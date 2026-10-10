@@ -531,21 +531,182 @@ private struct FileTreePanel: View {
             .padding(.top, 8)
             .padding(.bottom, 8)
 
-            ScrollView {
-                LazyVStack(spacing: 1) {
-                    ForEach(model.items) { item in
-                        FileTreeRow(
-                            model: model, git: git, item: item, session: session,
-                            currentFilePath: currentFilePath,
-                            openFile: openFile, openToSide: openToSide, onRename: onRename,
-                            refreshGitStatus: refreshGitStatus
-                        )
-                    }
+            FileTreeScrollView(
+                model: model, git: git, session: session,
+                currentFilePath: currentFilePath,
+                openFile: openFile, openToSide: openToSide, onRename: onRename,
+                refreshGitStatus: refreshGitStatus
+            )
+        }
+    }
+}
+
+/// Native two-axis scrolling with table-row reuse. File actions and inline
+/// editing stay in the existing hosted row until the file tree is fully AppKit.
+private final class FileTreeNativeScrollView: NSScrollView {
+    var treeContentWidth: CGFloat = 0 {
+        didSet { needsLayout = true }
+    }
+
+    override func layout() {
+        super.layout()
+        guard let table = documentView as? NSTableView,
+              let column = table.tableColumns.first else { return }
+        let width = max(treeContentWidth, contentView.bounds.width)
+        if abs(column.width - width) > 0.5 {
+            column.width = width
+        }
+        // Collapsing folders may shrink the document while scrolled right.
+        let rightmostX = max(0, width - contentView.bounds.width)
+        if contentView.bounds.minX > rightmostX {
+            contentView.scroll(to: NSPoint(x: rightmostX, y: contentView.bounds.minY))
+            reflectScrolledClipView(contentView)
+        }
+    }
+}
+
+private struct FileTreeScrollView: NSViewRepresentable {
+    @ObservedObject var model: FileTreeModel
+    @ObservedObject var git: GitStatusModel
+    let session: TerminalSession?
+    let currentFilePath: String?
+    let openFile: (String) -> Void
+    let openToSide: (String) -> Void
+    let onRename: (String, String) -> Void
+    let refreshGitStatus: () -> Void
+    @Environment(\.sidebarFontScale) var fontScale
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> FileTreeNativeScrollView {
+        let scroll = FileTreeNativeScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.automaticallyAdjustsContentInsets = false
+
+        let table = NSTableView()
+        table.headerView = nil
+        table.backgroundColor = .clear
+        table.selectionHighlightStyle = .none
+        table.columnAutoresizingStyle = .noColumnAutoresizing
+        table.intercellSpacing = NSSize(width: 0, height: 1)
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("file"))
+        column.resizingMask = []
+        table.addTableColumn(column)
+        table.delegate = context.coordinator
+        table.dataSource = context.coordinator
+        scroll.documentView = table
+        context.coordinator.update(self, scroll: scroll)
+        return scroll
+    }
+
+    func updateNSView(_ scroll: FileTreeNativeScrollView, context: Context) {
+        context.coordinator.update(self, scroll: scroll)
+    }
+
+    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+        private var configuration: FileTreeScrollView?
+        private var items: [FileTreeModel.Item] = []
+        private var rootPath = ""
+        private var editingPath: String?
+        private var draft: FileTreeModel.Draft?
+        private var activePath: String?
+        private var fontScale: CGFloat = 1
+        private let rowID = NSUserInterfaceItemIdentifier("file-row")
+
+        func numberOfRows(in tableView: NSTableView) -> Int {
+            items.count
+        }
+
+        // Keep file-to-terminal/Finder drags working with the native table.
+        func tableView(
+            _ tableView: NSTableView, pasteboardWriterForRow row: Int
+        ) -> (any NSPasteboardWriting)? {
+            guard items.indices.contains(row), !items[row].isDraft else { return nil }
+            return NSURL(fileURLWithPath: items[row].path)
+        }
+
+        func tableView(
+            _ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int
+        ) -> NSView? {
+            guard let configuration, items.indices.contains(row) else { return nil }
+            let content = FileTreeHostedRow(configuration: configuration, item: items[row])
+            if let host = tableView.makeView(withIdentifier: rowID, owner: self)
+                as? NSHostingView<FileTreeHostedRow> {
+                host.rootView = content
+                return host
+            }
+            let host = NSHostingView(rootView: content)
+            host.identifier = rowID
+            return host
+        }
+
+        func update(_ view: FileTreeScrollView, scroll: FileTreeNativeScrollView) {
+            guard let table = scroll.documentView as? NSTableView else { return }
+            let newItems = view.model.items
+            let newEditingPath = view.model.renamingPath
+            let newDraft = view.model.draft
+            let treeChanged = newItems != items || rootPath != view.model.rootPath
+            let fontChanged = fontScale != view.fontScale
+            let editingChanged = editingPath != newEditingPath || draft != newDraft
+            let selectionChanged = activePath != view.currentFilePath
+            configuration = view
+            items = newItems
+            if rootPath != view.model.rootPath {
+                scroll.contentView.scroll(to: .zero)
+            }
+            rootPath = view.model.rootPath
+            editingPath = newEditingPath
+            draft = newDraft
+            activePath = view.currentFilePath
+            fontScale = view.fontScale
+
+            if treeChanged || fontChanged {
+                // Give the whole table the width of its longest visible path;
+                // AppKit can then scroll horizontally instead of truncating.
+                let font = NSFont.systemFont(ofSize: 11.5 * fontScale)
+                scroll.treeContentWidth = newItems.reduce(CGFloat(0)) { widest, item in
+                    let nameWidth = (item.name as NSString).size(
+                        withAttributes: [.font: font]
+                    ).width
+                    return max(widest, nameWidth + CGFloat(item.depth) * 12 + 92)
                 }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 8)
+                table.rowHeight = max(24, 24 * fontScale)
+            }
+            if treeChanged || fontChanged || editingChanged || selectionChanged {
+                table.reloadData()
+            }
+            if editingChanged,
+               let index = newItems.firstIndex(where: {
+                   $0.isDraft || $0.path == newEditingPath
+               }) {
+                table.scrollRowToVisible(index)
             }
         }
+    }
+}
+
+private struct FileTreeHostedRow: View {
+    let configuration: FileTreeScrollView
+    let item: FileTreeModel.Item
+
+    var body: some View {
+        FileTreeRow(
+            model: configuration.model,
+            git: configuration.git,
+            item: item,
+            session: configuration.session,
+            currentFilePath: configuration.currentFilePath,
+            openFile: configuration.openFile,
+            openToSide: configuration.openToSide,
+            onRename: configuration.onRename,
+            refreshGitStatus: configuration.refreshGitStatus
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 6)
+        .environment(\.sidebarFontScale, configuration.fontScale)
     }
 }
 
@@ -727,14 +888,14 @@ private struct FileTreeRow: View {
                 Text(item.name)
                     .sidebarFont(size: 11.5)
                     .foregroundStyle(fileNameColor)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
+                    .fixedSize(horizontal: true, vertical: false)
                 if let gitDecoration {
                     Text(gitDecoration.badge)
                         .sidebarFont(size: 9, weight: .semibold, design: .monospaced)
                         .foregroundStyle(gitDecoration.color)
                         .accessibilityHidden(true)
                 }
+                Spacer(minLength: 0)
             }
             .padding(.leading, CGFloat(item.depth) * 12 + 6)
             .padding(.trailing, 6)
