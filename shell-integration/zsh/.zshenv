@@ -40,9 +40,20 @@ if [[ -o interactive ]] && [[ -n "${KERO_SSH_HELPER-}" ]]; then
     add-zsh-hook -d precmd kero_ssh_integration
     unfunction kero_ssh_integration 2>/dev/null
 
-    # The user's own ssh always wins.
-    (( $+aliases[ssh] || $+functions[ssh] )) && return
+    # Preserve user aliases and custom functions. Kaku's known wrapper is
+    # different: it delegates to `command ssh`, so give only that invocation
+    # Kero's helper first on PATH, retaining Kaku's SSH options and behavior.
+    (( $+aliases[ssh] )) && return
     [[ -x "$KERO_SSH_HELPER" ]] || return
+    if (( $+functions[ssh] )); then
+      (( $+functions[_kaku_wrapped_ssh] )) || return
+      [[ ${functions[ssh]} == *'_kaku_wrapped_ssh "$@"'* ]] || return
+      ssh() {
+        local PATH="${KERO_SSH_HELPER:h}:$PATH"
+        _kaku_wrapped_ssh "$@"
+      }
+      return
+    fi
 
     # Only stand in front of a stock ssh. Anyone running their own build, say
     # ~/bin/ssh earlier on PATH, meant to run that one; the helper would pick a

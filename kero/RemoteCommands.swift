@@ -194,7 +194,34 @@ nonisolated enum RemoteCommands {
         }
         lines.append("d=$(readlink \"/proc/$p/cwd\" 2>/dev/null) || continue;")
         lines.append("printf '%s %s\\n' \"$p\" \"$d\"; break; done")
-        return lines.joined(separator: " ")
+        let linux = lines.joined(separator: " ")
+
+        // MSYS/Cygwin ps has no -o format or visible sshd parent; its
+        // interactive shell still exposes SSH_CONNECTION and cwd in /proc.
+        // Filter by the connection first, never by a guessed process name alone.
+        var windows = [
+            "ps -ef 2>/dev/null | awk 'NR>1 && $4 != \"?\" {print $2}'",
+            "| while read -r p; do",
+            // In MSYS the STIME column can be one or two fields, so inspect
+            // the executable via /proc rather than parsing ps's COMMAND field.
+            "exe=$(readlink \"/proc/$p/exe\" 2>/dev/null) || continue;",
+            "case \"${exe##*/}\" in sh|bash|zsh|fish|ksh|sh.exe|bash.exe|zsh.exe|fish.exe|ksh.exe) ;; *) continue;; esac;",
+            "grep -qz \"SSH_CONNECTION=$SSH_CONNECTION\" \"/proc/$p/environ\" 2>/dev/null || continue;",
+        ]
+        if let terminalTag, !terminalTag.isEmpty {
+            // Windows OpenSSH often ignores SendEnv. An absent tag is fine:
+            // this connection's SSH_CONNECTION is already unique. If a tag
+            // was accepted, it must belong to this pane.
+            windows.append("if grep -qz 'LC_KERO_TERMINAL=' \"/proc/$p/environ\" 2>/dev/null; then")
+            windows.append(
+                "grep -qz \(quote("LC_KERO_TERMINAL=" + terminalTag)) "
+                    + "\"/proc/$p/environ\" 2>/dev/null || continue; fi;"
+            )
+        }
+        windows.append("d=$(readlink \"/proc/$p/cwd\" 2>/dev/null) || continue;")
+        windows.append("printf '%s %s\\n' \"$p\" \"$d\"; break; done")
+        return "case \"$(uname -s)\" in MSYS*|CYGWIN*) "
+            + windows.joined(separator: " ") + " ;; *) " + linux + " ;; esac"
     }
 
     /// A directory may contain spaces, so only the first space is a separator.
@@ -623,6 +650,8 @@ extension RemoteCommands {
         let discovery = shellDiscoveryCommand()
         assert(discovery.contains("$SSH_CONNECTION"))
         assert(discovery.contains("sshd*"))
+        assert(discovery.contains("MSYS*|CYGWIN*"))
+        assert(discovery.contains("/proc/$p/exe"))
         assert(!discovery.contains("LC_KERO_TERMINAL"))
         let tagged = shellDiscoveryCommand(terminalTag: "test-uuid-1234")
         assert(tagged.contains("'LC_KERO_TERMINAL=test-uuid-1234'"))
