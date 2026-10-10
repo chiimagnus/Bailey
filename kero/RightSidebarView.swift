@@ -4,6 +4,7 @@
 //
 
 import AppKit
+import Combine
 import SwiftUI
 
 /// Serialises the right pane's refreshes. Reading a panel costs a round trip
@@ -547,12 +548,19 @@ private final class FileTreeNativeScrollView: NSScrollView {
     var treeContentWidth: CGFloat = 0 {
         didSet { needsLayout = true }
     }
+    var onViewportWidthChange: ((CGFloat) -> Void)?
+    private var lastViewportWidth: CGFloat = 0
 
     override func layout() {
         super.layout()
+        let visibleWidth = contentView.bounds.width
+        if visibleWidth > 0, abs(visibleWidth - lastViewportWidth) > 0.5 {
+            lastViewportWidth = visibleWidth
+            onViewportWidthChange?(visibleWidth)
+        }
         guard let table = documentView as? NSTableView,
               let column = table.tableColumns.first else { return }
-        let width = max(treeContentWidth, contentView.bounds.width)
+        let width = max(treeContentWidth, visibleWidth)
         if abs(column.width - width) > 0.5 {
             column.width = width
         }
@@ -563,6 +571,10 @@ private final class FileTreeNativeScrollView: NSScrollView {
             reflectScrolledClipView(contentView)
         }
     }
+}
+
+private final class FileTreeViewport: ObservableObject {
+    @Published var width: CGFloat = 0
 }
 
 private struct FileTreeScrollView: NSViewRepresentable {
@@ -585,11 +597,22 @@ private struct FileTreeScrollView: NSViewRepresentable {
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
         scroll.automaticallyAdjustsContentInsets = false
+        let viewport = context.coordinator.viewport
+        scroll.onViewportWidthChange = { [weak viewport] width in
+            DispatchQueue.main.async { [weak viewport] in
+                guard let viewport, abs(viewport.width - width) > 0.5 else { return }
+                viewport.width = width
+            }
+        }
 
         let table = NSTableView()
+        // The automatic table style adds its own content margins, unlike the
+        // original edge-to-edge Files list.
+        table.style = .plain
         table.headerView = nil
         table.backgroundColor = .clear
         table.selectionHighlightStyle = .none
+        table.allowsEmptySelection = true
         table.columnAutoresizingStyle = .noColumnAutoresizing
         table.intercellSpacing = NSSize(width: 0, height: 1)
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("file"))
@@ -613,26 +636,38 @@ private struct FileTreeScrollView: NSViewRepresentable {
         private var editingPath: String?
         private var draft: FileTreeModel.Draft?
         private var activePath: String?
+        private var sessionID: UUID?
+        private var isRemote = false
         private var fontScale: CGFloat = 1
+        let viewport = FileTreeViewport()
         private let rowID = NSUserInterfaceItemIdentifier("file-row")
 
         func numberOfRows(in tableView: NSTableView) -> Int {
-            items.count
+            items.count + 1 // Original list's 8pt bottom scroll padding.
         }
 
-        // Keep file-to-terminal/Finder drags working with the native table.
-        func tableView(
-            _ tableView: NSTableView, pasteboardWriterForRow row: Int
-        ) -> (any NSPasteboardWriting)? {
-            guard items.indices.contains(row), !items[row].isDraft else { return nil }
-            return NSURL(fileURLWithPath: items[row].path)
+        func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+            false // File actions and current-file highlighting belong to the hosted row.
+        }
+
+        func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+            guard items.indices.contains(row) else { return 7 }
+            if items[row].isDraft || items[row].path == editingPath {
+                let font = NSFont.systemFont(ofSize: 11.5 * fontScale)
+                return max(tableView.rowHeight, ceil(
+                    font.ascender - font.descender + font.leading + 10
+                ))
+            }
+            return tableView.rowHeight
         }
 
         func tableView(
             _ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int
         ) -> NSView? {
             guard let configuration, items.indices.contains(row) else { return nil }
-            let content = FileTreeHostedRow(configuration: configuration, item: items[row])
+            let content = FileTreeHostedRow(
+                configuration: configuration, item: items[row], viewport: viewport
+            )
             if let host = tableView.makeView(withIdentifier: rowID, owner: self)
                 as? NSHostingView<FileTreeHostedRow> {
                 host.rootView = content
@@ -652,6 +687,10 @@ private struct FileTreeScrollView: NSViewRepresentable {
             let fontChanged = fontScale != view.fontScale
             let editingChanged = editingPath != newEditingPath || draft != newDraft
             let selectionChanged = activePath != view.currentFilePath
+            let sessionChanged = sessionID != view.session?.id
+                || isRemote != (view.session?.location.remoteConnection != nil)
+            let oldActivePath = activePath
+            let oldEditingPath = editingPath
             configuration = view
             items = newItems
             if rootPath != view.model.rootPath {
@@ -661,6 +700,8 @@ private struct FileTreeScrollView: NSViewRepresentable {
             editingPath = newEditingPath
             draft = newDraft
             activePath = view.currentFilePath
+            sessionID = view.session?.id
+            isRemote = view.session?.location.remoteConnection != nil
             fontScale = view.fontScale
 
             if treeChanged || fontChanged {
@@ -671,12 +712,42 @@ private struct FileTreeScrollView: NSViewRepresentable {
                     let nameWidth = (item.name as NSString).size(
                         withAttributes: [.font: font]
                     ).width
-                    return max(widest, nameWidth + CGFloat(item.depth) * 12 + 92)
+                    // Includes icons, Git badge, row padding and outer inset.
+                    return max(widest, nameWidth + CGFloat(item.depth) * 12 + 80)
                 }
-                table.rowHeight = max(24, 24 * fontScale)
+                table.rowHeight = ceil(
+                    font.ascender - font.descender + font.leading + 6
+                )
             }
-            if treeChanged || fontChanged || editingChanged || selectionChanged {
+            if treeChanged || fontChanged {
                 table.reloadData()
+            } else {
+                if editingChanged {
+                    let paths = Set([oldEditingPath, newEditingPath].compactMap { $0 })
+                    let rows = IndexSet(newItems.indices.filter { index in
+                        paths.contains(newItems[index].path)
+                    })
+                    table.noteHeightOfRows(withIndexesChanged: rows)
+                    table.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integer: 0))
+                }
+                if selectionChanged || sessionChanged {
+                    // Refresh only affected cells, preserving an unrelated
+                    // inline rename field and the hovered row's SwiftUI state.
+                    let selected = Set([oldActivePath, activePath].compactMap { $0 })
+                    let visible = table.rows(in: table.visibleRect)
+                    if visible.location != NSNotFound {
+                        for row in visible.location..<NSMaxRange(visible) where row < items.count {
+                            guard sessionChanged || selected.contains(items[row].path),
+                                  let host = table.view(
+                                    atColumn: 0, row: row, makeIfNecessary: false
+                                  ) as? NSHostingView<FileTreeHostedRow>
+                            else { continue }
+                            host.rootView = FileTreeHostedRow(
+                                configuration: view, item: items[row], viewport: viewport
+                            )
+                        }
+                    }
+                }
             }
             if editingChanged,
                let index = newItems.firstIndex(where: {
@@ -691,6 +762,19 @@ private struct FileTreeScrollView: NSViewRepresentable {
 private struct FileTreeHostedRow: View {
     let configuration: FileTreeScrollView
     let item: FileTreeModel.Item
+    @ObservedObject var viewport: FileTreeViewport
+
+    private var rowWidth: CGFloat {
+        let visibleWidth = max(0, viewport.width - 12)
+        guard !item.isDraft, configuration.model.renamingPath != item.path else {
+            return visibleWidth
+        }
+        let font = NSFont.systemFont(ofSize: 11.5 * configuration.fontScale)
+        let nameWidth = (item.name as NSString).size(withAttributes: [.font: font]).width
+        // Short rows preserve the original trailing badge position; longer
+        // rows get enough width for the entire name and its status letter.
+        return max(visibleWidth, ceil(nameWidth + CGFloat(item.depth) * 12 + 68))
+    }
 
     var body: some View {
         FileTreeRow(
@@ -704,8 +788,10 @@ private struct FileTreeHostedRow: View {
             onRename: configuration.onRename,
             refreshGitStatus: configuration.refreshGitStatus
         )
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .id(item.path)
+        .frame(width: rowWidth, alignment: .leading)
         .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .environment(\.sidebarFontScale, configuration.fontScale)
     }
 }
@@ -889,13 +975,13 @@ private struct FileTreeRow: View {
                     .sidebarFont(size: 11.5)
                     .foregroundStyle(fileNameColor)
                     .fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 0)
                 if let gitDecoration {
                     Text(gitDecoration.badge)
                         .sidebarFont(size: 9, weight: .semibold, design: .monospaced)
                         .foregroundStyle(gitDecoration.color)
                         .accessibilityHidden(true)
                 }
-                Spacer(minLength: 0)
             }
             .padding(.leading, CGFloat(item.depth) * 12 + 6)
             .padding(.trailing, 6)
