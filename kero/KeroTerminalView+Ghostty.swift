@@ -7,13 +7,8 @@ import AppKit
 import GhosttyTerminal
 import GhosttyTheme
 
-/// The libghostty half of Kero's terminal backend: starting the emulator,
-/// rendering Kero's settings into Ghostty's config, and translating Ghostty's
-/// delegate callbacks into ``TerminalBackendEvents``.
-///
-/// Nothing above `KeroTerminalView` names a Ghostty type, so a second backend
-/// only has to satisfy ``TerminalBackendSurface`` — it does not have to
-/// re-implement any of this.
+/// Starts Ghostty, configures its renderer and forwards terminal events
+/// into Kero's session model through ``TerminalBackendEvents``.
 extension KeroTerminalView {
     // MARK: - Lifecycle
 
@@ -65,9 +60,12 @@ extension KeroTerminalView {
             ? TerminalFont.bundledFamily : settings.fontFamily
         return TerminalConfiguration { builder in
             builder.withFontFamily(family)
-            // Keep Kero's bundled icon font as a fallback after the selected
-            // primary face. Repeated font-family entries form Ghostty's list.
-            builder.withCustom("font-family", "Symbols Nerd Font Mono")
+            // Prefer PingFang for Chinese glyphs, as Kaku does, before
+            // the bundled Nerd symbols and the system color emoji font.
+            // Repeated font-family entries form Ghostty's fallback list.
+            builder.withFontFamily("PingFang SC")
+            builder.withFontFamily("Symbols Nerd Font Mono")
+            builder.withFontFamily("Apple Color Emoji")
             builder.withFontSize(Float(settings.fontSize))
             // Always set explicitly: the wrapper's ConfigSource.none base
             // config injects the package default `font-thicken = true`, and
@@ -102,6 +100,8 @@ extension KeroTerminalView {
             for keybind in [
                 "alt+left=esc:b",
                 "alt+right=esc:f",
+                "shift+enter=text:\\x0a",
+                "super+enter=text:\\x0a",
                 "super+left=text:\\x01",
                 "super+right=text:\\x05",
                 "super+backspace=text:\\x15",

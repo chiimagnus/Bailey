@@ -63,7 +63,7 @@ enum Theme {
     )
 
     /// Popular themes that render through the shared palette path used by both
-    /// terminal backends. Each appearance has 29 catalog themes plus Kero's
+    /// terminal views. Each appearance has 29 catalog themes plus Kero's
     /// default, keeping either Settings picker capped at 30 choices.
     private nonisolated static let commonDarkCatalogThemeNames: Set<String> = [
         "Adwaita Dark",

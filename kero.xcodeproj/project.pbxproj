@@ -94,7 +94,6 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = FF3FDD7E300B6A7600112486 /* Build configuration list for PBXNativeTarget "kero" */;
 			buildPhases = (
-				AA40000000000000000000A0 /* Build Alacritty bridge */,
 				FF3FDD6F300B6A7400112486 /* Sources */,
 				FF3FDD70300B6A7400112486 /* Frameworks */,
 				FF3FDD71300B6A7400112486 /* Resources */,
@@ -175,27 +174,6 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		AA40000000000000000000A0 /* Build Alacritty bridge */ = {
-			isa = PBXShellScriptBuildPhase;
-			inputPaths = (
-				"$(SRCROOT)/Vendor/alacritty-bridge/Cargo.lock",
-				"$(SRCROOT)/Vendor/alacritty-bridge/Cargo.toml",
-				"$(SRCROOT)/Vendor/alacritty-bridge/src/graphics_event_loop.rs",
-				"$(SRCROOT)/Vendor/alacritty-bridge/src/kitty_graphics.rs",
-				"$(SRCROOT)/Vendor/alacritty-bridge/src/kitty_graphics_tracking.rs",
-				"$(SRCROOT)/Vendor/alacritty-bridge/src/lib.rs",
-				"$(SRCROOT)/scripts/build-alacritty-bridge.sh",
-			);
-			name = "Build Alacritty bridge";
-			outputPaths = (
-				"$(BUILT_PRODUCTS_DIR)/alacritty-bridge/libkero_alacritty.a",
-			);
-			shellPath = /bin/zsh;
-			shellScript = (
-				"\"${SRCROOT}/scripts/build-alacritty-bridge.sh\"",
-				"",
-			);
-		};
 		AA40000000000000000000A1 /* Install ssh helper symlink */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -364,10 +342,6 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				HEADER_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(SRCROOT)/Vendor/alacritty-bridge/include",
-				);
 				INFOPLIST_FILE = kero/Info.plist;
 				KERO_DISPLAY_NAME = "Kero Debug";
 				KERO_UPDATE_FEED_URL = "https://releases.kero.sh/appcast.xml";
@@ -376,16 +350,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(BUILT_PRODUCTS_DIR)/alacritty-bridge",
-				);
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 0.1.48-remote.1;
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-lkero_alacritty",
-				);
 				PRODUCT_BUNDLE_IDENTIFIER = sh.kero.dev;
 				PRODUCT_NAME = kero;
 				REGISTER_APP_GROUPS = YES;
@@ -393,7 +359,6 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "kero/kero-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				WRAPPER_NAME = "$(KERO_DISPLAY_NAME).app";
@@ -413,10 +378,6 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				HEADER_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(SRCROOT)/Vendor/alacritty-bridge/include",
-				);
 				INFOPLIST_FILE = kero/Info.plist;
 				KERO_DISPLAY_NAME = Kero;
 				KERO_UPDATE_FEED_URL = "https://releases.kero.sh/appcast.xml";
@@ -425,16 +386,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(BUILT_PRODUCTS_DIR)/alacritty-bridge",
-				);
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 0.1.48-remote.1;
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-lkero_alacritty",
-				);
 				PRODUCT_BUNDLE_IDENTIFIER = sh.kero;
 				PRODUCT_NAME = kero;
 				REGISTER_APP_GROUPS = YES;
@@ -442,7 +395,6 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "kero/kero-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				WRAPPER_NAME = "$(KERO_DISPLAY_NAME).app";

@@ -1,26 +1,15 @@
 ---
 title: The terminal
-description: Kero's terminal backends, shell environment, link handling, notifications, and safety features.
+description: Kero's terminal, shell environment, link handling, notifications, and safety features.
 ---
 
-Every terminal pane runs your real login shell and uses one of two native,
-GPU-accelerated terminal backends. Kero owns the surrounding behavior—pane
-focus, search, notifications, links, history, themes, and paste safety—so it is
-consistent whichever emulator you choose.
+Every terminal pane runs your real login shell through the embedded Ghostty
+terminal and its native GPU-accelerated renderer. Kero adds pane focus, search,
+notifications, links, history, themes, and paste safety.
 
-## Terminal backends
-
-Choose a backend under **Settings → Terminal → Backend**:
-
-| Backend | Notes |
-| --- | --- |
-| **Ghostty** | The default |
-| **Alacritty** | Generally uses less memory |
-
-Both support GPU acceleration, image rendering, Kero's shared theme catalog,
-find, mouse reporting, notifications, and progress reports. A backend change
-applies to new terminals only—existing panes keep the emulator they started
-with.
+JetBrains Mono is bundled; PingFang SC, Nerd Font symbols, and Apple Color Emoji
+provide font fallback. In a terminal, **Shift+Return** or **Cmd+Return** sends a
+newline for multiline prompts, matching Kaku's input behavior.
 
 ## Your shell, unchanged
 
@@ -32,16 +21,14 @@ and identity variables:
 | --- | --- |
 | `TERM_PROGRAM` | `ghostty` |
 | `TERM_PROGRAM_VERSION` | the Ghostty capability version Kero implements |
-| `KERO_TERM` | `ghostty` or `alacritty`, the actual pane backend |
+| `KERO_TERM` | `ghostty` |
 
-Both backends advertise Ghostty through `TERM_PROGRAM` because image-aware and
-notification-aware CLIs use it as a capability hint. Use `KERO_TERM` only when
-you genuinely need to distinguish the renderer.
+The `TERM_PROGRAM` value is a capability hint for image-aware and
+notification-aware CLI tools.
 
 <Callout type="info">
-Kero does not read `~/.config/ghostty` or an Alacritty config. Fonts, colors,
-input behavior, and the backend are configured in Kero's own
-[settings](/docs/configuration).
+Kero does not read `~/.config/ghostty`. Fonts, colors, and input behavior
+come from Kero's own [settings](/docs/configuration).
 </Callout>
 
 ## Search

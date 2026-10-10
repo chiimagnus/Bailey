@@ -77,7 +77,7 @@ Powerline 分隔符和图标字形也能正常显示。
 
 布尔值——默认 `false`
 
-用稍粗的笔画渲染终端文字，效果类似经典 macOS 字体平滑。两个终端后端都支持，设置窗口里的预览也会反映效果。旧的 `font-thicken` 仍能读取，但保存后会改写成现在的点号键。
+用稍粗的笔画渲染终端文字，效果类似经典 macOS 字体平滑。设置窗口里的预览也会反映效果。旧的 `font-thicken` 仍能读取，但保存后会改写成现在的点号键。
 
 ### `editor.wrap-lines`
 
@@ -87,14 +87,6 @@ Powerline 分隔符和图标字形也能正常显示。
 里的折行行为。
 
 ## 终端
-
-### `terminal.backend`
-
-`"libghostty"` · `"alacritty"`——默认 `"libghostty"`
-
-选择之后新建终端使用的模拟器；已经打开的窗格继续使用启动时的后端。两者都是原生 GPU 加速，都支持图片渲染并共用 Kero 主题；Alacritty 通常占用更少内存。
-
-环境变量与兼容约定见[终端后端](/zh/docs/terminal#终端后端)。
 
 ### `terminal.macos-option-as-alt`
 
@@ -132,7 +124,6 @@ sidebar.font-size = 13
 toolbar.visibility = "auto"
 terminal.font-thicken = true
 terminal.macos-option-as-alt = false
-terminal.backend = "alacritty"
 terminal.restore-history = true
 editor.wrap-lines = true
 ai.enabled = true
@@ -146,5 +137,5 @@ ai.enabled = true
 - **自动检查更新。** **设置 → Updates** 里的开关属于 Sparkle。见[安装](/zh/docs/installation#更新)。
 - **窗口与布局状态。** 窗口尺寸、侧边栏宽度、当前面板、项目、标签页、窗格、浏览器 URL 和
   diff 控件偏好，都存在 Kero 的 macOS 偏好设置或会话快照里。
-- **后端自己的配置文件。** Kero 不读取 `~/.config/ghostty`，也不读取 Alacritty 配置。Kero 的设置就是两个后端共同支持的配置面。
+- **Ghostty 配置文件。** Kero 不读取 `~/.config/ghostty`，请使用 Kero 自己的设置。
 - **快捷键。** 目前[快捷键](/zh/docs/shortcuts)是固定的。

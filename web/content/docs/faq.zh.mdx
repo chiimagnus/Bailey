@@ -14,7 +14,7 @@ description: 关于费用、隐私，以及 Kero 和你的 shell 是什么关系
 <Accordion title="它会替换我的 shell 吗？">
 
 不会。Kero 运行的就是你已经在用的 shell——它启动 `$SHELL -l`，不碰你的提示符、别名、函数和
-dotfiles。终端窗格可以选择 Ghostty 或 Alacritty 作为后端。
+dotfiles。终端窗格使用 Ghostty。
 
 </Accordion>
 
@@ -26,9 +26,9 @@ dotfiles。终端窗格可以选择 Ghostty 或 Alacritty 作为后端。
 
 </Accordion>
 
-<Accordion title="它会读我的 Ghostty 或 Alacritty 配置吗？">
+<Accordion title="它会读我的 Ghostty 配置吗？">
 
-不会。后端、字体、配色和输入行为都来自 Kero 自己的[设置](/zh/docs/configuration)，两个终端应用的配置文件都不会加载。
+不会。字体、配色和输入行为都来自 Kero 自己的[设置](/zh/docs/configuration)，而非 `~/.config/ghostty`。
 
 </Accordion>
 

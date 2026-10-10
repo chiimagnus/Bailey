@@ -13,9 +13,8 @@ import Foundation
 /// exec an explicit argv directly. SwiftUI only reparents the same surface, so
 /// PTY state, selection, and scrollback survive tab and split-layout changes.
 ///
-/// Which emulator draws that surface is `TerminalBackend`'s business: this
-/// type talks to ``TerminalBackendSurface`` and hears back through
-/// ``TerminalBackendEvents``, and names no emulator's types itself.
+/// The surface reports its lifecycle and input events through
+/// ``TerminalBackendEvents`` so session logic stays independent of rendering.
 @MainActor
 final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated Identifiable {
     nonisolated let id: UUID
@@ -38,9 +37,6 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     /// local machine.
     @Published private(set) var lastRemoteConnection: RemoteConnection?
 
-    /// The emulator driving this session. Fixed for the session's lifetime —
-    /// changing the setting only affects terminals opened afterwards.
-    let backend: TerminalBackend
     let surface: any TerminalBackendSurface
     let overlayScrollbar = OverlayScrollbarView()
     /// Find-in-terminal state for this session's pane (⌘F).
@@ -84,22 +80,18 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         let shellPath = directCommand?.first ?? Self.loginShell()
         let directory = Self.validWorkingDirectory(initialDirectory)
         let artifacts = Self.makeLaunchArtifacts(restoredHistory: restoredHistory)
-        let backend = AppSettings.shared.terminalBackend
         let environment = Self.surfaceEnvironment(
             pathOverride: environmentPath,
             sessionID: sessionID,
             shellPath: shellPath
         )
         let script = Self.makeLaunchScript(
-            backend: backend,
             shellPath: shellPath,
             commandArguments: directCommand,
             pidFileURL: artifacts.pidFileURL,
             replayFileURL: artifacts.replayFileURL
         )
         let launch = TerminalLaunch(
-            program: "/bin/sh",
-            arguments: ["-c", script],
             commandLine: "/bin/sh -c \(Self.shellQuote(script))",
             workingDirectory: directory,
             environment: environment
@@ -108,14 +100,13 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         id = sessionID
         zshIntegrationActive = environment["ZDOTDIR"] != nil
         self.shellPath = shellPath
-        self.backend = backend
         launchWorkingDirectory = directory
         launchDirectoryURL = artifacts.directoryURL
         shellPidFileURL = artifacts.pidFileURL
         title = (shellPath as NSString).lastPathComponent
         agentStatus = nil
 
-        let surface = Self.makeSurface(backend: backend, launch: launch)
+        let surface = KeroTerminalView(launch: launch)
         self.surface = surface
         find = TerminalFind(surface: surface)
         lastHistorySnapshot = restoredHistory
@@ -131,17 +122,6 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         if let launchDirectoryURL {
             try? FileManager.default.removeItem(at: launchDirectoryURL)
         }
-    }
-
-    /// `makeSurface` returns nil only for a backend this build has no surface
-    /// for, and `AppSettings` refuses to store one — so this is belt and
-    /// braces, preferring a working terminal over an empty pane.
-    private static func makeSurface(
-        backend: TerminalBackend, launch: TerminalLaunch
-    ) -> any TerminalBackendSurface {
-        if let surface = backend.makeSurface(launch: launch) { return surface }
-        NSLog("kero: no surface for terminal backend \(backend.rawValue)")
-        return KeroTerminalView(launch: launch)
     }
 
     private func installOverlayScrollbar() {
@@ -680,7 +660,6 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     /// any restored scrollback, advertise the emulator, then become either the
     /// requested argv or the user's login shell.
     private static func makeLaunchScript(
-        backend: TerminalBackend,
         shellPath: String,
         commandArguments: [String]?,
         pidFileURL: URL?,
@@ -702,18 +681,10 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
             let path = shellQuote(replayFileURL.path)
             commands.append("if [ -r \(path) ]; then /bin/cat \(path); /bin/rm -f \(path); fi")
         }
-        // KERO_TERM exposes the actual surface. TERM_PROGRAM remains a
-        // capability hint so tools select protocols Kero can actually render.
-        commands.append("export KERO_TERM=\(shellQuote(backend.environmentName))")
-        let termProgram = backend.termProgram
-        commands.append("export TERM_PROGRAM=\(shellQuote(termProgram.name))")
-        if !termProgram.version.isEmpty {
-            commands.append(
-                "export TERM_PROGRAM_VERSION=\(shellQuote(termProgram.version))"
-            )
-        } else {
-            commands.append("unset TERM_PROGRAM_VERSION")
-        }
+        // Expose the protocols implemented by Kero's embedded Ghostty surface.
+        commands.append("export KERO_TERM='ghostty'")
+        commands.append("export TERM_PROGRAM='ghostty'")
+        commands.append("export TERM_PROGRAM_VERSION='1.3.2-dev'")
         if let commandArguments {
             let argv = commandArguments.map(shellQuote).joined(separator: " ")
             // `env` resolves argv[0] against the caller's PATH. Every argument

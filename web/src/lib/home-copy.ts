@@ -135,9 +135,9 @@ const en: HomeCopy = {
             'zsh, fish, or bash exactly as you configured it — prompt, aliases, dotfiles and all',
         },
         {
-          name: 'Two native backends',
+          name: 'GPU-accelerated terminal',
           detail:
-            'choose Ghostty or Alacritty for new panes; both are GPU-accelerated and support images',
+            'Ghostty powers native terminal panes, with image support and CJK font fallback',
         },
         {
           name: 'Agent-aware',
@@ -195,7 +195,7 @@ const en: HomeCopy = {
     },
     {
       q: 'Does it replace my shell?',
-      a: 'No. kero hosts the shell you already run and leaves your prompt, aliases, and dotfiles untouched. Terminal panes can use Ghostty or Alacritty.',
+      a: 'No. kero hosts the shell you already run and leaves your prompt, aliases, and dotfiles untouched. Terminal panes use Ghostty.',
     },
     {
       q: 'Does it collect any data?',
@@ -305,8 +305,8 @@ const zh: HomeCopy = {
             'zsh、fish 还是 bash，你怎么配的就怎么用——提示符、别名、dotfiles 一个不少',
         },
         {
-          name: '两个原生后端',
-          detail: '新窗格可选 Ghostty 或 Alacritty；两者都有 GPU 加速并支持图片',
+          name: 'GPU 加速终端',
+          detail: '终端窗格使用 Ghostty，支持图片和中文后备字体',
         },
         {
           name: '与 AI Agent 协作',
@@ -361,7 +361,7 @@ const zh: HomeCopy = {
     },
     {
       q: '它会替换我的 shell 吗？',
-      a: '不会。kero 运行的就是你本来在用的 shell，提示符、别名和 dotfiles 都不受影响。终端窗格可以使用 Ghostty 或 Alacritty。',
+      a: '不会。kero 运行的就是你本来在用的 shell，提示符、别名和 dotfiles 都不受影响。终端窗格使用 Ghostty。',
     },
     {
       q: '它会收集数据吗？',

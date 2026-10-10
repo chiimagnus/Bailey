@@ -714,23 +714,6 @@
         }
       }
     },
-    "Available" : {
-      "comment" : "Accessibility description for a supported terminal feature.",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "利用可能"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "可用"
-          }
-        }
-      }
-    },
     "Back" : {
       "localizations" : {
         "ja" : {
@@ -760,22 +743,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "竖线"
-          }
-        }
-      }
-    },
-    "Backend" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "バックエンド"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "后端"
           }
         }
       }
@@ -988,22 +955,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "更改"
-          }
-        }
-      }
-    },
-    "Changes apply to new terminals" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "変更はこれから開くターミナルに適用されます"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "更改将应用于新建的终端"
           }
         }
       }
@@ -2522,22 +2473,6 @@
         }
       }
     },
-    "Excellent performance" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "優れたパフォーマンス"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "性能出色"
-          }
-        }
-      }
-    },
     "Exit Pane Zoom (⇧⌘↩)" : {
       "localizations" : {
         "ja" : {
@@ -3277,22 +3212,6 @@
         }
       }
     },
-    "GPU-accelerated" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "GPU加速"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "GPU 加速"
-          }
-        }
-      }
-    },
     "Hide" : {
       "localizations" : {
         "ja" : {
@@ -3328,22 +3247,6 @@
         }
       }
     },
-    "Higher memory footprint" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "メモリ使用量が多い"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "内存占用较高"
-          }
-        }
-      }
-    },
     "Ignored" : {
       "localizations" : {
         "ja" : {
@@ -3356,22 +3259,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已忽略"
-          }
-        }
-      }
-    },
-    "Image rendering" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "画像レンダリング"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "图像渲染"
           }
         }
       }
@@ -3627,22 +3514,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "浅色主题"
-          }
-        }
-      }
-    },
-    "Lower memory footprint" : {
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "メモリ使用量が少ない"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "内存占用较低"
           }
         }
       }
@@ -7092,23 +6963,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法读取 Git 状态。"
-          }
-        }
-      }
-    },
-    "Unavailable" : {
-      "comment" : "Accessibility description for an unsupported terminal feature.",
-      "localizations" : {
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "利用できません"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "不可用"
           }
         }
       }

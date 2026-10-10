@@ -30,12 +30,4 @@ enum TerminalCursorShape: String, CaseIterable, Sendable {
         case .underline: .underline
         }
     }
-
-    var alacrittyValue: UInt8 {
-        switch self {
-        case .block: 0
-        case .underline: 1
-        case .bar: 2
-        }
-    }
 }

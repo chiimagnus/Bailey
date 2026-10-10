@@ -44,9 +44,8 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
         registerForDraggedTypes([.fileURL])
     }
 
-    /// Entry point for `TerminalBackend.makeSurface(launch:)`. Starts the
-    /// emulator immediately; libghostty only spawns the shell once the view is
-    /// attached to a window, which `TerminalHostView` guarantees.
+    /// Starts the emulator immediately; Ghostty spawns the shell once the
+    /// view is attached to a window, which `TerminalHostView` guarantees.
     convenience init(launch: TerminalLaunch) {
         self.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         start(launch: launch)
