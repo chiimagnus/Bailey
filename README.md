@@ -2,8 +2,6 @@
 
 A native terminal workspace for macOS, with projects, SSH, files, Git and diffs.
 
-![Kero workspace](web/public/kero-screenshot.png)
-
 ## Features
 
 - Native macOS project sidebar, tabs and split panes
@@ -25,7 +23,7 @@ xcodebuild -project kero.xcodeproj -scheme kero -configuration Release \
 open 'build/DerivedData/Build/Products/Release/Kero Remote.app'
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for signing and [documentation](web/content/docs/installation.mdx) for setup.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development, signing, and localization.
 
 ## License
 

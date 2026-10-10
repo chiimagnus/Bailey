@@ -31,11 +31,10 @@ Open `kero.xcodeproj` and press **Cmd+B** for normal development. If only the
 Xcode beta is installed, set
 `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`.
 
-## Website and localization
+## Localization
 
-The site is in [`web/`](web/README.md); English/Chinese user docs are under
-`web/content/docs`. The app uses Xcode String Catalogs for localization; see
-[LOCALIZATION.md](LOCALIZATION.md). The site requires Bun, not the macOS app.
+The app uses Xcode String Catalogs for localization; see
+[LOCALIZATION.md](LOCALIZATION.md).
 
 There is no automatic updater or publishing pipeline. Build and launch locally
 after reviewing the changes and verifying the signature.
