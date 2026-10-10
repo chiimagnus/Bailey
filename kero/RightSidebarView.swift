@@ -896,8 +896,92 @@ private extension GitStatusModel.FileDecoration {
 
 // MARK: - Git panel
 
+// Only the newly added directory rows use AppKit; existing Git file rows
+// retain their actions and context menus until that legacy view is migrated.
+@MainActor
+private final class GitChangeFolderNSView: NSView {
+    private let disclosure = NSButton(title: "", target: nil, action: nil)
+    private let folder = NSButton(title: "", target: nil, action: nil)
+    var onToggle: (() -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+
+        for button in [disclosure, folder] {
+            button.isBordered = false
+            button.target = self
+            button.action = #selector(toggleFolder)
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.controlSize = .small
+            addSubview(button)
+        }
+        disclosure.imagePosition = .imageOnly
+        disclosure.setAccessibilityElement(false)
+        folder.imagePosition = .imageLeading
+        folder.alignment = .left
+        folder.font = .systemFont(ofSize: 11.5)
+        folder.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        NSLayoutConstraint.activate([
+            disclosure.leadingAnchor.constraint(equalTo: leadingAnchor),
+            disclosure.centerYAnchor.constraint(equalTo: centerYAnchor),
+            disclosure.widthAnchor.constraint(equalToConstant: 14),
+            disclosure.heightAnchor.constraint(equalToConstant: 20),
+            folder.leadingAnchor.constraint(equalTo: disclosure.trailingAnchor, constant: 2),
+            folder.trailingAnchor.constraint(equalTo: trailingAnchor),
+            folder.centerYAnchor.constraint(equalTo: centerYAnchor),
+            folder.heightAnchor.constraint(equalToConstant: 20),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not used")
+    }
+
+    func apply(name: String, path: String, collapsed: Bool, fontScale: CGFloat) {
+        disclosure.image = NSImage(
+            systemSymbolName: collapsed ? "chevron.right" : "chevron.down",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(.init(pointSize: 9 * fontScale, weight: .semibold))
+        folder.image = NSImage(
+            systemSymbolName: collapsed ? "folder" : "folder.fill",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(.init(pointSize: 11 * fontScale, weight: .regular))
+        folder.font = .systemFont(ofSize: 11.5 * fontScale)
+        folder.title = name
+        folder.toolTip = path
+        folder.setAccessibilityLabel(name)
+        folder.setAccessibilityValue(
+            collapsed ? String(localized: "Collapsed") : String(localized: "Expanded")
+        )
+    }
+
+    @objc private func toggleFolder() {
+        onToggle?()
+    }
+}
+
+private struct GitChangeFolderRow: NSViewRepresentable {
+    let name: String
+    let path: String
+    let collapsed: Bool
+    let fontScale: CGFloat
+    let onToggle: () -> Void
+
+    func makeNSView(context: Context) -> GitChangeFolderNSView {
+        GitChangeFolderNSView(frame: .zero)
+    }
+
+    func updateNSView(_ view: GitChangeFolderNSView, context: Context) {
+        view.onToggle = onToggle
+        view.apply(name: name, path: path, collapsed: collapsed, fontScale: fontScale)
+    }
+}
+
 private struct GitPanel: View {
     @ObservedObject private var themeChanges = Theme.changes
+    @ObservedObject private var settings = AppSettings.shared
 
     private enum EntryOperation: Equatable {
         case stage
@@ -950,6 +1034,7 @@ private struct GitPanel: View {
     @State private var mergeCollapsed = false
     @State private var stagedCollapsed = false
     @State private var changesCollapsed = false
+    @State private var collapsedFolders: Set<String> = []
     @State private var historyCollapsed = false
     @State private var expandedCommitIDs: Set<String> = []
     @State private var filterText = ""
@@ -1034,6 +1119,7 @@ private struct GitPanel: View {
             pendingDiscard = nil
             pendingDiscardAll = []
             confirmDiscardAll = false
+            collapsedFolders.removeAll()
         }
         .onChange(of: model.repositoryIdentity) {
             resetRepositoryDrafts()
@@ -1674,9 +1760,7 @@ private struct GitPanel: View {
                         actionsDisabled: model.isBusy
                     )
                     if !mergeCollapsed {
-                        ForEach(filteredMergeEntries, id: \.mergeRowID) { entry in
-                            row(entry, status: "U", kind: .merge)
-                        }
+                        changedFileRows(filteredMergeEntries, kind: .merge)
                     }
                 }
                 if !filteredStagedEntries.isEmpty {
@@ -1696,9 +1780,7 @@ private struct GitPanel: View {
                         actionsDisabled: model.isBusy
                     )
                     if !stagedCollapsed {
-                        ForEach(filteredStagedEntries, id: \.stagedRowID) { entry in
-                            row(entry, status: entry.staged, kind: .staged)
-                        }
+                        changedFileRows(filteredStagedEntries, kind: .staged)
                     }
                 }
                 if !filteredChangedEntries.isEmpty {
@@ -1725,9 +1807,7 @@ private struct GitPanel: View {
                         actionsDisabled: model.isBusy
                     )
                     if !changesCollapsed {
-                        ForEach(filteredChangedEntries, id: \.changedRowID) { entry in
-                            row(entry, status: entry.unstaged, kind: .unstaged)
-                        }
+                        changedFileRows(filteredChangedEntries, kind: .unstaged)
                     }
                 }
                 if filterText.isEmpty, !model.recentCommits.isEmpty {
@@ -1754,6 +1834,46 @@ private struct GitPanel: View {
             }
             .padding(.horizontal, 6)
             .padding(.bottom, 8)
+        }
+    }
+
+    @ViewBuilder
+    private func changedFileRows(
+        _ entries: [GitStatusModel.Entry], kind: GitEntryRow.Kind
+    ) -> some View {
+        if settings.gitViewMode == .tree {
+            ForEach(GitChangeTree.rows(entries, section: kind.rawValue, collapsed: collapsedFolders)) { item in
+                switch item.content {
+                case .folder(let path, let name, let isCollapsed):
+                    GitChangeFolderRow(
+                        name: name, path: path, collapsed: isCollapsed,
+                        fontScale: sidebarFontScale
+                    ) {
+                        let key = kind.rawValue + ":" + path
+                        if !collapsedFolders.insert(key).inserted {
+                            collapsedFolders.remove(key)
+                        }
+                    }
+                    .frame(height: max(22, 22 * sidebarFontScale))
+                    .padding(.leading, CGFloat(item.depth) * 12 + 8)
+                case .file(let entry):
+                    row(entry, status: entryStatus(entry, kind: kind), kind: kind,
+                        showDirectory: false)
+                        .padding(.leading, CGFloat(item.depth) * 12)
+                }
+            }
+        } else {
+            ForEach(entries, id: \.path) { entry in
+                row(entry, status: entryStatus(entry, kind: kind), kind: kind)
+            }
+        }
+    }
+
+    private func entryStatus(_ entry: GitStatusModel.Entry, kind: GitEntryRow.Kind) -> Character {
+        switch kind {
+        case .merge: "U"
+        case .staged: entry.staged
+        case .unstaged: entry.unstaged
         }
     }
 
@@ -1788,7 +1908,8 @@ private struct GitPanel: View {
     }
 
     private func row(
-        _ entry: GitStatusModel.Entry, status: Character, kind: GitEntryRow.Kind
+        _ entry: GitStatusModel.Entry, status: Character, kind: GitEntryRow.Kind,
+        showDirectory: Bool = true
     ) -> some View {
         let stageTrigger = OperationTrigger.entry(path: entry.path, operation: .stage)
         let unstageTrigger = OperationTrigger.entry(path: entry.path, operation: .unstage)
@@ -1797,6 +1918,7 @@ private struct GitPanel: View {
             entry: entry,
             status: status,
             kind: kind,
+            showDirectory: showDirectory,
             isRemote: remoteName != nil,
             disabled: model.isBusy,
             isStageLoading: operationIsLoading(stageTrigger),
@@ -2266,13 +2388,14 @@ private struct GitSectionHeader: View {
 }
 
 private struct GitEntryRow: View {
-    enum Kind {
+    enum Kind: String {
         case merge, staged, unstaged
     }
 
     let entry: GitStatusModel.Entry
     let status: Character
     let kind: Kind
+    let showDirectory: Bool
     /// Whether this repository is on another machine, where discarding an
     /// untracked or copied file deletes it rather than moving it to the Trash.
     let isRemote: Bool
@@ -2312,7 +2435,7 @@ private struct GitEntryRow: View {
                         .strikethrough(status == "D")
                         .lineLimit(1)
                         .layoutPriority(1)
-                    if !isHovering && !isFocused {
+                    if showDirectory && !isHovering && !isFocused {
                         Text(entry.directory)
                             .sidebarFont(size: 10)
                             .foregroundStyle(.tertiary)

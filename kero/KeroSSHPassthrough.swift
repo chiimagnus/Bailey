@@ -8,15 +8,14 @@ import Foundation
 
 /// The `ssh` the user actually types inside a Kero terminal.
 ///
-/// Kero prepends its own `Contents/MacOS` to every terminal's `PATH`, and a
-/// symlink there named `ssh` points back at the app binary. When the binary is
+/// A symlink named `ssh` beside the app executable points at its binary;
+/// Kero's interactive zsh integration invokes it for ordinary SSH sessions. When the binary is
 /// invoked under that name it either tells Kero a session is going remote and
 /// hands control to the real ssh with a shared control socket, or — far more
 /// often — gets out of the way entirely.
 ///
-/// Every uncertain case passes through untouched. A wrong pass-through costs
-/// nothing; a wrong interception would alter a command the user, a script, or
-/// an agent depends on.
+/// Every uncertain case passes through untouched. An unrecognized invocation
+/// must retain its original SSH behavior.
 enum KeroSSHPassthrough {
     /// Options OpenSSH accepts with no value.
     private static let flagOptions = Set("46AaCfGgKkMNnqsTtVvXxYy")
@@ -112,9 +111,9 @@ enum KeroSSHPassthrough {
     /// Everything that must hold before Kero touches an ssh invocation.
     static func interceptionPlan(arguments: [String], realSSH: String) -> Plan? {
         let environment = ProcessInfo.processInfo.environment
-        guard let socketPath = environment["KERO_AUTOMATION_SOCKET"], !socketPath.isEmpty,
-              let token = environment["KERO_AUTOMATION_TOKEN"], !token.isEmpty,
-              let terminalID = environment["KERO_TERMINAL_ID"], !terminalID.isEmpty
+        guard let socketPath = environment["KERO_SSH_SOCKET"], !socketPath.isEmpty,
+              let token = environment["KERO_SSH_TOKEN"], !token.isEmpty,
+              let terminalID = environment["KERO_SSH_SESSION"], !terminalID.isEmpty
         else { return nil }
 
         // Only a session a person is sitting in front of. A pipeline, an agent
@@ -248,27 +247,15 @@ enum KeroSSHPassthrough {
     /// Announces the pending connection and returns the control socket path
     /// Kero allocated for it, or nil if Kero did not answer.
     private static func announceConnecting(_ plan: Plan) -> String? {
-        let request = KeroAutomationRequest(
-            version: 1,
-            id: "kero:ssh:\(getpid())",
-            method: "remote.connecting",
-            token: plan.token,
-            terminalID: plan.terminalID,
-            params: [
-                "user": .string(plan.user),
-                "host": .string(plan.host),
-                "port": .number(Double(plan.port)),
-                // This process becomes ssh itself at `execv`, so the pid Kero
-                // records stays valid for the life of the connection.
-                "pid": .number(Double(getpid())),
-            ]
+        let request = KeroSSHRequest(
+            token: plan.token, terminalID: plan.terminalID,
+            user: plan.user, host: plan.host, port: plan.port,
+            // The helper execs ssh in place, keeping this pid for the session.
+            pid: getpid()
         )
-        guard let response = try? KeroAutomationSocketServer.exchange(
+        guard let socket = try? KeroSSHSocketServer.exchange(
             path: plan.socketPath, request: request, timeout: 1
-        ), response.ok,
-            let socket = response.result?.objectValue?["socket"]?.stringValue,
-            !socket.isEmpty
-        else { return nil }
+        ).socket, !socket.isEmpty else { return nil }
         return socket
     }
 

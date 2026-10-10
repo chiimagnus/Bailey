@@ -1366,17 +1366,16 @@ private struct PaneTabItem: View {
         } else {
             switch tab.focusedContent {
             case .session(let session):
-                SessionTabLabel(session: session, customTitle: tab.customName, paneCount: paneCount, agentRollup: tab.agentRollup, isSelected: isSelected, select: select, close: close)
+                SessionTabLabel(session: session, customTitle: tab.customName, paneCount: paneCount, isSelected: isSelected, select: select, close: close)
             case .file(let file):
-                FileTabLabel(file: file, customTitle: tab.customName, paneCount: paneCount, agentRollup: tab.agentRollup, isSelected: isSelected, select: select, close: close)
+                FileTabLabel(file: file, customTitle: tab.customName, paneCount: paneCount, isSelected: isSelected, select: select, close: close)
             case .browser(let browser):
-                BrowserTabLabel(browser: browser, customTitle: tab.customName, paneCount: paneCount, agentRollup: tab.agentRollup, isSelected: isSelected, select: select, close: close)
+                BrowserTabLabel(browser: browser, customTitle: tab.customName, paneCount: paneCount, isSelected: isSelected, select: select, close: close)
             case .diff(let diff):
                 DiffTabLabel(
                     diff: diff,
                     customTitle: tab.customName,
                     paneCount: paneCount,
-                    agentRollup: tab.agentRollup,
                     isSelected: isSelected,
                     select: select,
                     close: close
@@ -1482,7 +1481,6 @@ private struct SessionTabLabel: View {
     /// User-assigned tab name overriding the live terminal title.
     var customTitle: String?
     let paneCount: Int
-    let agentRollup: KeroAgentRollup?
     let isSelected: Bool
     let select: () -> Void
     let close: () -> Void
@@ -1492,7 +1490,6 @@ private struct SessionTabLabel: View {
             systemImage: "terminal",
             title: customTitle ?? session.title,
             paneCount: paneCount,
-            agentRollup: agentRollup,
             isSelected: isSelected,
             select: select,
             close: close
@@ -1505,7 +1502,6 @@ private struct FileTabLabel: View {
     /// User-assigned tab name overriding the file name.
     var customTitle: String?
     let paneCount: Int
-    let agentRollup: KeroAgentRollup?
     let isSelected: Bool
     let select: () -> Void
     let close: () -> Void
@@ -1516,7 +1512,6 @@ private struct FileTabLabel: View {
             fileIconPath: file.path,
             title: customTitle ?? file.name,
             paneCount: paneCount,
-            agentRollup: agentRollup,
             isSelected: isSelected,
             isDirty: file.isDirty,
             select: select,
@@ -1531,7 +1526,6 @@ private struct BrowserTabLabel: View {
     /// User-assigned tab name overriding the webpage title.
     var customTitle: String?
     let paneCount: Int
-    let agentRollup: KeroAgentRollup?
     let isSelected: Bool
     let select: () -> Void
     let close: () -> Void
@@ -1542,7 +1536,6 @@ private struct BrowserTabLabel: View {
             browserIcon: browser,
             title: customTitle ?? browser.title,
             paneCount: paneCount,
-            agentRollup: agentRollup,
             isSelected: isSelected,
             select: select,
             close: close
@@ -1555,7 +1548,6 @@ private struct DiffTabLabel: View {
     @ObservedObject var diff: DiffTab
     var customTitle: String?
     let paneCount: Int
-    let agentRollup: KeroAgentRollup?
     let isSelected: Bool
     let select: () -> Void
     let close: () -> Void
@@ -1566,7 +1558,6 @@ private struct DiffTabLabel: View {
             fileIconPath: diff.path,
             title: customTitle ?? diff.title,
             paneCount: paneCount,
-            agentRollup: agentRollup,
             isSelected: isSelected,
             isDirty: diff.isDirty,
             select: select,
@@ -1583,7 +1574,6 @@ private struct TabItemChrome: View {
     var fileIconPath: String? = nil
     let title: String
     var paneCount: Int = 1
-    var agentRollup: KeroAgentRollup? = nil
     let isSelected: Bool
     var isDirty = false
     let select: () -> Void
@@ -1630,10 +1620,6 @@ private struct TabItemChrome: View {
                             .font(.system(size: 9, weight: .semibold))
                     }
                     .foregroundStyle(.tertiary)
-                }
-                if let agentRollup {
-                    AgentStatusBadgeRepresentable(rollup: agentRollup)
-                        .fixedSize()
                 }
                 if isHovering {
                     Button(action: close) {

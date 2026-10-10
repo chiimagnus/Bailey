@@ -12,7 +12,6 @@ struct keroApp: App {
     init() {
         TerminalFont.registerBundledFonts()
         TerminalNotificationService.shared.configure()
-        AppSettings.shared.reconcileAIEnabled()
         // Saved forwards are for other apps too (an RDP client, a browser),
         // so they open at launch rather than when Settings is first shown.
         TunnelManager.shared.start()
@@ -251,14 +250,6 @@ private struct KeroCommands: Commands {
                 manager?.openSelectedPageInDefaultBrowser()
             }
             .disabled(manager?.hasSelectedBrowser != true)
-        }
-
-        CommandMenu("Agents") {
-            Button("Next Agent Needing Attention") {
-                manager?.focusNextAgentAttention()
-            }
-            .keyboardShortcut("a", modifiers: [.command, .shift])
-            .disabled(manager?.hasAgentAttention != true)
         }
 
         CommandMenu("Tabs") {

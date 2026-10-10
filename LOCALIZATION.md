@@ -10,7 +10,6 @@ development language. The currently maintained localizations are:
 | --- | --- |
 | English | `en` |
 | Chinese (Simplified) | `zh-Hans` |
-| Japanese | `ja` |
 
 ## Translate existing text
 
@@ -29,15 +28,6 @@ For work outside Xcode, use **Product → Export Localizations…** to produce
 XLIFF, then **Product → Import Localizations…** when the translation is ready.
 XLIFF is the easiest way to send a language to a translator without exposing
 the source code.
-
-## Add a language
-
-1. In the project editor, add the language under **Info → Localizations**.
-2. Add that language to all three String Catalogs.
-3. Translate every entry, including plural variants and the privacy prompt.
-4. Run the app in that language and check menus, settings, the sidebars,
-   dialogs, and `kero +themes`.
-5. Add the language and identifier to the table above.
 
 ## Add localizable text in Swift
 
@@ -74,7 +64,6 @@ then translate the new entry in `Localizable.xcstrings`.
 ## Test a localization
 
 In Xcode, choose **Product → Scheme → Edit Scheme… → Run → Options**, then set
-**App Language** and **App Region**. Test English, Simplified Chinese, and
-Japanese independently. Also use the in-app picker to switch between all four
-options and confirm that **System Default** follows the user’s macOS preference
-after relaunch.
+**App Language** and **App Region**. Test English and Simplified Chinese.
+The in-app picker offers those two languages and **System Default**; the latter
+follows macOS and falls back to English when macOS uses another language.

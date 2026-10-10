@@ -16,7 +16,6 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     case system
     case english = "en"
     case simplifiedChinese = "zh-Hans"
-    case japanese = "ja"
 
     var id: String { rawValue }
 
@@ -33,8 +32,6 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             "English"
         case .simplifiedChinese:
             "简体中文"
-        case .japanese:
-            "日本語"
         }
     }
 
@@ -61,9 +58,6 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             || normalized.hasPrefix("zh-SG") {
             return .simplifiedChinese
         }
-        if normalized == "ja" || normalized.hasPrefix("ja-") {
-            return .japanese
-        }
         if normalized == "en" || normalized.hasPrefix("en-") {
             return .english
         }
@@ -74,7 +68,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         switch self {
         case .system:
             UserDefaults.standard.removeObject(forKey: "AppleLanguages")
-        case .english, .simplifiedChinese, .japanese:
+        case .english, .simplifiedChinese:
             UserDefaults.standard.set([rawValue], forKey: "AppleLanguages")
         }
     }
@@ -85,6 +79,14 @@ enum ToolbarVisibility: String, CaseIterable, Identifiable {
     case auto
     case always
     case hide
+
+    var id: String { rawValue }
+}
+
+/// Changed-file presentation in the Git panel; does not affect the Files panel.
+enum GitViewMode: String, CaseIterable, Identifiable {
+    case tree
+    case list
 
     var id: String { rawValue }
 }
@@ -176,6 +178,10 @@ final class AppSettings: nonisolated ObservableObject {
         didSet { save() }
     }
 
+    @Published var gitViewMode: GitViewMode {
+        didSet { save() }
+    }
+
     /// Render terminal glyphs with slightly heavier strokes, like classic
     /// macOS font smoothing. Each backend maps this to its own rasterizer.
     /// Persisted as `terminal.font-thicken`; off by default so Kero's text
@@ -212,13 +218,6 @@ final class AppSettings: nonisolated ObservableObject {
         didSet { save() }
     }
 
-    /// Link Kero's shared coordination skill plus the native lifecycle
-    /// integrations whose provider APIs provide semantic turn events. Other
-    /// agents retain process recognition without inferred progress state.
-    @Published private(set) var aiEnabled: Bool {
-        didSet { save() }
-    }
-
     private init() {
         let savedLanguage = AppLanguage.saved
         activeLanguage = savedLanguage
@@ -248,6 +247,7 @@ final class AppSettings: nonisolated ObservableObject {
         toolbarVisibility = ToolbarVisibility(
             rawValue: toml["toolbar.visibility"]?.string ?? ""
         ) ?? Self.defaultToolbarVisibility
+        gitViewMode = GitViewMode(rawValue: toml["git.view-mode"]?.string ?? "") ?? .tree
         fontThicken = toml["terminal.font-thicken"]?.bool
             ?? toml["font-thicken"]?.bool
             ?? false
@@ -258,7 +258,6 @@ final class AppSettings: nonisolated ObservableObject {
         macosOptionAsAlt = toml["terminal.macos-option-as-alt"]?.bool ?? false
         wrapLines = toml["editor.wrap-lines"]?.bool ?? false
         restoreTerminalHistory = toml["terminal.restore-history"]?.bool ?? false
-        aiEnabled = toml["ai.enabled"]?.bool ?? false
         applyAppearance()
         reloadThemeSelection()
         if existing == nil { save() }
@@ -303,55 +302,12 @@ final class AppSettings: nonisolated ObservableObject {
         themeDark = Theme.defaultDarkThemeName
         themeLight = Theme.defaultLightThemeName
         toolbarVisibility = Self.defaultToolbarVisibility
+        gitViewMode = .tree
         cursorShape = .block
         cursorBlinking = true
         macosOptionAsAlt = false
         wrapLines = false
         restoreTerminalHistory = false
-        if aiEnabled {
-            do {
-                try setAIEnabled(false)
-            } catch {
-                NSLog("kero: failed to disable AI support: \(error)")
-            }
-        }
-    }
-
-    /// Persist the setting only after every requested destination operation
-    /// returns successfully.
-    func setAIEnabled(_ enabled: Bool) throws {
-        if enabled {
-            try KeroAgentIntegrations.preflightInstallAvailable()
-            _ = try KeroAutomationSkill.install(
-                destinations: KeroAutomationSkill.Destination.allCases,
-                force: false
-            )
-            try KeroAgentIntegrations.installAvailable()
-        } else {
-            try KeroAgentIntegrations.preflightUninstallManaged()
-            _ = try KeroAutomationSkill.uninstall(
-                destinations: KeroAutomationSkill.Destination.allCases,
-                force: false
-            )
-            try KeroAgentIntegrations.uninstallManaged()
-        }
-        aiEnabled = enabled
-    }
-
-    /// App updates normally preserve the bundle path targeted by the links.
-    /// Reconcile at launch as well so moving the app or changing Debug build
-    /// products repairs only installations the user explicitly enabled.
-    func reconcileAIEnabled() {
-        guard aiEnabled else { return }
-        do {
-            _ = try KeroAutomationSkill.install(
-                destinations: KeroAutomationSkill.Destination.allCases,
-                force: false
-            )
-            try KeroAgentIntegrations.installAvailable()
-        } catch {
-            NSLog("kero: failed to refresh AI support: \(error)")
-        }
     }
 
     private func save() {
@@ -377,6 +333,9 @@ final class AppSettings: nonisolated ObservableObject {
         if toolbarVisibility != Self.defaultToolbarVisibility {
             lines.append("toolbar.visibility = \(TOML.quote(toolbarVisibility.rawValue))")
         }
+        if gitViewMode != .tree {
+            lines.append("git.view-mode = \(TOML.quote(gitViewMode.rawValue))")
+        }
         if fontThicken {
             lines.append("terminal.font-thicken = true")
         }
@@ -394,9 +353,6 @@ final class AppSettings: nonisolated ObservableObject {
         }
         if restoreTerminalHistory {
             lines.append("terminal.restore-history = true")
-        }
-        if aiEnabled {
-            lines.append("ai.enabled = true")
         }
         let dir = Self.configURL.deletingLastPathComponent()
         do {

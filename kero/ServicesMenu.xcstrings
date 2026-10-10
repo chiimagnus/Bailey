@@ -11,12 +11,6 @@
             "value": "New Kero Debug Project Here"
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ここに新規Kero Debugプロジェクトを作成"
-          }
-        },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
@@ -33,12 +27,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "New Kero Project Here"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ここに新規Keroプロジェクトを作成"
           }
         },
         "zh-Hans": {

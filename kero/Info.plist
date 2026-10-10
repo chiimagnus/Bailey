@@ -4,8 +4,8 @@
 <dict>
 	<!-- This Info.plist is authored by hand (GENERATE_INFOPLIST_FILE = NO) so we
 	     own the Bundle* keys instead of letting the generator derive them.
-	     PRODUCT_NAME remains lowercase so Xcode and the CLI agree on the
-	     executable name. KERO_DISPLAY_NAME supplies Kero Remote for Release
+	     PRODUCT_NAME remains lowercase for the bundled ssh helper symlink.
+	     KERO_DISPLAY_NAME supplies Kero Remote for Release
 	     and Kero Debug for Debug. sh.kero.remote preserves installed app state.
 	     Dynamic values use build-setting substitution to stay in sync. -->
 

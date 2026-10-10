@@ -26,7 +26,6 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     @Published private(set) var terminalCellSize: CGSize?
     /// Recognized coding agent occupying this terminal, if any. The monitor
     /// reconciles foreground process identity with explicit lifecycle events.
-    @Published var agentStatus: KeroAgentStatus?
 
     /// Where this session's right pane looks. Set by Kero's `ssh` helper
     /// through the automation socket, never guessed from the foreground
@@ -67,27 +66,18 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     /// Alternate-screen transcript paging must begin at the live prompt, never
     /// from text the user has scrolled back to inspect.
     var terminalIsAtLiveBottom = true
-    let agentObservation = KeroAgentObservationState()
 
     init(
         initialDirectory: String? = nil,
-        restoredHistory: String? = nil,
-        commandArguments: [String]? = nil,
-        environmentPath: String? = nil
+        restoredHistory: String? = nil
     ) {
         let sessionID = UUID()
-        let directCommand = commandArguments.flatMap { $0.isEmpty ? nil : $0 }
-        let shellPath = directCommand?.first ?? Self.loginShell()
+        let shellPath = Self.loginShell()
         let directory = Self.validWorkingDirectory(initialDirectory)
         let artifacts = Self.makeLaunchArtifacts(restoredHistory: restoredHistory)
-        let environment = Self.surfaceEnvironment(
-            pathOverride: environmentPath,
-            sessionID: sessionID,
-            shellPath: shellPath
-        )
+        let environment = Self.surfaceEnvironment(sessionID: sessionID, shellPath: shellPath)
         let script = Self.makeLaunchScript(
             shellPath: shellPath,
-            commandArguments: directCommand,
             pidFileURL: artifacts.pidFileURL,
             replayFileURL: artifacts.replayFileURL
         )
@@ -104,7 +94,6 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         launchDirectoryURL = artifacts.directoryURL
         shellPidFileURL = artifacts.pidFileURL
         title = (shellPath as NSString).lastPathComponent
-        agentStatus = nil
 
         let surface = KeroTerminalView(launch: launch)
         self.surface = surface
@@ -115,7 +104,6 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         surface.events = self
         installOverlayScrollbar()
         applyTheme()
-        AgentAutomationMonitor.shared.register(self)
     }
 
     deinit {
@@ -201,7 +189,7 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
 
     private func removeLaunchArtifacts() {
         endRemoteConnection(reason: "terminal closed")
-        KeroCLIService.shared.revokeTerminal(id: id)
+        KeroSSHService.shared.revokeTerminal(id: id)
         guard let launchDirectoryURL else { return }
         try? FileManager.default.removeItem(at: launchDirectoryURL)
     }
@@ -548,7 +536,6 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     // MARK: - Launch
 
     private static func surfaceEnvironment(
-        pathOverride: String?,
         sessionID: UUID,
         shellPath: String
     ) -> [String: String] {
@@ -557,16 +544,13 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
             "COLORTERM": "truecolor",
         ]
         environment.merge(
-            KeroCLIService.shared.terminalEnvironment(for: sessionID),
-            uniquingKeysWith: { _, cliValue in cliValue }
+            KeroSSHService.shared.terminalEnvironment(for: sessionID),
+            uniquingKeysWith: { _, sshValue in sshValue }
         )
         environment.merge(
             zshIntegrationEnvironment(shellPath: shellPath),
             uniquingKeysWith: { _, integrationValue in integrationValue }
         )
-        if let pathOverride, !pathOverride.isEmpty {
-            environment["PATH"] = pathOverride
-        }
         // Locale belongs to the user's shell environment. Kero's app language
         // must never synthesize or override LANG/LC_* for terminal processes.
         return environment
@@ -657,11 +641,9 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     }
 
     /// The `sh` script every pane starts with: record the process PID, replay
-    /// any restored scrollback, advertise the emulator, then become either the
-    /// requested argv or the user's login shell.
+    /// any restored scrollback, advertise the emulator, then exec the login shell.
     private static func makeLaunchScript(
         shellPath: String,
-        commandArguments: [String]?,
         pidFileURL: URL?,
         replayFileURL: URL?
     ) -> String {
@@ -685,15 +667,7 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         commands.append("export KERO_TERM='ghostty'")
         commands.append("export TERM_PROGRAM='ghostty'")
         commands.append("export TERM_PROGRAM_VERSION='1.3.2-dev'")
-        if let commandArguments {
-            let argv = commandArguments.map(shellQuote).joined(separator: " ")
-            // `env` resolves argv[0] against the caller's PATH. Every argument
-            // is quoted independently, so no command text is reparsed or
-            // expanded by the launch shim.
-            commands.append("exec /usr/bin/env -- \(argv)")
-        } else {
-            commands.append("exec \(shellQuote(shellPath)) -l")
-        }
+        commands.append("exec \(shellQuote(shellPath)) -l")
         // Ghostty's macOS launcher prepends `exec -l` to a shell command.
         // Keeping the setup as one compound command means `exec -l` does not
         // stop after the first shell builtin.

@@ -34,12 +34,6 @@
             "value": "A program running within Kero would like to use your microphone."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kero内で実行中のプログラムがマイクを使用しようとしています。"
-          }
-        },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",

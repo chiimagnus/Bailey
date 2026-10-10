@@ -74,6 +74,13 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Git") {
+                GitViewModeSettingsRow(mode: settings.gitViewMode) {
+                    settings.gitViewMode = $0
+                }
+                .frame(height: 28)
+            }
+
             Section("Colors") {
                 Picker("Dark theme", selection: $settings.themeDark) {
                     ForEach(Self.darkThemeNames, id: \.self) { name in
@@ -210,14 +217,6 @@ struct SettingsView: View {
                 Toggle("Wrap lines to editor width", isOn: $settings.wrapLines)
             }
 
-            Section("Automation") {
-                AgentCLISupportSettingsRow(
-                    isEnabled: settings.aiEnabled,
-                    onChange: { try settings.setAIEnabled($0) }
-                )
-                .frame(minHeight: 44)
-            }
-
             Section {
                 HStack {
                     Spacer()
@@ -236,9 +235,9 @@ struct SettingsView: View {
                         && settings.themeDark == Theme.defaultDarkThemeName
                         && settings.themeLight == Theme.defaultLightThemeName
                         && settings.toolbarVisibility == AppSettings.defaultToolbarVisibility
+                        && settings.gitViewMode == .tree
                         && !settings.wrapLines
-                        && !settings.restoreTerminalHistory
-                        && !settings.aiEnabled)
+                        && !settings.restoreTerminalHistory)
                 }
             }
         }
@@ -571,6 +570,73 @@ private struct MiniWindow: View {
         RoundedRectangle(cornerRadius: 1)
             .fill(fill)
             .frame(width: width, height: 2.5)
+    }
+}
+
+// AppKit controls the new Git preference; the surrounding Settings form is legacy SwiftUI.
+@MainActor
+private final class GitViewModeSettingsNSView: NSView {
+    private let label = NSTextField(labelWithString: String(localized: "Changed files view"))
+    private let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+    var onChange: ((GitViewMode) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        label.font = .systemFont(ofSize: NSFont.systemFontSize)
+        popup.controlSize = .small
+        popup.target = self
+        popup.action = #selector(changedMode)
+        popup.setAccessibilityLabel(String(localized: "Changed files view"))
+        for mode in GitViewMode.allCases {
+            let title = mode == .tree ? String(localized: "Tree") : String(localized: "List")
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.representedObject = mode.rawValue
+            popup.menu?.addItem(item)
+        }
+        label.translatesAutoresizingMaskIntoConstraints = false
+        popup.translatesAutoresizingMaskIntoConstraints = false
+        popup.setContentHuggingPriority(.required, for: .horizontal)
+        addSubview(label)
+        addSubview(popup)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: popup.leadingAnchor, constant: -16),
+            popup.trailingAnchor.constraint(equalTo: trailingAnchor),
+            popup.centerYAnchor.constraint(equalTo: centerYAnchor),
+            popup.widthAnchor.constraint(greaterThanOrEqualToConstant: 112),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not used")
+    }
+
+    func apply(_ mode: GitViewMode) {
+        if let item = popup.itemArray.first(where: { $0.representedObject as? String == mode.rawValue }) {
+            popup.select(item)
+        }
+    }
+
+    @objc private func changedMode() {
+        guard let value = popup.selectedItem?.representedObject as? String,
+              let mode = GitViewMode(rawValue: value) else { return }
+        onChange?(mode)
+    }
+}
+
+private struct GitViewModeSettingsRow: NSViewRepresentable {
+    let mode: GitViewMode
+    let onChange: (GitViewMode) -> Void
+
+    func makeNSView(context: Context) -> GitViewModeSettingsNSView {
+        GitViewModeSettingsNSView(frame: .zero)
+    }
+
+    func updateNSView(_ view: GitViewModeSettingsNSView, context: Context) {
+        view.onChange = onChange
+        view.apply(mode)
     }
 }
 

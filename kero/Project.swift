@@ -231,15 +231,9 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// explicit choice, so it also becomes the default for future terminals.
     @discardableResult
     func newSession(
-        directory: String? = nil,
-        commandArguments: [String]? = nil,
-        environmentPath: String? = nil
+        directory: String? = nil
     ) -> TerminalSession {
-        let session = makeSession(
-            directory: directory,
-            commandArguments: commandArguments,
-            environmentPath: environmentPath
-        )
+        let session = makeSession(directory: directory)
         let tab = makeTab(content: .session(session))
         insertNextToSelected(tab)
         selectedTabID = tab.id
@@ -251,17 +245,13 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// scrollback when reopening a saved session.
     private func makeSession(
         directory: String? = nil,
-        restoredHistory: String? = nil,
-        commandArguments: [String]? = nil,
-        environmentPath: String? = nil
+        restoredHistory: String? = nil
     ) -> TerminalSession {
         let session = TerminalSession(
             initialDirectory: directory
                 ?? customDirectory
                 ?? selectedSession?.currentDirectoryPath,
-            restoredHistory: restoredHistory,
-            commandArguments: commandArguments,
-            environmentPath: environmentPath
+            restoredHistory: restoredHistory
         )
         session.onExited = { [weak self] session in
             // Already dead — just drop its pane, no second terminate.
@@ -338,37 +328,6 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         guard let tab = selectedTab, tab.canSplit else { return }
         let session = makeSession()
         tab.split(Pane(content: .session(session)), toward: edge)
-    }
-
-    /// Creates a terminal beside an exact pane for the local automation API.
-    /// The caller chooses whether focus follows; the safe default at the API
-    /// boundary is false so background agents cannot disrupt the user.
-    func automationSplitTerminal(
-        beside targetPaneID: UUID,
-        toward edge: PaneDropEdge,
-        directory: String?,
-        focus: Bool
-    ) -> (tab: PaneTab, pane: Pane, session: TerminalSession)? {
-        guard let tab = tabs.first(where: { $0.layout.contains(targetPaneID) }),
-              let target = tab.allPanes.first(where: { $0.id == targetPaneID }),
-              !target.content.isDiff
-        else { return nil }
-
-        let contextDirectory: String? = switch target.content {
-        case .session(let session): session.currentDirectoryPath
-        default: tab.sessions.first?.currentDirectoryPath
-            ?? tab.contextSession?.currentDirectoryPath
-        }
-        let session = makeSession(directory: directory ?? contextDirectory)
-        let pane = Pane(content: .session(session))
-        tab.split(
-            pane,
-            toward: edge,
-            beside: targetPaneID,
-            focusInserted: focus
-        )
-        if focus { selectedTabID = tab.id }
-        return (tab, pane, session)
     }
 
     func focusLeft() { selectedTab?.focusLeft() }
