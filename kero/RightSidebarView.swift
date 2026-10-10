@@ -2105,10 +2105,12 @@ private struct GitPanel: View {
                     }
                     .frame(height: max(22, 22 * sidebarFontScale))
                     .padding(.leading, CGFloat(item.depth) * 12 + 8)
+                    .background { GitTreeGuideBackground(depth: item.depth) }
                 case .file(let entry):
                     row(entry, status: entryStatus(entry, kind: kind), kind: kind,
                         showDirectory: false)
                         .padding(.leading, CGFloat(item.depth) * 12)
+                        .background { GitTreeGuideBackground(depth: item.depth) }
                 }
             }
         } else {

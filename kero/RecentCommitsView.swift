@@ -735,6 +735,9 @@ private final class CommitFileRowView: NSView {
         nested.line(to: NSPoint(x: metrics.nestedRailX, y: bounds.maxY))
         NSColor.labelColor.withAlphaComponent(0.18).setStroke()
         nested.stroke()
+        GitTreeGuides.draw(
+            depth: depth, in: bounds, firstX: metrics.nestedRailX + 12
+        )
     }
 
     private func drawFolder(_ folder: (path: String, name: String, collapsed: Bool)) {
