@@ -83,7 +83,7 @@ enum ToolbarVisibility: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// Changed-file presentation in the Git panel; does not affect the Files panel.
+/// File presentation for working-tree changes and commit history in Git; not Files.
 enum GitViewMode: String, CaseIterable, Identifiable {
     case tree
     case list

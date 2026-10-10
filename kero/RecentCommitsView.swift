@@ -11,9 +11,11 @@ import SwiftUI
 /// a SwiftUI view tree for every changed path.
 struct RecentCommitsView: NSViewRepresentable {
     @Binding private var expandedCommitIDs: Set<String>
+    @Binding private var collapsedFolders: Set<String>
     @ObservedObject private var themeChanges = Theme.changes
 
     let commits: [GitStatusModel.RecentCommit]
+    let viewMode: GitViewMode
     let fontScale: CGFloat
     let hasMoreCommits: Bool
     let isLoadingMore: Bool
@@ -26,6 +28,8 @@ struct RecentCommitsView: NSViewRepresentable {
     init(
         commits: [GitStatusModel.RecentCommit],
         expandedCommitIDs: Binding<Set<String>>,
+        collapsedFolders: Binding<Set<String>>,
+        viewMode: GitViewMode,
         fontScale: CGFloat,
         hasMoreCommits: Bool,
         isLoadingMore: Bool,
@@ -37,6 +41,8 @@ struct RecentCommitsView: NSViewRepresentable {
     ) {
         self.commits = commits
         _expandedCommitIDs = expandedCommitIDs
+        _collapsedFolders = collapsedFolders
+        self.viewMode = viewMode
         self.fontScale = fontScale
         self.hasMoreCommits = hasMoreCommits
         self.isLoadingMore = isLoadingMore
@@ -57,11 +63,18 @@ struct RecentCommitsView: NSViewRepresentable {
                 expandedCommitIDs.insert(id)
             }
         }
+        view.onToggleFolder = { key in
+            if !collapsedFolders.insert(key).inserted {
+                collapsedFolders.remove(key)
+            }
+        }
         view.onOpenDiff = openDiff
         view.onLoadMore = loadMore
         view.configure(
             commits: commits,
             expandedCommitIDs: expandedCommitIDs,
+            collapsedFolders: collapsedFolders,
+            viewMode: viewMode,
             fontScale: fontScale,
             hasMoreCommits: hasMoreCommits,
             isLoadingMore: isLoadingMore
@@ -82,12 +95,15 @@ final class RecentCommitsNSView: NSView {
     private struct Snapshot: Equatable {
         let commits: [GitStatusModel.RecentCommit]
         let expandedCommitIDs: Set<String>
+        let collapsedFolders: Set<String>
+        let viewMode: GitViewMode
         let fontScale: CGFloat
         let hasMoreCommits: Bool
         let isLoadingMore: Bool
     }
 
     var onToggleCommit: ((String) -> Void)?
+    var onToggleFolder: ((String) -> Void)?
     var onLoadMore: (() -> Bool)?
     var onOpenDiff: ((
         GitStatusModel.RecentCommit,
@@ -107,6 +123,8 @@ final class RecentCommitsNSView: NSView {
     func configure(
         commits: [GitStatusModel.RecentCommit],
         expandedCommitIDs: Set<String>,
+        collapsedFolders: Set<String>,
+        viewMode: GitViewMode,
         fontScale: CGFloat,
         hasMoreCommits: Bool,
         isLoadingMore: Bool
@@ -114,6 +132,8 @@ final class RecentCommitsNSView: NSView {
         let next = Snapshot(
             commits: commits,
             expandedCommitIDs: expandedCommitIDs,
+            collapsedFolders: collapsedFolders,
+            viewMode: viewMode,
             fontScale: fontScale,
             hasMoreCommits: hasMoreCommits,
             isLoadingMore: isLoadingMore
@@ -158,6 +178,44 @@ final class RecentCommitsNSView: NSView {
                     metrics: metrics,
                     onOpen: nil
                 ))
+                continue
+            }
+
+            if snapshot.viewMode == .tree {
+                let section = "commit:" + commit.hash
+                let filesByPath = Dictionary(
+                    commit.files.map { ($0.path, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                let nodes = GitChangeTree.pathRows(
+                    commit.files.map(\.path),
+                    section: section,
+                    collapsed: snapshot.collapsedFolders
+                )
+                for (index, node) in nodes.enumerated() {
+                    let continues = index < nodes.count - 1 || !isLastCommit
+                    switch node.content {
+                    case .folder(let path, let name, let isCollapsed):
+                        addArrangedRow(CommitFileRowView(
+                            change: nil,
+                            folder: (path: path, name: name, collapsed: isCollapsed),
+                            depth: node.depth,
+                            continuesBelow: continues,
+                            metrics: metrics,
+                            onOpen: { [weak self] in
+                                self?.onToggleFolder?(section + ":" + path)
+                            }
+                        ))
+                    case .file(let path):
+                        guard let file = filesByPath[path] else { continue }
+                        addArrangedRow(CommitFileRowView(
+                            change: file, depth: node.depth, showDirectory: false,
+                            continuesBelow: continues,
+                            metrics: metrics,
+                            onOpen: { [weak self] in self?.onOpenDiff?(commit, file) }
+                        ))
+                    }
+                }
             } else {
                 for (fileIndex, file) in commit.files.enumerated() {
                     addArrangedRow(CommitFileRowView(
@@ -514,6 +572,9 @@ private final class CommitGraphRowView: NSView {
 @MainActor
 private final class CommitFileRowView: NSView {
     let change: GitStatusModel.RecentCommit.FileChange?
+    let folder: (path: String, name: String, collapsed: Bool)?
+    let depth: Int
+    let showDirectory: Bool
     let continuesBelow: Bool
     let metrics: CommitGraphMetrics
     let onOpen: (() -> Void)?
@@ -522,23 +583,35 @@ private final class CommitFileRowView: NSView {
 
     init(
         change: GitStatusModel.RecentCommit.FileChange?,
+        folder: (path: String, name: String, collapsed: Bool)? = nil,
+        depth: Int = 0,
+        showDirectory: Bool = true,
         continuesBelow: Bool,
         metrics: CommitGraphMetrics,
         onOpen: (() -> Void)?
     ) {
         self.change = change
+        self.folder = folder
+        self.depth = depth
+        self.showDirectory = showDirectory
         self.continuesBelow = continuesBelow
         self.metrics = metrics
         self.onOpen = onOpen
         super.init(frame: .zero)
-        if let change {
+        setAccessibilityElement(true)
+        if let folder {
+            toolTip = folder.path
+            setAccessibilityRole(.button)
+            setAccessibilityLabel(folder.name)
+            setAccessibilityValue(
+                folder.collapsed ? String(localized: "Collapsed") : String(localized: "Expanded")
+            )
+        } else if let change {
             toolTip = change.path
-            setAccessibilityElement(true)
             setAccessibilityRole(.button)
             setAccessibilityLabel("\(change.fileName), \(statusName(for: change.status)), \(change.path)")
             setAccessibilityHelp(String(localized: "Opens changes"))
         } else {
-            setAccessibilityElement(true)
             setAccessibilityRole(.staticText)
             setAccessibilityLabel(String(localized: "No changed files"))
         }
@@ -546,7 +619,7 @@ private final class CommitFileRowView: NSView {
 
     required init?(coder: NSCoder) { nil }
     override var isFlipped: Bool { true }
-    override var acceptsFirstResponder: Bool { change != nil }
+    override var acceptsFirstResponder: Bool { onOpen != nil }
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: metrics.fileHeight)
     }
@@ -574,27 +647,27 @@ private final class CommitFileRowView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard change != nil else { return }
+        guard let onOpen else { return }
         window?.makeFirstResponder(self)
-        onOpen?()
+        onOpen()
     }
 
     override func keyDown(with event: NSEvent) {
-        if change != nil, event.keyCode == 36 || event.keyCode == 49 {
-            onOpen?()
+        if let onOpen, event.keyCode == 36 || event.keyCode == 49 {
+            onOpen()
         } else {
             super.keyDown(with: event)
         }
     }
 
     override func accessibilityPerformPress() -> Bool {
-        guard change != nil else { return false }
-        onOpen?()
+        guard let onOpen else { return false }
+        onOpen()
         return true
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
-        guard change != nil else { return nil }
+        guard change != nil || folder != nil else { return nil }
         let menu = NSMenu()
         let item = menu.addItem(
             withTitle: String(localized: "Copy Relative Path"),
@@ -606,7 +679,7 @@ private final class CommitFileRowView: NSView {
     }
 
     @objc private func copyPath() {
-        if let change { copyToPasteboard(change.path) }
+        if let path = change?.path ?? folder?.path { copyToPasteboard(path) }
     }
 
     private func synchronizeHoverWithMouse() {
@@ -639,11 +712,13 @@ private final class CommitFileRowView: NSView {
             ).fill()
         }
         drawRails()
-        guard let change else {
+        if let folder {
+            drawFolder(folder)
+        } else if let change {
+            drawFile(change)
+        } else {
             drawEmptyState()
-            return
         }
-        drawFile(change)
     }
 
     private func drawRails() {
@@ -662,10 +737,45 @@ private final class CommitFileRowView: NSView {
         nested.stroke()
     }
 
+    private func drawFolder(_ folder: (path: String, name: String, collapsed: Bool)) {
+        let offset = CGFloat(depth) * 12
+        let y = (bounds.height - 12) / 2
+        let disclosureStyle = NSImage.SymbolConfiguration(
+            pointSize: 9 * metrics.scale, weight: .semibold
+        ).applying(.init(paletteColors: [.tertiaryLabelColor]))
+        let disclosure = NSImage(
+            systemSymbolName: folder.collapsed ? "chevron.right" : "chevron.down",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(disclosureStyle)
+        disclosure?.draw(in: NSRect(x: metrics.fileIconX + offset, y: y + 1, width: 10, height: 10))
+
+        let folderStyle = NSImage.SymbolConfiguration(
+            pointSize: 11 * metrics.scale, weight: .regular
+        ).applying(.init(paletteColors: [Theme.accent.withAlphaComponent(0.8)]))
+        let image = NSImage(
+            systemSymbolName: folder.collapsed ? "folder" : "folder.fill",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(folderStyle)
+        image?.draw(in: NSRect(x: metrics.fileIconX + offset + 13, y: y, width: 13, height: 12))
+        let height = ceil(metrics.fileFont.pointSize * 1.45)
+        (folder.name as NSString).draw(
+            with: NSRect(
+                x: metrics.fileContentX + offset + 15,
+                y: (bounds.height - height) / 2,
+                width: max(0, bounds.width - metrics.fileContentX - offset - 20),
+                height: height
+            ),
+            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+            attributes: [.font: metrics.fileFont, .foregroundColor: NSColor.secondaryLabelColor],
+            context: nil
+        )
+    }
+
     private func drawFile(_ change: GitStatusModel.RecentCommit.FileChange) {
         let statusWidth: CGFloat = 18
+        let offset = CGFloat(depth) * 12
         let symbolRect = NSRect(
-            x: metrics.fileIconX,
+            x: metrics.fileIconX + offset,
             y: (bounds.height - 12) / 2,
             width: 12,
             height: 12
@@ -685,7 +795,7 @@ private final class CommitFileRowView: NSView {
                 .strikethroughStyle: change.status == "D" ? NSUnderlineStyle.single.rawValue : 0,
             ]
         )
-        if !change.directory.isEmpty {
+        if showDirectory, !change.directory.isEmpty {
             text.append(NSAttributedString(
                 string: "  " + change.directory,
                 attributes: [
@@ -697,9 +807,9 @@ private final class CommitFileRowView: NSView {
         let height = ceil(max(metrics.fileFont.pointSize, metrics.pathFont.pointSize) * 1.45)
         text.draw(
             with: NSRect(
-                x: metrics.fileContentX,
+                x: metrics.fileContentX + offset,
                 y: (bounds.height - height) / 2,
-                width: max(0, bounds.width - metrics.fileContentX - statusWidth - 5),
+                width: max(0, bounds.width - metrics.fileContentX - offset - statusWidth - 5),
                 height: height
             ),
             options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],

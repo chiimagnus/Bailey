@@ -2069,6 +2069,8 @@ private struct GitPanel: View {
                         RecentCommitsView(
                             commits: model.recentCommits,
                             expandedCommitIDs: $expandedCommitIDs,
+                            collapsedFolders: $collapsedFolders,
+                            viewMode: settings.gitViewMode,
                             fontScale: sidebarFontScale,
                             hasMoreCommits: model.hasMoreRecentCommits,
                             isLoadingMore: model.isLoadingMoreCommits,

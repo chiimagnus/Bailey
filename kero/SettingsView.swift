@@ -576,7 +576,7 @@ private struct MiniWindow: View {
 // AppKit controls the new Git preference; the surrounding Settings form is legacy SwiftUI.
 @MainActor
 private final class GitViewModeSettingsNSView: NSView {
-    private let label = NSTextField(labelWithString: String(localized: "Changed files view"))
+    private let label = NSTextField(labelWithString: String(localized: "File layout"))
     private let popup = NSPopUpButton(frame: .zero, pullsDown: false)
     var onChange: ((GitViewMode) -> Void)?
 
@@ -586,7 +586,7 @@ private final class GitViewModeSettingsNSView: NSView {
         popup.controlSize = .small
         popup.target = self
         popup.action = #selector(changedMode)
-        popup.setAccessibilityLabel(String(localized: "Changed files view"))
+        popup.setAccessibilityLabel(String(localized: "File layout"))
         for mode in GitViewMode.allCases {
             let title = mode == .tree ? String(localized: "Tree") : String(localized: "List")
             let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
