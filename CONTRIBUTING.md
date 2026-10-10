@@ -1,43 +1,41 @@
-# Contributing to Kero
+# Developing Kero
 
-For anything larger than a fix, open an issue first —
-Kero says no to features that fit some other tool better, and it's kinder to find
-that out before the work.
+## Build
 
-## Setup and build
+Requires Xcode, macOS 15.6+ and the personal Apple Development certificate in
+the login Keychain. Only Ghostty is used; there is no Rust or release pipeline.
 
-```bash
-git clone --recurse-submodules https://github.com/egoist/kero.git
+```sh
+git clone --recurse-submodules https://github.com/chiimagnus/kero.git
+cd kero
+xcodebuild -project kero.xcodeproj -scheme kero -configuration Debug \
+  -destination 'platform=macOS,arch=arm64' build
 ```
 
-Already cloned? `git submodule update --init --recursive`. Bun is also needed for
-`web/` and `scripts/`.
+For a locally signed production build, use:
 
-Open `kero.xcodeproj` and run the `kero` scheme, or:
-
-```bash
-xcodebuild -project kero.xcodeproj -scheme kero -configuration Debug -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+```sh
+xcodebuild -project kero.xcodeproj -scheme kero -configuration Release \
+  -destination 'platform=macOS,arch=arm64' -derivedDataPath build/DerivedData build
+codesign --verify --deep --strict 'build/DerivedData/Build/Products/Release/Kero Remote.app'
 ```
 
-Add `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer` if you only have Xcode beta.
+Both configurations sign with the installed Apple Development identity for
+team `RDQHYSDFFG`. This is for local development, not distribution to other Macs:
+Developer ID Application signing and notarization would require a different
+certificate and workflow. The Release app keeps bundle ID `sh.kero.remote` to
+preserve the installed app's settings. The separate Debug app uses `sh.kero.dev`,
+its own icon, and `~/.config/kero-dev/config.toml`.
 
-A Debug build is `sh.kero.dev` and keeps its own state, so it can run beside an
-installed Kero without clobbering it: settings go to
-`~/.config/kero-dev/config.toml`, and the session snapshot, sidebar widths, and
-Sparkle preferences live under the separate bundle id.
+Open `kero.xcodeproj` and press **Cmd+B** for normal development. If only the
+Xcode beta is installed, set
+`DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`.
 
-## Website and docs
+## Website and localization
 
-The site is in [`web/`](web/README.md); user documentation is MDX under
-`web/content/docs`. It is written for people using the app — anything that only
-matters when you are building it belongs here instead.
+The site is in [`web/`](web/README.md); English/Chinese user docs are under
+`web/content/docs`. The app uses Xcode String Catalogs for localization; see
+[LOCALIZATION.md](LOCALIZATION.md). The site requires Bun, not the macOS app.
 
-## Localization
-
-Kero’s development language is English, with Simplified Chinese and Japanese
-translations maintained in Xcode String Catalogs. See
-[LOCALIZATION.md](LOCALIZATION.md) for translating existing text, adding a
-language, testing a localization, and writing localizable Swift.
-
-Translation-only pull requests are welcome. Xcode’s catalog editor and XLIFF
-export/import workflow both work; contributors do not need to edit Swift.
+There is no automatic updater or publishing pipeline. Build and launch locally
+after reviewing the changes and verifying the signature.

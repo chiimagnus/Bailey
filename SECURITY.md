@@ -1,27 +1,18 @@
 # Security Policy
 
-## Supported Versions
+## Supported builds
 
-Only the latest release of Kero receives security fixes. Updates ship
-through the in-app updater and https://kero.sh.
+This fork is maintained through locally built, signed versions. There is no
+automatic updater or public binary release channel.
 
-## Reporting a Vulnerability
+## Report a vulnerability
 
-Please use GitHub private vulnerability reporting:
-https://github.com/egoist/kero/security/advisories/new
-
-If that doesn't work for you, email hi@egoist.dev.
-
-Please don't open a public issue for anything you believe is
-exploitable before it has been fixed. Include reproduction steps and
-the Kero version (Kero → About Kero) you tested.
+Report security concerns privately to the [repository maintainer](https://github.com/chiimagnus).
+Do not disclose a suspected vulnerability in a public issue before it is fixed.
+Include reproduction steps, the affected build and macOS version.
 
 ## Scope
 
-Kero embeds libghostty (vendored in `Vendor/libghostty-spm`) for
-terminal emulation. In scope here: Kero's configuration and host
-integration of it — clipboard access, escape-sequence handling that
-crosses a trust boundary, the update chain, and anything that lets
-terminal output reach data outside the session. Vulnerabilities in
-upstream Ghostty itself should also be reported to the Ghostty
-project: https://github.com/ghostty-org/ghostty/security.
+Kero embeds Ghostty. Issues in Kero's integration — such as clipboard and
+remote terminal trust boundaries — belong here. Vulnerabilities in Ghostty
+itself should be reported to [Ghostty's security team](https://github.com/ghostty-org/ghostty/security).

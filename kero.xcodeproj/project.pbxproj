@@ -10,7 +10,6 @@
 		AA10000000000000000000B2 /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = AA10000000000000000000B1 /* GhosttyTerminal */; };
 		AA10000000000000000000B4 /* GhosttyTheme in Frameworks */ = {isa = PBXBuildFile; productRef = AA10000000000000000000B3 /* GhosttyTheme */; };
 		AA10000000000000000000C2 /* STTextView in Frameworks */ = {isa = PBXBuildFile; productRef = AA10000000000000000000C1 /* STTextView */; };
-		AA10000000000000000000E2 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = AA10000000000000000000E1 /* Sparkle */; };
 		AA20000000000000000000A2 /* STTextView-Plugin-Neon in Frameworks */ = {isa = PBXBuildFile; productRef = AA20000000000000000000A1 /* STTextView-Plugin-Neon */; };
 		AA30000000000000000000A2 /* TreeSitterTSX in Frameworks */ = {isa = PBXBuildFile; productRef = AA30000000000000000000A1 /* TreeSitterTSX */; };
 		AA60000000000000000000A2 /* FuzzyMatch in Frameworks */ = {isa = PBXBuildFile; productRef = AA60000000000000000000A1 /* FuzzyMatch */; };
@@ -18,8 +17,6 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		AA50000000000000000000A0 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
-		AA50000000000000000000A1 /* Local.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.example.xcconfig; sourceTree = "<group>"; };
 		FF3FDD73300B6A7400112486 /* Kero Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Kero Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -52,7 +49,6 @@
 				AA10000000000000000000B2 /* GhosttyTerminal in Frameworks */,
 				AA10000000000000000000B4 /* GhosttyTheme in Frameworks */,
 				AA10000000000000000000C2 /* STTextView in Frameworks */,
-				AA10000000000000000000E2 /* Sparkle in Frameworks */,
 				AA20000000000000000000A2 /* STTextView-Plugin-Neon in Frameworks */,
 				AA30000000000000000000A2 /* TreeSitterTSX in Frameworks */,
 				AA60000000000000000000A2 /* FuzzyMatch in Frameworks */,
@@ -61,19 +57,9 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		AA50000000000000000000A2 /* Config */ = {
-			isa = PBXGroup;
-			children = (
-				AA50000000000000000000A0 /* Debug.xcconfig */,
-				AA50000000000000000000A1 /* Local.example.xcconfig */,
-			);
-			path = Config;
-			sourceTree = "<group>";
-		};
 		FF3FDD6A300B6A7400112486 = {
 			isa = PBXGroup;
 			children = (
-				AA50000000000000000000A2 /* Config */,
 				FF3FDD75300B6A7400112486 /* kero */,
 				FF3FDD74300B6A7400112486 /* Products */,
 			);
@@ -111,7 +97,6 @@
 				AA10000000000000000000B3 /* GhosttyTheme */,
 				AA10000000000000000000C1 /* STTextView */,
 				AA10000000000000000000D1 /* PierreDiffsSwift */,
-				AA10000000000000000000E1 /* Sparkle */,
 				AA20000000000000000000A1 /* STTextView-Plugin-Neon */,
 				AA30000000000000000000A1 /* TreeSitterTSX */,
 				AA60000000000000000000A1 /* FuzzyMatch */,
@@ -151,7 +136,6 @@
 				AA10000000000000000000B0 /* XCLocalSwiftPackageReference "Vendor/libghostty-spm" */,
 				AA30000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/TreeSitterTSX" */,
 				AA10000000000000000000D0 /* XCRemoteSwiftPackageReference "PierreDiffsSwift" */,
-				AA10000000000000000000E0 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				AA20000000000000000000A0 /* XCRemoteSwiftPackageReference "STTextView-Plugin-Neon" */,
 				AA60000000000000000000A0 /* XCRemoteSwiftPackageReference "FuzzyMatch" */,
 			);
@@ -330,12 +314,13 @@
 		};
 		FF3FDD7F300B6A7600112486 /* Debug configuration for PBXNativeTarget "kero" */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = AA50000000000000000000A0 /* Debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "AppIcon-Dev";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = kero/kero.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				DEVELOPMENT_TEAM = RDQHYSDFFG;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 54;
 				ENABLE_APP_SANDBOX = NO;
@@ -344,8 +329,6 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = kero/Info.plist;
 				KERO_DISPLAY_NAME = "Kero Debug";
-				KERO_UPDATE_FEED_URL = "https://releases.kero.sh/appcast.xml";
-				KERO_UPDATE_PUBLIC_KEY = "gv9GLMPjH5yMQkZMFXnoNfHOyL8/7KGzl/jzAqlzZZY=";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -368,10 +351,12 @@
 		FF3FDD80300B6A7600112486 /* Release configuration for PBXNativeTarget "kero" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "AppIcon-Remote";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = kero/kero.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				DEVELOPMENT_TEAM = RDQHYSDFFG;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 54;
 				ENABLE_APP_SANDBOX = NO;
@@ -379,16 +364,14 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = kero/Info.plist;
-				KERO_DISPLAY_NAME = Kero;
-				KERO_UPDATE_FEED_URL = "https://releases.kero.sh/appcast.xml";
-				KERO_UPDATE_PUBLIC_KEY = "gv9GLMPjH5yMQkZMFXnoNfHOyL8/7KGzl/jzAqlzZZY=";
+				KERO_DISPLAY_NAME = "Kero Remote";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 0.1.48-remote.1;
-				PRODUCT_BUNDLE_IDENTIFIER = sh.kero;
+				PRODUCT_BUNDLE_IDENTIFIER = sh.kero.remote;
 				PRODUCT_NAME = kero;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -446,14 +429,6 @@
 				minimumVersion = 1.5.0;
 			};
 		};
-		AA10000000000000000000E0 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/sparkle-project/Sparkle";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.6.0;
-			};
-		};
 		AA20000000000000000000A0 /* XCRemoteSwiftPackageReference "STTextView-Plugin-Neon" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/krzyzanowskim/STTextView-Plugin-Neon";
@@ -489,11 +464,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA10000000000000000000D0 /* XCRemoteSwiftPackageReference "PierreDiffsSwift" */;
 			productName = PierreDiffsSwift;
-		};
-		AA10000000000000000000E1 /* Sparkle */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = AA10000000000000000000E0 /* XCRemoteSwiftPackageReference "Sparkle" */;
-			productName = Sparkle;
 		};
 		AA20000000000000000000A1 /* STTextView-Plugin-Neon */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -39,7 +39,7 @@ export default defineConfig({
         autoStaticPathsDiscovery: false,
         crawlLinks: false,
       },
-      pages: [{ path: '/changelog', prerender: { enabled: true } }, ...docsPages()],
+      pages: docsPages(),
       sitemap: { enabled: false },
     }),
     viteReact(),

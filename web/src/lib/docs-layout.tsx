@@ -1,13 +1,10 @@
 import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared'
 import { DEFAULT_LANGUAGE } from '@/lib/i18n'
+import { GITHUB_URL } from '@/lib/links'
 
-const GITHUB_URL = 'https://github.com/egoist/kero'
-const X_URL = 'https://x.com/localhost_4173'
-
-/** The changelog is generated from CHANGELOG.md, so it has no translation. */
 const NAV_LABELS = {
-  en: { home: 'Home', changelog: 'Changelog', download: 'Download' },
-  zh: { home: '首页', changelog: '更新日志', download: '下载' },
+  en: { home: 'Home', build: 'Build locally' },
+  zh: { home: '首页', build: '本地构建' },
 } as const
 
 /** Chrome shared by every docs page: the kero wordmark plus links back to the site. */
@@ -37,18 +34,10 @@ export function docsLayoutOptions(lang: string): BaseLayoutProps {
     },
     links: [
       { text: labels.home, url: home, active: 'url' },
-      { text: labels.changelog, url: '/changelog', active: 'url' },
-      { type: 'button', text: labels.download, url: home, active: 'none' },
-      // Sits beside the GitHub icon `githubUrl` renders.
       {
-        type: 'icon',
-        label: 'X',
-        text: 'X',
-        url: X_URL,
-        external: true,
-        // Explicit size: the icon is a masked span, not the `<svg>` Fumadocs
-        // sizes for you, so `size-full` would collapse it to nothing.
-        icon: <span className="i-mingcute-social-x-fill size-4" />,
+        type: 'button', text: labels.build,
+        url: lang === DEFAULT_LANGUAGE ? '/docs/installation' : `/${lang}/docs/installation`,
+        active: 'url',
       },
     ],
   }

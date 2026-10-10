@@ -1,18 +1,11 @@
 # Changelog
 
-All notable changes to kero. This file is the **source of truth for the release
-notes shown in the in-app updater**: [`scripts/release.ts`](scripts/release.ts)
-extracts the section whose heading matches the version being released
-(`MARKETING_VERSION`) and publishes it next to the update, so Sparkle shows it in
-the update prompt.
+Historical user-visible changes in Kero. This fork is built locally; it has
+no automatic update channel or publication pipeline.
 
-Format follows [Keep a Changelog](https://keepachangelog.com). Add a new
-`## [<version>]` section at the top for each release, matching the version you
-set in the Xcode project.
-
-Write release notes for the final product users receive, not the development
-history. When a feature is still unreleased, fold its fixes and refinements into
-the original feature bullet instead of adding separate entries for them.
+Format follows [Keep a Changelog](https://keepachangelog.com). Keep earlier
+entries as historical records; do not add implementation details from local
+work-in-progress changes.
 
 ## [0.1.48-remote.1]
 

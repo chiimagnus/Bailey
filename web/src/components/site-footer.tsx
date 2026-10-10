@@ -1,10 +1,8 @@
-import { Link } from '@tanstack/react-router'
 import { DocsLink, HomeLink } from '@/components/site-links'
 import { homeCopy } from '@/lib/home-copy'
 import { DEFAULT_LANGUAGE, i18n } from '@/lib/i18n'
-import { GITHUB_URL, X_URL } from '@/lib/release'
+import { GITHUB_URL } from '@/lib/links'
 
-const AUTHOR = '@localhost_4173'
 const LINK = 'text-foreground transition-colors hover:text-brand'
 
 export function SiteFooter({ lang = DEFAULT_LANGUAGE }: { lang?: string }) {
@@ -13,23 +11,14 @@ export function SiteFooter({ lang = DEFAULT_LANGUAGE }: { lang?: string }) {
 
   return (
     <footer className="text-[13px] text-muted-foreground">
-      {copy.footerBuiltBy.before}
-      <a href={X_URL} target="_blank" rel="noreferrer" className={LINK}>
-        {AUTHOR}
-      </a>
-      {copy.footerBuiltBy.after} ·{' '}
+      Kero · GPLv3 ·{' '}
       <a href={GITHUB_URL} target="_blank" rel="noreferrer" className={LINK}>
         GitHub
       </a>{' '}
       ·{' '}
       <DocsLink lang={lang} className={LINK}>
         {copy.footerDocs}
-      </DocsLink>{' '}
-      ·{' '}
-      {/* The changelog is generated from CHANGELOG.md, so it stays English. */}
-      <Link to="/changelog" className={LINK}>
-        {copy.footerChangelog}
-      </Link>
+      </DocsLink>
       {others.map((code) => (
         <span key={code}>
           {' '}
@@ -38,8 +27,7 @@ export function SiteFooter({ lang = DEFAULT_LANGUAGE }: { lang?: string }) {
             {homeCopy(code).languageName}
           </HomeLink>
         </span>
-      ))}{' '}
-      · © 2026
+      ))}
     </footer>
   )
 }

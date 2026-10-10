@@ -1,60 +1,40 @@
 ---
 title: 安装
-description: 下载 Kero、用 Homebrew 安装、保持更新，以及干净地卸载。
+description: 从源码构建、运行和卸载 Kero Remote。
 ---
 
-每个构建都经过 Apple 签名与公证，所以打开时不会弹出 Gatekeeper 警告。当前版本需要的最低
-macOS 版本，标在 [kero.sh](https://kero.sh) 的下载按钮旁边。
+Kero Remote 只从源码进行本地构建，不提供 DMG、Homebrew Cask 或自动更新。
 
-## 下载
+## 本地构建与运行
 
-从 [kero.sh](https://kero.sh) 下载 `.dmg`，打开后把 **Kero** 拖进「应用程序」文件夹。
+需要 macOS 15.6+、Xcode，以及已安装在钥匙串中的个人 Apple Development 签名证书。
 
-## Homebrew
-
-```bash
-brew install egoist/tap/kero
+```sh
+git clone --recurse-submodules https://github.com/chiimagnus/kero.git
+cd kero
+xcodebuild -project kero.xcodeproj -scheme kero -configuration Release \
+  -destination 'platform=macOS,arch=arm64' -derivedDataPath build/DerivedData build
+open 'build/DerivedData/Build/Products/Release/Kero Remote.app'
 ```
 
-cask 放在 `egoist/homebrew-tap`，所以要写完整的 tap 名。升级方式和别的软件一样：
+平时开发直接用 Xcode 打开 `kero.xcodeproj`，构建 **Debug** 即可。Debug 使用独立配置，
+不会覆盖正式版数据。更多细节见[开发说明](https://github.com/chiimagnus/kero/blob/main/CONTRIBUTING.md)。
 
-```bash
-brew upgrade --cask kero
-```
-
-## 更新
-
-Kero 通过 [Sparkle](https://sparkle-project.org) 自动更新：后台检查、静默下载，等你下次退出时安装——真正应用之前，你会先看到更新说明。
-
-想改这个行为，用 <kbd>Cmd</kbd>+<kbd>,</kbd> 打开 **设置 → Updates**：
-
-- **Automatically check for updates**——彻底关掉后台检查。
-- **Check for Updates…**——立刻检查一次。
-
-<Callout title="用 Homebrew 装的？">
-两条更新路径都能用。如果你更希望由 Homebrew 管理版本，就关掉自动检查，自己按节奏跑
-`brew upgrade --cask kero`。
-</Callout>
+Release 使用本机 **Apple Development** 证书签名，未针对公开分发进行 Apple 公证。
+替换 `/Applications` 中的版本之前，先退出旧 App，确认没有终端任务会被中断。
 
 ## 从 Finder 打开文件夹
 
-Kero 注册了一个名为 **New Kero Project Here** 的 macOS 服务。在 Finder 里选中一个或多个文件夹，右键，从 **服务** 子菜单里选它——每个文件夹都会作为一个项目打开，终端已经在对应目录里启动好了。
-
-如果菜单里没有它，去 **系统设置 → 键盘 → 键盘快捷键 → 服务 → 文件和文件夹** 打开。macOS
-只会在应用至少启动过一次之后才列出新服务。
+将 Kero Remote 安装至应用程序并启动一次后，Finder 会在选中文件夹的 **服务** 菜单
+中显示 **New Kero Remote Project Here**。如果没有出现，打开 **系统设置 → 键盘 →
+键盘快捷键 → 服务 → 文件和文件夹** 启用它。
 
 ## 卸载
 
-如果打开了 **设置 → Automation → AI**，请先关掉再删除应用，让 Kero 移除它安装的 agent 支持。
+若启用了 **设置 → Automation → AI**，请先关闭该功能以清理已安装的 Agent 支持。
+然后从「应用程序」删除 **Kero Remote.app**。如果还要清除保存的工作区和偏好设置：
 
-从「应用程序」里删掉 `Kero.app`，如果想彻底清干净，再删掉它的配置：
-
-```bash
+```sh
 rm -rf ~/.config/kero
-```
-
-窗口布局、侧边栏宽度和会话快照存在 macOS 自己的偏好设置里：
-
-```bash
-defaults delete sh.kero
+defaults delete sh.kero.remote
 ```

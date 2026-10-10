@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "kero-release",
+      "name": "kero-monorepo",
       "devDependencies": {
         "@types/bun": "latest",
       },

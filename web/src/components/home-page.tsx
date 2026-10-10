@@ -1,15 +1,14 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { SiteLayout } from '@/components/site-layout'
 import { DocsLink } from '@/components/site-links'
 import { homeCopy, type Row } from '@/lib/home-copy'
-import { BREW_COMMAND, GITHUB_URL, type Release } from '@/lib/release'
-import { cn } from '@/lib/utils'
+import { GITHUB_URL } from '@/lib/links'
 
 const BUTTON =
   'inline-flex items-center gap-2 rounded-[9px] border border-border bg-card px-4 py-[7px] text-foreground transition-colors hover:border-brand hover:bg-brand/8 hover:text-brand'
 
 /** The landing page, rendered once per language from `homeCopy`. */
-export function HomePage({ lang, release }: { lang: string; release: Release }) {
+export function HomePage({ lang }: { lang: string }) {
   const copy = homeCopy(lang)
 
   return (
@@ -36,9 +35,9 @@ export function HomePage({ lang, release }: { lang: string; release: Release }) 
     >
       <section className="flex flex-col gap-3.5">
         <div className="flex flex-wrap items-center gap-2.5">
-          <a href={release.dmg} download className={BUTTON}>
+          <a href={lang === 'zh' ? '/zh/docs/installation' : '/docs/installation'} className={BUTTON}>
             <span className="i-mingcute-apple-fill size-4 shrink-0" />
-            {copy.download}
+            {copy.build}
           </a>
           <DocsLink lang={lang} className={BUTTON}>
             <span className="i-mingcute-book-2-fill size-4 shrink-0" />
@@ -49,15 +48,8 @@ export function HomePage({ lang, release }: { lang: string; release: Release }) 
             GitHub
           </a>
         </div>
-        <CopyCommand
-          command={BREW_COMMAND}
-          label={copy.copy}
-          copiedLabel={copy.copied}
-          aria={copy.copyAria(BREW_COMMAND)}
-        />
         <div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
-          <Pill>v{release.version}</Pill>
-          <Pill>macOS {release.minSystem}+</Pill>
+          <Pill>macOS 15.6+</Pill>
           <Pill>{copy.pillFree}</Pill>
         </div>
       </section>
@@ -130,77 +122,6 @@ function SectionHeading({ children }: { children: ReactNode }) {
     <h2 className="text-[13px] font-normal tracking-[0.04em] text-muted-foreground">
       {children}
     </h2>
-  )
-}
-
-/**
- * The Homebrew one-liner with a copy button, sharing the download button's
- * chrome. The command stays selectable so it's still usable if the Clipboard
- * API isn't available (insecure context, denied permission).
- */
-function CopyCommand({
-  command,
-  label,
-  copiedLabel,
-  aria,
-}: {
-  command: string
-  label: string
-  copiedLabel: string
-  aria: string
-}) {
-  const [copied, setCopied] = useState(false)
-  const commandRef = useRef<HTMLSpanElement>(null)
-
-  useEffect(() => {
-    if (!copied) return
-    const timer = setTimeout(() => setCopied(false), 2000)
-    return () => clearTimeout(timer)
-  }, [copied])
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(command)
-      setCopied(true)
-    } catch {
-      // Clipboard denied (insecure context, permissions policy). Select the
-      // command so ⌘C still works — a button that does nothing reads as broken.
-      const node = commandRef.current
-      if (!node) return
-      const range = document.createRange()
-      range.selectNodeContents(node)
-      const selection = window.getSelection()
-      selection?.removeAllRanges()
-      selection?.addRange(range)
-    }
-  }
-
-  return (
-    <div className="flex max-w-full items-stretch self-start overflow-hidden rounded-[9px] border border-border bg-card">
-      <code className="flex min-w-0 items-center gap-2 overflow-x-auto px-4 py-[7px] whitespace-pre">
-        <span aria-hidden className="shrink-0 text-muted-foreground select-none">
-          $
-        </span>
-        <span ref={commandRef}>{command}</span>
-      </code>
-      <button
-        type="button"
-        onClick={copy}
-        aria-label={aria}
-        className="inline-flex shrink-0 items-center gap-2 border-l border-border px-3.5 text-muted-foreground transition-colors hover:bg-brand/8 hover:text-brand"
-      >
-        <span
-          aria-hidden
-          className={cn(
-            'size-4 shrink-0',
-            copied ? 'i-mingcute-check-line' : 'i-mingcute-copy-2-line',
-          )}
-        />
-        <span aria-live="polite" className="max-[420px]:sr-only">
-          {copied ? copiedLabel : label}
-        </span>
-      </button>
-    </div>
   )
 }
 

@@ -1,7 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { HomePage } from '@/components/home-page'
 import { homeCopy } from '@/lib/home-copy'
-import { fetchLatestRelease } from '@/lib/release'
 
 const LANG = 'zh'
 
@@ -13,9 +12,6 @@ const LANG = 'zh'
  */
 export const Route = createFileRoute('/zh/')({
   component: Home,
-  // Fetched per request (SSR) so the page always advertises the newest release.
-  loader: () => fetchLatestRelease(),
-  staleTime: 5 * 60 * 1000,
   head: () => {
     const copy = homeCopy(LANG)
     return {
@@ -28,5 +24,5 @@ export const Route = createFileRoute('/zh/')({
 })
 
 function Home() {
-  return <HomePage lang={LANG} release={Route.useLoaderData()} />
+  return <HomePage lang={LANG} />
 }

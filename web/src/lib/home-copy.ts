@@ -13,11 +13,8 @@ export type HomeCopy = {
   taglineAfter: string
   intro: string
   introFree: string
-  download: string
+  build: string
   docs: string
-  copy: string
-  copied: string
-  copyAria: (command: string) => string
   pillFree: string
   screenshotAlt: string
   screenshotCaption: string
@@ -33,10 +30,7 @@ export type HomeCopy = {
    */
   shortcuts: Row[]
   faq: { q: string; a: string }[]
-  /** The author's name is a link, so the credit is split around it. */
-  footerBuiltBy: { before: string; after: string }
   footerDocs: string
-  footerChangelog: string
 }
 
 const en: HomeCopy = {
@@ -50,11 +44,8 @@ const en: HomeCopy = {
   intro:
     'A native macOS workspace built around the terminal — projects, persistent sessions, files, and git in one window.',
   introFree: 'Free, no telemetry, no subscription.',
-  download: 'Download',
+  build: 'Build locally',
   docs: 'Docs',
-  copy: 'Copy',
-  copied: 'Copied',
-  copyAria: (command) => `Copy "${command}" to the clipboard`,
   pillFree: 'free & open-source',
   screenshotAlt: "kero showing a project's terminal session with the git panel open",
   screenshotCaption: 'Projects, tabs, the info panel open beside it',
@@ -157,12 +148,7 @@ const en: HomeCopy = {
         {
           name: 'Fonts',
           detail:
-            'ships with JetBrains Mono and Nerd Font symbols; swap in any monospace family and size',
-        },
-        {
-          name: 'Quiet updates',
-          detail:
-            'new builds check in with Sparkle and install in the background, on their own',
+            'ships with JetBrains Mono, PingFang SC CJK fallback, and Nerd Font symbols; change the primary font and size in Settings',
         },
       ],
     },
@@ -191,7 +177,7 @@ const en: HomeCopy = {
   faq: [
     {
       q: 'Is kero free?',
-      a: 'Yes. Free to download, no subscription, no account.',
+      a: 'Yes. Free to build from source, no subscription, no account.',
     },
     {
       q: 'Does it replace my shell?',
@@ -199,7 +185,7 @@ const en: HomeCopy = {
     },
     {
       q: 'Does it collect any data?',
-      a: 'No telemetry, no analytics. Its only automatic network request is the update check; browser pages and agent CLIs make only the requests you ask them to.',
+      a: 'No telemetry, no analytics, and no automatic update checks. Browser pages, SSH, and agent CLIs can make network requests when you use them.',
     },
     {
       q: 'What happens to my sessions when I quit?',
@@ -210,9 +196,7 @@ const en: HomeCopy = {
       a: 'No — the terminal stays the center of gravity. The git and files panels exist so you can review and ship what happens in the terminal without switching to an editor.',
     },
   ],
-  footerBuiltBy: { before: 'Built by ', after: '' },
   footerDocs: 'Docs',
-  footerChangelog: 'Changelog',
 }
 
 const zh: HomeCopy = {
@@ -226,11 +210,8 @@ const zh: HomeCopy = {
   intro:
     '以终端为中心的原生 macOS 工作区——项目、可恢复的会话、文件和 git，都在同一个窗口里。',
   introFree: '免费，无遥测，无订阅。',
-  download: '下载',
+  build: '本地构建',
   docs: '文档',
-  copy: '复制',
-  copied: '已复制',
-  copyAria: (command) => `将「${command}」复制到剪贴板`,
   pillFree: '免费开源',
   screenshotAlt: 'kero 窗口：项目的终端会话，旁边开着 git 面板',
   screenshotCaption: '项目、标签页，旁边开着信息面板',
@@ -324,11 +305,7 @@ const zh: HomeCopy = {
         },
         {
           name: '字体',
-          detail: '内置 JetBrains Mono 和 Nerd Font 符号；也可以换成任何等宽字体和字号',
-        },
-        {
-          name: '静默更新',
-          detail: '通过 Sparkle 在后台检查并安装新版本，不用你操心',
+          detail: '内置 JetBrains Mono、苹方中文后备字体和 Nerd Font 符号；可以自定义主字体及字号',
         },
       ],
     },
@@ -357,7 +334,7 @@ const zh: HomeCopy = {
   faq: [
     {
       q: 'kero 免费吗？',
-      a: '是的。免费下载，无需订阅，也不需要账号。',
+      a: '是的。可从源码自行构建，无需订阅，也不需要账号。',
     },
     {
       q: '它会替换我的 shell 吗？',
@@ -365,7 +342,7 @@ const zh: HomeCopy = {
     },
     {
       q: '它会收集数据吗？',
-      a: '没有遥测，也没有分析统计。唯一自动发起的是更新检查；浏览器页面和 agent CLI 只会发送你要求的请求。',
+      a: '没有遥测、统计脚本或自动更新检查。浏览器、SSH 和 Agent CLI 会在你使用时发起各自的网络请求。',
     },
     {
       q: '退出之后我的会话会怎样？',
@@ -376,9 +353,7 @@ const zh: HomeCopy = {
       a: '不是——终端始终是核心。git 和文件面板是为了让你不用切到编辑器，也能审阅并提交终端里完成的工作。',
     },
   ],
-  footerBuiltBy: { before: '由 ', after: ' 打造' },
   footerDocs: '文档',
-  footerChangelog: '更新日志',
 }
 
 const COPY: Record<string, HomeCopy> = { en, zh }

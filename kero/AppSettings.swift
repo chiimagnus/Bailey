@@ -100,7 +100,7 @@ final class AppSettings: nonisolated ObservableObject {
     /// instead of `~/.config/kero`, so running a dev build alongside an
     /// installed production build doesn't clobber its settings. This mirrors
     /// the separate `sh.kero.dev` bundle identifier that keeps the two apps'
-    /// `UserDefaults` (session snapshot, sidebar widths, Sparkle) apart.
+    /// `UserDefaults` (session snapshot and sidebar widths) apart.
     static let configURL: URL = {
         #if DEBUG
         let directory = "kero-dev"

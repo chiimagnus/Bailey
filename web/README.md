@@ -9,7 +9,7 @@ macOS.
 - [Tailwind CSS v4](https://tailwindcss.com)
 - [shadcn/ui](https://ui.shadcn.com) with **Base UI** primitives (`@base-ui/react`)
 - [Fumadocs](https://fumadocs.dev) for `/docs`
-- Deployed to [Cloudflare Workers](https://developers.cloudflare.com/workers/)
+- Supports [Cloudflare Workers](https://developers.cloudflare.com/workers/)
   via [`@cloudflare/vite-plugin`](https://developers.cloudflare.com/workers/vite-plugin/)
 
 ## Develop
@@ -32,8 +32,8 @@ bun run deploy        # vite build → wrangler deploy
 picks it up. `bun run preview` serves the built Worker locally.
 
 Config lives in [`wrangler.jsonc`](wrangler.jsonc) (worker name, compatibility
-flags). To serve from `kero.sh`, uncomment the `routes` entry there once the zone
-is on Cloudflare. Run `bun run cf-typegen` after adding any bindings.
+flags). Set up your own domain in Cloudflare if needed. Run `bun run cf-typegen`
+after adding any bindings. The site has no binary downloads or release feed.
 
 ## Languages
 
@@ -63,8 +63,8 @@ language also needs a tokenizer entry in
 Docs pages are written for people using the app; see
 [CONTRIBUTING.md](../CONTRIBUTING.md). Every docs URL is prerendered —
 [`vite.config.ts`](vite.config.ts) derives the list from the filenames, so a new
-page needs no config change. The landing pages are rendered per request instead,
-since they read the current version from the appcast.
+page needs no config change. Landing pages show local-build instructions,
+not a downloadable release.
 
 ## Notes
 
@@ -73,9 +73,6 @@ since they read the current version from the appcast.
   same variables through `fumadocs-ui/css/shadcn.css`, so the docs inherit it.
 - Add more components with `bunx shadcn@latest add <name>` — the project is
   already configured for Base UI (`components.json` → `"style": "base-nova"`).
-- Landing pages read the newest release from the Sparkle appcast through
-  [`src/lib/release.ts`](src/lib/release.ts). Keep its fallback release current
-  so downloads still work if the appcast is temporarily unavailable.
 - The hero product shot is [`public/kero-screenshot.png`](public/kero-screenshot.png)
   (a real app screenshot with transparent padding + shadow) — swap the file to
   update it.

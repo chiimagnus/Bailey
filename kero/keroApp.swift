@@ -9,10 +9,6 @@ struct keroApp: App {
     @NSApplicationDelegateAdaptor(KeroApplicationDelegate.self)
     private var applicationDelegate
 
-    // Held here so Sparkle starts at launch and background checks run even if
-    // the menu is never opened.
-    @StateObject private var updater = Updater.shared
-
     init() {
         TerminalFont.registerBundledFonts()
         TerminalNotificationService.shared.configure()
@@ -32,11 +28,6 @@ struct keroApp: App {
         .windowBackgroundDragBehavior(.disabled)
         .defaultSize(width: 900, height: 600)
         .commands {
-            CommandGroup(after: .appInfo) {
-                if updater.isAvailable {
-                    CheckForUpdatesView(updater: updater)
-                }
-            }
             KeroCommands()
         }
 

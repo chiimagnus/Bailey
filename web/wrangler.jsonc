@@ -10,6 +10,4 @@
     "enabled": true
   }
 
-  // To serve from your own domain, add routes once kero.sh is on Cloudflare:
-  // "routes": [{ "pattern": "kero.sh", "custom_domain": true }]
 }

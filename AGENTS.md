@@ -5,7 +5,7 @@ an editor, and a diff viewer. Existing SwiftUI code is legacy; AppKit is the UI 
 
 - [PRODUCT.md](PRODUCT.md) — who Kero is for; product and design calls follow from it.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — build, verify, and what a PR must say. Read before opening one.
-- [RELEASING.md](RELEASING.md) — maintainer-only. Never bump the version in a PR.
+- No updater or publishing pipeline. Local builds are described in CONTRIBUTING.md.
 
 ## Verify
 

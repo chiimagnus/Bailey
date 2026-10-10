@@ -80,7 +80,7 @@ struct SidebarView: View {
                     tooltipAlignment: .trailing
                 ) {
                     NSWorkspace.shared.open(
-                        URL(string: "https://github.com/egoist/kero/issues/new")!
+                        URL(string: "https://github.com/chiimagnus/kero/issues/new")!
                     )
                 }
                 SidebarFooterButton(

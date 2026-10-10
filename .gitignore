@@ -1,4 +1,4 @@
-# Release artifacts produced by scripts/release.ts
+# Local build outputs
 /build/
 
 # Bun / node deps
