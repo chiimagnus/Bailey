@@ -3,7 +3,7 @@ current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
-title = "固定状态所有权与行为基线"
+title = "核对代码所有权与基础回归"
 status = "pending"
 plan = "plan-p1.md#p1-t1"
 commit = ""
@@ -11,7 +11,7 @@ note = ""
 
 [[tasks]]
 id = "P1-T2"
-title = "共享树模型与行组件归位"
+title = "共享树唯一归属与旧路径同步移除"
 status = "pending"
 plan = "plan-p1.md#p1-t2"
 commit = ""
@@ -19,23 +19,15 @@ note = ""
 
 [[tasks]]
 id = "P1-T3"
-title = "文件树模型归入 Files"
+title = "文件树模型归入 Files，项目持有者不变"
 status = "pending"
 plan = "plan-p1.md#p1-t3"
 commit = ""
 note = ""
 
 [[tasks]]
-id = "P1-T4"
-title = "Info 数据模型归位"
-status = "pending"
-plan = "plan-p1.md#p1-t4"
-commit = ""
-note = ""
-
-[[tasks]]
 id = "P2-T1"
-title = "核对面板生命周期与异步回写"
+title = "抽离 Files 面板与唯一共享标题"
 status = "pending"
 plan = "plan-p2.md#p2-t1"
 commit = ""
@@ -43,7 +35,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T2"
-title = "抽离 Files 面板与共享标题"
+title = "抽离 Git 面板和破坏性操作确认 UI"
 status = "pending"
 plan = "plan-p2.md#p2-t2"
 commit = ""
@@ -51,7 +43,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T3"
-title = "抽离 Git 面板及确认交互"
+title = "抽离 Info 面板及其数据模型"
 status = "pending"
 plan = "plan-p2.md#p2-t3"
 commit = ""
@@ -59,7 +51,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T4"
-title = "抽离 Info 面板与子行"
+title = "让 SSH 转发记录跟随连接，而非工具 View"
 status = "pending"
 plan = "plan-p2.md#p2-t4"
 commit = ""
@@ -67,7 +59,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T5"
-title = "收敛面板工作区上下文与刷新责任"
+title = "收敛同一项目内异步范围校验"
 status = "pending"
 plan = "plan-p2.md#p2-t5"
 commit = ""
@@ -75,7 +67,7 @@ note = ""
 
 [[tasks]]
 id = "P3-T1"
-title = "项目显式接收初始工作区配置"
+title = "项目显式接收布局初始值，同步清理设置旧格式"
 status = "pending"
 plan = "plan-p3.md#p3-t1"
 commit = ""
@@ -83,7 +75,7 @@ note = ""
 
 [[tasks]]
 id = "P3-T2"
-title = "内部窗格模型归入 Workspace"
+title = "删除已淘汰的快照解码分支，只保留当前格式"
 status = "pending"
 plan = "plan-p3.md#p3-t2"
 commit = ""
@@ -91,7 +83,7 @@ note = ""
 
 [[tasks]]
 id = "P3-T3"
-title = "窗口协调者源码归位"
+title = "内层 Pane 数据模型与渲染分离"
 status = "pending"
 plan = "plan-p3.md#p3-t3"
 commit = ""
@@ -99,7 +91,7 @@ note = ""
 
 [[tasks]]
 id = "P3-T4"
-title = "抽离底部工具栏及原生控件"
+title = "窗口协调者归入 Workspace，不拆现用 owner"
 status = "pending"
 plan = "plan-p3.md#p3-t4"
 commit = ""
@@ -107,39 +99,39 @@ note = ""
 
 [[tasks]]
 id = "P3-T5"
-title = "抽离标签外观与重命名控件"
+title = "收敛 WorkspaceBackend 接口与具体实现的源码边界"
 status = "pending"
 plan = "plan-p3.md#p3-t5"
 commit = ""
 note = ""
 
 [[tasks]]
+id = "P3-T6"
+title = "把被 Dock 使用的底部工具栏抽成独立组件"
+status = "pending"
+plan = "plan-p3.md#p3-t6"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T7"
+title = "把标签胶囊、重命名和内容标签统一归入 Components"
+status = "pending"
+plan = "plan-p3.md#p3-t7"
+commit = ""
+note = ""
+
+[[tasks]]
 id = "P4-T1"
-title = "审查 Git 本地与 SSH 执行契约"
+title = "提取 Git 进程执行，并一次性修正全部消费者"
 status = "pending"
 plan = "plan-p4.md#p4-t1"
 commit = ""
 note = ""
 
 [[tasks]]
-id = "P4-T2"
-title = "提取 Git 无状态命令执行"
-status = "pending"
-plan = "plan-p4.md#p4-t2"
-commit = ""
-note = ""
-
-[[tasks]]
-id = "P4-T3"
-title = "收敛 Git 快照本地与远端策略"
-status = "pending"
-plan = "plan-p4.md#p4-t3"
-commit = ""
-note = ""
-
-[[tasks]]
 id = "P5-T1"
-title = "全仓目录与长期文档归属审查"
+title = "全仓调用链、旧路径和文档交叉核销"
 status = "pending"
 plan = "plan-p5.md#p5-t1"
 commit = ""
@@ -147,7 +139,7 @@ note = ""
 
 [[tasks]]
 id = "P5-T2"
-title = "端到端验收并关闭重构风险"
+title = "安全替换签名 Debug 并验证核心工作流"
 status = "pending"
 plan = "plan-p5.md#p5-t2"
 commit = ""

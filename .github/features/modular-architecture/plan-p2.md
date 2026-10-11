@@ -1,122 +1,106 @@
-# P2：按功能拆分 Files / Git / Info 面板
+# P2：Files / Git / Info 面板职责与真实生命周期
 
-**Goal：** 结束 `ToolPanelView.swift` 同时拥有三套大型 UI 实现的结构，让 Files、Git、Info 各自维护界面；保留一个足够轻的标签组面板宿主，明确现有异步刷新/连接对象的生命周期。
+**Goal：** 把三套面板 UI 移出混合文件，并处理源码已确认可达的连接状态与异步范围错配；不建立新容器或重写业务模型。
 
-**Non-goals：** 不改变侧栏/标签外观、菜单或弹窗；不重写 Git 操作/Info 扫描算法；不为了视图拆分新建通用 Controller、Store 或 Protocol。
+**Non-goals：** 不改变 Kero 的标签外观、菜单和面板功能；不增加全局刷新服务、事件总线、统一后端协议或多层防护状态。
 
-**Approach：** 先实测跨项目、跨标签和远程断线时 View/模型的实际重建和任务取消；再一次一个面板迁移**现有**类型、关联 helper 和布局。分离单个共享标题头后，原宿主保留通用环境/刷新入口；再沿实际调用链收敛场景选择，避免把本地/SSH 安全决策写在视图里。
+**Approach：** 依次抽离 Files、Git、Info 的已有 View/私有 helper，每次完成编译接入并删除旧定义；最后在各自真实所有者上收敛两条已识别的状态链：`PortForwardController` 的连接生命周期，以及 Git/Info 异步结果的工作区范围。
 
-**Acceptance：**
-- `ToolPanelView.swift` 不再内含 Files/Git/Info 三个庞大的视图及其私有行类型；三个面板可以独立定位源码，不复制树语义或操作实现。
-- 终端工作目录变化、项目切换、窗口重建、SSH 重连不会使旧刷新覆盖新工作区；Git 不被新增无条件轮询。
-- Git 丢弃/暂存/提交/历史 diff、Files 新建/重命名/打开、Info 端口转发均与 P1 基线一致；面板位置与项目数据范围无关。
+**Acceptance：** `ToolPanelView` 只负责工具标签的渲染选择和当前必要的生命周期触发，Files/Git/Info 的 UI 源码各有唯一归属；从工具标签离开再回来，不会丢失既有 SSH 转发记录；Git/Info 不显示来自旧项目/旧工作目录的返回值。
 
-**Rules：** 当前 `ToolPanelView` 的 `PanelSyncQueue` 合并异步请求，`Project.panelRoot` 计算面板工作区根，`FileTreeModel.sync` / `SessionInfoModel.sync` / `GitStatusModel.sync` 分别消费结果；不得在拆文件时凭直觉改写这些路径。`PortForwardRegistry` 与 `RemoteConnection` 的生命周期须有 P2-T1 证据才能改变。
+**Rules：** `GitStatusModel` 仍由 `ContentView` 作为窗口级状态持有，`Project.fileTree` 持有 Files 模型；`PanelSyncQueue` 已合并远端目录刷新，不因拆分而新增并行轮询。`RemoteConnection` 执行 SSH 转发，销毁视图不是停止 SSH 的理由。
 
 ---
 
 <a id="p2-t1"></a>
-## P2-T1 核对面板生命周期与异步回写时序
+## P2-T1 抽离 Files 面板与唯一共享标题
 
-**类型 / 依赖：** 最小只读实验；依赖 P1 全部任务，先产证据，不实施架构改写。
+**Files：**
+- 从 `kero/UI/Panels/ToolPanelView.swift` 移出 `PanelHeader` → `kero/UI/Panels/PanelHeader.swift`。
+- 移出 `FileTreePanel`、`FileTreeScrollView`、`FileTreeRow` 及 Files 独有 helper → `kero/Files/FileTreePanel.swift`；删掉原文件中相应定义。
+- `ToolPanelView` 仍按 `Project.fileTree`、`git` 与文件打开/重命名闭包调用它，公共行来自 P1 的 `Shared/Tree`。
 
-**源头与真实路径：** `kero/UI/WorkspaceDockView.swift::DockTabGroupView.content` 建立 `ToolPanelView`；宿主内 `@StateObject SessionInfoModel`、`@State PanelSyncQueue`、`@State PortForwardRegistry`、`applyRemoteHeading()`、`performSync()`；后者通过 `Project.panelContext/panelRoot` 和 `WorkspaceBackend` 进入 Files/Info；`ContentView` 持有窗口级 `GitStatusModel`。
+**依据：** 原文件 `// MARK: - File tree` 下的类型由 `ToolPanelView.body` 唯一实例化；公共 `PanelHeader` 被多个工具面板使用，不应该复刻。调整 `private` 访问仅限真实跨文件调用。
 
-**操作与决策：**
-1. 用 CodeGraph 追踪宿主显示条件与 `@StateObject`/异步任务的实际生命周期，确认切项目、工具标签在外层分屏间移动、关闭再加入、切换本地/SSH 时对象是否重建；对照窗口创建/重建和端口转发的现有持有者。
-2. 在签名 Debug 隔离场景做最少量可观察实验：Files/Info 正在刷新时切项目；终端快速 `cd` 改变目录；SSH 连接变更/断线期间离开、重返面板。核对最终目录、Git 范围、Info 端口显示和连接状态，而非只看请求完成日志。
-3. 如发现实际失效/资源泄漏，记录触发顺序、唯一应持有状态的对象和一项最小修复路径；如没有证据，仅记录现有 `PanelSyncQueue` 与各 Model 已满足的条件，不提前增加服务。结果写入本地 `evidence-p2.md`，用于决定 P2-T5 是否需要移动状态持有者。
+**实施：** 原样移动相关视图与 helper，同一提交移除旧定义、无用 import 和错误源码路径；`docs/PERFORMANCE.md` 引用 FileTreePanel/旧 ToolPanel 路径的地方当场更新。清理所触及文件中“固定右侧栏”一类已失效的注释，不改变文件操作目标选择，也不在此时新增 `FilesController` 或根目录解析方案。
 
-**验证：** 对每个路径分别记录操作、最终可见结果、对象生命周期证据、未覆盖的 SSH 场景；不得将“AX 点击成功”算为面板刷新成功。只读实验无 Git 提交。
+**验证：** Debug 编译/签名，原生 Files 面板的创建/重命名/打开、项目范围、目录压缩、状态颜色与按钮命中；运行 P1 对应文件树与树行检查；确认没有第二份 `PanelHeader`、`FileTreeRow` 或 `TreeRowSurface`。
+
+**提交边界：** Files 显示与共享标题归位、旧定义当场删除，一个原子提交。
 
 ---
 
 <a id="p2-t2"></a>
-## P2-T2 独立 Files 面板并保留共享标题
+## P2-T2 抽离 Git 面板和破坏性操作确认 UI
 
-**类型 / 依赖：** 原子源码迁移；依赖 P2-T1。
+**Files：**
+- 从 `ToolPanelView.swift` 的 `// MARK: - Git panel` 移出 `GitPanel`、`GitSectionHeader`、`GitEntryRow`、`NonemptyTextFieldValidator` 以及仅供 Git 使用的私有类型 → `kero/Git/GitPanel.swift`。
+- 保留 `GitStatusModel`、`RecentCommitsView`、`DiffViewerView` 原位置和窗口级状态；同任务删除原 GitPanel 旧定义。
 
-**Files / 锚点：**
-- Extract from `kero/UI/Panels/ToolPanelView.swift`: `FileTreePanel`、`FileTreeScrollView`、`FileTreeRow` 及仅 Files 使用的辅助类型/方法（目前位于 `// MARK: - File tree`）。
-- New: `kero/Files/FileTreePanel.swift`。
-- Move shared `PanelHeader` into `kero/UI/Panels/PanelHeader.swift`（它当前被多个面板使用，不能复制三份）。
-- Update: 原宿主中 `FileTreePanel(...)` 的构造引用；使用 P1 的 `Shared/Tree`。
+**依据：** GitPanel 内 `PendingDiscard`、指纹对照、`EntryOperation`、`OperationTrigger` 保护实际丢弃/暂存操作，属于 Git 操作 UI，不是通用表单逻辑。
 
-**当前依据：** `ToolPanelView` 通过 `Project.fileTree`、窗口级 `git`、`manager.openFile/openFileToSide`、`manager.fileRenamed` 与 `git.refresh` 给 FileTreePanel 传入操作闭包；业务范围取自当前项目和 `fileActionSession`。
+**实施：** 一次性迁移 GitPanel 的私有 helper、确认弹窗、操作闭包与原有按钮样式；保留 `openDiff/openCommitDiff` 路径和对唯一共享树组件的引用。不因为文件超过 1,000 行拆出无用途的额外 ViewModel/Protocol。
 
-**实施：** 将现有 Files 视图及关联私有 helper 整体移出，跨文件需要访问的类型仅做最小访问控制调整，移完即删除旧定义；共用标题保留一份。宿主中的回调、Files 根目录状态、压缩目录/展开、文件动作和刷新触发保持原样。
+**验证：** 签名 Debug 的 Git 工作/暂存与历史树、分支/菜单、Diff 打开、焦点与弹窗；**仅在独立测试仓库**实测暂存/取消/丢弃/提交，确保最终 Git 文件和 UI 结果正确。共享树原生命中回归、编译/签名与旧类型删除检查均通过。
 
-**验证：** 更新路径后的 Files/共享树检查及 Debug 构建/签名；真机检查本地/SSH 文件、项目切换、固定目录、打开/新建/重命名、Git 文件颜色/压缩目录/点击命中、长名称和键盘导航；对照 P1 基线。运行 `git diff --check`、`rg` 确认无重复 PanelHeader/TreeRow。
-
-**提交边界：** Files 面板及共享标题抽离一个中文原子提交，包含必要最小引用更新。
+**提交边界：** Git 面板整体迁移 + 旧实现当场清理，一个原子提交。
 
 ---
 
 <a id="p2-t3"></a>
-## P2-T3 将 Git 面板与操作确认 UI 归入 Git
+## P2-T3 抽离 Info 面板及其数据模型
 
-**类型 / 依赖：** 原子源码迁移；依赖 P2-T2。
+**Files：**
+- `git mv kero/Terminal/SessionInfoModel.swift kero/Info/SessionInfoModel.swift`。
+- 从 `ToolPanelView.swift` 的 `// MARK: - Info panel` 移出 `InfoPanel`、`InfoProcessRow`、`InfoPortRow` 及专属 helper → `kero/Info/InfoPanel.swift`；旧实现同步删除。
+- 保留 `ToolPanelView` 对 `SessionInfoModel` 的创建与现有 `InfoPanel(model:session:sshHost:forwards:)` 调用，P2-T4/T5 才处理被确认不稳定的生命周期。
 
-**Files / 锚点：**
-- Extract from `kero/UI/Panels/ToolPanelView.swift`: `GitPanel`、`NonemptyTextFieldValidator`、`GitSectionHeader`、`GitEntryRow` 及仅被其使用的私有 helper（从 `// MARK: - Git panel` 至 `// MARK: - Info panel`）。
-- New: `kero/Git/GitPanel.swift`。保留现有 `GitStatusModel.swift`、`RecentCommitsView.swift`、Diff 视图位置不变。
-- Consumer: `ToolPanelView` 的 `.git` 分支、`PanelHeader` 与 `Shared/Tree`。
+**依据：** `SessionInfoModel` 的目录/进程/端口扫描只服务 Info，原来位于 Terminal 是物理归属错误。远端 pid/端口仍通过 `WorkspaceBackend`，不可换为 Mac 本地 pid。
 
-**当前依据：** GitPanel 内有暂存/取消暂存/丢弃、提交/分支等操作、文件指纹与确认状态；这些是操作安全的一部分，不能因为“纯 UI 拆分”遗漏状态或确认前检查。
+**实施：** 模型与其消费 View 在**同一个任务**归入 Info；按真实引用最小调整可见性、文档和旧路径，同时清理所触及代码及 `RemotePaneHeaderView.swift` 中“固定右侧栏”的旧注释（只更正文案，不重写已有 AppKit 头部），不新增 `InfoService` 或单独刷新架构。
 
-**实施：** 原样迁移 GitPanel 和其私有辅助类型，避免把 Git 的破坏性确认或仓库路径判断抽象成通用面板功能。移除原文件旧定义，保持 `openDiff` / `openCommitDiff`、刷新和提示走现有调用链。
+**验证：** Debug 签名构建；本地 Info 显示工作目录、进程/端口和作用于正确 PID 的操作；有可用 SSH 时确认远端目录与端口，断线/重连后展示正确主机。旧 `Terminal/SessionInfoModel.swift`、旧 Info 视图定义必须不存在。
 
-**验证：** 签名 Debug 真机逐项验收 Git 未提交、暂存、冲突、提交历史和 diff；在专门的**测试仓库**进行暂存/撤销/丢弃和提交（不要触碰用户真实项目）；本地/SSH 状态及远程失败提示保持原样。共享树命中检查通过；确认没有新增 Git 轮询、重复操作/数据副本，`git diff --check` 通过。
-
-**提交边界：** Git 面板 UI 与其现有私有辅助类型一个提交，行为不变。
+**提交边界：** Info 模型与视图唯一归属同一个原子提交。
 
 ---
 
 <a id="p2-t4"></a>
-## P2-T4 Info 面板 UI 与子行独立归属
+## P2-T4 让 SSH 转发记录跟随连接，而非工具 View
 
-**类型 / 依赖：** 原子源码迁移；依赖 P2-T3。
+**Files / 已确认链路：** `WorkspaceDockView.DockTabGroupView.content` 切换 `ToolPanelView`；`ToolPanelView.@State PortForwardRegistry` 为 `RemoteConnection` 分配 `PortForwardController`；`PortForwardController.localPortsByRemote` 记录已经建立的 SSH 转发；`TerminalSession` 持有远程连接。
 
-**Files / 锚点：**
-- Extract from `kero/UI/Panels/ToolPanelView.swift`: `InfoPanel`、`InfoProcessRow`、`InfoPortRow` 及其私有视图 helper。
-- New: `kero/Info/InfoPanel.swift`。
-- Check: `Info/SessionInfoModel.swift`（P1 移入）、`Remote/PortForwardController.swift` 与 `ToolPanelView` 原有 `forwards` 参数。
+**已观察的源码缺口：** `PortForwardRegistry` 只由可卸载的工具 View 持有。离开或关闭 Info 后重建 View，会创建空的 `PortForwardController`，但现有转发仍由 SSH 连接管理；UI 将不再认出此前的端口。它与工具停靠后的视图生命周期直接相关，不是理论上的未来扩展。
 
-**当前依据：** InfoPanel 负责目录、子进程、监听端口及转发操作的显示；宿主 `applyRemoteHeading` 通过 Session/RemoteConnection 选择本地或 SSH 内容。
+**实施：**
+1. 选择当前连接的真实长寿命持有者（优先 `TerminalSession`，核对连接是否会在同一 session 内替换），让一个连接对应现有的 `PortForwardController`；视图只取引用。不得把 controller 强持有回其 `RemoteConnection` 造成循环引用，也不创建应用级转发注册中心。
+2. 同任务删掉 View 中旧 `PortForwardRegistry` 与不再使用的分配路径。断线仍由现有 `PortForwardController` 的 `connection.$state` 清理端口记录；显式取消仍走 `RemoteConnection.cancelForward`。
+3. 对照实际 UI：先打开一个远端端口 → 切别的标签 → 回 Info → 应仍显示同一个已转发端口并可取消；连接断开后记录消失。若现场缺 SSH，仅可报告未做端到端，不追加无证据的重连状态机。
 
-**实施：** 原样移动 Info 面板及局部显示/交互状态，仍从宿主接收 `SessionInfoModel` 和 `PortForwardController`；不自行创建第二套远程连接或计时刷新机制。移动后去掉旧定义。
+**验证：** 签名 Debug + 安全可用的真实 SSH 连接上验证上述端口操作；不新增监听、不会复制远程请求；确认旧 Registry 不再使用、`PortForwardController` 的唯一生命周期可解释，`git diff --check`。
 
-**验证：** Debug 签名构建；Info 本地 PID、端口、目录展示与操作正确；SSH 端口转发入口、权限/失败反馈与断线状态不变，跨项目切换未把旧主机映射到新项目；`git diff --check`。
-
-**提交边界：** Info 视图及子行一个提交。
+**提交边界：** 转发记录生命周期修复与旧视图缓存同步删除一个提交。
 
 ---
 
 <a id="p2-t5"></a>
-## P2-T5 收敛宿主中的工作区选择和刷新责任
+## P2-T5 收敛同一项目内异步范围校验
 
-**类型 / 依赖：** 单一业务边界改造；依赖 P2-T1 证据与 P2-T2～T4 的独立迁移。
+**Files / 实际调用：**
+- `kero/UI/ContentView.swift::syncGit`：异步 `project.panelRoot(...)` 后只校验 `selectedProjectID`；同一个项目内连续 cd / SSH 切换时旧 root 可能晚返回并触发 `git.sync`。
+- `kero/UI/Panels/ToolPanelView.swift::performSync`、`Project.panelContext/panelRoot`、`FileTreeModel.sync/rebuild`。
+- `kero/Info/SessionInfoModel.swift::sync/refresh`：当前刷新返回只比较 `shellPid`，不同 SSH 主机的相同 PID 不能代表同一工作区。
 
-**Files / 锚点：**
-- `kero/UI/Panels/ToolPanelView.swift::fileActionSession`、`workspaceEpoch(of:)`、`performSync()`、`PanelSyncQueue`、`applyRemoteHeading()`。
-- `kero/Workspace/Project.swift::workspaceBackend`、`panelContext`、`panelRoot(...)`。
-- `kero/Files/FileTreeModel.swift::sync`、`kero/Info/SessionInfoModel.swift::sync`、`kero/Git/GitStatusModel.swift::sync/refresh`。
+**依据：** `FileTreeModel.rebuild` 已对 root 与 scope 进行回写检查，`GitStatusModel` 已有 `contextGeneration/statusRequestID`，不应再叠加一个大范围 Coordinator。缺口在**计算根目录之后、写入当前状态之前**的特定调用点。
 
-**当前依据：** 固定本地项目下的文件动作必须不跟随交互 SSH 会话；旧连接/项目的异步结果不得写进新项目。宿主目前在 View 内同时决定范围、序列化刷新和调用具体模型。
+**实施：** 重用当前 `Project.panelContext` 的项目/范围与目录数据进行校验：`ContentView.syncGit` 只应用仍匹配当前项目、目录和机器的异步结果；`SessionInfoModel` 只采用本次原目标 pid 和机器/作用域的进程/端口结果。不重复计算根目录、不搬移 `Project` 已有的范围选择逻辑，不新增全局 generation/缓存/轮询，保留现有 `PanelSyncQueue` 的合并行为。
 
-**实施：**
-1. 将**工作区范围和文件操作目标的业务判断**归到现有 `Project` 的上下文选择位置，宿主只读取可用结果、触发相应模型刷新，不重复计算安全/范围规则。沿项目身份、scope 与现有 generation/请求标识核对结果，不叠加新一层通用计时器。
-2. `PanelSyncQueue` 的请求合并行为、Git 的事件触发和 2 秒可见面板刷新路径保持不变；P2-T1 若证明某个对象因 View 重建丢失，再把**该对象**移到已经存在的适当窗口/项目/连接持有者，不为理论问题增加全局单例或协议。不得让移入业务层的刷新变成无条件后台轮询。
-3. 同任务删除宿主里已被替代的重复范围判断和无效 helper，保留必要的 `RemotePaneHeaderHost` 和轻量渲染切换。
+**验证：** 签名 Debug 内连续改 cwd/快速切项目、SSH 断开/重连、跨主机相同 pid 情况可控时测最终 Git 仓库和 Info 内容；旧异步返回不能覆盖新的，最后一次有效刷新仍生效。保留 Git 事件驱动刷新、Files 惰性展开及现有面板展示；按源码核对唯一范围判断，`git diff --check`。
 
-**验证：** 有针对性的源码回归与签名 Debug：快速切项目/切标签、前景工作目录与固定目录、SSH 连接状态变化、Files/Git/Info 同步、关闭后资源释放，确认最后一个刷新事件没有丢失且旧结果不能覆写新范围。比较主线程/远程调用次数，至少确认无新轮询或明显重复请求；`git diff --check`。
-
-**提交边界：** 面板工作区上下文的唯一归属及同任务移除冗余判断，一个独立提交；若 P2-T1 已证实无需移动某个状态，不为形式增加额外层。
+**提交边界：** 精确修复异步根目录/进程范围错配并删除被取代的旧判断，一个提交，不新建框架。
 
 ---
 
-## 阶段审查准入
+## P2 完成条件
 
-- 原 `ToolPanelView.swift` 中不再含各面板的整套 UI 定义，Files/Git/Info 的真实行为仍由原模型驱动；重复类型或空壳转发文件为审计失败。
-- 没有证据时不把视图内 `@State` 或刷新任务自动视为缺陷；确有生命周期失效的按 P2-T1 证据最小修复。
-- 阶段审计时创建 `audit-p2.md`，此时不预建。
+原混合 `ToolPanelView.swift` 不再容纳三套面板 UI、Files/Info 数据模型也已归位。任何新接入均已同时移除旧定义；不把残留留给 P5。没有 SSH 实机证据的条件不冒称通过。
