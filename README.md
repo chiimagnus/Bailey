@@ -10,7 +10,7 @@
 
 ## 文档
 
-- [使用指南](docs/README.md)：项目、终端、文件、Git、浏览器与设置。
+- [使用指南](docs/README.md)：快速上手，以及项目、终端、编辑器、Git、浏览器和设置的功能文档入口。
 - [产品原则](docs/PRODUCT.md)：定位和设计取舍。
 - [性能](docs/PERFORMANCE.md)：编辑器、语法高亮与 Git 的优化优先级和测量方法。
 - [本地化](docs/LOCALIZATION.md)：界面翻译规则。
