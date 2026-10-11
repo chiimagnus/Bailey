@@ -11,8 +11,26 @@
 - **文本编辑**：启用编辑器自动换行；默认关闭，长行横向滚动。
 - **Git**：切换目录树/列表布局；diff 的统一/并排选择在差异页顶部操作。
 
-主要显示、终端和编辑偏好保存在 `~/.config/kero/config.toml`，建议通过设置界面修改。这个文件不是项目、标签或未保存内容的备份。
-“恢复默认设置”重置这些偏好，不应当作恢复文件或撤销 Git 操作的工具。
+显示、终端、编辑与工作区配置保存在 `~/.config/kero/config.toml`。常用偏好可通过设置界面修改；工作区初始布局可直接编辑该文件。它不是项目、标签或未保存内容的备份。
+“恢复默认设置”重置常用偏好，不应当作恢复文件或撤销 Git 操作的工具。
+
+## 配置新项目的工作区
+
+下面是默认值；未填写的键采用默认值：
+
+```toml
+workspace.groups = ["projects", "", "info,files,git"]
+workspace.selected = ["projects", "", "files"]
+workspace.weights = [0.12, 0.69256, 0.18744]
+workspace.add-actions = ["session", "projects", "info", "files", "git"]
+workspace.edge-threshold = 0.22
+```
+
+- `groups` 从左到右列出初始标签组，逗号分隔同组面板；空字符串表示暂时没有标签。一个工具在全部组中只能出现一次，且必须包含 `projects`。
+- `selected` 指定每个组默认显示的面板；填空字符串时选该组第一个。`weights` 是对应组的相对宽度，可如 `[1, 3, 1]`。
+- `add-actions` 控制每个标签栏「＋」的 Popover 选项及顺序，必须包含 `session` 和 `projects`。`edge-threshold` 控制拖入内容边缘时触发分屏的范围，允许 `0.05` 至 `0.4`。
+
+配置在启动时读取，**只影响此后新建的项目**；已有项目的分屏和标签位置仍以项目保存的布局为准。无效工作区配置会整体回退默认值并写入系统日志。当前没有对外提供 API，但内部使用同一个类型化 `DockWorkspaceConfiguration`；未来接口可复用它，无须另建一套布局逻辑。
 
 ## 重启后恢复什么
 
