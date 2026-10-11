@@ -575,21 +575,30 @@ final class TerminalManager: nonisolated ObservableObject {
         }
     }
 
-    /// Activates Kero and reveals the session that emitted a desktop
-    /// notification. Searches every open window; if the session is gone,
-    /// still brings the app forward so the click isn't a dead end.
-    static func revealSession(id: UUID) {
-        NSApp.activate()
+    private static func location(forSession id: UUID) -> (manager: TerminalManager, project: Project, session: TerminalSession)? {
         for manager in registry {
             for project in manager.projects {
-                for session in project.sessions where session.id == id {
-                    manager.revealSession(session)
-                    manager.window?.makeKeyAndOrderFront(nil)
-                    return
+                if let session = project.sessions.first(where: { $0.id == id }) {
+                    return (manager, project, session)
                 }
             }
         }
-        // Session closed since the banner was posted — surface any live window.
+        return nil
+    }
+
+    static func projectName(forSession id: UUID) -> String? {
+        location(forSession: id)?.project.name
+    }
+
+    /// Activates Kero and reveals the session that emitted a desktop
+    /// notification. If the session has closed, still bring the app forward.
+    static func revealSession(id: UUID) {
+        NSApp.activate()
+        if let location = location(forSession: id) {
+            location.manager.revealSession(location.session)
+            location.manager.window?.makeKeyAndOrderFront(nil)
+            return
+        }
         if let manager = registry.first(where: { $0.window != nil }) {
             manager.window?.makeKeyAndOrderFront(nil)
         }

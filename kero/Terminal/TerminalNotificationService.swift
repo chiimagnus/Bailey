@@ -119,7 +119,7 @@ final class TerminalNotificationService: NSObject, UNUserNotificationCenterDeleg
 
     private func deliver(_ message: String, sessionID: UUID?) {
         let content = UNMutableNotificationContent()
-        content.title = "Kero"
+        content.title = sessionID.flatMap { TerminalManager.projectName(forSession: $0) } ?? "Kero"
         content.body = message
         content.sound = .default
         if let sessionID {
