@@ -5,7 +5,7 @@
 
 import AppKit
 
-/// What the right pane's header says about where the panels are pointing.
+/// What the tool header says about where the panels are pointing.
 ///
 /// Declared as its own type rather than taken from `WorkspaceLocation` so the
 /// view has a case for a connection Kero is not managing, which is a fact
@@ -31,7 +31,7 @@ enum RemotePaneHeaderState: Equatable {
     case helperBypassed
 }
 
-/// The right pane's remote heading: `user@host` with a lamp while connected,
+/// The tool's remote heading: `user@host` with a lamp while connected,
 /// and plain sentences for every other state.
 ///
 /// Hidden entirely when the session is local, so a local window looks exactly
