@@ -1,0 +1,930 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Add Files or Folders…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加文件或文件夹…"
+          }
+        }
+      }
+    },
+    "Add SSH Files or Folders…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加 SSH 文件或文件夹…"
+          }
+        }
+      }
+    },
+    "Add files, folders, or SSH paths" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加文件、文件夹或 SSH 路径"
+          }
+        }
+      }
+    },
+    "Could not verify remote files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法验证远程文件"
+          }
+        }
+      }
+    },
+    "Verifying remote files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在验证远程文件"
+          }
+        }
+      }
+    },
+    "%@, in progress" : {},
+    "Added" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已添加"
+          }
+        }
+      }
+    },
+    "Branch name" : {},
+    "Cancel" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消"
+          }
+        }
+      }
+    },
+    "Changed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已更改"
+          }
+        }
+      }
+    },
+    "CHANGES" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更改"
+          }
+        }
+      }
+    },
+    "Choose" : {
+      "comment" : "Button in the project directory picker.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择"
+          }
+        }
+      }
+    },
+    "Choose the directory for “%@”." : {
+      "comment" : "Message in the project directory picker. The placeholder is a project name.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请选择“%@”的目录。"
+          }
+        }
+      }
+    },
+    "Collapsed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已折叠"
+          }
+        }
+      }
+    },
+    "Commit Staged" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提交暂存"
+          }
+        }
+      }
+    },
+    "Commit staged changes (⌘Return)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提交已暂存的更改（⌘Return）"
+          }
+        }
+      }
+    },
+    "Conflict" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "冲突"
+          }
+        }
+      }
+    },
+    "Copied" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已复制"
+          }
+        }
+      }
+    },
+    "Copy" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制"
+          }
+        }
+      }
+    },
+    "Copy Path" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制路径"
+          }
+        }
+      }
+    },
+    "Create" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建"
+          }
+        }
+      }
+    },
+    "Create New Branch" : {},
+    "Current branch, %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前分支：%@"
+          }
+        }
+      }
+    },
+    "CURRENT DIRECTORY" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前目录"
+          }
+        }
+      }
+    },
+    "Delete %@? Its contents will move to the Trash." : {
+      "comment" : "Discard confirmation. The placeholder is an untracked file name.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要删除 %@ 吗？其内容将移到废纸篓。"
+          }
+        }
+      }
+    },
+    "Deleted" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已删除"
+          }
+        }
+      }
+    },
+    "detached HEAD" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分离 HEAD"
+          }
+        }
+      }
+    },
+    "Detached HEAD" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分离 HEAD"
+          }
+        }
+      }
+    },
+    "Discard All Changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "丢弃所有更改"
+          }
+        }
+      }
+    },
+    "Discard Changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "丢弃更改"
+          }
+        }
+      }
+    },
+    "Discard changes in %@?" : {
+      "comment" : "Discard confirmation. The placeholder is a file name.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要丢弃 %@ 中的更改吗？"
+          }
+        }
+      }
+    },
+    "Discard Changes…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "丢弃更改…"
+          }
+        }
+      }
+    },
+    "Discard this copy? %@ will move to the Trash." : {
+      "comment" : "Copy discard confirmation. The placeholder is a file name.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要丢弃此副本吗？%@ 将移到废纸篓。"
+          }
+        }
+      }
+    },
+    "Enter a name for the new branch." : {},
+    "Expanded" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已展开"
+          }
+        }
+      }
+    },
+    "File name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件名"
+          }
+        }
+      }
+    },
+    "Files" : {
+      "comment" : "Command palette section title.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件"
+          }
+        }
+      }
+    },
+    "Files (⇧⌘E)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件（⇧⌘E）"
+          }
+        }
+      }
+    },
+    "Files and Git anchor to this directory. When automatic, it follows the closest Git repository containing the shell’s current directory, or the one the terminal’s foreground job moved to — a coding agent that switched to its own worktree. A directory set manually from the project’s context menu is always used as-is." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件与 Git 以此目录为基准。自动模式下，会跟随包含 Shell 当前目录的最近 Git 仓库，或终端前台作业所切换到的仓库——例如切换到自己工作树的编码代理。若从项目菜单手动指定了目录，则始终使用该目录。"
+          }
+        }
+      }
+    },
+    "Filter Changed Files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "筛选已更改的文件"
+          }
+        }
+      }
+    },
+    "Finding repository…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在查找仓库…"
+          }
+        }
+      }
+    },
+    "Finish or abort from the terminal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在终端中完成或中止"
+          }
+        }
+      }
+    },
+    "Folder name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件夹名称"
+          }
+        }
+      }
+    },
+    "Following the terminal job’s directory" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在跟随终端作业的目录"
+          }
+        }
+      }
+    },
+    "Following the terminal job’s worktree" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在跟随终端作业的工作树"
+          }
+        }
+      }
+    },
+    "Git" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git"
+          }
+        }
+      }
+    },
+    "Git (⇧⌘G)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git（⇧⌘G）"
+          }
+        }
+      }
+    },
+    "Hide Git Output" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏 Git 输出"
+          }
+        }
+      }
+    },
+    "Ignored" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已忽略"
+          }
+        }
+      }
+    },
+    "Info" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "信息"
+          }
+        }
+      }
+    },
+    "Info (⇧⌘I)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "信息（⇧⌘I）"
+          }
+        }
+      }
+    },
+    "job" : {
+      "comment" : "Files header badge: the panels follow a directory the terminal’s foreground job moved to, outside any worktree of the shell’s repository.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "作业"
+          }
+        }
+      }
+    },
+    "Mark Resolved (Stage)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标记为已解决（暂存）"
+          }
+        }
+      }
+    },
+    "MERGE CHANGES" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合并更改"
+          }
+        }
+      }
+    },
+    "Message (⌘⏎ to commit on “%@”)" : {
+      "comment" : "Commit message placeholder. The placeholder is the current branch name.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说明（⌘⏎ 提交到“%@”）"
+          }
+        }
+      }
+    },
+    "Message (⌘⏎ to commit)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说明（⌘⏎ 提交）"
+          }
+        }
+      }
+    },
+    "Message (stage changes to use ⌘⏎, or choose Amend)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说明（暂存更改后可用 ⌘⏎，或选择“修订”）"
+          }
+        }
+      }
+    },
+    "Message (stage changes to use ⌘⏎)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说明（暂存更改后可用 ⌘⏎）"
+          }
+        }
+      }
+    },
+    "Modified" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已修改"
+          }
+        }
+      }
+    },
+    "Move to Trash" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移到废纸篓"
+          }
+        }
+      }
+    },
+    "Move to Trash…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移到废纸篓…"
+          }
+        }
+      }
+    },
+    "Name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名称"
+          }
+        }
+      }
+    },
+    "No changed files match “%@”" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有与“%@”匹配的已更改文件"
+          }
+        }
+      }
+    },
+    "No listening ports" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无监听端口"
+          }
+        }
+      }
+    },
+    "No running processes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有运行中的进程"
+          }
+        }
+      }
+    },
+    "Open %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 %@"
+          }
+        }
+      }
+    },
+    "Open in %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 %@ 中打开"
+          }
+        }
+      }
+    },
+    "Pop Stash" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "弹出贮藏"
+          }
+        }
+      }
+    },
+    "PORTS" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "端口"
+          }
+        }
+      }
+    },
+    "PROCESSES" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进程"
+          }
+        }
+      }
+    },
+    "PROJECT DIRECTORY" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "项目目录"
+          }
+        }
+      }
+    },
+    "PROJECT DIRECTORY (AUTO)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "项目目录（自动）"
+          }
+        }
+      }
+    },
+    "PROJECT DIRECTORY (JOB)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "项目目录（作业）"
+          }
+        }
+      }
+    },
+    "PROJECT DIRECTORY (WORKTREE)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "项目目录（工作树）"
+          }
+        }
+      }
+    },
+    "Pull remote commits, then push local ones" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先拉取远程提交，再推送本地提交"
+          }
+        }
+      }
+    },
+    "RECENT COMMITS" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近提交"
+          }
+        }
+      }
+    },
+    "Refresh Git Status" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刷新 Git 状态"
+          }
+        }
+      }
+    },
+    "Refreshing Git status" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在刷新 Git 状态"
+          }
+        }
+      }
+    },
+    "Renamed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已重命名"
+          }
+        }
+      }
+    },
+    "Session" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话"
+          }
+        }
+      }
+    },
+    "Show Git Output" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示 Git 输出"
+          }
+        }
+      }
+    },
+    "Stage All Changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂存所有更改"
+          }
+        }
+      }
+    },
+    "Stage Changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂存更改"
+          }
+        }
+      }
+    },
+    "STAGED CHANGES" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已暂存的更改"
+          }
+        }
+      }
+    },
+    "Sync Changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同步更改"
+          }
+        }
+      }
+    },
+    "Undo Rename" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤销重命名"
+          }
+        }
+      }
+    },
+    "Undo Rename…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤销重命名…"
+          }
+        }
+      }
+    },
+    "Undo this rename? %@ will move to the Trash and %@ will be restored." : {
+      "comment" : "Rename discard confirmation. The placeholders are the new and old file names.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要撤销此次重命名吗？%@ 将移到废纸篓，并恢复 %@。"
+          }
+        }
+      }
+    },
+    "Unpublished branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未发布的分支"
+          }
+        }
+      }
+    },
+    "Unstage All Changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消暂存所有更改"
+          }
+        }
+      }
+    },
+    "Unstage Changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消暂存更改"
+          }
+        }
+      }
+    },
+    "Untracked" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未跟踪"
+          }
+        }
+      }
+    },
+    "Working tree clean" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作区干净"
+          }
+        }
+      }
+    },
+    "Working tree clean, sync is pending" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作区干净，尚有同步待完成"
+          }
+        }
+      }
+    },
+    "worktree" : {
+      "comment" : "Files header badge: the panels follow a Git worktree the terminal’s foreground job moved to.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作树"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

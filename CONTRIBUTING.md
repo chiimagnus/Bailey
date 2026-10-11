@@ -9,8 +9,12 @@ in the login Keychain. There is one target and one app, **Kero.app**
 ```sh
 git clone --recurse-submodules https://github.com/chiimagnus/kero.git
 cd kero
+./scripts/prepare-ghostty.sh # One-time verified download; keep the binary in Vendor/GhosttyKit
 xcodebuild -project kero.xcodeproj -scheme kero -configuration Debug \
-  -destination 'platform=macOS,arch=arm64' -derivedDataPath build/DerivedData build
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath build/DerivedData \
+  -clonedSourcePackagesDirPath build/SourcePackages \
+  -skipPackageUpdates build
 codesign --verify --deep --strict 'build/DerivedData/Build/Products/Debug/Kero.app'
 ```
 
