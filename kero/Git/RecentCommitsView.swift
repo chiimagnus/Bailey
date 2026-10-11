@@ -336,10 +336,10 @@ private struct CommitGraphMetrics {
     init(fontScale: CGFloat) {
         scale = fontScale
         commitHeight = max(22, (26 * fontScale).rounded(.up))
-        fileHeight = max(20, (23 * fontScale).rounded(.up))
+        fileHeight = TreeRowStyle.rowHeight(fontScale)
         subjectFont = .systemFont(ofSize: 11.5 * fontScale, weight: .regular)
         metadataFont = .systemFont(ofSize: 9.5 * fontScale, weight: .medium)
-        fileFont = .systemFont(ofSize: 11 * fontScale, weight: .regular)
+        fileFont = .systemFont(ofSize: TreeRowStyle.fontSize * fontScale, weight: .regular)
         pathFont = .systemFont(ofSize: 9.5 * fontScale, weight: .regular)
         statusFont = .monospacedSystemFont(ofSize: 9.5 * fontScale, weight: .semibold)
     }
@@ -348,7 +348,7 @@ private struct CommitGraphMetrics {
     var contentX: CGFloat { 27 }
     var nestedRailX: CGFloat { 35 }
     var fileIconX: CGFloat { 45 }
-    var fileContentX: CGFloat { 61 }
+    var fileContentX: CGFloat { fileIconX + TreeRowStyle.iconSize + TreeRowStyle.iconSpacing }
 }
 
 @MainActor
@@ -735,37 +735,32 @@ private final class CommitFileRowView: NSView {
         nested.line(to: NSPoint(x: metrics.nestedRailX, y: bounds.maxY))
         NSColor.labelColor.withAlphaComponent(0.18).setStroke()
         nested.stroke()
-        GitTreeGuides.draw(
-            depth: depth, in: bounds, firstX: metrics.nestedRailX + 12
+        TreeRowStyle.drawGuides(
+            depth: depth, in: bounds, firstX: metrics.fileIconX + TreeRowStyle.iconSize / 2
         )
     }
 
     private func drawFolder(_ folder: (path: String, name: String, collapsed: Bool)) {
-        let offset = CGFloat(depth) * 12
-        let y = (bounds.height - 12) / 2
-        let disclosureStyle = NSImage.SymbolConfiguration(
-            pointSize: 9 * metrics.scale, weight: .semibold
-        ).applying(.init(paletteColors: [.tertiaryLabelColor]))
-        let disclosure = NSImage(
-            systemSymbolName: folder.collapsed ? "chevron.right" : "chevron.down",
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(disclosureStyle)
-        disclosure?.draw(in: NSRect(x: metrics.fileIconX + offset, y: y + 1, width: 10, height: 10))
-
+        let offset = CGFloat(depth) * TreeRowStyle.indent
+        let iconSize = TreeRowStyle.iconSize
         let folderStyle = NSImage.SymbolConfiguration(
             pointSize: 11 * metrics.scale, weight: .regular
         ).applying(.init(paletteColors: [Theme.accent.withAlphaComponent(0.8)]))
         let image = NSImage(
-            systemSymbolName: folder.collapsed ? "folder" : "folder.fill",
+            systemSymbolName: TreeRowStyle.folderSymbol(expanded: !folder.collapsed),
             accessibilityDescription: nil
         )?.withSymbolConfiguration(folderStyle)
-        image?.draw(in: NSRect(x: metrics.fileIconX + offset + 13, y: y, width: 13, height: 12))
+        image?.draw(in: NSRect(
+            x: metrics.fileIconX + offset,
+            y: (bounds.height - iconSize) / 2,
+            width: iconSize, height: iconSize
+        ))
         let height = ceil(metrics.fileFont.pointSize * 1.45)
         (folder.name as NSString).draw(
             with: NSRect(
-                x: metrics.fileContentX + offset + 15,
+                x: metrics.fileContentX + offset,
                 y: (bounds.height - height) / 2,
-                width: max(0, bounds.width - metrics.fileContentX - offset - 20),
+                width: max(0, bounds.width - metrics.fileContentX - offset - 5),
                 height: height
             ),
             options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
@@ -776,12 +771,13 @@ private final class CommitFileRowView: NSView {
 
     private func drawFile(_ change: GitStatusModel.RecentCommit.FileChange) {
         let statusWidth: CGFloat = 18
-        let offset = CGFloat(depth) * 12
+        let offset = CGFloat(depth) * TreeRowStyle.indent
+        let iconSize = TreeRowStyle.iconSize
         let symbolRect = NSRect(
             x: metrics.fileIconX + offset,
-            y: (bounds.height - 12) / 2,
-            width: 12,
-            height: 12
+            y: (bounds.height - iconSize) / 2,
+            width: iconSize,
+            height: iconSize
         )
         MaterialFileIcon.image(forPath: change.path, appearance: effectiveAppearance).draw(
             in: symbolRect,
@@ -794,7 +790,7 @@ private final class CommitFileRowView: NSView {
             string: change.fileName,
             attributes: [
                 .font: metrics.fileFont,
-                .foregroundColor: NSColor.labelColor,
+                .foregroundColor: NSColor.secondaryLabelColor,
                 .strikethroughStyle: change.status == "D" ? NSUnderlineStyle.single.rawValue : 0,
             ]
         )

@@ -768,17 +768,15 @@ private struct FileTreeScrollView: NSViewRepresentable {
             if treeChanged || fontChanged {
                 // Give the whole table the width of its longest visible path;
                 // AppKit can then scroll horizontally instead of truncating.
-                let font = NSFont.systemFont(ofSize: 11.5 * fontScale)
+                let font = NSFont.systemFont(ofSize: TreeRowStyle.fontSize * fontScale)
                 scroll.treeContentWidth = newItems.reduce(CGFloat(0)) { widest, item in
                     let nameWidth = (item.name as NSString).size(
                         withAttributes: [.font: font]
                     ).width
                     // Includes icons, Git badge, row padding and outer inset.
-                    return max(widest, nameWidth + CGFloat(item.depth) * 12 + 80)
+                    return max(widest, nameWidth + CGFloat(item.depth) * TreeRowStyle.indent + 68)
                 }
-                table.rowHeight = ceil(
-                    font.ascender - font.descender + font.leading + 6
-                )
+                table.rowHeight = TreeRowStyle.rowHeight(fontScale)
             }
             if treeChanged || fontChanged {
                 table.reloadData()
@@ -830,11 +828,11 @@ private struct FileTreeHostedRow: View {
         guard !item.isDraft, configuration.model.renamingPath != item.path else {
             return visibleWidth
         }
-        let font = NSFont.systemFont(ofSize: 11.5 * configuration.fontScale)
+        let font = NSFont.systemFont(ofSize: TreeRowStyle.fontSize * configuration.fontScale)
         let nameWidth = (item.name as NSString).size(withAttributes: [.font: font]).width
         // Short rows preserve the original trailing badge position; longer
         // rows get enough width for the entire name and its status letter.
-        return max(visibleWidth, ceil(nameWidth + CGFloat(item.depth) * 12 + 68))
+        return max(visibleWidth, ceil(nameWidth + CGFloat(item.depth) * TreeRowStyle.indent + 56))
     }
 
     var body: some View {
@@ -855,6 +853,7 @@ private struct FileTreeHostedRow: View {
         .padding(.horizontal, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .environment(\.sidebarFontScale, configuration.fontScale)
+        .background { TreeGuideBackground(depth: item.depth) }
     }
 }
 
@@ -1032,10 +1031,10 @@ private struct FileTreeRow: View {
                 openFile(item.path)
             }
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: TreeRowStyle.iconSpacing) {
                 leadingGlyphs
                 Text(item.name)
-                    .sidebarFont(size: 11.5)
+                    .sidebarFont(size: TreeRowStyle.fontSize)
                     .foregroundStyle(fileNameColor)
                     .fixedSize(horizontal: true, vertical: false)
                 Spacer(minLength: 0)
@@ -1046,13 +1045,18 @@ private struct FileTreeRow: View {
                         .accessibilityHidden(true)
                 }
             }
-            .padding(.leading, CGFloat(item.depth) * 12 + 6)
+            .padding(.leading, CGFloat(item.depth) * TreeRowStyle.indent + 6)
             .padding(.trailing, 6)
             .padding(.vertical, 3)
             .contentShape(RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(fileAccessibilityLabel)
+        .accessibilityValue(item.isDirectory
+            ? (model.isExpanded(item)
+                ? String(localized: "Expanded", table: "Sidebar")
+                : String(localized: "Collapsed", table: "Sidebar"))
+            : "")
         // Drag a row out as a file URL: onto the terminal (which inserts its
         // path) or into Finder and other apps. A click still opens/toggles;
         // the drag only begins once the pointer moves.
@@ -1062,7 +1066,6 @@ private struct FileTreeRow: View {
     }
 
     private var fileNameColor: Color {
-        if let gitDecoration { return gitDecoration.color }
         return item.name.hasPrefix(".") ? Color.secondary.opacity(0.55) : .secondary
     }
 
@@ -1072,7 +1075,7 @@ private struct FileTreeRow: View {
     }
 
     private var renameRow: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: TreeRowStyle.iconSpacing) {
             leadingGlyphs
             nameField(String(localized: "Name", table: "Sidebar"))
                 .onSubmit { commitRename() }
@@ -1082,7 +1085,7 @@ private struct FileTreeRow: View {
                     if !fieldFocused { commitRename() }
                 }
         }
-        .padding(.leading, CGFloat(item.depth) * 12 + 6)
+        .padding(.leading, CGFloat(item.depth) * TreeRowStyle.indent + 6)
         .padding(.trailing, 6)
         .padding(.vertical, 2)
         .onAppear {
@@ -1092,7 +1095,7 @@ private struct FileTreeRow: View {
     }
 
     private var draftRow: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: TreeRowStyle.iconSpacing) {
             leadingGlyphs
             nameField(item.isDirectory
                 ? String(localized: "Folder name", table: "Sidebar")
@@ -1107,7 +1110,7 @@ private struct FileTreeRow: View {
                     if !fieldFocused { commitDraft() }
                 }
         }
-        .padding(.leading, CGFloat(item.depth) * 12 + 6)
+        .padding(.leading, CGFloat(item.depth) * TreeRowStyle.indent + 6)
         .padding(.trailing, 6)
         .padding(.vertical, 2)
         .onAppear {
@@ -1143,23 +1146,14 @@ private struct FileTreeRow: View {
 
     private var leadingGlyphs: some View {
         Group {
-            if item.isDirectory && !item.isDraft {
-                Image(systemName: "chevron.right")
-                    .sidebarFont(size: 8, weight: .semibold)
-                    .foregroundStyle(.tertiary)
-                    .rotationEffect(.degrees(model.isExpanded(item) ? 90 : 0))
-                    .frame(width: 10)
-            } else {
-                Spacer().frame(width: 10)
-            }
             if item.isDirectory {
-                Image(systemName: "folder.fill")
-                    .sidebarFont(size: 10)
+                Image(systemName: TreeRowStyle.folderSymbol(expanded: model.isExpanded(item)))
+                    .sidebarFont(size: 11)
                     .foregroundStyle(Color(nsColor: Theme.accent).opacity(0.8))
-                    .frame(width: 14)
+                    .frame(width: TreeRowStyle.iconSize)
             } else {
-                MaterialFileIconView(path: item.path, size: 14)
-                    .frame(width: 14)
+                MaterialFileIconView(path: item.path, size: TreeRowStyle.iconSize)
+                    .frame(width: TreeRowStyle.iconSize)
             }
         }
     }
@@ -1206,38 +1200,28 @@ private extension GitStatusModel.FileDecoration {
 
 // MARK: - Git panel
 
-// Only the newly added directory rows use AppKit; existing Git file rows
-// retain their actions and context menus until that legacy view is migrated.
+// Directory rows use one native button: the folder itself expands/collapses.
 @MainActor
 private final class GitChangeFolderNSView: NSView {
-    private let disclosure = NSButton(title: "", target: nil, action: nil)
     private let folder = NSButton(title: "", target: nil, action: nil)
     var onToggle: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
 
-        for button in [disclosure, folder] {
-            button.isBordered = false
-            button.target = self
-            button.action = #selector(toggleFolder)
-            button.translatesAutoresizingMaskIntoConstraints = false
-            button.controlSize = .small
-            addSubview(button)
-        }
-        disclosure.imagePosition = .imageOnly
-        disclosure.setAccessibilityElement(false)
+        folder.isBordered = false
+        folder.target = self
+        folder.action = #selector(toggleFolder)
+        folder.translatesAutoresizingMaskIntoConstraints = false
+        folder.controlSize = .small
+        addSubview(folder)
         folder.imagePosition = .imageLeading
         folder.alignment = .left
-        folder.font = .systemFont(ofSize: 11.5)
+        folder.font = .systemFont(ofSize: TreeRowStyle.fontSize)
         folder.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         NSLayoutConstraint.activate([
-            disclosure.leadingAnchor.constraint(equalTo: leadingAnchor),
-            disclosure.centerYAnchor.constraint(equalTo: centerYAnchor),
-            disclosure.widthAnchor.constraint(equalToConstant: 14),
-            disclosure.heightAnchor.constraint(equalToConstant: 20),
-            folder.leadingAnchor.constraint(equalTo: disclosure.trailingAnchor, constant: 2),
+            folder.leadingAnchor.constraint(equalTo: leadingAnchor),
             folder.trailingAnchor.constraint(equalTo: trailingAnchor),
             folder.centerYAnchor.constraint(equalTo: centerYAnchor),
             folder.heightAnchor.constraint(equalToConstant: 20),
@@ -1250,16 +1234,22 @@ private final class GitChangeFolderNSView: NSView {
     }
 
     func apply(name: String, path: String, collapsed: Bool, fontScale: CGFloat) {
-        disclosure.image = NSImage(
-            systemSymbolName: collapsed ? "chevron.right" : "chevron.down",
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(.init(pointSize: 9 * fontScale, weight: .semibold))
+        let configuration = NSImage.SymbolConfiguration(
+            pointSize: 11 * fontScale, weight: .regular
+        ).applying(.init(paletteColors: [Theme.accent.withAlphaComponent(0.8)]))
         folder.image = NSImage(
-            systemSymbolName: collapsed ? "folder" : "folder.fill",
+            systemSymbolName: TreeRowStyle.folderSymbol(expanded: !collapsed),
             accessibilityDescription: nil
-        )?.withSymbolConfiguration(.init(pointSize: 11 * fontScale, weight: .regular))
-        folder.font = .systemFont(ofSize: 11.5 * fontScale)
-        folder.title = name
+        )?.withSymbolConfiguration(configuration)
+        let font = NSFont.systemFont(ofSize: TreeRowStyle.fontSize * fontScale)
+        folder.font = font
+        folder.attributedTitle = NSAttributedString(
+            string: name,
+            attributes: [
+                .font: font,
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+        )
         folder.toolTip = path
         folder.setAccessibilityLabel(name)
         folder.setAccessibilityValue(
@@ -2196,14 +2186,14 @@ private struct GitPanel: View {
                         let key = kind.rawValue + ":" + path
                         model.toggleCollapsedFolder(key)
                     }
-                    .frame(height: max(22, 22 * sidebarFontScale))
-                    .padding(.leading, CGFloat(item.depth) * 12 + 8)
-                    .background { GitTreeGuideBackground(depth: item.depth) }
+                    .frame(height: TreeRowStyle.rowHeight(sidebarFontScale))
+                    .padding(.leading, CGFloat(item.depth) * TreeRowStyle.indent + TreeRowStyle.leadingInset)
+                    .background { TreeGuideBackground(depth: item.depth) }
                 case .file(let entry):
                     row(entry, status: entryStatus(entry, kind: kind), kind: kind,
                         showDirectory: false)
-                        .padding(.leading, CGFloat(item.depth) * 12)
-                        .background { GitTreeGuideBackground(depth: item.depth) }
+                        .padding(.leading, CGFloat(item.depth) * TreeRowStyle.indent)
+                        .background { TreeGuideBackground(depth: item.depth) }
                 }
             }
         } else {
@@ -2852,22 +2842,19 @@ private struct GitEntryRow: View {
 
     @State private var isHovering = false
     @FocusState private var isFocused: Bool
+    @Environment(\.sidebarFontScale) private var fontScale
 
     var body: some View {
         HStack(spacing: 2) {
             Button(action: openDiff) {
-                HStack(spacing: 7) {
-                    Text(String(status))
-                        .sidebarFont(size: 10, weight: .bold, design: .monospaced)
-                        .foregroundStyle(statusColor)
-                        .frame(width: 12)
+                HStack(spacing: TreeRowStyle.iconSpacing) {
                     MaterialFileIconView(
                         path: absolutePath,
-                        size: 13,
+                        size: TreeRowStyle.iconSize,
                         opacity: status == "D" ? 0.6 : 1
                     )
                     Text(entry.fileName)
-                        .sidebarFont(size: 11.5)
+                        .sidebarFont(size: TreeRowStyle.fontSize)
                         .foregroundStyle(.secondary)
                         .strikethrough(status == "D")
                         .lineLimit(1)
@@ -2880,6 +2867,10 @@ private struct GitEntryRow: View {
                             .truncationMode(.head)
                     }
                     Spacer(minLength: 0)
+                    Text(String(status))
+                        .sidebarFont(size: 10, weight: .bold, design: .monospaced)
+                        .foregroundStyle(statusColor)
+                        .frame(width: 12)
                 }
                 .frame(maxWidth: .infinity, minHeight: 16, alignment: .leading)
                 .contentShape(Rectangle())
@@ -2900,10 +2891,9 @@ private struct GitEntryRow: View {
                     )
             }
         }
-        // Fixed height so action buttons do not grow the dense file row.
-        .frame(minHeight: 16)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
+        .frame(height: TreeRowStyle.rowHeight(fontScale))
+        .padding(.leading, TreeRowStyle.leadingInset)
+        .padding(.trailing, 8)
         .contentShape(RoundedRectangle(cornerRadius: 4))
         .background(
             RoundedRectangle(cornerRadius: 4)

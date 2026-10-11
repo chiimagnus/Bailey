@@ -12,7 +12,8 @@ A native terminal workspace for macOS, with projects, SSH, files, Git and diffs.
 - GPU-accelerated terminal powered by Ghostty
 - Local and SSH remote terminal workspaces
 - Files, Git status, commits and editable diffs beside the terminal
-- Git changes in a collapsible directory tree (default) or flat list, configurable in Settings
+- Files, Git changes/staged changes, and committed files share a folder-icon tree with vertical indentation guides; click folders to expand or collapse
+- Git changes in a directory tree (default) or flat list, configurable in Settings
 - Browser panes and command palette (coding agents run as ordinary terminal programs)
 
 ## Build locally
