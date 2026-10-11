@@ -25,7 +25,7 @@
 **实施：**
 1. 沿上述所有实际调用方核对入参/返回值、主 actor / `nonisolated` 和局部错误消息，收敛为一个 Git 专用的本地字节执行实现；允许可选 stdout 捕获上限，文本/异步远端入口复用它或现有 backend。不创造新 `GitBackend`、通用 CommandRunner 或策略对象；原模型保留仓库/状态/操作编排。
 2. 同一个 Task 更新 `GitStatusModel`、`DiffViewerView`、`CommandPaletteView` 的全部调用，删除原 `runGit/remoteGitData/PipeData` 与 `runGitData/DiffPipeData` 的重复实现。保留原 QoS、Git 环境变量、launch failure/timeout 错误码和部分输出；远端预取留在模型，不再安排第二次执行策略抽离。
-3. 即时删除已证实的 Git 历史辅助层：`Entry.mergeRowID/stagedRowID/changedRowID` 与 `Operation.isSuccess` 均无消费者；`loadedDetails` 在每个实际发布的 repository snapshot 中必为 true，删除该字段/赋值/条件包装，保持原字段更新；`remoteTextLineCount` 只在一个已经由远端批量分支提前返回的路径后被调用，删除不可达的逐文件远端 fallback 与因此多余的参数。保留远端批量计数的真实体积预算/限制及 parser 的真实路径去重，不因名称像防护就删除。
+3. 执行 API 迁移时先删除无消费者路径，不为它设计新接口：`remoteTextLineCount` 只在一个已经由远端批量分支提前返回的路径后被调用，删除不可达的逐文件远端 fallback 与因此多余的参数。无消费者行标识、Operation.isSuccess 和恒真 loadedDetails 已归 P2-T2 即时清理，不在此重复安排。保留远端批量计数的真实体积预算/限制及 parser 的真实路径去重，不因名称像防护就删除。
 4. 更正 `SSHWorkspaceBackend.swift` “Git 只在本地运行”的旧注释，删除迁移失去消费者的 import/转发接口；**保留**当前输出限量、超时、SSH 主机信任、Git 丢弃 UI 的指纹确认和执行前仓库/HEAD 核对。UI 确认与执行前检查处于不同时间点，不能合并掉真实数据保护。
 
 **验证：** 同任务增加 `scripts/check-git-execution.swift`，沿用现有轻量脚本，不搭测试框架。临时 Git 仓库检查文本与原始 Data、含空格/引号的 literal 路径、NUL/无效 UTF-8、恰好上限/超限输出且进程可结束、stdout/stderr、非仓库/启动失败/超时及部分输出；启动失败用不存在的 cwd 触发，不为测试增加可执行文件注入。用现有 WorkspaceBackend 的测试实现核对远端环境/返回值映射，不发起真实认证。具体独立编译命令随新源码一并写入脚本/CONTRIBUTING 并实际运行，不留到 P5。签名 Debug 验证 unborn、未跟踪、暂存/历史、Diff 和命令面板文件搜索；破坏性 Git 验证只用独立仓库并检查最终文件/暂存区结果。SSH 可安全使用时确认批次与超时不退化，否则明确远端端到端未测；原静态 API/重复 runner/上述 dead code 无残留，`git diff --check`。

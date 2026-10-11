@@ -39,7 +39,7 @@
 2. 删掉旧版 `ColumnSnapshot`、旧列/行转换 `layout/stack`、`TabSnapshot` 的三路 legacy decoder 和 `SessionStore.load` 单窗口 fallback；保留当前 `LayoutSnapshot` 必需字段与类型。当前 `TabSnapshot` 可使用符合现行字段的正常 Codable 解码/编码，不维持旧字段透传；删除只因历史格式而存在的 `PaneSnapshot.weight`，同时改掉 `TerminalManager.layoutSnapshot` 对 weight=1 的写入。
 3. 保留 `DockSavedNode` 过滤无效标签引用、当前布局焦点索引保护及拒绝坏数据行为。`historyKey/customName/contextSessionIndex/customDirectory/sshHost/pinnedFile` 和 `SourceTextEditor.swift::EditorState` 的缺省也有当前真实含义；保留其可选语义，删除“为了旧版本可解码”的过时解释，不把 optional 全部改成必填。焦点与上下文索引仍按当前恢复路径检查，不用强制解包。旧布局/旧顶层格式明确不再接收，不添加版本号、迁移器或兼容透传。
 
-**验证：** 同任务留下现行快照的最小可运行往返检查：两层布局、空/非空 optional、焦点/上下文索引越界、无效 Dock 标签引用、损坏必需字段拒绝，以及旧顶层/旧列格式不再接收。对备份的真实当前快照执行只读解码，检查窗口/项目/两层布局数量与焦点；签名 Debug 正常关闭/重新打开后的当前快照可恢复，终端启动新 Shell 而不是伪造旧进程；有历史回放设置时不丢字段。旧 `columns/focusedRow/focusedColumn` 分支和旧单窗口 fallback 在同任务中消失，`git diff --check`。
+**验证：** 同任务留下现行快照的最小可运行往返检查：两层布局、空/非空 optional、损坏必需字段拒绝，以及旧顶层/旧列格式不再接收。焦点/上下文索引越界与无效 Dock 标签引用还要走实际恢复逻辑和已有 Dock 检查，不能只断言 Codable 返回成功；不为独立编译拆出无职责的生产模型或测试框架。对备份的真实当前快照执行只读解码，检查窗口/项目/两层布局数量与焦点；签名 Debug 正常关闭/重新打开后的当前快照可恢复，终端启动新 Shell 而不是伪造旧进程；有历史回放设置时不丢字段。旧 `columns/focusedRow/focusedColumn` 分支和旧单窗口 fallback 在同任务中消失，`git diff --check`。
 
 **提交边界：** 当前快照格式收敛 + 清理旧解码和写入参数一个原子提交。不是删除用户的快照数据，也不创建迁移层。
 
@@ -99,7 +99,7 @@
 
 **依据：** `ContentView` 并非底部工具栏的唯一消费者，控件内有分支菜单和原生 Popover 的 AppKit 桥。此处是**已经存在的共享 UI**，独立源码归属比新建协议合理。
 
-**实施：** 一次性迁移工具栏和它独占的辅助类型，保留原始 GitStatusModel 观察、按钮动作、焦点与 24pt 高度唯一常量；立即删除根 View 中旧定义。删除 `ContentView.emptyState` 中不可达的“已选项目但没有会话”旧分支：有 selectedProject 时根 View 始终进入 Dock，空分组提示已有 Dock 的实现；同步删除 `Resources/Localization/Interface.xcstrings` 中仅由该分支使用的 `No open sessions`、`New Session  ⌘T` 两条旧文案。保留真正无项目时的入口，不重写成新的配置系统。
+**实施：** 一次性迁移工具栏和它独占的辅助类型，保留原始 GitStatusModel 观察、按钮动作、焦点与 24pt 高度唯一常量；立即删除根 View 中旧定义。删除 `ContentView.emptyState` 中不可达的“已选项目但没有会话”旧分支：有 selectedProject 时根 View 始终进入 Dock，空分组提示已有 Dock 的实现；同步删除 `kero/Resources/Localization/Interface.xcstrings` 中仅由该分支使用的 `No open sessions`、`New Session  ⌘T` 两条旧文案。保留真正无项目时的入口，不重写成新的配置系统。
 
 **验证：** 签名 Debug 下分支搜索、弹窗关闭/焦点、底部栏显隐、Git 面板跳转、窄标签组与窗口缩放；唯一 `BottomToolbarLayout`、无新高度分支，`git diff --check`。
 

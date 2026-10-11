@@ -56,9 +56,9 @@ STTextView 核对本项目实际适配与三份补丁文件中的行号、横向
 
 `sync` 先替换 backend/机器信息；刷新在进行时直接返回，旧行暂时保留。异步结果只比较 shellPid，不区分机器；kill 又使用当前 backend。A、B 两个目标具有相同 PID 时，旧结果可发布，旧行操作也可能发给 B。
 
-修订：[P2-T5](plan-p2.md#p2-t5)。目标改变时让旧操作行失效；本次请求捕获 PID 和目标，返回时只应用匹配结果；沿现有刷新合并方式保证最后一个目标仍会刷新。不是给每次 await 或每个按钮叠加检查，更不增加全局安全框架。
+修订：[P2-T5](plan-p2.md#p2-t5)。目标改变时让旧操作行失效；请求和延迟菜单动作捕获各自原目标，模型在回写/实际 kill 入口核对，不只靠清空数组。进程目标不随无关目录变化失效；沿现有刷新合并方式保证最后一个目标仍会刷新。不是给每次 await 或每个按钮叠加检查，更不增加全局安全框架。
 
-必须验证延迟返回、同 PID 跨机器、旧行不向新 backend 发 kill，以及最后一次刷新确实完成。
+必须验证延迟返回、同 PID 跨机器、旧菜单在新目标已有同 PID 行后仍不能发 kill，以及最后一次刷新确实完成。
 
 ### 2. 根目录的异步身份不完整，且两处选择逻辑可能读到不同项目
 
@@ -140,6 +140,7 @@ GitSectionHeader 同时服务 Git 四处和 Info 四处，不能随 GitPanel 移
 | --- | --- | --- |
 | [P1-T2/T3](plan-p1.md#p1-t2) | 迁移后的旧树/行/文件树路径、重复定义和旧编译命令 | 树原本已共享；项目仍持有文件树模型，不重造统一树 |
 | [P2-T1/T2/T3](plan-p2.md#p2-t1) | ToolPanel 中迁出的整组旧定义、旧 GitSectionHeader 名称、Git 草稿重复状态 | ToolPanel 的渲染选择/必要刷新触发、Git 确认 UI 和共享行组件 |
+| [P2-T2](plan-p2.md#p2-t2) | Git 的三个无消费者 rowID 属性、Operation.isSuccess、恒真 loadedDetails 字段/赋值/条件包装；不拖到 P4 | 真正使用的树行 ID、操作结果与 repository snapshot 状态更新 |
 | [P2-T4](plan-p2.md#p2-t4) | PortForwardRegistry；controller.cancel/cancelAll → RemoteConnection.cancelForward；RemoteCommands.freeLocalPort/forwardSpec/forwardArguments/cancelForwardArguments 的死链 | 真正被会话转发和长期隧道使用的 isLocalPortFree；实际调用的 TunnelStore.runSelfCheck |
 | [P2-T4](plan-p2.md#p2-t4) | 从未调用的 RemoteCommands.runSelfCheck App 测试体与淘汰 API 断言；有效断言转为可运行脚本 | 现行 SSH 参数、转义、IPv4/IPv6 与 wildcard 端口占用检查 |
 | [P3-T1](plan-p3.md#p3-t1) | legacyDefaults、旧 font-thicken TOML 键、未来 API 复用布局的推测 | 现行默认/类型校验、原子写失败处理、保存时保留磁盘手工 workspace 修改；语言/Diff 偏好不是旧字体迁移 |
@@ -147,7 +148,7 @@ GitSectionHeader 同时服务 Git 四处和 Info 四处，不能随 GitPanel 移
 | [P3-T3/T4](plan-p3.md#p3-t3) | 旧源码路径；错误的 Diff 挂载/分屏说明；refreshAllAppearances、processArguments 与旧 CLI/Agent/socket 注释 | 真实 cwd/可执行路径查询、窗口/会话 registry、PTY 和通知/SSH 寻址 |
 | [P3-T5](plan-p3.md#p3-t5) | WorkspaceBackend 内迁出的实现；导航脚本的三个跨域桩；File/Diff 构造回退；未实例化 ProcessRemoteCommandRunner 的协议/实例层；无调用 argv/cwd run 重载及独占转义 helper | 活跃 RemoteCommandRunner 两实现、静态进程执行、机器身份、真实协议 run/信任/错误映射 |
 | [P3-T6/T7](plan-p3.md#p3-t6) | 根 View 旧 toolbar/chrome；不可达空会话 UI 及其两条唯一文案；临时 logScroller/KERO_SCROLLER_DEBUG | 无项目入口、真实滚动重算与选区恢复、FPS 可见时启停、既有按钮/标签语义 |
-| [P4-T1](plan-p4.md#p4-t1) | 两份 runner 合并后的旧 API/重复 PipeData；三个无消费者 rowID 属性、Operation.isSuccess、恒真 loadedDetails、不可达 remoteTextLineCount fallback | 真正使用的树行 ID、操作结果、远端批次/体积预算/路径去重、Diff 字节上限 |
+| [P4-T1](plan-p4.md#p4-t1) | 两份 runner 合并后的旧 API/重复 PipeData、不可达 remoteTextLineCount fallback；不为死消费者设计迁移接口 | 远端批次/体积预算/路径去重、Diff 字节上限 |
 
 上述死链已结合完整调用方与控制流核对，不只凭零搜索结果下结论。对相同名字的其他活跃行为，不连带删除。
 
