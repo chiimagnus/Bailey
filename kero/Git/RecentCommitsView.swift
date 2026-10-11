@@ -78,7 +78,7 @@ struct RecentCommitsView: View {
             leadingInset: 21, trailingInset: TreeRowStyle.contentInset,
             showsGuides: false,
             height: max(22, ceil(26 * fontScale))
-        ) { _ in
+        ) { _, layout in
             Button {
                 if !expandedCommitIDs.insert(commit.id).inserted {
                     expandedCommitIDs.remove(commit.id)
@@ -110,7 +110,7 @@ struct RecentCommitsView: View {
                         .background(Capsule().fill(Color(nsColor: Theme.accent)))
                     }
                 }
-                .contentShape(Rectangle())
+                .modifier(layout)
             }
             .buttonStyle(.plain)
             .help("\(commit.shortHash) \u{00B7} \(commit.author) \u{00B7} \(commit.relativeDate)")
@@ -142,10 +142,11 @@ struct RecentCommitsView: View {
     @ViewBuilder
     private func commitFiles(_ commit: GitStatusModel.RecentCommit, isLast: Bool) -> some View {
         if commit.files.isEmpty {
-            TreeRowSurface(depth: 0, scale: fontScale, hoverEnabled: false, leadingInset: 39) { _ in
+            TreeRowSurface(depth: 0, scale: fontScale, hoverEnabled: false, leadingInset: 39) { _, layout in
                 Text(String(localized: "No changed files", table: "Git"))
                     .font(.system(size: 9.5 * fontScale))
                     .foregroundStyle(.tertiary)
+                    .modifier(layout)
             }
             .background { fileRails(continuesBelow: !isLast) }
         } else if viewMode == .tree {

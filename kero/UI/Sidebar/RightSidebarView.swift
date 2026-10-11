@@ -677,14 +677,16 @@ private struct FileTreeRow: View {
             TreeRowSurface(
                 depth: item.depth, scale: fontScale,
                 focused: true, hoverEnabled: false
-            ) { _ in
+            ) { _, layout in
                 draftRow
+                    .modifier(layout)
             }
         } else if isRenaming {
             TreeRowSurface(
                 depth: item.depth, scale: fontScale, selected: isCurrent
-            ) { _ in
+            ) { _, layout in
                 renameRow
+                    .modifier(layout)
             }
             .contextMenu { rowMenu }
         } else {
@@ -2479,7 +2481,7 @@ private struct GitEntryRow: View {
     }
 
     private var hoverActions: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
             switch kind {
             case .merge:
                 rowButton(
@@ -2530,8 +2532,9 @@ private struct GitEntryRow: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(width: 16, height: 16)
-            .contentShape(RoundedRectangle(cornerRadius: 3))
+            .frame(width: 16, height: TreeRowStyle.rowHeight(fontScale))
+            .padding(.horizontal, 3)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(disabled)

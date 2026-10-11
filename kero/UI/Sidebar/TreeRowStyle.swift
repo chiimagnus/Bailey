@@ -21,8 +21,23 @@ enum TreeRowStyle {
 
 }
 
+struct TreeRowLayout: ViewModifier {
+    let leadingInset: CGFloat
+    let trailingInset: CGFloat
+    let height: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.leading, leadingInset)
+            .padding(.trailing, trailingInset)
+            .frame(height: height)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+    }
+}
+
 /// The one row surface shared by Files, working-tree Git and committed Git.
-/// Callers provide only their semantic content; hover/selection geometry lives here.
+/// Callers apply the supplied layout inside button labels so hover and hit areas agree.
 struct TreeRowSurface<Content: View>: View {
     let depth: Int
     let scale: CGFloat
@@ -34,7 +49,7 @@ struct TreeRowSurface<Content: View>: View {
     var outerInset = TreeRowStyle.outerInset
     var showsGuides = true
     var height: CGFloat? = nil
-    private let content: (Bool) -> Content
+    private let content: (Bool, TreeRowLayout) -> Content
 
     @State private var isHovering = false
 
@@ -49,7 +64,7 @@ struct TreeRowSurface<Content: View>: View {
         outerInset: CGFloat = TreeRowStyle.outerInset,
         showsGuides: Bool = true,
         height: CGFloat? = nil,
-        @ViewBuilder content: @escaping (Bool) -> Content
+        @ViewBuilder content: @escaping (Bool, TreeRowLayout) -> Content
     ) {
         self.depth = depth
         self.scale = scale
@@ -65,10 +80,11 @@ struct TreeRowSurface<Content: View>: View {
     }
 
     var body: some View {
-        content(isHovering)
-            .padding(.leading, leadingInset + CGFloat(depth) * TreeRowStyle.indent)
-            .padding(.trailing, trailingInset)
-            .frame(height: height ?? TreeRowStyle.rowHeight(scale))
+        content(isHovering, TreeRowLayout(
+            leadingInset: leadingInset + CGFloat(depth) * TreeRowStyle.indent,
+            trailingInset: trailingInset,
+            height: height ?? TreeRowStyle.rowHeight(scale)
+        ))
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(RoundedRectangle(cornerRadius: 4))
             .background(
@@ -183,9 +199,10 @@ struct TreeFolderRow: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        TreeRowSurface(depth: row.depth, scale: scale, focused: focused, leadingInset: leadingInset) { _ in
+        TreeRowSurface(depth: row.depth, scale: scale, focused: focused, leadingInset: leadingInset) { _, layout in
             Button(action: toggle) {
                 TreeRowLabel(row: row, iconPath: row.path, scale: scale)
+                    .modifier(layout)
             }
             .buttonStyle(.plain)
             .focused($focused)
@@ -212,11 +229,12 @@ struct TreeFileRow<Accessory: View>: View {
 
     var body: some View {
         TreeRowSurface(depth: row.depth, scale: scale, selected: selected,
-                       focused: focused, leadingInset: leadingInset) { hovering in
-            HStack(spacing: 2) {
+                       focused: focused, leadingInset: leadingInset) { hovering, layout in
+            HStack(spacing: 0) {
                 Button(action: open) {
                     TreeRowLabel(row: row, iconPath: iconPath ?? row.path, scale: scale,
                                  directory: directory)
+                        .modifier(layout)
                 }
                 .buttonStyle(.plain)
                 .focused($focused)

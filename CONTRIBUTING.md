@@ -31,11 +31,23 @@ The app uses the personal Apple Development certificate for team
 `RDQHYSDFFG`, and saves its configuration in `~/.config/kero/config.toml`.
 This is for local use, not distribution or notarization.
 
+To check native row clicks, including indentation, top/bottom edges, committed
+rows and separate Git action buttons at normal and enlarged font sizes:
+
+```sh
+xcrun swiftc -swift-version 5 -o build/check-tree-row-hit-testing \
+  kero/Workspace/TreeDisplayModel.swift kero/UI/Sidebar/TreeRowStyle.swift \
+  scripts/check-tree-row-hit-testing.swift && build/check-tree-row-hit-testing
+```
+
+This check hosts the shared SwiftUI rows in off-screen native windows and sends
+mouse events to them. It does not install or register another app.
+
 ## Verify
 
 Every code change ends with a signed Debug build installed at `/Applications/Kero.app`, followed by a real-app check of the changed behavior. Do not replace Kero while it owns active terminal child processes; after relaunch, confirm existing projects and sessions restore.
 
-For Files/Git tree changes, check Files, working/staged Git, and committed Git together: hover and selection geometry stay aligned, long names scroll without moving fixed actions, Compact Folders open the real leaf directory, and filenames share status colors without a separate status-letter column. The regression script above covers the shared display model and real filesystem operations; it does not replace visual interaction checks.
+For Files/Git tree changes, check Files, working/staged Git, and committed Git together: the whole highlighted row responds to clicks, including indentation and top/bottom edges; separate Git actions do not open the file. Hover and selection geometry stay aligned, long names scroll without moving fixed actions, Compact Folders open the real leaf directory, and filenames share status colors without a separate status-letter column. The regression scripts above cover the shared display model, real filesystem operations and native hit testing; they do not replace visual interaction checks.
 
 Open `kero.xcodeproj` and press **Cmd+B** for normal development. If only
 the Xcode beta is installed, set
