@@ -600,7 +600,7 @@ private struct FileTreePanel: View {
 }
 
 /// The same SwiftUI rows, 22 pt layout and hierarchy lines as the Git tree.
-/// Lazy creation keeps large directories usable; both scroll axes preserve full names.
+/// The tree stays viewport-sized; only long names scroll horizontally.
 private struct FileTreeScrollView: View {
     @ObservedObject var model: FileTreeModel
     @ObservedObject var git: GitStatusModel
@@ -613,38 +613,27 @@ private struct FileTreeScrollView: View {
     let refreshGitStatus: () -> Void
     @Environment(\.sidebarFontScale) private var fontScale
 
-    private var contentWidth: CGFloat {
-        model.items.reduce(0) { width, item in
-            max(width, TreeRowStyle.minimumWidth(
-                name: item.name, depth: item.depth, scale: fontScale, trailing: 48
-            ))
-        }
-    }
-
     var body: some View {
-        GeometryReader { viewport in
-            let width = max(viewport.size.width, contentWidth)
-            ScrollView([.vertical, .horizontal]) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(model.items) { item in
-                        FileTreeRow(
-                            model: model, git: git, item: item,
-                            session: session, sshHost: sshHost,
-                            currentFilePath: currentFilePath,
-                            openFile: openFile, openToSide: openToSide,
-                            onRename: onRename, refreshGitStatus: refreshGitStatus
-                        )
-                        .frame(width: max(0, width - 12), alignment: .leading)
-                        .frame(minHeight: TreeRowStyle.rowHeight(fontScale))
-                        .padding(.horizontal, 6)
-                        .background { TreeGuideBackground(depth: item.depth) }
-                    }
+        ScrollView(.vertical) {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(model.items) { item in
+                    FileTreeRow(
+                        model: model, git: git, item: item,
+                        session: session, sshHost: sshHost,
+                        currentFilePath: currentFilePath,
+                        openFile: openFile, openToSide: openToSide,
+                        onRename: onRename, refreshGitStatus: refreshGitStatus
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(minHeight: TreeRowStyle.rowHeight(fontScale))
+                    .padding(.horizontal, 6)
+                    .background { TreeGuideBackground(depth: item.depth) }
                 }
-                .padding(.bottom, 7)
-                .frame(width: width, alignment: .topLeading)
             }
-            .id(model.rootPath)
+            .padding(.bottom, 7)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+        .id(model.rootPath)
     }
 }
 
@@ -825,11 +814,14 @@ private struct FileTreeRow: View {
         } label: {
             HStack(spacing: TreeRowStyle.iconSpacing) {
                 leadingGlyphs
-                Text(item.name)
-                    .sidebarFont(size: TreeRowStyle.fontSize)
-                    .foregroundStyle(fileNameColor)
-                    .fixedSize(horizontal: true, vertical: false)
-                Spacer(minLength: 0)
+                ScrollView(.horizontal) {
+                    Text(item.name)
+                        .sidebarFont(size: TreeRowStyle.fontSize)
+                        .foregroundStyle(fileNameColor)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                .scrollIndicators(.hidden)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 if let gitDecoration {
                     Text(gitDecoration.badge)
                         .sidebarFont(size: 9, weight: .semibold, design: .monospaced)
