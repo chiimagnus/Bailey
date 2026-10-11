@@ -1,5 +1,7 @@
 # Kero
 
+本项目 fork 自 [benjaminv/kero](https://github.com/benjaminv/kero)，最初来源于 [egoist/kero](https://github.com/egoist/kero)，现独立开发和维护。感谢原作者与贡献者，保留原有 GPLv3 许可证及版权署名。
+
 原生 macOS 终端工作区，把项目、SSH、文件、Git、差异和浏览器放在一起。
 终端由 Ghostty 驱动；代码智能体作为普通终端程序运行，修改由你审查。
 
