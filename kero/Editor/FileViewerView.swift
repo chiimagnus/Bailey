@@ -369,7 +369,7 @@ struct FileViewerView: View {
         HStack(spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 10))
-            Text("Could not save: \(message)")
+            Text(String(localized: "Could not save: \(message)", table: "Editor"))
                 .font(.system(size: 11))
                 .lineLimit(1)
             Spacer(minLength: 0)

@@ -362,7 +362,9 @@ struct RightSidebarView: View {
         .buttonStyle(.plain)
         .help(help)
         .accessibilityLabel(title)
-        .accessibilityValue(isActive ? "Selected" : "Not selected")
+        .accessibilityValue(isActive
+            ? String(localized: "Selected", table: "Sidebar")
+            : String(localized: "Not selected", table: "Sidebar"))
     }
 
     private func syncModels() {
@@ -376,8 +378,11 @@ struct RightSidebarView: View {
     /// Cheap and synchronous — it reads published state and touches no
     /// workspace, so it stays correct while the panels are stalled.
     private func applyRemoteHeading() {
-        guard let project = manager.selectedProject,
-              let session = project.selectedSession else { return }
+        guard let project = manager.selectedProject else {
+            remoteHeaderState = .local
+            forwards = nil
+            return
+        }
         if let host = project.sshHost {
             let state: RemotePaneHeaderState
             switch SSHHostWorkspaces.connectionState(for: host) {
@@ -397,9 +402,13 @@ struct RightSidebarView: View {
             forwards = nil
             return
         }
-        // What the heading says is a fact about the terminal, not about any
-        // connection: an ssh Kero is not in front of has no connection at all
-        // and still has to be reported.
+        guard let session = project.selectedSession else {
+            remoteHeaderState = .local
+            forwards = nil
+            return
+        }
+        // An automatically scoped project may still follow its terminal's
+        // connection. A pinned project never does.
         let headerState = session.remoteHeaderState
         remoteHeader.apply(state: headerState)
         remoteHeader.workingDirectory = headerState == .local
@@ -422,8 +431,9 @@ struct RightSidebarView: View {
     private func performSync() async {
         guard manager.isPanelVisible,
               let project = manager.selectedProject,
-              let session = project.selectedSession
+              let context = project.panelContext
         else { return }
+        let session = project.selectedSession
         // The panel path, not the session's own: once the session is on a
         // remote machine these panels follow the remote shell's directory,
         // while new local terminals and restore snapshots keep the local one.
@@ -432,14 +442,14 @@ struct RightSidebarView: View {
         // as long as the link stays down. The panels keep their last remote
         // contents instead, which is what the heading is telling the user.
         if project.sshHost == nil, project.customDirectory == nil,
-           let connection = session.location.remoteConnection,
+           let connection = session?.location.remoteConnection,
            connection.state == .disconnected {
             return
         }
-        let epoch = workspaceEpoch(of: session)
+        let epoch = session.map(workspaceEpoch) ?? context.scope
 
-        let cwd = project.customDirectory ?? session.panelDirectoryPath
-        let backend = project.workspaceBackend
+        let cwd = context.cwd
+        let backend = context.backend
         // Files and Git anchor to the project directory — pinned when the
         // user set one, else the repository the session is working in — so
         // they don't re-root as the terminal cds around a repo; Info
@@ -448,18 +458,17 @@ struct RightSidebarView: View {
         // process directory, so the foreground job's cwd is passed in too.
         let (root, source) = await project.panelRoot(
             followingSessionAt: cwd,
-            foregroundAt: project.sshHost == nil ? session.foregroundDirectoryPath : nil,
+            foregroundAt: context.foreground,
             backend: backend
         )
         // The connection may have died while that was in flight; its answer
         // describes a workspace that is no longer the one on screen.
-        guard epoch == workspaceEpoch(of: session),
+        guard epoch == (project.selectedSession.map(workspaceEpoch) ?? context.scope),
               manager.selectedProjectID == project.id else { return }
         if rootSource != source { rootSource = source }
         switch manager.panelTab {
         case .files:
-            await fileTree.sync(root: root, backend: backend,
-                                scope: project.workspaceIdentity ?? "local")
+            await fileTree.sync(root: root, backend: backend, scope: context.scope)
         case .git:
             break
         case .info:
@@ -469,9 +478,9 @@ struct RightSidebarView: View {
             await info.sync(
                 root: project.sshHost == nil ? cwd : root,
                 projectRoot: root, projectRootSource: source,
-                shellName: session.shellName,
+                shellName: session?.shellName ?? "",
                 shellPid: project.sshHost == nil && fileActionSession != nil
-                    ? session.panelShellPid : nil,
+                    ? session?.panelShellPid : nil,
                 isRemote: project.workspaceIdentity != nil,
                 backend: backend
             )
@@ -572,7 +581,7 @@ private struct FileTreePanel: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
-                    .help("Reveal in Finder")
+                    .help(String(localized: "Reveal in Finder", table: "Sidebar"))
                 }
             }
             .padding(.horizontal, 12)
@@ -900,47 +909,47 @@ private struct FileTreeRow: View {
     @ViewBuilder
     private var rowMenu: some View {
         if !item.isDirectory {
-            Button("Open") {
+            Button(String(localized: "Open", table: "Sidebar")) {
                 openFile(item.path)
             }
-            Button("Open to the Side") {
+            Button(String(localized: "Open to the Side", table: "Sidebar")) {
                 openToSide(item.path)
             }
         }
         // Finder and the default app can only reach the local disk.
         if !isRemote {
-            Button("Open in Default App") {
+            Button(String(localized: "Open in Default App", table: "Sidebar")) {
                 NSWorkspace.shared.open(URL(fileURLWithPath: item.path))
             }
-            Button("Reveal in Finder") {
+            Button(String(localized: "Reveal in Finder", table: "Sidebar")) {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
             }
         }
-        Button("Copy Path") {
+        Button(String(localized: "Copy Path", table: "Sidebar")) {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(item.path, forType: .string)
         }
         if item.isDirectory {
-            Button("cd Here") {
+            Button(String(localized: "cd Here", table: "Sidebar")) {
                 session?.sendCommand("cd " + shellQuote(item.path) + "\n")
             }
             Divider()
-            Button("New File…") {
+            Button(String(localized: "New File…", table: "Sidebar")) {
                 Task { await model.beginNewFile(in: item.path) }
             }
-            Button("New Folder…") {
+            Button(String(localized: "New Folder…", table: "Sidebar")) {
                 Task { await model.beginNewFolder(in: item.path) }
             }
         }
         Divider()
-        Button("Rename") {
+        Button(String(localized: "Rename", table: "Sidebar")) {
             model.beginRename(item)
         }
         if isRemote {
             // No Trash on the remote: Freedesktop semantics vary between
             // distributions and a silently misplaced file is worse than an
             // explicit delete the user confirmed.
-            Button("Delete…", role: .destructive) {
+            Button(String(localized: "Delete…", table: "Sidebar"), role: .destructive) {
                 guard confirmRemoteDelete() else { return }
                 Task {
                     await model.delete(item)
@@ -948,7 +957,7 @@ private struct FileTreeRow: View {
                 }
             }
         } else {
-            Button("Move to Trash", role: .destructive) {
+            Button(String(localized: "Move to Trash", table: "Sidebar"), role: .destructive) {
                 Task {
                     await model.moveToTrash(item)
                     refreshGitStatus()
@@ -1404,7 +1413,7 @@ private struct GitPanel: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("Discard All Changes", role: .destructive) {
+            Button(String(localized: "Discard All Changes", table: "Sidebar"), role: .destructive) {
                 let snapshot = pendingDiscardAll
                 if remoteName != nil {
                     Task {
@@ -1518,7 +1527,7 @@ private struct GitPanel: View {
                 }
                 Divider()
             }
-            Button("Create New Branch…") {
+            Button(String(localized: "Create New Branch…", table: "Sidebar")) {
                 presentCreateBranchDialog()
             }
             .disabled(model.isBusy)
@@ -1545,7 +1554,7 @@ private struct GitPanel: View {
         .menuIndicator(.hidden)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .help("Switch or Create Branch")
+        .help(String(localized: "Switch or Create Branch", table: "Sidebar"))
         .accessibilityLabel(
             String(localized: "Current branch, \(model.branch ?? String(localized: "detached HEAD", table: "Sidebar"))", table: "Sidebar")
         )
@@ -1553,15 +1562,15 @@ private struct GitPanel: View {
 
     private var moreMenu: some View {
         Menu {
-            Button("Fetch") { performOperation(.moreMenu, model.fetch) }
+            Button(String(localized: "Fetch", table: "Sidebar")) { performOperation(.moreMenu, model.fetch) }
                 .disabled(model.isBusy || model.remotes.isEmpty)
-            Button("Pull (Fast-forward Only)") { performOperation(.moreMenu, model.pull) }
+            Button(String(localized: "Pull (Fast-forward Only)", table: "Sidebar")) { performOperation(.moreMenu, model.pull) }
                 .disabled(model.isBusy || !model.hasUpstream)
             if model.hasUpstream {
-                Button("Push") { performOperation(.moreMenu, model.push) }
+                Button(String(localized: "Push", table: "Sidebar")) { performOperation(.moreMenu, model.push) }
                     .disabled(model.isBusy)
             } else if model.remotes.count > 1 {
-                Menu("Publish Branch to") {
+                Menu(String(localized: "Publish Branch to", table: "Sidebar")) {
                     ForEach(model.remotes, id: \.self) { remote in
                         Button(remote) {
                             performOperation(.moreMenu) { model.publish(to: remote) }
@@ -1570,17 +1579,17 @@ private struct GitPanel: View {
                 }
                 .disabled(model.isBusy || model.branch == "detached HEAD")
             } else {
-                Button("Publish Branch") { performOperation(.moreMenu, model.push) }
+                Button(String(localized: "Publish Branch", table: "Sidebar")) { performOperation(.moreMenu, model.push) }
                     .disabled(model.isBusy || model.remotes.isEmpty || model.branch == "detached HEAD")
             }
-            Button("Sync Changes") { performOperation(.moreMenu, model.syncChanges) }
+            Button(String(localized: "Sync Changes", table: "Sidebar")) { performOperation(.moreMenu, model.syncChanges) }
                 .disabled(
                     model.isBusy || model.remotes.isEmpty
                         || (!model.hasUpstream && model.remotes.count != 1)
                         || model.branch == "detached HEAD"
                 )
             Divider()
-            Button("Stash All Changes") {
+            Button(String(localized: "Stash All Changes", table: "Sidebar")) {
                 performOperation(.moreMenu) { model.stash(includeUntracked: true) }
             }
                 .disabled(model.isBusy || model.totalChangeCount == 0)
@@ -1593,12 +1602,12 @@ private struct GitPanel: View {
             }
             .disabled(model.isBusy || model.stashCount == 0)
             Divider()
-            Button("Copy Changed Paths") { copyChangedPaths() }
+            Button(String(localized: "Copy Changed Paths", table: "Sidebar")) { copyChangedPaths() }
                 .disabled(model.totalChangeCount == 0)
-            Button("Copy Repository Path") { copyToPasteboard(model.repoRoot) }
+            Button(String(localized: "Copy Repository Path", table: "Sidebar")) { copyToPasteboard(model.repoRoot) }
             // Finder can only show a path on this Mac.
             if remoteName == nil {
-                Button("Reveal Repository in Finder") {
+                Button(String(localized: "Reveal Repository in Finder", table: "Sidebar")) {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: model.repoRoot)])
                 }
             }
@@ -1619,8 +1628,8 @@ private struct GitPanel: View {
         .menuStyle(.button)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("More Actions…")
-        .accessibilityLabel("More Git Actions")
+        .help(String(localized: "More Actions…", table: "Sidebar"))
+        .accessibilityLabel(String(localized: "More Git Actions", table: "Sidebar"))
     }
 
     private func headerButton(
@@ -1754,8 +1763,8 @@ private struct GitPanel: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("Dismiss")
-                    .accessibilityLabel("Dismiss Git Error")
+                    .help(String(localized: "Dismiss", table: "Sidebar"))
+                    .accessibilityLabel(String(localized: "Dismiss Git Error", table: "Sidebar"))
                 }
                 if operationExpanded, !operation.output.isEmpty {
                     ScrollView([.horizontal, .vertical]) {
@@ -1767,7 +1776,7 @@ private struct GitPanel: View {
                             .padding(.top, 6)
                     }
                     .frame(maxHeight: 96)
-                    .accessibilityLabel("Git Output")
+                    .accessibilityLabel(String(localized: "Git Output", table: "Sidebar"))
                 }
             }
             .foregroundStyle(Color(red: 0.88, green: 0.42, blue: 0.36))
@@ -1877,20 +1886,20 @@ private struct GitPanel: View {
 
     private var commitMenu: some View {
         Menu {
-            Button("Commit Staged") {
+            Button(String(localized: "Commit Staged", table: "Sidebar")) {
                 performCommit(includeAll: false, trigger: .commitMenu)
             }
                 .disabled(!canCommit(includeAll: false))
-            Button("Stage All & Commit") {
+            Button(String(localized: "Stage All & Commit", table: "Sidebar")) {
                 performCommit(includeAll: true, trigger: .commitMenu)
             }
                 .disabled(!canCommit(includeAll: true))
             Divider()
-            Button("Amend Last Commit") {
+            Button(String(localized: "Amend Last Commit", table: "Sidebar")) {
                 performCommit(includeAll: false, amend: true, trigger: .commitMenu)
             }
                 .disabled(!canAmend(includeAll: false))
-            Button("Stage All & Amend") {
+            Button(String(localized: "Stage All & Amend", table: "Sidebar")) {
                 performCommit(includeAll: true, amend: true, trigger: .commitMenu)
             }
                 .disabled(!canAmend(includeAll: true))
@@ -1915,8 +1924,8 @@ private struct GitPanel: View {
         .menuStyle(.button)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Commit Options")
-        .accessibilityLabel("Commit Options")
+        .help(String(localized: "Commit Options", table: "Sidebar"))
+        .accessibilityLabel(String(localized: "Commit Options", table: "Sidebar"))
     }
 
     private func actionButton(
@@ -2036,7 +2045,7 @@ private struct GitPanel: View {
                 Image(systemName: "magnifyingglass")
                     .sidebarFont(size: 10)
                     .foregroundStyle(.tertiary)
-                TextField("Filter changed files", text: $filterText)
+                TextField(String(localized: "Filter changed files", table: "Sidebar"), text: $filterText)
                     .textFieldStyle(.plain)
                     .sidebarFont(size: 11)
                 if !filterText.isEmpty {
@@ -2048,8 +2057,8 @@ private struct GitPanel: View {
                             .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
-                    .help("Clear Filter")
-                    .accessibilityLabel("Clear Git Filter")
+                    .help(String(localized: "Clear Filter", table: "Sidebar"))
+                    .accessibilityLabel(String(localized: "Clear Git Filter", table: "Sidebar"))
                 }
             }
             .padding(.horizontal, 8)
@@ -2567,9 +2576,9 @@ private struct GitPanel: View {
                 .sidebarFont(size: 24, weight: .light)
                 .foregroundStyle(.quaternary)
             VStack(spacing: 2) {
-                Text("No Git Repository")
+                Text(String(localized: "No Git Repository", table: "Sidebar"))
                     .sidebarFont(size: 11.5, weight: .medium)
-                Text("Initialize the terminal’s current directory to start tracking changes.")
+                Text(String(localized: "Initialize the terminal’s current directory to start tracking changes.", table: "Sidebar"))
                     .sidebarFont(size: 10)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
@@ -2583,7 +2592,7 @@ private struct GitPanel: View {
                     if operationIsLoading(.initializeRepository) {
                         operationProgressView()
                     }
-                    Text("Initialize Repository")
+                    Text(String(localized: "Initialize Repository", table: "Sidebar"))
                 }
             }
             .buttonStyle(.borderedProminent)
@@ -2603,7 +2612,7 @@ private struct GitPanel: View {
                 .sidebarFont(size: 24, weight: .light)
                 .foregroundStyle(Color(red: 0.88, green: 0.42, blue: 0.36))
             VStack(spacing: 3) {
-                Text("Git Status Unavailable")
+                Text(String(localized: "Git Status Unavailable", table: "Sidebar"))
                     .sidebarFont(size: 11.5, weight: .medium)
                 Text(verbatim: message)
                     .sidebarFont(size: 10, design: .monospaced)
@@ -2612,7 +2621,7 @@ private struct GitPanel: View {
                     .lineLimit(5)
                     .textSelection(.enabled)
             }
-            Button("Retry") { model.refresh() }
+            Button(String(localized: "Retry", table: "Sidebar")) { model.refresh() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(model.isBusy || model.isResolvingInitialStatus)
@@ -2743,7 +2752,7 @@ private struct GitSectionHeader: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("About \(title)")
+                .accessibilityLabel(String(localized: "About \(title)", table: "Sidebar"))
                 .popover(isPresented: $isShowingHelp, arrowEdge: .bottom) {
                     Text(helpText)
                         .sidebarFont(size: 11)
@@ -2783,7 +2792,7 @@ private struct GitSectionHeader: View {
             Spacer(minLength: 0)
 
             if count > 0 {
-                Text("\(count)")
+                Text(String(localized: "\(count)", table: "Sidebar"))
                     .sidebarFont(size: 9, weight: .medium)
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 5)
@@ -2804,7 +2813,7 @@ private struct GitSectionHeader: View {
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(title), \(count) items")
+        .accessibilityLabel(String(localized: "\(title), \(count) items", table: "Sidebar"))
         .accessibilityValue(isCollapsed ? "Collapsed" : "Expanded")
     }
 }
@@ -2871,8 +2880,10 @@ private struct GitEntryRow: View {
             }
             .buttonStyle(.plain)
             .focused($isFocused)
-            .accessibilityLabel("\(entry.fileName), \(statusName)")
-            .accessibilityHint(kind == .merge ? "Opens conflict changes" : "Opens changes")
+            .accessibilityLabel(String(localized: "\(entry.fileName), \(statusName)", table: "Sidebar"))
+            .accessibilityHint(kind == .merge
+                ? String(localized: "Opens conflict changes", table: "Sidebar")
+                : String(localized: "Opens changes", table: "Sidebar"))
 
             if !disabled || isStageLoading || isUnstageLoading || isDiscardLoading {
                 hoverActions
@@ -2962,40 +2973,40 @@ private struct GitEntryRow: View {
     @ViewBuilder
     private var menu: some View {
         if kind == .merge {
-            Button("Open Changes") { openDiff() }
-            Button("Open Conflicted File") { openFile() }
+            Button(String(localized: "Open Changes", table: "Sidebar")) { openDiff() }
+            Button(String(localized: "Open Conflicted File", table: "Sidebar")) { openFile() }
         } else {
-            Button("Open Changes") { openDiff() }
-            Button("Open File") { openFile() }
+            Button(String(localized: "Open Changes", table: "Sidebar")) { openDiff() }
+            Button(String(localized: "Open File", table: "Sidebar")) { openFile() }
         }
-        Button("Open File to the Side") { openToSide() }
+        Button(String(localized: "Open File to the Side", table: "Sidebar")) { openToSide() }
         Divider()
         switch kind {
         case .merge:
-            Button("Mark Resolved (Stage)") { stage() }
+            Button(String(localized: "Mark Resolved (Stage)", table: "Sidebar")) { stage() }
                 .disabled(disabled)
         case .staged:
-            Button("Unstage Changes") { unstage() }
+            Button(String(localized: "Unstage Changes", table: "Sidebar")) { unstage() }
                 .disabled(disabled)
         case .unstaged:
-            Button("Stage Changes") { stage() }
+            Button(String(localized: "Stage Changes", table: "Sidebar")) { stage() }
                 .disabled(disabled)
             Button(destructiveMenuTitle) { discard() }
                 .disabled(disabled)
         }
         Divider()
         if !isRemote {
-            Button("Reveal in Finder") {
+            Button(String(localized: "Reveal in Finder", table: "Sidebar")) {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: absolutePath)])
             }
         }
-        Button("Copy Path") {
+        Button(String(localized: "Copy Path", table: "Sidebar")) {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(absolutePath, forType: .string)
         }
-        Button("Copy Relative Path") { copyRelativePath() }
+        Button(String(localized: "Copy Relative Path", table: "Sidebar")) { copyRelativePath() }
         if let insertInTerminal {
-            Button("Insert Absolute Path in Terminal") { insertInTerminal() }
+            Button(String(localized: "Insert Absolute Path in Terminal", table: "Sidebar")) { insertInTerminal() }
         }
     }
 
@@ -3085,7 +3096,10 @@ private struct InfoPanel: View {
                 .sidebarFont(size: 11, weight: .medium)
                 .foregroundStyle(Color(nsColor: Theme.accent))
             PanelHeader(
-                title: model.shellName.isEmpty ? String(localized: "Session", table: "Sidebar") : model.shellName,
+                title: session == nil
+                    ? String(localized: "Project", table: "Sidebar")
+                    : (model.shellName.isEmpty
+                        ? String(localized: "Session", table: "Sidebar") : model.shellName),
                 subtitle: model.shellPid > 0 ? "pid \(String(model.shellPid))" : nil
             )
             Button {
@@ -3098,7 +3112,7 @@ private struct InfoPanel: View {
                     .contentShape(RoundedRectangle(cornerRadius: 4))
             }
             .buttonStyle(.plain)
-            .help("Refresh")
+            .help(String(localized: "Refresh", table: "Sidebar"))
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)
@@ -3165,7 +3179,7 @@ private struct InfoPanel: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .help(path)
                 .contextMenu {
-                    Button("Copy Path") { copyPath(path) }
+                    Button(String(localized: "Copy Path", table: "Sidebar")) { copyPath(path) }
                 }
 
             HStack(spacing: 4) {
@@ -3366,9 +3380,9 @@ private struct InfoProcessRow: View {
                         .contentShape(RoundedRectangle(cornerRadius: 3))
                 }
                 .buttonStyle(.plain)
-                .help("Terminate Process")
+                .help(String(localized: "Terminate Process", table: "Sidebar"))
             } else {
-                Text("\(process.cpu, format: .number.precision(.fractionLength(0)))% · \(process.memoryLabel)")
+                Text(String(localized: "\(process.cpu, format: .number.precision(.fractionLength(0)))% · \(process.memoryLabel)", table: "Sidebar"))
                     .sidebarFont(size: 10)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
@@ -3385,14 +3399,14 @@ private struct InfoProcessRow: View {
         )
         .onHover { isHovering = $0 }
         .contextMenu {
-            Button("Terminate") { kill(false) }
-            Button("Force Kill") { kill(true) }
+            Button(String(localized: "Terminate", table: "Sidebar")) { kill(false) }
+            Button(String(localized: "Force Kill", table: "Sidebar")) { kill(true) }
             Divider()
-            Button("Copy PID") {
+            Button(String(localized: "Copy PID", table: "Sidebar")) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString("\(process.pid)", forType: .string)
             }
-            Button("Copy Executable Path") {
+            Button(String(localized: "Copy Executable Path", table: "Sidebar")) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(process.executable, forType: .string)
             }
@@ -3465,12 +3479,14 @@ private struct InfoPortRow: View {
         )
         .onHover { isHovering = $0 }
         .contextMenu {
-            Button(isRemote && localPort == nil ? "Forward and Open" : "Open in Browser") {
+            Button(isRemote && localPort == nil
+                ? String(localized: "Forward and Open", table: "Sidebar")
+                : String(localized: "Open in Browser", table: "Sidebar")) {
                 open()
             }
-            Button("Copy URL") { copyURL() }
+            Button(String(localized: "Copy URL", table: "Sidebar")) { copyURL() }
             Divider()
-            Button("Kill Process (\(port.processName))") { kill(false) }
+            Button(String(localized: "Kill Process (\(port.processName))", table: "Sidebar")) { kill(false) }
         }
     }
 

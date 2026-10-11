@@ -351,7 +351,7 @@ struct PaneLayoutView: View {
                 .font(.system(size: 12, weight: .medium))
                 .lineLimit(1)
             if drag.paneCount > 1 {
-                Text("\(drag.paneCount)")
+                Text(String(localized: "\(drag.paneCount)", table: "Interface"))
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 5)
@@ -623,14 +623,14 @@ private struct PaneHeaderView: View {
 
             paneAction(
                 systemImage: "rectangle.split.2x1",
-                label: "Split Right",
-                tooltip: "Split Right (⌘D)",
+                label: String(localized: "Split Right", table: "Interface"),
+                tooltip: String(localized: "Split Right (⌘D)", table: "Interface"),
                 edge: .right
             )
             paneAction(
                 systemImage: "rectangle.split.1x2",
-                label: "Split Down",
-                tooltip: "Split Down (⇧⌘D)",
+                label: String(localized: "Split Down", table: "Interface"),
+                tooltip: String(localized: "Split Down (⇧⌘D)", table: "Interface"),
                 edge: .bottom
             )
         }
@@ -684,8 +684,8 @@ private struct PaneHeaderView: View {
 
     private func paneAction(
         systemImage: String,
-        label: LocalizedStringKey,
-        tooltip: LocalizedStringKey,
+        label: String,
+        tooltip: String,
         edge: PaneDropEdge
     ) -> some View {
         Button {

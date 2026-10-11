@@ -331,27 +331,21 @@ struct ContentView: View {
 
     private func syncGit() {
         guard let project = manager.selectedProject,
-              let session = project.selectedSession else {
+              let context = project.panelContext else {
             git.sync(root: "")
             return
         }
-        // The remote shell's directory once the session is connected, and the
-        // matching workspace, so the panel reads the repository on the machine
-        // the terminal is actually in. Resolving the root is a round trip
-        // there, hence the task.
-        let backend = project.workspaceBackend
-        let cwd = session.panelDirectoryPath
-        let foreground = project.sshHost == nil ? session.foregroundDirectoryPath : nil
-        let scope = project.workspaceIdentity ?? "local"
+        // Files and Git belong to the selected project, not to its terminals.
+        // Resolving an automatic remote root can involve a round trip.
         let selectedID = project.id
         Task {
             let root = await project.panelRoot(
-                followingSessionAt: cwd,
-                foregroundAt: foreground,
-                backend: backend
+                followingSessionAt: context.cwd,
+                foregroundAt: context.foreground,
+                backend: context.backend
             ).root
             guard manager.selectedProjectID == selectedID else { return }
-            git.sync(root: root, backend: backend, scope: scope)
+            git.sync(root: root, backend: context.backend, scope: context.scope)
         }
     }
 
@@ -359,33 +353,33 @@ struct ContentView: View {
     private var emptyState: some View {
         if manager.selectedProject == nil {
             emptyStatePrompt(
-                title: "No open projects",
-                buttonTitle: "Add Files or Folders…",
+                title: String(localized: "No open projects", table: "Interface"),
+                buttonTitle: String(localized: "Add Files or Folders…", table: "Interface"),
                 action: { manager.chooseLocalItems() }
             )
         } else {
             // A project whose tabs were all closed stays open; offer to reopen
             // a session rather than showing the no-projects prompt.
             emptyStatePrompt(
-                title: "No open sessions",
-                buttonTitle: "New Session  ⌘T",
+                title: String(localized: "No open sessions", table: "Interface"),
+                buttonTitle: String(localized: "New Session  ⌘T", table: "Interface"),
                 action: { manager.newSession() }
             )
         }
     }
 
     private func emptyStatePrompt(
-        title: LocalizedStringKey,
-        buttonTitle: LocalizedStringKey,
+        title: String,
+        buttonTitle: String,
         action: @escaping () -> Void
     ) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "terminal")
                 .font(.system(size: 36, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text(title)
+            Text(verbatim: title)
                 .foregroundStyle(.secondary)
-            Button(buttonTitle, action: action)
+            Button(action: action) { Text(verbatim: buttonTitle) }
         }
     }
 }
@@ -458,7 +452,7 @@ private struct BottomToolbarView: View {
                 Image(systemName: "arrow.triangle.branch")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
-                Text("No Git Repository")
+                Text(String(localized: "No Git Repository", table: "Interface"))
             }
             .padding(.horizontal, 6)
             .frame(height: 24)
@@ -515,7 +509,7 @@ private struct BottomToolbarView: View {
             }
         }
         .disabled(model.isBusy)
-        .help("Switch Branch")
+        .help(String(localized: "Switch Branch", table: "Interface"))
         .accessibilityLabel(
             String(localized: "Current branch, \(model.branch ?? String(localized: "detached HEAD", table: "Workspace"))", table: "Workspace")
         )
@@ -528,7 +522,7 @@ private struct BottomToolbarView: View {
                     Circle()
                         .fill(Color(red: 0.25, green: 0.73, blue: 0.31))
                         .frame(width: 6, height: 6)
-                    Text("Clean")
+                    Text(String(localized: "Clean", table: "Interface"))
                 } else {
                     Text(verbatim: "+\(model.lineAdditions)")
                         .foregroundStyle(Color(red: 0.25, green: 0.73, blue: 0.31))
@@ -548,8 +542,8 @@ private struct BottomToolbarView: View {
         }
         .buttonStyle(.plain)
         .onHover { isChangesButtonHovered = $0 }
-        .help("Open Changes")
-        .accessibilityLabel("Open Changes")
+        .help(String(localized: "Open Changes", table: "Interface"))
+        .accessibilityLabel(String(localized: "Open Changes", table: "Interface"))
         .accessibilityValue(changesAccessibilityValue)
     }
 
@@ -574,7 +568,7 @@ private struct BottomToolbarView: View {
                 ScrollView {
                     LazyVStack(spacing: 2) {
                         if filteredBranches.isEmpty {
-                            Text("No matches")
+                            Text(String(localized: "No matches", table: "Interface"))
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 24)
@@ -593,10 +587,10 @@ private struct BottomToolbarView: View {
                                             .truncationMode(.middle)
                                         Spacer(minLength: 0)
                                         if branch == model.defaultBranch {
-                                            Text(
-                                                "default",
+                                            Text(String(
+                                                localized: "default", table: "Interface",
                                                 comment: "Badge for the repository's default branch."
-                                            )
+                                            ))
                                             .font(.system(size: 9, weight: .medium))
                                             .foregroundStyle(
                                                 isHovered
@@ -988,7 +982,7 @@ private struct MainHeaderView: View {
                 if !manager.isLeftSidebarVisible {
                     ChromeIconButton(
                         systemImage: "sidebar.left",
-                        tooltip: "Toggle Left Sidebar (⌘B)",
+                        tooltip: String(localized: "Toggle Left Sidebar (⌘B)", table: "Interface"),
                         tooltipAlignment: .leading
                     ) {
                         manager.toggleLeftSidebar()
@@ -1029,14 +1023,14 @@ private struct MainHeaderView: View {
                             .contentShape(RoundedRectangle(cornerRadius: 6))
                     }
                     .buttonStyle(.plain)
-                    .tooltip("Exit Pane Zoom (⇧⌘↩)", edge: .below, alignment: .trailing)
+                    .tooltip(String(localized: "Exit Pane Zoom (⇧⌘↩)", table: "Interface"), edge: .below, alignment: .trailing)
                 }
                 // No project means the sidebar has nothing to show, so drop
                 // its toggle too — matching the panel collapsing itself.
                 if manager.selectedProject != nil {
                     ChromeIconButton(
                         systemImage: "sidebar.right",
-                        tooltip: "Toggle Right Sidebar (⇧⌘B)"
+                        tooltip: String(localized: "Toggle Right Sidebar (⇧⌘B)", table: "Interface")
                     ) {
                         manager.toggleSidebar()
                     }
@@ -1191,7 +1185,7 @@ private struct SessionTabsView: View {
 
             ChromeIconButton(
                 systemImage: "plus",
-                tooltip: "New Session (⌘T)",
+                tooltip: String(localized: "New Session (⌘T)", table: "Interface"),
                 font: .system(size: 10, weight: .semibold),
                 iconSize: 14,
                 tooltipAlignment: .leading
@@ -1289,16 +1283,16 @@ private struct SessionTabsView: View {
 
     @ViewBuilder
     private func tabContextMenu(for tab: PaneTab) -> some View {
-        Button("Rename…") { renamingTabID = tab.id }
+        Button(String(localized: "Rename…", table: "Interface")) { renamingTabID = tab.id }
         if tab.customName != nil {
-            Button("Use Automatic Title") { tab.customName = nil }
+            Button(String(localized: "Use Automatic Title", table: "Interface")) { tab.customName = nil }
         }
         Divider()
         if case .file(let file) = tab.focusedContent {
-            Button("Reveal in Finder") {
+            Button(String(localized: "Reveal in Finder", table: "Interface")) {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)])
             }
-            Button("Copy Absolute Path") {
+            Button(String(localized: "Copy Absolute Path", table: "Interface")) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(file.path, forType: .string)
             }
@@ -1306,28 +1300,28 @@ private struct SessionTabsView: View {
         }
         if case .browser(let browser) = tab.focusedContent,
            !browser.urlString.isEmpty {
-            Button("Open in Default Browser") {
+            Button(String(localized: "Open in Default Browser", table: "Interface")) {
                 browser.openInDefaultBrowser()
             }
             .disabled(browser.shareURL == nil)
-            Button("Copy Address") {
+            Button(String(localized: "Copy Address", table: "Interface")) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(browser.urlString, forType: .string)
             }
             Divider()
         }
-        Button("Close") { project.close(tab) }
-        Button("Close Others") { project.closeOthers(tab) }
+        Button(String(localized: "Close", table: "Interface")) { project.close(tab) }
+        Button(String(localized: "Close Others", table: "Interface")) { project.closeOthers(tab) }
             .disabled(project.tabs.count <= 1)
-        Button("Close Tabs to the Right") { project.closeToRight(of: tab) }
+        Button(String(localized: "Close Tabs to the Right", table: "Interface")) { project.closeToRight(of: tab) }
             .disabled(project.tabs.last?.id == tab.id)
         Divider()
-        Button("Close Files") { project.closeFiles() }
+        Button(String(localized: "Close Files", table: "Interface")) { project.closeFiles() }
             .disabled(!project.hasFiles)
-        Button("Close Diffs") { project.closeDiffs() }
+        Button(String(localized: "Close Diffs", table: "Interface")) { project.closeDiffs() }
             .disabled(!project.hasDiffs)
         Divider()
-        Button("Close All") { project.closeAll() }
+        Button(String(localized: "Close All", table: "Interface")) { project.closeAll() }
     }
 }
 

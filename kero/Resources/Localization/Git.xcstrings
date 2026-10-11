@@ -1,6 +1,34 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@ (%lld items were already moved to Trash.)" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%@ (%lld item was already moved to Trash.)"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%@ (%lld items were already moved to Trash.)"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@（其中 %lld 项已在废纸篓中。）"
+          }
+        }
+      }
+    },
     "%@ (Staged)" : {
       "comment" : "Tab title for the staged diff of a file.",
       "localizations" : {
@@ -252,6 +280,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "复制相对路径"
+          }
+        }
+      }
+    },
+    "Could not save: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法保存：%@"
           }
         }
       }
@@ -628,6 +666,34 @@
         }
       }
     },
+    "Removed %lld intent-to-add index entries." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Removed %lld intent-to-add index entry."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Removed %lld intent-to-add index entries."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移除 %lld 个 intent-to-add 索引条目。"
+          }
+        }
+      }
+    },
     "Removed the intent-to-add index entry." : {
       "localizations" : {
         "zh-Hans" : {
@@ -688,6 +754,16 @@
         }
       }
     },
+    "Resolve before committing" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提交前请先解决冲突"
+          }
+        }
+      }
+    },
     "Restore %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -704,6 +780,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已恢复 %@。"
+          }
+        }
+      }
+    },
+    "Restored %lld tracked paths." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Restored %lld tracked path."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Restored %lld tracked paths."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已恢复 %lld 个已跟踪路径。"
           }
         }
       }
@@ -889,6 +993,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "统一视图"
+          }
+        }
+      }
+    },
+    "Unresolved merge conflict" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未解决的合并冲突"
           }
         }
       }

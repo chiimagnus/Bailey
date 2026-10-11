@@ -214,7 +214,6 @@ final class TerminalManager: nonisolated ObservableObject {
             project.customName = url.lastPathComponent
             project.customDirectory = root
             project.pinnedFile = file
-            project.newSession(directory: root)
             if let file { project.openFile(file) }
             insert(project)
         }
@@ -273,7 +272,6 @@ final class TerminalManager: nonisolated ObservableObject {
             project.customDirectory = root
             project.pinnedFile = file
             project.customName = (item.path as NSString).lastPathComponent
-            project.newSession()
             if let file { project.openFile(file) }
             insert(project)
         }
@@ -494,8 +492,8 @@ final class TerminalManager: nonisolated ObservableObject {
             selectedProjectID = neighbor >= 0 ? projects[neighbor].id : nil
         }
         retainedDiffProjectIDs.remove(project.id)
-        // Nothing left to inspect once the last project is gone, so collapse
-        // the right sidebar — its panels all track the selected session.
+        // Only an explicit project closure removes the Files/Git workspace.
+        // Closing its last terminal never collapses the right sidebar.
         if projects.isEmpty {
             isPanelVisible = false
         }
@@ -952,8 +950,7 @@ final class TerminalManager: nonisolated ObservableObject {
         typealias ProjectSnapshot = SessionSnapshot.ProjectSnapshot
         var histories: [String: String] = [:]
         let snapshot = SessionSnapshot(
-            projects: projects.compactMap { project in
-                guard !project.tabs.isEmpty else { return nil }
+            projects: projects.map { project in
                 let projectSessions = project.sessions
                 // A tab holding nothing but remote content is not written at
                 // all, so the surviving tabs decide the selected index below.
@@ -1097,7 +1094,7 @@ final class TerminalManager: nonisolated ObservableObject {
         if let visible = snapshot.isLeftSidebarVisible { isLeftSidebarVisible = visible }
         if let visible = snapshot.isRightPanelVisible { isPanelVisible = visible }
         if let tab = snapshot.rightPanelTab { panelTab = tab }
-        for saved in snapshot.projects where !saved.tabs.isEmpty {
+        for saved in snapshot.projects {
             let project = makeProject()
             project.customName = Project.normalizedCustomName(saved.customName)
             project.customDirectory = saved.customDirectory
@@ -1116,10 +1113,6 @@ final class TerminalManager: nonisolated ObservableObject {
             for context in restoredContexts
             where restoredSessions.indices.contains(context.sessionIndex) {
                 context.tab.contextSession = restoredSessions[context.sessionIndex]
-            }
-            guard !project.tabs.isEmpty else {
-                projectObservations[project.id] = nil
-                continue
             }
             if let index = saved.selectedTabIndex, project.tabs.indices.contains(index) {
                 project.selectedTabID = project.tabs[index].id

@@ -16,8 +16,8 @@ development language. The currently maintained localizations are:
 Open `kero.xcodeproj` in Xcode and edit the catalogs under
 `kero/Resources/Localization/`. Choose the catalog for the feature:
 
-- `Git`, `Sidebar`, `Terminal`, `Workspace`, `Browser`, `Settings` — feature UI.
-- `Localizable` — shared labels and SwiftUI strings using the default table.
+- `Git`, `Sidebar`, `Terminal`, `Workspace`, `Browser`, `Editor`, `Settings` — feature UI.
+- `Interface` — app menus, command palette, tab and window controls.
 - `InfoPlist` — privacy permission text; `ServicesMenu` — Finder Services.
 
 Xcode keeps placeholders, plural variants, and translation state visible.
@@ -34,13 +34,16 @@ the source code.
 
 ## Add localizable text in Swift
 
-SwiftUI string literals are extracted automatically:
+Always specify the owning feature's string table, including in SwiftUI:
 
 ```swift
-Button("Create New Branch…") {
+Button(String(localized: "Create New Branch…", table: "Git")) {
     createBranch()
 }
 ```
+
+Use `LocalizedStringResource("…", table: "Interface")` when an API expects
+that resource type. Do not introduce unscoped SwiftUI localization keys.
 
 When an API requires a runtime `String`, use `String(localized:table:comment:)`
 for the matching feature catalog. Describe placeholders when not obvious:

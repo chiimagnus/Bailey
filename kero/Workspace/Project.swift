@@ -9,8 +9,8 @@ import Foundation
 
 /// A project groups tabs and appears as one row in the left sidebar. Each tab
 /// is a recursive split layout of terminal, file, browser, and diff panes; see
-/// `PaneTab`. It always starts with one session; closing the last tab leaves
-/// the project open but empty — only the explicit "Close Project" action (see
+/// `PaneTab`. A project can have zero terminal sessions or tabs; closing the last
+/// tab leaves the project open — only the explicit "Close Project" action (see
 /// `TerminalManager.close(_:)`) removes it from the manager.
 @MainActor
 final class Project: nonisolated ObservableObject, nonisolated Identifiable {
@@ -165,6 +165,19 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         if let sshHost { return SSHHostWorkspaces.backend(for: sshHost) }
         if customDirectory != nil { return LocalWorkspaceBackend.shared }
         return selectedSession?.workspaceBackend ?? LocalWorkspaceBackend.shared
+    }
+
+    /// A pinned project is a workspace even without any shell. Automatic
+    /// projects still follow their selected terminal when one exists.
+    var panelContext: (cwd: String, foreground: String?, backend: WorkspaceBackend, scope: String)? {
+        guard let cwd = customDirectory ?? selectedSession?.panelDirectoryPath else { return nil }
+        return (
+            cwd: cwd,
+            foreground: customDirectory == nil && sshHost == nil
+                ? selectedSession?.foregroundDirectoryPath : nil,
+            backend: workspaceBackend,
+            scope: workspaceIdentity ?? "local"
+        )
     }
 
     /// Which rule produced the panel root, so labels can describe it

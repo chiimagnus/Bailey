@@ -72,16 +72,6 @@
         }
       }
     },
-    "Couldn’t create “%@”." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法创建“%@”。"
-          }
-        }
-      }
-    },
     "Couldn’t create the file." : {
       "localizations" : {
         "zh-Hans" : {
@@ -98,6 +88,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法创建文件夹。"
+          }
+        }
+      }
+    },
+    "Couldn’t create “%@”." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法创建“%@”。"
           }
         }
       }
@@ -252,6 +252,27 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "标签页"
+          }
+        }
+      }
+    },
+    "Tab %lld" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签页 %lld"
+          }
+        }
+      }
+    },
+    "Tab %lld, %@" : {
+      "comment" : "Accessibility label for a tab. The placeholders are its position and title.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签页 %lld，%@"
           }
         }
       }

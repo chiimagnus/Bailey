@@ -416,7 +416,7 @@ struct TabSwitcherOverlay: View {
                     )
                 }
                 .accessibilityElement(children: .contain)
-                .accessibilityLabel("Tab switcher")
+                .accessibilityLabel(String(localized: "Tab switcher", table: "Interface"))
             }
         }
         .transition(.opacity.combined(with: .scale(scale: 0.97)))
@@ -558,7 +558,7 @@ private struct TabSwitcherCard: View {
                 comment: "Accessibility label for a tab. The placeholders are its position and title."
             )
         )
-        .accessibilityValue(isHighlighted ? "Selected on release" : "")
+        .accessibilityValue(isHighlighted ? String(localized: "Selected on release", table: "Interface") : "")
         .accessibilityAddTraits(.isButton)
         .accessibilityAddTraits(isHighlighted ? .isSelected : [])
         .accessibilityAction { select() }

@@ -1,22 +1,33 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@: %@" : {
+      "comment" : "Accessibility label for a terminal feature and whether it is available.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@：%@"
+          }
+        }
+      }
+    },
+    "A program is attempting to read from the clipboard. The current clipboard contents are shown below." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有程序正在尝试读取剪贴板。当前剪贴板内容如下。"
+          }
+        }
+      }
+    },
     "Add" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "添加"
-          }
-        }
-      }
-    },
-    "Add SSH Files or Folders" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "添加 SSH 文件或文件夹"
           }
         }
       }
@@ -31,62 +42,12 @@
         }
       }
     },
-    "Enter an SSH host from ~/.ssh/config." : {
+    "Add SSH Files or Folders" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请输入 ~/.ssh/config 中的 SSH 主机。"
-          }
-        }
-      }
-    },
-    "Enter an absolute remote directory or file path." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "请输入远程目录或文件的绝对路径。"
-          }
-        }
-      }
-    },
-    "Remote file or folder not found: %@" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "找不到远程文件或文件夹：%@"
-          }
-        }
-      }
-    },
-    "Remote paths (one per line)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "远程路径（每行一个）"
-          }
-        }
-      }
-    },
-    "SSH host" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "SSH 主机"
-          }
-        }
-      }
-    },
-    "A program is attempting to read from the clipboard. The current clipboard contents are shown below." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "有程序正在尝试读取剪贴板。当前剪贴板内容如下。"
+            "value" : "添加 SSH 文件或文件夹"
           }
         }
       }
@@ -152,6 +113,16 @@
         }
       }
     },
+    "Close find bar" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭查找栏"
+          }
+        }
+      }
+    },
     "Copy" : {
       "localizations" : {
         "zh-Hans" : {
@@ -178,6 +149,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "拒绝"
+          }
+        }
+      }
+    },
+    "Enter an absolute remote directory or file path." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入远程目录或文件的绝对路径。"
+          }
+        }
+      }
+    },
+    "Enter an SSH host from ~/.ssh/config." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入 ~/.ssh/config 中的 SSH 主机。"
+          }
+        }
+      }
+    },
+    "Find" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查找"
           }
         }
       }
@@ -222,6 +223,16 @@
         }
       }
     },
+    "Next match" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一个匹配"
+          }
+        }
+      }
+    },
     "Paste" : {
       "localizations" : {
         "zh-Hans" : {
@@ -238,6 +249,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "将此文本粘贴到终端可能有风险，因为其中似乎包含会被执行的命令。"
+          }
+        }
+      }
+    },
+    "Previous match" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一个匹配"
+          }
+        }
+      }
+    },
+    "Remote file or folder not found: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到远程文件或文件夹：%@"
+          }
+        }
+      }
+    },
+    "Remote paths (one per line)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远程路径（每行一个）"
           }
         }
       }
@@ -303,6 +344,16 @@
         }
       }
     },
+    "SSH host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH 主机"
+          }
+        }
+      }
+    },
     "Terminal" : {
       "localizations" : {
         "zh-Hans" : {
@@ -343,22 +394,22 @@
         }
       }
     },
-    "Warning: Potentially Unsafe Paste" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "警告：粘贴内容可能不安全"
-          }
-        }
-      }
-    },
     "Use an SSH host from ~/.ssh/config and one remote path per line. Windows paths such as D:\\GitHub\\project are accepted." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "从 ~/.ssh/config 选择 SSH 主机，每行输入一个远程路径。支持 D:\\GitHub\\project 这样的 Windows 路径。"
+          }
+        }
+      }
+    },
+    "Warning: Potentially Unsafe Paste" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "警告：粘贴内容可能不安全"
           }
         }
       }

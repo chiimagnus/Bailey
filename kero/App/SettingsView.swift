@@ -16,14 +16,14 @@ struct SettingsView: View {
     /// Installed fixed-pitch families (bundled default first).
     private let families = TerminalFont.selectableFamilies()
 
-    private var toolbarVisibilityDescription: LocalizedStringKey {
+    private var toolbarVisibilityDescription: String {
         switch settings.toolbarVisibility {
         case .auto:
-            "Shows the toolbar only in Git repositories"
+            String(localized: "Shows the toolbar only in Git repositories", table: "Settings")
         case .always:
-            "Shows the toolbar in every project"
+            String(localized: "Shows the toolbar in every project", table: "Settings")
         case .hide:
-            "Keeps the toolbar hidden"
+            String(localized: "Keeps the toolbar hidden", table: "Settings")
         }
     }
 
@@ -33,70 +33,70 @@ struct SettingsView: View {
 
     private var form: some View {
         Form {
-            Section("Appearance") {
+            Section(String(localized: "Appearance", table: "Settings")) {
                 // A plain row rather than LabeledContent: that stamps its own
                 // label onto every child, leaving all three previews named
                 // "Theme" to VoiceOver instead of System/Light/Dark.
                 HStack {
-                    Text("Theme")
+                    Text(String(localized: "Theme", table: "Settings"))
                     Spacer()
                     ThemePicker(selection: $settings.theme)
                 }
 
-                Picker("Language", selection: $settings.language) {
+                Picker(String(localized: "Language", table: "Settings"), selection: $settings.language) {
                     ForEach(AppLanguage.allCases) { language in
                         Text(verbatim: language.title).tag(language)
                     }
                 }
 
                 DescribedSettingsRow(
-                    "Toolbar",
+                    String(localized: "Toolbar", table: "Settings"),
                     description: toolbarVisibilityDescription
                 ) {
-                    Picker("Toolbar", selection: $settings.toolbarVisibility) {
-                        Text("Auto").tag(ToolbarVisibility.auto)
-                        Text("Always Show").tag(ToolbarVisibility.always)
-                        Text("Hide").tag(ToolbarVisibility.hide)
+                    Picker(String(localized: "Toolbar", table: "Settings"), selection: $settings.toolbarVisibility) {
+                        Text(String(localized: "Auto", table: "Settings")).tag(ToolbarVisibility.auto)
+                        Text(String(localized: "Always Show", table: "Settings")).tag(ToolbarVisibility.always)
+                        Text(String(localized: "Hide", table: "Settings")).tag(ToolbarVisibility.hide)
                     }
                     .labelsHidden()
                 }
 
                 if settings.languageRequiresRelaunch {
                     HStack(alignment: .firstTextBaseline) {
-                        Text("Relaunch Kero to apply the language change.")
+                        Text(String(localized: "Relaunch Kero to apply the language change.", table: "Settings"))
                             .font(.callout)
                             .foregroundStyle(.secondary)
                         Spacer()
-                        Button("Relaunch Kero") {
+                        Button(String(localized: "Relaunch Kero", table: "Settings")) {
                             relaunch()
                         }
                     }
                 }
             }
 
-            Section("Git") {
+            Section(String(localized: "Git", table: "Settings")) {
                 GitViewModeSettingsRow(mode: settings.gitViewMode) {
                     settings.gitViewMode = $0
                 }
                 .frame(height: 28)
             }
 
-            Section("Colors") {
-                Picker("Dark theme", selection: $settings.themeDark) {
+            Section(String(localized: "Colors", table: "Settings")) {
+                Picker(String(localized: "Dark theme", table: "Settings"), selection: $settings.themeDark) {
                     ForEach(Self.darkThemeNames, id: \.self) { name in
                         Text(name).tag(name)
                     }
                 }
-                Picker("Light theme", selection: $settings.themeLight) {
+                Picker(String(localized: "Light theme", table: "Settings"), selection: $settings.themeLight) {
                     ForEach(Self.lightThemeNames, id: \.self) { name in
                         Text(name).tag(name)
                     }
                 }
             }
 
-            Section("Font") {
-                Picker("Family", selection: $settings.fontFamily) {
-                    Text("\(TerminalFont.bundledFamily) (Bundled)").tag("")
+            Section(String(localized: "Font", table: "Settings")) {
+                Picker(String(localized: "Family", table: "Settings"), selection: $settings.fontFamily) {
+                    Text(String(localized: "\(TerminalFont.bundledFamily) (Bundled)", table: "Settings")).tag("")
                     Divider()
                     ForEach(families.dropFirst(), id: \.self) { family in
                         Text(family).tag(family)
@@ -104,13 +104,13 @@ struct SettingsView: View {
                 }
 
                 HStack {
-                    Text("Size")
+                    Text(String(localized: "Size", table: "Settings"))
                     Slider(
                         value: $settings.fontSize,
                         in: AppSettings.fontSizeRange,
                         step: 1
                     )
-                    Text("\(Int(settings.fontSize)) pt")
+                    Text(String(localized: "\(Int(settings.fontSize)) pt", table: "Settings"))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .frame(width: 40, alignment: .trailing)
@@ -124,16 +124,16 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Sidebar") {
+            Section(String(localized: "Sidebar", table: "Settings")) {
                 HStack {
-                    Text("Font size")
+                    Text(String(localized: "Font size", table: "Settings"))
                     Slider(
                         value: $settings.sidebarFontSize,
                         in: AppSettings.sidebarFontSizeRange,
                         step: 1
                     )
-                    .accessibilityLabel("Sidebar font size")
-                    Text("\(Int(settings.sidebarFontSize)) pt")
+                    .accessibilityLabel(String(localized: "Sidebar font size", table: "Settings"))
+                    Text(String(localized: "\(Int(settings.sidebarFontSize)) pt", table: "Settings"))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .frame(width: 40, alignment: .trailing)
@@ -144,11 +144,11 @@ struct SettingsView: View {
                         step: 1
                     )
                     .labelsHidden()
-                    .accessibilityLabel("Sidebar font size")
+                    .accessibilityLabel(String(localized: "Sidebar font size", table: "Settings"))
                 }
             }
 
-            Section("Preview") {
+            Section(String(localized: "Preview", table: "Settings")) {
                 // SwiftUI Text cannot show Ghostty's font-thicken — that flag
                 // only affects CoreText glyph rasterization — so draw through
                 // AppKit with shouldSmoothFonts matching the toggle.
@@ -166,7 +166,7 @@ struct SettingsView: View {
                     .accessibilityAddTraits(.isStaticText)
             }
 
-            Section("Terminal") {
+            Section(String(localized: "Terminal", table: "Settings")) {
                 TerminalCursorShapeSettingsRow(
                     shape: settings.cursorShape,
                     onChange: { settings.cursorShape = $0 }
@@ -178,49 +178,49 @@ struct SettingsView: View {
                 )
 
                 DescribedSettingsRow(
-                    "Thicken font strokes",
-                    description: "Renders terminal text with slightly heavier strokes, like classic macOS font smoothing"
+                    String(localized: "Thicken font strokes", table: "Settings"),
+                    description: String(localized: "Renders terminal text with slightly heavier strokes, like classic macOS font smoothing", table: "Settings")
                 ) {
-                    Toggle("Thicken font strokes", isOn: $settings.fontThicken)
+                    Toggle(String(localized: "Thicken font strokes", table: "Settings"), isOn: $settings.fontThicken)
                         .labelsHidden()
                 }
 
                 DescribedSettingsRow(
-                    "Use Option as Alt/Meta",
-                    description: "Sends Option-key combinations to terminal programs as Meta shortcuts instead of macOS text input"
+                    String(localized: "Use Option as Alt/Meta", table: "Settings"),
+                    description: String(localized: "Sends Option-key combinations to terminal programs as Meta shortcuts instead of macOS text input", table: "Settings")
                 ) {
                     Toggle(
-                        "Use Option as Alt/Meta",
+                        String(localized: "Use Option as Alt/Meta", table: "Settings"),
                         isOn: $settings.macosOptionAsAlt
                     )
                     .labelsHidden()
                 }
 
                 DescribedSettingsRow(
-                    "Restore session history on relaunch",
-                    description: "Reopened terminals show their previous scrollback above a fresh shell"
+                    String(localized: "Restore session history on relaunch", table: "Settings"),
+                    description: String(localized: "Reopened terminals show their previous scrollback above a fresh shell", table: "Settings")
                 ) {
                     Toggle(
-                        "Restore session history on relaunch",
+                        String(localized: "Restore session history on relaunch", table: "Settings"),
                         isOn: $settings.restoreTerminalHistory
                     )
                     .labelsHidden()
                 }
             }
 
-            Section("Port Forwarding") {
+            Section(String(localized: "Port Forwarding", table: "Settings")) {
                 TunnelSettingsRow()
                     .frame(height: 176)
             }
 
-            Section("Text Editing") {
-                Toggle("Wrap lines to editor width", isOn: $settings.wrapLines)
+            Section(String(localized: "Text Editing", table: "Settings")) {
+                Toggle(String(localized: "Wrap lines to editor width", table: "Settings"), isOn: $settings.wrapLines)
             }
 
             Section {
                 HStack {
                     Spacer()
-                    Button("Reset to Defaults") {
+                    Button(String(localized: "Reset to Defaults", table: "Settings")) {
                         settings.resetToDefaults()
                     }
                     .disabled(settings.fontFamily.isEmpty
@@ -244,10 +244,10 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 600)
         .alert(
-            "Couldn’t Relaunch Kero",
+            String(localized: "Couldn’t Relaunch Kero", table: "Settings"),
             isPresented: $isShowingRelaunchError
         ) {
-            Button("OK", role: .cancel) {}
+            Button(String(localized: "OK", table: "Settings"), role: .cancel) {}
         } message: {
             Text(verbatim: relaunchError)
         }
@@ -287,13 +287,13 @@ struct SettingsView: View {
 /// Matches macOS Settings: a title and explanation form one label stack,
 /// while the setting control stays aligned to the row's top-right corner.
 private struct DescribedSettingsRow<Control: View>: View {
-    let title: LocalizedStringKey
-    let description: LocalizedStringKey
+    let title: String
+    let description: String
     let control: Control
 
     init(
-        _ title: LocalizedStringKey,
-        description: LocalizedStringKey,
+        _ title: String,
+        description: String,
         @ViewBuilder control: () -> Control
     ) {
         self.title = title
@@ -304,8 +304,8 @@ private struct DescribedSettingsRow<Control: View>: View {
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                Text(description)
+                Text(verbatim: title)
+                Text(verbatim: description)
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

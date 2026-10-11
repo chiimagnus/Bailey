@@ -32,7 +32,7 @@ struct SidebarView: View {
                 }
                 ChromeIconButton(
                     systemImage: "sidebar.left",
-                    tooltip: "Toggle Left Sidebar (⌘B)"
+                    tooltip: String(localized: "Toggle Left Sidebar (⌘B)", table: "Sidebar")
                 ) {
                     manager.toggleLeftSidebar()
                 }
@@ -74,7 +74,7 @@ struct SidebarView: View {
                 Spacer()
                 SidebarFooterButton(
                     systemImage: "exclamationmark.bubble",
-                    tooltip: "Send Feedback",
+                    tooltip: String(localized: "Send Feedback", table: "Sidebar"),
                     tooltipAlignment: .trailing
                 ) {
                     NSWorkspace.shared.open(
@@ -83,7 +83,7 @@ struct SidebarView: View {
                 }
                 SidebarFooterButton(
                     systemImage: "gearshape",
-                    tooltip: "Settings (⌘,)",
+                    tooltip: String(localized: "Settings (⌘,)", table: "Sidebar"),
                     tooltipAlignment: .trailing
                 ) { openSettings() }
             }
@@ -149,7 +149,7 @@ struct SidebarView: View {
 
 struct ChromeIconButton: View {
     let systemImage: String
-    let tooltip: LocalizedStringKey
+    let tooltip: String
     var font: Font = .system(size: 12, weight: .medium)
     var iconSize: CGFloat = 16
     var tooltipEdge: TooltipEdge = .below
@@ -184,7 +184,7 @@ private struct FPSBadge: View {
     @StateObject private var counter = FPSCounter()
 
     var body: some View {
-        Text("\(counter.fps) fps")
+        Text(String(localized: "\(counter.fps) fps", table: "Sidebar"))
             .font(.system(size: 10, weight: .medium))
             .monospacedDigit()
             .foregroundStyle(.secondary)
@@ -266,7 +266,7 @@ private struct SidebarAddButton: NSViewRepresentable {
 
 private struct SidebarFooterButton: View {
     let systemImage: String
-    let tooltip: LocalizedStringKey
+    let tooltip: String
     /// Buttons near the sidebar's right edge anchor `.trailing` so the label
     /// grows inward instead of off-panel.
     var tooltipAlignment: HorizontalAlignment = .leading
@@ -331,28 +331,28 @@ private struct SidebarProjectRow: View {
         )
         .onHover { isHovering = $0 }
         .contextMenu {
-            Button("Rename…") {
+            Button(String(localized: "Rename…", table: "Sidebar")) {
                 beginRename()
             }
             if project.customName != nil {
-                Button("Use Automatic Title") {
+                Button(String(localized: "Use Automatic Title", table: "Sidebar")) {
                     project.customName = nil
                 }
             }
             Divider()
             if project.sshHost == nil {
-                Button("Set Project Directory…") {
+                Button(String(localized: "Set Project Directory…", table: "Sidebar")) {
                     pickProjectDirectory()
                 }
                 if project.customDirectory != nil {
-                    Button("Use Automatic Directory") {
+                    Button(String(localized: "Use Automatic Directory", table: "Sidebar")) {
                         project.customDirectory = nil
                         project.pinnedFile = nil
                     }
                 }
             }
             Divider()
-            Button("Close Project") {
+            Button(String(localized: "Close Project", table: "Sidebar")) {
                 close()
             }
         }
@@ -460,7 +460,7 @@ private struct SidebarProjectRow: View {
     @ViewBuilder
     private var subtitle: some View {
         if let host = project.sshHost {
-            Text("SSH · \(host)")
+            Text(String(localized: "SSH · \(host)", table: "Sidebar"))
                 .font(.system(size: supportingFontSize))
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
@@ -471,7 +471,7 @@ private struct SidebarProjectRow: View {
                 .lineLimit(1)
                 .truncationMode(.head)
         } else if project.sessions.count > 1 {
-            Text("\(project.sessions.count) sessions")
+            Text(String(localized: "\(project.sessions.count) sessions", table: "Sidebar"))
                 .font(.system(size: supportingFontSize))
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)

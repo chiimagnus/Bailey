@@ -173,117 +173,119 @@ struct CommandPaletteView: View {
 
     private var commands: [PaletteCommand] {
         var items: [PaletteCommand] = [
-            PaletteCommand(id: "new-session", title: "New Session", systemImage: "terminal", shortcut: "⌘T") {
+            PaletteCommand(id: "new-session", title: LocalizedStringResource("New Session", table: "Interface"), systemImage: "terminal", shortcut: "⌘T") {
                 manager.newSession()
             },
-            PaletteCommand(id: "new-browser-tab", title: "New Browser Tab", systemImage: "globe") {
+            PaletteCommand(id: "new-browser-tab", title: LocalizedStringResource("New Browser Tab", table: "Interface"), systemImage: "globe") {
                 manager.newBrowserTab()
             },
-            PaletteCommand(id: "new-browser-pane", title: "New Browser Pane", systemImage: "globe") {
+            PaletteCommand(id: "new-browser-pane", title: LocalizedStringResource("New Browser Pane", table: "Interface"), systemImage: "globe") {
                 manager.newBrowserPane()
             },
-            PaletteCommand(id: "clear-terminal", title: "Clear Terminal", systemImage: "eraser", shortcut: "⌘K") {
+            PaletteCommand(id: "clear-terminal", title: LocalizedStringResource("Clear Terminal", table: "Interface"), systemImage: "eraser", shortcut: "⌘K") {
                 manager.clearActiveTerminal()
             },
-            PaletteCommand(id: "split-right", title: "Split Right", systemImage: "rectangle.split.2x1", shortcut: "⌘D") {
+            PaletteCommand(id: "split-right", title: LocalizedStringResource("Split Right", table: "Interface"), systemImage: "rectangle.split.2x1", shortcut: "⌘D") {
                 manager.splitRight()
             },
-            PaletteCommand(id: "split-left", title: "Split Left", systemImage: "rectangle.split.2x1") {
+            PaletteCommand(id: "split-left", title: LocalizedStringResource("Split Left", table: "Interface"), systemImage: "rectangle.split.2x1") {
                 manager.splitLeft()
             },
-            PaletteCommand(id: "split-down", title: "Split Down", systemImage: "rectangle.split.1x2", shortcut: "⇧⌘D") {
+            PaletteCommand(id: "split-down", title: LocalizedStringResource("Split Down", table: "Interface"), systemImage: "rectangle.split.1x2", shortcut: "⇧⌘D") {
                 manager.splitDown()
             },
-            PaletteCommand(id: "split-up", title: "Split Up", systemImage: "rectangle.split.1x2") {
+            PaletteCommand(id: "split-up", title: LocalizedStringResource("Split Up", table: "Interface"), systemImage: "rectangle.split.1x2") {
                 manager.splitUp()
             },
-            PaletteCommand(id: "focus-pane-left", title: "Focus Pane Left", systemImage: "arrow.left", shortcut: "⌥⌘←") {
+            PaletteCommand(id: "focus-pane-left", title: LocalizedStringResource("Focus Pane Left", table: "Interface"), systemImage: "arrow.left", shortcut: "⌥⌘←") {
                 manager.focusPaneLeft()
             },
-            PaletteCommand(id: "focus-pane-right", title: "Focus Pane Right", systemImage: "arrow.right", shortcut: "⌥⌘→") {
+            PaletteCommand(id: "focus-pane-right", title: LocalizedStringResource("Focus Pane Right", table: "Interface"), systemImage: "arrow.right", shortcut: "⌥⌘→") {
                 manager.focusPaneRight()
             },
-            PaletteCommand(id: "focus-pane-up", title: "Focus Pane Up", systemImage: "arrow.up", shortcut: "⌥⌘↑") {
+            PaletteCommand(id: "focus-pane-up", title: LocalizedStringResource("Focus Pane Up", table: "Interface"), systemImage: "arrow.up", shortcut: "⌥⌘↑") {
                 manager.focusPaneUp()
             },
-            PaletteCommand(id: "focus-pane-down", title: "Focus Pane Down", systemImage: "arrow.down", shortcut: "⌥⌘↓") {
+            PaletteCommand(id: "focus-pane-down", title: LocalizedStringResource("Focus Pane Down", table: "Interface"), systemImage: "arrow.down", shortcut: "⌥⌘↓") {
                 manager.focusPaneDown()
             },
-            PaletteCommand(id: "focus-prev-pane", title: "Focus Previous Pane", systemImage: "arrow.backward.square", shortcut: "⌘[") {
+            PaletteCommand(id: "focus-prev-pane", title: LocalizedStringResource("Focus Previous Pane", table: "Interface"), systemImage: "arrow.backward.square", shortcut: "⌘[") {
                 manager.focusPreviousPane()
             },
-            PaletteCommand(id: "focus-next-pane", title: "Focus Next Pane", systemImage: "arrow.forward.square", shortcut: "⌘]") {
+            PaletteCommand(id: "focus-next-pane", title: LocalizedStringResource("Focus Next Pane", table: "Interface"), systemImage: "arrow.forward.square", shortcut: "⌘]") {
                 manager.focusNextPane()
             },
-            PaletteCommand(id: "toggle-pane-zoom", title: "Toggle Pane Zoom", systemImage: "arrow.up.left.and.arrow.down.right", shortcut: "⇧⌘↩") {
+            PaletteCommand(id: "toggle-pane-zoom", title: LocalizedStringResource("Toggle Pane Zoom", table: "Interface"), systemImage: "arrow.up.left.and.arrow.down.right", shortcut: "⇧⌘↩") {
                 manager.togglePaneZoom()
             },
-            PaletteCommand(id: "equalize-panes", title: "Equalize Panes", systemImage: "rectangle.split.3x1", shortcut: "⌃⌘=") {
+            PaletteCommand(id: "equalize-panes", title: LocalizedStringResource("Equalize Panes", table: "Interface"), systemImage: "rectangle.split.3x1", shortcut: "⌃⌘=") {
                 manager.equalizePanes()
             },
-            PaletteCommand(id: "resize-pane-up", title: "Resize Pane Up", systemImage: "arrow.up.to.line", shortcut: "⌃⌘↑") {
+            PaletteCommand(id: "resize-pane-up", title: LocalizedStringResource("Resize Pane Up", table: "Interface"), systemImage: "arrow.up.to.line", shortcut: "⌃⌘↑") {
                 manager.resizePaneUp()
             },
-            PaletteCommand(id: "resize-pane-down", title: "Resize Pane Down", systemImage: "arrow.down.to.line", shortcut: "⌃⌘↓") {
+            PaletteCommand(id: "resize-pane-down", title: LocalizedStringResource("Resize Pane Down", table: "Interface"), systemImage: "arrow.down.to.line", shortcut: "⌃⌘↓") {
                 manager.resizePaneDown()
             },
-            PaletteCommand(id: "resize-pane-left", title: "Resize Pane Left", systemImage: "arrow.left.to.line", shortcut: "⌃⌘←") {
+            PaletteCommand(id: "resize-pane-left", title: LocalizedStringResource("Resize Pane Left", table: "Interface"), systemImage: "arrow.left.to.line", shortcut: "⌃⌘←") {
                 manager.resizePaneLeft()
             },
-            PaletteCommand(id: "resize-pane-right", title: "Resize Pane Right", systemImage: "arrow.right.to.line", shortcut: "⌃⌘→") {
+            PaletteCommand(id: "resize-pane-right", title: LocalizedStringResource("Resize Pane Right", table: "Interface"), systemImage: "arrow.right.to.line", shortcut: "⌃⌘→") {
                 manager.resizePaneRight()
             },
-            PaletteCommand(id: "add-items", title: "Add Files or Folders", systemImage: "folder.badge.plus", shortcut: "⇧⌘A") {
+            PaletteCommand(id: "add-items", title: LocalizedStringResource("Add Files or Folders", table: "Interface"), systemImage: "folder.badge.plus", shortcut: "⇧⌘A") {
                 manager.chooseLocalItems()
             },
-            PaletteCommand(id: "add-ssh-items", title: "Add SSH Files or Folders", systemImage: "network", shortcut: nil) {
+            PaletteCommand(id: "add-ssh-items", title: LocalizedStringResource("Add SSH Files or Folders", table: "Interface"), systemImage: "network", shortcut: nil) {
                 manager.chooseSSHItems()
             },
-            PaletteCommand(id: "close-tab", title: "Close Tab", systemImage: "xmark.square", shortcut: "⌘W") {
+            PaletteCommand(id: "close-tab", title: LocalizedStringResource("Close Tab", table: "Interface"), systemImage: "xmark.square", shortcut: "⌘W") {
                 manager.closeSelectedTab()
             },
-            PaletteCommand(id: "save-file", title: "Save File", systemImage: "square.and.arrow.down", shortcut: "⌘S") {
+            PaletteCommand(id: "save-file", title: LocalizedStringResource("Save File", table: "Interface"), systemImage: "square.and.arrow.down", shortcut: "⌘S") {
                 manager.saveSelectedFile()
             },
-            PaletteCommand(id: "toggle-left-sidebar", title: "Toggle Left Sidebar", systemImage: "sidebar.left", shortcut: "⌘B") {
+            PaletteCommand(id: "toggle-left-sidebar", title: LocalizedStringResource("Toggle Left Sidebar", table: "Interface"), systemImage: "sidebar.left", shortcut: "⌘B") {
                 manager.toggleLeftSidebar()
             },
-            PaletteCommand(id: "toggle-sidebar", title: "Toggle Right Sidebar", systemImage: "sidebar.right", shortcut: "⇧⌘B") {
+            PaletteCommand(id: "toggle-sidebar", title: LocalizedStringResource("Toggle Right Sidebar", table: "Interface"), systemImage: "sidebar.right", shortcut: "⇧⌘B") {
                 manager.toggleSidebar()
             },
-            PaletteCommand(id: "toggle-files", title: "Toggle Files Panel", systemImage: "doc.text", shortcut: "⇧⌘E") {
+            PaletteCommand(id: "toggle-files", title: LocalizedStringResource("Toggle Files Panel", table: "Interface"), systemImage: "doc.text", shortcut: "⇧⌘E") {
                 manager.togglePanel(.files)
             },
-            PaletteCommand(id: "toggle-git", title: "Toggle Git Panel", systemImage: "arrow.triangle.branch", shortcut: "⇧⌘G") {
+            PaletteCommand(id: "toggle-git", title: LocalizedStringResource("Toggle Git Panel", table: "Interface"), systemImage: "arrow.triangle.branch", shortcut: "⇧⌘G") {
                 manager.togglePanel(.git)
             },
-            PaletteCommand(id: "toggle-info", title: "Toggle Info Panel", systemImage: "info.circle", shortcut: "⇧⌘I") {
+            PaletteCommand(id: "toggle-info", title: LocalizedStringResource("Toggle Info Panel", table: "Interface"), systemImage: "info.circle", shortcut: "⇧⌘I") {
                 manager.togglePanel(.info)
             },
             PaletteCommand(
                 id: "toggle-fps-counter",
-                title: manager.isFPSCounterVisible ? "Hide FPS Counter" : "Show FPS Counter",
+                title: manager.isFPSCounterVisible
+                    ? LocalizedStringResource("Hide FPS Counter", table: "Interface")
+                    : LocalizedStringResource("Show FPS Counter", table: "Interface"),
                 systemImage: "gauge.with.needle"
             ) {
                 manager.toggleFPSCounter()
             },
-            PaletteCommand(id: "next-tab", title: "Next Tab", systemImage: "arrow.right", shortcut: "⇧⌘]") {
+            PaletteCommand(id: "next-tab", title: LocalizedStringResource("Next Tab", table: "Interface"), systemImage: "arrow.right", shortcut: "⇧⌘]") {
                 manager.selectNextTab()
             },
-            PaletteCommand(id: "prev-tab", title: "Previous Tab", systemImage: "arrow.left", shortcut: "⇧⌘[") {
+            PaletteCommand(id: "prev-tab", title: LocalizedStringResource("Previous Tab", table: "Interface"), systemImage: "arrow.left", shortcut: "⇧⌘[") {
                 manager.selectPreviousTab()
             },
-            PaletteCommand(id: "next-project", title: "Next Project", systemImage: "arrow.right.square", shortcut: "⌥⌘]") {
+            PaletteCommand(id: "next-project", title: LocalizedStringResource("Next Project", table: "Interface"), systemImage: "arrow.right.square", shortcut: "⌥⌘]") {
                 manager.selectNextProject()
             },
-            PaletteCommand(id: "prev-project", title: "Previous Project", systemImage: "arrow.left.square", shortcut: "⌥⌘[") {
+            PaletteCommand(id: "prev-project", title: LocalizedStringResource("Previous Project", table: "Interface"), systemImage: "arrow.left.square", shortcut: "⌥⌘[") {
                 manager.selectPreviousProject()
             },
         ]
 
         if let project = manager.selectedProject {
             items.append(
-                PaletteCommand(id: "close-project", title: "Close Project: \(project.name)", systemImage: "folder.badge.minus") {
+                PaletteCommand(id: "close-project", title: LocalizedStringResource("Close Project: \(project.name)", table: "Interface"), systemImage: "folder.badge.minus") {
                     manager.close(project)
                 }
             )
@@ -293,7 +295,7 @@ struct CommandPaletteView: View {
             items.append(
                 PaletteCommand(
                     id: "switch-project-\(project.id)",
-                    title: "Switch to Project: \(project.name)",
+                    title: LocalizedStringResource("Switch to Project: \(project.name)", table: "Interface"),
                     systemImage: "folder",
                     shortcut: index < 9 ? "⌘\(index + 1)" : nil
                 ) {
@@ -303,7 +305,7 @@ struct CommandPaletteView: View {
         }
 
         items.append(
-            PaletteCommand(id: "settings", title: "Settings…", systemImage: "gearshape", shortcut: "⌘,") {
+            PaletteCommand(id: "settings", title: LocalizedStringResource("Settings…", table: "Interface"), systemImage: "gearshape", shortcut: "⌘,") {
                 openSettings()
             }
         )
@@ -510,7 +512,7 @@ struct CommandPaletteView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
-                TextField("Search commands, files, and sessions…", text: $query)
+                TextField(String(localized: "Search commands, files, and sessions…", table: "Interface"), text: $query)
                     .textFieldStyle(.plain)
                     .font(.system(size: 15))
                     .focused($searchFocused)
@@ -570,7 +572,7 @@ struct CommandPaletteView: View {
         let pattern = query.trimmingCharacters(in: .whitespaces)
         let highlightQuery = pattern.isEmpty ? nil : Self.fuzzyMatcher.prepare(pattern)
         if items.isEmpty {
-            Text("No matches")
+            Text(String(localized: "No matches", table: "Interface"))
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)

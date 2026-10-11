@@ -68,34 +68,34 @@ private struct KeroCommands: Commands {
         }
 
         CommandGroup(replacing: .newItem) {
-            Button("Add Files or Folders…") {
+            Button(String(localized: "Add Files or Folders…", table: "Interface")) {
                 manager?.chooseLocalItems()
             }
             .keyboardShortcut("a", modifiers: [.command, .shift])
             .disabled(manager == nil)
 
-            Button("Add SSH Files or Folders…") {
+            Button(String(localized: "Add SSH Files or Folders…", table: "Interface")) {
                 manager?.chooseSSHItems()
             }
             .disabled(manager == nil)
 
-            Button("New Session") {
+            Button(String(localized: "New Session", table: "Interface")) {
                 manager?.newSession()
             }
             .keyboardShortcut("t", modifiers: .command)
             .disabled(manager?.selectedProject == nil)
 
-            Button("New Browser Tab") {
+            Button(String(localized: "New Browser Tab", table: "Interface")) {
                 manager?.newBrowserTab()
             }
             .disabled(manager?.selectedProject == nil)
 
-            Button("New Window") {
+            Button(String(localized: "New Window", table: "Interface")) {
                 openWindow(id: "main")
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
 
-            Button("Close Pane") {
+            Button(String(localized: "Close Pane", table: "Interface")) {
                 // Cmd-W is app-wide: close a pane only when a main window with
                 // an open project is key. Otherwise close the key window
                 // itself — a non-main window (e.g. Settings), or a main window
@@ -111,7 +111,7 @@ private struct KeroCommands: Commands {
         }
 
         CommandGroup(replacing: .saveItem) {
-            Button("Save") {
+            Button(String(localized: "Save", table: "Interface")) {
                 manager?.saveSelectedFile()
             }
             .keyboardShortcut("s", modifiers: .command)
@@ -125,31 +125,31 @@ private struct KeroCommands: Commands {
             // the first responder, which keeps them live while the find bar's
             // text field has keyboard focus. ⇧⌘G is already Toggle Git Panel,
             // so Find Previous is reachable by ⇧↩ in the bar instead.
-            Menu("Find") {
-                Button("Find…") {
+            Menu(String(localized: "Find", table: "Interface")) {
+                Button(String(localized: "Find…", table: "Interface")) {
                     manager?.performFindAction(.show)
                 }
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(manager?.canFind != true)
 
-                Button("Find and Replace…") {
+                Button(String(localized: "Find and Replace…", table: "Interface")) {
                     manager?.performFindAction(.replace)
                 }
                 .keyboardShortcut("f", modifiers: [.command, .option])
                 .disabled(manager?.canReplace != true)
 
-                Button("Find Next") {
+                Button(String(localized: "Find Next", table: "Interface")) {
                     manager?.performFindAction(.next)
                 }
                 .keyboardShortcut("g", modifiers: .command)
                 .disabled(manager?.canFind != true)
 
-                Button("Find Previous") {
+                Button(String(localized: "Find Previous", table: "Interface")) {
                     manager?.performFindAction(.previous)
                 }
                 .disabled(manager?.canFind != true)
 
-                Button("Use Selection for Find") {
+                Button(String(localized: "Use Selection for Find", table: "Interface")) {
                     manager?.performFindAction(.useSelection)
                 }
                 .keyboardShortcut("e", modifiers: .command)
@@ -158,7 +158,7 @@ private struct KeroCommands: Commands {
 
             Divider()
 
-            Button("Clear Terminal") {
+            Button(String(localized: "Clear Terminal", table: "Interface")) {
                 manager?.clearActiveTerminal()
             }
             .keyboardShortcut("k", modifiers: .command)
@@ -169,7 +169,7 @@ private struct KeroCommands: Commands {
         CommandGroup(replacing: .printItem) {}
 
         CommandGroup(after: .sidebar) {
-            Button("Command Palette…") {
+            Button(String(localized: "Command Palette…", table: "Interface")) {
                 manager?.toggleCommandPalette()
             }
             .keyboardShortcut("p", modifiers: .command)
@@ -177,45 +177,45 @@ private struct KeroCommands: Commands {
 
             Divider()
 
-            Button("Toggle Left Sidebar") {
+            Button(String(localized: "Toggle Left Sidebar", table: "Interface")) {
                 manager?.toggleLeftSidebar()
             }
             .keyboardShortcut("b", modifiers: .command)
             .disabled(manager == nil)
 
-            Button("Toggle Right Sidebar") {
+            Button(String(localized: "Toggle Right Sidebar", table: "Interface")) {
                 manager?.toggleSidebar()
             }
             .keyboardShortcut("b", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
 
-            Button("Toggle Files Panel") {
+            Button(String(localized: "Toggle Files Panel", table: "Interface")) {
                 manager?.togglePanel(.files)
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
 
-            Button("Toggle Git Panel") {
+            Button(String(localized: "Toggle Git Panel", table: "Interface")) {
                 manager?.togglePanel(.git)
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
 
-            Button("Toggle Info Panel") {
+            Button(String(localized: "Toggle Info Panel", table: "Interface")) {
                 manager?.togglePanel(.info)
             }
             .keyboardShortcut("i", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
         }
 
-        CommandMenu("Projects") {
-            Button("Next Project") {
+        CommandMenu(String(localized: "Projects", table: "Interface")) {
+            Button(String(localized: "Next Project", table: "Interface")) {
                 manager?.selectNextProject()
             }
             .keyboardShortcut("]", modifiers: [.command, .option])
             .disabled(manager == nil)
 
-            Button("Previous Project") {
+            Button(String(localized: "Previous Project", table: "Interface")) {
                 manager?.selectPreviousProject()
             }
             .keyboardShortcut("[", modifiers: [.command, .option])
@@ -231,88 +231,88 @@ private struct KeroCommands: Commands {
             }
         }
 
-        CommandMenu("Browser") {
-            Button("Focus Address Bar") {
+        CommandMenu(String(localized: "Browser", table: "Interface")) {
+            Button(String(localized: "Focus Address Bar", table: "Interface")) {
                 manager?.focusBrowserAddressBar()
             }
             .keyboardShortcut("l", modifiers: .command)
             .disabled(manager?.hasSelectedBrowser != true)
 
-            Button("Reload Page") {
+            Button(String(localized: "Reload Page", table: "Interface")) {
                 manager?.reloadSelectedBrowser()
             }
             .keyboardShortcut("r", modifiers: .command)
             .disabled(manager?.hasSelectedBrowser != true)
 
-            Button("Stop Loading") {
+            Button(String(localized: "Stop Loading", table: "Interface")) {
                 manager?.stopSelectedBrowser()
             }
             .disabled(manager?.hasSelectedBrowser != true)
 
             Divider()
 
-            Button("Open in Default Browser") {
+            Button(String(localized: "Open in Default Browser", table: "Interface")) {
                 manager?.openSelectedPageInDefaultBrowser()
             }
             .disabled(manager?.hasSelectedBrowser != true)
         }
 
-        CommandMenu("Tabs") {
-            Button("Split Right") {
+        CommandMenu(String(localized: "Tabs", table: "Interface")) {
+            Button(String(localized: "Split Right", table: "Interface")) {
                 manager?.splitRight()
             }
             .keyboardShortcut("d", modifiers: .command)
             .disabled(manager?.canSplit != true)
 
-            Button("Split Down") {
+            Button(String(localized: "Split Down", table: "Interface")) {
                 manager?.splitDown()
             }
             .keyboardShortcut("d", modifiers: [.command, .shift])
             .disabled(manager?.canSplit != true)
 
-            Button("Split Left") {
+            Button(String(localized: "Split Left", table: "Interface")) {
                 manager?.splitLeft()
             }
             .disabled(manager?.canSplit != true)
 
-            Button("Split Up") {
+            Button(String(localized: "Split Up", table: "Interface")) {
                 manager?.splitUp()
             }
             .disabled(manager?.canSplit != true)
 
             Divider()
 
-            Button("Focus Pane Left") {
+            Button(String(localized: "Focus Pane Left", table: "Interface")) {
                 manager?.focusPaneLeft()
             }
             .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
             .disabled(manager == nil)
 
-            Button("Focus Pane Right") {
+            Button(String(localized: "Focus Pane Right", table: "Interface")) {
                 manager?.focusPaneRight()
             }
             .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
             .disabled(manager == nil)
 
-            Button("Focus Pane Up") {
+            Button(String(localized: "Focus Pane Up", table: "Interface")) {
                 manager?.focusPaneUp()
             }
             .keyboardShortcut(.upArrow, modifiers: [.command, .option])
             .disabled(manager == nil)
 
-            Button("Focus Pane Down") {
+            Button(String(localized: "Focus Pane Down", table: "Interface")) {
                 manager?.focusPaneDown()
             }
             .keyboardShortcut(.downArrow, modifiers: [.command, .option])
             .disabled(manager == nil)
 
-            Button("Focus Previous Pane") {
+            Button(String(localized: "Focus Previous Pane", table: "Interface")) {
                 manager?.focusPreviousPane()
             }
             .keyboardShortcut("[", modifiers: .command)
             .disabled(manager == nil)
 
-            Button("Focus Next Pane") {
+            Button(String(localized: "Focus Next Pane", table: "Interface")) {
                 manager?.focusNextPane()
             }
             .keyboardShortcut("]", modifiers: .command)
@@ -320,38 +320,38 @@ private struct KeroCommands: Commands {
 
             Divider()
 
-            Button("Toggle Pane Zoom") {
+            Button(String(localized: "Toggle Pane Zoom", table: "Interface")) {
                 manager?.togglePaneZoom()
             }
             .keyboardShortcut(.return, modifiers: [.command, .shift])
             .disabled(manager?.hasSplitPanes != true)
 
-            Button("Equalize Panes") {
+            Button(String(localized: "Equalize Panes", table: "Interface")) {
                 manager?.equalizePanes()
             }
             .keyboardShortcut("=", modifiers: [.command, .control])
             .disabled(manager?.hasSplitPanes != true)
 
-            Menu("Resize Pane") {
-                Button("Up") {
+            Menu(String(localized: "Resize Pane", table: "Interface")) {
+                Button(String(localized: "Up", table: "Interface")) {
                     manager?.resizePaneUp()
                 }
                 .keyboardShortcut(.upArrow, modifiers: [.command, .control])
                 .disabled(manager?.hasSplitPanes != true)
 
-                Button("Down") {
+                Button(String(localized: "Down", table: "Interface")) {
                     manager?.resizePaneDown()
                 }
                 .keyboardShortcut(.downArrow, modifiers: [.command, .control])
                 .disabled(manager?.hasSplitPanes != true)
 
-                Button("Left") {
+                Button(String(localized: "Left", table: "Interface")) {
                     manager?.resizePaneLeft()
                 }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
                 .disabled(manager?.hasSplitPanes != true)
 
-                Button("Right") {
+                Button(String(localized: "Right", table: "Interface")) {
                     manager?.resizePaneRight()
                 }
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
@@ -360,13 +360,13 @@ private struct KeroCommands: Commands {
 
             Divider()
 
-            Button("Next Tab") {
+            Button(String(localized: "Next Tab", table: "Interface")) {
                 manager?.selectNextTab()
             }
             .keyboardShortcut("]", modifiers: [.command, .shift])
             .disabled(manager == nil)
 
-            Button("Previous Tab") {
+            Button(String(localized: "Previous Tab", table: "Interface")) {
                 manager?.selectPreviousTab()
             }
             .keyboardShortcut("[", modifiers: [.command, .shift])

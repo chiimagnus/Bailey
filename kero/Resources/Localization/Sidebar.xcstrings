@@ -1,22 +1,179 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@% · %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@% · %@"
+          }
+        }
+      }
+    },
+    "%@%% · %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@%% · %@"
+          }
+        }
+      }
+    },
+    "%@, %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@，%@"
+          }
+        }
+      }
+    },
+    "%@, %lld items" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%@, %lld item"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%@, %lld items"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@，%lld 项"
+          }
+        }
+      }
+    },
+    "%@, in progress" : {},
+    "%lld" : {
+      "shouldTranslate" : false
+    },
+    "%lld fps" : {},
+    "%lld incoming commits" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld incoming commit"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld incoming commits"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待拉取 %lld 个提交"
+          }
+        }
+      }
+    },
+    "%lld outgoing commits" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld outgoing commit"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld outgoing commits"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待推送 %lld 个提交"
+          }
+        }
+      }
+    },
+    "%lld sessions" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld session"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld sessions"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个会话"
+          }
+        }
+      }
+    },
+    "+%lld, −%lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "+%1$lld, −%2$lld"
+          }
+        }
+      }
+    },
+    "About %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关于 %@"
+          }
+        }
+      }
+    },
     "Add Files or Folders…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "添加文件或文件夹…"
-          }
-        }
-      }
-    },
-    "Add SSH Files or Folders…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "添加 SSH 文件或文件夹…"
           }
         }
       }
@@ -31,33 +188,32 @@
         }
       }
     },
-    "Could not verify remote files" : {
+    "Add SSH Files or Folders…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法验证远程文件"
+            "value" : "添加 SSH 文件或文件夹…"
           }
         }
       }
     },
-    "Verifying remote files" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在验证远程文件"
-          }
-        }
-      }
-    },
-    "%@, in progress" : {},
     "Added" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "已添加"
+          }
+        }
+      }
+    },
+    "Amend Last Commit" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "修订上次提交"
           }
         }
       }
@@ -69,6 +225,27 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "取消"
+          }
+        }
+      }
+    },
+    "Cancel Branch Creation" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消创建分支"
+          }
+        }
+      }
+    },
+    "cd Here" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "cd 到此目录"
           }
         }
       }
@@ -115,12 +292,81 @@
         }
       }
     },
+    "Clear Filter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除筛选"
+          }
+        }
+      }
+    },
+    "Clear Git Filter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除 Git 筛选"
+          }
+        }
+      }
+    },
+    "Close Project" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭项目"
+          }
+        }
+      }
+    },
     "Collapsed" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "已折叠"
+          }
+        }
+      }
+    },
+    "Commit %lld Staged Files" : {
+      "comment" : "Commit button title. The placeholder is the number of staged files.",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Commit %lld Staged File"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Commit %lld Staged Files"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提交 %lld 个已暂存文件"
+          }
+        }
+      }
+    },
+    "Commit Options" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提交选项"
           }
         }
       }
@@ -175,12 +421,82 @@
         }
       }
     },
+    "Copy Changed Paths" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制已更改的路径"
+          }
+        }
+      }
+    },
+    "Copy Executable Path" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制可执行文件路径"
+          }
+        }
+      }
+    },
     "Copy Path" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "复制路径"
+          }
+        }
+      }
+    },
+    "Copy PID" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制 PID"
+          }
+        }
+      }
+    },
+    "Copy Relative Path" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制相对路径"
+          }
+        }
+      }
+    },
+    "Copy Repository Path" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制仓库路径"
+          }
+        }
+      }
+    },
+    "Copy URL" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制 URL"
+          }
+        }
+      }
+    },
+    "Could not verify remote files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法验证远程文件"
           }
         }
       }
@@ -196,6 +512,16 @@
       }
     },
     "Create New Branch" : {},
+    "Create New Branch…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建新分支…"
+          }
+        }
+      }
+    },
     "Current branch, %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -233,6 +559,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已删除"
+          }
+        }
+      }
+    },
+    "Delete…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除…"
           }
         }
       }
@@ -298,6 +634,34 @@
         }
       }
     },
+    "Discard the %lld reviewed changes? Untracked and moved files go to the Trash." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Discard the %lld reviewed change? Untracked and moved files go to the Trash."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Discard the %lld reviewed changes? Untracked and moved files go to the Trash."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要丢弃这 %lld 项已确认的更改吗？未跟踪和已移动的文件将移到废纸篓。"
+          }
+        }
+      }
+    },
     "Discard this copy? %@ will move to the Trash." : {
       "comment" : "Copy discard confirmation. The placeholder is a file name.",
       "localizations" : {
@@ -309,6 +673,28 @@
         }
       }
     },
+    "Dismiss" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭"
+          }
+        }
+      }
+    },
+    "Dismiss Git Error" : {},
+    "Dismiss Git Result" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭 Git 结果"
+          }
+        }
+      }
+    },
     "Enter a name for the new branch." : {},
     "Expanded" : {
       "localizations" : {
@@ -316,6 +702,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已展开"
+          }
+        }
+      }
+    },
+    "Fetch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "获取"
           }
         }
       }
@@ -371,6 +767,16 @@
         }
       }
     },
+    "Filter changed files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "筛选已更改的文件"
+          }
+        }
+      }
+    },
     "Finding repository…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -387,6 +793,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "请在终端中完成或中止"
+          }
+        }
+      }
+    },
+    "Finishing Git operation…" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在完成 Git 操作…"
           }
         }
       }
@@ -421,6 +838,16 @@
         }
       }
     },
+    "Force Kill" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "强制结束"
+          }
+        }
+      }
+    },
     "Git" : {
       "localizations" : {
         "zh-Hans" : {
@@ -437,6 +864,37 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Git（⇧⌘G）"
+          }
+        }
+      }
+    },
+    "Git operation in progress" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 操作进行中"
+          }
+        }
+      }
+    },
+    "Git Output" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 输出"
+          }
+        }
+      }
+    },
+    "Git Status Unavailable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法获取 Git 状态"
           }
         }
       }
@@ -481,6 +939,36 @@
         }
       }
     },
+    "Initialize Repository" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "初始化仓库"
+          }
+        }
+      }
+    },
+    "Initialize the terminal’s current directory to start tracking changes." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "初始化终端的当前目录以开始跟踪更改。"
+          }
+        }
+      }
+    },
+    "Insert Absolute Path in Terminal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在终端中插入绝对路径"
+          }
+        }
+      }
+    },
     "job" : {
       "comment" : "Files header badge: the panels follow a directory the terminal’s foreground job moved to, outside any worktree of the shell’s repository.",
       "localizations" : {
@@ -488,6 +976,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "作业"
+          }
+        }
+      }
+    },
+    "Kill Process (%@)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "终止进程（%@）"
           }
         }
       }
@@ -508,6 +1006,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "合并更改"
+          }
+        }
+      }
+    },
+    "Message (stage changes to use ⌘⏎)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说明（暂存更改后可用 ⌘⏎）"
+          }
+        }
+      }
+    },
+    "Message (stage changes to use ⌘⏎, or choose Amend)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说明（暂存更改后可用 ⌘⏎，或选择“修订”）"
           }
         }
       }
@@ -533,32 +1051,32 @@
         }
       }
     },
-    "Message (stage changes to use ⌘⏎, or choose Amend)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "说明（暂存更改后可用 ⌘⏎，或选择“修订”）"
-          }
-        }
-      }
-    },
-    "Message (stage changes to use ⌘⏎)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "说明（暂存更改后可用 ⌘⏎）"
-          }
-        }
-      }
-    },
     "Modified" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "已修改"
+          }
+        }
+      }
+    },
+    "More Actions…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更多操作…"
+          }
+        }
+      }
+    },
+    "More Git Actions" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更多 Git 操作"
           }
         }
       }
@@ -593,12 +1111,53 @@
         }
       }
     },
+    "New branch name" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新分支名称"
+          }
+        }
+      }
+    },
+    "New File…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建文件…"
+          }
+        }
+      }
+    },
+    "New Folder…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建文件夹…"
+          }
+        }
+      }
+    },
     "No changed files match “%@”" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "没有与“%@”匹配的已更改文件"
+          }
+        }
+      }
+    },
+    "No Git Repository" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有 Git 仓库"
           }
         }
       }
@@ -623,12 +1182,72 @@
         }
       }
     },
+    "Not selected" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未选中"
+          }
+        }
+      }
+    },
+    "Open" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开"
+          }
+        }
+      }
+    },
     "Open %@" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "打开 %@"
+          }
+        }
+      }
+    },
+    "Open Changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开更改"
+          }
+        }
+      }
+    },
+    "Open Conflicted File" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开有冲突的文件"
+          }
+        }
+      }
+    },
+    "Open File" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开文件"
+          }
+        }
+      }
+    },
+    "Open File to the Side" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在侧边打开文件"
           }
         }
       }
@@ -643,12 +1262,62 @@
         }
       }
     },
+    "Open in Browser" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在浏览器中打开"
+          }
+        }
+      }
+    },
+    "Open in Default App" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用默认应用打开"
+          }
+        }
+      }
+    },
+    "Open to the Side" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在侧边打开"
+          }
+        }
+      }
+    },
+    "Opens conflict changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开冲突更改"
+          }
+        }
+      }
+    },
     "Pop Stash" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "弹出贮藏"
+          }
+        }
+      }
+    },
+    "Pop Stash (%lld)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "弹出贮藏（%lld）"
           }
         }
       }
@@ -669,6 +1338,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "进程"
+          }
+        }
+      }
+    },
+    "Project" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "项目"
           }
         }
       }
@@ -713,6 +1392,36 @@
         }
       }
     },
+    "Publish Branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发布分支"
+          }
+        }
+      }
+    },
+    "Publish Branch to" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发布分支到"
+          }
+        }
+      }
+    },
+    "Pull (Fast-forward Only)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拉取（仅快进）"
+          }
+        }
+      }
+    },
     "Pull remote commits, then push local ones" : {
       "localizations" : {
         "zh-Hans" : {
@@ -723,12 +1432,32 @@
         }
       }
     },
+    "Push" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推送"
+          }
+        }
+      }
+    },
     "RECENT COMMITS" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "最近提交"
+          }
+        }
+      }
+    },
+    "Refresh" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刷新"
           }
         }
       }
@@ -753,12 +1482,111 @@
         }
       }
     },
+    "Rename" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名"
+          }
+        }
+      }
+    },
     "Renamed" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "已重命名"
+          }
+        }
+      }
+    },
+    "Rename…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名…"
+          }
+        }
+      }
+    },
+    "Resolve and stage %lld conflicted files" : {
+      "comment" : "Git merge guidance. The placeholder is the number of conflicted files.",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Resolve and stage %lld conflicted file"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Resolve and stage %lld conflicted files"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解决并暂存 %lld 个冲突文件"
+          }
+        }
+      }
+    },
+    "Retry" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重试"
+          }
+        }
+      }
+    },
+    "Reveal in Finder" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在访达中显示"
+          }
+        }
+      }
+    },
+    "Reveal Repository in Finder" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在访达中显示仓库"
+          }
+        }
+      }
+    },
+    "Selected" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已选中"
+          }
+        }
+      }
+    },
+    "Send Feedback" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送反馈"
           }
         }
       }
@@ -773,12 +1601,62 @@
         }
       }
     },
+    "Set Project Directory…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设置项目目录…"
+          }
+        }
+      }
+    },
+    "Settings (⌘,)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设置（⌘,）"
+          }
+        }
+      }
+    },
     "Show Git Output" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "显示 Git 输出"
+          }
+        }
+      }
+    },
+    "SSH · %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH · %@"
+          }
+        }
+      }
+    },
+    "Stage All & Amend" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部暂存并修订"
+          }
+        }
+      }
+    },
+    "Stage All & Commit" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部暂存并提交"
           }
         }
       }
@@ -813,12 +1691,62 @@
         }
       }
     },
+    "Stash All Changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "贮藏所有更改"
+          }
+        }
+      }
+    },
+    "Switch or Create Branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换或创建分支"
+          }
+        }
+      }
+    },
     "Sync Changes" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "同步更改"
+          }
+        }
+      }
+    },
+    "Terminate" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "终止"
+          }
+        }
+      }
+    },
+    "Terminate Process" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "终止进程"
+          }
+        }
+      }
+    },
+    "Toggle Left Sidebar (⌘B)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示/隐藏左侧边栏（⌘B）"
           }
         }
       }
@@ -890,6 +1818,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未跟踪"
+          }
+        }
+      }
+    },
+    "Use Automatic Directory" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用自动目录"
+          }
+        }
+      }
+    },
+    "Use Automatic Title" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用自动标题"
+          }
+        }
+      }
+    },
+    "Verifying remote files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在验证远程文件"
           }
         }
       }

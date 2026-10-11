@@ -23,7 +23,7 @@ struct TerminalFindBar: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
 
-            TextField("Find", text: $find.query)
+            TextField(String(localized: "Find", table: "Terminal"), text: $find.query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .frame(width: 150)
@@ -57,7 +57,7 @@ struct TerminalFindBar: View {
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .help("Close find bar")
+            .help(String(localized: "Close find bar", table: "Terminal"))
         }
         .padding(.horizontal, 8)
         .frame(height: 30)
@@ -94,7 +94,9 @@ struct TerminalFindBar: View {
         }
         .buttonStyle(.plain)
         .disabled(!hasMatches)
-        .help(forward ? "Next match" : "Previous match")
+        .help(forward
+            ? String(localized: "Next match", table: "Terminal")
+            : String(localized: "Previous match", table: "Terminal"))
     }
 
     /// Blank while a count for the current needle is still pending, so a tally

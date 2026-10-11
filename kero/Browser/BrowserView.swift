@@ -979,14 +979,14 @@ struct BrowserView: View {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 28, weight: .light))
                 .foregroundStyle(.secondary)
-            Text("This webpage couldn’t be loaded.")
+            Text(String(localized: "This webpage couldn’t be loaded.", table: "Browser"))
                 .font(.headline)
             Text(verbatim: message)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .lineLimit(3)
-            Button("Try Again") {
+            Button(String(localized: "Try Again", table: "Browser")) {
                 browser.reload()
             }
         }

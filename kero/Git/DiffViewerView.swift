@@ -870,10 +870,10 @@ struct DiffViewerView: View {
     private var conflictBanner: some View {
         HStack(spacing: 6) {
             Image(systemName: "arrow.triangle.merge")
-            Text("Unresolved merge conflict")
+            Text(String(localized: "Unresolved merge conflict", table: "Git"))
                 .fontWeight(.medium)
             Spacer(minLength: 0)
-            Text("Resolve before committing")
+            Text(String(localized: "Resolve before committing", table: "Git"))
                 .foregroundStyle(.secondary)
         }
         .font(.system(size: 11))
@@ -935,7 +935,7 @@ struct DiffViewerView: View {
         HStack(spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 10))
-            Text("Could not save: \(message)")
+            Text(String(localized: "Could not save: \(message)", table: "Git"))
                 .font(.system(size: 11))
                 .lineLimit(1)
             Spacer(minLength: 0)
