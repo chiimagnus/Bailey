@@ -2462,4 +2462,3 @@ private struct InfoPortRow: View {
         )
     }
 }
-
