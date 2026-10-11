@@ -496,8 +496,7 @@ private struct PaneView: View {
             )
                 .background(Color(nsColor: Theme.background))
         case .diff:
-            // Rendered by the always-mounted diff stack behind the layout; stay
-            // transparent and non-interactive so clicks and scrolls reach it.
+            // Dock renders single-pane diffs directly; they cannot split.
             Color.clear.allowsHitTesting(false)
         }
     }

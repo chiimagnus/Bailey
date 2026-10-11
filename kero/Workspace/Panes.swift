@@ -443,8 +443,8 @@ final class PaneTab: nonisolated ObservableObject, nonisolated Identifiable {
 
     var hasMultiplePanes: Bool { allPanes.count > 1 }
 
-    /// Splitting is disallowed while a diff is focused: diffs stay in their own
-    /// single-pane tab so their always-mounted web view keeps filling the tab.
+    /// Splitting is disallowed while a diff is focused; Dock renders diffs
+    /// directly in their single-pane tabs.
     var canSplit: Bool {
         if case .diff? = focusedContent { return false }
         return true
