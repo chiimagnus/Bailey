@@ -1015,7 +1015,6 @@ final class TerminalManager: nonisolated ObservableObject {
             }
             return .pane(ProjectSnapshot.PaneSnapshot(
                 content: content,
-                weight: 1,
                 historyKey: historyKey
             ))
         case .split(let split):

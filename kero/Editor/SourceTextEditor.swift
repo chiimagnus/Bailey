@@ -10,8 +10,7 @@ import SwiftUI
 
 /// Scroll offset and cursor position of a file tab's editor, kept on the
 /// `FileTab` so it survives tab switches, and in the session snapshot so it
-/// survives relaunches. Every field is optional so decoding tolerates
-/// snapshots written by earlier editor stacks.
+/// survives relaunches. Optional fields represent state not yet captured.
 struct EditorState: Codable, Equatable {
     var selectionLocation: Int?
     var selectionLength: Int?

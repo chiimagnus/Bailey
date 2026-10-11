@@ -37,6 +37,14 @@ xcrun swiftc -swift-version 5 -o build/check-dock-workspace \
   && build/check-dock-workspace
 ```
 
+涉及快照格式时，再运行现行格式往返检查（编辑器字段和窗格轴使用数据类型桩，不创建终端）：
+
+```sh
+xcrun swiftc -swift-version 5 -o build/check-session-snapshot \
+  kero/Workspace/DockWorkspaceModel.swift kero/Workspace/SessionStore.swift \
+  scripts/check-session-snapshot.swift && build/check-session-snapshot
+```
+
 涉及树结构、路径或展开状态时，运行真实文件系统检查：
 
 ```sh
