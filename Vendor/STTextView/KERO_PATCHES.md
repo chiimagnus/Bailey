@@ -80,7 +80,7 @@ diff -ru Sources /path/to/kero/Vendor/STTextView/Sources
 
 ## What is NOT a patch here
 
-Don't re-add these to the package — they live on the app side, in [`kero/SourceTextEditor.swift`](../../kero/SourceTextEditor.swift), and are configuration of a stock STTextView, not modifications to it:
+Don't re-add these to the package — they live on the app side, in [`kero/Editor/SourceTextEditor.swift`](../../kero/Editor/SourceTextEditor.swift), and are configuration of a stock STTextView, not modifications to it:
 
 - `scrollView.clipsToBounds = true` — the gutter is a document-height floating subview; since macOS 14 NSViews don't clip subviews, so scrolled-away numbers would otherwise draw over the header.
 - `automaticallyAdjustsContentInsets = false` — the full-size-content-view window would otherwise add a titlebar-height top inset that misaligns the gutter by one line.

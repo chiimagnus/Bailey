@@ -27,7 +27,8 @@ Do not imitate a web dashboard, add decorative developer-tool chrome, or copy an
 3. Prefer explicit scope and inspectable outcomes over clever automation.
 4. Put the common action close, and progressively disclose advanced actions.
 5. Preserve context across repositories, sessions, tabs, and narrow panel sizes.
+6. Keep Files and Git tree interactions consistent; long names may scroll, but fixed actions stay anchored.
 
 ## Accessibility & Inclusion
 
-Follow macOS appearance and interaction conventions. Support keyboard and assistive-technology access, label icon-only controls, never communicate Git state by color alone, respect reduced-motion preferences, and keep core workflows usable from the minimum supported sidebar width.
+Follow macOS appearance and interaction conventions. Support keyboard and assistive technologies, label icon-only controls, respect reduced motion, and keep core workflows usable from the minimum supported sidebar width. Files may use filename color for Git state, but the same state must remain available to assistive technology; action-critical Git views keep explicit status text.

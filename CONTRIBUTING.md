@@ -9,7 +9,7 @@ in the login Keychain. There is one target and one app, **Kero.app**
 ```sh
 git clone --recurse-submodules https://github.com/chiimagnus/kero.git
 cd kero
-./scripts/prepare-ghostty.sh # One-time verified download; keep the binary in Vendor/GhosttyKit
+./scripts/prepare-ghostty.sh # Downloads once when missing; reuses Vendor/GhosttyKit on later builds
 xcodebuild -project kero.xcodeproj -scheme kero -configuration Debug \
   -destination 'platform=macOS,arch=arm64' \
   -derivedDataPath build/DerivedData \
@@ -18,7 +18,7 @@ xcodebuild -project kero.xcodeproj -scheme kero -configuration Debug \
 codesign --verify --deep --strict 'build/DerivedData/Build/Products/Debug/Kero.app'
 ```
 
-To check Files expansion across project/root changes with the real local backend:
+To check Compact Folders and Files expansion persistence across project/root changes with the real local backend:
 
 ```sh
 xcrun swiftc -swift-version 5 -o build/check-file-tree-navigation \
@@ -29,6 +29,12 @@ xcrun swiftc -swift-version 5 -o build/check-file-tree-navigation \
 The app uses the personal Apple Development certificate for team
 `RDQHYSDFFG`, and saves its configuration in `~/.config/kero/config.toml`.
 This is for local use, not distribution or notarization.
+
+## Verify
+
+Every code change ends with a signed Debug build installed at `/Applications/Kero.app`, followed by a real-app check of the changed behavior. Do not replace Kero while it owns active terminal child processes; after relaunch, confirm existing projects and sessions restore.
+
+For Files/Git tree changes, check Files, working/staged Git, and committed Git together: hover and selection geometry stay aligned, long names scroll without moving fixed actions, and Compact Folders open the real leaf directory. The regression script above covers tree-model behavior; it does not replace visual interaction checks.
 
 Open `kero.xcodeproj` and press **Cmd+B** for normal development. If only
 the Xcode beta is installed, set

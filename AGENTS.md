@@ -10,12 +10,11 @@ native terminal integration and platform capabilities SwiftUI cannot cover.
 
 ## Verify
 
-Every code change must end with a signed Debug build, replacing `/Applications/Kero.app`, and validating the changed behavior in the newly launched app. Verify the restored projects and sessions, not just the build log. Do not force-quit active commands or discard unsaved work; if safe installation is blocked, report the blocker explicitly and complete it as soon as possible. Clean up temporary installation copies after verification.
+[CONTRIBUTING.md](CONTRIBUTING.md) owns the build and verification procedure. Do not stop at compilation: use its signed Debug install and real-app checks. Never replace Kero while active commands or unsaved work would be lost; clean temporary installation copies after verification.
 
 ## Conventions
 
 - Match the file you're in. Comments explain *why* — keep them, add them.
-- Prefer SwiftUI for layout, controls, file trees and Git trees. Reuse shared SwiftUI
-  rows and Canvas guides instead of embedding AppKit drawing or flipped view hosts.
+- Prefer SwiftUI for layout, controls, file trees and Git trees. Files and Git must reuse the shared tree-row interaction/layout instead of drifting into separate hover, padding, guide, or scrolling behavior.
 - Use AppKit only where platform integration requires it, such as the native terminal.
   Preserve responsiveness with lazy rendering and verify large-tree performance.
