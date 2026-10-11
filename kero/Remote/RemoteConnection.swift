@@ -68,15 +68,14 @@ final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunne
     nonisolated let sshPID: pid_t
 
     @Published private(set) var state: State = .connecting
-    /// One backend per connection: the models store whatever they are handed
-    /// each sync, so a fresh instance per access would be wasteful churn.
-    lazy var workspaceBackend: SSHWorkspaceBackend = SSHWorkspaceBackend(runner: self)
+    var workspaceBackend: SSHWorkspaceBackend { SSHWorkspaceBackend(runner: self) }
     /// The same channel with a short deadline, used only for the liveness
     /// probe. Panel work can afford to wait; a probe that waits is a drop
     /// this session has not noticed yet.
-    lazy var livenessBackend: SSHWorkspaceBackend = SSHWorkspaceBackend(
-        runner: self, timeout: 3
-    )
+    var livenessBackend: SSHWorkspaceBackend {
+        SSHWorkspaceBackend(runner: self, timeout: 3)
+    }
+    lazy var portForwards = PortForwardController(connection: self)
     /// Remote working directory, filled in by the cwd probe.
     @Published var workingDirectory: String?
     /// The remote login shell's process id, found by the same probe. The Info
@@ -234,17 +233,6 @@ final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunne
             destination, remotePort, localPort
         )
         return localPort
-    }
-
-    /// Removes a forward created by ``forward(remotePort:)``. The
-    /// specification must match the one that created it.
-    func cancelForward(localPort: Int, remotePort: Int) async {
-        let specification = "127.0.0.1:\(localPort):127.0.0.1:\(remotePort)"
-        _ = await Self.runSSH(
-            arguments: controlArguments + ["-O", "cancel", "-L", specification, destination],
-            stdin: nil,
-            timeout: 5
-        )
     }
 
     /// Asks the kernel for an unused loopback port by binding it and letting

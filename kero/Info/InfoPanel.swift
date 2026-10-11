@@ -36,7 +36,11 @@ struct InfoPanel: View {
                     currentDirectorySection
                     projectDirectorySection
                     processesSection
-                    portsSection
+                    if let forwards {
+                        ObservedPortForwards(controller: forwards) { portsSection(localPorts: $0) }
+                    } else {
+                        portsSection(localPorts: [:])
+                    }
                 }
                 .padding(.horizontal, 6)
                 .padding(.bottom, 8)
@@ -268,7 +272,7 @@ struct InfoPanel: View {
     // MARK: Ports
 
     @ViewBuilder
-    private var portsSection: some View {
+    private func portsSection(localPorts: [Int: Int]) -> some View {
         PanelSectionHeader(
             title: String(localized: "PORTS", table: "Sidebar"),
             count: model.ports.count,
@@ -282,7 +286,7 @@ struct InfoPanel: View {
                 ForEach(model.ports) { port in
                     InfoPortRow(
                         port: port,
-                        localPort: forwards?.localPort(forRemote: port.port),
+                        localPort: localPorts[port.port],
                         isRemote: isRemote,
                         open: { openPort(port) },
                         copyURL: { copyPortURL(port) },
@@ -302,6 +306,13 @@ struct InfoPanel: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
     }
+}
+
+private struct ObservedPortForwards<Content: View>: View {
+    @ObservedObject var controller: PortForwardController
+    let content: ([Int: Int]) -> Content
+
+    var body: some View { content(controller.localPortsByRemote) }
 }
 
 private struct InfoProcessRow: View {

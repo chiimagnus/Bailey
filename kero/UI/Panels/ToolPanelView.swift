@@ -32,28 +32,6 @@ private final class PanelSyncQueue {
     }
 }
 
-/// One ``PortForwardController`` per remote connection, kept while the pane
-/// lives so a forward opened from a port row is still known after the user
-/// switches panels and comes back. The connection is held weakly: its
-/// forwards die with it, so a finished connection's entry is dropped.
-@MainActor
-private final class PortForwardRegistry {
-    private struct Entry {
-        weak var connection: RemoteConnection?
-        let controller: PortForwardController
-    }
-
-    private var entries: [UUID: Entry] = [:]
-
-    func controller(for connection: RemoteConnection?) -> PortForwardController? {
-        entries = entries.filter { $0.value.connection != nil }
-        guard let connection else { return nil }
-        if let existing = entries[connection.id]?.controller { return existing }
-        let controller = PortForwardController(connection: connection)
-        entries[connection.id] = Entry(connection: connection, controller: controller)
-        return controller
-    }
-}
 
 /// Hosts the pane's remote heading, which is AppKit and outlives any one
 /// body evaluation — same shape as the diff viewer's web host.
@@ -105,7 +83,6 @@ struct ToolPanelView: View {
     /// Mirrors the heading's own state, because the layout above has to give
     /// back the row's height when the session is local.
     @State private var remoteHeaderState = RemotePaneHeaderState.local
-    @State private var portForwards = PortForwardRegistry()
     /// The selected session's forwards, or nil while it is local.
     @State private var forwards: PortForwardController?
 
@@ -334,7 +311,7 @@ struct ToolPanelView: View {
             ? nil
             : session.panelDirectoryPath
         if remoteHeaderState != headerState { remoteHeaderState = headerState }
-        let controller = portForwards.controller(for: session.location.remoteConnection)
+        let controller = session.location.remoteConnection?.portForwards
         if forwards !== controller { forwards = controller }
     }
 

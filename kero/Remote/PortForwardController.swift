@@ -16,7 +16,7 @@ import Foundation
 /// and `WorkspacePort.port`, so no conversion is needed anywhere along the way.
 @MainActor
 final class PortForwardController: ObservableObject {
-    private let connection: RemoteConnection
+    private weak var connection: RemoteConnection?
 
     /// Remote port to the loopback port it is reachable on.
     @Published private(set) var localPortsByRemote: [Int: Int] = [:]
@@ -28,8 +28,6 @@ final class PortForwardController: ObservableObject {
 
     init(connection: RemoteConnection) {
         self.connection = connection
-        // Forwards live inside the ssh connection, so a drop takes them with
-        // it. Nothing needs cancelling; the table just stops being true.
         stateObserver = connection.$state
             .filter { $0 == .disconnected }
             .sink { [weak self] _ in self?.forgetAll() }
@@ -40,6 +38,9 @@ final class PortForwardController: ObservableObject {
     /// The loopback port `remotePort` is reachable on, forwarding it first if
     /// it is not already. Asking twice returns the same port.
     func forward(remotePort: Int) async throws -> Int {
+        guard let connection, connection.state == .connected else {
+            throw RemoteConnectionError.notConnected
+        }
         if let existing = localPortsByRemote[remotePort] { return existing }
         if let running = pending[remotePort] { return try await running.value }
 
@@ -47,36 +48,17 @@ final class PortForwardController: ObservableObject {
             try await connection.forward(remotePort: remotePort)
         }
         pending[remotePort] = task
-        defer { pending[remotePort] = nil }
+        defer {
+            if !task.isCancelled { pending[remotePort] = nil }
+        }
 
         let localPort = try await task.value
         // A disconnect while the request was in flight makes the forward moot.
-        guard connection.state == .connected else {
+        guard !task.isCancelled, connection.state == .connected else {
             throw RemoteConnectionError.notConnected
         }
         localPortsByRemote[remotePort] = localPort
         return localPort
-    }
-
-    func localPort(forRemote remotePort: Int) -> Int? {
-        localPortsByRemote[remotePort]
-    }
-
-    func cancel(remotePort: Int) async {
-        pending[remotePort]?.cancel()
-        pending[remotePort] = nil
-        guard let localPort = localPortsByRemote.removeValue(forKey: remotePort) else {
-            return
-        }
-        await connection.cancelForward(localPort: localPort, remotePort: remotePort)
-    }
-
-    func cancelAll() async {
-        let open = localPortsByRemote
-        forgetAll()
-        for (remotePort, localPort) in open {
-            await connection.cancelForward(localPort: localPort, remotePort: remotePort)
-        }
     }
 
     private func forgetAll() {

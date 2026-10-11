@@ -55,6 +55,19 @@ xcrun swiftc -swift-version 5 -o build/check-git-panel-state \
   scripts/check-git-panel-state.swift && build/check-git-panel-state
 ```
 
+涉及 SSH 命令或连接所有权时，运行不连接网络的检查：
+
+```sh
+xcrun swiftc -swift-version 5 -o build/check-remote-commands \
+  kero/Workspace/WorkspaceBackend.swift kero/Remote/RemoteCommands.swift \
+  scripts/check-remote-commands.swift && build/check-remote-commands
+xcrun swiftc -swift-version 5 -o build/check-remote-lifetime \
+  kero/Workspace/WorkspaceBackend.swift kero/Remote/RemoteCommands.swift \
+  kero/Remote/SSHWorkspaceBackend.swift kero/Remote/RemoteConnection.swift \
+  kero/Remote/PortForwardController.swift scripts/check-remote-lifetime.swift \
+  && build/check-remote-lifetime
+```
+
 涉及行布局、点击或按钮时，再运行原生鼠标事件检查：
 
 ```sh

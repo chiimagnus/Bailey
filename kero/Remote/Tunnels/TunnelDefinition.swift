@@ -255,7 +255,7 @@ enum TunnelStore {
 #if DEBUG
 extension TunnelStore {
     /// Self-check standing in for a unit test target, like
-    /// `RemoteCommands.runSelfCheck()`.
+    /// `scripts/check-remote-commands.swift`.
     static func runSelfCheck() {
         let rdp = TunnelDefinition(
             name: "A1 \"desktop\"", host: "oracle", localPort: 13389,
