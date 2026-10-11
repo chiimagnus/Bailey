@@ -51,7 +51,7 @@ enum RemoteConnectionError: Error, LocalizedError {
 /// process, and every command here rides the existing channel.
 @MainActor
 final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunner {
-    enum State: Equatable {
+    nonisolated enum State: Hashable, Sendable {
         case connecting
         case connected
         case disconnected

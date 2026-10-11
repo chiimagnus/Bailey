@@ -68,6 +68,18 @@ xcrun swiftc -swift-version 5 -o build/check-remote-lifetime \
   && build/check-remote-lifetime
 ```
 
+涉及面板异步目标或进程操作时，运行延迟后端检查（不执行真实 kill/delete）：
+
+```sh
+xcrun swiftc -swift-version 5 -o build/check-panel-targets \
+  kero/Workspace/WorkspaceBackend.swift kero/Workspace/PanelContext.swift \
+  kero/Remote/RemoteCommands.swift kero/Remote/SSHWorkspaceBackend.swift \
+  kero/Remote/RemoteConnection.swift kero/Remote/PortForwardController.swift \
+  kero/Shared/Tree/TreeDisplayModel.swift kero/Files/FileTreeModel.swift \
+  kero/Info/SessionInfoModel.swift scripts/check-panel-targets.swift \
+  && build/check-panel-targets
+```
+
 涉及行布局、点击或按钮时，再运行原生鼠标事件检查：
 
 ```sh

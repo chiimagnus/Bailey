@@ -69,20 +69,7 @@ struct ContentView: View {
             syncGit()
         }
         .onChange(of: commandCompletionSequences) { syncGit() }
-        .onChange(of: manager.selectedProjectID) { syncGit() }
-        .onChange(of: manager.selectedSession?.id) { syncGit() }
-        .onChange(of: manager.selectedSession?.workingDirectory) { syncGit() }
-        // The panel directory, not the session's own: a `cd` on a remote
-        // machine moves that and leaves `workingDirectory` alone, so without
-        // this the Git panel kept its old repository until something unrelated
-        // happened to trigger a sync. Files re-roots from the right pane's own
-        // poll, which is why only Git looked stuck.
-        .onChange(of: manager.selectedSession?.panelDirectoryPath) { syncGit() }
-        // A connection going up or down changes which machine the panel should
-        // be reading, even when the directory string happens to be unchanged.
-        .onChange(of: manager.selectedSession?.remoteHeaderState) { syncGit() }
-        .onChange(of: manager.selectedSession?.foregroundDirectoryPath) { syncGit() }
-        .onChange(of: manager.selectedProject?.customDirectory) { syncGit() }
+        .onChange(of: manager.selectedProject?.panelContext?.identity) { syncGit() }
         .onChange(of: colorScheme) {
             manager.refreshAppearance()
         }
@@ -112,14 +99,10 @@ struct ContentView: View {
         }
         // Files and Git belong to the selected project, not to its terminals.
         // Resolving an automatic remote root can involve a round trip.
-        let selectedID = project.id
         Task {
-            let root = await project.panelRoot(
-                followingSessionAt: context.cwd,
-                foregroundAt: context.foreground,
-                backend: context.backend
-            ).root
-            guard manager.selectedProjectID == selectedID else { return }
+            let root = await context.resolvedRoot().root
+            guard manager.selectedProjectID == project.id,
+                  project.matchesPanelTarget(context.identity) else { return }
             git.sync(root: root, backend: context.backend, scope: context.scope)
         }
     }

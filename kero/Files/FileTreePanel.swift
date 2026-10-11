@@ -14,6 +14,7 @@ struct FileTreePanel: View {
     let openToSide: (String) -> Void
     let onRename: (_ oldPath: String, _ newPath: String) -> Void
     let refreshGitStatus: () -> Void
+    let isCurrentTarget: () -> Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -55,7 +56,7 @@ struct FileTreePanel: View {
                 model: model, git: git, session: session,
                 sshHost: sshHost, currentFilePath: currentFilePath,
                 openFile: openFile, openToSide: openToSide, onRename: onRename,
-                refreshGitStatus: refreshGitStatus
+                refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget
             )
         }
     }
@@ -73,6 +74,7 @@ private struct FileTreeScrollView: View {
     let openToSide: (String) -> Void
     let onRename: (String, String) -> Void
     let refreshGitStatus: () -> Void
+    let isCurrentTarget: () -> Bool
     @Environment(\.panelFontScale) private var fontScale
 
     var body: some View {
@@ -84,7 +86,8 @@ private struct FileTreeScrollView: View {
                         session: session, sshHost: sshHost,
                         currentFilePath: currentFilePath,
                         openFile: openFile, openToSide: openToSide,
-                        onRename: onRename, refreshGitStatus: refreshGitStatus
+                        onRename: onRename, refreshGitStatus: refreshGitStatus,
+                        isCurrentTarget: isCurrentTarget
                     )
                 }
             }
@@ -106,6 +109,7 @@ private struct FileTreeRow: View {
     let openToSide: (String) -> Void
     let onRename: (_ oldPath: String, _ newPath: String) -> Void
     let refreshGitStatus: () -> Void
+    let isCurrentTarget: () -> Bool
 
     @State private var editingName = ""
     @FocusState private var fieldFocused: Bool
@@ -164,10 +168,10 @@ private struct FileTreeRow: View {
     private var rowMenu: some View {
         if !item.isDirectory {
             Button(String(localized: "Open", table: "Sidebar")) {
-                openFile(item.path)
+                if isCurrentTarget() { openFile(item.path) }
             }
             Button(String(localized: "Open to the Side", table: "Sidebar")) {
-                openToSide(item.path)
+                if isCurrentTarget() { openToSide(item.path) }
             }
         }
         // Finder and the default app can only reach the local disk.
@@ -204,8 +208,9 @@ private struct FileTreeRow: View {
             // distributions and a silently misplaced file is worse than an
             // explicit delete the user confirmed.
             Button(String(localized: "Delete…", table: "Sidebar"), role: .destructive) {
-                guard confirmRemoteDelete() else { return }
+                guard isCurrentTarget(), confirmRemoteDelete(), isCurrentTarget() else { return }
                 Task {
+                    guard isCurrentTarget() else { return }
                     await model.delete(item)
                     refreshGitStatus()
                 }
@@ -213,6 +218,7 @@ private struct FileTreeRow: View {
         } else {
             Button(String(localized: "Move to Trash", table: "Sidebar"), role: .destructive) {
                 Task {
+                    guard isCurrentTarget() else { return }
                     await model.moveToTrash(item)
                     refreshGitStatus()
                 }
@@ -258,8 +264,9 @@ private struct FileTreeRow: View {
         guard item.isDraft, model.draft != nil else { return }
         let name = editingName
         Task {
+            guard isCurrentTarget() else { return }
             if let created = await model.commitDraft(name: name) {
-                openFile(created)
+                if isCurrentTarget() { openFile(created) }
             }
             refreshGitStatus()
         }
@@ -273,7 +280,7 @@ private struct FileTreeRow: View {
             }
         } else {
             TreeFileRow(row: displayRow, scale: fontScale, selected: isCurrent,
-                        open: { openFile(item.path) }) { _ in EmptyView() }
+                        open: { if isCurrentTarget() { openFile(item.path) } }) { _ in EmptyView() }
         }
     }
 

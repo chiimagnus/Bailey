@@ -180,29 +180,40 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
 
     /// A pinned project is a workspace even without any shell. Automatic
     /// projects still follow their selected terminal when one exists.
-    var panelContext: (cwd: String, foreground: String?, backend: WorkspaceBackend, scope: String)? {
-        guard let cwd = customDirectory ?? selectedSession?.panelDirectoryPath else { return nil }
-        return (
-            cwd: cwd,
-            foreground: customDirectory == nil && sshHost == nil
-                ? selectedSession?.foregroundDirectoryPath : nil,
-            backend: workspaceBackend,
-            scope: workspaceIdentity ?? "local"
+    var panelContext: PanelContext? {
+        if let directory = customDirectory {
+            return PanelContext(
+                identity: .pinned(project: id, workspace: workspaceIdentity, directory: directory),
+                backend: workspaceBackend
+            )
+        }
+        guard let session = selectedSession else { return nil }
+        let connection = session.location.remoteConnection
+        guard connection == nil || connection?.workingDirectory != nil else { return nil }
+        return PanelContext(
+            identity: .automatic(
+                project: id, workspace: workspaceIdentity, directory: session.panelDirectoryPath,
+                foreground: session.foregroundDirectoryPath, session: session.id,
+                connection: connection?.id, state: connection?.state
+            ),
+            backend: workspaceBackend
         )
     }
 
-    /// Which rule produced the panel root, so labels can describe it
-    /// truthfully instead of just saying "automatic".
-    enum PanelRootSource: Equatable {
-        /// The directory pinned on the project row.
-        case pinned
-        /// The repository the shell itself sits in.
-        case shell
-        /// The repository the terminal's foreground job sits in — a coding
-        /// agent that moved to another checkout of the same project. Whether
-        /// that checkout is a linked worktree is resolved here, once per
-        /// refresh, so views can label it without touching the disk.
-        case foreground(isWorktree: Bool)
+    func matchesPanelTarget(_ identity: PanelContext.Identity) -> Bool {
+        panelContext?.identity == identity
+    }
+
+    var infoProcessTarget: SessionInfoModel.ProcessTarget? {
+        guard sshHost == nil, let session = selectedSession else { return nil }
+        let connection = session.location.remoteConnection
+        if customDirectory != nil, connection != nil { return nil }
+        if let connection, connection.state != .connected { return nil }
+        guard let pid = connection == nil ? session.shellPid : connection?.shellProcessID,
+              pid > 0 else { return nil }
+        return SessionInfoModel.ProcessTarget(
+            workspace: workspaceIdentity, connection: connection?.id, shellPid: pid
+        )
     }
 
     /// Root for the file tree and git panels: the pinned directory when the
@@ -214,7 +225,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// track the session in and out of repositories without sticking.
     func panelRoot(
         followingSessionAt cwd: String, foregroundAt foregroundCwd: String? = nil
-    ) -> (root: String, source: PanelRootSource) {
+    ) -> (root: String, source: PanelContext.RootSource) {
         if let pinned = customDirectory {
             return (pinned, .pinned)
         }
@@ -234,28 +245,6 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         return (shellRoot, .shell)
     }
 
-    /// The same root over a workspace that may be a remote machine. Keep the
-    /// two in step: the synchronous form above stays only for callers that
-    /// cannot await (the command palette and the Git panel), and both reach
-    /// the same walk — one through `LocalWorkspaceBackend`'s helpers, one
-    /// through the backend that wraps them.
-    func panelRoot(
-        followingSessionAt cwd: String,
-        foregroundAt foregroundCwd: String? = nil,
-        backend: WorkspaceBackend
-    ) async -> (root: String, source: PanelRootSource) {
-        if let pinned = customDirectory {
-            return (pinned, .pinned)
-        }
-        let shellRoot = ((try? await backend.gitRoot(containing: cwd)) ?? nil) ?? cwd
-        if let foregroundCwd,
-           let foregroundRoot = (try? await backend.gitRoot(containing: foregroundCwd)) ?? nil,
-           foregroundRoot != shellRoot {
-            let isWorktree = (try? await backend.isLinkedWorktree(foregroundRoot)) ?? false
-            return (foregroundRoot, .foreground(isWorktree: isWorktree))
-        }
-        return (shellRoot, .shell)
-    }
 
     // MARK: - Sessions
 

@@ -261,8 +261,8 @@ struct InfoPanel: View {
                 emptyRow(String(localized: "No running processes", table: "Sidebar"))
             } else {
                 ForEach(model.processes) { process in
-                    InfoProcessRow(process: process) { force in
-                        Task { await model.kill(process.pid, force: force) }
+                    InfoProcessRow(process: process) { [target = model.processTarget] force in
+                        Task { await model.kill(process.pid, target: target, force: force) }
                     }
                 }
             }
@@ -290,8 +290,8 @@ struct InfoPanel: View {
                         isRemote: isRemote,
                         open: { openPort(port) },
                         copyURL: { copyPortURL(port) },
-                        kill: { force in
-                            Task { await model.kill(port.pid, force: force) }
+                        kill: { [target = model.processTarget] force in
+                            Task { await model.kill(port.pid, target: target, force: force) }
                         }
                     )
                 }

@@ -13,6 +13,12 @@ import Foundation
 /// the session is connected to another machine.
 @MainActor
 final class SessionInfoModel: nonisolated ObservableObject {
+    nonisolated struct ProcessTarget: Equatable, Sendable {
+        let workspace: String?
+        let connection: UUID?
+        let shellPid: pid_t
+    }
+
     struct ProcessItem: Identifiable, Equatable {
         var id: pid_t { pid }
         let pid: pid_t
@@ -48,13 +54,15 @@ final class SessionInfoModel: nonisolated ObservableObject {
     @Published private(set) var projectRootPath = ""
     /// Which rule produced that directory — pinned, the shell's repository,
     /// or the repository the foreground job moved to.
-    @Published private(set) var projectRootSource = Project.PanelRootSource.shell
+    @Published private(set) var projectRootSource = PanelContext.RootSource.shell
     @Published private(set) var shellName = ""
     @Published private(set) var shellPid: pid_t = 0
     @Published private(set) var processes: [ProcessItem] = []
     @Published private(set) var ports: [PortItem] = []
+    @Published private(set) var processTarget: ProcessTarget?
 
     private var isRefreshing = false
+    private var refreshPending = false
     /// The workspace this panel describes. Replaced on every `sync`, so the
     /// panel follows its session between the local machine and a remote one.
     private var backend: WorkspaceBackend = LocalWorkspaceBackend.shared
@@ -65,63 +73,65 @@ final class SessionInfoModel: nonisolated ObservableObject {
     /// The local shell's name, used as given while local and as a fallback.
     private var localShellName = ""
 
+    func retarget(to target: ProcessTarget?, backend: WorkspaceBackend, shellName: String) {
+        self.backend = backend
+        isRemote = target?.workspace != nil
+        localShellName = shellName
+        guard processTarget != target else { return }
+        processTarget = target
+        shellPid = target?.shellPid ?? 0
+        self.shellName = target == nil || isRemote ? "" : shellName
+        processes = []
+        ports = []
+        if isRefreshing { refreshPending = true }
+    }
+
     func sync(
         root: String,
         projectRoot: String,
-        projectRootSource: Project.PanelRootSource,
+        projectRootSource: PanelContext.RootSource,
         shellName: String,
-        shellPid: pid_t?,
-        isRemote: Bool,
+        target: ProcessTarget?,
         backend: WorkspaceBackend
     ) async {
-        self.backend = backend
-        self.isRemote = isRemote
-        localShellName = shellName
+        retarget(to: target, backend: backend, shellName: shellName)
         if rootPath != root { rootPath = root }
         if projectRootPath != projectRoot { projectRootPath = projectRoot }
         if self.projectRootSource != projectRootSource {
             self.projectRootSource = projectRootSource
         }
-        // A remote shell's name arrives with the process table in `refresh`.
-        // Until it does the header shows no name rather than the local
-        // shell's, which would label a remote pid with a process on this Mac.
-        if isRemote {
-            if self.shellName == shellName { self.shellName = "" }
-        } else if self.shellName != shellName {
-            self.shellName = shellName
-        }
-        let pid = shellPid ?? 0
-        if self.shellPid != pid { self.shellPid = pid }
         await refresh()
     }
 
     func refresh() async {
-        let pid = shellPid
-        guard pid > 0 else {
-            if !processes.isEmpty { processes = [] }
-            if !ports.isEmpty { ports = [] }
+        guard !isRefreshing else {
+            refreshPending = true
             return
         }
-        guard !isRefreshing else { return }
         isRefreshing = true
-
-        // A workspace that cannot answer leaves the rows as they were: on a
-        // remote machine that is a connection that has gone away, and empty
-        // lists would claim nothing is running there.
-        let snapshot = await Self.snapshot(shellPid: pid, backend: backend)
-        isRefreshing = false
-        guard let (processes, ports, names) = snapshot else { return }
-        // A tab switch may have re-targeted us while the poll ran.
-        guard shellPid == pid else { return }
-        if self.processes != processes { self.processes = processes }
-        if self.ports != ports { self.ports = ports }
-        let name = isRemote ? (names[pid].map(Self.displayName) ?? "") : localShellName
-        if shellName != name { shellName = name }
+        defer { isRefreshing = false }
+        repeat {
+            refreshPending = false
+            guard let target = processTarget else { return }
+            let backend = backend
+            let isRemote = isRemote
+            let localShellName = localShellName
+            let snapshot = await Self.snapshot(shellPid: target.shellPid, backend: backend)
+            if processTarget == target, let (processes, ports, names) = snapshot {
+                if self.processes != processes { self.processes = processes }
+                if self.ports != ports { self.ports = ports }
+                let name = isRemote
+                    ? (names[target.shellPid].map(Self.displayName) ?? "") : localShellName
+                if shellName != name { shellName = name }
+            }
+        } while refreshPending
     }
 
     /// SIGTERM (or SIGKILL when `force`), then a delayed re-poll so the
     /// row disappears once the process is actually gone.
-    func kill(_ pid: pid_t, force: Bool = false) async {
+    func kill(_ pid: pid_t, target: ProcessTarget?, force: Bool = false) async {
+        guard let target, processTarget == target else { return }
+        let backend = backend
         try? await backend.kill(pid: pid, force: force)
         try? await Task.sleep(for: .milliseconds(300))
         await refresh()

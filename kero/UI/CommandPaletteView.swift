@@ -127,6 +127,7 @@ struct CommandPaletteView: View {
     @State private var query = ""
     @State private var selection = 0
     @State private var projectFiles: [ProjectFile] = []
+    @State private var indexedTarget: PanelContext.Identity?
     @StateObject private var pointerSelectionController = PalettePointerSelectionController()
     @FocusState private var searchFocused: Bool
 
@@ -153,9 +154,16 @@ struct CommandPaletteView: View {
         )
         .onExitCommand { handleEscapeFromKeyboard() }
         .onDisappear { manager.restoreFocusAfterCommandPalette() }
-        .task(id: fileIndexRoot) {
+        .task(id: fileIndexContext?.identity) {
             projectFiles = []
-            guard let root = fileIndexRoot else { return }
+            indexedTarget = nil
+            guard let context = fileIndexContext,
+                  let project = manager.selectedProject else { return }
+            let root = project.panelRoot(
+                followingSessionAt: context.cwd, foregroundAt: context.foreground
+            ).root
+            let standardizedRoot = URL(fileURLWithPath: root).standardizedFileURL
+            guard standardizedRoot != FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL else { return }
             let indexingTask = Task.detached(priority: .userInitiated) {
                 Self.loadProjectFiles(in: root)
             }
@@ -164,7 +172,9 @@ struct CommandPaletteView: View {
             } onCancel: {
                 indexingTask.cancel()
             }
-            guard !Task.isCancelled, root == fileIndexRoot else { return }
+            guard !Task.isCancelled, manager.selectedProjectID == project.id,
+                  project.matchesPanelTarget(context.identity) else { return }
+            indexedTarget = context.identity
             projectFiles = files
         }
     }
@@ -345,27 +355,11 @@ struct CommandPaletteView: View {
     /// The current project's pinned/automatic panel root. Indexing starts only
     /// after the user types, so opening ⌘P for a command stays filesystem-free.
     /// Home is excluded because it is an account boundary, not a project root.
-    private var fileIndexRoot: String? {
+    private var fileIndexContext: PanelContext? {
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty,
-              let project = manager.selectedProject
+              let context = manager.selectedProject?.panelContext, !context.isRemote
         else { return nil }
-        let root: String?
-        if let session = project.selectedSession {
-            root = project.panelRoot(
-                followingSessionAt: session.currentDirectoryPath,
-                foregroundAt: session.foregroundDirectoryPath
-            ).root
-        } else if let pinned = project.customDirectory,
-                  FileManager.default.fileExists(atPath: pinned) {
-            root = pinned
-        } else {
-            root = nil
-        }
-        guard let root else { return nil }
-
-        let standardizedRoot = URL(fileURLWithPath: root).standardizedFileURL
-        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
-        return standardizedRoot == home ? nil : root
+        return context
     }
 
     private var filtered: [PaletteCommand] {
@@ -409,6 +403,7 @@ struct CommandPaletteView: View {
         _ query: FuzzyQuery,
         buffer: inout ScoringBuffer
     ) -> [PaletteCommand] {
+        guard let indexedTarget, fileIndexContext?.identity == indexedTarget else { return [] }
         var best: [ScoredProjectFile] = []
         best.reserveCapacity(Self.maxFileResults)
         for file in projectFiles {
@@ -438,7 +433,9 @@ struct CommandPaletteView: View {
                 section: .file,
                 searchText: file.relativePath
             ) {
-                manager.openFile(file.absolutePath)
+                guard let project = manager.selectedProject,
+                      project.matchesPanelTarget(indexedTarget) else { return }
+                project.openFile(file.absolutePath)
             }
         }
     }

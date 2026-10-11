@@ -75,7 +75,8 @@ struct ToolPanelView: View {
     @StateObject private var info = SessionInfoModel()
     @State private var applicationIsActive = NSApp.isActive
     /// Which rule produced the current panel root; drives the Files badge.
-    @State private var rootSource = Project.PanelRootSource.shell
+    @State private var rootSource = PanelContext.RootSource.shell
+    @State private var filesTarget: PanelContext.Identity?
     @State private var syncQueue = PanelSyncQueue()
     /// The remote heading. Held here rather than rebuilt, so its state and
     /// its lamp survive every panel switch and poll.
@@ -165,7 +166,12 @@ struct ToolPanelView: View {
                                 from: oldPath, to: newPath, workspace: workspace
                             )
                         },
-                        refreshGitStatus: { git.refresh() }
+                        refreshGitStatus: { git.refresh() },
+                        isCurrentTarget: { [target = filesTarget] in
+                            guard let target else { return false }
+                            return manager.selectedProjectID == project.id
+                                && project.matchesPanelTarget(target)
+                        }
                     )
                 }
             case .git:
@@ -245,18 +251,10 @@ struct ToolPanelView: View {
         .onChange(of: commandCompletionSequences) {
             syncModels()
         }
-        .onChange(of: manager.selectedSession?.id) { syncModels() }
-        .onChange(of: manager.selectedProjectID) { syncModels() }
-        .onChange(of: manager.selectedProject?.sshHost) { syncModels() }
-        // A `cd` in the terminal publishes the new cwd immediately (OSC 7 →
-        // session.workingDirectory); resync at once so automatically rooted
-        // panels follow the terminal without waiting for another event.
-        .onChange(of: manager.selectedSession?.workingDirectory) { syncModels() }
+        .onChange(of: manager.selectedProject?.panelContext?.identity) { syncModels() }
         // A connection appearing, connecting, dying or being replaced changes
         // what the heading says; repaint it without waiting for the next tick.
-        .onChange(of: remoteConnectionToken) { applyRemoteHeading() }
-        // Same for pinning/unpinning the project directory.
-        .onChange(of: manager.selectedProject?.customDirectory) { syncModels() }
+        .onChange(of: remoteConnectionToken) { syncModels() }
         .environment(\.panelFontScale, panelFontScale)
         // Native button and control labels without a designed hierarchy use
         // the configured base size directly.
@@ -267,6 +265,13 @@ struct ToolPanelView: View {
         // Before the queue, not inside it: a refresh over a dead connection
         // waits out its deadlines, and the heading must not wait with it.
         applyRemoteHeading()
+        if panel == .info {
+            info.retarget(
+                to: manager.selectedProject?.infoProcessTarget,
+                backend: manager.selectedProject?.workspaceBackend ?? LocalWorkspaceBackend.shared,
+                shellName: manager.selectedSession?.shellName ?? ""
+            )
+        }
         syncQueue.run { await performSync() }
     }
 
@@ -341,8 +346,6 @@ struct ToolPanelView: View {
            connection.state == .disconnected {
             return
         }
-        let epoch = session.map(workspaceEpoch) ?? context.scope
-
         let cwd = context.cwd
         let backend = context.backend
         // Files and Git anchor to the project directory — pinned when the
@@ -351,19 +354,16 @@ struct ToolPanelView: View {
         // describes the shell itself, showing its live cwd next to that root.
         // An agent that moves to its own worktree changes only its own
         // process directory, so the foreground job's cwd is passed in too.
-        let (root, source) = await project.panelRoot(
-            followingSessionAt: cwd,
-            foregroundAt: context.foreground,
-            backend: backend
-        )
+        let (root, source) = await context.resolvedRoot()
         // The connection may have died while that was in flight; its answer
         // describes a workspace that is no longer the one on screen.
-        guard epoch == (project.selectedSession.map(workspaceEpoch) ?? context.scope),
+        guard project.matchesPanelTarget(context.identity),
               manager.selectedProjectID == project.id else { return }
         if rootSource != source { rootSource = source }
         switch panel {
         case .files:
             await project.fileTree.sync(root: root, backend: backend, scope: context.scope)
+            if project.matchesPanelTarget(context.identity) { filesTarget = context.identity }
         case .git:
             break
         case .info:
@@ -374,9 +374,7 @@ struct ToolPanelView: View {
                 root: project.sshHost == nil ? cwd : root,
                 projectRoot: root, projectRootSource: source,
                 shellName: session?.shellName ?? "",
-                shellPid: project.sshHost == nil && fileActionSession != nil
-                    ? session?.panelShellPid : nil,
-                isRemote: project.workspaceIdentity != nil,
+                target: project.infoProcessTarget,
                 backend: backend
             )
         }
