@@ -297,7 +297,7 @@ final class TerminalManager: nonisolated ObservableObject {
         let alert = NSAlert()
         alert.messageText = String(localized: "Add SSH Files or Folders", table: "Terminal")
         alert.informativeText = String(localized:
-            "Use an SSH host from ~/.ssh/config and one remote path per line. Windows paths such as D:\\\\GitHub\\\\project are accepted.", table: "Terminal")
+            "Use an SSH host from ~/.ssh/config and one remote path per line. Windows paths such as D:\\GitHub\\project are accepted.", table: "Terminal")
         alert.addButton(withTitle: String(localized: "Add", table: "Terminal"))
         alert.addButton(withTitle: String(localized: "Cancel", table: "Terminal"))
 
@@ -309,15 +309,15 @@ final class TerminalManager: nonisolated ObservableObject {
             hosts.stringValue = first
         }
 
-        let paths = NSTextView(frame: .zero)
+        let scroll = NSTextView.scrollableTextView()
+        let paths = scroll.documentView as! NSTextView
         paths.isRichText = false
+        paths.isAutomaticQuoteSubstitutionEnabled = false
+        paths.isAutomaticDashSubstitutionEnabled = false
+        paths.isAutomaticTextReplacementEnabled = false
         paths.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        paths.string = ""
-        let scroll = NSScrollView()
-        scroll.documentView = paths
-        scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
-        scroll.heightAnchor.constraint(equalToConstant: 80).isActive = true
+        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
 
         let stack = NSStackView(views: [
             NSTextField(labelWithString: String(localized: "SSH host", table: "Terminal")),
@@ -327,11 +327,23 @@ final class TerminalManager: nonisolated ObservableObject {
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 6
-        stack.widthAnchor.constraint(equalToConstant: 380).isActive = true
-        hosts.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        scroll.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        alert.accessoryView = stack
+        stack.spacing = 8
+        stack.setCustomSpacing(12, after: hosts)
+
+        // NSAlert sizes an accessory from its frame, not the constraints on its children.
+        // A zero-sized stack lets the form overlap the alert's title and description.
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 214))
+        accessory.addSubview(stack)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: accessory.topAnchor, constant: 8),
+            stack.leadingAnchor.constraint(equalTo: accessory.leadingAnchor, constant: 8),
+            stack.trailingAnchor.constraint(equalTo: accessory.trailingAnchor, constant: -8),
+            stack.bottomAnchor.constraint(equalTo: accessory.bottomAnchor, constant: -8),
+            hosts.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
+        ])
+        alert.accessoryView = accessory
 
         let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard response == .alertFirstButtonReturn, let self else { return }

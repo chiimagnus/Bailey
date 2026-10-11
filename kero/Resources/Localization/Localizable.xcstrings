@@ -41,16 +41,6 @@
         }
       }
     },
-    "Use an SSH host from ~/.ssh/config and one remote path per line. Windows paths such as D:\\GitHub\\project are accepted." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "从 ~/.ssh/config 选择 SSH 主机，每行输入一个远程路径。支持 D:\\GitHub\\project 这样的 Windows 路径。"
-          }
-        }
-      }
-    },
     "" : {
       "shouldTranslate" : false
     },
