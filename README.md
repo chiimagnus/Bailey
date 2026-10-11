@@ -7,13 +7,13 @@ A native terminal workspace for macOS, with projects, SSH, files, Git and diffs.
 - One project list in the left sidebar: add multiple local files or folders with ⇧⌘A
 - Add SSH folders or files by host alias and remote path (including Windows with an MSYS2 shell)
 - Selecting a project controls its Files/Git context, regardless of terminal `cd`
-- Files remembers expanded folders per project and compacts single-child folder chains such as `BinaryTarget / GhosttyKit.xcframework`; Git keeps folder folds per repository when switching
+- Files remembers expanded folders per project; Git keeps folder folds per repository when switching
 - Native macOS terminal tabs and split panes
 - GPU-accelerated terminal powered by Ghostty
 - Local and SSH remote terminal workspaces
 - Files, Git status, commits and editable diffs beside the terminal
-- Files, Git changes/staged changes, and committed files use the same tree interaction and vertical guides; long names scroll inside the row so fixed controls stay visible
-- Files colors Git state in the name: modified yellow, added/untracked green, deleted red, renamed/copied blue, conflict purple, ignored gray
+- Files, Git changes/staged changes, and committed files share Compact Folders, tree rows and vertical guides. Single-child folder chains appear as `parent / child`; folder actions target the real leaf directory. Long names scroll inside the row so fixed controls stay visible
+- All file trees color Git state in the name instead of a status-letter column: modified yellow, added/untracked green, deleted red, renamed/copied blue, conflict purple, ignored gray. Tooltips and accessibility text also identify the status
 - Git changes in a directory tree (default) or flat list, configurable in Settings
 - Browser panes and command palette (coding agents run as ordinary terminal programs)
 

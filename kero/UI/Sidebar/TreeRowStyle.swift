@@ -80,7 +80,9 @@ struct TreeRowSurface<Content: View>: View {
             .onHover { if hoverEnabled { isHovering = $0 } }
             .padding(.horizontal, outerInset)
             .background {
-                if showsGuides { TreeGuideBackground(depth: depth) }
+                if showsGuides {
+                    TreeGuideBackground(depth: depth, leadingInset: outerInset + leadingInset)
+                }
             }
     }
 }
@@ -103,12 +105,13 @@ struct TreeFolderIcon: View {
 /// A zero-spacing LazyVStack makes the full-height rectangles touch exactly.
 struct TreeGuideBackground: View {
     let depth: Int
+    var leadingInset = TreeRowStyle.leadingInset
 
     var body: some View {
         Canvas { context, size in
             guard depth > 0 else { return }
             for level in 0..<depth {
-                let x = TreeRowStyle.leadingInset + TreeRowStyle.iconSize / 2
+                let x = leadingInset + TreeRowStyle.iconSize / 2
                     + CGFloat(level) * TreeRowStyle.indent
                 let line = Path(CGRect(x: x - 0.5, y: 0, width: 1, height: size.height))
                 context.fill(line, with: .color(.primary.opacity(0.18)))
@@ -116,5 +119,112 @@ struct TreeGuideBackground: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+extension TreeDisplayModel.Status {
+    var color: Color {
+        switch self {
+        case .modified: Color(red: 0.82, green: 0.60, blue: 0.13)
+        case .added, .untracked: Color(red: 0.25, green: 0.73, blue: 0.31)
+        case .deleted: Color(red: 1.0, green: 0.48, blue: 0.45)
+        case .renamed, .copied: Color(red: 0.35, green: 0.65, blue: 1.0)
+        case .conflict: Color(red: 0.74, green: 0.55, blue: 1.0)
+        case .ignored: Color.secondary.opacity(0.55)
+        case .changed: .secondary
+        }
+    }
+}
+
+private struct TreeRowLabel: View {
+    let row: TreeDisplayModel.Row
+    let iconPath: String
+    let scale: CGFloat
+    var directory: String? = nil
+
+    var body: some View {
+        HStack(spacing: TreeRowStyle.iconSpacing) {
+            if row.isDirectory {
+                TreeFolderIcon(expanded: row.isExpanded, scale: scale)
+            } else {
+                MaterialFileIconView(path: iconPath, size: TreeRowStyle.iconSize,
+                                     opacity: row.status == .deleted ? 0.6 : 1)
+                    .frame(width: TreeRowStyle.iconSize)
+            }
+            ScrollView(.horizontal) {
+                HStack(spacing: 6) {
+                    Text(row.displayName)
+                        .font(.system(size: TreeRowStyle.fontSize * scale))
+                        .foregroundStyle(row.status?.color
+                            ?? (row.name.hasPrefix(".") ? Color.secondary.opacity(0.55) : .secondary))
+                        .strikethrough(!row.isDirectory && row.status == .deleted)
+                        .fixedSize(horizontal: true, vertical: false)
+                    if let directory, !directory.isEmpty {
+                        Text(directory)
+                            .font(.system(size: 10 * scale))
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, minHeight: 16, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+}
+
+struct TreeFolderRow: View {
+    let row: TreeDisplayModel.Row
+    let scale: CGFloat
+    var leadingInset = TreeRowStyle.contentInset
+    let toggle: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TreeRowSurface(depth: row.depth, scale: scale, focused: focused, leadingInset: leadingInset) { _ in
+            Button(action: toggle) {
+                TreeRowLabel(row: row, iconPath: row.path, scale: scale)
+            }
+            .buttonStyle(.plain)
+            .focused($focused)
+            .help(row.accessibilityLabel + "\n" + row.path)
+            .accessibilityLabel(row.accessibilityLabel)
+            .accessibilityValue(row.isExpanded
+                ? String(localized: "Expanded", table: "Sidebar")
+                : String(localized: "Collapsed", table: "Sidebar"))
+        }
+    }
+}
+
+struct TreeFileRow<Accessory: View>: View {
+    let row: TreeDisplayModel.Row
+    let scale: CGFloat
+    var iconPath: String? = nil
+    var directory: String? = nil
+    var selected = false
+    var leadingInset = TreeRowStyle.contentInset
+    var accessibilityHint = ""
+    let open: () -> Void
+    @ViewBuilder var accessory: (Bool) -> Accessory
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TreeRowSurface(depth: row.depth, scale: scale, selected: selected,
+                       focused: focused, leadingInset: leadingInset) { hovering in
+            HStack(spacing: 2) {
+                Button(action: open) {
+                    TreeRowLabel(row: row, iconPath: iconPath ?? row.path, scale: scale,
+                                 directory: directory)
+                }
+                .buttonStyle(.plain)
+                .focused($focused)
+                .help(row.accessibilityLabel + "\n" + row.path)
+                .accessibilityLabel(row.accessibilityLabel + ", " + row.path)
+                .accessibilityHint(accessibilityHint)
+                accessory(hovering || focused)
+            }
+        }
     }
 }

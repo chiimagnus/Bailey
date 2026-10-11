@@ -47,34 +47,7 @@ final class GitStatusModel: nonisolated ObservableObject {
         var changedRowID: String { "changed/" + path }
     }
 
-    /// Compact Explorer-style decoration for a path in the active repository.
-    /// Files uses the semantic state as its name color and exposes the status
-    /// through accessibility text.
-    nonisolated enum FileDecoration: Equatable, Sendable {
-        case modified
-        case added
-        case untracked
-        case deleted
-        case renamed
-        case copied
-        case conflict
-        case ignored
-
-        /// When a directory contains several changed files, bubble up the
-        /// state that most needs attention.
-        var directoryPriority: Int {
-            switch self {
-            case .conflict: 8
-            case .deleted: 7
-            case .modified: 6
-            case .added: 5
-            case .untracked: 4
-            case .renamed: 3
-            case .copied: 2
-            case .ignored: 1
-            }
-        }
-    }
+    typealias FileDecoration = TreeDisplayModel.Status
 
     nonisolated struct RecentCommit: Identifiable, Equatable, Sendable {
         nonisolated struct FileChange: Identifiable, Equatable, Sendable {

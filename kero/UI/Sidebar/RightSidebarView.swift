@@ -658,6 +658,12 @@ private struct FileTreeRow: View {
         git.fileDecoration(for: item.path, isDirectory: item.isDirectory)
     }
 
+    private var displayRow: TreeDisplayModel.Row {
+        var row = item
+        row.status = gitDecoration
+        return row
+    }
+
     /// Whether this row names a file on another machine. A connection that has
     /// dropped still counts: the path is remote either way, and handing it to
     /// Finder would open whatever sits at the same path locally.
@@ -674,13 +680,19 @@ private struct FileTreeRow: View {
             ) { _ in
                 draftRow
             }
-        } else {
+        } else if isRenaming {
             TreeRowSurface(
                 depth: item.depth, scale: fontScale, selected: isCurrent
             ) { _ in
-                content
+                renameRow
             }
             .contextMenu { rowMenu }
+        } else {
+            semanticRow
+                .contextMenu { rowMenu }
+                .onDrag {
+                    NSItemProvider(object: URL(fileURLWithPath: item.path) as NSURL)
+                }
         }
     }
 
@@ -790,58 +802,15 @@ private struct FileTreeRow: View {
     }
 
     @ViewBuilder
-    private var content: some View {
-        if isRenaming {
-            renameRow
-        } else {
-            rowButton
-        }
-    }
-
-    private var rowButton: some View {
-        Button {
-            if item.isDirectory {
+    private var semanticRow: some View {
+        if item.isDirectory {
+            TreeFolderRow(row: displayRow, scale: fontScale) {
                 Task { await model.toggle(item) }
-            } else {
-                openFile(item.path)
             }
-        } label: {
-            HStack(spacing: TreeRowStyle.iconSpacing) {
-                leadingGlyphs
-                ScrollView(.horizontal) {
-                    Text(item.displayName)
-                        .sidebarFont(size: TreeRowStyle.fontSize)
-                        .foregroundStyle(fileNameColor)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
-                .scrollIndicators(.hidden)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .contentShape(Rectangle())
+        } else {
+            TreeFileRow(row: displayRow, scale: fontScale, selected: isCurrent,
+                        open: { openFile(item.path) }) { _ in EmptyView() }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(fileAccessibilityLabel)
-        .accessibilityValue(item.isDirectory
-            ? (model.isExpanded(item)
-                ? String(localized: "Expanded", table: "Sidebar")
-                : String(localized: "Collapsed", table: "Sidebar"))
-            : "")
-        // Drag a row out as a file URL: onto the terminal (which inserts its
-        // path) or into Finder and other apps. A click still opens/toggles;
-        // the drag only begins once the pointer moves.
-        .onDrag {
-            NSItemProvider(object: URL(fileURLWithPath: item.path) as NSURL)
-        }
-    }
-
-    private var fileNameColor: Color {
-        if let gitDecoration { return gitDecoration.color }
-        return item.name.hasPrefix(".") ? Color.secondary.opacity(0.55) : .secondary
-    }
-
-    private var fileAccessibilityLabel: String {
-        guard let gitDecoration else { return item.displayName }
-        return item.displayName + ", " + gitDecoration.accessibilityName
     }
 
     private var renameRow: some View {
@@ -926,69 +895,7 @@ private struct FileTreeRow: View {
     }
 }
 
-private extension GitStatusModel.FileDecoration {
-    var accessibilityName: String {
-        switch self {
-        case .modified: String(localized: "Modified", table: "Sidebar")
-        case .added: String(localized: "Added", table: "Sidebar")
-        case .untracked: String(localized: "Untracked", table: "Sidebar")
-        case .deleted: String(localized: "Deleted", table: "Sidebar")
-        case .renamed: String(localized: "Renamed", table: "Sidebar")
-        case .copied: String(localized: "Copied", table: "Sidebar")
-        case .conflict: String(localized: "Conflict", table: "Sidebar")
-        case .ignored: String(localized: "Ignored", table: "Sidebar")
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .modified: Color(red: 0.82, green: 0.60, blue: 0.13)
-        case .added, .untracked: Color(red: 0.25, green: 0.73, blue: 0.31)
-        case .deleted: Color(red: 1.0, green: 0.48, blue: 0.45)
-        case .renamed, .copied: Color(red: 0.35, green: 0.65, blue: 1.0)
-        case .conflict: Color(red: 0.74, green: 0.55, blue: 1.0)
-        case .ignored: Color.secondary.opacity(0.55)
-        }
-    }
-}
-
 // MARK: - Git panel
-
-private struct GitChangeFolderRow: View {
-    let name: String
-    let path: String
-    let collapsed: Bool
-    let depth: Int
-    let fontScale: CGFloat
-    let onToggle: () -> Void
-
-    var body: some View {
-        TreeRowSurface(depth: depth, scale: fontScale) { _ in
-            Button(action: onToggle) {
-                HStack(spacing: TreeRowStyle.iconSpacing) {
-                    TreeFolderIcon(expanded: !collapsed, scale: fontScale)
-                    ScrollView(.horizontal) {
-                        Text(name)
-                            .sidebarFont(size: TreeRowStyle.fontSize)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                    .scrollIndicators(.hidden)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(path)
-            .accessibilityLabel(name)
-            .accessibilityValue(
-                collapsed ? String(localized: "Collapsed", table: "Sidebar")
-                    : String(localized: "Expanded", table: "Sidebar")
-            )
-        }
-    }
-}
 
 private struct GitPanel: View {
     @ObservedObject private var settings = AppSettings.shared
@@ -1889,24 +1796,23 @@ private struct GitPanel: View {
         _ entries: [GitStatusModel.Entry], kind: GitEntryRow.Kind
     ) -> some View {
         if settings.gitViewMode == .tree {
-            ForEach(GitChangeTree.rows(entries, section: kind.rawValue, collapsed: collapsedFolders)) { item in
-                switch item.content {
-                case .folder(let path, let name, let isCollapsed):
-                    GitChangeFolderRow(
-                        name: name, path: path, collapsed: isCollapsed,
-                        depth: item.depth, fontScale: sidebarFontScale
-                    ) {
-                        let key = kind.rawValue + ":" + path
-                        model.toggleCollapsedFolder(key)
+            let files = entries.map { entry in
+                TreeDisplayModel.Row(name: entry.fileName, path: entry.path, isDirectory: false,
+                                     status: .init(entryStatus(entry, kind: kind)))
+            }
+            let byPath = Dictionary(entries.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+            ForEach(TreeDisplayModel.pathRows(files, section: kind.rawValue, collapsed: collapsedFolders)) { item in
+                if item.isDirectory {
+                    TreeFolderRow(row: item, scale: sidebarFontScale) {
+                        model.toggleCollapsedFolder(kind.rawValue + ":" + item.path)
                     }
-                case .file(let entry):
-                    row(entry, status: entryStatus(entry, kind: kind), kind: kind,
-                        showDirectory: false, depth: item.depth)
+                } else if let entry = byPath[item.path] {
+                    row(entry, kind: kind, showDirectory: false, displayRow: item)
                 }
             }
         } else {
             ForEach(entries, id: \.path) { entry in
-                row(entry, status: entryStatus(entry, kind: kind), kind: kind)
+                row(entry, kind: kind)
             }
         }
     }
@@ -1950,18 +1856,20 @@ private struct GitPanel: View {
     }
 
     private func row(
-        _ entry: GitStatusModel.Entry, status: Character, kind: GitEntryRow.Kind,
-        showDirectory: Bool = true, depth: Int = 0
+        _ entry: GitStatusModel.Entry, kind: GitEntryRow.Kind,
+        showDirectory: Bool = true, displayRow: TreeDisplayModel.Row? = nil
     ) -> some View {
         let stageTrigger = OperationTrigger.entry(path: entry.path, operation: .stage)
         let unstageTrigger = OperationTrigger.entry(path: entry.path, operation: .unstage)
         let discardTrigger = OperationTrigger.entry(path: entry.path, operation: .discard)
         return GitEntryRow(
             entry: entry,
-            status: status,
+            displayRow: displayRow ?? TreeDisplayModel.Row(
+                name: entry.fileName, path: entry.path, isDirectory: false,
+                status: .init(entryStatus(entry, kind: kind))
+            ),
             kind: kind,
             showDirectory: showDirectory,
-            depth: depth,
             isRemote: remoteName != nil,
             disabled: model.isBusy,
             isStageLoading: operationIsLoading(stageTrigger),
@@ -2529,10 +2437,9 @@ private struct GitEntryRow: View {
     }
 
     let entry: GitStatusModel.Entry
-    let status: Character
+    let displayRow: TreeDisplayModel.Row
     let kind: Kind
     let showDirectory: Bool
-    let depth: Int
     /// Whether this repository is on another machine, where discarding an
     /// untracked or copied file deletes it rather than moving it to the Trash.
     let isRemote: Bool
@@ -2550,59 +2457,22 @@ private struct GitEntryRow: View {
     let copyRelativePath: () -> Void
     let insertInTerminal: (() -> Void)?
 
-    @FocusState private var isFocused: Bool
     @Environment(\.sidebarFontScale) private var fontScale
 
     var body: some View {
-        TreeRowSurface(depth: depth, scale: fontScale, focused: isFocused) { isHovering in
-            HStack(spacing: 2) {
-                Button(action: openDiff) {
-                    HStack(spacing: TreeRowStyle.iconSpacing) {
-                            MaterialFileIconView(
-                            path: absolutePath,
-                            size: TreeRowStyle.iconSize,
-                            opacity: status == "D" ? 0.6 : 1
-                        )
-                        ScrollView(.horizontal) {
-                        HStack(spacing: 6) {
-                            Text(entry.fileName)
-                                .sidebarFont(size: TreeRowStyle.fontSize)
-                                .foregroundStyle(.secondary)
-                                .strikethrough(status == "D")
-                                .fixedSize(horizontal: true, vertical: false)
-                            if showDirectory {
-                                Text(entry.directory)
-                                    .sidebarFont(size: 10)
-                                    .foregroundStyle(.tertiary)
-                                    .fixedSize(horizontal: true, vertical: false)
-                            }
-                        }
-                        }
-                        .scrollIndicators(.hidden)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        Text(String(status))
-                            .sidebarFont(size: 10, weight: .bold, design: .monospaced)
-                            .foregroundStyle(statusColor)
-                            .frame(width: 12)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 16, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .focused($isFocused)
-            .accessibilityLabel(String(localized: "\(entry.fileName), \(statusName)", table: "Sidebar"))
-            .accessibilityHint(kind == .merge
+        TreeFileRow(
+            row: displayRow,
+            scale: fontScale, iconPath: absolutePath,
+            directory: showDirectory ? entry.directory : nil,
+            accessibilityHint: kind == .merge
                 ? String(localized: "Opens conflict changes", table: "Sidebar")
-                : String(localized: "Opens changes", table: "Sidebar"))
-
-                if !disabled || isStageLoading || isUnstageLoading || isDiscardLoading {
-                    hoverActions
-                        .opacity(
-                            isStageLoading || isUnstageLoading || isDiscardLoading
-                                ? 1
-                                : (isHovering || isFocused ? 1 : 0.55)
-                        )
-                }
+                : String(localized: "Opens changes", table: "Sidebar"),
+            open: openDiff
+        ) { active in
+            if !disabled || isStageLoading || isUnstageLoading || isDiscardLoading {
+                hoverActions
+                    .opacity(isStageLoading || isUnstageLoading || isDiscardLoading
+                             ? 1 : (active ? 1 : 0.55))
             }
         }
         .contextMenu { menu }
@@ -2711,19 +2581,6 @@ private struct GitEntryRow: View {
         }
     }
 
-    private var statusName: String {
-        switch status {
-        case "M": return String(localized: "Modified", table: "Sidebar")
-        case "A": return String(localized: "Added", table: "Sidebar")
-        case "?": return String(localized: "Untracked", table: "Sidebar")
-        case "D": return String(localized: "Deleted", table: "Sidebar")
-        case "R": return String(localized: "Renamed", table: "Sidebar")
-        case "C": return String(localized: "Copied", table: "Sidebar")
-        case "U": return String(localized: "Conflict", table: "Sidebar")
-        default: return String(localized: "Changed", table: "Sidebar")
-        }
-    }
-
     private var destructiveMenuTitle: String {
         if entry.isUntracked || entry.isWorktreeCopy {
             return isRemote
@@ -2734,16 +2591,6 @@ private struct GitEntryRow: View {
         return String(localized: "Discard Changes…", table: "Sidebar")
     }
 
-    private var statusColor: Color {
-        switch status {
-        case "M": return Color(red: 0.82, green: 0.60, blue: 0.13)
-        case "A", "?": return Color(red: 0.25, green: 0.73, blue: 0.31)
-        case "D": return Color(red: 1.0, green: 0.48, blue: 0.45)
-        case "R", "C": return Color(red: 0.35, green: 0.65, blue: 1.0)
-        case "U": return Color(red: 0.74, green: 0.55, blue: 1.0)
-        default: return .secondary
-        }
-    }
 }
 
 // MARK: - Info panel

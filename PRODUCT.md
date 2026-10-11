@@ -31,4 +31,4 @@ Do not imitate a web dashboard, add decorative developer-tool chrome, or copy an
 
 ## Accessibility & Inclusion
 
-Follow macOS appearance and interaction conventions. Support keyboard and assistive technologies, label icon-only controls, respect reduced motion, and keep core workflows usable from the minimum supported sidebar width. Files may use filename color for Git state, but the same state must remain available to assistive technology; action-critical Git views keep explicit status text.
+Follow macOS appearance and interaction conventions. Support keyboard and assistive technologies, label icon-only controls, respect reduced motion, and keep core workflows usable from the minimum supported sidebar width. Files and every Git file tree use filename color for Git state; the same state must remain available in tooltips and to assistive technology, without a separate status-letter column.

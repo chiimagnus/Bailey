@@ -10,19 +10,7 @@ import Foundation
 /// Flattened, lazily-expanded view of a directory tree.
 @MainActor
 final class FileTreeModel: nonisolated ObservableObject {
-    struct Item: Identifiable, Equatable {
-        var id: String { path }
-        let name: String
-        let path: String
-        let isDirectory: Bool
-        let depth: Int
-        /// Parent directory names folded into this row (VS Code compact folders).
-        var compactPrefix: [String] = []
-        var displayName: String { (compactPrefix + [name]).joined(separator: " / ") }
-        /// True for the transient inline "new file/folder" input row, which
-        /// has no backing file yet.
-        var isDraft = false
-    }
+    typealias Item = TreeDisplayModel.Row
 
     /// A pending inline "new file/folder": an input row shown inside
     /// `parentDir` until the user names it (Enter) or cancels (Escape/blur).
@@ -312,12 +300,16 @@ final class FileTreeModel: nonisolated ObservableObject {
             let backend = self.backend
             let expanded = self.expanded
             let draft = self.draft
-            if let out = await children(
-                of: path, depth: 0, backend: backend,
-                expanded: expanded, draft: draft
-            ),
-               path == rootPath, scope == workspaceScope, out != items {
-                items = out
+            // Live directory sources can contain symlink cycles; Git's finite paths cannot.
+            var traversal = TreeDisplayModel.Traversal(root: path, directoryDepthLimit: 32) {
+                expanded.contains($0)
+            }
+            while let directory = traversal.nextDirectory() {
+                traversal.receive(await children(of: directory, backend: backend, draft: draft))
+            }
+            if traversal.rootReadable,
+               path == rootPath, scope == workspaceScope, traversal.rows != items {
+                items = traversal.rows
             }
         } while rebuildPending
         isRebuilding = false
@@ -327,78 +319,29 @@ final class FileTreeModel: nonisolated ObservableObject {
     /// which the caller treats as "keep what is on screen" rather than "this
     /// directory is empty".
     private func children(
-        of dir: String, depth: Int, backend: WorkspaceBackend,
-        expanded: Set<String>, draft: Draft?
+        of dir: String, backend: WorkspaceBackend, draft: Draft?
     ) async -> [Item]? {
-        // Guard against runaway recursion through symlink cycles.
-        guard depth < 32 else { return [] }
         var out: [Item] = []
         // Show the inline new-file/folder input at the top of its folder.
         if let draft, draft.parentDir == dir {
             out.append(
                 Item(
                     name: "", path: dir + "/\u{1}draft",
-                    isDirectory: draft.isDirectory, depth: depth, isDraft: true
+                    isDirectory: draft.isDirectory, isDraft: true
                 )
             )
         }
         guard let entries = try? await backend.list(directory: dir) else { return nil }
 
-        let rows = entries
+        out += entries
             .filter { $0.name != ".git" }
             .map { entry in
                 Item(
                     name: entry.name,
                     path: (dir as NSString).appendingPathComponent(entry.name),
-                    isDirectory: entry.isDirectory,
-                    depth: depth
+                    isDirectory: entry.isDirectory
                 )
             }
-            .sorted { a, b in
-                if a.isDirectory != b.isDirectory { return a.isDirectory }
-                return a.name.localizedStandardCompare(b.name) == .orderedAscending
-            }
-
-        for row in rows {
-            let visibleRow = row.isDirectory
-                ? await compactDirectory(row, backend: backend, draft: draft)
-                : row
-            out.append(visibleRow)
-            if visibleRow.isDirectory, expanded.contains(visibleRow.path),
-               let descendants = await children(
-                   of: visibleRow.path, depth: depth + 1,
-                   backend: backend, expanded: expanded, draft: draft
-               ) {
-                out.append(contentsOf: descendants)
-            }
-        }
         return out
-    }
-
-    /// Fold a chain of directories with exactly one directory child into one row.
-    /// Stop at a directory that contains a draft so its inline input remains visible.
-    private func compactDirectory(
-        _ item: Item, backend: WorkspaceBackend, draft: Draft?
-    ) async -> Item {
-        var leaf = item
-        var prefix = item.compactPrefix
-        var traversed = 0
-
-        while traversed < 32, draft?.parentDir != leaf.path {
-            guard let entries = try? await backend.list(directory: leaf.path) else { break }
-            let visible = entries.filter { $0.name != ".git" }
-            guard visible.count == 1, let child = visible.first, child.isDirectory else { break }
-
-            prefix.append(leaf.name)
-            leaf = Item(
-                name: child.name,
-                path: (leaf.path as NSString).appendingPathComponent(child.name),
-                isDirectory: true,
-                depth: item.depth,
-                compactPrefix: prefix
-            )
-            traversed += 1
-        }
-        return leaf
     }
 }

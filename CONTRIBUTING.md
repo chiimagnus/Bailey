@@ -22,7 +22,8 @@ To check Compact Folders and Files expansion persistence across project/root cha
 
 ```sh
 xcrun swiftc -swift-version 5 -o build/check-file-tree-navigation \
-  kero/Workspace/WorkspaceBackend.swift kero/Workspace/FileTreeModel.swift \
+  kero/Workspace/WorkspaceBackend.swift kero/Workspace/TreeDisplayModel.swift \
+  kero/Workspace/FileTreeModel.swift \
   scripts/check-file-tree-navigation.swift && build/check-file-tree-navigation
 ```
 
@@ -34,7 +35,7 @@ This is for local use, not distribution or notarization.
 
 Every code change ends with a signed Debug build installed at `/Applications/Kero.app`, followed by a real-app check of the changed behavior. Do not replace Kero while it owns active terminal child processes; after relaunch, confirm existing projects and sessions restore.
 
-For Files/Git tree changes, check Files, working/staged Git, and committed Git together: hover and selection geometry stay aligned, long names scroll without moving fixed actions, and Compact Folders open the real leaf directory. The regression script above covers tree-model behavior; it does not replace visual interaction checks.
+For Files/Git tree changes, check Files, working/staged Git, and committed Git together: hover and selection geometry stay aligned, long names scroll without moving fixed actions, Compact Folders open the real leaf directory, and filenames share status colors without a separate status-letter column. The regression script above covers the shared display model and real filesystem operations; it does not replace visual interaction checks.
 
 Open `kero.xcodeproj` and press **Cmd+B** for normal development. If only
 the Xcode beta is installed, set

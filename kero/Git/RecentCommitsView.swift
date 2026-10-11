@@ -6,8 +6,7 @@
 import AppKit
 import SwiftUI
 
-/// One SwiftUI hierarchy for committed paths and worktree paths. The graph
-/// occupies its own leading gutter; folder icons use TreeFolderIcon directly.
+/// Commit history decorates the shared tree rows with its own graph gutter.
 struct RecentCommitsView: View {
     @Binding private var expandedCommitIDs: Set<String>
     @Binding private var collapsedFolders: Set<String>
@@ -127,7 +126,7 @@ struct RecentCommitsView: View {
             }
         }
         .background {
-            CommitTreeRails(depth: 0, isCommit: true, startsAtCenter: isFirst,
+            CommitTreeRails(isCommit: true, startsAtCenter: isFirst,
                             endsAtCenter: !continuesBelow, expanded: expanded)
         }
     }
@@ -143,124 +142,68 @@ struct RecentCommitsView: View {
     @ViewBuilder
     private func commitFiles(_ commit: GitStatusModel.RecentCommit, isLast: Bool) -> some View {
         if commit.files.isEmpty {
-            fileRow(depth: 0, continuesBelow: !isLast, hoverEnabled: false) {
+            TreeRowSurface(depth: 0, scale: fontScale, hoverEnabled: false, leadingInset: 39) { _ in
                 Text(String(localized: "No changed files", table: "Git"))
                     .font(.system(size: 9.5 * fontScale))
                     .foregroundStyle(.tertiary)
             }
+            .background { fileRails(continuesBelow: !isLast) }
         } else if viewMode == .tree {
             let section = "commit:" + commit.hash
             let byPath = Dictionary(commit.files.map { ($0.path, $0) },
                                     uniquingKeysWith: { first, _ in first })
-            let nodes = GitChangeTree.pathRows(commit.files.map(\.path),
-                                               section: section, collapsed: collapsedFolders)
-            ForEach(Array(nodes.indices), id: \.self) { index in
-                let node = nodes[index]
+            let nodes = TreeDisplayModel.pathRows(commit.files.map(displayRow),
+                                                  section: section, collapsed: collapsedFolders)
+            ForEach(Array(nodes.enumerated()), id: \.element.id) { index, node in
                 let continues = index < nodes.count - 1 || !isLast
-                switch node.content {
-                case .folder(let path, let name, let collapsed):
-                    fileRow(depth: node.depth, continuesBelow: continues) {
-                        Button {
-                            let key = section + ":" + path
-                            if !collapsedFolders.insert(key).inserted { collapsedFolders.remove(key) }
-                        } label: {
-                            HStack(spacing: TreeRowStyle.iconSpacing) {
-                                TreeFolderIcon(expanded: !collapsed, scale: fontScale)
-                                ScrollView(.horizontal) {
-                                    Text(name)
-                                        .font(.system(size: TreeRowStyle.fontSize * fontScale))
-                                        .foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: true, vertical: false)
-                                }
-                                .scrollIndicators(.hidden)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help(path)
-                        .accessibilityLabel(name)
-                        .accessibilityValue(collapsed
-                            ? String(localized: "Collapsed", table: "Git")
-                            : String(localized: "Expanded", table: "Git"))
-                        .contextMenu {
-                            Button(String(localized: "Copy Relative Path", table: "Git")) { copy(path) }
-                        }
+                if node.isDirectory {
+                    TreeFolderRow(row: node, scale: fontScale, leadingInset: 39) {
+                        let key = section + ":" + node.path
+                        if !collapsedFolders.insert(key).inserted { collapsedFolders.remove(key) }
                     }
-                case .file(let path):
-                    if let file = byPath[path] {
-                        fileRow(depth: node.depth, continuesBelow: continues) {
-                            changedFile(file, in: commit, showDirectory: false)
-                        }
+                    .background { fileRails(continuesBelow: continues) }
+                    .contextMenu {
+                        Button(String(localized: "Copy Relative Path", table: "Git")) { copy(node.path) }
                     }
+                } else if let file = byPath[node.path] {
+                    changedFile(file, row: node, in: commit, showDirectory: false)
+                        .background { fileRails(continuesBelow: continues) }
                 }
             }
         } else {
             ForEach(Array(commit.files.indices), id: \.self) { index in
                 let file = commit.files[index]
-                fileRow(depth: 0, continuesBelow: index < commit.files.count - 1 || !isLast) {
-                    changedFile(file, in: commit, showDirectory: true)
-                }
+                changedFile(file, row: displayRow(file), in: commit, showDirectory: true)
+                    .background {
+                        fileRails(continuesBelow: index < commit.files.count - 1 || !isLast)
+                    }
             }
         }
     }
 
     private func changedFile(
         _ file: GitStatusModel.RecentCommit.FileChange,
+        row: TreeDisplayModel.Row,
         in commit: GitStatusModel.RecentCommit, showDirectory: Bool
     ) -> some View {
-        Button { openDiff(commit, file) } label: {
-            HStack(spacing: TreeRowStyle.iconSpacing) {
-                MaterialFileIconView(path: file.path, size: TreeRowStyle.iconSize,
-                                     opacity: file.status == "D" ? 0.6 : 1)
-                ScrollView(.horizontal) {
-                    HStack(spacing: 6) {
-                        Text(file.fileName)
-                            .font(.system(size: TreeRowStyle.fontSize * fontScale))
-                            .foregroundStyle(.secondary)
-                            .strikethrough(file.status == "D")
-                            .fixedSize(horizontal: true, vertical: false)
-                        if showDirectory && !file.directory.isEmpty {
-                            Text(file.directory)
-                                .font(.system(size: 9.5 * fontScale))
-                                .foregroundStyle(.tertiary)
-                                .fixedSize(horizontal: true, vertical: false)
-                        }
-                    }
-                }
-                .scrollIndicators(.hidden)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Text(String(file.status))
-                    .font(.system(size: 9.5 * fontScale, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color(nsColor: statusColor(for: file.status)))
-                    .frame(width: 18)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(file.path)
-        .accessibilityLabel("\(file.fileName), \(statusName(for: file.status)), \(file.path)")
+        TreeFileRow(row: row, scale: fontScale,
+                    directory: showDirectory ? file.directory : nil,
+                    leadingInset: 39,
+                    accessibilityHint: String(localized: "Opens changes", table: "Sidebar"),
+                    open: { openDiff(commit, file) }) { _ in EmptyView() }
         .contextMenu {
             Button(String(localized: "Copy Relative Path", table: "Git")) { copy(file.path) }
         }
     }
 
-    private func fileRow<Content: View>(
-        depth: Int, continuesBelow: Bool, hoverEnabled: Bool = true,
-        @ViewBuilder content: @escaping () -> Content
-    ) -> some View {
-        TreeRowSurface(
-            depth: depth, scale: fontScale, hoverEnabled: hoverEnabled,
-            leadingInset: 39, trailingInset: TreeRowStyle.contentInset,
-            showsGuides: false
-        ) { _ in
-            content()
-        }
-        .background {
-            CommitTreeRails(depth: depth, isCommit: false,
-                            startsAtCenter: false, endsAtCenter: !continuesBelow,
-                            expanded: false)
-        }
+    private func displayRow(_ file: GitStatusModel.RecentCommit.FileChange) -> TreeDisplayModel.Row {
+        TreeDisplayModel.Row(name: file.fileName, path: file.path, isDirectory: false,
+                             status: .init(file.status))
+    }
+
+    private func fileRails(continuesBelow: Bool) -> some View {
+        CommitTreeRails(isCommit: false, startsAtCenter: false,
+                        endsAtCenter: !continuesBelow, expanded: false)
     }
 
     private func copy(_ text: String) {
@@ -271,7 +214,6 @@ struct RecentCommitsView: View {
 
 /// Continuous graph and hierarchy lines are painted across the entire SwiftUI row.
 private struct CommitTreeRails: View {
-    let depth: Int
     let isCommit: Bool
     let startsAtCenter: Bool
     let endsAtCenter: Bool
@@ -293,12 +235,6 @@ private struct CommitTreeRails: View {
             } else {
                 context.fill(Path(CGRect(x: 34.5, y: 0, width: 1, height: size.height)),
                              with: .color(.primary.opacity(0.18)))
-                for level in 0..<depth {
-                    let x = 45 + TreeRowStyle.iconSize / 2
-                        + CGFloat(level) * TreeRowStyle.indent
-                    context.fill(Path(CGRect(x: x-0.5, y: 0, width: 1, height: size.height)),
-                                 with: .color(.primary.opacity(0.18)))
-                }
             }
         }
         .allowsHitTesting(false)
@@ -306,25 +242,3 @@ private struct CommitTreeRails: View {
     }
 }
 
-private func statusName(for status: Character) -> String {
-    switch status {
-    case "M": String(localized: "Modified", table: "Git")
-    case "A": String(localized: "Added", table: "Git")
-    case "D": String(localized: "Deleted", table: "Git")
-    case "R": String(localized: "Renamed", table: "Git")
-    case "C": String(localized: "Copied", table: "Git")
-    case "U": String(localized: "Conflict", table: "Git")
-    default: String(localized: "Changed", table: "Git")
-    }
-}
-
-private func statusColor(for status: Character) -> NSColor {
-    switch status {
-    case "M": NSColor(srgbRed: 0.82, green: 0.60, blue: 0.13, alpha: 1)
-    case "A": NSColor(srgbRed: 0.25, green: 0.73, blue: 0.31, alpha: 1)
-    case "D": NSColor(srgbRed: 1.0, green: 0.48, blue: 0.45, alpha: 1)
-    case "R", "C": NSColor(srgbRed: 0.35, green: 0.65, blue: 1.0, alpha: 1)
-    case "U": NSColor(srgbRed: 0.74, green: 0.55, blue: 1.0, alpha: 1)
-    default: .secondaryLabelColor
-    }
-}
