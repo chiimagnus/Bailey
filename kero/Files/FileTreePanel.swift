@@ -189,18 +189,26 @@ private struct FileTreeRow: View {
         }
         if item.isDirectory {
             Button(String(localized: "cd Here", table: "Sidebar")) {
+                guard isCurrentTarget() else { return }
                 session?.sendCommand("cd " + shellQuote(item.path) + "\n")
             }
             Divider()
             Button(String(localized: "New File…", table: "Sidebar")) {
-                Task { await model.beginNewFile(in: item.path) }
+                Task {
+                    guard isCurrentTarget() else { return }
+                    await model.beginNewFile(in: item.path)
+                }
             }
             Button(String(localized: "New Folder…", table: "Sidebar")) {
-                Task { await model.beginNewFolder(in: item.path) }
+                Task {
+                    guard isCurrentTarget() else { return }
+                    await model.beginNewFolder(in: item.path)
+                }
             }
         }
         Divider()
         Button(String(localized: "Rename", table: "Sidebar")) {
+            guard isCurrentTarget() else { return }
             model.beginRename(item)
         }
         if isRemote {
@@ -247,10 +255,12 @@ private struct FileTreeRow: View {
     /// app to follow it in any open tabs. Guarded by `isRenaming` so the
     /// commit-on-blur that fires right after Enter/Escape is a no-op.
     private func commitRename() {
+        guard isCurrentTarget() else { return }
         guard isRenaming else { return }
         let oldPath = item.path
         let newName = editingName
         Task {
+            guard isCurrentTarget() else { return }
             if let newPath = await model.rename(item, to: newName) {
                 onRename(oldPath, newPath)
                 refreshGitStatus()
