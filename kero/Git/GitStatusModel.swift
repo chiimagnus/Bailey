@@ -40,11 +40,6 @@ final class GitStatusModel: nonisolated ObservableObject {
         var isWorktreeRename: Bool { unstaged == "R" && origPath != nil }
         var isWorktreeCopy: Bool { unstaged == "C" && origPath != nil }
 
-        // A file can sit in two sections at once (for example, "MM"). Rows in
-        // the same lazy stack need distinct identities or SwiftUI drops one.
-        var mergeRowID: String { "merge/" + path }
-        var stagedRowID: String { "staged/" + path }
-        var changedRowID: String { "changed/" + path }
     }
 
     typealias FileDecoration = TreeDisplayModel.Status
@@ -95,7 +90,6 @@ final class GitStatusModel: nonisolated ObservableObject {
         var finishedAt: Date?
 
         var isRunning: Bool { state == .running }
-        var isSuccess: Bool { state == .succeeded }
 
         var statusLabel: String {
             switch state {
@@ -157,6 +151,20 @@ final class GitStatusModel: nonisolated ObservableObject {
     private var workspaceScope = "local"
     var currentScope: String { workspaceScope }
     private var scopedRoot: String { workspaceScope + "\u{0}" + rootPath }
+    @Published private var commitMessagesByRepository: [String: String] = [:]
+
+    private var commitDraftKey: String? {
+        guard isRepo, !repositoryIdentity.isEmpty else { return nil }
+        return workspaceScope + "\u{0}" + repositoryIdentity
+    }
+
+    var commitMessage: String {
+        get { commitDraftKey.flatMap { commitMessagesByRepository[$0] } ?? "" }
+        set {
+            guard let key = commitDraftKey else { return }
+            commitMessagesByRepository[key] = newValue
+        }
+    }
     /// Restores a previously resolved directory immediately when switching
     /// tabs. Without this, every return to a repository clears `isRepo` until
     /// the asynchronous Git refresh finishes, briefly removing the toolbar
@@ -251,8 +259,7 @@ final class GitStatusModel: nonisolated ObservableObject {
             .max { $0.directoryPriority < $1.directoryPriority }
     }
 
-    /// The workspace Git runs on. Local unless a session hands over a remote
-    /// one; nothing selects a remote backend yet.
+    /// The workspace selected by the project's current panel context.
     private var backend: WorkspaceBackend = LocalWorkspaceBackend.shared
 
     /// The backend is optional rather than defaulted to the shared local one:
@@ -503,16 +510,15 @@ final class GitStatusModel: nonisolated ObservableObject {
     func commit(
         message: String,
         includeAll: Bool,
-        amend: Bool = false,
-        completion: (@MainActor (Bool) -> Void)? = nil
+        amend: Bool = false
     ) {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            failImmediately(String(localized: "Enter a commit message", table: "Git"), completion: completion)
+            failImmediately(String(localized: "Enter a commit message", table: "Git"))
             return
         }
         guard includeAll || !stagedEntries.isEmpty || amend else {
-            failImmediately(String(localized: "Stage changes before committing", table: "Git"), completion: completion)
+            failImmediately(String(localized: "Stage changes before committing", table: "Git"))
             return
         }
 
@@ -527,7 +533,13 @@ final class GitStatusModel: nonisolated ObservableObject {
             : (includeAll
                 ? String(localized: "Stage all and commit", table: "Git")
                 : String(localized: "Commit staged changes", table: "Git"))
-        perform(label: label, commands: commands, completion: completion)
+        let draftKey = commitDraftKey
+        perform(label: label, commands: commands) { [weak self] success in
+            if success, let self, let draftKey,
+               self.commitMessagesByRepository[draftKey] == message {
+                self.commitMessagesByRepository[draftKey] = ""
+            }
+        }
     }
 
     func fetch() {
@@ -1069,15 +1081,13 @@ final class GitStatusModel: nonisolated ObservableObject {
         lineDeletions = result.lineDeletions
         topLevel = result.topLevel
         repositoryIdentity = result.topLevel
-        if result.loadedDetails {
-            branches = result.branches
-            defaultBranch = result.defaultBranch
-            remotes = result.remotes
-            recentCommits = result.recentCommits
-            hasMoreRecentCommits = result.hasMoreRecentCommits
-            repositoryOperation = result.repositoryOperation
-            stashCount = result.stashCount
-        }
+        branches = result.branches
+        defaultBranch = result.defaultBranch
+        remotes = result.remotes
+        recentCommits = result.recentCommits
+        hasMoreRecentCommits = result.hasMoreRecentCommits
+        repositoryOperation = result.repositoryOperation
+        stashCount = result.stashCount
 
         let entries = result.entries.map { entry in
             var entry = entry
@@ -1128,7 +1138,6 @@ final class GitStatusModel: nonisolated ObservableObject {
         var hasMoreRecentCommits = false
         var repositoryOperation: String?
         var stashCount = 0
-        var loadedDetails = false
     }
 
     /// Runs Git while draining stdout and stderr concurrently. Dedicated
@@ -1375,7 +1384,6 @@ final class GitStatusModel: nonisolated ObservableObject {
             backend: backend
         )
 
-        result.loadedDetails = true
         let repoRoot = resolvedRoot
 
         let refs = await statusGit(

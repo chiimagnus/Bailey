@@ -46,6 +46,15 @@ xcrun swiftc -swift-version 5 -o build/check-file-tree-navigation \
   scripts/check-file-tree-navigation.swift && build/check-file-tree-navigation
 ```
 
+涉及 Git 操作或提交草稿时，运行独立临时仓库检查（不修改用户仓库）：
+
+```sh
+xcrun swiftc -swift-version 5 -o build/check-git-panel-state \
+  kero/Workspace/WorkspaceBackend.swift kero/Remote/RemoteCommands.swift \
+  kero/Shared/Tree/TreeDisplayModel.swift kero/Git/GitStatusModel.swift \
+  scripts/check-git-panel-state.swift && build/check-git-panel-state
+```
+
 涉及行布局、点击或按钮时，再运行原生鼠标事件检查：
 
 ```sh
