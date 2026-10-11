@@ -16,6 +16,9 @@ final class FileTreeModel: nonisolated ObservableObject {
         let path: String
         let isDirectory: Bool
         let depth: Int
+        /// Parent directory names folded into this row (VS Code compact folders).
+        var compactPrefix: [String] = []
+        var displayName: String { (compactPrefix + [name]).joined(separator: " / ") }
         /// True for the transient inline "new file/folder" input row, which
         /// has no backing file yet.
         var isDraft = false
@@ -357,15 +360,45 @@ final class FileTreeModel: nonisolated ObservableObject {
             }
 
         for row in rows {
-            out.append(row)
-            if row.isDirectory, expanded.contains(row.path),
+            let visibleRow = row.isDirectory
+                ? await compactDirectory(row, backend: backend, draft: draft)
+                : row
+            out.append(visibleRow)
+            if visibleRow.isDirectory, expanded.contains(visibleRow.path),
                let descendants = await children(
-                   of: row.path, depth: depth + 1,
+                   of: visibleRow.path, depth: depth + 1,
                    backend: backend, expanded: expanded, draft: draft
                ) {
                 out.append(contentsOf: descendants)
             }
         }
         return out
+    }
+
+    /// Fold a chain of directories with exactly one directory child into one row.
+    /// Stop at a directory that contains a draft so its inline input remains visible.
+    private func compactDirectory(
+        _ item: Item, backend: WorkspaceBackend, draft: Draft?
+    ) async -> Item {
+        var leaf = item
+        var prefix = item.compactPrefix
+        var traversed = 0
+
+        while traversed < 32, draft?.parentDir != leaf.path {
+            guard let entries = try? await backend.list(directory: leaf.path) else { break }
+            let visible = entries.filter { $0.name != ".git" }
+            guard visible.count == 1, let child = visible.first, child.isDirectory else { break }
+
+            prefix.append(leaf.name)
+            leaf = Item(
+                name: child.name,
+                path: (leaf.path as NSString).appendingPathComponent(child.name),
+                isDirectory: true,
+                depth: item.depth,
+                compactPrefix: prefix
+            )
+            traversed += 1
+        }
+        return leaf
     }
 }

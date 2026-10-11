@@ -809,7 +809,7 @@ private struct FileTreeRow: View {
             HStack(spacing: TreeRowStyle.iconSpacing) {
                 leadingGlyphs
                 ScrollView(.horizontal) {
-                    Text(item.name)
+                    Text(item.displayName)
                         .sidebarFont(size: TreeRowStyle.fontSize)
                         .foregroundStyle(fileNameColor)
                         .fixedSize(horizontal: true, vertical: false)
@@ -845,13 +845,19 @@ private struct FileTreeRow: View {
     }
 
     private var fileAccessibilityLabel: String {
-        guard let gitDecoration else { return item.name }
-        return item.name + ", " + gitDecoration.accessibilityName
+        guard let gitDecoration else { return item.displayName }
+        return item.displayName + ", " + gitDecoration.accessibilityName
     }
 
     private var renameRow: some View {
         HStack(spacing: TreeRowStyle.iconSpacing) {
             leadingGlyphs
+            if !item.compactPrefix.isEmpty {
+                Text(item.compactPrefix.joined(separator: " / ") + " /")
+                    .sidebarFont(size: TreeRowStyle.fontSize)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
             nameField(String(localized: "Name", table: "Sidebar"))
                 .onSubmit { commitRename() }
                 .onKeyPress(.escape) { model.cancelRename(); return .handled }

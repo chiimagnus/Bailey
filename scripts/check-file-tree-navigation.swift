@@ -35,33 +35,33 @@ enum FileTreeNavigationCheck {
         let first = FileTreeModel()
         let second = FileTreeModel()
         await first.sync(root: a.path, backend: backend)
-        let directory = first.items.first { $0.path == nested.deletingLastPathComponent().path }!
-        await first.toggle(directory)
-        let inner = first.items.first { $0.path == nested.path }!
-        await first.toggle(inner)
+        let compact = first.items.first { $0.path == nested.path }!
+        assert(compact.displayName == "dir / inner")
+        assert(compact.depth == 0)
+        await first.toggle(compact)
         assert(first.items.contains { $0.path == original })
 
         await second.sync(root: b.path, backend: backend)
         await second.toggle(second.items.first { $0.path == other.path }!)
         await first.sync(root: a.path, backend: backend)
-        assert(first.isExpanded(directory) && first.isExpanded(inner))
+        assert(first.isExpanded(compact))
         assert(second.items.contains { $0.path == other.appendingPathComponent("b.swift").path })
 
         await first.sync(root: b.path, backend: backend)
-        assert(!first.isExpanded(directory))
+        assert(!first.isExpanded(compact))
         await first.sync(root: a.path, backend: backend)
-        assert(first.isExpanded(directory) && first.isExpanded(inner))
+        assert(first.isExpanded(compact))
 
         await first.sync(root: a.path, backend: backend, scope: "ssh:fixture")
-        assert(!first.isExpanded(directory))
+        assert(!first.isExpanded(compact))
         await first.sync(root: a.path, backend: backend, scope: "local")
-        assert(first.isExpanded(directory) && first.isExpanded(inner))
+        assert(first.isExpanded(compact))
 
         let added = nested.appendingPathComponent("new.swift").path
         try Data().write(to: URL(fileURLWithPath: added))
         await first.sync(root: a.path, backend: backend)
         assert(first.items.contains { $0.path == added })
-        assert(first.isExpanded(directory) && first.isExpanded(inner))
+        assert(first.isExpanded(compact))
 
         let emptyItem = first.items.first { $0.path == empty.path }!
         let before = first.items
@@ -71,6 +71,6 @@ enum FileTreeNavigationCheck {
         assert(first.isExpanded(emptyItem) && first.items == before)
         assert(notifications > 0)
         withExtendedLifetime(observation) {}
-        print("PASS: project isolation, root return, scope separation, live refresh, empty folder notification")
+        print("PASS: compact folders, project isolation, root return, scope separation, live refresh, empty folder notification")
     }
 }
