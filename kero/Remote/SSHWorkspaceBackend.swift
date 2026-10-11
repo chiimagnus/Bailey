@@ -233,26 +233,8 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
     }
 }
 
-/// Runs commands over an ssh control socket somebody else opened.
-///
-/// `BatchMode=yes` keeps a stalled connection from stopping on a prompt no one
-/// can answer; the multiplexed channel needs no authentication of its own.
-nonisolated struct ProcessRemoteCommandRunner: RemoteCommandRunner {
-    let controlSocket: String
-    let destination: String
-    var sshPath = "/usr/bin/ssh"
-
-    func run(
-        _ argv: [String], stdin: Data?, timeout: TimeInterval
-    ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
-        let arguments =
-            ["-S", controlSocket, "-o", "BatchMode=yes", destination, "--"] + argv
-        return try await Task.detached(priority: .utility) {
-            try Self.launch(
-                sshPath: sshPath, arguments: arguments, stdin: stdin, timeout: timeout
-            )
-        }.value
-    }
+/// Shared subprocess execution for independent SSH workspace commands.
+nonisolated enum ProcessRemoteCommandRunner {
 
     /// Both pipes are drained on their own threads: a command that fills one
     /// while we wait on the other would otherwise never finish.

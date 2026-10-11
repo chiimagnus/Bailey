@@ -1,7 +1,5 @@
 import Foundation
 
-struct TerminalSessionLocation { let remoteConnection: RemoteConnection? }
-@MainActor struct TerminalSession { let location: TerminalSessionLocation }
 
 actor DelayedWorkspace: WorkspaceBackend {
     let name: String

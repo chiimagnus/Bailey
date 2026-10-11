@@ -49,7 +49,8 @@ xcrun swiftc -swift-version 5 -o build/check-session-snapshot \
 
 ```sh
 xcrun swiftc -swift-version 5 -o build/check-file-tree-navigation \
-  kero/Workspace/WorkspaceBackend.swift kero/Shared/Tree/TreeDisplayModel.swift \
+  kero/Workspace/WorkspaceBackend.swift kero/Workspace/LocalWorkspaceBackend.swift \
+  kero/Shared/Tree/TreeDisplayModel.swift \
   kero/Files/FileTreeModel.swift \
   scripts/check-file-tree-navigation.swift && build/check-file-tree-navigation
 ```
@@ -66,7 +67,8 @@ xcrun swiftc -swift-version 5 -o build/check-settings \
 
 ```sh
 xcrun swiftc -swift-version 5 -o build/check-git-panel-state \
-  kero/Workspace/WorkspaceBackend.swift kero/Remote/RemoteCommands.swift \
+  kero/Workspace/WorkspaceBackend.swift kero/Workspace/LocalWorkspaceBackend.swift \
+  kero/Remote/RemoteCommands.swift \
   kero/Shared/Tree/TreeDisplayModel.swift kero/Git/GitStatusModel.swift \
   scripts/check-git-panel-state.swift && build/check-git-panel-state
 ```
@@ -75,10 +77,12 @@ xcrun swiftc -swift-version 5 -o build/check-git-panel-state \
 
 ```sh
 xcrun swiftc -swift-version 5 -o build/check-remote-commands \
-  kero/Workspace/WorkspaceBackend.swift kero/Remote/RemoteCommands.swift \
+  kero/Workspace/WorkspaceBackend.swift kero/Workspace/LocalWorkspaceBackend.swift \
+  kero/Remote/RemoteCommands.swift \
   scripts/check-remote-commands.swift && build/check-remote-commands
 xcrun swiftc -swift-version 5 -o build/check-remote-lifetime \
-  kero/Workspace/WorkspaceBackend.swift kero/Remote/RemoteCommands.swift \
+  kero/Workspace/WorkspaceBackend.swift kero/Workspace/LocalWorkspaceBackend.swift \
+  kero/Remote/RemoteCommands.swift \
   kero/Remote/SSHWorkspaceBackend.swift kero/Remote/RemoteConnection.swift \
   kero/Remote/PortForwardController.swift scripts/check-remote-lifetime.swift \
   && build/check-remote-lifetime
@@ -88,7 +92,8 @@ xcrun swiftc -swift-version 5 -o build/check-remote-lifetime \
 
 ```sh
 xcrun swiftc -swift-version 5 -o build/check-panel-targets \
-  kero/Workspace/WorkspaceBackend.swift kero/Workspace/PanelContext.swift \
+  kero/Workspace/WorkspaceBackend.swift kero/Workspace/LocalWorkspaceBackend.swift \
+  kero/Workspace/PanelContext.swift \
   kero/Remote/RemoteCommands.swift kero/Remote/SSHWorkspaceBackend.swift \
   kero/Remote/RemoteConnection.swift kero/Remote/PortForwardController.swift \
   kero/Shared/Tree/TreeDisplayModel.swift kero/Files/FileTreeModel.swift \

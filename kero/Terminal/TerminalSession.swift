@@ -8,6 +8,15 @@ import Combine
 import Darwin
 import Foundation
 
+extension TerminalSession {
+    /// Which workspace a tab opened from this session belongs to. Nil is this
+    /// Mac, and two machines are different workspaces even at the same path —
+    /// which is what keeps a remote `/etc/hosts` from reusing the local tab.
+    var workspaceIdentity: String? {
+        location.remoteConnection?.workspaceIdentity
+    }
+}
+
 /// One long-lived terminal process rendered by one terminal surface. Normally
 /// that process is the user's login shell; an SSH project launches its host
 /// command instead. SwiftUI only reparents the same surface, so

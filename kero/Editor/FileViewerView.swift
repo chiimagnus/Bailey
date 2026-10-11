@@ -79,16 +79,14 @@ final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
 
     init(
         path: String,
-        session: TerminalSession? = nil,
-        backend: WorkspaceBackend? = nil,
-        workspaceIdentity: String? = nil
+        backend: WorkspaceBackend,
+        workspaceIdentity: String?
     ) {
         self.path = path
         // Files opened from a remote session keep reading and writing over
         // that connection even while the panels follow another session.
-        let backend = backend ?? session?.workspaceBackend ?? LocalWorkspaceBackend.shared
         self.backend = backend
-        self.workspaceIdentity = workspaceIdentity ?? session?.workspaceIdentity
+        self.workspaceIdentity = workspaceIdentity
         // This initializer is synchronous (a file opens from a menu, a click,
         // or session restore), so a workspace that can answer immediately does
         // so here rather than flashing a placeholder on every open.

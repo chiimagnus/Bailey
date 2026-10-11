@@ -1,8 +1,5 @@
 import Foundation
 
-struct RemoteConnection { let port: Int; let destination: String }
-struct TerminalSessionLocation { let remoteConnection: RemoteConnection? }
-struct TerminalSession { let location: TerminalSessionLocation }
 
 @main
 enum GitPanelStateCheck {

@@ -150,12 +150,11 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
         commitHash: String? = nil,
         commitParentHash: String? = nil,
         commitStatus: Character? = nil,
-        session: TerminalSession? = nil,
-        backend: WorkspaceBackend? = nil,
-        workspaceIdentity: String? = nil
+        backend: WorkspaceBackend,
+        workspaceIdentity: String?
     ) {
-        self.backend = backend ?? session?.workspaceBackend ?? LocalWorkspaceBackend.shared
-        self.workspaceIdentity = workspaceIdentity ?? session?.workspaceIdentity
+        self.backend = backend
+        self.workspaceIdentity = workspaceIdentity
         self.repoRoot = repoRoot
         self.path = path
         self.staged = staged

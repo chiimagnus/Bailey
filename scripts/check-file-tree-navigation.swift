@@ -1,17 +1,14 @@
 // Regression check using the real FileTreeModel and local filesystem backend.
 // From the repository root:
 // xcrun swiftc -swift-version 5 -o build/check-file-tree-navigation \
-//   kero/Workspace/WorkspaceBackend.swift kero/Shared/Tree/TreeDisplayModel.swift \
+//   kero/Workspace/WorkspaceBackend.swift kero/Workspace/LocalWorkspaceBackend.swift \
+//   kero/Shared/Tree/TreeDisplayModel.swift \
 //   kero/Files/FileTreeModel.swift \
 //   scripts/check-file-tree-navigation.swift && build/check-file-tree-navigation
 
 import Combine
 import Foundation
 
-// WorkspaceBackend.swift also extends these app-only types; no sessions run here.
-struct RemoteConnection { let port: Int; let destination: String }
-struct TerminalSessionLocation { let remoteConnection: RemoteConnection? }
-struct TerminalSession { let location: TerminalSessionLocation }
 
 @main
 enum FileTreeNavigationCheck {

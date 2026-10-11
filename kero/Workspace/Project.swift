@@ -411,7 +411,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
             return
         }
         let file = FileTab(
-            path: path, session: context,
+            path: path,
             backend: workspaceBackend, workspaceIdentity: workspaceIdentity
         )
         if let editorState {
@@ -431,7 +431,6 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
             openFile(path)
             return
         }
-        let session = selectedSession
         if let existing = tab.allPanes.first(where: {
             if case .file(let file) = $0.content {
                 return file.path == path
@@ -444,7 +443,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         }
         tab.split(
             Pane(content: .file(FileTab(
-                path: path, session: session,
+                path: path,
                 backend: workspaceBackend, workspaceIdentity: workspaceIdentity
             ))),
             toward: .right
@@ -573,7 +572,6 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         let diff = DiffTab(
             repoRoot: repoRoot, path: path, staged: staged,
             untracked: untracked, origPath: origPath,
-            session: context,
             backend: workspaceBackend, workspaceIdentity: workspaceIdentity
         )
         let tab = makeTab(content: .diff(diff))
@@ -612,7 +610,6 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
             commitHash: commitHash,
             commitParentHash: parentHash,
             commitStatus: status,
-            session: context,
             backend: workspaceBackend, workspaceIdentity: workspaceIdentity
         )
         let tab = makeTab(content: .diff(diff))

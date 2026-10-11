@@ -281,8 +281,7 @@ final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunne
     ///
     /// `argv` is handed to ssh as the remote command words, which ssh joins
     /// with spaces for the remote login shell to interpret. Callers that have
-    /// already built a shell command pass it as a single element; callers with
-    /// real argv should quote through ``remoteScript(_:cwd:)`` first.
+    /// already built a shell command pass it as a single element.
     ///
     /// The liveness check is not decoration: with a dead control socket `ssh
     /// -S` silently falls back to opening a brand new connection, which would
@@ -314,20 +313,6 @@ final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunne
         )
     }
 
-    /// Runs a command in a specific remote directory. Every element is quoted
-    /// here, so this is the entry point for real argv rather than a shell
-    /// command that has already been assembled.
-    @discardableResult
-    func run(
-        _ argv: [String],
-        cwd: String,
-        stdin: Data? = nil,
-        timeout: TimeInterval = 20
-    ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
-        try await run(
-            [Self.remoteScript(argv, cwd: cwd)], stdin: stdin, timeout: timeout
-        )
-    }
 
     /// Options naming the shared channel. `-S` is ssh's own "use this control
     /// socket" switch and overrides any ControlPath from a config file.
@@ -335,22 +320,6 @@ final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunne
         ["-S", controlSocket.path, "-p", String(port)]
     }
 
-    // MARK: - Command construction
-
-    /// Wraps argv in a POSIX `sh` command line. ssh joins the remote command
-    /// with spaces and hands it to the remote login shell, so every element is
-    /// quoted here rather than relying on ssh to preserve argument boundaries.
-    static func remoteScript(_ argv: [String], cwd: String?) -> String {
-        let command = argv.map(shellQuoted).joined(separator: " ")
-        guard let cwd, !cwd.isEmpty else { return "exec \(command)" }
-        return "cd \(shellQuoted(cwd)) && exec \(command)"
-    }
-
-    /// POSIX single-quoting: everything is literal inside `'...'`, and a
-    /// literal quote is written by closing, escaping and reopening.
-    static func shellQuoted(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
 
     static func text(_ data: Data) -> String {
         String(data: data, encoding: .utf8) ?? ""
@@ -481,5 +450,13 @@ final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunne
             return (-2, outData, errData)
         }
         return (process.terminationStatus, outData, errData)
+    }
+}
+
+extension RemoteConnection {
+    /// Names the machine a file or diff belongs to. The port appears only when
+    /// it is not the default, so the common case reads as `user@host`.
+    var workspaceIdentity: String {
+        port == 22 ? destination : "\(destination):\(port)"
     }
 }
