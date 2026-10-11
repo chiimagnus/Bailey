@@ -70,6 +70,7 @@ struct SidebarView: View {
 
             HStack(spacing: 2) {
                 SidebarAddButton(manager: manager)
+                    // .frame(width: 24, height: 24)
                 Spacer()
                 SidebarFooterButton(
                     systemImage: "exclamationmark.bubble",
@@ -245,14 +246,6 @@ private struct SidebarAddButton: NSViewRepresentable {
             )
             remote.target = self
             menu.addItem(remote)
-            menu.addItem(.separator())
-            let empty = NSMenuItem(
-                title: String(localized: "New Project"),
-                action: #selector(addEmpty),
-                keyEquivalent: ""
-            )
-            empty.target = self
-            menu.addItem(empty)
             menu.popUp(
                 positioning: nil,
                 at: NSPoint(x: 0, y: sender.bounds.maxY),
@@ -262,7 +255,6 @@ private struct SidebarAddButton: NSViewRepresentable {
 
         @objc private func addLocal() { manager?.chooseLocalItems() }
         @objc private func addSSH() { manager?.chooseSSHItems() }
-        @objc private func addEmpty() { manager?.newProject() }
     }
 }
 
@@ -419,7 +411,7 @@ private struct SidebarProjectRow: View {
 
             Spacer(minLength: 0)
 
-            // Fixed trailing slot: close and the ⌘N hint share the same
+            // Fixed trailing slot: close and the ⌘1–9 hint share the same
             // width so hover does not reflow the row. Continuous title
             // updates from the terminal re-render the strip; without a
             // stable slot that reflow reads as jitter under the pointer.

@@ -360,8 +360,8 @@ struct ContentView: View {
         if manager.selectedProject == nil {
             emptyStatePrompt(
                 title: "No open projects",
-                buttonTitle: "New Project  ⌘N",
-                action: { manager.newProject() }
+                buttonTitle: "Add Files or Folders…",
+                action: { manager.chooseLocalItems() }
             )
         } else {
             // A project whose tabs were all closed stays open; offer to reopen

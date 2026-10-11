@@ -233,9 +233,6 @@ struct CommandPaletteView: View {
             PaletteCommand(id: "resize-pane-right", title: "Resize Pane Right", systemImage: "arrow.right.to.line", shortcut: "⌃⌘→") {
                 manager.resizePaneRight()
             },
-            PaletteCommand(id: "new-project", title: "New Project", systemImage: "folder.badge.plus", shortcut: "⌘N") {
-                manager.newProject()
-            },
             PaletteCommand(id: "add-items", title: "Add Files or Folders", systemImage: "folder.badge.plus", shortcut: "⇧⌘A") {
                 manager.chooseLocalItems()
             },

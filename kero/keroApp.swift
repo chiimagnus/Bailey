@@ -68,12 +68,6 @@ private struct KeroCommands: Commands {
         }
 
         CommandGroup(replacing: .newItem) {
-            Button("New Project") {
-                manager?.newProject()
-            }
-            .keyboardShortcut("n", modifiers: .command)
-            .disabled(manager == nil)
-
             Button("Add Files or Folders…") {
                 manager?.chooseLocalItems()
             }

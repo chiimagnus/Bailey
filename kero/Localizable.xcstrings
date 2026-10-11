@@ -2538,36 +2538,6 @@
         }
       }
     },
-    "New Project" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新建项目"
-          }
-        }
-      }
-    },
-    "New Project  ⌘N" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新建项目  ⌘N"
-          }
-        }
-      }
-    },
-    "New Project (⌘N)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新建项目（⌘N）"
-          }
-        }
-      }
-    },
     "New Session" : {
       "localizations" : {
         "zh-Hans" : {

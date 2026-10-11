@@ -27,7 +27,10 @@ xcodebuild -project kero.xcodeproj -scheme kero -configuration Release \
 open 'build/DerivedData/Build/Products/Release/Kero Remote.app'
 ```
 
-To add files or folders, press **Shift+Cmd+A** or use **+** in the left sidebar.
+To add files or folders, press **Shift+Cmd+A** or use **+** in the bottom-left
+corner of the sidebar. The menu also accepts SSH paths; there is no separate
+blank-project command. Closing the last window quits Kero and stops its port
+forwards; open Kero again to restore saved tabs and projects.
 For remote items, choose **+ → Add SSH Files or Folders…**, select a host from
 `~/.ssh/config`, and enter one absolute remote path per line. Windows SSH hosts
 with an MSYS2 shell accept both `D:\\GitHub\\project` and `/d/GitHub/project`.
