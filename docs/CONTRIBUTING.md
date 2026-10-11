@@ -42,7 +42,7 @@ xcrun swiftc -swift-version 5 -o build/check-file-tree-navigation \
 
 ```sh
 xcrun swiftc -swift-version 5 -o build/check-tree-row-hit-testing \
-  kero/Workspace/TreeDisplayModel.swift kero/UI/Sidebar/TreeRowStyle.swift \
+  kero/Workspace/TreeDisplayModel.swift kero/UI/Panels/TreeRowStyle.swift \
   scripts/check-tree-row-hit-testing.swift && build/check-tree-row-hit-testing
 ```
 
@@ -71,7 +71,7 @@ open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Kero.app" --args --isola
 文件树改动要一起检查文件面板、Git 未提交、暂存和提交历史：
 
 - 高亮范围内的缩进、上下边缘和留白都能触发行操作；右侧按钮只执行自身动作。
-- 长名称可横向滚动，操作按钮不移动；窄侧栏和放大字体下仍可用。
+- 长名称可横向滚动，操作按钮不移动；窄面板和放大字体下仍可用。
 - 压缩目录打开真实末级目录，状态颜色、提示和无障碍描述一致，没有独立状态字母列。
 - 大树滚动保持响应，选中、悬停和竖线布局一致。
 
