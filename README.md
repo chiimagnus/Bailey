@@ -1,46 +1,21 @@
 # Kero
 
-A native terminal workspace for macOS, with projects, SSH, files, Git and diffs.
+原生 macOS 终端工作区，把项目、SSH、文件、Git、差异和浏览器放在一起。
+终端由 Ghostty 驱动；代码智能体作为普通终端程序运行，修改由你审查。
 
-## Features
+## 开始使用
 
-- One project list in the left sidebar: add multiple local files or folders with ⇧⌘A
-- Add SSH folders or files by host alias and remote path (including Windows with an MSYS2 shell)
-- Selecting a project controls its Files/Git context, regardless of terminal `cd`
-- Files remembers expanded folders per project; Git keeps folder folds per repository when switching
-- Native macOS terminal tabs and split panes
-- GPU-accelerated terminal powered by Ghostty
-- Local and SSH remote terminal workspaces
-- Files, Git status, commits and editable diffs beside the terminal
-- Files, Git changes/staged changes, and committed files share Compact Folders, tree rows and vertical guides. Single-child folder chains appear as `parent / child`; folder actions target the real leaf directory. Long names scroll inside the row so fixed controls stay visible
-- All file trees color Git state in the name instead of a status-letter column: modified yellow, added/untracked green, deleted red, renamed/copied blue, conflict purple, ignored gray. Tooltips and accessibility text also identify the status
-- Git changes in a directory tree (default) or flat list, configurable in Settings
-- Browser panes and command palette (coding agents run as ordinary terminal programs)
+需要 macOS 15.6+。按[开发与验证](docs/CONTRIBUTING.md)构建并安装本地签名应用，再看[使用指南](docs/README.md)添加项目、打开终端和审查修改。
+本仓库没有自动更新或发布流水线。
 
-## Build locally
+## 文档
 
-Requires macOS 15.6+, Xcode and a personal Apple Development certificate.
-Kero has one local app: **Kero.app**, built in **Debug**. No publishing pipeline.
+- [使用指南](docs/README.md)：项目、终端、文件、Git、浏览器与设置。
+- [产品原则](docs/PRODUCT.md)：定位和设计取舍。
+- [本地化](docs/LOCALIZATION.md)：界面翻译规则。
+- [依赖与生成资源](docs/DEPENDENCIES.md)：本地补丁、升级和资源来源。
+- [安全与漏洞报告](docs/SECURITY.md)：安全边界和私下报告方式。
 
-```sh
-git clone --recurse-submodules https://github.com/chiimagnus/kero.git
-cd kero
-./scripts/prepare-ghostty.sh
-open kero.xcodeproj
-```
+## 许可证
 
-`prepare-ghostty.sh` downloads the pinned GhosttyKit only when it is missing, keeps it under `Vendor/GhosttyKit`, and reuses it on later builds. Press **Cmd+B** in Xcode for normal development; see [开发与验证](docs/CONTRIBUTING.md) for the canonical command-line build and verification steps.
-To add files or folders, press **Shift+Cmd+A** or use **+** in the bottom-left
-corner of the sidebar. The menu also accepts SSH paths; there is no separate
-blank-project command.
-For remote items, choose **+ → Add SSH Files or Folders…**, select a host from
-`~/.ssh/config`, and enter one absolute remote path per line. Windows SSH hosts
-with an MSYS2 shell accept both `D:\\GitHub\\project` and `/d/GitHub/project`.
-Remote connections use your existing SSH keys and OpenSSH config; no port
-forwarding or local filesystem mount is needed.
-
-See [开发与验证](docs/CONTRIBUTING.md) for development and signing, and [本地化](docs/LOCALIZATION.md) for translation.
-
-## License
-
-GPLv3. See [LICENSE](LICENSE); existing authors' copyright notices are retained.
+采用 GPLv3，见 [LICENSE](LICENSE)。保留原作者的版权与署名。

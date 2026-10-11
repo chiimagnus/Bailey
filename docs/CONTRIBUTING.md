@@ -73,3 +73,16 @@ xcrun swiftc -swift-version 5 -o build/check-tree-row-hit-testing \
 - 说明改了什么、为什么这样改，以及实际运行的检查；未验证部分单独列明。
 - 行为变化同步更新对应文档；翻译见[本地化](LOCALIZATION.md)，依赖升级见[依赖与生成资源](DEPENDENCIES.md)。
 - 运行 `git diff --check`，确认没有无关改动或临时产物。
+
+## 同步文档
+
+自有长期文档放在 `docs/`，正文使用中文；`README.md` 与 `AGENTS.md` 入口保留在根目录。
+命令、API、界面键和路径保持原样，上游文档、许可证和生成资源按[依赖规则](DEPENDENCIES.md)维护。
+
+- 功能或操作入口变化：更新[使用指南](README.md)。
+- 定位、项目范围或交互原则变化：更新[产品原则](PRODUCT.md)。
+- 构建、验收或提交要求变化：更新本文；翻译方式变化：更新[本地化](LOCALIZATION.md)。
+- 依赖、补丁或生成流程变化：更新[依赖与生成资源](DEPENDENCIES.md)。
+- 报告渠道或安全边界变化：更新[安全与漏洞报告](SECURITY.md)。
+
+同一事实只详细写一次，其余入口链接到负责它的页面。移动文档时同步检查 Markdown、包说明和其他消费者中的引用。
