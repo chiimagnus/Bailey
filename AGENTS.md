@@ -9,7 +9,7 @@ an editor, and a diff viewer. Existing SwiftUI code is legacy; AppKit is the UI 
 
 ## Verify
 
-Build, run the app, exercise the change;
+Every code change must end with a signed Debug build, replacing `/Applications/Kero.app`, and validating the changed behavior in the newly launched app. Verify the restored projects and sessions, not just the build log. Do not force-quit active commands or discard unsaved work; if safe installation is blocked, report the blocker explicitly and complete it as soon as possible. Clean up temporary installation copies after verification.
 
 ## Conventions
 
