@@ -211,7 +211,7 @@ private struct DockTreeView: View {
                 let size = geometry.size
                 let fraction = liveFraction ?? split.fraction
                 let horizontal = split.axis == .horizontal
-                let available = max(0, (horizontal ? size.width : size.height) - 4)
+                let available = max(0, (horizontal ? size.width : size.height) - 1)
                 let firstLength = available * fraction
                 let secondLength = max(0, available - firstLength)
                 Group {
@@ -220,7 +220,7 @@ private struct DockTreeView: View {
                             child(split.first)
                                 .frame(width: firstLength, height: size.height)
                             divider(split, available: available)
-                                .frame(width: 4, height: size.height)
+                                .frame(width: 1, height: size.height)
                             child(split.second)
                                 .frame(width: secondLength, height: size.height)
                         }
@@ -229,7 +229,7 @@ private struct DockTreeView: View {
                             child(split.first)
                                 .frame(width: size.width, height: firstLength)
                             divider(split, available: available)
-                                .frame(width: size.width, height: 4)
+                                .frame(width: size.width, height: 1)
                             child(split.second)
                                 .frame(width: size.width, height: secondLength)
                         }
@@ -247,37 +247,53 @@ private struct DockTreeView: View {
         )
     }
 
+    private func resetFraction(for split: DockSplit, available: CGFloat) -> Double {
+        guard split.axis == .horizontal, available > 0 else { return 0.5 }
+        if case .group(let first) = split.first, first.region == .left {
+            return 220 / Double(available)
+        }
+        if case .group(let second) = split.second, second.region == .right {
+            return 1 - 240 / Double(available)
+        }
+        return 0.5
+    }
+
     private func divider(_ split: DockSplit, available: CGFloat) -> some View {
+        // Match the original sidebar: a 1pt hairline, with a wider
+        // invisible hit target so resizing remains easy.
         Rectangle()
             .fill(Color(nsColor: Theme.divider))
-            .contentShape(Rectangle())
-            .onHover { inside in
-                if inside {
-                    (split.axis == .horizontal
-                     ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).set()
-                } else {
-                    NSCursor.arrow.set()
-                }
+            .overlay {
+                Rectangle()
+                    .fill(.clear)
+                    .frame(
+                        width: split.axis == .horizontal ? 7 : nil,
+                        height: split.axis == .vertical ? 7 : nil
+                    )
+                    .contentShape(Rectangle())
+                    .pointerStyle(split.axis == .horizontal ? .columnResize : .rowResize)
+                    .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                        .onChanged { value in
+                            guard available > 0 else { return }
+                            let delta = split.axis == .horizontal
+                                ? value.translation.width : value.translation.height
+                            let minimumLength: CGFloat = split.axis == .horizontal ? 150 : 90
+                            let minimum = min(0.48, max(0.1, Double(minimumLength / available)))
+                            liveFraction = min(max(
+                                split.fraction + Double(delta / available), minimum
+                            ), 1 - minimum)
+                        }
+                        .onEnded { _ in
+                            if let liveFraction { project.dock.resize(split.id, to: liveFraction) }
+                            liveFraction = nil
+                        }
+                    )
+                    .simultaneousGesture(
+                        TapGesture(count: 2).onEnded {
+                            project.dock.resize(split.id, to: resetFraction(for: split, available: available))
+                        }
+                    )
             }
-            .onTapGesture(count: 2) { project.dock.resize(split.id, to: 0.5) }
-            .gesture(DragGesture(minimumDistance: 2)
-                .onChanged { value in
-                    guard available > 0 else { return }
-                    let delta = split.axis == .horizontal
-                        ? value.translation.width : value.translation.height
-                    // Narrow panes may shrink only as far as the available
-                    // window permits, keeping their tab strips reachable.
-                    let minimumLength: CGFloat = split.axis == .horizontal ? 150 : 90
-                    let minimum = min(0.48, max(0.1, Double(minimumLength / available)))
-                    liveFraction = min(max(
-                        split.fraction + Double(delta / available), minimum
-                    ), 1 - minimum)
-                }
-                .onEnded { _ in
-                    if let liveFraction { project.dock.resize(split.id, to: liveFraction) }
-                    liveFraction = nil
-                }
-            )
     }
 }
 
@@ -330,93 +346,111 @@ private struct DockTabGroupView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 4) {
-            if group.region == .left {
-                WindowDragArea().frame(width: 76)
-                tabStrip
-                if manager.isFPSCounterVisible { FPSBadge() }
-                ChromeIconButton(
-                    systemImage: "sidebar.left",
-                    tooltip: String(localized: "Toggle Left Sidebar (⌘B)", table: "Interface")
-                ) { manager.toggleLeftSidebar() }
-            } else {
-                if group.region == .main && !manager.isLeftSidebarVisible {
+        GeometryReader { geometry in
+            HStack(spacing: 4) {
+                if group.region == .left {
+                    WindowDragArea().frame(width: 76)
+                    tabStrip()
+                    if manager.isFPSCounterVisible { FPSBadge() }
                     ChromeIconButton(
                         systemImage: "sidebar.left",
                         tooltip: String(localized: "Toggle Left Sidebar (⌘B)", table: "Interface")
                     ) { manager.toggleLeftSidebar() }
-                    .padding(.leading, 76)
-                }
-                tabStrip
-                if group.region == .main {
-                    ChromeIconButton(
-                        systemImage: "plus",
-                        tooltip: String(localized: "New Session (⌘T)", table: "Interface"),
-                        font: .system(size: 10, weight: .semibold),
-                        iconSize: 14
-                    ) {
-                        project.newSession()
-                        if let id = project.selectedTabID {
-                            project.dock.place(.tab(id), in: .main)
-                        }
-                    }
-                    WindowDragArea().frame(minWidth: 100, maxWidth: .infinity)
-                    if manager.isPaneZoomed {
-                        ChromeIconButton(
-                            systemImage: "arrow.down.forward.and.arrow.up.backward",
-                            tooltip: String(localized: "Exit Pane Zoom (⇧⌘↩)", table: "Interface")
-                        ) { manager.togglePaneZoom() }
-                    }
-                    ChromeIconButton(
-                        systemImage: "sidebar.right",
-                        tooltip: String(localized: "Toggle Right Sidebar (⇧⌘B)", table: "Interface")
-                    ) { manager.toggleSidebar() }
                 } else {
-                    Spacer(minLength: 0)
-                    if group.region == .right {
+                    if group.region == .main && !manager.isLeftSidebarVisible {
+                        ChromeIconButton(
+                            systemImage: "sidebar.left",
+                            tooltip: String(localized: "Toggle Left Sidebar (⌘B)", table: "Interface")
+                        ) { manager.toggleLeftSidebar() }
+                        .padding(.leading, 76)
+                    }
+                    tabStrip(maxWidth: group.region == .main
+                        ? maxMainTabWidth(in: geometry.size.width) : nil)
+                    if group.region == .main {
+                        ChromeIconButton(
+                            systemImage: "plus",
+                            tooltip: String(localized: "New Session (⌘T)", table: "Interface"),
+                            font: .system(size: 10, weight: .semibold),
+                            iconSize: 14
+                        ) {
+                            project.newSession()
+                            if let id = project.selectedTabID {
+                                project.dock.place(.tab(id), in: .main)
+                            }
+                        }
+                        WindowDragArea().frame(minWidth: 100, maxWidth: .infinity)
+                        if manager.isPaneZoomed {
+                            ChromeIconButton(
+                                systemImage: "arrow.down.forward.and.arrow.up.backward",
+                                tooltip: String(localized: "Exit Pane Zoom (⇧⌘↩)", table: "Interface")
+                            ) { manager.togglePaneZoom() }
+                        }
                         ChromeIconButton(
                             systemImage: "sidebar.right",
                             tooltip: String(localized: "Toggle Right Sidebar (⇧⌘B)", table: "Interface")
                         ) { manager.toggleSidebar() }
+                    } else {
+                        Spacer(minLength: 0)
+                        if group.region == .right {
+                            ChromeIconButton(
+                                systemImage: "sidebar.right",
+                                tooltip: String(localized: "Toggle Right Sidebar (⇧⌘B)", table: "Interface")
+                            ) { manager.toggleSidebar() }
+                        }
                     }
                 }
             }
+            .padding(.trailing, 8)
         }
-        .padding(.trailing, 8)
     }
 
-    private var tabStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 3) {
-                ForEach(group.items, id: \.self) { item in
-                    tab(item)
-                        .opacity(dragging.position?.item == item ? 0.6 : 1)
-                        .background {
-                            GeometryReader { geometry in
-                                Color.clear.preference(
-                                    key: DockTabFrames.self,
-                                    value: [item: geometry.frame(in: .global)]
-                                )
-                            }
-                        }
-                        .highPriorityGesture(
-                            DragGesture(minimumDistance: 4, coordinateSpace: .global)
-                                .onChanged { value in
-                                    dragging.update(item, at: value.location, dock: project.dock)
-                                    NSCursor.closedHand.set()
+    /// Preserve the original header's compact strip: the "+" follows the last
+    /// tab, and only a full strip begins scrolling.
+    private func maxMainTabWidth(in width: CGFloat) -> CGFloat {
+        let hiddenSidebarInset: CGFloat = manager.isLeftSidebarVisible ? 0 : 108
+        return max(0, width - hiddenSidebarInset - 168
+            - (manager.isPaneZoomed ? 28 : 0))
+    }
+
+    private func tabStrip(maxWidth: CGFloat? = nil) -> some View {
+        ScrollViewReader { scrollProxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 3) {
+                    ForEach(group.items, id: \.self) { item in
+                        tab(item)
+                            .id(item)
+                            .opacity(dragging.position?.item == item ? 0.6 : 1)
+                            .background {
+                                GeometryReader { geometry in
+                                    Color.clear.preference(
+                                        key: DockTabFrames.self,
+                                        value: [item: geometry.frame(in: .global)]
+                                    )
                                 }
-                                .onEnded { value in
-                                    dragging.update(item, at: value.location, dock: project.dock)
-                                    dragging.finish(project: project, manager: manager)
-                                },
-                            including: item.tabID != nil && renamingTabID == item.tabID ? .subviews : .all
-                        )
+                            }
+                            .highPriorityGesture(
+                                DragGesture(minimumDistance: 4, coordinateSpace: .global)
+                                    .onChanged { value in
+                                        dragging.update(item, at: value.location, dock: project.dock)
+                                        NSCursor.closedHand.set()
+                                    }
+                                    .onEnded { value in
+                                        dragging.update(item, at: value.location, dock: project.dock)
+                                        dragging.finish(project: project, manager: manager)
+                                    },
+                                including: item.tabID != nil && renamingTabID == item.tabID ? .subviews : .all
+                            )
+                    }
                 }
+                .padding(.leading, group.region == .main ? 8 : 4)
+                .padding(.trailing, 2)
             }
-            .padding(.leading, group.region == .main ? 8 : 4)
-            .padding(.trailing, 2)
+            .frame(maxWidth: maxWidth, alignment: .leading)
+            .fixedSize(horizontal: maxWidth != nil, vertical: false)
+            .onChange(of: group.selected) { _, selected in
+                if let selected { scrollProxy.scrollTo(selected) }
+            }
         }
-        .fixedSize(horizontal: false, vertical: false)
     }
 
     @ViewBuilder
