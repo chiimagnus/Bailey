@@ -672,7 +672,7 @@ private struct FileTreeScrollView: NSViewRepresentable {
         table.selectionHighlightStyle = .none
         table.allowsEmptySelection = true
         table.columnAutoresizingStyle = .noColumnAutoresizing
-        table.intercellSpacing = NSSize(width: 0, height: 1)
+        table.intercellSpacing = .zero
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("file"))
         column.resizingMask = []
         table.addTableColumn(column)
@@ -2074,7 +2074,7 @@ private struct GitPanel: View {
 
     private var changeList: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 1) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 if model.totalChangeCount == 0 {
                     cleanState
                 } else if visibleChangeCount == 0 {

@@ -20,15 +20,11 @@ enum TreeRowStyle {
 
     static func drawGuides(depth: Int, in bounds: NSRect, firstX: CGFloat) {
         guard depth > 0 else { return }
-        let lines = NSBezierPath()
-        lines.lineWidth = 1
+        NSColor.labelColor.withAlphaComponent(0.18).setFill()
         for level in 0..<depth {
             let x = firstX + CGFloat(level) * indent
-            lines.move(to: NSPoint(x: x, y: bounds.minY))
-            lines.line(to: NSPoint(x: x, y: bounds.maxY))
+            NSRect(x: x - 0.5, y: bounds.minY, width: 1, height: bounds.height).fill()
         }
-        NSColor.labelColor.withAlphaComponent(0.18).setStroke()
-        lines.stroke()
     }
 }
 
