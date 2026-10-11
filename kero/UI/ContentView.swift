@@ -870,9 +870,7 @@ private struct TabRenameChrome: View {
                     if !focused { finish(apply: true) }
                 }
         }
-        .padding(.leading, 9)
-        .padding(.trailing, 5)
-        .padding(.vertical, 4)
+        .padding(4)
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(Color.primary.opacity(0.09))
@@ -998,30 +996,43 @@ struct TabItemChrome: View {
     var body: some View {
         Button(action: select) {
             HStack(spacing: 5) {
-                if let browserIcon {
-                    BrowserFaviconView(browser: browserIcon, size: 11)
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(
-                            isSelected
-                                ? AnyShapeStyle(Color(nsColor: Theme.accent))
-                                : AnyShapeStyle(.tertiary)
+                ZStack {
+                    if isHovering {
+                        Button(action: close) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 14, height: 14)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(String(localized: "Close Tab", table: "Interface"))
+                    } else if let browserIcon {
+                        BrowserFaviconView(browser: browserIcon, size: 11)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(
+                                isSelected
+                                    ? AnyShapeStyle(Color(nsColor: Theme.accent))
+                                    : AnyShapeStyle(.tertiary)
+                            )
+                            .opacity(isSelected ? 1 : 0.78)
+                    } else if let fileIconPath {
+                        MaterialFileIconView(
+                            path: fileIconPath,
+                            size: 12,
+                            opacity: isSelected ? 1 : 0.82
                         )
-                        .opacity(isSelected ? 1 : 0.78)
-                } else if let fileIconPath {
-                    MaterialFileIconView(
-                        path: fileIconPath,
-                        size: 12,
-                        opacity: isSelected ? 1 : 0.82
-                    )
-                } else {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(
-                            isSelected
-                                ? AnyShapeStyle(Color(nsColor: Theme.accent))
-                                : AnyShapeStyle(.tertiary)
-                        )
+                    } else {
+                        Image(systemName: systemImage)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(
+                                isSelected
+                                    ? AnyShapeStyle(Color(nsColor: Theme.accent))
+                                    : AnyShapeStyle(.tertiary)
+                            )
+                    }
                 }
+                .frame(width: 14, height: 14)
                 Text(verbatim: title)
                     .font(.system(size: 11.5))
                     .foregroundStyle(isSelected ? .primary : .secondary)
@@ -1035,28 +1046,13 @@ struct TabItemChrome: View {
                     }
                     .foregroundStyle(.tertiary)
                 }
-                if isHovering {
-                    Button(action: close) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 14, height: 14)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                } else if isDirty {
+                if isDirty {
                     Circle()
                         .fill(.secondary)
                         .frame(width: 5, height: 5)
-                        .frame(width: 14, height: 14)
-                } else {
-                    Spacer()
-                        .frame(width: 14)
                 }
             }
-            .padding(.leading, 9)
-            .padding(.trailing, 5)
-            .padding(.vertical, 4)
+            .padding(4)
             .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
