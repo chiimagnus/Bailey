@@ -1,34 +1,35 @@
 version = 1
-current_task_id = ""
+current_task_id = "P2-T1"
 
 [[tasks]]
 id = "P1-T1"
 title = "核对代码所有权与基础回归"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = ""
+no_commit_reason = "只读基线核对，无产品变更"
+note = "HEAD bfe8602；相对335a940产品源码无差异；重新编译运行Dock、文件树导航（含10k文件）、原生树行命中均PASS；WindowRootView持有窗口manager、ContentView持有Git、Project持有fileTree/Dock、PaneTab持有内层布局；正式Kero PID73829运行中，未经安全确认不退出。"
 
 [[tasks]]
 id = "P1-T2"
 title = "共享树唯一归属与旧路径同步移除"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = ""
-note = ""
+commit = "26a3f4e28434745a8b1553e2fa5a80e6de5938c4"
+note = "树模型/行源码迁移逐字不变；导航含10k文件、原生行命中PASS；Debug build/严格签名PASS；授权正常退出并安装正式Kero，4项目及标签恢复，Files/工作区/暂存/历史树压缩和无障碍实际观察；hover/长名称滚动未逐项视觉实测。"
 
 [[tasks]]
 id = "P1-T3"
 title = "文件树模型归入 Files，项目持有者不变"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t3"
-commit = ""
-note = ""
+commit = "01c3c1cef4ba973a7482209af9527a83aafabdee"
+note = "迁移逐字不变，Project.fileTree持有者不变；新路径导航含创建/rename/跨root/scope/10k文件PASS（0.110s）；签名Debug build PASS；用户改为独立Kero Test/sh.kero.test验收，实际添加临时仓库并观察压缩/展开/长名称。SSH未测。"
 
 [[tasks]]
 id = "P2-T1"
 title = "抽离 Files 面板与唯一共享标题"
-status = "pending"
+status = "in_progress"
 plan = "plan-p2.md#p2-t1"
 commit = ""
 note = ""
