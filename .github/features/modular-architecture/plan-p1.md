@@ -19,9 +19,9 @@
 
 **源码锚点：** `kero/App/keroApp.swift::WindowRootView`、`ContentView.git`、`Project.tabs/dock/fileTree`、`TerminalManager.saveAll/restore`、`DockNode` / `PaneNode`、`ToolPanelView`、`SessionInfoModel`、`PortForwardController`。
 
-**步骤：** 使用 CodeGraph 确认各状态创建/关闭/恢复链，记录窗口级 Git、项目级文件树与标签级 Pane 的**现有**归属。现有三项检查已在本次执行前审查（`051c1fe` 的源码状态）通过；执行开始时再次核对 HEAD、未提交改动及命令能否重放，不再创建一套全面实机实验或新的基线框架。
+**步骤：** 执行入口核对 HEAD 与未提交改动；复用本次独立审查的所有权/基线证据，不再重复全仓调研。2026-10-12 在 `335a940` 上重新编译运行三项检查均通过，`051c1fe..335a940` 的 `kero/docs/scripts/kero.xcodeproj` 无差异。若执行前相关源码/工具链已变化，再重跑受影响检查并更新证据，不把旧结果套用到新代码。窗口级 Git、项目级文件树与标签级 Pane 的 owner 已核对，不再创建全面实机实验或基线框架。
 
-**验证：** 按 `docs/CONTRIBUTING.md` 执行 `check-dock-workspace`、`check-file-tree-navigation` 和 `check-tree-row-hit-testing` 的现有编译命令；记录失败的真实路径及不能安全触碰的运行中窗口。证据可直接写入 Task note，无需额外 `evidence-p1.md` 或新测试脚本。
+**验证：** `docs/CONTRIBUTING.md` 当前提供树导航和原生命中两条命令，不含 Dock 命令；Dock 的实际命令是 `xcrun swiftc -swift-version 5 -o build/check-dock-workspace kero/Workspace/DockWorkspaceModel.swift scripts/check-dock-workspace.swift && build/check-dock-workspace`。记录源码/命令与可安全触碰的窗口边界；P1-T2 同步补上文档遗漏的 Dock 命令。证据写入 Task note，无需额外 `evidence-p1.md` 或第二个状态看板。
 
 ---
 
@@ -31,9 +31,9 @@
 **Files：**
 - `git mv kero/Workspace/TreeDisplayModel.swift kero/Shared/Tree/TreeDisplayModel.swift`
 - `git mv kero/UI/Panels/TreeRowStyle.swift kero/Shared/Tree/TreeRowStyle.swift`
-- 同 Task 更新 `docs/CONTRIBUTING.md`、`scripts/check-file-tree-navigation.swift` 内的注释命令和受影响的其他源码路径/文档引用；旧文件无副本。
+- 同 Task 更新 `docs/CONTRIBUTING.md` 的树导航/命中编译路径并补全已有 Dock 检查命令，更新 `scripts/check-file-tree-navigation.swift` 内的注释命令及受影响的其他源码路径/文档引用；旧文件无副本。根 `AGENTS.md` 对 `TreeDisplayModel` 的共享约定仍为唯一契约，不再新增架构规范。
 
-**根因与步骤：** `TreeDisplayModel` 负责两类目录树的统一遍历和压缩目录，`TreeRowStyle` 同时实现 `TreeRowSurface` 与两个语义行及 Status 颜色；此前散落 Workspace/UI，容易再造副本。整体搬迁、保持所有声明和调用语义不变，核对 Git 的 `RecentCommitsView` 及 Files 所有消费者。
+**依据与步骤：** `TreeDisplayModel` 负责 Files 实际目录遍历、Git 路径树和共同的目录压缩语义，`TreeRowStyle` 同时实现 `TreeRowSurface` 与两个语义行及 Status 颜色；它们已经共享，并非这次才创建统一实现。整体搬迁、保持声明和调用语义，核对 Files、Git 工作区/暂存区、`RecentCommitsView`；共享目录只放这两份真实公用实现，不扩成通用 Toolkit。
 
 **验证：** 三项轻量检查中受影响的树导航/原生命中检查，Debug 编译/签名、真实 Files/Git 树行的悬停、选中、长名称、压缩目录/无障碍；检查旧路径和重复 Row 声明已消失。按项目开发规范安全验收，不中断运行的命令。
 

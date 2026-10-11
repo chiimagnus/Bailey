@@ -18,14 +18,17 @@
 ## 已识别的范围
 
 - `ToolPanelView.swift` 混合了 Files/Git/Info 的 UI、范围选择、异步刷新及按连接维护的端口转发视图状态。
-- `ContentView.swift` 包含被 Dock 复用的底部工具栏和标签外观；`WorkspaceBackend.swift` 末尾实现了对 TerminalSession/RemoteConnection 的跨域扩展。
+- `ContentView.swift` 包含被 Dock 复用的底部工具栏和标签外观；`ProjectsPanelView.swift` 还承载 Dock 使用的按钮和 FPS chrome；`WorkspaceBackend.swift` 末尾实现了对 TerminalSession/RemoteConnection 的跨域扩展。
 - `SessionStore.swift` 仍解析老版单内容、列式分屏和单窗口快照；`AppSettings.swift` 仍读取旧 UserDefaults/旧字体配置键。需在当前格式验证后就地清理。
-- `GitStatusModel.runGit/remoteGitData` 还被 `DiffViewerView`、`CommandPaletteView` 使用；`DiffViewerView` 本地字节读取有独立大小上限，不可直接替换为通用字符串命令执行。
+- `GitStatusModel.runGit/remoteGitData` 还被 `DiffViewerView`、`CommandPaletteView` 使用；Diff 的本地 runner 重复同一 Git 进程逻辑，原始字节/捕获上限可在一个 Git 专用实现中保留，不直接改成无限字符串读取。
+- 当前可达的所有权/机器范围缺口：Git 提交草稿与转发记录归 transient View，RemoteConnection 与缓存 backend 强引用循环；异步根目录只比项目 ID、Info 只比 PID 且换 backend 后仍显示旧行；File/Diff 构造把本机 nil 身份回退为 SSH 会话身份。相应任务在最小职责处修复，不为这些具体缺口搭框架。
 - `Editor/MaterialFileIcon.swift` 是生成资源，`BrowserView.swift` 等大文件不因行数而拆分；除已确认跨职责、跨调用边界的内容外不扩大范围。
 
 ## 非目标
 
 不新增用户功能、菜单或设置项；不扩展 CLI/MCP/API、Swift Packages、依赖注入框架、事件总线、兼容层或测试框架；不修改 `Vendor/`、生成资源、不实施独立的性能 Feature。运行时安全校验（SSH 主机信任、删除确认、Git 防串仓、保存失败保留编辑、当前快照读写）**不是**历史兼容围栏，不能删掉。
+
+不把“彻底”理解成每个文件都必须变：App、Terminal、Editor、Browser、Remote 与 UI 已有合理内聚的内容直接保留。已有协议可能只有一个实现但隔离了真实框架边界（如 TerminalBackendSurface），不按实现数机械删除；同样不把系统 Finder pasteboard、Windows/MSYS SSH 命令、语言切换的历史分隔符识别或手写 TOML 可选默认值误判为废弃格式。删的是无消费者链与淘汰数据分支，不缩水现有跨平台远端行为。
 
 ## 验收
 
@@ -33,3 +36,5 @@
 - 已有停靠、文件树和树行命中检查通过；Git、Files、Info、终端及编辑/差异的受影响真实调用路径均有对应验证。
 - 签名 Debug 安全验收本地与可安全连接的 SSH、项目/窗口切换、双层分屏与重启恢复；未验证的远端条件如实记录，不能用模拟点击充数。
 - `todo.toml` 为唯一执行状态，所有 Task 在实际执行前保持 pending；本次执行前审查仅更新 Feature Plan，不提前修改或删除产品源码。
+- 各 Phase 完成即审计、通过后再推进；P5 只核销最终一致性，不承担拖延下来的清理。审查证据与用户机器状态不是长期架构真源，也不当成 App/SSH 端到端已验收。
+- 本次独立审查的源码依据、清理归属和实际验证边界见 [执行前审查](review.md)。执行仍逐任务验证并原子提交：中文标题概括结果，正文记录改了什么、为什么和实际验证，只包含该任务变更；不创建分支或推送。
