@@ -18,6 +18,18 @@ enum TreeDisplayModel {
             }
         }
 
+        init(staged: Character, unstaged: Character, isConflict: Bool) {
+            let statuses = [staged, unstaged]
+            if isConflict || statuses.contains("U") { self = .conflict }
+            else if statuses.contains("?") { self = .untracked }
+            else if staged == "A" { self = .added }
+            else if statuses.contains("D") { self = .deleted }
+            else if statuses.contains("R") { self = .renamed }
+            else if statuses.contains("C") { self = .copied }
+            else if staged == "." && unstaged == "." { self = .modified }
+            else { self.init(unstaged == "." ? staged : unstaged) }
+        }
+
         var accessibilityName: String {
             switch self {
             case .modified: String(localized: "Modified", table: "Sidebar")

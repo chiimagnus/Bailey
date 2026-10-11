@@ -1088,7 +1088,9 @@ final class GitStatusModel: nonisolated ObservableObject {
         // stray duplicate must degrade to a deterministic decoration instead of
         // trapping the whole app on duplicate keys.
         fileDecorations = Dictionary(
-            entries.map { ($0.path, Self.fileDecoration(for: $0)) },
+            entries.map {
+                ($0.path, FileDecoration(staged: $0.staged, unstaged: $0.unstaged, isConflict: $0.isConflict))
+            },
             uniquingKeysWith: { first, _ in first }
         )
         ignoredPaths = result.ignoredPaths
@@ -1795,17 +1797,6 @@ final class GitStatusModel: nonisolated ObservableObject {
             if byte == 0x0A { count += 1 }
         }
         return (newlines + (data.last == 0x0A ? 0 : 1), data.count)
-    }
-
-    private static func fileDecoration(for entry: Entry) -> FileDecoration {
-        let statuses = [entry.staged, entry.unstaged]
-        if entry.isConflict || statuses.contains("U") { return .conflict }
-        if statuses.contains("?") { return .untracked }
-        if entry.staged == "A" { return .added }
-        if statuses.contains("D") { return .deleted }
-        if statuses.contains("R") { return .renamed }
-        if statuses.contains("C") { return .copied }
-        return .modified
     }
 
     nonisolated static func parseRecentCommits(_ output: String) -> [RecentCommit] {

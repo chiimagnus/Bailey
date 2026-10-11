@@ -94,6 +94,18 @@ enum FileTreeNavigationCheck {
         assert(first.items.contains { $0.displayName == "dir / renamed" })
 
         var paths: [TreeDisplayModel.Row] = []
+        let combinedStatuses: [(staged: Character, unstaged: Character, conflict: Bool, expected: TreeDisplayModel.Status)] = [
+            (".", "A", false, .added), ("T", ".", false, .changed),
+            (".", "T", false, .changed), ("A", "M", false, .added),
+            ("D", "M", false, .deleted), ("R", "M", false, .renamed),
+            ("C", "M", false, .copied), ("M", "M", false, .modified),
+            ("?", "?", false, .untracked), ("A", "U", false, .conflict),
+            ("?", "?", true, .conflict), (".", ".", false, .modified)
+        ]
+        for input in combinedStatuses {
+            assert(TreeDisplayModel.Status(staged: input.staged, unstaged: input.unstaged,
+                                           isConflict: input.conflict) == input.expected)
+        }
         for (character, status) in zip(Array("MA?DRCU!T"), [
             TreeDisplayModel.Status.modified, .added, .untracked, .deleted,
             .renamed, .copied, .conflict, .ignored, .changed
