@@ -11,6 +11,7 @@ import SwiftUI
 struct SidebarView: View {
     @ObservedObject var manager: TerminalManager
     let bottomBarHeight: CGFloat
+    var docked = false
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var themeChanges = Theme.changes
     @Environment(\.openSettings) private var openSettings
@@ -23,6 +24,7 @@ struct SidebarView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Header-height strip housing the traffic-light buttons and the
             // control for collapsing this sidebar.
+            if !docked {
             HStack(spacing: 0) {
                 WindowDragArea()
                     .frame(maxWidth: .infinity)
@@ -39,6 +41,7 @@ struct SidebarView: View {
             }
             .padding(.trailing, 8)
             .frame(height: 38)
+            }
 
             ScrollView {
                 VStack(spacing: 3) {
@@ -95,7 +98,8 @@ struct SidebarView: View {
                     .frame(height: 1)
             }
         }
-        .frame(width: width)
+        .frame(width: docked ? nil : width)
+        .frame(maxWidth: docked ? .infinity : nil, maxHeight: .infinity)
         .background {
             // Kero's built-in Default themes keep the native translucent
             // sidebar material; every other theme — including the GitHub
@@ -120,12 +124,14 @@ struct SidebarView: View {
             }
         }
         .overlay(alignment: .trailing) {
+            if !docked {
             SidebarResizeHandle(
                 edge: .trailing,
                 width: $width,
                 range: 160...400,
                 defaultWidth: 220
             )
+            }
         }
         .onPreferenceChange(ProjectFramePreferenceKey.self) { projectFrames = $0 }
     }
@@ -180,7 +186,7 @@ struct ChromeIconButton: View {
 /// Live frames-per-second readout in the header strip, fed by `FPSCounter`.
 /// It exists only while the manager's toggle is on, so the counter starts
 /// when the badge appears and stops when it leaves the hierarchy.
-private struct FPSBadge: View {
+struct FPSBadge: View {
     @StateObject private var counter = FPSCounter()
 
     var body: some View {

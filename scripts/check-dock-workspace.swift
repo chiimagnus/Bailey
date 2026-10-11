@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 @main
@@ -8,6 +9,21 @@ struct CheckDockWorkspace {
     }
 
     static func main() throws {
+        let frame = CGRect(x: 10, y: 20, width: 300, height: 300)
+        check(DockDropHitTest.edge(at: CGPoint(x: 12, y: 170), in: frame) == .left, "left edge")
+        check(DockDropHitTest.edge(at: CGPoint(x: 308, y: 170), in: frame) == .right, "right edge")
+        check(DockDropHitTest.edge(at: CGPoint(x: 160, y: 60), in: frame) == .top, "top edge")
+        check(DockDropHitTest.edge(at: CGPoint(x: 160, y: 317), in: frame) == .bottom, "bottom edge")
+        check(DockDropHitTest.edge(at: CGPoint(x: 160, y: 170), in: frame) == nil, "center merges")
+        check(DockDropHitTest.edge(at: CGPoint(x: 12, y: 25), in: frame) == nil, "header reorders")
+
+        let migrated = DockWorkspaceModel()
+        migrated.applyExistingSidebarWidths(windowWidth: 1800, left: 184, right: 300)
+        if case .split(let outer) = migrated.root, case .split(let inner) = outer.second {
+            check(abs(outer.fraction * 1792 - 184) < 1, "preserve legacy left width")
+            check(abs((1 - inner.fraction) * (1792 - 184) - 300) < 1, "preserve legacy right width")
+        } else { preconditionFailure("default split structure") }
+
         let dock = DockWorkspaceModel()
         let a = UUID()
         let b = UUID()
@@ -28,6 +44,7 @@ struct CheckDockWorkspace {
         check(dock.group(region: .main)?.items == [.tab(b), .tab(a), .tab(c)], "reorder destination must account for removed index")
         check(dock.move(.tab(c), into: main.id, index: 0), "reorder later tab")
         check(dock.group(region: .main)?.items == [.tab(c), .tab(b), .tab(a)], "reverse reorder wrong")
+        check(dock.tabOrder == [c, b, a], "keyboard navigation must follow visible tab order")
         check(dock.move(.tab(c), into: main.id, edge: .top), "split content to auxiliary group")
         check(dock.root.groups.count == 4, "auxiliary split not created")
         dock.syncTabs([a, b], near: b)
@@ -50,6 +67,13 @@ struct CheckDockWorkspace {
         restored.place(.projects, in: .right)
         check(restored.group(region: .right)?.items.contains(.projects) == true, "project list should be movable")
         check(restored.group(region: .left)?.items == [.git], "moving must not clone panel")
+
+        let closedPanel = DockWorkspaceModel()
+        closedPanel.removeTool(.git)
+        check(!closedPanel.visibleItems.contains(.git), "closing Git must remove its tab")
+        closedPanel.place(.git, in: .left)
+        check(closedPanel.group(containing: .git)?.region == .left, "reopening panel must not clone it")
+        check(closedPanel.group(region: .right)?.items == [.info, .files], "closing must retain other right tabs")
 
         let legacy = DockWorkspaceModel()
         legacy.syncTabs([a], near: nil)

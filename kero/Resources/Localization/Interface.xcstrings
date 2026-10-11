@@ -27,6 +27,16 @@
         }
       }
     },
+    "Add Panel" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加面板"
+          }
+        }
+      }
+    },
     "Add SSH Files or Folders" : {
       "localizations" : {
         "zh-Hans" : {
@@ -128,6 +138,16 @@
         }
       }
     },
+    "Close Panel" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭面板"
+          }
+        }
+      }
+    },
     "Close Project: %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -184,6 +204,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "复制地址"
+          }
+        }
+      }
+    },
+    "Drag a Tab Here or Add a Panel" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拖入标签或添加面板"
+          }
+        }
+      }
+    },
+    "Move to Left Sidebar" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移到左侧边栏"
+          }
+        }
+      }
+    },
+    "Move to Right Sidebar" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移到右侧边栏"
+          }
+        }
+      }
+    },
+    "No Open Tabs" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有打开的标签页"
           }
         }
       }

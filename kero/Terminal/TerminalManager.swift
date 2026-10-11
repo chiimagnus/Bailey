@@ -859,23 +859,28 @@ final class TerminalManager: nonisolated ObservableObject {
         return false
     }
 
-    /// Shows the sidebar on `panel`, or hides it if already showing that panel.
+    /// Reveal an existing tool wherever it was docked. The shortcut must not
+    /// clone or move a panel back to the right after the user relocated it.
     func togglePanel(_ panel: RightPanel) {
         let dockItem: DockItem = switch panel {
         case .info: .info
         case .files: .files
         case .git: .git
         }
-        if let project = selectedProject {
-            if project.dock.group(containing: dockItem) == nil {
-                project.dock.place(dockItem, in: .right)
-            }
+        let previousPanel = panelTab
+        panelTab = panel
+        guard let project = selectedProject else { return }
+        if let owner = project.dock.group(containing: dockItem) {
+            let alreadySelected = owner.selected == dockItem
             project.dock.select(dockItem)
-        }
-        if isPanelVisible && panelTab == panel {
-            isPanelVisible = false
+            switch owner.region {
+            case .left: isLeftSidebarVisible = true
+            case .right:
+                isPanelVisible = !(isPanelVisible && alreadySelected && previousPanel == panel)
+            case .main, .extra: break
+            }
         } else {
-            panelTab = panel
+            project.dock.place(dockItem, in: .right)
             isPanelVisible = true
         }
     }

@@ -11,8 +11,11 @@ import SwiftUI
 /// combined freely. Only the selected tab's layout is ever mounted.
 struct PaneLayoutView: View {
     @ObservedObject var tab: PaneTab
-    @ObservedObject var tabSplitDrag: TabSplitDragCoordinator
     @ObservedObject private var themeChanges = Theme.changes
+    /// Only one workspace tab owns keyboard focus across all dock groups.
+    var isWorkspaceTabSelected = true
+    /// Focus of any embedded NSView makes its entire workspace tab active.
+    var onFocused: () -> Void = {}
     /// Splits the focused pane on the given edge — from a pane's context menu.
     var onSplit: (PaneDropEdge) -> Void = { _ in }
     /// Browser creation actions exposed by terminal and file-editor menus.
@@ -72,6 +75,8 @@ struct PaneLayoutView: View {
                 PaneView(
                     tab: tab,
                     pane: pane,
+                    onFocused: onFocused,
+                    isActiveTab: isWorkspaceTabSelected,
                     showFocusRing: true,
                     allowsMove: false,
                     isMoveSource: false,
@@ -94,10 +99,6 @@ struct PaneLayoutView: View {
         .padding(tab.hasMultiplePanes ? gap : 0)
         .onPreferenceChange(PaneFramePreferenceKey.self) { frames in
             paneFrames = frames
-            tabSplitDrag.updatePaneFrames(frames, for: tab.id)
-        }
-        .onDisappear {
-            tabSplitDrag.clearPaneFrames(for: tab.id)
         }
         // A divider or pane-move drag can't deliver its ending callback once
         // toggling zoom unmounts its view — drop any in-flight drag state so a
@@ -122,6 +123,8 @@ struct PaneLayoutView: View {
                     PaneView(
                         tab: tab,
                         pane: placement.pane,
+                        onFocused: onFocused,
+                        isActiveTab: isWorkspaceTabSelected,
                         showFocusRing: tab.hasMultiplePanes,
                         allowsMove: true,
                         isMoveSource: paneDrag?.sourceID == placement.pane.id,
@@ -177,20 +180,6 @@ struct PaneLayoutView: View {
                         .allowsHitTesting(false)
                 }
 
-                // Tab-strip drags use the same directional preview as pane
-                // moves. The compact label follows the pointer only while it
-                // is over a valid destination pane.
-                if let tabDrag = tabSplitDrag.drag,
-                   tabDrag.targetTabID == tab.id,
-                   tabDrag.targetPaneID != nil {
-                    let origin = geo.frame(in: .global).origin
-                    draggedTabLabel(tabDrag)
-                        .offset(
-                            x: tabDrag.location.x - origin.x - 110,
-                            y: tabDrag.location.y - origin.y - 22
-                        )
-                        .allowsHitTesting(false)
-                }
             }
         }
     }
@@ -228,15 +217,8 @@ struct PaneLayoutView: View {
 
     // MARK: - Moving panes
 
-    /// Pane moves and tab-to-pane moves share the same drop highlight. A pane
-    /// move wins if both states ever overlap during gesture teardown.
     private func dropEdge(for paneID: UUID) -> PaneDropEdge? {
-        if paneDrag?.targetID == paneID {
-            return paneDrag?.edge
-        }
-        guard tabSplitDrag.drag?.targetTabID == tab.id,
-              tabSplitDrag.drag?.targetPaneID == paneID else { return nil }
-        return tabSplitDrag.drag?.edge
+        paneDrag?.targetID == paneID ? paneDrag?.edge : nil
     }
 
     /// Tracks a pane-move drag: `location` is the pointer in global space. The
@@ -338,41 +320,6 @@ struct PaneLayoutView: View {
         }
     }
 
-    private func draggedTabLabel(_ drag: TabSplitDragCoordinator.Drag) -> some View {
-        HStack(spacing: 7) {
-            if let fileIconPath = drag.fileIconPath {
-                MaterialFileIconView(path: fileIconPath, size: 14)
-            } else {
-                Image(systemName: drag.systemImage)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color(nsColor: Theme.accent))
-            }
-            Text(drag.title)
-                .font(.system(size: 12, weight: .medium))
-                .lineLimit(1)
-            if drag.paneCount > 1 {
-                Text(String(localized: "\(drag.paneCount)", table: "Interface"))
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(Color.primary.opacity(0.1)))
-            }
-        }
-        .padding(.horizontal, 12)
-        .frame(width: 220, height: 44, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color(nsColor: Theme.background))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(Color(nsColor: Theme.accent), lineWidth: 1.5)
-        )
-        .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
-        .opacity(0.92)
-    }
-
 }
 
 /// Invisible drag strip in the gap between two tiles. Dragging shifts weight
@@ -416,6 +363,8 @@ private struct PaneView: View {
     @ObservedObject var tab: PaneTab
     @ObservedObject private var themeChanges = Theme.changes
     let pane: Pane
+    let onFocused: () -> Void
+    let isActiveTab: Bool
     let showFocusRing: Bool
     /// Whether the header can be grabbed — false while zoomed, where there is
     /// no other pane on screen to drop onto.
@@ -436,11 +385,12 @@ private struct PaneView: View {
     let onNewFileTab: (String) -> Void
     let onNewFilePane: (String) -> Void
 
-    private var isFocused: Bool { tab.focusedPaneID == pane.id }
+    private var isFocused: Bool { isActiveTab && tab.focusedPaneID == pane.id }
 
     /// Marks this pane focused — invoked when its content takes first-responder
     /// status (a click). Idempotent when already focused.
     private func focus() {
+        onFocused()
         if tab.focusedPaneID != pane.id {
             tab.focusedPaneID = pane.id
         }

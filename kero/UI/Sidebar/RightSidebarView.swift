@@ -86,11 +86,12 @@ private struct RemotePaneHeaderHost: NSViewRepresentable {
     }
 }
 
-/// Right sidebar: hidden by default, toggled from the terminal's corner
-/// button or ⇧⌘B. Files/Git switch via tabs along its top, otty-style.
+/// Renders one tool within a dock tab. Files, Git and Info retain their
+/// original models and actions regardless of where the tab is parked.
 struct RightSidebarView: View {
     @ObservedObject var manager: TerminalManager
     @ObservedObject var git: GitStatusModel
+    let panel: RightPanel
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var themeChanges = Theme.changes
     @StateObject private var info = SessionInfoModel()
@@ -107,7 +108,6 @@ struct RightSidebarView: View {
     @State private var portForwards = PortForwardRegistry()
     /// The selected session's forwards, or nil while it is local.
     @State private var forwards: PortForwardController?
-    @AppStorage("rightSidebarWidth") private var width: Double = 240
 
     /// Changes whenever the selected session's connection appears, changes
     /// state, or is replaced.
@@ -133,14 +133,8 @@ struct RightSidebarView: View {
     /// can die while the user is in another app — turning Wi-Fi off in Control
     /// Centre is exactly that. So it keeps ticking whenever the pane is on
     /// screen, active or not, while the panel refreshes below do not.
-    private var pollsRemoteHeading: Bool {
-        manager.isPanelVisible
-    }
-
     private var pollsSelectedPanel: Bool {
-        manager.isPanelVisible
-            && applicationIsActive
-            && manager.panelTab != .git
+        applicationIsActive && panel != .git
     }
 
     /// Every terminal in the selected project can change the same repository.
@@ -164,99 +158,79 @@ struct RightSidebarView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            if manager.isPanelVisible {
-                Rectangle()
-                    .fill(Color(nsColor: Theme.divider))
-                    .frame(width: 1)
-
-                VStack(spacing: 0) {
-                    tabBar
-                    if remoteHeaderState != .local {
-                        RemotePaneHeaderHost(
-                            view: remoteHeader,
-                            fontScale: sidebarFontScale
-                        )
-                        .frame(height: remoteHeader.fittingSize.height)
-                        // Same inset as the panel headings below, so the
-                        // destination and the shell row share a left edge.
-                        // The view supplies its own top inset.
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 6)
-                    }
-                    switch manager.panelTab {
-                    case .files:
-                        if let project = manager.selectedProject {
-                            FileTreePanel(
-                                model: project.fileTree,
-                                git: git,
-                                session: fileActionSession,
-                                sshHost: project.sshHost,
-                                rootBadge: rootBadge,
-                                currentFilePath: openFilePath,
-                                openFile: { manager.openFile($0) },
-                                openToSide: { manager.openFileToSide($0) },
-                                onRename: { [workspace = project.workspaceIdentity] oldPath, newPath in
-                                    manager.fileRenamed(
-                                        from: oldPath, to: newPath, workspace: workspace
-                                    )
-                                },
-                                refreshGitStatus: { git.refresh() }
-                            )
-                        }
-                    case .git:
-                        GitPanel(
-                            model: git,
-                            session: fileActionSession,
-                            sshHost: manager.selectedProject?.sshHost,
-                            openFile: { manager.openFile($0) },
-                            openToSide: { manager.openFileToSide($0) },
-                            openDiff: { entry, staged in
-                                manager.openDiff(
-                                    repoRoot: git.repoRoot,
-                                    path: entry.path,
-                                    staged: staged,
-                                    untracked: entry.isUntracked,
-                                    origPath: entry.origPath
-                                )
-                            },
-                            openCommitDiff: { commit, file in
-                                manager.openCommitDiff(
-                                    repoRoot: git.repoRoot,
-                                    path: file.path,
-                                    commitHash: commit.hash,
-                                    parentHash: commit.parentHash,
-                                    status: file.status,
-                                    origPath: file.originalPath
-                                )
-                            }
-                        )
-                    case .info:
-                        InfoPanel(
-                            model: info,
-                            session: fileActionSession,
-                            sshHost: manager.selectedProject?.sshHost,
-                            forwards: forwards
-                        )
-                    }
-                }
-                .frame(width: width)
-                .background(Color(nsColor: Theme.sidebar))
+        VStack(spacing: 0) {
+            if remoteHeaderState != .local {
+                RemotePaneHeaderHost(
+                    view: remoteHeader,
+                    fontScale: sidebarFontScale
+                )
+                .frame(height: remoteHeader.fittingSize.height)
+                // Same inset as the panel headings below, so the
+                // destination and the shell row share a left edge.
+                // The view supplies its own top inset.
+                .padding(.horizontal, 12)
+                .padding(.bottom, 6)
             }
-        }
-        .overlay(alignment: .leading) {
-            if manager.isPanelVisible {
-                SidebarResizeHandle(
-                    edge: .leading,
-                    width: $width,
-                    range: 180...500,
-                    defaultWidth: 240
+            switch panel {
+            case .files:
+                if let project = manager.selectedProject {
+                    FileTreePanel(
+                        model: project.fileTree,
+                        git: git,
+                        session: fileActionSession,
+                        sshHost: project.sshHost,
+                        rootBadge: rootBadge,
+                        currentFilePath: openFilePath,
+                        openFile: { manager.openFile($0) },
+                        openToSide: { manager.openFileToSide($0) },
+                        onRename: { [workspace = project.workspaceIdentity] oldPath, newPath in
+                            manager.fileRenamed(
+                                from: oldPath, to: newPath, workspace: workspace
+                            )
+                        },
+                        refreshGitStatus: { git.refresh() }
+                    )
+                }
+            case .git:
+                GitPanel(
+                    model: git,
+                    session: fileActionSession,
+                    sshHost: manager.selectedProject?.sshHost,
+                    openFile: { manager.openFile($0) },
+                    openToSide: { manager.openFileToSide($0) },
+                    openDiff: { entry, staged in
+                        manager.openDiff(
+                            repoRoot: git.repoRoot,
+                            path: entry.path,
+                            staged: staged,
+                            untracked: entry.isUntracked,
+                            origPath: entry.origPath
+                        )
+                    },
+                    openCommitDiff: { commit, file in
+                        manager.openCommitDiff(
+                            repoRoot: git.repoRoot,
+                            path: file.path,
+                            commitHash: commit.hash,
+                            parentHash: commit.parentHash,
+                            status: file.status,
+                            origPath: file.originalPath
+                        )
+                    }
+                )
+            case .info:
+                InfoPanel(
+                    model: info,
+                    session: fileActionSession,
+                    sshHost: manager.selectedProject?.sshHost,
+                    forwards: forwards
                 )
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: Theme.sidebar))
         .onAppear { syncModels() }
-        .task(id: pollsRemoteHeading) {
-            guard pollsRemoteHeading else { return }
+        .task {
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(for: .seconds(2))
@@ -294,8 +268,6 @@ struct RightSidebarView: View {
         .onChange(of: commandCompletionSequences) {
             syncModels()
         }
-        .onChange(of: manager.isPanelVisible) { syncModels() }
-        .onChange(of: manager.panelTab) { syncModels() }
         .onChange(of: manager.selectedSession?.id) { syncModels() }
         .onChange(of: manager.selectedProjectID) { syncModels() }
         .onChange(of: manager.selectedProject?.sshHost) { syncModels() }
@@ -312,60 +284,6 @@ struct RightSidebarView: View {
         // Native button and control labels without a designed hierarchy use
         // the configured base size directly.
         .environment(\.font, .system(size: CGFloat(settings.sidebarFontSize)))
-    }
-
-    private var tabBar: some View {
-        HStack(spacing: 4) {
-            tabButton(
-                .info,
-                systemImage: "info.circle",
-                title: String(localized: "Info", table: "Sidebar"),
-                help: String(localized: "Info (⇧⌘I)", table: "Sidebar")
-            )
-            tabButton(
-                .files,
-                systemImage: "folder",
-                title: String(localized: "Files", table: "Sidebar"),
-                help: String(localized: "Files (⇧⌘E)", table: "Sidebar")
-            )
-            tabButton(
-                .git,
-                systemImage: "arrow.triangle.branch",
-                title: String(localized: "Git", table: "Sidebar"),
-                help: String(localized: "Git (⇧⌘G)", table: "Sidebar")
-            )
-        }
-        .padding(.horizontal, 8)
-        .padding(.top, 12)
-        .padding(.bottom, 4)
-    }
-
-    private func tabButton(_ panel: RightPanel, systemImage: String, title: String, help: String) -> some View {
-        let isActive = manager.panelTab == panel
-        return Button {
-            manager.panelTab = panel
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: systemImage)
-                    .sidebarFont(size: 10, weight: .medium)
-                Text(title)
-                    .sidebarFont(size: 11, weight: .regular)
-            }
-            .foregroundStyle(isActive ? .primary : .secondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isActive ? Color.primary.opacity(0.12) : .clear)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .accessibilityLabel(title)
-        .accessibilityValue(isActive
-            ? String(localized: "Selected", table: "Sidebar")
-            : String(localized: "Not selected", table: "Sidebar"))
     }
 
     private func syncModels() {

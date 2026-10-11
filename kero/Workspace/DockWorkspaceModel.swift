@@ -1,4 +1,5 @@
 import Combine
+import CoreGraphics
 import Foundation
 
 /// One movable workspace tab. A project owns its live editor/terminal tabs;
@@ -19,8 +20,23 @@ enum DockAxis: String, Codable {
     case horizontal, vertical
 }
 
-enum DockEdge {
+enum DockEdge: Equatable {
     case left, right, top, bottom
+}
+
+/// Hit-test directly against the pane's visible content, not a five-zone
+/// overlay. The tab strip always accepts a merge/reorder drop.
+enum DockDropHitTest {
+    static func edge(at pointer: CGPoint, in frame: CGRect, headerHeight: CGFloat = 38) -> DockEdge? {
+        guard frame.contains(pointer), pointer.y >= frame.minY + headerHeight else { return nil }
+        let x = (pointer.x - frame.minX) / max(frame.width, 1)
+        let y = (pointer.y - frame.minY - headerHeight) / max(frame.height - headerHeight, 1)
+        let nearest = min(x, 1 - x, y, 1 - y)
+        guard nearest < 0.22 else { return nil }
+        if nearest == x { return .left }
+        if nearest == 1 - x { return .right }
+        return nearest == y ? .top : .bottom
+    }
 }
 
 struct DockGroup {
@@ -269,6 +285,7 @@ indirect enum DockSavedNode: Codable {
 @MainActor
 final class DockWorkspaceModel: ObservableObject {
     @Published private(set) var root: DockNode
+    private var needsLegacyWidthMigration = true
 
     init() {
         root = Self.defaults()
@@ -284,6 +301,22 @@ final class DockWorkspaceModel: ObservableObject {
                 second: .group(DockGroup(region: .right, items: [.info, .files, .git], selected: .files))
             ))
         ))
+    }
+
+    /// Keep the user's existing sidebar widths on first launch of the new
+    /// docking UI; a saved dock layout already owns its own split fractions.
+    func applyExistingSidebarWidths(windowWidth: CGFloat, left: Double, right: Double) {
+        guard needsLegacyWidthMigration, windowWidth > 500,
+              case .split(var outer) = root,
+              case .split(var inner) = outer.second else { return }
+        let available = Double(windowWidth - 8)
+        let leftFraction = min(max(left / available, 0.1), 0.45)
+        let remaining = available * (1 - leftFraction)
+        outer.fraction = leftFraction
+        inner.fraction = min(max(1 - right / remaining, 0.4), 0.9)
+        outer.second = .split(inner)
+        needsLegacyWidthMigration = false
+        root = .split(outer)
     }
 
     func group(containing item: DockItem) -> DockGroup? { root.group(containing: item) }
@@ -364,6 +397,11 @@ final class DockWorkspaceModel: ObservableObject {
         }
     }
 
+    func removeTool(_ item: DockItem) {
+        if case .tab = item { return }
+        if let remaining = root.removing(item) { root = remaining }
+    }
+
     func resize(_ splitID: UUID, to fraction: Double) {
         root = root.settingFraction(splitID, fraction)
     }
@@ -373,10 +411,18 @@ final class DockWorkspaceModel: ObservableObject {
     }
 
     func restore(_ saved: DockSavedNode, tabIDs: [UUID]) {
+        needsLegacyWidthMigration = false
         root = saved.restore(tabIDs: tabIDs)
         // Normalize the saved tree: missing/unsnapshotable references and
         // project tabs opened since the snapshot must never disappear.
         syncTabs(tabIDs, near: nil)
+    }
+
+    var tabOrder: [UUID] {
+        root.groups.flatMap(\.items).compactMap { item in
+            if case .tab(let id) = item { return id }
+            return nil
+        }
     }
 
     var visibleItems: Set<DockItem> {

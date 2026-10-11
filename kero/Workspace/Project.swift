@@ -701,16 +701,26 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         closeBatch(tab.allContents)
     }
 
-    /// Closes every tab except `keep`.
+    /// "Close Others" is scoped to the tab group containing this tab, not
+    /// an unrelated split elsewhere in the same workspace.
     func closeOthers(_ keep: PaneTab) {
+        guard let group = dock.group(containing: .tab(keep.id)) else { return }
         selectedTabID = keep.id
-        closeBatch(tabs.filter { $0.id != keep.id }.flatMap(\.allContents))
+        let ids = Set(group.items.compactMap { item -> UUID? in
+            if case .tab(let id) = item, id != keep.id { return id }
+            return nil
+        })
+        closeBatch(tabs.filter { ids.contains($0.id) }.flatMap(\.allContents))
     }
 
-    /// Closes every tab positioned to the right of `tab` in the strip.
     func closeToRight(of tab: PaneTab) {
-        guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
-        closeBatch(Array(tabs[(index + 1)...]).flatMap(\.allContents))
+        guard let group = dock.group(containing: .tab(tab.id)),
+              let index = group.items.firstIndex(of: .tab(tab.id)) else { return }
+        let ids = Set(group.items.dropFirst(index + 1).compactMap { item -> UUID? in
+            if case .tab(let id) = item { return id }
+            return nil
+        })
+        closeBatch(tabs.filter { ids.contains($0.id) }.flatMap(\.allContents))
     }
 
     /// Closes every file pane while leaving other content in split tabs open.
@@ -800,62 +810,10 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
 
     // MARK: - Tab selection
 
-    /// Moves a dragged tab across `targetID`: after it when moving right, or
-    /// before it when moving left. Selection continues to follow its tab ID.
-    func moveTab(_ draggedID: UUID, to targetID: UUID) {
-        guard draggedID != targetID,
-              let draggedIndex = tabs.firstIndex(where: { $0.id == draggedID }),
-              let targetIndex = tabs.firstIndex(where: { $0.id == targetID })
-        else { return }
-
-        var reorderedTabs = tabs
-        let draggedTab = reorderedTabs.remove(at: draggedIndex)
-        reorderedTabs.insert(draggedTab, at: targetIndex)
-        tabs = reorderedTabs
-    }
-
-    /// Moves a tab into another tab's pane tree at the indicated drop edge.
-    /// The source layout is grafted intact, so dragging a tab that already has
-    /// splits preserves those panes and their proportions. Diff tabs stay
-    /// standalone, matching the same constraint as every other split path.
-    @discardableResult
-    func moveTab(
-        _ draggedID: UUID,
-        into targetTabID: UUID,
-        toward edge: PaneDropEdge,
-        beside targetPaneID: UUID
-    ) -> Bool {
-        guard draggedID != targetTabID,
-              let draggedIndex = tabs.firstIndex(where: { $0.id == draggedID }),
-              let draggedTab = tabs.first(where: { $0.id == draggedID }),
-              let targetTab = tabs.first(where: { $0.id == targetTabID }),
-              !draggedTab.allContents.contains(where: \.isDiff),
-              let targetPane = targetTab.allPanes.first(where: { $0.id == targetPaneID }),
-              !targetPane.content.isDiff
-        else { return false }
-
-        targetTab.insert(
-            draggedTab.layout,
-            focusedPaneID: draggedTab.focusedPaneID,
-            toward: edge,
-            beside: targetPaneID
-        )
-        if targetTab.contextSession == nil {
-            targetTab.contextSession = draggedTab.contextSession
-        }
-
-        // Contents remain alive and keep their project-level observations;
-        // only the now-empty source tab's forwarding observation is removed.
-        tabObservations[draggedID] = nil
-        recentTabIDs.removeAll { $0 == draggedID }
-        tabs.remove(at: draggedIndex)
-        selectedTabID = targetTabID
-        return true
-    }
-
     func select(index: Int) {
-        guard tabs.indices.contains(index) else { return }
-        selectedTabID = tabs[index].id
+        let ids = dock.tabOrder
+        guard ids.indices.contains(index) else { return }
+        selectedTabID = ids[index]
     }
 
     func selectNext() {
@@ -867,11 +825,10 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     }
 
     private func shiftSelection(by offset: Int) {
-        guard !tabs.isEmpty,
-              let current = tabs.firstIndex(where: { $0.id == selectedTabID })
+        let ids = dock.tabOrder
+        guard !ids.isEmpty, let current = ids.firstIndex(where: { $0 == selectedTabID })
         else { return }
-        let next = (current + offset + tabs.count) % tabs.count
-        selectedTabID = tabs[next].id
+        selectedTabID = ids[(current + offset + ids.count) % ids.count]
     }
 
     // MARK: - Layout mutation plumbing
