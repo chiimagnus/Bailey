@@ -614,10 +614,10 @@ private struct FileTreeScrollView: View {
     @Environment(\.sidebarFontScale) private var fontScale
 
     private var contentWidth: CGFloat {
-        let font = NSFont.systemFont(ofSize: TreeRowStyle.fontSize * fontScale)
-        return model.items.reduce(0) { width, item in
-            let nameWidth = (item.name as NSString).size(withAttributes: [.font: font]).width
-            return max(width, nameWidth + CGFloat(item.depth) * TreeRowStyle.indent + 68)
+        model.items.reduce(0) { width, item in
+            max(width, TreeRowStyle.minimumWidth(
+                name: item.name, depth: item.depth, scale: fontScale, trailing: 48
+            ))
         }
     }
 
@@ -1812,102 +1812,159 @@ private struct GitPanel: View {
 
     // MARK: Change list
 
-    private var changeList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                if model.totalChangeCount == 0 {
-                    cleanState
-                } else if visibleChangeCount == 0 {
-                    inlinePlaceholder(
-                        icon: "line.3.horizontal.decrease",
-                        text: String(localized: "No changed files match “\(filterText)”", table: "Sidebar")
-                    )
-                }
-                if !filteredMergeEntries.isEmpty {
-                    GitSectionHeader(
-                        title: String(localized: "MERGE CHANGES", table: "Sidebar"),
-                        count: filteredMergeEntries.count,
-                        isCollapsed: $mergeCollapsed,
-                        actions: [],
-                        actionsDisabled: model.isBusy
-                    )
-                    if !mergeCollapsed {
-                        changedFileRows(filteredMergeEntries, kind: .merge)
+    private var gitContentWidth: CGFloat {
+        var width: CGFloat = 0
+        let scale = sidebarFontScale
+        func include(_ name: String, depth: Int = 0, trailing: CGFloat = 112) {
+            width = max(width, TreeRowStyle.minimumWidth(
+                name: name, depth: depth, scale: scale, trailing: trailing
+            ))
+        }
+        let sections: [(GitEntryRow.Kind, [GitStatusModel.Entry], Bool)] = [
+            (.merge, filteredMergeEntries, mergeCollapsed),
+            (.staged, filteredStagedEntries, stagedCollapsed),
+            (.unstaged, filteredChangedEntries, changesCollapsed),
+        ]
+        for (kind, entries, collapsed) in sections where !collapsed {
+            if settings.gitViewMode == .tree {
+                for item in GitChangeTree.rows(
+                    entries, section: kind.rawValue, collapsed: collapsedFolders
+                ) {
+                    switch item.content {
+                    case .folder(_, let name, _): include(name, depth: item.depth)
+                    case .file(let entry): include(entry.fileName, depth: item.depth)
                     }
                 }
-                if !filteredStagedEntries.isEmpty {
-                    GitSectionHeader(
-                        title: String(localized: "STAGED CHANGES", table: "Sidebar"),
-                        count: filteredStagedEntries.count,
-                        isCollapsed: $stagedCollapsed,
-                        actions: filterText.isEmpty ? [
-                            .init(
-                                systemImage: "minus",
-                                help: String(localized: "Unstage All Changes", table: "Sidebar"),
-                                isLoading: operationIsLoading(.unstageAll)
-                            ) {
-                                performOperation(.unstageAll, model.unstageAll)
-                            }
-                        ] : [],
-                        actionsDisabled: model.isBusy
+            } else {
+                for entry in entries { include(entry.fileName + "  " + entry.directory) }
+            }
+        }
+        if filterText.isEmpty && !historyCollapsed {
+            for commit in model.recentCommits {
+                include(commit.subject + "  " + commit.author.uppercased(), trailing: 155)
+                guard expandedCommitIDs.contains(commit.id) else { continue }
+                if settings.gitViewMode == .tree {
+                    let rows = GitChangeTree.pathRows(
+                        commit.files.map(\.path), section: "commit:" + commit.hash,
+                        collapsed: collapsedFolders
                     )
-                    if !stagedCollapsed {
-                        changedFileRows(filteredStagedEntries, kind: .staged)
+                    for row in rows {
+                        switch row.content {
+                        case .folder(_, let name, _): include(name, depth: row.depth, trailing: 150)
+                        case .file(let path):
+                            include((path as NSString).lastPathComponent,
+                                    depth: row.depth, trailing: 150)
+                        }
                     }
-                }
-                if !filteredChangedEntries.isEmpty {
-                    GitSectionHeader(
-                        title: String(localized: "CHANGES", table: "Sidebar"),
-                        count: filteredChangedEntries.count,
-                        isCollapsed: $changesCollapsed,
-                        actions: filterText.isEmpty ? [
-                            .init(
-                                systemImage: "arrow.uturn.backward",
-                                help: String(localized: "Discard All Changes", table: "Sidebar"),
-                                isLoading: operationIsLoading(.discardAll)
-                            ) {
-                                requestDiscardAll()
-                            },
-                            .init(
-                                systemImage: "plus",
-                                help: String(localized: "Stage All Changes", table: "Sidebar"),
-                                isLoading: operationIsLoading(.stageAll)
-                            ) {
-                                performOperation(.stageAll, model.stageAll)
-                            },
-                        ] : [],
-                        actionsDisabled: model.isBusy
-                    )
-                    if !changesCollapsed {
-                        changedFileRows(filteredChangedEntries, kind: .unstaged)
-                    }
-                }
-                if filterText.isEmpty, !model.recentCommits.isEmpty {
-                    GitSectionHeader(
-                        title: String(localized: "RECENT COMMITS", table: "Sidebar"),
-                        count: model.recentCommits.count,
-                        isCollapsed: $historyCollapsed,
-                        actions: [],
-                        actionsDisabled: model.isBusy
-                    )
-                    if !historyCollapsed {
-                        RecentCommitsView(
-                            commits: model.recentCommits,
-                            expandedCommitIDs: $expandedCommitIDs,
-                            collapsedFolders: collapsedFoldersBinding,
-                            viewMode: settings.gitViewMode,
-                            fontScale: sidebarFontScale,
-                            hasMoreCommits: model.hasMoreRecentCommits,
-                            isLoadingMore: model.isLoadingMoreCommits,
-                            loadMore: model.loadMoreCommits,
-                            openDiff: openCommitDiff
-                        )
-                        .frame(maxWidth: .infinity)
+                } else {
+                    for file in commit.files {
+                        include(file.fileName + "  " + file.directory, trailing: 150)
                     }
                 }
             }
-            .padding(.horizontal, 6)
-            .padding(.bottom, 8)
+        }
+        return width
+    }
+
+    private var changeList: some View {
+        GeometryReader { viewport in
+            ScrollView([.vertical, .horizontal]) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if model.totalChangeCount == 0 {
+                        cleanState
+                    } else if visibleChangeCount == 0 {
+                        inlinePlaceholder(
+                            icon: "line.3.horizontal.decrease",
+                            text: String(localized: "No changed files match “\(filterText)”", table: "Sidebar")
+                        )
+                    }
+                    if !filteredMergeEntries.isEmpty {
+                        GitSectionHeader(
+                            title: String(localized: "MERGE CHANGES", table: "Sidebar"),
+                            count: filteredMergeEntries.count,
+                            isCollapsed: $mergeCollapsed,
+                            actions: [],
+                            actionsDisabled: model.isBusy
+                        )
+                        if !mergeCollapsed {
+                            changedFileRows(filteredMergeEntries, kind: .merge)
+                        }
+                    }
+                    if !filteredStagedEntries.isEmpty {
+                        GitSectionHeader(
+                            title: String(localized: "STAGED CHANGES", table: "Sidebar"),
+                            count: filteredStagedEntries.count,
+                            isCollapsed: $stagedCollapsed,
+                            actions: filterText.isEmpty ? [
+                                .init(
+                                    systemImage: "minus",
+                                    help: String(localized: "Unstage All Changes", table: "Sidebar"),
+                                    isLoading: operationIsLoading(.unstageAll)
+                                ) {
+                                    performOperation(.unstageAll, model.unstageAll)
+                                }
+                            ] : [],
+                            actionsDisabled: model.isBusy
+                        )
+                        if !stagedCollapsed {
+                            changedFileRows(filteredStagedEntries, kind: .staged)
+                        }
+                    }
+                    if !filteredChangedEntries.isEmpty {
+                        GitSectionHeader(
+                            title: String(localized: "CHANGES", table: "Sidebar"),
+                            count: filteredChangedEntries.count,
+                            isCollapsed: $changesCollapsed,
+                            actions: filterText.isEmpty ? [
+                                .init(
+                                    systemImage: "arrow.uturn.backward",
+                                    help: String(localized: "Discard All Changes", table: "Sidebar"),
+                                    isLoading: operationIsLoading(.discardAll)
+                                ) {
+                                    requestDiscardAll()
+                                },
+                                .init(
+                                    systemImage: "plus",
+                                    help: String(localized: "Stage All Changes", table: "Sidebar"),
+                                    isLoading: operationIsLoading(.stageAll)
+                                ) {
+                                    performOperation(.stageAll, model.stageAll)
+                                },
+                            ] : [],
+                            actionsDisabled: model.isBusy
+                        )
+                        if !changesCollapsed {
+                            changedFileRows(filteredChangedEntries, kind: .unstaged)
+                        }
+                    }
+                    if filterText.isEmpty, !model.recentCommits.isEmpty {
+                        GitSectionHeader(
+                            title: String(localized: "RECENT COMMITS", table: "Sidebar"),
+                            count: model.recentCommits.count,
+                            isCollapsed: $historyCollapsed,
+                            actions: [],
+                            actionsDisabled: model.isBusy
+                        )
+                        if !historyCollapsed {
+                            RecentCommitsView(
+                                commits: model.recentCommits,
+                                expandedCommitIDs: $expandedCommitIDs,
+                                collapsedFolders: collapsedFoldersBinding,
+                                viewMode: settings.gitViewMode,
+                                fontScale: sidebarFontScale,
+                                hasMoreCommits: model.hasMoreRecentCommits,
+                                isLoadingMore: model.isLoadingMoreCommits,
+                                loadMore: model.loadMoreCommits,
+                                openDiff: openCommitDiff
+                            )
+                            .frame(maxWidth: .infinity)
+                        }
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.bottom, 8)
+                .frame(width: max(viewport.size.width, gitContentWidth), alignment: .leading)
+            }
         }
     }
 

@@ -18,6 +18,12 @@ enum TreeRowStyle {
         expanded ? "folder" : "folder.fill"
     }
 
+    static func minimumWidth(name: String, depth: Int, scale: CGFloat, trailing: CGFloat) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: fontSize * scale)
+        let nameWidth = (name as NSString).size(withAttributes: [.font: font]).width
+        return ceil(leadingInset + CGFloat(depth) * indent + iconSize + iconSpacing
+                    + nameWidth + trailing)
+    }
 }
 
 /// Identical SwiftUI folder glyph in Files and both Git trees.
