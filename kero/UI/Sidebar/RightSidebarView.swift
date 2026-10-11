@@ -873,6 +873,7 @@ private struct FileTreeRow: View {
     @State private var isHovering = false
     @State private var editingName = ""
     @FocusState private var fieldFocused: Bool
+    @Environment(\.sidebarFontScale) private var fontScale
 
     private var isRenaming: Bool { model.renamingPath == item.path }
 
@@ -1147,10 +1148,7 @@ private struct FileTreeRow: View {
     private var leadingGlyphs: some View {
         Group {
             if item.isDirectory {
-                Image(systemName: TreeRowStyle.folderSymbol(expanded: model.isExpanded(item)))
-                    .sidebarFont(size: 11)
-                    .foregroundStyle(Color(nsColor: Theme.accent).opacity(0.8))
-                    .frame(width: TreeRowStyle.iconSize)
+                TreeFolderIcon(expanded: model.isExpanded(item), scale: fontScale)
             } else {
                 MaterialFileIconView(path: item.path, size: TreeRowStyle.iconSize)
                     .frame(width: TreeRowStyle.iconSize)
@@ -1200,82 +1198,33 @@ private extension GitStatusModel.FileDecoration {
 
 // MARK: - Git panel
 
-// Directory rows use one native button: the folder itself expands/collapses.
-@MainActor
-private final class GitChangeFolderNSView: NSView {
-    private let folder = NSButton(title: "", target: nil, action: nil)
-    var onToggle: (() -> Void)?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-
-        folder.isBordered = false
-        folder.target = self
-        folder.action = #selector(toggleFolder)
-        folder.translatesAutoresizingMaskIntoConstraints = false
-        folder.controlSize = .small
-        addSubview(folder)
-        folder.imagePosition = .imageLeading
-        folder.alignment = .left
-        folder.font = .systemFont(ofSize: TreeRowStyle.fontSize)
-        folder.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        NSLayoutConstraint.activate([
-            folder.leadingAnchor.constraint(equalTo: leadingAnchor),
-            folder.trailingAnchor.constraint(equalTo: trailingAnchor),
-            folder.centerYAnchor.constraint(equalTo: centerYAnchor),
-            folder.heightAnchor.constraint(equalToConstant: 20),
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) is not used")
-    }
-
-    func apply(name: String, path: String, collapsed: Bool, fontScale: CGFloat) {
-        let configuration = NSImage.SymbolConfiguration(
-            pointSize: 11 * fontScale, weight: .regular
-        ).applying(.init(paletteColors: [Theme.accent.withAlphaComponent(0.8)]))
-        folder.image = NSImage(
-            systemSymbolName: TreeRowStyle.folderSymbol(expanded: !collapsed),
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(configuration)
-        let font = NSFont.systemFont(ofSize: TreeRowStyle.fontSize * fontScale)
-        folder.font = font
-        folder.attributedTitle = NSAttributedString(
-            string: name,
-            attributes: [
-                .font: font,
-                .foregroundColor: NSColor.secondaryLabelColor,
-            ]
-        )
-        folder.toolTip = path
-        folder.setAccessibilityLabel(name)
-        folder.setAccessibilityValue(
-            collapsed ? String(localized: "Collapsed", table: "Sidebar") : String(localized: "Expanded", table: "Sidebar")
-        )
-    }
-
-    @objc private func toggleFolder() {
-        onToggle?()
-    }
-}
-
-private struct GitChangeFolderRow: NSViewRepresentable {
+private struct GitChangeFolderRow: View {
     let name: String
     let path: String
     let collapsed: Bool
     let fontScale: CGFloat
     let onToggle: () -> Void
 
-    func makeNSView(context: Context) -> GitChangeFolderNSView {
-        GitChangeFolderNSView(frame: .zero)
-    }
-
-    func updateNSView(_ view: GitChangeFolderNSView, context: Context) {
-        view.onToggle = onToggle
-        view.apply(name: name, path: path, collapsed: collapsed, fontScale: fontScale)
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: TreeRowStyle.iconSpacing) {
+                TreeFolderIcon(expanded: !collapsed, scale: fontScale)
+                Text(name)
+                    .sidebarFont(size: TreeRowStyle.fontSize)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(path)
+        .accessibilityLabel(name)
+        .accessibilityValue(
+            collapsed ? String(localized: "Collapsed", table: "Sidebar")
+                : String(localized: "Expanded", table: "Sidebar")
+        )
     }
 }
 

@@ -28,6 +28,26 @@ enum TreeRowStyle {
     }
 }
 
+/// Identical SwiftUI folder glyph in Files and both Git trees.
+struct TreeFolderIcon: View {
+    let expanded: Bool
+    let scale: CGFloat
+
+    var body: some View {
+        Image(systemName: TreeRowStyle.folderSymbol(expanded: expanded))
+            .font(.system(size: 11 * scale))
+            .foregroundStyle(Color(nsColor: Theme.accent).opacity(0.8))
+            .frame(width: TreeRowStyle.iconSize, height: TreeRowStyle.iconSize)
+            .accessibilityHidden(true)
+    }
+}
+
+/// The AppKit commit graph hosts that same SwiftUI glyph without intercepting row clicks.
+@MainActor
+final class TreeFolderIconHost: NSHostingView<TreeFolderIcon> {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 @MainActor
 private final class TreeGuideNSView: NSView {
     var depth = 0 { didSet { if depth != oldValue { needsDisplay = true } } }

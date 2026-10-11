@@ -580,6 +580,7 @@ private final class CommitFileRowView: NSView {
     let onOpen: (() -> Void)?
     private var trackingAreaReference: NSTrackingArea?
     private var isHovered = false
+    private var folderIcon: TreeFolderIconHost?
 
     init(
         change: GitStatusModel.RecentCommit.FileChange?,
@@ -598,6 +599,13 @@ private final class CommitFileRowView: NSView {
         self.metrics = metrics
         self.onOpen = onOpen
         super.init(frame: .zero)
+        if let folder {
+            let icon = TreeFolderIconHost(rootView: TreeFolderIcon(
+                expanded: !folder.collapsed, scale: metrics.scale
+            ))
+            addSubview(icon)
+            folderIcon = icon
+        }
         setAccessibilityElement(true)
         if let folder {
             toolTip = folder.path
@@ -622,6 +630,16 @@ private final class CommitFileRowView: NSView {
     override var acceptsFirstResponder: Bool { onOpen != nil }
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: metrics.fileHeight)
+    }
+
+    override func layout() {
+        super.layout()
+        folderIcon?.frame = NSRect(
+            x: metrics.fileIconX + CGFloat(depth) * TreeRowStyle.indent,
+            y: (bounds.height - TreeRowStyle.iconSize) / 2,
+            width: TreeRowStyle.iconSize,
+            height: TreeRowStyle.iconSize
+        )
     }
 
     override func updateTrackingAreas() {
@@ -741,26 +759,14 @@ private final class CommitFileRowView: NSView {
     }
 
     private func drawFolder(_ folder: (path: String, name: String, collapsed: Bool)) {
-        let offset = CGFloat(depth) * TreeRowStyle.indent
-        let iconSize = TreeRowStyle.iconSize
-        let folderStyle = NSImage.SymbolConfiguration(
-            pointSize: 11 * metrics.scale, weight: .regular
-        ).applying(.init(paletteColors: [Theme.accent.withAlphaComponent(0.8)]))
-        let image = NSImage(
-            systemSymbolName: TreeRowStyle.folderSymbol(expanded: !folder.collapsed),
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(folderStyle)
-        image?.draw(in: NSRect(
-            x: metrics.fileIconX + offset,
-            y: (bounds.height - iconSize) / 2,
-            width: iconSize, height: iconSize
-        ))
+        let x = metrics.fileIconX + CGFloat(depth) * TreeRowStyle.indent
+            + TreeRowStyle.iconSize + TreeRowStyle.iconSpacing
         let height = ceil(metrics.fileFont.pointSize * 1.45)
         (folder.name as NSString).draw(
             with: NSRect(
-                x: metrics.fileContentX + offset,
+                x: x,
                 y: (bounds.height - height) / 2,
-                width: max(0, bounds.width - metrics.fileContentX - offset - 5),
+                width: max(0, bounds.width - x - 5),
                 height: height
             ),
             options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
