@@ -12,10 +12,6 @@ enum DockItem: Hashable {
     case tab(UUID)
 }
 
-enum DockRegion: String, Codable {
-    case left, main, right, extra
-}
-
 enum DockAxis: String, Codable {
     case horizontal, vertical
 }
@@ -41,13 +37,11 @@ enum DockDropHitTest {
 
 struct DockGroup {
     let id: UUID
-    var region: DockRegion
     var items: [DockItem]
     var selected: DockItem?
 
-    init(id: UUID = UUID(), region: DockRegion, items: [DockItem], selected: DockItem? = nil) {
+    init(id: UUID = UUID(), items: [DockItem], selected: DockItem? = nil) {
         self.id = id
-        self.region = region
         self.items = items
         self.selected = selected ?? items.first
     }
@@ -81,38 +75,8 @@ indirect enum DockNode {
     }
 
     func group(id: UUID) -> DockGroup? { groups.first { $0.id == id } }
-    func group(region: DockRegion) -> DockGroup? { groups.first { $0.region == region } }
     func group(containing item: DockItem) -> DockGroup? {
         groups.first { $0.items.contains(item) }
-    }
-
-    /// A split inside a sidebar belongs to that sidebar even when its new
-    /// groups are marked `.extra`. The anchor group remains in the tree.
-    var sidebarRegion: DockRegion? {
-        let regions = Set(groups.map(\.region))
-        if regions.contains(.left), !regions.contains(.main), !regions.contains(.right) { return .left }
-        if regions.contains(.right), !regions.contains(.main), !regions.contains(.left) { return .right }
-        return nil
-    }
-
-    func sidebar(containing groupID: UUID) -> DockRegion? {
-        guard group(id: groupID) != nil else { return nil }
-        if let sidebarRegion { return sidebarRegion }
-        switch self {
-        case .group: return nil
-        case .split(let split):
-            return split.first.sidebar(containing: groupID)
-                ?? split.second.sidebar(containing: groupID)
-        }
-    }
-
-    func sidebarGroups(_ region: DockRegion) -> [DockGroup] {
-        if sidebarRegion == region { return groups }
-        switch self {
-        case .group: return []
-        case .split(let split):
-            return split.first.sidebarGroups(region) + split.second.sidebarGroups(region)
-        }
     }
 
     func editingGroup(_ id: UUID, _ edit: (inout DockGroup) -> Void) -> DockNode {
@@ -139,14 +103,13 @@ indirect enum DockNode {
         }
     }
 
-    /// Empty auxiliary groups collapse; the three default regions remain
-    /// available for reopening from the existing sidebar buttons.
+    /// Empty groups collapse naturally after moving or closing their last tab.
     func removing(_ item: DockItem) -> DockNode? {
         switch self {
         case .group(var group):
             group.items.removeAll { $0 == item }
             if group.selected == item { group.selected = group.items.first }
-            return group.items.isEmpty && group.region == .extra ? nil : .group(group)
+            return group.items.isEmpty ? nil : .group(group)
         case .split(var split):
             let first = split.first.removing(item)
             let second = split.second.removing(item)
@@ -179,20 +142,17 @@ indirect enum DockNode {
         }
     }
 
-    func removingEmptyExtras() -> DockNode? {
+    func removingEmptyGroups() -> DockNode? {
         switch self {
-        case .group(let group):
-            return group.items.isEmpty && group.region == .extra ? nil : self
+        case .group(let group): return group.items.isEmpty ? nil : self
         case .split(var split):
-            let first = split.first.removingEmptyExtras()
-            let second = split.second.removingEmptyExtras()
-            switch (first, second) {
-            case (let a?, let b?):
-                split.first = a
-                split.second = b
+            switch (split.first.removingEmptyGroups(), split.second.removingEmptyGroups()) {
+            case (let first?, let second?):
+                split.first = first
+                split.second = second
                 return .split(split)
-            case (let a?, nil): return a
-            case (nil, let b?): return b
+            case (let first?, nil): return first
+            case (nil, let second?): return second
             case (nil, nil): return nil
             }
         }
@@ -212,42 +172,6 @@ indirect enum DockNode {
         }
     }
 
-    /// Remove collapsed side regions from the rendered tree without modifying
-    /// the saved layout or moving their contained tabs.
-    func visible(left: Bool, right: Bool) -> DockNode? {
-        if sidebarRegion == .left && !left { return nil }
-        if sidebarRegion == .right && !right { return nil }
-        switch self {
-        case .group: return self
-        case .split(var split):
-            let first = split.first.visible(left: left, right: right)
-            let second = split.second.visible(left: left, right: right)
-            switch (first, second) {
-            case (let a?, let b?):
-                split.first = a
-                split.second = b
-                return .split(split)
-            case (let a?, nil): return a
-            case (nil, let b?): return b
-            case (nil, nil): return nil
-            }
-        }
-    }
-}
-
-extension DockSplit {
-    func resetFraction(available: CGFloat) -> Double {
-        guard axis == .horizontal, available > 0 else { return 0.5 }
-        if first.sidebarRegion == .left,
-           second.groups.contains(where: { $0.region == .main || $0.region == .right }) {
-            return 220 / Double(available)
-        }
-        if second.sidebarRegion == .right,
-           first.groups.contains(where: { $0.region == .main || $0.region == .left }) {
-            return 1 - 240 / Double(available)
-        }
-        return 0.5
-    }
 }
 
 /// Saved tab references are indices into the *persistable* project tab list:
@@ -282,7 +206,6 @@ enum DockSavedItem: Codable, Hashable {
 
 struct DockSavedGroup: Codable {
     var id: UUID
-    var region: DockRegion
     var items: [DockSavedItem]
     var selected: DockSavedItem?
 }
@@ -295,7 +218,7 @@ indirect enum DockSavedNode: Codable {
         switch node {
         case .group(let group):
             self = .group(DockSavedGroup(
-                id: group.id, region: group.region,
+                id: group.id,
                 items: group.items.compactMap { DockSavedItem($0, tabIDs: tabIDs) },
                 selected: group.selected.flatMap { DockSavedItem($0, tabIDs: tabIDs) }
             ))
@@ -312,7 +235,7 @@ indirect enum DockSavedNode: Codable {
         switch self {
         case .group(let saved):
             return .group(DockGroup(
-                id: saved.id, region: saved.region,
+                id: saved.id,
                 items: saved.items.compactMap { $0.resolve(tabIDs: tabIDs) },
                 selected: saved.selected?.resolve(tabIDs: tabIDs)
             ))
@@ -328,8 +251,6 @@ indirect enum DockSavedNode: Codable {
 @MainActor
 final class DockWorkspaceModel: ObservableObject {
     @Published private(set) var root: DockNode
-    private var needsLegacyWidthMigration = true
-
     init() {
         root = Self.defaults()
     }
@@ -337,49 +258,24 @@ final class DockWorkspaceModel: ObservableObject {
     private static func defaults() -> DockNode {
         .split(DockSplit(
             axis: .horizontal, fraction: 0.12,
-            first: .group(DockGroup(region: .left, items: [.projects])),
+            first: .group(DockGroup(items: [.projects])),
             second: .split(DockSplit(
                 axis: .horizontal, fraction: 0.787,
-                first: .group(DockGroup(region: .main, items: [])),
-                second: .group(DockGroup(region: .right, items: [.info, .files, .git], selected: .files))
+                first: .group(DockGroup(items: [])),
+                second: .group(DockGroup(items: [.info, .files, .git], selected: .files))
             ))
         ))
     }
 
-    /// Keep the user's existing sidebar widths on first launch of the new
-    /// docking UI; a saved dock layout already owns its own split fractions.
-    func applyExistingSidebarWidths(windowWidth: CGFloat, left: Double, right: Double) {
-        guard needsLegacyWidthMigration, windowWidth > 500,
-              case .split(var outer) = root,
-              case .split(var inner) = outer.second else { return }
-        let available = Double(windowWidth - 8)
-        let leftFraction = min(max(left / available, 0.1), 0.45)
-        let remaining = available * (1 - leftFraction)
-        outer.fraction = leftFraction
-        inner.fraction = min(max(1 - right / remaining, 0.4), 0.9)
-        outer.second = .split(inner)
-        needsLegacyWidthMigration = false
-        root = .split(outer)
-    }
-
     func group(containing item: DockItem) -> DockGroup? { root.group(containing: item) }
-    func group(region: DockRegion) -> DockGroup? { root.group(region: region) }
-    func sidebar(containing item: DockItem) -> DockRegion? {
-        guard let owner = root.group(containing: item) else { return nil }
-        return root.sidebar(containing: owner.id)
-    }
-
-    func hasSidebarItems(_ region: DockRegion) -> Bool {
-        root.sidebarGroups(region).contains { !$0.items.isEmpty }
-    }
 
     func select(_ item: DockItem) {
         guard let owner = group(containing: item), owner.selected != item else { return }
         root = root.editingGroup(owner.id) { $0.selected = item }
     }
 
-    /// A new content tab belongs beside the previously selected tab, or to the
-    /// main group if no live anchor remains. Removes stale tabs after closes.
+    /// Keep new tabs near the selected tab, otherwise prefer an empty group.
+    /// There is no privileged main/left/right container.
     func syncTabs(_ tabIDs: [UUID], near selectedTab: UUID?) {
         let allowed = Set(tabIDs)
         var seen = Set<DockItem>()
@@ -393,7 +289,10 @@ final class DockWorkspaceModel: ObservableObject {
             }
         }
         let destination = selectedTab.flatMap { updated.group(containing: .tab($0)) }
-            ?? updated.group(region: .main)
+            ?? updated.groups.first(where: { $0.items.isEmpty })
+            ?? updated.groups.first(where: { group in
+                group.items.contains { if case .tab = $0 { return true }; return false }
+            })
             ?? updated.groups.first
         if let destination {
             let missing = tabIDs.map(DockItem.tab).filter { !seen.contains($0) }
@@ -404,19 +303,24 @@ final class DockWorkspaceModel: ObservableObject {
                 }
             }
         }
-        root = updated.removingEmptyExtras() ?? Self.defaults()
+        let hadTerminalTabs = root.groups.contains { group in
+            group.items.contains { if case .tab = $0 { return true }; return false }
+        }
+        root = hadTerminalTabs
+            ? (updated.removingEmptyGroups() ?? .group(DockGroup(items: [])))
+            : updated
     }
 
     func move(_ item: DockItem, into destinationID: UUID, edge: DockEdge? = nil, index: Int? = nil) -> Bool {
         guard let source = root.group(containing: item),
               root.group(id: destinationID) != nil
         else { return false }
-        if source.id == destinationID && edge != nil && source.items.count == 1 { return false }
+        if source.id == destinationID && source.items.count == 1 { return edge == nil }
         guard let remaining = root.removing(item) else { return false }
         if let edge {
             guard remaining.group(id: destinationID) != nil else { return false }
             root = remaining.inserting(
-                .group(DockGroup(region: .extra, items: [item])),
+                .group(DockGroup(items: [item])),
                 edge: edge, at: destinationID
             )
         } else {
@@ -435,12 +339,6 @@ final class DockWorkspaceModel: ObservableObject {
         return true
     }
 
-    /// An empty side can be reopened and populated without copying a panel.
-    func place(_ item: DockItem, in region: DockRegion) {
-        guard let destination = root.group(region: region) else { return }
-        _ = place(item, in: destination.id)
-    }
-
     @discardableResult
     func place(_ item: DockItem, in groupID: UUID) -> Bool {
         guard root.group(id: groupID) != nil else { return false }
@@ -454,7 +352,14 @@ final class DockWorkspaceModel: ObservableObject {
 
     func removeTool(_ item: DockItem) {
         if case .tab = item { return }
-        if let remaining = root.removing(item) { root = remaining }
+        if let remaining = root.removing(item) {
+            root = remaining
+        } else if let owner = root.group(containing: item) {
+            root = root.editingGroup(owner.id) { group in
+                group.items.removeAll { $0 == item }
+                group.selected = nil
+            }
+        }
     }
 
     func resize(_ splitID: UUID, to fraction: Double) {
@@ -466,7 +371,6 @@ final class DockWorkspaceModel: ObservableObject {
     }
 
     func restore(_ saved: DockSavedNode, tabIDs: [UUID]) {
-        needsLegacyWidthMigration = false
         root = saved.restore(tabIDs: tabIDs)
         // Normalize the saved tree: missing/unsnapshotable references and
         // project tabs opened since the snapshot must never disappear.

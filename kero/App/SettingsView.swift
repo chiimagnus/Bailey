@@ -124,27 +124,27 @@ struct SettingsView: View {
                 }
             }
 
-            Section(String(localized: "Sidebar", table: "Settings")) {
+            Section(String(localized: "Panels", table: "Settings")) {
                 HStack {
                     Text(String(localized: "Font size", table: "Settings"))
                     Slider(
-                        value: $settings.sidebarFontSize,
-                        in: AppSettings.sidebarFontSizeRange,
+                        value: $settings.panelFontSize,
+                        in: AppSettings.panelFontSizeRange,
                         step: 1
                     )
-                    .accessibilityLabel(String(localized: "Sidebar font size", table: "Settings"))
-                    Text(String(localized: "\(Int(settings.sidebarFontSize)) pt", table: "Settings"))
+                    .accessibilityLabel(String(localized: "Panel font size", table: "Settings"))
+                    Text(String(localized: "\(Int(settings.panelFontSize)) pt", table: "Settings"))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .frame(width: 40, alignment: .trailing)
                     Stepper(
                         "",
-                        value: $settings.sidebarFontSize,
-                        in: AppSettings.sidebarFontSizeRange,
+                        value: $settings.panelFontSize,
+                        in: AppSettings.panelFontSizeRange,
                         step: 1
                     )
                     .labelsHidden()
-                    .accessibilityLabel(String(localized: "Sidebar font size", table: "Settings"))
+                    .accessibilityLabel(String(localized: "Panel font size", table: "Settings"))
                 }
             }
 
@@ -225,7 +225,7 @@ struct SettingsView: View {
                     }
                     .disabled(settings.fontFamily.isEmpty
                         && settings.fontSize == AppSettings.defaultFontSize
-                        && settings.sidebarFontSize == AppSettings.defaultSidebarFontSize
+                        && settings.panelFontSize == AppSettings.defaultPanelFontSize
                         && !settings.fontThicken
                         && settings.cursorShape == .block
                         && settings.cursorBlinking

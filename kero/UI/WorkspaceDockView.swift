@@ -59,30 +59,17 @@ final class DockTabDragCoordinator: ObservableObject {
         )
     }
 
-    func finish(project: Project, manager: TerminalManager) {
+    func finish(project: Project) {
         defer {
             position = nil
             NSCursor.arrow.set()
         }
         guard let position, let destination = position.destination else { return }
-        let original = project.dock.group(containing: position.item)
         guard project.dock.move(
             position.item, into: destination,
             edge: position.edge, index: position.index
         ) else { return }
-        if case .tab(let id) = position.item {
-            project.selectedTabID = id
-        }
-        // A sidebar whose last tab was moved away collapses automatically;
-        // it remains in the saved tree and the original button reopens it.
-        if let original, original.region == .left,
-           project.dock.group(region: .left)?.items.isEmpty == true {
-            manager.isLeftSidebarVisible = false
-        }
-        if let original, original.region == .right,
-           project.dock.group(region: .right)?.items.isEmpty == true {
-            manager.isPanelVisible = false
-        }
+        if case .tab(let id) = position.item { project.selectedTabID = id }
     }
 }
 
@@ -104,34 +91,17 @@ struct WorkspaceDockView: View {
     @ObservedObject var manager: TerminalManager
     @ObservedObject var git: GitStatusModel
     @StateObject private var dragging = DockTabDragCoordinator()
-    @AppStorage("leftSidebarWidth") private var legacyLeftWidth: Double = 220
-    @AppStorage("rightSidebarWidth") private var legacyRightWidth: Double = 240
 
     var body: some View {
         GeometryReader { rootGeometry in
-            if let project = manager.selectedProject,
-               let layout = project.dock.root.visible(
-                left: manager.isLeftSidebarVisible,
-                right: manager.isPanelVisible
-               ) {
+            if let project = manager.selectedProject {
+                let layout = project.dock.root
                 DockTreeView(
                     node: layout, project: project, manager: manager,
                     git: git, dragging: dragging
                 )
                 .frame(width: rootGeometry.size.width, height: rootGeometry.size.height)
                 .background(Color(nsColor: Theme.background))
-                .onAppear {
-                    project.dock.applyExistingSidebarWidths(
-                        windowWidth: rootGeometry.size.width,
-                        left: legacyLeftWidth, right: legacyRightWidth
-                    )
-                }
-                .onChange(of: rootGeometry.size.width) {
-                    project.dock.applyExistingSidebarWidths(
-                        windowWidth: rootGeometry.size.width,
-                        left: legacyLeftWidth, right: legacyRightWidth
-                    )
-                }
                 .onPreferenceChange(DockGroupFrames.self) {
                     dragging.setFrames(groups: $0)
                 }
@@ -139,12 +109,6 @@ struct WorkspaceDockView: View {
                     dragging.setFrames(tabs: $0)
                 }
                 .onChange(of: manager.selectedProjectID) { dragging.cancel() }
-                .onChange(of: project.selectedTabID) {
-                    guard let id = project.selectedTabID,
-                          let group = project.dock.group(containing: .tab(id)) else { return }
-                    if group.region == .left { manager.isLeftSidebarVisible = true }
-                    if group.region == .right { manager.isPanelVisible = true }
-                }
                 .overlay(alignment: .topLeading) {
                     if let position = dragging.position, position.destination != nil {
                         let origin = rootGeometry.frame(in: .global).origin
@@ -173,6 +137,7 @@ struct WorkspaceDockView: View {
                 }
             }
         }
+        .coordinateSpace(name: "workspaceDock")
     }
 }
 
@@ -257,17 +222,6 @@ private struct DockTreeView: View {
         )
     }
 
-    private func resetFraction(for split: DockSplit, available: CGFloat) -> Double {
-        guard split.axis == .horizontal, available > 0 else { return 0.5 }
-        if case .group(let first) = split.first, first.region == .left {
-            return 220 / Double(available)
-        }
-        if case .group(let second) = split.second, second.region == .right {
-            return 1 - 240 / Double(available)
-        }
-        return 0.5
-    }
-
     private func divider(_ split: DockSplit, available: CGFloat) -> some View {
         // Match the original sidebar: a 1pt hairline, with a wider
         // invisible hit target so resizing remains easy.
@@ -300,7 +254,7 @@ private struct DockTreeView: View {
                     )
                     .simultaneousGesture(
                         TapGesture(count: 2).onEnded {
-                            project.dock.resize(split.id, to: resetFraction(for: split, available: available))
+                            project.dock.resize(split.id, to: 0.5)
                         }
                     )
             }
@@ -323,8 +277,7 @@ private struct DockTabGroupView: View {
         VStack(spacing: 0) {
             header
                 .frame(height: 38)
-                .background(Color(nsColor: group.region == .left || group.region == .right
-                    ? Theme.sidebar : Theme.background))
+                .background(Color(nsColor: Theme.background))
                 .overlay(alignment: .bottom) {
                     Color(nsColor: Theme.divider).frame(height: 1)
                 }
@@ -346,13 +299,13 @@ private struct DockTabGroupView: View {
                 dropPreview
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if group.region == .main,
+            if active?.tabID != nil,
                settings.toolbarVisibility != .hide,
                (git.isRepo || settings.toolbarVisibility == .always) {
                 BottomToolbarView(
                     model: git,
                     height: BottomToolbarLayout.height,
-                    toggleGitPanel: { manager.togglePanel(.git) },
+                    toggleGitPanel: { manager.showPanel(.git) },
                     hideToolbar: { settings.toolbarVisibility = .hide }
                 )
             }
@@ -370,54 +323,22 @@ private struct DockTabGroupView: View {
 
     private var header: some View {
         GeometryReader { geometry in
+            let origin = geometry.frame(in: .named("workspaceDock")).origin
+            let isTopLeft = origin.x < 1 && origin.y < 1
             HStack(spacing: 4) {
-                if group.region == .left {
-                    WindowDragArea().frame(width: 76)
-                    tabStrip(maxWidth: max(0, geometry.size.width - (manager.isFPSCounterVisible ? 194 : 146)))
-                    panelAddButton
-                    if manager.isFPSCounterVisible { FPSBadge() }
+                if isTopLeft { WindowDragArea().frame(width: 76) }
+                tabStrip(maxWidth: max(0, geometry.size.width
+                    - (isTopLeft ? 120 : 44)
+                    - (manager.isFPSCounterVisible ? 42 : 0)
+                    - (manager.isPaneZoomed ? 28 : 0)))
+                panelAddButton
+                WindowDragArea().frame(minWidth: 0, maxWidth: .infinity)
+                if manager.isFPSCounterVisible { FPSBadge() }
+                if manager.isPaneZoomed && active?.tabID != nil {
                     ChromeIconButton(
-                        systemImage: "sidebar.left",
-                        tooltip: String(localized: "Toggle Left Sidebar (⌘B)", table: "Interface")
-                    ) { manager.toggleLeftSidebar() }
-                } else {
-                    if group.region == .main && !manager.isLeftSidebarVisible {
-                        ChromeIconButton(
-                            systemImage: "sidebar.left",
-                            tooltip: String(localized: "Toggle Left Sidebar (⌘B)", table: "Interface")
-                        ) { manager.toggleLeftSidebar() }
-                        .padding(.leading, 76)
-                    }
-                    tabStrip(maxWidth: group.region == .main
-                        ? maxMainTabWidth(in: geometry.size.width)
-                        : group.region == .right ? max(0, geometry.size.width - 36) : nil)
-                    if group.region == .main {
-                        ChromeIconButton(
-                            systemImage: "plus",
-                            tooltip: String(localized: "New Session (⌘T)", table: "Interface"),
-                            font: .system(size: 10, weight: .semibold),
-                            iconSize: 14
-                        ) {
-                            project.newSession()
-                            if let id = project.selectedTabID {
-                                project.dock.place(.tab(id), in: .main)
-                            }
-                        }
-                        WindowDragArea().frame(minWidth: 100, maxWidth: .infinity)
-                        if manager.isPaneZoomed {
-                            ChromeIconButton(
-                                systemImage: "arrow.down.forward.and.arrow.up.backward",
-                                tooltip: String(localized: "Exit Pane Zoom (⇧⌘↩)", table: "Interface")
-                            ) { manager.togglePaneZoom() }
-                        }
-                        ChromeIconButton(
-                            systemImage: "sidebar.right",
-                            tooltip: String(localized: "Toggle Right Sidebar (⇧⌘B)", table: "Interface")
-                        ) { manager.toggleSidebar() }
-                    } else {
-                        panelAddButton
-                        Spacer(minLength: 0)
-                    }
+                        systemImage: "arrow.down.forward.and.arrow.up.backward",
+                        tooltip: String(localized: "Exit Pane Zoom (⇧⌘↩)", table: "Interface")
+                    ) { manager.togglePaneZoom() }
                 }
             }
             .padding(.trailing, 8)
@@ -432,9 +353,18 @@ private struct DockTabGroupView: View {
             font: .system(size: 10, weight: .semibold),
             iconSize: 14
         ) { showingPanelPicker.toggle() }
-        .disabled(availablePanels.isEmpty)
         .popover(isPresented: $showingPanelPicker, arrowEdge: .bottom) {
             VStack(spacing: 2) {
+                Button {
+                    showingPanelPicker = false
+                    addSession()
+                } label: {
+                    Label(String(localized: "New Session", table: "Interface"), systemImage: "terminal")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(7)
+                }
+                .buttonStyle(.plain)
+                if !availablePanels.isEmpty { Divider() }
                 ForEach(availablePanels, id: \.self) { item in
                     Button {
                         showingPanelPicker = false
@@ -455,14 +385,6 @@ private struct DockTabGroupView: View {
 
     private var availablePanels: [DockItem] {
         [DockItem.projects, .info, .files, .git].filter { !group.items.contains($0) }
-    }
-
-    /// Keep the original header spacing: the "+" follows the tab strip,
-    /// and overflowing tabs remain scrollable.
-    private func maxMainTabWidth(in width: CGFloat) -> CGFloat {
-        let hiddenSidebarInset: CGFloat = manager.isLeftSidebarVisible ? 0 : 108
-        return max(0, width - hiddenSidebarInset - 168
-            - (manager.isPaneZoomed ? 28 : 0))
     }
 
     private func tabStrip(maxWidth: CGFloat? = nil) -> some View {
@@ -489,19 +411,19 @@ private struct DockTabGroupView: View {
                                     }
                                     .onEnded { value in
                                         dragging.update(item, at: value.location, dock: project.dock)
-                                        dragging.finish(project: project, manager: manager)
+                                        dragging.finish(project: project)
                                     },
                                 including: item.tabID != nil && renamingTabID == item.tabID ? .subviews : .all
                             )
                     }
                 }
-                .padding(.leading, group.region == .main ? 8 : 4)
+                .padding(.leading, 4)
                 .padding(.trailing, 2)
             }
             .frame(maxWidth: maxWidth, alignment: .leading)
-            .fixedSize(horizontal: group.region == .main && maxWidth != nil, vertical: false)
+            .fixedSize(horizontal: maxWidth != nil, vertical: false)
             .onChange(of: group.selected) { _, selected in
-                if group.region != .right, let selected { scrollProxy.scrollTo(selected) }
+                if let selected { scrollProxy.scrollTo(selected) }
             }
         }
     }
@@ -525,9 +447,6 @@ private struct DockTabGroupView: View {
                 close: { closeTool(item) }
             )
             .contextMenu {
-                Button(String(localized: "Move to Left Sidebar", table: "Interface")) { project.dock.place(item, in: .left); manager.isLeftSidebarVisible = true }
-                Button(String(localized: "Move to Right Sidebar", table: "Interface")) { project.dock.place(item, in: .right); manager.isPanelVisible = true }
-                Divider()
                 Button(String(localized: "Close Panel", table: "Interface")) { closeTool(item) }
             }
         }
@@ -536,44 +455,24 @@ private struct DockTabGroupView: View {
     private func select(_ item: DockItem) {
         project.dock.select(item)
         if case .tab(let id) = item { project.selectedTabID = id }
-        switch item {
-        case .info: manager.panelTab = .info
-        case .files: manager.panelTab = .files
-        case .git: manager.panelTab = .git
-        default: break
-        }
     }
 
-    private func closeTool(_ item: DockItem) {
-        guard case .tab = item else {
-            project.dock.removeTool(item)
-            if group.region == .left,
-               project.dock.group(region: .left)?.items.isEmpty == true {
-                manager.isLeftSidebarVisible = false
-            }
-            if group.region == .right,
-               project.dock.group(region: .right)?.items.isEmpty == true {
-                manager.isPanelVisible = false
-            }
-            return
-        }
-    }
+    private func closeTool(_ item: DockItem) { project.dock.removeTool(item) }
 
     @ViewBuilder
     private var content: some View {
         switch active {
         case .projects:
-            SidebarView(
+            ProjectsPanelView(
                 manager: manager,
-                bottomBarHeight: BottomToolbarLayout.height,
-                docked: true
+                bottomBarHeight: BottomToolbarLayout.height
             )
         case .info:
-            RightSidebarView(manager: manager, git: git, panel: .info)
+            ToolPanelView(manager: manager, git: git, panel: .info)
         case .files:
-            RightSidebarView(manager: manager, git: git, panel: .files)
+            ToolPanelView(manager: manager, git: git, panel: .files)
         case .git:
-            RightSidebarView(manager: manager, git: git, panel: .git)
+            ToolPanelView(manager: manager, git: git, panel: .git)
         case .tab(let id):
             if let tab = project.tabs.first(where: { $0.id == id }) {
                 if let diff = tab.diffs.first, tab.allPanes.count == 1 {
@@ -603,33 +502,21 @@ private struct DockTabGroupView: View {
 
     private var emptyGroup: some View {
         VStack(spacing: 10) {
-            if group.region == .main {
-                Text(String(localized: "No Open Tabs", table: "Interface")).foregroundStyle(.secondary)
-                Button(String(localized: "New Session", table: "Interface")) { project.newSession() }
-            } else {
-                Text(String(localized: "Drag a Tab Here or Add a Panel", table: "Interface")).foregroundStyle(.secondary)
-                Menu(String(localized: "Add Panel", table: "Interface")) {
-                    Button(String(localized: "Projects", table: "Interface")) { add(.projects) }
-                    Button(String(localized: "Info", table: "Sidebar")) { add(.info) }
-                    Button(String(localized: "Files", table: "Sidebar")) { add(.files) }
-                    Button(String(localized: "Git", table: "Sidebar")) { add(.git) }
-                }
-            }
+            Text(String(localized: "Drag a Tab Here or Add a Panel", table: "Interface"))
+                .foregroundStyle(.secondary)
+            Button(String(localized: "New Session", table: "Interface")) { addSession() }
         }
         .font(.system(size: 12))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: Theme.background))
     }
 
-    private func add(_ item: DockItem) {
-        if let original = project.dock.group(containing: item), original.region == .left,
-           original.items.count == 1 { manager.isLeftSidebarVisible = false }
-        if let original = project.dock.group(containing: item), original.region == .right,
-           original.items.count == 1 { manager.isPanelVisible = false }
-        _ = project.dock.move(item, into: group.id)
-        // When a tool was explicitly closed, it has no owner yet.
-        if project.dock.group(containing: item) == nil {
-            project.dock.place(item, in: group.region)
+    private func add(_ item: DockItem) { _ = project.dock.place(item, in: group.id) }
+
+    private func addSession() {
+        project.newSession()
+        if let id = project.selectedTabID {
+            _ = project.dock.move(.tab(id), into: group.id)
         }
     }
 

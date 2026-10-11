@@ -343,22 +343,22 @@
         }
       }
     },
-    "Sidebar" : {
+    "Panels" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "侧边栏"
+            "value" : "面板"
           }
         }
       }
     },
-    "Sidebar font size" : {
+    "Panel font size" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "侧边栏字体大小"
+            "value" : "面板字体大小"
           }
         }
       }

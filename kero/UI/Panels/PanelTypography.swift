@@ -1,25 +1,25 @@
 //
-//  SidebarTypography.swift
+//  PanelTypography.swift
 //  kero
 //
 
 import SwiftUI
 
-private struct SidebarFontScaleKey: EnvironmentKey {
+private struct PanelFontScaleKey: EnvironmentKey {
     static let defaultValue: CGFloat = 1
 }
 
 extension EnvironmentValues {
-    var sidebarFontScale: CGFloat {
-        get { self[SidebarFontScaleKey.self] }
-        set { self[SidebarFontScaleKey.self] = newValue }
+    var panelFontScale: CGFloat {
+        get { self[PanelFontScaleKey.self] }
+        set { self[PanelFontScaleKey.self] = newValue }
     }
 }
 
-/// Scales a sidebar font from its designed size while preserving the relative
+/// Scales a panel font from its designed size while preserving the relative
 /// hierarchy between section labels, content, metadata, and controls.
-private struct SidebarFontModifier: ViewModifier {
-    @Environment(\.sidebarFontScale) private var scale
+private struct PanelFontModifier: ViewModifier {
+    @Environment(\.panelFontScale) private var scale
 
     let size: CGFloat
     let weight: Font.Weight
@@ -31,11 +31,11 @@ private struct SidebarFontModifier: ViewModifier {
 }
 
 extension View {
-    func sidebarFont(
+    func panelFont(
         size: CGFloat,
         weight: Font.Weight = .regular,
         design: Font.Design = .default
     ) -> some View {
-        modifier(SidebarFontModifier(size: size, weight: weight, design: design))
+        modifier(PanelFontModifier(size: size, weight: weight, design: design))
     }
 }

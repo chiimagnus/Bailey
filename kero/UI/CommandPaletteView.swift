@@ -245,20 +245,14 @@ struct CommandPaletteView: View {
             PaletteCommand(id: "save-file", title: LocalizedStringResource("Save File", table: "Interface"), systemImage: "square.and.arrow.down", shortcut: "⌘S") {
                 manager.saveSelectedFile()
             },
-            PaletteCommand(id: "toggle-left-sidebar", title: LocalizedStringResource("Toggle Left Sidebar", table: "Interface"), systemImage: "sidebar.left", shortcut: "⌘B") {
-                manager.toggleLeftSidebar()
+            PaletteCommand(id: "show-files", title: LocalizedStringResource("Files", table: "Sidebar"), systemImage: "doc.text", shortcut: "⇧⌘E") {
+                manager.showPanel(.files)
             },
-            PaletteCommand(id: "toggle-sidebar", title: LocalizedStringResource("Toggle Right Sidebar", table: "Interface"), systemImage: "sidebar.right", shortcut: "⇧⌘B") {
-                manager.toggleSidebar()
+            PaletteCommand(id: "show-git", title: LocalizedStringResource("Git", table: "Sidebar"), systemImage: "arrow.triangle.branch", shortcut: "⇧⌘G") {
+                manager.showPanel(.git)
             },
-            PaletteCommand(id: "toggle-files", title: LocalizedStringResource("Toggle Files Panel", table: "Interface"), systemImage: "doc.text", shortcut: "⇧⌘E") {
-                manager.togglePanel(.files)
-            },
-            PaletteCommand(id: "toggle-git", title: LocalizedStringResource("Toggle Git Panel", table: "Interface"), systemImage: "arrow.triangle.branch", shortcut: "⇧⌘G") {
-                manager.togglePanel(.git)
-            },
-            PaletteCommand(id: "toggle-info", title: LocalizedStringResource("Toggle Info Panel", table: "Interface"), systemImage: "info.circle", shortcut: "⇧⌘I") {
-                manager.togglePanel(.info)
+            PaletteCommand(id: "show-info", title: LocalizedStringResource("Info", table: "Sidebar"), systemImage: "info.circle", shortcut: "⇧⌘I") {
+                manager.showPanel(.info)
             },
             PaletteCommand(
                 id: "toggle-fps-counter",

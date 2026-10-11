@@ -31,33 +31,12 @@ struct ContentView: View {
             if manager.selectedProject != nil {
                 WorkspaceDockView(manager: manager, git: git)
             } else {
-                HStack(spacing: 0) {
-                    if manager.isLeftSidebarVisible {
-                        SidebarView(
-                            manager: manager,
-                            bottomBarHeight: BottomToolbarLayout.height
-                        )
-                    }
-                    VStack(spacing: 0) {
-                        HStack(spacing: 0) {
-                            if !manager.isLeftSidebarVisible {
-                                ChromeIconButton(
-                                    systemImage: "sidebar.left",
-                                    tooltip: String(localized: "Toggle Left Sidebar (⌘B)", table: "Interface")
-                                ) { manager.toggleLeftSidebar() }
-                                .padding(.leading, 76)
-                            }
-                            WindowDragArea().frame(maxWidth: .infinity)
-                        }
+                VStack(spacing: 0) {
+                    HStack { WindowDragArea().frame(maxWidth: .infinity) }
                         .frame(height: 38)
-                        .overlay(alignment: .bottom) {
-                            Color(nsColor: Theme.divider).frame(height: 1)
-                        }
-                        emptyState
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                    .background(Color(nsColor: Theme.background))
+                    emptyState.frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                .background(Color(nsColor: Theme.background))
             }
         }
         .ignoresSafeArea()
@@ -114,10 +93,6 @@ struct ContentView: View {
     private var parkedTerminalSessions: [TerminalSession] {
         let visibleIDs = Set(
             manager.selectedProject?.dock.root.groups
-                .filter { group in
-                    (group.region != .left || manager.isLeftSidebarVisible)
-                        && (group.region != .right || manager.isPanelVisible)
-                }
                 .compactMap { group -> PaneTab? in
                     guard case .tab(let id)? = group.selected else { return nil }
                     return manager.selectedProject?.tabs.first { $0.id == id }

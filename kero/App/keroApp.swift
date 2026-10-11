@@ -177,32 +177,20 @@ private struct KeroCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Toggle Left Sidebar", table: "Interface")) {
-                manager?.toggleLeftSidebar()
-            }
-            .keyboardShortcut("b", modifiers: .command)
-            .disabled(manager == nil)
-
-            Button(String(localized: "Toggle Right Sidebar", table: "Interface")) {
-                manager?.toggleSidebar()
-            }
-            .keyboardShortcut("b", modifiers: [.command, .shift])
-            .disabled(manager?.selectedProject == nil)
-
-            Button(String(localized: "Toggle Files Panel", table: "Interface")) {
-                manager?.togglePanel(.files)
+            Button(String(localized: "Files", table: "Sidebar")) {
+                manager?.showPanel(.files)
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
 
-            Button(String(localized: "Toggle Git Panel", table: "Interface")) {
-                manager?.togglePanel(.git)
+            Button("Git") {
+                manager?.showPanel(.git)
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
 
-            Button(String(localized: "Toggle Info Panel", table: "Interface")) {
-                manager?.togglePanel(.info)
+            Button(String(localized: "Info", table: "Sidebar")) {
+                manager?.showPanel(.info)
             }
             .keyboardShortcut("i", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)

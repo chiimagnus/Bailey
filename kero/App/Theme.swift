@@ -53,7 +53,7 @@ enum Theme {
 
     /// Kero's built-in themes: the GitHub Default palettes under kero's own
     /// names. Selecting one keeps the project sidebar's native translucent
-    /// material (see `SidebarView`); picking the catalog originals — or any
+    /// material (see `ProjectsPanelView`); picking the catalog originals — or any
     /// other theme — paints the flat theme shade instead.
     nonisolated static let defaultDarkDefinition = keroDefault(
         named: defaultDarkThemeName, from: "GitHub Dark Default", dark: true

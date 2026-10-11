@@ -10,122 +10,82 @@ struct CheckDockWorkspace {
 
     static func main() throws {
         let frame = CGRect(x: 10, y: 20, width: 300, height: 300)
-        check(DockDropHitTest.edge(at: CGPoint(x: 12, y: 170), in: frame) == .left, "left edge")
-        check(DockDropHitTest.edge(at: CGPoint(x: 308, y: 170), in: frame) == .right, "right edge")
-        check(DockDropHitTest.edge(at: CGPoint(x: 160, y: 60), in: frame) == .top, "top edge")
-        check(DockDropHitTest.edge(at: CGPoint(x: 160, y: 317), in: frame) == .bottom, "bottom edge")
-        check(DockDropHitTest.edge(at: CGPoint(x: 160, y: 170), in: frame) == nil, "center merges")
-        check(DockDropHitTest.edge(at: CGPoint(x: 12, y: 25), in: frame) == nil, "header reorders")
-
-        let migrated = DockWorkspaceModel()
-        migrated.applyExistingSidebarWidths(windowWidth: 1800, left: 184, right: 300)
-        if case .split(let outer) = migrated.root, case .split(let inner) = outer.second {
-            check(abs(outer.fraction * 1792 - 184) < 1, "preserve legacy left width")
-            check(abs((1 - inner.fraction) * (1792 - 184) - 300) < 1, "preserve legacy right width")
-        } else { preconditionFailure("default split structure") }
+        check(DockDropHitTest.edge(at: CGPoint(x: 12, y: 170), in: frame) == .left, "left drop")
+        check(DockDropHitTest.edge(at: CGPoint(x: 308, y: 170), in: frame) == .right, "right drop")
+        check(DockDropHitTest.edge(at: CGPoint(x: 160, y: 60), in: frame) == .top, "top drop")
+        check(DockDropHitTest.edge(at: CGPoint(x: 160, y: 317), in: frame) == .bottom, "bottom drop")
+        check(DockDropHitTest.edge(at: CGPoint(x: 160, y: 170), in: frame) == nil, "merge center")
+        check(DockDropHitTest.edge(at: CGPoint(x: 12, y: 25), in: frame) == nil, "tab header")
 
         let dock = DockWorkspaceModel()
-        let a = UUID()
-        let b = UUID()
-        let c = UUID()
+        let defaults = dock.root.groups
+        check(defaults.count == 3, "default three-column workspace")
+        check(defaults[0].items == [.projects], "projects default")
+        check(defaults[1].items.isEmpty, "empty middle group")
+        check(defaults[2].items == [.info, .files, .git], "tools default")
+
+        let newSessionDock = DockWorkspaceModel()
+        let leftTarget = newSessionDock.root.groups[0].id
+        let newID = UUID()
+        newSessionDock.syncTabs([newID], near: nil)
+        check(newSessionDock.move(.tab(newID), into: leftTarget),
+              "the plus button can place a new session in the clicked group")
+        check(newSessionDock.group(containing: .tab(newID))?.id == leftTarget,
+              "new session must not remain in the original middle group")
+
+        let a = UUID(), b = UUID(), c = UUID()
         dock.syncTabs([a, b], near: nil)
-        let main = dock.group(region: .main)!
-        let left = dock.group(region: .left)!
-        check(main.items == [.tab(a), .tab(b)], "new tabs must appear in main group")
-        check(dock.move(.git, into: main.id, edge: .bottom), "move git to bottom split")
-        check(dock.root.groups.count == 4, "edge drop should create an auxiliary group")
-        check(dock.group(containing: .git)?.region == .extra, "git was not moved")
-        check(dock.group(region: .right)?.items == [.info, .files], "source group not updated")
-        check(dock.move(.git, into: left.id), "merge git as left tab")
-        check(dock.group(region: .left)?.selected == .git, "destination selection not updated")
-        check(dock.root.groups.count == 3, "empty auxiliary group must collapse")
+        let center = defaults[1].id
+        let projects = defaults[0].id
+        check(dock.root.group(id: center)?.items == [.tab(a), .tab(b)], "tabs in empty group")
+        check(dock.move(.git, into: center, edge: .bottom), "split tool below terminals")
+        check(dock.root.groups.count == 4, "four groups after split")
+        check(dock.move(.git, into: projects), "merge tool with projects")
+        check(dock.root.groups.count == 3, "empty split collapses")
+        check(dock.root.group(id: projects)?.items == [.projects, .git], "merge destination")
+
         dock.syncTabs([a, b, c], near: b)
-        check(dock.move(.tab(a), into: main.id, index: 2), "reorder earlier tab")
-        check(dock.group(region: .main)?.items == [.tab(b), .tab(a), .tab(c)], "reorder destination must account for removed index")
-        check(dock.move(.tab(c), into: main.id, index: 0), "reorder later tab")
-        check(dock.group(region: .main)?.items == [.tab(c), .tab(b), .tab(a)], "reverse reorder wrong")
-        check(dock.tabOrder == [c, b, a], "keyboard navigation must follow visible tab order")
-        check(dock.move(.tab(c), into: main.id, edge: .top), "split content to auxiliary group")
-        check(dock.root.groups.count == 4, "auxiliary split not created")
+        check(dock.move(.tab(a), into: center, index: 2), "move earlier tab")
+        check(dock.root.group(id: center)?.items == [.tab(b), .tab(a), .tab(c)], "index adjusted")
+        check(dock.move(.tab(c), into: center, index: 0), "move later tab")
+        check(dock.root.group(id: center)?.items == [.tab(c), .tab(b), .tab(a)], "tab reordered")
+        check(dock.tabOrder == [c, b, a], "keyboard order")
+        check(dock.move(.tab(c), into: center, edge: .top), "split session")
+        check(dock.root.groups.count == 4, "four groups after session split")
         dock.syncTabs([a, b], near: b)
-        check(dock.root.groups.count == 3, "closing last auxiliary tab must collapse its group")
+        check(dock.root.groups.count == 3, "empty split closed")
 
-        let saved = dock.snapshot(tabIDs: [a, b])
-        let encoded = try JSONEncoder().encode(saved)
-        let decoded = try JSONDecoder().decode(DockSavedNode.self, from: encoded)
+        let data = try JSONEncoder().encode(dock.snapshot(tabIDs: [a, b]))
+        check(!String(decoding: data, as: UTF8.self).contains("region"), "no region persistence")
         let restored = DockWorkspaceModel()
-        restored.restore(decoded, tabIDs: [b, c])
-        check(restored.group(region: .main)?.items == [.tab(c), .tab(b)], "restored tab references must rebind by index")
-        check(restored.group(region: .left)?.items == [.projects, .git], "tool placement must survive restore")
-        check(restored.visibleItems.count == 6, "a tab or tool must not be duplicated")
+        restored.restore(try JSONDecoder().decode(DockSavedNode.self, from: data), tabIDs: [b, c])
+        check(restored.root.group(id: center)?.items == [.tab(c), .tab(b)], "tab identity rebound")
+        check(restored.root.group(id: projects)?.items == [.projects, .git], "tool location persisted")
+        check(restored.visibleItems.count == 6, "no duplication")
+        check(!restored.move(.projects, into: UUID()), "invalid target rejected")
 
-        restored.syncTabs([b], near: b)
-        check(!restored.visibleItems.contains(.tab(c)), "closed tab must leave the layout")
-        check(restored.root.visible(left: false, right: false)?.groups.count == 1, "both collapsed sidebars must preserve main")
-        check(restored.root.visible(left: true, right: true)?.groups.count == 3, "reopening must preserve original groups")
-        check(restored.move(.projects, into: UUID()) == false, "stale target IDs should not modify layout")
-        restored.place(.projects, in: .right)
-        check(restored.group(region: .right)?.items.contains(.projects) == true, "project list should be movable")
-        check(restored.group(region: .left)?.items == [.git], "moving must not clone panel")
+        let target = restored.root.groups.last!.id
+        check(restored.place(.projects, in: target), "move projects anywhere")
+        check(restored.root.group(id: projects)?.items == [.git], "origin updated")
+        check(restored.root.group(id: target)?.items.contains(.projects) == true, "target updated")
+        restored.removeTool(.git)
+        check(!restored.visibleItems.contains(.git), "close tool")
+        check(restored.place(.git, in: center), "reopen selected group")
+        check(restored.group(containing: .git)?.id == center, "exact reopen target")
 
-        let closedPanel = DockWorkspaceModel()
-        closedPanel.removeTool(.git)
-        check(!closedPanel.visibleItems.contains(.git), "closing Git must remove its tab")
-        closedPanel.place(.git, in: .left)
-        check(closedPanel.group(containing: .git)?.region == .left, "reopening panel must not clone it")
-        check(closedPanel.group(region: .right)?.items == [.info, .files], "closing must retain other right tabs")
+        let stacked = DockWorkspaceModel()
+        let first = stacked.root.groups[0].id
+        check(stacked.move(.files, into: first, edge: .top), "stack files above projects")
+        check(stacked.root.groups.count == 3, "empty groups collapse when splitting")
+        if case .split(let outer) = stacked.root,
+           case .split(let inner) = outer.first {
+            check(abs(outer.fraction - 0.12) < 0.001, "outer width preserved")
+            check(inner.fraction == 0.5, "nested split half")
+            stacked.resize(outer.id, to: 0.25)
+            stacked.resize(inner.id, to: 0.65)
+            check(stacked.group(containing: .files) != nil, "resizing keeps nested tab")
+        } else { preconditionFailure("nested split tree") }
 
-        let stackedLeft = DockWorkspaceModel()
-        let leftAnchor = stackedLeft.group(region: .left)!
-        check(stackedLeft.move(.files, into: leftAnchor.id, edge: .top), "stack files above projects")
-        let topFiles = stackedLeft.group(containing: .files)!
-        check(topFiles.region == .extra, "new side groups retain their generic region")
-        check(stackedLeft.sidebar(containing: .files) == .left, "nested group belongs to left sidebar")
-        check(stackedLeft.root.visible(left: false, right: true)?.groups.count == 2,
-              "Cmd-B must hide the entire stacked left sidebar")
-        check(stackedLeft.root.visible(left: true, right: true)?.groups.count == 4,
-              "Cmd-B must restore both left panels")
-        if case .split(let outer) = stackedLeft.root,
-           case .split(let sideSplit) = outer.first {
-            check(abs(outer.resetFraction(available: 1799) * 1799 - 220) < 1,
-                  "nested left sidebar boundary must restore 220pt")
-            check(sideSplit.resetFraction(available: 220) == 0.5,
-                  "internal left divider must still equalize")
-        } else { preconditionFailure("stacked left tree") }
-        check(stackedLeft.move(.projects, into: stackedLeft.group(region: .main)!.id),
-              "move left anchor content away")
-        check(stackedLeft.hasSidebarItems(.left), "extra file group keeps sidebar alive")
-        check(stackedLeft.move(.git, into: topFiles.id), "retain group while closing a panel")
-        stackedLeft.removeTool(.files)
-        check(stackedLeft.place(.files, in: topFiles.id), "reopen closed file in its original group")
-        check(stackedLeft.group(containing: .files)?.id == topFiles.id,
-              "reopened file tab must be visible in the upper group")
-
-        let stackedRight = DockWorkspaceModel()
-        let rightAnchor = stackedRight.group(region: .right)!
-        check(stackedRight.move(.info, into: rightAnchor.id, edge: .bottom),
-              "stack information below right sidebar")
-        check(stackedRight.sidebar(containing: .info) == .right,
-              "nested right group belongs to right sidebar")
-        check(stackedRight.root.visible(left: true, right: false)?.groups.count == 2,
-              "Shift-Cmd-B must hide the entire stacked right sidebar")
-        check(stackedRight.root.visible(left: true, right: true)?.groups.count == 4,
-              "Shift-Cmd-B must restore both right panels")
-        if case .split(let outer) = stackedRight.root,
-           case .split(let inner) = outer.second,
-           case .split(let sideSplit) = inner.second {
-            let remainingWidth = 1799 * (1 - outer.fraction)
-            check(abs((1 - inner.resetFraction(available: remainingWidth)) * remainingWidth - 240) < 1,
-                  "nested right sidebar boundary must restore 240pt")
-            check(sideSplit.resetFraction(available: 240) == 0.5,
-                  "internal right divider must still equalize")
-        } else { preconditionFailure("stacked right tree") }
-
-        let legacy = DockWorkspaceModel()
-        legacy.syncTabs([a], near: nil)
-        check(legacy.group(region: .left)?.items == [.projects], "legacy sidebar default")
-        check(legacy.group(region: .right)?.items == [.info, .files, .git], "legacy right panels default")
-
-        print("PASS: docking, tab identity, split/merge, snapshots, sidebars, legacy defaults")
+        print("PASS: uniform dock groups, splits, tab order, snapshots, tool restore")
     }
 }

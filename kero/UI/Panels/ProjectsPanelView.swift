@@ -1,48 +1,24 @@
 //
-//  SidebarView.swift
+//  ProjectsPanelView.swift
 //  kero
 //
 
 import AppKit
 import SwiftUI
 
-/// Vertical tab strip listing projects, otty-style. Each row is a project;
-/// its sessions show as horizontal tabs in the main header.
-struct SidebarView: View {
+/// Movable project-list panel; its workspace tab is the normal dock tab.
+struct ProjectsPanelView: View {
     @ObservedObject var manager: TerminalManager
     let bottomBarHeight: CGFloat
-    var docked = false
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var themeChanges = Theme.changes
     @Environment(\.openSettings) private var openSettings
-    @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("leftSidebarWidth") private var width: Double = 220
+    @State private var showingProjectPicker = false
     @State private var draggedProjectID: UUID?
     @State private var projectFrames: [UUID: CGRect] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header-height strip housing the traffic-light buttons and the
-            // control for collapsing this sidebar.
-            if !docked {
-            HStack(spacing: 0) {
-                WindowDragArea()
-                    .frame(maxWidth: .infinity)
-                if manager.isFPSCounterVisible {
-                    FPSBadge()
-                        .padding(.trailing, 8)
-                }
-                ChromeIconButton(
-                    systemImage: "sidebar.left",
-                    tooltip: String(localized: "Toggle Left Sidebar (⌘B)", table: "Sidebar")
-                ) {
-                    manager.toggleLeftSidebar()
-                }
-            }
-            .padding(.trailing, 8)
-            .frame(height: 38)
-            }
-
             ScrollView {
                 VStack(spacing: 3) {
                     ForEach(Array(manager.projects.enumerated()), id: \.element.id) { index, project in
@@ -55,7 +31,7 @@ struct SidebarView: View {
                             isDragging: draggedProjectID == project.id,
                             onDrag: { updateProjectDrag(source: project.id, location: $0) },
                             onDragEnded: endProjectDrag,
-                            fontSize: settings.sidebarFontSize
+                            fontSize: settings.panelFontSize
                         )
                         .background {
                             GeometryReader { proxy in
@@ -72,8 +48,31 @@ struct SidebarView: View {
             }
 
             HStack(spacing: 2) {
-                SidebarAddButton(manager: manager)
-                    .frame(width: 24, height: 24)
+                ChromeIconButton(
+                    systemImage: "plus",
+                    tooltip: String(localized: "Add files, folders, or SSH paths", table: "Sidebar")
+                ) { showingProjectPicker.toggle() }
+                .popover(isPresented: $showingProjectPicker, arrowEdge: .top) {
+                    VStack(spacing: 2) {
+                        Button(String(localized: "New Session", table: "Interface")) {
+                            showingProjectPicker = false
+                            manager.newSession()
+                        }
+                        Divider()
+                        Button(String(localized: "Add Files or Folders…", table: "Sidebar")) {
+                            showingProjectPicker = false
+                            manager.chooseLocalItems()
+                        }
+                        Button(String(localized: "Add SSH Files or Folders…", table: "Sidebar")) {
+                            showingProjectPicker = false
+                            manager.chooseSSHItems()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .padding(10)
+                    .frame(width: 220, alignment: .leading)
+                }
+                .frame(width: 24, height: 24)
                 Spacer()
                 SidebarFooterButton(
                     systemImage: "exclamationmark.bubble",
@@ -98,41 +97,8 @@ struct SidebarView: View {
                     .frame(height: 1)
             }
         }
-        .frame(width: docked ? nil : width)
-        .frame(maxWidth: docked ? .infinity : nil, maxHeight: .infinity)
-        .background {
-            // Kero's built-in Default themes keep the native translucent
-            // sidebar material; every other theme — including the GitHub
-            // originals they're based on — paints its flat sidebar shade so
-            // the strip follows the palette.
-            if Theme.isDefault(dark: colorScheme == .dark) {
-                VisualEffectView(material: .sidebar)
-            } else {
-                Color(nsColor: Theme.sidebar)
-            }
-        }
-        // Hairline between sidebar and content: themes fill both with the
-        // same background, so the boundary needs its own line. The built-in
-        // Defaults keep their material fill, whose contrast already draws
-        // the edge.
-        .overlay(alignment: .trailing) {
-            if !Theme.isDefault(dark: colorScheme == .dark) {
-                Rectangle()
-                    .fill(Color(nsColor: Theme.divider))
-                    .frame(width: 1)
-                    .allowsHitTesting(false)
-            }
-        }
-        .overlay(alignment: .trailing) {
-            if !docked {
-            SidebarResizeHandle(
-                edge: .trailing,
-                width: $width,
-                range: 160...400,
-                defaultWidth: 220
-            )
-            }
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: Theme.background))
         .onPreferenceChange(ProjectFramePreferenceKey.self) { projectFrames = $0 }
     }
 
@@ -202,71 +168,6 @@ struct FPSBadge: View {
             )
             .onAppear { counter.start() }
             .onDisappear { counter.stop() }
-    }
-}
-
-/// Native add menu; there is one project list, not a separate workspace switcher.
-private struct SidebarAddButton: NSViewRepresentable {
-    @ObservedObject var manager: TerminalManager
-
-    func makeCoordinator() -> Coordinator { Coordinator(manager: manager) }
-
-    func makeNSView(context: Context) -> NSButton {
-        let button = NSButton()
-        button.isBordered = false
-        button.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
-        button.imagePosition = .imageOnly
-        button.imageScaling = .scaleProportionallyDown
-        button.contentTintColor = .secondaryLabelColor
-        button.toolTip = String(localized: "Add files, folders, or SSH paths", table: "Sidebar")
-        button.setAccessibilityLabel(button.toolTip)
-        button.target = context.coordinator
-        button.action = #selector(Coordinator.showMenu(_:))
-        return button
-    }
-
-    func updateNSView(_ button: NSButton, context: Context) {
-        context.coordinator.manager = manager
-    }
-
-    func sizeThatFits(
-        _ proposal: ProposedViewSize, nsView: NSButton, context: Context
-    ) -> CGSize? {
-        CGSize(width: 24, height: 24)
-    }
-
-    final class Coordinator: NSObject {
-        weak var manager: TerminalManager?
-
-        init(manager: TerminalManager) {
-            self.manager = manager
-        }
-
-        @objc func showMenu(_ sender: NSButton) {
-            let menu = NSMenu()
-            let local = NSMenuItem(
-                title: String(localized: "Add Files or Folders…", table: "Sidebar"),
-                action: #selector(addLocal),
-                keyEquivalent: ""
-            )
-            local.target = self
-            menu.addItem(local)
-            let remote = NSMenuItem(
-                title: String(localized: "Add SSH Files or Folders…", table: "Sidebar"),
-                action: #selector(addSSH),
-                keyEquivalent: ""
-            )
-            remote.target = self
-            menu.addItem(remote)
-            menu.popUp(
-                positioning: nil,
-                at: NSPoint(x: 0, y: sender.bounds.maxY),
-                in: sender
-            )
-        }
-
-        @objc private func addLocal() { manager?.chooseLocalItems() }
-        @objc private func addSSH() { manager?.chooseSSHItems() }
     }
 }
 
@@ -487,17 +388,17 @@ private struct SidebarProjectRow: View {
     }
 
     private var supportingFontSize: Double {
-        10 * sidebarFontScale
+        10 * panelFontScale
     }
 
     /// Match the file-tree label's designed 11.5 pt size while following the
-    /// shared sidebar font-size setting.
+    /// shared panel font-size setting.
     private var projectTitleFontSize: Double {
-        11.5 * sidebarFontScale
+        11.5 * panelFontScale
     }
 
-    private var sidebarFontScale: Double {
-        fontSize / AppSettings.defaultSidebarFontSize
+    private var panelFontScale: Double {
+        fontSize / AppSettings.defaultPanelFontSize
     }
 }
 

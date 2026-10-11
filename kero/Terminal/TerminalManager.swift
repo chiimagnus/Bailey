@@ -9,9 +9,8 @@ import Foundation
 import SwiftUI
 import WebKit
 
-/// Panels available in the right sidebar. Raw values are stable names
-/// persisted in `SessionSnapshot`.
-enum RightPanel: String, Codable {
+/// Tools can be docked in any group.
+enum ToolPanel {
     case files
     case git
     case info
@@ -47,11 +46,6 @@ final class TerminalManager: nonisolated ObservableObject {
             }
         }
     }
-    @Published var isPanelVisible = false
-    @Published var panelTab: RightPanel = .files
-    /// Visibility of the left project sidebar (⌘B). `isPanelVisible` above is
-    /// the separate right panel.
-    @Published var isLeftSidebarVisible = true
     /// Debug FPS badge in the sidebar header. Deliberately not persisted:
     /// every launch starts with it hidden.
     @Published var isFPSCounterVisible = false
@@ -493,10 +487,6 @@ final class TerminalManager: nonisolated ObservableObject {
         }
         retainedDiffProjectIDs.remove(project.id)
         // Only an explicit project closure removes the Files/Git workspace.
-        // Closing its last terminal never collapses the right sidebar.
-        if projects.isEmpty {
-            isPanelVisible = false
-        }
     }
 
     /// Moves a dragged project across `targetID`: after it when moving down,
@@ -536,7 +526,7 @@ final class TerminalManager: nonisolated ObservableObject {
 
     // MARK: - Sessions
 
-    /// New sessions and browser tabs belong to the selected sidebar item.
+    /// New sessions and browser tabs use the selected project.
     func newSession() {
         selectedProject?.newSession()
     }
@@ -788,14 +778,6 @@ final class TerminalManager: nonisolated ObservableObject {
 
     // MARK: - Panels & appearance
 
-    func toggleSidebar() {
-        isPanelVisible.toggle()
-    }
-
-    func toggleLeftSidebar() {
-        isLeftSidebarVisible.toggle()
-    }
-
     func toggleFPSCounter() {
         isFPSCounterVisible.toggle()
     }
@@ -859,29 +841,21 @@ final class TerminalManager: nonisolated ObservableObject {
         return false
     }
 
-    /// Reveal an existing tool wherever it was docked. The shortcut must not
-    /// clone or move a panel back to the right after the user relocated it.
-    func togglePanel(_ panel: RightPanel) {
-        let dockItem: DockItem = switch panel {
+    /// Reuse an existing panel or reopen it in a tool group; never create
+    /// another copy just because the user relocated the original.
+    func showPanel(_ panel: ToolPanel) {
+        let item: DockItem = switch panel {
         case .info: .info
         case .files: .files
         case .git: .git
         }
-        let previousPanel = panelTab
-        panelTab = panel
         guard let project = selectedProject else { return }
-        if let owner = project.dock.group(containing: dockItem) {
-            let alreadySelected = owner.selected == dockItem
-            project.dock.select(dockItem)
-            switch owner.region {
-            case .left: isLeftSidebarVisible = true
-            case .right:
-                isPanelVisible = !(isPanelVisible && alreadySelected && previousPanel == panel)
-            case .main, .extra: break
-            }
-        } else {
-            project.dock.place(dockItem, in: .right)
-            isPanelVisible = true
+        if project.dock.group(containing: item) != nil {
+            project.dock.select(item)
+        } else if let target = project.dock.root.groups.last(where: { group in
+            group.items.contains(.info) || group.items.contains(.files) || group.items.contains(.git)
+        }) ?? project.dock.root.groups.last {
+            project.dock.place(item, in: target.id)
         }
     }
 
@@ -1010,10 +984,7 @@ final class TerminalManager: nonisolated ObservableObject {
                     dock: project.dock.snapshot(tabIDs: savedTabs.map { $0.0.id })
                 )
             },
-            selectedProjectIndex: projects.firstIndex { $0.id == selectedProjectID },
-            isLeftSidebarVisible: isLeftSidebarVisible,
-            isRightPanelVisible: isPanelVisible,
-            rightPanelTab: panelTab
+            selectedProjectIndex: projects.firstIndex { $0.id == selectedProjectID }
         )
         return (snapshot, histories)
     }
@@ -1113,13 +1084,8 @@ final class TerminalManager: nonisolated ObservableObject {
         }
     }
 
-    /// Rebuilds projects and tabs from a saved window snapshot. Returns
-    /// false when the snapshot holds nothing restorable. Sidebar state is
-    /// applied even then — the window claimed this snapshot's layout.
+    /// Rebuilds projects and tabs from the saved window snapshot.
     private func restore(from snapshot: SessionSnapshot) -> Bool {
-        if let visible = snapshot.isLeftSidebarVisible { isLeftSidebarVisible = visible }
-        if let visible = snapshot.isRightPanelVisible { isPanelVisible = visible }
-        if let tab = snapshot.rightPanelTab { panelTab = tab }
         for saved in snapshot.projects {
             let project = makeProject()
             project.customName = Project.normalizedCustomName(saved.customName)
@@ -1143,16 +1109,7 @@ final class TerminalManager: nonisolated ObservableObject {
             if let index = saved.selectedTabIndex, project.tabs.indices.contains(index) {
                 project.selectedTabID = project.tabs[index].id
             }
-            if let dock = saved.dock {
-                project.dock.restore(dock, tabIDs: project.tabs.map(\.id))
-            } else if let legacyPanel = snapshot.rightPanelTab {
-                let item: DockItem = switch legacyPanel {
-                case .info: .info
-                case .files: .files
-                case .git: .git
-                }
-                project.dock.select(item)
-            }
+            project.dock.restore(saved.dock, tabIDs: project.tabs.map(\.id))
             project.resetRecency()
             if let pinnedFile = project.pinnedFile,
                !project.tabs.flatMap(\.allContents).contains(where: { content in

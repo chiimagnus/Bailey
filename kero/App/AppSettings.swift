@@ -103,8 +103,8 @@ final class AppSettings: nonisolated ObservableObject {
 
     static let defaultFontSize: Double = 13
     static let fontSizeRange: ClosedRange<Double> = 8...32
-    static let defaultSidebarFontSize: Double = 14
-    static let sidebarFontSizeRange: ClosedRange<Double> = 9...18
+    static let defaultPanelFontSize: Double = 14
+    static let panelFontSizeRange: ClosedRange<Double> = 9...18
     static let defaultToolbarVisibility: ToolbarVisibility = .hide
 
     /// The language this process launched with, kept separate from the pending
@@ -154,9 +154,9 @@ final class AppSettings: nonisolated ObservableObject {
         didSet { save() }
     }
 
-    /// Base text size for both sidebars. Each panel preserves its relative
+    /// Base text size for project and tool panels. Each panel preserves its relative
     /// hierarchy for section labels, content, metadata, and controls.
-    @Published var sidebarFontSize: Double {
+    @Published var panelFontSize: Double {
         didSet { save() }
     }
 
@@ -227,11 +227,11 @@ final class AppSettings: nonisolated ObservableObject {
         fontFamily = toml["font-family"]?.string ?? ""
         let size = toml["font-size"]?.double ?? Self.defaultFontSize
         fontSize = Self.fontSizeRange.contains(size) ? size : Self.defaultFontSize
-        let sidebarSize = toml["sidebar.font-size"]?.double
-            ?? Self.defaultSidebarFontSize
-        sidebarFontSize = Self.sidebarFontSizeRange.contains(sidebarSize)
-            ? sidebarSize
-            : Self.defaultSidebarFontSize
+        let panelSize = toml["panel.font-size"]?.double
+            ?? Self.defaultPanelFontSize
+        panelFontSize = Self.panelFontSizeRange.contains(panelSize)
+            ? panelSize
+            : Self.defaultPanelFontSize
         toolbarVisibility = ToolbarVisibility(
             rawValue: toml["toolbar.visibility"]?.string ?? ""
         ) ?? Self.defaultToolbarVisibility
@@ -279,7 +279,7 @@ final class AppSettings: nonisolated ObservableObject {
     func resetFont() {
         fontFamily = ""
         fontSize = Self.defaultFontSize
-        sidebarFontSize = Self.defaultSidebarFontSize
+        panelFontSize = Self.defaultPanelFontSize
         fontThicken = false
     }
 
@@ -315,8 +315,8 @@ final class AppSettings: nonisolated ObservableObject {
             lines.append("font-family = \(TOML.quote(fontFamily))")
         }
         lines.append("font-size = \(TOML.number(fontSize))")
-        if sidebarFontSize != Self.defaultSidebarFontSize {
-            lines.append("sidebar.font-size = \(TOML.number(sidebarFontSize))")
+        if panelFontSize != Self.defaultPanelFontSize {
+            lines.append("panel.font-size = \(TOML.number(panelFontSize))")
         }
         if toolbarVisibility != Self.defaultToolbarVisibility {
             lines.append("toolbar.visibility = \(TOML.quote(toolbarVisibility.rawValue))")

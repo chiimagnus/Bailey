@@ -197,17 +197,11 @@ struct SessionSnapshot: Codable {
         var pinnedFile: String?
         var tabs: [TabSnapshot]
         var selectedTabIndex: Int?
-        /// Optional: older snapshots used separate fixed sidebars.
-        var dock: DockSavedNode?
+        var dock: DockSavedNode
     }
 
     var projects: [ProjectSnapshot]
     var selectedProjectIndex: Int?
-    /// Sidebar layout. Optional so snapshots written before these were
-    /// captured still decode; nil leaves the window at its defaults.
-    var isLeftSidebarVisible: Bool?
-    var isRightPanelVisible: Bool?
-    var rightPanelTab: RightPanel?
 }
 
 /// Persisted top level: one `SessionSnapshot` per open window, in

@@ -1,5 +1,5 @@
 //
-//  RightSidebarView.swift
+//  ToolPanelView.swift
 //  kero
 //
 
@@ -88,10 +88,10 @@ private struct RemotePaneHeaderHost: NSViewRepresentable {
 
 /// Renders one tool within a dock tab. Files, Git and Info retain their
 /// original models and actions regardless of where the tab is parked.
-struct RightSidebarView: View {
+struct ToolPanelView: View {
     @ObservedObject var manager: TerminalManager
     @ObservedObject var git: GitStatusModel
-    let panel: RightPanel
+    let panel: ToolPanel
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var themeChanges = Theme.changes
     @StateObject private var info = SessionInfoModel()
@@ -125,8 +125,8 @@ struct RightSidebarView: View {
         return project.selectedSession
     }
 
-    private var sidebarFontScale: CGFloat {
-        CGFloat(settings.sidebarFontSize / AppSettings.defaultSidebarFontSize)
+    private var panelFontScale: CGFloat {
+        CGFloat(settings.panelFontSize / AppSettings.defaultPanelFontSize)
     }
 
     /// The heading is a published-state read costing nothing, and a connection
@@ -162,7 +162,7 @@ struct RightSidebarView: View {
             if remoteHeaderState != .local {
                 RemotePaneHeaderHost(
                     view: remoteHeader,
-                    fontScale: sidebarFontScale
+                    fontScale: panelFontScale
                 )
                 .frame(height: remoteHeader.fittingSize.height)
                 // Same inset as the panel headings below, so the
@@ -280,10 +280,10 @@ struct RightSidebarView: View {
         .onChange(of: remoteConnectionToken) { applyRemoteHeading() }
         // Same for pinning/unpinning the project directory.
         .onChange(of: manager.selectedProject?.customDirectory) { syncModels() }
-        .environment(\.sidebarFontScale, sidebarFontScale)
+        .environment(\.panelFontScale, panelFontScale)
         // Native button and control labels without a designed hierarchy use
         // the configured base size directly.
-        .environment(\.font, .system(size: CGFloat(settings.sidebarFontSize)))
+        .environment(\.font, .system(size: CGFloat(settings.panelFontSize)))
     }
 
     private func syncModels() {
@@ -348,8 +348,7 @@ struct RightSidebarView: View {
     }
 
     private func performSync() async {
-        guard manager.isPanelVisible,
-              let project = manager.selectedProject,
+        guard let project = manager.selectedProject,
               let context = project.panelContext
         else { return }
         let session = project.selectedSession
@@ -385,7 +384,7 @@ struct RightSidebarView: View {
         guard epoch == (project.selectedSession.map(workspaceEpoch) ?? context.scope),
               manager.selectedProjectID == project.id else { return }
         if rootSource != source { rootSource = source }
-        switch manager.panelTab {
+        switch panel {
         case .files:
             await project.fileTree.sync(root: root, backend: backend, scope: context.scope)
         case .git:
@@ -441,11 +440,11 @@ private struct PanelHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(title)
-                .sidebarFont(size: 12, weight: .semibold)
+                .panelFont(size: 12, weight: .semibold)
                 .lineLimit(1)
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle)
-                    .sidebarFont(size: 10)
+                    .panelFont(size: 10)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
@@ -496,7 +495,7 @@ private struct FileTreePanel: View {
                         )
                     } label: {
                         Image(systemName: "arrow.up.forward.app")
-                            .sidebarFont(size: 11)
+                            .panelFont(size: 11)
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
@@ -529,7 +528,7 @@ private struct FileTreeScrollView: View {
     let openToSide: (String) -> Void
     let onRename: (String, String) -> Void
     let refreshGitStatus: () -> Void
-    @Environment(\.sidebarFontScale) private var fontScale
+    @Environment(\.panelFontScale) private var fontScale
 
     var body: some View {
         ScrollView(.vertical) {
@@ -565,7 +564,7 @@ private struct FileTreeRow: View {
 
     @State private var editingName = ""
     @FocusState private var fieldFocused: Bool
-    @Environment(\.sidebarFontScale) private var fontScale
+    @Environment(\.panelFontScale) private var fontScale
 
     private var isRenaming: Bool { model.renamingPath == item.path }
 
@@ -738,7 +737,7 @@ private struct FileTreeRow: View {
             leadingGlyphs
             if !item.compactPrefix.isEmpty {
                 Text(item.compactPrefix.joined(separator: " / ") + " /")
-                    .sidebarFont(size: TreeRowStyle.fontSize)
+                    .panelFont(size: TreeRowStyle.fontSize)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: true, vertical: false)
             }
@@ -781,7 +780,7 @@ private struct FileTreeRow: View {
     private func nameField(_ placeholder: String) -> some View {
         TextField(placeholder, text: $editingName)
             .textFieldStyle(.plain)
-            .sidebarFont(size: 11.5)
+            .panelFont(size: 11.5)
             .foregroundStyle(.primary)
             .focused($fieldFocused)
             .padding(.horizontal, 4)
@@ -887,7 +886,7 @@ private struct GitPanel: View {
     @State private var showFilter = false
     @State private var operationExpanded = false
     @State private var operationTrigger: OperationTrigger?
-    @Environment(\.sidebarFontScale) private var sidebarFontScale
+    @Environment(\.panelFontScale) private var panelFontScale
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1001,7 +1000,7 @@ private struct GitPanel: View {
                 branchMenu
             } else {
                 Image(systemName: "arrow.triangle.branch")
-                    .sidebarFont(size: 11, weight: .medium)
+                    .panelFont(size: 11, weight: .medium)
                     .foregroundStyle(Color(nsColor: Theme.accent))
                 PanelHeader(title: String(localized: "Git", table: "Sidebar"), subtitle: model.rootPath)
             }
@@ -1070,7 +1069,7 @@ private struct GitPanel: View {
             HStack(spacing: 6) {
                 ZStack {
                     Image(systemName: "arrow.triangle.branch")
-                        .sidebarFont(size: 11, weight: .medium)
+                        .panelFont(size: 11, weight: .medium)
                         .foregroundStyle(Color(nsColor: Theme.accent))
                         .opacity(operationIsLoading(.branchMenu) ? 0 : 1)
                     if operationIsLoading(.branchMenu) {
@@ -1149,7 +1148,7 @@ private struct GitPanel: View {
         } label: {
             ZStack {
                 Image(systemName: "ellipsis")
-                    .sidebarFont(size: 10, weight: .medium)
+                    .panelFont(size: 10, weight: .medium)
                     .foregroundStyle(.secondary)
                     .opacity(operationIsLoading(.moreMenu) ? 0 : 1)
                 if operationIsLoading(.moreMenu) {
@@ -1172,7 +1171,7 @@ private struct GitPanel: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .sidebarFont(size: 10, weight: .medium)
+                .panelFont(size: 10, weight: .medium)
                 .foregroundStyle(.secondary)
                 .frame(width: 18, height: 18)
                 .contentShape(RoundedRectangle(cornerRadius: 4))
@@ -1189,12 +1188,12 @@ private struct GitPanel: View {
         if let branch = model.branch {
             HStack(spacing: 5) {
                 Image(systemName: model.hasUpstream ? "arrow.triangle.2.circlepath" : "icloud.slash")
-                    .sidebarFont(size: 9, weight: .medium)
+                    .panelFont(size: 9, weight: .medium)
                     .foregroundStyle(.secondary)
                 Text(verbatim: model.upstream ?? (branch == "detached HEAD"
                     ? String(localized: "Detached HEAD", table: "Sidebar")
                     : String(localized: "Unpublished branch", table: "Sidebar")))
-                    .sidebarFont(size: 9.5)
+                    .panelFont(size: 9.5)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -1226,17 +1225,17 @@ private struct GitPanel: View {
         if let current = model.repositoryOperation {
             HStack(spacing: 6) {
                 Image(systemName: "arrow.triangle.merge")
-                    .sidebarFont(size: 10, weight: .semibold)
+                    .panelFont(size: 10, weight: .semibold)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(verbatim: current)
-                        .sidebarFont(size: 10.5, weight: .medium)
+                        .panelFont(size: 10.5, weight: .medium)
                     Text(model.mergeEntries.isEmpty
                          ? String(localized: "Finish or abort from the terminal", table: "Sidebar")
                          : String(
                             localized: "Resolve and stage \(model.mergeEntries.count) conflicted files", table: "Sidebar",
                             comment: "Git merge guidance. The placeholder is the number of conflicted files."
                          ))
-                        .sidebarFont(size: 9.5)
+                        .panelFont(size: 9.5)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
@@ -1261,9 +1260,9 @@ private struct GitPanel: View {
             VStack(spacing: 0) {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .sidebarFont(size: 10)
+                        .panelFont(size: 10)
                     Text(operation.statusLabel)
-                        .sidebarFont(size: 10.5, weight: .medium)
+                        .panelFont(size: 10.5, weight: .medium)
                         .lineLimit(1)
                     Spacer(minLength: 0)
                     if !operation.output.isEmpty {
@@ -1271,7 +1270,7 @@ private struct GitPanel: View {
                             operationExpanded.toggle()
                         } label: {
                             Image(systemName: "chevron.right")
-                                .sidebarFont(size: 8, weight: .semibold)
+                                .panelFont(size: 8, weight: .semibold)
                                 .rotationEffect(.degrees(operationExpanded ? 90 : 0))
                                 .frame(width: 16, height: 16)
                                 .contentShape(Rectangle())
@@ -1293,7 +1292,7 @@ private struct GitPanel: View {
                         model.dismissOperation()
                     } label: {
                         Image(systemName: "xmark")
-                            .sidebarFont(size: 8, weight: .semibold)
+                            .panelFont(size: 8, weight: .semibold)
                             .frame(width: 16, height: 16)
                             .contentShape(Rectangle())
                     }
@@ -1304,7 +1303,7 @@ private struct GitPanel: View {
                 if operationExpanded, !operation.output.isEmpty {
                     ScrollView([.horizontal, .vertical]) {
                         Text(verbatim: operation.output)
-                            .sidebarFont(size: 9, design: .monospaced)
+                            .panelFont(size: 9, design: .monospaced)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: true, vertical: false)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1374,7 +1373,7 @@ private struct GitPanel: View {
                 axis: .vertical
             )
                 .textFieldStyle(.plain)
-                .sidebarFont(size: 11.5)
+                .panelFont(size: 11.5)
                 .lineLimit(1...4)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
@@ -1441,7 +1440,7 @@ private struct GitPanel: View {
         } label: {
             ZStack {
                 Image(systemName: "chevron.down")
-                    .sidebarFont(size: 8, weight: .semibold)
+                    .panelFont(size: 8, weight: .semibold)
                     .foregroundStyle(.secondary)
                     .opacity(operationIsLoading(.commitMenu) ? 0 : 1)
                 if operationIsLoading(.commitMenu) {
@@ -1473,10 +1472,10 @@ private struct GitPanel: View {
                     operationProgressView()
                 } else {
                     Image(systemName: icon)
-                        .sidebarFont(size: 10, weight: .semibold)
+                        .panelFont(size: 10, weight: .semibold)
                 }
                 Text(title)
-                    .sidebarFont(size: 11, weight: .medium)
+                    .panelFont(size: 11, weight: .medium)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 5)
@@ -1578,17 +1577,17 @@ private struct GitPanel: View {
         if showFilter {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
-                    .sidebarFont(size: 10)
+                    .panelFont(size: 10)
                     .foregroundStyle(.tertiary)
                 TextField(String(localized: "Filter changed files", table: "Sidebar"), text: $filterText)
                     .textFieldStyle(.plain)
-                    .sidebarFont(size: 11)
+                    .panelFont(size: 11)
                 if !filterText.isEmpty {
                     Button {
                         filterText = ""
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .sidebarFont(size: 10)
+                            .panelFont(size: 10)
                             .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
@@ -1695,7 +1694,7 @@ private struct GitPanel: View {
                             expandedCommitIDs: $expandedCommitIDs,
                             collapsedFolders: collapsedFoldersBinding,
                             viewMode: settings.gitViewMode,
-                            fontScale: sidebarFontScale,
+                            fontScale: panelFontScale,
                             hasMoreCommits: model.hasMoreRecentCommits,
                             isLoadingMore: model.isLoadingMoreCommits,
                             loadMore: model.loadMoreCommits,
@@ -1723,7 +1722,7 @@ private struct GitPanel: View {
             let byPath = Dictionary(entries.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
             ForEach(TreeDisplayModel.pathRows(files, section: kind.rawValue, collapsed: collapsedFolders)) { item in
                 if item.isDirectory {
-                    TreeFolderRow(row: item, scale: sidebarFontScale) {
+                    TreeFolderRow(row: item, scale: panelFontScale) {
                         model.toggleCollapsedFolder(kind.rawValue + ":" + item.path)
                     }
                 } else if let entry = byPath[item.path] {
@@ -2077,10 +2076,10 @@ private struct GitPanel: View {
         VStack(spacing: 8) {
             Spacer()
             Image(systemName: icon)
-                .sidebarFont(size: 24, weight: .light)
+                .panelFont(size: 24, weight: .light)
                 .foregroundStyle(.quaternary)
             Text(verbatim: text)
-                .sidebarFont(size: 11)
+                .panelFont(size: 11)
                 .foregroundStyle(.tertiary)
             Spacer()
         }
@@ -2090,10 +2089,10 @@ private struct GitPanel: View {
     private func inlinePlaceholder(icon: String, text: String) -> some View {
         VStack(spacing: 6) {
             Image(systemName: icon)
-                .sidebarFont(size: 18, weight: .light)
+                .panelFont(size: 18, weight: .light)
                 .foregroundStyle(.quaternary)
             Text(verbatim: text)
-                .sidebarFont(size: 10.5)
+                .panelFont(size: 10.5)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
         }
@@ -2106,13 +2105,13 @@ private struct GitPanel: View {
         VStack(spacing: 9) {
             Spacer()
             Image(systemName: "arrow.triangle.branch")
-                .sidebarFont(size: 24, weight: .light)
+                .panelFont(size: 24, weight: .light)
                 .foregroundStyle(.quaternary)
             VStack(spacing: 2) {
                 Text(String(localized: "No Git Repository", table: "Sidebar"))
-                    .sidebarFont(size: 11.5, weight: .medium)
+                    .panelFont(size: 11.5, weight: .medium)
                 Text(String(localized: "Initialize the terminal’s current directory to start tracking changes.", table: "Sidebar"))
-                    .sidebarFont(size: 10)
+                    .panelFont(size: 10)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
             }
@@ -2142,13 +2141,13 @@ private struct GitPanel: View {
         VStack(spacing: 9) {
             Spacer()
             Image(systemName: "exclamationmark.triangle")
-                .sidebarFont(size: 24, weight: .light)
+                .panelFont(size: 24, weight: .light)
                 .foregroundStyle(Color(red: 0.88, green: 0.42, blue: 0.36))
             VStack(spacing: 3) {
                 Text(String(localized: "Git Status Unavailable", table: "Sidebar"))
-                    .sidebarFont(size: 11.5, weight: .medium)
+                    .panelFont(size: 11.5, weight: .medium)
                 Text(verbatim: message)
-                    .sidebarFont(size: 10, design: .monospaced)
+                    .panelFont(size: 10, design: .monospaced)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
                     .lineLimit(5)
@@ -2167,7 +2166,7 @@ private struct GitPanel: View {
 
     private func badge(_ text: String, label: String) -> some View {
         Text(verbatim: text)
-            .sidebarFont(size: 10, weight: .medium)
+            .panelFont(size: 10, weight: .medium)
             .foregroundStyle(.secondary)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
@@ -2262,10 +2261,10 @@ private struct GitSectionHeader: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.right")
-                        .sidebarFont(size: 7, weight: .semibold)
+                        .panelFont(size: 7, weight: .semibold)
                         .rotationEffect(.degrees(isCollapsed ? 0 : 90))
                     Text(title)
-                        .sidebarFont(size: 9.5, weight: .medium)
+                        .panelFont(size: 9.5, weight: .medium)
                 }
                 .foregroundStyle(Color.secondary.opacity(0.7))
                 .contentShape(Rectangle())
@@ -2279,7 +2278,7 @@ private struct GitSectionHeader: View {
                     isShowingHelp.toggle()
                 } label: {
                     Image(systemName: "questionmark.circle")
-                        .sidebarFont(size: 9)
+                        .panelFont(size: 9)
                         .foregroundStyle(.secondary)
                         .frame(width: 14, height: 14)
                         .contentShape(Rectangle())
@@ -2288,7 +2287,7 @@ private struct GitSectionHeader: View {
                 .accessibilityLabel(String(localized: "About \(title)", table: "Sidebar"))
                 .popover(isPresented: $isShowingHelp, arrowEdge: .bottom) {
                     Text(helpText)
-                        .sidebarFont(size: 11)
+                        .panelFont(size: 11)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(width: 230, alignment: .leading)
                         .padding(12)
@@ -2304,7 +2303,7 @@ private struct GitSectionHeader: View {
                                 .scaleEffect(0.7)
                         } else {
                             Image(systemName: action.systemImage)
-                                .sidebarFont(size: 9, weight: .medium)
+                                .panelFont(size: 9, weight: .medium)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -2326,7 +2325,7 @@ private struct GitSectionHeader: View {
 
             if count > 0 {
                 Text(String(localized: "\(count)", table: "Sidebar"))
-                    .sidebarFont(size: 9, weight: .medium)
+                    .panelFont(size: 9, weight: .medium)
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
@@ -2377,7 +2376,7 @@ private struct GitEntryRow: View {
     let copyRelativePath: () -> Void
     let insertInTerminal: (() -> Void)?
 
-    @Environment(\.sidebarFontScale) private var fontScale
+    @Environment(\.panelFontScale) private var fontScale
 
     var body: some View {
         TreeFileRow(
@@ -2446,7 +2445,7 @@ private struct GitEntryRow: View {
                         .scaleEffect(0.7)
                 } else {
                     Image(systemName: systemImage)
-                        .sidebarFont(size: 9, weight: .semibold)
+                        .panelFont(size: 9, weight: .semibold)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -2562,7 +2561,7 @@ private struct InfoPanel: View {
     private var header: some View {
         HStack(spacing: 6) {
             Image(systemName: "info.circle")
-                .sidebarFont(size: 11, weight: .medium)
+                .panelFont(size: 11, weight: .medium)
                 .foregroundStyle(Color(nsColor: Theme.accent))
             PanelHeader(
                 title: session == nil
@@ -2575,7 +2574,7 @@ private struct InfoPanel: View {
                 Task { await model.refresh() }
             } label: {
                 Image(systemName: "arrow.clockwise")
-                    .sidebarFont(size: 10, weight: .medium)
+                    .panelFont(size: 10, weight: .medium)
                     .foregroundStyle(.secondary)
                     .frame(width: 18, height: 18)
                     .contentShape(RoundedRectangle(cornerRadius: 4))
@@ -2641,7 +2640,7 @@ private struct InfoPanel: View {
     private func directoryGroup(path: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(verbatim: path)
-                .sidebarFont(size: 11)
+                .panelFont(size: 11)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .truncationMode(.head)
@@ -2736,9 +2735,9 @@ private struct InfoPanel: View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: systemImage)
-                    .sidebarFont(size: 9, weight: .medium)
+                    .panelFont(size: 9, weight: .medium)
                 Text(verbatim: title)
-                    .sidebarFont(size: 10, weight: .medium)
+                    .panelFont(size: 10, weight: .medium)
             }
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
@@ -2810,7 +2809,7 @@ private struct InfoPanel: View {
 
     private func emptyRow(_ text: String) -> some View {
         Text(text)
-            .sidebarFont(size: 11)
+            .panelFont(size: 11)
             .foregroundStyle(.secondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -2829,13 +2828,13 @@ private struct InfoProcessRow: View {
                 .fill(Color(red: 0.25, green: 0.73, blue: 0.31))
                 .frame(width: 5, height: 5)
             Text(process.name)
-                .sidebarFont(size: 11.5)
+                .panelFont(size: 11.5)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .layoutPriority(1)
                 .help(process.executable)
             Text(String(process.pid))
-                .sidebarFont(size: 10, design: .monospaced)
+                .panelFont(size: 10, design: .monospaced)
                 .foregroundStyle(.tertiary)
             Spacer(minLength: 0)
             if isHovering {
@@ -2843,7 +2842,7 @@ private struct InfoProcessRow: View {
                     kill(false)
                 } label: {
                     Image(systemName: "xmark")
-                        .sidebarFont(size: 9, weight: .semibold)
+                        .panelFont(size: 9, weight: .semibold)
                         .foregroundStyle(.secondary)
                         .frame(width: 16, height: 16)
                         .contentShape(RoundedRectangle(cornerRadius: 3))
@@ -2852,7 +2851,7 @@ private struct InfoProcessRow: View {
                 .help(String(localized: "Terminate Process", table: "Sidebar"))
             } else {
                 Text(String(localized: "\(process.cpu, format: .number.precision(.fractionLength(0)))% · \(process.memoryLabel)", table: "Sidebar"))
-                    .sidebarFont(size: 10)
+                    .panelFont(size: 10)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
@@ -2916,21 +2915,21 @@ private struct InfoPortRow: View {
         Button(action: open) {
             HStack(spacing: 7) {
                 Image(systemName: isRemote ? "arrow.left.arrow.right" : "network")
-                    .sidebarFont(size: 9, weight: .medium)
+                    .panelFont(size: 9, weight: .medium)
                     .foregroundStyle(Color(red: 0.35, green: 0.65, blue: 1.0))
                     .frame(width: 12)
                 Text(portLabel)
-                    .sidebarFont(size: 11.5, weight: .medium, design: .monospaced)
+                    .panelFont(size: 11.5, weight: .medium, design: .monospaced)
                     .foregroundStyle(.secondary)
                     .layoutPriority(1)
                 Text(port.processName)
-                    .sidebarFont(size: 10)
+                    .panelFont(size: 10)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 if isHovering {
                     Image(systemName: "arrow.up.forward")
-                        .sidebarFont(size: 9, weight: .medium)
+                        .panelFont(size: 9, weight: .medium)
                         .foregroundStyle(.tertiary)
                 }
             }
