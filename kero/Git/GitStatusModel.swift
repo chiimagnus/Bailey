@@ -48,8 +48,8 @@ final class GitStatusModel: nonisolated ObservableObject {
     }
 
     /// Compact Explorer-style decoration for a path in the active repository.
-    /// The file tree maps these semantic states to both a color and a visible
-    /// status badge, so color is never the only indication.
+    /// Files uses the semantic state as its name color and exposes the status
+    /// through accessibility text.
     nonisolated enum FileDecoration: Equatable, Sendable {
         case modified
         case added

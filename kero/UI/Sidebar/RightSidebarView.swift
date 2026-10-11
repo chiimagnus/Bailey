@@ -816,12 +816,6 @@ private struct FileTreeRow: View {
                 }
                 .scrollIndicators(.hidden)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                if let gitDecoration {
-                    Text(gitDecoration.badge)
-                        .sidebarFont(size: 9, weight: .semibold, design: .monospaced)
-                        .foregroundStyle(gitDecoration.color)
-                        .accessibilityHidden(true)
-                }
             }
             .contentShape(Rectangle())
         }
@@ -841,6 +835,7 @@ private struct FileTreeRow: View {
     }
 
     private var fileNameColor: Color {
+        if let gitDecoration { return gitDecoration.color }
         return item.name.hasPrefix(".") ? Color.secondary.opacity(0.55) : .secondary
     }
 
@@ -932,19 +927,6 @@ private struct FileTreeRow: View {
 }
 
 private extension GitStatusModel.FileDecoration {
-    var badge: String {
-        switch self {
-        case .modified: "M"
-        case .added: "A"
-        case .untracked: "U"
-        case .deleted: "D"
-        case .renamed: "R"
-        case .copied: "C"
-        case .conflict: "!"
-        case .ignored: "I"
-        }
-    }
-
     var accessibilityName: String {
         switch self {
         case .modified: String(localized: "Modified", table: "Sidebar")
