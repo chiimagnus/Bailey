@@ -71,5 +71,5 @@ xcrun swiftc -swift-version 5 -o build/check-tree-row-hit-testing \
 
 - 一个提交只包含一个已验证的逻辑改动，不夹带其他人的修改。
 - 说明改了什么、为什么这样改，以及实际运行的检查；未验证部分单独列明。
-- 行为变化同步更新对应文档；本地化规则见[本地化](LOCALIZATION.md)。
+- 行为变化同步更新对应文档；翻译见[本地化](LOCALIZATION.md)，依赖升级见[依赖与生成资源](DEPENDENCIES.md)。
 - 运行 `git diff --check`，确认没有无关改动或临时产物。

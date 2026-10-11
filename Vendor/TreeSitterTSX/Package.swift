@@ -3,7 +3,7 @@
 import PackageDescription
 
 // The tree-sitter TSX grammar (TypeScript + JSX), vendored so kero can link it.
-// See README.md for why this can't just come from STTextView-Plugin-Neon.
+// 本地包的原因与更新规则见 ../../docs/DEPENDENCIES.md。
 let package = Package(
     name: "TreeSitterTSX",
     products: [

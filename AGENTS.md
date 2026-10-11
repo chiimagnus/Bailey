@@ -4,6 +4,7 @@ Kero 是原生 macOS 终端工作区，包含项目、窗格、文件、Git、�
 
 - [产品原则](PRODUCT.md)：产品与设计决策的依据。
 - [开发与验证](docs/CONTRIBUTING.md)：构建、验收和提交要求，动手前先读。
+- 升级本地依赖或生成资源前，先读[依赖与生成资源](docs/DEPENDENCIES.md)。
 
 ## 验证
 
