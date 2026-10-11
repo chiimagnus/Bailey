@@ -6,13 +6,13 @@
 import AppKit
 import SwiftUI
 
-/// A compact native commit graph embedded in the legacy Git panel. The
-/// history rows stay AppKit-owned so expanding a large commit does not create
-/// a SwiftUI view tree for every changed path.
-struct RecentCommitsView: NSViewRepresentable {
+/// One SwiftUI hierarchy for committed paths and worktree paths. The graph
+/// occupies its own leading gutter; folder icons use TreeFolderIcon directly.
+struct RecentCommitsView: View {
     @Binding private var expandedCommitIDs: Set<String>
     @Binding private var collapsedFolders: Set<String>
     @ObservedObject private var themeChanges = Theme.changes
+    @State private var requestedLastCommit: String?
 
     let commits: [GitStatusModel.RecentCommit]
     let viewMode: GitViewMode
@@ -20,10 +20,7 @@ struct RecentCommitsView: NSViewRepresentable {
     let hasMoreCommits: Bool
     let isLoadingMore: Bool
     let loadMore: () -> Bool
-    let openDiff: (
-        _ commit: GitStatusModel.RecentCommit,
-        _ file: GitStatusModel.RecentCommit.FileChange
-    ) -> Void
+    let openDiff: (GitStatusModel.RecentCommit, GitStatusModel.RecentCommit.FileChange) -> Void
 
     init(
         commits: [GitStatusModel.RecentCommit],
@@ -34,10 +31,7 @@ struct RecentCommitsView: NSViewRepresentable {
         hasMoreCommits: Bool,
         isLoadingMore: Bool,
         loadMore: @escaping () -> Bool,
-        openDiff: @escaping (
-            _ commit: GitStatusModel.RecentCommit,
-            _ file: GitStatusModel.RecentCommit.FileChange
-        ) -> Void
+        openDiff: @escaping (GitStatusModel.RecentCommit, GitStatusModel.RecentCommit.FileChange) -> Void
     ) {
         self.commits = commits
         _expandedCommitIDs = expandedCommitIDs
@@ -50,492 +44,91 @@ struct RecentCommitsView: NSViewRepresentable {
         self.openDiff = openDiff
     }
 
-    func makeNSView(context: Context) -> RecentCommitsNSView {
-        RecentCommitsNSView()
-    }
-
-    func updateNSView(_ view: RecentCommitsNSView, context: Context) {
-        _ = themeChanges
-        view.onToggleCommit = { id in
-            if expandedCommitIDs.contains(id) {
-                expandedCommitIDs.remove(id)
-            } else {
-                expandedCommitIDs.insert(id)
-            }
-        }
-        view.onToggleFolder = { key in
-            if !collapsedFolders.insert(key).inserted {
-                collapsedFolders.remove(key)
-            }
-        }
-        view.onOpenDiff = openDiff
-        view.onLoadMore = loadMore
-        view.configure(
-            commits: commits,
-            expandedCommitIDs: expandedCommitIDs,
-            collapsedFolders: collapsedFolders,
-            viewMode: viewMode,
-            fontScale: fontScale,
-            hasMoreCommits: hasMoreCommits,
-            isLoadingMore: isLoadingMore
-        )
-    }
-
-    func sizeThatFits(
-        _ proposal: ProposedViewSize,
-        nsView: RecentCommitsNSView,
-        context: Context
-    ) -> CGSize? {
-        CGSize(width: proposal.width ?? 240, height: nsView.requiredHeight)
-    }
-}
-
-@MainActor
-final class RecentCommitsNSView: NSView {
-    private struct Snapshot: Equatable {
-        let commits: [GitStatusModel.RecentCommit]
-        let expandedCommitIDs: Set<String>
-        let collapsedFolders: Set<String>
-        let viewMode: GitViewMode
-        let fontScale: CGFloat
-        let hasMoreCommits: Bool
-        let isLoadingMore: Bool
-    }
-
-    var onToggleCommit: ((String) -> Void)?
-    var onToggleFolder: ((String) -> Void)?
-    var onLoadMore: (() -> Bool)?
-    var onOpenDiff: ((
-        GitStatusModel.RecentCommit,
-        GitStatusModel.RecentCommit.FileChange
-    ) -> Void)?
-    private var snapshot: Snapshot?
-    private var orderedRows: [NSView] = []
-    private weak var observedClipView: NSClipView?
-    private var autoLoadRequestPending = false
-    private(set) var requiredHeight: CGFloat = 0
-
-    override var isFlipped: Bool { true }
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: requiredHeight)
-    }
-
-    func configure(
-        commits: [GitStatusModel.RecentCommit],
-        expandedCommitIDs: Set<String>,
-        collapsedFolders: Set<String>,
-        viewMode: GitViewMode,
-        fontScale: CGFloat,
-        hasMoreCommits: Bool,
-        isLoadingMore: Bool
-    ) {
-        let next = Snapshot(
-            commits: commits,
-            expandedCommitIDs: expandedCommitIDs,
-            collapsedFolders: collapsedFolders,
-            viewMode: viewMode,
-            fontScale: fontScale,
-            hasMoreCommits: hasMoreCommits,
-            isLoadingMore: isLoadingMore
-        )
-        guard snapshot != next else {
-            orderedRows.forEach { $0.needsDisplay = true }
-            evaluateAutoLoadIfNeeded()
-            return
-        }
-        if snapshot?.commits.count != next.commits.count
-            || snapshot?.isLoadingMore != next.isLoadingMore
-            || !next.hasMoreCommits {
-            autoLoadRequestPending = false
-        }
-        snapshot = next
-        rebuildRows(using: next)
-    }
-
-    private func rebuildRows(using snapshot: Snapshot) {
-        orderedRows.forEach { $0.removeFromSuperview() }
-        orderedRows.removeAll(keepingCapacity: true)
-
-        let metrics = CommitGraphMetrics(fontScale: snapshot.fontScale)
-        for (commitIndex, commit) in snapshot.commits.enumerated() {
-            let isExpanded = snapshot.expandedCommitIDs.contains(commit.id)
-            let isLastCommit = commitIndex == snapshot.commits.count - 1
-            let row = CommitGraphRowView(
-                commit: commit,
-                isFirst: commitIndex == 0,
-                continuesBelow: isExpanded || !isLastCommit,
-                isExpanded: isExpanded,
-                metrics: metrics
-            )
-            row.onToggle = { [weak self] id in self?.onToggleCommit?(id) }
-            addArrangedRow(row)
-
-            guard isExpanded else { continue }
-            if commit.files.isEmpty {
-                addArrangedRow(CommitFileRowView(
-                    change: nil,
-                    continuesBelow: !isLastCommit,
-                    metrics: metrics,
-                    onOpen: nil
-                ))
-                continue
-            }
-
-            if snapshot.viewMode == .tree {
-                let section = "commit:" + commit.hash
-                let filesByPath = Dictionary(
-                    commit.files.map { ($0.path, $0) },
-                    uniquingKeysWith: { first, _ in first }
-                )
-                let nodes = GitChangeTree.pathRows(
-                    commit.files.map(\.path),
-                    section: section,
-                    collapsed: snapshot.collapsedFolders
-                )
-                for (index, node) in nodes.enumerated() {
-                    let continues = index < nodes.count - 1 || !isLastCommit
-                    switch node.content {
-                    case .folder(let path, let name, let isCollapsed):
-                        addArrangedRow(CommitFileRowView(
-                            change: nil,
-                            folder: (path: path, name: name, collapsed: isCollapsed),
-                            depth: node.depth,
-                            continuesBelow: continues,
-                            metrics: metrics,
-                            onOpen: { [weak self] in
-                                self?.onToggleFolder?(section + ":" + path)
-                            }
-                        ))
-                    case .file(let path):
-                        guard let file = filesByPath[path] else { continue }
-                        addArrangedRow(CommitFileRowView(
-                            change: file, depth: node.depth, showDirectory: false,
-                            continuesBelow: continues,
-                            metrics: metrics,
-                            onOpen: { [weak self] in self?.onOpenDiff?(commit, file) }
-                        ))
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(commits) { commit in
+                let expanded = expandedCommitIDs.contains(commit.id)
+                let isLast = commit.id == commits.last?.id
+                VStack(alignment: .leading, spacing: 0) {
+                    commitRow(commit, isFirst: commit.id == commits.first?.id,
+                              continuesBelow: expanded || !isLast, expanded: expanded)
+                    if expanded {
+                        commitFiles(commit, isLast: isLast)
                     }
                 }
-            } else {
-                for (fileIndex, file) in commit.files.enumerated() {
-                    addArrangedRow(CommitFileRowView(
-                        change: file,
-                        continuesBelow: fileIndex < commit.files.count - 1 || !isLastCommit,
-                        metrics: metrics,
-                        onOpen: { [weak self] in self?.onOpenDiff?(commit, file) }
-                    ))
+                .onAppear {
+                    if isLast { requestMoreIfNeeded(after: commit.id) }
                 }
             }
         }
-        requiredHeight = orderedRows.reduce(0) { $0 + $1.intrinsicContentSize.height }
-        invalidateIntrinsicContentSize()
-        needsLayout = true
-        DispatchQueue.main.async { [weak self] in
-            self?.updateScrollObservation()
-            self?.evaluateAutoLoadIfNeeded()
+        .onChange(of: commits.last?.id) {
+            requestedLastCommit = nil
         }
     }
 
-    private func addArrangedRow(_ row: NSView) {
-        addSubview(row)
-        orderedRows.append(row)
+    private func requestMoreIfNeeded(after id: String) {
+        guard hasMoreCommits, !isLoadingMore, requestedLastCommit != id else { return }
+        if loadMore() { requestedLastCommit = id }
     }
 
-    override func layout() {
-        super.layout()
-        var y: CGFloat = 0
-        for row in orderedRows {
-            let height = row.intrinsicContentSize.height
-            row.frame = NSRect(x: 0, y: y, width: bounds.width, height: height)
-            y += height
+    private func commitRow(
+        _ commit: GitStatusModel.RecentCommit,
+        isFirst: Bool, continuesBelow: Bool, expanded: Bool
+    ) -> some View {
+        Button {
+            if !expandedCommitIDs.insert(commit.id).inserted {
+                expandedCommitIDs.remove(commit.id)
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Text(commit.subject)
+                    .font(.system(size: 11.5 * fontScale))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(commit.author.uppercased())
+                    .font(.system(size: 9.5 * fontScale, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if let reference = primaryReference(for: commit) {
+                    Text(reference)
+                        .font(.system(size: 9.5 * fontScale, weight: .medium))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .frame(maxWidth: 104)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color(nsColor: Theme.accent)))
+                }
+            }
+            .padding(.leading, 27)
+            .padding(.trailing, 5)
+            .frame(height: max(22, ceil(26 * fontScale)))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        updateScrollObservation()
-        evaluateAutoLoadIfNeeded()
-    }
-
-    override func viewDidMoveToSuperview() {
-        super.viewDidMoveToSuperview()
-        DispatchQueue.main.async { [weak self] in
-            self?.updateScrollObservation()
-            self?.evaluateAutoLoadIfNeeded()
+        .buttonStyle(.plain)
+        .background {
+            CommitTreeRails(depth: 0, isCommit: true, startsAtCenter: isFirst,
+                            endsAtCenter: !continuesBelow, expanded: expanded)
         }
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        updateScrollObservation()
-        evaluateAutoLoadIfNeeded()
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        orderedRows.forEach { $0.needsDisplay = true }
-    }
-
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-    }
-
-    /// The history view lives inside the Git panel's existing SwiftUI scroll
-    /// view. Observe its native clip view so reaching the last couple of rows
-    /// requests another page without adding a SwiftUI sentinel or button.
-    private func updateScrollObservation() {
-        let clipView = enclosingScrollView?.contentView
-        guard observedClipView !== clipView else { return }
-        if let observedClipView {
-            NotificationCenter.default.removeObserver(
-                self,
-                name: NSView.boundsDidChangeNotification,
-                object: observedClipView
-            )
+        .background {
+            if expanded { RoundedRectangle(cornerRadius: 4).fill(Color(nsColor: Theme.accent).opacity(0.08)) }
         }
-        observedClipView = clipView
-        guard let clipView else { return }
-        clipView.postsBoundsChangedNotifications = true
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(scrollBoundsDidChange),
-            name: NSView.boundsDidChangeNotification,
-            object: clipView
-        )
-    }
-
-    @objc private func scrollBoundsDidChange() {
-        evaluateAutoLoadIfNeeded()
-    }
-
-    private func evaluateAutoLoadIfNeeded() {
-        guard let snapshot,
-              snapshot.hasMoreCommits,
-              !snapshot.isLoadingMore,
-              !autoLoadRequestPending,
-              requiredHeight > 0,
-              let clipView = observedClipView ?? enclosingScrollView?.contentView else { return }
-        let visibleRect = convert(clipView.bounds, from: clipView)
-        let preloadDistance = max(44, clipView.bounds.height * 0.25)
-        guard visibleRect.minY < requiredHeight,
-              visibleRect.maxY >= requiredHeight - preloadDistance else { return }
-        // Only latch requests the model accepted. A temporary rejection (for
-        // example while a Git mutation is finishing) must remain retryable on
-        // the next SwiftUI update or scroll/layout event.
-        autoLoadRequestPending = onLoadMore?() == true
-    }
-}
-
-@MainActor
-private struct CommitGraphMetrics {
-    let scale: CGFloat
-    let commitHeight: CGFloat
-    let fileHeight: CGFloat
-    let subjectFont: NSFont
-    let metadataFont: NSFont
-    let fileFont: NSFont
-    let pathFont: NSFont
-    let statusFont: NSFont
-
-    init(fontScale: CGFloat) {
-        scale = fontScale
-        commitHeight = max(22, (26 * fontScale).rounded(.up))
-        fileHeight = TreeRowStyle.rowHeight(fontScale)
-        subjectFont = .systemFont(ofSize: 11.5 * fontScale, weight: .regular)
-        metadataFont = .systemFont(ofSize: 9.5 * fontScale, weight: .medium)
-        fileFont = .systemFont(ofSize: TreeRowStyle.fontSize * fontScale, weight: .regular)
-        pathFont = .systemFont(ofSize: 9.5 * fontScale, weight: .regular)
-        statusFont = .monospacedSystemFont(ofSize: 9.5 * fontScale, weight: .semibold)
-    }
-
-    var graphX: CGFloat { 14 }
-    var contentX: CGFloat { 27 }
-    var nestedRailX: CGFloat { 35 }
-    var fileIconX: CGFloat { 45 }
-    var fileContentX: CGFloat { fileIconX + TreeRowStyle.iconSize + TreeRowStyle.iconSpacing }
-}
-
-@MainActor
-private final class CommitGraphRowView: NSView {
-    let commit: GitStatusModel.RecentCommit
-    let isFirst: Bool
-    let continuesBelow: Bool
-    let isExpanded: Bool
-    let metrics: CommitGraphMetrics
-    var onToggle: ((String) -> Void)?
-
-    private var trackingAreaReference: NSTrackingArea?
-    private var isHovered = false
-
-    init(
-        commit: GitStatusModel.RecentCommit,
-        isFirst: Bool,
-        continuesBelow: Bool,
-        isExpanded: Bool,
-        metrics: CommitGraphMetrics
-    ) {
-        self.commit = commit
-        self.isFirst = isFirst
-        self.continuesBelow = continuesBelow
-        self.isExpanded = isExpanded
-        self.metrics = metrics
-        super.init(frame: .zero)
-        focusRingType = .default
-        toolTip = "\(commit.shortHash) · \(commit.author) · \(commit.relativeDate)"
-        setAccessibilityElement(true)
-        setAccessibilityRole(.button)
-        setAccessibilityLabel(String(
-            localized: "\(commit.subject), \(commit.shortHash), by \(commit.author), \(commit.relativeDate)", table: "Git",
-            comment: "Commit summary, short hash, author, and relative date for accessibility."
+        .help("\(commit.shortHash) \u{00B7} \(commit.author) \u{00B7} \(commit.relativeDate)")
+        .accessibilityLabel(String(
+            localized: "\(commit.subject), \(commit.shortHash), by \(commit.author), \(commit.relativeDate)", table: "Git"
         ))
-        setAccessibilityHelp(String(localized: "Shows files changed in this commit", table: "Git"))
-        setAccessibilityValue(isExpanded ? String(localized: "Expanded", table: "Git") : String(localized: "Collapsed", table: "Git"))
-    }
-
-    required init?(coder: NSCoder) { nil }
-    override var isFlipped: Bool { true }
-    override var acceptsFirstResponder: Bool { true }
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: metrics.commitHeight)
-    }
-    override var focusRingMaskBounds: NSRect { bounds.insetBy(dx: 2, dy: 1) }
-
-    override func drawFocusRingMask() {
-        NSBezierPath(roundedRect: focusRingMaskBounds, xRadius: 4, yRadius: 4).fill()
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingAreaReference { removeTrackingArea(trackingAreaReference) }
-        let area = NSTrackingArea(
-            rect: .zero,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        trackingAreaReference = area
-        synchronizeHoverWithMouse()
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        setHovered(true)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        setHovered(false)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-        onToggle?(commit.id)
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == 36 || event.keyCode == 49 {
-            onToggle?(commit.id)
-        } else {
-            super.keyDown(with: event)
+        .accessibilityValue(expanded
+            ? String(localized: "Expanded", table: "Git")
+            : String(localized: "Collapsed", table: "Git"))
+        .contextMenu {
+            Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
+            Button(String(localized: "Copy Commit Message", table: "Git")) { copy(commit.subject) }
         }
     }
 
-    override func accessibilityPerformPress() -> Bool {
-        onToggle?(commit.id)
-        return true
-    }
-
-    override func menu(for event: NSEvent) -> NSMenu? {
-        let menu = NSMenu()
-        menu.addItem(withTitle: String(localized: "Copy Commit Hash", table: "Git"), action: #selector(copyHash), keyEquivalent: "")
-        menu.addItem(withTitle: String(localized: "Copy Commit Message", table: "Git"), action: #selector(copyMessage), keyEquivalent: "")
-        menu.items.forEach { $0.target = self }
-        return menu
-    }
-
-    @objc private func copyHash() { copyToPasteboard(commit.hash) }
-    @objc private func copyMessage() { copyToPasteboard(commit.subject) }
-
-    private func synchronizeHoverWithMouse() {
-        guard let window else {
-            setHovered(false)
-            return
-        }
-        setHovered(bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)))
-    }
-
-    private func setHovered(_ hovered: Bool) {
-        guard isHovered != hovered else { return }
-        isHovered = hovered
-        needsDisplay = true
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        if isExpanded {
-            Theme.accent.withAlphaComponent(0.08).setFill()
-            NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 0), xRadius: 4, yRadius: 4).fill()
-        } else if isHovered {
-            NSColor.labelColor.withAlphaComponent(0.04).setFill()
-            NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 0), xRadius: 4, yRadius: 4).fill()
-        }
-
-        drawGraph()
-        drawSummary()
-    }
-
-    private func drawGraph() {
-        let centerY = bounds.midY
-        let line = NSBezierPath()
-        line.lineWidth = 1.5
-        line.move(to: NSPoint(x: metrics.graphX, y: isFirst ? centerY : 0))
-        line.line(to: NSPoint(x: metrics.graphX, y: continuesBelow ? bounds.maxY : centerY))
-        Theme.accent.withAlphaComponent(0.72).setStroke()
-        line.stroke()
-
-        Theme.accent.setFill()
-        let radius: CGFloat = isExpanded ? 5 : 4
-        NSBezierPath(
-            ovalIn: NSRect(
-                x: metrics.graphX - radius,
-                y: centerY - radius,
-                width: radius * 2,
-                height: radius * 2
-            )
-        ).fill()
-    }
-
-    private func drawSummary() {
-        let reference = primaryReference
-        let badgeWidth = reference.map(referenceBadgeWidth) ?? 0
-        let trailingInset: CGFloat = 6
-        if let reference {
-            drawReferenceBadge(reference, width: badgeWidth)
-        }
-
-        let summary = NSMutableAttributedString(
-            string: commit.subject,
-            attributes: [
-                .font: metrics.subjectFont,
-                .foregroundColor: NSColor.secondaryLabelColor,
-            ]
-        )
-        summary.append(NSAttributedString(
-            string: "  " + commit.author.uppercased(),
-            attributes: [
-                .font: metrics.metadataFont,
-                .foregroundColor: NSColor.tertiaryLabelColor,
-            ]
-        ))
-        let height = ceil(max(metrics.subjectFont.pointSize, metrics.metadataFont.pointSize) * 1.45)
-        summary.draw(
-            with: NSRect(
-                x: metrics.contentX,
-                y: (bounds.height - height) / 2,
-                width: max(0, bounds.width - metrics.contentX - badgeWidth - trailingInset),
-                height: height
-            ),
-            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
-            context: nil
-        )
-    }
-
-    private var primaryReference: String? {
+    private func primaryReference(for commit: GitStatusModel.RecentCommit) -> String? {
         commit.references.first {
             $0.contains("/") && !$0.hasPrefix("HEAD -> ") && !$0.contains("/HEAD")
         } ?? commit.references.first.map {
@@ -543,322 +136,158 @@ private final class CommitGraphRowView: NSView {
         }
     }
 
-    private func referenceBadgeWidth(_ reference: String) -> CGFloat {
-        min(104, ceil((reference as NSString).size(withAttributes: [.font: metrics.metadataFont]).width) + 14)
+    @ViewBuilder
+    private func commitFiles(_ commit: GitStatusModel.RecentCommit, isLast: Bool) -> some View {
+        if commit.files.isEmpty {
+            fileRow(depth: 0, continuesBelow: !isLast) {
+                Text(String(localized: "No changed files", table: "Git"))
+                    .font(.system(size: 9.5 * fontScale))
+                    .foregroundStyle(.tertiary)
+            }
+        } else if viewMode == .tree {
+            let section = "commit:" + commit.hash
+            let byPath = Dictionary(commit.files.map { ($0.path, $0) },
+                                    uniquingKeysWith: { first, _ in first })
+            let nodes = GitChangeTree.pathRows(commit.files.map(\.path),
+                                               section: section, collapsed: collapsedFolders)
+            ForEach(Array(nodes.indices), id: \.self) { index in
+                let node = nodes[index]
+                let continues = index < nodes.count - 1 || !isLast
+                switch node.content {
+                case .folder(let path, let name, let collapsed):
+                    fileRow(depth: node.depth, continuesBelow: continues) {
+                        Button {
+                            let key = section + ":" + path
+                            if !collapsedFolders.insert(key).inserted { collapsedFolders.remove(key) }
+                        } label: {
+                            HStack(spacing: TreeRowStyle.iconSpacing) {
+                                TreeFolderIcon(expanded: !collapsed, scale: fontScale)
+                                Text(name)
+                                    .font(.system(size: TreeRowStyle.fontSize * fontScale))
+                                    .foregroundStyle(.secondary)
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(path)
+                        .accessibilityLabel(name)
+                        .accessibilityValue(collapsed
+                            ? String(localized: "Collapsed", table: "Git")
+                            : String(localized: "Expanded", table: "Git"))
+                        .contextMenu {
+                            Button(String(localized: "Copy Relative Path", table: "Git")) { copy(path) }
+                        }
+                    }
+                case .file(let path):
+                    if let file = byPath[path] {
+                        fileRow(depth: node.depth, continuesBelow: continues) {
+                            changedFile(file, in: commit, showDirectory: false)
+                        }
+                    }
+                }
+            }
+        } else {
+            ForEach(Array(commit.files.indices), id: \.self) { index in
+                let file = commit.files[index]
+                fileRow(depth: 0, continuesBelow: index < commit.files.count - 1 || !isLast) {
+                    changedFile(file, in: commit, showDirectory: true)
+                }
+            }
+        }
     }
 
-    private func drawReferenceBadge(_ reference: String, width: CGFloat) {
-        let height = max(16, ceil(metrics.metadataFont.pointSize + 6))
-        let rect = NSRect(
-            x: bounds.width - width - 4,
-            y: (bounds.height - height) / 2,
-            width: width,
-            height: height
-        )
-        Theme.accent.setFill()
-        NSBezierPath(roundedRect: rect, xRadius: height / 2, yRadius: height / 2).fill()
-        (reference as NSString).draw(
-            with: rect.insetBy(dx: 7, dy: (height - metrics.metadataFont.pointSize * 1.35) / 2),
-            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
-            attributes: [
-                .font: metrics.metadataFont,
-                .foregroundColor: NSColor.white,
-            ],
-            context: nil
-        )
+    private func changedFile(
+        _ file: GitStatusModel.RecentCommit.FileChange,
+        in commit: GitStatusModel.RecentCommit, showDirectory: Bool
+    ) -> some View {
+        Button { openDiff(commit, file) } label: {
+            HStack(spacing: TreeRowStyle.iconSpacing) {
+                MaterialFileIconView(path: file.path, size: TreeRowStyle.iconSize,
+                                     opacity: file.status == "D" ? 0.6 : 1)
+                Text(file.fileName)
+                    .font(.system(size: TreeRowStyle.fontSize * fontScale))
+                    .foregroundStyle(.secondary)
+                    .strikethrough(file.status == "D")
+                    .lineLimit(1)
+                if showDirectory && !file.directory.isEmpty {
+                    Text(file.directory)
+                        .font(.system(size: 9.5 * fontScale))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Text(String(file.status))
+                    .font(.system(size: 9.5 * fontScale, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color(nsColor: statusColor(for: file.status)))
+                    .frame(width: 18)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(file.path)
+        .accessibilityLabel("\(file.fileName), \(statusName(for: file.status)), \(file.path)")
+        .contextMenu {
+            Button(String(localized: "Copy Relative Path", table: "Git")) { copy(file.path) }
+        }
+    }
+
+    private func fileRow<Content: View>(
+        depth: Int, continuesBelow: Bool, @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .padding(.leading, 45 + CGFloat(depth) * TreeRowStyle.indent)
+            .padding(.trailing, 5)
+            .frame(height: TreeRowStyle.rowHeight(fontScale))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                CommitTreeRails(depth: depth, isCommit: false,
+                                startsAtCenter: false, endsAtCenter: !continuesBelow,
+                                expanded: false)
+            }
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 }
 
-@MainActor
-private final class CommitFileRowView: NSView {
-    let change: GitStatusModel.RecentCommit.FileChange?
-    let folder: (path: String, name: String, collapsed: Bool)?
+/// Continuous graph and hierarchy lines are painted across the entire SwiftUI row.
+private struct CommitTreeRails: View {
     let depth: Int
-    let showDirectory: Bool
-    let continuesBelow: Bool
-    let metrics: CommitGraphMetrics
-    let onOpen: (() -> Void)?
-    private var trackingAreaReference: NSTrackingArea?
-    private var isHovered = false
-    private var folderIcon: TreeFolderIconHost?
+    let isCommit: Bool
+    let startsAtCenter: Bool
+    let endsAtCenter: Bool
+    let expanded: Bool
 
-    init(
-        change: GitStatusModel.RecentCommit.FileChange?,
-        folder: (path: String, name: String, collapsed: Bool)? = nil,
-        depth: Int = 0,
-        showDirectory: Bool = true,
-        continuesBelow: Bool,
-        metrics: CommitGraphMetrics,
-        onOpen: (() -> Void)?
-    ) {
-        self.change = change
-        self.folder = folder
-        self.depth = depth
-        self.showDirectory = showDirectory
-        self.continuesBelow = continuesBelow
-        self.metrics = metrics
-        self.onOpen = onOpen
-        super.init(frame: .zero)
-        if let folder {
-            let icon = TreeFolderIconHost(rootView: TreeFolderIcon(
-                expanded: !folder.collapsed, scale: metrics.scale
-            ))
-            addSubview(icon)
-            folderIcon = icon
+    var body: some View {
+        Canvas { context, size in
+            let accent = Color(nsColor: Theme.accent)
+            let midpoint = size.height / 2
+            var graph = Path()
+            graph.move(to: CGPoint(x: 14, y: startsAtCenter ? midpoint : 0))
+            graph.addLine(to: CGPoint(x: 14, y: endsAtCenter ? midpoint : size.height))
+            context.stroke(graph, with: .color(accent.opacity(0.72)), lineWidth: 1.5)
+            if isCommit {
+                let radius: CGFloat = expanded ? 5 : 4
+                context.fill(Path(ellipseIn: CGRect(x: 14-radius,y:midpoint-radius,
+                                                     width:radius*2,height:radius*2)),
+                             with: .color(accent))
+            } else {
+                context.fill(Path(CGRect(x: 34.5, y: 0, width: 1, height: size.height)),
+                             with: .color(.primary.opacity(0.18)))
+                for level in 0..<depth {
+                    let x = 45 + TreeRowStyle.iconSize / 2
+                        + CGFloat(level) * TreeRowStyle.indent
+                    context.fill(Path(CGRect(x: x-0.5, y: 0, width: 1, height: size.height)),
+                                 with: .color(.primary.opacity(0.18)))
+                }
+            }
         }
-        setAccessibilityElement(true)
-        if let folder {
-            toolTip = folder.path
-            setAccessibilityRole(.button)
-            setAccessibilityLabel(folder.name)
-            setAccessibilityValue(
-                folder.collapsed ? String(localized: "Collapsed", table: "Git") : String(localized: "Expanded", table: "Git")
-            )
-        } else if let change {
-            toolTip = change.path
-            setAccessibilityRole(.button)
-            setAccessibilityLabel("\(change.fileName), \(statusName(for: change.status)), \(change.path)")
-            setAccessibilityHelp(String(localized: "Opens changes", table: "Git"))
-        } else {
-            setAccessibilityRole(.staticText)
-            setAccessibilityLabel(String(localized: "No changed files", table: "Git"))
-        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
-
-    required init?(coder: NSCoder) { nil }
-    override var isFlipped: Bool { true }
-    override var acceptsFirstResponder: Bool { onOpen != nil }
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: metrics.fileHeight)
-    }
-
-    override func layout() {
-        super.layout()
-        folderIcon?.frame = NSRect(
-            x: metrics.fileIconX + CGFloat(depth) * TreeRowStyle.indent,
-            y: (bounds.height - TreeRowStyle.iconSize) / 2,
-            width: TreeRowStyle.iconSize,
-            height: TreeRowStyle.iconSize
-        )
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingAreaReference { removeTrackingArea(trackingAreaReference) }
-        let area = NSTrackingArea(
-            rect: .zero,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        trackingAreaReference = area
-        synchronizeHoverWithMouse()
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        setHovered(true)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        setHovered(false)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        guard let onOpen else { return }
-        window?.makeFirstResponder(self)
-        onOpen()
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if let onOpen, event.keyCode == 36 || event.keyCode == 49 {
-            onOpen()
-        } else {
-            super.keyDown(with: event)
-        }
-    }
-
-    override func accessibilityPerformPress() -> Bool {
-        guard let onOpen else { return false }
-        onOpen()
-        return true
-    }
-
-    override func menu(for event: NSEvent) -> NSMenu? {
-        guard change != nil || folder != nil else { return nil }
-        let menu = NSMenu()
-        let item = menu.addItem(
-            withTitle: String(localized: "Copy Relative Path", table: "Git"),
-            action: #selector(copyPath),
-            keyEquivalent: ""
-        )
-        item.target = self
-        return menu
-    }
-
-    @objc private func copyPath() {
-        if let path = change?.path ?? folder?.path { copyToPasteboard(path) }
-    }
-
-    private func synchronizeHoverWithMouse() {
-        guard let window else {
-            setHovered(false)
-            return
-        }
-        setHovered(bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)))
-    }
-
-    private func setHovered(_ hovered: Bool) {
-        guard isHovered != hovered else { return }
-        isHovered = hovered
-        needsDisplay = true
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        if isHovered {
-            NSColor.labelColor.withAlphaComponent(0.055).setFill()
-            NSBezierPath(
-                roundedRect: NSRect(
-                    x: metrics.nestedRailX + 5,
-                    y: 1,
-                    width: max(0, bounds.width - metrics.nestedRailX - 7),
-                    height: max(0, bounds.height - 2)
-                ),
-                xRadius: 4,
-                yRadius: 4
-            ).fill()
-        }
-        drawRails()
-        if let folder {
-            drawFolder(folder)
-        } else if let change {
-            drawFile(change)
-        } else {
-            drawEmptyState()
-        }
-    }
-
-    private func drawRails() {
-        let graph = NSBezierPath()
-        graph.lineWidth = 1.5
-        graph.move(to: NSPoint(x: metrics.graphX, y: 0))
-        graph.line(to: NSPoint(x: metrics.graphX, y: continuesBelow ? bounds.maxY : bounds.midY))
-        Theme.accent.withAlphaComponent(0.72).setStroke()
-        graph.stroke()
-
-        let nested = NSBezierPath()
-        nested.lineWidth = 1
-        nested.move(to: NSPoint(x: metrics.nestedRailX, y: 0))
-        nested.line(to: NSPoint(x: metrics.nestedRailX, y: bounds.maxY))
-        NSColor.labelColor.withAlphaComponent(0.18).setStroke()
-        nested.stroke()
-        TreeRowStyle.drawGuides(
-            depth: depth, in: bounds, firstX: metrics.fileIconX + TreeRowStyle.iconSize / 2
-        )
-    }
-
-    private func drawFolder(_ folder: (path: String, name: String, collapsed: Bool)) {
-        let x = metrics.fileIconX + CGFloat(depth) * TreeRowStyle.indent
-            + TreeRowStyle.iconSize + TreeRowStyle.iconSpacing
-        let height = ceil(metrics.fileFont.pointSize * 1.45)
-        (folder.name as NSString).draw(
-            with: NSRect(
-                x: x,
-                y: (bounds.height - height) / 2,
-                width: max(0, bounds.width - x - 5),
-                height: height
-            ),
-            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
-            attributes: [.font: metrics.fileFont, .foregroundColor: NSColor.secondaryLabelColor],
-            context: nil
-        )
-    }
-
-    private func drawFile(_ change: GitStatusModel.RecentCommit.FileChange) {
-        let statusWidth: CGFloat = 18
-        let offset = CGFloat(depth) * TreeRowStyle.indent
-        let iconSize = TreeRowStyle.iconSize
-        let symbolRect = NSRect(
-            x: metrics.fileIconX + offset,
-            y: (bounds.height - iconSize) / 2,
-            width: iconSize,
-            height: iconSize
-        )
-        MaterialFileIcon.image(forPath: change.path, appearance: effectiveAppearance).draw(
-            in: symbolRect,
-            from: .zero,
-            operation: .sourceOver,
-            fraction: change.status == "D" ? 0.6 : 1
-        )
-
-        let text = NSMutableAttributedString(
-            string: change.fileName,
-            attributes: [
-                .font: metrics.fileFont,
-                .foregroundColor: NSColor.secondaryLabelColor,
-                .strikethroughStyle: change.status == "D" ? NSUnderlineStyle.single.rawValue : 0,
-            ]
-        )
-        if showDirectory, !change.directory.isEmpty {
-            text.append(NSAttributedString(
-                string: "  " + change.directory,
-                attributes: [
-                    .font: metrics.pathFont,
-                    .foregroundColor: NSColor.tertiaryLabelColor,
-                ]
-            ))
-        }
-        let height = ceil(max(metrics.fileFont.pointSize, metrics.pathFont.pointSize) * 1.45)
-        text.draw(
-            with: NSRect(
-                x: metrics.fileContentX + offset,
-                y: (bounds.height - height) / 2,
-                width: max(0, bounds.width - metrics.fileContentX - offset - statusWidth - 5),
-                height: height
-            ),
-            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
-            context: nil
-        )
-
-        (String(change.status) as NSString).draw(
-            with: NSRect(
-                x: bounds.width - statusWidth - 3,
-                y: (bounds.height - height) / 2,
-                width: statusWidth,
-                height: height
-            ),
-            options: [.usesLineFragmentOrigin],
-            attributes: [
-                .font: metrics.statusFont,
-                .foregroundColor: statusColor(for: change.status),
-            ],
-            context: nil
-        )
-    }
-
-    private func drawEmptyState() {
-        let text = String(localized: "No changed files", table: "Git") as NSString
-        let height = ceil(metrics.pathFont.pointSize * 1.45)
-        text.draw(
-            in: NSRect(
-                x: metrics.fileContentX,
-                y: (bounds.height - height) / 2,
-                width: max(0, bounds.width - metrics.fileContentX - 5),
-                height: height
-            ),
-            withAttributes: [
-                .font: metrics.pathFont,
-                .foregroundColor: NSColor.tertiaryLabelColor,
-            ]
-        )
-    }
-}
-
-@MainActor
-private func copyToPasteboard(_ text: String) {
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(text, forType: .string)
 }
 
 private func statusName(for status: Character) -> String {

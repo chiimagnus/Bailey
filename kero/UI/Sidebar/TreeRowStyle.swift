@@ -18,15 +18,6 @@ enum TreeRowStyle {
         expanded ? "folder" : "folder.fill"
     }
 
-    // Existing commit-graph rows still draw their own rails until migrated.
-    static func drawGuides(depth: Int, in bounds: NSRect, firstX: CGFloat) {
-        guard depth > 0 else { return }
-        NSColor.labelColor.withAlphaComponent(0.18).setFill()
-        for level in 0..<depth {
-            let x = firstX + CGFloat(level) * indent
-            NSRect(x: x - 0.5, y: bounds.minY, width: 1, height: bounds.height).fill()
-        }
-    }
 }
 
 /// Identical SwiftUI folder glyph in Files and both Git trees.
@@ -41,12 +32,6 @@ struct TreeFolderIcon: View {
             .frame(width: TreeRowStyle.iconSize, height: TreeRowStyle.iconSize)
             .accessibilityHidden(true)
     }
-}
-
-/// The AppKit commit graph hosts that same SwiftUI glyph without intercepting row clicks.
-@MainActor
-final class TreeFolderIconHost: NSHostingView<TreeFolderIcon> {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// Draw across the entire SwiftUI row, including scaled typography and inline editing.
