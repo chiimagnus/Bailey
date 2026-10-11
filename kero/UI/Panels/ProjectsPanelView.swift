@@ -114,58 +114,6 @@ struct ProjectsPanelView: View {
     }
 }
 
-struct ChromeIconButton: View {
-    let systemImage: String
-    let tooltip: String
-    var font: Font = .system(size: 12, weight: .medium)
-    var iconSize: CGFloat = 16
-    var tooltipEdge: TooltipEdge = .below
-    var tooltipAlignment: HorizontalAlignment = .trailing
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(font)
-                .foregroundStyle(isHovering ? .primary : .secondary)
-                .frame(width: iconSize, height: iconSize)
-                .padding(4)
-                .background {
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(isHovering ? Color.primary.opacity(0.08) : .clear)
-                }
-                .contentShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
-        .tooltip(tooltip, edge: tooltipEdge, alignment: tooltipAlignment)
-    }
-}
-
-/// Live frames-per-second readout in the header strip, fed by `FPSCounter`.
-/// It exists only while the manager's toggle is on, so the counter starts
-/// when the badge appears and stops when it leaves the hierarchy.
-struct FPSBadge: View {
-    @StateObject private var counter = FPSCounter()
-
-    var body: some View {
-        Text(String(localized: "\(counter.fps) fps", table: "Sidebar"))
-            .font(.system(size: 10, weight: .medium))
-            .monospacedDigit()
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.primary.opacity(0.07))
-            )
-            .onAppear { counter.start() }
-            .onDisappear { counter.stop() }
-    }
-}
-
 private struct SidebarFooterButton: View {
     let systemImage: String
     let tooltip: String

@@ -9,7 +9,7 @@ import QuartzCore
 
 /// Counts CADisplayLink callbacks to report how often the window can actually
 /// present a new frame — the UI's real redraw cadence, not elapsed time a
-/// timer would measure. A debug aid: the counter exists only while the sidebar
+/// timer would measure. A debug aid: the counter exists only while the Dock
 /// badge it feeds is visible, and pauses while the app is inactive so a
 /// backgrounded rate can't show as a bogus low FPS.
 @MainActor
