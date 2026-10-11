@@ -2,7 +2,7 @@
 // From the repository root:
 // xcrun swiftc -swift-version 5 -o build/check-file-tree-navigation \
 //   kero/Workspace/WorkspaceBackend.swift kero/Shared/Tree/TreeDisplayModel.swift \
-//   kero/Workspace/FileTreeModel.swift \
+//   kero/Files/FileTreeModel.swift \
 //   scripts/check-file-tree-navigation.swift && build/check-file-tree-navigation
 
 import Combine
