@@ -1,0 +1,170 @@
+version = 1
+current_task_id = ""
+
+[[tasks]]
+id = "P1-T1"
+title = "生成可重复性能样本与操作序列"
+status = "pending"
+plan = "plan-p1.md#p1-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T2"
+title = "取得真实基线并固定热点准入"
+status = "pending"
+plan = "plan-p1.md#p1-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T1"
+title = "统一首次加载与有界后台读取"
+status = "pending"
+plan = "plan-p2.md#p2-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T2"
+title = "移除高亮无效字体事务"
+status = "pending"
+plan = "plan-p2.md#p2-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T1"
+title = "补齐编辑后的高亮范围更新"
+status = "pending"
+plan = "plan-p3.md#p3-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T2"
+title = "删除编辑回写重复全文比较"
+status = "pending"
+plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T3"
+title = "验证并收敛坐标扫描热点"
+status = "pending"
+plan = "plan-p3.md#p3-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T4"
+title = "验证并优化根解析调度"
+status = "pending"
+plan = "plan-p3.md#p3-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T5"
+title = "合并查询编译在途工作"
+status = "pending"
+plan = "plan-p3.md#p3-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T6"
+title = "验证嵌入语言复用方案"
+status = "pending"
+plan = "plan-p3.md#p3-t6"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T7"
+title = "接入后台子区域增量解析"
+status = "pending"
+plan = "plan-p3.md#p3-t7"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T1"
+title = "分阶段交付 Git 核心状态与详情"
+status = "pending"
+plan = "plan-p4.md#p4-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T2"
+title = "收敛详情失效与历史分页工作"
+status = "pending"
+plan = "plan-p4.md#p4-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T3"
+title = "预聚合共享树状态装饰"
+status = "pending"
+plan = "plan-p4.md#p4-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T4"
+title = "验证并收敛文件树刷新成本"
+status = "pending"
+plan = "plan-p4.md#p4-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T1"
+title = "归因 diff 完整流水线"
+status = "pending"
+plan = "plan-p5.md#p5-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T2"
+title = "收敛 diff 读取与解码"
+status = "pending"
+plan = "plan-p5.md#p5-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T3"
+title = "收敛桥接编码与在途渲染"
+status = "pending"
+plan = "plan-p5.md#p5-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T4"
+title = "减少 JS 差异计算与内容扫描"
+status = "pending"
+plan = "plan-p5.md#p5-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P6-T1"
+title = "完成同机综合复测与真机验收"
+status = "pending"
+plan = "plan-p6.md#p6-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P6-T2"
+title = "收敛性能文档与功能指南"
+status = "pending"
+plan = "plan-p6.md#p6-t2"
+commit = ""
+note = ""
