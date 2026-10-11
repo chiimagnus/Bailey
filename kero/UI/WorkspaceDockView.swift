@@ -28,6 +28,16 @@ final class DockTabDragCoordinator: ObservableObject {
     func setFrames(groups: [UUID: CGRect]) { self.groups = groups }
     func setFrames(tabs: [DockItem: CGRect]) { self.tabs = tabs }
 
+    func insertionX(in group: DockGroup) -> CGFloat? {
+        guard let position, position.destination == group.id, position.edge == nil,
+              let frame = groups[group.id],
+              position.location.y >= frame.minY, position.location.y < frame.minY + 38,
+              let index = position.index, !group.items.isEmpty else { return nil }
+        let item = index < group.items.count ? group.items[index] : group.items[group.items.count - 1]
+        guard let bounds = tabs[item] else { return nil }
+        return index < group.items.count ? bounds.minX : bounds.maxX
+    }
+
     func update(_ item: DockItem, at location: CGPoint, dock: DockWorkspaceModel) {
         let hit = groups.first { $0.value.contains(location) }
         var edge: DockEdge?
@@ -317,6 +327,18 @@ private struct DockTabGroupView: View {
                     ? Theme.sidebar : Theme.background))
                 .overlay(alignment: .bottom) {
                     Color(nsColor: Theme.divider).frame(height: 1)
+                }
+                .overlay {
+                    GeometryReader { geometry in
+                        if let x = dragging.insertionX(in: group) {
+                            Capsule()
+                                .fill(Color(nsColor: Theme.accent))
+                                .frame(width: 2, height: 19)
+                                .shadow(color: Color(nsColor: Theme.accent).opacity(0.6), radius: 3)
+                                .position(x: x - geometry.frame(in: .global).minX, y: 19)
+                                .allowsHitTesting(false)
+                        }
+                    }
                 }
                 .zIndex(1)
             ZStack {
@@ -652,7 +674,8 @@ private struct DockTabGroupView: View {
 
     @ViewBuilder
     private var dropPreview: some View {
-        if let drag = dragging.position, drag.destination == group.id {
+        if let drag = dragging.position, drag.destination == group.id,
+           dragging.insertionX(in: group) == nil {
             GeometryReader { geometry in
                 let size = geometry.size
                 let previewWidth = (drag.edge == .left || drag.edge == .right)
