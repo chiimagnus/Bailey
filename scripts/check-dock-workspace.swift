@@ -75,6 +75,52 @@ struct CheckDockWorkspace {
         check(closedPanel.group(containing: .git)?.region == .left, "reopening panel must not clone it")
         check(closedPanel.group(region: .right)?.items == [.info, .files], "closing must retain other right tabs")
 
+        let stackedLeft = DockWorkspaceModel()
+        let leftAnchor = stackedLeft.group(region: .left)!
+        check(stackedLeft.move(.files, into: leftAnchor.id, edge: .top), "stack files above projects")
+        let topFiles = stackedLeft.group(containing: .files)!
+        check(topFiles.region == .extra, "new side groups retain their generic region")
+        check(stackedLeft.sidebar(containing: .files) == .left, "nested group belongs to left sidebar")
+        check(stackedLeft.root.visible(left: false, right: true)?.groups.count == 2,
+              "Cmd-B must hide the entire stacked left sidebar")
+        check(stackedLeft.root.visible(left: true, right: true)?.groups.count == 4,
+              "Cmd-B must restore both left panels")
+        if case .split(let outer) = stackedLeft.root,
+           case .split(let sideSplit) = outer.first {
+            check(abs(outer.resetFraction(available: 1799) * 1799 - 220) < 1,
+                  "nested left sidebar boundary must restore 220pt")
+            check(sideSplit.resetFraction(available: 220) == 0.5,
+                  "internal left divider must still equalize")
+        } else { preconditionFailure("stacked left tree") }
+        check(stackedLeft.move(.projects, into: stackedLeft.group(region: .main)!.id),
+              "move left anchor content away")
+        check(stackedLeft.hasSidebarItems(.left), "extra file group keeps sidebar alive")
+        check(stackedLeft.move(.git, into: topFiles.id), "retain group while closing a panel")
+        stackedLeft.removeTool(.files)
+        check(stackedLeft.place(.files, in: topFiles.id), "reopen closed file in its original group")
+        check(stackedLeft.group(containing: .files)?.id == topFiles.id,
+              "reopened file tab must be visible in the upper group")
+
+        let stackedRight = DockWorkspaceModel()
+        let rightAnchor = stackedRight.group(region: .right)!
+        check(stackedRight.move(.info, into: rightAnchor.id, edge: .bottom),
+              "stack information below right sidebar")
+        check(stackedRight.sidebar(containing: .info) == .right,
+              "nested right group belongs to right sidebar")
+        check(stackedRight.root.visible(left: true, right: false)?.groups.count == 2,
+              "Shift-Cmd-B must hide the entire stacked right sidebar")
+        check(stackedRight.root.visible(left: true, right: true)?.groups.count == 4,
+              "Shift-Cmd-B must restore both right panels")
+        if case .split(let outer) = stackedRight.root,
+           case .split(let inner) = outer.second,
+           case .split(let sideSplit) = inner.second {
+            let remainingWidth = 1799 * (1 - outer.fraction)
+            check(abs((1 - inner.resetFraction(available: remainingWidth)) * remainingWidth - 240) < 1,
+                  "nested right sidebar boundary must restore 240pt")
+            check(sideSplit.resetFraction(available: 240) == 0.5,
+                  "internal right divider must still equalize")
+        } else { preconditionFailure("stacked right tree") }
+
         let legacy = DockWorkspaceModel()
         legacy.syncTabs([a], near: nil)
         check(legacy.group(region: .left)?.items == [.projects], "legacy sidebar default")

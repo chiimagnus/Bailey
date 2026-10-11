@@ -86,6 +86,35 @@ indirect enum DockNode {
         groups.first { $0.items.contains(item) }
     }
 
+    /// A split inside a sidebar belongs to that sidebar even when its new
+    /// groups are marked `.extra`. The anchor group remains in the tree.
+    var sidebarRegion: DockRegion? {
+        let regions = Set(groups.map(\.region))
+        if regions.contains(.left), !regions.contains(.main), !regions.contains(.right) { return .left }
+        if regions.contains(.right), !regions.contains(.main), !regions.contains(.left) { return .right }
+        return nil
+    }
+
+    func sidebar(containing groupID: UUID) -> DockRegion? {
+        guard group(id: groupID) != nil else { return nil }
+        if let sidebarRegion { return sidebarRegion }
+        switch self {
+        case .group: return nil
+        case .split(let split):
+            return split.first.sidebar(containing: groupID)
+                ?? split.second.sidebar(containing: groupID)
+        }
+    }
+
+    func sidebarGroups(_ region: DockRegion) -> [DockGroup] {
+        if sidebarRegion == region { return groups }
+        switch self {
+        case .group: return []
+        case .split(let split):
+            return split.first.sidebarGroups(region) + split.second.sidebarGroups(region)
+        }
+    }
+
     func editingGroup(_ id: UUID, _ edit: (inout DockGroup) -> Void) -> DockNode {
         switch self {
         case .group(var group):
@@ -186,11 +215,10 @@ indirect enum DockNode {
     /// Remove collapsed side regions from the rendered tree without modifying
     /// the saved layout or moving their contained tabs.
     func visible(left: Bool, right: Bool) -> DockNode? {
+        if sidebarRegion == .left && !left { return nil }
+        if sidebarRegion == .right && !right { return nil }
         switch self {
-        case .group(let group):
-            if group.region == .left && !left { return nil }
-            if group.region == .right && !right { return nil }
-            return self
+        case .group: return self
         case .split(var split):
             let first = split.first.visible(left: left, right: right)
             let second = split.second.visible(left: left, right: right)
@@ -204,6 +232,21 @@ indirect enum DockNode {
             case (nil, nil): return nil
             }
         }
+    }
+}
+
+extension DockSplit {
+    func resetFraction(available: CGFloat) -> Double {
+        guard axis == .horizontal, available > 0 else { return 0.5 }
+        if first.sidebarRegion == .left,
+           second.groups.contains(where: { $0.region == .main || $0.region == .right }) {
+            return 220 / Double(available)
+        }
+        if second.sidebarRegion == .right,
+           first.groups.contains(where: { $0.region == .main || $0.region == .left }) {
+            return 1 - 240 / Double(available)
+        }
+        return 0.5
     }
 }
 
@@ -321,6 +364,14 @@ final class DockWorkspaceModel: ObservableObject {
 
     func group(containing item: DockItem) -> DockGroup? { root.group(containing: item) }
     func group(region: DockRegion) -> DockGroup? { root.group(region: region) }
+    func sidebar(containing item: DockItem) -> DockRegion? {
+        guard let owner = root.group(containing: item) else { return nil }
+        return root.sidebar(containing: owner.id)
+    }
+
+    func hasSidebarItems(_ region: DockRegion) -> Bool {
+        root.sidebarGroups(region).contains { !$0.items.isEmpty }
+    }
 
     func select(_ item: DockItem) {
         guard let owner = group(containing: item), owner.selected != item else { return }
@@ -387,14 +438,18 @@ final class DockWorkspaceModel: ObservableObject {
     /// An empty side can be reopened and populated without copying a panel.
     func place(_ item: DockItem, in region: DockRegion) {
         guard let destination = root.group(region: region) else { return }
-        if root.group(containing: item) != nil {
-            _ = move(item, into: destination.id)
-        } else {
-            root = root.editingGroup(destination.id) { group in
-                group.items.append(item)
-                group.selected = item
-            }
+        _ = place(item, in: destination.id)
+    }
+
+    @discardableResult
+    func place(_ item: DockItem, in groupID: UUID) -> Bool {
+        guard root.group(id: groupID) != nil else { return false }
+        if root.group(containing: item) != nil { return move(item, into: groupID) }
+        root = root.editingGroup(groupID) { group in
+            group.items.append(item)
+            group.selected = item
         }
+        return true
     }
 
     func removeTool(_ item: DockItem) {
