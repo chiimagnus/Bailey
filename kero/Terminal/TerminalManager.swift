@@ -465,7 +465,10 @@ final class TerminalManager: nonisolated ObservableObject {
 
     private func makeProject() -> Project {
         projectCounter += 1
-        let project = Project(fallbackName: "Project \(projectCounter)")
+        let project = Project(
+            fallbackName: "Project \(projectCounter)",
+            workspaceConfiguration: AppSettings.shared.workspaceConfiguration
+        )
         projectObservations[project.id] = project.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }

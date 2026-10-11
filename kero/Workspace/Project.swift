@@ -29,7 +29,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     @Published var sshHost: String?
     /// An individually added file is anchored to its parent directory.
     @Published var pinnedFile: String?
-    /// File browser state belongs to the project, not a transient right panel.
+    /// File browser state belongs to the project, not a transient tool tab.
     let fileTree = FileTreeModel()
     let dock: DockWorkspaceModel
     @Published var tabs: [PaneTab] = [] {
@@ -63,9 +63,9 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// working directory.
     private var browserObservations: [UUID: AnyCancellable] = [:]
 
-    init(fallbackName: String) {
+    init(fallbackName: String, workspaceConfiguration: DockWorkspaceConfiguration) {
         self.fallbackName = fallbackName
-        dock = DockWorkspaceModel(configuration: AppSettings.shared.workspaceConfiguration)
+        dock = DockWorkspaceModel(configuration: workspaceConfiguration)
         dockObservation = dock.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }

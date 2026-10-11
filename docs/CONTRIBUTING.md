@@ -46,6 +46,14 @@ xcrun swiftc -swift-version 5 -o build/check-file-tree-navigation \
   scripts/check-file-tree-navigation.swift && build/check-file-tree-navigation
 ```
 
+涉及配置加载或保存时，运行临时文件检查；它编译真实设置与 Dock 代码，主题绘制和 Ghostty 枚举使用桩，不修改用户配置：
+
+```sh
+xcrun swiftc -swift-version 5 -o build/check-settings \
+  kero/App/AppSettings.swift kero/Workspace/DockWorkspaceModel.swift \
+  scripts/check-settings.swift && build/check-settings
+```
+
 涉及 Git 操作或提交草稿时，运行独立临时仓库检查（不修改用户仓库）：
 
 ```sh

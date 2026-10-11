@@ -98,8 +98,9 @@ enum GitViewMode: String, CaseIterable, Identifiable {
 final class AppSettings: nonisolated ObservableObject {
     static let shared = AppSettings()
 
-    static let configURL = FileManager.default.homeDirectoryForCurrentUser
+    nonisolated static let configURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".config/kero/config.toml")
+    private let settingsURL: URL
 
     static let defaultFontSize: Double = 13
     static let fontSizeRange: ClosedRange<Double> = 8...32
@@ -210,13 +211,14 @@ final class AppSettings: nonisolated ObservableObject {
         didSet { save() }
     }
 
-    private init() {
+    init(configURL: URL = AppSettings.configURL) {
+        settingsURL = configURL
         let savedLanguage = AppLanguage.saved
         activeLanguage = savedLanguage
         language = savedLanguage
 
-        let existing = TOML.parse(at: Self.configURL)
-        let toml = existing ?? Self.legacyDefaults()
+        let existing = TOML.parse(at: settingsURL)
+        let toml = existing ?? [:]
         workspaceConfiguration = Self.workspace(from: toml) ?? .standard
         theme = toml["theme"]?.string.flatMap(AppTheme.init(rawValue:)) ?? .system
         themeDark = Self.knownTheme(
@@ -241,9 +243,7 @@ final class AppSettings: nonisolated ObservableObject {
             rawValue: toml["toolbar.visibility"]?.string ?? ""
         ) ?? Self.defaultToolbarVisibility
         gitViewMode = GitViewMode(rawValue: toml["git.view-mode"]?.string ?? "") ?? .tree
-        fontThicken = toml["terminal.font-thicken"]?.bool
-            ?? toml["font-thicken"]?.bool
-            ?? false
+        fontThicken = toml["terminal.font-thicken"]?.bool ?? false
         cursorShape = TerminalCursorShape(
             rawValue: toml["terminal.cursor-shape"]?.string ?? ""
         ) ?? .block
@@ -379,7 +379,7 @@ final class AppSettings: nonisolated ObservableObject {
             lines.append("terminal.restore-history = true")
         }
         let standard = DockWorkspaceConfiguration.standard
-        let configured = TOML.parse(at: Self.configURL).flatMap(Self.workspace)
+        let configured = TOML.parse(at: settingsURL).flatMap(Self.workspace)
             ?? workspaceConfiguration
         if configured.groupNames != standard.groupNames {
             lines.append("workspace.groups = \(TOML.list(configured.groupNames))")
@@ -396,29 +396,17 @@ final class AppSettings: nonisolated ObservableObject {
         if configured.edgeThreshold != standard.edgeThreshold {
             lines.append("workspace.edge-threshold = \(TOML.number(configured.edgeThreshold))")
         }
-        let dir = Self.configURL.deletingLastPathComponent()
+        let dir = settingsURL.deletingLastPathComponent()
         do {
             try FileManager.default.createDirectory(
                 at: dir, withIntermediateDirectories: true)
             try (lines.joined(separator: "\n") + "\n")
-                .write(to: Self.configURL, atomically: true, encoding: .utf8)
+                .write(to: settingsURL, atomically: true, encoding: .utf8)
         } catch {
-            NSLog("kero: failed to write \(Self.configURL.path): \(error)")
+            NSLog("kero: failed to write \(settingsURL.path): \(error)")
         }
     }
 
-    /// Settings from releases that stored config in UserDefaults.
-    private static func legacyDefaults() -> [String: TOML.Value] {
-        var toml: [String: TOML.Value] = [:]
-        let defaults = UserDefaults.standard
-        if let family = defaults.string(forKey: "terminalFontFamily") {
-            toml["font-family"] = .string(family)
-        }
-        if defaults.object(forKey: "terminalFontSize") != nil {
-            toml["font-size"] = .number(defaults.double(forKey: "terminalFontSize"))
-        }
-        return toml
-    }
 }
 
 /// TOML subset used by Kero: dotted keys, tables, primitive values,
