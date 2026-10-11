@@ -1,7 +1,8 @@
 # AGENTS.md
 
 Kero is a native macOS terminal workspace with projects, panes, a file tree, a git panel,
-an editor, and a diff viewer. Existing SwiftUI code is legacy; AppKit is the UI foundation.
+an editor, and a diff viewer. SwiftUI is the default UI framework; AppKit remains for
+native terminal integration and platform capabilities SwiftUI cannot cover.
 
 - [PRODUCT.md](PRODUCT.md) — who Kero is for; product and design calls follow from it.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — build, verify, and what a PR must say. Read before opening one.
@@ -14,6 +15,7 @@ Every code change must end with a signed Debug build, replacing `/Applications/K
 ## Conventions
 
 - Match the file you're in. Comments explain *why* — keep them, add them.
-- SwiftUI is legacy and must not be introduced or expanded. Build all new UI in AppKit;
-  when materially changing an existing SwiftUI view, migrate the affected UI to AppKit.
-  UI architecture must prioritize maximum runtime performance over implementation convenience.
+- Prefer SwiftUI for layout, controls, file trees and Git trees. Reuse shared SwiftUI
+  rows and Canvas guides instead of embedding AppKit drawing or flipped view hosts.
+- Use AppKit only where platform integration requires it, such as the native terminal.
+  Preserve responsiveness with lazy rendering and verify large-tree performance.
