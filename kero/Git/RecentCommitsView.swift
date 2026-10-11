@@ -81,15 +81,20 @@ struct RecentCommitsView: View {
             }
         } label: {
             HStack(spacing: 5) {
-                Text(commit.subject)
-                    .font(.system(size: 11.5 * fontScale))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Text(commit.author.uppercased())
-                    .font(.system(size: 9.5 * fontScale, weight: .medium))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
+                ScrollView(.horizontal) {
+                    HStack(spacing: 5) {
+                        Text(commit.subject)
+                            .font(.system(size: 11.5 * fontScale))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: true, vertical: false)
+                        Text(commit.author.uppercased())
+                            .font(.system(size: 9.5 * fontScale, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                }
+                .scrollIndicators(.hidden)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 if let reference = primaryReference(for: commit) {
                     Text(reference)
                         .font(.system(size: 9.5 * fontScale, weight: .medium))
@@ -162,10 +167,14 @@ struct RecentCommitsView: View {
                         } label: {
                             HStack(spacing: TreeRowStyle.iconSpacing) {
                                 TreeFolderIcon(expanded: !collapsed, scale: fontScale)
-                                Text(name)
-                                    .font(.system(size: TreeRowStyle.fontSize * fontScale))
-                                    .foregroundStyle(.secondary)
-                                Spacer(minLength: 0)
+                                ScrollView(.horizontal) {
+                                    Text(name)
+                                        .font(.system(size: TreeRowStyle.fontSize * fontScale))
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                }
+                                .scrollIndicators(.hidden)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             .contentShape(Rectangle())
                         }
@@ -205,18 +214,23 @@ struct RecentCommitsView: View {
             HStack(spacing: TreeRowStyle.iconSpacing) {
                 MaterialFileIconView(path: file.path, size: TreeRowStyle.iconSize,
                                      opacity: file.status == "D" ? 0.6 : 1)
-                Text(file.fileName)
-                    .font(.system(size: TreeRowStyle.fontSize * fontScale))
-                    .foregroundStyle(.secondary)
-                    .strikethrough(file.status == "D")
-                    .lineLimit(1)
-                if showDirectory && !file.directory.isEmpty {
-                    Text(file.directory)
-                        .font(.system(size: 9.5 * fontScale))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
+                ScrollView(.horizontal) {
+                    HStack(spacing: 6) {
+                        Text(file.fileName)
+                            .font(.system(size: TreeRowStyle.fontSize * fontScale))
+                            .foregroundStyle(.secondary)
+                            .strikethrough(file.status == "D")
+                            .fixedSize(horizontal: true, vertical: false)
+                        if showDirectory && !file.directory.isEmpty {
+                            Text(file.directory)
+                                .font(.system(size: 9.5 * fontScale))
+                                .foregroundStyle(.tertiary)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                    }
                 }
-                Spacer(minLength: 0)
+                .scrollIndicators(.hidden)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Text(String(file.status))
                     .font(.system(size: 9.5 * fontScale, weight: .semibold, design: .monospaced))
                     .foregroundStyle(Color(nsColor: statusColor(for: file.status)))
