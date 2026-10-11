@@ -107,6 +107,10 @@ final class AppSettings: nonisolated ObservableObject {
     static let panelFontSizeRange: ClosedRange<Double> = 9...18
     static let defaultToolbarVisibility: ToolbarVisibility = .hide
 
+    /// Loaded once at launch; changing the initial template never rearranges
+    /// a project's already saved dock tree.
+    let workspaceConfiguration: DockWorkspaceConfiguration
+
     /// The language this process launched with, kept separate from the pending
     /// selection so Settings can explain when a relaunch is required.
     let activeLanguage: AppLanguage
@@ -213,6 +217,7 @@ final class AppSettings: nonisolated ObservableObject {
 
         let existing = TOML.parse(at: Self.configURL)
         let toml = existing ?? Self.legacyDefaults()
+        workspaceConfiguration = Self.workspace(from: toml) ?? .standard
         theme = toml["theme"]?.string.flatMap(AppTheme.init(rawValue:)) ?? .system
         themeDark = Self.knownTheme(
             toml["theme-dark"]?.string,
@@ -249,6 +254,37 @@ final class AppSettings: nonisolated ObservableObject {
         applyAppearance()
         reloadThemeSelection()
         if existing == nil { save() }
+    }
+
+    /// Parse the same typed workspace configuration for launch and for saves.
+    /// Reading again before saving preserves manual edits made while Kero runs.
+    private static func workspace(from toml: [String: TOML.Value]) -> DockWorkspaceConfiguration? {
+        let standard = DockWorkspaceConfiguration.standard
+        let keys = ["workspace.groups", "workspace.selected", "workspace.weights",
+                    "workspace.add-actions", "workspace.edge-threshold"]
+        let validTypes = keys.allSatisfy { key in
+            guard let value = toml[key] else { return true }
+            switch key {
+            case "workspace.weights": return value.numbers != nil
+            case "workspace.edge-threshold": return value.double != nil
+            default: return value.strings != nil
+            }
+        }
+        let groups = toml["workspace.groups"]?.strings ?? standard.groupNames
+        let selected = toml["workspace.selected"]?.strings
+            ?? (toml["workspace.groups"] == nil
+                ? standard.selectedNames : Array(repeating: "", count: groups.count))
+        let config = validTypes ? DockWorkspaceConfiguration(
+            groupNames: groups,
+            selectedNames: selected,
+            weights: toml["workspace.weights"]?.numbers ?? standard.weights,
+            actionNames: toml["workspace.add-actions"]?.strings ?? standard.actionNames,
+            edgeThreshold: toml["workspace.edge-threshold"]?.double ?? standard.edgeThreshold
+        ) : nil
+        if config == nil, keys.contains(where: { toml[$0] != nil }) {
+            NSLog("kero: invalid workspace configuration; using defaults")
+        }
+        return config
     }
 
     /// Pushes the current names into `Theme`, which resolves and caches the
@@ -342,6 +378,24 @@ final class AppSettings: nonisolated ObservableObject {
         if restoreTerminalHistory {
             lines.append("terminal.restore-history = true")
         }
+        let standard = DockWorkspaceConfiguration.standard
+        let configured = TOML.parse(at: Self.configURL).flatMap(Self.workspace)
+            ?? workspaceConfiguration
+        if configured.groupNames != standard.groupNames {
+            lines.append("workspace.groups = \(TOML.list(configured.groupNames))")
+        }
+        if configured.selectedNames != standard.selectedNames {
+            lines.append("workspace.selected = \(TOML.list(configured.selectedNames))")
+        }
+        if configured.weights != standard.weights {
+            lines.append("workspace.weights = \(TOML.list(configured.weights))")
+        }
+        if configured.actionNames != standard.actionNames {
+            lines.append("workspace.add-actions = \(TOML.list(configured.actionNames))")
+        }
+        if configured.edgeThreshold != standard.edgeThreshold {
+            lines.append("workspace.edge-threshold = \(TOML.number(configured.edgeThreshold))")
+        }
         let dir = Self.configURL.deletingLastPathComponent()
         do {
             try FileManager.default.createDirectory(
@@ -367,15 +421,14 @@ final class AppSettings: nonisolated ObservableObject {
     }
 }
 
-/// Minimal TOML support covering what the config file uses: flat and dotted
-/// keys (`font-size = 15`, `terminal.restore-history = true`), string/number/
-/// bool values, and `#` comments. `[table]` headers are also accepted and
-/// flattened to `table.key`, matching the dotted form.
+/// TOML subset used by Kero: dotted keys, tables, primitive values,
+/// one-line arrays and comments.
 enum TOML {
     enum Value {
         case string(String)
         case number(Double)
         case bool(Bool)
+        case array([Value])
 
         var string: String? {
             if case .string(let s) = self { return s }
@@ -390,6 +443,18 @@ enum TOML {
         var bool: Bool? {
             if case .bool(let b) = self { return b }
             return nil
+        }
+
+        var strings: [String]? {
+            guard case .array(let values) = self else { return nil }
+            let strings = values.compactMap(\.string)
+            return strings.count == values.count ? strings : nil
+        }
+
+        var numbers: [Double]? {
+            guard case .array(let values) = self else { return nil }
+            let numbers = values.compactMap(\.double)
+            return numbers.count == values.count ? numbers : nil
         }
     }
 
@@ -418,6 +483,52 @@ enum TOML {
     }
 
     static func parseValue(_ raw: String) -> Value? {
+        if raw.hasPrefix("[") {
+            var values: [Value] = []
+            var token = ""
+            var depth = 0
+            var quoted = false
+            var escaped = false
+            var closed = false
+            for ch in raw {
+                if closed {
+                    if ch == "#" { break }
+                    guard ch.isWhitespace else { return nil }
+                    continue
+                }
+                if quoted {
+                    token.append(ch)
+                    if escaped { escaped = false }
+                    else if ch == "\\" { escaped = true }
+                    else if ch == "\"" { quoted = false }
+                    continue
+                }
+                switch ch {
+                case "\"": quoted = true; token.append(ch)
+                case "[":
+                    depth += 1
+                    if depth > 1 { token.append(ch) }
+                case "]":
+                    depth -= 1
+                    guard depth >= 0 else { return nil }
+                    if depth == 0 {
+                        let value = token.trimmingCharacters(in: .whitespaces)
+                        if !value.isEmpty {
+                            guard let item = parseValue(value) else { return nil }
+                            values.append(item)
+                        }
+                        closed = true
+                    } else { token.append(ch) }
+                case "," where depth == 1:
+                    let value = token.trimmingCharacters(in: .whitespaces)
+                    guard !value.isEmpty, let item = parseValue(value) else { return nil }
+                    values.append(item)
+                    token = ""
+                default: token.append(ch)
+                }
+            }
+            return closed && !quoted && depth == 0 ? .array(values) : nil
+        }
         if raw.hasPrefix("\"") {
             var out = ""
             var escaped = false
@@ -440,13 +551,22 @@ enum TOML {
             return nil
         }
         // Unquoted: strip a trailing comment, then try bool/number.
-        let bare = raw.split(separator: "#", maxSplits: 1)[0]
+        let bare = (raw.split(separator: "#", maxSplits: 1,
+                              omittingEmptySubsequences: false).first ?? "")
             .trimmingCharacters(in: .whitespaces)
         switch bare {
         case "true": return .bool(true)
         case "false": return .bool(false)
         default: return Double(bare).map(Value.number)
         }
+    }
+
+    static func list(_ values: [String]) -> String {
+        "[" + values.map(quote).joined(separator: ", ") + "]"
+    }
+
+    static func list(_ values: [Double]) -> String {
+        "[" + values.map(number).joined(separator: ", ") + "]"
     }
 
     static func quote(_ s: String) -> String {

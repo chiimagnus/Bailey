@@ -23,6 +23,47 @@ struct CheckDockWorkspace {
         check(defaults[0].items == [.projects], "projects default")
         check(defaults[1].items.isEmpty, "empty middle group")
         check(defaults[2].items == [.info, .files, .git], "tools default")
+        check(defaults[2].selected == .files, "default Git/files/info tab selection")
+        if case .split(let outer) = dock.root,
+           case .split(let inner) = outer.second {
+            check(abs(outer.fraction - 0.12) < 0.0001, "configured outer fraction")
+            check(abs(inner.fraction - 0.787) < 0.0001, "configured inner fraction")
+        } else { preconditionFailure("default horizontal split configuration") }
+
+        let configured = DockWorkspaceConfiguration(
+            groupNames: ["files", "projects,info", "git"],
+            selectedNames: ["files", "info", "git"],
+            weights: [2, 3, 1],
+            actionNames: ["session", "git", "projects", "files"], edgeThreshold: 0.1
+        )!
+        let customDock = DockWorkspaceModel(configuration: configured)
+        check(customDock.root.groups.map(\.items) == [
+            [.files], [.projects, .info], [.git]
+        ], "configuration controls all initial groups")
+        check(customDock.root.groups[1].selected == .info, "configuration controls selected tab")
+        check(customDock.configuration.addActions == [.session, .git, .projects, .files],
+              "configuration controls add-menu ordering")
+        let nearEdge = CGPoint(x: 55, y: 160)
+        check(DockDropHitTest.edge(at: nearEdge, in: frame) == .left, "default edge accepts 15%")
+        check(DockDropHitTest.edge(at: nearEdge, in: frame,
+              threshold: CGFloat(configured.edgeThreshold)) == nil, "configured edge rejects 15%")
+        let invalid = [
+            (["projects,projects"], ["projects"], [1.0], ["session"], 0.22),
+            (["projects,unknown"], ["projects"], [1.0], ["session"], 0.22),
+            (["projects,,git"], ["projects"], [1.0], ["session"], 0.22),
+            (["projects"], ["git"], [1.0], ["session"], 0.22),
+            (["projects"], ["projects"], [0.0], ["session"], 0.22),
+            (["projects"], ["projects"], [1.0], ["session", "session"], 0.22),
+            (["projects"], ["projects"], [1.0], ["files"], 0.22),
+            (["projects"], ["projects"], [1.0], ["session"], 0.22),
+            (["projects"], ["projects"], [1.0], ["session"], 0.95)
+        ]
+        for (groups, selected, weights, actions, edge) in invalid {
+            check(DockWorkspaceConfiguration(
+                groupNames: groups, selectedNames: selected, weights: weights,
+                actionNames: actions, edgeThreshold: edge
+            ) == nil, "malformed configuration rejected")
+        }
 
         let newSessionDock = DockWorkspaceModel()
         let leftTarget = newSessionDock.root.groups[0].id
@@ -57,8 +98,9 @@ struct CheckDockWorkspace {
 
         let data = try JSONEncoder().encode(dock.snapshot(tabIDs: [a, b]))
         check(!String(decoding: data, as: UTF8.self).contains("region"), "no region persistence")
-        let restored = DockWorkspaceModel()
+        let restored = DockWorkspaceModel(configuration: configured)
         restored.restore(try JSONDecoder().decode(DockSavedNode.self, from: data), tabIDs: [b, c])
+        check(restored.root.groups.count == 3, "saved layout overrides configured initial groups")
         check(restored.root.group(id: center)?.items == [.tab(c), .tab(b)], "tab identity rebound")
         check(restored.root.group(id: projects)?.items == [.projects, .git], "tool location persisted")
         check(restored.visibleItems.count == 6, "no duplication")

@@ -10,6 +10,126 @@ enum DockItem: Hashable {
     case files
     case git
     case tab(UUID)
+
+    init?(configurationName: String) {
+        switch configurationName {
+        case "projects": self = .projects
+        case "info": self = .info
+        case "files": self = .files
+        case "git": self = .git
+        default: return nil
+        }
+    }
+
+    var configurationName: String? {
+        switch self {
+        case .projects: "projects"
+        case .info: "info"
+        case .files: "files"
+        case .git: "git"
+        case .tab: nil
+        }
+    }
+}
+
+/// Defines workspace actions without binding the model to SwiftUI menus.
+enum DockAddAction: String, CaseIterable, Hashable {
+    case session, projects, info, files, git
+
+    var item: DockItem? {
+        self == .session ? nil : DockItem(configurationName: rawValue)
+    }
+}
+
+/// Shared, validated configuration for new projects and tab-group menus.
+/// Per-project saved layouts remain separate from this starting template.
+struct DockWorkspaceConfiguration {
+    static let standard = DockWorkspaceConfiguration(
+        groups: [[.projects], [], [.info, .files, .git]],
+        selected: [.projects, nil, .files],
+        weights: [0.12, 0.69256, 0.18744],
+        addActions: DockAddAction.allCases,
+        edgeThreshold: 0.22
+    )
+
+    let groups: [[DockItem]]
+    let selected: [DockItem?]
+    let weights: [Double]
+    let addActions: [DockAddAction]
+    let edgeThreshold: Double
+
+    private init(
+        groups: [[DockItem]], selected: [DockItem?], weights: [Double],
+        addActions: [DockAddAction], edgeThreshold: Double
+    ) {
+        self.groups = groups
+        self.selected = selected
+        self.weights = weights
+        self.addActions = addActions
+        self.edgeThreshold = edgeThreshold
+    }
+
+    init?(
+        groupNames: [String], selectedNames: [String], weights: [Double],
+        actionNames: [String], edgeThreshold: Double
+    ) {
+        guard !groupNames.isEmpty, weights.count == groupNames.count,
+              selectedNames.count == groupNames.count,
+              edgeThreshold.isFinite, (0.05...0.4).contains(edgeThreshold) else { return nil }
+        var groups: [[DockItem]] = []
+        var seen = Set<DockItem>()
+        for name in groupNames {
+            let names = name.isEmpty ? [] : name.split(separator: ",", omittingEmptySubsequences: false)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            var items: [DockItem] = []
+            for name in names {
+                guard let item = DockItem(configurationName: name), seen.insert(item).inserted else {
+                    return nil
+                }
+                items.append(item)
+            }
+            groups.append(items)
+        }
+        guard seen.contains(.projects), weights.allSatisfy({ $0.isFinite && $0 > 0 }) else { return nil }
+        var selected: [DockItem?] = []
+        for (index, name) in selectedNames.enumerated() {
+            let item = name.isEmpty ? groups[index].first : DockItem(configurationName: name)
+            if !name.isEmpty && item == nil { return nil }
+            if let item, !groups[index].contains(item) { return nil }
+            selected.append(item)
+        }
+        let total = weights.reduce(0, +)
+        guard total.isFinite else { return nil }
+        for index in 0..<(weights.count - 1) {
+            let fraction = weights[index] / weights[index...].reduce(0, +)
+            guard (0.1...0.9).contains(fraction) else { return nil }
+        }
+        let actions = actionNames.compactMap(DockAddAction.init(rawValue:))
+        guard actions.count == actionNames.count, Set(actions).count == actions.count,
+              actions.contains(.session), actions.contains(.projects) else { return nil }
+        self.init(groups: groups, selected: selected, weights: weights,
+                  addActions: actions, edgeThreshold: edgeThreshold)
+    }
+
+    var groupNames: [String] {
+        groups.map { $0.compactMap(\.configurationName).joined(separator: ",") }
+    }
+
+    var selectedNames: [String] { selected.map { $0?.configurationName ?? "" } }
+    var actionNames: [String] { addActions.map(\.rawValue) }
+
+    func makeInitialLayout() -> DockNode {
+        func make(_ index: Int) -> DockNode {
+            let group = DockNode.group(DockGroup(items: groups[index], selected: selected[index]))
+            guard index + 1 < groups.count else { return group }
+            let fraction = weights[index] / weights[index...].reduce(0, +)
+            return .split(DockSplit(
+                axis: .horizontal, fraction: fraction,
+                first: group, second: make(index + 1)
+            ))
+        }
+        return make(0)
+    }
 }
 
 enum DockAxis: String, Codable {
@@ -23,12 +143,15 @@ enum DockEdge: Equatable {
 /// Hit-test directly against the pane's visible content, not a five-zone
 /// overlay. The tab strip always accepts a merge/reorder drop.
 enum DockDropHitTest {
-    static func edge(at pointer: CGPoint, in frame: CGRect, headerHeight: CGFloat = 38) -> DockEdge? {
+    static func edge(
+        at pointer: CGPoint, in frame: CGRect,
+        headerHeight: CGFloat = 38, threshold: CGFloat = 0.22
+    ) -> DockEdge? {
         guard frame.contains(pointer), pointer.y >= frame.minY + headerHeight else { return nil }
         let x = (pointer.x - frame.minX) / max(frame.width, 1)
         let y = (pointer.y - frame.minY - headerHeight) / max(frame.height - headerHeight, 1)
         let nearest = min(x, 1 - x, y, 1 - y)
-        guard nearest < 0.22 else { return nil }
+        guard nearest < threshold else { return nil }
         if nearest == x { return .left }
         if nearest == 1 - x { return .right }
         return nearest == y ? .top : .bottom
@@ -250,21 +373,12 @@ indirect enum DockSavedNode: Codable {
 
 @MainActor
 final class DockWorkspaceModel: ObservableObject {
+    let configuration: DockWorkspaceConfiguration
     @Published private(set) var root: DockNode
-    init() {
-        root = Self.defaults()
-    }
 
-    private static func defaults() -> DockNode {
-        .split(DockSplit(
-            axis: .horizontal, fraction: 0.12,
-            first: .group(DockGroup(items: [.projects])),
-            second: .split(DockSplit(
-                axis: .horizontal, fraction: 0.787,
-                first: .group(DockGroup(items: [])),
-                second: .group(DockGroup(items: [.info, .files, .git], selected: .files))
-            ))
-        ))
+    init(configuration: DockWorkspaceConfiguration = .standard) {
+        self.configuration = configuration
+        root = configuration.makeInitialLayout()
     }
 
     func group(containing item: DockItem) -> DockGroup? { root.group(containing: item) }

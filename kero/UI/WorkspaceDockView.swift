@@ -44,7 +44,10 @@ final class DockTabDragCoordinator: ObservableObject {
         var insertIndex: Int?
         if let hit, let target = dock.root.group(id: hit.key) {
             let frame = hit.value
-            edge = DockDropHitTest.edge(at: location, in: frame)
+            edge = DockDropHitTest.edge(
+                at: location, in: frame,
+                threshold: CGFloat(dock.configuration.edgeThreshold)
+            )
             if edge == nil {
                 insertIndex = target.items.firstIndex { tab in
                     guard let bounds = tabs[tab] else { return false }
@@ -349,25 +352,19 @@ private struct DockTabGroupView: View {
         ) { showingPanelPicker.toggle() }
         .popover(isPresented: $showingPanelPicker, arrowEdge: .bottom) {
             VStack(spacing: 2) {
-                Button {
-                    showingPanelPicker = false
-                    addSession()
-                } label: {
-                    Label(String(localized: "New Session", table: "Interface"), systemImage: "terminal")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(7)
-                }
-                .buttonStyle(.plain)
-                if !availablePanels.isEmpty { Divider() }
-                ForEach(availablePanels, id: \.self) { item in
+                ForEach(availableActions, id: \.self) { action in
                     Button {
                         showingPanelPicker = false
-                        add(item)
+                        if let item = action.item { add(item) } else { addSession() }
                     } label: {
-                        Label(item.label(project: project), systemImage: item.symbol)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(7)
-                            .contentShape(Rectangle())
+                        Label(
+                            action.item?.label(project: project)
+                                ?? String(localized: "New Session", table: "Interface"),
+                            systemImage: action.item?.symbol ?? "terminal"
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(7)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
@@ -377,8 +374,11 @@ private struct DockTabGroupView: View {
         }
     }
 
-    private var availablePanels: [DockItem] {
-        [DockItem.projects, .info, .files, .git].filter { !group.items.contains($0) }
+    private var availableActions: [DockAddAction] {
+        project.dock.configuration.addActions.filter { action in
+            guard let item = action.item else { return true }
+            return !group.items.contains(item)
+        }
     }
 
     private func tabStrip(maxWidth: CGFloat? = nil) -> some View {
@@ -498,7 +498,9 @@ private struct DockTabGroupView: View {
         VStack(spacing: 10) {
             Text(String(localized: "Drag a Tab Here or Add a Panel", table: "Interface"))
                 .foregroundStyle(.secondary)
-            Button(String(localized: "New Session", table: "Interface")) { addSession() }
+            Button(String(localized: "Add Panel", table: "Interface")) {
+                showingPanelPicker = true
+            }
         }
         .font(.system(size: 12))
         .frame(maxWidth: .infinity, maxHeight: .infinity)

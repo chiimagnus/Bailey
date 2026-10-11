@@ -31,7 +31,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     @Published var pinnedFile: String?
     /// File browser state belongs to the project, not a transient right panel.
     let fileTree = FileTreeModel()
-    let dock = DockWorkspaceModel()
+    let dock: DockWorkspaceModel
     @Published var tabs: [PaneTab] = [] {
         didSet { dock.syncTabs(tabs.map(\.id), near: selectedTabID) }
     }
@@ -65,6 +65,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
 
     init(fallbackName: String) {
         self.fallbackName = fallbackName
+        dock = DockWorkspaceModel(configuration: AppSettings.shared.workspaceConfiguration)
         dockObservation = dock.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
