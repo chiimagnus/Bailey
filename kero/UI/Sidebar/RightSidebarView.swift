@@ -624,10 +624,6 @@ private struct FileTreeScrollView: View {
                         openFile: openFile, openToSide: openToSide,
                         onRename: onRename, refreshGitStatus: refreshGitStatus
                     )
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(minHeight: TreeRowStyle.rowHeight(fontScale))
-                    .padding(.horizontal, 6)
-                    .background { TreeGuideBackground(depth: item.depth) }
                 }
             }
             .padding(.bottom, 7)
@@ -640,7 +636,6 @@ private struct FileTreeScrollView: View {
 private struct FileTreeRow: View {
     @ObservedObject var model: FileTreeModel
     @ObservedObject var git: GitStatusModel
-    @ObservedObject private var themeChanges = Theme.changes
     let item: FileTreeModel.Item
     let session: TerminalSession?
     let sshHost: String?
@@ -650,7 +645,6 @@ private struct FileTreeRow: View {
     let onRename: (_ oldPath: String, _ newPath: String) -> Void
     let refreshGitStatus: () -> Void
 
-    @State private var isHovering = false
     @State private var editingName = ""
     @FocusState private var fieldFocused: Bool
     @Environment(\.sidebarFontScale) private var fontScale
@@ -673,20 +667,20 @@ private struct FileTreeRow: View {
 
     var body: some View {
         if item.isDraft {
-            // The transient new-file/folder input row: no hover/menu, no
-            // backing file to act on.
-            draftRow
-                .background(
-                    RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.05))
-                )
+            // The transient input keeps the same focused fill but has no hover/menu.
+            TreeRowSurface(
+                depth: item.depth, scale: fontScale,
+                focused: true, hoverEnabled: false
+            ) { _ in
+                draftRow
+            }
         } else {
-            content
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(isCurrent ? Color.primary.opacity(0.09) : (isHovering ? Color.primary.opacity(0.05) : .clear))
-                )
-                .onHover { isHovering = $0 }
-                .contextMenu { rowMenu }
+            TreeRowSurface(
+                depth: item.depth, scale: fontScale, selected: isCurrent
+            ) { _ in
+                content
+            }
+            .contextMenu { rowMenu }
         }
     }
 
@@ -829,10 +823,7 @@ private struct FileTreeRow: View {
                         .accessibilityHidden(true)
                 }
             }
-            .padding(.leading, CGFloat(item.depth) * TreeRowStyle.indent + 6)
-            .padding(.trailing, 6)
-            .padding(.vertical, 3)
-            .contentShape(RoundedRectangle(cornerRadius: 4))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(fileAccessibilityLabel)
@@ -869,9 +860,6 @@ private struct FileTreeRow: View {
                     if !fieldFocused { commitRename() }
                 }
         }
-        .padding(.leading, CGFloat(item.depth) * TreeRowStyle.indent + 6)
-        .padding(.trailing, 6)
-        .padding(.vertical, 2)
         .onAppear {
             editingName = item.name
             focusField()
@@ -894,9 +882,6 @@ private struct FileTreeRow: View {
                     if !fieldFocused { commitDraft() }
                 }
         }
-        .padding(.leading, CGFloat(item.depth) * TreeRowStyle.indent + 6)
-        .padding(.trailing, 6)
-        .padding(.vertical, 2)
         .onAppear {
             editingName = ""
             focusField()
@@ -985,37 +970,39 @@ private struct GitChangeFolderRow: View {
     let name: String
     let path: String
     let collapsed: Bool
+    let depth: Int
     let fontScale: CGFloat
     let onToggle: () -> Void
 
     var body: some View {
-        Button(action: onToggle) {
-            HStack(spacing: TreeRowStyle.iconSpacing) {
-                TreeFolderIcon(expanded: !collapsed, scale: fontScale)
-                ScrollView(.horizontal) {
-                    Text(name)
-                        .sidebarFont(size: TreeRowStyle.fontSize)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: true, vertical: false)
+        TreeRowSurface(depth: depth, scale: fontScale) { _ in
+            Button(action: onToggle) {
+                HStack(spacing: TreeRowStyle.iconSpacing) {
+                    TreeFolderIcon(expanded: !collapsed, scale: fontScale)
+                    ScrollView(.horizontal) {
+                        Text(name)
+                            .sidebarFont(size: TreeRowStyle.fontSize)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .scrollIndicators(.hidden)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .scrollIndicators(.hidden)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .help(path)
+            .accessibilityLabel(name)
+            .accessibilityValue(
+                collapsed ? String(localized: "Collapsed", table: "Sidebar")
+                    : String(localized: "Expanded", table: "Sidebar")
+            )
         }
-        .buttonStyle(.plain)
-        .help(path)
-        .accessibilityLabel(name)
-        .accessibilityValue(
-            collapsed ? String(localized: "Collapsed", table: "Sidebar")
-                : String(localized: "Expanded", table: "Sidebar")
-        )
     }
 }
 
 private struct GitPanel: View {
-    @ObservedObject private var themeChanges = Theme.changes
     @ObservedObject private var settings = AppSettings.shared
 
     private enum EntryOperation: Equatable {
@@ -1919,19 +1906,14 @@ private struct GitPanel: View {
                 case .folder(let path, let name, let isCollapsed):
                     GitChangeFolderRow(
                         name: name, path: path, collapsed: isCollapsed,
-                        fontScale: sidebarFontScale
+                        depth: item.depth, fontScale: sidebarFontScale
                     ) {
                         let key = kind.rawValue + ":" + path
                         model.toggleCollapsedFolder(key)
                     }
-                    .frame(height: TreeRowStyle.rowHeight(sidebarFontScale))
-                    .padding(.leading, CGFloat(item.depth) * TreeRowStyle.indent + TreeRowStyle.leadingInset)
-                    .background { TreeGuideBackground(depth: item.depth) }
                 case .file(let entry):
                     row(entry, status: entryStatus(entry, kind: kind), kind: kind,
-                        showDirectory: false)
-                        .padding(.leading, CGFloat(item.depth) * TreeRowStyle.indent)
-                        .background { TreeGuideBackground(depth: item.depth) }
+                        showDirectory: false, depth: item.depth)
                 }
             }
         } else {
@@ -1981,7 +1963,7 @@ private struct GitPanel: View {
 
     private func row(
         _ entry: GitStatusModel.Entry, status: Character, kind: GitEntryRow.Kind,
-        showDirectory: Bool = true
+        showDirectory: Bool = true, depth: Int = 0
     ) -> some View {
         let stageTrigger = OperationTrigger.entry(path: entry.path, operation: .stage)
         let unstageTrigger = OperationTrigger.entry(path: entry.path, operation: .unstage)
@@ -1991,6 +1973,7 @@ private struct GitPanel: View {
             status: status,
             kind: kind,
             showDirectory: showDirectory,
+            depth: depth,
             isRemote: remoteName != nil,
             disabled: model.isBusy,
             isStageLoading: operationIsLoading(stageTrigger),
@@ -2561,6 +2544,7 @@ private struct GitEntryRow: View {
     let status: Character
     let kind: Kind
     let showDirectory: Bool
+    let depth: Int
     /// Whether this repository is on another machine, where discarding an
     /// untracked or copied file deletes it rather than moving it to the Trash.
     let isRemote: Bool
@@ -2578,43 +2562,43 @@ private struct GitEntryRow: View {
     let copyRelativePath: () -> Void
     let insertInTerminal: (() -> Void)?
 
-    @State private var isHovering = false
     @FocusState private var isFocused: Bool
     @Environment(\.sidebarFontScale) private var fontScale
 
     var body: some View {
-        HStack(spacing: 2) {
-            Button(action: openDiff) {
-                HStack(spacing: TreeRowStyle.iconSpacing) {
-                    MaterialFileIconView(
-                        path: absolutePath,
-                        size: TreeRowStyle.iconSize,
-                        opacity: status == "D" ? 0.6 : 1
-                    )
-                    ScrollView(.horizontal) {
+        TreeRowSurface(depth: depth, scale: fontScale, focused: isFocused) { isHovering in
+            HStack(spacing: 2) {
+                Button(action: openDiff) {
+                    HStack(spacing: TreeRowStyle.iconSpacing) {
+                            MaterialFileIconView(
+                            path: absolutePath,
+                            size: TreeRowStyle.iconSize,
+                            opacity: status == "D" ? 0.6 : 1
+                        )
+                        ScrollView(.horizontal) {
                         HStack(spacing: 6) {
                             Text(entry.fileName)
                                 .sidebarFont(size: TreeRowStyle.fontSize)
                                 .foregroundStyle(.secondary)
                                 .strikethrough(status == "D")
                                 .fixedSize(horizontal: true, vertical: false)
-                            if showDirectory && !isHovering && !isFocused {
+                            if showDirectory {
                                 Text(entry.directory)
                                     .sidebarFont(size: 10)
                                     .foregroundStyle(.tertiary)
                                     .fixedSize(horizontal: true, vertical: false)
                             }
                         }
+                        }
+                        .scrollIndicators(.hidden)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(String(status))
+                            .sidebarFont(size: 10, weight: .bold, design: .monospaced)
+                            .foregroundStyle(statusColor)
+                            .frame(width: 12)
                     }
-                    .scrollIndicators(.hidden)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    Text(String(status))
-                        .sidebarFont(size: 10, weight: .bold, design: .monospaced)
-                        .foregroundStyle(statusColor)
-                        .frame(width: 12)
-                }
-                .frame(maxWidth: .infinity, minHeight: 16, alignment: .leading)
-                .contentShape(Rectangle())
+                    .frame(maxWidth: .infinity, minHeight: 16, alignment: .leading)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .focused($isFocused)
@@ -2623,24 +2607,16 @@ private struct GitEntryRow: View {
                 ? String(localized: "Opens conflict changes", table: "Sidebar")
                 : String(localized: "Opens changes", table: "Sidebar"))
 
-            if !disabled || isStageLoading || isUnstageLoading || isDiscardLoading {
-                hoverActions
-                    .opacity(
-                        isStageLoading || isUnstageLoading || isDiscardLoading
-                            ? 1
-                            : (isHovering || isFocused ? 1 : 0.55)
-                    )
+                if !disabled || isStageLoading || isUnstageLoading || isDiscardLoading {
+                    hoverActions
+                        .opacity(
+                            isStageLoading || isUnstageLoading || isDiscardLoading
+                                ? 1
+                                : (isHovering || isFocused ? 1 : 0.55)
+                        )
+                }
             }
         }
-        .frame(height: TreeRowStyle.rowHeight(fontScale))
-        .padding(.leading, TreeRowStyle.leadingInset)
-        .padding(.trailing, 8)
-        .contentShape(RoundedRectangle(cornerRadius: 4))
-        .background(
-            RoundedRectangle(cornerRadius: 4)
-                .fill(isHovering || isFocused ? Color.primary.opacity(0.05) : .clear)
-        )
-        .onHover { isHovering = $0 }
         .contextMenu { menu }
     }
 

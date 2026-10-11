@@ -11,7 +11,6 @@ import SwiftUI
 struct RecentCommitsView: View {
     @Binding private var expandedCommitIDs: Set<String>
     @Binding private var collapsedFolders: Set<String>
-    @ObservedObject private var themeChanges = Theme.changes
     @State private var requestedLastCommit: String?
 
     let commits: [GitStatusModel.RecentCommit]
@@ -75,13 +74,19 @@ struct RecentCommitsView: View {
         _ commit: GitStatusModel.RecentCommit,
         isFirst: Bool, continuesBelow: Bool, expanded: Bool
     ) -> some View {
-        Button {
-            if !expandedCommitIDs.insert(commit.id).inserted {
-                expandedCommitIDs.remove(commit.id)
-            }
-        } label: {
-            HStack(spacing: 5) {
-                ScrollView(.horizontal) {
+        TreeRowSurface(
+            depth: 0, scale: fontScale, selected: expanded,
+            leadingInset: 21, trailingInset: TreeRowStyle.contentInset,
+            showsGuides: false,
+            height: max(22, ceil(26 * fontScale))
+        ) { _ in
+            Button {
+                if !expandedCommitIDs.insert(commit.id).inserted {
+                    expandedCommitIDs.remove(commit.id)
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    ScrollView(.horizontal) {
                     HStack(spacing: 5) {
                         Text(commit.subject)
                             .font(.system(size: 11.5 * fontScale))
@@ -92,10 +97,10 @@ struct RecentCommitsView: View {
                             .foregroundStyle(.tertiary)
                             .fixedSize(horizontal: true, vertical: false)
                     }
-                }
-                .scrollIndicators(.hidden)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                if let reference = primaryReference(for: commit) {
+                    }
+                    .scrollIndicators(.hidden)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if let reference = primaryReference(for: commit) {
                     Text(reference)
                         .font(.system(size: 9.5 * fontScale, weight: .medium))
                         .foregroundStyle(.white)
@@ -104,32 +109,26 @@ struct RecentCommitsView: View {
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
                         .background(Capsule().fill(Color(nsColor: Theme.accent)))
+                    }
                 }
+                .contentShape(Rectangle())
             }
-            .padding(.leading, 27)
-            .padding(.trailing, 5)
-            .frame(height: max(22, ceil(26 * fontScale)))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .help("\(commit.shortHash) \u{00B7} \(commit.author) \u{00B7} \(commit.relativeDate)")
+            .accessibilityLabel(String(
+                localized: "\(commit.subject), \(commit.shortHash), by \(commit.author), \(commit.relativeDate)", table: "Git"
+            ))
+            .accessibilityValue(expanded
+                ? String(localized: "Expanded", table: "Git")
+                : String(localized: "Collapsed", table: "Git"))
+            .contextMenu {
+                Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
+                Button(String(localized: "Copy Commit Message", table: "Git")) { copy(commit.subject) }
+            }
         }
-        .buttonStyle(.plain)
         .background {
             CommitTreeRails(depth: 0, isCommit: true, startsAtCenter: isFirst,
                             endsAtCenter: !continuesBelow, expanded: expanded)
-        }
-        .background {
-            if expanded { RoundedRectangle(cornerRadius: 4).fill(Color(nsColor: Theme.accent).opacity(0.08)) }
-        }
-        .help("\(commit.shortHash) \u{00B7} \(commit.author) \u{00B7} \(commit.relativeDate)")
-        .accessibilityLabel(String(
-            localized: "\(commit.subject), \(commit.shortHash), by \(commit.author), \(commit.relativeDate)", table: "Git"
-        ))
-        .accessibilityValue(expanded
-            ? String(localized: "Expanded", table: "Git")
-            : String(localized: "Collapsed", table: "Git"))
-        .contextMenu {
-            Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
-            Button(String(localized: "Copy Commit Message", table: "Git")) { copy(commit.subject) }
         }
     }
 
@@ -144,7 +143,7 @@ struct RecentCommitsView: View {
     @ViewBuilder
     private func commitFiles(_ commit: GitStatusModel.RecentCommit, isLast: Bool) -> some View {
         if commit.files.isEmpty {
-            fileRow(depth: 0, continuesBelow: !isLast) {
+            fileRow(depth: 0, continuesBelow: !isLast, hoverEnabled: false) {
                 Text(String(localized: "No changed files", table: "Git"))
                     .font(.system(size: 9.5 * fontScale))
                     .foregroundStyle(.tertiary)
@@ -247,18 +246,21 @@ struct RecentCommitsView: View {
     }
 
     private func fileRow<Content: View>(
-        depth: Int, continuesBelow: Bool, @ViewBuilder content: () -> Content
+        depth: Int, continuesBelow: Bool, hoverEnabled: Bool = true,
+        @ViewBuilder content: @escaping () -> Content
     ) -> some View {
-        content()
-            .padding(.leading, 45 + CGFloat(depth) * TreeRowStyle.indent)
-            .padding(.trailing, 5)
-            .frame(height: TreeRowStyle.rowHeight(fontScale))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                CommitTreeRails(depth: depth, isCommit: false,
-                                startsAtCenter: false, endsAtCenter: !continuesBelow,
-                                expanded: false)
-            }
+        TreeRowSurface(
+            depth: depth, scale: fontScale, hoverEnabled: hoverEnabled,
+            leadingInset: 39, trailingInset: TreeRowStyle.contentInset,
+            showsGuides: false
+        ) { _ in
+            content()
+        }
+        .background {
+            CommitTreeRails(depth: depth, isCommit: false,
+                            startsAtCenter: false, endsAtCenter: !continuesBelow,
+                            expanded: false)
+        }
     }
 
     private func copy(_ text: String) {
