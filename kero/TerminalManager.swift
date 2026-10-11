@@ -76,10 +76,6 @@ final class TerminalManager: nonisolated ObservableObject {
     /// Window hosting this manager, once SwiftUI has attached its content.
     /// Finder service requests use it to target the active Kero window.
     private weak var window: NSWindow?
-    /// The untouched project created before the first window appears. A Finder
-    /// request arriving during launch replaces it instead of leaving an extra
-    /// home-directory project beside the requested folder.
-    private var startupProjectID: UUID?
 
     /// Live managers in window-creation order; the persisted snapshot is
     /// one entry per registered manager.
@@ -117,9 +113,8 @@ final class TerminalManager: nonisolated ObservableObject {
             Self.pendingHistories = TerminalHistoryStore.load()
         }
         Self.registry.append(self)
-        var restored = false
         if !Self.pendingRestores.isEmpty {
-            restored = restore(from: Self.pendingRestores.removeFirst())
+            _ = restore(from: Self.pendingRestores.removeFirst())
         }
         // Only a window still claiming a snapshot reads the scrollback blobs,
         // so once the last one is claimed they are dead weight — several
@@ -128,12 +123,7 @@ final class TerminalManager: nonisolated ObservableObject {
             Self.pendingHistories = [:]
         }
         let queuedDirectories = Self.takePendingDirectories()
-        if !restored, queuedDirectories.isEmpty {
-            startupProjectID = newProject().id
-        }
-        for directory in queuedDirectories {
-            newProject(directory: directory)
-        }
+        addLocalItems(queuedDirectories.map { URL(fileURLWithPath: $0, isDirectory: true) })
         // Reconfigure live sessions only when font, appearance, theme, or
         // terminal input settings change. Delivery is scheduled onto the main
         // queue because @Published emits in willSet — by then `didSet` has
@@ -200,13 +190,6 @@ final class TerminalManager: nonisolated ObservableObject {
 
     // MARK: - Projects
 
-    @discardableResult
-    func newProject() -> Project {
-        let project = makeProject()
-        insert(project)
-        return project
-    }
-
     /// Finder, the sidebar and the keyboard shortcut all add entries to the
     /// same project list. A selected file opens in an editor; its parent is
     /// the Files/Git root and initial terminal directory.
@@ -227,7 +210,7 @@ final class TerminalManager: nonisolated ObservableObject {
                 selectedProjectID = existing.id
                 continue
             }
-            let project = makeProject(createInitialSession: false)
+            let project = makeProject()
             project.customName = url.lastPathComponent
             project.customDirectory = root
             project.pinnedFile = file
@@ -285,7 +268,7 @@ final class TerminalManager: nonisolated ObservableObject {
                 selectedProjectID = existing.id
                 continue
             }
-            let project = makeProject(createInitialSession: false)
+            let project = makeProject()
             project.sshHost = host
             project.customDirectory = root
             project.pinnedFile = file
@@ -390,11 +373,6 @@ final class TerminalManager: nonisolated ObservableObject {
         }
     }
 
-    /// Finder folders use the same entry semantics as the sidebar picker.
-    private func newProject(directory: String) {
-        addLocalItems([URL(fileURLWithPath: directory, isDirectory: true)])
-    }
-
     private func insert(_ project: Project) {
         // Open the new project next to the current one rather than at the end.
         // Falls back to appending when nothing is selected yet.
@@ -420,9 +398,9 @@ final class TerminalManager: nonisolated ObservableObject {
             return
         }
 
-        for directory in directories {
-            manager.newProject(directory: directory)
-        }
+        manager.addLocalItems(
+            directories.map { URL(fileURLWithPath: $0, isDirectory: true) }
+        )
         manager.window?.makeKeyAndOrderFront(nil)
     }
 
@@ -432,15 +410,7 @@ final class TerminalManager: nonisolated ObservableObject {
         self.window = window
         Self.isOpeningWindow = false
         let directories = Self.takePendingDirectories()
-        if !directories.isEmpty, let startupProjectID,
-           let startupProject = projects.first(where: { $0.id == startupProjectID }) {
-            startupProject.terminateAll()
-            remove(startupProject)
-        }
-        startupProjectID = nil
-        for directory in directories {
-            newProject(directory: directory)
-        }
+        addLocalItems(directories.map { URL(fileURLWithPath: $0, isDirectory: true) })
         if !directories.isEmpty {
             window.makeKeyAndOrderFront(nil)
         }
@@ -489,12 +459,9 @@ final class TerminalManager: nonisolated ObservableObject {
         }
     }
 
-    private func makeProject(createInitialSession: Bool = true) -> Project {
+    private func makeProject() -> Project {
         projectCounter += 1
-        let project = Project(
-            fallbackName: "Project \(projectCounter)",
-            createInitialSession: createInitialSession
-        )
+        let project = Project(fallbackName: "Project \(projectCounter)")
         projectObservations[project.id] = project.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
@@ -559,21 +526,13 @@ final class TerminalManager: nonisolated ObservableObject {
 
     // MARK: - Sessions
 
-    /// New session in the current project; creates a project if none exist.
+    /// New sessions and browser tabs belong to the selected sidebar item.
     func newSession() {
-        guard let project = selectedProject else {
-            newProject()
-            return
-        }
-        project.newSession()
+        selectedProject?.newSession()
     }
 
-    /// Opens a browser tab in the current project. Kero remains
-    /// project-oriented, so invoking it from the no-project state first creates
-    /// the normal project shell and places the browser beside it.
     func newBrowserTab(initialURL: String? = nil) {
-        let project = selectedProject ?? newProject()
-        project.newBrowserTab(
+        selectedProject?.newBrowserTab(
             initialURL: initialURL,
             initialFocus: initialURL == nil ? .addressBar : .webContent
         )
@@ -1127,7 +1086,7 @@ final class TerminalManager: nonisolated ObservableObject {
         if let visible = snapshot.isRightPanelVisible { isPanelVisible = visible }
         if let tab = snapshot.rightPanelTab { panelTab = tab }
         for saved in snapshot.projects where !saved.tabs.isEmpty {
-            let project = makeProject(createInitialSession: false)
+            let project = makeProject()
             project.customName = Project.normalizedCustomName(saved.customName)
             project.customDirectory = saved.customDirectory
             project.sshHost = saved.sshHost

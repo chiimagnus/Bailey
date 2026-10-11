@@ -18,7 +18,7 @@ struct keroApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("kero", id: "main") {
+        WindowGroup("Kero", id: "main") {
             WindowRootView()
         }
         .windowStyle(.hiddenTitleBar)
@@ -83,12 +83,12 @@ private struct KeroCommands: Commands {
                 manager?.newSession()
             }
             .keyboardShortcut("t", modifiers: .command)
-            .disabled(manager == nil)
+            .disabled(manager?.selectedProject == nil)
 
             Button("New Browser Tab") {
                 manager?.newBrowserTab()
             }
-            .disabled(manager == nil)
+            .disabled(manager?.selectedProject == nil)
 
             Button("New Window") {
                 openWindow(id: "main")

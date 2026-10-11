@@ -16,21 +16,20 @@ A native terminal workspace for macOS, with projects, SSH, files, Git and diffs.
 
 ## Build locally
 
-Requires macOS 15.6+, Xcode and an Apple Development signing identity.
-This fork provides local source builds, not prebuilt downloads or automatic updates.
+Requires macOS 15.6+, Xcode and a personal Apple Development certificate.
+Kero has one local app: **Kero.app**, built in **Debug**. No publishing pipeline.
 
 ```sh
 git clone --recurse-submodules https://github.com/chiimagnus/kero.git
 cd kero
-xcodebuild -project kero.xcodeproj -scheme kero -configuration Release \
-  -destination 'platform=macOS,arch=arm64' -derivedDataPath build/DerivedData build
-open 'build/DerivedData/Build/Products/Release/Kero Remote.app'
+xcodebuild -project kero.xcodeproj -scheme kero -configuration Debug \
+  -destination 'platform=macOS,arch=arm64' build
 ```
 
+For normal development, open `kero.xcodeproj` and press **Cmd+B**.
 To add files or folders, press **Shift+Cmd+A** or use **+** in the bottom-left
 corner of the sidebar. The menu also accepts SSH paths; there is no separate
-blank-project command. Closing the last window quits Kero and stops its port
-forwards; open Kero again to restore saved tabs and projects.
+blank-project command.
 For remote items, choose **+ → Add SSH Files or Folders…**, select a host from
 `~/.ssh/config`, and enter one absolute remote path per line. Windows SSH hosts
 with an MSYS2 shell accept both `D:\\GitHub\\project` and `/d/GitHub/project`.

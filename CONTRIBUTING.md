@@ -2,33 +2,24 @@
 
 ## Build
 
-Requires Xcode, macOS 15.6+ and the personal Apple Development certificate in
-the login Keychain. Only Ghostty is used; there is no Rust or release pipeline.
+Requires Xcode, macOS 15.6+ and the personal Apple Development certificate
+in the login Keychain. There is one target and one app, **Kero.app**
+(bundle ID `sh.kero`), with a single Debug build configuration.
 
 ```sh
 git clone --recurse-submodules https://github.com/chiimagnus/kero.git
 cd kero
 xcodebuild -project kero.xcodeproj -scheme kero -configuration Debug \
-  -destination 'platform=macOS,arch=arm64' build
-```
-
-For a locally signed production build, use:
-
-```sh
-xcodebuild -project kero.xcodeproj -scheme kero -configuration Release \
   -destination 'platform=macOS,arch=arm64' -derivedDataPath build/DerivedData build
-codesign --verify --deep --strict 'build/DerivedData/Build/Products/Release/Kero Remote.app'
+codesign --verify --deep --strict 'build/DerivedData/Build/Products/Debug/Kero.app'
 ```
 
-Both configurations sign with the installed Apple Development identity for
-team `RDQHYSDFFG`. This is for local development, not distribution to other Macs:
-Developer ID Application signing and notarization would require a different
-certificate and workflow. The Release app keeps bundle ID `sh.kero.remote` to
-preserve the installed app's settings. The separate Debug app uses `sh.kero.dev`,
-its own icon, and `~/.config/kero-dev/config.toml`.
+The app uses the personal Apple Development certificate for team
+`RDQHYSDFFG`, and saves its configuration in `~/.config/kero/config.toml`.
+This is for local use, not distribution or notarization.
 
-Open `kero.xcodeproj` and press **Cmd+B** for normal development. If only the
-Xcode beta is installed, set
+Open `kero.xcodeproj` and press **Cmd+B** for normal development. If only
+the Xcode beta is installed, set
 `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer`.
 
 ## Localization

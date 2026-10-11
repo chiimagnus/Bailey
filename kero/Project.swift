@@ -56,13 +56,8 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// working directory.
     private var browserObservations: [UUID: AnyCancellable] = [:]
 
-    /// Pass `createInitialSession: false` when restoring a saved project;
-    /// the caller then rebuilds the tabs itself.
-    init(fallbackName: String, createInitialSession: Bool = true) {
+    init(fallbackName: String) {
         self.fallbackName = fallbackName
-        if createInitialSession {
-            newSession()
-        }
     }
 
     var name: String {

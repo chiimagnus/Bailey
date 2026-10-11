@@ -70,7 +70,7 @@ struct SidebarView: View {
 
             HStack(spacing: 2) {
                 SidebarAddButton(manager: manager)
-                    // .frame(width: 24, height: 24)
+                    .frame(width: 24, height: 24)
                 Spacer()
                 SidebarFooterButton(
                     systemImage: "exclamationmark.bubble",
@@ -221,6 +221,12 @@ private struct SidebarAddButton: NSViewRepresentable {
 
     func updateNSView(_ button: NSButton, context: Context) {
         context.coordinator.manager = manager
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize, nsView: NSButton, context: Context
+    ) -> CGSize? {
+        CGSize(width: 24, height: 24)
     }
 
     final class Coordinator: NSObject {

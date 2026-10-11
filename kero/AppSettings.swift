@@ -98,20 +98,8 @@ enum GitViewMode: String, CaseIterable, Identifiable {
 final class AppSettings: nonisolated ObservableObject {
     static let shared = AppSettings()
 
-    /// Development (Debug) builds store their config under `~/.config/kero-dev`
-    /// instead of `~/.config/kero`, so running a dev build alongside an
-    /// installed production build doesn't clobber its settings. This mirrors
-    /// the separate `sh.kero.dev` bundle identifier that keeps the two apps'
-    /// `UserDefaults` (session snapshot and sidebar widths) apart.
-    static let configURL: URL = {
-        #if DEBUG
-        let directory = "kero-dev"
-        #else
-        let directory = "kero"
-        #endif
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/\(directory)/config.toml")
-    }()
+    static let configURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".config/kero/config.toml")
 
     static let defaultFontSize: Double = 13
     static let fontSizeRange: ClosedRange<Double> = 8...32

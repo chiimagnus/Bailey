@@ -2,12 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- This Info.plist is authored by hand (GENERATE_INFOPLIST_FILE = NO) so we
-	     own the Bundle* keys instead of letting the generator derive them.
-	     PRODUCT_NAME remains lowercase for the bundled ssh helper symlink.
-	     KERO_DISPLAY_NAME supplies Kero Remote for Release
-	     and Kero Debug for Debug. sh.kero.remote preserves installed app state.
-	     Dynamic values use build-setting substitution to stay in sync. -->
+	<!-- The executable remains lowercase for the bundled ssh helper symlink.
+	     This is the only Kero app identity for local development. -->
 
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
@@ -23,9 +19,9 @@
 	<!-- User-visible name. CFBundleName drives the app menu (bold menu next to
 	     the Apple menu); CFBundleDisplayName is what Finder/Dock show. -->
 	<key>CFBundleName</key>
-	<string>$(KERO_DISPLAY_NAME)</string>
+	<string>Kero</string>
 	<key>CFBundleDisplayName</key>
-	<string>$(KERO_DISPLAY_NAME)</string>
+	<string>Kero</string>
 
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
@@ -42,7 +38,7 @@
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
-				<string>New $(KERO_DISPLAY_NAME) Project Here</string>
+				<string>Add Folder to Kero</string>
 			</dict>
 			<key>NSMessage</key>
 			<string>openInKero</string>
