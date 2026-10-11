@@ -223,8 +223,7 @@ private struct DockTreeView: View {
     }
 
     private func divider(_ split: DockSplit, available: CGFloat) -> some View {
-        // Match the original sidebar: a 1pt hairline, with a wider
-        // invisible hit target so resizing remains easy.
+        // A thin divider with a wider invisible drag target.
         Rectangle()
             .fill(Color(nsColor: Theme.divider))
             .overlay {
@@ -250,11 +249,6 @@ private struct DockTreeView: View {
                         .onEnded { _ in
                             if let liveFraction { project.dock.resize(split.id, to: liveFraction) }
                             liveFraction = nil
-                        }
-                    )
-                    .simultaneousGesture(
-                        TapGesture(count: 2).onEnded {
-                            project.dock.resize(split.id, to: 0.5)
                         }
                     )
             }
