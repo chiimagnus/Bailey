@@ -21,3 +21,4 @@ timeline.xctimeline
 playground.xcworkspace
 
 .crew/
+.codegraph/
