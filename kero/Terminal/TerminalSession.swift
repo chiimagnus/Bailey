@@ -9,8 +9,8 @@ import Darwin
 import Foundation
 
 /// One long-lived terminal process rendered by one terminal surface. Normally
-/// that process is the user's login shell; a CLI-created project can instead
-/// exec an explicit argv directly. SwiftUI only reparents the same surface, so
+/// that process is the user's login shell; an SSH project launches its host
+/// command instead. SwiftUI only reparents the same surface, so
 /// PTY state, selection, and scrollback survive tab and split-layout changes.
 ///
 /// The surface reports its lifecycle and input events through
@@ -23,11 +23,8 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     @Published var workingDirectory: String?
     @Published var hasExited = false
     @Published private(set) var commandLifecycle = TerminalCommandLifecycle()
-    /// Recognized coding agent occupying this terminal, if any. The monitor
-    /// reconciles foreground process identity with explicit lifecycle events.
-
-    /// Where this session's right pane looks. Set by Kero's `ssh` helper
-    /// through the automation socket, never guessed from the foreground
+    /// Where this session's workspace tools look. Set by Kero's `ssh` helper
+    /// through the private authenticated handoff, never guessed from the foreground
     /// process: an ssh Kero did not front cannot be followed.
     @Published var location: WorkspaceLocation = .local
     /// The connection this session most recently left. Open editor tabs use it

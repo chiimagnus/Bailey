@@ -34,19 +34,8 @@ enum FindAction {
 @MainActor
 final class TerminalManager: nonisolated ObservableObject {
     @Published var projects: [Project] = []
-    @Published var selectedProjectID: UUID? {
-        willSet {
-            // Diff hosts are expensive WebKit trees. Once a project has put
-            // them in this window, keep that project's stack mounted across
-            // project switches just as ContentView already does across tab
-            // switches. Reattaching every open diff can otherwise block the
-            // main thread while AppKit rebuilds the window/view hierarchy.
-            if let selectedProjectID, selectedProjectID != newValue {
-                retainedDiffProjectIDs.insert(selectedProjectID)
-            }
-        }
-    }
-    /// Debug FPS badge in the sidebar header. Deliberately not persisted:
+    @Published var selectedProjectID: UUID?
+    /// Debug FPS badge in the Dock header. Deliberately not persisted:
     /// every launch starts with it hidden.
     @Published var isFPSCounterVisible = false
     @Published private(set) var isCommandPaletteVisible = false
@@ -54,10 +43,6 @@ final class TerminalManager: nonisolated ObservableObject {
     /// Projects publish their own changes (session list, session selection);
     /// re-publish them so views observing the manager stay current.
     private var projectObservations: [UUID: AnyCancellable] = [:]
-    /// Projects whose diff stacks have already been mounted in this window.
-    /// Unvisited restored projects stay lazy so launch does not instantiate all
-    /// of their WKWebViews at once.
-    private var retainedDiffProjectIDs: Set<UUID> = []
     private var projectCounter = 0
     private var settingsObservation: AnyCancellable?
     private var autosaveObservation: AnyCancellable?
@@ -170,16 +155,6 @@ final class TerminalManager: nonisolated ObservableObject {
 
     var selectedSession: TerminalSession? {
         selectedProject?.selectedSession
-    }
-
-    /// Diff stacks that should remain in the window hierarchy. The selected
-    /// project is included immediately; previously selected projects remain
-    /// only when they actually own a diff.
-    var projectsWithMountedDiffs: [Project] {
-        projects.filter {
-            $0.id == selectedProjectID
-                || (retainedDiffProjectIDs.contains($0.id) && $0.hasDiffs)
-        }
     }
 
     // MARK: - Projects
@@ -488,7 +463,6 @@ final class TerminalManager: nonisolated ObservableObject {
             let neighbor = min(index, projects.count - 1)
             selectedProjectID = neighbor >= 0 ? projects[neighbor].id : nil
         }
-        retainedDiffProjectIDs.remove(project.id)
         // Only an explicit project closure removes the Files/Git workspace.
     }
 
@@ -868,14 +842,6 @@ final class TerminalManager: nonisolated ObservableObject {
             for session in project.sessions {
                 session.applyTheme()
             }
-        }
-    }
-
-    /// Re-themes every open window for app-wide changes that do not mutate an
-    /// `AppSettings` publisher, such as a transient CLI theme preview.
-    static func refreshAllAppearances() {
-        for manager in registry {
-            manager.refreshAppearance()
         }
     }
 
