@@ -31,12 +31,16 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     @Published var pinnedFile: String?
     /// File browser state belongs to the project, not a transient right panel.
     let fileTree = FileTreeModel()
-    @Published var tabs: [PaneTab] = []
+    let dock = DockWorkspaceModel()
+    @Published var tabs: [PaneTab] = [] {
+        didSet { dock.syncTabs(tabs.map(\.id), near: selectedTabID) }
+    }
     @Published var selectedTabID: UUID? {
         didSet {
             guard selectedTabID != oldValue, let selectedTabID else { return }
             recentTabIDs.removeAll { $0 == selectedTabID }
             recentTabIDs.insert(selectedTabID, at: 0)
+            dock.select(.tab(selectedTabID))
         }
     }
 
@@ -53,6 +57,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// Tabs publish layout changes (splits, focus, resize); re-publish them so
     /// the strip re-renders and autosave fires.
     private var tabObservations: [UUID: AnyCancellable] = [:]
+    private var dockObservation: AnyCancellable?
     /// Browser navigation changes the tab's automatic title and persisted URL.
     /// Re-publish it through the project just like a terminal's live title and
     /// working directory.
@@ -60,6 +65,9 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
 
     init(fallbackName: String) {
         self.fallbackName = fallbackName
+        dockObservation = dock.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
     }
 
     var name: String {

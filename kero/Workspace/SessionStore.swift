@@ -197,6 +197,8 @@ struct SessionSnapshot: Codable {
         var pinnedFile: String?
         var tabs: [TabSnapshot]
         var selectedTabIndex: Int?
+        /// Optional: older snapshots used separate fixed sidebars.
+        var dock: DockSavedNode?
     }
 
     var projects: [ProjectSnapshot]

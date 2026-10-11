@@ -861,6 +861,17 @@ final class TerminalManager: nonisolated ObservableObject {
 
     /// Shows the sidebar on `panel`, or hides it if already showing that panel.
     func togglePanel(_ panel: RightPanel) {
+        let dockItem: DockItem = switch panel {
+        case .info: .info
+        case .files: .files
+        case .git: .git
+        }
+        if let project = selectedProject {
+            if project.dock.group(containing: dockItem) == nil {
+                project.dock.place(dockItem, in: .right)
+            }
+            project.dock.select(dockItem)
+        }
         if isPanelVisible && panelTab == panel {
             isPanelVisible = false
         } else {
@@ -990,7 +1001,8 @@ final class TerminalManager: nonisolated ObservableObject {
                     sshHost: project.sshHost,
                     pinnedFile: project.pinnedFile,
                     tabs: tabs,
-                    selectedTabIndex: savedTabs.firstIndex { $0.0.id == project.selectedTabID }
+                    selectedTabIndex: savedTabs.firstIndex { $0.0.id == project.selectedTabID },
+                    dock: project.dock.snapshot(tabIDs: savedTabs.map { $0.0.id })
                 )
             },
             selectedProjectIndex: projects.firstIndex { $0.id == selectedProjectID },
@@ -1125,6 +1137,16 @@ final class TerminalManager: nonisolated ObservableObject {
             }
             if let index = saved.selectedTabIndex, project.tabs.indices.contains(index) {
                 project.selectedTabID = project.tabs[index].id
+            }
+            if let dock = saved.dock {
+                project.dock.restore(dock, tabIDs: project.tabs.map(\.id))
+            } else if let legacyPanel = snapshot.rightPanelTab {
+                let item: DockItem = switch legacyPanel {
+                case .info: .info
+                case .files: .files
+                case .git: .git
+                }
+                project.dock.select(item)
             }
             project.resetRecency()
             if let pinnedFile = project.pinnedFile,
