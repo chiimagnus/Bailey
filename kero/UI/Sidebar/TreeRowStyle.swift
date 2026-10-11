@@ -18,6 +18,7 @@ enum TreeRowStyle {
         expanded ? "folder" : "folder.fill"
     }
 
+    // Existing commit-graph rows still draw their own rails until migrated.
     static func drawGuides(depth: Int, in bounds: NSRect, firstX: CGFloat) {
         guard depth > 0 else { return }
         NSColor.labelColor.withAlphaComponent(0.18).setFill()
@@ -48,31 +49,22 @@ final class TreeFolderIconHost: NSHostingView<TreeFolderIcon> {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-@MainActor
-private final class TreeGuideNSView: NSView {
-    var depth = 0 { didSet { if depth != oldValue { needsDisplay = true } } }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        needsDisplay = true
-    }
-    override func draw(_ dirtyRect: NSRect) {
-        TreeRowStyle.drawGuides(
-            depth: depth, in: bounds,
-            firstX: TreeRowStyle.leadingInset + TreeRowStyle.iconSize / 2
-        )
-    }
-}
-
-/// AppKit artwork behind the existing interactive SwiftUI file rows.
-struct TreeGuideBackground: NSViewRepresentable {
+/// Draw across the entire SwiftUI row, including scaled typography and inline editing.
+/// A zero-spacing LazyVStack makes the full-height rectangles touch exactly.
+struct TreeGuideBackground: View {
     let depth: Int
 
-    func makeNSView(context: Context) -> NSView {
-        TreeGuideNSView()
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView as? TreeGuideNSView)?.depth = depth
+    var body: some View {
+        Canvas { context, size in
+            guard depth > 0 else { return }
+            for level in 0..<depth {
+                let x = TreeRowStyle.leadingInset + TreeRowStyle.iconSize / 2
+                    + CGFloat(level) * TreeRowStyle.indent
+                let line = Path(CGRect(x: x - 0.5, y: 0, width: 1, height: size.height))
+                context.fill(line, with: .color(.primary.opacity(0.18)))
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
