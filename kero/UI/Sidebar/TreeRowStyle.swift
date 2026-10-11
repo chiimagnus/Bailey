@@ -4,7 +4,7 @@ import SwiftUI
 /// One file-tree layout for Files, working-tree changes and commit history.
 @MainActor
 enum TreeRowStyle {
-    static let indent: CGFloat = 12
+    static let indent: CGFloat = 18
     static let leadingInset: CGFloat = 12
     static let iconSize: CGFloat = 14
     static let iconSpacing: CGFloat = 6
