@@ -7,7 +7,7 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Serialises the right pane's refreshes. Reading a panel costs a round trip
+/// Serialises tool-panel refreshes. Reading a panel costs a round trip
 /// per directory on a remote workspace, so a tick arriving while one refresh
 /// is in flight is folded into a single further pass rather than running
 /// alongside it — and never dropped, so a `cd` mid-refresh still lands.
@@ -428,389 +428,6 @@ struct ToolPanelView: View {
             ),
             String(localized: "Following the terminal job’s directory", table: "Sidebar")
         )
-    }
-}
-
-// MARK: - Shared panel chrome
-
-private struct PanelHeader: View {
-    let title: String
-    let subtitle: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(title)
-                .panelFont(size: 12, weight: .semibold)
-                .lineLimit(1)
-            if let subtitle, !subtitle.isEmpty {
-                Text(subtitle)
-                    .panelFont(size: 10)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-// MARK: - File tree
-
-private struct FileTreePanel: View {
-    @ObservedObject var model: FileTreeModel
-    @ObservedObject var git: GitStatusModel
-    let session: TerminalSession?
-    let sshHost: String?
-    /// Set while the tree follows the terminal's foreground job into another
-    /// checkout, so the header says why the root moved.
-    let rootBadge: (text: String, description: String)?
-    let currentFilePath: String?
-    let openFile: (String) -> Void
-    let openToSide: (String) -> Void
-    let onRename: (_ oldPath: String, _ newPath: String) -> Void
-    let refreshGitStatus: () -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                PanelHeader(title: model.rootName, subtitle: model.rootPath)
-                if let rootBadge {
-                    Text(verbatim: rootBadge.text)
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.primary.opacity(0.09))
-                        )
-                        .accessibilityLabel(rootBadge.description)
-                }
-                // Finder can only reach the local disk; while remote this
-                // path names a directory on another machine.
-                if sshHost == nil && session?.location.remoteConnection == nil {
-                    Button {
-                        NSWorkspace.shared.activateFileViewerSelecting(
-                            [URL(fileURLWithPath: model.rootPath)]
-                        )
-                    } label: {
-                        Image(systemName: "arrow.up.forward.app")
-                            .panelFont(size: 11)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help(String(localized: "Reveal in Finder", table: "Sidebar"))
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 8)
-
-            FileTreeScrollView(
-                model: model, git: git, session: session,
-                sshHost: sshHost, currentFilePath: currentFilePath,
-                openFile: openFile, openToSide: openToSide, onRename: onRename,
-                refreshGitStatus: refreshGitStatus
-            )
-        }
-    }
-}
-
-/// The same SwiftUI rows, 22 pt layout and hierarchy lines as the Git tree.
-/// The tree stays viewport-sized; only long names scroll horizontally.
-private struct FileTreeScrollView: View {
-    @ObservedObject var model: FileTreeModel
-    @ObservedObject var git: GitStatusModel
-    let session: TerminalSession?
-    let sshHost: String?
-    let currentFilePath: String?
-    let openFile: (String) -> Void
-    let openToSide: (String) -> Void
-    let onRename: (String, String) -> Void
-    let refreshGitStatus: () -> Void
-    @Environment(\.panelFontScale) private var fontScale
-
-    var body: some View {
-        ScrollView(.vertical) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(model.items) { item in
-                    FileTreeRow(
-                        model: model, git: git, item: item,
-                        session: session, sshHost: sshHost,
-                        currentFilePath: currentFilePath,
-                        openFile: openFile, openToSide: openToSide,
-                        onRename: onRename, refreshGitStatus: refreshGitStatus
-                    )
-                }
-            }
-            .padding(.bottom, 7)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
-        .id(model.rootPath)
-    }
-}
-
-private struct FileTreeRow: View {
-    @ObservedObject var model: FileTreeModel
-    @ObservedObject var git: GitStatusModel
-    let item: FileTreeModel.Item
-    let session: TerminalSession?
-    let sshHost: String?
-    let currentFilePath: String?
-    let openFile: (String) -> Void
-    let openToSide: (String) -> Void
-    let onRename: (_ oldPath: String, _ newPath: String) -> Void
-    let refreshGitStatus: () -> Void
-
-    @State private var editingName = ""
-    @FocusState private var fieldFocused: Bool
-    @Environment(\.panelFontScale) private var fontScale
-
-    private var isRenaming: Bool { model.renamingPath == item.path }
-
-    /// The file open in the active tab, so it reads as selected in the tree.
-    private var isCurrent: Bool { !item.isDirectory && item.path == currentFilePath }
-
-    private var gitDecoration: GitStatusModel.FileDecoration? {
-        git.fileDecoration(for: item.path, isDirectory: item.isDirectory)
-    }
-
-    private var displayRow: TreeDisplayModel.Row {
-        var row = item
-        row.status = gitDecoration
-        return row
-    }
-
-    /// Whether this row names a file on another machine. A connection that has
-    /// dropped still counts: the path is remote either way, and handing it to
-    /// Finder would open whatever sits at the same path locally.
-    private var isRemote: Bool {
-        sshHost != nil || session?.location.remoteConnection != nil
-    }
-
-    var body: some View {
-        if item.isDraft {
-            // The transient input keeps the same focused fill but has no hover/menu.
-            TreeRowSurface(
-                depth: item.depth, scale: fontScale,
-                focused: true, hoverEnabled: false
-            ) { _, layout in
-                draftRow
-                    .modifier(layout)
-            }
-        } else if isRenaming {
-            TreeRowSurface(
-                depth: item.depth, scale: fontScale, selected: isCurrent
-            ) { _, layout in
-                renameRow
-                    .modifier(layout)
-            }
-            .contextMenu { rowMenu }
-        } else {
-            semanticRow
-                .contextMenu { rowMenu }
-                .onDrag {
-                    NSItemProvider(object: URL(fileURLWithPath: item.path) as NSURL)
-                }
-        }
-    }
-
-    @ViewBuilder
-    private var rowMenu: some View {
-        if !item.isDirectory {
-            Button(String(localized: "Open", table: "Sidebar")) {
-                openFile(item.path)
-            }
-            Button(String(localized: "Open to the Side", table: "Sidebar")) {
-                openToSide(item.path)
-            }
-        }
-        // Finder and the default app can only reach the local disk.
-        if !isRemote {
-            Button(String(localized: "Open in Default App", table: "Sidebar")) {
-                NSWorkspace.shared.open(URL(fileURLWithPath: item.path))
-            }
-            Button(String(localized: "Reveal in Finder", table: "Sidebar")) {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
-            }
-        }
-        Button(String(localized: "Copy Path", table: "Sidebar")) {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(item.path, forType: .string)
-        }
-        if item.isDirectory {
-            Button(String(localized: "cd Here", table: "Sidebar")) {
-                session?.sendCommand("cd " + shellQuote(item.path) + "\n")
-            }
-            Divider()
-            Button(String(localized: "New File…", table: "Sidebar")) {
-                Task { await model.beginNewFile(in: item.path) }
-            }
-            Button(String(localized: "New Folder…", table: "Sidebar")) {
-                Task { await model.beginNewFolder(in: item.path) }
-            }
-        }
-        Divider()
-        Button(String(localized: "Rename", table: "Sidebar")) {
-            model.beginRename(item)
-        }
-        if isRemote {
-            // No Trash on the remote: Freedesktop semantics vary between
-            // distributions and a silently misplaced file is worse than an
-            // explicit delete the user confirmed.
-            Button(String(localized: "Delete…", table: "Sidebar"), role: .destructive) {
-                guard confirmRemoteDelete() else { return }
-                Task {
-                    await model.delete(item)
-                    refreshGitStatus()
-                }
-            }
-        } else {
-            Button(String(localized: "Move to Trash", table: "Sidebar"), role: .destructive) {
-                Task {
-                    await model.moveToTrash(item)
-                    refreshGitStatus()
-                }
-            }
-        }
-    }
-
-    /// Names the full remote path, because there is nothing to undo it with.
-    private func confirmRemoteDelete() -> Bool {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = String(
-            localized: "Delete “\(item.name)” on \(sshHost ?? session?.location.remoteConnection?.displayName ?? "the remote machine")?", table: "Sidebar",
-            comment: "Remote delete confirmation. The placeholders are a file name and a remote machine as user@host."
-        )
-        alert.informativeText = String(
-            localized: "\(item.path) will be deleted. This cannot be undone — a remote file does not go to the Trash.", table: "Sidebar",
-            comment: "Remote delete confirmation detail. The placeholder is a full path."
-        )
-        alert.addButton(withTitle: String(localized: "Delete", table: "Sidebar"))
-        alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
-        return alert.runModal() == .alertFirstButtonReturn
-    }
-
-    /// Commits an inline rename and, when the file actually moved, tells the
-    /// app to follow it in any open tabs. Guarded by `isRenaming` so the
-    /// commit-on-blur that fires right after Enter/Escape is a no-op.
-    private func commitRename() {
-        guard isRenaming else { return }
-        let oldPath = item.path
-        let newName = editingName
-        Task {
-            if let newPath = await model.rename(item, to: newName) {
-                onRename(oldPath, newPath)
-                refreshGitStatus()
-            }
-        }
-    }
-
-    /// Commits the inline new-file/folder input, opening a newly created file.
-    /// Guarded so the commit-on-blur after Enter/Escape is a no-op.
-    private func commitDraft() {
-        guard item.isDraft, model.draft != nil else { return }
-        let name = editingName
-        Task {
-            if let created = await model.commitDraft(name: name) {
-                openFile(created)
-            }
-            refreshGitStatus()
-        }
-    }
-
-    @ViewBuilder
-    private var semanticRow: some View {
-        if item.isDirectory {
-            TreeFolderRow(row: displayRow, scale: fontScale) {
-                Task { await model.toggle(item) }
-            }
-        } else {
-            TreeFileRow(row: displayRow, scale: fontScale, selected: isCurrent,
-                        open: { openFile(item.path) }) { _ in EmptyView() }
-        }
-    }
-
-    private var renameRow: some View {
-        HStack(spacing: TreeRowStyle.iconSpacing) {
-            leadingGlyphs
-            if !item.compactPrefix.isEmpty {
-                Text(item.compactPrefix.joined(separator: " / ") + " /")
-                    .panelFont(size: TreeRowStyle.fontSize)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-            nameField(String(localized: "Name", table: "Sidebar"))
-                .onSubmit { commitRename() }
-                .onKeyPress(.escape) { model.cancelRename(); return .handled }
-                .onChange(of: fieldFocused) {
-                    // Commit on blur (Finder-style); unchanged names no-op.
-                    if !fieldFocused { commitRename() }
-                }
-        }
-        .onAppear {
-            editingName = item.name
-            focusField()
-        }
-    }
-
-    private var draftRow: some View {
-        HStack(spacing: TreeRowStyle.iconSpacing) {
-            leadingGlyphs
-            nameField(item.isDirectory
-                ? String(localized: "Folder name", table: "Sidebar")
-                : String(localized: "File name", table: "Sidebar"))
-                .onSubmit { commitDraft() }
-                .onKeyPress(.escape) {
-                    Task { await model.cancelDraft() }
-                    return .handled
-                }
-                .onChange(of: fieldFocused) {
-                    // Blur commits a typed name, cancels an empty one (VS Code).
-                    if !fieldFocused { commitDraft() }
-                }
-        }
-        .onAppear {
-            editingName = ""
-            focusField()
-        }
-    }
-
-    private func nameField(_ placeholder: String) -> some View {
-        TextField(placeholder, text: $editingName)
-            .textFieldStyle(.plain)
-            .panelFont(size: 11.5)
-            .foregroundStyle(.primary)
-            .focused($fieldFocused)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-            .background(
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(Color(nsColor: Theme.background))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 3)
-                    .strokeBorder(Color(nsColor: Theme.accent).opacity(0.7), lineWidth: 1)
-            )
-    }
-
-    /// Grab focus on the next runloop tick — a context menu is still
-    /// dismissing when the input row appears, and a synchronous focus can be
-    /// stolen back as it tears down.
-    private func focusField() {
-        DispatchQueue.main.async { fieldFocused = true }
-    }
-
-    private var leadingGlyphs: some View {
-        Group {
-            if item.isDirectory {
-                TreeFolderIcon(expanded: model.isExpanded(item), scale: fontScale)
-            } else {
-                MaterialFileIconView(path: item.path, size: TreeRowStyle.iconSize)
-                    .frame(width: TreeRowStyle.iconSize)
-            }
-        }
     }
 }
 
@@ -1622,7 +1239,7 @@ private struct GitPanel: View {
                     )
                 }
                 if !filteredMergeEntries.isEmpty {
-                    GitSectionHeader(
+                    PanelSectionHeader(
                         title: String(localized: "MERGE CHANGES", table: "Sidebar"),
                         count: filteredMergeEntries.count,
                         isCollapsed: $mergeCollapsed,
@@ -1634,7 +1251,7 @@ private struct GitPanel: View {
                     }
                 }
                 if !filteredStagedEntries.isEmpty {
-                    GitSectionHeader(
+                    PanelSectionHeader(
                         title: String(localized: "STAGED CHANGES", table: "Sidebar"),
                         count: filteredStagedEntries.count,
                         isCollapsed: $stagedCollapsed,
@@ -1654,7 +1271,7 @@ private struct GitPanel: View {
                     }
                 }
                 if !filteredChangedEntries.isEmpty {
-                    GitSectionHeader(
+                    PanelSectionHeader(
                         title: String(localized: "CHANGES", table: "Sidebar"),
                         count: filteredChangedEntries.count,
                         isCollapsed: $changesCollapsed,
@@ -1681,7 +1298,7 @@ private struct GitPanel: View {
                     }
                 }
                 if filterText.isEmpty, !model.recentCommits.isEmpty {
-                    GitSectionHeader(
+                    PanelSectionHeader(
                         title: String(localized: "RECENT COMMITS", table: "Sidebar"),
                         count: model.recentCommits.count,
                         isCollapsed: $historyCollapsed,
@@ -2222,133 +1839,6 @@ private final class NonemptyTextFieldValidator: NSObject, NSTextFieldDelegate {
     }
 }
 
-private struct GitSectionHeader: View {
-    struct Action: Identifiable {
-        let id = UUID()
-        let systemImage: String
-        let help: String
-        let isLoading: Bool
-        let perform: () -> Void
-
-        init(
-            systemImage: String,
-            help: String,
-            isLoading: Bool = false,
-            perform: @escaping () -> Void
-        ) {
-            self.systemImage = systemImage
-            self.help = help
-            self.isLoading = isLoading
-            self.perform = perform
-        }
-    }
-
-    let title: String
-    let count: Int
-    @Binding var isCollapsed: Bool
-    let actions: [Action]
-    var actionsDisabled = false
-    /// When set, a small "?" after the title opens this in a popover.
-    var helpText: String?
-
-    @State private var isHovering = false
-    @State private var isShowingHelp = false
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Button {
-                isCollapsed.toggle()
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.right")
-                        .panelFont(size: 7, weight: .semibold)
-                        .rotationEffect(.degrees(isCollapsed ? 0 : 90))
-                    Text(title)
-                        .panelFont(size: 9.5, weight: .medium)
-                }
-                .foregroundStyle(Color.secondary.opacity(0.7))
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(title)
-            .accessibilityValue(isCollapsed ? "Collapsed" : "Expanded")
-
-            if let helpText {
-                Button {
-                    isShowingHelp.toggle()
-                } label: {
-                    Image(systemName: "questionmark.circle")
-                        .panelFont(size: 9)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 14, height: 14)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(String(localized: "About \(title)", table: "Sidebar"))
-                .popover(isPresented: $isShowingHelp, arrowEdge: .bottom) {
-                    Text(helpText)
-                        .panelFont(size: 11)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(width: 230, alignment: .leading)
-                        .padding(12)
-                }
-            }
-
-            ForEach(actions) { action in
-                Button(action: action.perform) {
-                    Group {
-                        if action.isLoading {
-                            ProgressView()
-                                .controlSize(.mini)
-                                .scaleEffect(0.7)
-                        } else {
-                            Image(systemName: action.systemImage)
-                                .panelFont(size: 9, weight: .medium)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .frame(width: 16, height: 16)
-                    .contentShape(RoundedRectangle(cornerRadius: 3))
-                }
-                .buttonStyle(.plain)
-                .disabled(actionsDisabled)
-                .opacity(action.isLoading ? 1 : (actionsDisabled ? 0.3 : (isHovering ? 1 : 0.55)))
-                .help(action.help)
-                .accessibilityLabel(
-                    action.isLoading
-                        ? String(localized: "\(action.help), in progress", table: "Sidebar")
-                        : action.help
-                )
-            }
-
-            Spacer(minLength: 0)
-
-            if count > 0 {
-                Text(String(localized: "\(count)", table: "Sidebar"))
-                    .panelFont(size: 9, weight: .medium)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.primary.opacity(0.07)))
-            }
-        }
-        // Fixed height so the taller hover buttons don't grow the header.
-        .frame(height: 16)
-        .padding(.horizontal, 8)
-        .padding(.top, 8)
-        .padding(.bottom, 3)
-        .onHover { isHovering = $0 }
-        .contextMenu {
-            ForEach(actions) { action in
-                Button(action.help, action: action.perform)
-                    .disabled(actionsDisabled)
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(String(localized: "\(title), \(count) items", table: "Sidebar"))
-        .accessibilityValue(isCollapsed ? "Collapsed" : "Expanded")
-    }
-}
 
 private struct GitEntryRow: View {
     enum Kind: String {
@@ -2594,7 +2084,7 @@ private struct InfoPanel: View {
     @ViewBuilder
     private var currentDirectorySection: some View {
         if model.rootPath != model.projectRootPath {
-            GitSectionHeader(
+            PanelSectionHeader(
                 title: String(localized: "CURRENT DIRECTORY", table: "Sidebar"), count: 0,
                 isCollapsed: $currentDirectoryCollapsed, actions: []
             )
@@ -2607,7 +2097,7 @@ private struct InfoPanel: View {
     @ViewBuilder
     private var projectDirectorySection: some View {
         if !model.projectRootPath.isEmpty {
-            GitSectionHeader(
+            PanelSectionHeader(
                 title: projectDirectoryTitle,
                 count: 0,
                 isCollapsed: $projectDirectoryCollapsed, actions: [],
@@ -2758,7 +2248,7 @@ private struct InfoPanel: View {
 
     @ViewBuilder
     private var processesSection: some View {
-        GitSectionHeader(
+        PanelSectionHeader(
             title: String(localized: "PROCESSES", table: "Sidebar"),
             count: model.processes.count,
             isCollapsed: $processesCollapsed,
@@ -2781,7 +2271,7 @@ private struct InfoPanel: View {
 
     @ViewBuilder
     private var portsSection: some View {
-        GitSectionHeader(
+        PanelSectionHeader(
             title: String(localized: "PORTS", table: "Sidebar"),
             count: model.ports.count,
             isCollapsed: $portsCollapsed,
@@ -2973,6 +2463,3 @@ private struct InfoPortRow: View {
     }
 }
 
-private func shellQuote(_ path: String) -> String {
-    "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-}
