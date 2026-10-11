@@ -352,7 +352,11 @@ private struct DockTabGroupView: View {
         ) { showingPanelPicker.toggle() }
         .popover(isPresented: $showingPanelPicker, arrowEdge: .bottom) {
             VStack(spacing: 2) {
-                ForEach(availableActions, id: \.self) { action in
+                ForEach(availableActions.indices, id: \.self) { index in
+                    let action = availableActions[index]
+                    if index > 0 && (availableActions[index - 1].item == nil) != (action.item == nil) {
+                        Divider()
+                    }
                     Button {
                         showingPanelPicker = false
                         if let item = action.item { add(item) } else { addSession() }

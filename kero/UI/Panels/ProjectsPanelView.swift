@@ -54,11 +54,6 @@ struct ProjectsPanelView: View {
                 ) { showingProjectPicker.toggle() }
                 .popover(isPresented: $showingProjectPicker, arrowEdge: .top) {
                     VStack(spacing: 2) {
-                        Button(String(localized: "New Session", table: "Interface")) {
-                            showingProjectPicker = false
-                            manager.newSession()
-                        }
-                        Divider()
                         Button(String(localized: "Add Files or Folders…", table: "Sidebar")) {
                             showingProjectPicker = false
                             manager.chooseLocalItems()
