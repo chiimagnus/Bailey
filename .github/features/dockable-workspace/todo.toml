@@ -1,5 +1,5 @@
 version = 1
-current_task_id = ""
+current_task_id = "P2-T2"
 
 [[tasks]]
 id = "P1-T1"
@@ -12,15 +12,15 @@ note = "状态回归PASS，Debug编译通过，布局快照恢复与旧默认逻
 [[tasks]]
 id = "P2-T1"
 title = "统一原生窗口布局和标签交互"
-status = "blocked"
+status = "in_progress"
 plan = "plan-p2.md#p2-t1"
 commit = ""
-note = "代码已提交59b1580；签名Debug及Dock回归PASS。当前Kero.app有codex agents任务运行，等待安全安装后真机拖拽、焦点及恢复验收。"
+note = "自由停靠已提交59b1580；隔离验收入口ebb7b4b；原始Kero分隔线/标签栏视觉修复4f8041f已真机通过，后续跨区拖拽/SSH/Diff仍待验收"
 
 [[tasks]]
 id = "P2-T2"
 title = "设计对照回归与文档"
-status = "blocked"
+status = "in_progress"
 plan = "plan-p2.md#p2-t2"
 commit = ""
-note = "文档已提交93af1c1、六篇链接检查PASS；待与v3真实截图比对、验收Diff切换性能后才能关闭任务。"
+note = "已对照原Kero截图完成1pt分隔线、7pt拖拽区、紧凑+位置和双击宽度复位，并已更新audit-p2；其余 v3 端到端验收继续"

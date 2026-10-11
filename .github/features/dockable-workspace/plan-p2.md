@@ -20,7 +20,7 @@
 
 **Files:** docs/PRODUCT.md, docs/TERMINAL.md, docs/PROJECTS.md, docs/SETTINGS.md, UI issues as found
 
-逐项与 v3 比对：坐标预览、双击均分、键盘/工具条入口、隐藏与空区恢复、重启布局；修正落差并做针对性回归。记录尚无法验证的风险，不宣称假验收。
+逐项与 v3 比对：坐标预览、侧栏边界双击复位及普通分隔线均分、键盘/工具条入口、隐藏与空区恢复、重启布局；修正落差并做针对性回归。记录尚无法验证的风险，不宣称假验收。
 
 **Validation:** 旧快照载入、项目切换、签名 Debug 真机截图、git diff --check。
 **Commit:** 分逻辑提交。

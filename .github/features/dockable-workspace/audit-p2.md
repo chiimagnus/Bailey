@@ -24,6 +24,19 @@
 
 ## 发现项
 
+## 发现 F-06
+
+- 任务：`P2-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`kero/UI/WorkspaceDockView.swift`
+- 摘要：`停靠分隔线画成4pt粗条且新建按钮被贪婪标签栏挤到中间`
+- 风险：`偏离原Kero细线/左侧紧凑布局，鼠标命中与视觉都不顺手`
+- 预期修复：`分割线采用1pt细线和7pt透明拖拽热区，沿用原标签滚动区固定理想宽度；侧栏双击回到原默认220/240pt`
+- 验证：`隔离Debug真机点击+后按钮紧跟第二标签；左/右分别拖动和双击恢复，读取持久化fraction确认；签名Debug通过`
+- 解决证据：`4f8041f：隔离Kero真机新建第二标签+按钮x382到x455；左右拖动fraction变更及双击220pt/240pt复位，xcodebuild和codesign PASS`
+
+
 ## 发现 F-05
 
 - 任务：`P2-T2`
@@ -43,10 +56,10 @@
 - 严重级别：`High`
 - 状态：`Open`
 - 位置：`/Applications/Kero.app`
-- 摘要：`签名 Debug 安装与真实 GUI 交互尚未验收`
+- 摘要：`隔离签名 Debug 真机已开展，正式安装及完整 GUI 路径尚未验收`
 - 风险：`当前 Kero 有正在执行的 codex agents，会话中断会造成用户工作损失；不能在此状态替换 App`
 - 预期修复：`等待任务结束或经用户明确同意中断后，安全退出并安装唯一签名 Debug Kero.app；执行真机拖拽及设计稿逐项比对`
-- 验证：`xcodebuild Debug PASS 且 codesign --verify PASS；真机结果当前未验证`
+- 验证：`xcodebuild Debug、codesign PASS；隔离实例原生按钮、分隔线拖动及双击已验收；跨组拖拽/SSH/Diff 与正式安装待验收`
 - 解决证据：`<commit diff note or test/build output>`
 
 
@@ -93,11 +106,12 @@
 
 | 设计验收项 | 源码证据 | 状态 |
 | --- | --- | --- |
-| 采用 Kero 现有圆角轻底色标签 | 直接复用 `PaneTabItem`、`TabItemChrome`，无独立标签样式 | 静态确认，待截图 |
+| 采用 Kero 现有圆角轻底色标签 | 直接复用 `PaneTabItem`、`TabItemChrome`，无独立标签样式 | 已与原版截图及隔离 Debug 截图比对；工具面板更多布局仍待验收 |
 | 默认左项目、中终端、右 Info/Files/Git | `DockWorkspaceModel.defaults` 及 `WorkspaceDockView` | 状态回归通过，待截图 |
 | 标签可跨区移动、合并及排序 | `DockWorkspaceModel.move` 与 `DockTabDragCoordinator` | 状态回归通过，待真机拖动 |
 | 上下左右靠边停靠、只显示单片预览 | `DockDropHitTest.edge` 与 `dropPreview` | 四向几何回归通过，待真机预览 |
-| 分隔线调节和双击均分 | `DockTreeView.divider` | 编译确认，待真机操作 |
+| 1pt 分隔线、7pt 透明热区，左右侧栏拖动及双击复位 | `DockTreeView.divider` | **隔离 Debug 真机通过**：左 220pt、右 240pt；普通嵌套分屏另行验收 |
+| 新建终端“＋”紧跟标签、不在中央 | 按原版的 `fixedSize` 与内容宽度上限布局 | **隔离 Debug 真机通过**：单标签旁“＋”x=382，新增第二标签后“＋”x=455 |
 | ⌘B／⇧⌘B 收起并恢复，空区添加面板 | `DockNode.visible`、`TerminalManager.togglePanel`、`emptyGroup` | 状态回归通过，待快捷键实测 |
 | 不破坏终端、SSH、文件及 Git 语义 | 复用 `PaneLayoutView`、`SidebarView`、`FileTreePanel`、`GitPanel` | 编译和树回归通过，待端到端 |
 | 布局与侧栏宽度迁移、重启恢复 | `ProjectSnapshot.dock`、旧宽度比例迁移 | Codable 与几何回归通过，待重启复现 |
@@ -109,6 +123,8 @@
 - `59b1580`：修复多停靠组同时显示时的终端焦点与批量关闭范围；删除旧主标签栏和固定右侧标签栏；统一拖拽落点、状态持久化、完整面板复用。
 - `59b1580`：初次无 Dock 快照时继承 `leftSidebarWidth`／`rightSidebarWidth`；修复在鼠标松开时使用最后落点，并保留原主标题栏最小拖拽区域。
 - `93af1c1`：更新六份中文使用文档，确保操作、恢复与验收限制表述准确。
+- `ebb7b4b`：同一 Debug 应用增加会话与终端历史隔离启动入口，避免干扰正式 Kero 的 Codex 命令及 SSH 转发。
+- `4f8041f`：依据原始界面恢复 1pt 分隔线、7pt 透明拖拽热区、紧跟标签的“＋”及侧栏双击复位；真实鼠标事件与布局快照均通过。
 
 ## 验证日志
 
@@ -120,17 +136,19 @@
 - `python3` 校验 Interface.xcstrings 新增六条简中译文 → PASS
 - 六份文档内相对 Markdown 链接存在性校验 → PASS
 - `git diff --check` → PASS
-- `/Applications/Kero.app` 安装、拖拽、重启截图及 Diff 切换 → **未执行，受运行中的 Codex 进程阻塞**
+- 同一签名 Debug `--isolated-ui-test` 并行实例 → PASS（正式 Kero 仍运行；快照及终端历史另存，不启动保存的 SSH 转发）
+- `Peekaboo` 原生 GUI → PASS：新增终端后“＋”依次紧跟标签；左侧分隔线拖动 fraction 0.1223→0.1946，双击恢复至 0.122290（220pt）；右侧拖动 fraction 0.8479→0.7782，双击恢复至 0.847909（240pt）。
+- `/Applications/Kero.app` 正式安装、跨组拖拽/SSH/Diff 切换 → **仍待验收；正式 Kero 内有活跃会话，暂不替换**
 
 ## Gate（是否允许进入下一阶段）
 
 - 结论：`No-Go`（仅阻止标记为全部验收通过；已保存源码提交）
-- 理由：已有真实用户任务在 Kero 终端运行，不能替换 App 来做规定的签名 Debug 真机操作；实际 GUI 验收是不可省略的关口。
+- 理由：隔离 Debug 实例已验证视觉、标签新增和左右侧栏手势，但跨区拖拽、SSH/Diff、正式安装与重启回归未全部完成。正式 Kero 的活动会话不受影响。
 
 ## 最终状态与剩余风险
 
-- 当前状态：`Open`；P2-T1 与 P2-T2 均 blocked，F-01/02/03 修正但真实交互待确认，F-04/05 保持 Open。
-- 剩余风险：安装会中断 `codex agents` 活动会话；拖拽是否符合实际点击／键盘／坐标行为、Diff 恢复性能尚不能作完成声明。用户结束或允许终止任务后，安装单一 `/Applications/Kero.app`、逐项截图并与 v3 对照，修正发现问题后重新审计 Gate。
+- 当前状态：`Open`；P2-T1 进行中、P2-T2 待完成；分隔线和按钮视觉验收通过，F-04/05 仍 Open。
+- 剩余风险：尚未将新构建安装到 `/Applications/Kero.app`，不能中断其活动命令。继续用隔离签名 Debug 做跨组拖拽、键盘/焦点、Git/SSH/Diff 与重启测试；最终安装另择可安全退出正式会话时进行。
 
 ## 审计约束
 
