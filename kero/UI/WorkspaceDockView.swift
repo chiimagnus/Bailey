@@ -365,7 +365,8 @@ private struct DockTabGroupView: View {
                         .padding(.leading, 76)
                     }
                     tabStrip(maxWidth: group.region == .main
-                        ? maxMainTabWidth(in: geometry.size.width) : nil)
+                        ? maxMainTabWidth(in: geometry.size.width)
+                        : group.region == .right ? max(0, geometry.size.width - 8) : nil)
                     if group.region == .main {
                         ChromeIconButton(
                             systemImage: "plus",
@@ -391,16 +392,11 @@ private struct DockTabGroupView: View {
                         ) { manager.toggleSidebar() }
                     } else {
                         Spacer(minLength: 0)
-                        if group.region == .right {
-                            ChromeIconButton(
-                                systemImage: "sidebar.right",
-                                tooltip: String(localized: "Toggle Right Sidebar (⇧⌘B)", table: "Interface")
-                            ) { manager.toggleSidebar() }
-                        }
                     }
                 }
             }
             .padding(.trailing, 8)
+            .frame(height: geometry.size.height)
         }
     }
 
@@ -445,10 +441,11 @@ private struct DockTabGroupView: View {
                 .padding(.leading, group.region == .main ? 8 : 4)
                 .padding(.trailing, 2)
             }
+            .scrollDisabled(group.region == .right)
             .frame(maxWidth: maxWidth, alignment: .leading)
-            .fixedSize(horizontal: maxWidth != nil, vertical: false)
+            .fixedSize(horizontal: group.region == .main && maxWidth != nil, vertical: false)
             .onChange(of: group.selected) { _, selected in
-                if let selected { scrollProxy.scrollTo(selected) }
+                if group.region != .right, let selected { scrollProxy.scrollTo(selected) }
             }
         }
     }
