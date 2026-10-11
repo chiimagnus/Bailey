@@ -1,0 +1,154 @@
+version = 1
+current_task_id = ""
+
+[[tasks]]
+id = "P1-T1"
+title = "固定状态所有权与行为基线"
+status = "pending"
+plan = "plan-p1.md#p1-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T2"
+title = "共享树模型与行组件归位"
+status = "pending"
+plan = "plan-p1.md#p1-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T3"
+title = "文件树模型归入 Files"
+status = "pending"
+plan = "plan-p1.md#p1-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T4"
+title = "Info 数据模型归位"
+status = "pending"
+plan = "plan-p1.md#p1-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T1"
+title = "核对面板生命周期与异步回写"
+status = "pending"
+plan = "plan-p2.md#p2-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T2"
+title = "抽离 Files 面板与共享标题"
+status = "pending"
+plan = "plan-p2.md#p2-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T3"
+title = "抽离 Git 面板及确认交互"
+status = "pending"
+plan = "plan-p2.md#p2-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T4"
+title = "抽离 Info 面板与子行"
+status = "pending"
+plan = "plan-p2.md#p2-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T5"
+title = "收敛面板工作区上下文与刷新责任"
+status = "pending"
+plan = "plan-p2.md#p2-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T1"
+title = "项目显式接收初始工作区配置"
+status = "pending"
+plan = "plan-p3.md#p3-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T2"
+title = "内部窗格模型归入 Workspace"
+status = "pending"
+plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T3"
+title = "窗口协调者源码归位"
+status = "pending"
+plan = "plan-p3.md#p3-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T4"
+title = "抽离底部工具栏及原生控件"
+status = "pending"
+plan = "plan-p3.md#p3-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T5"
+title = "抽离标签外观与重命名控件"
+status = "pending"
+plan = "plan-p3.md#p3-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T1"
+title = "审查 Git 本地与 SSH 执行契约"
+status = "pending"
+plan = "plan-p4.md#p4-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T2"
+title = "提取 Git 无状态命令执行"
+status = "pending"
+plan = "plan-p4.md#p4-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T3"
+title = "收敛 Git 快照本地与远端策略"
+status = "pending"
+plan = "plan-p4.md#p4-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T1"
+title = "全仓目录与长期文档归属审查"
+status = "pending"
+plan = "plan-p5.md#p5-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T2"
+title = "端到端验收并关闭重构风险"
+status = "pending"
+plan = "plan-p5.md#p5-t2"
+commit = ""
+note = ""
