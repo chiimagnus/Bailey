@@ -136,16 +136,7 @@ final class TabSplitDragCoordinator: ObservableObject {
 }
 
 enum BottomToolbarLayout {
-    static let idealHeight: CGFloat = 32
-
-    static func height(for session: TerminalSession?) -> CGFloat {
-        guard let cellHeight = session?.terminalCellSize?.height,
-              cellHeight.isFinite, cellHeight > 0 else {
-            return idealHeight
-        }
-        let rowCount = max(1, (idealHeight / cellHeight).rounded())
-        return rowCount * cellHeight
-    }
+    static let height: CGFloat = 24
 }
 
 struct ContentView: View {
@@ -167,16 +158,12 @@ struct ContentView: View {
         )
     }
 
-    private var bottomToolbarHeight: CGFloat {
-        BottomToolbarLayout.height(for: manager.selectedSession)
-    }
-
     var body: some View {
         HStack(spacing: 0) {
             if manager.isLeftSidebarVisible {
                 SidebarView(
                     manager: manager,
-                    bottomBarHeight: bottomToolbarHeight
+                    bottomBarHeight: BottomToolbarLayout.height
                 )
             }
 
@@ -243,7 +230,7 @@ struct ContentView: View {
                     && (git.isRepo || settings.toolbarVisibility == .always) {
                     BottomToolbarView(
                         model: git,
-                        height: bottomToolbarHeight,
+                        height: BottomToolbarLayout.height,
                         toggleGitPanel: { manager.togglePanel(.git) },
                         hideToolbar: { settings.toolbarVisibility = .hide }
                     )

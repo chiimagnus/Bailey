@@ -107,7 +107,6 @@ protocol TerminalBackendSurface: NSView {
 protocol TerminalBackendEvents: AnyObject {
     func terminalDidChangeTitle(_ title: String)
     func terminalDidChangeWorkingDirectory(_ path: String)
-    func terminalDidChangeCellSize(_ size: CGSize)
     func terminalDidRingBell()
     func terminalDidReportShellIntegration(_ event: TerminalShellIntegrationEvent)
 

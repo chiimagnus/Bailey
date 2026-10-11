@@ -23,7 +23,6 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     @Published var workingDirectory: String?
     @Published var hasExited = false
     @Published private(set) var commandLifecycle = TerminalCommandLifecycle()
-    @Published private(set) var terminalCellSize: CGSize?
     /// Recognized coding agent occupying this terminal, if any. The monitor
     /// reconciles foreground process identity with explicit lifecycle events.
 
@@ -712,12 +711,6 @@ extension TerminalSession: TerminalBackendEvents {
         guard !path.isEmpty else { return }
         workingDirectory = path.hasPrefix("/")
             ? URL(fileURLWithPath: path).absoluteString : path
-    }
-
-    func terminalDidChangeCellSize(_ size: CGSize) {
-        guard size.width > 0, size.height > 0,
-              terminalCellSize != size else { return }
-        terminalCellSize = size
     }
 
     func terminalDidRingBell() {

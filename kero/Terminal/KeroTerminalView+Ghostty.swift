@@ -168,19 +168,6 @@ extension KeroTerminalView: TerminalSurfacePwdDelegate {
     }
 }
 
-extension KeroTerminalView: TerminalSurfaceGridResizeDelegate {
-    func terminalDidResize(_ size: TerminalGridMetrics) {
-        let scale = window?.backingScaleFactor
-            ?? NSScreen.main?.backingScaleFactor
-            ?? 2
-        guard scale > 0 else { return }
-        events?.terminalDidChangeCellSize(CGSize(
-            width: CGFloat(size.cellWidthPixels) / scale,
-            height: CGFloat(size.cellHeightPixels) / scale
-        ))
-    }
-}
-
 extension KeroTerminalView: TerminalSurfaceBellDelegate {
     func terminalDidRingBell() {
         events?.terminalDidRingBell()
