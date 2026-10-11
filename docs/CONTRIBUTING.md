@@ -49,6 +49,8 @@ xcrun swiftc -swift-version 5 -o build/check-tree-row-hit-testing \
 第二项在屏幕外的原生窗口中测试共享行，不安装或注册另一份应用。
 两项检查覆盖结构和命中范围，但不能代替视觉、焦点与真实操作验收。
 
+涉及文件打开、语法高亮、输入、Git 刷新、diff 或大树响应时，按[性能](PERFORMANCE.md)区分冷/热路径和用户可见阶段，记录前后测量与正确性回归。编译通过、骨架出现或 FPS 读数不能代替性能证据；没有测量时明确标记未测。
+
 ## 真机验收
 
 代码改动须将签名 Debug 构建安装到 `/Applications/Kero.app`，检查受影响行为：
@@ -82,6 +84,7 @@ xcrun swiftc -swift-version 5 -o build/check-tree-row-hit-testing \
 - 功能或操作入口变化：更新[使用指南](README.md)。
 - 定位、项目范围或交互原则变化：更新[产品原则](PRODUCT.md)。
 - 构建、验收或提交要求变化：更新本文；翻译方式变化：更新[本地化](LOCALIZATION.md)。
+- 性能路径、缓存、调度、容量边界或测量方式变化：更新[性能](PERFORMANCE.md)。
 - 依赖、补丁或生成流程变化：更新[依赖与生成资源](DEPENDENCIES.md)。
 - 报告渠道或安全边界变化：更新[安全与漏洞报告](SECURITY.md)。
 

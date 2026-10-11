@@ -64,4 +64,4 @@ Git 面板分别显示未提交、已暂存和最近提交。点击文件查看�
 
 ## 参与维护
 
-[开发与验证](CONTRIBUTING.md) · [产品原则](PRODUCT.md) · [本地化](LOCALIZATION.md) · [依赖与生成资源](DEPENDENCIES.md)
+[开发与验证](CONTRIBUTING.md) · [性能](PERFORMANCE.md) · [产品原则](PRODUCT.md) · [本地化](LOCALIZATION.md) · [依赖与生成资源](DEPENDENCIES.md)

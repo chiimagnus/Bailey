@@ -12,6 +12,7 @@
 
 - [使用指南](docs/README.md)：项目、终端、文件、Git、浏览器与设置。
 - [产品原则](docs/PRODUCT.md)：定位和设计取舍。
+- [性能](docs/PERFORMANCE.md)：编辑器、语法高亮与 Git 的优化优先级和测量方法。
 - [本地化](docs/LOCALIZATION.md)：界面翻译规则。
 - [依赖与生成资源](docs/DEPENDENCIES.md)：本地补丁、升级和资源来源。
 - [安全与漏洞报告](docs/SECURITY.md)：安全边界和私下报告方式。
