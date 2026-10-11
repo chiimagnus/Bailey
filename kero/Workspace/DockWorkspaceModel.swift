@@ -134,6 +134,25 @@ indirect enum DockNode {
         }
     }
 
+    func removingEmptyExtras() -> DockNode? {
+        switch self {
+        case .group(let group):
+            return group.items.isEmpty && group.region == .extra ? nil : self
+        case .split(var split):
+            let first = split.first.removingEmptyExtras()
+            let second = split.second.removingEmptyExtras()
+            switch (first, second) {
+            case (let a?, let b?):
+                split.first = a
+                split.second = b
+                return .split(split)
+            case (let a?, nil): return a
+            case (nil, let b?): return b
+            case (nil, nil): return nil
+            }
+        }
+    }
+
     func settingFraction(_ splitID: UUID, _ fraction: Double) -> DockNode {
         switch self {
         case .group: return self
@@ -301,7 +320,7 @@ final class DockWorkspaceModel: ObservableObject {
                 }
             }
         }
-        root = updated
+        root = updated.removingEmptyExtras() ?? Self.defaults()
     }
 
     func move(_ item: DockItem, into destinationID: UUID, edge: DockEdge? = nil, index: Int? = nil) -> Bool {
@@ -318,8 +337,13 @@ final class DockWorkspaceModel: ObservableObject {
             )
         } else {
             guard let target = remaining.group(id: destinationID) else { return false }
+            let sourceIndex = source.items.firstIndex(of: item)
             root = remaining.editingGroup(target.id) { group in
-                let insertAt = min(max(index ?? group.items.count, 0), group.items.count)
+                var insertAt = index ?? group.items.count
+                if source.id == destinationID, let sourceIndex, sourceIndex < insertAt {
+                    insertAt -= 1
+                }
+                insertAt = min(max(insertAt, 0), group.items.count)
                 group.items.insert(item, at: insertAt)
                 group.selected = item
             }
