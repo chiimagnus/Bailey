@@ -305,6 +305,7 @@ private struct DockTabGroupView: View {
     @ObservedObject var dragging: DockTabDragCoordinator
     @ObservedObject private var settings = AppSettings.shared
     @State private var renamingTabID: UUID?
+    @State private var showingPanelPicker = false
 
     private var active: DockItem? { group.selected ?? group.items.first }
 
@@ -350,7 +351,8 @@ private struct DockTabGroupView: View {
             HStack(spacing: 4) {
                 if group.region == .left {
                     WindowDragArea().frame(width: 76)
-                    tabStrip()
+                    tabStrip(maxWidth: max(0, geometry.size.width - (manager.isFPSCounterVisible ? 194 : 146)))
+                    panelAddButton
                     if manager.isFPSCounterVisible { FPSBadge() }
                     ChromeIconButton(
                         systemImage: "sidebar.left",
@@ -366,7 +368,7 @@ private struct DockTabGroupView: View {
                     }
                     tabStrip(maxWidth: group.region == .main
                         ? maxMainTabWidth(in: geometry.size.width)
-                        : group.region == .right ? max(0, geometry.size.width - 8) : nil)
+                        : group.region == .right ? max(0, geometry.size.width - 36) : nil)
                     if group.region == .main {
                         ChromeIconButton(
                             systemImage: "plus",
@@ -391,6 +393,7 @@ private struct DockTabGroupView: View {
                             tooltip: String(localized: "Toggle Right Sidebar (⇧⌘B)", table: "Interface")
                         ) { manager.toggleSidebar() }
                     } else {
+                        panelAddButton
                         Spacer(minLength: 0)
                     }
                 }
@@ -400,8 +403,40 @@ private struct DockTabGroupView: View {
         }
     }
 
-    /// Preserve the original header's compact strip: the "+" follows the last
-    /// tab, and only a full strip begins scrolling.
+    private var panelAddButton: some View {
+        ChromeIconButton(
+            systemImage: "plus",
+            tooltip: String(localized: "Add Panel", table: "Interface"),
+            font: .system(size: 10, weight: .semibold),
+            iconSize: 14
+        ) { showingPanelPicker.toggle() }
+        .disabled(availablePanels.isEmpty)
+        .popover(isPresented: $showingPanelPicker, arrowEdge: .bottom) {
+            VStack(spacing: 2) {
+                ForEach(availablePanels, id: \.self) { item in
+                    Button {
+                        showingPanelPicker = false
+                        add(item)
+                    } label: {
+                        Label(item.label(project: project), systemImage: item.symbol)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(7)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(6)
+            .frame(width: 170)
+        }
+    }
+
+    private var availablePanels: [DockItem] {
+        [DockItem.projects, .info, .files, .git].filter { !group.items.contains($0) }
+    }
+
+    /// Keep the original header spacing: the "+" follows the tab strip,
+    /// and overflowing tabs remain scrollable.
     private func maxMainTabWidth(in width: CGFloat) -> CGFloat {
         let hiddenSidebarInset: CGFloat = manager.isLeftSidebarVisible ? 0 : 108
         return max(0, width - hiddenSidebarInset - 168
@@ -441,7 +476,6 @@ private struct DockTabGroupView: View {
                 .padding(.leading, group.region == .main ? 8 : 4)
                 .padding(.trailing, 2)
             }
-            .scrollDisabled(group.region == .right)
             .frame(maxWidth: maxWidth, alignment: .leading)
             .fixedSize(horizontal: group.region == .main && maxWidth != nil, vertical: false)
             .onChange(of: group.selected) { _, selected in
