@@ -1,20 +1,18 @@
 # AGENTS.md
 
-Kero is a native macOS terminal workspace with projects, panes, a file tree, a git panel,
-an editor, and a diff viewer. SwiftUI is the default UI framework; AppKit remains for
-native terminal integration and platform capabilities SwiftUI cannot cover.
+Kero 是原生 macOS 终端工作区，包含项目、窗格、文件、Git、编辑器和差异查看器。
 
-- [PRODUCT.md](PRODUCT.md) — who Kero is for; product and design calls follow from it.
-- [CONTRIBUTING.md](CONTRIBUTING.md) — build, verify, and what a PR must say. Read before opening one.
-- No updater or publishing pipeline. Local builds are described in CONTRIBUTING.md.
+- [产品原则](PRODUCT.md)：产品与设计决策的依据。
+- [开发与验证](docs/CONTRIBUTING.md)：构建、验收和提交要求，动手前先读。
 
-## Verify
+## 验证
 
-[CONTRIBUTING.md](CONTRIBUTING.md) owns the build and verification procedure. Do not stop at compilation: use its signed Debug install and real-app checks. Never replace Kero while active commands or unsaved work would be lost; clean temporary installation copies after verification.
+[开发与验证](docs/CONTRIBUTING.md) 是验证流程的唯一归属。
+代码改动不能止于编译：安装签名 Debug 并做真机验收。替换应用前保护运行命令和未保存编辑，验收后清理临时副本。
 
-## Conventions
+## 约定
 
-- Match the file you're in. Comments explain *why* — keep them, add them.
-- Prefer SwiftUI for layout, controls, file trees and Git trees. Files and Git must reuse the shared tree-row interaction/layout instead of drifting into separate hover, padding, guide, or scrolling behavior.
-- Use AppKit only where platform integration requires it, such as the native terminal.
-  Preserve responsiveness with lazy rendering and verify large-tree performance.
+- 延续所在文件的风格；注释解释原因，不复述代码。
+- 布局和控件优先使用 SwiftUI；原生终端等平台集成需要时才用 AppKit。
+- 文件与所有 Git 区域必须复用共享树模型、语义行、交互和布局，不独立实现压缩目录、状态、悬停、内边距、竖线或滚动。
+- 保留懒加载，验证大树响应。

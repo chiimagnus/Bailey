@@ -29,7 +29,7 @@ cd kero
 open kero.xcodeproj
 ```
 
-`prepare-ghostty.sh` downloads the pinned GhosttyKit only when it is missing, keeps it under `Vendor/GhosttyKit`, and reuses it on later builds. Press **Cmd+B** in Xcode for normal development; see [CONTRIBUTING.md](CONTRIBUTING.md) for the canonical command-line build and verification steps.
+`prepare-ghostty.sh` downloads the pinned GhosttyKit only when it is missing, keeps it under `Vendor/GhosttyKit`, and reuses it on later builds. Press **Cmd+B** in Xcode for normal development; see [开发与验证](docs/CONTRIBUTING.md) for the canonical command-line build and verification steps.
 To add files or folders, press **Shift+Cmd+A** or use **+** in the bottom-left
 corner of the sidebar. The menu also accepts SSH paths; there is no separate
 blank-project command.
@@ -39,7 +39,7 @@ with an MSYS2 shell accept both `D:\\GitHub\\project` and `/d/GitHub/project`.
 Remote connections use your existing SSH keys and OpenSSH config; no port
 forwarding or local filesystem mount is needed.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development, signing, and localization.
+See [开发与验证](docs/CONTRIBUTING.md) for development and signing, and [本地化](docs/LOCALIZATION.md) for translation.
 
 ## License
 
