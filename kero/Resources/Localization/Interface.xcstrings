@@ -453,16 +453,6 @@
         }
       }
     },
-    "New Session  ⌘T" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新建会话  ⌘T"
-          }
-        }
-      }
-    },
     "New Session (⌘T)" : {
       "localizations" : {
         "zh-Hans" : {
@@ -529,16 +519,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没有已打开的项目"
-          }
-        }
-      }
-    },
-    "No open sessions" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有已打开的会话"
           }
         }
       }
