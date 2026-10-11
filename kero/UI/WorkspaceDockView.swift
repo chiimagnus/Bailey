@@ -20,9 +20,9 @@ final class DockTabDragCoordinator: ObservableObject {
     private var tabs: [DockItem: CGRect] = [:]
 
     func cancel() {
+        // Layout preferences may update before project-switch cancellation;
+        // preserve their latest frames so the next drag can still hit a target.
         position = nil
-        groups = [:]
-        tabs = [:]
     }
 
     func setFrames(groups: [UUID: CGRect]) { self.groups = groups }
