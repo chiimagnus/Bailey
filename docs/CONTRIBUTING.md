@@ -60,6 +60,14 @@ xcrun swiftc -swift-version 5 -o build/check-tree-row-hit-testing \
 3. 实际操作受影响路径，记录结果；不要把编译通过或事件发送成功当成验收通过。
 4. 删除临时应用、独立测试配置和安装备份。
 
+如果正式 Kero 正在运行不能中断的终端命令，可先用同一个签名 Debug 包独立验收：
+
+```sh
+open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Kero.app" --args --isolated-ui-test
+```
+
+该模式单独保存窗口和终端历史，不启动保存的 SSH 转发；字体、外观等全局设置仍可能共用，因此不要在隔离实例中修改设置。隔离验收不代替最终安装验收。
+
 文件树改动要一起检查文件面板、Git 未提交、暂存和提交历史：
 
 - 高亮范围内的缩进、上下边缘和留白都能触发行操作；右侧按钮只执行自身动作。

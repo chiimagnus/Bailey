@@ -427,7 +427,10 @@ enum TerminalHistoryStore {
         ).first ?? FileManager.default.temporaryDirectory
         return base
             .appendingPathComponent("kero", isDirectory: true)
-            .appendingPathComponent("terminal-history.json")
+            .appendingPathComponent(
+                KeroInstanceMode.isIsolated ? "terminal-history-isolated-ui-test.json"
+                    : "terminal-history.json"
+            )
     }()
 
     static func save(_ histories: [String: String]) {
