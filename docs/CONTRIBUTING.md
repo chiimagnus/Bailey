@@ -29,11 +29,19 @@ export DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer
 
 ## 按改动选择回归检查
 
+涉及停靠布局、标签顺序或恢复时，运行现有 Dock 模型检查：
+
+```sh
+xcrun swiftc -swift-version 5 -o build/check-dock-workspace \
+  kero/Workspace/DockWorkspaceModel.swift scripts/check-dock-workspace.swift \
+  && build/check-dock-workspace
+```
+
 涉及树结构、路径或展开状态时，运行真实文件系统检查：
 
 ```sh
 xcrun swiftc -swift-version 5 -o build/check-file-tree-navigation \
-  kero/Workspace/WorkspaceBackend.swift kero/Workspace/TreeDisplayModel.swift \
+  kero/Workspace/WorkspaceBackend.swift kero/Shared/Tree/TreeDisplayModel.swift \
   kero/Workspace/FileTreeModel.swift \
   scripts/check-file-tree-navigation.swift && build/check-file-tree-navigation
 ```
@@ -42,7 +50,7 @@ xcrun swiftc -swift-version 5 -o build/check-file-tree-navigation \
 
 ```sh
 xcrun swiftc -swift-version 5 -o build/check-tree-row-hit-testing \
-  kero/Workspace/TreeDisplayModel.swift kero/UI/Panels/TreeRowStyle.swift \
+  kero/Shared/Tree/TreeDisplayModel.swift kero/Shared/Tree/TreeRowStyle.swift \
   scripts/check-tree-row-hit-testing.swift && build/check-tree-row-hit-testing
 ```
 

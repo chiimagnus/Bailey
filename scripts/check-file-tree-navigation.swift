@@ -1,7 +1,7 @@
 // Regression check using the real FileTreeModel and local filesystem backend.
 // From the repository root:
 // xcrun swiftc -swift-version 5 -o build/check-file-tree-navigation \
-//   kero/Workspace/WorkspaceBackend.swift kero/Workspace/TreeDisplayModel.swift \
+//   kero/Workspace/WorkspaceBackend.swift kero/Shared/Tree/TreeDisplayModel.swift \
 //   kero/Workspace/FileTreeModel.swift \
 //   scripts/check-file-tree-navigation.swift && build/check-file-tree-navigation
 
