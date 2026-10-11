@@ -69,7 +69,8 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
 
     init(
         initialDirectory: String? = nil,
-        restoredHistory: String? = nil
+        restoredHistory: String? = nil,
+        launchCommand: String? = nil
     ) {
         let sessionID = UUID()
         let shellPath = Self.loginShell()
@@ -79,7 +80,8 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         let script = Self.makeLaunchScript(
             shellPath: shellPath,
             pidFileURL: artifacts.pidFileURL,
-            replayFileURL: artifacts.replayFileURL
+            replayFileURL: artifacts.replayFileURL,
+            launchCommand: launchCommand
         )
         let launch = TerminalLaunch(
             commandLine: "/bin/sh -c \(Self.shellQuote(script))",
@@ -645,7 +647,8 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     private static func makeLaunchScript(
         shellPath: String,
         pidFileURL: URL?,
-        replayFileURL: URL?
+        replayFileURL: URL?,
+        launchCommand: String? = nil
     ) -> String {
         var commands: [String] = []
         if let pidFileURL {
@@ -667,7 +670,7 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         commands.append("export KERO_TERM='ghostty'")
         commands.append("export TERM_PROGRAM='ghostty'")
         commands.append("export TERM_PROGRAM_VERSION='1.3.2-dev'")
-        commands.append("exec \(shellQuote(shellPath)) -l")
+        commands.append(launchCommand ?? "exec \(shellQuote(shellPath)) -l")
         // Ghostty's macOS launcher prepends `exec -l` to a shell command.
         // Keeping the setup as one compound command means `exec -l` does not
         // stop after the first shell builtin.

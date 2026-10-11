@@ -181,6 +181,9 @@ final class GitStatusModel: nonisolated ObservableObject {
     private var topLevel = ""
     /// Invalidates async refreshes and operations after the terminal changes cwd.
     private var contextGeneration: UInt = 0
+    private var workspaceScope = "local"
+    var currentScope: String { workspaceScope }
+    private var scopedRoot: String { workspaceScope + "\u{0}" + rootPath }
     /// Restores a previously resolved directory immediately when switching
     /// tabs. Without this, every return to a repository clears `isRepo` until
     /// the asynchronous Git refresh finishes, briefly removing the toolbar
@@ -267,16 +270,17 @@ final class GitStatusModel: nonisolated ObservableObject {
     /// The backend is optional rather than defaulted to the shared local one:
     /// a default argument is evaluated outside the actor, where that shared
     /// instance cannot be read.
-    func sync(root: String, backend: WorkspaceBackend? = nil) {
+    func sync(root: String, backend: WorkspaceBackend? = nil, scope: String = "local") {
         self.backend = backend ?? LocalWorkspaceBackend.shared
-        if root != rootPath {
+        if root != rootPath || workspaceScope != scope {
+            workspaceScope = scope
             contextGeneration &+= 1
             rootPath = root
-            recentCommitLimit = recentCommitLimitByRoot[root]
+            recentCommitLimit = recentCommitLimitByRoot[scopedRoot]
                 ?? Self.recentCommitPageSize
             hasResolvedStatus = false
             clearRepositoryState(preserveIdentity: true)
-            if let cachedStatus = cachedStatusByRoot[root] {
+            if let cachedStatus = cachedStatusByRoot[scopedRoot] {
                 apply(cachedStatus)
                 hasResolvedStatus = true
             }
@@ -302,8 +306,10 @@ final class GitStatusModel: nonisolated ObservableObject {
         // metadata calls can become uninterruptible on a disconnected volume;
         // the sidebar must still leave its initial loading state and offer a
         // retry while the stale worker winds down in the background.
+        let refreshTimeout: Duration = backend is LocalWorkspaceBackend
+            ? .seconds(12) : .seconds(30)
         Task { [weak self] in
-            try? await Task.sleep(for: .seconds(12))
+            try? await Task.sleep(for: refreshTimeout)
             guard let self,
                   self.isRefreshing,
                   self.contextGeneration == generation,
@@ -334,7 +340,7 @@ final class GitStatusModel: nonisolated ObservableObject {
             self.isLoadingMoreCommits = commitLimit < self.recentCommitLimit
             switch result {
             case .repository, .notRepository:
-                self.cachedStatusByRoot[root] = result
+                self.cachedStatusByRoot[self.scopedRoot] = result
             case .failed:
                 break
             }
@@ -352,7 +358,7 @@ final class GitStatusModel: nonisolated ObservableObject {
         guard isRepo, hasMoreRecentCommits,
               !isLoadingMoreCommits, !isBusy else { return false }
         recentCommitLimit += Self.recentCommitPageSize
-        recentCommitLimitByRoot[rootPath] = recentCommitLimit
+        recentCommitLimitByRoot[scopedRoot] = recentCommitLimit
         isLoadingMoreCommits = true
         if isRefreshing {
             // The active worker captured the previous limit. Queue a second
@@ -1299,7 +1305,11 @@ final class GitStatusModel: nonisolated ObservableObject {
         // initial sidebar spinner running forever. Share one deadline across
         // the full snapshot instead of allowing every detail command its own
         // timeout.
-        let deadline = Date().addingTimeInterval(10)
+        // A first SSH connection on Windows can spend several seconds in
+        // authentication before the already-batched Git commands begin.
+        let deadline = Date().addingTimeInterval(
+            backend is LocalWorkspaceBackend ? 10 : 24
+        )
         let timeoutMessage = String(localized: "Git did not respond in time.")
         // On a remote workspace the commands that do not depend on each
         // other's output are fetched together first, because a round trip
@@ -1499,8 +1509,8 @@ final class GitStatusModel: nonisolated ObservableObject {
         let remaining = deadline.timeIntervalSinceNow
         guard remaining > 0,
             let result = try? await backend.run(
-                argv: ["sh", "-c", script], cwd: nil, env: nil, stdin: nil,
-                timeout: remaining
+                argv: ["sh", "-s"], cwd: nil, env: nil,
+                stdin: Data(script.utf8), timeout: remaining
             )
         else { return [:] }
 

@@ -35,6 +35,7 @@ final class FileTreeModel: nonisolated ObservableObject {
     /// The pending new-file/folder input row, if any.
     @Published private(set) var draft: Draft?
     private var expanded: Set<String> = []
+    private var workspaceScope = "local"
 
     /// The workspace this tree reads. Replaced on every `sync`, so the tree
     /// follows its session between the local disk and a remote machine.
@@ -54,10 +55,12 @@ final class FileTreeModel: nonisolated ObservableObject {
 
     /// Points the tree at `root` (collapsing everything if it moved) and
     /// re-reads visible directories. Cheap when nothing changed.
-    func sync(root: String, backend: WorkspaceBackend) async {
+    func sync(root: String, backend: WorkspaceBackend, scope: String = "local") async {
         self.backend = backend
-        if root != rootPath {
+        if root != rootPath || workspaceScope != scope {
+            workspaceScope = scope
             rootPath = root
+            items = []
             expanded = []
             // Any in-progress inline edit belonged to the old tree.
             renamingPath = nil
@@ -76,9 +79,12 @@ final class FileTreeModel: nonisolated ObservableObject {
 
     /// Moves `item` to the Trash, then rebuilds so it drops out of the tree.
     func moveToTrash(_ item: Item) async {
+        let backend = self.backend
+        let scope = workspaceScope
+        let root = rootPath
         do {
             try await backend.delete(paths: [item.path])
-            expanded.remove(item.path)
+            if scope == workspaceScope, root == rootPath { expanded.remove(item.path) }
         } catch {
             presentError(
                 String(
@@ -88,16 +94,19 @@ final class FileTreeModel: nonisolated ObservableObject {
                 error.localizedDescription
             )
         }
-        await rebuild()
+        if scope == workspaceScope, root == rootPath { await rebuild() }
     }
 
     /// Deletes `item` outright, then rebuilds so it drops out of the tree.
     /// Used where the workspace has no Trash to move it to — a remote
     /// machine — so the caller confirms with the user first.
     func delete(_ item: Item) async {
+        let backend = self.backend
+        let scope = workspaceScope
+        let root = rootPath
         do {
             try await backend.delete(paths: [item.path])
-            expanded.remove(item.path)
+            if scope == workspaceScope, root == rootPath { expanded.remove(item.path) }
         } catch {
             presentError(
                 String(
@@ -107,7 +116,7 @@ final class FileTreeModel: nonisolated ObservableObject {
                 error.localizedDescription
             )
         }
-        await rebuild()
+        if scope == workspaceScope, root == rootPath { await rebuild() }
     }
 
     // MARK: - Rename
@@ -126,6 +135,9 @@ final class FileTreeModel: nonisolated ObservableObject {
     /// (e.g. re-point open tabs).
     @discardableResult
     func rename(_ item: Item, to newName: String) async -> String? {
+        let backend = self.backend
+        let scope = workspaceScope
+        let root = rootPath
         renamingPath = nil
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != item.name else { return nil }
@@ -142,6 +154,7 @@ final class FileTreeModel: nonisolated ObservableObject {
         // case-insensitive volume, so don't treat that as a collision.
         let caseOnlyChange = trimmed.lowercased() == item.name.lowercased()
         let exists = (try? await backend.stat(path: dest)) ?? nil
+        guard scope == workspaceScope, root == rootPath else { return nil }
         guard caseOnlyChange || exists == nil else {
             presentError(
                 String(localized: "Couldn’t rename to “\(trimmed)”."),
@@ -151,12 +164,14 @@ final class FileTreeModel: nonisolated ObservableObject {
         }
         do {
             try await backend.rename(from: item.path, to: dest)
-            remapExpanded(from: item.path, to: dest)
+            if scope == workspaceScope, root == rootPath {
+                remapExpanded(from: item.path, to: dest)
+            }
         } catch {
             presentError(String(localized: "Couldn’t rename to “\(trimmed)”."), error.localizedDescription)
             return nil
         }
-        await rebuild()
+        if scope == workspaceScope, root == rootPath { await rebuild() }
         return dest
     }
 
@@ -206,6 +221,9 @@ final class FileTreeModel: nonisolated ObservableObject {
     @discardableResult
     func commitDraft(name: String) async -> String? {
         guard let draft else { return nil }
+        let backend = self.backend
+        let scope = workspaceScope
+        let root = rootPath
         self.draft = nil
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { await rebuild(); return nil }
@@ -219,6 +237,7 @@ final class FileTreeModel: nonisolated ObservableObject {
         }
         let dest = (draft.parentDir as NSString).appendingPathComponent(trimmed)
         let exists = (try? await backend.stat(path: dest)) ?? nil
+        guard scope == workspaceScope, root == rootPath else { return nil }
         guard exists == nil else {
             presentError(
                 String(localized: "Couldn’t create “\(trimmed)”."),
@@ -247,8 +266,11 @@ final class FileTreeModel: nonisolated ObservableObject {
                 presentError(String(localized: "Couldn’t create the file."), error.localizedDescription)
             }
         }
-        await rebuild()
-        return createdFile
+        if scope == workspaceScope, root == rootPath {
+            await rebuild()
+            return createdFile
+        }
+        return nil
     }
 
     private func presentError(_ messageText: String, _ informativeText: String) {
@@ -273,7 +295,16 @@ final class FileTreeModel: nonisolated ObservableObject {
             // A root that cannot be read leaves the tree as it was. On a
             // remote workspace that is a connection that has gone away, and
             // emptying the panel would claim the directory is empty.
-            if let out = await children(of: rootPath, depth: 0), out != items {
+            let path = rootPath
+            let scope = workspaceScope
+            let backend = self.backend
+            let expanded = self.expanded
+            let draft = self.draft
+            if let out = await children(
+                of: path, depth: 0, backend: backend,
+                expanded: expanded, draft: draft
+            ),
+               path == rootPath, scope == workspaceScope, out != items {
                 items = out
             }
         } while rebuildPending
@@ -283,7 +314,10 @@ final class FileTreeModel: nonisolated ObservableObject {
     /// The rows for one directory, or nil when it could not be read at all —
     /// which the caller treats as "keep what is on screen" rather than "this
     /// directory is empty".
-    private func children(of dir: String, depth: Int) async -> [Item]? {
+    private func children(
+        of dir: String, depth: Int, backend: WorkspaceBackend,
+        expanded: Set<String>, draft: Draft?
+    ) async -> [Item]? {
         // Guard against runaway recursion through symlink cycles.
         guard depth < 32 else { return [] }
         var out: [Item] = []
@@ -316,7 +350,10 @@ final class FileTreeModel: nonisolated ObservableObject {
         for row in rows {
             out.append(row)
             if row.isDirectory, expanded.contains(row.path),
-               let descendants = await children(of: row.path, depth: depth + 1) {
+               let descendants = await children(
+                   of: row.path, depth: depth + 1,
+                   backend: backend, expanded: expanded, draft: draft
+               ) {
                 out.append(contentsOf: descendants)
             }
         }

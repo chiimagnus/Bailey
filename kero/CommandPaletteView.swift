@@ -236,6 +236,12 @@ struct CommandPaletteView: View {
             PaletteCommand(id: "new-project", title: "New Project", systemImage: "folder.badge.plus", shortcut: "⌘N") {
                 manager.newProject()
             },
+            PaletteCommand(id: "add-items", title: "Add Files or Folders", systemImage: "folder.badge.plus", shortcut: "⇧⌘A") {
+                manager.chooseLocalItems()
+            },
+            PaletteCommand(id: "add-ssh-items", title: "Add SSH Files or Folders", systemImage: "network", shortcut: nil) {
+                manager.chooseSSHItems()
+            },
             PaletteCommand(id: "close-tab", title: "Close Tab", systemImage: "xmark.square", shortcut: "⌘W") {
                 manager.closeSelectedTab()
             },

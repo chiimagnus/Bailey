@@ -25,6 +25,10 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// selected session's working directory, re-derived as the session
     /// moves (see `panelRoot(followingSessionAt:)`).
     @Published var customDirectory: String?
+    /// Selected SSH host, if this sidebar root is remote.
+    @Published var sshHost: String?
+    /// An individually added file is anchored to its parent directory.
+    @Published var pinnedFile: String?
     @Published var tabs: [PaneTab] = []
     @Published var selectedTabID: UUID? {
         didSet {
@@ -156,6 +160,18 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
 
     // MARK: - Project directory
 
+    var workspaceIdentity: String? {
+        if let sshHost { return "ssh:" + sshHost }
+        if customDirectory != nil { return nil }
+        return selectedSession?.workspaceIdentity
+    }
+
+    var workspaceBackend: WorkspaceBackend {
+        if let sshHost { return SSHHostWorkspaces.backend(for: sshHost) }
+        if customDirectory != nil { return LocalWorkspaceBackend.shared }
+        return selectedSession?.workspaceBackend ?? LocalWorkspaceBackend.shared
+    }
+
     /// Which rule produced the panel root, so labels can describe it
     /// truthfully instead of just saying "automatic".
     enum PanelRootSource: Equatable {
@@ -180,7 +196,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     func panelRoot(
         followingSessionAt cwd: String, foregroundAt foregroundCwd: String? = nil
     ) -> (root: String, source: PanelRootSource) {
-        if let pinned = customDirectory, FileManager.default.fileExists(atPath: pinned) {
+        if let pinned = customDirectory {
             return (pinned, .pinned)
         }
         let shellRoot = LocalWorkspaceBackend.gitRootSync(containing: cwd) ?? cwd
@@ -209,8 +225,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         foregroundAt foregroundCwd: String? = nil,
         backend: WorkspaceBackend
     ) async -> (root: String, source: PanelRootSource) {
-        if let pinned = customDirectory,
-           ((try? await backend.stat(path: pinned)) ?? nil) != nil {
+        if let pinned = customDirectory {
             return (pinned, .pinned)
         }
         let shellRoot = ((try? await backend.gitRoot(containing: cwd)) ?? nil) ?? cwd
@@ -247,11 +262,23 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         directory: String? = nil,
         restoredHistory: String? = nil
     ) -> TerminalSession {
+        let remoteCommand: String? = sshHost.map { host in
+            let cwd = customDirectory ?? "/"
+            // Windows OpenSSH's MSYS2 zsh wrapper forwards single quotes
+            // literally and its .exe login shell resets cwd to HOME.
+            let remote = "cd " + RemoteCommands.doubleQuote(cwd)
+                + " && case \"$SHELL\" in *.exe) exec zsh -i ;; "
+                + "*) exec \"${SHELL:-/bin/sh}\" -i ;; esac"
+            return "exec /usr/bin/ssh -tt -o BatchMode=yes "
+                + "-o StrictHostKeyChecking=yes -- "
+                + Self.shellQuoted(host) + " " + Self.shellQuoted(remote)
+        }
         let session = TerminalSession(
-            initialDirectory: directory
-                ?? customDirectory
-                ?? selectedSession?.currentDirectoryPath,
-            restoredHistory: restoredHistory
+            initialDirectory: sshHost == nil
+                ? (directory ?? customDirectory ?? selectedSession?.currentDirectoryPath)
+                : nil,
+            restoredHistory: restoredHistory,
+            launchCommand: remoteCommand
         )
         session.onExited = { [weak self] session in
             // Already dead — just drop its pane, no second terminate.
@@ -266,6 +293,10 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         return session
     }
 
+    private static func shellQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     // MARK: - Remote tabs
 
     /// A live workspace for `identity`, from whichever session in this project
@@ -273,6 +304,9 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// to be opened from: reconnecting in a second terminal of the same
     /// project makes those tabs writable again.
     func connectedWorkspace(for identity: String) -> WorkspaceBackend? {
+        if let sshHost, identity == "ssh:" + sshHost {
+            return SSHHostWorkspaces.backend(for: sshHost)
+        }
         for session in sessions {
             guard let connection = session.location.remoteConnection,
                   connection.workspaceIdentity == identity,
@@ -362,13 +396,16 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         // lookup below cannot reuse a tab from another machine.
         let context = selectedSession
         if let (tab, paneID) = findFilePane(
-            path: path, workspace: context?.workspaceIdentity
+            path: path, workspace: workspaceIdentity
         ) {
             selectedTabID = tab.id
             tab.focusedPaneID = paneID
             return
         }
-        let file = FileTab(path: path, session: context)
+        let file = FileTab(
+            path: path, session: context,
+            backend: workspaceBackend, workspaceIdentity: workspaceIdentity
+        )
         if let editorState {
             file.editorState = editorState
         }
@@ -390,7 +427,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         if let existing = tab.allPanes.first(where: {
             if case .file(let file) = $0.content {
                 return file.path == path
-                    && file.workspaceIdentity == session?.workspaceIdentity
+                    && file.workspaceIdentity == workspaceIdentity
             }
             return false
         }) {
@@ -398,7 +435,10 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
             return
         }
         tab.split(
-            Pane(content: .file(FileTab(path: path, session: session))),
+            Pane(content: .file(FileTab(
+                path: path, session: session,
+                backend: workspaceBackend, workspaceIdentity: workspaceIdentity
+            ))),
             toward: .right
         )
     }
@@ -476,17 +516,29 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
 
     // MARK: - File paths
 
-    /// After a rename on disk, re-points any open file pane at its new path —
-    /// the renamed file itself, or any file beneath a renamed directory.
-    func updateFilePaths(from oldPath: String, to newPath: String) {
+    /// Only rename tabs from the machine where the change happened.
+    /// A local and remote file with identical paths must remain independent.
+    func updateFilePaths(from oldPath: String, to newPath: String, workspace: String?) {
         for tab in tabs {
-            for case .file(let file) in tab.allContents {
+            for case .file(let file) in tab.allContents where file.workspaceIdentity == workspace {
                 if file.path == oldPath {
                     file.updatePath(newPath)
                 } else if file.path.hasPrefix(oldPath + "/") {
                     file.updatePath(newPath + String(file.path.dropFirst(oldPath.count)))
                 }
             }
+        }
+        guard workspaceIdentity == workspace else { return }
+        if let pinnedFile, pinnedFile == oldPath || pinnedFile.hasPrefix(oldPath + "/") {
+            let updated = newPath + String(pinnedFile.dropFirst(oldPath.count))
+            if customName == (pinnedFile as NSString).lastPathComponent {
+                customName = (updated as NSString).lastPathComponent
+            }
+            self.pinnedFile = updated
+        }
+        if let customDirectory,
+           customDirectory == oldPath || customDirectory.hasPrefix(oldPath + "/") {
+            self.customDirectory = newPath + String(customDirectory.dropFirst(oldPath.count))
         }
     }
 
@@ -500,7 +552,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         let context = selectedSession
         if let (tab, pane) = findDiffPane(
             repoRoot: repoRoot, path: path, staged: staged, commitHash: nil,
-            workspace: context?.workspaceIdentity
+            workspace: workspaceIdentity
         ),
            case .diff(let diff) = pane.content {
             diff.untracked = untracked
@@ -513,7 +565,8 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         let diff = DiffTab(
             repoRoot: repoRoot, path: path, staged: staged,
             untracked: untracked, origPath: origPath,
-            session: context
+            session: context,
+            backend: workspaceBackend, workspaceIdentity: workspaceIdentity
         )
         let tab = makeTab(content: .diff(diff))
         tab.contextSession = context
@@ -534,7 +587,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         let context = selectedSession
         if let (tab, pane) = findDiffPane(
             repoRoot: repoRoot, path: path, staged: false, commitHash: commitHash,
-            workspace: context?.workspaceIdentity
+            workspace: workspaceIdentity
         ), case .diff(let diff) = pane.content {
             diff.origPath = origPath
             diff.reload()
@@ -551,7 +604,8 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
             commitHash: commitHash,
             commitParentHash: parentHash,
             commitStatus: status,
-            session: context
+            session: context,
+            backend: workspaceBackend, workspaceIdentity: workspaceIdentity
         )
         let tab = makeTab(content: .diff(diff))
         tab.contextSession = context
@@ -864,9 +918,10 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         case .session(let workingDirectory):
             return .session(makeSession(directory: workingDirectory, restoredHistory: restoredHistory))
         case .file(let path, let editorState):
-            // Restored tabs are always local: a remote connection does not
-            // survive a relaunch.
-            let file = FileTab(path: path)
+            let file = FileTab(
+                path: path, backend: workspaceBackend,
+                workspaceIdentity: workspaceIdentity
+            )
             if let editorState { file.editorState = editorState }
             return .file(file)
         case .browser(let url):
@@ -874,7 +929,8 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         case .diff(let repoRoot, let path, let staged, let untracked, let origPath):
             return .diff(DiffTab(
                 repoRoot: repoRoot, path: path, staged: staged,
-                untracked: untracked, origPath: origPath
+                untracked: untracked, origPath: origPath,
+                backend: workspaceBackend, workspaceIdentity: workspaceIdentity
             ))
         case .commitDiff(
             let repoRoot, let path, let commitHash, let parentHash, let status, let origPath
@@ -887,7 +943,8 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
                 origPath: origPath,
                 commitHash: commitHash,
                 commitParentHash: parentHash,
-                commitStatus: status.first
+                commitStatus: status.first,
+                backend: workspaceBackend, workspaceIdentity: workspaceIdentity
             ))
         }
     }

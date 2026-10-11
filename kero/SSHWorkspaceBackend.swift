@@ -185,12 +185,14 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
     ) async throws -> WorkspaceRunResult {
         guard !argv.isEmpty else { throw WorkspaceError.notFound }
         var command = ""
-        if let cwd { command += "cd \(RemoteCommands.quote(cwd)) && " }
+        if let cwd { command += "cd \(RemoteCommands.doubleQuote(cwd)) && " }
         if let env, !env.isEmpty {
-            let assignments = env.keys.sorted().map { "\($0)=\(RemoteCommands.quote(env[$0]!))" }
+            let assignments = env.keys.sorted().map {
+                "\($0)=\(RemoteCommands.doubleQuote(env[$0]!))"
+            }
             command += "env " + assignments.joined(separator: " ") + " "
         }
-        command += argv.map(RemoteCommands.quote).joined(separator: " ")
+        command += argv.map(RemoteCommands.doubleQuote).joined(separator: " ")
 
         let result = try await runner.run(
             [command], stdin: stdin, timeout: timeout ?? self.timeout
@@ -254,7 +256,7 @@ nonisolated struct ProcessRemoteCommandRunner: RemoteCommandRunner {
 
     /// Both pipes are drained on their own threads: a command that fills one
     /// while we wait on the other would otherwise never finish.
-    private static func launch(
+    static func launch(
         sshPath: String, arguments: [String], stdin: Data?, timeout: TimeInterval
     ) throws -> (status: Int32, stdout: Data, stderr: Data) {
         let process = Process()

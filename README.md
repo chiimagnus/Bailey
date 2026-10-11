@@ -4,7 +4,10 @@ A native terminal workspace for macOS, with projects, SSH, files, Git and diffs.
 
 ## Features
 
-- Native macOS project sidebar, tabs and split panes
+- One project list in the left sidebar: add multiple local files or folders with ⇧⌘A
+- Add SSH folders or files by host alias and remote path (including Windows with an MSYS2 shell)
+- Selecting a project controls its Files/Git context, regardless of terminal `cd`
+- Native macOS terminal tabs and split panes
 - GPU-accelerated terminal powered by Ghostty
 - Local and SSH remote terminal workspaces
 - Files, Git status, commits and editable diffs beside the terminal
@@ -23,6 +26,13 @@ xcodebuild -project kero.xcodeproj -scheme kero -configuration Release \
   -destination 'platform=macOS,arch=arm64' -derivedDataPath build/DerivedData build
 open 'build/DerivedData/Build/Products/Release/Kero Remote.app'
 ```
+
+To add files or folders, press **Shift+Cmd+A** or use **+** in the left sidebar.
+For remote items, choose **+ → Add SSH Files or Folders…**, select a host from
+`~/.ssh/config`, and enter one absolute remote path per line. Windows SSH hosts
+with an MSYS2 shell accept both `D:\\GitHub\\project` and `/d/GitHub/project`.
+Remote connections use your existing SSH keys and OpenSSH config; no port
+forwarding or local filesystem mount is needed.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development, signing, and localization.
 

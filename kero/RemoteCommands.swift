@@ -22,6 +22,16 @@ nonisolated enum RemoteCommands {
         "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
 
+    /// Double quotes survive both POSIX shells and Windows' OpenSSH zsh
+    /// wrapper, which can treat single quotes in argv as literal characters.
+    static func doubleQuote(_ value: String) -> String {
+        "\"" + value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "$", with: "\\$")
+            .replacingOccurrences(of: "`", with: "\\`") + "\""
+    }
+
     // MARK: - Port forwarding
 
     /// Asks the kernel for a free loopback port by binding to port 0 and

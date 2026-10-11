@@ -339,16 +339,19 @@ struct ContentView: View {
         // matching workspace, so the panel reads the repository on the machine
         // the terminal is actually in. Resolving the root is a round trip
         // there, hence the task.
-        let backend = session.workspaceBackend
+        let backend = project.workspaceBackend
         let cwd = session.panelDirectoryPath
-        let foreground = session.foregroundDirectoryPath
+        let foreground = project.sshHost == nil ? session.foregroundDirectoryPath : nil
+        let scope = project.workspaceIdentity ?? "local"
+        let selectedID = project.id
         Task {
             let root = await project.panelRoot(
                 followingSessionAt: cwd,
                 foregroundAt: foreground,
                 backend: backend
             ).root
-            git.sync(root: root, backend: backend)
+            guard manager.selectedProjectID == selectedID else { return }
+            git.sync(root: root, backend: backend, scope: scope)
         }
     }
 

@@ -69,10 +69,7 @@ struct SidebarView: View {
             }
 
             HStack(spacing: 2) {
-                SidebarFooterButton(
-                    systemImage: "plus",
-                    tooltip: "New Project (⌘N)"
-                ) { manager.newProject() }
+                SidebarAddButton(manager: manager)
                 Spacer()
                 SidebarFooterButton(
                     systemImage: "exclamationmark.bubble",
@@ -201,6 +198,74 @@ private struct FPSBadge: View {
     }
 }
 
+/// Native add menu; there is one project list, not a separate workspace switcher.
+private struct SidebarAddButton: NSViewRepresentable {
+    @ObservedObject var manager: TerminalManager
+
+    func makeCoordinator() -> Coordinator { Coordinator(manager: manager) }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton()
+        button.isBordered = false
+        button.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyDown
+        button.contentTintColor = .secondaryLabelColor
+        button.toolTip = String(localized: "Add files, folders, or SSH paths")
+        button.setAccessibilityLabel(button.toolTip)
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.showMenu(_:))
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.manager = manager
+    }
+
+    final class Coordinator: NSObject {
+        weak var manager: TerminalManager?
+
+        init(manager: TerminalManager) {
+            self.manager = manager
+        }
+
+        @objc func showMenu(_ sender: NSButton) {
+            let menu = NSMenu()
+            let local = NSMenuItem(
+                title: String(localized: "Add Files or Folders…"),
+                action: #selector(addLocal),
+                keyEquivalent: ""
+            )
+            local.target = self
+            menu.addItem(local)
+            let remote = NSMenuItem(
+                title: String(localized: "Add SSH Files or Folders…"),
+                action: #selector(addSSH),
+                keyEquivalent: ""
+            )
+            remote.target = self
+            menu.addItem(remote)
+            menu.addItem(.separator())
+            let empty = NSMenuItem(
+                title: String(localized: "New Project"),
+                action: #selector(addEmpty),
+                keyEquivalent: ""
+            )
+            empty.target = self
+            menu.addItem(empty)
+            menu.popUp(
+                positioning: nil,
+                at: NSPoint(x: 0, y: sender.bounds.maxY),
+                in: sender
+            )
+        }
+
+        @objc private func addLocal() { manager?.chooseLocalItems() }
+        @objc private func addSSH() { manager?.chooseSSHItems() }
+        @objc private func addEmpty() { manager?.newProject() }
+    }
+}
+
 private struct SidebarFooterButton: View {
     let systemImage: String
     let tooltip: LocalizedStringKey
@@ -277,12 +342,15 @@ private struct SidebarProjectRow: View {
                 }
             }
             Divider()
-            Button("Set Project Directory…") {
-                pickProjectDirectory()
-            }
-            if project.customDirectory != nil {
-                Button("Use Automatic Directory") {
-                    project.customDirectory = nil
+            if project.sshHost == nil {
+                Button("Set Project Directory…") {
+                    pickProjectDirectory()
+                }
+                if project.customDirectory != nil {
+                    Button("Use Automatic Directory") {
+                        project.customDirectory = nil
+                        project.pinnedFile = nil
+                    }
                 }
             }
             Divider()
@@ -321,7 +389,8 @@ private struct SidebarProjectRow: View {
 
     private var rowContent: some View {
         HStack(spacing: 8) {
-            Image(systemName: "folder")
+            Image(systemName: project.sshHost != nil ? "network"
+                : project.pinnedFile != nil ? "doc.text" : "folder")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(isSelected ? Color(nsColor: Theme.accent) : .secondary)
                 .frame(width: max(14, fontSize), alignment: .center)
@@ -392,7 +461,18 @@ private struct SidebarProjectRow: View {
 
     @ViewBuilder
     private var subtitle: some View {
-        if project.sessions.count > 1 {
+        if let host = project.sshHost {
+            Text("SSH · \(host)")
+                .font(.system(size: supportingFontSize))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        } else if let directory = project.customDirectory {
+            Text(directory)
+                .font(.system(size: supportingFontSize))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.head)
+        } else if project.sessions.count > 1 {
             Text("\(project.sessions.count) sessions")
                 .font(.system(size: supportingFontSize))
                 .foregroundStyle(.tertiary)

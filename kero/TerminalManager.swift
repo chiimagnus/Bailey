@@ -207,17 +207,192 @@ final class TerminalManager: nonisolated ObservableObject {
         return project
     }
 
-    /// Creates a project rooted at `directory`, with its first terminal
-    /// launched there. Used by Kero's Finder service.
+    /// Finder, the sidebar and the keyboard shortcut all add entries to the
+    /// same project list. A selected file opens in an editor; its parent is
+    /// the Files/Git root and initial terminal directory.
+    func addLocalItems(_ urls: [URL]) {
+        for url in urls {
+            let path = url.standardizedFileURL.path
+            var directory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &directory) else {
+                continue
+            }
+            let root = directory.boolValue
+                ? path : (path as NSString).deletingLastPathComponent
+            let file = directory.boolValue ? nil : path
+            if let existing = projects.first(where: {
+                $0.sshHost == nil && $0.customDirectory == root
+                    && $0.pinnedFile == file
+            }) {
+                selectedProjectID = existing.id
+                continue
+            }
+            let project = makeProject(createInitialSession: false)
+            project.customName = url.lastPathComponent
+            project.customDirectory = root
+            project.pinnedFile = file
+            project.newSession(directory: root)
+            if let file { project.openFile(file) }
+            insert(project)
+        }
+    }
+
+    func chooseLocalItems() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = String(localized: "Add")
+        panel.message = String(localized: "Add files and folders to Kero")
+        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .OK else { return }
+            self?.addLocalItems(panel.urls)
+        }
+        if let window {
+            panel.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            finish(panel.runModal())
+        }
+    }
+
+    /// One SSH host can supply several independent roots. The remote file
+    /// browser uses the already-supported POSIX shell on the SSH destination.
+    func addSSHItems(host: String, paths: [String]) async throws {
+        let host = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard SSHHostWorkspaces.validHost(host) else {
+            throw SSHItemError.invalidHost
+        }
+        let paths = paths.map(SSHHostWorkspaces.normalizedPath)
+        guard !paths.isEmpty, paths.allSatisfy({ $0.hasPrefix("/") }) else {
+            throw SSHItemError.invalidPath
+        }
+        let backend = SSHHostWorkspaces.backend(for: host)
+        var validated: [(path: String, directory: Bool)] = []
+        for path in paths {
+            guard let stat = try await backend.stat(path: path),
+                  stat.isDirectory || stat.isRegular
+            else { throw SSHItemError.notFound(path) }
+            validated.append((path, stat.isDirectory))
+        }
+        for item in validated {
+            let root = item.directory ? item.path
+                : (item.path as NSString).deletingLastPathComponent
+            let file = item.directory ? nil : item.path
+            if let existing = projects.first(where: {
+                $0.sshHost == host && $0.customDirectory == root
+                    && $0.pinnedFile == file
+            }) {
+                selectedProjectID = existing.id
+                continue
+            }
+            let project = makeProject(createInitialSession: false)
+            project.sshHost = host
+            project.customDirectory = root
+            project.pinnedFile = file
+            project.customName = (item.path as NSString).lastPathComponent
+            project.newSession()
+            if let file { project.openFile(file) }
+            insert(project)
+        }
+    }
+
+    private enum SSHItemError: LocalizedError {
+        case invalidHost
+        case invalidPath
+        case notFound(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidHost: String(localized: "Enter an SSH host from ~/.ssh/config.")
+            case .invalidPath: String(localized: "Enter an absolute remote directory or file path.")
+            case .notFound(let path): String(localized: "Remote file or folder not found: \(path)")
+            }
+        }
+    }
+
+    func chooseSSHItems() {
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Add SSH Files or Folders")
+        alert.informativeText = String(localized:
+            "Use an SSH host from ~/.ssh/config and one remote path per line. Windows paths such as D:\\\\GitHub\\\\project are accepted.")
+        alert.addButton(withTitle: String(localized: "Add"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+
+        let hosts = NSComboBox()
+        hosts.usesDataSource = false
+        hosts.addItems(withObjectValues: Self.sshHostAliases())
+        hosts.placeholderString = String(localized: "SSH host")
+        if let first = hosts.objectValues.first as? String {
+            hosts.stringValue = first
+        }
+
+        let paths = NSTextView(frame: .zero)
+        paths.isRichText = false
+        paths.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        paths.string = ""
+        let scroll = NSScrollView()
+        scroll.documentView = paths
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        scroll.heightAnchor.constraint(equalToConstant: 80).isActive = true
+
+        let stack = NSStackView(views: [
+            NSTextField(labelWithString: String(localized: "SSH host")),
+            hosts,
+            NSTextField(labelWithString: String(localized: "Remote paths (one per line)")),
+            scroll,
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        stack.widthAnchor.constraint(equalToConstant: 380).isActive = true
+        hosts.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        scroll.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        alert.accessoryView = stack
+
+        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            let host = hosts.stringValue
+            let values = paths.string.components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            Task {
+                do {
+                    try await self.addSSHItems(host: host, paths: values)
+                } catch {
+                    let failure = NSAlert(error: error)
+                    if let window = self.window {
+                        failure.beginSheetModal(for: window, completionHandler: { _ in })
+                    } else {
+                        failure.runModal()
+                    }
+                }
+            }
+        }
+        if let window {
+            alert.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            finish(alert.runModal())
+        }
+    }
+
+    private static func sshHostAliases() -> [String] {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ssh/config")
+        guard let data = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        return data.split(whereSeparator: \.isNewline).flatMap { line -> [String] in
+            let words = line.split(whereSeparator: \.isWhitespace)
+            guard words.first?.lowercased() == "host" else { return [] }
+            return words.dropFirst().compactMap { value in
+                let host = String(value)
+                return host.contains("*") || host.contains("?") ? nil : host
+            }
+        }
+    }
+
+    /// Finder folders use the same entry semantics as the sidebar picker.
     private func newProject(directory: String) {
-        let project = makeProject(createInitialSession: false)
-        project.customName = URL(
-            fileURLWithPath: directory,
-            isDirectory: true
-        ).lastPathComponent
-        project.customDirectory = directory
-        project.newSession(directory: directory)
-        insert(project)
+        addLocalItems([URL(fileURLWithPath: directory, isDirectory: true)])
     }
 
     private func insert(_ project: Project) {
@@ -625,12 +800,11 @@ final class TerminalManager: nonisolated ObservableObject {
         Task { await content.save() }
     }
 
-    /// Propagates a file-tree rename to every open file tab across all
-    /// projects, so tabs for the moved file (or files under a moved
-    /// directory) keep pointing at the right place.
-    func fileRenamed(from oldPath: String, to newPath: String) {
+    /// Keep tabs and pinned sidebar entries in sync on the affected machine,
+    /// not in unrelated Mac/SSH projects with the same path.
+    func fileRenamed(from oldPath: String, to newPath: String, workspace: String?) {
         for project in projects {
-            project.updateFilePaths(from: oldPath, to: newPath)
+            project.updateFilePaths(from: oldPath, to: newPath, workspace: workspace)
         }
     }
 
@@ -815,13 +989,14 @@ final class TerminalManager: nonisolated ObservableObject {
                 let savedTabs = project.tabs.compactMap { tab -> (PaneTab, ProjectSnapshot.TabSnapshot)? in
                     guard let layout = Self.layoutSnapshot(
                         tab.layout,
+                        sshHost: project.sshHost,
                         captureTerminalHistory: captureTerminalHistory,
                         histories: &histories
                     ) else { return nil }
                     // Restore rebuilds panes from the layout that was written,
                     // so focus is an index into the panes that survived it.
                     let focusedPaneIndex = tab.allPanes
-                        .filter { Self.isSnapshotable($0.content) }
+                        .filter { Self.isSnapshotable($0.content, sshHost: project.sshHost) }
                         .firstIndex { $0.id == tab.focusedPaneID } ?? 0
                     return (tab, ProjectSnapshot.TabSnapshot(
                         layout: layout, focusedPaneIndex: focusedPaneIndex,
@@ -835,6 +1010,8 @@ final class TerminalManager: nonisolated ObservableObject {
                 return ProjectSnapshot(
                     customName: project.customName,
                     customDirectory: project.customDirectory,
+                    sshHost: project.sshHost,
+                    pinnedFile: project.pinnedFile,
                     tabs: tabs,
                     selectedTabIndex: savedTabs.firstIndex { $0.0.id == project.selectedTabID }
                 )
@@ -847,19 +1024,18 @@ final class TerminalManager: nonisolated ObservableObject {
         return (snapshot, histories)
     }
 
-    /// Nil for a pane, or a whole split, that holds nothing worth restoring —
-    /// today only remote files and diffs, which must not come back as local
-    /// paths. A split that loses one side collapses to the other, so the
-    /// surviving pane takes the whole rectangle.
+    /// Unmanaged SSH panes are not persisted without a machine identity.
+    /// Explicit SSH roots do persist remote tabs because their host is saved.
     private static func layoutSnapshot(
         _ layout: PaneNode,
+        sshHost: String?,
         captureTerminalHistory: Bool,
         histories: inout [String: String]
     ) -> SessionSnapshot.ProjectSnapshot.LayoutSnapshot? {
         typealias ProjectSnapshot = SessionSnapshot.ProjectSnapshot
         switch layout {
         case .pane(let pane):
-            guard let content = contentSnapshot(pane.content) else { return nil }
+            guard let content = contentSnapshot(pane.content, sshHost: sshHost) else { return nil }
             var historyKey: String?
             if case .session(let session) = pane.content,
                let history = session.serializedHistory(
@@ -877,11 +1053,13 @@ final class TerminalManager: nonisolated ObservableObject {
         case .split(let split):
             let first = layoutSnapshot(
                 split.first,
+                sshHost: sshHost,
                 captureTerminalHistory: captureTerminalHistory,
                 histories: &histories
             )
             let second = layoutSnapshot(
                 split.second,
+                sshHost: sshHost,
                 captureTerminalHistory: captureTerminalHistory,
                 histories: &histories
             )
@@ -901,21 +1079,21 @@ final class TerminalManager: nonisolated ObservableObject {
         }
     }
 
-    /// Whether this content survives a relaunch. A remote file or diff does
-    /// not: the snapshot records a bare path, so restoring one would reopen
-    /// whatever sits at that path on this Mac.
-    private static func isSnapshotable(_ content: PaneContent) -> Bool {
+    /// A remote path can be saved only when its SSH host is pinned on the
+    /// sidebar item. Otherwise relaunch could read a same-named Mac file.
+    private static func isSnapshotable(_ content: PaneContent, sshHost: String?) -> Bool {
+        let identity = sshHost.map { "ssh:" + $0 }
         switch content {
-        case .file(let file): return file.workspaceIdentity == nil
-        case .diff(let diff): return diff.workspaceIdentity == nil
+        case .file(let file): return file.workspaceIdentity == identity
+        case .diff(let diff): return diff.workspaceIdentity == identity
         case .session, .browser: return true
         }
     }
 
     private static func contentSnapshot(
-        _ content: PaneContent
+        _ content: PaneContent, sshHost: String?
     ) -> SessionSnapshot.ProjectSnapshot.PaneContentSnapshot? {
-        guard isSnapshotable(content) else { return nil }
+        guard isSnapshotable(content, sshHost: sshHost) else { return nil }
         switch content {
         case .session(let session):
             return .session(workingDirectory: session.currentDirectoryPath)
@@ -952,6 +1130,8 @@ final class TerminalManager: nonisolated ObservableObject {
             let project = makeProject(createInitialSession: false)
             project.customName = Project.normalizedCustomName(saved.customName)
             project.customDirectory = saved.customDirectory
+            project.sshHost = saved.sshHost
+            project.pinnedFile = saved.pinnedFile
             var restoredContexts: [(tab: PaneTab, sessionIndex: Int)] = []
             for savedTab in saved.tabs {
                 guard let tab = project.restoreTab(
@@ -974,6 +1154,16 @@ final class TerminalManager: nonisolated ObservableObject {
                 project.selectedTabID = project.tabs[index].id
             }
             project.resetRecency()
+            if let pinnedFile = project.pinnedFile,
+               !project.tabs.flatMap(\.allContents).contains(where: { content in
+                   if case .file(let file) = content {
+                       return file.path == pinnedFile
+                           && file.workspaceIdentity == project.workspaceIdentity
+                   }
+                   return false
+               }) {
+                project.openFile(pinnedFile)
+            }
             projects.append(project)
         }
         guard !projects.isEmpty else { return false }

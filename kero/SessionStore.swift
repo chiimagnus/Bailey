@@ -192,6 +192,9 @@ struct SessionSnapshot: Codable {
         /// automatic (the closest git repository, never persisted).
         /// Optional so older snapshots still decode.
         var customDirectory: String?
+        /// Optional additions preserve snapshots from before SSH sidebar roots.
+        var sshHost: String?
+        var pinnedFile: String?
         var tabs: [TabSnapshot]
         var selectedTabIndex: Int?
     }

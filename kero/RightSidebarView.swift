@@ -117,6 +117,15 @@ struct RightSidebarView: View {
         return workspaceEpoch(of: session)
     }
 
+    /// A pinned local path must not inherit a different machine just because
+    /// its terminal happens to be inside an interactive SSH session.
+    private var fileActionSession: TerminalSession? {
+        guard let project = manager.selectedProject else { return nil }
+        if project.sshHost == nil, project.customDirectory != nil,
+           project.selectedSession?.workspaceIdentity != nil { return nil }
+        return project.selectedSession
+    }
+
     private var sidebarFontScale: CGFloat {
         CGFloat(settings.sidebarFontSize / AppSettings.defaultSidebarFontSize)
     }
@@ -181,18 +190,24 @@ struct RightSidebarView: View {
                         FileTreePanel(
                             model: fileTree,
                             git: git,
-                            session: manager.selectedSession,
+                            session: fileActionSession,
+                            sshHost: manager.selectedProject?.sshHost,
                             rootBadge: rootBadge,
                             currentFilePath: openFilePath,
                             openFile: { manager.openFile($0) },
                             openToSide: { manager.openFileToSide($0) },
-                            onRename: { manager.fileRenamed(from: $0, to: $1) },
+                            onRename: { [workspace = manager.selectedProject?.workspaceIdentity] oldPath, newPath in
+                                manager.fileRenamed(
+                                    from: oldPath, to: newPath, workspace: workspace
+                                )
+                            },
                             refreshGitStatus: { git.refresh() }
                         )
                     case .git:
                         GitPanel(
                             model: git,
-                            session: manager.selectedSession,
+                            session: fileActionSession,
+                            sshHost: manager.selectedProject?.sshHost,
                             openFile: { manager.openFile($0) },
                             openToSide: { manager.openFileToSide($0) },
                             openDiff: { entry, staged in
@@ -218,7 +233,8 @@ struct RightSidebarView: View {
                     case .info:
                         InfoPanel(
                             model: info,
-                            session: manager.selectedSession,
+                            session: fileActionSession,
+                            sshHost: manager.selectedProject?.sshHost,
                             forwards: forwards
                         )
                     }
@@ -280,6 +296,8 @@ struct RightSidebarView: View {
         .onChange(of: manager.isPanelVisible) { syncModels() }
         .onChange(of: manager.panelTab) { syncModels() }
         .onChange(of: manager.selectedSession?.id) { syncModels() }
+        .onChange(of: manager.selectedProjectID) { syncModels() }
+        .onChange(of: manager.selectedProject?.sshHost) { syncModels() }
         // A `cd` in the terminal publishes the new cwd immediately (OSC 7 →
         // session.workingDirectory); resync at once so automatically rooted
         // panels follow the terminal without waiting for another event.
@@ -358,7 +376,27 @@ struct RightSidebarView: View {
     /// Cheap and synchronous — it reads published state and touches no
     /// workspace, so it stays correct while the panels are stalled.
     private func applyRemoteHeading() {
-        guard let session = manager.selectedProject?.selectedSession else { return }
+        guard let project = manager.selectedProject,
+              let session = project.selectedSession else { return }
+        if let host = project.sshHost {
+            let state: RemotePaneHeaderState
+            switch SSHHostWorkspaces.connectionState(for: host) {
+            case .some(true): state = .connected(destination: host)
+            case .some(false): state = .disconnected(destination: host)
+            case .none: state = .connecting(destination: host)
+            }
+            remoteHeader.apply(state: state)
+            remoteHeader.workingDirectory = project.customDirectory
+            if remoteHeaderState != state { remoteHeaderState = state }
+            forwards = nil
+            return
+        }
+        if project.customDirectory != nil {
+            remoteHeader.apply(state: .local)
+            remoteHeaderState = .local
+            forwards = nil
+            return
+        }
         // What the heading says is a fact about the terminal, not about any
         // connection: an ssh Kero is not in front of has no connection at all
         // and still has to be reported.
@@ -375,6 +413,8 @@ struct RightSidebarView: View {
     /// Which workspace a refresh belongs to. A connection changing state, or
     /// being replaced, makes results that were already in flight stale.
     private func workspaceEpoch(of session: TerminalSession) -> String {
+        if let host = manager.selectedProject?.sshHost { return "ssh:" + host }
+        if manager.selectedProject?.customDirectory != nil { return "local" }
         guard let connection = session.location.remoteConnection else { return "local" }
         return "\(connection.id) \(connection.state)"
     }
@@ -391,14 +431,15 @@ struct RightSidebarView: View {
         // its own deadline, one after another, and stall the refresh loop for
         // as long as the link stays down. The panels keep their last remote
         // contents instead, which is what the heading is telling the user.
-        if let connection = session.location.remoteConnection,
+        if project.sshHost == nil, project.customDirectory == nil,
+           let connection = session.location.remoteConnection,
            connection.state == .disconnected {
             return
         }
         let epoch = workspaceEpoch(of: session)
 
-        let cwd = session.panelDirectoryPath
-        let backend = session.workspaceBackend
+        let cwd = project.customDirectory ?? session.panelDirectoryPath
+        let backend = project.workspaceBackend
         // Files and Git anchor to the project directory — pinned when the
         // user set one, else the repository the session is working in — so
         // they don't re-root as the terminal cds around a repo; Info
@@ -407,16 +448,18 @@ struct RightSidebarView: View {
         // process directory, so the foreground job's cwd is passed in too.
         let (root, source) = await project.panelRoot(
             followingSessionAt: cwd,
-            foregroundAt: session.foregroundDirectoryPath,
+            foregroundAt: project.sshHost == nil ? session.foregroundDirectoryPath : nil,
             backend: backend
         )
         // The connection may have died while that was in flight; its answer
         // describes a workspace that is no longer the one on screen.
-        guard epoch == workspaceEpoch(of: session) else { return }
+        guard epoch == workspaceEpoch(of: session),
+              manager.selectedProjectID == project.id else { return }
         if rootSource != source { rootSource = source }
         switch manager.panelTab {
         case .files:
-            await fileTree.sync(root: root, backend: backend)
+            await fileTree.sync(root: root, backend: backend,
+                                scope: project.workspaceIdentity ?? "local")
         case .git:
             break
         case .info:
@@ -424,9 +467,12 @@ struct RightSidebarView: View {
             // describe the remote login shell and its children, so filtering
             // them by this Mac's shell pid would find nothing.
             await info.sync(
-                root: cwd, projectRoot: root, projectRootSource: source,
-                shellName: session.shellName, shellPid: session.panelShellPid,
-                isRemote: session.location.remoteConnection != nil,
+                root: project.sshHost == nil ? cwd : root,
+                projectRoot: root, projectRootSource: source,
+                shellName: session.shellName,
+                shellPid: project.sshHost == nil && fileActionSession != nil
+                    ? session.panelShellPid : nil,
+                isRemote: project.workspaceIdentity != nil,
                 backend: backend
             )
         }
@@ -487,6 +533,7 @@ private struct FileTreePanel: View {
     @ObservedObject var model: FileTreeModel
     @ObservedObject var git: GitStatusModel
     let session: TerminalSession?
+    let sshHost: String?
     /// Set while the tree follows the terminal's foreground job into another
     /// checkout, so the header says why the root moved.
     let rootBadge: (text: String, description: String)?
@@ -514,7 +561,7 @@ private struct FileTreePanel: View {
                 }
                 // Finder can only reach the local disk; while remote this
                 // path names a directory on another machine.
-                if session?.location.remoteConnection == nil {
+                if sshHost == nil && session?.location.remoteConnection == nil {
                     Button {
                         NSWorkspace.shared.activateFileViewerSelecting(
                             [URL(fileURLWithPath: model.rootPath)]
@@ -534,7 +581,7 @@ private struct FileTreePanel: View {
 
             FileTreeScrollView(
                 model: model, git: git, session: session,
-                currentFilePath: currentFilePath,
+                sshHost: sshHost, currentFilePath: currentFilePath,
                 openFile: openFile, openToSide: openToSide, onRename: onRename,
                 refreshGitStatus: refreshGitStatus
             )
@@ -581,6 +628,7 @@ private struct FileTreeScrollView: NSViewRepresentable {
     @ObservedObject var model: FileTreeModel
     @ObservedObject var git: GitStatusModel
     let session: TerminalSession?
+    let sshHost: String?
     let currentFilePath: String?
     let openFile: (String) -> Void
     let openToSide: (String) -> Void
@@ -688,7 +736,7 @@ private struct FileTreeScrollView: NSViewRepresentable {
             let editingChanged = editingPath != newEditingPath || draft != newDraft
             let selectionChanged = activePath != view.currentFilePath
             let sessionChanged = sessionID != view.session?.id
-                || isRemote != (view.session?.location.remoteConnection != nil)
+                || isRemote != (view.sshHost != nil || view.session?.location.remoteConnection != nil)
             let oldActivePath = activePath
             let oldEditingPath = editingPath
             configuration = view
@@ -701,7 +749,7 @@ private struct FileTreeScrollView: NSViewRepresentable {
             draft = newDraft
             activePath = view.currentFilePath
             sessionID = view.session?.id
-            isRemote = view.session?.location.remoteConnection != nil
+            isRemote = view.sshHost != nil || view.session?.location.remoteConnection != nil
             fontScale = view.fontScale
 
             if treeChanged || fontChanged {
@@ -782,6 +830,7 @@ private struct FileTreeHostedRow: View {
             git: configuration.git,
             item: item,
             session: configuration.session,
+            sshHost: configuration.sshHost,
             currentFilePath: configuration.currentFilePath,
             openFile: configuration.openFile,
             openToSide: configuration.openToSide,
@@ -802,6 +851,7 @@ private struct FileTreeRow: View {
     @ObservedObject private var themeChanges = Theme.changes
     let item: FileTreeModel.Item
     let session: TerminalSession?
+    let sshHost: String?
     let currentFilePath: String?
     let openFile: (String) -> Void
     let openToSide: (String) -> Void
@@ -825,7 +875,7 @@ private struct FileTreeRow: View {
     /// dropped still counts: the path is remote either way, and handing it to
     /// Finder would open whatever sits at the same path locally.
     private var isRemote: Bool {
-        session?.location.remoteConnection != nil
+        sshHost != nil || session?.location.remoteConnection != nil
     }
 
     var body: some View {
@@ -912,7 +962,7 @@ private struct FileTreeRow: View {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = String(
-            localized: "Delete “\(item.name)” on \(session?.location.remoteConnection?.displayName ?? "the remote machine")?",
+            localized: "Delete “\(item.name)” on \(sshHost ?? session?.location.remoteConnection?.displayName ?? "the remote machine")?",
             comment: "Remote delete confirmation. The placeholders are a file name and a remote machine as user@host."
         )
         alert.informativeText = String(
@@ -1262,10 +1312,12 @@ private struct GitPanel: View {
         let fingerprints: [String: FileFingerprint]
         let branch: String?
         let headOID: String?
+        let scope: String
     }
 
     @ObservedObject var model: GitStatusModel
     let session: TerminalSession?
+    let sshHost: String?
     let openFile: (String) -> Void
     let openToSide: (String) -> Void
     let openDiff: (_ entry: GitStatusModel.Entry, _ staged: Bool) -> Void
@@ -1277,6 +1329,7 @@ private struct GitPanel: View {
     @State private var commitMessage = ""
     @State private var pendingDiscard: PendingDiscard?
     @State private var pendingDiscardAll: [PendingDiscard] = []
+    @State private var preparingDiscard = false
     @State private var confirmDiscardAll = false
     @State private var mergeCollapsed = false
     @State private var stagedCollapsed = false
@@ -1322,15 +1375,19 @@ private struct GitPanel: View {
             Button(discardActionTitle(for: pendingDiscard?.entry),
                    role: .destructive) {
                 if let pendingDiscard {
-                    if discardSnapshotIsCurrent(pendingDiscard) {
+                    if remoteName != nil {
+                        Task {
+                            if await remoteDiscardSnapshotIsCurrent(pendingDiscard) {
+                                performOperation(
+                                    .entry(path: pendingDiscard.entry.path, operation: .discard)
+                                ) { model.discard(pendingDiscard.entry) }
+                            } else { model.cancelStaleDiscard() }
+                        }
+                    } else if discardSnapshotIsCurrent(pendingDiscard) {
                         performOperation(
                             .entry(path: pendingDiscard.entry.path, operation: .discard)
-                        ) {
-                            model.discard(pendingDiscard.entry)
-                        }
-                    } else {
-                        model.cancelStaleDiscard()
-                    }
+                        ) { model.discard(pendingDiscard.entry) }
+                    } else { model.cancelStaleDiscard() }
                 }
                 pendingDiscard = nil
             }
@@ -1349,13 +1406,23 @@ private struct GitPanel: View {
         ) {
             Button("Discard All Changes", role: .destructive) {
                 let snapshot = pendingDiscardAll
-                if !snapshot.isEmpty && snapshot.allSatisfy(discardSnapshotIsCurrent) {
+                if remoteName != nil {
+                    Task {
+                        var verified = !snapshot.isEmpty
+                        for entry in snapshot where verified {
+                            verified = await remoteDiscardSnapshotIsCurrent(entry)
+                        }
+                        if verified {
+                            performOperation(.discardAll) {
+                                model.discardChanges(snapshot.map(\.entry))
+                            }
+                        } else { model.cancelStaleDiscard() }
+                    }
+                } else if !snapshot.isEmpty && snapshot.allSatisfy(discardSnapshotIsCurrent) {
                     performOperation(.discardAll) {
                         model.discardChanges(snapshot.map(\.entry))
                     }
-                } else {
-                    model.cancelStaleDiscard()
-                }
+                } else { model.cancelStaleDiscard() }
                 pendingDiscardAll = []
                 confirmDiscardAll = false
             }
@@ -1370,6 +1437,12 @@ private struct GitPanel: View {
         }
         .onChange(of: model.repositoryIdentity) {
             resetRepositoryDrafts()
+        }
+        .onChange(of: model.currentScope) {
+            pendingDiscard = nil
+            pendingDiscardAll = []
+            confirmDiscardAll = false
+            collapsedFolders.removeAll()
         }
         .onChange(of: model.isBusy) {
             if !model.isBusy { operationTrigger = nil }
@@ -1396,6 +1469,11 @@ private struct GitPanel: View {
                     .scaleEffect(0.6)
                     .frame(width: 12, height: 12)
                     .accessibilityLabel(String(localized: "Refreshing Git status"))
+            }
+            if preparingDiscard {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel(String(localized: "Verifying remote files"))
             }
             if model.isRepo {
                 headerButton(
@@ -2189,7 +2267,13 @@ private struct GitPanel: View {
             openToSide: { openIfPossible(entry, toSide: true) },
             stage: { performOperation(stageTrigger) { model.stage(entry) } },
             unstage: { performOperation(unstageTrigger) { model.unstage(entry) } },
-            discard: { pendingDiscard = makePendingDiscard(entry) },
+            discard: {
+                if remoteName == nil {
+                    pendingDiscard = makePendingDiscard(entry)
+                } else {
+                    prepareRemoteDiscard([entry], all: false)
+                }
+            },
             absolutePath: model.absolutePath(for: entry),
             copyRelativePath: { copyToPasteboard(entry.path) },
             insertInTerminal: session.map { session in
@@ -2201,7 +2285,7 @@ private struct GitPanel: View {
     private func openIfPossible(_ entry: GitStatusModel.Entry, toSide: Bool = false) {
         guard model.isCurrent(entry) else { return }
         let path = model.absolutePath(for: entry)
-        guard FileManager.default.fileExists(atPath: path) else { return }
+        guard remoteName != nil || FileManager.default.fileExists(atPath: path) else { return }
         if toSide {
             openToSide(path)
         } else {
@@ -2211,7 +2295,7 @@ private struct GitPanel: View {
 
     /// The machine a discard would act on, or nil while local.
     private var remoteName: String? {
-        session?.location.remoteConnection?.displayName
+        sshHost ?? session?.location.remoteConnection?.displayName
     }
 
     private func discardTitle(for entry: GitStatusModel.Entry?) -> String {
@@ -2297,12 +2381,14 @@ private struct GitPanel: View {
                 (path, fileFingerprint(at: absolutePath(path, for: entry)))
             }),
             branch: model.branch,
-            headOID: model.headOID
+            headOID: model.headOID,
+            scope: model.currentScope
         )
     }
 
     private func discardSnapshotIsCurrent(_ pending: PendingDiscard) -> Bool {
         model.isCurrent(pending.entry)
+            && model.currentScope == pending.scope
             && model.branch == pending.branch
             && model.headOID == pending.headOID
             && model.changedEntries.contains(pending.entry)
@@ -2336,8 +2422,93 @@ private struct GitPanel: View {
     }
 
     private func requestDiscardAll() {
-        pendingDiscardAll = model.changedEntries.map(makePendingDiscard)
-        confirmDiscardAll = !pendingDiscardAll.isEmpty
+        if remoteName != nil {
+            prepareRemoteDiscard(model.changedEntries, all: true)
+        } else {
+            pendingDiscardAll = model.changedEntries.map(makePendingDiscard)
+            confirmDiscardAll = !pendingDiscardAll.isEmpty
+        }
+    }
+
+    private var remoteBackend: WorkspaceBackend? {
+        if let sshHost { return SSHHostWorkspaces.backend(for: sshHost) }
+        return session?.location.remoteConnection?.workspaceBackend
+    }
+
+    private func remoteFingerprint(at path: String, backend: WorkspaceBackend) async throws -> FileFingerprint {
+        guard let stat = try await backend.stat(path: path) else {
+            return FileFingerprint(
+                exists: false, size: 0, modificationDate: nil,
+                fileNumber: nil, symbolicLinkDestination: nil
+            )
+        }
+        let target = stat.isSymlink
+            ? try await backend.readSymlinkDestination(path: path) : nil
+        return FileFingerprint(
+            exists: true, size: UInt64(max(0, stat.size)), modificationDate: stat.mtime,
+            fileNumber: nil, symbolicLinkDestination: target
+        )
+    }
+
+    private func remotePendingDiscard(_ entry: GitStatusModel.Entry,
+                                      backend: WorkspaceBackend) async throws -> PendingDiscard {
+        var paths = [entry.path]
+        if entry.isWorktreeRename, let original = entry.origPath { paths.append(original) }
+        var fingerprints: [String: FileFingerprint] = [:]
+        for path in paths {
+            fingerprints[path] = try await remoteFingerprint(
+                at: absolutePath(path, for: entry), backend: backend
+            )
+        }
+        return PendingDiscard(
+            entry: entry, fingerprints: fingerprints,
+            branch: model.branch, headOID: model.headOID,
+            scope: model.currentScope
+        )
+    }
+
+    private func remoteDiscardSnapshotIsCurrent(_ pending: PendingDiscard) async -> Bool {
+        guard let backend = remoteBackend,
+              model.currentScope == pending.scope,
+              model.isCurrent(pending.entry),
+              model.branch == pending.branch,
+              model.headOID == pending.headOID,
+              model.changedEntries.contains(pending.entry)
+        else { return false }
+        for (path, fingerprint) in pending.fingerprints {
+            guard let current = try? await remoteFingerprint(
+                at: absolutePath(path, for: pending.entry), backend: backend
+            ), current == fingerprint else { return false }
+        }
+        return model.currentScope == pending.scope && model.isCurrent(pending.entry)
+    }
+
+    private func prepareRemoteDiscard(_ entries: [GitStatusModel.Entry], all: Bool) {
+        guard !preparingDiscard, let backend = remoteBackend, !entries.isEmpty else { return }
+        preparingDiscard = true
+        let scope = model.currentScope
+        Task {
+            defer { preparingDiscard = false }
+            do {
+                var snapshots: [PendingDiscard] = []
+                for entry in entries {
+                    snapshots.append(try await remotePendingDiscard(entry, backend: backend))
+                }
+                guard model.currentScope == scope,
+                      entries.allSatisfy(model.isCurrent) else { return }
+                if all {
+                    pendingDiscardAll = snapshots
+                    confirmDiscardAll = true
+                } else {
+                    pendingDiscard = snapshots.first
+                }
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = String(localized: "Could not verify remote files")
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
+            }
+        }
     }
 
     // MARK: Bits
@@ -2871,6 +3042,7 @@ private struct InfoPanel: View {
     @ObservedObject var model: SessionInfoModel
     @ObservedObject private var themeChanges = Theme.changes
     let session: TerminalSession?
+    let sshHost: String?
     /// The remote session's open forwards. Nil while local, where a listening
     /// port is already reachable on this Mac.
     var forwards: PortForwardController?
@@ -2886,7 +3058,7 @@ private struct InfoPanel: View {
     /// Whether these directories live on another machine. Finder and VS Code
     /// would otherwise open whatever sits at the same path locally.
     private var isRemote: Bool {
-        session?.location.remoteConnection != nil
+        sshHost != nil || session?.location.remoteConnection != nil
     }
 
     var body: some View {

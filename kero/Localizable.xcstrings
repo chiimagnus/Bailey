@@ -1,6 +1,146 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Add" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加"
+          }
+        }
+      }
+    },
+    "Add Files or Folders…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加文件或文件夹…"
+          }
+        }
+      }
+    },
+    "Add SSH Files or Folders" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加 SSH 文件或文件夹"
+          }
+        }
+      }
+    },
+    "Add SSH Files or Folders…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加 SSH 文件或文件夹…"
+          }
+        }
+      }
+    },
+    "Add files and folders to Kero" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将文件和文件夹添加到 Kero"
+          }
+        }
+      }
+    },
+    "Add files, folders, or SSH paths" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加文件、文件夹或 SSH 路径"
+          }
+        }
+      }
+    },
+    "Could not verify remote files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法验证远程文件"
+          }
+        }
+      }
+    },
+    "Enter an SSH host from ~/.ssh/config." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入 ~/.ssh/config 中的 SSH 主机。"
+          }
+        }
+      }
+    },
+    "Enter an absolute remote directory or file path." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入远程目录或文件的绝对路径。"
+          }
+        }
+      }
+    },
+    "Remote file or folder not found: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到远程文件或文件夹：%@"
+          }
+        }
+      }
+    },
+    "Remote paths (one per line)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远程路径（每行一个）"
+          }
+        }
+      }
+    },
+    "SSH host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH 主机"
+          }
+        }
+      }
+    },
+    "Use an SSH host from ~/.ssh/config and one remote path per line. Windows paths such as D:\\GitHub\\project are accepted." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从 ~/.ssh/config 选择 SSH 主机，每行输入一个远程路径。支持 D:\\GitHub\\project 这样的 Windows 路径。"
+          }
+        }
+      }
+    },
+    "Verifying remote files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在验证远程文件"
+          }
+        }
+      }
+    },
     "" : {
       "shouldTranslate" : false
     },

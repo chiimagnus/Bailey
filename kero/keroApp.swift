@@ -74,6 +74,17 @@ private struct KeroCommands: Commands {
             .keyboardShortcut("n", modifiers: .command)
             .disabled(manager == nil)
 
+            Button("Add Files or Folders…") {
+                manager?.chooseLocalItems()
+            }
+            .keyboardShortcut("a", modifiers: [.command, .shift])
+            .disabled(manager == nil)
+
+            Button("Add SSH Files or Folders…") {
+                manager?.chooseSSHItems()
+            }
+            .disabled(manager == nil)
+
             Button("New Session") {
                 manager?.newSession()
             }
