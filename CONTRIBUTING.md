@@ -18,6 +18,14 @@ xcodebuild -project kero.xcodeproj -scheme kero -configuration Debug \
 codesign --verify --deep --strict 'build/DerivedData/Build/Products/Debug/Kero.app'
 ```
 
+To check Files expansion across project/root changes with the real local backend:
+
+```sh
+xcrun swiftc -swift-version 5 -o build/check-file-tree-navigation \
+  kero/Workspace/WorkspaceBackend.swift kero/Workspace/FileTreeModel.swift \
+  scripts/check-file-tree-navigation.swift && build/check-file-tree-navigation
+```
+
 The app uses the personal Apple Development certificate for team
 `RDQHYSDFFG`, and saves its configuration in `~/.config/kero/config.toml`.
 This is for local use, not distribution or notarization.

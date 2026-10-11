@@ -251,9 +251,8 @@ struct ContentView: View {
             }
             .background(Color(nsColor: Theme.background))
 
-            // Dropping the hidden sidebar also drops its expanded file tree
-            // and process snapshot. Git stays window-owned because the toolbar
-            // remains visible while this panel is closed.
+            // Panel views are disposable. Each project's file tree and the
+            // window's Git model retain navigation state when hidden.
             if manager.isPanelVisible {
                 RightSidebarView(manager: manager, git: git)
             }

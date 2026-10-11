@@ -199,6 +199,21 @@ final class GitStatusModel: nonisolated ObservableObject {
     private static let recentCommitPageSize = 30
     private var recentCommitLimit = recentCommitPageSize
     private var recentCommitLimitByRoot: [String: Int] = [:]
+    /// Folding a Git directory is navigation state, not part of a status
+    /// refresh. Key by machine and root so different repositories stay apart.
+    @Published private var collapsedFoldersByRoot: [String: Set<String>] = [:]
+
+    var collapsedFolders: Set<String> {
+        get { collapsedFoldersByRoot[scopedRoot] ?? [] }
+        set { collapsedFoldersByRoot[scopedRoot] = newValue }
+    }
+
+    func toggleCollapsedFolder(_ key: String) {
+        var folders = collapsedFolders
+        if !folders.insert(key).inserted { folders.remove(key) }
+        collapsedFolders = folders
+    }
+
     /// Keeps a mutation globally exclusive even if the terminal changes cwd
     /// while its Git process is still running.
     private var runningOperationID: UUID?

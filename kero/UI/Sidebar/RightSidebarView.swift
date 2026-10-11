@@ -93,7 +93,6 @@ struct RightSidebarView: View {
     @ObservedObject var git: GitStatusModel
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var themeChanges = Theme.changes
-    @StateObject private var fileTree = FileTreeModel()
     @StateObject private var info = SessionInfoModel()
     @State private var applicationIsActive = NSApp.isActive
     /// Which rule produced the current panel root; drives the Files badge.
@@ -187,22 +186,24 @@ struct RightSidebarView: View {
                     }
                     switch manager.panelTab {
                     case .files:
-                        FileTreePanel(
-                            model: fileTree,
-                            git: git,
-                            session: fileActionSession,
-                            sshHost: manager.selectedProject?.sshHost,
-                            rootBadge: rootBadge,
-                            currentFilePath: openFilePath,
-                            openFile: { manager.openFile($0) },
-                            openToSide: { manager.openFileToSide($0) },
-                            onRename: { [workspace = manager.selectedProject?.workspaceIdentity] oldPath, newPath in
-                                manager.fileRenamed(
-                                    from: oldPath, to: newPath, workspace: workspace
-                                )
-                            },
-                            refreshGitStatus: { git.refresh() }
-                        )
+                        if let project = manager.selectedProject {
+                            FileTreePanel(
+                                model: project.fileTree,
+                                git: git,
+                                session: fileActionSession,
+                                sshHost: project.sshHost,
+                                rootBadge: rootBadge,
+                                currentFilePath: openFilePath,
+                                openFile: { manager.openFile($0) },
+                                openToSide: { manager.openFileToSide($0) },
+                                onRename: { [workspace = project.workspaceIdentity] oldPath, newPath in
+                                    manager.fileRenamed(
+                                        from: oldPath, to: newPath, workspace: workspace
+                                    )
+                                },
+                                refreshGitStatus: { git.refresh() }
+                            )
+                        }
                     case .git:
                         GitPanel(
                             model: git,
@@ -468,7 +469,7 @@ struct RightSidebarView: View {
         if rootSource != source { rootSource = source }
         switch manager.panelTab {
         case .files:
-            await fileTree.sync(root: root, backend: backend, scope: context.scope)
+            await project.fileTree.sync(root: root, backend: backend, scope: context.scope)
         case .git:
             break
         case .info:
@@ -688,6 +689,7 @@ private struct FileTreeScrollView: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         private var configuration: FileTreeScrollView?
+        private weak var activeModel: FileTreeModel?
         private var items: [FileTreeModel.Item] = []
         private var rootPath = ""
         private var editingPath: String?
@@ -740,7 +742,8 @@ private struct FileTreeScrollView: NSViewRepresentable {
             let newItems = view.model.items
             let newEditingPath = view.model.renamingPath
             let newDraft = view.model.draft
-            let treeChanged = newItems != items || rootPath != view.model.rootPath
+            let modelChanged = activeModel !== view.model
+            let treeChanged = modelChanged || newItems != items || rootPath != view.model.rootPath
             let fontChanged = fontScale != view.fontScale
             let editingChanged = editingPath != newEditingPath || draft != newDraft
             let selectionChanged = activePath != view.currentFilePath
@@ -749,8 +752,9 @@ private struct FileTreeScrollView: NSViewRepresentable {
             let oldActivePath = activePath
             let oldEditingPath = editingPath
             configuration = view
+            activeModel = view.model
             items = newItems
-            if rootPath != view.model.rootPath {
+            if modelChanged || rootPath != view.model.rootPath {
                 scroll.contentView.scroll(to: .zero)
             }
             rootPath = view.model.rootPath
@@ -1343,7 +1347,13 @@ private struct GitPanel: View {
     @State private var mergeCollapsed = false
     @State private var stagedCollapsed = false
     @State private var changesCollapsed = false
-    @State private var collapsedFolders: Set<String> = []
+    private var collapsedFolders: Set<String> { model.collapsedFolders }
+    private var collapsedFoldersBinding: Binding<Set<String>> {
+        Binding(
+            get: { model.collapsedFolders },
+            set: { model.collapsedFolders = $0 }
+        )
+    }
     @State private var historyCollapsed = false
     @State private var expandedCommitIDs: Set<String> = []
     @State private var filterText = ""
@@ -1442,7 +1452,6 @@ private struct GitPanel: View {
             pendingDiscard = nil
             pendingDiscardAll = []
             confirmDiscardAll = false
-            collapsedFolders.removeAll()
         }
         .onChange(of: model.repositoryIdentity) {
             resetRepositoryDrafts()
@@ -1451,7 +1460,6 @@ private struct GitPanel: View {
             pendingDiscard = nil
             pendingDiscardAll = []
             confirmDiscardAll = false
-            collapsedFolders.removeAll()
         }
         .onChange(of: model.isBusy) {
             if !model.isBusy { operationTrigger = nil }
@@ -2156,7 +2164,7 @@ private struct GitPanel: View {
                         RecentCommitsView(
                             commits: model.recentCommits,
                             expandedCommitIDs: $expandedCommitIDs,
-                            collapsedFolders: $collapsedFolders,
+                            collapsedFolders: collapsedFoldersBinding,
                             viewMode: settings.gitViewMode,
                             fontScale: sidebarFontScale,
                             hasMoreCommits: model.hasMoreRecentCommits,
@@ -2186,9 +2194,7 @@ private struct GitPanel: View {
                         fontScale: sidebarFontScale
                     ) {
                         let key = kind.rawValue + ":" + path
-                        if !collapsedFolders.insert(key).inserted {
-                            collapsedFolders.remove(key)
-                        }
+                        model.toggleCollapsedFolder(key)
                     }
                     .frame(height: max(22, 22 * sidebarFontScale))
                     .padding(.leading, CGFloat(item.depth) * 12 + 8)

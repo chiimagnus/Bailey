@@ -29,6 +29,8 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     @Published var sshHost: String?
     /// An individually added file is anchored to its parent directory.
     @Published var pinnedFile: String?
+    /// File browser state belongs to the project, not a transient right panel.
+    let fileTree = FileTreeModel()
     @Published var tabs: [PaneTab] = []
     @Published var selectedTabID: UUID? {
         didSet {

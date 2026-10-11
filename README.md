@@ -7,6 +7,7 @@ A native terminal workspace for macOS, with projects, SSH, files, Git and diffs.
 - One project list in the left sidebar: add multiple local files or folders with ⇧⌘A
 - Add SSH folders or files by host alias and remote path (including Windows with an MSYS2 shell)
 - Selecting a project controls its Files/Git context, regardless of terminal `cd`
+- Files remembers expanded folders per project; Git keeps folder folds per repository when switching
 - Native macOS terminal tabs and split panes
 - GPU-accelerated terminal powered by Ghostty
 - Local and SSH remote terminal workspaces

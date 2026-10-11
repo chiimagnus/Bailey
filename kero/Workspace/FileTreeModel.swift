@@ -34,8 +34,14 @@ final class FileTreeModel: nonisolated ObservableObject {
     @Published private(set) var renamingPath: String?
     /// The pending new-file/folder input row, if any.
     @Published private(set) var draft: Draft?
-    private var expanded: Set<String> = []
+    @Published private var expanded: Set<String> = []
     private var workspaceScope = "local"
+    /// A project can follow different checkouts; each retains its own outline.
+    private struct Root: Hashable {
+        let scope: String
+        let path: String
+    }
+    private var expandedByRoot: [Root: Set<String>] = [:]
 
     /// The workspace this tree reads. Replaced on every `sync`, so the tree
     /// follows its session between the local disk and a remote machine.
@@ -53,16 +59,19 @@ final class FileTreeModel: nonisolated ObservableObject {
         expanded.contains(item.path)
     }
 
-    /// Points the tree at `root` (collapsing everything if it moved) and
-    /// re-reads visible directories. Cheap when nothing changed.
+    /// Switches the visible root without discarding expansion state from the
+    /// previously visited directory. Data is still reread on every refresh.
     func sync(root: String, backend: WorkspaceBackend, scope: String = "local") async {
         self.backend = backend
         if root != rootPath || workspaceScope != scope {
+            if !rootPath.isEmpty {
+                expandedByRoot[Root(scope: workspaceScope, path: rootPath)] = expanded
+            }
+            expanded = expandedByRoot[Root(scope: scope, path: root)] ?? []
             workspaceScope = scope
             rootPath = root
             items = []
-            expanded = []
-            // Any in-progress inline edit belonged to the old tree.
+            // Inline editing cannot continue in an inactive workspace.
             renamingPath = nil
             draft = nil
         }
