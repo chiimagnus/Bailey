@@ -1,0 +1,50 @@
+version = 1
+current_task_id = ""
+
+[[tasks]]
+id = "P1-T1"
+title = "保存完整父提交与解析有类型 Ref"
+status = "pending"
+plan = "plan-p1.md#p1-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T2"
+title = "Recent Commits 真实图谱与 Ref 独立命中"
+status = "pending"
+plan = "plan-p1.md#p1-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T1"
+title = "按 Commit、本地分支、Tag 归属原生 Context Menu"
+status = "pending"
+plan = "plan-p2.md#p2-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T2"
+title = "在所选 Commit 创建 Ref 并安全管理 Tag"
+status = "pending"
+plan = "plan-p2.md#p2-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T1"
+title = "复现并定位 Git 面板刷新迟滞"
+status = "pending"
+plan = "plan-p3.md#p3-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T2"
+title = "最小刷新修复与原生端到端验收"
+status = "pending"
+plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
