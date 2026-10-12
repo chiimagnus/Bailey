@@ -57,23 +57,20 @@ jobs:
             -k "$password" "$SIGNING_KEYCHAIN"
           security list-keychains -d user -s "$SIGNING_KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
           python3 -c 'import os, pathlib; pathlib.Path(os.environ["RUNNER_TEMP"], "kero-signing.p12").unlink()'
-      - name: Build and verify both signed archives
+      - name: Build and verify stable archive
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           BUILD_NUMBER: ${{ github.run_number }}
         run: |
           bash scripts/release-app.sh stable "${RELEASE_TAG#v}" "$BUILD_NUMBER"
-          bash scripts/release-app.sh dev "${RELEASE_TAG#v}" "$BUILD_NUMBER"
-      - name: Publish verified archives
+      - name: Publish stable archive
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           gh release create "$RELEASE_TAG" \
             "build/releases/kero-${RELEASE_TAG#v}-macos-arm64.zip" \
-            "build/releases/kero-dev-${RELEASE_TAG#v}-macos-arm64.zip" \
-            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$RELEASE_TAG" --generate-notes --latest \
-            --notes "安装提醒：本版本使用 Apple Development 证书签名，未经 Apple 公证，macOS 可能拦截首次打开。确认信任本版本后，复制[首次打开说明](https://github.com/$GITHUB_REPOSITORY/blob/$RELEASE_TAG/README.md#首次打开被拦截时)中的终端命令：先校验签名和团队，再仅移除指定应用的下载隔离标记并打开。无需额外脚本，不关闭全局 Gatekeeper。"
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$RELEASE_TAG" --generate-notes --latest
       - name: Remove temporary signing credentials
         if: always()
         run: |

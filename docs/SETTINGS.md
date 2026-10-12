@@ -4,9 +4,13 @@
 
 ## 配置
 
-普通偏好与工作区初始值来自 `~/.config/kero/config.toml`，不是项目快照或未保存内容备份。具体用户配置见 [README](../README.md#设置与恢复)。
+普通偏好与工作区初始值来自 `~/.config/kero/config.toml`，不是项目快照或未保存内容备份。
 
-正式版为 `chiimagnus.kero`，配置与终端历史仍使用 `kero` 目录；开发版为 `chiimagnus.kero.dev`，配置与隧道位于 `~/.config/kero-dev/`，终端历史位于 Application Support 下的 `kero-dev/`。窗口快照、语言偏好和隧道 PID 记录使用各自 Bundle ID。路径由 `AppIdentity` 汇聚，不用 Debug 宏或临时视图判断，不自动复制正式数据。隔离测试 suite 也按 Bundle ID 区分，仍不启动已保存隧道。旧身份的数据由明确授权的安装迁移处理，应用不读取旧 ID。
+正式版与开发版的数据独立，由 `AppIdentity` 决定路径：
+
+- 正式版 `chiimagnus.kero`：配置目录为 `~/.config/kero/`，历史目录为 Application Support 下的 `kero/`。
+- 开发版 `chiimagnus.kero.dev`：对应目录为 `kero-dev/`，不复制正式版数据。
+- 快照、语言偏好、隧道 PID 和隔离测试 suite 使用各自 Bundle ID；隔离测试不启动已保存隧道。应用不读取旧 Bundle ID。
 
 - 布局由窗口协调者显式传入项目；项目不自行读取全局布局配置。启动读取的初始值只影响新建项目，已有项目按保存布局恢复。
 - 校验组数量、权重、选中项、工具唯一性与必需项；边缘范围为 `0.05...0.4`。无效工作区配置整体回退默认值并记录错误，不接受一半有效的布局。

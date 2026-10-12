@@ -22,18 +22,10 @@
 需要 macOS 15.6+、Xcode 和可用的 Apple Development 证书。工程默认团队为 `RDQHYSDFFG`；使用其他团队时调整签名设置。以下命令从仓库根目录执行：
 
 ```sh
-bash scripts/prepare-ghostty.sh
-xcodebuild -project kero.xcodeproj -scheme kero-dev -configuration Debug \
-  -destination 'platform=macOS,arch=arm64' \
-  -derivedDataPath build/DerivedData \
-  -clonedSourcePackagesDirPath build/SourcePackages \
-  -skipPackageUpdates build
-codesign --verify --deep --strict "build/DerivedData/Build/Products/Debug/Kero Dev.app"
+bash scripts/build-app.sh dev
 ```
 
-Debug 产物是 `Kero Dev.app`，标识为 `chiimagnus.kero.dev`。正式版使用 `-scheme kero -configuration Release`，产物为 `build/DerivedData/Build/Products/Release/Kero.app`，标识为 `chiimagnus.kero`。两者共享单个 Target 和 `kero` 可执行文件，但不共享设置、快照、历史及隧道。GhosttyKit 缺失时才下载，校验后复用。需要切换 Xcode 时设置 `DEVELOPER_DIR`；没有自动更新。
-
-两种构建也可运行 `bash scripts/build-app.sh stable|dev`。GitHub CI、标签发布与免费账号签名的凭据及限制见[构建与发包](docs/RELEASE.md)；不要未经授权上传私钥、推送或发布。
+正式版使用 `bash scripts/build-app.sh stable`。脚本准备 Ghostty、构建并校验签名；切换 Xcode 时设置 `DEVELOPER_DIR`。应用包路径、CI 和签名发布见[构建与发包](docs/RELEASE.md)，身份与数据隔离见[设置与恢复](docs/SETTINGS.md)。Release 只发正式版；未经授权不上传私钥、推送或发布。
 
 ## 验证
 

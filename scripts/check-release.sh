@@ -80,4 +80,10 @@ if SIGNING_IDENTITY=0000000000000000000000000000000000000000 SIGNING_TEAM=RDQHYS
     bash scripts/build-app.sh stable release > "$temporary/signing" 2>&1; then
     echo '不存在的证书却继续构建' >&2; exit 1
 fi
-printf 'PASS: release tag, main ancestry, exact-SHA CI, API failures, duplicate/version order and missing signing credentials\n'
+if grep -Eq 'release-app\.sh[[:space:]]+dev|kero-dev-.*\.zip' .github/workflows/release.yml; then
+    echo 'GitHub Release 不得构建或上传开发版' >&2; exit 1
+fi
+grep -F 'bash scripts/release-app.sh stable' .github/workflows/release.yml >/dev/null
+grep -F 'bash scripts/build-app.sh dev adhoc' .github/workflows/ci.yml >/dev/null
+grep -F 'bash scripts/build-app.sh stable adhoc' .github/workflows/ci.yml >/dev/null
+printf 'PASS: release tag, main ancestry, exact-SHA CI, API failures, duplicate/version order, missing signing credentials, stable-only Release and both CI variants\n'
