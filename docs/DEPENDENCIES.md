@@ -54,7 +54,7 @@ Swift 源码由 `Vendor/libghostty-spm` 子模块提供，`Vendor/GhosttyKit` �
 bun scripts/generate-material-file-icons.ts /path/to/vscode-material-icon-theme
 ```
 
-脚本验证版本，提交来源由维护者核对。输出为 `kero/Resources/MaterialFileIcons/` 与 `kero/Editor/MaterialFileIcon.swift`，均入库；普通构建不下载或生成图标。
+脚本验证版本，重新生成前另行核对上游提交。输出为 `kero/Resources/MaterialFileIcons/` 与 `kero/Editor/MaterialFileIcon.swift`，均入库；普通构建不下载或生成图标。
 重新生成后检查明暗主题、常见扩展名和未知文件的图标，并保留输出中的许可证与来源说明。
 
 内置字体位于 `kero/Resources/Fonts/`。替换字体或图标时核对各自的许可证和署名，不改写许可原文。

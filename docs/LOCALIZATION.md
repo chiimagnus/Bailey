@@ -1,24 +1,17 @@
 # 本地化
 
-本文负责界面翻译的归属、占位符和验证要求。
-应用维护英语（`en`）与简体中文（`zh-Hans`），开发语言仍为英语；这与仓库文档使用中文无关。
+新增或修改界面文案、字符串表或语言切换时，保留以下约束。
 
-## 翻译现有文案
+应用维护英语（`en`）与简体中文（`zh-Hans`），开发语言为英语；自有文档使用中文。
 
-在 Xcode 中打开 `kero.xcodeproj`，编辑 `kero/Resources/Localization/` 下的字符串目录：
+## 文案归属
 
-- `Git`、`Sidebar`、`Terminal`、`Workspace`、`Browser`、`Editor`、`Settings`：对应功能界面。
-- `Interface`：应用菜单、命令面板、标签和窗口控件。
-- `InfoPlist`：权限说明；`ServicesMenu`：Finder 服务。
+字符串目录位于 `kero/Resources/Localization/`：
 
-保留 `%@`、`%lld` 等占位符、快捷键符号和产品名称。
-移动文案所属目录时，同步修改 Swift 中的 `table`，避免查找错误。
+- `Git`、`Sidebar`、`Terminal`、`Workspace`、`Browser`、`Editor`、`Settings` 对应功能界面。
+- `Interface` 负责菜单、命令面板、标签与窗口；`InfoPlist` 负责权限说明，`ServicesMenu` 负责 Finder 服务。
 
-交给外部译者时，可在 Xcode 的“产品”菜单导出本地化为 XLIFF，翻译后再导入，无需提供源码。
-
-## 新增文案
-
-始终指定所属功能的字符串表，不使用无归属的 SwiftUI 本地化键：
+始终指定字符串表；移动文案时同步 Swift 中的 `table`，不使用无归属的本地化键：
 
 ```swift
 Button(String(localized: "Create New Branch…", table: "Git")) {
@@ -26,22 +19,12 @@ Button(String(localized: "Create New Branch…", table: "Git")) {
 }
 ```
 
-API 需要资源类型时，使用 `LocalizedStringResource("…", table: "Interface")`。
-占位符含义不明显时，用 `comment` 说明。使用完整句子，不拼接翻译片段；数量相关文案使用目录中的复数变体。
+需要资源类型时用 `LocalizedStringResource`。保留占位符、快捷键与产品名称；语义不明的占位符提供翻译说明。使用完整句子和复数变体，不拼接翻译片段。
 
-文件名、用户内容和终端输出不参与翻译：
+文件名、用户内容和终端输出不翻译，使用 `Text(verbatim:)` 等明确表达原文的入口。新增文案先构建提取，再补齐目录中的翻译。
 
-```swift
-Text(verbatim: file.path)
-```
+## 语言与验证
 
-工程已启用字符串提取。新增文案后先构建，再翻译目录中的新条目。
+「系统默认」遵循 macOS 语言偏好，包括单独应用语言；不支持的语言回退英语。应用内切换语言需重启，不承诺恢复未保存内容，见[恢复约束](SETTINGS.md)。
 
-## 验证
-
-在 Xcode 的方案编辑器中，进入运行选项，分别设置应用语言和地区，检查英语与简体中文。
-确认菜单、对话框、长文案、数量变化和无障碍名称都正确。
-
-应用内可从“设置 → 外观 → 语言”选择语言，重新启动后生效。
-“系统默认”遵循 macOS 的语言偏好，包括系统设置中的单独应用语言；不支持的语言回退到英语。
-重启前先保存编辑并结束不能中断的命令。
+分别运行英语与简体中文，检查菜单、对话框、长文案、数量变化与无障碍名称。占位符和表名检查通过不能代替界面验证。
