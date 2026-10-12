@@ -4,7 +4,7 @@
 
 **Non-goals:** 不更换 WebKit/Pierre，不新增全项目多文件 diff，不缩小 5 MiB 上限，不降低差异或高亮质量。
 
-**Approach:** 先分别测读取、Swift 桥接、JS 计算和页面布局，再对命中的阶段做最小修改。优先应用与依赖的已有入口；公开接口无法处理已证实热点时，才携带同一固定版本的最小依赖补丁。每个候选单独复测，保留数据和编辑正确性，而不是用提前发出 ready 隐藏等待。
+**Approach:** 读取失败/编辑保留与内容身份正确性先闭环；性能分别测读取、Swift 桥接、JS 计算和布局，命中才改。优先现有入口，依赖内部的已复现正确性问题或准入热点才携带固定版本最小补丁，不以提前 ready 隐藏等待。
 
 **Acceptance:**
 - 首次打开、复选、跨项目和当前停靠组切换的实际首屏/可编辑/高亮分别有记录。
@@ -14,7 +14,7 @@
 
 **Rules:**
 - 前置 P1。P2 改善 backend 读取不等于 diff 的解码已离开主线程，须单独核对实际 executor。
-- `DiffTab` 已保留 hosting view；历史 diff 已避免复选时重读；Pierre 已有相等输入检查、虚拟化和高亮 worker。不得重复搭建。
+- `DiffTab` 保留 hosting view，`refreshWhenSelected` 跳过历史与初始在途读取；但 `Project.openDiff/openCommitDiff` 复用已有 tab 时仍直接 reload。区分“选回 tab”和“再次点击 Git 行”，不能声称所有历史复选已免读取。Pierre 已有相等输入检查、虚拟化和高亮 worker，不重复搭建。
 - 当前布局是 `WorkspaceDockView → DockTabGroupView.content / PaneLayoutView`；按正式基线核对可见组、挂载、重挂载和关闭，不能套用旧 visited-project stack 的事实。
 - `bridgeReady`、`ready`、`evaluateJavaScript` 完成都不是实际绘制。布局、字体、可见行与高亮要在 WebKit timeline/截图中核对。
 - 依赖固定为 resolved 中的 PierreDiffsSwift `3713d29360b750d3d6146b187ff3b77b7d498fee`，JS `@pierre/diffs 1.3.1`。上游最新文档不能替代固定版本契约。
@@ -25,7 +25,8 @@
 **类型 / 依赖:** 实验；依赖 P1，比较时记录 P2/P3/P4 的实际实现状态。
 
 **Files / 已核对锚点:**
-- `kero/Git/DiffViewerView.swift`：`DiffTab.reload`、`firstGitContent`、`gitContent`、`runGitData`、`readWorktreeFile`、`materializeWebHostView`、`DiffWebRoot`。
+- `kero/Git/DiffViewerView.swift`：`DiffTab.reload`、`firstGitContent`、`gitContent`、`readWorktreeFile`、`materializeWebHostView`、`DiffWebRoot`；`GitCommandExecution.runData` 是实际共享 runner，旧模型/文件内 runner 不存在。
+- `kero/Workspace/Project.swift`：`openDiff` / `openCommitDiff` 的已有 tab 分支。
 - `kero/UI/WorkspaceDockView.swift`、`kero/UI/Panes/PaneLayoutView.swift`：当前实际挂载 caller。
 - Read-only upstream: `build/SourcePackages/checkouts/PierreDiffsSwift/Sources/PierreDiffsSwift/WebView/{PierreMultiDiffView,DiffWebViewCoordinator}.swift`。
 - Read-only upstream: 同包 `Models/PierreMultiDiffInput.swift`、`scripts/src/{diff-entry,worker-entry}.js`、`scripts/bundle.js`、`docs/upstream-pierre-diffs.md`、`AGENTS.md`、`CHANGELOG.md`。
@@ -36,11 +37,13 @@
 - coordinator 在 MainActor 做 JSON 编码、base64 和脚本构造；未 ready 时保存待执行闭包。输入 `PierreMultiDiffInput` 与 `PierreDiffFile` 已是 Sendable，可以传值，不能把 WKWebView 送到后台。
 - `createCodeViewItem` 先同步 `parseDiffFromFile`，再算内容版本并调用 `CodeView.setItems`；现有 worker 只负责高亮。虚拟化不意味着差异计算也在后台。
 - Swift 相等输入通常不会重新 render；不能把“JS 进入一次就算一次”误写成“每次标签切换都重算”。
+- `contentVersion` 的 32 位 hash 被当作 CodeView 不更新记录与 worker 高亮缓存的身份。当前生产函数对 `fixture.txt`、空 before、review 模式的 after=` a` / `!@` 均产生 itemVersion=1381271817，两侧内容键也碰撞；身份修复属于 P5-T4 必修，不是未发生的理论风险。
+- Swift cleanup 当前只停止导航、移除 handler/视图，未清 pendingOperations，也未调用 JS bridge.cleanup；JS 有销毁 CodeView/worker/blob URL 的能力不代表 App 已执行它。关闭增长仍需实际归因，不直接声称泄漏或立即加恢复框架。
 
 **实验:**
 1. 固定 P1 选中的小/大 diff，以及初次、live 再选、历史再选、edit/review 切换和多个可见停靠组。按同一源代码快照测 Kero 与关联 WebKit 进程。
 2. 记录 Git 进程/SSH 往返及等待、worktree 读取/解码、JSON/base64/脚本、网页解码、差异计算/内容扫描、字体/DOM/布局与可见高亮。已有 signpost 不足才最小补充，不记录实际文本或路径。
-3. 对主耗时只做对应最小原型：独立两侧读取重叠；Sendable 输入后台编码；重复输入在 parse 前复用。原型在 `build/` 的固定版本副本中进行，不把 checkout 临时改动当成正式成果。
+3. 对主耗时只做对应最小原型：复用 tab 时免无益 reload、有限两侧读取重叠、Sendable 输入后台编码、parse 前复用。原型在 `build/` 固定版本副本中进行，不把 checkout 临时改动当正式成果；不预建 cat-file batch 协议或旧 Git 兼容分支。
 4. 若单次 parse 是热点，检查固定 `1.3.1` 的源码/类型声明和 worker 能力，再试一条受支持路径；没有证据就不能预设高亮 worker 能计算 diff。需要网络获取锁定 npm 包时仅取现有锁定依赖，不升级，不上传样本。
 5. 结果更新本阶段具体选择、源码位置、回归命令和准入；不能留给实现者凭空决定新协议或 worker 结构。公开 API 已能解决就不 vendoring；需要超出最小补丁的新引擎就停止并说明限制。
 
@@ -54,45 +57,38 @@
 <a id="p5-t2"></a>
 ## P5-T2 收敛 diff 读取等待与后台解码
 
-**类型 / 依赖:** 条件实现；依赖 P5-T1 的读取热点准入及 P2-T1 的 backend 契约。
+**类型 / 依赖:** 读取正确性必修 + 条件性能精简；依赖 P5-T1 归因、P2-T1 backend 契约。正确性不以耗时准入决定是否修。
 
 **Files:**
 - Modify: `kero/Git/DiffViewerView.swift` 的 `reload` 与读取结果回写。
-- Only if needed: new `kero/Git/DiffContentReader.swift`，迁移实际 Git/worktree 内容读取；仅包含原有职责，不加 protocol 或缓存框架。
-- New if this path changes: `scripts/check-diff-content.swift`，运行真实生产读取函数和临时 Git 仓库。
-- Existing shared runners: `GitStatusModel.runGit / remoteGitData`、`WorkspaceBackend`；不另造通用进程池。
+- New: `kero/Git/DiffContentReader.swift`，迁移实际 Git/worktree 读取，单个生产与脚本共用的数据型职责；不加 protocol、factory、队列或缓存框架。
+- New: `scripts/check-diff-content.swift` 并在 check.sh 接入；Extend: `scripts/check-workspace-identity.swift` 的真实 DiffTab 晚结果/编辑保留检查。
+- Modify: `Project.openDiff/openCommitDiff` 的复用分支，按归因避免重复初读/历史重读。
+- Existing shared runners: `GitCommandExecution.run / runData`、`WorkspaceBackend` 与 `LocalWorkspaceBackend`；不另造进程池或绕过登录 shell 环境。
 
 **不变量与实施:**
-1. 只实施 P5-T1 已证明的最小路径。优先让彼此独立的两侧读取重叠、将工作树 UTF-8 扫描/解码显式放到非主执行器；同一侧冲突 fallback 仍按原顺序选择。每 tab 至多两侧，不并发启动所有 fallback。
-2. 回写继续由 `DiffTab` 拥有，用原 `reloadGeneration`、workspace 和只读状态校验。不发布中间空文本重建 WebView。检查进入 edit mode 时已有 read 在途的路径：提交结果前也须保持“不替换正在编辑或 dirty 的文档”，不能只依赖启动时 guard。
-3. 历史、staged、live、untracked、rename 的两侧语义不变；live 冲突仍依次 stage-0、stage-2、stage-1、HEAD。一次结果只聚合真实失败，另一侧成功不能清掉前一侧错误。
-4. 不缓存可变 index/worktree 为 immutable HEAD。已有历史复用保留，不增加永久 blob 缓存。
-5. 只有 P5-T1 证明进程启动/远程往返主导且 batch 原型值得采用时才改 blob 读取。按 [git-cat-file 官方协议](https://git-scm.com/docs/git-cat-file)核对本机与远端实际版本；优先两次有限调用：先批取类型、大小和对象 ID，再仅请求合限对象的内容，复用 backend.run 的 stdin 能力，不为两侧 blob 新造交互式进程服务。固定对象 ID 避免 size/content 指向不同 index 对象；按字节边界读响应，不按内容换行拆 blob。
-6. batch 分支保留 missing、binary、tooLarge、UTF-8 和 cap+1 防护，每侧各有 5 MiB 边界；不能直接把 runGitData 的单个 stdout 全局 cap 套到两侧总响应，否则两个合法大 blob 会被截断。stdin/stdout/stderr 必须避免互等，退出/失败必须排空或正常终止，不建立常驻跨 tab 进程。含空格/换行的路径不能破坏帧。远端缺能力走原路径，不擅自提高最低 Git 版本。若这些成本超过收益，保留现有有界 runner。
-7. 改动非平凡读取逻辑时，最小拆出 `DiffContentReader` 给 app 和回归脚本共同调用，接入与删除原重复实现在本 task 完成。仅移动 executor 的简单分支则保留原文件，复用 P2 有界读取检查，并用实际应用验证解码线程与回写。
-8. 脚本若使用 shared runner，沿用 P4-T1 已验证的 app-only 类型壳，不复制 Git/字节算法。需要拆出真实读取逻辑时使用以下编译入口，纯 executor 调整则复用 P2 检查与真机 trace；不会声称规划时已验证尚不存在的脚本。
-
-```sh
-xcrun swiftc -swift-version 5 -o build/check-diff-content \
-  kero/Workspace/WorkspaceBackend.swift kero/Workspace/TreeDisplayModel.swift \
-  kero/Remote/RemoteCommands.swift kero/Git/GitStatusModel.swift \
-  kero/Git/DiffContentReader.swift scripts/check-diff-content.swift \
-  && build/check-diff-content
-```
+1. 先复现实际缺口：gitContent 当前把 cat-file 的任何非零退出都当 missing，size 无法解析也默认为 0；DiffTab.reload 回写不再检查编辑状态；isLoading=true 后的 edit/reloadGeneration 变化还可能使旧任务不清 loading。检查最终 UI 内容/错误/等待，不只断言某个 guard 返回。
+2. 回写由 DiffTab 拥有并复用 reloadGeneration。切入编辑、输入及保存时使旧加载失效并结束其 loading；发布前核对只读/正在编辑/dirty，不能等待到首个 dirty 才保护已打开的 editor/undo。不要加第二套 render 身份来补读取层错误；不发布中间空文本重建 WebView。
+3. 用成功的结构化元数据区分缺失和失败，而非匹配任意 stderr：index 用 `--literal-pathspecs ls-files --stage -z -- <path>`（替代现有 isUnmerged 单次查询），按 stage 选 0/2/1 的对象 ID；tree 用 `--literal-pathspecs ls-tree -z <commit> -- <path>`，成功空输出才是该路径不存在。历史用已有 parentHash/commitStatus 判定无父/A/D，live/staged 需要 HEAD 时先 `rev-parse --verify --quiet HEAD` 区分正常 unborn 与非仓库/执行失败。路径按 NUL 原字节解析，不能 split 换行；HEAD/root 与同一轮 metadata 不借用别的面板旧快照。
+4. 已找到的 blob 按固定对象 ID 调共享 runner 的 cat-file size/原字节入口，任何读取失败/坏 size 都是 error，不继续选另一 spec；size/content 不再分别解引用可变 index 路径。正常 index stage 缺失仍按 0 → 2 → 1 → HEAD 的现有语义选择，不把冲突 fallback 当旧版本兼容代码删除。保留两侧失败聚合、大小/二进制/UTF-8 策略与历史复用，不新增永久 blob cache。
+5. 只对 P5-T1 命中的等待优化：先删除 Project 复用分支中的重复初始化读取/不可变历史重读，live metadata 实际变化仍刷新；工作树 UTF-8 扫描/解码明确后台，独立两侧至多有限并行，同侧 fallback 不并行。复用现有任务/选择入口，不同时跑新旧读取。
+6. 删除旧计划的 batch 读取协议、版本能力探测与“远端不支持走原算法”双轨。若这些简单措施之后进程/往返仍主导，记录证据并另行回改设计，不在当前 task 默认增加 stdin 执行器、交互服务或大小/内容双阶段协议。保留现有每侧 cap、原始字节、symlink 和失败处理。
+7. 在同 task 接入 DiffContentReader 并删除 DiffTab 旧 firstGitContent/gitContent/isUnmerged/readWorktreeFile 等迁出的读取算法及“任意失败是 missing”分支。共享字节上限归 reader，一个拥有者；不留旧 spec reader 作恢复兼容层，也不删除模型仍需的编辑性与保存保护。
+8. Run（同 task 注册）：`bash scripts/check.sh diff-content workspace-identity git-execution`，后两类 App 检查按需先构建 Debug；DiffTab 用真实 App + 受控 backend 验证晚结果，临时 Git 为内容 oracle。diff-content 的编译输入为 WorkspaceBackend.swift、LocalWorkspaceBackend.swift、GitCommandExecution.swift、DiffContentReader.swift 与检查脚本，不拉入整份 GitStatusModel 或写 app-only 类型壳。
 
 **验证:**
 - 真实 temporary Git 检查：普通 live/staged/history、root commit 缺父、unborn、untracked、rename、删除、unmerged fallback；用 `git cat-file blob` 和磁盘原始字节作 oracle。
-- 空、Unicode/组合字符、NUL、无效 UTF-8、恰好 5 MiB/多一字节、symlink 显示及禁止原子覆盖。若 batch 入选，额外检查两侧各 4 MiB 均合法、单侧超限不发送内容、协议截断、大 stderr、路径换行、失败退出和 size/content 竞态。
+- 空、Unicode/组合字符、NUL、无效 UTF-8、恰好 5 MiB/多一字节、symlink 显示及禁止原子覆盖；区分真实缺失与启动/超时/读取失败/坏 size，坏结果不进入后续 fallback；两侧成功不能清掉另一侧错误。保留本地 raw-byte cap；远程 stdoutLimit 目前只在返回后截 prefix，不冒称传输本身已有同样有界能力。
 - 真机：打开时终端/光标可操作；读取中切换与关闭；在途 reload 后进入 edit、输入、撤销、保存，WebView 文档和 undo 不重置，磁盘只有实际保存的内容。
 - 共享 SSH 分支变化须用授权 fixture 做真实连接；模拟只用于可控延迟/乱序，不冒充端到端。
 - 与 P5-T1 比较同一阶段及实际首屏，记录进程/往返变化和内存，收益不显著则不保留复杂 batch。
 
-**提交边界:** 选中的读取路径、必要 helper/真实回归检查一个原子提交；未命中时只回写本地证据，不制造代码提交。
+**提交边界:** 读取正确性、生产 reader 接入/旧路径删除与真实回归一个原子提交；未命中性能候选仍修正确性，只是不加入并行/预取等措施。
 
 <a id="p5-t3"></a>
 ## P5-T3 收敛桥接编码与在途渲染
 
-**类型 / 依赖:** 条件实现；依赖 P5-T1 的 Swift 编码或重复排队热点准入。
+**类型 / 依赖:** 条件实现；依赖 P5-T1 的 Swift 编码或排队热点准入。P5-T4 的必修身份补丁可先提供同固定版本的包，没命中编码热点不强制移动 executor。
 
 **Files:**
 - Existing application call: `kero/Git/DiffViewerView.swift` 的 `DiffWebRoot`，只有公开 API 能解决时在这里最小调整。
@@ -104,9 +100,9 @@ xcrun swiftc -swift-version 5 -o build/check-diff-content \
 2. 在实际拥有 `PierreMultiDiffInput` 的 coordinator 内，让纯 Sendable 输入的 JSON/base64/脚本构造后台执行；WebKit 调用与 UI 状态仍在 MainActor。不使用 `@unchecked Sendable` 搬运 WKWebView、coordinator 或可变编辑对象。
 3. 新异步间隙需要一个 coordinator 自有的最小 render revision / 最新在途输入；只在真实 full-render 路径使用。旧编码不能晚到覆盖新内容；关闭后取消/丢弃结果；未 ready 时不累积多份大文本编码。已有无数据变更的 style/theme/font 增量命令继续复用。
 4. 明确内容与选项的顺序：full render、随后 theme/style/overflow/font 和 scroll 必须落在最新内容上，旧 input 的选项不能覆盖更新设置。保留一个最新期望值即可，不建立通用命令总线或第二套文档状态。
-5. `lastFiles/lastRenderOptions` 是依赖的发送判定；编码/提交失败不能永远把未发送内容当作已成功。保留既有错误反馈，区分“期望输入”和“已提交”仅到该异步边界所需程度，不新增无限重试。
+5. `lastFiles/lastRenderOptions` 是依赖发送判定；编码/提交失败不能永远把未发送内容当成功。当前 Swift/JS error 只到 DiffLogger，不是 Kero 用户失败条，不能声称已有可见恢复。改异步时提供最小可见失败结果及用户触发重试/重载，不造自动重试框架；只区分该间隙需要的期望输入/已提交。
 6. UTF-8 解码继续 `atob → Uint8Array → TextDecoder → JSON.parse`；不能直接按 Latin-1 解码。少一次复制只有测量证明且协议可保持才做，不换传输栈。
-7. cleanup 清除 pending 大输入和自有任务。只有关闭/重复创建 trace 显示残留，才进一步沿现有 JS `cleanup → terminateWorkerPoolSingleton / revokeObjectURL` 到实际释放查明；不能只证明 cleanup 函数被调用。
+7. 同 task cleanup 清 pending 大输入/自有编码任务，替换 pending full-render 闭包队列时删除旧队列分支；非 full-render 的公开命令能力不顺手裁剪。只有关闭 trace 显示残留，才接通并验证实际 JS cleanup/worker/blob URL 释放，当前 Swift cleanup 未调用它，不能只证明 JS 存在一个函数。
 8. 同一 task 完成本地 package 接入、补丁归属/固定来源/生成流程文档；不能在 checkout 留临时修复，不能把 plan 文件并入提交。
 
 **验证:**
@@ -120,7 +116,7 @@ xcrun swiftc -swift-version 5 -o build/check-diff-content \
 <a id="p5-t4"></a>
 ## P5-T4 减少 JS 差异计算与内容扫描
 
-**类型 / 依赖:** 条件实现；依赖 P5-T1 的 JS 热点结论。P5-T3 若未携带依赖，也可独立按同一准入规则接入必要最小补丁。
+**类型 / 依赖:** 内容身份必修 + 条件 JS 性能实现；依赖 P5-T1，P5-T3 未 vendoring 时本 task 独立接入同固定 revision。先闭环已复现的 identity 碰撞，parse 复用/调度仍以 trace 决定。
 
 **Files:**
 - If dependency patch is necessary: `Vendor/PierreDiffsSwift/scripts/src/diff-entry.js`、必要的固定版本 worker source，以及生成脚本的真实输出资源。
@@ -129,22 +125,22 @@ xcrun swiftc -swift-version 5 -o build/check-diff-content \
 - 接入首次发生在本 task 时，包含 P5-T3 的项目与依赖归属文件。
 
 **实施:**
-1. 按 P5-T1 选择复用或调度，先在 `createCodeViewItem` 的 parse 前判断实际变化，不在 `setItems` 后才发现可以复用。已有 Swift 相等检查仍保留，JS 不建无限内容缓存。
+1. 先用本轮 ` a` / `!@` fixture 在真实 CodeView/WKWebView 复现，检查内容、差异行和高亮最终更新；替换 hash 身份为当前 item 的明确内容变化 + 单调版本，并用于两侧 worker cacheKey。固定 hash 已被证据推翻，不能只升级 hash 位数或再套第二个 hash。公开 Swift API 没有传入 version 的入口，不通过改 fileID 重建编辑器规避。
 2. 若复用值得采用，仅保留当前 CodeView items 的最新 descriptor 与已解析结果，更新/移除 item 同步失效。名称/oldName、语言、note、两侧内容、edit/review 语义都纳入比较，不能只按 path 或长度。
-3. 不把 32 位 `contentVersion` 当成绝无碰撞的正确性凭证。已明确相等输入才能跳过解析；确有变化就用该 item 的单调版本/内容身份使 CodeView 和高亮缓存失效，不再为每次渲染多次扫描整份内容。身份不能跨已删除 item/另一文档误复用。
-4. 若单次计算仍主导，必须使用 P5-T1 已核对固定版本的方案：复用可用 worker 能力，或一个已经证明能降低实际等待、序列化成本可接受的最小差异计算 worker。不得假定现有高亮 pool 支持 parseDiff；没有合适能力就先补实验结论和实施边界，不能暗中引入新 diff 引擎。
-5. 新后台计算只传不可变值；根 bridge 持有最新 render 身份，旧结果不能覆盖新文本或 edit mode。取消、worker 不可用和异常仍有既有可用路径，不能显示空白或吞掉错误。
+3. 同 task 删除 contentVersion 的旧扫描/hash 路径，不保留兼容 key；旧 cache 仅进程内，无磁盘迁移需求。内容未变只改 edit/review 时不改变 blob 内容键，避免无意义重新高亮；item 移除后不可重用旧版本串到另一文档。parse 前复用是否带来收益按 P5-T1 决定，没命中只修身份，不预建缓存层。
+4. 若单次计算仍主导，只尝试 P5-T1 已核对固定版本支持的入口。未证明的自定义 diff worker/异常备用计算路径从本计划删除；现有高亮 pool 不可推定支持 parseDiff。没有可用入口则交付限制与具体 trace，再决定是否另行扩大设计，不暗中引入新引擎或双轨。
+5. 若固定版本已有异步入口被证据选用，沿它的契约只传不可变值，复用最新 render 身份，旧结果不能覆盖新文本或 edit mode；真实失败应可见。当前 task 不为此预建另一套 worker、备用算法或无期限重试。
 6. 保留虚拟化、内容相关 highlight cache key、null-origin 下 blob worker、编辑内的 undo/选择、字体行高和 layout/overflow/theme 增量设置。不要用禁用词级 diff、高亮或高亮预取来达成数字。
 7. 生成 bundle 仍走原 `scripts/bundle.js`，保留 `ignoreAnnotations: true` 等防止空 worker 的约束，不手改 minified 资源。依赖/worker 新改动清理旧路径在同一 task 完成。
 
 **验证:**
-- 固定 `1.3.1` 的真实 `parseDiffFromFile` 作结果 oracle；同内容重复、同长度不同内容、Unicode、rename/语言变化、note ↔ diff、review ↔ edit、删除后重加均正确。
-- JS 复用检查必须断言实际 parse 次数与最新结果，不能只比 cache key；若增加 worker，控制旧/新完成顺序与 fallback，测试最终使用结果，而不只看 postMessage。
-- If JS changes: `npm ci --prefix Vendor/PierreDiffsSwift/scripts`；`npm --prefix Vendor/PierreDiffsSwift/scripts run build`；运行已接入的 Node 逻辑检查，再 `swift test --package-path Vendor/PierreDiffsSwift`。先核对锁定版本，不用安装时的 latest。
+- 固定 `1.3.1` 的真实 `parseDiffFromFile` 作 oracle；至少包含已证实碰撞 ` a` → `!@` 的真实网页结果，而非只证明新 key 不同；同内容重复、同长度不同内容、Unicode、rename/语言变化、note ↔ diff、review ↔ edit、删除后重加均正确。
+- JS 复用准入后断言实际 parse 次数与最新结果，不只比 cache key；已有异步入口入选才控制旧/新完成顺序，测试最终显示而非仅 postMessage。
+- If JS changes: `npm ci --prefix Vendor/PierreDiffsSwift/scripts`；从 `Vendor/PierreDiffsSwift/scripts` 目录执行 `npm run build`（bundle.js 的输入/输出均相对 cwd）；运行已接入的 Node 检查，再 `swift test --package-path Vendor/PierreDiffsSwift`。核对 package-lock 的固定版本，不用 latest，也不在仓库根运行 bundle.js 导致写错资源位置。
 - 签名 Debug 实际 WKWebView 测首次大 diff、反复选同 diff、改一侧再看、历史/冲突、滚动、两种布局和编辑保存；确认差异行/词、高亮与磁盘内容，不仅是 bundle 含某字符串。
 - 测真实首屏/可见高亮、JS 最长主线程段、两进程内存、关闭后 worker；如果优化只移动等待却端到端变差，不保留该调度方案。
 
-**提交边界:** 选中的 JS 优化、实际检查、生成 bundle 及必要首次包接入一个原子提交；未命中时记录理由，不制造代码。
+**提交边界:** 内容身份修复、实际检查、生成 bundle 及必要包接入一个原子提交；未命中性能候选仍修身份，不加入 parse 复用/调度。确有独立性能变更时先回改原子任务边界，不夹带未测措施。
 
 ## 阶段自审与交接
 
