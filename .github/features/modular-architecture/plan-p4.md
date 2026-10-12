@@ -36,4 +36,6 @@
 
 ## P4 完成条件
 
+**实施证据校正：** 超时测试实际复现了旧 runner 的遗漏：Git 已退出但忽略 SIGTERM 的 helper 仍持有管道，0.1 秒超时拖至约 5 秒。共享 runner 在同一任务观察进程与管道完成，且仅对 getpgid 证明本次 Git 所有的进程组升级 SIGKILL；稳定回归约 1.18 秒并保留部分输出。不为测试新增可执行文件注入或通用 Process 框架。
+
 不为让 Git 模型变短继续拆解析 helper、额外 Repository、第二个 GitStateStore 或重复本地字节读取。旧执行实现不保留兼容 wrapper；后续的性能问题归独立 Feature。

@@ -35,6 +35,7 @@
 **真实路径：** `kero/App/keroApp.swift::WindowRootView`、`Workspace/TerminalManager`（P3 后）、`SessionStore/TerminalHistoryStore`、`WorkspaceDockView`、`PaneLayoutView`、Files/Git/Info 与各本地/SSH backend；验证规范 `docs/CONTRIBUTING.md`。
 
 **执行：**
+本次用户授权已明确改为独立 `Kero Test` / `sh.kero.test`：只复制、签名和替换测试包，正式 Kero 及其现有 Shell 不操作。下文正式安装要求仅适用于用户授权正式替换的任务，不把本次未替换正式包记成遗漏；仍需实际签名包验收和保护现有隔离项目/历史。
 1. 先确认真实 Kero 正在运行什么命令/有无未保存编辑、Git 工作树和用户快照；只在安全时正常退出/替换正式包。不能停止的 Shell 存在时，先用同一个签名 Debug 的 `--isolated-ui-test` 测试，不强退当前进程，也不让隔离实例覆盖正式快照/转发。隔离模式只隔离会话快照/历史并跳过长期隧道启动，**AppSettings、语言与 Diff 偏好仍共享**；不在隔离实例改用户设置/保存 tunnels.toml，不把它写成配置沙盒。不能安全替换时保留正式安装验收未完成的状态。
 2. 与本轮执行前基线比对本地与可安全连接的 SSH：新建/切换项目、外层 Dock 跨组排序/分屏/关闭、内部 `PaneNode` 嵌套、窗口恢复、现用布局快照、终端未被意外重启；File/Diff 的未保存内容、编辑器查找/替换与光标/滚动恢复正确，Browser 的页面/历史/表单不因重挂载丢失。还需核对菜单/快捷键、Ctrl-Tab 与查找返回焦点、Finder 服务和通知寻址，不能只验证新目录能构建。
 3. Files 与 Git 的工作区/暂存区/提交历史共享树状态和交互；在单独测试仓库进行 Git 状态、暂存/取消暂存/丢弃、分支和 Diff，检查最终文件/索引。Info 本地及安全可达的远端进程/端口，SSH 会话转发打开/复制→切走→关闭重开 Info→回来→退出交互 SSH；没有会话转发取消 UI，不增加它。临时网络失联和退出 master 的监听结果分开记录。长期隧道使用独立 TunnelManager，不能拿它代替会话转发验收，也不为验证自动修改用户隧道规则。确认切换范围后旧异步结果/旧进程行不能错写或向另一台机器发操作。

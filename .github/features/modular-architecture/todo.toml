@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P2-T1"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
@@ -29,119 +29,119 @@ note = "迁移逐字不变，Project.fileTree持有者不变；新路径导航�
 [[tasks]]
 id = "P2-T1"
 title = "抽离 Files 面板与唯一共享标题"
-status = "in_progress"
+status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = ""
-note = ""
+commit = "18e3fb2"
+note = "共享标题和Files唯一归属已接入；Debug build/严格签名、导航含create/rename/10k、原生命中PASS；用户暂停桌面操作后Kero Test创建/打开/重命名实测：旧路径消失、新文件存在、标签更新。e327401移除EOF空行，diff --check PASS。"
 
 [[tasks]]
 id = "P2-T2"
 title = "抽离 Git 面板和破坏性操作确认 UI"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = ""
-note = ""
+commit = "c11009200ba19f750e5e5bbb28cd655acee53443"
+note = "Debug build/严格签名、真实仓库stage/unstage/discard/commit及草稿失败/编辑/成功/scope/root/提交期间切目标回归、原生树命中PASS；Kero Test切Files/Info回Git草稿保持；SSH未测。"
 
 [[tasks]]
 id = "P2-T3"
 title = "抽离 Info 面板及其数据模型"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t3"
-commit = ""
-note = ""
+commit = "97fd6eb"
+note = "原样迁移模型/Info UI；签名Debug build PASS；Kero Test目录/实际zsh PID/临时sleep子进程显示与终止后PID消失PASS。远端未测。"
 
 [[tasks]]
 id = "P2-T4"
 title = "让 SSH 转发记录跟随连接，而非工具 View"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t4"
-commit = ""
-note = ""
+commit = "34dc7b4"
+note = "连接所有权、并发转发复用、HTTP404和退出后监听/socket消失PASS。最终审计018d67a在共享controlArguments禁止master检查后新传输回退；真实mux/TCP反例前失败后通过，最新真实SSH读写及1177转发、12项回归/签名Debug PASS。Windows缺少Linux Info工具，远端Info UI记录显示未实测。"
 
 [[tasks]]
 id = "P2-T5"
 title = "收敛同一项目内异步范围校验"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t5"
-commit = ""
-note = ""
+commit = "2e06a230408daded83286a310b817705d7665da5"
+note = "延迟backend/同PID旧菜单/连接替换/最后刷新/Files边界、真实Git、文件树导航、签名build PASS；Kero Test本机搜索打开、坏.gitmodules真实fallback、同名远端不残留本机行、Info本机端口复制URL和终止服务PASS。"
 
 [[tasks]]
 id = "P3-T1"
 title = "项目显式接收布局初始值，同步清理设置旧格式"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t1"
-commit = ""
-note = ""
+commit = "6bacc62602d09ba07b33a29b7699e7d2fffb30e1"
+note = "真实配置临时副本/default/custom/原子失败检查、Dock、签名Debug、Test新本地和SSH项目/正常重启恢复PASS；正式进程未中断。"
 
 [[tasks]]
 id = "P3-T2"
 title = "删除已淘汰的快照解码分支，只保留当前格式"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t2"
-commit = ""
-note = ""
+commit = "e9a97675e913e1f9160c2a7e361bf5da7f3356b4"
+note = "两层/optional/history/损坏必需字段/旧格式拒绝、真实4和5项目副本、Dock、签名Debug PASS；自建Test项目越界focus/context/selection/Dock注入后实际restore重存校验PASS。"
 
 [[tasks]]
 id = "P3-T3"
 title = "内层 Pane 数据模型与渲染分离"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t3"
-commit = ""
-note = ""
+commit = "527b61fe8330672c14f675b2b67afb2cf68e71c7"
+note = "Dock/签名Debug PASS；Test四向嵌套5窗格和跨外层组拖动，原shell写回PID一致。dirty/browser/Diff综合门禁继续验收。"
 
 [[tasks]]
 id = "P3-T4"
 title = "窗口协调者归入 Workspace，不拆现用 owner"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t4"
-commit = ""
-note = ""
+commit = "295df3122bd9fe3ec5feca60bdb8bab23485f82e"
+note = "快照/签名Debug PASS；Test 2窗口5项目聚合与恢复、空窗口关闭和原5窗格恢复PASS，正式实例未操作。"
 
 [[tasks]]
 id = "P3-T5"
 title = "收敛 WorkspaceBackend 接口与具体实现的源码边界"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t5"
-commit = ""
-note = ""
+commit = "1e8f9c69cb8e5cb83e6ca01f46aecf56b3bf8841"
+note = "阶段审计4eb0043修正App隔离契约；9独立回归/签名Debug/真实App身份PASS；专用Windows SSH master实际File/Diff读取、断线拒写、替换连接保存及两台同路径字节核对PASS。"
 
 [[tasks]]
 id = "P3-T6"
 title = "把被 Dock 使用的底部工具栏抽成独立组件"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t6"
-commit = ""
-note = ""
+commit = "9d54a420aea312e53ce19a3140f73c4da62215a8"
+note = "JSON/签名Debug PASS；Test原生分支搜索无匹配、点击外部关闭与File/Git工作标签栏显隐PASS。不修改共享toolbar设置。"
 
 [[tasks]]
 id = "P3-T7"
 title = "把标签胶囊、重命名和内容标签统一归入 Components"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t7"
-commit = ""
-note = ""
+commit = "7e6fe8a1423f3cbe35ca4312aac43de1fe372d9a"
+note = "Dock/签名Debug PASS；Test dirty跨组、窄组/窗口/Dockresize、重命名与实际保存原buffer PASS；hover关闭控件观察，后续门禁继续综合验收。"
 
 [[tasks]]
 id = "P4-T1"
 title = "提取 Git 进程执行，并一次性修正全部消费者"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t1"
-commit = ""
-note = ""
+commit = "3e32370aa86637ce781d98084aca1fd9e227536b"
+note = "10独立回归+实际App本机Git/Diff边界+真实SSH批次/计数/重连写回+原生Browser重挂载/签名Debug/Test Diff搜索hover关闭PASS；修复忽略TERM helper超时5秒拖住管道。"
 
 [[tasks]]
 id = "P5-T1"
 title = "全仓调用链、旧路径和文档交叉核销"
-status = "pending"
+status = "completed"
 plan = "plan-p5.md#p5-t1"
-commit = ""
-note = ""
+commit = "28042a1434e4fb1e9b2aa4edfd7d7302df0f1f61"
+note = "旧源码路径/旧API/重复组件与两层状态所有者交叉核销；15文档本地链接PASS，同产品10独立+2真实App回归/实际SSH/签名Debug PASS。"
 
 [[tasks]]
 id = "P5-T2"
 title = "安全替换签名 Debug 并验证核心工作流"
-status = "pending"
+status = "completed"
 plan = "plan-p5.md#p5-t2"
-commit = ""
-note = ""
+commit = "018d67a3b311a9e7b5cb2d4116f6bd9696dc7133"
+note = "全部实现完成；最终修复归属P2-T4的SSH检查后新连接回退。签名Debug/10独立+2实际App回归/真实SSH读写、Git批次和并发HTTP转发PASS；Test实际双层布局、PTY、dirty、搜索替换、CtrlTab、hover关闭、Git Diff PASS。仅删除3自建项目，原2项目重启数据与UI恢复一致；自建目录/Test包/专用master清理，配置不变、正式Kero保持运行。Finder服务/OS通知点击、Windows远端Info、暂时失联转发未实测，见audit-p5。"
