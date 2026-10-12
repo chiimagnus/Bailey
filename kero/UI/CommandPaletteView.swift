@@ -183,7 +183,7 @@ struct CommandPaletteView: View {
 
     private var commands: [PaletteCommand] {
         var items: [PaletteCommand] = [
-            PaletteCommand(id: "new-session", title: LocalizedStringResource("New Session", table: "Interface"), systemImage: "terminal", shortcut: "⌘T") {
+            PaletteCommand(id: "new-session", title: LocalizedStringResource("New Terminal", table: "Interface"), systemImage: "terminal", shortcut: "⌘T") {
                 manager.newSession()
             },
             PaletteCommand(id: "new-browser-tab", title: LocalizedStringResource("New Browser Tab", table: "Interface"), systemImage: "globe") {
@@ -255,10 +255,10 @@ struct CommandPaletteView: View {
             PaletteCommand(id: "save-file", title: LocalizedStringResource("Save File", table: "Interface"), systemImage: "square.and.arrow.down", shortcut: "⌘S") {
                 manager.saveSelectedFile()
             },
-            PaletteCommand(id: "show-files", title: LocalizedStringResource("Files", table: "Sidebar"), systemImage: "doc.text", shortcut: "⇧⌘E") {
+            PaletteCommand(id: "show-files", title: LocalizedStringResource("File Manager", table: "Sidebar"), systemImage: "doc.text", shortcut: "⇧⌘E") {
                 manager.showPanel(.files)
             },
-            PaletteCommand(id: "show-git", title: LocalizedStringResource("Git", table: "Sidebar"), systemImage: "arrow.triangle.branch", shortcut: "⇧⌘G") {
+            PaletteCommand(id: "show-git", title: LocalizedStringResource("Git Manager", table: "Sidebar"), systemImage: "arrow.triangle.branch", shortcut: "⇧⌘G") {
                 manager.showPanel(.git)
             },
             PaletteCommand(id: "show-info", title: LocalizedStringResource("Info", table: "Sidebar"), systemImage: "info.circle", shortcut: "⇧⌘I") {

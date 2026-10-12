@@ -159,8 +159,8 @@ extension DockItem {
         switch self {
         case .projects: String(localized: "Projects", table: "Interface")
         case .info: String(localized: "Info", table: "Sidebar")
-        case .files: String(localized: "Files", table: "Sidebar")
-        case .git: "Git"
+        case .files: String(localized: "File Manager", table: "Sidebar")
+        case .git: String(localized: "Git Manager", table: "Sidebar")
         case .tab(let id): project.tabs.first { $0.id == id }?.displayTitle ?? String(localized: "Tab", table: "Workspace")
         }
     }
@@ -363,7 +363,7 @@ private struct DockTabGroupView: View {
                     } label: {
                         Label(
                             action.item?.label(project: project)
-                                ?? String(localized: "New Session", table: "Interface"),
+                                ?? String(localized: "New Terminal", table: "Interface"),
                             systemImage: action.item?.symbol ?? "terminal"
                         )
                         .frame(maxWidth: .infinity, alignment: .leading)

@@ -79,7 +79,7 @@ private struct KeroCommands: Commands {
             }
             .disabled(manager == nil)
 
-            Button(String(localized: "New Session", table: "Interface")) {
+            Button(String(localized: "New Terminal", table: "Interface")) {
                 manager?.newSession()
             }
             .keyboardShortcut("t", modifiers: .command)
@@ -177,13 +177,13 @@ private struct KeroCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Files", table: "Sidebar")) {
+            Button(String(localized: "File Manager", table: "Sidebar")) {
                 manager?.showPanel(.files)
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
 
-            Button("Git") {
+            Button(String(localized: "Git Manager", table: "Sidebar")) {
                 manager?.showPanel(.git)
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
@@ -219,7 +219,7 @@ private struct KeroCommands: Commands {
             }
         }
 
-        CommandMenu(String(localized: "Browser", table: "Interface")) {
+        CommandMenu(String(localized: "Browser", table: "Browser")) {
             Button(String(localized: "Focus Address Bar", table: "Interface")) {
                 manager?.focusBrowserAddressBar()
             }

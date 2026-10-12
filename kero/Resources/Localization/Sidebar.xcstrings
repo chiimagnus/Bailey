@@ -726,13 +726,12 @@
         }
       }
     },
-    "Files" : {
-      "comment" : "Command palette section title.",
+    "File Manager" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "文件"
+            "value" : "文件管理器"
           }
         }
       }
@@ -848,12 +847,12 @@
         }
       }
     },
-    "Git" : {
+    "Git Manager" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Git"
+            "value" : "Git 管理器"
           }
         }
       }

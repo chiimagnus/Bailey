@@ -192,7 +192,7 @@ struct GitPanel: View {
                 Image(systemName: "arrow.triangle.branch")
                     .panelFont(size: 11, weight: .medium)
                     .foregroundStyle(Color(nsColor: Theme.accent))
-                PanelHeader(title: String(localized: "Git", table: "Sidebar"), subtitle: model.rootPath)
+                PanelHeader(title: String(localized: "Git Manager", table: "Sidebar"), subtitle: model.rootPath)
             }
             // User operations surface progress in their initiating control.
             // Keep repository discovery here because it has no trigger button.
