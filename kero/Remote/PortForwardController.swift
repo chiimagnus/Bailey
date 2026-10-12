@@ -42,14 +42,12 @@ final class PortForwardController: ObservableObject {
             throw RemoteConnectionError.notConnected
         }
         if let existing = localPortsByRemote[remotePort] { return existing }
-        if let running = pending[remotePort] { return try await running.value }
-
-        let task = Task { [connection] in
+        let task = pending[remotePort] ?? Task { [connection] in
             try await connection.forward(remotePort: remotePort)
         }
         pending[remotePort] = task
         defer {
-            if !task.isCancelled { pending[remotePort] = nil }
+            if pending[remotePort] == task { pending[remotePort] = nil }
         }
 
         let localPort = try await task.value
