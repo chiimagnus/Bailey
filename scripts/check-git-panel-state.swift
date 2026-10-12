@@ -19,7 +19,7 @@ enum GitPanelStateCheck {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let root = directory.path
         func git(_ arguments: [String]) -> String {
-            let result = GitStatusModel.runGit(arguments, in: root, timeout: 10)
+            let result = GitCommandExecution.run(arguments, in: root, timeout: 10)
             precondition(result.status == 0, result.stderr)
             return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         }

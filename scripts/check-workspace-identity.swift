@@ -29,7 +29,7 @@ actor IdentityWorkspace: WorkspaceBackend {
 enum WorkspaceIdentityCheck {
     @MainActor
     static func wait(_ predicate: () -> Bool) async throws {
-        for _ in 0..<200 {
+        for _ in 0..<1200 {
             if predicate() { return }
             try await Task.sleep(for: .milliseconds(25))
         }
@@ -43,6 +43,56 @@ enum WorkspaceIdentityCheck {
         connection.workingDirectory = "/fixture"
         connection.markConnected()
         return connection
+    }
+
+    @MainActor
+    static func checkLocalGit(directory: URL) async throws {
+        let root = directory.path
+        func git(_ arguments: [String]) -> String {
+            let result = GitCommandExecution.run(arguments, in: root)
+            precondition(result.status == 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .newlines)
+        }
+        _ = git(["init", "-q"])
+        let model = GitStatusModel()
+        model.sync(root: root)
+        try await wait { !model.isRefreshing && model.hasResolvedStatus }
+        precondition(model.isRepo && model.headOID == nil && model.recentCommits.isEmpty)
+        let untracked = DiffTab(repoRoot: root, path: "file.txt", staged: false,
+            untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await wait { !untracked.isLoading }
+        precondition(untracked.error == nil && untracked.web.newContent == "local diff save\n")
+        model.stage(model.changedEntries.first { $0.path == "file.txt" }!)
+        try await wait { !model.isBusy && !model.isRefreshing }
+        precondition(git(["diff", "--cached", "--name-only"]) == "file.txt")
+        let staged = DiffTab(repoRoot: root, path: "file.txt", staged: true,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await wait { !staged.isLoading }
+        precondition(staged.error == nil && staged.web.oldContent.isEmpty && staged.web.newContent == "local diff save\n")
+        let limit = 5 << 20
+        let cases: [(String, Data, String?)] = [
+            ("binary.txt", Data([0, 1, 2]), String(localized: "Binary file", table: "Git")),
+            ("invalid.txt", Data([255, 254]), String(localized: "Binary file", table: "Git")),
+            ("exact.txt", Data(repeating: 65, count: limit), nil),
+            ("oversized.txt", Data(repeating: 65, count: limit + 1), String(localized: "File is too large to diff", table: "Git")),
+        ]
+        for (path, bytes, _) in cases { try bytes.write(to: directory.appendingPathComponent(path)) }
+        _ = git(["add", "--", "binary.txt", "invalid.txt", "exact.txt", "oversized.txt"])
+        let hash = git(["-c", "user.name=App Check", "-c", "user.email=check@invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture"])
+        precondition(hash.isEmpty)
+        let commit = git(["rev-parse", "HEAD"])
+        for (path, bytes, expectedError) in cases {
+            let diff = DiffTab(repoRoot: root, path: path, staged: false,
+                untracked: false, origPath: nil, commitHash: commit,
+                backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            try await wait { !diff.isLoading }
+            precondition(diff.error == expectedError, "Unexpected Diff verdict for \(path): \(diff.error ?? "none")")
+            if expectedError == nil { precondition(diff.web.newContent.utf8.count == bytes.count) }
+        }
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        precondition(model.recentCommits.count == 1 && model.lastError == nil)
+        print("PASS: actual App Git unborn/untracked/staged/history; Diff Git blobs preserve NUL/invalid UTF-8, exact limit and oversized verdicts")
     }
 
     @MainActor
@@ -65,13 +115,22 @@ enum WorkspaceIdentityCheck {
         try await backend.createDirectory(path: directory)
         do {
             try await backend.write(path: path, data: Data("remote baseline\n".utf8))
+            for arguments in [["init", "-q"], ["add", "--", "file.txt"],
+                ["-c", "user.name=Workspace Check", "-c", "user.email=check@invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture"]] {
+                let result = await GitCommandExecution.run(arguments, in: directory, backend: backend)
+                precondition(result.status == 0, result.stderr)
+            }
+            let git = GitStatusModel()
+            git.sync(root: directory, backend: backend, scope: first.workspaceIdentity)
+            try await wait { !git.isRefreshing && git.hasResolvedStatus }
+            precondition(git.isRepo && git.lastError == nil && git.recentCommits.count == 1)
             let project = Project(fallbackName: "remote identity", workspaceConfiguration: .standard)
             defer { project.terminateAll() }
             let session = project.newSession()
             session.location = .remote(first)
             project.openFile(path)
             let file = project.selectedTab!.allContents.compactMap { if case .file(let file) = $0 { return file }; return nil }.first!
-            project.openDiff(repoRoot: directory, path: "file.txt", staged: false, untracked: true, origPath: nil)
+            project.openDiff(repoRoot: directory, path: "file.txt", staged: false, untracked: false, origPath: nil)
             let diff = project.selectedTab!.diffs.first!
             try await wait { if case .text = file.content { return !diff.isLoading }; return false }
             precondition(file.text == "remote baseline\n" && file.workspaceIdentity == first.workspaceIdentity)
@@ -101,6 +160,13 @@ enum WorkspaceIdentityCheck {
             precondition(diffBytes == Data("remote diff saved\n".utf8))
             let localBytes = try await local.read(path: path, maxBytes: 1024)
             precondition(localBytes == Data("local sentinel\n".utf8))
+            try await replacement.workspaceBackend.write(path: directory + "/untracked.txt", data: Data("one\ntwo\n".utf8))
+            git.sync(root: directory, backend: replacement.workspaceBackend, scope: replacement.workspaceIdentity)
+            try await wait { !git.isRefreshing && git.hasResolvedStatus }
+            precondition(git.lastError == nil && git.changedEntries.contains { $0.path == "file.txt" })
+            precondition(git.changedEntries.contains { $0.path == "untracked.txt" })
+            precondition(git.lineAdditions >= 2)
+            print("PASS: real remote Git snapshot batch/history/untracked count and shared Git-backed Diff")
         } catch {
             try await backend.delete(paths: [directory])
             throw error
@@ -177,6 +243,7 @@ enum WorkspaceIdentityCheck {
         let finalWriteCount = await remote.writes
         precondition(finalWriteCount == 0)
         print("PASS: actual App Project/File/Diff: pinned local+SSH save, same-path machine/port isolation, disconnected write refusal, rebind to replacement channel, failed remote save preserves dirty buffers and never writes local")
+        try await checkLocalGit(directory: directory)
         let arguments = CommandLine.arguments
         if arguments.count == 5, let port = Int(arguments[3]) {
             try await checkRemote(user: arguments[1], host: arguments[2], port: port, socket: arguments[4])

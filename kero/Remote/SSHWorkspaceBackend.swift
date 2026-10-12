@@ -8,8 +8,8 @@ import Foundation
 
 /// Runs one command on the remote machine and returns what it printed.
 ///
-/// Declared here rather than taken from the ssh connection type so this file
-/// can be built and tested before that lands; the connection conforms to it.
+/// Both an interactive connection and a configured SSH host implement this
+/// boundary; the workspace does not own their authentication or lifetime.
 nonisolated protocol RemoteCommandRunner: Sendable {
     func run(
         _ argv: [String], stdin: Data?, timeout: TimeInterval
@@ -28,10 +28,7 @@ nonisolated struct RemoteCommandFailure: LocalizedError {
     }
 }
 
-/// The workspace on a Linux machine reached over an existing ssh connection.
-///
-/// Files and processes only. Git still runs locally, so the git methods report
-/// that they are unsupported rather than pretending.
+/// Files, Git and Linux process queries reached through an SSH command runner.
 ///
 /// Every method is a single round trip: build the command with
 /// `RemoteCommands`, run it, parse the output.

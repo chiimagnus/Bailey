@@ -63,13 +63,21 @@ xcrun swiftc -swift-version 5 -o build/check-settings \
   scripts/check-settings.swift && build/check-settings
 ```
 
-涉及 Git 操作或提交草稿时，运行独立临时仓库检查（不修改用户仓库）：
+涉及 Git 执行、操作或提交草稿时，运行独立临时仓库检查（不修改用户仓库）。第一项检查字节、捕获上限、超时及远端映射，第二项检查操作与草稿；远端映射使用受控后端，不连接网络：
+
+```sh
+xcrun swiftc -swift-version 5 -o build/check-git-execution \
+  kero/Workspace/WorkspaceBackend.swift kero/Workspace/LocalWorkspaceBackend.swift \
+  kero/Git/GitCommandExecution.swift scripts/check-git-execution.swift \
+  && build/check-git-execution
+```
 
 ```sh
 xcrun swiftc -swift-version 5 -o build/check-git-panel-state \
   kero/Workspace/WorkspaceBackend.swift kero/Workspace/LocalWorkspaceBackend.swift \
   kero/Remote/RemoteCommands.swift \
-  kero/Shared/Tree/TreeDisplayModel.swift kero/Git/GitStatusModel.swift \
+  kero/Shared/Tree/TreeDisplayModel.swift kero/Git/GitCommandExecution.swift \
+  kero/Git/GitStatusModel.swift \
   scripts/check-git-panel-state.swift && build/check-git-panel-state
 ```
 
@@ -94,9 +102,9 @@ xcrun swiftc -swift-version 5 -o build/check-remote-lifetime \
 bash scripts/check-workspace-identity.sh
 ```
 
-它链接当前 Debug 模块，使用未挂载的终端模型和临时文件，不启动交互 Shell、网络认证或修改用户窗口快照。远端读写使用受控后端，替换连接使用不存在的 socket，检查失败保存不误写本机；不能代替真实 SSH 传输验收。
+它链接当前 Debug 模块，使用未挂载的终端模型和临时文件，不启动交互 Shell、网络认证或修改用户窗口快照。检查机器身份与失败保存不误写本机，也检查尚无提交的 Git 仓库、未跟踪/暂存/历史 Diff、二进制及大小边界。离线远端读写使用受控后端，替换连接使用不存在的 socket；不能代替真实 SSH 传输验收。
 
-已有专用测试 SSH master 时，可追加 `user host port control-socket` 四个参数，验证真实远端读取、断线拒绝写入与替换连接后的 File/Diff 保存。检查在两台机器上创建同名的唯一临时目录，核对远端字节和本机未被改写后删除测试目录；不创建认证连接或借用用户的 master。
+已有专用测试 SSH master 时，可追加 `user host port control-socket` 四个参数，验证真实远端 Git 批次、历史、未跟踪行数、读取、断线拒绝写入与替换连接后的 File/Diff 保存。检查在两台机器上创建同名的唯一临时目录，核对远端字节和本机未被改写后删除测试目录；不创建认证连接或借用用户的 master。
 
 涉及窗格内容的生命周期时，在 Debug 构建后运行原生重挂载检查：
 

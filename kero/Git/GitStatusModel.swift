@@ -4,7 +4,6 @@
 //
 
 import Combine
-import Darwin
 import Dispatch
 import Foundation
 
@@ -262,9 +261,8 @@ final class GitStatusModel: nonisolated ObservableObject {
     /// The workspace selected by the project's current panel context.
     private var backend: WorkspaceBackend = LocalWorkspaceBackend.shared
 
-    /// The backend is optional rather than defaulted to the shared local one:
-    /// a default argument is evaluated outside the actor, where that shared
-    /// instance cannot be read.
+    /// Omitting the backend selects the Mac; scope keeps cached state and
+    /// drafts distinct when the same path exists on another machine.
     func sync(root: String, backend: WorkspaceBackend? = nil, scope: String = "local") {
         self.backend = backend ?? LocalWorkspaceBackend.shared
         if root != rootPath || workspaceScope != scope {
@@ -748,7 +746,7 @@ final class GitStatusModel: nonisolated ObservableObject {
                         )
                     }
                     if requiresStableHead {
-                        let liveStatus = await Self.runGit(
+                        let liveStatus = await GitCommandExecution.run(
                             ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=no"],
                             in: expectedRepositoryRoot,
                             backend: backend
@@ -772,7 +770,7 @@ final class GitStatusModel: nonisolated ObservableObject {
 
                 for args in commands {
                     transcript.append("$ git " + Self.displayCommand(args))
-                    let run = await Self.runGit(args, in: dir, backend: backend)
+                    let run = await GitCommandExecution.run(args, in: dir, backend: backend)
                     let text = [run.stdout, run.stderr]
                         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                         .filter { !$0.isEmpty }
@@ -883,7 +881,7 @@ final class GitStatusModel: nonisolated ObservableObject {
                         failure: String(localized: "Repository changed before the file action could run. Review the current changes and try again.", table: "Git")
                     )
                 }
-                let liveStatus = await Self.runGit(
+                let liveStatus = await GitCommandExecution.run(
                     ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=no"],
                     in: expectedRepositoryRoot,
                     backend: backend
@@ -968,10 +966,6 @@ final class GitStatusModel: nonisolated ObservableObject {
     private nonisolated struct TrashResult: Sendable {
         let moved: [String]
         let failure: String?
-    }
-
-    private nonisolated final class PipeData: @unchecked Sendable {
-        var value = Data()
     }
 
     private func invalidateStatusRefresh() {
@@ -1140,147 +1134,6 @@ final class GitStatusModel: nonisolated ObservableObject {
         var stashCount = 0
     }
 
-    /// Runs Git while draining stdout and stderr concurrently. Dedicated
-    /// reader threads are intentional: several restored diff tabs can call
-    /// this from Swift's cooperative executor at once, and dispatching the
-    /// readers back onto the shared pool can starve every pipe drain.
-    nonisolated static func runGit(
-        _ args: [String], in dir: String, timeout: TimeInterval? = nil
-    ) -> (status: Int32, stdout: String, stderr: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = args
-        process.currentDirectoryURL = URL(fileURLWithPath: dir, isDirectory: true)
-        var env = ProcessInfo.processInfo.environment
-        env["GIT_OPTIONAL_LOCKS"] = "0"
-        // Fail rather than hanging on a credential prompt behind the app.
-        env["GIT_TERMINAL_PROMPT"] = "0"
-        // Git diagnostics are parsed only to distinguish an ordinary folder
-        // from a broken repository. Pinning the locale makes that safe and
-        // also keeps relative dates stable in the compact history list.
-        env["LC_ALL"] = "C"
-        process.environment = env
-
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-        process.standardInput = FileHandle.nullDevice
-        let processExited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in processExited.signal() }
-
-        do {
-            try process.run()
-        } catch {
-            return (-1, "", error.localizedDescription)
-        }
-        let outData = PipeData()
-        let errData = PipeData()
-        let readers = DispatchGroup()
-        // These readers are on the synchronous completion path below. Match
-        // the caller so a user-initiated Git request never waits on utility
-        // threads, while background refreshes keep their lower priority.
-        let readerQualityOfService = Thread.current.qualityOfService
-        readers.enter()
-        let stdoutReader = Thread {
-            outData.value = stdout.fileHandleForReading.readDataToEndOfFile()
-            readers.leave()
-        }
-        stdoutReader.qualityOfService = readerQualityOfService
-        stdoutReader.start()
-        readers.enter()
-        let stderrReader = Thread {
-            errData.value = stderr.fileHandleForReading.readDataToEndOfFile()
-            readers.leave()
-        }
-        stderrReader.qualityOfService = readerQualityOfService
-        stderrReader.start()
-        var timedOut = false
-        if let timeout {
-            timedOut = processExited.wait(timeout: .now() + timeout) == .timedOut
-            if timedOut {
-                process.terminate()
-                if processExited.wait(timeout: .now() + 1) == .timedOut {
-                    // Git can launch a helper that ignores SIGTERM. It is our
-                    // child, so force it down before waiting for pipe EOF.
-                    Darwin.kill(process.processIdentifier, SIGKILL)
-                    process.waitUntilExit()
-                }
-            }
-        } else {
-            process.waitUntilExit()
-        }
-        readers.wait()
-        let output = String(data: outData.value, encoding: .utf8) ?? ""
-        var errorOutput = String(data: errData.value, encoding: .utf8) ?? ""
-        if timedOut {
-            let timeoutMessage = String(localized: "Git did not respond in time.", table: "Git")
-            if !errorOutput.isEmpty, !errorOutput.hasSuffix("\n") {
-                errorOutput += "\n"
-            }
-            errorOutput += timeoutMessage
-            return (-2, output, errorOutput)
-        }
-        return (
-            process.terminationStatus,
-            output,
-            errorOutput
-        )
-    }
-
-    /// Runs Git wherever the workspace is. A local workspace goes through the
-    /// launcher above, unchanged: it keeps partial output when a command times
-    /// out, escalates to SIGKILL for a helper that ignores SIGTERM, and matches
-    /// its reader threads to the caller's quality of service, none of which the
-    /// generic backend does.
-    nonisolated static func runGit(
-        _ args: [String], in dir: String, timeout: TimeInterval? = nil,
-        backend: WorkspaceBackend
-    ) async -> (status: Int32, stdout: String, stderr: String) {
-        if backend is LocalWorkspaceBackend {
-            return runGit(args, in: dir, timeout: timeout)
-        }
-        let result = await remoteGitData(args, in: dir, timeout: timeout, backend: backend)
-        return (
-            result.status,
-            String(data: result.stdout, encoding: .utf8) ?? "",
-            result.stderr
-        )
-    }
-
-    /// Shared with the diff viewer, which needs the bytes rather than text: a
-    /// diff may not be valid UTF-8 and must survive the round trip unchanged.
-    ///
-    /// Reproduces the local launcher's contract - `-2` and the same message on
-    /// a timeout, `-1` and the system message when the command cannot run.
-    nonisolated static func remoteGitData(
-        _ args: [String], in dir: String, timeout: TimeInterval? = nil,
-        backend: WorkspaceBackend
-    ) async -> (status: Int32, stdout: Data, stderr: String) {
-        do {
-            let result = try await backend.run(
-                argv: ["git"] + args,
-                cwd: dir,
-                env: [
-                    "GIT_OPTIONAL_LOCKS": "0",
-                    "GIT_TERMINAL_PROMPT": "0",
-                    "LC_ALL": "C",
-                ],
-                stdin: nil,
-                timeout: timeout
-            )
-            return (
-                result.status,
-                result.stdout,
-                String(data: result.stderr, encoding: .utf8) ?? ""
-            )
-        } catch WorkspaceError.timedOut {
-            return (-2, Data(), String(localized: "Git did not respond in time.", table: "Git"))
-        } catch {
-            return (-1, Data(), error.localizedDescription)
-        }
-    }
-
     /// Resolves the active repository and distinguishes a normal non-repo
     /// directory from an actual Git failure that the UI should surface.
     private nonisolated static func runGitStatus(
@@ -1315,7 +1168,7 @@ final class GitStatusModel: nonisolated ObservableObject {
             }
             let remaining = deadline.timeIntervalSinceNow
             guard remaining > 0 else { return (-2, "", timeoutMessage) }
-            return await runGit(args, in: directory, timeout: remaining, backend: backend)
+            return await GitCommandExecution.run(args, in: directory, timeout: remaining, backend: backend)
         }
 
         let top = await statusGit(["rev-parse", "--show-toplevel"], in: root)
@@ -1512,7 +1365,7 @@ final class GitStatusModel: nonisolated ObservableObject {
     private nonisolated static func resolveRepositoryRoot(
         in root: String, backend: WorkspaceBackend
     ) async -> String? {
-        let top = await runGit(["rev-parse", "--show-toplevel"], in: root, backend: backend)
+        let top = await GitCommandExecution.run(["rev-parse", "--show-toplevel"], in: root, backend: backend)
         guard top.status == 0 else { return nil }
         let path = strippingTrailingLineEnding(top.stdout)
         return path.isEmpty ? nil : path
@@ -1732,10 +1585,9 @@ final class GitStatusModel: nonisolated ObservableObject {
             visitedFiles += 1
             let fileURL = rootURL.appendingPathComponent(entry.path).standardizedFileURL
             guard fileURL.path.hasPrefix(rootPrefix) else { continue }
-            let count = await textLineCount(
+            let count = textLineCount(
                 at: fileURL,
-                maximumBytes: min(maximumFileBytes, remainingBytes),
-                backend: backend
+                maximumBytes: min(maximumFileBytes, remainingBytes)
             )
             total += count.lines
             remainingBytes -= count.bytesRead
@@ -1747,14 +1599,8 @@ final class GitStatusModel: nonisolated ObservableObject {
     /// Symlink content is its destination path, which is one added line.
     private nonisolated static func textLineCount(
         at url: URL,
-        maximumBytes: Int,
-        backend: WorkspaceBackend
-    ) async -> (lines: Int, bytesRead: Int) {
-        guard backend is LocalWorkspaceBackend else {
-            return await remoteTextLineCount(
-                at: url.path, maximumBytes: maximumBytes, backend: backend
-            )
-        }
+        maximumBytes: Int
+    ) -> (lines: Int, bytesRead: Int) {
         guard let values = try? url.resourceValues(
             forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey]
         ) else { return (0, 0) }
@@ -1787,24 +1633,6 @@ final class GitStatusModel: nonisolated ObservableObject {
 
         guard byteCount > 0 else { return (0, 0) }
         return (newlineCount + (lastByte == 0x0A ? 0 : 1), byteCount)
-    }
-
-    private nonisolated static func remoteTextLineCount(
-        at path: String, maximumBytes: Int, backend: WorkspaceBackend
-    ) async -> (lines: Int, bytesRead: Int) {
-        guard let stat = try? await backend.stat(path: path) else { return (0, 0) }
-        if stat.isSymlink { return (1, 0) }
-        guard stat.isRegular, stat.size <= maximumBytes,
-            let data = try? await backend.read(path: path, maxBytes: maximumBytes)
-        else { return (0, 0) }
-
-        let probe = data.prefix(8_000)
-        guard !probe.contains(0) else { return (0, probe.count) }
-        guard !data.isEmpty else { return (0, 0) }
-        let newlines = data.reduce(into: 0) { count, byte in
-            if byte == 0x0A { count += 1 }
-        }
-        return (newlines + (data.last == 0x0A ? 0 : 1), data.count)
     }
 
     nonisolated static func parseRecentCommits(_ output: String) -> [RecentCommit] {
