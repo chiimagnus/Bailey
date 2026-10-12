@@ -82,6 +82,7 @@ xcrun swiftc -swift-version 5 -o build/check-git-panel-state \
 ```
 
 涉及 SSH 命令或连接所有权时，运行不连接网络的检查：
+第二项还使用本机专用 mux socket 和回环监听，检查 master 在存活检查后退出时不会新建 TCP 传输；不连接远端或使用凭据。
 
 ```sh
 xcrun swiftc -swift-version 5 -o build/check-remote-commands \

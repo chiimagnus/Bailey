@@ -283,10 +283,9 @@ final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunne
     /// with spaces for the remote login shell to interpret. Callers that have
     /// already built a shell command pass it as a single element.
     ///
-    /// The liveness check is not decoration: with a dead control socket `ssh
-    /// -S` silently falls back to opening a brand new connection, which would
-    /// authenticate behind the user's back. Checking first keeps this method
-    /// strictly a passenger on the session the user opened.
+    /// A missing master fails the liveness check immediately. The channel
+    /// options also forbid a new transport, so a master exiting after that
+    /// check cannot make ssh authenticate behind the user's back.
     nonisolated func run(
         _ argv: [String],
         stdin: Data? = nil,
@@ -298,8 +297,8 @@ final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunne
         //
         // `-O check` only asks the LOCAL multiplexing master, which answers
         // happily with the network down, so it proves the socket is ours and
-        // nothing more. It is kept as the cheap fast-fail that stops ssh
-        // quietly opening a brand new connection once the master is gone.
+        // nothing more. It is kept as the cheap fast-fail; the channel options
+        // below prevent a new transport even if the master exits next.
         guard controlSocketExists, await check() else {
             await MainActor.run {
                 markDisconnected(reason: "control socket is gone")
@@ -317,7 +316,10 @@ final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunne
     /// Options naming the shared channel. `-S` is ssh's own "use this control
     /// socket" switch and overrides any ControlPath from a config file.
     nonisolated private var controlArguments: [String] {
-        ["-S", controlSocket.path, "-p", String(port)]
+        [
+            "-S", controlSocket.path, "-p", String(port),
+            "-o", "ControlMaster=no", "-o", "ProxyCommand=/usr/bin/false",
+        ]
     }
 
 
