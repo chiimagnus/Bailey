@@ -87,7 +87,10 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     let path: String
     /// Diffs HEAD → index instead of index → worktree.
     let staged: Bool
-    var untracked: Bool
+    var untracked: Bool {
+        didSet { if untracked != oldValue { onSnapshotChange?() } }
+    }
+    var onSnapshotChange: (() -> Void)?
     /// Historical commit shown by this tab. Nil keeps the existing
     /// index/worktree behavior.
     let commitHash: String?
@@ -97,7 +100,9 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     let commitStatus: Character?
     /// Previous path when the change is a rename/copy; the "before" side
     /// reads from here so renames diff old file → new file like VS Code.
-    var origPath: String?
+    var origPath: String? {
+        didSet { if origPath != oldValue { onSnapshotChange?() } }
+    }
 
     @Published private(set) var error: String?
     @Published private(set) var isLoading = true

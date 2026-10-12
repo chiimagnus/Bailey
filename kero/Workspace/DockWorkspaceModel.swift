@@ -372,7 +372,10 @@ indirect enum DockSavedNode: Codable {
 @MainActor
 final class DockWorkspaceModel: ObservableObject {
     let configuration: DockWorkspaceConfiguration
-    @Published private(set) var root: DockNode
+    @Published private(set) var root: DockNode {
+        didSet { onSnapshotChange?() }
+    }
+    var onSnapshotChange: (() -> Void)?
 
     init(configuration: DockWorkspaceConfiguration = .standard) {
         self.configuration = configuration

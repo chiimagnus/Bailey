@@ -29,7 +29,10 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     nonisolated let id: UUID
 
     @Published var title: String
-    @Published var workingDirectory: String?
+    @Published var workingDirectory: String? {
+        didSet { if workingDirectory != oldValue { onSnapshotChange?() } }
+    }
+    var onSnapshotChange: (() -> Void)?
     @Published var hasExited = false
     @Published private(set) var commandLifecycle = TerminalCommandLifecycle()
     /// Where this session's workspace tools look. Set by Kero's `ssh` helper

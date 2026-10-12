@@ -143,7 +143,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     nonisolated let id = UUID()
 
     @Published private(set) var title = String(localized: "New Tab", table: "Browser")
-    @Published private(set) var urlString = ""
+    @Published private(set) var urlString = "" {
+        didSet { if urlString != oldValue { onSnapshotChange?() } }
+    }
+    var onSnapshotChange: (() -> Void)?
     @Published private(set) var canGoBack = false
     @Published private(set) var canGoForward = false
     @Published private(set) var isLoading = false

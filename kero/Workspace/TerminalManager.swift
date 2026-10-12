@@ -32,8 +32,12 @@ enum FindAction {
 /// project's selected session.
 @MainActor
 final class TerminalManager: nonisolated ObservableObject {
-    @Published var projects: [Project] = []
-    @Published var selectedProjectID: UUID?
+    @Published var projects: [Project] = [] {
+        didSet { requestSave() }
+    }
+    @Published var selectedProjectID: UUID? {
+        didSet { if selectedProjectID != oldValue { requestSave() } }
+    }
     /// Debug FPS badge in the Dock header. Deliberately not persisted:
     /// every launch starts with it hidden.
     @Published var isFPSCounterVisible = false
@@ -44,7 +48,8 @@ final class TerminalManager: nonisolated ObservableObject {
     private var projectObservations: [UUID: AnyCancellable] = [:]
     private var projectCounter = 0
     private var settingsObservation: AnyCancellable?
-    private var autosaveObservation: AnyCancellable?
+    private var pendingSave: Task<Void, Never>?
+    private var isInitialized = false
     private var terminationObservation: AnyCancellable?
     /// The stable terminal/editor responder displaced by the command palette's
     /// search field. AppKit field editors are deliberately excluded because a
@@ -129,14 +134,6 @@ final class TerminalManager: nonisolated ObservableObject {
             .sink { [weak self] _ in
                 self?.refreshAppearance()
             }
-        // Every project/tab/selection change re-publishes through the manager,
-        // so a debounced sink snapshots layout after mutations settle without
-        // reading live terminal contents.
-        autosaveObservation = objectWillChange
-            .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
-            .sink { _ in
-                TerminalManager.saveAll(captureTerminalHistory: false)
-            }
         // The debounce can swallow changes made just before quitting;
         // capture a final snapshot while the shells are still alive.
         terminationObservation = NotificationCenter.default
@@ -146,6 +143,22 @@ final class TerminalManager: nonisolated ObservableObject {
                 TerminalManager.isQuitting = true
                 TerminalManager.saveAll(captureTerminalHistory: true)
             }
+        isInitialized = true
+        if !queuedDirectories.isEmpty { requestSave() }
+    }
+
+    /// Persist only changes to saved project/tab/layout content, not every UI redraw.
+    func requestSave() {
+        guard isInitialized, !Self.isQuitting else { return }
+        pendingSave?.cancel()
+        pendingSave = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(500)) }
+            catch { return }
+            guard let self, !Task.isCancelled,
+                  TerminalManager.registry.contains(where: { $0 === self }),
+                  !TerminalManager.isQuitting else { return }
+            TerminalManager.saveAll(captureTerminalHistory: false)
+        }
     }
 
     var selectedProject: Project? {
@@ -446,6 +459,7 @@ final class TerminalManager: nonisolated ObservableObject {
         projectObservations[project.id] = project.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
+        project.onSnapshotChange = { [weak self] in self?.requestSave() }
         return project
     }
 
@@ -457,6 +471,7 @@ final class TerminalManager: nonisolated ObservableObject {
     private func remove(_ project: Project) {
         guard let index = projects.firstIndex(where: { $0.id == project.id }) else { return }
         projects.remove(at: index)
+        project.onSnapshotChange = nil
         projectObservations[project.id] = nil
         if selectedProjectID == project.id {
             let neighbor = min(index, projects.count - 1)
@@ -837,6 +852,7 @@ final class TerminalManager: nonisolated ObservableObject {
     /// kill its shells.
     func windowClosed() {
         guard !Self.isQuitting else { return }
+        pendingSave?.cancel()
         Self.registry.removeAll { $0 === self }
         if Self.registry.isEmpty {
             // These shells are about to be destroyed, so this is their final

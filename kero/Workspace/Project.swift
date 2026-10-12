@@ -18,29 +18,43 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
 
     /// User-assigned name; when nil the project title follows the
     /// selected session's terminal title.
-    @Published var customName: String?
+    @Published var customName: String? {
+        didSet { if customName != oldValue { onSnapshotChange?() } }
+    }
     /// User-pinned project directory ("Set Project Directory…" on the
     /// project row). When set, the file tree and git panels always anchor
     /// here. Nil means automatic: the closest git repository containing the
     /// selected session's working directory, re-derived as the session
     /// moves (see `panelRoot(followingSessionAt:)`).
-    @Published var customDirectory: String?
+    @Published var customDirectory: String? {
+        didSet { if customDirectory != oldValue { onSnapshotChange?() } }
+    }
     /// Selected SSH host, if this sidebar root is remote.
-    @Published var sshHost: String?
+    @Published var sshHost: String? {
+        didSet { if sshHost != oldValue { onSnapshotChange?() } }
+    }
     /// An individually added file is anchored to its parent directory.
-    @Published var pinnedFile: String?
+    @Published var pinnedFile: String? {
+        didSet { if pinnedFile != oldValue { onSnapshotChange?() } }
+    }
     /// File browser state belongs to the project, not a transient tool tab.
     let fileTree = FileTreeModel()
     let dock: DockWorkspaceModel
     @Published var tabs: [PaneTab] = [] {
-        didSet { dock.syncTabs(tabs.map(\.id), near: selectedTabID) }
+        didSet {
+            dock.syncTabs(tabs.map(\.id), near: selectedTabID)
+            onSnapshotChange?()
+        }
     }
     @Published var selectedTabID: UUID? {
         didSet {
-            guard selectedTabID != oldValue, let selectedTabID else { return }
-            recentTabIDs.removeAll { $0 == selectedTabID }
-            recentTabIDs.insert(selectedTabID, at: 0)
-            dock.select(.tab(selectedTabID))
+            guard selectedTabID != oldValue else { return }
+            if let selectedTabID {
+                recentTabIDs.removeAll { $0 == selectedTabID }
+                recentTabIDs.insert(selectedTabID, at: 0)
+                dock.select(.tab(selectedTabID))
+            }
+            onSnapshotChange?()
         }
     }
 
@@ -50,12 +64,13 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     private var recentTabIDs: [UUID] = []
     private var isRemoteTabRebindPending = false
 
+    var onSnapshotChange: (() -> Void)?
     private let fallbackName: String
     /// Sessions publish their own changes (title, directory); re-publish them
     /// so the project name and views observing the project stay current.
     private var sessionObservations: [UUID: AnyCancellable] = [:]
-    /// Tabs publish name and dirty-state changes; re-publish them so
-    /// the strip re-renders and autosave fires.
+    /// Keep dirty indicators and tab titles current in existing SwiftUI views;
+    /// persisted fields notify the window separately.
     private var tabObservations: [UUID: AnyCancellable] = [:]
     private var dockObservation: AnyCancellable?
     /// Browser navigation changes the tab's automatic title and persisted URL.
@@ -69,6 +84,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         dockObservation = dock.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
+        dock.onSnapshotChange = { [weak self] in self?.onSnapshotChange?() }
     }
 
     var name: String {
@@ -687,6 +703,14 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         tabObservations[tab.id] = tab.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
+        let notify: () -> Void = { [weak self] in self?.onSnapshotChange?() }
+        tab.onSnapshotChange = notify
+        switch tab.content {
+        case .session(let session): session.onSnapshotChange = notify
+        case .browser(let browser): browser.onSnapshotChange = notify
+        case .file(let file): file.onSnapshotChange = notify
+        case .diff(let diff): diff.onSnapshotChange = notify
+        }
         return tab
     }
 
@@ -773,6 +797,13 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     private func remove(tabID: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == tabID }) else { return }
         let tab = tabs[index]
+        tab.onSnapshotChange = nil
+        switch tab.content {
+        case .session(let session): session.onSnapshotChange = nil
+        case .browser(let browser): browser.onSnapshotChange = nil
+        case .file(let file): file.onSnapshotChange = nil
+        case .diff(let diff): diff.onSnapshotChange = nil
+        }
         sessionObservations[tab.content.id] = nil
         browserObservations[tab.content.id] = nil
         tabObservations[tabID] = nil

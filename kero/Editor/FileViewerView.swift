@@ -14,7 +14,10 @@ final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
     nonisolated let id = UUID()
     /// Mutable so a rename in the file tree can re-point the tab without
     /// tearing it down (the id — hence the editor and its state — is stable).
-    @Published private(set) var path: String
+    @Published private(set) var path: String {
+        didSet { if path != oldValue { onSnapshotChange?() } }
+    }
+    var onSnapshotChange: (() -> Void)?
 
     enum Content {
         case text

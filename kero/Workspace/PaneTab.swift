@@ -81,8 +81,13 @@ enum PaneContent: nonisolated Identifiable {
 final class PaneTab: nonisolated ObservableObject, nonisolated Identifiable {
     nonisolated let id = UUID()
     let content: PaneContent
-    @Published var customName: String?
-    weak var contextSession: TerminalSession?
+    @Published var customName: String? {
+        didSet { if customName != oldValue { onSnapshotChange?() } }
+    }
+    weak var contextSession: TerminalSession? {
+        didSet { if contextSession?.id != oldValue?.id { onSnapshotChange?() } }
+    }
+    var onSnapshotChange: (() -> Void)?
     private var dirtyObservation: AnyCancellable?
 
     init(content: PaneContent) {
