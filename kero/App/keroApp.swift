@@ -366,7 +366,6 @@ private struct KeroCommands: Commands {
                 Button(tab.displayTitle ?? String(localized: "Tab \(index + 1)", table: "Settings")) {
                     manager?.selectTab(index: index)
                 }
-                .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .control)
             }
         }
     }
