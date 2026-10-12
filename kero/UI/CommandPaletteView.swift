@@ -255,7 +255,7 @@ struct CommandPaletteView: View {
             PaletteCommand(id: "add-ssh-items", title: LocalizedStringResource("Add SSH Files or Folders", table: "Interface"), systemImage: "network", shortcut: nil) {
                 manager.chooseSSHItems()
             },
-            PaletteCommand(id: "close-tab", title: LocalizedStringResource("Close Tab", table: "Interface"), systemImage: "xmark.square", shortcut: "⌘W") {
+            PaletteCommand(id: "close-tab", title: LocalizedStringResource("Close Pane", table: "Interface"), systemImage: "xmark.square", shortcut: "⌘W") {
                 manager.closeSelectedTab()
             },
             PaletteCommand(id: "save-file", title: LocalizedStringResource("Save File", table: "Interface"), systemImage: "square.and.arrow.down", shortcut: "⌘S") {
@@ -289,6 +289,13 @@ struct CommandPaletteView: View {
                 manager.selectPreviousProject()
             },
         ]
+
+        if manager.selectedProject != nil {
+            items.append(PaletteCommand(id: "show-projects", title: LocalizedStringResource("Projects", table: "Interface"), systemImage: DockItem.projects.symbol) {
+                manager.showPanel(.projects)
+            })
+        }
+        if !manager.canSaveSelectedFile { items.removeAll { $0.id == "save-file" } }
 
         if let project = manager.selectedProject {
             items.append(

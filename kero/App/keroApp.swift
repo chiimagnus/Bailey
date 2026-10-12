@@ -80,17 +80,6 @@ private struct KeroCommands: Commands {
             .keyboardShortcut("n", modifiers: [.command, .option])
             .disabled(manager?.selectedProject?.panelContext == nil)
 
-            Button(String(localized: "Add Files or Folders…", table: "Interface")) {
-                manager?.chooseLocalItems()
-            }
-            .keyboardShortcut("a", modifiers: [.command, .shift])
-            .disabled(manager == nil)
-
-            Button(String(localized: "Add SSH Files or Folders…", table: "Interface")) {
-                manager?.chooseSSHItems()
-            }
-            .disabled(manager == nil)
-
             Button(String(localized: "New Terminal", table: "Interface")) {
                 manager?.newSession()
             }
@@ -107,6 +96,30 @@ private struct KeroCommands: Commands {
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
 
+            Divider()
+
+            Button(String(localized: "Add Files or Folders…", table: "Interface")) {
+                manager?.chooseLocalItems()
+            }
+            .keyboardShortcut("a", modifiers: [.command, .shift])
+            .disabled(manager == nil)
+
+            Button(String(localized: "Add SSH Files or Folders…", table: "Interface")) {
+                manager?.chooseSSHItems()
+            }
+            .disabled(manager == nil)
+
+        }
+
+        CommandGroup(replacing: .saveItem) {
+            Button(String(localized: "Save", table: "Interface")) {
+                manager?.saveSelectedFile()
+            }
+            .keyboardShortcut("s", modifiers: .command)
+            .disabled(manager?.canSaveSelectedFile != true)
+
+            Divider()
+
             Button(String(localized: "Close Pane", table: "Interface")) {
                 // Cmd-W is app-wide: close a pane only when a main window with
                 // an open project is key. Otherwise close the key window
@@ -120,14 +133,6 @@ private struct KeroCommands: Commands {
                 }
             }
             .keyboardShortcut("w", modifiers: .command)
-        }
-
-        CommandGroup(replacing: .saveItem) {
-            Button(String(localized: "Save", table: "Interface")) {
-                manager?.saveSelectedFile()
-            }
-            .keyboardShortcut("s", modifiers: .command)
-            .disabled(manager == nil)
         }
 
         CommandGroup(after: .pasteboard) {
@@ -189,6 +194,11 @@ private struct KeroCommands: Commands {
 
             Divider()
 
+            Button(String(localized: "Projects", table: "Interface")) {
+                manager?.showPanel(.projects)
+            }
+            .disabled(manager?.selectedProject == nil)
+
             Button(String(localized: "File Manager", table: "Sidebar")) {
                 manager?.showPanel(.files)
             }
@@ -203,27 +213,30 @@ private struct KeroCommands: Commands {
 
         }
 
-        CommandMenu(String(localized: "Projects", table: "Interface")) {
-            Button(String(localized: "Next Project", table: "Interface")) {
-                manager?.selectNextProject()
-            }
-            .keyboardShortcut("]", modifiers: [.command, .option])
-            .disabled(manager == nil)
-
-            Button(String(localized: "Previous Project", table: "Interface")) {
-                manager?.selectPreviousProject()
-            }
-            .keyboardShortcut("[", modifiers: [.command, .option])
-            .disabled(manager == nil)
-
-            Divider()
-
-            ForEach(Array((manager?.projects ?? []).prefix(9).enumerated()), id: \.element.id) { index, project in
-                Button(project.name) {
-                    manager?.selectProject(index: index)
+        CommandGroup(after: .toolbar) {
+            Menu(String(localized: "Switch Project", table: "Interface")) {
+                Button(String(localized: "Next Project", table: "Interface")) {
+                    manager?.selectNextProject()
                 }
-                .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                .keyboardShortcut("]", modifiers: [.command, .option])
+                .disabled((manager?.projects.count ?? 0) < 2)
+
+                Button(String(localized: "Previous Project", table: "Interface")) {
+                    manager?.selectPreviousProject()
+                }
+                .keyboardShortcut("[", modifiers: [.command, .option])
+                .disabled((manager?.projects.count ?? 0) < 2)
+
+                Divider()
+
+                ForEach(Array((manager?.projects ?? []).prefix(9).enumerated()), id: \.element.id) { index, project in
+                    Button(project.name) {
+                        manager?.selectProject(index: index)
+                    }
+                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                }
             }
+            .disabled(manager?.projects.isEmpty != false)
         }
 
         CommandMenu(String(localized: "Browser", table: "Browser")) {
@@ -252,128 +265,134 @@ private struct KeroCommands: Commands {
             .disabled(manager?.hasSelectedBrowser != true)
         }
 
-        CommandMenu(String(localized: "Tabs", table: "Interface")) {
-            Button(String(localized: "Split Right", table: "Interface")) {
-                manager?.splitRight()
-            }
-            .keyboardShortcut("d", modifiers: .command)
-            .disabled(manager?.canSplit != true)
-
-            Button(String(localized: "Split Down", table: "Interface")) {
-                manager?.splitDown()
-            }
-            .keyboardShortcut("d", modifiers: [.command, .shift])
-            .disabled(manager?.canSplit != true)
-
-            Button(String(localized: "Split Left", table: "Interface")) {
-                manager?.splitLeft()
-            }
-            .disabled(manager?.canSplit != true)
-
-            Button(String(localized: "Split Up", table: "Interface")) {
-                manager?.splitUp()
-            }
-            .disabled(manager?.canSplit != true)
-
-            Divider()
-
-            Button(String(localized: "Focus Pane Left", table: "Interface")) {
-                manager?.focusPaneLeft()
-            }
-            .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
-            .disabled(manager == nil)
-
-            Button(String(localized: "Focus Pane Right", table: "Interface")) {
-                manager?.focusPaneRight()
-            }
-            .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
-            .disabled(manager == nil)
-
-            Button(String(localized: "Focus Pane Up", table: "Interface")) {
-                manager?.focusPaneUp()
-            }
-            .keyboardShortcut(.upArrow, modifiers: [.command, .option])
-            .disabled(manager == nil)
-
-            Button(String(localized: "Focus Pane Down", table: "Interface")) {
-                manager?.focusPaneDown()
-            }
-            .keyboardShortcut(.downArrow, modifiers: [.command, .option])
-            .disabled(manager == nil)
-
-            Button(String(localized: "Focus Previous Pane", table: "Interface")) {
-                manager?.focusPreviousPane()
-            }
-            .keyboardShortcut("[", modifiers: .command)
-            .disabled(manager == nil)
-
-            Button(String(localized: "Focus Next Pane", table: "Interface")) {
-                manager?.focusNextPane()
-            }
-            .keyboardShortcut("]", modifiers: .command)
-            .disabled(manager == nil)
-
-            Divider()
-
-            Button(String(localized: "Toggle Pane Zoom", table: "Interface")) {
-                manager?.togglePaneZoom()
-            }
-            .keyboardShortcut(.return, modifiers: [.command, .shift])
-            .disabled(manager?.hasSplitPanes != true)
-
-            Button(String(localized: "Equalize Panes", table: "Interface")) {
-                manager?.equalizePanes()
-            }
-            .keyboardShortcut("=", modifiers: [.command, .control])
-            .disabled(manager?.hasSplitPanes != true)
-
-            Menu(String(localized: "Resize Pane", table: "Interface")) {
-                Button(String(localized: "Up", table: "Interface")) {
-                    manager?.resizePaneUp()
+        CommandGroup(after: .toolbar) {
+            Menu(String(localized: "Layout", table: "Interface")) {
+                Button(String(localized: "Split Right", table: "Interface")) {
+                    manager?.splitRight()
                 }
-                .keyboardShortcut(.upArrow, modifiers: [.command, .control])
+                .keyboardShortcut("d", modifiers: .command)
+                .disabled(manager?.canSplit != true)
+
+                Button(String(localized: "Split Down", table: "Interface")) {
+                    manager?.splitDown()
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(manager?.canSplit != true)
+
+                Button(String(localized: "Split Left", table: "Interface")) {
+                    manager?.splitLeft()
+                }
+                .disabled(manager?.canSplit != true)
+
+                Button(String(localized: "Split Up", table: "Interface")) {
+                    manager?.splitUp()
+                }
+                .disabled(manager?.canSplit != true)
+
+                Divider()
+
+                Button(String(localized: "Focus Pane Left", table: "Interface")) {
+                    manager?.focusPaneLeft()
+                }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
                 .disabled(manager?.hasSplitPanes != true)
 
-                Button(String(localized: "Down", table: "Interface")) {
-                    manager?.resizePaneDown()
+                Button(String(localized: "Focus Pane Right", table: "Interface")) {
+                    manager?.focusPaneRight()
                 }
-                .keyboardShortcut(.downArrow, modifiers: [.command, .control])
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
                 .disabled(manager?.hasSplitPanes != true)
 
-                Button(String(localized: "Left", table: "Interface")) {
-                    manager?.resizePaneLeft()
+                Button(String(localized: "Focus Pane Up", table: "Interface")) {
+                    manager?.focusPaneUp()
                 }
-                .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
                 .disabled(manager?.hasSplitPanes != true)
 
-                Button(String(localized: "Right", table: "Interface")) {
-                    manager?.resizePaneRight()
+                Button(String(localized: "Focus Pane Down", table: "Interface")) {
+                    manager?.focusPaneDown()
                 }
-                .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
                 .disabled(manager?.hasSplitPanes != true)
+
+                Button(String(localized: "Focus Previous Pane", table: "Interface")) {
+                    manager?.focusPreviousPane()
+                }
+                .keyboardShortcut("[", modifiers: .command)
+                .disabled(manager?.hasSplitPanes != true)
+
+                Button(String(localized: "Focus Next Pane", table: "Interface")) {
+                    manager?.focusNextPane()
+                }
+                .keyboardShortcut("]", modifiers: .command)
+                .disabled(manager?.hasSplitPanes != true)
+
+                Divider()
+
+                Button(String(localized: "Toggle Pane Zoom", table: "Interface")) {
+                    manager?.togglePaneZoom()
+                }
+                .keyboardShortcut(.return, modifiers: [.command, .shift])
+                .disabled(manager?.hasSplitPanes != true)
+
+                Button(String(localized: "Equalize Panes", table: "Interface")) {
+                    manager?.equalizePanes()
+                }
+                .keyboardShortcut("=", modifiers: [.command, .control])
+                .disabled(manager?.hasSplitPanes != true)
+
+                Menu(String(localized: "Resize Pane", table: "Interface")) {
+                    Button(String(localized: "Up", table: "Interface")) {
+                        manager?.resizePaneUp()
+                    }
+                    .keyboardShortcut(.upArrow, modifiers: [.command, .control])
+                    .disabled(manager?.hasSplitPanes != true)
+
+                    Button(String(localized: "Down", table: "Interface")) {
+                        manager?.resizePaneDown()
+                    }
+                    .keyboardShortcut(.downArrow, modifiers: [.command, .control])
+                    .disabled(manager?.hasSplitPanes != true)
+
+                    Button(String(localized: "Left", table: "Interface")) {
+                        manager?.resizePaneLeft()
+                    }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
+                    .disabled(manager?.hasSplitPanes != true)
+
+                    Button(String(localized: "Right", table: "Interface")) {
+                        manager?.resizePaneRight()
+                    }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
+                    .disabled(manager?.hasSplitPanes != true)
+                }
+                .disabled(manager?.hasSplitPanes != true)
+
             }
+            .disabled(manager?.selectedProject?.focusedContent == nil)
 
-            Divider()
+            Menu(String(localized: "Tabs", table: "Interface")) {
+                Button(String(localized: "Next Tab", table: "Interface")) {
+                    manager?.selectNextTab()
+                }
+                .keyboardShortcut("]", modifiers: [.command, .shift])
+                .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
 
-            Button(String(localized: "Next Tab", table: "Interface")) {
-                manager?.selectNextTab()
-            }
-            .keyboardShortcut("]", modifiers: [.command, .shift])
-            .disabled(manager == nil)
+                Button(String(localized: "Previous Tab", table: "Interface")) {
+                    manager?.selectPreviousTab()
+                }
+                .keyboardShortcut("[", modifiers: [.command, .shift])
+                .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
 
-            Button(String(localized: "Previous Tab", table: "Interface")) {
-                manager?.selectPreviousTab()
-            }
-            .keyboardShortcut("[", modifiers: [.command, .shift])
-            .disabled(manager == nil)
+                Divider()
 
-            Divider()
-
-            ForEach(Array((manager?.selectedProject?.tabs ?? []).prefix(9).enumerated()), id: \.element.id) { index, tab in
-                Button(tab.displayTitle ?? String(localized: "Tab \(index + 1)", table: "Settings")) {
-                    manager?.selectTab(index: index)
+                ForEach(Array((manager?.selectedProject?.tabs ?? []).prefix(9).enumerated()), id: \.element.id) { index, tab in
+                    Button(tab.displayTitle ?? String(localized: "Tab \(index + 1)", table: "Settings")) {
+                        manager?.selectTab(index: index)
+                    }
                 }
             }
+            .disabled(manager?.selectedProject?.tabs.isEmpty != false)
         }
     }
 }

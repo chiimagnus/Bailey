@@ -380,7 +380,9 @@ final class PaneTab: nonisolated ObservableObject, nonisolated Identifiable {
     /// pane's content (terminal title, file name, diff title) — the same
     /// override scheme as `Project.customName`.
     @Published var customName: String?
-    @Published var layout: PaneNode
+    @Published var layout: PaneNode {
+        didSet { observeDirtyContents() }
+    }
     @Published var focusedPaneID: UUID
     /// Whether the focused pane is zoomed to fill the tab. Presentation-only:
     /// the split tree and fractions stay intact underneath, and the layout
@@ -398,17 +400,38 @@ final class PaneTab: nonisolated ObservableObject, nonisolated Identifiable {
     /// shell simply drops the association.
     weak var contextSession: TerminalSession?
 
+    private var dirtyObservations: [UUID: AnyCancellable] = [:]
+
     /// A fresh single-pane tab wrapping one piece of content.
     init(content: PaneContent) {
         let pane = Pane(content: content)
         layout = .pane(pane)
         focusedPaneID = pane.id
+        observeDirtyContents()
     }
 
     /// Restores a saved layout.
     init(layout: PaneNode, focusedPaneID: UUID) {
         self.layout = layout
         self.focusedPaneID = focusedPaneID
+        observeDirtyContents()
+    }
+
+    private func observeDirtyContents() {
+        let contents = allContents
+        let retainedIDs = Set(contents.map(\.id))
+        dirtyObservations = dirtyObservations.filter { retainedIDs.contains($0.key) }
+        for content in contents where dirtyObservations[content.id] == nil {
+            let publisher: AnyPublisher<Bool, Never>
+            switch content {
+            case .file(let file): publisher = file.$isDirty.eraseToAnyPublisher()
+            case .diff(let diff): publisher = diff.$isDirty.eraseToAnyPublisher()
+            case .session, .browser: continue
+            }
+            dirtyObservations[content.id] = publisher.removeDuplicates().dropFirst()
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in self?.objectWillChange.send() }
+        }
     }
 
     // MARK: - Derived

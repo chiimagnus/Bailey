@@ -413,6 +413,16 @@
     "kero" : {
       "shouldTranslate" : false
     },
+    "Layout" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "布局"
+          }
+        }
+      }
+    },
     "Left" : {
       "localizations" : {
         "zh-Hans" : {
@@ -810,6 +820,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "标签页切换器"
+          }
+        }
+      }
+    },
+    "Switch Project" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换项目"
           }
         }
       }

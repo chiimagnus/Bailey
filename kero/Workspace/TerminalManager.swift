@@ -760,6 +760,8 @@ final class TerminalManager: nonisolated ObservableObject {
         )
     }
 
+    var canSaveSelectedFile: Bool { selectedProject?.focusedContent?.isDirty == true }
+
     /// Saves the focused pane if it holds a file or an editable diff.
     func saveSelectedFile() {
         guard let content = selectedProject?.focusedContent else { return }
@@ -841,11 +843,7 @@ final class TerminalManager: nonisolated ObservableObject {
 
     /// Reuse an existing panel or reopen it in a tool group; never create
     /// another copy just because the user relocated the original.
-    func showPanel(_ panel: ToolPanel) {
-        let item: DockItem = switch panel {
-        case .files: .files
-        case .git: .git
-        }
+    func showPanel(_ item: DockItem) {
         guard let project = selectedProject else { return }
         if project.dock.group(containing: item) != nil {
             project.dock.select(item)

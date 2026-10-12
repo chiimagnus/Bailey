@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 @testable import kero
 
@@ -207,8 +208,36 @@ enum WorkspaceIdentityCheck {
             preconditionFailure("Created file did not open in the editor")
         }
         precondition(createdFile.path == created && createdFile.text.isEmpty)
+        precondition(!manager.canSaveSelectedFile)
         let createdBytes = try Data(contentsOf: URL(fileURLWithPath: created!))
         precondition(createdBytes.isEmpty)
+        var menuNotifications = 0
+        let menuObservation = manager.objectWillChange.sink { menuNotifications += 1 }
+        createdFile.text = "menu saved\n"
+        createdFile.refreshDirtyState()
+        precondition(manager.canSaveSelectedFile)
+        try await wait { menuNotifications > 0 }
+        menuNotifications = 0
+        manager.saveSelectedFile()
+        try await wait { !createdFile.isDirty }
+        try await wait { menuNotifications > 0 }
+        precondition(!manager.canSaveSelectedFile && createdFile.saveError == nil)
+        let menuSavedBytes = try Data(contentsOf: URL(fileURLWithPath: created!))
+        precondition(menuSavedBytes == Data("menu saved\n".utf8))
+        withExtendedLifetime(menuObservation) {}
+        let savedFileTab = fileProject.selectedTab!
+        fileProject.newBrowserTab()
+        precondition(!manager.canSaveSelectedFile)
+        fileProject.selectedTabID = savedFileTab.id
+        let originalGroup = fileProject.dock.root.group(containing: .projects)!
+        let otherGroup = fileProject.dock.root.groups.first { $0.id != originalGroup.id }!
+        precondition(fileProject.dock.move(.projects, into: otherGroup.id))
+        manager.showPanel(.projects)
+        precondition(fileProject.dock.root.groups.flatMap(\.items).filter { $0 == .projects }.count == 1)
+        precondition(fileProject.dock.root.group(containing: .projects)?.selected == .projects)
+        fileProject.dock.removeTool(.projects)
+        manager.showPanel(.projects)
+        precondition(fileProject.dock.visibleItems.contains(.projects))
         let failedRunner = FailingCreateRunner()
         let failedRemote = SSHWorkspaceBackend(runner: failedRunner)
         let failureSentinel = directory.appendingPathComponent("remote-failure.txt")
@@ -268,8 +297,14 @@ enum WorkspaceIdentityCheck {
         localFile.refreshDirtyState()
         await localFile.save()
         precondition(!localFile.isDirty && localFile.saveError == nil)
+        var diffNotifications = 0
+        let diffObservation = project.objectWillChange.sink { diffNotifications += 1 }
         localDiff.updateEditedContent(fileID: "file.txt", contents: "local diff save\n")
+        try await wait { diffNotifications > 0 }
+        diffNotifications = 0
         await localDiff.save()
+        try await wait { diffNotifications > 0 }
+        withExtendedLifetime(diffObservation) {}
         let localBytes = try Data(contentsOf: URL(fileURLWithPath: path))
         precondition(localBytes == Data("local diff save\n".utf8))
         let remote = IdentityWorkspace()
