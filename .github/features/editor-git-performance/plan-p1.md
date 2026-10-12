@@ -13,7 +13,7 @@
 - 安全安装/恢复有记录；无法观测的指标写明缺口，不用替代指标冒充。
 
 **Rules:**
-- 沿用 `docs/CONTRIBUTING.md` 的签名 Debug 与 `/Applications/Kero.app`，不注册另一份同标识应用。
+- 沿用 `AGENTS.md` 的签名 Debug 与 `/Applications/Kero.app`，不注册另一份同标识应用。
 - 工程只有 Debug 配置，目标默认 MainActor、启用 approachable concurrency。单看 `async` 或旧注释不能证明 executor。
 - `FPSCounter.tick` 统计显示回调；`DiffWebRoot.onReady` 不是可见首屏，只能辅助定位。
 - trace 和原始样本留在被忽略的 `build/`，feature 文件保持本地。
@@ -25,7 +25,7 @@
 
 **Files:**
 - New: `scripts/prepare-performance-fixtures.swift`，独立 Foundation 脚本，不增加测试框架。
-- Modify: `docs/PERFORMANCE.md` 的生成入口，验收流程链接 `docs/CONTRIBUTING.md`。
+- Modify: `docs/PERFORMANCE.md` 的生成入口，验收流程链接 `AGENTS.md`。
 - Local evidence: `build/performance/fixtures/`、`build/performance/fixtures-manifest.json`、feature 下 `evidence-p1.md`。
 
 **当前依据:** `scripts/check-file-tree-navigation.swift` 已用独立 Swift 检查和临时目录；没有 app 测试 target。文本及 diff 上限 5 MiB，未跟踪计数有 2048 文件/8 MiB 每文件/32 MiB 总预算。

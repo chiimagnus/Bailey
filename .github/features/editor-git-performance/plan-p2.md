@@ -18,7 +18,7 @@
 - 本地读取已用同一个 FileHandle、前后 seek 检查与 64 KiB 分块；复用它，不换成 stat 后无界 Data(contentsOf:)。
 - NSImage 等 AppKit 对象不直接跨 executor 传递；后台交付 Sendable 数据/文本，UI 对象在正确隔离域创建。
 - 字体仍由 SourceTextEditor.apply 管理，保留原生选区、输入法、查找替换和弱视图生命周期。
-- 构建、安装、保护用户工作、清理均按 docs/CONTRIBUTING.md；每 task 都须真机验收后提交。
+- 构建、安装、保护用户工作、清理均按 AGENTS.md；每 task 都须真机验收后提交。
 
 <a id="p2-t1"></a>
 ## P2-T1 统一首次加载和有界后台读取
