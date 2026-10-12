@@ -141,7 +141,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
 
     /// The focused terminal session; while a file, browser, or diff pane is
     /// focused it has no directory of its own, so panels that need a working
-    /// directory (file tree, git, info) track a terminal that does: one sharing
+    /// directory (file tree, git) track a terminal that does: one sharing
     /// the tab (a split), else the session the content was opened from (the
     /// tab's `contextSession`), else the project's first session.
     var selectedSession: TerminalSession? {
@@ -196,18 +196,6 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
 
     func matchesPanelTarget(_ identity: PanelContext.Identity) -> Bool {
         panelContext?.identity == identity
-    }
-
-    var infoProcessTarget: SessionInfoModel.ProcessTarget? {
-        guard sshHost == nil, let session = selectedSession else { return nil }
-        let connection = session.location.remoteConnection
-        if customDirectory != nil, connection != nil { return nil }
-        if let connection, connection.state != .connected { return nil }
-        guard let pid = connection == nil ? session.shellPid : connection?.shellProcessID,
-              pid > 0 else { return nil }
-        return SessionInfoModel.ProcessTarget(
-            workspace: workspaceIdentity, connection: connection?.id, shellPid: pid
-        )
     }
 
     /// Root for the file tree and git panels: the pinned directory when the

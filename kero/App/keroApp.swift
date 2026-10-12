@@ -189,11 +189,6 @@ private struct KeroCommands: Commands {
             .keyboardShortcut("g", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
 
-            Button(String(localized: "Info", table: "Sidebar")) {
-                manager?.showPanel(.info)
-            }
-            .keyboardShortcut("i", modifiers: [.command, .shift])
-            .disabled(manager?.selectedProject == nil)
         }
 
         CommandMenu(String(localized: "Projects", table: "Interface")) {

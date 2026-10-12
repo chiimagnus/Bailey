@@ -6,7 +6,6 @@ import Foundation
 /// this model owns only where each tab is displayed.
 enum DockItem: Hashable {
     case projects
-    case info
     case files
     case git
     case tab(UUID)
@@ -14,7 +13,6 @@ enum DockItem: Hashable {
     init?(configurationName: String) {
         switch configurationName {
         case "projects": self = .projects
-        case "info": self = .info
         case "files": self = .files
         case "git": self = .git
         default: return nil
@@ -24,7 +22,6 @@ enum DockItem: Hashable {
     var configurationName: String? {
         switch self {
         case .projects: "projects"
-        case .info: "info"
         case .files: "files"
         case .git: "git"
         case .tab: nil
@@ -34,7 +31,7 @@ enum DockItem: Hashable {
 
 /// Defines workspace actions without binding the model to SwiftUI menus.
 enum DockAddAction: String, CaseIterable, Hashable {
-    case session, projects, info, files, git
+    case session, projects, files, git
 
     var item: DockItem? {
         self == .session ? nil : DockItem(configurationName: rawValue)
@@ -45,7 +42,7 @@ enum DockAddAction: String, CaseIterable, Hashable {
 /// Per-project saved layouts remain separate from this starting template.
 struct DockWorkspaceConfiguration {
     static let standard = DockWorkspaceConfiguration(
-        groups: [[.projects], [], [.info, .files, .git]],
+        groups: [[.projects], [], [.files, .git]],
         selected: [.projects, nil, .files],
         weights: [0.12, 0.69256, 0.18744],
         addActions: DockAddAction.allCases,
@@ -83,6 +80,7 @@ struct DockWorkspaceConfiguration {
                 .map { $0.trimmingCharacters(in: .whitespaces) }
             var items: [DockItem] = []
             for name in names {
+                if name == "info" { continue }
                 guard let item = DockItem(configurationName: name), seen.insert(item).inserted else {
                     return nil
                 }
@@ -93,8 +91,8 @@ struct DockWorkspaceConfiguration {
         guard seen.contains(.projects), weights.allSatisfy({ $0.isFinite && $0 > 0 }) else { return nil }
         var selected: [DockItem?] = []
         for (index, name) in selectedNames.enumerated() {
-            let item = name.isEmpty ? groups[index].first : DockItem(configurationName: name)
-            if !name.isEmpty && item == nil { return nil }
+            let item = name.isEmpty || name == "info" ? groups[index].first : DockItem(configurationName: name)
+            if !name.isEmpty && name != "info" && item == nil { return nil }
             if let item, !groups[index].contains(item) { return nil }
             selected.append(item)
         }
@@ -104,8 +102,9 @@ struct DockWorkspaceConfiguration {
             let fraction = weights[index] / weights[index...].reduce(0, +)
             guard (0.1...0.9).contains(fraction) else { return nil }
         }
-        let actions = actionNames.compactMap(DockAddAction.init(rawValue:))
-        guard actions.count == actionNames.count, Set(actions).count == actions.count,
+        let activeActionNames = actionNames.filter { $0 != "info" }
+        let actions = activeActionNames.compactMap(DockAddAction.init(rawValue:))
+        guard actions.count == activeActionNames.count, Set(actions).count == actions.count,
               actions.contains(.session), actions.contains(.projects) else { return nil }
         self.init(groups: groups, selected: selected, weights: weights,
                   addActions: actions, edgeThreshold: edgeThreshold)
@@ -305,7 +304,6 @@ enum DockSavedItem: Codable, Hashable {
     init?(_ item: DockItem, tabIDs: [UUID]) {
         switch item {
         case .projects: self = .projects
-        case .info: self = .info
         case .files: self = .files
         case .git: self = .git
         case .tab(let id):
@@ -317,7 +315,7 @@ enum DockSavedItem: Codable, Hashable {
     func resolve(tabIDs: [UUID]) -> DockItem? {
         switch self {
         case .projects: return .projects
-        case .info: return .info
+        case .info: return nil
         case .files: return .files
         case .git: return .git
         case .tab(let index):

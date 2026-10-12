@@ -431,32 +431,12 @@
         }
       }
     },
-    "Copy Executable Path" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "复制可执行文件路径"
-          }
-        }
-      }
-    },
     "Copy Path" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "复制路径"
-          }
-        }
-      }
-    },
-    "Copy PID" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "复制 PID"
           }
         }
       }
@@ -477,16 +457,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "复制仓库路径"
-          }
-        }
-      }
-    },
-    "Copy URL" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "复制 URL"
           }
         }
       }
@@ -528,16 +498,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "当前分支：%@"
-          }
-        }
-      }
-    },
-    "CURRENT DIRECTORY" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "当前目录"
           }
         }
       }
@@ -746,16 +706,6 @@
         }
       }
     },
-    "Files and Git anchor to this directory. When automatic, it follows the closest Git repository containing the shell’s current directory, or the one the terminal’s foreground job moved to — a coding agent that switched to its own worktree. A directory set manually from the project’s context menu is always used as-is." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "文件与 Git 以此目录为基准。自动模式下，会跟随包含 Shell 当前目录的最近 Git 仓库，或终端前台作业所切换到的仓库——例如切换到自己工作树的编码代理。若从项目菜单手动指定了目录，则始终使用该目录。"
-          }
-        }
-      }
-    },
     "Filter Changed Files" : {
       "localizations" : {
         "zh-Hans" : {
@@ -837,16 +787,6 @@
         }
       }
     },
-    "Force Kill" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "强制结束"
-          }
-        }
-      }
-    },
     "Git Manager" : {
       "localizations" : {
         "zh-Hans" : {
@@ -914,26 +854,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已忽略"
-          }
-        }
-      }
-    },
-    "Info" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "信息"
-          }
-        }
-      }
-    },
-    "Info (⇧⌘I)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "信息（⇧⌘I）"
           }
         }
       }
@@ -1161,26 +1081,6 @@
         }
       }
     },
-    "No listening ports" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无监听端口"
-          }
-        }
-      }
-    },
-    "No running processes" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有运行中的进程"
-          }
-        }
-      }
-    },
     "Not selected" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1261,16 +1161,6 @@
         }
       }
     },
-    "Open in Browser" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在浏览器中打开"
-          }
-        }
-      }
-    },
     "Open in Default App" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1317,76 +1207,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "弹出贮藏（%lld）"
-          }
-        }
-      }
-    },
-    "PORTS" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "端口"
-          }
-        }
-      }
-    },
-    "PROCESSES" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "进程"
-          }
-        }
-      }
-    },
-    "Project" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "项目"
-          }
-        }
-      }
-    },
-    "PROJECT DIRECTORY" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "项目目录"
-          }
-        }
-      }
-    },
-    "PROJECT DIRECTORY (AUTO)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "项目目录（自动）"
-          }
-        }
-      }
-    },
-    "PROJECT DIRECTORY (JOB)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "项目目录（作业）"
-          }
-        }
-      }
-    },
-    "PROJECT DIRECTORY (WORKTREE)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "项目目录（工作树）"
           }
         }
       }
@@ -1447,16 +1267,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "最近提交"
-          }
-        }
-      }
-    },
-    "Refresh" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "刷新"
           }
         }
       }
@@ -1590,16 +1400,6 @@
         }
       }
     },
-    "Session" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "会话"
-          }
-        }
-      }
-    },
     "Set Project Directory…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1716,26 +1516,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "同步更改"
-          }
-        }
-      }
-    },
-    "Terminate" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "终止"
-          }
-        }
-      }
-    },
-    "Terminate Process" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "终止进程"
           }
         }
       }

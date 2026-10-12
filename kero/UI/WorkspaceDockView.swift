@@ -148,7 +148,6 @@ extension DockItem {
     var symbol: String {
         switch self {
         case .projects: "folder"
-        case .info: "info.circle"
         case .files: "folder"
         case .git: "arrow.triangle.branch"
         case .tab: "terminal"
@@ -158,7 +157,6 @@ extension DockItem {
     func label(project: Project) -> String {
         switch self {
         case .projects: String(localized: "Projects", table: "Interface")
-        case .info: String(localized: "Info", table: "Sidebar")
         case .files: String(localized: "File Manager", table: "Sidebar")
         case .git: String(localized: "Git Manager", table: "Sidebar")
         case .tab(let id): project.tabs.first { $0.id == id }?.displayTitle ?? String(localized: "Tab", table: "Workspace")
@@ -465,8 +463,6 @@ private struct DockTabGroupView: View {
                 manager: manager,
                 bottomBarHeight: BottomToolbarLayout.height
             )
-        case .info:
-            ToolPanelView(manager: manager, git: git, panel: .info)
         case .files:
             ToolPanelView(manager: manager, git: git, panel: .files)
         case .git:

@@ -22,8 +22,8 @@ struct CheckDockWorkspace {
         check(defaults.count == 3, "default three-column workspace")
         check(defaults[0].items == [.projects], "projects default")
         check(defaults[1].items.isEmpty, "empty middle group")
-        check(defaults[2].items == [.info, .files, .git], "tools default")
-        check(defaults[2].selected == .files, "default Git/files/info tab selection")
+        check(defaults[2].items == [.files, .git], "tools default")
+        check(defaults[2].selected == .files, "default file manager tab selection")
         if case .split(let outer) = dock.root,
            case .split(let inner) = outer.second {
             check(abs(outer.fraction - 0.12) < 0.0001, "configured outer fraction")
@@ -38,9 +38,9 @@ struct CheckDockWorkspace {
         )!
         let customDock = DockWorkspaceModel(configuration: configured)
         check(customDock.root.groups.map(\.items) == [
-            [.files], [.projects, .info], [.git]
+            [.files], [.projects], [.git]
         ], "configuration controls all initial groups")
-        check(customDock.root.groups[1].selected == .info, "configuration controls selected tab")
+        check(customDock.root.groups[1].selected == .projects, "removed Info selection falls back within its group")
         check(customDock.configuration.addActions == [.session, .git, .projects, .files],
               "configuration controls add-menu ordering")
         let nearEdge = CGPoint(x: 55, y: 160)
@@ -103,7 +103,7 @@ struct CheckDockWorkspace {
         check(restored.root.groups.count == 3, "saved layout overrides configured initial groups")
         check(restored.root.group(id: center)?.items == [.tab(c), .tab(b)], "tab identity rebound")
         check(restored.root.group(id: projects)?.items == [.projects, .git], "tool location persisted")
-        check(restored.visibleItems.count == 6, "no duplication")
+        check(restored.visibleItems.count == 5, "no duplication")
         check(!restored.move(.projects, into: UUID()), "invalid target rejected")
 
         let target = restored.root.groups.last!.id

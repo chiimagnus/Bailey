@@ -42,7 +42,8 @@ enum SettingsCheck {
         let customized = AppSettings(configURL: url)
         precondition(customized.fontFamily == "Fixture\"Font" && customized.fontSize == 18)
         precondition(customized.panelFontSize == 16 && customized.fontThicken)
-        precondition(customized.workspaceConfiguration.groupNames == ["projects,files", "git,info"])
+        precondition(customized.workspaceConfiguration.groupNames == ["projects,files", "git"])
+        precondition(!customized.workspaceConfiguration.addActions.map(\.rawValue).contains("info"))
         customized.fontSize = 19
         let roundtrip = AppSettings(configURL: url)
         precondition(roundtrip.fontFamily == customized.fontFamily && roundtrip.fontSize == 19)
@@ -56,7 +57,8 @@ enum SettingsCheck {
         customized.fontSize = 20
         let manuallyEdited = AppSettings(configURL: url)
         precondition(manuallyEdited.fontSize == 20)
-        precondition(manuallyEdited.workspaceConfiguration.groupNames == ["projects", "files", "git,info"])
+        precondition(manuallyEdited.workspaceConfiguration.groupNames == ["projects", "files", "git"])
+        precondition(manuallyEdited.workspaceConfiguration.selectedNames == ["projects", "files", "git"])
         precondition(manuallyEdited.workspaceConfiguration.weights == [1, 3, 2])
         try "font-thicken = true\nfont-size = 100\nworkspace.groups = [1]\n".write(to: url, atomically: true, encoding: .utf8)
         let invalid = AppSettings(configURL: url)

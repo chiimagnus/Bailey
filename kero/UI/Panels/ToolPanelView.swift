@@ -64,7 +64,7 @@ private struct RemotePaneHeaderHost: NSViewRepresentable {
     }
 }
 
-/// Renders one tool within a dock tab. Files, Git and Info retain their
+/// Renders one tool within a dock tab. Files and Git retain their
 /// original models and actions regardless of where the tab is parked.
 struct ToolPanelView: View {
     @ObservedObject var manager: TerminalManager
@@ -72,7 +72,6 @@ struct ToolPanelView: View {
     let panel: ToolPanel
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var themeChanges = Theme.changes
-    @StateObject private var info = SessionInfoModel()
     @State private var applicationIsActive = NSApp.isActive
     /// Which rule produced the current panel root; drives the Files badge.
     @State private var rootSource = PanelContext.RootSource.shell
@@ -84,8 +83,6 @@ struct ToolPanelView: View {
     /// Mirrors the heading's own state, because the layout above has to give
     /// back the row's height when the session is local.
     @State private var remoteHeaderState = RemotePaneHeaderState.local
-    /// The selected session's forwards, or nil while it is local.
-    @State private var forwards: PortForwardController?
 
     /// Changes whenever the selected session's connection appears, changes
     /// state, or is replaced.
@@ -201,13 +198,6 @@ struct ToolPanelView: View {
                         )
                     }
                 )
-            case .info:
-                InfoPanel(
-                    model: info,
-                    session: fileActionSession,
-                    sshHost: manager.selectedProject?.sshHost,
-                    forwards: forwards
-                )
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -223,7 +213,7 @@ struct ToolPanelView: View {
                 applyRemoteHeading()
             }
         }
-        // Files and process information remain live while visible. Git is
+        // Files remain live while visible. Git is
         // event-driven: terminal/Git command completion and app activation
         // refresh it without a repeating main-run-loop source.
         .task(id: pollsSelectedPanel) {
@@ -265,23 +255,15 @@ struct ToolPanelView: View {
         // Before the queue, not inside it: a refresh over a dead connection
         // waits out its deadlines, and the heading must not wait with it.
         applyRemoteHeading()
-        if panel == .info {
-            info.retarget(
-                to: manager.selectedProject?.infoProcessTarget,
-                backend: manager.selectedProject?.workspaceBackend ?? LocalWorkspaceBackend.shared,
-                shellName: manager.selectedSession?.shellName ?? ""
-            )
-        }
         syncQueue.run { await performSync() }
     }
 
-    /// The heading, and the forwards that belong to the current connection.
+    /// The heading belonging to the current connection.
     /// Cheap and synchronous — it reads published state and touches no
     /// workspace, so it stays correct while the panels are stalled.
     private func applyRemoteHeading() {
         guard let project = manager.selectedProject else {
             remoteHeaderState = .local
-            forwards = nil
             return
         }
         if let host = project.sshHost {
@@ -294,18 +276,15 @@ struct ToolPanelView: View {
             remoteHeader.apply(state: state)
             remoteHeader.workingDirectory = project.customDirectory
             if remoteHeaderState != state { remoteHeaderState = state }
-            forwards = nil
             return
         }
         if project.customDirectory != nil {
             remoteHeader.apply(state: .local)
             remoteHeaderState = .local
-            forwards = nil
             return
         }
         guard let session = project.selectedSession else {
             remoteHeaderState = .local
-            forwards = nil
             return
         }
         // An automatically scoped project may still follow its terminal's
@@ -316,8 +295,6 @@ struct ToolPanelView: View {
             ? nil
             : session.panelDirectoryPath
         if remoteHeaderState != headerState { remoteHeaderState = headerState }
-        let controller = session.location.remoteConnection?.portForwards
-        if forwards !== controller { forwards = controller }
     }
 
     /// Which workspace a refresh belongs to. A connection changing state, or
@@ -346,12 +323,10 @@ struct ToolPanelView: View {
            connection.state == .disconnected {
             return
         }
-        let cwd = context.cwd
         let backend = context.backend
         // Files and Git anchor to the project directory — pinned when the
         // user set one, else the repository the session is working in — so
-        // they don't re-root as the terminal cds around a repo; Info
-        // describes the shell itself, showing its live cwd next to that root.
+        // they don't re-root as the terminal cds around a repo.
         // An agent that moves to its own worktree changes only its own
         // process directory, so the foreground job's cwd is passed in too.
         let (root, source) = await context.resolvedRoot()
@@ -366,17 +341,6 @@ struct ToolPanelView: View {
             if project.matchesPanelTarget(context.identity) { filesTarget = context.identity }
         case .git:
             break
-        case .info:
-            // The panel pid, not the session's own: while remote these rows
-            // describe the remote login shell and its children, so filtering
-            // them by this Mac's shell pid would find nothing.
-            await info.sync(
-                root: project.sshHost == nil ? cwd : root,
-                projectRoot: root, projectRootSource: source,
-                shellName: session?.shellName ?? "",
-                target: project.infoProcessTarget,
-                backend: backend
-            )
         }
     }
 

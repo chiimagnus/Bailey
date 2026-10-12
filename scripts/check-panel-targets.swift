@@ -3,10 +3,8 @@ import Foundation
 
 actor DelayedWorkspace: WorkspaceBackend {
     let name: String
-    private(set) var processRequests = 0
     private(set) var created: [String] = []
     private(set) var deleted: [String] = []
-    private(set) var killed: [pid_t] = []
 
     init(_ name: String) { self.name = name }
 
@@ -36,7 +34,6 @@ actor DelayedWorkspace: WorkspaceBackend {
         WorkspaceRunResult(status: 0, stdout: Data(), stderr: Data())
     }
     func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot {
-        processRequests += 1
         try await Task.sleep(for: .milliseconds(100))
         return WorkspaceProcessSnapshot(
             descendants: [WorkspaceProcess(pid: 42, name: name, executable: "/" + name, cpu: 1, memoryKB: 1)],
@@ -44,7 +41,7 @@ actor DelayedWorkspace: WorkspaceBackend {
         )
     }
     func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] { [WorkspacePort(port: 8080, pid: 42)] }
-    func kill(pid: pid_t, force: Bool) async throws { killed.append(pid) }
+    func kill(pid: pid_t, force: Bool) async throws {}
 }
 
 @main
@@ -100,41 +97,6 @@ enum PanelTargetsCheck {
         ), backend: first)
         precondition(disconnected.identity != automatic("/new", workspace: "remote", connection: firstConnection).identity)
 
-        let info = SessionInfoModel()
-        let oldTarget = SessionInfoModel.ProcessTarget(workspace: "first", connection: firstConnection, shellPid: 7)
-        let newTarget = SessionInfoModel.ProcessTarget(workspace: "second", connection: secondConnection, shellPid: 7)
-        await info.sync(root: "/root", projectRoot: "/root", projectRootSource: .shell, shellName: "local", target: oldTarget, backend: first)
-        precondition(info.processes.first?.name == "first" && info.shellName == "first")
-        let savedMenuTarget = info.processTarget
-        let pending = Task { await info.refresh() }
-        try await wait { await first.processRequests >= 2 }
-        info.retarget(to: newTarget, backend: second, shellName: "local")
-        precondition(info.processes.isEmpty && info.ports.isEmpty)
-        await info.kill(42, target: savedMenuTarget)
-        await info.sync(root: "/other", projectRoot: "/other", projectRootSource: .pinned, shellName: "local", target: newTarget, backend: second)
-        await pending.value
-        precondition(info.processes.first?.name == "second" && info.shellName == "second")
-        await info.kill(42, target: savedMenuTarget)
-        let rejectedKills = await second.killed
-        precondition(rejectedKills.isEmpty)
-        await info.sync(root: "/cwd-changed", projectRoot: "/root", projectRootSource: .shell, shellName: "local", target: newTarget, backend: second)
-        await info.kill(42, target: newTarget)
-        let acceptedKills = await second.killed
-        precondition(acceptedKills == [42])
-        let third = DelayedWorkspace("third")
-        let thirdTarget = SessionInfoModel.ProcessTarget(workspace: "second", connection: UUID(), shellPid: 7)
-        let requestCount = await second.processRequests
-        let retargetedRefresh = Task { await info.refresh() }
-        try await wait { await second.processRequests > requestCount }
-        info.retarget(to: thirdTarget, backend: third, shellName: "local")
-        await retargetedRefresh.value
-        precondition(info.processes.first?.name == "third" && info.shellName == "third")
-        await info.kill(42, target: newTarget)
-        let connectionStaleKills = await third.killed
-        precondition(connectionStaleKills.isEmpty)
-        info.retarget(to: nil, backend: first, shellName: "local")
-        precondition(info.processes.isEmpty && info.ports.isEmpty && info.shellPid == 0)
-
         let tree = FileTreeModel()
         await tree.sync(root: "/root", backend: first)
         await tree.beginNewFile(in: "/root")
@@ -156,6 +118,6 @@ enum PanelTargetsCheck {
         let deletions = await second.deleted
         let originalDeletions = await first.deleted
         precondition(deletions.isEmpty && originalDeletions.isEmpty)
-        print("PASS: delayed root/foreground/machine/connection identity, Info same-PID stale kill + final refresh, Files delayed-create/confirmation boundaries")
+        print("PASS: delayed root/foreground/machine/connection identity, Files delayed-create/confirmation boundaries")
     }
 }

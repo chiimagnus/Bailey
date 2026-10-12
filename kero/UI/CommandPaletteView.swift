@@ -261,9 +261,6 @@ struct CommandPaletteView: View {
             PaletteCommand(id: "show-git", title: LocalizedStringResource("Git Manager", table: "Sidebar"), systemImage: "arrow.triangle.branch", shortcut: "⇧⌘G") {
                 manager.showPanel(.git)
             },
-            PaletteCommand(id: "show-info", title: LocalizedStringResource("Info", table: "Sidebar"), systemImage: "info.circle", shortcut: "⇧⌘I") {
-                manager.showPanel(.info)
-            },
             PaletteCommand(
                 id: "toggle-fps-counter",
                 title: manager.isFPSCounterVisible

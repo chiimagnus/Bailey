@@ -13,7 +13,6 @@ import WebKit
 enum ToolPanel {
     case files
     case git
-    case info
 }
 
 /// One Find menu command, routed from the menu bar to whichever find
@@ -822,7 +821,6 @@ final class TerminalManager: nonisolated ObservableObject {
     /// another copy just because the user relocated the original.
     func showPanel(_ panel: ToolPanel) {
         let item: DockItem = switch panel {
-        case .info: .info
         case .files: .files
         case .git: .git
         }
@@ -830,7 +828,7 @@ final class TerminalManager: nonisolated ObservableObject {
         if project.dock.group(containing: item) != nil {
             project.dock.select(item)
         } else if let target = project.dock.root.groups.last(where: { group in
-            group.items.contains(.info) || group.items.contains(.files) || group.items.contains(.git)
+            group.items.contains(.files) || group.items.contains(.git)
         }) ?? project.dock.root.groups.last {
             project.dock.place(item, in: target.id)
         }

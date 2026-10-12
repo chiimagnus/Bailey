@@ -844,16 +844,6 @@
         }
       }
     },
-    "Toggle Info Panel" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "显示/隐藏信息面板"
-          }
-        }
-      }
-    },
     "Toggle Left Sidebar" : {
       "localizations" : {
         "zh-Hans" : {

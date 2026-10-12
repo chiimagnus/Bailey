@@ -66,7 +66,7 @@ for name in "$@"; do
             compile_and_run "$name" kero/Workspace/WorkspaceBackend.swift kero/Workspace/LocalWorkspaceBackend.swift \
                 kero/Workspace/PanelContext.swift kero/Remote/RemoteCommands.swift kero/Remote/SSHWorkspaceBackend.swift \
                 kero/Remote/RemoteConnection.swift kero/Remote/PortForwardController.swift \
-                kero/Shared/Tree/TreeDisplayModel.swift kero/Files/FileTreeModel.swift kero/Info/SessionInfoModel.swift
+                kero/Shared/Tree/TreeDisplayModel.swift kero/Files/FileTreeModel.swift
             ;;
         tree-row-hit-testing)
             compile_and_run "$name" kero/Shared/Tree/TreeDisplayModel.swift kero/Shared/Tree/TreeRowStyle.swift

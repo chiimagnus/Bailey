@@ -38,6 +38,22 @@ enum SessionSnapshotCheck {
         precondition(encodedAgain == data)
         let restoredDock = dock.restore(tabIDs: [UUID()])
         precondition(restoredDock.groups.flatMap(\.items).count == 2)
+        let legacyGroupID = UUID(), legacyTabID = UUID()
+        let legacyDock = DockSavedNode.group(DockSavedGroup(
+            id: legacyGroupID, items: [.info, .files, .tab(0), .git], selected: .info
+        ))
+        var legacyProject = project
+        legacyProject.dock = legacyDock
+        let legacyApp = AppSnapshot(windows: [SessionSnapshot(projects: [legacyProject], selectedProjectIndex: 0)])
+        let decodedLegacy = try decoder.decode(AppSnapshot.self, from: encoder.encode(legacyApp))
+        precondition(decodedLegacy.windows[0].projects[0].tabs.count == tabs.count)
+        let migrated = decodedLegacy.windows[0].projects[0].dock.restore(tabIDs: [legacyTabID])
+        precondition(migrated.groups[0].id == legacyGroupID)
+        precondition(migrated.groups[0].items == [.files, .tab(legacyTabID), .git])
+        precondition(migrated.groups[0].selected == .files)
+        let currentSnapshot = DockSavedNode(migrated, tabIDs: [legacyTabID])
+        let currentSnapshotData = try encoder.encode(currentSnapshot)
+        precondition(!String(decoding: currentSnapshotData, as: UTF8.self).contains("info"))
         for invalid in ["{}", "{\"columns\":[],\"focusedColumn\":0,\"focusedRow\":0}", "{\"session\":{\"workingDirectory\":\"/fixture\"}}"] {
             precondition((try? decoder.decode(Project.TabSnapshot.self, from: Data(invalid.utf8))) == nil)
         }
