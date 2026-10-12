@@ -14,9 +14,8 @@ concurrency:
 jobs:
   release:
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
-      actions: read
       contents: write
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
@@ -39,9 +38,20 @@ jobs:
           test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$commit"
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$commit" origin/main
-          state=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=push&branch=main&head_sha=$commit&per_page=100" \
-            --jq '[.workflow_runs[] | select(.head_sha == "'"$commit"'" and .event == "push" and .head_branch == "main")] | sort_by(.run_number) | last | "\(.status):\(.conclusion)"')
-          test "$state" = completed:success || { echo "同一提交的 main CI 尚未成功：$state" >&2; exit 1; }
+          plutil -convert json -o - kero.xcodeproj/project.pbxproj | python3 -c '
+          import json, os, sys
+          objects = json.load(sys.stdin)["objects"]
+          targets = [obj for obj in objects.values()
+                     if obj.get("isa") == "PBXNativeTarget" and obj.get("name") == "kero"]
+          if len(targets) != 1:
+              sys.exit("无法确定 Kero App target")
+          configs = objects[targets[0]["buildConfigurationList"]]["buildConfigurations"]
+          versions = {objects[c]["name"]: objects[c]["buildSettings"].get("MARKETING_VERSION")
+                      for c in configs}
+          expected = os.environ["RELEASE_TAG"][1:]
+          if versions.get("Debug") != expected or versions.get("Release") != expected:
+              sys.exit(f"Tag 版本 {expected} 与 Xcode 项目版本不一致：{versions}")
+          '
           gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name' | python3 -c '
           import re, sys
           tag = sys.argv[1]
@@ -51,6 +61,8 @@ jobs:
                                      and tuple(map(int, existing[1:].split("."))) >= version):
                   sys.exit("拒绝重复或倒退发布：" + existing)
           ' "$RELEASE_TAG"
+      - name: Test tagged source
+        run: make test SIGNING=adhoc
       - name: Import Apple Development signing identity
         env:
           CERTIFICATE_P12: ${{ secrets.APPLE_DEVELOPMENT_P12_BASE64 }}

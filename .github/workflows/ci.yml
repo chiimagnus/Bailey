@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
@@ -25,7 +23,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Run Xcode tests
-        run: make test
+        run: make test SIGNING=adhoc
       - name: Build release app without credentials
         run: make build:release SIGNING=adhoc
       - name: Verify application identity
