@@ -1,0 +1,10 @@
+version = 1
+current_task_id = ""
+
+[[tasks]]
+id = "P1-T1"
+title = "删除标签内部布局并保留独立面板生命周期"
+status = "completed"
+plan = "plan-p1.md#p1-t1"
+commit = "a4cb7ffed4d5517286bc1f930d3aa2d419f8c9b6"
+note = "六项检查及签名构建通过；独立审计 Go；正式应用未替换，鼠标拖拽/正式重启/真实 SSH 未测。README 未修改。"

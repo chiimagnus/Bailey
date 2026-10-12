@@ -15,7 +15,7 @@
 **Rules:**
 - 前置 P1。P2 改善 backend 读取不等于 diff 的解码已离开主线程，须单独核对实际 executor。
 - `DiffTab` 保留 hosting view，`refreshWhenSelected` 跳过历史与初始在途读取；但 `Project.openDiff/openCommitDiff` 复用已有 tab 时仍直接 reload。区分“选回 tab”和“再次点击 Git 行”，不能声称所有历史复选已免读取。Pierre 已有相等输入检查、虚拟化和高亮 worker，不重复搭建。
-- 当前布局是 `WorkspaceDockView → DockTabGroupView.content / PaneLayoutView`；按正式基线核对可见组、挂载、重挂载和关闭，不能套用旧 visited-project stack 的事实。
+- 当前布局是 `WorkspaceDockView → DockTabGroupView.content → PanelContentView`；按正式基线核对可见组、挂载、重挂载和关闭，不能套用旧 visited-project stack 的事实。
 - `bridgeReady`、`ready`、`evaluateJavaScript` 完成都不是实际绘制。布局、字体、可见行与高亮要在 WebKit timeline/截图中核对。
 - 依赖固定为 resolved 中的 PierreDiffsSwift `3713d29360b750d3d6146b187ff3b77b7d498fee`，JS `@pierre/diffs 1.3.1`。上游最新文档不能替代固定版本契约。
 
@@ -27,7 +27,7 @@
 **Files / 已核对锚点:**
 - `kero/Git/DiffViewerView.swift`：`DiffTab.reload`、`firstGitContent`、`gitContent`、`readWorktreeFile`、`materializeWebHostView`、`DiffWebRoot`；`GitCommandExecution.runData` 是实际共享 runner，旧模型/文件内 runner 不存在。
 - `kero/Workspace/Project.swift`：`openDiff` / `openCommitDiff` 的已有 tab 分支。
-- `kero/UI/WorkspaceDockView.swift`、`kero/UI/Panes/PaneLayoutView.swift`：当前实际挂载 caller。
+- `kero/UI/WorkspaceDockView.swift`、`kero/UI/Panes/PanelContentView.swift`：当前实际挂载 caller。
 - Read-only upstream: `build/SourcePackages/checkouts/PierreDiffsSwift/Sources/PierreDiffsSwift/WebView/{PierreMultiDiffView,DiffWebViewCoordinator}.swift`。
 - Read-only upstream: 同包 `Models/PierreMultiDiffInput.swift`、`scripts/src/{diff-entry,worker-entry}.js`、`scripts/bundle.js`、`docs/upstream-pierre-diffs.md`、`AGENTS.md`、`CHANGELOG.md`。
 - Local evidence: `evidence-p5.md`、`build/performance/diff/`。

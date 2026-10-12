@@ -36,7 +36,7 @@
 2. 边界样本包括空文件、中文/emoji、CRLF、超长单行、5 MiB 恰好及多一字节、二进制、有效小图片和无效图片扩展名。图片用固定合法样本，不建生成链路。
 3. 仅在输出目录建 Git fixture：小仓库、上千 tracked/untracked 改动、rename、unborn、merge conflict 和足够分页的 history。设仓库内作者信息，不改 global config，不建立网络 remote。
 4. 固定动作：首次打开、重复切换、首/中/尾编辑、滚动、撤销回原文、Git 刷新/分页、同一 diff 复选及跨项目切换。正确性边界另列，不掺进计时动作。
-5. 分屏、字体/换行、SSH 按相应根因加入，不穷举所有组合。fixture 关闭/重建不改变用户项目。
+5. 独立标签停靠、字体/换行、SSH 按相应根因加入，不穷举所有组合。fixture 关闭/重建不改变用户项目。
 
 **验证:**
 - Run: `xcrun swift scripts/prepare-performance-fixtures.swift build/performance/fixtures`；manifest 与文件一致，Git porcelain/index/log 与设计一致。
@@ -80,7 +80,7 @@
 - `kero/Git/GitStatusModel.swift`：`refresh`、`runGitStatus`、`applyRepository`。
 - `kero/Git/GitCommandExecution.swift`：`loadLoginEnvironment`、`runData`、`runProcess`；`kero/Workspace/LocalWorkspaceBackend.swift`：`readSync` / `read`。
 - `kero/Git/DiffViewerView.swift`：`DiffTab.reload`、`gitContent`、`readWorktreeFile`、`DiffWebRoot`。
-- 当前布局 caller：`WorkspaceDockView.DockTabGroupView.content` 直接挂载独立 diff，文件经 `PaneLayoutView.PaneView.content`；Git 同步归 `ContentView.syncGit`，Files 同步归 `ToolPanelView.performSync`。工具唯一但 Files/Git 可同时可见，不能套旧 sidebar/visited stack 假设。
+- 当前布局 caller：`WorkspaceDockView.DockTabGroupView.content → PanelContentView` 挂载单内容工作标签；Git 同步归 `ContentView.syncGit`，Files 同步归 `ToolPanelView.performSync`。工具唯一但 Files/Git 可同时可见，不能套旧 sidebar/visited stack 假设。
 - Only if needed: new `kero/Support/PerformanceTrace.swift`，通过现有同步根目录接入；上述共享入口的 Debug 标记。
 - Local evidence: `evidence-p1.md` 与 `build/performance/baseline/`。
 
