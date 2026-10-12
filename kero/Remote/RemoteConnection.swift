@@ -339,120 +339,15 @@ final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunne
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(
-                    returning: runSSHBlocking(
-                        arguments: arguments, stdin: stdin, timeout: timeout
+                    returning: ProcessRemoteCommandRunner.run(
+                        sshPath: "/usr/bin/ssh", arguments: arguments,
+                        stdin: stdin, timeout: timeout
                     )
                 )
             }
         }
     }
 
-    private nonisolated static func runSSHBlocking(
-        arguments: [String],
-        stdin: Data?,
-        timeout: TimeInterval
-    ) -> (status: Int32, stdout: Data, stderr: Data) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = arguments
-        var environment = ProcessInfo.processInfo.environment
-        // Parsed output ("Allocated port N") must not follow the user's locale.
-        environment["LC_ALL"] = "C"
-        process.environment = environment
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-        let stdinPipe: Pipe? = stdin == nil ? nil : Pipe()
-        process.standardInput = stdinPipe ?? FileHandle.nullDevice
-
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
-
-        do {
-            try process.run()
-        } catch {
-            return (-1, Data(), Data(error.localizedDescription.utf8))
-        }
-
-        if let stdinPipe, let stdin {
-            DispatchQueue.global(qos: .utility).async {
-                try? stdinPipe.fileHandleForWriting.write(contentsOf: stdin)
-                try? stdinPipe.fileHandleForWriting.close()
-            }
-        }
-
-        // Read with the same deadline that bounds the process.
-        //
-        // Not `readDataToEndOfFile` on a helper thread: ssh's multiplexing
-        // client hands its stdout and stderr to the MASTER process over the
-        // control socket, so the master holds the write ends. Killing this
-        // client does not close them, and a read waiting for end-of-file
-        // waits for the master to finish the session — which, when the
-        // network has gone, means waiting out the whole outage. That is what
-        // made a dropped connection take tens of seconds to notice instead of
-        // the deadline set here.
-        let outFD = stdoutPipe.fileHandleForReading.fileDescriptor
-        let errFD = stderrPipe.fileHandleForReading.fileDescriptor
-        for descriptor in [outFD, errFD] {
-            let flags = fcntl(descriptor, F_GETFL, 0)
-            if flags >= 0 { _ = fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) }
-        }
-
-        var outData = Data()
-        var errData = Data()
-        var buffer = [UInt8](repeating: 0, count: 8_192)
-        var openDescriptors: Set<Int32> = [outFD, errFD]
-        let deadline = Date().addingTimeInterval(timeout)
-        var timedOut = false
-
-        while true {
-            if Date() >= deadline {
-                timedOut = true
-                break
-            }
-            var fds = openDescriptors.sorted().map { descriptor in
-                pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
-            }
-            if fds.isEmpty {
-                // Both ends closed: the command's output is complete. Give the
-                // process a moment to report its status.
-                if exited.wait(timeout: .now() + .milliseconds(200)) == .success { break }
-                if Date() >= deadline { timedOut = true }
-                if timedOut { break }
-                continue
-            }
-            let ready = poll(&fds, nfds_t(fds.count), 100)
-            if ready < 0 {
-                if errno == EINTR { continue }
-                break
-            }
-            for entry in fds where entry.revents != 0 {
-                let count = Darwin.read(entry.fd, &buffer, buffer.count)
-                if count > 0 {
-                    if entry.fd == outFD {
-                        outData.append(buffer, count: count)
-                    } else {
-                        errData.append(buffer, count: count)
-                    }
-                } else if count == 0 || (count < 0 && errno != EAGAIN && errno != EINTR) {
-                    openDescriptors.remove(entry.fd)
-                }
-            }
-        }
-
-        if timedOut {
-            process.terminate()
-            if exited.wait(timeout: .now() + .seconds(1)) == .timedOut {
-                Darwin.kill(process.processIdentifier, SIGKILL)
-                _ = exited.wait(timeout: .now() + .seconds(1))
-            }
-            errData.append(Data("\nssh did not respond in time.\n".utf8))
-            return (-2, outData, errData)
-        }
-        return (process.terminationStatus, outData, errData)
-    }
 }
 
 extension RemoteConnection {

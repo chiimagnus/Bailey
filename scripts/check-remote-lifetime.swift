@@ -126,6 +126,25 @@ enum RemoteLifetimeCheck {
         print("PASS: concurrent forward waiters share one request and \(disconnect ? "all reject disconnect" : "reuse the published port")")
     }
 
+    static func checkIndependentCommandDeadline() throws {
+        let normal = try ProcessRemoteCommandRunner.launch(sshPath: "/bin/sh",
+            arguments: ["-c", "printf out; printf err >&2; cat"],
+            stdin: Data("input".utf8), timeout: 2)
+        precondition(normal.status == 0 && normal.stdout == Data("outinput".utf8)
+            && normal.stderr == Data("err".utf8))
+        let failure = try ProcessRemoteCommandRunner.launch(sshPath: "/bin/sh",
+            arguments: ["-c", "exit 7"], stdin: nil, timeout: 2)
+        precondition(failure.status == 7)
+        let started = Date()
+        do {
+            _ = try ProcessRemoteCommandRunner.launch(sshPath: "/bin/sh",
+                arguments: ["-c", "(sleep 0.5) & printf retained"], stdin: nil, timeout: 0.05)
+            preconditionFailure("Client exit must not cancel the pipe deadline")
+        } catch WorkspaceError.timedOut {}
+        precondition(Date().timeIntervalSince(started) < 0.4)
+        print("PASS: independent SSH command helper preserves input/streams/status and bounds pipes after client exit")
+    }
+
     @MainActor
     static func checkMasterExitRace() async throws {
         let directory = URL(fileURLWithPath: "/tmp/kero-mux-" + UUID().uuidString.prefix(8))
@@ -194,6 +213,7 @@ enum RemoteLifetimeCheck {
 
     @MainActor
     static func main() async throws {
+        try await Task.detached { try checkIndependentCommandDeadline() }.value
         var connection: RemoteConnection? = RemoteConnection(
             user: "fixture", host: "invalid", port: 22,
             controlSocket: URL(fileURLWithPath: "/tmp/kero-no-such-control-socket"), sshPID: 0

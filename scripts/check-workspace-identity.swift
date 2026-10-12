@@ -109,6 +109,10 @@ enum WorkspaceIdentityCheck {
         let connected = await first.check()
         precondition(connected)
         first.markConnected()
+        let hostRunner = SSHHostCommandRunner(host: first.destination, socket: socket)
+        let hostResult = try await hostRunner.run(["printf kero-host-runner"], stdin: nil, timeout: 3)
+        precondition(hostResult.status == 0 && hostResult.stdout == Data("kero-host-runner".utf8))
+        print("PASS: actual App SSHHostCommandRunner uses the shared bounded executor over the owned master")
         let backend = first.workspaceBackend
         let existing = try await backend.stat(path: directory)
         precondition(existing == nil)

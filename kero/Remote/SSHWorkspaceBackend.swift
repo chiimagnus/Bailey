@@ -4,6 +4,7 @@
 //
 
 import Darwin
+import Darwin
 import Foundation
 
 /// Runs one command on the remote machine and returns what it printed.
@@ -233,78 +234,101 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
 /// Shared subprocess execution for independent SSH workspace commands.
 nonisolated enum ProcessRemoteCommandRunner {
 
-    /// Both pipes are drained on their own threads: a command that fills one
-    /// while we wait on the other would otherwise never finish.
     static func launch(
         sshPath: String, arguments: [String], stdin: Data?, timeout: TimeInterval
     ) throws -> (status: Int32, stdout: Data, stderr: Data) {
+        let result = run(sshPath: sshPath, arguments: arguments, stdin: stdin, timeout: timeout)
+        if result.status == -2 { throw WorkspaceError.timedOut }
+        if result.status == -1 {
+            throw RemoteConnectionError.commandFailed(
+                status: result.status, message: String(decoding: result.stderr, as: UTF8.self)
+            )
+        }
+        return result
+    }
+
+    static func run(
+        sshPath: String, arguments: [String], stdin: Data?, timeout: TimeInterval
+    ) -> (status: Int32, stdout: Data, stderr: Data) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: sshPath)
         process.arguments = arguments
+        var environment = ProcessInfo.processInfo.environment
+        environment["LC_ALL"] = "C"
+        process.environment = environment
 
-        let outPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = errorPipe
-        let inputPipe = Pipe()
-        process.standardInput = stdin == nil ? FileHandle.nullDevice : inputPipe
-
-        try process.run()
-
-        if let stdin {
-            let handle = inputPipe.fileHandleForWriting
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        let stdinPipe: Pipe? = stdin == nil ? nil : Pipe()
+        process.standardInput = stdinPipe ?? FileHandle.nullDevice
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
+        do {
+            try process.run()
+        } catch {
+            return (-1, Data(), Data(error.localizedDescription.utf8))
+        }
+        if let stdinPipe, let stdin {
             DispatchQueue.global(qos: .utility).async {
-                try? handle.write(contentsOf: stdin)
-                try? handle.close()
+                try? stdinPipe.fileHandleForWriting.write(contentsOf: stdin)
+                try? stdinPipe.fileHandleForWriting.close()
             }
         }
-
-        let collected = Collected()
-        let group = DispatchGroup()
-        for (pipe, isStdout) in [(outPipe, true), (errorPipe, false)] {
-            DispatchQueue.global(qos: .utility).async(group: group) {
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                collected.store(data, isStdout: isStdout)
+        let outFD = stdoutPipe.fileHandleForReading.fileDescriptor
+        let errFD = stderrPipe.fileHandleForReading.fileDescriptor
+        for descriptor in [outFD, errFD] {
+            let flags = fcntl(descriptor, F_GETFL, 0)
+            if flags >= 0 { _ = fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) }
+        }
+        var outData = Data()
+        var errData = Data()
+        var buffer = [UInt8](repeating: 0, count: 8_192)
+        var openDescriptors: Set<Int32> = [outFD, errFD]
+        let deadline = Date().addingTimeInterval(timeout)
+        var timedOut = false
+        while true {
+            if Date() >= deadline {
+                timedOut = true
+                break
+            }
+            var fds = openDescriptors.sorted().map { descriptor in
+                pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+            }
+            if fds.isEmpty {
+                if exited.wait(timeout: .now() + .milliseconds(200)) == .success { break }
+                continue
+            }
+            let ready = poll(&fds, nfds_t(fds.count), 100)
+            if ready < 0 {
+                if errno == EINTR { continue }
+                break
+            }
+            for entry in fds where entry.revents != 0 {
+                let count = Darwin.read(entry.fd, &buffer, buffer.count)
+                if count > 0 {
+                    if entry.fd == outFD {
+                        outData.append(buffer, count: count)
+                    } else {
+                        errData.append(buffer, count: count)
+                    }
+                } else if count == 0 || (count < 0 && errno != EAGAIN && errno != EINTR) {
+                    openDescriptors.remove(entry.fd)
+                }
             }
         }
-
-        let expired = Flag()
-        let watchdog = DispatchWorkItem {
-            expired.raise()
-            process.terminate()
+        if timedOut {
+            if process.isRunning {
+                process.terminate()
+                if exited.wait(timeout: .now() + .seconds(1)) == .timedOut {
+                    Darwin.kill(process.processIdentifier, SIGKILL)
+                    _ = exited.wait(timeout: .now() + .seconds(1))
+                }
+            }
+            errData.append(Data("\nssh did not respond in time.\n".utf8))
+            return (-2, outData, errData)
         }
-        DispatchQueue.global(qos: .utility).asyncAfter(
-            deadline: .now() + timeout, execute: watchdog
-        )
-
-        process.waitUntilExit()
-        watchdog.cancel()
-        group.wait()
-
-        if expired.isRaised { throw WorkspaceError.timedOut }
-        return (process.terminationStatus, collected.stdout, collected.stderr)
-    }
-
-    private final class Collected: @unchecked Sendable {
-        private let lock = NSLock()
-        private var out = Data()
-        private var error = Data()
-
-        func store(_ data: Data, isStdout: Bool) {
-            lock.lock()
-            defer { lock.unlock() }
-            if isStdout { out = data } else { error = data }
-        }
-
-        var stdout: Data { lock.withLock { out } }
-        var stderr: Data { lock.withLock { error } }
-    }
-
-    private final class Flag: @unchecked Sendable {
-        private let lock = NSLock()
-        private var value = false
-
-        func raise() { lock.withLock { value = true } }
-        var isRaised: Bool { lock.withLock { value } }
+        return (process.terminationStatus, outData, errData)
     }
 }
