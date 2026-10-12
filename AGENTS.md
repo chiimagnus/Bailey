@@ -10,7 +10,7 @@
 
 ## 架构：MVVM
 
-**新功能及被修改的相关代码以 MVVM 为目标架构。当前项目尚未完成迁移**：`TerminalManager`、`Project` 等兼有状态协调与业务职责，部分 SwiftUI View 仍直接编排任务。不得仅改类名就宣称 MVVM 已落地。
+**目标架构是 MVVM + Observation，当前项目尚未完成迁移。** 新功能默认遵循此架构；`TerminalManager`、`Project` 等现有类型仍混合状态协调与业务职责，部分 SwiftUI View 仍直接编排任务。后续重构须迁移实际职责和状态流，不能仅改名或替换属性包装器就宣称完成。
 
 - **Model**：表达领域数据、身份、不变量与纯转换；不依赖 SwiftUI、AppKit、Combine，也不直接执行界面或文件／网络操作。
 - **ViewModel**：持有可观察的展示状态、用户动作、业务流程和异步任务；调用注入的 Service，处理加载、错误、取消及目标失效。不直接构建 SwiftUI View、弹原生对话框或执行底层 IO。
@@ -31,7 +31,8 @@
 ## Swift / SwiftUI 约定
 
 - **真实工具链优先**：工程使用 macOS 15.6+、Swift 5 语言模式与默认 `MainActor` 隔离；使用较新 Swift、Foundation、SwiftUI API 前核对实际 Xcode／SDK 及部署目标，不引入为追新而造的兼容层。
-- **观察与注入**：当前以 `ObservableObject`／`@Published`／Combine 为主。状态创建方用 `@StateObject`，使用方用 `@ObservedObject` 或 `Binding`，局部 UI 状态用 `@State`；依赖通过初始化参数或现有环境注入。仅在明确迁移观察链时采用 `@Observable`／`@Bindable`，不重复维护同一状态，也不为形式统一替换所有 Combine。
+- **Observation 优先**：新建可观察 ViewModel 默认使用 `@Observable`；View 持有其生命周期时用 `@State`，需要双向绑定时用 `@Bindable`，只读取时直接传入对象，局部 UI 状态仍用 `@State`。依赖通过初始化参数或现有环境注入。现有 `ObservableObject`／`@Published`／`@StateObject`／`@ObservedObject` 逐步迁移，不为同一状态维护两套观察机制。
+- **Combine 限定用途**：界面状态统一向 Observation 收敛；仅确实需要 Publisher、节流、事件合并或第三方桥接时保留 Combine。迁移时逐项替代原先依赖 `objectWillChange`／`@Published` 的通知、订阅与自动保存触发，不能直接删除事件链导致状态失同步。
 - **并发与错误**：可观察状态在 `MainActor` 发布；文件、Git、SSH 等耗时任务走异步后端，`Task {}` 本身不代表脱离主线程。优先 Swift Concurrency 与 `Task.sleep(for:)`，取消或切换目标后不发布过期结果；现有 Combine 调度及 AppKit 事件桥接可保留必要的 GCD。不要用 `nonisolated(unsafe)`、`try!` 或强制解包掩盖真实问题。
 - **交互与无障碍**：普通点击用 `Button`，仅确需坐标或点击次数时用 `onTapGesture`；图标按钮必须有文字语义及辅助功能名称。核对键盘快捷键、焦点、悬停与 VoiceOver；尊重系统字号和用户配置的终端／编辑器字体，不以固定文字大小取代可调整字号。
 - **视图结构**：较复杂且独立的界面块用独立 `View` 类型，不通过返回 `some View` 的计算属性堆叠子视图；避免无必要的 `AnyView`。可用原生布局替代时不用 `GeometryReader`，但 Dock 拖动和精确命中仍允许读取几何信息；`ForEach` 使用稳定身份，避免仅为遍历 `enumerated()` 转成数组。
@@ -54,7 +55,7 @@ make build:release
 
 ## 验证
 
-- **代码与 MVVM 改动**：按受影响流程运行 XCTest，验证状态、动作、实际 Service 副作用及错误／取消／过期结果；构建并严格验签，必要时以真实原生界面检查焦点、编辑、拖动或重挂载。编译通过或事件发出不等于行为完成。
+- **代码与 MVVM／Observation 改动**：按受影响流程运行 XCTest，验证状态更新、绑定、事件触发、实际 Service 副作用及错误／取消／过期结果；迁移观察链还须覆盖自动保存、窗口恢复、项目／标签切换与终端／编辑器重挂载。构建并严格验签，必要时以真实原生界面检查焦点、编辑和拖动。编译通过或事件发出不等于行为完成。
 - **测试边界**：自动测试使用临时数据或受控后端；真实 SSH 只用获准的专用测试 master，不复用用户连接。性能改动按[性能](docs/PERFORMANCE.md)测量；真实网络、重启恢复及原生界面未测时明确说明。
 - **文案与文档**：纯名称、翻译只校验字符串表、中英文、占位符、链接；涉及字符串提取时按需构建，不机械要求真机验收。快捷键、动作路由和布局属于行为改动。只修改文档时检查事实与引用，无需重装 App。
 - **隔离验收**：需要操作 App 时优先使用同一签名 Debug 包，不复制成另一套身份：
