@@ -80,7 +80,10 @@ struct ContentView: View {
                     guard case .tab(let id)? = group.selected else { return nil }
                     return manager.selectedProject?.tabs.first { $0.id == id }
                 }
-                .flatMap(\.sessions).map(\.id) ?? []
+                .compactMap { tab -> UUID? in
+                    if case .session(let session) = tab.content { return session.id }
+                    return nil
+                } ?? []
         )
         return manager.projects
             .flatMap(\.sessions)

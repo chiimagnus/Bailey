@@ -8,7 +8,7 @@ import Combine
 import Foundation
 
 /// A project groups tabs and appears as one row in the left sidebar. Each tab
-/// is a recursive split layout of terminal, file, browser, and diff panes; see
+/// holds one terminal, file, browser, or diff; see
 /// `PaneTab`. A project can have zero terminal sessions or tabs; closing the last
 /// tab leaves the project open — only the explicit "Close Project" action (see
 /// `TerminalManager.close(_:)`) removes it from the manager.
@@ -54,7 +54,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// Sessions publish their own changes (title, directory); re-publish them
     /// so the project name and views observing the project stay current.
     private var sessionObservations: [UUID: AnyCancellable] = [:]
-    /// Tabs publish layout changes (splits, focus, resize); re-publish them so
+    /// Tabs publish name and dirty-state changes; re-publish them so
     /// the strip re-renders and autosave fires.
     private var tabObservations: [UUID: AnyCancellable] = [:]
     private var dockObservation: AnyCancellable?
@@ -91,9 +91,9 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// Every terminal session across every pane in every tab.
+    /// Every terminal session across the project's independent tabs.
     var sessions: [TerminalSession] {
-        tabs.flatMap(\.sessions)
+        tabs.compactMap { if case .session(let session) = $0.content { return session }; return nil }
     }
 
     var selectedTab: PaneTab? {
@@ -126,36 +126,25 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         recentTabIDs = selectedTabID.map { [$0] } ?? []
     }
 
-    /// Content of the focused pane in the selected tab.
+    /// Content of the selected work tab.
     var focusedContent: PaneContent? {
-        selectedTab?.focusedContent
+        selectedTab?.content
     }
 
     var hasFiles: Bool {
-        tabs.contains { $0.allContents.contains { $0.isFile } }
+        tabs.contains { $0.content.isFile }
     }
 
     var hasDiffs: Bool {
-        tabs.contains { $0.allContents.contains { $0.isDiff } }
+        tabs.contains { $0.content.isDiff }
     }
 
-    /// The focused terminal session; while a file, browser, or diff pane is
-    /// focused it has no directory of its own, so panels that need a working
-    /// directory (file tree, git) track a terminal that does: one sharing
-    /// the tab (a split), else the session the content was opened from (the
-    /// tab's `contextSession`), else the project's first session.
+    /// Non-terminal tabs retain the session whose directory they were opened from.
     var selectedSession: TerminalSession? {
         if case .session(let session)? = focusedContent {
             return session
         }
-        return selectedTab?.sessions.first
-            ?? selectedTab?.contextSession
-            ?? sessions.first
-    }
-
-    /// Whether the selected tab's focused pane can be split (false for diffs).
-    var canSplit: Bool {
-        selectedTab?.canSplit ?? false
+        return selectedTab?.contextSession ?? sessions.first
     }
 
     // MARK: - Project directory
@@ -246,7 +235,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     }
 
     /// Builds a session wired for exit + change observation, without placing
-    /// it in a tab — shared by new tabs and splits. `restoredHistory` seeds the
+    /// it in a tab. `restoredHistory` seeds the
     /// scrollback when reopening a saved session.
     private func makeSession(
         directory: String? = nil,
@@ -324,7 +313,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     }
 
     func rebindRemoteTabs() {
-        for content in tabs.flatMap(\.allContents) {
+        for content in tabs.map(\.content) {
             switch content {
             case .file(let file): file.reevaluateWorkspace(in: self)
             case .diff(let diff): diff.reevaluateWorkspace(in: self)
@@ -339,45 +328,9 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         }
     }
 
-    // MARK: - Splits
-
-    func splitRight() { split(toward: .right) }
-    func splitLeft() { split(toward: .left) }
-    func splitDown() { split(toward: .bottom) }
-    func splitUp() { split(toward: .top) }
-
-    /// Splits the focused pane's rectangle on `edge` with a fresh terminal.
-    /// No-op while a diff is focused.
-    func split(toward edge: PaneDropEdge) {
-        guard let tab = selectedTab, tab.canSplit else { return }
-        let session = makeSession()
-        tab.split(Pane(content: .session(session)), toward: edge)
-    }
-
-    func focusLeft() { selectedTab?.focusLeft() }
-    func focusRight() { selectedTab?.focusRight() }
-    func focusUp() { selectedTab?.focusUp() }
-    func focusDown() { selectedTab?.focusDown() }
-    func focusNextPane() { selectedTab?.focusNext() }
-    func focusPreviousPane() { selectedTab?.focusPrevious() }
-
-    func togglePaneZoom() { selectedTab?.toggleZoom() }
-    func equalizePanes() { selectedTab?.equalize() }
-    func resizePaneUp() { selectedTab?.resizeUp() }
-    func resizePaneDown() { selectedTab?.resizeDown() }
-    func resizePaneLeft() { selectedTab?.resizeLeft() }
-    func resizePaneRight() { selectedTab?.resizeRight() }
-
-    /// Whether the selected tab is a split layout — gates zoom, resize and
-    /// equalize.
-    var hasSplitPanes: Bool { selectedTab?.hasMultiplePanes ?? false }
-
-    /// Whether the selected tab is showing a zoomed pane.
-    var isPaneZoomed: Bool { selectedTab?.isZoomed ?? false }
-
     // MARK: - Files
 
-    /// Opens `path` as a new file tab, reusing an existing tab/pane for the
+    /// Opens `path` as a new file tab, reusing an existing tab for the
     /// same path. `editorState` seeds scroll/cursor state when restoring.
     func openFile(_ path: String, editorState: EditorState? = nil) {
         // Capture the current directory context *before* selection moves to the
@@ -385,11 +338,8 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         // same session decides which workspace the path belongs to, so the
         // lookup below cannot reuse a tab from another machine.
         let context = selectedSession
-        if let (tab, paneID) = findFilePane(
-            path: path, workspace: workspaceIdentity
-        ) {
+        if let tab = findFileTab(path: path, workspace: workspaceIdentity) {
             selectedTabID = tab.id
-            tab.focusedPaneID = paneID
             return
         }
         let file = FileTab(
@@ -405,51 +355,11 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         selectedTabID = tab.id
     }
 
-    /// Opens `path` as a new pane beside the focused one in the current tab
-    /// ("Open to the Side"). Falls back to a fresh tab when the current tab
-    /// can't take a split (e.g. it's a diff) or none is selected.
-    func openFileToSide(_ path: String) {
-        guard let tab = selectedTab, tab.canSplit else {
-            openFile(path)
-            return
+    private func findFileTab(path: String, workspace: String?) -> PaneTab? {
+        tabs.first {
+            guard case .file(let file) = $0.content else { return false }
+            return file.path == path && file.workspaceIdentity == workspace
         }
-        if let existing = tab.allPanes.first(where: {
-            if case .file(let file) = $0.content {
-                return file.path == path
-                    && file.workspaceIdentity == workspaceIdentity
-            }
-            return false
-        }) {
-            tab.focusedPaneID = existing.id
-            return
-        }
-        tab.split(
-            Pane(content: .file(FileTab(
-                path: path,
-                backend: workspaceBackend, workspaceIdentity: workspaceIdentity
-            ))),
-            toward: .right
-        )
-    }
-
-    /// A tab is the same tab only when it holds the same path *on the same
-    /// machine*: `/etc/hosts` here and `/etc/hosts` on a remote are two files,
-    /// and reusing one tab for both would show one machine's contents while
-    /// saving to the other.
-    private func findFilePane(
-        path: String, workspace: String?
-    ) -> (tab: PaneTab, paneID: UUID)? {
-        for tab in tabs {
-            if let pane = tab.allPanes.first(where: {
-                if case .file(let file) = $0.content {
-                    return file.path == path && file.workspaceIdentity == workspace
-                }
-                return false
-            }) {
-                return (tab, pane.id)
-            }
-        }
-        return nil
     }
 
     // MARK: - Browser
@@ -469,23 +379,6 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         tab.contextSession = context
         insertNextToSelected(tab)
         selectedTabID = tab.id
-        return browser
-    }
-
-    /// Opens a native browser to the right of the focused pane in the current
-    /// tab. Unlike a normal terminal split, the new pane owns a WKWebView.
-    @discardableResult
-    func newBrowserPane(
-        toward edge: PaneDropEdge = .right,
-        initialURL: String? = nil,
-        initialFocus: BrowserTab.InitialFocus = .addressBar
-    ) -> BrowserTab? {
-        guard let tab = selectedTab, tab.canSplit else { return nil }
-        let browser = makeBrowser(
-            initialURL: initialURL,
-            initialFocus: initialFocus
-        )
-        tab.split(Pane(content: .browser(browser)), toward: edge)
         return browser
     }
 
@@ -509,12 +402,12 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// A local and remote file with identical paths must remain independent.
     func updateFilePaths(from oldPath: String, to newPath: String, workspace: String?) {
         for tab in tabs {
-            for case .file(let file) in tab.allContents where file.workspaceIdentity == workspace {
-                if file.path == oldPath {
-                    file.updatePath(newPath)
-                } else if file.path.hasPrefix(oldPath + "/") {
-                    file.updatePath(newPath + String(file.path.dropFirst(oldPath.count)))
-                }
+            guard case .file(let file) = tab.content,
+                  file.workspaceIdentity == workspace else { continue }
+            if file.path == oldPath {
+                file.updatePath(newPath)
+            } else if file.path.hasPrefix(oldPath + "/") {
+                file.updatePath(newPath + String(file.path.dropFirst(oldPath.count)))
             }
         }
         guard workspaceIdentity == workspace else { return }
@@ -539,16 +432,15 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         repoRoot: String, path: String, staged: Bool, untracked: Bool, origPath: String?
     ) {
         let context = selectedSession
-        if let (tab, pane) = findDiffPane(
+        if let tab = findDiffTab(
             repoRoot: repoRoot, path: path, staged: staged, commitHash: nil,
             workspace: workspaceIdentity
         ),
-           case .diff(let diff) = pane.content {
+           case .diff(let diff) = tab.content {
             diff.untracked = untracked
             diff.origPath = origPath
             diff.reload()
             selectedTabID = tab.id
-            tab.focusedPaneID = pane.id
             return
         }
         let diff = DiffTab(
@@ -573,14 +465,13 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         origPath: String?
     ) {
         let context = selectedSession
-        if let (tab, pane) = findDiffPane(
+        if let tab = findDiffTab(
             repoRoot: repoRoot, path: path, staged: false, commitHash: commitHash,
             workspace: workspaceIdentity
-        ), case .diff(let diff) = pane.content {
+        ), case .diff(let diff) = tab.content {
             diff.origPath = origPath
             diff.reload()
             selectedTabID = tab.id
-            tab.focusedPaneID = pane.id
             return
         }
         let diff = DiffTab(
@@ -600,41 +491,32 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         selectedTabID = tab.id
     }
 
-    private func findDiffPane(
+    private func findDiffTab(
         repoRoot: String, path: String, staged: Bool, commitHash: String?,
         workspace: String?
-    ) -> (tab: PaneTab, pane: Pane)? {
-        for tab in tabs {
-            if let pane = tab.allPanes.first(where: {
-                if case .diff(let diff) = $0.content {
-                    return diff.repoRoot == repoRoot
-                        && diff.path == path
-                        && diff.staged == staged
-                        && diff.commitHash == commitHash
-                        && diff.workspaceIdentity == workspace
-                }
-                return false
-            }) {
-                return (tab, pane)
-            }
+    ) -> PaneTab? {
+        tabs.first {
+            guard case .diff(let diff) = $0.content else { return false }
+            return diff.repoRoot == repoRoot
+                && diff.path == path
+                && diff.staged == staged
+                && diff.commitHash == commitHash
+                && diff.workspaceIdentity == workspace
         }
-        return nil
     }
 
     // MARK: - Closing
 
-    /// Closes one piece of content: terminates a session, prompts before
-    /// discarding a dirty file, then removes its pane (dropping the tab when
-    /// that was its last pane). `terminate` is false when a shell has already
-    /// exited on its own.
+    /// Closes one tab's content. Dirty edits require confirmation; an exited
+    /// shell is removed without terminating it again.
     func closeContent(_ content: PaneContent, terminate: Bool = true) {
         switch content {
         case .session(let session):
             if terminate { session.terminate() }
-            removePaneWithContent(content.id)
+            removeTabWithContent(content.id)
         case .file(let file):
             guard file.isDirty else {
-                removePaneWithContent(content.id)
+                removeTabWithContent(content.id)
                 return
             }
             let window = NSApp.keyWindow ?? NSApp.mainWindow
@@ -642,10 +524,10 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
                 _ = await confirmCloseUnsaved(content, in: window)
             }
         case .browser:
-            removePaneWithContent(content.id)
+            removeTabWithContent(content.id)
         case .diff(let diff):
             guard diff.isDirty else {
-                removePaneWithContent(content.id)
+                removeTabWithContent(content.id)
                 return
             }
             let window = NSApp.keyWindow ?? NSApp.mainWindow
@@ -655,23 +537,17 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         }
     }
 
-    /// Closes the focused pane of the selected tab (⌘W).
-    func closeFocusedPane() {
+    func closeSelected() {
         guard let content = focusedContent else { return }
         closeContent(content)
     }
 
-    func closeSelected() {
-        closeFocusedPane()
-    }
-
-    /// Closes an entire tab — every pane it holds.
     func close(_ tab: PaneTab) {
-        closeBatch(tab.allContents)
+        closeContent(tab.content)
     }
 
     /// "Close Others" is scoped to the tab group containing this tab, not
-    /// an unrelated split elsewhere in the same workspace.
+    /// an unrelated dock region elsewhere in the same workspace.
     func closeOthers(_ keep: PaneTab) {
         guard let group = dock.group(containing: .tab(keep.id)) else { return }
         selectedTabID = keep.id
@@ -679,7 +555,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
             if case .tab(let id) = item, id != keep.id { return id }
             return nil
         })
-        closeBatch(tabs.filter { ids.contains($0.id) }.flatMap(\.allContents))
+        closeBatch(tabs.filter { ids.contains($0.id) }.map(\.content))
     }
 
     func closeToRight(of tab: PaneTab) {
@@ -689,29 +565,29 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
             if case .tab(let id) = item { return id }
             return nil
         })
-        closeBatch(tabs.filter { ids.contains($0.id) }.flatMap(\.allContents))
+        closeBatch(tabs.filter { ids.contains($0.id) }.map(\.content))
     }
 
-    /// Closes every file pane while leaving other content in split tabs open.
+    /// Closes file tabs while leaving other content open.
     func closeFiles() {
-        closeBatch(tabs.flatMap(\.allContents).filter { $0.isFile })
+        closeBatch(tabs.map(\.content).filter { $0.isFile })
     }
 
-    /// Closes every diff pane while leaving other content in split tabs open.
+    /// Closes diff tabs while leaving other content open.
     func closeDiffs() {
-        closeBatch(tabs.flatMap(\.allContents).filter { $0.isDiff })
+        closeBatch(tabs.map(\.content).filter { $0.isDiff })
     }
 
     /// Closes every tab, leaving the project open but empty.
     func closeAll() {
-        closeBatch(tabs.flatMap(\.allContents))
+        closeBatch(tabs.map(\.content))
     }
 
     /// Asks whether to save before discarding an edited file, matching the
     /// standard macOS Save / Don't Save / Cancel prompt. Presented as a sheet
     /// on `window` (app-modal only when there's no window) so it doesn't block
     /// the whole app. Returns `true` if the user backed out — Cancel, or a save
-    /// that failed — so a batch close can stop before tearing down other panes.
+    /// that failed — so a batch close can stop before tearing down other tabs.
     ///
     /// This is `async` on purpose: awaiting the sheet means each prompt in a
     /// batch is presented only after the previous one has fully dismissed.
@@ -725,9 +601,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         )
         alert.informativeText = String(localized: "Your changes will be lost if you don't save them.", table: "Workspace")
         alert.addButton(withTitle: String(localized: "Save", table: "Workspace"))
-        let dontSave = alert.addButton(withTitle: String(localized: "Don’t Save", table: "Workspace"))
-        dontSave.keyEquivalent = "d"
-        dontSave.keyEquivalentModifierMask = .command
+        alert.addButton(withTitle: String(localized: "Don’t Save", table: "Workspace")).keyEquivalent = ""
         let cancel = alert.addButton(withTitle: String(localized: "Cancel", table: "Workspace"))
         cancel.keyEquivalent = "\u{1b}"
 
@@ -741,12 +615,12 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         switch response {
         case .alertFirstButtonReturn: // Save
             await content.save()
-            // Keep the pane open if the write failed; the error bar shows why.
+            // Keep the tab open if the write failed; the error bar shows why.
             guard content.saveError == nil else { return true }
-            removePaneWithContent(content.id)
+            removeTabWithContent(content.id)
             return false
         case .alertSecondButtonReturn: // Don't Save
-            removePaneWithContent(content.id)
+            removeTabWithContent(content.id)
             return false
         default: // Cancel
             return true
@@ -756,7 +630,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// Closes several pieces of content at once. Any unsaved files are
     /// confirmed *first*, one prompt at a time; the remaining (clean) content
     /// is only torn down once every prompt has been answered — so cancelling
-    /// out of a save prompt leaves the saved panes open too.
+    /// out of a save prompt leaves the saved tabs open too.
     private func closeBatch(_ targets: [PaneContent]) {
         let dirtyContents = targets.filter(\.isDirty)
         let cleanContents = targets.filter { !$0.isDirty }
@@ -769,8 +643,8 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         let window = NSApp.keyWindow ?? NSApp.mainWindow
         Task { @MainActor in
             for content in dirtyContents where content.isDirty {
-                // Bail the moment the user backs out — the clean panes, and any
-                // unsaved panes not yet prompted, stay open.
+                // Bail the moment the user backs out — the clean tabs, and any
+                // unsaved tabs not yet prompted, stay open.
                 if await confirmCloseUnsaved(content, in: window) { return }
             }
             cleanContents.forEach { closeContent($0) }
@@ -816,46 +690,23 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         return tab
     }
 
-    /// Rebuilds a saved tab's pane layout — recreating its sessions (wired for
-    /// exit + observation), files and diffs — then registers and appends it.
-    /// Skips panes whose content can't be rebuilt; a tab with none is dropped.
+    /// Restores one independent tab and its saved content.
     @discardableResult
     func restoreTab(
         from snap: SessionSnapshot.ProjectSnapshot.TabSnapshot,
         histories: [String: String] = [:]
-    ) -> PaneTab? {
-        let layout = restoreLayout(from: snap.layout, histories: histories)
-        let panes = layout.allPanes
-        guard !panes.isEmpty else { return nil }
-        let focusedIndex = min(max(0, snap.focusedPaneIndex), panes.count - 1)
-        let tab = PaneTab(layout: layout, focusedPaneID: panes[focusedIndex].id)
+    ) -> PaneTab {
+        let tab = PaneTab(content: makeContent(
+            from: snap.content,
+            restoredHistory: snap.historyKey.flatMap { histories[$0] }
+        ))
         tab.customName = snap.customName
         append(tab)
         return tab
     }
 
-    private func restoreLayout(
-        from snap: SessionSnapshot.ProjectSnapshot.LayoutSnapshot,
-        histories: [String: String]
-    ) -> PaneNode {
-        switch snap {
-        case .pane(let pane):
-            let restoredHistory = pane.historyKey.flatMap { histories[$0] }
-            return .pane(Pane(content: makeContent(
-                from: pane.content, restoredHistory: restoredHistory
-            )))
-        case .split(let axis, let fraction, let first, let second):
-            return .split(PaneSplit(
-                axis: axis,
-                fraction: CGFloat(fraction),
-                first: restoreLayout(from: first, histories: histories),
-                second: restoreLayout(from: second, histories: histories)
-            ))
-        }
-    }
-
     private func makeContent(
-        from snap: SessionSnapshot.ProjectSnapshot.PaneContentSnapshot,
+        from snap: SessionSnapshot.ProjectSnapshot.ContentSnapshot,
         restoredHistory: String? = nil
     ) -> PaneContent {
         switch snap {
@@ -914,30 +765,16 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         selectedTabID = tab.id
     }
 
-    /// Removes the pane holding `contentID` from whichever tab owns it, and
-    /// drops the tab if that pane was its last.
-    private func removePaneWithContent(_ contentID: UUID) {
-        for tab in tabs {
-            guard let paneID = tab.paneID(forContent: contentID) else { continue }
-            // Keyed by content id; no-ops for the other content kinds.
-            sessionObservations[contentID] = nil
-            browserObservations[contentID] = nil
-            if !tab.removePane(paneID) {
-                remove(tabID: tab.id)
-            }
-            return
-        }
+    private func removeTabWithContent(_ contentID: UUID) {
+        guard let tab = tabs.first(where: { $0.content.id == contentID }) else { return }
+        remove(tabID: tab.id)
     }
 
     private func remove(tabID: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == tabID }) else { return }
         let tab = tabs[index]
-        for session in tab.sessions {
-            sessionObservations[session.id] = nil
-        }
-        for browser in tab.browsers {
-            browserObservations[browser.id] = nil
-        }
+        sessionObservations[tab.content.id] = nil
+        browserObservations[tab.content.id] = nil
         tabObservations[tabID] = nil
         recentTabIDs.removeAll { $0 == tabID }
         tabs.remove(at: index)

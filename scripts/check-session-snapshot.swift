@@ -1,6 +1,5 @@
 import Foundation
 
-enum PaneSplitAxis: String, Codable { case horizontal, vertical }
 struct EditorState: Codable, Equatable {
     var selectionLocation: Int?
     var selectionLength: Int?
@@ -15,19 +14,19 @@ enum SessionSnapshotCheck {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         let decoder = JSONDecoder()
-        let contents: [Project.PaneContentSnapshot] = [
+        let contents: [Project.ContentSnapshot] = [
             .session(workingDirectory: "/fixture"),
             .file(path: "/fixture/file", editorState: EditorState(selectionLocation: 4, scrollY: 22)),
             .browser(url: nil),
             .diff(repoRoot: "/fixture", path: "file", staged: true, untracked: false, origPath: nil),
             .commitDiff(repoRoot: "/fixture", path: "file", commitHash: "fixture", parentHash: nil, status: "A", origPath: "old")
         ]
-        let leaves = contents.enumerated().map { index, content in
-            Project.LayoutSnapshot.pane(Project.PaneSnapshot(content: content, historyKey: index == 0 ? "history-fixture" : nil))
+        let tabs = contents.enumerated().map { index, content in
+            Project.TabSnapshot(
+                content: content, historyKey: index == 0 ? "history-fixture" : nil,
+                customName: index == 0 ? "fixture" : nil, contextSessionIndex: index == 1 ? 0 : nil
+            )
         }
-        let layout = Project.LayoutSnapshot.split(axis: .horizontal, fraction: 0.4, first: leaves[0], second: .split(axis: .vertical, fraction: 0.6, first: leaves[1], second: leaves[2]))
-        let tabs = [Project.TabSnapshot(layout: layout, focusedPaneIndex: 2, customName: "fixture", contextSessionIndex: 0)]
-            + leaves.map { Project.TabSnapshot(layout: $0, focusedPaneIndex: 0) }
         let dock = DockSavedNode.split(id: UUID(), axis: .horizontal, fraction: 0.3,
             first: .group(DockSavedGroup(id: UUID(), items: [.files], selected: .files)),
             second: .group(DockSavedGroup(id: UUID(), items: [.tab(0), .tab(999)], selected: .tab(999))))
@@ -59,12 +58,10 @@ enum SessionSnapshotCheck {
         }
         let tabData = try encoder.encode(tabs[0])
         let tabObject = try JSONSerialization.jsonObject(with: tabData) as! [String: Any]
-        for key in ["layout", "focusedPaneIndex"] {
-            var object = tabObject
-            object.removeValue(forKey: key)
-            let invalid = try JSONSerialization.data(withJSONObject: object)
-            precondition((try? decoder.decode(Project.TabSnapshot.self, from: invalid)) == nil)
-        }
+        var missingContent = tabObject
+        missingContent.removeValue(forKey: "content")
+        let missingContentData = try JSONSerialization.data(withJSONObject: missingContent)
+        precondition((try? decoder.decode(Project.TabSnapshot.self, from: missingContentData)) == nil)
         var badOptional = tabObject
         badOptional["contextSessionIndex"] = "bad"
         let invalid = try JSONSerialization.data(withJSONObject: badOptional)
@@ -73,13 +70,13 @@ enum SessionSnapshotCheck {
         precondition((try? decoder.decode(AppSnapshot.self, from: oldTop)) == nil)
         for path in CommandLine.arguments.dropFirst() {
             let plist = try PropertyListSerialization.propertyList(from: Data(contentsOf: URL(fileURLWithPath: path)), format: nil) as! [String: Any]
-            let currentData = plist["sessionSnapshot"] as! Data
+            let currentData = plist["workspaceSnapshot"] as! Data
             let current = try decoder.decode(AppSnapshot.self, from: currentData)
             let encoded = try encoder.encode(current)
             let roundtrip = try decoder.decode(AppSnapshot.self, from: encoded)
             precondition(current.windows.count == roundtrip.windows.count)
             print("PASS: current private snapshot decoded/roundtripped: \(current.windows.count) windows, \(current.windows.reduce(0) { $0 + $1.projects.count }) projects")
         }
-        print("PASS: current two-layer snapshot, optional/history fields, required field rejection, obsolete formats rejected, invalid Dock reference filtered")
+        print("PASS: single-content tabs and outer docking snapshot, optional/history fields, required field rejection, obsolete formats rejected, invalid Dock reference filtered")
     }
 }

@@ -292,13 +292,11 @@ final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
 /// oversized.
 struct FileViewerView: View {
     @ObservedObject var file: FileTab
-    /// Whether this file's pane is the focused one in its tab.
+    /// Whether this file's work tab is selected.
     var isFocused: Bool = true
     /// Called when the editor takes focus itself (e.g. a click), so the
-    /// model's focused pane can follow.
+    /// selected work tab can follow.
     var onFocused: () -> Void = {}
-    /// Splits this pane on the given edge — wired to the context-menu items.
-    var onSplit: (PaneDropEdge) -> Void = { _ in }
 
     @ObservedObject private var settings = AppSettings.shared
     @Environment(\.colorScheme) private var colorScheme
@@ -321,8 +319,7 @@ struct FileViewerView: View {
                         palette: .theme(dark: colorScheme == .dark),
                         wrapLines: settings.wrapLines,
                         isFocused: isFocused,
-                        onFocused: onFocused,
-                        onSplit: onSplit
+                        onFocused: onFocused
                     )
                     .id(file.reloadRevision)
                 }

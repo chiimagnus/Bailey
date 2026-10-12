@@ -195,59 +195,8 @@ struct CommandPaletteView: View {
             PaletteCommand(id: "new-browser-tab", title: LocalizedStringResource("New Browser Tab", table: "Interface"), systemImage: "globe") {
                 manager.newBrowserTab()
             },
-            PaletteCommand(id: "new-browser-pane", title: LocalizedStringResource("New Browser Pane", table: "Interface"), systemImage: "globe") {
-                manager.newBrowserPane()
-            },
             PaletteCommand(id: "clear-terminal", title: LocalizedStringResource("Clear Terminal", table: "Interface"), systemImage: "eraser", shortcut: "⌘K") {
                 manager.clearActiveTerminal()
-            },
-            PaletteCommand(id: "split-right", title: LocalizedStringResource("Split Right", table: "Interface"), systemImage: "rectangle.split.2x1", shortcut: "⌘D") {
-                manager.splitRight()
-            },
-            PaletteCommand(id: "split-left", title: LocalizedStringResource("Split Left", table: "Interface"), systemImage: "rectangle.split.2x1") {
-                manager.splitLeft()
-            },
-            PaletteCommand(id: "split-down", title: LocalizedStringResource("Split Down", table: "Interface"), systemImage: "rectangle.split.1x2", shortcut: "⇧⌘D") {
-                manager.splitDown()
-            },
-            PaletteCommand(id: "split-up", title: LocalizedStringResource("Split Up", table: "Interface"), systemImage: "rectangle.split.1x2") {
-                manager.splitUp()
-            },
-            PaletteCommand(id: "focus-pane-left", title: LocalizedStringResource("Focus Pane Left", table: "Interface"), systemImage: "arrow.left", shortcut: "⌥⌘←") {
-                manager.focusPaneLeft()
-            },
-            PaletteCommand(id: "focus-pane-right", title: LocalizedStringResource("Focus Pane Right", table: "Interface"), systemImage: "arrow.right", shortcut: "⌥⌘→") {
-                manager.focusPaneRight()
-            },
-            PaletteCommand(id: "focus-pane-up", title: LocalizedStringResource("Focus Pane Up", table: "Interface"), systemImage: "arrow.up", shortcut: "⌥⌘↑") {
-                manager.focusPaneUp()
-            },
-            PaletteCommand(id: "focus-pane-down", title: LocalizedStringResource("Focus Pane Down", table: "Interface"), systemImage: "arrow.down", shortcut: "⌥⌘↓") {
-                manager.focusPaneDown()
-            },
-            PaletteCommand(id: "focus-prev-pane", title: LocalizedStringResource("Focus Previous Pane", table: "Interface"), systemImage: "arrow.backward.square", shortcut: "⌘[") {
-                manager.focusPreviousPane()
-            },
-            PaletteCommand(id: "focus-next-pane", title: LocalizedStringResource("Focus Next Pane", table: "Interface"), systemImage: "arrow.forward.square", shortcut: "⌘]") {
-                manager.focusNextPane()
-            },
-            PaletteCommand(id: "toggle-pane-zoom", title: LocalizedStringResource("Toggle Pane Zoom", table: "Interface"), systemImage: "arrow.up.left.and.arrow.down.right", shortcut: "⇧⌘↩") {
-                manager.togglePaneZoom()
-            },
-            PaletteCommand(id: "equalize-panes", title: LocalizedStringResource("Equalize Panes", table: "Interface"), systemImage: "rectangle.split.3x1", shortcut: "⌃⌘=") {
-                manager.equalizePanes()
-            },
-            PaletteCommand(id: "resize-pane-up", title: LocalizedStringResource("Resize Pane Up", table: "Interface"), systemImage: "arrow.up.to.line", shortcut: "⌃⌘↑") {
-                manager.resizePaneUp()
-            },
-            PaletteCommand(id: "resize-pane-down", title: LocalizedStringResource("Resize Pane Down", table: "Interface"), systemImage: "arrow.down.to.line", shortcut: "⌃⌘↓") {
-                manager.resizePaneDown()
-            },
-            PaletteCommand(id: "resize-pane-left", title: LocalizedStringResource("Resize Pane Left", table: "Interface"), systemImage: "arrow.left.to.line", shortcut: "⌃⌘←") {
-                manager.resizePaneLeft()
-            },
-            PaletteCommand(id: "resize-pane-right", title: LocalizedStringResource("Resize Pane Right", table: "Interface"), systemImage: "arrow.right.to.line", shortcut: "⌃⌘→") {
-                manager.resizePaneRight()
             },
             PaletteCommand(id: "add-items", title: LocalizedStringResource("Add Files or Folders", table: "Interface"), systemImage: "folder.badge.plus", shortcut: "⇧⌘A") {
                 manager.chooseLocalItems()
@@ -255,7 +204,7 @@ struct CommandPaletteView: View {
             PaletteCommand(id: "add-ssh-items", title: LocalizedStringResource("Add SSH Files or Folders", table: "Interface"), systemImage: "network", shortcut: nil) {
                 manager.chooseSSHItems()
             },
-            PaletteCommand(id: "close-tab", title: LocalizedStringResource("Close Pane", table: "Interface"), systemImage: "xmark.square", shortcut: "⌘W") {
+            PaletteCommand(id: "close-tab", title: LocalizedStringResource("Close Tab", table: "Interface"), systemImage: "xmark.square", shortcut: "⌘W") {
                 manager.closeSelectedTab()
             },
             PaletteCommand(id: "save-file", title: LocalizedStringResource("Save File", table: "Interface"), systemImage: "square.and.arrow.down", shortcut: "⌘S") {

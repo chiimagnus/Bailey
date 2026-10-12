@@ -91,7 +91,7 @@ extension KeroTerminalView {
             builder.withCustom("window-padding-color", "extend")
             // Kero owns the app-level command map. Leaving Ghostty's defaults
             // installed makes its performKeyEquivalent intercept shortcuts
-            // such as Cmd-T, Cmd-N, Cmd-D, Cmd-K, and project/tab navigation
+            // such as Cmd-T, Cmd-N, Cmd-K, and project/tab navigation
             // before SwiftUI's command menu can handle them.
             builder.withCustom("keybind", "clear")
             // Reinstall only terminal-local editing and scrolling bindings.

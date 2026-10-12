@@ -11,17 +11,13 @@ import SwiftUI
 /// overlay scrollbar to the container's true trailing edge.
 struct TerminalHostView: NSViewRepresentable {
     let session: TerminalSession
-    /// Whether this terminal's pane is the focused one in its tab.
+    /// Whether this terminal's work tab is selected.
     var isFocused: Bool = true
     /// Called when the terminal takes focus itself (e.g. a click), so the
-    /// model's focused pane can follow.
+    /// selected work tab can follow.
     var onFocused: () -> Void = {}
-    /// Splits this pane on the given edge — wired to the context-menu items.
-    var onSplit: (PaneDropEdge) -> Void = { _ in }
     var onNewBrowserTab: (String?) -> Void = { _ in }
-    var onNewBrowserPane: (String?) -> Void = { _ in }
     var onNewFileTab: (String) -> Void = { _ in }
-    var onNewFilePane: (String) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -31,11 +27,8 @@ struct TerminalHostView: NSViewRepresentable {
         container.focusOnAppear = isFocused
         let terminal = session.surface
         terminal.onBecomeFirstResponder = onFocused
-        terminal.splitTarget.onSplit = onSplit
-        terminal.splitTarget.onNewBrowserTab = onNewBrowserTab
-        terminal.splitTarget.onNewBrowserPane = onNewBrowserPane
-        terminal.splitTarget.onNewFileTab = onNewFileTab
-        terminal.splitTarget.onNewFilePane = onNewFilePane
+        terminal.openMenuTarget.onNewBrowserTab = onNewBrowserTab
+        terminal.openMenuTarget.onNewFileTab = onNewFileTab
         let scrollbar = session.overlayScrollbar
         // Kero's visual insets live inside the backend as window padding (see
         // KeroTerminalView+Ghostty), so that a padding-color of `extend` can
@@ -68,16 +61,13 @@ struct TerminalHostView: NSViewRepresentable {
 
     func updateNSView(_ view: NSView, context: Context) {
         session.surface.onBecomeFirstResponder = onFocused
-        session.surface.splitTarget.onSplit = onSplit
-        session.surface.splitTarget.onNewBrowserTab = onNewBrowserTab
-        session.surface.splitTarget.onNewBrowserPane = onNewBrowserPane
-        session.surface.splitTarget.onNewFileTab = onNewFileTab
-        session.surface.splitTarget.onNewFilePane = onNewFilePane
+        session.surface.openMenuTarget.onNewBrowserTab = onNewBrowserTab
+        session.surface.openMenuTarget.onNewFileTab = onNewFileTab
         let container = view as? TerminalContainerView
         container?.activateSurfaceAfterLayout()
         container?.focusOnAppear = isFocused
         // Take focus only on the unfocused→focused edge (keyboard navigation,
-        // a split landing here), never on every render — that would fight the
+        // a tab becoming selected), never on every render — that would fight the
         // user for focus and make sidebar text fields untypable.
         if isFocused, !context.coordinator.isFocused, let container {
             container.requestTerminalFocus()
@@ -89,17 +79,14 @@ struct TerminalHostView: NSViewRepresentable {
         guard let container = view as? TerminalContainerView,
               let terminal = container.terminal as? any TerminalBackendSurface
         else { return }
-        // These closures originate on PaneView and therefore capture its
+        // These closures originate on PanelContentView and therefore capture its
         // PaneContent, including the same TerminalSession that owns `terminal`.
         // Clear them whenever SwiftUI removes this host so a closed tab cannot
         // leave the session and its renderer in a retain cycle. A parked
         // session gets fresh callbacks when its host is recreated.
         terminal.onBecomeFirstResponder = nil
-        terminal.splitTarget.onSplit = nil
-        terminal.splitTarget.onNewBrowserTab = nil
-        terminal.splitTarget.onNewBrowserPane = nil
-        terminal.splitTarget.onNewFileTab = nil
-        terminal.splitTarget.onNewFilePane = nil
+        terminal.openMenuTarget.onNewBrowserTab = nil
+        terminal.openMenuTarget.onNewFileTab = nil
         container.terminal = nil
     }
 

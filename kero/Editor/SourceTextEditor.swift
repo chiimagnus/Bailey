@@ -53,7 +53,6 @@ struct SourceTextEditor: NSViewRepresentable {
     let wrapLines: Bool
     var isFocused: Bool = true
     var onFocused: () -> Void = {}
-    var onSplit: (PaneDropEdge) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(file: file)
@@ -63,7 +62,6 @@ struct SourceTextEditor: NSViewRepresentable {
         let scrollView = RestorableScrollView()
         let textView = FocusReportingTextView()
         textView.onBecomeFirstResponder = onFocused
-        textView.splitTarget.onSplit = onSplit
         scrollView.wantsLayer = true
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
@@ -136,8 +134,8 @@ struct SourceTextEditor: NSViewRepresentable {
             }
         }
 
-        // Only grab focus on mount when this pane is the focused one, so an
-        // unfocused split doesn't steal the caret.
+        // Only grab focus on mount when this work tab is selected, so an
+        // inactive work tab doesn't steal the caret.
         if isFocused {
             DispatchQueue.main.async {
                 textView.window?.makeFirstResponder(textView)
@@ -152,7 +150,6 @@ struct SourceTextEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? STTextView else { return }
         (textView as? FocusReportingTextView)?.onBecomeFirstResponder = onFocused
-        (textView as? FocusReportingTextView)?.splitTarget.onSplit = onSplit
         apply(to: textView, scrollView: scrollView)
         // Take focus on the unfocused→focused edge (keyboard navigation moving
         // focus here), never on every render.
@@ -261,26 +258,15 @@ struct SourceTextEditor: NSViewRepresentable {
 }
 
 /// STTextView that reports when it takes first-responder status (a click, or a
-/// programmatic focus), so the owning pane can mark itself focused in the model,
-/// and appends pane-split items to its context menu.
+/// programmatic focus), so the owning work tab can mark itself selected.
 final class FocusReportingTextView: STTextView {
     var onBecomeFirstResponder: (() -> Void)?
-    /// Owns the split context-menu items, kept off the text view so its own
-    /// menu validation doesn't disable them.
-    let splitTarget = SplitMenuTarget()
-
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
         if became { onBecomeFirstResponder?() }
         return became
     }
 
-    override func menu(for event: NSEvent) -> NSMenu? {
-        let menu = super.menu(for: event) ?? NSMenu()
-        menu.addItem(.separator())
-        for item in splitTarget.menuItems() { menu.addItem(item) }
-        return menu
-    }
 }
 
 /// NSScrollView that runs a one-shot restoration during its first real layout

@@ -45,7 +45,6 @@ struct GitPanel: View {
     let session: TerminalSession?
     let sshHost: String?
     let openFile: (String) -> Void
-    let openToSide: (String) -> Void
     let openDiff: (_ entry: GitStatusModel.Entry, _ staged: Bool) -> Void
     let openCommitDiff: (
         _ commit: GitStatusModel.RecentCommit,
@@ -993,7 +992,6 @@ struct GitPanel: View {
                 openDiff(diffEntry, kind == .staged)
             },
             openFile: { openIfPossible(entry) },
-            openToSide: { openIfPossible(entry, toSide: true) },
             stage: { performOperation(stageTrigger) { model.stage(entry) } },
             unstage: { performOperation(unstageTrigger) { model.unstage(entry) } },
             discard: {
@@ -1011,15 +1009,11 @@ struct GitPanel: View {
         )
     }
 
-    private func openIfPossible(_ entry: GitStatusModel.Entry, toSide: Bool = false) {
+    private func openIfPossible(_ entry: GitStatusModel.Entry) {
         guard model.isCurrent(entry) else { return }
         let path = model.absolutePath(for: entry)
         guard remoteName != nil || FileManager.default.fileExists(atPath: path) else { return }
-        if toSide {
-            openToSide(path)
-        } else {
-            openFile(path)
-        }
+        openFile(path)
     }
 
     /// The machine a discard would act on, or nil while local.
@@ -1428,7 +1422,6 @@ private struct GitEntryRow: View {
     let isDiscardLoading: Bool
     let openDiff: () -> Void
     let openFile: () -> Void
-    let openToSide: () -> Void
     let stage: () -> Void
     let unstage: () -> Void
     let discard: () -> Void
@@ -1530,7 +1523,6 @@ private struct GitEntryRow: View {
             Button(String(localized: "Open Changes", table: "Sidebar")) { openDiff() }
             Button(String(localized: "Open File", table: "Sidebar")) { openFile() }
         }
-        Button(String(localized: "Open File to the Side", table: "Sidebar")) { openToSide() }
         Divider()
         switch kind {
         case .merge:

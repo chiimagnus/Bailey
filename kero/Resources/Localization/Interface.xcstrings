@@ -128,16 +128,6 @@
         }
       }
     },
-    "Close Pane" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "关闭窗格"
-          }
-        }
-      }
-    },
     "Close Panel" : {
       "localizations" : {
         "zh-Hans" : {
@@ -259,36 +249,6 @@
         }
       }
     },
-    "Down" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向下"
-          }
-        }
-      }
-    },
-    "Equalize Panes" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "均分窗格"
-          }
-        }
-      }
-    },
-    "Exit Pane Zoom (⇧⌘↩)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "退出窗格最大化（⇧⌘↩）"
-          }
-        }
-      }
-    },
     "Find" : {
       "localizations" : {
         "zh-Hans" : {
@@ -349,99 +309,9 @@
         }
       }
     },
-    "Focus Next Pane" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "切换到下一个窗格"
-          }
-        }
-      }
-    },
-    "Focus Pane Down" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "切换到下方窗格"
-          }
-        }
-      }
-    },
-    "Focus Pane Left" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "切换到左侧窗格"
-          }
-        }
-      }
-    },
-    "Focus Pane Right" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "切换到右侧窗格"
-          }
-        }
-      }
-    },
-    "Focus Pane Up" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "切换到上方窗格"
-          }
-        }
-      }
-    },
-    "Focus Previous Pane" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "切换到上一个窗格"
-          }
-        }
-      }
-    },
     "Hide FPS Counter" : {},
     "kero" : {
       "shouldTranslate" : false
-    },
-    "Layout" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "布局"
-          }
-        }
-      }
-    },
-    "Left" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向左"
-          }
-        }
-      }
-    },
-    "New Browser Pane" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新建浏览器窗格"
-          }
-        }
-      }
     },
     "New Browser Tab" : {
       "localizations" : {
@@ -603,72 +473,12 @@
         }
       }
     },
-    "Resize Pane" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "调整窗格大小"
-          }
-        }
-      }
-    },
-    "Resize Pane Down" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向下调整窗格"
-          }
-        }
-      }
-    },
-    "Resize Pane Left" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向左调整窗格"
-          }
-        }
-      }
-    },
-    "Resize Pane Right" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向右调整窗格"
-          }
-        }
-      }
-    },
-    "Resize Pane Up" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向上调整窗格"
-          }
-        }
-      }
-    },
     "Reveal in Finder" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "在访达中显示"
-          }
-        }
-      }
-    },
-    "Right" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向右"
           }
         }
       }
@@ -724,66 +534,6 @@
       }
     },
     "Show FPS Counter" : {},
-    "Split Down" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向下分屏"
-          }
-        }
-      }
-    },
-    "Split Down (⇧⌘D)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向下分屏 (⇧⌘D)"
-          }
-        }
-      }
-    },
-    "Split Left" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向左分屏"
-          }
-        }
-      }
-    },
-    "Split Right" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向右分屏"
-          }
-        }
-      }
-    },
-    "Split Right (⌘D)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向右分屏 (⌘D)"
-          }
-        }
-      }
-    },
-    "Split Up" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向上分屏"
-          }
-        }
-      }
-    },
     "Stop Loading" : {
       "localizations" : {
         "zh-Hans" : {
@@ -884,16 +634,6 @@
         }
       }
     },
-    "Toggle Pane Zoom" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "切换窗格最大化"
-          }
-        }
-      }
-    },
     "Toggle Right Sidebar" : {
       "localizations" : {
         "zh-Hans" : {
@@ -910,16 +650,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "显示/隐藏右侧边栏（⇧⌘B）"
-          }
-        }
-      }
-    },
-    "Up" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向上"
           }
         }
       }

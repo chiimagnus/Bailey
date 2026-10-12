@@ -13,9 +13,9 @@ import Foundation
 /// from disk.
 struct SessionSnapshot: Codable {
     struct ProjectSnapshot: Codable {
-        /// A single pane's content — the terminal, file, browser, or diff it
+        /// A tab's content — the terminal, file, browser, or diff it
         /// holds.
-        enum PaneContentSnapshot: Codable {
+        enum ContentSnapshot: Codable {
             case session(workingDirectory: String)
             case file(path: String, editorState: EditorState?)
             case browser(url: String?)
@@ -30,47 +30,11 @@ struct SessionSnapshot: Codable {
             )
         }
 
-        struct PaneSnapshot: Codable {
-            var content: PaneContentSnapshot
-            /// Key into the sidecar terminal-history store for a session pane;
-            /// nil for files, browsers, diffs, or when history restore is off.
-            var historyKey: String?
-        }
-
-        /// The persisted recursive pane tree. Fractions belong to individual
-        /// splits, so a child can be divided on either axis without affecting
-        /// its siblings.
-        indirect enum LayoutSnapshot: Codable {
-            case pane(PaneSnapshot)
-            case split(
-                axis: PaneSplitAxis,
-                fraction: Double,
-                first: LayoutSnapshot,
-                second: LayoutSnapshot
-            )
-        }
-
-        /// One tab's recursive layout plus the focused leaf's tree-order
-        /// position.
         struct TabSnapshot: Codable {
-            var layout: LayoutSnapshot
-            var focusedPaneIndex: Int
-            /// User-assigned tab name; nil when the title is automatic.
+            var content: ContentSnapshot
+            var historyKey: String?
             var customName: String?
-            /// Position of the terminal this non-terminal tab was opened
-            /// from in the project's flattened session list; nil without one.
             var contextSessionIndex: Int?
-
-            init(
-                layout: LayoutSnapshot, focusedPaneIndex: Int,
-                customName: String? = nil, contextSessionIndex: Int? = nil
-            ) {
-                self.layout = layout
-                self.focusedPaneIndex = focusedPaneIndex
-                self.customName = customName
-                self.contextSessionIndex = contextSessionIndex
-            }
-
         }
 
         var customName: String?
@@ -101,7 +65,7 @@ enum KeroInstanceMode {
 }
 
 enum SessionStore {
-    private static let key = "sessionSnapshot"
+    private static let key = "workspaceSnapshot"
     private static let defaults: UserDefaults? = KeroInstanceMode.isIsolated
         ? UserDefaults(suiteName: AppIdentity.current.isolatedDefaultsSuite) : .standard
 

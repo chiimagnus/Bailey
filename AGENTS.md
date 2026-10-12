@@ -10,8 +10,8 @@
 
 ## 不可破坏的边界
 
-- **状态随生命周期归属**：窗口由 `TerminalManager` 协调，项目由 `Project` 持有，标签内部窗格由 `PaneTab` 持有。临时 View 重建不能结束终端、丢失编辑或中断转发。
-- **两层布局各有真源**：`DockNode` 管外层停靠，`PaneNode` 管标签内部分屏。移动、关闭和恢复必须保留内容与焦点，不另造并行布局状态。
+- **状态随生命周期归属**：窗口由 `TerminalManager` 协调，项目由 `Project` 持有，每个 `PaneTab` 只持有一份内容。临时 View 重建不能结束终端、丢失编辑或中断转发。
+- **独立标签自由停靠**：`DockNode` 是窗口停靠布局的真源；面板与标签页一一对应，不支持标签内部再分区。移动、关闭和恢复必须保留内容与焦点，不另造并行布局状态。
 - **文件与 Git 共用树**：复用 `TreeDisplayModel` 和树行，保留目录压缩、状态、命中范围、悬停、滚动、键盘、无障碍及懒加载。
 - **异步结果不能串目标**：发布前核对发起时的项目、机器、连接与请求代次；旧结果不能覆盖新状态。保存失败保留编辑，远程失败不得回退写入本机。
 - **沿用平台与后端边界**：SwiftUI 负责界面，AppKit/Ghostty 负责原生终端与输入。复用现有后端契约，保留 Git 刷新合并、SSH 批量执行和超时；布局配置由窗口协调者传入项目，不在项目中读取全局布局设置。
@@ -39,7 +39,7 @@ bash scripts/check.sh dock-workspace session-snapshot
 | --- | --- | --- |
 | 应用身份与数据目录 | [设置与恢复](docs/SETTINGS.md) | `app-identity settings session-snapshot` |
 | Actions 与签名发包 | [构建与发包](docs/RELEASE.md) | `release`，另验收签名 ZIP |
-| 停靠、分屏、焦点与内容生命周期 | [终端与窗格](docs/TERMINAL.md) | `dock-workspace pane-retention` |
+| 停靠、焦点与内容生命周期 | [终端与面板](docs/TERMINAL.md) | `dock-workspace pane-retention` |
 | 配置与快照格式 | [设置与恢复](docs/SETTINGS.md) | `settings session-snapshot` |
 | 文件树、编辑、读取与保存 | [文件与编辑器](docs/EDITOR.md) | `file-tree-navigation tree-row-hit-testing workspace-identity` |
 | Git 执行、操作、草稿与 diff | [Git 与差异](docs/GIT.md) | `git-execution git-panel-state workspace-identity` |

@@ -123,3 +123,13 @@ struct TerminalFindBar: View {
         }
     }
 }
+
+struct TerminalFindOverlay: View {
+    @ObservedObject var find: TerminalFind
+
+    var body: some View {
+        if find.isPresented {
+            TerminalFindBar(find: find)
+        }
+    }
+}

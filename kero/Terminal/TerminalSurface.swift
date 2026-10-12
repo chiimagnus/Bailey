@@ -16,7 +16,7 @@ struct TerminalLaunch {
 /// What Kero needs from a terminal surface, in Kero's vocabulary rather than
 /// any one emulator's.
 ///
-/// A surface is an `NSView` because panes reparent the same instance as splits
+/// A surface is an `NSView` because docking reparents the same instance as layout
 /// and tabs change (see `TerminalHostView`) — that is what keeps PTY state,
 /// selection, and scrollback alive across layout changes. Everything the
 /// terminal reports back travels the other way, through
@@ -30,8 +30,8 @@ protocol TerminalBackendSurface: NSView {
     /// Fired whenever direct interaction makes this pane the active one.
     var onBecomeFirstResponder: (() -> Void)? { get set }
 
-    /// Target for the pane-split items in the surface's context menu.
-    var splitTarget: SplitMenuTarget { get }
+    /// Target for opening links and files in independent tabs.
+    var openMenuTarget: TerminalOpenMenuTarget { get }
 
     /// True only while Kero is active, its window is key, and this exact
     /// surface owns the first responder.

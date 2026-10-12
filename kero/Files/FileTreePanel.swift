@@ -11,7 +11,6 @@ struct FileTreePanel: View {
     let rootBadge: (text: String, description: String)?
     let currentFilePath: String?
     let openFile: (String) -> Void
-    let openToSide: (String) -> Void
     let onRename: (_ oldPath: String, _ newPath: String) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
@@ -55,7 +54,7 @@ struct FileTreePanel: View {
             FileTreeScrollView(
                 model: model, git: git, session: session,
                 sshHost: sshHost, currentFilePath: currentFilePath,
-                openFile: openFile, openToSide: openToSide, onRename: onRename,
+                openFile: openFile, onRename: onRename,
                 refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget
             )
         }
@@ -71,7 +70,6 @@ private struct FileTreeScrollView: View {
     let sshHost: String?
     let currentFilePath: String?
     let openFile: (String) -> Void
-    let openToSide: (String) -> Void
     let onRename: (String, String) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
@@ -86,7 +84,7 @@ private struct FileTreeScrollView: View {
                             model: model, git: git, item: item,
                             session: session, sshHost: sshHost,
                             currentFilePath: currentFilePath,
-                            openFile: openFile, openToSide: openToSide,
+                            openFile: openFile,
                             onRename: onRename, refreshGitStatus: refreshGitStatus,
                             isCurrentTarget: isCurrentTarget
                         )
@@ -112,7 +110,6 @@ private struct FileTreeRow: View {
     let sshHost: String?
     let currentFilePath: String?
     let openFile: (String) -> Void
-    let openToSide: (String) -> Void
     let onRename: (_ oldPath: String, _ newPath: String) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
@@ -175,9 +172,6 @@ private struct FileTreeRow: View {
         if !item.isDirectory {
             Button(String(localized: "Open", table: "Sidebar")) {
                 if isCurrentTarget() { openFile(item.path) }
-            }
-            Button(String(localized: "Open to the Side", table: "Sidebar")) {
-                if isCurrentTarget() { openToSide(item.path) }
             }
         }
         // Finder and the default app can only reach the local disk.

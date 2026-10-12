@@ -20,7 +20,7 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
 
     /// Fired whenever direct interaction makes this pane the active one.
     var onBecomeFirstResponder: (() -> Void)?
-    let splitTarget = SplitMenuTarget()
+    let openMenuTarget = TerminalOpenMenuTarget()
 
     /// Held strongly for the surface's lifetime; ``detach()`` drops it.
     var ghosttyController: TerminalController?
@@ -216,7 +216,7 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
-        // This view is long-lived and reparented as panes split. Resign while
+        // This view is long-lived and reparented as tabs move. Resign while
         // the old window still owns us so Ghostty receives FocusOut and draws
         // an inactive cursor instead of retaining stale focus state.
         if newWindow == nil, let window, window.firstResponder === self {
@@ -273,17 +273,11 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
             menu.addItem(.separator())
             switch linkTarget {
             case .url(let url):
-                for item in splitTarget.browserMenuItems(initialURL: url.absoluteString) {
-                    menu.addItem(item)
-                }
+                menu.addItem(openMenuTarget.browserMenuItem(initialURL: url.absoluteString))
             case .file(let url):
-                for item in splitTarget.fileMenuItems(path: url.path) {
-                    menu.addItem(item)
-                }
+                menu.addItem(openMenuTarget.fileMenuItem(path: url.path))
             }
         }
-        menu.addItem(.separator())
-        for item in splitTarget.menuItems() { menu.addItem(item) }
         return menu
     }
 
@@ -501,50 +495,26 @@ final class KeroTerminalProgressBarView: NSView {
     }
 }
 
-/// Target for pane-split context-menu items, kept separate from terminal menu
-/// validation so these actions remain enabled even when there is no selection.
-final class SplitMenuTarget: NSObject {
-    var onSplit: ((PaneDropEdge) -> Void)?
+final class TerminalOpenMenuTarget: NSObject {
     var onNewBrowserTab: ((String?) -> Void)?
-    var onNewBrowserPane: ((String?) -> Void)?
     var onNewFileTab: ((String) -> Void)?
-    var onNewFilePane: ((String) -> Void)?
 
-    func browserMenuItems(initialURL: String) -> [NSMenuItem] {
-        let tabItem = item(
+    func browserMenuItem(initialURL: String) -> NSMenuItem {
+        let menuItem = item(
             String(localized: "New Browser Tab", table: "Terminal"),
             #selector(newBrowserTab(_:))
         )
-        tabItem.representedObject = initialURL
-        let paneItem = item(
-            String(localized: "New Browser Pane", table: "Terminal"),
-            #selector(newBrowserPane(_:))
-        )
-        paneItem.representedObject = initialURL
-        return [tabItem, paneItem]
+        menuItem.representedObject = initialURL
+        return menuItem
     }
 
-    func fileMenuItems(path: String) -> [NSMenuItem] {
-        let tabItem = item(
+    func fileMenuItem(path: String) -> NSMenuItem {
+        let menuItem = item(
             String(localized: "New File Tab", table: "Terminal"),
             #selector(newFileTab(_:))
         )
-        tabItem.representedObject = path
-        let paneItem = item(
-            String(localized: "New File Pane", table: "Terminal"),
-            #selector(newFilePane(_:))
-        )
-        paneItem.representedObject = path
-        return [tabItem, paneItem]
-    }
-
-    func menuItems() -> [NSMenuItem] {
-        [
-            item(String(localized: "Split Right", table: "Terminal"), #selector(splitRight)),
-            item(String(localized: "Split Left", table: "Terminal"), #selector(splitLeft)),
-            item(String(localized: "Split Up", table: "Terminal"), #selector(splitUp)),
-            item(String(localized: "Split Down", table: "Terminal"), #selector(splitDown)),
-        ]
+        menuItem.representedObject = path
+        return menuItem
     }
 
     private func item(_ title: String, _ action: Selector) -> NSMenuItem {
@@ -553,25 +523,12 @@ final class SplitMenuTarget: NSObject {
         return menuItem
     }
 
-    @objc private func splitRight() { onSplit?(.right) }
-    @objc private func splitLeft() { onSplit?(.left) }
-    @objc private func splitUp() { onSplit?(.top) }
-    @objc private func splitDown() { onSplit?(.bottom) }
     @objc private func newBrowserTab(_ sender: NSMenuItem) {
         onNewBrowserTab?(sender.representedObject as? String)
-    }
-
-    @objc private func newBrowserPane(_ sender: NSMenuItem) {
-        onNewBrowserPane?(sender.representedObject as? String)
     }
 
     @objc private func newFileTab(_ sender: NSMenuItem) {
         guard let path = sender.representedObject as? String else { return }
         onNewFileTab?(path)
-    }
-
-    @objc private func newFilePane(_ sender: NSMenuItem) {
-        guard let path = sender.representedObject as? String else { return }
-        onNewFilePane?(path)
     }
 }

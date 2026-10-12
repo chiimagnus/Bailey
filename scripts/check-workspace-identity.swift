@@ -142,9 +142,9 @@ enum WorkspaceIdentityCheck {
             let session = project.newSession()
             session.location = .remote(first)
             project.openFile(path)
-            let file = project.selectedTab!.allContents.compactMap { if case .file(let file) = $0 { return file }; return nil }.first!
+            guard case .file(let file) = project.selectedTab!.content else { preconditionFailure("Expected file tab") }
             project.openDiff(repoRoot: directory, path: "file.txt", staged: false, untracked: false, origPath: nil)
-            let diff = project.selectedTab!.diffs.first!
+            guard case .diff(let diff) = project.selectedTab!.content else { preconditionFailure("Expected diff tab") }
             try await wait { if case .text = file.content { return !diff.isLoading }; return false }
             precondition(file.text == "remote baseline\n" && file.workspaceIdentity == first.workspaceIdentity)
             file.text = "remote file saved\n"
@@ -286,9 +286,9 @@ enum WorkspaceIdentityCheck {
         let first = connection()
         session.location = .remote(first)
         project.openFile(path)
-        let localFile = project.selectedTab!.allContents.compactMap { if case .file(let file) = $0 { return file }; return nil }.first!
+        guard case .file(let localFile) = project.selectedTab!.content else { preconditionFailure("Expected file tab") }
         project.openDiff(repoRoot: directory.path, path: "file.txt", staged: false, untracked: true, origPath: nil)
-        let localDiff = project.selectedTab!.diffs.first!
+        guard case .diff(let localDiff) = project.selectedTab!.content else { preconditionFailure("Expected diff tab") }
         try await wait { !localDiff.isLoading }
         precondition(localFile.workspaceIdentity == nil && localDiff.workspaceIdentity == nil)
         project.openFile(path)

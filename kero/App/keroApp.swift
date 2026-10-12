@@ -120,8 +120,8 @@ private struct KeroCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Close Pane", table: "Interface")) {
-                // Cmd-W is app-wide: close a pane only when a main window with
+            Button(String(localized: "Close Tab", table: "Interface")) {
+                // Cmd-W is app-wide: close a tab only when a main window with
                 // an open project is key. Otherwise close the key window
                 // itself — a non-main window (e.g. Settings), or a main window
                 // showing the empty "No open projects" state with no tab left.
@@ -266,111 +266,6 @@ private struct KeroCommands: Commands {
         }
 
         CommandGroup(after: .toolbar) {
-            Menu(String(localized: "Layout", table: "Interface")) {
-                Button(String(localized: "Split Right", table: "Interface")) {
-                    manager?.splitRight()
-                }
-                .keyboardShortcut("d", modifiers: .command)
-                .disabled(manager?.canSplit != true)
-
-                Button(String(localized: "Split Down", table: "Interface")) {
-                    manager?.splitDown()
-                }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
-                .disabled(manager?.canSplit != true)
-
-                Button(String(localized: "Split Left", table: "Interface")) {
-                    manager?.splitLeft()
-                }
-                .disabled(manager?.canSplit != true)
-
-                Button(String(localized: "Split Up", table: "Interface")) {
-                    manager?.splitUp()
-                }
-                .disabled(manager?.canSplit != true)
-
-                Divider()
-
-                Button(String(localized: "Focus Pane Left", table: "Interface")) {
-                    manager?.focusPaneLeft()
-                }
-                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
-                .disabled(manager?.hasSplitPanes != true)
-
-                Button(String(localized: "Focus Pane Right", table: "Interface")) {
-                    manager?.focusPaneRight()
-                }
-                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
-                .disabled(manager?.hasSplitPanes != true)
-
-                Button(String(localized: "Focus Pane Up", table: "Interface")) {
-                    manager?.focusPaneUp()
-                }
-                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
-                .disabled(manager?.hasSplitPanes != true)
-
-                Button(String(localized: "Focus Pane Down", table: "Interface")) {
-                    manager?.focusPaneDown()
-                }
-                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
-                .disabled(manager?.hasSplitPanes != true)
-
-                Button(String(localized: "Focus Previous Pane", table: "Interface")) {
-                    manager?.focusPreviousPane()
-                }
-                .keyboardShortcut("[", modifiers: .command)
-                .disabled(manager?.hasSplitPanes != true)
-
-                Button(String(localized: "Focus Next Pane", table: "Interface")) {
-                    manager?.focusNextPane()
-                }
-                .keyboardShortcut("]", modifiers: .command)
-                .disabled(manager?.hasSplitPanes != true)
-
-                Divider()
-
-                Button(String(localized: "Toggle Pane Zoom", table: "Interface")) {
-                    manager?.togglePaneZoom()
-                }
-                .keyboardShortcut(.return, modifiers: [.command, .shift])
-                .disabled(manager?.hasSplitPanes != true)
-
-                Button(String(localized: "Equalize Panes", table: "Interface")) {
-                    manager?.equalizePanes()
-                }
-                .keyboardShortcut("=", modifiers: [.command, .control])
-                .disabled(manager?.hasSplitPanes != true)
-
-                Menu(String(localized: "Resize Pane", table: "Interface")) {
-                    Button(String(localized: "Up", table: "Interface")) {
-                        manager?.resizePaneUp()
-                    }
-                    .keyboardShortcut(.upArrow, modifiers: [.command, .control])
-                    .disabled(manager?.hasSplitPanes != true)
-
-                    Button(String(localized: "Down", table: "Interface")) {
-                        manager?.resizePaneDown()
-                    }
-                    .keyboardShortcut(.downArrow, modifiers: [.command, .control])
-                    .disabled(manager?.hasSplitPanes != true)
-
-                    Button(String(localized: "Left", table: "Interface")) {
-                        manager?.resizePaneLeft()
-                    }
-                    .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
-                    .disabled(manager?.hasSplitPanes != true)
-
-                    Button(String(localized: "Right", table: "Interface")) {
-                        manager?.resizePaneRight()
-                    }
-                    .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
-                    .disabled(manager?.hasSplitPanes != true)
-                }
-                .disabled(manager?.hasSplitPanes != true)
-
-            }
-            .disabled(manager?.selectedProject?.focusedContent == nil)
-
             Menu(String(localized: "Tabs", table: "Interface")) {
                 Button(String(localized: "Next Tab", table: "Interface")) {
                     manager?.selectNextTab()
@@ -387,7 +282,7 @@ private struct KeroCommands: Commands {
                 Divider()
 
                 ForEach(Array((manager?.selectedProject?.tabs ?? []).prefix(9).enumerated()), id: \.element.id) { index, tab in
-                    Button(tab.displayTitle ?? String(localized: "Tab \(index + 1)", table: "Settings")) {
+                    Button(tab.displayTitle) {
                         manager?.selectTab(index: index)
                     }
                 }

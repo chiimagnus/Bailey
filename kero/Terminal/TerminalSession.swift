@@ -20,7 +20,7 @@ extension TerminalSession {
 /// One long-lived terminal process rendered by one terminal surface. Normally
 /// that process is the user's login shell; an SSH project launches its host
 /// command instead. SwiftUI only reparents the same surface, so
-/// PTY state, selection, and scrollback survive tab and split-layout changes.
+/// PTY state, selection, and scrollback survive tab and docking changes.
 ///
 /// The surface reports its lifecycle and input events through
 /// ``TerminalBackendEvents`` so session logic stays independent of rendering.
@@ -147,14 +147,11 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     private func beginTeardown(processAlive: Bool, notifyExit: Bool) {
         // TerminalHostView normally clears these while dismantling, but close
         // teardown must not depend on a later SwiftUI reconciliation pass.
-        // These callbacks originate on PaneView and capture this session.
+        // These callbacks originate on PanelContentView and capture this session.
         surface.setSurfaceVisible(false)
         surface.onBecomeFirstResponder = nil
-        surface.splitTarget.onSplit = nil
-        surface.splitTarget.onNewBrowserTab = nil
-        surface.splitTarget.onNewBrowserPane = nil
-        surface.splitTarget.onNewFileTab = nil
-        surface.splitTarget.onNewFilePane = nil
+        surface.openMenuTarget.onNewBrowserTab = nil
+        surface.openMenuTarget.onNewFileTab = nil
 
         if processAlive {
             _ = shellPid // Cache it before `hasExited` changes.

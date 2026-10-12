@@ -514,28 +514,15 @@ final class TerminalManager: nonisolated ObservableObject {
         )
     }
 
-    /// Opens a browser beside the focused pane in the current tab.
-    func newBrowserPane(
-        toward edge: PaneDropEdge = .right,
-        initialURL: String? = nil
-    ) {
-        selectedProject?.newBrowserPane(
-            toward: edge,
-            initialURL: initialURL,
-            initialFocus: initialURL == nil ? .addressBar : .webContent
-        )
-    }
-
     /// Brings `session` to the foreground: selects its project and tab, then
-    /// focuses its pane. Backs the command palette's session switcher; a no-op
+    /// activates it. Backs the command palette's session switcher; a no-op
     /// if the session is no longer open anywhere.
     func revealSession(_ session: TerminalSession) {
         for project in projects {
             for tab in project.tabs {
-                guard let paneID = tab.paneID(forContent: session.id) else { continue }
+                guard tab.content.id == session.id else { continue }
                 selectedProjectID = project.id
                 project.selectedTabID = tab.id
-                tab.focusedPaneID = paneID
                 return
             }
         }
@@ -611,50 +598,15 @@ final class TerminalManager: nonisolated ObservableObject {
         return false
     }
 
-    /// Closes the focused pane (⌘W). When it's the last pane in its tab the
-    /// tab closes too — matching the old single-content-tab behavior. Once the
-    /// project has no tabs left, ⌘W closes the project itself.
+    /// Closes the selected work tab, or the empty project.
     func closeSelectedTab() {
         guard let project = selectedProject else { return }
         if project.tabs.isEmpty {
             close(project)
         } else {
-            project.closeFocusedPane()
+            project.closeSelected()
         }
     }
-
-    // MARK: - Panes
-
-    func splitRight() { selectedProject?.splitRight() }
-    func splitLeft() { selectedProject?.splitLeft() }
-    func splitDown() { selectedProject?.splitDown() }
-    func splitUp() { selectedProject?.splitUp() }
-    func split(toward edge: PaneDropEdge) { selectedProject?.split(toward: edge) }
-    func focusPaneLeft() { selectedProject?.focusLeft() }
-    func focusPaneRight() { selectedProject?.focusRight() }
-    func focusPaneUp() { selectedProject?.focusUp() }
-    func focusPaneDown() { selectedProject?.focusDown() }
-    func focusNextPane() { selectedProject?.focusNextPane() }
-    func focusPreviousPane() { selectedProject?.focusPreviousPane() }
-
-    func togglePaneZoom() { selectedProject?.togglePaneZoom() }
-    func equalizePanes() { selectedProject?.equalizePanes() }
-    func resizePaneUp() { selectedProject?.resizePaneUp() }
-    func resizePaneDown() { selectedProject?.resizePaneDown() }
-    func resizePaneLeft() { selectedProject?.resizePaneLeft() }
-    func resizePaneRight() { selectedProject?.resizePaneRight() }
-
-    /// Whether the focused pane can be split right now (false for diffs / no
-    /// project).
-    var canSplit: Bool { selectedProject?.canSplit ?? false }
-
-    /// Whether the selected tab holds more than one pane — gates the zoom,
-    /// resize and equalize commands.
-    var hasSplitPanes: Bool { selectedProject?.hasSplitPanes ?? false }
-
-    /// Whether the selected tab is showing a zoomed pane — drives the header's
-    /// exit-zoom indicator.
-    var isPaneZoomed: Bool { selectedProject?.isPaneZoomed ?? false }
 
     func selectNextTab() {
         selectedProject?.selectNext()
@@ -724,11 +676,6 @@ final class TerminalManager: nonisolated ObservableObject {
     /// Opens `path` as a file tab in the current project.
     func openFile(_ path: String) {
         selectedProject?.openFile(path)
-    }
-
-    /// Opens `path` as a pane beside the focused one in the current tab.
-    func openFileToSide(_ path: String) {
-        selectedProject?.openFileToSide(path)
     }
 
     /// Opens a git diff tab in the current project.
@@ -941,19 +888,19 @@ final class TerminalManager: nonisolated ObservableObject {
                 // A tab holding nothing but remote content is not written at
                 // all, so the surviving tabs decide the selected index below.
                 let savedTabs = project.tabs.compactMap { tab -> (PaneTab, ProjectSnapshot.TabSnapshot)? in
-                    guard let layout = Self.layoutSnapshot(
-                        tab.layout,
-                        sshHost: project.sshHost,
-                        captureTerminalHistory: captureTerminalHistory,
-                        histories: &histories
+                    guard let content = Self.contentSnapshot(
+                        tab.content, sshHost: project.sshHost
                     ) else { return nil }
-                    // Restore rebuilds panes from the layout that was written,
-                    // so focus is an index into the panes that survived it.
-                    let focusedPaneIndex = tab.allPanes
-                        .filter { Self.isSnapshotable($0.content, sshHost: project.sshHost) }
-                        .firstIndex { $0.id == tab.focusedPaneID } ?? 0
+                    var historyKey: String?
+                    if case .session(let session) = tab.content,
+                       let history = session.serializedHistory(captureLive: captureTerminalHistory),
+                       !history.isEmpty {
+                        let key = UUID().uuidString
+                        histories[key] = history
+                        historyKey = key
+                    }
                     return (tab, ProjectSnapshot.TabSnapshot(
-                        layout: layout, focusedPaneIndex: focusedPaneIndex,
+                        content: content, historyKey: historyKey,
                         customName: tab.customName,
                         contextSessionIndex: tab.contextSession.flatMap { context in
                             projectSessions.firstIndex { $0.id == context.id }
@@ -976,60 +923,6 @@ final class TerminalManager: nonisolated ObservableObject {
         return (snapshot, histories)
     }
 
-    /// Unmanaged SSH panes are not persisted without a machine identity.
-    /// Explicit SSH roots do persist remote tabs because their host is saved.
-    private static func layoutSnapshot(
-        _ layout: PaneNode,
-        sshHost: String?,
-        captureTerminalHistory: Bool,
-        histories: inout [String: String]
-    ) -> SessionSnapshot.ProjectSnapshot.LayoutSnapshot? {
-        typealias ProjectSnapshot = SessionSnapshot.ProjectSnapshot
-        switch layout {
-        case .pane(let pane):
-            guard let content = contentSnapshot(pane.content, sshHost: sshHost) else { return nil }
-            var historyKey: String?
-            if case .session(let session) = pane.content,
-               let history = session.serializedHistory(
-                   captureLive: captureTerminalHistory
-               ), !history.isEmpty {
-                let key = UUID().uuidString
-                histories[key] = history
-                historyKey = key
-            }
-            return .pane(ProjectSnapshot.PaneSnapshot(
-                content: content,
-                historyKey: historyKey
-            ))
-        case .split(let split):
-            let first = layoutSnapshot(
-                split.first,
-                sshHost: sshHost,
-                captureTerminalHistory: captureTerminalHistory,
-                histories: &histories
-            )
-            let second = layoutSnapshot(
-                split.second,
-                sshHost: sshHost,
-                captureTerminalHistory: captureTerminalHistory,
-                histories: &histories
-            )
-            switch (first, second) {
-            case (nil, nil):
-                return nil
-            case (let onlyOne?, nil), (nil, let onlyOne?):
-                return onlyOne
-            case (let first?, let second?):
-                return .split(
-                    axis: split.axis,
-                    fraction: Double(split.fraction),
-                    first: first,
-                    second: second
-                )
-            }
-        }
-    }
-
     /// A remote path can be saved only when its SSH host is pinned on the
     /// sidebar item. Otherwise relaunch could read a same-named Mac file.
     private static func isSnapshotable(_ content: PaneContent, sshHost: String?) -> Bool {
@@ -1043,7 +936,7 @@ final class TerminalManager: nonisolated ObservableObject {
 
     private static func contentSnapshot(
         _ content: PaneContent, sshHost: String?
-    ) -> SessionSnapshot.ProjectSnapshot.PaneContentSnapshot? {
+    ) -> SessionSnapshot.ProjectSnapshot.ContentSnapshot? {
         guard isSnapshotable(content, sshHost: sshHost) else { return nil }
         switch content {
         case .session(let session):
@@ -1080,9 +973,7 @@ final class TerminalManager: nonisolated ObservableObject {
             project.pinnedFile = saved.pinnedFile
             var restoredContexts: [(tab: PaneTab, sessionIndex: Int)] = []
             for savedTab in saved.tabs {
-                guard let tab = project.restoreTab(
-                    from: savedTab, histories: Self.pendingHistories
-                ) else { continue }
+                let tab = project.restoreTab(from: savedTab, histories: Self.pendingHistories)
                 if let sessionIndex = savedTab.contextSessionIndex {
                     restoredContexts.append((tab, sessionIndex))
                 }
@@ -1098,7 +989,7 @@ final class TerminalManager: nonisolated ObservableObject {
             project.dock.restore(saved.dock, tabIDs: project.tabs.map(\.id))
             project.resetRecency()
             if let pinnedFile = project.pinnedFile,
-               !project.tabs.flatMap(\.allContents).contains(where: { content in
+               !project.tabs.map(\.content).contains(where: { content in
                    if case .file(let file) = content {
                        return file.path == pinnedFile
                            && file.workspaceIdentity == project.workspaceIdentity

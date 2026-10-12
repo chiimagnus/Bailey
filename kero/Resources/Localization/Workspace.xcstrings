@@ -246,16 +246,6 @@
         }
       }
     },
-    "Tab %lld" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "标签页 %lld"
-          }
-        }
-      }
-    },
     "Tab %lld, %@" : {
       "comment" : "Accessibility label for a tab. The placeholders are its position and title.",
       "localizations" : {
@@ -263,16 +253,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "标签页 %lld，%@"
-          }
-        }
-      }
-    },
-    "Untitled" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "未命名"
           }
         }
       }

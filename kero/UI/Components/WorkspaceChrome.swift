@@ -1,9 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// A tab in the strip. Shows the focused pane's title/icon, with a small
-/// counter when the tab holds more than one pane. Observes the tab so focus
-/// and layout changes refresh it; the focused content is observed by the
+/// A tab in the strip. Shows its content's title/icon and dirty indicator.
+/// Observes the tab so name changes refresh it; the content is observed by the
 /// per-kind label below so its live title/dirty state shows.
 struct PaneTabItem: View {
     @ObservedObject var tab: PaneTab
@@ -13,13 +12,12 @@ struct PaneTabItem: View {
     @Binding var renamingTabID: UUID?
 
     var body: some View {
-        let paneCount = tab.allPanes.count
         if renamingTabID == tab.id {
             TabRenameChrome(
-                systemImage: tab.focusedContent?.systemImage ?? "terminal",
+                systemImage: tab.content.systemImage,
                 browserIcon: focusedBrowser,
                 fileIconPath: focusedFileIconPath,
-                initialValue: tab.displayTitle ?? "",
+                initialValue: tab.displayTitle,
                 commit: { name in
                     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                     tab.customName = trimmed.isEmpty ? nil : trimmed
@@ -27,30 +25,27 @@ struct PaneTabItem: View {
                 end: { renamingTabID = nil }
             )
         } else {
-            switch tab.focusedContent {
+            switch tab.content {
             case .session(let session):
-                SessionTabLabel(session: session, customTitle: tab.customName, paneCount: paneCount, isSelected: isSelected, select: select, close: close)
+                SessionTabLabel(session: session, customTitle: tab.customName, isSelected: isSelected, select: select, close: close)
             case .file(let file):
-                FileTabLabel(file: file, customTitle: tab.customName, paneCount: paneCount, isSelected: isSelected, select: select, close: close)
+                FileTabLabel(file: file, customTitle: tab.customName, isSelected: isSelected, select: select, close: close)
             case .browser(let browser):
-                BrowserTabLabel(browser: browser, customTitle: tab.customName, paneCount: paneCount, isSelected: isSelected, select: select, close: close)
+                BrowserTabLabel(browser: browser, customTitle: tab.customName, isSelected: isSelected, select: select, close: close)
             case .diff(let diff):
                 DiffTabLabel(
                     diff: diff,
                     customTitle: tab.customName,
-                    paneCount: paneCount,
                     isSelected: isSelected,
                     select: select,
                     close: close
                 )
-            case nil:
-                EmptyView()
             }
         }
     }
 
     private var focusedBrowser: BrowserTab? {
-        if case .browser(let browser) = tab.focusedContent {
+        if case .browser(let browser) = tab.content {
             browser
         } else {
             nil
@@ -58,7 +53,7 @@ struct PaneTabItem: View {
     }
 
     private var focusedFileIconPath: String? {
-        tab.focusedContent?.fileIconPath
+        tab.content.fileIconPath
     }
 }
 
@@ -141,7 +136,6 @@ private struct SessionTabLabel: View {
     @ObservedObject var session: TerminalSession
     /// User-assigned tab name overriding the live terminal title.
     var customTitle: String?
-    let paneCount: Int
     let isSelected: Bool
     let select: () -> Void
     let close: () -> Void
@@ -150,7 +144,6 @@ private struct SessionTabLabel: View {
         TabItemChrome(
             systemImage: "terminal",
             title: customTitle ?? session.title,
-            paneCount: paneCount,
             isSelected: isSelected,
             select: select,
             close: close
@@ -162,7 +155,6 @@ private struct FileTabLabel: View {
     @ObservedObject var file: FileTab
     /// User-assigned tab name overriding the file name.
     var customTitle: String?
-    let paneCount: Int
     let isSelected: Bool
     let select: () -> Void
     let close: () -> Void
@@ -172,7 +164,6 @@ private struct FileTabLabel: View {
             systemImage: "doc.text",
             fileIconPath: file.path,
             title: customTitle ?? file.name,
-            paneCount: paneCount,
             isSelected: isSelected,
             isDirty: file.isDirty,
             select: select,
@@ -186,7 +177,6 @@ private struct BrowserTabLabel: View {
     @ObservedObject var browser: BrowserTab
     /// User-assigned tab name overriding the webpage title.
     var customTitle: String?
-    let paneCount: Int
     let isSelected: Bool
     let select: () -> Void
     let close: () -> Void
@@ -196,7 +186,6 @@ private struct BrowserTabLabel: View {
             systemImage: "globe",
             browserIcon: browser,
             title: customTitle ?? browser.title,
-            paneCount: paneCount,
             isSelected: isSelected,
             select: select,
             close: close
@@ -208,7 +197,6 @@ private struct BrowserTabLabel: View {
 private struct DiffTabLabel: View {
     @ObservedObject var diff: DiffTab
     var customTitle: String?
-    let paneCount: Int
     let isSelected: Bool
     let select: () -> Void
     let close: () -> Void
@@ -218,7 +206,6 @@ private struct DiffTabLabel: View {
             systemImage: "plus.forwardslash.minus",
             fileIconPath: diff.path,
             title: customTitle ?? diff.title,
-            paneCount: paneCount,
             isSelected: isSelected,
             isDirty: diff.isDirty,
             select: select,
@@ -234,7 +221,6 @@ struct TabItemChrome: View {
     var browserIcon: BrowserTab? = nil
     var fileIconPath: String? = nil
     let title: String
-    var paneCount: Int = 1
     let isSelected: Bool
     var isDirty = false
     let select: () -> Void
@@ -286,15 +272,6 @@ struct TabItemChrome: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(isSelected ? .primary : .secondary)
                     .lineLimit(1)
-                if paneCount > 1 {
-                    HStack(spacing: 2) {
-                        Image(systemName: "square.split.2x1")
-                            .font(.system(size: 7.5, weight: .semibold))
-                        Text(verbatim: "\(paneCount)")
-                            .font(.system(size: 9, weight: .semibold))
-                    }
-                    .foregroundStyle(.tertiary)
-                }
                 if isDirty {
                     Circle()
                         .fill(.secondary)

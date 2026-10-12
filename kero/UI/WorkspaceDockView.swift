@@ -164,8 +164,7 @@ extension DockItem {
     }
 }
 
-/// The only recursive window layout. The inner PaneLayoutView remains
-/// responsible for splits *inside* a terminal/editor tab.
+/// The recursive window layout positions independent work and tool tabs.
 private struct DockTreeView: View {
     let node: DockNode
     @ObservedObject var project: Project
@@ -324,17 +323,10 @@ private struct DockTabGroupView: View {
                 if isTopLeft { WindowDragArea().frame(width: 76) }
                 tabStrip(maxWidth: max(0, geometry.size.width
                     - (isTopLeft ? 120 : 44)
-                    - (manager.isFPSCounterVisible ? 42 : 0)
-                    - (manager.isPaneZoomed ? 28 : 0)))
+                    - (manager.isFPSCounterVisible ? 42 : 0)))
                 panelAddButton
                 WindowDragArea().frame(minWidth: 0, maxWidth: .infinity)
                 if manager.isFPSCounterVisible { FPSBadge() }
-                if manager.isPaneZoomed && active?.tabID != nil {
-                    ChromeIconButton(
-                        systemImage: "arrow.down.forward.and.arrow.up.backward",
-                        tooltip: String(localized: "Exit Pane Zoom (⇧⌘↩)", table: "Interface")
-                    ) { manager.togglePaneZoom() }
-                }
             }
             .padding(.trailing, 8)
             .frame(height: geometry.size.height)
@@ -495,25 +487,15 @@ private struct DockTabGroupView: View {
             ToolPanelView(manager: manager, git: git, panel: .git)
         case .tab(let id):
             if let tab = project.tabs.first(where: { $0.id == id }) {
-                if let diff = tab.diffs.first, tab.allPanes.count == 1 {
-                    DiffViewerView(diff: diff, isSelected: true)
-                } else {
-                    PaneLayoutView(
-                        tab: tab,
-                        isWorkspaceTabSelected: project.selectedTabID == id,
-                        onFocused: {
-                            if project.selectedTabID != id { project.selectedTabID = id }
-                        },
-                        onSplit: {
-                            project.selectedTabID = id
-                            manager.split(toward: $0)
-                        },
-                        onNewBrowserTab: { manager.newBrowserTab(initialURL: $0) },
-                        onNewBrowserPane: { manager.newBrowserPane(initialURL: $0) },
-                        onNewFileTab: { manager.openFile($0) },
-                        onNewFilePane: { manager.openFileToSide($0) }
-                    )
-                }
+                PanelContentView(
+                    tab: tab,
+                    isSelected: project.selectedTabID == id,
+                    onFocused: {
+                        if project.selectedTabID != id { project.selectedTabID = id }
+                    },
+                    onNewBrowserTab: { manager.newBrowserTab(initialURL: $0) },
+                    onNewFileTab: { manager.openFile($0) }
+                )
             }
         case nil:
             emptyGroup
@@ -549,7 +531,7 @@ private struct DockTabGroupView: View {
             Button(String(localized: "Use Automatic Title", table: "Interface")) { tab.customName = nil }
         }
         Divider()
-        if case .file(let file) = tab.focusedContent {
+        if case .file(let file) = tab.content {
             Button(String(localized: "Reveal in Finder", table: "Interface")) {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)])
             }
@@ -559,7 +541,7 @@ private struct DockTabGroupView: View {
             }
             Divider()
         }
-        if case .browser(let browser) = tab.focusedContent, !browser.urlString.isEmpty {
+        if case .browser(let browser) = tab.content, !browser.urlString.isEmpty {
             Button(String(localized: "Open in Default Browser", table: "Interface")) {
                 browser.openInDefaultBrowser()
             }

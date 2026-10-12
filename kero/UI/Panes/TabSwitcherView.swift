@@ -151,7 +151,7 @@ final class TabSwitcherController: ObservableObject {
             // Ctrl-Tab toggles between the last two tabs like Cmd-Tab does.
             highlightedTabID = orderedTabIDs[reverse ? orderedTabIDs.count - 1 : 1]
             acceptsPointerHighlight = false
-            let validContentIDs = Set(project.tabs.flatMap(\.allContents).map(\.id))
+            let validContentIDs = Set(project.tabs.map { $0.content.id })
             terminalPreviews = terminalPreviews.filter {
                 validContentIDs.contains($0.key)
             }
@@ -180,12 +180,12 @@ final class TabSwitcherController: ObservableObject {
     /// cards are rendered directly from their models.
     private func refreshTerminalPreviews(in project: Project) {
         previewTask?.cancel()
-        let sessions = project.tabs.flatMap(\.sessions)
+        let sessions = project.sessions
         guard !sessions.isEmpty else { return }
 
         previewTask = Task { @MainActor [weak self] in
             // Let SwiftUI present the switcher before doing synchronous surface
-            // exports. Split tabs are captured one pane per run-loop turn.
+            // exports. Terminals are captured one tab per run-loop turn.
             await Task.yield()
             for session in sessions {
                 guard !Task.isCancelled, let self, self.isPresented else { return }
@@ -510,7 +510,7 @@ private struct TabSwitcherCard: View {
                 titleIcon
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.primary.opacity(isHighlighted ? 1 : 0.82))
-                Text(verbatim: tab.displayTitle ?? String(localized: "Tab \(index + 1)", table: "Workspace"))
+                Text(verbatim: tab.displayTitle)
                     .font(.system(
                         size: 14,
                         weight: .medium
@@ -518,7 +518,7 @@ private struct TabSwitcherCard: View {
                     .foregroundStyle(.primary.opacity(isHighlighted ? 1 : 0.82))
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                if tab.focusedContent?.isDirty == true {
+                if tab.content.isDirty {
                     Circle()
                         .fill(.secondary)
                         .frame(width: 6, height: 6)
@@ -554,7 +554,7 @@ private struct TabSwitcherCard: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
             String(
-                localized: "Tab \(index + 1), \(tab.displayTitle ?? String(localized: "Untitled", table: "Workspace"))", table: "Workspace",
+                localized: "Tab \(index + 1), \(tab.displayTitle)", table: "Workspace",
                 comment: "Accessibility label for a tab. The placeholders are its position and title."
             )
         )
@@ -566,12 +566,12 @@ private struct TabSwitcherCard: View {
 
     @ViewBuilder
     private var titleIcon: some View {
-        if case .browser(let browser) = tab.focusedContent {
+        if case .browser(let browser) = tab.content {
             BrowserFaviconView(browser: browser, size: 16)
-        } else if let path = tab.focusedContent?.fileIconPath {
+        } else if let path = tab.content.fileIconPath {
             MaterialFileIconView(path: path, size: 16)
         } else {
-            Image(systemName: tab.focusedContent?.systemImage ?? "rectangle")
+            Image(systemName: tab.content.systemImage)
         }
     }
 
@@ -639,50 +639,20 @@ private final class TabSwitcherInteractionNSView: NSView {
     }
 }
 
-/// A small but structurally faithful rendering of a tab. The recursive split
-/// geometry is preserved; each pane supplies a backend-independent preview.
 private struct TabThumbnail: View {
     @ObservedObject var tab: PaneTab
     let terminalPreviews: [UUID: String]
 
-    private let gap: CGFloat = 2
-
     var body: some View {
-        GeometryReader { geometry in
-            if tab.isZoomed, let pane = tab.focusedPane {
-                TabPaneThumbnail(
-                    content: pane.content,
-                    terminalPreview: terminalPreviews[pane.content.id]
-                )
-            } else {
-                let placements = tab.layout.geometry(
-                    in: CGRect(origin: .zero, size: geometry.size), gap: gap
-                ).panes
-                ZStack(alignment: .topLeading) {
-                    ForEach(placements) { placement in
-                        TabPaneThumbnail(
-                            content: placement.pane.content,
-                            terminalPreview: terminalPreviews[
-                                placement.pane.content.id
-                            ]
-                        )
-                        .frame(
-                            width: placement.frame.width,
-                            height: placement.frame.height
-                        )
-                        .offset(
-                            x: placement.frame.minX,
-                            y: placement.frame.minY
-                        )
-                    }
-                }
-            }
-        }
+        TabContentThumbnail(
+            content: tab.content,
+            terminalPreview: terminalPreviews[tab.content.id]
+        )
         .background(Color(nsColor: Theme.background))
     }
 }
 
-private struct TabPaneThumbnail: View {
+private struct TabContentThumbnail: View {
     let content: PaneContent
     let terminalPreview: String?
 

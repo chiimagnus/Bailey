@@ -44,7 +44,6 @@ private final class BrowserContextMenuBridge: NSObject, WKScriptMessageHandler {
 final class BrowserWebView: WKWebView {
     var onFocused: (() -> Void)?
     var onNewBrowserTab: ((String?) -> Void)?
-    var onNewBrowserPane: ((String?) -> Void)?
     fileprivate var contextMenuLink: String? {
         didSet {
             guard let contextMenuLink,
@@ -62,8 +61,6 @@ final class BrowserWebView: WKWebView {
     private var contextMenuLinkURL: URL?
     private static let openLinkInNewTabIdentifier =
         NSUserInterfaceItemIdentifier("kero.browser.openLinkInNewTab")
-    private static let openLinkInNewPaneIdentifier =
-        NSUserInterfaceItemIdentifier("kero.browser.openLinkInNewPane")
 
     override func mouseDown(with event: NSEvent) {
         onFocused?()
@@ -91,17 +88,9 @@ final class BrowserWebView: WKWebView {
             action: #selector(openLinkInNewTab(_:)),
             linkURL: linkURL
         )
-        let paneItem = linkMenuItem(
-            String(localized: "Open Link in New Pane", table: "Browser"),
-            identifier: Self.openLinkInNewPaneIdentifier,
-            action: #selector(openLinkInNewPane(_:)),
-            linkURL: linkURL
-        )
-
         let insertionIndex = min(1, menu.items.count)
         menu.insertItem(tabItem, at: insertionIndex)
-        menu.insertItem(paneItem, at: insertionIndex + 1)
-        let separatorIndex = insertionIndex + 2
+        let separatorIndex = insertionIndex + 1
         if separatorIndex < menu.items.count,
            !menu.items[separatorIndex].isSeparatorItem {
             menu.insertItem(.separator(), at: separatorIndex)
@@ -137,10 +126,6 @@ final class BrowserWebView: WKWebView {
 
     @objc private func openLinkInNewTab(_ sender: NSMenuItem) {
         onNewBrowserTab?(sender.representedObject as? String)
-    }
-
-    @objc private func openLinkInNewPane(_ sender: NSMenuItem) {
-        onNewBrowserPane?(sender.representedObject as? String)
     }
 }
 
@@ -743,7 +728,6 @@ struct BrowserView: View {
     let isFocused: Bool
     let onFocused: () -> Void
     let onNewBrowserTab: (String?) -> Void
-    let onNewBrowserPane: (String?) -> Void
 
     @ObservedObject private var themeChanges = Theme.changes
     @State private var address = ""
@@ -759,7 +743,6 @@ struct BrowserView: View {
                     browser: browser,
                     onFocused: onFocused,
                     onNewBrowserTab: onNewBrowserTab,
-                    onNewBrowserPane: onNewBrowserPane,
                     focusRequest: webContentFocusRequest
                 )
 
@@ -786,7 +769,7 @@ struct BrowserView: View {
             address = browser.urlString
         }
         .task(id: browser.id) {
-            // A split can transiently mount this view while the grid settles.
+            // Docking can transiently mount this view while the layout settles.
             // SwiftUI cancels this task if that mount is discarded, preserving
             // the one-shot request for the stable browser view.
             try? await Task.sleep(nanoseconds: 50_000_000)
@@ -1120,7 +1103,7 @@ private struct BrowserAddressField: NSViewRepresentable {
         }
 
         func focus(_ field: BrowserAddressTextField) {
-            // A newly inserted split can update before AppKit has attached its
+            // A newly docked tab can update before AppKit has attached its
             // field to the window. Keep the one-shot request alive briefly.
             focus(field, attemptsRemaining: 6)
         }
@@ -1183,7 +1166,6 @@ private struct BrowserWebViewRepresentable: NSViewRepresentable {
     @ObservedObject var browser: BrowserTab
     let onFocused: () -> Void
     let onNewBrowserTab: (String?) -> Void
-    let onNewBrowserPane: (String?) -> Void
     let focusRequest: UInt
 
     func makeCoordinator() -> Coordinator {
@@ -1193,14 +1175,12 @@ private struct BrowserWebViewRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> BrowserWebView {
         browser.webView.onFocused = onFocused
         browser.webView.onNewBrowserTab = onNewBrowserTab
-        browser.webView.onNewBrowserPane = onNewBrowserPane
         return browser.webView
     }
 
     func updateNSView(_ webView: BrowserWebView, context: Context) {
         webView.onFocused = onFocused
         webView.onNewBrowserTab = onNewBrowserTab
-        webView.onNewBrowserPane = onNewBrowserPane
         guard focusRequest != context.coordinator.handledFocusRequest else {
             return
         }
@@ -1214,7 +1194,6 @@ private struct BrowserWebViewRepresentable: NSViewRepresentable {
     ) {
         webView.onFocused = nil
         webView.onNewBrowserTab = nil
-        webView.onNewBrowserPane = nil
     }
 
     final class Coordinator {
@@ -1228,7 +1207,7 @@ private struct BrowserWebViewRepresentable: NSViewRepresentable {
         }
 
         func focus(_ webView: BrowserWebView) {
-            // Split insertion can race the AppKit attachment just like the
+            // Docking can race the AppKit attachment just like the
             // address field; retry only until WebKit accepts first responder.
             focus(webView, attemptsRemaining: 6)
         }

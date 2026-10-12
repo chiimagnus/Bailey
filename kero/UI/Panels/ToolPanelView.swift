@@ -157,7 +157,6 @@ struct ToolPanelView: View {
                         rootBadge: rootBadge,
                         currentFilePath: openFilePath,
                         openFile: { manager.openFile($0) },
-                        openToSide: { manager.openFileToSide($0) },
                         onRename: { [workspace = project.workspaceIdentity] oldPath, newPath in
                             manager.fileRenamed(
                                 from: oldPath, to: newPath, workspace: workspace
@@ -177,7 +176,6 @@ struct ToolPanelView: View {
                     session: fileActionSession,
                     sshHost: manager.selectedProject?.sshHost,
                     openFile: { manager.openFile($0) },
-                    openToSide: { manager.openFileToSide($0) },
                     openDiff: { entry, staged in
                         manager.openDiff(
                             repoRoot: git.repoRoot,
