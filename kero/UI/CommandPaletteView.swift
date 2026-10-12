@@ -183,6 +183,12 @@ struct CommandPaletteView: View {
 
     private var commands: [PaletteCommand] {
         var items: [PaletteCommand] = [
+            PaletteCommand(id: "new-file", title: LocalizedStringResource("New File…", table: "Sidebar"), systemImage: "doc.badge.plus", shortcut: "⌘N") {
+                Task { await manager.newFile() }
+            },
+            PaletteCommand(id: "new-folder", title: LocalizedStringResource("New Folder…", table: "Sidebar"), systemImage: "folder.badge.plus", shortcut: "⌥⌘N") {
+                Task { await manager.newFolder() }
+            },
             PaletteCommand(id: "new-session", title: LocalizedStringResource("New Terminal", table: "Interface"), systemImage: "terminal", shortcut: "⌘T") {
                 manager.newSession()
             },

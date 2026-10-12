@@ -5,6 +5,7 @@ actor DelayedWorkspace: WorkspaceBackend {
     let name: String
     private(set) var created: [String] = []
     private(set) var deleted: [String] = []
+    private(set) var statRequests = 0
 
     init(_ name: String) { self.name = name }
 
@@ -12,6 +13,11 @@ actor DelayedWorkspace: WorkspaceBackend {
         [WorkspaceEntry(name: "tracked.txt", isDirectory: false, isSymlink: false)]
     }
     func stat(path: String) async throws -> WorkspaceStat? {
+        if path.hasSuffix("stale.txt") {
+            statRequests += 1
+            try await Task.sleep(for: .milliseconds(100))
+            return nil
+        }
         if path.hasSuffix("created.txt") { return nil }
         return WorkspaceStat(isRegular: !path.hasSuffix("/root"), isDirectory: path.hasSuffix("/root"), isSymlink: false, size: 0, mtime: .distantPast)
     }
@@ -96,6 +102,19 @@ enum PanelTargetsCheck {
             session: session, connection: firstConnection, state: .disconnected
         ), backend: first)
         precondition(disconnected.identity != automatic("/new", workspace: "remote", connection: firstConnection).identity)
+
+        let staleTree = FileTreeModel()
+        await staleTree.sync(root: "/root", backend: first)
+        await staleTree.beginNewFile(in: "/root")
+        var targetIsCurrent = true
+        let staleCreate = Task {
+            await staleTree.commitDraft(name: "stale.txt", isCurrentTarget: { targetIsCurrent })
+        }
+        try await wait { await first.statRequests > 0 }
+        targetIsCurrent = false
+        let staleCreated = await staleCreate.value
+        let staleWrites = await first.created
+        precondition(staleCreated == nil && staleWrites.isEmpty)
 
         let tree = FileTreeModel()
         await tree.sync(root: "/root", backend: first)

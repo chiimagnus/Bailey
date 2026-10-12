@@ -120,9 +120,8 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         try await shell(RemoteCommands.atomicWriteCommand(path: path), stdin: data)
     }
 
-    /// Truncates an existing file, matching `FileManager.createFile`.
     func createFile(path: String) async throws {
-        try await shell(": > \(RemoteCommands.quote(path))")
+        try await shell(RemoteCommands.createFileCommand(path: path))
     }
 
     /// No `-p`: the local backend creates one level and fails when the

@@ -4,11 +4,11 @@ import Foundation
 
 @main
 enum RemoteCommandsCheck {
-    static func main() { RemoteCommands.checkCurrentCommands() }
+    static func main() throws { try RemoteCommands.checkCurrentCommands() }
 }
 
 extension RemoteCommands {
-    static func checkCurrentCommands() {
+    static func checkCurrentCommands() throws {
         assert(quote("/home/ubuntu/kero probe") == "'/home/ubuntu/kero probe'")
         assert(quote("it's") == #"'it'"'"'s'"#)
 
@@ -34,6 +34,32 @@ extension RemoteCommands {
             close(held)
         }
         assert(!isLocalPortFree(0))
+
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let created = fixture.appendingPathComponent("quote' space.txt")
+        func create(_ path: String) throws -> Int32 {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", createFileCommand(path: path)]
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus
+        }
+        let createdStatus = try create(created.path)
+        precondition(createdStatus == 0)
+        try Data("preserve".utf8).write(to: created)
+        let existingStatus = try create(created.path)
+        precondition(existingStatus != 0)
+        let preserved = try Data(contentsOf: created)
+        precondition(preserved == Data("preserve".utf8))
+        let dangling = fixture.appendingPathComponent("dangling")
+        let missing = fixture.appendingPathComponent("missing")
+        try FileManager.default.createSymbolicLink(at: dangling, withDestinationURL: missing)
+        let danglingStatus = try create(dangling.path)
+        precondition(danglingStatus != 0)
+        precondition(!FileManager.default.fileExists(atPath: missing.path))
 
         let discovery = shellDiscoveryCommand()
         assert(discovery.contains("$SSH_CONNECTION"))

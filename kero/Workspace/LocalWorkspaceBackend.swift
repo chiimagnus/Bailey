@@ -101,9 +101,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
     }
 
     @concurrent func createFile(path: String) async throws {
-        guard FileManager.default.createFile(atPath: path, contents: nil) else {
-            throw WorkspaceError.createFileFailed
-        }
+        try Data().write(to: URL(fileURLWithPath: path), options: .withoutOverwriting)
     }
 
     @concurrent func createDirectory(path: String) async throws {

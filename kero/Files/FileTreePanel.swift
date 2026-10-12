@@ -78,21 +78,27 @@ private struct FileTreeScrollView: View {
     @Environment(\.panelFontScale) private var fontScale
 
     var body: some View {
-        ScrollView(.vertical) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(model.items) { item in
-                    FileTreeRow(
-                        model: model, git: git, item: item,
-                        session: session, sshHost: sshHost,
-                        currentFilePath: currentFilePath,
-                        openFile: openFile, openToSide: openToSide,
-                        onRename: onRename, refreshGitStatus: refreshGitStatus,
-                        isCurrentTarget: isCurrentTarget
-                    )
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(model.items) { item in
+                        FileTreeRow(
+                            model: model, git: git, item: item,
+                            session: session, sshHost: sshHost,
+                            currentFilePath: currentFilePath,
+                            openFile: openFile, openToSide: openToSide,
+                            onRename: onRename, refreshGitStatus: refreshGitStatus,
+                            isCurrentTarget: isCurrentTarget
+                        )
+                        .id(item.path)
+                    }
                 }
+                .padding(.bottom, 7)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .padding(.bottom, 7)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .onChange(of: model.items.first(where: \.isDraft)?.path) { _, path in
+                if let path { proxy.scrollTo(path, anchor: .top) }
+            }
         }
         .id(model.rootPath)
     }
@@ -275,7 +281,7 @@ private struct FileTreeRow: View {
         let name = editingName
         Task {
             guard isCurrentTarget() else { return }
-            if let created = await model.commitDraft(name: name) {
+            if let created = await model.commitDraft(name: name, isCurrentTarget: isCurrentTarget) {
                 if isCurrentTarget() { openFile(created) }
             }
             refreshGitStatus()

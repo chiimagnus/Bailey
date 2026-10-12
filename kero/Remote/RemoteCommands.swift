@@ -13,6 +13,10 @@ import Foundation
 /// The strings themselves were proven against Ubuntu 24.04 with OpenSSH 9.6;
 /// the notes in each builder record what the probe found.
 nonisolated enum RemoteCommands {
+    static func createFileCommand(path: String) -> String {
+        let destination = quote(path)
+        return "[ ! -e \(destination) ] && [ ! -L \(destination) ] && (set -C; : > \(destination))"
+    }
 
     // MARK: - Quoting
 

@@ -15,6 +15,7 @@ enum FileTreeNavigationCheck {
     @MainActor
     static func main() async throws {
         let fm = FileManager.default
+        let backend = LocalWorkspaceBackend.shared
         let fixture = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? fm.removeItem(at: fixture) }
         let a = fixture.appendingPathComponent("a")
@@ -25,11 +26,57 @@ enum FileTreeNavigationCheck {
         for dir in [nested, empty, other] {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
+        let createdURL = fixture.appendingPathComponent("exclusive.txt")
+        try await backend.createFile(path: createdURL.path)
+        let createdBytes = try Data(contentsOf: createdURL)
+        precondition(createdBytes.isEmpty)
+        try Data("preserve".utf8).write(to: createdURL)
+        do {
+            try await backend.createFile(path: createdURL.path)
+            preconditionFailure("Creation overwrote an existing file")
+        } catch {}
+        let preservedBytes = try Data(contentsOf: createdURL)
+        precondition(preservedBytes == Data("preserve".utf8))
+        let dangling = fixture.appendingPathComponent("dangling")
+        let missingTarget = fixture.appendingPathComponent("missing")
+        try fm.createSymbolicLink(at: dangling, withDestinationURL: missingTarget)
+        do {
+            try await backend.createFile(path: dangling.path)
+            preconditionFailure("Creation followed a dangling symlink")
+        } catch {}
+        precondition(!fm.fileExists(atPath: missingTarget.path))
+        let createdFolder = fixture.appendingPathComponent("exclusive-folder")
+        try await backend.createDirectory(path: createdFolder.path)
+        let folderSentinel = createdFolder.appendingPathComponent("preserve.txt")
+        try Data("preserve".utf8).write(to: folderSentinel)
+        do {
+            try await backend.createDirectory(path: createdFolder.path)
+            preconditionFailure("Creation accepted an existing folder")
+        } catch {}
+        let folderBytes = try Data(contentsOf: folderSentinel)
+        precondition(folderBytes == Data("preserve".utf8))
+        do {
+            try await backend.createDirectory(path: dangling.path)
+            preconditionFailure("Folder creation followed a dangling symlink")
+        } catch {}
+        precondition(!fm.fileExists(atPath: missingTarget.path))
+        let race = fixture.appendingPathComponent("race.txt").path
+        let winners = await withTaskGroup(of: Bool.self) { group in
+            for _ in 0..<12 {
+                group.addTask {
+                    do { try await backend.createFile(path: race); return true }
+                    catch { return false }
+                }
+            }
+            var count = 0
+            for await won in group { if won { count += 1 } }
+            return count
+        }
+        precondition(winners == 1)
         let original = nested.appendingPathComponent("a.swift").path
         try Data().write(to: URL(fileURLWithPath: original))
         try Data().write(to: other.appendingPathComponent("b.swift"))
 
-        let backend = LocalWorkspaceBackend.shared
         let first = FileTreeModel()
         let second = FileTreeModel()
         await first.sync(root: a.path, backend: backend)

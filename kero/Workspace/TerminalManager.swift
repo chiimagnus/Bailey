@@ -699,6 +699,28 @@ final class TerminalManager: nonisolated ObservableObject {
 
     // MARK: - Files
 
+    func newFile() async {
+        await newItem(isDirectory: false)
+    }
+
+    func newFolder() async {
+        await newItem(isDirectory: true)
+    }
+
+    private func newItem(isDirectory: Bool) async {
+        guard let project = selectedProject, let context = project.panelContext else { return }
+        let root = await context.resolvedRoot().root
+        guard selectedProjectID == project.id, project.matchesPanelTarget(context.identity) else { return }
+        showPanel(.files)
+        await project.fileTree.sync(root: root, backend: context.backend, scope: context.scope)
+        guard selectedProjectID == project.id, project.matchesPanelTarget(context.identity) else { return }
+        if isDirectory {
+            await project.fileTree.beginNewFolder(in: root)
+        } else {
+            await project.fileTree.beginNewFile(in: root)
+        }
+    }
+
     /// Opens `path` as a file tab in the current project.
     func openFile(_ path: String) {
         selectedProject?.openFile(path)

@@ -68,6 +68,18 @@ private struct KeroCommands: Commands {
         }
 
         CommandGroup(replacing: .newItem) {
+            Button(String(localized: "New File…", table: "Sidebar")) {
+                Task { await manager?.newFile() }
+            }
+            .keyboardShortcut("n", modifiers: .command)
+            .disabled(manager?.selectedProject?.panelContext == nil)
+
+            Button(String(localized: "New Folder…", table: "Sidebar")) {
+                Task { await manager?.newFolder() }
+            }
+            .keyboardShortcut("n", modifiers: [.command, .option])
+            .disabled(manager?.selectedProject?.panelContext == nil)
+
             Button(String(localized: "Add Files or Folders…", table: "Interface")) {
                 manager?.chooseLocalItems()
             }

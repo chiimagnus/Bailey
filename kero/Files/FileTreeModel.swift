@@ -219,8 +219,8 @@ final class FileTreeModel: nonisolated ObservableObject {
     /// cancels (matching VS Code). Returns the new file's path — for files
     /// only — so the caller can open it.
     @discardableResult
-    func commitDraft(name: String) async -> String? {
-        guard let draft else { return nil }
+    func commitDraft(name: String, isCurrentTarget: () -> Bool = { true }) async -> String? {
+        guard isCurrentTarget(), let draft else { return nil }
         let backend = self.backend
         let scope = workspaceScope
         let root = rootPath
@@ -236,8 +236,15 @@ final class FileTreeModel: nonisolated ObservableObject {
             return nil
         }
         let dest = (draft.parentDir as NSString).appendingPathComponent(trimmed)
-        let exists = (try? await backend.stat(path: dest)) ?? nil
-        guard scope == workspaceScope, root == rootPath else { return nil }
+        let exists: WorkspaceStat?
+        do {
+            exists = try await backend.stat(path: dest)
+        } catch {
+            presentError(String(localized: "Couldn’t create “\(trimmed)”.", table: "Workspace"), error.localizedDescription)
+            await rebuild()
+            return nil
+        }
+        guard isCurrentTarget(), scope == workspaceScope, root == rootPath else { return nil }
         guard exists == nil else {
             presentError(
                 String(localized: "Couldn’t create “\(trimmed)”.", table: "Workspace"),
@@ -257,16 +264,11 @@ final class FileTreeModel: nonisolated ObservableObject {
             do {
                 try await backend.createFile(path: dest)
                 createdFile = dest
-            } catch WorkspaceError.createFileFailed {
-                presentError(
-                    String(localized: "Couldn’t create the file.", table: "Workspace"),
-                    String(localized: "It could not be written to disk.", table: "Workspace")
-                )
             } catch {
                 presentError(String(localized: "Couldn’t create the file.", table: "Workspace"), error.localizedDescription)
             }
         }
-        if scope == workspaceScope, root == rootPath {
+        if isCurrentTarget(), scope == workspaceScope, root == rootPath {
             await rebuild()
             return createdFile
         }

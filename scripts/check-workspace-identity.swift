@@ -25,6 +25,14 @@ actor IdentityWorkspace: WorkspaceBackend {
     func kill(pid: pid_t, force: Bool) async throws {}
 }
 
+actor FailingCreateRunner: RemoteCommandRunner {
+    private(set) var commands: [[String]] = []
+    func run(_ argv: [String], stdin: Data?, timeout: TimeInterval) async throws -> (status: Int32, stdout: Data, stderr: Data) {
+        commands.append(argv)
+        return (1, Data(), Data("controlled creation failure".utf8))
+    }
+}
+
 @main
 enum WorkspaceIdentityCheck {
     @MainActor
@@ -186,6 +194,61 @@ enum WorkspaceIdentityCheck {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let path = directory.appendingPathComponent("file.txt").path
+        let manager = TerminalManager()
+        manager.addLocalItems([directory])
+        let fileProject = manager.selectedProject!
+        await manager.newFile()
+        precondition(fileProject.fileTree.draft?.parentDir == directory.path)
+        precondition(fileProject.dock.visibleItems.contains(.files))
+        let created = await fileProject.fileTree.commitDraft(name: "new.txt")
+        precondition(created == directory.appendingPathComponent("new.txt").path)
+        fileProject.openFile(created!)
+        guard case .file(let createdFile)? = fileProject.focusedContent else {
+            preconditionFailure("Created file did not open in the editor")
+        }
+        precondition(createdFile.path == created && createdFile.text.isEmpty)
+        let createdBytes = try Data(contentsOf: URL(fileURLWithPath: created!))
+        precondition(createdBytes.isEmpty)
+        let failedRunner = FailingCreateRunner()
+        let failedRemote = SSHWorkspaceBackend(runner: failedRunner)
+        let failureSentinel = directory.appendingPathComponent("remote-failure.txt")
+        try Data("local sentinel".utf8).write(to: failureSentinel)
+        do {
+            try await failedRemote.createFile(path: failureSentinel.path)
+            preconditionFailure("Remote create failure was ignored")
+        } catch let failure as RemoteCommandFailure {
+            precondition(failure.status == 1 && failure.message.contains("controlled creation failure"))
+        }
+        do {
+            try await failedRemote.createDirectory(path: directory.appendingPathComponent("remote-failed-folder").path)
+            preconditionFailure("Remote folder create failure was ignored")
+        } catch let failure as RemoteCommandFailure {
+            precondition(failure.status == 1)
+        }
+        let untouchedLocal = try Data(contentsOf: failureSentinel)
+        let failedCommands = await failedRunner.commands
+        precondition(untouchedLocal == Data("local sentinel".utf8) && failedCommands.count == 2)
+        precondition(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("remote-failed-folder").path))
+        await manager.newFolder()
+        precondition(fileProject.fileTree.draft?.parentDir == directory.path)
+        precondition(fileProject.fileTree.draft?.isDirectory == true)
+        let folderResult = await fileProject.fileTree.commitDraft(name: "new-folder")
+        let folderStat = try await LocalWorkspaceBackend.shared.stat(path: directory.appendingPathComponent("new-folder").path)
+        precondition(folderResult == nil && folderStat?.isDirectory == true)
+        precondition(fileProject.focusedContent?.id == createdFile.id)
+        await manager.newFolder()
+        await fileProject.fileTree.cancelDraft()
+        precondition(fileProject.fileTree.draft == nil)
+        await manager.newFile()
+        await fileProject.fileTree.cancelDraft()
+        precondition(fileProject.fileTree.draft == nil)
+        await manager.newFile()
+        manager.addLocalItems([directory.appendingPathComponent("new.txt")])
+        let rejected = await fileProject.fileTree.commitDraft(name: "stale.txt", isCurrentTarget: {
+            manager.selectedProjectID == fileProject.id
+        })
+        precondition(rejected == nil && !FileManager.default.fileExists(atPath: directory.appendingPathComponent("stale.txt").path))
+        manager.close(fileProject)
         try Data("local\n".utf8).write(to: URL(fileURLWithPath: path))
         let project = Project(fallbackName: "identity", workspaceConfiguration: .standard)
         project.customDirectory = directory.path

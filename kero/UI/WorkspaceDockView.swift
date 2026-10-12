@@ -350,6 +350,9 @@ private struct DockTabGroupView: View {
         ) { showingPanelPicker.toggle() }
         .popover(isPresented: $showingPanelPicker, arrowEdge: .bottom) {
             VStack(spacing: 2) {
+                newItemButton(isDirectory: false)
+                newItemButton(isDirectory: true)
+                if !availableActions.isEmpty { Divider() }
                 ForEach(availableActions.indices, id: \.self) { index in
                     let action = availableActions[index]
                     if index > 0 && (availableActions[index - 1].item == nil) != (action.item == nil) {
@@ -374,6 +377,28 @@ private struct DockTabGroupView: View {
             .padding(6)
             .frame(width: 170)
         }
+    }
+
+    private func newItemButton(isDirectory: Bool) -> some View {
+        Button {
+            showingPanelPicker = false
+            Task {
+                guard manager.selectedProjectID == project.id else { return }
+                if isDirectory { await manager.newFolder() }
+                else { await manager.newFile() }
+            }
+        } label: {
+            Label(
+                isDirectory ? String(localized: "New Folder…", table: "Sidebar")
+                    : String(localized: "New File…", table: "Sidebar"),
+                systemImage: isDirectory ? "folder.badge.plus" : "doc.badge.plus"
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(project.panelContext == nil)
     }
 
     private var availableActions: [DockAddAction] {

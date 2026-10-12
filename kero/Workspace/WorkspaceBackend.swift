@@ -62,8 +62,6 @@ struct WorkspaceRunResult: Sendable {
 enum WorkspaceError: Error {
     case notFound
     case tooLarge
-    /// `FileManager.createFile` reports failure without an error.
-    case createFileFailed
     case timedOut
 }
 
