@@ -28,6 +28,19 @@
 
 ## 发现项
 
+## 发现 F-101
+
+- 任务：`P2-T4`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Remote/PortForwardController.swift:45`
+- 摘要：`独立复审：合并转发的后续等待者绕过断线检查而返回过期成功`
+- 风险：`第二个打开或复制操作仍获得旧端口；连接状态检查只保护第一个调用者`
+- 预期修复：`新请求与复用请求共用await后校验及发布，以Task身份清理pending，不增加状态机`
+- 验证：`真实OpenSSH本机mux：同端口并发、响应前断线，两调用都失败且表为空；正常并发仅发一条请求`
+- 解决证据：`独立复审修复提交见当前HEAD。/tmp/kero-independent-forward-before.log复现第二等待者success(port)；after日志两等待者均拒绝断线、正常仅一条mux请求与缓存复用PASS。实际OpenSSH，不增加生产测试接口；真实Git操作/延迟目标与签名Debug/严格校验PASS。`
+
+
 ## 发现 F-03
 
 - 任务：`P2-T4`
@@ -98,4 +111,17 @@
 
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
+
+## 2026-10-12 执行完成后的独立复审
+
+不引用旧 audit 的结论。按当前需求、plan/todo、提交 diff、生产调用及本轮重跑结果核对。
+
+- P2-T1：`18e3fb2` 将 Files 与共用标题移出混合 View；唯一入口仍为 ToolPanelView，Files 的 LazyVStack 和共同树行保留。`e327401` 仅删除 EOF 空行。
+- P2-T2：`c110092` GitPanel 仍由 ToolPanelView 挂载，草稿转入窗口 GitStatusModel，按机器与已确认仓库保存；真实 stage/unstage/discard/commit、失败/提交期间编辑/成功/切目标重编译回归 PASS。淘汰行 ID、loadedDetails 与 isSuccess 无生产引用。
+- P2-T3：`97fd6eb` Info 模型迁移逐字一致，实际 InfoPanel 继续通过 WorkspaceBackend 查进程/端口；生产 kill 捕获 ProcessTarget 并由模型共同入口校验。
+- P2-T4：`34dc7b4` 连接拥有唯一 controller、controller 弱引用连接、请求持有 backend，Info ObservedObject 消费原转发表；旧 Registry/取消辅助链删除，长期 TunnelManager 停止链保留。`018d67a` 的控制参数被 check/run/forward 共同使用；真实 mux 后 socket 消失不新建 TCP 的本轮回归 PASS。
+- 新 F-101：合并转发的后续等待者直接返回 task.value，绕过断线校验。实际 OpenSSH 本机 mux 先合并两个请求、再断线并回复成功，修复前第二等待者错误返回端口。本轮删除这一旁路，让全部等待者共用完成校验；按 Task 身份清理 pending，未增加状态机或 UI 守卫。修复前后日志 `/tmp/kero-independent-forward-before.log`、`/tmp/kero-independent-forward-after.log`，正常合并/缓存及断线全部 PASS。
+- P2-T5：`2e06a23` 不可变 PanelContext 被 ContentView、ToolPanelView、Palette 的实际入口消费，自动身份含项目/cwd/foreground/session/connection/state；固定根不绑定无关终端。`3799427` 补齐旧 Files 菜单及 Task 发起边界；删除确认前后和异步创建后打开属于不同真实副作用边界，不能合并为只检查一次。延迟目标/同 PID 旧 kill/最后刷新/Files 创建确认重编译回归 PASS。
+- `9e3b94d` 仅计划说明，不计为产品实现。必要的 Git 破坏性操作确认、机器身份和结果代次保留；未为理论风险新增围栏。
+- 本轮签名 Debug 构建与严格校验 PASS。本轮 Gate：Go，F-101 已修复；Windows 远端 Info 与转发菜单完整前台链本轮未实测，不用本机 mux 代替远端 UI 验收。
 

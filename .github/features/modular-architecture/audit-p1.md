@@ -52,3 +52,14 @@
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
 
+## 2026-10-12 执行完成后的独立复审
+
+本轮不读取旧 audit 的发现、结论或验证记录，以当前 plan/todo、逐提交 diff、实际消费者和重新运行结果判断。
+
+- P1-T1：`bfe8602` 仅计划变更，对产品目录无差异；重新确认 WindowRootView 持有窗口 manager、ContentView 持有 Git、Project 持有 fileTree/Dock/tabs。
+- P1-T2：`26a3f4e` 两个源码 rename 均 100% 相同，旧路径删除；导航脚本和文档编译路径同步。Files 与 Git 工作/暂存/历史实际引用同一 TreeDisplayModel、TreeFolderRow、TreeFileRow，未新增树框架。
+- P1-T3：`01c3c1c` FileTreeModel rename 100% 相同，实例仍由 Project 创建，所有实际面板消费该对象，旧路径删除。
+- `53d747c`、`72ee408` 仅计划/执行状态文件，不计为功能实现；未使用其中旧 audit 的结论作为证据。
+- 独立重编译 Dock、真实文件树导航（10k 约 0.108 秒）、两档字体原生行命中均 PASS，日志 `/tmp/kero-independent-p1.log`。本轮最终签名 Debug 构建和严格校验也通过。
+- 本轮 Gate：Go；没有新发现。没有机械删除共有树的命中/路径安全边界，没有把搜索零结果当端到端通过。
+

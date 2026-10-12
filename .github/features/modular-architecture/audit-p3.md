@@ -34,6 +34,19 @@
 
 ## 发现项
 
+## 发现 F-101
+
+- 任务：`P3-T5`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Remote/SSHWorkspaceBackend.swift:279`
+- 摘要：`独立复审：固定SSH后端的进程helper在client退出后无限等待master持有的输出管道`
+- 风险：`watchdog在client退出时取消，而group.wait仍可能等待存活的mux master；网络失联时固定SSH项目的文件/Git请求不受原25秒期限约束`
+- 预期修复：`现有静态SSH进程helper承接RemoteConnection已有的有界poll执行，实现一份共同进程/管道deadline；删除重复reader/watchdog/lock状态，保留两类连接与错误映射`
+- 验证：`现有sshPath参数的真实子进程检查：client退出而子进程持管道应按期限抛timedOut；正常双流/错误/输入及真实mux与连接寿命通过`
+- 解决证据：`本轮SSH统一修复提交见HEAD。/tmp/kero-independent-ssh-helper-before.log证明client退出后取消pipe deadline；after日志独立输入/双流/status/按时超时及真实mux并发检查PASS。实际App SSHHostCommandRunner与RemoteConnection在专用Windows master的File/Diff/Git和重连保存均PASS，日志/tmp/kero-independent-real-ssh.log；签名Debug及12项重新编译回归通过。`
+
+
 ## 发现 F-03
 
 - 任务：`P3-T4`
@@ -103,4 +116,27 @@
 
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
+
+## 2026-10-12 执行完成后的独立复审
+
+以当前 plan/todo、各 commit diff 和重新编译的实际模块检查独立判断，不使用旧 audit 结论。
+
+- P3-T1 / `6bacc62`：唯一 TerminalManager.makeProject 向 Project 传值，Project 不读 AppSettings；真实配置 URL 的默认/自定义/手工 workspace 保留与失败写入检查 PASS，旧字体键和 legacyDefaults 删除，现用语言/Diff 偏好仍保留。
+- P3-T2 / `e9a9767`：删除 ColumnSnapshot、weight、三路 decoder 和单窗口 fallback；保存/加载仍为当前 windows/两层布局，可选字段业务含义保留。重编译往返/损坏必需字段拒绝/旧格式拒绝/无效 Dock 引用检查 PASS；实际 restore 源码的焦点、上下文、选中索引保护仍存在。
+- P3-T3 / `527b61f`：Pane 模型迁移只有注释变化，外层 Dock 与内层 Pane 仍是两个原有布局；Diff 不允许内层分屏，与 Dock 直接挂载一致。
+- P3-T4 / `295df31`：窗口协调者迁移保留唯一 registry、makeProject/saveAll/restore、App 菜单和 SSH 通知消费者；删除无人调用的外观/argv 查询及旧 Diff 挂载 UUID 表。当前 Shell 状态仍属于 TerminalSession，不另建 owner。
+- P3-T5 / `1e8f9c6`：接口/本地实现分离，身份扩展回定义类型；File/Diff 全部生产构造者显式传 backend 和可选身份，nil 本机不回退为 session 的 SSH 身份。静态进程 helper 仍被 SSHHostCommandRunner 消费，删除仅无人实例化的协议 conformance 和便利重载。`4eb0043` 明确真实 App 的默认 actor 隔离，磁盘/进程解析 @concurrent 方法仍为生产入口；没有新增协议。实际模块身份与失败保存回归 PASS，不能以独立源码编译替代这一证据。
+- P3-T6 / `9d54a42`：BottomToolbarView 的生产消费者为 Dock/Projects，迁移 helper 与 AppKit popover，删除不可达 emptyState 分支及独占的两条文案；保留真正空项目入口。
+- P3-T7 / `7e6fe8a`：标签/chrome 在 Components 中唯一，Dock/Projects 继续消费；仅移除临时滚动日志，实际几何重算和 EditorState 恢复逻辑保留。
+- `a0c1de8` 删除无人消费的旧 diffPlacements；`191cdd9` 的两份脚本实际链接 App dylib，不产生生产替身。重跑实际 Pane/Dock dirty File 与 Browser 身份、原生 SwiftUI Browser 页面/表单/非零滚动/历史重挂载检查 PASS。
+- 本轮 4 项检查日志 `/tmp/kero-independent-p3.log`，签名 Debug 构建/严格校验 PASS。本轮 Gate：Go，无新 finding；焦点/光标逐项前台视觉与远端 UI 不用模型检查冒充。
+
+### 最终消费者交叉核对后的补验
+
+- 顺着 P3-T5 的 `SSHHostCommandRunner → ProcessRemoteCommandRunner.launch` 继续追到进程与管道，发现 F-101：客户端提前退出取消 watchdog，但 mux master 仍可持有输出 FD，group.wait 无期限等待。真实本机子进程反例修复前失败，日志 `/tmp/kero-independent-ssh-helper-before.log`。
+- `ae80653` 把 RemoteConnection 已有的有界 poll 收敛到现有静态 helper，两种 SSH 调用共享它；固定 SSH 后端仍映射 timedOut/启动错误，交互连接保留状态码和部分输出。不改变独立主机连接与交互连接的认证/所有权差异。
+- 删除旧重复读取线程、watchdog、Collected 和 Flag 两套锁状态；没有新增接口、状态机、重试或监控器。原 sshPath 参数保留，只在轻量检查中用于真实本机子进程，未为测试新加生产注入接口。
+- 正常 stdin/双流/非零状态、client 退出但输出持有时按期超时，以及真实 OpenSSH mux/连接释放/并发转发检查 PASS。签名 Debug、全部 10 项独立检查与 2 项实际 App 检查重新编译通过。
+- 专用 Windows master 上实际 App 的 SSHHostCommandRunner 和 RemoteConnection 均通过；File/Diff/Git 批次及替换连接保存检查最终远端字节、本机哨兵未改，测试目录与 master 已清理，日志 `/tmp/kero-independent-real-ssh.log`。
+- 更新本轮 Gate：Go，F-101 已解决；这是返回责任 Task 的补验，不以 P5 添加新围栏掩盖根因。
 
