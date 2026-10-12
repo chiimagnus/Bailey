@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P1-T2"
+current_task_id = "P1-T6"
 
 [[tasks]]
 id = "P1-T1"
@@ -12,39 +12,48 @@ note = "签名构建；真实 Control+1 传入终端不切标签；Control+Tab �
 [[tasks]]
 id = "P1-T2"
 title = "修复编辑与窗口菜单闪烁"
-status = "in_progress"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = ""
+no_commit_reason = "用户确认当前菜单不再闪烁；未复现，不作猜测性修改"
+note = "隔离实例编辑和窗口菜单各连续观察4秒未闪烁；菜单重组时复测动态启用和跨窗口路由"
 
 [[tasks]]
 id = "P1-T3"
 title = "统一面板名称"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t3"
-commit = ""
-note = ""
+commit = "bfd97bc7a63365a3801ac0780261eed004596930"
+note = "Debug构建/签名、dock-workspace与双语引用核对通过；按最新规范纯文案无需真机验收"
 
 [[tasks]]
 id = "P1-T4"
 title = "删除 Info 面板"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t4"
-commit = ""
-note = ""
+commit = "18f628198d55e81853dfa625e5daeea468e60888"
+note = "五项回归、签名构建、隔离恢复和面板操作通过；真实SSH未测"
 
 [[tasks]]
 id = "P1-T5"
 title = "项目根目录新建文件"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t5"
-commit = ""
-note = ""
+commit = "08ecf230652687c6fabf439d93233f93c70030a3"
+note = "四项回归、签名构建通过；用户手动验收新建功能；真实SSH未测，正式包未替换"
 
 [[tasks]]
 id = "P1-T6"
 title = "菜单重新分组"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t6"
 commit = ""
 note = ""
+
+[[tasks]]
+id = "P1-T7"
+title = "统一加号创建分组并区分面板图标"
+status = "completed"
+plan = "plan-p1.md#p1-t7"
+commit = "7e2cac0de5ed1c925ef566ad7fc9b5de7b3f32e2"
+note = "签名构建与独立隔离窗口检查通过；创建三项连续，项目网格图标与文件夹区分"

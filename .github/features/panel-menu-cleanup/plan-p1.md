@@ -29,10 +29,10 @@
 先追 Info 的数据与转发调用，删除仅属于 Info 的 owner/操作；保留其他调用方的后端、连接与长期隧道。移除 Dock/配置/菜单入口。旧 Info 引用仅过滤该项，不丢整个项目、其他面板或编辑内容。
 运行 dock-workspace、session-snapshot、settings、panel-targets 与远端生命周期检查；补旧 Info 配置/快照回归，真实 UI 不再有入口，剩余面板可操作后提交。
 
-## P1-T5 项目根目录新建文件
+## P1-T5 项目根目录新建文件与文件夹
 
 **Files:** Workspace/TerminalManager.swift、Files/FileTreeModel.swift/Panel、App/keroApp.swift、UI/CommandPaletteView.swift、相关字符串与文件/机器身份检查。
-复用 FileTreeModel.beginNewFile/commitDraft 与 WorkspaceBackend.createFile；入口捕获当前项目和工作范围，默认项目根，不取当前文件父目录。必要时显示文件管理器并等待正确树目标，成功后在原项目打开；切换目标、取消、同名或失败不产生错误写入。
+复用 FileTreeModel.beginNewFile/beginNewFolder/commitDraft 与 WorkspaceBackend；文件菜单、命令面板和每个标签栏的「＋」提供两个入口，新建文件为⌘N，新建文件夹为⌥⌘N。入口捕获当前项目和工作范围，默认项目根，不取当前文件父目录。必要时显示文件管理器并等待正确树目标，文件成功后在原项目打开；切换目标、取消、同名或失败不产生错误写入。
 真实临时目录和受控远端检查最终字节、打开目标、同名保留、取消及切项目，隔离菜单/快捷键操作验证后提交。
 
 ## P1-T6 菜单重新分组
@@ -42,5 +42,9 @@
 验证每个新分组的实际动作与启用条件、Settings/空窗口和多窗口路由，并复测编辑/窗口菜单稳定后提交。
 
 ## Phase Audit
+
+## P1-T7 统一加号创建分组并区分面板图标
+
+每个加号中，新建文件、新建文件夹与新建终端连在一起，不用分隔线；即使 add-actions 自定义顺序也保持三项相邻。项目面板改用网格图标，文件管理器保留文件夹，不改变项目列表中的目录图标。构建、签名与隔离界面观察后独立提交。
 
 全部任务验证并提交后进入 plan-task-auditor，逐项检查最终结果及测试证据。讨论项不作为待实现任务。
