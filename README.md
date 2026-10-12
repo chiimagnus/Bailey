@@ -4,11 +4,25 @@
 
 提供两种可同时安装的应用：`Kero.app` 用于日常工作，`Kero Dev.app` 用于开发和测试。两者的设置、项目快照、终端历史和隧道独立保存，开发版不会接管正式版的数据。
 
-## 开始使用
+## 安装
 
 需要 Apple Silicon Mac 和 macOS 15.6+。已发布版本可在 [GitHub Releases](https://github.com/chiimagnus/kero/releases) 下载：日常使用选 `kero-版本-macos-arm64.zip`，测试选 `kero-dev-版本-macos-arm64.zip`，解压后把应用拖入「应用程序」。没有自动更新；尚无发布包时按 [构建与发包](docs/RELEASE.md) 本机构建。
 
-发布包使用免费账号的 Apple Development 证书签名，**不能进行 Apple 公证，无法保证免除首次打开的安全提示**。macOS 拦截时，确认来源后在「系统设置 → 隐私与安全性」允许打开；不需要关闭系统安全检查。
+发布包使用免费账号的 Apple Development 证书签名，**不能进行 Apple 公证，无法保证免除首次打开的安全提示**。签名完整性校验通过，不代表 Gatekeeper（macOS 的应用安全检查）会自动放行。
+
+### 首次打开被拦截时
+
+仅在确认应用来自本仓库的 GitHub Release、未被篡改时，按 [Apple 官方说明](https://support.apple.com/zh-cn/102445)操作：
+
+1. 先双击 `Kero.app` 或 `Kero Dev.app`，出现无法验证开发者或无法检查恶意软件的提醒后，关闭提醒。
+2. 打开「系统设置 → 隐私与安全性」，向下滚动到「安全性」，找到对应应用，点击「仍要打开」（Open Anyway）。
+3. 按提示使用 Touch ID 或管理员密码确认；再次出现提醒时，点击「打开」。之后可正常双击打开。若两种应用都被拦截，分别操作。
+
+没有「仍要打开」按钮时，先重新尝试打开应用，再回到设置；受公司设备管理限制的 Mac 需联系管理员。不要关闭 Gatekeeper，也不要用删除隔离标记的命令绕过检查。
+
+若提示应用「已损坏」或「将损坏你的电脑」，不要按普通首次打开提醒处理。重新从本仓库 Release 下载；仍有问题时联系维护者并提供提示和 macOS 版本。可运行 `codesign --verify --deep --strict "/Applications/Kero.app"` 检查包完整性（开发版替换为 `Kero Dev.app`）；校验失败不要继续运行。`spctl --assess` 拒绝未公证的开发签名包，不等于包已损坏。
+
+## 开始使用
 
 1. 按 ⇧⌘A 添加文件或目录；选择文件会打开编辑器，添加目录不会启动终端。
 2. 选中项目，按 ⌘T 启动终端。

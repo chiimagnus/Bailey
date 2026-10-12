@@ -40,6 +40,8 @@ Release 在临时钥匙串导入身份，并在成功或失败时清理。缺少
 
 ## 免费签名的限制
 
-Apple Development 签名可校验签名者与包完整性，但不是面向公众分发的 Developer ID。Apple [公证服务](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)不接受 Apple Development 证书，因此本流程不能公证，也不能保证从 GitHub 下载后直接打开或免除 Gatekeeper 提醒。用户仍可能需要在「系统设置 → 隐私与安全性」允许首次打开。
+Apple Development 签名可校验签名者与包完整性，但不是面向公众分发的 Developer ID。Apple [公证服务](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)不接受 Apple Development 证书，因此本流程不能公证，也不能保证从 GitHub 下载后直接打开或免除 Gatekeeper 提醒。用户操作统一见 [首次打开被拦截时](../README.md#首次打开被拦截时)；workflow 会在 Release 说明顶部提示限制并链接到该版本的操作说明。
+
+验收须分别记录 `codesign --verify --deep --strict` 的完整性结果、`spctl --assess --type execute --verbose=4` 的 Gatekeeper 结果，以及真实下载包的首次打开结果。后两项未通过或未测时明确说明，不能把签名有效、本地构建或静态 workflow 检查当作 Gatekeeper 放行或远端 CI/CD 成功。开发签名包被 Gatekeeper 拒绝时保留检查结果并告知上述操作，不因此降级签名或关闭安全检查。
 
 不移除下载隔离标记、不关闭 Gatekeeper，也不把其他证书冒充免费方案。应用内部权限仍由 macOS 单独管理。
