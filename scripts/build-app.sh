@@ -38,7 +38,6 @@ if [ -n "${KERO_VERSION:-}" ] || [ -n "${KERO_BUILD_NUMBER:-}" ]; then
     version=("MARKETING_VERSION=$KERO_VERSION" "CURRENT_PROJECT_VERSION=$KERO_BUILD_NUMBER")
 fi
 
-bash scripts/prepare-ghostty.sh
 xcodebuild -project kero.xcodeproj -scheme kero -configuration "$configuration" \
     -destination 'platform=macOS,arch=arm64' \
     -derivedDataPath build/DerivedData -clonedSourcePackagesDirPath build/SourcePackages \

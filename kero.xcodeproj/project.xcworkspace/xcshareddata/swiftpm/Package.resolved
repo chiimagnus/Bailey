@@ -1,5 +1,5 @@
 {
-  "originHash" : "944056b7ed6438af06aa572f2d570efbf9437d68d4617a21b3148e00642fb307",
+  "originHash" : "20c334815152e7dc34deb6e5fa2245644384f5b413a7b5123c98f3a93f0d443d",
   "pins" : [
     {
       "identity" : "coretextswift",
@@ -17,6 +17,15 @@
       "state" : {
         "revision" : "ea09aa7faa3c1832716d1ccdb81dcb83bea89774",
         "version" : "1.4.0"
+      }
+    },
+    {
+      "identity" : "libghostty-spm",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/egoist-labs/libghostty-spm",
+      "state" : {
+        "revision" : "3a930fd32adb477d70374fb70939c014c8fca438",
+        "version" : "1.3.6"
       }
     },
     {

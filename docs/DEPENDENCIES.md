@@ -5,9 +5,10 @@
 
 ## Ghostty
 
-Swift 源码由 `Vendor/libghostty-spm` 子模块提供，`Vendor/GhosttyKit` 是本地包入口。
-二进制框架由 [`prepare-ghostty.sh`](../scripts/prepare-ghostty.sh) 下载和校验，不入库，已存在时复用。
-升级时同时核对脚本中的版本、SHA-256 和子模块版本，避免接口与二进制不匹配。
+Ghostty 通过 Xcode Package Dependencies 直接引用 [`egoist-labs/libghostty-spm`](https://github.com/egoist-labs/libghostty-spm) 的 `1.3.6` 固定版本。
+其 Swift 源码与校验和受上游 `Package.swift` 管理，Xcode 自动下载 `GhosttyKit.xcframework`，不再维护 Git submodule、本地二进制包装包或下载脚本。
+升级时核对上游 Swift API、XCFramework 版本及 SHA-256，并验证终端初始化、输入和主题切换。
+首次下载需保证 Xcode 能访问 GitHub 发布资源；只为 Shell 配置的代理不一定对 SwiftPM 二进制下载生效。
 
 ## STTextView
 

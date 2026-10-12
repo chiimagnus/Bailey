@@ -188,7 +188,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				AA10000000000000000000C0 /* XCLocalSwiftPackageReference "Vendor/STTextView" */,
-				AA10000000000000000000B0 /* XCLocalSwiftPackageReference "Vendor/GhosttyKit" */,
+				AA10000000000000000000B0 /* XCRemoteSwiftPackageReference "libghostty-spm" */,
 				AA30000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/TreeSitterTSX" */,
 				AA10000000000000000000D0 /* XCRemoteSwiftPackageReference "PierreDiffsSwift" */,
 				AA20000000000000000000A0 /* XCRemoteSwiftPackageReference "STTextView-Plugin-Neon" */,
@@ -458,10 +458,6 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		AA10000000000000000000B0 /* XCLocalSwiftPackageReference "Vendor/GhosttyKit" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = "Vendor/GhosttyKit";
-		};
 		AA10000000000000000000C0 /* XCLocalSwiftPackageReference "Vendor/STTextView" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/STTextView;
@@ -473,6 +469,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		AA10000000000000000000B0 /* XCRemoteSwiftPackageReference "libghostty-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/egoist-labs/libghostty-spm";
+			requirement = {
+				kind = exactVersion;
+				version = 1.3.6;
+			};
+		};
 		AA10000000000000000000D0 /* XCRemoteSwiftPackageReference "PierreDiffsSwift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/egoist-labs/PierreDiffsSwift";
@@ -502,10 +506,12 @@
 /* Begin XCSwiftPackageProductDependency section */
 		AA10000000000000000000B1 /* GhosttyTerminal */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = AA10000000000000000000B0 /* XCRemoteSwiftPackageReference "libghostty-spm" */;
 			productName = GhosttyTerminal;
 		};
 		AA10000000000000000000B3 /* GhosttyTheme */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = AA10000000000000000000B0 /* XCRemoteSwiftPackageReference "libghostty-spm" */;
 			productName = GhosttyTheme;
 		};
 		AA10000000000000000000C1 /* STTextView */ = {

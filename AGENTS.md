@@ -25,7 +25,7 @@
 bash scripts/build-app.sh debug
 ```
 
-发布构建使用 `bash scripts/build-app.sh release`。Debug 与 Release 都只生成 `Kero.app`，Bundle ID 固定为 `chiimagnus.kero`；不要再增加第二套应用身份或 scheme。脚本准备 Ghostty、构建并校验签名；切换 Xcode 时设置 `DEVELOPER_DIR`。应用包路径、CI 和签名发布见[构建与发包](docs/RELEASE.md)，持久化约束见[设置与恢复](docs/SETTINGS.md)。未经授权不上传私钥、推送或发布。
+发布构建使用 `bash scripts/build-app.sh release`。Debug 与 Release 都只生成 `Kero.app`，Bundle ID 固定为 `chiimagnus.kero`；不要再增加第二套应用身份或 scheme。Ghostty 由 Xcode 的 Swift Package Dependencies 管理；脚本只负责构建与校验签名。切换 Xcode 时设置 `DEVELOPER_DIR`。应用包路径、CI 和签名发布见[构建与发包](docs/RELEASE.md)，持久化约束见[设置与恢复](docs/SETTINGS.md)。未经授权不上传私钥、推送或发布。
 
 ## 验证
 
