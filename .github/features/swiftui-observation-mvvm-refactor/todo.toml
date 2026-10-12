@@ -4,18 +4,19 @@ current_task_id = ""
 [[tasks]]
 id = "P1-T1"
 title = "核对迁移基线并取得 Swift 6 诊断"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = ""
+no_commit_reason = "探索/基线记录，不修改生产源码；图片与日志只存本机，防止用户数据进入公开 Git"
+note = "macOS27.2 Xcode27.0 Swift6.4; make doctor/build通过,codesign通过; make test 33/33; Swift6: 全局覆盖65阻于STTextKitPlus，隔离工程65首错KeroTerminalView.swift:359 deinit Timer; 截图与日志: .github/features/swiftui-observation-mvvm-refactor/evidence/p1-baseline/README.md，正式版与隔离Debug窗口、4标签/菜单基线已采；未涵盖交互项需各Task实测。"
 
 [[tasks]]
 id = "P1-T2"
 title = "将窗口自动保存改为语义变更触发"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = ""
-note = ""
+commit = "259ac58"
+note = "语义状态驱动500ms快照；旧autosaveObservation已删除；全量make test 35/35 PASS、make build/codesign PASS；隔离原生同场景49,484像素采样0差异，UI证据本机evidence/p1-baseline。"
 
 [[tasks]]
 id = "P2-T1"
