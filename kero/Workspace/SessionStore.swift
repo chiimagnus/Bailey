@@ -58,8 +58,8 @@ struct AppSnapshot: Codable {
     var windows: [SessionSnapshot]
 }
 
-/// A second process of the same signed Debug app must not overwrite the
-/// running Kero's window snapshots or stop its background SSH forwards.
+/// Explicitly isolated secondary instances must not overwrite the running
+/// Kero window snapshot or start its saved background forwards.
 enum KeroInstanceMode {
     static let isIsolated = ProcessInfo.processInfo.arguments.contains("--isolated-ui-test")
 }
@@ -67,7 +67,7 @@ enum KeroInstanceMode {
 enum SessionStore {
     private static let key = "workspaceSnapshot"
     private static let defaults: UserDefaults? = KeroInstanceMode.isIsolated
-        ? UserDefaults(suiteName: AppIdentity.current.isolatedDefaultsSuite) : .standard
+        ? UserDefaults(suiteName: AppIdentity.bundleIdentifier + ".isolated-ui-test") : .standard
 
     static func save(_ windows: [SessionSnapshot]) {
         guard let data = try? JSONEncoder().encode(AppSnapshot(windows: windows)) else { return }

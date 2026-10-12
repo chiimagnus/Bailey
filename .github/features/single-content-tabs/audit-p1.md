@@ -30,8 +30,8 @@
 
 ## 验证日志
 
-- `xcodebuild -project kero.xcodeproj -scheme kero-dev -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath build/DerivedData -clonedSourcePackagesDirPath build/SourcePackages -skipPackageUpdates build` → PASS；日志 `build/single-content-tabs-build.log`。
-- `codesign --verify --deep --strict 'build/DerivedData/Build/Products/Debug/Kero Dev.app'` → PASS。
+- 当前统一入口 `kero` 的 Debug 原生测试与构建已覆盖该功能；双应用身份的旧构建入口已移除。
+- Debug 产物统一为 `build/DerivedData/Build/Products/Debug/Kero.app`。
 - `bash scripts/check.sh pane-retention workspace-identity session-snapshot dock-workspace file-tree-navigation tree-row-hit-testing` → 六项 PASS；最终签名构建后再次运行，日志 `build/single-content-tabs-checks.log`。
 - 原生检查实际操作 AppKit/STTextView 编辑、WKWebView 表单/滚动/历史、Ghostty Shell PID 和停止；Cancel、保存失败、明确放弃及正常保存均到达最终状态；文件/空白浏览器快照恢复通过。
 - 98 份当前源码、字符串目录及维护文档的旧内部类型/动作残留检查 → PASS；显式 Command-D 入口不存在，字符串 JSON 有效。

@@ -22,35 +22,30 @@
 需要 macOS 15.6+、Xcode 和可用的 Apple Development 证书。工程默认团队为 `RDQHYSDFFG`；使用其他团队时调整签名设置。以下命令从仓库根目录执行：
 
 ```sh
-bash scripts/build-app.sh dev
+bash scripts/build-app.sh debug
 ```
 
-正式版使用 `bash scripts/build-app.sh stable`。脚本准备 Ghostty、构建并校验签名；切换 Xcode 时设置 `DEVELOPER_DIR`。应用包路径、CI 和签名发布见[构建与发包](docs/RELEASE.md)，身份与数据隔离见[设置与恢复](docs/SETTINGS.md)。Release 只发正式版；未经授权不上传私钥、推送或发布。
+发布构建使用 `bash scripts/build-app.sh release`。Debug 与 Release 都只生成 `Kero.app`，Bundle ID 固定为 `chiimagnus.kero`；不要再增加第二套应用身份或 scheme。脚本准备 Ghostty、构建并校验签名；切换 Xcode 时设置 `DEVELOPER_DIR`。应用包路径、CI 和签名发布见[构建与发包](docs/RELEASE.md)，持久化约束见[设置与恢复](docs/SETTINGS.md)。未经授权不上传私钥、推送或发布。
 
 ## 验证
 
-测试源码与专用检查脚本放在 `KeroTests/`，`scripts/check.sh` 只作为统一执行入口。沿用现有轻量检查，不新增测试 Target 或框架。
+Kero 使用 Xcode 原生 `KeroTests` Unit Test Target。当前测试源码直接放在 `KeroTests/`；迁移前的脚本只保存在 `KeroTests/references/` 作为行为参考，不参与构建，也不能作为验收入口。
 
-按改动选择[现有检查](scripts/check.sh)，可一次运行多个名称：
+完整测试从仓库根目录运行：
 
 ```sh
-bash scripts/check.sh dock-workspace session-snapshot
+xcodebuild test -project kero.xcodeproj -scheme kero -configuration Debug \
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath build/DerivedData \
+  -clonedSourcePackagesDirPath build/SourcePackages \
+  -skipPackageUpdates -disableAutomaticPackageResolution
 ```
 
-| 改动范围 | 维护约束 | 检查名称 |
-| --- | --- | --- |
-| 应用身份与数据目录 | [设置与恢复](docs/SETTINGS.md) | `app-identity settings session-snapshot` |
-| Actions 与签名发包 | [构建与发包](docs/RELEASE.md) | `release`，另验收签名 ZIP |
-| 停靠、焦点与内容生命周期 | [终端与面板](docs/TERMINAL.md) | `dock-workspace pane-retention` |
-| 配置与快照格式 | [设置与恢复](docs/SETTINGS.md) | `settings session-snapshot` |
-| 文件树、编辑、读取与保存 | [文件与编辑器](docs/EDITOR.md) | `file-tree-navigation tree-row-hit-testing workspace-identity` |
-| Git 执行、操作、草稿与 diff | [Git 与差异](docs/GIT.md) | `git-execution git-panel-state workspace-identity` |
-| SSH 连接、转发与面板异步目标 | [项目与 SSH](docs/PROJECTS.md) | `remote-commands remote-lifetime panel-targets workspace-identity` |
-| 浏览器导航与重挂载 | [浏览器与开发服务](docs/BROWSER.md) | `pane-retention` |
+Xcode TestAction 启动真实的 Debug `Kero.app` 生命周期，并显式传入 `--isolated-ui-test`，避免测试实例覆盖正式窗口快照、终端历史或启动已保存隧道。不得通过 XCTest 环境变量在产品入口创建测试专用启动分支。
 
-其他改动按需读[产品原则](docs/PRODUCT.md)、[性能](docs/PERFORMANCE.md)、[本地化](docs/LOCALIZATION.md)、[依赖](docs/DEPENDENCIES.md)与[安全](docs/SECURITY.md)约束。
+按改动运行对应 XCTest 类或完整套件；模型、持久化、文件、Git、SSH/异步目标和原生视图生命周期都应直接通过 XCTest 断言。发布脚本与 workflow 通过实际构建/签名验证，不再额外复制成 shell 测试。
 
-`workspace-identity` 和 `pane-retention` 须先构建 Debug 开发版；原生视图检查需要 macOS 图形会话。检查使用临时数据或受控后端，不连接真实 SSH 主机，不能代替真实远端传输或用户交互验收。
+其他改动按需读[产品原则](docs/PRODUCT.md)、[性能](docs/PERFORMANCE.md)、[本地化](docs/LOCALIZATION.md)、[依赖](docs/DEPENDENCIES.md)与[安全](docs/SECURITY.md)约束。原生视图测试需要 macOS 图形会话；自动测试使用临时数据或受控后端，不连接真实 SSH 主机，不能代替真实远端传输或用户交互验收。
 
 行为或逻辑改动还须构建、校验签名，并在真机实际操作受影响行为。检查主路径与共享根因的关键边界；性能改动按[测量约束](docs/PERFORMANCE.md)记录前后数据。纯文案改动（名称、标签、翻译等）只核对引用、双语文案、占位符与表名；涉及源码或字符串提取时按需构建，不要求真机操作验收、重装或重签测试包。快捷键、启用条件、动作路由与布局变化不属于纯文案。仅改文档时核对事实、命令与链接，不机械重装 App。
 
@@ -61,11 +56,11 @@ bash scripts/check.sh dock-workspace session-snapshot
 - 交付时分别说明应用包是否已替换、重启与恢复是否已验收，以及备份位置。用户重启后检查原有项目、标签与布局；未经确认不宣称恢复通过，也不删除安装备份。仅在用户明确授权代操作时，确认命令和编辑可安全结束，再正常退出或重启。
 - 行为验收默认使用同一签名 Debug 包的隔离实例，不为验收重启正式实例：
   ```sh
-  open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Kero Dev.app" --args --isolated-ui-test
+  open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Kero.app" --args --isolated-ui-test
   ```
   隔离模式单独保存窗口和终端历史，不启动已保存隧道；全局设置仍可能共用，不在隔离实例中修改设置。
-- 指定独立测试包时，只更新该包，默认直接使用已签名的 Kero Dev 开发版和隔离参数。不得仅修改 Info.plist 后冒称数据隔离成立；应用数据路径由实际 Bundle ID 决定，检查须覆盖配置与历史目录。
-- 真实 SSH 检查只用获准的专用测试 master，不借用用户连接。`bash KeroTests/check-workspace-identity.sh user host port control-socket` 会在两台机器创建并清理唯一临时目录；缺少条件时明确记录远端未测。
+- 隔离验收仍使用同一个 `Kero.app` 与同一个 Bundle ID，只通过显式隔离参数分开会话快照和终端历史；不得为了测试复制、改名或重签成第二套应用身份。
+- 真实 SSH 验收只用获准的专用测试 master，不借用用户连接；自动 XCTest 不连接真实 SSH 主机，缺少专用环境时明确记录远端未测。
 - 验收后只清理本轮创建且可确认归属的临时应用与独立测试数据，保留用户原有数据。编译成功、事件发出或骨架出现不算行为通过；隔离包通过不等于正式包已安装。
 
 ## 文档与提交

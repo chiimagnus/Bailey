@@ -6,11 +6,9 @@
 
 普通偏好与工作区初始值来自 `~/.config/kero/config.toml`，不是项目快照或未保存内容备份。
 
-正式版与开发版的数据独立，由 `AppIdentity` 决定路径：
+Kero 只有一个应用身份 `chiimagnus.kero`：配置目录固定为 `~/.config/kero/`，历史目录固定为 Application Support 下的 `kero/`。Debug 与 Release 使用同一身份和数据位置，不维护开发版 Bundle ID 或第二套配置目录。
 
-- 正式版 `chiimagnus.kero`：配置目录为 `~/.config/kero/`，历史目录为 Application Support 下的 `kero/`。
-- 开发版 `chiimagnus.kero.dev`：对应目录为 `kero-dev/`，不复制正式版数据。
-- 快照、语言偏好、隧道 PID 和隔离测试 suite 使用各自 Bundle ID；隔离测试不启动已保存隧道。应用不读取旧 Bundle ID。
+显式 `--isolated-ui-test` 实例只隔离窗口快照与终端历史，并且不启动已保存隧道；普通配置仍是全局配置，因此隔离验收不得修改设置。
 
 - 布局由窗口协调者显式传入项目；项目不自行读取全局布局配置。启动读取的初始值只影响新建项目，已有项目按保存布局恢复。
 - 校验组数量、权重、选中项、工具唯一性与必需项；边缘范围为 `0.05...0.4`。无效工作区配置整体回退默认值并记录错误，不接受一半有效的布局。

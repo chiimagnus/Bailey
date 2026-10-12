@@ -25,19 +25,23 @@ jobs:
         with:
           submodules: recursive
           persist-credentials: false
-      - name: Check independent behavior
+      - name: Prepare Ghostty
+        run: bash scripts/prepare-ghostty.sh
+      - name: Run Xcode tests
         run: >-
-          bash scripts/check.sh release app-identity settings session-snapshot dock-workspace
-          file-tree-navigation git-execution git-panel-state remote-commands
-          remote-lifetime panel-targets
-      - name: Build development app without credentials
-        run: bash scripts/build-app.sh dev adhoc
-      - name: Check native workspace behavior
-        run: bash scripts/check.sh workspace-identity
-      - name: Build stable app without credentials
-        run: bash scripts/build-app.sh stable adhoc
-      - name: Verify both bundle identities
-        run: >-
-          build/check-app-identity
-          'build/DerivedData/Build/Products/Debug/Kero Dev.app'
-          'build/DerivedData/Build/Products/Release/Kero.app'
+          xcodebuild test -project kero.xcodeproj -scheme kero -configuration Debug
+          -destination 'platform=macOS,arch=arm64'
+          -derivedDataPath build/DerivedData
+          -clonedSourcePackagesDirPath build/SourcePackages
+          -skipPackageUpdates -disableAutomaticPackageResolution
+      - name: Build release app without credentials
+        run: bash scripts/build-app.sh release adhoc
+      - name: Verify application identity
+        run: |
+          app='build/DerivedData/Build/Products/Release/Kero.app'
+          info="$app/Contents/Info.plist"
+          test -d "$app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")" = chiimagnus.kero
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$info")" = Kero
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info")" = kero
+          codesign --verify --deep --strict "$app"

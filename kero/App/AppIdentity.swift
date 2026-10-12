@@ -1,32 +1,18 @@
 import Foundation
 
-nonisolated struct AppIdentity {
-    static let current = AppIdentity(bundleIdentifier: Bundle.main.bundleIdentifier ?? "chiimagnus.kero")
+nonisolated enum AppIdentity {
+    static let bundleIdentifier = "chiimagnus.kero"
+    static let displayName = "Kero"
 
-    let bundleIdentifier: String
-
-    var dataDirectoryName: String {
-        bundleIdentifier == "chiimagnus.kero.dev" ? "kero-dev" : "kero"
-    }
-
-    var displayName: String {
-        bundleIdentifier == "chiimagnus.kero.dev" ? "Kero Dev" : "Kero"
-    }
-
-    var configDirectory: URL {
+    static var configDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent(dataDirectoryName, isDirectory: true)
+            .appendingPathComponent(".config/kero", isDirectory: true)
     }
 
-    var historyDirectory: URL {
+    static var historyDirectory: URL {
         let base = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first ?? FileManager.default.temporaryDirectory
-        return base.appendingPathComponent(dataDirectoryName, isDirectory: true)
-    }
-
-    var isolatedDefaultsSuite: String {
-        bundleIdentifier + ".isolated-ui-test"
+        return base.appendingPathComponent("kero", isDirectory: true)
     }
 }

@@ -98,7 +98,7 @@ enum GitViewMode: String, CaseIterable, Identifiable {
 final class AppSettings: nonisolated ObservableObject {
     static let shared = AppSettings()
 
-    nonisolated static let configURL = AppIdentity.current.configDirectory
+    nonisolated static let configURL = AppIdentity.configDirectory
         .appendingPathComponent("config.toml")
     private let settingsURL: URL
 

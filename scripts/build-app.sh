@@ -3,9 +3,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 case "${1:-}" in
-    stable) scheme=kero; configuration=Release; name=Kero ;;
-    dev) scheme=kero-dev; configuration=Debug; name='Kero Dev' ;;
-    *) echo '用法：bash scripts/build-app.sh stable|dev [local|adhoc|release]' >&2; exit 2 ;;
+    debug) configuration=Debug ;;
+    release) configuration=Release ;;
+    *) echo '用法：bash scripts/build-app.sh debug|release [local|adhoc|release]' >&2; exit 2 ;;
 esac
 
 signing=()
@@ -37,10 +37,11 @@ if [ -n "${KERO_VERSION:-}" ] || [ -n "${KERO_BUILD_NUMBER:-}" ]; then
     [[ "${KERO_BUILD_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] || exit 2
     version=("MARKETING_VERSION=$KERO_VERSION" "CURRENT_PROJECT_VERSION=$KERO_BUILD_NUMBER")
 fi
+
 bash scripts/prepare-ghostty.sh
-xcodebuild -project kero.xcodeproj -scheme "$scheme" -configuration "$configuration" \
+xcodebuild -project kero.xcodeproj -scheme kero -configuration "$configuration" \
     -destination 'platform=macOS,arch=arm64' \
     -derivedDataPath build/DerivedData -clonedSourcePackagesDirPath build/SourcePackages \
     -skipPackageUpdates -disableAutomaticPackageResolution \
     ${signing[@]+"${signing[@]}"} ${version[@]+"${version[@]}"} build
-codesign --verify --deep --strict "build/DerivedData/Build/Products/$configuration/$name.app"
+codesign --verify --deep --strict "build/DerivedData/Build/Products/$configuration/Kero.app"

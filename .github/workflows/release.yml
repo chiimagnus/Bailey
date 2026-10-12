@@ -57,13 +57,13 @@ jobs:
             -k "$password" "$SIGNING_KEYCHAIN"
           security list-keychains -d user -s "$SIGNING_KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
           python3 -c 'import os, pathlib; pathlib.Path(os.environ["RUNNER_TEMP"], "kero-signing.p12").unlink()'
-      - name: Build and verify stable archive
+      - name: Build and verify release archive
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           BUILD_NUMBER: ${{ github.run_number }}
         run: |
-          bash scripts/release-app.sh stable "${RELEASE_TAG#v}" "$BUILD_NUMBER"
-      - name: Publish stable archive
+          bash scripts/release-app.sh "${RELEASE_TAG#v}" "$BUILD_NUMBER"
+      - name: Publish release archive
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}

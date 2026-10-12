@@ -16,9 +16,9 @@
 	<!-- User-visible name. CFBundleName drives the app menu (bold menu next to
 	     the Apple menu); CFBundleDisplayName is what Finder/Dock show. -->
 	<key>CFBundleName</key>
-	<string>$(KERO_APP_NAME)</string>
+	<string>Kero</string>
 	<key>CFBundleDisplayName</key>
-	<string>$(KERO_APP_NAME)</string>
+	<string>Kero</string>
 
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
@@ -35,7 +35,7 @@
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
-				<string>Add Folder to $(KERO_APP_NAME)</string>
+				<string>Add Folder to Kero</string>
 			</dict>
 			<key>NSMessage</key>
 			<string>openInKero</string>

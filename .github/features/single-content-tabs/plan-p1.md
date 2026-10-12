@@ -26,7 +26,7 @@
 ### 验证与提交
 
 - bash scripts/check.sh session-snapshot dock-workspace。
-- 按 AGENTS 构建 kero-dev Debug 并严格校验签名。
+- 按 AGENTS 构建 kero Debug 并严格校验签名。
 - bash scripts/check.sh pane-retention workspace-identity；原生检查证明实际生命周期，不仅模型分支。
 - 核对菜单注册、全量源码和双语目录没有内部布局入口；签名 Debug 动态库的原生组件回归验证独立内容打开、编辑、停靠、重挂载及关闭。鼠标拖拽和正式包重启不作为已测结论；不操作正式实例。
 - 精确搜索旧类型、入口、回调、字符串与命令；rtk git diff --check；仅提交本任务生产/文档/测试变更。
