@@ -1,0 +1,19 @@
+name: Feature request
+description: Suggest an idea
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What should it do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why does it belong in Kero?
+      description: Kero is a terminal-first native macOS workspace for projects, Git, files, and SSH. Tell us how this improves that workflow.
+    validations:
+      required: true
