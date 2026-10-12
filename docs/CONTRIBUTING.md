@@ -142,20 +142,22 @@ xcrun swiftc -swift-version 5 -o build/check-tree-row-hit-testing \
 
 ## 真机验收
 
-代码改动须将签名 Debug 构建安装到 `/Applications/Kero.app`，检查受影响行为：
+代码改动须在真机用签名 Debug 检查受影响行为。默认安装到 `/Applications/Kero.app`；用户明确指定独立测试包时，只更新该包，不替换正式应用。
 
 1. 替换前确认没有会丢失的运行命令或未保存编辑，再正常退出 Kero。
 2. 安装并重新打开，确认原有项目、标签与终端布局恢复。
 3. 实际操作受影响路径，记录结果；不要把编译通过或事件发送成功当成验收通过。
 4. 删除临时应用、独立测试配置和安装备份。
 
-如果正式 Kero 正在运行不能中断的终端命令，可先用同一个签名 Debug 包独立验收：
+如果正式 Kero 正在运行不能中断的终端命令，或用户指定独立验收，可用同一个签名 Debug 包运行隔离模式：
 
 ```sh
 open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Kero.app" --args --isolated-ui-test
 ```
 
-该模式单独保存窗口和终端历史，不启动保存的 SSH 转发；字体、外观等全局设置仍可能共用，因此不要在隔离实例中修改设置。隔离验收不代替最终安装验收。
+独立包可从构建结果复制为 `build/Kero Test.app`，将 Info.plist 的 `CFBundleIdentifier` 改为 `sh.kero.test`，显示名和包名改为 `Kero Test`，再按原 entitlements 重新签名并校验。保留 `CFBundleExecutable` 和构建时的产品名，避免影响 SSH helper 或 SwiftPM 资源包；启动时仍传入 `--isolated-ui-test`。
+
+该模式单独保存窗口和终端历史，不启动保存的 SSH 转发；配置文件等全局设置仍可能共用，因此不要在隔离实例中修改设置。只有正式安装也属于本次授权范围时，才继续正式替换验收；不能把独立包验证说成正式包已安装。
 
 文件树改动要一起检查文件面板、Git 未提交、暂存和提交历史：
 
