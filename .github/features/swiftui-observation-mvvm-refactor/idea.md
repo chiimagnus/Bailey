@@ -65,6 +65,20 @@ Kero 已决定以 **MVVM + Observation** 为长期架构，但现有代码仍主
 5. **测试覆盖真实结果**：按阶段扩展或调整现有 XCTest，既断言状态，也验证真实副作用；最终完成 Debug／Release 构建与签名核验，并使用隔离 Debug 实例做原生交互验收。真实 SSH 只使用获授权的专用连接；无法覆盖的路径诚实列明。
 6. **代码与文档一次收敛**：迁移每块职责时立即删除其旧路径，及时更新相关 `docs/` 和 `AGENTS.md`；最终不存在一边维护 Observation、一边靠旧 Combine 状态链维持同一功能的双轨实现。
 
+## 执行前源码核查（2026-10-13）
+
+已对照当前 `AGENTS.md`、12 份维护文档、Xcode/CI 配置、74 个自有 Swift 文件的类型/调用入口及核心状态和原生后端实现，重新核实阶段任务，不引用历史 `audit*.md`。计划由 27 项减至 22 项，删除重复 Git Service、窗口级 Git 状态搬迁、无必要的隧道观察桥、FPS/指针独立任务、纯样式 API 扫荡和重复最终审计任务。
+
+- `GitStatusModel → GitCommandExecution → WorkspaceBackend` 已构成真实 MVVM/Service 链；`ContentView` 已在窗口范围持有唯一 Git 状态，**只需将其观察方式切换而非增加另一份 owner**（P3）。
+- `FileTreeModel/FileTab/TerminalSession/BrowserTab/DiffTab` 已分别持有长寿命状态，`SourceTextEditor/TerminalBackendSurface/BrowserWebView/DiffWebHostingView` 已负责必要原生桥接；优先复用原对象而非机械新建双层 ViewModel/Adapter（P3～P5）。
+- `GitPanel` 的本机文件指纹、SSH `stat`、待丢弃快照是实际越界的业务预检，移进现有 Git 状态所有者；`Project` 的关闭确认、`TerminalSession` 的原生剪贴板授权 UI、`TerminalManager` 的文件选择弹框则仅移动 UI 构造，不删除安全语义（P3～P5）。
+- 自动保存现依赖 `TerminalManager.objectWillChange` 广播，应按当前 `SessionSnapshot` **确实持久化的字段**触发；Git 刷新、每次命令状态、逐键编辑不能无端导致全量快照写盘（P1）。
+- 旧 Info 工具仅剩 `DockSavedItem.info` 和布局配置的解码/过滤分支，**P5-T1 与 Dock 迁移同时删除它们及旧版专用测试**，保持现行有效快照格式；其它用于现有用户数据或远端隔离的校验不按“围栏”误删。
+- `TunnelManager.$tunnels/$states` 被原生 NSTableView 消费，`BrowserTab.webView.publisher(for:)` 用于 WebKit KVO；均是与 UI 自有 `ObservableObject` 广播不同的**有效 Combine 事件桥**，不为完全清零 Combine 再引入另一套机制。
+- 本机 Xcode 27.0/Swift 6.4 已通过 macOS 15.6 目标的 Swift 6 严格模式最小 `@Observable + NSObject/WKNavigationDelegate + FocusedValues` 类型检查；但 CI/Release 锁定 **Xcode 26.6**，本机不具备该安装，P7 必须另行验证，不能以此原型代替完整 App 构建。
+
+所有替代任务在**同一 Task** 删除对应旧 Publisher、调用链、状态与兼容分支并验证，禁止积压到最后；规划期不提前修改正式 Swift 源码。
+
 ## 后续计划的边界
 
 本文件只确定**需求、架构目标、不可破坏的行为和验收要求**。实施拆分、源码锚点、验证步骤与各 Task 的即时旧代码清理见同目录 `plan-pX.md`；实时任务状态由 `todo.toml` 唯一维护。全面迁移前先核对 Swift 6 与 Observation 的实际编译和事件语义，不把假设当成既定实现。

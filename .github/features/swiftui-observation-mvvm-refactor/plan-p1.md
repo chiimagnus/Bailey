@@ -4,9 +4,9 @@
 
 **Non-goals：** 本阶段不批量改写所有 ObservableObject、不变更存储键/快照格式、不启动或重启正式 App；诊断性 Swift 6 编译不等于正式切换语言模式。
 
-**Approach：** 先复用 XCTest 和构建真源核对行为；沿 `TerminalManager → Project → PaneTab → 内容对象` 与 `DockWorkspaceModel` 找全当前快照实际记录的字段及触发事件。用现有窗口 owner 安排一次防抖写盘，持久化改变由**实际内容或布局变更**触发，而不是依赖任意 `objectWillChange` 重绘事件。
+**Approach：** 从当前 `SessionStore.SessionSnapshot`、`TerminalManager.makeWindowSnapshot` 和 `TerminalHistoryStore` 的**真实持久化字段**反推触发点。保留 `TerminalManager.saveAll/windowClosed` 唯一写入入口与 500ms 防抖，直接连接确实影响快照的业务更改；UI 刷新、Shell 每个 OSC 133 事件、编辑器逐键输入不等于快照内容改变，不能重复写盘。先以现有 XCTest 确定写盘/关闭状态，再做 Swift 6 诊断，不预造通用 Observer/事件总线。
 
-**Acceptance：** 基线和实际 Swift 6 诊断有记录；窗口/项目/标签/布局/网址/终端目录等已持久化字段改变会触发正确快照，结束运行和关闭最后窗口仍保存完整数据；`autosaveObservation = objectWillChange` 路径在本阶段已删除。
+**Acceptance：** baseline + 诊断具实际命令/退出码；项目/标签/布局/网址/工作目录的**已存字段**能正确写盘，关闭最后窗口/退出保留终端历史且无多窗口覆盖；普通 Git UI、OSC133 状态或逐键编辑不会无意义触发全窗口自动保存；本阶段已删除 `autosaveObservation = objectWillChange` 旧路径。
 
 **Rules：** 单一 `TerminalManager` 窗口 owner；`SessionStore` 的 `workspaceSnapshot` 格式与 `TerminalHistoryStore` 保持不变，历史内容与当前实时进程不能混淆；用户磁盘数据不参与测试。每个变更任务同提交移除对应旧路径。
 
@@ -34,9 +34,9 @@
 
 **根因：** 当前 `TerminalManager.autosaveObservation` 订阅 `objectWillChange.debounce(500ms)`，而此事件由 Project、Dock、Terminal、Browser、Tab 的 Combine 链转发；任意一层先改为 Observation 都可能漏存，同时旧事件在对象值改变前送出。
 
-**实现：** 从 `makeWindowSnapshot` 中的实际持久化字段反推最小变更源：项目名单／选中、项目元数据、标签及名称／上下文、Dock、终端目录、浏览器地址。保持窗口 manager 统一防抖写入及退出时强制冲刷；在拥有字段的变更入口向窗口 owner 发出明确的“需保存”信号，包含仍依赖框架事件的目录／网址变化，避免另建全局事件总线、镜像快照或重复可写状态。先接入所有实际来源、验证写盘，再**同 Task 删除旧 `autosaveObservation = objectWillChange`、重复写盘触发与无消费者分发代码**；尚供 UI 使用的 Combine 转发仅保留到其具体界面迁移任务，须有可核对的消费者。
+**实现：** 逐字段追踪 `makeWindowSnapshot`：项目名单/名称/目录/SSH host/选择、tabs 名称及 `contextSession`、Dock root、会话本机 cwd、FileTab 路径与编辑器光标/滚动、BrowserTab URL、DiffTab 的必要身份。实现一条由**实际影响已保存字段的修改入口**触发的窗口级 `requestSave`（500ms 合并，退出与最后窗口立即冲刷），让随后 P2～P5 的宏迁移继续复用它；不引入每属性永久回调、额外 global notification 或第二份快照真源。**明确排除**未被快照保存的 Git status、Shell 每次 OSC133 `commandLifecycle`、逐键的 `FileTab.text/isDirty`，而 `editorState` 改动本来不靠 `@Published` 逐帧保存，切换/关闭/最终冲刷仍须准确采集。静态 `saveAll` 是多窗口写入/退出最终保证，不能在普通 debounce 时误删 TerminalHistory sidecar。**同 Task 移除 `autosaveObservation = objectWillChange` 旧订阅、无用转发，不删仍供旧 SwiftUI UI 展示的订阅直到 P4/P5 具体替换。**
 
-**验证：** `make test ONLY_TESTING=KeroTests/SessionStoreTests`，补充变更触发／防抖／窗口关闭／最终历史冲刷的最小 XCTest（使用隔离或临时存储，绝不写真实快照）；按 `KeroTests/WorkspaceIdentityTests` 验证本机／远端同名目标没有串写。观察结果必须是读取**正确的实际序列化快照**，而非只检查触发计数；`make build` 并验签。
+**验证：** `make test ONLY_TESTING=KeroTests/SessionStoreTests` 并在此类增加最小真实窗口变更/500ms 合并/最后窗口及退出保存测试，校验 UserDefaults 的**最终序列化数据**；编辑器仅验证生命周期结束/布局改变会持久化正确光标状态，不要求逐键写盘；含 BrowserTab URL 和现行 Dock 结构；**旧 Info 工具的解码兼容将在 P5-T1 连同旧测试清除**，这里不新增或扩大旧 Info 恢复保证。必要时运行 WorkspaceIdentityTests。若测试构造终端会启动 PTY，使用 XCTest 原有隔离模式，不操作用户正在运行的 Session。`make build`。
 
 **提交：** 持久化语义事件接入、回归检查与旧自动保存订阅删除一起原子提交。
 

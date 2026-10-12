@@ -4,11 +4,11 @@
 
 **Non-goals：** 不重写 Ghostty、TextKit、Pierre/WebKit 内核，不切换远端 SSH 协议，不承诺跨进程恢复正在运行的 Shell 或网页表单。
 
-**Approach：** 首先迁移 remote connection 的生命周期事件，再转换依赖它的终端和各长寿命内容对象；每个任务**连同对应 View、PaneTab／Project 观察入口**一起改，替换的订阅在该任务清理。必须区分 `@Observable` 的展示／动作 ViewModel 与持有进程、原生 NSView／WKWebView／TextKit 的 runtime/service adapter；若现有类型混合两者，则在真实职责边界拆分，使用稳定一对一持有关系，不复制可写业务状态。用于 KVO、原生事件回调的适配可以继续存在。
+**Approach：** 沿当前 `RemoteConnection → TerminalSession → Project` 和 `PaneTab → FileTab/DiffTab/BrowserTab` 两条可达链迁移。已有 `TerminalBackendSurface`、`SourceTextEditor`、`BrowserWebView` 和 `DiffWebHostingView` 就是原生桥接，**不预设再创建一套 NativeAdapter/ViewModel 类**；先把真实展示状态改为 Observation，只在 NSAlert、原生 View 创建或底层 IO 确实越过职责时做针对性抽离。第三方 KVO/原生 delegate 是有效事件源，按消费者是否真实存在决定保留，禁止盲删。
 
 **Acceptance：** 已迁移内容对象在 Observation 下更新；拖动标签、项目切换和重挂载不重启 Shell、丢失表单、撤销、文本或滚动；远程断线、只读、恢复与转发无误，清理各对象原先的 UI 发布器和无用转发。
 
-**Rules：** `docs/TERMINAL.md`、`docs/EDITOR.md`、`docs/BROWSER.md`、`docs/PROJECTS.md`。native 视图由长生命周期身份持有；SwiftUI View 不拥有或重复创建这些实例。线程、WebKit delegate 与后台 SSH 事件必须按实际 actor 安全处理。
+**Rules：** `docs/TERMINAL.md`、`docs/EDITOR.md`、`docs/BROWSER.md`、`docs/PROJECTS.md`、`docs/SECURITY.md`。不复制 Native View，不改变 WebKit KVO/JS 对话框、Ghostty OSC 52 剪贴板授权、脏文件保存与 SSH 主机/路径身份。SwiftUI 的 Observation 与框架 callback 两种机制不能混为一谈。
 
 ---
 
@@ -19,7 +19,7 @@
 
 **当前依赖：** `PortForwardController` 订阅 `connection.$state` 后断开立即取消在途转发；`TerminalSession.remoteObservation` 转发 connection 的 `objectWillChange`，后续 Project 需要重绑文件／diff。直接移除 Publisher 将导致远端 UI 滞后或过期转发仍显示成功。
 
-**实现：** `RemoteConnection` 的状态改用 Observation，但断线取消、子连接更新应在**实际状态变更处**调用已有会话／转发 owner 的明确回调。保留 connection 的唯一身份、control socket、RemoteCommandRunner、连接重绑定语义和端口请求合并；检查 `WorkspaceBackend` 的 `Sendable` 边界。**同 Task 移除 `PortForwardController.stateObserver`、`RemoteConnection.@Published`、已被明确事件替换的 `TerminalSession.remoteObservation`，同时更新受影响的 View／Project 触发点**，不能留下假定 Combine 仍然会推送的订阅。TerminalSession 仍需保留的其他 legacy UI 发布机制留给紧接的 P4-T2 迁移，不能再基于被删除的连接 publisher。
+**实现：** `RemoteConnection` 的 `state/workingDirectory/shellProcessID` 换用 `@Observable`；UI 直接观察必要的嵌套字段。`PortForwardController.forgetAll` 必须由**现有 `RemoteConnection.markDisconnected` 的真实断线事件**直接触发，保留相同连接上并发转发只占一个请求的逻辑，不创建新的事件中心或两份状态。`TerminalSession` 与 Project 的远端重绑在连接变化时使用原有一条 `scheduleRemoteTabRebind` 入口，不能依赖被移除的 `connection.objectWillChange`。已全局核对 **`PortForwardController.localPortsByRemote` 没有 UI `@ObservedObject` 或 `$localPortsByRemote` 消费者**，它只由 controller 的 `forward/forgetAll` 读写；因此保留普通私有字典即可，**同 Task 删除整个 `PortForwardController: ObservableObject`、它的 `@Published`、`stateObserver`、`RemoteConnection.@Published`、旧 `remoteObservation` 和无消费者转发**。不要为了全局“统一 Observation”反过来给无观察用途的 Controller 加宏。`TerminalSession` 自有展示发布机制由 P4-T2 改造。`RemoteCommandRunner`、control socket、跨 SSH host identity 与 `WorkspaceBackend: Sendable` 保持原样，暂不改进程 runner。
 
 **验证：** `make test ONLY_TESTING=KeroTests/RemoteLifetimeTests`、`make test ONLY_TESTING=KeroTests/RemoteCommandsTests`、`make test ONLY_TESTING=KeroTests/WorkspaceIdentityTests`；覆盖断线发生在 `forward` 等待期间、重复并发请求、旧连接复活不可回写新机器、同主机不同端口身份。受控测试不接触用户 SSH master；`make build` 并验签。
 
@@ -30,11 +30,11 @@
 <a id="p4-t2"></a>
 ## P4-T2 终端会话和查找条的 Observation／原生事件桥
 
-**Files／锚点：** `kero/Terminal/TerminalSession.swift::TerminalSession`、`kero/Terminal/TerminalFind.swift::TerminalFind`、`kero/Terminal/TerminalFindBar.swift`、`kero/Terminal/TerminalHostView.swift`、`kero/Terminal/KeroTerminalView+Ghostty.swift`、`kero/Workspace/Project.swift::sessionObservations/scheduleRemoteTabRebind`、`kero/UI/Components/WorkspaceChrome.swift`、`KeroTests/PaneRetentionTests.swift`。
+**Files／锚点：** `kero/Terminal/TerminalSession.swift::TerminalSession/terminalDidRequestClipboardConfirmation/clipboardPreview`、`kero/Terminal/TerminalFind.swift::TerminalFind`、`kero/Terminal/TerminalFindBar.swift`、`kero/Terminal/TerminalHostView.swift`、`kero/Terminal/KeroTerminalView+Ghostty.swift`、`kero/Terminal/TerminalSurface.swift::TerminalBackendEvents/TerminalClipboardRequest`、`kero/Workspace/Project.swift::sessionObservations/scheduleRemoteTabRebind`、`kero/UI/Components/WorkspaceChrome.swift`、`KeroTests/PaneRetentionTests.swift`。
 
 **当前依赖：** Shell 进程、原生 surface、历史、查找及 SSH 事件由长生命周期 `TerminalSession` 所有；Project 借 `session.objectWillChange` 更新标题和远端重绑，ContentView／工具面板通过完成序列刷新 Git/Files。
 
-**实现：** 保留 `TerminalSession` 当前长期进程与 `TerminalBackendSurface` 实际拥有的 Shell、NSView 和事件代理身份。沿生命周期边界决定：若 `TerminalSession` 作为 ViewModel，则把具体 native 创建／IO 委托给现有 surface/service 并仅持有展示状态；若仍承担 native runtime，则建立由同一 session 稳定持有、具有真实状态与动作职责的 `@Observable` 展示 ViewModel，不能把混合类直接改宏就称作 MVVM。用户可见标题、命令完成、连接状态单一归属且通过真实观察或语义事件供 Project／面板读取，不维护双份可写值；`TerminalFind` 同步迁移，重复聚焦与异步匹配保留 sequence/generation。**同 Task 删除被替换的 `TerminalSession/TerminalFind.@Published`、对应 View 的 `@ObservedObject` 与 `Project.sessionObservations` 旧订阅路径**，确保 P1 保存不依赖旧 Publisher。
+**实现：** `TerminalSession` 已持有唯一 Ghostty `TerminalBackendSurface`（现成 service/adapter）及完整 `TerminalBackendEvents` 回调，不新建终端 runtime wrapper。改用 Observation 暴露标题、目录、命令完成、SSH 位置与 `TerminalFind`，并确认在 View 中读取嵌套可观察字段时能实际刷新，保持原生 surface、PTY、滚动和进程不动。`TerminalSession.init` 中实际创建 `KeroTerminalView` 的工作可以移到已有 surface 的最小工厂入口；`terminalDidRequestClipboardConfirmation` 中的 `NSAlert`/预览创建应委托给窗口/AppKit UI 桥接，回调中的 `approve/deny` 原样保留，**不能移动确认到纯 ViewModel 或取消 OSC 52 防护**。只针对这两个职责越界处抽出实际 UI/native 代码，不增加并行 Session 或双份标题。`TerminalFind` 直接改 `@Observable`，重复焦点、延迟首个命中和恢复 responder 保持。**同 Task 删除 `TerminalSession/TerminalFind.@Published`、对应旧 View wrapper 和已不再需要的 `Project.sessionObservations`，并让 P1 快照保存独立于旧 Publisher**。
 
 **验证：** `make test ONLY_TESTING=KeroTests/PaneRetentionTests`、`make test ONLY_TESTING=KeroTests/RemoteLifetimeTests`；新增或调整终端标题、命令完成事件、查找请求与远端断开恢复的最小测试。隔离原生检查停车宿主拖动后 Shell PID 和输入可用、通知跳转、⌘F 重复聚焦及选择不丢失；`make build`。
 
@@ -49,7 +49,7 @@
 
 **当前依赖：** `FileTab` 持有编辑文本、保存基线和原生编辑视图；`text` 刻意不逐键发布，`isDirty` 变化却通过 `PaneTab.dirtyObservation` 驱动标签和保存按钮。旧读取不允许覆盖编辑中的缓冲区。
 
-**实现：** 保留唯一长生命周期编辑会话／TextKit 视图；真实内容、基线、dirty、只读、saveError、reloadRevision 等展示与操作状态由 `@Observable` ViewModel 单独负责，底层 IO 走 `WorkspaceBackend`，原生编辑视图的创建／拖动预览指针留在 TextKit UI adapter，不让 ViewModel 持有或构建 NSView。可直接收敛 `FileTab` 的职责，若必须保留它为 native adapter 则由同一个标签稳定持有 ViewModel，禁止双份可写缓冲区；逐键编辑不使整个窗口重绘。读取／写入按发起路径、机器、代次校验。PaneTab／工作区**直接消费可观察 dirty 状态或接收语义通知**，不再依赖 `file.$isDirty`。**同 Task 删除 FileTab 旧发布属性、编辑 UI 的旧观察包装器、ViewModel 中不应出现的原生视图引用和 PaneTab 对 FileTab 的旧 Combine 订阅**。失败保存和关闭提示保留，不能在关闭前丢缓冲区。
+**实现：** `FileTab` **已经是长生命周期的文件展示状态与操作 owner**，`SourceTextEditor`/`STTextView` 已单独负责 Native View 创建，`FileTab.editorView` 只是用于 Dock 拖动预览的**弱引用**，无须另拆 `FileViewModel + Adapter`，更不能复制 text/baseline。`FileTab` 原类型改 `@Observable`，`path/isDirty/saveError/readOnlyReason/reloadRevision` 直接响应；`text`/`editorState` 可依原本低频 UI 消费方式采用 `@ObservationIgnored`，逐键写入不重绘整个窗口。真实读写保持在既有 `WorkspaceBackend`；缓存原工作区和 generation，避免重命名、写中继续编辑或断线后旧读覆盖新内容。`PaneTab`/工作区直接读取 dirty，**同 Task 删除 `FileTab.@Published`、`FileViewerView.@ObservedObject` 及 `PaneTab.dirtyObservation` 对 FileTab 的旧订阅**，不误删 DiffTab 尚未迁移的源。
 
 **验证：** `make test ONLY_TESTING=KeroTests/PaneRetentionTests`、`make test ONLY_TESTING=KeroTests/WorkspaceIdentityTests`；补脏标记转清、写中二次编辑、重命名后写新路径、断线只读、旧读取丢弃与保存失败不关闭。隔离原生检查 UTF-8／emoji／CRLF、撤销、查找、光标滚动；`make build`。
 
@@ -64,7 +64,7 @@
 
 **当前依赖：** `DiffTab` 保留 repo、机器、提交元数据和可编辑工作区 diff；`DiffWebModel` 驱动独立渲染，`webHostView` 长期持有 WebKit 容器，`PaneTab` 通过 `diff.$isDirty` 显示编辑标记。
 
-**实现：** 将差异内容、编辑标记、加载／错误等展示与业务动作交给唯一 `@Observable` ViewModel，Git 字节读取交给 P3 的真实 Git service／`WorkspaceBackend`；`DiffWebModel`／`webHostView` 承载的原生 WebKit 生命周期属于长期 native adapter，而非纯 Model 或 ViewModel。若拆分 `DiffTab`，保留原标签身份，并由其稳定持有 native adapter 与 ViewModel；可观察状态只由 ViewModel 一方写入，WebKit 的编辑回调仅做输入通知。保留按机器重绑、脏缓冲保护、渲染局部更新与完整 WKWebView 身份，不能因每次内容编辑重造渲染器。**同 Task 删除 DiffTab／DiffWebModel／DiffViewPreferences 被替换的 ObservableObject／@Published、DiffViewerView 旧包装器，以及 PaneTab 对 DiffTab 的旧 dirty Publisher**，不保留两套渲染状态。
+**实现：** `DiffTab` 已经唯一负责 diff 的 repo/路径/机器、加载、编辑/保存与错误；`DiffWebModel` 是长期 `DiffWebHostingView` 真正消费的**渲染输入状态**，两者本来职责不同，不能为了“只剩一个 Observable”就合并并触发 WebKit 全量渲染。对各自的现有 UI 状态改 `@Observable`，保留 `DiffWebHostingView` 一份真实实例与 `DiffViewPreferences.shared` 唯一 UserDefaults 状态。Git 读取继续走现有 `GitCommandExecution`／`WorkspaceBackend`，**不存在需要引入的 P3 Git Service**。真正的原生创建 `DiffTab.materializeWebHostView` 只在具体创建边界移给现有 host adapter（如保持长寿命身份可在同任务完成），无需额外包装类。仍须避免逐键改 `DiffWebModel.newContent` 触发丢失 undo，保留 editing buffer 与 saved baseline 的当前职责分工。**同 Task 删除被替换的 `@Published`、`@ObservedObject`、PaneTab 的 Diff 旧 dirty publisher、无消费者通知；不会删除真实 WebKit 局部渲染所需桥接。**
 
 **验证：** 更新的 Git XCTest、`make test ONLY_TESTING=KeroTests/PaneRetentionTests`、`make test ONLY_TESTING=KeroTests/WorkspaceIdentityTests`；工作区／暂存／历史、UTF-8/二进制/5MiB 限制、未保存 diff、断线重连。隔离原生验证 WKWebView 真实首屏、滚动、diff 编辑/保存、切换后重新显示；`make build`。
 
@@ -77,9 +77,9 @@
 
 **Files／锚点：** `kero/Browser/BrowserView.swift::BrowserTab/BrowserView/BrowserWebView`、`kero/Workspace/Project.swift::browserObservations`、`kero/UI/Components/WorkspaceChrome.swift`、`KeroTests/PaneRetentionTests.swift`。
 
-**当前依赖：** `BrowserTab` 同时是 `NSObject`／`WKNavigationDelegate` 和持久 WKWebView owner；网页标题、地址、前进后退与 favicon 当前以 `@Published` 驱动，Project 还监听 `objectWillChange` 以便保存网址。
+**当前依赖：** BrowserTab 同时是浏览器标签的唯一生命周期 owner 和 WKNavigationDelegate；`webView.publisher(for:)` 读取 WebKit **KVO 事件**，原 `@Published` 则供 SwiftUI 展示和 Project 的 `objectWillChange` 中继，两者用途不同。
 
-**实现：** 将 `BrowserTab` 的 WebView 持有、`NSObject`／`WKNavigationDelegate`／KVO 回调划为长寿命原生 adapter，把导航标题、URL、前后退、加载、图标、焦点请求等**展示状态与动作**划为同一标签稳定持有的 `@Observable` ViewModel；是否需要物理拆分为两个类由当前 delegate 与宏兼容性及真实职责决定，但不允许一个单纯改宏的混合 native 对象冒充已完成 MVVM。KVO／delegate 将结果投递给唯一可写 presentation 状态，页面本身只由既有 WKWebView 持有，不镜像网页状态；保留 `BrowserWebView` 实例、delegate 和原生交互。导航变化按 P1 的语义保存路径发出。**同 Task 移除 `BrowserTab.@Published`、Project 中已失效的 `browserObservations` 和 Browser View 的旧 `@ObservedObject`**，不误删实际需要的 WebKit KVO。
+**实现：** 已用本机 Swift 6.4／Xcode 27 最小编译验证：`@Observable final class X: NSObject, WKNavigationDelegate` **可以直接通过类型检查**，不需为宏兼容先新增 BrowserNativeAdapter 和重复 ViewModel。沿现有 BrowserTab（唯一页面身份/命令 owner）改 `@Observable`，页面本身仍只由 `BrowserWebView` 实例持有。`webView.publisher(for: \.url/title/isLoading/...)` 属于**真实 WebKit KVO 输入事件**，不是自有 UI 状态广播；保留必要 KVO，更新唯一可观察展示字段，禁止额外封装新的 WKWebView/Delegate 副本。WebKit JS alert/confirm/prompt 的 `WKUIDelegate` 必须如实回调，不能为了消灭 NSAlert 无谓迁移。导航 URL 变化必须继续触发 P1 自动保存；**同 Task 只删除 `BrowserTab.@Published`、Project 中不再有消费者的 `browserObservations` 和 UI `@ObservedObject`，保留仍运行的 KVO/Delegate。**
 
 **验证：** `make test ONLY_TESTING=KeroTests/PaneRetentionTests`；本地临时 HTML（不上传私人内容）验证前进／后退、网址和标题变化、页面表单、滚动、favicon、重挂载和项目快照网址。隔离原生校验新标签、⌘L 聚焦与历史；`make build`。
 

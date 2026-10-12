@@ -4,7 +4,7 @@
 
 **Non-goals：** 不修改 Git 语义、目录显示规则或新增 Git 功能；不以本阶段为由迁移整个窗口／终端；没有可验证收益不重写 Git 执行器。
 
-**Approach：** 先完成文件树的独立状态与 UI，再以“查询、写操作、确认”三个已经存在的职责边界收敛 Git。已有 `WorkspaceBackend`、`GitCommandExecution`、`TreeDisplayModel` 是唯一复用起点；若确需新增 Git service 只承载实际 IO，不制造空协议或第二个 runner。每个 Task 自带接入与旧代码删除。
+**Approach：** 先迁移现有 `FileTreeModel`（已有 WorkspaceBackend 执行 IO），再迁移已具备完整 Git 业务编排的 `GitStatusModel`，最后把 GitPanel 真正越界的本机/远端文件指纹预检移入该模型。`GitCommandExecution`、`WorkspaceBackend` 和 `TreeDisplayModel` 已是足够的真实分层，**不新增 Git Service、Repository 协议或第二套执行器**。仅删除已被直接替代的代码，不因类名含 Model 就重命名所有文件。
 
 **Acceptance：** Files/Git 在 Observation 下直接更新，rename/new/delete、Git refresh、stage/unstage、commit、discard、diff、提交历史和同名仓库身份行为不变；原本混在 View 中的底层文件系统访问与 Git 安全校验已迁走；共享树仍只有一套。
 
@@ -19,9 +19,9 @@
 
 **当前问题：** `FileTreeModel` 虽是状态与动作持有者，却把后台 Workspace IO、错误原生弹窗和 `@Published` 混在一起；`FileTreePanel` 依赖 `@ObservedObject`。
 
-**实现：** 明确它是视图模型，可按真实命名需要统一为 `FileTreeViewModel`；域树 `TreeDisplayModel` 保持纯数据和唯一共用。转换 `@Observable`、用 `@State`／`@Bindable`／直接读取更新 Files 视图；后端 IO 继续走已有 `WorkspaceBackend`，在 ViewModel 记录操作错误并由 View 负责实际对话框，不让 VM 调 `NSAlert`。保持 `sync` 的机器与根目录作用域、`rebuildPending` 单路合并及 rename/创建失败的真实结果。**同 Task 删除旧模型类型与 `@Published`、视图旧包装器和 `presentError` 中的 UI 调用**；不留下同名兼容转发类。
+**实现：** `FileTreeModel` 已是文件树展示与动作的唯一 ViewModel，**保留名称和现有职责**，使用 `@Observable`，View 直接读取属性、绑定时才用 `@Bindable`。其真实文件 IO 本就委托给 `WorkspaceBackend`，不再增设文件 Service；仅把 `presentError` 里直接创建 `NSAlert` 的界面工作委托给**所属窗口稳定存在的 UI presenter**（优先复用 P5 计划的窗口原生对话框入口），ViewModel 负责产出单个操作错误，View／窗口展示它；**不能只依赖 `FileTreePanel` 挂载**，因为 ⌘N、命令面板或外层标签工具栏也可在 Files 面板未显示时执行文件操作。保留远端删除由 View 向用户确认。保持 `sync` 的机器/根目录作用域、`rebuildPending` 合并，以及创建、重命名后的实际文件结果。**本 Task 同时删除 `FileTreeModel.@Published`、旧 `@ObservedObject`、VM 内旧 `NSAlert`/`AppKit` 引用与对应 Combine import**，不留兼容别名。
 
-**验证：** `make test ONLY_TESTING=KeroTests/FileTreeTests`、`make test ONLY_TESTING=KeroTests/PanelContextTests`、`make test ONLY_TESTING=KeroTests/TreeRowHitTestingTests`，必要处补错误／取消后 View 更新测试；`make build`、隔离 UI 中大目录、压缩树和内联重命名。验证结果为实际文件创建／更名／删除，而不只检查视图状态。
+**验证：** `make test ONLY_TESTING=KeroTests/FileTreeTests`、`make test ONLY_TESTING=KeroTests/PanelContextTests`、`make test ONLY_TESTING=KeroTests/TreeRowHitTestingTests`，必要处补从 Files 面板可见和隐藏的两个命令入口出错时都确实能展示错误、取消不改盘的测试；`make build`、隔离 UI 中大目录、压缩树和内联重命名。验证结果为实际文件创建／更名／删除，而不只检查视图状态。
 
 **提交：** 新状态与真实操作、视图绑定、旧实现删除和测试一次提交。
 
@@ -32,39 +32,24 @@
 
 **Files／锚点：** `kero/Git/GitStatusModel.swift::GitStatusModel.sync/refresh/loadMoreCommits`；`kero/UI/ContentView.swift::git`、`kero/UI/Panels/ToolPanelView.swift`、`kero/Git/GitPanel.swift`、`kero/Git/RecentCommitsView.swift`、`kero/UI/Components/BottomToolbarView.swift`、`kero/Files/FileTreePanel.swift`；`KeroTests/GitStatusModelTests.swift`。
 
-**当前问题：** 窗口级 Git 状态目前由临时 `ContentView.@StateObject` 持有，多个 UI 通过 `@ObservedObject` 消费；仓库身份、刷新批次、折叠与草稿状态在一个混合类里。全链路迁移必须保持**窗口级唯一持有者**，并保护在途刷新不会覆盖操作后的状态。
+**当前事实：** Git 业务状态已由 `ContentView.@StateObject git` 在每个 WindowRoot 下持有，**不是多个 View 的临时状态**；Git 命令通过 `GitCommandExecution` 调用 `WorkspaceBackend`，`GitStatusModel` 只负责编排命令与更新展示状态。`statusRequestID/contextGeneration/refreshPending` 防止旧结果覆盖新仓库，必须保留。
 
-**实现：** 让既有 Git presentation owner 成为 `@Observable` ViewModel（若重命名为 `GitViewModel`，同 Task 改完所有引用和测试，无旧类 alias），纯 Git 数据类型可留在同一文件或按确有职责边界移动。窗口唯一 owner 不再放在短生命周期 `ContentView`；用现有 `TerminalManager` 窗口实例持有该状态并从 UI 读取，供 P5 正式窗口 MVVM 收敛。查询仍复用现有 Git 执行通路，保留 `contextGeneration`、`statusRequestID`、`refreshPending`、`cachedStatusByRoot`、远端批量请求以及最近提交分页。**移除所有已迁移 Git 视图的 `@ObservedObject`／`@Published` 和废弃状态别名，不复制第二份 Git 状态。**
+**实现：** `GitStatusModel` 直接作为窗口作用域的 `@Observable` ViewModel，保留名称；由 `ContentView.@State` 稳定拥有（由 WindowRoot 安装），不要**无理由搬进 `TerminalManager`**，否则 Git 与窗口/恢复层反而耦合。读取、stage/unstage/commit/discard/fetch/pull/push 的命令顺序与 UI 结果仍通过已有 `GitCommandExecution` 和 `WorkspaceBackend`，不另做一层 Git Service；保留 `contextGeneration/statusRequestID/refreshPending/cachedStatusByRoot`、远端批处理、最近提交分页、仓库作用域的草稿和变更独占。同步更换 GitPanel、Files 装饰、工具栏、历史的直接数据读取；**在同 Task 删除全部 Git `@Published` 与相应 View 的 `@ObservedObject`/Combine import，不建立第二份 Git 状态**。纯 Git 解析结构只在确实与 UI 混用时小范围移动，不做无意义的重命名/分文件。
 
-**验证：** 更新后的 Git XCTest（原 `KeroTests/GitStatusModelTests.swift`），`KeroTests/GitExecutionTests.swift`、`KeroTests/WorkspaceIdentityTests.swift`；补在途刷新、提交后事件、仓库切换和无 HEAD 仓库的结果检验。验证内容包括仓库字节、真实索引／工作区状态与历史分页；`make build`。
+**验证：** `make test ONLY_TESTING=KeroTests/GitStatusModelTests` 与 `make test ONLY_TESTING=KeroTests/GitExecutionTests`，视影响复用 WorkspaceIdentityTests；临时真实 Git 仓库覆盖 stage/unstage/commit/撤销/初始无 HEAD、切仓库、在途刷新、草稿隔离和历史分页，检查实际 index/worktree/HEAD，而非只观察 `isBusy`。窗口内 Files 状态颜色和 Git 工具栏同步更新；此任务边界完成后 `make build`。
 
-**提交：** Git 窗口 owner、观察方式、所有消费者同步迁移及旧 UI 状态接线清除。
+**提交：** Git 状态迁移、所有真实消费者接入、旧 Publisher/包装器删除和实际 Git 操作测试一并提交。
 
 ---
 
 <a id="p3-t3"></a>
-## P3-T3 将 Git 变更操作与执行副作用收敛到既有服务边界
+## P3-T3 把 GitPanel 的丢弃预检移出 View 并保留交互确认
 
-**Files／锚点：** `kero/Git/GitStatusModel.swift::stage/unstage/discardChanges/commit/fetch/pull/push`（重命名后使用新 ViewModel 文件）、`kero/Git/GitCommandExecution.swift`、`kero/Workspace/WorkspaceBackend.swift::run`、`kero/Remote/SSHWorkspaceBackend.swift`、相关 Git XCTest。
+**Files／锚点：** `kero/Git/GitPanel.swift::FileFingerprint/PendingDiscard/makePendingDiscard/discardSnapshotIsCurrent/fileFingerprint/remotePendingDiscard/remoteDiscardSnapshotIsCurrent/prepareRemoteDiscard`、`kero/Git/GitStatusModel.swift::discard/discardChanges/perform/trash`、`kero/Workspace/WorkspaceBackend.swift::stat/readSymlinkDestination`、`KeroTests/GitStatusModelTests.swift`、`KeroTests/WorkspaceIdentityTests.swift`。
 
-**当前问题：** 现有状态类直接编排底层 Git 读写与进程执行，UI 动作、错误和运行状态耦合；不能因为换用 Observation 就继续把低层 IO 留在 ViewModel 内。
+**当前问题：** `GitPanel` 在 View 内执行 `FileManager` 指纹读取与 `WorkspaceBackend.stat` 远端预检；`PendingDiscard` 包含 HEAD、scope、指纹等业务核对，而 View 持有一次弹框的本地 `@State` 本身合理。`GitPanel` 里的创建分支 `NSAlert` 是正常 UI 呈现，不是需要迁走的业务 IO。
 
-**实现：** ViewModel 负责用户动作、状态、业务命令顺序和异常呈现；需要 IO 的路径委托现有 `GitCommandExecution`／`WorkspaceBackend`，如果现有接口不足只在真实共同执行处补一个具体 Git service，不能复制进程 runner 或为唯一实现造 protocol。迁出原底层调用时**同 Task 删除原 ViewModel 中被替换的 IO 分支**；保留本机 login-shell PATH 获取、argv/literal pathspec、二进制和 NUL 解析、限流、超时、锁与重试边界，以及远端语义。写前重新验证机器、仓库、HEAD、路径、操作独占与请求代次，成功后刷新，失败保留草稿与可读的输出。
-
-**验证：** `make test ONLY_TESTING=KeroTests/GitExecutionTests`、更新后的 Git XCTest；用临时真实仓库验证 stage、unstage、首次提交、重命名、discard、超时、commit 期间改草稿、错误输出和切仓库；不能通过“命令发出”代替 Git 实际结果。执行后 `make build` 并验签。
-
-**提交：** Git IO 收敛、旧执行路径删除、测试同一次提交。
-
----
-
-<a id="p3-t4"></a>
-## P3-T4 把 GitPanel 的丢弃预检移出 View 并保留交互确认
-
-**Files／锚点：** `kero/Git/GitPanel.swift::FileFingerprint/PendingDiscard/makePendingDiscard/discardSnapshotIsCurrent/fileFingerprint/remotePendingDiscard/remoteDiscardSnapshotIsCurrent/prepareRemoteDiscard`；当前 Git ViewModel／`WorkspaceBackend`；`kero/Git/RecentCommitsView.swift`、相关 Git XCTest。
-
-**当前问题：** `GitPanel` 自己读取本机元数据、向远端发 stat，并在异步准备过程中生成待丢弃快照；`NSAlert` 仍在 View。把所有这些都留在 View 会违反 MVVM，直接移动弹框到 VM 又违反 UI 边界。
-
-**实现：** 把指纹、目录和历史状态防护放到 Git ViewModel／既有文件后端，呈现可供 View 消费的待确认操作与忙碌／失败状态；View 只负责显示确认、取消及把确认结果回传。按准备时的机器／仓库／HEAD／文件指纹在**执行前**再校验，不允许切仓库后确认旧动作；保留本机垃圾篓与远端彻底删除的不同提示。**同 Task 从 GitPanel 删除 `FileFingerprint`、`PendingDiscard` 的业务计算、`FileManager.stat`／远端 IO、旧 loading 状态和重复检查**；与 `RecentCommitsView` 共用的树行不复制。
+**实现：** 把 `FileFingerprint`、本机/远端 `PendingDiscard` 构建和**确认前重新校验**归入现有 GitStatusModel（使用已有 `WorkspaceBackend.stat/readSymlinkDestination` 或就地必需的本机元数据 API）；UI 的 `@State` 只保留弹框显示、过滤、展开等纯展示事实，不再持有一套业务校验算法，也不额外制造 `GitDiscardService`。用户确认时由 View 将已审核快照交回 Git Model，后者复验同一机器／仓库／HEAD／路径／指纹并执行；不能只检查 View 当前状态或先验证、挂起后切库又执行。**同 Task 删除 GitPanel 原有 `fileFingerprint/remoteFingerprint/makePendingDiscard/discardSnapshotIsCurrent/remoteDiscardSnapshotIsCurrent` 等 IO 与检查方法**，与 Git Model 原有 HEAD/仓库验证复用而非堆叠重复围栏。保留 Git 分支创建弹框和 remote 永久删除/本机移废纸篓两种确认说明。
 
 **验证：** 更新的 Git XCTest 与 `KeroTests/TreeRowHitTestingTests.swift`；含等待确认时目标变化、远端连接失效、未跟踪文件／符号链接和取消无副作用；必要时隔离原生确认框检查，`make build`。用户不授权时不触碰真实工作树。
 
@@ -74,4 +59,4 @@
 
 ## 阶段完成门槛
 
-Files 和 Git 不再由短生命周期 View 直接执行后台文件／Git IO；状态仅有一份，UI 与命令路径都使用新 owner。所有旧代码清理随对应 T1～T4 即时完成，不留“最后统一清理”的任务。
+Files 和 Git 不再由短生命周期 View 执行低层文件/Git IO；两者沿用现有 Model/ViewModel 与 Backend/Execution，**不增加新的 Git Service 或窗口级 Git 镜像状态**。旧实现分别在 P3-T1、T2、T3 接替时即删，不留“最后清理”。
