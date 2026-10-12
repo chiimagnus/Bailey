@@ -78,7 +78,7 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         launchCommand: String? = nil
     ) {
         let sessionID = UUID()
-        let shellPath = Self.loginShell()
+        let shellPath = LocalWorkspaceBackend.loginShell
         let directory = Self.validWorkingDirectory(initialDirectory)
         let artifacts = Self.makeLaunchArtifacts(restoredHistory: restoredHistory)
         let environment = Self.surfaceEnvironment(sessionID: sessionID, shellPath: shellPath)
@@ -696,13 +696,6 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         return NSHomeDirectory()
     }
 
-    private static func loginShell() -> String {
-        if let pw = getpwuid(getuid()), let shell = pw.pointee.pw_shell {
-            let path = String(cString: shell)
-            if !path.isEmpty { return path }
-        }
-        return ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-    }
 }
 
 // MARK: - Terminal surface callbacks

@@ -284,6 +284,16 @@
         }
       }
     },
+    "Could not load the login shell environment. Check your shell startup files and restart Kero." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载登录 shell 的环境。请检查 shell 启动配置，然后重启 Kero。"
+          }
+        }
+      }
+    },
     "Could not save: %@" : {
       "localizations" : {
         "zh-Hans" : {

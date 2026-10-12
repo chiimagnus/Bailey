@@ -185,6 +185,14 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
 
     // MARK: - Processes
 
+    static let loginShell: String = {
+        if let pw = getpwuid(getuid()), let shell = pw.pointee.pw_shell {
+            let path = String(cString: shell)
+            if !path.isEmpty { return path }
+        }
+        return ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+    }()
+
     func run(
         argv: [String], cwd: String?, env: [String: String]?,
         stdin: Data?, timeout: TimeInterval?

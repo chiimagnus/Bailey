@@ -2,8 +2,39 @@ import Darwin
 import Foundation
 
 nonisolated enum GitCommandExecution {
+    private static let localEnvironment = loadLoginEnvironment()
+
     private final class PipeData: @unchecked Sendable {
         var value = Data()
+    }
+
+    static func loadLoginEnvironment(
+        shell: String = LocalWorkspaceBackend.loginShell,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        timeout: TimeInterval = 5
+    ) -> (status: Int32, values: [String: String], stderr: String) {
+        let marker = "\0kero-git-\(UUID().uuidString)\0"
+        let result = runProcess(
+            ["-ilc", "/usr/bin/printf '\\0\(marker.dropFirst().dropLast())\\0'; exec /usr/bin/env -0"],
+            executable: shell, in: NSHomeDirectory(), environment: environment,
+            timeout: timeout, stdoutLimit: 1024 * 1024 + 1
+        )
+        let error = String(localized: "Could not load the login shell environment. Check your shell startup files and restart Kero.", table: "Git")
+        guard result.status == 0,
+              result.stdout.count <= 1024 * 1024,
+              let range = result.stdout.range(of: Data(marker.utf8)),
+              result.stdout.last == 0 else {
+            let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (result.status == 0 ? -1 : result.status, [:], detail.isEmpty ? error : error + "\n" + detail)
+        }
+        var values: [String: String] = [:]
+        for entry in result.stdout[range.upperBound...].split(separator: 0) {
+            let parts = String(decoding: entry, as: UTF8.self).split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2, !parts[0].isEmpty else { return (-1, [:], error) }
+            values[String(parts[0])] = String(parts[1])
+        }
+        guard let path = values["PATH"], !path.isEmpty else { return (-1, [:], error) }
+        return (0, values, "")
     }
 
     /// Runs Git while draining stdout and stderr concurrently. Dedicated
@@ -15,19 +46,32 @@ nonisolated enum GitCommandExecution {
         stdoutLimit: Int? = nil
     ) -> (status: Int32, stdout: Data, stderr: String) {
         precondition(stdoutLimit == nil || stdoutLimit! >= 0)
+        let started = ProcessInfo.processInfo.systemUptime
+        let resolved = localEnvironment
+        guard resolved.status == 0 else { return (resolved.status, Data(), resolved.stderr) }
+        let remaining = timeout.map { $0 - (ProcessInfo.processInfo.systemUptime - started) }
+        if let remaining, remaining <= 0 {
+            return (-2, Data(), String(localized: "Git did not respond in time.", table: "Git"))
+        }
+        var env = resolved.values
+        env["GIT_OPTIONAL_LOCKS"] = "0"
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["LC_ALL"] = "C"
+        return runProcess(
+            ["git"] + args, executable: "/usr/bin/env", in: dir,
+            environment: env, timeout: remaining, stdoutLimit: stdoutLimit
+        )
+    }
+
+    private static func runProcess(
+        _ args: [String], executable: String, in dir: String,
+        environment: [String: String], timeout: TimeInterval?, stdoutLimit: Int?
+    ) -> (status: Int32, stdout: Data, stderr: String) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = args
         process.currentDirectoryURL = URL(fileURLWithPath: dir, isDirectory: true)
-        var env = ProcessInfo.processInfo.environment
-        env["GIT_OPTIONAL_LOCKS"] = "0"
-        // Fail rather than hanging on a credential prompt behind the app.
-        env["GIT_TERMINAL_PROMPT"] = "0"
-        // Git diagnostics are parsed only to distinguish an ordinary folder
-        // from a broken repository. Pinning the locale makes that safe and
-        // also keeps relative dates stable in the compact history list.
-        env["LC_ALL"] = "C"
-        process.environment = env
+        process.environment = environment
 
         let stdout = Pipe()
         let stderr = Pipe()
