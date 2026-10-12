@@ -79,11 +79,15 @@ nonisolated enum GitCommandExecution {
         stderrReader.start()
         var timedOut = false
         if let timeout {
-            timedOut = processExited.wait(timeout: .now() + timeout) == .timedOut
+            let deadline = DispatchTime.now() + timeout
+            var processStillRunning = processExited.wait(timeout: deadline) == .timedOut
+            let pipesStillOpen = readers.wait(timeout: deadline) == .timedOut
+            timedOut = processStillRunning || pipesStillOpen
             if timedOut {
-                process.terminate()
+                if processStillRunning, process.isRunning { process.terminate() }
                 let terminationDeadline = DispatchTime.now() + 1
-                let processStillRunning = processExited.wait(timeout: terminationDeadline) == .timedOut
+                processStillRunning = processStillRunning
+                    && processExited.wait(timeout: terminationDeadline) == .timedOut
                 let pipesStillOpen = readers.wait(timeout: terminationDeadline) == .timedOut
                 if processStillRunning || pipesStillOpen, ownsProcessGroup {
                     Darwin.kill(-process.processIdentifier, SIGKILL)
