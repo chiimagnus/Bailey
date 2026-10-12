@@ -73,7 +73,7 @@ enum WorkspaceError: Error {
 /// Every method is `async throws` because the remote implementation costs a
 /// round trip per call and must never run on the main actor — the shape has to
 /// be async even where the local implementation answers immediately.
-protocol WorkspaceBackend: Sendable {
+nonisolated protocol WorkspaceBackend: Sendable {
     // MARK: Files
     func list(directory: String) async throws -> [WorkspaceEntry]
     func stat(path: String) async throws -> WorkspaceStat?

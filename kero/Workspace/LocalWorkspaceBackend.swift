@@ -10,14 +10,14 @@ private final class RunPipeData: @unchecked Sendable {
 /// The Mac's own disk and process table. Wraps exactly the calls the panels
 /// made inline before the seam existed.
 ///
-/// Nothing is stored, so the type is `Sendable` and its `nonisolated async`
+/// Nothing is stored, so the type is `Sendable` and its `@concurrent`
 /// methods run off the main actor even when a main-actor model awaits them.
-final class LocalWorkspaceBackend: WorkspaceBackend {
+nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
     static let shared = LocalWorkspaceBackend()
 
     // MARK: - Files
 
-    func list(directory: String) async throws -> [WorkspaceEntry] {
+    @concurrent func list(directory: String) async throws -> [WorkspaceEntry] {
         let names = try FileManager.default.contentsOfDirectory(atPath: directory)
         return names.map { name in
             let path = (directory as NSString).appendingPathComponent(name)
@@ -47,15 +47,15 @@ final class LocalWorkspaceBackend: WorkspaceBackend {
         }
     }
 
-    func stat(path: String) async throws -> WorkspaceStat? {
+    @concurrent func stat(path: String) async throws -> WorkspaceStat? {
         Self.statSync(path)
     }
 
-    func readSymlinkDestination(path: String) async throws -> String? {
+    @concurrent func readSymlinkDestination(path: String) async throws -> String? {
         try? FileManager.default.destinationOfSymbolicLink(atPath: path)
     }
 
-    func read(path: String, maxBytes: Int) async throws -> Data {
+    @concurrent func read(path: String, maxBytes: Int) async throws -> Data {
         try Self.readSync(path: path, maxBytes: maxBytes)
     }
 
@@ -96,27 +96,27 @@ final class LocalWorkspaceBackend: WorkspaceBackend {
         try? Self.readSync(path: path, maxBytes: .max)
     }
 
-    func write(path: String, data: Data) async throws {
+    @concurrent func write(path: String, data: Data) async throws {
         try data.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 
-    func createFile(path: String) async throws {
+    @concurrent func createFile(path: String) async throws {
         guard FileManager.default.createFile(atPath: path, contents: nil) else {
             throw WorkspaceError.createFileFailed
         }
     }
 
-    func createDirectory(path: String) async throws {
+    @concurrent func createDirectory(path: String) async throws {
         try FileManager.default.createDirectory(
             atPath: path, withIntermediateDirectories: false
         )
     }
 
-    func rename(from: String, to: String) async throws {
+    @concurrent func rename(from: String, to: String) async throws {
         try FileManager.default.moveItem(atPath: from, toPath: to)
     }
 
-    func delete(paths: [String]) async throws {
+    @concurrent func delete(paths: [String]) async throws {
         for path in paths {
             try FileManager.default.trashItem(
                 at: URL(fileURLWithPath: path), resultingItemURL: nil
@@ -126,11 +126,11 @@ final class LocalWorkspaceBackend: WorkspaceBackend {
 
     // MARK: - Git geography
 
-    func gitRoot(containing path: String) async throws -> String? {
+    @concurrent func gitRoot(containing path: String) async throws -> String? {
         Self.gitRootSync(containing: path)
     }
 
-    func isLinkedWorktree(_ root: String) async throws -> Bool {
+    @concurrent func isLinkedWorktree(_ root: String) async throws -> Bool {
         Self.isLinkedWorktreeSync(root)
     }
 
@@ -262,7 +262,7 @@ final class LocalWorkspaceBackend: WorkspaceBackend {
         )
     }
 
-    func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot {
+    @concurrent func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot {
         // `comm` is the executable path with no arguments, so the only
         // free-form field is the last one and column parsing stays safe.
         let psOut = try await text(
@@ -309,7 +309,7 @@ final class LocalWorkspaceBackend: WorkspaceBackend {
         return WorkspaceProcessSnapshot(descendants: descendants, namesByPid: names)
     }
 
-    func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] {
+    @concurrent func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] {
         guard !pids.isEmpty else { return [] }
         let list = pids.map(String.init).joined(separator: ",")
         // -a ANDs the selectors, so this only inspects the session's own

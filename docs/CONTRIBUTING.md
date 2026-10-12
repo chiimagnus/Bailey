@@ -88,6 +88,16 @@ xcrun swiftc -swift-version 5 -o build/check-remote-lifetime \
   && build/check-remote-lifetime
 ```
 
+涉及文件或 Diff 的机器身份时，在上述 Debug 构建后运行实际 App 类型检查：
+
+```sh
+bash scripts/check-workspace-identity.sh
+```
+
+它链接当前 Debug 模块，使用未挂载的终端模型和临时文件，不启动交互 Shell、网络认证或修改用户窗口快照。远端读写使用受控后端，替换连接使用不存在的 socket，检查失败保存不误写本机；不能代替真实 SSH 传输验收。
+
+已有专用测试 SSH master 时，可追加 `user host port control-socket` 四个参数，验证真实远端读取、断线拒绝写入与替换连接后的 File/Diff 保存。检查在两台机器上创建同名的唯一临时目录，核对远端字节和本机未被改写后删除测试目录；不创建认证连接或借用用户的 master。
+
 涉及面板异步目标或进程操作时，运行延迟后端检查（不执行真实 kill/delete）：
 
 ```sh
