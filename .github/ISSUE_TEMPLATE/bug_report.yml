@@ -3,6 +3,10 @@ description: Report something that isn't working in Kero
 title: "[Bug]: "
 labels: ["bug"]
 body:
+  - type: markdown
+    attributes:
+      value: "中文优先，英文也可以。Chinese preferred; English is welcome."
+
   - type: checkboxes
     id: existing-search
     attributes:

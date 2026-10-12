@@ -1,3 +1,5 @@
+> 中文优先，英文也可以。Chinese preferred; English is welcome.
+
 ## Related issue
 
 Closes #
