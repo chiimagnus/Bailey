@@ -1,0 +1,50 @@
+version = 1
+current_task_id = "P1-T2"
+
+[[tasks]]
+id = "P1-T1"
+title = "删除 Control+数字快捷键"
+status = "completed"
+plan = "plan-p1.md#p1-t1"
+commit = "7c7a181275023988c4d8522918fe9a5a9b6ebe1b"
+note = "签名构建；真实 Control+1 传入终端不切标签；Control+Tab 调出切换器且 Escape 取消"
+
+[[tasks]]
+id = "P1-T2"
+title = "修复编辑与窗口菜单闪烁"
+status = "in_progress"
+plan = "plan-p1.md#p1-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T3"
+title = "统一面板名称"
+status = "pending"
+plan = "plan-p1.md#p1-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T4"
+title = "删除 Info 面板"
+status = "pending"
+plan = "plan-p1.md#p1-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T5"
+title = "项目根目录新建文件"
+status = "pending"
+plan = "plan-p1.md#p1-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T6"
+title = "菜单重新分组"
+status = "pending"
+plan = "plan-p1.md#p1-t6"
+commit = ""
+note = ""
