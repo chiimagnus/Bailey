@@ -1,30 +1,6 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    "CFBundleDisplayName": {
-      "comment": "Bundle display name",
-      "extractionState": "extracted_with_value",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Kero"
-          }
-        }
-      }
-    },
-    "CFBundleName": {
-      "comment": "Bundle name",
-      "extractionState": "extracted_with_value",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Kero"
-          }
-        }
-      }
-    },
     "NSMicrophoneUsageDescription": {
       "comment": "Privacy prompt shown when a program running in a Kero terminal requests microphone access.",
       "localizations": {

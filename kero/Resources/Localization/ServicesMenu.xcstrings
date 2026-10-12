@@ -1,6 +1,22 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Add Folder to Kero Dev": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add Folder to Kero Dev"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "将文件夹添加到 Kero Dev"
+          }
+        }
+      }
+    },
     "Add Folder to Kero": {
       "localizations": {
         "en": {

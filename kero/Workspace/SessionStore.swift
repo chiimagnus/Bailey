@@ -103,7 +103,7 @@ enum KeroInstanceMode {
 enum SessionStore {
     private static let key = "sessionSnapshot"
     private static let defaults: UserDefaults? = KeroInstanceMode.isIsolated
-        ? UserDefaults(suiteName: "sh.kero.isolated-ui-test") : .standard
+        ? UserDefaults(suiteName: AppIdentity.current.isolatedDefaultsSuite) : .standard
 
     static func save(_ windows: [SessionSnapshot]) {
         guard let data = try? JSONEncoder().encode(AppSnapshot(windows: windows)) else { return }

@@ -23,15 +23,15 @@
 
 ```sh
 bash scripts/prepare-ghostty.sh
-xcodebuild -project kero.xcodeproj -scheme kero -configuration Debug \
+xcodebuild -project kero.xcodeproj -scheme kero-dev -configuration Debug \
   -destination 'platform=macOS,arch=arm64' \
   -derivedDataPath build/DerivedData \
   -clonedSourcePackagesDirPath build/SourcePackages \
   -skipPackageUpdates build
-codesign --verify --deep --strict build/DerivedData/Build/Products/Debug/Kero.app
+codesign --verify --deep --strict "build/DerivedData/Build/Products/Debug/Kero Dev.app"
 ```
 
-产物是 `Kero.app`，标识为 `sh.kero`。GhosttyKit 缺失时才下载，校验后复用。需要切换 Xcode 时设置 `DEVELOPER_DIR`；没有自动更新或发布流水线。
+Debug 产物是 `Kero Dev.app`，标识为 `chiimagnus.kero.dev`。正式版使用 `-scheme kero -configuration Release`，产物为 `build/DerivedData/Build/Products/Release/Kero.app`，标识为 `chiimagnus.kero`。两者共享单个 Target 和 `kero` 可执行文件，但不共享设置、快照、历史及隧道。GhosttyKit 缺失时才下载，校验后复用。需要切换 Xcode 时设置 `DEVELOPER_DIR`；没有自动更新。
 
 ## 验证
 
@@ -43,6 +43,7 @@ bash scripts/check.sh dock-workspace session-snapshot
 
 | 改动范围 | 维护约束 | 检查名称 |
 | --- | --- | --- |
+| 应用身份与数据目录 | [设置与恢复](docs/SETTINGS.md) | `app-identity settings session-snapshot` |
 | 停靠、分屏、焦点与内容生命周期 | [终端与窗格](docs/TERMINAL.md) | `dock-workspace pane-retention` |
 | 配置与快照格式 | [设置与恢复](docs/SETTINGS.md) | `settings session-snapshot` |
 | 文件树、编辑、读取与保存 | [文件与编辑器](docs/EDITOR.md) | `file-tree-navigation tree-row-hit-testing workspace-identity` |
@@ -52,7 +53,7 @@ bash scripts/check.sh dock-workspace session-snapshot
 
 其他改动按需读[产品原则](docs/PRODUCT.md)、[性能](docs/PERFORMANCE.md)、[本地化](docs/LOCALIZATION.md)、[依赖](docs/DEPENDENCIES.md)与[安全](docs/SECURITY.md)约束。
 
-`workspace-identity` 和 `pane-retention` 须先构建 Debug App；原生视图检查需要 macOS 图形会话。检查使用临时数据或受控后端，不连接真实 SSH 主机，不能代替真实远端传输或用户交互验收。
+`workspace-identity` 和 `pane-retention` 须先构建 Debug 开发版；原生视图检查需要 macOS 图形会话。检查使用临时数据或受控后端，不连接真实 SSH 主机，不能代替真实远端传输或用户交互验收。
 
 行为或逻辑改动还须构建、校验签名，并在真机实际操作受影响行为。检查主路径与共享根因的关键边界；性能改动按[测量约束](docs/PERFORMANCE.md)记录前后数据。纯文案改动（名称、标签、翻译等）只核对引用、双语文案、占位符与表名；涉及源码或字符串提取时按需构建，不要求真机操作验收、重装或重签测试包。快捷键、启用条件、动作路由与布局变化不属于纯文案。仅改文档时核对事实、命令与链接，不机械重装 App。
 
@@ -63,10 +64,10 @@ bash scripts/check.sh dock-workspace session-snapshot
 - 交付时分别说明应用包是否已替换、重启与恢复是否已验收，以及备份位置。用户重启后检查原有项目、标签与布局；未经确认不宣称恢复通过，也不删除安装备份。仅在用户明确授权代操作时，确认命令和编辑可安全结束，再正常退出或重启。
 - 行为验收默认使用同一签名 Debug 包的隔离实例，不为验收重启正式实例：
   ```sh
-  open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Kero.app" --args --isolated-ui-test
+  open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Kero Dev.app" --args --isolated-ui-test
   ```
   隔离模式单独保存窗口和终端历史，不启动已保存隧道；全局设置仍可能共用，不在隔离实例中修改设置。
-- 指定独立测试包时，只更新该包。可复制构建结果为 `build/Kero Test.app`，改标识为 `sh.kero.test`、显示名与包名为 `Kero Test`，保留可执行文件名和构建产品名，按原 entitlements 重新签名并校验；启动仍传隔离参数。
+- 指定独立测试包时，只更新该包，默认直接使用已签名的 Kero Dev 开发版和隔离参数。不得仅修改 Info.plist 后冒称数据隔离成立；应用数据路径由实际 Bundle ID 决定，检查须覆盖配置与历史目录。
 - 真实 SSH 检查只用获准的专用测试 master，不借用用户连接。`bash scripts/check-workspace-identity.sh user host port control-socket` 会在两台机器创建并清理唯一临时目录；缺少条件时明确记录远端未测。
 - 验收后只清理本轮创建且可确认归属的临时应用与独立测试数据，保留用户原有数据。编译成功、事件发出或骨架出现不算行为通过；隔离包通过不等于正式包已安装。
 

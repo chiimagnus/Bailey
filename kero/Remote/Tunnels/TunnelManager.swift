@@ -475,7 +475,7 @@ private enum TunnelPIDFile {
         let support = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return support
-            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "sh.kero")
+            .appendingPathComponent(AppIdentity.current.bundleIdentifier)
             .appendingPathComponent("tunnels.pids")
     }
 

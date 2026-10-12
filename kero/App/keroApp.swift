@@ -18,7 +18,7 @@ struct keroApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Kero", id: "main") {
+        WindowGroup(AppIdentity.current.displayName, id: "main") {
             WindowRootView()
         }
         .windowStyle(.hiddenTitleBar)

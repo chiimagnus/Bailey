@@ -422,11 +422,7 @@ enum TerminalHistorySerializer {
 /// belonging to sessions that no longer exist are pruned automatically.
 enum TerminalHistoryStore {
     private static let fileURL: URL = {
-        let base = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
-        return base
-            .appendingPathComponent("kero", isDirectory: true)
+        return AppIdentity.current.historyDirectory
             .appendingPathComponent(
                 KeroInstanceMode.isIsolated ? "terminal-history-isolated-ui-test.json"
                     : "terminal-history.json"

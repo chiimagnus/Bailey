@@ -98,8 +98,8 @@ enum GitViewMode: String, CaseIterable, Identifiable {
 final class AppSettings: nonisolated ObservableObject {
     static let shared = AppSettings()
 
-    nonisolated static let configURL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".config/kero/config.toml")
+    nonisolated static let configURL = AppIdentity.current.configDirectory
+        .appendingPathComponent("config.toml")
     private let settingsURL: URL
 
     static let defaultFontSize: Double = 13

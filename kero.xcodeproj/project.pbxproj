@@ -246,7 +246,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -278,7 +278,60 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 0.1.48;
-				PRODUCT_BUNDLE_IDENTIFIER = sh.kero;
+				KERO_APP_NAME = "Kero Dev";
+				PRODUCT_BUNDLE_IDENTIFIER = chiimagnus.kero.dev;
+				PRODUCT_NAME = kero;
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				WRAPPER_NAME = "Kero Dev.app";
+			};
+			name = Debug;
+		};
+		AA7000000000000000000001 /* Release configuration for PBXProject "kero" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		AA7000000000000000000002 /* Release configuration for PBXNativeTarget "kero" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = kero/Resources/kero.entitlements;
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				DEVELOPMENT_TEAM = RDQHYSDFFG;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 54;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = kero/Resources/Info.plist;
+				KERO_APP_NAME = Kero;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 0.1.48;
+				PRODUCT_BUNDLE_IDENTIFIER = chiimagnus.kero;
 				PRODUCT_NAME = kero;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -289,7 +342,7 @@
 				SWIFT_VERSION = 5.0;
 				WRAPPER_NAME = Kero.app;
 			};
-			name = Debug;
+			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
@@ -298,7 +351,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				FF3FDD7C300B6A7600112486 /* Debug configuration for PBXProject "kero" */,
-
+				AA7000000000000000000001 /* Release configuration for PBXProject "kero" */,
 			);
 			defaultConfigurationName = Debug;
 		};
@@ -306,7 +359,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				FF3FDD7F300B6A7600112486 /* Debug configuration for PBXNativeTarget "kero" */,
-
+				AA7000000000000000000002 /* Release configuration for PBXNativeTarget "kero" */,
 			);
 			defaultConfigurationName = Debug;
 		};

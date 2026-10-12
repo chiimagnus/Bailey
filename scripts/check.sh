@@ -7,7 +7,7 @@ if [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && [ "$1" = "--help" ]; }; then
 用法：bash scripts/check.sh <检查名称> [更多检查名称]
 
 独立检查：
-  dock-workspace  session-snapshot  file-tree-navigation  settings
+  app-identity  dock-workspace  session-snapshot  file-tree-navigation  settings
   git-execution  git-panel-state  remote-commands  remote-lifetime
   panel-targets  tree-row-hit-testing
 
@@ -31,18 +31,21 @@ mkdir -p build
 for name in "$@"; do
     printf '\n检查：%s\n' "$name"
     case "$name" in
+        app-identity)
+            compile_and_run "$name" kero/App/AppIdentity.swift
+            ;;
         dock-workspace)
             compile_and_run "$name" kero/Workspace/DockWorkspaceModel.swift
             ;;
         session-snapshot)
-            compile_and_run "$name" kero/Workspace/DockWorkspaceModel.swift kero/Workspace/SessionStore.swift
+            compile_and_run "$name" kero/App/AppIdentity.swift kero/Workspace/DockWorkspaceModel.swift kero/Workspace/SessionStore.swift
             ;;
         file-tree-navigation)
             compile_and_run "$name" kero/Workspace/WorkspaceBackend.swift kero/Workspace/LocalWorkspaceBackend.swift \
                 kero/Shared/Tree/TreeDisplayModel.swift kero/Files/FileTreeModel.swift
             ;;
         settings)
-            compile_and_run "$name" kero/App/AppSettings.swift kero/Workspace/DockWorkspaceModel.swift
+            compile_and_run "$name" kero/App/AppIdentity.swift kero/App/AppSettings.swift kero/Workspace/DockWorkspaceModel.swift
             ;;
         git-execution)
             compile_and_run "$name" kero/Workspace/WorkspaceBackend.swift kero/Workspace/LocalWorkspaceBackend.swift \
@@ -72,7 +75,7 @@ for name in "$@"; do
             compile_and_run "$name" kero/Shared/Tree/TreeDisplayModel.swift kero/Shared/Tree/TreeRowStyle.swift
             ;;
         workspace-identity|pane-retention)
-            if [ ! -f build/DerivedData/Build/Products/Debug/Kero.app/Contents/MacOS/kero.debug.dylib ]; then
+            if [ ! -f "build/DerivedData/Build/Products/Debug/Kero Dev.app/Contents/MacOS/kero.debug.dylib" ]; then
                 printf '请先按 AGENTS.md 构建 Debug App。\n' >&2
                 exit 1
             fi
