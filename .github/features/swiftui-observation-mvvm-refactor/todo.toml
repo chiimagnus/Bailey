@@ -1,0 +1,218 @@
+version = 1
+current_task_id = ""
+
+[[tasks]]
+id = "P1-T1"
+title = "核对迁移基线并取得 Swift 6 诊断"
+status = "pending"
+plan = "plan-p1.md#p1-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T2"
+title = "将窗口自动保存改为语义变更触发"
+status = "pending"
+plan = "plan-p1.md#p1-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T1"
+title = "配置状态转 Observation，保持写入与终端设置传播"
+status = "pending"
+plan = "plan-p2.md#p2-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T2"
+title = "用 Observation 替换全局主题重绘信号"
+status = "pending"
+plan = "plan-p2.md#p2-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T3"
+title = "长期隧道状态与 AppKit 表格事件迁移"
+status = "pending"
+plan = "plan-p2.md#p2-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T1"
+title = "文件树状态转 Observation，文件操作归入 ViewModel／Backend"
+status = "pending"
+plan = "plan-p3.md#p3-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T2"
+title = "Git 状态／读取刷新统一成可观察 ViewModel"
+status = "pending"
+plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T3"
+title = "将 Git 变更操作与执行副作用收敛到既有服务边界"
+status = "pending"
+plan = "plan-p3.md#p3-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T4"
+title = "把 GitPanel 的丢弃预检移出 View 并保留交互确认"
+status = "pending"
+plan = "plan-p3.md#p3-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T1"
+title = "SSH 连接和临时端口转发的可观察状态与断线事件"
+status = "pending"
+plan = "plan-p4.md#p4-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T2"
+title = "终端会话和查找条的 Observation／原生事件桥"
+status = "pending"
+plan = "plan-p4.md#p4-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T3"
+title = "文件编辑标签的可观察状态与可靠保存"
+status = "pending"
+plan = "plan-p4.md#p4-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T4"
+title = "差异标签和 WebKit 渲染器的可观察状态"
+status = "pending"
+plan = "plan-p4.md#p4-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T5"
+title = "浏览器标签 Observation 与 WKWebView delegate/KVO 适配"
+status = "pending"
+plan = "plan-p4.md#p4-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T1"
+title = "Dock 布局唯一状态与拖动手势改用 Observation"
+status = "pending"
+plan = "plan-p5.md#p5-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T2"
+title = "PaneTab 和 Project 的身份、选择及关闭流程收敛"
+status = "pending"
+plan = "plan-p5.md#p5-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T3"
+title = "窗口 TerminalManager 收敛成唯一窗口 ViewModel"
+status = "pending"
+plan = "plan-p5.md#p5-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T4"
+title = "App／WindowRoot 的 Observation 装配及多窗口菜单焦点"
+status = "pending"
+plan = "plan-p5.md#p5-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T5"
+title = "Ctrl-Tab 快速切换及标签／项目侧栏的局部状态收敛"
+status = "pending"
+plan = "plan-p5.md#p5-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P6-T1"
+title = "将跨面板根目录解析与刷新编排移出 SwiftUI View"
+status = "pending"
+plan = "plan-p6.md#p6-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P6-T2"
+title = "命令面板文件索引与动作查询改成 ViewModel／Service"
+status = "pending"
+plan = "plan-p6.md#p6-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P6-T3"
+title = "辅助状态、FPS 与剩余旧式 View 包装器即时收敛"
+status = "pending"
+plan = "plan-p6.md#p6-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P7-T1"
+title = "SSH、Git 和文件后端的 Swift 6 并发边界收敛"
+status = "pending"
+plan = "plan-p7.md#p7-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P7-T2"
+title = "终端、编辑器与 WebKit 的 Swift 6 actor／delegate 边界"
+status = "pending"
+plan = "plan-p7.md#p7-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P7-T3"
+title = "正式切换 Swift 6 语言模式并使构建／测试全通过"
+status = "pending"
+plan = "plan-p7.md#p7-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P7-T4"
+title = "适用的现代 SwiftUI、Foundation、交互与无障碍规范收敛"
+status = "pending"
+plan = "plan-p7.md#p7-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P7-T5"
+title = "只读核验全项目架构、任务清理和可观察行为"
+status = "pending"
+plan = "plan-p7.md#p7-t5"
+commit = ""
+note = ""
