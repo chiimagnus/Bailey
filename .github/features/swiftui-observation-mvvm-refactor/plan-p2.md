@@ -21,7 +21,7 @@
 
 **实现：** 将 `AppSettings.shared` 原实例改为 `@Observable`；Settings/其它现有消费者直接读取，需要修改时使用 `@Bindable`。保持已实现的 `didSet → save`、语言重启前保存、TOML 现有校验和**仅保留用户手工配置的 workspace 字段**的真实行为（源码未实现“保留任意未知键”，不提出虚假要求）。窗口端在读取 fontFamily/size/thicken、theme/dark/light、Option-as-Alt、cursor 等相关设置的 `onChange` 里调用已有 `manager.refreshAppearance()`；当前旧 `Publishers.CombineLatest4` 承担的语义一次覆盖，不新建设置事件总线或从设置层反向依赖窗口层。**本 Task 一次删除 `AppSettings.@Published`、`settingsObservation`、Setting View 的旧 `@ObservedObject`、无消费者 Combine import**；必须实际核对每个设置影响终端的字段，没有原生结果不称迁移完成。
 
-**验证：** `make test ONLY_TESTING=KeroTests/AppSettingsTests`，通过 `AppSettings(configURL: 临时路径)` 验证配置变更与磁盘往返，补新 Observation 的字段跟踪／终端刷新触发检查；`make build` 并验签。`--isolated-ui-test` **不会隔离用户的 config.toml**，不能在隔离 App 内直接修改共享设置；窗口联动可用隔离配置注入或只读原生观察，未经许可的真实设置修改标为未测。必须分别确认终端字体、主题、Option-as-Alt 和光标均能响应；不可只断言 Settings View 文本。
+**验证：** `make test ONLY_TESTING=KeroTests/AppSettingsTests`，通过 `AppSettings(configURL: 临时路径)` 验证配置变更与磁盘往返，补新 Observation 的字段跟踪／终端刷新触发检查；`make build` 并验签。`--isolated-ui-test` 本身**不会隔离用户的 config.toml**。本机 macOS 27.2 已额外实测通过 LaunchServices `open -g -n --env CFFIXED_USER_HOME=<临时Home> --env HOME=<临时Home> -a <Debug Kero.app> --args --isolated-ui-test`：测试实例真实读取／写入的 `~/.config/kero/config.toml` 被限制到 `build/UIBaselineFixture/home/`，而正式用户配置前后 SHA-256 不变。使用该**已验证的进程级配置隔离**在原生设置 UI 调整字段并检查 Shell PID、字体实际渲染、光标/Option 配置与主题实际配色；后续 SDK/系统若不支持这种隔离，则只允许只读观察，不得改用户真实配置。不得只断言 Settings View 文本。
 
 **提交：** 配置 Observation 接入、终端订阅迁移、旧 Publisher 删除及测试一起提交。
 
@@ -36,7 +36,7 @@
 
 **实现：** 保留 `Theme.selection` 原有 `OSAllocatedUnfairLock`：它是非隔离 `NSColor` 动态颜色 provider 的必要线程安全缓存，不是多余的可写 UI 镜像。旧 `ThemeChanges: ObservableObject {}` 是纯空重绘信号，可改为单一 `@Observable` 修订值（由 `Theme.reloadSelection` 修改）或让各 View 直接读取已观察的 AppSettings/theme 字段，以实际消费者最少改动决定；不能并行保留空 Publisher。原生 Ghostty、WebKit diff、TextKit 按现有具体 appearance 更新入口响应，不造主题订阅中心。**同 Task 删除 `Theme.changes.objectWillChange.send()`、旧 `@ObservedObject themeChanges`/空类与无用 Combine import**，保留真实颜色缓存。
 
-**验证：** `make test ONLY_TESTING=KeroTests/AppSettingsTests`、`make build`；主题修订值变更应能触发全部真实消费者，而非仅窗口外框。**不能在隔离 Debug 实例中修改共享的 `AppSettings.shared` 配置文件**；用临时 `AppSettings(configURL:)` 检查状态/解析及自控原生预览，正式 UI 主题联动如需真实用户配置修改必须另获准，不把未测冒充完成。静态颜色缓存应仍线程安全；对照 P1 同条件的亮/暗主题原生截图，核对窗口/树行/标签/Diff/终端的实际颜色及切换时机，不接受因替换刷新源产生闪烁、重置滚动或焦点。
+**验证：** `make test ONLY_TESTING=KeroTests/AppSettingsTests`、`make build`；主题修订值变更应能触发全部真实消费者，而非仅窗口外框。**不能在普通隔离 Debug 实例中修改共享的用户配置文件**；复用 P2-T1 已实测的 `CFFIXED_USER_HOME` 临时 Home 进程隔离进行主题变更和原生对照，另用 `AppSettings(configURL:)` 检查状态/解析。不得误把进程级隔离失效的运行继续当安全测试；正式用户配置的 SHA-256 必须保持不变。静态颜色缓存应仍线程安全；对照 P1 同条件的亮/暗主题原生截图，核对窗口/树行/标签/Diff/终端的实际颜色及切换时机，不接受因替换刷新源产生闪烁、重置滚动或焦点。
 
 **提交：** 主题真源接入与所有旧重绘订阅删除同一原子提交。
 

@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import Observation
 import XCTest
 @testable import kero
 
@@ -47,6 +49,52 @@ final class AppSettingsTests: XCTestCase {
 
         customized.fontSize = 19
         XCTAssertEqual(AppSettings(configURL: configURL).fontSize, 19)
+    }
+
+    func testObservationTracksAllNativeTerminalSettingsWithTemporaryConfig() {
+        let originalAppearance = NSApp?.appearance
+        let configured = AppSettings(configURL: configURL)
+        defer {
+            NSApp?.appearance = originalAppearance
+            Theme.reloadSelection(
+                light: AppSettings.shared.themeLight,
+                dark: AppSettings.shared.themeDark
+            )
+        }
+
+        let fields: [(name: String, read: () -> Any, change: () -> Void)] = [
+            ("font family", { configured.fontFamily }, { configured.fontFamily = "Fixture Mono" }),
+            ("font size", { configured.fontSize }, { configured.fontSize = 18 }),
+            ("font strokes", { configured.fontThicken }, { configured.fontThicken = true }),
+            ("appearance", { configured.theme }, { configured.theme = .dark }),
+            ("dark palette", { configured.themeDark }, { configured.themeDark = "Ayu" }),
+            ("light palette", { configured.themeLight },
+             { configured.themeLight = "Apple System Colors Light" }),
+            ("Option as Alt", { configured.macosOptionAsAlt },
+             { configured.macosOptionAsAlt = true }),
+            ("cursor shape", { configured.cursorShape }, { configured.cursorShape = .bar }),
+            ("cursor blinking", { configured.cursorBlinking },
+             { configured.cursorBlinking = false }),
+        ]
+        for field in fields {
+            let notified = expectation(description: field.name)
+            withObservationTracking({ _ = field.read() }) {
+                notified.fulfill()
+            }
+            field.change()
+            wait(for: [notified], timeout: 1)
+        }
+
+        let saved = AppSettings(configURL: configURL)
+        XCTAssertEqual(saved.fontFamily, "Fixture Mono")
+        XCTAssertEqual(saved.fontSize, 18)
+        XCTAssertTrue(saved.fontThicken)
+        XCTAssertEqual(saved.theme, .dark)
+        XCTAssertEqual(saved.themeDark, "Ayu")
+        XCTAssertEqual(saved.themeLight, "Apple System Colors Light")
+        XCTAssertTrue(saved.macosOptionAsAlt)
+        XCTAssertEqual(saved.cursorShape, .bar)
+        XCTAssertFalse(saved.cursorBlinking)
     }
 
     func testInvalidValuesFallBackAndFailedWritePreservesExistingFile() throws {

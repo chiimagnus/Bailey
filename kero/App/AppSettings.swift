@@ -4,7 +4,7 @@
 //
 
 import AppKit
-import Combine
+import Observation
 import Foundation
 
 /// The app-specific language macOS should use when Kero next launches.
@@ -95,7 +95,8 @@ enum GitViewMode: String, CaseIterable, Identifiable {
 /// Views observe this directly; `TerminalManager` re-themes live sessions on
 /// any change.
 @MainActor
-final class AppSettings: nonisolated ObservableObject {
+@Observable
+final class AppSettings {
     static let shared = AppSettings()
 
     nonisolated static let configURL = AppIdentity.configDirectory
@@ -116,7 +117,7 @@ final class AppSettings: nonisolated ObservableObject {
     /// selection so Settings can explain when a relaunch is required.
     let activeLanguage: AppLanguage
 
-    @Published var language: AppLanguage {
+    var language: AppLanguage {
         didSet { language.persist() }
     }
 
@@ -125,7 +126,7 @@ final class AppSettings: nonisolated ObservableObject {
     }
 
     /// Light/dark appearance override; `system` follows macOS.
-    @Published var theme: AppTheme {
+    var theme: AppTheme {
         didSet {
             applyAppearance()
             save()
@@ -135,14 +136,14 @@ final class AppSettings: nonisolated ObservableObject {
     /// Color theme names, one per appearance; the terminal, window chrome,
     /// and editor all derive from them. `Theme` keeps the resolved
     /// definitions (kero built-ins plus the ghostty catalog).
-    @Published var themeDark: String {
+    var themeDark: String {
         didSet {
             reloadThemeSelection()
             save()
         }
     }
 
-    @Published var themeLight: String {
+    var themeLight: String {
         didSet {
             reloadThemeSelection()
             save()
@@ -151,27 +152,27 @@ final class AppSettings: nonisolated ObservableObject {
 
     /// Terminal font family name; empty string means the bundled default
     /// (JetBrains Mono).
-    @Published var fontFamily: String {
+    var fontFamily: String {
         didSet { save() }
     }
 
-    @Published var fontSize: Double {
+    var fontSize: Double {
         didSet { save() }
     }
 
     /// Base text size for project and tool panels. Each panel preserves its relative
     /// hierarchy for section labels, content, metadata, and controls.
-    @Published var panelFontSize: Double {
+    var panelFontSize: Double {
         didSet { save() }
     }
 
     /// `auto` shows the toolbar only for Git projects; `always` keeps its Git
     /// panel entry point visible in every project; `hide` suppresses it.
-    @Published var toolbarVisibility: ToolbarVisibility {
+    var toolbarVisibility: ToolbarVisibility {
         didSet { save() }
     }
 
-    @Published var gitViewMode: GitViewMode {
+    var gitViewMode: GitViewMode {
         didSet { save() }
     }
 
@@ -179,35 +180,35 @@ final class AppSettings: nonisolated ObservableObject {
     /// macOS font smoothing. Each backend maps this to its own rasterizer.
     /// Persisted as `terminal.font-thicken`; off by default so Kero's text
     /// matches a stock Ghostty install.
-    @Published var fontThicken: Bool {
+    var fontThicken: Bool {
         didSet { save() }
     }
 
-    @Published var cursorShape: TerminalCursorShape {
+    var cursorShape: TerminalCursorShape {
         didSet { save() }
     }
 
-    @Published var cursorBlinking: Bool {
+    var cursorBlinking: Bool {
         didSet { save() }
     }
 
     /// Send Option-key chords to terminal programs as Alt/Meta instead of
     /// letting the active macOS input source produce text. Off by default so
     /// layouts such as Polish Pro can type their Option-composed characters.
-    @Published var macosOptionAsAlt: Bool {
+    var macosOptionAsAlt: Bool {
         didSet { save() }
     }
 
     /// Soft-wrap file editor lines to the viewport width. Off by default so
     /// long lines scroll horizontally.
-    @Published var wrapLines: Bool {
+    var wrapLines: Bool {
         didSet { save() }
     }
 
     /// Restore each terminal's previous scrollback (as static, styled text)
     /// when the app relaunches, above the freshly started shell. Off by
     /// default: opt-in, and it writes captured output to disk.
-    @Published var restoreTerminalHistory: Bool {
+    var restoreTerminalHistory: Bool {
         didSet { save() }
     }
 

@@ -301,7 +301,7 @@ struct FileViewerView: View {
     /// selected work tab can follow.
     var onFocused: () -> Void = {}
 
-    @ObservedObject private var settings = AppSettings.shared
+    private let settings = AppSettings.shared
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {

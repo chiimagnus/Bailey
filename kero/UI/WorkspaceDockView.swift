@@ -261,7 +261,7 @@ private struct DockTabGroupView: View {
     @ObservedObject var manager: TerminalManager
     @ObservedObject var git: GitStatusModel
     @ObservedObject var dragging: DockTabDragCoordinator
-    @ObservedObject private var settings = AppSettings.shared
+    private let settings = AppSettings.shared
     @State private var renamingTabID: UUID?
     @State private var showingPanelPicker = false
 

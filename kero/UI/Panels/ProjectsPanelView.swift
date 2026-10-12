@@ -10,7 +10,7 @@ import SwiftUI
 struct ProjectsPanelView: View {
     @ObservedObject var manager: TerminalManager
     let bottomBarHeight: CGFloat
-    @ObservedObject private var settings = AppSettings.shared
+    private let settings = AppSettings.shared
     @ObservedObject private var themeChanges = Theme.changes
     @Environment(\.openSettings) private var openSettings
     @State private var showingProjectPicker = false

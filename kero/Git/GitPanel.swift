@@ -4,7 +4,7 @@ import SwiftUI
 // MARK: - Git panel
 
 struct GitPanel: View {
-    @ObservedObject private var settings = AppSettings.shared
+    private let settings = AppSettings.shared
 
     private enum EntryOperation: Equatable {
         case stage

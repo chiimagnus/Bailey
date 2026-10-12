@@ -9,7 +9,7 @@ import SwiftUI
 
 /// The app settings window (Cmd+,).
 struct SettingsView: View {
-    @ObservedObject private var settings = AppSettings.shared
+    @Bindable private var settings = AppSettings.shared
     @State private var relaunchError = ""
     @State private var isShowingRelaunchError = false
 

@@ -70,7 +70,7 @@ struct ToolPanelView: View {
     @ObservedObject var manager: TerminalManager
     @ObservedObject var git: GitStatusModel
     let panel: ToolPanel
-    @ObservedObject private var settings = AppSettings.shared
+    private let settings = AppSettings.shared
     @ObservedObject private var themeChanges = Theme.changes
     @State private var applicationIsActive = NSApp.isActive
     /// Which rule produced the current panel root; drives the Files badge.

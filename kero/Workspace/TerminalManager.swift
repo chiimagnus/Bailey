@@ -47,7 +47,6 @@ final class TerminalManager: nonisolated ObservableObject {
     /// re-publish them so views observing the manager stay current.
     private var projectObservations: [UUID: AnyCancellable] = [:]
     private var projectCounter = 0
-    private var settingsObservation: AnyCancellable?
     private var pendingSave: Task<Void, Never>?
     private var isInitialized = false
     private var terminationObservation: AnyCancellable?
@@ -107,33 +106,6 @@ final class TerminalManager: nonisolated ObservableObject {
         }
         let queuedDirectories = Self.takePendingDirectories()
         addLocalItems(queuedDirectories.map { URL(fileURLWithPath: $0, isDirectory: true) })
-        // Reconfigure live sessions only when font, appearance, theme, or
-        // terminal input settings change. Delivery is scheduled onto the main
-        // queue because @Published emits in willSet — by then `didSet` has
-        // pushed the theme onto NSApp (and the selection into `Theme`), so
-        // `refreshAppearance` reads the new state.
-        settingsObservation = Publishers.CombineLatest4(
-            Publishers.CombineLatest4(
-                AppSettings.shared.$fontFamily.removeDuplicates(),
-                AppSettings.shared.$fontSize.removeDuplicates(),
-                AppSettings.shared.$fontThicken.removeDuplicates(),
-                AppSettings.shared.$theme.removeDuplicates()
-            ),
-            Publishers.CombineLatest(
-                AppSettings.shared.$themeDark.removeDuplicates(),
-                AppSettings.shared.$themeLight.removeDuplicates()
-            ),
-            AppSettings.shared.$macosOptionAsAlt.removeDuplicates(),
-            Publishers.CombineLatest(
-                AppSettings.shared.$cursorShape.removeDuplicates(),
-                AppSettings.shared.$cursorBlinking.removeDuplicates()
-            )
-        )
-            .dropFirst()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.refreshAppearance()
-            }
         // The debounce can swallow changes made just before quitting;
         // capture a final snapshot while the shells are still alive.
         terminationObservation = NotificationCenter.default

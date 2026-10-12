@@ -4,7 +4,7 @@
 
 ## 配置
 
-普通偏好与工作区初始值来自 `~/.config/kero/config.toml`，不是项目快照或未保存内容备份。
+普通偏好与工作区初始值来自 `~/.config/kero/config.toml`，不是项目快照或未保存内容备份。设置由唯一的 `AppSettings` 状态管理；终端字体、配色、光标与 Option-as-Alt 变更由所属窗口及时应用到已有原生终端，不重建 Shell。
 
 Kero 只有一个应用身份 `chiimagnus.kero`：配置目录固定为 `~/.config/kero/`，历史目录固定为 Application Support 下的 `kero/`。Debug 与 Release 使用同一身份和数据位置，不维护开发版 Bundle ID 或第二套配置目录。
 

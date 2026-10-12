@@ -596,7 +596,7 @@ private enum DiffFont {
 /// single-file view renders every row up front and highlights them inline.
 private struct DiffWebRoot: View {
     @ObservedObject var model: DiffWebModel
-    @ObservedObject private var settings = AppSettings.shared
+    private let settings = AppSettings.shared
     @ObservedObject private var preferences = DiffViewPreferences.shared
 
     var body: some View {

@@ -41,11 +41,24 @@ struct keroApp: App {
 /// reopens windows for any snapshots left over.
 private struct WindowRootView: View {
     @StateObject private var manager = TerminalManager()
+    private let settings = AppSettings.shared
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ContentView(manager: manager)
             .focusedSceneObject(manager)
+            // Each field is an actual terminal configuration input. Reading
+            // them here lets Observation notify the existing native surface
+            // only after the settings' didSet has applied and saved its value.
+            .onChange(of: settings.fontFamily) { _, _ in manager.refreshAppearance() }
+            .onChange(of: settings.fontSize) { _, _ in manager.refreshAppearance() }
+            .onChange(of: settings.fontThicken) { _, _ in manager.refreshAppearance() }
+            .onChange(of: settings.theme) { _, _ in manager.refreshAppearance() }
+            .onChange(of: settings.themeDark) { _, _ in manager.refreshAppearance() }
+            .onChange(of: settings.themeLight) { _, _ in manager.refreshAppearance() }
+            .onChange(of: settings.macosOptionAsAlt) { _, _ in manager.refreshAppearance() }
+            .onChange(of: settings.cursorShape) { _, _ in manager.refreshAppearance() }
+            .onChange(of: settings.cursorBlinking) { _, _ in manager.refreshAppearance() }
             .onAppear {
                 TerminalManager.openRestoredWindows {
                     openWindow(id: "main")
