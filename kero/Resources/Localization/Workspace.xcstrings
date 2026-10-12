@@ -215,16 +215,6 @@
         }
       }
     },
-    "It could not be written to disk." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法写入磁盘。"
-          }
-        }
-      }
-    },
     "Save" : {
       "localizations" : {
         "zh-Hans" : {

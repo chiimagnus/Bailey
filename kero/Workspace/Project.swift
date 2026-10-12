@@ -45,7 +45,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     }
 
     /// Tab IDs newest-used first. Kept here rather than in the switcher
-    /// because every way of reaching a tab — strip click, Ctrl-number,
+    /// because every way of reaching a tab — strip click, menu selection,
     /// opening a file — counts as a use.
     private var recentTabIDs: [UUID] = []
     private var isRemoteTabRebindPending = false
