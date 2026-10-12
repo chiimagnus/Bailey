@@ -7,7 +7,7 @@ if [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && [ "$1" = "--help" ]; }; then
 用法：bash scripts/check.sh <检查名称> [更多检查名称]
 
 独立检查：
-  app-identity  dock-workspace  session-snapshot  file-tree-navigation  settings
+  release  app-identity  dock-workspace  session-snapshot  file-tree-navigation  settings
   git-execution  git-panel-state  remote-commands  remote-lifetime
   panel-targets  tree-row-hit-testing
 
@@ -31,6 +31,9 @@ mkdir -p build
 for name in "$@"; do
     printf '\n检查：%s\n' "$name"
     case "$name" in
+        release)
+            bash scripts/check-release.sh
+            ;;
         app-identity)
             compile_and_run "$name" kero/App/AppIdentity.swift
             ;;

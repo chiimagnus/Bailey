@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kero-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: write
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      SIGNING_IDENTITY: ${{ secrets.APPLE_DEVELOPMENT_IDENTITY }}
+      SIGNING_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Preflight release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: bash scripts/release-preflight.sh "$RELEASE_TAG"
+      - name: Import Apple Development signing identity
+        env:
+          CERTIFICATE_P12: ${{ secrets.APPLE_DEVELOPMENT_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPMENT_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          export SIGNING_KEYCHAIN="$RUNNER_TEMP/kero-signing.keychain-db"
+          echo "SIGNING_KEYCHAIN=$SIGNING_KEYCHAIN" >> "$GITHUB_ENV"
+          test -n "$CERTIFICATE_P12" && test -n "$CERTIFICATE_PASSWORD"
+          test -n "$SIGNING_IDENTITY" && test -n "$SIGNING_TEAM"
+          umask 077
+          printf '%s' "$CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/kero-signing.p12"
+          password=$(openssl rand -hex 24)
+          echo "::add-mask::$password"
+          security create-keychain -p "$password" "$SIGNING_KEYCHAIN"
+          security set-keychain-settings -lut 7200 "$SIGNING_KEYCHAIN"
+          security unlock-keychain -p "$password" "$SIGNING_KEYCHAIN"
+          security import "$RUNNER_TEMP/kero-signing.p12" -P "$CERTIFICATE_PASSWORD" \
+            -k "$SIGNING_KEYCHAIN" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$password" "$SIGNING_KEYCHAIN"
+          security list-keychains -d user -s "$SIGNING_KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
+          python3 -c 'import os, pathlib; pathlib.Path(os.environ["RUNNER_TEMP"], "kero-signing.p12").unlink()'
+      - name: Build and verify both signed archives
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          bash scripts/release-app.sh stable "${RELEASE_TAG#v}" "$BUILD_NUMBER"
+          bash scripts/release-app.sh dev "${RELEASE_TAG#v}" "$BUILD_NUMBER"
+      - name: Publish verified archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "build/releases/kero-${RELEASE_TAG#v}-macos-arm64.zip" \
+            "build/releases/kero-dev-${RELEASE_TAG#v}-macos-arm64.zip" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$RELEASE_TAG" --generate-notes --latest
+      - name: Remove temporary signing credentials
+        if: always()
+        run: |
+          security list-keychains -d user -s "$HOME/Library/Keychains/login.keychain-db"
+          keychain="$RUNNER_TEMP/kero-signing.keychain-db"
+          if [ -f "$keychain" ]; then security delete-keychain "$keychain"; fi
+          python3 -c 'import os, pathlib; pathlib.Path(os.environ["RUNNER_TEMP"], "kero-signing.p12").unlink(missing_ok=True)'

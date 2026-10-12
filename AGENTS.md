@@ -33,6 +33,8 @@ codesign --verify --deep --strict "build/DerivedData/Build/Products/Debug/Kero D
 
 Debug 产物是 `Kero Dev.app`，标识为 `chiimagnus.kero.dev`。正式版使用 `-scheme kero -configuration Release`，产物为 `build/DerivedData/Build/Products/Release/Kero.app`，标识为 `chiimagnus.kero`。两者共享单个 Target 和 `kero` 可执行文件，但不共享设置、快照、历史及隧道。GhosttyKit 缺失时才下载，校验后复用。需要切换 Xcode 时设置 `DEVELOPER_DIR`；没有自动更新。
 
+两种构建也可运行 `bash scripts/build-app.sh stable|dev`。GitHub CI、标签发布与免费账号签名的凭据及限制见[构建与发包](docs/RELEASE.md)；不要未经授权上传私钥、推送或发布。
+
 ## 验证
 
 按改动选择[现有检查](scripts/check.sh)，可一次运行多个名称：
@@ -44,6 +46,7 @@ bash scripts/check.sh dock-workspace session-snapshot
 | 改动范围 | 维护约束 | 检查名称 |
 | --- | --- | --- |
 | 应用身份与数据目录 | [设置与恢复](docs/SETTINGS.md) | `app-identity settings session-snapshot` |
+| Actions 与签名发包 | [构建与发包](docs/RELEASE.md) | `release`，另验收签名 ZIP |
 | 停靠、分屏、焦点与内容生命周期 | [终端与窗格](docs/TERMINAL.md) | `dock-workspace pane-retention` |
 | 配置与快照格式 | [设置与恢复](docs/SETTINGS.md) | `settings session-snapshot` |
 | 文件树、编辑、读取与保存 | [文件与编辑器](docs/EDITOR.md) | `file-tree-navigation tree-row-hit-testing workspace-identity` |

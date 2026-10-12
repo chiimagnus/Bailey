@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Check independent behavior
+        run: >-
+          bash scripts/check.sh release app-identity settings session-snapshot dock-workspace
+          file-tree-navigation git-execution git-panel-state remote-commands
+          remote-lifetime panel-targets
+      - name: Build development app without credentials
+        run: bash scripts/build-app.sh dev adhoc
+      - name: Check native workspace behavior
+        run: bash scripts/check.sh workspace-identity
+      - name: Build stable app without credentials
+        run: bash scripts/build-app.sh stable adhoc
+      - name: Verify both bundle identities
+        run: >-
+          build/check-app-identity
+          'build/DerivedData/Build/Products/Debug/Kero Dev.app'
+          'build/DerivedData/Build/Products/Release/Kero.app'

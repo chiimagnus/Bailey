@@ -6,7 +6,9 @@
 
 ## 开始使用
 
-需要 macOS 15.6+。当前没有公开二进制发布或自动更新，需由 AI agent 按 [AGENTS.md](AGENTS.md) 构建并安装本地签名应用。
+需要 Apple Silicon Mac 和 macOS 15.6+。已发布版本可在 [GitHub Releases](https://github.com/chiimagnus/kero/releases) 下载：日常使用选 `kero-版本-macos-arm64.zip`，测试选 `kero-dev-版本-macos-arm64.zip`，解压后把应用拖入「应用程序」。没有自动更新；尚无发布包时按 [构建与发包](docs/RELEASE.md) 本机构建。
+
+发布包使用免费账号的 Apple Development 证书签名，**不能进行 Apple 公证，无法保证免除首次打开的安全提示**。macOS 拦截时，确认来源后在「系统设置 → 隐私与安全性」允许打开；不需要关闭系统安全检查。
 
 1. 按 ⇧⌘A 添加文件或目录；选择文件会打开编辑器，添加目录不会启动终端。
 2. 选中项目，按 ⌘T 启动终端。
@@ -98,7 +100,7 @@
 
 按 `⌘,` 打开设置，可调整明暗主题、语言、字体、面板字号、光标、Option 键、编辑器换行和 Git 布局。语言切换需要重启。
 
-偏好与新项目布局保存在 `~/.config/kero/config.toml`。以下是默认工作区配置；启动时读取，只影响之后新建的项目，不覆盖已有项目布局：
+正式版的偏好与新项目布局保存在 `~/.config/kero/config.toml`，开发版使用 `~/.config/kero-dev/config.toml`。以下是默认工作区配置；启动时读取，只影响之后新建的项目，不覆盖已有项目布局：
 
 ```toml
 workspace.groups = ["projects", "", "files,git"]
@@ -118,7 +120,7 @@ workspace.edge-threshold = 0.22
 
 重启会恢复项目、标签与布局，重新读取文件和 diff、打开浏览器网址，并恢复编辑器光标与滚动位置。**不会恢复运行中的命令、未保存文字或网页表单。** 可选的终端历史回放默认关闭，启用后输出保存到磁盘，可能包含敏感信息；它不恢复进程。
 
-「设置 → 端口转发」管理独立的本地或反向 SSH 隧道，规则保存在 `~/.config/kero/tunnels.toml`。启用后随应用启动，不依赖终端标签；关闭规则或退出应用会停止。后台认证使用已有密钥或 SSH agent，不弹出密码框。监听请求使用回环地址，但远端 `GatewayPorts` 可能改变范围。
+「设置 → 端口转发」管理独立的本地或反向 SSH 隧道，正式版规则保存在 `~/.config/kero/tunnels.toml`，开发版使用 `~/.config/kero-dev/tunnels.toml`。启用后随应用启动，不依赖终端标签；关闭规则或退出应用会停止。后台认证使用已有密钥或 SSH agent，不弹出密码框。监听请求使用回环地址，但远端 `GatewayPorts` 可能改变范围。
 
 退出或重启前保存文件、diff 和网页中的工作，结束不能中断的命令。遇到保存失败先保留编辑，SSH 问题先核对主机身份与连接；疑似漏洞请先联系[维护者](https://github.com/chiimagnus)，不要公开密钥或私人输出。
 
