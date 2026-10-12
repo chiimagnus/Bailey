@@ -139,12 +139,6 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         tabs.contains { $0.allContents.contains { $0.isDiff } }
     }
 
-    /// Every diff shown anywhere, paired with the id of its containing tab so
-    /// the content view can tell which one is currently on screen.
-    var diffPlacements: [(diff: DiffTab, tabID: UUID)] {
-        tabs.flatMap { tab in tab.diffs.map { (diff: $0, tabID: tab.id) } }
-    }
-
     /// The focused terminal session; while a file, browser, or diff pane is
     /// focused it has no directory of its own, so panels that need a working
     /// directory (file tree, git, info) track a terminal that does: one sharing
