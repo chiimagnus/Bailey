@@ -12,15 +12,19 @@
 
 ### 首次打开被拦截时
 
-仅在确认应用来自本仓库的 GitHub Release、未被篡改时，按 [Apple 官方说明](https://support.apple.com/zh-cn/102445)操作：
+确认应用来自本仓库的 GitHub Release，并愿意信任它后，在终端粘贴以下命令。开发版将第一行改为 `APP="/Applications/Kero Dev.app"`：
 
-1. 先双击 `Kero.app` 或 `Kero Dev.app`，出现无法验证开发者或无法检查恶意软件的提醒后，关闭提醒。
-2. 打开「系统设置 → 隐私与安全性」，向下滚动到「安全性」，找到对应应用，点击「仍要打开」（Open Anyway）。
-3. 按提示使用 Touch ID 或管理员密码确认；再次出现提醒时，点击「打开」。之后可正常双击打开。若两种应用都被拦截，分别操作。
+```sh
+APP="/Applications/Kero.app"
+codesign --verify --deep --strict \
+  -R='anchor apple generic and certificate leaf[subject.OU] = "RDQHYSDFFG"' "$APP" &&
+xattr -drs com.apple.quarantine "$APP" &&
+open "$APP"
+```
 
-没有「仍要打开」按钮时，先重新尝试打开应用，再回到设置；受公司设备管理限制的 Mac 需联系管理员。不要关闭 Gatekeeper，也不要用删除隔离标记的命令绕过检查。
+命令先校验包完整性、Apple 证书链和本项目签名团队，成功后仅移除这个应用的下载隔离标记并打开。它跳过该包的下载来源检查，不关闭全局 Gatekeeper、不清空其他扩展属性，也不代表应用已公证或 `spctl --assess` 会放行。无需另下脚本，不自动使用 `sudo`。
 
-若提示应用「已损坏」或「将损坏你的电脑」，不要按普通首次打开提醒处理。重新从本仓库 Release 下载；仍有问题时联系维护者并提供提示和 macOS 版本。可运行 `codesign --verify --deep --strict "/Applications/Kero.app"` 检查包完整性（开发版替换为 `Kero Dev.app`）；校验失败不要继续运行。`spctl --assess` 拒绝未公证的开发签名包，不等于包已损坏。
+若校验失败或提示「将损坏你的电脑」，不要继续绕过检查；重新从本仓库 Release 下载，仍有问题时联系维护者并提供提示和 macOS 版本。若没有修改应用包的权限，可将应用放到自己有写入权限的目录并调整 `APP` 路径；企业管理策略仍可能阻止运行。
 
 ## 开始使用
 

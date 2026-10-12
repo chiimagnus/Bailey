@@ -44,4 +44,4 @@ Apple Development 签名可校验签名者与包完整性，但不是面向公�
 
 验收须分别记录 `codesign --verify --deep --strict` 的完整性结果、`spctl --assess --type execute --verbose=4` 的 Gatekeeper 结果，以及真实下载包的首次打开结果。后两项未通过或未测时明确说明，不能把签名有效、本地构建或静态 workflow 检查当作 Gatekeeper 放行或远端 CI/CD 成功。开发签名包被 Gatekeeper 拒绝时保留检查结果并告知上述操作，不因此降级签名或关闭安全检查。
 
-不移除下载隔离标记、不关闭 Gatekeeper，也不把其他证书冒充免费方案。应用内部权限仍由 macOS 单独管理。
+发布包不预先清理下载隔离标记；用户确认信任后，可执行 README 中的命令，先校验签名、Apple 证书链和团队，再仅清理指定应用的 `com.apple.quarantine`。不提供额外首次打开脚本，不关闭全局 Gatekeeper、不清空其他属性，也不把其他证书冒充免费方案。应用内部权限仍由 macOS 单独管理。
