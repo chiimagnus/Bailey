@@ -30,13 +30,13 @@
 - Modify: `kero/Workspace/LocalWorkspaceBackend.swift`：删除 `readImmediately`，保留 `readSync` / `@concurrent read`；`WorkspaceBackend.swift` 只有契约与数据类型，不再含本地实现。
 - Modify: `kero/Editor/SourceTextEditor.swift`：`apply` 的断线编辑禁用。
 - Verify/modify only for the existing reconnect chain: `Project.connectedWorkspace/rebindRemoteTabs`、`SSHHostWorkspaces.setConnected/connectionState`。固定主机与终端交互 SSH 的状态来源不同，不能只测后者。
-- Callers to verify, not automatically modify: Project.openFile/openFileToSide/makeContent、FileViewerView.onAppear/didBecomeActive/didBecomeKey。
-- New: scripts/check-bounded-file-read.swift，复用现有独立 Swift 编译检查约定，检查真实 WorkspaceBackend 读取而不是复制算法。
-- Modify: `scripts/check.sh` 注册新检查；`scripts/check-workspace-identity.swift` 与 `scripts/check-pane-retention.swift` 迁移初始化后立即读写的假设，并覆盖真实 FileTab 生命周期。
+- Callers to verify, not automatically modify: Project.openFile/makeContent、FileViewerView.onAppear/didBecomeActive/didBecomeKey。
+- New: KeroTests/check-bounded-file-read.swift，复用现有独立 Swift 编译检查约定，检查真实 WorkspaceBackend 读取而不是复制算法。
+- Modify: `scripts/check.sh` 注册新检查；`KeroTests/check-workspace-identity.swift` 与 `KeroTests/check-pane-retention.swift` 迁移初始化后立即读写的假设，并覆盖真实 FileTab 生命周期。
 - Modify: docs/PERFORMANCE.md 的已实现约束；行为说明仅在需要时更新 docs/EDITOR.md。
 
 **当前链路与根因:**
-Project 的三个入口同步创建 FileTab；本地 init 调 readImmediately(.max)，读取/解码或 NSImage 创建之后才检查文本大小。远程 init 启动 reload，onAppear 再启动会取消旧任务；取消 Task 不等于同步 I/O 已停止。`LocalWorkspaceBackend` 当前已是 `nonisolated`，read/list/stat 等已是 `@concurrent`，不是本 task 尚需添加的能力。reload 用 try? 吞掉具体错误，loadedContent 仍在 MainActor；updatePath 假设已有内容，异步首次加载后不成立。SourceTextEditor 当前也未设置 `isEditable`，断线只有横幅，需与既有只读要求一致。
+Project 的 openFile 与恢复用 makeContent 同步创建 FileTab；本地 init 调 readImmediately(.max)，读取/解码或 NSImage 创建之后才检查文本大小。远程 init 启动 reload，onAppear 再启动会取消旧任务；取消 Task 不等于同步 I/O 已停止。`LocalWorkspaceBackend` 当前已是 `nonisolated`，read/list/stat 等已是 `@concurrent`，不是本 task 尚需添加的能力。reload 用 try? 吞掉具体错误，loadedContent 仍在 MainActor；updatePath 假设已有内容，异步首次加载后不成立。SourceTextEditor 当前也未设置 `isEditable`，断线只有横幅，需与既有只读要求一致。
 
 **实施:**
 1. init 只保存身份/backend、空基线与 .loading，不做 I/O，也不在 init 启动第二套读取。既有 onAppear 负责第一次加载，未选中的恢复标签保持懒加载。
@@ -51,13 +51,13 @@ Project 的三个入口同步创建 FileTab；本地 init 调 readImmediately(.m
 10. 沿固定 SSH 主机的实际连接状态闭环：当前 connectedWorkspace 对匹配 sshHost 无条件返回缓存 backend，setConnected 也不是 Project 的通知源，不能认为 banner/isEditable 修复已覆盖它。复用 SSHHostWorkspaces 的状态发布到现有 Project rebind，不新建连接管理者或后台探测循环；首次未知/connecting 仍能由已有选中加载开始连接，已知断线保留预览与编辑。已有面板刷新或选中/激活的显式读取可恢复连接，失败不能清内容；恢复后换正确 backend 并失效旧读取。不能用只读守卫把首次连接或后续重连永久阻断。
 
 **针对性验证:**
-- 在 task 内完成 scripts/check-bounded-file-read.swift：
+- 在 task 内完成 KeroTests/check-bounded-file-read.swift：
   - 编译 `WorkspaceBackend.swift` 与 `LocalWorkspaceBackend.swift` 的真实生产实现，不提供后端壳或复制读取算法。
   - 临时文件 0、cap-1、cap、cap+1、缺失、可读 symlink 目标；超限捕获 tooLarge，内容和字节正确。
   - 用现有工程并发 flags 编译应用，再用 trace 验证 executor；脚本默认编译语义不能代替 app 语义证明。
-- Run（同 task 注册）：`bash scripts/check.sh bounded-file-read workspace-identity pane-retention`；后两项先构建 Debug App。独立检查编译输入为 `WorkspaceBackend.swift LocalWorkspaceBackend.swift scripts/check-bounded-file-read.swift`。
+- Run（同 task 注册）：`bash scripts/check.sh bounded-file-read workspace-identity pane-retention`；后两项先构建 Debug App。独立检查编译输入为 `WorkspaceBackend.swift LocalWorkspaceBackend.swift KeroTests/check-bounded-file-read.swift`。
 - 扩展实际 App 的 `workspace-identity` 检查：未显示 init 不读取、显式加载成功/超限/失败、延迟旧路径后 rename、干净/脏重载、同机器连接更换与关闭释放；`pane-retention` 在加载后编辑再重挂载。这两项不是单独 backend 读取检查可替代的。
-- 真实 Kero：树/打开到旁边/恢复三入口；512 KiB 与 4 MiB 首开，纯文本无高亮与 Swift 分开；等待时能切终端/标签，实际文本出现后能输入、保存并对照磁盘。
+- 真实 Kero：树和菜单经 openFile 打开独立标签，以及快照恢复；512 KiB 与 4 MiB 首开，纯文本无高亮与 Swift 分开；等待时能切终端/标签，实际文本出现后能输入、保存并对照磁盘。
 - 加载中重命名/关闭、外部修改触发干净重载、脏文本激活窗口、保存失败和写入期间继续输入；有授权 SSH fixture 时检查断线保留与同路径不同机器隔离。
 - 冷/热复测证明确少一次初始读、无界超限读消失，记录图片例外和实际可见延迟。旧结果未覆盖不仅看守卫代码，要看最终文本/路径/磁盘内容。
 
@@ -72,7 +72,7 @@ Project 的三个入口同步创建 FileTab；本地 init 调 readImmediately(.m
 - Modify: kero/Editor/SyntaxHighlightPlugin.swift：SyntaxHighlightCoordinator.init 的字体初始化与 AttributeProvider、SyntaxHighlightTextInterface.clearStyle/applyStyle。
 - Verify: kero/Editor/SyntaxHighlighting.swift：theme 的空 fonts；kero/Editor/SourceTextEditor.swift：apply。
 - Read-only dependency contract: Vendor/STTextView/Sources/STTextViewAppKit/STTextView.swift：font setter、addAttributes。
-- Modify: `scripts/check-editor-highlighting.swift`，扩展 P1-T3 已接入的真实 App 检查，不新建样式测试框架。
+- Modify: `KeroTests/check-editor-highlighting.swift`，扩展 P1-T3 已接入的真实 App 检查，不新建样式测试框架。
 - Modify: docs/PERFORMANCE.md。
 
 **当前行为与根因:** Kero 的 theme fonts 明确为空，仍在 coordinator 初始化执行 textView.font = textView.font；该 setter 不比较值，会给整个已装入文档加字体属性。每 token 还带当前 .font，clearStyle 也写回字体，触发文本事务/布局。颜色本来已有 rendering attribute 路径。

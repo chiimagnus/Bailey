@@ -32,7 +32,7 @@
 - Modify: `kero/Git/GitPanel.swift`、`kero/Git/RecentCommitsView.swift`、`kero/UI/Components/BottomToolbarView.swift`：真实详情 consumer 与加载/失败表示；调用入口是 `ContentView.syncGit` / `ToolPanelView`，按需要最小接入。
 - Modify only as needed: kero/Remote/RemoteCommands.swift 的现有 batchCommand/parseBatch 使用；新文案按 docs/LOCALIZATION.md 更新 kero/Resources/Localization/Git.xcstrings、Sidebar.xcstrings 或 Workspace.xcstrings 对应归属。
 - Only where deadline propagation requires it: `RemoteConnection.run/check` 的已有 master preflight。check 当前另有固定 5 秒预算，不能把传给 backend.run 的剩余时间当作整个调用已严格包含 preflight；沿当前 runner 传递同一剩余预算，不新增连接/重试层。
-- Extend: `scripts/check-git-panel-state.swift` 现有真实模型/backend 检查，增加受控延迟结果，不另建同职责脚本。
+- Extend: `KeroTests/check-git-panel-state.swift` 现有真实模型/backend 检查，增加受控延迟结果，不另建同职责脚本。
 - Modify: docs/PERFORMANCE.md、docs/GIT.md；本地 evidence-p4.md。
 
 **现状与失效边界:** runGitStatus 完成 numstat、未跟踪行数、refs/remote/log/stash/git-dir 后才 publish。applyRepository 当前全量覆盖，不能以空数组补齐核心结果。worker 的 10/24 秒 deadline 目前只传给 statusGit；未跟踪计数和仓库标记另走无剩余时间的调用，外层 12/30 秒 watchdog 只能拒绝晚结果，并未停止实际工作。另有同 root/scope 更换连接后旧结果仍可能通过原 generation 的路径；拆阶段必须在同 task 验证并处理。
@@ -62,7 +62,7 @@
 
 **类型 / 依赖:** 实现；依赖 P4-T1。
 
-**Files / 锚点:** GitStatusModel.sync/refresh/loadMoreCommits/perform、stage/unstage/discard/trash/commit/fetch/switchBranch/createBranch/stash、cachedStatusByRoot/recentCommitLimitByRoot；ContentView 的 commandCompletionSequences/激活入口与 syncGit；ToolPanelView 的文件创建/rename/delete 后 refreshGitStatus；扩展 scripts/check-git-panel-state.swift。
+**Files / 锚点:** GitStatusModel.sync/refresh/loadMoreCommits/perform、stage/unstage/discard/trash/commit/fetch/switchBranch/createBranch/stash、cachedStatusByRoot/recentCommitLimitByRoot；ContentView 的 commandCompletionSequences/激活入口与 syncGit；ToolPanelView 的文件创建/rename/delete 后 refreshGitStatus；扩展 KeroTests/check-git-panel-state.swift。
 
 **设计决定:** 缓存有效性来自真实数据或已知动作，不由延时 TTL 决定。HEAD 没变不证明 refs/remote/stash 没变；任意终端命令不安全可分类。先最小两类失效及现有状态表达，再测需要的数据身份校验是否比重取更划算。
 
@@ -93,7 +93,7 @@
 **Files / 锚点:**
 - Modify: GitStatusModel.applyRepository/clearRepositoryState/fileDecoration。
 - Reuse: TreeDisplayModel.Status.directoryPriority、pathRows 已有的目录聚合语义。
-- Modify: scripts/check-git-panel-state.swift 的装饰检查；仅需要共享算法归属时才改 `kero/Shared/Tree/TreeDisplayModel.swift` 和现有树检查。
+- Modify: KeroTests/check-git-panel-state.swift 的装饰检查；仅需要共享算法归属时才改 `kero/Shared/Tree/TreeDisplayModel.swift` 和现有树检查。
 - Consumers to verify: FileTreeRow、GitEntryRow、RecentCommitsView；不独立修改 row 布局。
 
 **现状与根因:** fileDecoration 先 direct path，再扫描全部 ignoredPaths，目录再 filter 全部 fileDecorations。每行重绘可重复扫描同快照；Git pathRows 已在构造时聚合父目录状态，不能在 Files 另发明优先级。
@@ -114,7 +114,7 @@
 
 **类型 / 依赖:** 定向实验后条件最小实现；依赖 P1、P4-T3，用来排除装饰影响。
 
-**Files / 锚点:** ToolPanelView.pollsSelectedPanel/syncQueue/performSync、FileTreeModel.sync/rebuild/children、LocalWorkspaceBackend.list、SSHWorkspaceBackend.list、RemoteCommands.listDirectoryCommand/batchCommand、TreeDisplayModel.Traversal.nextDirectory/receive；scripts/check-file-tree-navigation.swift。
+**Files / 锚点:** ToolPanelView.pollsSelectedPanel/syncQueue/performSync、FileTreeModel.sync/rebuild/children、LocalWorkspaceBackend.list、SSHWorkspaceBackend.list、RemoteCommands.listDirectoryCommand/batchCommand、TreeDisplayModel.Traversal.nextDirectory/receive；KeroTests/check-file-tree-navigation.swift。
 
 **当前事实:** Traversal 为压缩目录读取未展开目录的直接子项，不仅 expanded；live tree 有 32 层约束防 symlink 循环，Git 有限路径没有同一限制。ToolPanelView 两秒 poll 只在前台可见 Files，performSync 按自身 panel，Git 分支不执行同步；heading 只读发布状态。Info 已移除，工具面板不重复创建；既有 PanelSyncQueue 与 FileTreeModel.rebuild 都串行合并，各管不同生命周期，不据此认定两者冗余。
 

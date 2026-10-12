@@ -13,7 +13,7 @@
 - Workspace/PaneTab.swift::PaneTab、Project::closeContent/restoreTab、TerminalManager::makeWindowSnapshot/restore、SessionStore。
 - KeroCommands、CommandPaletteView.commands、WorkspaceDockView.content、PanelContentView、WorkspaceChrome、TabSwitcherView。
 - TerminalHostView、TerminalSession、TerminalSurface、TerminalOpenMenuTarget、SourceTextEditor、FileViewerView、BrowserView、FileTreePanel、GitPanel、ToolPanelView。
-- check-session-snapshot、check-pane-retention、check-workspace-identity；AGENTS、TERMINAL/SETTINGS/BROWSER/PRODUCT 文档及被删除动作的字符串。README 保留用户删减后的内容，不恢复、不改写。
+- `KeroTests/check-session-snapshot.swift`、`KeroTests/check-pane-retention.swift`、`KeroTests/check-workspace-identity.swift`；AGENTS、TERMINAL/SETTINGS/BROWSER/PRODUCT 文档及被删除动作的字符串。README 保留用户删减后的内容，不恢复、不改写。
 
 ### 实施
 

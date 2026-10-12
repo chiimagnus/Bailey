@@ -29,6 +29,8 @@ bash scripts/build-app.sh dev
 
 ## 验证
 
+测试源码与专用检查脚本放在 `KeroTests/`，`scripts/check.sh` 只作为统一执行入口。沿用现有轻量检查，不新增测试 Target 或框架。
+
 按改动选择[现有检查](scripts/check.sh)，可一次运行多个名称：
 
 ```sh
@@ -63,7 +65,7 @@ bash scripts/check.sh dock-workspace session-snapshot
   ```
   隔离模式单独保存窗口和终端历史，不启动已保存隧道；全局设置仍可能共用，不在隔离实例中修改设置。
 - 指定独立测试包时，只更新该包，默认直接使用已签名的 Kero Dev 开发版和隔离参数。不得仅修改 Info.plist 后冒称数据隔离成立；应用数据路径由实际 Bundle ID 决定，检查须覆盖配置与历史目录。
-- 真实 SSH 检查只用获准的专用测试 master，不借用用户连接。`bash scripts/check-workspace-identity.sh user host port control-socket` 会在两台机器创建并清理唯一临时目录；缺少条件时明确记录远端未测。
+- 真实 SSH 检查只用获准的专用测试 master，不借用用户连接。`bash KeroTests/check-workspace-identity.sh user host port control-socket` 会在两台机器创建并清理唯一临时目录；缺少条件时明确记录远端未测。
 - 验收后只清理本轮创建且可确认归属的临时应用与独立测试数据，保留用户原有数据。编译成功、事件发出或骨架出现不算行为通过；隔离包通过不等于正式包已安装。
 
 ## 文档与提交

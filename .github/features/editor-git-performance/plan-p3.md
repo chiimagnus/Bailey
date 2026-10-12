@@ -29,7 +29,7 @@
 **Files / 锚点:**
 - Modify: kero/Editor/SyntaxHighlightPlugin.swift：setUp、willChangeContent、didChangeContent、两种 token provider、tsClient.invalidationHandler。
 - Read-only: Neon Highlighter.didChangeContent / handleTokens / TokenApplication；锁定源码见 build/SourcePackages/checkouts/Neon/Sources/Neon/。
-- Modify: `scripts/check-editor-highlighting.swift`，扩展 P1-T3 已有真实 App/生产桥接检查；可在同一脚本用现有 TextSystemInterface 加可控延迟验证真实 Neon 契约，不另写桥接算法。
+- Modify: `KeroTests/check-editor-highlighting.swift`，扩展 P1-T3 已有真实 App/生产桥接检查；可在同一脚本用现有 TextSystemInterface 加可控延迟验证真实 Neon 契约，不另写桥接算法。
 - Modify: docs/PERFORMANCE.md 的增量路径事实。
 
 **证据:** Highlighter.didChangeContent 移动 validSet、清 pending 并安排重请求，Kero 当前未调用。另有真实的多回调间隙：base query 成功后再发 injection query，两者各自通过 Neon 的 version 检查，并不证明合并结果同版；后一查询 staleContent 时当前代码仍提交旧 base tokens。STTextView 在修改前/后传同一个 NSTextRange，Kero 却在修改后重新转换旧范围，删除末尾时可能越界；应在 will 阶段保留旧 NSRange。这些是当前执行链缺口，不等待后台子解析或性能准入才处理。
@@ -73,7 +73,7 @@
 **Files / 锚点:**
 - kero/Editor/SyntaxHighlightPlugin.swift：TreeSitterClient transformer、willChangeContent/didChangeContent。
 - Read-only: STTextKitPlus NSTextContentManager.position；Neon InputEdit 扩展与 SwiftTreeSitter.Point。
-- Only if admitted: new kero/Editor/TextCoordinateIndex.swift、scripts/check-text-coordinate-index.swift；现有同步根目录自动接入应用。
+- Only if admitted: new kero/Editor/TextCoordinateIndex.swift、KeroTests/check-text-coordinate-index.swift；现有同步根目录自动接入应用。
 - Local evidence: evidence-p3.md；实现后更新 docs/PERFORMANCE.md。
 
 **问题与方法:** position 每次枚举整份文档段落并搜索。测首/中/尾、等字节不同换行数量、超长单行；将转换耗时与 parser 耗时分开。成本最多一轮定位加一轮纯数据原型，若未命中就保留现实现。
@@ -83,7 +83,7 @@
 2. 如确需索引，只维护当前文档的 UTF-16 行起点，在编辑通知更新受影响片段和后续偏移；二分查所在行。不新建 Rope、不声称数组尾部平移是 O(log N)。
 3. 复用 P1-T3/P3-T1 已正确的 Point 与旧 edit 范围：索引按 LF 行定义，输出 UTF-16 字节列，will 用旧文本、did 用新文本。数据由 coordinator 持有，重建/换文档重置；后台只读对应快照，不读 AppKit。
 4. 对照完整 Parser oracle 检查 CRLF、LF、bare CR、Unicode 段落分隔符、尾换行和空文本；不把 TextKit 的 paragraph row 当作 Tree-sitter row。此处是性能替代的等价性验证，不将已知单位修复延期到索引准入。
-5. 脚本编译真实 TextCoordinateIndex；用固定 seed 多次插删替换与慢扫描 oracle 对比全部关键偏移，含 emoji 代理对、中文、CRLF 边界和尾端。命令：xcrun swiftc -swift-version 5 -o build/check-text-coordinate-index kero/Editor/TextCoordinateIndex.swift scripts/check-text-coordinate-index.swift && build/check-text-coordinate-index。
+5. 脚本编译真实 TextCoordinateIndex；用固定 seed 多次插删替换与慢扫描 oracle 对比全部关键偏移，含 emoji 代理对、中文、CRLF 边界和尾端。命令：xcrun swiftc -swift-version 5 -o build/check-text-coordinate-index kero/Editor/TextCoordinateIndex.swift KeroTests/check-text-coordinate-index.swift && build/check-text-coordinate-index。
 
 **验收:** 真机输入/撤销/高亮范围无回退，原扫描热点消失或明显收敛；记索引分配、首开成本与尾部偏移更新成本。未改善或破坏坐标则撤销原型，不把新增索引本身算完成。
 
@@ -114,7 +114,7 @@
 **Files / 锚点:**
 - Modify: kero/Editor/SyntaxHighlightPlugin.swift 的 installTokenProvider、finishInstall、injectedHighlightsQuery、pendingInjectionCompiles；SyntaxHighlighting.highlightsData/injectionsData 的资源输入。
 - Only if admitted: new kero/Editor/HighlightQueryCache.swift，将现有 HighlightQueryCache 原职责迁出插件，新增的在途合并仍由它拥有。不是新增通用缓存或替换 SyntaxLanguage。
-- Modify: `scripts/check-editor-highlighting.swift`；实际 cache 仍在插件内时用现有 App 模块检查，不为了测试迁出文件或伪造 SyntaxLanguage。确因共享职责需要独立文件才用真实模块链接。
+- Modify: `KeroTests/check-editor-highlighting.swift`；实际 cache 仍在插件内时用现有 App 模块检查，不为了测试迁出文件或伪造 SyntaxLanguage。确因共享职责需要独立文件才用真实模块链接。
 - Local evidence: evidence-p3.md；实现后更新 docs/PERFORMANCE.md。
 
 **已证实必修:** injectedHighlightsQuery 无论成功/失败都移除 pending 并 invalidate；固定查询失败后，下一请求会再编译、再 invalidate，形成实际闭环。本 task 先用坏查询可控复现并消除循环，不以性能不显著为由保留。
@@ -163,7 +163,7 @@
 **Files / 接入:**
 - Modify: kero/Editor/SyntaxHighlightPlugin.swift 的 injection provider / edit / lifecycle。
 - Only if selected: kero/Editor/InjectedSyntaxState.swift，拥有当前 editor 的子区域解析数据；单个真实职责，不写 protocol/factory。
-- New: scripts/check-injected-highlighting.swift 与同 task 配套运行命令；编译实际被选子区域实现和现有依赖，不复制其算法。
+- New: KeroTests/check-injected-highlighting.swift 与同 task 配套运行命令；编译实际被选子区域实现和现有依赖，不复制其算法。
 - Modify: `scripts/check.sh` 注册 `injected-highlighting`；编译/模块参数沿 P1-T3 的现有 App/依赖入口，采用真实 SyntaxLanguage，不为脚本新增类型壳。
 - Modify: docs/PERFORMANCE.md；需要额外产品/补丁时更新 docs/DEPENDENCIES.md。
 

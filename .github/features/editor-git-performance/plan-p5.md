@@ -62,7 +62,7 @@
 **Files:**
 - Modify: `kero/Git/DiffViewerView.swift` 的 `reload` 与读取结果回写。
 - New: `kero/Git/DiffContentReader.swift`，迁移实际 Git/worktree 读取，单个生产与脚本共用的数据型职责；不加 protocol、factory、队列或缓存框架。
-- New: `scripts/check-diff-content.swift` 并在 check.sh 接入；Extend: `scripts/check-workspace-identity.swift` 的真实 DiffTab 晚结果/编辑保留检查。
+- New: `KeroTests/check-diff-content.swift` 并在 check.sh 接入；Extend: `KeroTests/check-workspace-identity.swift` 的真实 DiffTab 晚结果/编辑保留检查。
 - Modify: `Project.openDiff/openCommitDiff` 的复用分支，按归因避免重复初读/历史重读。
 - Existing shared runners: `GitCommandExecution.run / runData`、`WorkspaceBackend` 与 `LocalWorkspaceBackend`；不另造进程池或绕过登录 shell 环境。
 

@@ -29,7 +29,7 @@
 - Modify: `docs/PERFORMANCE.md` 的生成入口，验收流程链接 `AGENTS.md`。
 - Local evidence: `build/performance/fixtures/`、`build/performance/fixtures-manifest.json`、feature 下 `evidence-p1.md`。
 
-**当前依据:** `scripts/check-file-tree-navigation.swift` 已用独立 Swift 检查和临时目录；没有 app 测试 target。文本及 diff 上限 5 MiB，未跟踪计数有 2048 文件/8 MiB 每文件/32 MiB 总预算。
+**当前依据:** `KeroTests/check-file-tree-navigation.swift` 已用独立 Swift 检查和临时目录；没有 app 测试 target。文本及 diff 上限 5 MiB，未跟踪计数有 2048 文件/8 MiB 每文件/32 MiB 总预算。
 
 **实施:**
 1. 只创建指定的全新输出目录；已存在则拒绝覆盖。确定性生成 32 KiB / 512 KiB / 4 MiB Swift、TSX、Markdown 长代码块和 HTML script，记录真实字节数、UTF-16 长度与行数。
@@ -54,7 +54,7 @@
 **Files / 锚点:**
 - Modify: `kero/Editor/SyntaxHighlightPlugin.swift`：coordinator 初始化的首次 will/did 与 TreeSitterClient transformer。
 - Read-only: `Neon/Sources/TreeSitterClient/TreeSitter+Extensions.swift`、`SwiftTreeSitter/Parser.swift`、`STTextKitPlus/NSTextContentManager.swift`、tree-sitter `lib/src/lexer.c`。
-- New: `scripts/check-editor-highlighting.swift` 与 `.sh`，复用现有 `@testable import kero` / Debug dylib 方式，调用生产插件；Modify: `scripts/check.sh` 注册 `editor-highlighting`，`docs/EDITOR.md` 仅同步必要维护约束。
+- New: `KeroTests/check-editor-highlighting.swift` 与 `.sh`，复用现有 `@testable import kero` / Debug dylib 方式，调用生产插件；Modify: `scripts/check.sh` 注册 `editor-highlighting`，`docs/EDITOR.md` 仅同步必要维护约束。
 
 **当前证据:** 初始文档长度 N 时，代码以旧范围 `[0,N)` 加 delta=N，Neon 因而请求新终点 2N；Kero 的 NSTextContentManager 无该位置，不能用 `.zero` 伪造坐标。锁定 parser 用 UTF-16，InputEdit 字节乘 2，但当前 transformer 将 TextKit 的 UTF-16 column 原值传入 Point；TextKit 段落也不等于 Tree-sitter 只按 LF 分行的定义。本轮链接真实依赖的最小检查确认 N=7 时请求 offset=14，完整解析的 EOF column 为 14 字节，不是 7。
 
@@ -73,7 +73,7 @@
 **类型 / 依赖:** 最小实验；依赖 P1-T1、P1-T3。
 
 **Files / 已核对锚点:**
-- `kero/Workspace/Project.swift`：`openFile`、`openFileToSide`、`makeContent`。
+- `kero/Workspace/Project.swift`：`openFile`、`makeContent`。
 - `kero/Editor/FileViewerView.swift`：`FileTab.init`、`reloadFromDiskIfClean`、`loadedContent`。
 - `kero/Editor/SourceTextEditor.swift`：`makeNSView`、`Coordinator.textViewDidChangeText`。
 - `kero/Editor/SyntaxHighlightPlugin.swift`：`didChangeContent`、`injectedTokens`、`SyntaxHighlightTextInterface.applyStyle`。

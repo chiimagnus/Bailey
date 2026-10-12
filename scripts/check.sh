@@ -23,7 +23,7 @@ fi
 compile_and_run() {
     local name="$1"
     shift
-    xcrun swiftc -swift-version 5 -o "build/check-$name" "$@" "scripts/check-$name.swift"
+    xcrun swiftc -swift-version 5 -o "build/check-$name" "$@" "KeroTests/check-$name.swift"
     "build/check-$name"
 }
 
@@ -32,7 +32,7 @@ for name in "$@"; do
     printf '\n检查：%s\n' "$name"
     case "$name" in
         release)
-            bash scripts/check-release.sh
+            bash KeroTests/check-release.sh
             ;;
         app-identity)
             compile_and_run "$name" kero/App/AppIdentity.swift
@@ -82,7 +82,7 @@ for name in "$@"; do
                 printf '请先按 AGENTS.md 构建 Debug App。\n' >&2
                 exit 1
             fi
-            bash "scripts/check-$name.sh"
+            bash "KeroTests/check-$name.sh"
             ;;
         *)
             printf '未知检查：%s；用 --help 查看名称。\n' "$name" >&2

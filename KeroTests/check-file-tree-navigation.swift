@@ -4,7 +4,7 @@
 //   kero/Workspace/WorkspaceBackend.swift kero/Workspace/LocalWorkspaceBackend.swift \
 //   kero/Shared/Tree/TreeDisplayModel.swift \
 //   kero/Files/FileTreeModel.swift \
-//   scripts/check-file-tree-navigation.swift && build/check-file-tree-navigation
+//   KeroTests/check-file-tree-navigation.swift && build/check-file-tree-navigation
 
 import Combine
 import Foundation

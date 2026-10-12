@@ -11,5 +11,5 @@ xcrun swiftc -parse-as-library -swift-version 5 \
     -I Vendor/STTextView/Sources/STObjCLandShim/include \
     "${module_flags[@]}" "$products/Kero Dev.app/Contents/MacOS/kero.debug.dylib" \
     -Xlinker -rpath -Xlinker "$PWD/$products/Kero Dev.app/Contents/MacOS" \
-    -o build/check-workspace-identity scripts/check-workspace-identity.swift
-build/check-workspace-identity "$@"
+    -o build/check-pane-retention KeroTests/check-pane-retention.swift
+build/check-pane-retention
