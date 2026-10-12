@@ -98,6 +98,14 @@ bash scripts/check-workspace-identity.sh
 
 已有专用测试 SSH master 时，可追加 `user host port control-socket` 四个参数，验证真实远端读取、断线拒绝写入与替换连接后的 File/Diff 保存。检查在两台机器上创建同名的唯一临时目录，核对远端字节和本机未被改写后删除测试目录；不创建认证连接或借用用户的 master。
 
+涉及窗格内容的生命周期时，在 Debug 构建后运行原生重挂载检查：
+
+```sh
+bash scripts/check-pane-retention.sh
+```
+
+它使用实际 App 的 Pane/Dock、未显示的 SwiftUI 浏览器视图和临时 HTML，检查未保存文件及浏览器页面、表单、滚动、前进后退历史。不会激活窗口或加载外网；不代替真实 Dock 拖动及焦点验收。
+
 涉及面板异步目标或进程操作时，运行延迟后端检查（不执行真实 kill/delete）：
 
 ```sh
