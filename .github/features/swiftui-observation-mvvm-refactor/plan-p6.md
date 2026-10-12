@@ -4,11 +4,11 @@
 
 **Non-goals：** 不新增另一套项目／Git／Files 状态真源；不重做原生终端或编辑器的输入机制；不扩大命令面板的搜索范围到远程 SSH 项目。
 
-**Approach：** `PanelContext.resolvedRoot()` 已解决本机/SSH 项目识别；GitStatusModel、FileTreeModel 自己已有 refresh 合并/代次保护，`ToolPanelView.PanelSyncQueue` 另解决可见面板重复触发。不再发明一套窗口级 SyncCoordinator，只把实际解析与后端操作移到最接近的现有 ViewModel，View 的 `onChange/.task` 留做生命周期触发。命令面板目录枚举/`GitCommandExecution.run` 移入一份简单的索引函数/具体后台 helper，只有持续索引/取消/加载状态需要明确 owner 才新建对应 ViewModel。
+**Approach：** `PanelContext.resolvedRoot()` 已解决本机/SSH 项目识别；GitStatusModel、FileTreeModel 自己已有 refresh 合并/代次保护，`ToolPanelView.PanelSyncQueue` 另解决可见面板重复触发。不再发明一套窗口级 SyncCoordinator，只把实际解析与后端操作移到最接近的现有 ViewModel，View 的 `onChange/.task` 留做生命周期触发。命令面板目录枚举/`GitCommandExecution.run` 移入一份简单的索引函数/具体后台 helper；现有 `.task` 与 `@State` 已能保存索引、取消和选中作用域，不再预留额外 ViewModel。
 
 **Acceptance：** Git／Files 的同步不受窗口位置或 View 重挂载影响；本机项目文件搜索通过真实服务并尊重取消及作用域；辅助 UI 状态由 Observation／局部 `@State` 表达，原先旧式订阅与包装器按任务消失。
 
-**Rules：** `docs/TERMINAL.md`、`docs/GIT.md`、`docs/EDITOR.md`、`docs/PERFORMANCE.md`，尤其保留本地与 SSH 身份隔离、Git 事件驱动刷新、文件树活动期间定时刷新与长寿命原生视图。重构不是新增轮询或重复读盘的理由。
+**Rules：** `docs/TERMINAL.md`、`docs/GIT.md`、`docs/EDITOR.md`、`docs/PERFORMANCE.md`，尤其保留本地与 SSH 身份隔离、Git 事件驱动刷新、文件树活动期间定时刷新与长寿命原生视图。重构不是新增轮询或重复读盘的理由。Git/Files 更新时机、加载与错误反馈、⌘P 搜索排序、键盘/鼠标选择、焦点/关闭时机、动画和可见界面必须与 P1 原生基线一致。
 
 ---
 
@@ -34,7 +34,7 @@
 
 **当前可达链：** 命令面板 `.task(id: fileIndexContext?.identity)` 启动 `Task.detached`；View 内静态 `loadProjectFiles` 先直接调用 `GitCommandExecution.run(ls-files)`，失败时 `FileManager.enumerator` 枚举本机文件，并在异步返回后核对 manager／project 目标。远端项目默认禁止该本机文件索引，避免同名路径串机。
 
-**实现：** 把 `loadProjectFiles/gitProjectFilePaths/enumeratedProjectFiles` **从 SwiftUI View 类型**移动到一个无状态具体后台索引 helper（如 `ProjectFileIndex`，无需 `Service` 后缀/协议/DI），内部仍复用唯一 `GitCommandExecution`，普通目录只用 `FileManager` 枚举，NUL/pathspec/.git 排除/子模块失败回退行为保持不变。命令面板真的需要一个 `@Observable` owner 管理异步索引结果、当前 `PanelContext.Identity`、取消和加载状态时就用一个小 `CommandPaletteViewModel`；`query/selection/hover/焦点` 等即时 View 局部状态若没有异步业务消费者继续 `@State`，不塞进 VM 制造镜像。当前 `PalettePointerSelectionController: ObservableObject` **没有任何 `@Published` 字段**，删除空 conformance，保留识别真实鼠标移动的逻辑。**本 Task 同时删除 View 中所有直接目录枚举/同步 Git 命令、原 `Task.detached` 的重复分支、旧索引数据与旧指针假可观察声明**；不新增后台常驻索引或远端扫描。
+**实现：** 把 `loadProjectFiles/gitProjectFilePaths/enumeratedProjectFiles` **从 SwiftUI View 类型**移动到一个无状态具体后台索引 helper（如 `ProjectFileIndex`，无需 `Service` 后缀/协议/DI），内部仍复用唯一 `GitCommandExecution`，普通目录只用 `FileManager` 枚举，NUL/pathspec/.git 排除/子模块失败回退行为保持不变。**现有 `.task(id: fileIndexContext?.identity)` + `@State projectFiles/indexedTarget` 已具备本地索引的取消和目标核对**，默认原样保留，移动的是纯文件 IO；没有证据就**不新增 `CommandPaletteViewModel`、加载状态或额外 generation token**。`query/selection/hover/焦点` 等即时 View 局部状态继续 `@State`，不制造镜像。当前 `PalettePointerSelectionController: ObservableObject` **没有任何 `@Published` 字段**，改成普通持久参考对象由 `@State` 保存，保留识别真实鼠标移动的逻辑（其值仅在 pointer callback 被读取，不必为了重新渲染加宏）。**本 Task 删除 View 内目录枚举/同步 Git 命令和旧指针假可观察声明**；现有 `Task.detached` 仅是把阻塞磁盘索引移离主线程的**必要一次调用**，helper 接走后保留一条异步调用及其取消，不要因偏好新并发 API 而改成主线程扫描；不新增后台常驻索引或远端扫描。
 
 **验证：** 增补或调整针对性 XCTest，覆盖本机普通目录、已跟踪／未跟踪／忽略文件、git ls-files 失败回退、查询排序与超过结果限制、快速换项目／取消后旧结果不能出现，特别检查 SSH 项目不会访问本机同名目录；`make test ONLY_TESTING=KeroTests/PanelContextTests`、`make test ONLY_TESTING=KeroTests/WorkspaceIdentityTests` 及新命令面板测试；`make build`、隔离原生 ⌘P、上下键／Return／Esc 与实际打开文件。
 

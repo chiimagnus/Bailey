@@ -8,20 +8,20 @@
 
 **Acceptance：** Files/Git 在 Observation 下直接更新，rename/new/delete、Git refresh、stage/unstage、commit、discard、diff、提交历史和同名仓库身份行为不变；原本混在 View 中的底层文件系统访问与 Git 安全校验已迁走；共享树仍只有一套。
 
-**Rules：** `docs/EDITOR.md`、`docs/GIT.md`、`docs/PROJECTS.md`、`docs/SECURITY.md`；远端读取、超时、目录切换、失败重试和用户确认必须保持，不能将远端失败降级成对本机执行。
+**Rules：** `docs/EDITOR.md`、`docs/GIT.md`、`docs/PROJECTS.md`、`docs/SECURITY.md`；远端读取、超时、目录切换、失败重试和用户确认必须保持，不能将远端失败降级成对本机执行。Files/Git 的树结构、行高/命中区、颜色、右键菜单、错误/确认弹窗和快捷键，必须与 P1 基线逐项一致，不增加提示或改交互。
 
 ---
 
 <a id="p3-t1"></a>
 ## P3-T1 文件树状态转 Observation，文件操作归入 ViewModel／Backend
 
-**Files／锚点：** `kero/Files/FileTreeModel.swift::FileTreeModel.sync/rebuild/rename/commitDraft/moveToTrash/delete/presentError`，`kero/Files/FileTreePanel.swift::FileTreePanel/FileTreeRow`，`kero/Workspace/Project.swift::fileTree`、`kero/UI/Panels/ToolPanelView.swift`，`KeroTests/FileTreeTests.swift`、`KeroTests/PanelContextTests.swift`。
+**Files／锚点：** `kero/Files/FileTreeModel.swift::FileTreeModel.sync/rebuild/rename/commitDraft/moveToTrash/delete/presentError`，`kero/Files/FileTreePanel.swift::FileTreePanel/FileTreeRow`，`kero/Workspace/Project.swift::fileTree`、`kero/UI/Panels/ToolPanelView.swift`、`kero/UI/ContentView.swift::ContentView`，`KeroTests/FileTreeTests.swift`、`KeroTests/PanelContextTests.swift`。
 
 **当前问题：** `FileTreeModel` 虽是状态与动作持有者，却把后台 Workspace IO、错误原生弹窗和 `@Published` 混在一起；`FileTreePanel` 依赖 `@ObservedObject`。
 
-**实现：** `FileTreeModel` 已是文件树展示与动作的唯一 ViewModel，**保留名称和现有职责**，使用 `@Observable`，View 直接读取属性、绑定时才用 `@Bindable`。其真实文件 IO 本就委托给 `WorkspaceBackend`，不再增设文件 Service；仅把 `presentError` 里直接创建 `NSAlert` 的界面工作委托给**所属窗口稳定存在的 UI presenter**（优先复用 P5 计划的窗口原生对话框入口），ViewModel 负责产出单个操作错误，View／窗口展示它；**不能只依赖 `FileTreePanel` 挂载**，因为 ⌘N、命令面板或外层标签工具栏也可在 Files 面板未显示时执行文件操作。保留远端删除由 View 向用户确认。保持 `sync` 的机器/根目录作用域、`rebuildPending` 合并，以及创建、重命名后的实际文件结果。**本 Task 同时删除 `FileTreeModel.@Published`、旧 `@ObservedObject`、VM 内旧 `NSAlert`/`AppKit` 引用与对应 Combine import**，不留兼容别名。
+**实现：** `FileTreeModel` 已是文件树展示与动作的唯一 ViewModel，**保留名称和现有职责**，使用 `@Observable`，View 直接读取属性、绑定时才用 `@Bindable`。其真实文件 IO 本就委托给 `WorkspaceBackend`，不再增设文件 Service；仅把 `presentError` 里直接创建 `NSAlert` 的界面工作移到**本 Task 就建立且持续挂载的所属窗口 UI 入口**：在现有 WindowRoot/ContentView 上以最小闭包或可消费的操作错误状态呈现，不增设 ErrorBus、全局 AlertManager 或另一套 File ViewModel；后续 P5 的其它原生弹窗复用同一真实窗口归属。**搬迁 `NSAlert` 不等于更换 UI**：保持原有的模态/Sheet 方式、标题、正文、按钮顺序、默认操作、键盘等效键及出现时机；不可为了窗口归属改成新的警告样式、增加错误 Toast 或新增拦截。**不能只依赖 `FileTreePanel` 挂载**，因为 ⌘N、命令面板或外层标签工具栏也可在 Files 面板未显示时执行文件操作；异步失败时切换项目／窗口也不能将错误错投到别的窗口。保留远端删除由 View 向用户确认。保持 `sync` 的机器/根目录作用域、`rebuildPending` 合并，以及创建、重命名后的实际文件结果。**本 Task 同时删除 `FileTreeModel.@Published`、旧 `@ObservedObject`、VM 内旧 `NSAlert`/`AppKit` 引用与对应 Combine import**，不留兼容别名。
 
-**验证：** `make test ONLY_TESTING=KeroTests/FileTreeTests`、`make test ONLY_TESTING=KeroTests/PanelContextTests`、`make test ONLY_TESTING=KeroTests/TreeRowHitTestingTests`，必要处补从 Files 面板可见和隐藏的两个命令入口出错时都确实能展示错误、取消不改盘的测试；`make build`、隔离 UI 中大目录、压缩树和内联重命名。验证结果为实际文件创建／更名／删除，而不只检查视图状态。
+**验证：** `make test ONLY_TESTING=KeroTests/FileTreeTests`、`make test ONLY_TESTING=KeroTests/PanelContextTests`、`make test ONLY_TESTING=KeroTests/TreeRowHitTestingTests`，必要处补从 Files 面板可见和隐藏的两个命令入口出错时都确实能展示错误、取消不改盘的测试；`make build`、隔离 UI 中大目录、压缩树和内联重命名，并对照原生截图、右键菜单项、错误弹窗与键盘/鼠标操作基线。验证结果为实际文件创建／更名／删除，而不只检查视图状态。
 
 **提交：** 新状态与真实操作、视图绑定、旧实现删除和测试一次提交。
 

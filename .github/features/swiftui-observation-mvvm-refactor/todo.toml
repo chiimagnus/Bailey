@@ -59,7 +59,7 @@ note = ""
 
 [[tasks]]
 id = "P4-T1"
-title = "SSH 连接和临时端口转发的可观察状态与断线事件"
+title = "SSH 断线事件与临时端口转发发布器清理"
 status = "pending"
 plan = "plan-p4.md#p4-t1"
 commit = ""

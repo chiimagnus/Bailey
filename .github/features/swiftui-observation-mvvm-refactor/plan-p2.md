@@ -8,7 +8,7 @@
 
 **Acceptance：** 设置改动实时影响 UI、终端和原有磁盘配置；主题切换后 SwiftUI 与长期原生表面全部刷新；移除 `AppSettings.@Published`、`TerminalManager.settingsObservation` 与 `ThemeChanges.objectWillChange` 旧链。不改变不属于 SwiftUI 状态的 TunnelManager/AppKit 表格原生事件协议，避免强制引入第二套事件桥。
 
-**Rules：** `~/.config/kero/config.toml` 和 `tunnels.toml` 分离；遵守 `docs/SETTINGS.md`、`docs/LOCALIZATION.md`、`docs/SECURITY.md`，不得在隔离 UI 实例更改全局设置或启动真实的保存隧道进行测试。
+**Rules：** `~/.config/kero/config.toml` 和 `tunnels.toml` 分离；遵守 `docs/SETTINGS.md`、`docs/LOCALIZATION.md`、`docs/SECURITY.md`，不得在隔离 UI 实例更改全局设置或启动真实的保存隧道进行测试。对照 P1 基线，设置页控件、排列、亮/暗配色、字号、主题切换反馈、终端光标与字体**均不可有任何 UI/UX 差异**；不能借迁移重画设置页面。
 
 ---
 
@@ -36,7 +36,7 @@
 
 **实现：** 保留 `Theme.selection` 原有 `OSAllocatedUnfairLock`：它是非隔离 `NSColor` 动态颜色 provider 的必要线程安全缓存，不是多余的可写 UI 镜像。旧 `ThemeChanges: ObservableObject {}` 是纯空重绘信号，可改为单一 `@Observable` 修订值（由 `Theme.reloadSelection` 修改）或让各 View 直接读取已观察的 AppSettings/theme 字段，以实际消费者最少改动决定；不能并行保留空 Publisher。原生 Ghostty、WebKit diff、TextKit 按现有具体 appearance 更新入口响应，不造主题订阅中心。**同 Task 删除 `Theme.changes.objectWillChange.send()`、旧 `@ObservedObject themeChanges`/空类与无用 Combine import**，保留真实颜色缓存。
 
-**验证：** `make test ONLY_TESTING=KeroTests/AppSettingsTests`、`make build`；主题修订值变更应能触发全部真实消费者，而非仅窗口外框。**不能在隔离 Debug 实例中修改共享的 `AppSettings.shared` 配置文件**；用临时 `AppSettings(configURL:)` 检查状态/解析及自控原生预览，正式 UI 主题联动如需真实用户配置修改必须另获准，不把未测冒充完成。静态颜色缓存应仍线程安全。
+**验证：** `make test ONLY_TESTING=KeroTests/AppSettingsTests`、`make build`；主题修订值变更应能触发全部真实消费者，而非仅窗口外框。**不能在隔离 Debug 实例中修改共享的 `AppSettings.shared` 配置文件**；用临时 `AppSettings(configURL:)` 检查状态/解析及自控原生预览，正式 UI 主题联动如需真实用户配置修改必须另获准，不把未测冒充完成。静态颜色缓存应仍线程安全；对照 P1 同条件的亮/暗主题原生截图，核对窗口/树行/标签/Diff/终端的实际颜色及切换时机，不接受因替换刷新源产生闪烁、重置滚动或焦点。
 
 **提交：** 主题真源接入与所有旧重绘订阅删除同一原子提交。
 

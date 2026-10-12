@@ -6,6 +6,12 @@ Kero 已决定以 **MVVM + Observation** 为长期架构，但现有代码仍主
 
 本次允许**跨模块、大规模重构**。目标不是给旧类改名、机械替换属性包装器或只调整目录，而是在保持产品行为的前提下，让整个 Kero 真正使用现代 SwiftUI 数据流、Observation、清晰的 MVVM 职责，以及适用的现代 Swift 并发／系统 API。完整迁移所需的工作量不作为主动缩减需求的理由。
 
+## 不可协商：UI / UX 零变化
+
+**这次只改内部架构，不改任何现有用户体验。** 相同 macOS、显示缩放、窗口尺寸、主题、语言、数据和操作下，重构前后的布局、间距、颜色、字体、图标、菜单、弹窗文案/按钮/呈现方式、动效、鼠标/键盘/拖拽、快捷键、焦点、滚动、悬停、加载/错误/取消反馈、无障碍与响应顺序均须一致。不能以“现代 SwiftUI”“顺便修一下”为理由更换控件、调整样式、增减提示或改变既有交互。内部迁移不得重建已有的 Shell/WebView/编辑器。
+
+**验收方式**：P1 在改源码前用隔离 Debug 记录受影响界面的原生截图和代表性交互；每个 Task 对照相同环境与状态下的基线截图和实际操作，P7 终验复核。系统时钟、动态文件内容等非代码因素需控制或标明，不能把 XCTest/编译通过当作视觉与交互一致。发现差异先在当前 Task 修复；必须改变 UI/UX 才能实施的方案不属于本次重构，应单独提出并获得明确授权。已发现但修复会改变用户可见操作的既有缺陷，不以重构名义悄悄修复。
+
 ## 目标架构与技术选择
 
 1. **MVVM 职责真正分离**
@@ -24,7 +30,7 @@ Kero 已决定以 **MVVM + Observation** 为长期架构，但现有代码仍主
 3. **现代 Swift、并发与系统 API**
    - 以现有 Xcode／Swift 工具链支持且 **macOS 15.6+** 可用的 API 为准，优先使用原生 SwiftUI／Foundation／Swift Concurrency 实现，减少不必要的 AppKit UI、GCD 调度、旧式回调和兼容包装。
    - **以升级 Swift 6 语言模式、满足严格并发检查为目标**：梳理 `MainActor` 所有权、异步后端、跨 actor 传值、取消及 `Sendable`；不靠 `nonisolated(unsafe)` 或随意 `@unchecked Sendable` 压制诊断。第三方框架或编译器造成的限制须先用实际编译／最小实验确认，再决定边界，而不是预先放弃。
-   - 原生 `Scene`、`Commands`、数据流、焦点、布局、控件及现代格式化／日志等 API 可在语义等价时更新；不得为追求“新”而改变交互或引入更多抽象。
+   - 原生 `Scene`、`Commands`、数据流、焦点及 API 仅在内部迁移确有必要、且原生实测 UI/UX 完全一致时更新；不做纯样式、控件、布局或动效 API 的顺手替换。
    - 仍应使用 AppKit／Ghostty／WebKit／TextKit 处理 SwiftUI 无法等价覆盖的终端、编辑器、网页、原生焦点与输入；现代化不等于强行以纯 SwiftUI 重写这些能力。
 
 4. **只保留一套真正运行的实现**
@@ -64,6 +70,7 @@ Kero 已决定以 **MVVM + Observation** 为长期架构，但现有代码仍主
 4. **数据与生命周期无回归**：当前快照写入／读取、多窗口恢复、无损编辑与失败保存、终端进程和网页状态在重挂载中的保留、跨机器隔离、Git 写操作及转发行为均有针对性验证。
 5. **测试覆盖真实结果**：按阶段扩展或调整现有 XCTest，既断言状态，也验证真实副作用；最终完成 Debug／Release 构建与签名核验，并使用隔离 Debug 实例做原生交互验收。真实 SSH 只使用获授权的专用连接；无法覆盖的路径诚实列明。
 6. **代码与文档一次收敛**：迁移每块职责时立即删除其旧路径，及时更新相关 `docs/` 和 `AGENTS.md`；最终不存在一边维护 Observation、一边靠旧 Combine 状态链维持同一功能的双轨实现。
+7. **UI/UX 严格一致**：以重构前隔离原生截图与实际操作为基线，逐阶段核对所有受影响页面及正常/错误/取消路径；任何非环境因素造成的可见或可操作差异均不通过。
 
 ## 执行前源码核查（2026-10-13）
 
@@ -72,12 +79,17 @@ Kero 已决定以 **MVVM + Observation** 为长期架构，但现有代码仍主
 - `GitStatusModel → GitCommandExecution → WorkspaceBackend` 已构成真实 MVVM/Service 链；`ContentView` 已在窗口范围持有唯一 Git 状态，**只需将其观察方式切换而非增加另一份 owner**（P3）。
 - `FileTreeModel/FileTab/TerminalSession/BrowserTab/DiffTab` 已分别持有长寿命状态，`SourceTextEditor/TerminalBackendSurface/BrowserWebView/DiffWebHostingView` 已负责必要原生桥接；优先复用原对象而非机械新建双层 ViewModel/Adapter（P3～P5）。
 - `GitPanel` 的本机文件指纹、SSH `stat`、待丢弃快照是实际越界的业务预检，移进现有 Git 状态所有者；`Project` 的关闭确认、`TerminalSession` 的原生剪贴板授权 UI、`TerminalManager` 的文件选择弹框则仅移动 UI 构造，不删除安全语义（P3～P5）。
-- 自动保存现依赖 `TerminalManager.objectWillChange` 广播，应按当前 `SessionSnapshot` **确实持久化的字段**触发；Git 刷新、每次命令状态、逐键编辑不能无端导致全量快照写盘（P1）。
-- 旧 Info 工具仅剩 `DockSavedItem.info` 和布局配置的解码/过滤分支，**P5-T1 与 Dock 迁移同时删除它们及旧版专用测试**，保持现行有效快照格式；其它用于现有用户数据或远端隔离的校验不按“围栏”误删。
+- 自动保存现依赖 `TerminalManager.objectWillChange` 广播，应按当前 `SessionSnapshot` **确实持久化的字段**触发；Git 刷新、每次命令状态、逐键编辑不能无端导致全量快照写盘（P1）。复核 `makeWindowSnapshot/saveAll`、`serializedHistory(false)` 与 `TerminalHistoryStore`：每次快照重建会话 `historyKey`，同时更新对应 sidecar 是**保持引用一致、删除孤儿记录**的现有机制；没有可引用历史时删除空文件是有意行为。P1 只减少无意义写盘触发，**不能擅自拆散布局快照和历史键更新**，终态仍需抓取最新 scrollback。
+- **Info 历史数据不是可无损直接删除的死代码**：`DockSavedItem` 参与合成 `Codable`，`SessionStore.load()` 对整个 `AppSnapshot` 一次解码；立即删 `.info` 会让含旧 Info 的任一窗口拖累全部窗口恢复为 `[]`。P5-T1 保留**最小解码／丢弃旧 Info 项**，不恢复 Info UI、不新增双格式迁移层；补完整 `AppSnapshot` 的回归测试，确认其余项目／标签／Dock 不丢失。确认持久化格式确已不再存在该值前不得删除最后这点数据保护。
+- **已发现但不混入纯重构的交互缺陷**：`Project.closeBatch` 逐个移除已确认标签，随后 Cancel 会留下部分关闭结果；`TerminalManager.close(project)` 直接终止项目，`WindowRootView.onDisappear → windowClosed` 在窗口已关闭后才清理，均没有新增的脏编辑确认。此前 P5 想添加项目／窗口关闭提示、改变批量 Cancel 结果，**会直接改变 UX**，违反本次零变化要求；P5 仅保持并迁移**现有**提示、入口与关闭结果，已知数据丢失风险单独列明，须另案授权修复，不能宣称本次已消除。
+- `RemoteConnection.objectWillChange → TerminalSession.remoteObservation → Project.sessionObservations` 是仍在使用的跨层 UI／远端重绑链；**不能在 P4-T1 单独转换连接并删除中继**。先移除 PortForwardController 自身无消费者的发布器，P4-T2 将连接、Session、Find 和下游实际消费者一起原子迁移。
+- `FileTreeModel.presentError` 在 P3-T1 就需要所属窗口可用的 UI 错误呈现，不能依赖 P5-T2/T3 尚不存在的 presenter，也不能只挂在可能隐藏的 Files 面板；P3 当场做一份最小窗口级入口供后续复用。
+- `DiffViewPreferences` 也是实际 `ObservableObject`，驱动 Pierre diff 样式／编辑模式；P4-T4 必须与 `DiffTab/DiffWebModel` 一起转为 Observation，保留同一 UserDefaults 键与 `@Bindable` 绑定。
+- `TerminalSession.panelShellPid` 与 `RemoteConnection.shellProcessID` 仅互相服务，原 Info 进程面板已不存在；P4-T2 删除这条真正无消费者的缓存和远端 PID 赋值，但保留仍用于探测当前远端工作目录的 SSH shell discovery（其内部识别 PID 用于查找 cwd，不可误删）。
 - `TunnelManager.$tunnels/$states` 被原生 NSTableView 消费，`BrowserTab.webView.publisher(for:)` 用于 WebKit KVO；均是与 UI 自有 `ObservableObject` 广播不同的**有效 Combine 事件桥**，不为完全清零 Combine 再引入另一套机制。
 - 本机 Xcode 27.0/Swift 6.4 已通过 macOS 15.6 目标的 Swift 6 严格模式最小 `@Observable + NSObject/WKNavigationDelegate + FocusedValues` 类型检查；但 CI/Release 锁定 **Xcode 26.6**，本机不具备该安装，P7 必须另行验证，不能以此原型代替完整 App 构建。
 
-所有替代任务在**同一 Task** 删除对应旧 Publisher、调用链、状态与兼容分支并验证，禁止积压到最后；规划期不提前修改正式 Swift 源码。
+所有替代任务在**同一 Task** 删除对应旧 Publisher、调用链、状态与无消费者代码并验证，禁止积压到最后。唯一保留经现行 `AppSnapshot` 解码证实必需的最小旧 Info 数据过滤，以及 SSH／用户数据／原生事件确有消费者的保护；不以“全部删光”制造数据丢失或断链。每个 Task 完成时应独立可编译、可验收，不能借后续 Task 才补上当前中断的响应链；规划期不提前修改正式 Swift 源码。
 
 ## 后续计划的边界
 

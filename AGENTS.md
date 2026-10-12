@@ -21,6 +21,7 @@
 
 ## 不可破坏的状态与平台边界
 
+- **纯架构重构的 UI/UX 零变化**：同一系统、窗口尺寸、主题、语言与内容下，布局、颜色、字体、图标、间距、动效、弹窗/菜单/文案、点击与拖拽、键盘快捷键、焦点、滚动、加载/失败/取消反馈和无障碍行为必须保持现状。改动前建立隔离 Debug 原生基线，受影响区域逐任务对照截图及实操；编译通过不能代替 UI/UX 验收。既有交互缺陷另案处理，不混入纯重构。
 - **生命周期**：当前窗口由 `TerminalManager` 协调、项目由 `Project` 持有，每个 `PaneTab` 恰有一份内容。这些是现存真实 owner，迁移前不得复制其状态；临时 View 重建不能结束终端、丢失编辑或中断转发。
 - **自由停靠**：`DockNode` 是外层布局真源；面板与标签一一对应，禁止标签内部二次分屏。移动、关闭、恢复须保留内容和焦点，不另建并行布局状态。
 - **共享树**：文件与 Git 共用 `TreeDisplayModel` 和树行，保留目录压缩、状态、命中范围、悬停、滚动、键盘、无障碍和懒加载。
@@ -37,7 +38,7 @@
 - **并发与错误**：可观察状态由 `MainActor` 管理；文件、Git、SSH 等耗时任务走异步后端，`Task {}` 本身不会脱离主 actor。优先 Swift Concurrency、`Sendable` 边界及 `Task.sleep(for:)`，任务取消或切换目标后不发布过期结果；只有确需 AppKit 事件／第三方桥接时保留 GCD。按 Swift 6 编译诊断修正隔离，不能用 `nonisolated(unsafe)`、无依据的 `@unchecked Sendable`、`try!` 或强制解包掩盖问题。
 - **交互与无障碍**：普通点击用 `Button`，仅确需坐标或点击次数时用 `onTapGesture`；图标按钮必须有文字语义及辅助功能名称。核对键盘快捷键、焦点、悬停与 VoiceOver；尊重系统字号和用户配置的终端／编辑器字体，不以固定文字大小取代可调整字号。
 - **视图结构**：较复杂且独立的界面块用独立 `View` 类型，不通过返回 `some View` 的计算属性堆叠子视图；避免无必要的 `AnyView`。可用原生布局替代时不用 `GeometryReader`，但 Dock 拖动和精确命中仍允许读取几何信息；`ForEach` 使用稳定身份，避免仅为遍历 `enumerated()` 转成数组。
-- **SwiftUI 表达**：语义等价且系统支持时优先 `foregroundStyle()`、`clipShape(.rect(cornerRadius:))`、`.scrollIndicators(.hidden)`；普通加粗优先 `.bold()`。自定义 Dock 标签不是系统导航，不为套用 `TabView` 或 `NavigationStack` 示例而改写工作区；SwiftUI 视图渲染图片时优先 `ImageRenderer`，原生表面仍由相应 AppKit／WebKit 接口处理。
+- **SwiftUI 表达**：新增界面代码在语义及视觉等价、系统支持时优先 `foregroundStyle()`、`clipShape(.rect(cornerRadius:))`、`.scrollIndicators(.hidden)`；普通加粗可用 `.bold()`。**现有界面的纯架构重构不顺手替换样式 API。**自定义 Dock 标签不是系统导航，不为套用 `TabView` 或 `NavigationStack` 示例而改写工作区；SwiftUI 视图渲染图片时优先 `ImageRenderer`，原生表面仍由相应 AppKit／WebKit 接口处理。
 - **Swift API 与日志**：优先 Swift 原生字符串方法、现代 Foundation URL／数字格式化及简洁的静态成员表达，不用 C 风格格式化显示数字；用户输入的普通文本匹配优先 `localizedStandardContains()`（不取代路径精确匹配或模糊搜索）。新诊断日志使用带明确 `subsystem`／`category` 的 `os.Logger`，保护路径、终端输出和凭据等隐私信息。
 
 ## 构建
