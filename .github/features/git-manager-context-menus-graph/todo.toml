@@ -27,7 +27,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T2"
-title = "在所选 Commit 创建 Ref 并安全管理 Tag"
+title = "在指定 Commit 创建本地分支与 Tag"
 status = "pending"
 plan = "plan-p2.md#p2-t2"
 commit = ""
