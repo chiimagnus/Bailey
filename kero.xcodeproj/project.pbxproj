@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AA40000000000000000000B4 /* .zshenv in Copy Files */ = {isa = PBXBuildFile; fileRef = AA40000000000000000000B6 /* .zshenv */; };
 		AA10000000000000000000B2 /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = AA10000000000000000000B1 /* GhosttyTerminal */; };
 		AA10000000000000000000B4 /* GhosttyTheme in Frameworks */ = {isa = PBXBuildFile; productRef = AA10000000000000000000B3 /* GhosttyTheme */; };
 		AA10000000000000000000C2 /* STTextView in Frameworks */ = {isa = PBXBuildFile; productRef = AA10000000000000000000C1 /* STTextView */; };
@@ -17,6 +18,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		AA40000000000000000000B6 /* .zshenv */ = {isa = PBXFileReference; lastKnownFileType = text; path = shell-integration/zsh/.zshenv; sourceTree = "<group>"; };
 		FF3FDD73300B6A7400112486 /* Kero.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Kero.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA8000000000000000000002 /* KeroTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = KeroTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -38,18 +40,14 @@
 				references/check-file-tree-navigation.swift,
 				references/check-git-execution.swift,
 				references/check-git-panel-state.swift,
-				references/check-pane-retention.sh,
 				references/check-pane-retention.swift,
 				references/check-panel-targets.swift,
-				references/check-release.sh,
 				references/check-remote-commands.swift,
 				references/check-remote-lifetime.swift,
 				references/check-session-snapshot.swift,
 				references/check-settings.swift,
 				references/check-tree-row-hit-testing.swift,
-				references/check-workspace-identity.sh,
 				references/check-workspace-identity.swift,
-				references/check.sh,
 			);
 			target = AA8000000000000000000001 /* KeroTests */;
 		};
@@ -90,6 +88,17 @@
 		AA8000000000000000000005 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; files = (); };
 /* End PBXFrameworksBuildPhase section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		AA40000000000000000000B2 /* Copy zsh integration */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = shell-integration/zsh;
+			dstSubfolderSpec = 7;
+			files = (AA40000000000000000000B4 /* .zshenv in Copy Files */);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXContainerItemProxy section */
 		AA8000000000000000000008 = {isa = PBXContainerItemProxy; containerPortal = FF3FDD6B300B6A7400112486; proxyType = 1; remoteGlobalIDString = FF3FDD72300B6A7400112486; remoteInfo = kero; };
 /* End PBXContainerItemProxy section */
@@ -103,6 +112,7 @@
 			isa = PBXGroup;
 			children = (
 				FF3FDD75300B6A7400112486 /* kero */,
+				AA40000000000000000000B6 /* .zshenv */,
 				AA8000000000000000000003 /* KeroTests */,
 				FF3FDD74300B6A7400112486 /* Products */,
 			);
@@ -127,8 +137,8 @@
 				FF3FDD6F300B6A7400112486 /* Sources */,
 				FF3FDD70300B6A7400112486 /* Frameworks */,
 				FF3FDD71300B6A7400112486 /* Resources */,
-				AA40000000000000000000A1 /* Install ssh helper symlink */,
-				AA40000000000000000000A2 /* Install zsh shell integration */,
+				AA40000000000000000000B2 /* Copy zsh integration */,
+				AA40000000000000000000A1 /* Link ssh helper */,
 			);
 			buildRules = (
 			);
@@ -215,30 +225,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		AA40000000000000000000A1 /* Install ssh helper symlink */ = {
+		AA40000000000000000000A1 /* Link ssh helper */ = {
 			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			inputPaths = (
-			);
-			name = "Install ssh helper symlink";
-			outputPaths = (
-				"$(CODESIGNING_FOLDER_PATH)/Contents/MacOS/ssh",
-			);
+			inputPaths = ();
+			name = "Link ssh helper";
+			outputPaths = ("$(CODESIGNING_FOLDER_PATH)/Contents/MacOS/ssh");
 			shellPath = /bin/sh;
-			shellScript = "# Kero prepends Contents/MacOS to every terminal's PATH, so a symlink\n# named ssh beside the app binary is what puts Kero in front of a typed\n# ssh. Relative target: the link must stay valid wherever the bundle goes.\nset -e\nln -sfn kero \"${CODESIGNING_FOLDER_PATH}/Contents/MacOS/ssh\"\n";
-		};
-		AA40000000000000000000A2 /* Install zsh shell integration */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			inputPaths = (
-				"$(SRCROOT)/shell-integration/zsh/.zshenv",
-			);
-			name = "Install zsh shell integration";
-			outputPaths = (
-				"$(CODESIGNING_FOLDER_PATH)/Contents/Resources/shell-integration/zsh/.zshenv",
-			);
-			shellPath = /bin/sh;
-			shellScript = "# Kero starts zsh with ZDOTDIR pointing at this directory, which is how a\n# typed `ssh` reaches Kero's helper. PATH cannot do the job: /etc/zprofile\n# runs path_helper, which puts the system directories first.\nset -e\ndestination=\"${CODESIGNING_FOLDER_PATH}/Contents/Resources/shell-integration/zsh\"\nmkdir -p \"$destination\"\ncp -f \"${SRCROOT}/shell-integration/zsh/.zshenv\" \"$destination/.zshenv\"\n";
+			shellScript = "ln -sfn kero \"${CODESIGNING_FOLDER_PATH}/Contents/MacOS/ssh\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

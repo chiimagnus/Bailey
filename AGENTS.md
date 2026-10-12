@@ -22,28 +22,20 @@
 需要 macOS 15.6+、Xcode 和可用的 Apple Development 证书。工程默认团队为 `RDQHYSDFFG`；使用其他团队时调整签名设置。以下命令从仓库根目录执行：
 
 ```sh
-bash scripts/build-app.sh debug
+make build
 ```
 
-发布构建使用 `bash scripts/build-app.sh release`。Debug 与 Release 都只生成 `Kero.app`，Bundle ID 固定为 `chiimagnus.kero`；不要再增加第二套应用身份或 scheme。Ghostty 由 Xcode 的 Swift Package Dependencies 管理；脚本只负责构建与校验签名。切换 Xcode 时设置 `DEVELOPER_DIR`。应用包路径、CI 和签名发布见[构建与发包](docs/RELEASE.md)，持久化约束见[设置与恢复](docs/SETTINGS.md)。未经授权不上传私钥、推送或发布。
+Release 构建使用 `make build:release`，测试使用 `make test`；全部直接调用原生 `xcodebuild`，不经过独立 shell 构建脚本。Debug 与 Release 都只生成 `Kero.app`，Bundle ID 固定为 `chiimagnus.kero`；不要再增加第二套应用身份或 scheme。Ghostty 由 Xcode 的 Swift Package Dependencies 管理。Xcode Copy Files 打包 zsh 集成文件，仅保留一条创建 `ssh -> kero` 的必要 Build Phase（Copy Files 会解引用符号链接，不能代替该步骤）。切换 Xcode 时设置 `DEVELOPER_DIR`。应用包路径、CI 和签名发布见[构建与发包](docs/RELEASE.md)，持久化约束见[设置与恢复](docs/SETTINGS.md)。未经授权不上传私钥、推送或发布。
 
 ## 验证
 
-Kero 使用 Xcode 原生 `KeroTests` Unit Test Target。当前测试源码直接放在 `KeroTests/`；迁移前的脚本只保存在 `KeroTests/references/` 作为行为参考，不参与构建，也不能作为验收入口。
+Kero 使用 Xcode 原生 `KeroTests` Unit Test Target。测试源码直接放在 `KeroTests/`；历史 Swift 检查仅保存在 `KeroTests/references/` 作为行为参考，不参与构建，也不能作为验收入口。
 
-完整测试从仓库根目录运行：
-
-```sh
-xcodebuild test -project kero.xcodeproj -scheme kero -configuration Debug \
-  -destination 'platform=macOS,arch=arm64' \
-  -derivedDataPath build/DerivedData \
-  -clonedSourcePackagesDirPath build/SourcePackages \
-  -skipPackageUpdates -disableAutomaticPackageResolution
-```
+完整测试从仓库根目录运行 `make test`；运行单个测试类使用 `make test ONLY_TESTING=KeroTests/类名`。需要详细参数时参考项目根目录 `Makefile` 中的 `xcodebuild` 命令。
 
 Xcode TestAction 启动真实的 Debug `Kero.app` 生命周期，并显式传入 `--isolated-ui-test`，避免测试实例覆盖正式窗口快照、终端历史或启动已保存隧道。不得通过 XCTest 环境变量在产品入口创建测试专用启动分支。
 
-按改动运行对应 XCTest 类或完整套件；模型、持久化、文件、Git、SSH/异步目标和原生视图生命周期都应直接通过 XCTest 断言。发布脚本与 workflow 通过实际构建/签名验证，不再额外复制成 shell 测试。
+按改动运行对应 XCTest 类或完整套件；模型、持久化、文件、Git、SSH/异步目标和原生视图生命周期都应直接通过 XCTest 断言。发布归档与 workflow 通过实际构建/签名验证，不再额外复制成 shell 测试。
 
 其他改动按需读[产品原则](docs/PRODUCT.md)、[性能](docs/PERFORMANCE.md)、[本地化](docs/LOCALIZATION.md)、[依赖](docs/DEPENDENCIES.md)与[安全](docs/SECURITY.md)约束。原生视图测试需要 macOS 图形会话；自动测试使用临时数据或受控后端，不连接真实 SSH 主机，不能代替真实远端传输或用户交互验收。
 

@@ -1,15 +1,18 @@
 # 构建与发包
 
-本页供维护者构建、签名和发布应用。修改相关脚本或 workflow 时同步更新；用户安装说明见 [README](../README.md#安装)。
+本页供维护者构建、签名和发布应用。修改 `Makefile` 或 workflow 时同步更新；用户安装说明见 [README](../README.md#安装)。
 
 ## 本机构建
 
 Kero 只有一个应用身份：`Kero.app` / `chiimagnus.kero`。Debug 与 Release 只是构建配置，不是两套应用。
 
 ```sh
-bash scripts/build-app.sh debug
-bash scripts/build-app.sh release
+make build
+make test
+make build:release
 ```
+
+`Makefile` 直接调用 Xcode 原生 `xcodebuild`；CI 使用 `make build:release SIGNING=adhoc`，不需要开发证书。
 
 产物分别位于 `build/DerivedData/Build/Products/Debug/Kero.app` 与 `Release/Kero.app`。本机构建需要 Apple Development 证书，团队设置见 [AGENTS](../AGENTS.md#构建)。CI 使用临时签名，不读取私钥。
 
@@ -38,7 +41,7 @@ Release 使用临时钥匙串，结束后清理。缺少凭据、证书过期或
 
 ## 验证与维护
 
-原生测试按 [AGENTS](../AGENTS.md#验证) 运行。设置 `SIGNING_IDENTITY` 和 `SIGNING_TEAM` 后，可用 `bash scripts/release-app.sh 0.1.49 55` 验收本地签名包；输出到 `build/releases/`，不会发布，拒绝覆盖同名 ZIP。
+原生测试按 [AGENTS](../AGENTS.md#验证) 运行。设置 `SIGNING_IDENTITY` 和 `SIGNING_TEAM` 后，使用 `make package VERSION=0.1.49 BUILD_NUMBER=55` 验收本地签名包；输出到 `build/releases/`，不会发布，拒绝覆盖同名 ZIP。需要指定钥匙串时设置 `SIGNING_KEYCHAIN`。
 
 - 升级 runner、Xcode 或 Action 时核对官方配置；Action 固定完整 SHA。
 - 分别记录测试、签名完整性、真实 Actions 运行、Gatekeeper 检查和下载包首次打开的结果。本地检查不能代替远端或首次打开验收。

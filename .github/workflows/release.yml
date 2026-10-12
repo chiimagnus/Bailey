@@ -32,7 +32,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: bash scripts/release-preflight.sh "$RELEASE_TAG"
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          commit=$(git rev-parse HEAD)
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$commit"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$commit" origin/main
+          state=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=push&branch=main&head_sha=$commit&per_page=100" \
+            --jq '[.workflow_runs[] | select(.head_sha == "'"$commit"'" and .event == "push" and .head_branch == "main")] | sort_by(.run_number) | last | "\(.status):\(.conclusion)"')
+          test "$state" = completed:success || { echo "同一提交的 main CI 尚未成功：$state" >&2; exit 1; }
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name' | python3 -c '
+          import re, sys
+          tag = sys.argv[1]
+          version = tuple(map(int, tag[1:].split(".")))
+          for existing in sys.stdin.read().splitlines():
+              if existing == tag or (re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", existing)
+                                     and tuple(map(int, existing[1:].split("."))) >= version):
+                  sys.exit("拒绝重复或倒退发布：" + existing)
+          ' "$RELEASE_TAG"
       - name: Import Apple Development signing identity
         env:
           CERTIFICATE_P12: ${{ secrets.APPLE_DEVELOPMENT_P12_BASE64 }}
@@ -60,8 +78,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           BUILD_NUMBER: ${{ github.run_number }}
-        run: |
-          bash scripts/release-app.sh "${RELEASE_TAG#v}" "$BUILD_NUMBER"
+        run: make package VERSION="${RELEASE_TAG#v}" BUILD_NUMBER="$BUILD_NUMBER"
       - name: Publish release archive
         env:
           GH_TOKEN: ${{ github.token }}
