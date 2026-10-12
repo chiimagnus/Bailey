@@ -147,7 +147,7 @@ struct WorkspaceDockView: View {
 extension DockItem {
     var symbol: String {
         switch self {
-        case .projects: "folder"
+        case .projects: "square.grid.2x2"
         case .files: "folder"
         case .git: "arrow.triangle.branch"
         case .tab: "terminal"
@@ -350,13 +350,14 @@ private struct DockTabGroupView: View {
         ) { showingPanelPicker.toggle() }
         .popover(isPresented: $showingPanelPicker, arrowEdge: .bottom) {
             VStack(spacing: 2) {
-                newItemButton(isDirectory: false)
-                newItemButton(isDirectory: true)
-                if !availableActions.isEmpty { Divider() }
                 ForEach(availableActions.indices, id: \.self) { index in
                     let action = availableActions[index]
                     if index > 0 && (availableActions[index - 1].item == nil) != (action.item == nil) {
                         Divider()
+                    }
+                    if action.item == nil {
+                        newItemButton(isDirectory: false)
+                        newItemButton(isDirectory: true)
                     }
                     Button {
                         showingPanelPicker = false
