@@ -8,16 +8,16 @@
 - 按改动阅读[产品](docs/PRODUCT.md)、[项目与 SSH](docs/PROJECTS.md)、[终端与停靠](docs/TERMINAL.md)、[文件与编辑器](docs/EDITOR.md)、[Git](docs/GIT.md)、[浏览器](docs/BROWSER.md)、[设置与恢复](docs/SETTINGS.md)；横向约束见[性能](docs/PERFORMANCE.md)、[安全](docs/SECURITY.md)、[本地化](docs/LOCALIZATION.md)及[依赖与生成](docs/DEPENDENCIES.md)。
 - 优先复用现有实现、修复共享根因。只做获授权的修改；推送、发布、破坏性操作和替换用户正在使用的 App 须另获授权，不中断运行中命令或未保存编辑。
 
-## 架构：MVVM
+## 架构：MVVM + Observation
 
-**目标架构是 MVVM + Observation，当前项目尚未完成迁移。** 新功能默认遵循此架构；`TerminalManager`、`Project` 等现有类型仍混合状态协调与业务职责，部分 SwiftUI View 仍直接编排任务。后续重构须迁移实际职责和状态流，不能仅改名或替换属性包装器就宣称完成。
+**全项目目标是 MVVM + Observation，当前代码尚未完成迁移。** 新功能必须按此架构开发；全面重构须覆盖 Kero 自有的窗口、项目、标签、文件、Git、终端、浏览器、设置等状态与业务调用链。现有 `TerminalManager`、`Project` 等仍有混合职责，不能仅重命名类型或替换属性包装器就宣称完成。
 
 - **Model**：表达领域数据、身份、不变量与纯转换；不依赖 SwiftUI、AppKit、Combine，也不直接执行界面或文件／网络操作。
 - **ViewModel**：持有可观察的展示状态、用户动作、业务流程和异步任务；调用注入的 Service，处理加载、错误、取消及目标失效。不直接构建 SwiftUI View、弹原生对话框或执行底层 IO。
 - **View**：SwiftUI 只负责布局、显示、绑定、焦点和交互转发；临时输入／动画状态可用 `@State`，不在 `body`、事件回调或 View 的生命周期中新增业务规则、Git 命令、网络／文件访问。
 - **Service / Repository**：集中管理文件、Git、SSH、持久化及系统副作用；已有 `WorkspaceBackend` 提供本机与 SSH 的真实多实现边界。仅在确实需要多实现、替换或测试注入时定义 protocol，不为每个类生成接口。
 - **依赖与装配**：方向为 `View → ViewModel → Service → Model`（各层可读取纯 Model）；从 App／窗口入口显式传入依赖，复用现有唯一状态所有者，不新增平行缓存、全局单例、依赖容器或内部 SwiftPM target。简单无业务状态的 View 不必强造 ViewModel。
-- **渐进迁移**：改动触及旧混合实现时，先找正确的唯一归属，再连同调用方与测试收敛；不得保留两套可写状态，也不为迁移一次性重排全部源码或牺牲现有生命周期与失败保护。
+- **分阶段、全量收敛**：先沿真实状态和副作用链确定职责，再逐块迁移、验证并同时删除被取代的旧状态、转发与调用路径；最终核对所有自有 UI 状态链，不以只迁移碰到的代码结束，也不长期保留双套实现。分阶段不等于一次性乱改，更不能牺牲生命周期或数据保护。
 
 ## 不可破坏的状态与平台边界
 
@@ -25,19 +25,20 @@
 - **自由停靠**：`DockNode` 是外层布局真源；面板与标签一一对应，禁止标签内部二次分屏。移动、关闭、恢复须保留内容和焦点，不另建并行布局状态。
 - **共享树**：文件与 Git 共用 `TreeDisplayModel` 和树行，保留目录压缩、状态、命中范围、悬停、滚动、键盘、无障碍和懒加载。
 - **异步身份**：回写状态或执行操作前核对发起时的项目、机器、连接、路径与请求代次；旧结果不能覆盖新状态。失败保留未保存编辑，远端失败不得退回本机写入。
+- **窗口焦点与事件**：当前菜单通过 `focusedSceneObject`／`@FocusedObject` 定位窗口，自动保存依赖变化事件及防抖。迁移到 Observation 时须以实际行为替代这两条路径，确保菜单只操作焦点窗口、嵌套变化能触发保存，而不是把旧订阅直接删掉。
 - **系统桥接**：SwiftUI 是主要界面，AppKit／Ghostty／WebKit／TextKit 负责原生输入、终端和长生命周期视图；桥接不能因 SwiftUI 重绘重新创建 Shell、WebView 或编辑器。后端保留 Git 刷新合并、SSH 批量执行及超时；布局配置由窗口协调者传入项目。
 - **生成与依赖**：图标资源和查询表只通过生成脚本修改；第三方源码、补丁和许可证按[依赖约束](docs/DEPENDENCIES.md)维护。
 
 ## Swift / SwiftUI 约定
 
-- **真实工具链优先**：工程使用 macOS 15.6+、Swift 5 语言模式与默认 `MainActor` 隔离；使用较新 Swift、Foundation、SwiftUI API 前核对实际 Xcode／SDK 及部署目标，不引入为追新而造的兼容层。
+- **Swift 6 升级目标**：工程当前最低 macOS 15.6、Swift 5 语言模式与默认 `MainActor` 隔离；全面重构以切换 **Swift 6 语言模式并通过严格并发编译**为目标，未实际编译通过前不得称已完成。新 API 以实际 Xcode／SDK 和 macOS 部署目标可用性为准，不为追新提高最低系统版本或增加兼容包装。
 - **Observation 优先**：新建可观察 ViewModel 默认使用 `@Observable`；View 持有其生命周期时用 `@State`，需要双向绑定时用 `@Bindable`，只读取时直接传入对象，局部 UI 状态仍用 `@State`。依赖通过初始化参数或现有环境注入。现有 `ObservableObject`／`@Published`／`@StateObject`／`@ObservedObject` 逐步迁移，不为同一状态维护两套观察机制。
-- **Combine 限定用途**：界面状态统一向 Observation 收敛；仅确实需要 Publisher、节流、事件合并或第三方桥接时保留 Combine。迁移时逐项替代原先依赖 `objectWillChange`／`@Published` 的通知、订阅与自动保存触发，不能直接删除事件链导致状态失同步。
-- **并发与错误**：可观察状态在 `MainActor` 发布；文件、Git、SSH 等耗时任务走异步后端，`Task {}` 本身不代表脱离主线程。优先 Swift Concurrency 与 `Task.sleep(for:)`，取消或切换目标后不发布过期结果；现有 Combine 调度及 AppKit 事件桥接可保留必要的 GCD。不要用 `nonisolated(unsafe)`、`try!` 或强制解包掩盖真实问题。
+- **Combine 限定用途**：界面状态统一向 Observation 收敛；只有确需 Publisher、节流、事件合并或第三方桥接时才保留 Combine。Observation 的属性追踪不等于事件订阅；原先经 `objectWillChange`／`@Published` 转发的嵌套变化、设置响应和自动保存，必须有实际生效的替代触发，不能只删 Publisher 或复制第二套状态。
+- **并发与错误**：可观察状态由 `MainActor` 管理；文件、Git、SSH 等耗时任务走异步后端，`Task {}` 本身不会脱离主 actor。优先 Swift Concurrency、`Sendable` 边界及 `Task.sleep(for:)`，任务取消或切换目标后不发布过期结果；只有确需 AppKit 事件／第三方桥接时保留 GCD。按 Swift 6 编译诊断修正隔离，不能用 `nonisolated(unsafe)`、无依据的 `@unchecked Sendable`、`try!` 或强制解包掩盖问题。
 - **交互与无障碍**：普通点击用 `Button`，仅确需坐标或点击次数时用 `onTapGesture`；图标按钮必须有文字语义及辅助功能名称。核对键盘快捷键、焦点、悬停与 VoiceOver；尊重系统字号和用户配置的终端／编辑器字体，不以固定文字大小取代可调整字号。
 - **视图结构**：较复杂且独立的界面块用独立 `View` 类型，不通过返回 `some View` 的计算属性堆叠子视图；避免无必要的 `AnyView`。可用原生布局替代时不用 `GeometryReader`，但 Dock 拖动和精确命中仍允许读取几何信息；`ForEach` 使用稳定身份，避免仅为遍历 `enumerated()` 转成数组。
 - **SwiftUI 表达**：语义等价且系统支持时优先 `foregroundStyle()`、`clipShape(.rect(cornerRadius:))`、`.scrollIndicators(.hidden)`；普通加粗优先 `.bold()`。自定义 Dock 标签不是系统导航，不为套用 `TabView` 或 `NavigationStack` 示例而改写工作区；SwiftUI 视图渲染图片时优先 `ImageRenderer`，原生表面仍由相应 AppKit／WebKit 接口处理。
-- **Swift API 与日志**：优先现代 Swift 字符串／Foundation URL API 与格式化接口，不用 C 风格格式化来显示数字；用户输入的普通文本匹配优先 `localizedStandardContains()`（不取代路径精确匹配或模糊搜索）。新诊断日志使用 `os.Logger` 并保护文件路径、终端输出、凭据等隐私信息。
+- **Swift API 与日志**：优先 Swift 原生字符串方法、现代 Foundation URL／数字格式化及简洁的静态成员表达，不用 C 风格格式化显示数字；用户输入的普通文本匹配优先 `localizedStandardContains()`（不取代路径精确匹配或模糊搜索）。新诊断日志使用带明确 `subsystem`／`category` 的 `os.Logger`，保护路径、终端输出和凭据等隐私信息。
 
 ## 构建
 
@@ -55,7 +56,8 @@ make build:release
 
 ## 验证
 
-- **代码与 MVVM／Observation 改动**：按受影响流程运行 XCTest，验证状态更新、绑定、事件触发、实际 Service 副作用及错误／取消／过期结果；迁移观察链还须覆盖自动保存、窗口恢复、项目／标签切换与终端／编辑器重挂载。构建并严格验签，必要时以真实原生界面检查焦点、编辑和拖动。编译通过或事件发出不等于行为完成。
+- **MVVM／Observation 验收**：每块迁移都验证状态、绑定、变化事件、真实 Service 副作用及错误／取消／过期结果；尤其核对焦点窗口菜单、嵌套状态、自动保存、窗口恢复、项目／标签切换及终端／编辑器重挂载。使用受影响的 XCTest 和必要的原生交互验收，编译通过或事件发出不等于行为完成。
+- **Swift 6 收口**：全项目迁移完成时，必须在工程实际启用的 Swift 6 语言模式下构建、运行 XCTest 并严格验签，检查并发诊断；仅修改编译选项、静态扫描或屏蔽诊断不算通过。现代化不得改变既有行为，确有平台／依赖限制则记录实际证据和未完成范围。
 - **测试边界**：自动测试使用临时数据或受控后端；真实 SSH 只用获准的专用测试 master，不复用用户连接。性能改动按[性能](docs/PERFORMANCE.md)测量；真实网络、重启恢复及原生界面未测时明确说明。
 - **文案与文档**：纯名称、翻译只校验字符串表、中英文、占位符、链接；涉及字符串提取时按需构建，不机械要求真机验收。快捷键、动作路由和布局属于行为改动。只修改文档时检查事实与引用，无需重装 App。
 - **隔离验收**：需要操作 App 时优先使用同一签名 Debug 包，不复制成另一套身份：
