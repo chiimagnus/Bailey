@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P1-T6"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
@@ -45,10 +45,10 @@ note = "四项回归、签名构建通过；用户手动验收新建功能；真
 [[tasks]]
 id = "P1-T6"
 title = "菜单重新分组"
-status = "in_progress"
+status = "completed"
 plan = "plan-p1.md#p1-t6"
-commit = ""
-note = ""
+commit = "fcc7a35a34a1d8aa51fba001d41627c4e31e6ead"
+note = "签名构建和三项回归通过；隔离菜单动作、实际文件保存、设置/空窗口关闭和多窗口检查；编辑/窗口菜单稳定；真实SSH未测"
 
 [[tasks]]
 id = "P1-T7"
