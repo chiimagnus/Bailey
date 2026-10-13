@@ -8,6 +8,7 @@ import XCTest
 private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     private var online = true
     private var failGit = false
+    private var failHistoryLog = false
     private var pauseNextGit = false
     private var pausedGit: CheckedContinuation<Void, Never>?
     private(set) var awaitingGit = false
@@ -18,6 +19,7 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
 
     func setOnline(_ value: Bool) { online = value }
     func setGitUnavailable(_ value: Bool) { failGit = value }
+    func setHistoryLogUnavailable(_ value: Bool) { failHistoryLog = value }
     func suspendNextGitRequest() { pauseNextGit = true }
     func releaseGitRequest() {
         pausedGit?.resume()
@@ -53,9 +55,18 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
         // local backend deliberately requires an absolute executable URL.
         var variables = ProcessInfo.processInfo.environment
         for (key, value) in env ?? [:] { variables[key] = value }
+        let commandInput: Data?
+        if failHistoryLog, let stdin, let script = String(data: stdin, encoding: .utf8) {
+            // Fail only git log inside the real batched status execution.
+            commandInput = Data(script.replacingOccurrences(
+                of: " LC_ALL=C git 'log' ", with: " LC_ALL=C git 'invalid-test-history-log' "
+            ).utf8)
+        } else {
+            commandInput = stdin
+        }
         return try await LocalWorkspaceBackend.shared.run(
             argv: ["/usr/bin/env"] + argv, cwd: cwd, env: variables,
-            stdin: stdin, timeout: timeout
+            stdin: commandInput, timeout: timeout
         )
     }
 
@@ -363,6 +374,18 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertTrue(model.isRepo)
         XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
         XCTAssertEqual(model.changedEntries, priorChanges)
+
+        // The main status command can succeed while the history subcommand
+        // fails. That must not silently publish an empty Git Graph.
+        await backend.setHistoryLogUnavailable(true)
+        model.refresh()
+        try await wait { model.statusError != nil && !model.isRefreshing }
+        XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
+        XCTAssertEqual(model.changedEntries, priorChanges)
+        await backend.setHistoryLogUnavailable(false)
+        model.refresh()
+        try await wait { model.statusError == nil && !model.isRefreshing }
+        XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
     }
 
     func testReplacingSSHBackendDoesNotWaitForStaleGitWorker() async throws {

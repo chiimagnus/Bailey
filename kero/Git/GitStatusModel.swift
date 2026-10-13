@@ -1496,6 +1496,12 @@ final class GitStatusModel {
             let commits = parseRecentCommits(log.stdout)
             result.hasMoreRecentCommits = commits.count > recentCommitLimit
             result.recentCommits = Array(commits.prefix(recentCommitLimit))
+        } else if result.hasHead {
+            // A failed history query is not an empty history. Publishing a
+            // partial success here would erase the already loaded Git Graph.
+            return .failed(gitFailureMessage(
+                log, fallback: String(localized: "Unable to read Git status.", table: "Git")
+            ))
         }
 
         let stash = await statusGit(
