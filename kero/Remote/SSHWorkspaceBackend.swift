@@ -4,7 +4,6 @@
 //
 
 import Darwin
-import Darwin
 import Foundation
 
 /// Runs one command on the remote machine and returns what it printed.
