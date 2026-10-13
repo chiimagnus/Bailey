@@ -102,7 +102,7 @@ struct ContentView: View {
     private func installFileErrorPresentation() {
         for project in manager.projects {
             project.fileTree.onError = { [weak manager] title, detail in
-                guard let window = manager?.attachedWindow else { return }
+                guard let window = manager?.attachedWindow, window.isVisible else { return }
                 let alert = NSAlert()
                 alert.messageText = title
                 alert.informativeText = detail

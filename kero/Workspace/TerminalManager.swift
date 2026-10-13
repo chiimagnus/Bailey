@@ -824,6 +824,8 @@ final class TerminalManager: nonisolated ObservableObject {
     /// saved and queued so reopening (or relaunching) restores it — and
     /// kill its shells.
     func windowClosed() {
+        // A pending async Files error must not bring back the closed window.
+        window = nil
         guard !Self.isQuitting else { return }
         pendingSave?.cancel()
         Self.registry.removeAll { $0 === self }

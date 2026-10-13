@@ -1,9 +1,34 @@
+import AppKit
 import Foundation
 import XCTest
 @testable import kero
 
 @MainActor
 final class SessionStoreTests: XCTestCase {
+    func testClosedWindowCannotBeUsedForLateFileOperationErrors() {
+        XCTAssertTrue(KeroInstanceMode.isIsolated)
+        let previouslySaved = SessionStore.load()
+        let previousHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(previouslySaved)
+            TerminalHistoryStore.save(previousHistories)
+        }
+
+        let manager = TerminalManager()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        // AppKit normally releases programmatic NSWindow instances on close.
+        // XCTest still owns this reference until the test method returns.
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        manager.attach(to: window)
+        XCTAssertTrue(manager.attachedWindow === window)
+        manager.windowClosed()
+        XCTAssertNil(manager.attachedWindow)
+    }
+
     func testSnapshotRoundTripAndInvalidReferences() throws {
         typealias Project = SessionSnapshot.ProjectSnapshot
         let contents: [Project.ContentSnapshot] = [
