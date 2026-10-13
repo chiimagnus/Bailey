@@ -255,9 +255,15 @@ final class DiffTabTests: XCTestCase {
     }
 
     func testNativeDiffRendersAndRetainsTextKitSurface() async throws {
+        let domain = "kero-native-render-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.prefersEditing = false
         let backend = DiffWorkspaceFixture()
         let diff = DiffTab(repoRoot: "/fixture", path: "render.txt", staged: false,
-                           untracked: true, origPath: nil, backend: backend, workspaceIdentity: nil)
+                           untracked: true, origPath: nil, backend: backend,
+                           workspaceIdentity: nil, preferences: preferences)
         try await wait { !diff.isLoading && diff.display != nil }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -362,12 +368,36 @@ final class DiffTabTests: XCTestCase {
         diff.setDiffStyle(.unified)
         try await wait { surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }.count == 1 }
         XCTAssertTrue(findNativeTextView(in: surface) === firstUnified)
+
+        // The toolbar can update independently of the native surface. Its
+        // Observation change must still switch the actual visible TextKit pane.
+        diff.setEditing(true)
+        try await wait {
+            let visible = surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }
+            return visible.count == 1 && visible[0].textView.isEditable
+        }
+        let editor = try XCTUnwrap(surface.subviews.compactMap { $0 as? DiffCodePaneView }
+            .first { !$0.isHidden && $0.textView.isEditable })
+        XCTAssertEqual(editor.textView.text, diff.newContent)
+
+        diff.setEditing(false)
+        try await wait {
+            let visible = surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }
+            return visible.count == 1 && !visible[0].textView.isEditable
+        }
+        XCTAssertFalse(firstUnified.isHidden)
     }
 
     func testReadInFlightCannotReplaceEditingOrDisconnectedContent() async throws {
+        let domain = "kero-native-stale-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.prefersEditing = false
         let backend = DiffWorkspaceFixture()
         let diff = DiffTab(repoRoot: "/fixture", path: "stale.txt", staged: false,
-                           untracked: true, origPath: nil, backend: backend, workspaceIdentity: "ssh:fixture")
+                           untracked: true, origPath: nil, backend: backend,
+                           workspaceIdentity: "ssh:fixture", preferences: preferences)
         try await wait { !diff.isLoading }
         let baseline = diff.newContent
         await backend.pauseOneRead()

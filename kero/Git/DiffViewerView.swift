@@ -714,6 +714,8 @@ struct DiffViewerView: View {
 
     var body: some View {
         let _ = themeChanges.revision
+        let _ = preferences.prefersEditing
+        let _ = preferences.diffStyle
         let _ = diff.editDecorations
         VStack(spacing: 0) {
             if let reason = diff.readOnlyReason {
