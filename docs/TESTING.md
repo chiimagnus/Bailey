@@ -5,7 +5,7 @@ Kero 使用**需求／文档驱动确定目标，测试驱动验证实现**。�
 ## 工作方式
 
 1. **先定义行为**：简单修复写清复现步骤和正确结果；跨阶段 Feature 用 `idea.md`、`plan-pX.md` 与 `todo.toml` 记录范围、验收和任务状态。不要为小改动强制建计划。
-2. **先证明问题**：可复现的缺陷先写失败回归（Red），确认测试确实覆盖用户入口与错误结果；再做最小根因修复（Green），最后清理重复实现（Refactor）。既有正确行为不因测试假设错误而被修改。
+2. **测试先行**：可自动验证的新行为先写因功能尚未实现而失败的测试；可复现缺陷先写能暴露原错误的回归（Red）。确认失败确由目标行为引起，再做最小根因修复（Green），最后清理重复实现（Refactor）。既有正确行为不因测试假设错误而被修改。
 3. **逐任务验证**：不仅断言 ViewModel 字段，还要验证实际文件、Git、终端或原生 UI 的最终结果。每个任务在改动处同步移除被替代代码，并记录已测、未测与失败边界；必要时对照原生截图与交互。
 4. **交付门槛**：相关回归和全量 XCTest 通过，受影响的真实交互另行验收；按[仓库构建规范](../AGENTS.md#构建)构建、验签。功能完成不等于“只编译通过”或“所有测试为绿”。
 
@@ -15,7 +15,7 @@ Kero 使用**需求／文档驱动确定目标，测试驱动验证实现**。�
 | --- | --- | --- |
 | 单元测试 | 纯算法、解析、状态不变量和异常分支 | `KeroTests/*Tests.swift` 中的独立计算与模型测试 |
 | 组件 UI 测试 | 在真实 `NSWindow`／`NSHostingView` 中验证 TextKit、WebKit、原生焦点、滚动与撤销 | `DiffTabTests`、`FileTabTests`、`PaneRetentionTests` |
-| 工作区集成测试 | 使用真实 `ContentView` 和项目／Dock／标签切换，验证多个组件的生命周期与磁盘副作用 | `WorkspaceContentIdentityTests`、Files 的 A→B→A 回归 |
+| 工作区集成测试 | 使用真实 `ContentView` 和项目／Dock／标签切换，验证多个组件的生命周期与磁盘副作用 | `WorkspaceContentIdentityTests`、`WorkspaceWindowCloseTests`、Files 的 A→B→A 回归 |
 | 端到端 UI 测试（E2E） | 启动完整 App，从真实入口点击／输入，走到可观察结果；macOS 通常使用 XCUITest／`XCUIApplication` | **尚无独立 XCUITest 测试目标；不能把上面的 XCTest 冒充 E2E** |
 
 按**行为风险**选择测试层次，而不是每个组件机械配四套测试。纯函数用单元测试即可；影响 Tab 身份、焦点、保存、机器连接、Dock 或窗口的改动，必须包含真实原生 UI／工作区集成回归。核心用户路径需要独立的 E2E 验收，未建成或未运行时明确标为未测。
@@ -32,4 +32,4 @@ Kero 使用**需求／文档驱动确定目标，测试驱动验证实现**。�
 
 ## MVVM 与目录组织
 
-源码按**业务领域**放在 `App/`、`Workspace/`、`Editor/`、`Git/`、`Files/`、`Remote/`、`Terminal/`、`Browser/` 等目录；通用视觉组件放 `UI/`，跨功能的共享表达放 `Shared/`。**不按全仓 Model／View／ViewModel 三个大目录机械搬文件**。一个领域内保持唯一状态拥有者：Model 管纯数据，`@Observable` ViewModel 管状态与编排，View 管交互／绑定，Service/Backend 管 IO；原生对象由长生命周期标签持有。只有真实职责不清、重复状态或调用方向错误时，才在相应任务内调整文件归属。
+源码按**业务领域**放在 `App/`、`Workspace/`、`Editor/`、`Git/`、`Files/`、`Remote/`、`Terminal/`、`Browser/` 等目录；通用视觉组件放 `UI/`，跨功能共享表达放 `Shared/`。**不按全仓 Model／View／ViewModel 三个大目录机械搬文件**。具体职责、依赖方向与状态所有权以 [MVVM 架构规范](../AGENTS.md#架构mvvm--observation)为准；只有职责不清、重复状态或调用方向错误时，才调整相应文件的归属。

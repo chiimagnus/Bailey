@@ -69,24 +69,31 @@ final class TerminalManager {
     /// one entry per registered manager.
     private static var registry: [TerminalManager] = []
 
-    static var hasUnsavedEditors: Bool {
-        registry.contains { manager in
-            manager.projects.contains { project in
-                project.tabs.contains { $0.content.isDirty }
-            }
+    var hasUnsavedEditorsInWindow: Bool {
+        projects.contains { project in
+            project.tabs.contains { $0.content.isDirty }
         }
     }
 
-    /// Termination must await file writes: onDisappear is too late to protect
-    /// an edited document when the entire process is about to exit.
+    static var hasUnsavedEditors: Bool {
+        registry.contains { $0.hasUnsavedEditorsInWindow }
+    }
+
+    /// Both a single window close and full app termination must wait for the
+    /// same real file writes before native views and shells are torn down.
+    func saveBeforeWindowClose() async -> Bool {
+        for project in projects {
+            for tab in project.tabs where tab.content.isDirty {
+                await tab.content.save()
+                guard !tab.content.isDirty else { return false }
+            }
+        }
+        return true
+    }
+
     static func saveBeforeTermination() async -> Bool {
         for manager in registry {
-            for project in manager.projects {
-                for tab in project.tabs where tab.content.isDirty {
-                    await tab.content.save()
-                    guard !tab.content.isDirty else { return false }
-                }
-            }
+            guard await manager.saveBeforeWindowClose() else { return false }
         }
         return true
     }

@@ -55,9 +55,9 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         second.openFile(bURL.path)
 
         let firstWindow = NSWindow(contentRect: .init(x: 0, y: 0, width: 800, height: 520),
-                                   styleMask: [.titled], backing: .buffered, defer: false)
+                                   styleMask: [.titled, .closable], backing: .buffered, defer: false)
         let secondWindow = NSWindow(contentRect: .init(x: 0, y: 0, width: 800, height: 520),
-                                    styleMask: [.titled], backing: .buffered, defer: false)
+                                    styleMask: [.titled, .closable], backing: .buffered, defer: false)
         firstWindow.isReleasedWhenClosed = false
         secondWindow.isReleasedWhenClosed = false
         defer { firstWindow.close(); secondWindow.close() }
@@ -78,6 +78,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let bEditor = try XCTUnwrap(editor(in: secondHost))
         // Closing A has to remove only A from the window registry and snapshot;
         // it must not remove B or its native editor when B owns the key window.
+        firstWindow.performClose(nil)
+        XCTAssertFalse(firstWindow.isVisible, "A clean native window must close immediately")
         first.windowClosed()
         XCTAssertNil(first.attachedWindow)
         XCTAssertTrue(second.attachedWindow === secondWindow)

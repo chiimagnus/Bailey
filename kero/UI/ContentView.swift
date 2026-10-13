@@ -60,7 +60,11 @@ struct ContentView: View {
             TabSwitcherEventMonitor(manager: manager, controller: tabSwitcher)
                 .frame(width: 0, height: 0)
         }
-        .background(WindowChromeAccessor { manager.attach(to: $0) })
+        .background(WindowChromeAccessor(
+            onAttach: { manager.attach(to: $0) },
+            hasUnsavedEdits: { manager.hasUnsavedEditorsInWindow },
+            saveBeforeClose: { await manager.saveBeforeWindowClose() }
+        ))
         .onAppear {
             installFileErrorPresentation()
             syncGit()

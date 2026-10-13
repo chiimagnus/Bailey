@@ -15,13 +15,24 @@ struct WindowChromeAccessor: NSViewRepresentable {
     static let buttonSpacing: CGFloat = 20
 
     private let onAttach: (NSWindow) -> Void
+    private let hasUnsavedEdits: () -> Bool
+    private let saveBeforeClose: () async -> Bool
 
-    init(onAttach: @escaping (NSWindow) -> Void = { _ in }) {
+    init(
+        onAttach: @escaping (NSWindow) -> Void,
+        hasUnsavedEdits: @escaping () -> Bool,
+        saveBeforeClose: @escaping () async -> Bool
+    ) {
         self.onAttach = onAttach
+        self.hasUnsavedEdits = hasUnsavedEdits
+        self.saveBeforeClose = saveBeforeClose
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onAttach: onAttach)
+        Coordinator(
+            onAttach: onAttach, hasUnsavedEdits: hasUnsavedEdits,
+            saveBeforeClose: saveBeforeClose
+        )
     }
 
     func makeNSView(context: Context) -> NSView {
@@ -41,18 +52,76 @@ struct WindowChromeAccessor: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator {
+    final class Coordinator: NSObject, NSWindowDelegate {
         private weak var window: NSWindow?
+        // Objective-C selector forwarding is nonisolated; AppKit owns this
+        // delegate and calls it on the main thread, like our attach method.
+        nonisolated(unsafe) private weak var originalDelegate: (any NSWindowDelegate)?
         private var observers: [NSObjectProtocol] = []
+        private var savingBeforeClose = false
+        private var approvedClose = false
         private let onAttach: (NSWindow) -> Void
+        private let hasUnsavedEdits: () -> Bool
+        private let saveBeforeClose: () async -> Bool
 
-        init(onAttach: @escaping (NSWindow) -> Void) {
+        init(
+            onAttach: @escaping (NSWindow) -> Void,
+            hasUnsavedEdits: @escaping () -> Bool,
+            saveBeforeClose: @escaping () async -> Bool
+        ) {
             self.onAttach = onAttach
+            self.hasUnsavedEdits = hasUnsavedEdits
+            self.saveBeforeClose = saveBeforeClose
+            super.init()
+        }
+
+        nonisolated override func responds(to aSelector: Selector!) -> Bool {
+            super.responds(to: aSelector) || (originalDelegate?.responds(to: aSelector) ?? false)
+        }
+
+        nonisolated override func forwardingTarget(for aSelector: Selector!) -> Any? {
+            if let originalDelegate, originalDelegate.responds(to: aSelector) {
+                return originalDelegate
+            }
+            return super.forwardingTarget(for: aSelector)
+        }
+
+        func windowShouldClose(_ sender: NSWindow) -> Bool {
+            if approvedClose || !hasUnsavedEdits() {
+                return originalDelegate?.windowShouldClose?(sender) ?? true
+            }
+            guard !savingBeforeClose else { return false }
+            savingBeforeClose = true
+            Task { @MainActor [weak self, weak sender] in
+                guard let self else { return }
+                let saved = await self.saveBeforeClose()
+                self.savingBeforeClose = false
+                guard saved, !self.hasUnsavedEdits(),
+                      let sender, sender === self.window else { return }
+                self.approvedClose = true
+                sender.performClose(nil)
+                self.approvedClose = false
+            }
+            return false
         }
 
         func attach(_ window: NSWindow) {
             guard self.window !== window else { return }
+            if let previous = self.window, previous.delegate === self {
+                previous.delegate = originalDelegate
+            }
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers.removeAll()
             self.window = window
+            // A SwiftUI content remount can replace this coordinator before
+            // the old one is destroyed. Keep forwarding to SwiftUI's actual
+            // delegate, not to an earlier temporary coordinator.
+            if let earlier = window.delegate as? Coordinator {
+                originalDelegate = earlier.originalDelegate
+            } else {
+                originalDelegate = window.delegate
+            }
+            window.delegate = self
             onAttach(window)
             // Interactive controls occupy the title-bar region. Disable the
             // server-side title-bar drag entirely; WindowDragArea is the only
@@ -108,6 +177,9 @@ struct WindowChromeAccessor: NSViewRepresentable {
         }
 
         isolated deinit {
+            if let window, window.delegate === self {
+                window.delegate = originalDelegate
+            }
             for observer in observers {
                 NotificationCenter.default.removeObserver(observer)
             }
