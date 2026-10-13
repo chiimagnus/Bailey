@@ -190,7 +190,7 @@ struct ToolPanelView: View {
                             repoRoot: git.repoRoot,
                             path: file.path,
                             commitHash: commit.hash,
-                            parentHash: commit.parentHash,
+                            parentHash: commit.parentHashes.first,
                             status: file.status,
                             origPath: file.originalPath
                         )

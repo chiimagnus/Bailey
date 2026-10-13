@@ -134,11 +134,8 @@ struct RecentCommitsView: View {
     }
 
     private func primaryReference(for commit: GitStatusModel.RecentCommit) -> String? {
-        commit.references.first {
-            $0.contains("/") && !$0.hasPrefix("HEAD -> ") && !$0.contains("/HEAD")
-        } ?? commit.references.first.map {
-            $0.hasPrefix("HEAD -> ") ? String($0.dropFirst("HEAD -> ".count)) : $0
-        }
+        commit.references.first { $0.kind == .remoteBranch }?.name
+            ?? commit.references.first?.name
     }
 
     @ViewBuilder

@@ -45,6 +45,16 @@ final class GitStatusModel {
     typealias FileDecoration = TreeDisplayModel.Status
 
     nonisolated struct RecentCommit: Identifiable, Equatable, Sendable {
+        nonisolated struct Reference: Identifiable, Hashable, Sendable {
+            enum Kind: String, Sendable {
+                case currentBranch, localBranch, remoteBranch, tag, detachedHead
+            }
+
+            let kind: Kind
+            let name: String
+            var id: String { kind.rawValue + ":" + name }
+        }
+
         nonisolated struct FileChange: Identifiable, Equatable, Sendable {
             let status: Character
             let path: String
@@ -66,8 +76,8 @@ final class GitStatusModel {
         let subject: String
         let author: String
         let date: Date
-        let parentHash: String?
-        let references: [String]
+        let parentHashes: [String]
+        let references: [Reference]
         let files: [FileChange]
 
         var relativeDate: String {
@@ -1487,11 +1497,7 @@ final class GitStatusModel {
 
         // NUL-delimited name-status records preserve every valid path while
         // supplying the nested file rows used by the native commit graph.
-        let log = await statusGit([
-            "log", "-n", "\(recentCommitLimit + 1)", "--decorate=short",
-            "--pretty=format:%x1e%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%P%x1f%D",
-            "--name-status", "-z",
-        ], in: repoRoot)
+        let log = await statusGit(recentCommitLogArguments(limit: recentCommitLimit), in: repoRoot)
         if log.status == 0 {
             let commits = parseRecentCommits(log.stdout)
             result.hasMoreRecentCommits = commits.count > recentCommitLimit
@@ -1541,11 +1547,7 @@ final class GitStatusModel {
             ],
             ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
             ["remote"],
-            [
-                "log", "-n", "\(recentCommitLimit + 1)", "--decorate=short",
-                "--pretty=format:%x1e%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%P%x1f%D",
-                "--name-status", "-z",
-            ],
+            recentCommitLogArguments(limit: recentCommitLimit),
             ["rev-list", "--walk-reflogs", "--count", "refs/stash"],
             ["rev-parse", "--absolute-git-dir"],
         ]
@@ -1857,6 +1859,40 @@ final class GitStatusModel {
         return (newlineCount + (lastByte == 0x0A ? 0 : 1), byteCount)
     }
 
+    private nonisolated static func recentCommitLogArguments(limit: Int) -> [String] {
+        [
+            "log", "-n", "\(limit + 1)", "--branches", "--remotes", "--tags", "HEAD",
+            "--topo-order", "--decorate=full",
+            "--pretty=format:%x1e%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%P%x1f%D",
+            "--name-status", "-z",
+        ]
+    }
+
+    private nonisolated static func parseCommitReferences(
+        _ decorations: String
+    ) -> [RecentCommit.Reference] {
+        typealias Reference = RecentCommit.Reference
+        return decorations.split(separator: ",").compactMap { item in
+            let value = item.trimmingCharacters(in: .whitespaces)
+            func named(_ prefix: String, as kind: Reference.Kind) -> Reference? {
+                guard value.hasPrefix(prefix) else { return nil }
+                let name = String(value.dropFirst(prefix.count))
+                return name.isEmpty ? nil : Reference(kind: kind, name: name)
+            }
+            if value == "HEAD" { return Reference(kind: .detachedHead, name: "HEAD") }
+            if let current = named("HEAD -> refs/heads/", as: .currentBranch) {
+                return current
+            }
+            if let branch = named("refs/heads/", as: .localBranch) {
+                return branch
+            }
+            if let remote = named("refs/remotes/", as: .remoteBranch) {
+                return remote.name.hasSuffix("/HEAD") ? nil : remote
+            }
+            return named("tag: refs/tags/", as: .tag)
+        }
+    }
+
     nonisolated static func parseRecentCommits(_ output: String) -> [RecentCommit] {
         output.split(separator: "\u{1e}").compactMap { record in
             var chunks = record.split(separator: "\u{0}", omittingEmptySubsequences: false)
@@ -1902,20 +1938,12 @@ final class GitStatusModel {
                 index += 1
             }
 
-            let parentHash = fields[5]
-                .split(separator: " ")
-                .first
-                .map(String.init)
-            let references = fields[6]
-                .split(separator: ",")
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
             return RecentCommit(
                 hash: String(fields[0]), shortHash: String(fields[1]),
                 subject: String(fields[2]), author: String(fields[3]),
                 date: Date(timeIntervalSince1970: timestamp),
-                parentHash: parentHash,
-                references: references,
+                parentHashes: fields[5].split(separator: " ").map(String.init),
+                references: parseCommitReferences(String(fields[6])),
                 files: files
             )
         }

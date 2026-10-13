@@ -431,6 +431,68 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(model.recentCommits.map(\.subject), ["baseline"])
     }
 
+    func testRecentCommitsKeepMergeParentsAndTypedReferences() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        func git(_ arguments: [String]) throws -> String {
+            let result = GitCommandExecution.run(arguments, in: directory.path, timeout: 15)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = try git(["init", "-q", "-b", "main"])
+        _ = try git(["config", "user.name", "Graph Test"])
+        _ = try git(["config", "user.email", "graph@invalid"])
+        _ = try git(["config", "commit.gpgsign", "false"])
+        try "root".write(to: directory.appendingPathComponent("root.txt"), atomically: true, encoding: .utf8)
+        _ = try git(["add", "."])
+        _ = try git(["commit", "-qm", "root"])
+        let root = try git(["rev-parse", "HEAD"])
+        _ = try git(["switch", "-qc", "feature/nested"])
+        try "side".write(to: directory.appendingPathComponent("side.txt"), atomically: true, encoding: .utf8)
+        _ = try git(["add", "."])
+        _ = try git(["commit", "-qm", "side"])
+        let side = try git(["rev-parse", "HEAD"])
+        _ = try git(["switch", "-q", "main"])
+        try "main".write(to: directory.appendingPathComponent("main.txt"), atomically: true, encoding: .utf8)
+        _ = try git(["add", "."])
+        _ = try git(["commit", "-qm", "main"])
+        let firstParent = try git(["rev-parse", "HEAD"])
+        _ = try git(["merge", "-q", "--no-ff", "-m", "merge", "feature/nested"])
+        let merge = try git(["rev-parse", "HEAD"])
+        _ = try git(["branch", "release/stable", merge])
+        _ = try git(["tag", "v1.0", merge])
+        _ = try git(["update-ref", "refs/remotes/origin/main", merge])
+        _ = try git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"])
+        // A second tip that HEAD cannot reach must still appear in the graph.
+        _ = try git(["switch", "-qc", "experiment/other", root])
+        _ = try git(["commit", "--allow-empty", "-qm", "independent tip"])
+        let extra = try git(["rev-parse", "HEAD"])
+        _ = try git(["switch", "-q", "main"])
+
+        let model = GitStatusModel()
+        model.sync(root: directory.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let rows = model.recentCommits
+        let top = try XCTUnwrap(rows.first { $0.hash == merge })
+        XCTAssertEqual(top.parentHashes, [firstParent, side])
+        XCTAssertEqual(rows.first { $0.hash == root }?.parentHashes, [])
+        XCTAssertNotNil(rows.first { $0.hash == extra })
+        XCTAssertEqual(
+            Set(top.references),
+            Set([
+                .init(kind: .currentBranch, name: "main"),
+                .init(kind: .localBranch, name: "release/stable"),
+                .init(kind: .remoteBranch, name: "origin/main"),
+                .init(kind: .tag, name: "v1.0"),
+            ])
+        )
+        XCTAssertEqual(rows.first { $0.hash == side }?.references,
+                       [.init(kind: .localBranch, name: "feature/nested")])
+        XCTAssertEqual(rows.first { $0.hash == side }?.files.map(\.path), ["side.txt"])
+    }
+
     func testUnbornRepositoryAndPagedHistorySurviveRepositorySwitch() async throws {
         let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let first = fixture.appendingPathComponent("first")
