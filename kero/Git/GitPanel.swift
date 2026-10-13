@@ -42,7 +42,7 @@ struct GitPanel: View {
         let scope: String
     }
 
-    @ObservedObject var model: GitStatusModel
+    let model: GitStatusModel
     let session: TerminalSession?
     let sshHost: String?
     let openFile: (String) -> Void

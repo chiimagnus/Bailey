@@ -93,7 +93,7 @@ private struct DockTabFrames: PreferenceKey {
 struct WorkspaceDockView: View {
     private let themeChanges = Theme.changes
     @ObservedObject var manager: TerminalManager
-    @ObservedObject var git: GitStatusModel
+    let git: GitStatusModel
     @StateObject private var dragging = DockTabDragCoordinator()
 
     var body: some View {
@@ -172,7 +172,7 @@ private struct DockTreeView: View {
     let node: DockNode
     @ObservedObject var project: Project
     @ObservedObject var manager: TerminalManager
-    @ObservedObject var git: GitStatusModel
+    let git: GitStatusModel
     @ObservedObject var dragging: DockTabDragCoordinator
 
     @State private var liveFraction: Double?
@@ -264,7 +264,7 @@ private struct DockTabGroupView: View {
     let group: DockGroup
     @ObservedObject var project: Project
     @ObservedObject var manager: TerminalManager
-    @ObservedObject var git: GitStatusModel
+    let git: GitStatusModel
     @ObservedObject var dragging: DockTabDragCoordinator
     private let settings = AppSettings.shared
     @State private var renamingTabID: UUID?

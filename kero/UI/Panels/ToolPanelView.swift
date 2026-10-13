@@ -68,7 +68,7 @@ private struct RemotePaneHeaderHost: NSViewRepresentable {
 /// original models and actions regardless of where the tab is parked.
 struct ToolPanelView: View {
     @ObservedObject var manager: TerminalManager
-    @ObservedObject var git: GitStatusModel
+    let git: GitStatusModel
     let panel: ToolPanel
     private let settings = AppSettings.shared
     private let themeChanges = Theme.changes

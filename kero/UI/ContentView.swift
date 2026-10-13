@@ -12,7 +12,7 @@ struct ContentView: View {
     @ObservedObject var manager: TerminalManager
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var tabSwitcher = TabSwitcherController()
-    @StateObject private var git = GitStatusModel()
+    @State private var git = GitStatusModel()
 
     /// Every terminal in the selected project can change the same repository.
     /// Watching command completion keeps the toolbar current without polling.

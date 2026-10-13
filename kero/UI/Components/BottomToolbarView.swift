@@ -8,7 +8,7 @@ enum BottomToolbarLayout {
 /// Project context for the active workspace. It stays deliberately compact so
 /// terminal content remains the center of gravity below the tab strip.
 struct BottomToolbarView: View {
-    @ObservedObject var model: GitStatusModel
+    let model: GitStatusModel
     private let themeChanges = Theme.changes
     let height: CGFloat
     let toggleGitPanel: () -> Void

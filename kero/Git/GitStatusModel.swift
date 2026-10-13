@@ -3,14 +3,15 @@
 //  kero
 //
 
-import Combine
 import Dispatch
 import Foundation
+import Observation
 
 /// Loads repository state in response to explicit UI events and performs
 /// source-control operations without blocking the UI.
 @MainActor
-final class GitStatusModel: nonisolated ObservableObject {
+@Observable
+final class GitStatusModel {
     nonisolated struct Entry: Identifiable, Equatable, Sendable {
         var id: String { path }
         /// Relative to the repository root, as porcelain v2 reports it.
@@ -102,45 +103,45 @@ final class GitStatusModel: nonisolated ObservableObject {
         }
     }
 
-    @Published private(set) var rootPath = ""
+    private(set) var rootPath = ""
     /// Stable canonical repository root, used by the UI to key drafts. It is
     /// preserved while a cwd change is being resolved inside the same repo.
-    @Published private(set) var repositoryIdentity = ""
-    @Published private(set) var isRepo = false
-    @Published private(set) var fileDecorations: [String: FileDecoration] = [:]
+    private(set) var repositoryIdentity = ""
+    private(set) var isRepo = false
+    private(set) var fileDecorations: [String: FileDecoration] = [:]
     /// Relative porcelain paths. Directory records retain their trailing slash
     /// so expanded descendants can inherit the ignored state.
-    @Published private(set) var ignoredPaths: Set<String> = []
-    @Published private(set) var branch: String?
-    @Published private(set) var headOID: String?
-    @Published private(set) var hasHead = true
-    @Published private(set) var upstream: String?
-    @Published private(set) var ahead = 0
-    @Published private(set) var behind = 0
-    @Published private(set) var hasUpstream = false
-    @Published private(set) var lineAdditions = 0
-    @Published private(set) var lineDeletions = 0
-    @Published private(set) var mergeEntries: [Entry] = []
-    @Published private(set) var stagedEntries: [Entry] = []
-    @Published private(set) var changedEntries: [Entry] = []
-    @Published private(set) var branches: [String] = []
-    @Published private(set) var defaultBranch: String?
-    @Published private(set) var remotes: [String] = []
-    @Published private(set) var recentCommits: [RecentCommit] = []
-    @Published private(set) var hasMoreRecentCommits = false
-    @Published private(set) var isLoadingMoreCommits = false
-    @Published private(set) var repositoryOperation: String?
-    @Published private(set) var stashCount = 0
-    @Published private(set) var isRefreshing = false
+    private(set) var ignoredPaths: Set<String> = []
+    private(set) var branch: String?
+    private(set) var headOID: String?
+    private(set) var hasHead = true
+    private(set) var upstream: String?
+    private(set) var ahead = 0
+    private(set) var behind = 0
+    private(set) var hasUpstream = false
+    private(set) var lineAdditions = 0
+    private(set) var lineDeletions = 0
+    private(set) var mergeEntries: [Entry] = []
+    private(set) var stagedEntries: [Entry] = []
+    private(set) var changedEntries: [Entry] = []
+    private(set) var branches: [String] = []
+    private(set) var defaultBranch: String?
+    private(set) var remotes: [String] = []
+    private(set) var recentCommits: [RecentCommit] = []
+    private(set) var hasMoreRecentCommits = false
+    private(set) var isLoadingMoreCommits = false
+    private(set) var repositoryOperation: String?
+    private(set) var stashCount = 0
+    private(set) var isRefreshing = false
     /// True once a status load has completed for the current `rootPath`. The
     /// UI keeps showing resolved content during later event-driven refreshes
     /// instead of flashing a loading placeholder.
-    @Published private(set) var hasResolvedStatus = false
-    @Published private(set) var statusError: String?
+    private(set) var hasResolvedStatus = false
+    private(set) var statusError: String?
     /// True while a user-initiated Git operation runs.
-    @Published private(set) var isBusy = false
-    @Published private(set) var operation: Operation?
-    @Published var lastError: String?
+    private(set) var isBusy = false
+    private(set) var operation: Operation?
+    var lastError: String?
 
     /// Absolute repository root. Porcelain paths are relative to this path,
     /// not necessarily to the terminal's current working directory.
@@ -150,7 +151,7 @@ final class GitStatusModel: nonisolated ObservableObject {
     private var workspaceScope = "local"
     var currentScope: String { workspaceScope }
     private var scopedRoot: String { workspaceScope + "\u{0}" + rootPath }
-    @Published private var commitMessagesByRepository: [String: String] = [:]
+    private var commitMessagesByRepository: [String: String] = [:]
 
     private var commitDraftKey: String? {
         guard isRepo, !repositoryIdentity.isEmpty else { return nil }
@@ -181,7 +182,7 @@ final class GitStatusModel: nonisolated ObservableObject {
     private var recentCommitLimitByRoot: [String: Int] = [:]
     /// Folding a Git directory is navigation state, not part of a status
     /// refresh. Key by machine and root so different repositories stay apart.
-    @Published private var collapsedFoldersByRoot: [String: Set<String>] = [:]
+    private var collapsedFoldersByRoot: [String: Set<String>] = [:]
 
     var collapsedFolders: Set<String> {
         get { collapsedFoldersByRoot[scopedRoot] ?? [] }
