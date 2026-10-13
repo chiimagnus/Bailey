@@ -33,8 +33,6 @@
 		AA800000000000000000000C /* Exceptions for "KeroTests" folder in "KeroTests" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				references/AppIdentityTests.swift,
-				references/check-app-identity.swift,
 				references/check-dock-workspace.swift,
 				references/check-file-tree-navigation.swift,
 				references/check-git-execution.swift,

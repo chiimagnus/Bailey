@@ -33,8 +33,7 @@ private final class PanelSyncQueue {
 }
 
 
-/// Hosts the pane's remote heading, which is AppKit and outlives any one
-/// body evaluation — same shape as the diff viewer's web host.
+/// Hosts the pane's AppKit remote heading across SwiftUI updates.
 private struct RemotePaneHeaderHost: NSViewRepresentable {
     let view: RemotePaneHeaderView
     let fontScale: CGFloat

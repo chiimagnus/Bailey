@@ -55,6 +55,8 @@ make build:release
 
 测试源码放在 `KeroTests/`，`KeroTests/references/` 中的历史检查不参与构建，也不是验收入口。Xcode TestAction 为真实 Debug App 传入 `--isolated-ui-test`，隔离窗口快照和终端历史，并避免启动已保存隧道；不在产品入口增加依赖 XCTest 环境变量的特殊逻辑。
 
+**开发与测试闭环**：Feature 的需求／计划驱动负责定义目标和验收，测试驱动开发（TDD）负责证明行为：复现缺陷先写失败回归（Red）→修复根因（Green）→清理旧路径（Refactor）。按风险覆盖单元、原生组件、完整工作区与真正的 E2E，不能用单个面板 XCTest 冒充完整 App 点击验收；测试须核对真实副作用，并保护用户正在运行的 Kero。分层选择、隔离要求与 MVVM 目录归属统一见[开发与测试](docs/TESTING.md)。
+
 ## 验证
 
 - **MVVM／Observation 验收**：每块迁移都验证状态、绑定、变化事件、真实 Service 副作用及错误／取消／过期结果；尤其核对焦点窗口菜单、嵌套状态、自动保存、窗口恢复、项目／标签切换及终端／编辑器重挂载。使用受影响的 XCTest 和必要的原生交互验收，编译通过或事件发出不等于行为完成。

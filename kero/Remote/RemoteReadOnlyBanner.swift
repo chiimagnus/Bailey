@@ -65,8 +65,7 @@ final class RemoteReadOnlyBannerView: NSView {
     }
 }
 
-/// The editor and diff panes around this banner are legacy SwiftUI, but new
-/// chrome stays in AppKit — same split as the diff controls bar.
+/// SwiftUI mounts the same AppKit banner in both the file and diff viewers.
 struct RemoteReadOnlyBanner: NSViewRepresentable {
     let message: String
 
