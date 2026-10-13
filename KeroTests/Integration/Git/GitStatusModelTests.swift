@@ -477,6 +477,7 @@ final class GitStatusModelTests: XCTestCase {
         let rows = model.recentCommits
         let top = try XCTUnwrap(rows.first { $0.hash == merge })
         XCTAssertEqual(top.parentHashes, [firstParent, side])
+        XCTAssertEqual(top.files.map(\.path), ["side.txt"], "Merge files must compare with the first parent")
         XCTAssertEqual(rows.first { $0.hash == root }?.parentHashes, [])
         XCTAssertNotNil(rows.first { $0.hash == extra })
         XCTAssertEqual(
