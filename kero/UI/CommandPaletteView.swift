@@ -4,7 +4,6 @@
 //
 
 import AppKit
-import Combine
 import FuzzyMatch
 import SwiftUI
 
@@ -88,7 +87,7 @@ struct PaletteCommand: Identifiable {
 }
 
 @MainActor
-private final class PalettePointerSelectionController: ObservableObject {
+private final class PalettePointerSelectionController {
     private(set) var acceptsPointerSelection = false
 
     func reset() {
@@ -109,16 +108,7 @@ struct CommandPaletteView: View {
         let score: Double
     }
 
-    private struct ProjectFile: Sendable {
-        let name: String
-        let relativePath: String
-        let absolutePath: String
-
-        var parentPath: String? {
-            let parent = (relativePath as NSString).deletingLastPathComponent
-            return parent.isEmpty ? nil : parent
-        }
-    }
+    private typealias ProjectFile = ProjectFileIndex.File
 
     let manager: TerminalManager
     private let themeChanges = Theme.changes
@@ -128,7 +118,7 @@ struct CommandPaletteView: View {
     @State private var selection = 0
     @State private var projectFiles: [ProjectFile] = []
     @State private var indexedTarget: PanelContext.Identity?
-    @StateObject private var pointerSelectionController = PalettePointerSelectionController()
+    @State private var pointerSelectionController = PalettePointerSelectionController()
     @FocusState private var searchFocused: Bool
 
     /// Smith-Waterman uses fzf/nucleo-style boundary and gap scoring while
@@ -166,7 +156,7 @@ struct CommandPaletteView: View {
             let standardizedRoot = URL(fileURLWithPath: root).standardizedFileURL
             guard standardizedRoot != FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL else { return }
             let indexingTask = Task.detached(priority: .userInitiated) {
-                Self.loadProjectFiles(in: root)
+                ProjectFileIndex.load(in: root)
             }
             let files = await withTaskCancellationHandler {
                 await indexingTask.value
@@ -734,99 +724,6 @@ struct CommandPaletteView: View {
         DispatchQueue.main.async { dismiss() }
     }
 
-    // MARK: - Project file index
-
-    /// Git provides a fast, ignore-aware index for repositories. A normal
-    /// directory falls back to recursive enumeration, still excluding VCS
-    /// metadata to match the Files panel.
-    private nonisolated static func loadProjectFiles(in root: String) -> [ProjectFile] {
-        if let paths = gitProjectFilePaths(in: root) {
-            return projectFiles(for: paths, in: root)
-        }
-        return enumeratedProjectFiles(in: root)
-    }
-
-    private nonisolated static func gitProjectFilePaths(in root: String) -> Set<String>? {
-        var tracked = GitCommandExecution.run(
-            ["ls-files", "--cached", "--recurse-submodules", "-z"],
-            in: root
-        )
-        // A missing or broken submodule should not disable search for the rest
-        // of the repository.
-        if tracked.status != 0 {
-            tracked = GitCommandExecution.run(["ls-files", "--cached", "-z"], in: root)
-        }
-        let untracked = GitCommandExecution.run(
-            ["ls-files", "--others", "--exclude-standard", "-z"],
-            in: root
-        )
-        guard tracked.status == 0, untracked.status == 0 else { return nil }
-        return Set(nulSeparatedPaths(tracked.stdout) + nulSeparatedPaths(untracked.stdout))
-    }
-
-    private nonisolated static func nulSeparatedPaths(_ output: String) -> [String] {
-        output.split(separator: "\0").map(String.init)
-    }
-
-    private nonisolated static func projectFiles(
-        for relativePaths: Set<String>,
-        in root: String
-    ) -> [ProjectFile] {
-        let fileManager = FileManager.default
-        return relativePaths.compactMap { relativePath in
-            guard !Task.isCancelled else { return nil }
-            let absolutePath = (root as NSString).appendingPathComponent(relativePath)
-            var isDirectory: ObjCBool = false
-            guard fileManager.fileExists(atPath: absolutePath, isDirectory: &isDirectory),
-                  !isDirectory.boolValue
-            else { return nil }
-            return ProjectFile(
-                name: (relativePath as NSString).lastPathComponent,
-                relativePath: relativePath,
-                absolutePath: absolutePath
-            )
-        }
-        .sorted {
-            $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
-        }
-    }
-
-    private nonisolated static func enumeratedProjectFiles(in root: String) -> [ProjectFile] {
-        let rootURL = URL(fileURLWithPath: root, isDirectory: true).standardizedFileURL
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isRegularFileKey]
-        let keySet = Set(keys)
-        let rootPrefix = rootURL.path == "/" ? "/" : rootURL.path + "/"
-        guard let enumerator = FileManager.default.enumerator(
-            at: rootURL,
-            includingPropertiesForKeys: keys,
-            errorHandler: { _, _ in true }
-        ) else { return [] }
-
-        var files: [ProjectFile] = []
-        while let url = enumerator.nextObject() as? URL {
-            if Task.isCancelled { break }
-            if url.lastPathComponent == ".git" {
-                enumerator.skipDescendants()
-                continue
-            }
-            guard let values = try? url.resourceValues(forKeys: keySet),
-                  values.isDirectory != true,
-                  values.isRegularFile == true
-            else { continue }
-            guard url.path.hasPrefix(rootPrefix) else { continue }
-            let relativePath = String(url.path.dropFirst(rootPrefix.count))
-            files.append(
-                ProjectFile(
-                    name: url.lastPathComponent,
-                    relativePath: relativePath,
-                    absolutePath: url.path
-                )
-            )
-        }
-        return files.sorted {
-            $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
-        }
-    }
 }
 
 private struct PalettePointerEventMonitor: NSViewRepresentable {
