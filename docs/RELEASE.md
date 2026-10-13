@@ -45,7 +45,7 @@ Release 使用临时钥匙串，结束后清理。缺少凭据、证书过期或
 
 ## 验证与维护
 
-原生测试按 [AGENTS](../AGENTS.md#验证) 运行。设置 `SIGNING_IDENTITY` 和 `SIGNING_TEAM` 后，使用 `make package VERSION=0.1.49 BUILD_NUMBER=55` 验收本地签名包；输出到 `build/releases/`，不会发布，拒绝覆盖同名 ZIP。需要指定钥匙串时设置 `SIGNING_KEYCHAIN`。
+测试层次、隔离及未测范围按[开发与测试](TESTING.md)，构建与签名验收按 [AGENTS](../AGENTS.md#验证) 执行。设置 `SIGNING_IDENTITY` 和 `SIGNING_TEAM` 后，使用 `make package VERSION=0.1.49 BUILD_NUMBER=55` 验收本地签名包；输出到 `build/releases/`，不会发布，拒绝覆盖同名 ZIP。需要指定钥匙串时设置 `SIGNING_KEYCHAIN`。
 
 - CI/Release 使用 Xcode 26.6；工程文件格式保持 `objectVersion = 77`。用更新版 Xcode 修改工程后须确认格式未升到 Runner 无法识别的 `110`；Action 固定完整 SHA。
 - 分别记录测试、签名完整性、真实 Actions 运行、Gatekeeper 检查和下载包首次打开的结果。本地检查不能代替远端或首次打开验收。
