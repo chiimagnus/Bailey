@@ -75,7 +75,7 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 
 ### 语法解析与 Diff
 
-TSX 使用独立解析器，不能用普通 TypeScript 替代。`Vendor/TreeSitterTSX` 的来源是 `STTextView-Plugin-Neon` 固定提交 `5a30db4ce7908a5414e7b499e2379bdc49991cd1`，与工程依赖匹配；升级时从同一来源更新解析器、头文件、查询和运行库。
+TSX 使用独立解析器，不能用普通 TypeScript 替代。`Vendor/TreeSitterTSX` 的来源是 `STTextView-Plugin-Neon` 固定提交 `5a30db4ce7908a5414e7b499e2379bdc49991cd1`，与工程依赖匹配。升级时从目标提交的 `Sources/TreeSitterTSX/` 更新 `include/` 和 `src/`，并核对插件查询与工程所用运行库的兼容性，不把查询或运行库一并复制进本地解析器包。
 
 高亮查询由插件提供，Kero 合并 TypeScript 与 JSX 查询，不复制一份手工查询。更新后检查 TypeScript、TSX 元素／属性／表达式及 Markdown／HTML 嵌入语言。
 
