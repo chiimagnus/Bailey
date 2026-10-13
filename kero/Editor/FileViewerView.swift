@@ -58,6 +58,7 @@ final class FileTab: nonisolated Identifiable {
     /// drag can snapshot it for the drag thumbnail. Weak — owned by the mounted
     /// editor, nils out when the pane unmounts.
     @ObservationIgnored weak var editorView: NSView?
+    @ObservationIgnored var editorCoordinator: SourceTextEditor.Coordinator?
 
     private nonisolated static let maxTextBytes = 5 << 20
     private nonisolated static let imageExtensions: Set<String> = [
@@ -240,6 +241,7 @@ final class FileTab: nonisolated Identifiable {
 
             let loaded = Self.loadedContent(path: expectedPath, data: data)
             guard !self.matches(loaded) else { return }
+            self.editorCoordinator = nil
             self.content = loaded.content
             self.text = loaded.text
             self.savedText = loaded.text

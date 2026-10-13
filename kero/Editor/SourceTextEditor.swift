@@ -45,7 +45,7 @@ struct EditorPalette: Equatable {
 /// routed here by `FileTab.performFindAction`). Text edits are written
 /// straight back to `FileTab.text`; scroll/cursor state is written back to
 /// `FileTab.editorState` as it changes and restored when the view is
-/// recreated on tab switch or relaunch.
+/// restored on relaunch. The tab retains the native editor across remounts.
 struct SourceTextEditor: NSViewRepresentable {
     let file: FileTab
     let font: NSFont
@@ -55,10 +55,32 @@ struct SourceTextEditor: NSViewRepresentable {
     var onFocused: () -> Void = {}
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(file: file)
+        if let coordinator = file.editorCoordinator,
+           coordinator.revision == file.reloadRevision {
+            return coordinator
+        }
+        let coordinator = Coordinator(file: file)
+        file.editorCoordinator = coordinator
+        return coordinator
     }
 
-    func makeNSView(context: Context) -> NSScrollView {
+    func makeNSView(context: Context) -> NSView {
+        let scrollView = context.coordinator.scrollView ?? makeScrollView(coordinator: context.coordinator)
+        if let textView = scrollView.documentView as? FocusReportingTextView {
+            textView.onBecomeFirstResponder = onFocused
+            apply(to: textView, scrollView: scrollView)
+            if isFocused {
+                DispatchQueue.main.async { [weak textView] in
+                    textView?.window?.makeFirstResponder(textView)
+                }
+            }
+        }
+        context.coordinator.wasFocused = isFocused
+        file.editorView = scrollView
+        return SourceEditorContainer(scrollView: scrollView)
+    }
+
+    private func makeScrollView(coordinator: Coordinator) -> NSScrollView {
         let scrollView = RestorableScrollView()
         let textView = FocusReportingTextView()
         textView.onBecomeFirstResponder = onFocused
@@ -113,7 +135,7 @@ struct SourceTextEditor: NSViewRepresentable {
             textView.textSelection = NSRange(location: start, length: length)
         }
 
-        context.coordinator.attach(textView: textView, scrollView: scrollView)
+        coordinator.attach(textView: textView, scrollView: scrollView)
 
         // Restore the saved scroll offset during the first layout pass — while
         // the frame is finally known but before the first paint — so the file
@@ -134,20 +156,13 @@ struct SourceTextEditor: NSViewRepresentable {
             }
         }
 
-        // Only grab focus on mount when this work tab is selected, so an
-        // inactive work tab doesn't steal the caret.
-        if isFocused {
-            DispatchQueue.main.async {
-                textView.window?.makeFirstResponder(textView)
-            }
-        }
-        context.coordinator.wasFocused = isFocused
-        // Expose the view so a pane-move drag can snapshot it as a thumbnail.
-        file.editorView = scrollView
         return scrollView
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+    func updateNSView(_ container: NSView, context: Context) {
+        guard let container = container as? SourceEditorContainer,
+              container.scrollView.superview === container else { return }
+        let scrollView = container.scrollView
         guard let textView = scrollView.documentView as? STTextView else { return }
         (textView as? FocusReportingTextView)?.onBecomeFirstResponder = onFocused
         apply(to: textView, scrollView: scrollView)
@@ -161,6 +176,16 @@ struct SourceTextEditor: NSViewRepresentable {
         context.coordinator.wasFocused = isFocused
     }
 
+    static func dismantleNSView(_ container: NSView, coordinator: Coordinator) {
+        guard let container = container as? SourceEditorContainer,
+              container.scrollView.superview === container else { return }
+        container.scrollView.removeFromSuperview()
+        (container.scrollView.documentView as? FocusReportingTextView)?.onBecomeFirstResponder = nil
+        if coordinator.file?.editorView === container.scrollView {
+            coordinator.file?.editorView = nil
+        }
+    }
+
     /// Take exactly the space SwiftUI offers. Without this, SwiftUI sizes the
     /// editor from the scroll view's `fittingSize`, which STTextView derives
     /// from the entire document — enormous for a large file, and degenerate
@@ -170,7 +195,7 @@ struct SourceTextEditor: NSViewRepresentable {
     /// there are views"). Reporting the proposed size keeps the editor a
     /// space-filling pane that never influences the window's size.
     func sizeThatFits(
-        _ proposal: ProposedViewSize, nsView: NSScrollView, context: Context
+        _ proposal: ProposedViewSize, nsView: NSView, context: Context
     ) -> CGSize? {
         func resolve(_ value: CGFloat?, fallback: CGFloat) -> CGFloat {
             guard let value, value.isFinite else { return fallback }
@@ -207,7 +232,9 @@ struct SourceTextEditor: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, STTextViewDelegate {
-        private let file: FileTab
+        fileprivate weak var file: FileTab?
+        let revision: UInt
+        private(set) var scrollView: NSScrollView?
         private weak var textView: STTextView?
         private var scrollObserver: (any NSObjectProtocol)?
         /// Last-applied focus state, so `updateNSView` can act only on the
@@ -216,10 +243,12 @@ struct SourceTextEditor: NSViewRepresentable {
 
         init(file: FileTab) {
             self.file = file
+            revision = file.reloadRevision
         }
 
         func attach(textView: STTextView, scrollView: NSScrollView) {
             self.textView = textView
+            self.scrollView = scrollView
             textView.textDelegate = self
             scrollObserver = NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification,
@@ -227,9 +256,11 @@ struct SourceTextEditor: NSViewRepresentable {
                 queue: .main
             ) { [weak self, weak scrollView] _ in
                 MainActor.assumeIsolated {
-                    guard let self, let clipView = scrollView?.contentView else { return }
-                    self.file.editorState.scrollX = clipView.bounds.origin.x
-                    self.file.editorState.scrollY = clipView.bounds.origin.y
+                    guard let self, let file = self.file,
+                          file.editorCoordinator === self,
+                          let clipView = scrollView?.contentView else { return }
+                    file.editorState.scrollX = clipView.bounds.origin.x
+                    file.editorState.scrollY = clipView.bounds.origin.y
                 }
             }
         }
@@ -241,7 +272,7 @@ struct SourceTextEditor: NSViewRepresentable {
         }
 
         func textViewDidChangeText(_ notification: Notification) {
-            guard let textView else { return }
+            guard let textView, let file, file.editorCoordinator === self else { return }
             let newText = textView.text ?? ""
             guard newText != file.text else { return }
             file.text = newText
@@ -249,11 +280,35 @@ struct SourceTextEditor: NSViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
-            guard let textView else { return }
+            guard let textView, let file, file.editorCoordinator === self else { return }
             let selection = textView.textSelection
             file.editorState.selectionLocation = selection.location
             file.editorState.selectionLength = selection.length
         }
+    }
+}
+
+private final class SourceEditorContainer: NSView {
+    let scrollView: NSScrollView
+
+    init(scrollView: NSScrollView) {
+        self.scrollView = scrollView
+        super.init(frame: .zero)
+        addSubview(scrollView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        guard scrollView.superview === self, bounds.width > 0, bounds.height > 0 else { return }
+        if scrollView.frame != bounds { scrollView.frame = bounds }
     }
 }
 

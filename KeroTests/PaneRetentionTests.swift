@@ -165,7 +165,83 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertEqual(restored.text, file.text)
         XCTAssertEqual(restored.textSelection, NSRange(location: 3, length: 2))
         XCTAssertTrue(file.isDirty)
+        XCTAssertTrue(restored === editor)
+        let restoredUndo = try XCTUnwrap(restored.undoManager)
+        XCTAssertTrue(restoredUndo.canUndo)
+        restoredUndo.undo()
+        try await settle { file.text == "baseline\n" }
+        XCTAssertFalse(file.isDirty)
+        restoredUndo.redo()
+        try await settle { file.text.hasPrefix("edited ") }
+        XCTAssertTrue(file.isDirty)
         editorView?.removeFromSuperview()
+    }
+
+    func testEditorRetainsScrollAndReleasesRetiredNativeResources() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("scroll.txt")
+        let contents = (0..<400).map { "Line \($0) 中文 😀\r\n" }.joined()
+        try contents.write(to: path, atomically: true, encoding: .utf8)
+        var file: FileTab? = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        weak var releasedFile = file
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let window = NSWindow(contentRect: container.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = container
+        window.orderFront(nil)
+        defer { window.close() }
+
+        func mount(_ file: FileTab) -> NSHostingView<SourceTextEditor> {
+            let host = NSHostingView(rootView: SourceTextEditor(
+                file: file, font: .monospacedSystemFont(ofSize: 14, weight: .regular),
+                palette: .theme(dark: true), wrapLines: false, isFocused: false
+            ))
+            host.frame = container.bounds
+            container.addSubview(host)
+            host.layoutSubtreeIfNeeded()
+            return host
+        }
+        var host: NSHostingView<SourceTextEditor>? = mount(try XCTUnwrap(file))
+        try await settle { file?.editorView != nil }
+        var retiredScroll: NSScrollView? = file?.editorView as? NSScrollView
+        var retiredEditor: FocusReportingTextView? = try XCTUnwrap(retiredScroll?.documentView as? FocusReportingTextView)
+        weak var releasedEditor = retiredEditor
+        retiredScroll?.contentView.setBoundsOrigin(NSPoint(x: 0, y: 900))
+        retiredScroll?.reflectScrolledClipView(try XCTUnwrap(retiredScroll?.contentView))
+        let before = try XCTUnwrap(retiredScroll?.contentView.bounds.origin)
+        XCTAssertGreaterThan(before.y, 0)
+        host?.removeFromSuperview()
+        host = nil
+        host = mount(try XCTUnwrap(file))
+        try await settle { file?.editorView != nil }
+        XCTAssertTrue(file?.editorView === retiredScroll)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(retiredScroll?.contentView.bounds.origin, before)
+        XCTAssertEqual(retiredEditor?.text, contents)
+
+        host?.removeFromSuperview()
+        host = nil
+        try "changed on disk\n".write(to: path, atomically: true, encoding: .utf8)
+        file?.reloadFromDiskIfClean()
+        try await settle { file?.text == "changed on disk\n" }
+        retiredEditor?.insertText("stale editor", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(file?.text, "changed on disk\n")
+        XCTAssertFalse(try XCTUnwrap(file).isDirty)
+        host = mount(try XCTUnwrap(file))
+        try await settle { file?.editorView != nil }
+        weak var currentEditor = (file?.editorView as? NSScrollView)?.documentView
+        XCTAssertFalse(currentEditor === retiredEditor)
+        XCTAssertEqual((currentEditor as? FocusReportingTextView)?.text, "changed on disk\n")
+        XCTAssertFalse((currentEditor as? FocusReportingTextView)?.undoManager?.canUndo ?? true)
+        retiredScroll = nil
+        retiredEditor = nil
+        try await settle { releasedEditor == nil }
+        host?.removeFromSuperview()
+        host = nil
+        file = nil
+        try await settle { releasedFile == nil && currentEditor == nil }
     }
 
     func testTerminalAndFindObservationPreserveNativeSurfaceIdentity() async throws {
