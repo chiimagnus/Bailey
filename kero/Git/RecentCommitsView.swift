@@ -133,7 +133,7 @@ struct RecentCommitsView: View {
 
                     Text(verbatim: commit.relativeDate)
                         .font(.system(size: 10.5 * fontScale))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
                 }
@@ -335,7 +335,7 @@ private struct CommitGraphRails: View {
     }
 
     private func color(_ index: Int) -> Color {
-        if index == 0 { return Color(nsColor: .systemIndigo) }
+        if index == 0 { return Color(red: 0.41, green: 0.52, blue: 0.96) }
         let colors: [NSColor] = [.systemGreen, .systemPurple, .systemTeal,
                                  .systemYellow, .systemRed]
         return Color(nsColor: colors[(index - 1) % colors.count])

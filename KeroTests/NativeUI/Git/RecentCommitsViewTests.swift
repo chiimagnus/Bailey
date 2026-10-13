@@ -78,11 +78,6 @@ final class RecentCommitsViewTests: XCTestCase {
             .background(Color(nsColor: Theme.sidebar)))
         window.orderFront(nil)
         settle()
-        if let v = window.contentView, let b = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
-            v.cacheDisplay(in: v.bounds, to: b)
-            try? b.representation(using: .png, properties: [:])?.write(
-                to: URL(fileURLWithPath: "/tmp/kero-graph-qa-merge.png"))
-        }
         click(NSPoint(x: 95, y: height - 18), in: window)
         XCTAssertTrue(selection.expanded.contains("merge"))
         click(NSPoint(x: 125, y: height - 64), in: window)
@@ -130,11 +125,6 @@ final class RecentCommitsViewTests: XCTestCase {
                 .background(Color(nsColor: Theme.sidebar)))
             window.orderFront(nil)
             settle()
-            if let v = window.contentView, let b = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
-                v.cacheDisplay(in: v.bounds, to: b)
-                try? b.representation(using: .png, properties: [:])?.write(
-                    to: URL(fileURLWithPath: "/tmp/kero-graph-qa-\(Int(width)).png"))
-            }
             let gutter = max(41, 37 * scale)
             let titlePoint = NSPoint(x: gutter + 18, y: height - 14 * scale)
             click(titlePoint, in: window)
