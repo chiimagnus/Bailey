@@ -17,6 +17,19 @@
 
 ## 发现项
 
+## 发现 F-01
+
+- 任务：`P6-T1`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Git/GitStatusModel.swift:287`
+- 摘要：`同仓库同 scope 的 SSH 后端更换不能抢占旧的 Git 状态 worker`
+- 风险：`旧 SSH 通道卡住时新通道同步被 refreshPending 兜住，用户持续等待旧连接的超时；旧结果还可能短暂更新已换目标的 Git 面板`
+- 预期修复：`仅当真实 WorkspaceBackend 实例更换时使旧 worker 的代次失效并立即向新通道刷新，保持已成功的仓库快照与错误隔离`
+- 验证：`make test ONLY_TESTING=KeroTests/GitStatusModelTests/testReplacingSSHBackendDoesNotWaitForStaleGitWorker; make test`
+- 解决证据：`62a31cf：换 SSH backend 时不等待旧 Git worker，比较真实 backend 实例并失效旧请求代次；旧连接挂起、新连接接管的红绿场景通过；全套 XCTest 89/89。`
+
+
 - 本阶段审查未发现仍开放的、符合 finding 门槛的正确性问题。实际发现并已随 `870f86d` 修复：普通目录通过 Foundation URL 枚举时 `/private/var` 与 `/var` 字符串前缀不一致，搜索结果错误地全部被丢弃；改用目录相对路径遍历并在回归测试覆盖。
 - 检查业务路径：`ContentView` 只触发 `GitStatusModel.syncSelectedProject`，后者先核对窗口选中 Project、上下文身份和请求代次，再调用既有 `GitStatusModel.sync`，其代次保护维持；`ToolPanelView` 只触发 `Project.syncFiles`，既有 `PanelSyncQueue` 合并及 2 秒活动 Files 刷新未移除；项目和机器变更后旧结果不进入可见状态。
 - 命令面板 `.task` 仍以上下文身份取消旧索引，helper 仅通过现有 Git 执行器/本机 FileManager 读取，不接入远端路径，不复制缓存；`@State` 保留查询/选择/指针临时输入，删除无用途 `ObservableObject` 和 View 内旧索引方法。
@@ -49,3 +62,12 @@
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
 
+
+## 2026-10-14 独立重审：P6（不继承旧审计结论）
+
+| todo 任务 | 原提交核对 | 当前执行路径／独立证据 | 判定 |
+| --- | --- | --- | --- |
+| P6-T1 | `52012db`，后审修复 `62a31cf` | `ContentView` 只通知 Git ViewModel，`ToolPanelView` 的 UI 触发交给 Project.syncFiles；旧 SSH 查询挂起时新连接同 root/scope 无法接管，修复后后端代次失效并马上请求，有红绿受控测试（F-01）。 | 原提交遗漏同仓库换通道身份，已修复 |
+| P6-T2 | `870f86d` | `CommandPaletteView` 的本地索引由 `ProjectFileIndex` 负责，`.task` 和选择状态留在 View；`Project.panelRoot` **仍由此实际调用**，不是死代码，禁止误删。ProjectFileIndexTests 覆盖 Git／普通目录和取消。 | 没有多余并行索引状态；保留现有活跃 helper |
+
+**阶段门槛**：代码／受控 SSH 代次测试通过，真实远端 SSH 断连并重连的原生 Files/Git/Heading 仍需独立验收。

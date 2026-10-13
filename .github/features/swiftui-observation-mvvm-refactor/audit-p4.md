@@ -28,6 +28,45 @@
 
 ## 发现项
 
+## 发现 F-07
+
+- 任务：`P4-T1`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Remote/Tunnels/TunnelDefinition.swift:216`
+- 摘要：`tunnels.toml 的无限大/NaN 端口进入 Int(Double) 时会让 App 直接崩溃`
+- 风险：`用户手动编辑或损坏的配置文件会在启动隧道加载时触发 Swift Fatal error，整个 Kero 启动失败；当前 Debug 自检未覆盖异常输入`
+- 预期修复：`TunnelStore.parse 用 Int(exactly:) 安全转换端口数值，跳过单条非法隧道并保留其余有效条目，不新增冗余配置恢复逻辑`
+- 验证：`make test ONLY_TESTING=KeroTests/TunnelStoreTests/testMalformedPortsDoNotCrashOrCorruptValidTunnels; make test; make build:release`
+- 解决证据：`c1848ca：传入 local-port=1e309、nan 的独立 XCTest 先触发真实 Swift Fatal error，后改为 Int(exactly:) 仅跳过无效条目；TunnelStoreTests 4/4、全量 93/93、Debug/Release 验签通过。`
+
+
+## 发现 F-06
+
+- 任务：`P4-T1`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`kero/Remote/Tunnels/TunnelManager.swift:47`
+- 摘要：`隧道核心配置检查仍以 Debug App 启动时 assert 自检执行，正式 XCTest 不运行该用例`
+- 风险：`开发版每次启动执行无关测试，而 CI 和 XCTest 无法单独枚举、报告或复现隧道配置解析和端口冲突回归`
+- 预期修复：`将 TunnelStore 的纯配置、转发与冲突自检转为正式 XCTest，删除生产 Debug 启动时的 runSelfCheck 及过时检查脚本说明`
+- 验证：`make test ONLY_TESTING=KeroTests/TunnelStoreTests; make test; make build:release`
+- 解决证据：`c1848ca：删除 TunnelManager.start 中 DEBUG runSelfCheck 和 TunnelDefinition.swift 中 81 行断言自检；迁入 TunnelStoreTests 4 个 XCTest 用例覆盖有效/无效规则、绑定端口与本地/反向转发；完整 XCTest 93/93、Debug/Release 构建与严格签名校验通过。`
+
+
+## 发现 F-05
+
+- 任务：`P4-T4`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Git/DiffViewerView.swift:790`
+- 摘要：`跨历史 Diff 标签 A-B-A 时 SwiftUI 复用错误 NSView 内容`
+- 风险：`标签身份和原生 Diff 文档不一致，用户会查看另一提交的文本`
+- 预期修复：`对每个 DiffTab 保留独立原生视图并在 SwiftUI 挂载边界按标签 ID 区分身份`
+- 验证：`make test ONLY_TESTING=KeroTests/DiffTabTests/testSwitchingLoadedDiffTabsKeepsEachNativeDocument`
+- 解决证据：`ceceeb1：独立 DiffTab 原生内容身份恢复；新增 DiffTabTests A-B-A 原生宿主回归；2026-10-14 全量 XCTest 84/84 与签名 Debug 构建通过。`
+
+
 ## 发现 F-04
 
 - 任务：`P4-T4`
@@ -113,3 +152,15 @@
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
 
+
+## 2026-10-14 独立重审：P4（不继承旧审计结论）
+
+| todo 任务 | 原提交／后续修复 | 当前执行路径／独立证据 | 判定 |
+| --- | --- | --- | --- |
+| P4-T1 | `a7f83ce`，后审 `c1848ca` | per-session 死转发已删除，真实 `TunnelManager` 仍被 App/设置消费；将启动时的自检移为 TunnelStoreTests，异常 TOML 端口复现启动崩溃后改为安全解析。 | F-06/F-07 已解决；保留真实隧道事件桥 |
+| P4-T2 | `7664467` | TerminalSession/RemoteConnection/TerminalFind 状态由 Project/Terminal View 原生消费；PaneRetentionTests、RemoteLifetimeTests 覆盖进程与变更。 | 有现行消费者，无旧 Combine UI 广播 |
+| P4-T3 | `5bd9e26`，`de63012`，`d7d9a2b` | FileTab 保留 STTextView/保存基线与 SSH 机器身份，`SourceTextEditor` 的 Coordinator 及窗口第一帧恢复可达；FileTabTests 对接真实读写/断连。 | 保留稳定原生视图，跨工作区测试已增补 |
+| P4-T4 | `ee243e0`，`807d666`；后由 `6b3081b` 替换 Pierre；`ceceeb1` | `DiffTab` Git/SSH 读取由现行 `DiffNativeSurface` 消费，Pierre WebKit 渲染已删除；`ceceeb1` 解决 A→B→A 旧 NSView 身份污染（F-05），有红绿原生回归。 | 当前仅维护 TextKit；原任务 WebKit 方案已退出生产 |
+| P4-T5 | `b1c3550` | BrowserTab Observation 状态由 BrowserView 与 TabSwitcher 消费，WebKit KVO 订阅必要；PaneRetentionTests 覆盖 native WebView 内容与滚动重挂载。 | 不删除必要 KVO 桥 |
+
+**阶段门槛**：后审增加跨文件／Diff／浏览器 ContentView 切换及隧道 TOML 边界测试；其中崩溃复现红／绿，最终 XCTest 93/93、Debug/Release 构建与验签通过。真实用户点击、SSH 实机、跨进程恢复与 GUI 截图对照仍待独立验收。

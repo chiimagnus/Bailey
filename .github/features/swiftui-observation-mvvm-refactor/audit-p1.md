@@ -17,6 +17,19 @@
 
 ## 发现项
 
+## 发现 F-01
+
+- 任务：`P1-T1`
+- 严重级别：`Low`
+- 状态：`Resolved`
+- 位置：`KeroTests/references/check-app-identity.swift`
+- 摘要：`两个历史测试参考文件仍要求已移除的 Kero Dev 包名及独立数据目录`
+- 风险：`失效脚本虽被排除构建，却会误导以后审查者恢复已明确放弃的多 App 身份`
+- 预期修复：`删除无当前消费者的两个过时历史身份脚本，同步 Xcode 排除清单；保留真实使用的一套 Kero 身份及现行 AppIdentityTests`
+- 验证：`rg Kero Dev kero-dev; make test ONLY_TESTING=KeroTests/AppIdentityTests; make build`
+- 解决证据：`已删除两份过时多 App 身份测试并同步 Xcode excluded sources；当前 AppIdentityTests 2/2，全套 XCTest 89/89；Debug、Release 严格签名通过，当前只有 chiimagnus.kero。`
+
+
 无符合 finding 门槛的未修复 P1 正确性问题。逐字段核对 Snapshot 与各 Owner 的 setter 后，`autosaveObservation` 已消失，唯一业务写入路径仍为原 `saveAll → SessionStore/TerminalHistoryStore`。
 
 **计划验收修正（证据与范围一致）**：旧 P1-T2 文字要求在本任务模拟系统级终端历史开关及真实回放，但变更范围只是保存触发事件来源，且隔离 App 仍与正式 App 共用全局配置。直接切换 `AppSettings.shared.restoreTerminalHistory` 会写真实 `config.toml`，违反安全验收。P1 采用实际存储层的历史键/sidecar 联动检查与代码调用链审查，不把它称作滚动历史重启测试；真实回放属于 P5/P7 原生生命周期完整验收。
@@ -53,3 +66,12 @@
 
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
+
+## 2026-10-14 独立重审：P1（不继承旧审计结论）
+
+| todo 任务 | 原提交核对 | 当前执行路径／独立证据 | 判定 |
+| --- | --- | --- | --- |
+| P1-T1 | 基线检查任务，无独立功能提交 | 阅读 plan-p1 与当前源码、真实 scheme；本机未入 Git 的 `evidence/p1-baseline/` 实际保有正式 App、隔离 Debug 的原生截图和构建日志，可在原机查看；但图像不是完整可交互基线，后来 Diff/Files A-B-A 实际串文证明标签切换覆盖不充分。 | **需补真实 UI 比对**；不能以完成标记认定零 UX 差异 |
+| P1-T2 | `259ac58` | `TerminalManager.requestSave→saveAll→makeWindowSnapshot`，Project/PaneTab 与文件/浏览器变更触发快照；`SessionStoreTests` 覆盖语义保存、历史 sidecar，代码仍被现行 App 消费。 | 代码与单测可核对；运行中 App 重启恢复待测 |
+
+**额外清理**：P1-F-01 指向两份已不编译的历史身份测试，仍要求早已停止使用的 Kero Dev 包名／数据目录。删除它们及 Xcode 排除列表对应项；现行 `AppIdentityTests` 只验证唯一正式身份。保留真正需要的历史布局 `info` *读取并过滤*兼容分支，删除它会破坏旧用户快照的整体解码。

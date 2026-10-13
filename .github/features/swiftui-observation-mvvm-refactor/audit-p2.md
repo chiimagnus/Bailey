@@ -49,3 +49,12 @@
 
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
+
+## 2026-10-14 独立重审：P2（不继承旧审计结论）
+
+| todo 任务 | 原提交核对 | 当前执行路径／独立证据 | 判定 |
+| --- | --- | --- | --- |
+| P2-T1 | `0b05d11` | `AppSettings.@Observable` 由 Settings 及 WindowRoot 直接读取；原 `TerminalManager.settingsObservation` 已消失，现有 `AppSettingsTests` 覆盖配置往返和状态响应。 | 代码/单测符合；隔离真实字体／光标视觉复验待补 |
+| P2-T2 | `889172a` | `Theme.changes.revision` 由 Browser/Editor/Git/Files/Dock 等消费者读取；`AppSettingsTests` 校验主题状态变化。 | 真实消费链存在；原生明暗视觉逐一对照未全测 |
+
+**旧链核销**：生产 SwiftUI 下已无旧 `@StateObject/@ObservedObject/objectWillChange`；少数 Combine 保留用于系统终止、WebKit KVO 及原生 `NSTableView`，不能误删。

@@ -19,6 +19,32 @@
 
 ## 发现项
 
+## 发现 F-03
+
+- 任务：`P3-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Git/GitStatusModel.swift:1490`
+- 摘要：`Git status 成功但 Git log 单独失败会发布空历史并抹掉 Git Graph`
+- 风险：`SSH 批处理局部失败时解析结果仍被当作仓库成功快照，提交图谱和历史列表丢失且没有警告`
+- 预期修复：`有 HEAD 时 Git log 失败应当作为整个刷新失败，保留上次成功的仓库快照；初始无 HEAD 则仍允许空历史`
+- 验证：`make test ONLY_TESTING=KeroTests/GitStatusModelTests/testTransientGitFailurePreservesLastRepositorySnapshotAndRecovers; make test`
+- 解决证据：`2af09b2：有 HEAD 的 Git log 局部失败不能当作成功空历史；受控 batch 单子命令失败红绿对照通过；全套 XCTest 89/89。`
+
+
+## 发现 F-02
+
+- 任务：`P3-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Git/GitStatusModel.swift:1261`
+- 摘要：`一次 Git/SSH 状态刷新失败会清空同一仓库已成功读取的提交与文件变化`
+- 风险：`一时超时导致 Git Graph、文件装饰和工具栏消失，已加载的历史被误认作仓库丢失；之前的 SSH Git Unavailable 与此一致`
+- 预期修复：`仅在确定切换仓库或确认不是 Git 仓库时清空快照；暂时失败保留上次成功的数据并展示可重试的错误，不新增第二份缓存`
+- 验证：`make test ONLY_TESTING=KeroTests/GitStatusModelTests/testTransientGitFailurePreservesLastRepositorySnapshotAndRecovers; make test`
+- 解决证据：`0e46a97：SSH Git 超时后保留已加载快照并在 GitPanel 展示可重试错误；红绿对照，新版 GitStatusModelTests 6/6；全套 XCTest 89/89。`
+
+
 ## 发现 F-01
 
 - 任务：`P3-T1`
@@ -64,3 +90,13 @@
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
 
+
+## 2026-10-14 独立重审：P3（不继承旧审计结论）
+
+| todo 任务 | 原提交核对 | 当前执行路径／独立证据 | 判定 |
+| --- | --- | --- | --- |
+| P3-T1 | `f92ab70` | `FileTreeModel` 与原生 `ContentView` 的错误呈现仍为 FileTreePanel 的实际路径；FileTreeTests 真实创建、删除、重命名受控文件。 | 现行路径存在、被测试覆盖 |
+| P3-T2 | `d78bd85` | `GitStatusModel→ContentView.@State→ToolPanelView/GitPanel/RecentCommits` 真实消费；刷新失败清空历史由 `0e46a97` 修复，`git log` 单点失败伪装空历史由 `2af09b2` 修复。原生 Git/SSH 使用独立回归验证。 | **原提交有真实缺陷，后审已定位并修复**（F-02、F-03） |
+| P3-T3 | `ffa054c`，相关窗口回调后续 `d492475` | `GitPanel` 丢弃确认只负责 UI，`GitStatusModel` 执行路径与目标/内容复验；GitStatusModelTests 真实 Git/index/受控 SSH 错误有覆盖。 | 真实功能使用，未发现可删除的旧并行丢弃服务 |
+
+**阶段门槛**：针对性 XCTest、Debug 验签已通过；真实 SSH 长时间断连／Git UI 原生重试路径待额外手工验收。错误必须显示但不抹去可靠的上次快照。

@@ -20,6 +20,32 @@
 
 ## 发现项
 
+## 发现 F-03
+
+- 任务：`P7-T3`
+- 严重级别：`Medium`
+- 状态：`Open`
+- 位置：`kero.xcodeproj/xcshareddata/xcschemes/kero.xcscheme`
+- 摘要：`重构零 UI/UX 差异缺少可点击完整 App 的独立 E2E 证据`
+- 风险：`组件 XCTest 全绿仍可漏掉文件/Diff/窗口焦点跨控件缺陷；实际出现过 A-B-A 串文，当前背景隔离实例 AX 元素不完整`
+- 预期修复：`在不影响正式同 bundle ID Kero 的独立桌面环境中引入可运行的 XCUITest/原生 GUI 自动化，覆盖完整点击流程、无保存/SSH 风险和重启恢复`
+- 验证：`真正 XCUITest/原生 GUI 回归结果与对应基线；当前只有隔离 Debug 冷启动+只读 AX，不能称 E2E`
+- 解决证据：`<commit diff note or test/build output>`
+
+
+## 发现 F-02
+
+- 任务：`P7-T3`
+- 严重级别：`Low`
+- 状态：`Resolved`
+- 位置：`KeroTests/references/check-file-tree-navigation.swift:1`
+- 摘要：`KeroTests/references 历史 Swift 5 @main 检查脚本已完全脱离当前 XCTest 目标`
+- 风险：`Xcode 排除清单仍需逐项维护，旧脚本含停用架构和过时路径、可能误导后续测试`
+- 预期修复：`删除不参与构建的旧 references 脚本，移除无用途的 Xcode 测试目标例外条目，更新实际测试入口文档；让源码只保留一套 XCTest`
+- 验证：`make test; make build; make build:release; 现行 XCTest 仍覆盖 89 项且 references 无消费者`
+- 解决证据：`d0d1989：移除未由 Makefile/Xcode 执行的 12 个 references/check-*.swift（2094 行）和 Xcode test target 的 21 行已失效例外清单；仍保持现行 XCTest 93/93、Debug/Release build 严格验签通过；脚本可由 Git 历史追溯。`
+
+
 ## 发现 F-01
 
 - 任务：`P7-T3`
@@ -66,3 +92,21 @@
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
 
+
+## 2026-10-14 独立重审：P7（不继承旧审计结论）
+
+| todo 任务 | 原提交核对 | 当前执行路径／独立证据 | 判定 |
+| --- | --- | --- | --- |
+| P7-T1 | `7e763e7` | 消除 SSH 后端重复导入并核对原有独立进程 runner、Pipe/Socket 生命周期；RemoteLifetimeTests/GitExecutionTests 仍实际运行。 | 不删除用来保证防死锁的独立 IO 边界 |
+| P7-T2 | `1abc0ad` | Terminal/AppKit/Editor/WebKit 原生回调的 Swift 6 actor 隔离，当前 Diff 和 Browser/Editor native 路径仍调用；PaneRetentionTests/DiffTabTests 覆盖时序。 | 有真实调用方；未引入平行兼容回调 |
+| P7-T3 | `31175d8`，规范同步 `8450b9d` | App 和 XCTest Debug/Release `SWIFT_VERSION=6.0`；单 scheme、唯一 Kero.app。只用当前 Xcode 构建及验签，不额外装旧工具链。 | 编译／签名作为机械 gate；真实 UI/UX 不等于编译通过 |
+
+**额外测试治理**：`157e4fc` 建立 `docs/TESTING.md`、AGENTS、PR 证据要求和跨标签／双窗口 XCTest；`c1848ca` 将隧道 Debug 启动自检迁至 XCTest；`d0d1989` 删除 12 份未参与构建的旧脚本（2094 行）及工程例外。明确需求/文档驱动与 TDD 红绿循环、单元/组件/工作区/真正 E2E 的边界；当前尚无安全的独立 XCUITest 环境，不能中断用户正在运行的同 Bundle ID App。
+
+### 2026-10-14 总 Gate（独立复核）
+
+- **范围**：按现存 `todo.toml` P1-T1 至 P7-T3 共 23 项逐项对照原提交、后续替代实现、当前调用方与对应 XCTest。P1-T1 是无独立代码提交的基线工作；P5-T4 与 `3918150` 的 P5-T3 合并提交，不能虚构额外实现提交。本机 `evidence/p1-baseline/` 有真实原始截图及多阶段对照，但未覆盖所有交互及同条件逐像素回归。
+- **已解决的本轮发现**：P1-F-01（过期双身份脚本，`157e4fc`）；P3-F-02（临时失败清空 Git，`0e46a97`）、P3-F-03（`git log` 单点失败被当作空历史，`2af09b2`）；P4-F-05（Diff A-B-A，`ceceeb1`）、P4-F-06/F-07（隧道自检及非法端口崩溃，`c1848ca`）；P5-F-01（Files A-B-A，`5edfccd`）；P6-F-01（同仓库换 SSH 连接排队，`62a31cf`）；P7-F-02（失效测试脚本，`d0d1989`）。上述均有对应真实受控或原生宿主回归。
+- **本轮验证**：`make test` **93/93 PASS**；`make doctor`（Xcode 27.0）、`make build`、`make build:release` **PASS**，Debug/Release `codesign --verify --deep --strict` **PASS**。曾观察到 XCTest 测试插件出现在 Debug 产物而导致封装验签失败；重新执行正常 Debug 构建后 `PlugIns/KeroTests.xctest` 消失且签名正常，未增设新构建后处理。签名 Debug `/Applications/Kero.app` 已按最终 93/93 代码**整包替换并复验**（可执行文件 SHA-256 `4bafc4577fa71866953abd449e6b78d635062418f0fba89a46bcb14d6740c516`）；正式进程 PID 96288 保持运行、**未退出/重启**，因此正式重启恢复未测。独立隔离进程冷启动和 AX 只读成功，后台 UI 元素不足，未开展真实鼠标点击 E2E，隔离进程及临时数据已清理。
+- **仍未消除／未验收**：P5-F-02（单窗口关闭发生保存失败时的数据风险，现行文档也承认未保护；原计划非目标，须独立产品修复）；P7-F-03（缺少不干扰正式 App 的独立真正 E2E 环境）；真实 SSH 断线重连和同条件明暗/多窗口 UX 视觉对照未运行。不要为消除这些空缺而修改用户配置或启动同 Bundle ID 的前台 XCUITest。
+- **Gate：No-Go（完整重构 UX / E2E 验收）**。上述已修根因与 XCTest／签名构建有充分正证据，但本轮不能证明原计划全部真实环境验收达成，更不能声称已穷尽所有潜在 Bug。建议先处理仍为高风险的窗口关闭保存边界，再建立隔离 E2E 环境做真实用户路径验收；不重新执行已明确定为历史的 Pierre/WebKit Diff 或多 App 身份路线。
