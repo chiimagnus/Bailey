@@ -1,6 +1,6 @@
 # Kero 开发规范
 
-本文件是仓库级 AI 开发入口，`CLAUDE.md` 只转发到这里。文档总入口是 [docs/README.md](docs/README.md)，面向用户的说明在 [README](README.md)。先读受影响文档，再沿真实入口、状态所有者和后端查到最终结果。
+本文件是唯一的仓库级 AI 开发入口。文档总入口是 [docs/README.md](docs/README.md)，面向用户的说明在 [README](README.md)。先读受影响文档，再沿真实入口、状态所有者和后端查到最终结果。
 
 ## 开发立场
 

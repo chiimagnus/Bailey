@@ -10,7 +10,7 @@ Kero 使用 [GNU GPLv3](LICENSE)。本页用于定位项目来源、文档参考
 
 文档组织与维护方式参考 [abue-ammar/tinycast](https://github.com/abue-ammar/tinycast/tree/808f2d8792474fac3608217c6e14708e947182fd/docs) 及同一修订的 [AGENTS.md](https://github.com/abue-ammar/tinycast/blob/808f2d8792474fac3608217c6e14708e947182fd/AGENTS.md)。
 
-采用其核心文档分工、功能页 `Invariants`、文档索引中的职责与更新时机、单一完成标准、贡献与验证衔接，以及 `CLAUDE.md` 转发结构。正文按 Kero 当前实现重新编写，不复制 Tinycast 的产品能力、性能数字、签名密钥、渠道或贡献者法律条款。
+采用其核心文档分工、功能页 `Invariants`、文档索引中的职责与更新时机、单一完成标准以及贡献与验证衔接。正文按 Kero 当前实现重新编写，不复制 Tinycast 的产品能力、性能数字、签名密钥、渠道或贡献者法律条款。
 
 ## 已有第三方材料
 

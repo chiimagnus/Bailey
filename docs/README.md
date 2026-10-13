@@ -38,7 +38,7 @@
 
 ## 根目录入口
 
-[README](../README.md) 面向用户，负责能力、安装和使用；[CONTRIBUTING](../CONTRIBUTING.md) 负责贡献流程；[SECURITY](../SECURITY.md) 负责漏洞报告和安全范围；[NOTICE](../NOTICE.md) 负责来源与第三方声明。`CLAUDE.md` 只转发到 `AGENTS.md`，不维护第二套规范。
+[README](../README.md) 面向用户，负责能力、安装和使用；[CONTRIBUTING](../CONTRIBUTING.md) 负责贡献流程；[SECURITY](../SECURITY.md) 负责漏洞报告和安全范围；[NOTICE](../NOTICE.md) 负责来源与第三方声明。AI 开发规范只维护根目录的 `AGENTS.md`。
 
 ## 文档维护
 
