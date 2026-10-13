@@ -69,7 +69,24 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
 }
 
 @MainActor
+@Observable
+private final class DiffSelectionFixture {
+    var selected: DiffTab
+    init(_ selected: DiffTab) { self.selected = selected }
+}
+
+private struct DiffSelectionFixtureView: View {
+    let selection: DiffSelectionFixture
+    var body: some View { DiffViewerView(diff: selection.selected) }
+}
+
+@MainActor
 final class DiffTabTests: XCTestCase {
+    private func findNativeSurface(in view: NSView) -> DiffNativeSurface? {
+        if let surface = view as? DiffNativeSurface { return surface }
+        return view.subviews.lazy.compactMap { self.findNativeSurface(in: $0) }.first
+    }
+
     private func findNativeTextView(in view: NSView, editable: Bool? = nil) -> DiffTextView? {
         if let textView = view as? DiffTextView,
            editable == nil || textView.isEditable == editable { return textView }
@@ -105,6 +122,47 @@ final class DiffTabTests: XCTestCase {
             XCTAssertEqual(result.status, 0, result.stderr)
         }
         return directory
+    }
+
+    func testSwitchingLoadedDiffTabsKeepsEachNativeDocument() async throws {
+        let suite = "kero-diff-switch-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        let aBackend = DiffWorkspaceFixture()
+        let bBackend = DiffWorkspaceFixture()
+        let a = DiffTab(repoRoot: "/fixture", path: "A.txt", staged: false,
+                        untracked: true, origPath: nil, backend: aBackend,
+                        workspaceIdentity: nil, preferences: preferences)
+        try await wait { a.display != nil }
+
+        let selection = DiffSelectionFixture(a)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 850, height: 570),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffSelectionFixtureView(selection: selection))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait { self.findNativeSurface(in: host) === a.nativeSurface && a.nativeSurface != nil }
+
+        await bBackend.pauseOneRead()
+        let b = DiffTab(repoRoot: "/fixture", path: "B.txt", staged: false,
+                        untracked: true, origPath: nil, backend: bBackend,
+                        workspaceIdentity: nil, preferences: preferences)
+        selection.selected = b
+        try await wait { await bBackend.reading }
+        await bBackend.finishRead(with: Data("different B document".utf8))
+        try await wait { b.display != nil && self.findNativeSurface(in: host) === b.nativeSurface && b.nativeSurface != nil }
+        XCTAssertNotEqual(a.newContent, b.newContent)
+
+        selection.selected = a
+        try await wait { self.findNativeSurface(in: host)?.diff === a }
+        XCTAssertTrue(findNativeSurface(in: host) === a.nativeSurface,
+                      "Returning A must mount A's own TextKit document, not B's")
+        selection.selected = b
+        try await wait { self.findNativeSurface(in: host)?.diff === b }
+        XCTAssertTrue(findNativeSurface(in: host) === b.nativeSurface)
     }
 
     func testNativeDiffEditorFocusLossSavesThroughBackend() async throws {

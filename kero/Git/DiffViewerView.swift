@@ -784,7 +784,9 @@ struct DiffViewerView: View {
                     VStack(spacing: 0) {
                         controlBar
                         if diff.display != nil {
+                            // Each tab retains its own TextKit document; never reuse another tab's NSView.
                             DiffNativeRoot(diff: diff)
+                                .id(diff.id)
                         } else {
                             DiffSkeletonView()
                         }
