@@ -68,15 +68,18 @@ struct GitPanel: View {
             header
             operationFailureBanner
 
-            if let statusError = model.statusError {
-                statusFailure(statusError)
-            } else if !model.isRepo {
-                if model.isResolvingInitialStatus {
+            if !model.isRepo {
+                if let statusError = model.statusError {
+                    statusFailure(statusError)
+                } else if model.isResolvingInitialStatus {
                     placeholder(icon: "arrow.clockwise", text: String(localized: "Finding repository…", table: "Sidebar"))
                 } else {
                     notRepository
                 }
             } else {
+                if let statusError = model.statusError {
+                    statusWarning(statusError)
+                }
                 trackingBar
                 repositoryOperationBanner
                 commitBox
@@ -1190,6 +1193,28 @@ struct GitPanel: View {
         }
         .padding(.horizontal, 18)
         .frame(maxWidth: .infinity)
+    }
+
+    private func statusWarning(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle")
+                Text(String(localized: "Git Status Unavailable", table: "Sidebar"))
+                    .panelFont(size: 10.5, weight: .medium)
+                Spacer(minLength: 4)
+                Button(String(localized: "Retry", table: "Sidebar")) { model.refresh() }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(model.isBusy || model.isRefreshing)
+            }
+            Text(verbatim: message)
+                .panelFont(size: 10)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .textSelection(.enabled)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     private func statusFailure(_ message: String) -> some View {

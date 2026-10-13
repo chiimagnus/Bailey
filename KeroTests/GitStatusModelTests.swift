@@ -7,11 +7,13 @@ import XCTest
 /// is independently controllable so a failed SSH stat can never trash a Mac file.
 private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     private var online = true
+    private var failGit = false
     private var pauseMetadata = false
     private(set) var metadataReads = 0
     private(set) var deleteAttempts = 0
 
     func setOnline(_ value: Bool) { online = value }
+    func setGitUnavailable(_ value: Bool) { failGit = value }
     func setPauseMetadata(_ value: Bool) { pauseMetadata = value }
 
     func stat(path: String) async throws -> WorkspaceStat? {
@@ -30,6 +32,7 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
         argv: [String], cwd: String?, env: [String: String]?,
         stdin: Data?, timeout: TimeInterval?
     ) async throws -> WorkspaceRunResult {
+        if failGit { throw WorkspaceError.timedOut }
         // The remote protocol passes command names (git/sh), whereas the
         // local backend deliberately requires an absolute executable URL.
         var variables = ProcessInfo.processInfo.environment
@@ -300,6 +303,50 @@ final class GitStatusModelTests: XCTestCase {
                        "changed after review")
         let attemptsAfterSwitch = await backend.deleteAttempts
         XCTAssertEqual(attemptsAfterSwitch, 0)
+    }
+
+    func testTransientGitFailurePreservesLastRepositorySnapshotAndRecovers() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func git(_ args: [String]) throws {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        try git(["init", "-q"])
+        try git(["config", "user.name", "Git Recovery Test"])
+        try git(["config", "user.email", "test@invalid"])
+        try git(["config", "commit.gpgsign", "false"])
+        try "baseline\n".write(to: directory.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        try git(["add", "."])
+        try git(["commit", "-qm", "first"])
+        try git(["commit", "--allow-empty", "-qm", "second"])
+        try "changed\n".write(to: directory.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+
+        let backend = DiscardRemoteWorkspaceFixture()
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: backend, scope: "ssh:fixture")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.isRepo)
+        XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
+        let priorChanges = model.changedEntries
+        XCTAssertEqual(priorChanges.map(\.path), ["tracked.txt"])
+        let priorBranch = model.branch
+
+        await backend.setGitUnavailable(true)
+        model.refresh()
+        try await wait { model.statusError != nil && !model.isRefreshing }
+        XCTAssertTrue(model.isRepo, "Temporary SSH/Git errors must not erase the repository")
+        XCTAssertEqual(model.branch, priorBranch)
+        XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
+        XCTAssertEqual(model.changedEntries, priorChanges)
+
+        await backend.setGitUnavailable(false)
+        model.refresh()
+        try await wait { model.statusError == nil && !model.isRefreshing }
+        XCTAssertTrue(model.isRepo)
+        XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
+        XCTAssertEqual(model.changedEntries, priorChanges)
     }
 
     func testUnbornRepositoryAndPagedHistorySurviveRepositorySwitch() async throws {

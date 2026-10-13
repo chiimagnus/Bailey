@@ -1260,16 +1260,9 @@ final class GitStatusModel {
             return
         case .failed(let message):
             if isBusy { return }
-            let preserveFailure: Bool
-            if let operation, case .failed = operation.state {
-                preserveFailure = true
-            } else {
-                preserveFailure = false
-            }
-            clearRepositoryState(
-                preserveIdentity: true,
-                preserveFailedOperation: preserveFailure
-            )
+            // A failed refresh is not evidence that the repository disappeared.
+            // Keep its last successful snapshot until a refresh succeeds or the
+            // selected workspace is proven to be a different/non-Git root.
             statusError = message
             return
         case .repository(let result):
