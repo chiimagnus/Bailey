@@ -306,41 +306,11 @@ struct ToolPanelView: View {
     }
 
     private func performSync() async {
-        guard let project = manager.selectedProject,
-              let context = project.panelContext
-        else { return }
-        let session = project.selectedSession
-        // The panel path, not the session's own: once the session is on a
-        // remote machine these panels follow the remote shell's directory,
-        // while new local terminals and restore snapshots keep the local one.
-        // A dead connection answers nothing: every call below would wait out
-        // its own deadline, one after another, and stall the refresh loop for
-        // as long as the link stays down. The panels keep their last remote
-        // contents instead, which is what the heading is telling the user.
-        if project.sshHost == nil, project.customDirectory == nil,
-           let connection = session?.location.remoteConnection,
-           connection.state == .disconnected {
-            return
-        }
-        let backend = context.backend
-        // Files and Git anchor to the project directory — pinned when the
-        // user set one, else the repository the session is working in — so
-        // they don't re-root as the terminal cds around a repo.
-        // An agent that moves to its own worktree changes only its own
-        // process directory, so the foreground job's cwd is passed in too.
-        let (root, source) = await context.resolvedRoot()
-        // The connection may have died while that was in flight; its answer
-        // describes a workspace that is no longer the one on screen.
-        guard project.matchesPanelTarget(context.identity),
-              manager.selectedProjectID == project.id else { return }
+        guard panel == .files, let project = manager.selectedProject,
+              let (source, target) = await project.syncFiles(in: manager),
+              manager.selectedProject === project else { return }
         if rootSource != source { rootSource = source }
-        switch panel {
-        case .files:
-            await project.fileTree.sync(root: root, backend: backend, scope: context.scope)
-            if project.matchesPanelTarget(context.identity) { filesTarget = context.identity }
-        case .git:
-            break
-        }
+        filesTarget = target
     }
 
     /// Text badge for the Files header while the panels follow the foreground

@@ -73,6 +73,52 @@ final class PanelContextTests: XCTestCase {
         XCTAssertFalse(pinned.isRemote)
     }
 
+    func testSelectedProjectOwnsGitAndFilesRefreshAcrossRapidSwitches() async throws {
+        let snapshots = SessionStore.load()
+        let histories = TerminalHistoryStore.load()
+        defer { SessionStore.save(snapshots); TerminalHistoryStore.save(histories) }
+
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kero-panel-sync-\(UUID().uuidString)")
+        let firstURL = base.appendingPathComponent("first")
+        let secondURL = base.appendingPathComponent("second")
+        try FileManager.default.createDirectory(at: firstURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        try Data("first".utf8).write(to: firstURL.appendingPathComponent("one.txt"))
+        try Data("second".utf8).write(to: secondURL.appendingPathComponent("two.txt"))
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        let git = GitStatusModel()
+        manager.addLocalItems([firstURL])
+        let firstProject = try XCTUnwrap(manager.selectedProject)
+        git.syncSelectedProject(in: manager)
+        manager.addLocalItems([secondURL])
+        let secondProject = try XCTUnwrap(manager.selectedProject)
+        git.syncSelectedProject(in: manager)
+        try await wait { git.rootPath == secondURL.path && git.hasResolvedStatus && !git.isRefreshing }
+        XCTAssertEqual(git.rootPath, secondURL.path)
+        XCTAssertEqual(git.currentScope, "local")
+        let inactiveResult = await firstProject.syncFiles(in: manager)
+        XCTAssertNil(inactiveResult, "Inactive project must not issue a refresh")
+
+        let secondResult = await secondProject.syncFiles(in: manager)
+        XCTAssertEqual(secondResult?.0, .pinned)
+        XCTAssertEqual(secondProject.fileTree.rootPath, secondURL.path)
+        XCTAssertTrue(secondProject.fileTree.items.contains { $0.path == secondURL.appendingPathComponent("two.txt").path })
+        XCTAssertFalse(secondProject.fileTree.items.contains { $0.path == firstURL.appendingPathComponent("one.txt").path })
+
+        manager.selectedProjectID = firstProject.id
+        git.syncSelectedProject(in: manager)
+        try await wait { git.rootPath == firstURL.path && git.hasResolvedStatus && !git.isRefreshing }
+        let firstResult = await firstProject.syncFiles(in: manager)
+        XCTAssertEqual(firstResult?.0, .pinned)
+        XCTAssertEqual(firstProject.fileTree.rootPath, firstURL.path)
+        XCTAssertTrue(firstProject.fileTree.items.contains { $0.path == firstURL.appendingPathComponent("one.txt").path })
+        XCTAssertEqual(secondProject.fileTree.rootPath, secondURL.path)
+    }
+
     func testLateFileCreationDoesNotPublishAfterTargetChanges() async throws {
         let backend = DelayedWorkspaceFixture("first")
         let tree = FileTreeModel()

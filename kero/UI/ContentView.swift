@@ -114,19 +114,7 @@ struct ContentView: View {
     }
 
     private func syncGit() {
-        guard let project = manager.selectedProject,
-              let context = project.panelContext else {
-            git.sync(root: "")
-            return
-        }
-        // Files and Git belong to the selected project, not to its terminals.
-        // Resolving an automatic remote root can involve a round trip.
-        Task {
-            let root = await context.resolvedRoot().root
-            guard manager.selectedProjectID == project.id,
-                  project.matchesPanelTarget(context.identity) else { return }
-            git.sync(root: root, backend: context.backend, scope: context.scope)
-        }
+        git.syncSelectedProject(in: manager)
     }
 
     private var emptyState: some View {

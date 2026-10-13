@@ -261,6 +261,27 @@ final class GitStatusModel {
 
     /// The workspace selected by the project's current panel context.
     private var backend: WorkspaceBackend = LocalWorkspaceBackend.shared
+    @ObservationIgnored private var panelResolveGeneration: UInt64 = 0
+
+    /// Only the focused project's latest directory resolution may select a
+    /// repository. Its backend can complete after the user switches projects.
+    func syncSelectedProject(in manager: TerminalManager) {
+        panelResolveGeneration &+= 1
+        let generation = panelResolveGeneration
+        guard let project = manager.selectedProject,
+              let context = project.panelContext else {
+            sync(root: "")
+            return
+        }
+        Task { [weak self, weak manager, weak project] in
+            let root = await context.resolvedRoot().root
+            guard let self, let manager, let project,
+                  self.panelResolveGeneration == generation,
+                  manager.selectedProject === project,
+                  project.matchesPanelTarget(context.identity) else { return }
+            self.sync(root: root, backend: context.backend, scope: context.scope)
+        }
+    }
 
     /// Omitting the backend selects the Mac; scope keeps cached state and
     /// drafts distinct when the same path exists on another machine.

@@ -190,6 +190,22 @@ final class Project: nonisolated Identifiable {
         panelContext?.identity == identity
     }
 
+    /// Synchronize the project's Files tree; only the latest active workspace
+    /// may publish its root, and a disconnected shell retains the last tree.
+    func syncFiles(in manager: TerminalManager) async -> (PanelContext.RootSource, PanelContext.Identity)? {
+        guard manager.selectedProject === self,
+              let context = panelContext else { return nil }
+        if sshHost == nil, customDirectory == nil,
+           selectedSession?.location.remoteConnection?.state == .disconnected { return nil }
+        let (root, source) = await context.resolvedRoot()
+        guard manager.selectedProject === self,
+              matchesPanelTarget(context.identity) else { return nil }
+        await fileTree.sync(root: root, backend: context.backend, scope: context.scope)
+        guard manager.selectedProject === self,
+              matchesPanelTarget(context.identity) else { return nil }
+        return (source, context.identity)
+    }
+
     /// Root for the file tree and git panels: the pinned directory when the
     /// user set one (and it still exists on disk), else the repository the
     /// terminal's foreground job moved to (an agent's worktree), else the
