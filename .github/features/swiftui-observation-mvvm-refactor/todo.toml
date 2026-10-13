@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P6-T1"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
@@ -142,42 +142,42 @@ note = "标签切换器和 FPS 均移除旧 Combine UI 发布器，PaneRetention
 [[tasks]]
 id = "P6-T1"
 title = "将跨面板根目录解析与刷新编排移出 SwiftUI View"
-status = "in_progress"
+status = "completed"
 plan = "plan-p6.md#p6-t1"
-commit = ""
-note = "P5 审计 Go，开始核对 ContentView/ToolPanel 的业务刷新路径与目标身份。"
+commit = "52012db"
+note = "GitStatusModel/Project 解析与同步所有权；Panel3/3 Identity4/4 Git4/4 + build/codesign；隔离原生 Files 2秒及 App 激活 Git 新文件状态PASS，真实SSH未测。"
 
 [[tasks]]
 id = "P6-T2"
 title = "将命令面板文件索引迁出 View 并保留即时交互状态"
-status = "pending"
+status = "completed"
 plan = "plan-p6.md#p6-t2"
-commit = ""
-note = ""
+commit = "870f86d"
+note = "ProjectFileIndex本机Git/NUL/普通目录、相对路径别名与取消；index2/2、全量71/71、build/codesign PASS；隔离原生真实文件打开、50结果上限和Esc已实测。"
 
 [[tasks]]
 id = "P7-T1"
 title = "SSH、Git 和文件后端的 Swift 6 并发边界收敛"
-status = "pending"
+status = "completed"
 plan = "plan-p7.md#p7-t1"
-commit = ""
-note = ""
+commit = "7e763e7"
+note = "Swift6 编译诊断后端无报错，移除重复 Darwin；受控 RemoteLifetime3/3 RemoteCommands4/4 GitExecution4/4 + 默认 build，Swift6 native 仍有诊断留 P7-T2。"
 
 [[tasks]]
 id = "P7-T2"
 title = "终端、编辑器与 WebKit 的 Swift 6 actor／delegate 边界"
-status = "pending"
+status = "completed"
 plan = "plan-p7.md#p7-t2"
-commit = ""
-note = ""
+commit = "1abc0ad"
+note = "原生 Swift6 actor/Sendable 边界按真实编译根因修复；WebKit delegate 4 个 SDK 回调匹配；原生 Split/Unified+编辑器渲染通过，Diff Swift/TSX、AX 折叠和网页 JS alert/confirm/prompt 实际回归通过；全量73/73。正式App未修改。"
 
 [[tasks]]
 id = "P7-T3"
 title = "正式切换 Swift 6 语言模式并使构建／测试全通过"
-status = "pending"
+status = "completed"
 plan = "plan-p7.md#p7-t3"
-commit = ""
-note = "用户2026-10-13明确仅使用当前Xcode；idea/plan-p7已删除26.6复验门槛，验收仍需真实Swift6 Debug/Release build/test/严格验签，不切换其他工具链。"
+commit = "31175d8"
+note = "Xcode27 Swift6 App/Test Debug/Release；xcodebuild showBuildSettings EFFECTIVE_SWIFT_VERSION=6；RemoteLifetime4/4 含真实UNIX socket跨actor；全量XCTest75/75；make build、make build:release、两包严格验签PASS，原生隔离Diff/编辑器及Shell身份复核。正式Kero、用户SSH未触碰；等比例P1全像素对照受屏幕尺寸限制。"
 
 [[tasks]]
 id = "P5-T6"
