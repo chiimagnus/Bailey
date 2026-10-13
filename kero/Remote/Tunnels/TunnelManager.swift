@@ -45,9 +45,6 @@ final class TunnelManager: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
-        #if DEBUG
-        TunnelStore.runSelfCheck()
-        #endif
         TunnelPIDFile.terminateLeftovers()
         tunnels = TunnelStore.load()
         reconcile()

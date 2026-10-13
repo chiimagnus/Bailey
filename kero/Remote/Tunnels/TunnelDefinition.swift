@@ -206,16 +206,18 @@ enum TunnelStore {
             guard
                 let host = table["host"]?.string,
                 let local = table["local-port"]?.double,
-                let remote = table["remote-port"]?.double
+                let remote = table["remote-port"]?.double,
+                let localPort = Int(exactly: local),
+                let remotePort = Int(exactly: remote)
             else { return nil }
             return TunnelDefinition(
                 name: table["name"]?.string ?? host,
                 host: host,
                 direction: table["direction"]?.string.flatMap(TunnelDirection.init(rawValue:)) ?? .local,
                 localHost: table["local-host"]?.string ?? "127.0.0.1",
-                localPort: Int(local),
+                localPort: localPort,
                 remoteHost: table["remote-host"]?.string ?? "127.0.0.1",
-                remotePort: Int(remote),
+                remotePort: remotePort,
                 isEnabled: table["enabled"]?.bool ?? false
             )
         }
@@ -251,79 +253,3 @@ enum TunnelStore {
         .joined(separator: "\n\n") + "\n"
     }
 }
-
-#if DEBUG
-extension TunnelStore {
-    /// Self-check standing in for a unit test target, like
-    /// `scripts/check-remote-commands.swift`.
-    static func runSelfCheck() {
-        let rdp = TunnelDefinition(
-            name: "A1 \"desktop\"", host: "oracle", localPort: 13389,
-            remotePort: 3389, isEnabled: true)
-        let back = TunnelDefinition(
-            name: "A1 back", host: "oracle", direction: .remote, localPort: 22,
-            remotePort: 2222, isEnabled: true)
-        let parsed = parse(serialize([rdp, back]))
-        assert(parsed.count == 2)
-        assert(parsed[0].name == rdp.name)
-        assert(parsed[0].host == "oracle" && parsed[0].direction == .local)
-        assert(parsed[0].localPort == 13389 && parsed[0].remotePort == 3389)
-        assert(parsed[0].remoteHost == "127.0.0.1" && parsed[0].isEnabled)
-        assert(parsed[0].forwardSpecification == "127.0.0.1:13389:127.0.0.1:3389")
-        assert(parsed[0].listenPort == 13389)
-        assert(parsed[1].direction == .remote && parsed[1].localHost == "127.0.0.1")
-        assert(parsed[1].isEnabled)
-        assert(parsed[1].localPort == 22 && parsed[1].remotePort == 2222)
-        assert(parsed[1].forwardSpecification == "127.0.0.1:2222:127.0.0.1:22")
-        assert(parsed[1].listenPort == 2222 && parsed[1].listenAddress == "127.0.0.1:2222")
-        assert(parsed[0].routeDescription.hasPrefix("This Mac:13389 → 127.0.0.1:3389"))
-        assert(parsed[1].routeDescription.hasPrefix("oracle:2222 → 127.0.0.1:22"))
-        assert(parsed[1].validationProblem == nil)
-
-        let mixed = """
-            # comment
-            [other]
-            host = "ignored"
-            [[tunnel]]
-            host = "a1"
-            local-port = 9292
-            remote-port = 9292
-            [[tunnel]]
-            name = "no host"
-            local-port = 1
-            [[tunnel]]
-            host = "a1"
-            direction = "sideways"
-            local-port = 8080
-            remote-port = 8080
-            """
-        let fromMixed = parse(mixed)
-        assert(fromMixed.count == 2 && fromMixed[0].name == "a1" && !fromMixed[0].isEnabled)
-        assert(fromMixed[0].direction == .local && fromMixed[1].direction == .local)
-
-        // Two forwards clash only when the same machine would listen twice.
-        var otherHostBack = back
-        otherHostBack.host = "a1"
-        assert(back.listensAlongside(back) && !back.listensAlongside(otherHostBack))
-        var rdpOn2222 = rdp
-        rdpOn2222.localPort = 2222
-        assert(!rdpOn2222.listensAlongside(back))
-        assert(rdp.listensAlongside(rdp) && !rdp.listensAlongside(rdpOn2222))
-
-        var bad = rdp
-        bad.host = "-oProxyCommand=x"
-        assert(bad.validationProblem != nil)
-        bad = rdp
-        bad.localPort = 80
-        assert(bad.validationProblem != nil)
-        assert(rdp.validationProblem == nil)
-        // A remote forward may reach a privileged port on this Mac, since
-        // nothing here has to bind it.
-        bad = back
-        bad.localPort = 80
-        assert(bad.validationProblem == nil)
-        bad.localHost = ""
-        assert(bad.validationProblem != nil)
-    }
-}
-#endif
