@@ -8,7 +8,7 @@ import SwiftUI
 
 /// Movable project-list panel; its workspace tab is the normal dock tab.
 struct ProjectsPanelView: View {
-    @ObservedObject var manager: TerminalManager
+    let manager: TerminalManager
     let bottomBarHeight: CGFloat
     private let settings = AppSettings.shared
     private let themeChanges = Theme.changes
@@ -25,6 +25,7 @@ struct ProjectsPanelView: View {
                     ForEach(Array(manager.projects.enumerated()), id: \.element.id) { index, project in
                         SidebarProjectRow(
                             project: project,
+                            owningWindow: { [weak manager] in manager?.attachedWindow },
                             index: index,
                             isSelected: project.id == manager.selectedProjectID,
                             select: { manager.selectedProjectID = project.id },
@@ -144,6 +145,7 @@ private struct ProjectFramePreferenceKey: PreferenceKey {
 
 private struct SidebarProjectRow: View {
     let project: Project
+    let owningWindow: () -> NSWindow?
     private let themeChanges = Theme.changes
     let index: Int
     let isSelected: Bool
@@ -230,7 +232,7 @@ private struct SidebarProjectRow: View {
             guard response == .OK, let url = panel.url else { return }
             project.customDirectory = url.path
         }
-        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+        if let window = owningWindow() {
             panel.beginSheetModal(for: window, completionHandler: apply)
         } else {
             apply(panel.runModal())

@@ -7,10 +7,17 @@ import XCTest
 
 @MainActor
 final class PaneRetentionTests: XCTestCase {
-    private func settle(_ predicate: () -> Bool) async throws {
+    private func settle(
+        _ predicate: () -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
         let deadline = Date().addingTimeInterval(10)
         while !predicate() {
-            guard Date() < deadline else { return XCTFail("Native panel did not settle") }
+            guard Date() < deadline else {
+                XCTFail("Native panel did not settle", file: file, line: line)
+                return
+            }
             try await Task.sleep(for: .milliseconds(25))
         }
     }
@@ -76,6 +83,58 @@ final class PaneRetentionTests: XCTestCase {
         let result = await response.value
         XCTAssertEqual(result, .alertThirdButtonReturn)
         try await settle { window.attachedSheet == nil }
+    }
+
+    func testNativeFileAndSSHChoosersStayOnOwningWindow() async throws {
+        let local = WorkspaceNativeDialogs.localPanel()
+        XCTAssertTrue(local.canChooseFiles)
+        XCTAssertTrue(local.canChooseDirectories)
+        XCTAssertTrue(local.allowsMultipleSelection)
+        XCTAssertEqual(local.prompt, String(localized: "Add", table: "Terminal"))
+        XCTAssertEqual(local.message, String(localized: "Add files and folders to Kero", table: "Terminal"))
+        let ssh = WorkspaceNativeDialogs.sshForm(aliases: ["fixture-one", "fixture-two"])
+        XCTAssertEqual(ssh.alert.buttons.map(\.title), [
+            String(localized: "Add", table: "Terminal"),
+            String(localized: "Cancel", table: "Terminal"),
+        ])
+        XCTAssertEqual(ssh.hosts.stringValue, "fixture-one")
+        XCTAssertEqual(ssh.hosts.objectValues as? [String], ["fixture-one", "fixture-two"])
+        XCTAssertEqual(ssh.alert.accessoryView?.frame.size, NSSize(width: 420, height: 214))
+        XCTAssertFalse(ssh.paths.isRichText)
+        XCTAssertFalse(ssh.paths.isAutomaticTextReplacementEnabled)
+
+        let previous = SessionStore.load()
+        let histories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(previous)
+            TerminalHistoryStore.save(histories)
+        }
+        let firstManager = TerminalManager()
+        let secondManager = TerminalManager()
+        defer { firstManager.windowClosed(); secondManager.windowClosed() }
+        let first = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 650, height: 420),
+                             styleMask: [.titled], backing: .buffered, defer: false)
+        let second = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 650, height: 420),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        first.isReleasedWhenClosed = false
+        second.isReleasedWhenClosed = false
+        defer { first.close(); second.close() }
+        firstManager.attach(to: first)
+        secondManager.attach(to: second)
+        first.orderFront(nil)
+        second.makeKeyAndOrderFront(nil)
+        let initialProjectCount = firstManager.projects.count
+        firstManager.chooseSSHItems()
+        try await settle { first.attachedSheet != nil }
+        XCTAssertNil(second.attachedSheet, "A menu action must not attach to the key window of another manager")
+        first.endSheet(try XCTUnwrap(first.attachedSheet), returnCode: .alertSecondButtonReturn)
+        try await settle { first.attachedSheet == nil }
+        firstManager.chooseLocalItems()
+        try await settle { first.attachedSheet != nil }
+        XCTAssertNil(second.attachedSheet)
+        first.endSheet(try XCTUnwrap(first.attachedSheet), returnCode: .cancel)
+        try await settle { first.attachedSheet == nil }
+        XCTAssertEqual(firstManager.projects.count, initialProjectCount)
     }
 
     func testBrowserKVOUpdatesObservationHistoryFaviconAndRepeatedFocus() async throws {

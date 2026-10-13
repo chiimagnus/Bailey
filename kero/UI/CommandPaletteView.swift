@@ -120,7 +120,7 @@ struct CommandPaletteView: View {
         }
     }
 
-    @ObservedObject var manager: TerminalManager
+    let manager: TerminalManager
     private let themeChanges = Theme.changes
     @Environment(\.openSettings) private var openSettings
 

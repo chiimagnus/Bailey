@@ -6,6 +6,7 @@
 import AppKit
 import Combine
 import Foundation
+import Observation
 import SwiftUI
 import WebKit
 
@@ -31,30 +32,31 @@ enum FindAction {
 /// its own terminal sessions; the "selected session" is the selected
 /// project's selected session.
 @MainActor
-final class TerminalManager: nonisolated ObservableObject {
-    @Published var projects: [Project] = [] {
+@Observable
+final class TerminalManager {
+    var projects: [Project] = [] {
         didSet { requestSave() }
     }
-    @Published var selectedProjectID: UUID? {
+    var selectedProjectID: UUID? {
         didSet { if selectedProjectID != oldValue { requestSave() } }
     }
     /// Debug FPS badge in the Dock header. Deliberately not persisted:
     /// every launch starts with it hidden.
-    @Published var isFPSCounterVisible = false
-    @Published private(set) var isCommandPaletteVisible = false
+    var isFPSCounterVisible = false
+    private(set) var isCommandPaletteVisible = false
 
-    private var projectCounter = 0
-    private var pendingSave: Task<Void, Never>?
-    private var isInitialized = false
-    private var terminationObservation: AnyCancellable?
+    @ObservationIgnored private var projectCounter = 0
+    @ObservationIgnored private var pendingSave: Task<Void, Never>?
+    @ObservationIgnored private var isInitialized = false
+    @ObservationIgnored private var terminationObservation: AnyCancellable?
     /// The stable terminal/editor responder displaced by the command palette's
     /// search field. AppKit field editors are deliberately excluded because a
     /// SwiftUI TextField can reuse the same responder for the palette itself.
-    private weak var commandPalettePreviousResponder: NSResponder?
-    private weak var commandPaletteWindow: NSWindow?
+    @ObservationIgnored private weak var commandPalettePreviousResponder: NSResponder?
+    @ObservationIgnored private weak var commandPaletteWindow: NSWindow?
     /// Window hosting this manager, once SwiftUI has attached its content.
     /// Finder service requests use it to target the active Kero window.
-    private weak var window: NSWindow?
+    @ObservationIgnored private weak var window: NSWindow?
     var attachedWindow: NSWindow? { window }
 
     /// Live managers in window-creation order; the persisted snapshot is
@@ -171,20 +173,8 @@ final class TerminalManager: nonisolated ObservableObject {
     }
 
     func chooseLocalItems() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = true
-        panel.prompt = String(localized: "Add", table: "Terminal")
-        panel.message = String(localized: "Add files and folders to Kero", table: "Terminal")
-        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
-            guard response == .OK else { return }
-            self?.addLocalItems(panel.urls)
-        }
-        if let window {
-            panel.beginSheetModal(for: window, completionHandler: finish)
-        } else {
-            finish(panel.runModal())
+        WorkspaceNativeDialogs.chooseLocalItems(in: window) { [weak self] urls in
+            self?.addLocalItems(urls)
         }
     }
 
@@ -243,80 +233,17 @@ final class TerminalManager: nonisolated ObservableObject {
     }
 
     func chooseSSHItems() {
-        let alert = NSAlert()
-        alert.messageText = String(localized: "Add SSH Files or Folders", table: "Terminal")
-        alert.informativeText = String(localized:
-            "Use an SSH host from ~/.ssh/config and one remote path per line. Windows paths such as D:\\GitHub\\project are accepted.", table: "Terminal")
-        alert.addButton(withTitle: String(localized: "Add", table: "Terminal"))
-        alert.addButton(withTitle: String(localized: "Cancel", table: "Terminal"))
-
-        let hosts = NSComboBox()
-        hosts.usesDataSource = false
-        hosts.addItems(withObjectValues: Self.sshHostAliases())
-        hosts.placeholderString = String(localized: "SSH host", table: "Terminal")
-        if let first = hosts.objectValues.first as? String {
-            hosts.stringValue = first
-        }
-
-        let scroll = NSTextView.scrollableTextView()
-        let paths = scroll.documentView as! NSTextView
-        paths.isRichText = false
-        paths.isAutomaticQuoteSubstitutionEnabled = false
-        paths.isAutomaticDashSubstitutionEnabled = false
-        paths.isAutomaticTextReplacementEnabled = false
-        paths.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        scroll.borderType = .bezelBorder
-        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
-
-        let stack = NSStackView(views: [
-            NSTextField(labelWithString: String(localized: "SSH host", table: "Terminal")),
-            hosts,
-            NSTextField(labelWithString: String(localized: "Remote paths (one per line)", table: "Terminal")),
-            scroll,
-        ])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 8
-        stack.setCustomSpacing(12, after: hosts)
-
-        // NSAlert sizes an accessory from its frame, not the constraints on its children.
-        // A zero-sized stack lets the form overlap the alert's title and description.
-        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 214))
-        accessory.addSubview(stack)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: accessory.topAnchor, constant: 8),
-            stack.leadingAnchor.constraint(equalTo: accessory.leadingAnchor, constant: 8),
-            stack.trailingAnchor.constraint(equalTo: accessory.trailingAnchor, constant: -8),
-            stack.bottomAnchor.constraint(equalTo: accessory.bottomAnchor, constant: -8),
-            hosts.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
-        ])
-        alert.accessoryView = accessory
-
-        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
-            guard response == .alertFirstButtonReturn, let self else { return }
-            let host = hosts.stringValue
-            let values = paths.string.components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
+        WorkspaceNativeDialogs.chooseSSHItems(
+            in: window, aliases: Self.sshHostAliases()
+        ) { [weak self] host, paths in
+            guard let self else { return }
             Task {
                 do {
-                    try await self.addSSHItems(host: host, paths: values)
+                    try await self.addSSHItems(host: host, paths: paths)
                 } catch {
-                    let failure = NSAlert(error: error)
-                    if let window = self.window {
-                        failure.beginSheetModal(for: window, completionHandler: { _ in })
-                    } else {
-                        failure.runModal()
-                    }
+                    WorkspaceNativeDialogs.showError(error, in: self.window)
                 }
             }
-        }
-        if let window {
-            alert.beginSheetModal(for: window, completionHandler: finish)
-        } else {
-            finish(alert.runModal())
         }
     }
 

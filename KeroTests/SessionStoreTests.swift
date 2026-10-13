@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Observation
 import XCTest
 @testable import kero
 
@@ -135,7 +136,10 @@ final class SessionStoreTests: XCTestCase {
         var firstClosed = false
         defer { if !firstClosed { first.windowClosed() } }
 
+        let projectAdded = expectation(description: "Window manager directly observes project insertion")
+        withObservationTracking({ _ = first.projects.map(\.id) }) { projectAdded.fulfill() }
         first.addLocalItems([directory])
+        await fulfillment(of: [projectAdded], timeout: 1)
         let project = try XCTUnwrap(first.selectedProject)
         project.customName = "Edited Project"
         guard case .split(let split) = project.dock.root else {
@@ -166,7 +170,10 @@ final class SessionStoreTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(650))
         XCTAssertEqual(defaults.data(forKey: "workspaceSnapshot"), originalData)
 
+        let tabAdded = expectation(description: "Nested project tab change is observed without manager relays")
+        withObservationTracking({ _ = first.selectedProject?.tabs.map(\.id) }) { tabAdded.fulfill() }
         project.openFile(oldFile.path)
+        await fulfillment(of: [tabAdded], timeout: 1)
         let fileTab = try XCTUnwrap(project.selectedTab)
         fileTab.customName = "Renamed File Tab"
         try FileManager.default.moveItem(at: oldFile, to: newFile)

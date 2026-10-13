@@ -40,13 +40,13 @@ struct keroApp: App {
 /// claims the next unclaimed window snapshot; the first window to appear
 /// reopens windows for any snapshots left over.
 private struct WindowRootView: View {
-    @StateObject private var manager = TerminalManager()
+    @State private var manager = TerminalManager()
     private let settings = AppSettings.shared
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ContentView(manager: manager)
-            .focusedSceneObject(manager)
+            .focusedSceneValue(\.keroManager, manager)
             // Each field is an actual terminal configuration input. Reading
             // them here lets Observation notify the existing native surface
             // only after the settings' didSet has applied and saved its value.
@@ -70,9 +70,13 @@ private struct WindowRootView: View {
     }
 }
 
+extension FocusedValues {
+    @Entry var keroManager: TerminalManager?
+}
+
 /// Menu commands routed to the focused window's manager.
 private struct KeroCommands: Commands {
-    @FocusedObject private var manager: TerminalManager?
+    @FocusedValue(\.keroManager) private var manager: TerminalManager?
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
