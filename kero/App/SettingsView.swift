@@ -573,7 +573,7 @@ private struct MiniWindow: View {
     }
 }
 
-// AppKit controls the new Git preference; the surrounding Settings form is legacy SwiftUI.
+// AppKit controls this Git preference inside the SwiftUI Settings form.
 @MainActor
 private final class GitViewModeSettingsNSView: NSView {
     private let label = NSTextField(labelWithString: String(localized: "File layout", table: "Settings"))

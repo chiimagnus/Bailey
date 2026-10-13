@@ -6,7 +6,7 @@
 import AppKit
 import SwiftUI
 
-/// AppKit-owned cursor shape row for the legacy SwiftUI Settings mount point.
+/// AppKit-owned cursor shape row for the SwiftUI Settings mount point.
 @MainActor
 final class TerminalCursorShapeSettingsView: NSView {
     private let titleLabel = NSTextField(
@@ -78,7 +78,7 @@ final class TerminalCursorShapeSettingsView: NSView {
     }
 }
 
-/// AppKit-owned cursor blinking row for the legacy SwiftUI Settings mount point.
+/// AppKit-owned cursor blinking row for the SwiftUI Settings mount point.
 @MainActor
 final class TerminalCursorBlinkingSettingsView: NSView {
     private let titleLabel = NSTextField(

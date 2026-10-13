@@ -30,24 +30,6 @@
 			);
 			target = FF3FDD72300B6A7400112486 /* kero */;
 		};
-		AA800000000000000000000C /* Exceptions for "KeroTests" folder in "KeroTests" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				references/check-dock-workspace.swift,
-				references/check-file-tree-navigation.swift,
-				references/check-git-execution.swift,
-				references/check-git-panel-state.swift,
-				references/check-pane-retention.swift,
-				references/check-panel-targets.swift,
-				references/check-remote-commands.swift,
-				references/check-remote-lifetime.swift,
-				references/check-session-snapshot.swift,
-				references/check-settings.swift,
-				references/check-tree-row-hit-testing.swift,
-				references/check-workspace-identity.swift,
-			);
-			target = AA8000000000000000000001 /* KeroTests */;
-		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -61,9 +43,6 @@
 		};
 		AA8000000000000000000003 /* KeroTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				AA800000000000000000000C /* Exceptions for "KeroTests" folder in "KeroTests" target */,
-			);
 			path = KeroTests;
 			sourceTree = "<group>";
 		};

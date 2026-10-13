@@ -53,7 +53,7 @@ make build:release
 
 需要指定 XCTest 时使用 `make test ONLY_TESTING=KeroTests/类名`。本机签名要求有效 Apple Development 证书，默认 Team ID 为 `RDQHYSDFFG`；CI、发包、产物路径和 `DEVELOPER_DIR` 见[构建与发包](docs/RELEASE.md)。Ghostty 由 Xcode Swift Package Dependencies 管理；资源通过 Copy Files 打包，仅 `ssh -> kero` 符号链接需要一条 Xcode Build Phase。
 
-测试源码放在 `KeroTests/`，`KeroTests/references/` 中的历史检查不参与构建，也不是验收入口。Xcode TestAction 为真实 Debug App 传入 `--isolated-ui-test`，隔离窗口快照和终端历史，并避免启动已保存隧道；不在产品入口增加依赖 XCTest 环境变量的特殊逻辑。
+测试源码统一放在 `KeroTests/` 并由 XCTest 执行；旧独立检查脚本已清理，不得在 Debug App 启动时运行断言式自检。Xcode TestAction 为真实 Debug App 传入 `--isolated-ui-test`，隔离窗口快照和终端历史，并避免启动已保存隧道；不在产品入口增加依赖 XCTest 环境变量的特殊逻辑。
 
 **开发与测试闭环**：Feature 的需求／计划驱动负责定义目标和验收，测试驱动开发（TDD）负责证明行为：复现缺陷先写失败回归（Red）→修复根因（Green）→清理旧路径（Refactor）。按风险覆盖单元、原生组件、完整工作区与真正的 E2E，不能用单个面板 XCTest 冒充完整 App 点击验收；测试须核对真实副作用，并保护用户正在运行的 Kero。分层选择、隔离要求与 MVVM 目录归属统一见[开发与测试](docs/TESTING.md)。
 

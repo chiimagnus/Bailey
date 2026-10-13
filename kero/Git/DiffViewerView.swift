@@ -891,8 +891,7 @@ private enum DiffViewerLayout {
     static let controlsHeight: CGFloat = 37
 }
 
-/// Native controls for the materially changed diff toolbar. The surrounding
-/// diff view is legacy SwiftUI, but new interaction stays in AppKit.
+/// AppKit diff controls mounted in the SwiftUI diff toolbar.
 private struct DiffControlsBar: NSViewRepresentable {
     @Binding var diffStyle: DiffLayoutStyle
     @Binding var isEditing: Bool

@@ -13,7 +13,7 @@ import SwiftUI
 /// Three columns and two-line rows: the Settings pane is 600 pt wide and
 /// not resizable, and a column per fact truncated every cell at that width.
 ///
-/// AppKit-owned, mounted into the legacy SwiftUI Settings form through
+/// AppKit-owned, mounted into the SwiftUI Settings form through
 /// ``TunnelSettingsRow`` like the terminal cursor rows.
 @MainActor
 final class TunnelSettingsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
