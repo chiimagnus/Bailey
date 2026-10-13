@@ -42,7 +42,7 @@ Ghostty 通过 Xcode Package Dependencies 直接引用 [`egoist-labs/libghostty-
 
 Git Diff 复用应用现有的 STTextView/TextKit 与语法解析依赖，**不再需要 PierreDiffsSwift 或 WKWebView**。`kero/Git/DiffEngine.swift` 计算行级与行内差异；`DiffSyntaxHighlighter.swift` 使用编辑器同一语法与主题；`DiffTextView.swift` 绘制行号、增删颜色和折叠上下文。`DiffNativeSurface.swift` 由 `DiffTab` 保留唯一原生视图，SwiftUI 重挂载不替换编辑缓冲区、撤销栈或滚动位置。
 
-升级 STTextView 时除编辑器自身四项补丁外，必须检查固定行高和只读文档替换时的滚动行为，并运行 `make test ONLY_TESTING=KeroTests/DiffTabTests`（源码位于 `KeroTests/NativeUI/DiffTabTests.swift`），验证真实渲染、统一/分栏、编辑、撤销、保存与重新挂载。
+升级 STTextView 时除编辑器自身四项补丁外，必须检查固定行高和只读文档替换时的滚动行为，并运行 `make test ONLY_TESTING=KeroTests/DiffTabTests`（源码位于 `KeroTests/NativeUI/Git/DiffTabTests.swift`），验证真实渲染、统一/分栏、编辑、撤销、保存与重新挂载。
 
 ## TSX 语法
 
