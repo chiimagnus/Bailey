@@ -26,7 +26,7 @@ enum TunnelState: Equatable {
 /// never prompting (`BatchMode=yes`: keys and agent only, and ssh's own
 /// error is shown instead), never binding anything but loopback, never
 /// starting a forward the user did not add and switch on, and never feeding
-/// the Files, Git or Info panels.
+/// the Files or Git panels.
 @MainActor
 final class TunnelManager: ObservableObject {
     static let shared = TunnelManager()
