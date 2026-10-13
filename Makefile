@@ -37,6 +37,7 @@ help:
 		'Kero · Xcode 原生构建与测试' \
 		'  make build                              Debug 构建并验签' \
 		'  make test                               运行 Xcode XCTest' \
+		'  make test SIGNING=adhoc                 临时签名运行 XCTest（CI）' \
 		'  make build:release                      Release 构建并验签' \
 		'  make build:release SIGNING=adhoc        无开发证书的 CI 构建' \
 		'  make test ONLY_TESTING=KeroTests/类名     只运行指定 XCTest' \
@@ -57,7 +58,13 @@ build\:release: CONFIGURATION = Release
 build\:release: build
 
 test:
-	$(XCODEBUILD) $(TEST_SELECTION) test
+	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(TEST_SELECTION) test
+ifeq ($(SIGNING),adhoc)
+	@set -eu; for bundle in '$(APP)' '$(APP)/Contents/PlugIns/KeroTests.xctest'; do \
+		codesign --verify --deep --strict "$$bundle"; \
+		codesign -dvvv "$$bundle" 2>&1 | grep -Fx 'Signature=adhoc' >/dev/null; \
+	done
+endif
 
 package:
 	@python3 -c 'import re,sys; v,n,identity,team=sys.argv[1:]; assert re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",v), "版本必须为 X.Y.Z"; assert re.fullmatch(r"[1-9][0-9]*",n), "构建号无效"; assert re.fullmatch(r"[A-F0-9]{40}",identity), "签名 SHA-1 无效"; assert re.fullmatch(r"[A-Z0-9]{10}",team), "Team ID 无效"' '$(VERSION)' '$(BUILD_NUMBER)' '$(SIGNING_IDENTITY)' '$(SIGNING_TEAM)'

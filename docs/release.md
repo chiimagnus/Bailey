@@ -8,7 +8,7 @@
 
 当前 workflow 依次调用 `make test SIGNING=adhoc`、`make build:release SIGNING=adhoc`，再检查应用身份及签名。它不是完整 UI 或真实 SSH 验收，提交者仍须执行 [testing.md](testing.md#完成标准) 中与改动相关的检查。
 
-**当前签名参数缺口：** Makefile 的 `test` recipe 没有传入 `SIGNING_FLAGS`，因此 `make test SIGNING=adhoc` 目前不能证明 XCTest 使用临时签名或不需要开发证书。Release 构建路径会传入该参数。验证 CI 时须核对实际测试签名和 Actions 结果；修正命令消费后同步更新此处，不能继续声称全部 CI 步骤已免证书。
+`make test SIGNING=adhoc` 与 `make build:release SIGNING=adhoc` 都向 Xcode 传递临时签名参数。前者在 XCTest 成功后，使用 `codesign` 严格验签并确认测试宿主 `Kero.app` 和嵌入的 `KeroTests.xctest` 都实际采用 ad hoc 签名；校验失败会令 Make 失败，CI 和标签发布流程共用这一个门禁。本地 `make test` 未指定 `SIGNING` 时仍使用工程自己的 Apple Development 配置。临时签名不代表正式发布身份，本地成功也不代表 GitHub Actions 已通过。
 
 ## 本地打包
 
