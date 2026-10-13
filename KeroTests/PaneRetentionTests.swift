@@ -80,6 +80,14 @@ final class PaneRetentionTests: XCTestCase {
         let editor = try XCTUnwrap((file.editorView as? NSScrollView)?.documentView as? FocusReportingTextView)
         editor.insertText("edited ", replacementRange: NSRange(location: 0, length: 0))
         try await settle { file.text.hasPrefix("edited ") }
+        XCTAssertTrue(file.isDirty)
+        let undoManager = try XCTUnwrap(editor.undoManager)
+        undoManager.undo()
+        try await settle { file.text == "baseline\n" }
+        XCTAssertFalse(file.isDirty)
+        undoManager.redo()
+        try await settle { file.text.hasPrefix("edited ") }
+        XCTAssertTrue(file.isDirty)
         editor.textSelection = NSRange(location: 3, length: 2)
         try await settle { file.editorState.selectionLocation == 3 }
         editorView?.removeFromSuperview()

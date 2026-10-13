@@ -153,7 +153,7 @@ private struct SessionTabLabel: View {
 }
 
 private struct FileTabLabel: View {
-    @ObservedObject var file: FileTab
+    let file: FileTab
     /// User-assigned tab name overriding the file name.
     var customTitle: String?
     let isSelected: Bool

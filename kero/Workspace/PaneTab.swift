@@ -92,13 +92,8 @@ final class PaneTab: nonisolated ObservableObject, nonisolated Identifiable {
 
     init(content: PaneContent) {
         self.content = content
-        let publisher: AnyPublisher<Bool, Never>
-        switch content {
-        case .file(let file): publisher = file.$isDirty.eraseToAnyPublisher()
-        case .diff(let diff): publisher = diff.$isDirty.eraseToAnyPublisher()
-        case .session, .browser: return
-        }
-        dirtyObservation = publisher.removeDuplicates().dropFirst()
+        guard case .diff(let diff) = content else { return }
+        dirtyObservation = diff.$isDirty.removeDuplicates().dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
     }

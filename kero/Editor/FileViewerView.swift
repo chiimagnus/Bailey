@@ -4,20 +4,21 @@
 //
 
 import AppKit
-import Combine
+import Observation
 import SwiftUI
 
 /// A file opened as a tab in a project. Text content lives here (not in the
 /// view) so edits survive tab switches.
 @MainActor
-final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
+@Observable
+final class FileTab: nonisolated Identifiable {
     nonisolated let id = UUID()
     /// Mutable so a rename in the file tree can re-point the tab without
     /// tearing it down (the id — hence the editor and its state — is stable).
-    @Published private(set) var path: String {
+    private(set) var path: String {
         didSet { if path != oldValue { onSnapshotChange?() } }
     }
-    var onSnapshotChange: (() -> Void)?
+    @ObservationIgnored var onSnapshotChange: (() -> Void)?
 
     enum Content {
         case text
@@ -31,44 +32,47 @@ final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
     private(set) var content: Content
     /// Current editor text, written back by the editor on every edit. Not
     /// published: the editor owns display, this is only read back for saves.
-    var text: String
+    @ObservationIgnored var text: String
     /// The content as last loaded from or saved to disk. `isDirty` is the
     /// difference between this and `text`, so undoing edits back to it (or
     /// retyping the same characters) clears the dirty indicator rather than
     /// leaving it stuck on.
-    private var savedText = ""
+    @ObservationIgnored private var savedText = ""
     /// Scroll position and cursor, written back by the editor as they
     /// change. Lives here (not in the view) so the state survives tab
     /// switches, and in the session snapshot so it survives relaunches. Not
     /// published for the same reason as `text`.
-    var editorState = EditorState()
+    @ObservationIgnored var editorState = EditorState()
 
-    @Published private(set) var isDirty = false
-    @Published var saveError: String?
+    private(set) var isDirty = false
+    var saveError: String?
     /// Why this file cannot be written, or nil while it is writable. Set when
     /// the remote machine it lives on is no longer reachable.
-    @Published private(set) var readOnlyReason: String?
+    private(set) var readOnlyReason: String?
     /// Changes only when a clean tab picks up different bytes from disk. Text
     /// editors use this as their identity so an already-mounted pane is rebuilt
     /// with the new content while preserving its stored cursor/scroll state.
-    @Published private(set) var reloadRevision: UInt = 0
+    private(set) var reloadRevision: UInt = 0
 
     /// The editor's scroll view while this file is on screen, so a pane-move
     /// drag can snapshot it for the drag thumbnail. Weak — owned by the mounted
     /// editor, nils out when the pane unmounts.
-    weak var editorView: NSView?
+    @ObservationIgnored weak var editorView: NSView?
 
     private nonisolated static let maxTextBytes = 5 << 20
     private nonisolated static let imageExtensions: Set<String> = [
         "png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp", "icns",
     ]
-    private var imageFingerprint: Int?
-    private var reloadGeneration: UInt = 0
-    private var reloadTask: Task<Void, Never>?
+    @ObservationIgnored private var imageFingerprint: Int?
+    @ObservationIgnored private var reloadGeneration: UInt = 0
+    @ObservationIgnored private var reloadTask: Task<Void, Never>?
+    /// Changes when a rename or remote reconnect changes the save target.
+    /// An in-flight write must not claim to have saved a different target.
+    @ObservationIgnored private var targetGeneration: UInt = 0
     /// The workspace this file lives on. The tab keeps its own, so it never
     /// follows the session onto another machine — and re-binds to a new
     /// connection to the same machine when one arrives.
-    private var backend: WorkspaceBackend
+    @ObservationIgnored private var backend: WorkspaceBackend
     /// The workspace this file belongs to: nil for this Mac, else the machine
     /// it was opened from. Part of the tab's identity, so the same path on two
     /// machines is two tabs, and a file opened locally is never read-only.
@@ -122,7 +126,7 @@ final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
         // A reconnection is a new channel; reading or saving over the old one
         // fails, so the tab takes the live one.
         backend = live
-        readOnlyReason = nil
+        setReadOnly(false, destination: workspaceIdentity)
         // No-op while the buffer is dirty, so edits made during the outage
         // survive and can now be saved.
         reloadFromDiskIfClean()
@@ -136,6 +140,8 @@ final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
             )
             : nil
         guard readOnlyReason != reason else { return }
+        targetGeneration &+= 1
+        invalidateReload()
         readOnlyReason = reason
     }
 
@@ -156,6 +162,7 @@ final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
     func updatePath(_ newPath: String) {
         guard newPath != path else { return }
         invalidateReload()
+        targetGeneration &+= 1
         path = newPath
     }
 
@@ -188,13 +195,19 @@ final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
         }
         invalidateReload()
         let written = text
+        let savedPath = path
+        let generation = targetGeneration
+        let target = backend
         do {
-            try await backend.write(path: path, data: Data(written.utf8))
+            try await target.write(path: savedPath, data: Data(written.utf8))
+            guard generation == targetGeneration, path == savedPath,
+                  readOnlyReason == nil else { return }
             savedText = written
             // An edit landing while the write was in flight stays dirty.
             refreshDirtyState()
             saveError = nil
         } catch {
+            guard generation == targetGeneration, path == savedPath else { return }
             saveError = error.localizedDescription
         }
     }
@@ -294,7 +307,7 @@ final class FileTab: nonisolated ObservableObject, nonisolated Identifiable {
 /// bar), an image preview, or a placeholder for anything binary or
 /// oversized.
 struct FileViewerView: View {
-    @ObservedObject var file: FileTab
+    let file: FileTab
     /// Whether this file's work tab is selected.
     var isFocused: Bool = true
     /// Called when the editor takes focus itself (e.g. a click), so the
