@@ -7,6 +7,7 @@ import Combine
 import SwiftUI
 
 struct ContentView: View {
+    private let themeChanges = Theme.changes
     @ObservedObject var manager: TerminalManager
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var tabSwitcher = TabSwitcherController()
@@ -23,6 +24,7 @@ struct ContentView: View {
     }
 
     var body: some View {
+        let _ = themeChanges.revision
         Group {
             if manager.selectedProject != nil {
                 WorkspaceDockView(manager: manager, git: git)

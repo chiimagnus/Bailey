@@ -91,11 +91,13 @@ private struct DockTabFrames: PreferenceKey {
 }
 
 struct WorkspaceDockView: View {
+    private let themeChanges = Theme.changes
     @ObservedObject var manager: TerminalManager
     @ObservedObject var git: GitStatusModel
     @StateObject private var dragging = DockTabDragCoordinator()
 
     var body: some View {
+        let _ = themeChanges.revision
         GeometryReader { rootGeometry in
             if let project = manager.selectedProject {
                 let layout = project.dock.root
@@ -166,6 +168,7 @@ extension DockItem {
 
 /// The recursive window layout positions independent work and tool tabs.
 private struct DockTreeView: View {
+    private let themeChanges = Theme.changes
     let node: DockNode
     @ObservedObject var project: Project
     @ObservedObject var manager: TerminalManager
@@ -175,6 +178,7 @@ private struct DockTreeView: View {
     @State private var liveFraction: Double?
 
     var body: some View {
+        let _ = themeChanges.revision
         switch node {
         case .group(let group):
             DockTabGroupView(
@@ -256,6 +260,7 @@ private struct DockTreeView: View {
 }
 
 private struct DockTabGroupView: View {
+    private let themeChanges = Theme.changes
     let group: DockGroup
     @ObservedObject var project: Project
     @ObservedObject var manager: TerminalManager
@@ -268,6 +273,7 @@ private struct DockTabGroupView: View {
     private var active: DockItem? { group.selected ?? group.items.first }
 
     var body: some View {
+        let _ = themeChanges.revision
         VStack(spacing: 0) {
             header
                 .frame(height: 38)

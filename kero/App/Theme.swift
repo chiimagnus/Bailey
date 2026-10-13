@@ -4,7 +4,7 @@
 //
 
 import AppKit
-import Combine
+import Observation
 import GhosttyTheme
 import os
 
@@ -36,9 +36,14 @@ enum AppTheme: String, CaseIterable, Identifiable {
     }
 }
 
-/// Publishes when the selected terminal themes change, so views painting with
-/// `Theme` colors repaint without waiting for an appearance flip.
-final class ThemeChanges: nonisolated ObservableObject {}
+/// Tracked by SwiftUI views which resolve colors from the static Theme palette.
+@MainActor
+@Observable
+final class ThemeChanges {
+    private(set) var revision = 0
+
+    func notifyChange() { revision += 1 }
+}
 
 /// App colors, sourced from the ghostty themes the user selected in Settings
 /// (one per appearance; GitHub Dark/Light Default out of the box). Terminal
@@ -169,7 +174,7 @@ enum Theme {
             dark: definition(named: dark) ?? defaultDarkDefinition
         )
         selection.withLock { $0 = resolved }
-        changes.objectWillChange.send()
+        changes.notifyChange()
     }
 
     /// The selected ghostty theme for one appearance.

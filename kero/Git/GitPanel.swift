@@ -5,6 +5,7 @@ import SwiftUI
 
 struct GitPanel: View {
     private let settings = AppSettings.shared
+    private let themeChanges = Theme.changes
 
     private enum EntryOperation: Equatable {
         case stage
@@ -78,6 +79,7 @@ struct GitPanel: View {
     @Environment(\.panelFontScale) private var panelFontScale
 
     var body: some View {
+        let _ = themeChanges.revision
         VStack(spacing: 0) {
             header
             operationFailureBanner

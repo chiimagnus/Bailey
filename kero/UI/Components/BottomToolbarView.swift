@@ -9,7 +9,7 @@ enum BottomToolbarLayout {
 /// terminal content remains the center of gravity below the tab strip.
 struct BottomToolbarView: View {
     @ObservedObject var model: GitStatusModel
-    @ObservedObject private var themeChanges = Theme.changes
+    private let themeChanges = Theme.changes
     let height: CGFloat
     let toggleGitPanel: () -> Void
     let hideToolbar: () -> Void
@@ -42,6 +42,7 @@ struct BottomToolbarView: View {
     }
 
     var body: some View {
+        let _ = themeChanges.revision
         HStack(spacing: 9) {
             if model.isRepo {
                 branchButton

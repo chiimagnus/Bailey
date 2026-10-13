@@ -732,13 +732,14 @@ struct BrowserView: View {
     let onFocused: () -> Void
     let onNewBrowserTab: (String?) -> Void
 
-    @ObservedObject private var themeChanges = Theme.changes
+    private let themeChanges = Theme.changes
     @State private var address = ""
     @State private var addressFocused = false
     @State private var addressFocusRequest: UInt = 0
     @State private var webContentFocusRequest: UInt = 0
 
     var body: some View {
+        let _ = themeChanges.revision
         VStack(spacing: 0) {
             toolbar
             ZStack {

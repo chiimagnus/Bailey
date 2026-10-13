@@ -302,9 +302,11 @@ struct FileViewerView: View {
     var onFocused: () -> Void = {}
 
     private let settings = AppSettings.shared
+    private let themeChanges = Theme.changes
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        let _ = themeChanges.revision
         Group {
             switch file.content {
             case .text:

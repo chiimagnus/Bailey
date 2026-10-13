@@ -97,6 +97,29 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertFalse(saved.cursorBlinking)
     }
 
+    func testThemeRevisionInvalidatesObserversAndUpdatesNativePalette() {
+        let settings = AppSettings(configURL: configURL)
+        defer {
+            Theme.reloadSelection(
+                light: AppSettings.shared.themeLight,
+                dark: AppSettings.shared.themeDark
+            )
+        }
+
+        let oldRevision = Theme.changes.revision
+        let invalidated = expectation(description: "theme revision changed")
+        withObservationTracking({ _ = Theme.changes.revision }) {
+            invalidated.fulfill()
+        }
+        settings.themeDark = "Ayu"
+        wait(for: [invalidated], timeout: 1)
+        XCTAssertEqual(Theme.changes.revision, oldRevision + 1)
+        XCTAssertEqual(Theme.terminal(dark: true).name, "Ayu")
+        settings.themeLight = "Apple System Colors Light"
+        XCTAssertEqual(Theme.changes.revision, oldRevision + 2)
+        XCTAssertEqual(Theme.terminal(dark: false).name, "Apple System Colors Light")
+    }
+
     func testInvalidValuesFallBackAndFailedWritePreservesExistingFile() throws {
         try "font-thicken = true\nfont-size = 100\nworkspace.groups = [1]\n".write(
             to: configURL, atomically: true, encoding: .utf8

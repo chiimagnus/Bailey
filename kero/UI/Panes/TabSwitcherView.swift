@@ -334,10 +334,11 @@ private enum TabSwitcherLayout {
 struct TabSwitcherOverlay: View {
     @ObservedObject var project: Project
     @ObservedObject var controller: TabSwitcherController
-    @ObservedObject private var themeChanges = Theme.changes
+    private let themeChanges = Theme.changes
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        let _ = themeChanges.revision
         GeometryReader { geometry in
             let tabs = controller.orderedTabs(in: project)
             let columnCount = columnsPerRow(count: tabs.count, available: geometry.size.width)

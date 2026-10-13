@@ -11,13 +11,14 @@ import SwiftUI
 /// field, the tally, and the navigation controls.
 struct TerminalFindBar: View {
     @ObservedObject var find: TerminalFind
-    @ObservedObject private var themeChanges = Theme.changes
+    private let themeChanges = Theme.changes
 
     @FocusState private var fieldFocused: Bool
 
     private var hasMatches: Bool { (find.total ?? 0) > 0 }
 
     var body: some View {
+        let _ = themeChanges.revision
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11, weight: .medium))

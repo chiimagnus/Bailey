@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct PanelContentView: View {
+    private let themeChanges = Theme.changes
     @ObservedObject var tab: PaneTab
     var isSelected: Bool
     var onFocused: () -> Void
@@ -8,6 +9,7 @@ struct PanelContentView: View {
     var onNewFileTab: (String) -> Void
 
     var body: some View {
+        let _ = themeChanges.revision
         Group {
             switch tab.content {
             case .session(let session):

@@ -71,7 +71,7 @@ struct ToolPanelView: View {
     @ObservedObject var git: GitStatusModel
     let panel: ToolPanel
     private let settings = AppSettings.shared
-    @ObservedObject private var themeChanges = Theme.changes
+    private let themeChanges = Theme.changes
     @State private var applicationIsActive = NSApp.isActive
     /// Which rule produced the current panel root; drives the Files badge.
     @State private var rootSource = PanelContext.RootSource.shell
@@ -133,6 +133,7 @@ struct ToolPanelView: View {
     }
 
     var body: some View {
+        let _ = themeChanges.revision
         VStack(spacing: 0) {
             if remoteHeaderState != .local {
                 RemotePaneHeaderHost(

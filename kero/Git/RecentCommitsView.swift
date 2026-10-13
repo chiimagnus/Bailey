@@ -8,6 +8,7 @@ import SwiftUI
 
 /// Commit history decorates the shared tree rows with its own graph gutter.
 struct RecentCommitsView: View {
+    private let themeChanges = Theme.changes
     @Binding private var expandedCommitIDs: Set<String>
     @Binding private var collapsedFolders: Set<String>
     @State private var requestedLastCommit: String?
@@ -43,6 +44,7 @@ struct RecentCommitsView: View {
     }
 
     var body: some View {
+        let _ = themeChanges.revision
         LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(commits) { commit in
                 let expanded = expandedCommitIDs.contains(commit.id)
@@ -215,12 +217,14 @@ struct RecentCommitsView: View {
 
 /// Continuous graph and hierarchy lines are painted across the entire SwiftUI row.
 private struct CommitTreeRails: View {
+    private let themeChanges = Theme.changes
     let isCommit: Bool
     let startsAtCenter: Bool
     let endsAtCenter: Bool
     let expanded: Bool
 
     var body: some View {
+        let _ = themeChanges.revision
         Canvas { context, size in
             let accent = Color(nsColor: Theme.accent)
             let midpoint = size.height / 2

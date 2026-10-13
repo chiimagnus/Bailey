@@ -105,10 +105,12 @@ struct TreeRowSurface<Content: View>: View {
 
 /// Identical SwiftUI folder glyph in Files and both Git trees.
 struct TreeFolderIcon: View {
+    private let themeChanges = Theme.changes
     let expanded: Bool
     let scale: CGFloat
 
     var body: some View {
+        let _ = themeChanges.revision
         Image(systemName: TreeRowStyle.folderSymbol(expanded: expanded))
             .font(.system(size: 11 * scale))
             .foregroundStyle(Color(nsColor: Theme.accent).opacity(0.8))

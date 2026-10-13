@@ -61,7 +61,7 @@ struct PaneTabItem: View {
 /// affordance as the project row's rename. Commits on Return or focus loss,
 /// cancels on Escape; an empty name returns the tab to its automatic title.
 private struct TabRenameChrome: View {
-    @ObservedObject private var themeChanges = Theme.changes
+    private let themeChanges = Theme.changes
     let systemImage: String
     let browserIcon: BrowserTab?
     let fileIconPath: String?
@@ -91,6 +91,7 @@ private struct TabRenameChrome: View {
     }
 
     var body: some View {
+        let _ = themeChanges.revision
         HStack(spacing: 5) {
             if let browserIcon {
                 BrowserFaviconView(browser: browserIcon, size: 11)
@@ -216,7 +217,7 @@ private struct DiffTabLabel: View {
 }
 
 struct TabItemChrome: View {
-    @ObservedObject private var themeChanges = Theme.changes
+    private let themeChanges = Theme.changes
     let systemImage: String
     var browserIcon: BrowserTab? = nil
     var fileIconPath: String? = nil
@@ -229,6 +230,7 @@ struct TabItemChrome: View {
     @State private var isHovering = false
 
     var body: some View {
+        let _ = themeChanges.revision
         Button(action: select) {
             HStack(spacing: 5) {
                 ZStack {

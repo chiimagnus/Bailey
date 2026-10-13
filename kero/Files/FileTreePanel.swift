@@ -103,6 +103,7 @@ private struct FileTreeScrollView: View {
 }
 
 private struct FileTreeRow: View {
+    private let themeChanges = Theme.changes
     @ObservedObject var model: FileTreeModel
     @ObservedObject var git: GitStatusModel
     let item: FileTreeModel.Item
@@ -141,6 +142,7 @@ private struct FileTreeRow: View {
     }
 
     var body: some View {
+        let _ = themeChanges.revision
         if item.isDraft {
             // The transient input keeps the same focused fill but has no hover/menu.
             TreeRowSurface(

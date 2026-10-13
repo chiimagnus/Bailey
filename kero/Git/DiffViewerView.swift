@@ -702,7 +702,7 @@ private struct DiffWebHostView: NSViewRepresentable {
 /// split view with word-level change highlighting.
 struct DiffViewerView: View {
     @ObservedObject var diff: DiffTab
-    @ObservedObject private var themeChanges = Theme.changes
+    private let themeChanges = Theme.changes
     @ObservedObject private var web: DiffWebModel
     @ObservedObject private var preferences = DiffViewPreferences.shared
     /// The view stays mounted while other tabs are selected (see
@@ -717,6 +717,7 @@ struct DiffViewerView: View {
     }
 
     var body: some View {
+        let _ = themeChanges.revision
         VStack(spacing: 0) {
             if let reason = diff.readOnlyReason {
                 RemoteReadOnlyBanner(message: reason)

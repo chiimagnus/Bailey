@@ -11,13 +11,14 @@ struct ProjectsPanelView: View {
     @ObservedObject var manager: TerminalManager
     let bottomBarHeight: CGFloat
     private let settings = AppSettings.shared
-    @ObservedObject private var themeChanges = Theme.changes
+    private let themeChanges = Theme.changes
     @Environment(\.openSettings) private var openSettings
     @State private var showingProjectPicker = false
     @State private var draggedProjectID: UUID?
     @State private var projectFrames: [UUID: CGRect] = [:]
 
     var body: some View {
+        let _ = themeChanges.revision
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(spacing: 3) {
@@ -143,7 +144,7 @@ private struct ProjectFramePreferenceKey: PreferenceKey {
 
 private struct SidebarProjectRow: View {
     @ObservedObject var project: Project
-    @ObservedObject private var themeChanges = Theme.changes
+    private let themeChanges = Theme.changes
     let index: Int
     let isSelected: Bool
     let select: () -> Void
@@ -159,6 +160,7 @@ private struct SidebarProjectRow: View {
     @FocusState private var renameFocused: Bool
 
     var body: some View {
+        let _ = themeChanges.revision
         Group {
             if isRenaming {
                 rowContent

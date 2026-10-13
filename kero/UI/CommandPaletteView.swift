@@ -121,7 +121,7 @@ struct CommandPaletteView: View {
     }
 
     @ObservedObject var manager: TerminalManager
-    @ObservedObject private var themeChanges = Theme.changes
+    private let themeChanges = Theme.changes
     @Environment(\.openSettings) private var openSettings
 
     @State private var query = ""
@@ -137,6 +137,7 @@ struct CommandPaletteView: View {
     private static let maxFileResults = 50
 
     var body: some View {
+        let _ = themeChanges.revision
         ZStack(alignment: .top) {
             // The palette floats over the terminal surface, whose AppKit cursor
             // rect would otherwise show through as an I-beam across the whole
