@@ -184,7 +184,11 @@ final class DiffTab: nonisolated Identifiable {
             setReadOnly(true, destination: workspaceIdentity)
             return
         }
-        guard readOnlyReason != nil else { return }
+        guard readOnlyReason != nil || (backend as AnyObject) !== (live as AnyObject) else { return }
+        if readOnlyReason == nil {
+            targetGeneration &+= 1
+            reloadGeneration &+= 1
+        }
         // A reconnection is a new channel; reading or saving over the old one
         // fails, so the tab takes the live one.
         backend = live

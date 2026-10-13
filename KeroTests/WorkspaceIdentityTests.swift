@@ -114,18 +114,12 @@ final class WorkspaceIdentityTests: XCTestCase {
         connection.markConnected()
         XCTAssertTrue(session.beginRemoteConnection(connection))
 
-        // This fake backend may read the local temp file to initialize the
-        // editor, but no SSH master is accessed or created.
-        let backend = IdentityWorkspaceFixture()
         let file = FileTab(
-            path: path.path, backend: backend,
+            path: path.path, backend: LocalWorkspaceBackend.shared,
             workspaceIdentity: connection.workspaceIdentity
         )
         project.append(PaneTab(content: .file(file)))
-        try await wait {
-            if case .text = file.content { return true }
-            return false
-        }
+        XCTAssertEqual(file.text, "local sentinel")
         file.text = "unsaved on remote"
         file.refreshDirtyState()
         XCTAssertTrue(file.isDirty)

@@ -87,6 +87,8 @@ final class RemoteLifetimeTests: XCTestCase {
 
         weak let releasedConnection = connection
         var backend: SSHWorkspaceBackend? = connection!.workspaceBackend
+        XCTAssertTrue(backend === connection?.workspaceBackend)
+        XCTAssertFalse(backend === second.workspaceBackend)
         var liveness: SSHWorkspaceBackend? = connection!.livenessBackend
         connection = nil
         XCTAssertNotNil(releasedConnection)

@@ -85,6 +85,55 @@ final class FileTabTests: XCTestCase {
         }
     }
 
+    func testAnotherLiveChannelTakesOverWithoutTransientReadOnlyState() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("remote.txt")
+        try Data("local sentinel".utf8).write(to: path)
+        let project = Project(fallbackName: "channel handoff", workspaceConfiguration: .standard)
+        defer { project.terminateAll() }
+        func connect(_ session: TerminalSession) -> RemoteConnection {
+            let connection = RemoteConnection(
+                user: "fixture", host: "invalid", port: 2222,
+                controlSocket: directory.appendingPathComponent(UUID().uuidString), sshPID: 0
+            )
+            connection.workingDirectory = directory.path
+            connection.markConnected()
+            XCTAssertTrue(session.beginRemoteConnection(connection))
+            return connection
+        }
+        let first = connect(project.newSession())
+        let second = connect(project.newSession())
+        try await Task.sleep(for: .milliseconds(50))
+        let backend = EditorWorkspaceFixture(path: path.path, contents: Data("baseline\n".utf8))
+        let file = FileTab(path: path.path, backend: backend, workspaceIdentity: first.workspaceIdentity)
+        project.append(PaneTab(content: .file(file)))
+        try await wait { if case .text = file.content { return true }; return false }
+        file.text = "old channel draft"
+        file.refreshDirtyState()
+        let save = Task { await file.save() }
+        try await wait { await backend.writingPath != nil }
+        first.markDisconnected(reason: "first channel ended")
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertNil(file.readOnlyReason)
+        XCTAssertEqual(second.state, .connected)
+        await backend.finishWrite()
+        await save.value
+        XCTAssertTrue(file.isDirty, "Old-channel write cannot establish the new target's baseline")
+        XCTAssertEqual(file.text, "old channel draft")
+        guard file.isDirty else { return }
+        file.text = "new channel draft"
+        file.refreshDirtyState()
+        await file.save()
+        XCTAssertTrue(file.isDirty)
+        XCTAssertTrue(file.saveError != nil || file.readOnlyReason != nil,
+                      "The new channel has no socket and must fail, not fall back")
+        let oldContents = await backend.data(at: path.path)
+        XCTAssertEqual(oldContents, Data("old channel draft".utf8))
+        XCTAssertEqual(try Data(contentsOf: path), Data("local sentinel".utf8))
+    }
+
     func testDirtyUndoSaveDuringEditRenameFailureAndStaleReload() async throws {
         let first = "/fixture/\(UUID().uuidString)-original.txt"
         let renamed = first.replacingOccurrences(of: "-original", with: "-renamed")

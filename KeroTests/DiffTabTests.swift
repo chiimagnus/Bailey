@@ -101,6 +101,55 @@ final class DiffTabTests: XCTestCase {
         return directory
     }
 
+    func testAnotherLiveChannelInvalidatesInFlightDiffSave() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("remote.txt")
+        try Data("local sentinel".utf8).write(to: path)
+        let project = Project(fallbackName: "diff channel handoff", workspaceConfiguration: .standard)
+        defer { project.terminateAll() }
+        func connect(_ session: TerminalSession) -> RemoteConnection {
+            let connection = RemoteConnection(
+                user: "fixture", host: "invalid", port: 2222,
+                controlSocket: directory.appendingPathComponent(UUID().uuidString), sshPID: 0
+            )
+            connection.workingDirectory = directory.path
+            connection.markConnected()
+            XCTAssertTrue(session.beginRemoteConnection(connection))
+            return connection
+        }
+        let first = connect(project.newSession())
+        let second = connect(project.newSession())
+        try await Task.sleep(for: .milliseconds(50))
+        let backend = DiffWorkspaceFixture()
+        let diff = DiffTab(
+            repoRoot: directory.path, path: "remote.txt", staged: false, untracked: true,
+            origPath: nil, backend: backend, workspaceIdentity: first.workspaceIdentity
+        )
+        project.append(PaneTab(content: .diff(diff)))
+        try await wait { !diff.isLoading }
+        XCTAssertTrue(diff.isEditableNow)
+        diff.web.onFileEditChange?(diff.path, "old channel draft")
+        let save = Task { await diff.save() }
+        try await wait { await backend.writing }
+        first.markDisconnected(reason: "first channel ended")
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertNil(diff.readOnlyReason)
+        XCTAssertEqual(second.state, .connected)
+        await backend.finishWrite()
+        await save.value
+        XCTAssertTrue(diff.isDirty, "Old-channel write cannot establish the new target's baseline")
+        guard diff.isDirty else { return }
+        diff.web.onFileEditChange?(diff.path, "new channel draft")
+        await diff.save()
+        XCTAssertTrue(diff.isDirty)
+        XCTAssertTrue(diff.saveError != nil || diff.readOnlyReason != nil)
+        let oldContents = await backend.stored()
+        XCTAssertEqual(oldContents, Data("old channel draft".utf8))
+        XCTAssertEqual(try Data(contentsOf: path), Data("local sentinel".utf8))
+    }
+
     func testWorktreeStagedHistoryBinarySizeAndSymlink() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }

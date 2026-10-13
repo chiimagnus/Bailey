@@ -68,7 +68,13 @@ final class RemoteConnection: Identifiable, RemoteCommandRunner {
     private(set) var state: State = .connecting {
         didSet { if state != oldValue { onWorkspaceChange?() } }
     }
-    var workspaceBackend: SSHWorkspaceBackend { SSHWorkspaceBackend(runner: self) }
+    @ObservationIgnored private weak var cachedWorkspaceBackend: SSHWorkspaceBackend?
+    var workspaceBackend: SSHWorkspaceBackend {
+        if let cachedWorkspaceBackend { return cachedWorkspaceBackend }
+        let backend = SSHWorkspaceBackend(runner: self)
+        cachedWorkspaceBackend = backend
+        return backend
+    }
     /// The same channel with a short deadline, used only for the liveness
     /// probe. Panel work can afford to wait; a probe that waits is a drop
     /// this session has not noticed yet.
