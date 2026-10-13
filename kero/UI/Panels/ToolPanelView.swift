@@ -103,12 +103,12 @@ struct ToolPanelView: View {
         CGFloat(settings.panelFontSize / AppSettings.defaultPanelFontSize)
     }
 
-    /// The heading is a published-state read costing nothing, and a connection
-    /// can die while the user is in another app — turning Wi-Fi off in Control
-    /// Centre is exactly that. So it keeps ticking whenever the pane is on
-    /// screen, active or not, while the panel refreshes below do not.
+    /// Files already refresh while visible. An external CLI has no terminal
+    /// completion event, so a visible local Git panel shares that tick; remote
+    /// Git stays event-driven to avoid continuous SSH round trips.
     private var pollsSelectedPanel: Bool {
-        applicationIsActive && panel != .git
+        applicationIsActive && (panel != .git
+            || manager.selectedProject?.panelContext?.isRemote == false)
     }
 
     /// Every terminal in the selected project can change the same repository.
@@ -211,9 +211,8 @@ struct ToolPanelView: View {
                 applyRemoteHeading()
             }
         }
-        // Files remain live while visible. Git is
-        // event-driven: terminal/Git command completion and app activation
-        // refresh it without a repeating main-run-loop source.
+        // Reuse the Files visibility tick for local Git; do not start a
+        // separate watcher or poll a remote workspace.
         .task(id: pollsSelectedPanel) {
             guard pollsSelectedPanel else { return }
             while !Task.isCancelled {
@@ -222,7 +221,15 @@ struct ToolPanelView: View {
                 } catch {
                     return
                 }
-                syncModels()
+                guard pollsSelectedPanel else { return }
+                if panel == .git {
+                    if git.isRepo && git.currentScope == "local"
+                        && !git.isRefreshing && !git.isBusy {
+                        git.refresh()
+                    }
+                } else {
+                    syncModels()
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(

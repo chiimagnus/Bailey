@@ -106,14 +106,13 @@ struct RecentCommitsView: View {
                             .truncationMode(.tail)
                     }
                     .buttonStyle(.plain)
-                    .layoutPriority(-1)
+                    .layoutPriority(1)
                     .help(commit.subject)
                     .accessibilityValue(expanded
                         ? String(localized: "Expanded", table: "Git")
                         : String(localized: "Collapsed", table: "Git"))
                     if !commit.references.isEmpty {
                         referenceStrip(commit.references, commit: commit)
-                            .layoutPriority(1)
                     }
                     Spacer(minLength: 0)
                 }
