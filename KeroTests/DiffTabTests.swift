@@ -368,14 +368,27 @@ final class DiffTabTests: XCTestCase {
             }
           };
           window.fixtureEditor = find(document);
-          return !!window.fixtureEditor;
+          return !!window.fixtureEditor?.querySelector('[data-char]')?.firstChild;
         })()
         """
         try await wait { (try? await webView.evaluateJavaScript(locateEditor) as? Bool) == true }
-        _ = try await webView.evaluateJavaScript("fixtureEditor.focus(); const caret = document.createRange(); caret.setStart(fixtureEditor.querySelector('[data-char]').firstChild, 0); caret.collapse(true); const selection = fixtureEditor.getRootNode().getSelection?.() || window.getSelection(); selection.removeAllRanges(); selection.addRange(caret)")
-        _ = try await webView.evaluateJavaScript("fixtureEditor.dispatchEvent(new FocusEvent('focus')); document.dispatchEvent(new Event('selectionchange'))")
-        try await Task.sleep(for: .milliseconds(100))
-        _ = try await webView.evaluateJavaScript("fixtureEditor.dispatchEvent(new InputEvent('beforeinput', {inputType:'insertText',data:'E',bubbles:true,cancelable:true,composed:true}))")
+        let input = try await webView.evaluateJavaScript("""
+        \(locateEditor);
+        (() => {
+          fixtureEditor.focus();
+          fixtureEditor.dispatchEvent(new FocusEvent('focus'));
+          const selectAll = new KeyboardEvent('keydown', {key:'a',metaKey:true,bubbles:true,cancelable:true,composed:true});
+          fixtureEditor.dispatchEvent(selectAll);
+          const collapse = new KeyboardEvent('keydown', {key:'ArrowLeft',bubbles:true,cancelable:true,composed:true});
+          fixtureEditor.dispatchEvent(collapse);
+          const event = new InputEvent('beforeinput', {inputType:'insertText',data:'E',bubbles:true,cancelable:true,composed:true});
+          fixtureEditor.dispatchEvent(event);
+          return {consumed:event.defaultPrevented, selected:selectAll.defaultPrevented, collapsed:collapse.defaultPrevented};
+        })()
+        """) as? [String: Any]
+        XCTAssertEqual(input?["consumed"] as? Bool, true)
+        XCTAssertEqual(input?["selected"] as? Bool, true)
+        XCTAssertEqual(input?["collapsed"] as? Bool, true)
         try await wait { diff.isDirty }
         _ = try await webView.evaluateJavaScript("const viewport = document.getElementById('diff-container'); viewport.dispatchEvent(new WheelEvent('wheel', {deltaY:700,bubbles:true})); viewport.scrollTop = 700")
         _ = try await webView.callAsyncJavaScript(
@@ -408,7 +421,7 @@ final class DiffTabTests: XCTestCase {
         try await wait { diff.isDirty }
         await diff.save()
         XCTAssertFalse(diff.isDirty)
-        XCTAssertTrue(try String(contentsOf: path, encoding: .utf8).contains("E"))
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "E" + original)
         mounted?.removeFromSuperview()
         mounted = nil
         surface = nil
