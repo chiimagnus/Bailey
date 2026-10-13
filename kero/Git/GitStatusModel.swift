@@ -286,7 +286,9 @@ final class GitStatusModel {
     /// Omitting the backend selects the Mac; scope keeps cached state and
     /// drafts distinct when the same path exists on another machine.
     func sync(root: String, backend: WorkspaceBackend? = nil, scope: String = "local") {
-        self.backend = backend ?? LocalWorkspaceBackend.shared
+        let targetBackend = backend ?? LocalWorkspaceBackend.shared
+        let channelChanged = (self.backend as AnyObject) !== (targetBackend as AnyObject)
+        self.backend = targetBackend
         if root != rootPath || workspaceScope != scope {
             workspaceScope = scope
             contextGeneration &+= 1
@@ -299,6 +301,11 @@ final class GitStatusModel {
                 apply(cachedStatus)
                 hasResolvedStatus = true
             }
+        } else if channelChanged {
+            // A new SSH channel must not queue behind a worker stalled on the
+            // previous connection, even when the host and repository match.
+            contextGeneration &+= 1
+            invalidateStatusRefresh()
         }
         refresh()
     }

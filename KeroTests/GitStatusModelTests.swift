@@ -8,12 +8,22 @@ import XCTest
 private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     private var online = true
     private var failGit = false
+    private var pauseNextGit = false
+    private var pausedGit: CheckedContinuation<Void, Never>?
+    private(set) var awaitingGit = false
+    private(set) var gitRuns = 0
     private var pauseMetadata = false
     private(set) var metadataReads = 0
     private(set) var deleteAttempts = 0
 
     func setOnline(_ value: Bool) { online = value }
     func setGitUnavailable(_ value: Bool) { failGit = value }
+    func suspendNextGitRequest() { pauseNextGit = true }
+    func releaseGitRequest() {
+        pausedGit?.resume()
+        pausedGit = nil
+        awaitingGit = false
+    }
     func setPauseMetadata(_ value: Bool) { pauseMetadata = value }
 
     func stat(path: String) async throws -> WorkspaceStat? {
@@ -32,6 +42,12 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
         argv: [String], cwd: String?, env: [String: String]?,
         stdin: Data?, timeout: TimeInterval?
     ) async throws -> WorkspaceRunResult {
+        gitRuns += 1
+        if pauseNextGit {
+            pauseNextGit = false
+            awaitingGit = true
+            await withCheckedContinuation { pausedGit = $0 }
+        }
         if failGit { throw WorkspaceError.timedOut }
         // The remote protocol passes command names (git/sh), whereas the
         // local backend deliberately requires an absolute executable URL.
@@ -347,6 +363,49 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertTrue(model.isRepo)
         XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
         XCTAssertEqual(model.changedEntries, priorChanges)
+    }
+
+    func testReplacingSSHBackendDoesNotWaitForStaleGitWorker() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func git(_ args: [String]) throws {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        try git(["init", "-q"])
+        try git(["config", "user.name", "Git Channel Test"])
+        try git(["config", "user.email", "test@invalid"])
+        try git(["config", "commit.gpgsign", "false"])
+        try "hello".write(to: directory.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        try git(["add", "."])
+        try git(["commit", "-qm", "baseline"])
+
+        let oldChannel = DiscardRemoteWorkspaceFixture()
+        let newChannel = DiscardRemoteWorkspaceFixture()
+        await oldChannel.suspendNextGitRequest()
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: oldChannel, scope: "ssh:fixture")
+        let oldDeadline = Date().addingTimeInterval(5)
+        while await !oldChannel.awaitingGit, Date() < oldDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let oldStarted = await oldChannel.awaitingGit
+        XCTAssertTrue(oldStarted)
+        // The same host and repository, but a different SSH connection.
+        model.sync(root: directory.path, backend: newChannel, scope: "ssh:fixture")
+        let deadline = Date().addingTimeInterval(1.5)
+        while await newChannel.gitRuns == 0, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let launched = await newChannel.gitRuns
+        await oldChannel.setGitUnavailable(true)
+        await oldChannel.releaseGitRequest()
+        XCTAssertGreaterThan(launched, 0, "A new SSH channel must not wait for an old Git worker")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.isRepo)
+        XCTAssertNil(model.statusError)
+        XCTAssertEqual(model.recentCommits.map(\.subject), ["baseline"])
     }
 
     func testUnbornRepositoryAndPagedHistorySurviveRepositorySwitch() async throws {
