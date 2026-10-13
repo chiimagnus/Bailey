@@ -7,7 +7,7 @@
 - [Git Graph 仓库 README](https://github.com/mhutchie/vscode-git-graph)：区分 Commit、Branch、Tag、Stash、未提交变更与历史文件的菜单归属，以及图谱、Refs、详情界面。
 - [Git Graph Context Menus](https://github.com/mhutchie/vscode-git-graph/wiki/Context-Menus)：参考原生语义和动作分类，**不直接迁移全部菜单项**。Issue 中也附有其 Commit 菜单截图。
 - [Apple SwiftUI contextMenu](https://developer.apple.com/documentation/swiftui/view/contextmenu(menuitems:))：正式 UI 使用 SwiftUI `.contextMenu`；右击对象本身决定 Menu 归属，不在 App 中引入自绘 HTML 菜单。
-- Kero 本地 [Git 维护约束](../../../docs/GIT.md)、[安全](../../../docs/SECURITY.md)、[文件与共享树](../../../docs/EDITOR.md)和仓库 [AGENTS.md](../../../AGENTS.md)，以及用户提供的当前界面截图。
+- Kero 本地 [Git 维护约束](../../../docs/features/git.md)、[安全](../../../SECURITY.md)、[文件与共享树](../../../docs/features/files.md)和仓库 [AGENTS.md](../../../AGENTS.md)，以及用户提供的当前界面截图。
 
 ## 已经有的功能：无需再做
 
@@ -23,7 +23,7 @@
 
 ## 确实缺少的增量（有源码证据）
 
-- 仓库正在进行独立的 [MVVM / Observation 重构](../swiftui-observation-mvvm-refactor/plan-p3.md)：该计划明确让 **`GitStatusModel` 保留名称，但承担窗口级 `@Observable` Git ViewModel 职责**，继续复用 `GitCommandExecution` 与 `WorkspaceBackend`，不引入新 Git Service。实施本 Feature 时应先核对该重构实际完成状态，沿唯一的当前 Git 状态 owner 接入，不把新操作写回已淘汰的 `ObservableObject` 路径，也不重复迁移。
+- 2026-10-14 源码复核：`GitStatusModel` 已是 `@MainActor @Observable`，继续复用 `GitCommandExecution` 与 `WorkspaceBackend`。新能力沿此唯一 Git ViewModel 接入，不重复进行 Observation 迁移或引入平行服务。所有权见[当前架构](../../../docs/architecture.md#唯一所有者)，测试使用[分层 XCTest](../../../docs/testing.md)，不是旧独立检查脚本。
 
 1. **Commit 与 Ref 菜单归属**：`RecentCommitsView.commitRow` 整行放在一个 `Button` 中，右键仅复制 Hash/Subject；`primaryReference` 把一个引用挑成单一字符串胶囊。真实 Tag Badge 尚未独立呈现或拥有自己的 `.contextMenu`。需分离 Commit 行与 Ref Badge 的命中，不能用一个统一的菜单判断“点击位置”的字符串。
 2. **选定提交创建 Ref**：`GitStatusModel.createBranch(named:)` 当前用 `git switch -c <name>` 从 HEAD 建立；不能用于“在历史 Commit 建分支”。需要在已有 `perform` 命令/身份校验链下增加以指定 SHA 创建本地分支/Tag 的路径；**不增加 Tag Push/Delete、远端操作或发布流程**。

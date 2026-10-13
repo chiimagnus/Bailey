@@ -1,5 +1,7 @@
 # P4：Git 状态先可用与共享树成本收敛
 
+> 本页保留旧实施方案，先读 [实施基线更新](idea.md#实施基线更新)。当前 Git ViewModel 已用 Observation；下文 `@Published`、旧检查脚本和当时的缺口不得直接作为现状。沿当前共享执行器、XCTest 与真实事件入口重新取证，不重复实施后续已落地的修复。
+
 **Goal:** 仓库状态不等待历史/行数等次要信息；相同工作树事件不无条件重做无关详情，树行状态查询不逐行扫描整份快照。
 
 **Non-goals:** 不重写 Git runner、不增加无限并发、不解析 shell 命令猜操作、不另建文件/Git 树，不默认引入 FSEvents/监听框架。
@@ -30,10 +32,10 @@
 **Files / 锚点:**
 - Modify: kero/Git/GitStatusModel.swift：refresh/runGitStatus/prefetchedSnapshotCommands、StatusResult/StatusLoadResult、apply/applyRepository、invalidateStatusRefresh、perform。
 - Modify: `kero/Git/GitPanel.swift`、`kero/Git/RecentCommitsView.swift`、`kero/UI/Components/BottomToolbarView.swift`：真实详情 consumer 与加载/失败表示；调用入口是 `ContentView.syncGit` / `ToolPanelView`，按需要最小接入。
-- Modify only as needed: kero/Remote/RemoteCommands.swift 的现有 batchCommand/parseBatch 使用；新文案按 docs/LOCALIZATION.md 更新 kero/Resources/Localization/Git.xcstrings、Sidebar.xcstrings 或 Workspace.xcstrings 对应归属。
+- Modify only as needed: kero/Remote/RemoteCommands.swift 的现有 batchCommand/parseBatch 使用；新文案按 docs/ui.md#本地化 更新 kero/Resources/Localization/Git.xcstrings、Sidebar.xcstrings 或 Workspace.xcstrings 对应归属。
 - Only where deadline propagation requires it: `RemoteConnection.run/check` 的已有 master preflight。check 当前另有固定 5 秒预算，不能把传给 backend.run 的剩余时间当作整个调用已严格包含 preflight；沿当前 runner 传递同一剩余预算，不新增连接/重试层。
 - Extend: `KeroTests/check-git-panel-state.swift` 现有真实模型/backend 检查，增加受控延迟结果，不另建同职责脚本。
-- Modify: docs/PERFORMANCE.md、docs/GIT.md；本地 evidence-p4.md。
+- Modify: docs/testing.md#性能与内存测量、docs/features/git.md；本地 evidence-p4.md。
 
 **现状与失效边界:** runGitStatus 完成 numstat、未跟踪行数、refs/remote/log/stash/git-dir 后才 publish。applyRepository 当前全量覆盖，不能以空数组补齐核心结果。worker 的 10/24 秒 deadline 目前只传给 statusGit；未跟踪计数和仓库标记另走无剩余时间的调用，外层 12/30 秒 watchdog 只能拒绝晚结果，并未停止实际工作。另有同 root/scope 更换连接后旧结果仍可能通过原 generation 的路径；拆阶段必须在同 task 验证并处理。
 

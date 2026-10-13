@@ -1,5 +1,7 @@
 # P2：非阻塞打开与纯颜色高亮
 
+> 本页保留旧实施方案，先按 [实施基线更新](idea.md#实施基线更新)重核加载、断线和保存路径。下文旧独立测试命令不再有效；使用当前 XCTest，不为复现旧方案恢复删除的入口，也不推定旧缺口仍存在。
+
 **Goal:** 去掉已证实无必要的主线程文件读取与字体样式写入，保持打开、重载、编辑和保存正确。
 
 **Non-goals:** 不改文本引擎，不新建文件状态机，不改变大小/图片政策，不把整份文档预热为高亮缓存。
@@ -33,7 +35,7 @@
 - Callers to verify, not automatically modify: Project.openFile/makeContent、FileViewerView.onAppear/didBecomeActive/didBecomeKey。
 - New: KeroTests/check-bounded-file-read.swift，复用现有独立 Swift 编译检查约定，检查真实 WorkspaceBackend 读取而不是复制算法。
 - Modify: `scripts/check.sh` 注册新检查；`KeroTests/check-workspace-identity.swift` 与 `KeroTests/check-pane-retention.swift` 迁移初始化后立即读写的假设，并覆盖真实 FileTab 生命周期。
-- Modify: docs/PERFORMANCE.md 的已实现约束；行为说明仅在需要时更新 docs/EDITOR.md。
+- 当前已实现的加载与保存契约归 `docs/features/editor.md`；只在测量方法改变时更新 `docs/testing.md#性能与内存测量`。
 
 **当前链路与根因:**
 Project 的 openFile 与恢复用 makeContent 同步创建 FileTab；本地 init 调 readImmediately(.max)，读取/解码或 NSImage 创建之后才检查文本大小。远程 init 启动 reload，onAppear 再启动会取消旧任务；取消 Task 不等于同步 I/O 已停止。`LocalWorkspaceBackend` 当前已是 `nonisolated`，read/list/stat 等已是 `@concurrent`，不是本 task 尚需添加的能力。reload 用 try? 吞掉具体错误，loadedContent 仍在 MainActor；updatePath 假设已有内容，异步首次加载后不成立。SourceTextEditor 当前也未设置 `isEditable`，断线只有横幅，需与既有只读要求一致。
@@ -73,7 +75,7 @@ Project 的 openFile 与恢复用 makeContent 同步创建 FileTab；本地 init
 - Verify: kero/Editor/SyntaxHighlighting.swift：theme 的空 fonts；kero/Editor/SourceTextEditor.swift：apply。
 - Read-only dependency contract: Vendor/STTextView/Sources/STTextViewAppKit/STTextView.swift：font setter、addAttributes。
 - Modify: `KeroTests/check-editor-highlighting.swift`，扩展 P1-T3 已接入的真实 App 检查，不新建样式测试框架。
-- Modify: docs/PERFORMANCE.md。
+- 样式与编辑不变量归 `docs/features/editor.md`，测量方法仍由 `docs/testing.md#性能与内存测量` 维护。
 
 **当前行为与根因:** Kero 的 theme fonts 明确为空，仍在 coordinator 初始化执行 textView.font = textView.font；该 setter 不比较值，会给整个已装入文档加字体属性。每 token 还带当前 .font，clearStyle 也写回字体，触发文本事务/布局。颜色本来已有 rendering attribute 路径。
 

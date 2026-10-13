@@ -8,7 +8,7 @@
 
 **Acceptance：** 外部修改仓库时，正在显示的 Git Manager 会在可观测的合理时间内反映变更；手动刷新仍有效；Git 操作中不被旧快照覆盖；本机/SSH 失败与恢复不退化；Commit / Tag 菜单和图谱整体可用。
 
-**Rules：** 全部测试在临时仓库；不清理或操作用户真实 Kero 数据、不重启正式 App、不修改 Windows SSH 配置。实施前先核对独立 MVVM/Observation 重构的 P3 Git ViewModel 和 P6 事件入口是否已迁移，避免修复旧订阅再留下重复事件路径。使用 `AGENTS.md` 指定的唯一 Debug App `--isolated-ui-test` 路径与现有 XCTest；不把 CI 编译、HTML 演示当真机验收。
+**Rules：** 全部测试在临时仓库；不清理或操作用户真实 Kero 数据、不重启正式 App、不修改 Windows SSH 配置。沿已有 Observation Git ViewModel 和当前事件入口取证，不重复迁移，也不修复已删除的旧订阅。使用 `AGENTS.md` 指定的唯一 Debug App `--isolated-ui-test` 路径与现有 XCTest；不把 CI 编译、HTML 演示当真机验收。
 
 <a id="p3-t1"></a>
 ## P3-T1 追踪前台外部 Git 变更与刷新丢失位置
@@ -27,13 +27,13 @@
 <a id="p3-t2"></a>
 ## P3-T2 最小刷新修复与设计方案整体验收
 
-**Files / 锚点：** 以 P3-T1 的已证实失效入口为准，预计在 `ContentView.swift` / `ToolPanelView.swift` 当前订阅与 `GitStatusModel.refresh` 之间，若证据指向快照层再修改 `GitStatusModel.swift`；`KeroTests/GitStatusModelTests.swift`、`docs/GIT.md`、相关 `Localizable.xcstrings`。
+**Files / 锚点：** 以 P3-T1 的已证实失效入口为准，预计在 `ContentView.swift` / `ToolPanelView.swift` 当前订阅与 `GitStatusModel.refresh` 之间，若证据指向快照层再修改 `GitStatusModel.swift`；`KeroTests/Integration/Git/GitStatusModelTests.swift`、`docs/features/git.md`、所属的 `kero/Resources/Localization/Git.xcstrings`／`Interface.xcstrings`。
 
 **实施：**
 1. 优先复用已有本机文件变化/命令完成事件；若缺事件且只有当前显示的 Git 面板需要补全，再引入受**前台、面板可见、仓库身份和 SSH 成本**约束的最小刷新触发。不无条件启动独立 Git polling、不对远程目录逐文件请求。
 2. 旧请求不得覆盖新仓库或完成后的状态；失败/超时仍可重试。复用 `refreshPending` 等既有逻辑，证据显示失效时修它，不新造 generation、cache、queue。
-3. 同 task 更新 `docs/GIT.md` 中实际新增的刷新契约，删掉被替代的旧订阅/分支，不留“以后最后再清理”任务。对照最新版 `design.html` 验收 Recent Commits 的**双行布局、标题后 Ref、短 SHA/作者/时间、蓝色主干与彩色分支**，避免影响已有 Changes、Stash 与顶部仓库菜单。
+3. 同 task 更新 `docs/features/git.md` 中实际新增的刷新契约，删掉被替代的旧订阅/分支，不留“以后最后再清理”任务。对照最新版 `design.html` 验收 Recent Commits 的**双行布局、标题后 Ref、短 SHA/作者/时间、蓝色主干与彩色分支**，避免影响已有 Changes、Stash 与顶部仓库菜单。
 
-**验证：** 在 P3-T1 相同的隔离 fixture 上重放前台外部编辑/Stage/Commit、Kero 内部操作、项目切换、首次与重复打开、刷新中继续修改、SSH 断开；核对 Git 状态/图谱/菜单与真实 refs/index 一致。检查 Recent Commits 中多分支提交的 SHA、作者、相对时间与 Ref 显示；有性能证据时比较刷新次数和用户可见更新时间，不通过禁用刷新获得通过。执行受影响 XCTest、`make test SIGNING=adhoc` 和本机隔离 Debug 窗口点按 / 右击验收；正式包不替换。
+**验证：** 在 P3-T1 相同的隔离 fixture 上重放前台外部编辑/Stage/Commit、Kero 内部操作、项目切换、首次与重复打开、刷新中继续修改、SSH 断开；核对 Git 状态/图谱/菜单与真实 refs/index 一致。检查 Recent Commits 中多分支提交的 SHA、作者、相对时间与 Ref 显示；有性能证据时比较刷新次数和用户可见更新时间，不通过禁用刷新获得通过。执行受影响 XCTest、`make test` 和本机隔离 Debug 窗口点按 / 右击验收；正式包不替换。
 
 **提交边界：** 根因最小修改、回归测试、长期维护文档一次提交。按已核实的实际运行记录区分 “本地通过 / SSH 待验 / 正式包未安装”。

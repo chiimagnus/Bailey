@@ -1,5 +1,7 @@
 # P5：优化 diff 从读取到实际首屏的完整流水线
 
+> **本页的 Pierre／WebKit Diff 实施前提已失效，以下为旧方案，不得执行。** 当前 Diff 由原生 STTextView/TextKit 承载，见 [实施基线更新](idea.md#实施基线更新)与[当前功能契约](../../../docs/features/diff.md)。后续只针对当前读取、差异计算、TextKit 布局与高亮重新制定实测方案；不复建 JS worker、WebView 桥接、Pierre 副本或旧测试脚本。未据此改写任务状态。
+
 **Goal:** 找到并减少用户等待 diff 的真实成本，同时保持编辑、滚动和已有 WebView 复用。
 
 **Non-goals:** 不更换 WebKit/Pierre，不新增全项目多文件 diff，不缩小 5 MiB 上限，不降低差异或高亮质量。
@@ -93,7 +95,7 @@
 **Files:**
 - Existing application call: `kero/Git/DiffViewerView.swift` 的 `DiffWebRoot`，只有公开 API 能解决时在这里最小调整。
 - Only if required by measured hotspot: 固定版本源码副本 `Vendor/PierreDiffsSwift/`，重点 `Sources/PierreDiffsSwift/WebView/DiffWebViewCoordinator.swift`、`PierreMultiDiffView.swift` 与现有 `Tests/PierreDiffsSwiftTests/PierreDiffsSwiftTests.swift`。
-- If vendored: `kero.xcodeproj/project.pbxproj`、其实际 resolved 消费者、`docs/DEPENDENCIES.md`。
+- If vendored: `kero.xcodeproj/project.pbxproj`、其实际 resolved 消费者、`docs/development.md#依赖与本地补丁`。
 
 **准入与实施:**
 1. 优先现有 API/相等检查；当前编码函数和 pending queue 在依赖内部，无法用 caller 的另一层 Task 把它们移出 MainActor。只有这部分在 trace 中主导时才替换 remote package reference 为同一固定 revision 的本地包。保留许可证、署名、资源与必要上游说明，不复制 `.git/.build/node_modules`，不升级其他包。

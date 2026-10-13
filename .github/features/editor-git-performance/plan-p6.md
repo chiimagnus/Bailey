@@ -1,5 +1,7 @@
 # P6：同机综合复测、真机验收与长期文档收尾
 
+> 本页保留旧实施方案，先读 [实施基线更新](idea.md#实施基线更新)。验收以重新校正后的当前实现、测试和测量为准；Diff 不再测 WebKit，构建／签名／安装分别由现行核心文档维护。必要文档在各 task 同步，本阶段只最终核销，不能用文档更新宣布性能或真实用户路径已通过。
+
 **Goal:** 证明保留的优化在同一签名 Debug 的隔离实例中共同改善真实操作，不以数据安全、功能或持续耗电换速度；正式安装与恢复另行记录。
 
 **Non-goals:** 不追加新性能架构，不发布、不 push、不上传原始 trace，不把综合验收替代前面 task 的独立验证。
@@ -53,11 +55,11 @@
 **类型 / 依赖:** 文档与收尾；依赖 P6-T1 的实际结论。
 
 **Files:**
-- Modify: `docs/PERFORMANCE.md`。
-- Only if behavior/entry changed: `docs/EDITOR.md`、`docs/GIT.md`、`docs/PROJECTS.md`。
-- If dependency patch exists: `docs/DEPENDENCIES.md`。
+- Modify: `docs/testing.md#性能与内存测量`。
+- Only if behavior/entry changed: `docs/features/editor.md`、`docs/features/git.md`、`docs/features/projects.md`。
+- If dependency patch exists: `docs/development.md#依赖与本地补丁`。
 - Only if navigation needs an update: 根 `README.md` / `AGENTS.md` 的现有入口。
-- `AGENTS.md` 拥有验证流程；没有规则变化不改它。
+- `AGENTS.md` 只提供行动入口；完成标准与测量归 `docs/testing.md`，构建／安装归 `docs/development.md`，签名归 `docs/signing.md`。没有规则变化不改相应页面。
 
 **当前依据:** 长期性能文档只保留测量与正确性约束，静态调查和实施方案留在本 feature。`docs/` 面向 AI 开发者维护功能，用户操作归根 README，不按源码组件再复制一套文档。
 

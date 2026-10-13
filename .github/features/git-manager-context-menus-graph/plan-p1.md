@@ -8,12 +8,12 @@
 
 **Acceptance：** 提交标题后紧跟 Ref；下行呈现短 SHA、作者及右对齐相对时间；蓝色主干与彩色分支按完整父 SHA 绘制正确的分叉/合并，历史文件展开后线条连续；同 Commit 多 Ref 的类型和命中正确；分页、Diff 及无障碍不回归。
 
-**Rules：** 遵守 `AGENTS.md` 的 MVVM + Observation 目标：当前 `GitStatusModel` 是唯一 Git 状态 owner，另一份进行中的重构计划将其就地升级为 `@Observable` ViewModel（名称不变）。实施前先核对其实际迁移进度，不创建平行 Git 状态或新服务；图谱为纯派生显示。保持 `TreeRowSurface` / `TreeFileRow` 的 hover、无障碍、滚动、折叠、本机和 SSH 数据范围。
+**Rules：** 遵守 `AGENTS.md` 的 MVVM + Observation 目标：当前 `GitStatusModel` 已是唯一 `@MainActor @Observable` Git ViewModel，沿既有所有者接入，不重复迁移或创建平行状态／服务；图谱为纯派生显示。保持 `TreeRowSurface` / `TreeFileRow` 的 hover、无障碍、滚动、折叠、本机和 SSH 数据范围。
 
 <a id="p1-t1"></a>
 ## P1-T1 完整父 SHA 与有类型 Ref
 
-**Files / 锚点：** `kero/Git/GitStatusModel.swift` 的 `RecentCommit` / `runGitStatus` / `parseRecentCommits`，`kero/UI/Panels/ToolPanelView.swift` 的历史文件 Diff 调用方；`KeroTests/GitStatusModelTests.swift`。
+**Files / 锚点：** `kero/Git/GitStatusModel.swift` 的 `RecentCommit` / `runGitStatus` / `parseRecentCommits`，`kero/UI/Panels/ToolPanelView.swift` 的历史文件 Diff 调用方；`KeroTests/Integration/Git/GitStatusModelTests.swift`。
 
 **已知事实：** 当前 `git log` 已一次返回 `%P`（全部父 SHA）、`%D`（Refs）、`%h`（短 SHA）、`%an`（作者）及 `%ct`（时间）；`RecentCommit` 已有 `shortHash` / `author` / `relativeDate`，无需增加元信息查询。但 parser 只保留首父 `parentHash`，`primaryReference` 只取一个字符串，不能可靠识别 `HEAD -> main`、`origin/main` 与 `tag: v...`。
 
@@ -22,9 +22,9 @@
 2. 保留合并提交的每个 parent；兼顾 root/unborn、缺 decorations、多个 Tag/Branch 同指一个 Commit、带斜杠的本地分支；不能把所有带 `/` 的名字都识别为远程引用。结合现有 `git log -n` 的排序检查子提交是否始终先于加载的父提交，只有存在真实错序时才在同一次日志调用中调整排序。
 3. 更新消费旧 `parentHash`/`references` 的调用点与测试；删除被替代的旧字符串推断逻辑，不留并行版本。
 
-**验证：** `make test ONLY_TESTING=KeroTests/GitStatusModelTests SIGNING=adhoc`；用线性、双父、root、多个同 SHA Ref、含斜杠本地分支的 Git fixture 核对完整父 SHA 与引用类型；短 SHA/作者/时间仍取既有字段，历史 Diff 仍选择首父，不丢文件变化。
+**验证：** `make test ONLY_TESTING=KeroTests/GitStatusModelTests`；用线性、双父、root、多个同 SHA Ref、含斜杠本地分支的 Git fixture 核对完整父 SHA 与引用类型；短 SHA/作者/时间仍取既有字段，历史 Diff 仍选择首父，不丢文件变化。
 
-**提交边界：** Model/parser、必要调用方、回归测试一次提交。
+**提交边界：** Model/parser、必要调用方、回归测试及 [Git 功能契约](../../../docs/features/git.md)一次提交。
 
 <a id="p1-t2"></a>
 ## P1-T2 最小车道布局与 Ref Badge 独立命中
@@ -40,4 +40,4 @@
 
 **验证：** 用受控 Git fixture 检查普通单车道、双父合并、同时活跃多分支、同 SHA 的多个 Ref、分页边界与展开文件后的连续线段；核对双行标题/Badge/SHA/作者/时间、窗口变窄后 `+N` 真正可操作、右键命中、键盘和 VoiceOver。只对照 `design.html` 的**分叉/合并设计**，不寻找已删除的线性模式，也不把 HTML 原型视为 SwiftUI 实机通过。
 
-**提交边界：** 真实图谱+徽章可点击结构及相应测试一次提交；本 task 不加入任何新的 Git 写命令。
+**提交边界：** 真实图谱、徽章可点击结构、相应测试及受影响 UI／Git 文档一次提交；本 task 不加入任何新的 Git 写命令。

@@ -1,5 +1,7 @@
 # P3：正确的增量编辑、查询与嵌入语言
 
+> 本页保留旧实施方案，先读 [实施基线更新](idea.md#实施基线更新)。下面写作前提的“P1 已修复”是旧计划的依赖条件，不是任务完成证据。按当前 Swift 6、XCTest 与实际高亮实现重新复现和测量，不恢复旧 Swift 5 编译／独立脚本路径。
+
 **Goal:** 编辑后范围正确，输入不承担无必要的全文扫描；嵌入语言不为同一内容和区域反复从头解析。
 
 **Non-goals:** 不造 Rope/CRDT，不替换 Neon，不引入通用 parser service，不扩大语言能力或改语法资源。
@@ -30,7 +32,7 @@
 - Modify: kero/Editor/SyntaxHighlightPlugin.swift：setUp、willChangeContent、didChangeContent、两种 token provider、tsClient.invalidationHandler。
 - Read-only: Neon Highlighter.didChangeContent / handleTokens / TokenApplication；锁定源码见 build/SourcePackages/checkouts/Neon/Sources/Neon/。
 - Modify: `KeroTests/check-editor-highlighting.swift`，扩展 P1-T3 已有真实 App/生产桥接检查；可在同一脚本用现有 TextSystemInterface 加可控延迟验证真实 Neon 契约，不另写桥接算法。
-- Modify: docs/PERFORMANCE.md 的增量路径事实。
+- Modify: docs/features/editor.md 的增量路径事实。
 
 **证据:** Highlighter.didChangeContent 移动 validSet、清 pending 并安排重请求，Kero 当前未调用。另有真实的多回调间隙：base query 成功后再发 injection query，两者各自通过 Neon 的 version 检查，并不证明合并结果同版；后一查询 staleContent 时当前代码仍提交旧 base tokens。STTextView 在修改前/后传同一个 NSTextRange，Kero 却在修改后重新转换旧范围，删除末尾时可能越界；应在 will 阶段保留旧 NSRange。这些是当前执行链缺口，不等待后台子解析或性能准入才处理。
 
@@ -52,7 +54,7 @@
 **Files / 锚点:**
 - Modify: kero/Editor/SourceTextEditor.swift：Coordinator.textViewDidChangeText。
 - Verify: kero/Editor/FileViewerView.swift：text、savedText、refreshDirtyState、save。
-- Modify: docs/PERFORMANCE.md。
+- 当前编辑与保存契约归 `docs/features/editor.md`；测量方法改变才更新 `docs/testing.md#性能与内存测量`。
 
 **依据与不变量:** didChangeText 已是文本变化完成通知；FileTab.text 不发布。当前先 newText != file.text，再 refreshDirtyState 比较 savedText，长文尾部编辑可能进行两次长前缀比较。真正决定 dirty 的是保存基线，不是之前一刻文本。
 
@@ -74,7 +76,7 @@
 - kero/Editor/SyntaxHighlightPlugin.swift：TreeSitterClient transformer、willChangeContent/didChangeContent。
 - Read-only: STTextKitPlus NSTextContentManager.position；Neon InputEdit 扩展与 SwiftTreeSitter.Point。
 - Only if admitted: new kero/Editor/TextCoordinateIndex.swift、KeroTests/check-text-coordinate-index.swift；现有同步根目录自动接入应用。
-- Local evidence: evidence-p3.md；实现后更新 docs/PERFORMANCE.md。
+- Local evidence: evidence-p3.md；实现后更新 docs/features/editor.md 中相关契约，不把实现细节复制进测量规范。
 
 **问题与方法:** position 每次枚举整份文档段落并搜索。测首/中/尾、等字节不同换行数量、超长单行；将转换耗时与 parser 耗时分开。成本最多一轮定位加一轮纯数据原型，若未命中就保留现实现。
 
@@ -115,7 +117,7 @@
 - Modify: kero/Editor/SyntaxHighlightPlugin.swift 的 installTokenProvider、finishInstall、injectedHighlightsQuery、pendingInjectionCompiles；SyntaxHighlighting.highlightsData/injectionsData 的资源输入。
 - Only if admitted: new kero/Editor/HighlightQueryCache.swift，将现有 HighlightQueryCache 原职责迁出插件，新增的在途合并仍由它拥有。不是新增通用缓存或替换 SyntaxLanguage。
 - Modify: `KeroTests/check-editor-highlighting.swift`；实际 cache 仍在插件内时用现有 App 模块检查，不为了测试迁出文件或伪造 SyntaxLanguage。确因共享职责需要独立文件才用真实模块链接。
-- Local evidence: evidence-p3.md；实现后更新 docs/PERFORMANCE.md。
+- Local evidence: evidence-p3.md；实现后更新 docs/features/editor.md 中相关契约，不把实现细节复制进测量规范。
 
 **已证实必修:** injectedHighlightsQuery 无论成功/失败都移除 pending 并 invalidate；固定查询失败后，下一请求会再编译、再 invalidate，形成实际闭环。本 task 先用坏查询可控复现并消除循环，不以性能不显著为由保留。
 
@@ -165,7 +167,7 @@
 - Only if selected: kero/Editor/InjectedSyntaxState.swift，拥有当前 editor 的子区域解析数据；单个真实职责，不写 protocol/factory。
 - New: KeroTests/check-injected-highlighting.swift 与同 task 配套运行命令；编译实际被选子区域实现和现有依赖，不复制其算法。
 - Modify: `scripts/check.sh` 注册 `injected-highlighting`；编译/模块参数沿 P1-T3 的现有 App/依赖入口，采用真实 SyntaxLanguage，不为脚本新增类型壳。
-- Modify: docs/PERFORMANCE.md；需要额外产品/补丁时更新 docs/DEPENDENCIES.md。
+- 实际接入后的高亮契约归 docs/features/editor.md；依赖补丁归 docs/development.md#依赖与本地补丁；测量规范只在方法变化时更新。
 
 **实施:**
 1. 按 P3-T6 决策接入，删除原每次 new Parser / full-fragment parse 的旧路径，不能两个实现同时运行。只维护当前文档当前子区域，查询仍由 P3-T5 的实际缓存策略提供。

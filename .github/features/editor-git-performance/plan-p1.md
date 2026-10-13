@@ -1,5 +1,7 @@
 # P1：建立同机基线与可重复证据
 
+> 本页保留旧实施方案。先读 [实施基线更新](idea.md#实施基线更新)：当前有 Debug／Release、Swift 6 与 XCTest；下文旧脚本和 WebKit Diff 测量前提已失效，不照单重建。继续执行前先校正实际源码与测试入口，任务状态仍归 `todo.toml`。
+
 **Goal:** 在改性能代码前回答“哪一段慢、慢在 CPU 还是等待、用户什么时候真正能操作”。
 
 **Non-goals:** 不优化业务路径，不建立通用 benchmark 平台，不改应用配置或会话恢复格式。仅修复已证实的首次解析/坐标契约，使参考实现的输入正确，不夹带性能实现，也不假定旧 App 已复现启动崩溃。
@@ -26,7 +28,7 @@
 
 **Files:**
 - New: `scripts/prepare-performance-fixtures.swift`，独立 Foundation 脚本，不增加测试框架。
-- Modify: `docs/PERFORMANCE.md` 的生成入口，验收流程链接 `AGENTS.md`。
+- 生成器落地时更新 `docs/development.md#生成资源` 的实际入口；测量方法归 `docs/testing.md#性能与内存测量`，不在测试文档复制生成流程。
 - Local evidence: `build/performance/fixtures/`、`build/performance/fixtures-manifest.json`、feature 下 `evidence-p1.md`。
 
 **当前依据:** `KeroTests/check-file-tree-navigation.swift` 已用独立 Swift 检查和临时目录；没有 app 测试 target。文本及 diff 上限 5 MiB，未跟踪计数有 2048 文件/8 MiB 每文件/32 MiB 总预算。
@@ -54,7 +56,7 @@
 **Files / 锚点:**
 - Modify: `kero/Editor/SyntaxHighlightPlugin.swift`：coordinator 初始化的首次 will/did 与 TreeSitterClient transformer。
 - Read-only: `Neon/Sources/TreeSitterClient/TreeSitter+Extensions.swift`、`SwiftTreeSitter/Parser.swift`、`STTextKitPlus/NSTextContentManager.swift`、tree-sitter `lib/src/lexer.c`。
-- New: `KeroTests/check-editor-highlighting.swift` 与 `.sh`，复用现有 `@testable import kero` / Debug dylib 方式，调用生产插件；Modify: `scripts/check.sh` 注册 `editor-highlighting`，`docs/EDITOR.md` 仅同步必要维护约束。
+- New: `KeroTests/check-editor-highlighting.swift` 与 `.sh`，复用现有 `@testable import kero` / Debug dylib 方式，调用生产插件；Modify: `scripts/check.sh` 注册 `editor-highlighting`，`docs/features/editor.md` 仅同步必要维护约束。
 
 **当前证据:** 初始文档长度 N 时，代码以旧范围 `[0,N)` 加 delta=N，Neon 因而请求新终点 2N；Kero 的 NSTextContentManager 无该位置，不能用 `.zero` 伪造坐标。锁定 parser 用 UTF-16，InputEdit 字节乘 2，但当前 transformer 将 TextKit 的 UTF-16 column 原值传入 Point；TextKit 段落也不等于 Tree-sitter 只按 LF 分行的定义。本轮链接真实依赖的最小检查确认 N=7 时请求 offset=14，完整解析的 EOF column 为 14 字节，不是 7。
 

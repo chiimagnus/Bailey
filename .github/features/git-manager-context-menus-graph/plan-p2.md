@@ -8,7 +8,7 @@
 
 **Acceptance：** 右击 Commit/当前本地分支/其他本地分支/Tag/历史文件分别出现设计稿规定的动作；远端跟踪引用只显示；Commit 选定 SHA 上创建的引用确实指向该 SHA；Changes、冲突、未跟踪和暂存文件的现有菜单不变。
 
-**Rules：** 新增本地 Ref 创建仍复用当前唯一 Git ViewModel（现名 `GitStatusModel`）→现有命令执行入口→`GitCommandExecution`→当前 `WorkspaceBackend`；按正在进行的 MVVM 重构进度接入已迁移的 `@Observable` owner，不另建 Service/状态副本。保留操作互斥、仓库身份、所选 SHA 校验与失败提示；View 不发 Shell 命令。正式产品用 SwiftUI `.contextMenu`，不引入 HTML 菜单或另造 `NSMenu`。
+**Rules：** 新增本地 Ref 创建仍复用当前唯一 Git ViewModel（现名 `GitStatusModel`）→现有命令执行入口→`GitCommandExecution`→当前 `WorkspaceBackend`；直接接入已有的 `@MainActor @Observable` owner，不另建 Service/状态副本。保留操作互斥、仓库身份、所选 SHA 校验与失败提示；View 不发 Shell 命令。正式产品用 SwiftUI `.contextMenu`，不引入 HTML 菜单或另造 `NSMenu`。
 
 <a id="p2-t1"></a>
 ## P2-T1 Commit、本地 Branch、Tag 与历史文件菜单路由
@@ -24,12 +24,12 @@
 
 **验证：** 同一 Commit 上同时存在当前本地分支、其他分支、Tag、远端跟踪 Ref；右击各自显示对应菜单，`origin/main` 无管理菜单；提交标题左键展开，短 SHA 点击复制，文件行右键 Diff/复制路径，Esc/键盘/VoiceOver 可达；检查 Changes 原菜单没有被意外改动。
 
-**提交边界：** 仅 View 命中/菜单绑定及必要的测试，一次提交，不夹带历史 Git 命令。
+**提交边界：** 仅 View 命中／菜单绑定、必要测试及受影响的 UI／Git 文档，一次提交，不夹带历史 Git 命令。
 
 <a id="p2-t2"></a>
 ## P2-T2 在指定 Commit 创建本地分支与 Tag
 
-**Files / 锚点：** `kero/Git/GitStatusModel.swift` `createBranch` / `perform` / `validate`，`kero/Git/GitPanel.swift` 现有建分支对话框及错误处理，`RecentCommitsView.swift` 菜单回调；`KeroTests/GitStatusModelTests.swift`、`KeroTests/GitExecutionTests.swift`；必要的 `Localizable.xcstrings`。
+**Files / 锚点：** `kero/Git/GitStatusModel.swift` `createBranch` / `perform` / `validate`，`kero/Git/GitPanel.swift` 现有建分支对话框及错误处理，`RecentCommitsView.swift` 菜单回调；`KeroTests/Integration/Git/GitStatusModelTests.swift`、`KeroTests/Integration/Git/GitExecutionTests.swift`；所属的 `kero/Resources/Localization/Git.xcstrings`／`Interface.xcstrings`。
 
 **根因 / 范围：** 现有 `createBranch(named:)` 使用 `git switch -c <name>`，**只能基于 HEAD**。不能从历史 Commit 菜单直接调用并声称分支指向该 SHA。设计稿只要求以选中的历史提交创建**本地分支**或**本地 Tag**，不要求 Tag 推送/删除。
 
@@ -40,4 +40,4 @@
 
 **验证：** 临时 Git fixture 同时有 HEAD 与较旧 Commit：通过对应菜单新建的本地分支/Tag 必须解析到目标 SHA，且创建本地分支不切换 HEAD；重复名称不覆盖现有 Ref，取消输入不写入，切换仓库后不会写错目标；更新后可在该 Commit 显示 Badge。不会向任何真实远端 Push，也不在 Kero 仓库创建/删除 Tag；Mac 原生菜单检查目标身份，SSH 仅在获准隔离环境验证。
 
-**提交边界：** 指定 SHA 的本地分支/Tag 创建、菜单接线、测试与必要文案一次提交；删除被替代的冗余路径，不保留仅演示而不执行的正式产品菜单。
+**提交边界：** 指定 SHA 的本地分支/Tag 创建、菜单接线、测试、必要文案及 [Git 功能契约](../../../docs/features/git.md)一次提交；删除被替代的冗余路径，不保留仅演示而不执行的正式产品菜单。
