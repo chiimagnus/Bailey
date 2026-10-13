@@ -11,10 +11,6 @@ enum RemoteLifetimeCheck {
         }
     }
 
-    static func waitForRequest(_ semaphore: DispatchSemaphore) -> Bool {
-        semaphore.wait(timeout: .now() + 5) == .success
-    }
-
     static func readPacketData(_ handle: FileHandle) throws -> Data {
         func readExactly(_ count: Int) throws -> Data {
             var data = Data()
@@ -38,92 +34,6 @@ enum RemoteLifetimeCheck {
         return stride(from: 0, to: body.count, by: 4).map { index in
             body[index..<index + 4].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
         }
-    }
-
-    @MainActor
-    static func checkConcurrentForward(disconnect: Bool) async throws {
-        let directory = URL(fileURLWithPath: "/tmp/kero-forward-" + UUID().uuidString.prefix(8))
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
-            attributes: [.posixPermissions: 0o700])
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let path = directory.appendingPathComponent("control").path
-        let master = socket(AF_UNIX, SOCK_STREAM, 0)
-        precondition(master >= 0)
-        defer { close(master) }
-        var address = sockaddr_un()
-        address.sun_family = sa_family_t(AF_UNIX)
-        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
-        withUnsafeMutableBytes(of: &address.sun_path) {
-            $0.copyBytes(from: Array(path.utf8) + [0])
-        }
-        let bound = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(master, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-        precondition(bound == 0 && listen(master, 2) == 0)
-        let requested = DispatchSemaphore(value: 0)
-        let respond = DispatchSemaphore(value: 0)
-        let completed = DispatchSemaphore(value: 0)
-        Thread {
-            let client = accept(master, nil, nil)
-            precondition(client >= 0)
-            let handle = FileHandle(fileDescriptor: client, closeOnDealloc: true)
-            do {
-                let hello = try readPacket(handle)
-                precondition(hello == [1, 4])
-                try handle.write(contentsOf: words([8, 1, 4]))
-                let request = [UInt8](try readPacketData(handle))
-                precondition(request.count >= 12)
-                let type = request[0..<4].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
-                let requestID = request[4..<8].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
-                precondition(type == 0x10000006)
-                requested.signal()
-                precondition(respond.wait(timeout: .now() + 5) == .success)
-                try handle.write(contentsOf: words([8, 0x80000001, requestID]))
-                try handle.close()
-                completed.signal()
-            } catch { preconditionFailure("Controlled forward mux failed: \(error)") }
-        }.start()
-        let connection = RemoteConnection(user: "fixture", host: "invalid", port: 22,
-            controlSocket: URL(fileURLWithPath: path), sshPID: 0)
-        connection.markConnected()
-        let controller = connection.portForwards
-        let remotePort = try RemoteConnection.freeLocalPort()
-        let first = Task { try await controller.forward(remotePort: remotePort) }
-        let requestArrived = await Task.detached {
-            waitForRequest(requested)
-        }.value
-        precondition(requestArrived)
-        var repeated: Task<Int, Error>?
-        await withCheckedContinuation { continuation in
-            repeated = Task {
-                continuation.resume()
-                return try await controller.forward(remotePort: remotePort)
-            }
-        }
-        if disconnect { connection.markDisconnected(reason: "controlled pending forward") }
-        respond.signal()
-        let results = await (first.result, repeated!.result)
-        if disconnect {
-            for result in [results.0, results.1] {
-                guard case .failure(RemoteConnectionError.notConnected) = result else {
-                    preconditionFailure("Every pending waiter must reject a disconnected forward: \(result)")
-                }
-            }
-            precondition(controller.localPortsByRemote.isEmpty)
-        } else {
-            let firstPort = try results.0.get()
-            let repeatedPort = try results.1.get()
-            precondition(firstPort == remotePort && repeatedPort == remotePort)
-            precondition(controller.localPortsByRemote[remotePort] == remotePort)
-            let cachedPort = try await controller.forward(remotePort: remotePort)
-            precondition(cachedPort == remotePort)
-        }
-        precondition(completed.wait(timeout: .now() + 1) == .success)
-        var incoming = pollfd(fd: master, events: Int16(POLLIN), revents: 0)
-        precondition(poll(&incoming, 1, 100) == 0, "Concurrent forwarding must share one mux request")
-        print("PASS: concurrent forward waiters share one request and \(disconnect ? "all reject disconnect" : "reuse the published port")")
     }
 
     static func checkIndependentCommandDeadline() throws {
@@ -218,59 +128,18 @@ enum RemoteLifetimeCheck {
             user: "fixture", host: "invalid", port: 22,
             controlSocket: URL(fileURLWithPath: "/tmp/kero-no-such-control-socket"), sshPID: 0
         )
-        weak let releasedConnection = connection
-        weak let releasedController = connection!.portForwards
-        var controller: PortForwardController? = connection!.portForwards
-        precondition(controller === connection!.portForwards)
+        weak let released = connection
         var backend: SSHWorkspaceBackend? = connection!.workspaceBackend
         var liveness: SSHWorkspaceBackend? = connection!.livenessBackend
         connection = nil
-        precondition(releasedConnection != nil)
+        precondition(released != nil)
         backend = nil
-        precondition(releasedConnection != nil)
+        precondition(released != nil)
         liveness = nil
-        precondition(releasedConnection == nil)
-        do {
-            _ = try await controller!.forward(remotePort: 8000)
-            fatalError("Released connection must not forward")
-        } catch RemoteConnectionError.notConnected {}
-        controller = nil
-        precondition(releasedController == nil)
-        var second: RemoteConnection? = RemoteConnection(
-            user: "fixture", host: "invalid", port: 22,
-            controlSocket: URL(fileURLWithPath: "/tmp/kero-no-such-control-socket"), sshPID: 0
-        )
-        weak let secondConnection = second
-        weak let secondController = second!.portForwards
-        second!.markConnected()
-        second!.markDisconnected(reason: "lifetime check without network")
-        precondition(second!.portForwards.localPortsByRemote.isEmpty)
-        second = nil
-        precondition(secondConnection == nil && secondController == nil)
+        precondition(released == nil)
         withExtendedLifetime(backend) {}
         withExtendedLifetime(liveness) {}
-        print("PASS: connection-owned controller, request-owned backends, weak release and unavailable forwarding")
+        print("PASS: SSH backend references own the connection until release")
         try await checkMasterExitRace()
-        try await checkConcurrentForward(disconnect: false)
-        try await checkConcurrentForward(disconnect: true)
-        let arguments = CommandLine.arguments
-        if arguments.count == 4, let remotePort = Int(arguments[3]) {
-            let live = RemoteConnection(
-                user: "", host: arguments[2], port: 22,
-                controlSocket: URL(fileURLWithPath: arguments[1]), sshPID: 0
-            )
-            live.markConnected()
-            async let first = live.portForwards.forward(remotePort: remotePort)
-            async let repeated = live.portForwards.forward(remotePort: remotePort)
-            let (firstPort, repeatedPort) = try await (first, repeated)
-            precondition(firstPort == repeatedPort)
-            precondition(live.portForwards.localPortsByRemote[remotePort] == firstPort)
-            let url = URL(string: "http://127.0.0.1:\(firstPort)/kero-lifetime-fixture-does-not-exist")!
-            let (_, response) = try await URLSession.shared.data(from: url)
-            precondition((response as? HTTPURLResponse)?.statusCode == 404)
-            live.markDisconnected(reason: "records check; master still alive")
-            precondition(live.portForwards.localPortsByRemote.isEmpty)
-            print("PASS: concurrent forwarding reused actual loopback port \(firstPort), HTTP fixture reached; disconnect cleared records only")
-        }
     }
 }

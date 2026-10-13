@@ -27,7 +27,6 @@ enum WorkspaceLocation {
 enum RemoteConnectionError: Error, LocalizedError {
     case notConnected
     case commandFailed(status: Int32, message: String)
-    case unexpectedOutput(String)
     case socketPathTooLong(String)
 
     var errorDescription: String? {
@@ -38,8 +37,6 @@ enum RemoteConnectionError: Error, LocalizedError {
             return message.isEmpty
                 ? String(localized: "The remote command failed with status \(status).", table: "Workspace")
                 : message
-        case .unexpectedOutput(let output):
-            return String(localized: "Unexpected ssh output: \(output)", table: "Workspace")
         case .socketPathTooLong(let path):
             return String(localized: "The control socket path is too long: \(path)", table: "Workspace")
         }
@@ -75,7 +72,6 @@ final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunne
     var livenessBackend: SSHWorkspaceBackend {
         SSHWorkspaceBackend(runner: self, timeout: 3)
     }
-    lazy var portForwards = PortForwardController(connection: self)
     /// Remote working directory, filled in by the cwd probe.
     @Published var workingDirectory: String?
     /// The remote login shell's process id, found by the same probe. The Info
@@ -178,103 +174,6 @@ final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunne
             timeout: 5
         )
         return result.status == 0
-    }
-
-    /// Opens a local listener on 127.0.0.1 forwarding to `remotePort` on the
-    /// remote's own loopback, and returns the local port. Never binds 0.0.0.0.
-    /// The forward dies with the connection because the helper sets
-    /// `ControlPersist=no`.
-    ///
-    /// The local port is the remote number itself whenever this Mac has it
-    /// free. Dev servers such as Vite write their own port into the pages they
-    /// serve (`http://localhost:5173/@vite/client`), so a forward on any other
-    /// number loads the page but none of its scripts or live reload. Only when
-    /// that number is taken, or below 1024 where binding needs root, does Kero
-    /// fall back to a free port of its choosing.
-    ///
-    /// OpenSSH 10.2 rejects port 0 in a local forward specification ("Bad
-    /// local forwarding specification"), so Kero picks the free port itself
-    /// and names it explicitly. A successful `-O forward` prints nothing.
-    func forward(remotePort: Int) async throws -> Int {
-        guard state == .connected else { throw RemoteConnectionError.notConnected }
-        if (1024...65535).contains(remotePort),
-            RemoteCommands.isLocalPortFree(UInt16(remotePort))
-        {
-            do {
-                return try await requestForward(localPort: remotePort, remotePort: remotePort)
-            } catch RemoteConnectionError.commandFailed(_, let message) {
-                // Something took the port between the probe and ssh's bind.
-                // A random port still works for most servers, so try that
-                // rather than showing an error.
-                NSLog(
-                    "kero: remote connection %@ could not forward to local port %d (%@), using a free port",
-                    destination, remotePort, message
-                )
-            }
-        }
-        return try await requestForward(localPort: Self.freeLocalPort(), remotePort: remotePort)
-    }
-
-    private func requestForward(localPort: Int, remotePort: Int) async throws -> Int {
-        let specification = "127.0.0.1:\(localPort):127.0.0.1:\(remotePort)"
-        let result = await Self.runSSH(
-            arguments: controlArguments + ["-O", "forward", "-L", specification, destination],
-            stdin: nil,
-            timeout: 10
-        )
-        guard result.status == 0 else {
-            throw RemoteConnectionError.commandFailed(
-                status: result.status,
-                message: Self.text(result.stderr)
-            )
-        }
-        NSLog(
-            "kero: remote connection %@ forwarded remote port %d to 127.0.0.1:%d",
-            destination, remotePort, localPort
-        )
-        return localPort
-    }
-
-    /// Asks the kernel for an unused loopback port by binding it and letting
-    /// go. A race with another process is possible but the window is small and
-    /// ssh reports the collision rather than binding something unexpected.
-    nonisolated static func freeLocalPort() throws -> Int {
-        let descriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
-        guard descriptor >= 0 else {
-            throw RemoteConnectionError.unexpectedOutput(
-                "socket: \(String(cString: strerror(errno)))"
-            )
-        }
-        defer { Darwin.close(descriptor) }
-
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = 0
-        address.sin_addr.s_addr = INADDR_LOOPBACK.bigEndian
-        let bound = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard bound == 0 else {
-            throw RemoteConnectionError.unexpectedOutput(
-                "bind: \(String(cString: strerror(errno)))"
-            )
-        }
-        var resolved = sockaddr_in()
-        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-        let named = withUnsafeMutablePointer(to: &resolved) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.getsockname(descriptor, $0, &length)
-            }
-        }
-        guard named == 0 else {
-            throw RemoteConnectionError.unexpectedOutput(
-                "getsockname: \(String(cString: strerror(errno)))"
-            )
-        }
-        return Int(UInt16(bigEndian: resolved.sin_port))
     }
 
     /// Runs one command on the remote over the shared channel.

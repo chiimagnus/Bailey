@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import XCTest
 @testable import kero
@@ -35,32 +34,34 @@ final class RemoteLifetimeTests: XCTestCase {
     }
 
     @MainActor
-    func testConnectionOwnsControllerAndBackendsOwnConnectionLifetime() async throws {
+    func testBackendsRetainConnectionAndDisconnectedState() {
         var connection: RemoteConnection? = RemoteConnection(
             user: "fixture", host: "invalid", port: 22,
             controlSocket: URL(fileURLWithPath: "/tmp/kero-no-such-control-socket"), sshPID: 0
         )
+        XCTAssertEqual(connection?.workspaceIdentity, "fixture@invalid")
+        let second = RemoteConnection(
+            user: "fixture", host: "invalid", port: 2222,
+            controlSocket: URL(fileURLWithPath: "/tmp/kero-another-socket"), sshPID: 0
+        )
+        XCTAssertEqual(second.workspaceIdentity, "fixture@invalid:2222")
+        XCTAssertNotEqual(connection?.workspaceIdentity, second.workspaceIdentity)
+
+        connection!.markConnected()
+        XCTAssertEqual(connection?.state, .connected)
+        connection!.markDisconnected(reason: "controlled disconnection")
+        XCTAssertEqual(connection?.state, .disconnected)
+        connection!.markConnected()
+        XCTAssertEqual(connection?.state, .connected)
+
         weak let releasedConnection = connection
-        weak let releasedController = connection!.portForwards
-        var controller: PortForwardController? = connection!.portForwards
         var backend: SSHWorkspaceBackend? = connection!.workspaceBackend
         var liveness: SSHWorkspaceBackend? = connection!.livenessBackend
-
-        XCTAssertTrue(controller === connection!.portForwards)
         connection = nil
         XCTAssertNotNil(releasedConnection)
         backend = nil
         XCTAssertNotNil(releasedConnection)
         liveness = nil
         XCTAssertNil(releasedConnection)
-
-        do {
-            _ = try await controller!.forward(remotePort: 8000)
-            XCTFail("Released connection must reject forwarding")
-        } catch RemoteConnectionError.notConnected {}
-        controller = nil
-        XCTAssertNil(releasedController)
-        withExtendedLifetime(backend) {}
-        withExtendedLifetime(liveness) {}
     }
 }
