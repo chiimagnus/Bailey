@@ -29,13 +29,13 @@
 
 - 任务：`P5-T3`
 - 严重级别：`High`
-- 状态：`Open`
+- 状态：`Resolved`
 - 位置：`kero/App/keroApp.swift:WindowRootView.onDisappear + kero/Workspace/TerminalManager.swift:windowClosed`
 - 摘要：`单独关闭窗口缺少保存失败时的预关闭拦截`
 - 风险：`关闭一个窗口不是全 App 退出；当前 TerminalManager.saveBeforeTermination 只处理终止进程，单窗关闭时未保存内容或写入失败可能丢失，docs/EDITOR.md 已承认缺口`
 - 预期修复：`后续单独设计窗口关闭前的异步保存及失败阻止关闭，复用既有 saveBeforeTermination/ProjectCloseConfirmation 合理职责，避免增加第二套窗口 owner`
 - 验证：`新增针对两窗口、未保存文件、保存失败、取消、窗口保持可见与 SSH 断开的真实 UI/进程验收；现有 89 XCTest 不含该完整路径`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`085849b: 原生 NSWindow+ContentView 的失败保存测试修复前红：保存拒绝仍关闭窗口；修复后等待同一窗口所有脏文件真实 save，失败不关闭，二次关闭+保存成功后才退出；覆盖重复关闭只发起一次写入、SwiftUI 宿主重挂载和原 windowWillClose delegate 链，独立 1/1、全量 94/94，Debug/Release 构建并严格验签。后续再测最终 95/95。`
 
 
 ## 发现 F-01
@@ -93,9 +93,9 @@
 | --- | --- | --- | --- |
 | P5-T1 | `ddc4333`，后审修复 `5edfccd` | `DockNode` 单树，`WorkspaceDockView` 内共享 PaneTab 挂载按稳定 ID 区分；Full ContentView Files A→B→A 复现红绿与真实磁盘内容验收（F-01）。 | 原提交遗漏关键交互身份约束，已修复 |
 | P5-T2 | `134ac76` | Project/PaneTab `@Observable`，原 `projectObservations` 已消失；关闭 Sheet 由 WorkspaceNativeDialogs/ProjectCloseConfirmation 驱动；PaneRetentionTests 核查原生按钮行为。 | 当前使用；旧观察中继已删除 |
-| P5-T3 | `3918150` | `TerminalManager` 持有每窗口状态，WindowRoot `@State`；项目/原生选择器入口真实消费。 | 唯一 owner，未新增并行 WindowManager |
+| P5-T3 | `3918150`，单窗关闭后审修复 `085849b` | `TerminalManager` 持有每窗口状态，WindowRoot `@State`；项目/原生选择器实际接入。后审以真实 NSWindow 实证关闭保存失败会丢窗口，现已通过共用窗口保存方法和原生 windowShouldClose 拦截，失败保留缓冲、成功再关闭。 | F-02 已解决；唯一 owner，未新增平行 WindowManager |
 | P5-T4 | 与 P5-T3 同提交 `3918150`，无第二份独立实现提交 | `WindowRootView.focusedSceneValue(keroManager)` 与 `KeroCommands.@FocusedValue` 可达；新增独立双 `NSWindow+ContentView` 的 manager/编辑器与关闭快照隔离测试。 | 源码可达；真正菜单点击与多窗口焦点自动化未覆盖 |
 | P5-T5 | `998b249` | `TabSwitcherController` 和 FPSCounter Observation 由 ContentView/WorkspaceChrome 消费；现有 PaneRetentionTests 覆盖切换器关键状态。 | 仍可达，未保留旧 ObservableObject |
 | P5-T6 | `6b3081b`，`3d72aff` | 删除 Pierre 源码、包依赖、WebKit Diff，使用当前 STTextView/原生 Diff，DiffTabTests 覆盖渲染/分栏/撤销/保存；后续 `9202ffa` 补水平同步。 | 新路径确实在用，旧渲染退出 |
 
-**阶段门槛**：视图身份关键反例已修复，窗口红色关闭、批量取消的历史数据风险在原计划明确列为非目标，不能谎称已解决；完整原生菜单／真正端到端仍未验收。
+**阶段门槛**：视图身份 A→B→A 和单独窗口原生关闭失败保护均已修复，后者测试修复前红、修复后绿且经完整工作区验证；`make test` 95/95。批量关闭中途取消无法回滚已关闭标签的旧产品行为仍存在，完整原生菜单／真正 E2E 仍未验收。
