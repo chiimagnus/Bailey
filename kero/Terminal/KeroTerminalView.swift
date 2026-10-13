@@ -401,7 +401,7 @@ final class KeroTerminalProgressBarView: NSView {
         reportTimer = Timer.scheduledTimer(
             withTimeInterval: 15, repeats: false
         ) { [weak self] _ in
-            self?.clearReport()
+            MainActor.assumeIsolated { self?.clearReport() }
         }
     }
 

@@ -25,7 +25,7 @@ struct ProjectsPanelView: View {
                     ForEach(Array(manager.projects.enumerated()), id: \.element.id) { index, project in
                         SidebarProjectRow(
                             project: project,
-                            owningWindow: { [weak manager] in manager?.attachedWindow },
+                            owningWindow: { manager.attachedWindow },
                             index: index,
                             isSelected: project.id == manager.selectedProjectID,
                             select: { manager.selectedProjectID = project.id },

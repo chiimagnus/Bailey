@@ -4,7 +4,7 @@
 import Darwin
 import Foundation
 
-struct KeroSSHRequest: Codable, Sendable {
+nonisolated struct KeroSSHRequest: Codable, Sendable {
     let token: String
     let terminalID: String
     let user: String
@@ -13,7 +13,7 @@ struct KeroSSHRequest: Codable, Sendable {
     let pid: Int32
 }
 
-struct KeroSSHResponse: Codable, Sendable {
+nonisolated struct KeroSSHResponse: Codable, Sendable {
     let socket: String?
 }
 
@@ -23,7 +23,7 @@ enum KeroSSHWireError: Error {
 
 /// A private, one-shot SSH handoff socket. This is only for an interactive
 /// `ssh` started inside a Kero terminal; it cannot run commands or inspect panes.
-final class KeroSSHSocketServer: @unchecked Sendable {
+nonisolated final class KeroSSHSocketServer: @unchecked Sendable {
     typealias Handler = @Sendable (
         KeroSSHRequest,
         @escaping @Sendable (KeroSSHResponse) -> Void

@@ -34,6 +34,36 @@ final class RemoteLifetimeTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(started), 0.4)
     }
 
+    func testPrivateSSHSocketHandoffCompletesAcrossWorkerAndMainActor() async throws {
+        let path = "/tmp/kero-ssh-test-\(UUID().uuidString.prefix(8)).sock"
+        let listener = try KeroSSHSocketServer(path: path) { request, reply in
+            Task { @MainActor in
+                reply(KeroSSHResponse(
+                    socket: request.token == "valid" && request.host == "fixture.invalid"
+                        ? "/tmp/fixture-master.sock" : nil
+                ))
+            }
+        }
+        let valid = KeroSSHRequest(
+            token: "valid", terminalID: UUID().uuidString,
+            user: "fixture", host: "fixture.invalid", port: 2222, pid: getpid()
+        )
+        let accepted = try await Task.detached {
+            try KeroSSHSocketServer.exchange(path: path, request: valid, timeout: 3)
+        }.value
+        XCTAssertEqual(accepted.socket, "/tmp/fixture-master.sock")
+
+        let rejected = KeroSSHRequest(
+            token: "invalid", terminalID: valid.terminalID,
+            user: valid.user, host: valid.host, port: valid.port, pid: valid.pid
+        )
+        let refused = try await Task.detached {
+            try KeroSSHSocketServer.exchange(path: path, request: rejected, timeout: 3)
+        }.value
+        XCTAssertNil(refused.socket)
+        withExtendedLifetime(listener) {}
+    }
+
     @MainActor
     func testSSHStateAndWorkingDirectoryAreObserved() async {
         let connection = RemoteConnection(
