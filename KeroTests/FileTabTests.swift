@@ -79,6 +79,11 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
 
 @MainActor
 final class FileTabTests: XCTestCase {
+    private func mountedEditor(in view: NSView) -> FocusReportingTextView? {
+        if let editor = view as? FocusReportingTextView { return editor }
+        return view.subviews.lazy.compactMap { self.mountedEditor(in: $0) }.first
+    }
+
     private func wait(_ condition: () async -> Bool) async throws {
         let deadline = Date().addingTimeInterval(5)
         while !(await condition()) {
@@ -160,6 +165,100 @@ final class FileTabTests: XCTestCase {
         try await wait { !project.tabs.contains(where: { $0.id == filePane.id }) }
         XCTAssertFalse(file.isDirty)
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "saved when closing the file")
+    }
+
+    func testFilesPanelABATabSwitchKeepsEachNativeEditorAndCorrectSaveTarget() async throws {
+        let snapshots = SessionStore.load()
+        let histories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(snapshots)
+            TerminalHistoryStore.save(histories)
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let aPath = root.appendingPathComponent("A.swift")
+        let bPath = root.appendingPathComponent("B.swift")
+        try "let fileA = \"only A\"\n".write(to: aPath, atomically: true, encoding: .utf8)
+        try "let fileB = \"only B\"\n".write(to: bPath, atomically: true, encoding: .utf8)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1080, height: 700),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+
+        // Same entry point used by a file row in the real Files panel.
+        manager.openFile(aPath.path)
+        let a = try XCTUnwrap(project.tabs.compactMap {
+            if case .file(let file) = $0.content, file.path == aPath.path { return file }
+            return nil
+        }.first)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.mountedEditor(in: host)?.text == a.text
+                && a.editorView?.window === window
+        }
+        let aEditor = try XCTUnwrap(mountedEditor(in: host))
+        XCTAssertEqual(aEditor.text, "let fileA = \"only A\"\n")
+
+        manager.openFile(bPath.path)
+        let b = try XCTUnwrap(project.tabs.compactMap {
+            if case .file(let file) = $0.content, file.path == bPath.path { return file }
+            return nil
+        }.first)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.mountedEditor(in: host)?.text == b.text
+                && b.editorView?.window === window
+        }
+        let bEditor = try XCTUnwrap(mountedEditor(in: host))
+        XCTAssertFalse(aEditor === bEditor)
+        XCTAssertEqual(bEditor.text, "let fileB = \"only B\"\n")
+
+        manager.openFile(aPath.path)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.mountedEditor(in: host) === aEditor
+                && a.editorView?.window === window
+        }
+        XCTAssertEqual(aEditor.text, "let fileA = \"only A\"\n")
+        XCTAssertEqual(a.text, aEditor.text)
+
+        // Editing after switching back must never modify B's model or bytes.
+        aEditor.insertText("// edited A\n", replacementRange: NSRange(location: 0, length: 0))
+        try await wait { a.isDirty }
+        XCTAssertEqual(b.text, "let fileB = \"only B\"\n")
+        manager.openFile(bPath.path)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.mountedEditor(in: host) === bEditor && !a.isDirty
+        }
+        XCTAssertEqual(try String(contentsOf: aPath, encoding: .utf8),
+                       "// edited A\nlet fileA = \"only A\"\n")
+        XCTAssertEqual(try String(contentsOf: bPath, encoding: .utf8),
+                       "let fileB = \"only B\"\n")
+
+        bEditor.insertText("// edited B\n", replacementRange: NSRange(location: 0, length: 0))
+        try await wait { b.isDirty }
+        manager.openFile(aPath.path)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.mountedEditor(in: host) === aEditor && !b.isDirty
+        }
+        XCTAssertEqual(try String(contentsOf: aPath, encoding: .utf8),
+                       "// edited A\nlet fileA = \"only A\"\n")
+        XCTAssertEqual(try String(contentsOf: bPath, encoding: .utf8),
+                       "// edited B\nlet fileB = \"only B\"\n")
     }
 
     func testNativeEditorResignFirstResponderWritesRealFile() async throws {

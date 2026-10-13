@@ -503,6 +503,7 @@ private struct DockTabGroupView: View {
                     onNewBrowserTab: { manager.newBrowserTab(initialURL: $0) },
                     onNewFileTab: { manager.openFile($0) }
                 )
+                .id(tab.id)
             }
         case nil:
             emptyGroup
