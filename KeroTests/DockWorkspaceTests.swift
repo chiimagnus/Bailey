@@ -1,9 +1,59 @@
 import CoreGraphics
+import Observation
 import XCTest
 @testable import kero
 
 @MainActor
 final class DockWorkspaceTests: XCTestCase {
+    func testNestedLayoutObservationAndDragCancelPreserveUniqueOwners() async throws {
+        let project = Project(fallbackName: "dock observation", workspaceConfiguration: .standard)
+        let browser = BrowserTab(initialFocus: .none)
+        let pane = PaneTab(content: .browser(browser))
+        project.append(pane)
+        let webView = browser.webView
+        let dock = project.dock
+        let source = try XCTUnwrap(dock.group(containing: .tab(pane.id)))
+        let destination = try XCTUnwrap(dock.group(containing: .files))
+        let rootChanged = expectation(description: "Nested Dock root is observed without Project relay")
+        withObservationTracking({ _ = project.dock.visibleItems }) { rootChanged.fulfill() }
+        var snapshotChanges = 0
+        project.onSnapshotChange = { snapshotChanges += 1 }
+        XCTAssertTrue(dock.move(.tab(pane.id), into: destination.id, edge: .bottom))
+        await fulfillment(of: [rootChanged], timeout: 1)
+        XCTAssertGreaterThan(snapshotChanges, 0)
+        XCTAssertEqual(dock.tabOrder, [pane.id])
+        XCTAssertTrue(browser.webView === webView)
+
+        let dragging = DockTabDragCoordinator()
+        let moved = try XCTUnwrap(dock.group(containing: .tab(pane.id)))
+        let frame = CGRect(x: 100, y: 100, width: 300, height: 400)
+        let positionChanged = expectation(description: "Only real drag preview changes are observed")
+        withObservationTracking({ _ = dragging.position }) { positionChanged.fulfill() }
+        dragging.setFrames(groups: [moved.id: frame])
+        dragging.setFrames(tabs: [.tab(pane.id): CGRect(x: 100, y: 100, width: 120, height: 38)])
+        XCTAssertNil(dragging.position)
+        dragging.update(.files, at: CGPoint(x: 101, y: 300), dock: dock)
+        await fulfillment(of: [positionChanged], timeout: 1)
+        XCTAssertEqual(dragging.position?.destination, moved.id)
+        XCTAssertEqual(dragging.position?.edge, .left)
+        dragging.cancel()
+        XCTAssertNil(dragging.position)
+        XCTAssertTrue(dock.visibleItems.contains(.files))
+        dragging.update(.files, at: CGPoint(x: 160, y: 118), dock: dock)
+        XCTAssertEqual(dragging.position?.index, 1)
+        XCTAssertEqual(dragging.insertionX(in: moved), 220)
+        dragging.update(.files, at: CGPoint(x: 159, y: 118), dock: dock)
+        XCTAssertEqual(dragging.position?.index, 0)
+        XCTAssertEqual(dragging.insertionX(in: moved), 100)
+        dragging.finish(project: project)
+        XCTAssertNil(dragging.position)
+        XCTAssertEqual(dock.root.groups.flatMap(\.items).filter { $0 == .files }.count, 1)
+        XCTAssertEqual(dock.group(containing: .files)?.id, moved.id)
+        XCTAssertNotEqual(source.id, moved.id)
+        XCTAssertTrue(project.tabs.first === pane)
+        XCTAssertTrue(browser.webView === webView)
+    }
+
     func testDefaultLayoutAndDropHitTesting() throws {
         let frame = CGRect(x: 10, y: 20, width: 300, height: 300)
         XCTAssertEqual(DockDropHitTest.edge(at: CGPoint(x: 12, y: 170), in: frame), .left)

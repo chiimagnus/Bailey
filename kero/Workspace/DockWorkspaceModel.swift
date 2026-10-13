@@ -1,6 +1,6 @@
-import Combine
 import CoreGraphics
 import Foundation
+import Observation
 
 /// One movable workspace tab. A project owns its live editor/terminal tabs;
 /// this model owns only where each tab is displayed.
@@ -370,12 +370,13 @@ indirect enum DockSavedNode: Codable {
 }
 
 @MainActor
-final class DockWorkspaceModel: ObservableObject {
+@Observable
+final class DockWorkspaceModel {
     let configuration: DockWorkspaceConfiguration
-    @Published private(set) var root: DockNode {
+    private(set) var root: DockNode {
         didSet { onSnapshotChange?() }
     }
-    var onSnapshotChange: (() -> Void)?
+    @ObservationIgnored var onSnapshotChange: (() -> Void)?
 
     init(configuration: DockWorkspaceConfiguration = .standard) {
         self.configuration = configuration

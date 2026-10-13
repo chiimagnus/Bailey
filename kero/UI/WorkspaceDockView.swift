@@ -1,12 +1,13 @@
 import AppKit
-import Combine
+import Observation
 import SwiftUI
 
 /// Window-wide docking gesture. One hit-tested destination and one preview:
 /// the pointer's proximity to a pane edge determines the split, while the
 /// title strip and the interior merge into the existing tab group.
 @MainActor
-final class DockTabDragCoordinator: ObservableObject {
+@Observable
+final class DockTabDragCoordinator {
     struct Position {
         let item: DockItem
         let location: CGPoint
@@ -15,9 +16,9 @@ final class DockTabDragCoordinator: ObservableObject {
         let index: Int?
     }
 
-    @Published private(set) var position: Position?
-    private var groups: [UUID: CGRect] = [:]
-    private var tabs: [DockItem: CGRect] = [:]
+    private(set) var position: Position?
+    @ObservationIgnored private var groups: [UUID: CGRect] = [:]
+    @ObservationIgnored private var tabs: [DockItem: CGRect] = [:]
 
     func cancel() {
         // Layout preferences may update before project-switch cancellation;
@@ -94,7 +95,7 @@ struct WorkspaceDockView: View {
     private let themeChanges = Theme.changes
     @ObservedObject var manager: TerminalManager
     let git: GitStatusModel
-    @StateObject private var dragging = DockTabDragCoordinator()
+    @State private var dragging = DockTabDragCoordinator()
 
     var body: some View {
         let _ = themeChanges.revision
@@ -173,7 +174,7 @@ private struct DockTreeView: View {
     @ObservedObject var project: Project
     @ObservedObject var manager: TerminalManager
     let git: GitStatusModel
-    @ObservedObject var dragging: DockTabDragCoordinator
+    let dragging: DockTabDragCoordinator
 
     @State private var liveFraction: Double?
 
@@ -265,7 +266,7 @@ private struct DockTabGroupView: View {
     @ObservedObject var project: Project
     @ObservedObject var manager: TerminalManager
     let git: GitStatusModel
-    @ObservedObject var dragging: DockTabDragCoordinator
+    let dragging: DockTabDragCoordinator
     private let settings = AppSettings.shared
     @State private var renamingTabID: UUID?
     @State private var showingPanelPicker = false

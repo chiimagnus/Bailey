@@ -299,6 +299,57 @@ final class SessionStoreTests: XCTestCase {
         let encoded = try JSONEncoder().encode(DockSavedNode(migrated, tabIDs: [tabID]))
         XCTAssertFalse(String(decoding: encoded, as: UTF8.self).contains("info"))
 
+        guard KeroInstanceMode.isIsolated else { return XCTFail("Snapshot verification requires isolated storage") }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: AppIdentity.bundleIdentifier + ".isolated-ui-test"))
+        let previous = defaults.data(forKey: "workspaceSnapshot")
+        defer {
+            if let previous { defaults.set(previous, forKey: "workspaceSnapshot") }
+            else { defaults.removeObject(forKey: "workspaceSnapshot") }
+        }
+        let firstTab = Project.TabSnapshot(content: .file(path: "/fixture/first", editorState: nil), customName: "First")
+        let secondTab = Project.TabSnapshot(content: .browser(url: "https://example.invalid"), customName: "Second")
+        let secondGroupID = UUID()
+        let oldProject = Project(
+            customName: "Legacy", tabs: [firstTab], selectedTabIndex: 0, dock: legacy
+        )
+        let currentProject = Project(
+            customName: "Current", tabs: [secondTab], selectedTabIndex: 0,
+            dock: .group(DockSavedGroup(id: secondGroupID, items: [.projects, .tab(0)], selected: .tab(0)))
+        )
+        let app = AppSnapshot(windows: [
+            SessionSnapshot(projects: [oldProject], selectedProjectIndex: 0),
+            SessionSnapshot(projects: [currentProject], selectedProjectIndex: 0),
+        ])
+        defaults.set(try JSONEncoder().encode(app), forKey: "workspaceSnapshot")
+        let windows = SessionStore.load()
+        XCTAssertEqual(windows.count, 2)
+        XCTAssertEqual(windows.map(\.selectedProjectIndex), [0, 0])
+        let loadedOld = try XCTUnwrap(windows.first?.projects.first)
+        let loadedCurrent = try XCTUnwrap(windows.last?.projects.first)
+        XCTAssertEqual(loadedOld.customName, "Legacy")
+        XCTAssertEqual(loadedCurrent.customName, "Current")
+        XCTAssertEqual(loadedOld.tabs.first?.customName, "First")
+        XCTAssertEqual(loadedCurrent.tabs.first?.customName, "Second")
+        guard case .file(let restoredPath, _) = loadedOld.tabs.first?.content,
+              case .browser(let restoredURL) = loadedCurrent.tabs.first?.content else {
+            return XCTFail("Both windows must retain their original content types")
+        }
+        XCTAssertEqual(restoredPath, "/fixture/first")
+        XCTAssertEqual(restoredURL, "https://example.invalid")
+        XCTAssertEqual(loadedOld.selectedTabIndex, 0)
+        XCTAssertEqual(loadedCurrent.selectedTabIndex, 0)
+        let restoredLegacy = DockWorkspaceModel()
+        restoredLegacy.restore(loadedOld.dock, tabIDs: [tabID])
+        XCTAssertEqual(restoredLegacy.root.groups.first?.id, groupID)
+        XCTAssertEqual(restoredLegacy.root.groups.first?.items, [.files, .tab(tabID), .git])
+        XCTAssertEqual(restoredLegacy.root.groups.first?.selected, .files)
+        let currentTabID = UUID()
+        let restoredCurrent = loadedCurrent.dock.restore(tabIDs: [currentTabID])
+        XCTAssertEqual(restoredCurrent.groups.first?.id, secondGroupID)
+        XCTAssertEqual(restoredCurrent.groups.first?.selected, .tab(currentTabID))
+        let currentData = try JSONEncoder().encode(restoredLegacy.snapshot(tabIDs: [tabID]))
+        XCTAssertFalse(String(decoding: currentData, as: UTF8.self).contains("info"))
+
         for invalid in ["{}", "{\"columns\":[]}", "{\"session\":{\"workingDirectory\":\"/fixture\"}}"] {
             XCTAssertThrowsError(try JSONDecoder().decode(Project.TabSnapshot.self, from: Data(invalid.utf8)))
         }

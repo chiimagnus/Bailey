@@ -69,15 +69,12 @@ struct SourceTextEditor: NSViewRepresentable {
         if let textView = scrollView.documentView as? FocusReportingTextView {
             textView.onBecomeFirstResponder = onFocused
             apply(to: textView, scrollView: scrollView)
-            if isFocused {
-                DispatchQueue.main.async { [weak textView] in
-                    textView?.window?.makeFirstResponder(textView)
-                }
-            }
         }
         context.coordinator.wasFocused = isFocused
         file.editorView = scrollView
-        return SourceEditorContainer(scrollView: scrollView)
+        let container = SourceEditorContainer(scrollView: scrollView)
+        container.focusOnAttach = isFocused
+        return container
     }
 
     private func makeScrollView(coordinator: Coordinator) -> NSScrollView {
@@ -259,6 +256,7 @@ struct SourceTextEditor: NSViewRepresentable {
                     guard let self, let file = self.file,
                           file.editorCoordinator === self,
                           let clipView = scrollView?.contentView else { return }
+                    guard scrollView?.window != nil else { return }
                     file.editorState.scrollX = clipView.bounds.origin.x
                     file.editorState.scrollY = clipView.bounds.origin.y
                 }
@@ -290,6 +288,7 @@ struct SourceTextEditor: NSViewRepresentable {
 
 private final class SourceEditorContainer: NSView {
     let scrollView: NSScrollView
+    var focusOnAttach = false
 
     init(scrollView: NSScrollView) {
         self.scrollView = scrollView
@@ -299,6 +298,15 @@ private final class SourceEditorContainer: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard focusOnAttach, let window,
+              let editor = scrollView.documentView as? FocusReportingTextView else { return }
+        focusOnAttach = false
+        window.makeFirstResponder(editor)
+        (scrollView as? RestorableScrollView)?.restoreScrollAfterFocus()
+    }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
@@ -331,6 +339,30 @@ private final class RestorableScrollView: NSScrollView {
     var restoreOnFirstLayout: (() -> Void)?
     private var lastViewportSize: NSSize = .zero
     private var geometryUpdateScheduled = false
+    private var detachedScrollOrigin: NSPoint?
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if window != nil, newWindow == nil, restoreOnFirstLayout == nil {
+            let offset = contentView.bounds.origin
+            detachedScrollOrigin = offset
+            restoreOnFirstLayout = { [weak self] in
+                guard let self else { return }
+                let clip = self.contentView
+                clip.setBoundsOrigin(offset)
+                self.reflectScrolledClipView(clip)
+                self.documentView?.needsLayout = true
+            }
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    func restoreScrollAfterFocus() {
+        guard let detachedScrollOrigin else { return }
+        self.detachedScrollOrigin = nil
+        let clip = contentView
+        clip.setBoundsOrigin(detachedScrollOrigin)
+        reflectScrolledClipView(clip)
+    }
 
     override func layout() {
         super.layout()
@@ -339,7 +371,8 @@ private final class RestorableScrollView: NSScrollView {
             lastViewportSize = viewportSize
             scheduleEditorGeometryUpdate()
         }
-        if bounds.width > 0, bounds.height > 0, let restore = restoreOnFirstLayout {
+        if window != nil, bounds.width > 0, bounds.height > 0,
+           let restore = restoreOnFirstLayout {
             restoreOnFirstLayout = nil
             restore()
         }

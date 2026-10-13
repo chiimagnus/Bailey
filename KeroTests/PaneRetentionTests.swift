@@ -244,6 +244,70 @@ final class PaneRetentionTests: XCTestCase {
         try await settle { releasedFile == nil && currentEditor == nil }
     }
 
+    func testObservedDockMoveReparentsRealEditorAndPreservesUndoAndScroll() async throws {
+        let previousWindows = SessionStore.load()
+        let previousHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(previousWindows)
+            TerminalHistoryStore.save(previousHistories)
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("dock.txt")
+        let original = (0..<400).map { "Line \($0) 中文😀\n" }.joined()
+        try original.write(to: path, atomically: true, encoding: .utf8)
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([path])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let pane = try XCTUnwrap(project.selectedTab)
+        guard case .file(let file) = pane.content else { return XCTFail("Expected a file") }
+        let git = GitStatusModel()
+        let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: git))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        defer { window.close() }
+        try await settle { file.editorView?.window === window }
+        let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        let editor = try XCTUnwrap(scroll.documentView as? FocusReportingTextView)
+        window.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        editor.insertText("E", replacementRange: NSRange(location: 0, length: 0))
+        try await settle { file.isDirty }
+        // Keep the insertion point inside the viewport while checking native reparenting.
+        editor.textSelection = NSRange(location: (original as NSString).range(of: "Line 40").location + 1, length: 0)
+        scroll.contentView.setBoundsOrigin(NSPoint(x: 0, y: 900))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let scrollBefore = scroll.contentView.bounds.origin
+        let heightBefore = scroll.bounds.height
+        let target = try XCTUnwrap(project.dock.group(containing: .files))
+        XCTAssertTrue(project.dock.move(.tab(pane.id), into: target.id, edge: .bottom))
+        try await settle {
+            file.editorView === scroll && scroll.window === window
+                && scroll.bounds.height > 0 && scroll.bounds.height < heightBefore
+        }
+        XCTAssertEqual(project.dock.tabOrder, [pane.id])
+        XCTAssertEqual(project.selectedTabID, pane.id)
+        XCTAssertTrue(scroll.documentView === editor)
+        try await settle { window.firstResponder === editor }
+        XCTAssertEqual(scroll.contentView.bounds.origin, scrollBefore)
+        let undo = try XCTUnwrap(editor.undoManager)
+        XCTAssertTrue(undo.canUndo)
+        undo.undo()
+        try await settle { file.text == original }
+        XCTAssertFalse(file.isDirty)
+        undo.redo()
+        try await settle { file.text == "E" + original }
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), original)
+    }
+
     func testTerminalAndFindObservationPreserveNativeSurfaceIdentity() async throws {
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }

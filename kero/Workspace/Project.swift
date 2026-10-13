@@ -69,14 +69,10 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// Keep dirty indicators and tab titles current in existing SwiftUI views;
     /// persisted fields notify the window separately.
     private var tabObservations: [UUID: AnyCancellable] = [:]
-    private var dockObservation: AnyCancellable?
 
     init(fallbackName: String, workspaceConfiguration: DockWorkspaceConfiguration) {
         self.fallbackName = fallbackName
         dock = DockWorkspaceModel(configuration: workspaceConfiguration)
-        dockObservation = dock.objectWillChange.sink { [weak self] _ in
-            self?.objectWillChange.send()
-        }
         dock.onSnapshotChange = { [weak self] in self?.onSnapshotChange?() }
     }
 

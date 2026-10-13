@@ -76,14 +76,20 @@ final class DiffTabTests: XCTestCase {
         return view.subviews.lazy.compactMap { self.findWebView(in: $0) }.first
     }
 
-    private func wait(_ condition: () async -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
-        let deadline = Date().addingTimeInterval(10)
+    private func wait(
+        _ condition: () async -> Bool,
+        pollingInterval: Duration = .milliseconds(15),
+        timeout: TimeInterval = 10,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
         while !(await condition()) {
             if Date() >= deadline {
                 XCTFail("Native or backend operation did not settle", file: file, line: line)
                 throw WorkspaceError.timedOut
             }
-            try await Task.sleep(for: .milliseconds(15))
+            try await Task.sleep(for: pollingInterval)
         }
     }
 
@@ -361,6 +367,9 @@ final class DiffTabTests: XCTestCase {
         let webView = try XCTUnwrap(findWebView(in: try XCTUnwrap(mounted)))
         let locateEditor = """
         (() => {
+          // Offscreen XCTest windows do not guarantee a paint. Force the
+          // virtualized renderer's viewport geometry to become current.
+          document.getElementById('diff-container')?.getBoundingClientRect();
           const find = root => {
             for (const node of root.querySelectorAll('*')) {
               if (node.getAttribute('contenteditable') === 'true') return node;
@@ -371,7 +380,11 @@ final class DiffTabTests: XCTestCase {
           return !!window.fixtureEditor?.querySelector('[data-char]')?.firstChild;
         })()
         """
-        try await wait { (try? await webView.evaluateJavaScript(locateEditor) as? Bool) == true }
+        // WebKit's 11 MB renderer can initialize slowly in an offscreen test
+        // host. Wait for real editable DOM instead of assuming a first paint.
+        try await wait({
+            (try? await webView.evaluateJavaScript(locateEditor) as? Bool) == true
+        }, pollingInterval: .milliseconds(100), timeout: 30)
         let input = try await webView.evaluateJavaScript("""
         \(locateEditor);
         (() => {
