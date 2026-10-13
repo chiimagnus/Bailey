@@ -88,14 +88,9 @@ final class PaneTab: nonisolated ObservableObject, nonisolated Identifiable {
         didSet { if contextSession?.id != oldValue?.id { onSnapshotChange?() } }
     }
     var onSnapshotChange: (() -> Void)?
-    private var dirtyObservation: AnyCancellable?
 
     init(content: PaneContent) {
         self.content = content
-        guard case .diff(let diff) = content else { return }
-        dirtyObservation = diff.$isDirty.removeDuplicates().dropFirst()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     var displayTitle: String {

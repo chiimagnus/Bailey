@@ -196,7 +196,7 @@ private struct BrowserTabLabel: View {
 }
 
 private struct DiffTabLabel: View {
-    @ObservedObject var diff: DiffTab
+    let diff: DiffTab
     var customTitle: String?
     let isSelected: Bool
     let select: () -> Void

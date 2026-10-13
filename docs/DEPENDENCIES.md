@@ -36,6 +36,14 @@ Ghostty 通过 Xcode Package Dependencies 直接引用 [`egoist-labs/libghostty-
 
 全部问题被上游解决后，可撤销本地副本并改用固定版本的远程依赖；仍须运行上述验收。
 
+## Pierre Diff
+
+本地副本 `Vendor/PierreDiffsSwift` 基于上游 `1.5.0`，提交 `3713d29360b750d3d6146b187ff3b77b7d498fee`；保留原 MIT 许可证、资源和渲染逻辑。
+
+标签使用 `PierreMultiDiffSurface` 持有唯一 WKWebView 和协调器。SwiftUI 重挂载只借用这一份资源，不能在临时 View 拆除时执行 `cleanup`；标签与挂载引用释放后才清理。临时容器负责布局，只将有效尺寸交给长期 WebView，避免 SwiftUI 把它清零而丢失网页内滚动。
+
+此改动只涉及 `PierreMultiDiffView.swift` 与 `DiffWebViewCoordinator.swift` 的资源所有权和原生挂载，不改 Pierre 的 JavaScript 内核或输入内容。Kero 删除了额外的 NSHostingView 与外观转发，渲染器直接继承当前窗口外观。升级时核对上游是否已提供同等生命周期保证，并运行 `KeroTests/DiffTabTests`，检查真实内容、WebView 身份、滚动、编辑与撤销。上游解决后可撤销本地副本；不能只凭宿主对象相同就删除此修复。
+
 ## TSX 语法
 
 `.tsx` 使用独立的 TSX 解析器，不能用普通 TypeScript 解析器替代。

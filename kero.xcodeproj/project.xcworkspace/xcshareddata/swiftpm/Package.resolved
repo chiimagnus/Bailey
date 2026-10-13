@@ -1,5 +1,5 @@
 {
-  "originHash" : "20c334815152e7dc34deb6e5fa2245644384f5b413a7b5123c98f3a93f0d443d",
+  "originHash" : "c203cabf7ba675d79b6f343f8aab190fc61215feb726567b6356356cd477edfe",
   "pins" : [
     {
       "identity" : "coretextswift",
@@ -44,15 +44,6 @@
       "state" : {
         "branch" : "ce8d252",
         "revision" : "ce8d252c8fd53ea0b6960e02c423315eef11f141"
-      }
-    },
-    {
-      "identity" : "pierrediffsswift",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/egoist-labs/PierreDiffsSwift",
-      "state" : {
-        "revision" : "3713d29360b750d3d6146b187ff3b77b7d498fee",
-        "version" : "1.5.0"
       }
     },
     {

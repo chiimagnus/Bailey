@@ -4,37 +4,39 @@
 //
 
 import AppKit
-import Combine
 import Foundation
+import Observation
 import PierreDiffsSwift
 import SwiftUI
 
 /// Lightweight UI state that should follow Kero across launches without
 /// becoming a user-facing TOML setting.
 @MainActor
-private final class DiffViewPreferences: ObservableObject {
+@Observable
+final class DiffViewPreferences {
     static let shared = DiffViewPreferences()
 
     private static let layoutKey = "diffView.layout"
     private static let modeKey = "diffView.mode"
+    @ObservationIgnored private let defaults: UserDefaults
 
-    @Published var diffStyle: DiffStyle {
+    var diffStyle: DiffStyle {
         didSet {
-            UserDefaults.standard.set(diffStyle.rawValue, forKey: Self.layoutKey)
+            defaults.set(diffStyle.rawValue, forKey: Self.layoutKey)
         }
     }
 
-    @Published var prefersEditing: Bool {
+    var prefersEditing: Bool {
         didSet {
-            UserDefaults.standard.set(
+            defaults.set(
                 prefersEditing ? "edit" : "review",
                 forKey: Self.modeKey
             )
         }
     }
 
-    private init() {
-        let defaults = UserDefaults.standard
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         if let rawValue = defaults.string(forKey: Self.layoutKey),
            let style = DiffStyle(rawValue: rawValue) {
             diffStyle = style
@@ -45,40 +47,31 @@ private final class DiffViewPreferences: ObservableObject {
     }
 }
 
-/// Observable inputs for a diff tab's web view. Owned by `DiffTab` and also
-/// retained by the tab's long-lived hosting view. Its edit callbacks capture
+/// Observable inputs for a diff tab's web view. Owned by `DiffTab`.
+/// Its edit callbacks capture
 /// the owning `DiffTab` weakly so that view retention cannot leak the tab.
 @MainActor
-final class DiffWebModel: nonisolated ObservableObject {
-    @Published var oldContent = ""
-    @Published var newContent = ""
-    @Published var fileName = ""
-    @Published var fileID = ""
-    @Published var canEdit = false
-    @Published var overflowMode: OverflowMode = .scroll
-    var onFileEditChange: ((String, String) -> Void)?
-    var onFileEditComplete: ((String, String) -> Void)?
+@Observable
+final class DiffWebModel {
+    var oldContent = ""
+    var newContent = ""
+    var fileName = ""
+    var fileID = ""
+    var canEdit = false
+    var overflowMode: OverflowMode = .scroll
+    @ObservationIgnored var onFileEditChange: ((String, String) -> Void)?
+    @ObservationIgnored var onFileEditComplete: ((String, String) -> Void)?
     /// The WKWebView renders blank until its JS bundle has drawn the diff;
     /// a skeleton covers it until the bridge reports ready.
-    @Published var isReady = false
-    /// Explicit appearance for the long-lived, separately hosted diff root.
-    /// Its NSHostingView is re-parented between SwiftUI containers, so relying
-    /// on an implicitly inherited colorScheme can leave WebKit one appearance
-    /// behind after macOS changes between light and dark.
-    @Published private(set) var usesDarkAppearance = false
-
-    func updateAppearance(_ appearance: NSAppearance) {
-        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        guard usesDarkAppearance != isDark else { return }
-        usesDarkAppearance = isDark
-    }
+    var isReady = false
 }
 
 /// A git diff opened as a tab from the git panel. Loads both sides of the
 /// change (via `git show` / the worktree) so they survive tab switches;
 /// reloads when the view reappears.
 @MainActor
-final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
+@Observable
+final class DiffTab: nonisolated Identifiable {
     nonisolated let id = UUID()
 
     /// Absolute repository root the diff runs in.
@@ -90,7 +83,7 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     var untracked: Bool {
         didSet { if untracked != oldValue { onSnapshotChange?() } }
     }
-    var onSnapshotChange: (() -> Void)?
+    @ObservationIgnored var onSnapshotChange: (() -> Void)?
     /// Historical commit shown by this tab. Nil keeps the existing
     /// index/worktree behavior.
     let commitHash: String?
@@ -104,37 +97,34 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
         didSet { if origPath != oldValue { onSnapshotChange?() } }
     }
 
-    @Published private(set) var error: String?
-    @Published private(set) var isLoading = true
-    @Published private(set) var isUnmerged = false
-    @Published private(set) var isEditable = false
-    @Published private(set) var isDirty = false
-    @Published var saveError: String?
+    private(set) var error: String?
+    private(set) var isLoading = true
+    private(set) var isUnmerged = false
+    private(set) var isEditable = false
+    private(set) var isDirty = false
+    var saveError: String?
     /// Why this file cannot be written, or nil while it is writable. Set when
     /// the remote machine it lives on is no longer reachable.
-    @Published private(set) var readOnlyReason: String?
+    private(set) var readOnlyReason: String?
 
     let web = DiffWebModel()
+    let preferences: DiffViewPreferences
 
-    /// The web view lives on the tab (not in the SwiftUI view) so switching
-    /// tabs re-parents the same rendered view instead of booting a fresh
-    /// WKWebView — same pattern as `TerminalSession.terminalView`.
-    ///
-    /// It starts nil so project selection can commit its skeleton before the
-    /// selected diff creates WebKit's AppKit hierarchy on the main actor.
-    @Published private(set) var webHostView: NSView?
+    fileprivate(set) var nativeSurface: PierreMultiDiffSurface?
+    var webHostView: NSView? { nativeSurface?.webView }
 
     private nonisolated static let maxBytes = 5 << 20
-    private var savedNewContent = ""
+    @ObservationIgnored private var savedNewContent = ""
     /// Live text emitted by Pierre's editor. Kept out of `DiffWebModel` while
     /// editing so a keystroke does not rebuild the CodeView item that owns the
     /// editor, selection, and undo stack.
-    private var editedNewContent = ""
-    private var reloadGeneration: UInt = 0
+    @ObservationIgnored private var editedNewContent = ""
+    @ObservationIgnored private var reloadGeneration: UInt = 0
+    @ObservationIgnored private var targetGeneration: UInt = 0
     /// The workspace this diff reads. The tab keeps its own, so it never
     /// follows the session onto another machine — and re-binds to a new
     /// connection to the same machine when one arrives.
-    private var backend: WorkspaceBackend
+    @ObservationIgnored private var backend: WorkspaceBackend
     /// The workspace this diff belongs to: nil for this Mac, else the machine
     /// it was opened from. Part of the tab's identity, so the same path on two
     /// machines is two tabs, and a diff opened locally is never read-only.
@@ -150,10 +140,12 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
         commitParentHash: String? = nil,
         commitStatus: Character? = nil,
         backend: WorkspaceBackend,
-        workspaceIdentity: String?
+        workspaceIdentity: String?,
+        preferences: DiffViewPreferences = .shared
     ) {
         self.backend = backend
         self.workspaceIdentity = workspaceIdentity
+        self.preferences = preferences
         self.repoRoot = repoRoot
         self.path = path
         self.staged = staged
@@ -196,8 +188,7 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
         // A reconnection is a new channel; reading or saving over the old one
         // fails, so the tab takes the live one.
         backend = live
-        readOnlyReason = nil
-        web.canEdit = isEditableNow
+        setReadOnly(false, destination: workspaceIdentity)
         // No-op while the buffer is dirty, so edits made during the outage
         // survive and can now be saved.
         reload()
@@ -211,6 +202,8 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
             )
             : nil
         guard readOnlyReason != reason else { return }
+        targetGeneration &+= 1
+        reloadGeneration &+= 1
         readOnlyReason = reason
         // `isEditable` stays the file's own verdict, so an edit made before the
         // connection dropped is still saveable once it comes back.
@@ -350,6 +343,7 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
                   self.readOnlyReason == nil
             else { return }
             self.isLoading = false
+            guard !self.isEditing, !self.isDirty else { return }
             self.error = result.failure
             self.isUnmerged = result.unmerged
             self.isEditable = result.editable && result.failure == nil
@@ -373,18 +367,6 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
         reload()
     }
 
-    /// WebKit views are main-actor objects, but their creation does not need to
-    /// be part of the project-selection transaction. Yielding lets SwiftUI
-    /// display the existing skeleton first and avoids materializing every
-    /// hidden diff in a project at once.
-    func materializeWebHostView() async {
-        guard webHostView == nil else { return }
-        await Task.yield()
-        guard !Task.isCancelled, webHostView == nil else { return }
-        web.updateAppearance(NSApp.effectiveAppearance)
-        webHostView = DiffWebHostingView(model: web)
-    }
-
     /// Accepts the updated side emitted by Pierre's editor. The web view owns
     /// the live document; this mirrored value drives dirty state and saving.
     func updateEditedContent(fileID: String, contents: String) {
@@ -406,16 +388,16 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
     }
 
     func setDiffStyle(_ style: DiffStyle) {
-        DiffViewPreferences.shared.diffStyle = style
+        preferences.diffStyle = style
     }
 
     func setEditing(_ isEditing: Bool) {
         guard isEditableNow else { return }
-        DiffViewPreferences.shared.prefersEditing = isEditing
+        preferences.prefersEditing = isEditing
     }
 
     private var isEditing: Bool {
-        isEditableNow && DiffViewPreferences.shared.prefersEditing
+        isEditableNow && preferences.prefersEditing
     }
 
     func save() async {
@@ -427,13 +409,18 @@ final class DiffTab: nonisolated ObservableObject, nonisolated Identifiable {
         }
         let filePath = (repoRoot as NSString).appendingPathComponent(path)
         let written = editedNewContent
+        let target = backend
+        let generation = targetGeneration
+        reloadGeneration &+= 1
         do {
-            try await backend.write(path: filePath, data: Data(written.utf8))
+            try await target.write(path: filePath, data: Data(written.utf8))
+            guard generation == targetGeneration, readOnlyReason == nil else { return }
             savedNewContent = written
             // An edit landing while the write was in flight stays dirty.
             isDirty = editedNewContent != savedNewContent
             saveError = nil
         } catch {
+            guard generation == targetGeneration else { return }
             saveError = error.localizedDescription
         }
     }
@@ -585,19 +572,31 @@ private enum DiffFont {
     }()
 }
 
-/// Root of the tab-owned hosting view: keeps the diff web view (and its
-/// WKWebView) alive for the tab's lifetime, re-rendering when the model's
-/// inputs change.
+/// Renders the tab's retained native surface when its inputs change.
 ///
 /// A tab still shows exactly one file. It goes through the multi-file surface
 /// holding that single file because that is the virtualized path: rows are
 /// rendered only while on screen and syntax highlighting runs in a worker, so
 /// opening or scrolling a large diff never stalls the main thread. The
 /// single-file view renders every row up front and highlights them inline.
-private struct DiffWebRoot: View {
-    @ObservedObject var model: DiffWebModel
+struct DiffWebRoot: View {
+    @Bindable var model: DiffWebModel
+    let surface: PierreMultiDiffSurface
     private let settings = AppSettings.shared
-    @ObservedObject private var preferences = DiffViewPreferences.shared
+    @Bindable private var preferences: DiffViewPreferences
+
+    init(diff: DiffTab, surface: PierreMultiDiffSurface) {
+        model = diff.web
+        preferences = diff.preferences
+        self.surface = surface
+    }
+
+    static func materialize(for diff: DiffTab) async {
+        guard diff.nativeSurface == nil else { return }
+        await Task.yield()
+        guard !Task.isCancelled, diff.nativeSurface == nil else { return }
+        diff.nativeSurface = PierreMultiDiffSurface()
+    }
 
     var body: some View {
         PierreMultiDiffView(
@@ -610,109 +609,43 @@ private struct DiffWebRoot: View {
                     isEditable: model.canEdit && preferences.prefersEditing
                 )
             ],
+            surface: surface,
             diffStyle: $preferences.diffStyle,
             overflowMode: $model.overflowMode,
             renderOptions: DiffFont.renderOptions(
                 family: settings.fontFamily, size: settings.fontSize
             ),
-            onFileEditChange: { fileID, contents in
+            onFileEditChange: { [model] fileID, contents in
                 model.onFileEditChange?(fileID, contents)
             },
-            onFileEditComplete: { fileID, contents in
+            onFileEditComplete: { [model] fileID, contents in
                 model.onFileEditComplete?(fileID, contents)
             },
-            onReady: {
+            onReady: { [model] in
                 withAnimation(.easeInOut(duration: 0.2)) {
                     model.isReady = true
                 }
             }
         )
-        // Pierre derives its JavaScript theme from this environment value.
-        // Make it follow the host view's effective AppKit appearance instead
-        // of a colorScheme captured while the detached host was constructed.
-        .environment(
-            \.colorScheme,
-            model.usesDarkAppearance ? ColorScheme.dark : ColorScheme.light
-        )
-    }
-}
-
-/// Bridges the actual AppKit appearance into the detached SwiftUI diff root.
-/// AppKit sends this callback only after the view's effective appearance has
-/// changed, avoiding the old/new ordering race of a global system notification.
-private final class DiffWebHostingView: NSHostingView<DiffWebRoot> {
-    private let model: DiffWebModel
-
-    init(model: DiffWebModel) {
-        self.model = model
-        super.init(rootView: DiffWebRoot(model: model))
-    }
-
-    @available(*, unavailable)
-    required init(rootView: DiffWebRoot) {
-        fatalError("init(rootView:) has not been implemented")
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        model.updateAppearance(effectiveAppearance)
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        model.updateAppearance(effectiveAppearance)
-    }
-}
-
-/// Re-parents a tab's long-lived web host view into the current tab area;
-/// AppKit detaches it from any previous container automatically.
-private struct DiffWebHostView: NSViewRepresentable {
-    let view: NSView
-
-    func makeNSView(context: Context) -> NSView {
-        let container = NSView()
-        attach(to: container)
-        return container
-    }
-
-    func updateNSView(_ container: NSView, context: Context) {
-        if view.superview !== container {
-            attach(to: container)
-        }
-    }
-
-    private func attach(to container: NSView) {
-        view.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(view)
-        NSLayoutConstraint.activate([
-            view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            view.topAnchor.constraint(equalTo: container.topAnchor),
-            view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
     }
 }
 
 /// Renders a diff tab with PierreDiffsSwift: syntax-highlighted unified or
 /// split view with word-level change highlighting.
 struct DiffViewerView: View {
-    @ObservedObject var diff: DiffTab
+    let diff: DiffTab
     private let themeChanges = Theme.changes
-    @ObservedObject private var web: DiffWebModel
-    @ObservedObject private var preferences = DiffViewPreferences.shared
+    private let web: DiffWebModel
+    private let preferences: DiffViewPreferences
     /// The view stays mounted while other tabs are selected (see
     /// ContentView); this flags when it is the frontmost tab so content
     /// refreshes on each re-visit, not just on first mount.
     let isSelected: Bool
 
     init(diff: DiffTab, isSelected: Bool = true) {
-        _diff = ObservedObject(wrappedValue: diff)
-        _web = ObservedObject(wrappedValue: diff.web)
+        self.diff = diff
+        web = diff.web
+        preferences = diff.preferences
         self.isSelected = isSelected
     }
 
@@ -746,8 +679,8 @@ struct DiffViewerView: View {
                 } else {
                     VStack(spacing: 0) {
                         controlBar
-                        if let webHostView = diff.webHostView {
-                            DiffWebHostView(view: webHostView)
+                        if let surface = diff.nativeSurface {
+                            DiffWebRoot(diff: diff, surface: surface)
                                 // Cover (never hide) the webview while it boots:
                                 // making it invisible lets WebKit throttle rendering
                                 // and the initial diff render can be dropped entirely.
@@ -762,7 +695,7 @@ struct DiffViewerView: View {
                             DiffSkeletonView()
                                 .task(id: isSelected) {
                                     guard isSelected else { return }
-                                    await diff.materializeWebHostView()
+                                    await DiffWebRoot.materialize(for: diff)
                                 }
                         }
                     }

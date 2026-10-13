@@ -200,7 +200,7 @@
 				AA10000000000000000000C0 /* XCLocalSwiftPackageReference "Vendor/STTextView" */,
 				AA10000000000000000000B0 /* XCRemoteSwiftPackageReference "libghostty-spm" */,
 				AA30000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/TreeSitterTSX" */,
-				AA10000000000000000000D0 /* XCRemoteSwiftPackageReference "PierreDiffsSwift" */,
+				AA10000000000000000000D0 /* XCLocalSwiftPackageReference "Vendor/PierreDiffsSwift" */,
 				AA20000000000000000000A0 /* XCRemoteSwiftPackageReference "STTextView-Plugin-Neon" */,
 				AA60000000000000000000A0 /* XCRemoteSwiftPackageReference "FuzzyMatch" */,
 			);
@@ -451,6 +451,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		AA10000000000000000000D0 /* XCLocalSwiftPackageReference "Vendor/PierreDiffsSwift" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/PierreDiffsSwift;
+		};
 		AA10000000000000000000C0 /* XCLocalSwiftPackageReference "Vendor/STTextView" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/STTextView;
@@ -468,14 +472,6 @@
 			requirement = {
 				kind = exactVersion;
 				version = 1.3.6;
-			};
-		};
-		AA10000000000000000000D0 /* XCRemoteSwiftPackageReference "PierreDiffsSwift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/egoist-labs/PierreDiffsSwift";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.5.0;
 			};
 		};
 		AA20000000000000000000A0 /* XCRemoteSwiftPackageReference "STTextView-Plugin-Neon" */ = {
@@ -513,7 +509,7 @@
 		};
 		AA10000000000000000000D1 /* PierreDiffsSwift */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = AA10000000000000000000D0 /* XCRemoteSwiftPackageReference "PierreDiffsSwift" */;
+			package = AA10000000000000000000D0 /* XCLocalSwiftPackageReference "Vendor/PierreDiffsSwift" */;
 			productName = PierreDiffsSwift;
 		};
 		AA20000000000000000000A1 /* STTextView-Plugin-Neon */ = {
