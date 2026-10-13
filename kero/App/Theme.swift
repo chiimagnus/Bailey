@@ -263,6 +263,9 @@ nonisolated extension GhosttyThemeDefinition {
 
     var backgroundNSColor: NSColor { Self.nsColor(background) }
     var foregroundNSColor: NSColor { Self.nsColor(foreground) }
+    func paletteNSColor(_ index: Int) -> NSColor? {
+        palette[index].map(Self.nsColor)
+    }
 
     var cursorNSColor: NSColor {
         cursorColor.map(Self.nsColor) ?? accentNSColor

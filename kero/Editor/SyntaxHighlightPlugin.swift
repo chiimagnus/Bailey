@@ -208,14 +208,14 @@ final class SyntaxHighlightCoordinator {
     /// concealment, and the explicit "no highlight" marker. Grammars attach
     /// these alongside real captures (e.g. Swift's `@comment @spell`), so they
     /// must be dropped rather than resolved to a color.
-    private static let ignoredCaptures: Set<String> = ["spell", "nospell", "conceal", "none"]
+    nonisolated static let ignoredCaptures: Set<String> = ["spell", "nospell", "conceal", "none"]
 
     /// The theme color for a tree-sitter capture name, trying the most specific
     /// name first and shortening on each dot (`variable.parameter` → `variable`),
     /// then the theme's `plain` default. The merged queries carry finer-grained
     /// capture names than the theme enumerates, so exact-match alone would leave
     /// many tokens uncolored.
-    private static func themeColor(for name: String, theme: STPluginNeonAppKit.Theme) -> NSColor? {
+    nonisolated static func themeColor(for name: String, theme: STPluginNeonAppKit.Theme) -> NSColor? {
         var key = name
         while true {
             if let color = theme.color(forToken: TokenName(key)) {
@@ -235,7 +235,7 @@ final class SyntaxHighlightCoordinator {
     /// `@tag` and `@attribute` — which carry most of the color in a JSX or HTML
     /// file — would otherwise walk straight to the `plain` fallback and leave
     /// every element name and prop the same black as the text around it.
-    private static let captureAliases: [String: String] = [
+    nonisolated private static let captureAliases: [String: String] = [
         // Capitalized JSX components already reach `@constructor` through the
         // JavaScript query's `^[A-Z]` rule, so lowercase intrinsics match them
         // and `<main>` looks like `<Sidebar>`.

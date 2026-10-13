@@ -70,14 +70,14 @@ enum WorkspaceIdentityCheck {
         let untracked = DiffTab(repoRoot: root, path: "file.txt", staged: false,
             untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         try await wait { !untracked.isLoading }
-        precondition(untracked.error == nil && untracked.web.newContent == "local diff save\n")
+        precondition(untracked.error == nil && untracked.newContent == "local diff save\n")
         model.stage(model.changedEntries.first { $0.path == "file.txt" }!)
         try await wait { !model.isBusy && !model.isRefreshing }
         precondition(git(["diff", "--cached", "--name-only"]) == "file.txt")
         let staged = DiffTab(repoRoot: root, path: "file.txt", staged: true,
             untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         try await wait { !staged.isLoading }
-        precondition(staged.error == nil && staged.web.oldContent.isEmpty && staged.web.newContent == "local diff save\n")
+        precondition(staged.error == nil && staged.oldContent.isEmpty && staged.newContent == "local diff save\n")
         let limit = 5 << 20
         let cases: [(String, Data, String?)] = [
             ("binary.txt", Data([0, 1, 2]), String(localized: "Binary file", table: "Git")),
@@ -96,7 +96,7 @@ enum WorkspaceIdentityCheck {
                 backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
             try await wait { !diff.isLoading }
             precondition(diff.error == expectedError, "Unexpected Diff verdict for \(path): \(diff.error ?? "none")")
-            if expectedError == nil { precondition(diff.web.newContent.utf8.count == bytes.count) }
+            if expectedError == nil { precondition(diff.newContent.utf8.count == bytes.count) }
         }
         model.refresh()
         try await wait { !model.isRefreshing }

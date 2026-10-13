@@ -1,9 +1,8 @@
 import AppKit
 import Foundation
 import Observation
-import PierreDiffsSwift
+import STTextView
 import SwiftUI
-import WebKit
 import XCTest
 @testable import kero
 
@@ -71,9 +70,10 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
 
 @MainActor
 final class DiffTabTests: XCTestCase {
-    private func findWebView(in view: NSView) -> WKWebView? {
-        if let webView = view as? WKWebView { return webView }
-        return view.subviews.lazy.compactMap { self.findWebView(in: $0) }.first
+    private func findNativeTextView(in view: NSView, editable: Bool? = nil) -> DiffTextView? {
+        if let textView = view as? DiffTextView,
+           editable == nil || textView.isEditable == editable { return textView }
+        return view.subviews.lazy.compactMap { self.findNativeTextView(in: $0, editable: editable) }.first
     }
 
     private func wait(
@@ -136,7 +136,7 @@ final class DiffTabTests: XCTestCase {
         project.append(PaneTab(content: .diff(diff)))
         try await wait { !diff.isLoading }
         XCTAssertTrue(diff.isEditableNow)
-        diff.web.onFileEditChange?(diff.path, "old channel draft")
+        diff.updateEditedContent("old channel draft")
         let save = Task { await diff.save() }
         try await wait { await backend.writing }
         first.markDisconnected(reason: "first channel ended")
@@ -147,7 +147,7 @@ final class DiffTabTests: XCTestCase {
         await save.value
         XCTAssertTrue(diff.isDirty, "Old-channel write cannot establish the new target's baseline")
         guard diff.isDirty else { return }
-        diff.web.onFileEditChange?(diff.path, "new channel draft")
+        diff.updateEditedContent("new channel draft")
         await diff.save()
         XCTAssertTrue(diff.isDirty)
         XCTAssertTrue(diff.saveError != nil || diff.readOnlyReason != nil)
@@ -179,22 +179,22 @@ final class DiffTabTests: XCTestCase {
         let index = diff(staged: true)
         let history = diff(commit: hash)
         try await wait { !worktree.isLoading && !index.isLoading && !history.isLoading }
-        XCTAssertEqual(worktree.web.oldContent, stagedText)
-        XCTAssertEqual(worktree.web.newContent, worktreeText)
+        XCTAssertEqual(worktree.oldContent, stagedText)
+        XCTAssertEqual(worktree.newContent, worktreeText)
         XCTAssertTrue(worktree.isEditable)
-        XCTAssertEqual(index.web.oldContent, original)
-        XCTAssertEqual(index.web.newContent, stagedText)
+        XCTAssertEqual(index.oldContent, original)
+        XCTAssertEqual(index.newContent, stagedText)
         XCTAssertFalse(index.isEditable)
-        XCTAssertEqual(history.web.oldContent, "")
-        XCTAssertEqual(history.web.newContent, original)
+        XCTAssertEqual(history.oldContent, "")
+        XCTAssertEqual(history.newContent, original)
         XCTAssertFalse(history.isEditable)
 
         let pane = PaneTab(content: .diff(worktree))
         let dirty = expectation(description: "Diff dirty propagates through the existing pane")
         withObservationTracking({ _ = pane.content.isDirty }) { dirty.fulfill() }
-        worktree.web.onFileEditChange?("tracked.txt", "saved😀\r\n")
+        worktree.updateEditedContent("saved😀\r\n")
         await fulfillment(of: [dirty], timeout: 1)
-        XCTAssertEqual(worktree.web.newContent, worktreeText)
+        XCTAssertEqual(worktree.newContent, worktreeText)
         await worktree.save()
         XCTAssertFalse(worktree.isDirty)
         XCTAssertEqual(try Data(contentsOf: file), Data("saved😀\r\n".utf8))
@@ -210,7 +210,7 @@ final class DiffTabTests: XCTestCase {
         XCTAssertFalse(binary.isEditable)
         XCTAssertNotNil(large.error)
         XCTAssertFalse(large.isEditable)
-        XCTAssertEqual(link.web.newContent, "tracked.txt")
+        XCTAssertEqual(link.newContent, "tracked.txt")
         XCTAssertFalse(link.isEditable)
     }
 
@@ -219,10 +219,10 @@ final class DiffTabTests: XCTestCase {
         let diff = DiffTab(repoRoot: "/fixture", path: "remote.txt", staged: false,
                            untracked: true, origPath: nil, backend: backend, workspaceIdentity: "ssh:fixture")
         try await wait { !diff.isLoading }
-        diff.updateEditedContent(fileID: "remote.txt", contents: "first😀\r\n")
+        diff.updateEditedContent("first😀\r\n")
         let saving = Task { await diff.save() }
         try await wait { await backend.writing }
-        diff.updateEditedContent(fileID: "remote.txt", contents: "second🪨\r\n")
+        diff.updateEditedContent("second🪨\r\n")
         await backend.finishWrite()
         await saving.value
         XCTAssertTrue(diff.isDirty)
@@ -244,61 +244,124 @@ final class DiffTabTests: XCTestCase {
         await outdated.value
         XCTAssertTrue(diff.isDirty)
         XCTAssertNotNil(diff.readOnlyReason)
-        XCTAssertFalse(diff.web.canEdit)
+        XCTAssertFalse(diff.isEditableNow)
+        XCTAssertEqual(diff.newContent, "second🪨\r\n", "Disconnected native review must still display unsaved edits")
         await diff.save()
         XCTAssertEqual(diff.saveError, diff.readOnlyReason)
         let count = await backend.writes
         XCTAssertEqual(count, 3)
-        diff.completeEditing(fileID: "remote.txt", contents: "second🪨\r\n")
-        XCTAssertEqual(diff.web.newContent, "second🪨\r\n")
+        XCTAssertEqual(diff.editedNewContent, "second🪨\r\n")
         XCTAssertTrue(diff.isDirty)
     }
 
-    func testRealDiffWebHostRendersAndRetainsItsWebView() async throws {
+    func testNativeDiffRendersAndRetainsTextKitSurface() async throws {
         let backend = DiffWorkspaceFixture()
         let diff = DiffTab(repoRoot: "/fixture", path: "render.txt", staged: false,
                            untracked: true, origPath: nil, backend: backend, workspaceIdentity: nil)
-        try await wait { !diff.isLoading }
-        await DiffWebRoot.materialize(for: diff)
-        let surface = try XCTUnwrap(diff.nativeSurface)
+        try await wait { !diff.isLoading && diff.display != nil }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        func mount() -> NSHostingView<DiffWebRoot> {
-            let host = NSHostingView(rootView: DiffWebRoot(diff: diff, surface: surface))
+
+        func mount() -> NSHostingView<DiffViewerView> {
+            let host = NSHostingView(rootView: DiffViewerView(diff: diff))
             window.contentView = host
             window.orderFront(nil)
             host.layoutSubtreeIfNeeded()
             return host
         }
+
         let first = mount()
-        try await wait { diff.web.isReady }
-        let webView = try XCTUnwrap(findWebView(in: first))
-        let renderedText = """
-        (() => {
-          const text = root => Array.from(root.childNodes).map(node =>
-            node.nodeType === Node.TEXT_NODE ? node.textContent :
-              text(node.shadowRoot || node)).join('');
-          return text(document.body);
-        })()
-        """
-        try await wait {
-            let text = try? await webView.evaluateJavaScript(renderedText) as? String
-            return text?.contains("baseline") == true
-        }
-        XCTAssertTrue(findWebView(in: first) === webView)
+        try await wait { diff.nativeSurface != nil && self.findNativeTextView(in: first) != nil }
+        let surface = try XCTUnwrap(diff.nativeSurface)
+        let textView = try XCTUnwrap(findNativeTextView(in: surface))
+        XCTAssertTrue(textView.attributedText?.string.contains("baseline") == true)
+        XCTAssertFalse(textView.isEditable)
+        XCTAssertTrue(textView.window === window)
+
         first.removeFromSuperview()
         let second = mount()
-        await DiffWebRoot.materialize(for: diff)
-        try await Task.sleep(for: .milliseconds(100))
+        try await wait { self.findNativeTextView(in: second) === textView }
         XCTAssertTrue(diff.nativeSurface === surface)
-        XCTAssertTrue(diff.webHostView === webView)
-        XCTAssertTrue(findWebView(in: second) === webView)
-        XCTAssertTrue(diff.web.isReady)
-        let after = try await webView.evaluateJavaScript(renderedText) as? String
-        XCTAssertTrue(try XCTUnwrap(after).contains("baseline"))
+        XCTAssertTrue(findNativeTextView(in: second) === textView)
+        XCTAssertTrue(textView.attributedText?.string.contains("baseline") == true)
         second.removeFromSuperview()
+    }
+
+
+    func testNativeDiffUnicodeAndSplitAlignmentWithFoldExpansion() {
+        let old = "one\r\n中文😀\r\nlast\n"
+        let new = "one\r\n中文🪨\r\nlast"
+        let compared = DiffComputation.compute(oldText: old, newText: new)
+        XCTAssertEqual(compared.splitLeft.rows.count, compared.splitRight.rows.count)
+        XCTAssertEqual(compared.unified.rows.count, compared.unified.lineStartOffsets.count)
+        XCTAssertTrue(compared.unified.rows.contains { if case .removed = $0.kind { true } else { false } })
+        XCTAssertTrue(compared.unified.rows.contains { if case .added = $0.kind { true } else { false } })
+        XCTAssertTrue(compared.unified.rows.contains { $0.missingNewline })
+        XCTAssertTrue(compared.unified.text.contains("中文"))
+
+        let oldLines = (0..<240).map { "line \($0)" }
+        var newLines = oldLines
+        newLines[120] = "line 120 changed"
+        let oldText = oldLines.joined(separator: "\n") + "\n"
+        let newText = newLines.joined(separator: "\n") + "\n"
+        let core = DiffCore.compute(oldText: oldText, newText: newText)
+        let folded = DiffComputation.build(core: core, expansions: [:])
+        let folds = folded.unified.rows.compactMap(\.collapsed)
+        XCTAssertFalse(folds.isEmpty)
+        XCTAssertEqual(folded.splitLeft.rows.count, folded.splitRight.rows.count)
+        let expanded = DiffComputation.build(
+            core: core,
+            expansions: [folds[0].runIndex: DiffRunExpansion(fromStart: 100, fromEnd: 0)]
+        )
+        XCTAssertGreaterThan(expanded.unified.rows.count, folded.unified.rows.count)
+        XCTAssertEqual(expanded.splitLeft.rows.count, expanded.splitRight.rows.count)
+    }
+
+    func testNativeDiffSplitLayoutPreservesPaneIdentity() async throws {
+        let domain = "kero-native-layout-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.prefersEditing = false
+        preferences.diffStyle = .unified
+        let backend = DiffWorkspaceFixture()
+        let diff = DiffTab(
+            repoRoot: "/fixture", path: "split.txt", staged: false,
+            untracked: true, origPath: nil, backend: backend,
+            workspaceIdentity: nil, preferences: preferences
+        )
+        try await wait { !diff.isLoading && diff.display != nil }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: diff))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        try await wait { diff.nativeSurface != nil && self.findNativeTextView(in: host) != nil }
+        let surface = try XCTUnwrap(diff.nativeSurface)
+        let firstUnified = try XCTUnwrap(findNativeTextView(in: surface))
+        XCTAssertTrue(firstUnified.attributedText?.string.contains("baseline") == true)
+
+        diff.setDiffStyle(.split)
+        try await wait {
+            surface.subviews.filter { ($0 as? DiffCodePaneView)?.isHidden == false }.count == 2
+        }
+        let visible = surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }
+        XCTAssertEqual(visible.count, 2)
+        XCTAssertTrue(visible.allSatisfy { !$0.textView.isEditable })
+        XCTAssertTrue(visible.contains { $0.textView.attributedText?.string.contains("baseline") == true })
+        XCTAssertEqual(visible[0].scrollView.contentView.bounds.height, visible[1].scrollView.contentView.bounds.height)
+
+        diff.setDiffStyle(.unified)
+        try await wait { surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }.count == 1 }
+        XCTAssertTrue(findNativeTextView(in: surface) === firstUnified)
     }
 
     func testReadInFlightCannotReplaceEditingOrDisconnectedContent() async throws {
@@ -306,17 +369,17 @@ final class DiffTabTests: XCTestCase {
         let diff = DiffTab(repoRoot: "/fixture", path: "stale.txt", staged: false,
                            untracked: true, origPath: nil, backend: backend, workspaceIdentity: "ssh:fixture")
         try await wait { !diff.isLoading }
-        let baseline = diff.web.newContent
+        let baseline = diff.newContent
         await backend.pauseOneRead()
         diff.reload()
         try await wait { await backend.reading }
-        diff.updateEditedContent(fileID: "stale.txt", contents: "editing during read")
+        diff.updateEditedContent("editing during read")
         await backend.finishRead(with: Data("stale result".utf8))
         try await Task.sleep(for: .milliseconds(60))
         XCTAssertTrue(diff.isDirty)
-        XCTAssertEqual(diff.web.newContent, baseline)
+        XCTAssertEqual(diff.newContent, baseline)
 
-        diff.updateEditedContent(fileID: "stale.txt", contents: baseline)
+        diff.updateEditedContent(baseline)
         XCTAssertFalse(diff.isDirty)
         await backend.pauseOneRead()
         diff.reload()
@@ -326,120 +389,85 @@ final class DiffTabTests: XCTestCase {
         await backend.finishRead(with: Data("outdated before outage".utf8))
         try await Task.sleep(for: .milliseconds(60))
         XCTAssertNotNil(diff.readOnlyReason)
-        XCTAssertEqual(diff.web.newContent, baseline)
-        XCTAssertFalse(diff.web.canEdit)
+        XCTAssertEqual(diff.newContent, baseline)
+        XCTAssertFalse(diff.isEditableNow)
     }
 
-    func testDiffRendererInputAndScrollSurviveRemountAndResourcesAreReleased() async throws {
+    func testNativeDiffEditUndoScrollSaveAndReparent() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let path = directory.appendingPathComponent("editor.txt")
+        let file = directory.appendingPathComponent("editor.txt")
         let original = (0..<180).map { "line \($0) 中文😀\n" }.joined()
-        try Data(original.utf8).write(to: path)
+        try Data(original.utf8).write(to: file)
+        let domain = "kero-native-diff-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.prefersEditing = true
         let diff = DiffTab(repoRoot: directory.path, path: "editor.txt", staged: false,
-                           untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
-        try await wait { !diff.isLoading }
-        var surface: PierreMultiDiffSurface? = PierreMultiDiffSurface()
-        weak var releasedSurface = surface
+                           untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil, preferences: preferences)
+        try await wait { !diff.isLoading && diff.isEditable && diff.display != nil }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         window.contentView = container
-        var mounted: NSHostingView<PierreMultiDiffView>?
+        var host: NSHostingView<DiffViewerView>?
         func mount() {
-            mounted = NSHostingView(rootView: PierreMultiDiffView(
-                files: [.init(id: "editor.txt", name: "editor.txt", oldContents: "", newContents: original, isEditable: true)],
-                surface: surface, diffStyle: .constant(.unified), overflowMode: .constant(.scroll),
-                onFileEditChange: { [weak diff] fileID, text in diff?.updateEditedContent(fileID: fileID, contents: text) }
-            ))
-            mounted?.frame = container.bounds
-            if let mounted { container.addSubview(mounted) }
+            let root = NSHostingView(rootView: DiffViewerView(diff: diff))
+            root.frame = container.bounds
+            host = root
+            container.addSubview(root)
             window.orderFront(nil)
-            mounted?.layoutSubtreeIfNeeded()
+            root.layoutSubtreeIfNeeded()
         }
         mount()
-        try await wait {
-            guard let mounted else { return false }
-            return self.findWebView(in: mounted) != nil
-        }
-        let webView = try XCTUnwrap(findWebView(in: try XCTUnwrap(mounted)))
-        let locateEditor = """
-        (() => {
-          // Offscreen XCTest windows do not guarantee a paint. Force the
-          // virtualized renderer's viewport geometry to become current.
-          document.getElementById('diff-container')?.getBoundingClientRect();
-          const find = root => {
-            for (const node of root.querySelectorAll('*')) {
-              if (node.getAttribute('contenteditable') === 'true') return node;
-              if (node.shadowRoot) { const result = find(node.shadowRoot); if (result) return result; }
-            }
-          };
-          window.fixtureEditor = find(document);
-          return !!window.fixtureEditor?.querySelector('[data-char]')?.firstChild;
-        })()
-        """
-        // WebKit's 11 MB renderer can initialize slowly in an offscreen test
-        // host. Wait for real editable DOM instead of assuming a first paint.
-        try await wait({
-            (try? await webView.evaluateJavaScript(locateEditor) as? Bool) == true
-        }, pollingInterval: .milliseconds(100), timeout: 30)
-        let input = try await webView.evaluateJavaScript("""
-        \(locateEditor);
-        (() => {
-          fixtureEditor.focus();
-          fixtureEditor.dispatchEvent(new FocusEvent('focus'));
-          const selectAll = new KeyboardEvent('keydown', {key:'a',metaKey:true,bubbles:true,cancelable:true,composed:true});
-          fixtureEditor.dispatchEvent(selectAll);
-          const collapse = new KeyboardEvent('keydown', {key:'ArrowLeft',bubbles:true,cancelable:true,composed:true});
-          fixtureEditor.dispatchEvent(collapse);
-          const event = new InputEvent('beforeinput', {inputType:'insertText',data:'E',bubbles:true,cancelable:true,composed:true});
-          fixtureEditor.dispatchEvent(event);
-          return {consumed:event.defaultPrevented, selected:selectAll.defaultPrevented, collapsed:collapse.defaultPrevented};
-        })()
-        """) as? [String: Any]
-        XCTAssertEqual(input?["consumed"] as? Bool, true)
-        XCTAssertEqual(input?["selected"] as? Bool, true)
-        XCTAssertEqual(input?["collapsed"] as? Bool, true)
+        try await wait { diff.nativeSurface != nil && self.findNativeTextView(in: container, editable: true) != nil }
+        let surface = try XCTUnwrap(diff.nativeSurface)
+        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        editor.insertText("E", replacementRange: NSRange(location: 0, length: 0))
         try await wait { diff.isDirty }
-        _ = try await webView.evaluateJavaScript("const viewport = document.getElementById('diff-container'); viewport.dispatchEvent(new WheelEvent('wheel', {deltaY:700,bubbles:true})); viewport.scrollTop = 700")
-        _ = try await webView.callAsyncJavaScript(
-            "await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
-            in: nil, contentWorld: .page
+        XCTAssertEqual(editor.text, "E" + original)
+        // Keep the native insertion point inside the viewport before
+        // checking that reparenting preserves the reader's scroll offset.
+        editor.textSelection = NSRange(
+            location: (editor.text! as NSString).range(of: "line 45").location,
+            length: 0
         )
-        let scrollBefore = try await webView.evaluateJavaScript("document.getElementById('diff-container').scrollTop") as? Double
-        let geometryBefore = try await webView.evaluateJavaScript("JSON.stringify({height:innerHeight,range:document.getElementById('diff-container').scrollHeight,client:document.getElementById('diff-container').clientHeight})") as? String
-        XCTAssertGreaterThan(try XCTUnwrap(scrollBefore), 0)
-        _ = try await webView.evaluateJavaScript("fixtureEditor.blur(); fixtureEditor.dispatchEvent(new FocusEvent('blur'))")
-        mounted?.removeFromSuperview()
+        let scroll = try XCTUnwrap(editor.enclosingScrollView)
+        scroll.contentView.setBoundsOrigin(NSPoint(x: 0, y: 700))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let previousOffset = scroll.contentView.bounds.origin
+        XCTAssertGreaterThan(previousOffset.y, 0)
+        let undoManager = try XCTUnwrap(editor.undoManager)
+        XCTAssertTrue(undoManager.canUndo)
+
+        host?.removeFromSuperview()
+        host = nil
         mount()
-        try await Task.sleep(for: .milliseconds(100))
-        XCTAssertTrue(findWebView(in: try XCTUnwrap(mounted)) === webView)
-        let scrollAfter = try await webView.evaluateJavaScript("document.getElementById('diff-container').scrollTop") as? Double
-        let geometryAfter = try await webView.evaluateJavaScript("JSON.stringify({height:innerHeight,range:document.getElementById('diff-container').scrollHeight,client:document.getElementById('diff-container').clientHeight})") as? String
-        XCTAssertEqual(scrollAfter, scrollBefore)
-        XCTAssertEqual(geometryAfter, geometryBefore)
-        _ = try await webView.evaluateJavaScript("const returnedViewport=document.getElementById('diff-container'); returnedViewport.dispatchEvent(new WheelEvent('wheel', {deltaY:-700,bubbles:true})); returnedViewport.scrollTop=0")
-        _ = try await webView.callAsyncJavaScript(
-            "await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
-            in: nil, contentWorld: .page
-        )
-        _ = try await webView.evaluateJavaScript(locateEditor)
-        let editorText = try await webView.evaluateJavaScript("fixtureEditor.textContent") as? String
-        XCTAssertTrue(try XCTUnwrap(editorText).contains("E"))
-        _ = try await webView.evaluateJavaScript("fixtureEditor.dispatchEvent(new FocusEvent('focus')); fixtureEditor.dispatchEvent(new KeyboardEvent('keydown',{key:'z',metaKey:true,bubbles:true,cancelable:true,composed:true}))")
+        try await wait { self.findNativeTextView(in: container, editable: true) === editor }
+        XCTAssertTrue(diff.nativeSurface === surface)
+        XCTAssertTrue(findNativeTextView(in: container, editable: true) === editor)
+        XCTAssertEqual(scroll.contentView.bounds.origin, previousOffset)
+        XCTAssertTrue(undoManager.canUndo)
+        undoManager.undo()
         try await wait { !diff.isDirty }
-        _ = try await webView.evaluateJavaScript("fixtureEditor.dispatchEvent(new KeyboardEvent('keydown',{key:'z',metaKey:true,shiftKey:true,bubbles:true,cancelable:true,composed:true}))")
+        XCTAssertEqual(editor.text, original)
+        undoManager.redo()
         try await wait { diff.isDirty }
+        XCTAssertEqual(editor.text, "E" + original)
         await diff.save()
         XCTAssertFalse(diff.isDirty)
-        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "E" + original)
-        mounted?.removeFromSuperview()
-        mounted = nil
-        surface = nil
-        try await wait { releasedSurface == nil }
-        XCTAssertNil(webView.navigationDelegate)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "E" + original)
+
+        // A mode switch must expose the saved buffer as the review document.
+        diff.setEditing(false)
+        try await wait { diff.newContent == "E" + original && diff.display != nil }
+        XCTAssertEqual(diff.newContent, "E" + original)
+        host?.removeFromSuperview()
     }
 
     func testEnteringEditModeDiscardsInFlightReadAndKeepsSharedPreferenceIdentity() async throws {
@@ -452,7 +480,7 @@ final class DiffTabTests: XCTestCase {
                            untracked: true, origPath: nil, backend: backend, workspaceIdentity: nil,
                            preferences: preferences)
         try await wait { !diff.isLoading }
-        let baseline = diff.web.newContent
+        let baseline = diff.newContent
         await backend.pauseOneRead()
         diff.reload()
         try await wait { await backend.reading }
@@ -461,11 +489,11 @@ final class DiffTabTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: "diffView.mode"), "edit")
         await backend.finishRead(with: Data("stale before editor appeared".utf8))
         try await wait { !diff.isLoading }
-        XCTAssertEqual(diff.web.newContent, baseline)
+        XCTAssertEqual(diff.newContent, baseline)
         XCTAssertFalse(diff.isDirty)
-        diff.updateEditedContent(fileID: "editing.txt", contents: "current buffer")
+        diff.updateEditedContent("current buffer")
         diff.reload()
-        XCTAssertEqual(diff.web.newContent, baseline)
+        XCTAssertEqual(diff.newContent, baseline)
         XCTAssertTrue(diff.isDirty)
         diff.setDiffStyle(.split)
         XCTAssertEqual(defaults.string(forKey: "diffView.layout"), "split")

@@ -1513,6 +1513,9 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
         #endif
     }
 
+    /// Exact height of fixed-line-height diff documents; nil for normal editors.
+    public var overrideContentHeight: CGFloat?
+
     func updateContentSizeIfNeeded() {
         let gutterWidth = gutterView?.frame.width ?? 0
         let scrollerInset = scrollView?.contentView.contentInsets.right ?? 0
@@ -1546,6 +1549,10 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
         textLayoutManager.enumerateTextSegments(in: segmentRange, type: .standard, options: .middleFragmentsExcluded) { _, rect, _, _ in
             estimatedSize.height = max(estimatedSize.height, rect.origin.y + rect.size.height)
             return true
+        }
+
+        if let overrideContentHeight {
+            estimatedSize.height = overrideContentHeight
         }
 
         if !isHorizontallyResizable {
@@ -1593,6 +1600,9 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
             return true
         }
 
+        if let overrideContentHeight {
+            lastLineMaxY = max(lastLineMaxY, overrideContentHeight)
+        }
         if !lastLineMaxY.isAlmostEqual(to: frame.height) {
             setFrameSize(CGSize(width: frame.width, height: lastLineMaxY))
         }
@@ -1632,6 +1642,10 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
         textCheckingDidChangeText(in: NSRange(textRange, in: textContentManager))
     }
 
+    /// Native review panes replace documents without moving the visible caret.
+    /// Ordinary editable text views keep the default caret-follow behavior.
+    public var scrollsSelectionToVisibleOnTextChange = true
+
     /// Sends out necessary notifications when a text change completes.
     ///
     /// Invoked automatically at the end of a series of changes, this method posts an `textDidChangeNotification` to the default notification center, which also results in the delegate receiving `textViewDidChangeText(_:)` message.
@@ -1646,9 +1660,11 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
 
         NSAccessibility.post(element: self, notification: .valueChanged)
 
-        postLayoutAction = { [weak self] in
-            guard let self, let textRange = textLayoutManager.textSelections.last?.textRanges.last else { return }
-            scrollToVisible(textRange, type: .standard)
+        if scrollsSelectionToVisibleOnTextChange {
+            postLayoutAction = { [weak self] in
+                guard let self, let textRange = textLayoutManager.textSelections.last?.textRanges.last else { return }
+                scrollToVisible(textRange, type: .standard)
+            }
         }
         needsDisplay = true
     }

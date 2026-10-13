@@ -27,7 +27,7 @@
 - **共享树**：文件与 Git 共用 `TreeDisplayModel` 和树行，保留目录压缩、状态、命中范围、悬停、滚动、键盘、无障碍和懒加载。
 - **异步身份**：回写状态或执行操作前核对发起时的项目、机器、连接、路径与请求代次；旧结果不能覆盖新状态。失败保留未保存编辑，远端失败不得退回本机写入。
 - **窗口焦点与事件**：菜单通过 `.focusedSceneValue(\.keroManager, manager)`／`@FocusedValue(\.keroManager)` 读取当前窗口；自动保存由语义变化回调经 500ms 防抖写盘，不依赖旧 `objectWillChange` 级联。修改菜单或嵌套状态时须实测两窗口切焦点、动作归属及快照，不能让后台窗口接管快捷键。
-- **系统桥接**：SwiftUI 是主要界面，AppKit／Ghostty／WebKit／TextKit 负责原生输入、终端和长生命周期视图；桥接不能因 SwiftUI 重绘重新创建 Shell、WebView 或编辑器。后端保留 Git 刷新合并、SSH 批量执行及超时；布局配置由窗口协调者传入项目。
+- **系统桥接**：SwiftUI 是主要界面；Ghostty 用于终端，WebKit 仅用于浏览器，Diff／文件编辑器使用 AppKit／TextKit。SwiftUI 重绘不得重新创建 Shell、浏览器 WebView 或原生编辑器。后端保留 Git 刷新合并、SSH 批量执行及超时；布局配置由窗口协调者传入项目。
 - **生成与依赖**：图标资源和查询表只通过生成脚本修改；第三方源码、补丁和许可证按[依赖约束](docs/DEPENDENCIES.md)维护。
 
 ## Swift / SwiftUI 约定

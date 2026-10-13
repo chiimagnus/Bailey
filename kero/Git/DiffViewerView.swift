@@ -6,7 +6,6 @@
 import AppKit
 import Foundation
 import Observation
-import PierreDiffsSwift
 import SwiftUI
 
 /// Lightweight UI state that should follow Kero across launches without
@@ -20,7 +19,7 @@ final class DiffViewPreferences {
     private static let modeKey = "diffView.mode"
     @ObservationIgnored private let defaults: UserDefaults
 
-    var diffStyle: DiffStyle {
+    var diffStyle: DiffLayoutStyle {
         didSet {
             defaults.set(diffStyle.rawValue, forKey: Self.layoutKey)
         }
@@ -38,7 +37,7 @@ final class DiffViewPreferences {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         if let rawValue = defaults.string(forKey: Self.layoutKey),
-           let style = DiffStyle(rawValue: rawValue) {
+           let style = DiffLayoutStyle(rawValue: rawValue) {
             diffStyle = style
         } else {
             diffStyle = .unified
@@ -47,23 +46,25 @@ final class DiffViewPreferences {
     }
 }
 
-/// Observable inputs for a diff tab's web view. Owned by `DiffTab`.
-/// Its edit callbacks capture
-/// the owning `DiffTab` weakly so that view retention cannot leak the tab.
-@MainActor
-@Observable
-final class DiffWebModel {
-    var oldContent = ""
-    var newContent = ""
-    var fileName = ""
-    var fileID = ""
-    var canEdit = false
-    var overflowMode: OverflowMode = .scroll
-    @ObservationIgnored var onFileEditChange: ((String, String) -> Void)?
-    @ObservationIgnored var onFileEditComplete: ((String, String) -> Void)?
-    /// The WKWebView renders blank until its JS bundle has drawn the diff;
-    /// a skeleton covers it until the bridge reports ready.
-    var isReady = false
+/// Values match the existing persisted unified/split preference.
+enum DiffLayoutStyle: String {
+    case unified
+    case split
+}
+
+/// One native review artifact shared across the unified and split layouts.
+nonisolated struct DiffDisplay {
+    let id = UUID()
+    let computation: DiffComputation
+    let unifiedText: NSAttributedString
+    let leftText: NSAttributedString
+    let rightText: NSAttributedString
+}
+
+private nonisolated struct DiffDisplayInputs {
+    let core: DiffCore
+    let oldRuns: [DiffHighlightRun]
+    let newRuns: [DiffHighlightRun]
 }
 
 /// A git diff opened as a tab from the git panel. Loads both sides of the
@@ -107,18 +108,26 @@ final class DiffTab: nonisolated Identifiable {
     /// the remote machine it lives on is no longer reachable.
     private(set) var readOnlyReason: String?
 
-    let web = DiffWebModel()
     let preferences: DiffViewPreferences
-
-    fileprivate(set) var nativeSurface: PierreMultiDiffSurface?
-    var webHostView: NSView? { nativeSurface?.webView }
+    private(set) var oldContent = ""
+    private(set) var newContent = ""
+    private(set) var display: DiffDisplay?
+    private(set) var editDecorations = DiffDecorations.empty
+    /// Owned by the tab, never by a transient SwiftUI mount.
+    @ObservationIgnored var nativeSurface: DiffNativeSurface?
+    var hasChanges: Bool { oldContent != newContent }
+    var isEditing: Bool { isEditableNow && preferences.prefersEditing }
 
     private nonisolated static let maxBytes = 5 << 20
     @ObservationIgnored private var savedNewContent = ""
-    /// Live text emitted by Pierre's editor. Kept out of `DiffWebModel` while
-    /// editing so a keystroke does not rebuild the CodeView item that owns the
-    /// editor, selection, and undo stack.
-    @ObservationIgnored private var editedNewContent = ""
+    @ObservationIgnored private(set) var editedNewContent = ""
+    @ObservationIgnored private(set) var editBufferRevision: UInt = 0
+    @ObservationIgnored private var displayGeneration: UInt = 0
+    @ObservationIgnored private var displayTask: Task<Void, Never>?
+    @ObservationIgnored private var displayInputs: DiffDisplayInputs?
+    @ObservationIgnored private var runExpansions: [Int: DiffRunExpansion] = [:]
+    @ObservationIgnored private var editGeneration: UInt = 0
+    @ObservationIgnored private var editTask: Task<Void, Never>?
     @ObservationIgnored private var reloadGeneration: UInt = 0
     @ObservationIgnored private var targetGeneration: UInt = 0
     /// The workspace this diff reads. The tab keeps its own, so it never
@@ -154,14 +163,6 @@ final class DiffTab: nonisolated Identifiable {
         self.commitHash = commitHash
         self.commitParentHash = commitParentHash
         self.commitStatus = commitStatus
-        web.fileName = name
-        web.fileID = path
-        web.onFileEditChange = { [weak self] fileID, contents in
-            self?.updateEditedContent(fileID: fileID, contents: contents)
-        }
-        web.onFileEditComplete = { [weak self] fileID, contents in
-            self?.completeEditing(fileID: fileID, contents: contents)
-        }
         reload()
     }
 
@@ -209,9 +210,16 @@ final class DiffTab: nonisolated Identifiable {
         targetGeneration &+= 1
         reloadGeneration &+= 1
         readOnlyReason = reason
-        // `isEditable` stays the file's own verdict, so an edit made before the
-        // connection dropped is still saveable once it comes back.
-        web.canEdit = isEditableNow
+        // Going offline hides the editable pane; publish its unsaved text to
+        // the read-only diff instead of making the draft disappear on screen.
+        if isReadOnly, isDirty, newContent != editedNewContent {
+            newContent = editedNewContent
+            runExpansions.removeAll()
+            recomputeDisplay()
+        }
+        // An edit made before the connection dropped remains saveable once
+        // the original machine is reachable again.
+        if isEditing { refreshEditDecorations(immediate: true) }
     }
 
     var name: String {
@@ -351,11 +359,17 @@ final class DiffTab: nonisolated Identifiable {
             self.error = result.failure
             self.isUnmerged = result.unmerged
             self.isEditable = result.editable && result.failure == nil
-            self.web.canEdit = self.isEditableNow
-            self.web.oldContent = result.old
-            self.web.newContent = result.new
+            let changed = self.oldContent != result.old || self.newContent != result.new
+            self.oldContent = result.old
+            self.newContent = result.new
+            if changed { self.runExpansions.removeAll() }
+            if changed || (self.hasChanges && self.display == nil) {
+                self.recomputeDisplay()
+            }
+            self.editBufferRevision &+= 1
             self.savedNewContent = result.new
             self.editedNewContent = result.new
+            if self.isEditing { self.refreshEditDecorations(immediate: true) }
             self.isDirty = false
             self.saveError = nil
         }
@@ -363,45 +377,193 @@ final class DiffTab: nonisolated Identifiable {
 
     /// Refreshes a live diff when navigation brings it back on screen.
     /// Historical blobs are immutable and already loaded by `init`; rerunning
-    /// four Git processes and republishing both files on every project switch
-    /// only makes WebKit render the same diff again. An initial live load also
+    /// Git operations and recomputing native rows on every project switch
+    /// would waste work without changing the visible diff. An initial live load also
     /// stays in flight rather than being duplicated by the view's first mount.
     func refreshWhenSelected() {
         guard commitHash == nil, !isLoading else { return }
         reload()
     }
 
-    /// Accepts the updated side emitted by Pierre's editor. The web view owns
-    /// the live document; this mirrored value drives dirty state and saving.
-    func updateEditedContent(fileID: String, contents: String) {
-        guard isEditable, fileID == path else { return }
+    /// Keep the native TextKit buffer as the editing source of truth.
+    func updateEditedContent(_ contents: String) {
+        guard isEditable else { return }
         editedNewContent = contents
         isDirty = contents != savedNewContent
-        if isDirty {
-            // A reload already in flight must not win after the first edit.
-            reloadGeneration &+= 1
-        }
+        if isDirty { reloadGeneration &+= 1 }
+        refreshEditDecorations()
     }
 
-    /// Once Pierre has torn down its editor, publish the final buffer so the
-    /// read-only diff renders the text the user just reviewed and edited.
-    func completeEditing(fileID: String, contents: String) {
-        updateEditedContent(fileID: fileID, contents: contents)
-        guard isEditable, fileID == path else { return }
-        web.newContent = contents
-    }
-
-    func setDiffStyle(_ style: DiffStyle) {
+    func setDiffStyle(_ style: DiffLayoutStyle) {
+        guard preferences.diffStyle != style else { return }
+        nativeSurface?.rememberScrollAnchor()
         preferences.diffStyle = style
     }
 
-    func setEditing(_ isEditing: Bool) {
-        guard isEditableNow else { return }
-        preferences.prefersEditing = isEditing
+    func setEditing(_ editing: Bool) {
+        guard isEditableNow, editing != isEditing else { return }
+        nativeSurface?.rememberScrollAnchor()
+        if !editing && newContent != editedNewContent {
+            newContent = editedNewContent
+            runExpansions.removeAll()
+            recomputeDisplay()
+        }
+        preferences.prefersEditing = editing
+        if editing { refreshEditDecorations(immediate: true) }
     }
 
-    private var isEditing: Bool {
-        isEditableNow && preferences.prefersEditing
+
+    /// Generate review rows and syntax tokens off the main actor. Superseded
+    /// results never overwrite a newer local/remote target or edit.
+    func recomputeDisplay() {
+        displayGeneration &+= 1
+        let generation = displayGeneration
+        guard hasChanges, error == nil else {
+            display = nil
+            displayInputs = nil
+            return
+        }
+        let before = oldContent
+        let after = newContent
+        let path = path
+        let expansions = runExpansions
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let font = TerminalFont.current()
+        let paragraphStyle = DiffTypography.paragraphStyle(for: font)
+        let textColor = Theme.terminal(dark: dark).foregroundNSColor
+        displayTask?.cancel()
+        displayTask = Task { [weak self] in
+            let context = await DiffSyntaxHighlighter.context(for: path)
+            let result = await Task.detached(priority: .userInitiated) {
+                let inputs = DiffDisplayInputs(
+                    core: DiffCore.compute(oldText: before, newText: after),
+                    oldRuns: context.map { DiffSyntaxHighlighter.runs(text: before, context: $0) } ?? [],
+                    newRuns: context.map { DiffSyntaxHighlighter.runs(text: after, context: $0) } ?? []
+                )
+                return (inputs, Self.makeDisplay(
+                    inputs: inputs, expansions: expansions,
+                    font: font, paragraphStyle: paragraphStyle, textColor: textColor
+                ))
+            }.value
+            guard let self, !Task.isCancelled, self.displayGeneration == generation else { return }
+            self.displayInputs = result.0
+            self.display = result.1
+        }
+    }
+
+    private nonisolated static func makeDisplay(
+        inputs: DiffDisplayInputs, expansions: [Int: DiffRunExpansion],
+        font: NSFont, paragraphStyle: NSParagraphStyle, textColor: NSColor
+    ) -> DiffDisplay {
+        let computation = DiffComputation.build(core: inputs.core, expansions: expansions)
+        let base: [NSAttributedString.Key: Any] = [
+            .font: font, .foregroundColor: textColor, .paragraphStyle: paragraphStyle,
+        ]
+        return DiffDisplay(
+            computation: computation,
+            unifiedText: DiffSyntaxHighlighter.attributedDocument(
+                computation.unified, oldRuns: inputs.oldRuns, newRuns: inputs.newRuns,
+                baseAttributes: base
+            ),
+            leftText: DiffSyntaxHighlighter.attributedDocument(
+                computation.splitLeft, oldRuns: inputs.oldRuns, newRuns: inputs.newRuns,
+                baseAttributes: base
+            ),
+            rightText: DiffSyntaxHighlighter.attributedDocument(
+                computation.splitRight, oldRuns: inputs.oldRuns, newRuns: inputs.newRuns,
+                baseAttributes: base
+            )
+        )
+    }
+
+    func expandRun(_ fold: DiffCollapsedRun) {
+        guard hasChanges else { return }
+        var expansion = runExpansions[fold.runIndex] ?? DiffRunExpansion()
+        switch fold.direction {
+        case .revealUp: expansion.fromEnd += DiffCollapse.expansionLineCount
+        case .revealDown: expansion.fromStart += DiffCollapse.expansionLineCount
+        case .both:
+            expansion.fromStart += DiffCollapse.expansionLineCount
+            expansion.fromEnd += DiffCollapse.expansionLineCount
+        }
+        runExpansions[fold.runIndex] = expansion
+        // Reuse the parsed diff and syntax runs; only the folded document changes.
+        guard let inputs = displayInputs else {
+            recomputeDisplay()
+            return
+        }
+        displayGeneration &+= 1
+        let generation = displayGeneration
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let font = TerminalFont.current()
+        let style = DiffTypography.paragraphStyle(for: font)
+        let color = Theme.terminal(dark: dark).foregroundNSColor
+        let expansions = runExpansions
+        displayTask?.cancel()
+        displayTask = Task { [weak self] in
+            let display = await Task.detached(priority: .userInitiated) {
+                Self.makeDisplay(
+                    inputs: inputs, expansions: expansions, font: font,
+                    paragraphStyle: style, textColor: color
+                )
+            }.value
+            guard let self, !Task.isCancelled, self.displayGeneration == generation else { return }
+            self.display = display
+        }
+    }
+
+    func refreshEditDecorations(immediate: Bool = false) {
+        editGeneration &+= 1
+        let generation = editGeneration
+        let before = oldContent
+        let after = editedNewContent
+        let oldRuns = displayInputs?.oldRuns ?? []
+        let font = TerminalFont.current()
+        let style = DiffTypography.paragraphStyle(for: font)
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let theme = Theme.terminal(dark: dark)
+        let color = theme.foregroundNSColor
+        let emphasis = theme.backgroundNSColor.blended(
+            withFraction: 0.38, of: theme.paletteNSColor(1) ?? .systemRed
+        ) ?? .systemRed
+        editTask?.cancel()
+        editTask = Task { [weak self] in
+            if !immediate { try? await Task.sleep(for: .milliseconds(120)) }
+            guard !Task.isCancelled else { return }
+            let decoration = await Task.detached(priority: .userInitiated) {
+                let (oldLines, _) = DiffLineSplitter.lines(of: before)
+                let (newLines, _) = DiffLineSplitter.lines(of: after)
+                let ops = DiffEngine.lineOps(old: oldLines, new: newLines)
+                let state = DiffComputation.editState(
+                    ops: ops, oldLines: oldLines, newLines: newLines
+                )
+                let base: [NSAttributedString.Key: Any] = [
+                    .font: font, .foregroundColor: color, .paragraphStyle: style,
+                ]
+                let ghosts = state.ghosts.map { block in
+                    DiffDecorations.GhostBlock(
+                        anchorLine: block.anchorLine,
+                        firstOldLine: block.firstOldLine,
+                        lines: DiffSyntaxHighlighter.attributedGhostLines(
+                            oldText: before as NSString, block: block, runs: oldRuns,
+                            baseAttributes: base, emphasisColor: emphasis
+                        )
+                    )
+                }
+                return DiffDecorations.edit(
+                    state: state, snapshotOffsets: newLines.map(\.utf16Range.location),
+                    lineCount: newLines.count, ghostBlocks: ghosts
+                )
+            }.value
+            guard let self, !Task.isCancelled, self.editGeneration == generation else { return }
+            self.editDecorations = decoration
+        }
+    }
+
+    /// No parallel editor state: the native STTextView keeps selection and undo.
+    func refreshNativeAppearance() {
+        recomputeDisplay()
+        if isEditing { refreshEditDecorations(immediate: true) }
     }
 
     func save() async {
@@ -533,113 +695,11 @@ final class DiffTab: nonisolated Identifiable {
     }
 }
 
-/// Font handling for the diff web view, so a diff reads at the same family and
-/// size as the terminal and the editor.
-///
-/// A family the user picked in Settings is installed system-wide and the web
-/// view resolves it by name. kero's bundled JetBrains Mono is different:
-/// `TerminalFont.registerBundledFonts` registers it for this process only, and
-/// the diff renders in a separate WebKit content process that cannot see it —
-/// so its faces travel to the web view as embedded font data. Reading and
-/// encoding them happens once for the whole app.
-private enum DiffFont {
-    static func renderOptions(family: String, size: Double) -> PierreDiffRenderOptions {
-        let usesBundled = family.isEmpty || family == TerminalFont.bundledFamily
-        return PierreDiffRenderOptions(
-            font: .bundled(
-                familyName: usesBundled ? TerminalFont.bundledFamily : family,
-                faces: usesBundled ? bundledFaces : [],
-                sizePoints: size
-            )
-        )
-    }
-
-    /// All four faces travel, rather than letting the browser synthesize bold
-    /// and italic: synthetic faces in a monospace grid do not stay aligned
-    /// with the real one.
-    private static let bundledFaces: [PierreDiffFontFace] = {
-        let variants = [
-            ("JetBrainsMono-Regular", "400", "normal"),
-            ("JetBrainsMono-Bold", "700", "normal"),
-            ("JetBrainsMono-Italic", "400", "italic"),
-            ("JetBrainsMono-BoldItalic", "700", "italic"),
-        ]
-        return variants.compactMap { resource, weight, style in
-            PierreDiffFontFace.load(
-                family: TerminalFont.bundledFamily,
-                resource: resource,
-                extension: "ttf",
-                weight: weight,
-                style: style
-            )
-        }
-    }()
-}
-
-/// Renders the tab's retained native surface when its inputs change.
-///
-/// A tab still shows exactly one file. It goes through the multi-file surface
-/// holding that single file because that is the virtualized path: rows are
-/// rendered only while on screen and syntax highlighting runs in a worker, so
-/// opening or scrolling a large diff never stalls the main thread. The
-/// single-file view renders every row up front and highlights them inline.
-struct DiffWebRoot: View {
-    @Bindable var model: DiffWebModel
-    let surface: PierreMultiDiffSurface
-    private let settings = AppSettings.shared
-    @Bindable private var preferences: DiffViewPreferences
-
-    init(diff: DiffTab, surface: PierreMultiDiffSurface) {
-        model = diff.web
-        preferences = diff.preferences
-        self.surface = surface
-    }
-
-    static func materialize(for diff: DiffTab) async {
-        guard diff.nativeSurface == nil else { return }
-        await Task.yield()
-        guard !Task.isCancelled, diff.nativeSurface == nil else { return }
-        diff.nativeSurface = PierreMultiDiffSurface()
-    }
-
-    var body: some View {
-        PierreMultiDiffView(
-            files: [
-                PierreDiffFile(
-                    id: model.fileID,
-                    name: model.fileName,
-                    oldContents: model.oldContent,
-                    newContents: model.newContent,
-                    isEditable: model.canEdit && preferences.prefersEditing
-                )
-            ],
-            surface: surface,
-            diffStyle: $preferences.diffStyle,
-            overflowMode: $model.overflowMode,
-            renderOptions: DiffFont.renderOptions(
-                family: settings.fontFamily, size: settings.fontSize
-            ),
-            onFileEditChange: { [model] fileID, contents in
-                model.onFileEditChange?(fileID, contents)
-            },
-            onFileEditComplete: { [model] fileID, contents in
-                model.onFileEditComplete?(fileID, contents)
-            },
-            onReady: { [model] in
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    model.isReady = true
-                }
-            }
-        )
-    }
-}
-
-/// Renders a diff tab with PierreDiffsSwift: syntax-highlighted unified or
-/// split view with word-level change highlighting.
+/// Native TextKit-backed diff with a tab-retained editor and scroll state.
 struct DiffViewerView: View {
     let diff: DiffTab
     private let themeChanges = Theme.changes
-    private let web: DiffWebModel
+    private let settings = AppSettings.shared
     private let preferences: DiffViewPreferences
     /// The view stays mounted while other tabs are selected (see
     /// ContentView); this flags when it is the frontmost tab so content
@@ -648,13 +708,13 @@ struct DiffViewerView: View {
 
     init(diff: DiffTab, isSelected: Bool = true) {
         self.diff = diff
-        web = diff.web
         preferences = diff.preferences
         self.isSelected = isSelected
     }
 
     var body: some View {
         let _ = themeChanges.revision
+        let _ = diff.editDecorations
         VStack(spacing: 0) {
             if let reason = diff.readOnlyReason {
                 RemoteReadOnlyBanner(message: reason)
@@ -669,7 +729,7 @@ struct DiffViewerView: View {
             Group {
                 if let error = diff.error {
                     placeholder(icon: "exclamationmark.triangle", text: error)
-                } else if web.oldContent == web.newContent {
+                } else if !diff.hasChanges {
                     if diff.isLoading {
                         initialLoadingSkeleton
                     } else if diff.isUnmerged {
@@ -683,24 +743,10 @@ struct DiffViewerView: View {
                 } else {
                     VStack(spacing: 0) {
                         controlBar
-                        if let surface = diff.nativeSurface {
-                            DiffWebRoot(diff: diff, surface: surface)
-                                // Cover (never hide) the webview while it boots:
-                                // making it invisible lets WebKit throttle rendering
-                                // and the initial diff render can be dropped entirely.
-                                .overlay {
-                                    if !web.isReady {
-                                        DiffSkeletonView()
-                                            .background(Color(nsColor: Theme.background))
-                                            .transition(.opacity)
-                                    }
-                                }
+                        if diff.display != nil {
+                            DiffNativeRoot(diff: diff)
                         } else {
                             DiffSkeletonView()
-                                .task(id: isSelected) {
-                                    guard isSelected else { return }
-                                    await DiffWebRoot.materialize(for: diff)
-                                }
                         }
                     }
                 }
@@ -713,10 +759,11 @@ struct DiffViewerView: View {
             }
         }
         .onChange(of: isSelected) {
-            if isSelected {
-                diff.refreshWhenSelected()
-            }
+            if isSelected { diff.refreshWhenSelected() }
         }
+        .onChange(of: settings.fontFamily) { _, _ in diff.refreshNativeAppearance() }
+        .onChange(of: settings.fontSize) { _, _ in diff.refreshNativeAppearance() }
+        .onChange(of: themeChanges.revision) { _, _ in diff.refreshNativeAppearance() }
     }
 
     private var conflictBanner: some View {
@@ -756,9 +803,8 @@ struct DiffViewerView: View {
         .frame(height: DiffViewerLayout.controlsHeight)
     }
 
-    /// The WebKit skeleton later sits below the real controls. Reserve that
-    /// exact toolbar row during the file load too, so the code-shaped lines do
-    /// not jump down when the diff contents become available.
+    /// Reserve the toolbar row while the native diff is computing so its
+    /// layout never jumps when the text panes become available.
     private var initialLoadingSkeleton: some View {
         VStack(spacing: 0) {
             DiffControlsSkeletonBar(
@@ -806,7 +852,7 @@ private enum DiffViewerLayout {
 /// Native controls for the materially changed diff toolbar. The surrounding
 /// diff view is legacy SwiftUI, but new interaction stays in AppKit.
 private struct DiffControlsBar: NSViewRepresentable {
-    @Binding var diffStyle: DiffStyle
+    @Binding var diffStyle: DiffLayoutStyle
     @Binding var isEditing: Bool
     let canEdit: Bool
 
@@ -930,7 +976,7 @@ private final class DiffControlsNSView: NSView {
         action: nil
     )
     private let divider = NSView()
-    private var onDiffStyleChange: ((DiffStyle) -> Void)?
+    private var onDiffStyleChange: ((DiffLayoutStyle) -> Void)?
     private var onEditingChange: ((Bool) -> Void)?
 
     override init(frame frameRect: NSRect) {
@@ -971,10 +1017,10 @@ private final class DiffControlsNSView: NSView {
     }
 
     func update(
-        diffStyle: DiffStyle,
+        diffStyle: DiffLayoutStyle,
         isEditing: Bool,
         canEdit: Bool,
-        onDiffStyleChange: @escaping (DiffStyle) -> Void,
+        onDiffStyleChange: @escaping (DiffLayoutStyle) -> Void,
         onEditingChange: @escaping (Bool) -> Void
     ) {
         self.onDiffStyleChange = onDiffStyleChange
@@ -1015,8 +1061,7 @@ private final class DiffControlsNSView: NSView {
     }
 }
 
-/// Code-shaped gray bars shown while the diff web view boots, so opening
-/// a diff never flashes an empty pane.
+/// Code-shaped gray bars shown while native diff computation completes.
 private struct DiffSkeletonView: View {
     /// (indent level, width fraction) per line, repeated to fill the pane.
     private static let pattern: [(indent: CGFloat, width: CGFloat)] = [

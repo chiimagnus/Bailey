@@ -15,12 +15,14 @@ Ghostty 通过 Xcode Package Dependencies 直接引用 [`egoist-labs/libghostty-
 本地副本位于 `Vendor/STTextView`，基于上游 `2.3.11`。
 保留副本是为了携带尚需维护的源码修复，不用上游变更日志推断副本版本。
 
-当前修复覆盖四项行为：
+当前修复覆盖六项行为：
 
 - **行号**：字体或颜色变化后，排除已脱离视图的旧布局片段，避免行号错位。
 - **横向滚动**：按已布局内容的最大宽度计算文档范围，避免末行较短时无法滚到长行尾部。
 - **短文档点击**：文档高度至少覆盖视口，使最后一行下方的点击仍可聚焦编辑器。
 - **空范围高亮**：跳过空文本范围上的临时属性，避免打开 Markdown 时触发 TextKit 崩溃。
+- **Diff 固定行高**：为双栏只读 Diff 提供准确的文档高度，避免 TextKit 懒布局让左右列的滚动范围不一致。
+- **只读替换不追光标**：Diff 展开上下文或重载只读文本时保留滚动位置，普通编辑器仍追随插入点。
 
 这些修复集中在三个文件：
 [行号](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Gutter.swift)、
@@ -36,13 +38,11 @@ Ghostty 通过 Xcode Package Dependencies 直接引用 [`egoist-labs/libghostty-
 
 全部问题被上游解决后，可撤销本地副本并改用固定版本的远程依赖；仍须运行上述验收。
 
-## Pierre Diff
+## 原生 Git Diff
 
-本地副本 `Vendor/PierreDiffsSwift` 基于上游 `1.5.0`，提交 `3713d29360b750d3d6146b187ff3b77b7d498fee`；保留原 MIT 许可证、资源和渲染逻辑。
+Git Diff 复用应用现有的 STTextView/TextKit 与语法解析依赖，**不再需要 PierreDiffsSwift 或 WKWebView**。`kero/Git/DiffEngine.swift` 计算行级与行内差异；`DiffSyntaxHighlighter.swift` 使用编辑器同一语法与主题；`DiffTextView.swift` 绘制行号、增删颜色和折叠上下文。`DiffNativeSurface.swift` 由 `DiffTab` 保留唯一原生视图，SwiftUI 重挂载不替换编辑缓冲区、撤销栈或滚动位置。
 
-标签使用 `PierreMultiDiffSurface` 持有唯一 WKWebView 和协调器。SwiftUI 重挂载只借用这一份资源，不能在临时 View 拆除时执行 `cleanup`；标签与挂载引用释放后才清理。临时容器负责布局，只将有效尺寸交给长期 WebView，避免 SwiftUI 把它清零而丢失网页内滚动。
-
-此改动只涉及 `PierreMultiDiffView.swift` 与 `DiffWebViewCoordinator.swift` 的资源所有权和原生挂载，不改 Pierre 的 JavaScript 内核或输入内容。Kero 删除了额外的 NSHostingView 与外观转发，渲染器直接继承当前窗口外观。升级时核对上游是否已提供同等生命周期保证，并运行 `KeroTests/DiffTabTests`，检查真实内容、WebView 身份、滚动、编辑与撤销。上游解决后可撤销本地副本；不能只凭宿主对象相同就删除此修复。
+升级 STTextView 时除编辑器自身四项补丁外，必须检查固定行高和只读文档替换时的滚动行为，并运行 `KeroTests/DiffTabTests`，验证真实渲染、统一/分栏、编辑、撤销、保存与重新挂载。
 
 ## TSX 语法
 
