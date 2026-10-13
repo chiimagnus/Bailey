@@ -6,16 +6,28 @@ Closes #
 
 ## What changed
 
-<!-- What it does and how it works. Call out anything non-obvious in the diff. -->
+<!-- 说明改了什么、为什么，以及必要的架构／数据／权限影响。引用既有需求、文档和停止决定，不复制进度表。 -->
+
+## Memory footprint
+
+<!-- 涉及性能、内存或生命周期时填写前后测量、环境和泄漏检查结果；无关改动删除本节，不填猜测数字。 -->
+
+| 场景 | 修改前 | 修改后 |
+| --- | --- | --- |
+| 启动后空闲 | | |
+| 功能使用峰值 | | |
+| 关闭相关标签／窗口后稳定值 | | |
+
+泄漏检查：
 
 ## Demo
 
-<!-- UI, layout, or interaction change: attach before/after screenshots or a short recording when useful. Delete this section if there is nothing to show. -->
+<!-- 视觉改动附同窗口尺寸、内容和动作的前后并排录屏，截图仅作补充。非视觉改动删除本节。 -->
 
 ## Drawbacks
 
-<!-- Tradeoffs made on purpose, compatibility/data/device impact, and anything you're unsure about. "None" is a valid answer. -->
+<!-- 刻意取舍、兼容／恢复影响、未解决风险或后续工作。引用已有证据，确实没有时写“无”。 -->
 
 ## Tests & validation
 
-<!-- 按 docs/TESTING.md 说明：新增/更新的回归测试（缺陷优先 Red→Green）、实际执行的 make test/build、原生组件与工作区集成、真正 E2E 的已测/未测边界；影响本机/SSH、真实文件或 Git 时写出结果。不要把单组件 XCTest 称为 E2E。 -->
+<!-- 按 docs/testing.md 的完成标准列出实际命令、回归用例（适用时 Red→Green）、原生及人工路径和未测项。区分单元、集成、原生 UI、工作区 UI 与真实 E2E；列出已同步的文档。不要提交凭据、用户数据或敏感日志。 -->

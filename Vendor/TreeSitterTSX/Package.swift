@@ -3,7 +3,7 @@
 import PackageDescription
 
 // The tree-sitter TSX grammar (TypeScript + JSX), vendored so kero can link it.
-// 本地包的原因与更新规则见 ../../docs/DEPENDENCIES.md。
+// 本地包的原因与更新规则见 ../../docs/development.md。
 let package = Package(
     name: "TreeSitterTSX",
     products: [
