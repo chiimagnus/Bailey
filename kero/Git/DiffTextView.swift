@@ -116,8 +116,8 @@ enum DiffCollapsedRunLabel {
 
 /// Everything a code pane needs to decorate its document, keyed by paragraph
 /// (row) index. Built from a `DiffSideDocument` in review mode, or from the
-/// edit-mode line lists while the buffer is live. Nonisolated: edit-mode
-/// decorations are rebuilt off the main actor as the user types.
+/// edit-mode line lists while the buffer is live. The line diff runs off-main;
+/// native colors, attributed ghost rows and decorations are built on MainActor.
 struct DiffDecorations {
     struct Row {
         let kind: DiffRowKind

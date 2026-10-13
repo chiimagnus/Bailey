@@ -10,7 +10,7 @@
 
 ## 架构：MVVM + Observation
 
-**全项目目标是 MVVM + Observation，当前代码尚未完成迁移。** 新功能必须按此架构开发；全面重构须覆盖 Kero 自有的窗口、项目、标签、文件、Git、终端、浏览器、设置等状态与业务调用链。现有 `TerminalManager`、`Project` 等仍有混合职责，不能仅重命名类型或替换属性包装器就宣称完成。
+**当前自有 SwiftUI 状态以 MVVM + Observation 为主。** `TerminalManager` 负责窗口状态、`Project` 负责项目与标签，两者是现有长生命周期 ViewModel 所有者；Git、文件与 SSH 的实际操作经后端执行。新功能继续按此职责划分，不通过重命名类型、复制状态或引入旧的发布级联实现观察。
 
 - **Model**：表达领域数据、身份、不变量与纯转换；不依赖 SwiftUI、AppKit、Combine，也不直接执行界面或文件／网络操作。
 - **ViewModel**：持有可观察的展示状态、用户动作、业务流程和异步任务；调用注入的 Service，处理加载、错误、取消及目标失效。不直接构建 SwiftUI View、弹原生对话框或执行底层 IO。
@@ -32,9 +32,9 @@
 
 ## Swift / SwiftUI 约定
 
-- **Swift 6 升级目标**：工程当前最低 macOS 15.6、Swift 5 语言模式与默认 `MainActor` 隔离；全面重构以切换 **Swift 6 语言模式并通过严格并发编译**为目标，未实际编译通过前不得称已完成。新 API 以实际 Xcode／SDK 和 macOS 部署目标可用性为准，不为追新提高最低系统版本或增加兼容包装。
-- **Observation 优先**：新建可观察 ViewModel 默认使用 `@Observable`；View 持有其生命周期时用 `@State`，需要双向绑定时用 `@Bindable`，只读取时直接传入对象，局部 UI 状态仍用 `@State`。依赖通过初始化参数或现有环境注入。现有 `ObservableObject`／`@Published`／`@StateObject`／`@ObservedObject` 逐步迁移，不为同一状态维护两套观察机制。
-- **Combine 限定用途**：界面状态统一向 Observation 收敛；只有确需 Publisher、节流、事件合并或第三方桥接时才保留 Combine。Observation 的属性追踪不等于事件订阅；原先经 `objectWillChange`／`@Published` 转发的嵌套变化、设置响应和自动保存，必须有实际生效的替代触发，不能只删 Publisher 或复制第二套状态。
+- **Swift 6 编译基线**：App 与 XCTest 的 Debug／Release 均启用 Swift 6 语言模式和默认 `MainActor` 隔离，最低 macOS 仍为 15.6。修改并发代码须用真实 Swift 6 构建、测试与验签检查隔离边界；新 API 以当前 Xcode／SDK 和部署目标可用性为准，不为追新提高系统版本或增加兼容包装。
+- **Observation 优先**：新建可观察 ViewModel 默认使用 `@Observable`；View 持有其生命周期时用 `@State`，需要双向绑定时用 `@Bindable`，只读取时直接传入对象，局部 UI 状态仍用 `@State`。依赖通过初始化参数或现有环境注入，不恢复自有 SwiftUI 状态的旧 `ObservableObject`／`@Published` 转发或双套观察机制。
+- **Combine 限定用途**：SwiftUI 自有展示状态由 Observation 管理。`TunnelManager.$tunnels/$states` 的 Combine 事件仍供原生 `NSTableView` 刷新；WebKit 的 KVO 也保留必要的原生事件桥。Observation 属性追踪不等于事件订阅；嵌套变化、设置响应和自动保存须经现行语义触发，不恢复旧 `objectWillChange` 级联。
 - **并发与错误**：可观察状态由 `MainActor` 管理；文件、Git、SSH 等耗时任务走异步后端，`Task {}` 本身不会脱离主 actor。优先 Swift Concurrency、`Sendable` 边界及 `Task.sleep(for:)`，任务取消或切换目标后不发布过期结果；只有确需 AppKit 事件／第三方桥接时保留 GCD。按 Swift 6 编译诊断修正隔离，不能用 `nonisolated(unsafe)`、无依据的 `@unchecked Sendable`、`try!` 或强制解包掩盖问题。
 - **交互与无障碍**：普通点击用 `Button`，仅确需坐标或点击次数时用 `onTapGesture`；图标按钮必须有文字语义及辅助功能名称。核对键盘快捷键、焦点、悬停与 VoiceOver；尊重系统字号和用户配置的终端／编辑器字体，不以固定文字大小取代可调整字号。
 - **视图结构**：较复杂且独立的界面块用独立 `View` 类型，不通过返回 `some View` 的计算属性堆叠子视图；避免无必要的 `AnyView`。可用原生布局替代时不用 `GeometryReader`，但 Dock 拖动和精确命中仍允许读取几何信息；`ForEach` 使用稳定身份，避免仅为遍历 `enumerated()` 转成数组。
