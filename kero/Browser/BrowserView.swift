@@ -475,7 +475,7 @@ final class BrowserTab: NSObject, Identifiable, WKNavigationDelegate, WKUIDelega
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
-        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
     ) {
         guard let url = navigationAction.request.url,
               let scheme = url.scheme?.lowercased()
@@ -641,7 +641,7 @@ final class BrowserTab: NSObject, Identifiable, WKNavigationDelegate, WKUIDelega
         _ webView: WKWebView,
         runJavaScriptAlertPanelWithMessage message: String,
         initiatedByFrame frame: WKFrameInfo,
-        completionHandler: @escaping () -> Void
+        completionHandler: @escaping @MainActor () -> Void
     ) {
         let alert = NSAlert()
         alert.messageText = webView.title ?? String(localized: "Webpage", table: "Browser")
@@ -654,7 +654,7 @@ final class BrowserTab: NSObject, Identifiable, WKNavigationDelegate, WKUIDelega
         _ webView: WKWebView,
         runJavaScriptConfirmPanelWithMessage message: String,
         initiatedByFrame frame: WKFrameInfo,
-        completionHandler: @escaping (Bool) -> Void
+        completionHandler: @escaping @MainActor (Bool) -> Void
     ) {
         let alert = NSAlert()
         alert.messageText = webView.title ?? String(localized: "Webpage", table: "Browser")
@@ -671,7 +671,7 @@ final class BrowserTab: NSObject, Identifiable, WKNavigationDelegate, WKUIDelega
         runJavaScriptTextInputPanelWithPrompt prompt: String,
         defaultText: String?,
         initiatedByFrame frame: WKFrameInfo,
-        completionHandler: @escaping (String?) -> Void
+        completionHandler: @escaping @MainActor (String?) -> Void
     ) {
         let alert = NSAlert()
         alert.messageText = webView.title ?? String(localized: "Webpage", table: "Browser")

@@ -296,6 +296,32 @@ final class DiffTabTests: XCTestCase {
     }
 
 
+    func testBackgroundSyntaxCapturesReachNativeDiffColors() async throws {
+        for (path, source) in [
+            ("sample.swift", "let answer = 42\n"),
+            ("View.tsx", "const View = () => <main title=\"hi\">Hello</main>;\n"),
+        ] {
+            let resolved = await DiffSyntaxHighlighter.context(for: path)
+            let context = try XCTUnwrap(resolved, "Missing grammar for \(path)")
+            let captures = await Task.detached(priority: .userInitiated) {
+                DiffSyntaxHighlighter.captures(text: source, context: context)
+            }.value
+            XCTAssertFalse(captures.isEmpty, "Syntax parser returned no highlights for \(path)")
+            XCTAssertTrue(captures.allSatisfy {
+                $0.range.length > 0 && NSMaxRange($0.range) <= source.utf16.count
+            })
+            let colored = DiffSyntaxHighlighter.colors(for: captures)
+            XCTAssertEqual(colored.count, captures.count)
+            let computed = DiffComputation.compute(oldText: "", newText: source)
+            let rendered = DiffSyntaxHighlighter.attributedDocument(
+                computed.unified, oldRuns: [], newRuns: colored,
+                baseAttributes: [.foregroundColor: NSColor.textColor]
+            )
+            XCTAssertEqual(rendered.string, computed.unified.text)
+            XCTAssertFalse(colored.isEmpty, "No native foreground colors for \(path)")
+        }
+    }
+
     func testNativeDiffUnicodeAndSplitAlignmentWithFoldExpansion() {
         let old = "one\r\n中文😀\r\nlast\n"
         let new = "one\r\n中文🪨\r\nlast"
@@ -323,6 +349,47 @@ final class DiffTabTests: XCTestCase {
         )
         XCTAssertGreaterThan(expanded.unified.rows.count, folded.unified.rows.count)
         XCTAssertEqual(expanded.splitLeft.rows.count, expanded.splitRight.rows.count)
+    }
+
+    func testCollapsedDiffAccessibilityPressReachesNativeExpansion() async throws {
+        let oldLines = (0..<240).map { "line \($0)" }
+        var newLines = oldLines
+        newLines[120] = "line 120 changed"
+        let old = oldLines.joined(separator: "\n") + "\n"
+        let new = newLines.joined(separator: "\n") + "\n"
+        let compared = DiffComputation.build(
+            core: DiffCore.compute(oldText: old, newText: new), expansions: [:]
+        )
+        XCTAssertTrue(compared.unified.rows.contains { $0.collapsed != nil })
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 620),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        window.contentView = pane
+        window.orderFront(nil)
+        pane.setReviewDocument(
+            NSAttributedString(string: compared.unified.text),
+            decorations: DiffDecorations.review(compared.unified)
+        )
+        pane.layoutSubtreeIfNeeded()
+        let gutter = try XCTUnwrap(pane.subviews.compactMap { $0 as? DiffGutterView }.first)
+        var expanded: DiffCollapsedRun?
+        pane.onExpandCollapsedRun = { expanded = $0 }
+        try await wait {
+            pane.layoutSubtreeIfNeeded()
+            return (gutter.accessibilityChildren()?.count ?? 0) > 0
+        }
+        let controls = try XCTUnwrap(gutter.accessibilityChildren())
+        let first = try XCTUnwrap(controls.first as? NSAccessibilityElement)
+        XCTAssertTrue(first.accessibilityPerformPress())
+        let activated = try XCTUnwrap(expanded)
+        XCTAssertTrue(compared.unified.rows.contains {
+            $0.collapsed?.runIndex == activated.runIndex
+        })
     }
 
     func testNativeDiffSplitLayoutPreservesPaneIdentity() async throws {

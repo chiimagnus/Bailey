@@ -438,7 +438,7 @@ private final class ToolbarContextMenuMonitorView: NSView {
         self.eventMonitor = nil
     }
 
-    deinit {
+    isolated deinit {
         if let eventMonitor {
             NSEvent.removeMonitor(eventMonitor)
         }

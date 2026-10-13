@@ -16,19 +16,21 @@ import AppKit
 import STPluginNeon
 import SwiftTreeSitter
 
-/// One foreground-color run in a source file (UTF-16 offsets).
-nonisolated struct DiffHighlightRun {
+/// Background parser results contain only transferable source ranges/names.
+nonisolated struct DiffCaptureRun: Sendable {
+    let range: NSRange
+    let name: String
+}
+
+/// Native presentation colors never cross the actor boundary.
+struct DiffHighlightRun {
     let range: NSRange
     let color: NSColor
 }
 
-/// Inputs the off-main highlight pass needs from the main actor: the resolved
-/// language and its compiled query (shared with the editor's cache), plus the
-/// theme used to map capture names to colors.
-struct DiffHighlightContext {
-    let language: SyntaxLanguage
+nonisolated struct DiffHighlightContext: Sendable {
+    let grammarIndex: Int
     let query: SwiftTreeSitter.Query
-    let theme: STPluginNeonAppKit.Theme
 }
 
 enum DiffSyntaxHighlighter {
@@ -42,50 +44,61 @@ enum DiffSyntaxHighlighter {
     /// for file types without a grammar — the diff renders unhighlighted.
     static func context(for path: String) async -> DiffHighlightContext? {
         guard let language = SyntaxHighlighting.language(for: path) else { return nil }
-        let theme = SyntaxHighlighting.theme
+        guard let grammarIndex = language.grammarIndex else { return nil }
         if let cached = HighlightQueryCache.cached(language) {
-            return DiffHighlightContext(language: language, query: cached, theme: theme)
+            return DiffHighlightContext(grammarIndex: grammarIndex, query: cached)
         }
         let data = SyntaxHighlighting.highlightsData(for: language)
-        let parser = language.parser
         let query = await Task.detached(priority: .userInitiated) {
-            try? SwiftTreeSitter.Query(language: Language(language: parser), data: data)
+            SyntaxLanguage.compileQuery(grammarIndex: grammarIndex, data: data)
         }.value
         guard let query else { return nil }
         HighlightQueryCache.store(query, for: language)
-        return DiffHighlightContext(language: language, query: query, theme: theme)
+        return DiffHighlightContext(grammarIndex: grammarIndex, query: query)
     }
 
-    /// Whole-file highlight runs for one side's text. Pure compute — parse,
-    /// query, capture→color — meant for a detached task.
-    nonisolated static func runs(
+    /// The expensive tree-sitter pass returns only Sendable capture metadata.
+    nonisolated static func captures(
         text: String, context: DiffHighlightContext
-    ) -> [DiffHighlightRun] {
+    ) -> [DiffCaptureRun] {
         guard !text.isEmpty, text.utf8.count <= highlightByteLimit else { return [] }
         let parser = Parser()
+        guard let grammar = SyntaxLanguage.parser(grammarIndex: context.grammarIndex) else {
+            return []
+        }
         do {
-            try parser.setLanguage(context.language.parser)
+            try parser.setLanguage(grammar)
         } catch {
             return []
         }
         guard let tree = parser.parse(text), let root = tree.rootNode else { return [] }
 
         let predicateContext = SwiftTreeSitter.Predicate.Context(string: text)
-        var runs: [DiffHighlightRun] = []
+        var runs: [DiffCaptureRun] = []
         for named in context.query.execute(node: root, in: tree)
             .resolve(with: predicateContext).highlights() {
             guard named.range.length > 0,
-                  !SyntaxHighlightCoordinator.ignoredCaptures.contains(named.name),
-                  let color = SyntaxHighlightCoordinator.themeColor(for: named.name, theme: context.theme)
+                  !SyntaxHighlightCoordinator.ignoredCaptures.contains(named.name)
             else { continue }
-            runs.append(DiffHighlightRun(range: named.range, color: color))
+            runs.append(DiffCaptureRun(range: named.range, name: named.name))
         }
         return runs
     }
 
+    /// Resolve AppKit theme colors on the owning actor, after parsing.
+    static func colors(for captures: [DiffCaptureRun]) -> [DiffHighlightRun] {
+        let theme = SyntaxHighlighting.theme
+        return captures.compactMap { capture in
+            guard let color = SyntaxHighlightCoordinator.themeColor(
+                for: capture.name, theme: theme
+            ) else { return nil }
+            return DiffHighlightRun(range: capture.range, color: color)
+        }
+    }
+
     /// Builds the document's attributed text: base attributes over the whole
     /// string, then each row colored by the runs of its own source file.
-    nonisolated static func attributedDocument(
+    static func attributedDocument(
         _ document: DiffSideDocument,
         oldRuns: [DiffHighlightRun],
         newRuns: [DiffHighlightRun],
@@ -104,7 +117,7 @@ enum DiffSyntaxHighlighter {
     /// ready for the decoration underlay to draw into the ghost gap. Uses the
     /// same forward-pointer walk as `applyRuns` (block lines ascend through
     /// the old file), which stays correct for multi-line runs.
-    nonisolated static func attributedGhostLines(
+    static func attributedGhostLines(
         oldText: NSString,
         block: DiffEditGhostBlock,
         runs: [DiffHighlightRun],
@@ -159,7 +172,7 @@ enum DiffSyntaxHighlighter {
     /// overlap — sequential `addAttribute` preserves that. Multi-line runs
     /// (block comments, strings) overlap several rows and are re-applied to
     /// each.
-    private nonisolated static func applyRuns(
+    private static func applyRuns(
         _ runs: [DiffHighlightRun],
         source: DiffRowSource,
         to attributed: NSMutableAttributedString,

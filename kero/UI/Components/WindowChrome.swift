@@ -107,7 +107,7 @@ struct WindowChromeAccessor: NSViewRepresentable {
             }
         }
 
-        deinit {
+        isolated deinit {
             for observer in observers {
                 NotificationCenter.default.removeObserver(observer)
             }

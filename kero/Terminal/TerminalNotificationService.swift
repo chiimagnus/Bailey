@@ -29,8 +29,10 @@ final class TerminalNotificationService: NSObject, UNUserNotificationCenterDeleg
         // and delivered notifications can play audio — no prompt when already
         // authorized.
         center.getNotificationSettings { [weak self] settings in
+            let authorization = settings.authorizationStatus
+            let sound = settings.soundSetting
             DispatchQueue.main.async {
-                self?.upgradeSoundAuthorizationIfNeeded(settings)
+                self?.upgradeSoundAuthorizationIfNeeded(authorization: authorization, sound: sound)
             }
         }
     }
@@ -44,24 +46,24 @@ final class TerminalNotificationService: NSObject, UNUserNotificationCenterDeleg
 
     private func checkAuthorization(for message: String, sessionID: UUID?) {
         center.getNotificationSettings { [weak self] settings in
+            let authorization = settings.authorizationStatus
+            let sound = settings.soundSetting
             DispatchQueue.main.async {
                 self?.handle(
-                    settings,
-                    message: message,
-                    sessionID: sessionID
+                    authorization: authorization, sound: sound,
+                    message: message, sessionID: sessionID
                 )
             }
         }
     }
 
     private func handle(
-        _ settings: UNNotificationSettings,
-        message: String,
-        sessionID: UUID?
+        authorization: UNAuthorizationStatus, sound: UNNotificationSetting,
+        message: String, sessionID: UUID?
     ) {
-        switch settings.authorizationStatus {
+        switch authorization {
         case .authorized, .provisional:
-            if settings.soundSetting == .notSupported {
+            if sound == .notSupported {
                 // Authorized without sound — upgrade options before delivering.
                 requestAuthorization(message: message, sessionID: sessionID)
             } else {
@@ -82,10 +84,12 @@ final class TerminalNotificationService: NSObject, UNUserNotificationCenterDeleg
     /// When already authorized for alerts only, `soundSetting` is
     /// `.notSupported` and Settings hides "Play sound for notifications".
     /// Requesting `.sound` again registers the type without a second prompt.
-    private func upgradeSoundAuthorizationIfNeeded(_ settings: UNNotificationSettings) {
-        switch settings.authorizationStatus {
+    private func upgradeSoundAuthorizationIfNeeded(
+        authorization: UNAuthorizationStatus, sound: UNNotificationSetting
+    ) {
+        switch authorization {
         case .authorized, .provisional:
-            guard settings.soundSetting == .notSupported else { return }
+            guard sound == .notSupported else { return }
             requestAuthorization(message: nil, sessionID: nil)
         default:
             break

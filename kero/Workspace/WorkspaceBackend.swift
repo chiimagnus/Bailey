@@ -7,7 +7,7 @@ import Darwin
 import Foundation
 
 /// One directory entry, as the file tree needs it.
-struct WorkspaceEntry: Sendable, Equatable {
+nonisolated struct WorkspaceEntry: Sendable, Equatable {
     let name: String
     /// Directory after following symlinks, matching `FileManager.fileExists`.
     let isDirectory: Bool
@@ -15,7 +15,7 @@ struct WorkspaceEntry: Sendable, Equatable {
 }
 
 /// Metadata about one path, following symlinks for everything but `isSymlink`.
-struct WorkspaceStat: Sendable, Equatable {
+nonisolated struct WorkspaceStat: Sendable, Equatable {
     let isRegular: Bool
     let isDirectory: Bool
     /// True when the path *itself* is a symlink, whatever it resolves to.
@@ -25,7 +25,7 @@ struct WorkspaceStat: Sendable, Equatable {
 }
 
 /// One process under the session's shell.
-struct WorkspaceProcess: Sendable, Equatable {
+nonisolated struct WorkspaceProcess: Sendable, Equatable {
     let pid: pid_t
     /// Executable name, e.g. "node".
     let name: String
@@ -38,19 +38,19 @@ struct WorkspaceProcess: Sendable, Equatable {
 /// Descendants of one process, plus the names of every process on the machine.
 /// The names come along because a listening socket can belong to the shell
 /// itself, which is not one of its own descendants.
-struct WorkspaceProcessSnapshot: Sendable {
+nonisolated struct WorkspaceProcessSnapshot: Sendable {
     /// Breadth-first, so commands the user ran come before their workers.
     let descendants: [WorkspaceProcess]
     let namesByPid: [pid_t: String]
 }
 
 /// One TCP port a process is listening on.
-struct WorkspacePort: Sendable, Equatable {
+nonisolated struct WorkspacePort: Sendable, Equatable {
     let port: Int
     let pid: pid_t
 }
 
-struct WorkspaceRunResult: Sendable {
+nonisolated struct WorkspaceRunResult: Sendable {
     let status: Int32
     let stdout: Data
     let stderr: Data
@@ -59,7 +59,7 @@ struct WorkspaceRunResult: Sendable {
 /// Failures a consumer has to tell apart to keep its own wording. Anything
 /// else propagates as the original system error, so messages built from
 /// `localizedDescription` read exactly as they do without a backend.
-enum WorkspaceError: Error {
+nonisolated enum WorkspaceError: Error {
     case notFound
     case tooLarge
     case timedOut

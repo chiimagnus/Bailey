@@ -60,7 +60,7 @@ struct AppSnapshot: Codable {
 
 /// Explicitly isolated secondary instances must not overwrite the running
 /// Kero window snapshot or start its saved background forwards.
-enum KeroInstanceMode {
+nonisolated enum KeroInstanceMode {
     static let isIsolated = ProcessInfo.processInfo.arguments.contains("--isolated-ui-test")
 }
 

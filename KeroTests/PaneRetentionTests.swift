@@ -290,6 +290,52 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertTrue(browser.webView === native)
     }
 
+    func testWebKitJavaScriptDialogsInvokeNativeDelegateSheets() async throws {
+        let browser = BrowserTab(initialFocus: .none)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: BrowserView(
+            browser: browser, isFocused: true, onFocused: {}, onNewBrowserTab: { _ in }
+        ))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        browser.webView.loadHTMLString("<title>Delegate fixture</title>", baseURL: nil)
+        try await settle { browser.title == "Delegate fixture" && !browser.isLoading }
+
+        let alertTask = Task { @MainActor in
+            _ = try await browser.webView.evaluateJavaScript("alert('Native alert check')")
+            return true
+        }
+        try await settle { window.attachedSheet != nil }
+        let alertSheet = try XCTUnwrap(window.attachedSheet)
+        window.endSheet(alertSheet, returnCode: .alertFirstButtonReturn)
+        let alertCompleted = try await alertTask.value
+        XCTAssertTrue(alertCompleted)
+
+        let confirmTask = Task {
+            try await browser.webView.evaluateJavaScript("confirm('Native confirmation')") as? Bool
+        }
+        try await settle { window.attachedSheet != nil }
+        let confirmSheet = try XCTUnwrap(window.attachedSheet)
+        window.endSheet(confirmSheet, returnCode: .alertSecondButtonReturn)
+        let confirmed = try await confirmTask.value
+        XCTAssertEqual(confirmed, false)
+
+        let promptTask = Task {
+            try await browser.webView.evaluateJavaScript("prompt('Native prompt', 'default-text')") as? String
+        }
+        try await settle { window.attachedSheet != nil }
+        let promptSheet = try XCTUnwrap(window.attachedSheet)
+        window.endSheet(promptSheet, returnCode: .alertFirstButtonReturn)
+        let prompted = try await promptTask.value
+        XCTAssertEqual(prompted, "default-text")
+    }
+
     func testBrowserAndEditorStateSurviveViewRemount() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

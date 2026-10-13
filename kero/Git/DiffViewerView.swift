@@ -53,7 +53,7 @@ enum DiffLayoutStyle: String {
 }
 
 /// One native review artifact shared across the unified and split layouts.
-nonisolated struct DiffDisplay {
+struct DiffDisplay {
     let id = UUID()
     let computation: DiffComputation
     let unifiedText: NSAttributedString
@@ -61,7 +61,7 @@ nonisolated struct DiffDisplay {
     let rightText: NSAttributedString
 }
 
-private nonisolated struct DiffDisplayInputs {
+private struct DiffDisplayInputs {
     let core: DiffCore
     let oldRuns: [DiffHighlightRun]
     let newRuns: [DiffHighlightRun]
@@ -434,28 +434,37 @@ final class DiffTab: nonisolated Identifiable {
         displayTask?.cancel()
         displayTask = Task { [weak self] in
             let context = await DiffSyntaxHighlighter.context(for: path)
+            // Parse/diff off-main; do not send NSColor or attributed strings
+            // across actors. Only immutable token names and ranges return.
             let result = await Task.detached(priority: .userInitiated) {
-                let inputs = DiffDisplayInputs(
-                    core: DiffCore.compute(oldText: before, newText: after),
-                    oldRuns: context.map { DiffSyntaxHighlighter.runs(text: before, context: $0) } ?? [],
-                    newRuns: context.map { DiffSyntaxHighlighter.runs(text: after, context: $0) } ?? []
-                )
-                return (inputs, Self.makeDisplay(
-                    inputs: inputs, expansions: expansions,
-                    font: font, paragraphStyle: paragraphStyle, textColor: textColor
-                ))
+                let core = DiffCore.compute(oldText: before, newText: after)
+                let oldCaptures = context.map {
+                    DiffSyntaxHighlighter.captures(text: before, context: $0)
+                } ?? []
+                let newCaptures = context.map {
+                    DiffSyntaxHighlighter.captures(text: after, context: $0)
+                } ?? []
+                let computation = DiffComputation.build(core: core, expansions: expansions)
+                return (core, oldCaptures, newCaptures, computation)
             }.value
             guard let self, !Task.isCancelled, self.displayGeneration == generation else { return }
-            self.displayInputs = result.0
-            self.display = result.1
+            let inputs = DiffDisplayInputs(
+                core: result.0,
+                oldRuns: DiffSyntaxHighlighter.colors(for: result.1),
+                newRuns: DiffSyntaxHighlighter.colors(for: result.2)
+            )
+            self.displayInputs = inputs
+            self.display = Self.makeDisplay(
+                computation: result.3, inputs: inputs,
+                font: font, paragraphStyle: paragraphStyle, textColor: textColor
+            )
         }
     }
 
-    private nonisolated static func makeDisplay(
-        inputs: DiffDisplayInputs, expansions: [Int: DiffRunExpansion],
+    private static func makeDisplay(
+        computation: DiffComputation, inputs: DiffDisplayInputs,
         font: NSFont, paragraphStyle: NSParagraphStyle, textColor: NSColor
     ) -> DiffDisplay {
-        let computation = DiffComputation.build(core: inputs.core, expansions: expansions)
         let base: [NSAttributedString.Key: Any] = [
             .font: font, .foregroundColor: textColor, .paragraphStyle: paragraphStyle,
         ]
@@ -499,16 +508,17 @@ final class DiffTab: nonisolated Identifiable {
         let style = DiffTypography.paragraphStyle(for: font)
         let color = Theme.terminal(dark: dark).foregroundNSColor
         let expansions = runExpansions
+        let core = inputs.core
         displayTask?.cancel()
         displayTask = Task { [weak self] in
-            let display = await Task.detached(priority: .userInitiated) {
-                Self.makeDisplay(
-                    inputs: inputs, expansions: expansions, font: font,
-                    paragraphStyle: style, textColor: color
-                )
+            let computation = await Task.detached(priority: .userInitiated) {
+                DiffComputation.build(core: core, expansions: expansions)
             }.value
             guard let self, !Task.isCancelled, self.displayGeneration == generation else { return }
-            self.display = display
+            self.display = Self.makeDisplay(
+                computation: computation, inputs: inputs,
+                font: font, paragraphStyle: style, textColor: color
+            )
         }
     }
 
@@ -530,33 +540,35 @@ final class DiffTab: nonisolated Identifiable {
         editTask = Task { [weak self] in
             if !immediate { try? await Task.sleep(for: .milliseconds(120)) }
             guard !Task.isCancelled else { return }
-            let decoration = await Task.detached(priority: .userInitiated) {
+            // Pure edit-line diff remains in the background; AppKit ghost
+            // attributed strings and view decorations remain on MainActor.
+            let (state, offsets, lineCount) = await Task.detached(priority: .userInitiated) {
                 let (oldLines, _) = DiffLineSplitter.lines(of: before)
                 let (newLines, _) = DiffLineSplitter.lines(of: after)
                 let ops = DiffEngine.lineOps(old: oldLines, new: newLines)
-                let state = DiffComputation.editState(
-                    ops: ops, oldLines: oldLines, newLines: newLines
-                )
-                let base: [NSAttributedString.Key: Any] = [
-                    .font: font, .foregroundColor: color, .paragraphStyle: style,
-                ]
-                let ghosts = state.ghosts.map { block in
-                    DiffDecorations.GhostBlock(
-                        anchorLine: block.anchorLine,
-                        firstOldLine: block.firstOldLine,
-                        lines: DiffSyntaxHighlighter.attributedGhostLines(
-                            oldText: before as NSString, block: block, runs: oldRuns,
-                            baseAttributes: base, emphasisColor: emphasis
-                        )
-                    )
-                }
-                return DiffDecorations.edit(
-                    state: state, snapshotOffsets: newLines.map(\.utf16Range.location),
-                    lineCount: newLines.count, ghostBlocks: ghosts
+                return (
+                    DiffComputation.editState(ops: ops, oldLines: oldLines, newLines: newLines),
+                    newLines.map(\.utf16Range.location), newLines.count
                 )
             }.value
             guard let self, !Task.isCancelled, self.editGeneration == generation else { return }
-            self.editDecorations = decoration
+            let base: [NSAttributedString.Key: Any] = [
+                .font: font, .foregroundColor: color, .paragraphStyle: style,
+            ]
+            let ghosts = state.ghosts.map { block in
+                DiffDecorations.GhostBlock(
+                    anchorLine: block.anchorLine,
+                    firstOldLine: block.firstOldLine,
+                    lines: DiffSyntaxHighlighter.attributedGhostLines(
+                        oldText: before as NSString, block: block, runs: oldRuns,
+                        baseAttributes: base, emphasisColor: emphasis
+                    )
+                )
+            }
+            self.editDecorations = DiffDecorations.edit(
+                state: state, snapshotOffsets: offsets,
+                lineCount: lineCount, ghostBlocks: ghosts
+            )
         }
     }
 

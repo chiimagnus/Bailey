@@ -121,12 +121,12 @@ enum TerminalHistorySerializer {
     )
 
     /// The rule that brackets the label on each side of the divider.
-    private static let restoredBannerRule = String(repeating: "\u{2500}", count: 4)
+    nonisolated private static let restoredBannerRule = String(repeating: "\u{2500}", count: 4)
 
     /// The divider's plain, unstyled text — `<rule> <label> <rule>`. `visibleText`
     /// yields exactly this for a divider row, so recognizing one is an equality
     /// check against it.
-    private static func restoredBannerText(label: String) -> String {
+    nonisolated private static func restoredBannerText(label: String) -> String {
         "\(restoredBannerRule) \(label) \(restoredBannerRule)"
     }
 

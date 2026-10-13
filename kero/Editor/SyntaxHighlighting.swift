@@ -5,6 +5,7 @@
 
 import AppKit
 import STPluginNeon
+import SwiftTreeSitter
 // TreeSitterResource defines TreeSitterLanguage. It's an internal module of the
 // plugin package (not re-exported by STPluginNeon), but it must be imported
 // directly: this toolchain enforces MemberImportVisibility, so an enum case is
@@ -36,7 +37,7 @@ import TreeSitterTSX
 /// with the `typescript` grammar makes every element a parse error, which is
 /// why the JSX in one used to render as one long unbroken string. See
 /// `Vendor/TreeSitterTSX`.
-enum SyntaxLanguage: Hashable {
+nonisolated enum SyntaxLanguage: Hashable {
     case bundled(TreeSitterLanguage)
     case tsx
 
@@ -46,6 +47,29 @@ enum SyntaxLanguage: Hashable {
         case .bundled(let language): language.parser
         case .tsx: tree_sitter_tsx()
         }
+    }
+
+    /// A case index is Sendable; the upstream enum and raw parser pointers
+    /// are not. Recreate the immutable grammar on the compilation worker.
+    var grammarIndex: Int? {
+        switch self {
+        case .tsx: TreeSitterLanguage.allCases.count
+        case .bundled(let language): TreeSitterLanguage.allCases.firstIndex(of: language)
+        }
+    }
+
+    static func parser(grammarIndex: Int) -> OpaquePointer? {
+        let grammars = TreeSitterLanguage.allCases
+        guard grammarIndex >= 0 && grammarIndex <= grammars.count else { return nil }
+        return grammarIndex == grammars.count
+            ? tree_sitter_tsx() : grammars[grammarIndex].parser
+    }
+
+    static func compileQuery(grammarIndex: Int, data: Data) -> SwiftTreeSitter.Query? {
+        guard let parser = parser(grammarIndex: grammarIndex) else { return nil }
+        return try? SwiftTreeSitter.Query(
+            language: SwiftTreeSitter.Language(language: parser), data: data
+        )
     }
 }
 

@@ -256,16 +256,15 @@ final class SyntaxHighlightCoordinator {
             return
         }
 
+        guard let grammarIndex = language.grammarIndex else { return }
         let data = highlightsData
-        let tsLanguage = self.tsLanguage
-        let language = self.language
-        DispatchQueue.global(qos: .userInitiated).async {
-            let query = try? SwiftTreeSitter.Query(language: tsLanguage, data: data)
-            DispatchQueue.main.async { [weak self] in
-                guard let self, let query else { return }
-                HighlightQueryCache.store(query, for: language)
-                self.finishInstall(highlightsQuery: query, textContentManager: textContentManager)
-            }
+        Task { @MainActor [weak self, weak textContentManager] in
+            let query = await Task.detached(priority: .userInitiated) {
+                SyntaxLanguage.compileQuery(grammarIndex: grammarIndex, data: data)
+            }.value
+            guard let self, let textContentManager, let query else { return }
+            HighlightQueryCache.store(query, for: self.language)
+            self.finishInstall(highlightsQuery: query, textContentManager: textContentManager)
         }
     }
 
@@ -405,19 +404,22 @@ final class SyntaxHighlightCoordinator {
         guard !pendingInjectionCompiles.contains(language) else { return nil }
         pendingInjectionCompiles.insert(language)
 
+        guard let grammarIndex = language.grammarIndex else {
+            pendingInjectionCompiles.remove(language)
+            return nil
+        }
         let data = SyntaxHighlighting.highlightsData(for: language)
-        let parser = language.parser
-        DispatchQueue.global(qos: .userInitiated).async {
-            let query = try? SwiftTreeSitter.Query(language: Language(language: parser), data: data)
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.pendingInjectionCompiles.remove(language)
-                if let query {
-                    HighlightQueryCache.store(query, for: language)
-                }
-                // Repaint: the token provider can now emit this region's tokens.
-                self.highlighter?.invalidate()
+        Task { @MainActor [weak self] in
+            let query = await Task.detached(priority: .userInitiated) {
+                SyntaxLanguage.compileQuery(grammarIndex: grammarIndex, data: data)
+            }.value
+            guard let self else { return }
+            self.pendingInjectionCompiles.remove(language)
+            if let query {
+                HighlightQueryCache.store(query, for: language)
             }
+            // Repaint: the token provider can now emit this region's tokens.
+            self.highlighter?.invalidate()
         }
         return nil
     }

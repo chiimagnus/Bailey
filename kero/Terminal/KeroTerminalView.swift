@@ -355,7 +355,7 @@ final class KeroTerminalProgressBarView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    deinit {
+    isolated deinit {
         reportTimer?.invalidate()
     }
 

@@ -3,7 +3,7 @@ import Foundation
 
 /// Mutable pipe storage for one reader thread each, so a child process can
 /// never deadlock on a full pipe while we wait for it to exit.
-private final class RunPipeData: @unchecked Sendable {
+private nonisolated final class RunPipeData: @unchecked Sendable {
     var value = Data()
 }
 

@@ -118,7 +118,7 @@ enum DiffCollapsedRunLabel {
 /// (row) index. Built from a `DiffSideDocument` in review mode, or from the
 /// edit-mode line lists while the buffer is live. Nonisolated: edit-mode
 /// decorations are rebuilt off the main actor as the user types.
-nonisolated struct DiffDecorations {
+struct DiffDecorations {
     struct Row {
         let kind: DiffRowKind
         let oldLine: Int?
@@ -891,12 +891,23 @@ final class DiffGutterView: NSView {
 
     /// Each visible collapsed row is exposed as an accessibility button, so
     /// the fold can be expanded without a pointer.
-    private final class ExpandAXElement: NSAccessibilityElement {
-        var onPress: (() -> Void)?
+    private nonisolated final class ExpandAXElement: NSAccessibilityElement {
+        // Accessibility can invoke this nonisolated ObjC entry point from
+        // outside the main actor. Keep only a Sendable, actor-bound action.
+        private nonisolated let press: @MainActor @Sendable () -> Void
 
-        override func accessibilityPerformPress() -> Bool {
-            guard let onPress else { return false }
-            onPress()
+        init(press: @escaping @MainActor @Sendable () -> Void) {
+            self.press = press
+            super.init()
+        }
+
+        nonisolated override func accessibilityPerformPress() -> Bool {
+            let press = press
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { press() }
+            } else {
+                Task { @MainActor in press() }
+            }
             return true
         }
     }
@@ -913,7 +924,9 @@ final class DiffGutterView: NSView {
             guard row.index < decorations.rows.count,
                   let info = decorations.rows[row.index].collapsed
             else { continue }
-            let element = ExpandAXElement()
+            let element = ExpandAXElement { [weak self] in
+                self?.onExpandRun?(info)
+            }
             element.setAccessibilityRole(.button)
             element.setAccessibilityLabel(
                 DiffCollapsedRunLabel.expandAction(hiddenLines: info.hiddenLines)
@@ -925,9 +938,6 @@ final class DiffGutterView: NSView {
                 width: bounds.width,
                 height: row.frame.height
             ))
-            element.onPress = { [weak self] in
-                self?.onExpandRun?(info)
-            }
             elements.append(element)
         }
         expandElements = elements

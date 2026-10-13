@@ -295,7 +295,7 @@ final class TabSwitcherMonitorView: NSView {
         observers.removeAll()
     }
 
-    deinit {
+    isolated deinit {
         if let eventMonitor {
             NSEvent.removeMonitor(eventMonitor)
         }
