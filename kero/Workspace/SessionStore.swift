@@ -62,12 +62,19 @@ struct AppSnapshot: Codable {
 /// Kero window snapshot or start its saved background forwards.
 nonisolated enum KeroInstanceMode {
     static let isIsolated = ProcessInfo.processInfo.arguments.contains("--isolated-ui-test")
+
+    /// Each isolated process must have its own snapshot. A caller-supplied
+    /// UUID allows a deliberate restart test to reopen that same snapshot.
+    static let testRunID = ProcessInfo.processInfo.environment["KERO_UI_TEST_RUN_ID"]
+        .flatMap(UUID.init(uuidString:))?.uuidString
+        ?? UUID().uuidString
+    static let snapshotSuiteName = AppIdentity.bundleIdentifier + ".isolated-ui-test." + testRunID
 }
 
 enum SessionStore {
     private static let key = "workspaceSnapshot"
     private static let defaults: UserDefaults? = KeroInstanceMode.isIsolated
-        ? UserDefaults(suiteName: AppIdentity.bundleIdentifier + ".isolated-ui-test") : .standard
+        ? UserDefaults(suiteName: KeroInstanceMode.snapshotSuiteName) : .standard
 
     static func save(_ windows: [SessionSnapshot]) {
         guard let data = try? JSONEncoder().encode(AppSnapshot(windows: windows)) else { return }

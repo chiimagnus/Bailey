@@ -6,6 +6,22 @@ import XCTest
 
 @MainActor
 final class SessionStoreTests: XCTestCase {
+    func testIsolatedSnapshotsDoNotReadOrOverwritePreviousTestRuns() {
+        XCTAssertTrue(KeroInstanceMode.isIsolated)
+        let oldSuite = UserDefaults(suiteName: AppIdentity.bundleIdentifier + ".isolated-ui-test")
+        let oldBytes = oldSuite?.data(forKey: "workspaceSnapshot")
+        let activeSuite = KeroInstanceMode.snapshotSuiteName
+        XCTAssertNotEqual(activeSuite, AppIdentity.bundleIdentifier + ".isolated-ui-test")
+        XCTAssertTrue(activeSuite.hasPrefix(AppIdentity.bundleIdentifier + ".isolated-ui-test."))
+
+        let saved = SessionStore.load()
+        defer { SessionStore.save(saved) }
+        SessionStore.save([SessionSnapshot(projects: [], selectedProjectIndex: nil)])
+        XCTAssertEqual(SessionStore.load().count, 1)
+        XCTAssertEqual(oldSuite?.data(forKey: "workspaceSnapshot"), oldBytes,
+                       "An isolated XCTest instance must never change previous test fixtures")
+    }
+
     func testClosedWindowCannotBeUsedForLateFileOperationErrors() {
         XCTAssertTrue(KeroInstanceMode.isIsolated)
         let previouslySaved = SessionStore.load()
@@ -163,7 +179,7 @@ final class SessionStoreTests: XCTestCase {
         // Neither the performance badge nor another UI-only publication
         // should write a new window snapshot.
         let defaults = try XCTUnwrap(UserDefaults(
-            suiteName: AppIdentity.bundleIdentifier + ".isolated-ui-test"
+            suiteName: KeroInstanceMode.snapshotSuiteName
         ))
         let originalData = try XCTUnwrap(defaults.data(forKey: "workspaceSnapshot"))
         first.toggleFPSCounter()
@@ -307,7 +323,7 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertFalse(String(decoding: encoded, as: UTF8.self).contains("info"))
 
         guard KeroInstanceMode.isIsolated else { return XCTFail("Snapshot verification requires isolated storage") }
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: AppIdentity.bundleIdentifier + ".isolated-ui-test"))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: KeroInstanceMode.snapshotSuiteName))
         let previous = defaults.data(forKey: "workspaceSnapshot")
         defer {
             if let previous { defaults.set(previous, forKey: "workspaceSnapshot") }
