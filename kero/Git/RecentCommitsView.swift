@@ -1,28 +1,26 @@
-//
-//  RecentCommitsView.swift
-//  kero
-//
-
 import AppKit
 import SwiftUI
 
-/// Commit history decorates the shared tree rows with its own graph gutter.
+/// Commit history shares the file-tree rows while drawing its own real Git DAG.
 struct RecentCommitsView: View {
+    typealias Commit = GitStatusModel.RecentCommit
+    typealias Reference = Commit.Reference
+
     private let themeChanges = Theme.changes
     @Binding private var expandedCommitIDs: Set<String>
     @Binding private var collapsedFolders: Set<String>
     @State private var requestedLastCommit: String?
 
-    let commits: [GitStatusModel.RecentCommit]
+    let commits: [Commit]
     let viewMode: GitViewMode
     let fontScale: CGFloat
     let hasMoreCommits: Bool
     let isLoadingMore: Bool
     let loadMore: () -> Bool
-    let openDiff: (GitStatusModel.RecentCommit, GitStatusModel.RecentCommit.FileChange) -> Void
+    let openDiff: (Commit, Commit.FileChange) -> Void
 
     init(
-        commits: [GitStatusModel.RecentCommit],
+        commits: [Commit],
         expandedCommitIDs: Binding<Set<String>>,
         collapsedFolders: Binding<Set<String>>,
         viewMode: GitViewMode,
@@ -30,7 +28,7 @@ struct RecentCommitsView: View {
         hasMoreCommits: Bool,
         isLoadingMore: Bool,
         loadMore: @escaping () -> Bool,
-        openDiff: @escaping (GitStatusModel.RecentCommit, GitStatusModel.RecentCommit.FileChange) -> Void
+        openDiff: @escaping (Commit, Commit.FileChange) -> Void
     ) {
         self.commits = commits
         _expandedCommitIDs = expandedCommitIDs
@@ -45,15 +43,18 @@ struct RecentCommitsView: View {
 
     var body: some View {
         let _ = themeChanges.revision
+        let graph = CommitGraphLayout(commits: commits)
+        let gutter = max(41, 37 * fontScale + CGFloat(graph.laneCount - 1) * 22 * fontScale)
+
         LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(commits) { commit in
+            ForEach(Array(commits.enumerated()), id: \.element.id) { index, commit in
                 let expanded = expandedCommitIDs.contains(commit.id)
-                let isLast = commit.id == commits.last?.id
+                let isLast = index == commits.count - 1
                 VStack(alignment: .leading, spacing: 0) {
-                    commitRow(commit, isFirst: commit.id == commits.first?.id,
-                              continuesBelow: expanded || !isLast, expanded: expanded)
+                    commitRow(commit, graph: graph.rows[index], gutter: gutter, expanded: expanded)
                     if expanded {
-                        commitFiles(commit, isLast: isLast)
+                        commitFiles(commit, rails: graph.rows[index].bottomRails,
+                                    gutter: gutter)
                     }
                 }
                 .onAppear {
@@ -71,139 +72,249 @@ struct RecentCommitsView: View {
         if loadMore() { requestedLastCommit = id }
     }
 
+    private func toggle(_ commit: Commit) {
+        if !expandedCommitIDs.insert(commit.id).inserted {
+            expandedCommitIDs.remove(commit.id)
+        }
+    }
+
     private func commitRow(
-        _ commit: GitStatusModel.RecentCommit,
-        isFirst: Bool, continuesBelow: Bool, expanded: Bool
+        _ commit: Commit, graph: CommitGraphLayout.Row, gutter: CGFloat, expanded: Bool
     ) -> some View {
         TreeRowSurface(
             depth: 0, scale: fontScale, selected: expanded,
-            leadingInset: 21, trailingInset: TreeRowStyle.contentInset,
+            leadingInset: gutter, trailingInset: TreeRowStyle.contentInset,
             showsGuides: false,
-            height: max(22, ceil(26 * fontScale))
+            height: max(44, ceil(50 * fontScale))
         ) { _, layout in
-            Button {
-                if !expandedCommitIDs.insert(commit.id).inserted {
-                    expandedCommitIDs.remove(commit.id)
+            VStack(alignment: .leading, spacing: 3 * fontScale) {
+                HStack(spacing: 6 * fontScale) {
+                    Button { toggle(commit) } label: {
+                        Text(verbatim: commit.subject)
+                            .font(.system(size: 12.5 * fontScale))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .buttonStyle(.plain)
+                    .layoutPriority(-1)
+                    .help(commit.subject)
+                    .accessibilityValue(expanded
+                        ? String(localized: "Expanded", table: "Git")
+                        : String(localized: "Collapsed", table: "Git"))
+                    if !commit.references.isEmpty {
+                        referenceStrip(commit.references)
+                            .layoutPriority(1)
+                    }
+                    Spacer(minLength: 0)
                 }
-            } label: {
-                HStack(spacing: 5) {
-                    ScrollView(.horizontal) {
-                    HStack(spacing: 5) {
-                        Text(commit.subject)
-                            .font(.system(size: 11.5 * fontScale))
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(alignment: .firstTextBaseline, spacing: 8 * fontScale) {
+                    Button { copy(commit.hash) } label: {
+                        Text(verbatim: commit.shortHash)
+                            .font(.system(size: 10.5 * fontScale, design: .monospaced))
                             .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: true, vertical: false)
-                        Text(commit.author.uppercased())
-                            .font(.system(size: 9.5 * fontScale, weight: .medium))
-                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
-                    }
-                    .scrollIndicators(.hidden)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    if let reference = primaryReference(for: commit) {
-                    Text(reference)
-                        .font(.system(size: 9.5 * fontScale, weight: .medium))
-                        .foregroundStyle(.white)
+                    .buttonStyle(.plain)
+                    .help(commit.hash)
+                    .accessibilityLabel(String(localized: "Copy Commit Hash", table: "Git"))
+
+                    Text(verbatim: commit.author)
+                        .font(.system(size: 11 * fontScale, design: .serif).italic())
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .frame(maxWidth: 104)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(Color(nsColor: Theme.accent)))
-                    }
+                        .truncationMode(.tail)
+                        .layoutPriority(-1)
+
+                    Spacer(minLength: 3)
+
+                    Text(verbatim: commit.relativeDate)
+                        .font(.system(size: 10.5 * fontScale))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
-                .modifier(layout)
             }
-            .buttonStyle(.plain)
-            .help("\(commit.shortHash) \u{00B7} \(commit.author) \u{00B7} \(commit.relativeDate)")
-            .accessibilityLabel(String(
-                localized: "\(commit.subject), \(commit.shortHash), by \(commit.author), \(commit.relativeDate)", table: "Git"
-            ))
-            .accessibilityValue(expanded
-                ? String(localized: "Expanded", table: "Git")
-                : String(localized: "Collapsed", table: "Git"))
-            .contextMenu {
-                Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
-                Button(String(localized: "Copy Commit Message", table: "Git")) { copy(commit.subject) }
+            .modifier(layout)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.09))
+                    .frame(height: 0.5)
+                    .padding(.leading, gutter)
+                    .allowsHitTesting(false)
             }
         }
         .background {
-            CommitTreeRails(isCommit: true, startsAtCenter: isFirst,
-                            endsAtCenter: !continuesBelow, expanded: expanded)
+            CommitGraphRails(row: graph, fontScale: fontScale)
+        }
+        .contextMenu {
+            Button(String(localized: "Copy Commit Hash", table: "Git")) {
+                copy(commit.hash)
+            }
+            Button(String(localized: "Copy Commit Message", table: "Git")) {
+                copy(commit.subject)
+            }
         }
     }
 
-    private func primaryReference(for commit: GitStatusModel.RecentCommit) -> String? {
-        commit.references.first { $0.kind == .remoteBranch }?.name
-            ?? commit.references.first?.name
+    private func referenceStrip(_ references: [Reference]) -> some View {
+        ViewThatFits(in: .horizontal) {
+            referenceGroup(references, shown: references.count)
+            if references.count > 2 {
+                referenceGroup(references, shown: 2)
+            }
+            if references.count > 1 {
+                referenceGroup(references, shown: 1)
+            }
+            referenceGroup(references, shown: 0)
+        }
+    }
+
+    private func referenceGroup(_ references: [Reference], shown: Int) -> some View {
+        HStack(spacing: 4 * fontScale) {
+            ForEach(Array(references.prefix(shown))) { reference in
+                referenceBadge(reference)
+            }
+            if shown < references.count {
+                Menu {
+                    ForEach(Array(references.dropFirst(shown))) { reference in
+                        if reference.kind == .remoteBranch {
+                            Button(reference.name) {}.disabled(true)
+                        } else {
+                            Button(reference.name) { copy(reference.name) }
+                        }
+                    }
+                } label: {
+                    Text("+\(references.count - shown)")
+                        .font(.system(size: 10 * fontScale, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help(references.dropFirst(shown).map(\.name).joined(separator: ", "))
+                .accessibilityLabel(references.dropFirst(shown).map(\.name).joined(separator: ", "))
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     @ViewBuilder
-    private func commitFiles(_ commit: GitStatusModel.RecentCommit, isLast: Bool) -> some View {
+    private func referenceBadge(_ reference: Reference) -> some View {
+        let background: Color = {
+            switch reference.kind {
+            case .currentBranch: Color(nsColor: .systemBlue)
+            case .localBranch, .remoteBranch: Color(nsColor: .systemIndigo)
+            case .tag: Color(nsColor: .systemBrown)
+            case .detachedHead: Color(nsColor: .systemGray)
+            }
+        }()
+        let label = HStack(spacing: 3) {
+            if reference.kind == .tag {
+                Image(systemName: "tag")
+                    .font(.system(size: 9 * fontScale))
+            }
+            Text(verbatim: reference.name)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .font(.system(size: 10 * fontScale, weight: .medium))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 7 * fontScale)
+        .padding(.vertical, 3 * fontScale)
+        .frame(maxWidth: 142 * fontScale)
+        .background(Capsule().fill(background))
+        .help(reference.name)
+
+        if reference.kind == .remoteBranch {
+            label
+        } else {
+            Button { copy(reference.name) } label: { label }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    Button(String(localized: "Copy Reference Name", table: "Git")) {
+                        copy(reference.name)
+                    }
+                }
+        }
+    }
+
+    @ViewBuilder
+    private func commitFiles(
+        _ commit: Commit, rails: [CommitGraphLayout.Rail],
+        gutter: CGFloat
+    ) -> some View {
+        let filesInset = gutter + 17 * fontScale
         if commit.files.isEmpty {
-            TreeRowSurface(depth: 0, scale: fontScale, hoverEnabled: false, leadingInset: 39) { _, layout in
+            TreeRowSurface(
+                depth: 0, scale: fontScale, hoverEnabled: false, leadingInset: filesInset
+            ) { _, layout in
                 Text(String(localized: "No changed files", table: "Git"))
                     .font(.system(size: 9.5 * fontScale))
                     .foregroundStyle(.tertiary)
                     .modifier(layout)
             }
-            .background { fileRails(continuesBelow: !isLast) }
+            .background { fileRails(rails) }
         } else if viewMode == .tree {
             let section = "commit:" + commit.hash
             let byPath = Dictionary(commit.files.map { ($0.path, $0) },
                                     uniquingKeysWith: { first, _ in first })
             let nodes = TreeDisplayModel.pathRows(commit.files.map(displayRow),
                                                   section: section, collapsed: collapsedFolders)
-            ForEach(Array(nodes.enumerated()), id: \.element.id) { index, node in
-                let continues = index < nodes.count - 1 || !isLast
+            ForEach(nodes) { node in
                 if node.isDirectory {
-                    TreeFolderRow(row: node, scale: fontScale, leadingInset: 39) {
+                    TreeFolderRow(row: node, scale: fontScale, leadingInset: filesInset) {
                         let key = section + ":" + node.path
-                        if !collapsedFolders.insert(key).inserted { collapsedFolders.remove(key) }
+                        if !collapsedFolders.insert(key).inserted {
+                            collapsedFolders.remove(key)
+                        }
                     }
-                    .background { fileRails(continuesBelow: continues) }
+                    .background { fileRails(rails) }
                     .contextMenu {
-                        Button(String(localized: "Copy Relative Path", table: "Git")) { copy(node.path) }
+                        Button(String(localized: "Copy Relative Path", table: "Git")) {
+                            copy(node.path)
+                        }
                     }
                 } else if let file = byPath[node.path] {
-                    changedFile(file, row: node, in: commit, showDirectory: false)
-                        .background { fileRails(continuesBelow: continues) }
+                    changedFile(file, row: node, in: commit, showDirectory: false,
+                                inset: filesInset)
+                        .background { fileRails(rails) }
                 }
             }
         } else {
-            ForEach(Array(commit.files.indices), id: \.self) { index in
-                let file = commit.files[index]
-                changedFile(file, row: displayRow(file), in: commit, showDirectory: true)
-                    .background {
-                        fileRails(continuesBelow: index < commit.files.count - 1 || !isLast)
-                    }
+            ForEach(commit.files) { file in
+                changedFile(file, row: displayRow(file), in: commit,
+                            showDirectory: true, inset: filesInset)
+                    .background { fileRails(rails) }
             }
         }
     }
 
     private func changedFile(
-        _ file: GitStatusModel.RecentCommit.FileChange,
-        row: TreeDisplayModel.Row,
-        in commit: GitStatusModel.RecentCommit, showDirectory: Bool
+        _ file: Commit.FileChange, row: TreeDisplayModel.Row,
+        in commit: Commit, showDirectory: Bool, inset: CGFloat
     ) -> some View {
-        TreeFileRow(row: row, scale: fontScale,
-                    directory: showDirectory ? file.directory : nil,
-                    leadingInset: 39,
-                    accessibilityHint: String(localized: "Opens changes", table: "Sidebar"),
-                    open: { openDiff(commit, file) }) { _ in EmptyView() }
+        TreeFileRow(
+            row: row, scale: fontScale,
+            directory: showDirectory ? file.directory : nil,
+            leadingInset: inset,
+            accessibilityHint: String(localized: "Opens changes", table: "Sidebar"),
+            open: { openDiff(commit, file) }
+        ) { _ in EmptyView() }
         .contextMenu {
             Button(String(localized: "Copy Relative Path", table: "Git")) { copy(file.path) }
         }
     }
 
-    private func displayRow(_ file: GitStatusModel.RecentCommit.FileChange) -> TreeDisplayModel.Row {
+    private func displayRow(_ file: Commit.FileChange) -> TreeDisplayModel.Row {
         TreeDisplayModel.Row(name: file.fileName, path: file.path, isDirectory: false,
                              status: .init(file.status))
     }
 
-    private func fileRails(continuesBelow: Bool) -> some View {
-        CommitTreeRails(isCommit: false, startsAtCenter: false,
-                        endsAtCenter: !continuesBelow, expanded: false)
+    private func fileRails(_ rails: [CommitGraphLayout.Rail]) -> some View {
+        CommitGraphRails(bottomRails: rails, fontScale: fontScale)
     }
 
     private func copy(_ text: String) {
@@ -212,35 +323,90 @@ struct RecentCommitsView: View {
     }
 }
 
-/// Continuous graph and hierarchy lines are painted across the entire SwiftUI row.
-private struct CommitTreeRails: View {
+private struct CommitGraphRails: View {
     private let themeChanges = Theme.changes
-    let isCommit: Bool
-    let startsAtCenter: Bool
-    let endsAtCenter: Bool
-    let expanded: Bool
+
+    var row: CommitGraphLayout.Row? = nil
+    var bottomRails: [CommitGraphLayout.Rail] = []
+    let fontScale: CGFloat
+
+    private func laneX(_ lane: Int) -> CGFloat {
+        (16 + CGFloat(lane) * 22) * fontScale
+    }
+
+    private func color(_ index: Int) -> Color {
+        if index == 0 { return Color(nsColor: .systemIndigo) }
+        let colors: [NSColor] = [.systemGreen, .systemPurple, .systemTeal,
+                                 .systemYellow, .systemRed]
+        return Color(nsColor: colors[(index - 1) % colors.count])
+    }
 
     var body: some View {
         let _ = themeChanges.revision
         Canvas { context, size in
-            let accent = Color(nsColor: Theme.accent)
-            let midpoint = size.height / 2
-            var graph = Path()
-            graph.move(to: CGPoint(x: 14, y: startsAtCenter ? midpoint : 0))
-            graph.addLine(to: CGPoint(x: 14, y: endsAtCenter ? midpoint : size.height))
-            context.stroke(graph, with: .color(accent.opacity(0.72)), lineWidth: 1.5)
-            if isCommit {
-                let radius: CGFloat = expanded ? 5 : 4
-                context.fill(Path(ellipseIn: CGRect(x: 14-radius,y:midpoint-radius,
-                                                     width:radius*2,height:radius*2)),
-                             with: .color(accent))
+            let middle = size.height / 2
+            if let row {
+                for link in row.links {
+                    var path = Path()
+                    let linkColor: Int
+                    switch link {
+                    case .incoming(let rail):
+                        path.move(to: CGPoint(x: laneX(rail.lane), y: 0))
+                        path.addLine(to: CGPoint(x: laneX(rail.lane), y: middle))
+                        linkColor = rail.color
+                    case .outgoing(let rail):
+                        path.move(to: CGPoint(x: laneX(rail.lane), y: middle))
+                        path.addLine(to: CGPoint(x: laneX(rail.lane), y: size.height))
+                        linkColor = rail.color
+                    case .through(let rail):
+                        path.move(to: CGPoint(x: laneX(rail.lane), y: 0))
+                        path.addLine(to: CGPoint(x: laneX(rail.lane), y: size.height))
+                        linkColor = rail.color
+                    case .depart(let from, let to, let color):
+                        let x1 = laneX(from)
+                        let x2 = laneX(to)
+                        path.move(to: CGPoint(x: x1, y: middle))
+                        path.addCurve(
+                            to: CGPoint(x: x2, y: size.height),
+                            control1: CGPoint(x: x1, y: middle + size.height / 5),
+                            control2: CGPoint(x: x2, y: size.height - size.height / 5)
+                        )
+                        linkColor = color
+                    case .arrive(let from, let to, let color):
+                        let x1 = laneX(from)
+                        let x2 = laneX(to)
+                        path.move(to: CGPoint(x: x1, y: 0))
+                        path.addCurve(
+                            to: CGPoint(x: x2, y: middle),
+                            control1: CGPoint(x: x1, y: size.height / 5),
+                            control2: CGPoint(x: x2, y: middle - size.height / 5)
+                        )
+                        linkColor = color
+                    }
+                    context.stroke(
+                        path, with: .color(color(linkColor)), style: StrokeStyle(
+                            lineWidth: 2 * fontScale, lineCap: .round, lineJoin: .round
+                        )
+                    )
+                }
+                let radius = 4.6 * fontScale
+                let x = laneX(row.node.lane)
+                context.fill(
+                    Path(ellipseIn: CGRect(x: x - radius, y: middle - radius,
+                                           width: 2 * radius, height: 2 * radius)),
+                    with: .color(color(row.node.color))
+                )
             } else {
-                context.fill(Path(CGRect(x: 34.5, y: 0, width: 1, height: size.height)),
-                             with: .color(.primary.opacity(0.18)))
+                for rail in bottomRails {
+                    var path = Path()
+                    path.move(to: CGPoint(x: laneX(rail.lane), y: 0))
+                    path.addLine(to: CGPoint(x: laneX(rail.lane), y: size.height))
+                    context.stroke(path, with: .color(color(rail.color)),
+                                   lineWidth: 2 * fontScale)
+                }
             }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
 }
-
