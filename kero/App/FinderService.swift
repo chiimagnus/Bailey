@@ -9,6 +9,22 @@ import AppKit
 /// Info.plist; AppKit forwards matching service requests to this object.
 @MainActor
 final class KeroApplicationDelegate: NSObject, NSApplicationDelegate {
+    private var preparingToQuit = false
+
+    /// Let AppKit finish quitting only after all edited files were written.
+    /// A failed SSH or local save cancels termination and retains the editor.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard TerminalManager.hasUnsavedEditors else { return .terminateNow }
+        guard !preparingToQuit else { return .terminateLater }
+        preparingToQuit = true
+        Task { @MainActor in
+            let saved = await TerminalManager.saveBeforeTermination()
+            preparingToQuit = false
+            sender.reply(toApplicationShouldTerminate: saved)
+        }
+        return .terminateLater
+    }
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         // AppSettings is first initialized from SwiftUI's App.init(), where
         // NSApp may not exist yet. Reapply the saved override once AppKit is

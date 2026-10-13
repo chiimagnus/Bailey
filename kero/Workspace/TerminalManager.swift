@@ -38,7 +38,13 @@ final class TerminalManager {
         didSet { requestSave() }
     }
     var selectedProjectID: UUID? {
-        didSet { if selectedProjectID != oldValue { requestSave() } }
+        didSet {
+            guard selectedProjectID != oldValue else { return }
+            if let oldValue {
+                projects.first { $0.id == oldValue }?.selectedTab?.content.autoSaveOnFocusLoss()
+            }
+            requestSave()
+        }
     }
     /// Debug FPS badge in the Dock header. Deliberately not persisted:
     /// every launch starts with it hidden.
@@ -62,6 +68,28 @@ final class TerminalManager {
     /// Live managers in window-creation order; the persisted snapshot is
     /// one entry per registered manager.
     private static var registry: [TerminalManager] = []
+
+    static var hasUnsavedEditors: Bool {
+        registry.contains { manager in
+            manager.projects.contains { project in
+                project.tabs.contains { $0.content.isDirty }
+            }
+        }
+    }
+
+    /// Termination must await file writes: onDisappear is too late to protect
+    /// an edited document when the entire process is about to exit.
+    static func saveBeforeTermination() async -> Bool {
+        for manager in registry {
+            for project in manager.projects {
+                for tab in project.tabs where tab.content.isDirty {
+                    await tab.content.save()
+                    guard !tab.content.isDirty else { return false }
+                }
+            }
+        }
+        return true
+    }
     /// Read-only access for the private, authenticated SSH handoff.
     static var activeManagers: [TerminalManager] { registry }
     /// Folder requests can arrive while macOS is still launching Kero, before
@@ -357,9 +385,35 @@ final class TerminalManager {
         return project
     }
 
+    /// Losing the window's focus saves its active editor, not every open
+    /// file across unrelated projects and remote machines.
+    func autoSaveEditedTabs() {
+        selectedProject?.selectedTab?.content.autoSaveOnFocusLoss()
+    }
+
     func close(_ project: Project) {
-        project.terminateAll()
-        remove(project)
+        guard projects.contains(where: { $0 === project }) else { return }
+        let dirty = project.tabs.map(\.content).filter(\.isDirty)
+        guard !dirty.isEmpty else {
+            project.terminateAll()
+            remove(project)
+            return
+        }
+        dirty.forEach { $0.suspendAutoSaveForClose(true) }
+        Task { [weak self, weak project] in
+            for content in dirty {
+                await content.save()
+                guard !content.isDirty else {
+                    // A failed or superseded write must not destroy the editor.
+                    dirty.forEach { $0.suspendAutoSaveForClose(false) }
+                    return
+                }
+            }
+            guard let self, let project,
+                  self.projects.contains(where: { $0 === project }) else { return }
+            project.terminateAll()
+            self.remove(project)
+        }
     }
 
     private func remove(_ project: Project) {

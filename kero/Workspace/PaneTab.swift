@@ -75,6 +75,22 @@ enum PaneContent: nonisolated Identifiable {
         case .session, .browser: break
         }
     }
+
+    @MainActor func autoSaveOnFocusLoss() {
+        switch self {
+        case .file(let file): file.autoSaveOnFocusLoss()
+        case .diff(let diff): diff.autoSaveOnFocusLoss()
+        case .session, .browser: break
+        }
+    }
+
+    @MainActor func suspendAutoSaveForClose(_ suspended: Bool) {
+        switch self {
+        case .file(let file): file.autoSaveSuspendedForClose = suspended
+        case .diff(let diff): diff.autoSaveSuspendedForClose = suspended
+        case .session, .browser: break
+        }
+    }
 }
 
 @MainActor

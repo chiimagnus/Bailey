@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import Observation
+import SwiftUI
 import XCTest
 @testable import kero
 
@@ -83,6 +85,151 @@ final class FileTabTests: XCTestCase {
             guard Date() < deadline else { return XCTFail("Editor operation did not settle") }
             try await Task.sleep(for: .milliseconds(10))
         }
+    }
+
+    func testProjectCloseWaitsForFileSaveAndRetainsUnsavedOnFailure() async throws {
+        let prior = SessionStore.load()
+        let histories = TerminalHistoryStore.load()
+        defer { SessionStore.save(prior); TerminalHistoryStore.save(histories) }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([root])
+        let firstProject = try XCTUnwrap(manager.selectedProject)
+        let firstURL = root.appendingPathComponent("must-save.txt")
+        try "before".write(to: firstURL, atomically: true, encoding: .utf8)
+        let local = FileTab(path: firstURL.path, backend: LocalWorkspaceBackend.shared,
+                            workspaceIdentity: nil)
+        firstProject.append(PaneTab(content: .file(local)))
+        local.text = "durably saved"
+        local.refreshDirtyState()
+        manager.close(firstProject)
+        try await wait { !manager.projects.contains(where: { $0 === firstProject }) }
+        XCTAssertEqual(try String(contentsOf: firstURL, encoding: .utf8), "durably saved")
+
+        manager.addLocalItems([root])
+        let failingProject = try XCTUnwrap(manager.selectedProject)
+        let remotePath = root.appendingPathComponent("remote.txt")
+        try "local sentinel".write(to: remotePath, atomically: true, encoding: .utf8)
+        let backend = EditorWorkspaceFixture(path: remotePath.path, contents: Data("old".utf8))
+        let remote = FileTab(path: remotePath.path, backend: backend,
+                             workspaceIdentity: "ssh:fixture")
+        try await wait { if case .text = remote.content { return true }; return false }
+        failingProject.append(PaneTab(content: .file(remote)))
+        remote.text = "draft not yet persisted"
+        remote.refreshDirtyState()
+        manager.close(failingProject)
+        try await wait { await backend.writingPath == remotePath.path }
+        await backend.finishWrite(failing: true)
+        try await wait { remote.saveError != nil }
+        XCTAssertTrue(manager.projects.contains(where: { $0 === failingProject }))
+        XCTAssertTrue(remote.isDirty)
+        XCTAssertEqual(try String(contentsOf: remotePath, encoding: .utf8), "local sentinel")
+
+        XCTAssertTrue(TerminalManager.hasUnsavedEditors)
+        let exitAttempt = Task { await TerminalManager.saveBeforeTermination() }
+        try await wait { await backend.writingPath == remotePath.path }
+        await backend.finishWrite(failing: true)
+        let shouldExit = await exitAttempt.value
+        XCTAssertFalse(shouldExit, "A failed auto-save must veto application termination")
+        XCTAssertTrue(remote.isDirty)
+    }
+
+    func testProjectTabSwitchAndCloseAutomaticallySaveBeforeRemoving() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("autosave.txt")
+        try "original".write(to: url, atomically: true, encoding: .utf8)
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        let project = Project(fallbackName: "autosave", workspaceConfiguration: .standard)
+        let filePane = PaneTab(content: .file(file))
+        project.append(filePane)
+
+        file.text = "saved when selecting the browser"
+        file.refreshDirtyState()
+        project.append(PaneTab(content: .browser(BrowserTab(initialFocus: .none))))
+        try await wait { !file.isDirty }
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "saved when selecting the browser")
+
+        file.text = "saved when closing the file"
+        file.refreshDirtyState()
+        project.close(filePane)
+        try await wait { !project.tabs.contains(where: { $0.id == filePane.id }) }
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "saved when closing the file")
+    }
+
+    func testNativeEditorResignFirstResponderWritesRealFile() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("focus.txt")
+        try "original".write(to: url, atomically: true, encoding: .utf8)
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+
+        func findEditor(in view: NSView) -> FocusReportingTextView? {
+            if let editor = view as? FocusReportingTextView { return editor }
+            return view.subviews.lazy.compactMap { findEditor(in: $0) }.first
+        }
+        let editor = try XCTUnwrap(findEditor(in: host))
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        editor.insertText("中文😀", replacementRange: NSRange(location: 0, length: 0))
+        try await wait { file.isDirty }
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "original")
+        XCTAssertTrue(window.makeFirstResponder(nil), "Moving focus away must notify the original editor")
+        try await wait { !file.isDirty }
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "中文😀original")
+    }
+
+    func testFocusTriggeredSaveSerializesConcurrentEditsAndKeepsFailures() async throws {
+        let path = "/fixture/\(UUID().uuidString).txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        try await wait { if case .text = file.content { return true }; return false }
+
+        file.text = "first🙂"
+        file.refreshDirtyState()
+        let beforeFocusLoss = await backend.writingPath
+        XCTAssertNil(beforeFocusLoss, "Typing must not launch a timed or per-keystroke save")
+        file.autoSaveOnFocusLoss()
+        try await wait { await backend.writingPath == path }
+
+        file.text = "second🪨"
+        file.refreshDirtyState()
+        file.autoSaveOnFocusLoss()
+        await backend.finishWrite()
+        try await wait {
+            let stored = await backend.data(at: path)
+            let writing = await backend.writingPath
+            return stored == Data("first🙂".utf8) && writing == path
+        }
+        XCTAssertTrue(file.isDirty, "The first completed write cannot mark the newer edit saved")
+        await backend.finishWrite()
+        try await wait { !file.isDirty }
+        let final = await backend.data(at: path)
+        XCTAssertEqual(final, Data("second🪨".utf8))
+
+        file.text = "offline edit"
+        file.refreshDirtyState()
+        file.autoSaveOnFocusLoss()
+        try await wait { await backend.writingPath == path }
+        await backend.finishWrite(failing: true)
+        try await wait { file.saveError != nil }
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(file.text, "offline edit")
+        let retained = await backend.data(at: path)
+        XCTAssertEqual(retained, Data("second🪨".utf8))
     }
 
     func testAnotherLiveChannelTakesOverWithoutTransientReadOnlyState() async throws {

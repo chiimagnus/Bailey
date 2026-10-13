@@ -169,6 +169,9 @@ final class DiffNativeSurface: NSView, STTextViewDelegate {
     private func makeEditPane() -> DiffCodePaneView {
         let pane = makePane(mode: .edit, gutter: .single)
         pane.textView.textDelegate = self
+        pane.textView.onResignFirstResponder = { [weak self] in
+            self?.diff?.autoSaveOnFocusLoss()
+        }
         editPane = pane
         return pane
     }

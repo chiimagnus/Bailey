@@ -107,6 +107,75 @@ final class DiffTabTests: XCTestCase {
         return directory
     }
 
+    func testNativeDiffEditorFocusLossSavesThroughBackend() async throws {
+        let suite = "kero-diff-focus-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.prefersEditing = true
+        let backend = DiffWorkspaceFixture()
+        let diff = DiffTab(repoRoot: "/fixture", path: "editable.txt", staged: false,
+                           untracked: true, origPath: nil, backend: backend,
+                           workspaceIdentity: nil, preferences: preferences)
+        try await wait { !diff.isLoading && diff.isEditable }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 850, height: 570),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: diff))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        try await wait { diff.nativeSurface != nil }
+        let surface = try XCTUnwrap(diff.nativeSurface)
+        let editor = try XCTUnwrap(findNativeTextView(in: surface, editable: true))
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        editor.insertText("new🙂", replacementRange: NSRange(location: 0, length: 0))
+        try await wait { diff.isDirty }
+        XCTAssertTrue(window.makeFirstResponder(nil))
+        try await wait { await backend.writing }
+        await backend.finishWrite()
+        try await wait { !diff.isDirty }
+        let saved = await backend.stored()
+        XCTAssertEqual(saved, Data("new🙂baseline😀\r\n".utf8))
+    }
+
+    func testFocusTriggeredDiffSavePreservesNewestBufferAndFailure() async throws {
+        let backend = DiffWorkspaceFixture()
+        let diff = DiffTab(repoRoot: "/fixture", path: "editable.txt", staged: false,
+                           untracked: true, origPath: nil, backend: backend,
+                           workspaceIdentity: "ssh:fixture")
+        try await wait { !diff.isLoading && diff.isEditable }
+        diff.updateEditedContent("first 中文😀")
+        let writesBeforeFocusLoss = await backend.writes
+        XCTAssertEqual(writesBeforeFocusLoss, 0, "Editing alone must not automatically write")
+        diff.autoSaveOnFocusLoss()
+        try await wait { await backend.writing }
+        diff.updateEditedContent("second 中文🪨")
+        diff.autoSaveOnFocusLoss()
+        await backend.finishWrite()
+        try await wait {
+            let stored = await backend.stored()
+            let writes = await backend.writes
+            return stored == Data("first 中文😀".utf8) && writes == 2
+        }
+        XCTAssertTrue(diff.isDirty)
+        await backend.finishWrite()
+        try await wait { !diff.isDirty }
+        let latest = await backend.stored()
+        XCTAssertEqual(latest, Data("second 中文🪨".utf8))
+
+        diff.updateEditedContent("unsaved during outage")
+        diff.autoSaveOnFocusLoss()
+        try await wait { await backend.writing }
+        await backend.finishWrite(failing: true)
+        try await wait { diff.saveError != nil }
+        XCTAssertTrue(diff.isDirty)
+        XCTAssertEqual(diff.editedNewContent, "unsaved during outage")
+        let retained = await backend.stored()
+        XCTAssertEqual(retained, Data("second 中文🪨".utf8))
+    }
+
     func testAnotherLiveChannelInvalidatesInFlightDiffSave() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

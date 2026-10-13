@@ -129,6 +129,9 @@ final class DiffTab: nonisolated Identifiable {
     @ObservationIgnored private var editGeneration: UInt = 0
     @ObservationIgnored private var editTask: Task<Void, Never>?
     @ObservationIgnored private var reloadGeneration: UInt = 0
+    @ObservationIgnored private var lastSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var saveRequestGeneration: UInt = 0
+    @ObservationIgnored var autoSaveSuspendedForClose = false
     @ObservationIgnored private var targetGeneration: UInt = 0
     /// The workspace this diff reads. The tab keeps its own, so it never
     /// follows the session onto another machine — and re-binds to a new
@@ -409,7 +412,11 @@ final class DiffTab: nonisolated Identifiable {
             recomputeDisplay()
         }
         preferences.prefersEditing = editing
-        if editing { refreshEditDecorations(immediate: true) }
+        if editing {
+            refreshEditDecorations(immediate: true)
+        } else {
+            autoSaveOnFocusLoss()
+        }
     }
 
 
@@ -578,7 +585,26 @@ final class DiffTab: nonisolated Identifiable {
         if isEditing { refreshEditDecorations(immediate: true) }
     }
 
+    func autoSaveOnFocusLoss() {
+        guard isDirty, !autoSaveSuspendedForClose else { return }
+        Task { await save() }
+    }
+
+    /// Keep worktree writes in edit order across manual and automatic saves.
     func save() async {
+        saveRequestGeneration &+= 1
+        let generation = saveRequestGeneration
+        let preceding = lastSaveTask
+        let task = Task { [weak self] in
+            await preceding?.value
+            await self?.writeCurrentText()
+        }
+        lastSaveTask = task
+        await task.value
+        if saveRequestGeneration == generation { lastSaveTask = nil }
+    }
+
+    private func writeCurrentText() async {
         guard isEditable, isDirty else { return }
         // Refused, not silently dropped: the save-error bar says why.
         if let readOnlyReason {

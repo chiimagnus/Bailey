@@ -68,6 +68,7 @@ struct SourceTextEditor: NSViewRepresentable {
         let scrollView = context.coordinator.scrollView ?? makeScrollView(coordinator: context.coordinator)
         if let textView = scrollView.documentView as? FocusReportingTextView {
             textView.onBecomeFirstResponder = onFocused
+            textView.onResignFirstResponder = { [weak file] in file?.autoSaveOnFocusLoss() }
             apply(to: textView, scrollView: scrollView)
         }
         context.coordinator.wasFocused = isFocused
@@ -81,6 +82,7 @@ struct SourceTextEditor: NSViewRepresentable {
         let scrollView = RestorableScrollView()
         let textView = FocusReportingTextView()
         textView.onBecomeFirstResponder = onFocused
+        textView.onResignFirstResponder = { [weak file] in file?.autoSaveOnFocusLoss() }
         scrollView.wantsLayer = true
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
@@ -162,6 +164,9 @@ struct SourceTextEditor: NSViewRepresentable {
         let scrollView = container.scrollView
         guard let textView = scrollView.documentView as? STTextView else { return }
         (textView as? FocusReportingTextView)?.onBecomeFirstResponder = onFocused
+        (textView as? FocusReportingTextView)?.onResignFirstResponder = {
+            [weak file] in file?.autoSaveOnFocusLoss()
+        }
         apply(to: textView, scrollView: scrollView)
         // Take focus on the unfocused→focused edge (keyboard navigation moving
         // focus here), never on every render.
@@ -178,6 +183,7 @@ struct SourceTextEditor: NSViewRepresentable {
               container.scrollView.superview === container else { return }
         container.scrollView.removeFromSuperview()
         (container.scrollView.documentView as? FocusReportingTextView)?.onBecomeFirstResponder = nil
+        (container.scrollView.documentView as? FocusReportingTextView)?.onResignFirstResponder = nil
         if coordinator.file?.editorView === container.scrollView {
             coordinator.file?.editorView = nil
         }
@@ -324,12 +330,18 @@ private final class SourceEditorContainer: NSView {
 /// programmatic focus), so the owning work tab can mark itself selected.
 final class FocusReportingTextView: STTextView {
     var onBecomeFirstResponder: (() -> Void)?
+    var onResignFirstResponder: (() -> Void)?
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
         if became { onBecomeFirstResponder?() }
         return became
     }
 
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onResignFirstResponder?() }
+        return resigned
+    }
 }
 
 /// NSScrollView that runs a one-shot restoration during its first real layout

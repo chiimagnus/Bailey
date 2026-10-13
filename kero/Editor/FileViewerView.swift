@@ -70,6 +70,9 @@ final class FileTab: nonisolated Identifiable {
     /// Changes when a rename or remote reconnect changes the save target.
     /// An in-flight write must not claim to have saved a different target.
     @ObservationIgnored private var targetGeneration: UInt = 0
+    @ObservationIgnored private var lastSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var saveRequestGeneration: UInt = 0
+    @ObservationIgnored var autoSaveSuspendedForClose = false
     /// The workspace this file lives on. The tab keeps its own, so it never
     /// follows the session onto another machine — and re-binds to a new
     /// connection to the same machine when one arrives.
@@ -191,7 +194,28 @@ final class FileTab: nonisolated Identifiable {
         }
     }
 
+    /// A focus transition schedules one save, never a timed file-write loop.
+    func autoSaveOnFocusLoss() {
+        guard isDirty, !autoSaveSuspendedForClose else { return }
+        Task { await save() }
+    }
+
+    /// Serialize manual and focus-triggered writes. A later edit can never
+    /// land on disk before an older in-flight write completes.
     func save() async {
+        saveRequestGeneration &+= 1
+        let generation = saveRequestGeneration
+        let preceding = lastSaveTask
+        let task = Task { [weak self] in
+            await preceding?.value
+            await self?.writeCurrentText()
+        }
+        lastSaveTask = task
+        await task.value
+        if saveRequestGeneration == generation { lastSaveTask = nil }
+    }
+
+    private func writeCurrentText() async {
         guard case .text = content, isDirty else { return }
         // Refused, not silently dropped: the save-error bar says why.
         if let readOnlyReason {

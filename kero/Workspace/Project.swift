@@ -50,6 +50,9 @@ final class Project: nonisolated Identifiable {
     var selectedTabID: UUID? {
         didSet {
             guard selectedTabID != oldValue else { return }
+            if let oldValue {
+                tabs.first { $0.id == oldValue }?.content.autoSaveOnFocusLoss()
+            }
             if let selectedTabID {
                 recentTabIDs.removeAll { $0 == selectedTabID }
                 recentTabIDs.insert(selectedTabID, at: 0)
@@ -528,26 +531,20 @@ final class Project: nonisolated Identifiable {
         case .session(let session):
             if terminate { session.terminate() }
             removeTabWithContent(content.id)
-        case .file(let file):
-            guard file.isDirty else {
+        case .file, .diff:
+            guard content.isDirty else {
                 removeTabWithContent(content.id)
                 return
             }
+            // Closing is a focus transition, but it must not let a late
+            // background save defeat an explicit Don't Save choice.
+            content.suspendAutoSaveForClose(true)
             let window = NSApp.keyWindow ?? NSApp.mainWindow
             Task { @MainActor in
-                _ = await confirmCloseUnsaved(content, in: window)
+                _ = await saveBeforeClosing(content, in: window)
             }
         case .browser:
             removeTabWithContent(content.id)
-        case .diff(let diff):
-            guard diff.isDirty else {
-                removeTabWithContent(content.id)
-                return
-            }
-            let window = NSApp.keyWindow ?? NSApp.mainWindow
-            Task { @MainActor in
-                _ = await confirmCloseUnsaved(content, in: window)
-            }
         }
     }
 
@@ -606,6 +603,16 @@ final class Project: nonisolated Identifiable {
     /// This is `async` on purpose: awaiting the sheet means each prompt in a
     /// batch is presented only after the previous one has fully dismissed.
     @discardableResult
+    private func saveBeforeClosing(_ content: PaneContent, in window: NSWindow?) async -> Bool {
+        await content.save()
+        guard content.isDirty else {
+            removeTabWithContent(content.id)
+            return false
+        }
+        return await confirmCloseUnsaved(content, in: window)
+    }
+
+    @discardableResult
     private func confirmCloseUnsaved(_ content: PaneContent, in window: NSWindow?) async -> Bool {
         let response = await ProjectCloseConfirmation.present(title: content.title, in: window)
 
@@ -613,13 +620,17 @@ final class Project: nonisolated Identifiable {
         case .alertFirstButtonReturn: // Save
             await content.save()
             // Keep the tab open if the write failed; the error bar shows why.
-            guard content.saveError == nil else { return true }
+            guard !content.isDirty else {
+                content.suspendAutoSaveForClose(false)
+                return true
+            }
             removeTabWithContent(content.id)
             return false
         case .alertSecondButtonReturn: // Don't Save
             removeTabWithContent(content.id)
             return false
         default: // Cancel
+            content.suspendAutoSaveForClose(false)
             return true
         }
     }
@@ -637,11 +648,14 @@ final class Project: nonisolated Identifiable {
         }
 
         let window = NSApp.keyWindow ?? NSApp.mainWindow
+        dirtyContents.forEach { $0.suspendAutoSaveForClose(true) }
         Task { @MainActor in
-            for content in dirtyContents where content.isDirty {
-                // Bail the moment the user backs out — the clean tabs, and any
-                // unsaved tabs not yet prompted, stay open.
-                if await confirmCloseUnsaved(content, in: window) { return }
+            for content in dirtyContents {
+                // Save on close first; only failures need the native prompt.
+                if await saveBeforeClosing(content, in: window) {
+                    dirtyContents.forEach { $0.suspendAutoSaveForClose(false) }
+                    return
+                }
             }
             cleanContents.forEach { closeContent($0) }
         }

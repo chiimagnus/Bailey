@@ -267,6 +267,13 @@ final class DiffTextView: STTextView {
     /// Returns true when the click landed on a collapsed-run separator and
     /// was consumed by expanding it.
     var handleCollapsedClick: ((NSPoint) -> Bool)?
+    var onResignFirstResponder: (() -> Void)?
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onResignFirstResponder?() }
+        return resigned
+    }
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)

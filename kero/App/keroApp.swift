@@ -3,6 +3,7 @@
 //  kero
 //
 
+import AppKit
 import SwiftUI
 
 struct keroApp: App {
@@ -59,6 +60,13 @@ private struct WindowRootView: View {
             .onChange(of: settings.macosOptionAsAlt) { _, _ in manager.refreshAppearance() }
             .onChange(of: settings.cursorShape) { _, _ in manager.refreshAppearance() }
             .onChange(of: settings.cursorBlinking) { _, _ in manager.refreshAppearance() }
+            .onReceive(NotificationCenter.default.publisher(
+                for: NSWindow.didResignKeyNotification
+            )) { notification in
+                guard let window = notification.object as? NSWindow,
+                      window === manager.attachedWindow else { return }
+                manager.autoSaveEditedTabs()
+            }
             .onAppear {
                 TerminalManager.openRestoredWindows {
                     openWindow(id: "main")
