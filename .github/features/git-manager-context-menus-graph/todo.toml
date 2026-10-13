@@ -1,18 +1,18 @@
 version = 1
-current_task_id = "P1-T2"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
 title = "保存完整父提交与解析有类型 Ref"
-status = "completed"
+status = "pending"
 plan = "plan-p1.md#p1-t1"
-commit = "2b336ba"
-note = "GitStatusModelTests 7/7 通过（含真实合并、多 Ref、分页）；SSH 真实连接未测"
+commit = ""
+note = ""
 
 [[tasks]]
 id = "P1-T2"
 title = "Recent Commits 真实图谱与 Ref 独立命中"
-status = "in_progress"
+status = "pending"
 plan = "plan-p1.md#p1-t2"
 commit = ""
 note = ""
