@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct FileTreePanel: View {
-    @ObservedObject var model: FileTreeModel
+    let model: FileTreeModel
     @ObservedObject var git: GitStatusModel
     let session: TerminalSession?
     let sshHost: String?
@@ -64,7 +64,7 @@ struct FileTreePanel: View {
 /// The same SwiftUI rows, 22 pt layout and hierarchy lines as the Git tree.
 /// The tree stays viewport-sized; only long names scroll horizontally.
 private struct FileTreeScrollView: View {
-    @ObservedObject var model: FileTreeModel
+    let model: FileTreeModel
     @ObservedObject var git: GitStatusModel
     let session: TerminalSession?
     let sshHost: String?
@@ -104,7 +104,7 @@ private struct FileTreeScrollView: View {
 
 private struct FileTreeRow: View {
     private let themeChanges = Theme.changes
-    @ObservedObject var model: FileTreeModel
+    let model: FileTreeModel
     @ObservedObject var git: GitStatusModel
     let item: FileTreeModel.Item
     let session: TerminalSession?

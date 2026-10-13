@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import XCTest
 @testable import kero
 
@@ -93,6 +94,63 @@ final class FileTreeTests: XCTestCase {
         XCTAssertFalse(tree.isExpanded(compact))
         await tree.sync(root: firstRoot.path, backend: backend, scope: "local")
         XCTAssertTrue(tree.isExpanded(compact))
+    }
+
+    func testObservableTreeKeepsRealFileOperationsAndErrorsOutsideModelUI() async throws {
+        let existing = fixture.appendingPathComponent("existing.txt")
+        let candidate = fixture.appendingPathComponent("candidate.txt")
+        try Data("preserved".utf8).write(to: existing)
+        try Data("source".utf8).write(to: candidate)
+
+        let tree = FileTreeModel()
+        let changed = expectation(description: "File tree entries became observable")
+        withObservationTracking({ _ = tree.items }) { changed.fulfill() }
+        await tree.sync(root: fixture.path, backend: backend)
+        await fulfillment(of: [changed], timeout: 1)
+        XCTAssertTrue(tree.items.contains { $0.path == existing.path })
+
+        // There is no FileTreePanel here: an outer window still receives
+        // operation errors through the model's presentation callback.
+        var failures: [(title: String, detail: String)] = []
+        tree.onError = { title, detail in failures.append((title, detail)) }
+
+        await tree.beginNewFile(in: fixture.path)
+        let rejected = await tree.commitDraft(name: "invalid/name")
+        XCTAssertNil(rejected)
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertTrue(failures[0].title.contains("invalid/name"))
+        XCTAssertTrue(failures[0].detail.contains("/"))
+        XCTAssertNil(tree.draft)
+
+        await tree.beginNewFile(in: fixture.path)
+        let duplicate = await tree.commitDraft(name: "existing.txt")
+        XCTAssertNil(duplicate)
+        XCTAssertEqual(failures.count, 2)
+        XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "preserved")
+
+        // Normal creation uses a new name. Verify the actual file instead of
+        // treating an error dialog or a visible draft row as success.
+        let unique = fixture.appendingPathComponent("unique-smoke.txt")
+        await tree.beginNewFile(in: fixture.path)
+        let created = await tree.commitDraft(name: unique.lastPathComponent)
+        XCTAssertEqual(created, unique.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unique.path))
+        XCTAssertEqual(failures.count, 2)
+
+        let source = try XCTUnwrap(tree.items.first { $0.path == candidate.path })
+        let collision = await tree.rename(source, to: "existing.txt")
+        XCTAssertNil(collision)
+        XCTAssertEqual(failures.count, 3)
+        XCTAssertEqual(try String(contentsOf: candidate, encoding: .utf8), "source")
+        XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "preserved")
+
+        // Cancelling an inline new-file row cannot create anything on disk.
+        await tree.beginNewFolder(in: fixture.path)
+        await tree.cancelDraft()
+        XCTAssertNil(tree.draft)
+        XCTAssertEqual(failures.count, 3)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.path).sorted(),
+                       ["candidate.txt", "existing.txt", "unique-smoke.txt"])
     }
 
     func testSharedTreeStatusAndCompaction() {

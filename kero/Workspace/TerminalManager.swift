@@ -58,6 +58,7 @@ final class TerminalManager: nonisolated ObservableObject {
     /// Window hosting this manager, once SwiftUI has attached its content.
     /// Finder service requests use it to target the active Kero window.
     private weak var window: NSWindow?
+    var attachedWindow: NSWindow? { window }
 
     /// Live managers in window-creation order; the persisted snapshot is
     /// one entry per registered manager.

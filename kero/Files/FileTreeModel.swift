@@ -3,13 +3,13 @@
 //  kero
 //
 
-import AppKit
-import Combine
 import Foundation
+import Observation
 
 /// Flattened, lazily-expanded view of a directory tree.
 @MainActor
-final class FileTreeModel: nonisolated ObservableObject {
+@Observable
+final class FileTreeModel {
     typealias Item = TreeDisplayModel.Row
 
     /// A pending inline "new file/folder": an input row shown inside
@@ -19,28 +19,31 @@ final class FileTreeModel: nonisolated ObservableObject {
         let isDirectory: Bool
     }
 
-    @Published private(set) var rootPath = ""
-    @Published private(set) var items: [Item] = []
+    private(set) var rootPath = ""
+    private(set) var items: [Item] = []
     /// Path of the row currently being renamed inline, if any.
-    @Published private(set) var renamingPath: String?
+    private(set) var renamingPath: String?
     /// The pending new-file/folder input row, if any.
-    @Published private(set) var draft: Draft?
-    @Published private var expanded: Set<String> = []
-    private var workspaceScope = "local"
+    private(set) var draft: Draft?
+    private var expanded: Set<String> = []
+    @ObservationIgnored private var workspaceScope = "local"
     /// A project can follow different checkouts; each retains its own outline.
     private struct Root: Hashable {
         let scope: String
         let path: String
     }
-    private var expandedByRoot: [Root: Set<String>] = [:]
+    @ObservationIgnored private var expandedByRoot: [Root: Set<String>] = [:]
 
     /// The workspace this tree reads. Replaced on every `sync`, so the tree
     /// follows its session between the local disk and a remote machine.
-    private var backend: WorkspaceBackend = LocalWorkspaceBackend.shared
+    @ObservationIgnored private var backend: WorkspaceBackend = LocalWorkspaceBackend.shared
     /// A rebuild is a round trip per visible directory, so only one runs at a
     /// time; anything arriving mid-flight is folded into one further pass.
-    private var isRebuilding = false
-    private var rebuildPending = false
+    @ObservationIgnored private var isRebuilding = false
+    @ObservationIgnored private var rebuildPending = false
+
+    /// The hosting window presents native operation errors even when Files is hidden.
+    @ObservationIgnored var onError: ((_ title: String, _ detail: String) -> Void)?
 
     var rootName: String {
         (rootPath as NSString).lastPathComponent
@@ -276,11 +279,7 @@ final class FileTreeModel: nonisolated ObservableObject {
     }
 
     private func presentError(_ messageText: String, _ informativeText: String) {
-        let alert = NSAlert()
-        alert.messageText = messageText
-        alert.informativeText = informativeText
-        alert.alertStyle = .warning
-        alert.runModal()
+        onError?(messageText, informativeText)
     }
 
     private func rebuild() async {

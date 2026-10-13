@@ -3,6 +3,7 @@
 //  kero
 //
 
+import AppKit
 import Combine
 import SwiftUI
 
@@ -60,7 +61,11 @@ struct ContentView: View {
                 .frame(width: 0, height: 0)
         }
         .background(WindowChromeAccessor { manager.attach(to: $0) })
-        .onAppear { syncGit() }
+        .onAppear {
+            installFileErrorPresentation()
+            syncGit()
+        }
+        .onChange(of: manager.projects.map(\.id)) { installFileErrorPresentation() }
         .onReceive(NotificationCenter.default.publisher(
             for: NSApplication.didBecomeActiveNotification
         )) { _ in
@@ -90,6 +95,22 @@ struct ContentView: View {
         return manager.projects
             .flatMap(\.sessions)
             .filter { !visibleIDs.contains($0.id) }
+    }
+
+    /// Files may have been opened from a shortcut or another tool tab; the
+    /// error is attached to its original window rather than a transient pane.
+    private func installFileErrorPresentation() {
+        for project in manager.projects {
+            project.fileTree.onError = { [weak manager] title, detail in
+                guard let window = manager?.attachedWindow else { return }
+                let alert = NSAlert()
+                alert.messageText = title
+                alert.informativeText = detail
+                alert.alertStyle = .warning
+                window.makeKeyAndOrderFront(nil)
+                alert.runModal()
+            }
+        }
     }
 
     private func syncGit() {
