@@ -15,6 +15,74 @@ final class PaneRetentionTests: XCTestCase {
         }
     }
 
+    func testBrowserKVOUpdatesObservationHistoryFaviconAndRepeatedFocus() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("first.html")
+        let second = directory.appendingPathComponent("second.html")
+        let icon = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jMZkAAAAASUVORK5CYII="
+        try "<title>First fixture</title><link rel='icon' href='\(icon)'><input id='draft'>".write(to: first, atomically: true, encoding: .utf8)
+        try "<title>Second fixture</title>Second page".write(to: second, atomically: true, encoding: .utf8)
+        let browser = BrowserTab(initialFocus: .none)
+        let native = browser.webView
+        let project = Project(fallbackName: "browser", workspaceConfiguration: .standard)
+        project.append(PaneTab(content: .browser(browser)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: BrowserView(
+            browser: browser, isFocused: true, onFocused: {}, onNewBrowserTab: { _ in }
+        ))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        defer { window.close() }
+
+        let titleChanged = expectation(description: "WebKit title KVO updates the observed title")
+        withObservationTracking({ _ = project.tabs[0].displayTitle }) { titleChanged.fulfill() }
+        let navigationChanged = expectation(description: "WebKit URL KVO updates snapshot semantics")
+        browser.onSnapshotChange = { navigationChanged.fulfill() }
+        native.loadFileURL(first, allowingReadAccessTo: directory)
+        try await settle { browser.title == "First fixture" && !browser.isLoading }
+        await fulfillment(of: [titleChanged, navigationChanged], timeout: 1)
+        browser.onSnapshotChange = nil
+        XCTAssertEqual(browser.snapshotURL, first.absoluteString)
+        XCTAssertNil(browser.shareURL)
+        try await settle { browser.favicon != nil }
+        XCTAssertEqual(browser.favicon?.size, NSSize(width: 1, height: 1))
+        _ = try await native.evaluateJavaScript("document.getElementById('draft').value='retained draft'")
+
+        native.loadFileURL(second, allowingReadAccessTo: directory)
+        try await settle { browser.title == "Second fixture" && !browser.isLoading }
+        XCTAssertEqual(browser.snapshotURL, second.absoluteString)
+        XCTAssertTrue(browser.canGoBack)
+        browser.goBack()
+        try await settle { browser.title == "First fixture" && !browser.isLoading }
+        XCTAssertTrue(browser.canGoForward)
+        let restored = try await native.evaluateJavaScript("document.getElementById('draft').value") as? String
+        XCTAssertEqual(restored, "retained draft")
+        browser.goForward()
+        try await settle { browser.title == "Second fixture" && !browser.isLoading }
+        XCTAssertTrue(browser.webView === native)
+
+        let focused = expectation(description: "Repeated address focus requests are observable")
+        withObservationTracking({ _ = browser.focusAddressRequest }) { focused.fulfill() }
+        let initialRequest = browser.focusAddressRequest
+        browser.requestAddressFocus()
+        await fulfillment(of: [focused], timeout: 1)
+        try await settle {
+            (window.firstResponder as? NSTextView)?.string == second.absoluteString
+        }
+        let addressEditor = try XCTUnwrap(window.firstResponder as? NSTextView)
+        XCTAssertEqual(addressEditor.selectedRange(), NSRange(location: 0, length: second.absoluteString.utf16.count))
+        addressEditor.setSelectedRange(NSRange(location: 0, length: 0))
+        browser.requestAddressFocus()
+        XCTAssertEqual(browser.focusAddressRequest, initialRequest + 2)
+        try await settle { addressEditor.selectedRange().length == second.absoluteString.utf16.count }
+        XCTAssertTrue(browser.webView === native)
+    }
+
     func testBrowserAndEditorStateSurviveViewRemount() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

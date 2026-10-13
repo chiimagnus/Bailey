@@ -175,7 +175,7 @@ private struct FileTabLabel: View {
 }
 
 private struct BrowserTabLabel: View {
-    @ObservedObject var browser: BrowserTab
+    let browser: BrowserTab
     /// User-assigned tab name overriding the webpage title.
     var customTitle: String?
     let isSelected: Bool

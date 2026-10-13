@@ -786,7 +786,7 @@ private struct TabContentThumbnail: View {
 }
 
 private struct BrowserTabSwitcherPreview: View {
-    @ObservedObject var browser: BrowserTab
+    let browser: BrowserTab
 
     var body: some View {
         VStack(spacing: 5) {

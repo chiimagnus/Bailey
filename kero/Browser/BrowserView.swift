@@ -6,6 +6,7 @@
 import AppKit
 import Combine
 import ImageIO
+import Observation
 import SwiftUI
 import WebKit
 
@@ -133,7 +134,8 @@ final class BrowserWebView: WKWebView {
 /// model, rather than the transient SwiftUI representable, so switching tabs
 /// preserves page state, history, forms, and scroll position.
 @MainActor
-final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDelegate, WKUIDelegate {
+@Observable
+final class BrowserTab: NSObject, Identifiable, WKNavigationDelegate, WKUIDelegate {
     enum InitialFocus {
         case addressBar
         case webContent
@@ -142,29 +144,29 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     nonisolated let id = UUID()
 
-    @Published private(set) var title = String(localized: "New Tab", table: "Browser")
-    @Published private(set) var urlString = "" {
+    private(set) var title = String(localized: "New Tab", table: "Browser")
+    private(set) var urlString = "" {
         didSet { if urlString != oldValue { onSnapshotChange?() } }
     }
-    var onSnapshotChange: (() -> Void)?
-    @Published private(set) var canGoBack = false
-    @Published private(set) var canGoForward = false
-    @Published private(set) var isLoading = false
-    @Published private(set) var estimatedProgress = 0.0
-    @Published private(set) var errorMessage: String?
-    @Published private(set) var favicon: NSImage?
+    @ObservationIgnored var onSnapshotChange: (() -> Void)?
+    private(set) var canGoBack = false
+    private(set) var canGoForward = false
+    private(set) var isLoading = false
+    private(set) var estimatedProgress = 0.0
+    private(set) var errorMessage: String?
+    private(set) var favicon: NSImage?
     /// Incremented by the app-level Focus Address Bar command. A sequence is
     /// used instead of a Bool so repeated ⌘L presses are never coalesced.
-    @Published private(set) var focusAddressRequest: UInt = 0
+    private(set) var focusAddressRequest: UInt = 0
 
     let webView: BrowserWebView
 
-    private var pageTitle: String?
-    private var observations: Set<AnyCancellable> = []
-    private var initialFocus: InitialFocus?
+    @ObservationIgnored private var pageTitle: String?
+    @ObservationIgnored private var observations: Set<AnyCancellable> = []
+    @ObservationIgnored private var initialFocus: InitialFocus?
     private let contextMenuBridge: BrowserContextMenuBridge
-    private var faviconTask: Task<Void, Never>?
-    private var faviconRevision: UInt = 0
+    @ObservationIgnored private var faviconTask: Task<Void, Never>?
+    @ObservationIgnored private var faviconRevision: UInt = 0
 
     private static let maximumFaviconBytes = 2 * 1_024 * 1_024
     /// WKWebView's default macOS user agent has no browser/version token, so
@@ -247,7 +249,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     }
 
     var shareURL: URL? {
-        guard let url = webView.url,
+        guard let url = URL(string: urlString),
               let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https"
         else { return nil }
@@ -700,7 +702,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 /// A browser identity icon that observes favicon arrival independently of the
 /// pane/tab container rendering it.
 struct BrowserFaviconView: View {
-    @ObservedObject var browser: BrowserTab
+    let browser: BrowserTab
     let size: CGFloat
     var fallbackSystemImage = "globe"
 
@@ -727,7 +729,7 @@ struct BrowserFaviconView: View {
 /// Browser content and native navigation chrome. The toolbar stays in SwiftUI
 /// so it follows Kero's appearance while the page remains a real WKWebView.
 struct BrowserView: View {
-    @ObservedObject var browser: BrowserTab
+    let browser: BrowserTab
     let isFocused: Bool
     let onFocused: () -> Void
     let onNewBrowserTab: (String?) -> Void
@@ -1167,7 +1169,7 @@ private struct BrowserAddressField: NSViewRepresentable {
 }
 
 private struct BrowserWebViewRepresentable: NSViewRepresentable {
-    @ObservedObject var browser: BrowserTab
+    let browser: BrowserTab
     let onFocused: () -> Void
     let onNewBrowserTab: (String?) -> Void
     let focusRequest: UInt

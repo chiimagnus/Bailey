@@ -70,10 +70,6 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// persisted fields notify the window separately.
     private var tabObservations: [UUID: AnyCancellable] = [:]
     private var dockObservation: AnyCancellable?
-    /// Browser navigation changes the tab's automatic title and persisted URL.
-    /// Re-publish it through the project just like a terminal's live title and
-    /// working directory.
-    private var browserObservations: [UUID: AnyCancellable] = [:]
 
     init(fallbackName: String, workspaceConfiguration: DockWorkspaceConfiguration) {
         self.fallbackName = fallbackName
@@ -398,14 +394,10 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         initialURL: String?,
         initialFocus: BrowserTab.InitialFocus
     ) -> BrowserTab {
-        let browser = BrowserTab(
+        BrowserTab(
             initialURL: initialURL,
             initialFocus: initialFocus
         )
-        browserObservations[browser.id] = browser.objectWillChange.sink { [weak self] _ in
-            self?.objectWillChange.send()
-        }
-        return browser
     }
 
     // MARK: - File paths
@@ -802,7 +794,6 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         case .file(let file): file.onSnapshotChange = nil
         case .diff(let diff): diff.onSnapshotChange = nil
         }
-        browserObservations[tab.content.id] = nil
         tabObservations[tabID] = nil
         recentTabIDs.removeAll { $0 == tabID }
         tabs.remove(at: index)
