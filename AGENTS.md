@@ -6,7 +6,7 @@
 
 - 先读受影响功能的维护文档，沿入口、状态所有者、后端直到实际副作用检查。先执行 `rtk codegraph sync`，再用 `rtk codegraph explore` / `node` 定位；索引不全时核对源码与 XCTest，不凭文件名猜职责。
 - 按改动阅读[产品](docs/PRODUCT.md)、[项目与 SSH](docs/PROJECTS.md)、[终端与停靠](docs/TERMINAL.md)、[文件与编辑器](docs/EDITOR.md)、[Git](docs/GIT.md)、[浏览器](docs/BROWSER.md)、[设置与恢复](docs/SETTINGS.md)；横向约束见[性能](docs/PERFORMANCE.md)、[安全](docs/SECURITY.md)、[本地化](docs/LOCALIZATION.md)及[依赖与生成](docs/DEPENDENCIES.md)。
-- 优先复用现有实现、修复共享根因。只做获授权的修改；推送、发布、破坏性操作和替换用户正在使用的 App 须另获授权，不中断运行中命令或未保存编辑。
+- 优先复用现有实现、修复共享根因。只做获授权的修改；推送、发布及其它破坏性操作须另获授权。本地代码改动通过验证后按[本地安装](docs/RELEASE.md#本地安装)更新 App，不中断当前运行的进程或未保存编辑。
 
 ## 架构：MVVM + Observation
 
@@ -66,7 +66,7 @@ make build:release
   open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Kero.app" --args --isolated-ui-test
   ```
   此模式隔离窗口与终端历史，不启动保存的隧道，但普通设置仍共用；不得在隔离实例中改写全局设置。
-- **正式安装**：默认路径 `/Applications/Kero.app`。只有获准时才在构建验签后于临时路径准备完整 App，再替换并复验签名；**不创建旧版备份**，禁止逐文件覆盖运行中的包，失败即停止并说明。默认不退出、启动或重启现有 App，不打断命令或未保存编辑；用户自行重启后才能验收恢复。
+- **本地安装**：功能代码通过测试及签名 Debug 构建后，默认按[本地安装](docs/RELEASE.md#本地安装)整包替换 `/Applications/Kero.app`；用户明确要求跳过时除外。**绝不退出、启动或重启现有 App**，用户自行重启后新代码才生效；安装失败应恢复原包，不留旧版备份。
 - **收尾**：只清理本次可确认归属的临时产物，不动用户数据。分别报告已构建、已验签、已安装、已重启与恢复验收的实际状态；不以隔离实例成功冒充正式包已安装。
 
 ## 文档与提交

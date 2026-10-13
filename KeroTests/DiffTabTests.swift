@@ -582,6 +582,92 @@ final class DiffTabTests: XCTestCase {
         XCTAssertFalse(firstUnified.isHidden)
     }
 
+    func testSplitDiffSynchronizesHorizontalAndVerticalScrolling() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("wide.txt")
+        let oldText = ([String(repeating: "a", count: 1100)]
+            + (0..<150).map { "before \($0)" }).joined(separator: "\n") + "\n"
+        let newText = ([String(repeating: "b", count: 1400)]
+            + (0..<150).map { "after \($0)" }).joined(separator: "\n") + "\n"
+        try Data(oldText.utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", "wide.txt"], in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: directory.path).status, 0)
+        try Data(newText.utf8).write(to: file)
+
+        let suite = "kero-diff-scroll-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.diffStyle = .split
+        preferences.prefersEditing = false
+        let diff = DiffTab(
+            repoRoot: directory.path, path: "wide.txt", staged: false,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil, preferences: preferences
+        )
+        try await wait { !diff.isLoading && diff.display != nil }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 430),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: diff))
+        window.contentView = host
+        window.orderFront(nil)
+
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            guard let surface = diff.nativeSurface else { return false }
+            surface.layoutSubtreeIfNeeded()
+            let panes = surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }
+            guard panes.count == 2 else { return false }
+            return panes.allSatisfy { pane in
+                pane.layoutSubtreeIfNeeded()
+                return (pane.scrollView.documentView?.frame.width ?? 0)
+                    > pane.scrollView.contentView.bounds.width + 300
+            }
+        }
+        let surface = try XCTUnwrap(diff.nativeSurface)
+        let panes = surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }
+        let left = try XCTUnwrap(panes.first)
+        let right = try XCTUnwrap(panes.last)
+        XCTAssertFalse(left === right)
+
+        let leftClip = left.scrollView.contentView
+        let rightClip = right.scrollView.contentView
+        leftClip.scroll(to: NSPoint(x: 120, y: 60))
+        left.scrollView.reflectScrolledClipView(leftClip)
+        XCTAssertEqual(leftClip.bounds.origin.x, 120, accuracy: 1)
+        XCTAssertEqual(rightClip.bounds.origin.x, leftClip.bounds.origin.x, accuracy: 1)
+        XCTAssertEqual(rightClip.bounds.origin.y, leftClip.bounds.origin.y, accuracy: 1)
+
+        rightClip.scroll(to: NSPoint(x: 240, y: 100))
+        right.scrollView.reflectScrolledClipView(rightClip)
+        XCTAssertEqual(rightClip.bounds.origin.x, 240, accuracy: 1)
+        XCTAssertEqual(leftClip.bounds.origin.x, rightClip.bounds.origin.x, accuracy: 1)
+        XCTAssertEqual(leftClip.bounds.origin.y, rightClip.bounds.origin.y, accuracy: 1)
+
+        // A longer right-hand line can scroll farther without being pulled
+        // back by the shorter left-hand document.
+        let leftEnd = (left.scrollView.documentView?.frame.width ?? 0) - leftClip.bounds.width
+        let rightEnd = (right.scrollView.documentView?.frame.width ?? 0) - rightClip.bounds.width
+        XCTAssertGreaterThan(rightEnd, leftEnd + 200)
+        rightClip.scroll(to: NSPoint(x: leftEnd + 120, y: 100))
+        right.scrollView.reflectScrolledClipView(rightClip)
+        XCTAssertEqual(leftClip.bounds.origin.x, leftEnd, accuracy: 2)
+        XCTAssertEqual(rightClip.bounds.origin.x, leftEnd + 120, accuracy: 2)
+
+        diff.setDiffStyle(.unified)
+        try await wait { surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }.count == 1 }
+        diff.setDiffStyle(.split)
+        try await wait { surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }.count == 2 }
+        XCTAssertEqual(leftClip.bounds.origin.x, leftEnd, accuracy: 2)
+        XCTAssertEqual(rightClip.bounds.origin.x, leftEnd + 120, accuracy: 2)
+        leftClip.scroll(to: NSPoint(x: 30, y: 0))
+        left.scrollView.reflectScrolledClipView(leftClip)
+        XCTAssertEqual(rightClip.bounds.origin.x, 30, accuracy: 1)
+    }
+
     func testReadInFlightCannotReplaceEditingOrDisconnectedContent() async throws {
         let domain = "kero-native-stale-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))

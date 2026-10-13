@@ -991,7 +991,7 @@ final class DiffCodePaneView: NSView {
     /// Re-entrancy guard for vertical scroll syncing between split panes.
     private var isSyncingScroll = false
 
-    var onVerticalScroll: ((CGFloat) -> Void)?
+    var onScroll: ((NSPoint) -> Void)?
     /// Fired with the fold's metadata when the user activates a collapsed-run
     /// separator (row click, gutter click, or accessibility press).
     var onExpandCollapsedRun: ((DiffCollapsedRun) -> Void)?
@@ -1147,13 +1147,12 @@ final class DiffCodePaneView: NSView {
         })
     }
 
-    /// Every scroll tick: repaint the viewport-fixed decoration layers and
-    /// mirror the vertical offset to the sibling pane (split view).
+    /// Repaint viewport decorations and synchronize both axes in split mode.
     private func handleScrolled() {
         underlay.needsDisplay = true
         gutter.needsDisplay = true
         if !isSyncingScroll {
-            onVerticalScroll?(scrollView.contentView.bounds.origin.y)
+            onScroll?(scrollView.contentView.bounds.origin)
         }
     }
 
@@ -1182,19 +1181,24 @@ final class DiffCodePaneView: NSView {
         gutter.needsDisplay = true
     }
 
-    /// Follow a sibling pane's vertical scroll without echoing it back.
-    func setVerticalScrollOffset(_ y: CGFloat) {
+    /// Follow a sibling pane without echoing scroll events back to it.
+    func setScrollOffset(_ origin: NSPoint) {
         let clipView = scrollView.contentView
-        guard abs(clipView.bounds.origin.y - y) > 0.01 else { return }
+        let constrained = clipView.constrainBoundsRect(NSRect(origin: origin, size: clipView.bounds.size)).origin
+        let current = clipView.bounds.origin
+        guard abs(current.x - constrained.x) > 0.01 || abs(current.y - constrained.y) > 0.01 else { return }
         isSyncingScroll = true
-        clipView.setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: y))
+        defer { isSyncingScroll = false }
+        clipView.scroll(to: constrained)
         scrollView.reflectScrolledClipView(clipView)
-        isSyncingScroll = false
     }
 
-    var verticalScrollOffset: CGFloat {
-        scrollView.contentView.bounds.origin.y
+    func setVerticalScrollOffset(_ y: CGFloat) {
+        let current = scrollView.contentView.bounds.origin
+        setScrollOffset(NSPoint(x: current.x, y: y))
     }
+
+    var scrollOffset: NSPoint { scrollView.contentView.bounds.origin }
 
     /// The fixed row height from the last applied paragraph style, for
     /// layout-independent scroll math.

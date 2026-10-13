@@ -135,7 +135,7 @@ final class DiffNativeSurface: NSView, STTextViewDelegate {
                 apply(display.rightText, document: display.computation.splitRight,
                       id: display.id, to: right, font: font, style: style, palette: palette)
                 restoreAnchor(to: right, rows: display.computation.splitRight.rows)
-                left.setVerticalScrollOffset(right.verticalScrollOffset)
+                left.setScrollOffset(right.scrollOffset)
             } else {
                 let pane = unifiedPane ?? makeUnifiedPane()
                 apply(display.unifiedText, document: display.computation.unified,
@@ -195,11 +195,11 @@ final class DiffNativeSurface: NSView, STTextViewDelegate {
             line.layer?.backgroundColor = Theme.divider.cgColor
             addSubview(line)
             divider = line
-            leftPane.onVerticalScroll = { [weak rightPane] y in
-                rightPane?.setVerticalScrollOffset(y)
+            leftPane.onScroll = { [weak rightPane] origin in
+                rightPane?.setScrollOffset(origin)
             }
-            rightPane.onVerticalScroll = { [weak leftPane] y in
-                leftPane?.setVerticalScrollOffset(y)
+            rightPane.onScroll = { [weak leftPane] origin in
+                leftPane?.setScrollOffset(origin)
             }
         }
         return pane

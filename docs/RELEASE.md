@@ -16,6 +16,10 @@ make build:release
 
 产物分别位于 `build/DerivedData/Build/Products/Debug/Kero.app` 与 `Release/Kero.app`。本机构建需要 Apple Development 证书，团队设置见 [AGENTS](../AGENTS.md#构建)。CI 使用临时签名，不读取私钥。
 
+## 本地安装
+
+本地代码修改通过测试、Debug 构建及签名检查后，默认更新 `/Applications/Kero.app`。先在同一磁盘暂存并验签完整 App，再整包替换及复验；失败恢复原包，不逐文件覆盖、不保留旧版备份。**不退出、启动或重启正在运行的 Kero**：当前进程继续运行旧代码，由用户手动重启生效。用户明确要求不替换时跳过。
+
 ## 配置签名
 
 将有效的 Apple Development 证书及私钥导出为带密码的 `.p12`，在仓库 Actions Secrets 中配置：
