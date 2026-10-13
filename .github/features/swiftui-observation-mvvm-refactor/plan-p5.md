@@ -34,7 +34,7 @@
 
 **当前依赖：** `Project` 既是项目与标签的唯一 owner，又收集尚未迁移的 `sessionObservations/tabObservations/browserObservations`，并在 `confirmCloseUnsaved` 直接弹 NSAlert；`PaneTab` 标题依赖长寿命内容的状态。**源码已发现但本次不改变 UX 的既有缺陷**：`TerminalManager.close(project)` 不检查脏 File/Diff，直接 `terminateAll/remove`；`Project.closeBatch` 在逐个确认后立即移除标签，随后 Cancel 不会恢复已关标签；`confirmCloseUnsaved` 只检查 `saveError == nil`。此前新增项目关闭提示、调整批量取消行为的方案会改变现有体验，**从本次纯重构中剔除**，另案明确授权处理，不能将它们写成已修复。
 
-**实现：** 在**原有** `Project`、`PaneTab` 对象上改 `@Observable`，不另造 ProjectViewModel、PaneViewModel 转发层；`PaneContent` 只引用一份长寿命 native 内容。`Project.makeSession/makeBrowser` 保留业务编排，Native 实例创建交给 P4 已有的终端/浏览器原生适配入口，不造新的工厂容器。`confirmCloseUnsaved` 中构造原生 `NSAlert` 属于职责越界，可委托 P3-T1 的最小 UI 呈现入口，**前提是保持现有窗口选择、Sheet/Modal 类型、按钮与文字、键盘等效键、展示顺序、Save/Don't Save/Cancel 后实际结果完全不变**；若无法证明等价，当前 Task 不得标为完成；继续寻找等价的职责迁移方式，不允许以架构目标为由牺牲 UX。`Close Others/Right/All/Files/Diffs` 的确认、逐项关闭和取消结果以 P1 记录的原行为为准，不改成“全部准备后统一拆除”；`TerminalManager.close(project)` 的侧栏／命令面板入口保持原有关闭行为，**不新增未保存确认框**。既有窗口归属错误、保存竞态或数据丢失风险记录为独立缺陷，需另案授权后修复，不在本 Task 偷改交互。**本 Task 删除 `Project` 余留 `sessionObservations/tabObservations/browserObservations` 中继、`PaneTab` 旧 `@Published` 和直接生成 NSAlert 的项目业务路径，并替换对应 View `@ObservedObject`**；P4 已移除的订阅不再恢复。
+**实现：** 在**原有** `Project`、`PaneTab` 对象上改 `@Observable`，不另造 ProjectViewModel、PaneViewModel 转发层；`PaneContent` 只引用一份长寿命 native 内容。`Project.makeSession/makeBrowser` 保留业务编排，Native 实例创建交给 P4 已有的终端/浏览器原生适配入口，不造新的工厂容器。`confirmCloseUnsaved` 中构造原生 `NSAlert` 属于职责越界，可委托 P3-T1 的最小 UI 呈现入口，**前提是保持现有窗口选择、Sheet/Modal 类型、按钮与文字、键盘等效键、展示顺序、Save/Don't Save/Cancel 后实际结果完全不变**；若无法证明等价，当前 Task 不得标为完成；继续寻找等价的职责迁移方式，不允许以架构目标为由牺牲 UX。`Close Others/Right/All/Files/Diffs` 的确认、逐项关闭和取消结果以 P1 记录的原行为为准，不改成“全部准备后统一拆除”；`TerminalManager.close(project)` 的侧栏／命令面板入口保持原有关闭行为，**不新增未保存确认框**。既有窗口归属错误、保存竞态或数据丢失风险记录为独立缺陷，需另案授权后修复，不在本 Task 偷改交互。**本 Task 删除 `Project` 余留 `sessionObservations/tabObservations/browserObservations` 中继、`PaneTab` 旧 `@Published` 和直接生成 NSAlert 的项目业务路径，并替换对应 View `@ObservedObject`**；P4 已移除的订阅不再恢复。`Project` 不再符合 `ObservableObject` 后，`TerminalManager.projectObservations` 无法继续存在，须在本 Task 原子删除，而不是为了等 P5-T3 再留临时旧协议。
 
 **验证：** `make test ONLY_TESTING=KeroTests/PaneRetentionTests`、`make test ONLY_TESTING=KeroTests/WorkspaceIdentityTests`、`make test ONLY_TESTING=KeroTests/SessionStoreTests`；在**隔离测试内容**中对照 P1 基线核查单标签关闭、批量关闭逐项弹窗／Cancel、侧栏和命令面板关闭项目的**实际现有结果**，包括按钮文案、顺序、模态方式、焦点与 Shell 是否终止。现存风险只记录，不添加以新 UX 为预期的测试；确认展示迁移后必须与旧方式一致。`make build`。
 
@@ -47,9 +47,9 @@
 
 **Files／锚点：** `kero/Workspace/TerminalManager.swift::TerminalManager.init/makeProject/remove/saveAll/windowClosed/restore/openRestoredWindows`；`kero/UI/ContentView.swift`、`kero/UI/Panels/ProjectsPanelView.swift`、`kero/UI/WorkspaceDockView.swift`、`kero/UI/Panels/ToolPanelView.swift`、`kero/UI/CommandPaletteView.swift`、`KeroTests/WorkspaceIdentityTests.swift`、`KeroTests/SessionStoreTests.swift`。
 
-**当前依赖：** Manager 的 `projects/selectedProjectID` 使用 `@Published`，`projectObservations` 将每个项目的事件转为“整个窗口变了”。此外 manager 持有多个窗口 registry、Finder pending directories、恢复队列、用户命令与真正的进程 teardown，不可简单作为普通 Model 拆走。
+**当前依赖：** Manager 的 `projects/selectedProjectID` 仍用 `@Published`；原 `projectObservations` 广播链已随 P5-T2 原子删除，P5-T3 不应重新引入。此外 manager 持有多个窗口 registry、Finder pending directories、恢复队列、用户命令与真正的进程 teardown，不可简单作为普通 Model 拆走。
 
-**实现：** `TerminalManager` 是已有的**每窗口**唯一业务/选择/恢复协调者，改成 `@Observable`，保留静态注册表供 Finder/通知和跨窗口持久化，不新建 WindowViewModel。**P3 的 Git 状态继续由同窗口 `ContentView.@State` 单独持有**。Manager 目前创建的 `NSOpenPanel` 和 SSH 选择 UI 改由已有 WindowRoot／P3-T1 的**明确所属窗口**原生呈现入口执行，选中 URL/host 的验证及业务写入仍归 Manager，不建协议／DialogService。同步核对 `ProjectsPanelView.SidebarProjectRow.pickProjectDirectory`：它本就是 UI 选择器，不必从 View 再搬出去，却不能继续用 `NSApp.keyWindow ?? NSApp.mainWindow` 猜窗口；由最小现有 UI 入口呈现并只传回选中目录；**必须保持 NSOpenPanel/SSH 选择器原本的窗口归属、模态方式、默认路径、可选类型、按钮与取消行为**，不能借路由迁移改变体验。菜单和命令面板保持同一操作入口。接入各 View 直接读取 `@Observable manager`；**同 Task 删除 Manager `@Published`、`projectObservations`、已替换的原生对话框构造、旧 `objectWillChange` 中继与包装器**，并保留真正的 `willTerminate` 系统通知。
+**实现：** `TerminalManager` 是已有的**每窗口**唯一业务/选择/恢复协调者，改成 `@Observable`，保留静态注册表供 Finder/通知和跨窗口持久化，不新建 WindowViewModel。**P3 的 Git 状态继续由同窗口 `ContentView.@State` 单独持有**。Manager 目前创建的 `NSOpenPanel` 和 SSH 选择 UI 改由已有 WindowRoot／P3-T1 的**明确所属窗口**原生呈现入口执行，选中 URL/host 的验证及业务写入仍归 Manager，不建协议／DialogService。同步核对 `ProjectsPanelView.SidebarProjectRow.pickProjectDirectory`：它本就是 UI 选择器，不必从 View 再搬出去，却不能继续用 `NSApp.keyWindow ?? NSApp.mainWindow` 猜窗口；由最小现有 UI 入口呈现并只传回选中目录；**必须保持 NSOpenPanel/SSH 选择器原本的窗口归属、模态方式、默认路径、可选类型、按钮与取消行为**，不能借路由迁移改变体验。菜单和命令面板保持同一操作入口。接入各 View 直接读取 `@Observable manager`；由于 Manager 已不再符合 `ObservableObject`，`WindowRootView` 的 `@State`、`KeroCommands` 的 `FocusedValues` 观察接口必须在同一原子变更中更新才能通过编译，P5-T4 负责该 Scene 路由的多窗口原生验证及修复，而非保留一套临时兼容包装。**同 Task 删除 Manager `@Published`、已替换的原生对话框构造、其它旧 `objectWillChange` 中继与包装器**；`projectObservations` 在 P5-T2 已删，不重复，并保留真正的 `willTerminate` 系统通知。
 
 **验证：** `make test ONLY_TESTING=KeroTests/WorkspaceIdentityTests`、`make test ONLY_TESTING=KeroTests/SessionStoreTests`、`make test ONLY_TESTING=KeroTests/PaneRetentionTests`；新建／关闭空项目、从 Finder 添加文件／目录、焦点命令作用域、窗口关闭和重启模拟均检查实际结果；`make build` 并严格验签。
 
@@ -62,9 +62,9 @@
 
 **Files／锚点：** `kero/App/keroApp.swift::keroApp/WindowRootView/KeroCommands`、`kero/App/FinderService.swift::KeroApplicationDelegate`（只核对现有退出行为，不加回调）、`kero/UI/Components/WindowChrome.swift::WindowChromeAccessor`（只核对现有关闭与窗口归属，不增拦截）、`kero/Workspace/TerminalManager.swift::registerWindowOpener/openRestoredWindows/windowClosed`；必要的 SwiftUI 焦点值定义及 XCTest。
 
-**当前依赖：** `WindowRootView.@StateObject` 以窗口为作用域创建 Manager，`.focusedSceneObject(manager)` 与 `@FocusedObject` 供菜单定位激活窗口。SwiftUI 的 View 出现和消失还驱动窗口恢复／终端结束，不能换包装器时破坏。**另有已确认的关闭旁路**：`WindowRootView.onDisappear → TerminalManager.windowClosed()` 直接抓快照并终止 Shell；现行快照仅保存文件路径／编辑器位置，不保存未写盘的 File/Diff 编辑文本，点窗口红色关闭按钮时不能寄希望于 `onDisappear` 才检查脏文件。
+**当前依赖：** P5-T3 已随 Manager Observation 原子迁移 `WindowRootView.@State`、`.focusedSceneValue(\.keroManager, manager)` 与 `@FocusedValue(\.keroManager)`，本 Task 不重复替换这些接口，重点验收真正的双窗口焦点与动作目标；SwiftUI 的 View 出现和消失仍驱动窗口恢复／终端结束，不能破坏。**另有已确认的关闭旁路**：`WindowRootView.onDisappear → TerminalManager.windowClosed()` 直接抓快照并终止 Shell；现行快照仅保存文件路径／编辑器位置，不保存未写盘的 File/Diff 编辑文本，点窗口红色关闭按钮时不能寄希望于 `onDisappear` 才检查脏文件。
 
-**实现：** 本机 **Xcode 27 / Swift 6.4** 已用独立临时文件实际 `swiftc -typecheck` 通过：`@Observable final class X: NSObject, WKNavigationDelegate`、`@Entry var manager: Manager?`、`.focusedSceneValue(\.manager, manager)`、`@FocusedValue(\.manager)` 可组合，**原计划的 `.focusedSceneValue(manager)` 实参错误**。本 Task 在 `FocusedValues` 定义单一针对 `TerminalManager?` 的键（命名按当前工程避免碰撞）；WindowRoot `@State private var manager=TerminalManager()`，调用 `.focusedSceneValue(\.keroManager, manager)`，KeroCommands 使用 `@FocusedValue(\.keroManager)`。保留 `WindowGroup` 当前恢复/关闭时序，焦点窗口不跨 scene，暂不创建 Navigation/Scene 子系统。**窗口关闭与应用退出均须保持现有 UX**：只迁移 `WindowRootView` 的状态装配和菜单焦点读取，不修改 `WindowChromeAccessor`、`NSWindow` 关闭拦截、`WindowRootView.onDisappear → manager.windowClosed()` 和 `KeroApplicationDelegate` 的退出行为；不新增 `windowShouldClose`、`applicationShouldTerminate` 或关闭前弹窗。源码已证实的未保存编辑风险保留为独立缺陷记录，不在这次架构重构中默默更改红色关闭按钮、⌘W 或退出的结果。保留关闭后的窗口快照/终端历史保存时序，不允许迁移带来**新的**数据丢失或行为退化。**同 Task 删除旧 `@StateObject`、`.focusedSceneObject(manager)`、`@FocusedObject` 及失效焦点帮助类**。
+**实现：** 本机 **Xcode 27 / Swift 6.4** 已用独立临时文件实际 `swiftc -typecheck` 通过：`@Observable final class X: NSObject, WKNavigationDelegate`、`@Entry var manager: Manager?`、`.focusedSceneValue(\.manager, manager)`、`@FocusedValue(\.manager)` 可组合，**原计划的 `.focusedSceneValue(manager)` 实参错误**。P5-T3 已按本方案定义 `FocusedValues.keroManager`，并在 WindowRoot／KeroCommands 中原子接入。当前 Task 须实测这条 Scene 焦点链，发现真实路由错误时修复，不额外造 Navigation/Scene 子系统；保留 `WindowGroup` 当前恢复/关闭时序。**窗口关闭与应用退出均须保持现有 UX**：只迁移 `WindowRootView` 的状态装配和菜单焦点读取，不修改 `WindowChromeAccessor`、`NSWindow` 关闭拦截、`WindowRootView.onDisappear → manager.windowClosed()` 和 `KeroApplicationDelegate` 的退出行为；不新增 `windowShouldClose`、`applicationShouldTerminate` 或关闭前弹窗。源码已证实的未保存编辑风险保留为独立缺陷记录，不在这次架构重构中默默更改红色关闭按钮、⌘W 或退出的结果。保留关闭后的窗口快照/终端历史保存时序，不允许迁移带来**新的**数据丢失或行为退化。**同 Task 删除旧 `@StateObject`、`.focusedSceneObject(manager)`、`@FocusedObject` 及失效焦点帮助类**。
 
 **验证：** `make build` + `make test ONLY_TESTING=KeroTests/SessionStoreTests` 和 P5-T2 关闭行为回归。隔离 Debug **两窗口不同项目**核对切焦点后 New/Save/Close/Find/Show Panel 的原有可用条件、操作目标、快捷键与原生焦点；红色关闭按钮／⌘W／应用退出必须保持**基线中已有的**提示数量、关闭结果、终端退出和恢复时序，不能多出 Save/Don't Save/Cancel 对话框。涉及未保存数据只在临时文件中验并记录已知风险，绝不触碰正在运行的用户会话。若 SDK 编译不接受 FocusedValues `@Entry`，按真实报错调整 key 定义，不保留旧 `@FocusedObject` 双轨。
 
@@ -86,6 +86,16 @@
 **提交：** 临时切换状态和旧发布器移除、行为验收同一提交。
 
 ---
+
+## P5-T6 移除多余的 WebKit Diff 渲染与 Pierre 依赖
+
+**依据：** 用户明确要求 WebKit 仅用于内置浏览器。Git 历史确认初始仓库曾依赖 PierreDiffsSwift，`ee243e0` 将其 vendoring 到 `Vendor/`；非 main 的 `native-diff` 历史分支 `e3f5b3d` 已有可复用的 TextKit 差异计算、语法高亮和行布局实现。
+
+**实现：** 复用该原生实现，保留当前 `DiffTab` 的 Git/SSH 读取、保存、目标/请求代次与错误行为；以 `DiffNativeSurface` 由标签唯一持有原生视图，取消 WKWebView、Pierre 的 Xcode 包链接及本地源码，并即时清理旧编辑回调/旧测试。更新 `docs/GIT.md`、`docs/DEPENDENCIES.md`、`docs/PERFORMANCE.md` 和 AGENTS 的原生边界。
+
+**验证：** Diff 9/9、全量 XCTest 68/68、Debug build、严格代码签名通过；隔离 Debug 真实打开 Git Diff，检查 Unified/Split 中文/Emoji、行号、增删色和左右对照；确认 App 二进制不链接 Pierre，只有浏览器及其焦点桥接依赖 WebKit，正式运行中的 Kero 未替换。
+
+**提交：** `6b3081b`。
 
 ## 阶段完成门槛
 

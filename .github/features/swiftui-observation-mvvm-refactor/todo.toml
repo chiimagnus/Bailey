@@ -1,5 +1,5 @@
 version = 1
-current_task_id = ""
+current_task_id = "P6-T1"
 
 [[tasks]]
 id = "P1-T1"
@@ -21,130 +21,131 @@ note = "语义状态驱动500ms快照；旧autosaveObservation已删除；全量
 [[tasks]]
 id = "P2-T1"
 title = "配置状态转 Observation，保持写入与终端设置传播"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = ""
-note = ""
+commit = "0b05d11"
+note = "AppSettings@Observable、WindowRootView九项实时原生刷新；AppSettingsTests 3/3、全量XCTest 36/36、make build/codesign PASS。设置窗口94 AX控件/内容区像素一致；CFFIXED_USER_HOME临时Home原生调字号/主题/光标/Option，配置写入临时目录、Shell PID不变，原用户config SHA不变。"
 
 [[tasks]]
 id = "P2-T2"
 title = "用 Observation 替换全局主题重绘信号"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = ""
-note = ""
+commit = "889172a"
+note = "Theme.changes @Observable revision 及所有静态Theme消费者，删除旧Combine广播；设置测试4/4、全量37/37 PASS、Debug make build/codesign PASS；临时Home实机按相同dark-slot在TextKit/Git图谱/共享树/Dock/Ghostty/WebKit Diff/空白Browser中切换调色板成功，Shell PID与原始用户配置未变，证据本机evidence/p1-baseline。"
 
 [[tasks]]
 id = "P3-T1"
 title = "文件树状态转 Observation，文件操作归入 ViewModel／Backend"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t1"
-commit = ""
-note = ""
+commit = "f92ab70"
+note = "文件树 @Observable、无旧 Combine；窗口 ContentView 弹原生错误模态。FileTreeTests 5/5、PanelContext 2/2、TreeRowHit 1/1、全量38/38、build/codesign PASS；隔离原生创建/重命名/取消/非法名警告逐项验收并保留真正系统截图 evidence/p3-t1；测试数据清理、用户配置及正式 App 未触碰。"
 
 [[tasks]]
 id = "P3-T2"
 title = "Git 状态／读取刷新统一成可观察 ViewModel"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t2"
-commit = ""
-note = ""
+commit = "d78bd85"
+note = "GitStatusModel @Observable/窗口@State，同一VM驱动GitPanel/Files/底栏；无33个@Published遗留。模型2/2(首次HEAD/32条分页/双仓库与Observation)、执行器4/4、Workspace3/3、全量39/39，build/codesign PASS。独立Debug实机：Git刷新→临时Untracked→Files颜色/无障碍和工具栏均可见，测试文件清理，正式App及用户配置未触碰。"
 
 [[tasks]]
 id = "P3-T3"
 title = "把 GitPanel 的丢弃预检移出 View 并保留交互确认"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t3"
-commit = ""
-note = ""
+commit = "ffa054c"
+note = "GitPanel丢弃相关文件/远端IO及安全校验迁至GitStatusModel，确认快照绑定机器、仓库、HEAD、分支、代次和backend身份。测试本机变更/symlink、远端断线/在途切scope无删除、取消无副作用；Git模型4/4、全量41/41 PASS，Debug build/codesign PASS，隔离原生右键Move to Trash确认框只后台Cancel且校验和不变；正式Kero未动。"
 
 [[tasks]]
 id = "P4-T1"
-title = "SSH 断线事件与临时端口转发发布器清理"
-status = "pending"
+title = "清理未接入产品的 SSH 会话临时端口转发链"
+status = "completed"
 plan = "plan-p4.md#p4-t1"
-commit = ""
-note = ""
+commit = "a7f83ce"
+note = "源码调用图证明旧 PortForwardController/RemoteConnection.forward 无产品入口，真正转发由 TunnelManager 提供；直接删除死链及过时测试，保留真实 SSH mux 与 UI 发布待 P4-T2。受控 RemoteLifetime 2/2、RemoteCommands 4/4、WorkspaceIdentity 3/3、全量42/42、make build/codesign PASS，未触碰正式 App/用户 SSH。"
 
 [[tasks]]
 id = "P4-T2"
 title = "终端会话和查找条的 Observation／原生事件桥"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t2"
-commit = ""
-note = ""
+commit = "7664467"
+note = "SSH/TerminalSession/TerminalFind成组@Observable，移除旧Combine publisher中继/Info PID，实际状态变更经现有Project.scheduleRemoteTabRebind；PaneRetention3/3、RemoteLifetime3/3、WorkspaceIdentity4/4、全量45/45及make build/严格codesign PASS；隔离原生OSC修改标题、CmdF 1/1/重复焦点/Esc还原，真实截图evidence/p4-t2，未操作正式Kero、用户SSH、README。"
 
 [[tasks]]
 id = "P4-T3"
 title = "文件编辑标签的可观察状态与可靠保存"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t3"
-commit = ""
-note = ""
+commit = "5bd9e2639c9f7dd59410c68a79c1938cd5706b16"
+note = "原提交5bd9e26；审计de63012修复真正STTextView所有权/挂载后undo/900px滚动/旧回调/释放，d7d9a2b修复通道交接保存身份。Pane5/5、File5/5、Identity4/4、全量59/59、build/严格验签PASS；原生330813采样0差异。audit-p4。"
 
 [[tasks]]
 id = "P4-T4"
 title = "差异标签和 WebKit 渲染器的可观察状态"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t4"
-commit = ""
-note = ""
+commit = "ee243e043cbab5805b1c4ff957c86e59e6aa284b"
+note = "原提交ee243e0；审计d7d9a2b修复真实通道身份、807d666修复原生回归同步。Diff7/7、全量59/59、build/严格验签PASS；WK资源/真实编辑/700px滚动/undo-redo/字节/释放，原生330813采样0差异。audit-p4。"
 
 [[tasks]]
 id = "P4-T5"
 title = "浏览器标签 Observation 与 WKWebView delegate/KVO 适配"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t5"
-commit = ""
-note = ""
+commit = "b1c3550a020e234ec6e27819590abe59b1d1aa93"
+note = "BrowserTab Observation/旧UI中继删除、WebKit真实KVO保留；PaneRetention4/4(网页历史/favicon/表单/滚动/原生重复地址聚焦全选)、SessionStore5/5(真实导航自动保存)、build/严格验签PASS。证据evidence/p4-t5；CmdL菜单两窗口P5验收。"
 
 [[tasks]]
 id = "P5-T1"
 title = "Dock 布局唯一状态与拖动手势改用 Observation"
-status = "pending"
+status = "completed"
 plan = "plan-p5.md#p5-t1"
-commit = ""
-note = ""
+commit = "ddc4333"
+note = "Dock/drag Observation、旧广播移除、完整双窗口历史 Info 过滤；原生重挂载保留内容/Undo/滚动/焦点；XCTest 61/61、make build 与严格 codesign PASS；独立 Debug 离屏，未声称人工手势验收。"
 
 [[tasks]]
 id = "P5-T2"
 title = "PaneTab 和 Project 的身份、选择及关闭流程收敛"
-status = "pending"
+status = "completed"
 plan = "plan-p5.md#p5-t2"
-commit = ""
-note = ""
+commit = "134ac76"
+note = "Project/PaneTab Observation 单一状态，无旧 Combine 级联；UI 原生关闭 Sheet/Modal 对照；63/63 全量测试、build、严格 codesign PASS。"
 
 [[tasks]]
 id = "P5-T3"
 title = "窗口 TerminalManager 收敛成唯一窗口 ViewModel"
-status = "pending"
+status = "completed"
 plan = "plan-p5.md#p5-t3"
-commit = ""
-note = ""
+commit = "3918150"
+note = "窗口管理唯一 @Observable、原生选择器 UI/窗口归属与 Scene 焦点同步切换；64/64 全量、Session5/5、Pane9/9、build/codesign；隔离 Debug 双窗口菜单状态与新浏览器仅目标窗口验证。"
 
 [[tasks]]
 id = "P5-T4"
 title = "App／WindowRoot 的 Observation 装配及多窗口菜单焦点"
-status = "pending"
+status = "completed"
 plan = "plan-p5.md#p5-t4"
 commit = ""
-note = ""
+no_commit_reason = "Scene 的 @State 和 FocusedValues 原子实现已在 P5-T3 的 3918150 提交；P5-T4 仅按真实双窗口做行为和恢复验收，无新增代码变化，不制作空提交。"
+note = "隔离 Debug 4792 两窗口：key 焦点切换后文件/浏览器/面板菜单可用性正确，New Browser Tab 只作用有项目窗口；关闭空窗口保留另一窗口；最后窗口关闭后隔离快照保留 1 项窗口、1 项项目、19 标签；File > New Window 重开恢复原项目、zsh、README；SessionStore 5/5、最新全量 68/68、build 和 codesign PASS；用户正式 App PID37163 未触碰。已知脏文件关闭风险仅记录。"
 
 [[tasks]]
 id = "P5-T5"
 title = "Ctrl-Tab 快速切换及标签／项目侧栏的局部状态收敛"
-status = "pending"
+status = "completed"
 plan = "plan-p5.md#p5-t5"
-commit = ""
-note = ""
+commit = "998b249"
+note = "标签切换器和 FPS 均移除旧 Combine UI 发布器，PaneRetention 11/11、全量 68/68、Debug build 和 codesign 通过。隔离原生确认切换浮层、Esc、目标标签；合成 Control 释放非物理键盘验收。"
 
 [[tasks]]
 id = "P6-T1"
 title = "将跨面板根目录解析与刷新编排移出 SwiftUI View"
-status = "pending"
+status = "in_progress"
 plan = "plan-p6.md#p6-t1"
 commit = ""
-note = ""
+note = "P5 审计 Go，开始核对 ContentView/ToolPanel 的业务刷新路径与目标身份。"
 
 [[tasks]]
 id = "P6-T2"
@@ -176,4 +177,12 @@ title = "正式切换 Swift 6 语言模式并使构建／测试全通过"
 status = "pending"
 plan = "plan-p7.md#p7-t3"
 commit = ""
-note = ""
+note = "用户2026-10-13明确仅使用当前Xcode；idea/plan-p7已删除26.6复验门槛，验收仍需真实Swift6 Debug/Release build/test/严格验签，不切换其他工具链。"
+
+[[tasks]]
+id = "P5-T6"
+title = "移除 WebKit Diff 与 Pierre 依赖"
+status = "completed"
+plan = "plan-p5.md#p5-t6"
+commit = "6b3081b"
+note = "TextKit Git Diff，Pierre 34 文件及 SPM 链接清理；Diff 9/9、全量 XCTest 68/68、build/codesign；隔离 Debug 真机 Unified/Split 中文/Emoji/行号/颜色验收。"

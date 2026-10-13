@@ -28,7 +28,7 @@ Kero 已决定以 **MVVM + Observation** 为长期架构，但现有代码仍主
    - 迁移窗口菜单的焦点／命令路由，避免移除 `@FocusedObject` 后菜单指向错误窗口或失去可用状态。
 
 3. **现代 Swift、并发与系统 API**
-   - 以现有 Xcode／Swift 工具链支持且 **macOS 15.6+** 可用的 API 为准，优先使用原生 SwiftUI／Foundation／Swift Concurrency 实现，减少不必要的 AppKit UI、GCD 调度、旧式回调和兼容包装。
+   - 仅使用本机当前 Xcode／Swift 工具链验收，保留 **macOS 15.6+** 部署目标；不安装、切换或要求其他 Xcode 版本。优先使用原生 SwiftUI／Foundation／Swift Concurrency 实现，减少不必要的 AppKit UI、GCD 调度、旧式回调和兼容包装。
    - **以升级 Swift 6 语言模式、满足严格并发检查为目标**：梳理 `MainActor` 所有权、异步后端、跨 actor 传值、取消及 `Sendable`；不靠 `nonisolated(unsafe)` 或随意 `@unchecked Sendable` 压制诊断。第三方框架或编译器造成的限制须先用实际编译／最小实验确认，再决定边界，而不是预先放弃。
    - 原生 `Scene`、`Commands`、数据流、焦点及 API 仅在内部迁移确有必要、且原生实测 UI/UX 完全一致时更新；不做纯样式、控件、布局或动效 API 的顺手替换。
    - 仍应使用 AppKit／Ghostty／WebKit／TextKit 处理 SwiftUI 无法等价覆盖的终端、编辑器、网页、原生焦点与输入；现代化不等于强行以纯 SwiftUI 重写这些能力。
@@ -87,7 +87,7 @@ Kero 已决定以 **MVVM + Observation** 为长期架构，但现有代码仍主
 - `DiffViewPreferences` 也是实际 `ObservableObject`，驱动 Pierre diff 样式／编辑模式；P4-T4 必须与 `DiffTab/DiffWebModel` 一起转为 Observation，保留同一 UserDefaults 键与 `@Bindable` 绑定。
 - `TerminalSession.panelShellPid` 与 `RemoteConnection.shellProcessID` 仅互相服务，原 Info 进程面板已不存在；P4-T2 删除这条真正无消费者的缓存和远端 PID 赋值，但保留仍用于探测当前远端工作目录的 SSH shell discovery（其内部识别 PID 用于查找 cwd，不可误删）。
 - `TunnelManager.$tunnels/$states` 被原生 NSTableView 消费，`BrowserTab.webView.publisher(for:)` 用于 WebKit KVO；均是与 UI 自有 `ObservableObject` 广播不同的**有效 Combine 事件桥**，不为完全清零 Combine 再引入另一套机制。
-- 本机 Xcode 27.0/Swift 6.4 已通过 macOS 15.6 目标的 Swift 6 严格模式最小 `@Observable + NSObject/WKNavigationDelegate + FocusedValues` 类型检查；但 CI/Release 锁定 **Xcode 26.6**，本机不具备该安装，P7 必须另行验证，不能以此原型代替完整 App 构建。
+- 本机 Xcode 27.0/Swift 6.4 已通过 macOS 15.6 目标的 Swift 6 严格模式最小 `@Observable + NSObject/WKNavigationDelegate + FocusedValues` 类型检查，仍须用完整 App/Test 的实际 Swift 6 构建验收。用户于 2026-10-13 明确要求只使用当前 Xcode，删除旧计划的 Xcode 26.6 复验门槛；不把未运行的远端 CI 记为通过。
 
 所有替代任务在**同一 Task** 删除对应旧 Publisher、调用链、状态与无消费者代码并验证，禁止积压到最后。唯一保留经现行 `AppSnapshot` 解码证实必需的最小旧 Info 数据过滤，以及 SSH／用户数据／原生事件确有消费者的保护；不以“全部删光”制造数据丢失或断链。每个 Task 完成时应独立可编译、可验收，不能借后续 Task 才补上当前中断的响应链；规划期不提前修改正式 Swift 源码。
 

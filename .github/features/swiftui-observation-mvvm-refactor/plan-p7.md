@@ -47,11 +47,15 @@
 
 **Files／源码锚点：** `kero.xcodeproj/project.pbxproj::SWIFT_VERSION` 的应用与测试 target 配置、必要的自有 Swift 文件的**实际编译诊断位置**、`Makefile::build/test/build:release`、`kero.xcodeproj/xcshareddata/xcschemes/kero.xcscheme`、`docs/RELEASE.md`（如真实工具链契约发生变化）。
 
-**当前事实：** Xcode App/Test 目标仍是 `SWIFT_VERSION=5.0`，已启用默认 `MainActor`。**本机使用 `/Applications/Xcode-beta.app`（Xcode 27.0、Swift 6.4），而 `.github/workflows/ci.yml` 与 `release.yml` 明确锁定 `/Applications/Xcode_26.6.app`**，且本机没有这个 Xcode 26.6 目录；不能将本机 Swift 6.4 的 `@Entry/FocusedValues` 类型检查当作 CI 26.6 的通过证明。CI／发布只用同一 `Makefile` 与单一 App Target，不能为了本次重构增加 scheme 或测试框架。
+**当前事实与用户决定：** Xcode App/Test 目标仍是 `SWIFT_VERSION=5.0`，已启用默认 `MainActor`。本机当前工具链为 `/Applications/Xcode-beta.app`（Xcode 27.0、Swift 6.4）。用户于 2026-10-13 明确要求仅使用当前 Xcode；删除原计划的 Xcode 26.6 复验门槛，不安装、不切换其他版本。CI／发布仍只有同一 `Makefile` 与单一 App Target，不新增 scheme 或测试框架；未运行的远端 CI 不冒称通过。
 
 **实现：** 经 P7-T1/T2 根因修复后把 Xcode App/Test Target 真实 `SWIFT_VERSION` 改为 6，保持 macOS 15.6、Approachable Concurrency、默认 `MainActor`、Xcode scheme 与 CI/发布单一入口。剩余诊断回到其实际 owner 修复，禁止为骗过编译回落 Swift 5/禁用严格并发。**本 Task 及 P2～P6 都不为了满足新语法而替换 `foregroundStyle/.bold/clipShape` 等纯视觉表达；仅修改迁移 Observation 所必需的绑定代码，并对所有相关 UI 严格对照基线。** 终验再次按 CodeGraph 检查自有 UI `ObservableObject/@Published/objectWillChange/@StateObject/@ObservedObject`、SwiftUI View 直接 Git/文件 IO、非必要转发及手写兼容分支；若发现遗漏，回到所属前序 Task 当场改/验证/删旧代码并更新进展，不能在最终任务里为他们集中清理。
 
-**验证：** `xcodebuild -showBuildSettings` 确认 App/Test 真实 Swift 6，运行 `make doctor`、`make test`、`make build`、`make build:release`，对 Debug/Release 包各自 `codesign --verify --deep --strict`。**必须额外确认 CI/Release 指定的 Xcode 26.6 下可构建、可运行测试**，并确保这一轮用 P1/P5 的隔离测试覆盖普通自动保存的 snapshot/historyKey 与 sidecar 正确配对、无引用历史的正常清理、旧 Info 项只过滤不丢全窗口及**项目／标签／窗口关闭与 P1 的现有弹窗及结果相同**；既有关闭数据丢失缺陷单独记录，不能误写成已修复；可用真实 Actions PR 运行证明，或在装有 26.6 的受控设备用相同 Makefile 复验，不能因本机 27 通过就宣称发布兼容。若 26.6 不支持计划选用的具体 API，优先调整源码到两者和 macOS 15.6 都支持的方案，不擅自上调 CI Xcode 或最低系统版本。隔离 Debug **在 P1 同系统/缩放/尺寸/主题/语言/内容下逐一对比受影响界面的原生截图和实际操作**：多窗口焦点和快捷键、项目/Dock 布局和拖拽、终端 PID/字体/滚动、现存未保存提示、Git/Files 树及菜单、命令面板、SSH 反馈、WebKit 表单与 Diff、设置和错误提示；发现非环境因素的视觉/交互差异就退回所属 Task 修正，**不能签发通过**；未授权真实 SSH、正式 App 重启标为未测。不做无关的 30 次性能压测，只对真正修改的热点遵循 docs/PERFORMANCE.md。核对 22 项 Task 的提交和原位旧代码删除；不引用已有 `audit*.md` 作为事实。
+**验证：** 仅用当前 Xcode，`xcodebuild -showBuildSettings` 确认 App/Test 真实 Swift 6，运行 `make doctor`、`make test`、`make build`、`make build:release`，对 Debug/Release 包各自 `codesign --verify --deep --strict`。不要求其他 Xcode 版本复验，不为旧版本增加兼容层；最低部署目标仍为 macOS 15.6。
+
+P1/P5 隔离测试须覆盖普通自动保存的 snapshot/historyKey 与 sidecar 正确配对、无引用历史的正常清理、旧 Info 项只过滤不丢全窗口及**项目／标签／窗口关闭与 P1 的现有弹窗及结果相同**；既有关闭数据丢失缺陷单独记录，不能误写成已修复。
+
+隔离 Debug **在 P1 同系统/缩放/尺寸/主题/语言/内容下逐一对比受影响界面的原生截图和实际操作**：多窗口焦点和快捷键、项目/Dock 布局和拖拽、终端 PID/字体/滚动、现存未保存提示、Git/Files 树及菜单、命令面板、SSH 反馈、WebKit 表单与 Diff、设置和错误提示；发现非环境因素的视觉/交互差异就退回所属 Task 修正，**不能签发通过**；未授权真实 SSH、正式 App 重启标为未测。不做无关的 30 次性能压测，只对真正修改的热点遵循 docs/PERFORMANCE.md。核对 22 项 Task 的提交和原位旧代码删除；不引用已有 `audit*.md` 作为事实。
 
 **提交：** Swift 6 模式切换、所需的直接编译修复和针对性验证作为原子提交，禁止额外 target／新 App 身份。
 

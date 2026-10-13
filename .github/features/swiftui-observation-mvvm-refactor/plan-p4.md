@@ -4,7 +4,7 @@
 
 **Non-goals：** 不重写 Ghostty、TextKit、Pierre/WebKit 内核，不切换远端 SSH 协议，不承诺跨进程恢复正在运行的 Shell 或网页表单。
 
-**Approach：** 沿当前 `RemoteConnection → TerminalSession → Project` 和 `PaneTab → FileTab/DiffTab/BrowserTab` 两条可达链迁移。已有 `TerminalBackendSurface`、`SourceTextEditor`、`BrowserWebView` 和 `DiffWebHostingView` 就是原生桥接，**不预设再创建一套 NativeAdapter/ViewModel 类**；先把真实展示状态改为 Observation，只在 NSAlert、原生 View 创建或底层 IO 确实越过职责时做针对性抽离。第三方 KVO/原生 delegate 是有效事件源，按消费者是否真实存在决定保留，禁止盲删。
+**Approach：** 沿当前 `RemoteConnection → TerminalSession → Project` 和 `PaneTab → FileTab/DiffTab/BrowserTab` 两条可达链迁移。复用既有终端、TextKit、WebKit 原生桥接，不另建平行 ViewModel。原生测试已证明旧编辑器桥接每次重挂载重建 STTextView，旧 Diff 的嵌套 HostingView 也不能保留 WKWebView；须在各标签真实资源所有权处修复，而非只保留外层 SwiftUI 宿主。第三方 KVO/原生 delegate 是有效事件源，按消费者是否真实存在决定保留，禁止盲删。
 
 **Acceptance：** 已迁移内容对象在 Observation 下更新；拖动标签、项目切换和重挂载不重启 Shell、丢失表单、撤销、文本或滚动；远程断线、只读、恢复与转发无误，清理各对象原先的 UI 发布器和无用转发。
 
@@ -13,17 +13,15 @@
 ---
 
 <a id="p4-t1"></a>
-## P4-T1 SSH 断线事件与临时端口转发发布器清理
+## P4-T1 清理未接入产品的 SSH 会话临时端口转发链
 
-**Files／锚点：** `kero/Remote/RemoteConnection.swift::RemoteConnection.markConnected/markDisconnected/runSSH`；`kero/Remote/PortForwardController.swift::init/forward/forgetAll`；`kero/Terminal/TerminalSession.swift::beginRemoteConnection/endRemoteConnection/watchRemoteConnection`；`kero/Remote/SSHWorkspaceBackend.swift`、`KeroTests/RemoteLifetimeTests.swift`、`KeroTests/RemoteCommandsTests.swift`。
+**源码核对：** 全部产品 Swift 源码没有 `connection.portForwards.forward(...)` 调用，`RemoteConnection.forward/requestForward/freeLocalPort` 也只有旧控制器使用。其唯一持有者 `RemoteConnection.portForwards` 是从未被实际 UI 读取的 lazy 属性，故 `PortForwardController` 的缓存、`Combine` 断线订阅和旧源码测试不是现存产品行为。**真正的用户端口转发**由 `keroApp.init → TunnelManager.start → TunnelRunner` 和 Settings 的 `TunnelSettingsView` 提供，具备独立生命周期，与 `RemoteConnection` 无关，必须保留；`RemoteCommands.isLocalPortFree` 仍被 `TunnelManager` 使用。
 
-**当前依赖：** `PortForwardController` 订阅 `connection.$state` 后断开立即取消在途转发；`TerminalSession.remoteObservation` 仍通过 `connection.objectWillChange` 向未迁移的 `TerminalSession/Project/UI` 发布状态。**这两条链不能在不同 Task 的中间态被一起拔掉**，否则先编译失败，或连接状态变化时右侧 UI／远端重绑失效。
+**实现：** 直接删除未接入的 `kero/Remote/PortForwardController.swift`、`RemoteConnection.portForwards/forward/requestForward/freeLocalPort` 和仅供其使用的 `.unexpectedOutput`，而不是给闲置对象重新安装 `markDisconnected → forgetAll`。同步清理只针对该死路径的 XCTests 和不参与构建的历史 `check-remote-lifetime.swift` 中的旧转发场景（保留真实 SSH mux 失联测试及现有 Xcode 例外清单）。保留 `RemoteConnection` 的真实连接/断线/复联事件、仍被 `SSHWorkspaceBackend` 使用的 `RemoteConnectionError.commandFailed` 和实际 `TunnelManager`；**不要在本 Task 删除 `RemoteConnection.@Published` 或 `TerminalSession.remoteObservation`**，消费者在 P4-T2 才成组迁移。
 
-**实现：** **本 Task 先只闭合端口转发的真实副作用链**：让 `RemoteConnection.markDisconnected` 直接调用现有 `PortForwardController.forgetAll`（只在连接真实断开时触发；保留合并并发请求、断线取消及完成后重新核对 state，防止旧请求在重连后复写本地端口缓存），确认唯一实际断线入口；`localPortsByRemote` 没有 SwiftUI/$Publisher 消费者，改为普通私有字典，**立即删除 `PortForwardController: ObservableObject`、`@Published`、`stateObserver` 与无用 Combine import**。暂保留 `RemoteConnection` 当前 `ObservableObject/@Published` 和 `TerminalSession.remoteObservation`，因为下一 Task 才能把它们与原生终端、Project 及 UI 消费者一起原子换成 Observation；本 Task 不增加一套临时 `withObservationTracking` 中继。`RemoteCommandRunner`、控制 socket、跨 SSH host identity 与 `WorkspaceBackend: Sendable` 保持原样；不迁移进程 runner。
+**验证：** `make test ONLY_TESTING=KeroTests/RemoteLifetimeTests` 验证真实 runner 流与 `SSHWorkspaceBackend` 对连接的所有权；`RemoteCommandsTests` 与 `WorkspaceIdentityTests` 验证仍在运行的连接身份、控制 socket 和本机端口判断；`make test`、`make build` 及严格验签。静态追溯 `keroApp/TunnelManager/TunnelSettingsView` 用户入口并确认没有任何活动源代码依赖删除的接口。**不建立测试 SSH master，不触碰用户端口转发或 SSH 进程。**
 
-**验证：** `make test ONLY_TESTING=KeroTests/RemoteLifetimeTests`、`make test ONLY_TESTING=KeroTests/RemoteCommandsTests`、`make test ONLY_TESTING=KeroTests/WorkspaceIdentityTests`；覆盖断线发生在 `forward` 等待期间、重复并发请求、旧连接复活不可回写新机器、同主机不同端口身份。受控测试不接触用户 SSH master；`make build` 并验签。
-
-**提交：** 断线副作用与无消费者的端口转发发布器删除同一次提交；仍有消费者的 `RemoteConnection/TerminalSession` UI 发布器按 P4-T2 删除。
+**提交：** 死代码及对应过期测试/工程引用同一任务立即清理；真正的 SSH Observation 变更留给 P4-T2。
 
 ---
 
@@ -37,6 +35,8 @@
 **实现：** `TerminalSession` 已持有唯一 Ghostty `TerminalBackendSurface`（现成 service/adapter）及完整 `TerminalBackendEvents` 回调，不新建终端 runtime wrapper。将 `RemoteConnection.state/workingDirectory`、`TerminalSession` 标题／目录／命令完成／SSH 位置和 `TerminalFind` **同一 Task** 改成 Observation，并确认在 View 中读取嵌套可观察字段时能实际刷新，保持原生 surface、PTY、滚动和进程不动。`TerminalSession.init` 已经只通过现有 `KeroTerminalView` 建立唯一 native surface，**无需为这一行再造 TerminalFactory/Adapter**。`terminalDidRequestClipboardConfirmation` 的 `NSAlert`/预览是 Ghostty OSC 52 的必要系统 UI，保证由现有 native 事件边界在该 surface 的所属窗口呈现，`approve/deny` 必须回调一次；只在确有生命周期或窗口归属问题时抽出最小 AppKit UI 方法，不为“纯 SwiftUI”平白增加 Presenter 类。`TerminalFind` 直接改 `@Observable`，重复焦点、延迟首个命中和恢复 responder 保持。**同 Task 删除 `RemoteConnection/TerminalSession/TerminalFind.@Published`、`TerminalSession.remoteObservation`、对应旧 View wrapper 和已不再需要的 `Project.sessionObservations`，并让 P1 快照保存独立于旧 Publisher。对 SSH 状态、远端 cwd 更新／断线／重连，从原有状态变更入口显式触发**唯一的** `Project.scheduleRemoteTabRebind`；不能只靠 SwiftUI 读取属性来完成文件／diff 后端重绑，亦不得引入第二个轮询。旧 Info 面板没有任何消费者的 `TerminalSession.panelShellPid`、`RemoteConnection.shellProcessID` 及 PID 赋值在此直接删除；**保留远端 cwd 探测本身**，`SSHWorkspaceBackend.remoteWorkingDirectory → RemoteCommands.shellDiscoveryCommand` 内部使用远端 PID 寻找 cwd 仍有真实用途，不要误删整个进程发现逻辑；若调整返回 tuple／解析器，调用与相关解析测试同 Task 改完。
 
 **验证：** `make test ONLY_TESTING=KeroTests/PaneRetentionTests`、`make test ONLY_TESTING=KeroTests/RemoteLifetimeTests`、`make test ONLY_TESTING=KeroTests/WorkspaceIdentityTests`；新增或调整终端标题、命令完成事件、查找请求与远端断开恢复的最小测试。隔离原生检查停车宿主拖动后 Shell PID 和输入可用、通知跳转、⌘F 重复聚焦及选择不丢失；`make build`。
+
+**审计修正：** 同机器另一条通道已可用时，事件合并可跳过只读状态；不能仅以 readOnlyReason 判断是否重绑。RemoteConnection 弱复用仍被消费者持有的真实 workspace backend，FileTab/DiffTab 按该身份更换目标并失效旧读写。旧通道实际写入完成也不能清除新目标的 dirty。受控回归必须走 TerminalSession/RemoteConnection 的真实状态回调及 Project 原调度入口，不新增轮询或状态副本。
 
 **提交：** 终端真实 owner + 观察边界 + 旧事件链移除同一原子提交。
 
@@ -53,6 +53,8 @@
 
 **验证：** `make test ONLY_TESTING=KeroTests/PaneRetentionTests`、`make test ONLY_TESTING=KeroTests/WorkspaceIdentityTests`；补脏标记转清、写中二次编辑、重命名后写新路径、断线只读、旧读取丢弃与保存失败不关闭。隔离原生检查 UTF-8／emoji／CRLF、撤销、查找、光标滚动；`make build`。
 
+**审计修正：** `editorView` 的弱引用仅保留拖动预览用途，不能满足原生撤销保留。复用 `SourceTextEditor.Coordinator` 由文件标签持有唯一原生编辑器，协调器弱持有标签以避免环；临时容器不将真实编辑资源压为零尺寸。实际干净重载释放旧 owner，旧回调不再写入当前文档。原生回归覆盖重挂载后的撤销/重做、900px 滚动、中文/emoji/CRLF、磁盘变化替换、旧回调和释放。
+
 **提交：** 编辑状态链完整接入、旧 dirty Publisher 与重复状态删除同一提交。
 
 ---
@@ -64,7 +66,7 @@
 
 **当前依赖：** `DiffTab` 保留 repo、机器、提交元数据和可编辑工作区 diff；`DiffWebModel` 驱动独立渲染，`webHostView` 长期持有 WebKit 容器，`PaneTab` 通过 `diff.$isDirty` 显示编辑标记。
 
-**实现：** `DiffTab` 已经唯一负责 diff 的 repo/路径/机器、加载、编辑/保存与错误；`DiffWebModel` 是长期 `DiffWebHostingView` 真正消费的**渲染输入状态**，两者本来职责不同，不能为了“只剩一个 Observable”就合并并触发 WebKit 全量渲染。对各自的现有 UI 状态改 `@Observable`，保留 `DiffWebHostingView` 一份真实实例；`DiffViewPreferences.shared` **也是实际 UI `ObservableObject`**（驱动统一／并列 diff 及编辑模式），必须在本 Task 同步改为 `@Observable`，原 UserDefaults 键、写入时机和唯一共享身份不变。`DiffWebRoot` 的 Pierre `diffStyle`/`overflowMode` 绑定用 `@Bindable` 或已有显式 `Binding` 接回真实 owner，不把偏好复制到 DiffTab。Git 读取继续走现有 `GitCommandExecution`／`WorkspaceBackend`，**不存在需要引入的 P3 Git Service**。真正的原生创建 `DiffTab.materializeWebHostView` 只在具体创建边界移给现有 host adapter（如保持长寿命身份可在同任务完成），无需额外包装类。仍须避免逐键改 `DiffWebModel.newContent` 触发丢失 undo，保留 editing buffer 与 saved baseline 的当前职责分工。**同 Task 删除被替换的 `@Published`、`@ObservedObject`、PaneTab 的 Diff 旧 dirty publisher、无消费者通知；不会删除真实 WebKit 局部渲染所需桥接。**
+**实现（按原生证据修正）：** 保留 DiffTab 的唯一缓冲区／保存基线及 DiffWebModel 的低频渲染输入，两者与 DiffViewPreferences 改成 Observation；默认偏好仍是唯一 shared，UserDefaults 键与写入时机不变，受控测试可注入专用 defaults。原生实验已证明保留 NSHostingView 或 NSHostingController 不能保住内部 WKWebView；只缓存 WebView 又会被 SwiftUI 的临时零尺寸布局丢掉网页内滚动。用户要求在所有权根因修复后，基于 PierreDiffsSwift 1.5.0 固定提交保留源码／资源／许可证，增加 PierreMultiDiffSurface 持有唯一 WebView 和协调器，临时原生容器只给它有效尺寸；最终 owner 释放才 cleanup，不加重试或滚动恢复缓存。删除 Kero 的多余 DiffWebHostingView、DiffWebHostView 及仅为分离宿主服务的外观中继，DiffWebRoot 直接进入当前窗口 SwiftUI 树，创建入口只 materialize 原生 surface。Git／文件仍走原后端，保存回写核对机器／连接代次，进入编辑后的旧读取不得重置编辑器。逐键内容仍不改 DiffWebModel.newContent；同 Task 删除旧 Published／ObservedObject、PaneTab 的 Diff dirty Publisher。改动只涉及上游两个原生适配文件，不改 JavaScript 内核；出处与升级规则写入 docs/DEPENDENCIES.md。
 
 **验证：** 更新的 Git XCTest、`make test ONLY_TESTING=KeroTests/PaneRetentionTests`、`make test ONLY_TESTING=KeroTests/WorkspaceIdentityTests`；工作区／暂存／历史、UTF-8/二进制/5MiB 限制、未保存 diff、断线重连。隔离原生验证 WKWebView 真实首屏、滚动、diff 编辑/保存、切换后重新显示；`make build`。
 
