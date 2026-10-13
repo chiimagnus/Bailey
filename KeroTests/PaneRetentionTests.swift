@@ -137,6 +137,91 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertEqual(firstManager.projects.count, initialProjectCount)
     }
 
+    func testTabSwitcherKeepsProvisionalSelectionAndCancelsWithoutSideEffects() async throws {
+        let saved = SessionStore.load()
+        let history = TerminalHistoryStore.load()
+        defer { SessionStore.save(saved); TerminalHistoryStore.save(history) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tab-switcher-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([directory])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let tabs = (0..<3).map { _ in PaneTab(content: .browser(BrowserTab(initialFocus: .none))) }
+        tabs.forEach(project.append)
+        XCTAssertEqual(project.selectedTabID, tabs[2].id)
+        let switcher = TabSwitcherController()
+
+        func key(_ type: NSEvent.EventType, _ keyCode: UInt16, _ flags: NSEvent.ModifierFlags) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: flags,
+                timestamp: 0, windowNumber: 0, context: nil,
+                characters: "\t", charactersIgnoringModifiers: "\t",
+                isARepeat: false, keyCode: keyCode
+            ))
+        }
+
+        let previewStarted = expectation(description: "Switcher reports provisional highlight")
+        withObservationTracking({ _ = switcher.isPresented; _ = switcher.highlightedTabID }) {
+            previewStarted.fulfill()
+        }
+        let controlTab = try key(.keyDown, 48, [.control])
+        XCTAssertNil(switcher.handle(controlTab, manager: manager))
+        await fulfillment(of: [previewStarted], timeout: 1)
+        XCTAssertTrue(switcher.isPresented)
+        XCTAssertEqual(switcher.orderedTabIDs, [tabs[2].id, tabs[1].id, tabs[0].id])
+        XCTAssertEqual(switcher.highlightedTabID, tabs[1].id)
+        XCTAssertEqual(project.selectedTabID, tabs[2].id)
+
+        // A stationary pointer must not replace the keyboard highlight.
+        switcher.highlight(tabs[0].id, in: project)
+        XCTAssertEqual(switcher.highlightedTabID, tabs[1].id)
+        XCTAssertNil(switcher.handle(controlTab, manager: manager))
+        XCTAssertEqual(switcher.highlightedTabID, tabs[0].id)
+        XCTAssertEqual(project.selectedTabID, tabs[2].id)
+
+        let release = try key(.flagsChanged, 59, [])
+        XCTAssertNil(switcher.handle(release, manager: manager))
+        XCTAssertFalse(switcher.isPresented)
+        XCTAssertEqual(project.selectedTabID, tabs[0].id)
+        XCTAssertEqual(switcher.highlightedTabID, nil)
+
+        // A reverse cycle can be canceled by Escape without committing.
+        let original = project.selectedTabID
+        XCTAssertNil(switcher.handle(try key(.keyDown, 48, [.control, .shift]), manager: manager))
+        XCTAssertTrue(switcher.isPresented)
+        XCTAssertEqual(project.selectedTabID, original)
+        XCTAssertNil(switcher.handle(try key(.keyDown, 53, [.control]), manager: manager))
+        XCTAssertFalse(switcher.isPresented)
+        XCTAssertEqual(project.selectedTabID, original)
+        XCTAssertNotNil(switcher.handle(release, manager: manager))
+
+        // Closing a candidate during preview cannot select a removed tab.
+        XCTAssertNil(switcher.handle(controlTab, manager: manager))
+        let candidate = try XCTUnwrap(switcher.highlightedTabID)
+        let closing = try XCTUnwrap(project.tabs.first { $0.id == candidate })
+        project.close(closing)
+        XCTAssertNil(switcher.handle(release, manager: manager))
+        XCTAssertNotEqual(project.selectedTabID, candidate)
+        XCTAssertTrue(project.tabs.contains { $0.id == project.selectedTabID })
+    }
+
+    func testFPSCounterExposesOnlyPresentationAndStopsCleanly() async throws {
+        let counter = FPSCounter()
+        XCTAssertEqual(counter.fps, 0)
+        let changed = expectation(description: "FPS is directly observable")
+        withObservationTracking({ _ = counter.fps }) { changed.fulfill() }
+        try await Task.sleep(for: .milliseconds(1100))
+        counter.tick()
+        await fulfillment(of: [changed], timeout: 1)
+        XCTAssertGreaterThan(counter.fps, 0)
+        counter.stop()
+        XCTAssertEqual(counter.fps, 0)
+    }
+
     func testBrowserKVOUpdatesObservationHistoryFaviconAndRepeatedFocus() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

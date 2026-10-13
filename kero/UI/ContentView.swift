@@ -11,7 +11,7 @@ struct ContentView: View {
     private let themeChanges = Theme.changes
     let manager: TerminalManager
     @Environment(\.colorScheme) private var colorScheme
-    @StateObject private var tabSwitcher = TabSwitcherController()
+    @State private var tabSwitcher = TabSwitcherController()
     @State private var git = GitStatusModel()
 
     /// Every terminal in the selected project can change the same repository.

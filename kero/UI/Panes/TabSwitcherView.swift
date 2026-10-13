@@ -4,27 +4,28 @@
 //
 
 import AppKit
-import Combine
+import Observation
 import SwiftUI
 
 /// Owns the press-and-hold Ctrl-Tab interaction for one window. Repeated Tab
 /// presses move only the highlighted card; the project's real selection stays
 /// untouched until Control is released. Escape cancels the provisional choice.
 @MainActor
-final class TabSwitcherController: ObservableObject {
-    @Published private(set) var isPresented = false
-    @Published private(set) var highlightedTabID: UUID?
-    @Published private(set) var terminalPreviews: [UUID: String] = [:]
+@Observable
+final class TabSwitcherController {
+    private(set) var isPresented = false
+    private(set) var highlightedTabID: UUID?
+    private(set) var terminalPreviews: [UUID: String] = [:]
     /// Recency order captured when the switcher opened, frozen for the whole
     /// gesture so cards never reshuffle under the highlight.
-    @Published private(set) var orderedTabIDs: [UUID] = []
+    private(set) var orderedTabIDs: [UUID] = []
 
-    private weak var activeProject: Project?
-    private var originalTabID: UUID?
-    private var previewTask: Task<Void, Never>?
-    private var isConsumingTabKey = false
-    private var isConsumingEscapeKey = false
-    private var acceptsPointerHighlight = false
+    @ObservationIgnored private weak var activeProject: Project?
+    @ObservationIgnored private var originalTabID: UUID?
+    @ObservationIgnored private var previewTask: Task<Void, Never>?
+    @ObservationIgnored private var isConsumingTabKey = false
+    @ObservationIgnored private var isConsumingEscapeKey = false
+    @ObservationIgnored private var acceptsPointerHighlight = false
 
     /// Returns nil for an event consumed by the switcher.
     func handle(_ event: NSEvent, manager: TerminalManager) -> NSEvent? {
@@ -333,7 +334,7 @@ private enum TabSwitcherLayout {
 /// most five tabs per row and the current candidate kept in view.
 struct TabSwitcherOverlay: View {
     let project: Project
-    @ObservedObject var controller: TabSwitcherController
+    let controller: TabSwitcherController
     private let themeChanges = Theme.changes
     @Environment(\.colorScheme) private var colorScheme
 

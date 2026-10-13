@@ -329,7 +329,7 @@ struct ChromeIconButton: View {
 /// It exists only while the manager's toggle is on, so the counter starts
 /// when the badge appears and stops when it leaves the hierarchy.
 struct FPSBadge: View {
-    @StateObject private var counter = FPSCounter()
+    @State private var counter = FPSCounter()
 
     var body: some View {
         Text(String(localized: "\(counter.fps) fps", table: "Sidebar"))

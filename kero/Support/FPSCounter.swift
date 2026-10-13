@@ -4,7 +4,7 @@
 //
 
 import AppKit
-import Combine
+import Observation
 import QuartzCore
 
 /// Counts CADisplayLink callbacks to report how often the window can actually
@@ -13,13 +13,14 @@ import QuartzCore
 /// badge it feeds is visible, and pauses while the app is inactive so a
 /// backgrounded rate can't show as a bogus low FPS.
 @MainActor
-final class FPSCounter: ObservableObject {
-    @Published private(set) var fps = 0
+@Observable
+final class FPSCounter {
+    private(set) var fps = 0
 
-    private var displayLink: CADisplayLink?
-    private var framesInWindow = 0
-    private var windowStart = CACurrentMediaTime()
-    private var observers: [NSObjectProtocol] = []
+    @ObservationIgnored private var displayLink: CADisplayLink?
+    @ObservationIgnored private var framesInWindow = 0
+    @ObservationIgnored private var windowStart = CACurrentMediaTime()
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
 
     func start() {
         guard displayLink == nil else { return }
