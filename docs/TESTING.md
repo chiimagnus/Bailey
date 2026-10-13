@@ -13,10 +13,11 @@ Kero 使用**需求／文档驱动确定目标，测试驱动验证实现**。�
 
 | 层次 | 验证什么 | Kero 的现有入口 |
 | --- | --- | --- |
-| 单元测试 | 纯算法、解析、状态不变量和异常分支 | `KeroTests/*Tests.swift` 中的独立计算与模型测试 |
-| 组件 UI 测试 | 在真实 `NSWindow`／`NSHostingView` 中验证 TextKit、WebKit、原生焦点、滚动与撤销 | `DiffTabTests`、`FileTabTests`、`PaneRetentionTests` |
-| 工作区集成测试 | 使用真实 `ContentView` 和项目／Dock／标签切换，验证多个组件的生命周期与磁盘副作用 | `WorkspaceContentIdentityTests`、`WorkspaceWindowCloseTests`、Files 的 A→B→A 回归 |
-| 端到端 UI 测试（E2E） | 启动完整 App，从真实入口点击／输入，走到可观察结果；macOS 通常使用 XCUITest／`XCUIApplication` | **尚无独立 XCUITest 测试目标；不能把上面的 XCTest 冒充 E2E** |
+| 单元测试 | 不启动原生窗口，验证配置解析、模型规则与状态不变量 | `KeroTests/Unit/`，如 `TunnelStoreTests`、`DockWorkspaceTests` |
+| 集成测试 | 用临时文件、Git 仓库或可控后端检验真实副作用及失败边界 | `KeroTests/Integration/`，如 `GitStatusModelTests`、`SessionStoreTests` |
+| 原生组件 UI 测试 | 在真实 `NSWindow`／`NSHostingView` 中验证 TextKit、WebKit、焦点、滚动与撤销 | `KeroTests/NativeUI/`，如 `DiffTabTests`、`FileTabTests` |
+| 工作区 UI 集成测试 | 使用真实 `ContentView` 与多窗口／Dock／标签，验证身份、保存和生命周期 | `KeroTests/WorkspaceUI/`，如 `WorkspaceContentIdentityTests`、`WorkspaceWindowCloseTests` |
+| 端到端 UI 测试（E2E） | 启动完整 App，从真实入口点击／输入并核对结果，通常使用 XCUITest／`XCUIApplication` | **尚无独立 XCUITest 测试目标；上述 UI XCTest 不能冒充 E2E** |
 
 按**行为风险**选择测试层次，而不是每个组件机械配四套测试。纯函数用单元测试即可；影响 Tab 身份、焦点、保存、机器连接、Dock 或窗口的改动，必须包含真实原生 UI／工作区集成回归。核心用户路径需要独立的 E2E 验收，未建成或未运行时明确标为未测。
 
@@ -28,7 +29,7 @@ Kero 使用**需求／文档驱动确定目标，测试驱动验证实现**。�
 - XCUITest 启动相同 Bundle ID 的 App 可能影响正在运行的正式 Kero。当前没有安全的独立 E2E 执行环境前，**不得在用户活跃会话上直接运行 `XCUIApplication.launch()`**；可先做安全的工作区集成测试，E2E 留在专门隔离的运行环境中验收。
 - 异步测试使用明确的可控制事件和有限等待，确认**失败前红、修复后绿**；检查保存后的真实字节、Git index/HEAD、原生视图归属，而不只看“回调触发”。不能因测试偶发失败就任意加等待或安全围栏。
 
-测试代码集中放在 `KeroTests/`，按被验证的**用户行为／子系统**组织文件，复用现有 XCTest 目标，不为文件数量新增空测试类。旧 `references/` 检查脚本已删除，禁止另建不参与 XCTest 的临时自检。执行命令统一使用仓库的 `Makefile`；PR／提交说明应列出具体运行的测试、原生验收范围及未验证的环境。
+测试代码统一放在 `KeroTests/`，按**主要验证层次**分为 `Unit/`、`Integration/`、`NativeUI/`、`WorkspaceUI/`；文件仍以用户行为／子系统命名。单个文件可能同时包含模型与 UI 验证，归入主要层次即可，不为分类机械拆测试。四组仍属于**同一个 XCTest 目标**，目录不改变 `make test ONLY_TESTING=KeroTests/类名` 的用法，也不代表新增了 XCUITest。旧 `references/` 检查脚本已删除，禁止另建不参与 XCTest 的临时自检。执行命令统一使用仓库的 `Makefile`；PR／提交说明应列出具体运行的测试、原生验收范围及未验证的环境。
 
 ## MVVM 与目录组织
 
