@@ -26,22 +26,6 @@ struct GitPanel: View {
         case initializeRepository
     }
 
-    private struct FileFingerprint: Equatable {
-        let exists: Bool
-        let size: UInt64
-        let modificationDate: Date?
-        let fileNumber: UInt64?
-        let symbolicLinkDestination: String?
-    }
-
-    private struct PendingDiscard {
-        let entry: GitStatusModel.Entry
-        let fingerprints: [String: FileFingerprint]
-        let branch: String?
-        let headOID: String?
-        let scope: String
-    }
-
     let model: GitStatusModel
     let session: TerminalSession?
     let sshHost: String?
@@ -56,8 +40,8 @@ struct GitPanel: View {
     private var commitMessageBinding: Binding<String> {
         Binding(get: { model.commitMessage }, set: { model.commitMessage = $0 })
     }
-    @State private var pendingDiscard: PendingDiscard?
-    @State private var pendingDiscardAll: [PendingDiscard] = []
+    @State private var pendingDiscard: GitStatusModel.PendingDiscard?
+    @State private var pendingDiscardAll: [GitStatusModel.PendingDiscard] = []
     @State private var preparingDiscard = false
     @State private var confirmDiscardAll = false
     @State private var mergeCollapsed = false
@@ -111,19 +95,21 @@ struct GitPanel: View {
             Button(discardActionTitle(for: pendingDiscard?.entry),
                    role: .destructive) {
                 if let pendingDiscard {
+                    let trigger = OperationTrigger.entry(
+                        path: pendingDiscard.entry.path, operation: .discard
+                    )
                     if remoteName != nil {
                         Task {
-                            if await remoteDiscardSnapshotIsCurrent(pendingDiscard) {
-                                performOperation(
-                                    .entry(path: pendingDiscard.entry.path, operation: .discard)
-                                ) { model.discard(pendingDiscard.entry) }
-                            } else { model.cancelStaleDiscard() }
+                            if await model.confirmRemoteDiscard([pendingDiscard]), model.isBusy {
+                                operationExpanded = false
+                                operationTrigger = trigger
+                            }
                         }
-                    } else if discardSnapshotIsCurrent(pendingDiscard) {
-                        performOperation(
-                            .entry(path: pendingDiscard.entry.path, operation: .discard)
-                        ) { model.discard(pendingDiscard.entry) }
-                    } else { model.cancelStaleDiscard() }
+                    } else {
+                        performOperation(trigger) {
+                            _ = model.confirmLocalDiscard([pendingDiscard])
+                        }
+                    }
                 }
                 pendingDiscard = nil
             }
@@ -144,21 +130,16 @@ struct GitPanel: View {
                 let snapshot = pendingDiscardAll
                 if remoteName != nil {
                     Task {
-                        var verified = !snapshot.isEmpty
-                        for entry in snapshot where verified {
-                            verified = await remoteDiscardSnapshotIsCurrent(entry)
+                        if await model.confirmRemoteDiscard(snapshot), model.isBusy {
+                            operationExpanded = false
+                            operationTrigger = .discardAll
                         }
-                        if verified {
-                            performOperation(.discardAll) {
-                                model.discardChanges(snapshot.map(\.entry))
-                            }
-                        } else { model.cancelStaleDiscard() }
                     }
-                } else if !snapshot.isEmpty && snapshot.allSatisfy(discardSnapshotIsCurrent) {
+                } else {
                     performOperation(.discardAll) {
-                        model.discardChanges(snapshot.map(\.entry))
+                        _ = model.confirmLocalDiscard(snapshot)
                     }
-                } else { model.cancelStaleDiscard() }
+                }
                 pendingDiscardAll = []
                 confirmDiscardAll = false
             }
@@ -998,7 +979,7 @@ struct GitPanel: View {
             unstage: { performOperation(unstageTrigger) { model.unstage(entry) } },
             discard: {
                 if remoteName == nil {
-                    pendingDiscard = makePendingDiscard(entry)
+                    pendingDiscard = model.prepareLocalDiscard([entry]).first
                 } else {
                     prepareRemoteDiscard([entry], all: false)
                 }
@@ -1012,10 +993,8 @@ struct GitPanel: View {
     }
 
     private func openIfPossible(_ entry: GitStatusModel.Entry) {
-        guard model.isCurrent(entry) else { return }
-        let path = model.absolutePath(for: entry)
-        guard remoteName != nil || FileManager.default.fileExists(atPath: path) else { return }
-        openFile(path)
+        guard model.canOpen(entry, isRemote: remoteName != nil) else { return }
+        openFile(model.absolutePath(for: entry))
     }
 
     /// The machine a discard would act on, or nil while local.
@@ -1095,138 +1074,30 @@ struct GitPanel: View {
         )
     }
 
-    private func makePendingDiscard(_ entry: GitStatusModel.Entry) -> PendingDiscard {
-        var paths = [entry.path]
-        if entry.isWorktreeRename, let original = entry.origPath {
-            paths.append(original)
-        }
-        return PendingDiscard(
-            entry: entry,
-            fingerprints: Dictionary(uniqueKeysWithValues: paths.map { path in
-                (path, fileFingerprint(at: absolutePath(path, for: entry)))
-            }),
-            branch: model.branch,
-            headOID: model.headOID,
-            scope: model.currentScope
-        )
-    }
-
-    private func discardSnapshotIsCurrent(_ pending: PendingDiscard) -> Bool {
-        model.isCurrent(pending.entry)
-            && model.currentScope == pending.scope
-            && model.branch == pending.branch
-            && model.headOID == pending.headOID
-            && model.changedEntries.contains(pending.entry)
-            && pending.fingerprints.allSatisfy { path, fingerprint in
-                fileFingerprint(at: absolutePath(path, for: pending.entry)) == fingerprint
-            }
-    }
-
-    private func absolutePath(_ path: String, for entry: GitStatusModel.Entry) -> String {
-        let root = entry.repositoryRoot.isEmpty ? model.repoRoot : entry.repositoryRoot
-        return (root as NSString).appendingPathComponent(path)
-    }
-
-    private func fileFingerprint(at path: String) -> FileFingerprint {
-        let fm = FileManager.default
-        let linkDestination = try? fm.destinationOfSymbolicLink(atPath: path)
-        guard linkDestination != nil || fm.fileExists(atPath: path) else {
-            return FileFingerprint(
-                exists: false, size: 0, modificationDate: nil,
-                fileNumber: nil, symbolicLinkDestination: nil
-            )
-        }
-        let attributes = try? fm.attributesOfItem(atPath: path)
-        return FileFingerprint(
-            exists: true,
-            size: (attributes?[.size] as? NSNumber)?.uint64Value ?? 0,
-            modificationDate: attributes?[.modificationDate] as? Date,
-            fileNumber: (attributes?[.systemFileNumber] as? NSNumber)?.uint64Value,
-            symbolicLinkDestination: linkDestination
-        )
-    }
-
     private func requestDiscardAll() {
         if remoteName != nil {
             prepareRemoteDiscard(model.changedEntries, all: true)
         } else {
-            pendingDiscardAll = model.changedEntries.map(makePendingDiscard)
+            pendingDiscardAll = model.prepareLocalDiscard(model.changedEntries)
             confirmDiscardAll = !pendingDiscardAll.isEmpty
         }
     }
 
-    private var remoteBackend: WorkspaceBackend? {
-        if let sshHost { return SSHHostWorkspaces.backend(for: sshHost) }
-        return session?.location.remoteConnection?.workspaceBackend
-    }
-
-    private func remoteFingerprint(at path: String, backend: WorkspaceBackend) async throws -> FileFingerprint {
-        guard let stat = try await backend.stat(path: path) else {
-            return FileFingerprint(
-                exists: false, size: 0, modificationDate: nil,
-                fileNumber: nil, symbolicLinkDestination: nil
-            )
-        }
-        let target = stat.isSymlink
-            ? try await backend.readSymlinkDestination(path: path) : nil
-        return FileFingerprint(
-            exists: true, size: UInt64(max(0, stat.size)), modificationDate: stat.mtime,
-            fileNumber: nil, symbolicLinkDestination: target
-        )
-    }
-
-    private func remotePendingDiscard(_ entry: GitStatusModel.Entry,
-                                      backend: WorkspaceBackend) async throws -> PendingDiscard {
-        var paths = [entry.path]
-        if entry.isWorktreeRename, let original = entry.origPath { paths.append(original) }
-        var fingerprints: [String: FileFingerprint] = [:]
-        for path in paths {
-            fingerprints[path] = try await remoteFingerprint(
-                at: absolutePath(path, for: entry), backend: backend
-            )
-        }
-        return PendingDiscard(
-            entry: entry, fingerprints: fingerprints,
-            branch: model.branch, headOID: model.headOID,
-            scope: model.currentScope
-        )
-    }
-
-    private func remoteDiscardSnapshotIsCurrent(_ pending: PendingDiscard) async -> Bool {
-        guard let backend = remoteBackend,
-              model.currentScope == pending.scope,
-              model.isCurrent(pending.entry),
-              model.branch == pending.branch,
-              model.headOID == pending.headOID,
-              model.changedEntries.contains(pending.entry)
-        else { return false }
-        for (path, fingerprint) in pending.fingerprints {
-            guard let current = try? await remoteFingerprint(
-                at: absolutePath(path, for: pending.entry), backend: backend
-            ), current == fingerprint else { return false }
-        }
-        return model.currentScope == pending.scope && model.isCurrent(pending.entry)
-    }
-
     private func prepareRemoteDiscard(_ entries: [GitStatusModel.Entry], all: Bool) {
-        guard !preparingDiscard, let backend = remoteBackend, !entries.isEmpty else { return }
+        guard !preparingDiscard, !entries.isEmpty else { return }
         preparingDiscard = true
-        let scope = model.currentScope
         Task {
             defer { preparingDiscard = false }
             do {
-                var snapshots: [PendingDiscard] = []
-                for entry in entries {
-                    snapshots.append(try await remotePendingDiscard(entry, backend: backend))
-                }
-                guard model.currentScope == scope,
-                      entries.allSatisfy(model.isCurrent) else { return }
+                let snapshots = try await model.prepareRemoteDiscard(entries)
                 if all {
                     pendingDiscardAll = snapshots
                     confirmDiscardAll = true
                 } else {
                     pendingDiscard = snapshots.first
                 }
+            } catch GitStatusModel.DiscardReviewError.stale {
+                model.cancelStaleDiscard()
             } catch {
                 let alert = NSAlert()
                 alert.messageText = String(localized: "Could not verify remote files", table: "Sidebar")

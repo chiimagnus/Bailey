@@ -3,6 +3,65 @@ import Observation
 import XCTest
 @testable import kero
 
+/// Git commands operate only in a temporary test repository. Remote metadata
+/// is independently controllable so a failed SSH stat can never trash a Mac file.
+private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
+    private var online = true
+    private var pauseMetadata = false
+    private(set) var metadataReads = 0
+    private(set) var deleteAttempts = 0
+
+    func setOnline(_ value: Bool) { online = value }
+    func setPauseMetadata(_ value: Bool) { pauseMetadata = value }
+
+    func stat(path: String) async throws -> WorkspaceStat? {
+        metadataReads += 1
+        if pauseMetadata { try await Task.sleep(for: .milliseconds(300)) }
+        guard online else { throw WorkspaceError.timedOut }
+        return try await LocalWorkspaceBackend.shared.stat(path: path)
+    }
+
+    func readSymlinkDestination(path: String) async throws -> String? {
+        guard online else { throw WorkspaceError.timedOut }
+        return try await LocalWorkspaceBackend.shared.readSymlinkDestination(path: path)
+    }
+
+    func run(
+        argv: [String], cwd: String?, env: [String: String]?,
+        stdin: Data?, timeout: TimeInterval?
+    ) async throws -> WorkspaceRunResult {
+        // The remote protocol passes command names (git/sh), whereas the
+        // local backend deliberately requires an absolute executable URL.
+        var variables = ProcessInfo.processInfo.environment
+        for (key, value) in env ?? [:] { variables[key] = value }
+        return try await LocalWorkspaceBackend.shared.run(
+            argv: ["/usr/bin/env"] + argv, cwd: cwd, env: variables,
+            stdin: stdin, timeout: timeout
+        )
+    }
+
+    func delete(paths: [String]) async throws {
+        deleteAttempts += 1
+        throw WorkspaceError.timedOut
+    }
+
+    func gitRoot(containing path: String) async throws -> String? {
+        try await LocalWorkspaceBackend.shared.gitRoot(containing: path)
+    }
+    func isLinkedWorktree(_ root: String) async throws -> Bool { false }
+    func list(directory: String) async throws -> [WorkspaceEntry] { [] }
+    func read(path: String, maxBytes: Int) async throws -> Data { throw WorkspaceError.notFound }
+    func write(path: String, data: Data) async throws { throw WorkspaceError.notFound }
+    func createFile(path: String) async throws { throw WorkspaceError.notFound }
+    func createDirectory(path: String) async throws { throw WorkspaceError.notFound }
+    func rename(from: String, to: String) async throws { throw WorkspaceError.notFound }
+    func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot {
+        .init(descendants: [], namesByPid: [:])
+    }
+    func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] { [] }
+    func kill(pid: pid_t, force: Bool) async throws { throw WorkspaceError.notFound }
+}
+
 @MainActor
 final class GitStatusModelTests: XCTestCase {
     private func wait(_ predicate: () -> Bool) async throws {
@@ -88,6 +147,159 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertEqual(try git(["log", "-1", "--format=%s"]), "submitted")
         XCTAssertTrue(model.commitMessage.isEmpty)
+    }
+
+    func testDiscardReviewGuardsContentSymlinkAndRepositoryScope() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        func git(_ args: [String]) throws {
+            let result = GitCommandExecution.run(args, in: directory.path, timeout: 10)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        try git(["init", "-q"])
+        try git(["config", "user.name", "Discard Review Test"])
+        try git(["config", "user.email", "test@invalid"])
+        try git(["config", "commit.gpgsign", "false"])
+        let tracked = directory.appendingPathComponent("tracked.txt")
+        try Data("original\n".utf8).write(to: tracked)
+        try git(["add", "."])
+        try git(["commit", "-qm", "baseline"])
+
+        let untracked = directory.appendingPathComponent("untracked.txt")
+        let firstTarget = directory.appendingPathComponent("first.txt")
+        let secondTarget = directory.appendingPathComponent("second.txt")
+        let link = directory.appendingPathComponent("alias.txt")
+        try Data("new".utf8).write(to: untracked)
+        try Data("first".utf8).write(to: firstTarget)
+        try Data("second".utf8).write(to: secondTarget)
+        try FileManager.default.createSymbolicLink(
+            at: link, withDestinationURL: firstTarget
+        )
+        try Data("modified\n".utf8).write(to: tracked)
+
+        let model = GitStatusModel()
+        model.sync(root: directory.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let trackedEntry = try XCTUnwrap(model.changedEntries.first { $0.path == "tracked.txt" })
+        let untrackedEntry = try XCTUnwrap(model.changedEntries.first { $0.path == "untracked.txt" })
+        let linkEntry = try XCTUnwrap(model.changedEntries.first { $0.path == "alias.txt" })
+
+        // A new edit or a symlink retargeted while the confirmation is open
+        // must not delete anything from the reviewed set.
+        let originalReviews = model.prepareLocalDiscard([trackedEntry, untrackedEntry, linkEntry])
+        XCTAssertEqual(originalReviews.count, 3)
+        try Data("modified again (longer)\n".utf8).write(to: tracked)
+        XCTAssertFalse(model.confirmLocalDiscard(originalReviews))
+        XCTAssertEqual(try String(contentsOf: tracked, encoding: .utf8), "modified again (longer)\n")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: untracked.path))
+
+        let linkReview = try XCTUnwrap(model.prepareLocalDiscard([linkEntry]).first)
+        try FileManager.default.removeItem(at: link)
+        try FileManager.default.createSymbolicLink(
+            at: link, withDestinationURL: secondTarget
+        )
+        XCTAssertFalse(model.confirmLocalDiscard([linkReview]))
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path),
+                       secondTarget.path)
+
+        // Dismissing a valid confirmation never invokes a Git or delete action.
+        let cancelled = model.prepareLocalDiscard([untrackedEntry])
+        XCTAssertEqual(cancelled.count, 1)
+        XCTAssertEqual(try String(contentsOf: untracked, encoding: .utf8), "new")
+
+        let oldScope = try XCTUnwrap(model.prepareLocalDiscard([trackedEntry]).first)
+        model.sync(root: directory.path, scope: "ssh:unrelated-host")
+        XCTAssertFalse(model.confirmLocalDiscard([oldScope]))
+        XCTAssertEqual(try String(contentsOf: tracked, encoding: .utf8), "modified again (longer)\n")
+
+        model.sync(root: directory.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let current = try XCTUnwrap(model.changedEntries.first { $0.path == "tracked.txt" })
+        let reviewed = model.prepareLocalDiscard([current])
+        XCTAssertTrue(model.confirmLocalDiscard(reviewed))
+        try await wait { !model.isBusy && !model.isRefreshing }
+        XCTAssertEqual(try String(contentsOf: tracked, encoding: .utf8), "original\n")
+        XCTAssertEqual(try String(contentsOf: untracked, encoding: .utf8), "new")
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path),
+                       secondTarget.path)
+
+        XCTAssertTrue(model.canOpen(untrackedEntry, isRemote: false))
+        try FileManager.default.removeItem(at: untracked)
+        XCTAssertFalse(model.canOpen(untrackedEntry, isRemote: false))
+        XCTAssertTrue(model.canOpen(untrackedEntry, isRemote: true))
+    }
+
+    func testRemoteDiscardReviewRejectsDisconnectionAndInFlightScopeChange() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        func git(_ args: [String]) throws {
+            let result = GitCommandExecution.run(args, in: directory.path, timeout: 10)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        try git(["init", "-q"])
+        try git(["config", "user.name", "Remote Review Test"])
+        try git(["config", "user.email", "test@invalid"])
+        try git(["config", "commit.gpgsign", "false"])
+        let tracked = directory.appendingPathComponent("tracked.txt")
+        try Data("baseline".utf8).write(to: tracked)
+        try git(["add", "."])
+        try git(["commit", "-qm", "baseline"])
+        let candidate = directory.appendingPathComponent("remote-only.txt")
+        try Data("preserved remote fixture".utf8).write(to: candidate)
+
+        let backend = DiscardRemoteWorkspaceFixture()
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: backend, scope: "ssh:fixture")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.isRepo, model.statusError ?? "Remote fixture must resolve Git")
+        let entry = try XCTUnwrap(model.changedEntries.first { $0.path == "remote-only.txt" })
+
+        let reviewed = try await model.prepareRemoteDiscard([entry])
+        XCTAssertEqual(reviewed.count, 1)
+        await backend.setOnline(false)
+        let disconnected = await model.confirmRemoteDiscard(reviewed)
+        XCTAssertFalse(disconnected)
+        XCTAssertEqual(try String(contentsOf: candidate, encoding: .utf8),
+                       "preserved remote fixture")
+        let attemptsAfterDisconnect = await backend.deleteAttempts
+        XCTAssertEqual(attemptsAfterDisconnect, 0)
+
+        await backend.setOnline(true)
+        let oldReview = try await model.prepareRemoteDiscard([entry])
+        try Data("changed after review".utf8).write(to: candidate)
+        let contentChanged = await model.confirmRemoteDiscard(oldReview)
+        XCTAssertFalse(contentChanged)
+        XCTAssertEqual(try String(contentsOf: candidate, encoding: .utf8),
+                       "changed after review")
+        let attemptsAfterChange = await backend.deleteAttempts
+        XCTAssertEqual(attemptsAfterChange, 0)
+
+        await backend.setPauseMetadata(true)
+        let previousReads = await backend.metadataReads
+        let reviewing = Task {
+            try await model.prepareRemoteDiscard([entry])
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while await backend.metadataReads == previousReads, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let readsAfterStart = await backend.metadataReads
+        XCTAssertGreaterThan(readsAfterStart, previousReads)
+        model.sync(root: directory.path, backend: backend, scope: "ssh:another-host")
+        do {
+            _ = try await reviewing.value
+            XCTFail("Metadata gathered in the old SSH context must be rejected")
+        } catch GitStatusModel.DiscardReviewError.stale {
+            // Expected: context changed before async preflight completed.
+        }
+        XCTAssertEqual(try String(contentsOf: candidate, encoding: .utf8),
+                       "changed after review")
+        let attemptsAfterSwitch = await backend.deleteAttempts
+        XCTAssertEqual(attemptsAfterSwitch, 0)
     }
 
     func testUnbornRepositoryAndPagedHistorySurviveRepositorySwitch() async throws {

@@ -371,6 +371,200 @@ final class GitStatusModel {
         lastError = nil
     }
 
+    /// A local item must still exist before opening the file editor. Remote
+    /// tabs can be opened while disconnected and will remain read-only.
+    func canOpen(_ entry: Entry, isRemote: Bool) -> Bool {
+        guard isCurrent(entry) else { return false }
+        return isRemote || FileManager.default.fileExists(atPath: absolutePath(for: entry))
+    }
+
+    // MARK: - Discard review
+
+    /// Identity captured when the confirmation is prepared, before remote IO.
+    /// A reconnect can replace the backend without changing its filesystem path.
+    struct DiscardContext: Equatable {
+        let repositoryRoot: String
+        let scope: String
+        let branch: String?
+        let headOID: String?
+        let generation: UInt
+        let backendID: ObjectIdentifier
+    }
+
+    struct FileFingerprint: Equatable {
+        let exists: Bool
+        let size: UInt64
+        let modificationDate: Date?
+        let fileNumber: UInt64?
+        let symbolicLinkDestination: String?
+    }
+
+    struct PendingDiscard {
+        let entry: Entry
+        let fingerprints: [String: FileFingerprint]
+        let context: DiscardContext
+    }
+
+    enum DiscardReviewError: Error {
+        case stale
+    }
+
+    private var discardContext: DiscardContext {
+        DiscardContext(
+            repositoryRoot: repoRoot, scope: workspaceScope, branch: branch,
+            headOID: headOID, generation: contextGeneration,
+            backendID: ObjectIdentifier(backend as AnyObject)
+        )
+    }
+
+    private func discardPaths(for entry: Entry) -> [String] {
+        var paths = [entry.path]
+        if entry.isWorktreeRename, let original = entry.origPath {
+            paths.append(original)
+        }
+        return paths
+    }
+
+    private func absoluteDiscardPath(_ path: String, for entry: Entry) -> String {
+        let root = entry.repositoryRoot.isEmpty ? repoRoot : entry.repositoryRoot
+        return (root as NSString).appendingPathComponent(path)
+    }
+
+    /// Keep the original local metadata, including inode and symlink target:
+    /// WorkspaceStat cannot represent the inode used by this confirmation.
+    private func localFingerprint(at path: String) -> FileFingerprint {
+        let fm = FileManager.default
+        let linkDestination = try? fm.destinationOfSymbolicLink(atPath: path)
+        guard linkDestination != nil || fm.fileExists(atPath: path) else {
+            return FileFingerprint(
+                exists: false, size: 0, modificationDate: nil,
+                fileNumber: nil, symbolicLinkDestination: nil
+            )
+        }
+        let attributes = try? fm.attributesOfItem(atPath: path)
+        return FileFingerprint(
+            exists: true,
+            size: (attributes?[.size] as? NSNumber)?.uint64Value ?? 0,
+            modificationDate: attributes?[.modificationDate] as? Date,
+            fileNumber: (attributes?[.systemFileNumber] as? NSNumber)?.uint64Value,
+            symbolicLinkDestination: linkDestination
+        )
+    }
+
+    private func remoteFingerprint(
+        at path: String, backend: WorkspaceBackend
+    ) async throws -> FileFingerprint {
+        guard let stat = try await backend.stat(path: path) else {
+            return FileFingerprint(
+                exists: false, size: 0, modificationDate: nil,
+                fileNumber: nil, symbolicLinkDestination: nil
+            )
+        }
+        let target = stat.isSymlink
+            ? try await backend.readSymlinkDestination(path: path) : nil
+        return FileFingerprint(
+            exists: true, size: UInt64(max(0, stat.size)), modificationDate: stat.mtime,
+            fileNumber: nil, symbolicLinkDestination: target
+        )
+    }
+
+    /// Native local confirmation opens immediately, with no new loading state.
+    func prepareLocalDiscard(_ entries: [Entry]) -> [PendingDiscard] {
+        guard backend is LocalWorkspaceBackend, isRepo else { return [] }
+        let context = discardContext
+        return entries.filter { isCurrent($0) && changedEntries.contains($0) }.map { entry in
+            let fingerprints = Dictionary(uniqueKeysWithValues: discardPaths(for: entry).map {
+                ($0, localFingerprint(at: absoluteDiscardPath($0, for: entry)))
+            })
+            return PendingDiscard(entry: entry, fingerprints: fingerprints, context: context)
+        }
+    }
+
+    /// Remote metadata is gathered on the selected WorkspaceBackend, never on
+    /// the Mac. The context must still match the identity held before awaits.
+    func prepareRemoteDiscard(_ entries: [Entry]) async throws -> [PendingDiscard] {
+        let selectedBackend = backend
+        guard !(selectedBackend is LocalWorkspaceBackend), isRepo, !entries.isEmpty else {
+            throw DiscardReviewError.stale
+        }
+        let context = discardContext
+        guard entries.allSatisfy({ isCurrent($0) && changedEntries.contains($0) }) else {
+            throw DiscardReviewError.stale
+        }
+        var reviews: [PendingDiscard] = []
+        for entry in entries {
+            var fingerprints: [String: FileFingerprint] = [:]
+            for path in discardPaths(for: entry) {
+                fingerprints[path] = try await remoteFingerprint(
+                    at: absoluteDiscardPath(path, for: entry), backend: selectedBackend
+                )
+            }
+            reviews.append(PendingDiscard(entry: entry, fingerprints: fingerprints, context: context))
+        }
+        guard reviews.allSatisfy(isReviewedDiscardCurrent) else {
+            throw DiscardReviewError.stale
+        }
+        return reviews
+    }
+
+    private func isReviewedDiscardCurrent(_ review: PendingDiscard) -> Bool {
+        isRepo && !isBusy && discardContext == review.context
+            && isCurrent(review.entry) && changedEntries.contains(review.entry)
+    }
+
+    private func executeReviewedDiscard(_ reviews: [PendingDiscard]) {
+        if reviews.count == 1 {
+            discard(reviews[0].entry)
+        } else {
+            discardChanges(reviews.map(\.entry))
+        }
+    }
+
+    /// Called on the destructive confirmation button, not on dialog opening.
+    @discardableResult
+    func confirmLocalDiscard(_ reviews: [PendingDiscard]) -> Bool {
+        guard backend is LocalWorkspaceBackend, !reviews.isEmpty,
+              reviews.allSatisfy(isReviewedDiscardCurrent),
+              reviews.allSatisfy({ review in
+                  review.fingerprints.allSatisfy { path, fingerprint in
+                      localFingerprint(at: absoluteDiscardPath(path, for: review.entry)) == fingerprint
+                  }
+              }) else {
+            cancelStaleDiscard()
+            return false
+        }
+        executeReviewedDiscard(reviews)
+        return true
+    }
+
+    /// Rechecks both the remote files and their original repository identity
+    /// after each await, then starts the existing Git/Trash operation in place.
+    @discardableResult
+    func confirmRemoteDiscard(_ reviews: [PendingDiscard]) async -> Bool {
+        let selectedBackend = backend
+        guard !(selectedBackend is LocalWorkspaceBackend), !reviews.isEmpty,
+              reviews.allSatisfy(isReviewedDiscardCurrent) else {
+            cancelStaleDiscard()
+            return false
+        }
+        for review in reviews {
+            for (path, fingerprint) in review.fingerprints {
+                guard let current = try? await remoteFingerprint(
+                    at: absoluteDiscardPath(path, for: review.entry), backend: selectedBackend
+                ), current == fingerprint, isReviewedDiscardCurrent(review) else {
+                    cancelStaleDiscard()
+                    return false
+                }
+            }
+        }
+        guard reviews.allSatisfy(isReviewedDiscardCurrent) else {
+            cancelStaleDiscard()
+            return false
+        }
+        executeReviewedDiscard(reviews)
+        return true
+    }
+
     // MARK: - File operations
 
     func stage(_ entry: Entry) {
