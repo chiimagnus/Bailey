@@ -4,18 +4,18 @@ current_task_id = ""
 [[tasks]]
 id = "P1-T1"
 title = "保存完整父提交与解析有类型 Ref"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
-commit = ""
-note = ""
+commit = "2b336ba"
+note = "历史拓扑与 Ref 测试 7/7；审计 F-01 修复 ea41b63（Merge 文件首父差异），完整测试 102/102；真实 SSH 未测"
 
 [[tasks]]
 id = "P1-T2"
 title = "Recent Commits 真实图谱与 Ref 独立命中"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = ""
-note = ""
+commit = "0c42e3a"
+note = "图谱 4/4、原生界面 2/2；视觉清理补充 10a7486；完整测试 102/102、Debug 签名通过；已整包安装但未重启"
 
 [[tasks]]
 id = "P2-T1"
