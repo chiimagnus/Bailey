@@ -20,6 +20,7 @@ struct RecentCommitsView: View {
     let openDiff: (Commit, Commit.FileChange) -> Void
     let canSwitchBranch: Bool
     let switchBranch: (String) -> Void
+    let createReference: (Commit, GitStatusModel.CommitReferenceKind) -> Void
 
     init(
         commits: [Commit],
@@ -32,7 +33,8 @@ struct RecentCommitsView: View {
         loadMore: @escaping () -> Bool,
         openDiff: @escaping (Commit, Commit.FileChange) -> Void,
         canSwitchBranch: Bool,
-        switchBranch: @escaping (String) -> Void
+        switchBranch: @escaping (String) -> Void,
+        createReference: @escaping (Commit, GitStatusModel.CommitReferenceKind) -> Void
     ) {
         self.commits = commits
         _expandedCommitIDs = expandedCommitIDs
@@ -45,6 +47,7 @@ struct RecentCommitsView: View {
         self.openDiff = openDiff
         self.canSwitchBranch = canSwitchBranch
         self.switchBranch = switchBranch
+        self.createReference = createReference
     }
 
     var body: some View {
@@ -162,6 +165,15 @@ struct RecentCommitsView: View {
                 : String(localized: "Expand Commit Files", table: "Git")) {
                 toggle(commit)
             }
+            Divider()
+            Button(String(localized: "Create Branch at Commit…", table: "Git")) {
+                createReference(commit, .branch)
+            }
+            .disabled(!canSwitchBranch)
+            Button(String(localized: "Create Tag at Commit…", table: "Git")) {
+                createReference(commit, .tag)
+            }
+            .disabled(!canSwitchBranch)
             Divider()
             Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
             Button(String(localized: "Copy Commit Message", table: "Git")) {

@@ -494,6 +494,81 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(rows.first { $0.hash == side }?.files.map(\.path), ["side.txt"])
     }
 
+    func testHistoricalBranchMustPointAtSelectedCommitWithoutSwitchingHEAD() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func git(_ args: [String]) throws -> String {
+            let result = GitCommandExecution.run(args, in: directory.path, timeout: 10)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = try git(["init", "-q", "-b", "main"])
+        _ = try git(["config", "user.name", "History Test"])
+        _ = try git(["config", "user.email", "history@invalid"])
+        _ = try git(["config", "commit.gpgsign", "false"])
+        _ = try git(["commit", "--allow-empty", "-qm", "first"])
+        let selected = try git(["rev-parse", "HEAD"])
+        _ = try git(["commit", "--allow-empty", "-qm", "second"])
+        let head = try git(["rev-parse", "HEAD"])
+
+        let model = GitStatusModel()
+        model.sync(root: directory.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let target = try XCTUnwrap(model.recentCommits.first { $0.hash == selected })
+        let expectedRepository = model.repoRoot
+        model.createReference(
+            named: "history/first", kind: .branch, at: target,
+            repository: expectedRepository, scope: "local"
+        )
+        try await wait { !model.isBusy && !model.isRefreshing }
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "refs/heads/history/first"]), selected)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try git(["branch", "--show-current"]), "main")
+        XCTAssertTrue(model.recentCommits.first { $0.hash == selected }?.references.contains {
+            $0.kind == .localBranch && $0.name == "history/first"
+        } == true)
+
+        model.createReference(
+            named: "v1-local", kind: .tag, at: target,
+            repository: expectedRepository, scope: "local"
+        )
+        try await wait { !model.isBusy && !model.isRefreshing }
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "refs/tags/v1-local"]), selected)
+        XCTAssertTrue(model.recentCommits.first { $0.hash == selected }?.references.contains {
+            $0.kind == .tag && $0.name == "v1-local"
+        } == true)
+
+        model.createReference(
+            named: "history/first", kind: .branch, at: target,
+            repository: expectedRepository, scope: "local"
+        )
+        try await wait { !model.isBusy && !model.isRefreshing }
+        XCTAssertNotNil(model.lastError, "Duplicate branch must fail without force")
+        XCTAssertEqual(try git(["rev-parse", "refs/heads/history/first"]), selected)
+
+        let other = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: other) }
+        func otherGit(_ args: [String]) -> Int32 {
+            GitCommandExecution.run(args, in: other.path, timeout: 10).status
+        }
+        XCTAssertEqual(otherGit(["init", "-q", "-b", "other"]), 0)
+        let before = model.operation
+        model.sync(root: other.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        model.createReference(
+            named: "should-not-exist", kind: .tag, at: target,
+            repository: expectedRepository, scope: "local"
+        )
+        XCTAssertNotNil(model.lastError)
+        XCTAssertNotEqual(model.operation, before)
+        XCTAssertNotEqual(otherGit(["show-ref", "--verify", "--quiet",
+                                    "refs/tags/should-not-exist"]), 0)
+    }
+
     func testUnbornRepositoryAndPagedHistorySurviveRepositorySwitch() async throws {
         let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let first = fixture.appendingPathComponent("first")

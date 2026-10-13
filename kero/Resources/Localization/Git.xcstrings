@@ -374,6 +374,96 @@
         }
       }
     },
+    "Create Branch at Commit" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在指定提交创建分支"
+          }
+        }
+      }
+    },
+    "Create Branch at Commit…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在此创建分支…"
+          }
+        }
+      }
+    },
+    "Create Tag at Commit" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在指定提交创建标签"
+          }
+        }
+      }
+    },
+    "Create Tag at Commit…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在此创建标签…"
+          }
+        }
+      }
+    },
+    "Create tag %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建标签 %@"
+          }
+        }
+      }
+    },
+    "Enter a tag name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入标签名称"
+          }
+        }
+      }
+    },
+    "Repository or commit changed; reopen the history menu and try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仓库或提交已变化，请重新打开历史菜单后再试。"
+          }
+        }
+      }
+    },
+    "Repository %@: %@\nCommit %@: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仓库 %@：%@\n提交 %@：%@"
+          }
+        }
+      }
+    },
+    "Tag name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签名称"
+          }
+        }
+      }
+    },
     "Create branch %@" : {
       "localizations" : {
         "zh-Hans" : {

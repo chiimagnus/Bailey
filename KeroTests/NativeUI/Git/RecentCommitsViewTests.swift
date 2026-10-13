@@ -74,7 +74,8 @@ final class RecentCommitsViewTests: XCTestCase {
             hasMoreCommits: false, isLoadingMore: false,
             loadMore: { false },
             openDiff: { commit, file in diffs.append(commit.hash + ":" + file.path) },
-            canSwitchBranch: true, switchBranch: { _ in }
+            canSwitchBranch: true, switchBranch: { _ in },
+            createReference: { _, _ in }
         ).frame(width: width, height: height, alignment: .topLeading)
             .background(Color(nsColor: Theme.sidebar)))
         window.orderFront(nil)
@@ -121,7 +122,8 @@ final class RecentCommitsViewTests: XCTestCase {
                 viewMode: .list, fontScale: scale,
                 hasMoreCommits: false, isLoadingMore: false,
                 loadMore: { false }, openDiff: { _, _ in },
-                canSwitchBranch: true, switchBranch: { _ in }
+                canSwitchBranch: true, switchBranch: { _ in },
+            createReference: { _, _ in }
             )
             .frame(width: width, height: height, alignment: .topLeading)
                 .background(Color(nsColor: Theme.sidebar)))

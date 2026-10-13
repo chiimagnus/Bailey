@@ -501,14 +501,52 @@ struct GitPanel: View {
     }
 
     private func presentCreateBranchDialog() {
-        guard !model.isBusy else { return }
+        presentGitNameDialog(
+            title: String(localized: "Create New Branch", table: "Sidebar"),
+            detail: String(localized: "Enter a name for the new branch.", table: "Sidebar"),
+            placeholder: String(localized: "Branch name", table: "Sidebar")
+        ) { name in
+            performOperation(.branchMenu) { model.createBranch(named: name) }
+        }
+    }
 
+    private func presentCreateReferenceDialog(
+        kind: GitStatusModel.CommitReferenceKind, commit: GitStatusModel.RecentCommit
+    ) {
+        let repository = model.repoRoot
+        let scope = model.currentScope
+        presentGitNameDialog(
+            title: kind == .branch
+                ? String(localized: "Create Branch at Commit", table: "Git")
+                : String(localized: "Create Tag at Commit", table: "Git"),
+            detail: String(
+                localized: "Repository \(scope): \(repository)\nCommit \(commit.shortHash): \(commit.subject)",
+                table: "Git"
+            ),
+            placeholder: kind == .branch
+                ? String(localized: "Branch name", table: "Sidebar")
+                : String(localized: "Tag name", table: "Git")
+        ) { name in
+            performOperation(.branchMenu) {
+                model.createReference(
+                    named: name, kind: kind, at: commit,
+                    repository: repository, scope: scope
+                )
+            }
+        }
+    }
+
+    private func presentGitNameDialog(
+        title: String, detail: String, placeholder: String,
+        onCreate: @escaping (String) -> Void
+    ) {
+        guard !model.isBusy else { return }
         let alert = NSAlert()
-        alert.messageText = String(localized: "Create New Branch", table: "Sidebar")
-        alert.informativeText = String(localized: "Enter a name for the new branch.", table: "Sidebar")
+        alert.messageText = title
+        alert.informativeText = detail
 
         let field = NSTextField(string: "")
-        field.placeholderString = String(localized: "Branch name", table: "Sidebar")
+        field.placeholderString = placeholder
         field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
         alert.accessoryView = field
 
@@ -523,11 +561,9 @@ struct GitPanel: View {
         alert.window.initialFirstResponder = field
 
         let handleResponse: (NSApplication.ModalResponse) -> Void = { response in
-            _ = validator // Keep the field delegate alive until the sheet closes.
+            _ = validator
             guard response == .alertFirstButtonReturn else { return }
-            performOperation(.branchMenu) {
-                model.createBranch(named: field.stringValue)
-            }
+            onCreate(field.stringValue)
         }
 
         if let window = NSApp.keyWindow ?? NSApp.mainWindow {
@@ -875,6 +911,9 @@ struct GitPanel: View {
                             canSwitchBranch: !model.isBusy,
                             switchBranch: { name in
                                 performOperation(.branchMenu) { model.switchBranch(to: name) }
+                            },
+                            createReference: { commit, kind in
+                                presentCreateReferenceDialog(kind: kind, commit: commit)
                             }
                         )
                         .frame(maxWidth: .infinity)

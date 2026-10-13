@@ -44,6 +44,10 @@ final class GitStatusModel {
 
     typealias FileDecoration = TreeDisplayModel.Status
 
+    nonisolated enum CommitReferenceKind: Sendable {
+        case branch, tag
+    }
+
     nonisolated struct RecentCommit: Identifiable, Equatable, Sendable {
         nonisolated struct Reference: Identifiable, Hashable, Sendable {
             enum Kind: String, Sendable {
@@ -877,6 +881,36 @@ final class GitStatusModel {
             commands: [["switch", "-c", trimmed]],
             completion: completion
         )
+    }
+
+    func createReference(
+        named name: String, kind: CommitReferenceKind, at commit: RecentCommit,
+        repository expectedRepository: String, scope expectedScope: String
+    ) {
+        guard isRepo, repoRoot == expectedRepository, currentScope == expectedScope,
+              recentCommits.contains(where: { $0.hash == commit.hash }),
+              (commit.hash.count == 40 || commit.hash.count == 64),
+              commit.hash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) })
+        else {
+            failImmediately(String(
+                localized: "Repository or commit changed; reopen the history menu and try again.",
+                table: "Git"
+            ))
+            return
+        }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            failImmediately(kind == .branch
+                ? String(localized: "Enter a branch name", table: "Git")
+                : String(localized: "Enter a tag name", table: "Git"))
+            return
+        }
+        let label = kind == .branch
+            ? String(localized: "Create branch \(trimmed)", table: "Git")
+            : String(localized: "Create tag \(trimmed)", table: "Git")
+        perform(label: label, commands: [
+            [kind == .branch ? "branch" : "tag", "--", trimmed, commit.hash]
+        ])
     }
 
     func stash(includeUntracked: Bool = true) {
