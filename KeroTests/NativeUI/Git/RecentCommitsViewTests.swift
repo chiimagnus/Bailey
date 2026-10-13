@@ -73,7 +73,8 @@ final class RecentCommitsViewTests: XCTestCase {
             viewMode: .list, fontScale: 1,
             hasMoreCommits: false, isLoadingMore: false,
             loadMore: { false },
-            openDiff: { commit, file in diffs.append(commit.hash + ":" + file.path) }
+            openDiff: { commit, file in diffs.append(commit.hash + ":" + file.path) },
+            canSwitchBranch: true, switchBranch: { _ in }
         ).frame(width: width, height: height, alignment: .topLeading)
             .background(Color(nsColor: Theme.sidebar)))
         window.orderFront(nil)
@@ -119,7 +120,8 @@ final class RecentCommitsViewTests: XCTestCase {
                 ),
                 viewMode: .list, fontScale: scale,
                 hasMoreCommits: false, isLoadingMore: false,
-                loadMore: { false }, openDiff: { _, _ in }
+                loadMore: { false }, openDiff: { _, _ in },
+                canSwitchBranch: true, switchBranch: { _ in }
             )
             .frame(width: width, height: height, alignment: .topLeading)
                 .background(Color(nsColor: Theme.sidebar)))
@@ -132,6 +134,11 @@ final class RecentCommitsViewTests: XCTestCase {
                           "Commit title must remain clickable at width \(width)")
             click(titlePoint, in: window)
             XCTAssertFalse(selection.expanded.contains(commit.hash))
+            if width == 420 {
+                click(NSPoint(x: 265, y: height - 17), in: window)
+                XCTAssertTrue(selection.expanded.contains(commit.hash),
+                              "Selecting the tag must locate and reveal its commit")
+            }
             window.close()
         }
     }

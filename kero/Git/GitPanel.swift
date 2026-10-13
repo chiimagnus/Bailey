@@ -871,7 +871,11 @@ struct GitPanel: View {
                             hasMoreCommits: model.hasMoreRecentCommits,
                             isLoadingMore: model.isLoadingMoreCommits,
                             loadMore: model.loadMoreCommits,
-                            openDiff: openCommitDiff
+                            openDiff: openCommitDiff,
+                            canSwitchBranch: !model.isBusy,
+                            switchBranch: { name in
+                                performOperation(.branchMenu) { model.switchBranch(to: name) }
+                            }
                         )
                         .frame(maxWidth: .infinity)
                     }

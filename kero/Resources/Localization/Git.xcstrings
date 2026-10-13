@@ -274,12 +274,72 @@
         }
       }
     },
-    "Copy Reference Name" : {
+    "Collapse Commit Files" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "复制引用名称"
+            "value" : "收起提交文件"
+          }
+        }
+      }
+    },
+    "Copy Branch Name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制分支名称"
+          }
+        }
+      }
+    },
+    "Copy Tag Name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制标签名称"
+          }
+        }
+      }
+    },
+    "Expand Commit Files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "展开提交文件"
+          }
+        }
+      }
+    },
+    "Open Historical Diff" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开历史差异"
+          }
+        }
+      }
+    },
+    "Show Tagged Commit" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "定位标签对应的提交"
+          }
+        }
+      }
+    },
+    "Switch to This Branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到此分支"
           }
         }
       }

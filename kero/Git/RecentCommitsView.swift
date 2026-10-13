@@ -18,6 +18,8 @@ struct RecentCommitsView: View {
     let isLoadingMore: Bool
     let loadMore: () -> Bool
     let openDiff: (Commit, Commit.FileChange) -> Void
+    let canSwitchBranch: Bool
+    let switchBranch: (String) -> Void
 
     init(
         commits: [Commit],
@@ -28,7 +30,9 @@ struct RecentCommitsView: View {
         hasMoreCommits: Bool,
         isLoadingMore: Bool,
         loadMore: @escaping () -> Bool,
-        openDiff: @escaping (Commit, Commit.FileChange) -> Void
+        openDiff: @escaping (Commit, Commit.FileChange) -> Void,
+        canSwitchBranch: Bool,
+        switchBranch: @escaping (String) -> Void
     ) {
         self.commits = commits
         _expandedCommitIDs = expandedCommitIDs
@@ -39,6 +43,8 @@ struct RecentCommitsView: View {
         self.isLoadingMore = isLoadingMore
         self.loadMore = loadMore
         self.openDiff = openDiff
+        self.canSwitchBranch = canSwitchBranch
+        self.switchBranch = switchBranch
     }
 
     var body: some View {
@@ -103,7 +109,7 @@ struct RecentCommitsView: View {
                         ? String(localized: "Expanded", table: "Git")
                         : String(localized: "Collapsed", table: "Git"))
                     if !commit.references.isEmpty {
-                        referenceStrip(commit.references)
+                        referenceStrip(commit.references, commit: commit)
                             .layoutPriority(1)
                     }
                     Spacer(minLength: 0)
@@ -151,40 +157,46 @@ struct RecentCommitsView: View {
             CommitGraphRails(row: graph, fontScale: fontScale)
         }
         .contextMenu {
-            Button(String(localized: "Copy Commit Hash", table: "Git")) {
-                copy(commit.hash)
+            Button(expanded
+                ? String(localized: "Collapse Commit Files", table: "Git")
+                : String(localized: "Expand Commit Files", table: "Git")) {
+                toggle(commit)
             }
+            Divider()
+            Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
             Button(String(localized: "Copy Commit Message", table: "Git")) {
                 copy(commit.subject)
             }
         }
     }
 
-    private func referenceStrip(_ references: [Reference]) -> some View {
+    private func referenceStrip(_ references: [Reference], commit: Commit) -> some View {
         ViewThatFits(in: .horizontal) {
-            referenceGroup(references, shown: references.count)
+            referenceGroup(references, shown: references.count, commit: commit)
             if references.count > 2 {
-                referenceGroup(references, shown: 2)
+                referenceGroup(references, shown: 2, commit: commit)
             }
             if references.count > 1 {
-                referenceGroup(references, shown: 1)
+                referenceGroup(references, shown: 1, commit: commit)
             }
-            referenceGroup(references, shown: 0)
+            referenceGroup(references, shown: 0, commit: commit)
         }
     }
 
-    private func referenceGroup(_ references: [Reference], shown: Int) -> some View {
+    private func referenceGroup(_ references: [Reference], shown: Int, commit: Commit) -> some View {
         HStack(spacing: 4 * fontScale) {
             ForEach(Array(references.prefix(shown))) { reference in
-                referenceBadge(reference)
+                referenceBadge(reference, commit: commit)
             }
             if shown < references.count {
                 Menu {
                     ForEach(Array(references.dropFirst(shown))) { reference in
                         if reference.kind == .remoteBranch {
-                            Button(reference.name) {}.disabled(true)
+                            Text(verbatim: reference.name)
                         } else {
-                            Button(reference.name) { copy(reference.name) }
+                            Menu(reference.name) {
+                                referenceActions(reference, commit: commit)
+                            }
                         }
                     }
                 } label: {
@@ -202,7 +214,7 @@ struct RecentCommitsView: View {
     }
 
     @ViewBuilder
-    private func referenceBadge(_ reference: Reference) -> some View {
+    private func referenceBadge(_ reference: Reference, commit: Commit) -> some View {
         let background: Color = {
             switch reference.kind {
             case .currentBranch: Color(nsColor: .systemBlue)
@@ -231,13 +243,46 @@ struct RecentCommitsView: View {
         if reference.kind == .remoteBranch {
             label
         } else {
-            Button { copy(reference.name) } label: { label }
+            Button {
+                if reference.kind == .tag {
+                    expandedCommitIDs.insert(commit.id)
+                } else {
+                    copy(reference.name)
+                }
+            } label: { label }
                 .buttonStyle(.plain)
                 .contextMenu {
-                    Button(String(localized: "Copy Reference Name", table: "Git")) {
-                        copy(reference.name)
-                    }
+                    referenceActions(reference, commit: commit)
                 }
+        }
+    }
+
+    @ViewBuilder
+    private func referenceActions(_ reference: Reference, commit: Commit) -> some View {
+        switch reference.kind {
+        case .currentBranch:
+            Button(String(localized: "Copy Branch Name", table: "Git")) {
+                copy(reference.name)
+            }
+        case .localBranch:
+            Button(String(localized: "Switch to This Branch", table: "Git")) {
+                switchBranch(reference.name)
+            }
+            .disabled(!canSwitchBranch)
+            Button(String(localized: "Copy Branch Name", table: "Git")) {
+                copy(reference.name)
+            }
+        case .tag:
+            Button(String(localized: "Show Tagged Commit", table: "Git")) {
+                expandedCommitIDs.insert(commit.id)
+            }
+            Button(String(localized: "Copy Tag Name", table: "Git")) {
+                copy(reference.name)
+            }
+        case .detachedHead:
+            Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
+        case .remoteBranch:
+            EmptyView()
         }
     }
 
@@ -304,6 +349,9 @@ struct RecentCommitsView: View {
             open: { openDiff(commit, file) }
         ) { _ in EmptyView() }
         .contextMenu {
+            Button(String(localized: "Open Historical Diff", table: "Git")) {
+                openDiff(commit, file)
+            }
             Button(String(localized: "Copy Relative Path", table: "Git")) { copy(file.path) }
         }
     }
