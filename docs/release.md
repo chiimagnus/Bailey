@@ -33,7 +33,7 @@ Tag、工程版本、App 版本、Release 标题和 ZIP 文件名保持一致。
 
 ## 分发边界
 
-当前发布的是 Apple Silicon ZIP。没有已配置的 DMG、Homebrew cask、应用内更新、Beta 独立身份或自动公告流程，不因参考其他仓库的文档而宣称存在这些能力。
+当前通过 GitHub Releases 分发 Apple Silicon ZIP，更新沿 README 的下载与替换流程进行。新增渠道或应用内更新须同步维护此页与用户入口。
 
 用户安装入口是 [README](../README.md#安装)；自动生成的 Release notes 不能替代功能文档与未完成验收说明。
 

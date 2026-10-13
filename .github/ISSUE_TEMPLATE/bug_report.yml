@@ -5,7 +5,9 @@ labels: ["bug"]
 body:
   - type: markdown
     attributes:
-      value: "中文优先，英文也可以。Chinese preferred; English is welcome."
+      value: |
+        中文优先，英文也可以。Chinese preferred; English is welcome.
+        安全漏洞请按 [SECURITY.md](https://github.com/chiimagnus/kero/blob/main/SECURITY.md) 私下报告；截图与日志请移除密钥、私人路径和终端内容。
 
   - type: checkboxes
     id: existing-search
