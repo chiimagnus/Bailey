@@ -347,10 +347,9 @@ private struct SidebarProjectRow: View {
     }
 }
 
-/// Small subtitle showing a session's current directory; separate view so
-/// it observes the session's own published working directory.
+/// Small subtitle observing the session's live working directory.
 private struct SessionDirectoryLabel: View {
-    @ObservedObject var session: TerminalSession
+    let session: TerminalSession
     let fontSize: Double
 
     var body: some View {

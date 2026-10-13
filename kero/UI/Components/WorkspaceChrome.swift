@@ -134,7 +134,7 @@ private struct TabRenameChrome: View {
 }
 
 private struct SessionTabLabel: View {
-    @ObservedObject var session: TerminalSession
+    let session: TerminalSession
     /// User-assigned tab name overriding the live terminal title.
     var customTitle: String?
     let isSelected: Bool

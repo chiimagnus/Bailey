@@ -66,9 +66,6 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
 
     var onSnapshotChange: (() -> Void)?
     private let fallbackName: String
-    /// Sessions publish their own changes (title, directory); re-publish them
-    /// so the project name and views observing the project stay current.
-    private var sessionObservations: [UUID: AnyCancellable] = [:]
     /// Keep dirty indicators and tab titles current in existing SwiftUI views;
     /// persisted fields notify the window separately.
     private var tabObservations: [UUID: AnyCancellable] = [:]
@@ -279,10 +276,9 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
             // Already dead — just drop its pane, no second terminate.
             self?.closeContent(.session(session), terminate: false)
         }
-        sessionObservations[session.id] = session.objectWillChange.sink { [weak self] _ in
-            self?.objectWillChange.send()
-            // A session's connection coming or going decides whether the
-            // project's remote tabs can be read and written.
+        session.onRemoteContextChange = { [weak self] in
+            // Changing the real SSH target changes whether previously opened
+            // remote files/diffs are writable; SwiftUI redraw alone is insufficient.
             self?.scheduleRemoteTabRebind()
         }
         return session
@@ -317,8 +313,8 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     }
 
     /// Re-checks every remote file and diff against the project's connections.
-    /// Observations arrive before the change lands, so this runs one hop later
-    /// and at most once per turn.
+    /// Real SSH state/directory callbacks happen after mutation; coalesce
+    /// them one hop later instead of rechecking on every terminal UI update.
     private func scheduleRemoteTabRebind() {
         guard !isRemoteTabRebindPending else { return }
         isRemoteTabRebindPending = true
@@ -799,16 +795,18 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         let tab = tabs[index]
         tab.onSnapshotChange = nil
         switch tab.content {
-        case .session(let session): session.onSnapshotChange = nil
+        case .session(let session):
+            session.onSnapshotChange = nil
+            session.onRemoteContextChange = nil
         case .browser(let browser): browser.onSnapshotChange = nil
         case .file(let file): file.onSnapshotChange = nil
         case .diff(let diff): diff.onSnapshotChange = nil
         }
-        sessionObservations[tab.content.id] = nil
         browserObservations[tab.content.id] = nil
         tabObservations[tabID] = nil
         recentTabIDs.removeAll { $0 == tabID }
         tabs.remove(at: index)
+        if case .session = tab.content { scheduleRemoteTabRebind() }
         if selectedTabID == tabID {
             let neighbor = min(index, tabs.count - 1)
             selectedTabID = neighbor >= 0 ? tabs[neighbor].id : nil

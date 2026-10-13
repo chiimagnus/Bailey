@@ -4,8 +4,8 @@
 //
 
 import AppKit
-import Combine
 import Foundation
+import Observation
 
 /// Find-in-terminal state for one session.
 ///
@@ -15,12 +15,13 @@ import Foundation
 /// forwards the user's intent as surface find actions. Match counts arrive
 /// back asynchronously through `TerminalBackendEvents`.
 @MainActor
-final class TerminalFind: nonisolated ObservableObject {
-    @Published private(set) var isPresented = false
+@Observable
+final class TerminalFind {
+    private(set) var isPresented = false
 
     /// The needle. Every edit restarts the backend's search, so the bar
     /// searches as you type.
-    @Published var query = "" {
+    var query = "" {
         didSet {
             guard query != oldValue, !isApplyingReportedNeedle else { return }
             runSearch()
@@ -29,30 +30,30 @@ final class TerminalFind: nonisolated ObservableObject {
 
     /// Matches found so far, or nil while a count for the current needle has
     /// not been reported yet.
-    @Published private(set) var total: Int?
+    private(set) var total: Int?
     /// Zero-based index of the highlighted match, nil when none is.
-    @Published private(set) var selected: Int?
+    private(set) var selected: Int?
 
     /// Bumped whenever the bar should take (or retake) keyboard focus, so ⌘F
     /// on an already-open bar re-selects the term the way the system find bar
     /// does. A counter rather than a flag: repeated requests must each land.
-    @Published private(set) var focusRequest = 0
+    private(set) var focusRequest = 0
 
     /// The session owning this also owns the surface, so an unowned reference
     /// is safe and keeps the session's object graph acyclic.
-    private unowned let surface: any TerminalBackendSurface
+    @ObservationIgnored private unowned let surface: any TerminalBackendSurface
 
     /// Set while a needle the backend resolved for us (⌘E's selection) is
     /// being written into `query`, so echoing it back as a fresh search —
     /// which would restart the one already running — is suppressed.
-    private var isApplyingReportedNeedle = false
+    @ObservationIgnored private var isApplyingReportedNeedle = false
 
     /// Bumped per search so a deferred reveal belonging to an older needle can
     /// tell it has been superseded. A backend reports each restart as a burst
     /// of counts, several per keystroke.
-    private var searchGeneration = 0
+    @ObservationIgnored private var searchGeneration = 0
     /// Whether the current needle has already jumped to a match.
-    private var hasRevealedMatch = false
+    @ObservationIgnored private var hasRevealedMatch = false
 
     init(surface: any TerminalBackendSurface) {
         self.surface = surface

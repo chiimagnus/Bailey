@@ -95,6 +95,57 @@ final class WorkspaceIdentityTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), Data("local save\n".utf8))
     }
 
+    func testSSHStateChangeRebindsRemoteFileWithoutPublisherRelay() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("remote-owned.txt")
+        try Data("local sentinel".utf8).write(to: path)
+
+        let project = Project(fallbackName: "remote observer", workspaceConfiguration: .standard)
+        let session = project.newSession()
+        defer { project.terminateAll() }
+        let connection = RemoteConnection(
+            user: "fixture", host: "invalid", port: 2222,
+            controlSocket: URL(fileURLWithPath: "/tmp/kero-observation-rebind-no-socket"),
+            sshPID: 0
+        )
+        connection.workingDirectory = directory.path
+        connection.markConnected()
+        XCTAssertTrue(session.beginRemoteConnection(connection))
+
+        // This fake backend may read the local temp file to initialize the
+        // editor, but no SSH master is accessed or created.
+        let backend = IdentityWorkspaceFixture()
+        let file = FileTab(
+            path: path.path, backend: backend,
+            workspaceIdentity: connection.workspaceIdentity
+        )
+        project.append(PaneTab(content: .file(file)))
+        try await wait {
+            if case .text = file.content { return true }
+            return false
+        }
+        file.text = "unsaved on remote"
+        file.refreshDirtyState()
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNil(file.readOnlyReason)
+
+        // The only trigger is RemoteConnection.state's semantic event: no
+        // manual rebindRemoteTabs() or extra publisher notification.
+        connection.markDisconnected(reason: "controlled remote outage")
+        try await wait { file.readOnlyReason != nil }
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(file.text, "unsaved on remote")
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "local sentinel")
+
+        connection.markConnected()
+        try await wait { file.readOnlyReason == nil }
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(file.text, "unsaved on remote")
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "local sentinel")
+    }
+
     func testRemoteCreateFailureNeverFallsBackToLocalDisk() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

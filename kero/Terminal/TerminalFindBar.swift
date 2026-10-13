@@ -10,7 +10,7 @@ import SwiftUI
 /// draws the match highlights inside the grid itself, so this only carries the
 /// field, the tally, and the navigation controls.
 struct TerminalFindBar: View {
-    @ObservedObject var find: TerminalFind
+    @Bindable var find: TerminalFind
     private let themeChanges = Theme.changes
 
     @FocusState private var fieldFocused: Bool
@@ -126,7 +126,7 @@ struct TerminalFindBar: View {
 }
 
 struct TerminalFindOverlay: View {
-    @ObservedObject var find: TerminalFind
+    let find: TerminalFind
 
     var body: some View {
         if find.isPresented {

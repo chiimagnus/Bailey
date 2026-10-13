@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 import WebKit
 import XCTest
@@ -89,6 +90,59 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertEqual(restored.textSelection, NSRange(location: 3, length: 2))
         XCTAssertTrue(file.isDirty)
         editorView?.removeFromSuperview()
+    }
+
+    func testTerminalAndFindObservationPreserveNativeSurfaceIdentity() async throws {
+        let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
+        defer { terminal.terminate() }
+        let surface = terminal.surface
+        let project = Project(fallbackName: "fallback", workspaceConfiguration: .standard)
+        project.append(PaneTab(content: .session(terminal)))
+
+        let projectNameChanged = expectation(description: "Project title follows observed session")
+        withObservationTracking({ _ = project.name }) { projectNameChanged.fulfill() }
+        let titleChanged = expectation(description: "Terminal title observation")
+        withObservationTracking({ _ = terminal.title }) { titleChanged.fulfill() }
+        terminal.terminalDidChangeTitle("Observed title")
+        await fulfillment(of: [titleChanged, projectNameChanged], timeout: 2)
+        XCTAssertEqual(terminal.title, "Observed title")
+        XCTAssertEqual(project.name, "Observed title")
+
+        let commandChanged = expectation(description: "Real command completion observation")
+        withObservationTracking({ _ = terminal.commandLifecycle.completionSequence }) {
+            commandChanged.fulfill()
+        }
+        let previous = terminal.commandLifecycle.completionSequence
+        terminal.terminalDidReportShellIntegration(
+            .commandFinished(exitCode: 0, durationNanos: 1_000_000)
+        )
+        await fulfillment(of: [commandChanged], timeout: 2)
+        XCTAssertEqual(terminal.commandLifecycle.completionSequence, previous + 1)
+
+        let findChanged = expectation(description: "Find focus request observation")
+        withObservationTracking({ _ = terminal.find.focusRequest }) {
+            findChanged.fulfill()
+        }
+        terminal.find.present()
+        await fulfillment(of: [findChanged], timeout: 2)
+        XCTAssertTrue(terminal.find.isPresented)
+        let firstFocus = terminal.find.focusRequest
+        terminal.find.present()
+        XCTAssertEqual(terminal.find.focusRequest, firstFocus + 1)
+        terminal.find.dismiss()
+        XCTAssertFalse(terminal.find.isPresented)
+
+        // A headless/closed Ghostty surface must deny OSC 52 rather than
+        // accidentally authorizing clipboard access or leaving it unresolved.
+        var decisions: [Bool] = []
+        terminal.terminalDidRequestClipboardConfirmation(
+            TerminalClipboardRequest(
+                kind: .programRead, contents: "test clipboard",
+                resolve: { decisions.append($0) }
+            )
+        )
+        XCTAssertEqual(decisions, [false])
+        XCTAssertTrue(terminal.surface === surface)
     }
 
     func testTerminalKeepsSameShellAcrossParkingAndRemount() async throws {

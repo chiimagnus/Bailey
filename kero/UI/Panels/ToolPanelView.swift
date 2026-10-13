@@ -258,7 +258,7 @@ struct ToolPanelView: View {
     }
 
     /// The heading belonging to the current connection.
-    /// Cheap and synchronous — it reads published state and touches no
+    /// Cheap and synchronous — it reads observed state and touches no
     /// workspace, so it stays correct while the panels are stalled.
     private func applyRemoteHeading() {
         guard let project = manager.selectedProject else {

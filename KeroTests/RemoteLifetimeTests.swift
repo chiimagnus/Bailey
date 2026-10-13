@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import XCTest
 @testable import kero
 
@@ -31,6 +32,36 @@ final class RemoteLifetimeTests: XCTestCase {
             }
         }
         XCTAssertLessThan(Date().timeIntervalSince(started), 0.4)
+    }
+
+    @MainActor
+    func testSSHStateAndWorkingDirectoryAreObserved() async {
+        let connection = RemoteConnection(
+            user: "fixture", host: "invalid", port: 2222,
+            controlSocket: URL(fileURLWithPath: "/tmp/kero-observation-fixture-missing"),
+            sshPID: 0
+        )
+        let stateChanged = expectation(description: "SSH state observation")
+        withObservationTracking({ _ = connection.state }) { stateChanged.fulfill() }
+        connection.markConnected()
+        await fulfillment(of: [stateChanged], timeout: 1)
+        XCTAssertEqual(connection.state, .connected)
+
+        let directoryChanged = expectation(description: "Remote directory observation")
+        withObservationTracking({ _ = connection.workingDirectory }) {
+            directoryChanged.fulfill()
+        }
+        connection.workingDirectory = "/repo"
+        await fulfillment(of: [directoryChanged], timeout: 1)
+        XCTAssertEqual(connection.workingDirectory, "/repo")
+
+        var contextChanges = 0
+        connection.onWorkspaceChange = { contextChanges += 1 }
+        connection.markDisconnected(reason: "fixture")
+        connection.workingDirectory = "/repo/project"
+        XCTAssertEqual(connection.state, .disconnected)
+        XCTAssertEqual(contextChanges, 2)
+        XCTAssertEqual(connection.workspaceIdentity, "fixture@invalid:2222")
     }
 
     @MainActor

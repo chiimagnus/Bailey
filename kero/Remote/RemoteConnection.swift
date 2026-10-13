@@ -3,9 +3,9 @@
 //  kero
 //
 
-import Combine
 import Darwin
 import Foundation
+import Observation
 
 /// Where a session's right pane looks for files, processes and git state.
 ///
@@ -47,7 +47,8 @@ enum RemoteConnectionError: Error, LocalizedError {
 /// typed. Kero never authenticates: the control socket is created by that
 /// process, and every command here rides the existing channel.
 @MainActor
-final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunner {
+@Observable
+final class RemoteConnection: Identifiable, RemoteCommandRunner {
     nonisolated enum State: Hashable, Sendable {
         case connecting
         case connected
@@ -64,7 +65,9 @@ final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunne
     /// process, so the pid it reports stays valid for the session's life.
     nonisolated let sshPID: pid_t
 
-    @Published private(set) var state: State = .connecting
+    private(set) var state: State = .connecting {
+        didSet { if state != oldValue { onWorkspaceChange?() } }
+    }
     var workspaceBackend: SSHWorkspaceBackend { SSHWorkspaceBackend(runner: self) }
     /// The same channel with a short deadline, used only for the liveness
     /// probe. Panel work can afford to wait; a probe that waits is a drop
@@ -73,12 +76,12 @@ final class RemoteConnection: ObservableObject, Identifiable, RemoteCommandRunne
         SSHWorkspaceBackend(runner: self, timeout: 3)
     }
     /// Remote working directory, filled in by the cwd probe.
-    @Published var workingDirectory: String?
-    /// The remote login shell's process id, found by the same probe. The Info
-    /// panel needs it to describe the shell on the other machine rather than
-    /// the local ssh client.
-    @Published var shellProcessID: pid_t?
-
+    var workingDirectory: String? {
+        didSet { if workingDirectory != oldValue { onWorkspaceChange?() } }
+    }
+    /// One owner (the terminal session) relays connection changes to its
+    /// project's existing remote-tab rebind operation.
+    @ObservationIgnored var onWorkspaceChange: (() -> Void)?
     /// Unix socket paths are capped at 104 bytes by `sockaddr_un`, which rules
     /// out Application Support. Same `/tmp` convention as the automation
     /// socket, one directory per app process at 0700.

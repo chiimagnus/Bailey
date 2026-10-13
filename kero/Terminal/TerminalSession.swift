@@ -4,9 +4,9 @@
 //
 
 import AppKit
-import Combine
 import Darwin
 import Foundation
+import Observation
 
 extension TerminalSession {
     /// Which workspace a tab opened from this session belongs to. Nil is this
@@ -25,30 +25,34 @@ extension TerminalSession {
 /// The surface reports its lifecycle and input events through
 /// ``TerminalBackendEvents`` so session logic stays independent of rendering.
 @MainActor
-final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated Identifiable {
+@Observable
+final class TerminalSession: NSObject, nonisolated Identifiable {
     nonisolated let id: UUID
 
-    @Published var title: String
-    @Published var workingDirectory: String? {
+    var title: String
+    var workingDirectory: String? {
         didSet { if workingDirectory != oldValue { onSnapshotChange?() } }
     }
-    var onSnapshotChange: (() -> Void)?
-    @Published var hasExited = false
-    @Published private(set) var commandLifecycle = TerminalCommandLifecycle()
+    @ObservationIgnored var onSnapshotChange: (() -> Void)?
+    /// Real SSH state, remote cwd, or connection identity changed: the
+    /// project must rebind remote file and diff backends, not just redraw.
+    @ObservationIgnored var onRemoteContextChange: (() -> Void)?
+    var hasExited = false
+    private(set) var commandLifecycle = TerminalCommandLifecycle()
     /// Where this session's workspace tools look. Set by Kero's `ssh` helper
     /// through the private authenticated handoff, never guessed from the foreground
     /// process: an ssh Kero did not front cannot be followed.
-    @Published var location: WorkspaceLocation = .local
+    var location: WorkspaceLocation = .local
     /// The connection this session most recently left. Open editor tabs use it
     /// to recognise their own remote after `exit` has returned the pane to the
     /// local machine.
-    @Published private(set) var lastRemoteConnection: RemoteConnection?
+    private(set) var lastRemoteConnection: RemoteConnection?
 
     let surface: any TerminalBackendSurface
     let overlayScrollbar = OverlayScrollbarView()
     /// Find-in-terminal state for this session's pane (⌘F).
     let find: TerminalFind
-    var onExited: ((TerminalSession) -> Void)?
+    @ObservationIgnored var onExited: ((TerminalSession) -> Void)?
 
     private static let persistedHistoryLineLimit = 500
 
@@ -56,7 +60,7 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     private let launchWorkingDirectory: String
     private let launchDirectoryURL: URL?
     private let shellPidFileURL: URL?
-    private var cachedShellPid: pid_t?
+    @ObservationIgnored private var cachedShellPid: pid_t?
     /// True when this session's shell was started with Kero's zsh
     /// integration. A session that had it and still ends up running a stock
     /// ssh directly means the integration did not take, which the pane says
@@ -65,16 +69,11 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     /// When the current foreground ssh was first seen. A remote command like
     /// `ssh host uptime` is a foreground ssh too, and it finishes in well under
     /// a second; announcing it would flash the pane for no reason.
-    private var unmanagedSSHFirstSeen: (pid: pid_t, at: Date)?
-    private var remoteMonitor: Task<Void, Never>?
-    private var remoteObservation: AnyCancellable?
-    private var lastHistorySnapshot: String?
-    private var isTerminating = false
-    private var commandExecutionStartedAtNanos: UInt64?
-    /// Alternate-screen transcript paging must begin at the live prompt, never
-    /// from text the user has scrolled back to inspect.
-    var terminalIsAtLiveBottom = true
-
+    @ObservationIgnored private var unmanagedSSHFirstSeen: (pid: pid_t, at: Date)?
+    @ObservationIgnored private var remoteMonitor: Task<Void, Never>?
+    @ObservationIgnored private var lastHistorySnapshot: String?
+    @ObservationIgnored private var isTerminating = false
+    @ObservationIgnored private var commandExecutionStartedAtNanos: UInt64?
     init(
         initialDirectory: String? = nil,
         restoredHistory: String? = nil,
@@ -221,11 +220,12 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         }
         endRemoteConnection(reason: "replaced by a new connection")
         location = .remote(connection)
-        // The connection is its own observable object, so republish its
-        // changes or views bound to the session never see a state change.
-        remoteObservation = connection.objectWillChange.sink { [weak self] _ in
-            self?.objectWillChange.send()
+        connection.onWorkspaceChange = { [weak self, weak connection] in
+            guard let self, let connection,
+                  self.location.remoteConnection === connection else { return }
+            self.onRemoteContextChange?()
         }
+        onRemoteContextChange?()
         remoteMonitor = Task { [weak self] in
             await self?.watchRemoteConnection(connection)
         }
@@ -235,9 +235,9 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     func endRemoteConnection(reason: String) {
         remoteMonitor?.cancel()
         remoteMonitor = nil
-        remoteObservation = nil
         guard let connection = location.remoteConnection else { return }
         connection.markDisconnected(reason: reason)
+        connection.onWorkspaceChange = nil
         lastRemoteConnection = connection
     }
 
@@ -247,9 +247,10 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     /// back to local paths under a remote heading is the one outcome to avoid.
     private func returnToLocal(_ connection: RemoteConnection, reason: String) {
         connection.markDisconnected(reason: reason)
+        connection.onWorkspaceChange = nil
         lastRemoteConnection = connection
         location = .local
-        remoteObservation = nil
+        onRemoteContextChange?()
     }
 
     /// One check a second. While connecting, only the ssh process going away
@@ -312,8 +313,8 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         }
     }
 
-    /// Finds the remote shell's directory and process id over the shared
-    /// channel. Returns whether the round trip succeeded, which is what tells
+    /// Identifies the remote shell process to read its directory over the
+    /// shared channel. Returns whether the round trip succeeded, which tells
     /// a live connection from a dropped one.
     ///
     /// A miss keeps the last known values: the lookup can fail transiently
@@ -338,9 +339,6 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
         guard let found, !found.directory.isEmpty else { return true }
         if connection.workingDirectory != found.directory {
             connection.workingDirectory = found.directory
-        }
-        if connection.shellProcessID != found.pid {
-            connection.shellProcessID = found.pid
         }
         return true
     }
@@ -514,15 +512,6 @@ final class TerminalSession: NSObject, nonisolated ObservableObject, nonisolated
     /// turns a silent failure into a visible one.
     var sshHelperWasBypassed: Bool {
         zshIntegrationActive && unmanagedSSH?.path == "/usr/bin/ssh"
-    }
-
-    /// The shell the right pane should describe: the remote login shell while
-    /// this session is connected to another machine, and this Mac's own shell
-    /// otherwise. The Info panel filters processes by it, so handing it the
-    /// local pid while remote makes the panel describe a machine it is not
-    /// looking at.
-    var panelShellPid: pid_t? {
-        connectedRemote?.shellProcessID ?? shellPid
     }
 
     /// The remote this session is working on. Both the backend and the panel
@@ -826,7 +815,6 @@ extension TerminalSession: TerminalBackendEvents {
     }
 
     func terminalDidScroll(_ position: TerminalScrollPosition) {
-        terminalIsAtLiveBottom = position.position >= 0.999
         overlayScrollbar.update(
             position: position.position,
             proportion: position.proportion,
