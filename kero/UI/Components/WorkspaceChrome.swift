@@ -5,7 +5,7 @@ import SwiftUI
 /// Observes the tab so name changes refresh it; the content is observed by the
 /// per-kind label below so its live title/dirty state shows.
 struct PaneTabItem: View {
-    @ObservedObject var tab: PaneTab
+    let tab: PaneTab
     let isSelected: Bool
     let select: () -> Void
     let close: () -> Void

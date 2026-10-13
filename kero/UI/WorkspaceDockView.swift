@@ -171,7 +171,7 @@ extension DockItem {
 private struct DockTreeView: View {
     private let themeChanges = Theme.changes
     let node: DockNode
-    @ObservedObject var project: Project
+    let project: Project
     @ObservedObject var manager: TerminalManager
     let git: GitStatusModel
     let dragging: DockTabDragCoordinator
@@ -263,7 +263,7 @@ private struct DockTreeView: View {
 private struct DockTabGroupView: View {
     private let themeChanges = Theme.changes
     let group: DockGroup
-    @ObservedObject var project: Project
+    let project: Project
     @ObservedObject var manager: TerminalManager
     let git: GitStatusModel
     let dragging: DockTabDragCoordinator

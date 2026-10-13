@@ -15,6 +15,69 @@ final class PaneRetentionTests: XCTestCase {
         }
     }
 
+    func testProjectAndPaneTabObservationsReplacePublisherRelays() async throws {
+        let project = Project(fallbackName: "observation", workspaceConfiguration: .standard)
+        let tab = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
+        project.append(tab)
+        let renamed = expectation(description: "Tab rename invalidates the project-backed title")
+        withObservationTracking({ _ = project.tabs.first?.displayTitle }) { renamed.fulfill() }
+        var snapshots = 0
+        project.onSnapshotChange = { snapshots += 1 }
+        tab.customName = "Renamed"
+        await fulfillment(of: [renamed], timeout: 1)
+        XCTAssertEqual(project.tabs.first?.displayTitle, "Renamed")
+        XCTAssertGreaterThan(snapshots, 0)
+
+        let other = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
+        project.append(other)
+        let selected = expectation(description: "Project selection is directly observed")
+        withObservationTracking({ _ = project.selectedTabID }) { selected.fulfill() }
+        project.selectedTabID = tab.id
+        await fulfillment(of: [selected], timeout: 1)
+        XCTAssertTrue(project.selectedTab === tab)
+        XCTAssertEqual(project.dock.group(containing: .tab(tab.id))?.selected, .tab(tab.id))
+        project.close(other)
+        XCTAssertEqual(project.tabs.map(\.id), [tab.id])
+        XCTAssertTrue(project.tabs.first === tab)
+        project.close(tab)
+        XCTAssertTrue(project.tabs.isEmpty)
+        XCTAssertTrue(project.dock.tabOrder.isEmpty)
+        XCTAssertNil(project.selectedTabID)
+    }
+
+    func testNativeUnsavedConfirmationPreservesSheetAndButtonSemantics() async throws {
+        let alert = ProjectCloseConfirmation.alert(title: "draft.txt")
+        XCTAssertEqual(alert.alertStyle, .warning)
+        let title = "draft.txt"
+        XCTAssertEqual(alert.messageText, String(
+            localized: "Do you want to save the changes you made to \(title)?", table: "Workspace",
+            comment: "Unsaved file or diff confirmation. The placeholder is a file name."
+        ))
+        XCTAssertEqual(alert.informativeText, String(
+            localized: "Your changes will be lost if you don't save them.", table: "Workspace"
+        ))
+        XCTAssertEqual(alert.buttons.map(\.title), [
+            String(localized: "Save", table: "Workspace"),
+            String(localized: "Don’t Save", table: "Workspace"),
+            String(localized: "Cancel", table: "Workspace"),
+        ])
+        XCTAssertEqual(alert.buttons[1].keyEquivalent, "")
+        XCTAssertEqual(alert.buttons[2].keyEquivalent, "\u{1b}")
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.orderFront(nil)
+        defer { window.close() }
+        let response = Task { await ProjectCloseConfirmation.present(title: "draft.txt", in: window) }
+        try await settle { window.attachedSheet != nil }
+        let sheet = try XCTUnwrap(window.attachedSheet)
+        window.endSheet(sheet, returnCode: .alertThirdButtonReturn)
+        let result = await response.value
+        XCTAssertEqual(result, .alertThirdButtonReturn)
+        try await settle { window.attachedSheet == nil }
+    }
+
     func testBrowserKVOUpdatesObservationHistoryFaviconAndRepeatedFocus() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

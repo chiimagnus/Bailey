@@ -43,9 +43,6 @@ final class TerminalManager: nonisolated ObservableObject {
     @Published var isFPSCounterVisible = false
     @Published private(set) var isCommandPaletteVisible = false
 
-    /// Projects publish their own changes (session list, session selection);
-    /// re-publish them so views observing the manager stay current.
-    private var projectObservations: [UUID: AnyCancellable] = [:]
     private var projectCounter = 0
     private var pendingSave: Task<Void, Never>?
     private var isInitialized = false
@@ -429,9 +426,6 @@ final class TerminalManager: nonisolated ObservableObject {
             fallbackName: "Project \(projectCounter)",
             workspaceConfiguration: AppSettings.shared.workspaceConfiguration
         )
-        projectObservations[project.id] = project.objectWillChange.sink { [weak self] _ in
-            self?.objectWillChange.send()
-        }
         project.onSnapshotChange = { [weak self] in self?.requestSave() }
         return project
     }
@@ -445,7 +439,6 @@ final class TerminalManager: nonisolated ObservableObject {
         guard let index = projects.firstIndex(where: { $0.id == project.id }) else { return }
         projects.remove(at: index)
         project.onSnapshotChange = nil
-        projectObservations[project.id] = nil
         if selectedProjectID == project.id {
             let neighbor = min(index, projects.count - 1)
             selectedProjectID = neighbor >= 0 ? projects[neighbor].id : nil

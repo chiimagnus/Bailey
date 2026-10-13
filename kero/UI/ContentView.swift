@@ -152,3 +152,29 @@ struct ContentView: View {
         }
     }
 }
+
+/// Native presentation only. Project handles the save and tab-removal decision.
+@MainActor
+enum ProjectCloseConfirmation {
+    static func alert(title: String) -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(
+            localized: "Do you want to save the changes you made to \(title)?", table: "Workspace",
+            comment: "Unsaved file or diff confirmation. The placeholder is a file name."
+        )
+        alert.informativeText = String(
+            localized: "Your changes will be lost if you don't save them.", table: "Workspace"
+        )
+        alert.addButton(withTitle: String(localized: "Save", table: "Workspace"))
+        alert.addButton(withTitle: String(localized: "Don’t Save", table: "Workspace")).keyEquivalent = ""
+        alert.addButton(withTitle: String(localized: "Cancel", table: "Workspace")).keyEquivalent = "\u{1b}"
+        return alert
+    }
+
+    static func present(title: String, in window: NSWindow?) async -> NSApplication.ModalResponse {
+        let alert = alert(title: title)
+        if let window { return await alert.beginSheetModal(for: window) }
+        return alert.runModal()
+    }
+}

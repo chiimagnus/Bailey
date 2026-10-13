@@ -332,7 +332,7 @@ private enum TabSwitcherLayout {
 /// Centered switcher chrome: a vertically scrolling thumbnail grid with at
 /// most five tabs per row and the current candidate kept in view.
 struct TabSwitcherOverlay: View {
-    @ObservedObject var project: Project
+    let project: Project
     @ObservedObject var controller: TabSwitcherController
     private let themeChanges = Theme.changes
     @Environment(\.colorScheme) private var colorScheme
@@ -480,7 +480,7 @@ struct TabSwitcherOverlay: View {
 }
 
 private struct TabSwitcherCard: View {
-    @ObservedObject var tab: PaneTab
+    let tab: PaneTab
     let index: Int
     let isHighlighted: Bool
     let terminalPreviews: [UUID: String]
@@ -641,7 +641,7 @@ private final class TabSwitcherInteractionNSView: NSView {
 }
 
 private struct TabThumbnail: View {
-    @ObservedObject var tab: PaneTab
+    let tab: PaneTab
     let terminalPreviews: [UUID: String]
 
     var body: some View {

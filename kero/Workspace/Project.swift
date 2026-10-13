@@ -4,8 +4,8 @@
 //
 
 import AppKit
-import Combine
 import Foundation
+import Observation
 
 /// A project groups tabs and appears as one row in the left sidebar. Each tab
 /// holds one terminal, file, browser, or diff; see
@@ -13,12 +13,13 @@ import Foundation
 /// tab leaves the project open — only the explicit "Close Project" action (see
 /// `TerminalManager.close(_:)`) removes it from the manager.
 @MainActor
-final class Project: nonisolated ObservableObject, nonisolated Identifiable {
+@Observable
+final class Project: nonisolated Identifiable {
     nonisolated let id = UUID()
 
     /// User-assigned name; when nil the project title follows the
     /// selected session's terminal title.
-    @Published var customName: String? {
+    var customName: String? {
         didSet { if customName != oldValue { onSnapshotChange?() } }
     }
     /// User-pinned project directory ("Set Project Directory…" on the
@@ -26,27 +27,27 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// here. Nil means automatic: the closest git repository containing the
     /// selected session's working directory, re-derived as the session
     /// moves (see `panelRoot(followingSessionAt:)`).
-    @Published var customDirectory: String? {
+    var customDirectory: String? {
         didSet { if customDirectory != oldValue { onSnapshotChange?() } }
     }
     /// Selected SSH host, if this sidebar root is remote.
-    @Published var sshHost: String? {
+    var sshHost: String? {
         didSet { if sshHost != oldValue { onSnapshotChange?() } }
     }
     /// An individually added file is anchored to its parent directory.
-    @Published var pinnedFile: String? {
+    var pinnedFile: String? {
         didSet { if pinnedFile != oldValue { onSnapshotChange?() } }
     }
     /// File browser state belongs to the project, not a transient tool tab.
     let fileTree = FileTreeModel()
     let dock: DockWorkspaceModel
-    @Published var tabs: [PaneTab] = [] {
+    var tabs: [PaneTab] = [] {
         didSet {
             dock.syncTabs(tabs.map(\.id), near: selectedTabID)
             onSnapshotChange?()
         }
     }
-    @Published var selectedTabID: UUID? {
+    var selectedTabID: UUID? {
         didSet {
             guard selectedTabID != oldValue else { return }
             if let selectedTabID {
@@ -61,14 +62,11 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// Tab IDs newest-used first. Kept here rather than in the switcher
     /// because every way of reaching a tab — strip click, menu selection,
     /// opening a file — counts as a use.
-    private var recentTabIDs: [UUID] = []
-    private var isRemoteTabRebindPending = false
+    @ObservationIgnored private var recentTabIDs: [UUID] = []
+    @ObservationIgnored private var isRemoteTabRebindPending = false
 
-    var onSnapshotChange: (() -> Void)?
+    @ObservationIgnored var onSnapshotChange: (() -> Void)?
     private let fallbackName: String
-    /// Keep dirty indicators and tab titles current in existing SwiftUI views;
-    /// persisted fields notify the window separately.
-    private var tabObservations: [UUID: AnyCancellable] = [:]
 
     init(fallbackName: String, workspaceConfiguration: DockWorkspaceConfiguration) {
         self.fallbackName = fallbackName
@@ -593,24 +591,7 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
     /// batch is presented only after the previous one has fully dismissed.
     @discardableResult
     private func confirmCloseUnsaved(_ content: PaneContent, in window: NSWindow?) async -> Bool {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = String(
-            localized: "Do you want to save the changes you made to \(content.title)?", table: "Workspace",
-            comment: "Unsaved file or diff confirmation. The placeholder is a file name."
-        )
-        alert.informativeText = String(localized: "Your changes will be lost if you don't save them.", table: "Workspace")
-        alert.addButton(withTitle: String(localized: "Save", table: "Workspace"))
-        alert.addButton(withTitle: String(localized: "Don’t Save", table: "Workspace")).keyEquivalent = ""
-        let cancel = alert.addButton(withTitle: String(localized: "Cancel", table: "Workspace"))
-        cancel.keyEquivalent = "\u{1b}"
-
-        let response: NSApplication.ModalResponse
-        if let window {
-            response = await alert.beginSheetModal(for: window)
-        } else {
-            response = alert.runModal()
-        }
+        let response = await ProjectCloseConfirmation.present(title: content.title, in: window)
 
         switch response {
         case .alertFirstButtonReturn: // Save
@@ -627,10 +608,9 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         }
     }
 
-    /// Closes several pieces of content at once. Any unsaved files are
-    /// confirmed *first*, one prompt at a time; the remaining (clean) content
-    /// is only torn down once every prompt has been answered — so cancelling
-    /// out of a save prompt leaves the saved tabs open too.
+    /// Handles dirty tabs in order, closing each accepted tab immediately.
+    /// Clean tabs close after the prompts; Cancel stops the remaining prompts
+    /// without rolling back tabs already closed by Save or Don't Save.
     private func closeBatch(_ targets: [PaneContent]) {
         let dirtyContents = targets.filter(\.isDirty)
         let cleanContents = targets.filter { !$0.isDirty }
@@ -680,13 +660,9 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         register(PaneTab(content: content))
     }
 
-    /// Wires a tab's change observation and returns it — used for fresh tabs
-    /// and for tabs rebuilt during restore.
+    /// Wires semantic persistence changes for fresh and restored tabs.
     @discardableResult
     func register(_ tab: PaneTab) -> PaneTab {
-        tabObservations[tab.id] = tab.objectWillChange.sink { [weak self] _ in
-            self?.objectWillChange.send()
-        }
         let notify: () -> Void = { [weak self] in self?.onSnapshotChange?() }
         tab.onSnapshotChange = notify
         switch tab.content {
@@ -790,7 +766,6 @@ final class Project: nonisolated ObservableObject, nonisolated Identifiable {
         case .file(let file): file.onSnapshotChange = nil
         case .diff(let diff): diff.onSnapshotChange = nil
         }
-        tabObservations[tabID] = nil
         recentTabIDs.removeAll { $0 == tabID }
         tabs.remove(at: index)
         if case .session = tab.content { scheduleRemoteTabRebind() }

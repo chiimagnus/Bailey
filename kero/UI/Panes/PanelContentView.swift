@@ -2,7 +2,7 @@ import SwiftUI
 
 struct PanelContentView: View {
     private let themeChanges = Theme.changes
-    @ObservedObject var tab: PaneTab
+    let tab: PaneTab
     var isSelected: Bool
     var onFocused: () -> Void
     var onNewBrowserTab: (String?) -> Void

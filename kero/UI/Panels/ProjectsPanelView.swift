@@ -143,7 +143,7 @@ private struct ProjectFramePreferenceKey: PreferenceKey {
 }
 
 private struct SidebarProjectRow: View {
-    @ObservedObject var project: Project
+    let project: Project
     private let themeChanges = Theme.changes
     let index: Int
     let isSelected: Bool
