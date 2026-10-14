@@ -52,7 +52,7 @@ Git 及 hook 工具按该 PATH 解析，命令继续通过独立 argv 传参，�
 
 Branch Push 可选一个或多个远端，默认目标依次参考所选 Branch 的 `pushRemote` / `remote`、仓库 `remote.pushDefault`、`origin` 和首个远端。默认设置 upstream；模式为普通、`--force-with-lease` 或明确选择的 `--force`。依次推送，首个失败即停止并记录未执行目标；最后一次成功设置 upstream 的远端为最终追踪目标。非当前分支使用完整 Ref，不推送当前 HEAD 或同名 Tag。仓库没有配置任何 remote 时会显示原因并禁用 Push 确认，而不是点击后无响应。
 
-Branch「创建归档」在 macOS 原生保存面板选择 ZIP/TAR、文件名及位置，内容来自**确认时所选的 Git 对象**而非当前 HEAD。生成完成后才原子替换文件；失败不能损坏已有归档。本机使用 Git 的登录环境，SSH 在原机器生成临时文件后有界传输（最多 64 MiB），远端断线或清理失败明确报告残留路径。Remote Branch 也可按当前已知的远端跟踪 Ref 内容导出；Tag 的归档菜单仍属于后续任务。
+Branch、Remote Branch 与 Tag 的「创建归档」在 macOS 原生保存面板选择 ZIP/TAR、文件名及位置，内容来自**确认时所选的 Git 对象**而非当前 HEAD。生成完成后才原子替换文件；失败不能损坏已有归档。本机使用 Git 的登录环境，SSH 在原机器生成临时文件后有界传输（最多 64 MiB），远端断线或清理失败明确报告残留路径。Remote Branch 按当前已知的远端跟踪 Ref 内容导出。
 
 ### 历史文件操作
 
