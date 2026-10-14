@@ -614,7 +614,7 @@ final class GitStatusModelTests: XCTestCase {
         let target = try XCTUnwrap(model.recentCommits.first { $0.hash == selected })
         let expectedRepository = model.repoRoot
         model.createBranch(named: "history/first", at: selected,
-            checkout: false, replace: false, target: model.actionTarget())
+            checkout: false, replacing: nil, target: model.actionTarget())
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertNil(model.lastError)
         XCTAssertEqual(try git(["rev-parse", "refs/heads/history/first"]), selected)
@@ -625,7 +625,7 @@ final class GitStatusModelTests: XCTestCase {
         } == true)
 
         model.createTag(named: "v1-local", at: selected, type: .lightweight,
-                        message: "", replace: false, target: model.actionTarget())
+                        message: "", replacing: nil, target: model.actionTarget())
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertNil(model.lastError)
         XCTAssertEqual(try git(["rev-parse", "refs/tags/v1-local"]), selected)
@@ -634,7 +634,7 @@ final class GitStatusModelTests: XCTestCase {
         } == true)
 
         model.createBranch(named: "history/first", at: selected,
-            checkout: false, replace: false, target: model.actionTarget())
+            checkout: false, replacing: nil, target: model.actionTarget())
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertNotNil(model.lastError, "Duplicate branch must fail without force")
         XCTAssertEqual(try git(["rev-parse", "refs/heads/history/first"]), selected)
@@ -650,7 +650,7 @@ final class GitStatusModelTests: XCTestCase {
         model.sync(root: other.path)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         model.createTag(named: "should-not-exist", at: selected, type: .lightweight,
-                        message: "", replace: false, target: model.actionTarget())
+                        message: "", replacing: nil, target: model.actionTarget())
         XCTAssertNotNil(model.lastError)
         XCTAssertNotEqual(model.operation, before)
         XCTAssertNotEqual(otherGit(["show-ref", "--verify", "--quiet",

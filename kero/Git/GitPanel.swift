@@ -532,7 +532,7 @@ struct GitPanel: View {
         presentBranchCreate(at: nil, initialCheckout: true)
     }
 
-    private func presentBranchCreate(
+    func presentBranchCreate(
         at commit: GitStatusModel.RecentCommit?, initialName: String = "",
         initialCheckout: Bool
     ) {
@@ -557,10 +557,10 @@ struct GitPanel: View {
             guard response == .alertFirstButtonReturn, isCurrent() else { return }
             let name = dialog.name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             let checkout = dialog.checkout.state == .on
-            let run: @MainActor (Bool) -> Void = { replace in
+            let run: @MainActor () -> Void = {
                 performOperation(.branchMenu) {
                     model.createBranch(named: name, at: commit?.hash,
-                        checkout: checkout, replace: replace, target: target,
+                        checkout: checkout, replacing: nil, target: target,
                         prepare: {
                             if !checkout { return true }
                             return await project.saveBeforeGitAction(repository: target.repository,
@@ -572,7 +572,7 @@ struct GitPanel: View {
                         if success, checkout {
                             project.reloadAfterGitAction(repository: target.repository, scope: target.scope)
                         }
-                        if !success, !replace,
+                        if !success,
                            model.operation?.gitError?.localizedCaseInsensitiveContains("already exists") == true,
                            isCurrent() {
                             presentBranchReplacement(name: name, checkout: checkout,
@@ -586,7 +586,7 @@ struct GitPanel: View {
                 presentBranchReplacement(name: name, checkout: checkout,
                     commit: commit, target: target, window: window, isCurrent: isCurrent)
             } else {
-                run(false)
+                run()
             }
         }
     }
@@ -597,40 +597,44 @@ struct GitPanel: View {
         isCurrent: @escaping @MainActor () -> Bool
     ) {
         guard isCurrent(), let project else { return }
-        let alert = NSAlert()
-        alert.messageText = String(localized: "Branch already exists", table: "Git")
-        alert.informativeText = name
-        alert.addButton(withTitle: String(localized: "Replace Existing Branch", table: "Git"))
-        alert.addButton(withTitle: String(localized: "Choose Another Name", table: "Git"))
-        alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
-        alert.beginSheetModal(for: window) { answer in
-            guard isCurrent() else { return }
-            switch answer {
-            case .alertFirstButtonReturn:
-                performOperation(.branchMenu) {
-                    model.createBranch(named: name, at: commit?.hash,
-                        checkout: checkout, replace: true, target: target,
-                        prepare: {
-                            if !checkout { return true }
-                            return await project.saveBeforeGitAction(repository: target.repository,
-                                scope: target.scope, isCurrent: isCurrent)
-                        }, isCurrentTarget: {
-                            isCurrent() && (!checkout || project.canRunGitAction(
-                                repository: target.repository, scope: target.scope))
-                        }, completion: { success in
-                            if success, checkout {
-                                project.reloadAfterGitAction(repository: target.repository, scope: target.scope)
-                            }
-                        })
+        Task { @MainActor in
+            guard let oid = await model.referenceOID(named: "refs/heads/" + name, target: target),
+                  isCurrent() else { return }
+            let alert = NSAlert()
+            alert.messageText = String(localized: "Branch already exists", table: "Git")
+            alert.informativeText = name
+            alert.addButton(withTitle: String(localized: "Replace Existing Branch", table: "Git"))
+            alert.addButton(withTitle: String(localized: "Choose Another Name", table: "Git"))
+            alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+            alert.beginSheetModal(for: window) { answer in
+                guard isCurrent() else { return }
+                switch answer {
+                case .alertFirstButtonReturn:
+                    performOperation(.branchMenu) {
+                        model.createBranch(named: name, at: commit?.hash,
+                            checkout: checkout, replacing: oid, target: target,
+                            prepare: {
+                                if !checkout { return true }
+                                return await project.saveBeforeGitAction(repository: target.repository,
+                                    scope: target.scope, isCurrent: isCurrent)
+                            }, isCurrentTarget: {
+                                isCurrent() && (!checkout || project.canRunGitAction(
+                                    repository: target.repository, scope: target.scope))
+                            }, completion: { success in
+                                if success, checkout {
+                                    project.reloadAfterGitAction(repository: target.repository, scope: target.scope)
+                                }
+                            })
+                    }
+                case .alertSecondButtonReturn:
+                    presentBranchCreate(at: commit, initialName: name, initialCheckout: checkout)
+                default: break
                 }
-            case .alertSecondButtonReturn:
-                presentBranchCreate(at: commit, initialName: name, initialCheckout: checkout)
-            default: break
             }
         }
     }
 
-    private func presentTagCreate(
+    func presentTagCreate(
         at commit: GitStatusModel.RecentCommit, initialName: String = "",
         initialType: GitStatusModel.TagType = .annotated,
         initialMessage: String = "", initialRemote: String? = nil
@@ -659,10 +663,10 @@ struct GitPanel: View {
             let type = dialog.selectedType
             let message = dialog.message.string
             let remote = dialog.selectedCreateRemote
-            let submit: @MainActor (Bool) -> Void = { replace in
+            let submit: @MainActor () -> Void = {
                 performOperation(.branchMenu) {
                     model.createTag(named: name, at: commit.hash, type: type,
-                        message: message, replace: replace, target: target) { success in
+                        message: message, replacing: nil, target: target) { success in
                         guard isCurrent() else { return }
                         if success, let remote {
                             Task { @MainActor in
@@ -673,7 +677,7 @@ struct GitPanel: View {
                                     oid: oid, remotes: [remote], target: target,
                                     window: window, isCurrent: isCurrent)
                             }
-                        } else if !success, !replace,
+                        } else if !success,
                                   model.operation?.gitError?.localizedCaseInsensitiveContains(
                                     "already exists") == true {
                             presentTagReplacement(name: name, type: type,
@@ -688,7 +692,7 @@ struct GitPanel: View {
                     remote: remote, commit: commit, target: target,
                     window: window, isCurrent: isCurrent)
             } else {
-                submit(false)
+                submit()
             }
         }
     }
@@ -700,34 +704,38 @@ struct GitPanel: View {
         isCurrent: @escaping @MainActor () -> Bool
     ) {
         guard isCurrent() else { return }
-        let confirm = NSAlert()
-        confirm.messageText = String(localized: "Tag already exists", table: "Git")
-        confirm.informativeText = name
-        confirm.addButton(withTitle: String(localized: "Replace Existing Tag", table: "Git"))
-        confirm.addButton(withTitle: String(localized: "Choose Another Name", table: "Git"))
-        confirm.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
-        confirm.beginSheetModal(for: window) { answer in
-            guard isCurrent() else { return }
-            switch answer {
-            case .alertFirstButtonReturn:
-                performOperation(.branchMenu) {
-                    model.createTag(named: name, at: commit.hash, type: type,
-                        message: message, replace: true, target: target) { success in
-                        guard success, let remote, isCurrent() else { return }
-                        Task { @MainActor in
-                            guard let oid = await model.tagOID(
-                                named: name, pointingAt: commit.hash, target: target
-                            ), isCurrent() else { return }
-                            presentTagPushWarning(name: name, commitOID: commit.hash,
-                                oid: oid, remotes: [remote], target: target,
-                                window: window, isCurrent: isCurrent)
+        Task { @MainActor in
+            guard let previous = await model.referenceOID(named: "refs/tags/" + name, target: target),
+                  isCurrent() else { return }
+            let confirm = NSAlert()
+            confirm.messageText = String(localized: "Tag already exists", table: "Git")
+            confirm.informativeText = name
+            confirm.addButton(withTitle: String(localized: "Replace Existing Tag", table: "Git"))
+            confirm.addButton(withTitle: String(localized: "Choose Another Name", table: "Git"))
+            confirm.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+            confirm.beginSheetModal(for: window) { answer in
+                guard isCurrent() else { return }
+                switch answer {
+                case .alertFirstButtonReturn:
+                    performOperation(.branchMenu) {
+                        model.createTag(named: name, at: commit.hash, type: type,
+                            message: message, replacing: previous, target: target) { success in
+                            guard success, let remote, isCurrent() else { return }
+                            Task { @MainActor in
+                                guard let oid = await model.tagOID(
+                                    named: name, pointingAt: commit.hash, target: target
+                                ), isCurrent() else { return }
+                                presentTagPushWarning(name: name, commitOID: commit.hash,
+                                    oid: oid, remotes: [remote], target: target,
+                                    window: window, isCurrent: isCurrent)
+                            }
                         }
                     }
+                case .alertSecondButtonReturn:
+                    presentTagCreate(at: commit, initialName: name,
+                        initialType: type, initialMessage: message, initialRemote: remote)
+                default: break
                 }
-            case .alertSecondButtonReturn:
-                presentTagCreate(at: commit, initialName: name,
-                    initialType: type, initialMessage: message, initialRemote: remote)
-            default: break
             }
         }
     }

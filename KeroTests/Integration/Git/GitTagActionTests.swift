@@ -68,7 +68,7 @@ final class GitTagActionTests: XCTestCase {
         let second = try git(["rev-parse", "HEAD"])
         try await refresh()
         model.createTag(named: "v1.0", at: first, type: .annotated, message: "release notes\nsecond line",
-                        replace: false, target: model.actionTarget())
+                        replacing: nil, target: model.actionTarget())
         try await settle()
         XCTAssertNil(model.lastError)
         XCTAssertEqual(try git(["cat-file", "-t", "refs/tags/v1.0"]), "tag")
@@ -84,7 +84,7 @@ final class GitTagActionTests: XCTestCase {
         XCTAssertEqual(details.verification, .unsigned)
 
         model.createTag(named: "v1,patch", at: second, type: .lightweight, message: "ignored",
-                        replace: false, target: model.actionTarget())
+                        replacing: nil, target: model.actionTarget())
         try await settle()
         XCTAssertNil(model.lastError)
         XCTAssertEqual(try git(["cat-file", "-t", "refs/tags/v1,patch"]), "commit")
@@ -120,7 +120,7 @@ final class GitTagActionTests: XCTestCase {
         _ = try git(["tag", "coexisting", first])
         try await refresh()
         model.createTag(named: "v1", at: first, type: .annotated, message: "",
-                        replace: false, target: model.actionTarget())
+                        replacing: nil, target: model.actionTarget())
         try await settle()
         XCTAssertNil(model.lastError)
         let oldTag = try git(["rev-parse", "refs/tags/v1"])
@@ -128,13 +128,13 @@ final class GitTagActionTests: XCTestCase {
         let second = try git(["rev-parse", "HEAD"])
         try await refresh()
         model.createTag(named: "v1", at: second, type: .lightweight, message: "",
-                        replace: false, target: model.actionTarget())
+                        replacing: nil, target: model.actionTarget())
         try await settle()
         XCTAssertNotNil(model.lastError)
         XCTAssertEqual(try git(["rev-parse", "refs/tags/v1"]), oldTag)
 
         model.createTag(named: "v1", at: second, type: .lightweight, message: "",
-                        replace: true, target: model.actionTarget())
+                        replacing: oldTag, target: model.actionTarget())
         try await settle()
         XCTAssertNil(model.lastError)
         XCTAssertEqual(try git(["rev-parse", "refs/tags/v1"]), second)
@@ -202,7 +202,7 @@ final class GitTagActionTests: XCTestCase {
         let target = model.actionTarget()
         let pushed = expectation(description: "push the newly created annotated tag")
         model.createTag(named: "immediate", at: head, type: .annotated, message: "notes",
-                        replace: false, target: target) { success in
+                        replacing: nil, target: target) { success in
             XCTAssertTrue(success)
             Task { @MainActor in
                 let selected = await self.model.tagOID(
@@ -270,7 +270,7 @@ final class GitTagActionTests: XCTestCase {
         let second = try git(["rev-parse", "HEAD"])
         try await refresh()
         model.createTag(named: "v1", at: second, type: .annotated, message: "new",
-                        replace: false, target: model.actionTarget())
+                        replacing: nil, target: model.actionTarget())
         try await settle()
         XCTAssertNil(model.lastError)
         let unknown = await model.tagRemotesWithoutCommit(second, selected: ["rejecting", "unattempted"],

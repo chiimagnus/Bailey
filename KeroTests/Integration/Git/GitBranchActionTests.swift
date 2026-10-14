@@ -140,18 +140,18 @@ final class GitBranchActionTests: XCTestCase {
         let second = try git(["rev-parse", "HEAD"])
         try await refresh()
         let target = model.actionTarget()
-        model.createBranch(named: "feature/start", at: root, checkout: false, replace: false, target: target)
+        model.createBranch(named: "feature/start", at: root, checkout: false, replacing: nil, target: target)
         try await settle()
         XCTAssertNil(model.lastError)
         XCTAssertEqual(try git(["rev-parse", "refs/heads/feature/start"]), root)
         XCTAssertEqual(try git(["rev-parse", "HEAD"]), second)
 
-        model.createBranch(named: "feature/start", at: second, checkout: false, replace: false, target: model.actionTarget())
+        model.createBranch(named: "feature/start", at: second, checkout: false, replacing: nil, target: model.actionTarget())
         try await settle()
         XCTAssertNotNil(model.lastError)
         XCTAssertEqual(try git(["rev-parse", "refs/heads/feature/start"]), root)
 
-        model.createBranch(named: "feature/start", at: second, checkout: true, replace: true, target: model.actionTarget())
+        model.createBranch(named: "feature/start", at: second, checkout: true, replacing: root, target: model.actionTarget())
         try await settle()
         XCTAssertNil(model.lastError)
         XCTAssertEqual(try git(["rev-parse", "HEAD"]), second)
@@ -329,11 +329,11 @@ final class GitBranchActionTests: XCTestCase {
 
     func testBranchRefValidationAndOtherWorktreeCheckoutGuard() async throws {
         try await refresh()
-        model.createBranch(named: "-unsafe", at: nil, checkout: false, replace: false,
+        model.createBranch(named: "-unsafe", at: nil, checkout: false, replacing: nil,
                            target: model.actionTarget())
         try await settle()
         XCTAssertNotNil(model.lastError, "Invalid leading-option names must never be interpreted as flags")
-        model.createBranch(named: "topic/with.dots", at: nil, checkout: false, replace: false,
+        model.createBranch(named: "topic/with.dots", at: nil, checkout: false, replacing: nil,
                            target: model.actionTarget())
         try await settle()
         XCTAssertNil(model.lastError)
@@ -347,7 +347,7 @@ final class GitBranchActionTests: XCTestCase {
         }
         _ = try git(["worktree", "add", "-q", linked.path, "topic/with.dots"])
         try await refresh()
-        model.createBranch(named: "topic/with.dots", at: nil, checkout: false, replace: true,
+        model.createBranch(named: "topic/with.dots", at: nil, checkout: false, replacing: expected,
                            target: model.actionTarget())
         try await settle()
         XCTAssertNotNil(model.lastError, "A checked-out branch in another worktree must not be force-moved")

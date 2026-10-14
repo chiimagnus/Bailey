@@ -1224,6 +1224,23 @@ final class GitStatusModel {
             ?? (available.contains("origin") ? "origin" : available.first)
     }
 
+    func referenceOID(named reference: String, target: ActionTarget) async -> String? {
+        guard isCurrent(target, requiresStableHead: false) else { return nil }
+        let generation = contextGeneration
+        let result = await GitCommandExecution.run(
+            ["show-ref", "--verify", "--hash", reference], in: repoRoot, backend: backend
+        )
+        guard generation == contextGeneration,
+              isCurrent(target, requiresStableHead: false) else { return nil }
+        guard result.status == 0 else {
+            failImmediately(result.stderr.isEmpty
+                ? String(localized: "The selected Git reference changed. Reopen the menu and try again.", table: "Git")
+                : result.stderr)
+            return nil
+        }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func trackingRemotes(for name: String) -> [String] {
         remotes.filter { remote in
             let ref = refsByName["refs/remotes/\(remote)/\(name)"]
@@ -1232,7 +1249,7 @@ final class GitStatusModel {
     }
 
     func createBranch(
-        named name: String, at hash: String?, checkout: Bool, replace: Bool,
+        named name: String, at hash: String?, checkout: Bool, replacing expectedOID: String?,
         target: ActionTarget,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
@@ -1247,14 +1264,9 @@ final class GitStatusModel {
             failImmediately(String(localized: "Enter a branch name", table: "Git"), completion: completion)
             return
         }
-        let existing = refsByName["refs/heads/" + name]
-        guard !replace || existing != nil else {
-            failImmediately(String(localized: "The selected branch no longer exists.", table: "Git"), completion: completion)
-            return
-        }
         let start = hash ?? "HEAD"
         let commands: [[String]]
-        if replace {
+        if expectedOID != nil {
             commands = [["branch", "-f", "--", name, start]]
                 + (checkout ? [["switch", "--", name]] : [])
         } else if checkout {
@@ -1265,7 +1277,7 @@ final class GitStatusModel {
         perform(label: String(localized: "Create branch \(name)", table: "Git"),
                 commands: commands, requiresStableHead: checkout,
                 preflight: [["check-ref-format", "--branch", name]],
-                expectedRef: existing.map { (name: "refs/heads/" + name, oid: $0.oid) }.flatMap { replace ? $0 : nil },
+                expectedRef: expectedOID.map { (name: "refs/heads/" + name, oid: $0) },
                 prepare: prepare, isCurrentTarget: isCurrentTarget, completion: completion)
     }
 
@@ -1578,7 +1590,7 @@ final class GitStatusModel {
 
     func createTag(
         named name: String, at commitOID: String, type: TagType, message: String,
-        replace: Bool, target: ActionTarget,
+        replacing expectedOID: String?, target: ActionTarget,
         completion: (@MainActor (Bool) -> Void)? = nil
     ) {
         guard isCurrent(target, requiresStableHead: false),
@@ -1595,22 +1607,15 @@ final class GitStatusModel {
             return
         }
         let refName = "refs/tags/" + name
-        let previous = refsByName[refName]
-        if replace && previous == nil {
-            failImmediately(String(
-                localized: "The selected Git reference changed. Reopen the menu and try again.", table: "Git"
-            ), completion: completion)
-            return
-        }
         var args = ["tag"]
-        if replace { args.append("-f") }
+        if expectedOID != nil { args.append("-f") }
         if type == .annotated { args += ["-a", "-m", message] }
         args += ["--", name, commitOID]
         perform(
             label: String(localized: "Create tag \(name)", table: "Git"),
             commands: [args], requiresStableHead: false,
             preflight: [["check-ref-format", refName]],
-            expectedRef: replace ? previous.map { (name: refName, oid: $0.oid) } : nil,
+            expectedRef: expectedOID.map { (name: refName, oid: $0) },
             completion: completion
         )
     }
@@ -1677,15 +1682,13 @@ final class GitStatusModel {
         let peeled = await GitCommandExecution.run(
             ["rev-parse", "--verify", reference + "^{commit}"], in: repoRoot, backend: backend
         )
-        let object = await GitCommandExecution.run(
-            ["show-ref", "--verify", "--hash", reference], in: repoRoot, backend: backend
-        )
+        let object = await referenceOID(named: reference, target: target)
         guard generation == contextGeneration, isCurrent(target, requiresStableHead: false),
-              peeled.status == 0, object.status == 0,
+              peeled.status == 0, let object,
               peeled.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == commitOID else {
             return nil
         }
-        return object.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return object
     }
 
     /// Git Graph's warning is about *known local tracking refs*, not a query
