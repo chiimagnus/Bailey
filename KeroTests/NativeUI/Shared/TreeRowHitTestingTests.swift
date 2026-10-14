@@ -10,6 +10,68 @@ final class TreeRowHitTestingTests: XCTestCase {
         var accessory = 0
     }
 
+    @MainActor
+    private final class MenuTracker: NSObject {
+        var titles: [String] = []
+
+        @objc func beganTracking(_ notification: Notification) {
+            guard let menu = notification.object as? NSMenu else { return }
+            titles = menu.items.map(\.title)
+            DispatchQueue.main.async { menu.cancelTracking() }
+        }
+    }
+
+    func testTreeFileAndFolderNamesOpenNativeContextMenuWithoutPrimaryAction() {
+        let row = TreeDisplayModel.Row(name: "file.swift", path: "src/file.swift", isDirectory: false)
+        let folder = TreeDisplayModel.Row(name: "src", path: "src", isDirectory: true)
+        assertContextMenu { actions in
+            Text("Native menu control").frame(width: 240, height: 32).contentShape(Rectangle())
+                .contextMenu { Button("Shared tree context menu") { actions.accessory += 1 } }
+        }
+        assertContextMenu { actions in
+            TreeFileRow(row: row, scale: 1, open: { actions.primary += 1 }) { _ in EmptyView() }
+                .contextMenu { Button("Shared tree context menu") { actions.accessory += 1 } }
+        }
+        assertContextMenu { actions in
+            TreeFolderRow(row: folder, scale: 1) { actions.primary += 1 }
+                .contextMenu { Button("Shared tree context menu") { actions.accessory += 1 } }
+        }
+        assertContextMenu { actions in
+            ScrollView(.vertical) {
+                LazyVStack(spacing: 0) {
+                    TreeFileRow(row: row, scale: 1, open: { actions.primary += 1 }) { _ in EmptyView() }
+                        .contextMenu { Button("Shared tree context menu") { actions.accessory += 1 } }
+                }
+            }
+        }
+    }
+
+    private func assertContextMenu<Content: View>(@ViewBuilder content: (Actions) -> Content) {
+        let actions = Actions()
+        let marker = "Shared tree context menu"
+        let window = NSWindow(contentRect: NSRect(x: -1000, y: -1000, width: 240, height: 32),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: content(actions)
+            .frame(width: 240, height: 32))
+        window.orderFront(nil)
+        settle()
+        defer { window.close() }
+        let observer = MenuTracker()
+        NotificationCenter.default.addObserver(observer, selector: #selector(MenuTracker.beganTracking),
+            name: NSMenu.didBeginTrackingNotification, object: nil)
+        defer { NotificationCenter.default.removeObserver(observer) }
+        let event = NSEvent.mouseEvent(with: .rightMouseDown, location: NSPoint(x: 110, y: 16),
+            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+            clickCount: 1, pressure: 1)!
+        window.sendEvent(event)
+        settle()
+        XCTAssertTrue(observer.titles.contains(marker), "Right-clicking the shared name must open its native menu")
+        XCTAssertEqual(actions.primary, 0)
+        XCTAssertEqual(actions.accessory, 0)
+    }
+
     private func settle() {
         let deadline = Date().addingTimeInterval(0.08)
         while Date() < deadline {

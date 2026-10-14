@@ -79,7 +79,7 @@ open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Kero.app" --args --isola
 
 **普通设置仍然共享。** 隔离实例中不得直接改写用户设置；确需设置测试时使用独立 Home，并核实真正的配置、UserDefaults 与数据写入位置。临时文件、Git 仓库和受控后端不得指向正式项目。
 
-真实 SSH 只使用专用且获准的测试 master；不借用用户连接或结束其后台任务。P4 的实际 Windows SSH 交互式 Rebase 测试需要**明确指定主机**，否则标准 XCTest 会报告环境跳过。当前已获授权的 `windows` 主机完整执行（包含固定与自动跟随 SSH 项目）的命令是：
+真实 SSH 只使用专用且获准的测试 master；不借用用户连接或结束其后台任务。P4 的实际 Windows SSH 测试需要**明确指定主机**，否则标准 XCTest 会报告环境跳过。`GitInteractiveRebaseTests` 检查固定与自动跟随项目的真实 PTY；`GitWorkspaceSSHTests` 检查专属远端临时仓库的 Push/Delete、TAR/ZIP 二进制内容、历史文件 index/工作区复位、Stash、Clean 和普通 FileTab Ignore。这些不是完整 App 的菜单 E2E。当前已获授权的 `windows` 主机完整执行命令是：
 
 ```sh
 KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test
