@@ -1,5 +1,5 @@
 version = 1
-current_task_id = ""
+current_task_id = "P4-T6"
 
 [[tasks]]
 id = "P1-T1"
@@ -69,31 +69,31 @@ note = "make test 140（1 跳过）; windows pinned/automatic SSH 实测 44.278s
 [[tasks]]
 id = "P4-T3"
 title = "当前与其他本地分支管理菜单"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t3"
-commit = ""
-note = ""
+commit = "c15d72c"
+note = "完整 make test 155 项（1 SSH 专用用例依条件跳过）、Branch Git 集成 12/12 与 NativeUI 弹窗 3/3；make build/严格验签、整包安装 PASS；真实 SSH Archive/完整右键 E2E 留 T9"
 
 [[tasks]]
 id = "P4-T4"
 title = "远端分支 Checkout、Fetch、Pull 与删除"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t4"
-commit = ""
-note = ""
+commit = "9e25f51"
+note = "169/169 XCTest, zero skipped, windows real SSH pinned/automatic pass; make build and codesign pass; /Applications/Kero.app installed without restart; T9 still needs real Remote Branch full UI/SSH E2E; related test lifecycle cleanup a6f28be"
 
 [[tasks]]
 id = "P4-T5"
 title = "Tag 注释与本地及远端管理"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t5"
-commit = ""
-note = ""
+commit = "11d9e33"
+note = "真实 Windows SSH 参与的 make test 179/179、0 skip；Tag 集成 7/7、原生 3/3；make build 签名与整包安装通过，PID 不重启；P4-T9 再做全用户路径 E2E"
 
 [[tasks]]
 id = "P4-T6"
 title = "历史文件修订、比较与打开菜单"
-status = "pending"
+status = "in_progress"
 plan = "plan-p4.md#p4-t6"
 commit = ""
 note = ""
