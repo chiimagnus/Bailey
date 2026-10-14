@@ -2177,6 +2177,26 @@
         }
       }
     },
+    "Yes, Fetch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是，获取"
+          }
+        }
+      }
+    },
+    "Yes, Pull" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是，拉取"
+          }
+        }
+      }
+    },
     "Fetch into Local Branch" : {
       "localizations" : {
         "zh-Hans" : {

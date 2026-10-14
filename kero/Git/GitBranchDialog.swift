@@ -56,11 +56,11 @@ final class GitBranchDialog {
             alert.addButton(withTitle: String(localized: "Checkout Branch", table: "Git"))
         case .remoteFetch:
             stack.addArrangedSubview(forceFetch)
-            alert.addButton(withTitle: String(localized: "Fetch into Local Branch", table: "Git"))
+            alert.addButton(withTitle: String(localized: "Yes, Fetch", table: "Git"))
         case .remotePull:
             stack.addArrangedSubview(noFastForward)
             stack.addArrangedSubview(squash)
-            alert.addButton(withTitle: String(localized: "Pull into Current Branch", table: "Git"))
+            alert.addButton(withTitle: String(localized: "Yes, Pull", table: "Git"))
         case .delete(let remotes):
             stack.addArrangedSubview(forceDelete)
             if !remotes.isEmpty {

@@ -37,7 +37,7 @@ final class GitBranchDialogTests: XCTestCase {
             title: "Fetch into Local Branch", detail: "origin/topic/nested")
         XCTAssertEqual(fetch.forceFetch.state, .off)
         XCTAssertEqual(fetch.alert.buttons[0].title,
-                       String(localized: "Fetch into Local Branch", table: "Git"))
+                       String(localized: "Yes, Fetch", table: "Git"))
 
         let pull = GitBranchDialog(kind: .remotePull,
             title: "Pull into Current Branch", detail: "origin/topic/nested")
@@ -45,7 +45,7 @@ final class GitBranchDialogTests: XCTestCase {
                        "Fast-forward should be allowed by default")
         XCTAssertEqual(pull.squash.state, .off)
         XCTAssertEqual(pull.alert.buttons[0].title,
-                       String(localized: "Pull into Current Branch", table: "Git"))
+                       String(localized: "Yes, Pull", table: "Git"))
         XCTAssertEqual(pull.alert.buttons[1].title,
                        String(localized: "Cancel", table: "Sidebar"))
     }
