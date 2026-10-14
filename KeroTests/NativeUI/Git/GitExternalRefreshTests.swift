@@ -115,14 +115,14 @@ final class GitExternalRefreshTests: XCTestCase {
 
         let window = NSWindow(
             contentRect: NSRect(x: -1200, y: -1200, width: 460, height: 740),
-            styleMask: [.borderless], backing: .buffered, defer: false
+            styleMask: [.titled], backing: .buffered, defer: false
         )
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(
             rootView: ToolPanelView(manager: manager, git: model, panel: .git)
                 .frame(width: 460, height: 740)
         )
-        window.makeKeyAndOrderFront(nil)
+        window.orderFront(nil)
         defer { window.close() }
         try await Task.sleep(for: .milliseconds(350))
         XCTAssertTrue(window.isVisible)
@@ -154,7 +154,16 @@ final class GitExternalRefreshTests: XCTestCase {
         let newHead = git(["rev-parse", "HEAD"])
         let historyStart = Date()
         XCTAssertNotEqual(oldHead, newHead)
-        try await wait(seconds: 6) { model.recentCommits.first?.hash == newHead }
+        do {
+            try await wait(seconds: 6) { model.recentCommits.first?.hash == newHead }
+        } catch {
+            print("Git refresh diagnostic: expected HEAD=\(newHead) actual HEAD=\(model.headOID ?? "nil") "
+                + "recent=\(model.recentCommits.first?.hash ?? "nil") "
+                + "refreshing=\(model.isRefreshing) repo=\(model.isRepo) "
+                + "scope=\(model.currentScope) statusError=\(model.statusError ?? "nil") "
+                + "NSApp.isActive=\(NSApp.isActive)")
+            throw error
+        }
         let historyLatency = Date().timeIntervalSince(historyStart)
         print("Git external commit refresh latency: \(historyLatency) seconds")
         XCTAssertLessThan(historyLatency, 5, "External commits must reach Recent Commits promptly")
