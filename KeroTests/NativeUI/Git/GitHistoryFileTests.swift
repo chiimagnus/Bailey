@@ -201,14 +201,93 @@ final class GitHistoryFileTests: XCTestCase {
         let captured = await model.historicalFileState("target.txt", target: model.actionTarget())
         let state = try XCTUnwrap(captured)
         try Data("user changed after opening dialog\n".utf8).write(to: path)
+        var prepared = false
         model.resetHistoricalFile("target.txt", at: commit,
-                                  target: model.actionTarget(), expectedFileState: state)
+                                  target: model.actionTarget(), expectedFileState: state,
+                                  prepare: { prepared = true; return true })
         try await wait { !model.isBusy && model.operation?.finishedAt != nil }
         XCTAssertNotNil(model.lastError)
+        XCTAssertFalse(prepared, "A stale confirmation must not even save pending editor text")
         XCTAssertEqual(try String(contentsOf: path, encoding: .utf8),
                        "user changed after opening dialog\n")
         XCTAssertEqual(try git(["rev-parse", "HEAD"], in: root),
                        try git(["rev-parse", "main"], in: root))
+    }
+
+    func testResetFileSavesDirtyTabThenOverwritesIndexDiskAndReloadsSameTab() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("note.txt")
+        try Data("historical\n".utf8).write(to: path)
+        _ = try git(["add", "."], in: root)
+        _ = try git(["commit", "-qm", "original"], in: root)
+        let revision = try git(["rev-parse", "HEAD"], in: root)
+        try Data("current\n".utf8).write(to: path)
+        _ = try git(["commit", "-qam", "updated"], in: root)
+        let head = try git(["rev-parse", "HEAD"], in: root)
+        let project = Project(fallbackName: "Reset dirty tab", workspaceConfiguration: .standard)
+        project.customDirectory = root.path
+        project.openFile(path.path)
+        guard case .file(let file) = project.selectedTab?.content else { return XCTFail("FileTab missing") }
+        try await file.waitForText()
+        let tabID = project.selectedTabID
+        file.autoSaveSuspendedForClose = true
+        file.appendText("unsaved\n")
+        XCTAssertTrue(file.isDirty)
+        let model = GitStatusModel()
+        model.sync(root: root.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let target = model.actionTarget()
+        let commit = try XCTUnwrap(model.recentCommits.first { $0.hash == revision })
+        let captured = await model.historicalFileState("note.txt", target: target)
+        let state = try XCTUnwrap(captured)
+        model.resetHistoricalFile("note.txt", at: commit, target: target, expectedFileState: state,
+            prepare: { false })
+        try await wait { !model.isBusy && model.operation?.finishedAt != nil }
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(file.text, "current\nunsaved\n")
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "current\n")
+        model.resetHistoricalFile("note.txt", at: commit, target: target, expectedFileState: state,
+            prepare: { await project.saveBeforeGitAction(repository: root.path, scope: "local", isCurrent: { true }) },
+            isCurrentTarget: { project.canRunGitAction(repository: root.path, scope: "local") },
+            completion: { success in
+                if success { project.reloadAfterGitAction(repository: root.path, scope: "local") }
+            })
+        try await wait { !model.isBusy && model.operation?.finishedAt != nil }
+        XCTAssertNil(model.lastError, model.lastError ?? "")
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "historical\n")
+        XCTAssertEqual(try git(["show", ":note.txt"], in: root), "historical")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"], in: root), head)
+        try await wait { file.text == "historical\n" }
+        XCTAssertEqual(project.selectedTabID, tabID)
+        XCTAssertFalse(file.isDirty)
+    }
+
+    func testResetFileRejectsIndexChangeDuringPreparation() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("note.txt")
+        try Data("historical\n".utf8).write(to: path)
+        _ = try git(["add", "."], in: root)
+        _ = try git(["commit", "-qm", "original"], in: root)
+        let model = GitStatusModel()
+        model.sync(root: root.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let commit = try XCTUnwrap(model.recentCommits.first)
+        let captured = await model.historicalFileState("note.txt", target: model.actionTarget())
+        let state = try XCTUnwrap(captured)
+        model.resetHistoricalFile("note.txt", at: commit, target: model.actionTarget(),
+            expectedFileState: state, prepare: {
+                do {
+                    try Data("external staged update\n".utf8).write(to: path)
+                    _ = try self.git(["add", "note.txt"], in: root)
+                    return true
+                } catch { return false }
+            })
+        try await wait { !model.isBusy && model.operation?.finishedAt != nil }
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try git(["show", ":note.txt"], in: root), "external staged update")
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "external staged update\n")
     }
 
     func testProjectRestoresDistinctNativeTabsForHistoricalDiffModes() async throws {

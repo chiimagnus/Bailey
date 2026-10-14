@@ -1983,7 +1983,28 @@ final class GitStatusModel {
                     && self.runningOperationID == operationID
                     && (isCurrentTarget?() ?? true)
             }
-            let prepared = await prepare?() ?? true
+            let fileUnchanged: Bool
+            if let expectedFileState {
+                fileUnchanged = await Self.readHistoricalFileState(
+                    path: expectedFileState.path, root: dir, backend: backend
+                ) == expectedFileState.state
+            } else {
+                fileUnchanged = true
+            }
+            let prepared: Bool
+            if fileUnchanged {
+                prepared = await prepare?() ?? true
+            } else {
+                prepared = false
+            }
+            let preparedFileState: FileState?
+            if let expectedFileState, prepared {
+                preparedFileState = await Self.readHistoricalFileState(
+                    path: expectedFileState.path, root: dir, backend: backend
+                )
+            } else {
+                preparedFileState = nil
+            }
             let batch = await Task.detached(priority: .userInitiated) {
                 var transcript: [String] = []
                 var failureCode: Int32?
@@ -1991,6 +2012,12 @@ final class GitStatusModel {
                 var failedCommand: [String]?
                 var gitError: String?
                 let staleMessage = String(localized: "The Git action target changed or edits could not be saved. No further Git commands were run.", table: "Git")
+                let fileChangedMessage = String(localized:
+                    "The selected file changed since the confirmation opened. Review it and try again.", table: "Git")
+                guard fileUnchanged else {
+                    return CommandBatchResult(output: fileChangedMessage, failureCode: -1,
+                                              failureMessage: fileChangedMessage)
+                }
                 guard prepared, await isCurrent() else {
                     return CommandBatchResult(output: staleMessage, failureCode: -1, failureMessage: staleMessage)
                 }
@@ -2037,17 +2064,6 @@ final class GitStatusModel {
                         return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
                     }
                 }
-                if let expectedFileState {
-                    guard await isCurrent(),
-                          await Self.readHistoricalFileState(
-                            path: expectedFileState.path, root: dir, backend: backend
-                          ) == expectedFileState.state else {
-                        let message = String(localized:
-                            "The selected file changed since the confirmation opened. Review it and try again.", table: "Git")
-                        return CommandBatchResult(output: message, failureCode: -1,
-                                                  failureMessage: message)
-                    }
-                }
                 for args in preflight {
                     guard await isCurrent() else {
                         return CommandBatchResult(output: staleMessage, failureCode: -1, failureMessage: staleMessage)
@@ -2079,6 +2095,17 @@ final class GitStatusModel {
                           actual.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == expectedStash.oid else {
                         let message = String(localized: "The selected stash changed. Reopen the menu and select it again.", table: "Git")
                         return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
+                    }
+                }
+                if let expectedFileState {
+                    guard let preparedFileState,
+                          preparedFileState.indexOID == expectedFileState.state.indexOID,
+                          await isCurrent(),
+                          await Self.readHistoricalFileState(
+                            path: expectedFileState.path, root: dir, backend: backend
+                          ) == preparedFileState else {
+                        return CommandBatchResult(output: fileChangedMessage, failureCode: -1,
+                                                  failureMessage: fileChangedMessage)
                     }
                 }
                 for (index, args) in commands.enumerated() {
