@@ -20,31 +20,32 @@ note = "图谱 4/4、原生界面 2/2；视觉清理补充 10a7486；完整测�
 [[tasks]]
 id = "P2-T1"
 title = "按 Commit、本地分支、Tag 归属原生 Context Menu"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = ""
-note = ""
+commit = "dddc9b0"
+note = "原生 Tag 点击定位 Red→Green；Commit/Ref/文件菜单及 +N 分别路由；make test 102/102，创建操作在 P2-T2 启用"
 
 [[tasks]]
 id = "P2-T2"
 title = "在指定 Commit 创建本地分支与 Tag"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = ""
-note = ""
+commit = "8734bae"
+note = "GitStatusModel 8/8（临时 refs HEAD 不变、重复名、切仓库拒绝）；原生菜单 2/2；make test 103/103，Debug 构建验签通过"
 
 [[tasks]]
 id = "P3-T1"
 title = "复现并定位 Git 面板刷新迟滞"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t1"
 commit = ""
-note = ""
+no_commit_reason = "诊断任务仅产生本地 evidence-p3.md，不修改生产代码；失败测试将作为 P3-T2 红绿回归提交"
+note = "真实 Git 临时库 + 原生 ToolPanelView 两次外部变更，分别 4.6s 后 Red；手动 GitStatusModel.refresh 后两次都 Green；/tmp/kero-p3-external-red.log，根因无事件触发"
 
 [[tasks]]
 id = "P3-T2"
 title = "最小刷新修复与原生端到端验收"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t2"
-commit = ""
-note = ""
+commit = "1d2be55"
+note = "Git 原生面板外部编辑/暂存/提交 Red→Green，2.02/1.98/1.78秒；后台/隐藏停止、切仓库隔离、真实分叉+Ref 图验收；make test 104/104，make build 签名 PASS；真实 SSH / 独立进程右键 E2E 未测"

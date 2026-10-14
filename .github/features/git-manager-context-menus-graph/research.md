@@ -57,4 +57,4 @@
 ## 本轮交付边界
 
 - 当前 `design.html` 是用户已更新并提交的 **V4 Recent Commits 参考原型**。过去 HTML 的浏览器测试不等于这次同步计划或正式 SwiftUI 的实机验收；使用它时需独立核验所修改的版本。
-- **尚未**实现新版 SwiftUI Recent Commits、Ref 创建或刷新修复。后续按 `plan-p1.md`—`plan-p3.md` 实施，在本机隔离 Debug / 受控本机或 SSH fixture 验收；不能复用正在运行的正式 App 进行写操作。
+- 本调研记录实施前的缺口。P1～P3 现已实施且完成独立逐提交审计，现行契约见 [Git 维护文档](../../../docs/features/git.md)，验收证据按阶段保留在 `audit-p1.md`～`audit-p3.md`。正式 App 已按后续明确授权替换；未使用用户真实仓库执行测试写操作。

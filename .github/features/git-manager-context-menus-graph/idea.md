@@ -32,7 +32,7 @@
 - 不实现 Git Graph 全套 Cherry-pick/Revert/Drop/Reset/Merge/Rebase、分支管理页、PR 创建、Code Review 或任意仓库 Git 历史搜索。
 - 不创建 Remote Branch 独立菜单、Tag Push/Delete 或 Stash 列表；不复制已有 Stage/Unstage/Discard/Fetch/Pull/Push/Sync/More Menu，也不新增线性/分叉模式切换控件。
 - 不切换 Electron/Tauri，不替换 Files/Git 共用树，不引入新第三方图谱引擎。
-- **本轮授权仅为设计稿与 feature plan；未获授权前不修改生产 SwiftUI/Git 行为、不操作真实 Git 历史、不发布。**
+- **最初立项阶段**只授权设计稿与计划；后续已单独授权并执行 P1～P3，当前生产行为以 [Git 维护文档](../../../docs/features/git.md) 为准。实际 Git 写操作只在临时仓库验收，没有发布或推送。
 
 ## 验收
 

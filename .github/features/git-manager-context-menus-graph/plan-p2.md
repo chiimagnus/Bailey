@@ -18,7 +18,7 @@
 **现有能力直接使用：** Commit 复制 SHA / Subject、标题点击展开、历史文件 Diff/复制路径；本地 `switchBranch(to:)`；顶部 `branchMenu`、Push/Fetch/More Menu 与 Git Entry 右键全部保留，不复制出另一套。
 
 **实施：**
-1. Commit 行右键提供「展开/收起历史文件」「在此创建本地分支」「在此创建 Tag」「复制 Commit SHA」「复制提交标题」；左键标题仍展开，单击短 SHA 复制完整值；历史文件继续有独立的 Diff / 复制相对路径。**不引入** Cherry-pick、Revert、Drop、Reset、Merge 或 Rebase。
+1. Commit 行先接入「展开/收起历史文件」「复制 Commit SHA」「复制提交标题」；左键标题仍展开，单击短 SHA 复制完整值；历史文件继续有独立的 Diff / 复制相对路径。选定 Commit 的两个创建项由 P2-T2 在真实写操作就绪时一并启用，不留下无效菜单。**不引入** Cherry-pick、Revert、Drop、Reset、Merge 或 Rebase。
 2. 当前本地分支 Badge 的菜单**只复制分支名**；其他本地分支 Badge 只提供「切换到此分支」「复制分支名」（调用已有 `switchBranch(to:)`）。`origin/main` 等远端跟踪引用只显示胶囊，不弹出管理菜单，也不把它当成本地可切换分支。
 3. Tag Badge 只提供「定位该 Tag 的 Commit」「复制 Tag 名称」，不加 Push/Delete；Badge 右键不落入 Commit 菜单。若过窄导致部分 Ref 折叠，使用 P1-T2 的 `+N` 可访问入口仍能进入各自菜单。所有命中维持 Kero 原有点击/焦点习惯。
 

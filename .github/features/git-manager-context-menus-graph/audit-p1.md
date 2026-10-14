@@ -29,6 +29,32 @@
 
 ## 发现项
 
+## 发现 F-03
+
+- 任务：`P1-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`kero/Git/CommitGraphLayout.swift:41`
+- 摘要：`分页窗口未包含当前 HEAD 时错误将另一分支绘成蓝色主干`
+- 风险：`多分支仓库中当前分支较旧时，Git --topo-order 前 31 条全来自其他分支，蓝色主干表示错误分支，与图谱真实来源要求冲突`
+- 预期修复：`只在当前 HEAD 的实际提交已加载时标记蓝色；未加载时以普通侧分支颜色显示可见链，不虚构当前分支`
+- 验证：`临时真实多分支分页事实复现 + CommitGraphLayoutTests 先 Red 后 Green + make test`
+- 解决证据：`1778efc: 38 条真实提交证实首次 31 条可能不含 HEAD；CommitGraphLayoutTests 先 Red 后 Green，全量 make test 106/106 和 make build 验签通过`
+
+
+## 发现 F-02
+
+- 任务：`P1-T1`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Git/GitStatusModel.swift:1909`
+- 摘要：`Git 合法含逗号的本地分支和 Tag 被错误分段，实际引用名丢失`
+- 风险：`Ref Badge 和右键复制/切换操作可能使用不存在或错误的引用名，违背 P1-T1 保留真实引用名称`
+- 预期修复：`复用单条 git log 查询，将 pretty decoration 的分隔符换为 Git ref 名禁止使用的 ASCII 组分隔符，并按该字符解析；不增加查询`
+- 验证：`新增 GitStatusModelTests 中真实逗号引用测试先 Red 后 Green，make test，make build`
+- 解决证据：`55390d3: 实际 Git 分支 feature,hotfix/Tag v1,hotfix 的逗号分割断言 Red→Green；全量 make test 106/106、make build 验签通过`
+
+
 ## 发现 F-01
 
 - 任务：`P1-T1`
@@ -78,3 +104,10 @@
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
 
+## 2026-10-14 独立逐提交复审
+
+本次从 `todo.toml`、`plan-p1.md` 和历史 diff 重新核对，不采用旧审计的结论作证据。
+
+- **P1-T1／`2b336ba`**：核对同一条 Git 日志查询在本机与 SSH 批量通道中共用，`%P` 的全部父提交通过 `RecentCommit.parentHashes` 送往 `CommitGraphLayout`，历史 Diff 使用 `first`；真实合并文件空列表的既有修复 **`ea41b63`** 核对为 `--diff-merges=first-parent`，不增加额外查询。本次新复现带逗号的合法 Branch/Tag 被 `%D` 的逗号分割损坏，**F-02 → `55390d3`** 改为 Git 引用名禁用的控制字符分隔，测试 Red→Green。
+- **P1-T2／`0c42e3a`**：核对 `GitPanel → RecentCommitsView → CommitGraphLayout → CommitGraphRails(Canvas)` 的生产链、真实父边／双行／多 Ref／共享文件树；**`10a7486`** 将演示截图输出移出正式测试并修正窄栏视觉；本次真实 38 提交、前 31 条不含 HEAD 的分页复现蓝色主干错误，**F-03 → `1778efc`** 不再将其它分支伪装成 HEAD，Unit Red→Green。
+- **覆盖边界**：`CommitGraphLayoutTests` 覆盖线性、合并、多车道、分页；`GitStatusModelTests` 覆盖真实 Git 合并、首父文件差异、带逗号的 Branch/Tag。Windows 真实 SSH 的图谱视觉和逐项 VoiceOver 尚未验收；不将代码同源或模拟 SSH 计作真机结果。最终 `make test` **106/106**、`make build` 和严格验签通过，F-01/F-02/F-03 已全部关闭；独立源码审计 Gate：**Go（本机已验证范围）**。
