@@ -26,9 +26,9 @@
 ## 默认设计与交互
 
 - 左键整行展开/收起提交文件，短 SHA 独立复制；Commit、当前/其他本地分支、远端 Ref、Tag、Stash 条目、文件与分组拥有各自对应的右键动作。`+N` 不漏掉隐藏 Ref 的管理能力；不恢复右键「展开/收起提交文件」冗余项。
-- 冲突、进行中的操作及脏工作区决定菜单禁用/恢复动作；没有可用目标或 remote 时说明原因，不展示假的可点击项。Git Graph 的 Drop 只对**拓扑允许且确实能安全改写的当前本地线性历史**开放，合并/共享引用等情形明示不可用，不能用 Reset/Revert 冒充 Drop。
+- 没有可用对象、正在执行不兼容操作或可能丢失未保存编辑时明确拒绝；不把所有 dirty Git 状态都禁用，Git 能自行拒绝的前提沿用真实错误。Drop 遵循上游的父节点、Merge、多子分叉与当前 HEAD 路径条件；单个 Tag/同节点其它 Ref 不额外禁用，detached HEAD 下条件成立也不人为排除。尊重用户 Git 配置，不用 Reset/Revert 冒充 Drop。
 - Checkout 到历史提交须提示 detached HEAD；Commit Reset 默认 Mixed，Hard 只能由用户明确选择；Branch Push 默认 Normal，可按 Git Graph 弹窗明确改为 Force With Lease/Force，Force Delete/Force Fetch/替换同名 Ref 同理明确选择。任何模式都不得悄悄 Force、推送全部 Tag 或发布 Release。
-- 操作从菜单打开到真正发命令之间可能切换仓库或改变 HEAD/ref；对话框只捕获当前目标，最终执行时重新核对实际目标与工作区。拒绝过期命令，而不是退回本机或继续对旧仓库操作。
+- 对话框捕获发起窗口、Project、机器与仓库，确认及异步预检后核对；写当前 HEAD、本地 Ref、Stash selector 和文件覆写按其真实作用对象保护。远端删除按确认的 remote/完整 Ref 名执行原生 Git 删除，不额外强制 expected-OID lease 或网络二次确认；Force With Lease 仍是用户明确选择的独立 Push 模式。不可变 SHA 的只读/创建动作不因无关 HEAD 变化被禁用，远端失败不能回退写本机。
 - 使用已有 SwiftUI `.contextMenu`、原生输入/确认和当前文件树/Diff；不引入 WebView、HTML 菜单、另一套 Git 状态机或无关的页面重设计。
 
 ## 非目标
@@ -36,13 +36,13 @@
 - 不照搬 Git Graph 的主题、列可见性、Branches Dropdown、Issue Linking、PR/Code Review Provider、Mark Reviewed、外部 Difftool 或无限制历史搜索；Kero 当前没有这些专属对象和服务。不额外创造 Git Graph Commit 右键不存在的通用两 Ref / Merge Base 比较器。VSCodium 的 **Ignore** 确实属于工作区/未跟踪文件及目录菜单，必须复用 Kero 现有的 `.gitignore` FileTab 编辑/保存路径实现，**不另建** `.gitignore` 专用编辑器或绕过未保存缓冲。
 - 不**自动** Force Push/Force Delete、不自动创建 GitHub Release；用户在 Git Graph 对应弹窗里**明确选定**的 Force/替换操作不是非目标。交互式 Rebase 若被选择，应在 Kero 原生新终端执行，不能在后台假装支持或挪用用户正在工作的终端。
 - 不重做已有 Fetch/Pull/Push、Stage/Unstage/Discard、原生文件树或提交框；按对象复用已有动作，可用的缺口必须补齐。不改变既有图谱风格或增加线性/分叉模式切换。
-- **本次授权只有 `$writing-plan`**：仅更新这份既有 Feature 的需求、研究、阶段计划及任务登记；不修改 Kero 生产代码、不执行 Git 写操作测试、不替换 App，也不借此关闭 Issue。
+- **当前授权为执行 P4**：逐任务实现、回归、清理被替代代码、同步文档与原子提交；不进入范围外阶段、不推送或关闭 Issue。获准使用已有 Windows SSH 主机，但测试连接与临时仓库独立，不借用工作 master。通过验证后整包安装、不重启用户 App；旧路径在对应 task 接通并验证后删除。
 
 ## 验收
 
 1. P1～P3 已有图谱、Refs、文件树、提交编辑、刷新与键鼠交互全部不回归；不把 HTML 的模拟菜单当作产品测试。
 2. **逐对象逐操作**对照 [P4 菜单矩阵](plan-p4.md#菜单矩阵与边界)，每个应有菜单项必须真实可见/可用或有明确的合法禁用原因；折叠的 `+N` 与直接显示的引用行为一致。
 3. 每个适用的 Git Graph 弹窗都与 [P4 对照矩阵](plan-p4.md#原生弹窗行为合同)逐项一致：默认值、选项、确认/取消按钮、重名后的两个后续按钮、失败后的再选择，不能只有同名按钮。在**临时真实 Git 仓库**证明对应 HEAD/ref、index、工作区、reflog、远端 bare repo 与存档实际内容；不是只断言命令构造或 View 回调。
-4. 验证取消/拒绝/旧目标不写入；用户明确选定的 Hard/Force/文件复位/永久 Clean 只影响弹窗说明的对象，其他用户编辑受保护。合并、Cherry-pick、Revert、Rebase 发生冲突后可恢复；跨项目、跨机器、弹窗期间 HEAD/ref 变化不允许误操作。
+4. 验证取消/拒绝/旧目标不写入；Hard/Force/文件复位/永久 Clean 作用符合说明，包含 Hard 可删除阻挡 tracked 目标的 untracked 路径。未保存和在途保存受保护且失败不关 Tab；冲突保留真实 Git 状态，可从终端恢复。多远端 Delete/Push 的范围、停止顺序和部分结果遵循上游，Tag 已创建后取消 Push 不撤销本地 Tag。
 5. 对照原生窗口验证对象命中、禁用、确认对话框、菜单键盘/VoiceOver；独立 App E2E（本机与获准的真实 Windows SSH）分别记录，不用 NativeUI 或假 SSH 冒充完整验收。全部代码通过 `make test`、`make build` 与严格签名。
 6. 仅计划阶段：`idea.md` 与 `plan-p4.md`、`todo.toml` 任务 ID/锚点一致，所有任务都有正确源文件、验证、文档同步和提交边界；P1～P3 已完成记录不变。Issue #2 的 SSH 刷新缺口必须另行验收，不能仅凭 P4 完成关闭 Issue。

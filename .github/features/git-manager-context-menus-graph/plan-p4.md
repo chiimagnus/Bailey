@@ -1,19 +1,43 @@
 # P4：按 Git Graph 真实行为补齐 Git Manager 右键菜单
 
 **关联：** [需求](idea.md) · [当前源码和上游证据](research.md) · [Issue #2](https://github.com/chiimagnus/kero/issues/2)。
-**上游基线：** [Git Graph `d7f43f4`](https://github.com/mhutchie/vscode-git-graph/tree/d7f43f429a9e024e896bac9fc65fdc530935c812)（develop，2023-07；最新 GitHub Release 是 v1.30.0）。菜单、弹窗、默认值依次查 `web/main.ts`、`web/dialog.ts`、`src/config.ts`，最终 Git argv 查 `src/dataSource.ts`；不能只凭 Wiki 或截图猜操作语义。
+**上游基线：** [Git Graph 固定提交 `d7f43f4`](https://github.com/mhutchie/vscode-git-graph/tree/d7f43f429a9e024e896bac9fc65fdc530935c812)。菜单、弹窗、默认值依次查 `web/main.ts`、`web/dialog.ts`、`src/config.ts`；Git argv 查 `src/dataSource.ts`，多步操作顺序还必须查 `src/gitGraphView.ts`。不依赖“最新版本”的浮动描述，不凭 Wiki 或截图猜操作语义。
 
 **Goal：** 尽可能复制 Git Graph **对象右键 → 原生弹窗 → 用户选择 → Git 结果 → 二次询问/错误**的行为，而不是只给 Kero 加同名命令。菜单、提示、字段和按钮采用 Kero 现有 SwiftUI/AppKit 风格及中英本地化，不嵌入 Git Graph Web UI。
 
 **Non-goals：** 不复制插件特有的 Branches Dropdown、Issue Linking、PR/Code Review Provider、Mark Reviewed、列配置、外部 Difftool 或 Source Control 跳转。通用「Compare Commit with HEAD/Ref/Merge Base」**不是**上游普通 Commit 的右键动作：从本 P4 的必需项删除，不为它另建 Diff 比较模式。VSCodium 的 Ignore 在源码中是向现有 `.gitignore` 文档追加路径并保存，Kero 必须复用普通 FileTab 完成（不建 Ignore 专用编辑器或 Git 状态/对话框框架）。上游「Create Archive」属于 Branch/Remote/Tag 菜单，须尽可能沿用原生保存；不能谎称远端二进制流已经可安全保存。
 
-**Approach：** 保持 `RecentCommitsView.commitRow/referenceActions/changedFile` 和 `GitPanel.branchMenu/moreMenu/GitEntryRow.menu` 的原生命中；弹窗由 `GitPanel` 在**传入的发起窗口**展示，简单确认继续用 NSAlert、多个字段采用 SwiftUI 原生 sheet/Form，不建通用 DialogCoordinator；不能继续依赖 `NSApp.keyWindow ?? NSApp.mainWindow` 猜目标窗口（当前 `presentGitNameDialog` 正存在这处缺口）。Git 的执行、互斥、错误和刷新归 `GitStatusModel.perform` → `GitCommandExecution` → 当前 `WorkspaceBackend`，Tab/编辑内容由 `Project/PaneTab/DiffTab` 拥有。需要动态 Ref/Stash 保护时扩充**现有**执行前校验，不再开第二条写入/刷新通道。
+**Approach：** 保持 `RecentCommitsView.commitRow/referenceActions/changedFile` 和 `GitPanel.branchMenu/moreMenu/GitEntryRow.menu` 的原生命中；弹窗由 `GitPanel` 在 `ToolPanelView.manager.attachedWindow` 提供的**发起窗口**展示，简单确认用 NSAlert，多个字段用原生 sheet/Form 或 NSAlert accessory，不建通用 DialogCoordinator；删除 `presentGitNameDialog` 的全局 key/mainWindow 猜窗口路径。Git 的执行、互斥、错误和刷新归 `GitStatusModel.perform` → `GitCommandExecution` → 当前 `WorkspaceBackend`，Tab/编辑内容由 `Project/PaneTab/DiffTab` 拥有。展示层传递用户选择，Model 编排 Git 的条件分支，不让 View 拼命令或处理 Git 业务错误。
 
 **Rules：** [AGENTS.md](../../../AGENTS.md) · [Git Invariants](../../../docs/features/git.md#invariants) · [Diff Invariants](../../../docs/features/diff.md#invariants) · [Files](../../../docs/features/files.md#invariants) · [SSH](../../../docs/features/ssh.md#invariants) · [UI](../../../docs/ui.md) · [测试](../../../docs/testing.md)。
-- 弹窗打开时绑定**右击目标**的窗口、项目、机器、仓库、HEAD、ref 名/OID 和必要的文件状态；确认后在原 Model 执行入口验证。服务器端 Ref 删除/Force 的预检查不能消除远端并发更新：优先使用 Git 原生 **exact-OID lease** 等服务器原子拒绝能力；服务器 Protected Branch/Tag 拒绝须原样展示，绝不更改用户远端策略。一次菜单成功不等于 Git 成功。
+- 弹窗打开时绑定**右击目标**的窗口、Project 与现有 `PanelContext` 身份、机器和仓库；不能到确认时才从已变更的 Model 抓取“原目标”。会修改当前 HEAD 的动作捕获并核对 HEAD/branch，替换/删除本地 Ref 核对被确认的 Ref，Stash 核对 selector/OID，文件覆写核对该文件。不可变 Commit SHA 不另设 OID 状态。沿现有 generation/backend 失效机制检查确认及预检后的首次副作用，不新增并行的身份或锁管理器。
+- 远端删除按用户确认的 **remote + 完整 Ref 名**执行 Git 原生删除；删除动作不额外强制 `ls-remote`、expected-OID lease 或网络二次确认。Push 的三模式严格映射普通 Push、原生 `--force-with-lease`、`--force`，不把刚查到的服务器 OID 当 lease 基线而绕过其拒绝含义。服务器保护/Hook 拒绝原样展示，绝不修改远端策略。
 - Git 本身可以安全拒绝的操作不叠加猜测式禁用规则。只有对象不存在、当前正在冲突恢复、操作会破坏未保存编辑等**当前可证实**的前提才禁用或明确提示；不为所有 Git 分支/网络状态预建多层校验、retry 或 coordinator。
 - 普通操作默认非 Force。Force、替换已存在 Ref、Reset Hard、Clean 和历史文件覆写**仅在原生弹窗明确选中/确认后**执行；多远端动作逐一反馈部分成功和失败。后台 Git 不得等待交互式编辑器（Merge 需要提交时明确使用非交互默认消息）；选「Interactive Rebase」就打开真正的新终端，绝不在无 TTY 的 worker 假装已完成。
 - P1～P3 图谱、左右滚动、共用树行、历史 Diff、快速刷新以及正运行的 Kero 均不动。每个 task 自己完成 Red→Green、源码接入、旧路径清理、`Git.xcstrings`/`Sidebar.xcstrings` 和功能文档同步、原子提交；P4-T9 不是用来推迟实现或清理的总收尾。
+- 只读查询、Archive、无需 Checkout 的 Branch/Tag 创建不因无关 HEAD 变化失败，按需使用已有 `requiresStableHead: false`；不能为“统一安全”让每种动作都重复检查整个 index/worktree。保留机器/仓库隔离、真实未保存编辑、破坏性确认、argv/literal pathspec 与 Archive 有界读取，不能把这些数据边界当作多余围栏删除。
+
+## 执行前审查结论（2026-10-14）
+
+本节记录执行前从源码重新建立的问题证据，不读取或引用旧 `audit*.md`，不代表当前实现状态。实时任务状态见 `todo.toml`，实际执行与验证见 `evidence-p4.md`；以下仍保留为同任务修复和清理的依据。
+
+| 已确认的问题 | 源码依据与修订归属 |
+| --- | --- |
+| `manager.window` 是 private，真实可用入口为 `attachedWindow`；Model 不知道 Project ID | `TerminalManager.attachedWindow`、`Project.panelContext/matchesPanelTarget`、`GitStatusModel.perform`；T1 接入发起 Project/窗口，预检后再核对，后续任务复用 |
+| 原 `perform` 只有静态 argv 数组及成功 Bool，不能直接表达条件 Squash Commit、上游错误分流和多远端各自的停止规则 | `GitStatusModel.perform/CommandBatchResult`；T1 在此最小扩展条件步骤/实际结果，T3～T5 复用，不另建 executor 或反复退出互斥后接命令 |
+| Drop 额外禁止 Tag/远端 Ref 依赖不符合上游 | `web/graph.ts.dropCommitPossible` 只检查父、Merge、子分叉和 HEAD 路径；T2 删除“有其它 Ref 就禁用”，保留真实拓扑检查 |
+| SSH 新终端不仅丢 directory；自动跟随 SSH 的 Project 若 `sshHost == nil`，`newSession` 还会开本机 Shell | `Project.newSession/makeSession`、`TerminalSession.init/makeLaunchScript`、`RemoteConnection`；T2 按捕获的机器/cwd 启动命令，不在本机等待远端 prompt |
+| 本地 Branch 删除不是任意勾选 remotes；与 Push 的遇错策略也不同 | `web/main.ts.getBranchContextMenuActions`、`src/gitGraphView.ts` 的 `deleteBranch`、`dataSource.pushBranchToMultipleRemotes`；T3 单复选覆盖所有列出的同名 tracking remotes，本地删除成功后逐个尝试；Push 首错停止 |
+| 多 remote Push 缺默认选择及 Set Upstream 的最后成功目标 | `web/main.ts.getPushRemote`；T3/T5 按 Git config 与 origin/首个 remote 决定默认，不能默认全选或空选 |
+| Squash 后不能无条件 Commit；No Commit 未选 No-FF 时仍可能快进 | `dataSource.merge/pullBranch/commitSquashIfStagedChangesExist`；T1/T4 检查 staged 差异才提交，并采用上游默认消息，不强加 No-FF |
+| Archive 经本机 `backend.run(["git", …])` 会绕过已有登录环境且相对 executable 不符合本机后端契约 | `GitCommandExecution.runData`、`LocalWorkspaceBackend.runSync`；T3 的 Git 生成步骤必须走 GitCommandExecution，backend 仅承担临时文件/有界读取 |
+| 新 Diff 来源只改 `reload` 不够：只读原文会被 No Changes 隐藏，Revision↔Worktree 不会选中刷新，恢复会退回旧历史 Diff | `DiffViewerView.body`、`DiffNativeSurface.render`、`DiffTab.refreshWhenSelected`、`TerminalManager.contentSnapshot`、`Project.makeContent`；T6 同任务接通呈现、刷新、身份与当前快照 |
+| `gitContent` 将所有 Git 失败当 missing，读取失败可以被解释成空白/全删 | `DiffTab.gitContent/firstGitContent`；T6 区分预期缺侧与真实读取失败，不给新入口继承假成功 |
+| `PanelSectionHeader` 自己已有 contextMenu；把新 actions 加进去还会多出 hover 按钮 | `PanelSectionHeader.body`；T7 扩展同一菜单的仅菜单项，不嵌套另一 contextMenu，不改变标题左击和 hover 工具 |
+| 关闭保存 helper 会删 Tab，不能拿来作 Git 前置保存 | `Project.saveBeforeClosing/confirmCloseUnsaved`；T1 用 `PaneContent.save()` 等待在途保存并复查，失败留 Tab，不借用关闭副作用 |
+| Stash Branch 也会删除 selector 对应的 stash | `dataSource.branchFromStash`；T8 与 Pop/Drop 一起校验 selector/OID，不只保护两个按钮 |
+
+**本轮隔离 Git 实验：** Drop B 后指向 B 的 Tag 保持不变；`merge --no-commit` 在可快进时确实前移 HEAD；Squash 第二次无 staged 差异，不应创建空 Commit；Reset Hard 保留普通 untracked，却会删除阻挡目标 tracked 路径的 untracked 目录；Annotated Tag 可用 `-m ""` 非交互创建；所选 SHA 的 ZIP 只含该版本文件。命令在本轮 `/tmp` 临时库执行，不触及用户仓库、App 或 SSH。这些只证明 Git 语义，不是 Model/NativeUI/E2E 通过。
 
 ## 菜单矩阵与边界
 
@@ -21,12 +45,12 @@
 | --- | --- | --- |
 | Commit 行（普通、根、Merge） | Add Tag、Create Branch；Checkout、Cherry Pick、Revert、合适时 Drop；Merge into current、Rebase current onto、Reset Soft/Mixed/Hard；复制 SHA/Subject | `RecentCommitsView.commitRow`；`Drop` 必须有可证实的拓扑可行性。**保留整行左击展开**，不加右键「展开/收起」 |
 | 当前／其他本地 Branch Ref | Checkout（非当前）、Rename、Delete（非当前）、Merge/Rebase（非当前）、Push、Copy Name | `referenceActions` 及折叠 `+N`；当前分支仍能 Rename/Push |
-| Remote Branch Ref | Checkout（新本地跟踪分支/同名分流）、Delete Remote、Fetch into Local（本地同名且非当前）、Merge、Pull、Copy | `remoteBranch` 也必须有原生菜单；`refs/remotes/<remote>/HEAD` 不是可删除实体 |
+| Remote Branch Ref | Checkout（新本地跟踪分支/同名分流）、Delete Remote、Fetch into Local（本地同名且非当前）、Merge、Pull、Copy | `remoteBranch` 也有原生菜单；symbolic HEAD 不当实体 Branch，不能仅凭 `/HEAD` 名称后缀分类 |
 | Tag Ref | View Details（Annotated）、Delete（可选远端）、Push、Copy Name | Annotated/Lightweight 按 Git 对象类型判断，不凭 Badge；`+N` 行为一致 |
 | Stash 条目 | Apply、Create Branch、Pop、Drop、Copy Name/Hash | Kero 目前只有 `stashCount`：在既有 GitPanel 增加紧凑可右击 STASHES 条目，不新建独立 Dock |
-| Uncommitted Changes（CHANGES 标题） | Stash（Message/Include Untracked）、Reset（Mixed/Hard）、Clean Untracked（含目录选项） | Kero 没有 Git Graph 的伪 Commit，落到 `GitPanel` 现有 CHANGES 区块标题右键；保留已有 Stage/Discard |
+| Uncommitted Changes（现有分组标题） | Stash（Message/Include Untracked）、Reset（Mixed/Hard）、Clean Untracked（含目录选项） | 落到 CHANGES/STAGED/MERGE 标题的同一原生菜单及 More Menu；只有 staged 或被过滤隐藏时仍有入口；保留 Stage/Discard |
 | Staged/Unstaged/Conflict 文件、目录与标题 | 原有 Open/Diff、Stage/Unstage/Discard、分组批量动作；工作区与 Untracked 行/目录提供 VSCodium Ignore；按真实版本存在性提供读取 | Ignore 只在适用 Git 文件树对象出现，编辑目标是普通 `.gitignore` FileTab，不引入独立编辑器或未经协调的磁盘写入 |
-| 历史文件 | View Diff、View File at Revision、View Diff with Working File、Open File、Reset File to Revision、Copy Absolute/Relative Path | 仅内容确实存在且文本可读时启用对应查看；`Reset File` 独立警告其对 index/worktree 的覆盖 |
+| 历史文件 | View Diff、View File at Revision、View Diff with Working File、Open File、Reset File to Revision、Copy Absolute/Relative Path | Deleted 不提供查看该 Revision、Open File 或 Reset File；已知二进制不提供文本查看，但仍可 Reset；大小/读取失败在实际读取时说明，不逐行预读 blob |
 | Branch/Remote Branch/Tag | Create Archive（TAR/ZIP） | 本机 NSSavePanel 选择目的地；SSH 不能把远端地址当作 Mac 本地路径，需按真实可用的二进制链路处理 |
 
 ## 原生弹窗行为合同
@@ -40,16 +64,16 @@
 | Commit → Checkout | 警告进入 Detached HEAD；**Always Accept=false** | **Yes, Checkout / Cancel**；勾选后下次略过此确认，保留真正的 Git checkout 失败提示 |
 | Commit → Cherry Pick | Merge Commit 才显示 Parent（默认第一父，可选 1…N）；**Record Origin=false**、**No Commit=false** | **Yes, Cherry Pick / Cancel**；映射 `-m`、`-x`、`--no-commit`，不能忽略勾选 |
 | Commit → Revert | 普通提交无额外字段；Merge Commit 选择主线 Parent（默认第一父） | **Yes, Revert / Cancel**，实际 `revert --no-edit [-m N]` |
-| Commit → Drop | 显示 Commit 与历史改写范围，无额外字段 | **Yes, Drop / Cancel**；非可 Drop 的拓扑**不显示/禁用**；不以 Revert/Reset 冒充 |
+| Commit → Drop | 显示 Commit 与当前 HEAD 的改写范围，无额外字段 | **Yes, Drop / Cancel**；非可 Drop 的拓扑**不显示/禁用**，不因一个 Tag/同节点 Ref 禁用；尊重已有 Rebase 配置，不以 Revert/Reset 冒充 |
 | Commit / Branch / Remote Branch → Merge | **Create Commit Even If FF Possible=true**、**Squash Commits=false**、**No Commit=false** | **Yes, Merge / Cancel**；Squash 且未选 No Commit 时按上游自动生成合并效果的 commit，而非只留 staged changes |
 | Commit / Branch → Rebase | **Launch Interactive Rebase in New Terminal=false**、**Ignore Date=true**（只影响非交互式） | **Yes, Rebase / Cancel**；Interactive 必须在选定机器的新终端交互，后台模式实际执行 `rebase` |
 | Commit → Reset | 单选 **Mixed** 默认，另有 Soft、Hard，各说明影响 | **Yes, Reset / Cancel**；Hard 必须是明确选择，Git 的 Untracked 保留规则如实说明 |
-| Local Branch → Rename / Delete | Rename 新名默认旧名；Delete **Force Delete=false**、存在 remote tracking 时 **Delete on Remote(s)=false** | **Rename Branch / Cancel**；**Yes, Delete / Cancel**；未合并 safe Delete 失败时提供上游 **Yes, Force Delete Branch** 二次选择 |
-| Local Branch → Push | 单 remote 直接显示；多 remote 多选；**Set Upstream=true**；Push Mode **Normal** 默认 / Force With Lease / Force | **Yes, Push / Cancel**；每个 remote 实际执行并记录部分成功 |
+| Local Branch → Rename / Delete | Rename 新名默认旧名；Delete **Force Delete=false**；存在同名 remote tracking 时，**Delete on Remote(s)=false** 是一个复选框，覆盖提示中列出的全部 remotes | **Rename Branch / Cancel**；**Yes, Delete / Cancel**；未合并 safe Delete 失败时给 **Yes, Force Delete Branch**；本地删成功才逐个尝试全部所列远端删除 |
+| Local Branch → Push | 单 remote 直接显示；多 remote 多选，默认选 `getPushRemote(selectedBranch)`；**Set Upstream=true**；Push Mode **Normal** 默认 / Force With Lease / Force | **Yes, Push / Cancel**；按选择顺序执行，首个失败后停止；报告已成功、失败与未执行项 |
 | Remote Branch → Checkout | New Local Name 默认为 remote 分支短名 | **Checkout Branch / Cancel**；同名已存在时 **Choose Another Name** 或 **Checkout Existing Branch & Pull Changes**（不是隐式覆盖） |
 | Remote Branch → Delete / Fetch | Delete 无附加字段；Fetch into同名本地 Branch 时 **Force Fetch=false** | **Yes, Delete / Cancel**；**Yes, Fetch / Cancel** |
 | Remote Branch → Pull | **Create Commit Even If FF Possible=false**、**Squash Commits=false** | **Yes, Pull / Cancel**；不是 Kero 顶部的 `pull --ff-only`，两种入口语义不得偷换 |
-| Tag → Delete / Push | Delete：单远端 **Also Delete on Remote=false**，多远端选 **Don't Delete on Any Remote** 默认；Push：单远端确认，多远端多选 | **Yes, Delete / Cancel**、**Yes, Push / Cancel**；目标提交不在远端已知分支上时二次警告 **Proceed to Push / Cancel**，可选 **Always Proceed=false** |
+| Tag → Delete / Push | Delete：单远端 **Also Delete on Remote=false**，多远端选 **Don't Delete on Any Remote** 默认；Push：单远端确认，多远端多选，默认选不带 Branch 参数的 `getPushRemote()` | **Yes, Delete / Cancel**、**Yes, Push / Cancel**；全部所选 remote 的已知 tracking 分支包含检查在推送前完成；缺目标 Commit 时 **Proceed to Push / Cancel**、**Always Proceed=false**；实际 Push 首错停止 |
 | Uncommitted → Stash / Reset / Clean | Stash：Message 可空、**Include Untracked=true**；Reset：Mixed 默认 / Hard；Clean：**Clean Untracked Directories=true** | **Yes, Stash/Reset/Clean / Cancel**；Clean 是 Git Graph 的永久清理，不误称本机废纸篓 |
 | Stash → Apply / Pop / Branch / Drop | Apply/Pop **Reinstate Index=false**；Branch 输入新名称；Drop 无附加字段 | **Yes, Apply Stash / Yes, Pop Stash / Create Branch / Yes, Drop**，均有 **Cancel**；选择的特定 stash 不会误用栈顶 |
 | 历史文件 → Reset File to Revision | 显示 Commit、文件及工作区/索引将被覆盖的警告 | **Yes, Reset File / Cancel**；不与 View File at Revision（只读）混淆 |
@@ -57,7 +81,9 @@
 
 **二次弹窗是行为而不是实现细节。** 上游在 Branch/Tag 重名时给「替换 / 改名再试」，远端 Checkout 同名时给「换名称 / 切已有并 Pull」，删除未合并分支时给「强制删除」，Tag 远端不包含目标提交时给「仍要推送 / 取消」。Kero 采用同等可操作的原生按钮、提示和保留输入；不能简化成一个错误 Banner 加重试。
 
-**真实代码的限定：** `GitStatusModel.perform` 目前只校验 repoRoot、HEAD/branch（可选 upstream），不验证任意 Ref OID 或 index/worktree；按对象增加最少必要的目标预检，不能全局新增永远不需要的检查。Git Graph `stash apply <OID>` 可用，但实测 `stash pop/drop <OID>` 被 Git 拒绝：Pop/Drop 必须用 selector 并在执行前核对它仍指向选择的 OID。现有 `DiffTab` 只会读 index/worktree 或 Commit 对第一父的 blob；要先扩展**具体**修订来源与 Tab 身份，不能直接复用旧 Diff 假装满足新菜单。
+**真实代码的限定：** `perform` 的互斥覆盖同一 Model，不锁住用户外部 CLI；执行前检查不能承诺跨进程原子性，不为此发明全仓锁。按对象补最少预检和结果分流；多步成功应保留，失败不自动回滚。Stash Apply 可按固定 OID 执行；Pop/Drop/Branch 必须用 selector 并核对 OID，不能用 OID 替换 selector 而改变移除行为。Diff 的读取、原文呈现、选中刷新、Tab Key 和快照须一起更新。
+
+**推送默认目标：** Branch 依次尝试其 `branch.<name>.pushRemote`、`branch.<name>.remote`、`remote.pushDefault`、`origin`、remotes 首项，只选仍在配置列表中的目标；Tag 不使用 Branch 配置，依次 `remote.pushDefault`、`origin`、首项。当前 Model 只有 HEAD upstream，不能拿它冒充所选非 HEAD Branch 的配置；在打开 Push 弹窗时按需读取，SSH 合并往返，不在每次周期刷新中为每个 Branch 查询。
 
 <a id="p4-t1"></a>
 ## P4-T1 Commit Checkout、Cherry-pick、Revert、Merge 与恢复
@@ -67,29 +93,31 @@
 **入口 / Files：** `RecentCommitsView.commitRow` → `GitPanel.presentCreateReferenceDialog/performOperation/repositoryOperationBanner` → `GitStatusModel.perform/detectRepositoryOperation/remoteRepositoryOperation` → `GitCommandExecution`；窗口由 `ToolPanelView` 对应的 `TerminalManager` 提供。验证：`GitStatusModelTests`、`RecentCommitsViewTests`、`WorkspaceWindowIsolationTests`、`AppSettingsTests`（Always Accept 的真实偏好持久化）。
 
 **实施：**
-1. 只扩展现有 Commit `.contextMenu` 的操作回调，不覆盖整行左击与 Ref 点击。弹窗按上方矩阵保留 Checkout「Always Accept」、Cherry Pick Parent/Record Origin/No Commit、Revert Merge Parent、Merge No-FF/Squash/No Commit。沿 `ToolPanelView.manager.window` 向 `GitPanel` **显式传入发起窗口**，取代 `presentGitNameDialog` 通过全局 key/mainWindow 猜窗口的旧路径；取消或切窗口后旧 sheet 不能写到别的项目。勾选「Always Accept」由现有 `AppSettings` 持久化其真实含义（之后不再显示 Checkout 确认），不另设 UserDefaults 状态。不要在 View 层拼 Shell。
-2. `GitStatusModel` 使用所选完整 SHA 与当前工作空间，后台 argv 分别为 `switch --detach`（与上游 checkout 的 detached 结果一致）、`cherry-pick [-m N] [-x] [--no-commit]`、`revert --no-edit [-m N]`、`merge [--no-ff|--squash] [--no-commit]`；产生普通 Merge Commit 时使用 Git 的非交互默认消息选项，**不能弹出或阻塞不可见编辑器**。**上游 Squash + 自动 Commit**先用临时库实测并按实际结果完成后续提交，不能以 staged 中间态冒充完成。保留多命令部分成功状态、原仓库 commit hook/签名配置与实际失败提示，不暗中绕过。
+1. 只扩展现有 Commit `.contextMenu` 回调，不覆盖整行左击与 Ref 点击。字段保留 Checkout Always Accept、Cherry Pick Parent/Record Origin/No Commit、Revert Parent、Merge No-FF/Squash/No Commit。由 `ToolPanelView.manager.attachedWindow` 及发起 Project/PanelContext 显式接线；同步迁移现有名称框的窗口路由，不留全局窗口 fallback。关闭窗口、切 Project 或换连接使原确认失效；另一窗口成为 key 不把 sheet 转给它。Copy Commit Message 实际只复制 Subject，同 task 改为准确的 Copy Commit Subject 标签。Always Accept 在现有 `AppSettings` 的读取/保存/`resetToDefaults` 中默认 false，UI 测试传入临时配置的同类设置，不改 `AppSettings.shared` 或用户 Home。
+2. `GitStatusModel` 用完整 SHA 和捕获的工作空间；argv 为 `switch --detach`、`cherry-pick [-m N] [-x] [--no-commit]`、`revert --no-edit [-m N]`、`merge --no-edit [--squash|--no-ff] [--no-commit]`。Squash 优先于 No-FF，非 Squash 且 No-FF=false 不私自补 `--no-ff`：此时 No Commit 不能阻止快进，提示和测试如实表达。Squash 成功且 No Commit=false 后，按上游检查是否真的有 staged 差异；有才 `commit -m`，默认消息是 `Merge commit '<fullSHA>'`／`Merge branch '<name>'`／`Merge remote-tracking branch '<remote/name>'`，不误用 `--no-edit` 的 SQUASH_MSG，不制造空提交。原仓库 Hook/签名失败保持真实错误和已产生的 staged 状态。
+   在现有 `perform` 内最小扩展条件步骤和可检查的结果，让上述检查→Commit 保持同一个操作、同一个 backend；后续远端 Checkout→Pull、Tag 创建→Push、错误二次分流也复用它。仅原有 Bool completion 不足以让 UI 区分“未合并”“重名”“部分成功”；提供所需结果，不让 View 解析完整日志，不创建通用工作流 DSL 或另一套 runner。
 3. 现有 `repositoryOperation` 已从真实 Git 标记识别 Merge/Cherry-pick/Revert/Rebase/Bisect，`GitPanel.repositoryOperationBanner` 已提示用户可从终端恢复：这条路径足够，本阶段仅校验和修正提示文案。上游 Git Graph 自身没有额外 Continue/Abort/Skip 右键或弹窗；Kero 发生冲突后保留 index/worktree，允许用户从已有原生终端运行 Git 的 continue/abort/skip，完成后刷新。**不为菜单再造状态枚举、GUI 恢复面板或第二套状态机。**
-4. 对可能改变已打开文件的操作，从当前 `Project/PaneTab` 检查未保存编辑，拒绝覆盖或让用户先保存；异步执行前沿既有 `perform` 校验当前机器/仓库/HEAD 和选中 SHA 的存在。不要把所有 dirty Git 状态一律禁用：Git 自己能拒绝的不合法合并由真实错误说明。
+4. 在发起 Project 中按机器/仓库筛选受影响的 FileTab 和可编辑 DiffTab，复用 `PaneContent.save()` 等待已排队保存并复查；失败或保存期间又编辑就停止，保留内容。**不能调用 `Project.saveBeforeClosing/confirmCloseUnsaved`，它们会删 Tab。** 确认前后与异步预检后检查原目标，在首次 Git 副作用前沿现有 contextGeneration/backend 失效机制再确认；不能只有完成后的 guard。正常完成后重载干净的工作区 Tab，不等用户切换才显示变化；不重载 dirty 原生缓冲，不统一禁止所有 dirty Git 状态。此最小入口归 Project/现有 Git 编排，T2/T4/T6/T7/T8 复用，不各建保存协调器。
 
-**Red→Green / 验收：** 正常/根/Merge Commit、父节点选择、No Commit 与 Record Origin、多种 Merge 组合、Squash 自动 commit、detached 与 Always Accept；临时 Git fixture 核对 HEAD/refs/index/worktree/commit message。制造 Cherry-pick/Revert/Merge 冲突后从现有终端执行 Continue/Abort（及 Git 允许的 Skip），验证文件、序列状态与仓库标记；NativeUI 核对字段默认值、按钮和整行/Ref 独立命中。切换项目、取消及未保存内容均不得被偷偷覆盖；不把事件触发当成验收。
+**Red→Green / 验收：** 正常/根/Merge、主线 Parent、No Commit/-x、No-FF/Squash/No Commit 组合；Squash 有 staged 才提交、无差异不创建空 Commit；No-FF=false 的快进与上游相同，默认消息准确。临时仓库核对 HEAD/refs/index/worktree。制造冲突后在终端 Continue/Abort（及允许的 Skip），验证 Git 标记；NativeUI 测默认字段/按钮/独立命中和 Always Accept 的保存与重置。保存中再次编辑、预检等待期间切 Project/连接、两个 Project 指向同一仓库、窗口失效均测试真实副作用；取消不修改 Git，保存失败不关 Tab，操作成功已挂载干净编辑器更新。
 
-**提交边界：** 四项菜单、原生选项/确认路径、现有冲突提示的必要文案调整、代码回归、Git/UI/Settings 文档及中英文字符串同一提交；清理被替代的旧菜单/回调，不新增恢复状态。
+**提交边界：** 菜单/选项、窗口与最小保存接线、`perform` 的必要条件结果、回归、Git/UI/Settings 文档及中英字符串同一提交。删除全局猜窗口路径及被替换的 Commit 回调；替换“Copy Commit Message”旧标签（确认无其它使用后删除旧字符串）。保留仍负责安全语义的 `repositoryOperation`、PendingDiscard 和后台环境，不把它们当 legacy。
 
 <a id="p4-t2"></a>
 ## P4-T2 Commit Rebase、Reset 和合法 Drop
 
 **结果：** Reset 三模式、非交互/交互式 Rebase、Drop 具备上游的选项与效果，历史写入不能误改别的分支。
 
-**入口 / Files：** `RecentCommitsView.commitRow`、`GitPanel` 原生弹窗、`GitStatusModel.RecentCommit.parentHashes/headOID/branch/perform`，交互式入口复用 `Project.newSession`、当前机器的 `TerminalSession.sendCommand`；冲突提示继续使用 P4-T1 核对过的现有 Banner 与终端路径。验证：`CommitGraphLayoutTests`、`GitStatusModelTests`、`RecentCommitsViewTests`、现有 Workspace/Terminal 集成。
+**入口 / Files：** `RecentCommitsView.commitRow`、`GitPanel` 原生弹窗、`GitStatusModel.RecentCommit.parentHashes/headOID/branch/perform`，交互式入口沿 `Project.newSession/makeSession` → `TerminalSession.init/makeLaunchScript` → 真实 PTY；机器依据来自 `PanelContext`、`SSHHostWorkspaces` 或 `RemoteConnection`。验证：`CommitGraphLayoutTests`、`GitStatusModelTests`、`RecentCommitsViewTests`、现有 Workspace/Terminal 集成。
 
 **实施：**
-1. Rebase 原生字段 **Interactive=false、Ignore Date=true**。非交互式后台运行 `git rebase [--ignore-date] <selectedSHA|ref>`；勾 Interactive 后从**发起窗口的当前 Project** 创建独立终端并执行真正的 `git rebase --interactive`，不能借用用户已有终端、假显示成功或在后台阻塞编辑器。**源码已核对：** `Project.newSession(directory:)` 在 SSH 情形通过 `makeSession` 忽略所传 `directory`，默认使用 `customDirectory ?? "/"`；`TerminalSession.sendCommand` 仅调用 `surface.sendText`，不能证明新建的 SSH Shell 已就绪。先用本机和受控 SSH 的最小实验确认 `TerminalCommandLifecycle.prompt` / 远端 readiness 信号是否可靠；若 SSH 没有 OSC 133，就沿现有 `Project.makeSession` 的 launchCommand 入口在**该新会话**绑定目标 cwd/启动命令，不靠任意 sleep 盲发。必须证明命令在所选远端 repo 的真实 PTY 中运行且编辑器可交互；冲突仍使用终端和现有 Banner。
-2. Reset 弹窗 Soft/Mixed(默认)/Hard 单选与文案按矩阵，分别执行 `git reset --soft/--mixed/--hard <selectedSHA>`。Hard 明示覆盖已跟踪文件，未跟踪文件 Git 本来会保留的边界不能称为已清除；核对用户未保存 Tab 与 index/worktree，确认后在同一 Model 执行。
-3. Drop 与上游 `graph.dropCommitPossible` 同样要求被选节点有父、向当前 HEAD 的路径无合并/多子分叉；再用 Git 真实祖先/ref 验证图谱分页**未覆盖的拓扑**也不会被破坏。命令语义为 `git rebase --onto <selectedSHA>^ <selectedSHA>`；只更新当前本地分支，对存在其它 Ref 依赖的历史谨慎禁用，不自动 Force Push。Root/Merge/共享拓扑不使用假的 Reset/Revert；误选、取消后没有重写副作用。
+1. 字段 **Interactive=false、Ignore Date=true**。非交互式后台 `git rebase [--ignore-date] <selectedSHA|ref>`；Interactive 忽略 Ignore Date，在发起 Project 的**新**终端执行 `git rebase --interactive`。当前 `makeSession` 对 pinned SSH 忽略传入 directory，而自动跟随 SSH 的 Project（sshHost=nil）还会启动本机 Shell；两个入口都必须接到捕获的机器与 repoRoot，不把 `customDirectory` 或选中终端的 cwd 当 Git top-level。
+   接线扩展既有 newSession/makeSession，通过 `TerminalSession.launchCommand` 启动捕获机器的新 PTY。实际 Windows 测试证明复杂 remote command 会经过本机现有 Windows wrapper 的参数重组并产生 parse error，显式启动环境项路线已停止并删除，不把它保留成 fallback。改走普通 SSH 登录及已有认证 helper，再使用已安装 Ghostty 的原生 `input`（1.2 起支持，当前引擎 1.3.2）发送一次命令；不建 prompt/OSC 等待器、stdin 管道系统或另一个握手协议。握手前只暂存该会话的启动工作区，随后交给真实 RemoteConnection；新 Tab 不落回 Mac，保留 host/user/port、Shell 环境、配置与编辑器。SSH 结束后保留结果至 Enter 关闭，远端专用标签仍绑定断线机器。启动不等于变基成功；用本机及获准 `windows` 的真实 PTY、编辑器等待/输入和 HEAD 改写验证，主题变化不得重发输入，不借用工作 master。
+2. Reset Soft/Mixed(默认)/Hard 分别 `git reset --soft/--mixed/--hard <selectedSHA>`。Hard 覆写 tracked 的 index/worktree；普通 untracked 通常保留，但挡住目标 tracked 路径的 untracked 文件/目录可能删除，不能保证“Hard 从不删除 untracked”。复用 T1 不关闭 Tab 的保存/在途写入保护与干净内容重载。
+3. Drop 按上游要求所选节点有父，沿子路径找到当前 HEAD，所检查路径无 Merge/多子分叉；必要时在打开 Drop 时按需读完整可达拓扑，不能把分页缺节点当成安全证明，也不预建全历史索引。命令 `git rebase --onto <selectedSHA>^ <selectedSHA>`，不额外添加 `--update-refs` 或 Force Push。**删除“有其它 Ref 就禁用”的限制**：单个 Tag 或指向同一节点的其它 Branch/remote Ref 不是多个子提交，默认 Rebase 配置下保持这些 Ref 不动；真正的多子分叉仍不可 Drop。用户已有 `rebase.updateRefs=true` 会按 [Git 原生配置](https://git-scm.com/docs/git-rebase#Documentation/git-rebase.txt-rebaseupdateRefs)更新相关本地 Branch，不能保证所有配置下其它 Branch 恒定，也不能偷偷加 `--no-update-refs` 改变上游命令含义。保留上游在 detached HEAD 下成立的拓扑行为，准确呈现目标为当前 HEAD。Root/Merge 不以 Reset/Revert 冒充。
 4. 与上游相同，Reset 只在用户按 **Yes, Reset** 且选定模式后执行；Rebase/Drop 失败保留 Git 错误及现有操作标记，在终端可恢复；不新增定时器、重试或 Rebase 控制器。
 
-**Red→Green / 验收：** A→B→C→D、独立分叉、Merge、历史 Tag/远端 Ref、HEAD 与非 HEAD 的合法/非法 Drop：验证仅目标线性链被改写和其它 Ref 不变；Soft/Mixed/Hard 验证 HEAD/index/worktree 的不同结果，Hard 不删除普通 untracked；交互式 Rebase 的新终端（包括 SSH Shell 无 OSC prompt 情形）确实在目标仓库、Shell 就绪后执行，结束/冲突/取消行为可观察；NativeUI 验证两项复选框、三选一与二次确认，旧历史图仍可展开。
+**Red→Green / 验收：** A→B→C→D、独立分叉、Merge、分页边界、有历史 Tag/同节点 remote Ref、HEAD/detached 的 Drop；默认配置下其它 Ref 保持，另测用户显式开启 updateRefs 的 Git 原生结果，不能因一个 Tag 错禁用。Soft/Mixed/Hard 检查 HEAD/index/worktree，包含普通 untracked 保留与阻挡路径被 Hard 删除。Interactive 的新 PTY 在目标仓库真正进入编辑器并产生可观察结果；本机、pinned SSH 与自动 SSH 路由分别验证，不要求 OSC prompt。取消零 Git 副作用；NativeUI 核对两复选/三模式和历史展开。
 
 **提交边界：** 本组菜单、Rebase 终端接线、合法 Drop 判断及对应测试与 Git/Terminal/SSH 文档、本地化同一提交；不在最后 E2E task 才删除旧路径。
 
@@ -98,18 +126,19 @@
 
 **结果：** 选定 Commit 创建 Branch 的二级分流、现有 Branch 的重命名/删除/定向推送和 Archive 都按照 Git Graph 的弹窗与最终作用对象工作。
 
-**入口 / Files：** `RecentCommitsView.createReference/referenceActions/referenceStrip`、`GitPanel.presentCreateReferenceDialog/presentGitNameDialog/branchMenu/performOperation`；`GitStatusModel.createReference/createBranch/switchBranch/push/publish/perform`；存档使用 `GitCommandExecution.runData`、`WorkspaceBackend.run` 以及已有原生文件对话框风格 `WorkspaceNativeDialogs`（只复用交互模式，不加入全局 Dialog service）。验证：`GitStatusModelTests`、`RecentCommitsViewTests`、`GitExecutionTests`。
+**入口 / Files：** `RecentCommitsView.createReference/referenceActions/referenceStrip`、`GitPanel.presentCreateReferenceDialog/presentGitNameDialog/branchMenu/performOperation`；`GitStatusModel.createReference/createBranch/switchBranch/push/publish/perform/runGitStatus/prefetchedSnapshotCommands`；Archive 的 Git 生成走 `GitCommandExecution`，文件传回用 `WorkspaceBackend.read`，保存交互参考 `WorkspaceNativeDialogs`。验证：`GitStatusModelTests`、`RecentCommitsViewTests`、`GitExecutionTests`。
 
 **实施：**
-1. 将 P2 的「输入名称后只能创建且不 Checkout」直接**迁移**到 Commit → Create Branch 的 Name 与 **Check out=false** 表单；已有名称时给 **Replace Existing Branch / Choose Another Name** 两条真正可用的后续路径，后者保留输入。替换只在用户明确确认后使用 `git branch -f <name> <SHA>`（随后按 Check out 选择切换），普通新建用 `git branch <name> <SHA>` 或 `git switch -c <name> <SHA>`；Git 拒绝重写当前检出/其它 worktree 的分支必须显示错误。
+1. 将 P2 的仅名称 Branch 创建迁移到 Name 与 **Check out=false** 表单；重名给 **Replace Existing Branch / Choose Another Name**，保留 Name 和 Check out。确认替换才 `git branch -f <name> <SHA>`，成功后按选择切换；普通新建 `git branch <name> <SHA>`／`git switch -c <name> <SHA>`。顶部 Create New Branch 原本会切换，保留其**从当前 HEAD 创建并 Checkout**的语义，与历史入口共用执行方法但不偷换默认值。Git 对当前检出/其它 worktree 的拒绝原样显示；Ref 名必须按 Git 校验，不能只检查文本非空或让前导 `-` 变成 option。
 2. 直接展示与 `+N` 的本地 Ref 共享 `referenceActions`。当前 Branch 有 Rename、Push、Copy；其它 Branch 还包含 Checkout（不用确认，Git 自己检查工作区）、Delete、Merge into current、Rebase current onto、Copy。Rename 提供预填旧名称和 `Rename Branch / Cancel`，底层 `git branch -m old new`，重名不自动 `-M`；Merge/Rebase 复用 P4-T1/T2 的同一字段/方法。
-3. Delete 弹窗有 **Force Delete=false**；已知远端存在该分支时才显示 **Delete on Remote(s)=false**。先用 `git branch -d`，如上游「not fully merged」失败，**保留选择、提示 Yes, Force Delete Branch** 才允许 `-D`；选远端删除时仅针对已勾选且列出的 remotes，先取得各远端的准确 ref/OID，以 Git 的 expected-OID lease 在服务器端拒绝确认后移动过的 ref（此真实 helper 供 T4 Remote Branch Delete 复用），逐项报告哪条已经成功。不能将本地删除成功 + 部分远端删除失败整体称为失败且未改动。
-4. Push 弹窗包含 `Set Upstream=true`、`Push Mode=Normal(default)/Force With Lease/Force`；多 remote 是**多选**，支持定向非 HEAD 分支，`push <remote> <selectedBranch> [-u] [--force-with-lease|--force]`，不把顶部 `model.push()`（会 Push 当前 HEAD）当成目标 Branch Push。二次确认/错误保留已选择的 Ref；用户显式选 Force 才使用，拒绝过期 Ref。
-5. 上游 Branch/Remote Branch/Tag 有 **Create Archive**：在本 task 创建一个共享、真正按传入 ref 执行 `git archive --format=tar|zip <ref>` 的原生 NSSavePanel 流程（T4/T5 只接入对应 Badge）。保存路径由用户选定；本机可直接生成临时文件后原子保存；SSH 要把远端二进制归档通过**当前** `WorkspaceBackend` 有界传回 Mac，绝不能把 Mac 保存路径交给远端 Git。**实际源码没有这个保护**：`SSHWorkspaceBackend.run` / `ProcessRemoteCommandRunner` 先积累整个 stdout；`GitCommandExecution.runData(stdoutLimit:)` 只是切掉多余字节并仍返回成功，不能检测 Archive 截断。计划采用现有 `backend.run` 在选定机器的临时文件生成 Archive（需要核对 ExitCode），再通过**已有** `backend.read(path:maxBytes:)` 有界读取，核对字节长度与容器完整性后保存至用户选定的 Mac 路径；每次正常、失败、取消都清理**本次自身**生成的远端临时文件，绝不使用 SSH Backend 的任意无上限 stdout 直接导出。初期允许明确说明并严格执行单包上限（上限数值依据实际 runner 测试选定，禁止静默截断），不另建流式传输系统或永久缓存。没有能力安全导出某大小的 Archive 时明确报超限，不提供虚假的成功按钮；服务器仍按原有 SSH 认证及超时执行。
+3. Delete 默认 **Force Delete=false**。现有状态只读取 heads；把该条 `for-each-ref refs/heads` 查询扩为同一次 heads/remotes 的完整 ref 名、OID、symref 元数据，远端替换同一 batch 项，T4 继续使用、T5 再补 tags 对象类型，不新造 RefStore。按**已知同名 remote-tracking 分支**列出 remotes，显示一个 **Delete on Remote(s)=false** 复选框：勾选就删所有所列对象，不改成任意多选。先本地 `branch -d`（已选 Force 则 `-D`），未合并错误才给 **Yes, Force Delete Branch**；本地成功后，按上游 handler **逐个尝试全部**所列远端删除，即使中间一个失败仍尝试后面的。使用完整 heads refspec，服务器不存在时只清理对应 tracking ref；拒绝不绕过，不新增远端 expected-OID lease。记录本地及各远端的部分结果，T4 复用同一个单远端删除方法。
+4. Push 包含 `Set Upstream=true`、`Normal/Force With Lease/Force`；多 remote **多选且默认目标按上方合同**。支持非 HEAD Branch，用完整 `refs/heads/<selected>:refs/heads/<selected>` 避免同名 Tag 歧义，不调用当前 HEAD 的 `model.push()`。按选择顺序执行，**首错停止**；Set Upstream 最终指向最后一次**成功**的设定，不承诺同时 tracking 多个 remote。不预先 Fetch 来更新 lease，不把 Force With Lease 改成普通 Force；空选择禁用提交。T1 的结果分流及同一互斥区承担操作，失败/未执行清楚可见。
+5. Branch/Remote/Tag 共用 **Create Archive** 原生 NSSavePanel（T4/T5 只接入 Badge）。格式与扩展名一致，限 TAR/ZIP；目标是对象的完整 Ref／解析出的选定 OID，不用 HEAD 或歧义短名。本机用 `GitCommandExecution` 的已解析登录环境执行 `git archive --format=tar|zip -o <本次临时文件> <target>`，成功后原子保存到选择的位置，不用本机 `backend.run(["git", …])` 绕过环境。SSH 在**选定 backend**申请本次临时文件，Git 仍经 GitCommandExecution 生成并检查退出码，再通过已有 `backend.read(path:maxBytes:)` 有界传回 Mac；stdoutLimit 不能证明传输完整。
+   本机磁盘归档无需人为设内存上限；SSH 整包读取须公布一个有界上限，在本 task 验证边界，超限明确失败且不损坏现有目的文件。Git 生成成功及有界 read 是运行时检查，TAR/ZIP 条目与字节完整性放在测试验证，**不另写容器解析器、checksum 协议或传输系统**。对成功/失败/取消尝试清理本次临时文件；断线导致远端清理失败要记录准确路径和未完成结果，不承诺断线后已清干净，不加跨机器 fallback/定时 janitor。已确认目的文件替换才原子保存；取消不生成归档。
 
-**Red→Green / 验收：** 真实临时 Git 仓库创建/重名替换/取消/保留 Name/Checkout；当前及非当前分支 Rename/安全 Delete/提示后 Force Delete，两个 bare remotes 的 Delete on Remote(s) 及部分成功；Push Normal/Force With Lease/Force、Set Upstream、多远端选择核对 **服务器实际 refs** 与 upstream 配置。Tag 不在本 task 新增菜单，但共享 Archive 用 Branch Ref 验证 TAR/ZIP 实际条目内容、取消无文件、远端完整二进制与严格上限、失败/超限时本地无损坏文件且只清理本次远端临时文件。原生菜单 `+N`、异常分支名与窗口焦点测试，受影响文档同一任务同步。
+**Red→Green / 验收：** 历史 Branch 创建/替换/改名再试保留字段，顶部默认 Checkout 保持；重名 Tag/Branch、前导 option/特殊合法 ref、当前及其它 worktree 检出 Branch。至少三个 bare remotes 验证 Delete 的单复选范围、中间失败仍尝试后项、本地失败不删远端；Push 首错停止与后项未执行、三模式、默认目标 config 优先级、非 HEAD 源、最后成功 upstream。Archive 选中 Ref 的 TAR/ZIP 条目和 bytes、GUI PATH 登录环境、取消/已存在目的文件、SSH 受控 runner 的边界读取与断线清理失败；不把 runner fixture 当真实 SSH。原生直显/`+N`、焦点与文档同步。
 
-**提交边界：** Branch 创建旧单字段弹窗和旧执行路径直接替换；Branch Ref 与通用 Archive 所需的 Git/原生保存接线、测试及 Git/SSH/UI 文档、本地化一起提交。拒绝为 Archive 增加长期新 Service 或单独网络传输协议。
+**提交边界：** 同 task 替换历史与顶部 Branch 名称框及 Branch 执行分支。P2 `createReference(.branch)` 不保留兼容转发；`presentGitNameDialog`/`NonemptyTextFieldValidator` 若仍承载未迁移 Tag，留至 T5 最后调用迁移时立即删除，没有调用则 T3 就删。头部 Push/Publish 是现行快捷入口而非旧菜单，不删除或偷换语义。新菜单、Archive、回归与 Git/SSH/UI 文档和本地化同一提交。
 
 <a id="p4-t4"></a>
 ## P4-T4 Remote Branch 的 Checkout 分流、Fetch、Merge/Pull、删除
@@ -119,13 +148,13 @@
 **入口 / Files：** `GitStatusModel.RecentCommit.Reference(.remoteBranch)` / `parseCommitReferences`、`remotes/branches/fetch/pull/perform`；`RecentCommitsView.referenceBadge/referenceActions/+N`、`GitPanel`；`GitCommandExecution` → `SSHWorkspaceBackend`（远端 argv 引用）及 P4-T3 `Create Archive`；`GitStatusModelTests`、`GitExecutionTests`、`RemoteCommandsTests`、`RecentCommitsViewTests`。
 
 **实施：**
-1. 对照已配置 `remotes`，以**完整** `refs/remotes/<remote>/<branch>` 解析身份，处理含斜杠的 remote/branch，不能按字符串中第一个 `/` 盲切；`refs/remotes/<remote>/HEAD` 是 symbolic ref、不可当作普通 Branch。原有 `remoteBranch` 胶囊改为按钮与独立右键，`+N` 调相同菜单，保留标签左击不展开 Commit。
+1. 使用 T3 的完整 remotes ref 元数据及已配置 remote 前缀解析身份，处理嵌套 branch 和含斜杠 remote，不能盲切第一个 `/`；前缀有重叠时取实际匹配的最长 remote 前缀。**symref 元数据**判断 symbolic HEAD，不能继续 `parseCommitReferences` 的 `name.hasSuffix("/HEAD")` 过滤：普通实体分支也可叫 HEAD。只隐藏 symbolic HEAD 的管理操作，实体 refs 保留。remote Badge 变为独立原生菜单，`+N` 删除只读 Text 特判、调用同一 referenceActions，左击不展开 Commit。
 2. Checkout Branch 弹窗预填 remote 后的分支名，新名时创建本地跟踪分支并 Checkout；同名本地 Branch 已存在时必须提供**Choose Another Name**（带原输入重开）或 **Checkout Existing Branch & Pull Changes**（先切换再针对所选 remote/branch Pull，使用 P4-T4 同样的默认 Pull 参数）。不能把同名情况直接抛成「名字已存在」错误，不能隐式覆盖。
 3. Fetch into Local Branch 只在同名本地分支存在且不是当前分支时出现；复选 **Force Fetch=false**，普通尝试快进，选中时执行上游 `git fetch -f <remote> <branch>:<local>`，仍遵守 Git 对其它 worktree 正检出分支的禁止条件。Merge into current 直接复用 P4-T1 的 No-FF/Squash/No Commit 表单。
-4. Pull into current 提供 **Create New Commit Even If Fast-Forward=false**、**Squash=false**，以明确 remote/branch 执行 `git pull <remote> <branch> [--no-ff|--squash]` 及上游成功后的 Squash Commit 结果；**不走**顶栏的 `model.pull()`（它特意是 `--ff-only`）。同一项目两个菜单行为各自正确，失败由真实 Git 决定。
-5. Delete Remote Branch 只确认选中的 remote + branch；复用 P4-T3 已实现的定向服务器删除语义，不另造执行器。确认时固定该 remote/ref 在服务器上的实际旧 OID，使用 `git push --force-with-lease=refs/heads/<branch>:<oldOID> <remote> :refs/heads/<branch>` **原子拒绝**确认后移动过的 Ref（lease 是保护条件，不代表用户允许覆盖新的远端 Ref）；服务器的 `receive.denyDeleteCurrent` 等保护拒绝须原样提示，不修改远端设置。目标 ref 已不存在时，上游允许删除对应本地 remote-tracking ref：也必须检查同一仓库和跟踪 OID，不能删除其它分支。成功或部分成功均刷新；Create Archive 复用 T3 的选中远端 Ref。
+4. Pull 字段 **No-FF=false、Squash=false**，按 remote/完整 heads ref 执行 `pull --no-edit <remote> <branch> [--squash|--no-ff]`，Squash 优先；保持用户 Git 配置，不偷偷改 `pull.rebase`/`pull.ff`。Squash 成功后用 T1 的条件 staged 检查，存在差异才提交；上游默认消息为 `Merge branch '<remote>/<branch>'`。**不走**顶栏的 `model.pull()`（FF-only）。Checkout Existing & Pull 必须在同一执行链中 switch 成功才 Pull；Pull 失败保留已成功的 Checkout，不能对自己已更改的 HEAD 重用旧前置校验。
+5. Delete 只确认所选 remote + branch，复用 T3 的原生定向删除 `git push <remote> --delete refs/heads/<branch>`，不引入网络探测/lease 前提。服务器保护失败原样展示。仅真实错误表明 `remote ref does not exist` 时，按上游删除**对应**本地 tracking ref（同仓库目标校验）；认证/断线/Hook 拒绝不能走这个 fallback。测试到实际 tracking ref 删除，不只断言 fallback 被选择。Archive 使用选中的完整 `refs/remotes/…`，不是 Fetch 服务端实时归档。
 
-**Red→Green / 验收：** 两个 bare remotes 含同名不同 SHA、旧 OID 的服务器端删除拒绝、远端默认分支删除保护、`origin/HEAD` 与嵌套分支，逐项确认 Checkout 新分支及重名两按钮、Fetch 普通/Force、本地当前分支拒绝、Merge/Pull 的 No-FF 与 Squash、远端 Delete 与失效追踪 ref 清理；用 `ls-remote`、`for-each-ref`、index/worktree 检查真实结果。原生菜单在直显/`+N` 一致，SSH 受控后端证明机器和 argv 无串仓库，真实 SSH 留 P4-T9。
+**Red→Green / 验收：** 多 remote 同名不同 SHA、前缀重叠 remote、嵌套 Branch、symbolic `origin/HEAD` 与实体 HEAD 分支；Checkout 新 tracking/重名两按钮，switch 成功但 Pull 失败的部分结果；Fetch 普通/Force/其它 worktree 拒绝；Merge/Pull No-FF/Squash 条件 Commit。远端服务器保护、Ref 不存在时最终 tracking ref 消失、其它网络/Hook 错误不清理本地；`ls-remote/for-each-ref`、index/worktree 证明作用对象。NativeUI 直显/`+N` 一致；SSH fixture 仅证明路由和 argv，真实 SSH 单独验收。
 
 **提交边界：** 远端 Ref 从「只读标签」迁移为真菜单，复用既有 Fetch/Pull/Archive 而不创建第二个操作模型；实现、验证和文档/本地化同一提交。
 
@@ -137,13 +166,14 @@
 **入口 / Files：** `RecentCommitsView.createReference/referenceActions/+N`，`GitPanel.presentCreateReferenceDialog`；`GitStatusModel.createReference/perform/remotes`、`RecentCommit.Reference(.tag)`；按需 `git cat-file/for-each-ref/ls-remote`；共享 Archive 由 P4-T3 提供。验证：`GitStatusModelTests`、`RecentCommitsViewTests`、`AppSettingsTests`（Always Proceed 的保存与恢复）。
 
 **实施：**
-1. 直接替换 P2 的轻量 Tag 专用名称框。Commit → Add Tag 原生表单：**Name**、**Type=Annotated(default)/Lightweight**、**Message=Optional（仅 Annotated 用）**、**Push to Remote=false**（单 remote checkbox、多 remote 单选默认 Don't Push）；添加到选定完整 SHA，不自动改变 HEAD。已同名时**Replace Existing Tag** 或 **Choose Another Name**，后者保留所有字段；Replace 必须用户确认，`git tag -f` 覆写**本地目标 ref**，无自动强推。
-2. Tag 胶囊需要区分 Git **annotated tag object** 与 lightweight ref；`RecentCommit.Reference` 当前只有 Kind/Name，不能凭 `commit.hash` 判断 Tag 类型。沿现有 `runGitStatus/prefetchedSnapshotCommands` 的**同一状态快照**加入一次轻量 `for-each-ref refs/tags` 的对象类型/Ref OID 数据（远端纳入已有 batch，而不是每个 Badge 各发 SSH 查询）；不预取 Tag 注释全文。只有 annotated 的菜单显示 View Details，点击后按需查询 Tagger/Message/Tag object SHA/peeled Commit；`+N` 复用相同类型与菜单。
-3. Delete Tag：无 remote 直接确认只删本地；单 remote 显示 **Also Delete on Remote=false**；多 remote 显示 **Don't Delete on Any Remote（默认）/指定一个 remote**。用户选远端时按上游先执行该远端指定 Tag 的 Delete，再删除本地 Tag；任一失败保留实际错误及局部修改结果，不捎带其它同 SHA 的 Tags。指定远端 Tag 删除与 Branch 一样需用服务器原生 expected-OID lease 拒绝误删确认后已移动的 Tag；用户远端自己的 Protected Tag/Hook 拒绝不绕过。
-4. Push Tag：单 remote 确认，多 remote 多选并对每一个执行所选 `refs/tags/<name>` 的定向 Push，不 `--tags`；若目标 Commit 不在该 remote 已知分支上，按上游给出独立二次弹窗 **Proceed to Push / Cancel** 和 **Always Proceed=false**，用户选后才推；勾「Always Proceed」的持久化复用 `AppSettings` 的同一设置/保存 owner（字段独立于 T1 的 Always Accept），不额外添加 Tag 专用状态容器。不能把 annotated Tag 对象 ID 与 peeled commit ID 混淆，也不能把「Tag 本地创建成功、远端推送失败」当成全部失败/自动回滚。
-5. Tag 的 Create Archive 接 P4-T3 共享实现；新建 Tag 对话框仍归原 `GitPanel`，不另建 Tag ViewModel/Release 页面。增补真正需要的 Ref OID 核对与重名处理，取消/切仓库/旧 remote 不写错；清理旧轻量 `createReference(.tag)` 分支与重复 UI。
+1. 直接替换 P2 的轻量 Tag 专用名称框。Commit → Add Tag 原生表单：**Name**、**Type=Annotated(default)/Lightweight**、**Message=Optional（仅 Annotated 生效，切类型不清空输入）**、**Push to Remote=false**（单 remote checkbox、多 remote 单选默认 Don't Push）；添加到选定完整 SHA，不自动改变 HEAD。重名给 **Replace Existing Tag / Choose Another Name**，后者保留所有字段；Replace 确认才 `git tag -f` 覆写本地 Ref，无自动强推。
+2. 在 T3 已有的 refs 快照查询中加入 tags 的 objecttype/OID，不再新增第二份 heads/remotes/tags 查询或每 Badge 各发 SSH。annotated 才有 View Details，按需读 **Tag 名、Tag object SHA、peeled Commit、Tagger 姓名/邮箱、日期、消息、签名验证状态（有签名时）**，原生可选文本和 Close 按钮，不造签名管理页。按 tag object 与 commit 区分身份，不能把 object OID 当 commit 推送警告依据；不预取全文或为验证失败假报签名有效。创建 Annotated 必须用 `-a -m <message>`，空 message 也显式 `-m ""`，后台不等编辑器；保留仓库 `tag.gpgSign` 与实际签名失败。
+3. Delete 无 remote 仅本地；单 remote **Also Delete on Remote=false**；多 remote **Don't Delete on Any Remote（默认）/指定一个**。按上游先 `push <remote> --delete refs/tags/<name>`，成功才本地 `tag -d`；远端失败时本地仍在，本地删除失败时已成功的远端结果保留。无 expected-OID lease 或 `ls-remote` 强制前检；本地被确认 Ref 的必要检查与服务器保护仍保留，不删同 SHA 的其它 Tags。
+4. Push 单 remote 确认、多 remote 多选且默认按上方合同；明确 `refs/tags/<name>:refs/tags/<name>`，不 `--tags`。按上游 `getRemotesContainingCommit` 用**已有 remote-tracking 分支**判断 peeled Commit 的包含关系：不先 Fetch、不联网查询服务端全部历史，不把本地快照称为“服务器一定存在”。对所有所选 remote 完成此检查后，缺少 Commit 时整体先给 **Proceed to Push / Cancel**、**Always Proceed=false**，未确认不先推其中某个。这个提示本来是启发式；包含关系查询失败不伪造“不在远端”，按上游继续尝试 Push，保留查询诊断与真实 Push 结果，不新加网络重试/阻塞协议。实际推送按选中顺序**首错停止**。
+   Always Proceed 由 `AppSettings` 读取/保存/重置，默认 false、独立于 Always Accept；测试用临时配置。该警告也应用于 **Add Tag 选择 Push to Remote** 的后续 Push；本地已创建后用户取消警告，仅取消 Push、不撤销 Tag。使用同一个 T1 执行/分流入口，不把创建→推送封成无法继续询问的静态 argv 列表。
+5. Archive 接 T3；Tag 表单归原 GitPanel，不另建 ViewModel/Release 页面。保留左击 Tag 定位 Commit，但删除旧右键 **Show Tagged Commit** 冗余项，让原生右键按上游仅管理 Tag。迁移最后的 `createReference(.tag)` 后，立即删除 `CommitReferenceKind/createReference`、旧 `presentCreateReferenceDialog/presentGitNameDialog/NonemptyTextFieldValidator` 及已无调用的回调/字符串；T3 的 Branch 不恢复兼容壳。
 
-**Red→Green / 验收：** 临时仓库含 lightweight/annotated 两种同 Commit Tag、包含标点的合法名称；验证默认 Annotated、附注、替换/重新输入分流、创建时不改变 HEAD、单/多 remote 推送与不推送、Delete Local/Also Remote、Tag 目标变化、Push 目标提交不可达远端的 Proceed 警告、只有用户明确选择时覆盖。核对 `cat-file -t`、`show-ref`、`ls-remote --tags`、提示按钮和 Git index/worktree；Archive Tag 内容正确，NativeUI 真菜单和 `+N` 一致。
+**Red→Green / 验收：** lightweight/annotated 同 Commit Tag、空附注、合法标点、同名 Branch、签名详情（至少有签名但无法验证时不假报有效）。默认 Annotated、替换/改名保留所有字段、创建不改 HEAD、单/多 remote 默认选择、Push 首错停止、Delete 远端先于本地且失败不乱回滚。独立 Push 与 Add Tag→Push 都测 Proceed 警告、取消保留本地 Tag、Always Proceed 往返/重置；已有 tracking 与服务端实际 tip 不同的情况明确警告证据边界。`cat-file/show-ref/ls-remote` 核对实际对象；Archive Tag 内容、NativeUI 详情字段/Close/直显与 `+N` 一致。
 
 **提交边界：** 原轻量 Tag 新建路径直接迁移为完整表单，Tag 读/写和后续提示、测试与 Git/UI/Settings 文档、中英字符串同一提交；不保留两套创建方式。
 
@@ -152,17 +182,19 @@
 
 **结果：** 历史文件右键复制 Git Graph 的读版本、比较工作区及**带警告的覆写**，使用真实版本内容，不能把「查看」做成修改当前文件。
 
-**入口 / Files：** `RecentCommitsView.commitFiles/changedFile/displayRow` → `ToolPanelView.openCommitDiff/openFile` → `TerminalManager.openCommitDiff/openFile` → `Project.openCommitDiff/openFile/findDiffTab` → `DiffTab.reload/gitContent/readWorktreeFile`、`WorkspaceBackend`；`GitStatusModel.RecentCommit.FileChange.originalPath/parentHashes`。验证：`DiffTabTests`、`RecentCommitsViewTests`、`WorkspaceContentIdentityTests`、`GitStatusModelTests`。
+**入口 / Files：** `RecentCommitsView.commitFiles/changedFile/displayRow` → `ToolPanelView` 回调 → `TerminalManager/Project.openCommitDiff/openFile/findDiffTab` → `DiffTab.reload/gitContent/readWorktreeFile/refreshWhenSelected` → `DiffViewerView.body/DiffNativeSurface`；`TerminalManager.contentSnapshot` → `SessionStore.ContentSnapshot` → `Project.makeContent` 是恢复链。验证：`DiffTabTests`、`RecentCommitsViewTests`、`WorkspaceContentIdentityTests`、`GitStatusModelTests`、`SessionStoreTests`；文档增加 [Session Restore](../../../docs/features/session-restore.md)。
 
 **实施：**
-1. 上游 Commit Details File 右键是 **View Diff、View File at this Revision、View Diff with Working File、Open File、Reset File to this Revision…、Copy Absolute/Relative File Path**；普通文件 Diff 已存在，直接保留。只在版本 blob 确实可读时显示「查看修订」和「与工作区比较」，Deleted 文件不能冒充选中 SHA 中仍存在。重命名和 Copy 的前后路径分别按 `originalPath/path` 解释，root/merge 的历史 Diff 与当前已有第一父规则一致。
-2. `DiffTab.reload` 目前只支持「历史 commit^ → commit」或「HEAD/index/worktree」；在**现有 DiffTab** 增加确需的三种来源：「仅显示选定 Revision 的只读原文」「Revision blob ↔ 当前工作区」「历史两侧 Diff」。**View File at Revision 应是只读原文视图，不是把整个文件画成全新增的假 Diff**，可直接复用现有原生 TextKit 内容。根据 `Project.findDiffTab` 的真实 Key 同步包含比较来源/目标，避免同一 `commitHash + path` 错误复用不同模式的 Tab；不建另一套文件预览缓存/全局 Diff 引擎。继续使用 5 MiB/UTF-8/二进制限制和 Tab 的机器/断线/dirty 身份。
-3. 「Open File」使用当前 Project 的普通 FileTab，只访问**当前工作区路径**，但上游 `src/utils.ts.openFile` 和 `viewDiffWithWorkingFile` 都会在历史文件旧路径已不存在时，通过 `dataSource.getNewPathOfRenamedFile` 尝试从选定 Commit 到当前工作区追踪 Rename：Kero 的 Open File 应打开找到的真实现行路径，Revision ↔ Worktree 比较也必须使用同样的新路径；最终找不到文件时按上游区分「Open File 报不存在」与「Diff 的 working 一侧为已删除」，不能默默打开另一同名文件。Kero 应按这条**按需**解析的成功/失败分支操作，不能把所有历史路径直接当当前文件，也不为跟踪重命名预建全历史索引。远端只由其 Backend 打开，不能调用 Mac Finder。「Copy Absolute」是选定 repoRoot + Git 相对路径（SSH 为远端绝对路径），「Copy Relative」只复制相对路径；目录只提供对应的复制动作。
-4. 「Reset File to this Revision…」显示明确 **Yes, Reset File / Cancel** 和 SHA/路径/索引及工作区覆盖范围。底层选定 `git checkout <fullSHA> -- <literalFilePath>`（如适用配合 `--literal-pathspecs`），这是**同时影响 index 和 worktree**的真实复位，不是只恢复编辑器文本。确认和发命令前重新核对该文件真实工作区状态；若相同路径在当前 Project 的 FileTab/DiffTab 存在未保存编辑，阻止静默覆盖并通过已有保存保护引导用户处理；操作结束后正确更新/重载干净 Tab，不用新标签掩盖旧脏缓冲。
+1. 保留已有历史 View Diff；补 View File at Revision、Diff with Working、Open File、Reset File、Copy Absolute/Relative。Deleted 无选中 SHA blob，因此不提供该 Revision 查看、Open 或 Reset；已知二进制不提供文本查看，但**仍提供 Reset**，不能把文本能力当 Git 文件覆写资格。Kero 当前 FileChange 只有 name-status，不知道 binary；所需 diff 能力元数据在展开所选 Commit 时用一次 NUL 分隔 numstat 读取（Root/第一父规则），不遍历所有已加载历史、不逐文件 cat-file 预探。5 MiB/解码/真实读取失败在打开时反馈，不在菜单前预读整包内容。Rename/Copy 的 before/after 分别 originalPath/path，Root/Merge 维持第一父规则。
+2. 在现有 DiffTab 明确「Revision 原文」「Revision↔Worktree」「历史 Diff」「既有 index/worktree」的来源与身份，只增加这些实际模式，不造泛用 Ref/Merge Base 比较器。源模式同任务进入 `Project.findDiffTab`、标题、打开回调和**当前**快照编码/恢复；不让新模式恢复成 commitDiff。保留现有 diff/commitDiff 快照对应的现行业务，不新增旧版本解码、版本迁移层或双份来源字段/兼容 initializer；被替换的参数/分支在所有调用点和测试迁移后直接删除。
+   **原文**走同一 Tab 保留的原生 TextKit 表面，无增删装饰/折叠 Diff/编辑保存；修改 DiffViewerView 的 No Changes gate 与 DiffNativeSurface 呈现，空文件也显示原文而非“无变化”。Revision↔Worktree 的右侧是实际工作区，选中/重新打开时重读该侧，不能继续 `refreshWhenSelected` 的 `commitHash != nil` 一律不刷；不因共享 prefersEditing 意外写入历史 Revision。保留唯一表面、5 MiB、UTF-8/NUL 与机器/断线保护。
+   修 `gitContent` 把 cat-file 所有失败当 missing 的汇聚点：仅 Root/Added 的 before、Deleted 的 after、经确认不存在的版本/工作区侧可为空；所选 Revision 应存在却读取失败、SSH 超时或权限错误必须是错误，不走 firstGitContent 的“最后返回空成功”。保留未合并 index 的真实 stage fallback，不把删除所有 fallback 当简化。
+3. Open File 用**发起** Project 的普通 FileTab；其路径当前不存在时，按上游 `getNewPathOfRenamedFile` 只做一次 `git diff --name-status -z --find-renames --diff-filter=R <selectedSHA> --` 的 Revision→Worktree 对比，并确认匹配新路径实际存在。Revision↔Worktree 使用同一按需解析结果；不是逐 Commit `log --follow` 或预建历史索引。原路径仍存在时上游直接打开它，不加没有来源证据的“同名内容必须仍是原文件”规则；查询失败不能冒称已找到 Rename。最终找不到时 Open 报不存在、Diff working 侧为删除，远端仅当前 backend，不调 Mac Finder。Copy Absolute 为所选 repoRoot+Git 相对路径（SSH 为远端绝对路径），Relative 为原相对路径，目录同时提供两种复制。
+4. Reset File 显示 **Yes, Reset File / Cancel**、SHA/路径和 index/worktree 覆写说明；执行 `git --literal-pathspecs checkout <fullSHA> -- <original revision path>`，两处一起修改，不能只恢复编辑器文本，也不把 Open 的 Rename 解析结果偷换成 Reset 的目的路径。复用 T1 对受影响 Tab 的保存/在途写入保护、失败不关 Tab与干净重载；只核对该覆写目标的实际状态，不扫描或指纹整个仓库。二进制文件同样可恢复真实 bytes；取消零 Git 副作用。
 
-**Red→Green / 验收：** Git 临时库包含 Added/Deleted/Renamed/Copied、根提交、Merge 文件、多版本同名路径、文件超过 5 MiB、NUL/坏 UTF-8、SSH 模拟路径；比较实际 blob bytes 而不把缺失 blob 解释为无变化。NativeUI 从历史文件菜单进入：View Revision 是真实只读原文、Revision ↔ Worktree 的左右内容正确且能处理改名/工作区已删除，普通 Open 打开当前工作区文件且历史路径被改名时按需追踪新路径、复制两种路径准确；Reset File 取消零副作用、确认后 Git index/worktree 同时变更、未保存编辑不丢；重复打开不同模式必须生成/复用**正确** DiffTab 且保留原生视图身份。共享树整体仍不横向移动。
+**Red→Green / 验收：** Added/Deleted/Renamed/Copied、Root/Merge、多版本/当前同名路径、空 blob、超过 5 MiB、NUL/坏 UTF-8、读取失败与 SSH fixture；Revision 应存在却失败不能变成空 Diff。NativeUI 真菜单的只读原文无增删装饰，Revision↔Worktree 改名/删除/重新选中刷新正确，普通 Open 按上游仅在不存在时解析 Rename；两种目录/文件复制准确。Reset 取消不改 Git，确认后 index/worktree 同变、二进制 bytes 可恢复、失败/保存期间编辑不丢。不同来源的 Tab 正确复用/区分、共享编辑偏好不使 Revision 可写；SessionStore 当前模式往返及 Project 实际重建内容/只读性质一致，不只测 JSON 编码。保留原生身份与共享树滚动。
 
-**提交边界：** 与历史文件菜单同一 task 补齐真实 `DiffTab` 来源及 Tab Key、Git 文件复位、测试和 [Git](../../../docs/features/git.md)/[Diff](../../../docs/features/diff.md)/[Files](../../../docs/features/files.md)/[Editor](../../../docs/features/editor.md) 文档；删除被替换的特殊分支，不造独立 RevisionViewer。
+**提交边界：** 同 task 补齐 Diff 来源、原文呈现、刷新/Tab Key/当前快照、Git 文件复位、测试及 Git/Diff/Files/Editor/Session Restore 文档；删除被替换的布尔/optional 来源分支和兼容回调，不造 RevisionViewer、第二个 FileTab 或旧格式迁移器。
 
 <a id="p4-t7"></a>
 ## P4-T7 Uncommitted Changes 弹窗与工作区 Git 文件/分组菜单
@@ -172,11 +204,12 @@
 **入口 / Files：** `GitPanel.changeList` 的 MERGE/STAGED/CHANGES 区块标题 `PanelSectionHeader`、`changedFileRows/row/GitEntryRow.menu`，共享 `TreeFolderRow/TreeFileRow`；`GitStatusModel.stash/stage/unstage/stageAll/unstageAll/discard/discardChanges/prepareLocalDiscard/prepareRemoteDiscard`；`GitStatusModel.perform`。验证：`GitStatusModelTests`、`TreeRowHitTestingTests`、`RecentCommitsViewTests` 或现有同层 Git 原生窗。
 
 **实施：**
-1. Git Graph 把 Uncommitted Changes 当伪 Commit：其右键提供 **Stash uncommitted changes…**（Message 可空、Include Untracked=true）、**Reset uncommitted changes…**（Mixed 默认/Hard）、**Clean untracked files…**（Clean Untracked Directories=true）。Kero 不另加伪提交或独立区块：把这组菜单挂在**当前存在的** CHANGES/STAGED/MERGE 区块标题右键，并从既有 More Menu 提供一致入口（只有 staged 变化时仍能打开）；不复制不同的 `stash(includeUntracked: true)` 和「盲 Reset」按钮。Stash 仅扩展原方法接受可选 message。
-2. Reset Mixed 使用 `git reset --mixed HEAD`：取消暂存而保留 working；Hard `git reset --hard HEAD`：丢弃已跟踪的 index/worktree 修改，普通未跟踪文件不被它自动删除；在无 HEAD（unborn repo）时没有该菜单。原生确认呈现两种效果，不默认 Hard；复用 P4-T2 的真实 Reset Model 方法及工作区未保存保护。
+1. Git Graph 的三项是 **Stash…**（Message 可空、Include Untracked=true）、**Reset…**（Mixed 默认/Hard）、**Clean…**（Directories=true）。Kero 不加伪 Commit 或新区块：扩展 PanelSectionHeader **内部现有 contextMenu** 的仅菜单项，合并原 Stage/Unstage/Discard；不能外套第二份 contextMenu，也不能把这三项放进会同时生成 hover 按钮的 `actions`。Files 等其它 header 默认保持原样。CHANGES/STAGED/MERGE 使用同一表单入口，More Menu 兜住只有 staged 或过滤隐藏标题的情况；此处是可达入口而非错误 fallback。不留直接 `stash(includeUntracked: true)` 的盲执行；原 stash 方法仅增加可选 message。
+2. Mixed `git reset --mixed HEAD` 保留 working、重置 index；Hard `git reset --hard HEAD` 覆写 tracked 且可能删除阻挡恢复路径的 untracked，准确沿用 T2 提示，不默认 Hard；无 HEAD 不提供 Reset。复用 T2 的方法和 T1 不关闭 Tab 的保存/重载保护；Mixed 不因为无关未保存工作区文本一律被禁用。
 3. Clean 使用上游 `git clean -f[d]` 的**永久删除语义**，不能把它谎称为本机 Move to Trash，也不能把 Kero 原本逐文件的 Discard/Trash 悄悄改成永久删除。原生确认明确是否包含目录及永久删除的影响，保持上游 **Yes, Clean / Cancel** 单次确认，不为 Clean 新增另一个预览状态机；执行前核对当前机器与仓库，清理范围按 Git 原生语义。取消不执行，远端通过当前 Backend 执行，没有 Mac 同名路径兜底。
-4. MERGE 仍只对真正冲突文件提供 Open Conflicted File/Mark Resolved，STAGED 继续 Open Diff/Unstage 且补上 VSCodium 原有的 **Open File / Open HEAD File**（有 HEAD blob 时）；CHANGES 仍可 Stage/Discard/打开文件，并按存在的 HEAD/index blob 复用 P4-T6 的只读版本查看入口。分组/目录右键复用现有单文件/批量 Model 动作，不重新实现文件树与 hover，过滤时不能把“当前可见部分”误当全部而批量丢弃。Tree 目录批量操作基于显式所选路径集，不能简单使用全仓 `stageAll`。本机 per-file 删除仍按原 `PendingDiscard` 与 Trash；SSH 删除仍必须走原审核且是远端永久删除。
-5. **补齐 VSCodium 真实 Ignore，不建第二个编辑器**：微软 Git 扩展的 `repository.ignore` 在源码中打开仓库根 `.gitignore`，将所选工作区/Untracked 文件或目录的 Git 相对路径逐行追加至文档，随后保存。Kero 用**当前 Project 的普通 FileTab**承载该编辑；已核对 `FileTab.text` 是 `@ObservationIgnored`、`SourceTextEditor.Coordinator` 持有正在显示的 STTextView，单纯 `file.text += ...` **不会刷新已挂载的原生编辑器**。在 `FileTab`/其现有 `SourceTextEditor.Coordinator` 之间增加最小的「在现有原生缓冲尾部插入文本」动作，走原 `refreshDirtyState()` 与 `save()`；避免替换整个编辑器、丢失 undo/光标或双份内容。远端 FileTab 初始 `.loading` 必须等实际 `content == .text` 和初始读取完成才能追加，`.unavailable`/断线/保存失败要明确保留或拒绝；若 `.gitignore` 已有未保存修改，必须直接在**同一个**缓冲追加并保留原文，不能另起 Backend 写入压过用户文本；若文件不存在，复用已有创建文件→打开流程。路径按 Git ignore 规则处理反斜杠和 `[` 等字符，保持旧规则、换行和换行结束；不能碰其它机器同名路径。不存在一个名叫 Ignore 的另行维护状态机，也不做只在编辑器选区有效的 Stage Selected Ranges。共享树布局、点击、短文本不回弹、长文本可滚动、右侧按钮固定仍复用现有组件。
+4. MERGE 保留真正冲突的 Open/Mark Resolved；STAGED 已有 Open File，不重复添加，补 **Open HEAD File**（有 blob 时）；CHANGES 保留 Stage/Discard/Open，HEAD/index 查看复用 T6 原文入口。目录动作从对应**原始分组**取得所选真实目录的路径集，包含 Rename 新旧路径，单次 argv/perform 完成批量 Stage/Unstage：不能循环单文件调用（首个会占 isBusy），不能用全仓 stageAll 冒充目录作用域。无 HEAD 的 Unstage 继续用原 rm --cached 语义。Discard 复用 prepare/confirm ReviewedDiscard；过滤状态下沿用现有禁用“全仓”危险动作的规则，不默默改变范围。保留本机 Trash/SSH 删除审核和共享树 hover，不另建目录操作 executor。
+5. Ignore 按 VSCodium `repository.ignore` 在发起 Project 的普通 `.gitignore` FileTab **追加并保存**。使用同一原生编辑缓冲的末尾插入动作、`refreshDirtyState()` 和串行 `save()`；`file.text += …` 不会更新已挂载 STTextView，`reloadRevision` 重建或直接 backend.write 也不能替代原生插入。已有脏文本一起保留并按该动作保存，undo 能撤销插入；未挂载时仍由同一 FileTab 文本真源承载，不另建缓冲。
+   `.loading` 时等待 FileTab 已拥有的读取任务后核对文本/身份，不轮询或 sleep；`.unavailable`、断线和保存失败明确保留/拒绝。缺 `.gitignore` 时通过现有 backend 的排他 createFile→Project.openFile 建立，若已被另一进程创建则读取它，不能覆盖成空文件；FileTreeModel.beginNewFile 是会弹名称输入的 UI，不能把它当已存在的“静默创建指定文件”方法。Git 相对路径转换为可表达的 ignore pattern，保留旧内容/换行；POSIX 文件名的反斜杠不是 Windows 分隔符，`* ? [ # !` 等不能无意变成规则语法，用 `git check-ignore` 验证特殊文件/目录。含换行且不能准确表达的路径明确拒绝自动追加，不把一条文件名写成多条规则。不扩成通用 Ignore 编辑器、规则优化器或配置状态机；Ignore 的 Git 刷新由成功保存触发，不在失败时显示已忽略。
 
 **Red→Green / 验收：** 临时 Git 仓库覆盖只有 staged、只有 unstaged、同路径 staged+unstaged、untracked 文件及目录、Merge 冲突、改名、无 HEAD、变更过滤后批量动作、特殊路径。Stash Message/IncludeUntracked 直接核对 `stash list` 和工作区；Reset Mixed/Hard 核对 index/HEAD/工作区；Clean 取消/确认的实际作用路径、目录开关/远端命令；现有 Discard 仍按本机 Trash/SSH 删除审核执行；Ignore 在 `.gitignore` 无文件、已有规则、已挂载原生 STTextView、SSH 仍处于 `.loading` 及已有未保存文本时按真源追加并保存，不能空读覆盖或绕过原生编辑缓冲；失败后原文、undo 与脏状态不丢。NativeUI 在真实分组、目录和文件**右键**操作，额外验证 Staged 的 Open HEAD File 正确只读、无 HEAD 时不误开，其他各区 hover 与菜单动作一致，键盘/VoiceOver 和共享树滚动回归。
 
@@ -187,17 +220,17 @@
 
 **结果：** Git Manager 可看到并右击**具体** Stash，所有原生弹窗选项和操作对象与 Git Graph 相同。
 
-**入口 / Files：** `GitStatusModel.stashCount/runGitStatus/perform/stashPop`，`GitPanel.moreMenu/changeList`、`PanelSectionHeader`、现有树行风格；`WorkspaceBackend`。测试：`GitStatusModelTests`、原生 Git Panel 测试。
+**入口 / Files：** `GitStatusModel.stashCount/runGitStatus/prefetchedSnapshotCommands/StatusResult/applyRepository/clearRepositoryState/perform/stashPop`，`GitPanel.moreMenu/changeList`、`PanelSectionHeader`、现有树行风格；`WorkspaceBackend`。列表沿同一 StatusResult 与缓存快照发布/失效，切仓库时清除，测试：`GitStatusModelTests`、原生 Git Panel 测试。
 
 **实施：**
-1. 在 GitPanel 中增加最小 STASHES 折叠行区域（不独立 Dock，不修改 Recent Commits 的真实 DAG）：读取各条 `stash@{n}`、原始 OID、说明，使用现有 Model 在需要显示时按需加载；每条有原生 `.contextMenu`：Apply、Create Branch from Stash、Pop、Drop、Copy Stash Name/Hash。刷新/成功操作使旧列表失效，不为同一条 Stash 另建全局缓存、ViewModel 或定时轮询。
+1. GitPanel 增加紧凑 STASHES 折叠行，不独立 Dock、不混入真实 Commit DAG。在既有 status/batch 中把只计数的 `rev-list --walk-reflogs --count refs/stash` **替换**成一次 selector/OID/说明的 `stash list` 或 `reflog` 查询，count 从条目派生；不并行保留 count+list 两查询、独立缓存或按需加载状态机。使用可靠字段分隔保留说明，空列表与查询失败区分。各行 `.contextMenu` Apply/Branch/Pop/Drop/Copy Name/Hash；复用已有刷新请求失效规则，不另加轮询。
 2. Apply 与 Pop 分别有 **Reinstate Index=false** 复选，真正带/不带 `--index`；Apply 不移除 Stash，Pop 仅成功应用后移除，冲突时仍保留 reflog。Create Branch 先输入名称，真实 `git stash branch <name> <selector>` 会**Checkout 新 Branch 并恢复变更**、成功后可能移除原 Stash；Drop 的 **Yes, Drop/Cancel** 只移除选定的条目。
-3. **必须保留 selector + OID 两种含义。** 临时真实 Git 证明 `stash apply <OID>` 可执行，但 `stash pop/drop <OID>` 返回 `not a stash reference`；因此本项目的 Pop/Drop 传 `stash@{n}`，在**同一个** `GitStatusModel.perform` 开始 Git 命令前核对 reflog selector 当前 OID 等于菜单打开时的 OID。序号因新 Stash 移动时拒绝操作并提示重新选择；不依赖仅有的 `stashCount` 作身份。
-4. 既有 More Menu 的 `stashPop()` 若保留，明确叫 **Pop Latest Stash**，使用相同执行语义/可选 Reinstate Index，不造成两个不同的同名「Pop Stash」。操作前保护用户未保存编辑，不在选择 Stash 失败时用 Hard Reset 清理 Git index。兼顾远端连接和机器身份。
+3. selector+OID 都需保留。Apply 可用固定 OID；**Pop/Drop/Branch** 用 selector，Branch 的成功移除行为不能通过传 OID 丢掉。在同一 perform 首次副作用前核对 selector 仍指向选择的 OID；弹窗期间移位就重新选择，不只依赖 stashCount。检查不是外部 CLI 的原子锁，不声称消除所有跨进程并发，也不新建全局锁。Apply 使用 selector 时做同样核对。
+4. More Menu 若保留 Pop 快捷入口，明确 **Pop Latest Stash…**：绑定打开时的首条 selector/OID，走相同 Reinstate Index 表单、校验和执行方法，不保留原无参数盲 `stashPop()`。会修改工作区的 Apply/Pop/Branch 复用 T1 保存/重载；只删 reflog 的 Drop 不因无关 dirty Tab 被禁用。失败不 Hard Reset 清 index，连接/机器变化不串目标。
 
-**Red→Green / 验收：** 至少两个不同内容的真实 Stash，分别 Apply/Pop（有/无 `--index`）、Branch、Drop：核对 `stash list/reflog`、HEAD、新 Branch、index/worktree 和冲突；对话框打开后插入或删除另一 Stash，旧 selector 不得误删另一条；取消、新名重复、远端连接变化零错误副作用。NativeUI 每行右键显示正确名称及按钮，More Menu Pop Latest 语义清楚，窗口/项目切换与 VoiceOver 不串目标。
+**Red→Green / 验收：** 至少两个不同内容的 Stash，Apply/Pop 有/无 --index、Branch 成功移除、Drop 精确移除；冲突保留 stash/真实 index。弹窗期间新增/删除另一条时 Pop/Drop/**Branch** 不误用移位 selector；Apply 固定 OID 的内容正确。count 从真实列表派生，查询失败不假清零；Pop Latest 同表单/校验。取消、重名、换机器和保存失败留原内容；NativeUI 行右键/名称/字段/按钮、窗口与 VoiceOver 不串目标。
 
-**提交边界：** 原 `stashCount` 只作数字展示的缺口按需补成可读条目、菜单、模型复用、测试与 Git/UI/本地化文档；移除旧的含混 Pop 路由，不保留两套 Stash 执行器。
+**提交边界：** 列表/菜单/模型/回归及 Git/UI/本地化文档同一提交；删原 stashCount 独立计数命令/存储和无参数 stashPop 盲执行，count 仅保留派生展示；无兼容 Pop 路由、双份缓存或执行器。
 
 <a id="p4-t9"></a>
 ## P4-T9 全对象弹窗、真实副作用与本机/SSH 用户路径验收
@@ -208,8 +241,24 @@
 
 **步骤：**
 1. 对照 [菜单矩阵](#菜单矩阵与边界) 与 [弹窗行为合同](#原生弹窗行为合同) **逐格**核验：Commit Root/Merge/Head，当前与非当前 Branch，Remote HEAD 和多 remote，Tag 两类型与折叠 `+N`，Stash 各序号，Uncommitted 标题、Staged/Unstaged/Conflict 文件、历史文件、Archive。检查默认字段、禁用理由、键盘焦点、主/次按钮、二次询问、取消和保留输入；不是只测 `perform` 被调用。
-2. 使用临时 Git 仓库与两个 bare remotes，从真实菜单触发各种模式，核对 HEAD/refs/index/worktree、Stash reflog、Tag 注释、提交消息、Archive TAR/ZIP 内容以及服务端 Ref。显式覆盖：Branch/Tag 重名两按钮、Force With Lease/Force、Merge No-FF/Squash/No Commit、Cherry Pick -x/No Commit、Rebase Interactive、Reset 三模式、Drop、Tag Proceed to Push、Reset File、Clean Untracked、Stash selector 移位。所有部分成功与取消都要真实核对。
+2. 复用 T1～T8 的临时 Git 库与 bare remotes，从真实原生菜单/弹窗触发，核对 HEAD/refs/index/worktree、Stash reflog、Tag、消息、TAR/ZIP 和服务器 Ref。覆盖重名两按钮、Force 三模式、Merge 选项、Cherry Pick -x/No Commit、Interactive、Reset/Drop、Tag Proceed（含 Add Tag 后取消 Push）、Reset File/Clean/Stash selector 移位，以及 Delete 继续/Push 首错停止的差别。共享 Merge/Pull 模型的 Git 组合测试不为每种 Ref 重复一套；各对象仍验证实际菜单路由、默认字段与按钮，不用纯 callback spy 替代最终结果。所有部分成功、取消和“未执行”项都准确反馈。
 3. 按 [测试隔离](../../../docs/testing.md#隔离环境) 使用独立 Debug App 检查真右键和原生弹窗，不启动/结束用户正式 Kero。获授权的**专用** Windows SSH 测试连接和远端临时库另外实测；不能复用用户正在工作的 SSH master、修改正式仓库或在断线后落回 Mac。远端的 Push/Delete/Archive/Reset File 必须验证目标机器上的实际结果。缺 SSH 条件时只报告本机 Gate，P4 不冒称「SSH 全部验收」。
-4. 按各 task 已有回归先 Red→Green，最终运行实际发现的相关 XCTest、`make test`、`make build` 与严格签名；对 P1～P3 图谱、历史分页、横向回弹、文件树、焦点、多窗口、Local/SSH 刷新保持回归。**P4-T9 只能修实测遗漏并回到原 task 的源码/测试/文档归属，不把被替代代码的删除或必要新增测试留到本 task。** Issue #2 的 SSH 外部刷新缺口仍需单独证据，不因菜单完成自动 Close。
+4. 各 task 在本 task Red→Green 后运行相关 XCTest、`make test`、`make build`/严格签名并按 development 整包安装，不重启用户 App；无需额外 Release 构建（除非实际触及其要求范围）。T9 汇总受影响回归及完整 App/专用 SSH 路径，按测试文档区分 Integration/NativeUI/WorkspaceUI/E2E；普通设置不因 isolated-ui-test 而隔离，Always 选项验收使用已核实的测试配置，不能改用户偏好。**旧代码清理、必要回归和 owner 文档不延后到 T9。** 实测遗漏归还原 task；Issue #2 的 SSH 外部刷新另需证据，不自动 Close。
 
-**提交边界：** 以用户路径证据和完成判断为交付；只有本地证据而无源码变化时在 `todo.toml` 记 `no_commit_reason`。实际缺陷归还所属 task 同步修改并提交，保留严格 Task/Commit 对应；所有 P4 功能完成且真正审计通过后才可收 Gate。
+**提交边界：** 用户路径证据和完成判断是交付；只有本地证据无源码变化时记 no_commit_reason。缺陷回原 task 同步修改/验证/提交；无真实 SSH 条件可单独报告本机结果，但 T9 不因此标 completed、P4 不宣称全验收。规划/证据文件默认本地维护，生产代码按中文标题、正文写清改动/原因/实际验证原子提交，不推送。
+
+## 同任务清理与依赖顺序
+
+按 T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 执行；不新增前置框架 task。
+
+| Task | 替代接通后本 task 立即删除 | 保留的现行职责 |
+| --- | --- | --- |
+| T1 | 全局猜窗口、被替换 Commit 回调、错误的 Message 复制标签 | 唯一 perform、仓库/连接失效、冲突 Banner、Git 登录环境 |
+| T3 | Branch-only 名称框/旧 branch createReference 路由；名称 helper 无调用时删 | 顶部 Create 默认 Checkout、Push/Publish 快捷语义；Tag 未迁移的调用留 T5 |
+| T4 | remote Badge/+N 的只读特判、按 /HEAD 后缀过滤 | 单远端删除 fallback 的真实结果、symbolic HEAD 分类 |
+| T5 | 最后的 CommitReferenceKind/createReference、右键 Show Tagged Commit | 左击 Tag 定位、同一 refs 查询、独立 Always 偏好 |
+| T6 | 被替换的旧 Diff 来源参数/分支/初始化壳，不能保留两份来源真源 | 现行工作区/历史 Diff、当前快照业务、真实 stage fallback、唯一 TextKit 表面 |
+| T7 | More Menu 盲 Stash、被替换的重复菜单分支 | PendingDiscard、Trash/SSH 删除审核、共享树、普通 FileTab/保存 |
+| T8 | 独立 stashCount 查询/存储、无参盲 stashPop、含混 Pop 标签 | 派生 count、selector+OID 身份、同一刷新/执行 owner |
+
+清理只在替代实现接通并通过对应回归后进行；提前删仍被未实施 task 使用的调用不是原子迁移。确认无引用才删除字符串。T9 只验收和回送真实遗漏，不承担集中清理。

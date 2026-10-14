@@ -53,18 +53,18 @@ note = "Git 原生面板外部编辑/暂存/提交 Red→Green，2.02/1.98/1.78�
 [[tasks]]
 id = "P4-T1"
 title = "Commit Checkout、Cherry-pick、Revert、Merge 与冲突恢复"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t1"
-commit = ""
-note = ""
+commit = "a5f1c91"
+note = "Commit Git结果6/6、原生sheet2/2；预检切机器Red→Green；make test130/130、make build/严格验签PASS；整包安装未重启；完整App右键与真实SSH归T9"
 
 [[tasks]]
 id = "P4-T2"
 title = "Commit Rebase、Reset 三模式及条件 Drop"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t2"
-commit = ""
-note = ""
+commit = "ffd3194"
+note = "make test 140（1 跳过）; windows pinned/automatic SSH 实测 44.278s；make build/验签/安装通过；第一次 fixture 超时已核对清理并保留证据"
 
 [[tasks]]
 id = "P4-T3"
