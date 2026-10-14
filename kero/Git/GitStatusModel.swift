@@ -1699,7 +1699,12 @@ final class GitStatusModel {
             "for-each-ref", "--contains=" + commitOID, "--format=%(refname)", "refs/remotes"
         ], in: repoRoot, backend: backend)
         guard currentScope == contextGeneration,
-              isCurrent(target, requiresStableHead: false), result.status == 0 else { return nil }
+              isCurrent(target, requiresStableHead: false) else { return nil }
+        guard result.status == 0 else {
+            let message = String(localized: "Unable to check whether the tag commit is on the selected remotes.", table: "Git")
+            failImmediately(message + (result.stderr.isEmpty ? "" : "\n" + result.stderr))
+            return nil
+        }
         let containing = Set(result.stdout.split(separator: "\n").compactMap { raw -> String? in
             let name = String(raw)
             guard refsByName[name]?.symbolic == nil,

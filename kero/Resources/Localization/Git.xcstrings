@@ -2177,6 +2177,16 @@
         }
       }
     },
+    "Unable to check whether the tag commit is on the selected remotes." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法检查选定远端是否包含此标签对应的提交。"
+          }
+        }
+      }
+    },
     "Yes, Fetch" : {
       "localizations" : {
         "zh-Hans" : {

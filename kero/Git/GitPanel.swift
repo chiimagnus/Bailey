@@ -960,7 +960,7 @@ struct GitPanel: View {
         }
     }
 
-    private func presentTagAction(
+    func presentTagAction(
         _ reference: GitStatusModel.RecentCommit.Reference,
         commit: GitStatusModel.RecentCommit,
         action: RecentCommitsView.TagAction
@@ -1026,16 +1026,19 @@ struct GitPanel: View {
                 }
             }
         case .push:
-            let preferred = model.remotes.contains("origin") ? "origin" : model.remotes.first
-            let detail = model.remotes.isEmpty
-                ? String(localized: "No Git remote is configured", table: "Git") : name
-            let dialog = GitTagDialog(kind: .push(remotes: model.remotes, preferred: preferred),
-                title: String(localized: "Push Tag…", table: "Git"), detail: detail)
-            dialog.alert.beginSheetModal(for: window) { answer in
-                guard answer == .alertFirstButtonReturn, isCurrent() else { return }
-                presentTagPushWarning(name: name, commitOID: commit.hash, oid: oid,
-                    remotes: dialog.selectedPushRemotes, target: target,
-                    window: window, isCurrent: isCurrent)
+            Task { @MainActor in
+                let preferred = await model.preferredPushRemote(for: nil)
+                guard isCurrent() else { return }
+                let detail = model.remotes.isEmpty
+                    ? String(localized: "No Git remote is configured", table: "Git") : name
+                let dialog = GitTagDialog(kind: .push(remotes: model.remotes, preferred: preferred),
+                    title: String(localized: "Push Tag…", table: "Git"), detail: detail)
+                dialog.alert.beginSheetModal(for: window) { answer in
+                    guard answer == .alertFirstButtonReturn, isCurrent() else { return }
+                    presentTagPushWarning(name: name, commitOID: commit.hash, oid: oid,
+                        remotes: dialog.selectedPushRemotes, target: target,
+                        window: window, isCurrent: isCurrent)
+                }
             }
         case .archive:
             presentArchiveDialog(reference: "refs/tags/" + name, objectOID: oid,
@@ -1058,8 +1061,8 @@ struct GitPanel: View {
         Task { @MainActor in
             let unknown = await model.tagRemotesWithoutCommit(
                 commitOID, selected: remotes, target: target)
-            guard isCurrent() else { return }
-            guard !settings.gitAlwaysProceedPushTag, let unknown, !unknown.isEmpty else {
+            guard isCurrent(), let unknown else { return }
+            guard !settings.gitAlwaysProceedPushTag, !unknown.isEmpty else {
                 push()
                 return
             }
