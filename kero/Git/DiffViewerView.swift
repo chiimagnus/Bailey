@@ -130,6 +130,7 @@ final class DiffTab: nonisolated Identifiable {
     @ObservationIgnored private var editTask: Task<Void, Never>?
     @ObservationIgnored private var reloadGeneration: UInt = 0
     @ObservationIgnored private var lastSaveTask: Task<Void, Never>?
+    var isSaving: Bool { lastSaveTask != nil }
     @ObservationIgnored private var saveRequestGeneration: UInt = 0
     @ObservationIgnored var autoSaveSuspendedForClose = false
     @ObservationIgnored private var targetGeneration: UInt = 0
@@ -253,12 +254,10 @@ final class DiffTab: nonisolated Identifiable {
         return "\(workspaceIdentity): \(title)"
     }
 
-    func reload() {
-        // Keep the editor's document and undo history stable until the user
-        // leaves edit mode, and never replace an unsaved buffer from disk.
+    func reload(afterGitAction: Bool = false) {
         // While the machine is unreachable both sides can only fail to load,
         // and an error would replace the diff the user was reading.
-        guard readOnlyReason == nil, !isEditing, !isDirty else { return }
+        guard readOnlyReason == nil, (!isEditing || afterGitAction), !isDirty else { return }
         reloadGeneration &+= 1
         let generation = reloadGeneration
         isLoading = true
@@ -358,7 +357,7 @@ final class DiffTab: nonisolated Identifiable {
                   self.readOnlyReason == nil
             else { return }
             self.isLoading = false
-            guard !self.isEditing, !self.isDirty else { return }
+            guard (!self.isEditing || afterGitAction), !self.isDirty else { return }
             self.error = result.failure
             self.isUnmerged = result.unmerged
             self.isEditable = result.editable && result.failure == nil

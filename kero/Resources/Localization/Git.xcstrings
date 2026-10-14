@@ -1,6 +1,186 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Always Accept" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总是接受"
+          }
+        }
+      }
+    },
+    "Checkout Commit…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检出提交…"
+          }
+        }
+      }
+    },
+    "Cherry Pick Commit…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拣选提交…"
+          }
+        }
+      }
+    },
+    "Revert Commit…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤销提交…"
+          }
+        }
+      }
+    },
+    "Merge Commit into Current Branch…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将提交合并到当前分支…"
+          }
+        }
+      }
+    },
+    "Record Origin" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "记录来源"
+          }
+        }
+      }
+    },
+    "No Commit" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不创建提交"
+          }
+        }
+      }
+    },
+    "Create Commit Even If Fast-forward Is Possible" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "即使可快进也创建提交"
+          }
+        }
+      }
+    },
+    "Squash Commits" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "压缩提交"
+          }
+        }
+      }
+    },
+    "Mainline Parent" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主线父提交"
+          }
+        }
+      }
+    },
+    "Yes, Checkout" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是，检出"
+          }
+        }
+      }
+    },
+    "Yes, Cherry Pick" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是，拣选"
+          }
+        }
+      }
+    },
+    "Yes, Revert" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是，撤销"
+          }
+        }
+      }
+    },
+    "Yes, Merge" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是，合并"
+          }
+        }
+      }
+    },
+    "Checkout leaves you in detached HEAD. Create a branch to keep new commits." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检出后进入游离 HEAD 状态。请创建分支以保留新提交。"
+          }
+        }
+      }
+    },
+    "No Commit does not prevent a fast-forward when that is allowed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许快进时，“不创建提交”不会阻止快进。"
+          }
+        }
+      }
+    },
+    "The Git action target changed. Reopen the menu and try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 操作目标已改变。请重新打开菜单再试。"
+          }
+        }
+      }
+    },
+    "The Git action target changed or edits could not be saved. No further Git commands were run." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 操作目标已改变或编辑未能保存。未执行后续 Git 命令。"
+          }
+        }
+      }
+    },
     "%@ (%lld items were already moved to Trash.)" : {
       "localizations" : {
         "en" : {
@@ -264,12 +444,12 @@
         }
       }
     },
-    "Copy Commit Message" : {
+    "Copy Commit Subject" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "复制提交说明"
+            "value" : "复制提交标题"
           }
         }
       }

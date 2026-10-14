@@ -50,6 +50,8 @@ SwiftUI 是主要界面，AppKit、TextKit、Ghostty 与 WebKit 分别承担已�
 
 展示层负责呈现，ViewModel 负责结果及动作编排，底层 IO 留在后端。保存失败必须保留内容和可操作反馈，不能只写日志。
 
+Git 历史操作使用发起窗口的原生 sheet；另一窗口成为 key 不改变归属，切项目或关闭原窗口使确认失效。多个选项使用原生复选框和父提交选择器，默认值及 Git 行为见 [git.md](features/git.md#历史提交操作)。
+
 ## 本地化
 
 应用维护英语 `en` 与简体中文 `zh-Hans`，开发语言为英语；自有文档为中文。字符串表位于 `kero/Resources/Localization/`。

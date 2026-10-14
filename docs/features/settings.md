@@ -16,6 +16,8 @@
 
 ## 设置传播与旧键
 
+Git 检出提交的“总是接受”写入 `git.always-accept-checkout`，默认关闭。它只略过游离 HEAD 确认，不改变 Git 执行与错误处理；重置设置会关闭此选项。
+
 终端字体、配色、光标和 Option-as-Alt 变化即时作用于现有原生表面，不重建 Shell。主题与控件规范见 [ui.md](../ui.md)。
 
 现行字体加粗键为 `terminal.font-thicken`；不再读取旧字体 UserDefaults 或旧 `font-thicken` 键。语言及 Diff 偏好使用的现有 UserDefaults 不属于旧字体迁移，不能一起删除。

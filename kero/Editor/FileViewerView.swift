@@ -71,6 +71,7 @@ final class FileTab: nonisolated Identifiable {
     /// An in-flight write must not claim to have saved a different target.
     @ObservationIgnored private var targetGeneration: UInt = 0
     @ObservationIgnored private var lastSaveTask: Task<Void, Never>?
+    var isSaving: Bool { lastSaveTask != nil }
     @ObservationIgnored private var saveRequestGeneration: UInt = 0
     @ObservationIgnored var autoSaveSuspendedForClose = false
     /// The workspace this file lives on. The tab keeps its own, so it never

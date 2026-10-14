@@ -173,6 +173,8 @@ struct ToolPanelView: View {
             case .git:
                 GitPanel(
                     model: git,
+                    manager: manager,
+                    project: manager.selectedProject,
                     session: fileActionSession,
                     sshHost: manager.selectedProject?.sshHost,
                     openFile: { manager.openFile($0) },

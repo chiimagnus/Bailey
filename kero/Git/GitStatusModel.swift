@@ -48,6 +48,86 @@ final class GitStatusModel {
         case branch, tag
     }
 
+    nonisolated enum CommitAction: CaseIterable, Sendable {
+        case checkout, cherryPick, revert, merge
+
+        var title: String {
+            switch self {
+            case .checkout: String(localized: "Checkout Commit…", table: "Git")
+            case .cherryPick: String(localized: "Cherry Pick Commit…", table: "Git")
+            case .revert: String(localized: "Revert Commit…", table: "Git")
+            case .merge: String(localized: "Merge Commit into Current Branch…", table: "Git")
+            }
+        }
+    }
+
+    nonisolated struct ActionTarget: Sendable {
+        fileprivate let generation: UInt
+        let repository: String
+        let scope: String
+        fileprivate let head: String?
+        fileprivate let branch: String?
+    }
+
+    func actionTarget() -> ActionTarget {
+        .init(generation: contextGeneration, repository: repoRoot, scope: currentScope,
+              head: headOID, branch: branch)
+    }
+
+    func isCurrent(_ target: ActionTarget, requiresStableHead: Bool = true) -> Bool {
+        isRepo && target.generation == contextGeneration && target.repository == repoRoot
+            && target.scope == currentScope
+            && (!requiresStableHead || (target.head == headOID && target.branch == branch))
+    }
+
+    func actOnCommit(
+        _ commit: RecentCommit, action: CommitAction, target: ActionTarget,
+        parent: Int = 1, recordOrigin: Bool = false, noCommit: Bool = false,
+        noFastForward: Bool = true, squash: Bool = false,
+        prepare: (@MainActor () async -> Bool)? = nil,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        guard isCurrent(target), repositoryOperation == nil,
+              commit.hash.count == 40 || commit.hash.count == 64,
+              commit.hash.allSatisfy({ $0.isHexDigit }),
+              commit.parentHashes.count < 2 || (1...commit.parentHashes.count).contains(parent)
+        else {
+            failImmediately(String(localized: "The Git action target changed. Reopen the menu and try again.", table: "Git"), completion: completion)
+            return
+        }
+        var arguments: [String]
+        switch action {
+        case .checkout:
+            arguments = ["switch", "--detach", commit.hash]
+        case .cherryPick:
+            arguments = ["cherry-pick"]
+            if commit.parentHashes.count > 1 { arguments += ["-m", String(parent)] }
+            if recordOrigin { arguments.append("-x") }
+            if noCommit { arguments.append("--no-commit") }
+            arguments.append(commit.hash)
+        case .revert:
+            arguments = ["revert", "--no-edit"]
+            if commit.parentHashes.count > 1 { arguments += ["-m", String(parent)] }
+            arguments.append(commit.hash)
+        case .merge:
+            arguments = ["merge", "--no-edit"]
+            if squash { arguments.append("--squash") }
+            else if noFastForward { arguments.append("--no-ff") }
+            if noCommit { arguments.append("--no-commit") }
+            arguments.append(commit.hash)
+        }
+        perform(
+            label: action.title, commands: [arguments],
+            squashMessage: action == .merge && squash && !noCommit
+                ? "Merge commit '\(commit.hash)'" : nil,
+            prepare: prepare,
+            isCurrentTarget: {
+                self.isCurrent(target) && (isCurrentTarget?() ?? true)
+            }, completion: completion
+        )
+    }
+
     nonisolated struct RecentCommit: Identifiable, Equatable, Sendable {
         nonisolated struct Reference: Identifiable, Hashable, Sendable {
             enum Kind: String, Sendable {
@@ -100,6 +180,8 @@ final class GitStatusModel {
         let label: String
         var state: State
         var output: String
+        var failedCommand: [String]? = nil
+        var gitError: String? = nil
         let startedAt: Date
         var finishedAt: Date?
 
@@ -649,15 +731,14 @@ final class GitStatusModel {
                 label: String(localized: "Remove intent-to-add for \(entry.fileName)", table: "Git"),
                 commands: [[
                     "--literal-pathspecs", "rm", "--cached", "-f", "--", entry.path,
-                ]]
-            ) { [weak self] success in
+                ]], completion: { [weak self] success in
                 guard success else { return }
                 self?.trash(
                     paths: [entry.path],
                     label: String(localized: "Move \(entry.fileName) to Trash", table: "Git"),
                     completedBefore: String(localized: "Removed the intent-to-add index entry.", table: "Git")
                 )
-            }
+            })
         } else if entry.isUntracked || entry.isWorktreeCopy {
             trash(
                 paths: [entry.path],
@@ -666,15 +747,15 @@ final class GitStatusModel {
         } else if entry.isWorktreeRename, let original = entry.origPath {
             perform(
                 label: String(localized: "Restore \((original as NSString).lastPathComponent)", table: "Git"),
-                commands: [["--literal-pathspecs", "restore", "--worktree", "--", original]]
-            ) { [weak self] success in
+                commands: [["--literal-pathspecs", "restore", "--worktree", "--", original]],
+                completion: { [weak self] success in
                 guard success else { return }
                 self?.trash(
                     paths: [entry.path],
                     label: String(localized: "Move \(entry.fileName) to Trash", table: "Git"),
                     completedBefore: String(localized: "Restored \((original as NSString).lastPathComponent).", table: "Git")
                 )
-            }
+            })
         } else {
             perform(
                 label: String(localized: "Discard changes in \(entry.fileName)", table: "Git"),
@@ -724,14 +805,14 @@ final class GitStatusModel {
                     String(localized: "Removed \(intentToAdd.count) intent-to-add index entries.", table: "Git")
                 )
             }
-            perform(label: String(localized: "Discard all changes", table: "Git"), commands: commands) { [weak self] success in
+            perform(label: String(localized: "Discard all changes", table: "Git"), commands: commands, completion: { [weak self] success in
                 guard success, !untracked.isEmpty else { return }
                 self?.trash(
                     paths: untracked,
                     label: String(localized: "Finish discarding all changes", table: "Git"),
                     completedBefore: completedSteps.joined(separator: "\n")
                 )
-            }
+            })
         }
     }
 
@@ -769,12 +850,12 @@ final class GitStatusModel {
                 ? String(localized: "Stage all and commit", table: "Git")
                 : String(localized: "Commit staged changes", table: "Git"))
         let draftKey = commitDraftKey
-        perform(label: label, commands: commands) { [weak self] success in
+        perform(label: label, commands: commands, completion: { [weak self] success in
             if success, let self, let draftKey,
                self.commitMessagesByRepository[draftKey] == message {
                 self.commitMessagesByRepository[draftKey] = ""
             }
-        }
+        })
     }
 
     func fetch() {
@@ -908,7 +989,7 @@ final class GitStatusModel {
             : String(localized: "Create tag \(trimmed)", table: "Git")
         perform(label: label, commands: [
             [kind == .branch ? "branch" : "tag", "--", trimmed, commit.hash]
-        ])
+        ], requiresStableHead: false)
     }
 
     func stash(includeUntracked: Bool = true) {
@@ -962,6 +1043,9 @@ final class GitStatusModel {
         directory: String? = nil,
         requiresStableHead: Bool = true,
         requiresStableUpstream: Bool = false,
+        squashMessage: String? = nil,
+        prepare: (@MainActor () async -> Bool)? = nil,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
         completion: (@MainActor (Bool) -> Void)? = nil
     ) {
         if directory == nil && !isRepo {
@@ -978,7 +1062,10 @@ final class GitStatusModel {
         let expectedHeadOID = headOID
         let expectedBranch = branch
         let expectedUpstream = upstream
-        guard !dir.isEmpty, !isBusy, !commands.isEmpty else { return }
+        guard !dir.isEmpty, !isBusy, !commands.isEmpty else {
+            completion?(false)
+            return
+        }
 
         let operationID = UUID()
         invalidateStatusRefresh()
@@ -996,10 +1083,23 @@ final class GitStatusModel {
 
         let backend = backend
         Task { [weak self] in
+            let isCurrent: @MainActor () -> Bool = { [weak self] in
+                guard let self else { return false }
+                return self.contextGeneration == generation
+                    && self.runningOperationID == operationID
+                    && (isCurrentTarget?() ?? true)
+            }
+            let prepared = await prepare?() ?? true
             let batch = await Task.detached(priority: .userInitiated) {
                 var transcript: [String] = []
                 var failureCode: Int32?
                 var failureMessage: String?
+                var failedCommand: [String]?
+                var gitError: String?
+                let staleMessage = String(localized: "The Git action target changed or edits could not be saved. No further Git commands were run.", table: "Git")
+                guard prepared, await isCurrent() else {
+                    return CommandBatchResult(output: staleMessage, failureCode: -1, failureMessage: staleMessage)
+                }
 
                 if let expectedRepositoryRoot {
                     guard await Self.resolveRepositoryRoot(
@@ -1034,6 +1134,10 @@ final class GitStatusModel {
                 }
 
                 for args in commands {
+                    guard await isCurrent() else {
+                        return CommandBatchResult(output: transcript.joined(separator: "\n") + "\n" + staleMessage,
+                                                  failureCode: -1, failureMessage: staleMessage)
+                    }
                     transcript.append("$ git " + Self.displayCommand(args))
                     let run = await GitCommandExecution.run(args, in: dir, backend: backend)
                     let text = [run.stdout, run.stderr]
@@ -1045,13 +1149,46 @@ final class GitStatusModel {
                         let fallback = String(localized: "Git command failed", table: "Git")
                         failureCode = run.status
                         failureMessage = text.isEmpty ? fallback : text
+                        failedCommand = args
+                        gitError = run.stderr
                         break
+                    }
+                }
+                if failureCode == nil, let squashMessage {
+                    guard await isCurrent() else {
+                        return CommandBatchResult(output: transcript.joined(separator: "\n") + "\n" + staleMessage,
+                                                  failureCode: -1, failureMessage: staleMessage)
+                    }
+                    let staged = await GitCommandExecution.run(["diff", "--cached", "--quiet"], in: dir, backend: backend)
+                    if staged.status == 1 {
+                        guard await isCurrent() else {
+                            return CommandBatchResult(output: transcript.joined(separator: "\n") + "\n" + staleMessage,
+                                                      failureCode: -1, failureMessage: staleMessage)
+                        }
+                        let args = ["commit", "-m", squashMessage]
+                        transcript.append("$ git " + Self.displayCommand(args))
+                        let commit = await GitCommandExecution.run(args, in: dir, backend: backend)
+                        let text = [commit.stdout, commit.stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+                        transcript.append(text)
+                        if commit.status != 0 {
+                            failureCode = commit.status
+                            failureMessage = text
+                            failedCommand = args
+                            gitError = commit.stderr
+                        }
+                    } else if staged.status != 0 {
+                        failureCode = staged.status
+                        failureMessage = staged.stderr
+                        failedCommand = ["diff", "--cached", "--quiet"]
+                        gitError = staged.stderr
+                        transcript.append(staged.stderr)
                     }
                 }
                 return CommandBatchResult(
                     output: transcript.joined(separator: "\n"),
                     failureCode: failureCode,
-                    failureMessage: failureMessage
+                    failureMessage: failureMessage,
+                    failedCommand: failedCommand, gitError: gitError
                 )
             }.value
 
@@ -1075,6 +1212,7 @@ final class GitStatusModel {
                     label: label,
                     state: .failed(exitCode: failureCode),
                     output: batch.output,
+                    failedCommand: batch.failedCommand, gitError: batch.gitError,
                     startedAt: self.operation?.startedAt ?? finishedAt,
                     finishedAt: finishedAt
                 )
@@ -1226,6 +1364,8 @@ final class GitStatusModel {
         let output: String
         let failureCode: Int32?
         let failureMessage: String?
+        var failedCommand: [String]? = nil
+        var gitError: String? = nil
     }
 
     private nonisolated struct TrashResult: Sendable {

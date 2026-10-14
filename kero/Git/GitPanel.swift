@@ -4,7 +4,7 @@ import SwiftUI
 // MARK: - Git panel
 
 struct GitPanel: View {
-    private let settings = AppSettings.shared
+    var settings: AppSettings = .shared
     private let themeChanges = Theme.changes
 
     private enum EntryOperation: Equatable {
@@ -27,6 +27,8 @@ struct GitPanel: View {
     }
 
     let model: GitStatusModel
+    let manager: TerminalManager
+    let project: Project?
     let session: TerminalSession?
     let sshHost: String?
     let openFile: (String) -> Void
@@ -525,7 +527,8 @@ struct GitPanel: View {
             ),
             placeholder: kind == .branch
                 ? String(localized: "Branch name", table: "Sidebar")
-                : String(localized: "Tag name", table: "Git")
+                : String(localized: "Tag name", table: "Git"),
+            requiresStableHead: false
         ) { name in
             performOperation(.branchMenu) {
                 model.createReference(
@@ -537,10 +540,13 @@ struct GitPanel: View {
     }
 
     private func presentGitNameDialog(
-        title: String, detail: String, placeholder: String,
+        title: String, detail: String, placeholder: String, requiresStableHead: Bool = true,
         onCreate: @escaping (String) -> Void
     ) {
-        guard !model.isBusy else { return }
+        guard !model.isBusy, let window = manager.attachedWindow,
+              let project, manager.selectedProject === project,
+              let context = project.panelContext else { return }
+        let target = model.actionTarget()
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = detail
@@ -562,14 +568,62 @@ struct GitPanel: View {
 
         let handleResponse: (NSApplication.ModalResponse) -> Void = { response in
             _ = validator
-            guard response == .alertFirstButtonReturn else { return }
+            guard response == .alertFirstButtonReturn,
+                  manager.attachedWindow === window,
+                  manager.selectedProject === project,
+                  project.matchesPanelTarget(context.identity),
+                  model.isCurrent(target, requiresStableHead: requiresStableHead) else { return }
             onCreate(field.stringValue)
         }
 
-        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
-            alert.beginSheetModal(for: window, completionHandler: handleResponse)
-        } else {
-            handleResponse(alert.runModal())
+        alert.beginSheetModal(for: window, completionHandler: handleResponse)
+    }
+
+    func presentCommitDialog(
+        _ commit: GitStatusModel.RecentCommit, action: GitStatusModel.CommitAction
+    ) {
+        guard !model.isBusy, model.repositoryOperation == nil,
+              let window = manager.attachedWindow, let project,
+              manager.selectedProject === project, let context = project.panelContext else { return }
+        let target = model.actionTarget()
+        let isCurrent: @MainActor () -> Bool = {
+            manager.attachedWindow === window && manager.selectedProject === project
+                && project.matchesPanelTarget(context.identity) && model.isCurrent(target)
+        }
+        let execute: (GitCommitDialog?) -> Void = { dialog in
+            guard isCurrent() else { return }
+            if action == .checkout, dialog?.alwaysAccept.state == .on {
+                settings.gitAlwaysAcceptCheckout = true
+            }
+            performOperation(.commitMenu) {
+                model.actOnCommit(
+                    commit, action: action, target: target,
+                    parent: max(1, (dialog?.parent.indexOfSelectedItem ?? 0) + 1),
+                    recordOrigin: dialog?.recordOrigin.state == .on,
+                    noCommit: dialog?.noCommit.state == .on,
+                    noFastForward: dialog?.noFastForward.state == .on,
+                    squash: dialog?.squash.state == .on,
+                    prepare: {
+                        await project.saveBeforeGitAction(
+                            repository: target.repository, scope: target.scope, isCurrent: isCurrent
+                        )
+                    }, isCurrentTarget: {
+                        isCurrent() && project.canRunGitAction(repository: target.repository, scope: target.scope)
+                    },
+                    completion: { _ in
+                        project.reloadAfterGitAction(repository: target.repository, scope: target.scope)
+                    }
+                )
+            }
+        }
+        if action == .checkout, settings.gitAlwaysAcceptCheckout {
+            execute(nil)
+            return
+        }
+        let dialog = GitCommitDialog(action: action, commit: commit, target: target)
+        dialog.alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            execute(dialog)
         }
     }
 
@@ -914,6 +968,10 @@ struct GitPanel: View {
                             },
                             createReference: { commit, kind in
                                 presentCreateReferenceDialog(kind: kind, commit: commit)
+                            },
+                            canActOnCommit: !model.isBusy && model.repositoryOperation == nil,
+                            commitAction: { commit, action in
+                                presentCommitDialog(commit, action: action)
                             }
                         )
                         .frame(maxWidth: .infinity)

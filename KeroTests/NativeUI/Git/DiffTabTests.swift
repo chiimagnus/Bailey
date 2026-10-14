@@ -703,6 +703,40 @@ final class DiffTabTests: XCTestCase {
         XCTAssertFalse(diff.isEditableNow)
     }
 
+    func testGitReloadUpdatesCleanMountedEditSurfaceWithoutLosingDirtyText() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("reload.txt")
+        try Data("before\n".utf8).write(to: file)
+        let domain = "kero-git-reload-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.prefersEditing = true
+        let diff = DiffTab(repoRoot: directory.path, path: "reload.txt", staged: false,
+                           untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil, preferences: preferences)
+        try await wait { !diff.isLoading && diff.isEditable }
+        let window = NSWindow(contentRect: .init(x: -1200, y: -1200, width: 600, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: DiffViewerView(diff: diff))
+        window.orderFront(nil)
+        try await wait { self.findNativeTextView(in: window.contentView!, editable: true) != nil }
+        let editor = try XCTUnwrap(findNativeTextView(in: window.contentView!, editable: true))
+        try Data("after Git\n".utf8).write(to: file)
+        diff.reload(afterGitAction: true)
+        try await wait { !diff.isLoading && editor.text == "after Git\n" }
+        XCTAssertTrue(findNativeTextView(in: window.contentView!, editable: true) === editor)
+        editor.insertText("draft ", replacementRange: .init(location: 0, length: 0))
+        try await wait { diff.isDirty }
+        try Data("external\n".utf8).write(to: file)
+        diff.reload(afterGitAction: true)
+        XCTAssertEqual(editor.text, "draft after Git\n")
+        XCTAssertTrue(diff.isDirty)
+    }
+
     func testNativeDiffEditUndoScrollSaveAndReparent() async throws {
         let directory = try repository()
         defer { try? FileManager.default.removeItem(at: directory) }

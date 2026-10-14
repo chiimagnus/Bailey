@@ -431,6 +431,70 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(model.recentCommits.map(\.subject), ["baseline"])
     }
 
+    func testContextChangeDuringMutationPreflightDoesNotSwitchOldRepository() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [["init", "-q", "-b", "main"],
+                     ["config", "user.name", "Preflight Test"],
+                     ["config", "user.email", "preflight@invalid"],
+                     ["config", "commit.gpgsign", "false"],
+                     ["commit", "--allow-empty", "-qm", "root"],
+                     ["branch", "other"]] {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let backend = DiscardRemoteWorkspaceFixture()
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: backend, scope: "ssh:first")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        await backend.suspendNextGitRequest()
+        model.switchBranch(to: "other")
+        let deadline = Date().addingTimeInterval(5)
+        while await !backend.awaitingGit, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let paused = await backend.awaitingGit
+        XCTAssertTrue(paused)
+        model.sync(root: directory.path, backend: backend, scope: "ssh:second")
+        await backend.releaseGitRequest()
+        try await wait { !model.isBusy && !model.isRefreshing }
+        XCTAssertEqual(GitCommandExecution.run(["branch", "--show-current"], in: directory.path)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines), "main")
+    }
+
+    func testNewEditDuringCommitPreflightStopsBeforeFirstMutation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [["init", "-q", "-b", "main"], ["config", "user.name", "Late Edit"],
+                     ["config", "user.email", "edit@invalid"], ["config", "commit.gpgsign", "false"],
+                     ["commit", "--allow-empty", "-qm", "first"], ["commit", "--allow-empty", "-qm", "second"]] {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let backend = DiscardRemoteWorkspaceFixture()
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: backend, scope: "ssh:fixture")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let target = try XCTUnwrap(model.recentCommits.last)
+        let head = model.headOID
+        var dirty = false
+        await backend.suspendNextGitRequest()
+        model.actOnCommit(target, action: .checkout, target: model.actionTarget(),
+                          prepare: { true }, isCurrentTarget: { !dirty })
+        let deadline = Date().addingTimeInterval(5)
+        while await !backend.awaitingGit, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        dirty = true
+        await backend.releaseGitRequest()
+        try await wait { !model.isBusy && !model.isRefreshing }
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines), head)
+    }
+
     func testRecentCommitsKeepMergeParentsAndTypedReferences() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

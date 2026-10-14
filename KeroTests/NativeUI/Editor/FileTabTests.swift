@@ -92,6 +92,43 @@ final class FileTabTests: XCTestCase {
         }
     }
 
+    func testGitPreparationWaitsForWritesAndNeverClosesOrLosesEditedTab() async throws {
+        let project = Project(fallbackName: "Git Save", workspaceConfiguration: .standard)
+        let path = "/fixture/git/file.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("baseline".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        let tab = PaneTab(content: .file(file))
+        project.append(tab)
+        try await wait { if case .text = file.content { return true }; return false }
+        file.text = "first edit"
+        file.refreshDirtyState()
+        let saving = Task {
+            await project.saveBeforeGitAction(repository: "/fixture/git", scope: "ssh:fixture", isCurrent: { true })
+        }
+        try await wait { await backend.writingPath == path }
+        file.text = "new edit while saving"
+        file.refreshDirtyState()
+        await backend.finishWrite()
+        let prepared = await saving.value
+        XCTAssertFalse(prepared)
+        XCTAssertTrue(project.tabs.contains { $0 === tab })
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(file.text, "new edit while saving")
+        let persisted = await backend.data(at: path)
+        XCTAssertEqual(persisted, Data("first edit".utf8))
+
+        let failed = Task {
+            await project.saveBeforeGitAction(repository: "/fixture/git", scope: "ssh:fixture", isCurrent: { true })
+        }
+        try await wait { await backend.writingPath == path }
+        await backend.finishWrite(failing: true)
+        let readyAfterFailure = await failed.value
+        XCTAssertFalse(readyAfterFailure)
+        XCTAssertTrue(project.tabs.contains { $0 === tab })
+        XCTAssertEqual(file.text, "new edit while saving")
+        XCTAssertNotNil(file.saveError)
+    }
+
     func testProjectCloseWaitsForFileSaveAndRetainsUnsavedOnFailure() async throws {
         let prior = SessionStore.load()
         let histories = TerminalHistoryStore.load()

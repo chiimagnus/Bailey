@@ -193,6 +193,57 @@ final class Project: nonisolated Identifiable {
         panelContext?.identity == identity
     }
 
+    private func gitContents(repository: String, scope: String) -> [PaneContent] {
+        let prefix = repository.hasSuffix("/") ? repository : repository + "/"
+        return tabs.compactMap { tab in
+            switch tab.content {
+            case .file(let file):
+                guard (file.workspaceIdentity ?? "local") == scope,
+                      file.path.hasPrefix(prefix) else { return nil }
+            case .diff(let diff):
+                guard (diff.workspaceIdentity ?? "local") == scope,
+                      diff.repoRoot == repository, diff.commitHash == nil else { return nil }
+            case .session, .browser: return nil
+            }
+            return tab.content
+        }
+    }
+
+    func saveBeforeGitAction(
+        repository: String, scope: String, isCurrent: () -> Bool
+    ) async -> Bool {
+        let contents = gitContents(repository: repository, scope: scope)
+        for content in contents {
+            guard isCurrent() else { return false }
+            await content.save()
+            guard isCurrent(), !content.isDirty else { return false }
+        }
+        return isCurrent() && gitContents(repository: repository, scope: scope).allSatisfy {
+            !$0.isDirty
+        }
+    }
+
+    func canRunGitAction(repository: String, scope: String) -> Bool {
+        gitContents(repository: repository, scope: scope).allSatisfy {
+            guard !$0.isDirty else { return false }
+            switch $0 {
+            case .file(let file): return !file.isSaving
+            case .diff(let diff): return !diff.isSaving
+            case .session, .browser: return true
+            }
+        }
+    }
+
+    func reloadAfterGitAction(repository: String, scope: String) {
+        for content in gitContents(repository: repository, scope: scope) {
+            switch content {
+            case .file(let file): file.reloadFromDiskIfClean()
+            case .diff(let diff): diff.reload(afterGitAction: true)
+            case .session, .browser: break
+            }
+        }
+    }
+
     /// Synchronize the project's Files tree; only the latest active workspace
     /// may publish its root, and a disconnected shell retains the last tree.
     func syncFiles(in manager: TerminalManager) async -> (PanelContext.RootSource, PanelContext.Identity)? {

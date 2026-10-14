@@ -51,6 +51,26 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings(configURL: configURL).fontSize, 19)
     }
 
+    func testCheckoutConsentIsPersistedAndResetWithTemporaryConfig() throws {
+        let domain = "kero-checkout-consent-\(UUID().uuidString)"
+        let appearance = NSApp?.appearance
+        defer {
+            UserDefaults.standard.removePersistentDomain(forName: domain)
+            NSApp?.appearance = appearance
+            Theme.reloadSelection(light: AppSettings.shared.themeLight, dark: AppSettings.shared.themeDark)
+        }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defaults.set(["en"], forKey: "AppleLanguages")
+        let settings = AppSettings(configURL: configURL, languageDefaults: defaults, languageDomain: domain)
+        XCTAssertEqual(settings.language, .english)
+        XCTAssertFalse(settings.gitAlwaysAcceptCheckout)
+        settings.gitAlwaysAcceptCheckout = true
+        XCTAssertTrue(AppSettings(configURL: configURL).gitAlwaysAcceptCheckout)
+        settings.resetToDefaults()
+        XCTAssertFalse(settings.gitAlwaysAcceptCheckout)
+        XCTAssertFalse(AppSettings(configURL: configURL).gitAlwaysAcceptCheckout)
+    }
+
     func testObservationTracksAllNativeTerminalSettingsWithTemporaryConfig() {
         let originalAppearance = NSApp?.appearance
         let configured = AppSettings(configURL: configURL)
