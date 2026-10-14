@@ -52,8 +52,8 @@ final class SessionStoreTests: XCTestCase {
             .session(workingDirectory: "/fixture"),
             .file(path: "/fixture/file", editorState: EditorState(selectionLocation: 4, scrollY: 22)),
             .browser(url: nil),
-            .diff(repoRoot: "/fixture", path: "file", staged: true, untracked: false, origPath: nil),
-            .commitDiff(repoRoot: "/fixture", path: "file", commitHash: "fixture", parentHash: nil, status: "A", origPath: "old"),
+            .diff(repoRoot: "/fixture", path: "file", source: .staged, untracked: false, origPath: nil),
+            .diff(repoRoot: "/fixture", path: "file", source: .commit(hash: "fixture", parent: nil, status: "A"), untracked: false, origPath: "old"),
         ]
         let tabs = contents.enumerated().map { index, content in
             Project.TabSnapshot(

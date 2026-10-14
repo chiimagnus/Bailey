@@ -69,6 +69,8 @@ final class RecentCommitsViewTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: RecentCommitsView(
             commits: commits,
+            repoRoot: "/fixture", fileAction: { _, _, _ in },
+            loadBinaryStatus: { _ in }, isBinaryFile: { _, _ in false },
             expandedCommitIDs: Binding(get: { selection.expanded }, set: { selection.expanded = $0 }),
             collapsedFolders: Binding(get: { selection.folders }, set: { selection.folders = $0 }),
             viewMode: viewMode, fontScale: 1,
@@ -182,6 +184,8 @@ final class RecentCommitsViewTests: XCTestCase {
         window.contentView = NSHostingView(rootView: ScrollView(.vertical) {
             RecentCommitsView(
                 commits: commits,
+            repoRoot: "/fixture", fileAction: { _, _, _ in },
+            loadBinaryStatus: { _ in }, isBinaryFile: { _, _ in false },
                 expandedCommitIDs: Binding(get: { selection.expanded }, set: { selection.expanded = $0 }),
                 collapsedFolders: Binding(get: { selection.folders }, set: { selection.folders = $0 }),
                 viewMode: .list, fontScale: 1,
@@ -273,6 +277,8 @@ final class RecentCommitsViewTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: RecentCommitsView(
             commits: commits,
+            repoRoot: "/fixture", fileAction: { _, _, _ in },
+            loadBinaryStatus: { _ in }, isBinaryFile: { _, _ in false },
             expandedCommitIDs: Binding(
                 get: { selection.expanded },
                 set: { selection.expanded = $0 }
@@ -324,6 +330,8 @@ final class RecentCommitsViewTests: XCTestCase {
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: RecentCommitsView(
                 commits: [commit],
+            repoRoot: "/fixture", fileAction: { _, _, _ in },
+            loadBinaryStatus: { _ in }, isBinaryFile: { _, _ in false },
                 expandedCommitIDs: Binding(
                     get: { selection.expanded },
                     set: { selection.expanded = $0 }

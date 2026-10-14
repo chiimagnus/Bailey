@@ -306,11 +306,71 @@ final class GitStatusModel {
         let verification: Verification
     }
 
+    /// Each expanded commit is queried once, not each file or each hover.
+    func loadHistoricalBinaryPaths(for commit: RecentCommit) {
+        guard isRepo, recentCommits.contains(where: { $0.hash == commit.hash }),
+              historicalBinaryPaths[commit.hash] == nil,
+              pendingBinaryCommits.insert(commit.hash).inserted else { return }
+        let generation = contextGeneration
+        let selectedRoot = repoRoot
+        let selectedBackend = backend
+        Task { [weak self] in
+            let binary = await Task.detached(priority: .utility) {
+                let result = await GitCommandExecution.runData(
+                    ["show", "--format=", "--numstat", "-z",
+                     "--diff-merges=first-parent", commit.hash],
+                    in: selectedRoot, stdoutLimit: (2 << 20) + 1,
+                    backend: selectedBackend
+                )
+                guard result.status == 0, result.stdout.count <= (2 << 20),
+                      let binary = Self.parseHistoricalBinaryPaths(result.stdout)
+                else { return Optional<Set<String>>.none }
+                return binary
+            }.value
+            guard let self, self.contextGeneration == generation,
+                  self.repoRoot == selectedRoot else { return }
+            self.pendingBinaryCommits.remove(commit.hash)
+            if let binary { self.historicalBinaryPaths[commit.hash] = binary }
+        }
+    }
+
+    nonisolated static func parseHistoricalBinaryPaths(_ output: Data) -> Set<String>? {
+        let entries = output.split(separator: 0, omittingEmptySubsequences: true)
+        var binary: Set<String> = []
+        var i = 0
+        while i < entries.count {
+            let fields = entries[i].split(separator: 9, maxSplits: 2,
+                                          omittingEmptySubsequences: false)
+            guard fields.count == 3 else { return nil }
+            let isBinary = fields[0] == Data("-".utf8) && fields[1] == Data("-".utf8)
+            let filename: Data
+            if fields[2].isEmpty {
+                guard i + 2 < entries.count else { return nil }
+                filename = Data(entries[i + 2])
+                i += 3
+            } else {
+                filename = Data(fields[2])
+                i += 1
+            }
+            guard let path = String(data: filename, encoding: .utf8) else { return nil }
+            if isBinary { binary.insert(path) }
+        }
+        return binary
+    }
+
+    func isHistoricalBinaryFile(commit: RecentCommit, path: String) -> Bool {
+        historicalBinaryPaths[commit.hash]?.contains(path) == true
+    }
+
     func isAnnotatedTag(named name: String) -> Bool {
         refsByName["refs/tags/" + name]?.objectType == "tag"
     }
 
     private(set) var refsByName: [String: GitRef] = [:]
+    /// Loaded only when a historical commit's files are expanded. No per-row
+    /// SSH queries or eager binary inspection during regular status refresh.
+    private(set) var historicalBinaryPaths: [String: Set<String>] = [:]
+    @ObservationIgnored private var pendingBinaryCommits = Set<String>()
 
     nonisolated struct RemoteBranchTarget: Sendable {
         let remote: String
@@ -1650,6 +1710,61 @@ final class GitStatusModel {
         )
     }
 
+    nonisolated struct FileState: Equatable, Sendable {
+        let worktreeOID: String?
+        let indexOID: String?
+    }
+
+    private nonisolated static func readHistoricalFileState(
+        path: String, root: String, backend: WorkspaceBackend
+    ) async -> FileState? {
+        let index = await GitCommandExecution.run(
+            ["rev-parse", "--verify", ":" + path], in: root, backend: backend
+        )
+        let worktree = await GitCommandExecution.run(
+            ["hash-object", "--", path], in: root, backend: backend
+        )
+        guard [0, 128].contains(index.status), [0, 128].contains(worktree.status),
+              worktree.status == 0 || worktree.stderr.contains("No such file") else { return nil }
+        return FileState(
+            worktreeOID: worktree.status == 0
+                ? worktree.stdout.trimmingCharacters(in: .whitespacesAndNewlines) : nil,
+            indexOID: index.status == 0
+                ? index.stdout.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+        )
+    }
+
+    func historicalFileState(_ path: String, target: ActionTarget) async -> FileState? {
+        guard isCurrent(target), !isBusy else { return nil }
+        let generation = contextGeneration
+        let snapshot = await Self.readHistoricalFileState(
+            path: path, root: target.repository, backend: backend
+        )
+        guard generation == contextGeneration, isCurrent(target), !isBusy else { return nil }
+        return snapshot
+    }
+
+    func resetHistoricalFile(
+        _ path: String, at commit: RecentCommit, target: ActionTarget,
+        expectedFileState: FileState,
+        prepare: (@MainActor () async -> Bool)? = nil,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        guard isCurrent(target), !path.isEmpty,
+              recentCommits.contains(where: { $0.hash == commit.hash }),
+              commit.files.contains(where: { $0.path == path && $0.status != "D" }) else {
+            failImmediately(String(localized: "The Git action target changed. Reopen the menu and try again.", table: "Git"),
+                            completion: completion)
+            return
+        }
+        perform(label: String(localized: "Reset File to Revision", table: "Git"),
+                commands: [["--literal-pathspecs", "checkout", commit.hash, "--", path]],
+                preflight: [["cat-file", "-e", commit.hash + ":" + path]],
+                expectedFileState: (path, expectedFileState),
+                prepare: prepare, isCurrentTarget: isCurrentTarget, completion: completion)
+    }
+
     func stash(includeUntracked: Bool = true) {
         guard totalChangeCount > 0 else {
             failImmediately(String(localized: "There are no changes to stash", table: "Git"))
@@ -1705,6 +1820,7 @@ final class GitStatusModel {
         dropCommit: String? = nil,
         terminalAction: (@MainActor () throws -> Void)? = nil,
         preflight: [[String]] = [], expectedRef: (name: String, oid: String)? = nil,
+        expectedFileState: (path: String, state: FileState)? = nil,
         continueAfterFirstSuccess: Bool = false,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
@@ -1805,6 +1921,17 @@ final class GitStatusModel {
                           actual.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == expectedRef.oid else {
                         let message = String(localized: "The selected Git reference changed. Reopen the menu and try again.", table: "Git")
                         return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
+                    }
+                }
+                if let expectedFileState {
+                    guard await isCurrent(),
+                          await Self.readHistoricalFileState(
+                            path: expectedFileState.path, root: dir, backend: backend
+                          ) == expectedFileState.state else {
+                        let message = String(localized:
+                            "The selected file changed since the confirmation opened. Review it and try again.", table: "Git")
+                        return CommandBatchResult(output: message, failureCode: -1,
+                                                  failureMessage: message)
                     }
                 }
                 for args in preflight {
@@ -2143,6 +2270,8 @@ final class GitStatusModel {
         defaultBranch = nil
         remotes = []
         recentCommits = []
+        historicalBinaryPaths = [:]
+        pendingBinaryCommits.removeAll()
         hasMoreRecentCommits = false
         isLoadingMoreCommits = false
         repositoryOperation = nil

@@ -203,7 +203,8 @@ final class Project: nonisolated Identifiable {
                       (scope == "local" ? (file.path as NSString).standardizingPath : file.path).hasPrefix(prefix) else { return nil }
             case .diff(let diff):
                 guard (diff.workspaceIdentity ?? "local") == scope,
-                      diff.repoRoot == repository, diff.commitHash == nil else { return nil }
+                      diff.repoRoot == repository,
+                      (diff.source == .worktree || diff.source == .staged) else { return nil }
             case .session, .browser: return nil
             }
             return tab.content
@@ -547,7 +548,7 @@ final class Project: nonisolated Identifiable {
     ) {
         let context = selectedSession
         if let tab = findDiffTab(
-            repoRoot: repoRoot, path: path, staged: staged, commitHash: nil,
+            repoRoot: repoRoot, path: path, source: staged ? .staged : .worktree,
             workspace: workspaceIdentity
         ),
            case .diff(let diff) = tab.content {
@@ -558,7 +559,7 @@ final class Project: nonisolated Identifiable {
             return
         }
         let diff = DiffTab(
-            repoRoot: repoRoot, path: path, staged: staged,
+            repoRoot: repoRoot, path: path, source: staged ? .staged : .worktree,
             untracked: untracked, origPath: origPath,
             backend: workspaceBackend, workspaceIdentity: workspaceIdentity
         )
@@ -578,27 +579,26 @@ final class Project: nonisolated Identifiable {
         status: Character,
         origPath: String?
     ) {
+        openHistoricalDiff(repoRoot: repoRoot, path: path,
+            source: .commit(hash: commitHash, parent: parentHash, status: String(status)),
+            origPath: origPath)
+    }
+
+    func openHistoricalDiff(
+        repoRoot: String, path: String, source: DiffTab.Source, origPath: String?
+    ) {
         let context = selectedSession
-        if let tab = findDiffTab(
-            repoRoot: repoRoot, path: path, staged: false, commitHash: commitHash,
-            workspace: workspaceIdentity
-        ), case .diff(let diff) = tab.content {
+        if let tab = findDiffTab(repoRoot: repoRoot, path: path,
+                                 source: source, workspace: workspaceIdentity),
+           case .diff(let diff) = tab.content {
             diff.origPath = origPath
             diff.reload()
             selectedTabID = tab.id
             return
         }
-        let diff = DiffTab(
-            repoRoot: repoRoot,
-            path: path,
-            staged: false,
-            untracked: false,
-            origPath: origPath,
-            commitHash: commitHash,
-            commitParentHash: parentHash,
-            commitStatus: status,
-            backend: workspaceBackend, workspaceIdentity: workspaceIdentity
-        )
+        let diff = DiffTab(repoRoot: repoRoot, path: path, source: source,
+                           untracked: false, origPath: origPath,
+                           backend: workspaceBackend, workspaceIdentity: workspaceIdentity)
         let tab = makeTab(content: .diff(diff))
         tab.contextSession = context
         insertNextToSelected(tab)
@@ -606,16 +606,12 @@ final class Project: nonisolated Identifiable {
     }
 
     private func findDiffTab(
-        repoRoot: String, path: String, staged: Bool, commitHash: String?,
-        workspace: String?
+        repoRoot: String, path: String, source: DiffTab.Source, workspace: String?
     ) -> PaneTab? {
         tabs.first {
             guard case .diff(let diff) = $0.content else { return false }
-            return diff.repoRoot == repoRoot
-                && diff.path == path
-                && diff.staged == staged
-                && diff.commitHash == commitHash
-                && diff.workspaceIdentity == workspace
+            return diff.repoRoot == repoRoot && diff.path == path
+                && diff.source == source && diff.workspaceIdentity == workspace
         }
     }
 
@@ -832,24 +828,10 @@ final class Project: nonisolated Identifiable {
             return .file(file)
         case .browser(let url):
             return .browser(makeBrowser(initialURL: url, initialFocus: .none))
-        case .diff(let repoRoot, let path, let staged, let untracked, let origPath):
+        case .diff(let repoRoot, let path, let source, let untracked, let origPath):
             return .diff(DiffTab(
-                repoRoot: repoRoot, path: path, staged: staged,
+                repoRoot: repoRoot, path: path, source: source,
                 untracked: untracked, origPath: origPath,
-                backend: workspaceBackend, workspaceIdentity: workspaceIdentity
-            ))
-        case .commitDiff(
-            let repoRoot, let path, let commitHash, let parentHash, let status, let origPath
-        ):
-            return .diff(DiffTab(
-                repoRoot: repoRoot,
-                path: path,
-                staged: false,
-                untracked: false,
-                origPath: origPath,
-                commitHash: commitHash,
-                commitParentHash: parentHash,
-                commitStatus: status.first,
                 backend: workspaceBackend, workspaceIdentity: workspaceIdentity
             ))
         }

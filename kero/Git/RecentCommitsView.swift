@@ -9,6 +9,7 @@ struct RecentCommitsView: View {
     enum BranchAction { case rename, delete, push, merge, rebase, archive }
     enum RemoteAction { case checkout, fetch, merge, pull, delete, archive }
     enum TagAction { case details, delete, push, archive }
+    enum HistoricalFileAction { case viewRevision, compareWorktree, openWorkingFile, resetFile }
 
     private let themeChanges = Theme.changes
     @Binding private var expandedCommitIDs: Set<String>
@@ -17,6 +18,10 @@ struct RecentCommitsView: View {
     @State private var viewportWidth: CGFloat = 0
 
     let commits: [Commit]
+    let repoRoot: String
+    let fileAction: (Commit, Commit.FileChange, HistoricalFileAction) -> Void
+    let loadBinaryStatus: (Commit) -> Void
+    let isBinaryFile: (Commit, Commit.FileChange) -> Bool
     let viewMode: GitViewMode
     let fontScale: CGFloat
     let hasMoreCommits: Bool
@@ -37,7 +42,10 @@ struct RecentCommitsView: View {
     let commitAction: (Commit, GitStatusModel.CommitAction) -> Void
 
     init(
-        commits: [Commit],
+        commits: [Commit], repoRoot: String,
+        fileAction: @escaping (Commit, Commit.FileChange, HistoricalFileAction) -> Void,
+        loadBinaryStatus: @escaping (Commit) -> Void,
+        isBinaryFile: @escaping (Commit, Commit.FileChange) -> Bool,
         expandedCommitIDs: Binding<Set<String>>,
         collapsedFolders: Binding<Set<String>>,
         viewMode: GitViewMode,
@@ -60,6 +68,10 @@ struct RecentCommitsView: View {
         commitAction: @escaping (Commit, GitStatusModel.CommitAction) -> Void
     ) {
         self.commits = commits
+        self.repoRoot = repoRoot
+        self.fileAction = fileAction
+        self.loadBinaryStatus = loadBinaryStatus
+        self.isBinaryFile = isBinaryFile
         _expandedCommitIDs = expandedCommitIDs
         _collapsedFolders = collapsedFolders
         self.viewMode = viewMode
@@ -127,6 +139,8 @@ struct RecentCommitsView: View {
     private func toggle(_ commit: Commit) {
         if !expandedCommitIDs.insert(commit.id).inserted {
             expandedCommitIDs.remove(commit.id)
+        } else {
+            loadBinaryStatus(commit)
         }
     }
 
@@ -442,6 +456,9 @@ struct RecentCommitsView: View {
                     }
                     .background { fileRails(rails, spacing: spacing) }
                     .contextMenu {
+                        Button(String(localized: "Copy Absolute Path", table: "Git")) {
+                            copy((repoRoot as NSString).appendingPathComponent(node.path))
+                        }
                         Button(String(localized: "Copy Relative Path", table: "Git")) {
                             copy(node.path)
                         }
@@ -475,6 +492,28 @@ struct RecentCommitsView: View {
         .contextMenu {
             Button(String(localized: "Open Historical Diff", table: "Git")) {
                 openDiff(commit, file)
+            }
+            if file.status != "D" {
+                Button(String(localized: "View File at Revision", table: "Git")) {
+                    fileAction(commit, file, .viewRevision)
+                }
+                .disabled(isBinaryFile(commit, file))
+                Button(String(localized: "Compare with Working File", table: "Git")) {
+                    fileAction(commit, file, .compareWorktree)
+                }
+                .disabled(isBinaryFile(commit, file))
+                Button(String(localized: "Open Working File", table: "Git")) {
+                    fileAction(commit, file, .openWorkingFile)
+                }
+                Divider()
+                Button(String(localized: "Reset File to Revision…", table: "Git")) {
+                    fileAction(commit, file, .resetFile)
+                }
+                .disabled(!canActOnCommit)
+            }
+            Divider()
+            Button(String(localized: "Copy Absolute Path", table: "Git")) {
+                copy((repoRoot as NSString).appendingPathComponent(file.path))
             }
             Button(String(localized: "Copy Relative Path", table: "Git")) { copy(file.path) }
         }

@@ -1084,6 +1084,93 @@ struct GitPanel: View {
         }
     }
 
+    private func handleHistoricalFile(
+        _ commit: GitStatusModel.RecentCommit,
+        file: GitStatusModel.RecentCommit.FileChange,
+        action: RecentCommitsView.HistoricalFileAction
+    ) {
+        guard let project, let window = manager.attachedWindow,
+              manager.selectedProject === project,
+              let context = project.panelContext,
+              model.matchesPanelTarget(context.identity),
+              commit.files.contains(where: { $0.path == file.path }) else { return }
+        let target = model.actionTarget()
+        let current: @MainActor () -> Bool = {
+            manager.selectedProject === project && manager.attachedWindow === window
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity)
+                && model.isCurrent(target)
+        }
+        switch action {
+        case .viewRevision:
+            guard file.status != "D", current() else { return }
+            project.openHistoricalDiff(repoRoot: target.repository, path: file.path,
+                source: .revision(hash: commit.hash), origPath: file.originalPath)
+        case .compareWorktree:
+            guard file.status != "D", current() else { return }
+            project.openHistoricalDiff(repoRoot: target.repository, path: file.path,
+                source: .revisionWorktree(hash: commit.hash), origPath: file.originalPath)
+        case .openWorkingFile:
+            guard file.status != "D", current() else { return }
+            Task { @MainActor in
+                let result = await GitHistoricalFileLocator.resolve(
+                    root: target.repository, path: file.path, revision: commit.hash,
+                    backend: context.backend
+                )
+                guard current() else { return }
+                switch result {
+                case .found(let path):
+                    project.openFile((target.repository as NSString).appendingPathComponent(path))
+                case .missing:
+                    showHistoricalFileError(String(localized: "Historical file is not present in the working directory", table: "Git"),
+                                            window: window)
+                case .failed(let reason):
+                    showHistoricalFileError(reason, window: window)
+                }
+            }
+        case .resetFile:
+            guard file.status != "D", !model.isBusy, current() else { return }
+            Task { @MainActor in
+                guard let state = await model.historicalFileState(file.path, target: target),
+                      current() else { return }
+                let alert = NSAlert()
+                alert.messageText = String(localized: "Reset File to Revision", table: "Git")
+                alert.informativeText = String(localized:
+                    "The selected revision will replace this file in both the Git index and working directory. Any local changes to this file will be lost.", table: "Git")
+                    + "\n\n" + file.path + "\n" + commit.hash
+                alert.addButton(withTitle: String(localized: "Yes, Reset File", table: "Git"))
+                alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+                alert.beginSheetModal(for: window) { answer in
+                    guard answer == .alertFirstButtonReturn, current() else { return }
+                    performOperation(.commitMenu) {
+                        model.resetHistoricalFile(file.path, at: commit, target: target,
+                            expectedFileState: state,
+                            prepare: {
+                                await project.saveBeforeGitAction(repository: target.repository,
+                                    scope: target.scope, isCurrent: current)
+                            }, isCurrentTarget: {
+                                current() && project.canRunGitAction(repository: target.repository,
+                                    scope: target.scope)
+                            }, completion: { success in
+                                if success {
+                                    project.reloadAfterGitAction(repository: target.repository,
+                                        scope: target.scope)
+                                }
+                            })
+                    }
+                }
+            }
+        }
+    }
+
+    private func showHistoricalFileError(_ message: String, window: NSWindow) {
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Unable to open historical file", table: "Git")
+        alert.informativeText = message
+        alert.addButton(withTitle: String(localized: "Close", table: "Sidebar"))
+        alert.beginSheetModal(for: window) { _ in }
+    }
+
     private func presentArchiveDialog(
         reference: String, objectOID: String, target: GitStatusModel.ActionTarget,
         context: PanelContext, window: NSWindow,
@@ -1506,6 +1593,14 @@ struct GitPanel: View {
                     if !historyCollapsed {
                         RecentCommitsView(
                             commits: model.recentCommits,
+                            repoRoot: model.repoRoot,
+                            fileAction: { commit, file, action in
+                                handleHistoricalFile(commit, file: file, action: action)
+                            },
+                            loadBinaryStatus: model.loadHistoricalBinaryPaths,
+                            isBinaryFile: { commit, file in
+                                model.isHistoricalBinaryFile(commit: commit, path: file.path)
+                            },
                             expandedCommitIDs: $expandedCommitIDs,
                             collapsedFolders: collapsedFoldersBinding,
                             viewMode: settings.gitViewMode,

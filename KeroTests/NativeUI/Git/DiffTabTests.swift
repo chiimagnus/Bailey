@@ -131,7 +131,7 @@ final class DiffTabTests: XCTestCase {
         let preferences = DiffViewPreferences(defaults: defaults)
         let aBackend = DiffWorkspaceFixture()
         let bBackend = DiffWorkspaceFixture()
-        let a = DiffTab(repoRoot: "/fixture", path: "A.txt", staged: false,
+        let a = DiffTab(repoRoot: "/fixture", path: "A.txt", source: .worktree,
                         untracked: true, origPath: nil, backend: aBackend,
                         workspaceIdentity: nil, preferences: preferences)
         try await wait { a.display != nil }
@@ -147,7 +147,7 @@ final class DiffTabTests: XCTestCase {
         try await wait { self.findNativeSurface(in: host) === a.nativeSurface && a.nativeSurface != nil }
 
         await bBackend.pauseOneRead()
-        let b = DiffTab(repoRoot: "/fixture", path: "B.txt", staged: false,
+        let b = DiffTab(repoRoot: "/fixture", path: "B.txt", source: .worktree,
                         untracked: true, origPath: nil, backend: bBackend,
                         workspaceIdentity: nil, preferences: preferences)
         selection.selected = b
@@ -172,7 +172,7 @@ final class DiffTabTests: XCTestCase {
         let preferences = DiffViewPreferences(defaults: defaults)
         preferences.prefersEditing = true
         let backend = DiffWorkspaceFixture()
-        let diff = DiffTab(repoRoot: "/fixture", path: "editable.txt", staged: false,
+        let diff = DiffTab(repoRoot: "/fixture", path: "editable.txt", source: .worktree,
                            untracked: true, origPath: nil, backend: backend,
                            workspaceIdentity: nil, preferences: preferences)
         try await wait { !diff.isLoading && diff.isEditable }
@@ -200,7 +200,7 @@ final class DiffTabTests: XCTestCase {
 
     func testFocusTriggeredDiffSavePreservesNewestBufferAndFailure() async throws {
         let backend = DiffWorkspaceFixture()
-        let diff = DiffTab(repoRoot: "/fixture", path: "editable.txt", staged: false,
+        let diff = DiffTab(repoRoot: "/fixture", path: "editable.txt", source: .worktree,
                            untracked: true, origPath: nil, backend: backend,
                            workspaceIdentity: "ssh:fixture")
         try await wait { !diff.isLoading && diff.isEditable }
@@ -257,7 +257,7 @@ final class DiffTabTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(50))
         let backend = DiffWorkspaceFixture()
         let diff = DiffTab(
-            repoRoot: directory.path, path: "remote.txt", staged: false, untracked: true,
+            repoRoot: directory.path, path: "remote.txt", source: .worktree, untracked: true,
             origPath: nil, backend: backend, workspaceIdentity: first.workspaceIdentity
         )
         project.append(PaneTab(content: .diff(diff)))
@@ -299,8 +299,10 @@ final class DiffTabTests: XCTestCase {
         try Data(worktreeText.utf8).write(to: file)
 
         func diff(_ path: String = "tracked.txt", staged: Bool = false, commit: String? = nil) -> DiffTab {
-            DiffTab(repoRoot: directory.path, path: path, staged: staged, untracked: false,
-                    origPath: nil, commitHash: commit, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            DiffTab(repoRoot: directory.path, path: path,
+                    source: commit.map { .commit(hash: $0, parent: nil, status: "A") }
+                        ?? (staged ? .staged : .worktree), untracked: false,
+                    origPath: nil, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         }
         let worktree = diff()
         let index = diff(staged: true)
@@ -343,7 +345,7 @@ final class DiffTabTests: XCTestCase {
 
     func testSaveDuringEditFailureAndDisconnectKeepUnsavedContent() async throws {
         let backend = DiffWorkspaceFixture()
-        let diff = DiffTab(repoRoot: "/fixture", path: "remote.txt", staged: false,
+        let diff = DiffTab(repoRoot: "/fixture", path: "remote.txt", source: .worktree,
                            untracked: true, origPath: nil, backend: backend, workspaceIdentity: "ssh:fixture")
         try await wait { !diff.isLoading }
         diff.updateEditedContent("first😀\r\n")
@@ -388,7 +390,7 @@ final class DiffTabTests: XCTestCase {
         let preferences = DiffViewPreferences(defaults: defaults)
         preferences.prefersEditing = false
         let backend = DiffWorkspaceFixture()
-        let diff = DiffTab(repoRoot: "/fixture", path: "render.txt", staged: false,
+        let diff = DiffTab(repoRoot: "/fixture", path: "render.txt", source: .worktree,
                            untracked: true, origPath: nil, backend: backend,
                            workspaceIdentity: nil, preferences: preferences)
         try await wait { !diff.isLoading && diff.display != nil }
@@ -528,7 +530,7 @@ final class DiffTabTests: XCTestCase {
         preferences.diffStyle = .unified
         let backend = DiffWorkspaceFixture()
         let diff = DiffTab(
-            repoRoot: "/fixture", path: "split.txt", staged: false,
+            repoRoot: "/fixture", path: "split.txt", source: .worktree,
             untracked: true, origPath: nil, backend: backend,
             workspaceIdentity: nil, preferences: preferences
         )
@@ -602,7 +604,7 @@ final class DiffTabTests: XCTestCase {
         preferences.diffStyle = .split
         preferences.prefersEditing = false
         let diff = DiffTab(
-            repoRoot: directory.path, path: "wide.txt", staged: false,
+            repoRoot: directory.path, path: "wide.txt", source: .worktree,
             untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
             workspaceIdentity: nil, preferences: preferences
         )
@@ -675,7 +677,7 @@ final class DiffTabTests: XCTestCase {
         let preferences = DiffViewPreferences(defaults: defaults)
         preferences.prefersEditing = false
         let backend = DiffWorkspaceFixture()
-        let diff = DiffTab(repoRoot: "/fixture", path: "stale.txt", staged: false,
+        let diff = DiffTab(repoRoot: "/fixture", path: "stale.txt", source: .worktree,
                            untracked: true, origPath: nil, backend: backend,
                            workspaceIdentity: "ssh:fixture", preferences: preferences)
         try await wait { !diff.isLoading }
@@ -713,7 +715,7 @@ final class DiffTabTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: domain) }
         let preferences = DiffViewPreferences(defaults: defaults)
         preferences.prefersEditing = true
-        let diff = DiffTab(repoRoot: directory.path, path: "reload.txt", staged: false,
+        let diff = DiffTab(repoRoot: directory.path, path: "reload.txt", source: .worktree,
                            untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared,
                            workspaceIdentity: nil, preferences: preferences)
         try await wait { !diff.isLoading && diff.isEditable }
@@ -748,7 +750,7 @@ final class DiffTabTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: domain) }
         let preferences = DiffViewPreferences(defaults: defaults)
         preferences.prefersEditing = true
-        let diff = DiffTab(repoRoot: directory.path, path: "editor.txt", staged: false,
+        let diff = DiffTab(repoRoot: directory.path, path: "editor.txt", source: .worktree,
                            untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared,
                            workspaceIdentity: nil, preferences: preferences)
         try await wait { !diff.isLoading && diff.isEditable && diff.display != nil }
@@ -820,7 +822,7 @@ final class DiffTabTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: domain) }
         let preferences = DiffViewPreferences(defaults: defaults)
         let backend = DiffWorkspaceFixture()
-        let diff = DiffTab(repoRoot: "/fixture", path: "editing.txt", staged: false,
+        let diff = DiffTab(repoRoot: "/fixture", path: "editing.txt", source: .worktree,
                            untracked: true, origPath: nil, backend: backend, workspaceIdentity: nil,
                            preferences: preferences)
         try await wait { !diff.isLoading }

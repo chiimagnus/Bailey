@@ -73,25 +73,42 @@ private struct DiffDisplayInputs {
 @MainActor
 @Observable
 final class DiffTab: nonisolated Identifiable {
+    nonisolated enum Source: Hashable, Sendable, Codable {
+        case worktree
+        case staged
+        case commit(hash: String, parent: String?, status: String)
+        case revision(hash: String)
+        case revisionWorktree(hash: String)
+
+        var isLive: Bool {
+            switch self {
+            case .worktree, .staged, .revisionWorktree: true
+            case .commit, .revision: false
+            }
+        }
+
+        var isPlainRevision: Bool {
+            if case .revision = self { return true }
+            return false
+        }
+    }
+
     nonisolated let id = UUID()
 
     /// Absolute repository root the diff runs in.
     let repoRoot: String
     /// Repo-relative path, as porcelain reports it.
     let path: String
-    /// Diffs HEAD → index instead of index → worktree.
-    let staged: Bool
+    /// The single source of truth for a worktree, index, historical diff, or revision.
+    /// Different sources of the same path own different native tabs and snapshots.
+    let source: Source
     var untracked: Bool {
         didSet { if untracked != oldValue { onSnapshotChange?() } }
     }
     @ObservationIgnored var onSnapshotChange: (() -> Void)?
-    /// Historical commit shown by this tab. Nil keeps the existing
-    /// index/worktree behavior.
-    let commitHash: String?
-    /// First parent and name-status metadata used to describe a historical
-    /// comparison in the tab strip.
-    let commitParentHash: String?
-    let commitStatus: Character?
+    /// Resolved current file path for Revision ↔ Worktree after an actual rename.
+    /// Nil if the worktree side is absent (a deletion).
+    private(set) var resolvedWorktreePath: String?
     /// Previous path when the change is a rename/copy; the "before" side
     /// reads from here so renames diff old file → new file like VS Code.
     var origPath: String? {
@@ -146,12 +163,9 @@ final class DiffTab: nonisolated Identifiable {
     init(
         repoRoot: String,
         path: String,
-        staged: Bool,
+        source: Source,
         untracked: Bool,
         origPath: String?,
-        commitHash: String? = nil,
-        commitParentHash: String? = nil,
-        commitStatus: Character? = nil,
         backend: WorkspaceBackend,
         workspaceIdentity: String?,
         preferences: DiffViewPreferences = .shared
@@ -161,12 +175,9 @@ final class DiffTab: nonisolated Identifiable {
         self.preferences = preferences
         self.repoRoot = repoRoot
         self.path = path
-        self.staged = staged
+        self.source = source
         self.untracked = untracked
         self.origPath = origPath
-        self.commitHash = commitHash
-        self.commitParentHash = commitParentHash
-        self.commitStatus = commitStatus
         reload()
     }
 
@@ -231,20 +242,26 @@ final class DiffTab: nonisolated Identifiable {
     }
 
     var title: String {
-        if let commitHash {
-            let after = "\(name) (\(commitHash.prefix(7)))"
-            guard let commitParentHash else { return after }
+        switch source {
+        case .commit(let hash, let parent, let status):
+            let after = "\(name) (\(hash.prefix(7)))"
+            guard let parent else { return after }
             let beforeName = ((origPath ?? path) as NSString).lastPathComponent
-            let before = "\(beforeName) (\(commitParentHash.prefix(7)))"
-            switch commitStatus {
+            let before = "\(beforeName) (\(parent.prefix(7)))"
+            switch status {
             case "A": return after
             case "D": return before
             default: return "\(before) ↔ \(after)"
             }
+        case .revision(let hash):
+            return "\(name) (\(hash.prefix(7)))"
+        case .revisionWorktree(let hash):
+            return "\(name) (\(hash.prefix(7))) ↔ Worktree"
+        case .staged:
+            return String(localized: "\(name) (Staged)", table: "Git", comment: "Tab title for the staged diff of a file.")
+        case .worktree:
+            return name
         }
-        return staged
-            ? String(localized: "\(name) (Staged)", table: "Git", comment: "Tab title for the staged diff of a file.")
-            : name
     }
 
     /// Tab strip and switcher label. A remote diff says which machine it is
@@ -265,67 +282,64 @@ final class DiffTab: nonisolated Identifiable {
         let root = repoRoot
         let path = path
         let oldPath = origPath ?? path
-        let staged = staged
+        let source = source
         let untracked = untracked
-        let commitHash = commitHash
 
         let backend = self.backend
 
         Task { [weak self] in
             // Git first, on its own thread, exactly as before.
             let git = await Task.detached(priority: .userInitiated) {
-                var failureVar: String?
-                // Only a live worktree diff can be unmerged, and the check is
-                // a Git call, so it stays behind that test rather than inside
-                // a short-circuit that cannot await.
+                var failure: String?
+                var old = ""
+                var newFromGit: String?
+                var worktreePath = path
                 var unmerged = false
-                if commitHash == nil, !staged {
-                    unmerged = await Self.isUnmerged(
-                        path: path, in: root, backend: backend
-                    )
-                }
-                // A later side must not clear an earlier side's failure, so
-                // each result only overwrites it when it carries one.
                 func take(_ result: (text: String, error: String?)) -> String {
-                    if let error = result.error { failureVar = error }
+                    if let error = result.error { failure = error }
                     return result.text
                 }
-                let old: String
-                // Non-nil only when git supplies the "after" side too; a live
-                // worktree diff reads that side from the workspace below.
-                var newFromGit: String?
-                if let commitHash {
+                switch source {
+                case .commit(let hash, let parent, let status):
+                    if status != "A", let parent {
+                        old = take(await Self.requiredGitContent(
+                            "\(parent):\(oldPath)", in: root, backend: backend))
+                    }
+                    if status == "D" {
+                        newFromGit = ""
+                    } else {
+                        newFromGit = take(await Self.requiredGitContent(
+                            "\(hash):\(path)", in: root, backend: backend))
+                    }
+                case .revision(let hash):
+                    newFromGit = take(await Self.requiredGitContent(
+                        "\(hash):\(path)", in: root, backend: backend))
+                case .revisionWorktree(let hash):
+                    old = take(await Self.requiredGitContent(
+                        "\(hash):\(path)", in: root, backend: backend))
+                    switch await GitHistoricalFileLocator.resolve(
+                        root: root, path: path, revision: hash, backend: backend
+                    ) {
+                    case .found(let current): worktreePath = current
+                    case .missing: newFromGit = ""
+                    case .failed(let message): failure = message
+                    }
+                case .staged:
                     old = take(await Self.firstGitContent(
-                        ["\(commitHash)^:\(oldPath)"], in: root, backend: backend
-                    ))
-                    newFromGit = take(await Self.firstGitContent(
-                        ["\(commitHash):\(path)"], in: root, backend: backend
-                    ))
-                } else if staged {
-                    old = take(await Self.firstGitContent(
-                        ["HEAD:\(oldPath)"], in: root, backend: backend
-                    ))
-                    newFromGit = take(await Self.firstGitContent(
-                        [":\(path)"], in: root, backend: backend
-                    ))
-                } else if untracked {
-                    old = ""
-                } else {
-                    // An unmerged index has no stage-0 `:path`. Prefer our
-                    // side, then the merge base, so conflict rows show a
-                    // meaningful before-side instead of the whole file as new.
-                    old = take(await Self.firstGitContent(
-                        [":\(oldPath)", ":2:\(oldPath)", ":1:\(oldPath)", "HEAD:\(oldPath)"],
-                        in: root,
-                        backend: backend
-                    ))
+                        ["HEAD:\(oldPath)"], in: root, backend: backend))
+                    newFromGit = take(await Self.requiredGitContent(
+                        ":\(path)", in: root, backend: backend))
+                case .worktree:
+                    if !untracked {
+                        unmerged = await Self.isUnmerged(
+                            path: path, in: root, backend: backend)
+                        old = take(await Self.firstGitContent(
+                            [":\(oldPath)", ":2:\(oldPath)", ":1:\(oldPath)",
+                             "HEAD:\(oldPath)"], in: root, backend: backend))
+                    }
                 }
-                return (
-                    old: old,
-                    newFromGit: newFromGit,
-                    failure: failureVar,
-                    unmerged: unmerged
-                )
+                return (old: old, newFromGit: newFromGit, worktreePath: worktreePath,
+                        failure: failure, unmerged: unmerged)
             }.value
 
             var failure = git.failure
@@ -334,22 +348,26 @@ final class DiffTab: nonisolated Identifiable {
             if let newFromGit = git.newFromGit {
                 new = newFromGit
                 editable = false
+            } else if failure != nil {
+                new = ""
+                editable = false
             } else {
                 let worktree = await Self.readWorktreeFile(
-                    root: root, path: path, backend: backend
+                    root: root, path: git.worktreePath, backend: backend
                 )
                 new = worktree.text
                 if let error = worktree.error { failure = error }
-                editable = await Self.isEditableWorktreeFile(
-                    root: root, path: path, backend: backend
-                )
+                if case .worktree = source {
+                    editable = await Self.isEditableWorktreeFile(
+                        root: root, path: git.worktreePath, backend: backend)
+                } else {
+                    editable = false
+                }
             }
             let result = (
-                old: git.old,
-                new: new,
-                failure: failure,
-                unmerged: git.unmerged,
-                editable: editable
+                old: git.old, new: new, failure: failure,
+                unmerged: git.unmerged, editable: editable,
+                resolvedPath: source.isLive ? git.worktreePath : nil
             )
             // The connection may have dropped while these reads were in
             // flight; their failure must not become the tab's content.
@@ -361,6 +379,7 @@ final class DiffTab: nonisolated Identifiable {
             self.error = result.failure
             self.isUnmerged = result.unmerged
             self.isEditable = result.editable && result.failure == nil
+            self.resolvedWorktreePath = result.resolvedPath
             let changed = self.oldContent != result.old || self.newContent != result.new
             self.oldContent = result.old
             self.newContent = result.new
@@ -383,7 +402,7 @@ final class DiffTab: nonisolated Identifiable {
     /// would waste work without changing the visible diff. An initial live load also
     /// stays in flight rather than being duplicated by the view's first mount.
     func refreshWhenSelected() {
-        guard commitHash == nil, !isLoading else { return }
+        guard source.isLive, !isLoading else { return }
         reload()
     }
 
@@ -424,7 +443,7 @@ final class DiffTab: nonisolated Identifiable {
     func recomputeDisplay() {
         displayGeneration &+= 1
         let generation = displayGeneration
-        guard hasChanges, error == nil else {
+        guard !source.isPlainRevision, hasChanges, error == nil else {
             display = nil
             displayInputs = nil
             return
@@ -633,6 +652,7 @@ final class DiffTab: nonisolated Identifiable {
         case content(String)
         case binary
         case tooLarge
+        case failed(String)
     }
 
     /// The first spec that exists, and the reason the diff cannot be shown if
@@ -652,9 +672,24 @@ final class DiffTab: nonisolated Identifiable {
                 return ("", String(localized: "Binary file", table: "Git"))
             case .tooLarge:
                 return ("", String(localized: "File is too large to diff", table: "Git"))
+            case .failed(let message):
+                return ("", message)
             }
         }
         return ("", nil)
+    }
+
+    private nonisolated static func requiredGitContent(
+        _ spec: String, in root: String, backend: WorkspaceBackend
+    ) async -> (text: String, error: String?) {
+        switch await gitContent(spec, in: root, backend: backend) {
+        case .content(let text): return (text, nil)
+        case .missing:
+            return ("", String(localized: "Selected Git revision does not contain this file", table: "Git"))
+        case .binary: return ("", String(localized: "Binary file", table: "Git"))
+        case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"))
+        case .failed(let message): return ("", message)
+        }
     }
 
     private nonisolated static func gitContent(
@@ -663,14 +698,34 @@ final class DiffTab: nonisolated Identifiable {
         let size = await GitCommandExecution.run(
             ["cat-file", "-s", spec], in: root, backend: backend
         )
-        guard size.status == 0 else { return .missing }
-        let byteCount = Int(size.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        guard size.status == 0 else {
+            // Only an explicit missing Git object/path is an empty diff side.
+            // SSH disconnects, permissions and timeouts must not look like an
+            // empty file or a successful read of a selected revision.
+            let missing = ["does not exist", "Not a valid object name", "invalid object name",
+                           "not in the index", "but not in '", "bad revision", "bad object"]
+            if size.status == 128 && missing.contains(where: size.stderr.contains) {
+                return .missing
+            }
+            return .failed(size.stderr.isEmpty
+                ? String(localized: "Unable to read Git content", table: "Git")
+                : size.stderr)
+        }
+        guard let byteCount = Int(size.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return .failed(String(localized: "Unable to read Git content", table: "Git"))
+        }
         guard byteCount <= maxBytes else { return .tooLarge }
         let run = await GitCommandExecution.runData(
             ["cat-file", "blob", spec], in: root, stdoutLimit: maxBytes + 1, backend: backend
         )
-        guard run.status == 0 else { return .missing }
+        guard run.status == 0 else {
+            return .failed(run.stderr.isEmpty
+                ? String(localized: "Unable to read Git content", table: "Git") : run.stderr)
+        }
         guard run.stdout.count <= maxBytes else { return .tooLarge }
+        guard run.stdout.count == byteCount else {
+            return .failed(String(localized: "Incomplete Git content", table: "Git"))
+        }
         guard !run.stdout.contains(0),
               let content = String(data: run.stdout, encoding: .utf8)
         else {
@@ -768,7 +823,7 @@ struct DiffViewerView: View {
             Group {
                 if let error = diff.error {
                     placeholder(icon: "exclamationmark.triangle", text: error)
-                } else if !diff.hasChanges {
+                } else if !diff.hasChanges && !diff.source.isPlainRevision {
                     if diff.isLoading {
                         initialLoadingSkeleton
                     } else if diff.isUnmerged {
@@ -781,8 +836,8 @@ struct DiffViewerView: View {
                     }
                 } else {
                     VStack(spacing: 0) {
-                        controlBar
-                        if diff.display != nil {
+                        if !diff.source.isPlainRevision { controlBar }
+                        if diff.source.isPlainRevision || diff.display != nil {
                             // Each tab retains its own TextKit document; never reuse another tab's NSView.
                             DiffNativeRoot(diff: diff)
                                 .id(diff.id)
@@ -849,7 +904,7 @@ struct DiffViewerView: View {
     private var initialLoadingSkeleton: some View {
         VStack(spacing: 0) {
             DiffControlsSkeletonBar(
-                showsModePlaceholder: diff.commitHash == nil && !diff.staged
+                showsModePlaceholder: diff.source == .worktree
             )
             .frame(height: DiffViewerLayout.controlsHeight)
             DiffSkeletonView()

@@ -918,20 +918,9 @@ final class TerminalManager {
         case .browser(let browser):
             return .browser(url: browser.snapshotURL)
         case .diff(let diff):
-            if let commitHash = diff.commitHash {
-                return .commitDiff(
-                    repoRoot: diff.repoRoot,
-                    path: diff.path,
-                    commitHash: commitHash,
-                    parentHash: diff.commitParentHash,
-                    status: diff.commitStatus.map(String.init) ?? "M",
-                    origPath: diff.origPath
-                )
-            }
-            return .diff(
-                repoRoot: diff.repoRoot, path: diff.path, staged: diff.staged,
-                untracked: diff.untracked, origPath: diff.origPath
-            )
+            return .diff(repoRoot: diff.repoRoot, path: diff.path,
+                         source: diff.source, untracked: diff.untracked,
+                         origPath: diff.origPath)
         }
     }
 

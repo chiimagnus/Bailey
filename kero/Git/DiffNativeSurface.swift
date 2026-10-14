@@ -105,7 +105,18 @@ final class DiffNativeSurface: NSView, STTextViewDelegate {
         let editing = diff.isEditing
         let split = diff.preferences.diffStyle == .split
 
-        if editing {
+        if diff.source.isPlainRevision {
+            // A historical revision is an actual read-only document, not a diff
+            // whose every line should be colored as an insertion.
+            let pane = editPane ?? makeEditPane()
+            pane.applyTypography(font: font, paragraphStyle: style, textColor: palette.text)
+            if renderedEditRevision != diff.editBufferRevision {
+                renderedEditRevision = diff.editBufferRevision
+                pane.setEditBufferText(diff.newContent)
+            }
+            pane.textView.isEditable = false
+            pane.decorations = .empty
+        } else if editing {
             let pane = editPane ?? makeEditPane()
             pane.applyTypography(font: font, paragraphStyle: style, textColor: palette.text)
             pane.textView.insertionPointColor = palette.insertionPoint
@@ -144,11 +155,12 @@ final class DiffNativeSurface: NSView, STTextViewDelegate {
             }
         }
 
-        unifiedPane?.isHidden = editing || split
-        leftPane?.isHidden = editing || !split
-        rightPane?.isHidden = editing || !split
-        divider?.isHidden = editing || !split
-        editPane?.isHidden = !editing
+        let plain = diff.source.isPlainRevision
+        unifiedPane?.isHidden = editing || split || plain
+        leftPane?.isHidden = editing || !split || plain
+        rightPane?.isHidden = editing || !split || plain
+        divider?.isHidden = editing || !split || plain
+        editPane?.isHidden = !(editing || plain)
 
         for pane in [unifiedPane, leftPane, rightPane, editPane] where pane?.isHidden == true {
             guard let pane, pane.scrollView.isFindBarVisible else { continue }

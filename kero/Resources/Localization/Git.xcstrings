@@ -2286,6 +2286,176 @@
           }
         }
       }
+    },
+    "View File at Revision" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看此提交中的文件"
+          }
+        }
+      }
+    },
+    "Compare with Working File" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "与工作区文件比较"
+          }
+        }
+      }
+    },
+    "Open Working File" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开工作区文件"
+          }
+        }
+      }
+    },
+    "Reset File to Revision…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复到此版本…"
+          }
+        }
+      }
+    },
+    "Reset File to Revision" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复文件到指定版本"
+          }
+        }
+      }
+    },
+    "Yes, Reset File" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认恢复文件"
+          }
+        }
+      }
+    },
+    "Copy Absolute Path" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制绝对路径"
+          }
+        }
+      }
+    },
+    "Historical file is not present in the working directory" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该历史文件目前不在工作区"
+          }
+        }
+      }
+    },
+    "Unable to open historical file" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法打开历史文件"
+          }
+        }
+      }
+    },
+    "Unable to resolve historical file rename" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确定历史文件的重命名路径"
+          }
+        }
+      }
+    },
+    "Historical rename results are too large" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "历史文件重命名结果超过大小限制"
+          }
+        }
+      }
+    },
+    "Unable to parse Git rename results" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法解析 Git 文件重命名结果"
+          }
+        }
+      }
+    },
+    "Selected Git revision does not contain this file" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选中的 Git 版本不包含此文件"
+          }
+        }
+      }
+    },
+    "Unable to read Git content" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取 Git 文件内容"
+          }
+        }
+      }
+    },
+    "Incomplete Git content" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 文件内容读取不完整"
+          }
+        }
+      }
+    },
+    "The selected file changed since the confirmation opened. Review it and try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认窗口打开后文件已改变，请检查后重试。"
+          }
+        }
+      }
+    },
+    "The selected revision will replace this file in both the Git index and working directory. Any local changes to this file will be lost." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选定版本将同时覆盖 Git 暂存区和工作区的此文件，该文件的本地修改会丢失。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
