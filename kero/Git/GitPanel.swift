@@ -723,7 +723,7 @@ struct GitPanel: View {
         switch action {
         case .merge, .rebase:
             presentCommitDialog(commit, action: action == .merge ? .merge : .rebase,
-                                selectedBranch: name)
+                                selectedRefName: "refs/heads/" + name)
         case .rename:
             let dialog = GitBranchDialog(kind: .rename,
                 title: String(localized: "Rename Branch…", table: "Git"),
@@ -784,6 +784,151 @@ struct GitPanel: View {
         }
     }
 
+    private func presentRemoteBranchAction(
+        _ reference: GitStatusModel.RecentCommit.Reference,
+        commit: GitStatusModel.RecentCommit,
+        action: RecentCommitsView.RemoteAction
+    ) {
+        guard reference.kind == .remoteBranch,
+              let window = manager.attachedWindow, let project,
+              manager.selectedProject === project, let context = project.panelContext,
+              model.matchesPanelTarget(context.identity), !model.isBusy,
+              let selected = model.remoteBranch(named: reference.name),
+              selected.oid == commit.hash else { return }
+        let target = model.actionTarget()
+        let referenceName = "refs/remotes/" + reference.name
+        let stillSelected: @MainActor () -> Bool = {
+            manager.attachedWindow === window && manager.selectedProject === project
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity)
+                && model.isCurrent(target, requiresStableHead: false)
+                && model.refsByName[referenceName]?.oid == selected.oid
+                && model.remoteBranch(named: reference.name)?.remote == selected.remote
+        }
+        let saveBeforeChangingWorktree: @MainActor () async -> Bool = {
+            await project.saveBeforeGitAction(
+                repository: target.repository, scope: target.scope, isCurrent: stillSelected
+            )
+        }
+        let canMutateWorktree: @MainActor () -> Bool = {
+            stillSelected() && project.canRunGitAction(
+                repository: target.repository, scope: target.scope
+            )
+        }
+        let onFinish: @MainActor (Bool) -> Void = { _ in
+            project.reloadAfterGitAction(repository: target.repository, scope: target.scope)
+        }
+
+        switch action {
+        case .checkout:
+            presentRemoteCheckoutDialog(
+                selected, localName: selected.branch, window: window,
+                target: target, isCurrent: stillSelected,
+                prepare: saveBeforeChangingWorktree,
+                canMutate: canMutateWorktree, completion: onFinish
+            )
+        case .fetch:
+            guard model.branches.contains(selected.branch),
+                  model.branch != selected.branch else { return }
+            let dialog = GitBranchDialog(kind: .remoteFetch,
+                title: String(localized: "Fetch into Local Branch…", table: "Git"),
+                detail: reference.name)
+            dialog.alert.beginSheetModal(for: window) { response in
+                guard response == .alertFirstButtonReturn, stillSelected() else { return }
+                performOperation(.branchMenu) {
+                    model.fetchIntoLocalBranch(
+                        selected, force: dialog.forceFetch.state == .on, target: target
+                    )
+                }
+            }
+        case .merge:
+            presentCommitDialog(commit, action: .merge, selectedRefName: referenceName)
+        case .pull:
+            let dialog = GitBranchDialog(kind: .remotePull,
+                title: String(localized: "Pull into Current Branch…", table: "Git"),
+                detail: reference.name)
+            dialog.alert.beginSheetModal(for: window) { response in
+                guard response == .alertFirstButtonReturn, stillSelected() else { return }
+                performOperation(.branchMenu) {
+                    model.pullRemoteBranch(selected,
+                        noFastForward: dialog.noFastForward.state == .on,
+                        squash: dialog.squash.state == .on, target: target,
+                        prepare: saveBeforeChangingWorktree,
+                        isCurrentTarget: canMutateWorktree, completion: onFinish
+                    )
+                }
+            }
+        case .delete:
+            let alert = NSAlert()
+            alert.messageText = String(localized: "Delete Remote Branch…", table: "Git")
+            alert.informativeText = selected.remote + " / " + selected.branch
+            alert.addButton(withTitle: String(localized: "Yes, Delete", table: "Git"))
+            alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+            alert.beginSheetModal(for: window) { response in
+                guard response == .alertFirstButtonReturn, stillSelected() else { return }
+                performOperation(.branchMenu) {
+                    model.deleteRemoteBranch(selected, target: target)
+                }
+            }
+        case .archive:
+            presentArchiveDialog(reference: referenceName, objectOID: selected.oid,
+                                 target: target, context: context, window: window,
+                                 isCurrent: stillSelected)
+        }
+    }
+
+    private func presentRemoteCheckoutDialog(
+        _ selected: GitStatusModel.RemoteBranchTarget, localName: String,
+        window: NSWindow, target: GitStatusModel.ActionTarget,
+        isCurrent: @escaping @MainActor () -> Bool,
+        prepare: @escaping @MainActor () async -> Bool,
+        canMutate: @escaping @MainActor () -> Bool,
+        completion: @escaping @MainActor (Bool) -> Void
+    ) {
+        guard isCurrent(), !model.isBusy else { return }
+        let dialog = GitBranchDialog(kind: .remoteCheckout,
+            title: String(localized: "Checkout Remote Branch…", table: "Git"),
+            detail: selected.remote + " / " + selected.branch,
+            initialName: localName)
+        dialog.alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn, isCurrent() else { return }
+            let name = dialog.name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let performCheckout: @MainActor (Bool) -> Void = { useExisting in
+                performOperation(.branchMenu) {
+                    model.checkoutRemoteBranch(selected, localName: name,
+                        checkoutExistingAndPull: useExisting, target: target,
+                        prepare: prepare, isCurrentTarget: canMutate,
+                        completion: completion
+                    )
+                }
+            }
+            if model.refsByName["refs/heads/" + name] == nil {
+                performCheckout(false)
+                return
+            }
+            let existing = NSAlert()
+            existing.messageText = String(localized: "Branch already exists", table: "Git")
+            existing.informativeText = name
+            existing.addButton(withTitle: String(localized: "Choose Another Name", table: "Git"))
+            existing.addButton(withTitle: String(localized: "Checkout Existing Branch & Pull Changes", table: "Git"))
+            existing.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+            existing.beginSheetModal(for: window) { choice in
+                guard isCurrent() else { return }
+                switch choice {
+                case .alertFirstButtonReturn:
+                    presentRemoteCheckoutDialog(
+                        selected, localName: name, window: window, target: target,
+                        isCurrent: isCurrent, prepare: prepare,
+                        canMutate: canMutate, completion: completion
+                    )
+                case .alertSecondButtonReturn:
+                    performCheckout(true)
+                default: break
+                }
+            }
+        }
+    }
+
     private func presentArchiveDialog(
         reference: String, objectOID: String, target: GitStatusModel.ActionTarget,
         context: PanelContext, window: NSWindow,
@@ -813,7 +958,7 @@ struct GitPanel: View {
 
     func presentCommitDialog(
         _ commit: GitStatusModel.RecentCommit, action: GitStatusModel.CommitAction,
-        selectedBranch: String? = nil
+        selectedRefName: String? = nil
     ) {
         guard !model.isBusy, model.repositoryOperation == nil,
               let window = manager.attachedWindow, let project,
@@ -825,7 +970,7 @@ struct GitPanel: View {
                 && context.scope == target.scope
                 && project.matchesPanelTarget(context.identity)
                 && model.matchesPanelTarget(context.identity) && model.isCurrent(target)
-                && (selectedBranch.map { model.refsByName["refs/heads/" + $0]?.oid == commit.hash } ?? true)
+                && (selectedRefName.map { model.refsByName[$0]?.oid == commit.hash } ?? true)
         }
         let execute: @MainActor (GitCommitDialog?) -> Void = { dialog in
             guard isCurrent() else { return }
@@ -853,7 +998,7 @@ struct GitPanel: View {
                     resetMode: resetMode,
                     ignoreDate: dialog?.ignoreDate.state != .off,
                     interactiveLaunch: interactiveLaunch,
-                    selectedRef: selectedBranch.map { ("refs/heads/" + $0, commit.hash) },
+                    selectedRef: selectedRefName.map { ($0, commit.hash) },
                     prepare: {
                         if !changesWorktree { return true }
                         return await project.saveBeforeGitAction(
@@ -1220,6 +1365,14 @@ struct GitPanel: View {
                             },
                             branchAction: { ref, commit, action in
                                 presentBranchAction(ref, commit: commit, action: action)
+                            },
+                            remoteAction: { ref, commit, action in
+                                presentRemoteBranchAction(ref, commit: commit, action: action)
+                            },
+                            canFetchRemoteBranch: { ref in
+                                guard let selected = model.remoteBranch(named: ref.name) else { return false }
+                                return model.branches.contains(selected.branch)
+                                    && model.branch != selected.branch
                             },
                             createReference: { commit, kind in
                                 presentCreateReferenceDialog(kind: kind, commit: commit)

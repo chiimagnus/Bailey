@@ -1876,6 +1876,156 @@
           }
         }
       }
+    },
+    "Checkout Remote Branch…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检出远端分支…"
+          }
+        }
+      }
+    },
+    "Checkout Remote Branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检出远端分支"
+          }
+        }
+      }
+    },
+    "Checkout Branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检出分支"
+          }
+        }
+      }
+    },
+    "Checkout Existing Branch & Pull Changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检出现有分支并拉取更新"
+          }
+        }
+      }
+    },
+    "Fetch into Local Branch…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "获取到本地分支…"
+          }
+        }
+      }
+    },
+    "Fetch into Local Branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "获取到本地分支"
+          }
+        }
+      }
+    },
+    "Pull into Current Branch…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拉取到当前分支…"
+          }
+        }
+      }
+    },
+    "Pull into Current Branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拉取到当前分支"
+          }
+        }
+      }
+    },
+    "Pull Remote Branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拉取远端分支"
+          }
+        }
+      }
+    },
+    "Delete Remote Branch…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除远端分支…"
+          }
+        }
+      }
+    },
+    "Delete Remote Branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除远端分支"
+          }
+        }
+      }
+    },
+    "Force Fetch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "强制获取"
+          }
+        }
+      }
+    },
+    "Create New Commit Even If Fast-Forward" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "即使可快进也创建新提交"
+          }
+        }
+      }
+    },
+    "Squash" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "压缩合并"
+          }
+        }
+      }
+    },
+    "Copy Remote Branch Name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制远端分支名称"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

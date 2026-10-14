@@ -298,6 +298,29 @@ final class GitStatusModel {
     }
 
     private(set) var refsByName: [String: GitRef] = [:]
+
+    nonisolated struct RemoteBranchTarget: Sendable {
+        let remote: String
+        let branch: String
+        let oid: String
+    }
+
+    func remoteBranch(named displayName: String) -> RemoteBranchTarget? {
+        // Names such as `origin/team/topic` may fit more than one configured
+        // remote. The longest configured prefix owns the selected ref.
+        let matched = remotes
+            .filter { displayName.hasPrefix($0 + "/") }
+            .max { $0.count < $1.count }
+        guard let remote = matched,
+              let ref = refsByName["refs/remotes/" + displayName],
+              ref.symbolic == nil else { return nil }
+        return RemoteBranchTarget(
+            remote: remote,
+            branch: String(displayName.dropFirst(remote.count + 1)),
+            oid: ref.oid
+        )
+    }
+
     private(set) var branches: [String] = []
     private(set) var defaultBranch: String?
     private(set) var remotes: [String] = []
@@ -1180,6 +1203,106 @@ final class GitStatusModel {
         perform(label: String(localized: "Push branch \(name)", table: "Git"),
                 commands: commands, requiresStableHead: false,
                 expectedRef: (full, ref.oid), completion: completion)
+    }
+
+
+    private func isSelectedRemoteBranchCurrent(
+        _ selected: RemoteBranchTarget, target: ActionTarget
+    ) -> Bool {
+        guard isCurrent(target, requiresStableHead: false),
+              let actual = remoteBranch(named: selected.remote + "/" + selected.branch)
+        else { return false }
+        return actual.remote == selected.remote && actual.branch == selected.branch
+            && actual.oid == selected.oid
+    }
+
+    func checkoutRemoteBranch(
+        _ selected: RemoteBranchTarget, localName: String,
+        checkoutExistingAndPull: Bool, target: ActionTarget,
+        prepare: (@MainActor () async -> Bool)? = nil,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        guard isSelectedRemoteBranchCurrent(selected, target: target) else {
+            failImmediately(String(localized: "The selected Git reference changed. Reopen the menu and try again.", table: "Git"),
+                            completion: completion)
+            return
+        }
+        let localName = localName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !localName.isEmpty else {
+            failImmediately(String(localized: "Enter a branch name", table: "Git"), completion: completion)
+            return
+        }
+        let trackingRef = "refs/remotes/" + selected.remote + "/" + selected.branch
+        let serverRef = "refs/heads/" + selected.branch
+        let commands: [[String]]
+        if checkoutExistingAndPull {
+            commands = [["switch", "--", localName],
+                        ["pull", "--no-edit", selected.remote, serverRef]]
+        } else {
+            commands = [["switch", "-c", localName, "--track", trackingRef]]
+        }
+        perform(label: String(localized: "Checkout Remote Branch", table: "Git"),
+                commands: commands,
+                preflight: checkoutExistingAndPull ? [] : [["check-ref-format", "--branch", localName]],
+                expectedRef: (trackingRef, selected.oid),
+                prepare: prepare, isCurrentTarget: isCurrentTarget, completion: completion)
+    }
+
+    func fetchIntoLocalBranch(
+        _ selected: RemoteBranchTarget, force: Bool, target: ActionTarget,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        let localRef = "refs/heads/" + selected.branch
+        guard isSelectedRemoteBranchCurrent(selected, target: target),
+              refsByName[localRef] != nil, selected.branch != branch else {
+            failImmediately(String(localized: "The selected branch or remote is no longer available.", table: "Git"),
+                            completion: completion)
+            return
+        }
+        let commands = [["fetch"] + (force ? ["-f"] : [])
+                        + [selected.remote, "refs/heads/" + selected.branch + ":" + localRef]]
+        perform(label: String(localized: "Fetch into Local Branch", table: "Git"),
+                commands: commands, requiresStableHead: false,
+                expectedRef: ("refs/remotes/" + selected.remote + "/" + selected.branch, selected.oid),
+                completion: completion)
+    }
+
+    func pullRemoteBranch(
+        _ selected: RemoteBranchTarget, noFastForward: Bool, squash: Bool,
+        target: ActionTarget,
+        prepare: (@MainActor () async -> Bool)? = nil,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        guard isSelectedRemoteBranchCurrent(selected, target: target) else {
+            failImmediately(String(localized: "The selected Git reference changed. Reopen the menu and try again.", table: "Git"),
+                            completion: completion)
+            return
+        }
+        let options = squash ? ["--squash"] : (noFastForward ? ["--no-ff"] : [])
+        perform(label: String(localized: "Pull Remote Branch", table: "Git"),
+                commands: [["pull", "--no-edit"] + options
+                           + [selected.remote, "refs/heads/" + selected.branch]],
+                squashMessage: squash ? "Merge branch '\(selected.remote)/\(selected.branch)'" : nil,
+                expectedRef: ("refs/remotes/" + selected.remote + "/" + selected.branch, selected.oid),
+                prepare: prepare, isCurrentTarget: isCurrentTarget, completion: completion)
+    }
+
+    func deleteRemoteBranch(
+        _ selected: RemoteBranchTarget, target: ActionTarget,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        guard isSelectedRemoteBranchCurrent(selected, target: target) else {
+            failImmediately(String(localized: "The selected Git reference changed. Reopen the menu and try again.", table: "Git"),
+                            completion: completion)
+            return
+        }
+        perform(label: String(localized: "Delete Remote Branch", table: "Git"),
+                commands: [["push", selected.remote, "--delete", "refs/heads/" + selected.branch]],
+                requiresStableHead: false,
+                expectedRef: ("refs/remotes/" + selected.remote + "/" + selected.branch, selected.oid),
+                completion: completion)
     }
 
     nonisolated enum ArchiveFormat: String, CaseIterable, Sendable {
@@ -2098,7 +2221,7 @@ final class GitStatusModel {
         // supplying the nested file rows used by the native commit graph.
         let log = await statusGit(recentCommitLogArguments(limit: recentCommitLimit), in: repoRoot)
         if log.status == 0 {
-            let commits = parseRecentCommits(log.stdout)
+            let commits = parseRecentCommits(log.stdout, refsByName: result.refsByName)
             result.hasMoreRecentCommits = commits.count > recentCommitLimit
             result.recentCommits = Array(commits.prefix(recentCommitLimit))
         } else if result.hasHead {
@@ -2504,13 +2627,16 @@ final class GitStatusModel {
                 return branch
             }
             if let remote = named("refs/remotes/", as: .remoteBranch) {
-                return remote.name.hasSuffix("/HEAD") ? nil : remote
+                let name = String(remote.name.components(separatedBy: " -> ").first ?? "")
+                return name.isEmpty ? nil : Reference(kind: .remoteBranch, name: name)
             }
             return named("tag: refs/tags/", as: .tag)
         }
     }
 
-    nonisolated static func parseRecentCommits(_ output: String) -> [RecentCommit] {
+    nonisolated static func parseRecentCommits(
+        _ output: String, refsByName: [String: GitRef] = [:]
+    ) -> [RecentCommit] {
         output.split(separator: "\u{1e}").compactMap { record in
             var chunks = record.split(separator: "\u{0}", omittingEmptySubsequences: false)
                 .map(String.init)
@@ -2560,7 +2686,10 @@ final class GitStatusModel {
                 subject: String(fields[2]), author: String(fields[3]),
                 date: Date(timeIntervalSince1970: timestamp),
                 parentHashes: fields[5].split(separator: " ").map(String.init),
-                references: parseCommitReferences(String(fields[6])),
+                references: parseCommitReferences(String(fields[6])).filter { reference in
+                    reference.kind != .remoteBranch
+                        || refsByName["refs/remotes/" + reference.name]?.symbolic == nil
+                },
                 files: files
             )
         }

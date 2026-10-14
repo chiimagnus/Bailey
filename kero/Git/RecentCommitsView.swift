@@ -7,6 +7,7 @@ struct RecentCommitsView: View {
     typealias Reference = Commit.Reference
 
     enum BranchAction { case rename, delete, push, merge, rebase, archive }
+    enum RemoteAction { case checkout, fetch, merge, pull, delete, archive }
 
     private let themeChanges = Theme.changes
     @Binding private var expandedCommitIDs: Set<String>
@@ -24,6 +25,8 @@ struct RecentCommitsView: View {
     let canSwitchBranch: Bool
     let switchBranch: (String) -> Void
     let branchAction: (Reference, Commit, BranchAction) -> Void
+    let remoteAction: (Reference, Commit, RemoteAction) -> Void
+    let canFetchRemoteBranch: (Reference) -> Bool
     let createReference: (Commit, GitStatusModel.CommitReferenceKind) -> Void
     let canActOnCommit: Bool
     let canDropCommit: (Commit) -> Bool
@@ -42,6 +45,8 @@ struct RecentCommitsView: View {
         canSwitchBranch: Bool,
         switchBranch: @escaping (String) -> Void,
         branchAction: @escaping (Reference, Commit, BranchAction) -> Void,
+        remoteAction: @escaping (Reference, Commit, RemoteAction) -> Void,
+        canFetchRemoteBranch: @escaping (Reference) -> Bool,
         createReference: @escaping (Commit, GitStatusModel.CommitReferenceKind) -> Void,
         canActOnCommit: Bool,
         canDropCommit: @escaping (Commit) -> Bool,
@@ -59,6 +64,8 @@ struct RecentCommitsView: View {
         self.canSwitchBranch = canSwitchBranch
         self.switchBranch = switchBranch
         self.branchAction = branchAction
+        self.remoteAction = remoteAction
+        self.canFetchRemoteBranch = canFetchRemoteBranch
         self.createReference = createReference
         self.canActOnCommit = canActOnCommit
         self.canDropCommit = canDropCommit
@@ -236,12 +243,8 @@ struct RecentCommitsView: View {
             if shown < references.count {
                 Menu {
                     ForEach(Array(references.dropFirst(shown))) { reference in
-                        if reference.kind == .remoteBranch {
-                            Text(verbatim: reference.name)
-                        } else {
-                            Menu(reference.name) {
-                                referenceActions(reference, commit: commit)
-                            }
+                        Menu(reference.name) {
+                            referenceActions(reference, commit: commit)
                         }
                     }
                 } label: {
@@ -285,21 +288,17 @@ struct RecentCommitsView: View {
         .background(Capsule().fill(background))
         .help(reference.name)
 
-        if reference.kind == .remoteBranch {
-            label
-        } else {
-            Button {
-                if reference.kind == .tag {
-                    expandedCommitIDs.insert(commit.id)
-                } else {
-                    copy(reference.name)
-                }
-            } label: { label }
-                .buttonStyle(.plain)
-                .contextMenu {
-                    referenceActions(reference, commit: commit)
-                }
-        }
+        Button {
+            if reference.kind == .tag {
+                expandedCommitIDs.insert(commit.id)
+            } else {
+                copy(reference.name)
+            }
+        } label: { label }
+            .buttonStyle(.plain)
+            .contextMenu {
+                referenceActions(reference, commit: commit)
+            }
     }
 
     @ViewBuilder
@@ -352,7 +351,36 @@ struct RecentCommitsView: View {
         case .detachedHead:
             Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
         case .remoteBranch:
-            EmptyView()
+            Button(String(localized: "Checkout Remote Branch…", table: "Git")) {
+                remoteAction(reference, commit, .checkout)
+            }
+            .disabled(!canActOnCommit)
+            if canFetchRemoteBranch(reference) {
+                Button(String(localized: "Fetch into Local Branch…", table: "Git")) {
+                    remoteAction(reference, commit, .fetch)
+                }
+                .disabled(!canActOnCommit)
+            }
+            Button(String(localized: "Merge into Current Branch…", table: "Git")) {
+                remoteAction(reference, commit, .merge)
+            }
+            .disabled(!canActOnCommit)
+            Button(String(localized: "Pull into Current Branch…", table: "Git")) {
+                remoteAction(reference, commit, .pull)
+            }
+            .disabled(!canActOnCommit)
+            Button(String(localized: "Delete Remote Branch…", table: "Git")) {
+                remoteAction(reference, commit, .delete)
+            }
+            .disabled(!canActOnCommit)
+            Button(String(localized: "Create Archive…", table: "Git")) {
+                remoteAction(reference, commit, .archive)
+            }
+            .disabled(!canActOnCommit)
+            Divider()
+            Button(String(localized: "Copy Remote Branch Name", table: "Git")) {
+                copy(reference.name)
+            }
         }
     }
 

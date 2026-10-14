@@ -56,7 +56,7 @@ make test ONLY_TESTING=KeroTests/FileTabTests
 | Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests` |
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
-| Git 环境、刷新、写操作与失败状态 | `GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitBranchDialogTests` |
+| Git 环境、刷新、写操作与失败状态 | `GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitBranchDialogTests` |
 | SSH 命令、断线、重连和过期结果 | `RemoteCommandsTests`、`RemoteLifetimeTests` |
 | 文件、Diff 和原生内容保留 | `FileTabTests`、`DiffTabTests`、`PaneRetentionTests` |
 | Files 与所有 Git 树的命中与交互 | `TreeRowHitTestingTests` |
@@ -79,7 +79,13 @@ open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Kero.app" --args --isola
 
 **普通设置仍然共享。** 隔离实例中不得直接改写用户设置；确需设置测试时使用独立 Home，并核实真正的配置、UserDefaults 与数据写入位置。临时文件、Git 仓库和受控后端不得指向正式项目。
 
-真实 SSH 只使用专用且获准的测试 master；不借用用户连接或结束其后台任务。XCUITest 启动同 Bundle ID 的应用可能影响正在使用的 Kero，在安全的独立执行环境建立前，不能在用户活跃会话直接调用 `XCUIApplication.launch()`。
+真实 SSH 只使用专用且获准的测试 master；不借用用户连接或结束其后台任务。P4 的实际 Windows SSH 交互式 Rebase 测试需要**明确指定主机**，否则标准 XCTest 会报告环境跳过。当前已获授权的 `windows` 主机完整执行（包含固定与自动跟随 SSH 项目）的命令是：
+
+```sh
+KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test
+```
+
+必须核对原生 XCTest 的实际执行总数、0 failures、0 skipped 和 Windows SSH 用例的 passed 记录；不能以不带环境参数的绿色 `make test` 冒充实机验收。没有获准测试主机的 CI 不应擅自连接用户设备。XCUITest 启动同 Bundle ID 的应用可能影响正在使用的 Kero，在安全的独立执行环境建立前，不能在用户活跃会话直接调用 `XCUIApplication.launch()`。
 
 只清理本次创建且可确认归属的窗口、进程和数据，不按 App 名或宽泛目录清理。安装不包含重启，见 [development.md](development.md#本地安装)。
 

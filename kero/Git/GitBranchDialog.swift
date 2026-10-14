@@ -7,6 +7,9 @@ final class GitBranchDialog {
         case rename
         case delete(remotes: [String])
         case push(remotes: [String], preferred: String?)
+        case remoteCheckout
+        case remoteFetch
+        case remotePull
     }
 
     let alert = NSAlert()
@@ -15,6 +18,9 @@ final class GitBranchDialog {
     let forceDelete = NSButton(checkboxWithTitle: String(localized: "Force Delete", table: "Git"), target: nil, action: nil)
     let deleteRemotes = NSButton(checkboxWithTitle: String(localized: "Delete on Remote(s)", table: "Git"), target: nil, action: nil)
     let setUpstream = NSButton(checkboxWithTitle: String(localized: "Set Upstream", table: "Git"), target: nil, action: nil)
+    let forceFetch = NSButton(checkboxWithTitle: String(localized: "Force Fetch", table: "Git"), target: nil, action: nil)
+    let noFastForward = NSButton(checkboxWithTitle: String(localized: "Create New Commit Even If Fast-Forward", table: "Git"), target: nil, action: nil)
+    let squash = NSButton(checkboxWithTitle: String(localized: "Squash", table: "Git"), target: nil, action: nil)
     let pushMode = NSPopUpButton()
     private(set) var remoteButtons: [(name: String, button: NSButton)] = []
     private var validator: GitNameFieldValidator?
@@ -45,6 +51,16 @@ final class GitBranchDialog {
         case .rename:
             addNameField(to: stack, initialName: initialName)
             alert.addButton(withTitle: String(localized: "Rename Branch", table: "Git"))
+        case .remoteCheckout:
+            addNameField(to: stack, initialName: initialName)
+            alert.addButton(withTitle: String(localized: "Checkout Branch", table: "Git"))
+        case .remoteFetch:
+            stack.addArrangedSubview(forceFetch)
+            alert.addButton(withTitle: String(localized: "Fetch into Local Branch", table: "Git"))
+        case .remotePull:
+            stack.addArrangedSubview(noFastForward)
+            stack.addArrangedSubview(squash)
+            alert.addButton(withTitle: String(localized: "Pull into Current Branch", table: "Git"))
         case .delete(let remotes):
             stack.addArrangedSubview(forceDelete)
             if !remotes.isEmpty {
@@ -83,6 +99,7 @@ final class GitBranchDialog {
         }
         if case .create = kind { attachValidator() }
         if case .rename = kind { attachValidator() }
+        if case .remoteCheckout = kind { attachValidator() }
         if case .push = kind {
             let validator = GitRemoteSelectionValidator(
                 button: alert.buttons[0], options: remoteButtons.map(\.button)

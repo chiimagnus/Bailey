@@ -24,6 +24,32 @@ final class GitBranchDialogTests: XCTestCase {
         XCTAssertEqual(renamed.alert.buttons[0].title, String(localized: "Rename Branch", table: "Git"))
     }
 
+    func testRemoteCheckoutFetchAndPullExposeNativeDefaults() {
+        let checkout = GitBranchDialog(kind: .remoteCheckout,
+            title: "Checkout Remote Branch", detail: "origin/topic/nested",
+            initialName: "topic/nested")
+        XCTAssertEqual(checkout.name.stringValue, "topic/nested")
+        XCTAssertEqual(checkout.alert.buttons[0].title,
+                       String(localized: "Checkout Branch", table: "Git"))
+        XCTAssertTrue(checkout.alert.buttons[0].isEnabled)
+
+        let fetch = GitBranchDialog(kind: .remoteFetch,
+            title: "Fetch into Local Branch", detail: "origin/topic/nested")
+        XCTAssertEqual(fetch.forceFetch.state, .off)
+        XCTAssertEqual(fetch.alert.buttons[0].title,
+                       String(localized: "Fetch into Local Branch", table: "Git"))
+
+        let pull = GitBranchDialog(kind: .remotePull,
+            title: "Pull into Current Branch", detail: "origin/topic/nested")
+        XCTAssertEqual(pull.noFastForward.state, .off,
+                       "Fast-forward should be allowed by default")
+        XCTAssertEqual(pull.squash.state, .off)
+        XCTAssertEqual(pull.alert.buttons[0].title,
+                       String(localized: "Pull into Current Branch", table: "Git"))
+        XCTAssertEqual(pull.alert.buttons[1].title,
+                       String(localized: "Cancel", table: "Sidebar"))
+    }
+
     func testPushWithoutConfiguredRemotesHasNoPossibleSubmit() {
         let dialog = GitBranchDialog(kind: .push(remotes: [], preferred: nil),
             title: "Push Branch", detail: String(localized: "No Git remote is configured", table: "Git"))
