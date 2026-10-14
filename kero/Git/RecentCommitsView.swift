@@ -114,10 +114,10 @@ struct RecentCommitsView: View {
                                 .fixedSize(horizontal: true, vertical: false)
                         }
                         .scrollIndicators(.hidden)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(minWidth: 64 * fontScale, maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.plain)
-                    .layoutPriority(1)
+                    .layoutPriority(-1)
                     .help(commit.subject)
                     .accessibilityLabel(commit.subject)
                     .accessibilityValue(expanded
@@ -125,6 +125,7 @@ struct RecentCommitsView: View {
                         : String(localized: "Collapsed", table: "Git"))
                     if !commit.references.isEmpty {
                         referenceStrip(commit.references, commit: commit)
+                            .layoutPriority(1)
                     }
                     Spacer(minLength: 0)
                 }
@@ -170,13 +171,9 @@ struct RecentCommitsView: View {
         .background {
             CommitGraphRails(row: graph, fontScale: fontScale)
         }
+        .contentShape(Rectangle())
+        .onTapGesture { toggle(commit) }
         .contextMenu {
-            Button(expanded
-                ? String(localized: "Collapse Commit Files", table: "Git")
-                : String(localized: "Expand Commit Files", table: "Git")) {
-                toggle(commit)
-            }
-            Divider()
             Button(String(localized: "Create Branch at Commit…", table: "Git")) {
                 createReference(commit, .branch)
             }
@@ -314,7 +311,7 @@ struct RecentCommitsView: View {
         _ commit: Commit, rails: [CommitGraphLayout.Rail],
         gutter: CGFloat
     ) -> some View {
-        let filesInset = gutter + 11 * fontScale
+        let filesInset = gutter + 8 * fontScale
         if commit.files.isEmpty {
             TreeRowSurface(
                 depth: 0, scale: fontScale, hoverEnabled: false, leadingInset: filesInset
@@ -396,11 +393,11 @@ struct RecentCommitsView: View {
 
 private struct CommitGraphRails: View {
     private let themeChanges = Theme.changes
-    private static let laneSpacing: CGFloat = 13
-    private static let firstLaneX: CGFloat = 12
+    private static let laneSpacing: CGFloat = 9
+    private static let firstLaneX: CGFloat = 8
 
     static func gutter(lanes: Int, scale: CGFloat) -> CGFloat {
-        (firstLaneX + CGFloat(max(0, lanes - 1)) * laneSpacing + 18) * scale
+        (firstLaneX + CGFloat(max(0, lanes - 1)) * laneSpacing + 8) * scale
     }
 
     var row: CommitGraphLayout.Row? = nil
@@ -466,7 +463,7 @@ private struct CommitGraphRails: View {
                         )
                     )
                 }
-                let radius = 3.6 * fontScale
+                let radius = 3.2 * fontScale
                 let x = laneX(row.node.lane)
                 context.fill(
                     Path(ellipseIn: CGRect(x: x - radius, y: middle - radius,

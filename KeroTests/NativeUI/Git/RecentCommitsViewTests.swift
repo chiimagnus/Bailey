@@ -74,7 +74,8 @@ final class RecentCommitsViewTests: XCTestCase {
             hasMoreCommits: false, isLoadingMore: false, loadMore: { false },
             openDiff: { _, _ in }, canSwitchBranch: true,
             switchBranch: { _ in }, createReference: { _, _ in }
-        ).frame(width: width, height: height, alignment: .topLeading))
+        ).frame(width: width, height: height, alignment: .topLeading)
+            .background(Color(nsColor: Theme.sidebar)))
         window.orderFront(nil)
         settle()
         return window
@@ -102,7 +103,7 @@ final class RecentCommitsViewTests: XCTestCase {
                   references: current ? [.init(kind: .currentBranch, name: "main")] : [],
                   files: [])
         }
-        let commits = (0..<16).map { commit("branch-\($0)", parents: ["root"]) }
+        let commits = (0..<30).map { commit("branch-\($0)", parents: ["root"]) }
             + [commit("main", parents: ["root"], current: true), commit("root")]
         let window = hostHistory(commits, selection: selection, height: 320)
         defer { window.close() }
@@ -173,6 +174,38 @@ final class RecentCommitsViewTests: XCTestCase {
         verticalScroll.reflectScrolledClipView(verticalScroll.contentView)
         settle()
         XCTAssertEqual(pageRequests, 1, "Reaching the last visible row must still page history")
+    }
+
+    func testEntireCommitRowTogglesIncludingGraphMetadataAndBlankSpace() {
+        let selection = GraphSelection()
+        let commit = GitStatusModel.RecentCommit(
+            hash: "one", shortHash: "one", subject: "Commit message",
+            author: "Developer", date: .now, parentHashes: [],
+            references: [], files: [
+                .init(status: "A", path: "Sources/test.swift", originalPath: nil)
+            ]
+        )
+        let height: CGFloat = 200
+        let window = hostHistory([commit], selection: selection, height: height)
+        defer { window.close() }
+
+        // All coordinates are within the 38-point commit row, including its
+        // graph gutter, metadata, blank space and top/bottom edges.
+        for point in [
+            NSPoint(x: 10, y: height - 19),
+            NSPoint(x: 28, y: height - 19),
+            NSPoint(x: 142, y: height - 30),
+            NSPoint(x: 251, y: height - 13),
+            NSPoint(x: 18, y: height - 1),
+            NSPoint(x: 18, y: height - 37),
+        ] {
+            let wasExpanded = selection.expanded.contains(commit.hash)
+            click(point, in: window)
+            XCTAssertNotEqual(
+                selection.expanded.contains(commit.hash), wasExpanded,
+                "Whole commit row should toggle at \(point)"
+            )
+        }
     }
 
     func testMergedHistoryOpensItsRealFileAfterExpansion() {
@@ -278,12 +311,27 @@ final class RecentCommitsViewTests: XCTestCase {
                           "Commit title must remain clickable at width \(width)")
             click(titlePoint, in: window)
             XCTAssertFalse(selection.expanded.contains(commit.hash))
-            if width == 420 {
-                click(NSPoint(x: 265, y: height - 17), in: window)
-                XCTAssertTrue(selection.expanded.contains(commit.hash),
-                              "Selecting the tag must locate and reveal its commit")
-            }
             window.close()
         }
+    }
+
+    func testTagBadgeDoesNotToggleExpandedCommitClosed() {
+        let selection = GraphSelection()
+        let commit = GitStatusModel.RecentCommit(
+            hash: "tag-commit", shortHash: "tag-commit", subject: "Small change",
+            author: "Developer", date: .now, parentHashes: [],
+            references: [.init(kind: .tag, name: "v1.2.3")],
+            files: [.init(status: "A", path: "Sources/new.swift", originalPath: nil)]
+        )
+        let height: CGFloat = 180
+        let window = hostHistory([commit], selection: selection, height: height)
+        defer { window.close() }
+        let tagPoint = NSPoint(x: 216, y: height - 12)
+        click(tagPoint, in: window)
+        XCTAssertTrue(selection.expanded.contains(commit.hash),
+                      "Tag badge should locate the tagged commit")
+        click(tagPoint, in: window)
+        XCTAssertTrue(selection.expanded.contains(commit.hash),
+                      "Clicking Tag again must not collapse its commit")
     }
 }
