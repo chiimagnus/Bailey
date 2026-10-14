@@ -888,9 +888,7 @@ final class GitStatusModel {
         repository expectedRepository: String, scope expectedScope: String
     ) {
         guard isRepo, repoRoot == expectedRepository, currentScope == expectedScope,
-              recentCommits.contains(where: { $0.hash == commit.hash }),
-              (commit.hash.count == 40 || commit.hash.count == 64),
-              commit.hash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) })
+              recentCommits.contains(where: { $0.hash == commit.hash })
         else {
             failImmediately(String(
                 localized: "Repository or commit changed; reopen the history menu and try again.",
