@@ -223,7 +223,7 @@ struct ToolPanelView: View {
                 }
                 guard pollsSelectedPanel else { return }
                 if panel == .git {
-                    if git.isRepo && git.currentScope == "local"
+                    if git.currentScope == "local"
                         && !git.isRefreshing && !git.isBusy {
                         git.refresh()
                     }

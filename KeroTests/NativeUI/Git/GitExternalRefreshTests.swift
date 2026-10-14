@@ -18,6 +18,51 @@ final class GitExternalRefreshTests: XCTestCase {
         }
     }
 
+    func testVisibleLocalPanelDetectsExternalInitialization() async throws {
+        let snapshots = SessionStore.load()
+        let histories = TerminalHistoryStore.load()
+        defer { SessionStore.save(snapshots); TerminalHistoryStore.save(histories) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kero-git-init-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([directory])
+        let model = GitStatusModel()
+        model.syncSelectedProject(in: manager)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing && !model.isRepo }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: -1200, y: -1200, width: 420, height: 560),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView:
+            ToolPanelView(manager: manager, git: model, panel: .git)
+                .frame(width: 420, height: 560))
+        window.orderFront(nil)
+        defer { window.close() }
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertTrue(window.isVisible)
+        NotificationCenter.default.post(
+            name: NSApplication.didBecomeActiveNotification, object: NSApp
+        )
+        try await Task.sleep(for: .milliseconds(250))
+
+        let result = GitCommandExecution.run(["init", "-q", "-b", "main"],
+                                             in: directory.path, timeout: 10)
+        XCTAssertEqual(result.status, 0, result.stderr)
+        try await wait(seconds: 9) {
+            model.hasResolvedStatus && !model.isRefreshing && model.isRepo
+        }
+        let actual = try FileManager.default.attributesOfItem(atPath: model.repoRoot)
+        let expected = try FileManager.default.attributesOfItem(atPath: directory.path)
+        XCTAssertEqual(actual[.systemFileNumber] as? NSNumber,
+                       expected[.systemFileNumber] as? NSNumber)
+    }
+
     func testVisibleGitPanelRefreshesTwoExternalMutationsWithoutActivation() async throws {
         let snapshots = SessionStore.load()
         let histories = TerminalHistoryStore.load()
