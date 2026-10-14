@@ -49,3 +49,75 @@ status = "completed"
 plan = "plan-p3.md#p3-t2"
 commit = "1d2be55"
 note = "Git 原生面板外部编辑/暂存/提交 Red→Green，2.02/1.98/1.78秒；后台/隐藏停止、切仓库隔离、真实分叉+Ref 图验收；make test 104/104，make build 签名 PASS；真实 SSH / 独立进程右键 E2E 未测"
+
+[[tasks]]
+id = "P4-T1"
+title = "Commit Checkout、Cherry-pick、Revert、Merge 与冲突恢复"
+status = "pending"
+plan = "plan-p4.md#p4-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T2"
+title = "Commit Rebase、Reset 三模式及条件 Drop"
+status = "pending"
+plan = "plan-p4.md#p4-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T3"
+title = "当前与其他本地分支管理菜单"
+status = "pending"
+plan = "plan-p4.md#p4-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T4"
+title = "远端分支 Checkout、Fetch、Pull 与删除"
+status = "pending"
+plan = "plan-p4.md#p4-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T5"
+title = "Tag 注释与本地及远端管理"
+status = "pending"
+plan = "plan-p4.md#p4-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T6"
+title = "历史文件修订、比较与打开菜单"
+status = "pending"
+plan = "plan-p4.md#p4-t6"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T7"
+title = "工作区文件、目录与分组右键菜单"
+status = "pending"
+plan = "plan-p4.md#p4-t7"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T8"
+title = "具体 Stash 的选择与 Apply、Pop、Drop、Branch"
+status = "pending"
+plan = "plan-p4.md#p4-t8"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T9"
+title = "全对象菜单与本机及真实 SSH 用户路径验收"
+status = "pending"
+plan = "plan-p4.md#p4-t9"
+commit = ""
+note = ""

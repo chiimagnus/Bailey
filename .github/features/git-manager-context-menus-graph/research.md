@@ -1,4 +1,6 @@
-# Git Manager 调研：只补 Kero 真正缺少的部分
+# Git Manager 调研：P1～P3 历史决策与 P4 菜单补齐依据
+
+> 本文前半记录最初收缩的 P2 需求和当时的源码状态，保留供追溯；**2026-10-14 的 P4 新需求以文末的最新实证为准**，旧版「不做」不再限制本轮菜单。
 
 对应 [Issue #2](https://github.com/chiimagnus/kero/issues/2) · [Recent Commits 设计稿](design.html)。研究依据为 **当前 Kero 源码**、Issue 中的 Git Graph 截图（两行提交、主干/多色分叉、Ref/短 SHA/作者/时间）与 Git Graph 官方材料，不把 Git Graph 的全量菜单当作 Kero 需求。
 
@@ -57,4 +59,39 @@
 ## 本轮交付边界
 
 - 当前 `design.html` 是用户已更新并提交的 **V4 Recent Commits 参考原型**。过去 HTML 的浏览器测试不等于这次同步计划或正式 SwiftUI 的实机验收；使用它时需独立核验所修改的版本。
-- 本调研记录实施前的缺口。P1～P3 现已实施且完成独立逐提交审计，现行契约见 [Git 维护文档](../../../docs/features/git.md)，验收证据按阶段保留在 `audit-p1.md`～`audit-p3.md`。正式 App 已按后续明确授权替换；未使用用户真实仓库执行测试写操作。
+- 上述初版调研记录实施前的缺口。P1～P3 现已实施且完成独立逐提交审计，现行契约见 [Git 维护文档](../../../docs/features/git.md)，验收证据按阶段保留在 `audit-p1.md`～`audit-p3.md`。正式 App 已按后续明确授权替换；未使用用户真实仓库执行测试写操作。
+
+## 2026-10-14：P4 完整对象菜单的新增一手依据
+
+**范围变化：** 上面的「不做 Cherry-pick/Revert/Drop/Reset/Merge/Rebase、远端分支和 Tag 管理」是**原 P2 的历史收缩决定**，不是现在的需求。用户明确要求补回这些动作；当前实施方案以 [idea.md](idea.md) 和 [plan-p4.md](plan-p4.md) 为准，不能拿旧研究或旧审计把新增项划出范围。
+
+### 上游菜单与原 Issue 证据
+
+| 一手材料 | 实际核对结果 | 在 Kero 的使用方式 |
+| --- | --- | --- |
+| [Kero Issue #2](https://github.com/chiimagnus/kero/issues/2) 的 [Commit 菜单原图](https://github.com/user-attachments/assets/4321d2dd-7bb6-4499-aa9d-2bcf11663c25) | 原图逐项包含 Add Tag、Create Branch、Checkout、Cherry Pick、Revert、**Drop**、Merge into current、Rebase current onto、Reset current to this Commit、复制 SHA/Subject | 这些是本次 Commit 菜单最低覆盖，不得因旧 P2 省略而当作可选优化 |
+| [Git Graph 官方 Context Menus](https://github.com/mhutchie/vscode-git-graph/wiki/Context-Menus) | 分别列出 Commit、已/未 checkout 的本地分支、Remote Branch、Tag、Stash、Uncommitted Changes、Commit Details File 等菜单；Drop 有“if topologically possible”条件 | 依对象拆分；对不可用 Git 状态明确禁用，不用一个大菜单或假执行动作 |
+| [Git Graph 官方设置](https://github.com/mhutchie/vscode-git-graph/wiki/Extension-Settings) | Tag 有 annotated/lightweight；Reset 有 Soft/Mixed/Hard；Stash 可按具体条目操作 | 参考 Git **语义和影响范围**，不照抄插件的全部设置项 |
+| [VSCodium 构建说明](https://github.com/VSCodium/vscodium/blob/master/README.md) | VSCodium 用 Microsoft `vscode` 源码构建，Git SCM 菜单参考其内置 Git 扩展而不是另找 VSCodium 私有实现 | 明确 upstream 的来源，勿将 Git Graph 第三方插件误认为 VSCodium 自带 Git |
+| [VS Code Git 扩展 `package.json` 固定源码](https://github.com/microsoft/vscode/blob/76e9dff43b237f3fcbb8a289ed2f8bdf28105baf/extensions/git/package.json)（Git 扩展 10.0.0；2026-10-14 核对） | `scm/historyItem/context` 的 `git.graph.checkoutDetached` / `git.graph.cherryPick` / `git.graph.compareWithRemote` / `git.graph.compareWithMergeBase` / `git.graph.compareRef`；`scm/historyItemRef/context` 的 checkout/delete Branch/Tag；`scm/resourceState/context` 的 Stage/Unstage/Clean/Ignore/Open File，`scm/resourceGroup/context` 的批量 Stage/Discard；目录 `scm/resourceFolder/context` 也有单独命令 | Kero 同样按历史 Commit/Ref、工作区文件与分组/目录区分。菜单命令及条件取自实际声明，不按文字猜测 |
+
+**不照搬的明确理由：** Archive/PR 需要 Kero 当前不存在的导出目标或 PR Provider；列可见性、Branches Dropdown 和链接菜单没有对应 UI 对象；只在编辑器行选区中成立的 Stage Selected Ranges 不属于当前 Git 文件树行。用户强调的 Cherry-pick、Revert、Drop、Reset、Merge/Rebase、Remote Branch、Tag 和 Stash 不是此类非目标。
+
+### Kero 当前生产链与缺口（已逐层核对）
+
+| 当前 owner / 锚点 | 当前能力或缺口 | P4 应改位置 |
+| --- | --- | --- |
+| `RecentCommitsView.commitRow` | 仅历史 Branch/Tag 创建、复制；左击整行展开，SHA 和 Ref 独立 | Commit 命令由此绑定，但交付给 `GitPanel` / Model 执行；不要让 View 发 Git |
+| `RecentCommitsView.referenceActions` 与 `+N` | 当前本地 Branch 仅复制，其他本地 Branch 切换/复制，Tag 定位/复制，Remote Ref 为只读胶囊 | 通过同一个对象动作入口补本地/远端/Tag；验证 `+N` 与直接显示行为一致 |
+| `GitPanel.branchMenu / moreMenu / GitEntryRow.menu` | 顶部 Fetch/Pull FF-only/Push/Sync、Stash All/默认 Pop；行级 Stage/Unstage/Discard，Merge/Index/Working 不同；分组按钮存在 | 继续复用现有入口，缺 Stash 单条、历史 ref 管理、工作区分组/文件缺口在所属菜单实现 |
+| `GitStatusModel` | `perform` 校验 repoRoot、机器 scope、HEAD/upstream，并排他运行；`createReference` 可在选中 Commit 新建本地轻量 Tag/Branch；只有 `stashCount`，无逐条 Stash 身份/可右击条目 | 扩展现有 ViewModel 的真实 Git 语义，不建重复状态管理器；Ref、Stash 及确认前后目标需额外校验；确需单条右键时在现有 GitPanel 增加最小 STASHES 行，不把 More Menu 的左键子菜单当作右键验收 |
+| `GitStatusModel.repositoryOperation` / `detectRepositoryOperation` | 已检测 MERGE、CHERRY_PICK、REVERT、rebase 标记，但展示为字符串，`GitPanel.repositoryOperationBanner` 只建议转终端 | 对实际可恢复 Git 状态增加按钮和相应 Model 命令；不会无条件产生 Recovery 状态 |
+| `GitCommandExecution.run(_:in:backend:)` → `WorkspaceBackend.run` | argv 交给本机 `Process` 或 SSH backend；不直接复用用户终端 Shell | 保持当前后台执行、错误/超时、远端 argv 引用与机器身份；不得靠 View 使用 `Process` 或拼接未经校验的 shell |
+| `TerminalManager.openCommitDiff` → `Project.openCommitDiff` | 已有历史 Diff 标签的真实生命周期和 Read-only 语义 | 在现有内容体系上扩展「查看修订」「与工作区比较」，不在 Git Panel 新建平行 Editor/缓存 |
+
+### 真实风险、检查点与任务边界
+
+- **历史改写不是 Revert：** Git Graph 的 Drop 指从当前分支历史删除提交并重放后续提交；仅在拓扑可证明安全时启用。Reset 的 Soft/Mixed/Hard 影响不同，Hard 会影响未保存到提交的改动；不能无确认、默认 Hard 或擅自 Force Push。
+- **冲突必须有结果路径：** Cherry-pick、Revert、Merge 和 Rebase 可留下 `MERGE_HEAD`/`CHERRY_PICK_HEAD`/`REVERT_HEAD`/rebase 状态。现有只读 banner 不足以支撑完整菜单；需提供 Continue/Abort 与适用 Skip，失败保留真实 index/worktree。
+- **Remote/Tag/Stash 不能只信显示名称：** `origin/main` 必须解析为指定 remote + branch，`stash@{n}` 会随着 stash 变更移动，Tag 可能是 annotated 对象；确认之后仍需验证实际 OID/ref。使用独立 bare remotes 和真实临时 Git fixture 核对被修改的对象，不在真实 Kero 或用户 Git remote 上实验。
+- **双重验收：** `RecentCommitsViewTests` 等 NativeUI 宿主验证菜单命中与确认，`GitStatusModelTests` 等 Integration 验证 Git side effects；本机完整 App 与专用 Windows SSH 必须逐项实测。没有 SSH 实机测试，就只能报告本机已验，不能宣布 Issue #2 的 SSH 目标完成。
