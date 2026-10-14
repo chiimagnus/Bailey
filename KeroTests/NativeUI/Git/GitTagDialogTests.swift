@@ -112,7 +112,8 @@ final class GitTagDialogTests: XCTestCase {
         XCTAssertTrue(dialog.alert.buttons[0].isEnabled)
         XCTAssertEqual(dialog.alert.buttons[0].title, String(localized: "Add Tag", table: "Git"))
         dialog.tagType.selectItem(at: 1)
-        dialog.tagType.performClick(nil)
+        dialog.tagType.sendAction(dialog.tagType.action, to: dialog.tagType.target)
+        XCTAssertFalse(dialog.message.isEditable)
         XCTAssertEqual(dialog.message.string, "release notes", "Do not discard the annotation while switching type")
         let retry = GitTagDialog(kind: .create(remotes: ["origin"]), title: "Retry",
             detail: "commit", initialName: "v1", initialType: .lightweight,
