@@ -881,24 +881,53 @@ final class GitStatusModel {
 
     // MARK: - File operations
 
+    nonisolated static func ignorePatterns(_ paths: [String], isDirectory: Bool) throws -> [String] {
+        try paths.map { path in
+            guard !path.isEmpty, !path.hasPrefix("/"),
+                  !path.contains("\n"), !path.contains("\r"), !path.contains("\0"),
+                  !path.split(separator: "/").contains("..") else {
+                throw NSError(domain: "Kero.Git", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                    String(localized: "This path cannot be safely added to .gitignore.", table: "Git")])
+            }
+            let escaped = path.map { character -> String in
+                "\\*?[]#! ".contains(character) ? "\\" + String(character) : String(character)
+            }.joined()
+            return "/" + escaped + (isDirectory ? "/" : "")
+        }
+    }
+
     func stage(_ entry: Entry) {
-        guard validate(entry) else { return }
-        let original = entry.unstaged == "R" ? entry.origPath.map { [$0] } ?? [] : []
-        let paths = [entry.path] + original
+        stageEntries([entry])
+    }
+
+    func stageEntries(_ entries: [Entry]) {
+        guard !entries.isEmpty, entries.allSatisfy(validate) else { return }
+        let paths = entries.flatMap { entry in
+            [entry.path] + (entry.unstaged == "R" ? entry.origPath.map { [$0] } ?? [] : [])
+        }
         perform(
-            label: String(localized: "Stage \(entry.fileName)", table: "Git"),
+            label: entries.count == 1
+                ? String(localized: "Stage \(entries[0].fileName)", table: "Git")
+                : String(localized: "Stage Changes", table: "Sidebar"),
             commands: [["--literal-pathspecs", "add", "--"] + paths]
         )
     }
 
     func unstage(_ entry: Entry) {
-        guard validate(entry) else { return }
-        let original = entry.staged == "R" ? entry.origPath.map { [$0] } ?? [] : []
-        let paths = [entry.path] + original
+        unstageEntries([entry])
+    }
+
+    func unstageEntries(_ entries: [Entry]) {
+        guard !entries.isEmpty, entries.allSatisfy(validate) else { return }
+        let paths = entries.flatMap { entry in
+            [entry.path] + (entry.staged == "R" ? entry.origPath.map { [$0] } ?? [] : [])
+        }
         let args = hasHead
             ? ["--literal-pathspecs", "restore", "--staged", "--"] + paths
             : ["--literal-pathspecs", "rm", "--cached", "-f", "--"] + paths
-        perform(label: String(localized: "Unstage \(entry.fileName)", table: "Git"), commands: [args])
+        perform(label: entries.count == 1
+                ? String(localized: "Unstage \(entries[0].fileName)", table: "Git")
+                : String(localized: "Unstage Changes", table: "Sidebar"), commands: [args])
     }
 
     func stageAll() {
@@ -1765,14 +1794,45 @@ final class GitStatusModel {
                 prepare: prepare, isCurrentTarget: isCurrentTarget, completion: completion)
     }
 
-    func stash(includeUntracked: Bool = true) {
-        guard totalChangeCount > 0 else {
+    func stash(
+        message: String = "", includeUntracked: Bool = true, target: ActionTarget,
+        prepare: (@MainActor () async -> Bool)? = nil,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        guard isCurrent(target), totalChangeCount > 0 else {
             failImmediately(String(localized: "There are no changes to stash", table: "Git"))
             return
         }
         var args = ["stash", "push"]
         if includeUntracked { args.append("--include-untracked") }
-        perform(label: String(localized: "Stash changes", table: "Git"), commands: [args])
+        if !message.isEmpty { args += ["--message", message] }
+        perform(label: String(localized: "Stash changes", table: "Git"), commands: [args],
+                prepare: prepare, isCurrentTarget: isCurrentTarget, completion: completion)
+    }
+
+    func resetUncommitted(
+        mode: ResetMode, target: ActionTarget,
+        prepare: (@MainActor () async -> Bool)? = nil,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        guard isCurrent(target), hasHead, mode != .soft else { return }
+        perform(label: String(localized: "Reset…", table: "Git"),
+                commands: [["reset", "--" + mode.rawValue, "HEAD"]],
+                prepare: prepare, isCurrentTarget: isCurrentTarget, completion: completion)
+    }
+
+    func cleanUntracked(
+        includeDirectories: Bool, target: ActionTarget,
+        prepare: (@MainActor () async -> Bool)? = nil,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        guard isCurrent(target) else { return }
+        perform(label: String(localized: "Clean…", table: "Git"),
+                commands: [["clean", includeDirectories ? "-fd" : "-f"]],
+                prepare: prepare, isCurrentTarget: isCurrentTarget, completion: completion)
     }
 
     func stashPop() {

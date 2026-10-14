@@ -1,6 +1,12 @@
 import SwiftUI
 
 struct PanelSectionHeader: View {
+    struct MenuAction: Identifiable {
+        var id: String { title }
+        let title: String
+        var disabled = false
+        let perform: () -> Void
+    }
     struct Action: Identifiable {
         let id = UUID()
         let systemImage: String
@@ -28,6 +34,7 @@ struct PanelSectionHeader: View {
     var actionsDisabled = false
     /// When set, a small "?" after the title opens this in a popover.
     var helpText: String?
+    var menuActions: [MenuAction] = []
 
     @State private var isHovering = false
     @State private var isShowingHelp = false
@@ -120,6 +127,11 @@ struct PanelSectionHeader: View {
             ForEach(actions) { action in
                 Button(action.help, action: action.perform)
                     .disabled(actionsDisabled)
+            }
+            if !actions.isEmpty, !menuActions.isEmpty { Divider() }
+            ForEach(menuActions) { action in
+                Button(action.title, action: action.perform)
+                    .disabled(actionsDisabled || action.disabled)
             }
         }
         .accessibilityElement(children: .contain)

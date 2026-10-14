@@ -5,6 +5,7 @@
 
 import AppKit
 import Observation
+import STTextView
 import SwiftUI
 
 /// A file opened as a tab in a project. Text content lives here (not in the
@@ -115,6 +116,28 @@ final class FileTab: nonisolated Identifiable {
     }
 
     // MARK: - Remote workspace
+
+    func waitForText() async throws {
+        let generation = targetGeneration
+        await reloadTask?.value
+        guard generation == targetGeneration, readOnlyReason == nil,
+              case .text = content else {
+            throw NSError(domain: "Kero.Editor", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                String(localized: "The file is unavailable or its workspace changed. Reopen it and try again.", table: "Editor")])
+        }
+    }
+
+    func appendText(_ suffix: String) {
+        if editorCoordinator?.revision == reloadRevision, let textView {
+            textView.breakUndoCoalescing()
+            textView.insertText(suffix, replacementRange: NSRange(location: text.utf16.count, length: 0))
+            textView.breakUndoCoalescing()
+            text = textView.text ?? text
+        } else {
+            text += suffix
+        }
+        refreshDirtyState()
+    }
 
     /// Re-checks this tab against the project's connections: adopts a live
     /// workspace for its own machine, or marks it read-only. Driven by the

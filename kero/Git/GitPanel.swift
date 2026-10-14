@@ -305,10 +305,9 @@ struct GitPanel: View {
                         || model.branch == "detached HEAD"
                 )
             Divider()
-            Button(String(localized: "Stash All Changes", table: "Sidebar")) {
-                performOperation(.moreMenu) { model.stash(includeUntracked: true) }
+            ForEach(uncommittedMenuActions) { action in
+                Button(action.title, action: action.perform).disabled(action.disabled)
             }
-                .disabled(model.isBusy || model.totalChangeCount == 0)
             Button(
                 model.stashCount == 1
                     ? String(localized: "Pop Stash", table: "Sidebar")
@@ -1529,7 +1528,8 @@ struct GitPanel: View {
                         count: filteredMergeEntries.count,
                         isCollapsed: $mergeCollapsed,
                         actions: [],
-                        actionsDisabled: model.isBusy
+                        actionsDisabled: model.isBusy,
+                        menuActions: uncommittedMenuActions
                     )
                     if !mergeCollapsed {
                         changedFileRows(filteredMergeEntries, kind: .merge)
@@ -1549,7 +1549,8 @@ struct GitPanel: View {
                                 performOperation(.unstageAll, model.unstageAll)
                             }
                         ] : [],
-                        actionsDisabled: model.isBusy
+                        actionsDisabled: model.isBusy,
+                        menuActions: uncommittedMenuActions
                     )
                     if !stagedCollapsed {
                         changedFileRows(filteredStagedEntries, kind: .staged)
@@ -1576,7 +1577,8 @@ struct GitPanel: View {
                                 performOperation(.stageAll, model.stageAll)
                             },
                         ] : [],
-                        actionsDisabled: model.isBusy
+                        actionsDisabled: model.isBusy,
+                        menuActions: uncommittedMenuActions
                     )
                     if !changesCollapsed {
                         changedFileRows(filteredChangedEntries, kind: .unstaged)
@@ -1665,6 +1667,9 @@ struct GitPanel: View {
                     TreeFolderRow(row: item, scale: panelFontScale) {
                         model.toggleCollapsedFolder(kind.rawValue + ":" + item.path)
                     }
+                    .contextMenu {
+                        directoryMenu(path: item.path, kind: kind)
+                    }
                 } else if let entry = byPath[item.path] {
                     row(entry, kind: kind, showDirectory: false, displayRow: item)
                 }
@@ -1745,6 +1750,10 @@ struct GitPanel: View {
                 openDiff(diffEntry, kind == .staged)
             },
             openFile: { openIfPossible(entry) },
+            openHead: kind != .merge && model.hasHead && entry.staged != "A" && !entry.isUntracked ? {
+                openHeadFile(entry)
+            } : nil,
+            ignore: kind == .unstaged ? { ignorePaths([entry.path], isDirectory: false) } : nil,
             stage: { performOperation(stageTrigger) { model.stage(entry) } },
             unstage: { performOperation(unstageTrigger) { model.unstage(entry) } },
             discard: {
@@ -1765,6 +1774,128 @@ struct GitPanel: View {
     private func openIfPossible(_ entry: GitStatusModel.Entry) {
         guard model.canOpen(entry, isRemote: remoteName != nil) else { return }
         openFile(model.absolutePath(for: entry))
+    }
+
+    private var uncommittedMenuActions: [PanelSectionHeader.MenuAction] {
+        [
+            .init(title: String(localized: "Stash…", table: "Git"),
+                  disabled: model.isBusy || model.totalChangeCount == 0) { presentUncommittedDialog(.stash) },
+            .init(title: String(localized: "Reset…", table: "Git"),
+                  disabled: model.isBusy || !model.hasHead) { presentUncommittedDialog(.reset) },
+            .init(title: String(localized: "Clean…", table: "Git"),
+                  disabled: model.isBusy) { presentUncommittedDialog(.clean) },
+        ]
+    }
+
+    func presentUncommittedDialog(_ action: GitUncommittedDialog.Action) {
+        guard !model.isBusy, let window = manager.attachedWindow, let project,
+              manager.selectedProject === project, let context = project.panelContext,
+              model.matchesPanelTarget(context.identity) else { return }
+        let target = model.actionTarget()
+        let dialog = GitUncommittedDialog(action: action, target: target)
+        let isCurrent: @MainActor () -> Bool = {
+            manager.attachedWindow === window && manager.selectedProject === project
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity) && model.isCurrent(target)
+        }
+        dialog.alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn, isCurrent() else { return }
+            let mode: GitStatusModel.ResetMode = dialog.resetMode.indexOfSelectedItem == 1 ? .hard : .mixed
+            let writesWorktree = action != .reset || mode == .hard
+            let prepare: @MainActor () async -> Bool = {
+                if !writesWorktree { return true }
+                return await project.saveBeforeGitAction(
+                    repository: target.repository, scope: target.scope, isCurrent: isCurrent)
+            }
+            let validate: @MainActor () -> Bool = {
+                isCurrent() && (!writesWorktree || project.canRunGitAction(repository: target.repository, scope: target.scope))
+            }
+            let completion: @MainActor (Bool) -> Void = { _ in
+                project.reloadAfterGitAction(repository: target.repository, scope: target.scope)
+            }
+            performOperation(.moreMenu) {
+                switch action {
+                case .stash:
+                    model.stash(message: dialog.message.stringValue,
+                        includeUntracked: dialog.includeUntracked.state == .on, target: target,
+                        prepare: prepare, isCurrentTarget: validate, completion: completion)
+                case .reset:
+                    model.resetUncommitted(mode: mode, target: target, prepare: prepare,
+                                           isCurrentTarget: validate, completion: completion)
+                case .clean:
+                    model.cleanUntracked(includeDirectories: dialog.directories.state == .on,
+                        target: target, prepare: prepare, isCurrentTarget: validate, completion: completion)
+                }
+            }
+        }
+    }
+
+    private func entries(for kind: GitEntryRow.Kind) -> [GitStatusModel.Entry] {
+        switch kind {
+        case .merge: model.mergeEntries
+        case .staged: model.stagedEntries
+        case .unstaged: model.changedEntries
+        }
+    }
+
+    @ViewBuilder
+    private func directoryMenu(path: String, kind: GitEntryRow.Kind) -> some View {
+        let selected = entries(for: kind).filter { $0.path.hasPrefix(path + "/") }
+        if kind == .staged {
+            Button(String(localized: "Unstage Changes", table: "Sidebar")) {
+                performOperation(.unstageAll) { model.unstageEntries(selected) }
+            }.disabled(model.isBusy)
+        } else {
+            Button(kind == .merge ? String(localized: "Mark Resolved (Stage)", table: "Sidebar")
+                   : String(localized: "Stage Changes", table: "Sidebar")) {
+                performOperation(.stageAll) { model.stageEntries(selected) }
+            }.disabled(model.isBusy)
+            if kind == .unstaged {
+                Button(String(localized: "Discard Changes…", table: "Sidebar")) {
+                    requestDiscard(selected)
+                }.disabled(model.isBusy)
+                Button(String(localized: "Add to .gitignore", table: "Git")) {
+                    ignorePaths([path], isDirectory: true)
+                }.disabled(model.isBusy)
+            }
+        }
+    }
+
+    private func requestDiscard(_ entries: [GitStatusModel.Entry]) {
+        if remoteName != nil {
+            prepareRemoteDiscard(entries, all: true)
+        } else {
+            pendingDiscardAll = model.prepareLocalDiscard(entries)
+            confirmDiscardAll = !pendingDiscardAll.isEmpty
+        }
+    }
+
+    private func ignorePaths(_ paths: [String], isDirectory: Bool) {
+        guard !model.isBusy, let window = manager.attachedWindow,
+              let project, let context = project.panelContext else { return }
+        let target = model.actionTarget()
+        let isCurrent: @MainActor () -> Bool = {
+            manager.attachedWindow === window && manager.selectedProject === project
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity)
+                && model.isCurrent(target, requiresStableHead: false)
+        }
+        Task {
+            do {
+                try await project.ignoreGitPaths(paths, isDirectory: isDirectory,
+                    repository: target.repository, context: context, isCurrent: isCurrent)
+                if isCurrent() { model.refresh() }
+            } catch {
+                if isCurrent() { model.lastError = error.localizedDescription }
+            }
+        }
+    }
+
+    private func openHeadFile(_ entry: GitStatusModel.Entry) {
+        guard model.isCurrent(entry), let project, let hash = model.headOID else { return }
+        project.openHistoricalDiff(repoRoot: model.repoRoot,
+            path: (entry.staged == "R" || entry.staged == "C") ? entry.origPath ?? entry.path : entry.path,
+            source: .revision(hash: hash), origPath: nil)
     }
 
     /// The machine a discard would act on, or nil while local.
@@ -2107,6 +2238,8 @@ private struct GitEntryRow: View {
     let isDiscardLoading: Bool
     let openDiff: () -> Void
     let openFile: () -> Void
+    let openHead: (() -> Void)?
+    let ignore: (() -> Void)?
     let stage: () -> Void
     let unstage: () -> Void
     let discard: () -> Void
@@ -2209,6 +2342,9 @@ private struct GitEntryRow: View {
             Button(String(localized: "Open File", table: "Sidebar")) { openFile() }
         }
         Divider()
+        if let openHead {
+            Button(String(localized: "Open HEAD File", table: "Git"), action: openHead)
+        }
         switch kind {
         case .merge:
             Button(String(localized: "Mark Resolved (Stage)", table: "Sidebar")) { stage() }
@@ -2221,6 +2357,10 @@ private struct GitEntryRow: View {
                 .disabled(disabled)
             Button(destructiveMenuTitle) { discard() }
                 .disabled(disabled)
+            if let ignore {
+                Button(String(localized: "Add to .gitignore", table: "Git"), action: ignore)
+                    .disabled(disabled)
+            }
         }
         Divider()
         if !isRemote {

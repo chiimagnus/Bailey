@@ -79,6 +79,30 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
 
 @MainActor
 final class FileTabTests: XCTestCase {
+    func testAppendWaitsForRemoteReadAndRetainsTextOnSaveFailure() async throws {
+        let path = "/fixture/.gitignore"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("existing\n".utf8))
+        await backend.pauseOneRead()
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        try await wait { await backend.readingPath == path }
+        let append = Task {
+            try await file.waitForText()
+            file.appendText("/new\n")
+            await file.save()
+        }
+        await Task.yield()
+        XCTAssertEqual(file.text, "")
+        await backend.finishRead(with: Data("existing\n".utf8))
+        try await wait { await backend.writingPath == path }
+        await backend.finishWrite(failing: true)
+        try await append.value
+        XCTAssertEqual(file.text, "existing\n/new\n")
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        let stored = await backend.data(at: path)
+        XCTAssertEqual(stored, Data("existing\n".utf8))
+        file.autoSaveSuspendedForClose = true
+    }
     private func mountedEditor(in view: NSView) -> FocusReportingTextView? {
         if let editor = view as? FocusReportingTextView { return editor }
         return view.subviews.lazy.compactMap { self.mountedEditor(in: $0) }.first

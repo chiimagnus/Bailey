@@ -481,6 +481,39 @@ final class Project: nonisolated Identifiable {
         }
     }
 
+    func ignoreGitPaths(
+        _ paths: [String], isDirectory: Bool, repository: String,
+        context: PanelContext, isCurrent: () -> Bool
+    ) async throws {
+        let patterns = try GitStatusModel.ignorePatterns(paths, isDirectory: isDirectory)
+        let path = repository + "/.gitignore"
+        guard isCurrent() else { throw CancellationError() }
+        let existing = try await context.backend.stat(path: path)
+        guard isCurrent() else { throw CancellationError() }
+        if existing == nil {
+            do {
+                try await context.backend.createFile(path: path)
+            } catch {
+                guard try await context.backend.stat(path: path) != nil else { throw error }
+            }
+        }
+        guard isCurrent() else { throw CancellationError() }
+        openFile(path)
+        guard let tab = findFileTab(path: path, workspace: workspaceIdentity),
+              case .file(let file) = tab.content else { throw WorkspaceError.notFound }
+        try await file.waitForText()
+        guard isCurrent(), file.path == path else { throw CancellationError() }
+        let newline = file.text.contains("\r\n") ? "\r\n" : "\n"
+        let separator = file.text.isEmpty || file.text.hasSuffix("\n") ? "" : newline
+        file.appendText(separator + patterns.joined(separator: newline) + newline)
+        await file.save()
+        guard isCurrent() else { throw CancellationError() }
+        guard !file.isDirty, file.saveError == nil else {
+            throw NSError(domain: "Kero.Editor", code: 2, userInfo: [NSLocalizedDescriptionKey:
+                file.saveError ?? String(localized: "Edits could not be saved.", table: "Editor")])
+        }
+    }
+
     // MARK: - Browser
 
     /// Opens a native browser as a new tab beside the current selection.

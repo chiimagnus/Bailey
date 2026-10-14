@@ -1,6 +1,136 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Stash…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "储藏…"
+          }
+        }
+      }
+    },
+    "Reset…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复位…"
+          }
+        }
+      }
+    },
+    "Clean…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清理…"
+          }
+        }
+      }
+    },
+    "Message (optional)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "消息（可选）"
+          }
+        }
+      }
+    },
+    "Include Untracked Files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "包含未跟踪文件"
+          }
+        }
+      }
+    },
+    "Clean Untracked Directories" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清理未跟踪目录"
+          }
+        }
+      }
+    },
+    "Yes, Stash" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是，储藏"
+          }
+        }
+      }
+    },
+    "Yes, Clean" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是，清理"
+          }
+        }
+      }
+    },
+    "Reset Mode" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复位模式"
+          }
+        }
+      }
+    },
+    "Permanently delete untracked files, including directories when selected. Ignored files are kept. This does not move files to the Trash." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "永久删除未跟踪文件，勾选后也删除目录。保留已忽略的文件。文件不会移至废纸篓。"
+          }
+        }
+      }
+    },
+    "Add to .gitignore" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加到 .gitignore"
+          }
+        }
+      }
+    },
+    "Open HEAD File" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 HEAD 文件"
+          }
+        }
+      }
+    },
+    "This path cannot be safely added to .gitignore." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法安全地将此路径添加到 .gitignore。"
+          }
+        }
+      }
+    },
     "Rebase Current Branch onto Commit…" : {
       "localizations" : {
         "zh-Hans" : {
