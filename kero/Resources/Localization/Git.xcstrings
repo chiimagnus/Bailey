@@ -1,6 +1,146 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Apply Stash…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用储藏…"
+          }
+        }
+      }
+    },
+    "Create Branch from Stash…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从储藏创建分支…"
+          }
+        }
+      }
+    },
+    "Pop Stash…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "弹出储藏…"
+          }
+        }
+      }
+    },
+    "Drop Stash…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除储藏…"
+          }
+        }
+      }
+    },
+    "Reinstate Index" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复暂存状态"
+          }
+        }
+      }
+    },
+    "Yes, Apply Stash" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是，应用储藏"
+          }
+        }
+      }
+    },
+    "Yes, Pop Stash" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是，弹出储藏"
+          }
+        }
+      }
+    },
+    "Pop Latest Stash…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "弹出最新储藏…"
+          }
+        }
+      }
+    },
+    "STASHES" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "储藏"
+          }
+        }
+      }
+    },
+    "Copy Stash Name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制储藏名称"
+          }
+        }
+      }
+    },
+    "Copy Stash Hash" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制储藏哈希"
+          }
+        }
+      }
+    },
+    "Checkout a new branch, restore this stash and remove it on success." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检出新分支并恢复此储藏，成功后移除该储藏。"
+          }
+        }
+      }
+    },
+    "The selected stash changed. Reopen the menu and select it again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选储藏已更改。请重新打开菜单并选择。"
+          }
+        }
+      }
+    },
+    "Unable to read the stash list." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取储藏列表。"
+          }
+        }
+      }
+    },
     "Stash…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1216,16 +1356,6 @@
         }
       }
     },
-    "Pop stash" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "弹出贮藏"
-          }
-        }
-      }
-    },
     "Publish branch" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1551,16 +1681,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没有可贮藏的更改"
-          }
-        }
-      }
-    },
-    "There are no stashes to pop" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有可弹出的贮藏"
           }
         }
       }

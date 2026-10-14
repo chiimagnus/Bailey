@@ -72,6 +72,26 @@ final class GitStatusModel {
         }
     }
 
+    nonisolated struct Stash: Identifiable, Equatable, Sendable {
+        var id: String { selector + "\0" + oid }
+        let selector: String
+        let oid: String
+        let message: String
+    }
+
+    nonisolated enum StashAction: CaseIterable, Sendable {
+        case apply, branch, pop, drop
+
+        var title: String {
+            switch self {
+            case .apply: String(localized: "Apply Stash…", table: "Git")
+            case .branch: String(localized: "Create Branch from Stash…", table: "Git")
+            case .pop: String(localized: "Pop Stash…", table: "Git")
+            case .drop: String(localized: "Drop Stash…", table: "Git")
+            }
+        }
+    }
+
     nonisolated struct ActionTarget: Sendable {
         fileprivate let generation: UInt
         let repository: String
@@ -401,7 +421,8 @@ final class GitStatusModel {
     private(set) var hasMoreRecentCommits = false
     private(set) var isLoadingMoreCommits = false
     private(set) var repositoryOperation: String?
-    private(set) var stashCount = 0
+    private(set) var stashes: [Stash] = []
+    var stashCount: Int { stashes.count }
     private(set) var isRefreshing = false
     /// True once a status load has completed for the current `rootPath`. The
     /// UI keeps showing resolved content during later event-driven refreshes
@@ -1835,12 +1856,44 @@ final class GitStatusModel {
                 prepare: prepare, isCurrentTarget: isCurrentTarget, completion: completion)
     }
 
-    func stashPop() {
-        guard stashCount > 0 else {
-            failImmediately(String(localized: "There are no stashes to pop", table: "Git"))
+    func actOnStash(
+        _ stash: Stash, action: StashAction, reinstateIndex: Bool = false,
+        branchName: String = "", target: ActionTarget,
+        prepare: (@MainActor () async -> Bool)? = nil,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        guard isCurrent(target, requiresStableHead: action != .drop),
+              (stash.oid.count == 40 || stash.oid.count == 64), stash.oid.allSatisfy(\.isHexDigit),
+              stash.selector.hasPrefix("stash@{"), stash.selector.hasSuffix("}"),
+              Int(stash.selector.dropFirst(7).dropLast()) != nil else {
+            failImmediately(String(localized: "The selected stash changed. Reopen the menu and select it again.", table: "Git"), completion: completion)
             return
         }
-        perform(label: String(localized: "Pop stash", table: "Git"), commands: [["stash", "pop"]])
+        let commands: [[String]]
+        let preflight: [[String]]
+        switch action {
+        case .apply, .pop:
+            commands = [["stash", action == .apply ? "apply" : "pop"]
+                + (reinstateIndex ? ["--index"] : []) + [action == .apply ? stash.oid : stash.selector]]
+            preflight = []
+        case .drop:
+            commands = [["stash", "drop", stash.selector]]
+            preflight = []
+        case .branch:
+            let name = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, !name.hasPrefix("-") else {
+                failImmediately(String(localized: "Enter a branch name", table: "Git"), completion: completion)
+                return
+            }
+            commands = [["stash", "branch", name, stash.selector]]
+            preflight = [["check-ref-format", "--branch", name]]
+        }
+        perform(label: action.title, commands: commands,
+                requiresStableHead: action != .drop, preflight: preflight,
+                expectedStash: action == .apply ? nil : stash,
+                prepare: action == .drop ? nil : prepare,
+                isCurrentTarget: isCurrentTarget, completion: completion)
     }
 
     func initializeRepository(completion: (@MainActor (Bool) -> Void)? = nil) {
@@ -1881,6 +1934,7 @@ final class GitStatusModel {
         terminalAction: (@MainActor () throws -> Void)? = nil,
         preflight: [[String]] = [], expectedRef: (name: String, oid: String)? = nil,
         expectedFileState: (path: String, state: FileState)? = nil,
+        expectedStash: Stash? = nil,
         continueAfterFirstSuccess: Bool = false,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
@@ -2015,6 +2069,16 @@ final class GitStatusModel {
                             : topology.stderr
                         return CommandBatchResult(output: message, failureCode: topology.status == 0 ? -1 : topology.status,
                                                   failureMessage: message)
+                    }
+                }
+                if let expectedStash {
+                    let actual = await GitCommandExecution.run(
+                        ["rev-parse", "--verify", expectedStash.selector + "^{commit}"], in: dir, backend: backend
+                    )
+                    guard actual.status == 0,
+                          actual.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == expectedStash.oid else {
+                        let message = String(localized: "The selected stash changed. Reopen the menu and select it again.", table: "Git")
+                        return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
                     }
                 }
                 for (index, args) in commands.enumerated() {
@@ -2303,6 +2367,23 @@ final class GitStatusModel {
 
     // MARK: - Status
 
+    private nonisolated static let stashListArguments = ["stash", "list", "-z", "--format=%gd%x00%H%x00%gs"]
+
+    nonisolated static func parseStashes(_ output: String) -> [Stash]? {
+        if output.isEmpty { return [] }
+        var fields = output.components(separatedBy: "\0")
+        guard fields.removeLast() == "", fields.count.isMultiple(of: 3) else { return nil }
+        var stashes: [Stash] = []
+        for index in stride(from: 0, to: fields.count, by: 3) {
+            let selector = fields[index]
+            let oid = fields[index + 1]
+            guard selector == "stash@{\(stashes.count)}",
+                  (oid.count == 40 || oid.count == 64), oid.allSatisfy(\.isHexDigit) else { return nil }
+            stashes.append(Stash(selector: selector, oid: oid, message: fields[index + 2]))
+        }
+        return stashes
+    }
+
     private func clearRepositoryState(
         preserveIdentity: Bool = false,
         preserveFailedOperation: Bool = false
@@ -2335,7 +2416,7 @@ final class GitStatusModel {
         hasMoreRecentCommits = false
         isLoadingMoreCommits = false
         repositoryOperation = nil
-        stashCount = 0
+        stashes = []
         isRefreshing = false
         isBusy = runningOperationID != nil
         operation = failedOperation
@@ -2392,7 +2473,7 @@ final class GitStatusModel {
         recentCommits = result.recentCommits
         hasMoreRecentCommits = result.hasMoreRecentCommits
         repositoryOperation = result.repositoryOperation
-        stashCount = result.stashCount
+        stashes = result.stashes
 
         let entries = result.entries.map { entry in
             var entry = entry
@@ -2443,7 +2524,7 @@ final class GitStatusModel {
         var recentCommits: [RecentCommit] = []
         var hasMoreRecentCommits = false
         var repositoryOperation: String?
-        var stashCount = 0
+        var stashes: [Stash] = []
     }
 
     /// Resolves the active repository and distinguishes a normal non-repo
@@ -2597,12 +2678,12 @@ final class GitStatusModel {
             ))
         }
 
-        let stash = await statusGit(
-            ["rev-list", "--walk-reflogs", "--count", "refs/stash"], in: repoRoot
-        )
-        if stash.status == 0 {
-            result.stashCount = Int(stash.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        let stash = await statusGit(stashListArguments, in: repoRoot)
+        guard stash.status == 0, let stashes = parseStashes(stash.stdout) else {
+            return .failed(gitFailureMessage(stash,
+                fallback: String(localized: "Unable to read the stash list.", table: "Git")))
         }
+        result.stashes = stashes
 
         let gitDir = await statusGit(["rev-parse", "--absolute-git-dir"], in: repoRoot)
         if gitDir.status == 0 {
@@ -2635,7 +2716,7 @@ final class GitStatusModel {
             refSnapshotArguments,
             ["remote"],
             recentCommitLogArguments(limit: recentCommitLimit),
-            ["rev-list", "--walk-reflogs", "--count", "refs/stash"],
+            stashListArguments,
             ["rev-parse", "--absolute-git-dir"],
         ]
         let tag = UUID().uuidString

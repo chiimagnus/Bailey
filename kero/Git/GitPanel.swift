@@ -58,6 +58,7 @@ struct GitPanel: View {
         )
     }
     @State private var historyCollapsed = false
+    @State private var stashesCollapsed = false
     @State private var expandedCommitIDs: Set<String> = []
     @State private var filterText = ""
     @State private var showFilter = false
@@ -308,14 +309,11 @@ struct GitPanel: View {
             ForEach(uncommittedMenuActions) { action in
                 Button(action.title, action: action.perform).disabled(action.disabled)
             }
-            Button(
-                model.stashCount == 1
-                    ? String(localized: "Pop Stash", table: "Sidebar")
-                    : String(localized: "Pop Stash (\(model.stashCount))", table: "Sidebar")
-            ) {
-                performOperation(.moreMenu, model.stashPop)
+            if let latest = model.stashes.first {
+                Button(String(localized: "Pop Latest Stash…", table: "Git")) {
+                    presentStashDialog(latest, action: .pop)
+                }.disabled(model.isBusy)
             }
-            .disabled(model.isBusy || model.stashCount == 0)
             Divider()
             Button(String(localized: "Copy Changed Paths", table: "Sidebar")) { copyChangedPaths() }
                 .disabled(model.totalChangeCount == 0)
@@ -1584,6 +1582,15 @@ struct GitPanel: View {
                         changedFileRows(filteredChangedEntries, kind: .unstaged)
                     }
                 }
+                if filterText.isEmpty, !model.stashes.isEmpty {
+                    PanelSectionHeader(
+                        title: String(localized: "STASHES", table: "Git"), count: model.stashCount,
+                        isCollapsed: $stashesCollapsed, actions: [], actionsDisabled: model.isBusy
+                    )
+                    if !stashesCollapsed {
+                        ForEach(model.stashes) { stash in stashRow(stash) }
+                    }
+                }
                 if filterText.isEmpty, !model.recentCommits.isEmpty {
                     PanelSectionHeader(
                         title: String(localized: "RECENT COMMITS", table: "Sidebar"),
@@ -1785,6 +1792,65 @@ struct GitPanel: View {
             .init(title: String(localized: "Clean…", table: "Git"),
                   disabled: model.isBusy) { presentUncommittedDialog(.clean) },
         ]
+    }
+
+    private func stashRow(_ stash: GitStatusModel.Stash) -> some View {
+        TreeRowSurface(depth: 0, scale: panelFontScale, showsGuides: false) { _, layout in
+            HStack(spacing: TreeRowStyle.iconSpacing) {
+                Image(systemName: "archivebox")
+                    .foregroundStyle(.secondary)
+                    .frame(width: TreeRowStyle.iconSize, height: TreeRowStyle.iconSize)
+                Text(verbatim: stash.selector + ": " + stash.message)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .panelFont(size: TreeRowStyle.fontSize)
+            .modifier(layout)
+        }
+        .help(stash.selector + ": " + stash.message)
+        .focusable()
+        .contextMenu {
+            ForEach(GitStatusModel.StashAction.allCases, id: \.self) { action in
+                Button(action.title) { presentStashDialog(stash, action: action) }
+                    .disabled(model.isBusy)
+            }
+            Divider()
+            Button(String(localized: "Copy Stash Name", table: "Git")) { copyToPasteboard(stash.selector) }
+            Button(String(localized: "Copy Stash Hash", table: "Git")) { copyToPasteboard(stash.oid) }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAction(named: Text(GitStatusModel.StashAction.apply.title)) { presentStashDialog(stash, action: .apply) }
+        .accessibilityAction(named: Text(GitStatusModel.StashAction.branch.title)) { presentStashDialog(stash, action: .branch) }
+        .accessibilityAction(named: Text(GitStatusModel.StashAction.pop.title)) { presentStashDialog(stash, action: .pop) }
+        .accessibilityAction(named: Text(GitStatusModel.StashAction.drop.title)) { presentStashDialog(stash, action: .drop) }
+    }
+
+    func presentStashDialog(_ stash: GitStatusModel.Stash, action: GitStatusModel.StashAction) {
+        guard !model.isBusy, let window = manager.attachedWindow, let project,
+              manager.selectedProject === project, let context = project.panelContext,
+              model.matchesPanelTarget(context.identity) else { return }
+        let target = model.actionTarget()
+        let isCurrent: @MainActor () -> Bool = {
+            manager.attachedWindow === window && manager.selectedProject === project
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity)
+                && model.isCurrent(target, requiresStableHead: action != .drop)
+        }
+        let dialog = GitStashDialog(action: action, stash: stash, target: target)
+        dialog.alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn, isCurrent() else { return }
+            performOperation(.moreMenu) {
+                model.actOnStash(stash, action: action, reinstateIndex: dialog.reinstateIndex.state == .on,
+                    branchName: dialog.name.stringValue, target: target,
+                    prepare: {
+                        await project.saveBeforeGitAction(repository: target.repository, scope: target.scope, isCurrent: isCurrent)
+                    }, isCurrentTarget: {
+                        isCurrent() && (action == .drop || project.canRunGitAction(repository: target.repository, scope: target.scope))
+                    }, completion: { _ in
+                        if action != .drop { project.reloadAfterGitAction(repository: target.repository, scope: target.scope) }
+                    })
+            }
+        }
     }
 
     func presentUncommittedDialog(_ action: GitUncommittedDialog.Action) {
@@ -2176,6 +2242,7 @@ struct GitPanel: View {
         stagedCollapsed = false
         changesCollapsed = false
         historyCollapsed = false
+        stashesCollapsed = false
         expandedCommitIDs.removeAll()
     }
 

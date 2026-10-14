@@ -1171,26 +1171,6 @@
         }
       }
     },
-    "Pop Stash" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "弹出贮藏"
-          }
-        }
-      }
-    },
-    "Pop Stash (%lld)" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "弹出贮藏（%lld）"
-          }
-        }
-      }
-    },
     "Publish Branch" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1466,16 +1446,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已暂存的更改"
-          }
-        }
-      }
-    },
-    "Stash All Changes" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "贮藏所有更改"
           }
         }
       }

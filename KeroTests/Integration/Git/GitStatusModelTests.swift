@@ -9,6 +9,7 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     private var online = true
     private var failGit = false
     private var failHistoryLog = false
+    private var failStashList = false
     private var pauseNextGit = false
     private var pausedGit: CheckedContinuation<Void, Never>?
     private(set) var awaitingGit = false
@@ -20,6 +21,7 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     func setOnline(_ value: Bool) { online = value }
     func setGitUnavailable(_ value: Bool) { failGit = value }
     func setHistoryLogUnavailable(_ value: Bool) { failHistoryLog = value }
+    func setStashListUnavailable(_ value: Bool) { failStashList = value }
     func suspendNextGitRequest() { pauseNextGit = true }
     func releaseGitRequest() {
         pausedGit?.resume()
@@ -56,11 +58,15 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
         var variables = ProcessInfo.processInfo.environment
         for (key, value) in env ?? [:] { variables[key] = value }
         let commandInput: Data?
-        if failHistoryLog, let stdin, let script = String(data: stdin, encoding: .utf8) {
-            // Fail only git log inside the real batched status execution.
-            commandInput = Data(script.replacingOccurrences(
-                of: " LC_ALL=C git 'log' ", with: " LC_ALL=C git 'invalid-test-history-log' "
-            ).utf8)
+        if (failHistoryLog || failStashList), let stdin, let script = String(data: stdin, encoding: .utf8) {
+            var failing = script
+            if failHistoryLog {
+                failing = failing.replacingOccurrences(of: " LC_ALL=C git 'log' ", with: " LC_ALL=C git 'invalid-test-history-log' ")
+            }
+            if failStashList {
+                failing = failing.replacingOccurrences(of: " LC_ALL=C git 'stash' 'list' ", with: " LC_ALL=C git 'invalid-test-stash' 'list' ")
+            }
+            commandInput = Data(failing.utf8)
         } else {
             commandInput = stdin
         }
@@ -386,6 +392,22 @@ final class GitStatusModelTests: XCTestCase {
         model.refresh()
         try await wait { model.statusError == nil && !model.isRefreshing }
         XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
+
+        try git(["stash", "push", "-qm", "preserve on query failure"])
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        let priorStashes = model.stashes
+        XCTAssertEqual(priorStashes.count, 1)
+        await backend.setStashListUnavailable(true)
+        model.refresh()
+        try await wait { model.statusError != nil && !model.isRefreshing }
+        XCTAssertEqual(model.stashes, priorStashes)
+        XCTAssertEqual(model.stashCount, 1)
+        await backend.setStashListUnavailable(false)
+        try git(["stash", "clear"])
+        model.refresh()
+        try await wait { model.statusError == nil && !model.isRefreshing }
+        XCTAssertTrue(model.stashes.isEmpty)
     }
 
     func testReplacingSSHBackendDoesNotWaitForStaleGitWorker() async throws {
