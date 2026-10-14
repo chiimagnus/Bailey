@@ -1516,6 +1516,366 @@
           }
         }
       }
+    },
+    "Rename Branch…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名分支…"
+          }
+        }
+      }
+    },
+    "Delete Branch…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除分支…"
+          }
+        }
+      }
+    },
+    "Push Branch…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推送分支…"
+          }
+        }
+      }
+    },
+    "Merge into Current Branch…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合并到当前分支…"
+          }
+        }
+      }
+    },
+    "Rebase Current Branch onto This Branch…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将当前分支变基到此分支…"
+          }
+        }
+      }
+    },
+    "Create Archive…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建归档…"
+          }
+        }
+      }
+    },
+    "Create Archive" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建归档"
+          }
+        }
+      }
+    },
+    "Archive Format" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "归档格式"
+          }
+        }
+      }
+    },
+    "Check out" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建后检出"
+          }
+        }
+      }
+    },
+    "Create Branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建分支"
+          }
+        }
+      }
+    },
+    "Rename Branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名分支"
+          }
+        }
+      }
+    },
+    "Force Delete" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "强制删除"
+          }
+        }
+      }
+    },
+    "Delete on Remote(s)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同时删除远端分支"
+          }
+        }
+      }
+    },
+    "Set Upstream" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设置上游分支"
+          }
+        }
+      }
+    },
+    "Push Mode" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推送模式"
+          }
+        }
+      }
+    },
+    "Normal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "普通推送"
+          }
+        }
+      }
+    },
+    "Force With Lease" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "带租约的强制推送"
+          }
+        }
+      }
+    },
+    "Force" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "强制推送"
+          }
+        }
+      }
+    },
+    "Remotes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端仓库"
+          }
+        }
+      }
+    },
+    "Yes, Delete" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认删除"
+          }
+        }
+      }
+    },
+    "Yes, Push" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认推送"
+          }
+        }
+      }
+    },
+    "Branch already exists" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分支已存在"
+          }
+        }
+      }
+    },
+    "Replace Existing Branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替换已有分支"
+          }
+        }
+      }
+    },
+    "Choose Another Name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择其他名称"
+          }
+        }
+      }
+    },
+    "Branch is not fully merged" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分支尚未完全合并"
+          }
+        }
+      }
+    },
+    "Yes, Force Delete Branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认强制删除分支"
+          }
+        }
+      }
+    },
+    "The selected branch no longer exists." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选分支已不存在。"
+          }
+        }
+      }
+    },
+    "The selected branch or remote is no longer available." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选分支或远端已不可用。"
+          }
+        }
+      }
+    },
+    "The selected Git reference changed. Reopen the menu and try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选 Git 引用已变化，请重新打开菜单再试。"
+          }
+        }
+      }
+    },
+    "Remote archive exceeds the 64 MiB transfer limit." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端归档超过 64 MiB 传输上限。"
+          }
+        }
+      }
+    },
+    "Remote temporary archive could not be removed:" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法删除远端临时归档："
+          }
+        }
+      }
+    },
+    "Not attempted after failure:" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失败后未继续执行："
+          }
+        }
+      }
+    },
+    "Rename branch %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名分支 %@"
+          }
+        }
+      }
+    },
+    "Delete branch %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除分支 %@"
+          }
+        }
+      }
+    },
+    "Push branch %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推送分支 %@"
+          }
+        }
+      }
+    },
+    "Archive saved to:" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "归档已保存到："
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

@@ -6,6 +6,8 @@ struct RecentCommitsView: View {
     typealias Commit = GitStatusModel.RecentCommit
     typealias Reference = Commit.Reference
 
+    enum BranchAction { case rename, delete, push, merge, rebase, archive }
+
     private let themeChanges = Theme.changes
     @Binding private var expandedCommitIDs: Set<String>
     @Binding private var collapsedFolders: Set<String>
@@ -21,6 +23,7 @@ struct RecentCommitsView: View {
     let openDiff: (Commit, Commit.FileChange) -> Void
     let canSwitchBranch: Bool
     let switchBranch: (String) -> Void
+    let branchAction: (Reference, Commit, BranchAction) -> Void
     let createReference: (Commit, GitStatusModel.CommitReferenceKind) -> Void
     let canActOnCommit: Bool
     let canDropCommit: (Commit) -> Bool
@@ -38,6 +41,7 @@ struct RecentCommitsView: View {
         openDiff: @escaping (Commit, Commit.FileChange) -> Void,
         canSwitchBranch: Bool,
         switchBranch: @escaping (String) -> Void,
+        branchAction: @escaping (Reference, Commit, BranchAction) -> Void,
         createReference: @escaping (Commit, GitStatusModel.CommitReferenceKind) -> Void,
         canActOnCommit: Bool,
         canDropCommit: @escaping (Commit) -> Bool,
@@ -54,6 +58,7 @@ struct RecentCommitsView: View {
         self.openDiff = openDiff
         self.canSwitchBranch = canSwitchBranch
         self.switchBranch = switchBranch
+        self.branchAction = branchAction
         self.createReference = createReference
         self.canActOnCommit = canActOnCommit
         self.canDropCommit = canDropCommit
@@ -300,15 +305,40 @@ struct RecentCommitsView: View {
     @ViewBuilder
     private func referenceActions(_ reference: Reference, commit: Commit) -> some View {
         switch reference.kind {
-        case .currentBranch:
-            Button(String(localized: "Copy Branch Name", table: "Git")) {
-                copy(reference.name)
+        case .currentBranch, .localBranch:
+            if reference.kind == .localBranch {
+                Button(String(localized: "Switch to This Branch", table: "Git")) {
+                    switchBranch(reference.name)
+                }
+                .disabled(!canSwitchBranch)
             }
-        case .localBranch:
-            Button(String(localized: "Switch to This Branch", table: "Git")) {
-                switchBranch(reference.name)
+            Button(String(localized: "Rename Branch…", table: "Git")) {
+                branchAction(reference, commit, .rename)
             }
-            .disabled(!canSwitchBranch)
+            .disabled(!canActOnCommit)
+            if reference.kind == .localBranch {
+                Button(String(localized: "Delete Branch…", table: "Git")) {
+                    branchAction(reference, commit, .delete)
+                }
+                .disabled(!canActOnCommit)
+                Button(String(localized: "Merge into Current Branch…", table: "Git")) {
+                    branchAction(reference, commit, .merge)
+                }
+                .disabled(!canActOnCommit)
+                Button(String(localized: "Rebase Current Branch onto This Branch…", table: "Git")) {
+                    branchAction(reference, commit, .rebase)
+                }
+                .disabled(!canActOnCommit)
+            }
+            Button(String(localized: "Push Branch…", table: "Git")) {
+                branchAction(reference, commit, .push)
+            }
+            .disabled(!canActOnCommit)
+            Button(String(localized: "Create Archive…", table: "Git")) {
+                branchAction(reference, commit, .archive)
+            }
+            .disabled(!canActOnCommit)
+            Divider()
             Button(String(localized: "Copy Branch Name", table: "Git")) {
                 copy(reference.name)
             }

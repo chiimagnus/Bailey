@@ -138,6 +138,7 @@ final class GitStatusModel {
         noFastForward: Bool = true, squash: Bool = false,
         resetMode: ResetMode = .mixed, ignoreDate: Bool = true,
         interactiveLaunch: (@MainActor () throws -> Void)? = nil,
+        selectedRef: (name: String, oid: String)? = nil,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
         completion: (@MainActor (Bool) -> Void)? = nil
@@ -191,6 +192,7 @@ final class GitStatusModel {
                 ? "Merge commit '\(commit.hash)'" : nil,
             dropCommit: action == .drop ? commit.hash : nil,
             terminalAction: action == .rebase ? interactiveLaunch : nil,
+            expectedRef: selectedRef,
             prepare: prepare,
             isCurrentTarget: {
                 self.isCurrent(target) && (isCurrentTarget?() ?? true)
@@ -290,6 +292,12 @@ final class GitStatusModel {
     private(set) var mergeEntries: [Entry] = []
     private(set) var stagedEntries: [Entry] = []
     private(set) var changedEntries: [Entry] = []
+    nonisolated struct GitRef: Equatable, Sendable {
+        let oid: String
+        let symbolic: String?
+    }
+
+    private(set) var refsByName: [String: GitRef] = [:]
     private(set) var branches: [String] = []
     private(set) var defaultBranch: String?
     private(set) var remotes: [String] = []
@@ -1025,7 +1033,12 @@ final class GitStatusModel {
 
     // MARK: - Branches, stash, and repository setup
 
-    func switchBranch(to name: String, completion: (@MainActor (Bool) -> Void)? = nil) {
+    func switchBranch(
+        to name: String,
+        prepare: (@MainActor () async -> Bool)? = nil,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
         guard !name.isEmpty, name != branch else {
             completion?(name == branch)
             return
@@ -1033,25 +1046,291 @@ final class GitStatusModel {
         perform(
             label: String(localized: "Switch to \(name)", table: "Git"),
             commands: [["switch", name]],
+            prepare: prepare, isCurrentTarget: isCurrentTarget,
             completion: completion
         )
     }
 
-    func createBranch(named name: String, completion: (@MainActor (Bool) -> Void)? = nil) {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+    nonisolated enum BranchPushMode: String, CaseIterable, Sendable {
+        case normal, forceWithLease, force
+    }
+
+    func preferredPushRemote(for name: String?) async -> String? {
+        let available = remotes
+        guard !available.isEmpty else { return nil }
+        let generation = contextGeneration
+        let result = await GitCommandExecution.run(
+            ["config", "--null", "--get-regexp", "^(branch\\..*\\.(pushremote|remote)|remote\\.pushdefault)$"],
+            in: repoRoot, backend: backend
+        )
+        guard generation == contextGeneration else { return nil }
+        var config: [String: String] = [:]
+        if result.status == 0 {
+            for pair in result.stdout.split(separator: "\0") {
+                guard let boundary = pair.firstIndex(of: "\n") else { continue }
+                config[String(pair[..<boundary])] = String(pair[pair.index(after: boundary)...])
+            }
+        }
+        let keys: [String] = name.map { ["branch.\($0).pushremote", "branch.\($0).remote"] } ?? []
+        return (keys + ["remote.pushdefault"]).compactMap { config[$0] }
+            .first(where: available.contains)
+            ?? (available.contains("origin") ? "origin" : available.first)
+    }
+
+    func trackingRemotes(for name: String) -> [String] {
+        remotes.filter { remote in
+            let ref = refsByName["refs/remotes/\(remote)/\(name)"]
+            return ref != nil && ref?.symbolic == nil
+        }
+    }
+
+    func createBranch(
+        named name: String, at hash: String?, checkout: Bool, replace: Bool,
+        target: ActionTarget,
+        prepare: (@MainActor () async -> Bool)? = nil,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        guard isCurrent(target, requiresStableHead: checkout) else {
+            failImmediately(String(localized: "The Git action target changed. Reopen the menu and try again.", table: "Git"), completion: completion)
+            return
+        }
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
             failImmediately(String(localized: "Enter a branch name", table: "Git"), completion: completion)
             return
         }
-        perform(
-            label: String(localized: "Create branch \(trimmed)", table: "Git"),
-            commands: [["switch", "-c", trimmed]],
-            completion: completion
-        )
+        let existing = refsByName["refs/heads/" + name]
+        guard !replace || existing != nil else {
+            failImmediately(String(localized: "The selected branch no longer exists.", table: "Git"), completion: completion)
+            return
+        }
+        let start = hash ?? "HEAD"
+        let commands: [[String]]
+        if replace {
+            commands = [["branch", "-f", "--", name, start]]
+                + (checkout ? [["switch", "--", name]] : [])
+        } else if checkout {
+            commands = [["switch", "-c", name, "--", start]]
+        } else {
+            commands = [["branch", "--", name, start]]
+        }
+        perform(label: String(localized: "Create branch \(name)", table: "Git"),
+                commands: commands, requiresStableHead: checkout,
+                preflight: [["check-ref-format", "--branch", name]],
+                expectedRef: existing.map { (name: "refs/heads/" + name, oid: $0.oid) }.flatMap { replace ? $0 : nil },
+                prepare: prepare, isCurrentTarget: isCurrentTarget, completion: completion)
     }
 
-    func createReference(
-        named name: String, kind: CommitReferenceKind, at commit: RecentCommit,
+    func renameBranch(
+        from oldName: String, to newName: String, target: ActionTarget,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        let name = "refs/heads/" + oldName
+        guard isCurrent(target, requiresStableHead: false), let ref = refsByName[name] else {
+            failImmediately(String(localized: "The selected branch no longer exists.", table: "Git"), completion: completion)
+            return
+        }
+        perform(label: String(localized: "Rename branch \(oldName)", table: "Git"),
+                commands: [["branch", "-m", "--", oldName, newName]], requiresStableHead: false,
+                preflight: [["check-ref-format", "--branch", newName]],
+                expectedRef: (name, ref.oid), completion: completion)
+    }
+
+    func deleteBranch(
+        _ name: String, force: Bool, remoteNames: [String], target: ActionTarget,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        let full = "refs/heads/" + name
+        guard isCurrent(target, requiresStableHead: false), let ref = refsByName[full],
+              name != branch, remoteNames.allSatisfy({ trackingRemotes(for: name).contains($0) }) else {
+            failImmediately(String(localized: "The selected branch no longer exists.", table: "Git"), completion: completion)
+            return
+        }
+        let commands = [["branch", force ? "-D" : "-d", "--", name]]
+            + remoteNames.map { ["push", $0, "--delete", full] }
+        perform(label: String(localized: "Delete branch \(name)", table: "Git"),
+                commands: commands, requiresStableHead: false,
+                expectedRef: (full, ref.oid), continueAfterFirstSuccess: true,
+                completion: completion)
+    }
+
+    func pushBranch(
+        _ name: String, remotes selected: [String], setUpstream: Bool,
+        mode: BranchPushMode, target: ActionTarget,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        let full = "refs/heads/" + name
+        guard isCurrent(target, requiresStableHead: false), let ref = refsByName[full],
+              !selected.isEmpty, selected.allSatisfy(remotes.contains) else {
+            failImmediately(String(localized: "The selected branch or remote is no longer available.", table: "Git"), completion: completion)
+            return
+        }
+        let commands = selected.map { remote in
+            var args = ["push"]
+            if setUpstream { args.append("-u") }
+            switch mode {
+            case .normal: break
+            case .forceWithLease: args.append("--force-with-lease")
+            case .force: args.append("--force")
+            }
+            args += [remote, full + ":" + full]
+            return args
+        }
+        perform(label: String(localized: "Push branch \(name)", table: "Git"),
+                commands: commands, requiresStableHead: false,
+                expectedRef: (full, ref.oid), completion: completion)
+    }
+
+    nonisolated enum ArchiveFormat: String, CaseIterable, Sendable {
+        case zip, tar
+    }
+
+    /// The Git object is captured before the save sheet opens, so a later
+    /// branch movement cannot quietly change the downloaded archive.
+    func createArchive(
+        reference: String, objectOID: String, format: ArchiveFormat,
+        destination: URL, target: ActionTarget
+    ) async {
+        guard isCurrent(target, requiresStableHead: false),
+              refsByName[reference]?.oid == objectOID, !isBusy,
+              destination.isFileURL else {
+            failImmediately(String(localized: "The selected Git reference changed. Reopen the menu and try again.", table: "Git"))
+            return
+        }
+        let operationID = UUID()
+        let generation = contextGeneration
+        let panelIdentity = panelTargetIdentity
+        let root = repoRoot
+        let backend = backend
+        runningOperationID = operationID
+        isBusy = true
+        lastError = nil
+        operation = Operation(id: operationID,
+                              label: String(localized: "Create Archive", table: "Git"),
+                              state: .running, output: "", startedAt: Date(), finishedAt: nil)
+        let current: @MainActor () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return self.contextGeneration == generation
+                && self.panelTargetIdentity == panelIdentity
+                && self.runningOperationID == operationID
+                && self.isCurrent(target, requiresStableHead: false)
+        }
+        let result = await Task.detached(priority: .userInitiated) { () async -> (error: String?, output: String) in
+            let temporary = destination.deletingLastPathComponent()
+                .appendingPathComponent(".kero-archive-" + UUID().uuidString + "." + format.rawValue)
+            var remoteFolder: String?
+            var output = ""
+            var error: String?
+            var destinationSaved = false
+            do {
+                guard await current() else {
+                    throw NSError(domain: "KeroGitArchive", code: 4, userInfo: [
+                        NSLocalizedDescriptionKey: String(localized: "The Git action target changed. Reopen the menu and try again.", table: "Git")
+                    ])
+                }
+                let live = await GitCommandExecution.run(
+                    ["show-ref", "--verify", "--hash", reference], in: root, backend: backend
+                )
+                guard live.status == 0,
+                      live.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == objectOID else {
+                    throw NSError(domain: "KeroGitArchive", code: 1, userInfo: [
+                        NSLocalizedDescriptionKey: String(localized: "The selected Git reference changed. Reopen the menu and try again.", table: "Git")
+                    ])
+                }
+
+                var archiveOutput = temporary.path
+                if !(backend is LocalWorkspaceBackend) {
+                    let created = try await backend.run(
+                        argv: ["mktemp", "-d", "/tmp/kero-archive-XXXXXXXX"],
+                        cwd: nil, env: nil, stdin: nil, timeout: 25
+                    )
+                    let folder = String(decoding: created.stdout, as: UTF8.self)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard created.status == 0, folder.hasPrefix("/tmp/kero-archive-"),
+                          !folder.contains("\n"), !folder.contains("\r") else {
+                        throw NSError(domain: "KeroGitArchive", code: 2, userInfo: [
+                            NSLocalizedDescriptionKey: String(decoding: created.stderr, as: UTF8.self)
+                        ])
+                    }
+                    remoteFolder = folder
+                    archiveOutput = folder + "/archive." + format.rawValue
+                }
+                guard await current() else {
+                    throw NSError(domain: "KeroGitArchive", code: 4, userInfo: [
+                        NSLocalizedDescriptionKey: String(localized: "The Git action target changed. Reopen the menu and try again.", table: "Git")
+                    ])
+                }
+                let archived = await GitCommandExecution.run(
+                    ["archive", "--format=" + format.rawValue, "-o", archiveOutput, objectOID],
+                    in: root, backend: backend
+                )
+                guard archived.status == 0 else {
+                    throw NSError(domain: "KeroGitArchive", code: 3, userInfo: [
+                        NSLocalizedDescriptionKey: archived.stderr
+                    ])
+                }
+                output = "$ git archive --format=" + format.rawValue + " " + reference
+                if remoteFolder != nil {
+                    let maximumSize = 64 * 1024 * 1024
+                    let data = try await backend.read(path: archiveOutput, maxBytes: maximumSize)
+                    try data.write(to: temporary, options: .atomic)
+                }
+                guard await current() else {
+                    throw NSError(domain: "KeroGitArchive", code: 4, userInfo: [
+                        NSLocalizedDescriptionKey: String(localized: "The Git action target changed. Reopen the menu and try again.", table: "Git")
+                    ])
+                }
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
+                } else {
+                    try FileManager.default.moveItem(at: temporary, to: destination)
+                }
+                destinationSaved = true
+            } catch WorkspaceError.tooLarge {
+                error = String(localized: "Remote archive exceeds the 64 MiB transfer limit.", table: "Git")
+            } catch let failure {
+                error = failure.localizedDescription
+            }
+            if let remoteFolder {
+                do { try await backend.delete(paths: [remoteFolder]) }
+                catch let cleanupFailure {
+                    let cleanup = String(localized: "Remote temporary archive could not be removed:", table: "Git")
+                        + " " + remoteFolder + " (" + cleanupFailure.localizedDescription + ")"
+                    let detail = destinationSaved
+                        ? String(localized: "Archive saved to:", table: "Git") + " " + destination.path + "\n" + cleanup
+                        : cleanup
+                    error = [error, detail].compactMap { $0 }.joined(separator: "\n")
+                }
+            }
+            try? FileManager.default.removeItem(at: temporary)
+            return (error, output)
+        }.value
+        guard runningOperationID == operationID else { return }
+        runningOperationID = nil
+        isBusy = false
+        guard contextGeneration == generation, panelTargetIdentity == panelIdentity else {
+            refresh()
+            return
+        }
+        let finished = Date()
+        if let error = result.error {
+            lastError = error
+            operation = Operation(id: operationID,
+                label: String(localized: "Create Archive", table: "Git"),
+                state: .failed(exitCode: -1), output: error,
+                startedAt: operation?.startedAt ?? finished, finishedAt: finished)
+        } else {
+            operation = Operation(id: operationID,
+                label: String(localized: "Create Archive", table: "Git"),
+                state: .succeeded, output: result.output,
+                startedAt: operation?.startedAt ?? finished, finishedAt: finished)
+        }
+        refresh()
+    }
+
+    func createLightweightTag(
+        named name: String, at commit: RecentCommit,
         repository expectedRepository: String, scope expectedScope: String
     ) {
         guard isRepo, repoRoot == expectedRepository, currentScope == expectedScope,
@@ -1065,17 +1344,11 @@ final class GitStatusModel {
         }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            failImmediately(kind == .branch
-                ? String(localized: "Enter a branch name", table: "Git")
-                : String(localized: "Enter a tag name", table: "Git"))
+            failImmediately(String(localized: "Enter a tag name", table: "Git"))
             return
         }
-        let label = kind == .branch
-            ? String(localized: "Create branch \(trimmed)", table: "Git")
-            : String(localized: "Create tag \(trimmed)", table: "Git")
-        perform(label: label, commands: [
-            [kind == .branch ? "branch" : "tag", "--", trimmed, commit.hash]
-        ], requiresStableHead: false)
+        perform(label: String(localized: "Create tag \(trimmed)", table: "Git"),
+                commands: [["tag", "--", trimmed, commit.hash]], requiresStableHead: false)
     }
 
     func stash(includeUntracked: Bool = true) {
@@ -1132,6 +1405,8 @@ final class GitStatusModel {
         squashMessage: String? = nil,
         dropCommit: String? = nil,
         terminalAction: (@MainActor () throws -> Void)? = nil,
+        preflight: [[String]] = [], expectedRef: (name: String, oid: String)? = nil,
+        continueAfterFirstSuccess: Bool = false,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
         completion: (@MainActor (Bool) -> Void)? = nil
@@ -1223,6 +1498,27 @@ final class GitStatusModel {
                     }
                 }
 
+                if let expectedRef {
+                    let actual = await GitCommandExecution.run(
+                        ["show-ref", "--verify", "--hash", expectedRef.name], in: dir, backend: backend
+                    )
+                    guard actual.status == 0,
+                          actual.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == expectedRef.oid else {
+                        let message = String(localized: "The selected Git reference changed. Reopen the menu and try again.", table: "Git")
+                        return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
+                    }
+                }
+                for args in preflight {
+                    guard await isCurrent() else {
+                        return CommandBatchResult(output: staleMessage, failureCode: -1, failureMessage: staleMessage)
+                    }
+                    let validation = await GitCommandExecution.run(args, in: dir, backend: backend)
+                    if validation.status != 0 {
+                        let message = [validation.stderr, validation.stdout].filter { !$0.isEmpty }.joined(separator: "\n")
+                        return CommandBatchResult(output: message, failureCode: validation.status,
+                                                  failureMessage: message, failedCommand: args, gitError: validation.stderr)
+                    }
+                }
                 if let dropCommit {
                     let topology = await GitCommandExecution.run(["rev-list", "--parents", "--all", "HEAD"], in: dir, backend: backend)
                     guard topology.status == 0,
@@ -1235,7 +1531,7 @@ final class GitStatusModel {
                                                   failureMessage: message)
                     }
                 }
-                for args in commands {
+                for (index, args) in commands.enumerated() {
                     guard await isCurrent() else {
                         return CommandBatchResult(output: transcript.joined(separator: "\n") + "\n" + staleMessage,
                                                   failureCode: -1, failureMessage: staleMessage)
@@ -1249,11 +1545,20 @@ final class GitStatusModel {
                     if !text.isEmpty { transcript.append(text) }
                     if run.status != 0 {
                         let fallback = String(localized: "Git command failed", table: "Git")
-                        failureCode = run.status
-                        failureMessage = text.isEmpty ? fallback : text
-                        failedCommand = args
-                        gitError = run.stderr
-                        break
+                        if failureCode == nil {
+                            failureCode = run.status
+                            failureMessage = text.isEmpty ? fallback : text
+                            failedCommand = args
+                            gitError = run.stderr
+                        }
+                        if !continueAfterFirstSuccess || index == 0 {
+                            let remaining = commands.dropFirst(index + 1)
+                            if !remaining.isEmpty {
+                                transcript.append(String(localized: "Not attempted after failure:", table: "Git")
+                                    + "\n" + remaining.map { "$ git " + Self.displayCommand($0) }.joined(separator: "\n"))
+                            }
+                            break
+                        }
                     }
                 }
                 if failureCode == nil, let squashMessage {
@@ -1535,6 +1840,7 @@ final class GitStatusModel {
         fileDecorations = [:]
         ignoredPaths = []
         branches = []
+        refsByName = [:]
         defaultBranch = nil
         remotes = []
         recentCommits = []
@@ -1592,6 +1898,7 @@ final class GitStatusModel {
         topLevel = result.topLevel
         repositoryIdentity = result.topLevel
         branches = result.branches
+        refsByName = result.refsByName
         defaultBranch = result.defaultBranch
         remotes = result.remotes
         recentCommits = result.recentCommits
@@ -1642,6 +1949,7 @@ final class GitStatusModel {
         var entries: [Entry] = []
         var ignoredPaths: Set<String> = []
         var branches: [String] = []
+        var refsByName: [String: GitRef] = [:]
         var defaultBranch: String?
         var remotes: [String] = []
         var recentCommits: [RecentCommit] = []
@@ -1755,11 +2063,12 @@ final class GitStatusModel {
 
         let repoRoot = resolvedRoot
 
-        let refs = await statusGit(
-            ["for-each-ref", "--format=%(refname:short)", "refs/heads"], in: repoRoot
-        )
+        let refs = await statusGit(Self.refSnapshotArguments, in: repoRoot)
         if refs.status == 0 {
-            result.branches = refs.stdout.split(separator: "\n").map(String.init).sorted()
+            result.refsByName = parseRefSnapshot(refs.stdout)
+            result.branches = result.refsByName.keys.compactMap { name in
+                name.hasPrefix("refs/heads/") ? String(name.dropFirst("refs/heads/".count)) : nil
+            }.sorted()
         }
 
         let remoteRun = await statusGit(["remote"], in: repoRoot)
@@ -1835,7 +2144,7 @@ final class GitStatusModel {
                 "status", "--porcelain=v2", "--branch", "-z",
                 "--untracked-files=all", "--ignored=matching",
             ],
-            ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+            refSnapshotArguments,
             ["remote"],
             recentCommitLogArguments(limit: recentCommitLimit),
             ["rev-list", "--walk-reflogs", "--count", "refs/stash"],
@@ -2147,6 +2456,23 @@ final class GitStatusModel {
 
         guard byteCount > 0 else { return (0, 0) }
         return (newlineCount + (lastByte == 0x0A ? 0 : 1), byteCount)
+    }
+
+    private nonisolated static let refSnapshotArguments = [
+        "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)",
+        "refs/heads", "refs/remotes",
+    ]
+
+    nonisolated static func parseRefSnapshot(_ output: String) -> [String: GitRef] {
+        var refs: [String: GitRef] = [:]
+        for line in output.split(separator: "\n") {
+            let fields = line.split(separator: "\0", omittingEmptySubsequences: false)
+            guard fields.count == 3, fields[0].hasPrefix("refs/"), !fields[1].isEmpty else { continue }
+            let name = String(fields[0])
+            refs[name] = GitRef(oid: String(fields[1]),
+                                symbolic: fields[2].isEmpty ? nil : String(fields[2]))
+        }
+        return refs
     }
 
     private nonisolated static func recentCommitLogArguments(limit: Int) -> [String] {

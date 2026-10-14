@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Git panel
 
@@ -230,9 +231,7 @@ struct GitPanel: View {
             if !model.branches.isEmpty {
                 ForEach(model.branches, id: \.self) { branch in
                     Button {
-                        performOperation(.branchMenu) {
-                            model.switchBranch(to: branch)
-                        }
+                        switchBranchSafely(to: branch)
                     } label: {
                         if branch == model.branch {
                             Label(branch, systemImage: "checkmark")
@@ -508,37 +507,153 @@ struct GitPanel: View {
         }
     }
 
+    private func switchBranchSafely(to name: String) {
+        guard let window = manager.attachedWindow, let project,
+              manager.selectedProject === project, let context = project.panelContext,
+              model.matchesPanelTarget(context.identity), !model.isBusy else { return }
+        let target = model.actionTarget()
+        let isCurrent: @MainActor () -> Bool = {
+            manager.attachedWindow === window && manager.selectedProject === project
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity) && model.isCurrent(target)
+        }
+        performOperation(.branchMenu) {
+            model.switchBranch(to: name,
+                prepare: {
+                    await project.saveBeforeGitAction(repository: target.repository,
+                        scope: target.scope, isCurrent: isCurrent)
+                }, isCurrentTarget: {
+                    isCurrent() && project.canRunGitAction(repository: target.repository,
+                        scope: target.scope)
+                }, completion: { success in
+                    if success { project.reloadAfterGitAction(repository: target.repository, scope: target.scope) }
+                })
+        }
+    }
+
     private func presentCreateBranchDialog() {
-        presentGitNameDialog(
-            title: String(localized: "Create New Branch", table: "Sidebar"),
-            detail: String(localized: "Enter a name for the new branch.", table: "Sidebar"),
-            placeholder: String(localized: "Branch name", table: "Sidebar")
-        ) { name in
-            performOperation(.branchMenu) { model.createBranch(named: name) }
+        presentBranchCreate(at: nil, initialCheckout: true)
+    }
+
+    private func presentBranchCreate(
+        at commit: GitStatusModel.RecentCommit?, initialName: String = "",
+        initialCheckout: Bool
+    ) {
+        guard let window = manager.attachedWindow, let project,
+              manager.selectedProject === project, let context = project.panelContext,
+              model.matchesPanelTarget(context.identity), !model.isBusy else { return }
+        let target = model.actionTarget()
+        let detail = commit.map {
+            String(localized: "Repository \(target.scope): \(target.repository)\nCommit \($0.shortHash): \($0.subject)", table: "Git")
+        } ?? String(localized: "Enter a name for the new branch.", table: "Sidebar")
+        let dialog = GitBranchDialog(kind: .create(checkout: initialCheckout),
+            title: commit == nil ? String(localized: "Create New Branch", table: "Sidebar")
+                : String(localized: "Create Branch at Commit", table: "Git"),
+            detail: detail, initialName: initialName)
+        let isCurrent: @MainActor () -> Bool = {
+            manager.attachedWindow === window && manager.selectedProject === project
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity)
+                && model.isCurrent(target, requiresStableHead: dialog.checkout.state == .on)
+        }
+        dialog.alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn, isCurrent() else { return }
+            let name = dialog.name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let checkout = dialog.checkout.state == .on
+            let run: @MainActor (Bool) -> Void = { replace in
+                performOperation(.branchMenu) {
+                    model.createBranch(named: name, at: commit?.hash,
+                        checkout: checkout, replace: replace, target: target,
+                        prepare: {
+                            if !checkout { return true }
+                            return await project.saveBeforeGitAction(repository: target.repository,
+                                scope: target.scope, isCurrent: isCurrent)
+                        }, isCurrentTarget: {
+                            isCurrent() && (!checkout || project.canRunGitAction(
+                                repository: target.repository, scope: target.scope))
+                        }) { success in
+                        if success, checkout {
+                            project.reloadAfterGitAction(repository: target.repository, scope: target.scope)
+                        }
+                        if !success, !replace,
+                           model.operation?.gitError?.localizedCaseInsensitiveContains("already exists") == true,
+                           isCurrent() {
+                            presentBranchReplacement(name: name, checkout: checkout,
+                                commit: commit, target: target, window: window,
+                                isCurrent: isCurrent)
+                        }
+                    }
+                }
+            }
+            if model.refsByName["refs/heads/" + name] != nil {
+                presentBranchReplacement(name: name, checkout: checkout,
+                    commit: commit, target: target, window: window, isCurrent: isCurrent)
+            } else {
+                run(false)
+            }
+        }
+    }
+
+    private func presentBranchReplacement(
+        name: String, checkout: Bool, commit: GitStatusModel.RecentCommit?,
+        target: GitStatusModel.ActionTarget, window: NSWindow,
+        isCurrent: @escaping @MainActor () -> Bool
+    ) {
+        guard isCurrent(), let project else { return }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Branch already exists", table: "Git")
+        alert.informativeText = name
+        alert.addButton(withTitle: String(localized: "Replace Existing Branch", table: "Git"))
+        alert.addButton(withTitle: String(localized: "Choose Another Name", table: "Git"))
+        alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+        alert.beginSheetModal(for: window) { answer in
+            guard isCurrent() else { return }
+            switch answer {
+            case .alertFirstButtonReturn:
+                performOperation(.branchMenu) {
+                    model.createBranch(named: name, at: commit?.hash,
+                        checkout: checkout, replace: true, target: target,
+                        prepare: {
+                            if !checkout { return true }
+                            return await project.saveBeforeGitAction(repository: target.repository,
+                                scope: target.scope, isCurrent: isCurrent)
+                        }, isCurrentTarget: {
+                            isCurrent() && (!checkout || project.canRunGitAction(
+                                repository: target.repository, scope: target.scope))
+                        }, completion: { success in
+                            if success, checkout {
+                                project.reloadAfterGitAction(repository: target.repository, scope: target.scope)
+                            }
+                        })
+                }
+            case .alertSecondButtonReturn:
+                presentBranchCreate(at: commit, initialName: name, initialCheckout: checkout)
+            default: break
+            }
         }
     }
 
     private func presentCreateReferenceDialog(
         kind: GitStatusModel.CommitReferenceKind, commit: GitStatusModel.RecentCommit
     ) {
+        if kind == .branch {
+            presentBranchCreate(at: commit, initialCheckout: false)
+            return
+        }
         let repository = model.repoRoot
         let scope = model.currentScope
         presentGitNameDialog(
-            title: kind == .branch
-                ? String(localized: "Create Branch at Commit", table: "Git")
-                : String(localized: "Create Tag at Commit", table: "Git"),
+            title: String(localized: "Create Tag at Commit", table: "Git"),
             detail: String(
                 localized: "Repository \(scope): \(repository)\nCommit \(commit.shortHash): \(commit.subject)",
                 table: "Git"
             ),
-            placeholder: kind == .branch
-                ? String(localized: "Branch name", table: "Sidebar")
-                : String(localized: "Tag name", table: "Git"),
+            placeholder: String(localized: "Tag name", table: "Git"),
             requiresStableHead: false
         ) { name in
             performOperation(.branchMenu) {
-                model.createReference(
-                    named: name, kind: kind, at: commit,
+                model.createLightweightTag(
+                    named: name, at: commit,
                     repository: repository, scope: scope
                 )
             }
@@ -569,7 +684,7 @@ struct GitPanel: View {
         let cancel = alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
         cancel.keyEquivalent = "\u{1b}"
 
-        let validator = NonemptyTextFieldValidator(button: create)
+        let validator = GitNameFieldValidator(button: create)
         field.delegate = validator
         alert.window.initialFirstResponder = field
 
@@ -586,8 +701,119 @@ struct GitPanel: View {
         alert.beginSheetModal(for: window, completionHandler: handleResponse)
     }
 
+    private func presentBranchAction(
+        _ reference: GitStatusModel.RecentCommit.Reference,
+        commit: GitStatusModel.RecentCommit,
+        action: RecentCommitsView.BranchAction
+    ) {
+        guard reference.kind == .currentBranch || reference.kind == .localBranch,
+              let window = manager.attachedWindow, let project,
+              manager.selectedProject === project, let context = project.panelContext,
+              model.matchesPanelTarget(context.identity), !model.isBusy,
+              model.refsByName["refs/heads/" + reference.name]?.oid == commit.hash else { return }
+        let target = model.actionTarget()
+        let name = reference.name
+        let isCurrent: @MainActor () -> Bool = {
+            manager.attachedWindow === window && manager.selectedProject === project
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity)
+                && model.isCurrent(target, requiresStableHead: false)
+                && model.refsByName["refs/heads/" + name]?.oid == commit.hash
+        }
+        switch action {
+        case .merge, .rebase:
+            presentCommitDialog(commit, action: action == .merge ? .merge : .rebase,
+                                selectedBranch: name)
+        case .rename:
+            let dialog = GitBranchDialog(kind: .rename,
+                title: String(localized: "Rename Branch…", table: "Git"),
+                detail: name, initialName: name)
+            dialog.alert.beginSheetModal(for: window) { response in
+                guard response == .alertFirstButtonReturn, isCurrent() else { return }
+                performOperation(.branchMenu) {
+                    model.renameBranch(from: name, to: dialog.name.stringValue, target: target)
+                }
+            }
+        case .delete:
+            let remotes = model.trackingRemotes(for: name)
+            let dialog = GitBranchDialog(kind: .delete(remotes: remotes),
+                title: String(localized: "Delete Branch…", table: "Git"), detail: name)
+            dialog.alert.beginSheetModal(for: window) { response in
+                guard response == .alertFirstButtonReturn, isCurrent() else { return }
+                let remoteNames = dialog.deleteRemotes.state == .on ? remotes : []
+                let force = dialog.forceDelete.state == .on
+                performOperation(.branchMenu) {
+                    model.deleteBranch(name, force: force, remoteNames: remoteNames, target: target) { success in
+                        guard !success, !force, isCurrent(),
+                              model.operation?.gitError?.localizedCaseInsensitiveContains("not fully merged") == true else { return }
+                        let confirm = NSAlert()
+                        confirm.messageText = String(localized: "Branch is not fully merged", table: "Git")
+                        confirm.informativeText = name
+                        confirm.addButton(withTitle: String(localized: "Yes, Force Delete Branch", table: "Git"))
+                        confirm.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+                        confirm.beginSheetModal(for: window) { answer in
+                            guard answer == .alertFirstButtonReturn, isCurrent() else { return }
+                            performOperation(.branchMenu) {
+                                model.deleteBranch(name, force: true, remoteNames: remoteNames, target: target)
+                            }
+                        }
+                    }
+                }
+            }
+        case .push:
+            Task { @MainActor in
+                let preferred = await model.preferredPushRemote(for: name)
+                guard isCurrent() else { return }
+                let detail = model.remotes.isEmpty
+                    ? String(localized: "No Git remote is configured", table: "Git") : name
+                let dialog = GitBranchDialog(kind: .push(remotes: model.remotes, preferred: preferred),
+                    title: String(localized: "Push Branch…", table: "Git"), detail: detail)
+                dialog.alert.beginSheetModal(for: window) { response in
+                    guard response == .alertFirstButtonReturn, isCurrent() else { return }
+                    performOperation(.branchMenu) {
+                        model.pushBranch(name, remotes: dialog.selectedRemotes,
+                            setUpstream: dialog.setUpstream.state == .on,
+                            mode: dialog.selectedPushMode, target: target)
+                    }
+                }
+            }
+        case .archive:
+            presentArchiveDialog(reference: "refs/heads/" + name,
+                                 objectOID: commit.hash, target: target,
+                                 context: context, window: window, isCurrent: isCurrent)
+        }
+    }
+
+    private func presentArchiveDialog(
+        reference: String, objectOID: String, target: GitStatusModel.ActionTarget,
+        context: PanelContext, window: NSWindow,
+        isCurrent: @escaping @MainActor () -> Bool
+    ) {
+        guard isCurrent(), model.refsByName[reference]?.oid == objectOID else { return }
+        let panel = NSSavePanel()
+        panel.prompt = String(localized: "Create Archive", table: "Git")
+        panel.message = reference
+        panel.allowedContentTypes = [.zip]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = reference.replacingOccurrences(of: "/", with: "-") + ".zip"
+        let selector = GitArchiveFormatSelection(panel: panel)
+        panel.accessoryView = selector.accessory
+        panel.beginSheetModal(for: window) { response in
+            _ = selector
+            guard response == .OK, isCurrent(),
+                  model.refsByName[reference]?.oid == objectOID,
+                  let destination = panel.url,
+                  project?.matchesPanelTarget(context.identity) == true else { return }
+            Task { @MainActor in
+                await model.createArchive(reference: reference, objectOID: objectOID,
+                    format: selector.format, destination: destination, target: target)
+            }
+        }
+    }
+
     func presentCommitDialog(
-        _ commit: GitStatusModel.RecentCommit, action: GitStatusModel.CommitAction
+        _ commit: GitStatusModel.RecentCommit, action: GitStatusModel.CommitAction,
+        selectedBranch: String? = nil
     ) {
         guard !model.isBusy, model.repositoryOperation == nil,
               let window = manager.attachedWindow, let project,
@@ -599,6 +825,7 @@ struct GitPanel: View {
                 && context.scope == target.scope
                 && project.matchesPanelTarget(context.identity)
                 && model.matchesPanelTarget(context.identity) && model.isCurrent(target)
+                && (selectedBranch.map { model.refsByName["refs/heads/" + $0]?.oid == commit.hash } ?? true)
         }
         let execute: @MainActor (GitCommitDialog?) -> Void = { dialog in
             guard isCurrent() else { return }
@@ -626,6 +853,7 @@ struct GitPanel: View {
                     resetMode: resetMode,
                     ignoreDate: dialog?.ignoreDate.state != .off,
                     interactiveLaunch: interactiveLaunch,
+                    selectedRef: selectedBranch.map { ("refs/heads/" + $0, commit.hash) },
                     prepare: {
                         if !changesWorktree { return true }
                         return await project.saveBeforeGitAction(
@@ -988,7 +1216,10 @@ struct GitPanel: View {
                             openDiff: openCommitDiff,
                             canSwitchBranch: !model.isBusy,
                             switchBranch: { name in
-                                performOperation(.branchMenu) { model.switchBranch(to: name) }
+                                switchBranchSafely(to: name)
+                            },
+                            branchAction: { ref, commit, action in
+                                presentBranchAction(ref, commit: commit, action: action)
                             },
                             createReference: { commit, kind in
                                 presentCreateReferenceDialog(kind: kind, commit: commit)
@@ -1412,21 +1643,41 @@ struct GitPanel: View {
     }
 }
 
-private final class NonemptyTextFieldValidator: NSObject, NSTextFieldDelegate {
-    private weak var button: NSButton?
+@MainActor
+private final class GitArchiveFormatSelection: NSObject {
+    let accessory: NSStackView
+    private let choice = NSPopUpButton()
+    private weak var panel: NSSavePanel?
 
-    init(button: NSButton) {
-        self.button = button
+    var format: GitStatusModel.ArchiveFormat {
+        choice.indexOfSelectedItem == 1 ? .tar : .zip
     }
 
-    func controlTextDidChange(_ notification: Notification) {
-        guard let field = notification.object as? NSTextField else { return }
-        button?.isEnabled = !field.stringValue
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty
+    init(panel: NSSavePanel) {
+        self.panel = panel
+        choice.addItems(withTitles: ["ZIP (.zip)", "TAR (.tar)"])
+        choice.selectItem(at: 0)
+        accessory = NSStackView(views: [
+            NSTextField(labelWithString: String(localized: "Archive Format", table: "Git")), choice
+        ])
+        accessory.orientation = .horizontal
+        accessory.spacing = 12
+        accessory.frame = NSRect(x: 0, y: 0, width: 300, height: 34)
+        super.init()
+        choice.target = self
+        choice.action = #selector(updateFormat)
+    }
+
+    @objc private func updateFormat() {
+        guard let panel else { return }
+        let extensionName = format.rawValue
+        let name = (panel.nameFieldStringValue as NSString).deletingPathExtension
+        panel.allowedContentTypes = [
+            format == .zip ? .zip : (UTType(filenameExtension: "tar") ?? UTType(importedAs: "public.tar-archive"))
+        ]
+        panel.nameFieldStringValue = name + "." + extensionName
     }
 }
-
 
 private struct GitEntryRow: View {
     enum Kind: String {

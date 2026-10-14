@@ -591,10 +591,8 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         let target = try XCTUnwrap(model.recentCommits.first { $0.hash == selected })
         let expectedRepository = model.repoRoot
-        model.createReference(
-            named: "history/first", kind: .branch, at: target,
-            repository: expectedRepository, scope: "local"
-        )
+        model.createBranch(named: "history/first", at: selected,
+            checkout: false, replace: false, target: model.actionTarget())
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertNil(model.lastError)
         XCTAssertEqual(try git(["rev-parse", "refs/heads/history/first"]), selected)
@@ -604,8 +602,8 @@ final class GitStatusModelTests: XCTestCase {
             $0.kind == .localBranch && $0.name == "history/first"
         } == true)
 
-        model.createReference(
-            named: "v1-local", kind: .tag, at: target,
+        model.createLightweightTag(
+            named: "v1-local", at: target,
             repository: expectedRepository, scope: "local"
         )
         try await wait { !model.isBusy && !model.isRefreshing }
@@ -615,10 +613,8 @@ final class GitStatusModelTests: XCTestCase {
             $0.kind == .tag && $0.name == "v1-local"
         } == true)
 
-        model.createReference(
-            named: "history/first", kind: .branch, at: target,
-            repository: expectedRepository, scope: "local"
-        )
+        model.createBranch(named: "history/first", at: selected,
+            checkout: false, replace: false, target: model.actionTarget())
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertNotNil(model.lastError, "Duplicate branch must fail without force")
         XCTAssertEqual(try git(["rev-parse", "refs/heads/history/first"]), selected)
@@ -633,8 +629,8 @@ final class GitStatusModelTests: XCTestCase {
         let before = model.operation
         model.sync(root: other.path)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
-        model.createReference(
-            named: "should-not-exist", kind: .tag, at: target,
+        model.createLightweightTag(
+            named: "should-not-exist", at: target,
             repository: expectedRepository, scope: "local"
         )
         XCTAssertNotNil(model.lastError)
