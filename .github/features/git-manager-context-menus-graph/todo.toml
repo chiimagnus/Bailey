@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P4-T7"
+current_task_id = "P4-T9"
 
 [[tasks]]
 id = "P1-T1"
@@ -101,23 +101,23 @@ note = "make doctor; Windows SSH included: 187/187 0 skipped 0 failures; make bu
 [[tasks]]
 id = "P4-T7"
 title = "工作区文件、目录与分组右键菜单"
-status = "in_progress"
+status = "completed"
 plan = "plan-p4.md#p4-t7"
-commit = ""
-note = ""
+commit = "af16b18"
+note = "完整Windows SSH参与198/198、0skip；最后原生sheet/Ignore4/4；make build/严格验签/整包安装通过，PID40825未重启；原有暂存测试保持不夹入提交；全对象右键E2E归T9"
 
 [[tasks]]
 id = "P4-T8"
 title = "具体 Stash 的选择与 Apply、Pop、Drop、Branch"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t8"
-commit = ""
-note = ""
+commit = "111f3cd"
+note = "Stash真实Git9/9、原生2/2；最终指定Windows SSH完整210/210、0skip/0failure；make build/严格验签/整包安装通过，未重启PID40825；全App右键与真实SSH对象验收归T9"
 
 [[tasks]]
 id = "P4-T9"
 title = "全对象菜单与本机及真实 SSH 用户路径验收"
-status = "pending"
+status = "in_progress"
 plan = "plan-p4.md#p4-t9"
 commit = ""
 note = ""

@@ -1,5 +1,24 @@
 # P4 执行证据
 
+## P4-T8（本轮：具体 Stash）
+
+- 初始 Red `/tmp/kero-p4-t8-red.log`：缺 Stash 列表、解析及具体对象动作。原独立计数命令被同一快照中的 NUL 分隔 `stash list` 取代，count 仅从条目派生，查询失败保留上一次完整快照。没有双缓存、按需加载器或新轮询。
+- `GitStashActionTests` 首轮 8/8（`/tmp/kero-p4-t8-green.log`）：临时真实库验证指定非栈顶 Apply/Pop、两种 `--index`、Branch 检出/恢复/成功移除、Drop 精确移除，外部移位拒绝 Pop/Drop/Branch，固定 OID Apply 不误用新 selector；冲突保留 index/reflog。
+- `GitStashDialogTests` 2/2（`/tmp/kero-p4-t8-native.log`）：原生默认字段/名称校验和具体 selector/OID；真实 sheet Cancel 不写入，确认勾选 Reinstate Index 后从第二条恢复工作区/index并仅移除第二条。
+- 新增第九个用例覆盖准备保存失败、切工作区拒绝与清除旧列表。第一次全量运行中该测试把空根目录误当作应完成 Git 状态解析的目录，等待条件超时；依据 `sync(root: "")` 源码改为等待在途操作结束，不修改产品、不加任意等待、不跳过测试。失败记录仍在 `/tmp/kero-p4-t8-all.log`。
+- STASHES 行复用 `TreeRowSurface` 的高度、字体、命中和 hover；原生右键与辅助功能动作指向所选条目。Pop Latest 捕获首条 selector/OID，使用同一表单；删除无参盲 `stashPop`、旧计数状态和无引用的旧菜单字符串。
+- 最终 `GitStashActionTests` 9/9、完整 Windows SSH 参与的 `make test` 210/210（0 failures、0 skipped），`/tmp/kero-p4-t8-all-final.log`；`make build` 与严格签名通过，`/tmp/kero-p4-t8-build.log`。整包安装后正式 PID40825 不变，提交 `111f3cd`。本机 `/tmp/kero-p4-ui.sN0hKI` 和 Windows `/tmp/kero-p4-ui-remote-7uQn4y` 只是下一项的专属临时 UI fixture，尚不是完整路径验收；独立探测 master `/tmp/kp4-ui-AF5B7F61.sock`，非用户连接。
+
+## P4-T7（本轮：未提交改动、目录与 Ignore）
+
+- 接手时 `GitUncommittedActionTests.swift` 已暂存；保持原样、不夹入本轮原子提交。初始筛选测试实际编译失败，缺 `resetUncommitted/cleanUntracked/stageEntries/unstageEntries` 及带 message/target 的 Stash，完整 Red 位于 `~/Library/Application Support/rtk/tee/1792005139_make_tes_7339ac.log`。
+- 用户随后明确要求此前的 staged 内容也入库，已独立提交 `GitUncommittedActionTests.swift`；该文件在最终 210 项完整测试中 4/4 通过。此前“不夹入本轮实现提交”仅说明当时的保护边界，不再表示该测试仍未入库。
+- 同一 `perform` 实现 Message/Include Untracked、Mixed/Hard、永久 Clean；共享标题原生菜单加入仅菜单项，保留 hover，目录从原始分组一次批量执行并包含 Rename 两侧。原逐文件 Trash/SSH 审核路径未替换。
+- Ignore 使用普通 FileTab，等待原读取任务，TextKit 末尾插入、独立撤销组和串行保存；特殊字符按字面转义，CRLF/已有脏文本保留。文件排他创建前后检查发起目标，失败不覆盖或宣称已忽略。原生缓冲未就绪时使用同一 FileTab 文本，旧 reload 表面不能覆盖新文本。
+- `GitUncommittedActionTests` 4/4，`GitWorkspaceActionTests` 3/3；`GitWorkspaceMenuTests` 初轮 3/3，补真实 sheet Cancel/Confirm → stash Git 持久结果后 4/4；FileTab 远端暂停读取/失败保存回归通过。
+- `KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test`：198/198、0 failures、0 skipped（包含真实 Windows pinned/automatic interactive rebase），日志 `/tmp/kero-p4-t7-all.log`。最后修改后原生 4/4 复验 `/tmp/kero-p4-t7-native-final.log`。
+- 这里只证明 Integration/NativeUI 和上述真实 SSH 变基路径；全对象右键、VoiceOver 和 Uncommitted 真实 SSH 全 App E2E 继续归 T9，不以测试数量冒称完成。
+
 实时状态只由 `todo.toml` 维护。此页区分模型、原生界面与真实机器结果，不把构建或回调等同于 E2E；不沿用旧审计结论。
 
 ## P4-T1
