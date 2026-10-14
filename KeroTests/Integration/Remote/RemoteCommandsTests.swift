@@ -4,6 +4,14 @@ import XCTest
 @testable import kero
 
 final class RemoteCommandsTests: XCTestCase {
+    func testSSHStartupDestinationSeparatorKeepsRemoteCommandsUnfollowable() {
+        XCTAssertEqual(KeroSSHPassthrough.classify(["-tt", "--", "windows"]), .interactiveSession)
+        XCTAssertEqual(KeroSSHPassthrough.classify(["--", "windows", "git", "status"]), .notFollowable)
+        XCTAssertEqual(KeroSSHPassthrough.classify(["--"]), .notFollowable)
+        XCTAssertEqual(KeroSSHPassthrough.classify(["-tt", "windows", "git status"]), .notFollowable)
+        XCTAssertEqual(KeroSSHPassthrough.classify(["-S", "/tmp/user-master", "windows"]), .notFollowable)
+    }
+
     func testShellQuotingAndFileCommands() throws {
         XCTAssertEqual(RemoteCommands.quote("/home/ubuntu/kero probe"), "'/home/ubuntu/kero probe'")
         XCTAssertEqual(RemoteCommands.quote("it's"), #"'it'"'"'s'"#)

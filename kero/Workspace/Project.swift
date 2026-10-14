@@ -194,12 +194,13 @@ final class Project: nonisolated Identifiable {
     }
 
     private func gitContents(repository: String, scope: String) -> [PaneContent] {
-        let prefix = repository.hasSuffix("/") ? repository : repository + "/"
+        let base = scope == "local" ? (repository as NSString).standardizingPath : repository
+        let prefix = base.hasSuffix("/") ? base : base + "/"
         return tabs.compactMap { tab in
             switch tab.content {
             case .file(let file):
                 guard (file.workspaceIdentity ?? "local") == scope,
-                      file.path.hasPrefix(prefix) else { return nil }
+                      (scope == "local" ? (file.path as NSString).standardizingPath : file.path).hasPrefix(prefix) else { return nil }
             case .diff(let diff):
                 guard (diff.workspaceIdentity ?? "local") == scope,
                       diff.repoRoot == repository, diff.commitHash == nil else { return nil }
@@ -298,9 +299,12 @@ final class Project: nonisolated Identifiable {
     /// explicit choice, so it also becomes the default for future terminals.
     @discardableResult
     func newSession(
-        directory: String? = nil
+        directory: String? = nil,
+        launchCommand: String? = nil,
+        initialWorkspace: PanelContext? = nil,
+        initialInput: String? = nil
     ) -> TerminalSession {
-        let session = makeSession(directory: directory)
+        let session = makeSession(directory: directory, launchCommand: launchCommand, initialWorkspace: initialWorkspace, initialInput: initialInput)
         let tab = makeTab(content: .session(session))
         insertNextToSelected(tab)
         selectedTabID = tab.id
@@ -312,10 +316,13 @@ final class Project: nonisolated Identifiable {
     /// scrollback when reopening a saved session.
     private func makeSession(
         directory: String? = nil,
-        restoredHistory: String? = nil
+        restoredHistory: String? = nil,
+        launchCommand: String? = nil,
+        initialWorkspace: PanelContext? = nil,
+        initialInput: String? = nil
     ) -> TerminalSession {
         let remoteCommand: String? = sshHost.map { host in
-            let cwd = customDirectory ?? "/"
+            let cwd = directory ?? customDirectory ?? "/"
             // Windows OpenSSH's MSYS2 zsh wrapper forwards single quotes
             // literally and its .exe login shell resets cwd to HOME.
             let remote = "cd " + RemoteCommands.doubleQuote(cwd)
@@ -330,7 +337,9 @@ final class Project: nonisolated Identifiable {
                 ? (directory ?? customDirectory ?? selectedSession?.currentDirectoryPath)
                 : nil,
             restoredHistory: restoredHistory,
-            launchCommand: remoteCommand
+            launchCommand: launchCommand ?? remoteCommand,
+            initialWorkspace: initialWorkspace,
+            initialInput: initialInput
         )
         session.onExited = { [weak self] session in
             // Already dead — just drop its pane, no second terminate.
@@ -342,6 +351,43 @@ final class Project: nonisolated Identifiable {
             self?.scheduleRemoteTabRebind()
         }
         return session
+    }
+
+    @discardableResult
+    func newInteractiveGitSession(
+        repository: String, arguments: [String], context: PanelContext
+    ) throws -> TerminalSession {
+        let command = "cd " + Self.shellQuoted(repository) + " && git "
+            + arguments.map(Self.shellQuoted).joined(separator: " ")
+        if context.isRemote {
+            let connection = selectedSession?.location.remoteConnection
+            guard let host = sshHost ?? connection?.destination,
+                  let executable = Bundle.main.executableURL else { throw RemoteConnectionError.notConnected }
+            if sshHost == nil {
+                guard let connection, connection.state == .connected,
+                      connection.workspaceIdentity == context.scope else { throw RemoteConnectionError.notConnected }
+            }
+            let port = connection?.port ?? 22
+            let helper = executable.deletingLastPathComponent().appendingPathComponent("ssh").path
+            let launch = Self.shellQuoted(helper)
+                + " -tt -o BatchMode=yes -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
+                + (sshHost == nil ? " -p \(port)" : "") + " -- " + Self.shellQuoted(host)
+                + "; exitStatus=$?; printf '\\nSSH session ended (status %s). Press Enter to close this terminal.\\n' \"$exitStatus\"; read -r answer; exit \"$exitStatus\""
+            let initial = PanelContext(
+                identity: .pinned(project: id, workspace: context.identity.workspace, directory: repository),
+                backend: context.backend
+            )
+            let pathBytes = (repository + "/.").utf8.map {
+                "\\0" + String(repeating: "0", count: 3 - String($0, radix: 8).count) + String($0, radix: 8)
+            }.joined()
+            let input = "cd \"$(printf '%b' " + Self.shellQuoted(pathBytes) + ")\" && git "
+                + arguments.map(Self.shellQuoted).joined(separator: " ") + "\r"
+            return newSession(launchCommand: launch, initialWorkspace: initial, initialInput: input)
+        }
+        let shell = LocalWorkspaceBackend.loginShell
+        let script = command + "; exec " + Self.shellQuoted(shell) + " -il"
+        let launch = "exec " + Self.shellQuoted(shell) + " -ilc " + Self.shellQuoted(script)
+        return newSession(directory: repository, launchCommand: launch)
     }
 
     private static func shellQuoted(_ value: String) -> String {

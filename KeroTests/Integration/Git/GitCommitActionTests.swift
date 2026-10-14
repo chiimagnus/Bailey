@@ -78,6 +78,129 @@ final class GitCommitActionTests: XCTestCase {
         XCTAssertEqual(try git(["ls-tree", "--name-only", "HEAD"]), "")
     }
 
+    func testDropEligibilityUsesChildrenAndHeadNotReferenceCount() {
+        let linear = ["root": [String](), "second": ["root"], "third": ["second"], "head": ["third"]]
+        XCTAssertTrue(GitStatusModel.dropCommitPossible("second", head: "head", parents: linear))
+        XCTAssertTrue(GitStatusModel.dropCommitPossible("head", head: "head", parents: linear))
+        XCTAssertFalse(GitStatusModel.dropCommitPossible("root", head: "head", parents: linear))
+        XCTAssertFalse(GitStatusModel.dropCommitPossible("second", head: "unknown", parents: linear))
+        var forked = linear
+        forked["side"] = ["second"]
+        XCTAssertFalse(GitStatusModel.dropCommitPossible("second", head: "head", parents: forked))
+        var merged = linear
+        merged["head"] = ["third", "second"]
+        XCTAssertFalse(GitStatusModel.dropCommitPossible("second", head: "head", parents: merged))
+        var beyondHead = linear
+        beyondHead["later"] = ["head"]
+        XCTAssertTrue(GitStatusModel.dropCommitPossible("second", head: "head", parents: beyondHead))
+        beyondHead["later"] = ["head", "third"]
+        XCTAssertFalse(GitStatusModel.dropCommitPossible("second", head: "head", parents: beyondHead))
+    }
+
+    func testDropRewritesHeadAndRespectsConfiguredUpdateRefsWithTags() async throws {
+        let root = try git(["rev-parse", "HEAD"])
+        try Data("second".utf8).write(to: directory.appendingPathComponent("second.txt"))
+        _ = try git(["add", "."])
+        _ = try git(["commit", "-qm", "second"])
+        let second = try git(["rev-parse", "HEAD"])
+        _ = try git(["branch", "keep-second"])
+        _ = try git(["tag", "keep-second", second])
+        _ = try git(["update-ref", "refs/remotes/origin/keep-second", second])
+        try Data("third".utf8).write(to: directory.appendingPathComponent("third.txt"))
+        _ = try git(["add", "."])
+        _ = try git(["commit", "-qm", "third"])
+        let third = try git(["rev-parse", "HEAD"])
+        _ = try git(["branch", "keep-third", third])
+        try Data("fourth".utf8).write(to: directory.appendingPathComponent("fourth.txt"))
+        _ = try git(["add", "."])
+        _ = try git(["commit", "-qm", "fourth"])
+        let fourth = try git(["rev-parse", "HEAD"])
+        for updatesRefs in [false, true] {
+            _ = try git(["reset", "--hard", fourth])
+            _ = try git(["branch", "-f", "keep-second", second])
+            _ = try git(["branch", "-f", "keep-third", third])
+            _ = try git(["config", "rebase.updateRefs", updatesRefs ? "true" : "false"])
+            let selected = try await target(second)
+            XCTAssertTrue(model.canDrop(selected))
+            model.actOnCommit(selected, action: .drop, target: model.actionTarget())
+            try await settle()
+            XCTAssertNil(model.lastError)
+            XCTAssertEqual(try git(["log", "-1", "--format=%s"]), "fourth")
+            XCTAssertEqual(try git(["rev-parse", "HEAD^^"]), root)
+            XCTAssertEqual(try git(["show", "HEAD:third.txt"]), "third")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("second.txt").path))
+            XCTAssertEqual(try git(["rev-parse", "refs/tags/keep-second"]), second)
+            XCTAssertEqual(try git(["rev-parse", "refs/remotes/origin/keep-second"]), second)
+            XCTAssertEqual(try git(["rev-parse", "refs/heads/keep-second"]), second)
+            XCTAssertEqual(try git(["rev-parse", "refs/heads/keep-third"]), updatesRefs ? try git(["rev-parse", "HEAD^"]) : third)
+        }
+        _ = try git(["config", "rebase.updateRefs", "false"])
+        _ = try git(["switch", "--detach", fourth])
+        let detached = try await target(second)
+        model.actOnCommit(detached, action: .drop, target: model.actionTarget())
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["branch", "--show-current"]), "")
+        XCTAssertEqual(try git(["rev-parse", "HEAD^^"]), root)
+    }
+
+    func testResetModesChangeOnlySpecifiedLayers() async throws {
+        let root = try git(["rev-parse", "HEAD"])
+        let second = try commit("second", text: "second\n")
+        let path = directory.appendingPathComponent("tracked.txt")
+        try Data("ordinary untracked".utf8).write(to: directory.appendingPathComponent("untracked.txt"))
+        for mode in GitStatusModel.ResetMode.allCases {
+            _ = try git(["reset", "--hard", second])
+            try Data("index\n".utf8).write(to: path)
+            _ = try git(["add", "tracked.txt"])
+            try Data("worktree\n".utf8).write(to: path)
+            let selected = try await target(root)
+            model.actOnCommit(selected, action: .reset, target: model.actionTarget(), resetMode: mode)
+            try await settle()
+            XCTAssertNil(model.lastError)
+            XCTAssertEqual(try git(["rev-parse", "HEAD"]), root)
+            XCTAssertEqual(try git(["show", ":tracked.txt"]), mode == .soft ? "index" : "root")
+            XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), mode == .hard ? "root\n" : "worktree\n")
+            XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("untracked.txt"), encoding: .utf8), "ordinary untracked")
+        }
+    }
+
+    func testHardResetRemovesUntrackedObstructionButKeepsOrdinaryUntracked() async throws {
+        let obstacle = directory.appendingPathComponent("obstacle")
+        try Data("tracked file".utf8).write(to: obstacle)
+        _ = try git(["add", "obstacle"])
+        _ = try git(["commit", "-qm", "with obstacle"])
+        let selectedHash = try git(["rev-parse", "HEAD"])
+        _ = try git(["rm", "obstacle"])
+        _ = try git(["commit", "-qm", "without obstacle"])
+        try FileManager.default.createDirectory(at: obstacle, withIntermediateDirectories: false)
+        try Data("untracked child".utf8).write(to: obstacle.appendingPathComponent("child"))
+        try Data("keep".utf8).write(to: directory.appendingPathComponent("keep.txt"))
+        let selected = try await target(selectedHash)
+        model.actOnCommit(selected, action: .reset, target: model.actionTarget(), resetMode: .hard)
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try String(contentsOf: obstacle, encoding: .utf8), "tracked file")
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("keep.txt"), encoding: .utf8), "keep")
+    }
+
+    func testBackgroundRebaseReplaysCommitsOnSelectedCommit() async throws {
+        _ = try git(["switch", "-c", "side"])
+        try Data("side".utf8).write(to: directory.appendingPathComponent("side.txt"))
+        _ = try git(["add", "."])
+        _ = try git(["commit", "-qm", "side"])
+        let side = try git(["rev-parse", "HEAD"])
+        _ = try git(["switch", "main"])
+        _ = try commit("main", text: "main\n")
+        let selected = try await target(side)
+        model.actOnCommit(selected, action: .rebase, target: model.actionTarget(), ignoreDate: true)
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "HEAD^"]), side)
+        XCTAssertEqual(try git(["show", "HEAD:side.txt"]), "side")
+        XCTAssertEqual(try git(["show", "HEAD:tracked.txt"]), "main")
+    }
+
     func testCherryPickOriginAndNoCommitChangeRealIndex() async throws {
         let root = try git(["rev-parse", "HEAD"])
         _ = try git(["switch", "-c", "side"])

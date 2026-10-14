@@ -479,18 +479,24 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         let target = try XCTUnwrap(model.recentCommits.last)
         let head = model.headOID
-        var dirty = false
+        let filePath = directory.appendingPathComponent("editing.txt")
+        try Data("baseline".utf8).write(to: filePath)
+        let file = FileTab(path: filePath.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         await backend.suspendNextGitRequest()
         model.actOnCommit(target, action: .checkout, target: model.actionTarget(),
-                          prepare: { true }, isCurrentTarget: { !dirty })
+                          prepare: { true }, isCurrentTarget: { !file.isDirty })
         let deadline = Date().addingTimeInterval(5)
         while await !backend.awaitingGit, Date() < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
-        dirty = true
+        file.text = "new edit during preflight"
+        file.refreshDirtyState()
         await backend.releaseGitRequest()
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(file.text, "new edit during preflight")
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(try String(contentsOf: filePath, encoding: .utf8), "baseline")
         XCTAssertEqual(GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines), head)
     }

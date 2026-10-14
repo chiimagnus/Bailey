@@ -38,6 +38,14 @@ final class GitCommitDialogTests: XCTestCase {
         let revert = GitCommitDialog(action: .revert, commit: commit, target: model.actionTarget())
         XCTAssertEqual(revert.parent.numberOfItems, 2)
         XCTAssertEqual(revert.alert.buttons[0].title, String(localized: "Yes, Revert", table: "Git"))
+        let rebase = GitCommitDialog(action: .rebase, commit: commit, target: model.actionTarget())
+        XCTAssertEqual(rebase.interactive.state, .off)
+        XCTAssertEqual(rebase.ignoreDate.state, .on)
+        let reset = GitCommitDialog(action: .reset, commit: commit, target: model.actionTarget())
+        XCTAssertEqual(reset.resetMode.indexOfSelectedItem, 1)
+        XCTAssertEqual(reset.resetMode.numberOfItems, 3)
+        let drop = GitCommitDialog(action: .drop, commit: commit, target: model.actionTarget())
+        XCTAssertEqual(drop.alert.buttons[0].title, String(localized: "Yes, Drop", table: "Git"))
     }
 
     func testSheetStaysInInitiatingWindowAndRejectsSameRepositoryProjectSwitch() async throws {
@@ -78,8 +86,12 @@ final class GitCommitDialogTests: XCTestCase {
         window.orderFront(nil)
         anotherWindow.makeKeyAndOrderFront(nil)
         let model = GitStatusModel()
-        model.sync(root: root.path)
-        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let projectTarget = try XCTUnwrap(project.panelContext).identity
+        model.syncSelectedProject(in: manager)
+        try await wait {
+            model.hasResolvedStatus && !model.isRefreshing
+                && model.matchesPanelTarget(projectTarget)
+        }
         let commit = try XCTUnwrap(model.recentCommits.first { $0.hash == first })
         let panel = GitPanel(settings: AppSettings(configURL: root.appendingPathComponent("settings.toml")),
                              model: model, manager: manager, project: project, session: nil, sshHost: nil,
@@ -99,12 +111,17 @@ final class GitCommitDialogTests: XCTestCase {
         panel.presentCommitDialog(commit, action: .checkout)
         try await wait { window.attachedSheet != nil }
         manager.selectedProjectID = other.id
+        model.syncSelectedProject(in: manager)
         let staleSheet = try XCTUnwrap(window.attachedSheet?.contentView)
         try XCTUnwrap(buttons(in: staleSheet).first { $0.title == String(localized: "Yes, Checkout", table: "Git") }).performClick(nil)
         try await wait { window.attachedSheet == nil }
         XCTAssertEqual(git(["rev-parse", "HEAD"]), second)
 
         manager.selectedProjectID = project.id
+        model.syncSelectedProject(in: manager)
+        try await wait {
+            !model.isRefreshing && model.matchesPanelTarget(projectTarget)
+        }
         panel.presentCommitDialog(commit, action: .checkout)
         try await wait { window.attachedSheet != nil }
         let validSheet = try XCTUnwrap(window.attachedSheet?.contentView)
@@ -140,5 +157,56 @@ final class GitCommitDialogTests: XCTestCase {
         }?.performClick(nil)
         XCTAssertEqual(git(["rev-parse", "HEAD"]), second)
         XCTAssertNil(manager.attachedWindow)
+    }
+
+    func testProjectResolutionCannotAuthorizeOldRepositorySnapshot() async throws {
+        let snapshots = SessionStore.load()
+        let histories = TerminalHistoryStore.load()
+        defer { SessionStore.save(snapshots); TerminalHistoryStore.save(histories) }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let firstRoot = root.appendingPathComponent("first")
+        let secondRoot = root.appendingPathComponent("second")
+        for directory in [firstRoot, secondRoot] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            for arguments in [["init", "-q", "-b", "main"], ["config", "user.name", "Projection"],
+                              ["config", "user.email", "projection@invalid"], ["config", "commit.gpgsign", "false"],
+                              ["commit", "--allow-empty", "-qm", directory.lastPathComponent + "-root"],
+                              ["commit", "--allow-empty", "-qm", directory.lastPathComponent + "-head"]] {
+                let result = GitCommandExecution.run(arguments, in: directory.path)
+                XCTAssertEqual(result.status, 0, result.stderr)
+            }
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        let first = Project(fallbackName: "First", workspaceConfiguration: .standard)
+        first.customDirectory = firstRoot.path
+        let second = Project(fallbackName: "Second", workspaceConfiguration: .standard)
+        second.customDirectory = secondRoot.path
+        manager.projects = [first, second]
+        manager.selectedProjectID = first.id
+        let model = GitStatusModel()
+        let firstIdentity = try XCTUnwrap(first.panelContext).identity
+        let secondIdentity = try XCTUnwrap(second.panelContext).identity
+        model.syncSelectedProject(in: manager)
+        try await wait { model.matchesPanelTarget(firstIdentity) && model.hasResolvedStatus && !model.isRefreshing }
+        let old = try XCTUnwrap(model.recentCommits.last)
+        let oldTarget = model.actionTarget()
+        let originalHead = model.headOID
+        manager.selectedProjectID = second.id
+        model.syncSelectedProject(in: manager)
+        XCTAssertFalse(model.matchesPanelTarget(firstIdentity))
+        XCTAssertFalse(model.isCurrent(oldTarget))
+        model.actOnCommit(old, action: .checkout, target: model.actionTarget())
+        XCTAssertFalse(model.isBusy, "An unresolved projection must not acquire a mutation")
+        try await wait { model.matchesPanelTarget(secondIdentity) && !model.isRefreshing }
+        XCTAssertEqual(GitCommandExecution.run(["rev-parse", "HEAD"], in: firstRoot.path)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines), originalHead)
+        XCTAssertEqual(GitCommandExecution.run(["branch", "--show-current"], in: secondRoot.path)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines), "main")
+        manager.selectedProjectID = first.id
+        model.syncSelectedProject(in: manager)
+        try await wait { model.matchesPanelTarget(firstIdentity) && !model.isRefreshing }
+        XCTAssertFalse(model.isCurrent(oldTarget), "Switching away and back must not revive an old confirmation")
     }
 }

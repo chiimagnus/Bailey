@@ -64,6 +64,11 @@ struct GitPanel: View {
     @State private var operationTrigger: OperationTrigger?
     @Environment(\.panelFontScale) private var panelFontScale
 
+    private var hasCurrentPanelTarget: Bool {
+        guard let context = project?.panelContext else { return false }
+        return model.matchesPanelTarget(context.identity)
+    }
+
     var body: some View {
         let _ = themeChanges.revision
         VStack(spacing: 0) {
@@ -89,6 +94,7 @@ struct GitPanel: View {
                 changeList
             }
         }
+        .disabled(!hasCurrentPanelTarget)
         .confirmationDialog(
             discardTitle(for: pendingDiscard?.entry),
             isPresented: Binding(
@@ -545,7 +551,8 @@ struct GitPanel: View {
     ) {
         guard !model.isBusy, let window = manager.attachedWindow,
               let project, manager.selectedProject === project,
-              let context = project.panelContext else { return }
+              let context = project.panelContext,
+              model.matchesPanelTarget(context.identity) else { return }
         let target = model.actionTarget()
         let alert = NSAlert()
         alert.messageText = title
@@ -584,14 +591,27 @@ struct GitPanel: View {
     ) {
         guard !model.isBusy, model.repositoryOperation == nil,
               let window = manager.attachedWindow, let project,
-              manager.selectedProject === project, let context = project.panelContext else { return }
+              manager.selectedProject === project, let context = project.panelContext,
+              model.matchesPanelTarget(context.identity) else { return }
         let target = model.actionTarget()
         let isCurrent: @MainActor () -> Bool = {
             manager.attachedWindow === window && manager.selectedProject === project
-                && project.matchesPanelTarget(context.identity) && model.isCurrent(target)
+                && context.scope == target.scope
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity) && model.isCurrent(target)
         }
-        let execute: (GitCommitDialog?) -> Void = { dialog in
+        let execute: @MainActor (GitCommitDialog?) -> Void = { dialog in
             guard isCurrent() else { return }
+            let resetMode = GitStatusModel.ResetMode.allCases[max(0, dialog?.resetMode.indexOfSelectedItem ?? 1)]
+            let changesWorktree = action != .reset || resetMode == .hard
+            var interactiveLaunch: (@MainActor () throws -> Void)?
+            if action == .rebase, dialog?.interactive.state == .on {
+                interactiveLaunch = {
+                    _ = try project.newInteractiveGitSession(
+                        repository: target.repository, arguments: ["rebase", "--interactive", commit.hash], context: context
+                    )
+                }
+            }
             if action == .checkout, dialog?.alwaysAccept.state == .on {
                 settings.gitAlwaysAcceptCheckout = true
             }
@@ -603,12 +623,16 @@ struct GitPanel: View {
                     noCommit: dialog?.noCommit.state == .on,
                     noFastForward: dialog?.noFastForward.state == .on,
                     squash: dialog?.squash.state == .on,
+                    resetMode: resetMode,
+                    ignoreDate: dialog?.ignoreDate.state != .off,
+                    interactiveLaunch: interactiveLaunch,
                     prepare: {
-                        await project.saveBeforeGitAction(
+                        if !changesWorktree { return true }
+                        return await project.saveBeforeGitAction(
                             repository: target.repository, scope: target.scope, isCurrent: isCurrent
                         )
                     }, isCurrentTarget: {
-                        isCurrent() && project.canRunGitAction(repository: target.repository, scope: target.scope)
+                        isCurrent() && (!changesWorktree || project.canRunGitAction(repository: target.repository, scope: target.scope))
                     },
                     completion: { _ in
                         project.reloadAfterGitAction(repository: target.repository, scope: target.scope)
@@ -970,6 +994,7 @@ struct GitPanel: View {
                                 presentCreateReferenceDialog(kind: kind, commit: commit)
                             },
                             canActOnCommit: !model.isBusy && model.repositoryOperation == nil,
+                            canDropCommit: model.canDrop,
                             commitAction: { commit, action in
                                 presentCommitDialog(commit, action: action)
                             }

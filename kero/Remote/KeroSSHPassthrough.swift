@@ -16,7 +16,7 @@ import Foundation
 ///
 /// Every uncertain case passes through untouched. An unrecognized invocation
 /// must retain its original SSH behavior.
-enum KeroSSHPassthrough {
+nonisolated enum KeroSSHPassthrough {
     /// Options OpenSSH accepts with no value.
     private static let flagOptions = Set("46AaCfGgKkMNnqsTtVvXxYy")
     /// Options OpenSSH accepts with a value, attached or as the next argument.
@@ -162,7 +162,13 @@ enum KeroSSHPassthrough {
         while index < arguments.endIndex {
             let argument = arguments[index]
 
-            if argument == "-" || argument == "--" { return .notFollowable }
+            if argument == "-" { return .notFollowable }
+            if argument == "--" {
+                let destination = arguments.index(after: index)
+                return destination == arguments.index(before: arguments.endIndex)
+                    && !arguments[destination].isEmpty && arguments[destination] != "-"
+                    ? .interactiveSession : .notFollowable
+            }
 
             guard argument.hasPrefix("-") else {
                 // The destination. Anything after it is a remote command.

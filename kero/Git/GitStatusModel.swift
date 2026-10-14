@@ -49,7 +49,7 @@ final class GitStatusModel {
     }
 
     nonisolated enum CommitAction: CaseIterable, Sendable {
-        case checkout, cherryPick, revert, merge
+        case checkout, cherryPick, revert, merge, rebase, reset, drop
 
         var title: String {
             switch self {
@@ -57,6 +57,21 @@ final class GitStatusModel {
             case .cherryPick: String(localized: "Cherry Pick Commit…", table: "Git")
             case .revert: String(localized: "Revert Commit…", table: "Git")
             case .merge: String(localized: "Merge Commit into Current Branch…", table: "Git")
+            case .rebase: String(localized: "Rebase Current Branch onto Commit…", table: "Git")
+            case .reset: String(localized: "Reset Current Branch to Commit…", table: "Git")
+            case .drop: String(localized: "Drop Commit…", table: "Git")
+            }
+        }
+    }
+
+    nonisolated enum ResetMode: String, CaseIterable, Sendable {
+        case soft, mixed, hard
+
+        var title: String {
+            switch self {
+            case .soft: String(localized: "Soft — keep index and working files", table: "Git")
+            case .mixed: String(localized: "Mixed — reset index, keep working files", table: "Git")
+            case .hard: String(localized: "Hard — overwrite index and working files", table: "Git")
             }
         }
     }
@@ -75,15 +90,54 @@ final class GitStatusModel {
     }
 
     func isCurrent(_ target: ActionTarget, requiresStableHead: Bool = true) -> Bool {
-        isRepo && target.generation == contextGeneration && target.repository == repoRoot
+        hasResolvedPanelTarget && isRepo && target.generation == contextGeneration && target.repository == repoRoot
             && target.scope == currentScope
             && (!requiresStableHead || (target.head == headOID && target.branch == branch))
+    }
+
+    nonisolated static func dropCommitPossible(
+        _ selected: String, head: String?, parents: [String: [String]]
+    ) -> Bool {
+        guard let head, let selectedParents = parents[selected], !selectedParents.isEmpty else { return false }
+        var children: [String: [String]] = [:]
+        for (commit, ancestors) in parents {
+            for ancestor in ancestors { children[ancestor, default: []].append(commit) }
+        }
+        var current = selected
+        var containsHead = false
+        while let ancestors = parents[current] {
+            guard ancestors.count <= 1 else { return false }
+            let descendants = children[current] ?? []
+            guard descendants.count <= 1 else { return false }
+            containsHead = containsHead || current == head
+            guard let child = descendants.first else { return containsHead }
+            current = child
+        }
+        return false
+    }
+
+    func canDrop(_ commit: RecentCommit) -> Bool {
+        Self.dropCommitPossible(commit.hash, head: headOID,
+                                parents: Dictionary(uniqueKeysWithValues: recentCommits.map { ($0.hash, $0.parentHashes) }))
+    }
+
+    nonisolated static func parseCommitTopology(_ output: String) -> [String: [String]]? {
+        var parents: [String: [String]] = [:]
+        for line in output.split(separator: "\n") {
+            let fields = line.split(separator: " ").map(String.init)
+            guard let hash = fields.first, parents[hash] == nil,
+                  fields.allSatisfy({ ($0.count == 40 || $0.count == 64) && $0.allSatisfy(\.isHexDigit) }) else { return nil }
+            parents[hash] = Array(fields.dropFirst())
+        }
+        return parents
     }
 
     func actOnCommit(
         _ commit: RecentCommit, action: CommitAction, target: ActionTarget,
         parent: Int = 1, recordOrigin: Bool = false, noCommit: Bool = false,
         noFastForward: Bool = true, squash: Bool = false,
+        resetMode: ResetMode = .mixed, ignoreDate: Bool = true,
+        interactiveLaunch: (@MainActor () throws -> Void)? = nil,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
         completion: (@MainActor (Bool) -> Void)? = nil
@@ -116,11 +170,27 @@ final class GitStatusModel {
             else if noFastForward { arguments.append("--no-ff") }
             if noCommit { arguments.append("--no-commit") }
             arguments.append(commit.hash)
+        case .rebase:
+            arguments = ["rebase"]
+            if ignoreDate { arguments.append("--ignore-date") }
+            arguments.append(commit.hash)
+        case .reset:
+            arguments = ["reset", "--" + resetMode.rawValue, commit.hash]
+        case .drop:
+            guard canDrop(commit) else {
+                failImmediately(String(localized: "This commit cannot be dropped from the current HEAD without crossing a merge or fork.", table: "Git"), completion: completion)
+                return
+            }
+            arguments = ["rebase", "--onto", commit.hash + "^", commit.hash]
         }
         perform(
-            label: action.title, commands: [arguments],
+            label: action == .rebase && interactiveLaunch != nil
+                ? String(localized: "Launch Interactive Rebase", table: "Git") : action.title,
+            commands: action == .rebase && interactiveLaunch != nil ? [] : [arguments],
             squashMessage: action == .merge && squash && !noCommit
                 ? "Merge commit '\(commit.hash)'" : nil,
+            dropCommit: action == .drop ? commit.hash : nil,
+            terminalAction: action == .rebase ? interactiveLaunch : nil,
             prepare: prepare,
             isCurrentTarget: {
                 self.isCurrent(target) && (isCurrentTarget?() ?? true)
@@ -315,7 +385,7 @@ final class GitStatusModel {
     }
 
     func isCurrent(_ entry: Entry) -> Bool {
-        entry.repositoryRoot.isEmpty || entry.repositoryRoot == repoRoot
+        hasResolvedPanelTarget && (entry.repositoryRoot.isEmpty || entry.repositoryRoot == repoRoot)
     }
 
     /// Returns a Git decoration only when `absolutePath` belongs to the
@@ -358,6 +428,13 @@ final class GitStatusModel {
     /// The workspace selected by the project's current panel context.
     private var backend: WorkspaceBackend = LocalWorkspaceBackend.shared
     @ObservationIgnored private var panelResolveGeneration: UInt64 = 0
+    private var panelTargetIdentity: PanelContext.Identity?
+    private var isResolvingPanelTarget = false
+    private var hasResolvedPanelTarget: Bool { !isResolvingPanelTarget }
+
+    func matchesPanelTarget(_ identity: PanelContext.Identity) -> Bool {
+        panelTargetIdentity == identity
+    }
 
     /// Only the focused project's latest directory resolution may select a
     /// repository. Its backend can complete after the user switches projects.
@@ -369,6 +446,12 @@ final class GitStatusModel {
             sync(root: "")
             return
         }
+        if panelTargetIdentity != context.identity {
+            contextGeneration &+= 1
+            invalidateStatusRefresh()
+            panelTargetIdentity = nil
+            isResolvingPanelTarget = true
+        }
         Task { [weak self, weak manager, weak project] in
             let root = await context.resolvedRoot().root
             guard let self, let manager, let project,
@@ -376,12 +459,15 @@ final class GitStatusModel {
                   manager.selectedProject === project,
                   project.matchesPanelTarget(context.identity) else { return }
             self.sync(root: root, backend: context.backend, scope: context.scope)
+            self.panelTargetIdentity = context.identity
         }
     }
 
     /// Omitting the backend selects the Mac; scope keeps cached state and
     /// drafts distinct when the same path exists on another machine.
     func sync(root: String, backend: WorkspaceBackend? = nil, scope: String = "local") {
+        panelTargetIdentity = nil
+        isResolvingPanelTarget = false
         let targetBackend = backend ?? LocalWorkspaceBackend.shared
         let channelChanged = (self.backend as AnyObject) !== (targetBackend as AnyObject)
         self.backend = targetBackend
@@ -1044,11 +1130,13 @@ final class GitStatusModel {
         requiresStableHead: Bool = true,
         requiresStableUpstream: Bool = false,
         squashMessage: String? = nil,
+        dropCommit: String? = nil,
+        terminalAction: (@MainActor () throws -> Void)? = nil,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
         completion: (@MainActor (Bool) -> Void)? = nil
     ) {
-        if directory == nil && !isRepo {
+        if !hasResolvedPanelTarget || (directory == nil && !isRepo) {
             failImmediately(
                 String(localized: "Repository changed; review the current directory and try the Git action again.", table: "Git"),
                 completion: completion
@@ -1057,12 +1145,13 @@ final class GitStatusModel {
         }
         let dir = directory ?? repoRoot
         let generation = contextGeneration
+        let expectedPanelTarget = panelTargetIdentity
         let validationRoot = rootPath
         let expectedRepositoryRoot = directory == nil && isRepo ? repoRoot : nil
         let expectedHeadOID = headOID
         let expectedBranch = branch
         let expectedUpstream = upstream
-        guard !dir.isEmpty, !isBusy, !commands.isEmpty else {
+        guard !dir.isEmpty, !isBusy, (!commands.isEmpty || terminalAction != nil) else {
             completion?(false)
             return
         }
@@ -1086,6 +1175,7 @@ final class GitStatusModel {
             let isCurrent: @MainActor () -> Bool = { [weak self] in
                 guard let self else { return false }
                 return self.contextGeneration == generation
+                    && self.panelTargetIdentity == expectedPanelTarget
                     && self.runningOperationID == operationID
                     && (isCurrentTarget?() ?? true)
             }
@@ -1133,6 +1223,18 @@ final class GitStatusModel {
                     }
                 }
 
+                if let dropCommit {
+                    let topology = await GitCommandExecution.run(["rev-list", "--parents", "--all", "HEAD"], in: dir, backend: backend)
+                    guard topology.status == 0,
+                          let parents = Self.parseCommitTopology(topology.stdout),
+                          Self.dropCommitPossible(dropCommit, head: expectedHeadOID, parents: parents) else {
+                        let message = topology.status == 0
+                            ? String(localized: "This commit cannot be dropped from the current HEAD without crossing a merge or fork.", table: "Git")
+                            : topology.stderr
+                        return CommandBatchResult(output: message, failureCode: topology.status == 0 ? -1 : topology.status,
+                                                  failureMessage: message)
+                    }
+                }
                 for args in commands {
                     guard await isCurrent() else {
                         return CommandBatchResult(output: transcript.joined(separator: "\n") + "\n" + staleMessage,
@@ -1196,11 +1298,13 @@ final class GitStatusModel {
             self.runningOperationID = nil
             self.isBusy = false
             guard self.contextGeneration == generation,
+                  self.panelTargetIdentity == expectedPanelTarget,
                   self.operation?.id == operationID else {
                 // The command may have completed in the old repository, but
                 // success-only follow-ups (for example moving a renamed file
                 // to Trash) must never continue in the newly selected context.
                 completion?(false)
+                if self.operation?.id == operationID { self.operation = nil }
                 self.refresh()
                 return
             }
@@ -1218,6 +1322,20 @@ final class GitStatusModel {
                 )
                 completion?(false)
             } else {
+                if let terminalAction {
+                    guard isCurrentTarget?() ?? true else {
+                        self.failImmediately(String(localized: "The Git action target changed. Reopen the menu and try again.", table: "Git"), completion: completion)
+                        self.refresh()
+                        return
+                    }
+                    do {
+                        try terminalAction()
+                    } catch {
+                        self.failImmediately(error.localizedDescription, completion: completion)
+                        self.refresh()
+                        return
+                    }
+                }
                 self.lastError = nil
                 self.operation = Operation(
                     id: operationID,

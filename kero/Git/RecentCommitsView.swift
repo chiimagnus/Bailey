@@ -23,6 +23,7 @@ struct RecentCommitsView: View {
     let switchBranch: (String) -> Void
     let createReference: (Commit, GitStatusModel.CommitReferenceKind) -> Void
     let canActOnCommit: Bool
+    let canDropCommit: (Commit) -> Bool
     let commitAction: (Commit, GitStatusModel.CommitAction) -> Void
 
     init(
@@ -39,6 +40,7 @@ struct RecentCommitsView: View {
         switchBranch: @escaping (String) -> Void,
         createReference: @escaping (Commit, GitStatusModel.CommitReferenceKind) -> Void,
         canActOnCommit: Bool,
+        canDropCommit: @escaping (Commit) -> Bool,
         commitAction: @escaping (Commit, GitStatusModel.CommitAction) -> Void
     ) {
         self.commits = commits
@@ -54,6 +56,7 @@ struct RecentCommitsView: View {
         self.switchBranch = switchBranch
         self.createReference = createReference
         self.canActOnCommit = canActOnCommit
+        self.canDropCommit = canDropCommit
         self.commitAction = commitAction
     }
 
@@ -197,7 +200,7 @@ struct RecentCommitsView: View {
             Divider()
             ForEach(GitStatusModel.CommitAction.allCases, id: \.self) { action in
                 Button(action.title) { commitAction(commit, action) }
-                    .disabled(!canActOnCommit)
+                    .disabled(!canActOnCommit || (action == .drop && !canDropCommit(commit)))
             }
             Divider()
             Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }

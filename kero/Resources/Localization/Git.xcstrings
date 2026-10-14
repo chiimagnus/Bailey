@@ -1,6 +1,166 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Rebase Current Branch onto Commit…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将当前分支变基到提交…"
+          }
+        }
+      }
+    },
+    "Reset Current Branch to Commit…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将当前分支重置到提交…"
+          }
+        }
+      }
+    },
+    "Drop Commit…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除提交…"
+          }
+        }
+      }
+    },
+    "Soft — keep index and working files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Soft — 保留暂存区和工作文件"
+          }
+        }
+      }
+    },
+    "Mixed — reset index, keep working files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mixed — 重置暂存区，保留工作文件"
+          }
+        }
+      }
+    },
+    "Hard — overwrite index and working files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hard — 覆写暂存区和工作文件"
+          }
+        }
+      }
+    },
+    "This commit cannot be dropped from the current HEAD without crossing a merge or fork." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前 HEAD 到此提交的路径包含合并或分叉，不能删除该提交。"
+          }
+        }
+      }
+    },
+    "Launch Interactive Rebase" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启动交互式变基"
+          }
+        }
+      }
+    },
+    "Launch Interactive Rebase in New Terminal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在新终端启动交互式变基"
+          }
+        }
+      }
+    },
+    "Ignore Date" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "忽略日期"
+          }
+        }
+      }
+    },
+    "Ignore Date applies only to non-interactive rebase." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "忽略日期仅适用于非交互式变基。"
+          }
+        }
+      }
+    },
+    "Yes, Rebase" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是，变基"
+          }
+        }
+      }
+    },
+    "Yes, Reset" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是，重置"
+          }
+        }
+      }
+    },
+    "Yes, Drop" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是，删除"
+          }
+        }
+      }
+    },
+    "Hard permanently overwrites tracked files and may delete untracked paths obstructing their restoration. Ordinary untracked files are kept." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hard 永久覆写已跟踪文件，也可能删除阻挡恢复的未跟踪路径。普通未跟踪文件会保留。"
+          }
+        }
+      }
+    },
+    "This rewrites the current HEAD history to remove the selected commit. Your Git rebase configuration still applies." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这会改写当前 HEAD 的历史以删除所选提交。仍使用你的 Git 变基配置。"
+          }
+        }
+      }
+    },
     "Always Accept" : {
       "localizations" : {
         "zh-Hans" : {

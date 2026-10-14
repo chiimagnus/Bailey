@@ -9,6 +9,9 @@ final class GitCommitDialog {
     let noFastForward = NSButton(checkboxWithTitle: String(localized: "Create Commit Even If Fast-forward Is Possible", table: "Git"), target: nil, action: nil)
     let squash = NSButton(checkboxWithTitle: String(localized: "Squash Commits", table: "Git"), target: nil, action: nil)
     let alwaysAccept = NSButton(checkboxWithTitle: String(localized: "Always Accept", table: "Git"), target: nil, action: nil)
+    let interactive = NSButton(checkboxWithTitle: String(localized: "Launch Interactive Rebase in New Terminal", table: "Git"), target: nil, action: nil)
+    let ignoreDate = NSButton(checkboxWithTitle: String(localized: "Ignore Date", table: "Git"), target: nil, action: nil)
+    let resetMode = NSPopUpButton()
 
     init(action: GitStatusModel.CommitAction, commit: GitStatusModel.RecentCommit,
          target: GitStatusModel.ActionTarget) {
@@ -45,6 +48,21 @@ final class GitCommitDialog {
             controls.addArrangedSubview(noCommit)
             alert.informativeText += "\n" + String(localized: "No Commit does not prevent a fast-forward when that is allowed.", table: "Git")
             alert.addButton(withTitle: String(localized: "Yes, Merge", table: "Git"))
+        case .rebase:
+            ignoreDate.state = .on
+            controls.addArrangedSubview(interactive)
+            controls.addArrangedSubview(ignoreDate)
+            alert.informativeText += "\n" + String(localized: "Ignore Date applies only to non-interactive rebase.", table: "Git")
+            alert.addButton(withTitle: String(localized: "Yes, Rebase", table: "Git"))
+        case .reset:
+            for mode in GitStatusModel.ResetMode.allCases { resetMode.addItem(withTitle: mode.title) }
+            resetMode.selectItem(at: 1)
+            controls.addArrangedSubview(resetMode)
+            alert.informativeText += "\n" + String(localized: "Hard permanently overwrites tracked files and may delete untracked paths obstructing their restoration. Ordinary untracked files are kept.", table: "Git")
+            alert.addButton(withTitle: String(localized: "Yes, Reset", table: "Git"))
+        case .drop:
+            alert.informativeText += "\n" + String(localized: "This rewrites the current HEAD history to remove the selected commit. Your Git rebase configuration still applies.", table: "Git")
+            alert.addButton(withTitle: String(localized: "Yes, Drop", table: "Git"))
         }
         alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
         alert.buttons[0].keyEquivalent = "\r"

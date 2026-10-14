@@ -129,6 +129,33 @@ final class FileTabTests: XCTestCase {
         XCTAssertNotNil(file.saveError)
     }
 
+    func testGitPreparationMatchesNativePrivatePathAliasWithoutSavingOtherRepository() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let inside = root.appendingPathComponent("inside.txt")
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        try Data("baseline".utf8).write(to: inside)
+        try Data("other repository".utf8).write(to: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let project = Project(fallbackName: "Aliases", workspaceConfiguration: .standard)
+        let selected = FileTab(path: inside.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        let other = FileTab(path: outside.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        project.append(PaneTab(content: .file(selected)))
+        project.append(PaneTab(content: .file(other)))
+        selected.text = "save selected"
+        selected.refreshDirtyState()
+        other.text = "keep unsaved elsewhere"
+        other.refreshDirtyState()
+        let repository = root.path.hasPrefix("/var/") ? "/private" + root.path : root.path
+        let prepared = await project.saveBeforeGitAction(repository: repository, scope: "local", isCurrent: { true })
+        XCTAssertTrue(prepared)
+        XCTAssertEqual(try String(contentsOf: inside, encoding: .utf8), "save selected")
+        XCTAssertFalse(selected.isDirty)
+        XCTAssertEqual(try String(contentsOf: outside, encoding: .utf8), "other repository")
+        XCTAssertTrue(other.isDirty)
+    }
+
     func testProjectCloseWaitsForFileSaveAndRetainsUnsavedOnFailure() async throws {
         let prior = SessionStore.load()
         let histories = TerminalHistoryStore.load()

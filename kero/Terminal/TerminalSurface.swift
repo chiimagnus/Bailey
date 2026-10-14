@@ -11,6 +11,7 @@ struct TerminalLaunch {
     let commandLine: String
     let workingDirectory: String
     let environment: [String: String]
+    var initialInput: String? = nil
 }
 
 /// What Kero needs from a terminal surface, in Kero's vocabulary rather than
