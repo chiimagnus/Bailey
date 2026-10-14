@@ -1897,7 +1897,7 @@ final class GitStatusModel {
         [
             "log", "-n", "\(limit + 1)", "--branches", "--remotes", "--tags", "HEAD",
             "--topo-order", "--diff-merges=first-parent", "--decorate=full",
-            "--pretty=format:%x1e%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%P%x1f%D",
+            "--pretty=format:%x1e%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%P%x1f%(decorate:prefix=,suffix=,separator=%x1d)",
             "--name-status", "-z",
         ]
     }
@@ -1906,7 +1906,8 @@ final class GitStatusModel {
         _ decorations: String
     ) -> [RecentCommit.Reference] {
         typealias Reference = RecentCommit.Reference
-        return decorations.split(separator: ",").compactMap { item in
+        // Git refs can contain commas, but never ASCII control separators.
+        return decorations.split(separator: "\u{1d}").compactMap { item in
             let value = item.trimmingCharacters(in: .whitespaces)
             func named(_ prefix: String, as kind: Reference.Kind) -> Reference? {
                 guard value.hasPrefix(prefix) else { return nil }

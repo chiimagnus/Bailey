@@ -462,7 +462,9 @@ final class GitStatusModelTests: XCTestCase {
         _ = try git(["merge", "-q", "--no-ff", "-m", "merge", "feature/nested"])
         let merge = try git(["rev-parse", "HEAD"])
         _ = try git(["branch", "release/stable", merge])
+        _ = try git(["branch", "feature,hotfix", merge])
         _ = try git(["tag", "v1.0", merge])
+        _ = try git(["tag", "v1,hotfix", merge])
         _ = try git(["update-ref", "refs/remotes/origin/main", merge])
         _ = try git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"])
         // A second tip that HEAD cannot reach must still appear in the graph.
@@ -485,8 +487,10 @@ final class GitStatusModelTests: XCTestCase {
             Set([
                 .init(kind: .currentBranch, name: "main"),
                 .init(kind: .localBranch, name: "release/stable"),
+                .init(kind: .localBranch, name: "feature,hotfix"),
                 .init(kind: .remoteBranch, name: "origin/main"),
                 .init(kind: .tag, name: "v1.0"),
+                .init(kind: .tag, name: "v1,hotfix"),
             ])
         )
         XCTAssertEqual(rows.first { $0.hash == side }?.references,
