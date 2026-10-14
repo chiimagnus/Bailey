@@ -42,7 +42,8 @@ final class RecentCommitsViewTests: XCTestCase {
         in root: NSView, file: StaticString = #filePath, line: UInt = #line
     ) {
         let scroll = horizontallyScrollableViews(in: root).first {
-            ($0.documentView?.frame.width ?? 0) > $0.contentView.bounds.width + 60
+            $0.contentView.bounds.height < 30
+                && ($0.documentView?.frame.width ?? 0) > $0.contentView.bounds.width + 60
         }
         guard let scroll else {
             XCTFail("Expected horizontally scrollable content", file: file, line: line)
@@ -94,7 +95,7 @@ final class RecentCommitsViewTests: XCTestCase {
         assertHorizontalScroll(in: window.contentView!)
     }
 
-    func testManyParallelBranchesAllowGraphWideHorizontalScroll() {
+    func testManyParallelBranchesDoNotScrollWholeGraphSideways() {
         let selection = GraphSelection()
         func commit(_ hash: String, parents: [String] = [], current: Bool = false)
             -> GitStatusModel.RecentCommit {
@@ -107,7 +108,36 @@ final class RecentCommitsViewTests: XCTestCase {
             + [commit("main", parents: ["root"], current: true), commit("root")]
         let window = hostHistory(commits, selection: selection, height: 320)
         defer { window.close() }
-        assertHorizontalScroll(in: window.contentView!)
+        let rowScrolls = horizontallyScrollableViews(in: window.contentView!)
+        XCTAssertFalse(rowScrolls.contains {
+            $0.contentView.bounds.height > 60
+                && ($0.documentView?.frame.width ?? 0) > $0.contentView.bounds.width + 10
+        }, "Graph and commit rows must stay anchored while only text scrolls")
+        XCTAssertTrue(rowScrolls.contains {
+            $0.contentView.bounds.height < 30 && $0.contentView.bounds.width > 90
+        }, "Even with many Git lanes, the message must remain readable in the sidebar")
+    }
+
+    func testShortCommitMessagesDoNotBounceHorizontally() {
+        let selection = GraphSelection()
+        let commit = GitStatusModel.RecentCommit(
+            hash: "short", shortHash: "short", subject: "Fix",
+            author: "Developer", date: .now, parentHashes: [],
+            references: [], files: []
+        )
+        let window = hostHistory([commit], selection: selection)
+        defer { window.close() }
+        guard let scroll = horizontallyScrollableViews(in: window.contentView!).first(where: {
+            $0.contentView.bounds.height < 30
+        }) else {
+            XCTFail("Expected a message-only horizontal scroller")
+            return
+        }
+        XCTAssertLessThanOrEqual(
+            (scroll.documentView?.frame.width ?? 0) - scroll.contentView.bounds.width, 1
+        )
+        XCTAssertEqual(scroll.horizontalScrollElasticity, .none,
+                       "A short commit message must not bounce horizontally")
     }
 
     func testExpandedHistoryKeepsLongFolderPathsScrollable() {
@@ -128,7 +158,7 @@ final class RecentCommitsViewTests: XCTestCase {
         assertHorizontalScroll(in: window.contentView!)
     }
 
-    func testHorizontalGraphScrollDoesNotEagerlyPageOffscreenHistory() {
+    func testRecentCommitHistoryOnlyPagesAtBottom() {
         let selection = GraphSelection()
         let commits: [GitStatusModel.RecentCommit] = (0..<60).map { index in
             .init(hash: "hash-\(index)", shortHash: "hash-\(index)",

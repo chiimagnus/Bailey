@@ -186,6 +186,7 @@ private struct TreeRowLabel: View {
                 }
             }
             .scrollIndicators(.hidden)
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, minHeight: 16, alignment: .leading)

@@ -78,6 +78,118 @@ final class TreeRowHitTestingTests: XCTestCase {
         }
     }
 
+    private func assertTextScroll<Content: View>(
+        _ content: Content, overflowing: Bool = false,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let width: CGFloat = 240
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: width, height: 32),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: content.frame(width: width, height: 32))
+        window.orderFront(nil)
+        settle()
+        defer { window.close() }
+
+        func scrollViews(in view: NSView) -> [NSScrollView] {
+            let own = (view as? NSScrollView).map { [$0] } ?? []
+            return own + view.subviews.flatMap(scrollViews)
+        }
+        let scrolls = scrollViews(in: window.contentView!)
+        guard let scroll = scrolls.first, let document = scroll.documentView else {
+            XCTFail("Expected one shared tree label scroller", file: file, line: line)
+            return
+        }
+        XCTAssertEqual(scrolls.count, 1, file: file, line: line)
+        let widthDifference = document.frame.width - scroll.contentView.bounds.width
+        if overflowing {
+            XCTAssertGreaterThan(widthDifference, 60, file: file, line: line)
+            let before = scroll.contentView.bounds.minX
+            scroll.contentView.scroll(to: NSPoint(x: before + 40, y: 0))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            XCTAssertGreaterThan(scroll.contentView.bounds.minX, before + 20,
+                                 file: file, line: line)
+        } else {
+            XCTAssertLessThanOrEqual(widthDifference, 1, file: file, line: line)
+            XCTAssertEqual(scroll.horizontalScrollElasticity, .none,
+                           "Short labels must not bounce horizontally",
+                           file: file, line: line)
+        }
+    }
+
+    func testShortNamesDoNotBounceInFilesFoldersAndGitChanges() {
+        let file = TreeDisplayModel.Row(
+            name: "file.swift", path: "file.swift", isDirectory: false
+        )
+        let folder = TreeDisplayModel.Row(
+            name: "src", path: "src", isDirectory: true
+        )
+        assertTextScroll(TreeFolderRow(row: folder, scale: 1) {})
+        assertTextScroll(TreeFileRow(row: file, scale: 1, open: {}) { _ in EmptyView() })
+        assertTextScroll(TreeFileRow(row: file, scale: 1, open: {}) { _ in
+            Button {} label: {
+                Image(systemName: "plus").frame(width: 16, height: 22)
+            }
+        })
+    }
+
+    func testLongNamesScrollWithoutMovingGitActions() {
+        let file = TreeDisplayModel.Row(
+            name: String(repeating: "very-long-directory-name/", count: 8) + "file.swift",
+            path: "file.swift", isDirectory: false
+        )
+        assertTextScroll(
+            TreeFileRow(row: file, scale: 1, open: {}) { _ in EmptyView() },
+            overflowing: true
+        )
+        assertTextScroll(
+            TreeFileRow(row: file, scale: 1, open: {}) { _ in
+                Button {} label: {
+                    Image(systemName: "minus").frame(width: 16, height: 22)
+                }
+            },
+            overflowing: true
+        )
+    }
+
+    func testSharedLabelStopsBouncingAfterPanelWidens() {
+        let name = String(repeating: "long-folder-name/", count: 12) + "file.swift"
+        let file = TreeDisplayModel.Row(name: name, path: name, isDirectory: false)
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 190, height: 32),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView:
+            TreeFileRow(row: file, scale: 1, open: {}) { _ in EmptyView() }
+                .frame(maxWidth: .infinity)
+        )
+        window.orderFront(nil)
+        settle()
+        defer { window.close() }
+
+        func labelScroll(in root: NSView) -> NSScrollView? {
+            if let scroll = root as? NSScrollView { return scroll }
+            return root.subviews.lazy.compactMap(labelScroll).first
+        }
+        guard let scroll = labelScroll(in: window.contentView!) else {
+            XCTFail("Shared tree row must contain its text scroller")
+            return
+        }
+        XCTAssertGreaterThan(
+            (scroll.documentView?.frame.width ?? 0) - scroll.contentView.bounds.width, 60
+        )
+        window.setContentSize(NSSize(width: 1600, height: 32))
+        settle()
+        XCTAssertLessThanOrEqual(
+            (scroll.documentView?.frame.width ?? 0) - scroll.contentView.bounds.width, 1
+        )
+        XCTAssertEqual(scroll.horizontalScrollElasticity, .none,
+                       "Widening the sidebar must disable now-unnecessary horizontal bounce")
+    }
+
     func testFilesAndGitRowsOwnTheirFullHitArea() {
         for scale in [CGFloat(1), CGFloat(1.6)] {
             for depth in [0, 2] {
