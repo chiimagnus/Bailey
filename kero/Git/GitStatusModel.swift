@@ -1191,7 +1191,8 @@ final class GitStatusModel {
         }
         perform(
             label: String(localized: "Switch to \(name)", table: "Git"),
-            commands: [["switch", name]],
+            commands: [["switch", "--", name]],
+            preflight: [["check-ref-format", "--branch", name]],
             prepare: prepare, isCurrentTarget: isCurrentTarget,
             completion: completion
         )

@@ -111,6 +111,27 @@ final class GitBranchActionTests: XCTestCase {
         try await settle()
     }
 
+    func testSwitchRejectsOptionNamesAndPreviousCheckoutAliasInsteadOfChangingHead() async throws {
+        _ = try git(["branch", "other"])
+        let original = try git(["rev-parse", "HEAD"])
+        for name in ["-d", "-"] {
+            _ = try git(["update-ref", "refs/heads/" + name, original])
+            _ = try git(["switch", "other"])
+            _ = try git(["switch", "main"])
+            try await refresh()
+            XCTAssertTrue(model.branches.contains(name), "The external Ref must actually exist")
+            model.switchBranch(to: name)
+            try await settle()
+            XCTAssertNotNil(model.lastError, "An option or shorthand must not select a different target")
+            XCTAssertEqual(try git(["symbolic-ref", "HEAD"]), "refs/heads/main")
+            XCTAssertEqual(try git(["rev-parse", "HEAD"]), original)
+        }
+        model.switchBranch(to: "other")
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["symbolic-ref", "HEAD"]), "refs/heads/other")
+    }
+
     func testHistoryBranchCreationCheckoutAndExplicitReplacement() async throws {
         let root = try git(["rev-parse", "HEAD"])
         try Data("new\n".utf8).write(to: directory.appendingPathComponent("new.txt"))
