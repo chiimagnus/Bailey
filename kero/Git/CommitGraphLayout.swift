@@ -33,15 +33,16 @@ nonisolated struct CommitGraphLayout {
         })
         var nodes = [Node?](repeating: nil, count: commits.count)
 
-        // Only HEAD's first-parent ancestry owns lane zero.
-        if let start = commits.firstIndex(where: {
+        // A paged log may omit HEAD. Never color an unrelated tip as the main branch.
+        let loadedHead = commits.firstIndex(where: {
             $0.references.contains {
                 $0.kind == .currentBranch || $0.kind == .detachedHead
             }
-        }) ?? commits.indices.first {
+        })
+        if let start = loadedHead ?? commits.indices.first {
             var cursor = start
             while nodes[cursor] == nil {
-                nodes[cursor] = Node(lane: 0, color: 0)
+                nodes[cursor] = Node(lane: 0, color: loadedHead == nil ? 1 : 0)
                 guard let parent = commits[cursor].parentHashes.first,
                       let next = positions[parent], next > cursor else { break }
                 cursor = next
@@ -49,7 +50,7 @@ nonisolated struct CommitGraphLayout {
         }
 
         var reservations: [(lane: Int, first: Int, last: Int)] = []
-        var nextColor = 1
+        var nextColor = loadedHead == nil ? 2 : 1
         for start in commits.indices where nodes[start] == nil {
             var path: [Int] = []
             var cursor = start

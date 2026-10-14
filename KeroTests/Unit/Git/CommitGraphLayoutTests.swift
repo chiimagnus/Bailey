@@ -56,6 +56,17 @@ final class CommitGraphLayoutTests: XCTestCase {
         XCTAssertTrue(graph.rows[1].bottomRails.contains(.init(lane: 1, color: 1)))
     }
 
+    func testUnloadedHeadDoesNotMarkAnotherBranchAsCurrentMain() {
+        // Git --topo-order may return many commits from another branch before HEAD.
+        let graph = CommitGraphLayout(commits: [
+            commit("other-tip", parents: ["other-parent"]),
+            commit("other-parent", parents: ["unloaded-main"]),
+        ])
+        XCTAssertEqual(graph.laneCount, 1)
+        XCTAssertTrue(graph.rows.allSatisfy { $0.node.color != 0 },
+                      "Blue must identify the loaded HEAD ancestry, not an arbitrary tip")
+    }
+
     func testPaginationKeepsVisibleLaneAssignmentsAndNeverDrawsUnknownParents() {
         let prefix = [
             commit("main", parents: ["base"], current: true),
