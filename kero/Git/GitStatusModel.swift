@@ -1386,7 +1386,7 @@ final class GitStatusModel {
     }
 
     func fetchIntoLocalBranch(
-        _ selected: RemoteBranchTarget, force: Bool, target: ActionTarget,
+        _ selected: RemoteBranchTarget, force: Bool, destinationOID: String, target: ActionTarget,
         completion: (@MainActor (Bool) -> Void)? = nil
     ) {
         let localRef = "refs/heads/" + selected.branch
@@ -1400,7 +1400,7 @@ final class GitStatusModel {
                         + [selected.remote, "refs/heads/" + selected.branch + ":" + localRef]]
         perform(label: String(localized: "Fetch into Local Branch", table: "Git"),
                 commands: commands, requiresStableHead: false,
-                expectedRef: ("refs/remotes/" + selected.remote + "/" + selected.branch, selected.oid),
+                expectedRef: (localRef, destinationOID),
                 completion: completion)
     }
 

@@ -70,7 +70,9 @@ Branch、Remote Branch 与 Tag 的「创建归档」在 macOS 原生保存面板
 
 Checkout Remote Branch 默认以远端分支名创建本地跟踪分支并切换，创建前保护同一项目尚未保存的编辑。同名本地分支出现时不会自动覆盖，而是选择“重新输入名称”，或明确“切换现有分支并拉取”。后一种操作的切换已成功、拉取失败属于**部分成功**：保留当前分支、Git 冲突与错误，不假装撤销。
 
-已有同名**非当前**本地分支时才提供 Fetch into Local Branch，默认不强制；必要时可显式选择 Force Fetch，但 Git 仍禁止修改其他 worktree 正在检出的分支。Merge into Current Branch 使用历史提交相同的原生 Merge 表单；Pull into Current Branch 独立提供 No-FF 和 Squash（默认均关闭），不会混用顶部只允许快进的 Pull 快捷键。Squash 仅在确有暂存差异时创建单父提交。
+已有同名**非当前**本地分支时才提供 Fetch into Local Branch，默认不强制。它获取服务器最新分支，但执行前核对表单打开时的本地目标；期间本地分支被移动，即使勾选 Force Fetch 也拒绝旧确认。重新确认后可强制更新，仍不能修改其他 worktree 正在检出的分支。
+
+Merge into Current Branch 使用历史提交相同的原生 Merge 表单；Pull into Current Branch 独立提供 No-FF 和 Squash（默认均关闭），不会混用顶部只允许快进的 Pull 快捷键。Squash 仅在确有暂存差异时创建单父提交。
 
 删除远端 Branch 只作用于该 remote 的完整分支路径，服务端拒绝、认证错误或保护策略不被绕过。若服务器已删除该分支，Git 原生删除流程会清理**同一个**本地 remote-tracking Ref，不影响其它 remote 的同名分支。Archive 使用本次所选跟踪 Ref 的对象，不会先 Fetch 或擅自选取服务器上可能已移动的分支。
 

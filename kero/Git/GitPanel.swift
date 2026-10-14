@@ -823,7 +823,7 @@ struct GitPanel: View {
         }
     }
 
-    private func presentRemoteBranchAction(
+    func presentRemoteBranchAction(
         _ reference: GitStatusModel.RecentCommit.Reference,
         commit: GitStatusModel.RecentCommit,
         action: RecentCommitsView.RemoteAction
@@ -867,7 +867,7 @@ struct GitPanel: View {
                 canMutate: canMutateWorktree, completion: onFinish
             )
         case .fetch:
-            guard model.branches.contains(selected.branch),
+            guard let destinationOID = model.refsByName["refs/heads/" + selected.branch]?.oid,
                   model.branch != selected.branch else { return }
             let dialog = GitBranchDialog(kind: .remoteFetch,
                 title: String(localized: "Fetch into Local Branch…", table: "Git"),
@@ -876,7 +876,8 @@ struct GitPanel: View {
                 guard response == .alertFirstButtonReturn, stillSelected() else { return }
                 performOperation(.branchMenu) {
                     model.fetchIntoLocalBranch(
-                        selected, force: dialog.forceFetch.state == .on, target: target
+                        selected, force: dialog.forceFetch.state == .on,
+                        destinationOID: destinationOID, target: target
                     )
                 }
             }
