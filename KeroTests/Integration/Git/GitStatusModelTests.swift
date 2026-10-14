@@ -602,10 +602,8 @@ final class GitStatusModelTests: XCTestCase {
             $0.kind == .localBranch && $0.name == "history/first"
         } == true)
 
-        model.createLightweightTag(
-            named: "v1-local", at: target,
-            repository: expectedRepository, scope: "local"
-        )
+        model.createTag(named: "v1-local", at: selected, type: .lightweight,
+                        message: "", replace: false, target: model.actionTarget())
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertNil(model.lastError)
         XCTAssertEqual(try git(["rev-parse", "refs/tags/v1-local"]), selected)
@@ -629,10 +627,8 @@ final class GitStatusModelTests: XCTestCase {
         let before = model.operation
         model.sync(root: other.path)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
-        model.createLightweightTag(
-            named: "should-not-exist", at: target,
-            repository: expectedRepository, scope: "local"
-        )
+        model.createTag(named: "should-not-exist", at: selected, type: .lightweight,
+                        message: "", replace: false, target: model.actionTarget())
         XCTAssertNotNil(model.lastError)
         XCTAssertNotEqual(model.operation, before)
         XCTAssertNotEqual(otherGit(["show-ref", "--verify", "--quiet",

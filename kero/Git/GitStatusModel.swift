@@ -44,10 +44,6 @@ final class GitStatusModel {
 
     typealias FileDecoration = TreeDisplayModel.Status
 
-    nonisolated enum CommitReferenceKind: Sendable {
-        case branch, tag
-    }
-
     nonisolated enum CommitAction: CaseIterable, Sendable {
         case checkout, cherryPick, revert, merge, rebase, reset, drop
 
@@ -295,6 +291,23 @@ final class GitStatusModel {
     nonisolated struct GitRef: Equatable, Sendable {
         let oid: String
         let symbolic: String?
+        let objectType: String
+    }
+
+    nonisolated enum TagType: Sendable { case annotated, lightweight }
+
+    nonisolated struct TagDetails: Sendable {
+        nonisolated enum Verification: Sendable { case unsigned, valid, unverified }
+        let name: String
+        let objectOID: String
+        let commitOID: String
+        let tagger: String
+        let message: String
+        let verification: Verification
+    }
+
+    func isAnnotatedTag(named name: String) -> Bool {
+        refsByName["refs/tags/" + name]?.objectType == "tag"
     }
 
     private(set) var refsByName: [String: GitRef] = [:]
@@ -1452,26 +1465,189 @@ final class GitStatusModel {
         refresh()
     }
 
-    func createLightweightTag(
-        named name: String, at commit: RecentCommit,
-        repository expectedRepository: String, scope expectedScope: String
+    func createTag(
+        named name: String, at commitOID: String, type: TagType, message: String,
+        replace: Bool, target: ActionTarget,
+        completion: (@MainActor (Bool) -> Void)? = nil
     ) {
-        guard isRepo, repoRoot == expectedRepository, currentScope == expectedScope,
-              recentCommits.contains(where: { $0.hash == commit.hash })
-        else {
+        guard isCurrent(target, requiresStableHead: false),
+              recentCommits.contains(where: { $0.hash == commitOID }) else {
             failImmediately(String(
                 localized: "Repository or commit changed; reopen the history menu and try again.",
                 table: "Git"
-            ))
+            ), completion: completion)
             return
         }
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            failImmediately(String(localized: "Enter a tag name", table: "Git"))
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            failImmediately(String(localized: "Enter a tag name", table: "Git"), completion: completion)
             return
         }
-        perform(label: String(localized: "Create tag \(trimmed)", table: "Git"),
-                commands: [["tag", "--", trimmed, commit.hash]], requiresStableHead: false)
+        let refName = "refs/tags/" + name
+        let previous = refsByName[refName]
+        if replace && previous == nil {
+            failImmediately(String(
+                localized: "The selected Git reference changed. Reopen the menu and try again.", table: "Git"
+            ), completion: completion)
+            return
+        }
+        var args = ["tag"]
+        if replace { args.append("-f") }
+        if type == .annotated { args += ["-a", "-m", message] }
+        args += ["--", name, commitOID]
+        perform(
+            label: String(localized: "Create tag \(name)", table: "Git"),
+            commands: [args], requiresStableHead: false,
+            preflight: [["check-ref-format", refName]],
+            expectedRef: replace ? previous.map { (name: refName, oid: $0.oid) } : nil,
+            completion: completion
+        )
+    }
+
+    func deleteTag(
+        _ name: String, fromRemote selectedRemote: String?, target: ActionTarget,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        let refName = "refs/tags/" + name
+        guard isCurrent(target, requiresStableHead: false),
+              let ref = refsByName[refName],
+              selectedRemote.map(remotes.contains) ?? true else {
+            failImmediately(String(
+                localized: "The selected Git reference changed. Reopen the menu and try again.", table: "Git"
+            ), completion: completion)
+            return
+        }
+        // Delete on the selected remote first, as Git Graph does. The local
+        // compare-and-delete protects a tag changed while that network call ran.
+        var commands: [[String]] = []
+        if let selectedRemote {
+            commands.append(["push", selectedRemote, "--delete", refName])
+        }
+        commands.append(["update-ref", "-d", refName, ref.oid])
+        perform(
+            label: String(localized: "Delete tag \(name)", table: "Git"),
+            commands: commands, requiresStableHead: false,
+            expectedRef: (name: refName, oid: ref.oid),
+            completion: completion
+        )
+    }
+
+    func pushTag(
+        _ name: String, to selectedRemotes: [String], target: ActionTarget,
+        selectedOID: String? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        let refName = "refs/tags/" + name
+        guard isCurrent(target, requiresStableHead: false),
+              let oid = selectedOID ?? refsByName[refName]?.oid, !selectedRemotes.isEmpty,
+              selectedRemotes.allSatisfy(remotes.contains) else {
+            failImmediately(String(
+                localized: "The selected tag or remote is no longer available.", table: "Git"
+            ), completion: completion)
+            return
+        }
+        let commands = selectedRemotes.map {
+            ["push", $0, refName + ":" + refName]
+        }
+        perform(
+            label: String(localized: "Push tag \(name)", table: "Git"),
+            commands: commands, requiresStableHead: false,
+            expectedRef: (name: refName, oid: oid),
+            completion: completion
+        )
+    }
+
+    /// Resolve a just-created Tag before the asynchronous status refresh finishes.
+    /// The peeled target must still be the Commit chosen in the original dialog.
+    func tagOID(named name: String, pointingAt commitOID: String, target: ActionTarget) async -> String? {
+        guard isCurrent(target, requiresStableHead: false) else { return nil }
+        let generation = contextGeneration
+        let reference = "refs/tags/" + name
+        let peeled = await GitCommandExecution.run(
+            ["rev-parse", "--verify", reference + "^{commit}"], in: repoRoot, backend: backend
+        )
+        let object = await GitCommandExecution.run(
+            ["show-ref", "--verify", "--hash", reference], in: repoRoot, backend: backend
+        )
+        guard generation == contextGeneration, isCurrent(target, requiresStableHead: false),
+              peeled.status == 0, object.status == 0,
+              peeled.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == commitOID else {
+            return nil
+        }
+        return object.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Git Graph's warning is about *known local tracking refs*, not a query
+    /// of server-side history. Nil means Git could not evaluate that heuristic.
+    func tagRemotesWithoutCommit(
+        _ commitOID: String, selected: [String], target: ActionTarget
+    ) async -> [String]? {
+        guard isCurrent(target, requiresStableHead: false),
+              selected.allSatisfy(remotes.contains) else { return nil }
+        let currentScope = contextGeneration
+        let result = await GitCommandExecution.run([
+            "for-each-ref", "--contains=" + commitOID, "--format=%(refname)", "refs/remotes"
+        ], in: repoRoot, backend: backend)
+        guard currentScope == contextGeneration,
+              isCurrent(target, requiresStableHead: false), result.status == 0 else { return nil }
+        let containing = Set(result.stdout.split(separator: "\n").compactMap { raw -> String? in
+            let name = String(raw)
+            guard refsByName[name]?.symbolic == nil,
+                  name.hasPrefix("refs/remotes/") else { return nil }
+            return name
+        })
+        return selected.filter { remote in
+            !containing.contains(where: { $0.hasPrefix("refs/remotes/" + remote + "/") })
+        }
+    }
+
+    /// Reads details only when selected, not on every status or remote SSH poll.
+    func tagDetails(named name: String, target: ActionTarget) async -> TagDetails? {
+        let refName = "refs/tags/" + name
+        guard isCurrent(target, requiresStableHead: false),
+              let selected = refsByName[refName], selected.objectType == "tag" else {
+            return nil
+        }
+        let generation = contextGeneration
+        let object = await GitCommandExecution.run(
+            ["cat-file", "-p", selected.oid], in: repoRoot, backend: backend
+        )
+        let commit = await GitCommandExecution.run(
+            ["rev-parse", refName + "^{commit}"], in: repoRoot, backend: backend
+        )
+        guard generation == contextGeneration, isCurrent(target, requiresStableHead: false),
+              refsByName[refName]?.oid == selected.oid else { return nil }
+        guard object.status == 0, commit.status == 0,
+              let boundary = object.stdout.range(of: "\n\n") else {
+            failImmediately(String(localized: "Unable to read the selected annotated tag.", table: "Git"))
+            return nil
+        }
+        let header = String(object.stdout[..<boundary.lowerBound])
+        let body = String(object.stdout[boundary.upperBound...])
+        let tagger = header.split(separator: "\n").first(where: { $0.hasPrefix("tagger ") })
+            .map { String($0.dropFirst("tagger ".count)) } ?? ""
+        let signatureRange = body.range(of: "-----BEGIN PGP SIGNATURE-----")
+            ?? body.range(of: "-----BEGIN SSH SIGNATURE-----")
+        let message = signatureRange
+            .map { String(body[..<$0.lowerBound]) } ?? body
+        let verification: TagDetails.Verification
+        if signatureRange != nil {
+            let check = await GitCommandExecution.run(
+                ["verify-tag", refName], in: repoRoot, backend: backend
+            )
+            guard generation == contextGeneration, isCurrent(target, requiresStableHead: false),
+                  refsByName[refName]?.oid == selected.oid else { return nil }
+            verification = check.status == 0 ? .valid : .unverified
+        } else {
+            verification = .unsigned
+        }
+        return TagDetails(
+            name: name, objectOID: selected.oid,
+            commitOID: commit.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+            tagger: tagger,
+            message: message.trimmingCharacters(in: .newlines),
+            verification: verification
+        )
     }
 
     func stash(includeUntracked: Bool = true) {
@@ -2582,18 +2758,21 @@ final class GitStatusModel {
     }
 
     private nonisolated static let refSnapshotArguments = [
-        "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)",
-        "refs/heads", "refs/remotes",
+        "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)%00%(objecttype)",
+        "refs/heads", "refs/remotes", "refs/tags",
     ]
 
     nonisolated static func parseRefSnapshot(_ output: String) -> [String: GitRef] {
         var refs: [String: GitRef] = [:]
         for line in output.split(separator: "\n") {
             let fields = line.split(separator: "\0", omittingEmptySubsequences: false)
-            guard fields.count == 3, fields[0].hasPrefix("refs/"), !fields[1].isEmpty else { continue }
+            guard fields.count == 4, fields[0].hasPrefix("refs/"), !fields[1].isEmpty else { continue }
             let name = String(fields[0])
-            refs[name] = GitRef(oid: String(fields[1]),
-                                symbolic: fields[2].isEmpty ? nil : String(fields[2]))
+            refs[name] = GitRef(
+                oid: String(fields[1]),
+                symbolic: fields[2].isEmpty ? nil : String(fields[2]),
+                objectType: String(fields[3])
+            )
         }
         return refs
     }

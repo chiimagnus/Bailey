@@ -180,6 +180,10 @@ final class AppSettings {
         didSet { save() }
     }
 
+    var gitAlwaysProceedPushTag: Bool {
+        didSet { save() }
+    }
+
     /// Render terminal glyphs with slightly heavier strokes, like classic
     /// macOS font smoothing. Each backend maps this to its own rasterizer.
     /// Persisted as `terminal.font-thicken`; off by default so Kero's text
@@ -252,6 +256,7 @@ final class AppSettings {
         ) ?? Self.defaultToolbarVisibility
         gitViewMode = GitViewMode(rawValue: toml["git.view-mode"]?.string ?? "") ?? .tree
         gitAlwaysAcceptCheckout = toml["git.always-accept-checkout"]?.bool ?? false
+        gitAlwaysProceedPushTag = toml["git.always-proceed-push-tag"]?.bool ?? false
         fontThicken = toml["terminal.font-thicken"]?.bool ?? false
         cursorShape = TerminalCursorShape(
             rawValue: toml["terminal.cursor-shape"]?.string ?? ""
@@ -337,6 +342,7 @@ final class AppSettings {
         toolbarVisibility = Self.defaultToolbarVisibility
         gitViewMode = .tree
         gitAlwaysAcceptCheckout = false
+        gitAlwaysProceedPushTag = false
         cursorShape = .block
         cursorBlinking = true
         macosOptionAsAlt = false
@@ -372,6 +378,9 @@ final class AppSettings {
         }
         if gitAlwaysAcceptCheckout {
             lines.append("git.always-accept-checkout = true")
+        }
+        if gitAlwaysProceedPushTag {
+            lines.append("git.always-proceed-push-tag = true")
         }
         if fontThicken {
             lines.append("terminal.font-thicken = true")

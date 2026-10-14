@@ -56,7 +56,7 @@ make test ONLY_TESTING=KeroTests/FileTabTests
 | Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests` |
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
-| Git 环境、刷新、写操作与失败状态 | `GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitBranchDialogTests` |
+| Git 环境、刷新、写操作与失败状态 | `GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitTagActionTests`、`GitBranchDialogTests`、`GitTagDialogTests` |
 | SSH 命令、断线、重连和过期结果 | `RemoteCommandsTests`、`RemoteLifetimeTests` |
 | 文件、Diff 和原生内容保留 | `FileTabTests`、`DiffTabTests`、`PaneRetentionTests` |
 | Files 与所有 Git 树的命中与交互 | `TreeRowHitTestingTests` |

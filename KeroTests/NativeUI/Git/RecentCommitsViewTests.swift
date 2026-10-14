@@ -74,8 +74,9 @@ final class RecentCommitsViewTests: XCTestCase {
             viewMode: viewMode, fontScale: 1,
             hasMoreCommits: false, isLoadingMore: false, loadMore: { false },
             openDiff: { _, _ in }, canSwitchBranch: true,
-            switchBranch: { _ in }, branchAction: { _, _, _ in }, remoteAction: { _, _, _ in },
-            canFetchRemoteBranch: { _ in false }, createReference: { _, _ in },
+            switchBranch: { _ in }, branchAction: { _, _, _ in }, remoteAction: { _, _, _ in }, tagAction: { _, _, _ in },
+            isAnnotatedTag: { _ in false },
+            canFetchRemoteBranch: { _ in false }, createBranch: { _ in }, addTag: { _ in },
             canActOnCommit: true, canDropCommit: { _ in false }, commitAction: { _, _ in }
         ).frame(width: width, height: height, alignment: .topLeading)
             .background(Color(nsColor: Theme.sidebar)))
@@ -187,8 +188,9 @@ final class RecentCommitsViewTests: XCTestCase {
                 hasMoreCommits: true, isLoadingMore: false,
                 loadMore: { pageRequests += 1; return true },
                 openDiff: { _, _ in }, canSwitchBranch: true,
-                switchBranch: { _ in }, branchAction: { _, _, _ in }, remoteAction: { _, _, _ in },
-            canFetchRemoteBranch: { _ in false }, createReference: { _, _ in },
+                switchBranch: { _ in }, branchAction: { _, _, _ in }, remoteAction: { _, _, _ in }, tagAction: { _, _, _ in },
+            isAnnotatedTag: { _ in false },
+            canFetchRemoteBranch: { _ in false }, createBranch: { _ in }, addTag: { _ in },
                 canActOnCommit: true, canDropCommit: { _ in false }, commitAction: { _, _ in }
             )
         }.frame(width: width, height: height))
@@ -284,8 +286,9 @@ final class RecentCommitsViewTests: XCTestCase {
             loadMore: { false },
             openDiff: { commit, file in diffs.append(commit.hash + ":" + file.path) },
             canSwitchBranch: true, switchBranch: { _ in },
-            branchAction: { _, _, _ in }, remoteAction: { _, _, _ in },
-            canFetchRemoteBranch: { _ in false }, createReference: { _, _ in }, canActOnCommit: true, canDropCommit: { _ in false }, commitAction: { _, _ in }
+            branchAction: { _, _, _ in }, remoteAction: { _, _, _ in }, tagAction: { _, _, _ in },
+            isAnnotatedTag: { _ in false },
+            canFetchRemoteBranch: { _ in false }, createBranch: { _ in }, addTag: { _ in }, canActOnCommit: true, canDropCommit: { _ in false }, commitAction: { _, _ in }
         ).frame(width: width, height: height, alignment: .topLeading)
             .background(Color(nsColor: Theme.sidebar)))
         window.orderFront(nil)
@@ -333,8 +336,9 @@ final class RecentCommitsViewTests: XCTestCase {
                 hasMoreCommits: false, isLoadingMore: false,
                 loadMore: { false }, openDiff: { _, _ in },
                 canSwitchBranch: true, switchBranch: { _ in },
-                branchAction: { _, _, _ in }, remoteAction: { _, _, _ in },
-            canFetchRemoteBranch: { _ in false }, createReference: { _, _ in }, canActOnCommit: true, canDropCommit: { _ in false }, commitAction: { _, _ in }
+                branchAction: { _, _, _ in }, remoteAction: { _, _, _ in }, tagAction: { _, _, _ in },
+            isAnnotatedTag: { _ in false },
+            canFetchRemoteBranch: { _ in false }, createBranch: { _ in }, addTag: { _ in }, canActOnCommit: true, canDropCommit: { _ in false }, commitAction: { _, _ in }
             )
             .frame(width: width, height: height, alignment: .topLeading)
                 .background(Color(nsColor: Theme.sidebar)))

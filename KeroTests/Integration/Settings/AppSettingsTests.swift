@@ -64,11 +64,18 @@ final class AppSettingsTests: XCTestCase {
         let settings = AppSettings(configURL: configURL, languageDefaults: defaults, languageDomain: domain)
         XCTAssertEqual(settings.language, .english)
         XCTAssertFalse(settings.gitAlwaysAcceptCheckout)
+        XCTAssertFalse(settings.gitAlwaysProceedPushTag)
         settings.gitAlwaysAcceptCheckout = true
-        XCTAssertTrue(AppSettings(configURL: configURL).gitAlwaysAcceptCheckout)
+        settings.gitAlwaysProceedPushTag = true
+        let saved = AppSettings(configURL: configURL)
+        XCTAssertTrue(saved.gitAlwaysAcceptCheckout)
+        XCTAssertTrue(saved.gitAlwaysProceedPushTag)
         settings.resetToDefaults()
         XCTAssertFalse(settings.gitAlwaysAcceptCheckout)
-        XCTAssertFalse(AppSettings(configURL: configURL).gitAlwaysAcceptCheckout)
+        XCTAssertFalse(settings.gitAlwaysProceedPushTag)
+        let reset = AppSettings(configURL: configURL)
+        XCTAssertFalse(reset.gitAlwaysAcceptCheckout)
+        XCTAssertFalse(reset.gitAlwaysProceedPushTag)
     }
 
     func testObservationTracksAllNativeTerminalSettingsWithTemporaryConfig() {

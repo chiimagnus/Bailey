@@ -50,7 +50,7 @@ SwiftUI 是主要界面，AppKit、TextKit、Ghostty 与 WebKit 分别承担已�
 
 展示层负责呈现，ViewModel 负责结果及动作编排，底层 IO 留在后端。保存失败必须保留内容和可操作反馈，不能只写日志。
 
-Git 历史操作使用发起窗口的原生 sheet；另一窗口成为 key 不改变归属，切项目或关闭原窗口使确认失效。多个选项使用原生复选框和父提交选择器；本地 Branch 的创建/重名、重命名、删除及 Push 共用原生表单；远端 Branch 的 Checkout、Fetch、Pull 通过同一窗口的原生表单呈现，重名时保留用户输入并明确二次选择；ZIP/TAR 使用系统保存面板。各选项默认值和 Git 结果见 [git.md](features/git.md#历史提交操作) 与 [本地分支与归档](features/git.md#本地分支与归档)。
+Git 历史操作使用发起窗口的原生 sheet；另一窗口成为 key 不改变归属，切项目或关闭原窗口使确认失效。多个选项使用原生复选框和父提交选择器；本地 Branch 的创建/重名、重命名、删除及 Push 共用原生表单；远端 Branch 的 Checkout、Fetch、Pull 通过同一窗口的原生表单呈现，重名时保留用户输入并明确二次选择；Tag 的创建、重名、删除和推送使用原生表单/确认；详情在可选择文字的原生视图中展示，推送风险警告与偏好由同一发起窗口处理。ZIP/TAR 使用系统保存面板。各选项默认值和 Git 结果见 [git.md](features/git.md#历史提交操作) 与 [本地分支与归档](features/git.md#本地分支与归档)。
 
 ## 本地化
 

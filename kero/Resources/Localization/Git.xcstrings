@@ -2026,6 +2026,266 @@
           }
         }
       }
+    },
+    "Add Tag" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加标签"
+          }
+        }
+      }
+    },
+    "Tag Type" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签类型"
+          }
+        }
+      }
+    },
+    "Annotated" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "带注释标签"
+          }
+        }
+      }
+    },
+    "Lightweight" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻量标签"
+          }
+        }
+      }
+    },
+    "Tag Message" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签注释"
+          }
+        }
+      }
+    },
+    "Push to Remote" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推送到远端"
+          }
+        }
+      }
+    },
+    "Also Delete on Remote" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同时删除远端标签"
+          }
+        }
+      }
+    },
+    "Don't Push to Any Remote" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不推送到任何远端"
+          }
+        }
+      }
+    },
+    "Delete on Remote" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从远端删除"
+          }
+        }
+      }
+    },
+    "Don't Delete on Any Remote" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不删除远端标签"
+          }
+        }
+      }
+    },
+    "View Tag Details" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看标签详情"
+          }
+        }
+      }
+    },
+    "Delete Tag…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除标签…"
+          }
+        }
+      }
+    },
+    "Push Tag…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推送标签…"
+          }
+        }
+      }
+    },
+    "Tag Details" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签详情"
+          }
+        }
+      }
+    },
+    "Tag Object" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签对象"
+          }
+        }
+      }
+    },
+    "Tagger" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签创建者"
+          }
+        }
+      }
+    },
+    "Signature" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "签名"
+          }
+        }
+      }
+    },
+    "Unsigned" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未签名"
+          }
+        }
+      }
+    },
+    "Signature Verified" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "签名已验证"
+          }
+        }
+      }
+    },
+    "Signature Unverified" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "签名未通过验证"
+          }
+        }
+      }
+    },
+    "Proceed to Push" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍然推送"
+          }
+        }
+      }
+    },
+    "Always Proceed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以后总是继续"
+          }
+        }
+      }
+    },
+    "Tag already exists" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标签已存在"
+          }
+        }
+      }
+    },
+    "Replace Existing Tag" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替换已有标签"
+          }
+        }
+      }
+    },
+    "Tag Commit May Not Be on the Remote" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端可能不包含该标签的提交"
+          }
+        }
+      }
+    },
+    "The selected commit was not found in locally tracked branches of: %@. Push the tag anyway?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本地跟踪分支中未发现以下远端包含该提交：%@。仍然推送该标签吗？"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

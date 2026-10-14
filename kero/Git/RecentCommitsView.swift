@@ -8,6 +8,7 @@ struct RecentCommitsView: View {
 
     enum BranchAction { case rename, delete, push, merge, rebase, archive }
     enum RemoteAction { case checkout, fetch, merge, pull, delete, archive }
+    enum TagAction { case details, delete, push, archive }
 
     private let themeChanges = Theme.changes
     @Binding private var expandedCommitIDs: Set<String>
@@ -26,8 +27,11 @@ struct RecentCommitsView: View {
     let switchBranch: (String) -> Void
     let branchAction: (Reference, Commit, BranchAction) -> Void
     let remoteAction: (Reference, Commit, RemoteAction) -> Void
+    let tagAction: (Reference, Commit, TagAction) -> Void
+    let isAnnotatedTag: (String) -> Bool
     let canFetchRemoteBranch: (Reference) -> Bool
-    let createReference: (Commit, GitStatusModel.CommitReferenceKind) -> Void
+    let createBranch: (Commit) -> Void
+    let addTag: (Commit) -> Void
     let canActOnCommit: Bool
     let canDropCommit: (Commit) -> Bool
     let commitAction: (Commit, GitStatusModel.CommitAction) -> Void
@@ -46,8 +50,11 @@ struct RecentCommitsView: View {
         switchBranch: @escaping (String) -> Void,
         branchAction: @escaping (Reference, Commit, BranchAction) -> Void,
         remoteAction: @escaping (Reference, Commit, RemoteAction) -> Void,
+        tagAction: @escaping (Reference, Commit, TagAction) -> Void,
+        isAnnotatedTag: @escaping (String) -> Bool,
         canFetchRemoteBranch: @escaping (Reference) -> Bool,
-        createReference: @escaping (Commit, GitStatusModel.CommitReferenceKind) -> Void,
+        createBranch: @escaping (Commit) -> Void,
+        addTag: @escaping (Commit) -> Void,
         canActOnCommit: Bool,
         canDropCommit: @escaping (Commit) -> Bool,
         commitAction: @escaping (Commit, GitStatusModel.CommitAction) -> Void
@@ -65,8 +72,11 @@ struct RecentCommitsView: View {
         self.switchBranch = switchBranch
         self.branchAction = branchAction
         self.remoteAction = remoteAction
+        self.tagAction = tagAction
+        self.isAnnotatedTag = isAnnotatedTag
         self.canFetchRemoteBranch = canFetchRemoteBranch
-        self.createReference = createReference
+        self.createBranch = createBranch
+        self.addTag = addTag
         self.canActOnCommit = canActOnCommit
         self.canDropCommit = canDropCommit
         self.commitAction = commitAction
@@ -202,11 +212,11 @@ struct RecentCommitsView: View {
         .onTapGesture { toggle(commit) }
         .contextMenu {
             Button(String(localized: "Create Branch at Commit…", table: "Git")) {
-                createReference(commit, .branch)
+                createBranch(commit)
             }
             .disabled(!canSwitchBranch)
             Button(String(localized: "Create Tag at Commit…", table: "Git")) {
-                createReference(commit, .tag)
+                addTag(commit)
             }
             .disabled(!canSwitchBranch)
             Divider()
@@ -342,9 +352,25 @@ struct RecentCommitsView: View {
                 copy(reference.name)
             }
         case .tag:
-            Button(String(localized: "Show Tagged Commit", table: "Git")) {
-                expandedCommitIDs.insert(commit.id)
+            if isAnnotatedTag(reference.name) {
+                Button(String(localized: "View Tag Details", table: "Git")) {
+                    tagAction(reference, commit, .details)
+                }
+                .disabled(!canActOnCommit)
             }
+            Button(String(localized: "Delete Tag…", table: "Git")) {
+                tagAction(reference, commit, .delete)
+            }
+            .disabled(!canActOnCommit)
+            Button(String(localized: "Push Tag…", table: "Git")) {
+                tagAction(reference, commit, .push)
+            }
+            .disabled(!canActOnCommit)
+            Button(String(localized: "Create Archive…", table: "Git")) {
+                tagAction(reference, commit, .archive)
+            }
+            .disabled(!canActOnCommit)
+            Divider()
             Button(String(localized: "Copy Tag Name", table: "Git")) {
                 copy(reference.name)
             }

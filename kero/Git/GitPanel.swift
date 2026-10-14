@@ -633,72 +633,106 @@ struct GitPanel: View {
         }
     }
 
-    private func presentCreateReferenceDialog(
-        kind: GitStatusModel.CommitReferenceKind, commit: GitStatusModel.RecentCommit
+    private func presentTagCreate(
+        at commit: GitStatusModel.RecentCommit, initialName: String = "",
+        initialType: GitStatusModel.TagType = .annotated,
+        initialMessage: String = "", initialRemote: String? = nil
     ) {
-        if kind == .branch {
-            presentBranchCreate(at: commit, initialCheckout: false)
-            return
+        guard let window = manager.attachedWindow, let project,
+              manager.selectedProject === project, let context = project.panelContext,
+              model.matchesPanelTarget(context.identity), !model.isBusy else { return }
+        let target = model.actionTarget()
+        let dialog = GitTagDialog(kind: .create(remotes: model.remotes),
+            title: String(localized: "Add Tag", table: "Git"),
+            detail: String(localized:
+                "Repository \(target.scope): \(target.repository)\nCommit \(commit.shortHash): \(commit.subject)",
+                table: "Git"),
+            initialName: initialName, initialType: initialType,
+            initialMessage: initialMessage, initialRemote: initialRemote)
+        let isCurrent: @MainActor () -> Bool = {
+            manager.attachedWindow === window && manager.selectedProject === project
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity)
+                && model.isCurrent(target, requiresStableHead: false)
+                && model.recentCommits.contains(where: { $0.hash == commit.hash })
         }
-        let repository = model.repoRoot
-        let scope = model.currentScope
-        presentGitNameDialog(
-            title: String(localized: "Create Tag at Commit", table: "Git"),
-            detail: String(
-                localized: "Repository \(scope): \(repository)\nCommit \(commit.shortHash): \(commit.subject)",
-                table: "Git"
-            ),
-            placeholder: String(localized: "Tag name", table: "Git"),
-            requiresStableHead: false
-        ) { name in
-            performOperation(.branchMenu) {
-                model.createLightweightTag(
-                    named: name, at: commit,
-                    repository: repository, scope: scope
-                )
+        dialog.alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn, isCurrent() else { return }
+            let name = dialog.name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let type = dialog.selectedType
+            let message = dialog.message.string
+            let remote = dialog.selectedCreateRemote
+            let submit: @MainActor (Bool) -> Void = { replace in
+                performOperation(.branchMenu) {
+                    model.createTag(named: name, at: commit.hash, type: type,
+                        message: message, replace: replace, target: target) { success in
+                        guard isCurrent() else { return }
+                        if success, let remote {
+                            Task { @MainActor in
+                                guard let oid = await model.tagOID(
+                                    named: name, pointingAt: commit.hash, target: target
+                                ), isCurrent() else { return }
+                                presentTagPushWarning(name: name, commitOID: commit.hash,
+                                    oid: oid, remotes: [remote], target: target,
+                                    window: window, isCurrent: isCurrent)
+                            }
+                        } else if !success, !replace,
+                                  model.operation?.gitError?.localizedCaseInsensitiveContains(
+                                    "already exists") == true {
+                            presentTagReplacement(name: name, type: type,
+                                message: message, remote: remote, commit: commit,
+                                target: target, window: window, isCurrent: isCurrent)
+                        }
+                    }
+                }
+            }
+            if model.refsByName["refs/tags/" + name] != nil {
+                presentTagReplacement(name: name, type: type, message: message,
+                    remote: remote, commit: commit, target: target,
+                    window: window, isCurrent: isCurrent)
+            } else {
+                submit(false)
             }
         }
     }
 
-    private func presentGitNameDialog(
-        title: String, detail: String, placeholder: String, requiresStableHead: Bool = true,
-        onCreate: @escaping (String) -> Void
+    private func presentTagReplacement(
+        name: String, type: GitStatusModel.TagType, message: String,
+        remote: String?, commit: GitStatusModel.RecentCommit,
+        target: GitStatusModel.ActionTarget, window: NSWindow,
+        isCurrent: @escaping @MainActor () -> Bool
     ) {
-        guard !model.isBusy, let window = manager.attachedWindow,
-              let project, manager.selectedProject === project,
-              let context = project.panelContext,
-              model.matchesPanelTarget(context.identity) else { return }
-        let target = model.actionTarget()
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = detail
-
-        let field = NSTextField(string: "")
-        field.placeholderString = placeholder
-        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
-        alert.accessoryView = field
-
-        let create = alert.addButton(withTitle: String(localized: "Create", table: "Sidebar"))
-        create.keyEquivalent = "\r"
-        create.isEnabled = false
-        let cancel = alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
-        cancel.keyEquivalent = "\u{1b}"
-
-        let validator = GitNameFieldValidator(button: create)
-        field.delegate = validator
-        alert.window.initialFirstResponder = field
-
-        let handleResponse: (NSApplication.ModalResponse) -> Void = { response in
-            _ = validator
-            guard response == .alertFirstButtonReturn,
-                  manager.attachedWindow === window,
-                  manager.selectedProject === project,
-                  project.matchesPanelTarget(context.identity),
-                  model.isCurrent(target, requiresStableHead: requiresStableHead) else { return }
-            onCreate(field.stringValue)
+        guard isCurrent() else { return }
+        let confirm = NSAlert()
+        confirm.messageText = String(localized: "Tag already exists", table: "Git")
+        confirm.informativeText = name
+        confirm.addButton(withTitle: String(localized: "Replace Existing Tag", table: "Git"))
+        confirm.addButton(withTitle: String(localized: "Choose Another Name", table: "Git"))
+        confirm.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+        confirm.beginSheetModal(for: window) { answer in
+            guard isCurrent() else { return }
+            switch answer {
+            case .alertFirstButtonReturn:
+                performOperation(.branchMenu) {
+                    model.createTag(named: name, at: commit.hash, type: type,
+                        message: message, replace: true, target: target) { success in
+                        guard success, let remote, isCurrent() else { return }
+                        Task { @MainActor in
+                            guard let oid = await model.tagOID(
+                                named: name, pointingAt: commit.hash, target: target
+                            ), isCurrent() else { return }
+                            presentTagPushWarning(name: name, commitOID: commit.hash,
+                                oid: oid, remotes: [remote], target: target,
+                                window: window, isCurrent: isCurrent)
+                        }
+                    }
+                }
+            case .alertSecondButtonReturn:
+                presentTagCreate(at: commit, initialName: name,
+                    initialType: type, initialMessage: message, initialRemote: remote)
+            default: break
+            }
         }
-
-        alert.beginSheetModal(for: window, completionHandler: handleResponse)
     }
 
     private func presentBranchAction(
@@ -925,6 +959,127 @@ struct GitPanel: View {
                     performCheckout(true)
                 default: break
                 }
+            }
+        }
+    }
+
+    private func presentTagAction(
+        _ reference: GitStatusModel.RecentCommit.Reference,
+        commit: GitStatusModel.RecentCommit,
+        action: RecentCommitsView.TagAction
+    ) {
+        guard reference.kind == .tag, let window = manager.attachedWindow,
+              let project, manager.selectedProject === project,
+              let context = project.panelContext, model.matchesPanelTarget(context.identity),
+              !model.isBusy, let selected = model.refsByName["refs/tags/" + reference.name]
+        else { return }
+        let name = reference.name
+        let oid = selected.oid
+        let target = model.actionTarget()
+        let isCurrent: @MainActor () -> Bool = {
+            manager.attachedWindow === window && manager.selectedProject === project
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity)
+                && model.isCurrent(target, requiresStableHead: false)
+                && model.refsByName["refs/tags/" + name]?.oid == oid
+        }
+
+        switch action {
+        case .details:
+            guard selected.objectType == "tag" else { return }
+            Task { @MainActor in
+                guard let details = await model.tagDetails(named: name, target: target),
+                      isCurrent() else { return }
+                let verification: String
+                switch details.verification {
+                case .unsigned: verification = String(localized: "Unsigned", table: "Git")
+                case .valid: verification = String(localized: "Signature Verified", table: "Git")
+                case .unverified: verification = String(localized: "Signature Unverified", table: "Git")
+                }
+                let alert = NSAlert()
+                alert.messageText = String(localized: "Tag Details", table: "Git")
+                alert.informativeText = name
+                let body = [
+                    String(localized: "Tag Object", table: "Git") + ": " + details.objectOID,
+                    String(localized: "Commit", table: "Git") + ": " + details.commitOID,
+                    String(localized: "Tagger", table: "Git") + ": " + details.tagger,
+                    String(localized: "Signature", table: "Git") + ": " + verification,
+                    "", details.message
+                ].joined(separator: "\n")
+                let text = NSTextView()
+                text.isEditable = false
+                text.isSelectable = true
+                text.string = body
+                text.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+                let scroll = NSScrollView()
+                scroll.documentView = text
+                scroll.hasVerticalScroller = true
+                scroll.frame = NSRect(x: 0, y: 0, width: 480, height: 190)
+                alert.accessoryView = scroll
+                alert.addButton(withTitle: String(localized: "Close", table: "Sidebar"))
+                alert.beginSheetModal(for: window) { _ in }
+            }
+        case .delete:
+            let dialog = GitTagDialog(kind: .delete(remotes: model.remotes),
+                title: String(localized: "Delete Tag…", table: "Git"), detail: name)
+            dialog.alert.beginSheetModal(for: window) { answer in
+                guard answer == .alertFirstButtonReturn, isCurrent() else { return }
+                performOperation(.branchMenu) {
+                    model.deleteTag(name, fromRemote: dialog.selectedDeleteRemote, target: target)
+                }
+            }
+        case .push:
+            let preferred = model.remotes.contains("origin") ? "origin" : model.remotes.first
+            let detail = model.remotes.isEmpty
+                ? String(localized: "No Git remote is configured", table: "Git") : name
+            let dialog = GitTagDialog(kind: .push(remotes: model.remotes, preferred: preferred),
+                title: String(localized: "Push Tag…", table: "Git"), detail: detail)
+            dialog.alert.beginSheetModal(for: window) { answer in
+                guard answer == .alertFirstButtonReturn, isCurrent() else { return }
+                presentTagPushWarning(name: name, commitOID: commit.hash, oid: oid,
+                    remotes: dialog.selectedPushRemotes, target: target,
+                    window: window, isCurrent: isCurrent)
+            }
+        case .archive:
+            presentArchiveDialog(reference: "refs/tags/" + name, objectOID: oid,
+                target: target, context: context, window: window, isCurrent: isCurrent)
+        }
+    }
+
+    private func presentTagPushWarning(
+        name: String, commitOID: String, oid: String, remotes: [String],
+        target: GitStatusModel.ActionTarget, window: NSWindow,
+        isCurrent: @escaping @MainActor () -> Bool
+    ) {
+        guard !remotes.isEmpty, isCurrent() else { return }
+        let push: @MainActor () -> Void = {
+            guard isCurrent() else { return }
+            performOperation(.branchMenu) {
+                model.pushTag(name, to: remotes, target: target, selectedOID: oid)
+            }
+        }
+        Task { @MainActor in
+            let unknown = await model.tagRemotesWithoutCommit(
+                commitOID, selected: remotes, target: target)
+            guard isCurrent() else { return }
+            guard !settings.gitAlwaysProceedPushTag, let unknown, !unknown.isEmpty else {
+                push()
+                return
+            }
+            let alert = NSAlert()
+            alert.messageText = String(localized: "Tag Commit May Not Be on the Remote", table: "Git")
+            alert.informativeText = String(localized:
+                "The selected commit was not found in locally tracked branches of: \(unknown.joined(separator: ", ")). Push the tag anyway?",
+                table: "Git")
+            let always = NSButton(checkboxWithTitle:
+                String(localized: "Always Proceed", table: "Git"), target: nil, action: nil)
+            alert.accessoryView = always
+            alert.addButton(withTitle: String(localized: "Proceed to Push", table: "Git"))
+            alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+            alert.beginSheetModal(for: window) { answer in
+                guard answer == .alertFirstButtonReturn, isCurrent() else { return }
+                if always.state == .on { settings.gitAlwaysProceedPushTag = true }
+                push()
             }
         }
     }
@@ -1369,13 +1524,20 @@ struct GitPanel: View {
                             remoteAction: { ref, commit, action in
                                 presentRemoteBranchAction(ref, commit: commit, action: action)
                             },
+                            tagAction: { ref, commit, action in
+                                presentTagAction(ref, commit: commit, action: action)
+                            },
+                            isAnnotatedTag: model.isAnnotatedTag,
                             canFetchRemoteBranch: { ref in
                                 guard let selected = model.remoteBranch(named: ref.name) else { return false }
                                 return model.branches.contains(selected.branch)
                                     && model.branch != selected.branch
                             },
-                            createReference: { commit, kind in
-                                presentCreateReferenceDialog(kind: kind, commit: commit)
+                            createBranch: { commit in
+                                presentBranchCreate(at: commit, initialCheckout: false)
+                            },
+                            addTag: { commit in
+                                presentTagCreate(at: commit)
                             },
                             canActOnCommit: !model.isBusy && model.repositoryOperation == nil,
                             canDropCommit: model.canDrop,
