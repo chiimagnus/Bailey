@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P4-T6"
+current_task_id = "P4-T7"
 
 [[tasks]]
 id = "P1-T1"
@@ -93,15 +93,15 @@ note = "真实 Windows SSH 参与的 make test 179/179、0 skip；Tag 集成 7/7
 [[tasks]]
 id = "P4-T6"
 title = "历史文件修订、比较与打开菜单"
-status = "in_progress"
+status = "completed"
 plan = "plan-p4.md#p4-t6"
-commit = ""
-note = ""
+commit = "e5a64fd"
+note = "make doctor; Windows SSH included: 187/187 0 skipped 0 failures; make build codesign; official App installed without restarting; binary rename/readonly/session/checkout index worktree verified"
 
 [[tasks]]
 id = "P4-T7"
 title = "工作区文件、目录与分组右键菜单"
-status = "pending"
+status = "in_progress"
 plan = "plan-p4.md#p4-t7"
 commit = ""
 note = ""
