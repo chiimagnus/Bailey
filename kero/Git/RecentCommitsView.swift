@@ -53,22 +53,30 @@ struct RecentCommitsView: View {
     var body: some View {
         let _ = themeChanges.revision
         let graph = CommitGraphLayout(commits: commits)
-        let gutter = max(41, 37 * fontScale + CGFloat(graph.laneCount - 1) * 22 * fontScale)
+        let gutter = CommitGraphRails.gutter(lanes: graph.laneCount, scale: fontScale)
 
-        LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(commits.enumerated()), id: \.element.id) { index, commit in
-                let expanded = expandedCommitIDs.contains(commit.id)
-                let isLast = index == commits.count - 1
-                VStack(alignment: .leading, spacing: 0) {
-                    commitRow(commit, graph: graph.rows[index], gutter: gutter, expanded: expanded)
-                    if expanded {
-                        commitFiles(commit, rails: graph.rows[index].bottomRails,
-                                    gutter: gutter)
+        LazyVStack(spacing: 0) {
+            ScrollView(.horizontal) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(commits.enumerated()), id: \.element.id) { index, commit in
+                        let expanded = expandedCommitIDs.contains(commit.id)
+                        VStack(alignment: .leading, spacing: 0) {
+                            commitRow(commit, graph: graph.rows[index], gutter: gutter, expanded: expanded)
+                            if expanded {
+                                commitFiles(commit, rails: graph.rows[index].bottomRails,
+                                            gutter: gutter)
+                            }
+                        }
                     }
                 }
-                .onAppear {
-                    if isLast { requestMoreIfNeeded(after: commit.id) }
-                }
+                .containerRelativeFrame(.horizontal)
+                .frame(minWidth: gutter + 150 * fontScale, alignment: .leading)
+            }
+            if hasMoreCommits {
+                Color.clear.frame(height: 1)
+                    .onAppear {
+                        if let id = commits.last?.id { requestMoreIfNeeded(after: id) }
+                    }
             }
         }
         .onChange(of: commits.last?.id) {
@@ -94,20 +102,24 @@ struct RecentCommitsView: View {
             depth: 0, scale: fontScale, selected: expanded,
             leadingInset: gutter, trailingInset: TreeRowStyle.contentInset,
             showsGuides: false,
-            height: max(44, ceil(50 * fontScale))
+            height: max(36, ceil(38 * fontScale))
         ) { _, layout in
-            VStack(alignment: .leading, spacing: 3 * fontScale) {
-                HStack(spacing: 6 * fontScale) {
+            VStack(alignment: .leading, spacing: 2 * fontScale) {
+                HStack(spacing: 4 * fontScale) {
                     Button { toggle(commit) } label: {
-                        Text(verbatim: commit.subject)
-                            .font(.system(size: 12.5 * fontScale))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                        ScrollView(.horizontal) {
+                            Text(verbatim: commit.subject)
+                                .font(.system(size: 12.5 * fontScale))
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                        .scrollIndicators(.hidden)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.plain)
                     .layoutPriority(1)
                     .help(commit.subject)
+                    .accessibilityLabel(commit.subject)
                     .accessibilityValue(expanded
                         ? String(localized: "Expanded", table: "Git")
                         : String(localized: "Collapsed", table: "Git"))
@@ -118,7 +130,7 @@ struct RecentCommitsView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                HStack(alignment: .firstTextBaseline, spacing: 8 * fontScale) {
+                HStack(alignment: .firstTextBaseline, spacing: 6 * fontScale) {
                     Button { copy(commit.hash) } label: {
                         Text(verbatim: commit.shortHash)
                             .font(.system(size: 10.5 * fontScale, design: .monospaced))
@@ -302,7 +314,7 @@ struct RecentCommitsView: View {
         _ commit: Commit, rails: [CommitGraphLayout.Rail],
         gutter: CGFloat
     ) -> some View {
-        let filesInset = gutter + 17 * fontScale
+        let filesInset = gutter + 11 * fontScale
         if commit.files.isEmpty {
             TreeRowSurface(
                 depth: 0, scale: fontScale, hoverEnabled: false, leadingInset: filesInset
@@ -384,13 +396,19 @@ struct RecentCommitsView: View {
 
 private struct CommitGraphRails: View {
     private let themeChanges = Theme.changes
+    private static let laneSpacing: CGFloat = 13
+    private static let firstLaneX: CGFloat = 12
+
+    static func gutter(lanes: Int, scale: CGFloat) -> CGFloat {
+        (firstLaneX + CGFloat(max(0, lanes - 1)) * laneSpacing + 18) * scale
+    }
 
     var row: CommitGraphLayout.Row? = nil
     var bottomRails: [CommitGraphLayout.Rail] = []
     let fontScale: CGFloat
 
     private func laneX(_ lane: Int) -> CGFloat {
-        (16 + CGFloat(lane) * 22) * fontScale
+        (Self.firstLaneX + CGFloat(lane) * Self.laneSpacing) * fontScale
     }
 
     private func color(_ index: Int) -> Color {
@@ -444,11 +462,11 @@ private struct CommitGraphRails: View {
                     }
                     context.stroke(
                         path, with: .color(color(linkColor)), style: StrokeStyle(
-                            lineWidth: 2 * fontScale, lineCap: .round, lineJoin: .round
+                            lineWidth: 1.6 * fontScale, lineCap: .round, lineJoin: .round
                         )
                     )
                 }
-                let radius = 4.6 * fontScale
+                let radius = 3.6 * fontScale
                 let x = laneX(row.node.lane)
                 context.fill(
                     Path(ellipseIn: CGRect(x: x - radius, y: middle - radius,
@@ -461,7 +479,7 @@ private struct CommitGraphRails: View {
                     path.move(to: CGPoint(x: laneX(rail.lane), y: 0))
                     path.addLine(to: CGPoint(x: laneX(rail.lane), y: size.height))
                     context.stroke(path, with: .color(color(rail.color)),
-                                   lineWidth: 2 * fontScale)
+                                   lineWidth: 1.6 * fontScale)
                 }
             }
         }

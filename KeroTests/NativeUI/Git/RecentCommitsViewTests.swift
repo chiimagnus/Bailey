@@ -33,6 +33,148 @@ final class RecentCommitsViewTests: XCTestCase {
         settle()
     }
 
+    private func horizontallyScrollableViews(in root: NSView) -> [NSScrollView] {
+        let own = (root as? NSScrollView).map { [$0] } ?? []
+        return own + root.subviews.flatMap(horizontallyScrollableViews)
+    }
+
+    private func assertHorizontalScroll(
+        in root: NSView, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let scroll = horizontallyScrollableViews(in: root).first {
+            ($0.documentView?.frame.width ?? 0) > $0.contentView.bounds.width + 60
+        }
+        guard let scroll else {
+            XCTFail("Expected horizontally scrollable content", file: file, line: line)
+            return
+        }
+        let before = scroll.contentView.bounds.minX
+        scroll.contentView.scroll(to: NSPoint(x: before + 50, y: 0))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        XCTAssertGreaterThan(scroll.contentView.bounds.minX, before + 20,
+                             "Horizontal scrolling must actually move the content",
+                             file: file, line: line)
+    }
+
+    private func hostHistory(
+        _ commits: [GitStatusModel.RecentCommit], selection: GraphSelection,
+        height: CGFloat = 200, viewMode: GitViewMode = .list
+    ) -> NSWindow {
+        let width: CGFloat = 260
+        let window = NSWindow(
+            contentRect: NSRect(x: -1200, y: -1200, width: width, height: height),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: RecentCommitsView(
+            commits: commits,
+            expandedCommitIDs: Binding(get: { selection.expanded }, set: { selection.expanded = $0 }),
+            collapsedFolders: Binding(get: { selection.folders }, set: { selection.folders = $0 }),
+            viewMode: viewMode, fontScale: 1,
+            hasMoreCommits: false, isLoadingMore: false, loadMore: { false },
+            openDiff: { _, _ in }, canSwitchBranch: true,
+            switchBranch: { _ in }, createReference: { _, _ in }
+        ).frame(width: width, height: height, alignment: .topLeading))
+        window.orderFront(nil)
+        settle()
+        return window
+    }
+
+    func testLongCommitMessageCanScrollHorizontallyInNarrowSidebar() {
+        let selection = GraphSelection()
+        let longSubject = "修复远程工作区同步并保留所有 Git 分支的真实关系 " + String(repeating: "very-long-commit-message-", count: 12)
+        let commit = GitStatusModel.RecentCommit(
+            hash: "a", shortHash: "a", subject: longSubject,
+            author: "Developer", date: .now, parentHashes: [],
+            references: [.init(kind: .currentBranch, name: "main")], files: []
+        )
+        let window = hostHistory([commit], selection: selection, height: 110)
+        defer { window.close() }
+        assertHorizontalScroll(in: window.contentView!)
+    }
+
+    func testManyParallelBranchesAllowGraphWideHorizontalScroll() {
+        let selection = GraphSelection()
+        func commit(_ hash: String, parents: [String] = [], current: Bool = false)
+            -> GitStatusModel.RecentCommit {
+            .init(hash: hash, shortHash: hash, subject: hash,
+                  author: "Developer", date: .now, parentHashes: parents,
+                  references: current ? [.init(kind: .currentBranch, name: "main")] : [],
+                  files: [])
+        }
+        let commits = (0..<16).map { commit("branch-\($0)", parents: ["root"]) }
+            + [commit("main", parents: ["root"], current: true), commit("root")]
+        let window = hostHistory(commits, selection: selection, height: 320)
+        defer { window.close() }
+        assertHorizontalScroll(in: window.contentView!)
+    }
+
+    func testExpandedHistoryKeepsLongFolderPathsScrollable() {
+        let selection = GraphSelection()
+        let hash = "a"
+        selection.expanded.insert(hash)
+        let commit = GitStatusModel.RecentCommit(
+            hash: hash, shortHash: hash, subject: "Short title",
+            author: "Developer", date: .now, parentHashes: [],
+            references: [], files: [
+                .init(status: "M",
+                      path: String(repeating: "very-long-folder/", count: 9) + "file.swift",
+                      originalPath: nil)
+            ]
+        )
+        let window = hostHistory([commit], selection: selection, viewMode: .tree)
+        defer { window.close() }
+        assertHorizontalScroll(in: window.contentView!)
+    }
+
+    func testHorizontalGraphScrollDoesNotEagerlyPageOffscreenHistory() {
+        let selection = GraphSelection()
+        let commits: [GitStatusModel.RecentCommit] = (0..<60).map { index in
+            .init(hash: "hash-\(index)", shortHash: "hash-\(index)",
+                  subject: "Commit \(index)", author: "Developer", date: .now,
+                  parentHashes: index < 59 ? ["hash-\(index + 1)"] : [],
+                  references: index == 0
+                    ? [.init(kind: .currentBranch, name: "main")] : [],
+                  files: [])
+        }
+        let width: CGFloat = 260
+        let height: CGFloat = 190
+        var pageRequests = 0
+        let window = NSWindow(
+            contentRect: NSRect(x: -1200, y: -1200, width: width, height: height),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: ScrollView(.vertical) {
+            RecentCommitsView(
+                commits: commits,
+                expandedCommitIDs: Binding(get: { selection.expanded }, set: { selection.expanded = $0 }),
+                collapsedFolders: Binding(get: { selection.folders }, set: { selection.folders = $0 }),
+                viewMode: .list, fontScale: 1,
+                hasMoreCommits: true, isLoadingMore: false,
+                loadMore: { pageRequests += 1; return true },
+                openDiff: { _, _ in }, canSwitchBranch: true,
+                switchBranch: { _ in }, createReference: { _, _ in }
+            )
+        }.frame(width: width, height: height))
+        window.orderFront(nil)
+        settle()
+        defer { window.close() }
+        XCTAssertEqual(pageRequests, 0, "Offscreen commits must not trigger history pagination")
+        guard let verticalScroll = horizontallyScrollableViews(in: window.contentView!).first(where: {
+            ($0.documentView?.frame.height ?? 0) > $0.contentView.bounds.height + 200
+        }), let document = verticalScroll.documentView else {
+            XCTFail("Expected the vertical Git history scroller")
+            return
+        }
+        verticalScroll.contentView.scroll(to: NSPoint(
+            x: 0, y: document.frame.height - verticalScroll.contentView.bounds.height
+        ))
+        verticalScroll.reflectScrolledClipView(verticalScroll.contentView)
+        settle()
+        XCTAssertEqual(pageRequests, 1, "Reaching the last visible row must still page history")
+    }
+
     func testMergedHistoryOpensItsRealFileAfterExpansion() {
         let selection = GraphSelection()
         let files: [GitStatusModel.RecentCommit.FileChange] = [
@@ -82,7 +224,7 @@ final class RecentCommitsViewTests: XCTestCase {
         settle()
         click(NSPoint(x: 95, y: height - 18), in: window)
         XCTAssertTrue(selection.expanded.contains("merge"))
-        click(NSPoint(x: 125, y: height - 64), in: window)
+        click(NSPoint(x: 125, y: height - 38 - TreeRowStyle.rowHeight(1) / 2), in: window)
         XCTAssertEqual(diffs, ["merge:Sources/file.swift"])
         window.close()
     }
