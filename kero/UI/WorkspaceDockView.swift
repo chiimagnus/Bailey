@@ -441,6 +441,7 @@ private struct DockTabGroupView: View {
                 .padding(.leading, 4)
                 .padding(.trailing, 2)
             }
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             .frame(maxWidth: maxWidth, alignment: .leading)
             .fixedSize(horizontal: maxWidth != nil, vertical: false)
             .onChange(of: group.selected) { _, selected in

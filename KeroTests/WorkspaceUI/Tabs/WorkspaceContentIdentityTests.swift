@@ -43,6 +43,85 @@ final class WorkspaceContentIdentityTests: XCTestCase {
         return (root, file)
     }
 
+    func testDockTabStripOnlyBouncesWhenTabsOverflowAfterResizing() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kero-tab-bounce-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let snapshots = SessionStore.load()
+        let histories = TerminalHistoryStore.load()
+        defer { SessionStore.save(snapshots); TerminalHistoryStore.save(histories) }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([root])
+        let file = root.appendingPathComponent("a.swift")
+        try "let value = 1\n".write(to: file, atomically: true, encoding: .utf8)
+        manager.openFile(file.path)
+        let project = try XCTUnwrap(manager.selectedProject)
+        let pane = try XCTUnwrap(project.selectedTab)
+        let sourceGroup = try XCTUnwrap(project.dock.group(containing: .tab(pane.id)))
+        let destinationGroup = try XCTUnwrap(project.dock.group(containing: .files))
+        XCTAssertTrue(project.dock.move(.files, into: sourceGroup.id))
+        XCTAssertTrue(project.dock.move(.tab(pane.id), into: destinationGroup.id))
+
+        let window = NSWindow(
+            contentRect: NSRect(x: -2000, y: -2000, width: 1700, height: 440),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: WorkspaceDockView(
+            manager: manager, git: GitStatusModel()
+        ))
+        window.contentView = host
+        window.orderFront(nil)
+
+        func tabStrip() -> NSScrollView? {
+            func scrolls(in view: NSView) -> [NSScrollView] {
+                let own = (view as? NSScrollView).map { [$0] } ?? []
+                return own + view.subviews.flatMap(scrolls)
+            }
+            return scrolls(in: host)
+                .filter { $0.bounds.height > 10 && $0.bounds.height < 30 }
+                .max { ($0.documentView?.frame.width ?? 0)
+                    < ($1.documentView?.frame.width ?? 0) }
+        }
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            guard let scroll = tabStrip() else { return false }
+            return (scroll.documentView?.frame.width ?? 0) > 100
+                && scroll.contentView.bounds.width > 140
+        }
+        let wide = try XCTUnwrap(tabStrip())
+        XCTAssertLessThanOrEqual(
+            (wide.documentView?.frame.width ?? 0) - wide.contentView.bounds.width, 1
+        )
+        XCTAssertEqual(wide.horizontalScrollElasticity, .none,
+                       "Short tab strips must not bounce horizontally")
+
+        window.setContentSize(NSSize(width: 640, height: 440))
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            guard let scroll = tabStrip() else { return false }
+            return (scroll.documentView?.frame.width ?? 0) - scroll.contentView.bounds.width > 50
+        }
+        let narrow = try XCTUnwrap(tabStrip())
+        let before = narrow.contentView.bounds.minX
+        narrow.contentView.scroll(to: NSPoint(x: before + 35, y: 0))
+        narrow.reflectScrolledClipView(narrow.contentView)
+        XCTAssertGreaterThan(narrow.contentView.bounds.minX, before + 15,
+                             "Overflowing tabs must remain horizontally scrollable")
+
+        window.setContentSize(NSSize(width: 1700, height: 440))
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            guard let scroll = tabStrip() else { return false }
+            return (scroll.documentView?.frame.width ?? 0) - scroll.contentView.bounds.width <= 1
+        }
+        XCTAssertEqual(try XCTUnwrap(tabStrip()).horizontalScrollElasticity, .none,
+                       "Tabs must stop bouncing when the panel widens again")
+    }
+
     func testFileDiffFileReturnsToSameEditorAndDiffDocument() async throws {
         let (root, fileURL) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
