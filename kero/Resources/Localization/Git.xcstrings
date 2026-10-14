@@ -914,16 +914,6 @@
         }
       }
     },
-    "Show Tagged Commit" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "定位标签对应的提交"
-          }
-        }
-      }
-    },
     "Switch to This Branch" : {
       "localizations" : {
         "zh-Hans" : {

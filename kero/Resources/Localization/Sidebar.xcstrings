@@ -218,7 +218,16 @@
         }
       }
     },
-    "Branch name" : {},
+    "Branch name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分支名称"
+          }
+        }
+      }
+    },
     "Cancel" : {
       "localizations" : {
         "zh-Hans" : {
@@ -481,7 +490,16 @@
         }
       }
     },
-    "Create New Branch" : {},
+    "Create New Branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建新分支"
+          }
+        }
+      }
+    },
     "Create New Branch…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -643,7 +661,16 @@
         }
       }
     },
-    "Dismiss Git Error" : {},
+    "Dismiss Git Error" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭 Git 错误"
+          }
+        }
+      }
+    },
     "Dismiss Git Result" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -655,7 +682,16 @@
         }
       }
     },
-    "Enter a name for the new branch." : {},
+    "Enter a name for the new branch." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入新分支的名称。"
+          }
+        }
+      }
+    },
     "Expanded" : {
       "localizations" : {
         "zh-Hans" : {
