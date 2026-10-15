@@ -43,6 +43,71 @@
 
 ## 发现项
 
+## 发现 F-21
+
+- 任务：`P4-T8`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Git/GitStatusModel.swift:2099`
+- 摘要：`Stash Pop/Drop/Branch 只用 selector 当前 OID 验证旧菜单；同 OID 不同 reflog 记录在外部插入后可使旧 selector 错指另一条记录且 OID 比对依然通过`
+- 风险：`用户确认删除或弹出 stash@{1} 的旧记录，实际删除另一条同 SHA 的 stash reflog，违反精确选择和已知身份保护`
+- 预期修复：`复用现有 stash list 快照及 parser，确认打开时捕获列表，在首个 Git 写入前重新读取整个 reflog 列表并验证不变，取代不足以辨认条目的单 OID 检查；Apply 固定 OID 保持不变`
+- 验证：`真实 Git stash store 同 SHA 经中间项 drop 得到相邻重复记录，外部插入后原 selector OID 不变却指向另一条；GitStashActionTests Red-Green、NativeUI 相邻测试、完整 Windows SSH make test 和 build`
+- 解决证据：`7c7ddc6；真实同 SHA 不同 stash reflog 条目挤占 selector、旧 Git drop 错删 Red (/tmp/kero-p4-f21-red.log)；整列表快照执行前复验后 GitStashActionTests 10/10、GitStatusModelTests 10/10、GitStashDialogTests 2/2 Green。`
+
+
+## 发现 F-20
+
+- 任务：`P4-T7`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Git/GitStatusModel.swift:512`
+- 摘要：`Git 文件行的 isCurrent 只按仓库路径检查，外部 CLI 切分支并刷新后，旧 CHANGES 行仍能 Stage 新分支的同名文件`
+- 风险：`过期右键与延迟回调将另一分支文件加入 index，可能影响随后的提交或 Revert/Discard 决策，违背菜单目标身份绑定`
+- 预期修复：`让 Git status Entry 在快照发布时携带本次分支和 HEAD 身份，在现有 isCurrent/validate 最小公共位置校验，拒绝跨分支/HEAD 的旧行，不加新的状态机`
+- 验证：`真实仓库 main→other 的旧行 Stage Red-Green、相邻 GitWorkspaceActionTests 和 GitStatusModelTests、Windows SSH 完整测试与构建`
+- 解决证据：`f4f8cc0；旧文件行 main→other Stage 实际误写 index 测试 Red；修复共享 isCurrent(entry) 后 GitWorkspaceActionTests 5/5 与 GitStatusModelTests 10/10 Green；旧测试更新为显式拒绝过期行并允许重新选择当前行。`
+
+
+## 发现 F-19
+
+- 任务：`P4-T7`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`kero/Git/GitStatusModel.swift:2907`
+- 摘要：`Porcelain v2 同路径既有 staged 删除 D. 又有 untracked ?? 时，parseStatus 仅按 path 去重，吞掉未跟踪文件 CHANGES 行和对应 Ignore 菜单`
+- 风险：`git rm --cached 后磁盘仍在的文件在未跟踪分组中消失，不能从 P4 文件右键忽略，Stage/Discard 操作分组丢失`
+- 预期修复：`按 Git 状态所在分组保留同路径的 staged 与 untracked 两条记录；各组 path 身份仍唯一，不新增第二套 Git 状态来源`
+- 验证：`真实 git rm --cached 仓库 status porcelain 对照；GitStatusModelTests 或 GitWorkspaceActionTests Red-Green；原生 Git CHANGES 菜单、make test、make build`
+- 解决证据：`f4f8cc0；真实 git rm --cached 得到 D. 与 ? 同名两条 NUL 状态；/tmp/kero-p4-deeper-red-GitWorkspaceActionTests.log Red、/tmp/kero-p4-deeper-green2-GitWorkspaceActionTests.log 5/5 Green。`
+
+
+## 发现 F-18
+
+- 任务：`P4-T1`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Git/GitStatusModel.swift:2150`
+- 摘要：`Squash Merge 成功后使用全索引 diff --cached 断言并执行普通 git commit，导致预先暂存的无关文件被误提交，甚至 already up to date 时也能产生非预期提交；Remote Pull Squash 同受影响`
+- 风险：`改变与所选 Merge/Pull 无关的用户暂存记录和 Git HEAD，提交不属于合并的内容并清空其暂存态`
+- 预期修复：`在 Squash 自动提交执行前核实初始 index 无预先暂存变更，若不干净则在首次 Git 修改前明确拒绝自动 Squash；保持正常 Squash、No Commit 和失败路径不变，复用同一 perform 入口`
+- 验证：`临时真实 Git 仓库复现已有 staged 和 already-up-to-date 两情况，GitCommitActionTests 与 GitRemoteBranchActionTests Red-Green，Windows SSH 全量 make test 和 make build`
+- 解决证据：`f4f8cc0；git merge --squash with unrelated staged and already-up-to-date cases Red then Green；/tmp/kero-p4-deeper-green2-GitCommitActionTests.log 13/13；/tmp/kero-p4-deeper-green2-GitRemoteBranchActionTests.log 15/15。`
+
+
+## 发现 F-17
+
+- 任务：`P4-T7`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`kero/Git/GitPanel.swift:1775`
+- 摘要：`已跟踪的修改文件仍显示添加到 .gitignore，但 Git 不会忽略已跟踪文件，形成成功保存却无实际忽略效果的无效操作`
+- 风险：`普通 CHANGES 中已跟踪文件点击 Ignore 后会新增一条无效规则，仍保持 M 状态，使用户误以为文件已被忽略，污染 .gitignore`
+- 预期修复：`在现有 Git 文件菜单入口只对真正未跟踪（?）行展示 Ignore；目录只有包含未跟踪文件才展示，intent-to-add 已占用索引同样不应提供无效操作；不引入第二套 Ignore 实现`
+- 验证：`真实临时 Git 仓库验证 tracked M / untracked ?? 的 check-ignore 差异；NativeUI 原生文件右键菜单 Red→Green；make test；make build`
+- 解决证据：`cd4187b: 原生真实 Git 菜单测试先 Red（tracked 无效 Ignore），再 Green 5/5；Windows SSH 全量 KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test：224/224，0 failure，0 skipped；make build + codesign --verify --deep --strict 通过；/Applications/Kero.app 整包替换并严格验签通过，不重启用户进程；git diff --check 通过。`
+
+
 ## 发现 F-16
 
 - 任务：`P4-T3`
@@ -349,3 +414,56 @@
 - **最终回归**：`KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test` → **223/223，0 失败、0 跳过**（`/tmp/kero-p4-pr14-post-audit-f16-final-full-windows.log`，586.008 秒），涵盖真实 Windows SSH、Git 面板自动刷新、历史提交和图谱、Remote/Tag/Stash、交互式 Rebase、文件／目录和原生菜单。关键扩展测试 `GitStatusModelTests.testTransientGitFailurePreservesLastRepositorySnapshotAndRecovers` 也在最终全量中通过。
 - **构建和安装**：`make doctor` Xcode 27.0；`make build`、`codesign --verify --deep --strict`、同盘完整 App 替换与安装后的签名及可执行文件哈希对照通过。安装哈希 `4a2ec5a40b115fd374f55a5847f9df20e56b338a92685c3c288a199043098ec0`，正式 PID69132 未退出/重启，普通配置未改；新版等待用户下次自行重启后生效。
 - **范围边界**：没有为了所谓“安全围栏精简”删除必要的用户数据保护；计划点名的旧 Git 菜单/Ref/Stash 双轨入口在当前源码不存在，`stashCount` 只是派生展示值，不是旧缓存。PR #14 已在本次审查前合并，这次审后修复是本地后续改动，尚未另外推送或发布 PR。审查和当前通过的回归不能逻辑上保证未来所有环境均无缺陷；无其它已复现的 P4 阻断项。
+
+## 2026-10-15 独立逐提交复审（本轮）
+
+审查只以 `idea.md`、`todo.toml`、`plan-p4.md`、当前 `AGENTS.md`／owner 文档、真实 `git show`、CodeGraph 逐字符源码与调用关系、临时 Git 仓库及本轮实际 XCTest 为依据；旧 audit 的 findings、Gate 和叙述不作为结论证据。范围限定 P4；随后 `ca183bf` 和 `a266595` 等 Git 修改按当前调用链核对，避免只审历史 SHA 而忽略最终版本。
+
+| todo 任务及其提交 | 当前生产接线及可观察结果 | 当前测试和审阅结论 |
+| --- | --- | --- |
+| P4-T1 `a5f1c91` | `RecentCommitsView` 的 Commit 菜单 → `GitPanel.presentCommitDialog` → `GitStatusModel.actOnCommit/perform` → backend Git；Checkout、Cherry Pick、Revert、Merge 和冲突保留由同一入口完成 | `GitCommitActionTests`、`GitCommitDialogTests` 的临时仓库 HEAD/index/worktree、原生确认与冲突断言；接线有效 |
+| P4-T2 `ffd3194` | Rebase/Soft-Mixed-Hard Reset/合法 Drop 仍经所选 Commit；交互式由 `Project.newInteractiveGitSession` 启动选定机器的新原生终端 | `GitCommitActionTests`、`GitInteractiveRebaseTests`；本轮 Windows SSH 独立 PTY 已通过，不能以仅发出启动事件代替完成 |
+| P4-T3 `c15d72c` | 本地 Branch 的 Create/Rename/Delete/Push 与 ZIP/TAR Archive 通过 `GitPanel.presentBranchCreate/presentBranchAction` 和 `GitStatusModel`，保留所选 Ref 对象身份 | `GitBranchActionTests`、`GitBranchDialogTests`、`GitWorkspaceSSHTests`；无遗留 `createReference` 兼容分支 |
+| P4-T4 `9e25f51` | 远端 Badge 与折叠 Ref 的 Checkout/Fetch/Merge/Pull/Delete/Archive 经 `presentRemoteBranchAction` 和 model 现有执行器；同名本地 Ref、远端范围和 Force 在现行源码中独立核对 | `GitRemoteBranchActionTests`、`GitRemoteBranchDialogTests`、真实 SSH；后续已修复的远端 Fetch 过期 Ref 检查属于最终源码 |
+| P4-T5 `11d9e33` | Tag Annotated/Lightweight、Details、Delete、Push 与 Archive 经 `presentTagCreate/presentTagAction/presentTagPushWarning`、`createTag/tagDetails/deleteTag/pushTag` | `GitTagActionTests`、`GitTagDialogTests`、Settings tests；旧 Tag 创建回调已删除；查询失败时停止并报错是后续修复后的真实语义，计划已同步 |
+| P4-T6 `e5a64fd` | `RecentCommitsView.changedFile` → `GitPanel.handleHistoricalFile` → `Project` 的原生 FileTab / `DiffTab` / `GitHistoricalFileLocator`；Reset File 经真实 Git index 和工作区覆写 | `GitHistoryFileTests`、`DiffTabTests`、`SessionStoreTests`；只读文本、二进制和保存/过期检查非无效围栏 |
+| P4-T7 `af16b18` | `GitPanel.changeList` → `GitEntryRow.menu`/`directoryMenu`、Uncommitted 表单 → `GitStatusModel`，Ignore 由 `Project.ignoreGitPaths` 写入现有原生 `.gitignore` FileTab | 发现 F-17：对已跟踪／intent-to-add 行展示无效 Ignore。独立 Git 复现和 NativeUI Red 后按 Git `?` 精确资格修复；定向回归 5/5 Green |
+| P4-T8 `111f3cd` | `GitPanel.stashRow/presentStashDialog` → `GitStatusModel.actOnStash`，同一 status 快照派生 Stash count，Pop/Drop/Branch 检查 selector+OID | `GitStashActionTests`、`GitStashDialogTests`；无无参盲 Pop 或双份独立 stashCount 查询 |
+| P4-T9 `bcd3ced` | 本提交修复交互式 Rebase 测试的完整就绪条件，不谎称它单独交付前八项全部功能；当前菜单→原生面板及各类持久结果由上述功能和真实 SSH/NativeUI 测试承接 | `GitWorkspaceSSHTests`、`GitInteractiveRebaseTests`、`RecentCommitsViewTests` 等；本轮不重新宣称未亲自重做的独立完整 App 物理点击 E2E |
+
+**本轮已完成的独立验证：** 初始真实 Windows SSH 全量 `223/223, 0 failures`（`/tmp/kero-p4-independent-audit-test.log`）；F-17 Git CLI 临时库确认 tracked/intent-to-add 即使写入 `.gitignore` 仍不被忽略；补原生右键验收 `/tmp/kero-p4-f17-red-confirmed.log` 如期 Red；最小源码修复后 `/tmp/kero-p4-f17-green.log` 的 GitWorkspaceMenuTests `5/5` Green。最终完整 Windows 回归、build、严格签名与安装结果于完成后补记。
+
+**清理判断：** 旧 `presentGitNameDialog`、`presentCreateReferenceDialog`、`CommitReferenceKind/createReference` 和无参 Stash Pop 已无现行引用。当前机器/仓库/窗口身份、保存中失效、Git index/Ref 和 Stash OID 验证都阻止真实串目标或丢数据，不因“减少围栏”而删除。旧计划的入口符号、Tag 包含关系查询失败语义和专项 VoiceOver 强制验收已依最新源码与需求校准；这是计划漂移而非另外的实现缺陷。
+
+### 独立复审最终验证与 Gate（2026-10-15）
+
+- 独立基线：`KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test`，`/tmp/kero-p4-independent-audit-test.log`：**223/223，0 failures**。
+- F-17 根因：`git check-ignore -- tracked.txt` 和已 add -N 的 intent-to-add 都不会返回忽略匹配，即使对应规则已加入 `.gitignore`；真正未跟踪文件才受规则影响。真实原生 `NSWindow/NSHostingView/GitPanel` 右键测试 `/tmp/kero-p4-f17-red-confirmed.log` **Red**，受影响菜单资格修复后 `/tmp/kero-p4-f17-green.log` **5/5 Green**。
+- 修复后完整 Windows SSH 回归：`KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test`，`/tmp/kero-p4-f17-final-full-windows.log`：**224/224、0 failures、0 skipped，TEST SUCCEEDED**。Windows 本机/自动 SSH Interactive Rebase、真实 SSH Archive/二进制文件 Reset/Stash/Clean/Ignore 均 passed；新原生菜单测试 passed。
+- `make build`：`/tmp/kero-p4-f17-final-build.log`，**BUILD SUCCEEDED**，自带 `codesign --verify --deep --strict` PASS；`git diff --check` PASS。
+- **安装**：将当前签名 Debug `Kero.app` 在 `/Applications` 临时目录预签验证后整包替换 `/Applications/Kero.app`；目标重验签 PASS，安装包的 `Contents/MacOS/kero` 与构建源码二进制 SHA-256 都为 `d9d000e7c04275f86baf88ec7b133afdcb9b7ed0918960be68681b0cdedff8d5`。替换前旧完整包的临时备份已清理。没有停止／重启用户当前 Kero 进程，磁盘新包需用户自行重启后生效。
+- 生产最小修复已原子提交：**`cd4187b`**（仅 `GitPanel.swift`、原生右键测试和 `docs/features/git.md`）。Phase 计划与审计继续按 Skill 保留在本地，不混入代码提交；`idea.md` 的当前验证计数同步为 224。
+- **Gate：Go（P4 代码、测试和安装范围）**。本轮发现 F-17 已通过专用脚本标记 `Resolved`，无新确定的正确性阻塞项。以前 `evidence-p4.md` 记录过独立完整 App 的多对象菜单和 Windows UI E2E；本轮没有重做完整 App 逐按钮物理点击和 VoiceOver 系统朗读/导航，不把 NativeUI/SSH XCTest 冒充这些 E2E。VoiceOver 专项原已排除出需求；当前安装后正式进程也并未重启。历史旧测试失败和有限平台诊断仅留在历史执行证据中，不拿其推测新的产品缺陷。
+
+## 2026-10-15 P4 二次独立深入审查（针对上一轮只有 F-17 的复核）
+
+以现行生产代码为依据，使用 CodeGraph 逐字源码及入口→模型→Git argv→工作区/索引/Ref/reflog 路径追踪，所有新 finding 均在本轮先记录再修复，旧 `audit*.md` 不作为缺陷存在性证据。旧 F-17 的修复提交 `cd4187b` 未被撤销。
+
+| Finding / task | 真实失败依据（Red） | 最小根因修复 / 定向 Green |
+|---|---|---|
+| F-18 High / P4-T1，并涉及 T4 Pull Squash | `git merge --squash` 保留原索引的 staged 条目；旧 `perform` 仅检查合并后整个 `git diff --cached`，即使 `Already up to date (nothing to squash)` 仍可能 `git commit` 预存文件。`/tmp/kero-p4-deeper-red-GitCommitActionTests.log` 两项真实仓库 Red；`/tmp/kero-p4-deeper-red-GitRemoteBranchActionTests.log` 远端 Pull Red | 原有 `perform` 在自动提交 Squash 首次 Git 副作用前检查索引干净，否则明确失败，`No Commit` 不变。`f4f8cc0`；定向 Commit 13/13、Remote Branch 15/15 Green |
+| F-19 Medium / P4-T7 | `git rm --cached retained.txt` 后真实 `status --porcelain=v2 -z` 为 `1 D.` 与 `?` 两记录，旧 parser 按路径去重隐藏 `?` 行。`/tmp/kero-p4-deeper-red-GitWorkspaceActionTests.log` Red | 现有 parser 仅在相同分组内去重；STAGED 与 CHANGES 分别保留同路径文件。`f4f8cc0`，Workspace Actions 5/5 Green |
+| F-20 High / P4-T7 | 外部切换 `main→other` 后旧 CHANGES 行仍能对同路径调用 Stage，污染另一分支 index；同一真实 Git 集成 Red | Entry 在现有 status 发布时记录仓库代次/分支/HEAD，`isCurrent(entry)` 唯一公共位置拒绝过期行，成功路径仍使用现有 Stage。`f4f8cc0`，Workspace Actions 5/5 Green；`GitStatusModelTests` 内旧测试曾错误地期望作用于跨 scope 旧行，已改成旧行拒绝、当前重新选中行可用，定向 10/10 Green |
+| F-21 High / P4-T8 | 真实 Git stash store 同一 OID 的不同 reflog 记录，在外部插入新 stash 后旧 `stash@{1}` 被另一同 OID 条目占据；单 OID 校验通过且实际误删另一个 reflog。`/tmp/kero-p4-f21-red.log` 原生执行器 Red | 弹窗开启时捕获现有 stash 列表，唯一 `perform` 在副作用前通过既有 stash list/parse 比对 selector/OID/消息的完整快照；不新建状态机，Apply 固定 OID 行为不变。`7c7ddc6`；Stash Action 10/10、GitStatusModel 10/10、Stash Dialog 2/2 Green |
+
+初次合并测试包执行真实 Windows SSH 完整回归 `/tmp/kero-p4-deeper-final-full-windows.log`：229 项里有 5 个断言失败、涉及三个用例。其一 `GitStatusModelTests.testDiscardReviewGuardsContentSymlinkAndRepositoryScope` 是上述 F-20 新目标身份与旧测试假定冲突，修改测试后单类 10/10 通过。另两处为真实 SSH `mktemp` 连接返回 255 和测试私有临时文件清理时文件已不存在，无法单凭日志确定是产品缺陷；未为它们修改生产代码或任意加长等待。使用同一授权的 `windows` 主机独立重跑实际 `GitExternalRefreshTests` 3/3、`GitInteractiveRebaseTests` 2/2 均通过，日志 `/tmp/kero-p4-deeper-windows-recheck.log`，明确记录此前首次失败而不当成永久通过。
+
+生产修复只触及原本使用的 `GitStatusModel.perform/parseStatus/isCurrent/actOnStash`、`GitPanel.presentStashDialog` 及对应测试/owner 文档；未添加兼容入口、专用存储或新的 Git 状态机。计划、idea 和审计文档保持本地；两笔代码提交 `f4f8cc0`、`7c7ddc6`。最终回归、签名、安装和 Gate 待本轮真实完成后记录。
+
+### 二次复审最终验收与 Gate（本轮结论）
+
+- 严格真实 Windows SSH 完整入口：`KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test`。最终 `/tmp/kero-p4-deeper-final-230-windows.log`、`Test-kero-2026.10.15_16-43-26-+0800.xcresult`：**230/230 tests，0 failures，0 skipped，TEST SUCCEEDED**。新增 F-18～F-21 六个真实 Git 用例已发现执行并通过；Windows `GitExternalRefreshTests`、`GitInteractiveRebaseTests` 与 `GitWorkspaceSSHTests` 真实路径均 passed（后者约197.862s）。
+- `make build`：`/tmp/kero-p4-deeper-final-build.log`，`BUILD SUCCEEDED`，自动 `codesign --verify --deep --strict` 通过。对源码和工作区的 `git diff --check` 及已提交文件校验无空白错误。
+- 签名 Debug 完整包以独立临时 stage 校验后整包替换 `/Applications/Kero.app`，新包重验签 PASS，构建和安装可执行文件 SHA-256 均为 `7d23afa18c858d4f79b193a3a5a00f7fe20142b1b47cbfd17c18dec6798f50eb`。只清理本次确定归属的临时备份；**用户当前 Kero 进程未停止、未重启**，须自行重启后才切换磁盘新包。
+- 代码修复原子提交 `f4f8cc0`（T1/T4/T7 共享根因）和 `7c7ddc6`（T8 Stash 身份）；F-18～F-21 的 Open→Resolved 由 `feature_tool.py finding resolve` 分别写入定向 Red/Green 证据，未人工改写旧审计判断。历史阶段 commit 映射及 `todo.toml` 原始 P4-T1～T9 状态保留，不虚构第十个任务。
+- **Gate：Go（P4 生产逻辑/仓库操作、自动化测试、构建和磁盘安装）**；本轮四项新缺陷已全部解决，无保留的实证正确性阻塞。没有再次进行完整独立 App 所有菜单的人工端到端点击/VoiceOver 实际导航，不把 XCTest 当成该层级的重新通过；旧 `evidence-p4.md` 已有历史 E2E 记录但不是本轮依据。完整日志曾有 SSH 255 和测试临时文件已不存在两处环境失败，独立同类真机专项 5/5 和最终全量 230/230 均已通过，故不增加网络补丁、静默 fallback 或测试 sleep。阶段计划与审计保留本地，**未 push**。

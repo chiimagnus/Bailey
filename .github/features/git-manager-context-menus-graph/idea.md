@@ -2,7 +2,7 @@
 
 关联需求：[Kero Issue #2](https://github.com/chiimagnus/kero/issues/2)。
 
-**当前状态（2026-10-15）：** P1～P4 均已完成，任务以 [todo.toml](todo.toml) 为准。`ca183bf` 修复 SSH 外部 Git 变更自动刷新；真实 Windows SSH 参与的 **223/223 XCTest** 和已安装 `Kero.app` 独立进程的外部修改／暂存／提交 UI E2E 均通过，见 [evidence-p3.md](evidence-p3.md)。**Issue #2 功能与补验已完成**，关联 [PR #14](https://github.com/chiimagnus/kero/pull/14) 使用 `Closes #2`；合并到 `main` 前 Issue 仍保持 Open。
+**当前状态（2026-10-15）：** P1～P4 均已完成，任务以 [todo.toml](todo.toml) 为准。`ca183bf` 修复 SSH 外部 Git 变更自动刷新；真实 Windows SSH 参与的最新完整回归 **230/230 XCTest**（P4 二次独立复审 F-18～F-21 后，见 [audit-p4.md](audit-p4.md)）；此前已安装 `Kero.app` 独立进程的外部修改／暂存／提交 UI E2E 亦已通过，见 [evidence-p3.md](evidence-p3.md)。**Issue #2 功能与补验已完成**，关联 [PR #14](https://github.com/chiimagnus/kero/pull/14) 使用 `Closes #2`；合并到 `main` 前 Issue 仍保持 Open。
 
 **P4 的实施决定（历史）：** 保留 P1～P3 的完成记录；按 [Git Graph 固定版本](https://github.com/mhutchie/vscode-git-graph/tree/d7f43f429a9e024e896bac9fc65fdc530935c812) 补齐对象菜单与原生弹窗的真实后续动作，不只复制名称。Kero 使用 SwiftUI / AppKit，不照搬 WebView；依据见 [research.md](research.md) 和已完成的 [plan-p4.md](plan-p4.md)。
 
