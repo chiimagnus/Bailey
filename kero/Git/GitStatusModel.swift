@@ -113,7 +113,8 @@ final class GitStatusModel {
     }
 
     func isCurrent(_ target: ActionTarget, requiresStableHead: Bool = true) -> Bool {
-        hasResolvedPanelTarget && isRepo && target.generation == contextGeneration && target.repository == repoRoot
+        hasResolvedPanelTarget && isRepo && statusError == nil
+            && target.generation == contextGeneration && target.repository == repoRoot
             && target.scope == currentScope
             && (!requiresStableHead || (target.head == headOID && target.branch == branch))
     }
@@ -470,6 +471,8 @@ final class GitStatusModel {
     /// instead of flashing a loading placeholder.
     private(set) var hasResolvedStatus = false
     private(set) var statusError: String?
+    /// An optional Git history or metadata query failed; core status remains usable.
+    private(set) var detailError: String?
     /// True while a user-initiated Git operation runs.
     private(set) var isBusy = false
     private(set) var operation: Operation?
@@ -505,6 +508,7 @@ final class GitStatusModel {
     /// Invalidates an in-flight status refresh when a mutation begins, so its
     /// pre-operation snapshot cannot overwrite the post-operation state.
     private var statusRequestID: UInt = 0
+    @ObservationIgnored private var coreCompletedRequestID: UInt?
     /// Coalesces an event that arrives while another refresh or mutation is
     /// running. Without polling, dropping that event could leave the snapshot
     /// stale indefinitely.
@@ -622,12 +626,23 @@ final class GitStatusModel {
             isResolvingPanelTarget = true
         }
         Task { [weak self, weak manager, weak project] in
-            let root = await context.resolvedRoot().root
+            let resolved: (root: String, source: PanelContext.RootSource)
+            do {
+                resolved = try await context.resolvedRoot()
+            } catch {
+                guard let self, let manager, let project,
+                      self.panelResolveGeneration == generation,
+                      manager.selectedProject === project,
+                      project.matchesPanelTarget(context.identity) else { return }
+                self.apply(.failed(error.localizedDescription))
+                self.hasResolvedStatus = true
+                return
+            }
             guard let self, let manager, let project,
                   self.panelResolveGeneration == generation,
                   manager.selectedProject === project,
                   project.matchesPanelTarget(context.identity) else { return }
-            self.sync(root: root, backend: context.backend, scope: context.scope)
+            self.sync(root: resolved.root, backend: context.backend, scope: context.scope)
             self.panelTargetIdentity = context.identity
         }
     }
@@ -674,6 +689,7 @@ final class GitStatusModel {
         refreshPending = false
         statusRequestID &+= 1
         let requestID = statusRequestID
+        coreCompletedRequestID = nil
         isRefreshing = true
 
         // This is deliberately independent of the worker. Even filesystem
@@ -693,32 +709,65 @@ final class GitStatusModel {
             self.isRefreshing = false
             self.isLoadingMoreCommits = false
             self.refreshPending = false
-            self.apply(.failed(String(localized: "Git did not respond in time.", table: "Git")))
+            let timeout = String(localized: "Git did not respond in time.", table: "Git")
+            if self.coreCompletedRequestID == requestID {
+                self.detailError = timeout
+            } else {
+                self.apply(.failed(timeout))
+            }
             self.hasResolvedStatus = true
         }
 
         let backend = backend
         Task { [weak self] in
+            guard let model = self else { return }
             let result = await Task.detached(priority: .utility) {
                 await Self.runGitStatus(
                     in: root, recentCommitLimit: commitLimit, backend: backend
-                )
+                ) { partial in
+                    await MainActor.run {
+                        guard model.contextGeneration == generation,
+                              model.statusRequestID == requestID,
+                              model.rootPath == root else { return }
+                        model.apply(.repository(partial))
+                        model.hasResolvedStatus = true
+                        model.coreCompletedRequestID = requestID
+                    }
+                }
             }.value
             guard let self, self.contextGeneration == generation,
                   self.statusRequestID == requestID,
                   self.rootPath == root else { return }
             self.isRefreshing = false
-            // A pagination request may have arrived while this older snapshot
-            // was already running. Keep its loading state latched until the
-            // queued refresh using the larger limit finishes.
             self.isLoadingMoreCommits = commitLimit < self.recentCommitLimit
-            switch result {
+            var completed = result
+            if case .repository(var snapshot) = result {
+                if case .repository(let old) = self.cachedStatusByRoot[self.scopedRoot],
+                   old.topLevel == snapshot.topLevel {
+                    if !snapshot.historyLoaded {
+                        snapshot.recentCommits = old.recentCommits
+                        snapshot.hasMoreRecentCommits = old.hasMoreRecentCommits
+                        snapshot.historyLoaded = old.historyLoaded
+                    }
+                    if !snapshot.stashesLoaded {
+                        snapshot.stashes = old.stashes
+                        snapshot.stashesLoaded = old.stashesLoaded
+                    }
+                    if !snapshot.totalsLoaded {
+                        snapshot.lineAdditions = old.lineAdditions
+                        snapshot.lineDeletions = old.lineDeletions
+                        snapshot.totalsLoaded = old.totalsLoaded
+                    }
+                }
+                completed = .repository(snapshot)
+            }
+            switch completed {
             case .repository, .notRepository:
-                self.cachedStatusByRoot[self.scopedRoot] = result
+                self.cachedStatusByRoot[self.scopedRoot] = completed
             case .failed:
                 break
             }
-            self.apply(result)
+            self.apply(completed)
             self.hasResolvedStatus = true
             if self.refreshPending {
                 self.refreshPending = false
@@ -850,7 +899,7 @@ final class GitStatusModel {
 
     /// Native local confirmation opens immediately, with no new loading state.
     func prepareLocalDiscard(_ entries: [Entry]) -> [PendingDiscard] {
-        guard backend is LocalWorkspaceBackend, isRepo else { return [] }
+        guard backend is LocalWorkspaceBackend, isRepo, statusError == nil else { return [] }
         let context = discardContext
         return entries.filter { isCurrent($0) && changedEntries.contains($0) }.map { entry in
             let fingerprints = Dictionary(uniqueKeysWithValues: discardPaths(for: entry).map {
@@ -864,7 +913,7 @@ final class GitStatusModel {
     /// the Mac. The context must still match the identity held before awaits.
     func prepareRemoteDiscard(_ entries: [Entry]) async throws -> [PendingDiscard] {
         let selectedBackend = backend
-        guard !(selectedBackend is LocalWorkspaceBackend), isRepo, !entries.isEmpty else {
+        guard !(selectedBackend is LocalWorkspaceBackend), isRepo, statusError == nil, !entries.isEmpty else {
             throw DiscardReviewError.stale
         }
         let context = discardContext
@@ -888,7 +937,7 @@ final class GitStatusModel {
     }
 
     private func isReviewedDiscardCurrent(_ review: PendingDiscard) -> Bool {
-        isRepo && !isBusy && discardContext == review.context
+        isRepo && statusError == nil && !isBusy && discardContext == review.context
             && isCurrent(review.entry) && changedEntries.contains(review.entry)
     }
 
@@ -1053,7 +1102,7 @@ final class GitStatusModel {
     /// by an agent while the dialog is open from joining a bulk destructive action.
     func discardChanges(_ entries: [Entry]) {
         guard !entries.isEmpty else { return }
-        guard entries.allSatisfy(isCurrent) else {
+        guard statusError == nil, entries.allSatisfy(isCurrent) else {
             cancelStaleDiscard()
             return
         }
@@ -1973,7 +2022,7 @@ final class GitStatusModel {
     }
 
     private func validate(_ entry: Entry) -> Bool {
-        guard isCurrent(entry) else {
+        guard statusError == nil, isCurrent(entry) else {
             failImmediately(String(localized: "Repository changed; refresh and try the Git action again", table: "Git"))
             return false
         }
@@ -1997,7 +2046,7 @@ final class GitStatusModel {
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
         completion: (@MainActor (Bool) -> Void)? = nil
     ) {
-        if !hasResolvedPanelTarget || (directory == nil && !isRepo) {
+        if !hasResolvedPanelTarget || statusError != nil || (directory == nil && !isRepo) {
             failImmediately(
                 String(localized: "Repository changed; review the current directory and try the Git action again.", table: "Git"),
                 completion: completion
@@ -2333,7 +2382,7 @@ final class GitStatusModel {
     }
 
     private func trash(paths: [String], label: String, completedBefore: String? = nil) {
-        guard !paths.isEmpty, !isBusy else { return }
+        guard !paths.isEmpty, !isBusy, statusError == nil else { return }
         let base = URL(fileURLWithPath: repoRoot, isDirectory: true)
         let expectedRepositoryRoot = repoRoot
         let expectedHeadOID = headOID
@@ -2611,6 +2660,7 @@ final class GitStatusModel {
         operation = failedOperation
         lastError = failedError
         statusError = nil
+        detailError = nil
         statusRequestID &+= 1
         if !preserveIdentity { repositoryIdentity = "" }
     }
@@ -2643,6 +2693,7 @@ final class GitStatusModel {
     }
 
     private func applyRepository(_ result: StatusResult) {
+        let sameRepository = isRepo && topLevel == result.topLevel
         isRepo = true
         branch = result.branch
         headOID = result.headOID
@@ -2651,20 +2702,27 @@ final class GitStatusModel {
         ahead = result.ahead
         behind = result.behind
         hasUpstream = result.upstream != nil
-        lineAdditions = result.lineAdditions
-        lineDeletions = result.lineDeletions
+        if result.totalsLoaded || !sameRepository {
+            lineAdditions = result.lineAdditions
+            lineDeletions = result.lineDeletions
+        }
         topLevel = result.topLevel
         repositoryIdentity = result.topLevel
         branches = result.branches
         refsByName = result.refsByName
-        defaultBranch = result.defaultBranch
+        if result.detailsComplete || !sameRepository { defaultBranch = result.defaultBranch }
         remotes = result.remotes
-        recentCommits = result.recentCommits
-        hasMoreRecentCommits = result.hasMoreRecentCommits
+        if result.historyLoaded || !sameRepository {
+            recentCommits = result.recentCommits
+            hasMoreRecentCommits = result.hasMoreRecentCommits
+        }
         repositoryOperation = result.repositoryOperation
-        stashes = result.stashes
-        let liveStashOIDs = Set(stashes.map(\.oid))
-        stashFilesByOID = stashFilesByOID.filter { liveStashOIDs.contains($0.key) }
+        if result.stashesLoaded || !sameRepository {
+            stashes = result.stashes
+            let liveStashOIDs = Set(stashes.map(\.oid))
+            stashFilesByOID = stashFilesByOID.filter { liveStashOIDs.contains($0.key) }
+        }
+        if result.detailsComplete { detailError = result.detailError }
 
         let entries = result.entries.map { entry in
             var entry = entry
@@ -2719,6 +2777,11 @@ final class GitStatusModel {
         var hasMoreRecentCommits = false
         var repositoryOperation: String?
         var stashes: [Stash] = []
+        var historyLoaded = false
+        var stashesLoaded = false
+        var totalsLoaded = false
+        var detailsComplete = false
+        var detailError: String?
     }
 
     /// Resolves the active repository and distinguishes a normal non-repo
@@ -2726,7 +2789,8 @@ final class GitStatusModel {
     private nonisolated static func runGitStatus(
         in root: String,
         recentCommitLimit: Int,
-        backend: WorkspaceBackend
+        backend: WorkspaceBackend,
+        publishCore: @Sendable (StatusResult) async -> Void
     ) async -> StatusLoadResult {
         // A filesystem, Git helper, or corrupt repository must not leave the
         // initial sidebar spinner running forever. Share one deadline across
@@ -2744,8 +2808,12 @@ final class GitStatusModel {
         // from that batch, so the snapshot below reads exactly as it does
         // locally and parses exactly the same text.
         let prefetched = await prefetchedSnapshotCommands(
-            in: root, recentCommitLimit: recentCommitLimit, backend: backend,
-            deadline: deadline
+            in: root, argumentSets: [
+                ["rev-parse", "--show-toplevel"],
+                ["status", "--porcelain=v2", "--branch", "-z",
+                 "--untracked-files=all", "--ignored=matching"],
+                refSnapshotArguments, ["remote"], ["rev-parse", "--absolute-git-dir"],
+            ], discoverRoot: true, backend: backend, deadline: deadline
         )
         func statusGit(
             _ args: [String], in directory: String
@@ -2766,7 +2834,7 @@ final class GitStatusModel {
             )
             if top.status == 128,
                failure.localizedCaseInsensitiveContains("not a git repository"),
-               !(await containsGitMetadata(atOrAbove: root, backend: backend)) {
+               (await containsGitMetadata(atOrAbove: root, backend: backend)) == false {
                 return .notRepository
             }
             return .failed(failure)
@@ -2793,37 +2861,6 @@ final class GitStatusModel {
         var result = parseStatus(status.stdout)
         result.topLevel = resolvedRoot
 
-        let diff = await statusGit(
-            result.hasHead
-                ? ["diff", "--numstat", "HEAD", "--"]
-                : ["diff", "--numstat", "--cached", "--"],
-            in: resolvedRoot
-        )
-        if diff.status == 0 {
-            let totals = parseNumstat(diff.stdout)
-            result.lineAdditions = totals.additions
-            result.lineDeletions = totals.deletions
-        }
-        // An unborn branch has no HEAD to compare against. Its cached diff is
-        // the initial snapshot; add any edits made after staging as a second
-        // layer so the toolbar still reflects all pending work.
-        if !result.hasHead {
-            let unstaged = await statusGit(["diff", "--numstat", "--"], in: resolvedRoot)
-            if unstaged.status == 0 {
-                let totals = parseNumstat(unstaged.stdout)
-                result.lineAdditions += totals.additions
-                result.lineDeletions += totals.deletions
-            }
-        }
-        // `git diff` intentionally omits untracked files. Count their text
-        // lines as additions so the compact toolbar totals cover all pending
-        // work reported by the porcelain snapshot.
-        result.lineAdditions += await untrackedLineAdditions(
-            for: result.entries,
-            in: resolvedRoot,
-            backend: backend
-        )
-
         let repoRoot = resolvedRoot
 
         let refs = await statusGit(Self.refSnapshotArguments, in: repoRoot)
@@ -2845,46 +2882,8 @@ final class GitStatusModel {
         }
         result.remotes = remoteRun.stdout.split(separator: "\n").map(String.init).sorted()
 
-        // A clone records its remote's default branch as a symbolic HEAD.
-        // Prefer origin when more than one remote is present because that is
-        // the repository the local branch list conventionally belongs to.
-        if let remote = result.remotes.contains("origin") ? "origin" : result.remotes.first {
-            let remoteHead = await statusGit(
-                ["symbolic-ref", "--quiet", "--short", "refs/remotes/\(remote)/HEAD"],
-                in: repoRoot
-            )
-            let prefix = "\(remote)/"
-            let ref = strippingTrailingLineEnding(remoteHead.stdout)
-            if remoteHead.status == 0, ref.hasPrefix(prefix) {
-                let branch = String(ref.dropFirst(prefix.count))
-                if result.branches.contains(branch) {
-                    result.defaultBranch = branch
-                }
-            }
-        }
-
-        // NUL-delimited name-status records preserve every valid path while
-        // supplying the nested file rows used by the native commit graph.
-        let log = await statusGit(recentCommitLogArguments(limit: recentCommitLimit), in: repoRoot)
-        if log.status == 0 {
-            let commits = parseRecentCommits(log.stdout, refsByName: result.refsByName)
-            result.hasMoreRecentCommits = commits.count > recentCommitLimit
-            result.recentCommits = Array(commits.prefix(recentCommitLimit))
-        } else if result.hasHead {
-            // A failed history query is not an empty history. Publishing a
-            // partial success here would erase the already loaded Git Graph.
-            return .failed(gitFailureMessage(
-                log, fallback: String(localized: "Unable to read Git status.", table: "Git")
-            ))
-        }
-
-        let stash = await statusGit(stashListArguments, in: repoRoot)
-        guard stash.status == 0, let stashes = parseStashes(stash.stdout) else {
-            return .failed(gitFailureMessage(stash,
-                fallback: String(localized: "Unable to read the stash list.", table: "Git")))
-        }
-        result.stashes = stashes
-
+        // An unfinished merge/rebase is safety-critical and belongs to the
+        // core status, not to optional history or line-count metadata.
         let gitDir = await statusGit(["rev-parse", "--absolute-git-dir"], in: repoRoot)
         guard gitDir.status == 0 else {
             return .failed(gitFailureMessage(
@@ -2894,13 +2893,95 @@ final class GitStatusModel {
         let path = strippingTrailingLineEnding(gitDir.stdout)
         do {
             result.repositoryOperation = try await detectRepositoryOperation(
-                gitDirectory: path, backend: backend
+                gitDirectory: path, backend: backend,
+                timeout: max(0.001, deadline.timeIntervalSinceNow)
             )
         } catch WorkspaceError.timedOut {
             return .failed(timeoutMessage)
         } catch {
             return .failed(error.localizedDescription)
         }
+
+        await publishCore(result)
+
+        // History, stashes and additions are independent of the minimal
+        // usable status. A slow optional query never erases a valid core.
+        let historyArgs = recentCommitLogArguments(limit: recentCommitLimit)
+        let diffArgs = result.hasHead
+            ? ["diff", "--numstat", "HEAD", "--"]
+            : ["diff", "--numstat", "--cached", "--"]
+        let defaultRemote = result.remotes.contains("origin") ? "origin" : result.remotes.first
+        var optionalArgs = [historyArgs, stashListArguments, diffArgs]
+        if !result.hasHead { optionalArgs.append(["diff", "--numstat", "--"]) }
+        if let defaultRemote {
+            optionalArgs.append(["symbolic-ref", "--quiet", "--short",
+                                 "refs/remotes/\(defaultRemote)/HEAD"])
+        }
+        let optionalBatch = await prefetchedSnapshotCommands(
+            in: repoRoot, argumentSets: optionalArgs, discoverRoot: false,
+            backend: backend, deadline: deadline
+        )
+        func detailGit(_ args: [String]) async -> (status: Int32, stdout: String, stderr: String) {
+            if let cached = optionalBatch[args.joined(separator: " ")] { return cached }
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { return (-2, "", timeoutMessage) }
+            return await GitCommandExecution.run(args, in: repoRoot, timeout: remaining, backend: backend)
+        }
+        if let defaultRemote {
+            let head = await detailGit(["symbolic-ref", "--quiet", "--short",
+                                        "refs/remotes/\(defaultRemote)/HEAD"])
+            let prefix = defaultRemote + "/"
+            let reference = strippingTrailingLineEnding(head.stdout)
+            if head.status == 0, reference.hasPrefix(prefix) {
+                let name = String(reference.dropFirst(prefix.count))
+                if result.branches.contains(name) { result.defaultBranch = name }
+            }
+        }
+        let log = await detailGit(historyArgs)
+        if log.status == 0 {
+            let commits = parseRecentCommits(log.stdout, refsByName: result.refsByName)
+            if !result.hasHead || !commits.isEmpty {
+                result.hasMoreRecentCommits = commits.count > recentCommitLimit
+                result.recentCommits = Array(commits.prefix(recentCommitLimit))
+                result.historyLoaded = true
+            } else {
+                result.detailError = String(localized: "Unable to read Git history.", table: "Git")
+            }
+        } else if result.hasHead {
+            result.detailError = gitFailureMessage(
+                log, fallback: String(localized: "Unable to read Git history.", table: "Git")
+            )
+        }
+        let stash = await detailGit(stashListArguments)
+        if stash.status == 0, let stashes = parseStashes(stash.stdout) {
+            result.stashes = stashes
+            result.stashesLoaded = true
+        } else {
+            result.detailError = gitFailureMessage(
+                stash, fallback: String(localized: "Unable to read the stash list.", table: "Git")
+            )
+        }
+        let diff = await detailGit(diffArgs)
+        if diff.status == 0 {
+            let total = parseNumstat(diff.stdout)
+            result.lineAdditions = total.additions
+            result.lineDeletions = total.deletions
+            if !result.hasHead {
+                let unstaged = await detailGit(["diff", "--numstat", "--"])
+                if unstaged.status == 0 {
+                    let change = parseNumstat(unstaged.stdout)
+                    result.lineAdditions += change.additions
+                    result.lineDeletions += change.deletions
+                }
+            }
+            if let untracked = await untrackedLineAdditions(
+                for: result.entries, in: repoRoot, backend: backend, deadline: deadline
+            ) {
+                result.lineAdditions += untracked
+                result.totalsLoaded = true
+            }
+        }
+        result.detailsComplete = true
         return .repository(result)
     }
 
@@ -2912,22 +2993,10 @@ final class GitStatusModel {
     /// failure text is the message the panel shows and `gitFailureMessage`
     /// already prefers whichever stream carries it.
     private nonisolated static func prefetchedSnapshotCommands(
-        in root: String, recentCommitLimit: Int, backend: WorkspaceBackend,
-        deadline: Date
+        in root: String, argumentSets: [[String]], discoverRoot: Bool,
+        backend: WorkspaceBackend, deadline: Date
     ) async -> [String: (status: Int32, stdout: String, stderr: String)] {
-        guard !(backend is LocalWorkspaceBackend) else { return [:] }
-        let argumentSets: [[String]] = [
-            ["rev-parse", "--show-toplevel"],
-            [
-                "status", "--porcelain=v2", "--branch", "-z",
-                "--untracked-files=all", "--ignored=matching",
-            ],
-            refSnapshotArguments,
-            ["remote"],
-            recentCommitLogArguments(limit: recentCommitLimit),
-            stashListArguments,
-            ["rev-parse", "--absolute-git-dir"],
-        ]
+        guard !(backend is LocalWorkspaceBackend), !argumentSets.isEmpty else { return [:] }
         let tag = UUID().uuidString
         let commands = argumentSets.map { args in
             (
@@ -2936,15 +3005,19 @@ final class GitStatusModel {
                     + args.map(RemoteCommands.quote).joined(separator: " ") + " 2>&1"
             )
         }
-        // Every batched command runs at the repository top level, which is
-        // where the snapshot runs them one by one. A directory that is not a
-        // repository answers with the first command alone, so leaving a
-        // repository does not pay for six commands that are all going to fail.
-        let toplevel = RemoteCommands.batchCommand([commands[0]], tag: tag)
-        let script = "cd \(RemoteCommands.quote(root)) || exit 1; "
-            + "t=$(git rev-parse --show-toplevel 2>/dev/null); "
-            + "if [ -z \"$t\" ]; then \(toplevel); else cd \"$t\" || exit 1; "
-            + RemoteCommands.batchCommand(commands, tag: tag) + "; fi"
+        // The first batch resolves an arbitrary cwd; detail batches already
+        // have the verified repository root and avoid rediscovering it.
+        let script: String
+        if discoverRoot {
+            let toplevel = RemoteCommands.batchCommand([commands[0]], tag: tag)
+            script = "cd \(RemoteCommands.quote(root)) || exit 1; "
+                + "t=$(git rev-parse --show-toplevel 2>/dev/null); "
+                + "if [ -z \"$t\" ]; then \(toplevel); else cd \"$t\" || exit 1; "
+                + RemoteCommands.batchCommand(commands, tag: tag) + "; fi"
+        } else {
+            script = "cd \(RemoteCommands.quote(root)) || exit 1; "
+                + RemoteCommands.batchCommand(commands, tag: tag)
+        }
 
         let remaining = deadline.timeIntervalSinceNow
         guard remaining > 0,
@@ -2977,7 +3050,7 @@ final class GitStatusModel {
     /// of offering to initialize a nested repository on top of broken metadata.
     private nonisolated static func containsGitMetadata(
         atOrAbove root: String, backend: WorkspaceBackend
-    ) async -> Bool {
+    ) async -> Bool? {
         if !(backend is LocalWorkspaceBackend) {
             // The ancestor walk is one round trip per level otherwise, and it
             // runs every time the panel leaves a repository.
@@ -2986,8 +3059,8 @@ final class GitStatusModel {
                     "sh", "-c",
                     RemoteCommands.gitMetadataAtOrAboveCommand(path: root),
                 ],
-                cwd: nil, env: nil, stdin: nil, timeout: nil
-            ) else { return false }
+                cwd: nil, env: nil, stdin: nil, timeout: 5
+            ), result.status == 0 else { return nil }
             return String(decoding: result.stdout, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines) == "yes"
         }
@@ -2999,9 +3072,9 @@ final class GitStatusModel {
             .standardizedFileURL.path as NSString
         while true {
             let marker = directory.appendingPathComponent(".git")
-            if (try? await backend.stat(path: marker)) != nil {
-                return true
-            }
+            do {
+                if try await backend.stat(path: marker) != nil { return true }
+            } catch { return nil }
             let parent = directory.deletingLastPathComponent as NSString
             if parent.isEqual(to: directory as String) { return false }
             directory = parent
@@ -3010,11 +3083,11 @@ final class GitStatusModel {
 
     /// One round trip instead of one per marker.
     private nonisolated static func remoteRepositoryOperation(
-        gitDirectory: String, backend: WorkspaceBackend
+        gitDirectory: String, backend: WorkspaceBackend, timeout: TimeInterval?
     ) async throws -> String? {
         let result = try await backend.run(
             argv: ["sh", "-c", RemoteCommands.repositoryOperationCommand(gitDirectory: gitDirectory)],
-            cwd: nil, env: nil, stdin: nil, timeout: nil
+            cwd: nil, env: nil, stdin: nil, timeout: timeout
         )
         guard result.status == 0 else {
             throw RemoteConnectionError.commandFailed(
@@ -3140,8 +3213,9 @@ final class GitStatusModel {
     /// Git's numstat output has no representation for untracked files. Mirror
     /// its new-text-file behavior without spawning one Git process per path.
     private nonisolated static func untrackedLineAdditions(
-        for entries: [Entry], in root: String, backend: WorkspaceBackend
-    ) async -> Int {
+        for entries: [Entry], in root: String, backend: WorkspaceBackend, deadline: Date
+    ) async -> Int? {
+        guard deadline.timeIntervalSinceNow > 0 else { return nil }
         let rootURL = URL(fileURLWithPath: root, isDirectory: true).standardizedFileURL
         let rootPrefix = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
 
@@ -3176,16 +3250,17 @@ final class GitStatusModel {
                 cwd: root,
                 env: nil,
                 stdin: RemoteCommands.untrackedLineCountsInput(paths: paths),
-                timeout: nil
+                timeout: max(0.001, deadline.timeIntervalSinceNow)
             )
-            guard let result, result.status == 0 else { return 0 }
+            guard let result, result.status == 0 else { return nil }
             let counts = RemoteCommands.parseUntrackedLineCounts(
                 String(data: result.stdout, encoding: .utf8) ?? ""
             )
             return counts.reduce(0) { $0 + $1.lines }
         }
         for entry in entries where entry.staged == "?" {
-            guard visitedFiles < maximumFiles, remainingBytes > 0 else { break }
+            guard visitedFiles < maximumFiles, remainingBytes > 0,
+                  deadline.timeIntervalSinceNow > 0 else { break }
             visitedFiles += 1
             let fileURL = rootURL.appendingPathComponent(entry.path).standardizedFileURL
             guard fileURL.path.hasPrefix(rootPrefix) else { continue }
@@ -3357,11 +3432,13 @@ final class GitStatusModel {
     }
 
     nonisolated static func detectRepositoryOperation(
-        gitDirectory: String, backend: WorkspaceBackend
+        gitDirectory: String, backend: WorkspaceBackend, timeout: TimeInterval? = nil
     ) async throws -> String? {
         let git = URL(fileURLWithPath: gitDirectory, isDirectory: true)
         if !(backend is LocalWorkspaceBackend) {
-            return try await remoteRepositoryOperation(gitDirectory: gitDirectory, backend: backend)
+            return try await remoteRepositoryOperation(
+                gitDirectory: gitDirectory, backend: backend, timeout: timeout
+            )
         }
         func exists(_ name: String) async throws -> Bool {
             let path = git.appendingPathComponent(name).path

@@ -630,7 +630,13 @@ final class TerminalManager {
 
     private func newItem(isDirectory: Bool) async {
         guard let project = selectedProject, let context = project.panelContext else { return }
-        let root = await context.resolvedRoot().root
+        let root: String
+        do {
+            root = try await context.resolvedRoot().root
+        } catch {
+            WorkspaceNativeDialogs.showError(error, in: window)
+            return
+        }
         guard selectedProjectID == project.id, project.matchesPanelTarget(context.identity) else { return }
         showPanel(.files)
         await project.fileTree.sync(root: root, backend: context.backend, scope: context.scope)

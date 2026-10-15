@@ -88,6 +88,8 @@ struct GitPanel: View {
             } else {
                 if let statusError = model.statusError {
                     statusWarning(statusError)
+                } else if let detailError = model.detailError {
+                    statusWarning(detailError)
                 }
                 trackingBar
                 repositoryOperationBanner
@@ -190,7 +192,7 @@ struct GitPanel: View {
     private var header: some View {
         HStack(spacing: 6) {
             if model.isRepo {
-                branchMenu
+                branchMenu.disabled(model.statusError != nil)
             } else {
                 Image(systemName: "arrow.triangle.branch")
                     .panelFont(size: 11, weight: .medium)
@@ -1323,7 +1325,7 @@ struct GitPanel: View {
                 actionButton(
                     icon: "arrow.triangle.2.circlepath",
                     title: syncButtonTitle,
-                    enabled: !model.isBusy,
+                    enabled: !model.isBusy && model.statusError == nil,
                     isLoading: operationIsLoading(.syncButton),
                     help: String(localized: "Pull remote commits, then push local ones", table: "Sidebar"),
                     action: {
@@ -1455,6 +1457,7 @@ struct GitPanel: View {
         return !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && hasEligibleChanges
             && model.mergeEntries.isEmpty
+            && model.statusError == nil
             && !model.isBusy
     }
 
@@ -1467,6 +1470,7 @@ struct GitPanel: View {
             && hasCommit
             && hasEligibleChanges
             && model.mergeEntries.isEmpty
+            && model.statusError == nil
             && !model.isBusy
     }
 
@@ -1715,7 +1719,8 @@ struct GitPanel: View {
             model.toggleCollapsedFolder(kind.rawValue + ":" + item.path)
         }) { active in
             GitChangeRowActions(
-                kind: kind, active: active, disabled: model.isBusy,
+                kind: kind, active: active,
+                disabled: model.isBusy || model.statusError != nil,
                 isStageLoading: operationIsLoading(stageTrigger),
                 isUnstageLoading: operationIsLoading(unstageTrigger),
                 isDiscardLoading: operationIsLoading(discardTrigger),
@@ -1784,7 +1789,7 @@ struct GitPanel: View {
             kind: kind,
             showDirectory: showDirectory,
             isRemote: remoteName != nil,
-            disabled: model.isBusy,
+            disabled: model.isBusy || model.statusError != nil,
             isStageLoading: operationIsLoading(stageTrigger),
             isUnstageLoading: operationIsLoading(unstageTrigger),
             isDiscardLoading: operationIsLoading(discardTrigger),
@@ -1829,11 +1834,11 @@ struct GitPanel: View {
     private var uncommittedMenuActions: [PanelSectionHeader.MenuAction] {
         [
             .init(title: String(localized: "Stash…", table: "Git"),
-                  disabled: model.isBusy || model.totalChangeCount == 0) { presentUncommittedDialog(.stash) },
+                  disabled: model.isBusy || model.statusError != nil || model.totalChangeCount == 0) { presentUncommittedDialog(.stash) },
             .init(title: String(localized: "Reset…", table: "Git"),
-                  disabled: model.isBusy || !model.hasHead) { presentUncommittedDialog(.reset) },
+                  disabled: model.isBusy || model.statusError != nil || !model.hasHead) { presentUncommittedDialog(.reset) },
             .init(title: String(localized: "Clean…", table: "Git"),
-                  disabled: model.isBusy) { presentUncommittedDialog(.clean) },
+                  disabled: model.isBusy || model.statusError != nil) { presentUncommittedDialog(.clean) },
         ]
     }
 
@@ -1917,16 +1922,16 @@ struct GitPanel: View {
         if kind == .staged {
             Button(String(localized: "Unstage Changes", table: "Sidebar")) {
                 performOperation(unstageTrigger) { model.unstageEntries(selected) }
-            }.disabled(model.isBusy)
+            }.disabled(model.isBusy || model.statusError != nil)
         } else {
             Button(kind == .merge ? String(localized: "Mark Resolved (Stage)", table: "Sidebar")
                    : String(localized: "Stage Changes", table: "Sidebar")) {
                 performOperation(stageTrigger) { model.stageEntries(selected) }
-            }.disabled(model.isBusy)
+            }.disabled(model.isBusy || model.statusError != nil)
             if kind == .unstaged {
                 Button(String(localized: "Discard Changes…", table: "Sidebar")) {
                     requestDiscard(selected, trigger: .entry(path: path, operation: .discard))
-                }.disabled(model.isBusy)
+                }.disabled(model.isBusy || model.statusError != nil)
                 if selected.contains(where: { $0.staged == "?" }) {
                     Button(String(localized: "Add to .gitignore", table: "Git")) {
                         ignorePaths([path], isDirectory: true)
@@ -2067,7 +2072,7 @@ struct GitPanel: View {
         _ entries: [GitStatusModel.Entry], all: Bool,
         trigger: OperationTrigger = .discardAll
     ) {
-        guard !preparingDiscard, !entries.isEmpty else { return }
+        guard !preparingDiscard, !entries.isEmpty, model.statusError == nil else { return }
         preparingDiscard = true
         Task {
             defer { preparingDiscard = false }
