@@ -10,6 +10,10 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     private var failGit = false
     private var failHistoryLog = false
     private var failStashList = false
+    private var failRefSnapshot = false
+    private var failRemoteList = false
+    private var failGitDirectory = false
+    private var failOperationMarker = false
     private var pauseNextGit = false
     private var pausedGit: CheckedContinuation<Void, Never>?
     private(set) var awaitingGit = false
@@ -22,6 +26,10 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     func setGitUnavailable(_ value: Bool) { failGit = value }
     func setHistoryLogUnavailable(_ value: Bool) { failHistoryLog = value }
     func setStashListUnavailable(_ value: Bool) { failStashList = value }
+    func setRefSnapshotUnavailable(_ value: Bool) { failRefSnapshot = value }
+    func setRemoteListUnavailable(_ value: Bool) { failRemoteList = value }
+    func setGitDirectoryUnavailable(_ value: Bool) { failGitDirectory = value }
+    func setOperationMarkerUnavailable(_ value: Bool) { failOperationMarker = value }
     func suspendNextGitRequest() { pauseNextGit = true }
     func releaseGitRequest() {
         pausedGit?.resume()
@@ -53,18 +61,34 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
             await withCheckedContinuation { pausedGit = $0 }
         }
         if failGit { throw WorkspaceError.timedOut }
+        if failOperationMarker, argv.count == 3,
+           argv[0] == "sh", argv[1] == "-c",
+           argv[2].contains("for n in rebase-merge rebase-apply MERGE_HEAD") {
+            throw WorkspaceError.timedOut
+        }
         // The remote protocol passes command names (git/sh), whereas the
         // local backend deliberately requires an absolute executable URL.
         var variables = ProcessInfo.processInfo.environment
         for (key, value) in env ?? [:] { variables[key] = value }
         let commandInput: Data?
-        if (failHistoryLog || failStashList), let stdin, let script = String(data: stdin, encoding: .utf8) {
+        if (failHistoryLog || failStashList || failRefSnapshot || failRemoteList || failGitDirectory),
+           let stdin, let script = String(data: stdin, encoding: .utf8) {
             var failing = script
             if failHistoryLog {
                 failing = failing.replacingOccurrences(of: " LC_ALL=C git 'log' ", with: " LC_ALL=C git 'invalid-test-history-log' ")
             }
             if failStashList {
                 failing = failing.replacingOccurrences(of: " LC_ALL=C git 'stash' 'list' ", with: " LC_ALL=C git 'invalid-test-stash' 'list' ")
+            }
+            if failRefSnapshot {
+                failing = failing.replacingOccurrences(of: " LC_ALL=C git 'for-each-ref' ", with: " LC_ALL=C git 'invalid-test-refs' ")
+            }
+            if failRemoteList {
+                failing = failing.replacingOccurrences(of: " LC_ALL=C git 'remote' ", with: " LC_ALL=C git 'invalid-test-remotes' ")
+            }
+            if failGitDirectory {
+                failing = failing.replacingOccurrences(of: " LC_ALL=C git 'rev-parse' '--absolute-git-dir' ",
+                                                        with: " LC_ALL=C git 'invalid-test-git-dir' ")
             }
             commandInput = Data(failing.utf8)
         } else {
@@ -354,6 +378,9 @@ final class GitStatusModelTests: XCTestCase {
         try git(["add", "."])
         try git(["commit", "-qm", "first"])
         try git(["commit", "--allow-empty", "-qm", "second"])
+        try git(["branch", "topic/safe"])
+        try git(["tag", "v1"])
+        try git(["remote", "add", "origin", directory.path])
         try "changed\n".write(to: directory.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
 
         let backend = DiscardRemoteWorkspaceFixture()
@@ -365,6 +392,11 @@ final class GitStatusModelTests: XCTestCase {
         let priorChanges = model.changedEntries
         XCTAssertEqual(priorChanges.map(\.path), ["tracked.txt"])
         let priorBranch = model.branch
+        let priorRefs = model.refsByName
+        let priorRemotes = model.remotes
+        XCTAssertNotNil(priorRefs["refs/heads/topic/safe"])
+        XCTAssertNotNil(priorRefs["refs/tags/v1"])
+        XCTAssertEqual(priorRemotes, ["origin"])
 
         await backend.setGitUnavailable(true)
         model.refresh()
@@ -393,6 +425,30 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { model.statusError == nil && !model.isRefreshing }
         XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
 
+        // An individual metadata query failing must not publish a partial
+        // successful snapshot that hides Branch/Tag menus or an in-progress operation.
+        for kind in 0..<3 {
+            switch kind {
+            case 0: await backend.setRefSnapshotUnavailable(true)
+            case 1: await backend.setRemoteListUnavailable(true)
+            default: await backend.setGitDirectoryUnavailable(true)
+            }
+            model.refresh()
+            try await wait { !model.isRefreshing }
+            XCTAssertNotNil(model.statusError, "Metadata query \(kind) must fail the complete snapshot")
+            XCTAssertEqual(model.refsByName, priorRefs)
+            XCTAssertEqual(model.remotes, priorRemotes)
+            XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
+            switch kind {
+            case 0: await backend.setRefSnapshotUnavailable(false)
+            case 1: await backend.setRemoteListUnavailable(false)
+            default: await backend.setGitDirectoryUnavailable(false)
+            }
+            model.refresh()
+            try await wait { !model.isRefreshing }
+            XCTAssertNil(model.statusError)
+        }
+
         try git(["stash", "push", "-qm", "preserve on query failure"])
         model.refresh()
         try await wait { !model.isRefreshing }
@@ -408,6 +464,25 @@ final class GitStatusModelTests: XCTestCase {
         model.refresh()
         try await wait { model.statusError == nil && !model.isRefreshing }
         XCTAssertTrue(model.stashes.isEmpty)
+
+        // A failed remote marker check must not turn an in-progress merge
+        // into a clean repository that enables other commit actions.
+        let marker = directory.appendingPathComponent(".git/MERGE_HEAD")
+        try (try XCTUnwrap(model.headOID) + "\n").write(to: marker, atomically: true, encoding: .utf8)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        let priorOperation = try XCTUnwrap(model.repositoryOperation)
+        await backend.setOperationMarkerUnavailable(true)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertNotNil(model.statusError, "Failed SSH marker check must not be treated as no operation")
+        XCTAssertEqual(model.repositoryOperation, priorOperation)
+        await backend.setOperationMarkerUnavailable(false)
+        try FileManager.default.removeItem(at: marker)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertNil(model.statusError)
+        XCTAssertNil(model.repositoryOperation)
     }
 
     func testReplacingSSHBackendDoesNotWaitForStaleGitWorker() async throws {

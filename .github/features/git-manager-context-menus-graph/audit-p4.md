@@ -43,6 +43,19 @@
 
 ## 发现项
 
+## 发现 F-16
+
+- 任务：`P4-T3`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`kero/Git/GitStatusModel.swift:2671`
+- 摘要：`Ref、Remote、Git 目录与进行中操作标记失败时发布不完整的成功快照`
+- 风险：`间歇性 SSH/Git 故障会把已有分支、Tag、远端和正在进行的 Merge/Rebase 状态清空，历史引用徽章与菜单短暂消失、部分本应禁用的提交操作被启用，且未报告查询失败；T4、T5 与 T9 同样受影响。`
+- 预期修复：`在 runGitStatus 统一校验 Ref、Remote、Git 目录三个查询，并让本机/远端正在进行的 Git 操作标记检测传播真实读取失败；仅明确缺失的标记表示没有操作。失败走既有 .failed → statusError 与成功快照保留路径，不在各个菜单叠加守卫。`
+- 验证：`局部关键快照 5 条断言 Red（/tmp/kero-p4-post-audit-f16-metadata-red.log）；初步 Green（/tmp/kero-p4-post-audit-f16-metadata-green.log），Windows 223/223 PASS（/tmp/kero-p4-post-audit-f16-full-windows.log）；沿标记检测继续发现 2 条 Red（/tmp/kero-p4-post-audit-f16-marker-red.log）再专项 Green（/tmp/kero-p4-post-audit-f16-marker-green.log）；以含真实 Windows SSH 的最终全量、build、严格验签作最后 Gate。`
+- 解决证据：`两轮专项 Red：Ref、Remote、Git 目录 5 条断言失败（/tmp/kero-p4-post-audit-f16-metadata-red.log），在途 Merge 标记 SSH 读取失败 2 条断言失败（/tmp/kero-p4-post-audit-f16-marker-red.log）；同一模型测试对应 Green（/tmp/kero-p4-post-audit-f16-metadata-green.log、/tmp/kero-p4-post-audit-f16-marker-green.log）。唯一状态读取入口修复后完整 Windows SSH make test 223/223 PASS、0 failed、0 skipped（/tmp/kero-p4-pr14-post-audit-f16-final-full-windows.log）；make doctor Xcode27.0、make build PASS、严格 codesign PASS（/tmp/kero-p4-pr14-audit-f16-final-build.log）；完整 Debug Kero.app 整包替换，已安装和构建 SHA256 同为 4a2ec5a40b115fd374f55a5847f9df20e56b338a92685c3c288a199043098ec0，用户 PID69132 未重启或退出，配置 SHA256 不变。`
+
+
 ## 发现 F-15
 
 - 任务：`P4-T9`
@@ -278,3 +291,61 @@
 
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
+
+## 2026-10-15 独立复审：P4 × PR #14（按提交顺序）
+
+范围锁定：PR #14 合并时的 head `9f653fd`（merge `0686673`），实际 `38` 次提交、`72` 个差异文件；P4-T1～T9 以 `todo.toml` 与 `plan-p4.md` 原始验收要求为准。逐次核对 `git show` 的真实文件差异、最终源码调用方、现行测试和集成结果；计划与纯证据提交不冒充生产功能。**以下是针对最终集成态的审查，不意味着重新 checkout 并单独运行了 38 个历史版本。** 本次判断不以旧审计的结论为依据。
+
+| 顺序 | PR 提交 | 对应任务 | 独立核查的正式入口／结果 |
+| ---: | --- | --- | --- |
+| 01 | `eeaca06` | P4 需求 | 仅需求与任务分解，不是产品实现；与现行九任务对照 |
+| 02 | `b3014dd` | P4 计划 | 菜单与弹窗合同收敛；现行代码逐对象另行核对 |
+| 03 | `a5f1c91` | T1 | `RecentCommitsView` Commit 菜单 → `GitPanel.presentCommitDialog` → `actOnCommit`，真实 Cherry-pick／Revert／Merge／Checkout 用例 |
+| 04 | `ffd3194` | T2 | 同入口的 Rebase、Soft/Mixed/Hard Reset、按提交拓扑限制的 Drop；交互式会话经 `Project.newInteractiveGitSession` |
+| 05 | `c4ec20c` | T1–T2 | 只同步任务与验证资料；不计作新功能 |
+| 06 | `c15d72c` | T3 | `presentBranchCreate/Action` → `createBranch/renameBranch/deleteBranch/pushBranch`；归档走 `createArchive` 并核选定 Ref/OID |
+| 07 | `a6f28be` | T3/T9 相邻测试 | 修正 XCTest 原生窗口生命周期与刷新测试的前提；无新增产品调用链 |
+| 08 | `9e25f51` | T4 | 远端 Ref 的 Checkout/Fetch/Merge/Pull/Delete/Archive 接入直显 Badge 和折叠菜单、同一 Git executor |
+| 09 | `11d9e33` | T5 | Tag 轻量/附注创建、详情校验、指定远端 Push/Delete/Archive；引用来自实际 Git Snapshot |
+| 10 | `43e9ec7` | T3–T5 | 仅计划进度与证据；没有新产品代码 |
+| 11 | `e5a64fd` | T6 | 历史文件菜单 → `Project.openHistoricalDiff` 与 `resetHistoricalFile`；DiffTab 来源显式类型及 SessionStore 真正使用 |
+| 12 | `57cac9e` | T6 | 仅进度与实施证据 |
+| 13 | `af16b18` | T7 | Git 行／目录标题右键 → `stageEntries/unstageEntries/stash/resetUncommitted/cleanUntracked`；Ignore 经真实 `Project.ignoreGitPaths` |
+| 14 | `111f3cd` | T8 | `GitPanel.stashRow` → `actOnStash`，Stash selector/OID 同快照，Pop/Drop/Branch 显式锁定选择 |
+| 15 | `320b4cc` | T7 | `GitUncommittedActionTests` 纳入同一 XCTest 目标，验证真实 Git index、工作区和 Clean 范围 |
+| 16 | `c0edf54` | T7–T8 | 提交任务状态与历史证据；不计入功能实现 |
+| 17 | `385cf50` | T4 | Remote Fetch/Pull 原生确认按钮与资源回归；保留既有 Git 功能入口 |
+| 18 | `dd4535e` | T6 | 复位先保存再复核文件/index 的副作用次序，专属 `GitHistoryFileTests` |
+| 19 | `2e5bb4c` | T5 | Tag Push 默认 Remote 和失败检查后不推送的真实 bare remote 及对话框回归 |
+| 20 | `811835a` | T5 | 归档功能文档去掉错误未来时态，仅文档 |
+| 21 | `04e8d9c` | T3/T5 | 补本地化并删除无引用旧菜单资源；仅资源清理 |
+| 22 | `80f7129` | T7/T9 | Windows SSH GitWorktree 实测 + LazyVStack 真行右键命中；测试纳入已有目标 |
+| 23 | `2da19d8` | T5 | 澄清 Push 警告复选框默认值，非行为变更 |
+| 24 | `c555404` | T9 | 测试原生 NSPopUpButton 事件跟踪改用控件 action，避免全量测试阻塞 |
+| 25 | `7b62892` | T3/T9 | `switchBranch` 统一 Git 名称预检，`-`／`-d` 不能劫持 switch 命令 |
+| 26 | `1c05cd7` | T3/T5/T9 | Branch/Tag 替换确认读取真实初始 OID，`perform(expectedRef:)` 拒绝旧授权覆写新目标 |
+| 27 | `fcd80bd` | T5/T8 | Tag/Stash 原生 UI 中文资源补齐，保持业务逻辑不变 |
+| 28 | `53fb771` | T4/T9 | Force Fetch 捕获目标本地 Ref OID，执行前比较同一引用，防外部移动误覆盖 |
+| 29 | `aaf69f` | T9 | NativeUI 的 Badge 右键菜单归属验证，非仅合成事件已发送 |
+| 30 | `ed862e5` | T4/T9 | Remote Checkout Existing & Pull 复用名称预检，拒绝 Git `-` 上次分支别名 |
+| 31 | `8cafd13` | T6/T9 | 共用 `DiffTextView` 只读原生 Accessibility setter 真正拒写 |
+| 32 | `9d5c722` | T7/T9 | `FileTab.waitForText` 追当前读取任务，真实远端 Ignore 不用取消任务的过时内容 |
+| 33 | `bcd3ced` | T2/T9 | PTY Rebase 测试等完整内容就绪，不依赖固定 sleep 或人工输入 |
+| 34 | `b5f79a4` | T9 | 阶段任务状态／原有审计资料，无生产实现 |
+| 35 | `ad3f1ba` | T9／Issue #2 | 记录真实 SSH 外部刷新 Red 和 VoiceOver 实际边界；该提交未修生产代码 |
+| 36 | `ca183bf` | Issue #2／T9 相邻 | `ToolPanelView` 已有可见面板任务放开 SSH Git 周期刷新；真实 Windows SSH 后端、原生面板自动检测；随后另完成完整独立 App E2E（后续证据提交不属于 PR #14） |
+| 37 | `3716644` | T9 文档收口 | 用户／Git／SSH／UI／测试说明更新，取消额外 VoiceOver 专项强制要求 |
+| 38 | `9f653fd` | PR 收尾 | 历史审计末尾空行修正，无产品逻辑 |
+
+### 复审判据和遗留代码
+
+- **产品真正使用**：`ToolPanelView` 实例化正式 `GitPanel`；`GitPanel.changeList` 实例化正式 `RecentCommitsView` 并将 Commit、Branch、Remote、Tag、历史文件、Stash 和目录菜单回调分别连到 Model 与 Project；Model 统一走 `GitCommandExecution` 和当前 Local/SSH `WorkspaceBackend`，提交副作用由真实 Git、文件和远端引用测试断言。
+- **对照删旧路径**：现行生产源码没有 `presentGitNameDialog`、`CommitReferenceKind`、旧混合 `createReference`、参数为空的 `stashPop()` 或已废弃的 `Show Tagged Commit`。现有 `stashCount` 是 `stashes.count` 的只读派生，确实被正式 Git 标题使用；不是独立计数缓存。现有 `expectedRef`、项目/连接身份、未保存缓冲、归档上限、旧操作拒绝等保护防止覆盖用户数据，不能作为“多余安全围栏”删除。
+- **此次新发现**：F-16（见本文件发现项）证明 Ref、Remote、Git 目录和 Git 操作标记共四类关键读取故障原本会发布缺失数据的成功快照。完整旧版 `223/223` 没覆盖该风险；新增 7 条 Red 断言后沿唯一 Git 状态快照入口修复，关键标记的本机/SSH 读取保留真实错误，不在菜单分支补救；专项及最终含真实 Windows SSH 全量均通过。
+
+### 独立复审 Gate（最终）
+
+- **结论：Go。** P4-T1～T9 对应产品入口、38 个 PR #14 提交和 72 个差异文件按最终源码独立核对；历史提交本身不被冒充为逐 SHA 重编的通过证明。此次唯一新确认的根因 F-16 已通过真实 Red/Green 并在同一 GitStatusModel 快照所有者修复。
+- **最终回归**：`KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test` → **223/223，0 失败、0 跳过**（`/tmp/kero-p4-pr14-post-audit-f16-final-full-windows.log`，586.008 秒），涵盖真实 Windows SSH、Git 面板自动刷新、历史提交和图谱、Remote/Tag/Stash、交互式 Rebase、文件／目录和原生菜单。关键扩展测试 `GitStatusModelTests.testTransientGitFailurePreservesLastRepositorySnapshotAndRecovers` 也在最终全量中通过。
+- **构建和安装**：`make doctor` Xcode 27.0；`make build`、`codesign --verify --deep --strict`、同盘完整 App 替换与安装后的签名及可执行文件哈希对照通过。安装哈希 `4a2ec5a40b115fd374f55a5847f9df20e56b338a92685c3c288a199043098ec0`，正式 PID69132 未退出/重启，普通配置未改；新版等待用户下次自行重启后生效。
+- **范围边界**：没有为了所谓“安全围栏精简”删除必要的用户数据保护；计划点名的旧 Git 菜单/Ref/Stash 双轨入口在当前源码不存在，`stashCount` 只是派生展示值，不是旧缓存。PR #14 已在本次审查前合并，这次审后修复是本地后续改动，尚未另外推送或发布 PR。审查和当前通过的回归不能逻辑上保证未来所有环境均无缺陷；无其它已复现的 P4 阻断项。

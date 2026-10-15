@@ -2669,17 +2669,23 @@ final class GitStatusModel {
         let repoRoot = resolvedRoot
 
         let refs = await statusGit(Self.refSnapshotArguments, in: repoRoot)
-        if refs.status == 0 {
-            result.refsByName = parseRefSnapshot(refs.stdout)
-            result.branches = result.refsByName.keys.compactMap { name in
-                name.hasPrefix("refs/heads/") ? String(name.dropFirst("refs/heads/".count)) : nil
-            }.sorted()
+        guard refs.status == 0 else {
+            return .failed(gitFailureMessage(
+                refs, fallback: String(localized: "Unable to read Git status.", table: "Git")
+            ))
         }
+        result.refsByName = parseRefSnapshot(refs.stdout)
+        result.branches = result.refsByName.keys.compactMap { name in
+            name.hasPrefix("refs/heads/") ? String(name.dropFirst("refs/heads/".count)) : nil
+        }.sorted()
 
         let remoteRun = await statusGit(["remote"], in: repoRoot)
-        if remoteRun.status == 0 {
-            result.remotes = remoteRun.stdout.split(separator: "\n").map(String.init).sorted()
+        guard remoteRun.status == 0 else {
+            return .failed(gitFailureMessage(
+                remoteRun, fallback: String(localized: "Unable to read Git status.", table: "Git")
+            ))
         }
+        result.remotes = remoteRun.stdout.split(separator: "\n").map(String.init).sorted()
 
         // A clone records its remote's default branch as a symbolic HEAD.
         // Prefer origin when more than one remote is present because that is
@@ -2722,11 +2728,20 @@ final class GitStatusModel {
         result.stashes = stashes
 
         let gitDir = await statusGit(["rev-parse", "--absolute-git-dir"], in: repoRoot)
-        if gitDir.status == 0 {
-            let path = strippingTrailingLineEnding(gitDir.stdout)
-            result.repositoryOperation = await detectRepositoryOperation(
+        guard gitDir.status == 0 else {
+            return .failed(gitFailureMessage(
+                gitDir, fallback: String(localized: "Unable to read Git status.", table: "Git")
+            ))
+        }
+        let path = strippingTrailingLineEnding(gitDir.stdout)
+        do {
+            result.repositoryOperation = try await detectRepositoryOperation(
                 gitDirectory: path, backend: backend
             )
+        } catch WorkspaceError.timedOut {
+            return .failed(timeoutMessage)
+        } catch {
+            return .failed(error.localizedDescription)
         }
         return .repository(result)
     }
@@ -2838,11 +2853,16 @@ final class GitStatusModel {
     /// One round trip instead of one per marker.
     private nonisolated static func remoteRepositoryOperation(
         gitDirectory: String, backend: WorkspaceBackend
-    ) async -> String? {
-        guard let result = try? await backend.run(
+    ) async throws -> String? {
+        let result = try await backend.run(
             argv: ["sh", "-c", RemoteCommands.repositoryOperationCommand(gitDirectory: gitDirectory)],
             cwd: nil, env: nil, stdin: nil, timeout: nil
-        ), result.status == 0 else { return nil }
+        )
+        guard result.status == 0 else {
+            throw RemoteConnectionError.commandFailed(
+                status: result.status, message: String(decoding: result.stderr, as: UTF8.self)
+            )
+        }
         let marker = String(decoding: result.stdout, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         switch marker {
@@ -3182,31 +3202,31 @@ final class GitStatusModel {
 
     nonisolated static func detectRepositoryOperation(
         gitDirectory: String, backend: WorkspaceBackend
-    ) async -> String? {
+    ) async throws -> String? {
         let git = URL(fileURLWithPath: gitDirectory, isDirectory: true)
         if !(backend is LocalWorkspaceBackend) {
-            return await remoteRepositoryOperation(gitDirectory: gitDirectory, backend: backend)
+            return try await remoteRepositoryOperation(gitDirectory: gitDirectory, backend: backend)
         }
-        func exists(_ name: String) async -> Bool {
+        func exists(_ name: String) async throws -> Bool {
             let path = git.appendingPathComponent(name).path
-            return (try? await backend.stat(path: path)) != nil
+            return try await backend.stat(path: path) != nil
         }
 
-        let merging = await exists("rebase-merge")
-        let applying = await exists("rebase-apply")
+        let merging = try await exists("rebase-merge")
+        let applying = try await exists("rebase-apply")
         if merging || applying {
             return String(localized: "Rebase in progress", table: "Git")
         }
-        if await exists("MERGE_HEAD") {
+        if try await exists("MERGE_HEAD") {
             return String(localized: "Merge in progress", table: "Git")
         }
-        if await exists("CHERRY_PICK_HEAD") {
+        if try await exists("CHERRY_PICK_HEAD") {
             return String(localized: "Cherry-pick in progress", table: "Git")
         }
-        if await exists("REVERT_HEAD") {
+        if try await exists("REVERT_HEAD") {
             return String(localized: "Revert in progress", table: "Git")
         }
-        if await exists("BISECT_LOG") {
+        if try await exists("BISECT_LOG") {
             return String(localized: "Bisect in progress", table: "Git")
         }
         return nil
