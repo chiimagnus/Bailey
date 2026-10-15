@@ -46,3 +46,18 @@
 - 该回归使用真实 `NSHostingView` 中的产品 Git 面板、真实 Windows SSH 后端和独立 Git 工作区；**不是完整独立 App 的可视化 E2E**。仅清理本次专属临时仓库与连接，不操作用户正式 Kero、工作仓库或 SSH master。
 - **最终全量**：`KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test` → **223/223、0 failures、0 skipped**（`/tmp/kero-issue2-fix-full-windows.log`），其中新增 SSH 刷新 1/1、原本本机刷新 2/2、真实 Windows Rebase 与 GitWorkspaceSSH 均通过；完整运行 602.542 秒。
 - `make doctor`：Xcode 27.0；`make build` 与 `codesign --verify --deep --strict` 均 PASS（日志 `/tmp/kero-issue2-fix-build.log`）。将签名通过的新 Debug App 整包更新至 `/Applications/Kero.app`，安装后独立验签、构建／安装可执行文件 SHA256 同为 `dc7356166fafb343fccbec63d44d4a2d8668739885c4cf94b811aa1fd129f170`；原正式 PID41537 未退出或重启，普通配置 SHA256 `a23668bd5e043f0da30cbb02b307c0c5f0a99da7cb8d20c5d4a437adb5e1cf3c` 未改变。安装日志 `/tmp/kero-issue2-fix-install.log`；新版仅在用户下次自行重启时生效。
+
+## 2026-10-15：已安装 Kero.app 的独立进程 SSH 自动刷新 E2E
+
+- **真实完整 App**：`/Applications/Kero.app` 签名有效，执行文件 SHA256 为 `dc7356166fafb343fccbec63d44d4a2d8668739885c4cf94b811aa1fd129f170`。只启动独立测试进程 PID66058（`--isolated-ui-test`），通过「文件 → 添加 SSH 文件或文件夹…」选择 `windows` 及专属 `/tmp/kero-issue2-e2e-ywQktH`。真正的 Git 管理器显示 `main`、基线提交 `5511cb3` 与「工作区干净」，并非仅创建 `NSHostingView` 或直接调用模型。
+- **独立外部 CLI**：Windows Git 2.56.0；SSH 全程使用 `ControlMaster=no`、`ControlPath=none`，没有调用 Kero 内部终端，也没有点击 Git 刷新按钮。以下耗时为**远端命令返回后，直到真实窗口的 Accessibility 文本观察到更新**，以约 1.6 秒间隔采样，属于一次实机观测：
+
+| 外部 Windows SSH 操作 | Git 实际结果 | 完整 Kero UI 实际结果 | 时延 |
+| --- | --- | --- | ---: |
+| 修改 `e2e-file.txt` | ` M e2e-file.txt` | 「更改，1 项」及对应文件 | 8.49 秒 |
+| `git add -- e2e-file.txt` | `M  e2e-file.txt` | 「已暂存的更改，1 项」、按钮「提交 1 个已暂存文件」 | 10.19 秒 |
+| 独立 `git commit` | HEAD `ab189bafecce07f4f9e31729f293009fc8422b94`，工作区干净 | `e2e external SSH commit visible`、Recent Commits 2 项、「工作区干净」 | 6.93 秒 |
+
+- **原始现场证据**：`/tmp/kero-issue2-e2e-external-{edit,stage,commit}.log`、`/tmp/kero-issue2-e2e-git-external-{edit,stage,commit}.png`；Git 真值由独立 SSH 再读 `git log` 和 `git rev-parse HEAD` 核对。截图与日志暂留在本机 `/tmp`，不把测试二进制资料提交 Git。SSH 5 秒是触发间隔，**不是**端到端响应 SLA；这三次测量不是跨网络性能保证。
+- **隔离与收尾**：仅退出本人启动的 PID66058（核对进程身份 `1792045985195339`），运行中的用户 Kero PID65578 始终未退出或重启；普通配置 SHA256 `a23668bd5e043f0da30cbb02b307c0c5f0a99da7cb8d20c5d4a437adb5e1cf3c` 未变。严格核对最终测试 HEAD 后删除仅本次 Windows 临时仓库，并确认目录不存在。
+- **验收结论**：Issue #2 缺失的「完整独立 App + 真实 Windows SSH + 外部 CLI → 前台可见 Git 自动刷新」E2E **PASS**。之前的 NativeUI 后台／面板隐藏暂停、恢复和手动刷新回归仍保持其原有证据边界；本次不冒称测试了完整 App 的断线／后台性能。关联 PR #14，待合并后由 `Closes #2` 自动关闭 Issue。

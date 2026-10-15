@@ -2,7 +2,7 @@
 
 关联需求：[Kero Issue #2](https://github.com/chiimagnus/kero/issues/2)。
 
-**当前状态（2026-10-15）：** P1～P4 均已完成，任务以 [todo.toml](todo.toml) 为准。SSH 外部 Git 变更自动刷新随后在 `ca183bf` 修复；真实 Windows SSH 原生面板回归和含 SSH 的 223 项全量测试已通过，证据见 [evidence-p3.md](evidence-p3.md)。**Issue #2 仍为 Open**：完整独立 App 中由外部 SSH 命令改动仓库并观察自动刷新的用户路径尚未单独验收，不能以原生面板测试代替。
+**当前状态（2026-10-15）：** P1～P4 均已完成，任务以 [todo.toml](todo.toml) 为准。`ca183bf` 修复 SSH 外部 Git 变更自动刷新；真实 Windows SSH 参与的 **223/223 XCTest** 和已安装 `Kero.app` 独立进程的外部修改／暂存／提交 UI E2E 均通过，见 [evidence-p3.md](evidence-p3.md)。**Issue #2 功能与补验已完成**，关联 [PR #14](https://github.com/chiimagnus/kero/pull/14) 使用 `Closes #2`；合并到 `main` 前 Issue 仍保持 Open。
 
 **P4 的实施决定（历史）：** 保留 P1～P3 的完成记录；按 [Git Graph 固定版本](https://github.com/mhutchie/vscode-git-graph/tree/d7f43f429a9e024e896bac9fc65fdc530935c812) 补齐对象菜单与原生弹窗的真实后续动作，不只复制名称。Kero 使用 SwiftUI / AppKit，不照搬 WebView；依据见 [research.md](research.md) 和已完成的 [plan-p4.md](plan-p4.md)。
 
@@ -47,4 +47,4 @@
 3. 每个适用的 Git Graph 弹窗都与 [P4 对照矩阵](plan-p4.md#原生弹窗行为合同)逐项一致：默认值、选项、确认/取消按钮、重名后的两个后续按钮、失败后的再选择，不能只有同名按钮。在**临时真实 Git 仓库**证明对应 HEAD/ref、index、工作区、reflog、远端 bare repo 与存档实际内容；不是只断言命令构造或 View 回调。
 4. 验证取消/拒绝/旧目标不写入；Hard/Force/文件复位/永久 Clean 作用符合说明，包含 Hard 可删除阻挡 tracked 目标的 untracked 路径。未保存和在途保存受保护且失败不关 Tab；冲突保留真实 Git 状态，可从终端恢复。多远端 Delete/Push 的范围、停止顺序和部分结果遵循上游，Tag 已创建后取消 Push 不撤销本地 Tag。
 5. 对照原生窗口验证对象命中、禁用、确认对话框、菜单键盘和焦点；保留基础辅助功能标签，不把 VoiceOver 专项语音走查列为本需求的强制项。独立 App E2E（本机与获准的真实 Windows SSH）分别记录，不用 NativeUI 或模拟 SSH 冒充完整验收。全部代码通过 `make test`、`make build` 与严格签名。
-6. 完成的阶段任务与提交以 [todo.toml](todo.toml) 为准，历史测试结果保留在 `evidence-p3.md`、`evidence-p4.md` 与审计中。SSH 外部刷新已另行修复并通过真实 Windows SSH 原生面板回归；完整独立 App 的外部刷新用户路径尚未单独验收，不能仅凭该测试关闭 Issue #2。
+6. 完成的阶段任务与提交以 [todo.toml](todo.toml) 为准，历史测试结果保留在 `evidence-p3.md`、`evidence-p4.md` 与审计中。SSH 外部刷新已另行修复：真实 Windows 后端原生面板回归通过，且已安装的完整独立 Kero 进程从菜单接入 SSH 仓库，经外部 CLI 修改、暂存与提交，三次均在 Git 面板自动更新。Issue #2 等待 [PR #14](https://github.com/chiimagnus/kero/pull/14) 合并后自动关闭。
