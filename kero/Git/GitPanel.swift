@@ -59,6 +59,7 @@ struct GitPanel: View {
     }
     @State private var historyCollapsed = false
     @State private var stashesCollapsed = false
+    @FocusState private var focusedStash: String?
     @State private var expandedCommitIDs: Set<String> = []
     @State private var filterText = ""
     @State private var showFilter = false
@@ -1192,17 +1193,14 @@ struct GitPanel: View {
         panel.allowedContentTypes = [.zip]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = reference.replacingOccurrences(of: "/", with: "-") + ".zip"
-        let selector = GitArchiveFormatSelection(panel: panel)
-        panel.accessoryView = selector.accessory
         panel.beginSheetModal(for: window) { response in
-            _ = selector
             guard response == .OK, isCurrent(),
                   model.refsByName[reference]?.oid == objectOID,
                   let destination = panel.url,
                   project?.matchesPanelTarget(context.identity) == true else { return }
             Task { @MainActor in
                 await model.createArchive(reference: reference, objectOID: objectOID,
-                    format: selector.format, destination: destination, target: target)
+                    destination: destination, target: target)
             }
         }
     }
@@ -1808,7 +1806,8 @@ struct GitPanel: View {
     }
 
     private func stashRow(_ stash: GitStatusModel.Stash) -> some View {
-        TreeRowSurface(depth: 0, scale: panelFontScale, showsGuides: false) { _, layout in
+        TreeRowSurface(depth: 0, scale: panelFontScale,
+                       focused: focusedStash == stash.selector, showsGuides: false) { _, layout in
             HStack(spacing: TreeRowStyle.iconSpacing) {
                 Image(systemName: "archivebox")
                     .foregroundStyle(.secondary)
@@ -1822,6 +1821,8 @@ struct GitPanel: View {
         }
         .help(stash.selector + ": " + stash.message)
         .focusable()
+        .focused($focusedStash, equals: stash.selector)
+        .focusEffectDisabled()
         .contextMenu {
             ForEach(GitStatusModel.StashAction.allCases, id: \.self) { action in
                 Button(action.title) { presentStashDialog(stash, action: action) }
@@ -2259,47 +2260,12 @@ struct GitPanel: View {
         changesCollapsed = false
         historyCollapsed = false
         stashesCollapsed = false
+        focusedStash = nil
         expandedCommitIDs.removeAll()
     }
 
     private func shellQuoted(_ path: String) -> String {
         "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-}
-
-@MainActor
-private final class GitArchiveFormatSelection: NSObject {
-    let accessory: NSStackView
-    private let choice = NSPopUpButton()
-    private weak var panel: NSSavePanel?
-
-    var format: GitStatusModel.ArchiveFormat {
-        choice.indexOfSelectedItem == 1 ? .tar : .zip
-    }
-
-    init(panel: NSSavePanel) {
-        self.panel = panel
-        choice.addItems(withTitles: ["ZIP (.zip)", "TAR (.tar)"])
-        choice.selectItem(at: 0)
-        accessory = NSStackView(views: [
-            NSTextField(labelWithString: String(localized: "Archive Format", table: "Git")), choice
-        ])
-        accessory.orientation = .horizontal
-        accessory.spacing = 12
-        accessory.frame = NSRect(x: 0, y: 0, width: 300, height: 34)
-        super.init()
-        choice.target = self
-        choice.action = #selector(updateFormat)
-    }
-
-    @objc private func updateFormat() {
-        guard let panel else { return }
-        let extensionName = format.rawValue
-        let name = (panel.nameFieldStringValue as NSString).deletingPathExtension
-        panel.allowedContentTypes = [
-            format == .zip ? .zip : (UTType(filenameExtension: "tar") ?? UTType(importedAs: "public.tar-archive"))
-        ]
-        panel.nameFieldStringValue = name + "." + extensionName
     }
 }
 

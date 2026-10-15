@@ -81,20 +81,16 @@ final class GitWorkspaceSSHTests: XCTestCase {
             try await settle(model)
             let server = try await git(["ls-remote", "origin", "refs/heads/export/history"])
             XCTAssertTrue(server.hasPrefix(revision + "\t"))
-            for format in GitStatusModel.ArchiveFormat.allCases {
-                let destination = local.appendingPathComponent("download." + format.rawValue)
-                await model.createArchive(reference: "refs/heads/export/history", objectOID: revision,
-                    format: format, destination: destination, target: model.actionTarget())
-                try await settle(model)
-                let arguments = format == .tar
-                    ? ["-xOf", destination.path, "literal[[]1].bin"]
-                    : ["-p", destination.path, "literal[[]1].bin"]
-                let extracted = try await LocalWorkspaceBackend.shared.run(
-                    argv: [format == .tar ? "/usr/bin/tar" : "/usr/bin/unzip"] + arguments,
-                    cwd: local.path, env: nil, stdin: nil, timeout: 10)
-                XCTAssertEqual(extracted.status, 0, String(decoding: extracted.stderr, as: UTF8.self))
-                XCTAssertEqual(extracted.stdout, historical, "Remote binary archive must contain selected Ref, not HEAD")
-            }
+            let destination = local.appendingPathComponent("download.zip")
+            await model.createArchive(reference: "refs/heads/export/history", objectOID: revision,
+                destination: destination, target: model.actionTarget())
+            try await settle(model)
+            XCTAssertTrue(try Data(contentsOf: destination).starts(with: Data("PK".utf8)))
+            let extracted = try await LocalWorkspaceBackend.shared.run(
+                argv: ["/usr/bin/unzip", "-p", destination.path, "literal[[]1].bin"],
+                cwd: local.path, env: nil, stdin: nil, timeout: 10)
+            XCTAssertEqual(extracted.status, 0, String(decoding: extracted.stderr, as: UTF8.self))
+            XCTAssertEqual(extracted.stdout, historical, "Remote ZIP must contain selected Ref, not HEAD")
             let remote = try XCTUnwrap(model.remoteBranch(named: "origin/export/history"))
             model.deleteRemoteBranch(remote, target: model.actionTarget())
             try await settle(model)

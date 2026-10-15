@@ -1446,14 +1446,10 @@ final class GitStatusModel {
                 completion: completion)
     }
 
-    nonisolated enum ArchiveFormat: String, CaseIterable, Sendable {
-        case zip, tar
-    }
-
     /// The Git object is captured before the save sheet opens, so a later
     /// branch movement cannot quietly change the downloaded archive.
     func createArchive(
-        reference: String, objectOID: String, format: ArchiveFormat,
+        reference: String, objectOID: String,
         destination: URL, target: ActionTarget
     ) async {
         guard isCurrent(target, requiresStableHead: false),
@@ -1482,7 +1478,7 @@ final class GitStatusModel {
         }
         let result = await Task.detached(priority: .userInitiated) { () async -> (error: String?, output: String) in
             let temporary = destination.deletingLastPathComponent()
-                .appendingPathComponent(".kero-archive-" + UUID().uuidString + "." + format.rawValue)
+                .appendingPathComponent(".kero-archive-" + UUID().uuidString + ".zip")
             var remoteFolder: String?
             var output = ""
             var error: String?
@@ -1518,7 +1514,7 @@ final class GitStatusModel {
                         ])
                     }
                     remoteFolder = folder
-                    archiveOutput = folder + "/archive." + format.rawValue
+                    archiveOutput = folder + "/archive.zip"
                 }
                 guard await current() else {
                     throw NSError(domain: "KeroGitArchive", code: 4, userInfo: [
@@ -1526,7 +1522,7 @@ final class GitStatusModel {
                     ])
                 }
                 let archived = await GitCommandExecution.run(
-                    ["archive", "--format=" + format.rawValue, "-o", archiveOutput, objectOID],
+                    ["archive", "--format=zip", "-o", archiveOutput, objectOID],
                     in: root, backend: backend
                 )
                 guard archived.status == 0 else {
@@ -1534,7 +1530,7 @@ final class GitStatusModel {
                         NSLocalizedDescriptionKey: archived.stderr
                     ])
                 }
-                output = "$ git archive --format=" + format.rawValue + " " + reference
+                output = "$ git archive --format=zip " + reference
                 if remoteFolder != nil {
                     let maximumSize = 64 * 1024 * 1024
                     let data = try await backend.read(path: archiveOutput, maxBytes: maximumSize)

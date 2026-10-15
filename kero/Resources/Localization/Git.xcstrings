@@ -1887,16 +1887,6 @@
         }
       }
     },
-    "Archive Format" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "归档格式"
-          }
-        }
-      }
-    },
     "Check out" : {
       "localizations" : {
         "zh-Hans" : {
