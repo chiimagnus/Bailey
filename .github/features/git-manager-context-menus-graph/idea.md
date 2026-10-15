@@ -2,7 +2,7 @@
 
 关联需求：[Kero Issue #2](https://github.com/chiimagnus/kero/issues/2)。
 
-**当前状态（2026-10-15）：** P1～P4 均已完成，任务以 [todo.toml](todo.toml) 为准。`ca183bf` 修复 SSH 外部 Git 变更自动刷新；真实 Windows SSH 参与的最新完整回归 **230/230 XCTest**（P4 二次独立复审 F-18～F-21 后，见 [audit-p4.md](audit-p4.md)）；此前已安装 `Kero.app` 独立进程的外部修改／暂存／提交 UI E2E 亦已通过，见 [evidence-p3.md](evidence-p3.md)。**Issue #2 功能与补验已完成**，关联 [PR #14](https://github.com/chiimagnus/kero/pull/14) 使用 `Closes #2`；合并到 `main` 前 Issue 仍保持 Open。
+**当前状态（2026-10-15）：** P1～P4 均已完成，任务以 [todo.toml](todo.toml) 为准。`ca183bf` 已修复 SSH 外部 Git 变更自动刷新；后续 P4 独立复审及 Stash 图谱修正使 Git Graph 直接显示具体 `stash@{n}`，与基础提交连线，并支持原生右键及历史 Diff。最终包含真实 Windows SSH 的完整回归 **234/234 XCTest、0 失败、0 跳过**；窄侧栏完整序号修正后的独立 App 验收、构建与安装记录见 [audit-p4.md](audit-p4.md)。[PR #14](https://github.com/chiimagnus/kero/pull/14) 已于 2026-10-15 合并至 `main`，[Issue #2](https://github.com/chiimagnus/kero/issues/2) 同时关闭；此后 `crh` 上的修正已由本地提交 `42bbb53` 实现，不在已合并 PR 的提交中；尚未推送。
 
 **P4 的实施决定（历史）：** 保留 P1～P3 的完成记录；按 [Git Graph 固定版本](https://github.com/mhutchie/vscode-git-graph/tree/d7f43f429a9e024e896bac9fc65fdc530935c812) 补齐对象菜单与原生弹窗的真实后续动作，不只复制名称。Kero 使用 SwiftUI / AppKit，不照搬 WebView；依据见 [research.md](research.md) 和已完成的 [plan-p4.md](plan-p4.md)。
 
@@ -47,4 +47,4 @@
 3. 每个适用的 Git Graph 弹窗都与 [P4 对照矩阵](plan-p4.md#原生弹窗行为合同)逐项一致：默认值、选项、确认/取消按钮、重名后的两个后续按钮、失败后的再选择，不能只有同名按钮。在**临时真实 Git 仓库**证明对应 HEAD/ref、index、工作区、reflog、远端 bare repo 与存档实际内容；不是只断言命令构造或 View 回调。
 4. 验证取消/拒绝/旧目标不写入；Hard/Force/文件复位/永久 Clean 作用符合说明，包含 Hard 可删除阻挡 tracked 目标的 untracked 路径。未保存和在途保存受保护且失败不关 Tab；冲突保留真实 Git 状态，可从终端恢复。多远端 Delete/Push 的范围、停止顺序和部分结果遵循上游，Tag 已创建后取消 Push 不撤销本地 Tag。
 5. 对照原生窗口验证对象命中、禁用、确认对话框、菜单键盘和焦点；保留基础辅助功能标签，不把 VoiceOver 专项语音走查列为本需求的强制项。独立 App E2E（本机与获准的真实 Windows SSH）分别记录，不用 NativeUI 或模拟 SSH 冒充完整验收。全部代码通过 `make test`、`make build` 与严格签名。
-6. 完成的阶段任务与提交以 [todo.toml](todo.toml) 为准，历史测试结果保留在 `evidence-p3.md`、`evidence-p4.md` 与审计中。SSH 外部刷新已另行修复：真实 Windows 后端原生面板回归通过，且已安装的完整独立 Kero 进程从菜单接入 SSH 仓库，经外部 CLI 修改、暂存与提交，三次均在 Git 面板自动更新。Issue #2 等待 [PR #14](https://github.com/chiimagnus/kero/pull/14) 合并后自动关闭。
+6. 完成的阶段任务与提交以 [todo.toml](todo.toml) 为准，历史测试结果保留在 `evidence-p3.md`、`evidence-p4.md` 与审计中。SSH 外部刷新已另行修复：真实 Windows 后端原生面板回归通过，已安装的完整独立 Kero 进程接入 SSH 仓库后，外部 CLI 修改、暂存与提交均在 Git 面板自动更新。PR #14 已合并、Issue #2 已关闭；后续 Stash 图谱修正按本次独立代码提交与审计记录，不冒充原 PR 的一部分。

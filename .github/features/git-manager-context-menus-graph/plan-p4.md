@@ -47,7 +47,7 @@
 | 当前／其他本地 Branch Ref | Checkout（非当前）、Rename、Delete（非当前）、Merge/Rebase（非当前）、Push、Copy Name | `referenceActions` 及折叠 `+N`；当前分支仍能 Rename/Push |
 | Remote Branch Ref | Checkout（新本地跟踪分支/同名分流）、Delete Remote、Fetch into Local（本地同名且非当前）、Merge、Pull、Copy | `remoteBranch` 也有原生菜单；symbolic HEAD 不当实体 Branch，不能仅凭 `/HEAD` 名称后缀分类 |
 | Tag Ref | View Details（Annotated）、Delete（可选远端）、Push、Copy Name | Annotated/Lightweight 按 Git 对象类型判断，不凭 Badge；`+N` 行为一致 |
-| Stash 条目 | Apply、Create Branch、Pop、Drop、Copy Name/Hash | Kero 目前只有 `stashCount`：在既有 GitPanel 增加紧凑可右击 STASHES 条目，不新建独立 Dock |
+| Stash 条目 | Apply、Create Branch、Pop、Drop、Copy Name/Hash | 直接参考上游 `dataSource.ts` 的单父 Stash 图谱节点与 `web/main.ts` 标签菜单，复用 Kero 现有 Git DAG 与 Stash 对象身份；移除独立 STASHES 区域 |
 | Uncommitted Changes（现有分组标题） | Stash（Message/Include Untracked）、Reset（Mixed/Hard）、Clean Untracked（含目录选项） | 落到 CHANGES/STAGED/MERGE 标题的同一原生菜单及 More Menu；只有 staged 或被过滤隐藏时仍有入口；保留 Stage/Discard |
 | Staged/Unstaged/Conflict 文件、目录与标题 | 原有 Open/Diff、Stage/Unstage/Discard、分组批量动作；仅真正未跟踪的文件或含未跟踪文件的目录提供 VSCodium Ignore；按真实版本存在性提供读取 | Ignore 只在适用 Git 文件树对象出现，编辑目标是普通 `.gitignore` FileTab，不引入独立编辑器或未经协调的磁盘写入 |
 | 历史文件 | View Diff、View File at Revision、View Diff with Working File、Open File、Reset File to Revision、Copy Absolute/Relative Path | Deleted 不提供查看该 Revision、Open File 或 Reset File；已知二进制不提供文本查看，但仍可 Reset；大小/读取失败在实际读取时说明，不逐行预读 blob |
@@ -220,17 +220,17 @@
 
 **结果：** Git Manager 可看到并右击**具体** Stash，所有原生弹窗选项和操作对象与 Git Graph 相同。
 
-**入口 / Files：** `GitStatusModel.stashes/stashCount（派生）/runGitStatus/prefetchedSnapshotCommands/StatusResult/applyRepository/clearRepositoryState/perform/actOnStash`，`GitPanel.stashRow/presentStashDialog/moreMenu/changeList`、`PanelSectionHeader`、现有树行风格；`WorkspaceBackend`。列表沿同一 StatusResult 与缓存快照发布/失效，切仓库时清除，测试：`GitStatusModelTests`、原生 Git Panel 测试。
+**入口 / Files：** `GitStatusModel.stashes/graphCommits/runGitStatus/prefetchedSnapshotCommands/StatusResult/applyRepository/clearRepositoryState/perform/actOnStash`、`GitPanel.presentStashDialog/moreMenu/changeList`、`RecentCommitsView` 与 `CommitGraphLayout`；`WorkspaceBackend`。记录随同一 StatusResult 发布，Stash 概览与 Commit 共用图谱，选中后才读取文件变更；校验包括 NativeUI 图谱与真实 Git 临时仓库。
 
 **实施：**
-1. GitPanel 增加紧凑 STASHES 折叠行，不独立 Dock、不混入真实 Commit DAG。在既有 status/batch 中把只计数的 `rev-list --walk-reflogs --count refs/stash` **替换**成一次 selector/OID/说明的 `stash list` 或 `reflog` 查询，count 从条目派生；不并行保留 count+list 两查询、独立缓存或按需加载状态机。使用可靠字段分隔保留说明，空列表与查询失败区分。各行 `.contextMenu` Apply/Branch/Pop/Drop/Copy Name/Hash；复用已有刷新请求失效规则，不另加轮询。
+1. 复用 Git Graph 的真实 Stash 行为：同一次快照中的 `stash list` 返回 selector、OID、说明、父提交、作者和时间，在 RecentCommitsView 中插入紧邻基础提交的专属节点，以首父为视觉关系线，不能把 index／untracked 父对象误画入普通 Git 历史。不增加独立 STASHES 分组、第二套树或轮询；相同 OID 不同 reflog selector 分别成行，窄侧栏中 `stash@{n}` 序号仍完整可见。展开才读取 Stash 的文件变化（包含第三父未跟踪文件），使用现有只读 Diff，且不能暴露普通 Commit 的 Reset/Drop 菜单。分页不因 Stash 隐藏真实提交，连接或刷新失败不伪造连线。
 2. Apply 与 Pop 分别有 **Reinstate Index=false** 复选，真正带/不带 `--index`；Apply 不移除 Stash，Pop 仅成功应用后移除，冲突时仍保留 reflog。Create Branch 先输入名称，真实 `git stash branch <name> <selector>` 会**Checkout 新 Branch 并恢复变更**、成功后可能移除原 Stash；Drop 的 **Yes, Drop/Cancel** 只移除选定的条目。
-3. selector+OID 都需保留。Apply 可用固定 OID；**Pop/Drop/Branch** 用 selector，Branch 的成功移除行为不能通过传 OID 丢掉。在弹窗打开时捕获现有 Stash 列表，在同一 perform 首次副作用前重读同一列表并核对整个 selector/OID/说明顺序；只核对一个 OID 无法区分同一对象的不同 reflog 记录，弹窗期间列表变化就重新选择，不只依赖 stashCount。检查不是外部 CLI 的原子锁，不声称消除所有跨进程并发，也不新建全局锁。Apply 使用固定对象 OID，不因无关的 Stash 移位误用新 selector。
+3. selector+OID 都需保留。Apply 可用固定 OID；**Pop/Drop/Branch** 用 selector，Branch 的成功移除行为不能通过传 OID 丢掉。在弹窗打开时捕获现有 Stash 列表，在同一 perform 首次副作用前重读同一列表并核对整个 selector/OID/说明顺序；只核对一个 OID 无法区分同一对象的不同 reflog 记录，弹窗期间列表变化就重新选择，不能只比对储藏数量。检查不是外部 CLI 的原子锁，不声称消除所有跨进程并发，也不新建全局锁。Apply 使用固定对象 OID，不因无关的 Stash 移位误用新 selector。
 4. More Menu 若保留 Pop 快捷入口，明确 **Pop Latest Stash…**：绑定打开时的首条 selector/OID，走相同 Reinstate Index 表单、校验和执行方法，不保留原无参数盲 `stashPop()`。会修改工作区的 Apply/Pop/Branch 复用 T1 保存/重载；只删 reflog 的 Drop 不因无关 dirty Tab 被禁用。失败不 Hard Reset 清 index，连接/机器变化不串目标。
 
-**Red→Green / 验收：** 至少两个不同内容的 Stash，Apply/Pop 有/无 --index、Branch 成功移除、Drop 精确移除；冲突保留 stash/真实 index。弹窗期间新增/删除另一条时 Pop/Drop/**Branch** 不误用移位 selector；Apply 固定 OID 的内容正确。count 从真实列表派生，查询失败不假清零；Pop Latest 同表单/校验。取消、重名、换机器和保存失败留原内容；NativeUI 行右键/名称/字段/按钮、窗口与基础无障碍命中不串目标，不扩出 VoiceOver 专项功能。
+**Red→Green / 验收：** 至少两个不同内容的 Stash，Apply/Pop 有/无 --index、Branch 成功移除、Drop 精确移除；冲突保留 stash/真实 index。弹窗期间新增/删除另一条时 Pop/Drop/**Branch** 不误用移位 selector；Apply 固定 OID 的内容正确。数量从真实列表派生，查询失败不假清零；多条 selector 指向相同 OID 在图谱中仍独立可操作，同一基础提交的图谱边正确，未加载的基础提交不画虚假边，第三父未跟踪内容可打开历史 Diff；SSH 更换通道时旧的加载结果失效、失败后可重新展开重试；Pop Latest 同表单/校验。取消、重名、换机器和保存失败留原内容；NativeUI 行右键/名称/字段/按钮、窗口与基础无障碍命中不串目标，不扩出 VoiceOver 专项功能。
 
-**提交边界：** 列表/菜单/模型/回归及 Git/UI/本地化文档同一提交；删原 stashCount 独立计数命令/存储和无参数 stashPop 盲执行，count 仅保留派生展示；无兼容 Pop 路由、双份缓存或执行器。
+**提交边界：** 列表/菜单/模型/回归及 Git/UI/本地化文档同一提交；删原 stashCount 独立计数命令/存储和无参数 stashPop 盲执行，数量直接来自 stashes 列表；无兼容 Pop 路由、双份缓存或执行器。
 
 <a id="p4-t9"></a>
 ## P4-T9 全对象弹窗、真实副作用与本机/SSH 用户路径验收

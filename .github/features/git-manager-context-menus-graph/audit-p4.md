@@ -43,17 +43,43 @@
 
 ## 发现项
 
+## 发现 F-24
+
+- 任务：`P4-T8`
+- 严重级别：`Low`
+- 状态：`Resolved`
+- 位置：`kero/Git/RecentCommitsView.swift:292`
+- 摘要：`实际隔离 App 窄 Git 侧栏中 Stash 徽标把 stash@{0} 截断成 stash...，仅 AX 和帮助信息能读到完整 selector`
+- 风险：`存在多条储藏时无法在图谱中直接区分 stash@{0}、stash@{1} 等身份标签，不符合显示具体 Stash 的产品目标`
+- 预期修复：`让 Stash 标签的文本采用内在完整宽度，优先压缩前方可横向滚动的提交标题，不新增宽度状态或独立布局`
+- 验证：`原生 RecentCommitsViewTests、隔离 Kero 真实窄侧栏截图、make test、make build 和严格验签`
+- 解决证据：`42bbb53：RecentCommitsView.stashBadge 将 selector 文本改成固定内在水平尺寸，允许前方提交标题独立缩短/滚动，去掉 stash... 错误省略。隔离独立 Kero 窄侧栏之前截图 /tmp/kero-graph-isolated-git.png 对照之后 /tmp/kero-stash-graph-badge-after.png 看到完整 stash@{0}；原生图谱 RecentCommitsViewTests 11/11，最新真实 Windows SSH 全量 234/234，make build/codesign 全过。`
+
+
+## 发现 F-23
+
+- 任务：`P4-T8`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Git/GitPanel.swift:1593; kero/Git/RecentCommitsView.swift:99`
+- 摘要：`已完成的 Issue #2 要求参考 VS Code Git Graph；上游 d7f43f4 真实将 Stash 插入 Git DAG 并连接其基础提交，但 Kero 的 P4 计划主观排除 Stash 并单独创建 STASHES 区域，未满足更新后的用户需求`
+- 风险：`Stash 与原始提交缺乏拓扑关系，无法像 Git Graph 在图谱里观察每条储藏及其变化历史；同 SHA 多条记录仍需准确分别可操作`
+- 预期修复：`采用 Git Graph 的单父可视化策略，整合 GitStatusModel Stash 身份与 RecentCommitsView/CommitGraphLayout，删除独立 STASHES 分组及失效计划描述；保留原有 Stash 互斥与弹窗语义，必要时惰性读取变更`
+- 验证：`GitStashActionTests、RecentCommitsViewTests、CommitGraphLayoutTests、GitStatusModelTests、真实 Git 临时仓库与实际本机/Windows SSH make test、make build；启动隔离 App 检查图谱 Stash 节点及右键`
+- 解决证据：`42bbb53；Git Graph 上游 d7f43f4 的 src/dataSource.ts 真实读取 Stash 并以基础提交作单父可视化，Kero 复用现有 graphCommits/CommitGraphLayout、移除独立 STASHES；同 OID 不同 selector 多节点、无基础提交时不画虚线、第三父未跟踪差异、原右键身份保护专项全部通过。隔离 Kero 完整 App 的图谱关系线/展开 src/conflict.txt/原生 Diff/Apply Pop Drop Branch 右键经截图与 Git blob 对照。最终真实 Windows SSH 全量 /tmp/kero-stash-graph-badge-final-full-windows.log 234/234、0失败、0跳过；make build 严格验签，最终安装哈希对照通过。`
+
+
 ## 发现 F-22
 
 - 任务：`P4-T8`
 - 严重级别：`Low`
-- 状态：`Open`
+- 状态：`Resolved`
 - 位置：`kero/Git/GitPanel.swift:1824`
 - 摘要：`STASHES 只是上下文菜单行却启用 SwiftUI 默认焦点描边，鼠标交互留下主题色选中外框，与共享树行的 Hover/Focussed 浅底样式不一致`
 - 风险：`点击/键盘聚焦时出现多余强调色外框，容易误解为持续选中某条 Stash`
 - 预期修复：`保留原生可聚焦及 AX 上下文操作，禁止额外系统焦点描边，复用 TreeRowSurface 原有聚焦背景`
 - 验证：`原生侧栏焦点与菜单访问回归；make test；make build；正式 App 重启后实测样式`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`42bbb53：独立 STASHES/stashRow/@FocusState 删除，Stash 改为正式 Git 图谱节点，无原来专属的额外默认焦点描边；隔离完整 Kero App 右键图谱 Stash、视觉验收通过，RecentCommitsViewTests 11/11、最终真实 Windows SSH 234/234、严格 build/codesign 通过。正式运行 PID52207 没重启，未谎称现有用户进程已切换。`
 
 
 ## 发现 F-21
@@ -480,3 +506,18 @@
 - 签名 Debug 完整包以独立临时 stage 校验后整包替换 `/Applications/Kero.app`，新包重验签 PASS，构建和安装可执行文件 SHA-256 均为 `7d23afa18c858d4f79b193a3a5a00f7fe20142b1b47cbfd17c18dec6798f50eb`。只清理本次确定归属的临时备份；**用户当前 Kero 进程未停止、未重启**，须自行重启后才切换磁盘新包。
 - 代码修复原子提交 `f4f8cc0`（T1/T4/T7 共享根因）和 `7c7ddc6`（T8 Stash 身份）；F-18～F-21 的 Open→Resolved 由 `feature_tool.py finding resolve` 分别写入定向 Red/Green 证据，未人工改写旧审计判断。历史阶段 commit 映射及 `todo.toml` 原始 P4-T1～T9 状态保留，不虚构第十个任务。
 - **Gate：Go（P4 生产逻辑/仓库操作、自动化测试、构建和磁盘安装）**；本轮四项新缺陷已全部解决，无保留的实证正确性阻塞。没有再次进行完整独立 App 所有菜单的人工端到端点击/VoiceOver 实际导航，不把 XCTest 当成该层级的重新通过；旧 `evidence-p4.md` 已有历史 E2E 记录但不是本轮依据。完整日志曾有 SSH 255 和测试临时文件已不存在两处环境失败，独立同类真机专项 5/5 和最终全量 230/230 均已通过，故不增加网络补丁、静默 fallback 或测试 sleep。阶段计划与审计保留本地，**未 push**。
+
+
+## 2026-10-15 Stash 入 Git Graph 的后续补验（F-22～F-24）
+
+**根因与实现：** 已核对 VS Code Git Graph 固定提交 `d7f43f4` 的 `src/dataSource.ts`：Stash 在图谱中作为节点显示，只沿基础提交画关系线，并具有 Stash 专属菜单。原 P4 将储藏放在独立 STASHES 区域的设计不符合该交互及当前需求（F-23）。现行 `GitStatusModel.graphCommits` 将每条记录插入现有图谱，`CommitGraphLayout` 只用真实 Commit 建立父提交 SHA 索引，从而支持同 OID 不同 reflog selector、未加载基础提交时不伪造连线。`GitPanel` 删除旧的 STASHES 分组和焦点描边入口（F-22），保留原 `presentStashDialog/actOnStash` 的完整 reflog 身份验证。展开时惰性读取已跟踪和第三父未跟踪文件，复用只读 Diff；SSH 更换通道时旧明细失效，读取失败后可重试。窄栏完整显示 `stash@{n}`（F-24）。没有引入另一套 Git 模型、图谱或操作执行器。
+
+**执行证据：**
+- 真实临时 Git：`GitStashActionTests` 核对重复 OID 不同 selector 分别成行、首父连线、缺页不造边、12 条同时间戳记录保持 reflog 数字顺序、第三父未跟踪文件的真实 Git blob，以及 Apply/Pop/Drop/Branch 精确作用对象；`GitStatusModelTests` 核对 SSH 通道切换、旧加载丢弃和失败重试；`RecentCommitsViewTests` 核对原生 Stash 右键不混入普通 Commit 操作。
+- **独立完整 Kero App 的本机用户路径**：签名 Debug `--isolated-ui-test` 中观察到 GIT GRAPH 内的 Stash 节点及通向基础提交的真实彩色线；展开 `src/conflict.txt` 后打开原生历史 Diff，`QA_RESOLVED_MAIN_SIDE` → `native focus snapshot` 的真实显示与 `git diff 'stash@{0}^1' 'stash@{0}'` 一致。真实右键显示 Apply/Create Branch/Pop/Drop/Copy Name/Hash，不含普通 Commit 的 Reset/Checkout。截图 `/tmp/kero-graph-isolated-git.png`、`/tmp/kero-graph-isolated-stash-expanded.png`、`/tmp/kero-graph-isolated-stash-menu.png`；F-24 修复后 `/tmp/kero-stash-graph-badge-after.png` 确认窄侧栏中完整 `stash@{0}`。独立 App 没有执行破坏性 Pop/Drop；真实副作用由 Git 测试覆盖。隔离 App 进程已正常退出，不影响用户正式进程。
+- **最终完整 Windows SSH 自动化**：`KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test`，`/tmp/kero-stash-graph-badge-final-full-windows.log`，**234/234、0 failures、0 skipped，TEST SUCCEEDED**；Windows `GitExternalRefreshTests`、`GitInteractiveRebaseTests`、`GitWorkspaceSSHTests`（远端 ZIP、二进制版本、Stash、Clean、Ignore）和 `RecentCommitsViewTests` 全部 passed。F-24 之后的原生专项 `/tmp/kero-stash-graph-badge-native-final.log` 11/11 passed。
+- 首轮 `/tmp/kero-stash-graph-full-windows.log` 曾有一次 SSH 前台暂存后面板未刷新的超时；独立复测 `/tmp/kero-stash-graph-ssh-refresh-isolated.log` 及后续两轮完整 234/234 均通过。没有延长超时、跳过测试或为未经定位的问题打补丁；当下没有稳定复现的 Stash 回归。
+- `/tmp/kero-stash-graph-final-verified-build.log`：**BUILD SUCCEEDED**，`codesign --verify --deep --strict` PASS，`git diff --check` 和本地化 JSON 校验通过。`/Applications/Kero.app` 经过同磁盘预验签整包替换、安装后严格验签，构建/安装 `kero.debug.dylib` SHA-256 均为 **df9e6354dfc71fad404ba69b5430dcc6e09427e9115674622c8b7b14b43759fd**。临时安装目录和旧包备份清理；用户正式 PID **52207** 未退出或重启，需用户自行重启才加载新版本。
+- **正式本地提交 42bbb53**（14 个生产源码、测试、owner 文档与本地化文件）；F-22、F-23、F-24 已使用 `feature_tool.py finding resolve` 全部标为 `Resolved`。PR #14 已合并、Issue #2 已关闭，此次在 `crh` 上的补修不属于先前合并的 PR；分支领先 `origin/crh` 一个提交、**未 push**。`idea.md`、`plan-p4.md`、`audit-p4.md` 仍只保存在本地。
+
+**Gate：Go（本次 Stash 图谱、真实 Git、NativeUI、独立本机 App、真实 Windows SSH 自动化、签名和磁盘安装）。** F-22～F-24 均已关闭，无新的可复现阻断项。未另行执行真实 Windows SSH **独立 App** 逐按钮 E2E，也未做 VoiceOver 专项朗读；不能把自动化或本机 GUI 验收冒充这些未执行的测试。
