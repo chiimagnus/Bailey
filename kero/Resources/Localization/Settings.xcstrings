@@ -31,6 +31,16 @@
         }
       }
     },
+    "Add" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加"
+          }
+        }
+      }
+    },
     "Always Show" : {
       "localizations" : {
         "zh-Hans" : {
@@ -61,12 +71,132 @@
         }
       }
     },
+    "Bark URL added" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已添加 Bark 推送链接"
+          }
+        }
+      }
+    },
+    "Bark URL already exists" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Bark 推送链接已存在"
+          }
+        }
+      }
+    },
+    "Bark URL removed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移除 Bark 推送链接"
+          }
+        }
+      }
+    },
+    "Bark accepted %lld of %lld pushes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bark 已接受 %lld/%lld 条推送请求"
+          }
+        }
+      }
+    },
+    "Bark is enabled" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bark 已启用"
+          }
+        }
+      }
+    },
+    "Bark is not configured" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未配置 Bark"
+          }
+        }
+      }
+    },
+    "Bark push URL or device key" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bark 推送链接或设备 Key"
+          }
+        }
+      }
+    },
+    "Codex and other terminal notifications are sent to every Bark destination. Messages may contain sensitive output." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 等终端通知会发送到全部 Bark 设备，内容可能包含敏感信息。"
+          }
+        }
+      }
+    },
     "Colors" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "颜色"
+          }
+        }
+      }
+    },
+    "Could not access Bark URLs in Keychain" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法从钥匙串读取 Bark 推送链接"
+          }
+        }
+      }
+    },
+    "Could not remove Bark URL" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法移除 Bark 推送链接"
+          }
+        }
+      }
+    },
+    "Could not save Bark URL" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法保存 Bark 推送链接"
+          }
+        }
+      }
+    },
+    "Could not send the test notification" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "测试通知发送失败"
           }
         }
       }
@@ -223,6 +353,16 @@
         }
       }
     },
+    "Phone Notifications" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手机通知"
+          }
+        }
+      }
+    },
     "Port Forwarding" : {
       "localizations" : {
         "zh-Hans" : {
@@ -259,6 +399,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "重新启动 Kero 以应用语言更改。"
+          }
+        }
+      }
+    },
+    "Remove" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除"
+          }
+        }
+      }
+    },
+    "Remove %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除 %@"
           }
         }
       }
@@ -309,6 +469,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "选择一个或多个要在 Kero 中打开的文件夹。"
+          }
+        }
+      }
+    },
+    "Send Test Notification" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送测试通知"
           }
         }
       }
@@ -401,6 +571,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "终端"
+          }
+        }
+      }
+    },
+    "Test notification from Kero" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自 Kero 的测试通知"
           }
         }
       }

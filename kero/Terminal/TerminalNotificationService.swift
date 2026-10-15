@@ -5,6 +5,7 @@
 
 import AppKit
 import Foundation
+import os
 import UserNotifications
 
 /// Delivers terminal notification requests through macOS Notification Center.
@@ -37,9 +38,27 @@ final class TerminalNotificationService: NSObject, UNUserNotificationCenterDeleg
         }
     }
 
-    func post(message: String, sessionID: UUID? = nil) {
+    func post(message: String, sessionID: UUID? = nil, forwardToBark: Bool = false) {
         guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         DispatchQueue.main.async { [weak self] in
+            if forwardToBark, !KeroInstanceMode.isIsolated {
+                let title = sessionID.flatMap { TerminalManager.projectName(forSession: $0) } ?? "Kero"
+                Task.detached(priority: .utility) {
+                    let logger = Logger(
+                        subsystem: AppIdentity.bundleIdentifier, category: "notifications"
+                    )
+                    do {
+                        let result = try await BarkPushService.sendConfigured(
+                            title: title, message: message
+                        )
+                        if result.failed > 0 {
+                            logger.warning("Bark delivery failed for \(result.failed) destinations")
+                        }
+                    } catch {
+                        logger.error("Could not load Bark destinations from Keychain")
+                    }
+                }
+            }
             self?.checkAuthorization(for: message, sessionID: sessionID)
         }
     }
