@@ -1380,7 +1380,7 @@ final class GitStatusModel {
         }
         perform(label: String(localized: "Checkout Remote Branch", table: "Git"),
                 commands: commands,
-                preflight: checkoutExistingAndPull ? [] : [["check-ref-format", "--branch", localName]],
+                preflight: [["check-ref-format", "--branch", localName]],
                 expectedRef: (trackingRef, selected.oid),
                 prepare: prepare, isCurrentTarget: isCurrentTarget, completion: completion)
     }

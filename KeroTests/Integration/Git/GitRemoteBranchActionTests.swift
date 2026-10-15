@@ -137,6 +137,29 @@ final class GitRemoteBranchActionTests: XCTestCase {
         XCTAssertNotEqual(try git(["rev-parse", "HEAD"]), base)
     }
 
+    func testExistingRemoteCheckoutRejectsPreviousBranchAliasFromExternalRef() async throws {
+        _ = try makeBareRemote("origin")
+        let base = try git(["rev-parse", "HEAD"])
+        _ = try git(["push", "origin", "main:refs/heads/topic"])
+        _ = try git(["fetch", "-q", "origin"])
+        _ = try git(["switch", "-c", "previous"])
+        _ = try git(["commit", "--allow-empty", "-qm", "previous branch"])
+        let previous = try git(["rev-parse", "HEAD"])
+        _ = try git(["switch", "main"])
+        _ = try git(["update-ref", "refs/heads/-", base])
+        try await refresh()
+        let remote = try XCTUnwrap(model.remoteBranch(named: "origin/topic"))
+
+        model.checkoutRemoteBranch(remote, localName: "-",
+                                   checkoutExistingAndPull: true, target: model.actionTarget())
+        try await settle()
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try git(["branch", "--show-current"]), "main")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), base)
+        XCTAssertEqual(try git(["rev-parse", "refs/heads/-"]), base)
+        XCTAssertEqual(try git(["rev-parse", "refs/heads/previous"]), previous)
+    }
+
     func testRemoteRefChangesAfterSnapshotRejectOldTargetBeforeSideEffects() async throws {
         let server = try makeBareRemote("origin")
         _ = try git(["push", "origin", "main:refs/heads/topic/stale"])
