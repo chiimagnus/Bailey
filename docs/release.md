@@ -4,7 +4,7 @@
 
 ## PR 检查
 
-[CI workflow](../.github/workflows/ci.yml) 仅在面向 `main` 的 PR 上运行；普通 `main` 提交不会触发。Runner 为 `macos-26`，`DEVELOPER_DIR` 指定 Xcode 26.6。
+[CI workflow](../.github/workflows/ci.yml) 仅在面向 `main` 的 PR 上运行。纯 Markdown、`docs/`、`.github/features/`（计划／审计／设计稿）、`.github/ISSUE_TEMPLATE/` 或 `LICENSE` 变更会跳过；只要 PR 同时改动了其他文件（如 Swift、测试、工程、Makefile 或 workflow），仍运行完整 CI。普通 `main` 提交不会触发；版本 Tag 发布不受此过滤影响。Runner 为 `macos-26`，`DEVELOPER_DIR` 指定 Xcode 26.6。将来若配置必需 CI 检查，须同步调整跳过策略，避免检查一直 Pending 而阻止纯文档 PR 合并。
 
 PR CI 只执行 `make test SIGNING=adhoc`（Debug）：构建实际测试宿主、运行全部 XCTest，再严格验签 `Kero.app` 和 `KeroTests.xctest`，确认均为 ad hoc 签名。`AppIdentityTests` 同时检查测试宿主的 Bundle ID 和显示名称；失败会使 CI 失败。它不是完整 UI 或真实 SSH 验收，提交者仍须执行 [testing.md](testing.md#完成标准) 中与改动相关的检查。
 
