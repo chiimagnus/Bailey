@@ -16,18 +16,20 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
 
     private var files: [String: Data]
     private var writing: PendingWrite?
-    private var reading: CheckedContinuation<Data, Error>?
+    private var reading: [CheckedContinuation<Data, Error>] = []
     private var nextReadPaused = false
     private(set) var writingPath: String?
     private(set) var readingPath: String?
+    var pendingReadCount: Int { reading.count }
 
     init(path: String, contents: Data) { files = [path: contents] }
 
     func pauseOneRead() { nextReadPaused = true }
     func finishRead(with data: Data) {
-        readingPath = nil
-        reading?.resume(returning: data)
-        reading = nil
+        guard !reading.isEmpty else { return }
+        let continuation = reading.removeFirst()
+        if reading.isEmpty { readingPath = nil }
+        continuation.resume(returning: data)
     }
     func finishWrite(failing: Bool = false) {
         guard let pending = writing else { return }
@@ -47,7 +49,7 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
         if nextReadPaused {
             nextReadPaused = false
             readingPath = path
-            return try await withCheckedThrowingContinuation { reading = $0 }
+            return try await withCheckedThrowingContinuation { reading.append($0) }
         }
         return Data(data.prefix(maxBytes))
     }
@@ -79,6 +81,43 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
 
 @MainActor
 final class FileTabTests: XCTestCase {
+    func testAppendWaitsForReplacementReadWithoutUsingLoadingOrCachedText() async throws {
+        for initiallyLoading in [true, false] {
+            let path = "/fixture/.gitignore"
+            let backend = EditorWorkspaceFixture(path: path, contents: Data("cached\n".utf8))
+            if initiallyLoading { await backend.pauseOneRead() }
+            let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+            file.autoSaveSuspendedForClose = true
+            if !initiallyLoading {
+                try await wait { if case .text = file.content { return true }; return false }
+                await backend.pauseOneRead()
+                file.reloadFromDiskIfClean()
+            }
+            try await wait { await backend.pendingReadCount == 1 }
+            let premature = expectation(description: "Wait must follow the replacement read")
+            premature.isInverted = true
+            let waiting = expectation(description: "Append began waiting for the first read")
+            var checkingEarlyCompletion = true
+            let append = Task {
+                defer { if checkingEarlyCompletion { premature.fulfill() } }
+                waiting.fulfill()
+                try await file.waitForText()
+                file.appendText("/new\n")
+            }
+            await fulfillment(of: [waiting], timeout: 1)
+            await backend.pauseOneRead()
+            file.reloadFromDiskIfClean()
+            try await wait { await backend.pendingReadCount == 2 }
+            await backend.finishRead(with: Data("superseded\n".utf8))
+            await fulfillment(of: [premature], timeout: 0.1)
+            checkingEarlyCompletion = false
+            await backend.finishRead(with: Data("latest rules\n".utf8))
+            do { try await append.value } catch { XCTFail(error.localizedDescription) }
+            XCTAssertEqual(file.text, "latest rules\n/new\n")
+            XCTAssertTrue(file.isDirty)
+        }
+    }
+
     func testAppendWaitsForRemoteReadAndRetainsTextOnSaveFailure() async throws {
         let path = "/fixture/.gitignore"
         let backend = EditorWorkspaceFixture(path: path, contents: Data("existing\n".utf8))

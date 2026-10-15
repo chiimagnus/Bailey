@@ -119,7 +119,11 @@ final class FileTab: nonisolated Identifiable {
 
     func waitForText() async throws {
         let generation = targetGeneration
-        await reloadTask?.value
+        var readGeneration: UInt
+        repeat {
+            readGeneration = reloadGeneration
+            await reloadTask?.value
+        } while generation == targetGeneration && readOnlyReason == nil && readGeneration != reloadGeneration
         guard generation == targetGeneration, readOnlyReason == nil,
               case .text = content else {
             throw NSError(domain: "Kero.Editor", code: 1, userInfo: [NSLocalizedDescriptionKey:
