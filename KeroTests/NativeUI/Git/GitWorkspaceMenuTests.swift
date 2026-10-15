@@ -234,4 +234,128 @@ final class GitWorkspaceMenuTests: XCTestCase {
         XCTAssertTrue(git(["stash", "list"]).contains("native sheet message"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: untracked.path))
     }
+
+    func testFolderInlineStageAndUnstageAffectOnlyThatDirectory() async throws {
+        let sandbox = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kero-folder-buttons-" + UUID().uuidString)
+        let root = sandbox.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+        func git(_ args: [String]) -> String {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        git(["init", "-q", "-b", "main"])
+        git(["config", "user.name", "Folder Button Test"])
+        git(["config", "user.email", "folder@invalid"])
+        git(["config", "commit.gpgsign", "false"])
+        for path in ["inside/one.txt", "inside/two.txt", "outside/keep.txt"] {
+            let file = root.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try "original".write(to: file, atomically: true, encoding: .utf8)
+        }
+        git(["add", "."])
+        git(["commit", "-qm", "base"])
+        for path in ["inside/one.txt", "inside/two.txt", "outside/keep.txt"] {
+            try "modified".write(to: root.appendingPathComponent(path),
+                                 atomically: true, encoding: .utf8)
+        }
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([root])
+        let model = GitStatusModel()
+        model.syncSelectedProject(in: manager)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing && model.changedEntries.count == 3 }
+        let width: CGFloat = 440
+        let height: CGFloat = 640
+        let window = NSWindow(
+            contentRect: NSRect(x: -1200, y: -1200, width: width, height: height),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: GitPanel(
+            settings: AppSettings(configURL: sandbox.appendingPathComponent("settings.toml")),
+            model: model, manager: manager, project: manager.selectedProject,
+            session: nil, sshHost: nil, openFile: { _ in },
+            openDiff: { _, _ in }, openCommitDiff: { _, _ in }
+        ).frame(width: width, height: height))
+        window.orderFront(nil)
+        defer { window.close() }
+        try await Task.sleep(for: .milliseconds(250))
+
+        func folderY(menu expected: String) -> CGFloat? {
+            for y in stride(from: Int(height - 8), through: 8, by: -4) {
+                guard let event = NSEvent.mouseEvent(
+                    with: .rightMouseDown, location: NSPoint(x: 85, y: CGFloat(y)),
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                    clickCount: 1, pressure: 1
+                ) else { continue }
+                let titles = window.contentView?.menu(for: event)?.items.map(\.title) ?? []
+                if titles.contains(expected)
+                    && !titles.contains(String(localized: "Open File", table: "Sidebar")) {
+                    return CGFloat(y)
+                }
+            }
+            return nil
+        }
+        func clickAction(y: CGFloat, x: CGFloat = width - 23) {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = NSEvent.mouseEvent(
+                    with: type, location: NSPoint(x: x, y: y),
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                    clickCount: 1, pressure: 1
+                )!
+                window.sendEvent(event)
+            }
+        }
+        let stage = String(localized: "Stage Changes", table: "Sidebar")
+        let folderBefore = try XCTUnwrap(folderY(menu: stage), "Expected CHANGES folder row")
+        let collapsedBefore = model.collapsedFolders
+        clickAction(y: folderBefore)
+        try await wait { model.stagedEntries.count == 2 && !model.isBusy && !model.isRefreshing }
+        XCTAssertEqual(model.collapsedFolders, collapsedBefore,
+                       "Right-side action must not collapse the directory")
+        XCTAssertEqual(Set(git(["diff", "--cached", "--name-only"]).split(separator: "\n").map(String.init)),
+                       Set(["inside/one.txt", "inside/two.txt"]))
+        XCTAssertTrue(model.changedEntries.contains { $0.path == "outside/keep.txt" })
+
+        let unstage = String(localized: "Unstage Changes", table: "Sidebar")
+        let stagedFolder = try XCTUnwrap(folderY(menu: unstage), "Expected STAGED folder row")
+        clickAction(y: stagedFolder)
+        try await wait { model.stagedEntries.isEmpty && !model.isBusy && !model.isRefreshing }
+        XCTAssertEqual(git(["diff", "--cached", "--name-only"]), "")
+        XCTAssertEqual(model.changedEntries.count, 3)
+
+        let folderForDiscard = try XCTUnwrap(folderY(menu: stage), "Expected CHANGES folder")
+        clickAction(y: folderForDiscard, x: width - 45)
+        try await wait { window.attachedSheet != nil }
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("inside/one.txt"),
+                                  encoding: .utf8), "modified",
+                       "The inline discard button must require confirmation")
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("outside/keep.txt"),
+                                  encoding: .utf8), "modified")
+        func descendants(_ view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(descendants)
+        }
+        let sheet = try XCTUnwrap(window.attachedSheet)
+        let confirm = try XCTUnwrap(descendants(try XCTUnwrap(sheet.contentView))
+            .compactMap { $0 as? NSButton }
+            .first { $0.title == String(localized: "Discard Changes", table: "Sidebar") })
+        XCTAssertNotEqual(confirm.title, String(localized: "Discard All Changes", table: "Sidebar"))
+        confirm.performClick(nil)
+        try await wait {
+            !model.isBusy && !model.isRefreshing && model.changedEntries.count == 1
+        }
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("inside/one.txt"),
+                                  encoding: .utf8), "original")
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("inside/two.txt"),
+                                  encoding: .utf8), "original")
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("outside/keep.txt"),
+                                  encoding: .utf8), "modified")
+    }
 }

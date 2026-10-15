@@ -189,6 +189,11 @@ final class TreeRowHitTestingTests: XCTestCase {
             name: "src", path: "src", isDirectory: true
         )
         assertTextScroll(TreeFolderRow(row: folder, scale: 1) {})
+        assertTextScroll(TreeFolderRow(row: folder, scale: 1, toggle: {}) { _ in
+            Button {} label: {
+                Image(systemName: "plus").frame(width: 16, height: 22)
+            }
+        })
         assertTextScroll(TreeFileRow(row: file, scale: 1, open: {}) { _ in EmptyView() })
         assertTextScroll(TreeFileRow(row: file, scale: 1, open: {}) { _ in
             Button {} label: {
@@ -198,6 +203,18 @@ final class TreeRowHitTestingTests: XCTestCase {
     }
 
     func testLongNamesScrollWithoutMovingGitActions() {
+        let folder = TreeDisplayModel.Row(
+            name: String(repeating: "very-long-folder-name/", count: 8) + "nested",
+            path: "nested", isDirectory: true
+        )
+        assertTextScroll(
+            TreeFolderRow(row: folder, scale: 1, toggle: {}) { _ in
+                Button {} label: {
+                    Image(systemName: "minus").frame(width: 16, height: 22)
+                }
+            },
+            overflowing: true
+        )
         let file = TreeDisplayModel.Row(
             name: String(repeating: "very-long-directory-name/", count: 8) + "file.swift",
             path: "file.swift", isDirectory: false
@@ -264,6 +281,23 @@ final class TreeRowHitTestingTests: XCTestCase {
                     height: height,
                     actions: folderActions,
                     content: TreeFolderRow(row: folder, scale: scale) { folderActions.primary += 1 }
+                )
+
+                let folderWithActions = Actions()
+                assertSurface(
+                    height: height,
+                    actions: folderWithActions,
+                    accessory: true,
+                    content: TreeFolderRow(row: folder, scale: scale,
+                                           toggle: { folderWithActions.primary += 1 }) { _ in
+                        Button { folderWithActions.accessory += 1 } label: {
+                            Image(systemName: "plus")
+                                .frame(width: 16, height: height)
+                                .padding(.horizontal, 3)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
                 )
 
                 let file = TreeDisplayModel.Row(
