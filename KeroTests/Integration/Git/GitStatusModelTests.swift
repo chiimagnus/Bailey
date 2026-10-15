@@ -650,6 +650,7 @@ final class GitStatusModelTests: XCTestCase {
         let filePath = directory.appendingPathComponent("editing.txt")
         try Data("baseline".utf8).write(to: filePath)
         let file = FileTab(path: filePath.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
         await backend.suspendNextGitRequest()
         model.actOnCommit(target, action: .checkout, target: model.actionTarget(),
                           prepare: { true }, isCurrentTarget: { !file.isDirty })

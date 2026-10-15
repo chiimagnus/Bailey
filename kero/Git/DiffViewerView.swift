@@ -203,7 +203,7 @@ final class DiffTab: nonisolated Identifiable {
         guard readOnlyReason != nil || (backend as AnyObject) !== (live as AnyObject) else { return }
         if readOnlyReason == nil {
             targetGeneration &+= 1
-            reloadGeneration &+= 1
+            invalidateReload()
         }
         // A reconnection is a new channel; reading or saving over the old one
         // fails, so the tab takes the live one.
@@ -223,7 +223,7 @@ final class DiffTab: nonisolated Identifiable {
             : nil
         guard readOnlyReason != reason else { return }
         targetGeneration &+= 1
-        reloadGeneration &+= 1
+        invalidateReload()
         readOnlyReason = reason
         // Going offline hides the editable pane; publish its unsaved text to
         // the read-only diff instead of making the draft disappear on screen.
@@ -271,11 +271,16 @@ final class DiffTab: nonisolated Identifiable {
         return "\(workspaceIdentity): \(title)"
     }
 
+    private func invalidateReload() {
+        reloadGeneration &+= 1
+        isLoading = false
+    }
+
     func reload(afterGitAction: Bool = false) {
         // While the machine is unreachable both sides can only fail to load,
         // and an error would replace the diff the user was reading.
         guard readOnlyReason == nil, (!isEditing || afterGitAction), !isDirty else { return }
-        reloadGeneration &+= 1
+        invalidateReload()
         let generation = reloadGeneration
         isLoading = true
         error = nil
@@ -402,6 +407,10 @@ final class DiffTab: nonisolated Identifiable {
     /// would waste work without changing the visible diff. An initial live load also
     /// stays in flight rather than being duplicated by the view's first mount.
     func refreshWhenSelected() {
+        if readOnlyReason != nil, let workspaceIdentity {
+            SSHHostWorkspaces.retryConnection(for: workspaceIdentity, path: repoRoot + "/" + path)
+            return
+        }
         guard source.isLive, !isLoading else { return }
         reload()
     }
@@ -411,7 +420,7 @@ final class DiffTab: nonisolated Identifiable {
         guard isEditable else { return }
         editedNewContent = contents
         isDirty = contents != savedNewContent
-        if isDirty { reloadGeneration &+= 1 }
+        if isDirty { invalidateReload() }
         refreshEditDecorations()
     }
 
@@ -633,7 +642,7 @@ final class DiffTab: nonisolated Identifiable {
         let written = editedNewContent
         let target = backend
         let generation = targetGeneration
-        reloadGeneration &+= 1
+        invalidateReload()
         do {
             try await target.write(path: filePath, data: Data(written.utf8))
             guard generation == targetGeneration, readOnlyReason == nil else { return }

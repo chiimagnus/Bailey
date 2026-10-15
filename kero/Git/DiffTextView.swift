@@ -269,16 +269,6 @@ final class DiffTextView: STTextView {
     var handleCollapsedClick: ((NSPoint) -> Bool)?
     var onResignFirstResponder: (() -> Void)?
 
-    override func isAccessibilitySelectorAllowed(_ selector: Selector) -> Bool {
-        if selector == #selector(setAccessibilityValue(_:)), !isEditable { return false }
-        return super.isAccessibilitySelectorAllowed(selector)
-    }
-
-    override func setAccessibilityValue(_ value: Any?) {
-        guard isEditable else { return }
-        super.setAccessibilityValue(value)
-    }
-
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
         if resigned { onResignFirstResponder?() }

@@ -213,6 +213,7 @@ struct SourceTextEditor: NSViewRepresentable {
     /// Guarded assignments: the font/color setters restyle the whole
     /// document, and this runs on every SwiftUI render.
     private func apply(to textView: STTextView, scrollView: NSScrollView) {
+        textView.isEditable = file.readOnlyReason == nil
         if textView.font != font {
             textView.font = font
         }

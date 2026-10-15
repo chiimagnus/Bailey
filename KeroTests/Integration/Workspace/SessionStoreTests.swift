@@ -210,6 +210,7 @@ final class SessionStoreTests: XCTestCase {
         guard case .file(let file) = fileTab.content else {
             return XCTFail("Expected a file tab")
         }
+        try await file.waitForText()
         file.text = "unsaved fixture edit"
         file.refreshDirtyState()
         XCTAssertTrue(file.isDirty)

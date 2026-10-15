@@ -691,6 +691,8 @@ final class DiffTabTests: XCTestCase {
         XCTAssertTrue(diff.isDirty)
         XCTAssertEqual(diff.newContent, baseline)
 
+        XCTAssertFalse(diff.isLoading, "Invalidated read must release its loading state")
+
         diff.updateEditedContent(baseline)
         XCTAssertFalse(diff.isDirty)
         await backend.pauseOneRead()
@@ -703,6 +705,7 @@ final class DiffTabTests: XCTestCase {
         XCTAssertNotNil(diff.readOnlyReason)
         XCTAssertEqual(diff.newContent, baseline)
         XCTAssertFalse(diff.isEditableNow)
+        XCTAssertFalse(diff.isLoading, "Disconnect must release the invalidated read")
     }
 
     func testGitReloadUpdatesCleanMountedEditSurfaceWithoutLosingDirtyText() async throws {

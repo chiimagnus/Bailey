@@ -22,7 +22,10 @@ private actor WindowSaveFixture: WorkspaceBackend {
     }
     func currentText() -> String { String(decoding: bytes, as: UTF8.self) }
 
-    func read(path: String, maxBytes: Int) async throws -> Data { Data(bytes.prefix(maxBytes)) }
+    func read(path: String, maxBytes: Int) async throws -> Data {
+        guard bytes.count <= maxBytes else { throw WorkspaceError.tooLarge }
+        return bytes
+    }
     func write(path: String, data: Data) async throws {
         writes += 1
         if pauseNextWrite {
@@ -88,7 +91,7 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         let backend = WindowSaveFixture("original")
         let tab = FileTab(path: root.appendingPathComponent("case.txt").path,
                           backend: backend, workspaceIdentity: nil)
-        try await wait { if case .text = tab.content { return true }; return false }
+        try await tab.waitForText()
         project.append(PaneTab(content: .file(tab)))
 
         let window = NSWindow(

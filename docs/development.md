@@ -68,8 +68,9 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 | 空范围高亮 | 空范围不加临时属性，避免 TextKit 崩溃 |
 | Diff 固定行高 | 双栏只读文档高度准确，滚动范围一致 |
 | 只读替换 | 展开上下文或重载只读文本时保留滚动，普通编辑仍跟随插入点 |
+| 辅助功能只读 | 值／选中文本替换遵守原生 isEditable，文件与 Diff 共用底层保护 |
 
-补丁集中在 [STTextView+Gutter.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Gutter.swift)、[STTextView.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView.swift) 和 [STTextLayoutManager.swift](../Vendor/STTextView/Sources/STTextViewCommon/STTextLayoutManager.swift)。Kero 自己的裁切、内边距和字体初始化由 [SourceTextEditor.swift](../kero/Editor/SourceTextEditor.swift) 负责，不归入上游补丁。
+补丁集中在 [STTextView+Gutter.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Gutter.swift)、[STTextView.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView.swift)、[STTextView+Accessibility.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Accessibility.swift) 和 [STTextLayoutManager.swift](../Vendor/STTextView/Sources/STTextViewCommon/STTextLayoutManager.swift)。Kero 自己的裁切、内边距和字体初始化由 [SourceTextEditor.swift](../kero/Editor/SourceTextEditor.swift) 负责，不归入上游补丁。
 
 升级时逐项检查上游是否已修复，删除不再需要的补丁，保留许可证和署名。运行 `FileTabTests`、`DiffTabTests` 并检查字体变化、长行、短文档、Markdown、高亮空范围、固定行高和只读替换滚动。全部修复被上游覆盖后才考虑撤销副本，不以升级成功替代功能验收。
 

@@ -59,10 +59,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         try Self.readSync(path: path, maxBytes: maxBytes)
     }
 
-    /// The same read, for the two places that cannot await: `Project`'s
-    /// synchronous panel root and a file tab's initial content, which is
-    /// produced in a synchronous initializer.
-    static func readSync(path: String, maxBytes: Int) throws -> Data {
+    private static func readSync(path: String, maxBytes: Int) throws -> Data {
         do {
             // Keep one descriptor for the whole read: replacing the path while
             // an agent writes cannot redirect us to a different, larger file.
@@ -88,12 +85,6 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
             throw WorkspaceError.notFound
         }
-    }
-
-    /// The initial content of a file tab, which is built synchronously.
-    /// Nil on any failure, matching the tolerance that read has always had.
-    func readImmediately(path: String) -> Data? {
-        try? Self.readSync(path: path, maxBytes: .max)
     }
 
     @concurrent func write(path: String, data: Data) async throws {

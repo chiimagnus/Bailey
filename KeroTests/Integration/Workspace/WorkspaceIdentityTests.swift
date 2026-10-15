@@ -70,9 +70,11 @@ final class WorkspaceIdentityTests: XCTestCase {
             return XCTFail("Expected local file")
         }
         XCTAssertNil(localFile.workspaceIdentity)
+        try await localFile.waitForText()
 
         let remoteBackend = IdentityWorkspaceFixture()
         let remoteFile = FileTab(path: path, backend: remoteBackend, workspaceIdentity: first.workspaceIdentity)
+        try await remoteFile.waitForText()
         project.append(PaneTab(content: .file(remoteFile)))
         try await wait { if case .text = remoteFile.content { return true }; return false }
         XCTAssertNotNil(remoteFile.workspaceIdentity)
@@ -118,6 +120,7 @@ final class WorkspaceIdentityTests: XCTestCase {
             path: path.path, backend: LocalWorkspaceBackend.shared,
             workspaceIdentity: connection.workspaceIdentity
         )
+        try await file.waitForText()
         project.append(PaneTab(content: .file(file)))
         XCTAssertEqual(file.text, "local sentinel")
         file.text = "unsaved on remote"
