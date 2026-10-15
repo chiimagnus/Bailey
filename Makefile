@@ -39,7 +39,7 @@ help:
 		'  make test                               运行 Xcode XCTest' \
 		'  make test SIGNING=adhoc                 临时签名运行 XCTest（CI）' \
 		'  make build:release                      Release 构建并验签' \
-		'  make build:release SIGNING=adhoc        无开发证书的 CI 构建' \
+		'  make build:release SIGNING=adhoc        无开发证书时验证 Release 构建' \
 		'  make test ONLY_TESTING=KeroTests/类名     只运行指定 XCTest' \
 		'  make package VERSION=X.Y.Z BUILD_NUMBER=N  验证正式签名并制作 ZIP' \
 		'  make clean                              Xcode 清理构建产物' \
