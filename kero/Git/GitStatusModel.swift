@@ -3262,7 +3262,7 @@ final class GitStatusModel {
     private nonisolated static func recentCommitLogArguments(limit: Int) -> [String] {
         [
             "log", "-n", "\(limit + 1)", "--branches", "--remotes", "--tags", "HEAD",
-            "--topo-order", "--diff-merges=first-parent", "--decorate=full",
+            "--date-order", "--diff-merges=first-parent", "--decorate=full",
             "--pretty=format:%x1e%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%P%x1f%(decorate:prefix=,suffix=,separator=%x1d)",
             "--name-status", "-z",
         ]

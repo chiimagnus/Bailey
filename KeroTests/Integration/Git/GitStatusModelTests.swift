@@ -736,6 +736,71 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(rows.first { $0.hash == side }?.files.map(\.path), ["side.txt"])
     }
 
+    func testGitGraphUsesCommitDateOrderWithoutBreakingMergeParents() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kero-git-order-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        func git(_ args: [String]) throws -> String {
+            let result = GitCommandExecution.run(args, in: directory.path, timeout: 15)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func datedGit(_ args: [String], date: String) throws {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["git"] + args
+            process.currentDirectoryURL = directory
+            var environment = ProcessInfo.processInfo.environment
+            environment["GIT_AUTHOR_DATE"] = date
+            environment["GIT_COMMITTER_DATE"] = date
+            process.environment = environment
+            process.standardOutput = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0)
+        }
+
+        _ = try git(["init", "-q", "-b", "main"])
+        _ = try git(["config", "user.name", "Graph Date Order"])
+        _ = try git(["config", "user.email", "graph@invalid"])
+        _ = try git(["config", "commit.gpgsign", "false"])
+        try datedGit(["commit", "--allow-empty", "-qm", "root"], date: "2026-10-05T00:00:00+0000")
+        let root = try git(["rev-parse", "HEAD"])
+        for (subject, date) in [
+            ("main1", "2026-10-07T11:26:00+0000"),
+            ("main2", "2026-10-07T12:02:00+0000"),
+            ("main3", "2026-10-07T12:15:00+0000"),
+        ] {
+            try datedGit(["commit", "--allow-empty", "-qm", subject], date: date)
+        }
+        _ = try git(["switch", "-qc", "side", root])
+        for (subject, date) in [
+            ("side1", "2026-10-07T19:08:00+0000"),
+            ("side2", "2026-10-07T19:24:00+0000"),
+        ] {
+            try datedGit(["commit", "--allow-empty", "-qm", subject], date: date)
+        }
+        try datedGit(["merge", "-q", "--no-ff", "-m", "merged", "main"],
+                     date: "2026-10-08T14:20:00+0000")
+
+        let model = GitStatusModel()
+        model.sync(root: directory.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertEqual(model.recentCommits.map(\.subject),
+                       ["merged", "side2", "side1", "main3", "main2", "main1", "root"],
+                       "Git Graph must interleave branches by commit date, not group them topologically")
+        let indexByHash = Dictionary(uniqueKeysWithValues: model.recentCommits.enumerated()
+            .map { ($0.element.hash, $0.offset) })
+        for (index, commit) in model.recentCommits.enumerated() {
+            for parent in commit.parentHashes {
+                XCTAssertGreaterThan(indexByHash[parent] ?? -1, index,
+                                     "Git Graph must still place every child above its parent")
+            }
+        }
+    }
+
     func testHistoricalBranchMustPointAtSelectedCommitWithoutSwitchingHEAD() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

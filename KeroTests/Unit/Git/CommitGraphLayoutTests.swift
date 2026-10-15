@@ -57,7 +57,7 @@ final class CommitGraphLayoutTests: XCTestCase {
     }
 
     func testUnloadedHeadDoesNotMarkAnotherBranchAsCurrentMain() {
-        // Git --topo-order may return many commits from another branch before HEAD.
+        // A paged Git history may omit HEAD while still showing unrelated branch commits.
         let graph = CommitGraphLayout(commits: [
             commit("other-tip", parents: ["other-parent"]),
             commit("other-parent", parents: ["unloaded-main"]),
