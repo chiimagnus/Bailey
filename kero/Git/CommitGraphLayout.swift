@@ -14,8 +14,7 @@ nonisolated struct CommitGraphLayout {
         case incoming(Rail)
         case outgoing(Rail)
         case through(Rail)
-        case curve(fromX: Double, fromY: Double, control1X: Double, control2X: Double,
-                   toX: Double, toY: Double, color: Int)
+        case diagonal(fromX: Double, fromY: Double, toX: Double, toY: Double, color: Int)
     }
 
     struct Row {
@@ -92,24 +91,16 @@ nonisolated struct CommitGraphLayout {
                     }
                 } else {
                     let distance = Double(parentIndex - index)
-                    let laneDelta = Double(to.lane - from.lane)
-                    func x(_ t: Double) -> Double {
-                        Double(from.lane) + laneDelta * t * t * (3 - 2 * t)
-                    }
-                    func slope(_ t: Double) -> Double {
-                        6 * laneDelta * t * (1 - t) / distance
-                    }
                     for rowIndex in index...parentIndex {
                         let fromY = rowIndex == index ? 0.5 : 0.0
                         let toY = rowIndex == parentIndex ? 0.5 : 1.0
-                        let fromT = (Double(rowIndex - index) + fromY - 0.5) / distance
-                        let toT = (Double(rowIndex - index) + toY - 0.5) / distance
-                        let handle = (toY - fromY) / 3
-                        graph[rowIndex].links.append(.curve(
-                            fromX: x(fromT), fromY: fromY,
-                            control1X: x(fromT) + slope(fromT) * handle,
-                            control2X: x(toT) - slope(toT) * handle,
-                            toX: x(toT), toY: toY, color: color
+                        func x(_ y: Double) -> Double {
+                            let fraction = (Double(rowIndex - index) + y - 0.5) / distance
+                            return Double(from.lane) + Double(to.lane - from.lane) * fraction
+                        }
+                        graph[rowIndex].links.append(.diagonal(
+                            fromX: x(fromY), fromY: fromY,
+                            toX: x(toY), toY: toY, color: color
                         ))
                     }
                 }
@@ -123,7 +114,7 @@ nonisolated struct CommitGraphLayout {
                 switch link {
                 case .outgoing(let rail), .through(let rail):
                     return rail
-                case .curve(_, _, _, _, let toX, let toY, let color):
+                case .diagonal(_, _, let toX, let toY, let color):
                     return toY == 1 ? Rail(lane: toX, color: color) : nil
                 case .incoming:
                     return nil
