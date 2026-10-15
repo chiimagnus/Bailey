@@ -123,7 +123,7 @@ final class SyntaxHighlightCoordinator {
     private var highlighter: Neon.Highlighter?
     private let language: SyntaxLanguage
     private let tsLanguage: SwiftTreeSitter.Language
-    private let tsClient: TreeSitterClient
+    let tsClient: TreeSitterClient
     private let highlightsData: Data
     /// Injections query bytes for the root language, or `nil` when it embeds no
     /// other languages. Non-nil selects the injection-aware token provider.
@@ -149,13 +149,20 @@ final class SyntaxHighlightCoordinator {
         // (view → plugins → events → coordinator), so any strong capture of
         // the view here closes a retain cycle. See `SyntaxHighlightPlugin.setUp`.
         tsClient = try! TreeSitterClient(language: tsLanguage) { [weak textView] codePointIndex in
-            guard let textView,
-                  let location = textView.textContentManager.location(at: codePointIndex),
-                  let position = textView.textContentManager.position(location)
-            else {
-                return .zero
+            guard let textView, codePointIndex >= 0 else { return nil }
+            let string = textView.textContentManager.attributedString(in: nil)?.string ?? ""
+            guard codePointIndex <= string.utf16.count else { return nil }
+            var row = 0
+            var column = 0
+            for unit in string.utf16.prefix(codePointIndex) {
+                if unit == 10 {
+                    row += 1
+                    column = 0
+                } else {
+                    column += 2
+                }
             }
-            return Point(row: position.row, column: position.column)
+            return Point(row: row, column: column)
         }
 
         tsClient.invalidationHandler = { [weak self] indexSet in
@@ -191,10 +198,9 @@ final class SyntaxHighlightCoordinator {
         highlighter = Neon.Highlighter(textInterface: textInterface)
 
         // Parse the whole document once up front.
-        let documentRange = NSRange(textView.textContentManager.documentRange, in: textView.textContentManager)
-        tsClient.willChangeContent(in: documentRange)
+        tsClient.willChangeContent(in: .zero)
         tsClient.didChangeContent(
-            in: documentRange,
+            in: .zero,
             delta: textView.textContentManager.length,
             limit: textView.textContentManager.length,
             readHandler: Parser.readFunction(for: textView.textContentManager.attributedString(in: nil)?.string ?? ""),
