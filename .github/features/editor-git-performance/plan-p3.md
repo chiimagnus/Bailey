@@ -1,190 +1,123 @@
-# P3：正确的增量编辑、查询与嵌入语言
+# P3：正确的编辑高亮与按证据减少重复工作
 
-> 本页保留旧实施方案，先读 [实施基线更新](idea.md#实施基线更新)。下面写作前提的“P1 已修复”是旧计划的依赖条件，不是任务完成证据。按当前 Swift 6、XCTest 与实际高亮实现重新复现和测量，不恢复旧 Swift 5 编译／独立脚本路径。
+**目标：** 编辑后的范围和 token 版本正确；只优化实测的全文比较、坐标、调度、编译和嵌入片段热点。
+**不做：** Rope／CRDT、第二套根树／队列、通用解析服务、LanguageLayer fork 或全语言预热。
+**前置：** P1 基线及 P2；P1-T3 只是依赖要求，不是本轮已完成事实。
+**验收：** 最终视口对应当前文本，固定资源失败不形成重编译循环；保留的优化有数据，无热点就不制造代码。
 
-**Goal:** 编辑后范围正确，输入不承担无必要的全文扫描；嵌入语言不为同一内容和区域反复从头解析。
-
-**Non-goals:** 不造 Rope/CRDT，不替换 Neon，不引入通用 parser service，不扩大语言能力或改语法资源。
-
-**Approach:** 首次解析/坐标契约已在 P1-T3 修复；这里补齐编辑通知与整次 token 交付的同版契约，再分别核对比较、扫描、解析调度和编译成本。嵌入语言先验证现有 Parser/Tree 的最小复用，不预定第二套根解析。
-
-**Acceptance:**
-- 插入/删除/替换后，高亮有效范围随编辑移动；延迟旧回调不能把新区域误标为已高亮。
-- 输入成本按全文访问、比较、坐标转换、根解析分开复测，不把一项收益归给另一项。
-- 固定资源编译失败不会持续 invalidate/recompile；热点成立时，同语言冷开共享在途编译，已关闭编辑器不被 waiter 长期留住。
-- 同内容重复访问嵌入区域复用计算；内容/围栏/语言变化后结果正确，解析不堵主线程。
-- 所有选用的新逻辑在对应 task 就有最小可运行回归检查和真机验收，不等 P6 补测试。
-
-**Rules:**
-- TreeSitterClient 为 MainActor API；它的内部串行解析、版本检查、pending edits 与 range transformation 已存在，不能把整个 client 放后台或复制一套 root 状态机。
-- readHandler 须在 parse completion 前稳定且线程安全，后台不能访问正在变动的 NSTextContentStorage。
-- SwiftTreeSitter 使用 UTF-16 输入；Neon 的 InputEdit 从 NSRange 乘 2 得字节。P1-T3 已采用 Tree-sitter LF 行/字节列；这里不得退回 TextKit 段落序号/UTF-16 column 原值。
-- 已有 Query/Tree 是 Sendable；Parser、MutableTree 和 QueryCursor 不因此可跨线程共用。可变解析状态由一个明确串行拥有者持有。
-- 不关闭可见高亮换速度；未知语言仍 plain text，继承查询/TSX/metadata 过滤/零范围保护保留。
-- 标为“证据门”的 task：未命中热点时交付复测与保留理由，不制造代码；确有热点则在本 task 完成最小修复和验证。不同根因分开提交。
+Neon 已有根解析版本、串行 queue、pending edits／范围变换。TreeSitterClient 留 MainActor，readHandler 必须持续读取稳定快照到 completion；Parser／MutableTree／QueryCursor 不因 Query／Tree 可传递就跨线程共用。测试、文档和替代路径删除都在所属 task 完成；新测试仍进一个 XCTest 目标。
 
 <a id="p3-t1"></a>
-## P3-T1 补齐编辑后的高亮范围更新
+## P3-T1 修复编辑范围与整次 token 同版交付
 
-**类型 / 依赖:** 正确性实现；依赖 P2 和 P1 基线。
+**类型：** 正确性实现。
+**文件：** `kero/Editor/SyntaxHighlightPlugin.swift` 的 setUp、will/did、两种 provider／invalidation；只读 Neon Highlighter／TokenApplication／TreeSitterClient。扩展 `KeroTests/NativeUI/Editor/SyntaxHighlightingTests.swift`；文档归 `docs/features/editor.md`。
 
-**Files / 锚点:**
-- Modify: kero/Editor/SyntaxHighlightPlugin.swift：setUp、willChangeContent、didChangeContent、两种 token provider、tsClient.invalidationHandler。
-- Read-only: Neon Highlighter.didChangeContent / handleTokens / TokenApplication；锁定源码见 build/SourcePackages/checkouts/Neon/Sources/Neon/。
-- Modify: `KeroTests/check-editor-highlighting.swift`，扩展 P1-T3 已有真实 App/生产桥接检查；可在同一脚本用现有 TextSystemInterface 加可控延迟验证真实 Neon 契约，不另写桥接算法。
-- Modify: docs/features/editor.md 的增量路径事实。
+**当前缺口：** 修改前后的 NSTextRange 被修改后重算，尾删可越界；未调用 Highlighter.didChangeContent，valid/pending 不随 edit 移动；base 与 injection 两次异步查询可跨编辑版本，第二次 stale 仍交付旧 base。
 
-**证据:** Highlighter.didChangeContent 移动 validSet、清 pending 并安排重请求，Kero 当前未调用。另有真实的多回调间隙：base query 成功后再发 injection query，两者各自通过 Neon 的 version 检查，并不证明合并结果同版；后一查询 staleContent 时当前代码仍提交旧 base tokens。STTextView 在修改前/后传同一个 NSTextRange，Kero 却在修改后重新转换旧范围，删除末尾时可能越界；应在 will 阶段保留旧 NSRange。这些是当前执行链缺口，不等待后台子解析或性能准入才处理。
+1. Red：用生产插件和可控异步交付复现在已着色文本前插入／删除、尾删、全删、base/injection 间编辑；检查最终样式位置及当前视口重请求，不只检查 invalidate 被调用。
+2. will 保存旧 NSRange 并通知 tsClient；did 用保存范围与 replacement UTF-16 长度通知 highlighter，再通知 tsClient。新快照取实际 TextKit 内容，不能依赖随后 delegate 才写回的 FileTab.text。
+3. 复用一个 coordinator 编辑 revision 保护整次交付：plain/base/injection/最终 completion 都只能提交当前 edit 的结果。它解决跨回调间隙，不复制 Neon 内部解析版本；后续子区域路径复用它。
+4. stale 交付不回 .noChange：Highlighter 会把范围标 valid；TokenProvider 允许零次回调，旧请求可丢弃。编辑／invalidation 必须让新版本最后重请求，旧 failure 也不能异步清掉新 pending。普通实际错误保留既有降级，不加无限 retry。
+5. 删除修改后旧范围重算、无版本合并和伪成功交付路径；不引入第二套 pending 管理。
+6. `make test ONLY_TESTING=KeroTests/SyntaxHighlightingTests`：旧成功／旧失败晚到、连续 edit、undo/redo／空文本、当前视口最终颜色。完整测试／构建后隔离 App 检查 Swift／TSX／Markdown、替换、长粘贴、中文组合输入与保存原字节。
 
-**实施与验证:**
-1. 先用可控 TokenProvider 的延迟回调复现“在已着色文本前插入/删除”；检查请求覆盖当前视口，而不是仅看 invalidate 被调用。
-2. will 阶段捕获旧 NSRange，并传现有 tsClient.willChangeContent；did 阶段使用保存的旧范围与 replacement UTF-16 长度通知 highlighter，再通知 tsClient。不在已缩短文档里重新换算旧 endLocation。注意 plugin 的 didChangeTextIn 早于 delegate 的 textViewDidChangeText 全文回写；新解析快照取实际 TextKit 内容。
-3. stale 回调不返回 .success(.noChange) 冒充当前结果：它仍会在 handleTokens 标记请求范围有效。TokenProvider 允许零次回调；编辑已经清理旧 pending 并安排新请求时，可直接丢弃旧交付。Neon 的 failure 分支只异步清 pending，不主动启动下一请求，不能假定失败自动重试。沿实际 edit/invalidation 顺序证明新版本最终重请求、不忙循环也不永久失色。
-4. 在 coordinator 增加仅服务整次 token 交付的一个编辑 revision，edit 时更新；plain 与 injection provider 入口捕获，base/injection/最终 completion 均只交付同版结果。后续 P3-T7 复用此 revision，不另加根/子语言各一套 generation。旧错误也不能清除新请求的 pending；正常真实错误保持现有反馈/降级，不能靠无期限 retry 追上。
-5. Run: `bash scripts/check.sh editor-highlighting`，先构建 Debug。扩展真实生产桥接测试：在已着色区域前插入、尾部删除、全删到空、pending 期间新 edit、base 与 injection 中间编辑、旧成功/旧失败晚到；检查最终 token 范围和当前视口重新着色，而非仅测试 Neon 自身。
-6. 真机对 Swift/TSX/Markdown 首/中/尾插删、粘贴、find replace、撤销/重做、连续输入和中文组合输入；滚到原已高亮区域核对位置与保存内容。
-
-**提交边界:** 编辑范围契约修复、脚本与必要说明一次提交，不夹带调度优化。
+**提交：** edit 桥接、回归及文档独立正确性提交；修复后才用输入高亮结果比较优化收益。
 
 <a id="p3-t2"></a>
-## P3-T2 删除编辑回写中的重复全文比较
+## P3-T2 恢复字节精确文本契约并删除重复比较
 
-**类型 / 依赖:** 小实现；依赖 P3-T1。
+**类型／依赖：** 正确性修复及同根因精简；依赖 T1。
+**文件：** SourceTextEditor.Coordinator.textViewDidChangeText；FileTab.refreshDirtyState/matches；DiffTab 的 hasChanges、内容更新／模式切换、dirty／保存基线比较；DiffEngine.linesEqual 与 DiffIntraline 的文本／token 比较。扩展 FileTabTests／DiffTabTests，在现有 XCTest 目标新增 `KeroTests/Unit/Git/DiffEngineTests.swift`，供 P5-T2 继续扩展；文档 owner 为 editor.md／diff.md。
 
-**Files / 锚点:**
-- Modify: kero/Editor/SourceTextEditor.swift：Coordinator.textViewDidChangeText。
-- Verify: kero/Editor/FileViewerView.swift：text、savedText、refreshDirtyState、save。
-- 当前编辑与保存契约归 `docs/features/editor.md`；测量方法改变才更新 `docs/testing.md#性能与内存测量`。
+1. Red：保存的 `é`（U+00E9）替换为 `e` + U+0301。两者 String == 为 true、hash 相同，但 UTF-8 与 UTF-16 长度不同；当前回写可被跳过，dirty／干净重载／Diff 有变化判定及行／token 对比都可能漏掉字节变化。分别验证真实编辑、保存字节、外部 clean reload 和 Git 原文 Diff，不只断言 Swift 的语言行为。
+2. 使用标准库 UTF-8 elementsEqual 这类字节精确比较，在文本基线／内容变更及行／token 相等的真实拥有者修复。hash 只能筛选，必须保留精确确认；不能 normalize、增加第二 hash 或把字节不同当“不变”。同 task 接通编辑器与原生 Diff，不只修脏标记留下另一条内容链。
+3. 同时删除 newText != file.text 的冗余前置比较，同步取一次完整 String 回写；savedText 仍准确决定 dirty。保留保存期间新增编辑、全部撤销回原字节的行为，不用“收到 edit 就 dirty”或延迟第二缓冲替代。
+4. 相同字节、组合字符／中文／emoji、归一化表示变化、保存期间继续输入、撤销／重做和 clean reload；DiffCore ops 重建必须保留两侧字节和各自 UTF-16 范围。只治理用户文本，不把路径、Git Ref、文案等所有 String == 全仓替换。
+5. 运行 `make test ONLY_TESTING=KeroTests/FileTabTests`、DiffTabTests／DiffEngineTests、保留／保存相邻回归和完整完成流程；隔离 App 输入／替换／IME／撤销／保存，对照原始磁盘和 Git blob。
+6. 对修正后的精确比较重新取得可比基线，再测长文件尾部输入的比较／分配与响应。若 getter／dirty 比较仍主导，记录并另回改数据所有权方案，不偷偷加入 buffer。正确性收益不算后续性能收益。
 
-**依据与不变量:** didChangeText 已是文本变化完成通知；FileTab.text 不发布。当前先 newText != file.text，再 refreshDirtyState 比较 savedText，长文尾部编辑可能进行两次长前缀比较。真正决定 dirty 的是保存基线，不是之前一刻文本。
-
-**实施与验证:**
-1. 去掉回写前非必要的新旧相等比较，仍同步获取一次当前完整 String 写 FileTab，仍用准确的保存基线比较决定 dirty。不要用“收到 edit 就永远 dirty”替代。
-2. 这不承诺消除全文 getter/桥接，也不顺手延迟 file.text 同步。保存、关闭、切标签都可随时消费完整正确文本。
-3. 同机大文尾部输入复测比较次数/分配与按键响应；同内容替换通知不产生额外 dirty 发布。
-4. 真机插入/删除/同长度替换、全部撤销回保存内容、保存中继续输入、找替换和中文输入；核对关闭提示与最终文件。
-5. 如果 P1 显示剩余 getter/脏比较占主导，先在 evidence-p3.md 记录具体热点。更深文本持有方案必须回改计划、明确数据所有者和兼容测试，不能偷偷加入第二套 buffer 或概率 hash 判等。
-
-**提交边界:** 回写精简一个独立提交；不包含坐标/解析/子语言缓存。
+**提交：** 字节精确不变量、重复比较删除、全部真实消费者、回归及文档一个原子结果，不混坐标／解析缓存。
 
 <a id="p3-t3"></a>
-## P3-T3 坐标扫描的证据门与最小索引
+## P3-T3 测量修正后坐标转换，必要时加最小索引
 
-**类型 / 依赖:** 定向实验后条件实现；依赖 P3-T1、P3-T2。
+**类型／依赖：** 实验后条件实现；依赖 T1、T2。
+**文件：** 当前 SyntaxHighlightPlugin transformer／edit；条件成立才新增 `kero/Editor/TextCoordinateIndex.swift` 和 `KeroTests/Unit/Editor/TextCoordinateIndexTests.swift`，与生产接入同 task；文档归 editor.md。
 
-**Files / 锚点:**
-- kero/Editor/SyntaxHighlightPlugin.swift：TreeSitterClient transformer、willChangeContent/didChangeContent。
-- Read-only: STTextKitPlus NSTextContentManager.position；Neon InputEdit 扩展与 SwiftTreeSitter.Point。
-- Only if admitted: new kero/Editor/TextCoordinateIndex.swift、KeroTests/check-text-coordinate-index.swift；现有同步根目录自动接入应用。
-- Local evidence: evidence-p3.md；实现后更新 docs/features/editor.md 中相关契约，不把实现细节复制进测量规范。
+1. P1-T3 已删除错误的 TextKit.position 路径。本 task 重新测正确 LF／字节转换的首中尾、等字节不同换行数和长行，分离 parse 与转换；不沿用旧热点名称。
+2. 先找 TextKit／依赖可复用能力。一轮定位加一个最小原型；没命中就记录保留理由，不新建文件。
+3. 确需索引才在现有 coordinator 维护当前文档 UTF-16 的 LF 行起点，二分查询并在 edit 更新受影响段／后续偏移；承认数组平移成本，不造 Rope。
+4. will 用旧文档、did 用新文档；输出字节列，不用段落坐标。替换原扫描时同 task 删除旧实现，不留兼容开关或第二份索引真源。
+5. Red／Green：固定 seed 插删替换，对照直接扫描和真实 Parser 的点，涵盖 CRLF／LF／bare CR／Unicode 分隔符／emoji／文末；前者测增量等价，后者约束实际解析契约。
+6. 条件实现运行 `make test ONLY_TESTING=KeroTests/TextCoordinateIndexTests` 及 SyntaxHighlightingTests／完整完成流程；隔离 App 输入／高亮复测，记录首建、更新、分配和净收益。无净收益不接入。
 
-**问题与方法:** position 每次枚举整份文档段落并搜索。测首/中/尾、等字节不同换行数量、超长单行；将转换耗时与 parser 耗时分开。成本最多一轮定位加一轮纯数据原型，若未命中就保留现实现。
-
-**准入后实施:**
-1. 优先检查现有 TextKit/依赖是否有不全篇扫描且满足坐标契约的入口；当前公开 position 实现没有索引，不能用改名 helper 假装优化。
-2. 如确需索引，只维护当前文档的 UTF-16 行起点，在编辑通知更新受影响片段和后续偏移；二分查所在行。不新建 Rope、不声称数组尾部平移是 O(log N)。
-3. 复用 P1-T3/P3-T1 已正确的 Point 与旧 edit 范围：索引按 LF 行定义，输出 UTF-16 字节列，will 用旧文本、did 用新文本。数据由 coordinator 持有，重建/换文档重置；后台只读对应快照，不读 AppKit。
-4. 对照完整 Parser oracle 检查 CRLF、LF、bare CR、Unicode 段落分隔符、尾换行和空文本；不把 TextKit 的 paragraph row 当作 Tree-sitter row。此处是性能替代的等价性验证，不将已知单位修复延期到索引准入。
-5. 脚本编译真实 TextCoordinateIndex；用固定 seed 多次插删替换与慢扫描 oracle 对比全部关键偏移，含 emoji 代理对、中文、CRLF 边界和尾端。命令：xcrun swiftc -swift-version 5 -o build/check-text-coordinate-index kero/Editor/TextCoordinateIndex.swift KeroTests/check-text-coordinate-index.swift && build/check-text-coordinate-index。
-
-**验收:** 真机输入/撤销/高亮范围无回退，原扫描热点消失或明显收敛；记索引分配、首开成本与尾部偏移更新成本。未改善或破坏坐标则撤销原型，不把新增索引本身算完成。
-
-**提交边界:** 仅被证据选中的坐标实现、回归检查与说明；未准入的实验不提交。
+**提交：** 只提交被采用实现、测试和必要文档，实验证据归本地 evidence-p3.md。
 
 <a id="p3-t4"></a>
-## P3-T4 根解析调度的证据门
+## P3-T4 测量根解析调度，必要时调整现有参数
 
-**类型 / 依赖:** 定向实验后条件实现；依赖 P3-T1，默认在 P3-T3 后比较残余热点。
+**类型／依赖：** 条件实验；依赖 T1，默认在 T3 后检查残余热点。
+**锚点：** SyntaxHighlightCoordinator 的 TreeSitterClient 初始化；锁定依赖的 processEdit／synchronousLengthThreshold。
 
-**Files / 锚点:** kero/Editor/SyntaxHighlightPlugin.swift 的 tsClient 初始化与 didChangeContent；锁定 TreeSitterClient.init(synchronousLengthThreshold:) / processEdit；evidence-p3.md。
+默认 edit 不超过 1024、文档不超过 1,000,000 且无在途队列时可同步 parse。公开 init 已能设 threshold，不需要 fork。
 
-**已知:** 默认小 edit <=1024、文档 <=1,000,000 且无 queued work 时同步 parse。公开 init 已有 synchronousLengthThreshold 参数，不需要 fork Neon 增加“总是后台”开关。
+1. 仅默认同步 parse 确认阻塞时对比默认和 threshold=0；非空 edit 可走后台，零 edit 不保证，不用负数 undocumented 参数。
+2. 同组动作测按键／光标、高亮追上和持续输入后收敛，稳定 String readHandler 保持到 parse 完成；不只测主线程 parse 消失。
+3. 默认满足响应且异步更迟就保留。采用现有参数即可，不加 debounce／queue／root Parser／generation。
+4. SyntaxHighlightingTests 补最后版本、undo、大粘贴、切文档／关闭后的真实颜色与释放；完整完成流程和隔离 App 复测。
 
-**实验与选择:**
-1. 比较默认 threshold 与公开参数设为 0 的定向原型：后者让非空 edit 排队后台；零变化 edit 不保证走后台，不靠负数 undocumented 值强推。
-2. 测按键到文本/光标、高亮追上、pending 深度与持续输入结束后追上时间，而非只测主线程 parse 消失。每次 parse 仍读稳定 String 快照，Neon 自己保持 edit 顺序。
-3. 默认已在交互预算内且异步只增加着色迟滞则保持默认。同步 parse 确认阻塞时选较简单且实测有效的公开 threshold；不增加第二套 debounce、generation、queue 或 root Parser。
-4. 新 edit、撤销、大粘贴、关编辑器、切文档期间验证最后一版真实可见高亮正确，后台任务不留住视图。P3-T1 的编辑范围通知不可省略。
-
-**成本 / 验收 / 提交:** 两个配置各跑同组样本，不展开阈值调参研究；记录选择与延迟。被选中的参数及必要说明独立提交，构建、验签后在隔离实例验收；只实验无变化不提交。
+**清理／提交：** 不保留临时参数切换配置。选中参数、测试及必要说明独立提交；无改动只留本地证据，不做阈值调参研究。
 
 <a id="p3-t5"></a>
-## P3-T5 查询编译的单次在途共享
+## P3-T5 修复查询失败闭环，按需共享在途编译
 
-**类型 / 依赖:** 必修编译失败闭环 + 条件在途共享；依赖 P3-T1，默认在根解析复测后。
+**类型／依赖：** 失败闭环必修，共享有热点才做；依赖 T1。
+**文件／完整消费者：**
+- SyntaxHighlightPlugin 中 HighlightQueryCache、installTokenProvider、finishInstall、injectedHighlightsQuery／pendingInjectionCompiles。
+- `kero/Git/DiffSyntaxHighlighter.swift` 的 context 也读写同一 cache、也自行 compile，不得遗漏。
+- SyntaxHighlighting 的真实 query 资源输入；SyntaxHighlightingTests，若共享则扩展 DiffTabTests 的实际着色检查；文档归 editor.md，Diff 行为变动才同步 diff.md。
 
-**Files / 锚点:**
-- Modify: kero/Editor/SyntaxHighlightPlugin.swift 的 installTokenProvider、finishInstall、injectedHighlightsQuery、pendingInjectionCompiles；SyntaxHighlighting.highlightsData/injectionsData 的资源输入。
-- Only if admitted: new kero/Editor/HighlightQueryCache.swift，将现有 HighlightQueryCache 原职责迁出插件，新增的在途合并仍由它拥有。不是新增通用缓存或替换 SyntaxLanguage。
-- Modify: `KeroTests/check-editor-highlighting.swift`；实际 cache 仍在插件内时用现有 App 模块检查，不为了测试迁出文件或伪造 SyntaxLanguage。确因共享职责需要独立文件才用真实模块链接。
-- Local evidence: evidence-p3.md；实现后更新 docs/features/editor.md 中相关契约，不把实现细节复制进测量规范。
+1. Red：固定坏 embedded Query 完成后当前实现仍 invalidate，下一请求再编译；证明反复 viewport／请求不会忙循环。
+2. 在现有 query owner 记录进程内固定资源编译失败；失败结束 pending，不以 invalidate 启动无益重试，保留 plain/root 降级。资源无热更新入口，不增 TTL／重试恢复状态机。
+3. 只有冷开多文档／Diff 的 trace 证明重复 compile 值得治理，才在现有 cache 按 language／kind 合并在途工作。不为测试强制迁出新文件；root、embedded 与 Diff highlights 共用，injections 分 kind，TS 与 TSX 不混 grammar。
+4. 共享时 compile／资源读取在明确后台边界，cache／invalidate 回所属 actor；一个 waiter 关闭不能取消其他 waiter。只有真实存活消费者需要弱引用／释放处理，不预建 protocol 或编译服务。
+5. 同 task 接入所有消费者并删除各自重复 compile/pending／双轨备用闭包；只做失败闭环时不声称已经共享，也不预建共享文件。
+6. `make test ONLY_TESTING=KeroTests/SyntaxHighlightingTests`、共享时 DiffTabTests、完整完成流程。检验坏资源重复请求不重编译、root/embedded/Diff 同 key、不同 kind／grammar、关首个 waiter 后另一 editor/Diff 仍实际着色；不是只看 Query 返回或计数。
+7. 隔离 App 多同语言标签／Diff／围栏，比较冷 compile 工作量、可见颜色与内存。数字来自本机，不沿用源码注释的历史毫秒数。
 
-**已证实必修:** injectedHighlightsQuery 无论成功/失败都移除 pending 并 invalidate；固定查询失败后，下一请求会再编译、再 invalidate，形成实际闭环。本 task 先用坏查询可控复现并消除循环，不以性能不显著为由保留。
-
-**在途共享的证据门:** 当前只有完成缓存，每 coordinator 自有 pendingInjectionCompiles；同语言多文件冷开可重复 compile，root injections query 在 finishInstall 内同步 compile。trace 记录成本，没有热点则仅做失败闭环，不造缓存框架。
-
-**准入后实施与验证:**
-1. 首先为进程内固定的 language/query kind 记录编译失败，不因视口 invalidate 再次编译；失败保留 plain/root 降级，没有资源更新入口就不造自动重试、TTL 或恢复状态机。只有在途共享准入后才在同一 cache 合并 root/embedded highlights，injections 为另一种类。
-2. compile 和必要资源读取离开主线程；cache 管理与 UI invalidate 回主 actor。多个 waiter 得到同一 Query，关闭一个视图不取消其他 waiter 需要的编译。
-3. 编译完成/失败都结束 pending，waiter 弱引用 coordinator；成功失效一次以重绘，失败不驱动无益 invalidate。只在当前进程资源不变的边界记录失败，关闭一份文档不影响另一份编译。删除被共享请求取代的每 coordinator pending 与双份 root/child 编译闭包，不留下备用编译路径。
-4. 真机一次打开多个同语言文件和同语言围栏：每 key 在途 compile 一次；打开 TS 与 TSX 不共用 grammar；关首个 editor，第二个仍实际着色。未知语言保持 plain。
-5. 同 task 扩展 `bash scripts/check.sh editor-highlighting`：真实固定资源/坏 Query、失败后重复 viewport、root/embedded 相同语言、TS 与 TSX、不同 kind、关闭首个 waiter 后其他文档仍着色。若共享准入，断言同 key 编译一次、热命中和完成清理；只做失败闭环时不声称已共享。不要复制生产缓存算法或为了测试新增生产 protocol。
-6. 模块链接沿用 P1-T3 检查与当前 `GeneratedModuleMaps`；旧 plan 中包 target 内的 modulemap 路径不能复用。真实 JSON Query 可作小 fixture，但语言选择仍由实际 SyntaxLanguage/插件检查证明。
-
-7. 用 P1 Debug 计数和 trace 验证并发首次、热 cache、根 injections 与失败路径；真机证明最后视口真的着色，不只以函数返回 Query 或 compile 次数下降验收。
-
-**提交边界:** 查询编译闭环、实际准入的共享接入/旧 pending 删除及检查一个原子提交；未命中共享时只包含必修失败闭环，不为条件分支预建新文件。
+**提交：** 失败闭环与实际采用的共享接入／旧路径删除、回归和文档一个结果；未准入不建缓存框架。
 
 <a id="p3-t6"></a>
-## P3-T6 嵌入语言复用方案的最小实验
+## P3-T6 验证嵌入语言的最小复用
 
-**类型 / 依赖:** 探索；依赖 P3-T1 和查询缓存准入结论，必须先于 P3-T7。
+**类型／依赖：** 本地探索；依赖 T1、T5 的实际结论，先于 T7。
+**当前路径：** root highlights → injections → 每个 NamedRange 新 Parser／全 fragment parse／query／偏移 → Neon 样式；fragment 和 predicate 目前在主线程，可见范围请求可能反复解析同一长块。
 
-**当前最终路径:** root highlights callback → root injections callback → injectedTokens；每 NamedRange 新 Parser、parse 全 fragment、query 全 token、偏移后由 Neon 写样式。callback 与 predicate prepare 均回主线程。视口 1024 请求可能反复包含同一个长片段，不能只缓存 Query。
+1. 先测重复 parse／token 工作；无热点则记录保留，不自动重构。
+2. 有热点只做一个最小原型：优先同文档同 edit revision 的片段／结果复用与稳定快照后台计算。只有跨 edit 全量重算仍主导，才再验证 Parser／Tree 的增量复用；不一开始强制后台增量子树引擎。
+3. 长 fence、同语言不同区域、HTML script/style、围栏删改／换语言、区域前插入、未知语言与 Unicode，对照同版本全量解析。跨 root/injection 间隙复用 T1 的 revision，不另建版本真源。
+4. 当前 SwiftTreeSitterLayer 未链接；公开接口不能直接采用 Neon 根树，resolveSublayers 也无消失区域的完整删除契约。因此不做 Layer 双根解析原型／fork，不以“依赖有这个类型”当接入证据。
+5. 一个原型、一组正确性／性能对照；无收益、范围或删除语义不成立就不接入。缓存只留当前文档可达区域，不留无限版本。
 
-**已核对的可复用能力与排除项:**
-- 现有 SwiftTreeSitter Parser.parse(tree:string:)、Tree.copy/edit、Query.execute 支持子树复用。
-- 锁定包另有 SwiftTreeSitterLayer 产品：LanguageLayer.didChangeContent、resolveSublayers、snapshot、ContentSnapshot；当前 Kero 未链接该产品。Layer 会维护子语言与 included ranges，不能把它当作已接入能力。
-- Layer.state 为非公开，公开入口没有采用 Neon 已解析根树的能力；resolveSublayers 只遍历本次有结果的语言并并入 ranges，不移除消失的 sublayer/旧范围。它不能直接满足当前根树复用与围栏删除要求。本 feature 不为比较而强制实现另一套根解析或维护 Layer fork。
-- Neon TokenApplication.noChange 会把请求范围加入 validSet，不能用于掩盖过期结果。
-
-**实验交付:** 在 build/performance/prototypes/ 做一次可丢弃、同样本对照，不改用户应用资源；evidence-p3.md 明确决策和实际输出。
-1. 先测现有 fragment 工作量；未形成实际热点则保留并记录，不自动进入重构。命中后只做现有 Parser/Tree 的一个最小子区域原型；Layer 因上述源码边界排除，不强制做第二原型。后续若出现可用根树接入与清理契约，先回改本决定再试。
-2. 长 Markdown fence、两个相同语言不同内容区域、HTML script/style、未知语言、围栏编辑/删除/改语言、区域前插入文本；输出 named ranges 与同版本全量解析 oracle 一致。
-3. 同版本反复 viewport 查询计数；代码块内 edit 后检查可复用旧 tree，而非仅“有 cache”；调后台后按内容版本门控 root+child 合并，防止两个独立 root query 中途 edit 混版。
-4. 串行拥有可变 parser/tree，query/read 使用 immutable snapshot；记录 token 顺序、坐标/Point 和关闭后释放。
-5. 停止条件：一个小原型、一组正确性与性能对照。有围栏清理/坐标错误或无净收益就不接入；记录是否需要后续单独设计，不边实现边赌。
-
-**提交边界:** 只交本地证据与回写后的 P3-T7，不为实验制造 Git 提交。临时依赖源码修改不能成为正式成果。
+**交付：** 本地 evidence-p3.md 的方法、结果、选中的最小措施及 T7 精确接入决定；不提交原型、不改依赖 checkout。
 
 <a id="p3-t7"></a>
-## P3-T7 接入已验证的后台子区域增量路径
+## P3-T7 接入已验证的子区域复用措施
 
-**类型 / 依赖:** 条件实现；依赖 P3-T6 的热点与原型通过，未准入就交付保留理由，不实现“预定 Layer 重构”。
+**类型／依赖：** 条件实现；T6 有热点且原型通过才进入。
+**文件：** SyntaxHighlightPlugin 的 injection／edit／生命周期；确需单一职责时才新增 InjectedSyntaxState.swift，不预定文件。测试扩展 SyntaxHighlightingTests；数据算法变复杂才补 `KeroTests/Unit/Editor/InjectedSyntaxTests.swift`，仍进现有 XCTest。文档归 editor.md。
 
-**Files / 接入:**
-- Modify: kero/Editor/SyntaxHighlightPlugin.swift 的 injection provider / edit / lifecycle。
-- Only if selected: kero/Editor/InjectedSyntaxState.swift，拥有当前 editor 的子区域解析数据；单个真实职责，不写 protocol/factory。
-- New: KeroTests/check-injected-highlighting.swift 与同 task 配套运行命令；编译实际被选子区域实现和现有依赖，不复制其算法。
-- Modify: `scripts/check.sh` 注册 `injected-highlighting`；编译/模块参数沿 P1-T3 的现有 App/依赖入口，采用真实 SyntaxLanguage，不为脚本新增类型壳。
-- 实际接入后的高亮契约归 docs/features/editor.md；依赖补丁归 docs/development.md#依赖与本地补丁；测量规范只在方法变化时更新。
+1. 按 T6 选择接入，删除被替代的每请求 Parser／全片段路径。可能只是同版本复用，不把“必须跨 edit 增量解析”写成无证据验收。
+2. 稳定 String／数据后台计算，可变 Parser／Tree 一个串行拥有者；复用 T1 的 edit revision 保证 root+child 合并一致。不重造 root parser、queue、版本或 workspace 状态。
+3. 范围／语言／内容变化按实际选中策略失效；不能仅以同语言／同起点匹配其他片段。删除围栏必须清旧颜色／缓存。
+4. 只返回当前请求需要的合法 token 范围，保持 child 覆盖 root 的顺序和跨边界语法；旧结果不标 valid、不忙循环，当前视口最终着色。
+5. 关闭 editor 释放独占片段／任务／快照，不为了复用永久挂载所有编辑器。已有 root／query 缓存职责不复制。
+6. Red／Green 覆盖重复请求、片段内 edit、围栏移除／换语言、相同语言不同内容、Unicode／空范围和延迟旧结果；检查真实最终 tokens／颜色与工作量。
+7. `make test ONLY_TESTING=KeroTests/SyntaxHighlightingTests`、实际新增 Unit 类及完整完成流程；隔离 App 长 fence／HTML 输入、滚动、切换、撤销／保存，比较主线程、可见高亮、内存和关闭后释放。
 
-**实施:**
-1. 按 P3-T6 决策接入，删除原每次 new Parser / full-fragment parse 的旧路径，不能两个实现同时运行。只维护当前文档当前子区域，查询仍由 P3-T5 的实际缓存策略提供。
-2. 复用已有 edit range/delta；未受影响区域可移动/复用，片段内 edit 复用树，结构/语言改变作最小重建。无法可靠匹配的区域重建，不按相同 language 或相同起点误用别处内容。
-3. 子解析和 query 使用稳定文本在明确后台串行边界执行；复用 P3-T1 已有 coordinator 编辑 revision 做 root+injection+child 同版合并，不再增加一套版本或 workspace generation。可变 parser/tree 只有一个拥有者。
-4. 回主线程前丢弃过期或已关闭 coordinator 的结果；通过 Neon 的实际 pending/失效机制保证当前视口最终得到最后版本，不能失败即永久不请求。字体仍不入文本存储。
-5. token 只交付当前请求需要的范围，保持子语言覆盖 root 的既有顺序；不要为一个 1024 请求反复发整块数万 token，合法跨边界 token 的剪裁依现有语法/渲染契约验证。
-6. 缓存随 editor 释放，只留当前可达区域/树与必要快照；不保存无限文档版本。若视图重建仍是实测热点，先记录与回改专门 task，不能偷偷让全部编辑器永久挂载。
+**提交：** 采用实现、真实接入、旧路径删除、回归和文档同 task。未采用只交理由，不创建占位实现或“未来升级”配置。
 
-**验收与提交:**
-- task 内运行真实实现的脚本：P3-T6 全量 oracle、重复查询/片段内 edit、围栏移除/变语言、未知语言、零范围、Unicode 和故意延迟旧结果；检查输出与 parse 次数。
-- 构建、验签后在隔离 Debug 实例的长围栏与 HTML 中输入/滚动/切页，最终可见颜色、范围、文本、撤销/保存均正确；实际子 parse 不在主线程，同版复访不从头解析。
-- 同 P1 样本比较主线程、可见高亮、后台追上、内存和关闭释放；不能只证明分支选择或 cache 命中。
-- 实现、接入/旧路径删除、脚本及必要文档一个原子提交；依赖生成不混入。
+## 阶段核销
 
-## 阶段自审与交接
-
-- 逐项核对全量 oracle、最终可见高亮与磁盘文字；快照、root 版本检查不替代跨回调同版合并。
-- evidence-p3.md 区分已修复、实测保留、缺权限未验收与仍慢，不把条件措施全部算“已经优化”。
-- 实际完成后进入 plan-task-auditor 并创建 audit-p3.md；规划时不创建。
+evidence-p3.md 分清修复、实测保留、未测与仍慢；正确性依靠最终内容／可见范围，性能依靠同机对照。实际实施后进入阶段审计，本次不预建 audit 或宣布 Go。

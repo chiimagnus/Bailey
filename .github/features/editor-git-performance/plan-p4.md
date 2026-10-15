@@ -1,138 +1,99 @@
-# P4：Git 状态先可用与共享树成本收敛
+# P4：Git 核心先可用与共享树成本收敛
 
-> 本页保留旧实施方案，先读 [实施基线更新](idea.md#实施基线更新)。当前 Git ViewModel 已用 Observation；下文 `@Published`、旧检查脚本和当时的缺口不得直接作为现状。沿当前共享执行器、XCTest 与真实事件入口重新取证，不重复实施后续已落地的修复。
+**目标：** 核心状态不等历史／行数；减少有证据的无关详情工作和逐行全快照扫描。
+**不做：** 新 Git runner、refresh coordinator、命令字符串分类器、TTL／fingerprint、无限并发或新文件树。
+**前置／验收：** P1；核心成功不被详情失败抹掉，旧结果不覆盖操作，周期／事件最后更新不丢，树语义不变。
 
-**Goal:** 仓库状态不等待历史/行数等次要信息；相同工作树事件不无条件重做无关详情，树行状态查询不逐行扫描整份快照。
-
-**Non-goals:** 不重写 Git runner、不增加无限并发、不解析 shell 命令猜操作、不另建文件/Git 树，不默认引入 FSEvents/监听框架。
-
-**Approach:** 在 GitStatusModel 现有范围、请求 ID、互斥与最终事件合并上分离关键状态/次要结果。再按真实动作和可检查的数据身份缩小失效范围，预聚合共享装饰。文件树的 I/O 和遍历单独归因，只有证据成立才选最小改动。
-
-**Acceptance:**
-- 故意延迟 history/行数时，实际 Git 文件列表、分支/HEAD/upstream 与冲突信息先正确出现。
-- 详情失败不把已经成功的核心状态抹成“非仓库”；依赖未就绪详情的操作不会误导或使用旧仓库数据。
-- 暂存/取消暂存及已知仅工作树变化不必完整重取历史；分页只增加需要的历史工作。未知终端命令保持保守校验。
-- 操作/切仓库/刷新中最后事件不丢，旧状态/详情不覆盖新操作结果。
-- 大树装饰保持已有优先级/忽略语义且减少逐行全量扫描；四个树区域仍共享交互与布局。
-
-**Rules:**
-- contextGeneration、statusRequestID、refreshPending、runningOperationID 与 scopedRoot 继续拥有各自现有职责。需要跨阶段回写也复用它们，不加通用 refresh coordinator。
-- 关键状态不等于仅文件列表：canonical root、HEAD/branch/upstream、冲突与仓库操作标记都是当前 UI 的真实依赖。
-- 当前 `StatusResult` 没有 loadedDetails/readiness，applyRepository 会无条件覆盖全部字段。拆阶段须显式表达详情尚未成功，不把不存在的字段当复用点；只加实际分阶段结果需要的最小数据就绪信息。
-- 执行统一归 `GitCommandExecution`：登录 shell 环境、独立 stdout/stderr readers、共享进程 deadline、GIT_OPTIONAL_LOCKS=0 与禁 prompt 保留；模型内旧 runGit 已不存在。
-- SSH 当前把含 log 的整套 snapshot 一次批取，仍需等待完整 backend.run 返回；不能只在 Swift 层分两次 publish 而不拆远程关键批次。
-- 当前 caller 为 `WorkspaceDockView.DockTabGroupView.content → ToolPanelView`。Files/Git 各唯一且可同时可见；Git 同步由 `ContentView.syncGit` 拥有，ToolPanelView 的 syncQueue 仅刷新 Files。Info 与 manager.panelTab 已移除，不新增工具面板同步协调者。
-- 写操作仅合成仓库；真实远端不 push，不修改用户 repo 或 global config。真实 SSH 需现有授权测试目录。
+当前是 Observation。sync 已处理同 root/scope 换 backend 的 contextGeneration／worker 失效，失败保留快照也已有回归：保留它们，不重复列为新修复。ContentView.syncGit 拥有目标同步；ToolPanelView 的前台可见 Git 每本机 2 秒／SSH 5 秒刷新，Files 队列仍只做 Files。不能按旧计划假定没有 Git 轮询。
 
 <a id="p4-t1"></a>
-## P4-T1 关键状态与次要结果分阶段交付
+## P4-T1 分阶段交付核心与详情
 
-**类型 / 依赖:** 实现；依赖 P1，默认 P3 后。
+**类型：** 实现；P1 后，默认 P3 后。
+**文件：**
+- `kero/Git/GitStatusModel.swift` 的 refresh/runGitStatus/prefetchedSnapshotCommands、结果／缓存、apply、perform、计数和 operation 查询。
+- GitPanel、RecentCommitsView、BottomToolbarView 的实际字段消费者和动作；RemoteCommands 的批协议／计数只按需要改。
+- RemoteConnection.run/check 只在传播当前调用剩余预算确有需要时调整，不重构连接生命期。
+- 扩展 GitStatusModelTests、GitExecutionTests、RemoteCommandsTests、GitExternalRefreshTests；动作行为变化运行对应 Git 动作／原生菜单测试。
+- 文档 owner：`docs/features/git.md`；测量方法真的变化才改 testing.md；新文案按实际 Git／Sidebar／Interface／Workspace 归属本地化。
 
-**Files / 锚点:**
-- Modify: kero/Git/GitStatusModel.swift：refresh/runGitStatus/prefetchedSnapshotCommands、StatusResult/StatusLoadResult、apply/applyRepository、invalidateStatusRefresh、perform。
-- Modify: `kero/Git/GitPanel.swift`、`kero/Git/RecentCommitsView.swift`、`kero/UI/Components/BottomToolbarView.swift`：真实详情 consumer 与加载/失败表示；调用入口是 `ContentView.syncGit` / `ToolPanelView`，按需要最小接入。
-- Modify only as needed: kero/Remote/RemoteCommands.swift 的现有 batchCommand/parseBatch 使用；新文案按 docs/ui.md#本地化 更新 kero/Resources/Localization/Git.xcstrings、Sidebar.xcstrings 或 Workspace.xcstrings 对应归属。
-- Only where deadline propagation requires it: `RemoteConnection.run/check` 的已有 master preflight。check 当前另有固定 5 秒预算，不能把传给 backend.run 的剩余时间当作整个调用已严格包含 preflight；沿当前 runner 传递同一剩余预算，不新增连接/重试层。
-- Extend: `KeroTests/check-git-panel-state.swift` 现有真实模型/backend 检查，增加受控延迟结果，不另建同职责脚本。
-- Modify: docs/testing.md#性能与内存测量、docs/features/git.md；本地 evidence-p4.md。
+**根因：** runGitStatus 顺序做 numstat／未跟踪计数、refs／remote／log／stash／git-dir／operation 后才发布；SSH 预取批次也含 log，只拆 Swift apply 不能提早交付。StatusResult 是全量结果，不能用默认空数组充当“详情完成”。
 
-**现状与失效边界:** runGitStatus 完成 numstat、未跟踪行数、refs/remote/log/stash/git-dir 后才 publish。applyRepository 当前全量覆盖，不能以空数组补齐核心结果。worker 的 10/24 秒 deadline 目前只传给 statusGit；未跟踪计数和仓库标记另走无剩余时间的调用，外层 12/30 秒 watchdog 只能拒绝晚结果，并未停止实际工作。另有同 root/scope 更换连接后旧结果仍可能通过原 generation 的路径；拆阶段必须在同 task 验证并处理。
+1. Red：受控延迟 history／计数，真实核心文件列表、分支／HEAD／upstream／冲突应先可消费；详情失败／超时仍保留成功核心，不显示伪空历史／远端或 +0。既有失败保留测试按“分阶段但不发布缺字段成功详情”的新契约调整，不简单删除。
+2. 同一 refresh worker 顺序交付核心后详情，不并发启动两套全快照。核心包括 canonical root、porcelain entries/ignored、branch／HEAD／upstream／ahead/behind、conflict、git-dir 与 repositoryOperation；后两者决定真实操作资格，不推迟到任意详情。
+3. 用最少的核心／完整详情结果、就绪身份和错误表达阶段。相同仓库可保留上次详情供展示，未验证的新详情不能驱动动作；换机器／仓库重置。缓存必须区分核心与完整详情，不把空默认值缓存为成功。详情按自身结果完整发布，不因某个子查询失败清掉其他已有有效字段。
+4. 明确消费者：amend／“有提交”由核心 hasHead 判定；stage／正常 commit 不等 history。Ref／branch／remote／stash 菜单、publish/fetch／graph 操作和底栏 picker 依赖详情的新鲜身份；UI 与模型动作两端一致，不能只禁按钮。行数待定／失败不伪报确定的零，真实空与失败分开。保留草稿和原操作失败反馈，不夹带 UI 重设计。
+5. 每次交付复用 contextGeneration、requestID、root/scope；perform 开始仍 invalidate 查询。保留同仓库换连接的已有失效机制与测试，不增加第二套 generation。核心／详情收尾、缓存、分页、isRefreshing 与 refreshPending 同义，进行中事件结束后合并一轮，不丢最后事件。
+6. SSH 拆核心／详情有限批次，复用 quoting／NUL／tag。batch 调用失败或缺必需帧就是该阶段失败，不再落回 prefetched miss 的逐命令完整重取；删除这条隐式双轨。正常 non-repo、unborn、无 stash 是业务结果，不是失败 fallback。
+7. 现有 worker 10／24 秒预算仅覆盖 statusGit，计数／operation 等另走默认超时。传递同一剩余预算到实际耗时调用；交互 RemoteConnection.check 目前另有 5 秒，需要计入实际调用时间，不声称参数已经包含它。不新增连接重试层，不承诺无法中断的文件系统调用一定停下；保留 12／30 秒独立 UI watchdog，核心成功后不能被 watchdog 清空。
+8. 未跟踪统计的文件数／字节预算是真实容量边界。本地 textLineCount 仅读前 size 后循环到 EOF，远端 stat 后 wc/tail 也可无界读；改为受限读取／统计并计实际读取字节，保留 8000 字节二进制探测、symlink 和尾行语义。不要简单换全量分配，或让单文件 probe 超过剩余预算；上限／增长／读取失败在本 task 留回归。超预算跳过与读取失败不混为“精确 0 行”。远端继续一次有限批量，不退回每文件往返。当前输出还把路径按换行分帧，合法文件名中的换行可伪造额外统计记录；消费者只求和、不使用 path，应先删输出中无消费者的路径，保持最小数值帧并验证非负／预算，或用已有 NUL 能力正确分帧，不能兼容解析新旧两套输出。
+9. 不依赖 T2 补完功能：本 task 已能自动加载全部详情、分页、手动重试和失败恢复。同 task 删除被替代的全量单次 apply／全批预取、隐式 fallback 和无界计数循环；保留执行器、互斥及目标保护。
 
-**实施:**
-1. 保留仓库解析与精确 non-repo/失败判断。建立一个现有 worker 内的顺序交付：先核心状态，再行数/展示详情；不同时启动多套全量 snapshot。
-2. 核心包括 root、porcelain entries/ignored、branch/HEAD/upstream/ahead/behind、conflict 与 repositoryOperation。git-dir/operation 仍校验真实仓库，不能因为它原在详情末尾而省掉。
-3. 核心与详情使用明确结果，不把默认空值伪装成完成。最小就绪信息与详情错误归 GitStatusModel；核心 apply 不清 refs/history/totals，切机器/仓库才重置；初次未加载不被显示为“0 行/没有远端/没有 stash”。缓存须区分完整结果与仅核心，不能缓存空详情为成功全量快照。
-4. 同 repo 有效详情可保留展示，失效详情不能驱动动作。GitPanel fetch/publish/stash-pop、BottomToolbar 分支列表按真实数据依赖接入；amend 的“有提交”直接用核心 hasHead，不继续依赖 recentCommits，也不因 history loading 禁用正常 commit/stage。行数正在更新/失败不显示确定的 +0/−0；真实空历史、unborn 和详情失败各自表达。菜单和模型动作一起核对，不能只禁一个按钮。
-5. 每次阶段回写都检查原 root/scope/contextGeneration/requestID；perform 开始仍 invalidate 全部前操作结果。清理、timeout、isRefreshing/isLoadingMoreCommits、缓存和 refreshPending 定义一致：保留运行中事件，结束后仅合并一轮最后刷新。
-6. 核心成功后详情失败只保留成功核心，显示适当失败/可再刷新；初次核心失败仍显示原错误，不误导成空仓库。不丢操作失败条和用户草稿。
-7. SSH 拆核心/详情批次，沿用 quoting/NUL/envelope，核心 batch 不含 log。batch 传输失败或缺必需帧直接返回该阶段失败，不再落回旧的逐命令重取，删除 prefetched 字典 miss 的隐式备用路径；正常 non-repo/unborn/无 stash 是业务结果，不是传输 fallback。共享 worker 剩余 deadline 覆盖计数和 operation 查询，watchdog 在已有核心成功后不能清掉核心。记录往返数，不把每条命令拆一轮 SSH，也不造多层 retry。
-8. 不依赖后续失效优化：本 task 完成时，完整详情依然能自动加载、分页和出错恢复。
-9. 未跟踪计数按现有文件数/字节预算真正有界：local textLineCount 当前仅读前检查 size，后面循环读到 EOF；remote wc/tail 也在 stat 后再次无界读取。复用本地有界读、远程有限内容读及现有统计协议，读中增长不能绕过 per-file/总预算；至少加入增长/超限的回归。相应计数 helper 替换与旧无界循环删除同 task 完成，不把吞掉错误算“0 行成功”。
+**验证：**
+- 从 `make test ONLY_TESTING=KeroTests/GitStatusModelTests`、RemoteCommandsTests、GitExecutionTests、GitExternalRefreshTests 开始，再完整 `make test`／`make build`。新测试进现有 XCTest，不建脚本。
+- 延迟／乱序／缺 batch 帧／详情失败、目标／同仓库连接切换、操作中查询、刷新／分页中的末尾事件；检查最终当前仓库状态及不额外逐命令重取。
+- 真实临时 Git 的 unborn、冲突、stage／unstage、commit／amend、Ref／stash／分页，核对 index／HEAD／log。容量检查验证读量而不只看 spinner 消失。
+- 隔离 App 核心出现时尝试各受影响动作；授权 SSH fixture 检查核心先可见、断线反馈和往返。没有真实 SSH 就保留该验收缺口，不用受控后端冒充。
+- 与 P1 比核心／详情、主线程、进程／读取量／往返，不以缺功能换首屏。
 
-**针对性验证:**
-- Run: `bash scripts/check.sh git-panel-state git-execution remote-commands panel-targets`。现有编译入口已经含 WorkspaceBackend、LocalWorkspaceBackend、RemoteCommands、Shared/Tree/TreeDisplayModel、GitCommandExecution 与真实模型，无 app-only 壳。本地真实 Git fixture 为主，延迟/乱序复用已有 WorkspaceBackend 或 RemoteCommandRunner seam，不新增生产 protocol。
-- 延迟详情断言核心可消费、详情失败/超时不清核心、初次 readiness/缓存重访不串；切 root/scope、同 root/scope 更换连接、操作开始、末尾事件和分页中事件最终对应当前仓库。验证受控坏 batch 不额外发逐条命令；预算/timeout 看实际读量与剩余时间，不只检查 watchdog 消失。
-- 真实 app：小仓库/上千文件、unborn、冲突、stage/unstage、commit/amend、分支切换、stash/pop 与 loaded-more history；核对磁盘、index、log，不只检查 UI success。
-- 详情未到时尝试每个受影响按钮；真实合成 SSH repo 检查核心先出现、错误与断线，不向网络远端发布。
-- 同机比较状态可用/全部详情、process/读取/往返与主线程；证明延后的是非关键工作而非功能缺失。
-
-**提交边界:** 分阶段交付、UI 接入、检查、必要本地化/文档一次原子提交；不捎带 P4-T2 的缓存政策。
+**提交：** 分阶段交付、实际 consumer、计数／预算闭环、旧路径删除、回归和文档同一结果；不夹带下一 task 的缓存失效策略。
 
 <a id="p4-t2"></a>
-## P4-T2 缩小详情失效与历史分页工作
+## P4-T2 按已知动作缩小刷新，分页只读历史
 
-**类型 / 依赖:** 实现；依赖 P4-T1。
+**类型／依赖：** 条件性能实现；依赖 T1 和实际命令／等待热点。
+**锚点：** GitStatusModel.sync/refresh/loadMoreCommits/perform、已知 mutation、cachedStatusByRoot/recentCommitLimitByRoot；ContentView 命令／激活，ToolPanelView 周期／文件操作刷新；GitStatusModelTests、GitExternalRefreshTests。文档归 git.md。
 
-**Files / 锚点:** GitStatusModel.sync/refresh/loadMoreCommits/perform、stage/unstage/discard/trash/commit/fetch/switchBranch/createBranch/stash、cachedStatusByRoot/recentCommitLimitByRoot；ContentView 的 commandCompletionSequences/激活入口与 syncGit；ToolPanelView 的文件创建/rename/delete 后 refreshGitStatus；扩展 KeroTests/check-git-panel-state.swift。
+| 真实触发 | 最小更新 |
+| --- | --- |
+| stage／unstage、明确仅工作区／index 动作 | core + totals，已有详情身份有效且新核心 HEAD／branch 一致才复用 |
+| commit／branch／remote／stash 等动作 | full，先不发明更细原因分类 |
+| 分页 | 当前范围更大 limit 的 history，不重算文件行数 |
+| 周期、激活、手动刷新、未知终端完成、换 scope/root | full，不能只凭 HEAD 不变跳过 refs／remote／stash |
 
-**设计决定:** 缓存有效性来自真实数据或已知动作，不由延时 TTL 决定。HEAD 没变不证明 refs/remote/stash 没变；任意终端命令不安全可分类。先最小两类失效及现有状态表达，再测需要的数据身份校验是否比重取更划算。
+1. 先记实际 command 集合，Red 明确 stage 不必重取全 log、分页不重做 numstat／untracked；没有显著成本就只记录，不引入失效框架。
+2. 采用时用最小 core/totals 与 full 请求需求；合并要升级需求并保留较大 history limit，isBusy 中也不能让 full 被后来的轻请求覆盖。
+3. 不解析任意终端命令、不加 TTL、refs/config hash 或探测命令。外部变化可与已知动作交错，保守 full 周期与显式刷新仍必须存在；不能把局部动作等同于锁住外部 Git。
+4. 分页保留 size=30、hasMore、loading、已展开节点和 scope／HEAD／refs 一致性；失效时重读一致列表，不直接拼接错版本。新状态仍能最终交付。
+5. Observation 已有观察语义，不机械在每个字段前堆 equality guard。只在实测重建／重复通知热点的拥有者消除重复工作；不能用全模型相等屏蔽 readiness／error 转换。
+6. 扩展现有模型／周期回归并运行完整完成流程；隔离 App 对照 index／log／refs／stash，确认相同 HEAD 的外部 Ref／stash 变化最终更新，隐藏／后台无周期查询。
 
-| 当前事件 | 必须更新 | 可复用的前提 |
-| --- | --- | --- |
-| stage/unstage、tracked restore、untracked trash | core + totals | 新 core HEAD/branch 一致且详情本来有效；不重取未改变 history |
-| commit/amend、branch/create/switch、init | core + totals + 相关详情/history | 不依赖旧 HEAD |
-| stash/pop、fetch/remote 操作 | core + totals + stash/refs/upstream 等相关详情 | 只复用有证据未变的部分 |
-| history 加载更多 | 更大 limit 的 history | scope/root/HEAD/refs 未失效，不重新计算全部 numstat/untracked |
-| 新 scope/root、激活、未知终端 command completion | core + 必要保守校验/详情 | 不仅靠相同 HEAD 跳过 remote/stash/refs |
-
-**实施与验证:**
-1. 用当前 known caller 表达最小 core-only/full 失效需求；终端未知命令、手动刷新、激活仍 full，这是当前可达行为而非旧版本兼容层。不写 shell 命令解析器，不增加 TTL/多级原因框架；partial 失败不能把旧 details 标成有效。
-2. coalescing 合并失效需求而非用最后一条覆盖前面：详情刷新需求和更大 history limit 到达时不丢；isBusy 期间也保留。
-3. 默认不新增 refs/config fingerprint 探测。已知仅工作树/index 动作才复用有效详情，未知外部命令仍完整刷新；先测这个最小方案。只有后续证据证明 full 刷新仍主导且探测净收益成立，才回改本 task，不预建配置扫描与 hash 围栏。
-4. 分页走当前范围的 history 更新，保留 page size=30、hasMore、isLoadingMore 和已展开行；HEAD/refs 改变时重新取得一致列表，不把新旧 log 直接拼错。
-5. 相同字段/数组/装饰不重复 @Published 赋值；dirty/error/operation 的必要状态转换仍发布。先比较实际应用数据，不能用一条全模型相等守卫屏蔽需要变化的 readiness。
-6. 脚本记录实际 command 集合：stage 后不执行不必要完整 log，pagination 不重做文件行数；branch/remote/stash 的外部变化、相同 HEAD 的 ref 变化、快速 root 切换和最终事件均得到最新正确结果。
-7. 真机操作并对照 Git index/log/refs/stash，观察分页与菜单；比较 process 数、SSH 往返、状态尾延迟。失败过的操作仍有原反馈，不回退到旧 operation 成功。
-
-**提交边界:** 失效/分页/相同发布收敛与对应检查一个提交，不引入新的 Git runner。
+**清理／提交：** 删除被替代的“分页全刷”和重复无用请求路径，不保留新旧策略开关。采用实现、回归和文档独立提交；无热点只留证据。
 
 <a id="p4-t3"></a>
-## P4-T3 在快照层预聚合文件树状态装饰
+## P4-T3 在快照层预聚合共享装饰
 
-**类型 / 依赖:** 实现；依赖 P4-T1 的核心快照语义。
+**类型／依赖：** 条件性能实现；依赖 T1 核心快照；先以大树 trace 确认逐行扫描成本。
+**文件：** GitStatusModel.applyRepository/clearRepositoryState/fileDecoration；复用 TreeDisplayModel.Status.directoryPriority。共享 helper 归属真的变化才改 TreeDisplayModel；不动 row 布局。测试 GitStatusModelTests／GitWorkspaceActionTests、FileTreeTests／TreeRowHitTestingTests；文档归 files.md／git.md 的相应事实。
 
-**Files / 锚点:**
-- Modify: GitStatusModel.applyRepository/clearRepositoryState/fileDecoration。
-- Reuse: TreeDisplayModel.Status.directoryPriority、pathRows 已有的目录聚合语义。
-- Modify: KeroTests/check-git-panel-state.swift 的装饰检查；仅需要共享算法归属时才改 `kero/Shared/Tree/TreeDisplayModel.swift` 和现有树检查。
-- Consumers to verify: FileTreeRow、GitEntryRow、RecentCommitsView；不独立修改 row 布局。
+**现状：** fileDecoration 对每行扫 ignoredPaths，目录再 filter 全 fileDecorations；Git pathRows 已有祖先聚合语义。parseStatus 按 path + tracked/untracked 去重，不保证全局路径唯一。
 
-**现状与根因:** fileDecoration 先 direct path，再扫描全部 ignoredPaths，目录再 filter 全部 fileDecorations。每行重绘可重复扫描同快照；Git pathRows 已在构造时聚合父目录状态，不能在 Files 另发明优先级。
+1. 先用真实模型及慢扫描 oracle 建立绿色等价基线：直接状态、忽略祖先和后代目录优先级、foo/foobar、repo root／仓库外、MM／A+M／rename/copy／conflict；同路径 staged deletion + untracked 是必测，不是异常输入。性能收益由 trace 证明，不用任意运行时间断言制造 Red。
+2. entries／ignored 真变化时沿祖先建目录状态索引；查询用字典和祖先 membership，不逐行扫完整集合。当前直接状态先于 ignored，后代目录聚合复用 directoryPriority，保留相同路径的当前确定性选择结果，不趁机改颜色政策。
+3. 全体 entries 合法含同路径双业务行，因此不能把 fileDecorations 改成 uniqueKeys 构造。聚合后装饰是一值，两条分组行仍存在；不是删除业务行来满足字典。parseStatus 去重及通用 pathRows 的重复输入处理保留。
+4. GitPanel.changedFileRows 已分组，若能证明分组内唯一可直接映射，但只是相邻精简，不是强制性能项目；不得把这个局部前提外推到全体 entries。
+5. 换范围／清仓库同步重置索引；同核心不重复重建，不能因为字节相同保留旧机器的身份。记录快照构造和查询成本，不把扫描搬成更贵的主线程重建。
+6. `make test ONLY_TESTING=KeroTests/GitStatusModelTests`，GitWorkspaceActionTests／FileTreeTests／TreeRowHitTestingTests 和完整完成流程；隔离 App 检查 Files、changed、staged、history 的压缩、窄栏／字体、横滚／悬停／命中／辅助语义。
 
-**实施与验证:**
-1. 核心 entries/ignored 实际变化时，沿路径祖先构建目录状态索引，复用 directoryPriority；逐行查询用字典和祖先路径 membership，不扫描全变更集或忽略集。
-2. 保持“直接状态优先、再忽略祖先、再后代目录最高优先级”，忽略 trailing slash 与文件名区分，repo root/仓库外路径与无 repo 行为不变。foo 与 foobar 不串前缀。
-3. 清理与切 scope 清掉/重建索引；不得拿 A 机器同路径给 B 装饰。相同核心结果不要重新建索引/发布。
-4. 脚本用真实模型比较慢扫描 oracle：MM、A+M、D、rename/copy、conflict、ignored 目录子孙、仓库根/外、空集与路径边界；10k 文件 × 多层目录。
-5. 若修改共享树 helper，立即运行开发文档的 file-tree-navigation 和 tree-row-hit-testing 两项命令，再真机一起检查 Files/changed/staged/history、窄栏/字体/横滚/悬停/命中/无障碍。
-6. 比较快照构造成本与大树滚动/更新的查找成本；不把工作从 row 移进更慢的主线程全量重建后就宣布优化。
-7. parseStatus 已在真实 producer 去重；本 task 将 applyRepository 与 GitPanel.changedFileRows 中重复的 `uniquingKeysWith: first` 备用处理改为依赖该唯一性不变量的直接构造，并加 `git rm --cached`（staged deletion + untracked 同路径）真实回归。不要删除 parseStatus 的必需去重，也不要类推删除 history/通用 pathRows 的去重：后者已有显式重复输入契约。
-
-**提交边界:** 索引与检查/事实文档一个提交，不复制树或改懒加载。
+**清理／提交：** 用索引替代逐行全量扫描后删除旧扫描实现，不留兼容 fallback；不能删除有真实重复输入的聚合。实现、测试和文档独立提交。
 
 <a id="p4-t4"></a>
-## P4-T4 文件树刷新与远程往返的证据门
+## P4-T4 文件树刷新成本的最小实验
 
-**类型 / 依赖:** 定向实验后条件最小实现；依赖 P1、P4-T3，用来排除装饰影响。
+**类型／依赖：** 条件实验／实现；P1、T3 后排除装饰影响。
+**锚点：** ToolPanelView.PanelSyncQueue/performSync → Project.syncFiles／PanelContext → FileTreeModel.sync/rebuild/children → LocalWorkspaceBackend.list／SSHWorkspaceBackend.list → TreeDisplayModel.Traversal；RemoteCommands.listDirectoryCommand/batchCommand。
 
-**Files / 锚点:** ToolPanelView.pollsSelectedPanel/syncQueue/performSync、FileTreeModel.sync/rebuild/children、LocalWorkspaceBackend.list、SSHWorkspaceBackend.list、RemoteCommands.listDirectoryCommand/batchCommand、TreeDisplayModel.Traversal.nextDirectory/receive；KeroTests/check-file-tree-navigation.swift。
+当前 Files 读压缩目录的直接子项，不仅 expanded；live traversal 有 32 层保护 symlink 循环，Git 有限路径不同。PanelSyncQueue 和 FileTreeModel 的合并各管不同生命期，不因有两层 bool 就断言冗余。本地 list 已 @concurrent，items 已比较才发布。
 
-**当前事实:** Traversal 为压缩目录读取未展开目录的直接子项，不仅 expanded；live tree 有 32 层约束防 symlink 循环，Git 有限路径没有同一限制。ToolPanelView 两秒 poll 只在前台可见 Files，performSync 按自身 panel，Git 分支不执行同步；heading 只读发布状态。Info 已移除，工具面板不重复创建；既有 PanelSyncQueue 与 FileTreeModel.rebuild 都串行合并，各管不同生命周期，不据此认定两者冗余。
+1. 测初次展开、无变化 poll、外部 add/delete/rename、长压缩链与必要 SSH；分离 root resolve、list/stat／往返、排序／Traversal、发布／原生布局。
+2. 选一个真正主导的分支：远程多轮 list 才试本 traversal 已知必需目录的有限 batch；重复处理主导才复用当次／当前范围数据。不预扫未访问子树、不以目录 mtime 缓存 symlink 类型、不减刷新能力。
+3. 一轮定位和一个原型，无净收益就保留现有实现；需要新失效来源／watcher 再拿证据回改，不暗中加框架。
+4. 若采用，扩展 FileTreeTests 的外部变更、draft／取消、压缩／symlink／dangling／循环、不可读保留、换范围和重建中最后事件，性能替代前后的正确行为应一致；发现真实缺陷才先 Red 再修。若改变异步工作，沿现有 backend／目标验证同路径换通道旧结果，复用必要身份而不预建多层 generation。
+5. 运行 FileTreeTests、TreeRowHitTestingTests、PanelContextTests；批协议变动再跑 RemoteCommandsTests，之后完整完成流程与四区域原生验收。授权 SSH 才实测传输，隐藏／后台不得多 IO。
+6. 同 task 删除被替代的重复 list／排序／发布／临时预取路径，文档同步 files.md；不新旧并行运行。
 
-**实验与分支:**
-1. 同一固定大树测初次展开、重复无变化 poll、外部创建/删除、压缩长目录链与 SSH，分别计目录 list/stat、main thread、排序/Traversal、实际读量和往返。
-2. LocalWorkspaceBackend.list 已是 @concurrent；不重复增加后台边界。若 trace 仍有 main thread 成本，区分 PanelContext 根解析、返回后的 map/sort/Traversal 与 AppKit 构建，修实际拥有者，不再用“list 是 async”或增加 Task 猜测。
-3. 若主要是远程已知目录的多轮 list，原型仅对“本次 traversal 必定需要”的有限目录批取，复用现有 batch 协议；单次 rebuild 预取结果不能变成长期 stale cache。未知下一层保持需求驱动，预算/批次大小由实际输出上限决定，不预扫未访问子树。
-4. 若主要是重复数据处理，优先重用单次/当前范围已知数据并避免重复排序/发布。目录 mtime 不能单独证明 symlink 目标类型没变；不直接以它缓存整个目录，也不减少外部变化检测能力。
-5. 一轮定位加一个选中分支原型后停止。若最小措施不够，明确需要的新 invalidation 来源与净收益，先回改本 task/需求再实现；不得默默加入 watcher 框架。没有成本证据就保留已有 serial coalescing/poll。
+**提交：** 只提交采用的最小改动、回归及文档；实验无改动只交本地 evidence-p4.md。
 
-**针对性验证:** task 内扩展现有真实文件系统脚本，覆盖 external add/delete/rename、draft/取消、压缩链、symlink/dangling/循环、unreadable 保留、root/scope 变化和重建中最终事件。若批协议变化，检查空/换行/引号路径、批次失败与真实 SSH 输出。运行两项共享树检查并安装真机验收四区域、大树响应；关闭/隐藏/后台后无额外网络/I/O。
+## 阶段核销
 
-**提交边界:** 被测量选中的最小刷新改动、检查与性能说明独立提交；探索无改动只保留本地证据，不能把探索结束冒称已修复卡顿。
-
-## 阶段自审与交接
-
-- 基线和各 task 都核对核心结果/操作副作用；相同 scope、partial readiness 与最后事件是共享不变量。
-- P4-T1 完成时功能已完整，不依赖 T2 才补详情/失败/分页；T3/T4 不改变共享树语义。
-- 实际完成后进入 plan-task-auditor 并创建 audit-p4.md；规划时不创建。
+T1 完成时核心、详情、错误、分页与全部动作已完整；T2–T4 不能成为前一 task 正确性的延期依赖。实际实施后才创建阶段审计，本轮没有 Go 或性能通过结论。

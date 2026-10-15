@@ -3,11 +3,19 @@ current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
-title = "生成可重复性能样本与操作序列"
+title = "准备最小可重复样本与动作"
 status = "pending"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = ""
+note = "本地最小样本和动作；不强制提交永久生成器。"
+
+[[tasks]]
+id = "P1-T3"
+title = "修正首次解析与字节坐标"
+status = "pending"
+plan = "plan-p1.md#p1-t3"
+commit = ""
+note = "首次旧范围和 LF／UTF-16 字节坐标；测试进入同一 XCTest 目标。"
 
 [[tasks]]
 id = "P1-T2"
@@ -15,15 +23,15 @@ title = "取得真实基线并固定热点准入"
 status = "pending"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "执行依赖 P1-T3；P1 顺序 T1→T3→T2，区分旧输入契约与正确性已修复的性能基线，不假定 App 曾崩溃。"
+note = "依赖 P1-T3；任务顺序已同步为 T1→T3→T2。正确性修复和性能收益分开。"
 
 [[tasks]]
 id = "P2-T1"
-title = "统一首次加载与有界后台读取"
+title = "统一按需加载、解码与断线只读"
 status = "pending"
 plan = "plan-p2.md#p2-t1"
 commit = ""
-note = "本地后台 read 已存在；删同步 init/readImmediately，迁移实际 App 检查，接入原生断线只读。"
+note = "同一按需加载服务视图及 waitForText／ignoreGitPaths；删同步 init/readImmediately，迁移实际 XCTest，原生／固定主机只读闭环。"
 
 [[tasks]]
 id = "P2-T2"
@@ -31,7 +39,7 @@ title = "移除高亮无效字体事务"
 status = "pending"
 plan = "plan-p2.md#p2-t2"
 commit = ""
-note = ""
+note = "删除真实无效字体事务，保留颜色／零范围保护。"
 
 [[tasks]]
 id = "P3-T1"
@@ -39,15 +47,15 @@ title = "补齐编辑后的高亮范围更新"
 status = "pending"
 plan = "plan-p3.md#p3-t1"
 commit = ""
-note = "同时修旧 edit 范围、Neon didChange 与 root/injection 同版交付，不等 P3-T7。"
+note = "旧 edit 范围、Highlighter 通知、跨 base/injection 同版交付；不复制 Neon 解析状态机。"
 
 [[tasks]]
 id = "P3-T2"
-title = "删除编辑回写重复全文比较"
+title = "恢复字节精确文本契约并删除重复比较"
 status = "pending"
 plan = "plan-p3.md#p3-t2"
 commit = ""
-note = ""
+note = "字节精确比较贯穿编辑器保存／重载与原生 Diff／行token，不只删前置比较；同任务接入 DiffEngineTests。"
 
 [[tasks]]
 id = "P3-T3"
@@ -55,7 +63,7 @@ title = "验证并收敛坐标扫描热点"
 status = "pending"
 plan = "plan-p3.md#p3-t3"
 commit = ""
-note = ""
+note = "只测 P1-T3 修正后的坐标实现；无热点不建索引／文件。"
 
 [[tasks]]
 id = "P3-T4"
@@ -63,15 +71,15 @@ title = "验证并优化根解析调度"
 status = "pending"
 plan = "plan-p3.md#p3-t4"
 commit = ""
-note = ""
+note = "只按同步 parse 实测调整公开参数，不新建队列或调度服务。"
 
 [[tasks]]
 id = "P3-T5"
-title = "合并查询编译在途工作"
+title = "修复查询失败闭环并按需共享编译"
 status = "pending"
 plan = "plan-p3.md#p3-t5"
 commit = ""
-note = "固定查询编译失败循环必修；共享仅热点准入后同任务接入，未命中不预建新文件。"
+note = "固定 Query 失败循环必修；共享准入后同时接入 root、embedded 和原生 Diff，删重复 compile/pending。"
 
 [[tasks]]
 id = "P3-T6"
@@ -79,15 +87,15 @@ title = "验证嵌入语言复用方案"
 status = "pending"
 plan = "plan-p3.md#p3-t6"
 commit = ""
-note = ""
+note = "先测同版片段复用／后台计算；仅跨 edit 重算仍主导才验证增量树，不默认 Layer 或增量引擎。"
 
 [[tasks]]
 id = "P3-T7"
-title = "接入后台子区域增量解析"
+title = "接入已验证的子区域复用措施"
 status = "pending"
 plan = "plan-p3.md#p3-t7"
 commit = ""
-note = "仅在 P3-T6 现有 Parser/Tree 原型与热点成立后接入；Layer 无根树接入/删除清理契约，不默认重构。"
+note = "只接入 T6 实测选中措施，同任务删除被替代路径；未准入不预建文件。"
 
 [[tasks]]
 id = "P4-T1"
@@ -95,7 +103,7 @@ title = "分阶段交付 Git 核心状态与详情"
 status = "pending"
 plan = "plan-p4.md#p4-t1"
 commit = ""
-note = ""
+note = "核心／详情分阶段，保留已有换通道与失败快照修复；同任务闭环 consumer、计数预算、回归及旧路径删除。"
 
 [[tasks]]
 id = "P4-T2"
@@ -103,7 +111,7 @@ title = "收敛详情失效与历史分页工作"
 status = "pending"
 plan = "plan-p4.md#p4-t2"
 commit = ""
-note = ""
+note = "按热点选 known mutation／分页精简；周期、手动、激活、未知命令仍 full，不用 HEAD 代替详情身份。"
 
 [[tasks]]
 id = "P4-T3"
@@ -111,7 +119,7 @@ title = "预聚合共享树状态装饰"
 status = "pending"
 plan = "plan-p4.md#p4-t3"
 commit = ""
-note = ""
+note = "全 entries 合法含同路径 tracked/untracked，不可 uniqueKeys；只替代逐行扫描，保留聚合语义。"
 
 [[tasks]]
 id = "P4-T4"
@@ -119,39 +127,39 @@ title = "验证并收敛文件树刷新成本"
 status = "pending"
 plan = "plan-p4.md#p4-t4"
 commit = ""
-note = ""
+note = "已有后台 list、相同 items 去重和两级合并不重做；只选实际主导分支。"
 
 [[tasks]]
 id = "P5-T1"
-title = "归因 diff 完整流水线"
+title = "归因原生 Diff 完整流水线"
 status = "pending"
 plan = "plan-p5.md#p5-t1"
 commit = ""
-note = ""
+note = "只归因当前原生 Git→DiffEngine→TextKit 链路，不再有网页阶段。"
 
 [[tasks]]
 id = "P5-T2"
-title = "收敛 diff 读取与解码"
+title = "修复共享 LF／CRLF 分行契约"
 status = "pending"
 plan = "plan-p5.md#p5-t2"
 commit = ""
-note = "读取失败/真实缺失、在途 edit 与 loading 闭环必修；用结构化 metadata/OID，删除旧 spec reader，性能并行按测量。"
+note = "当前 Character LF 漏 CRLF；共享 splitter 精确范围／行号、review 和 edit 回归。"
 
 [[tasks]]
 id = "P5-T3"
-title = "收敛桥接编码与在途渲染"
+title = "收敛读取身份、错误与加载收尾"
 status = "pending"
 plan = "plan-p5.md#p5-t3"
 commit = ""
-note = ""
+note = "修 loading 收尾、结构化 OID 和旧 displayInputs 经 fold 重新获胜；保留已有保护，不预建新 reader。"
 
 [[tasks]]
 id = "P5-T4"
-title = "减少 JS 差异计算与内容扫描"
+title = "接入实测选中的原生性能措施"
 status = "pending"
 plan = "plan-p5.md#p5-t4"
 commit = ""
-note = "生产 hash 已确认碰撞，内容身份必修；parse 复用/调度仍按热点，移除自定义 worker 与兼容双轨预设。"
+note = "旧 JS/hash/bridge 任务已替换为实测原生热点的最小措施；无证据不建缓存／调度。"
 
 [[tasks]]
 id = "P6-T1"
@@ -159,20 +167,12 @@ title = "完成同机综合复测与真机验收"
 status = "pending"
 plan = "plan-p6.md#p6-t1"
 commit = ""
-note = ""
+note = "综合复测不代替各任务验证；安装／恢复遵循现行 development，不重启用户进程。"
 
 [[tasks]]
 id = "P6-T2"
-title = "收敛性能文档与功能指南"
+title = "核销文档、引用与本地证据"
 status = "pending"
 plan = "plan-p6.md#p6-t2"
 commit = ""
-note = ""
-
-[[tasks]]
-id = "P1-T3"
-title = "恢复首次解析与字节坐标契约"
-status = "pending"
-plan = "plan-p1.md#p1-t3"
-commit = ""
-note = ""
+note = "只核销已同步文档和本地证据；不接收延期旧代码清理，无新事实不制造提交。"

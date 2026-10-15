@@ -1,101 +1,54 @@
-# P2：非阻塞打开与纯颜色高亮
+# P2：按需后台加载与纯颜色样式
 
-> 本页保留旧实施方案，先按 [实施基线更新](idea.md#实施基线更新)重核加载、断线和保存路径。下文旧独立测试命令不再有效；使用当前 XCTest，不为复现旧方案恢复删除的入口，也不推定旧缺口仍存在。
+**目标：** 不在打开入口无界读文件，不让高亮制造无效字体事务。
+**不做：** 新文件状态机、连接管理器、通用队列、图片新限额。
+**前置／验收：** P1 基线；普通文本有界且可输入，非视图追加、rename、断线和保存正确，字体冗余事务消失。
 
-**Goal:** 去掉已证实无必要的主线程文件读取与字体样式写入，保持打开、重载、编辑和保存正确。
-
-**Non-goals:** 不改文本引擎，不新建文件状态机，不改变大小/图片政策，不把整份文档预热为高亮缓存。
-
-**Approach:** 第一次加载与干净重载汇入 FileTab 的同一入口，复用现有有界后台 read 和请求代次。文本解码另有明确后台边界；去掉同步初始化读取及重复的发布守卫。高亮只写临时颜色，字体由 SourceTextEditor 负责。
-
-**Acceptance:**
-- 菜单、树、独立标签与会话恢复的 FileTab 初始化不读取文件；选中视图才开始第一次加载。
-- 普通文本读前限额，恰好 5 MiB 可打开，多一字节显示超限，不被吞成普通失败。
-- 打开/加载中重命名/重载/保存/断线没有旧结果污染、长期空白或未保存内容丢失。
-- 开始高亮、逐 token 着色与清理不再无条件写 .font，不再触发无变化的全文字体设置。
-- 同机复测实际文本/可输入/高亮阶段；结论遵循 P1 噪声口径。
-
-**Rules:**
-- 首次 .loading 仍是“不具备可编辑文本”，不能暂时当空文本允许用户输入再被读取结果覆盖。
-- 本地读取已用同一个 FileHandle、前后 seek 检查与 64 KiB 分块；复用它，不换成 stat 后无界 Data(contentsOf:)。
-- NSImage 等 AppKit 对象不直接跨 executor 传递；后台交付 Sendable 数据/文本，UI 对象在正确隔离域创建。
-- 字体仍由 SourceTextEditor.apply 管理，保留原生选区、输入法、查找替换和弱视图生命周期。
-- 每 task 按 AGENTS.md 构建、验签并用隔离实例真机验收后提交，不以替换或重启正式应用作为验证前提。
+每项分别验证／提交；共同完成标准见 [testing.md](../../../docs/testing.md#完成标准)，必要清理、测试和文档不延至 P6。
 
 <a id="p2-t1"></a>
-## P2-T1 统一首次加载和有界后台读取
+## P2-T1 统一按需加载、解码与断线只读
 
-**类型 / 依赖:** 实现；依赖 P1 完成基线。
+**根因：** Project.openFile/makeContent 同步构造 FileTab，本机 init 调 readImmediately(.max)，MainActor 解码后才检查上限；远端 init 和 onAppear 可重复读取。ignoreGitPaths 在 openFile 后立即 waitForText，因此不能把初读独占给 onAppear。
 
-**Files / 锚点:**
-- Modify: kero/Editor/FileViewerView.swift：FileTab.init、Content、LoadedContent、loadedContent、reloadFromDiskIfClean、updatePath、reevaluateWorkspace。
-- Modify: `kero/Workspace/LocalWorkspaceBackend.swift`：删除 `readImmediately`，保留 `readSync` / `@concurrent read`；`WorkspaceBackend.swift` 只有契约与数据类型，不再含本地实现。
-- Modify: `kero/Editor/SourceTextEditor.swift`：`apply` 的断线编辑禁用。
-- Verify/modify only for the existing reconnect chain: `Project.connectedWorkspace/rebindRemoteTabs`、`SSHHostWorkspaces.setConnected/connectionState`。固定主机与终端交互 SSH 的状态来源不同，不能只测后者。
-- Callers to verify, not automatically modify: Project.openFile/makeContent、FileViewerView.onAppear/didBecomeActive/didBecomeKey。
-- New: KeroTests/check-bounded-file-read.swift，复用现有独立 Swift 编译检查约定，检查真实 WorkspaceBackend 读取而不是复制算法。
-- Modify: `scripts/check.sh` 注册新检查；`KeroTests/check-workspace-identity.swift` 与 `KeroTests/check-pane-retention.swift` 迁移初始化后立即读写的假设，并覆盖真实 FileTab 生命周期。
-- 当前已实现的加载与保存契约归 `docs/features/editor.md`；只在测量方法改变时更新 `docs/testing.md#性能与内存测量`。
+**文件／验证位置：**
+- `kero/Editor/FileViewerView.swift`：FileTab init、waitForText、reload、loadedContent、updatePath 和视图触发。
+- `kero/Workspace/LocalWorkspaceBackend.swift`：readImmediately/readSync/read；复用 WorkspaceBackend／SSHWorkspaceBackend。
+- `kero/Editor/SourceTextEditor.swift` 的编辑资格；`Project.connectedWorkspace/rebindRemoteTabs/ignoreGitPaths`、`SSHHostWorkspaces.setConnected` 的既有目标／断线链。
+- Vendor STTextView 的 AX setter／资格契约及 `DiffTextView` 现有保护；共同底层修复确有需要才纳入补丁。
+- 扩展 FileTabTests、WorkspaceIdentityTests、PaneRetentionTests；backend 边界可加 `KeroTests/Integration/Files/WorkspaceReadTests.swift`，仍进现有 XCTest。核对全部受影响的直接 FileTab 构造测试，包括关闭／Git 保存，不能只迁移三类。
+- 文档：`docs/features/editor.md`；连接事实改变同步 `docs/features/ssh.md`，Vendor 补丁变化同步 `docs/development.md`。
 
-**当前链路与根因:**
-Project 的 openFile 与恢复用 makeContent 同步创建 FileTab；本地 init 调 readImmediately(.max)，读取/解码或 NSImage 创建之后才检查文本大小。远程 init 启动 reload，onAppear 再启动会取消旧任务；取消 Task 不等于同步 I/O 已停止。`LocalWorkspaceBackend` 当前已是 `nonisolated`，read/list/stat 等已是 `@concurrent`，不是本 task 尚需添加的能力。reload 用 try? 吞掉具体错误，loadedContent 仍在 MainActor；updatePath 假设已有内容，异步首次加载后不成立。SourceTextEditor 当前也未设置 `isEditable`，断线只有横幅，需与既有只读要求一致。
+**步骤：**
+1. Red：init 无消费者不读；挂载／waitForText 都能首次加载；真实 Project.ignoreGitPaths 在视图未挂载时保留原文并保存追加规则。保留等待消费者跟随同目标替换读取、拒绝换目标的契约，不能丢旧测试的有效覆盖。
+2. init 只建身份与 .loading。同一按需入口服务视图和 waitForText，已在途首次加载不重复启动；真实外部变化重载不能被请求合并吞掉。无人消费的恢复标签保持懒加载。
+3. 普通文本传 5 MiB，tooLarge／读取失败／编码失败分别表达。复用本地 @concurrent read/readSync 和远端有限读取；解码放明确后台数据入口，不为每 caller 包另一套 detached。NSImage 留正确隔离域。
+4. 图片维持完整读取和现有扩展名策略，无效图片再回文本／二进制规则，不引入图片新上限，也不称全部读取有界。
+5. loader 仍归 FileTab，复用 reloadGeneration／保存目标代次。loading 时 rename 要失效旧读取并从新路径继续；旧代次、dirty、断线不能发布。任务完成清对应句柄，旧任务不能清新句柄。只有证明 path/cancellation 与代次完全等价才删重复条件，不能机械删除数据保护。
+6. 保存保留现有串行快照与原子 backend.write；失败／保存中输入不丢。保留 matches，未变内容不替换原生编辑器和撤销。
+7. 固定 SSH host 的连接状态接入现有 Project 重绑，不新增全局 owner／探测循环。未知初连和显式读取仍能建立连接；已知断线保留预览／草稿并只读，面板刷新／选中／显式重试能重新读原机器，不能被只读永久锁死。检查 FileTab 与 DiffTab 两个消费者。
+8. 原生 isEditable 表达只读，选择／复制／查找保留。Vendor 的 setAccessibilityValue 当前直接写 text，不受 isEditable 保护；测试 AX 不可绕过。优先在共同原生写入所有者修复，并在同 task 删除 DiffTextView 被替代的重复守卫，不再加 View 层假只读。
+9. 同 task 删除 readImmediately、同步 init 和 init 自动启动的第二条路径、无消费者 helper／旧说明。readSync 仍服务 async read，statSync/gitRootSync/isLinkedWorktreeSync 仍有真实同步消费者，不类推删除。
+10. 受影响测试显式按需加载／等 .text 后编辑；fake 也遵守 maxBytes 超限抛错，不能 prefix 截断后冒充成功。不为旧测试保留同步兼容接口。
 
-**实施:**
-1. init 只保存身份/backend、空基线与 .loading，不做 I/O，也不在 init 启动第二套读取。既有 onAppear 负责第一次加载，未选中的恢复标签保持懒加载。
-2. 第一次与干净重载使用同一 loader。普通文本传 maxTextBytes 到 backend.read；捕获 tooLarge 并使用已有超限文案，其他错误保留读取失败，UTF-8 失败保留二进制。删掉不再有消费者的 readImmediately，仅保留 backend 共享 readSync。
-3. 复用现有 `nonisolated LocalWorkspaceBackend` / `@concurrent read`，不重写 executor。新增的纯文本解码在最小数据型后台入口完成，遵守当前 approachable concurrency 编译设置；主 actor 不再做大文本解码，不全局关闭隔离设置，不让 caller 各包 detached。
-4. 读取后的文本解码在明确后台边界返回不可变结果，主 actor 仅做身份检查和发布。图片仍是现有扩展名策略：保留完整图片读取与主 actor NSImage 构造，不新增上限。无效图片回退原先文本/二进制规则；大图片另测，不宣称该例外已全部有界。
-5. 发布只保留拥有实际职责的校验：`reloadGeneration` 拒绝旧读取，dirty/readOnly 拒绝新编辑或断线后的替换。`path` 只经 `updatePath` 改写且先 `invalidateReload`，取消也总伴随代次更新；删除发布处被同一代次覆盖的重复 path/cancellation 判定，不新增第二套身份或状态机。任务结束清对应 reloadTask，旧任务不得清新句柄；维护 matches、savedText、reloadRevision、saveError。
-6. updatePath 在 .loading 时取消旧路径并从新路径继续加载；已有文本/图片仍保留原内容和编辑状态。断线时已有预览/未保存编辑不清空，重连只换同机器 backend。
-7. 初次 onAppear/窗口激活重复请求先通过统一入口减少；若 P1 trace 仍发现实际重复在途读，用最小请求合并保留最后一次重载，不加通用队列。不得直接丢弃外部修改事件。
-8. 不重新设计保存。继续使用原 save 的写入快照与原子 backend.write；重载不覆盖写入期间的新输入。SourceTextEditor.apply 使用原生 `isEditable` 表达断线只读，重连恢复；保留选择、复制和查找，不能只加横幅。
-9. 同 task 删除同步 init 分支、init 自动启动的第二套读取、`readImmediately` 及其过时说明；保留仍被同步项目根目录调用的 statSync/gitRootSync/isLinkedWorktreeSync。新检查无须 app 类型壳：backend 文件已经独立。所有直接构造 FileTab 的既有检查显式触发加载并等待 `.text` 后再编辑，测试不得靠睡眠猜时间，也不为旧检查保留同步兼容入口。
-10. 沿固定 SSH 主机的实际连接状态闭环：当前 connectedWorkspace 对匹配 sshHost 无条件返回缓存 backend，setConnected 也不是 Project 的通知源，不能认为 banner/isEditable 修复已覆盖它。复用 SSHHostWorkspaces 的状态发布到现有 Project rebind，不新建连接管理者或后台探测循环；首次未知/connecting 仍能由已有选中加载开始连接，已知断线保留预览与编辑。已有面板刷新或选中/激活的显式读取可恢复连接，失败不能清内容；恢复后换正确 backend 并失效旧读取。不能用只读守卫把首次连接或后续重连永久阻断。
+**验证：**
+- `make test ONLY_TESTING=KeroTests/FileTabTests`；运行新增 WorkspaceReadTests 及上述受影响测试，再 `make test`、`make build`。
+- 临时文件 0、cap−1／cap／cap+1、缺失、symlink；受控 rename／连接／延迟读取、追加、写入失败／期间输入、撤销核对真实磁盘。
+- 原生键入／AX 替换尊重只读，重连后可写且 undo／内容保留。SSH 仅用专用获准 fixture，模拟不叫 E2E。
+- 隔离 App 经树／菜单／恢复打开 512 KiB／4 MiB；等待时切终端、加载后编辑保存。复测读取次数、解码线程和可见延迟，明确图片例外。
 
-**针对性验证:**
-- 在 task 内完成 KeroTests/check-bounded-file-read.swift：
-  - 编译 `WorkspaceBackend.swift` 与 `LocalWorkspaceBackend.swift` 的真实生产实现，不提供后端壳或复制读取算法。
-  - 临时文件 0、cap-1、cap、cap+1、缺失、可读 symlink 目标；超限捕获 tooLarge，内容和字节正确。
-  - 用现有工程并发 flags 编译应用，再用 trace 验证 executor；脚本默认编译语义不能代替 app 语义证明。
-- Run（同 task 注册）：`bash scripts/check.sh bounded-file-read workspace-identity pane-retention`；后两项先构建 Debug App。独立检查编译输入为 `WorkspaceBackend.swift LocalWorkspaceBackend.swift KeroTests/check-bounded-file-read.swift`。
-- 扩展实际 App 的 `workspace-identity` 检查：未显示 init 不读取、显式加载成功/超限/失败、延迟旧路径后 rename、干净/脏重载、同机器连接更换与关闭释放；`pane-retention` 在加载后编辑再重挂载。这两项不是单独 backend 读取检查可替代的。
-- 真实 Kero：树和菜单经 openFile 打开独立标签，以及快照恢复；512 KiB 与 4 MiB 首开，纯文本无高亮与 Swift 分开；等待时能切终端/标签，实际文本出现后能输入、保存并对照磁盘。
-- 加载中重命名/关闭、外部修改触发干净重载、脏文本激活窗口、保存失败和写入期间继续输入；有授权 SSH fixture 时检查断线保留与同路径不同机器隔离。
-- 冷/热复测证明确少一次初始读、无界超限读消失，记录图片例外和实际可见延迟。旧结果未覆盖不仅看守卫代码，要看最终文本/路径/磁盘内容。
-
-**提交边界:** 加载/解码、断线原生只读、旧读取路径删除、既有检查迁移与必要文档一次原子提交；不重做已存在的 read executor，不包含后续解析/缓存优化。
+**提交：** 加载、真实消费者、只读闭环、必要测试迁移／文档和替代路径删除一个原子结果；Vendor 修改按依赖规则验证文件与 Diff，不夹带升级。
 
 <a id="p2-t2"></a>
-## P2-T2 去掉高亮路径的无效字体事务
+## P2-T2 删除高亮无效字体事务
 
-**类型 / 依赖:** 实现；依赖 P1，按默认执行顺序在 P2-T1 后。
+**根因：** theme.fonts 为空，coordinator 仍设置 font 为原 font；token 默认带 font，clearStyle 再写 font。Vendor setter 会全文加属性，不是无成本赋值。
 
-**Files / 锚点:**
-- Modify: kero/Editor/SyntaxHighlightPlugin.swift：SyntaxHighlightCoordinator.init 的字体初始化与 AttributeProvider、SyntaxHighlightTextInterface.clearStyle/applyStyle。
-- Verify: kero/Editor/SyntaxHighlighting.swift：theme 的空 fonts；kero/Editor/SourceTextEditor.swift：apply。
-- Read-only dependency contract: Vendor/STTextView/Sources/STTextViewAppKit/STTextView.swift：font setter、addAttributes。
-- Modify: `KeroTests/check-editor-highlighting.swift`，扩展 P1-T3 已接入的真实 App 检查，不新建样式测试框架。
-- 样式与编辑不变量归 `docs/features/editor.md`，测量方法仍由 `docs/testing.md#性能与内存测量` 维护。
+**文件：** SyntaxHighlightPlugin.swift 的初始化／AttributeProvider／SyntaxHighlightTextInterface；核对 SyntaxHighlighting.theme、SourceTextEditor.apply。扩展 P1 的 SyntaxHighlightingTests；文档归 docs/features/editor.md。
 
-**当前行为与根因:** Kero 的 theme fonts 明确为空，仍在 coordinator 初始化执行 textView.font = textView.font；该 setter 不比较值，会给整个已装入文档加字体属性。每 token 还带当前 .font，clearStyle 也写回字体，触发文本事务/布局。颜色本来已有 rendering attribute 路径。
+1. 保留真实插件着色／清理前后文本、字体、dirty 和 undo 不变、换字体仍生效的绿色行为基线；用 trace 记录冗余字体事务，不为性能改动编造必然失败的行为断言。若新增直接约束样式输出的测试，须调用生产路径，不复制 provider。
+2. 删除无条件 setter 与 token／clearStyle 的 font，只用颜色临时属性；删除无消费者的“其他样式写文本存储”支路，不为假想字体表留脚手架。
+3. 保留 metadata 过滤、themeColor 别名／逐层回退、零范围保护与真实弱引用，不当作多余围栏删掉。
+4. `make test ONLY_TESTING=KeroTests/SyntaxHighlightingTests`、受影响 FileTab／DiffTab 及完整完成流程。隔离 App 查 TSX／继承／嵌入颜色、主题／字体、IME、替换／撤销／保存；trace 中冗余字体事务应消失，再比较实际可见等待。
 
-**实施:**
-1. 去掉当前空字体主题下的无条件字体设置；字体只由 SourceTextEditor 的有守卫配置管理。
-2. AttributeProvider 只产生颜色；clearStyle 只清临时 foregroundColor。删掉不再需要的通用“其他属性进文本存储”分支，不为不存在的 per-token 字体保留脚手架。
-3. 保留 metadata capture 跳过、themeColor 的别名/逐层回退、零长度 token 守卫和弱 textView 引用。不要修改 token 顺序或语法资源。
-4. 除非复测证明颜色应用仍是主要热点，本 task 不引入合并属性事务或依赖补丁。
-
-**针对性验证:**
-- 真机同一 Swift/TSX 高密度样本，比较 trace 中高亮产生的字体 setter/addAttributes/编辑事务和布局占用；这些无效字体工作应消失。
-- Markdown 空范围、TSX 标签/属性、TypeScript 继承 comment/string、未知类型纯文本、明暗主题、换字体/字号、行号、选区、撤销、查找替换和中文输入。
-- 只切视口/完成高亮不改变 text/isDirty，不添加文本撤销动作；实际输入再撤销回保存原文，干净标记正确。文本与磁盘逐字对照。
-- 构建、验签后在隔离 Debug 实例复测首屏/可输入/高亮和滚动，若仍慢记录残余热点给 P3，不声称字体改动解决全部解析性能。
-- Run: `bash scripts/check.sh editor-highlighting`，断言真实插件高亮前后字体不变、text/isDirty 不变，换字体仍生效；扩展 P1-T3 的现有检查。不能只靠 trace 取代正确性检查，空范围的底层 TextKit 保护仍保留。
-
-**提交边界:** 插件样式精简与事实文档一个原子提交，不顺手改 STTextView。
-
-## 阶段自审与交接
-
-- 核对所有首次加载 caller、加载中 rename 和真实最终保存路径，不只验证“任务发出”。
-- 两项改动分开计时，区分去 I/O 与去样式事务的收益。
-- 实际完成再进入 plan-task-auditor 并创建 audit-p2.md；规划时不创建。
+**提交：** 样式、测试与必要文档独立提交，不顺手改 token 顺序、资源或布局。
