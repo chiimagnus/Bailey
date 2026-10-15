@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P4-T9"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
@@ -117,7 +117,7 @@ note = "Stash真实Git9/9、原生2/2；最终指定Windows SSH完整210/210、0
 [[tasks]]
 id = "P4-T9"
 title = "全对象菜单与本机及真实 SSH 用户路径验收"
-status = "in_progress"
+status = "completed"
 plan = "plan-p4.md#p4-t9"
-commit = ""
-note = ""
+commit = "bcd3ced"
+note = "完整App本机及Windows专用SSH菜单与真实副作用已记录evidence-p4；最后同步修复bcd3ced；无人干预完整222/222 0失败0跳过、make doctor/build及严格验签、整包安装PASS；正式PID40825未重启；SSH外部刷新另案。"
