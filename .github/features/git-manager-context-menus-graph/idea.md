@@ -2,11 +2,13 @@
 
 关联需求：[Kero Issue #2](https://github.com/chiimagnus/kero/issues/2)。
 
-**本次决定：** P1～P3 保持历史完成记录；P4 按 [Git Graph 上游源码](https://github.com/mhutchie/vscode-git-graph/tree/d7f43f429a9e024e896bac9fc65fdc530935c812) 的对象菜单、原生弹窗选项、默认值和后续动作实现，不只复制按钮名称。Kero 使用原生 SwiftUI / AppKit，不照搬 WebView；事实依据见 [research.md](research.md)，逐项行为合同见 [plan-p4.md](plan-p4.md)。
+**当前状态（2026-10-15）：** P1～P4 均已完成，任务以 [todo.toml](todo.toml) 为准。SSH 外部 Git 变更自动刷新随后在 `ca183bf` 修复；真实 Windows SSH 原生面板回归和含 SSH 的 223 项全量测试已通过，证据见 [evidence-p3.md](evidence-p3.md)。**Issue #2 仍为 Open**：完整独立 App 中由外部 SSH 命令改动仓库并观察自动刷新的用户路径尚未单独验收，不能以原生面板测试代替。
+
+**P4 的实施决定（历史）：** 保留 P1～P3 的完成记录；按 [Git Graph 固定版本](https://github.com/mhutchie/vscode-git-graph/tree/d7f43f429a9e024e896bac9fc65fdc530935c812) 补齐对象菜单与原生弹窗的真实后续动作，不只复制名称。Kero 使用 SwiftUI / AppKit，不照搬 WebView；依据见 [research.md](research.md) 和已完成的 [plan-p4.md](plan-p4.md)。
 
 ## 背景
 
-现有 Git Manager 已有仓库标题、分支菜单、Commit Staged、Stage/Unstage/Discard、Fetch/Pull/Push、Stash、文件 Diff、近期提交及懒加载。最初截图与 Issue 记录的问题包括：提交右键只复制、Commit 与 Ref 命中不完整、历史图只画单色直线，以及外部 Git 变更刷新落后。**图谱、Ref 基础交互和本机刷新已在 P1～P3 解决**；本阶段针对 Git Graph/VSCodium 更完整的对象菜单及弹窗行为，不重复修已完成的旧问题。
+现有 Git Manager 已有仓库标题、分支菜单、Commit Staged、Stage/Unstage/Discard、Fetch/Pull/Push、Stash、文件 Diff、近期提交及懒加载。最初截图与 Issue 记录的问题包括：提交右键只复制、Commit 与 Ref 命中不完整、历史图只画单色直线，以及外部 Git 变更刷新落后。**图谱、Ref 基础交互和本机刷新由 P1～P3 完成，完整对象菜单由 P4 补齐**；SSH 外部自动刷新则在 P4 之后单独修复，历史阶段边界不混写。
 
 原 P2 为了缩小实施范围主动省略了 Cherry-pick、Revert、Drop、Reset、Merge/Rebase、远端分支与 Tag 管理等操作；这不符合用户对 Issue #2「参照 Git Graph 与 VSCodium，把适合当前对象的菜单补齐」的最新明确要求。P4 不复制其它产品的整个 UI，但**不再以旧 P2 的非目标排除适用的 Git 操作**。每个动作必须有正确对象、原生命中、Git 真实结果与失败恢复。
 
@@ -17,11 +19,11 @@
 ## 实施范围
 
 - **P1～P3（已实施）**：真实提交拓扑与双行视图、Ref 类型与分页、Commit/本地分支/Tag 基础右键、在历史 SHA 创建本地分支和轻量 Tag、本机可见 Git 面板外部变更刷新；保持已有鼠标/键盘命中、文件树、Diff 和失败语义。`design.html` 仅作 Recent Commits 视觉历史参考，不约束 P4 的菜单功能范围。
-- **P4：以 Git Graph 为一手基准的右键菜单**：Commit（创建 Branch/Tag、Checkout、Cherry-pick、Revert、Drop、Merge、Rebase、Reset、复制）；本地/远端 Branch（Checkout、Rename、Delete、Fetch/Pull/Merge、Rebase、Push、复制）；Tag（查看详情、创建/替换、删除本地和可选远端、Push、复制）；Stash（每条 Apply/Pop/Drop/从 Stash 创建分支）；Uncommitted Changes（Stash 带消息、Reset Mixed/Hard、Clean Untracked 带目录选项）；历史文件（View Diff、View Revision、与工作区比较、打开文件、Reset File to Revision、复制两种路径）。现有 Staged/Unstaged/Conflict 文件和分组菜单按 VSCodium 的 SCM 习惯保持适用动作。Branch/Tag/Remote Ref 的 Create Archive 在不复制 Web 下载栈的前提下按原生保存流程支持，明确二进制与远端限制。
+- **P4（已完成）：以 Git Graph 为一手基准的右键菜单**：Commit（创建 Branch/Tag、Checkout、Cherry-pick、Revert、Drop、Merge、Rebase、Reset、复制）；本地/远端 Branch（Checkout、Rename、Delete、Fetch/Pull/Merge、Rebase、Push、复制）；Tag（查看详情、创建/替换、删除本地和可选远端、Push、复制）；Stash（每条 Apply/Pop/Drop/从 Stash 创建分支）；Uncommitted Changes（Stash 带消息、Reset Mixed/Hard、Clean Untracked 带目录选项）；历史文件（View Diff、View Revision、与工作区比较、打开文件、Reset File to Revision、复制两种路径）。现有 Staged/Unstaged/Conflict 文件和分组菜单按 VSCodium 的 SCM 习惯保持适用动作。Branch/Tag/Remote Ref 的 Create Archive 在不复制 Web 下载栈的前提下按原生保存流程支持，明确二进制与远端限制。
 - **以对象及语义决定菜单**：Commit 行与 Ref Badge 仍是独立命中；`+N` 折叠入口中的菜单与直显 Badge 一致。各对象只暴露有效动作，当前分支不能删除，远端 HEAD 符号引用不作为可删分支，历史文件未必存在于工作区；不以一个通用菜单堆砌所有命令。
 - **本机和 SSH 的相同语义**：Git 写操作复用 `GitStatusModel` → `GitCommandExecution` → 当前 `WorkspaceBackend` 的 argv 执行、仓库/机器身份、操作互斥、状态刷新和错误展示；不以本机文件路径操作 SSH 仓库。SSH 实机结果单独验收，不以模拟后端冒充通过。
 - **弹窗与副作用要相符**：除文本和字体改用原生控件外，保留上游适用的输入、单选/多选、复选框、默认值、主要/次要按钮及后续分支（包括重名替换/改名、Force Delete、Push Mode、Reinstate Index、Tag 推送警告）。每个按钮落到相应 Git argv 和后续动作；不能用同名但不同效果的命令蒙混。失误可能损失数据的操作须确认目标并在执行前校验，发生冲突时保留真实状态与 Git 错误，用户可从现有 Kero 终端继续/中止；不额外创建上游没有的恢复 GUI 或状态机。
-- **原有刷新需求不消失**：P3 已证明本机可见面板外部变化会刷新；Issue #2 对 SSH 的刷新覆盖仍未完成独立验收，不能因 P4 菜单验收而直接关闭 Issue。
+- **外部 Git 变更刷新（已补修）**：前台可见 Git 面板对本机和 SSH 仓库的外部修改、暂存与提交均能自动更新；触发条件、间隔与失败边界由 [Git 功能文档](../../../docs/features/git.md#刷新与显示) 维护。修复提交 `ca183bf` 与真实 Windows SSH 原生面板回归见 [evidence-p3.md](evidence-p3.md)。
 
 ## 默认设计与交互
 
@@ -36,7 +38,7 @@
 - 不照搬 Git Graph 的主题、列可见性、Branches Dropdown、Issue Linking、PR/Code Review Provider、Mark Reviewed、外部 Difftool 或无限制历史搜索；Kero 当前没有这些专属对象和服务。不额外创造 Git Graph Commit 右键不存在的通用两 Ref / Merge Base 比较器。VSCodium 的 **Ignore** 确实属于工作区/未跟踪文件及目录菜单，必须复用 Kero 现有的 `.gitignore` FileTab 编辑/保存路径实现，**不另建** `.gitignore` 专用编辑器或绕过未保存缓冲。
 - 不**自动** Force Push/Force Delete、不自动创建 GitHub Release；用户在 Git Graph 对应弹窗里**明确选定**的 Force/替换操作不是非目标。交互式 Rebase 若被选择，应在 Kero 原生新终端执行，不能在后台假装支持或挪用用户正在工作的终端。
 - 不重做已有 Fetch/Pull/Push、Stage/Unstage/Discard、原生文件树或提交框；按对象复用已有动作，可用的缺口必须补齐。不改变既有图谱风格或增加线性/分叉模式切换。
-- **当前授权为执行 P4**：逐任务实现、回归、清理被替代代码、同步文档与原子提交；不进入范围外阶段、不推送或关闭 Issue。获准使用已有 Windows SSH 主机，但测试连接与临时仓库独立，不借用工作 master。通过验证后整包安装、不重启用户 App；旧路径在对应 task 接通并验证后删除。
+- 不为 Git Manager 增加专门的 VoiceOver 朗读、导航或焦点适配。保留原生控件的基础无障碍语义和常规键盘焦点；只有新的明确需求才安排 VoiceOver 专项验收。P4 当时的执行权限和安全边界保留在历史计划，不继续视为当前实施授权。
 
 ## 验收
 
@@ -44,5 +46,5 @@
 2. **逐对象逐操作**对照 [P4 菜单矩阵](plan-p4.md#菜单矩阵与边界)，每个应有菜单项必须真实可见/可用或有明确的合法禁用原因；折叠的 `+N` 与直接显示的引用行为一致。
 3. 每个适用的 Git Graph 弹窗都与 [P4 对照矩阵](plan-p4.md#原生弹窗行为合同)逐项一致：默认值、选项、确认/取消按钮、重名后的两个后续按钮、失败后的再选择，不能只有同名按钮。在**临时真实 Git 仓库**证明对应 HEAD/ref、index、工作区、reflog、远端 bare repo 与存档实际内容；不是只断言命令构造或 View 回调。
 4. 验证取消/拒绝/旧目标不写入；Hard/Force/文件复位/永久 Clean 作用符合说明，包含 Hard 可删除阻挡 tracked 目标的 untracked 路径。未保存和在途保存受保护且失败不关 Tab；冲突保留真实 Git 状态，可从终端恢复。多远端 Delete/Push 的范围、停止顺序和部分结果遵循上游，Tag 已创建后取消 Push 不撤销本地 Tag。
-5. 对照原生窗口验证对象命中、禁用、确认对话框、菜单键盘/VoiceOver；独立 App E2E（本机与获准的真实 Windows SSH）分别记录，不用 NativeUI 或假 SSH 冒充完整验收。全部代码通过 `make test`、`make build` 与严格签名。
-6. 仅计划阶段：`idea.md` 与 `plan-p4.md`、`todo.toml` 任务 ID/锚点一致，所有任务都有正确源文件、验证、文档同步和提交边界；P1～P3 已完成记录不变。Issue #2 的 SSH 刷新缺口必须另行验收，不能仅凭 P4 完成关闭 Issue。
+5. 对照原生窗口验证对象命中、禁用、确认对话框、菜单键盘和焦点；保留基础辅助功能标签，不把 VoiceOver 专项语音走查列为本需求的强制项。独立 App E2E（本机与获准的真实 Windows SSH）分别记录，不用 NativeUI 或模拟 SSH 冒充完整验收。全部代码通过 `make test`、`make build` 与严格签名。
+6. 完成的阶段任务与提交以 [todo.toml](todo.toml) 为准，历史测试结果保留在 `evidence-p3.md`、`evidence-p4.md` 与审计中。SSH 外部刷新已另行修复并通过真实 Windows SSH 原生面板回归；完整独立 App 的外部刷新用户路径尚未单独验收，不能仅凭该测试关闭 Issue #2。

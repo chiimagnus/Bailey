@@ -16,9 +16,11 @@ SSH 后端让文件和 Git 面板直接操作远端项目，不要求挂载文�
 
 文件与 Git 操作使用已有 master；失联不能悄悄建立新的认证连接。保留批量执行和超时，避免改成逐文件往返或无限并发。
 
+外部 Git 工具不会发出 Kero 终端的命令完成事件。当前 SSH 项目 Git 面板的前台可见刷新、暂停条件和失败提示由 [Git 刷新](git.md#刷新与显示) 统一维护；不增加独立的远端后台监控。
+
 交互式变基是明确创建的新终端，拥有独立的 SSH 连接。固定主机与自动跟随的项目都捕获原机器、端口和 Git 根；握手前暂存启动目标，握手后由真实 RemoteConnection 接管。以普通登录终端接收原生启动输入，不把复杂远端 command 的 Windows 参数重组当作 POSIX 语义。连接或会话结束后保留断线目标与结果，不回退操作 Mac。
 
-Git Ref 归档在所选 SSH 工作区的临时目录生成，经 Git 原生进程写入后，通过已有后端一次有界读取保存至 Mac：传输限制为 **64 MiB**，超限不替换目标文件。只清理本次临时目录；断线导致清理失败时保留具体远端路径和失败反馈，不把 Mac 路径交给远端或反向写入。该行为已有模拟 SSH 后端验证，完整 App 的真实 SSH 归档仍须单独验收。
+Git Ref 归档在所选 SSH 工作区的临时目录生成，经 Git 原生进程写入后，通过已有后端一次有界读取保存至 Mac：传输限制为 **64 MiB**，超限不替换目标文件。只清理本次临时目录；断线导致清理失败时保留具体远端路径和失败反馈，不把 Mac 路径交给远端或反向写入。
 
 远端命令要求 POSIX shell 与相应 GNU 工具。Windows 支持依赖 MSYS2 路径和 shell，不承诺原生 PowerShell 命令兼容；路径转义与参数边界必须由后端处理。
 
@@ -31,5 +33,7 @@ Git Ref 归档在所选 SSH 工作区的临时目录生成，经 Git 原生进�
 ## 验证
 
 `RemoteCommandsTests`、`RemoteLifetimeTests` 和工作区身份回归检查命令、绑定、取消、失败与过期结果。受控后端只能证明这些逻辑，不能证明真实传输；真实 SSH 另用专用、获准的测试 master 验收，记录主机环境、断线保存、重连和最终文件结果。
+
+归档的验证分层：模拟 SSH 后端覆盖传输上限与远端清理失败；`GitWorkspaceSSHTests` 在真实 Windows SSH 中核对选定 Ref 的 ZIP/TAR 原始字节，远端分支经原生保存面板归档另有 [P4 现场证据](../../.github/features/git-manager-context-menus-graph/evidence-p4.md)。这些成功路径不代表断线时完整 App 的清理与恢复已完成验收。
 
 实现边界：[WorkspaceBackend.swift](../../kero/Workspace/WorkspaceBackend.swift)、[RemoteCommands.swift](../../kero/Remote/RemoteCommands.swift)。统一运行方式见 [testing.md](../testing.md)。

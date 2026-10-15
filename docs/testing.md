@@ -56,7 +56,7 @@ make test ONLY_TESTING=KeroTests/FileTabTests
 | Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests` |
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
-| Git 环境、刷新、写操作与失败状态 | `GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitTagActionTests`、`GitWorkspaceActionTests`、`GitStashActionTests`、`GitBranchDialogTests`、`GitTagDialogTests`、`GitWorkspaceMenuTests`、`GitStashDialogTests` |
+| Git 环境、刷新、写操作与失败状态 | `GitExternalRefreshTests`、`GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitTagActionTests`、`GitWorkspaceActionTests`、`GitStashActionTests`、`GitBranchDialogTests`、`GitTagDialogTests`、`GitWorkspaceMenuTests`、`GitStashDialogTests` |
 | SSH 命令、断线、重连和过期结果 | `RemoteCommandsTests`、`RemoteLifetimeTests` |
 | 文件、Diff 和原生内容保留 | `FileTabTests`、`DiffTabTests`、`PaneRetentionTests` |
 | Files 与所有 Git 树的命中与交互 | `TreeRowHitTestingTests` |
@@ -79,7 +79,9 @@ open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Kero.app" --args --isola
 
 **普通设置仍然共享。** 隔离实例中不得直接改写用户设置；确需设置测试时使用独立 Home，并核实真正的配置、UserDefaults 与数据写入位置。临时文件、Git 仓库和受控后端不得指向正式项目。
 
-真实 SSH 只使用专用且获准的测试 master；不借用用户连接或结束其后台任务。P4 的实际 Windows SSH 测试需要**明确指定主机**，否则标准 XCTest 会报告环境跳过。`GitInteractiveRebaseTests` 检查固定与自动跟随项目的真实 PTY；`GitWorkspaceSSHTests` 检查专属远端临时仓库的 Push/Delete、TAR/ZIP 二进制内容、历史文件 index/工作区复位、Stash、Clean 和普通 FileTab Ignore；`GitExternalRefreshTests` 检查独立 SSH 外部写入后的可见面板自动更新和面板隐藏／App 后台暂停查询。这些是实际 SSH 后端与原生面板集成验证，不是完整独立 App 的菜单 E2E。当前已获授权的 `windows` 主机完整执行命令是：
+真实 SSH 只使用专用且获准的测试 master；不借用用户连接或结束其后台任务。真实 Windows SSH 回归必须**明确指定获授权的测试主机**。`KERO_P4_TEST_SSH_HOST` 是已有的共用参数名，P4 与后续 Git 外部刷新测试都使用它；未提供时专用用例按条件跳过，不能视为真实 SSH 验收。
+
+`GitInteractiveRebaseTests` 检查固定与自动跟随项目的真实 PTY；`GitWorkspaceSSHTests` 检查专属远端临时仓库的 Push/Delete、TAR/ZIP 二进制内容、历史文件 index/工作区复位、Stash、Clean 和普通 FileTab Ignore；`GitExternalRefreshTests` 检查独立 SSH 外部写入后的可见面板自动更新和面板隐藏／App 后台暂停查询。这些是实际 SSH 后端与原生面板集成验证，不是完整独立 App 的菜单 E2E。当前已获授权的 `windows` 主机完整执行命令是：
 
 ```sh
 KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test
@@ -127,13 +129,14 @@ KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make tes
 | 停靠与窗口 | 上下／左右组合、跨区移动、关闭、双窗口菜单和焦点，后台 Shell 不重启 |
 | 文件与编辑 | 创建／重命名、中文输入、查找、撤销、滚动、保存失败和关闭保护 |
 | Git 与 Diff | 工作区／索引／历史、首次提交、特殊路径、失败草稿、两侧滚动及真实写入 |
+| Git 外部刷新 | 独立 CLI 修改本机或 SSH 仓库后，前台可见 Git 面板自动更新；隐藏／后台暂停、恢复前台重新读取、失败后手动重试 |
 | 共享树 | Files、工作区、暂存和历史一致；窄面板、放大字体、长名称和动作命中 |
 | 浏览器 | 表单、滚动、前进后退和重挂载；默认浏览器交接与开发服务 |
 | 设置与恢复 | 隔离配置的即时传播、快照和真实重启，区分显示恢复与任务恢复 |
 | 通知与命令面板 | 定位原会话、键盘选择和文件实际打开，而非仅收到事件 |
-| 视觉与无障碍 | 两种外观、长文案、键盘／VoiceOver、不同字体；纯架构改动前后无变化 |
+| 视觉、键盘与基础无障碍 | 两种外观、长文案、键盘焦点与动作目标、原生按钮辅助功能名称、不同字体；纯架构改动前后无变化 |
 
-视觉改动使用同窗口尺寸、内容和动作的前后并排录屏；截图和自动检查作为补充，不能把静态图当成焦点、拖动或滚动验收。纯架构重构对受影响区域逐任务对照原生截图和交互，不夹带重设计。
+视觉改动使用同窗口尺寸、内容和动作的前后并排录屏；截图和自动检查作为补充，不能把静态图当成焦点、拖动或滚动验收。纯架构重构对受影响区域逐任务对照原生截图和交互，不夹带重设计。VoiceOver 的逐项语音导航与专项焦点适配不作为普遍验收门槛；仅在明确需求涉及屏幕阅读器时单独验收，现有基础无障碍语义仍须保留。
 
 ## 提交证据
 
