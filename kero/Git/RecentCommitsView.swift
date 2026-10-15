@@ -633,7 +633,7 @@ private struct CommitGraphRails: View {
     let fontScale: CGFloat
     let laneSpacing: CGFloat
 
-    private func laneX(_ lane: Int) -> CGFloat {
+    private func laneX(_ lane: Double) -> CGFloat {
         (Self.firstLaneX + CGFloat(lane) * laneSpacing) * fontScale
     }
 
@@ -665,25 +665,9 @@ private struct CommitGraphRails: View {
                         path.move(to: CGPoint(x: laneX(rail.lane), y: 0))
                         path.addLine(to: CGPoint(x: laneX(rail.lane), y: size.height))
                         linkColor = rail.color
-                    case .depart(let from, let to, let color):
-                        let x1 = laneX(from)
-                        let x2 = laneX(to)
-                        path.move(to: CGPoint(x: x1, y: middle))
-                        path.addCurve(
-                            to: CGPoint(x: x2, y: size.height),
-                            control1: CGPoint(x: x1, y: middle + size.height / 5),
-                            control2: CGPoint(x: x2, y: size.height - size.height / 5)
-                        )
-                        linkColor = color
-                    case .arrive(let from, let to, let color):
-                        let x1 = laneX(from)
-                        let x2 = laneX(to)
-                        path.move(to: CGPoint(x: x1, y: 0))
-                        path.addCurve(
-                            to: CGPoint(x: x2, y: middle),
-                            control1: CGPoint(x: x1, y: size.height / 5),
-                            control2: CGPoint(x: x2, y: middle - size.height / 5)
-                        )
+                    case .diagonal(let fromX, let fromY, let toX, let toY, let color):
+                        path.move(to: CGPoint(x: laneX(fromX), y: size.height * CGFloat(fromY)))
+                        path.addLine(to: CGPoint(x: laneX(toX), y: size.height * CGFloat(toY)))
                         linkColor = color
                     }
                     context.stroke(
@@ -693,7 +677,7 @@ private struct CommitGraphRails: View {
                     )
                 }
                 let radius = 3.2 * fontScale
-                let x = laneX(row.node.lane)
+                let x = laneX(Double(row.node.lane))
                 context.fill(
                     Path(ellipseIn: CGRect(x: x - radius, y: middle - radius,
                                            width: 2 * radius, height: 2 * radius)),

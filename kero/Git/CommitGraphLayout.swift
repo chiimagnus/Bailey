@@ -6,7 +6,7 @@ nonisolated struct CommitGraphLayout {
     }
 
     struct Rail: Hashable {
-        let lane: Int
+        let lane: Double
         let color: Int
     }
 
@@ -14,8 +14,7 @@ nonisolated struct CommitGraphLayout {
         case incoming(Rail)
         case outgoing(Rail)
         case through(Rail)
-        case depart(from: Int, to: Int, color: Int)
-        case arrive(from: Int, to: Int, color: Int)
+        case diagonal(fromX: Double, fromY: Double, toX: Double, toY: Double, color: Int)
     }
 
     struct Row {
@@ -77,31 +76,32 @@ nonisolated struct CommitGraphLayout {
         var graph = nodes.map { Row(node: $0!) }
         for (index, commit) in commits.enumerated() {
             let from = graph[index].node
-            for (parentNumber, hash) in commit.parentHashes.enumerated() {
+            for hash in commit.parentHashes {
                 guard let parentIndex = positions[hash], parentIndex > index else { continue }
                 let to = graph[parentIndex].node
                 let color = from.lane == 0 && to.lane != 0 ? to.color : from.color
-                let lane = from.lane == to.lane
-                    ? from.lane
-                    : ((parentNumber > 0 || from.lane == 0) ? to.lane : from.lane)
-                let rail = Rail(lane: lane, color: color)
                 if from.lane == to.lane {
+                    let rail = Rail(lane: Double(from.lane), color: color)
                     graph[index].links.append(.outgoing(rail))
                     graph[parentIndex].links.append(.incoming(rail))
-                } else if parentNumber > 0 || from.lane == 0 {
-                    graph[index].links.append(.depart(
-                        from: from.lane, to: to.lane, color: color
-                    ))
-                    graph[parentIndex].links.append(.incoming(rail))
+                    if parentIndex > index + 1 {
+                        for intermediate in (index + 1)..<parentIndex {
+                            graph[intermediate].links.append(.through(rail))
+                        }
+                    }
                 } else {
-                    graph[index].links.append(.outgoing(rail))
-                    graph[parentIndex].links.append(.arrive(
-                        from: from.lane, to: to.lane, color: color
-                    ))
-                }
-                if parentIndex > index + 1 {
-                    for intermediate in (index + 1)..<parentIndex {
-                        graph[intermediate].links.append(.through(rail))
+                    let distance = Double(parentIndex - index)
+                    for rowIndex in index...parentIndex {
+                        let fromY = rowIndex == index ? 0.5 : 0.0
+                        let toY = rowIndex == parentIndex ? 0.5 : 1.0
+                        func x(_ y: Double) -> Double {
+                            let fraction = (Double(rowIndex - index) + y - 0.5) / distance
+                            return Double(from.lane) + Double(to.lane - from.lane) * fraction
+                        }
+                        graph[rowIndex].links.append(.diagonal(
+                            fromX: x(fromY), fromY: fromY,
+                            toX: x(toY), toY: toY, color: color
+                        ))
                     }
                 }
             }
@@ -114,9 +114,9 @@ nonisolated struct CommitGraphLayout {
                 switch link {
                 case .outgoing(let rail), .through(let rail):
                     return rail
-                case .depart(_, let to, let color):
-                    return Rail(lane: to, color: color)
-                case .incoming, .arrive:
+                case .diagonal(_, _, let toX, let toY, let color):
+                    return toY == 1 ? Rail(lane: toX, color: color) : nil
+                case .incoming:
                     return nil
                 }
             }
