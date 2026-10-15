@@ -169,27 +169,15 @@ final class SyntaxHighlightCoordinator {
             self?.highlighter?.invalidate(.set(indexSet))
         }
 
-        // Empty fonts table (see SyntaxHighlighting.theme) → this keeps kero's
-        // own editor font instead of resetting to the theme's.
-        textView.font = theme.font(forToken: "plain") ?? textView.font
-
-        let textInterface = SyntaxHighlightTextInterface(textView: textView) { [weak textView] neonToken in
+        let textInterface = SyntaxHighlightTextInterface(textView: textView) { neonToken in
             // Metadata captures aren't colors — skip them so they don't repaint
             // a real capture on the same range. Swift captures comments as
             // `@comment @spell`; letting `spell` through (it resolves to the
             // plain fallback, applied after `comment`) turned comments black.
-            guard let textView, !Self.ignoredCaptures.contains(neonToken.name) else {
+            guard !Self.ignoredCaptures.contains(neonToken.name) else {
                 return nil
             }
-            var attributes: [NSAttributedString.Key: Any] = [:]
-            attributes[.font] = textView.font
-            if let color = Self.themeColor(for: neonToken.name, theme: theme) {
-                attributes[.foregroundColor] = color
-            }
-            if let font = theme.font(forToken: TokenName(neonToken.name)) {
-                attributes[.font] = font
-            }
-            return attributes.isEmpty ? nil : attributes
+            return Self.themeColor(for: neonToken.name, theme: theme)
         }
 
         // Start with no token provider (a no-op); it's installed below once the
@@ -453,22 +441,19 @@ final class SyntaxHighlightCoordinator {
     }
 }
 
-/// Bridges Neon's token styling onto an STTextView. Colors are applied as
-/// rendering (temporary) attributes so they layer over the base text color;
-/// any other attributes (currently none, since the theme carries no per-token
-/// fonts) go into the text storage.
+/// Bridges Neon's colors onto an STTextView using temporary rendering attributes.
 private final class SyntaxHighlightTextInterface: TextSystemInterface {
-    typealias AttributeProvider = (Neon.Token) -> [NSAttributedString.Key: Any]?
+    typealias ColorProvider = (Neon.Token) -> NSColor?
 
     /// Weak: the text view owns this interface transitively (view → plugins →
     /// events → coordinator → highlighter → here), so a strong reference back
     /// would keep every editor — and its whole document — alive forever.
     private weak var textView: STTextView?
-    private let attributeProvider: AttributeProvider
+    private let colorProvider: ColorProvider
 
-    init(textView: STTextView, attributeProvider: @escaping AttributeProvider) {
+    init(textView: STTextView, colorProvider: @escaping ColorProvider) {
         self.textView = textView
-        self.attributeProvider = attributeProvider
+        self.colorProvider = colorProvider
     }
 
     func clearStyle(in range: NSRange) {
@@ -476,7 +461,6 @@ private final class SyntaxHighlightTextInterface: TextSystemInterface {
               let textRange = NSTextRange(range, in: textView.textContentManager)
         else { return }
         textView.textLayoutManager.removeRenderingAttribute(.foregroundColor, for: textRange)
-        textView.addAttributes([.font: textView.font], range: range)
     }
 
     func applyStyle(to token: Neon.Token) {
@@ -485,19 +469,13 @@ private final class SyntaxHighlightTextInterface: TextSystemInterface {
         // this, but skipping here avoids the wasted work.
         guard let textView,
               token.range.length > 0,
-              let attributes = attributeProvider(token),
+              let color = colorProvider(token),
               let textRange = NSTextRange(token.range, in: textView.textContentManager)
         else {
             return
         }
 
-        for attribute in attributes {
-            if attribute.key == .foregroundColor {
-                textView.textLayoutManager.addRenderingAttribute(.foregroundColor, value: attribute.value, for: textRange)
-            } else {
-                textView.addAttributes([attribute.key: attribute.value], range: token.range)
-            }
-        }
+        textView.textLayoutManager.addRenderingAttribute(.foregroundColor, value: color, for: textRange)
     }
 
     var length: Int {
