@@ -74,6 +74,8 @@ nonisolated enum WorkspaceError: Error {
 nonisolated protocol WorkspaceBackend: Sendable {
     // MARK: Files
     func list(directory: String) async throws -> [WorkspaceEntry]
+    /// Best-effort refresh: missing keys indicate directories that could not be read.
+    func list(directories: [String]) async -> [String: [WorkspaceEntry]]
     func stat(path: String) async throws -> WorkspaceStat?
     /// The target of a symlink, or nil when `path` is not one.
     func readSymlinkDestination(path: String) async throws -> String?
@@ -101,4 +103,14 @@ nonisolated protocol WorkspaceBackend: Sendable {
     func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot
     func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort]
     func kill(pid: pid_t, force: Bool) async throws
+}
+
+extension WorkspaceBackend {
+    func list(directories: [String]) async -> [String: [WorkspaceEntry]] {
+        var listed: [String: [WorkspaceEntry]] = [:]
+        for directory in directories {
+            listed[directory] = try? await list(directory: directory)
+        }
+        return listed
+    }
 }

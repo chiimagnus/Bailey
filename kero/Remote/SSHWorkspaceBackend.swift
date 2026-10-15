@@ -86,9 +86,35 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
 
     // MARK: - Files
 
-    func list(directory: String) async throws -> [WorkspaceEntry] {
+    @concurrent func list(directory: String) async throws -> [WorkspaceEntry] {
         let command = requiring(directory, RemoteCommands.listDirectoryCommand(path: directory))
         return RemoteCommands.parseDirectoryListing(try await shell(command))
+    }
+
+    /// Re-read visible directories in a single SSH round trip. Failures leave
+    /// their keys absent so a disconnected folder keeps its last contents.
+    @concurrent func list(directories: [String]) async -> [String: [WorkspaceEntry]] {
+        guard !directories.isEmpty else { return [:] }
+        let tag = UUID().uuidString
+        let commands = directories.enumerated().map { index, directory in
+            let quoted = RemoteCommands.quote(directory)
+            return (
+                name: String(index),
+                command: "[ -d \(quoted) ] && "
+                    + RemoteCommands.listDirectoryCommand(path: directory) + " 2>/dev/null"
+            )
+        }
+        let script = RemoteCommands.batchCommand(commands, tag: tag)
+        guard let response = try? await runner.run(
+            ["sh", "-s"], stdin: Data(script.utf8), timeout: timeout
+        ), response.status == 0 else { return [:] }
+        let parsed = RemoteCommands.parseBatch(response.stdout, tag: tag)
+        var result: [String: [WorkspaceEntry]] = [:]
+        for (index, directory) in directories.enumerated() {
+            guard let entry = parsed[String(index)], entry.status == 0 else { continue }
+            result[directory] = RemoteCommands.parseDirectoryListing(entry.stdout)
+        }
+        return result
     }
 
     func stat(path: String) async throws -> WorkspaceStat? {
@@ -154,13 +180,21 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
     // MARK: - Git geography
 
     /// Read-only, and needed before any panel can pick its root.
-    func gitRoot(containing path: String) async throws -> String? {
-        let quoted = RemoteCommands.quote(path)
-        let output = try await shell(
-            "git -C \(quoted) rev-parse --show-toplevel 2>/dev/null; :"
-        )
-        let root = text(output).trimmingCharacters(in: .newlines)
-        return root.isEmpty ? nil : root
+    @concurrent func gitRoot(containing path: String) async throws -> String? {
+        let command = "env LC_ALL=C git -C \(RemoteCommands.quote(path)) rev-parse --show-toplevel"
+        let result = try await runner.run([command], stdin: nil, timeout: timeout)
+        if result.status == 0 {
+            let root = text(result.stdout).trimmingCharacters(in: .newlines)
+            guard !root.isEmpty else {
+                throw RemoteCommandFailure(command: command, status: 0, message: "Git returned an empty repository path.")
+            }
+            return root
+        }
+        let message = text(result.stderr)
+        if result.status == 128 && message.localizedCaseInsensitiveContains("not a git repository") {
+            return nil
+        }
+        throw failure(command: command, result: result)
     }
 
     /// A linked worktree has `.git` as a file pointing into the main

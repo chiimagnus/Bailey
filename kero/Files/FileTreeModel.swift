@@ -37,10 +37,13 @@ final class FileTreeModel {
     /// The workspace this tree reads. Replaced on every `sync`, so the tree
     /// follows its session between the local disk and a remote machine.
     @ObservationIgnored private var backend: WorkspaceBackend = LocalWorkspaceBackend.shared
-    /// A rebuild is a round trip per visible directory, so only one runs at a
-    /// time; anything arriving mid-flight is folded into one further pass.
+    /// Listings live only for the current root and channel. A refresh batches
+    /// previously visible directories; expanding an already seen one uses the cache.
+    @ObservationIgnored private var cachedDirectories: [String: [WorkspaceEntry]] = [:]
+    @ObservationIgnored private var treeEpoch: UInt64 = 0
     @ObservationIgnored private var isRebuilding = false
     @ObservationIgnored private var rebuildPending = false
+    @ObservationIgnored private var refreshPending = false
 
     /// The hosting window presents native operation errors even when Files is hidden.
     @ObservationIgnored var onError: ((_ title: String, _ detail: String) -> Void)?
@@ -56,8 +59,11 @@ final class FileTreeModel {
     /// Switches the visible root without discarding expansion state from the
     /// previously visited directory. Data is still reread on every refresh.
     func sync(root: String, backend: WorkspaceBackend, scope: String = "local") async {
+        let channelChanged = (self.backend as AnyObject) !== (backend as AnyObject)
         self.backend = backend
         if root != rootPath || workspaceScope != scope {
+            treeEpoch &+= 1
+            cachedDirectories.removeAll()
             if !rootPath.isEmpty {
                 expandedByRoot[Root(scope: workspaceScope, path: rootPath)] = expanded
             }
@@ -68,14 +74,24 @@ final class FileTreeModel {
             // Inline editing cannot continue in an inactive workspace.
             renamingPath = nil
             draft = nil
+        } else if channelChanged {
+            treeEpoch &+= 1
+            cachedDirectories.removeAll()
         }
-        await rebuild()
+        await rebuild(refresh: true)
     }
 
     func toggle(_ item: Item) async {
-        guard item.isDirectory else { return }
+        guard item.isDirectory, items.contains(where: { $0.path == item.path && $0.isDirectory }) else { return }
         if !expanded.insert(item.path).inserted {
             expanded.remove(item.path)
+        }
+        // Update the row's disclosure/icon immediately, before any remote IO.
+        items = items.map { row in
+            guard row.path == item.path else { return row }
+            var row = row
+            row.isExpanded = expanded.contains(row.path)
+            return row
         }
         await rebuild()
     }
@@ -85,9 +101,14 @@ final class FileTreeModel {
         let backend = self.backend
         let scope = workspaceScope
         let root = rootPath
+        let epoch = treeEpoch
         do {
             try await backend.delete(paths: [item.path])
-            if scope == workspaceScope, root == rootPath { expanded.remove(item.path) }
+            if scope == workspaceScope, root == rootPath, epoch == treeEpoch {
+                expanded.remove(item.path)
+                invalidateDirectory(containing: item.path)
+                await rebuild()
+            }
         } catch {
             presentError(
                 String(
@@ -97,7 +118,6 @@ final class FileTreeModel {
                 error.localizedDescription
             )
         }
-        if scope == workspaceScope, root == rootPath { await rebuild() }
     }
 
     /// Deletes `item` outright, then rebuilds so it drops out of the tree.
@@ -107,9 +127,14 @@ final class FileTreeModel {
         let backend = self.backend
         let scope = workspaceScope
         let root = rootPath
+        let epoch = treeEpoch
         do {
             try await backend.delete(paths: [item.path])
-            if scope == workspaceScope, root == rootPath { expanded.remove(item.path) }
+            if scope == workspaceScope, root == rootPath, epoch == treeEpoch {
+                expanded.remove(item.path)
+                invalidateDirectory(containing: item.path)
+                await rebuild()
+            }
         } catch {
             presentError(
                 String(
@@ -119,7 +144,6 @@ final class FileTreeModel {
                 error.localizedDescription
             )
         }
-        if scope == workspaceScope, root == rootPath { await rebuild() }
     }
 
     // MARK: - Rename
@@ -141,6 +165,7 @@ final class FileTreeModel {
         let backend = self.backend
         let scope = workspaceScope
         let root = rootPath
+        let epoch = treeEpoch
         renamingPath = nil
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != item.name else { return nil }
@@ -156,8 +181,16 @@ final class FileTreeModel {
         // A case-only rename ("foo"→"Foo") maps to the same file on a
         // case-insensitive volume, so don't treat that as a collision.
         let caseOnlyChange = trimmed.lowercased() == item.name.lowercased()
-        let exists = (try? await backend.stat(path: dest)) ?? nil
-        guard scope == workspaceScope, root == rootPath else { return nil }
+        let exists: WorkspaceStat?
+        do {
+            exists = try await backend.stat(path: dest)
+        } catch {
+            if scope == workspaceScope, root == rootPath, epoch == treeEpoch {
+                presentError(String(localized: "Couldn’t rename to “\(trimmed)”.", table: "Workspace"), error.localizedDescription)
+            }
+            return nil
+        }
+        guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return nil }
         guard caseOnlyChange || exists == nil else {
             presentError(
                 String(localized: "Couldn’t rename to “\(trimmed)”.", table: "Workspace"),
@@ -167,15 +200,18 @@ final class FileTreeModel {
         }
         do {
             try await backend.rename(from: item.path, to: dest)
-            if scope == workspaceScope, root == rootPath {
-                remapExpanded(from: item.path, to: dest)
-            }
         } catch {
-            presentError(String(localized: "Couldn’t rename to “\(trimmed)”.", table: "Workspace"), error.localizedDescription)
+            if scope == workspaceScope, root == rootPath, epoch == treeEpoch {
+                presentError(String(localized: "Couldn’t rename to “\(trimmed)”.", table: "Workspace"), error.localizedDescription)
+            }
             return nil
         }
-        if scope == workspaceScope, root == rootPath { await rebuild() }
-        return dest
+        guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return nil }
+        remapExpanded(from: item.path, to: dest)
+        invalidateDirectory(containing: item.path)
+        let currentEpoch = treeEpoch
+        await rebuild()
+        return scope == workspaceScope && root == rootPath && currentEpoch == treeEpoch ? dest : nil
     }
 
     /// Keeps expansion state after a directory rename by rewriting the old
@@ -227,6 +263,7 @@ final class FileTreeModel {
         let backend = self.backend
         let scope = workspaceScope
         let root = rootPath
+        let epoch = treeEpoch
         self.draft = nil
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { await rebuild(); return nil }
@@ -247,7 +284,8 @@ final class FileTreeModel {
             await rebuild()
             return nil
         }
-        guard isCurrentTarget(), scope == workspaceScope, root == rootPath else { return nil }
+        guard isCurrentTarget(), scope == workspaceScope, root == rootPath,
+              epoch == treeEpoch else { return nil }
         guard exists == nil else {
             presentError(
                 String(localized: "Couldn’t create “\(trimmed)”.", table: "Workspace"),
@@ -271,7 +309,9 @@ final class FileTreeModel {
                 presentError(String(localized: "Couldn’t create the file.", table: "Workspace"), error.localizedDescription)
             }
         }
-        if isCurrentTarget(), scope == workspaceScope, root == rootPath {
+        if isCurrentTarget(), scope == workspaceScope, root == rootPath,
+           epoch == treeEpoch {
+            invalidateDirectory(containing: dest)
             await rebuild()
             return createdFile
         }
@@ -282,10 +322,14 @@ final class FileTreeModel {
         onError?(messageText, informativeText)
     }
 
-    private func rebuild() async {
+    private func invalidateDirectory(containing path: String) {
+        treeEpoch &+= 1
+        cachedDirectories.removeValue(forKey: (path as NSString).deletingLastPathComponent)
+    }
+
+    private func rebuild(refresh: Bool = false) async {
         guard !rootPath.isEmpty else { return }
-        // A rebuild requested while one is in flight would read the tree twice
-        // over the same channel; run one more pass instead of a second walk.
+        if refresh { refreshPending = true }
         if isRebuilding {
             rebuildPending = true
             return
@@ -293,47 +337,66 @@ final class FileTreeModel {
         isRebuilding = true
         repeat {
             rebuildPending = false
-            // A root that cannot be read leaves the tree as it was. On a
-            // remote workspace that is a connection that has gone away, and
-            // emptying the panel would claim the directory is empty.
+            let needsRefresh = refreshPending
+            refreshPending = false
             let path = rootPath
             let scope = workspaceScope
+            let epoch = treeEpoch
             let backend = self.backend
             let expanded = self.expanded
             let draft = self.draft
-            // Live directory sources can contain symlink cycles; Git's finite paths cannot.
+            var refreshedDirectories: Set<String> = []
+            if needsRefresh {
+                let directories = Array(Set(cachedDirectories.keys).union([path])).sorted()
+                refreshedDirectories = Set(directories)
+                let fresh = await backend.list(directories: directories)
+                if epoch == treeEpoch, path == rootPath, scope == workspaceScope {
+                    cachedDirectories.merge(fresh, uniquingKeysWith: { _, new in new })
+                } else {
+                    rebuildPending = true
+                    continue
+                }
+            }
+
             var traversal = TreeDisplayModel.Traversal(root: path, directoryDepthLimit: 32) {
                 expanded.contains($0)
             }
+            var visited: Set<String> = []
             while let directory = traversal.nextDirectory() {
-                traversal.receive(await children(of: directory, backend: backend, draft: draft))
+                visited.insert(directory)
+                var entries = cachedDirectories[directory]
+                if entries == nil && !refreshedDirectories.contains(directory) {
+                    entries = try? await backend.list(directory: directory)
+                    if epoch != treeEpoch || path != rootPath || scope != workspaceScope {
+                        rebuildPending = true
+                        break
+                    }
+                    if let entries { cachedDirectories[directory] = entries }
+                }
+                traversal.receive(Self.children(of: directory, entries: entries, draft: draft))
             }
-            if traversal.rootReadable,
-               path == rootPath, scope == workspaceScope, traversal.rows != items {
-                items = traversal.rows
+            if !rebuildPending, traversal.rootReadable,
+               epoch == treeEpoch, path == rootPath, scope == workspaceScope {
+                if traversal.rows != items { items = traversal.rows }
+                cachedDirectories = cachedDirectories.filter { visited.contains($0.key) }
+            } else if epoch != treeEpoch || path != rootPath || scope != workspaceScope {
+                rebuildPending = true
             }
         } while rebuildPending
         isRebuilding = false
     }
 
-    /// The rows for one directory, or nil when it could not be read at all —
-    /// which the caller treats as "keep what is on screen" rather than "this
-    /// directory is empty".
-    private func children(
-        of dir: String, backend: WorkspaceBackend, draft: Draft?
-    ) async -> [Item]? {
+    private static func children(
+        of dir: String, entries: [WorkspaceEntry]?, draft: Draft?
+    ) -> [Item]? {
+        guard let entries else { return nil }
         var out: [Item] = []
-        // Show the inline new-file/folder input at the top of its folder.
         if let draft, draft.parentDir == dir {
-            out.append(
-                Item(
-                    name: "", path: dir + "/\u{1}draft",
-                    isDirectory: draft.isDirectory, isDraft: true
-                )
-            )
+            out.append(Item(
+                name: "", path: dir + "/\u{1}draft",
+                isDirectory: draft.isDirectory, isDraft: true
+            ))
         }
-        guard let entries = try? await backend.list(directory: dir) else { return nil }
-
         out += entries
             .filter { $0.name != ".git" }
             .map { entry in
