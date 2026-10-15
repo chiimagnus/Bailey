@@ -50,18 +50,22 @@ final class CommitGraphLayoutTests: XCTestCase {
         ])
         XCTAssertEqual(graph.rows.map(\.node.lane), [0, 1, 0, 0])
         XCTAssertTrue(graph.rows[0].links.contains(
-            .diagonal(fromX: 0, fromY: 0.5, toX: 0.5, toY: 1, color: 1)
+            .curve(fromX: 0, fromY: 0.5, control1X: 0, control2X: 0.25,
+                   toX: 0.5, toY: 1, color: 1)
         ))
         XCTAssertTrue(graph.rows[1].links.contains(
-            .diagonal(fromX: 0.5, fromY: 0, toX: 1, toY: 0.5, color: 1)
+            .curve(fromX: 0.5, fromY: 0, control1X: 0.75, control2X: 1,
+                   toX: 1, toY: 0.5, color: 1)
         ))
         XCTAssertTrue(graph.rows[2].links.contains(
-            .diagonal(fromX: 0.75, fromY: 0, toX: 0.25, toY: 1, color: 1)
+            .curve(fromX: 0.84375, fromY: 0, control1X: 0.65625, control2X: 0.34375,
+                   toX: 0.15625, toY: 1, color: 1)
         ))
         XCTAssertTrue(graph.rows[3].links.contains(
-            .diagonal(fromX: 0.25, fromY: 0, toX: 0, toY: 0.5, color: 1)
+            .curve(fromX: 0.15625, fromY: 0, control1X: 0.0625, control2X: 0,
+                   toX: 0, toY: 0.5, color: 1)
         ))
-        XCTAssertTrue(graph.rows[1].bottomRails.contains(.init(lane: 0.75, color: 1)))
+        XCTAssertTrue(graph.rows[1].bottomRails.contains(.init(lane: 0.84375, color: 1)))
     }
 
     func testCrossLaneParentEdgeDoesNotJoinAnUnrelatedVerticalRail() {
@@ -75,15 +79,41 @@ final class CommitGraphLayoutTests: XCTestCase {
         XCTAssertFalse(graph.rows[2].links.contains(.through(.init(lane: 1, color: sideColor))),
                        "A side-parent connection must be a direct diagonal, not a vertical line followed by a bend")
         let segments = [
-            (row: 1, startX: 1.0, startY: 0.5, endX: 0.75, endY: 1.0),
-            (row: 2, startX: 0.75, startY: 0.0, endX: 0.25, endY: 1.0),
-            (row: 3, startX: 0.25, startY: 0.0, endX: 0.0, endY: 0.5),
+            (row: 1, fromX: 1.0, fromY: 0.5, c1: 1.0, c2: 0.9375, toX: 0.84375, toY: 1.0),
+            (row: 2, fromX: 0.84375, fromY: 0.0, c1: 0.65625, c2: 0.34375, toX: 0.15625, toY: 1.0),
+            (row: 3, fromX: 0.15625, fromY: 0.0, c1: 0.0625, c2: 0.0, toX: 0.0, toY: 0.5),
         ]
         for segment in segments {
-            XCTAssertTrue(graph.rows[segment.row].links.contains(.diagonal(
-                fromX: segment.startX, fromY: segment.startY,
-                toX: segment.endX, toY: segment.endY, color: sideColor
-            )), "Each row must contain its exact portion of the same node-to-node line")
+            XCTAssertTrue(graph.rows[segment.row].links.contains(.curve(
+                fromX: segment.fromX, fromY: segment.fromY,
+                control1X: segment.c1, control2X: segment.c2,
+                toX: segment.toX, toY: segment.toY, color: sideColor
+            )), "Each row must contain the correct piece of the same node-to-node curve")
+        }
+    }
+
+    func testCrossLaneCurveEasesIntoTheActualParentNode() {
+        let graph = CommitGraphLayout(commits: [
+            commit("merge", parents: ["base", "side"], current: true),
+            commit("side", parents: ["root"]),
+            commit("base", parents: ["root"]),
+            commit("root"),
+        ])
+        let firstSegment = graph.rows[1].links.compactMap { link -> (Double, Double, Double)? in
+            if case .curve(let fromX, let fromY, let control1X, let control2X,
+                           let toX, _, let color) = link,
+               fromX == 1, fromY == 0.5, color == 1 {
+                return (control1X, control2X, toX)
+            }
+            return nil
+        }
+        XCTAssertEqual(firstSegment.count, 1)
+        if let segment = firstSegment.first {
+            XCTAssertEqual(segment.0, 1, accuracy: 0.000001,
+                           "Curve must leave the source node vertically")
+            XCTAssertLessThan(segment.1, segment.0)
+            XCTAssertGreaterThan(segment.2, 0.8,
+                                 "Curve must ease away from the source, not trace a straight diagonal")
         }
     }
 

@@ -665,9 +665,16 @@ private struct CommitGraphRails: View {
                         path.move(to: CGPoint(x: laneX(rail.lane), y: 0))
                         path.addLine(to: CGPoint(x: laneX(rail.lane), y: size.height))
                         linkColor = rail.color
-                    case .diagonal(let fromX, let fromY, let toX, let toY, let color):
+                    case .curve(let fromX, let fromY, let control1X, let control2X,
+                                let toX, let toY, let color):
                         path.move(to: CGPoint(x: laneX(fromX), y: size.height * CGFloat(fromY)))
-                        path.addLine(to: CGPoint(x: laneX(toX), y: size.height * CGFloat(toY)))
+                        path.addCurve(
+                            to: CGPoint(x: laneX(toX), y: size.height * CGFloat(toY)),
+                            control1: CGPoint(x: laneX(control1X),
+                                              y: size.height * CGFloat((2 * fromY + toY) / 3)),
+                            control2: CGPoint(x: laneX(control2X),
+                                              y: size.height * CGFloat((fromY + 2 * toY) / 3))
+                        )
                         linkColor = color
                     }
                     context.stroke(
