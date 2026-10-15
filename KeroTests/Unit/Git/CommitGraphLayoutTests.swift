@@ -56,8 +56,85 @@ final class CommitGraphLayoutTests: XCTestCase {
         XCTAssertTrue(graph.rows[1].bottomRails.contains(.init(lane: 1, color: 1)))
     }
 
+    func testSideBranchMergeConnectsBothActualParentsAtTheirNodes() {
+        let graph = CommitGraphLayout(commits: [
+            commit("tip", parents: ["main"], current: true),
+            commit("merge", parents: ["side", "main"]),
+            commit("main", parents: ["base"]),
+            commit("side", parents: ["base"]),
+            commit("base"),
+        ])
+        XCTAssertEqual(graph.rows.map(\.node.lane), [0, 1, 0, 1, 0])
+        let green = graph.rows[1].node.color
+        let rail = CommitGraphLayout.Rail(lane: 1, color: green)
+
+        XCTAssertTrue(graph.rows[1].links.contains(.outgoing(rail)))
+        XCTAssertFalse(graph.rows[1].links.contains(
+            .depart(from: 1, to: 0, color: green)
+        ), "Merge second parent must not jump to the main rail at the child node")
+        XCTAssertTrue(graph.rows[2].links.contains(
+            .arrive(from: 1, to: 0, color: green)
+        ), "Merge second parent must connect to its real main parent node")
+        XCTAssertTrue(graph.rows[3].links.contains(.incoming(rail)),
+                      "Merge first parent must still connect to the side node")
+    }
+
+    func testCrossLaneMergeAvoidsPassingThroughUnrelatedCommitNodes() {
+        let graph = CommitGraphLayout(commits: [
+            commit("tip", parents: ["main-middle"], current: true),
+            commit("merge", parents: ["side-older", "main-base"]),
+            commit("main-middle", parents: ["main-base"]),
+            commit("side-older", parents: ["root"]),
+            commit("main-base", parents: ["root"]),
+            commit("root"),
+        ])
+        XCTAssertEqual(graph.rows.map(\.node.lane), [0, 1, 0, 1, 0, 0])
+        let green = graph.rows[1].node.color
+        let clear = CommitGraphLayout.Rail(lane: 2, color: green)
+        XCTAssertEqual(graph.laneCount, 3,
+                       "When both endpoint lanes contain unrelated nodes, reserve a clear edge lane")
+        XCTAssertTrue(graph.rows[1].links.contains(.depart(from: 1, to: 2, color: green)))
+        XCTAssertTrue(graph.rows[2].links.contains(.through(clear)))
+        XCTAssertTrue(graph.rows[3].links.contains(.through(clear)))
+        XCTAssertTrue(graph.rows[4].links.contains(.arrive(from: 2, to: 0, color: green)))
+        XCTAssertFalse(graph.rows[2].links.contains(.through(.init(lane: 0, color: green))))
+        XCTAssertFalse(graph.rows[3].links.contains(.through(.init(lane: 1, color: green))))
+        XCTAssertTrue(graph.rows[3].links.contains(.incoming(.init(lane: 1, color: green))),
+                      "The side branch's first-parent edge remains on its own node")
+    }
+
+    func testMergeWithTwoParentsOnMainRailEndsAtEachParent() {
+        let graph = CommitGraphLayout(commits: [
+            commit("head", parents: ["near"], current: true),
+            commit("merge", parents: ["deep", "near"]),
+            commit("near", parents: ["middle"]),
+            commit("middle", parents: ["deep"]),
+            commit("deep", parents: ["root"]),
+            commit("root"),
+        ])
+        XCTAssertEqual(graph.rows.map(\.node.lane), [0, 1, 0, 0, 0, 0])
+        let green = graph.rows[1].node.color
+        let sideRail = CommitGraphLayout.Rail(lane: 1, color: green)
+        XCTAssertTrue(graph.rows[1].links.contains(.outgoing(sideRail)))
+        XCTAssertEqual(graph.rows[1].links.filter { $0 == .outgoing(sideRail) }.count, 1)
+        XCTAssertTrue(graph.rows[2].links.contains(.arrive(from: 1, to: 0, color: green)),
+                      "The near second-parent must receive its own connection")
+        XCTAssertTrue(graph.rows[2].links.contains(.through(sideRail)),
+                      "The other parent edge must continue separately to the distant parent")
+        XCTAssertTrue(graph.rows[3].links.contains(.through(sideRail)))
+        XCTAssertTrue(graph.rows[4].links.contains(.arrive(from: 1, to: 0, color: green)),
+                      "The first-parent connection must end at its actual node")
+        XCTAssertFalse(graph.rows[2].links.contains(.through(.init(lane: 0, color: green))))
+    }
+
+    func testEmptyHistoryDoesNotReserveAVisualLane() {
+        let graph = CommitGraphLayout(commits: [])
+        XCTAssertEqual(graph.laneCount, 0)
+        XCTAssertTrue(graph.rows.isEmpty)
+    }
+
     func testUnloadedHeadDoesNotMarkAnotherBranchAsCurrentMain() {
-        // Git --topo-order may return many commits from another branch before HEAD.
+        // A paged Git history may omit HEAD while still showing unrelated branch commits.
         let graph = CommitGraphLayout(commits: [
             commit("other-tip", parents: ["other-parent"]),
             commit("other-parent", parents: ["unloaded-main"]),

@@ -450,7 +450,7 @@ final class GitBranchActionTests: XCTestCase {
         XCTAssertEqual(remoteOID.stdout.trimmingCharacters(in: .whitespacesAndNewlines), localCommit)
     }
 
-    func testLocalZipAndTarArchiveContainSelectedBranchNotHead() async throws {
+    func testLocalZipArchiveContainsSelectedBranchNotHead() async throws {
         try Data("old bytes\n".utf8).write(to: directory.appendingPathComponent("old.txt"))
         _ = try git(["add", "."])
         _ = try git(["commit", "-qm", "base archive"])
@@ -460,19 +460,18 @@ final class GitBranchActionTests: XCTestCase {
         _ = try git(["add", "."])
         _ = try git(["commit", "-qm", "new head"])
         try await refresh()
-        for format in GitStatusModel.ArchiveFormat.allCases {
-            let archive = directory.deletingLastPathComponent()
-                .appendingPathComponent("kero-archive-" + UUID().uuidString + "." + format.rawValue)
-            defer { try? FileManager.default.removeItem(at: archive) }
-            await model.createArchive(reference: "refs/heads/archive-base", objectOID: selectedOID,
-                                      format: format, destination: archive, target: model.actionTarget())
-            try await settle()
-            XCTAssertNil(model.lastError, model.lastError ?? "")
-            let listed = try tar(["-tf", archive.path])
-            XCTAssertTrue(listed.contains("old.txt"))
-            XCTAssertFalse(listed.contains("new.txt"))
-            XCTAssertEqual(try tar(["-xOf", archive.path, "old.txt"]), "old bytes\n")
-        }
+        let archive = directory.deletingLastPathComponent()
+            .appendingPathComponent("kero-archive-" + UUID().uuidString + ".zip")
+        defer { try? FileManager.default.removeItem(at: archive) }
+        await model.createArchive(reference: "refs/heads/archive-base", objectOID: selectedOID,
+                                  destination: archive, target: model.actionTarget())
+        try await settle()
+        XCTAssertNil(model.lastError, model.lastError ?? "")
+        XCTAssertTrue(try Data(contentsOf: archive).starts(with: Data("PK".utf8)))
+        let listed = try unzip(["-Z", "-1", archive.path])
+        XCTAssertTrue(listed.contains("old.txt"))
+        XCTAssertFalse(listed.contains("new.txt"))
+        XCTAssertEqual(try unzip(["-p", archive.path, "old.txt"]), "old bytes\n")
     }
 
     func testRemoteArchiveIsBoundedAndCleanupFailuresKeepDestinationIntact() async throws {
@@ -493,16 +492,16 @@ final class GitBranchActionTests: XCTestCase {
         XCTAssertTrue(model.isRepo)
 
         await model.createArchive(reference: "refs/heads/selected-archive", objectOID: selectedOID,
-                                  format: .zip, destination: archive, target: model.actionTarget())
+                                  destination: archive, target: model.actionTarget())
         try await settle()
         XCTAssertNil(model.lastError, model.lastError ?? "")
-        XCTAssertEqual(try tar(["-xOf", archive.path, "selected.txt"]), "selected revision\n")
-        XCTAssertFalse(try tar(["-tf", archive.path]).contains("new.txt"))
+        XCTAssertEqual(try unzip(["-p", archive.path, "selected.txt"]), "selected revision\n")
+        XCTAssertFalse(try unzip(["-Z", "-1", archive.path]).contains("new.txt"))
 
         await backend.simulateOversizeRead(true)
         let bytesBefore = try Data(contentsOf: archive)
         await model.createArchive(reference: "refs/heads/selected-archive", objectOID: selectedOID,
-                                  format: .zip, destination: archive, target: model.actionTarget())
+                                  destination: archive, target: model.actionTarget())
         try await settle()
         XCTAssertTrue(model.lastError?.contains("64 MiB") == true)
         XCTAssertEqual(try Data(contentsOf: archive), bytesBefore,
@@ -510,12 +509,12 @@ final class GitBranchActionTests: XCTestCase {
         await backend.simulateOversizeRead(false)
         await backend.simulateCleanupFailure(true)
         await model.createArchive(reference: "refs/heads/selected-archive", objectOID: selectedOID,
-                                  format: .tar, destination: archive, target: model.actionTarget())
+                                  destination: archive, target: model.actionTarget())
         try await settle()
         XCTAssertTrue(model.lastError?.contains(String(localized:
             "Remote temporary archive could not be removed:", table: "Git")) == true)
         XCTAssertTrue(model.lastError?.contains("/tmp/kero-archive-") == true)
-        XCTAssertEqual(try tar(["-xOf", archive.path, "selected.txt"]), "selected revision\n")
+        XCTAssertEqual(try unzip(["-p", archive.path, "selected.txt"]), "selected revision\n")
         let folders = await backend.temporaryFolders
         let attempted = await backend.cleanupAttempts
         XCTAssertEqual(attempted, folders, "Every archive temp must be cleaned or explicitly reported")
@@ -523,9 +522,9 @@ final class GitBranchActionTests: XCTestCase {
         for path in folders { XCTAssertFalse(FileManager.default.fileExists(atPath: path)) }
     }
 
-    private func tar(_ args: [String]) throws -> String {
+    private func unzip(_ args: [String]) throws -> String {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
         process.arguments = args
         let output = Pipe()
         process.standardOutput = output

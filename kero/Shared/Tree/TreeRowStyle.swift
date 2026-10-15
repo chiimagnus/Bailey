@@ -194,27 +194,38 @@ private struct TreeRowLabel: View {
     }
 }
 
-struct TreeFolderRow: View {
+struct TreeFolderRow<Accessory: View>: View {
     let row: TreeDisplayModel.Row
     let scale: CGFloat
     var leadingInset = TreeRowStyle.contentInset
     let toggle: () -> Void
+    @ViewBuilder var accessory: (Bool) -> Accessory
     @FocusState private var focused: Bool
 
     var body: some View {
-        TreeRowSurface(depth: row.depth, scale: scale, focused: focused, leadingInset: leadingInset) { _, layout in
-            Button(action: toggle) {
-                TreeRowLabel(row: row, iconPath: row.path, scale: scale)
-                    .modifier(layout)
+        TreeRowSurface(depth: row.depth, scale: scale, focused: focused, leadingInset: leadingInset) { hovering, layout in
+            HStack(spacing: 0) {
+                Button(action: toggle) {
+                    TreeRowLabel(row: row, iconPath: row.path, scale: scale)
+                        .modifier(layout)
+                }
+                .buttonStyle(.plain)
+                .focused($focused)
+                .help(row.accessibilityLabel + "\n" + row.path)
+                .accessibilityLabel(row.accessibilityLabel)
+                .accessibilityValue(row.isExpanded
+                    ? String(localized: "Expanded", table: "Sidebar")
+                    : String(localized: "Collapsed", table: "Sidebar"))
+                accessory(hovering || focused)
             }
-            .buttonStyle(.plain)
-            .focused($focused)
-            .help(row.accessibilityLabel + "\n" + row.path)
-            .accessibilityLabel(row.accessibilityLabel)
-            .accessibilityValue(row.isExpanded
-                ? String(localized: "Expanded", table: "Sidebar")
-                : String(localized: "Collapsed", table: "Sidebar"))
         }
+    }
+}
+
+extension TreeFolderRow where Accessory == EmptyView {
+    init(row: TreeDisplayModel.Row, scale: CGFloat,
+         leadingInset: CGFloat = TreeRowStyle.contentInset, toggle: @escaping () -> Void) {
+        self.init(row: row, scale: scale, leadingInset: leadingInset, toggle: toggle) { _ in EmptyView() }
     }
 }
 

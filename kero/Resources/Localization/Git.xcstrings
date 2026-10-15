@@ -121,12 +121,32 @@
         }
       }
     },
-    "STASHES" : {
+    "GIT GRAPH" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "储藏"
+            "value" : "Git 图谱"
+          }
+        }
+      }
+    },
+    "Loading stash changes…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载储藏变更…"
+          }
+        }
+      }
+    },
+    "Unable to read stash changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取储藏变更"
           }
         }
       }
@@ -1245,6 +1265,26 @@
         }
       }
     },
+    "Commit or unstage existing staged changes before automatic Squash Merge." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动压缩合并前，请先提交或取消暂存已有的修改。"
+          }
+        }
+      }
+    },
+    "Unable to inspect staged changes." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法检查已暂存的修改。"
+          }
+        }
+      }
+    },
     "Git command failed" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1863,16 +1903,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "创建归档"
-          }
-        }
-      }
-    },
-    "Archive Format" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "归档格式"
           }
         }
       }

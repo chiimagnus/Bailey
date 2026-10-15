@@ -10,6 +10,10 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     private var failGit = false
     private var failHistoryLog = false
     private var failStashList = false
+    private var failRefSnapshot = false
+    private var failRemoteList = false
+    private var failGitDirectory = false
+    private var failOperationMarker = false
     private var pauseNextGit = false
     private var pausedGit: CheckedContinuation<Void, Never>?
     private(set) var awaitingGit = false
@@ -22,6 +26,10 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     func setGitUnavailable(_ value: Bool) { failGit = value }
     func setHistoryLogUnavailable(_ value: Bool) { failHistoryLog = value }
     func setStashListUnavailable(_ value: Bool) { failStashList = value }
+    func setRefSnapshotUnavailable(_ value: Bool) { failRefSnapshot = value }
+    func setRemoteListUnavailable(_ value: Bool) { failRemoteList = value }
+    func setGitDirectoryUnavailable(_ value: Bool) { failGitDirectory = value }
+    func setOperationMarkerUnavailable(_ value: Bool) { failOperationMarker = value }
     func suspendNextGitRequest() { pauseNextGit = true }
     func releaseGitRequest() {
         pausedGit?.resume()
@@ -53,18 +61,34 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
             await withCheckedContinuation { pausedGit = $0 }
         }
         if failGit { throw WorkspaceError.timedOut }
+        if failOperationMarker, argv.count == 3,
+           argv[0] == "sh", argv[1] == "-c",
+           argv[2].contains("for n in rebase-merge rebase-apply MERGE_HEAD") {
+            throw WorkspaceError.timedOut
+        }
         // The remote protocol passes command names (git/sh), whereas the
         // local backend deliberately requires an absolute executable URL.
         var variables = ProcessInfo.processInfo.environment
         for (key, value) in env ?? [:] { variables[key] = value }
         let commandInput: Data?
-        if (failHistoryLog || failStashList), let stdin, let script = String(data: stdin, encoding: .utf8) {
+        if (failHistoryLog || failStashList || failRefSnapshot || failRemoteList || failGitDirectory),
+           let stdin, let script = String(data: stdin, encoding: .utf8) {
             var failing = script
             if failHistoryLog {
                 failing = failing.replacingOccurrences(of: " LC_ALL=C git 'log' ", with: " LC_ALL=C git 'invalid-test-history-log' ")
             }
             if failStashList {
                 failing = failing.replacingOccurrences(of: " LC_ALL=C git 'stash' 'list' ", with: " LC_ALL=C git 'invalid-test-stash' 'list' ")
+            }
+            if failRefSnapshot {
+                failing = failing.replacingOccurrences(of: " LC_ALL=C git 'for-each-ref' ", with: " LC_ALL=C git 'invalid-test-refs' ")
+            }
+            if failRemoteList {
+                failing = failing.replacingOccurrences(of: " LC_ALL=C git 'remote' ", with: " LC_ALL=C git 'invalid-test-remotes' ")
+            }
+            if failGitDirectory {
+                failing = failing.replacingOccurrences(of: " LC_ALL=C git 'rev-parse' '--absolute-git-dir' ",
+                                                        with: " LC_ALL=C git 'invalid-test-git-dir' ")
             }
             commandInput = Data(failing.utf8)
         } else {
@@ -261,10 +285,15 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path),
                        secondTarget.path)
 
-        XCTAssertTrue(model.canOpen(untrackedEntry, isRemote: false))
+        XCTAssertFalse(model.canOpen(untrackedEntry, isRemote: false),
+                       "An old file row cannot be reused after switching repository scope")
+        let currentUntracked = try XCTUnwrap(model.changedEntries.first {
+            $0.path == "untracked.txt"
+        })
+        XCTAssertTrue(model.canOpen(currentUntracked, isRemote: false))
         try FileManager.default.removeItem(at: untracked)
-        XCTAssertFalse(model.canOpen(untrackedEntry, isRemote: false))
-        XCTAssertTrue(model.canOpen(untrackedEntry, isRemote: true))
+        XCTAssertFalse(model.canOpen(currentUntracked, isRemote: false))
+        XCTAssertTrue(model.canOpen(currentUntracked, isRemote: true))
     }
 
     func testRemoteDiscardReviewRejectsDisconnectionAndInFlightScopeChange() async throws {
@@ -354,6 +383,9 @@ final class GitStatusModelTests: XCTestCase {
         try git(["add", "."])
         try git(["commit", "-qm", "first"])
         try git(["commit", "--allow-empty", "-qm", "second"])
+        try git(["branch", "topic/safe"])
+        try git(["tag", "v1"])
+        try git(["remote", "add", "origin", directory.path])
         try "changed\n".write(to: directory.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
 
         let backend = DiscardRemoteWorkspaceFixture()
@@ -365,6 +397,11 @@ final class GitStatusModelTests: XCTestCase {
         let priorChanges = model.changedEntries
         XCTAssertEqual(priorChanges.map(\.path), ["tracked.txt"])
         let priorBranch = model.branch
+        let priorRefs = model.refsByName
+        let priorRemotes = model.remotes
+        XCTAssertNotNil(priorRefs["refs/heads/topic/safe"])
+        XCTAssertNotNil(priorRefs["refs/tags/v1"])
+        XCTAssertEqual(priorRemotes, ["origin"])
 
         await backend.setGitUnavailable(true)
         model.refresh()
@@ -393,6 +430,30 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { model.statusError == nil && !model.isRefreshing }
         XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
 
+        // An individual metadata query failing must not publish a partial
+        // successful snapshot that hides Branch/Tag menus or an in-progress operation.
+        for kind in 0..<3 {
+            switch kind {
+            case 0: await backend.setRefSnapshotUnavailable(true)
+            case 1: await backend.setRemoteListUnavailable(true)
+            default: await backend.setGitDirectoryUnavailable(true)
+            }
+            model.refresh()
+            try await wait { !model.isRefreshing }
+            XCTAssertNotNil(model.statusError, "Metadata query \(kind) must fail the complete snapshot")
+            XCTAssertEqual(model.refsByName, priorRefs)
+            XCTAssertEqual(model.remotes, priorRemotes)
+            XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
+            switch kind {
+            case 0: await backend.setRefSnapshotUnavailable(false)
+            case 1: await backend.setRemoteListUnavailable(false)
+            default: await backend.setGitDirectoryUnavailable(false)
+            }
+            model.refresh()
+            try await wait { !model.isRefreshing }
+            XCTAssertNil(model.statusError)
+        }
+
         try git(["stash", "push", "-qm", "preserve on query failure"])
         model.refresh()
         try await wait { !model.isRefreshing }
@@ -402,12 +463,97 @@ final class GitStatusModelTests: XCTestCase {
         model.refresh()
         try await wait { model.statusError != nil && !model.isRefreshing }
         XCTAssertEqual(model.stashes, priorStashes)
-        XCTAssertEqual(model.stashCount, 1)
+        XCTAssertEqual(model.stashes.count, 1)
         await backend.setStashListUnavailable(false)
         try git(["stash", "clear"])
         model.refresh()
         try await wait { model.statusError == nil && !model.isRefreshing }
         XCTAssertTrue(model.stashes.isEmpty)
+
+        // A failed remote marker check must not turn an in-progress merge
+        // into a clean repository that enables other commit actions.
+        let marker = directory.appendingPathComponent(".git/MERGE_HEAD")
+        try (try XCTUnwrap(model.headOID) + "\n").write(to: marker, atomically: true, encoding: .utf8)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        let priorOperation = try XCTUnwrap(model.repositoryOperation)
+        await backend.setOperationMarkerUnavailable(true)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertNotNil(model.statusError, "Failed SSH marker check must not be treated as no operation")
+        XCTAssertEqual(model.repositoryOperation, priorOperation)
+        await backend.setOperationMarkerUnavailable(false)
+        try FileManager.default.removeItem(at: marker)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertNil(model.statusError)
+        XCTAssertNil(model.repositoryOperation)
+    }
+
+    func testStashFileLoadRejectsStaleSSHChannelAndRetriesAfterFailure() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kero-stash-ssh-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [
+            ["init", "-q", "-b", "main"],
+            ["config", "user.name", "Stash Channel Test"],
+            ["config", "user.email", "stash-ssh@invalid"],
+            ["config", "commit.gpgsign", "false"]
+        ] {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let file = directory.appendingPathComponent("tracked.txt")
+        try "baseline\n".write(to: file, atomically: true, encoding: .utf8)
+        XCTAssertEqual(GitCommandExecution.run(["add", "."], in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "base"], in: directory.path).status, 0)
+        try "stash change\n".write(to: file, atomically: true, encoding: .utf8)
+        XCTAssertEqual(GitCommandExecution.run(
+            ["stash", "push", "-qm", "saved"], in: directory.path
+        ).status, 0)
+
+        let oldChannel = DiscardRemoteWorkspaceFixture()
+        let newChannel = DiscardRemoteWorkspaceFixture()
+        defer { Task { await oldChannel.releaseGitRequest() } }
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: oldChannel, scope: "ssh:fixture")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing && model.isRepo }
+        let selected = try XCTUnwrap(model.stashes.first)
+        await oldChannel.suspendNextGitRequest()
+        model.loadStashFiles(for: selected)
+        let deadline = Date().addingTimeInterval(5)
+        while await !oldChannel.awaitingGit, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let paused = await oldChannel.awaitingGit
+        XCTAssertTrue(paused)
+        XCTAssertEqual(model.stashFilesByOID[selected.oid], .loading)
+
+        model.sync(root: directory.path, backend: newChannel, scope: "ssh:fixture")
+        XCTAssertNil(model.stashFilesByOID[selected.oid],
+                     "Replacing a channel must release the old loading indicator")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing && model.isRepo }
+        let current = try XCTUnwrap(model.stashes.first)
+        await newChannel.setGitUnavailable(true)
+        model.loadStashFiles(for: current)
+        try await wait {
+            if case .failed = model.stashFilesByOID[current.oid] { return true }
+            return false
+        }
+        await newChannel.setGitUnavailable(false)
+        model.loadStashFiles(for: current)
+        try await wait {
+            if case .loaded = model.stashFilesByOID[current.oid] { return true }
+            return false
+        }
+        await oldChannel.setGitUnavailable(true)
+        await oldChannel.releaseGitRequest()
+        if case .loaded(let changes) = model.stashFilesByOID[current.oid] {
+            XCTAssertEqual(changes.map(\.path), ["tracked.txt"])
+        } else {
+            XCTFail("A completed new SSH read must not be overwritten by the old channel")
+        }
     }
 
     func testReplacingSSHBackendDoesNotWaitForStaleGitWorker() async throws {
@@ -588,6 +734,71 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(rows.first { $0.hash == side }?.references,
                        [.init(kind: .localBranch, name: "feature/nested")])
         XCTAssertEqual(rows.first { $0.hash == side }?.files.map(\.path), ["side.txt"])
+    }
+
+    func testGitGraphUsesCommitDateOrderWithoutBreakingMergeParents() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kero-git-order-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        func git(_ args: [String]) throws -> String {
+            let result = GitCommandExecution.run(args, in: directory.path, timeout: 15)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func datedGit(_ args: [String], date: String) throws {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["git"] + args
+            process.currentDirectoryURL = directory
+            var environment = ProcessInfo.processInfo.environment
+            environment["GIT_AUTHOR_DATE"] = date
+            environment["GIT_COMMITTER_DATE"] = date
+            process.environment = environment
+            process.standardOutput = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0)
+        }
+
+        _ = try git(["init", "-q", "-b", "main"])
+        _ = try git(["config", "user.name", "Graph Date Order"])
+        _ = try git(["config", "user.email", "graph@invalid"])
+        _ = try git(["config", "commit.gpgsign", "false"])
+        try datedGit(["commit", "--allow-empty", "-qm", "root"], date: "2026-10-05T00:00:00+0000")
+        let root = try git(["rev-parse", "HEAD"])
+        for (subject, date) in [
+            ("main1", "2026-10-07T11:26:00+0000"),
+            ("main2", "2026-10-07T12:02:00+0000"),
+            ("main3", "2026-10-07T12:15:00+0000"),
+        ] {
+            try datedGit(["commit", "--allow-empty", "-qm", subject], date: date)
+        }
+        _ = try git(["switch", "-qc", "side", root])
+        for (subject, date) in [
+            ("side1", "2026-10-07T19:08:00+0000"),
+            ("side2", "2026-10-07T19:24:00+0000"),
+        ] {
+            try datedGit(["commit", "--allow-empty", "-qm", subject], date: date)
+        }
+        try datedGit(["merge", "-q", "--no-ff", "-m", "merged", "main"],
+                     date: "2026-10-08T14:20:00+0000")
+
+        let model = GitStatusModel()
+        model.sync(root: directory.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertEqual(model.recentCommits.map(\.subject),
+                       ["merged", "side2", "side1", "main3", "main2", "main1", "root"],
+                       "Git Graph must interleave branches by commit date, not group them topologically")
+        let indexByHash = Dictionary(uniqueKeysWithValues: model.recentCommits.enumerated()
+            .map { ($0.element.hash, $0.offset) })
+        for (index, commit) in model.recentCommits.enumerated() {
+            for parent in commit.parentHashes {
+                XCTAssertGreaterThan(indexByHash[parent] ?? -1, index,
+                                     "Git Graph must still place every child above its parent")
+            }
+        }
     }
 
     func testHistoricalBranchMustPointAtSelectedCommitWithoutSwitchingHEAD() async throws {

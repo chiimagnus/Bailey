@@ -183,9 +183,10 @@ struct ToolPanelView: View {
                         manager.openCommitDiff(
                             repoRoot: git.repoRoot,
                             path: file.path,
-                            commitHash: commit.hash,
-                            parentHash: commit.parentHashes.first,
-                            status: file.status,
+                            commitHash: file.fromStashUntracked
+                                ? (commit.stash?.untrackedFilesHash ?? commit.hash) : commit.hash,
+                            parentHash: file.fromStashUntracked ? nil : commit.parentHashes.first,
+                            status: file.fromStashUntracked ? "A" : file.status,
                             origPath: file.originalPath
                         )
                     }

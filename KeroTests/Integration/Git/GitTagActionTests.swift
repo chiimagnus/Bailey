@@ -229,6 +229,10 @@ final class GitTagActionTests: XCTestCase {
     }
 
     func testAnnotatedTagArchiveUsesSelectedCommitInsteadOfCurrentHead() async throws {
+        try "archive historical bytes".write(
+            to: directory.appendingPathComponent("historical.txt"), atomically: true, encoding: .utf8)
+        _ = try git(["add", "historical.txt"])
+        _ = try git(["commit", "-qm", "archive history"])
         let first = try git(["rev-parse", "HEAD"])
         _ = try git(["tag", "-a", "-m", "archive notes", "archive-v1", first])
         let tagOID = try git(["rev-parse", "refs/tags/archive-v1"])
@@ -239,14 +243,14 @@ final class GitTagActionTests: XCTestCase {
         try await refresh()
         let archive = remotesDirectory.appendingPathComponent("tag-selected.zip")
         await model.createArchive(reference: "refs/tags/archive-v1",
-            objectOID: tagOID, format: .zip, destination: archive, target: model.actionTarget())
+            objectOID: tagOID, destination: archive, target: model.actionTarget())
         try await settle()
         XCTAssertNil(model.lastError)
         let result = GitCommandExecution.run(["ls-tree", "-r", "--name-only", first], in: directory.path)
         XCTAssertEqual(result.status, 0)
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        process.arguments = ["-tf", archive.path]
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        process.arguments = ["-Z", "-1", archive.path]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
@@ -254,6 +258,7 @@ final class GitTagActionTests: XCTestCase {
         let names = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
+        XCTAssertTrue(names.contains("historical.txt"))
         XCTAssertFalse(names.contains("newer.txt"))
         XCTAssertEqual(try git(["rev-parse", "refs/tags/archive-v1^{commit}"]), first)
         XCTAssertNotEqual(try git(["rev-parse", "HEAD"]), first)

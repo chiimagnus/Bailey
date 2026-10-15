@@ -230,6 +230,31 @@ final class GitRemoteBranchActionTests: XCTestCase {
         XCTAssertEqual(try git(["show", "HEAD:server.txt"]), "squashed")
     }
 
+    func testPullSquashDoesNotCommitPreexistingStagedWork() async throws {
+        _ = try makeBareRemote("origin")
+        let original = try git(["rev-parse", "HEAD"])
+        try "server".write(to: directory.appendingPathComponent("server.txt"),
+                           atomically: true, encoding: .utf8)
+        _ = try git(["add", "server.txt"])
+        _ = try git(["commit", "-qm", "server"])
+        _ = try git(["push", "origin", "main:refs/heads/topic"])
+        _ = try git(["reset", "--hard", original])
+        _ = try git(["fetch", "-q", "origin"])
+        try "private".write(to: directory.appendingPathComponent("private.txt"),
+                            atomically: true, encoding: .utf8)
+        _ = try git(["add", "private.txt"])
+        try await refresh()
+        let selected = try XCTUnwrap(model.remoteBranch(named: "origin/topic"))
+        model.pullRemoteBranch(selected, noFastForward: false, squash: true,
+                               target: model.actionTarget())
+        try await settle()
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), original)
+        XCTAssertEqual(try git(["diff", "--cached", "--name-only"]), "private.txt")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("server.txt").path))
+    }
+
     func testRemoteDeleteLeavesOtherServerWithSameNameUntouched() async throws {
         let origin = try makeBareRemote("origin")
         let backup = try makeBareRemote("backup")

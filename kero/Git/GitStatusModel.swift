@@ -26,6 +26,9 @@ final class GitStatusModel {
         /// Canonical repo that produced this snapshot. Mutations reject stale
         /// rows after the active terminal moves to another repository.
         var repositoryRoot = ""
+        var snapshotGeneration: UInt = 0
+        var snapshotBranch: String?
+        var snapshotHeadOID: String?
 
         var fileName: String { (path as NSString).lastPathComponent }
         var directory: String {
@@ -77,6 +80,10 @@ final class GitStatusModel {
         let selector: String
         let oid: String
         let message: String
+        let baseHash: String
+        let untrackedFilesHash: String?
+        let author: String
+        let date: Date
     }
 
     nonisolated enum StashAction: CaseIterable, Sendable {
@@ -231,9 +238,10 @@ final class GitStatusModel {
             let status: Character
             let path: String
             let originalPath: String?
+            var fromStashUntracked = false
 
             var id: String {
-                "\(status)\u{0}\(originalPath ?? "")\u{0}\(path)"
+                "\(status)\u{0}\(originalPath ?? "")\u{0}\(path)\u{0}\(fromStashUntracked)"
             }
             var fileName: String { (path as NSString).lastPathComponent }
             var directory: String {
@@ -242,7 +250,7 @@ final class GitStatusModel {
             }
         }
 
-        var id: String { hash }
+        var id: String { stash?.id ?? hash }
         let hash: String
         let shortHash: String
         let subject: String
@@ -251,6 +259,7 @@ final class GitStatusModel {
         let parentHashes: [String]
         let references: [Reference]
         let files: [FileChange]
+        var stash: Stash? = nil
 
         var relativeDate: String {
             date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated))
@@ -422,7 +431,39 @@ final class GitStatusModel {
     private(set) var isLoadingMoreCommits = false
     private(set) var repositoryOperation: String?
     private(set) var stashes: [Stash] = []
-    var stashCount: Int { stashes.count }
+
+    nonisolated enum StashFilesState: Equatable, Sendable {
+        case loading
+        case loaded([RecentCommit.FileChange])
+        case failed(String)
+    }
+
+    private(set) var stashFilesByOID: [String: StashFilesState] = [:]
+    var graphCommits: [RecentCommit] { Self.graphCommits(recentCommits, stashes: stashes) }
+
+    /// A stash has several real parents, but the graph follows only its base commit.
+    nonisolated static func graphCommits(_ commits: [RecentCommit], stashes: [Stash]) -> [RecentCommit] {
+        let positions = Dictionary(uniqueKeysWithValues: commits.enumerated().map {
+            ($0.element.hash, $0.offset)
+        })
+        let sorted = stashes.enumerated().map { index, stash in
+            (position: positions[stash.baseHash] ?? commits.count, order: index, stash: stash)
+        }.sorted {
+            if $0.position != $1.position { return $0.position < $1.position }
+            if $0.stash.date != $1.stash.date { return $0.stash.date > $1.stash.date }
+            return $0.order < $1.order
+        }
+        var graph = commits
+        for entry in sorted.reversed() {
+            let stash = entry.stash
+            graph.insert(RecentCommit(
+                hash: stash.oid, shortHash: String(stash.oid.prefix(7)),
+                subject: stash.message, author: stash.author, date: stash.date,
+                parentHashes: [stash.baseHash], references: [], files: [], stash: stash
+            ), at: entry.position)
+        }
+        return graph
+    }
     private(set) var isRefreshing = false
     /// True once a status load has completed for the current `rootPath`. The
     /// UI keeps showing resolved content during later event-driven refreshes
@@ -510,7 +551,9 @@ final class GitStatusModel {
     }
 
     func isCurrent(_ entry: Entry) -> Bool {
-        hasResolvedPanelTarget && (entry.repositoryRoot.isEmpty || entry.repositoryRoot == repoRoot)
+        hasResolvedPanelTarget && entry.repositoryRoot == repoRoot
+            && entry.snapshotGeneration == contextGeneration
+            && entry.snapshotBranch == branch && entry.snapshotHeadOID == headOID
     }
 
     /// Returns a Git decoration only when `absolutePath` belongs to the
@@ -573,6 +616,7 @@ final class GitStatusModel {
         }
         if panelTargetIdentity != context.identity {
             contextGeneration &+= 1
+            stashFilesByOID = [:]
             invalidateStatusRefresh()
             panelTargetIdentity = nil
             isResolvingPanelTarget = true
@@ -612,6 +656,7 @@ final class GitStatusModel {
             // A new SSH channel must not queue behind a worker stalled on the
             // previous connection, even when the host and repository match.
             contextGeneration &+= 1
+            stashFilesByOID = [:]
             invalidateStatusRefresh()
         }
         refresh()
@@ -1441,14 +1486,10 @@ final class GitStatusModel {
                 completion: completion)
     }
 
-    nonisolated enum ArchiveFormat: String, CaseIterable, Sendable {
-        case zip, tar
-    }
-
     /// The Git object is captured before the save sheet opens, so a later
     /// branch movement cannot quietly change the downloaded archive.
     func createArchive(
-        reference: String, objectOID: String, format: ArchiveFormat,
+        reference: String, objectOID: String,
         destination: URL, target: ActionTarget
     ) async {
         guard isCurrent(target, requiresStableHead: false),
@@ -1477,7 +1518,7 @@ final class GitStatusModel {
         }
         let result = await Task.detached(priority: .userInitiated) { () async -> (error: String?, output: String) in
             let temporary = destination.deletingLastPathComponent()
-                .appendingPathComponent(".kero-archive-" + UUID().uuidString + "." + format.rawValue)
+                .appendingPathComponent(".kero-archive-" + UUID().uuidString + ".zip")
             var remoteFolder: String?
             var output = ""
             var error: String?
@@ -1513,7 +1554,7 @@ final class GitStatusModel {
                         ])
                     }
                     remoteFolder = folder
-                    archiveOutput = folder + "/archive." + format.rawValue
+                    archiveOutput = folder + "/archive.zip"
                 }
                 guard await current() else {
                     throw NSError(domain: "KeroGitArchive", code: 4, userInfo: [
@@ -1521,7 +1562,7 @@ final class GitStatusModel {
                     ])
                 }
                 let archived = await GitCommandExecution.run(
-                    ["archive", "--format=" + format.rawValue, "-o", archiveOutput, objectOID],
+                    ["archive", "--format=zip", "-o", archiveOutput, objectOID],
                     in: root, backend: backend
                 )
                 guard archived.status == 0 else {
@@ -1529,7 +1570,7 @@ final class GitStatusModel {
                         NSLocalizedDescriptionKey: archived.stderr
                     ])
                 }
-                output = "$ git archive --format=" + format.rawValue + " " + reference
+                output = "$ git archive --format=zip " + reference
                 if remoteFolder != nil {
                     let maximumSize = 64 * 1024 * 1024
                     let data = try await backend.read(path: archiveOutput, maxBytes: maximumSize)
@@ -1868,6 +1909,7 @@ final class GitStatusModel {
     func actOnStash(
         _ stash: Stash, action: StashAction, reinstateIndex: Bool = false,
         branchName: String = "", target: ActionTarget,
+        expectedStashes: [Stash]? = nil,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
         completion: (@MainActor (Bool) -> Void)? = nil
@@ -1898,9 +1940,15 @@ final class GitStatusModel {
             commands = [["stash", "branch", name, stash.selector]]
             preflight = [["check-ref-format", "--branch", name]]
         }
+        let originalStashes = expectedStashes ?? stashes
+        guard action == .apply || originalStashes.contains(stash) else {
+            failImmediately(String(localized: "The selected stash changed. Reopen the menu and select it again.", table: "Git"),
+                            completion: completion)
+            return
+        }
         perform(label: action.title, commands: commands,
                 requiresStableHead: action != .drop, preflight: preflight,
-                expectedStash: action == .apply ? nil : stash,
+                expectedStashes: action == .apply ? nil : originalStashes,
                 prepare: action == .drop ? nil : prepare,
                 isCurrentTarget: isCurrentTarget, completion: completion)
     }
@@ -1943,7 +1991,7 @@ final class GitStatusModel {
         terminalAction: (@MainActor () throws -> Void)? = nil,
         preflight: [[String]] = [], expectedRef: (name: String, oid: String)? = nil,
         expectedFileState: (path: String, state: FileState)? = nil,
-        expectedStash: Stash? = nil,
+        expectedStashes: [Stash]? = nil,
         continueAfterFirstSuccess: Bool = false,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
@@ -2096,12 +2144,12 @@ final class GitStatusModel {
                                                   failureMessage: message)
                     }
                 }
-                if let expectedStash {
+                if let expectedStashes {
                     let actual = await GitCommandExecution.run(
-                        ["rev-parse", "--verify", expectedStash.selector + "^{commit}"], in: dir, backend: backend
+                        Self.stashListArguments, in: dir, backend: backend
                     )
                     guard actual.status == 0,
-                          actual.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == expectedStash.oid else {
+                          Self.parseStashes(actual.stdout) == expectedStashes else {
                         let message = String(localized: "The selected stash changed. Reopen the menu and select it again.", table: "Git")
                         return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
                     }
@@ -2115,6 +2163,26 @@ final class GitStatusModel {
                           ) == preparedFileState else {
                         return CommandBatchResult(output: fileChangedMessage, failureCode: -1,
                                                   failureMessage: fileChangedMessage)
+                    }
+                }
+                if squashMessage != nil {
+                    guard await isCurrent() else {
+                        return CommandBatchResult(output: staleMessage, failureCode: -1,
+                                                  failureMessage: staleMessage)
+                    }
+                    let baseline = await GitCommandExecution.run(
+                        ["diff", "--cached", "--quiet"], in: dir, backend: backend
+                    )
+                    guard baseline.status == 0 else {
+                        let message = baseline.status == 1
+                            ? String(localized: "Commit or unstage existing staged changes before automatic Squash Merge.", table: "Git")
+                            : (baseline.stderr.isEmpty
+                               ? String(localized: "Unable to inspect staged changes.", table: "Git")
+                               : baseline.stderr)
+                        return CommandBatchResult(output: message, failureCode: baseline.status,
+                                                  failureMessage: message,
+                                                  failedCommand: ["diff", "--cached", "--quiet"],
+                                                  gitError: baseline.stderr)
                     }
                 }
                 for (index, args) in commands.enumerated() {
@@ -2403,21 +2471,105 @@ final class GitStatusModel {
 
     // MARK: - Status
 
-    private nonisolated static let stashListArguments = ["stash", "list", "-z", "--format=%gd%x00%H%x00%gs"]
+    private nonisolated static let stashListArguments = [
+        "stash", "list", "-z", "--format=%gd%x00%H%x00%gs%x00%P%x00%an%x00%ct"
+    ]
 
     nonisolated static func parseStashes(_ output: String) -> [Stash]? {
         if output.isEmpty { return [] }
         var fields = output.components(separatedBy: "\0")
-        guard fields.removeLast() == "", fields.count.isMultiple(of: 3) else { return nil }
+        guard fields.removeLast() == "", fields.count.isMultiple(of: 6) else { return nil }
         var stashes: [Stash] = []
-        for index in stride(from: 0, to: fields.count, by: 3) {
+        for index in stride(from: 0, to: fields.count, by: 6) {
             let selector = fields[index]
             let oid = fields[index + 1]
+            let parents = fields[index + 3].split(separator: " ").map(String.init)
             guard selector == "stash@{\(stashes.count)}",
-                  (oid.count == 40 || oid.count == 64), oid.allSatisfy(\.isHexDigit) else { return nil }
-            stashes.append(Stash(selector: selector, oid: oid, message: fields[index + 2]))
+                  (oid.count == 40 || oid.count == 64), oid.allSatisfy(\.isHexDigit),
+                  (2...3).contains(parents.count),
+                  parents.allSatisfy({ $0.count == oid.count && $0.allSatisfy(\.isHexDigit) }),
+                  let timestamp = TimeInterval(fields[index + 5]) else { return nil }
+            stashes.append(Stash(
+                selector: selector, oid: oid, message: fields[index + 2],
+                baseHash: parents[0], untrackedFilesHash: parents.count == 3 ? parents[2] : nil,
+                author: fields[index + 4], date: Date(timeIntervalSince1970: timestamp)
+            ))
         }
         return stashes
+    }
+
+    nonisolated static func parseStashFileChanges(
+        _ output: String, fromUntracked: Bool = false
+    ) -> [RecentCommit.FileChange]? {
+        if output.isEmpty { return [] }
+        var tokens = output.components(separatedBy: "\0")
+        guard tokens.removeLast() == "" else { return nil }
+        var changes: [RecentCommit.FileChange] = []
+        var index = 0
+        while index < tokens.count {
+            let code = tokens[index]
+            guard let status = code.first, "ACDMRT".contains(status) else { return nil }
+            index += 1
+            let original: String?
+            if status == "R" || status == "C" {
+                guard index < tokens.count, !tokens[index].isEmpty else { return nil }
+                original = tokens[index]
+                index += 1
+            } else {
+                original = nil
+            }
+            guard index < tokens.count, !tokens[index].isEmpty else { return nil }
+            changes.append(.init(
+                status: status, path: tokens[index], originalPath: original,
+                fromStashUntracked: fromUntracked
+            ))
+            index += 1
+        }
+        return changes
+    }
+
+    /// File details are fetched only for an expanded stash, never per status poll.
+    func loadStashFiles(for stash: Stash) {
+        guard isRepo, stashes.contains(stash) else { return }
+        if let cached = stashFilesByOID[stash.oid] {
+            switch cached {
+            case .loading, .loaded: return
+            case .failed: break
+            }
+        }
+        stashFilesByOID[stash.oid] = .loading
+        let generation = contextGeneration
+        let root = repoRoot
+        let backend = backend
+        Task { [weak self] in
+            let state = await Task.detached(priority: .utility) { () async -> StashFilesState in
+                let tracked = await GitCommandExecution.run([
+                    "diff", "--name-status", "-z", "--no-ext-diff",
+                    stash.baseHash, stash.oid, "--"
+                ], in: root, backend: backend)
+                guard tracked.status == 0,
+                      let trackedFiles = Self.parseStashFileChanges(tracked.stdout) else {
+                    return .failed(tracked.stderr.isEmpty
+                        ? String(localized: "Unable to read stash changes", table: "Git")
+                        : tracked.stderr)
+                }
+                guard let untracked = stash.untrackedFilesHash else { return .loaded(trackedFiles) }
+                let extra = await GitCommandExecution.run([
+                    "diff-tree", "--root", "-r", "--name-status", "-z",
+                    "--no-commit-id", untracked, "--"
+                ], in: root, backend: backend)
+                guard extra.status == 0,
+                      let extraFiles = Self.parseStashFileChanges(extra.stdout, fromUntracked: true) else {
+                    return .failed(extra.stderr.isEmpty
+                        ? String(localized: "Unable to read stash changes", table: "Git")
+                        : extra.stderr)
+                }
+                return .loaded(trackedFiles + extraFiles)
+            }.value
+            guard let self, self.contextGeneration == generation, self.repoRoot == root,
+                  self.stashes.contains(where: { $0.oid == stash.oid }) else { return }
+            self.stashFilesByOID[stash.oid] = state
+        }
     }
 
     private func clearRepositoryState(
@@ -2447,6 +2599,7 @@ final class GitStatusModel {
         defaultBranch = nil
         remotes = []
         recentCommits = []
+        stashFilesByOID = [:]
         historicalBinaryPaths = [:]
         pendingBinaryCommits.removeAll()
         hasMoreRecentCommits = false
@@ -2510,10 +2663,15 @@ final class GitStatusModel {
         hasMoreRecentCommits = result.hasMoreRecentCommits
         repositoryOperation = result.repositoryOperation
         stashes = result.stashes
+        let liveStashOIDs = Set(stashes.map(\.oid))
+        stashFilesByOID = stashFilesByOID.filter { liveStashOIDs.contains($0.key) }
 
         let entries = result.entries.map { entry in
             var entry = entry
             entry.repositoryRoot = result.topLevel
+            entry.snapshotGeneration = contextGeneration
+            entry.snapshotBranch = result.branch
+            entry.snapshotHeadOID = result.headOID
             return entry
         }
         // parseStatus already guarantees entries are unique per path, but a
@@ -2669,17 +2827,23 @@ final class GitStatusModel {
         let repoRoot = resolvedRoot
 
         let refs = await statusGit(Self.refSnapshotArguments, in: repoRoot)
-        if refs.status == 0 {
-            result.refsByName = parseRefSnapshot(refs.stdout)
-            result.branches = result.refsByName.keys.compactMap { name in
-                name.hasPrefix("refs/heads/") ? String(name.dropFirst("refs/heads/".count)) : nil
-            }.sorted()
+        guard refs.status == 0 else {
+            return .failed(gitFailureMessage(
+                refs, fallback: String(localized: "Unable to read Git status.", table: "Git")
+            ))
         }
+        result.refsByName = parseRefSnapshot(refs.stdout)
+        result.branches = result.refsByName.keys.compactMap { name in
+            name.hasPrefix("refs/heads/") ? String(name.dropFirst("refs/heads/".count)) : nil
+        }.sorted()
 
         let remoteRun = await statusGit(["remote"], in: repoRoot)
-        if remoteRun.status == 0 {
-            result.remotes = remoteRun.stdout.split(separator: "\n").map(String.init).sorted()
+        guard remoteRun.status == 0 else {
+            return .failed(gitFailureMessage(
+                remoteRun, fallback: String(localized: "Unable to read Git status.", table: "Git")
+            ))
         }
+        result.remotes = remoteRun.stdout.split(separator: "\n").map(String.init).sorted()
 
         // A clone records its remote's default branch as a symbolic HEAD.
         // Prefer origin when more than one remote is present because that is
@@ -2722,11 +2886,20 @@ final class GitStatusModel {
         result.stashes = stashes
 
         let gitDir = await statusGit(["rev-parse", "--absolute-git-dir"], in: repoRoot)
-        if gitDir.status == 0 {
-            let path = strippingTrailingLineEnding(gitDir.stdout)
-            result.repositoryOperation = await detectRepositoryOperation(
+        guard gitDir.status == 0 else {
+            return .failed(gitFailureMessage(
+                gitDir, fallback: String(localized: "Unable to read Git status.", table: "Git")
+            ))
+        }
+        let path = strippingTrailingLineEnding(gitDir.stdout)
+        do {
+            result.repositoryOperation = try await detectRepositoryOperation(
                 gitDirectory: path, backend: backend
             )
+        } catch WorkspaceError.timedOut {
+            return .failed(timeoutMessage)
+        } catch {
+            return .failed(error.localizedDescription)
         }
         return .repository(result)
     }
@@ -2838,11 +3011,16 @@ final class GitStatusModel {
     /// One round trip instead of one per marker.
     private nonisolated static func remoteRepositoryOperation(
         gitDirectory: String, backend: WorkspaceBackend
-    ) async -> String? {
-        guard let result = try? await backend.run(
+    ) async throws -> String? {
+        let result = try await backend.run(
             argv: ["sh", "-c", RemoteCommands.repositoryOperationCommand(gitDirectory: gitDirectory)],
             cwd: nil, env: nil, stdin: nil, timeout: nil
-        ), result.status == 0 else { return nil }
+        )
+        guard result.status == 0 else {
+            throw RemoteConnectionError.commandFailed(
+                status: result.status, message: String(decoding: result.stderr, as: UTF8.self)
+            )
+        }
         let marker = String(decoding: result.stdout, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         switch marker {
@@ -2877,15 +3055,13 @@ final class GitStatusModel {
         let records = output.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
         var result = StatusResult()
         var index = 0
-        // Porcelain v2 can report the same path twice: when a file was removed
-        // from the index (`git rm --cached`, `git update-index --force-remove`)
-        // but still exists in the worktree, git lists it as a staged deletion
-        // ("1 D.") and again as untracked ("? "). Git's own v1 short format
-        // shows only the deletion, and every consumer keys rows by path
-        // (Entry.id == path), so the first record for a path wins.
+        // After `git rm --cached`, Git reports both staged deletion and
+        // untracked content at the same path. Those belong to different
+        // sections; keep each while deduplicating within its own section.
         var parsedPaths: Set<String> = []
         func addEntry(_ entry: Entry) {
-            guard parsedPaths.insert(entry.path).inserted else { return }
+            let key = entry.path + "\0" + (entry.staged == "?" ? "untracked" : "tracked")
+            guard parsedPaths.insert(key).inserted else { return }
             result.entries.append(entry)
         }
         while index < records.count {
@@ -3086,7 +3262,7 @@ final class GitStatusModel {
     private nonisolated static func recentCommitLogArguments(limit: Int) -> [String] {
         [
             "log", "-n", "\(limit + 1)", "--branches", "--remotes", "--tags", "HEAD",
-            "--topo-order", "--diff-merges=first-parent", "--decorate=full",
+            "--date-order", "--diff-merges=first-parent", "--decorate=full",
             "--pretty=format:%x1e%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%P%x1f%(decorate:prefix=,suffix=,separator=%x1d)",
             "--name-status", "-z",
         ]
@@ -3182,31 +3358,31 @@ final class GitStatusModel {
 
     nonisolated static func detectRepositoryOperation(
         gitDirectory: String, backend: WorkspaceBackend
-    ) async -> String? {
+    ) async throws -> String? {
         let git = URL(fileURLWithPath: gitDirectory, isDirectory: true)
         if !(backend is LocalWorkspaceBackend) {
-            return await remoteRepositoryOperation(gitDirectory: gitDirectory, backend: backend)
+            return try await remoteRepositoryOperation(gitDirectory: gitDirectory, backend: backend)
         }
-        func exists(_ name: String) async -> Bool {
+        func exists(_ name: String) async throws -> Bool {
             let path = git.appendingPathComponent(name).path
-            return (try? await backend.stat(path: path)) != nil
+            return try await backend.stat(path: path) != nil
         }
 
-        let merging = await exists("rebase-merge")
-        let applying = await exists("rebase-apply")
+        let merging = try await exists("rebase-merge")
+        let applying = try await exists("rebase-apply")
         if merging || applying {
             return String(localized: "Rebase in progress", table: "Git")
         }
-        if await exists("MERGE_HEAD") {
+        if try await exists("MERGE_HEAD") {
             return String(localized: "Merge in progress", table: "Git")
         }
-        if await exists("CHERRY_PICK_HEAD") {
+        if try await exists("CHERRY_PICK_HEAD") {
             return String(localized: "Cherry-pick in progress", table: "Git")
         }
-        if await exists("REVERT_HEAD") {
+        if try await exists("REVERT_HEAD") {
             return String(localized: "Revert in progress", table: "Git")
         }
-        if await exists("BISECT_LOG") {
+        if try await exists("BISECT_LOG") {
             return String(localized: "Bisect in progress", table: "Git")
         }
         return nil

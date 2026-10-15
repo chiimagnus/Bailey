@@ -45,6 +45,7 @@ struct GitPanel: View {
     }
     @State private var pendingDiscard: GitStatusModel.PendingDiscard?
     @State private var pendingDiscardAll: [GitStatusModel.PendingDiscard] = []
+    @State private var pendingDiscardAllTrigger: OperationTrigger = .discardAll
     @State private var preparingDiscard = false
     @State private var confirmDiscardAll = false
     @State private var mergeCollapsed = false
@@ -58,7 +59,6 @@ struct GitPanel: View {
         )
     }
     @State private var historyCollapsed = false
-    @State private var stashesCollapsed = false
     @State private var expandedCommitIDs: Set<String> = []
     @State private var filterText = ""
     @State private var showFilter = false
@@ -134,22 +134,28 @@ struct GitPanel: View {
                 get: { confirmDiscardAll },
                 set: {
                     confirmDiscardAll = $0
-                    if !$0 { pendingDiscardAll = [] }
+                    if !$0 {
+                        pendingDiscardAll = []
+                        pendingDiscardAllTrigger = .discardAll
+                    }
                 }
             ),
             titleVisibility: .visible
         ) {
-            Button(String(localized: "Discard All Changes", table: "Sidebar"), role: .destructive) {
+            Button(pendingDiscardAllTrigger == .discardAll
+                   ? String(localized: "Discard All Changes", table: "Sidebar")
+                   : String(localized: "Discard Changes", table: "Sidebar"), role: .destructive) {
                 let snapshot = pendingDiscardAll
+                let trigger = pendingDiscardAllTrigger
                 if remoteName != nil {
                     Task {
                         if await model.confirmRemoteDiscard(snapshot), model.isBusy {
                             operationExpanded = false
-                            operationTrigger = .discardAll
+                            operationTrigger = trigger
                         }
                     }
                 } else {
-                    performOperation(.discardAll) {
+                    performOperation(trigger) {
                         _ = model.confirmLocalDiscard(snapshot)
                     }
                 }
@@ -162,6 +168,7 @@ struct GitPanel: View {
             // A dialog must never carry a destructive file target across cwd.
             pendingDiscard = nil
             pendingDiscardAll = []
+            pendingDiscardAllTrigger = .discardAll
             confirmDiscardAll = false
         }
         .onChange(of: model.repositoryIdentity) {
@@ -170,6 +177,7 @@ struct GitPanel: View {
         .onChange(of: model.currentScope) {
             pendingDiscard = nil
             pendingDiscardAll = []
+            pendingDiscardAllTrigger = .discardAll
             confirmDiscardAll = false
         }
         .onChange(of: model.isBusy) {
@@ -1192,17 +1200,14 @@ struct GitPanel: View {
         panel.allowedContentTypes = [.zip]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = reference.replacingOccurrences(of: "/", with: "-") + ".zip"
-        let selector = GitArchiveFormatSelection(panel: panel)
-        panel.accessoryView = selector.accessory
         panel.beginSheetModal(for: window) { response in
-            _ = selector
             guard response == .OK, isCurrent(),
                   model.refsByName[reference]?.oid == objectOID,
                   let destination = panel.url,
                   project?.matchesPanelTarget(context.identity) == true else { return }
             Task { @MainActor in
                 await model.createArchive(reference: reference, objectOID: objectOID,
-                    format: selector.format, destination: destination, target: target)
+                    destination: destination, target: target)
             }
         }
     }
@@ -1522,7 +1527,8 @@ struct GitPanel: View {
     // Only text scrolls horizontally. Section controls and row actions remain
     // anchored to the visible sidebar, even for exceptionally long paths.
     private var changeList: some View {
-        ScrollView(.vertical) {
+        let graphCommits = model.graphCommits
+        return ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if model.totalChangeCount == 0 {
                     cleanState
@@ -1594,31 +1600,29 @@ struct GitPanel: View {
                         changedFileRows(filteredChangedEntries, kind: .unstaged)
                     }
                 }
-                if filterText.isEmpty, !model.stashes.isEmpty {
+                if filterText.isEmpty, !graphCommits.isEmpty {
                     PanelSectionHeader(
-                        title: String(localized: "STASHES", table: "Git"), count: model.stashCount,
-                        isCollapsed: $stashesCollapsed, actions: [], actionsDisabled: model.isBusy
-                    )
-                    if !stashesCollapsed {
-                        ForEach(model.stashes) { stash in stashRow(stash) }
-                    }
-                }
-                if filterText.isEmpty, !model.recentCommits.isEmpty {
-                    PanelSectionHeader(
-                        title: String(localized: "RECENT COMMITS", table: "Sidebar"),
-                        count: model.recentCommits.count,
+                        title: String(localized: "GIT GRAPH", table: "Git"),
+                        count: graphCommits.count,
                         isCollapsed: $historyCollapsed,
                         actions: [],
                         actionsDisabled: model.isBusy
                     )
                     if !historyCollapsed {
                         RecentCommitsView(
-                            commits: model.recentCommits,
+                            commits: graphCommits,
+                            stashFilesByOID: model.stashFilesByOID,
                             repoRoot: model.repoRoot,
                             fileAction: { commit, file, action in
                                 handleHistoricalFile(commit, file: file, action: action)
                             },
-                            loadBinaryStatus: model.loadHistoricalBinaryPaths,
+                            loadBinaryStatus: { commit in
+                                if let stash = commit.stash {
+                                    model.loadStashFiles(for: stash)
+                                } else {
+                                    model.loadHistoricalBinaryPaths(for: commit)
+                                }
+                            },
                             isBinaryFile: { commit, file in
                                 model.isHistoricalBinaryFile(commit: commit, path: file.path)
                             },
@@ -1659,6 +1663,10 @@ struct GitPanel: View {
                             canDropCommit: model.canDrop,
                             commitAction: { commit, action in
                                 presentCommitDialog(commit, action: action)
+                            },
+                            canActOnStash: !model.isBusy,
+                            stashAction: { stash, action in
+                                presentStashDialog(stash, action: action)
                             }
                         )
                         .frame(maxWidth: .infinity)
@@ -1683,12 +1691,7 @@ struct GitPanel: View {
             let byPath = Dictionary(entries.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
             ForEach(TreeDisplayModel.pathRows(files, section: kind.rawValue, collapsed: collapsedFolders)) { item in
                 if item.isDirectory {
-                    TreeFolderRow(row: item, scale: panelFontScale) {
-                        model.toggleCollapsedFolder(kind.rawValue + ":" + item.path)
-                    }
-                    .contextMenu {
-                        directoryMenu(path: item.path, kind: kind)
-                    }
+                    directoryRow(item, entries: entries, kind: kind)
                 } else if let entry = byPath[item.path] {
                     row(entry, kind: kind, showDirectory: false, displayRow: item)
                 }
@@ -1697,6 +1700,33 @@ struct GitPanel: View {
             ForEach(entries, id: \.path) { entry in
                 row(entry, kind: kind)
             }
+        }
+    }
+
+    private func directoryRow(
+        _ item: TreeDisplayModel.Row,
+        entries: [GitStatusModel.Entry], kind: GitEntryRow.Kind
+    ) -> some View {
+        let selected = entries.filter { $0.path.hasPrefix(item.path + "/") }
+        let stageTrigger = OperationTrigger.entry(path: item.path, operation: .stage)
+        let unstageTrigger = OperationTrigger.entry(path: item.path, operation: .unstage)
+        let discardTrigger = OperationTrigger.entry(path: item.path, operation: .discard)
+        return TreeFolderRow(row: item, scale: panelFontScale, toggle: {
+            model.toggleCollapsedFolder(kind.rawValue + ":" + item.path)
+        }) { active in
+            GitChangeRowActions(
+                kind: kind, active: active, disabled: model.isBusy,
+                isStageLoading: operationIsLoading(stageTrigger),
+                isUnstageLoading: operationIsLoading(unstageTrigger),
+                isDiscardLoading: operationIsLoading(discardTrigger),
+                stage: { performOperation(stageTrigger) { model.stageEntries(selected) } },
+                unstage: { performOperation(unstageTrigger) { model.unstageEntries(selected) } },
+                discard: { requestDiscard(selected, trigger: discardTrigger) }
+            )
+        }
+        .contextMenu {
+            directoryMenu(path: item.path, selected: selected, kind: kind,
+                          stageTrigger: stageTrigger, unstageTrigger: unstageTrigger)
         }
     }
 
@@ -1772,7 +1802,8 @@ struct GitPanel: View {
             openHead: kind != .merge && model.hasHead && entry.staged != "A" && !entry.isUntracked ? {
                 openHeadFile(entry)
             } : nil,
-            ignore: kind == .unstaged ? { ignorePaths([entry.path], isDirectory: false) } : nil,
+            ignore: kind == .unstaged && entry.staged == "?"
+                ? { ignorePaths([entry.path], isDirectory: false) } : nil,
             stage: { performOperation(stageTrigger) { model.stage(entry) } },
             unstage: { performOperation(unstageTrigger) { model.unstage(entry) } },
             discard: {
@@ -1806,42 +1837,12 @@ struct GitPanel: View {
         ]
     }
 
-    private func stashRow(_ stash: GitStatusModel.Stash) -> some View {
-        TreeRowSurface(depth: 0, scale: panelFontScale, showsGuides: false) { _, layout in
-            HStack(spacing: TreeRowStyle.iconSpacing) {
-                Image(systemName: "archivebox")
-                    .foregroundStyle(.secondary)
-                    .frame(width: TreeRowStyle.iconSize, height: TreeRowStyle.iconSize)
-                Text(verbatim: stash.selector + ": " + stash.message)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .panelFont(size: TreeRowStyle.fontSize)
-            .modifier(layout)
-        }
-        .help(stash.selector + ": " + stash.message)
-        .focusable()
-        .contextMenu {
-            ForEach(GitStatusModel.StashAction.allCases, id: \.self) { action in
-                Button(action.title) { presentStashDialog(stash, action: action) }
-                    .disabled(model.isBusy)
-            }
-            Divider()
-            Button(String(localized: "Copy Stash Name", table: "Git")) { copyToPasteboard(stash.selector) }
-            Button(String(localized: "Copy Stash Hash", table: "Git")) { copyToPasteboard(stash.oid) }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityAction(named: Text(GitStatusModel.StashAction.apply.title)) { presentStashDialog(stash, action: .apply) }
-        .accessibilityAction(named: Text(GitStatusModel.StashAction.branch.title)) { presentStashDialog(stash, action: .branch) }
-        .accessibilityAction(named: Text(GitStatusModel.StashAction.pop.title)) { presentStashDialog(stash, action: .pop) }
-        .accessibilityAction(named: Text(GitStatusModel.StashAction.drop.title)) { presentStashDialog(stash, action: .drop) }
-    }
-
     func presentStashDialog(_ stash: GitStatusModel.Stash, action: GitStatusModel.StashAction) {
         guard !model.isBusy, let window = manager.attachedWindow, let project,
               manager.selectedProject === project, let context = project.panelContext,
               model.matchesPanelTarget(context.identity) else { return }
         let target = model.actionTarget()
+        let selectedStashes = model.stashes
         let isCurrent: @MainActor () -> Bool = {
             manager.attachedWindow === window && manager.selectedProject === project
                 && project.matchesPanelTarget(context.identity)
@@ -1854,7 +1855,7 @@ struct GitPanel: View {
             performOperation(.moreMenu) {
                 model.actOnStash(stash, action: action, reinstateIndex: dialog.reinstateIndex.state == .on,
                     branchName: dialog.name.stringValue, target: target,
-                    prepare: {
+                    expectedStashes: selectedStashes, prepare: {
                         await project.saveBeforeGitAction(repository: target.repository, scope: target.scope, isCurrent: isCurrent)
                     }, isCurrentTarget: {
                         isCurrent() && (action == .drop || project.canRunGitAction(repository: target.repository, scope: target.scope))
@@ -1908,42 +1909,41 @@ struct GitPanel: View {
         }
     }
 
-    private func entries(for kind: GitEntryRow.Kind) -> [GitStatusModel.Entry] {
-        switch kind {
-        case .merge: model.mergeEntries
-        case .staged: model.stagedEntries
-        case .unstaged: model.changedEntries
-        }
-    }
-
     @ViewBuilder
-    private func directoryMenu(path: String, kind: GitEntryRow.Kind) -> some View {
-        let selected = entries(for: kind).filter { $0.path.hasPrefix(path + "/") }
+    private func directoryMenu(
+        path: String, selected: [GitStatusModel.Entry], kind: GitEntryRow.Kind,
+        stageTrigger: OperationTrigger, unstageTrigger: OperationTrigger
+    ) -> some View {
         if kind == .staged {
             Button(String(localized: "Unstage Changes", table: "Sidebar")) {
-                performOperation(.unstageAll) { model.unstageEntries(selected) }
+                performOperation(unstageTrigger) { model.unstageEntries(selected) }
             }.disabled(model.isBusy)
         } else {
             Button(kind == .merge ? String(localized: "Mark Resolved (Stage)", table: "Sidebar")
                    : String(localized: "Stage Changes", table: "Sidebar")) {
-                performOperation(.stageAll) { model.stageEntries(selected) }
+                performOperation(stageTrigger) { model.stageEntries(selected) }
             }.disabled(model.isBusy)
             if kind == .unstaged {
                 Button(String(localized: "Discard Changes…", table: "Sidebar")) {
-                    requestDiscard(selected)
+                    requestDiscard(selected, trigger: .entry(path: path, operation: .discard))
                 }.disabled(model.isBusy)
-                Button(String(localized: "Add to .gitignore", table: "Git")) {
-                    ignorePaths([path], isDirectory: true)
-                }.disabled(model.isBusy)
+                if selected.contains(where: { $0.staged == "?" }) {
+                    Button(String(localized: "Add to .gitignore", table: "Git")) {
+                        ignorePaths([path], isDirectory: true)
+                    }.disabled(model.isBusy)
+                }
             }
         }
     }
 
-    private func requestDiscard(_ entries: [GitStatusModel.Entry]) {
+    private func requestDiscard(
+        _ entries: [GitStatusModel.Entry], trigger: OperationTrigger
+    ) {
         if remoteName != nil {
-            prepareRemoteDiscard(entries, all: true)
+            prepareRemoteDiscard(entries, all: true, trigger: trigger)
         } else {
             pendingDiscardAll = model.prepareLocalDiscard(entries)
+            pendingDiscardAllTrigger = trigger
             confirmDiscardAll = !pendingDiscardAll.isEmpty
         }
     }
@@ -2058,11 +2058,15 @@ struct GitPanel: View {
             prepareRemoteDiscard(model.changedEntries, all: true)
         } else {
             pendingDiscardAll = model.prepareLocalDiscard(model.changedEntries)
+            pendingDiscardAllTrigger = .discardAll
             confirmDiscardAll = !pendingDiscardAll.isEmpty
         }
     }
 
-    private func prepareRemoteDiscard(_ entries: [GitStatusModel.Entry], all: Bool) {
+    private func prepareRemoteDiscard(
+        _ entries: [GitStatusModel.Entry], all: Bool,
+        trigger: OperationTrigger = .discardAll
+    ) {
         guard !preparingDiscard, !entries.isEmpty else { return }
         preparingDiscard = true
         Task {
@@ -2071,6 +2075,7 @@ struct GitPanel: View {
                 let snapshots = try await model.prepareRemoteDiscard(entries)
                 if all {
                     pendingDiscardAll = snapshots
+                    pendingDiscardAllTrigger = trigger
                     confirmDiscardAll = true
                 } else {
                     pendingDiscard = snapshots.first
@@ -2249,53 +2254,17 @@ struct GitPanel: View {
         operationTrigger = nil
         pendingDiscard = nil
         pendingDiscardAll = []
+        pendingDiscardAllTrigger = .discardAll
         confirmDiscardAll = false
         mergeCollapsed = false
         stagedCollapsed = false
         changesCollapsed = false
         historyCollapsed = false
-        stashesCollapsed = false
         expandedCommitIDs.removeAll()
     }
 
     private func shellQuoted(_ path: String) -> String {
         "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-}
-
-@MainActor
-private final class GitArchiveFormatSelection: NSObject {
-    let accessory: NSStackView
-    private let choice = NSPopUpButton()
-    private weak var panel: NSSavePanel?
-
-    var format: GitStatusModel.ArchiveFormat {
-        choice.indexOfSelectedItem == 1 ? .tar : .zip
-    }
-
-    init(panel: NSSavePanel) {
-        self.panel = panel
-        choice.addItems(withTitles: ["ZIP (.zip)", "TAR (.tar)"])
-        choice.selectItem(at: 0)
-        accessory = NSStackView(views: [
-            NSTextField(labelWithString: String(localized: "Archive Format", table: "Git")), choice
-        ])
-        accessory.orientation = .horizontal
-        accessory.spacing = 12
-        accessory.frame = NSRect(x: 0, y: 0, width: 300, height: 34)
-        super.init()
-        choice.target = self
-        choice.action = #selector(updateFormat)
-    }
-
-    @objc private func updateFormat() {
-        guard let panel else { return }
-        let extensionName = format.rawValue
-        let name = (panel.nameFieldStringValue as NSString).deletingPathExtension
-        panel.allowedContentTypes = [
-            format == .zip ? .zip : (UTType(filenameExtension: "tar") ?? UTType(importedAs: "public.tar-archive"))
-        ]
-        panel.nameFieldStringValue = name + "." + extensionName
     }
 }
 
@@ -2338,77 +2307,14 @@ private struct GitEntryRow: View {
                 : String(localized: "Opens changes", table: "Sidebar"),
             open: openDiff
         ) { active in
-            if !disabled || isStageLoading || isUnstageLoading || isDiscardLoading {
-                hoverActions
-                    .opacity(isStageLoading || isUnstageLoading || isDiscardLoading
-                             ? 1 : (active ? 1 : 0.55))
-            }
+            GitChangeRowActions(
+                kind: kind, active: active, disabled: disabled,
+                isStageLoading: isStageLoading, isUnstageLoading: isUnstageLoading,
+                isDiscardLoading: isDiscardLoading,
+                stage: stage, unstage: unstage, discard: discard
+            )
         }
         .contextMenu { menu }
-    }
-
-    private var hoverActions: some View {
-        HStack(spacing: 0) {
-            switch kind {
-            case .merge:
-                rowButton(
-                    "plus",
-                    help: String(localized: "Mark Resolved (Stage)", table: "Sidebar"),
-                    isLoading: isStageLoading,
-                    action: stage
-                )
-            case .staged:
-                rowButton(
-                    "minus",
-                    help: String(localized: "Unstage Changes", table: "Sidebar"),
-                    isLoading: isUnstageLoading,
-                    action: unstage
-                )
-            case .unstaged:
-                rowButton(
-                    "arrow.uturn.backward",
-                    help: String(localized: "Discard Changes", table: "Sidebar"),
-                    isLoading: isDiscardLoading,
-                    action: discard
-                )
-                rowButton(
-                    "plus",
-                    help: String(localized: "Stage Changes", table: "Sidebar"),
-                    isLoading: isStageLoading,
-                    action: stage
-                )
-            }
-        }
-    }
-
-    private func rowButton(
-        _ systemImage: String,
-        help: String,
-        isLoading: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Group {
-                if isLoading {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .scaleEffect(0.7)
-                } else {
-                    Image(systemName: systemImage)
-                        .panelFont(size: 9, weight: .semibold)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(width: 16, height: TreeRowStyle.rowHeight(fontScale))
-            .padding(.horizontal, 3)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .help(help)
-        .accessibilityLabel(
-            isLoading ? String(localized: "\(help), in progress", table: "Sidebar") : help
-        )
     }
 
     @ViewBuilder
@@ -2466,5 +2372,77 @@ private struct GitEntryRow: View {
         if entry.isWorktreeRename { return String(localized: "Undo Rename…", table: "Sidebar") }
         return String(localized: "Discard Changes…", table: "Sidebar")
     }
+}
 
+private struct GitChangeRowActions: View {
+    let kind: GitEntryRow.Kind
+    let active: Bool
+    let disabled: Bool
+    let isStageLoading: Bool
+    let isUnstageLoading: Bool
+    let isDiscardLoading: Bool
+    let stage: () -> Void
+    let unstage: () -> Void
+    let discard: () -> Void
+
+    @Environment(\.panelFontScale) private var fontScale
+
+    var body: some View {
+        if !disabled || isStageLoading || isUnstageLoading || isDiscardLoading {
+            HStack(spacing: 0) {
+                switch kind {
+                case .merge:
+                    rowButton(
+                        "plus", help: String(localized: "Mark Resolved (Stage)", table: "Sidebar"),
+                        isLoading: isStageLoading, action: stage
+                    )
+                case .staged:
+                    rowButton(
+                        "minus", help: String(localized: "Unstage Changes", table: "Sidebar"),
+                        isLoading: isUnstageLoading, action: unstage
+                    )
+                case .unstaged:
+                    rowButton(
+                        "arrow.uturn.backward",
+                        help: String(localized: "Discard Changes", table: "Sidebar"),
+                        isLoading: isDiscardLoading, action: discard
+                    )
+                    rowButton(
+                        "plus", help: String(localized: "Stage Changes", table: "Sidebar"),
+                        isLoading: isStageLoading, action: stage
+                    )
+                }
+            }
+            .opacity(isStageLoading || isUnstageLoading || isDiscardLoading
+                     ? 1 : (active ? 1 : 0.55))
+        }
+    }
+
+    private func rowButton(
+        _ systemImage: String, help: String,
+        isLoading: Bool, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Group {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .scaleEffect(0.7)
+                } else {
+                    Image(systemName: systemImage)
+                        .panelFont(size: 9, weight: .semibold)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 16, height: TreeRowStyle.rowHeight(fontScale))
+            .padding(.horizontal, 3)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .help(help)
+        .accessibilityLabel(
+            isLoading ? String(localized: "\(help), in progress", table: "Sidebar") : help
+        )
+    }
 }

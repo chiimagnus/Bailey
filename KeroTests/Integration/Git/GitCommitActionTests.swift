@@ -221,6 +221,36 @@ final class GitCommitActionTests: XCTestCase {
         XCTAssertEqual(try git(["diff", "--cached", "--name-only"]), "tracked.txt")
     }
 
+    func testSquashAlreadyUpToDateDoesNotCommitPreexistingStagedWork() async throws {
+        let head = try git(["rev-parse", "HEAD"])
+        try "private".write(to: directory.appendingPathComponent("private.txt"),
+                            atomically: true, encoding: .utf8)
+        _ = try git(["add", "private.txt"])
+        let selected = try await target(head)
+        model.actOnCommit(selected, action: .merge, target: model.actionTarget(), squash: true)
+        try await settle()
+        XCTAssertNotNil(model.lastError, "A no-op squash must not auto-commit unrelated staged work")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try git(["diff", "--cached", "--name-only"]), "private.txt")
+    }
+
+    func testSquashRejectsPreexistingStagedWorkBeforeMergingOtherCommit() async throws {
+        let original = try git(["rev-parse", "HEAD"])
+        _ = try git(["switch", "-c", "topic"])
+        let topic = try commit("topic", text: "topic\n")
+        _ = try git(["switch", "main"])
+        try "private".write(to: directory.appendingPathComponent("private.txt"),
+                            atomically: true, encoding: .utf8)
+        _ = try git(["add", "private.txt"])
+        let selected = try await target(topic)
+        model.actOnCommit(selected, action: .merge, target: model.actionTarget(), squash: true)
+        try await settle()
+        XCTAssertNotNil(model.lastError, "Squash must not commit pre-staged user content")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), original)
+        XCTAssertEqual(try git(["diff", "--cached", "--name-only"]), "private.txt")
+        XCTAssertEqual(try git(["show", ":tracked.txt"]), "root")
+    }
+
     func testMergeOptionsSquashMessageAndNoEmptyCommit() async throws {
         let root = try git(["rev-parse", "HEAD"])
         _ = try git(["switch", "-c", "side"])
