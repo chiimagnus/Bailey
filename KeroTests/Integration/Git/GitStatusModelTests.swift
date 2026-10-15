@@ -463,7 +463,7 @@ final class GitStatusModelTests: XCTestCase {
         model.refresh()
         try await wait { model.statusError != nil && !model.isRefreshing }
         XCTAssertEqual(model.stashes, priorStashes)
-        XCTAssertEqual(model.stashCount, 1)
+        XCTAssertEqual(model.stashes.count, 1)
         await backend.setStashListUnavailable(false)
         try git(["stash", "clear"])
         model.refresh()
@@ -488,6 +488,72 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { !model.isRefreshing }
         XCTAssertNil(model.statusError)
         XCTAssertNil(model.repositoryOperation)
+    }
+
+    func testStashFileLoadRejectsStaleSSHChannelAndRetriesAfterFailure() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kero-stash-ssh-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [
+            ["init", "-q", "-b", "main"],
+            ["config", "user.name", "Stash Channel Test"],
+            ["config", "user.email", "stash-ssh@invalid"],
+            ["config", "commit.gpgsign", "false"]
+        ] {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let file = directory.appendingPathComponent("tracked.txt")
+        try "baseline\n".write(to: file, atomically: true, encoding: .utf8)
+        XCTAssertEqual(GitCommandExecution.run(["add", "."], in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "base"], in: directory.path).status, 0)
+        try "stash change\n".write(to: file, atomically: true, encoding: .utf8)
+        XCTAssertEqual(GitCommandExecution.run(
+            ["stash", "push", "-qm", "saved"], in: directory.path
+        ).status, 0)
+
+        let oldChannel = DiscardRemoteWorkspaceFixture()
+        let newChannel = DiscardRemoteWorkspaceFixture()
+        defer { Task { await oldChannel.releaseGitRequest() } }
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: oldChannel, scope: "ssh:fixture")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing && model.isRepo }
+        let selected = try XCTUnwrap(model.stashes.first)
+        await oldChannel.suspendNextGitRequest()
+        model.loadStashFiles(for: selected)
+        let deadline = Date().addingTimeInterval(5)
+        while await !oldChannel.awaitingGit, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let paused = await oldChannel.awaitingGit
+        XCTAssertTrue(paused)
+        XCTAssertEqual(model.stashFilesByOID[selected.oid], .loading)
+
+        model.sync(root: directory.path, backend: newChannel, scope: "ssh:fixture")
+        XCTAssertNil(model.stashFilesByOID[selected.oid],
+                     "Replacing a channel must release the old loading indicator")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing && model.isRepo }
+        let current = try XCTUnwrap(model.stashes.first)
+        await newChannel.setGitUnavailable(true)
+        model.loadStashFiles(for: current)
+        try await wait {
+            if case .failed = model.stashFilesByOID[current.oid] { return true }
+            return false
+        }
+        await newChannel.setGitUnavailable(false)
+        model.loadStashFiles(for: current)
+        try await wait {
+            if case .loaded = model.stashFilesByOID[current.oid] { return true }
+            return false
+        }
+        await oldChannel.setGitUnavailable(true)
+        await oldChannel.releaseGitRequest()
+        if case .loaded(let changes) = model.stashFilesByOID[current.oid] {
+            XCTAssertEqual(changes.map(\.path), ["tracked.txt"])
+        } else {
+            XCTFail("A completed new SSH read must not be overwritten by the old channel")
+        }
     }
 
     func testReplacingSSHBackendDoesNotWaitForStaleGitWorker() async throws {

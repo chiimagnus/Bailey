@@ -59,7 +59,8 @@ final class RecentCommitsViewTests: XCTestCase {
 
     private func hostHistory(
         _ commits: [GitStatusModel.RecentCommit], selection: GraphSelection,
-        height: CGFloat = 200, viewMode: GitViewMode = .list
+        height: CGFloat = 200, viewMode: GitViewMode = .list,
+        stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in }
     ) -> NSWindow {
         let width: CGFloat = 260
         let window = NSWindow(
@@ -79,7 +80,8 @@ final class RecentCommitsViewTests: XCTestCase {
             switchBranch: { _ in }, branchAction: { _, _, _ in }, remoteAction: { _, _, _ in }, tagAction: { _, _, _ in },
             isAnnotatedTag: { _ in false },
             canFetchRemoteBranch: { _ in false }, createBranch: { _ in }, addTag: { _ in },
-            canActOnCommit: true, canDropCommit: { _ in false }, commitAction: { _, _ in }
+            canActOnCommit: true, canDropCommit: { _ in false }, commitAction: { _, _ in },
+            stashAction: stashAction
         ).frame(width: width, height: height, alignment: .topLeading)
             .background(Color(nsColor: Theme.sidebar)))
         window.orderFront(nil)
@@ -390,6 +392,43 @@ final class RecentCommitsViewTests: XCTestCase {
             XCTAssertFalse(titles.contains(String(localized: "Create Branch at Commit…", table: "Git")), name)
             XCTAssertTrue(selection.expanded.isEmpty, "Requesting a context menu must not trigger a left action")
         }
+    }
+
+    func testStashIsANodeInTheSameGraphWithOnlyStashActions() throws {
+        let stash = GitStatusModel.Stash(
+            selector: "stash@{0}", oid: String(repeating: "d", count: 40),
+            message: "saved work", baseHash: String(repeating: "b", count: 40),
+            untrackedFilesHash: nil, author: "Tester", date: .now
+        )
+        let base = GitStatusModel.RecentCommit(
+            hash: stash.baseHash, shortHash: "bbbbbbb", subject: "Base revision",
+            author: "Developer", date: .now, parentHashes: [],
+            references: [.init(kind: .currentBranch, name: "main")], files: []
+        )
+        let graph = GitStatusModel.graphCommits([base], stashes: [stash])
+        XCTAssertEqual(graph.count, 2)
+        XCTAssertEqual(graph.first?.stash?.selector, "stash@{0}")
+        XCTAssertEqual(graph.last?.hash, stash.baseHash)
+        XCTAssertTrue(CommitGraphLayout(commits: graph).rows[0].links.count > 0)
+
+        let selection = GraphSelection()
+        let height: CGFloat = 180
+        let window = hostHistory(graph, selection: selection, height: height)
+        defer { window.close() }
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .rightMouseDown, location: NSPoint(x: 112, y: height - 12),
+            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+            clickCount: 1, pressure: 1
+        ))
+        let menu = try XCTUnwrap(window.contentView?.menu(for: event))
+        let titles = menu.items.map(\.title)
+        XCTAssertTrue(titles.contains(String(localized: "Apply Stash…", table: "Git")))
+        XCTAssertTrue(titles.contains(String(localized: "Pop Stash…", table: "Git")))
+        XCTAssertTrue(titles.contains(String(localized: "Drop Stash…", table: "Git")))
+        XCTAssertFalse(titles.contains(String(localized: "Checkout Commit…", table: "Git")))
+        XCTAssertFalse(titles.contains(String(localized: "Reset Current Branch to Commit…", table: "Git")))
+        XCTAssertTrue(selection.expanded.isEmpty, "A right click must not toggle the stash")
     }
 
     func testTagBadgeDoesNotToggleExpandedCommitClosed() {

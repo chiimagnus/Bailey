@@ -18,6 +18,7 @@ struct RecentCommitsView: View {
     @State private var viewportWidth: CGFloat = 0
 
     let commits: [Commit]
+    let stashFilesByOID: [String: GitStatusModel.StashFilesState]
     let repoRoot: String
     let fileAction: (Commit, Commit.FileChange, HistoricalFileAction) -> Void
     let loadBinaryStatus: (Commit) -> Void
@@ -40,9 +41,13 @@ struct RecentCommitsView: View {
     let canActOnCommit: Bool
     let canDropCommit: (Commit) -> Bool
     let commitAction: (Commit, GitStatusModel.CommitAction) -> Void
+    let canActOnStash: Bool
+    let stashAction: (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void
 
     init(
-        commits: [Commit], repoRoot: String,
+        commits: [Commit],
+        stashFilesByOID: [String: GitStatusModel.StashFilesState] = [:],
+        repoRoot: String,
         fileAction: @escaping (Commit, Commit.FileChange, HistoricalFileAction) -> Void,
         loadBinaryStatus: @escaping (Commit) -> Void,
         isBinaryFile: @escaping (Commit, Commit.FileChange) -> Bool,
@@ -65,9 +70,12 @@ struct RecentCommitsView: View {
         addTag: @escaping (Commit) -> Void,
         canActOnCommit: Bool,
         canDropCommit: @escaping (Commit) -> Bool,
-        commitAction: @escaping (Commit, GitStatusModel.CommitAction) -> Void
+        commitAction: @escaping (Commit, GitStatusModel.CommitAction) -> Void,
+        canActOnStash: Bool = true,
+        stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in }
     ) {
         self.commits = commits
+        self.stashFilesByOID = stashFilesByOID
         self.repoRoot = repoRoot
         self.fileAction = fileAction
         self.loadBinaryStatus = loadBinaryStatus
@@ -92,6 +100,8 @@ struct RecentCommitsView: View {
         self.canActOnCommit = canActOnCommit
         self.canDropCommit = canDropCommit
         self.commitAction = commitAction
+        self.canActOnStash = canActOnStash
+        self.stashAction = stashAction
     }
 
     var body: some View {
@@ -111,19 +121,36 @@ struct RecentCommitsView: View {
                     commitRow(commit, graph: graph.rows[index], gutter: gutter,
                               spacing: spacing, expanded: expanded)
                     if expanded {
-                        commitFiles(commit, rails: graph.rows[index].bottomRails,
-                                    gutter: gutter, spacing: spacing)
+                        if let stash = commit.stash {
+                            switch stashFilesByOID[stash.oid] {
+                            case .loaded(let files):
+                                commitFiles(commit, files: files, rails: graph.rows[index].bottomRails,
+                                            gutter: gutter, spacing: spacing)
+                            case .failed(let message):
+                                stashDetailPlaceholder(message, rails: graph.rows[index].bottomRails,
+                                                       gutter: gutter, spacing: spacing)
+                            default:
+                                stashDetailPlaceholder(String(localized: "Loading stash changes…", table: "Git"),
+                                                       rails: graph.rows[index].bottomRails,
+                                                       gutter: gutter, spacing: spacing)
+                            }
+                        } else {
+                            commitFiles(commit, files: commit.files, rails: graph.rows[index].bottomRails,
+                                        gutter: gutter, spacing: spacing)
+                        }
                     }
                 }
             }
             if hasMoreCommits {
                 Color.clear.frame(height: 1)
                     .onAppear {
-                        if let id = commits.last?.id { requestMoreIfNeeded(after: id) }
+                        if let id = commits.last(where: { $0.stash == nil })?.id {
+                            requestMoreIfNeeded(after: id)
+                        }
                     }
             }
         }
-        .onChange(of: commits.last?.id) {
+        .onChange(of: commits.last(where: { $0.stash == nil })?.id) {
             requestedLastCommit = nil
         }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) {
@@ -174,7 +201,10 @@ struct RecentCommitsView: View {
                     .accessibilityValue(expanded
                         ? String(localized: "Expanded", table: "Git")
                         : String(localized: "Collapsed", table: "Git"))
-                    if !commit.references.isEmpty {
+                    if let stash = commit.stash {
+                        stashBadge(stash, in: commit)
+                            .layoutPriority(1)
+                    } else if !commit.references.isEmpty {
                         referenceStrip(commit.references, commit: commit)
                             .layoutPriority(1)
                     }
@@ -225,25 +255,59 @@ struct RecentCommitsView: View {
         .contentShape(Rectangle())
         .onTapGesture { toggle(commit) }
         .contextMenu {
-            Button(String(localized: "Create Branch at Commit…", table: "Git")) {
-                createBranch(commit)
-            }
-            .disabled(!canSwitchBranch)
-            Button(String(localized: "Create Tag at Commit…", table: "Git")) {
-                addTag(commit)
-            }
-            .disabled(!canSwitchBranch)
-            Divider()
-            ForEach(GitStatusModel.CommitAction.allCases, id: \.self) { action in
-                Button(action.title) { commitAction(commit, action) }
-                    .disabled(!canActOnCommit || (action == .drop && !canDropCommit(commit)))
-            }
-            Divider()
-            Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
-            Button(String(localized: "Copy Commit Subject", table: "Git")) {
-                copy(commit.subject)
+            if let stash = commit.stash {
+                stashActions(stash)
+            } else {
+                Button(String(localized: "Create Branch at Commit…", table: "Git")) {
+                    createBranch(commit)
+                }
+                .disabled(!canSwitchBranch)
+                Button(String(localized: "Create Tag at Commit…", table: "Git")) {
+                    addTag(commit)
+                }
+                .disabled(!canSwitchBranch)
+                Divider()
+                ForEach(GitStatusModel.CommitAction.allCases, id: \.self) { action in
+                    Button(action.title) { commitAction(commit, action) }
+                        .disabled(!canActOnCommit || (action == .drop && !canDropCommit(commit)))
+                }
+                Divider()
+                Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
+                Button(String(localized: "Copy Commit Subject", table: "Git")) {
+                    copy(commit.subject)
+                }
             }
         }
+    }
+
+    private func stashBadge(_ stash: GitStatusModel.Stash, in commit: Commit) -> some View {
+        Button { toggle(commit) } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "archivebox")
+                    .font(.system(size: 9 * fontScale))
+                Text(verbatim: stash.selector)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .font(.system(size: 10 * fontScale, weight: .medium))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7 * fontScale)
+            .padding(.vertical, 3 * fontScale)
+            .background(Capsule().fill(Color(nsColor: .systemGray)))
+        }
+        .buttonStyle(.plain)
+        .help(stash.selector + ": " + stash.message)
+        .contextMenu { stashActions(stash) }
+    }
+
+    @ViewBuilder
+    private func stashActions(_ stash: GitStatusModel.Stash) -> some View {
+        ForEach(GitStatusModel.StashAction.allCases, id: \.self) { action in
+            Button(action.title) { stashAction(stash, action) }
+                .disabled(!canActOnStash)
+        }
+        Divider()
+        Button(String(localized: "Copy Stash Name", table: "Git")) { copy(stash.selector) }
+        Button(String(localized: "Copy Stash Hash", table: "Git")) { copy(stash.oid) }
     }
 
     private func referenceStrip(_ references: [Reference], commit: Commit) -> some View {
@@ -424,13 +488,28 @@ struct RecentCommitsView: View {
         }
     }
 
+    private func stashDetailPlaceholder(
+        _ message: String, rails: [CommitGraphLayout.Rail], gutter: CGFloat, spacing: CGFloat
+    ) -> some View {
+        TreeRowSurface(
+            depth: 0, scale: fontScale, hoverEnabled: false,
+            leadingInset: gutter + 8 * fontScale
+        ) { _, layout in
+            Text(verbatim: message)
+                .font(.system(size: 9.5 * fontScale))
+                .foregroundStyle(.secondary)
+                .modifier(layout)
+        }
+        .background { fileRails(rails, spacing: spacing) }
+    }
+
     @ViewBuilder
     private func commitFiles(
-        _ commit: Commit, rails: [CommitGraphLayout.Rail],
+        _ commit: Commit, files: [Commit.FileChange], rails: [CommitGraphLayout.Rail],
         gutter: CGFloat, spacing: CGFloat
     ) -> some View {
         let filesInset = gutter + 8 * fontScale
-        if commit.files.isEmpty {
+        if files.isEmpty {
             TreeRowSurface(
                 depth: 0, scale: fontScale, hoverEnabled: false, leadingInset: filesInset
             ) { _, layout in
@@ -440,11 +519,12 @@ struct RecentCommitsView: View {
                     .modifier(layout)
             }
             .background { fileRails(rails, spacing: spacing) }
-        } else if viewMode == .tree {
-            let section = "commit:" + commit.hash
-            let byPath = Dictionary(commit.files.map { ($0.path, $0) },
+        } else if viewMode == .tree
+                    && (commit.stash == nil || Set(files.map(\.path)).count == files.count) {
+            let section = "commit:" + commit.id
+            let byPath = Dictionary(files.map { ($0.path, $0) },
                                     uniquingKeysWith: { first, _ in first })
-            let nodes = TreeDisplayModel.pathRows(commit.files.map(displayRow),
+            let nodes = TreeDisplayModel.pathRows(files.map(displayRow),
                                                   section: section, collapsed: collapsedFolders)
             ForEach(nodes) { node in
                 if node.isDirectory {
@@ -470,7 +550,7 @@ struct RecentCommitsView: View {
                 }
             }
         } else {
-            ForEach(commit.files) { file in
+            ForEach(files) { file in
                 changedFile(file, row: displayRow(file), in: commit,
                             showDirectory: true, inset: filesInset)
                     .background { fileRails(rails, spacing: spacing) }
@@ -493,7 +573,7 @@ struct RecentCommitsView: View {
             Button(String(localized: "Open Historical Diff", table: "Git")) {
                 openDiff(commit, file)
             }
-            if file.status != "D" {
+            if file.status != "D" && commit.stash == nil {
                 Button(String(localized: "View File at Revision", table: "Git")) {
                     fileAction(commit, file, .viewRevision)
                 }

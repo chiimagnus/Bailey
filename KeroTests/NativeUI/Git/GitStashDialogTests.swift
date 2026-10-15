@@ -5,7 +5,11 @@ import XCTest
 @MainActor
 final class GitStashDialogTests: XCTestCase {
     func testSpecificStashIdentityIndexDefaultsAndBranchInputValidation() {
-        let stash = GitStatusModel.Stash(selector: "stash@{2}", oid: String(repeating: "a", count: 40), message: "selected stash")
+        let stash = GitStatusModel.Stash(
+            selector: "stash@{2}", oid: String(repeating: "a", count: 40),
+            message: "selected stash", baseHash: String(repeating: "b", count: 40),
+            untrackedFilesHash: nil, author: "Tester", date: .now
+        )
         let target = GitStatusModel().actionTarget()
         for action in GitStatusModel.StashAction.allCases {
             let dialog = GitStashDialog(action: action, stash: stash, target: target)

@@ -121,12 +121,32 @@
         }
       }
     },
-    "STASHES" : {
+    "GIT GRAPH" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "储藏"
+            "value" : "Git 图谱"
+          }
+        }
+      }
+    },
+    "Loading stash changes…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载储藏变更…"
+          }
+        }
+      }
+    },
+    "Unable to read stash changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取储藏变更"
           }
         }
       }

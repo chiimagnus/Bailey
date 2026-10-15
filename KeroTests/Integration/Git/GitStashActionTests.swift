@@ -57,15 +57,109 @@ final class GitStashActionTests: XCTestCase {
 
     func testListSnapshotKeepsSelectorsOIDsAndMessagesAndCountIsDerived() async throws {
         try makeTwoStashes(); try await refresh()
-        XCTAssertEqual(model.stashCount, 2)
+        XCTAssertEqual(model.stashes.count, 2)
         XCTAssertEqual(model.stashes.map(\.selector), ["stash@{0}", "stash@{1}"])
         XCTAssertEqual(model.stashes[1].oid, try git(["rev-parse", "stash@{1}"]))
         XCTAssertTrue(model.stashes[1].message.contains("message a"))
         try git(["stash", "clear"]); model.refresh(); try await settle()
         XCTAssertTrue(model.stashes.isEmpty)
-        XCTAssertEqual(model.stashCount, 0)
+        XCTAssertEqual(model.stashes.count, 0)
         XCTAssertEqual(GitStatusModel.parseStashes(""), [])
         XCTAssertNil(GitStatusModel.parseStashes("broken\0record\0"))
+    }
+
+    func testStashGraphConnectsEachSelectorToItsBaseWithoutTreatingItAsANormalCommit() async throws {
+        try makeTwoStashes()
+        let duplicateOID = try git(["rev-parse", "stash@{1}"])
+        try git(["stash", "store", "-m", "duplicate", duplicateOID])
+        try await refresh()
+
+        let graph = model.graphCommits
+        let stashes = graph.filter { $0.stash != nil }
+        XCTAssertEqual(stashes.count, 3)
+        XCTAssertEqual(Set(stashes.map(\.id)).count, 3,
+                       "Two reflog selectors with identical Git hashes are still separate rows")
+        let baseOID = try git(["rev-parse", "HEAD"])
+        let basePosition = try XCTUnwrap(graph.firstIndex {
+            $0.hash == baseOID && $0.stash == nil
+        })
+        for node in stashes {
+            XCTAssertEqual(node.parentHashes, [baseOID],
+                           "The visual edge must never connect to the stash index/untracked parents")
+            XCTAssertEqual(node.stash?.baseHash, baseOID)
+        }
+        XCTAssertEqual(graph[basePosition].hash, baseOID)
+        XCTAssertEqual(graph.prefix(basePosition).filter { $0.stash != nil }.count, 3)
+
+        let sharedDate = Date(timeIntervalSince1970: 1000)
+        let many = (0..<12).map { index in
+            GitStatusModel.Stash(
+                selector: "stash@{\(index)}",
+                oid: String(repeating: "0", count: 39) + String(index, radix: 16),
+                message: "many", baseHash: baseOID, untrackedFilesHash: nil,
+                author: "Tester", date: sharedDate
+            )
+        }
+        XCTAssertEqual(GitStatusModel.graphCommits(model.recentCommits, stashes: many)
+            .compactMap { $0.stash?.selector }, many.map(\.selector),
+            "Stash ties follow numeric reflog order, not lexical selector order")
+        let layout = CommitGraphLayout(commits: graph)
+        XCTAssertEqual(layout.rows.count, graph.count)
+        XCTAssertTrue(layout.rows[..<basePosition].contains {
+            !$0.links.isEmpty
+        }, "The stash rows should draw real parent connections")
+
+        let detached = GitStatusModel.graphCommits([], stashes: model.stashes)
+        XCTAssertEqual(detached.count, 3)
+        XCTAssertTrue(CommitGraphLayout(commits: detached).rows.allSatisfy {
+            $0.links.isEmpty
+        }, "A history page without the base must not invent a graph connection")
+        try git(["stash", "clear"])
+        model.refresh()
+        try await settle()
+        XCTAssertEqual(model.graphCommits.count, model.recentCommits.count)
+    }
+
+    func testExpandedStashLoadsTrackedAndThirdParentUntrackedFiles() async throws {
+        try write("a.txt", "tracked changed\n")
+        try write("new file [1].txt", "untracked contents\n")
+        try git(["stash", "push", "-u", "-m", "with untracked"])
+        try await refresh()
+        let stash = try XCTUnwrap(model.stashes.first)
+        XCTAssertEqual(stash.baseHash, try git(["rev-parse", "HEAD"]))
+        XCTAssertNotNil(stash.untrackedFilesHash)
+        XCTAssertNil(model.stashFilesByOID[stash.oid], "Do not scan every stash during status refresh")
+
+        model.loadStashFiles(for: stash)
+        let deadline = Date().addingTimeInterval(15)
+        var files: [GitStatusModel.RecentCommit.FileChange]?
+        while Date() < deadline {
+            switch model.stashFilesByOID[stash.oid] {
+            case .loaded(let loaded):
+                files = loaded
+            case .failed(let message):
+                XCTFail(message)
+                throw WorkspaceError.notFound
+            default:
+                try await Task.sleep(for: .milliseconds(20))
+                continue
+            }
+            break
+        }
+        let changes = try XCTUnwrap(files)
+        XCTAssertTrue(changes.contains {
+            $0.path == "a.txt" && !$0.fromStashUntracked && $0.status == "M"
+        })
+        XCTAssertTrue(changes.contains {
+            $0.path == "new file [1].txt" && $0.fromStashUntracked && $0.status == "A"
+        })
+        let untrackedOID = try XCTUnwrap(stash.untrackedFilesHash)
+        XCTAssertEqual(try git(["show", untrackedOID + ":new file [1].txt"]), "untracked contents")
+        XCTAssertEqual(try git(["show", stash.oid + ":a.txt"]), "tracked changed")
+        XCTAssertEqual(try text("a.txt"), "base a\n")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("new file [1].txt").path
+        ))
     }
 
     func testApplySelectedStashRestoresActualIndexOnlyWhenRequestedAndKeepsReflog() async throws {
@@ -78,7 +172,7 @@ final class GitStashActionTests: XCTestCase {
             XCTAssertEqual(try text("a.txt"), "work a\n")
             XCTAssertEqual(try text("b.txt"), "base b\n")
             XCTAssertEqual(try git(["show", ":a.txt"]), restoreIndex ? "staged a" : "base a")
-            XCTAssertEqual(model.stashCount, 2)
+            XCTAssertEqual(model.stashes.count, 2)
             try git(["reset", "--hard", "HEAD"]); model.refresh(); try await settle()
         }
     }
@@ -134,7 +228,7 @@ final class GitStashActionTests: XCTestCase {
         try await settle()
         XCTAssertNil(model.lastError)
         XCTAssertEqual(try text("a.txt"), "work a\n")
-        XCTAssertEqual(model.stashCount, 3)
+        XCTAssertEqual(model.stashes.count, 3)
     }
 
     func testSameOIDStashSelectorShiftCannotDeleteAnotherReflogEntry() async throws {
@@ -181,7 +275,7 @@ final class GitStashActionTests: XCTestCase {
         model.actOnStash(model.stashes[1], action: .branch, branchName: "main", target: model.actionTarget())
         try await settle()
         XCTAssertNotNil(model.lastError)
-        XCTAssertEqual(model.stashCount, 2)
+        XCTAssertEqual(model.stashes.count, 2)
         let retained = model.stashes[0].oid
         model.actOnStash(model.stashes[1], action: .drop, target: model.actionTarget(), prepare: {
             XCTFail("Deleting only a reflog entry must not save unrelated edits")
@@ -200,7 +294,7 @@ final class GitStashActionTests: XCTestCase {
             model.actOnStash(selected, action: action, branchName: "refused", target: model.actionTarget(), prepare: { false })
             try await settle()
             XCTAssertNotNil(model.lastError)
-            XCTAssertEqual(model.stashCount, 2)
+            XCTAssertEqual(model.stashes.count, 2)
             XCTAssertEqual(try text("a.txt"), "base a\n")
             XCTAssertEqual(try git(["branch", "--list", "refused"]), "")
         }

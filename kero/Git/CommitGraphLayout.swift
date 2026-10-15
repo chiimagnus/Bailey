@@ -28,8 +28,8 @@ nonisolated struct CommitGraphLayout {
     let laneCount: Int
 
     init(commits: [GitStatusModel.RecentCommit]) {
-        let positions = Dictionary(uniqueKeysWithValues: commits.enumerated().map {
-            ($0.element.hash, $0.offset)
+        let positions = Dictionary(uniqueKeysWithValues: commits.enumerated().compactMap {
+            $0.element.stash == nil ? ($0.element.hash, $0.offset) : nil
         })
         var nodes = [Node?](repeating: nil, count: commits.count)
 
