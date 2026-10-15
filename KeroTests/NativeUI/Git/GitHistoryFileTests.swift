@@ -86,9 +86,26 @@ final class GitHistoryFileTests: XCTestCase {
         let editor = try XCTUnwrap(nativeText(in: host))
         XCTAssertEqual(editor.text, "history one\n")
         XCTAssertFalse(editor.isEditable)
+        XCTAssertFalse(editor.isAccessibilitySelectorAllowed(#selector(editor.setAccessibilityValue(_:))))
+        editor.setAccessibilityValue("unexpected accessibility edit")
+        XCTAssertEqual(editor.text, "history one\n")
         window.contentView = NSHostingView(rootView: DiffViewerView(diff: empty))
         try await wait { empty.nativeSurface != nil && self.nativeText(in: window.contentView!) != nil }
         XCTAssertFalse(try XCTUnwrap(nativeText(in: window.contentView!)).isEditable)
+    }
+
+    func testNativeDiffAccessibilityAllowsOnlyEditableTextChanges() {
+        let editor = DiffTextView(frame: .init(x: 0, y: 0, width: 300, height: 150))
+        editor.text = "original"
+        for editable in [false, true, false] {
+            editor.isEditable = editable
+            XCTAssertEqual(editor.isAccessibilitySelectorAllowed(#selector(editor.setAccessibilityValue(_:))), editable)
+            let previous = editor.text
+            let replacement = editable ? "editable change" : "readonly change"
+            editor.setAccessibilityValue(replacement)
+            XCTAssertEqual(editor.text, editable ? replacement : previous)
+            XCTAssertTrue(editor.isSelectable)
+        }
     }
 
     func testRevisionToWorktreeFollowsRenameAndRefreshesWithoutWritingHistoricalBlob() async throws {
