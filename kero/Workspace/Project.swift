@@ -193,6 +193,59 @@ final class Project: nonisolated Identifiable {
         panelContext?.identity == identity
     }
 
+    private func gitContents(repository: String, scope: String) -> [PaneContent] {
+        let base = scope == "local" ? (repository as NSString).standardizingPath : repository
+        let prefix = base.hasSuffix("/") ? base : base + "/"
+        return tabs.compactMap { tab in
+            switch tab.content {
+            case .file(let file):
+                guard (file.workspaceIdentity ?? "local") == scope,
+                      (scope == "local" ? (file.path as NSString).standardizingPath : file.path).hasPrefix(prefix) else { return nil }
+            case .diff(let diff):
+                guard (diff.workspaceIdentity ?? "local") == scope,
+                      diff.repoRoot == repository,
+                      (diff.source == .worktree || diff.source == .staged) else { return nil }
+            case .session, .browser: return nil
+            }
+            return tab.content
+        }
+    }
+
+    func saveBeforeGitAction(
+        repository: String, scope: String, isCurrent: () -> Bool
+    ) async -> Bool {
+        let contents = gitContents(repository: repository, scope: scope)
+        for content in contents {
+            guard isCurrent() else { return false }
+            await content.save()
+            guard isCurrent(), !content.isDirty else { return false }
+        }
+        return isCurrent() && gitContents(repository: repository, scope: scope).allSatisfy {
+            !$0.isDirty
+        }
+    }
+
+    func canRunGitAction(repository: String, scope: String) -> Bool {
+        gitContents(repository: repository, scope: scope).allSatisfy {
+            guard !$0.isDirty else { return false }
+            switch $0 {
+            case .file(let file): return !file.isSaving
+            case .diff(let diff): return !diff.isSaving
+            case .session, .browser: return true
+            }
+        }
+    }
+
+    func reloadAfterGitAction(repository: String, scope: String) {
+        for content in gitContents(repository: repository, scope: scope) {
+            switch content {
+            case .file(let file): file.reloadFromDiskIfClean()
+            case .diff(let diff): diff.reload(afterGitAction: true)
+            case .session, .browser: break
+            }
+        }
+    }
+
     /// Synchronize the project's Files tree; only the latest active workspace
     /// may publish its root, and a disconnected shell retains the last tree.
     func syncFiles(in manager: TerminalManager) async -> (PanelContext.RootSource, PanelContext.Identity)? {
@@ -247,9 +300,12 @@ final class Project: nonisolated Identifiable {
     /// explicit choice, so it also becomes the default for future terminals.
     @discardableResult
     func newSession(
-        directory: String? = nil
+        directory: String? = nil,
+        launchCommand: String? = nil,
+        initialWorkspace: PanelContext? = nil,
+        initialInput: String? = nil
     ) -> TerminalSession {
-        let session = makeSession(directory: directory)
+        let session = makeSession(directory: directory, launchCommand: launchCommand, initialWorkspace: initialWorkspace, initialInput: initialInput)
         let tab = makeTab(content: .session(session))
         insertNextToSelected(tab)
         selectedTabID = tab.id
@@ -261,10 +317,13 @@ final class Project: nonisolated Identifiable {
     /// scrollback when reopening a saved session.
     private func makeSession(
         directory: String? = nil,
-        restoredHistory: String? = nil
+        restoredHistory: String? = nil,
+        launchCommand: String? = nil,
+        initialWorkspace: PanelContext? = nil,
+        initialInput: String? = nil
     ) -> TerminalSession {
         let remoteCommand: String? = sshHost.map { host in
-            let cwd = customDirectory ?? "/"
+            let cwd = directory ?? customDirectory ?? "/"
             // Windows OpenSSH's MSYS2 zsh wrapper forwards single quotes
             // literally and its .exe login shell resets cwd to HOME.
             let remote = "cd " + RemoteCommands.doubleQuote(cwd)
@@ -279,7 +338,9 @@ final class Project: nonisolated Identifiable {
                 ? (directory ?? customDirectory ?? selectedSession?.currentDirectoryPath)
                 : nil,
             restoredHistory: restoredHistory,
-            launchCommand: remoteCommand
+            launchCommand: launchCommand ?? remoteCommand,
+            initialWorkspace: initialWorkspace,
+            initialInput: initialInput
         )
         session.onExited = { [weak self] session in
             // Already dead — just drop its pane, no second terminate.
@@ -291,6 +352,43 @@ final class Project: nonisolated Identifiable {
             self?.scheduleRemoteTabRebind()
         }
         return session
+    }
+
+    @discardableResult
+    func newInteractiveGitSession(
+        repository: String, arguments: [String], context: PanelContext
+    ) throws -> TerminalSession {
+        let command = "cd " + Self.shellQuoted(repository) + " && git "
+            + arguments.map(Self.shellQuoted).joined(separator: " ")
+        if context.isRemote {
+            let connection = selectedSession?.location.remoteConnection
+            guard let host = sshHost ?? connection?.destination,
+                  let executable = Bundle.main.executableURL else { throw RemoteConnectionError.notConnected }
+            if sshHost == nil {
+                guard let connection, connection.state == .connected,
+                      connection.workspaceIdentity == context.scope else { throw RemoteConnectionError.notConnected }
+            }
+            let port = connection?.port ?? 22
+            let helper = executable.deletingLastPathComponent().appendingPathComponent("ssh").path
+            let launch = Self.shellQuoted(helper)
+                + " -tt -o BatchMode=yes -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
+                + (sshHost == nil ? " -p \(port)" : "") + " -- " + Self.shellQuoted(host)
+                + "; exitStatus=$?; printf '\\nSSH session ended (status %s). Press Enter to close this terminal.\\n' \"$exitStatus\"; read -r answer; exit \"$exitStatus\""
+            let initial = PanelContext(
+                identity: .pinned(project: id, workspace: context.identity.workspace, directory: repository),
+                backend: context.backend
+            )
+            let pathBytes = (repository + "/.").utf8.map {
+                "\\0" + String(repeating: "0", count: 3 - String($0, radix: 8).count) + String($0, radix: 8)
+            }.joined()
+            let input = "cd \"$(printf '%b' " + Self.shellQuoted(pathBytes) + ")\" && git "
+                + arguments.map(Self.shellQuoted).joined(separator: " ") + "\r"
+            return newSession(launchCommand: launch, initialWorkspace: initial, initialInput: input)
+        }
+        let shell = LocalWorkspaceBackend.loginShell
+        let script = command + "; exec " + Self.shellQuoted(shell) + " -il"
+        let launch = "exec " + Self.shellQuoted(shell) + " -ilc " + Self.shellQuoted(script)
+        return newSession(directory: repository, launchCommand: launch)
     }
 
     private static func shellQuoted(_ value: String) -> String {
@@ -383,6 +481,39 @@ final class Project: nonisolated Identifiable {
         }
     }
 
+    func ignoreGitPaths(
+        _ paths: [String], isDirectory: Bool, repository: String,
+        context: PanelContext, isCurrent: () -> Bool
+    ) async throws {
+        let patterns = try GitStatusModel.ignorePatterns(paths, isDirectory: isDirectory)
+        let path = repository + "/.gitignore"
+        guard isCurrent() else { throw CancellationError() }
+        let existing = try await context.backend.stat(path: path)
+        guard isCurrent() else { throw CancellationError() }
+        if existing == nil {
+            do {
+                try await context.backend.createFile(path: path)
+            } catch {
+                guard try await context.backend.stat(path: path) != nil else { throw error }
+            }
+        }
+        guard isCurrent() else { throw CancellationError() }
+        openFile(path)
+        guard let tab = findFileTab(path: path, workspace: workspaceIdentity),
+              case .file(let file) = tab.content else { throw WorkspaceError.notFound }
+        try await file.waitForText()
+        guard isCurrent(), file.path == path else { throw CancellationError() }
+        let newline = file.text.contains("\r\n") ? "\r\n" : "\n"
+        let separator = file.text.isEmpty || file.text.hasSuffix("\n") ? "" : newline
+        file.appendText(separator + patterns.joined(separator: newline) + newline)
+        await file.save()
+        guard isCurrent() else { throw CancellationError() }
+        guard !file.isDirty, file.saveError == nil else {
+            throw NSError(domain: "Kero.Editor", code: 2, userInfo: [NSLocalizedDescriptionKey:
+                file.saveError ?? String(localized: "Edits could not be saved.", table: "Editor")])
+        }
+    }
+
     // MARK: - Browser
 
     /// Opens a native browser as a new tab beside the current selection.
@@ -450,7 +581,7 @@ final class Project: nonisolated Identifiable {
     ) {
         let context = selectedSession
         if let tab = findDiffTab(
-            repoRoot: repoRoot, path: path, staged: staged, commitHash: nil,
+            repoRoot: repoRoot, path: path, source: staged ? .staged : .worktree,
             workspace: workspaceIdentity
         ),
            case .diff(let diff) = tab.content {
@@ -461,7 +592,7 @@ final class Project: nonisolated Identifiable {
             return
         }
         let diff = DiffTab(
-            repoRoot: repoRoot, path: path, staged: staged,
+            repoRoot: repoRoot, path: path, source: staged ? .staged : .worktree,
             untracked: untracked, origPath: origPath,
             backend: workspaceBackend, workspaceIdentity: workspaceIdentity
         )
@@ -481,27 +612,26 @@ final class Project: nonisolated Identifiable {
         status: Character,
         origPath: String?
     ) {
+        openHistoricalDiff(repoRoot: repoRoot, path: path,
+            source: .commit(hash: commitHash, parent: parentHash, status: String(status)),
+            origPath: origPath)
+    }
+
+    func openHistoricalDiff(
+        repoRoot: String, path: String, source: DiffTab.Source, origPath: String?
+    ) {
         let context = selectedSession
-        if let tab = findDiffTab(
-            repoRoot: repoRoot, path: path, staged: false, commitHash: commitHash,
-            workspace: workspaceIdentity
-        ), case .diff(let diff) = tab.content {
+        if let tab = findDiffTab(repoRoot: repoRoot, path: path,
+                                 source: source, workspace: workspaceIdentity),
+           case .diff(let diff) = tab.content {
             diff.origPath = origPath
             diff.reload()
             selectedTabID = tab.id
             return
         }
-        let diff = DiffTab(
-            repoRoot: repoRoot,
-            path: path,
-            staged: false,
-            untracked: false,
-            origPath: origPath,
-            commitHash: commitHash,
-            commitParentHash: parentHash,
-            commitStatus: status,
-            backend: workspaceBackend, workspaceIdentity: workspaceIdentity
-        )
+        let diff = DiffTab(repoRoot: repoRoot, path: path, source: source,
+                           untracked: false, origPath: origPath,
+                           backend: workspaceBackend, workspaceIdentity: workspaceIdentity)
         let tab = makeTab(content: .diff(diff))
         tab.contextSession = context
         insertNextToSelected(tab)
@@ -509,16 +639,12 @@ final class Project: nonisolated Identifiable {
     }
 
     private func findDiffTab(
-        repoRoot: String, path: String, staged: Bool, commitHash: String?,
-        workspace: String?
+        repoRoot: String, path: String, source: DiffTab.Source, workspace: String?
     ) -> PaneTab? {
         tabs.first {
             guard case .diff(let diff) = $0.content else { return false }
-            return diff.repoRoot == repoRoot
-                && diff.path == path
-                && diff.staged == staged
-                && diff.commitHash == commitHash
-                && diff.workspaceIdentity == workspace
+            return diff.repoRoot == repoRoot && diff.path == path
+                && diff.source == source && diff.workspaceIdentity == workspace
         }
     }
 
@@ -735,24 +861,10 @@ final class Project: nonisolated Identifiable {
             return .file(file)
         case .browser(let url):
             return .browser(makeBrowser(initialURL: url, initialFocus: .none))
-        case .diff(let repoRoot, let path, let staged, let untracked, let origPath):
+        case .diff(let repoRoot, let path, let source, let untracked, let origPath):
             return .diff(DiffTab(
-                repoRoot: repoRoot, path: path, staged: staged,
+                repoRoot: repoRoot, path: path, source: source,
                 untracked: untracked, origPath: origPath,
-                backend: workspaceBackend, workspaceIdentity: workspaceIdentity
-            ))
-        case .commitDiff(
-            let repoRoot, let path, let commitHash, let parentHash, let status, let origPath
-        ):
-            return .diff(DiffTab(
-                repoRoot: repoRoot,
-                path: path,
-                staged: false,
-                untracked: false,
-                origPath: origPath,
-                commitHash: commitHash,
-                commitParentHash: parentHash,
-                commitStatus: status.first,
                 backend: workspaceBackend, workspaceIdentity: workspaceIdentity
             ))
         }

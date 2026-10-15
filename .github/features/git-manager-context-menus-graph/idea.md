@@ -2,43 +2,49 @@
 
 关联需求：[Kero Issue #2](https://github.com/chiimagnus/kero/issues/2)。
 
+**当前状态（2026-10-15）：** P1～P4 均已完成，任务以 [todo.toml](todo.toml) 为准。SSH 外部 Git 变更自动刷新随后在 `ca183bf` 修复；真实 Windows SSH 原生面板回归和含 SSH 的 223 项全量测试已通过，证据见 [evidence-p3.md](evidence-p3.md)。**Issue #2 仍为 Open**：完整独立 App 中由外部 SSH 命令改动仓库并观察自动刷新的用户路径尚未单独验收，不能以原生面板测试代替。
+
+**P4 的实施决定（历史）：** 保留 P1～P3 的完成记录；按 [Git Graph 固定版本](https://github.com/mhutchie/vscode-git-graph/tree/d7f43f429a9e024e896bac9fc65fdc530935c812) 补齐对象菜单与原生弹窗的真实后续动作，不只复制名称。Kero 使用 SwiftUI / AppKit，不照搬 WebView；依据见 [research.md](research.md) 和已完成的 [plan-p4.md](plan-p4.md)。
+
 ## 背景
 
-现有 Git Manager 已有仓库标题、分支菜单、Commit Staged、Stage/Unstage/Discard、Fetch/Pull/Push、Stash、文件 Diff、近期提交及懒加载。截图和 Issue 反映的问题是：提交右键只有复制操作；Commit 与 Branch/Tag 引用还没有独立的菜单命中；Recent Commits 只有单色直线，不表达合并/分叉；外部 Git 变更后面板更新有时落后。
+现有 Git Manager 已有仓库标题、分支菜单、Commit Staged、Stage/Unstage/Discard、Fetch/Pull/Push、Stash、文件 Diff、近期提交及懒加载。最初截图与 Issue 记录的问题包括：提交右键只复制、Commit 与 Ref 命中不完整、历史图只画单色直线，以及外部 Git 变更刷新落后。**图谱、Ref 基础交互和本机刷新由 P1～P3 完成，完整对象菜单由 P4 补齐**；SSH 外部自动刷新则在 P4 之后单独修复，历史阶段边界不混写。
 
-最初参考 Git Graph 的完整菜单清单过宽。**本 feature 不复制 Git Graph，也不重做 Kero 已有功能。** 以当前 Kero 原生 SwiftUI 界面和实际数据流为准。
+原 P2 为了缩小实施范围主动省略了 Cherry-pick、Revert、Drop、Reset、Merge/Rebase、远端分支与 Tag 管理等操作；这不符合用户对 Issue #2「参照 Git Graph 与 VSCodium，把适合当前对象的菜单补齐」的最新明确要求。P4 不复制其它产品的整个 UI，但**不再以旧 P2 的非目标排除适用的 Git 操作**。每个动作必须有正确对象、原生命中、Git 真实结果与失败恢复。
 
-本次已经完成的交付：
+已完成的 P1～P3 基线（不是 P4 交付）：
 - [调研和已有功能对照](research.md)
-- [Recent Commits HTML 设计稿](design.html)：以 Issue #2 的 Git Graph 截图为参考，**只展示 Recent Commits**；一条提交占两行，标题后紧跟 Ref，第二行显示简短 SHA、作者及右对齐时间；蓝色主干与多色侧分支绘制分叉/合并，支持 Commit / 本地分支 / Tag / 历史文件的模拟交互。**不是已实现的 SwiftUI 功能，也不设计 Changes、提交框、仓库工具栏。**
+- [Recent Commits HTML 设计稿](design.html)：以 Issue #2 的 Git Graph 截图为参考，**只展示 Recent Commits**；一条提交占两行，标题后紧跟 Ref，第二行显示简短 SHA、作者及右对齐时间；蓝色主干与多色侧分支绘制分叉/合并，支持 Commit / 本地分支 / Tag / 历史文件的模拟交互。**这是当时的 HTML 原型而非 App 验收证据**；其 Git 图谱相关部分已在 P1～P3 对应实现，但并未设计 Changes、提交框、仓库工具栏及 P4 完整菜单。
 
 ## 实施范围
 
-1. **Recent Commits 的 Context Menu**：Commit 行、本地 Branch Badge、Tag Badge 和展开后的历史文件各自拥有命中区域。Commit 保留复制 SHA/标题与展开文件，补「在此创建本地分支」「在此创建 Tag」；当前本地分支只复制名称、其他本地分支复用已有切换/复制操作；Tag 只定位所指 Commit / 复制名称。`origin/*` 只显示为跟踪引用，**不新增远端分支菜单、Tag 推送或删除**。
-2. **仅调整 Recent Commits**：历史文件继续复用 `TreeFileRow` 与现有 Diff/复制路径；未暂存、未跟踪、已暂存、冲突文件及仓库标题、顶部 More Menu、Stash、提交框、同步等均保持原样，不在设计稿重复展示或实现。
-3. **提交图谱与双行布局**：使用 Git 日志的全部 parent hashes 和实际 Ref 关系绘制蓝色主干、不同颜色的分支及平滑合并线；线条必须来自真实父提交而非装饰。每个 Commit 第一行显示标题及紧随其后的 Ref Badge，第二行显示短 SHA、作者、右对齐相对时间，行间有细分隔线；展开文件后关系线不断裂。**设计稿只展示分叉/合并示例，不提供“线性历史”模式切换**；真实仓库没有分叉时仍需正确绘制单车道。
-4. **解决刷新迟滞**：以本机、外部 CLI 修改仓库而 Kero 持续前台可见等真实触发场景，查清缺少事件或慢查询的具体位置，再在既有 GitStatusModel 刷新/去重路径修复。不能把手动刷新按钮或伪进度当作修复。
-5. **本机 / SSH**：保留现有机器与仓库身份、超时、写操作互斥、远端批量 Git 查询和失败反馈。这里的 SSH 是现有项目运行方式，**不是新增一套 Remote Branch Context Menu**。
+- **P1～P3（已实施）**：真实提交拓扑与双行视图、Ref 类型与分页、Commit/本地分支/Tag 基础右键、在历史 SHA 创建本地分支和轻量 Tag、本机可见 Git 面板外部变更刷新；保持已有鼠标/键盘命中、文件树、Diff 和失败语义。`design.html` 仅作 Recent Commits 视觉历史参考，不约束 P4 的菜单功能范围。
+- **P4（已完成）：以 Git Graph 为一手基准的右键菜单**：Commit（创建 Branch/Tag、Checkout、Cherry-pick、Revert、Drop、Merge、Rebase、Reset、复制）；本地/远端 Branch（Checkout、Rename、Delete、Fetch/Pull/Merge、Rebase、Push、复制）；Tag（查看详情、创建/替换、删除本地和可选远端、Push、复制）；Stash（每条 Apply/Pop/Drop/从 Stash 创建分支）；Uncommitted Changes（Stash 带消息、Reset Mixed/Hard、Clean Untracked 带目录选项）；历史文件（View Diff、View Revision、与工作区比较、打开文件、Reset File to Revision、复制两种路径）。现有 Staged/Unstaged/Conflict 文件和分组菜单按 VSCodium 的 SCM 习惯保持适用动作。Branch/Tag/Remote Ref 的 Create Archive 在不复制 Web 下载栈的前提下按原生保存流程支持，明确二进制与远端限制。
+- **以对象及语义决定菜单**：Commit 行与 Ref Badge 仍是独立命中；`+N` 折叠入口中的菜单与直显 Badge 一致。各对象只暴露有效动作，当前分支不能删除，远端 HEAD 符号引用不作为可删分支，历史文件未必存在于工作区；不以一个通用菜单堆砌所有命令。
+- **本机和 SSH 的相同语义**：Git 写操作复用 `GitStatusModel` → `GitCommandExecution` → 当前 `WorkspaceBackend` 的 argv 执行、仓库/机器身份、操作互斥、状态刷新和错误展示；不以本机文件路径操作 SSH 仓库。SSH 实机结果单独验收，不以模拟后端冒充通过。
+- **弹窗与副作用要相符**：除文本和字体改用原生控件外，保留上游适用的输入、单选/多选、复选框、默认值、主要/次要按钮及后续分支（包括重名替换/改名、Force Delete、Push Mode、Reinstate Index、Tag 推送警告）。每个按钮落到相应 Git argv 和后续动作；不能用同名但不同效果的命令蒙混。失误可能损失数据的操作须确认目标并在执行前校验，发生冲突时保留真实状态与 Git 错误，用户可从现有 Kero 终端继续/中止；不额外创建上游没有的恢复 GUI 或状态机。
+- **外部 Git 变更刷新（已补修）**：前台可见 Git 面板对本机和 SSH 仓库的外部修改、暂存与提交均能自动更新；触发条件、间隔与失败边界由 [Git 功能文档](../../../docs/features/git.md#刷新与显示) 维护。修复提交 `ca183bf` 与真实 Windows SSH 原生面板回归见 [evidence-p3.md](evidence-p3.md)。
 
 ## 默认设计与交互
 
-- 单击 Commit 标题展开历史文件，单击短 SHA 复制完整哈希；右击 Commit 行显示 Commit Context Menu，右击本地分支/Tag Badge 只显示自己的菜单，不穿透到 Commit。
-- 当前本地分支只提供复制名称；其他本地分支只复用切换/复制。`origin/main` 等跟踪引用仅展示、不响应专属右键。多个 Ref 允许共存；狭窄空间隐藏 Ref 时必须提供可访问的完整列表（HTML 当前 `+N` 为静态提示，属于实施时需补齐的原型限制）。
-- 从历史 Commit 新建本地分支或 Tag，须明确所选 SHA 与当前仓库，复用既有 Git 操作入口；设计稿只模拟创建，不包含 Tag Push/Delete，更不能在浏览设计时触发 Release。
-- HTML 自定义浮层仅服务交互评审；正式产品使用 SwiftUI 原生 `.contextMenu`，不在 App 中引入 HTML/WebView 菜单。
+- 左键整行展开/收起提交文件，短 SHA 独立复制；Commit、当前/其他本地分支、远端 Ref、Tag、Stash 条目、文件与分组拥有各自对应的右键动作。`+N` 不漏掉隐藏 Ref 的管理能力；不恢复右键「展开/收起提交文件」冗余项。
+- 没有可用对象、正在执行不兼容操作或可能丢失未保存编辑时明确拒绝；不把所有 dirty Git 状态都禁用，Git 能自行拒绝的前提沿用真实错误。Drop 遵循上游的父节点、Merge、多子分叉与当前 HEAD 路径条件；单个 Tag/同节点其它 Ref 不额外禁用，detached HEAD 下条件成立也不人为排除。尊重用户 Git 配置，不用 Reset/Revert 冒充 Drop。
+- Checkout 到历史提交须提示 detached HEAD；Commit Reset 默认 Mixed，Hard 只能由用户明确选择；Branch Push 默认 Normal，可按 Git Graph 弹窗明确改为 Force With Lease/Force，Force Delete/Force Fetch/替换同名 Ref 同理明确选择。任何模式都不得悄悄 Force、推送全部 Tag 或发布 Release。
+- 对话框捕获发起窗口、Project、机器与仓库，确认及异步预检后核对；写当前 HEAD、本地 Ref、Stash selector 和文件覆写按其真实作用对象保护。远端删除按确认的 remote/完整 Ref 名执行原生 Git 删除，不额外强制 expected-OID lease 或网络二次确认；Force With Lease 仍是用户明确选择的独立 Push 模式。不可变 SHA 的只读/创建动作不因无关 HEAD 变化被禁用，远端失败不能回退写本机。
+- 使用已有 SwiftUI `.contextMenu`、原生输入/确认和当前文件树/Diff；不引入 WebView、HTML 菜单、另一套 Git 状态机或无关的页面重设计。
 
 ## 非目标
 
-- 不实现 Git Graph 全套 Cherry-pick/Revert/Drop/Reset/Merge/Rebase、分支管理页、PR 创建、Code Review 或任意仓库 Git 历史搜索。
-- 不创建 Remote Branch 独立菜单、Tag Push/Delete 或 Stash 列表；不复制已有 Stage/Unstage/Discard/Fetch/Pull/Push/Sync/More Menu，也不新增线性/分叉模式切换控件。
-- 不切换 Electron/Tauri，不替换 Files/Git 共用树，不引入新第三方图谱引擎。
-- **最初立项阶段**只授权设计稿与计划；后续已单独授权并执行 P1～P3，当前生产行为以 [Git 维护文档](../../../docs/features/git.md) 为准。实际 Git 写操作只在临时仓库验收，没有发布或推送。
+- 不照搬 Git Graph 的主题、列可见性、Branches Dropdown、Issue Linking、PR/Code Review Provider、Mark Reviewed、外部 Difftool 或无限制历史搜索；Kero 当前没有这些专属对象和服务。不额外创造 Git Graph Commit 右键不存在的通用两 Ref / Merge Base 比较器。VSCodium 的 **Ignore** 确实属于工作区/未跟踪文件及目录菜单，必须复用 Kero 现有的 `.gitignore` FileTab 编辑/保存路径实现，**不另建** `.gitignore` 专用编辑器或绕过未保存缓冲。
+- 不**自动** Force Push/Force Delete、不自动创建 GitHub Release；用户在 Git Graph 对应弹窗里**明确选定**的 Force/替换操作不是非目标。交互式 Rebase 若被选择，应在 Kero 原生新终端执行，不能在后台假装支持或挪用用户正在工作的终端。
+- 不重做已有 Fetch/Pull/Push、Stage/Unstage/Discard、原生文件树或提交框；按对象复用已有动作，可用的缺口必须补齐。不改变既有图谱风格或增加线性/分叉模式切换。
+- 不为 Git Manager 增加专门的 VoiceOver 朗读、导航或焦点适配。保留原生控件的基础无障碍语义和常规键盘焦点；只有新的明确需求才安排 VoiceOver 专项验收。P4 当时的执行权限和安全边界保留在历史计划，不继续视为当前实施授权。
 
 ## 验收
 
-1. `design.html` 作为 Recent Commits 唯一参考：双行提交、标题后的 Ref、蓝色主干/多色侧分支、平滑合并线、短 SHA、作者与右对齐时间；没有额外的 Git Manager 区域和“线性历史”模式控件。HTML 菜单只演示，不执行 Git。
-2. 正式 App 根据全部 parent SHA 绘制有真实拓扑的车道；合并、展开历史文件、滚动/分页保持连续，纯线性仓库自然只有一条车道；Ref Badge 可区分当前本地分支、其他本地分支、跟踪引用与 Tag。
-3. Commit 行、本地分支、Tag、历史文件的 Context Menu 按对象归属；跟踪引用不提供独立管理菜单，隐藏的 Ref 仍能访问；没有 Tag 就不显示 Tag Badge。
-4. Git 写操作使用既有 Model/Service 入口；已实现文件、分支和 Stash 操作行为不回归，跨项目/SSH 后不会误写前一仓库。
-5. 在可复现的“Git 面板持续可见、外部修改仓库”场景下，状态最终及时更新；核对 Git 实际结果与面板。加载超时/断线仍有明确提示与手动重试。
-6. 面向生产实施的每个 task 依据明确源文件与验证条件，可逐项实现；计划本身不冒充生产验收。
+1. P1～P3 已有图谱、Refs、文件树、提交编辑、刷新与键鼠交互全部不回归；不把 HTML 的模拟菜单当作产品测试。
+2. **逐对象逐操作**对照 [P4 菜单矩阵](plan-p4.md#菜单矩阵与边界)，每个应有菜单项必须真实可见/可用或有明确的合法禁用原因；折叠的 `+N` 与直接显示的引用行为一致。
+3. 每个适用的 Git Graph 弹窗都与 [P4 对照矩阵](plan-p4.md#原生弹窗行为合同)逐项一致：默认值、选项、确认/取消按钮、重名后的两个后续按钮、失败后的再选择，不能只有同名按钮。在**临时真实 Git 仓库**证明对应 HEAD/ref、index、工作区、reflog、远端 bare repo 与存档实际内容；不是只断言命令构造或 View 回调。
+4. 验证取消/拒绝/旧目标不写入；Hard/Force/文件复位/永久 Clean 作用符合说明，包含 Hard 可删除阻挡 tracked 目标的 untracked 路径。未保存和在途保存受保护且失败不关 Tab；冲突保留真实 Git 状态，可从终端恢复。多远端 Delete/Push 的范围、停止顺序和部分结果遵循上游，Tag 已创建后取消 Push 不撤销本地 Tag。
+5. 对照原生窗口验证对象命中、禁用、确认对话框、菜单键盘和焦点；保留基础辅助功能标签，不把 VoiceOver 专项语音走查列为本需求的强制项。独立 App E2E（本机与获准的真实 Windows SSH）分别记录，不用 NativeUI 或模拟 SSH 冒充完整验收。全部代码通过 `make test`、`make build` 与严格签名。
+6. 完成的阶段任务与提交以 [todo.toml](todo.toml) 为准，历史测试结果保留在 `evidence-p3.md`、`evidence-p4.md` 与审计中。SSH 外部刷新已另行修复并通过真实 Windows SSH 原生面板回归；完整独立 App 的外部刷新用户路径尚未单独验收，不能仅凭该测试关闭 Issue #2。

@@ -27,6 +27,7 @@ final class KeroTerminalView: AppTerminalView, TerminalBackendSurface {
     /// The `/bin/sh -c …` line this surface launched, kept so a live
     /// re-configure can restate it rather than start a second shell.
     var launchCommand = ""
+    var launchInput: String?
     /// Latest scroll report, so a scrollbar drag can be mapped back onto a row.
     var lastScroll: TerminalScrollPosition?
     /// Ghostty reports the recognized link under the pointer as hover state.

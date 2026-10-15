@@ -49,3 +49,75 @@ status = "completed"
 plan = "plan-p3.md#p3-t2"
 commit = "1d2be55"
 note = "Git 原生面板外部编辑/暂存/提交 Red→Green，2.02/1.98/1.78秒；后台/隐藏停止、切仓库隔离、真实分叉+Ref 图验收；make test 104/104，make build 签名 PASS；真实 SSH / 独立进程右键 E2E 未测"
+
+[[tasks]]
+id = "P4-T1"
+title = "Commit Checkout、Cherry-pick、Revert、Merge 与冲突恢复"
+status = "completed"
+plan = "plan-p4.md#p4-t1"
+commit = "a5f1c91"
+note = "Commit Git结果6/6、原生sheet2/2；预检切机器Red→Green；make test130/130、make build/严格验签PASS；整包安装未重启；完整App右键与真实SSH归T9"
+
+[[tasks]]
+id = "P4-T2"
+title = "Commit Rebase、Reset 三模式及条件 Drop"
+status = "completed"
+plan = "plan-p4.md#p4-t2"
+commit = "ffd3194"
+note = "make test 140（1 跳过）; windows pinned/automatic SSH 实测 44.278s；make build/验签/安装通过；第一次 fixture 超时已核对清理并保留证据"
+
+[[tasks]]
+id = "P4-T3"
+title = "当前与其他本地分支管理菜单"
+status = "completed"
+plan = "plan-p4.md#p4-t3"
+commit = "c15d72c"
+note = "完整 make test 155 项（1 SSH 专用用例依条件跳过）、Branch Git 集成 12/12 与 NativeUI 弹窗 3/3；make build/严格验签、整包安装 PASS；真实 SSH Archive/完整右键 E2E 留 T9"
+
+[[tasks]]
+id = "P4-T4"
+title = "远端分支 Checkout、Fetch、Pull 与删除"
+status = "completed"
+plan = "plan-p4.md#p4-t4"
+commit = "9e25f51"
+note = "169/169 XCTest, zero skipped, windows real SSH pinned/automatic pass; make build and codesign pass; /Applications/Kero.app installed without restart; T9 still needs real Remote Branch full UI/SSH E2E; related test lifecycle cleanup a6f28be"
+
+[[tasks]]
+id = "P4-T5"
+title = "Tag 注释与本地及远端管理"
+status = "completed"
+plan = "plan-p4.md#p4-t5"
+commit = "11d9e33"
+note = "真实 Windows SSH 参与的 make test 179/179、0 skip；Tag 集成 7/7、原生 3/3；make build 签名与整包安装通过，PID 不重启；P4-T9 再做全用户路径 E2E"
+
+[[tasks]]
+id = "P4-T6"
+title = "历史文件修订、比较与打开菜单"
+status = "completed"
+plan = "plan-p4.md#p4-t6"
+commit = "e5a64fd"
+note = "make doctor; Windows SSH included: 187/187 0 skipped 0 failures; make build codesign; official App installed without restarting; binary rename/readonly/session/checkout index worktree verified"
+
+[[tasks]]
+id = "P4-T7"
+title = "工作区文件、目录与分组右键菜单"
+status = "completed"
+plan = "plan-p4.md#p4-t7"
+commit = "af16b18"
+note = "完整Windows SSH参与198/198、0skip；最后原生sheet/Ignore4/4；make build/严格验签/整包安装通过，PID40825未重启；原有暂存测试保持不夹入提交；全对象右键E2E归T9"
+
+[[tasks]]
+id = "P4-T8"
+title = "具体 Stash 的选择与 Apply、Pop、Drop、Branch"
+status = "completed"
+plan = "plan-p4.md#p4-t8"
+commit = "111f3cd"
+note = "Stash真实Git9/9、原生2/2；最终指定Windows SSH完整210/210、0skip/0failure；make build/严格验签/整包安装通过，未重启PID40825；全App右键与真实SSH对象验收归T9"
+
+[[tasks]]
+id = "P4-T9"
+title = "全对象菜单与本机及真实 SSH 用户路径验收"
+status = "completed"
+plan = "plan-p4.md#p4-t9"
+commit = "bcd3ced"
+note = "完整App本机及Windows专用SSH菜单与真实副作用已记录evidence-p4；最后同步修复bcd3ced；无人干预完整222/222 0失败0跳过、make doctor/build及严格验签、整包安装PASS；正式PID40825未重启；SSH外部刷新另案。"

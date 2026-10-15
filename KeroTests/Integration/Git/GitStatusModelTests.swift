@@ -9,6 +9,7 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     private var online = true
     private var failGit = false
     private var failHistoryLog = false
+    private var failStashList = false
     private var pauseNextGit = false
     private var pausedGit: CheckedContinuation<Void, Never>?
     private(set) var awaitingGit = false
@@ -20,6 +21,7 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     func setOnline(_ value: Bool) { online = value }
     func setGitUnavailable(_ value: Bool) { failGit = value }
     func setHistoryLogUnavailable(_ value: Bool) { failHistoryLog = value }
+    func setStashListUnavailable(_ value: Bool) { failStashList = value }
     func suspendNextGitRequest() { pauseNextGit = true }
     func releaseGitRequest() {
         pausedGit?.resume()
@@ -56,11 +58,15 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
         var variables = ProcessInfo.processInfo.environment
         for (key, value) in env ?? [:] { variables[key] = value }
         let commandInput: Data?
-        if failHistoryLog, let stdin, let script = String(data: stdin, encoding: .utf8) {
-            // Fail only git log inside the real batched status execution.
-            commandInput = Data(script.replacingOccurrences(
-                of: " LC_ALL=C git 'log' ", with: " LC_ALL=C git 'invalid-test-history-log' "
-            ).utf8)
+        if (failHistoryLog || failStashList), let stdin, let script = String(data: stdin, encoding: .utf8) {
+            var failing = script
+            if failHistoryLog {
+                failing = failing.replacingOccurrences(of: " LC_ALL=C git 'log' ", with: " LC_ALL=C git 'invalid-test-history-log' ")
+            }
+            if failStashList {
+                failing = failing.replacingOccurrences(of: " LC_ALL=C git 'stash' 'list' ", with: " LC_ALL=C git 'invalid-test-stash' 'list' ")
+            }
+            commandInput = Data(failing.utf8)
         } else {
             commandInput = stdin
         }
@@ -386,6 +392,22 @@ final class GitStatusModelTests: XCTestCase {
         model.refresh()
         try await wait { model.statusError == nil && !model.isRefreshing }
         XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
+
+        try git(["stash", "push", "-qm", "preserve on query failure"])
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        let priorStashes = model.stashes
+        XCTAssertEqual(priorStashes.count, 1)
+        await backend.setStashListUnavailable(true)
+        model.refresh()
+        try await wait { model.statusError != nil && !model.isRefreshing }
+        XCTAssertEqual(model.stashes, priorStashes)
+        XCTAssertEqual(model.stashCount, 1)
+        await backend.setStashListUnavailable(false)
+        try git(["stash", "clear"])
+        model.refresh()
+        try await wait { model.statusError == nil && !model.isRefreshing }
+        XCTAssertTrue(model.stashes.isEmpty)
     }
 
     func testReplacingSSHBackendDoesNotWaitForStaleGitWorker() async throws {
@@ -429,6 +451,76 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertTrue(model.isRepo)
         XCTAssertNil(model.statusError)
         XCTAssertEqual(model.recentCommits.map(\.subject), ["baseline"])
+    }
+
+    func testContextChangeDuringMutationPreflightDoesNotSwitchOldRepository() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [["init", "-q", "-b", "main"],
+                     ["config", "user.name", "Preflight Test"],
+                     ["config", "user.email", "preflight@invalid"],
+                     ["config", "commit.gpgsign", "false"],
+                     ["commit", "--allow-empty", "-qm", "root"],
+                     ["branch", "other"]] {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let backend = DiscardRemoteWorkspaceFixture()
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: backend, scope: "ssh:first")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        await backend.suspendNextGitRequest()
+        model.switchBranch(to: "other")
+        let deadline = Date().addingTimeInterval(5)
+        while await !backend.awaitingGit, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let paused = await backend.awaitingGit
+        XCTAssertTrue(paused)
+        model.sync(root: directory.path, backend: backend, scope: "ssh:second")
+        await backend.releaseGitRequest()
+        try await wait { !model.isBusy && !model.isRefreshing }
+        XCTAssertEqual(GitCommandExecution.run(["branch", "--show-current"], in: directory.path)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines), "main")
+    }
+
+    func testNewEditDuringCommitPreflightStopsBeforeFirstMutation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [["init", "-q", "-b", "main"], ["config", "user.name", "Late Edit"],
+                     ["config", "user.email", "edit@invalid"], ["config", "commit.gpgsign", "false"],
+                     ["commit", "--allow-empty", "-qm", "first"], ["commit", "--allow-empty", "-qm", "second"]] {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let backend = DiscardRemoteWorkspaceFixture()
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: backend, scope: "ssh:fixture")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let target = try XCTUnwrap(model.recentCommits.last)
+        let head = model.headOID
+        let filePath = directory.appendingPathComponent("editing.txt")
+        try Data("baseline".utf8).write(to: filePath)
+        let file = FileTab(path: filePath.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        await backend.suspendNextGitRequest()
+        model.actOnCommit(target, action: .checkout, target: model.actionTarget(),
+                          prepare: { true }, isCurrentTarget: { !file.isDirty })
+        let deadline = Date().addingTimeInterval(5)
+        while await !backend.awaitingGit, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        file.text = "new edit during preflight"
+        file.refreshDirtyState()
+        await backend.releaseGitRequest()
+        try await wait { !model.isBusy && !model.isRefreshing }
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(file.text, "new edit during preflight")
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(try String(contentsOf: filePath, encoding: .utf8), "baseline")
+        XCTAssertEqual(GitCommandExecution.run(["rev-parse", "HEAD"], in: directory.path)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines), head)
     }
 
     func testRecentCommitsKeepMergeParentsAndTypedReferences() async throws {
@@ -521,10 +613,8 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         let target = try XCTUnwrap(model.recentCommits.first { $0.hash == selected })
         let expectedRepository = model.repoRoot
-        model.createReference(
-            named: "history/first", kind: .branch, at: target,
-            repository: expectedRepository, scope: "local"
-        )
+        model.createBranch(named: "history/first", at: selected,
+            checkout: false, replacing: nil, target: model.actionTarget())
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertNil(model.lastError)
         XCTAssertEqual(try git(["rev-parse", "refs/heads/history/first"]), selected)
@@ -534,10 +624,8 @@ final class GitStatusModelTests: XCTestCase {
             $0.kind == .localBranch && $0.name == "history/first"
         } == true)
 
-        model.createReference(
-            named: "v1-local", kind: .tag, at: target,
-            repository: expectedRepository, scope: "local"
-        )
+        model.createTag(named: "v1-local", at: selected, type: .lightweight,
+                        message: "", replacing: nil, target: model.actionTarget())
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertNil(model.lastError)
         XCTAssertEqual(try git(["rev-parse", "refs/tags/v1-local"]), selected)
@@ -545,10 +633,8 @@ final class GitStatusModelTests: XCTestCase {
             $0.kind == .tag && $0.name == "v1-local"
         } == true)
 
-        model.createReference(
-            named: "history/first", kind: .branch, at: target,
-            repository: expectedRepository, scope: "local"
-        )
+        model.createBranch(named: "history/first", at: selected,
+            checkout: false, replacing: nil, target: model.actionTarget())
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertNotNil(model.lastError, "Duplicate branch must fail without force")
         XCTAssertEqual(try git(["rev-parse", "refs/heads/history/first"]), selected)
@@ -563,10 +649,8 @@ final class GitStatusModelTests: XCTestCase {
         let before = model.operation
         model.sync(root: other.path)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
-        model.createReference(
-            named: "should-not-exist", kind: .tag, at: target,
-            repository: expectedRepository, scope: "local"
-        )
+        model.createTag(named: "should-not-exist", at: selected, type: .lightweight,
+                        message: "", replacing: nil, target: model.actionTarget())
         XCTAssertNotNil(model.lastError)
         XCTAssertNotEqual(model.operation, before)
         XCTAssertNotEqual(otherGit(["show-ref", "--verify", "--quiet",

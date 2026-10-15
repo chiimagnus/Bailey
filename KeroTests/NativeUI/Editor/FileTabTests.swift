@@ -16,18 +16,20 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
 
     private var files: [String: Data]
     private var writing: PendingWrite?
-    private var reading: CheckedContinuation<Data, Error>?
+    private var reading: [CheckedContinuation<Data, Error>] = []
     private var nextReadPaused = false
     private(set) var writingPath: String?
     private(set) var readingPath: String?
+    var pendingReadCount: Int { reading.count }
 
     init(path: String, contents: Data) { files = [path: contents] }
 
     func pauseOneRead() { nextReadPaused = true }
     func finishRead(with data: Data) {
-        readingPath = nil
-        reading?.resume(returning: data)
-        reading = nil
+        guard !reading.isEmpty else { return }
+        let continuation = reading.removeFirst()
+        if reading.isEmpty { readingPath = nil }
+        continuation.resume(returning: data)
     }
     func finishWrite(failing: Bool = false) {
         guard let pending = writing else { return }
@@ -47,7 +49,7 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
         if nextReadPaused {
             nextReadPaused = false
             readingPath = path
-            return try await withCheckedThrowingContinuation { reading = $0 }
+            return try await withCheckedThrowingContinuation { reading.append($0) }
         }
         return Data(data.prefix(maxBytes))
     }
@@ -79,6 +81,67 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
 
 @MainActor
 final class FileTabTests: XCTestCase {
+    func testAppendWaitsForReplacementReadWithoutUsingLoadingOrCachedText() async throws {
+        for initiallyLoading in [true, false] {
+            let path = "/fixture/.gitignore"
+            let backend = EditorWorkspaceFixture(path: path, contents: Data("cached\n".utf8))
+            if initiallyLoading { await backend.pauseOneRead() }
+            let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+            file.autoSaveSuspendedForClose = true
+            if !initiallyLoading {
+                try await wait { if case .text = file.content { return true }; return false }
+                await backend.pauseOneRead()
+                file.reloadFromDiskIfClean()
+            }
+            try await wait { await backend.pendingReadCount == 1 }
+            let premature = expectation(description: "Wait must follow the replacement read")
+            premature.isInverted = true
+            let waiting = expectation(description: "Append began waiting for the first read")
+            var checkingEarlyCompletion = true
+            let append = Task {
+                defer { if checkingEarlyCompletion { premature.fulfill() } }
+                waiting.fulfill()
+                try await file.waitForText()
+                file.appendText("/new\n")
+            }
+            await fulfillment(of: [waiting], timeout: 1)
+            await backend.pauseOneRead()
+            file.reloadFromDiskIfClean()
+            try await wait { await backend.pendingReadCount == 2 }
+            await backend.finishRead(with: Data("superseded\n".utf8))
+            await fulfillment(of: [premature], timeout: 0.1)
+            checkingEarlyCompletion = false
+            await backend.finishRead(with: Data("latest rules\n".utf8))
+            do { try await append.value } catch { XCTFail(error.localizedDescription) }
+            XCTAssertEqual(file.text, "latest rules\n/new\n")
+            XCTAssertTrue(file.isDirty)
+        }
+    }
+
+    func testAppendWaitsForRemoteReadAndRetainsTextOnSaveFailure() async throws {
+        let path = "/fixture/.gitignore"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("existing\n".utf8))
+        await backend.pauseOneRead()
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        try await wait { await backend.readingPath == path }
+        let append = Task {
+            try await file.waitForText()
+            file.appendText("/new\n")
+            await file.save()
+        }
+        await Task.yield()
+        XCTAssertEqual(file.text, "")
+        await backend.finishRead(with: Data("existing\n".utf8))
+        try await wait { await backend.writingPath == path }
+        await backend.finishWrite(failing: true)
+        try await append.value
+        XCTAssertEqual(file.text, "existing\n/new\n")
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        let stored = await backend.data(at: path)
+        XCTAssertEqual(stored, Data("existing\n".utf8))
+        file.autoSaveSuspendedForClose = true
+    }
     private func mountedEditor(in view: NSView) -> FocusReportingTextView? {
         if let editor = view as? FocusReportingTextView { return editor }
         return view.subviews.lazy.compactMap { self.mountedEditor(in: $0) }.first
@@ -90,6 +153,70 @@ final class FileTabTests: XCTestCase {
             guard Date() < deadline else { return XCTFail("Editor operation did not settle") }
             try await Task.sleep(for: .milliseconds(10))
         }
+    }
+
+    func testGitPreparationWaitsForWritesAndNeverClosesOrLosesEditedTab() async throws {
+        let project = Project(fallbackName: "Git Save", workspaceConfiguration: .standard)
+        let path = "/fixture/git/file.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("baseline".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        let tab = PaneTab(content: .file(file))
+        project.append(tab)
+        try await wait { if case .text = file.content { return true }; return false }
+        file.text = "first edit"
+        file.refreshDirtyState()
+        let saving = Task {
+            await project.saveBeforeGitAction(repository: "/fixture/git", scope: "ssh:fixture", isCurrent: { true })
+        }
+        try await wait { await backend.writingPath == path }
+        file.text = "new edit while saving"
+        file.refreshDirtyState()
+        await backend.finishWrite()
+        let prepared = await saving.value
+        XCTAssertFalse(prepared)
+        XCTAssertTrue(project.tabs.contains { $0 === tab })
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(file.text, "new edit while saving")
+        let persisted = await backend.data(at: path)
+        XCTAssertEqual(persisted, Data("first edit".utf8))
+
+        let failed = Task {
+            await project.saveBeforeGitAction(repository: "/fixture/git", scope: "ssh:fixture", isCurrent: { true })
+        }
+        try await wait { await backend.writingPath == path }
+        await backend.finishWrite(failing: true)
+        let readyAfterFailure = await failed.value
+        XCTAssertFalse(readyAfterFailure)
+        XCTAssertTrue(project.tabs.contains { $0 === tab })
+        XCTAssertEqual(file.text, "new edit while saving")
+        XCTAssertNotNil(file.saveError)
+    }
+
+    func testGitPreparationMatchesNativePrivatePathAliasWithoutSavingOtherRepository() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let inside = root.appendingPathComponent("inside.txt")
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        try Data("baseline".utf8).write(to: inside)
+        try Data("other repository".utf8).write(to: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let project = Project(fallbackName: "Aliases", workspaceConfiguration: .standard)
+        let selected = FileTab(path: inside.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        let other = FileTab(path: outside.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        project.append(PaneTab(content: .file(selected)))
+        project.append(PaneTab(content: .file(other)))
+        selected.text = "save selected"
+        selected.refreshDirtyState()
+        other.text = "keep unsaved elsewhere"
+        other.refreshDirtyState()
+        let repository = root.path.hasPrefix("/var/") ? "/private" + root.path : root.path
+        let prepared = await project.saveBeforeGitAction(repository: repository, scope: "local", isCurrent: { true })
+        XCTAssertTrue(prepared)
+        XCTAssertEqual(try String(contentsOf: inside, encoding: .utf8), "save selected")
+        XCTAssertFalse(selected.isDirty)
+        XCTAssertEqual(try String(contentsOf: outside, encoding: .utf8), "other repository")
+        XCTAssertTrue(other.isDirty)
     }
 
     func testProjectCloseWaitsForFileSaveAndRetainsUnsavedOnFailure() async throws {

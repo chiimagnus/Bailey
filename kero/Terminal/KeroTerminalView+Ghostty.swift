@@ -14,10 +14,11 @@ extension KeroTerminalView {
 
     func start(launch: TerminalLaunch) {
         launchCommand = launch.commandLine
+        launchInput = launch.initialInput
         let controller = TerminalController(
             configSource: .none,
             theme: Self.ghosttyTheme(),
-            terminalConfiguration: Self.terminalConfiguration(command: launch.commandLine)
+            terminalConfiguration: Self.terminalConfiguration(command: launch.commandLine, initialInput: launch.initialInput)
         )
         ghosttyController = controller
         delegate = self
@@ -36,7 +37,7 @@ extension KeroTerminalView {
     func applyAppearance() {
         guard let ghosttyController else { return }
         _ = ghosttyController.setTerminalConfiguration(
-            Self.terminalConfiguration(command: launchCommand)
+            Self.terminalConfiguration(command: launchCommand, initialInput: launchInput)
         )
         _ = ghosttyController.setTheme(Self.ghosttyTheme())
         let isDark = NSApp.effectiveAppearance.bestMatch(
@@ -54,7 +55,7 @@ extension KeroTerminalView {
 
     // MARK: - Configuration
 
-    private static func terminalConfiguration(command: String) -> TerminalConfiguration {
+    private static func terminalConfiguration(command: String, initialInput: String?) -> TerminalConfiguration {
         let settings = AppSettings.shared
         let family = settings.fontFamily.isEmpty
             ? TerminalFont.bundledFamily : settings.fontFamily
@@ -113,6 +114,10 @@ extension KeroTerminalView {
                 builder.withCustom("keybind", keybind)
             }
             builder.withCustom("command", "shell:\(command)")
+            if let initialInput {
+                let bytes = initialInput.utf8.map { String(format: "\\x%02x", $0) }.joined()
+                builder.withCustom("input", "raw:" + bytes)
+            }
             builder.withCustom("term", "xterm-256color")
             builder.withCustom("shell-integration", "none")
             // The previous backend retained 500 rows. Ghostty budgets bytes

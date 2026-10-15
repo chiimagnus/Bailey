@@ -1,60 +1,43 @@
-# Git Manager 调研：只补 Kero 真正缺少的部分
+# Git Manager P4：Git Graph / VSCodium 右键菜单的源码依据
 
-对应 [Issue #2](https://github.com/chiimagnus/kero/issues/2) · [Recent Commits 设计稿](design.html)。研究依据为 **当前 Kero 源码**、Issue 中的 Git Graph 截图（两行提交、主干/多色分叉、Ref/短 SHA/作者/时间）与 Git Graph 官方材料，不把 Git Graph 的全量菜单当作 Kero 需求。
+本文只记录 **P4 执行前的可验证事实**：外部行为来源、Kero 当前入口与已证实的边界。具体需求在 [idea.md](idea.md)，逐项弹窗、任务及验收在 [plan-p4.md](plan-p4.md)。P1～P3 的旧范围、图谱算法与刷新决策已留在 [P1](plan-p1.md)、[P2](plan-p2.md)、[P3](plan-p3.md)，**旧 P2 曾排除 Cherry-pick/Remote/Tag 并不限制 P4**；[design.html](design.html) 只是 Recent Commits 历史视觉原型，不能作为原生交互通过的证明。关联 [Issue #2](https://github.com/chiimagnus/kero/issues/2)，包括[原 Commit 菜单截图](https://github.com/user-attachments/assets/4321d2dd-7bb6-4499-aa9d-2bcf11663c25)。
 
-## 一手参考
+## 一手行为来源
 
-- [Git Graph 仓库 README](https://github.com/mhutchie/vscode-git-graph)：区分 Commit、Branch、Tag、Stash、未提交变更与历史文件的菜单归属，以及图谱、Refs、详情界面。
-- [Git Graph Context Menus](https://github.com/mhutchie/vscode-git-graph/wiki/Context-Menus)：参考原生语义和动作分类，**不直接迁移全部菜单项**。Issue 中也附有其 Commit 菜单截图。
-- [Apple SwiftUI contextMenu](https://developer.apple.com/documentation/swiftui/view/contextmenu(menuitems:))：正式 UI 使用 SwiftUI `.contextMenu`；右击对象本身决定 Menu 归属，不在 App 中引入自绘 HTML 菜单。
-- Kero 本地 [Git 维护约束](../../../docs/features/git.md)、[安全](../../../SECURITY.md)、[文件与共享树](../../../docs/features/files.md)和仓库 [AGENTS.md](../../../AGENTS.md)，以及用户提供的当前界面截图。
+| 固定来源 | 哪部分是行为依据 |
+| --- | --- |
+| [Git Graph 固定提交 `d7f43f4`](https://github.com/mhutchie/vscode-git-graph/tree/d7f43f429a9e024e896bac9fc65fdc530935c812) | `web/main.ts` 的对象菜单、弹窗与推送默认 remote；`web/dialog.ts` 的按钮/字段；`src/config.ts` 默认值；`src/dataSource.ts` argv、条件 Squash Commit；**`src/gitGraphView.ts` 多步执行顺序**；`src/utils.ts` Archive、历史 Rename/打开；`web/graph.ts` Drop 拓扑；`src/types.ts` 消息对象种类 |
+| [Git Graph 菜单说明](https://github.com/mhutchie/vscode-git-graph/wiki/Context-Menus) | 核对对象分类与显示条件；**源码优先**，不把截图或菜单名称等同于实际行为 |
+| [VS Code 内置 Git 固定版本](https://github.com/microsoft/vscode/blob/76e9dff43b237f3fcbb8a289ed2f8bdf28105baf/extensions/git/package.json) | VSCodium 使用 VS Code 内置 Git 扩展的 SCM 菜单声明。重点是文件、目录与分组的 Stage/Unstage/Clean/Open File/Open HEAD File/Ignore；不混成 Git Graph 扩展自身的 Commit 菜单 |
+| [VS Code `repository.ignore`](https://github.com/microsoft/vscode/blob/76e9dff43b237f3fcbb8a289ed2f8bdf28105baf/extensions/git/src/repository.ts#L2728) | 打开/建立 Git 根目录 `.gitignore` 文档，按行追加选择的相对路径后保存；没有专属 Ignore 编辑器 |
+| [Apple SwiftUI `contextMenu`](https://developer.apple.com/documentation/swiftui/view/contextmenu(menuitems:)) | Kero 的对象菜单使用原生 SwiftUI/AppKit，而不是嵌入 Git Graph WebView |
 
-## 已经有的功能：无需再做
+上游证实的**二次行为**包括 Branch/Tag 重名时「替换 / 换名称」、远端 Branch Checkout 重名时「换名称 / 切已有并 Pull」、未合并 Branch 删除失败后询问强删、Tag 推送到可能不包含目标 Commit 的远端时警告。Merge 的 No-FF 默认开启；Commit Reset 默认 Mixed；Cherry Pick 仅合并提交需要选择父节点；Rebase 交互式模式会打开终端；Stash Apply/Pop 的 Reinstate Index 默认关闭。所有输入、默认值、按钮及 Git argv 由 [P4 弹窗合同](plan-p4.md#原生弹窗行为合同) 单独维护，不在此重复列一份操作表。
 
-| 现有代码入口 | 已有行为 | 本次处理 |
+**适用边界：** Git Graph 的 Branch/Remote Branch/Tag 有 Create Archive，适合 Kero 原生保存；其 PR Provider、Issue Linking、Code Review、Branches Dropdown、列配置、外部 Difftool 没有现有 Kero 对应对象，暂不移植。VS Code 历史图里的 Compare with Ref/Merge Base 不是 Git Graph 普通 Commit 右键命令，不为混合两个产品而新造泛用比较器。VSCodium 的 Ignore 属于文件/目录菜单，应补齐，但必须复用 Kero 现有文本编辑器与保存流程。
+
+## Kero 已有入口与缺口
+
+| 实际 owner / 入口 | 阅读当前代码后确认 | 应在何处落地 |
 | --- | --- | --- |
-| `kero/Git/GitPanel.swift` `branchMenu` | 显示当前分支、切换本地分支、从 HEAD 新建分支 | 直接复用；只给需要的 Ref Badge 提供正确菜单命中 |
-| `GitPanel.moreMenu` | Fetch、Pull (FF-only)、Push/Publish、Sync、Stash All/Pop、复制仓库路径 | 保留顶部菜单，不再创造独立的 Remote/Stash 管理 UI |
-| `GitPanel.commitBox` / `commitMenu` | 提交已暂存、全部暂存并提交、Amend | 不重做提交框，不重做提交功能 |
-| `GitEntryRow.menu` | merge/staged/unstaged 不同菜单，Stage/Unstage/Discard，本机 Finder、复制路径、终端插入 | 全部保留；远端和未跟踪删除走原有保护 |
-| `GitPanel.changeList`、`TreeDisplayModel`/`TreeFileRow` | MERGE/STAGED/CHANGES、目录压缩、共享行、分组动作与懒加载 | 仅展示/复用；不生成重复树组件 |
-| `RecentCommitsView` `changedFile` / `commitFiles` | 点击展开历史文件；打开历史 Diff，复制文件路径；保留 Tree / List 视图 | 不新造历史 Diff、文件管理器 |
-| `GitStatusModel` `refresh`/`loadMoreCommits` | 异步刷新、请求 ID、待处理合并、超时、30 条分页、失败/断线反馈 | 在这里和实际事件入口定位刷新延迟，不能直接推翻其既有防护 |
+| `RecentCommitsView.commitRow/referenceActions/referenceGroup/changedFile` | 双行图谱、左击展开、短 SHA、Ref/`+N` 基础命中已有；Remote Ref 仍是只读，Commit/Tag 菜单仅少数功能 | 扩展**同一对象入口**的按钮和回调，`+N` 调相同菜单，不改 Canvas 和共享树 |
+| `GitPanel.branchMenu/moreMenu/changeList/GitEntryRow.menu` | 顶部 Fetch/FF-only Pull/Push/Sync，MERGE/STAGED/CHANGES 分组，Stage/Unstage/Discard 及原生确认已有；`stashCount` 不等于可选某一条 | 保留现有菜单语义，在原分组和既有面板补所需 Stash/Ignore/Uncommitted 右键，避免平行工具栏 |
+| `GitPanel.presentGitNameDialog` | 通过全局 key/mainWindow 挑窗口；`TerminalManager.window` 是 private，公开当前入口为 `attachedWindow`；Model 没有 Project ID | `ToolPanelView` 注入发起窗口/Project 与已有 PanelContext 身份，不只在确认时读取当前 Model |
+| `GitStatusModel.createReference/perform/runGitStatus` | 排他执行、仓库/HEAD/branch/可选 upstream 与代次已有，但只有静态 argv 和 Bool completion；没有所选本地 Ref、Stash 或条件多步结果 | 在唯一 perform 最小补齐条件结果与对象预检；不可变 SHA 创建/读取不套全局 HEAD 或 worktree 守卫，不另建 workflow DSL |
+| `GitStatusModel.repositoryOperation` | 已识别 Merge/Cherry-pick/Revert/Rebase/Bisect 标记，并在 Banner 提示终端恢复 | **无需新状态机**；Git Graph 菜单自身没有 Continue/Abort/Skip GUI，使用既有原生终端实测恢复 |
+| `GitCommandExecution.runData`、`WorkspaceBackend.run/read` | stdoutLimit 会截断但保留 exit 0；SSH runner 先无界收集 stdout，read 的多读一字节才严格拒绝超限；LocalWorkspaceBackend.run 要绝对 executable 且不加载 Git 登录环境 | GitCommandExecution 生成临时归档，SSH 才有界读取到 Mac，本机磁盘保存无需内存上限；不写容器解析器或新传输协议；断线清理失败不能假报已清理 |
+| `Project.newSession/makeSession` → `TerminalSession.init/makeLaunchScript` | pinned SSH 丢 directory；自动跟随 SSH 的 Project（sshHost=nil）开本机 Shell；sendCommand 不证明远端 ready，launchCommand 是已有执行入口 | T2 在新 PTY 的启动链绑定捕获机器/仓库及真正交互命令，不新造 OSC 等待器或 fallback；目标选择变化不落回 Mac |
+| `Project.openCommitDiff/findDiffTab` → `DiffTab` → `DiffViewerView/DiffNativeSurface` | Key 缺来源；No Changes 会隐藏原文；commitHash 非 nil 不会选中刷新；gitContent 所有错误均当 missing | T6 一次接通来源、只读原文、worktree 刷新和真实失败；Rename 按上游一次 Revision→Worktree diff，不建历史索引 |
+| `TerminalManager.contentSnapshot` → `SessionStore.ContentSnapshot` → `Project.makeContent` | 当前持久化明确区分 diff/commitDiff，新来源若不接入会恢复成错误历史 Diff | T6 同任务维护当前模式及实际内容恢复；无旧版本兼容 decoder/迁移层，不破坏当前仍支持的工作区和历史快照业务 |
+| `Project.saveBeforeClosing/confirmCloseUnsaved` | 等待/提示保存后会 removeTab，不是通用 Git 覆写前置保护 | T1 直接复用 PaneContent.save 等待/复查，不关闭 Tab；失败保留缓冲，后续写工作区动作复用同一入口 |
+| `PanelSectionHeader.body`、`GitPanel.changedFileRows` | header 内已有 contextMenu，actions 也生成 hover 按钮；目录没有批量菜单，循环单文件执行会被 isBusy 拒绝 | T7 增加同一菜单的仅菜单项，目录单批路径集，不套第二 contextMenu 或增加平行 toolbar |
+| `Project.openFile` → `FileTab` → `SourceTextEditor.Coordinator` | 同一路径复用 FileTab；文本 `file.text` 被 `@ObservationIgnored`，原生 STTextView 持有另一个显示缓冲；SSH FileTab 初始 `.loading`，`save()` 是唯一串行保存路径 | Ignore 应等文本真正读入后通过**同一个原生编辑缓冲**追加并保存；不可直接改 `file.text` 或 Backend 偷写，否则 UI/undo/未保存修改会分裂 |
 
-## 确实缺少的增量（有源码证据）
+## 已复现的关键 Git 边界
 
-- 2026-10-14 源码复核：`GitStatusModel` 已是 `@MainActor @Observable`，继续复用 `GitCommandExecution` 与 `WorkspaceBackend`。新能力沿此唯一 Git ViewModel 接入，不重复进行 Observation 迁移或引入平行服务。所有权见[当前架构](../../../docs/architecture.md#唯一所有者)，测试使用[分层 XCTest](../../../docs/testing.md)，不是旧独立检查脚本。
-
-1. **Commit 与 Ref 菜单归属**：`RecentCommitsView.commitRow` 整行放在一个 `Button` 中，右键仅复制 Hash/Subject；`primaryReference` 把一个引用挑成单一字符串胶囊。真实 Tag Badge 尚未独立呈现或拥有自己的 `.contextMenu`。需分离 Commit 行与 Ref Badge 的命中，不能用一个统一的菜单判断“点击位置”的字符串。
-2. **选定提交创建 Ref**：`GitStatusModel.createBranch(named:)` 当前用 `git switch -c <name>` 从 HEAD 建立；不能用于“在历史 Commit 建分支”。需要在已有 `perform` 命令/身份校验链下增加以指定 SHA 创建本地分支/Tag 的路径；**不增加 Tag Push/Delete、远端操作或发布流程**。
-3. **真实合并/分叉**：`GitStatusModel.runGitStatus` 已使用 `git log ... %P ... %D` 一次拿到**完整父哈希与引用字符串**；但 `parseRecentCommits` 截断为首个 `parentHash`，`CommitTreeRails` 仅在 X=14 画单直线。应复用已有数据扩展 Model，并在 RecentCommitsView 中布局车道，而不是加一套网络查询。
-4. **外部变更没有稳定的刷新触发证据**：`ContentView.syncGit` 监听 app 激活、terminal command completion 与项目切换；`ToolPanelView.pollsSelectedPanel` 明确排除 `.git`，并在 `performSync` 的 `.git` 分支不调用 `git.refresh()`。因此持续前台、外部程序修改仓库的情形**可能缺少刷新触发**。这只是静态可达路径证据，需复现实测后确认是否就是 Issue 的根因；现有 `GitStatusModel.refreshPending` 并发合并本身不是已证实的 bug。
-
-## 精简后的 Context Menu 归属
-
-| 对象 | 复用（已存在） | 真正建议增加 | 不做 |
-| --- | --- | --- | --- |
-| Commit 行 / 节点 | 复制 SHA、复制标题；单击展开历史文件 | 在指定提交创建本地分支、创建 Tag；明确目标 Commit | 不做 Cherry-pick、Revert、Drop、Merge、Rebase、Reset 的全量 Git Graph 复刻 |
-| 当前本地分支 Badge | Top Branch/Menu 已有当前状态、Push、Fetch、创建分支 | 独立 Badge 命中、复制分支名 | 不允许 Checkout 自己 / 删除当前分支 |
-| 其他本地分支 Badge | 已有 `switchBranch(to:)` | 独立 Badge 命中、复制分支名 | 不新造分支管理页、远程分支删除 |
-| `origin/main` 等已有跟踪引用 | 顶部 upstream 状态、Fetch/Pull/Sync | 在 Recent Commits 中作为胶囊显示、标注跟踪引用身份 | **只显示，不独立右击管理，也不新增 Remote Branch 菜单** |
-| Tag Badge | 历史 `%D` 可能携带 Tag 字符串 | Tag 类型/独立右键；定位所指 Commit、复制名称 | 不做 Push/Delete Tag 或 Tag 列表页；Tag 不当作 Branch |
-| 未跟踪/未暂存/已暂存/冲突文件、历史文件 | 现有 `GitEntryRow` / `RecentCommitsView` 上下文菜单 | 只验证正确命中，不重做操作 | 不重复实现文件读取/暂存/删除/恢复 |
-| 仓库标题、CHANGES、More、Stash | 现有 Menu / Button / `PanelSectionHeader` | 原布局维持；没有明显缺失则不改 | 不加第二套仓库/分组菜单 |
-
-> `design.html` **仅演示 Recent Commits**，其中 Commit/分支/Tag/历史文件与多色分叉是合成数据；不包含 Changes、Staged/Conflict 等其他 Git Manager 区域。自绘菜单仅用于浏览器评审，正式 App 使用 SwiftUI `.contextMenu`。
-
-## 新版设计稿：两行提交与分叉图谱
-
-- 一条 Commit 分两行：**标题 + 紧随其后的 Ref Badge**；其下为**短 SHA、作者、右对齐相对时间**，上下提交之间用细分隔线。HTML 示例显示 8 位 SHA，而生产代码的 `%h` 长度受 Git 缩写规则影响；优先复用 `RecentCommit.shortHash`，完整 SHA 仍可复制，不为视觉长度新增 Git 查询。标题、作者与 Ref 可截断，但不能挤掉时间；作者和时间沿用现有 `author` / `relativeDate`。原型固定 `90` 只是示例计数，正式 App 使用现有实际计数。
-- 蓝色主干为当前本地分支的第一父提交链；真实存在的侧分支在其生命周期内使用其他颜色、从主干分叉并平滑合并。**只保留分叉/合并视觉样例，不再制作独立的“线性历史”模式或切换按钮**；正式 App 仍需支持真实线性仓库的一车道显示。线条必须依据全部 parent OID；分页未加载的父提交不虚构连接，展开文件后图谱仍需连续。
-- HTML `topo()` 仅对样例中的侧分支重复利用第二车道，**不能直接作为生产多车道算法**：若真实仓库同时存在多个分支，应由拓扑关系分配不冲突的车道，颜色不应因展开/分页改变。
-- Ref 必须解析 `HEAD -> main` / `origin/main` / `tag: v...` 等类型；一个 Commit 可显示多个 Badge。跟踪引用只显示，不响应专属管理菜单。当前 HTML 在窄窗口用 `+N` 表示额外的 Ref，但该字符**尚不可操作**；正式 App 必须能访问其中的每个 Ref（可用原生子菜单或等价可访问入口），不能因截断丢失 Tag 操作。
-- 单击标题展开 Commit 文件，单击短 SHA 复制完整值；右击 Commit 行显示 Commit 菜单，右击本地分支或 Tag 显示该对象菜单，不穿透到父行。历史文件继续使用共享树的键盘/hover/目录折叠语义，Ref 省略显示不能带来横向滚动或错误命中。
-- 刷新调查需要区分：(a) 事件根本未触发，(b) 已触发但合并/丢弃，(c) Git/SSH 查询耗时，(d) 新状态未渲染。以外部 CLI 修改 `.github/features` 下文件和提交后的状态为可重复样本；在临时仓库运行，避免污染真实项目。
-- 本次唯一新增的 Git 写操作是以被选中 Commit SHA 在本地创建分支或 Tag；使用现有操作链处理输入、忙碌状态、错误和仓库身份，不在 View 自行执行 Shell。**不包括 Tag Push/Delete，也不触发 Tag Release**。
-
-## 本轮交付边界
-
-- 当前 `design.html` 是用户已更新并提交的 **V4 Recent Commits 参考原型**。过去 HTML 的浏览器测试不等于这次同步计划或正式 SwiftUI 的实机验收；使用它时需独立核验所修改的版本。
-- 本调研记录实施前的缺口。P1～P3 现已实施且完成独立逐提交审计，现行契约见 [Git 维护文档](../../../docs/features/git.md)，验收证据按阶段保留在 `audit-p1.md`～`audit-p3.md`。正式 App 已按后续明确授权替换；未使用用户真实仓库执行测试写操作。
+- **Stash OID 与 selector 不等价：** Apply OID 可用，Pop/Drop OID 会被拒；Branch 使用 selector 成功时也可能删除该条 stash，改传 OID 会丢失移除语义。Pop/Drop/Branch 都持有 selector+OID 并执行前核对，不宣称预检是外部 CLI 原子锁。
+- **远端 Ref 删除与 lease 不是同一产品行为：** 上游 deleteRemoteBranch/deleteTag 是按名字原生 Push Delete，并尊重服务器拒绝。之前临时 bare remote 证明 exact-OID lease 可拒绝已移动 tip，只是 Git 能力实验，**不构成 P4 必须增加此围栏的依据**；本轮删除该计划前提。Force With Lease 的 Push 模式依旧按用户选择保留，不预先 Fetch 冲掉其基线；Kero 不修改任何用户服务器保护配置。
+- **多远端并非同一种停止规则：** `gitGraphView.ts.deleteBranch` 先本地删除，成功后逐个尝试全部列出的 remote；`dataSource.pushBranchToMultipleRemotes/pushTag` 首错停止。默认 remote 由 `web/main.ts.getPushRemote` 决定，Delete on Remotes 是一个复选而非任意多选，详见计划合同。
+- **本轮隔离实证（2026-10-14）：** 临时 A→B→C 库 Drop B，Tag keep-B OID 未变；FF 的 merge --no-commit 前移 HEAD；Squash 有 staged 才 Commit，默认消息采用上游 actionOn，二次无差异不空提交；Reset Hard 保留 ordinary-untracked，却删掉阻挡 tracked 文件的 untracked 目录；空 Annotated message 显式 `-m ""` 可创建；selected SHA 的 ZIP 内容准确。原始输出来自本轮临时库，不是 App/SSH 验收。Drop 的用户 `rebase.updateRefs` 配置边界已用 [Git 官方契约](https://git-scm.com/docs/git-rebase)核对。
+- **风险来自用户目标，不来自按钮名称：** Soft/Mixed/Hard Reset 对 HEAD、index、worktree 的效果不同；Drop 会重放后续提交而非做 Revert；Tag 是 Annotated Object 时不能混用 Tag Object OID 和 peeled Commit；SSH 同名路径不得回退写 Mac；历史 File Reset 会同时改 index 与 worktree，不能覆盖未保存编辑。
+- **测试证据分层：** `GitStatusModelTests` / `GitExecutionTests` 的临时仓库需核对真实 refs/index/worktree；`RecentCommitsViewTests` / `DiffTabTests` 验证原生菜单、显示与 Tab；独立 App E2E 和经批准的 Windows SSH 专用测试仍是单独关口。Issue #2 的 SSH 外部刷新仍未实测，不因 P4 菜单完成而关闭。

@@ -115,14 +115,14 @@ final class GitExternalRefreshTests: XCTestCase {
 
         let window = NSWindow(
             contentRect: NSRect(x: -1200, y: -1200, width: 460, height: 740),
-            styleMask: [.borderless], backing: .buffered, defer: false
+            styleMask: [.titled], backing: .buffered, defer: false
         )
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(
             rootView: ToolPanelView(manager: manager, git: model, panel: .git)
                 .frame(width: 460, height: 740)
         )
-        window.makeKeyAndOrderFront(nil)
+        window.orderFront(nil)
         defer { window.close() }
         try await Task.sleep(for: .milliseconds(350))
         XCTAssertTrue(window.isVisible)
@@ -154,7 +154,16 @@ final class GitExternalRefreshTests: XCTestCase {
         let newHead = git(["rev-parse", "HEAD"])
         let historyStart = Date()
         XCTAssertNotEqual(oldHead, newHead)
-        try await wait(seconds: 6) { model.recentCommits.first?.hash == newHead }
+        do {
+            try await wait(seconds: 6) { model.recentCommits.first?.hash == newHead }
+        } catch {
+            print("Git refresh diagnostic: expected HEAD=\(newHead) actual HEAD=\(model.headOID ?? "nil") "
+                + "recent=\(model.recentCommits.first?.hash ?? "nil") "
+                + "refreshing=\(model.isRefreshing) repo=\(model.isRepo) "
+                + "scope=\(model.currentScope) statusError=\(model.statusError ?? "nil") "
+                + "NSApp.isActive=\(NSApp.isActive)")
+            throw error
+        }
         let historyLatency = Date().timeIntervalSince(historyStart)
         print("Git external commit refresh latency: \(historyLatency) seconds")
         XCTAssertLessThan(historyLatency, 5, "External commits must reach Recent Commits promptly")
@@ -226,5 +235,178 @@ final class GitExternalRefreshTests: XCTestCase {
         XCTAssertEqual(model.rootPath, second.path)
         XCTAssertEqual(model.recentCommits.first?.hash, secondHead)
         XCTAssertFalse(model.changedEntries.contains { $0.path == "tracked.txt" })
+    }
+
+    func testVisibleSSHPanelRefreshesExternalGitChanges() async throws {
+        guard let host = ProcessInfo.processInfo.environment["KERO_P4_TEST_SSH_HOST"] else {
+            throw XCTSkip("Real SSH refresh requires an authorized test host")
+        }
+        let backend = SSHHostWorkspaces.backend(for: host)
+        let externalSocket = "/tmp/kero-issue2-\(UUID().uuidString.prefix(8)).sock"
+        let external = SSHWorkspaceBackend(
+            runner: SSHHostCommandRunner(host: host, socket: externalSocket), timeout: 25
+        )
+        let created = try await backend.run(
+            argv: ["mktemp", "-d", "/tmp/kero-issue2-refresh-XXXXXX"],
+            cwd: nil, env: nil, stdin: nil, timeout: 25
+        )
+        XCTAssertEqual(created.status, 0)
+        let root = String(decoding: created.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (root as NSString).deletingLastPathComponent == "/tmp",
+              (root as NSString).lastPathComponent.hasPrefix("kero-issue2-refresh-")
+        else { throw WorkspaceError.notFound }
+
+        func remote(_ command: String, via workspace: SSHWorkspaceBackend) async throws {
+            let result = try await workspace.run(
+                argv: ["sh", "-c", command], cwd: root, env: nil, stdin: nil, timeout: 25
+            )
+            guard result.status == 0 else {
+                XCTFail(String(decoding: result.stderr, as: UTF8.self))
+                throw WorkspaceError.notFound
+            }
+        }
+        func cleanup() async {
+            do { try await backend.delete(paths: [root]) }
+            catch { XCTFail("Could not delete test-owned SSH fixture: \(error)") }
+            if FileManager.default.fileExists(atPath: externalSocket) {
+                do {
+                    let result = try await Task.detached {
+                        try ProcessRemoteCommandRunner.launch(
+                            sshPath: "/usr/bin/ssh",
+                            arguments: ["-S", externalSocket, "-O", "exit", host],
+                            stdin: nil, timeout: 10
+                        )
+                    }.value
+                    XCTAssertEqual(result.status, 0)
+                } catch {
+                    XCTFail("Could not stop test-owned external SSH connection: \(error)")
+                }
+            }
+        }
+
+        do {
+            try await remote("""
+                git init -q -b main
+                git config user.name 'External SSH Fixture'
+                git config user.email fixture@invalid
+                git config commit.gpgsign false
+                git config core.autocrlf false
+                printf 'baseline\\n' > tracked.txt
+                git add tracked.txt
+                git commit -qm baseline
+                """, via: backend)
+
+            let manager = TerminalManager()
+            defer { manager.windowClosed() }
+            let project = Project(
+                fallbackName: "External SSH Fixture", workspaceConfiguration: .standard
+            )
+            project.sshHost = host
+            project.customDirectory = root
+            manager.projects = [project]
+            manager.selectedProjectID = project.id
+            let model = GitStatusModel()
+            model.syncSelectedProject(in: manager)
+            do {
+                try await wait(seconds: 35) {
+                    model.hasResolvedStatus && !model.isRefreshing && model.isRepo
+                }
+            } catch {
+                print("SSH initial refresh failed: root=\(model.rootPath) scope=\(model.currentScope) " +
+                    "isRepo=\(model.isRepo) resolved=\(model.hasResolvedStatus) " +
+                    "refreshing=\(model.isRefreshing) statusError=\(model.statusError ?? "nil")")
+                throw error
+            }
+            XCTAssertEqual(model.currentScope, "ssh:" + host)
+            let originalHead = try XCTUnwrap(model.recentCommits.first?.hash)
+
+            let window = NSWindow(
+                contentRect: NSRect(x: -1200, y: -1200, width: 460, height: 740),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView:
+                ToolPanelView(manager: manager, git: model, panel: .git)
+                    .frame(width: 460, height: 740))
+            window.orderFront(nil)
+            defer { window.close() }
+            try await Task.sleep(for: .milliseconds(350))
+            XCTAssertTrue(window.isVisible)
+            NotificationCenter.default.post(
+                name: NSApplication.didBecomeActiveNotification, object: NSApp
+            )
+
+            // This SSH connection never reports a Kero terminal command completion.
+            try await remote("printf 'worktree\\n' >> tracked.txt", via: external)
+            let worktreeStart = Date()
+            try await wait(seconds: 30) {
+                model.changedEntries.contains { $0.path == "tracked.txt" }
+            }
+            print("SSH external worktree refresh: \(Date().timeIntervalSince(worktreeStart)) s")
+
+            try await remote("git add tracked.txt", via: external)
+            do {
+                try await wait(seconds: 30) {
+                    model.stagedEntries.contains { $0.path == "tracked.txt" }
+                }
+            } catch {
+                let truth = await GitCommandExecution.run(
+                    ["status", "--short"], in: root, timeout: 25, backend: external
+                )
+                print("SSH staged timeout: git=\(truth.stdout) staged=\(model.stagedEntries.count) " +
+                    "changed=\(model.changedEntries.count) refreshing=\(model.isRefreshing) " +
+                    "busy=\(model.isBusy) statusError=\(model.statusError ?? "nil") " +
+                    "scope=\(model.currentScope)")
+                throw error
+            }
+            try await remote("git commit -qm 'external SSH change'", via: external)
+            let newest = await GitCommandExecution.run(
+                ["rev-parse", "HEAD"], in: root, timeout: 25, backend: external
+            )
+            XCTAssertEqual(newest.status, 0, newest.stderr)
+            let newHead = newest.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            XCTAssertNotEqual(originalHead, newHead)
+            let historyStart = Date()
+            try await wait(seconds: 30) { model.recentCommits.first?.hash == newHead }
+            print("SSH external commit refresh: \(Date().timeIntervalSince(historyStart)) s")
+
+            NotificationCenter.default.post(
+                name: NSApplication.didResignActiveNotification, object: NSApp
+            )
+            try await wait(seconds: 15) { !model.isRefreshing }
+            try await remote("printf 'background\\n' >> tracked.txt", via: external)
+            try await Task.sleep(for: .seconds(7))
+            XCTAssertTrue(model.changedEntries.isEmpty, "Background Git must not poll")
+
+            NotificationCenter.default.post(
+                name: NSApplication.didBecomeActiveNotification, object: NSApp
+            )
+            try await wait(seconds: 30) {
+                model.changedEntries.contains { $0.path == "tracked.txt" }
+            }
+
+            window.contentView = NSHostingView(rootView: Text("Git panel hidden"))
+            try await Task.sleep(for: .milliseconds(350))
+            try await remote(
+                "git add tracked.txt && git commit -qm 'external while hidden'", via: external
+            )
+            let hidden = await GitCommandExecution.run(
+                ["rev-parse", "HEAD"], in: root, timeout: 25, backend: external
+            )
+            XCTAssertEqual(hidden.status, 0, hidden.stderr)
+            let hiddenHead = hidden.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            try await Task.sleep(for: .seconds(7))
+            XCTAssertNotEqual(model.recentCommits.first?.hash, hiddenHead,
+                              "Hidden Git panel must not keep polling")
+            model.refresh()
+            try await wait(seconds: 35) {
+                !model.isRefreshing && model.recentCommits.first?.hash == hiddenHead
+            }
+        } catch {
+            await cleanup()
+            throw error
+        }
+        await cleanup()
     }
 }

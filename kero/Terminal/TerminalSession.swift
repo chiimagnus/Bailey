@@ -13,7 +13,7 @@ extension TerminalSession {
     /// Mac, and two machines are different workspaces even at the same path —
     /// which is what keeps a remote `/etc/hosts` from reusing the local tab.
     var workspaceIdentity: String? {
-        location.remoteConnection?.workspaceIdentity
+        location.remoteConnection?.workspaceIdentity ?? initialWorkspace?.identity.workspace
     }
 }
 
@@ -43,6 +43,8 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     /// through the private authenticated handoff, never guessed from the foreground
     /// process: an ssh Kero did not front cannot be followed.
     var location: WorkspaceLocation = .local
+    private var initialWorkspace: PanelContext?
+    private let isRemoteLaunch: Bool
     /// The connection this session most recently left. Open editor tabs use it
     /// to recognise their own remote after `exit` has returned the pane to the
     /// local machine.
@@ -77,7 +79,9 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     init(
         initialDirectory: String? = nil,
         restoredHistory: String? = nil,
-        launchCommand: String? = nil
+        launchCommand: String? = nil,
+        initialWorkspace: PanelContext? = nil,
+        initialInput: String? = nil
     ) {
         let sessionID = UUID()
         let shellPath = LocalWorkspaceBackend.loginShell
@@ -93,12 +97,15 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         let launch = TerminalLaunch(
             commandLine: "/bin/sh -c \(Self.shellQuote(script))",
             workingDirectory: directory,
-            environment: environment
+            environment: environment,
+            initialInput: initialInput
         )
 
         id = sessionID
         zshIntegrationActive = environment["ZDOTDIR"] != nil
         self.shellPath = shellPath
+        self.initialWorkspace = initialWorkspace
+        isRemoteLaunch = initialWorkspace != nil
         launchWorkingDirectory = directory
         launchDirectoryURL = artifacts.directoryURL
         shellPidFileURL = artifacts.pidFileURL
@@ -219,6 +226,8 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
             return false
         }
         endRemoteConnection(reason: "replaced by a new connection")
+        if let initialWorkspace { connection.workingDirectory = initialWorkspace.cwd }
+        initialWorkspace = nil
         location = .remote(connection)
         connection.onWorkspaceChange = { [weak self, weak connection] in
             guard let self, let connection,
@@ -245,10 +254,14 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     /// is gone, which is what `exit` does. A connection that drops while ssh is
     /// still running keeps the pane remote and disconnected on purpose: falling
     /// back to local paths under a remote heading is the one outcome to avoid.
-    private func returnToLocal(_ connection: RemoteConnection, reason: String) {
+    private func finishRemoteProcess(_ connection: RemoteConnection, reason: String) {
         connection.markDisconnected(reason: reason)
         connection.onWorkspaceChange = nil
         lastRemoteConnection = connection
+        if isRemoteLaunch {
+            onRemoteContextChange?()
+            return
+        }
         location = .local
         onRemoteContextChange?()
     }
@@ -267,7 +280,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
             // The only way back to the local machine is the ssh process
             // ending, which is what `exit` does.
             guard connection.isSSHProcessAlive else {
-                returnToLocal(connection, reason: "ssh process exited")
+                finishRemoteProcess(connection, reason: "ssh process exited")
                 return
             }
             // The master removes its socket when it goes; cheaper than asking.
@@ -441,6 +454,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     /// this session. Always the Mac's own disk today; a session ssh'd into a
     /// remote machine will answer with a backend that runs over that channel.
     var workspaceBackend: WorkspaceBackend {
+        if let initialWorkspace { return initialWorkspace.backend }
         guard let connection = connectedRemote else { return LocalWorkspaceBackend.shared }
         return connection.workspaceBackend
     }
@@ -453,6 +467,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     /// local terminals and the saved session snapshot and must stay a path on
     /// this Mac.
     var panelDirectoryPath: String {
+        if let initialWorkspace { return initialWorkspace.cwd }
         guard let directory = connectedRemote?.workingDirectory else {
             return currentDirectoryPath
         }
@@ -466,6 +481,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     /// channel to work over. Saying so is better than showing this Mac's files
     /// under the remote's name.
     var remoteHeaderState: RemotePaneHeaderState {
+        if let initialWorkspace { return .connecting(destination: initialWorkspace.scope) }
         // A connection of Kero's own always describes itself, whatever is in
         // the foreground.
         if location.remoteConnection != nil {

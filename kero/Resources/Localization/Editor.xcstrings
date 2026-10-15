@@ -1,6 +1,26 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "The file is unavailable or its workspace changed. Reopen it and try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件不可用或工作区已更改。请重新打开后重试。"
+          }
+        }
+      }
+    },
+    "Edits could not be saved." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法保存编辑。"
+          }
+        }
+      }
+    },
     "Could not save: %@" : {
       "localizations" : {
         "zh-Hans" : {

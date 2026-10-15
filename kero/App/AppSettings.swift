@@ -35,11 +35,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         }
     }
 
-    static var saved: AppLanguage {
+    static func saved(in defaults: UserDefaults, domainName: String) -> AppLanguage {
         guard
-            let bundleIdentifier = Bundle.main.bundleIdentifier,
-            let domain = UserDefaults.standard.persistentDomain(
-                forName: bundleIdentifier
+            let domain = defaults.persistentDomain(
+                forName: domainName
             ),
             let identifiers = domain["AppleLanguages"] as? [String],
             let identifier = identifiers.first
@@ -64,12 +63,12 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         return nil
     }
 
-    func persist() {
+    func persist(in defaults: UserDefaults) {
         switch self {
         case .system:
-            UserDefaults.standard.removeObject(forKey: "AppleLanguages")
+            defaults.removeObject(forKey: "AppleLanguages")
         case .english, .simplifiedChinese:
-            UserDefaults.standard.set([rawValue], forKey: "AppleLanguages")
+            defaults.set([rawValue], forKey: "AppleLanguages")
         }
     }
 }
@@ -102,6 +101,7 @@ final class AppSettings {
     nonisolated static let configURL = AppIdentity.configDirectory
         .appendingPathComponent("config.toml")
     private let settingsURL: URL
+    private let languageDefaults: UserDefaults
 
     static let defaultFontSize: Double = 13
     static let fontSizeRange: ClosedRange<Double> = 8...32
@@ -118,7 +118,7 @@ final class AppSettings {
     let activeLanguage: AppLanguage
 
     var language: AppLanguage {
-        didSet { language.persist() }
+        didSet { language.persist(in: languageDefaults) }
     }
 
     var languageRequiresRelaunch: Bool {
@@ -176,6 +176,14 @@ final class AppSettings {
         didSet { save() }
     }
 
+    var gitAlwaysAcceptCheckout: Bool {
+        didSet { save() }
+    }
+
+    var gitAlwaysProceedPushTag: Bool {
+        didSet { save() }
+    }
+
     /// Render terminal glyphs with slightly heavier strokes, like classic
     /// macOS font smoothing. Each backend maps this to its own rasterizer.
     /// Persisted as `terminal.font-thicken`; off by default so Kero's text
@@ -212,9 +220,12 @@ final class AppSettings {
         didSet { save() }
     }
 
-    init(configURL: URL = AppSettings.configURL) {
+    init(configURL: URL = AppSettings.configURL,
+         languageDefaults: UserDefaults = .standard,
+         languageDomain: String = AppIdentity.bundleIdentifier) {
         settingsURL = configURL
-        let savedLanguage = AppLanguage.saved
+        self.languageDefaults = languageDefaults
+        let savedLanguage = AppLanguage.saved(in: languageDefaults, domainName: languageDomain)
         activeLanguage = savedLanguage
         language = savedLanguage
 
@@ -244,6 +255,8 @@ final class AppSettings {
             rawValue: toml["toolbar.visibility"]?.string ?? ""
         ) ?? Self.defaultToolbarVisibility
         gitViewMode = GitViewMode(rawValue: toml["git.view-mode"]?.string ?? "") ?? .tree
+        gitAlwaysAcceptCheckout = toml["git.always-accept-checkout"]?.bool ?? false
+        gitAlwaysProceedPushTag = toml["git.always-proceed-push-tag"]?.bool ?? false
         fontThicken = toml["terminal.font-thicken"]?.bool ?? false
         cursorShape = TerminalCursorShape(
             rawValue: toml["terminal.cursor-shape"]?.string ?? ""
@@ -328,6 +341,8 @@ final class AppSettings {
         themeLight = Theme.defaultLightThemeName
         toolbarVisibility = Self.defaultToolbarVisibility
         gitViewMode = .tree
+        gitAlwaysAcceptCheckout = false
+        gitAlwaysProceedPushTag = false
         cursorShape = .block
         cursorBlinking = true
         macosOptionAsAlt = false
@@ -360,6 +375,12 @@ final class AppSettings {
         }
         if gitViewMode != .tree {
             lines.append("git.view-mode = \(TOML.quote(gitViewMode.rawValue))")
+        }
+        if gitAlwaysAcceptCheckout {
+            lines.append("git.always-accept-checkout = true")
+        }
+        if gitAlwaysProceedPushTag {
+            lines.append("git.always-proceed-push-tag = true")
         }
         if fontThicken {
             lines.append("terminal.font-thicken = true")

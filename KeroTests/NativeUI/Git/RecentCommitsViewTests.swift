@@ -69,12 +69,17 @@ final class RecentCommitsViewTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: RecentCommitsView(
             commits: commits,
+            repoRoot: "/fixture", fileAction: { _, _, _ in },
+            loadBinaryStatus: { _ in }, isBinaryFile: { _, _ in false },
             expandedCommitIDs: Binding(get: { selection.expanded }, set: { selection.expanded = $0 }),
             collapsedFolders: Binding(get: { selection.folders }, set: { selection.folders = $0 }),
             viewMode: viewMode, fontScale: 1,
             hasMoreCommits: false, isLoadingMore: false, loadMore: { false },
             openDiff: { _, _ in }, canSwitchBranch: true,
-            switchBranch: { _ in }, createReference: { _, _ in }
+            switchBranch: { _ in }, branchAction: { _, _, _ in }, remoteAction: { _, _, _ in }, tagAction: { _, _, _ in },
+            isAnnotatedTag: { _ in false },
+            canFetchRemoteBranch: { _ in false }, createBranch: { _ in }, addTag: { _ in },
+            canActOnCommit: true, canDropCommit: { _ in false }, commitAction: { _, _ in }
         ).frame(width: width, height: height, alignment: .topLeading)
             .background(Color(nsColor: Theme.sidebar)))
         window.orderFront(nil)
@@ -179,13 +184,18 @@ final class RecentCommitsViewTests: XCTestCase {
         window.contentView = NSHostingView(rootView: ScrollView(.vertical) {
             RecentCommitsView(
                 commits: commits,
+            repoRoot: "/fixture", fileAction: { _, _, _ in },
+            loadBinaryStatus: { _ in }, isBinaryFile: { _, _ in false },
                 expandedCommitIDs: Binding(get: { selection.expanded }, set: { selection.expanded = $0 }),
                 collapsedFolders: Binding(get: { selection.folders }, set: { selection.folders = $0 }),
                 viewMode: .list, fontScale: 1,
                 hasMoreCommits: true, isLoadingMore: false,
                 loadMore: { pageRequests += 1; return true },
                 openDiff: { _, _ in }, canSwitchBranch: true,
-                switchBranch: { _ in }, createReference: { _, _ in }
+                switchBranch: { _ in }, branchAction: { _, _, _ in }, remoteAction: { _, _, _ in }, tagAction: { _, _, _ in },
+            isAnnotatedTag: { _ in false },
+            canFetchRemoteBranch: { _ in false }, createBranch: { _ in }, addTag: { _ in },
+                canActOnCommit: true, canDropCommit: { _ in false }, commitAction: { _, _ in }
             )
         }.frame(width: width, height: height))
         window.orderFront(nil)
@@ -267,6 +277,8 @@ final class RecentCommitsViewTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: RecentCommitsView(
             commits: commits,
+            repoRoot: "/fixture", fileAction: { _, _, _ in },
+            loadBinaryStatus: { _ in }, isBinaryFile: { _, _ in false },
             expandedCommitIDs: Binding(
                 get: { selection.expanded },
                 set: { selection.expanded = $0 }
@@ -280,7 +292,9 @@ final class RecentCommitsViewTests: XCTestCase {
             loadMore: { false },
             openDiff: { commit, file in diffs.append(commit.hash + ":" + file.path) },
             canSwitchBranch: true, switchBranch: { _ in },
-            createReference: { _, _ in }
+            branchAction: { _, _, _ in }, remoteAction: { _, _, _ in }, tagAction: { _, _, _ in },
+            isAnnotatedTag: { _ in false },
+            canFetchRemoteBranch: { _ in false }, createBranch: { _ in }, addTag: { _ in }, canActOnCommit: true, canDropCommit: { _ in false }, commitAction: { _, _ in }
         ).frame(width: width, height: height, alignment: .topLeading)
             .background(Color(nsColor: Theme.sidebar)))
         window.orderFront(nil)
@@ -316,6 +330,8 @@ final class RecentCommitsViewTests: XCTestCase {
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: RecentCommitsView(
                 commits: [commit],
+            repoRoot: "/fixture", fileAction: { _, _, _ in },
+            loadBinaryStatus: { _ in }, isBinaryFile: { _, _ in false },
                 expandedCommitIDs: Binding(
                     get: { selection.expanded },
                     set: { selection.expanded = $0 }
@@ -328,7 +344,9 @@ final class RecentCommitsViewTests: XCTestCase {
                 hasMoreCommits: false, isLoadingMore: false,
                 loadMore: { false }, openDiff: { _, _ in },
                 canSwitchBranch: true, switchBranch: { _ in },
-            createReference: { _, _ in }
+                branchAction: { _, _, _ in }, remoteAction: { _, _, _ in }, tagAction: { _, _, _ in },
+            isAnnotatedTag: { _ in false },
+            canFetchRemoteBranch: { _ in false }, createBranch: { _ in }, addTag: { _ in }, canActOnCommit: true, canDropCommit: { _ in false }, commitAction: { _, _ in }
             )
             .frame(width: width, height: height, alignment: .topLeading)
                 .background(Color(nsColor: Theme.sidebar)))
@@ -342,6 +360,35 @@ final class RecentCommitsViewTests: XCTestCase {
             click(titlePoint, in: window)
             XCTAssertFalse(selection.expanded.contains(commit.hash))
             window.close()
+        }
+    }
+
+    func testNativeContextMenuAtDirectReferencesContainsOnlyTheSelectedObjectActions() throws {
+        let cases: [(GitStatusModel.RecentCommit.Reference.Kind, String, String)] = [
+            (.currentBranch, "main", String(localized: "Rename Branch…", table: "Git")),
+            (.localBranch, "topic", String(localized: "Delete Branch…", table: "Git")),
+            (.remoteBranch, "origin/topic", String(localized: "Delete Remote Branch…", table: "Git")),
+            (.tag, "v1.2.3", String(localized: "Delete Tag…", table: "Git")),
+        ]
+        for (kind, name, expected) in cases {
+            let selection = GraphSelection()
+            let commit = GitStatusModel.RecentCommit(
+                hash: "menu", shortHash: "menu", subject: "Small change", author: "Developer",
+                date: .now, parentHashes: [], references: [.init(kind: kind, name: name)], files: []
+            )
+            let height: CGFloat = 110
+            let window = hostHistory([commit], selection: selection, height: height)
+            defer { window.close() }
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: .rightMouseDown, location: NSPoint(x: 216, y: height - 12),
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                clickCount: 1, pressure: 1))
+            let menu = try XCTUnwrap(window.contentView?.menu(for: event), name)
+            let titles = menu.items.map(\.title)
+            XCTAssertTrue(titles.contains(expected), name)
+            XCTAssertFalse(titles.contains(String(localized: "Create Branch at Commit…", table: "Git")), name)
+            XCTAssertTrue(selection.expanded.isEmpty, "Requesting a context menu must not trigger a left action")
         }
     }
 

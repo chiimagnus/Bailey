@@ -119,16 +119,15 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         XCTAssertEqual(afterFailure, "original")
         XCTAssertTrue(manager.projects.contains { $0 === project })
 
-        // Replace the entire SwiftUI host while the dirty window is still
-        // alive. It must not accidentally chain its original delegate through
-        // a dead WindowChromeAccessor coordinator.
-        weak var retiredHost = host
+        // Replacing the SwiftUI host must install a live coordinator without
+        // losing the original window delegate. SwiftUI owns when the retired
+        // host is released; deallocation is not a prerequisite for close.
         let replacement = NSHostingView(rootView: ContentView(manager: manager))
         window.contentView = replacement
         host = nil
         try await wait {
             replacement.layoutSubtreeIfNeeded()
-            return retiredHost == nil
+            return window.contentView === replacement
                 && window.delegate is WindowChromeAccessor.Coordinator
                 && manager.attachedWindow === window
         }

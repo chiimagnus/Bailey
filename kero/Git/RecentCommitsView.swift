@@ -6,6 +6,11 @@ struct RecentCommitsView: View {
     typealias Commit = GitStatusModel.RecentCommit
     typealias Reference = Commit.Reference
 
+    enum BranchAction { case rename, delete, push, merge, rebase, archive }
+    enum RemoteAction { case checkout, fetch, merge, pull, delete, archive }
+    enum TagAction { case details, delete, push, archive }
+    enum HistoricalFileAction { case viewRevision, compareWorktree, openWorkingFile, resetFile }
+
     private let themeChanges = Theme.changes
     @Binding private var expandedCommitIDs: Set<String>
     @Binding private var collapsedFolders: Set<String>
@@ -13,6 +18,10 @@ struct RecentCommitsView: View {
     @State private var viewportWidth: CGFloat = 0
 
     let commits: [Commit]
+    let repoRoot: String
+    let fileAction: (Commit, Commit.FileChange, HistoricalFileAction) -> Void
+    let loadBinaryStatus: (Commit) -> Void
+    let isBinaryFile: (Commit, Commit.FileChange) -> Bool
     let viewMode: GitViewMode
     let fontScale: CGFloat
     let hasMoreCommits: Bool
@@ -21,10 +30,22 @@ struct RecentCommitsView: View {
     let openDiff: (Commit, Commit.FileChange) -> Void
     let canSwitchBranch: Bool
     let switchBranch: (String) -> Void
-    let createReference: (Commit, GitStatusModel.CommitReferenceKind) -> Void
+    let branchAction: (Reference, Commit, BranchAction) -> Void
+    let remoteAction: (Reference, Commit, RemoteAction) -> Void
+    let tagAction: (Reference, Commit, TagAction) -> Void
+    let isAnnotatedTag: (String) -> Bool
+    let canFetchRemoteBranch: (Reference) -> Bool
+    let createBranch: (Commit) -> Void
+    let addTag: (Commit) -> Void
+    let canActOnCommit: Bool
+    let canDropCommit: (Commit) -> Bool
+    let commitAction: (Commit, GitStatusModel.CommitAction) -> Void
 
     init(
-        commits: [Commit],
+        commits: [Commit], repoRoot: String,
+        fileAction: @escaping (Commit, Commit.FileChange, HistoricalFileAction) -> Void,
+        loadBinaryStatus: @escaping (Commit) -> Void,
+        isBinaryFile: @escaping (Commit, Commit.FileChange) -> Bool,
         expandedCommitIDs: Binding<Set<String>>,
         collapsedFolders: Binding<Set<String>>,
         viewMode: GitViewMode,
@@ -35,9 +56,22 @@ struct RecentCommitsView: View {
         openDiff: @escaping (Commit, Commit.FileChange) -> Void,
         canSwitchBranch: Bool,
         switchBranch: @escaping (String) -> Void,
-        createReference: @escaping (Commit, GitStatusModel.CommitReferenceKind) -> Void
+        branchAction: @escaping (Reference, Commit, BranchAction) -> Void,
+        remoteAction: @escaping (Reference, Commit, RemoteAction) -> Void,
+        tagAction: @escaping (Reference, Commit, TagAction) -> Void,
+        isAnnotatedTag: @escaping (String) -> Bool,
+        canFetchRemoteBranch: @escaping (Reference) -> Bool,
+        createBranch: @escaping (Commit) -> Void,
+        addTag: @escaping (Commit) -> Void,
+        canActOnCommit: Bool,
+        canDropCommit: @escaping (Commit) -> Bool,
+        commitAction: @escaping (Commit, GitStatusModel.CommitAction) -> Void
     ) {
         self.commits = commits
+        self.repoRoot = repoRoot
+        self.fileAction = fileAction
+        self.loadBinaryStatus = loadBinaryStatus
+        self.isBinaryFile = isBinaryFile
         _expandedCommitIDs = expandedCommitIDs
         _collapsedFolders = collapsedFolders
         self.viewMode = viewMode
@@ -48,7 +82,16 @@ struct RecentCommitsView: View {
         self.openDiff = openDiff
         self.canSwitchBranch = canSwitchBranch
         self.switchBranch = switchBranch
-        self.createReference = createReference
+        self.branchAction = branchAction
+        self.remoteAction = remoteAction
+        self.tagAction = tagAction
+        self.isAnnotatedTag = isAnnotatedTag
+        self.canFetchRemoteBranch = canFetchRemoteBranch
+        self.createBranch = createBranch
+        self.addTag = addTag
+        self.canActOnCommit = canActOnCommit
+        self.canDropCommit = canDropCommit
+        self.commitAction = commitAction
     }
 
     var body: some View {
@@ -96,6 +139,8 @@ struct RecentCommitsView: View {
     private func toggle(_ commit: Commit) {
         if !expandedCommitIDs.insert(commit.id).inserted {
             expandedCommitIDs.remove(commit.id)
+        } else {
+            loadBinaryStatus(commit)
         }
     }
 
@@ -181,16 +226,21 @@ struct RecentCommitsView: View {
         .onTapGesture { toggle(commit) }
         .contextMenu {
             Button(String(localized: "Create Branch at Commit…", table: "Git")) {
-                createReference(commit, .branch)
+                createBranch(commit)
             }
             .disabled(!canSwitchBranch)
             Button(String(localized: "Create Tag at Commit…", table: "Git")) {
-                createReference(commit, .tag)
+                addTag(commit)
             }
             .disabled(!canSwitchBranch)
             Divider()
+            ForEach(GitStatusModel.CommitAction.allCases, id: \.self) { action in
+                Button(action.title) { commitAction(commit, action) }
+                    .disabled(!canActOnCommit || (action == .drop && !canDropCommit(commit)))
+            }
+            Divider()
             Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
-            Button(String(localized: "Copy Commit Message", table: "Git")) {
+            Button(String(localized: "Copy Commit Subject", table: "Git")) {
                 copy(commit.subject)
             }
         }
@@ -217,12 +267,8 @@ struct RecentCommitsView: View {
             if shown < references.count {
                 Menu {
                     ForEach(Array(references.dropFirst(shown))) { reference in
-                        if reference.kind == .remoteBranch {
-                            Text(verbatim: reference.name)
-                        } else {
-                            Menu(reference.name) {
-                                referenceActions(reference, commit: commit)
-                            }
+                        Menu(reference.name) {
+                            referenceActions(reference, commit: commit)
                         }
                     }
                 } label: {
@@ -266,49 +312,115 @@ struct RecentCommitsView: View {
         .background(Capsule().fill(background))
         .help(reference.name)
 
-        if reference.kind == .remoteBranch {
-            label
-        } else {
-            Button {
-                if reference.kind == .tag {
-                    expandedCommitIDs.insert(commit.id)
-                } else {
-                    copy(reference.name)
-                }
-            } label: { label }
-                .buttonStyle(.plain)
-                .contextMenu {
-                    referenceActions(reference, commit: commit)
-                }
-        }
+        Button {
+            if reference.kind == .tag {
+                expandedCommitIDs.insert(commit.id)
+            } else {
+                copy(reference.name)
+            }
+        } label: { label }
+            .buttonStyle(.plain)
+            .contextMenu {
+                referenceActions(reference, commit: commit)
+            }
     }
 
     @ViewBuilder
     private func referenceActions(_ reference: Reference, commit: Commit) -> some View {
         switch reference.kind {
-        case .currentBranch:
-            Button(String(localized: "Copy Branch Name", table: "Git")) {
-                copy(reference.name)
+        case .currentBranch, .localBranch:
+            if reference.kind == .localBranch {
+                Button(String(localized: "Switch to This Branch", table: "Git")) {
+                    switchBranch(reference.name)
+                }
+                .disabled(!canSwitchBranch)
             }
-        case .localBranch:
-            Button(String(localized: "Switch to This Branch", table: "Git")) {
-                switchBranch(reference.name)
+            Button(String(localized: "Rename Branch…", table: "Git")) {
+                branchAction(reference, commit, .rename)
             }
-            .disabled(!canSwitchBranch)
+            .disabled(!canActOnCommit)
+            if reference.kind == .localBranch {
+                Button(String(localized: "Delete Branch…", table: "Git")) {
+                    branchAction(reference, commit, .delete)
+                }
+                .disabled(!canActOnCommit)
+                Button(String(localized: "Merge into Current Branch…", table: "Git")) {
+                    branchAction(reference, commit, .merge)
+                }
+                .disabled(!canActOnCommit)
+                Button(String(localized: "Rebase Current Branch onto This Branch…", table: "Git")) {
+                    branchAction(reference, commit, .rebase)
+                }
+                .disabled(!canActOnCommit)
+            }
+            Button(String(localized: "Push Branch…", table: "Git")) {
+                branchAction(reference, commit, .push)
+            }
+            .disabled(!canActOnCommit)
+            Button(String(localized: "Create Archive…", table: "Git")) {
+                branchAction(reference, commit, .archive)
+            }
+            .disabled(!canActOnCommit)
+            Divider()
             Button(String(localized: "Copy Branch Name", table: "Git")) {
                 copy(reference.name)
             }
         case .tag:
-            Button(String(localized: "Show Tagged Commit", table: "Git")) {
-                expandedCommitIDs.insert(commit.id)
+            if isAnnotatedTag(reference.name) {
+                Button(String(localized: "View Tag Details", table: "Git")) {
+                    tagAction(reference, commit, .details)
+                }
+                .disabled(!canActOnCommit)
             }
+            Button(String(localized: "Delete Tag…", table: "Git")) {
+                tagAction(reference, commit, .delete)
+            }
+            .disabled(!canActOnCommit)
+            Button(String(localized: "Push Tag…", table: "Git")) {
+                tagAction(reference, commit, .push)
+            }
+            .disabled(!canActOnCommit)
+            Button(String(localized: "Create Archive…", table: "Git")) {
+                tagAction(reference, commit, .archive)
+            }
+            .disabled(!canActOnCommit)
+            Divider()
             Button(String(localized: "Copy Tag Name", table: "Git")) {
                 copy(reference.name)
             }
         case .detachedHead:
             Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
         case .remoteBranch:
-            EmptyView()
+            Button(String(localized: "Checkout Remote Branch…", table: "Git")) {
+                remoteAction(reference, commit, .checkout)
+            }
+            .disabled(!canActOnCommit)
+            if canFetchRemoteBranch(reference) {
+                Button(String(localized: "Fetch into Local Branch…", table: "Git")) {
+                    remoteAction(reference, commit, .fetch)
+                }
+                .disabled(!canActOnCommit)
+            }
+            Button(String(localized: "Merge into Current Branch…", table: "Git")) {
+                remoteAction(reference, commit, .merge)
+            }
+            .disabled(!canActOnCommit)
+            Button(String(localized: "Pull into Current Branch…", table: "Git")) {
+                remoteAction(reference, commit, .pull)
+            }
+            .disabled(!canActOnCommit)
+            Button(String(localized: "Delete Remote Branch…", table: "Git")) {
+                remoteAction(reference, commit, .delete)
+            }
+            .disabled(!canActOnCommit)
+            Button(String(localized: "Create Archive…", table: "Git")) {
+                remoteAction(reference, commit, .archive)
+            }
+            .disabled(!canActOnCommit)
+            Divider()
+            Button(String(localized: "Copy Remote Branch Name", table: "Git")) {
+                copy(reference.name)
+            }
         }
     }
 
@@ -344,6 +456,9 @@ struct RecentCommitsView: View {
                     }
                     .background { fileRails(rails, spacing: spacing) }
                     .contextMenu {
+                        Button(String(localized: "Copy Absolute Path", table: "Git")) {
+                            copy((repoRoot as NSString).appendingPathComponent(node.path))
+                        }
                         Button(String(localized: "Copy Relative Path", table: "Git")) {
                             copy(node.path)
                         }
@@ -377,6 +492,28 @@ struct RecentCommitsView: View {
         .contextMenu {
             Button(String(localized: "Open Historical Diff", table: "Git")) {
                 openDiff(commit, file)
+            }
+            if file.status != "D" {
+                Button(String(localized: "View File at Revision", table: "Git")) {
+                    fileAction(commit, file, .viewRevision)
+                }
+                .disabled(isBinaryFile(commit, file))
+                Button(String(localized: "Compare with Working File", table: "Git")) {
+                    fileAction(commit, file, .compareWorktree)
+                }
+                .disabled(isBinaryFile(commit, file))
+                Button(String(localized: "Open Working File", table: "Git")) {
+                    fileAction(commit, file, .openWorkingFile)
+                }
+                Divider()
+                Button(String(localized: "Reset File to Revision…", table: "Git")) {
+                    fileAction(commit, file, .resetFile)
+                }
+                .disabled(!canActOnCommit)
+            }
+            Divider()
+            Button(String(localized: "Copy Absolute Path", table: "Git")) {
+                copy((repoRoot as NSString).appendingPathComponent(file.path))
             }
             Button(String(localized: "Copy Relative Path", table: "Git")) { copy(file.path) }
         }
