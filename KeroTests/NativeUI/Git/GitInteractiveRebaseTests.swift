@@ -73,7 +73,9 @@ final class GitInteractiveRebaseTests: XCTestCase {
         ))
         window.orderFront(nil)
         window.contentView?.layoutSubtreeIfNeeded()
-        try await wait { FileManager.default.fileExists(atPath: marker.path) }
+        try await wait {
+            (try? String(contentsOf: marker, encoding: .utf8)) == directory.path + "\nPTY\n"
+        }
         XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), directory.path + "\nPTY\n")
         XCTAssertEqual(try git(["rev-parse", "HEAD"]), previousHead, "The real sequence editor must still be waiting")
         terminal.sendCommand("\r")
