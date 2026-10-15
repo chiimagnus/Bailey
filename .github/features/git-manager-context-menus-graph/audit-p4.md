@@ -43,6 +43,19 @@
 
 ## 发现项
 
+## 发现 F-22
+
+- 任务：`P4-T8`
+- 严重级别：`Low`
+- 状态：`Open`
+- 位置：`kero/Git/GitPanel.swift:1824`
+- 摘要：`STASHES 只是上下文菜单行却启用 SwiftUI 默认焦点描边，鼠标交互留下主题色选中外框，与共享树行的 Hover/Focussed 浅底样式不一致`
+- 风险：`点击/键盘聚焦时出现多余强调色外框，容易误解为持续选中某条 Stash`
+- 预期修复：`保留原生可聚焦及 AX 上下文操作，禁止额外系统焦点描边，复用 TreeRowSurface 原有聚焦背景`
+- 验证：`原生侧栏焦点与菜单访问回归；make test；make build；正式 App 重启后实测样式`
+- 解决证据：`<commit diff note or test/build output>`
+
+
 ## 发现 F-21
 
 - 任务：`P4-T8`
