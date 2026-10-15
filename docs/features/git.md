@@ -12,7 +12,7 @@
 
 ## 刷新与显示
 
-应用激活、项目变化、Kero 终端命令完成和手动刷新仍立即请求 Git 状态。外部 CLI 不发这些事件，因此**本机 Git 面板仅在可见且 App 前台时**复用已有的 2 秒可见面板刷新周期：文件修改、暂存、新提交以及普通目录中新初始化的 Git 仓库都会重新识别。Git 正在刷新或执行写操作时跳过周期请求，避免重复查询；后台、隐藏的 Git 面板及 SSH 不做周期 Git 查询。原有请求合并、超时和远端批量查询保持不变，SSH 换用新连接时立即使旧连接结果失效。
+应用激活、项目变化、Kero 终端命令完成和手动刷新仍立即请求 Git 状态。独立 CLI 不发这些事件，因此可见且 App 前台的 Git 面板复用已有周期任务：本机每 2 秒、SSH 每 5 秒检查一次，自动识别外部文件修改、暂存和新提交。本机也能发现普通目录中新初始化的 Git 仓库。正在刷新或执行 Git 写操作时跳过周期请求；App 后台或 Git 面板隐藏时停止查询，包括 SSH。远端复用原有批量 Git 查询和独立 SSH 连接，不新增常驻监听；请求合并、超时与换连接后旧结果失效的约束不变。
 
 尚无提交的仓库仍支持状态、未跟踪文件与首次暂存。首次加载失败或超时必须退出等待并允许重试。未跟踪行数保留文件数和字节预算，界面概览不表示已经统计所有内容。
 
@@ -110,6 +110,6 @@ STASHES 区域随同一次 Git 状态快照显示每条 selector、消息与对�
 
 ## 验证
 
-`GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests` 与 `GitRemoteBranchActionTests` 使用临时仓库核对工作区、index、HEAD、Ref、多个裸仓库推送和选中版本归档；`GitBranchDialogTests` 核对原生弹窗默认值与禁用条件；`RecentCommitsViewTests` 在原生窗口核对窄侧栏、整行点击、Tag 独立操作、短文字无回弹、长标题/路径独立滚动、图谱固定、文件 Diff 命中及只在滚至末端时加载历史；`GitExternalRefreshTests` 在原生 SwiftUI Git 面板中执行外部修改和提交，检查前台响应延迟、后台和隐藏面板停止轮询及手动刷新。覆盖首次提交前、特殊路径、重命名、超时、失败草稿、提交期间编辑、快速切换和临时刷新失败。
+`GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests` 与 `GitRemoteBranchActionTests` 使用临时仓库核对工作区、index、HEAD、Ref、多个裸仓库推送和选中版本归档；`GitBranchDialogTests` 核对原生弹窗默认值与禁用条件；`RecentCommitsViewTests` 在原生窗口核对窄侧栏、整行点击、Tag 独立操作、短文字无回弹、长标题/路径独立滚动、图谱固定、文件 Diff 命中及只在滚至末端时加载历史；`GitExternalRefreshTests` 在原生 SwiftUI Git 面板中执行本机与真实 Windows SSH 的独立外部修改、暂存和提交，检查前台刷新、后台与隐藏面板停止轮询以及手动刷新；真实 SSH 需要显式提供测试主机。覆盖首次提交前、特殊路径、重命名、超时、失败草稿、提交期间编辑、快速切换和临时刷新失败。
 
 执行环境检查从精简 GUI PATH 出发，包含启动噪声、变量、Git 与 hook 解析、失败和超时。推送测试使用临时接收仓库并核对实际提交；涉及 LFS 时还核对接收端对象。真实 SSH 另行验收，不以 fake 后端结果代替。统一方式见 [testing.md](../testing.md)。

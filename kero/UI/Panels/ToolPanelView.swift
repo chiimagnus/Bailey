@@ -103,14 +103,6 @@ struct ToolPanelView: View {
         CGFloat(settings.panelFontSize / AppSettings.defaultPanelFontSize)
     }
 
-    /// Files already refresh while visible. An external CLI has no terminal
-    /// completion event, so a visible local Git panel shares that tick; remote
-    /// Git stays event-driven to avoid continuous SSH round trips.
-    private var pollsSelectedPanel: Bool {
-        applicationIsActive && (panel != .git
-            || manager.selectedProject?.panelContext?.isRemote == false)
-    }
-
     /// Every terminal in the selected project can change the same repository.
     /// Watching only these counters avoids reacting to prompt/input lifecycle
     /// updates while still catching commands completed in an unfocused pane.
@@ -213,20 +205,20 @@ struct ToolPanelView: View {
                 applyRemoteHeading()
             }
         }
-        // Reuse the Files visibility tick for local Git; do not start a
-        // separate watcher or poll a remote workspace.
-        .task(id: pollsSelectedPanel) {
-            guard pollsSelectedPanel else { return }
+        // External Git processes do not emit Kero command-completion events.
+        // Poll only visible, foreground panels; SSH uses a slower interval.
+        .task(id: applicationIsActive) {
+            guard applicationIsActive else { return }
             while !Task.isCancelled {
+                let interval = panel == .git && git.currentScope != "local" ? 5 : 2
                 do {
-                    try await Task.sleep(for: .seconds(2))
+                    try await Task.sleep(for: .seconds(interval))
                 } catch {
                     return
                 }
-                guard pollsSelectedPanel else { return }
+                guard applicationIsActive else { return }
                 if panel == .git {
-                    if git.currentScope == "local"
-                        && !git.isRefreshing && !git.isBusy {
+                    if !git.isRefreshing && !git.isBusy {
                         git.refresh()
                     }
                 } else {
