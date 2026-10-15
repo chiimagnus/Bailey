@@ -101,6 +101,85 @@ final class GitWorkspaceMenuTests: XCTestCase {
         XCTAssertEqual(file.text, "/build/\n")
     }
 
+    func testIgnoreContextMenuIsOnlyOfferedForUntrackedFiles() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kero-ignore-menu-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func git(_ arguments: [String]) {
+            let result = GitCommandExecution.run(arguments, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        git(["init", "-q", "-b", "main"])
+        git(["config", "user.name", "Ignore Menu Test"])
+        git(["config", "user.email", "ignore@invalid"])
+        try "original".write(to: root.appendingPathComponent("aa-tracked.txt"),
+                             atomically: true, encoding: .utf8)
+        git(["add", "aa-tracked.txt"])
+        git(["-c", "commit.gpgsign=false", "commit", "-qm", "baseline"])
+        try "modified".write(to: root.appendingPathComponent("aa-tracked.txt"),
+                             atomically: true, encoding: .utf8)
+        try "intent".write(to: root.appendingPathComponent("za-intent.txt"),
+                           atomically: true, encoding: .utf8)
+        git(["add", "-N", "za-intent.txt"])
+        try "new".write(to: root.appendingPathComponent("zz-untracked.txt"),
+                        atomically: true, encoding: .utf8)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([root])
+        let model = GitStatusModel()
+        model.syncSelectedProject(in: manager)
+        try await wait {
+            model.hasResolvedStatus && !model.isRefreshing && model.changedEntries.count == 3
+        }
+        XCTAssertEqual(Set(model.changedEntries.map(\.path)),
+                       Set(["aa-tracked.txt", "za-intent.txt", "zz-untracked.txt"]))
+        let intent = try XCTUnwrap(model.changedEntries.first { $0.path == "za-intent.txt" })
+        XCTAssertTrue(intent.isIntentToAdd)
+        let window = NSWindow(
+            contentRect: NSRect(x: -1200, y: -1200, width: 460, height: 680),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: GitPanel(
+            model: model, manager: manager, project: manager.selectedProject,
+            session: nil, sshHost: nil, openFile: { _ in },
+            openDiff: { _, _ in }, openCommitDiff: { _, _ in }
+        ).frame(width: 460, height: 680))
+        window.orderFront(nil)
+        defer { window.close() }
+        try await Task.sleep(for: .milliseconds(250))
+
+        let openFile = String(localized: "Open File", table: "Sidebar")
+        let stage = String(localized: "Stage Changes", table: "Sidebar")
+        let ignore = String(localized: "Add to .gitignore", table: "Git")
+        var menuSamples: [(y: Int, titles: [String])] = []
+        for y in stride(from: 670, through: 15, by: -5) {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: .rightMouseDown, location: NSPoint(x: 120, y: CGFloat(y)),
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                clickCount: 1, pressure: 1
+            ))
+            let titles = window.contentView?.menu(for: event)?.items.map(\.title) ?? []
+            let isFileRow = titles.contains(openFile) && titles.contains(stage)
+            if isFileRow { menuSamples.append((y, titles)) }
+        }
+        let first = try XCTUnwrap(menuSamples.first)
+        let last = try XCTUnwrap(menuSamples.last)
+        let rowHeight = Int(TreeRowStyle.rowHeight(1))
+        XCTAssertGreaterThan(first.y - last.y, rowHeight * 2,
+            "All three CHANGES rows must be visible and independently hit-tested")
+        let middle = try XCTUnwrap(menuSamples.first { $0.y <= first.y - rowHeight })
+        XCTAssertFalse(first.titles.contains(ignore),
+            "Tracked changes cannot be ignored via .gitignore")
+        XCTAssertFalse(middle.titles.contains(ignore),
+            "Intent-to-add is already in the index and is not affected by .gitignore")
+        XCTAssertTrue(last.titles.contains(ignore),
+            "Untracked changes must retain the Ignore action")
+    }
+
     func testUncommittedSheetCancelAndConfirmReachRealStash() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("kero-uncommitted-sheet-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

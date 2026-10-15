@@ -1772,7 +1772,8 @@ struct GitPanel: View {
             openHead: kind != .merge && model.hasHead && entry.staged != "A" && !entry.isUntracked ? {
                 openHeadFile(entry)
             } : nil,
-            ignore: kind == .unstaged ? { ignorePaths([entry.path], isDirectory: false) } : nil,
+            ignore: kind == .unstaged && entry.staged == "?"
+                ? { ignorePaths([entry.path], isDirectory: false) } : nil,
             stage: { performOperation(stageTrigger) { model.stage(entry) } },
             unstage: { performOperation(unstageTrigger) { model.unstage(entry) } },
             discard: {
@@ -1932,9 +1933,11 @@ struct GitPanel: View {
                 Button(String(localized: "Discard Changes…", table: "Sidebar")) {
                     requestDiscard(selected)
                 }.disabled(model.isBusy)
-                Button(String(localized: "Add to .gitignore", table: "Git")) {
-                    ignorePaths([path], isDirectory: true)
-                }.disabled(model.isBusy)
+                if selected.contains(where: { $0.staged == "?" }) {
+                    Button(String(localized: "Add to .gitignore", table: "Git")) {
+                        ignorePaths([path], isDirectory: true)
+                    }.disabled(model.isBusy)
+                }
             }
         }
     }
