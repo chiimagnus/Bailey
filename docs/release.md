@@ -6,9 +6,9 @@
 
 [CI workflow](../.github/workflows/ci.yml) 仅在面向 `main` 的 PR 上运行；普通 `main` 提交不会触发。Runner 为 `macos-26`，`DEVELOPER_DIR` 指定 Xcode 26.6。
 
-当前 workflow 依次调用 `make test SIGNING=adhoc`、`make build:release SIGNING=adhoc`，再检查应用身份及签名。它不是完整 UI 或真实 SSH 验收，提交者仍须执行 [testing.md](testing.md#完成标准) 中与改动相关的检查。
+PR CI 只执行 `make test SIGNING=adhoc`（Debug）：构建实际测试宿主、运行全部 XCTest，再严格验签 `Kero.app` 和 `KeroTests.xctest`，确认均为 ad hoc 签名。`AppIdentityTests` 同时检查测试宿主的 Bundle ID 和显示名称；失败会使 CI 失败。它不是完整 UI 或真实 SSH 验收，提交者仍须执行 [testing.md](testing.md#完成标准) 中与改动相关的检查。
 
-`make test SIGNING=adhoc` 与 `make build:release SIGNING=adhoc` 都向 Xcode 传递临时签名参数。前者在 XCTest 成功后，使用 `codesign` 严格验签并确认测试宿主 `Kero.app` 和嵌入的 `KeroTests.xctest` 都实际采用 ad hoc 签名；校验失败会令 Make 失败，CI 和标签发布流程共用这一个门禁。本地 `make test` 未指定 `SIGNING` 时仍使用工程自己的 Apple Development 配置。临时签名不代表正式发布身份，本地成功也不代表 GitHub Actions 已通过。
+PR 不再额外编译 Release，也不重复进行 YAML 中的验签；正式 Release 编译、版本和签名检查仍由标签触发的发布流程执行。**PR 通过不等于 Release 构建通过**：修改工程、依赖或发布路径时，提交前另运行 `make build:release`；无开发证书的隔离环境可用 `make build:release SIGNING=adhoc`。本地 `make test` 未指定 `SIGNING` 时使用工程自己的 Apple Development 配置；临时签名不代表正式发布身份，本地成功也不代表 GitHub Actions 已通过。
 
 ## 本地打包
 

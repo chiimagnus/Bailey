@@ -24,14 +24,3 @@ jobs:
           persist-credentials: false
       - name: Run Xcode tests
         run: make test SIGNING=adhoc
-      - name: Build release app without credentials
-        run: make build:release SIGNING=adhoc
-      - name: Verify application identity
-        run: |
-          app='build/DerivedData/Build/Products/Release/Kero.app'
-          info="$app/Contents/Info.plist"
-          test -d "$app"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")" = chiimagnus.kero
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$info")" = Kero
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info")" = kero
-          codesign --verify --deep --strict "$app"
