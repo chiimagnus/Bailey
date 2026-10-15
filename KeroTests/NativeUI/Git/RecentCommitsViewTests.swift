@@ -363,6 +363,35 @@ final class RecentCommitsViewTests: XCTestCase {
         }
     }
 
+    func testNativeContextMenuAtDirectReferencesContainsOnlyTheSelectedObjectActions() throws {
+        let cases: [(GitStatusModel.RecentCommit.Reference.Kind, String, String)] = [
+            (.currentBranch, "main", String(localized: "Rename Branch…", table: "Git")),
+            (.localBranch, "topic", String(localized: "Delete Branch…", table: "Git")),
+            (.remoteBranch, "origin/topic", String(localized: "Delete Remote Branch…", table: "Git")),
+            (.tag, "v1.2.3", String(localized: "Delete Tag…", table: "Git")),
+        ]
+        for (kind, name, expected) in cases {
+            let selection = GraphSelection()
+            let commit = GitStatusModel.RecentCommit(
+                hash: "menu", shortHash: "menu", subject: "Small change", author: "Developer",
+                date: .now, parentHashes: [], references: [.init(kind: kind, name: name)], files: []
+            )
+            let height: CGFloat = 110
+            let window = hostHistory([commit], selection: selection, height: height)
+            defer { window.close() }
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: .rightMouseDown, location: NSPoint(x: 216, y: height - 12),
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                clickCount: 1, pressure: 1))
+            let menu = try XCTUnwrap(window.contentView?.menu(for: event), name)
+            let titles = menu.items.map(\.title)
+            XCTAssertTrue(titles.contains(expected), name)
+            XCTAssertFalse(titles.contains(String(localized: "Create Branch at Commit…", table: "Git")), name)
+            XCTAssertTrue(selection.expanded.isEmpty, "Requesting a context menu must not trigger a left action")
+        }
+    }
+
     func testTagBadgeDoesNotToggleExpandedCommitClosed() {
         let selection = GraphSelection()
         let commit = GitStatusModel.RecentCommit(
