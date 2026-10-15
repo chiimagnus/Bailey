@@ -285,10 +285,15 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path),
                        secondTarget.path)
 
-        XCTAssertTrue(model.canOpen(untrackedEntry, isRemote: false))
+        XCTAssertFalse(model.canOpen(untrackedEntry, isRemote: false),
+                       "An old file row cannot be reused after switching repository scope")
+        let currentUntracked = try XCTUnwrap(model.changedEntries.first {
+            $0.path == "untracked.txt"
+        })
+        XCTAssertTrue(model.canOpen(currentUntracked, isRemote: false))
         try FileManager.default.removeItem(at: untracked)
-        XCTAssertFalse(model.canOpen(untrackedEntry, isRemote: false))
-        XCTAssertTrue(model.canOpen(untrackedEntry, isRemote: true))
+        XCTAssertFalse(model.canOpen(currentUntracked, isRemote: false))
+        XCTAssertTrue(model.canOpen(currentUntracked, isRemote: true))
     }
 
     func testRemoteDiscardReviewRejectsDisconnectionAndInFlightScopeChange() async throws {

@@ -26,6 +26,9 @@ final class GitStatusModel {
         /// Canonical repo that produced this snapshot. Mutations reject stale
         /// rows after the active terminal moves to another repository.
         var repositoryRoot = ""
+        var snapshotGeneration: UInt = 0
+        var snapshotBranch: String?
+        var snapshotHeadOID: String?
 
         var fileName: String { (path as NSString).lastPathComponent }
         var directory: String {
@@ -510,7 +513,9 @@ final class GitStatusModel {
     }
 
     func isCurrent(_ entry: Entry) -> Bool {
-        hasResolvedPanelTarget && (entry.repositoryRoot.isEmpty || entry.repositoryRoot == repoRoot)
+        hasResolvedPanelTarget && entry.repositoryRoot == repoRoot
+            && entry.snapshotGeneration == contextGeneration
+            && entry.snapshotBranch == branch && entry.snapshotHeadOID == headOID
     }
 
     /// Returns a Git decoration only when `absolutePath` belongs to the
@@ -2117,6 +2122,26 @@ final class GitStatusModel {
                                                   failureMessage: fileChangedMessage)
                     }
                 }
+                if squashMessage != nil {
+                    guard await isCurrent() else {
+                        return CommandBatchResult(output: staleMessage, failureCode: -1,
+                                                  failureMessage: staleMessage)
+                    }
+                    let baseline = await GitCommandExecution.run(
+                        ["diff", "--cached", "--quiet"], in: dir, backend: backend
+                    )
+                    guard baseline.status == 0 else {
+                        let message = baseline.status == 1
+                            ? String(localized: "Commit or unstage existing staged changes before automatic Squash Merge.", table: "Git")
+                            : (baseline.stderr.isEmpty
+                               ? String(localized: "Unable to inspect staged changes.", table: "Git")
+                               : baseline.stderr)
+                        return CommandBatchResult(output: message, failureCode: baseline.status,
+                                                  failureMessage: message,
+                                                  failedCommand: ["diff", "--cached", "--quiet"],
+                                                  gitError: baseline.stderr)
+                    }
+                }
                 for (index, args) in commands.enumerated() {
                     guard await isCurrent() else {
                         return CommandBatchResult(output: transcript.joined(separator: "\n") + "\n" + staleMessage,
@@ -2514,6 +2539,9 @@ final class GitStatusModel {
         let entries = result.entries.map { entry in
             var entry = entry
             entry.repositoryRoot = result.topLevel
+            entry.snapshotGeneration = contextGeneration
+            entry.snapshotBranch = result.branch
+            entry.snapshotHeadOID = result.headOID
             return entry
         }
         // parseStatus already guarantees entries are unique per path, but a
@@ -2897,15 +2925,13 @@ final class GitStatusModel {
         let records = output.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
         var result = StatusResult()
         var index = 0
-        // Porcelain v2 can report the same path twice: when a file was removed
-        // from the index (`git rm --cached`, `git update-index --force-remove`)
-        // but still exists in the worktree, git lists it as a staged deletion
-        // ("1 D.") and again as untracked ("? "). Git's own v1 short format
-        // shows only the deletion, and every consumer keys rows by path
-        // (Entry.id == path), so the first record for a path wins.
+        // After `git rm --cached`, Git reports both staged deletion and
+        // untracked content at the same path. Those belong to different
+        // sections; keep each while deduplicating within its own section.
         var parsedPaths: Set<String> = []
         func addEntry(_ entry: Entry) {
-            guard parsedPaths.insert(entry.path).inserted else { return }
+            let key = entry.path + "\0" + (entry.staged == "?" ? "untracked" : "tracked")
+            guard parsedPaths.insert(key).inserted else { return }
             result.entries.append(entry)
         }
         while index < records.count {

@@ -1245,6 +1245,26 @@
         }
       }
     },
+    "Commit or unstage existing staged changes before automatic Squash Merge." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动压缩合并前，请先提交或取消暂存已有的修改。"
+          }
+        }
+      }
+    },
+    "Unable to inspect staged changes." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法检查已暂存的修改。"
+          }
+        }
+      }
+    },
     "Git command failed" : {
       "localizations" : {
         "zh-Hans" : {

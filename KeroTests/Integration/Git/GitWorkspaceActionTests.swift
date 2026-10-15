@@ -74,6 +74,43 @@ final class GitWorkspaceActionTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("inside/new.txt").path))
     }
 
+    func testIndexDeletionAndSamePathUntrackedRemainSeparateGitRows() async throws {
+        try write("retained.txt", "kept")
+        try git(["add", "retained.txt"])
+        try git(["commit", "-qm", "baseline"])
+        try git(["rm", "--cached", "-q", "retained.txt"])
+        try await refresh()
+        XCTAssertTrue(model.stagedEntries.contains {
+            $0.path == "retained.txt" && $0.staged == "D"
+        })
+        XCTAssertTrue(model.changedEntries.contains {
+            $0.path == "retained.txt" && $0.staged == "?"
+        }, "The same disk file must remain selectable as untracked for Ignore")
+    }
+
+    func testStaleFileRowFromPreviousBranchCannotStageNewBranchChanges() async throws {
+        try write("tracked.txt", "baseline")
+        try git(["add", "tracked.txt"])
+        try git(["commit", "-qm", "base"])
+        try write("tracked.txt", "main edit")
+        try await refresh()
+        let old = try XCTUnwrap(model.changedEntries.first {
+            $0.path == "tracked.txt"
+        })
+        try git(["reset", "--hard", "HEAD"])
+        try git(["switch", "-c", "other"])
+        try write("tracked.txt", "other edit")
+        try await refresh()
+        XCTAssertEqual(model.branch, "other")
+        XCTAssertTrue(model.changedEntries.contains { $0.path == old.path })
+
+        model.stage(old)
+        try await settle()
+        XCTAssertTrue(try git(["diff", "--cached", "--name-only"]).isEmpty,
+            "A stale row must not stage another branch's file content")
+        XCTAssertNotNil(model.lastError)
+    }
+
     func testFailedPreparationAndStaleTargetDoNotCleanOrStash() async throws {
         try write("tracked", "base"); try git(["add", "."]); try git(["commit", "-qm", "base"])
         try write("tracked", "changed"); try write("untracked", "keep")
