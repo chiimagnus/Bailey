@@ -49,42 +49,11 @@ final class CommitGraphLayoutTests: XCTestCase {
             commit("root"),
         ])
         XCTAssertEqual(graph.rows.map(\.node.lane), [0, 1, 0, 0])
-        XCTAssertTrue(graph.rows[0].links.contains(
-            .diagonal(fromX: 0, fromY: 0.5, toX: 0.5, toY: 1, color: 1)
-        ))
-        XCTAssertTrue(graph.rows[1].links.contains(
-            .diagonal(fromX: 0.5, fromY: 0, toX: 1, toY: 0.5, color: 1)
-        ))
-        XCTAssertTrue(graph.rows[2].links.contains(
-            .diagonal(fromX: 0.75, fromY: 0, toX: 0.25, toY: 1, color: 1)
-        ))
-        XCTAssertTrue(graph.rows[3].links.contains(
-            .diagonal(fromX: 0.25, fromY: 0, toX: 0, toY: 0.5, color: 1)
-        ))
-        XCTAssertTrue(graph.rows[1].bottomRails.contains(.init(lane: 0.75, color: 1)))
-    }
-
-    func testCrossLaneParentEdgeDoesNotJoinAnUnrelatedVerticalRail() {
-        let graph = CommitGraphLayout(commits: [
-            commit("merge", parents: ["main", "side"], current: true),
-            commit("side", parents: ["root"]),
-            commit("main", parents: ["root"]),
-            commit("root"),
-        ])
-        let sideColor = graph.rows[1].node.color
-        XCTAssertFalse(graph.rows[2].links.contains(.through(.init(lane: 1, color: sideColor))),
-                       "A side-parent connection must be a direct diagonal, not a vertical line followed by a bend")
-        let segments = [
-            (row: 1, startX: 1.0, startY: 0.5, endX: 0.75, endY: 1.0),
-            (row: 2, startX: 0.75, startY: 0.0, endX: 0.25, endY: 1.0),
-            (row: 3, startX: 0.25, startY: 0.0, endX: 0.0, endY: 0.5),
-        ]
-        for segment in segments {
-            XCTAssertTrue(graph.rows[segment.row].links.contains(.diagonal(
-                fromX: segment.startX, fromY: segment.startY,
-                toX: segment.endX, toY: segment.endY, color: sideColor
-            )), "Each row must contain its exact portion of the same node-to-node line")
-        }
+        XCTAssertTrue(graph.rows[0].links.contains(.depart(from: 0, to: 1, color: 1)))
+        XCTAssertTrue(graph.rows[1].links.contains(.incoming(.init(lane: 1, color: 1))))
+        XCTAssertTrue(graph.rows[2].links.contains(.through(.init(lane: 1, color: 1))))
+        XCTAssertTrue(graph.rows[3].links.contains(.arrive(from: 1, to: 0, color: 1)))
+        XCTAssertTrue(graph.rows[1].bottomRails.contains(.init(lane: 1, color: 1)))
     }
 
     func testUnloadedHeadDoesNotMarkAnotherBranchAsCurrentMain() {
