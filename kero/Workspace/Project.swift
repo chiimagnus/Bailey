@@ -253,7 +253,8 @@ final class Project: nonisolated Identifiable {
               let context = panelContext else { return nil }
         if sshHost == nil, customDirectory == nil,
            selectedSession?.location.remoteConnection?.state == .disconnected { return nil }
-        let (root, source) = await context.resolvedRoot()
+        // An SSH probe failure is not evidence that cwd changed or became local.
+        guard let (root, source) = try? await context.resolvedRoot() else { return nil }
         guard manager.selectedProject === self,
               matchesPanelTarget(context.identity) else { return nil }
         await fileTree.sync(root: root, backend: context.backend, scope: context.scope)
@@ -322,16 +323,8 @@ final class Project: nonisolated Identifiable {
         initialWorkspace: PanelContext? = nil,
         initialInput: String? = nil
     ) -> TerminalSession {
-        let remoteCommand: String? = sshHost.map { host in
-            let cwd = directory ?? customDirectory ?? "/"
-            // Windows OpenSSH's MSYS2 zsh wrapper forwards single quotes
-            // literally and its .exe login shell resets cwd to HOME.
-            let remote = "cd " + RemoteCommands.doubleQuote(cwd)
-                + " && case \"$SHELL\" in *.exe) exec zsh -i ;; "
-                + "*) exec \"${SHELL:-/bin/sh}\" -i ;; esac"
-            return "exec /usr/bin/ssh -tt -o BatchMode=yes "
-                + "-o StrictHostKeyChecking=yes -- "
-                + Self.shellQuoted(host) + " " + Self.shellQuoted(remote)
+        let remoteCommand: String? = sshHost.map {
+            Self.remoteTerminalCommand(host: $0, directory: directory ?? customDirectory ?? "/")
         }
         let session = TerminalSession(
             initialDirectory: sshHost == nil
@@ -389,6 +382,18 @@ final class Project: nonisolated Identifiable {
         let script = command + "; exec " + Self.shellQuoted(shell) + " -il"
         let launch = "exec " + Self.shellQuoted(shell) + " -ilc " + Self.shellQuoted(script)
         return newSession(directory: repository, launchCommand: launch)
+    }
+
+    static func remoteTerminalCommand(host: String, directory: String) -> String {
+        // Windows OpenSSH's MSYS2 zsh wrapper forwards single quotes literally;
+        // its .exe login shell resets cwd to HOME.
+        let remote = "cd " + RemoteCommands.doubleQuote(directory)
+            + " && case \"$SHELL\" in *.exe) exec zsh -i ;; "
+            + "*) exec \"${SHELL:-/bin/sh}\" -i ;; esac"
+        let options = SSHMultiplexing.options.map(Self.shellQuoted).joined(separator: " ")
+        return "exec /usr/bin/ssh -tt -o BatchMode=yes "
+            + "-o StrictHostKeyChecking=yes " + options + " -- "
+            + Self.shellQuoted(host) + " " + Self.shellQuoted(remote)
     }
 
     private static func shellQuoted(_ value: String) -> String {

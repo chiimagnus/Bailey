@@ -51,6 +51,17 @@ final class WorkspaceIdentityTests: XCTestCase {
         return connection
     }
 
+    func testProjectSSHAndWorkspaceCommandsUseTheSameScopedControlSocket() {
+        let options = SSHMultiplexing.options
+        XCTAssertTrue(options.contains("ControlMaster=auto"))
+        XCTAssertTrue(options.contains("ControlPersist=180"))
+        XCTAssertTrue(options.contains(where: { $0.hasPrefix("ControlPath=") && $0.contains("%C") }))
+        let command = Project.remoteTerminalCommand(host: "alias", directory: "/d/my files")
+        for option in options { XCTAssertTrue(command.contains(option)) }
+        XCTAssertTrue(command.contains("StrictHostKeyChecking=yes"))
+        XCTAssertTrue(command.contains("BatchMode=yes"))
+    }
+
     func testLocalAndRemoteSamePathRemainDifferentTargets() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
