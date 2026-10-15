@@ -7,6 +7,13 @@
 - `make doctor`：Xcode 27.0；`make build` 与 `codesign --verify --deep --strict` 均 PASS，日志 `/tmp/kero-p4-t9-final-build.log`。从验证通过的 Debug 包整包替换 `/Applications/Kero.app`，安装后独立严格验签并确认与构建产物可执行文件 SHA256 相同（`2cf884f3807b88fbdd7ca341e6e4de0b138d8706d92ae31f616f521b37655b26`）；原有正式 PID40825 未退出或重启，用户配置 SHA256 仍为 `a23668bd5e043f0da30cbb02b307c0c5f0a99da7cb8d20c5d4a437adb5e1cf3c`。磁盘新包仅在用户自行重启后进入该现有进程。
 - 阶段结论：P4-T1～T9 全完成，审计 F-01～F-15 均已解决。旧全局菜单猜窗口、旧引用创建与 Diff 可选字段、无参盲 Stash Pop 等淘汰入口无现行源码引用；VoiceOver 的真实 AX 可操作性已验收，未启动系统朗读。Issue #2 的 SSH 外部自动刷新仍是另案，不能据 P4 菜单验收关闭 Issue。
 
+### 2026-10-15 VoiceOver 现场补验（补充而非追认完整通过）
+
+- 仅启动自己创建的隔离 Debug Kero（PID42544），导入本次临时 Git 仓库，在真实 Git 面板查到 `Current branch, main`、`RECENT COMMITS`、提交标题 `VoiceOver baseline`、`Copy Commit Hash` 与原生菜单的 AX 名称；未操作运行中的正式 Kero。
+- 实际从关闭状态启动 macOS VoiceOver，确认系统 VoiceOver 进程运行，屏幕字幕面板实时出现“你当前在 button 上……”等朗读文本，以及“文本的结尾”等位置反馈；这验证**系统屏幕朗读链路可工作**，不能以单纯 AX 标签代替。可见状态证据：`/tmp/kero-issue2-voiceover-caption.png`。
+- 对 Git 面板执行 VoiceOver 合成导航组合键时，注入键没有可靠地进入 VoiceOver 导航，部分输入落在本次临时 TextKit 编辑器。因此**尚未验证 VoiceOver 焦点依次遍历 Commit/Ref、键盘弹出菜单和执行操作的完整闭环**；没有证据表明这是 Kero 本身的缺陷，也不能把工具成功派发当作语音交互通过。
+- 最后已关闭 VoiceOver 并确认进程退出（恢复开始前的关闭状态）；仅正常退出本人隔离 Kero，不退出正式 Kero；本次本地临时文件已清理。现有 P4 阶段 Gate 仍表示原计划中的代码/AX 与 Git 结果通过，不表示未实测的人工 VoiceOver 导航已经验收。
+
 - 补充审计修复：F-07 `7b62892`、F-08 `1c05cd7` 后，无外部输入的完整 Windows SSH 回归 **217/217、0 failures、0 skipped**，日志 `/tmp/kero-p4-t9-verified-final.log`；build/严格验签通过并整包安装，正式 PID40825 未重启。此结果在 F-10/F-11 之前，不替代其最终回归。
 - 完整 App 的 Branch 重名确认：Choose Another Name 保留名称与 Checkout=false；外部移动420015后确认替换被拒绝并保留新 OID；重新确认成功，另建420019不切 HEAD。Tag420016的 Annotated/中文多行说明/不推送默认值均实际读回；改名再试保留所有输入，替换后对象 `7f61e1f4f128c29b3686d5de3c86fa7773da06ec` 指向 sandbox `cf71a75d0b70adba4b12ccca8fef79a6df0bb4ee`。详情为不可编辑原生文本。Push 默认 backup而非origin，Always Proceed=false，取消不改服务器，Proceed后仅backup出现该Tag。普通配置 SHA256 未变。
 - F-10 `fcd80bd`：补齐七个 Git/Sidebar 当前键，JSON、NativeUI4/4、build/严格验签通过；重启的仅是隔离测试 App，真实 Tag 详情已显示中文“提交/关闭”，不是只检查资源文件。
