@@ -1873,6 +1873,7 @@ final class GitStatusModel {
     func actOnStash(
         _ stash: Stash, action: StashAction, reinstateIndex: Bool = false,
         branchName: String = "", target: ActionTarget,
+        expectedStashes: [Stash]? = nil,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
         completion: (@MainActor (Bool) -> Void)? = nil
@@ -1903,9 +1904,15 @@ final class GitStatusModel {
             commands = [["stash", "branch", name, stash.selector]]
             preflight = [["check-ref-format", "--branch", name]]
         }
+        let originalStashes = expectedStashes ?? stashes
+        guard action == .apply || originalStashes.contains(stash) else {
+            failImmediately(String(localized: "The selected stash changed. Reopen the menu and select it again.", table: "Git"),
+                            completion: completion)
+            return
+        }
         perform(label: action.title, commands: commands,
                 requiresStableHead: action != .drop, preflight: preflight,
-                expectedStash: action == .apply ? nil : stash,
+                expectedStashes: action == .apply ? nil : originalStashes,
                 prepare: action == .drop ? nil : prepare,
                 isCurrentTarget: isCurrentTarget, completion: completion)
     }
@@ -1948,7 +1955,7 @@ final class GitStatusModel {
         terminalAction: (@MainActor () throws -> Void)? = nil,
         preflight: [[String]] = [], expectedRef: (name: String, oid: String)? = nil,
         expectedFileState: (path: String, state: FileState)? = nil,
-        expectedStash: Stash? = nil,
+        expectedStashes: [Stash]? = nil,
         continueAfterFirstSuccess: Bool = false,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
@@ -2101,12 +2108,12 @@ final class GitStatusModel {
                                                   failureMessage: message)
                     }
                 }
-                if let expectedStash {
+                if let expectedStashes {
                     let actual = await GitCommandExecution.run(
-                        ["rev-parse", "--verify", expectedStash.selector + "^{commit}"], in: dir, backend: backend
+                        Self.stashListArguments, in: dir, backend: backend
                     )
                     guard actual.status == 0,
-                          actual.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == expectedStash.oid else {
+                          Self.parseStashes(actual.stdout) == expectedStashes else {
                         let message = String(localized: "The selected stash changed. Reopen the menu and select it again.", table: "Git")
                         return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
                     }

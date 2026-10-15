@@ -137,6 +137,31 @@ final class GitStashActionTests: XCTestCase {
         XCTAssertEqual(model.stashCount, 3)
     }
 
+    func testSameOIDStashSelectorShiftCannotDeleteAnotherReflogEntry() async throws {
+        try write("a.txt", "first\n")
+        try git(["stash", "push", "-qm", "original"])
+        let oid = try git(["rev-parse", "stash@{0}"])
+        try write("b.txt", "second\n")
+        try git(["stash", "push", "-qm", "other"])
+        try git(["stash", "store", "-m", "duplicate", oid])
+        try git(["stash", "drop", "-q", "stash@{1}"])
+        try await refresh()
+        XCTAssertEqual(model.stashes.count, 2)
+        XCTAssertEqual(model.stashes[0].oid, model.stashes[1].oid)
+        XCTAssertNotEqual(model.stashes[0].message, model.stashes[1].message)
+        let selected = model.stashes[1]
+        try write("a.txt", "inserted\n")
+        try git(["stash", "push", "-qm", "inserted"])
+        let actualList = try git(["stash", "list", "--format=%gd:%gs"])
+        XCTAssertEqual(try git(["rev-parse", selected.selector + "^{commit}"]), selected.oid,
+                       "The old OID check passes for the wrong reflog entry")
+        model.actOnStash(selected, action: .drop, target: model.actionTarget())
+        try await settle()
+        XCTAssertNotNil(model.lastError, "The chosen reflog entry moved despite the matching OID")
+        XCTAssertEqual(try git(["stash", "list", "--format=%gd:%gs"]), actualList,
+                       "The other duplicate must not be deleted")
+    }
+
     func testConflictDuringPopKeepsStashAndRealUnmergedIndex() async throws {
         try makeTwoStashes(); try await refresh()
         let selected = model.stashes[1]

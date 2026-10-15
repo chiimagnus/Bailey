@@ -1843,6 +1843,7 @@ struct GitPanel: View {
               manager.selectedProject === project, let context = project.panelContext,
               model.matchesPanelTarget(context.identity) else { return }
         let target = model.actionTarget()
+        let selectedStashes = model.stashes
         let isCurrent: @MainActor () -> Bool = {
             manager.attachedWindow === window && manager.selectedProject === project
                 && project.matchesPanelTarget(context.identity)
@@ -1855,7 +1856,7 @@ struct GitPanel: View {
             performOperation(.moreMenu) {
                 model.actOnStash(stash, action: action, reinstateIndex: dialog.reinstateIndex.state == .on,
                     branchName: dialog.name.stringValue, target: target,
-                    prepare: {
+                    expectedStashes: selectedStashes, prepare: {
                         await project.saveBeforeGitAction(repository: target.repository, scope: target.scope, isCurrent: isCurrent)
                     }, isCurrentTarget: {
                         isCurrent() && (action == .drop || project.canRunGitAction(repository: target.repository, scope: target.scope))
