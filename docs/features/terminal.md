@@ -23,12 +23,14 @@
 
 ## 通知与历史
 
-通知使用对应项目名称并保留程序正文；点击应定位发出通知的会话，而不是当前随意选中的标签。项目名和目标身份不应取自可随命令变化的窗口标题。
+通知使用对应项目名称并保留程序正文；点击 macOS 通知应定位发出通知的会话，而不是当前随意选中的标签。项目名和目标身份不应取自可随命令变化的窗口标题。
+
+Codex CLI 在 `~/.codex/config.toml` 的 `[tui]` 下配置 `notifications = true` 和 `notification_method = "osc9"` 后，可在设置中添加多个 Bark HTTPS 推送地址，将终端主动发出的桌面通知推送到每台手机。每个地址通过独立的 HTTPS JSON POST 请求发送，某个设备失败不阻断其他设备。普通响铃、SSH 状态和其他应用通知仍只在 Mac 上显示；推送与 macOS 通知授权相互独立。本机通知被禁用不影响已配置的 Bark 推送，远程失败也不影响本机提醒。项目名和通知正文可能含敏感输出；设备 Key 与地址列表只保存在 macOS 钥匙串，不出现在实际请求 URL，默认未配置即不转发，不提供手机回复或公网入口。
 
 终端历史持久化默认关闭，启用后单独保存；其中可能包含敏感内容，不默认采集或提交。恢复方式见 [session-restore.md](session-restore.md)。
 
 ## 验证
 
-检查多项目、多标签、双窗口、拖动、关闭、重挂载和主题改变后的输入与 Shell 身份；通知必须走到原会话。`PaneRetentionTests` 与工作区 UI 回归覆盖可自动化部分；真实 CLI 通知、快捷键及重启恢复按 [testing.md](../testing.md#人工回归) 单独记录。
+检查多项目、多标签、双窗口、拖动、关闭、重挂载和主题改变后的输入与 Shell 身份；macOS 通知必须走到原会话。`BarkPushServiceTests` 验证地址规范化、跨服务器分发、HTTPS JSON 负载和单地址失败隔离；「发送测试通知」报告 Bark 服务端接受请求的数量，iPhone 实际显示须另行确认，不能把 HTTP 成功当作设备已收到。`PaneRetentionTests` 与工作区 UI 回归覆盖可自动化部分；真实 CLI 通知、快捷键及重启恢复按 [testing.md](../testing.md#人工回归) 单独记录。
 
 实现入口：[TerminalSession.swift](../../kero/Terminal/TerminalSession.swift)。升级 Ghostty 还需执行 [development.md](../development.md#依赖与本地补丁) 的回归。

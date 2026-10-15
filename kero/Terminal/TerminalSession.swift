@@ -764,7 +764,9 @@ extension TerminalSession: TerminalBackendEvents {
         guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return
         }
-        TerminalNotificationService.shared.post(message: message, sessionID: id)
+        TerminalNotificationService.shared.post(
+            message: message, sessionID: id, forwardToBark: true
+        )
     }
 
     func terminalDidRequestOpenURL(_ value: String) {
