@@ -75,34 +75,53 @@ nonisolated struct CommitGraphLayout {
         }
 
         var graph = nodes.map { Row(node: $0!) }
+        var largestLane = nodes.compactMap(\.self).map(\.lane).max() ?? -1
         for (index, commit) in commits.enumerated() {
             let from = graph[index].node
-            for (parentNumber, hash) in commit.parentHashes.enumerated() {
+            for hash in commit.parentHashes {
                 guard let parentIndex = positions[hash], parentIndex > index else { continue }
                 let to = graph[parentIndex].node
                 let color = from.lane == 0 && to.lane != 0 ? to.color : from.color
-                let lane = from.lane == to.lane
-                    ? from.lane
-                    : ((parentNumber > 0 || from.lane == 0) ? to.lane : from.lane)
+                let between = (index + 1)..<parentIndex
+
+                func clear(_ lane: Int) -> Bool {
+                    between.allSatisfy { row in
+                        guard graph[row].node.lane != lane else { return false }
+                        return !graph[row].links.contains { link in
+                            switch link {
+                            case .incoming(let rail), .outgoing(let rail), .through(let rail):
+                                return rail.lane == lane
+                            case .depart(let a, let b, _), .arrive(let a, let b, _):
+                                return a == lane || b == lane
+                            }
+                        }
+                    }
+                }
+
+                var lane = max(from.lane, to.lane)
+                if !clear(lane) {
+                    let alternate = min(from.lane, to.lane)
+                    if clear(alternate) {
+                        lane = alternate
+                    } else {
+                        lane = max(largestLane, lane) + 1
+                        while !clear(lane) { lane += 1 }
+                    }
+                }
+                largestLane = max(largestLane, lane)
                 let rail = Rail(lane: lane, color: color)
-                if from.lane == to.lane {
+                if from.lane == lane {
                     graph[index].links.append(.outgoing(rail))
-                    graph[parentIndex].links.append(.incoming(rail))
-                } else if parentNumber > 0 || from.lane == 0 {
-                    graph[index].links.append(.depart(
-                        from: from.lane, to: to.lane, color: color
-                    ))
+                } else {
+                    graph[index].links.append(.depart(from: from.lane, to: lane, color: color))
+                }
+                if to.lane == lane {
                     graph[parentIndex].links.append(.incoming(rail))
                 } else {
-                    graph[index].links.append(.outgoing(rail))
-                    graph[parentIndex].links.append(.arrive(
-                        from: from.lane, to: to.lane, color: color
-                    ))
+                    graph[parentIndex].links.append(.arrive(from: lane, to: to.lane, color: color))
                 }
-                if parentIndex > index + 1 {
-                    for intermediate in (index + 1)..<parentIndex {
-                        graph[intermediate].links.append(.through(rail))
-                    }
+                for intermediate in between {
+                    graph[intermediate].links.append(.through(rail))
                 }
             }
         }
@@ -125,6 +144,6 @@ nonisolated struct CommitGraphLayout {
             }
         }
         rows = graph
-        laneCount = (nodes.compactMap(\.self).map(\.lane).max() ?? -1) + 1
+        laneCount = largestLane + 1
     }
 }
