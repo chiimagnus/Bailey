@@ -64,6 +64,7 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 | --- | --- |
 | 行号 | 字体或颜色变化后忽略已脱离视图的旧布局片段 |
 | 横向滚动 | 按最大内容宽度计算范围，不因末行较短截断长行 |
+| 查找定位 | 用原生目标锚点移动真实视口，不按中间位置缩短文档；远距离前后定位均显示目标 |
 | 短文档点击 | 文档高度至少覆盖视口，最后一行下方仍可聚焦 |
 | 空范围高亮 | 空范围不加临时属性，避免 TextKit 崩溃 |
 | Diff 固定行高 | 双栏只读文档高度准确，滚动范围一致 |
@@ -71,9 +72,9 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 | 辅助功能只读 | 值／选中文本替换遵守原生 isEditable，文件与 Diff 共用底层保护 |
 | 组合输入 | 结束标记保留已输入正文；最终输入按组合范围替换，默认／显式范围和普通撤销不删字或重复插入 |
 
-补丁集中在 [STTextView+Gutter.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Gutter.swift)、[STTextView.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView.swift)、[STTextView+Accessibility.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Accessibility.swift)、[STTextView+NSTextInputClient.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+NSTextInputClient.swift) 和 [STTextLayoutManager.swift](../Vendor/STTextView/Sources/STTextViewCommon/STTextLayoutManager.swift)。Kero 自己的裁切、内边距和字体初始化由 [SourceTextEditor.swift](../kero/Editor/SourceTextEditor.swift) 负责，不归入上游补丁。
+补丁集中在 [STTextView+Gutter.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Gutter.swift)、[STTextView.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView.swift)、[STTextView+Accessibility.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Accessibility.swift)、[STTextView+NSTextInputClient.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+NSTextInputClient.swift)、[STTextView+Scrolling.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Scrolling.swift) 和 [STTextLayoutManager.swift](../Vendor/STTextView/Sources/STTextViewCommon/STTextLayoutManager.swift)。Kero 自己的裁切、内边距和字体初始化由 [SourceTextEditor.swift](../kero/Editor/SourceTextEditor.swift) 负责，不归入上游补丁。
 
-升级时逐项检查上游是否已修复，删除不再需要的补丁，保留许可证和署名。运行 `FileTabTests`、`DiffTabTests`、`EditorTextInputTests` 并检查字体变化、组合输入、长行、短文档、Markdown、高亮空范围、固定行高和只读替换滚动。全部修复被上游覆盖后才考虑撤销副本，不以升级成功替代功能验收。
+升级时逐项检查上游是否已修复，删除不再需要的补丁，保留许可证和署名。运行 `FileTabTests`、`DiffTabTests`、`EditorTextInputTests`、`EditorNavigationTests` 并检查字体变化、组合输入、长行、短文档、Markdown、高亮空范围、固定行高、远距离定位和只读替换滚动。全部修复被上游覆盖后才考虑撤销副本，不以升级成功替代功能验收。
 
 ### Neon
 

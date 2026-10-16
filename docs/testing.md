@@ -62,6 +62,7 @@ make test ONLY_TESTING=KeroTests/FileTabTests
 | 高亮坐标、渲染色与字体／撤销 | `TextCoordinateIndexTests`、`SyntaxHighlightingTests` |
 | 查询编译共享、固定资源失败与取消等待者 | `HighlightQueryCacheTests`、`SyntaxHighlightingTests` |
 | 原生组合输入、结束标记与最终替换 | `EditorTextInputTests` |
+| 原生远距离定位、文末与固定行高 | `EditorNavigationTests` |
 | Files 与所有 Git 树的命中与交互 | `TreeRowHitTestingTests` |
 | 快照、历史与测试隔离 | `SessionStoreTests` |
 | 标签及窗口整合路径 | `WorkspaceContentIdentityTests`、`WorkspaceWindowCloseTests`、`WorkspaceWindowIsolationTests` |
