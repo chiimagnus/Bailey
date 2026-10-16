@@ -89,6 +89,52 @@ final class RecentCommitsViewTests: XCTestCase {
         return window
     }
 
+    func testGraphPaletteMatchesTwelveReferenceColors() {
+        let expected: [(CGFloat, CGFloat, CGFloat)] = [
+            (0, 133, 217), (217, 0, 143), (0, 217, 10), (217, 133, 0),
+            (163, 0, 217), (255, 0, 0), (0, 217, 204), (225, 56, 232),
+            (133, 217, 0), (220, 91, 35), (111, 36, 214), (255, 204, 0),
+        ]
+        XCTAssertEqual(GitGraphPalette.colors.count, expected.count)
+        for (index, rgb) in expected.enumerated() {
+            let actual = GitGraphPalette.colors[index]
+            XCTAssertEqual(actual.redComponent, rgb.0 / 255, accuracy: 0.001)
+            XCTAssertEqual(actual.greenComponent, rgb.1 / 255, accuracy: 0.001)
+            XCTAssertEqual(actual.blueComponent, rgb.2 / 255, accuracy: 0.001)
+        }
+    }
+
+    func testHeadAndStashGraphGutterRemainsClickableInBothAppearances() throws {
+        let stash = GitStatusModel.Stash(
+            selector: "stash@{0}", oid: String(repeating: "d", count: 40),
+            message: "saved", baseHash: "head", untrackedFilesHash: nil,
+            author: "Tester", date: .now
+        )
+        let head = GitStatusModel.RecentCommit(
+            hash: "head", shortHash: "head", subject: "Main change",
+            author: "Developer", date: .now, parentHashes: ["base"],
+            references: [.init(kind: .currentBranch, name: "main")],
+            files: [.init(status: "M", path: "file.swift", originalPath: nil)]
+        )
+        let root = GitStatusModel.RecentCommit(
+            hash: "base", shortHash: "base", subject: "Initial",
+            author: "Developer", date: .now, parentHashes: [], references: [], files: []
+        )
+        let commits = GitStatusModel.graphCommits([head, root], stashes: [stash])
+        XCTAssertEqual(commits.first?.stash?.selector, stash.selector)
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let selection = GraphSelection()
+            let window = hostHistory(commits, selection: selection, height: 200)
+            window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+            settle()
+            click(NSPoint(x: 8, y: 200 - 19 - 38), in: window)
+            XCTAssertTrue(selection.expanded.contains("head"))
+            click(NSPoint(x: 8, y: 200 - 19), in: window)
+            XCTAssertTrue(selection.expanded.contains(commits[0].id))
+            window.close()
+        }
+    }
+
     func testLongCommitMessageCanScrollHorizontallyInNarrowSidebar() {
         let selection = GraphSelection()
         let longSubject = "修复远程工作区同步并保留所有 Git 分支的真实关系 " + String(repeating: "very-long-commit-message-", count: 12)

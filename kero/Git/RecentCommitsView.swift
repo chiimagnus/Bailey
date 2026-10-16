@@ -250,7 +250,14 @@ struct RecentCommitsView: View {
             }
         }
         .background {
-            CommitGraphRails(row: graph, fontScale: fontScale, laneSpacing: spacing)
+            CommitGraphRails(
+                row: graph,
+                isHead: commit.references.contains {
+                    $0.kind == .currentBranch || $0.kind == .detachedHead
+                },
+                isStash: commit.stash != nil,
+                fontScale: fontScale, laneSpacing: spacing
+            )
         }
         .contentShape(Rectangle())
         .onTapGesture { toggle(commit) }
@@ -614,6 +621,22 @@ struct RecentCommitsView: View {
     }
 }
 
+enum GitGraphPalette {
+    static let colors: [NSColor] = [
+        rgb(0, 133, 217), rgb(217, 0, 143), rgb(0, 217, 10), rgb(217, 133, 0),
+        rgb(163, 0, 217), rgb(255, 0, 0), rgb(0, 217, 204), rgb(225, 56, 232),
+        rgb(133, 217, 0), rgb(220, 91, 35), rgb(111, 36, 214), rgb(255, 204, 0),
+    ]
+
+    private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> NSColor {
+        NSColor(srgbRed: red / 255, green: green / 255, blue: blue / 255, alpha: 1)
+    }
+
+    static func color(_ index: Int) -> Color {
+        Color(nsColor: colors[index % colors.count])
+    }
+}
+
 private struct CommitGraphRails: View {
     private let themeChanges = Theme.changes
     private static let firstLaneX: CGFloat = 8
@@ -630,6 +653,8 @@ private struct CommitGraphRails: View {
 
     var row: CommitGraphLayout.Row? = nil
     var bottomRails: [CommitGraphLayout.Rail] = []
+    var isHead = false
+    var isStash = false
     let fontScale: CGFloat
     let laneSpacing: CGFloat
 
@@ -637,17 +662,18 @@ private struct CommitGraphRails: View {
         (Self.firstLaneX + CGFloat(lane) * laneSpacing) * fontScale
     }
 
-    private func color(_ index: Int) -> Color {
-        if index == 0 { return Color(red: 0.41, green: 0.52, blue: 0.96) }
-        let colors: [NSColor] = [.systemGreen, .systemPurple, .systemTeal,
-                                 .systemYellow, .systemRed]
-        return Color(nsColor: colors[(index - 1) % colors.count])
-    }
-
     var body: some View {
         let _ = themeChanges.revision
         Canvas { context, size in
             let middle = size.height / 2
+            let backdrop = Color(nsColor: Theme.sidebar)
+            let separation = StrokeStyle(
+                lineWidth: min(4, max(2, laneSpacing - 0.6)) * fontScale,
+                lineCap: .round, lineJoin: .round
+            )
+            let stroke = StrokeStyle(
+                lineWidth: 2 * fontScale, lineCap: .round, lineJoin: .round
+            )
             if let row {
                 for link in row.links {
                     var path = Path()
@@ -686,26 +712,38 @@ private struct CommitGraphRails: View {
                         )
                         linkColor = color
                     }
-                    context.stroke(
-                        path, with: .color(color(linkColor)), style: StrokeStyle(
-                            lineWidth: 1.6 * fontScale, lineCap: .round, lineJoin: .round
-                        )
-                    )
+                    context.stroke(path, with: .color(backdrop), style: separation)
+                    context.stroke(path, with: .color(GitGraphPalette.color(linkColor)),
+                                   style: stroke)
                 }
-                let radius = 3.2 * fontScale
+                let radius = 4 * fontScale
                 let x = laneX(row.node.lane)
-                context.fill(
-                    Path(ellipseIn: CGRect(x: x - radius, y: middle - radius,
-                                           width: 2 * radius, height: 2 * radius)),
-                    with: .color(color(row.node.color))
-                )
+                let node = Path(ellipseIn: CGRect(
+                    x: x - radius, y: middle - radius, width: 2 * radius, height: 2 * radius
+                ))
+                let nodeColor = GitGraphPalette.color(row.node.color)
+                if isHead || isStash {
+                    context.fill(node, with: .color(backdrop))
+                    context.stroke(node, with: .color(nodeColor), lineWidth: 2 * fontScale)
+                    if isStash {
+                        let innerRadius = 1.8 * fontScale
+                        let inner = Path(ellipseIn: CGRect(
+                            x: x - innerRadius, y: middle - innerRadius,
+                            width: 2 * innerRadius, height: 2 * innerRadius
+                        ))
+                        context.stroke(inner, with: .color(nodeColor), lineWidth: fontScale)
+                    }
+                } else {
+                    context.fill(node, with: .color(nodeColor))
+                }
             } else {
                 for rail in bottomRails {
                     var path = Path()
                     path.move(to: CGPoint(x: laneX(rail.lane), y: 0))
                     path.addLine(to: CGPoint(x: laneX(rail.lane), y: size.height))
-                    context.stroke(path, with: .color(color(rail.color)),
-                                   lineWidth: 1.6 * fontScale)
+                    context.stroke(path, with: .color(backdrop), style: separation)
+                    context.stroke(path, with: .color(GitGraphPalette.color(rail.color)),
+                                   style: stroke)
                 }
             }
         }
