@@ -1,67 +1,85 @@
-# P1：查明并重构源文件编辑器的滚动热路径
+# P1：稳定滚动几何与低资源占用的源代码编辑器
 
-**目标：** 让用户实际打开的 Swift 文件在**触摸板连续／惯性滚动**及首次进入新区时明显更流畅；先通过实际渲染与主线程证据找出重复工作，再在单一 Swift／AppKit／TextKit 所有者处重构。滚动条拖拽作为单独对照，不预先重写编辑器。
+**目标：** 根治源代码浏览新区域时**滚动条长度／阅读位置异常跳变**，同时让 382、1,000、10,000、100,000 行 Swift 文件的打开、查看、连续编辑与关闭具备低 CPU／内存成本。真实复现文件：`kero/Files/FileTreeModel.swift`（382 行／16,050 字节）。坚持 Swift 6／AppKit／TextKit 2 按需布局；不修并不存在的自定义触控板事件层，也不靠强制全文排版换取稳定。
 
-**不做：** Git Diff 读取／算法、Git 状态刷新、Files 树重写、Rust／GPUI／Rope、替换 Neon，以及新 FPS 产品埋点／第二套文字绘制引擎。[原 P5](../editor-git-performance/plan-p5.md)继续独立进行；共享 STTextView 修改只在确认没有并行改动冲突后进行，并同时验证 Diff 消费者。
+**不做：** 触控板 `scrollWheel` 事件补丁、独立 Git／Files／Diff 算法、Rust／GPUI／Rope、Neon 插件迁移或第二套编辑器。共享 STTextView 修复须验证 [原 P5 的 Diff](../editor-git-performance/plan-p5.md) 使用者；不覆盖正在进行的 P6 工作区或暂存文件。
 
-**方式：** T1 对触摸板、滚动条、首开分别取证并确定真正的主线程/绘制瓶颈；T2 只重构证实的连续滚动热路径，T3 仅在首开仍有独立瓶颈时处理；T4 按实际触摸板体验验收。新路径在**所属任务当次替换并删除旧实现**，不追加长存的缓存、重试或兼容层。临时实验保存在忽略的 `build/performance/editor-rendering/`，经验证的结论记 `evidence-p1.md`。
+**方案与顺序：** T1 建立滚动几何、编辑主线程成本及内存基线；T2 在 STTextView 的**唯一几何所有者**处稳定滚动范围与文本锚点；T3 解决真实十万行文件的容量、初开与资源成本；T4 消除已确认的**每次按键整文快照／比较、全量坐标平移**等热路径；T5 用相同样本综合验收。不预置第二套编辑器或 Rope，只有 T1/T4 测量表明原生数据结构无法满足目标才做最小 Swift 分段索引替换。每个实现任务**同次接入新路径、删除旧路径、测试并更新拥有者文档**；实验放 `build/performance/editor-rendering/`，结论归 `evidence-p1.md`。
 
-**现有基础已完成而非待重做：** [旧 P3 证据](../editor-git-performance/evidence-p3.md)涵盖初次解析、后台根树、增量坐标、查询缓存、嵌入片段、远距离定位。约 400 KiB Swift 输入返回中位数从 48.074 ms 降到约 0.37 ms；高亮追上约 52 ms；长文首次指定位置定位及着色约 393.6 ms、已访问反向约 52 ms。它们**不是物理触摸板的帧间隔**。不要为这次滚动再造重复解析器或将 P3 的定位修复退回。
+**与既有优化的关系：** [原 P3](../editor-git-performance/evidence-p3.md) 已改善 Tree-sitter 后台解析、初次 Query 编译和长文档定位，但先前测得的输入延迟不代表对十万行文件持续按键的低开销。文件加载时完整进入 `FileTab.text` 和 STTextView；动态发生的是 TextKit **视口排版**，不是滚动时读取文件块。沿用现有 Neon、查询缓存和 STTextView 可见正文 fragment 复用；保留高亮正确性，不重做解析器。
 
-**执行前逐项核对的代码事实（并非已经证明它们是 CPU 热点）：**
-- **文件打开与标签**：`Project.openFile → PanelContentView → FileViewerView`；`FileTab.reloadFromDiskIfClean` 通过 `@concurrent` 后端读取／解码、对干净文件按字节比较；仅内容真实变化才清除原编辑器并递增 `reloadRevision`。`SourceTextEditor.makeScrollView` 在主线程依次设置字体、全文、语法插件与首帧选区／滚动恢复。`FileViewerView.onAppear`／窗口重新变为焦点会请求干净文件重新读取；需分开测**初读、重复激活与 TextKit 首次装配**，不能假定每次切换都重建。`EditorState` 被 `@ObservationIgnored` 排除，写回 clip bounds 不等于每帧 SwiftUI 更新。
-- **滚动准备与收敛**：`STTextView.prepareContent(in:)` 仅向上预备约半个视口；区域改变时同步 `layoutViewport()`，`layout()` 也会发起 viewport 布局。`layoutViewport()` 允许至多 5 次收敛，以应对 `setFrameSize → prepareContent` 回入；不是可随便删的无效安全围栏。`isCompatibleWithResponsiveScrolling = false`，且 Kero／Vendor **没有自定义 `scrollWheel` 拦截**；触摸板与滚动条表现不同不等于存在错误的滚轮算法，需沿 NSScrollView/NSClipView 追踪真实布局。响应式滚动仅在 AppKit 全链契约成立后评估。
-- **视口与正文**：`STTextView+NSTextViewportLayoutControllerDelegate` 已通过 `fragmentViewMap` **复用可见正文的 `STTextLayoutFragmentView`**、移除脱离的视图；并非每帧重新创建全部正文。`DidLayout` 之后依次可达 viewport `ensureLayout`、`updateContentSizeIfNeeded`、选中范围／当前行、gutter 和 plugin 回调。`updateContentSizeIfNeeded()` 又查询文末 fragment 与 `textSegmentFrame`，并可能通过 `setFrameSize` 触发新的布局；`setupTextLayoutManager` 还对 `usageBoundsForTextContainer` 做 KVO 并设置 `needsUpdateConstraints`。这些是**需要采样区分的布局反馈候选**，不预先声明必然导致卡顿。`updateSelectedRangeHighlight` 和 `updateSelectedLineHighlight` 也可能重建 NSView，不能只盯 gutter。
-- **行号及交互**：`STTextView+Gutter.layoutGutterLineNumbers` 每次移除并重建可见 `STGutterLineNumberCell`，通过 `textContentManager.textElements(for:文首…viewport)` 生成段落数组后 `.count`。`STGutterView` 的 marker 定位、鼠标命中／拖拽还依赖这些 line-number cell；Kero 默认未启用 marker，**不能因此就直接删上游共享行为或预设改成单一 Canvas**。前缀枚举／NSView 分配是否占用连续滚动帧，留 T1 定量判断。
-- **着色与观察**：`SyntaxHighlightCoordinator.updateViewportRange` 在 viewport 文字范围改变时才让 Neon 处理**无效且可见**区域，不会像 P7 失败的新插件一样每滚动全文 reset。新文件仍涉及正文装载、一次初始解析及共享 query 获取。`TextCoordinateIndex` 只维护 Tree-sitter 的 LF 行坐标，与 TextKit 段落／软换行不等价，不能直接转用为 gutter 索引。STTextView 还注册 `NSScrollView.didLiveScrollNotification` 取消自动补全，`resetCursorRects` 会遍历可见区链接/光标属性；仅当实际帧堆栈包含它们时才考虑优化，不因为名字在滚动链上就添加处理。现有 `kero/Support/FPSCounter.swift` 只数 `CADisplayLink` 回调，**不测文字真实合成／提交帧**，不得把界面 FPS 徽章当作完成证据。
+**按实际调用链核对的事实（具体异常仍需 T1 记录）：**
+- **完整读取与容量**：`FileTab.reloadFromDiskIfClean` 后台完整读取／UTF-8 解码、比对旧字节后才更新 `reloadRevision`；`SourceTextEditor.makeScrollView` 一次将全文赋给 STTextView，并非按滚动位置分块读取。`FileTab.maxTextBytes = 5 << 20`（5 MiB），`LocalWorkspaceBackend.read`／`SSHWorkspaceBackend.read` 遵守传入上限，`FileTabTests` 专门断言超限拒绝。**十万行真实 Swift 文件可能超限**，T3 必须连带修订读入额度与测试／文档，不能只做一个十万行极短文本的假测试。
+- **真正的滚动触发链**：`NSScrollView/NSClipView → STTextView.prepareContent(in:) → layoutViewport() → NSTextViewportLayoutControllerDelegate.didLayout → updateContentSizeIfNeeded()`。`prepareContent` 向上预备半个视口，正文 fragment 已由 `fragmentViewMap` 复用，`layoutViewport()` 最多进行 5 轮有因由的布局收敛；Kero／Vendor 没有自定义 `scrollWheel`。不要简单禁用按需布局、移除收敛保护或翻 `isCompatibleWithResponsiveScrolling` 开关。
+- **滚动条高度变化的直接机制**：`STTextView.updateContentSizeIfNeeded`（`STTextView.swift`）每次都从**文末布局 fragment／textSegmentFrame**计算 `estimatedSize.height`，再以 `setFrameSize()` 更新 `documentView.frame`。TextKit 按需排版导致文末坐标估计会变化，STTextView 自己的 `sizeToFit()` 注释也明确承认**估算高度随滚动逐渐变化**（注意：Kero 现有 `SourceTextEditor.sizeThatFits` 并未调用 `sizeToFit()`，不能把它误判为直接热函数）。Apple 的 `usageBoundsForTextContainer` 还能通过 KVO 触发 `needsUpdateConstraints`；`didLayout` 在看似到底部、实际未到文末时另有 `relocateViewport(to: documentEnd)`，可能进一步调整 frame 和锚点。这一**估算高度 → frame／滚动范围变化 → 重新布局／重定位**是新症状首要验证的完整反馈链。<https://developer.apple.com/documentation/appkit/nstextlayoutmanager/usageboundsfortextcontainer>
+- **滚动时重复工作**：`STTextView+Gutter.layoutGutterLineNumbers` 每次布局移除、重建可见行号 cell，并用 `textElements(for:文首…viewport).count` 计算绝对行号；选择／当前行高亮、Neon 可视区着色也可能产生额外分配。先与文档高度跳变区分归因；**若行号确实是 CPU／内存热点**，就由原有 gutter owner 增量计算／复用可见行号单元，替换文首前缀数组与每帧销毁路径，保持 marker、Unicode、折行等行为；不新增第二套正文缓存。
+- **滚动位置与状态**：`SourceTextEditor.RestorableScrollView` 初次挂载恢复 clip bounds，窗口尺寸变化时更新几何；`EditorState` 被 `@ObservationIgnored` 排除，不是每次滚动触发 SwiftUI 重新生成正文的证据。需要调查文末 `relocateViewport` 与错误高度是否共同导致跳行。`FPSCounter` 的 `CADisplayLink` 回调数不代表实际呈现帧。
+- **编辑时已存在的整文路径**：`SourceTextEditor.Coordinator.textViewDidChangeText` 每次调用 `textView.text`；STTextView getter 返回 `textContentManager.attributedString(in:nil)?.string`，然后 `FileTab.refreshDirtyState()` 使用 `text.utf8.elementsEqual(savedText.utf8)` 整文比较。`SyntaxHighlightCoordinator.didChangeContent` 又对 `NSTextContentManager` 取得全文字符串，并将其提供给后台 Tree-sitter read handler；`TextCoordinateIndex.replace` 平移修改行之后所有行起点，文件头编辑与行数有关。**这些是确定存在的可达工作，不等于已经量得每次都复制多少 MB**。独立关注主线程耗时、快照分配以及 Undo／IME／保存契约。
 
-**必须保留的真实契约：** `docs/features/editor.md` 规定的标签唯一原生对象、干净文件刷新、字节级保存保护、IME／Undo、Find 双向定位、实际高亮、只读与关闭后资源释放。`SourceTextEditor.sizeThatFits` 防止文档撑大窗口并无限布局；滚动恢复与 `setFrameSize` 收敛保护已有回归，不能因外观看似复杂就删。Vendor 的空范围高亮防崩溃、文末/水平滚动与 Diff 固定行高等修复仍有消费者（`kero/Git/DiffTextView.swift` 和 `DiffNativeSurface.swift`）。只对被本任务**真正取代、验证后无消费者**的旧实现进行即时删除；不触碰用户现有 Kero，测试限隔离实例，完成标准由根 `Makefile`／`docs/testing.md` 唯一维护。
+**从 Zed 直接借鉴的方案（不移植 Rust）**：Zed 的 [ScrollAnchor](https://github.com/zed-industries/zed/blob/main/crates/editor/src/scroll.rs) 保存**文本锚点与屏幕偏移**，而不是仅记一个易受高度修正影响的 Y 像素；[DisplayMap](https://github.com/zed-industries/zed/blob/main/crates/editor/src/display_map.rs) 经 [WrapMap](https://github.com/zed-industries/zed/blob/main/crates/editor/src/display_map/wrap_map.rs) 管理实际显示行，软换行位置和改动通过分段树及后台任务维护；[EditorElement](https://github.com/zed-industries/zed/blob/main/crates/editor/src/element.rs) 只对 `start_row..end_row` 布局可见文字；[Buffer](https://github.com/zed-industries/zed/blob/main/crates/language/src/buffer.rs) 将实时文本与便宜的快照分离。Kero 可复用 TextKit 原生输入／绘制，优先实现相同**职责边界、可见区工作量和按修改范围更新**，不再造 GPUI。
+
+**现成能力与必须保留的行为**：`DiffTextView.applyContentHeightOverride` 已用 `overrideContentHeight` 为**固定行高的 Diff**提供稳定高度，这是可对照的本仓方案，但源码编辑器存在 CRLF／Unicode／软换行、字体变化，不能直接套用其 `rowCount × rowHeight`。`EditorNavigationTests` 测的是双向跳转可见，不检查连续滚动时的 `frame.height`／滑块比例；新的几何回归应在现有 NativeUI 目标内补足。保留 `sizeThatFits` 防止窗口无限布局、文末点击／长行横滚／选区与 IME、保存和重挂载保护，以及共享 Diff 的固定行高。现有 [文件编辑器契约](../../../docs/features/editor.md) 还要求保存基线**字节完全相同才清除脏标记**，撤销和手动重打相同内容都必须立即正确；不能以单一 `revision != savedRevision` 替代字节判定，破坏 Undo 恢复。修改保存快照的所有者应追到 `Project.appendText`、`TabSwitcherView` 摘要、标签重挂载、`FileTab.save/reload` 与本地／SSH 实际字节写入。正式实现时**每个相关 task 同步删除旧路径、更新 `docs/features/editor.md`／必要的 `docs/development.md`**；不建立第二套编辑器。
 
 <a id="p1-t1"></a>
-## P1-T1 真实滚动与首次打开性能归因
+## P1-T1 捕获文档高度与滚动条跳变的真实反馈链
 
-**性质：** 执行前最小实验；没有可信热路径证据前**不重写产品渲染器**。不在产品加入诊断框架或新长期设置。
+**性质：** 最小诊断任务。先确认 382 行文件的**文档几何跳变**是否成立，同时建立编辑整文工作量和 CPU／内存前基线，避免 T4 改完才发现没有可比样本。不改正式渲染算法，不加入永久埋点。
 
-1. 固定实现前的 HEAD／相关未提交差异、Swift／Xcode 配置、实际屏幕刷新率、窗口、用户字号、默认**不折行**及语言。**先选用户能复现卡顿的一份真实 Swift 文件**，再以约 400 KiB Swift 和按需接近 5 MiB 的合成样本判断文件规模影响；避免只测巨型文件漏掉普通 Swift 文件。记录 Debug／Release 差别、首开与重新切回、首次进入新区和已布局区域反向滚动。
-2. 用同一个文件分别复现 **物理触摸板连续／惯性滚动**与**拖动右侧滚动条**；固定方向、区域和观察窗口，实际手势重复若干次并保存代表性最差卡顿。真实画面/帧 hitches 与主线程长阻塞要分别记录；只在需要比较具体热函数时跑 30 次微基准（中位/p95/最差）。不能用 `scrollRangeToVisible`、合成 wheel 事件或 P3 的首次着色等待代替物理手势；没有可控物理输入时记录人工操作步骤及未测边界。
-3. 优先用 Instruments 的 Time Profiler 和 Animation Hitches；若仍无法录制（此前 Xcode Beta 的 DTServiceHub/AMFI 曾阻塞），保留失败事实，用系统 `sample` 和仅限隔离测试的计时判断主线程卡在哪。按样本逐项核对 `prepareContent/layoutViewport`、文末 `updateContentSizeIfNeeded`、`usageBounds` KVO→约束更新、gutter 段落前缀与 view 重建、选区/当前行高亮、新 fragment 绘制和 Neon 请求；只有观察到堆栈命中才扩至实时滚动通知或光标区域重建。用 Allocations 仅在分配明显时补查。**`FPSBadge` 的 display-link tick 不是 App 实际内容呈现帧**；没有画面／帧证据时只能报告 CPU 和运行时热点，不能宣称达到流畅帧率。
-4. 在隔离 NativeUI 或只用于实验的配置中，优先单变量对照**行号开/关、高亮开/关**。文件首次挂载进一步区分后端读/字节比较、主线程 `textView.text` 安装、第一次 viewport layout、初始 Query/Neon 和颜色完成；如果这些阶段的开销不影响实际手势，不扩大到其它子系统。Zed 的可见行策略作源码参照；**检查时 `/Applications/Zed.app` 不存在**，如未配备可对比的 Zed 版本，就不把“同机 Zed A/B”当作本阶段必跑项。
-5. 在 `evidence-p1.md` 记录两种滚动方式的可比条件、主线程调用栈、对应画面/帧证据（如可得）、被排除的猜测、首次打开各阶段和**具体该修改的唯一 owner**。`build/performance/editor-rendering/` 仅存隔离样本与临时诊断，保留必要可复核依据，不创建新的 Xcode test target、永久脚本或产品级 signpost 状态。
+1. **真实小文件先行**：用 `kero/Files/FileTreeModel.swift`（382 行／16,050 字节）在隔离的原生编辑器中复现；固定文件版本、字体、默认不换行、窗口大小、Debug/Release 模式，再做约 **1,000、10,000、100,000 行**的真实 Swift 结构样本。记录每个样本的 UTF-8 字节数和是否超过现有 5 MiB 容量限制；容量拒绝单列为 T3 的问题，不用极短行掩盖。
+2. **直接测滚动范围**：从文件开头、小步连续下/上滚、拖动滑块到约 25%／50%／75%／文末，再反向返回；各点同步记录 `scrollView.documentView.frame.height`、`NSClipView.bounds.origin.y`、`NSScroller.knobProportion`／`doubleValue`、`textViewportLayoutController.viewportRange` 和首个可见行的屏幕位置。对固定文本／字号／宽度，**文档总高度与滑块比例**应稳定，`doubleValue` 和可见行则应随滚动正常变化；先确认**哪个值发生了非预期变化**，以及可见行是否因此瞬移。使用原生手势／滚动条观察现象，测试中直接移动 clip bounds 可以验证几何不变量，不能由此声称物理手势 FPS。
+3. **逐调用点确认因果**：在仅用于本地测试的边界记录 `updateContentSizeIfNeeded → estimatedSize.height → setFrameSize`、`usageBounds` KVO→约束、文末判定→`relocateViewport`／`adjustViewport`、`RestorableScrollView` 的恢复／resize 时机以及 `layoutViewport` 收敛次数。看**滑块比例变化是否与 frame 高度重新估算一致**，还是正文重绘/行号导致独立卡顿。只有对应主线程耗时明显时使用 Instruments Time Profiler／`sample`，Xcode Beta 诊断服务失效时记录阻塞，不凭 FPS 徽章代替几何证据。
+4. 对照 **不换行／软换行**、首次滚到未布局位置／回到已布局位置；改变字体、窗口宽度或插删行时，判定哪些高度变化确属合法。尤其验证**估算高度过短时误判“已经到底部”**是否触发 `relocateViewport`。排除动态文档几何后，才单变量开/关行号或高亮测试独立耗时；不下载 Zed 作为必须前提。
+5. **建立资源基线**：同文件分别在文首／中／末执行单字符插入、删除、Undo／Redo 与 30 次连续输入，确认实际调用到 `STTextView.text` 全文 getter、`refreshDirtyState` 比较、`SyntaxHighlightCoordinator.didChangeContent` 快照和 `TextCoordinateIndex.replace` 的次数／耗时；记录主线程中位／p95／最大、每次编辑分配、进程峰值／稳定驻留内存。再观察静置 30 秒的 CPU／唤醒、滚动 30 次以及 5 个标签打开／关闭后内存。样本与窗口、字体、语言、换行、Debug／Release 分开标注；尚被 5 MiB 拒绝的十万行样本注明不可测，不能冒充已验收。
+6. `evidence-p1.md` 汇总几何跳变、调用栈、主线程与内存数据、未测条件和不发生异常的对照，按**几何、编辑、文件加载**标明 T2～T4 应改的唯一 owner。临时采样放 `build/performance/editor-rendering/`，不新增永久 XCTest target、产品定时器或性能日志服务。
 
-**门槛：** 至少在具体原生调用路径或 A/B 中观察到可复核的额外工作，并与用户感到的卡顿关联，才进入相应的 T2/T3；未验证的假设不进入生产代码。若真实帧录制被系统阻塞，可据可重复的主线程热点做有限的优化实验，但**不能报物理触摸板帧率或整项体验已解决**。
+**门槛：** 固定文档高度／滑块比例异常与调用链相关，才进入 T2 相应几何改造；高度稳定则改查 fragment／行号／高亮 CPU。文件超过 5 MiB 的拒绝已从源码确定，可纳入 T3。T4 的两个整文 getter 和一个后续行偏移更新是确定存在的候选，按 T1 的真实开销**分别决定**是否需要更换所有者或索引，不因 Zed 用 Rope 就贸然移植。
 
 <a id="p1-t2"></a>
-## P1-T2 重构已证实的连续滚动主线程热路径
+## P1-T2 重构单一文档几何模型，稳定滚动条和阅读锚点
 
-**性质：** 仅修 T1 证实的连续滚动热点；无需在 T1 之前决定重写行号、视口还是正文。相互独立的瓶颈分开做原子改动，同一共享根因只保留一份实现。
+**性质：** 先解决 T1 已证明的**文档高度不稳定／视口被错误重定位**，这是当前用户体验的核心；行号、Neon 等独立耗时只在根因排除后处理。正文继续按需绘制，滚动条所依赖的**完整文档几何**必须另有稳定且正确的来源。
 
-1. **入口与责任**：以 T1 的证据选择实际最窄共有代码：`STTextView+Gutter.layoutGutterLineNumbers`、`STTextView.prepareContent/layoutViewport/updateContentSizeIfNeeded`、viewport delegate、`STTextView.updateSelectedRangeHighlight/updateSelectedLineHighlight`、usageBounds KVO/尺寸约束反馈，或确实命中的 `SourceTextEditor.Coordinator.attach`。分别核对首次进入/返回已访问区域、连续小步滚动/大步拖动。已有 `fragmentViewMap` 复用可见正文，先检查误失效／重入；**不要再实现第二个正文 fragment 缓存**。
-2. **行号命中时**：先消除每次视口更新产生的文首至 viewport 段落数组和无效 `STGutterLineNumberCell` 销毁/重建。需要绝对行号时优先已有 TextKit 内容位置能力和真实 paragraph 语义；不能不经验证复用只按 LF 计数的 `TextCoordinateIndex`，也不能先添加第二套全文索引。只在分配热点证明必要时复用可见行号单元；保持 `STGutterCalculations` 的文本行框、换行语义和 `STGutterView` marker 命中/位置契约（虽然 Kero 未启用 marker）。不预设新绘制画布、CoreText 行号引擎或额外永久缓存。
-3. **视口/选择热点命中时**：减少一次连续手势引出的重复 `layoutViewport`、文末 `ensureLayout`／`enumerateTextSegments`、无变化的 frame/尺寸回写、旧/新可见 fragment 反复失效以及选区／当前行 NSView 重建。保持无换行水平范围、文末、空文件及 Diff 固定高度正确；区分真实必要的 TextKit 估算与多余的同帧强制排版。`prepareContent` 当前只向上扩大半屏，若实际下滑最卡，再按采样做有界双向预布局实验，不靠全文同步排版。仅当 AppKit 官方响应式滚动的完整准备/线程契约可证明成立才评估开启，不能直接翻 `false` 或对主线程 UI 做未经支持的后台读写。
-4. **同 task 清理与验收**：先补能复现 T1 热点或正确性边界的最小原生测试，保留换行（特别 CRLF／软换行）、字体、可见行号、当前行与长行水平滚动等受影响结果。新算法接入后**立即删除被替代的前缀枚举、视图重建、重复尺寸计算或无消费者 helper**，不留旧/新并跑、兼容 fallback 和诊断开关；但 `sizeThatFits` 防窗口死循环、`layoutViewport` 收敛／递归保护、IME／高亮防崩溃、保存身份与 Diff 行高等存在真实消费者的机制不能当成“多余安全围栏”删除。同步 `docs/development.md`、`docs/features/editor.md`，真正改变 Diff 契约时同步 `docs/features/diff.md` 与旧 P5 接口说明；保留 Vendor 版权与补丁来源。
-5. **验证按改动影响选择**现有 `EditorNavigationTests`、`FileTabTests`、`EditorTextInputTests`、`SyntaxHighlightingTests`、`PaneRetentionTests`；改 STTextView 共享路径时必须覆盖 `DiffTabTests` 的双栏、水平/垂直滚动及 fixed-row。筛选示例为 `make test ONLY_TESTING=KeroTests/EditorNavigationTests`（测试类名，不是文件夹），其余参照 `docs/testing.md`。相同样本 A/B 对照主要热点、内存分配和真实触摸板卡顿，**无稳定净收益就撤回未采用的实现**。每个实现任务 Red/Green 后做完整相关回归、`make build` 和原子提交，不等 T4 才清理旧代码。
+1. **责任位置**：先审 `STTextView.updateContentSizeIfNeeded` 与 `STTextView+NSTextViewportLayoutControllerDelegate.didLayout`／`relocateViewport`，并追踪 `setFrameSize → prepareContent → layoutViewport`、`usageBounds` KVO 的反馈；这是多个滚动方式汇聚的共同 owner。实测确立唯一几何更新入口，区分**全文稳定范围**与**当前可见区布局**，不要在 `SourceTextEditor` 或 `NSScrollView` 外层追加“拖动时冻结滑块”的补丁。
+2. **无软换行时**：利用文档段落/行数和经过验证的实际行高确定可重复的总高度／滚动范围（可参考现有 `DiffTextView.applyContentHeightOverride`，但它只适用 Diff 的固定行高）。先核对末尾换行与额外行、CRLF／bare CR／Unicode、emoji/字体回退、段落样式与行高是否真的恒定；只有证明等价才能复用简单行数×行高，不能把 `TextCoordinateIndex` 的 LF 假设直接用作 TextKit 高度真源。**382 行也必须稳定**，不要靠达到行数阈值才启用修复。
+3. **软换行／高度可变时**：精确总高度依赖实际的行折返／字体布局，不能一面拒绝必要布局、一面无条件保证首帧已知精确高度。先验证 TextKit 的布局范围／位置 API；需要异步补足显示行几何时，以**文本位置＋视口内像素偏移**为滚动锚点，保持阅读行屏幕位置、滚动位置单调、末尾可达；背景得到更精确高度时只合并必要修正，禁止每滚一屏反复跳动。借鉴 Zed 的 WrapMap 原理但优先原生可用能力；不锁死错误尺寸、不每帧 `ensureLayout(documentRange)`、不另建一份完整文本或定时预热器。
+4. **单一更新链与当次清理**：检查文末 `relocateViewport` 是否被不准确的 documentView 高度误触发；新模型替代旧的“每次 didLayout 用文末 fragment 反复估高／反复 setFrameSize”分支时，**同 task 删除被替代的反馈循环和无消费者代码**。只在真正几何变化时更新 frame/scroller，必要时保留可见文字锚点。保留 `SourceTextEditor.sizeThatFits` 的窗口约束、布局收敛保护、水平长行滚动、短文末尾点击、IME 与 Diff 的 `overrideContentHeight`，不误删实际修复。更新 `docs/features/editor.md`／`docs/development.md`，共享 Diff 受影响再同步 `docs/features/diff.md`；保留 Vendor 版权。
+5. **先 Red 后 Green 的原生几何回归**：在现有 `EditorNavigationTests`／对应 NativeUI 测试中，固定文本+窗口时记录初始 `documentView.frame.height`、`verticalScroller.knobProportion` 和视口顶部字符/坐标，再多次滚动及反向（包含 0／25／50／75／100%），断言滑块比例不随视口改变、阅读锚点不跳、文末真的可达。单测覆盖 382／1,000／10,000 行，100,000 行纳入受控的性能/集成测试避免拖垮日常单测；字体、折行、内容修改必须触发**正确而稳定**的尺寸更新。共享实现还必须通过 `DiffTabTests` 的固定高度和双栏同步、`PaneRetentionTests` 的重挂载，以及相关输入和查找测试。改动无净收益或产生不正确滚动范围则撤回候选，改动当次完成测试、旧路径清理和原子提交。
 
-**决策边界：** 如果消除已证实的重复工作后仍无法满足体验目标，先在证据中写清**哪个 TextKit/AppKit 约束不可优化、为何现有 fragment 复用不足**。只有确有不可跨越的瓶颈才评估独立的 Swift 原生绘制方案；不能仅因 Zed 使用另一渲染架构就在本任务新造 CoreText/Metal 或第二套输入、Find、Undo 系统。
+**决策边界：** 正文 fragment 按需复用不等于滚动范围必须不稳定。如果稳定几何无法在现有 TextKit API 下准确获得，先以实验说明限制和可观察误差，才评估最小的 Swift 原生几何计算方案；不因 Zed 使用 GPUI 就写 CoreText/Metal 或第二套输入系统。行号前缀枚举等独立 CPU 热点只有 T1 测得后才在所属 owner 另行优化，不能遮盖高度问题。
 
 <a id="p1-t3"></a>
-## P1-T3 收敛新文件首屏与首次跨区域高亮工作
+## P1-T3 保证小文件首开与十万行代码的加载、编辑成本
 
-**性质：** T1 证明首次打开与连续滚动**存在不同根因**时才实施。如果已由 T2 的共享滚动布局修复解决，则只做验证并在证据注明无需新代码。
+**性质：** **十万行文件可读、可编辑且资源成本可控**是明确需求；现有 5 MiB 限制可能阻挡，必须先测量而不是无条件提高容量。首开／解析额外优化只针对实测独立瓶颈，不建第二套只读编辑器。
 
-1. 沿真实 `Project.openFile → FileViewerView.onAppear/refreshWhenSelected → FileTab.reloadFromDiskIfClean → SourceTextEditor.makeScrollView/makeNSView → textView.text → addPlugin → SyntaxHighlightCoordinator.init/installTokenProvider → didLayoutViewport` 分开观察：后台读/解码、干净文本在主线程的字节比较、首次编辑器装配、正文第一次实际可见、第一帧可操作、首次正确颜色。**`onAppear`、App/window 重新激活会发起重读，但同字节内容通过 `matches` 不重建；不能先假定“每次切标签必全文安装”**。
-2. 只在阶段计时证明确有瓶颈时处理该 owner：如果耗时在重读/比较，修 `FileTab` 的必要读写边界；如果在 `textView.text` 全文安装、首次布局或视口着色，修 `SourceTextEditor`／STTextView／现有 SyntaxHighlightCoordinator 的真实重复工作。字体在全文赋值前安装、原有共享 Query 编译及后台 parser 已完成，不得重做。重载／编辑的 `reloadRevision`、`contentRevision` 和文件目标校验保障数据安全，不能因简化而跳过；已经取消或过期的结果不能覆盖新内容。
-3. 不以“正文先显示空白、暂时禁用高亮、永远只显示旧色”换首屏数字；要比较真实 Swift／TSX／Markdown 首可见内容及最终颜色。仅在观察到旧安装/重复着色路径被取代后**当次删除旧路径和无消费者分支**，不额外加另一个激活监听器、预热任务或 parser 状态；保护原字节、IME、Undo、Find、重挂载后选区／滚动和窗口 Dock，更新 `docs/features/editor.md`（依赖或补丁变化才更 `docs/development.md`）。
+1. **四档真实规模**：先用 `FileTreeModel.swift` 和约 1,000／10,000／100,000 行包含 Swift 语法、长行、注释及 Unicode 的代码样本，逐档记录**UTF-8 字节数**。至少一个十万行样本应真实超过 5 MiB，明确表现为现行 `FileTab.maxTextBytes` 拒绝，而不是把超限失败误记为渲染慢；另一个十万行样本在现行上限内时，可先用于 T2 的布局实验。
+2. **容量与读取唯一 owner**：`FileTab.maxTextBytes`、`readContent/loadedContent` 决定本地 `LocalWorkspaceBackend.read`／远端 `SSHWorkspaceBackend.read` 上限。先对典型十万行文件记录真实 UTF-8 字节数、文本/语法树/布局峰值内存、编辑后稳定内存和冷开耗时，结合实测峰值和必要的现有复制成本，确定**有依据且仍有限制**的可编辑容量；此任务确保文件读入、可编辑及保存正确，T4 随后针对连续输入的额外整文工作继续降低 CPU／内存，不把 T3 的基本正确性交给后续任务。不能仅调大常量便宣布性能达标，也不能无限制读取、静默截断、降级只读或修改远端目标边界；新阈值要在 `FileTabTests` 与编辑器文档一并更新，保留超过新阈值／非法 UTF-8／断线／编辑中保存的真实保护。
+3. **按阶段评估首开**：沿 `FileTab.reloadFromDiskIfClean → SourceTextEditor.makeScrollView/textView.text → 第一次 viewport layout → SyntaxHighlightCoordinator` 区分读／解码、主线程文字安装、正文可见、可编辑和颜色完整的时间。只有 T1/T3 数据证明某阶段额外卡顿才修改对应 owner；仍沿用现有后台 parser 与 Query 缓存，不预热全文、不在首次绘制时 `ensureLayout(documentRange)`。新尺寸模型也不能让首次打开空白、错误滑块或切回后跳位。
 
-**验证：** 依命中路径运行 `FileTabTests`、`SyntaxHighlightingTests`、`HighlightQueryCacheTests`、`EditorTextInputTests`／`PaneRetentionTests` 中受影响者；若修改共享 TextKit，再加 `DiffTabTests`。按同条件独立首开/重复切回对照**字节/颜色/可编辑/真实画面**，有限冷开样本记录中位与最差，不将后台任务返回当作首屏完成。采用代码仍需当 task 构建、测试并同步文档。
+**验证和清理：** `FileTabTests` 覆盖新容量边界（阈值内／阈值外、本地与 SSH 模拟、UTF-8、替换后保存及未保存编辑保护），受影响时跑 `SyntaxHighlightingTests`、`EditorTextInputTests`、`PaneRetentionTests`。十万行样本真实加载后检查首屏、可编辑、滚到中部／文末／回到文首、Undo、Find 和保存字节，以及加载／滚动耗时与峰值内存。采取新容量/首开逻辑的**同 task 清理旧阈值常量、旧特殊分支与过期测试**，及时更新 `docs/features/editor.md` 的真实限制和维护文档；不能仅上调常量后不实测。
 
 <a id="p1-t4"></a>
-## P1-T4 真实用户路径验收与必要的下一层设计决策
+## P1-T4 消除每次按键的整文工作并控制内存
 
-**性质：** 对已采用的改动做最终体验验收；前面每个任务已经完成各自的功能测试、代码清理和文档同步，**这里不集中偿还遗漏事项**。
+**性质：** 由 T1 已测的 CPU／分配瓶颈驱动的编辑数据流重构，目标是小范围编辑主要付小范围的计算成本。不预设必须写 Rope 或全新编辑器；**保存基线、Undo 与后台解析的正确性不可缩水**。
 
-1. 用 T1 同一真实 Swift 文件、同窗口与设置，复现**触摸板连续/惯性下滑和反向、滚动条拖动、新开及切回**；记录可获得的实际呈现/帧间隔、hitches、主线程长阻塞、正文与颜色、稳定内存及剩余卡顿。`FPSBadge` 的 CADisplayLink 次数不作为帧证据；不能把 Debug 与 Release 或合成 wheel 输入的结果混合。若本机有 Zed 才做同条件对照，**没有 Zed 也必须验收 Kero 自己的前后差异**。
-2. 仅当 T1 样本出现 Git／Files 同线程竞争，再用开／关面板的单变量场景确认；已有 P4 文件树异步扫描和 Git 状态预聚合不重做。如果争用根因属于独立旧 Feature，将其记录并交回原所有者处理，不在本 Feature 顺带修改 Git/Files。没有此现象就跳过额外对照矩阵。
-3. 对本轮实际受影响的编辑器、IME、查找、行号、字节保存、窗口/标签重挂载及共享 Diff 运行原生回归，完成后 `make test`、`make build`、严格验签；必要的 Vendor/平台覆盖变更再 `make build:release`。已有测试通过不等于实际触摸板不卡，人工原生画面／焦点／保存和关闭资源需按 `docs/testing.md` 的适用项核验，隔离 App 不改用户设置、进程或项目。
-4. 已证实体验改善则记录量化结果、误差与残余限制；如果仍卡顿，记录是 **尚未归因、未能取帧，还是明确的 TextKit 限制**。只有获得可靠证据后再决定是否需要新的 Swift 原生架构计划，**本阶段不预创替代渲染器任务或保留双轨引擎**。功能代码在 T2/T3 实施当次即完成旧路径删除、文档及原子提交；本任务仅综合验收，不把任务勾选当作成功。
+1. **首先定位所有消费者**：`SourceTextEditor.Coordinator.textViewDidChangeText → STTextView.text → FileTab.text → refreshDirtyState`、`SyntaxHighlightCoordinator.didChangeContent → NSTextContentManager.attributedString(in:nil)?.string → TreeSitterClient.readHandler`、`TextCoordinateIndex.replace` 后续行整体平移；另追 `FileTab.appendText/save/reload`、`Project.appendText`、`TabSwitcherView.textExcerpt`、断线重连与 PaneRetention。先用 T1 数据确认是否为每次编辑的主要同步耗时／分配，区分 `String` 本身可能共享存储与 `NSAttributedString.string` 的实际物化成本；不把“调用全文 getter”直接等同于已测得等量物理拷贝。
+2. **统一实时正文所有者与快照边界**：优先由已存在的 TextKit 原生文档承载挂载中的实时编辑，未挂载内容仍由长期 `FileTab` 可读；将完整文本快照移到真正需要的保存、导出、关闭／外部消费者，并在切换／拆卸前保持内容可取得。若最小方案需要让 `FileTab` 暴露按需快照，避免在 `TabSwitcherView` 预览或焦点变化时反过来对整个大文档重复提取。**同一内容代次的语法解析与保存不要各自重复物化完整正文**；但 Tree-sitter 后台 read handler 必须捕获可长期有效的**不可变内容**，绝不能从后台直接访问会继续编辑的 AppKit mutable content manager。只有真实内存／耗时收益确立后才采用共享增量快照方案，不建第二套长期竞争的正文状态。
+3. **保持字节级脏状态**：现有 `FileTab.refreshDirtyState` 使用 `text.utf8.elementsEqual(savedText.utf8)` 逐字节对照，保证撤销和**手动重打原字节**时立即清除未保存状态。可利用实际编辑范围和已有基线减少无意义的整文判断，但必须保留完全相等时的确定性字节确认；单纯计数版本号、`UndoManager` 状态或哈希相等都不能替代精确相等。保留 Unicode 规范等价但字节不同、CRLF、空文档，以及编辑发生在保存过程中的 `savedText`／`targetGeneration` 语义；旧保存结果不能清掉新改动。
+4. **坐标与高亮仅更新实际变化区域**：目前 `TextCoordinateIndex.replace` 对所改行后面的所有行起点加 delta，是 O(剩余行数)。先用 1k／10k／100k 行在文首单字符插删与连续 Undo 测量；确认它是长尾来源时，将该同一索引所有者改为**分段偏移／前缀累计结构**，让定位与范围替换主要依赖被改区段规模，移除旧的全文尾部循环，复用现有 Tree-sitter UTF-16／LF 坐标与 Unicode 测试。不新建平行 index、不移植 Zed 的 Rust SumTree；Neon 的视口失效和异步解析继续按内容版本避免旧结果覆盖新文本。
+5. **TDD、当次清理与原生验证**：先在现有 `TextCoordinateIndexTests`、`SyntaxHighlightingTests`、`FileTabTests`、`EditorTextInputTests` 增加能复现 CPU／坐标／字节语义的失败用例；代码改动当次删除已替代的整文读取／尾部平移旧路径及无消费者兼容层，检查无重复状态所有者。验收文首／中／末输入、Undo／Redo、中文 IME、规范等价、自动保存与写入中编辑、Git Ignore 追加、TabSwitcher 摘要、切标签／关闭释放；性能测量保留 30 次中位／p95／最大、峰值分配和多标签稳定内存。按 `docs/features/editor.md` 更新数据流契约，必要时更新依赖补丁说明。实施任务本身必须经过相关测试和 `make build`，不推迟到 T5。
 
-**交付：** `evidence-p1.md` 中的前后证据、采用/否决原因、未测范围；进入执行审计时才创建 `audit-p1.md`，不在编写计划时预设审计结论。当前任务仅执行前审查，**未开始实现或性能录制**；不启动/退出用户正在使用的 Kero，不推送或发布。
+**收益门槛：** 逐项对照 T1 的原生主线程和内存数据；若某条路径并未成为可重复瓶颈则保留现有简单实现，避免额外索引／缓存导致内存更高。关闭标签后未被共享查询缓存正常拥有的内容、语法任务和视图必须释放；无收益的试验结构撤销，不长期保留 A/B 分支。
+
+<a id="p1-t5"></a>
+## P1-T5 四档代码文件的滚动条、编辑响应与资源验收
+
+**性质：** 验收 T2 的几何、T3 的真实大文件读写、T4 的连续输入／内存改善。所有实现任务已经各自删除旧代码、补全测试和文档；本任务不集中偿还技术债，也不拿一次成功加载冒充编辑器高性能。
+
+1. 对 **382 行真实 `FileTreeModel.swift`、1,000、10,000、100,000 行**分别新开、慢速上下滚、快滚、拖动滑块、25／50／75／100% 跳转和返回。固定行高／不软换行的配置下，`documentView.frame.height` 与 `knobProportion` 不应因滚动新区域而改变；`doubleValue` 和第一可见行随操作正确变化，反向返回无突然跳行。软换行／可变字体如需逐步精确化高度，必须保留**文本锚点的屏幕位置、滚动映射单调与末尾可达**，不得因刷新估算引发肉眼可见的大幅跳动；窗口宽度、字体或编辑改变时再更新合法范围。
+2. **按键与内存**：四档文件在文首／中／末各做单字符插入、删除、连续输入、Undo／Redo；分别记录输入主线程中位／p95／最大、整文 getter/比对/索引平移次数、每次编辑分配、连续滚动 CPU，以及打开 1／5 个标签、关闭后稳定 RSS 与空闲 30 秒 CPU／唤醒。验证**普通输入不再无条件多次扫描整文，关闭后内存不持续增长，空闲无持续重绘**；Debug/Release 和软换行单列，不伪造绝对 MB 或 FPS 的跨机器承诺。
+3. **语义回归**：Swift/TSX/Markdown 高亮、长行横滚、LF/CRLF、Unicode 规范等价但字节不同、折行、行号、中文 IME、Undo、Find、选区、自动保存与编辑中的并发保存、重挂载和关闭释放。十万行文件必须真正打开、编辑、撤销、保存原字节、到达文末；不能绕过容量／禁用着色假通过。共享 Diff 的固定行高、双栏同步和只读测试必须通过；没有测到争用不顺手改 Git／Files。
+4. **可比较的证据**：以 T1 固定样本和同机配置比对前后滚动条／锚点、首次可见、文末可达、主线程长阻塞、稳定与峰值内存、实际呈现卡顿（能测到才报告）。必要用 Instruments Time Profiler／Allocations；工具链阻塞则记录且不声称已得到真实帧率。`FPSCounter` 的 display-link tick 不是实际正文帧率。记录文件字节数、平均／最长行、语言、刷新率、样本量和性能瓶颈是否随全文大小线性增长；既不把用户的小文件问题埋在巨型测试，也不以 100,000 行短文本取巧。
+5. 运行受影响 NativeUI、`FileTabTests`、`TextCoordinateIndexTests`、`SyntaxHighlightingTests`、`EditorTextInputTests`、`PaneRetentionTests`、共享 `DiffTabTests`，以及完整 `make test`、`make build` 和严格验签（平台补丁必要时补 Release）。T2～T4 的旧路径和文档已在各自任务处理。若高度／锚点仍跳，或十万行编辑的同步全文处理仍明显拖慢主线程，**不能只因构建和单测通过而宣布完成**；说明残余瓶颈、证据与是否需要另立 Swift 原生结构方案，不预建第二引擎。
+
+**交付：** `evidence-p1.md` 的四档样本／字节数、滚动条与可见文字前后对照、输入 p95 与全文操作次数、峰值／关闭后内存、CPU/唤醒，以及未达标与未测项；实际进入审计时才建 `audit-p1.md`。本轮仅修订 Feature Plan，未开始产品实现、性能录制、App 重启或推送。

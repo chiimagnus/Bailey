@@ -3,7 +3,7 @@ current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
-title = "归因触摸板滚动与新文件首次显示"
+title = "定位文档高度与滚动条跳变的布局反馈"
 status = "pending"
 plan = "plan-p1.md#p1-t1"
 commit = ""
@@ -11,7 +11,7 @@ note = ""
 
 [[tasks]]
 id = "P1-T2"
-title = "按真实热点重构原生连续滚动布局与绘制"
+title = "稳定文档几何与可见内容滚动锚点"
 status = "pending"
 plan = "plan-p1.md#p1-t2"
 commit = ""
@@ -19,7 +19,7 @@ note = ""
 
 [[tasks]]
 id = "P1-T3"
-title = "收敛首次显示及首个可见区域高亮工作"
+title = "支持小文件首开与十万行代码完整编辑"
 status = "pending"
 plan = "plan-p1.md#p1-t3"
 commit = ""
@@ -27,8 +27,16 @@ note = ""
 
 [[tasks]]
 id = "P1-T4"
-title = "验证真实流畅度与决定是否需要更深架构变更"
+title = "降低编辑热路径的整文成本和内存占用"
 status = "pending"
 plan = "plan-p1.md#p1-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T5"
+title = "验收四档文件的稳定滚动和低资源编辑"
+status = "pending"
+plan = "plan-p1.md#p1-t5"
 commit = ""
 note = ""
