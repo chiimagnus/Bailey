@@ -149,9 +149,11 @@ final class SyntaxHighlightCoordinator {
         let string = textView.textContentManager.attributedString(in: nil)?.string ?? ""
         let coordinates = TextCoordinateIndex(string)
         self.coordinates = coordinates
-        tsClient = try! TreeSitterClient(language: tsLanguage) { codePointIndex in
-            coordinates.point(at: codePointIndex)
-        }
+        tsClient = try! TreeSitterClient(
+            language: tsLanguage,
+            transformer: { coordinates.point(at: $0) },
+            synchronousLengthThreshold: 0
+        )
 
         tsClient.invalidationHandler = { [weak self] indexSet in
             self?.highlighter?.invalidate(.set(indexSet))

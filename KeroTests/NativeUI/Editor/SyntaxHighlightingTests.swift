@@ -48,6 +48,25 @@ private struct ObservedSyntaxPlugin: STPlugin {
 
 @MainActor
 final class SyntaxHighlightingTests: XCTestCase {
+    func testClosingEditorDuringQueuedParsingReleasesItsContent() async throws {
+        weak var editor: STTextView?
+        weak var coordinator: SyntaxHighlightCoordinator?
+        try autoreleasepool {
+            let mounted = try mountedPlugin()
+            editor = mounted.editor
+            coordinator = mounted.coordinator
+            for iteration in 0..<8 {
+                mounted.editor.insertText("// \(iteration) 中文 👋\n",
+                                          replacementRange: NSRange(location: 0, length: 0))
+            }
+            mounted.editor.insertText(String(repeating: "// pasted\n", count: 4096),
+                                      replacementRange: NSRange(location: 0, length: 0))
+            mounted.window.contentView = nil
+            mounted.window.close()
+        }
+        try await wait { editor == nil && coordinator == nil }
+    }
+
     func testQueuedSemanticEditAndEarlierInsertionRecolorCurrentViewport() async throws {
         let prefix = "/*\n" + String(repeating: String(repeating: "a", count: 64) + "\n", count: 16384) + "*/\n"
         let source = prefix + "func target() {}\n"
