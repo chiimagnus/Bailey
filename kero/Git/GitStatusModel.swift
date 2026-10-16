@@ -510,7 +510,8 @@ final class GitStatusModel {
     /// Coalesces an event that arrives while another refresh or mutation is
     /// running. Without polling, dropping that event could leave the snapshot
     /// stale indefinitely.
-    private var refreshPending = false
+    nonisolated enum RefreshKind: Sendable { case full, indexOnly, historyOnly }
+    private var pendingRefresh: RefreshKind?
     private static let recentCommitPageSize = 30
     private var recentCommitLimit = recentCommitPageSize
     private var recentCommitLimitByRoot: [String: Int] = [:]
@@ -654,6 +655,7 @@ final class GitStatusModel {
                 apply(cachedStatus)
                 hasResolvedStatus = true
                 hasCurrentDetails = false
+                hasCurrentLineTotals = false
             }
         } else if channelChanged {
             // A new SSH channel must not queue behind a worker stalled on the
@@ -666,25 +668,38 @@ final class GitStatusModel {
         refresh()
     }
 
-    func refresh() {
+    private func queueRefresh(_ kind: RefreshKind) {
+        if let pendingRefresh {
+            self.pendingRefresh = pendingRefresh == kind ? kind : .full
+        } else {
+            pendingRefresh = kind
+        }
+    }
+
+    func refresh(kind: RefreshKind = .full) {
         let root = rootPath
         let generation = contextGeneration
         let commitLimit = recentCommitLimit
         guard !root.isEmpty else { return }
         guard !isRefreshing, !isBusy else {
-            refreshPending = true
+            queueRefresh(kind)
             return
         }
-        refreshPending = false
+        let requestKind = pendingRefresh.map { $0 == kind ? kind : .full } ?? kind
+        pendingRefresh = nil
+        let expectedCore: StatusResult?
+        if requestKind == .historyOnly,
+           case .repository(let previous) = cachedStatusByRoot[scopedRoot] {
+            expectedCore = previous
+        } else {
+            expectedCore = nil
+        }
         statusRequestID &+= 1
         let requestID = statusRequestID
         isRefreshing = true
-        hasCurrentLineTotals = false
+        if requestKind != .historyOnly { hasCurrentLineTotals = false }
 
-        // This is deliberately independent of the worker. Even filesystem
-        // metadata calls can become uninterruptible on a disconnected volume;
-        // the sidebar must still leave its initial loading state and offer a
-        // retry while the stale worker winds down in the background.
+        // A blocked filesystem may outlive the Git command timeout.
         let refreshTimeout: Duration = backend is LocalWorkspaceBackend
             ? .seconds(12) : .seconds(30)
         Task { [weak self] in
@@ -697,16 +712,19 @@ final class GitStatusModel {
             self.statusRequestID &+= 1
             self.isRefreshing = false
             self.isLoadingMoreCommits = false
-            self.refreshPending = false
+            let pending = self.pendingRefresh
+            self.pendingRefresh = nil
             self.apply(.failed(String(localized: "Git did not respond in time.", table: "Git")))
             self.hasResolvedStatus = true
+            if let pending { self.refresh(kind: pending) }
         }
 
         let backend = backend
         Task { [weak self] in
             let result = await Task.detached(priority: .utility) {
                 await Self.runGitStatus(
-                    in: root, recentCommitLimit: commitLimit, backend: backend
+                    in: root, recentCommitLimit: commitLimit, backend: backend,
+                    kind: requestKind
                 ) { [weak self] core in
                     guard let self, self.contextGeneration == generation,
                           self.statusRequestID == requestID, self.rootPath == root else { return false }
@@ -715,6 +733,7 @@ final class GitStatusModel {
                     if case .repository(let previous) = self.cachedStatusByRoot[self.scopedRoot],
                        previous.topLevel == core.topLevel {
                         cached.details = previous.details
+                        cached.lineTotals = previous.lineTotals
                     }
                     self.cachedStatusByRoot[self.scopedRoot] = .repository(cached)
                     self.hasResolvedStatus = true
@@ -725,21 +744,49 @@ final class GitStatusModel {
                   self.statusRequestID == requestID,
                   self.rootPath == root else { return }
             self.isRefreshing = false
-            // A pagination request may have arrived while this older snapshot
-            // was already running. Keep its loading state latched until the
-            // queued refresh using the larger limit finishes.
             self.isLoadingMoreCommits = commitLimit < self.recentCommitLimit
             switch result {
-            case .repository, .notRepository:
+            case .repository(let latest):
+                if requestKind == .historyOnly {
+                    if let history = latest.history, self.hasCurrentDetails,
+                       history.refsByName == self.refsByName,
+                       expectedCore?.matchesCore(latest) == true {
+                        self.recentCommits = history.commits
+                        self.hasMoreRecentCommits = history.hasMore
+                        if case .repository(var cached) = self.cachedStatusByRoot[self.scopedRoot] {
+                            cached.details?.recentCommits = history.commits
+                            cached.details?.hasMoreRecentCommits = history.hasMore
+                            self.cachedStatusByRoot[self.scopedRoot] = .repository(cached)
+                        }
+                    } else {
+                        // The page cannot publish counts from an older working tree.
+                        self.hasCurrentLineTotals = false
+                        self.queueRefresh(.full)
+                    }
+                } else {
+                    if requestKind == .indexOnly,
+                       case .repository(let previous) = self.cachedStatusByRoot[self.scopedRoot] {
+                        var cached = latest
+                        cached.details = previous.details
+                        self.cachedStatusByRoot[self.scopedRoot] = .repository(cached)
+                    } else {
+                        self.cachedStatusByRoot[self.scopedRoot] = .repository(latest)
+                    }
+                    self.apply(.repository(latest))
+                    if requestKind == .indexOnly, !self.hasCurrentDetails {
+                        self.queueRefresh(.full)
+                    }
+                }
+            case .notRepository:
                 self.cachedStatusByRoot[self.scopedRoot] = result
+                self.apply(result)
             case .failed:
-                break
+                self.apply(result)
             }
-            self.apply(result)
             self.hasResolvedStatus = true
-            if self.refreshPending {
-                self.refreshPending = false
-                self.refresh()
+            if let pending = self.pendingRefresh {
+                self.pendingRefresh = nil
+                self.refresh(kind: pending)
             }
         }
     }
@@ -752,12 +799,10 @@ final class GitStatusModel {
         recentCommitLimitByRoot[scopedRoot] = recentCommitLimit
         isLoadingMoreCommits = true
         if isRefreshing {
-            // The active worker captured the previous limit. Queue a second
-            // refresh instead of dropping the request made as the section is
-            // opened near the end of the viewport.
-            refreshPending = true
+            // Recheck the larger limit after the in-flight snapshot finishes.
+            queueRefresh(.historyOnly)
         } else {
-            refresh()
+            refresh(kind: hasCurrentDetails ? .historyOnly : .full)
         }
         return true
     }
@@ -992,7 +1037,8 @@ final class GitStatusModel {
             label: entries.count == 1
                 ? String(localized: "Stage \(entries[0].fileName)", table: "Git")
                 : String(localized: "Stage Changes", table: "Sidebar"),
-            commands: [["--literal-pathspecs", "add", "--"] + paths], requiresCurrentDetails: false
+            commands: [["--literal-pathspecs", "add", "--"] + paths],
+            requiresCurrentDetails: false, refreshKind: .indexOnly
         )
     }
 
@@ -1010,18 +1056,21 @@ final class GitStatusModel {
             : ["--literal-pathspecs", "rm", "--cached", "-f", "--"] + paths
         perform(label: entries.count == 1
                 ? String(localized: "Unstage \(entries[0].fileName)", table: "Git")
-                : String(localized: "Unstage Changes", table: "Sidebar"), commands: [args], requiresCurrentDetails: false)
+                : String(localized: "Unstage Changes", table: "Sidebar"), commands: [args],
+                requiresCurrentDetails: false, refreshKind: .indexOnly)
     }
 
     func stageAll() {
-        perform(label: String(localized: "Stage all changes", table: "Git"), commands: [["add", "-A"]], requiresCurrentDetails: false)
+        perform(label: String(localized: "Stage all changes", table: "Git"), commands: [["add", "-A"]],
+                requiresCurrentDetails: false, refreshKind: .indexOnly)
     }
 
     func unstageAll() {
         let args = hasHead
             ? ["restore", "--staged", "--", "."]
             : ["rm", "--cached", "-r", "-f", "--", "."]
-        perform(label: String(localized: "Unstage all changes", table: "Git"), commands: [args], requiresCurrentDetails: false)
+        perform(label: String(localized: "Unstage all changes", table: "Git"), commands: [args],
+                requiresCurrentDetails: false, refreshKind: .indexOnly)
     }
 
     /// Restores a tracked file from the index, or moves an untracked file to
@@ -2016,6 +2065,7 @@ final class GitStatusModel {
         commands: [[String]],
         directory: String? = nil,
         requiresCurrentDetails: Bool = true,
+        refreshKind: RefreshKind = .full,
         requiresStableHead: Bool = true,
         requiresStableUpstream: Bool = false,
         squashMessage: String? = nil,
@@ -2341,7 +2391,7 @@ final class GitStatusModel {
                 )
                 completion?(true)
             }
-            self.refresh()
+            self.refresh(kind: refreshKind)
         }
     }
 
@@ -2487,7 +2537,7 @@ final class GitStatusModel {
         statusRequestID &+= 1
         isRefreshing = false
         isLoadingMoreCommits = false
-        refreshPending = false
+        pendingRefresh = nil
     }
 
     private nonisolated static func displayCommand(_ args: [String]) -> String {
@@ -2633,6 +2683,7 @@ final class GitStatusModel {
         lastError = failedError
         statusError = nil
         statusRequestID &+= 1
+        pendingRefresh = nil
         if !preserveIdentity { repositoryIdentity = "" }
     }
 
@@ -2686,6 +2737,7 @@ final class GitStatusModel {
         if repositoryIdentity != result.topLevel || headOID != result.headOID
             || branch != result.branch || repositoryOperation != result.repositoryOperation {
             hasCurrentDetails = false
+            hasCurrentLineTotals = false
         }
         if repositoryIdentity != result.topLevel { clearDetails() }
         isRepo = true
@@ -2708,13 +2760,18 @@ final class GitStatusModel {
             hasMoreRecentCommits = details.hasMoreRecentCommits
             stashes = details.stashes
             hasCurrentDetails = true
-            hasCurrentLineTotals = details.lineAdditions != nil
-            if let additions = details.lineAdditions, let deletions = details.lineDeletions {
-                lineAdditions = additions
-                lineDeletions = deletions
-            }
             let liveStashOIDs = Set(stashes.map(\.oid))
             stashFilesByOID = stashFilesByOID.filter { liveStashOIDs.contains($0.key) }
+        }
+        if let totals = result.lineTotals {
+            switch totals {
+            case .available(let additions, let deletions):
+                lineAdditions = additions
+                lineDeletions = deletions
+                hasCurrentLineTotals = true
+            case .unavailable:
+                hasCurrentLineTotals = false
+            }
         }
         let entries = result.entries.map { entry in
             var entry = entry
@@ -2761,11 +2818,30 @@ final class GitStatusModel {
         var ignoredPaths: Set<String> = []
         var repositoryOperation: String?
         var details: StatusDetails?
+        var lineTotals: StatusLineTotals?
+        var history: StatusHistory?
+
+        nonisolated func matchesCore(_ other: StatusResult) -> Bool {
+            topLevel == other.topLevel && branch == other.branch
+                && headOID == other.headOID && hasHead == other.hasHead
+                && upstream == other.upstream && ahead == other.ahead && behind == other.behind
+                && repositoryOperation == other.repositoryOperation
+                && entries == other.entries && ignoredPaths == other.ignoredPaths
+        }
+    }
+
+    nonisolated enum StatusLineTotals: Equatable, Sendable {
+        case available(additions: Int, deletions: Int)
+        case unavailable
+    }
+
+    nonisolated struct StatusHistory: Equatable, Sendable {
+        let refsByName: [String: GitRef]
+        let commits: [RecentCommit]
+        let hasMore: Bool
     }
 
     nonisolated struct StatusDetails: Equatable, Sendable {
-        var lineAdditions: Int?
-        var lineDeletions: Int?
         var branches: [String] = []
         var refsByName: [String: GitRef] = [:]
         var defaultBranch: String?
@@ -2781,6 +2857,7 @@ final class GitStatusModel {
         in root: String,
         recentCommitLimit: Int,
         backend: WorkspaceBackend,
+        kind: RefreshKind,
         onCore: @MainActor @Sendable (StatusResult) -> Bool
     ) async -> StatusLoadResult {
         // A filesystem, Git helper, or corrupt repository must not leave the
@@ -2866,67 +2943,91 @@ final class GitStatusModel {
         }
 
         guard await onCore(result) else { return .repository(result) }
-        prefetched = await prefetchedSnapshotCommands(
-            [Self.refSnapshotArguments, ["remote"], recentCommitLogArguments(limit: recentCommitLimit), stashListArguments],
-            in: resolvedRoot, backend: backend, deadline: deadline
-        )
+        if kind == .historyOnly {
+            prefetched = await prefetchedSnapshotCommands(
+                [Self.refSnapshotArguments, recentCommitLogArguments(limit: recentCommitLimit)],
+                in: resolvedRoot, backend: backend, deadline: deadline
+            )
+            let refs = await statusGit(Self.refSnapshotArguments, in: resolvedRoot)
+            guard refs.status == 0 else {
+                return .failed(gitFailureMessage(refs, fallback: timeoutMessage))
+            }
+            let names = parseRefSnapshot(refs.stdout)
+            let log = await statusGit(recentCommitLogArguments(limit: recentCommitLimit), in: resolvedRoot)
+            guard log.status == 0 else {
+                return .failed(gitFailureMessage(log, fallback: timeoutMessage))
+            }
+            let commits = parseRecentCommits(log.stdout, refsByName: names)
+            result.history = StatusHistory(
+                refsByName: names,
+                commits: Array(commits.prefix(recentCommitLimit)),
+                hasMore: commits.count > recentCommitLimit
+            )
+            return .repository(result)
+        }
+
         var details = StatusDetails()
-        let repoRoot = resolvedRoot
+        if kind == .full {
+            prefetched = await prefetchedSnapshotCommands(
+                [Self.refSnapshotArguments, ["remote"], recentCommitLogArguments(limit: recentCommitLimit), stashListArguments],
+                in: resolvedRoot, backend: backend, deadline: deadline
+            )
+            let repoRoot = resolvedRoot
 
-        let refs = await statusGit(Self.refSnapshotArguments, in: repoRoot)
-        guard refs.status == 0 else {
-            return .failed(gitFailureMessage(
-                refs, fallback: String(localized: "Unable to read Git status.", table: "Git")
-            ))
-        }
-        details.refsByName = parseRefSnapshot(refs.stdout)
-        details.branches = details.refsByName.keys.compactMap { name in
-            name.hasPrefix("refs/heads/") ? String(name.dropFirst("refs/heads/".count)) : nil
-        }.sorted()
+            let refs = await statusGit(Self.refSnapshotArguments, in: repoRoot)
+            guard refs.status == 0 else {
+                return .failed(gitFailureMessage(
+                    refs, fallback: String(localized: "Unable to read Git status.", table: "Git")
+                ))
+            }
+            details.refsByName = parseRefSnapshot(refs.stdout)
+            details.branches = details.refsByName.keys.compactMap { name in
+                name.hasPrefix("refs/heads/") ? String(name.dropFirst("refs/heads/".count)) : nil
+            }.sorted()
 
-        let remoteRun = await statusGit(["remote"], in: repoRoot)
-        guard remoteRun.status == 0 else {
-            return .failed(gitFailureMessage(
-                remoteRun, fallback: String(localized: "Unable to read Git status.", table: "Git")
-            ))
-        }
-        details.remotes = remoteRun.stdout.split(separator: "\n").map(String.init).sorted()
+            let remoteRun = await statusGit(["remote"], in: repoRoot)
+            guard remoteRun.status == 0 else {
+                return .failed(gitFailureMessage(
+                    remoteRun, fallback: String(localized: "Unable to read Git status.", table: "Git")
+                ))
+            }
+            details.remotes = remoteRun.stdout.split(separator: "\n").map(String.init).sorted()
 
-        // A clone records its remote's default branch as a symbolic HEAD.
-        // Prefer origin when more than one remote is present because that is
-        // the repository the local branch list conventionally belongs to.
-        if let remote = details.remotes.contains("origin") ? "origin" : details.remotes.first {
-            if let ref = details.refsByName["refs/remotes/\(remote)/HEAD"]?.symbolic,
-               ref.hasPrefix("refs/remotes/\(remote)/") {
-                let branch = String(ref.dropFirst("refs/remotes/\(remote)/".count))
-                if details.branches.contains(branch) {
-                    details.defaultBranch = branch
+            // A clone records its remote's default branch as a symbolic HEAD.
+            // Prefer origin when more than one remote is present because that is
+            // the repository the local branch list conventionally belongs to.
+            if let remote = details.remotes.contains("origin") ? "origin" : details.remotes.first {
+                if let ref = details.refsByName["refs/remotes/\(remote)/HEAD"]?.symbolic,
+                   ref.hasPrefix("refs/remotes/\(remote)/") {
+                    let branch = String(ref.dropFirst("refs/remotes/\(remote)/".count))
+                    if details.branches.contains(branch) {
+                        details.defaultBranch = branch
+                    }
                 }
             }
-        }
 
-        // NUL-delimited name-status records preserve every valid path while
-        // supplying the nested file rows used by the native commit graph.
-        let log = await statusGit(recentCommitLogArguments(limit: recentCommitLimit), in: repoRoot)
-        if log.status == 0 {
-            let commits = parseRecentCommits(log.stdout, refsByName: details.refsByName)
-            details.hasMoreRecentCommits = commits.count > recentCommitLimit
-            details.recentCommits = Array(commits.prefix(recentCommitLimit))
-        } else if result.hasHead {
-            // A failed history query is not an empty history. Publishing a
-            // partial success here would erase the already loaded Git Graph.
-            return .failed(gitFailureMessage(
-                log, fallback: String(localized: "Unable to read Git status.", table: "Git")
-            ))
-        }
+            // NUL-delimited name-status records preserve every valid path while
+            // supplying the nested file rows used by the native commit graph.
+            let log = await statusGit(recentCommitLogArguments(limit: recentCommitLimit), in: repoRoot)
+            if log.status == 0 {
+                let commits = parseRecentCommits(log.stdout, refsByName: details.refsByName)
+                details.hasMoreRecentCommits = commits.count > recentCommitLimit
+                details.recentCommits = Array(commits.prefix(recentCommitLimit))
+            } else if result.hasHead {
+                // A failed history query is not an empty history. Publishing a
+                // partial success here would erase the already loaded Git Graph.
+                return .failed(gitFailureMessage(
+                    log, fallback: String(localized: "Unable to read Git status.", table: "Git")
+                ))
+            }
 
-        let stash = await statusGit(stashListArguments, in: repoRoot)
-        guard stash.status == 0, let stashes = parseStashes(stash.stdout) else {
-            return .failed(gitFailureMessage(stash,
-                fallback: String(localized: "Unable to read the stash list.", table: "Git")))
+            let stash = await statusGit(stashListArguments, in: repoRoot)
+            guard stash.status == 0, let stashes = parseStashes(stash.stdout) else {
+                return .failed(gitFailureMessage(stash,
+                    fallback: String(localized: "Unable to read the stash list.", table: "Git")))
+            }
+            details.stashes = stashes
         }
-        details.stashes = stashes
-
 
         let diff = await statusGit(
             result.hasHead ? ["diff", "--numstat", "HEAD", "--"] : ["diff", "--numstat", "--cached", "--"],
@@ -2949,14 +3050,13 @@ final class GitStatusModel {
             let untracked = try await untrackedLineAdditions(
                 for: result.entries, in: resolvedRoot, backend: backend, deadline: deadline
             )
-            if untracked.complete {
-                details.lineAdditions = totals.additions + untracked.lines
-                details.lineDeletions = totals.deletions
-            }
+            result.lineTotals = untracked.complete
+                ? .available(additions: totals.additions + untracked.lines, deletions: totals.deletions)
+                : .unavailable
         } catch {
             return .failed(error.localizedDescription)
         }
-        result.details = details
+        if kind == .full { result.details = details }
         return .repository(result)
     }
 
