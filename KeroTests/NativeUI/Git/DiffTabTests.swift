@@ -124,6 +124,87 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class DiffTabTests: XCTestCase {
+    func testLongCRLogicalRowDoesNotPutEOFGhostsAtViewportBoundary() {
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(
+            contentRect: NSRect(x: -990, y: -990, width: 600, height: 170),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(
+            font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+            textColor: .textColor
+        )
+        let source = (0..<150).map { "part\($0)" }.joined(separator: "\r") + "\n"
+        pane.setEditBufferText(source)
+        let split = DiffLineSplitter.lines(of: source).lines
+        let core = DiffCore.compute(oldText: "deleted\n", newText: source)
+        let state = DiffComputation.editState(
+            ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
+        )
+        XCTAssertEqual(split.count, 1)
+        pane.decorations = .edit(
+            state: state, snapshotOffsets: split.map(\.utf16Range.location),
+            lineCount: split.count,
+            ghostBlocks: [
+                .init(anchorLine: 1, firstOldLine: 1, lines: [NSAttributedString(string: "deleted")])
+            ]
+        )
+        pane.layoutSubtreeIfNeeded()
+        let visible = DiffRowGeometry.visibleRows(
+            textView: pane.textView, decorations: pane.decorations
+        ).filter { $0.index == 0 }
+        XCTAssertGreaterThan(visible.count, 1)
+        XCTAssertLessThan(visible.count, 150, "Viewport must not eagerly paint the entire CR file")
+        XCTAssertTrue(visible.allSatisfy { !$0.isLastSegment },
+                      "The viewport edge is not the real EOF ghost anchor")
+    }
+
+    func testUnicodeLineSeparatorsDecorateEveryNativeVisualSegment() {
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        let window = NSWindow(
+            contentRect: NSRect(x: -960, y: -960, width: 650, height: 340),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(
+            font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+            textColor: .textColor
+        )
+
+        for separator in ["\u{2028}", "\u{0085}", "\u{2029}", "\r"] {
+            let text = "before" + separator + "after\n"
+            let document = DiffComputation.compute(oldText: "", newText: text).unified
+            XCTAssertEqual(document.rows.count, 1)
+            pane.setReviewDocument(NSAttributedString(string: document.text),
+                                   decorations: .review(document))
+            pane.layoutSubtreeIfNeeded()
+            let paintedRows = DiffRowGeometry.visibleRows(
+                textView: pane.textView, decorations: pane.decorations
+            ).filter { $0.index == 0 }
+            XCTAssertEqual(paintedRows.count, 2,
+                           "Both native visual lines within one Git LF row must have decoration geometry")
+            if paintedRows.count == 2 {
+                XCTAssertFalse(paintedRows[0].isContinuation)
+                XCTAssertTrue(paintedRows[1].isContinuation,
+                              "A continuation must not draw the same gutter number or ghost again")
+                XCTAssertFalse(paintedRows[0].isLastSegment,
+                               "EOF markers and deletion ghosts belong after the final native part")
+                XCTAssertTrue(paintedRows[1].isLastSegment)
+                XCTAssertGreaterThan(paintedRows[1].frame.minY, paintedRows[0].frame.minY)
+                XCTAssertTrue(paintedRows[0].frame.maxY <= paintedRows[1].frame.minY + 1)
+            }
+        }
+    }
+
     func testDeletingEveryEditLineKeepsEOFRemovalGhostScrollAccessible() {
         let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
         let window = NSWindow(
@@ -275,6 +356,9 @@ final class DiffTabTests: XCTestCase {
         XCTAssertEqual(lines.count, 2)
         XCTAssertEqual(Array(rows.prefix(3).map(\.index)), [0, 0, 1],
                        "TextKit bare-CR paragraphs must share the same Git LF line number")
+        XCTAssertEqual(Array(rows.prefix(3).map(\.isContinuation)), [false, true, false],
+                       "Only the first native visual fragment may draw Git gutter/ghost metadata")
+        XCTAssertEqual(Array(rows.prefix(3).map(\.isLastSegment)), [false, true, true])
         XCTAssertTrue(pane.textView.hasNativeNonLFSeparators)
 
         pane.setEditBufferText("alpha\nsecond\n")
