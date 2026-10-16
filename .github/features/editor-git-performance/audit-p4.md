@@ -23,6 +23,71 @@
 
 ## 发现项
 
+## 发现 F-45
+
+- 任务：`P4-T4`
+- 严重级别：`Medium`
+- 状态：`Open`
+- 位置：`kero/Remote/SSHWorkspaceBackend.swift:166`
+- 摘要：`重命名引用 GNU stat -c 导致 macOS SSH 远端相同文件别名重命名失败`
+- 风险：`Mac remote shell 使用 BSD stat，不支持 -c；当前测试替换了该调用而掩盖兼容问题`
+- 预期修复：`改用在 POSIX 兼容 shell 可工作的同实体判断，不依赖 GNU stat`
+- 验证：`未做命令翻译的 macOS /bin/sh 回归以及 Windows SSH 回归`
+- 解决证据：`<commit diff note or test/build output>`
+
+
+## 发现 F-44
+
+- 任务：`P4-T4`
+- 严重级别：`High`
+- 状态：`Open`
+- 位置：`kero/Remote/SSHWorkspaceBackend.swift:166`
+- 摘要：`SSH 重命名以 inode 相同放行不同目录项硬链接并删除来源名`
+- 风险：`同 inode 的 hard link 可复现旧逻辑丢失源路径；跨目标真实数据完整性缺陷`
+- 预期修复：`以 no-clobber 保留目标，只有确实映射同一目录项的大小写更名才执行；区别硬链接`
+- 验证：`RemoteCommandsTests 真实磁盘硬链接 Red->Green，Windows SSH 真实路径回归`
+- 解决证据：`<commit diff note or test/build output>`
+
+
+## 发现 F-43
+
+- 任务：`P4-T1`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`kero/Git/GitStatusModel.swift:484`
+- 摘要：`已核验的 Stash 列表仍被无关的 Ref 元数据失败禁用`
+- 风险：`Ref 查询短暂失败即使 stash list 已成功，也无法 Apply/Pop/Drop 真实 Stash；无关详情错误互相拖累`
+- 预期修复：`仅以可用核心与当前 Stash 列表判断 Stash 操作资格，保留执行前现有 live stash selector/OID 二次校验`
+- 验证：`GitStatusModelTests 注入 Ref 失败且 Stash 查询成功；GitStashActionTests 磁盘操作回归`
+- 解决证据：`Red: Ref 失败且 stash list 成功时 Stash 资格被禁，单用例 1 failure；Green: 单用例通过、GitStashActionTests 和全量 XCTest 344/344；修复 commit d84579b，删除无关 Ref guard，保留活体 stash/HEAD/target 校验。`
+
+
+## 发现 F-42
+
+- 任务：`P4-T4`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Remote/SSHWorkspaceBackend.swift:160`
+- 摘要：`SSH 重命名把失效符号链接误判为不存在并允许覆盖同名目标`
+- 风险：`远端 Files 中合法的 dangling symlink 无法重命名；同名失效符号链接目标可能被 mv 无提示替换`
+- 预期修复：`统一在远端重命名原子命令中按链接本身判定源与目标存在性，并保持合法大小写重命名`
+- 验证：`RemoteCommandsTests/SSHWorkspaceBackend 真实临时文件路径副作用测试与 FileTreeTests`
+- 解决证据：`Red: 旧 SSH  对 dangling link 返回 false，临时目录重现目标链接被 mv 覆写；Green: RemoteCommandsTests 13/13（真实临时文件，包含 dangling 源/目标、case-only），全量 XCTest 344/344（SSH 文件树通过）；修复 commit 48607e5。`
+
+
+## 发现 F-41
+
+- 任务：`P4-T1`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Git/GitStatusModel.swift:3093`
+- 摘要：`完整刷新将 Ref/remote 作为核心门槛，查询失败或卡顿阻断有效的 Git 核心状态`
+- 风险：`核心 status/HEAD 已成功却显示整仓不可用，stage/commit 被禁，违背核心优先与详情局部失败契约`
+- 预期修复：`将 Ref/remote 合并入核心交付之后的有界详情批次；详情故障保留核心、只撤销未验证 Ref 操作资格`
+- 验证：`GitStatusModelTests 延迟 Ref 及失败恢复场景，make test ONLY_TESTING=KeroTests/GitStatusModelTests`
+- 解决证据：`Red: Ref 阻塞/失败导致核心不可见并禁止工作区动作；Green: GitStatusModelTests 26/26、全量 XCTest 344/344（含 Windows SSH Git 外部刷新）；修复 commit d84579b：将 Ref/remote 移到核心发布后的详情阶段，详情失败保持核心。`
+
+
 沿四笔真实提交、生产调用路径、对应消费者、原生／集成测试与当前功能文档重新复核，未发现尚未处理的确定性生产代码缺陷。T4 实施期间通过 Red／Green 修复两处已复现问题：旧 SSH 请求阻塞新目标且发布旧行；同路径换 backend 保留旧草稿并可误向旧通道创建／重命名。它们已有对应提交和永久回归，不重复登记成 Open finding。
 
 - **独立 App GUI 验收缺口**：隔离窗口可读取，但后台 AXPress 返回 INTERACTION_FAILED / effect=unverifiable，复查仅有 partial semantics。Files、Git 工作区、暂存区及历史区域的实际菜单、滚动、悬停、窄栏与无障碍不能声称完整 E2E 已通过。归 P6 整机验收，不冒充代码已发现 bug。
@@ -62,3 +127,32 @@
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
 
+
+## 2026-10-17 P4 独立逐提交复审（本轮）
+
+审查依据为 plan-p4.md、todo.toml、AGENTS/开发文档、本轮 CodeGraph 源码与调用路径、原始提交差异和本轮测试；结论不采用已有审计报告。
+
+| 任务 | 原提交 | 当前产品调用链与核验 | 本轮结果 |
+| --- | --- | --- | --- |
+| P4-T1 | `167be14` | `ContentView.syncGit` / `ToolPanelView` → `GitStatusModel.refresh` → `runGitStatus` → core `applyRepository` → GitPanel、底栏、Git 动作；SSH 批协议、operation、预算、行数与失效资格 | 发现 Ref/remote 在核心之前阻塞及失败撤销核心（F-41），Stash 被无关 Ref 资格锁住（F-43）；均修复于 `d84579b` |
+| P4-T2 | `56fa227` | index-only 已知索引动作的 core+totals，full 刷新排队升级，historyOnly 分页仅核查状态/Ref/log；历史列表操作仍接入 GitPanel | 保留；真实 Git 命令与分页／交错刷新回归通过，未发现值得额外拆分的新旧路径 |
+| P4-T3 | `cb1a245` | `GitStatusModel.applyRepository` 构建直接装饰及祖先索引；`fileDecoration` 提供共享树行消费；重复路径仍保留 Git staged/changed 两条业务记录 | 保留；慢扫描 oracle 等价测试与 FileTree/TreeRow 测试通过，未恢复旧每行全量扫描 |
+| P4-T4 | `618c77b` | `ToolPanelView.PanelSyncQueue` → `Project.syncFiles` → `FileTreeModel.sync/children` → local/SSH backend `list` → `TreeDisplayModel.Traversal`；目标切换、重建中事件、草稿/写前校验进入真实 Files UI | 发现远端重命名遗漏失效符号链接（F-42），修复于 `48607e5`；其他两级刷新合并各自有独立职责，不予误删 |
+
+### 本轮 Red → Green、验收和清理
+
+- F-41：注入远端 Ref 批次挂起，旧代码核心状态不可见；注入 Ref/remote 失败时旧代码撤销有效核心。拆出详情查询并核对详情错误、独立操作资格；GitStatusModelTests 26/26。
+- F-42：临时目录实测原 `[ -e ]` 将失效源链接误判不存在、将失效目标误判空闲并覆盖；改为检测目录项自身及相同 inode 的大小写重命名。RemoteCommandsTests 13/13，包含实际临时文件副作用。
+- F-43：注入 Ref 失败但 Stash 列表有效，旧资格限制触发 Red；删除 Stash 对 Ref 的无关依赖，保留活体 HEAD/目标/selector/OID 校验；Green 与 GitStashActionTests 均通过。
+- 全量 `make test` 使用 `KERO_P4_TEST_SSH_HOST=windows`：344 tests，0 failures，0 skipped；涵盖真实 Windows SSH 的 Git 外部刷新、实际写操作、FileTree batch、故障恢复；本机 Debug `make build` 和严格 codesign 通过。
+- 清理：不恢复核心阶段冗余 Ref 查询、不保留双轨 fallback；删除 Stash 无关安全围栏；保留 P4-T4 两个不同生命期的去重队列、合法 duplicate Git pathRows 及实际执行前校验。
+- 范围边界：原生 AX 全流程人工点击和 Windows 真实失效符号链接重命名未独立覆盖；后者已由运行实际 shell 的可控临时文件副作用测试验证。未以此冒充对实际 Windows 文件系统权限与 App AX 的验收。
+
+本轮功能性 Gate：自动化验收通过；原生 AX 与远端重命名的端到端设备覆盖仍属明确的未测边界，不宣称零潜在缺陷。
+
+### 构建、安装及 Gate 补充核验
+
+- `make build`、`make build:release` 均完成；Debug 和 Release 的整包 `codesign --verify --deep --strict` 通过。
+- 已按 `docs/development.md#本地安装` 将完整 Debug 构建替换至 `/Applications/Kero.app`：先同磁盘暂存并严格验签，整包移动替换，复验签名；安装后二进制与 Debug 构建逐字节一致，清除本次旧包与暂存，不遗留备份；未结束、启动或重启用户现有 App，新代码下次启动生效。
+- 两项独立中文 Git 提交已产生：`d84579b`（P4-T1，含 F-41/F-43）、`48607e5`（P4-T4，含 F-42）。`todo.toml` 中 P4 原四项已完成，不修改其他阶段任务；其他审查人员的文件未进入上述 commits。
+- Gate 结论：P4 自动化验收 **GO**（344/344、含真实 Windows SSH），Debug/Release 构建与本地安装 **GO**；GUI 的原生 AX 手工动作、Windows 真实失效符号链接的单独端到端副作用仍为未测边界，不声称已验证。
