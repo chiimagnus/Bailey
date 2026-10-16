@@ -27,39 +27,39 @@
 
 - 任务：`P5-T2`
 - 严重级别：`Medium`
-- 状态：`Open`
+- 状态：`Resolved`
 - 位置：`kero/Git/DiffTextView.swift:192-232,1070-1118`
 - 摘要：`编辑 Diff 删除全部正文后，空缓冲虚拟行错置删除 ghost 且没有可滚动高度`
 - 风险：`DiffDecorations.edit 把空文件统一作为 1 行但 ghost anchor 仍为 0，当作显示在第 0 行之前；没有实际字符时 applyGhostSpacing 没有 paragraphRange，2 行删除 ghost 被画在视口上方或被裁切。真实 NSWindow 测试 ghost anchor 错与高度 0 均 Red`
 - 预期修复：`由 DiffDecorations.edit 统一把空内容 ghost 归为虚拟行之后的 EOF 锚点，现有 DiffCodePaneView 内容高度计算在这个虚拟行上容纳 ghost，不能写入虚拟字符到用户文本`
 - 验证：`空→纯删除、完整删除→撤销→恢复、短窗滚动、原生真实 TextKit Red→Green 和 DiffTabTests`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`c845cac：真实 NSWindow/TextKit 删除到空文件，Red p5-third-audit-empty-red.log（EOF anchor nil、override height0），Green p5-third-audit-empty-green.log（虚拟行后 EOF ghost，可滚动）；空→输入→清空→去 ghost 测试及 DiffTabTests 30/30；始终不写虚拟字符。`
 
 
 ## 发现 F-24
 
 - 任务：`P5-T4`
 - 严重级别：`High`
-- 状态：`Open`
+- 状态：`Resolved`
 - 位置：`kero/Git/DiffTextView.swift:316-330`
 - 摘要：`Diff 滚动每次绘制都完整扫描文本判断非 LF 换行，4MiB 普通文件产生帧级性能回退`
 - 风险：`DiffRowGeometry.visibleRows 在每次 gutter 和 underlay 绘制执行 hasNativeNonLFSeparators(textView.text) 的 O(文件字节数) 扫描；4MiB ASCII 文本 Swift Debug 实测 x30 中位9.74ms/次，双次绘制约20ms，还未计 TextKit，影响长文件滚动/输入响应`
 - 预期修复：`把特殊分隔符标记归实际 DiffTextView 文本内容所有者，在首次装载和真实文本变更时更新；viewport 只读 O(1) 标记，不引入缓存系统，保留裸 CR/Unicode/undo 边界`
 - 验证：`真实 STTextView 编辑输入/撤销、LF/CRLF/裸CR/Unicode viewport 行号、改动前后 30 次同设备扫描/原生绘制；DiffTabTests及构建`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`c845cac：Debug Swift 4MiB 普通文本旧 hasNativeNonLFSeparators 全量扫描30次，中位9.738ms/p95 10.085ms；此前每 viewport gutter + underlay 调用。现在 DiffTextView 对内容实际变化失效缓存、DiffNativeSurface delegate 单次捕获文本并更新标记，viewport O(1) 读取；输入/撤销/CRLF/裸CR 回归 DiffTabTests 30/30，未宣称未经测量的 GPU FPS。`
 
 
 ## 发现 F-23
 
 - 任务：`P5-T2`
 - 严重级别：`Medium`
-- 状态：`Open`
+- 状态：`Resolved`
 - 位置：`kero/Git/DiffTextView.swift:1069-1116`
 - 摘要：`编辑态一条 LF Git 行包含裸 CR 段落时，删除 ghost 占位重复插入多次`
 - 风险：`applyGhostSpacing 对整条 LF 行的 utf16 range 设置同一个 paragraphSpacingBefore；TextKit 将其拆成多个实际段落，真实原生 XCTest 中第二个段落也获得 15pt 占位，导致重复空隙、删除内容与 gutter 行号错位`
 - 预期修复：`按首／末实际 TextKit 段落分别施加 before／after 样式，正确清除旧占位，不改变 Git 行或保存字节`
 - 验证：`NSWindow/TextKit 实际 attributed paragraph style Red→Green，首/尾 ghost、CRLF、empty、undo、DiffTabTests`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`c845cac：真实 AppKit/TextKit 裸 CR 的删除行 ghostBefore 第二段重复 15pt；Red build/performance/diff/p5-third-audit-ghost-red.log，Green p5-third-audit-ghost-green.log。首段/末段独立段落样式、清除旧样式且正文不变，DiffTabTests 30/30 passed。`
 
 
 ## 发现 F-22
