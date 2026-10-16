@@ -3,6 +3,99 @@ import XCTest
 @testable import kero
 
 final class DiffEngineTests: XCTestCase {
+    func testSeededUnicodeAndNewlineDiffsPreserveAllOriginalByteAndRowRanges() {
+        var seed: UInt64 = 0x5A17E20261017
+        func next(_ max: Int) -> Int {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Int(seed % UInt64(max))
+        }
+        let alphabet = [
+            "a", "b", "甲", "👩‍👩‍👧", "é", "e\u{301}", " ", "\t", "\r", "\n",
+            "\r\n", "\u{0085}", "\u{2028}", "\u{2029}", "_",
+        ]
+        func source() -> String {
+            (0..<next(75)).map { _ in alphabet[next(alphabet.count)] }.joined()
+        }
+        func check(_ old: String, _ new: String, caseID: Int) {
+            let core = DiffCore.compute(oldText: old, newText: new)
+            let nativeOld = old as NSString
+            let nativeNew = new as NSString
+            for (value, lines, missingNewline) in [
+                (old, core.oldLines, core.oldMissingNewline),
+                (new, core.newLines, core.newMissingNewline)
+            ] {
+                let expected = value as NSString
+                let text = lines.enumerated().map { index, line -> String in
+                    XCTAssertEqual(expected.substring(with: line.utf16Range), String(line.text),
+                                   "case \(caseID), line \(index)")
+                    return String(line.text) + (index < lines.count - 1 ||
+                        value.unicodeScalars.last == "\n" ? "\n" : "")
+                }.joined()
+                XCTAssertEqual(Data(text.utf8), Data(value.utf8), "case \(caseID)")
+                _ = missingNewline
+            }
+
+            var oldCursor = 0
+            var newCursor = 0
+            for operation in core.ops {
+                switch operation {
+                case .equal(let oldStart, let newStart, let count):
+                    XCTAssertEqual(oldStart, oldCursor, "old cursor case \(caseID)")
+                    XCTAssertEqual(newStart, newCursor, "new cursor case \(caseID)")
+                    for index in 0..<count {
+                        XCTAssertTrue(core.oldLines[oldStart + index].text.utf8.elementsEqual(
+                            core.newLines[newStart + index].text.utf8
+                        ), "equal op must be byte-identical")
+                    }
+                    oldCursor += count
+                    newCursor += count
+                case .delete(let start, let count):
+                    XCTAssertEqual(start, oldCursor, "delete case \(caseID)")
+                    oldCursor += count
+                case .insert(let start, let count):
+                    XCTAssertEqual(start, newCursor, "insert case \(caseID)")
+                    newCursor += count
+                }
+            }
+            XCTAssertEqual(oldCursor, core.oldLines.count, "case \(caseID)")
+            XCTAssertEqual(newCursor, core.newLines.count, "case \(caseID)")
+
+            let display = DiffComputation.build(core: core, expansions: nil)
+            XCTAssertEqual(display.splitLeft.rows.count, display.splitRight.rows.count)
+            for document in [display.unified, display.splitLeft, display.splitRight] {
+                let documentLines = DiffLineSplitter.lines(of: document.text).lines
+                XCTAssertEqual(document.rows.count, documentLines.count, "case \(caseID)")
+                XCTAssertEqual(document.lineStartOffsets.count, document.rows.count)
+                for (index, row) in document.rows.enumerated() {
+                    guard index < documentLines.count else { continue }
+                    XCTAssertEqual(document.lineStartOffsets[index],
+                                   documentLines[index].utf16Range.location)
+                    let original: NSString
+                    switch row.source {
+                    case .old: original = nativeOld
+                    case .new: original = nativeNew
+                    case .none: continue
+                    }
+                    let source = row.sourceRange
+                    XCTAssertLessThanOrEqual(source.location + source.length, original.length)
+                    XCTAssertEqual(String(documentLines[index].text),
+                                   original.substring(with: source),
+                                   "rendered row differs at case \(caseID), row \(index)")
+                    for emphasis in row.emphasis {
+                        XCTAssertGreaterThanOrEqual(emphasis.location, 0)
+                        XCTAssertLessThanOrEqual(emphasis.location + emphasis.length, source.length)
+                    }
+                }
+            }
+        }
+        for caseID in 0..<500 {
+            check(source(), source(), caseID: caseID)
+        }
+        let large = (0..<820).map { "same\($0)\n" }.joined()
+        check(large, large.replacingOccurrences(of: "same", with: "changed"), caseID: 500)
+        check(large, "first\n" + large + "last\n", caseID: 501)
+    }
+
     func testLFAndCRLFHaveExactUTF16OffsetsWithoutChangingOriginalBytes() {
         let value = "甲\r\nB👋\nC\rD\r\n"
         let result = DiffLineSplitter.lines(of: value)
