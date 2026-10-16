@@ -70,7 +70,8 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 | Diff 固定行高 | 双栏只读文档高度准确，滚动范围一致 |
 | 只读替换 | 展开上下文或重载只读文本时保留滚动，普通编辑仍跟随插入点 |
 | 辅助功能只读 | 值／选中文本替换遵守原生 isEditable，文件与 Diff 共用底层保护 |
-| 组合输入 | 结束标记保留正文；最终输入按组合范围替换。直接确认和替换已有文字均可一次撤销／重做，不保留中间候选的撤销步骤 |
+| 组合输入 | 结束标记保留正文；隐式替换使用当前选区，最终输入按组合范围替换。直接确认和替换已有文字均可一次撤销／重做，不保留中间候选的撤销步骤 |
+| 输入法屏幕坐标 | 编辑器拆卸后候选框矩形和命中查询不再访问失效窗口；附着时返回屏幕坐标，跨多行返回首行对应的实际字符范围 |
 | 语法插件切换 | 文件扩展名改变时可从现有 STTextView 移除旧插件，终止过期高亮并加载新语法；编辑缓冲与撤销历史不重建 |
 
 补丁集中在 [STTextView+Gutter.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Gutter.swift)、[STTextView.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView.swift)、[STTextView+Accessibility.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Accessibility.swift)、[STTextView+NSTextInputClient.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+NSTextInputClient.swift)、[STTextView+Scrolling.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Scrolling.swift) 和 [STTextLayoutManager.swift](../Vendor/STTextView/Sources/STTextViewCommon/STTextLayoutManager.swift)。Kero 自己的裁切、内边距和字体初始化由 [SourceTextEditor.swift](../kero/Editor/SourceTextEditor.swift) 负责，不归入上游补丁。

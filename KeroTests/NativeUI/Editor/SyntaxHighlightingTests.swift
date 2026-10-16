@@ -656,6 +656,80 @@ final class SyntaxHighlightingTests: XCTestCase {
         XCTAssertFalse(editor.undoManager?.canUndo ?? false)
     }
 
+    func testSelectedCompositionFlowsIntoActualFileBytesAndUndo() async throws {
+        for finishWithInsert in [false, true] {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let url = folder.appendingPathComponent("source.swift")
+            let source = "before 👋after\r\n"
+            try Data(source.utf8).write(to: url)
+            let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            try await file.waitForText()
+            file.autoSaveSuspendedForClose = true
+            let host = NSHostingView(rootView: SourceTextEditor(file: file,
+                font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+                palette: .theme(dark: true), wrapLines: false, isFocused: false))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 450),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.contentView = host
+            window.orderFront(nil)
+            host.layoutSubtreeIfNeeded()
+            let editor = try XCTUnwrap((file.editorView as? NSScrollView)?.documentView as? STTextView)
+            let selection = (source as NSString).range(of: "after")
+            editor.textSelection = selection
+            editor.setMarkedText("中文", selectedRange: NSRange(location: 2, length: 0), replacementRange: .notFound)
+            if finishWithInsert {
+                editor.insertText("完成", replacementRange: .notFound)
+            } else {
+                editor.unmarkText()
+            }
+            let expected = source.replacingOccurrences(of: "after", with: finishWithInsert ? "完成" : "中文")
+            XCTAssertEqual(Data(file.text.utf8), Data(expected.utf8))
+            XCTAssertTrue(file.isDirty)
+            await file.save()
+            XCTAssertEqual(try Data(contentsOf: url), Data(expected.utf8))
+            XCTAssertFalse(file.isDirty)
+            editor.undoManager?.undo()
+            XCTAssertEqual(Data(file.text.utf8), Data(source.utf8))
+            XCTAssertTrue(file.isDirty)
+            await file.save()
+            XCTAssertEqual(try Data(contentsOf: url), Data(source.utf8))
+            XCTAssertFalse(file.isDirty)
+        }
+    }
+
+    func testRepeatedGrammarSwitchReleasesPriorCoordinators() async throws {
+        let editor = FocusReportingTextView()
+        editor.text = "# Heading\n```swift\nlet value = 42\n```\n"
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = editor
+        window.orderFront(nil)
+        editor.updateSyntaxHighlighting(for: "before.swift")
+        do {
+            let first = try XCTUnwrap(editor.syntaxCoordinator)
+            editor.updateSyntaxHighlighting(for: "same.swift")
+            XCTAssertTrue(editor.syntaxCoordinator === first)
+        }
+        for index in 0..<24 {
+            weak var previous = editor.syntaxCoordinator
+            let path = ["file.md", "file.html", "file.txt", "file.swift"][index % 4]
+            editor.updateSyntaxHighlighting(for: path)
+            try await wait { previous == nil }
+            if path.hasSuffix(".txt") {
+                XCTAssertNil(editor.syntaxCoordinator)
+            } else {
+                XCTAssertNotNil(editor.syntaxCoordinator)
+            }
+        }
+        XCTAssertEqual(editor.text, "# Heading\n```swift\nlet value = 42\n```\n")
+    }
+
     func testRenamingMountedFileChangesGrammarWithoutDiscardingUndo() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

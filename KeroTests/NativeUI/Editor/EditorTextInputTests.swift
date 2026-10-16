@@ -45,6 +45,119 @@ final class EditorTextInputTests: XCTestCase {
         XCTAssertEqual(Data((editor.text ?? "").utf8), Data(reference.string.utf8))
     }
 
+    func testCompositionWithImplicitReplacementReplacesSelectedTextAndRestoresUndo() throws {
+        let editor = STTextView()
+        let reference = NSTextView()
+        let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 240), styleMask: [.titled], backing: .buffered, defer: false)
+        let native = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 240), styleMask: [.titled], backing: .buffered, defer: false)
+        host.isReleasedWhenClosed = false
+        native.isReleasedWhenClosed = false
+        defer { host.close(); native.close() }
+        host.contentView = editor
+        native.contentView = reference
+        editor.allowsUndo = true
+        reference.allowsUndo = true
+        editor.text = "before after"
+        reference.string = "before after"
+        editor.textSelection = NSRange(location: 7, length: 5)
+        reference.setSelectedRange(NSRange(location: 7, length: 5))
+        XCTAssertEqual(editor.selectedRange(), reference.selectedRange())
+        editor.setMarkedText("中文👋", selectedRange: NSRange(location: 4, length: 0), replacementRange: .notFound)
+        reference.setMarkedText("中文👋", selectedRange: NSRange(location: 4, length: 0), replacementRange: .notFound)
+        XCTAssertEqual(editor.text, reference.string, "Composing over a selection must replace, not duplicate it")
+        editor.unmarkText()
+        reference.unmarkText()
+        XCTAssertEqual(editor.text, reference.string)
+        editor.undoManager?.undo()
+        reference.undoManager?.undo()
+        XCTAssertEqual(editor.text, reference.string)
+        XCTAssertEqual(editor.text, "before after")
+    }
+
+    func testAttachedInputGeometryRemainsUsable() throws {
+        let editor = STTextView()
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 500, height: 240))
+        scroll.documentView = editor
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = scroll
+        editor.text = "hello 中文 👋\nsecond line\n"
+        window.orderFront(nil)
+        scroll.layoutSubtreeIfNeeded()
+        editor.textLayoutManager.ensureLayout(for: editor.textContentManager.documentRange)
+        var actual = NSRange(location: NSNotFound, length: 0)
+        let requested = NSRange(location: 0, length: (editor.text ?? "").utf16.count)
+        let rect = editor.firstRect(forCharacterRange: requested, actualRange: &actual)
+        XCTAssertFalse(rect.isEmpty)
+        XCTAssertNotEqual(actual.location, NSNotFound, "Multiline queries must return the first line's actual range")
+        XCTAssertLessThan(actual.length, requested.length)
+        let index = editor.characterIndex(for: CGPoint(x: rect.minX + 2, y: rect.midY))
+        XCTAssertTrue(index >= 0 && index < (editor.text ?? "").utf16.count, "\(index)")
+    }
+
+    func testInputGeometryAfterEditorDetachesDoesNotUseDisposedWindow() {
+        let editor = STTextView()
+        editor.text = "中文 👋"
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = editor
+        window.layoutIfNeeded()
+        window.contentView = nil
+        XCTAssertNil(editor.window)
+        XCTAssertEqual(editor.characterIndex(for: .zero), NSNotFound)
+        XCTAssertEqual(editor.firstRect(forCharacterRange: NSRange(location: 0, length: 1), actualRange: nil), .zero)
+        window.close()
+    }
+
+    func testUnicodeCompositionSelectionMatrixMatchesSystem() throws {
+        let initial = "α👩🏽‍💻Z\r\n尾巴"
+        let selectedRanges = [
+            NSRange(location: 0, length: 0),
+            (initial as NSString).range(of: "👩🏽‍💻"),
+            (initial as NSString).range(of: "尾巴"),
+        ]
+        for range in selectedRanges {
+            for completesWithInsert in [false, true] {
+                let editor = STTextView()
+                let reference = NSTextView()
+                editor.allowsUndo = true
+                reference.allowsUndo = true
+                let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 240), styleMask: [.titled], backing: .buffered, defer: false)
+                let native = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 240), styleMask: [.titled], backing: .buffered, defer: false)
+                host.isReleasedWhenClosed = false
+                native.isReleasedWhenClosed = false
+                defer { host.close(); native.close() }
+                host.contentView = editor
+                native.contentView = reference
+                editor.text = initial
+                reference.string = initial
+                editor.textSelection = range
+                reference.setSelectedRange(range)
+                let candidate = "👋e\u{301}"
+                editor.setMarkedText(candidate, selectedRange: NSRange(location: (candidate as NSString).length, length: 0), replacementRange: .notFound)
+                reference.setMarkedText(candidate, selectedRange: NSRange(location: (candidate as NSString).length, length: 0), replacementRange: .notFound)
+                editor.setMarkedText("中文", selectedRange: NSRange(location: 2, length: 0), replacementRange: .notFound)
+                reference.setMarkedText("中文", selectedRange: NSRange(location: 2, length: 0), replacementRange: .notFound)
+                XCTAssertEqual(Data((editor.text ?? "").utf8), Data(reference.string.utf8), "mark \(range)")
+                if completesWithInsert {
+                    editor.insertText("完成", replacementRange: .notFound)
+                    reference.insertText("完成", replacementRange: .notFound)
+                } else {
+                    editor.unmarkText()
+                    reference.unmarkText()
+                }
+                XCTAssertEqual(Data((editor.text ?? "").utf8), Data(reference.string.utf8), "finish \(range), \(completesWithInsert)")
+                editor.undoManager?.undo()
+                reference.undoManager?.undo()
+                XCTAssertEqual(Data((editor.text ?? "").utf8), Data(reference.string.utf8), "undo \(range), \(completesWithInsert)")
+                editor.undoManager?.redo()
+                reference.undoManager?.redo()
+                XCTAssertEqual(Data((editor.text ?? "").utf8), Data(reference.string.utf8), "redo \(range), \(completesWithInsert)")
+            }
+        }
+    }
+
     func testDirectUnmarkUndoMatchesNativeTextView() throws {
         for replacedLength in [0, 5] {
             let editor = STTextView()

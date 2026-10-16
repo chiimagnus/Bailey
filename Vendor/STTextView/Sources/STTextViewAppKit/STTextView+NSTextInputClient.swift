@@ -38,6 +38,11 @@ extension STTextView: NSTextInputClient {
     ///   - selectedRange: The range to set as the selection, computed from the beginning of the inserted string.
     ///   - replacementRange: The range to replace, computed from the beginning of the marked text.
     @objc public func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        var replacementRange = replacementRange
+        if markedText == nil, replacementRange.location == NSNotFound {
+            replacementRange = self.selectedRange()
+            guard replacementRange.location != NSNotFound else { return }
+        }
         let attributedMarkedString: NSAttributedString
         switch string {
         case let attributedString as NSAttributedString:
@@ -192,13 +197,16 @@ extension STTextView: NSTextInputClient {
     }
 
     @objc public func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
-        guard let textRange = NSTextRange(range, in: textContentManager) else {
+        guard let window, let textRange = NSTextRange(range, in: textContentManager) else {
             return .zero
         }
 
         var rect: CGRect = .zero
-        textLayoutManager.enumerateTextSegments(in: textRange, type: .standard, options: .rangeNotRequired) { _, textSegmentFrame, _, _ in
-            rect = window!.convertToScreen(contentView.convert(textSegmentFrame, to: nil))
+        textLayoutManager.enumerateTextSegments(in: textRange, type: .standard) { segmentRange, textSegmentFrame, _, _ in
+            if let segmentRange {
+                actualRange?.pointee = NSRange(segmentRange, in: textContentManager)
+            }
+            rect = window.convertToScreen(contentView.convert(textSegmentFrame, to: nil))
             return false
         }
 
@@ -206,7 +214,8 @@ extension STTextView: NSTextInputClient {
     }
 
     @objc public func characterIndex(for point: CGPoint) -> Int {
-        let eventPoint = contentView.convert(window!.convertPoint(fromScreen: point), from: nil)
+        guard let window else { return NSNotFound }
+        let eventPoint = contentView.convert(window.convertPoint(fromScreen: point), from: nil)
         guard let location = textLayoutManager.caretLocation(interactingAt: eventPoint, inContainerAt: textLayoutManager.documentRange.location) else {
             return NSNotFound
         }
