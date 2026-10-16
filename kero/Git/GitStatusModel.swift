@@ -770,6 +770,10 @@ final class GitStatusModel {
                         snapshot.lineDeletions = old.lineDeletions
                         snapshot.totalsLoaded = old.totalsLoaded
                     }
+                    if !snapshot.ignoredLoaded {
+                        snapshot.ignoredPaths = old.ignoredPaths
+                        snapshot.ignoredLoaded = old.ignoredLoaded
+                    }
                 }
                 completed = .repository(snapshot)
             }
@@ -2755,7 +2759,7 @@ final class GitStatusModel {
             },
             uniquingKeysWith: { first, _ in first }
         )
-        ignoredPaths = result.ignoredPaths
+        if result.ignoredLoaded || !sameRepository { ignoredPaths = result.ignoredPaths }
         mergeEntries = entries.filter(\.isConflict)
         stagedEntries = entries.filter {
             !$0.isConflict && $0.staged != "." && $0.staged != "?"
@@ -2783,6 +2787,7 @@ final class GitStatusModel {
         var topLevel = ""
         var entries: [Entry] = []
         var ignoredPaths: Set<String> = []
+        var ignoredLoaded = false
         var branches: [String] = []
         var refsByName: [String: GitRef] = [:]
         var defaultBranch: String?
@@ -2834,7 +2839,7 @@ final class GitStatusModel {
             in: root, argumentSets: [
                 ["rev-parse", "--show-toplevel"],
                 ["status", "--porcelain=v2", "--branch", "-z",
-                 "--untracked-files=all", "--ignored=matching"],
+                 "--untracked-files=all"],
                 refSnapshotArguments, ["remote"], ["rev-parse", "--absolute-git-dir"],
             ], discoverRoot: true, backend: backend, deadline: deadline
         )
@@ -2869,7 +2874,7 @@ final class GitStatusModel {
         let status = await statusGit(
             [
                 "status", "--porcelain=v2", "--branch", "-z",
-                "--untracked-files=all", "--ignored=matching",
+                "--untracked-files=all",
             ],
             in: resolvedRoot
         )
@@ -2934,11 +2939,13 @@ final class GitStatusModel {
         // History, stashes and additions are independent of the minimal
         // usable status. A slow optional query never erases a valid core.
         let historyArgs = recentCommitLogArguments(limit: recentCommitLimit)
+        let ignoredArgs = ["status", "--porcelain=v2", "-z",
+                           "--untracked-files=normal", "--ignored=matching"]
         let diffArgs = result.hasHead
             ? ["diff", "--numstat", "HEAD", "--"]
             : ["diff", "--numstat", "--cached", "--"]
         let defaultRemote = result.remotes.contains("origin") ? "origin" : result.remotes.first
-        var optionalArgs = [historyArgs, stashListArguments, diffArgs]
+        var optionalArgs = [historyArgs, stashListArguments, diffArgs, ignoredArgs]
         if !result.hasHead { optionalArgs.append(["diff", "--numstat", "--"]) }
         if let defaultRemote {
             optionalArgs.append(["symbolic-ref", "--quiet", "--short",
@@ -2977,6 +2984,15 @@ final class GitStatusModel {
         } else if result.hasHead {
             result.detailError = gitFailureMessage(
                 log, fallback: String(localized: "Unable to read Git history.", table: "Git")
+            )
+        }
+        let ignored = await detailGit(ignoredArgs)
+        if ignored.status == 0 {
+            result.ignoredPaths = parseStatus(ignored.stdout).ignoredPaths
+            result.ignoredLoaded = true
+        } else {
+            result.detailError = gitFailureMessage(
+                ignored, fallback: String(localized: "Unable to read ignored files.", table: "Git")
             )
         }
         let stash = await detailGit(stashListArguments)

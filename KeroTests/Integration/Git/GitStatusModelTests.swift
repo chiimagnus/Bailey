@@ -10,6 +10,7 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     private var failGit = false
     private var failHistoryLog = false
     private var failStashList = false
+    private var failIgnoredStatus = false
     private var failRefSnapshot = false
     private var failRemoteList = false
     private var failGitDirectory = false
@@ -29,6 +30,7 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     func setGitUnavailable(_ value: Bool) { failGit = value }
     func setHistoryLogUnavailable(_ value: Bool) { failHistoryLog = value }
     func setStashListUnavailable(_ value: Bool) { failStashList = value }
+    func setIgnoredStatusUnavailable(_ value: Bool) { failIgnoredStatus = value }
     func setRefSnapshotUnavailable(_ value: Bool) { failRefSnapshot = value }
     func setRemoteListUnavailable(_ value: Bool) { failRemoteList = value }
     func setGitDirectoryUnavailable(_ value: Bool) { failGitDirectory = value }
@@ -86,7 +88,7 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
         var variables = ProcessInfo.processInfo.environment
         for (key, value) in env ?? [:] { variables[key] = value }
         let commandInput: Data?
-        if (failHistoryLog || failStashList || failRefSnapshot || failRemoteList || failGitDirectory),
+        if (failHistoryLog || failStashList || failIgnoredStatus || failRefSnapshot || failRemoteList || failGitDirectory),
            let stdin, let script = String(data: stdin, encoding: .utf8) {
             var failing = script
             if failHistoryLog {
@@ -94,6 +96,9 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
             }
             if failStashList {
                 failing = failing.replacingOccurrences(of: " LC_ALL=C git 'stash' 'list' ", with: " LC_ALL=C git 'invalid-test-stash' 'list' ")
+            }
+            if failIgnoredStatus {
+                failing = failing.replacingOccurrences(of: " '--ignored=matching'", with: " '--invalid-ignored-option'")
             }
             if failRefSnapshot {
                 failing = failing.replacingOccurrences(of: " LC_ALL=C git 'for-each-ref' ", with: " LC_ALL=C git 'invalid-test-refs' ")
@@ -395,6 +400,8 @@ final class GitStatusModelTests: XCTestCase {
         try git(["config", "user.email", "test@invalid"])
         try git(["config", "commit.gpgsign", "false"])
         try "baseline\n".write(to: directory.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        try "ignored.tmp\n".write(to: directory.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try "ignored contents".write(to: directory.appendingPathComponent("ignored.tmp"), atomically: true, encoding: .utf8)
         try git(["add", "."])
         try git(["commit", "-qm", "first"])
         try git(["commit", "--allow-empty", "-qm", "second"])
@@ -417,6 +424,7 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertNotNil(priorRefs["refs/heads/topic/safe"])
         XCTAssertNotNil(priorRefs["refs/tags/v1"])
         XCTAssertEqual(priorRemotes, ["origin"])
+        XCTAssertTrue(model.ignoredPaths.contains("ignored.tmp"))
 
         await backend.setGitUnavailable(true)
         model.refresh()
@@ -449,6 +457,22 @@ final class GitStatusModelTests: XCTestCase {
         model.refresh()
         try await wait { model.detailError == nil && !model.isRefreshing }
         XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
+
+        // Ignored decorations can be expensive on large SSH repositories.
+        // A failure here cannot turn valid HEAD, refs, and working files stale.
+        await backend.setIgnoredStatusUnavailable(true)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertNil(model.statusError, "Ignored-file scanning must be optional")
+        XCTAssertNotNil(model.detailError)
+        XCTAssertTrue(model.canUseCurrentStatus)
+        XCTAssertEqual(model.changedEntries, priorChanges)
+        XCTAssertTrue(model.ignoredPaths.contains("ignored.tmp"))
+        await backend.setIgnoredStatusUnavailable(false)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertNil(model.statusError)
+        XCTAssertNil(model.detailError)
 
         // An individual metadata query failing must not publish a partial
         // successful snapshot that hides Branch/Tag menus or an in-progress operation.
