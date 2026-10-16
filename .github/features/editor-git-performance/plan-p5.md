@@ -58,7 +58,7 @@
 
 **当前事实：** gitContent 已检查 size 与原字节，且只有部分特定 stderr 判 missing；reload 已有 editing/dirty 守卫。保留这些已实现结果，不再按旧计划“任意错误都为空／没有编辑检查”重修。
 
-1. Red：复用现有受控 read，在 reload 后输入使 generation 改变，完成旧读，再撤销／保存／复选，检查 isLoading 结束且能够重新读取。现有测试只检查未覆盖编辑，漏了旧任务在清 loading 之前退出的路径。无输入只进入 edit 的路径已有测试，继续保留。
+1. 读取失效的 loading 收尾已移入 P2-T1 的断线闭环，同一 DiffTab.invalidateReload 覆盖编辑、保存和换通道，已有实际 Red／Green 归 P2。此处继续检验撤销／保存／复选可重新读取及旧任务不能结束新 loading，不重复实现或重复计为 P5 新修复。无输入只进入 edit 的原有测试继续保留。
 2. 在 DiffTab 的加载拥有者统一 begin／失效／结束，edit／保存／断线使读取失效也要结束属于它的 loading；旧任务不能结束新任务的 loading。不加第二套 render 身份、独立 coordinator 或到处补调用点 guard。
 3. 保留发布前 editing／dirty／readOnly／代次检查，不能用 .noChange 或中间空内容掩盖失效。重连仅原机器，关闭后独占工作有界，不保留第二份缓冲。
 4. 收敛真实 missing／失败与可变 spec：成功的 index metadata 用 literal ls-files --stage -z 选 0／2／1 OID，tree metadata 用 literal ls-tree -z，固定 OID 后再读 size／blob；成功空记录才是路径缺失，启动／权限／超时／坏 size／短读都是错误，不凭模糊 stderr 继续 fallback。
@@ -95,4 +95,4 @@
 
 ## 阶段核销
 
-确认真实文件／index／历史来源、原生内容、只读和滚动；性能用 T2／T3 正确性基线对照。没有网页、JS hash、worker 或桥接验收项。实施后才创建阶段 audit，本次没有运行／性能 Gate。
+确认真实文件／index／历史来源、原生内容、只读和滚动；性能用 T2／T3 正确性基线对照。没有网页、JS hash、worker 或桥接验收项。实施并验证后进入阶段审计，不能把计划复核当运行／性能 Gate。

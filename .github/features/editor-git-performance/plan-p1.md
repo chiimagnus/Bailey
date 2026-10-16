@@ -56,7 +56,7 @@
 - 挂载：WorkspaceDockView.DockTabGroupView.content → PanelContentView，各可见组显示 active 内容，原生资源由标签保留。
 
 1. 固定源码／差异／依赖／构建／样本／环境，以同一签名 Debug 的本轮隔离实例测量；不为基线替换正式包。
-2. 优先 Time Profiler；CPU 低却卡时查 System Trace／等待，资源归属用 Allocations。backend read/list 已有 @concurrent，不当成待补能力；同步 init、主 actor 解码另外计时。
+2. 优先 Time Profiler；CPU 低却卡时查 System Trace／等待，资源归属用 Allocations。当前 beta 的 DTServiceHub 被 AMFI 拒绝（见 evidence-p1.md），按用户决定保留 beta，CPU 归因改用系统 sample，只附本轮隔离 PID；不绕过系统校验。以现有 XCTest 目标内的本地原生实验与隔离 App 的实际观察补可比数据，明确组件／AX／绘制边界及未测范围。backend read/list 已有 @concurrent，不当成待补能力；同步 init、主 actor 解码另外计时。
 3. 真有阶段分不清才加最少 Debug signpost，留在领域入口，不预建 PerformanceTrace 服务、偏好或轮询；不记录文本／路径／主机。不把 parse／display 创建命名为绘制完成。
 4. 两批选中正常路径估计波动；热至少 30 次、冷开 5 次独立进程。分别记主线程长段、IO／计算／进程／往返和用户可见终点。登录 shell 首次环境加载（最多 5 秒）与热成本分开，不绕过共享执行器。
 5. 每候选一轮定位和一个最小原型；未归因先修观测，不排列多套架构。回写 P2–P5 的命中／未命中及理由。trace 开关有显著扰动就精简并重测。

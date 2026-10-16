@@ -26,7 +26,7 @@
 4. 图片维持完整读取和现有扩展名策略，无效图片再回文本／二进制规则，不引入图片新上限，也不称全部读取有界。
 5. loader 仍归 FileTab，复用 reloadGeneration／保存目标代次。loading 时 rename 要失效旧读取并从新路径继续；旧代次、dirty、断线不能发布。任务完成清对应句柄，旧任务不能清新句柄。只有证明 path/cancellation 与代次完全等价才删重复条件，不能机械删除数据保护。
 6. 保存保留现有串行快照与原子 backend.write；失败／保存中输入不丢。保留 matches，未变内容不替换原生编辑器和撤销。
-7. 固定 SSH host 的连接状态接入现有 Project 重绑，不新增全局 owner／探测循环。未知初连和显式读取仍能建立连接；已知断线保留预览／草稿并只读，面板刷新／选中／显式重试能重新读原机器，不能被只读永久锁死。检查 FileTab 与 DiffTab 两个消费者。
+7. 固定 SSH host 的连接状态接入现有 Project 重绑，不新增全局 owner／探测循环。未知初连和显式读取仍能建立连接；已知断线保留预览／草稿并只读，面板刷新／选中／显式重试能重新读原机器，不能被只读永久锁死。检查 FileTab 与 DiffTab 两个消费者。断线闭环实际复现 Diff 读失效后 loading 不结束，因此把原 P5-T3 的加载失效公共拥有者修复提前到本 task：所有 reloadGeneration 失效统一结束该代次 loading，保留旧任务不能结束新任务的检查，并补输入、撤销后再读与断线回归。
 8. 原生 isEditable 表达只读，选择／复制／查找保留。Vendor 的 setAccessibilityValue 当前直接写 text，不受 isEditable 保护；测试 AX 不可绕过。优先在共同原生写入所有者修复，并在同 task 删除 DiffTextView 被替代的重复守卫，不再加 View 层假只读。
 9. 同 task 删除 readImmediately、同步 init 和 init 自动启动的第二条路径、无消费者 helper／旧说明。readSync 仍服务 async read，statSync/gitRootSync/isLinkedWorktreeSync 仍有真实同步消费者，不类推删除。
 10. 受影响测试显式按需加载／等 .text 后编辑；fake 也遵守 maxBytes 超限抛错，不能 prefix 截断后冒充成功。不为旧测试保留同步兼容接口。

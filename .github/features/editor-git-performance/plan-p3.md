@@ -2,7 +2,7 @@
 
 **目标：** 编辑后的范围和 token 版本正确；只优化实测的全文比较、坐标、调度、编译和嵌入片段热点。
 **不做：** Rope／CRDT、第二套根树／队列、通用解析服务、LanguageLayer fork 或全语言预热。
-**前置：** P1 基线及 P2；P1-T3 只是依赖要求，不是本轮已完成事实。
+**前置：** P1 基线及 P2；完成状态只读 todo.toml，不能以计划审查代替实施。
 **验收：** 最终视口对应当前文本，固定资源失败不形成重编译循环；保留的优化有数据，无热点就不制造代码。
 
 Neon 已有根解析版本、串行 queue、pending edits／范围变换。TreeSitterClient 留 MainActor，readHandler 必须持续读取稳定快照到 completion；Parser／MutableTree／QueryCursor 不因 Query／Tree 可传递就跨线程共用。测试、文档和替代路径删除都在所属 task 完成；新测试仍进一个 XCTest 目标。
@@ -13,13 +13,13 @@ Neon 已有根解析版本、串行 queue、pending edits／范围变换。TreeS
 **类型：** 正确性实现。
 **文件：** `kero/Editor/SyntaxHighlightPlugin.swift` 的 setUp、will/did、两种 provider／invalidation；只读 Neon Highlighter／TokenApplication／TreeSitterClient。扩展 `KeroTests/NativeUI/Editor/SyntaxHighlightingTests.swift`；文档归 `docs/features/editor.md`。
 
-**当前缺口：** 修改前后的 NSTextRange 被修改后重算，尾删可越界；未调用 Highlighter.didChangeContent，valid/pending 不随 edit 移动；base 与 injection 两次异步查询可跨编辑版本，第二次 stale 仍交付旧 base。
+**已核实缺口：** 未调用 Highlighter.didChangeContent，valid/pending 不随 edit 移动；plain 的过期成功／失败、base 与 injection 两次异步查询可跨编辑版本。实际 TextKit 旧 NSTextRange 使用同文档偏移，尾删／全删和连续编辑对照 Parser 已通过，不新增无必要的旧范围缓存。
 
 1. Red：用生产插件和可控异步交付复现在已着色文本前插入／删除、尾删、全删、base/injection 间编辑；检查最终样式位置及当前视口重请求，不只检查 invalidate 被调用。
-2. will 保存旧 NSRange 并通知 tsClient；did 用保存范围与 replacement UTF-16 长度通知 highlighter，再通知 tsClient。新快照取实际 TextKit 内容，不能依赖随后 delegate 才写回的 FileTab.text。
+2. will 推进编辑 revision 并通知 tsClient；did 沿用实际 TextKit 提供的旧范围偏移与 replacement UTF-16 长度，先通知 highlighter，再通知 tsClient。新快照取实际 TextKit 内容，不能依赖随后 delegate 才写回的 FileTab.text。
 3. 复用一个 coordinator 编辑 revision 保护整次交付：plain/base/injection/最终 completion 都只能提交当前 edit 的结果。它解决跨回调间隙，不复制 Neon 内部解析版本；后续子区域路径复用它。
 4. stale 交付不回 .noChange：Highlighter 会把范围标 valid；TokenProvider 允许零次回调，旧请求可丢弃。编辑／invalidation 必须让新版本最后重请求，旧 failure 也不能异步清掉新 pending。普通实际错误保留既有降级，不加无限 retry。
-5. 删除修改后旧范围重算、无版本合并和伪成功交付路径；不引入第二套 pending 管理。
+5. 删除无版本合并和伪成功交付路径；保留已验证正确的范围转换，不引入第二套 pending 管理。
 6. `make test ONLY_TESTING=KeroTests/SyntaxHighlightingTests`：旧成功／旧失败晚到、连续 edit、undo/redo／空文本、当前视口最终颜色。完整测试／构建后隔离 App 检查 Swift／TSX／Markdown、替换、长粘贴、中文组合输入与保存原字节。
 
 **提交：** edit 桥接、回归及文档独立正确性提交；修复后才用输入高亮结果比较优化收益。
@@ -118,6 +118,15 @@ Neon 已有根解析版本、串行 queue、pending edits／范围变换。TreeS
 
 **提交：** 采用实现、真实接入、旧路径删除、回归和文档同 task。未采用只交理由，不创建占位实现或“未来升级”配置。
 
+<a id="p3-t8"></a>
+## P3-T8 修复原生组合输入结束时丢字
+
+T2 的原生中文输入回归实际发现：STTextView.unmarkText 删除已标记正文，违反 Apple 接受已插入文本的契约。T2 先验证正常 setMarkedText→insertText 的提交路径；本任务紧接 T2 独立修复，不推迟到阶段收尾。
+
+1. 使用真实 STTextView 对照 NSTextView，Red 验证直接 unmark 不删字；同时覆盖 marked→insertText 的默认／显式替换范围，不能修一条路径后让另一条重复插入。
+2. 在现有 NSTextInputClient 桥接区分“接受组合文本”和“用最终输入替换组合范围”；删除旧的 unmark 删正文语义，不引入第二套输入缓冲。保持临时标记清理、选择、普通输入和既有撤销。
+3. 复用现有 NativeUI XCTest；通过 EditorTextInputTests、FileTabTests、DiffTabTests、SyntaxHighlightingTests 和完整 build/test；更新 development.md 的本地补丁归属及 editor.md。独立原子提交。
+
 ## 阶段核销
 
-evidence-p3.md 分清修复、实测保留、未测与仍慢；正确性依靠最终内容／可见范围，性能依靠同机对照。实际实施后进入阶段审计，本次不预建 audit 或宣布 Go。
+evidence-p3.md 分清修复、实测保留、未测与仍慢；正确性依靠最终内容／可见范围，性能依靠同机对照。实施并验证后进入阶段审计，不以计划审查宣布 Go。

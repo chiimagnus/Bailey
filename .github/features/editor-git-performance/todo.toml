@@ -1,66 +1,68 @@
 version = 1
-current_task_id = ""
+current_task_id = "P3-T3"
 
 [[tasks]]
 id = "P1-T1"
 title = "准备最小可重复样本与动作"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "本地最小样本和动作；不强制提交永久生成器。"
+no_commit_reason = "仅本地实验样本与证据，按 Skill 不入库"
+note = "两次独立生成 manifest 完全相同；含1000变更、rename、unborn、65+历史与真实merge冲突。"
 
 [[tasks]]
 id = "P1-T3"
 title = "修正首次解析与字节坐标"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t3"
-commit = ""
-note = "首次旧范围和 LF／UTF-16 字节坐标；测试进入同一 XCTest 目标。"
+commit = "b6d736860709847d990bbe2de6ec5cf543e3b78f"
+note = "实际 Red→Green；全量241/0失败/3 SSH skipped；最终定向测试、Debug构建及验签；Swift/TSX/Markdown隔离实际颜色。"
 
 [[tasks]]
 id = "P1-T2"
 title = "取得真实基线并固定热点准入"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = "依赖 P1-T3；任务顺序已同步为 T1→T3→T2。正确性修复和性能收益分开。"
+no_commit_reason = "本地实验与证据；未引入生产诊断代码"
+note = "evidence-p1：两批原生打开各30次、五个独立App冷AX观察、实际Swift/TSX/Markdown截图；beta AMFI阻断Instruments，按用户决定用sample，限定已测边界；Git/Diff各阶段改动前补基线。"
 
 [[tasks]]
 id = "P2-T1"
 title = "统一按需加载、解码与断线只读"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = ""
-note = "同一按需加载服务视图及 waitForText／ignoreGitPaths；删同步 init/readImmediately，迁移实际 XCTest，原生／固定主机只读闭环。"
+commit = "e82cd03b4d35717b6e0acb73bbe93a9d87638f79"
+note = "21 File/16 Diff定向Green，247全量0失败3SSH skipped；Debug/Release验签；原生断线/重连/undo、缺失重建恢复；同任务删除旧同步/重复AX/重复目标比较；loading根因提前自P5。"
 
 [[tasks]]
 id = "P2-T2"
 title = "移除高亮无效字体事务"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = ""
-note = "删除真实无效字体事务，保留颜色／零范围保护。"
+commit = "b440eb04a3fe36e8715bf8364c68af035969999d"
+note = "等价基线前后2测试Green；同加载器字体单变量A/B各2×30+独立sample；阶段249/0失败/3SSH skipped，Debug验签；删除全部被替代字体/正文样式支路。"
 
 [[tasks]]
 id = "P3-T1"
 title = "补齐编辑后的高亮范围更新"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t1"
-commit = ""
-note = "旧 edit 范围、Highlighter 通知、跨 base/injection 同版交付；不复制 Neon 解析状态机。"
+commit = "9467448c1909e607143fb723c316640d824a93ea"
+note = "真实过期成功/失败Red→Green；6原生高亮测试、253全量0失败3SSH skipped，Debug验签；删除伪成功，取证撤回无必要旧范围缓存；evidence-p3。"
 
 [[tasks]]
 id = "P3-T2"
 title = "恢复字节精确文本契约并删除重复比较"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t2"
-commit = ""
-note = "字节精确比较贯穿编辑器保存／重载与原生 Diff／行token，不只删前置比较；同任务接入 DiffEngineTests。"
+commit = "8533dd10041f1cb11e92d3ea4d952f2cde9089fe"
+note = "字节契约Red→Green；45定向、261全量0失败3SSH skipped，Debug验签；两类实际写入/原生Diff/字节重建；2×30长行基线仍慢不宣称提速；evidence-p3。"
 
 [[tasks]]
 id = "P3-T3"
 title = "验证并收敛坐标扫描热点"
-status = "pending"
+status = "in_progress"
 plan = "plan-p3.md#p3-t3"
 commit = ""
 note = "只测 P1-T3 修正后的坐标实现；无热点不建索引／文件。"
@@ -176,3 +178,11 @@ status = "pending"
 plan = "plan-p6.md#p6-t2"
 commit = ""
 note = "只核销已同步文档和本地证据；不接收延期旧代码清理，无新事实不制造提交。"
+
+[[tasks]]
+id = "P3-T8"
+title = "修复原生组合输入结束时丢字"
+status = "completed"
+plan = "plan-p3.md#p3-t8"
+commit = "f87b416f92abdb8ae424b4f567a12a7de3ec2c94"
+note = "系统NSTextView对照Red→Green；53联合、265全量0失败3SSH skipped，最终输入3/0；Debug/Release验签；及时修复T2发现的输入丢字，不建输入状态机。"
