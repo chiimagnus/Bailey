@@ -45,6 +45,78 @@ final class EditorTextInputTests: XCTestCase {
         XCTAssertEqual(Data((editor.text ?? "").utf8), Data(reference.string.utf8))
     }
 
+    func testDirectUnmarkUndoMatchesNativeTextView() throws {
+        for replacedLength in [0, 5] {
+            let editor = STTextView()
+            let reference = NSTextView()
+            editor.allowsUndo = true
+            reference.allowsUndo = true
+            let editorWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
+                                        styleMask: [.titled], backing: .buffered, defer: false)
+            let referenceWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
+                                           styleMask: [.titled], backing: .buffered, defer: false)
+            editorWindow.isReleasedWhenClosed = false
+            referenceWindow.isReleasedWhenClosed = false
+            defer { editorWindow.close(); referenceWindow.close() }
+            editorWindow.contentView = editor
+            referenceWindow.contentView = reference
+            editor.text = "before after"
+            reference.string = "before after"
+            let range = NSRange(location: 7, length: replacedLength)
+            editor.setMarkedText("中文", selectedRange: NSRange(location: 2, length: 0), replacementRange: range)
+            reference.setMarkedText("中文", selectedRange: NSRange(location: 2, length: 0), replacementRange: range)
+            editor.setMarkedText("中文👋", selectedRange: NSRange(location: 4, length: 0), replacementRange: .notFound)
+            reference.setMarkedText("中文👋", selectedRange: NSRange(location: 4, length: 0), replacementRange: .notFound)
+            editor.unmarkText()
+            reference.unmarkText()
+            XCTAssertEqual(editor.text, reference.string)
+            let expectedUndo = reference.undoManager?.canUndo ?? false
+            XCTAssertEqual(editor.undoManager?.canUndo ?? false, expectedUndo,
+                           "Accepting a completed composition should keep native undo semantics")
+            if expectedUndo {
+                editor.undoManager?.undo()
+                reference.undoManager?.undo()
+                XCTAssertEqual(editor.text, reference.string)
+                editor.undoManager?.redo()
+                reference.undoManager?.redo()
+                XCTAssertEqual(editor.text, reference.string)
+            }
+        }
+    }
+
+    func testCompositionReplacingExistingTextRestoresOriginalOnUndo() throws {
+        let editor = STTextView()
+        let reference = NSTextView()
+        editor.allowsUndo = true
+        reference.allowsUndo = true
+        let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
+                            styleMask: [.titled], backing: .buffered, defer: false)
+        let native = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        host.isReleasedWhenClosed = false
+        native.isReleasedWhenClosed = false
+        defer { host.close(); native.close() }
+        host.contentView = editor
+        native.contentView = reference
+        editor.text = "before after"
+        reference.string = "before after"
+        let range = NSRange(location: 7, length: 5)
+        editor.setMarkedText("中文", selectedRange: NSRange(location: 2, length: 0), replacementRange: range)
+        reference.setMarkedText("中文", selectedRange: NSRange(location: 2, length: 0), replacementRange: range)
+        editor.setMarkedText("中文👋", selectedRange: NSRange(location: 4, length: 0), replacementRange: .notFound)
+        reference.setMarkedText("中文👋", selectedRange: NSRange(location: 4, length: 0), replacementRange: .notFound)
+        editor.insertText("完成", replacementRange: .notFound)
+        reference.insertText("完成", replacementRange: .notFound)
+        XCTAssertEqual(editor.text, reference.string)
+        editor.undoManager?.undo()
+        reference.undoManager?.undo()
+        XCTAssertEqual(editor.text, reference.string)
+        XCTAssertEqual(reference.string, "before after")
+        editor.undoManager?.redo()
+        reference.undoManager?.redo()
+        XCTAssertEqual(editor.text, reference.string)
+    }
+
     func testFinalCompositionDefaultAndExplicitRangesMatchSystemAndKeepUndo() throws {
         for replacement in [NSRange(location: NSNotFound, length: 0),
                             NSRange(location: 7, length: 4), NSRange(location: 0, length: 11)] {
