@@ -124,6 +124,53 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class DiffTabTests: XCTestCase {
+    func testBareCRReviewUsesTextKitParagraphHeightInsteadOfLFOnlyHeight() {
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 700, height: 420),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(
+            font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+            textColor: .textColor
+        )
+
+        let normal = DiffComputation.compute(oldText: "before\n", newText: "after\n").unified
+        pane.setReviewDocument(NSAttributedString(string: normal.text), decorations: .review(normal))
+        XCTAssertNotNil(pane.textView.overrideContentHeight)
+        let crlf = DiffComputation.compute(oldText: "before\r\n", newText: "after\r\n").unified
+        pane.setReviewDocument(NSAttributedString(string: crlf.text), decorations: .review(crlf))
+        XCTAssertNotNil(pane.textView.overrideContentHeight,
+                        "Normal CRLF remains one TextKit paragraph per Git line")
+
+        let manyCRs = (0..<90).map { "part\($0)" }.joined(separator: "\r")
+        let unusual = DiffComputation.compute(
+            oldText: manyCRs + "\n", newText: manyCRs + "\rchanged\n"
+        ).unified
+        pane.setReviewDocument(NSAttributedString(string: unusual.text), decorations: .review(unusual))
+        pane.layoutSubtreeIfNeeded()
+        let elements = pane.textView.textContentManager.textElements(
+            for: pane.textView.textLayoutManager.documentRange
+        )
+        XCTAssertGreaterThan(elements.count, unusual.rows.count,
+                             "Bare CR forms additional TextKit paragraphs within one Git LF line")
+        XCTAssertNil(pane.textView.overrideContentHeight,
+                     "Git LF-only row count must not clip additional native paragraphs")
+        XCTAssertEqual(pane.textView.attributedText?.string, unusual.text)
+
+        let unicode = DiffComputation.compute(
+            oldText: "before\u{2028}after\n", newText: "before\u{2028}updated\n"
+        ).unified
+        pane.setReviewDocument(NSAttributedString(string: unicode.text), decorations: .review(unicode))
+        XCTAssertNil(pane.textView.overrideContentHeight,
+                     "Unicode line separators also require native content height")
+    }
+
     func testStagedDeletionShowsDeletedLinesInsteadOfMissingRevision() async throws {
         let root = try repository()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -395,18 +442,18 @@ final class DiffTabTests: XCTestCase {
         XCTAssertEqual(Data(diff.newContent.utf8), Data(decomposed.utf8))
         if diff.newContent.utf8.elementsEqual(decomposed.utf8) {
             try await wait { diff.display?.id != oldDisplayID }
-            XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.dropLast().utf8))
+            XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.utf8))
         }
         try Data(composed.utf8).write(to: path)
         diff.reload()
         try await wait { !diff.isLoading }
-        try await wait { diff.display?.computation.splitRight.text.utf8.elementsEqual(composed.dropLast().utf8) == true }
+        try await wait { diff.display?.computation.splitRight.text.utf8.elementsEqual(composed.utf8) == true }
         let newDisplayID = diff.display?.id
         try Data(decomposed.utf8).write(to: path)
         diff.reload()
         try await wait { !diff.isLoading }
         try await wait { diff.display?.id != newDisplayID }
-        XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.dropLast().utf8))
+        XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.utf8))
     }
 
     private func findNativeSurface(in view: NSView) -> DiffNativeSurface? {

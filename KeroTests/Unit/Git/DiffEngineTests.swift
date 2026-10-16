@@ -68,6 +68,15 @@ final class DiffEngineTests: XCTestCase {
         XCTAssertNotEqual((diff.unified.text as NSString).range(of: "new\r").location, NSNotFound)
     }
 
+    func testSyntheticNativeReviewTerminatesTheFinalCRLFRow() {
+        let before = "old\r\n"
+        let after = "new\r\n"
+        let computation = DiffComputation.compute(oldText: before, newText: after)
+        XCTAssertTrue(computation.unified.text.hasSuffix("new\r\n"))
+        XCTAssertTrue(computation.splitRight.text.hasSuffix("new\r\n"))
+        XCTAssertEqual(DiffLineSplitter.lines(of: after).lines.map { String($0.text) }, ["new\r"])
+    }
+
     func testCanonicalEquivalentLinesRemainByteDifferentAndReconstructBothSides() {
         let old = "prefix\nlet café = 1\nsuffix\n"
         let new = "prefix\nlet cafe\u{301} = 1\nsuffix\n"

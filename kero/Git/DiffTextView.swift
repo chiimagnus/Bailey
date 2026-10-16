@@ -1249,7 +1249,20 @@ final class DiffCodePaneView: NSView {
 
         textView.attributedText = text
         decorations = newDecorations
-        setFixedRowCount(newDecorations.rows.count)
+        // Git counts only LF lines; TextKit gives bare CR and Unicode line
+        // separators additional visual height. Never clip those paragraphs
+        // to the smaller Git row count; ordinary LF/CRLF stays fixed-height.
+        var previousCR = false
+        var usesNativeBreaks = false
+        for scalar in text.string.unicodeScalars {
+            if (previousCR && scalar != "\n") ||
+                scalar == "\u{2028}" || scalar == "\u{2029}" || scalar == "\u{0085}" {
+                usesNativeBreaks = true
+                break
+            }
+            previousCR = scalar == "\r"
+        }
+        setFixedRowCount(usesNativeBreaks || previousCR ? nil : newDecorations.rows.count)
 
         if isExpansionSwap {
             setVerticalScrollOffset(savedOffset)
