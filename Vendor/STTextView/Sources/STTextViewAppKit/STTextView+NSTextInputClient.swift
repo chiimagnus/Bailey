@@ -113,15 +113,12 @@ extension STTextView: NSTextInputClient {
     /// The text view should accept the marked text as if it had been inserted normally.
     /// If there is no marked text, the invocation of this method has no effect.
     @objc public func unmarkText() {
-        if hasMarkedText() {
-            // Delete temporary marked text. It's been replaced with final text in insertText
-            undoManager.withoutUndoRegistration {
-                let markedTextRange = NSTextRange(markedText!.markedRange, in: textContentManager)!
-                replaceCharacters(in: markedTextRange, with: "")
-            }
+        guard let markedText else { return }
+        for attribute in markedTextAttributes.keys {
+            removeAttribute(attribute, range: markedText.markedRange)
         }
-
-        markedText = nil
+        addAttributes(typingAttributes, range: markedText.markedRange)
+        self.markedText = nil
     }
 
     /// Returns the marked range. Returns {NSNotFound, 0} if no marked range.
@@ -195,7 +192,25 @@ extension STTextView: NSTextInputClient {
     }
 
     @objc open func insertText(_ string: Any, replacementRange: NSRange) {
-        unmarkText()
+        var replacementRange = replacementRange
+        if let markedText {
+            let markedRange = markedText.markedRange
+            if replacementRange.location == NSNotFound {
+                replacementRange = NSRange(location: markedRange.location, length: 0)
+            } else {
+                func offsetAfterRemoval(_ offset: Int) -> Int {
+                    offset - min(max(0, offset - markedRange.location), markedRange.length)
+                }
+                let start = offsetAfterRemoval(replacementRange.location)
+                let end = offsetAfterRemoval(NSMaxRange(replacementRange))
+                replacementRange = NSRange(location: start, length: end - start)
+            }
+            undoManager.withoutUndoRegistration {
+                let textRange = NSTextRange(markedRange, in: textContentManager)!
+                replaceCharacters(in: textRange, with: "")
+            }
+            self.markedText = nil
+        }
 
         var textRanges: [NSTextRange] = []
 

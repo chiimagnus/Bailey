@@ -123,6 +123,34 @@ final class SyntaxHighlightingTests: XCTestCase {
         XCTAssertTrue((mounted.editor.text ?? "").hasPrefix("// fresh\n"))
     }
 
+    func testCompositionFinalReplacementKeepsParserAndCurrentColors() async throws {
+        let source = "// comment 中文 👋\nlet value = 42\n"
+        let mounted = try mountedPlugin(source: source)
+        defer { mounted.window.close() }
+        try await wait { self.hasRenderingColor(mounted.editor) }
+        let replaced = (source as NSString).range(of: "value")
+        mounted.editor.setMarkedText("café", selectedRange: NSRange(location: 4, length: 0),
+                                     replacementRange: replaced)
+        mounted.editor.setMarkedText("cafe\u{301}", selectedRange: NSRange(location: 5, length: 0),
+                                     replacementRange: NSRange(location: NSNotFound, length: 0))
+        mounted.editor.insertText("新值", replacementRange: mounted.editor.markedRange())
+        let expected = source.replacingOccurrences(of: "value", with: "新值")
+        XCTAssertEqual(Data((mounted.editor.text ?? "").utf8), Data(expected.utf8))
+        let actual = try await mounted.coordinator.tsClient.currentTree()
+        let plugin = try XCTUnwrap(SyntaxHighlighting.plugin(for: "fixture.swift"))
+        let parser = Parser()
+        try parser.setLanguage(plugin.language.parser)
+        let fresh = try XCTUnwrap(parser.parse(expected)?.rootNode)
+        XCTAssertEqual(actual.rootNode?.sExpressionString, fresh.sExpressionString)
+        XCTAssertEqual(actual.rootNode?.range, fresh.range)
+        XCTAssertEqual(actual.rootNode?.pointRange, fresh.pointRange)
+        let keyword = (expected as NSString).range(of: "let").location
+        try await wait {
+            self.color(mounted.editor, at: 0) == SyntaxHighlightCoordinator.themeColor(for: "comment", theme: plugin.theme)
+                && self.color(mounted.editor, at: keyword) == SyntaxHighlightCoordinator.themeColor(for: "keyword", theme: plugin.theme)
+        }
+    }
+
     func testOldFailureIsNotDeliveredAfterNewEdit() async throws {
         let mounted = try mountedPlugin()
         defer { mounted.window.close() }
