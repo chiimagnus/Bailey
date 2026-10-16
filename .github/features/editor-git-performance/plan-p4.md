@@ -90,7 +90,7 @@
 1. 测初次展开、无变化 poll、外部 add/delete/rename、长压缩链与必要 SSH；分离 root resolve、list/stat／往返、排序／Traversal、发布／原生布局。
 2. 选一个真正主导的分支：远程多轮 list 才试本 traversal 已知必需目录的有限 batch；重复处理主导才复用当次／当前范围数据。不预扫未访问子树、不以目录 mtime 缓存 symlink 类型、不减刷新能力。
 3. 一轮定位和一个原型，无净收益就保留现有实现；需要新失效来源／watcher 再拿证据回改，不暗中加框架。
-4. 若采用，扩展 FileTreeTests 的外部变更、draft／取消、压缩／symlink／dangling／循环、不可读保留、换范围和重建中最后事件，性能替代前后的正确行为应一致；发现真实缺陷才先 Red 再修。若改变异步工作，沿现有 backend／目标验证同路径换通道旧结果，复用必要身份而不预建多层 generation。
+4. 若采用，扩展 FileTreeTests 的外部变更、draft／取消、压缩／symlink／dangling／循环、不可读保留、换范围和重建中最后事件，性能替代前后的正确行为应一致；发现真实缺陷才先 Red 再修。实测确认为两处独立所有者的错误：外层 PanelSyncQueue 用旧请求阻塞新目标且重复旧闭包，内层 FileTreeModel 的旧遍历／文件草稿及写前检查遗漏 backend 身份；各自只复用已有 PanelContext 身份与单一请求代次来修正，避免额外协调器或通用重试。
 5. 运行 FileTreeTests、TreeRowHitTestingTests、PanelContextTests；批协议变动再跑 RemoteCommandsTests，之后完整完成流程与四区域原生验收。授权 SSH 才实测传输，隐藏／后台不得多 IO。
 6. 同 task 删除被替代的重复 list／排序／发布／临时预取路径，文档同步 files.md；不新旧并行运行。
 

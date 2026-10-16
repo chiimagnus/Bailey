@@ -48,6 +48,35 @@ macOS 27.2（26B5101f），MacBookPro18,3／arm64；Xcode beta 27.0（27A5209h�
 
 `p4-t2-green1.log`：暂存／分页的真实仓库 Green。`p4-t2-suite.log` 19 项 0 失败，随后补上分页间 Ref、工作区事件竞态；后一项测试明确模拟外部写入**后**发来的完整刷新事件，不能要求已经结束的 core 扫描凭空获知未来写入。`p4-t2-concurrent-fix.log` 定向测试 1 项通过。最终 `p4-t2-final-full.log`：294 项，0 失败，3 项专用 SSH skipped；`p4-t2-final-debug.log`／`p4-t2-final-release.log`：Debug／Release 构建和严格验签通过。均用真实 Git 临时仓库，不以受控 SSH 冒充真机。
 
+## T3：共享文件树装饰预聚合
+
+先取旧 `fileDecoration` 完整扫描作为行为 oracle，使用临时 1000 个修改文件、200 个工作目录、200 个忽略目录的 Git 仓库做每类 30 次真实模型查询；原始数据 `p4-t3-baseline.log`、`p4-t3-final-benchmark.log` 和本地忽略的 `GitDecorationPerformanceTests.swift`。同一台 Mac、同一固定 fixture、Debug／重复访问，测的是状态装饰查询，不是屏幕帧时间。单位 ms，数值为 median／p95：
+
+| 每组查询 | 旧 | 新 |
+| --- | --- | --- |
+| 200 变更目录 | 14.876／14.945 | 0.690／0.718 |
+| 1000 变更文件 | 22.654／22.709 | 3.027／3.072 |
+| 200 忽略目录 | 4.546／4.583 | 0.619／0.631 |
+| 200 无状态目录 | 14.508／14.705 | 0.645／0.671 |
+
+核心状态变化时预聚合各级目录的最大优先级颜色，无变化不重新构建；忽略规则沿路径祖先做集合查询，不再每行扫描全量集合。同路径 staged 删除 + untracked 仍按原两条记录处理；只保留一份最终装饰，冲突优先级保持原语义。测试 `testFileDecorationsMatchFullScan...` 使用真实重命名／删除／暂存与老扫描 oracle；另补真实 Merge 冲突和结束状态。Red 阶段发现 fixture 所有基础文件内容一样会被 Git 重命名启发式交叉配对，改为每文件内容唯一。随后发现生产级路径问题：`NSString.standardizingPath` 对存在的 `/private/var/...` 根目录解析为 `/var/...`，但不存在的删除叶子会保留 `/private/var/...`，造成字典有删除记录而绝对路径查不到；用 Git 原始根路径优先匹配、仅对别名／需要规范化的路径走已有规范化逻辑，不以文件是否存在改变 Git 状态查询。对应 Red `p4-t3-debugdeleted.log`，Green `p4-t3-deleted-identity-green.log`。基准 XCTest 临时文件从正式测试目录移回忽略的实验区，没有永久新增独立基准类。
+
+## T4：Files 刷新成本与同范围后端替换
+
+沿真实 `ToolPanelView.PanelSyncQueue → Project.syncFiles → FileTreeModel.sync/rebuild/children → WorkspaceBackend.list → TreeDisplayModel.Traversal` 阅读。外层队列合并 UI 更新，内层模型合并重建请求；本地 `list` 已在后台调用，且 `traversal.rows != items` 时才发布。展开／压缩树需要读取可见目录的直接子项（包括判断未展开目录能否压缩），不是无意重复 IO；不合并两层不同职责的队列，也不把逐目录读取改成对隐藏子树的预扫描。
+
+隔离 XCTest `p4-t4-local-experiment.log` 在临时 150 个含 3 文件子目录的根下测量：首次读取 18.350 ms；同根无变化 30 次中位 18.209／p95 19.776／最大 20.060 ms；24 层压缩目录 2.848 ms。其余在同一次实验真实创建、重命名、删除文件并观察文件树跟随，均通过。结果是原生模型扫描的计时，不是完整 App UI，且远端每目录 SSH 往返尚无获准主机测量；无法证明新增批协议具有净收益，因此**没有引入远端预取、mtime 缓存、watcher 或第二套树状态机**。临时基准测试已从正式测试目标移回忽略的实验目录。
+
+真正发现的正确性缺陷是：同路径／scope 换 SSH backend 时，旧 `rebuild` 可以把旧连接的项发布到当前树，且新连接必须排队等待旧连接返回。新增 `PanelContextTests.testFileTreeDoesNotPublishOldChannelAtSameRootAndScope` 在受控暂停旧、新 `list` 时先 Red (`p4-t4-channel-red.log`)，修复在 `FileTreeModel` 所有者中：目标或实际 backend 身份变化时递增单一遍历代次，允许新遍历开始，旧异步调用返回后立即停止，旧完成不能清掉新请求；同目标的事件仍由原来的 `rebuildPending` 合并。`p4-t4-channel-final.log` 验证新树不等旧通道且旧结果晚到不覆盖（Green）；增加同 backend 不同 root 异步切换测试，及真实 symlink 目录／悬空链接／自循环与压缩树正确性。
+
+继续追到用户入口发现：`PanelSyncQueue.run` 无条件等旧 `performSync` 结束，且多次事件只重复运行最初的闭包；即使模型正确，新目录仍可能等待旧 SSH 超时。`p4-t4-panel-queue-red.log` 在旧列表持续等待时切换 panel target，明确 Red（新目标不显示）。改为同一 `PanelContext.Identity` 合并最新动作、不同 identity 立即启动新任务并取消旧等待；旧任务结束不得重置新队列。`p4-t4-panel-queue-green.log` 在旧后端仍阻塞时完成新树并通过；另增加同目标末次事件保留测试。真实文件新增／重命名／删除、临时不可读根目录保持已有行，作为正式 FileTreeTests 回归。
+
+继续核对同路径、同 scope 更换 backend 的真实读写结果，发现另一条错误：旧已加载行和 inline draft 仍留在新连接，`commitDraft` 和 `rename` 只检查 scope/root，相同路径换通道时仍可能对旧 backend 写入或返回伪成功。`p4-t4-channel-operations-red2.log` 9 项中新增两例共 7 个断言 Red；`p4-t4-channel-operations-green.log` 两例及其余 7 项全部 Green。新连接先清除旧行和草稿，已有遍历代次也用于文件动作从元数据读取到真实写入／回传路径的身份校验；同连接临时读取失败仍保留原列表。没有终止用户连接或更改 SSH 协议；受控后端不构成真实远端 E2E。
+
+**最终复核：** `p4-t4-PanelContextTests-final.log` 9/9、`p4-t4-FileTreeTests-final.log` 7/7、`p4-t4-TreeRowHitTestingTests-final.log` 5/5、`p4-t4-RemoteCommandsTests-final.log` 10/10；`p4-t4-verified-full.log` **304 项、0 失败、3 个需专用主机的 SSH 跳过**。`p4-t4-verified-debug.log`、`p4-t4-verified-release.log` 均 BUILD SUCCEEDED，均严格 codesign 验签。补充的 PanelSyncQueue 目标切换先 Red 再 Green，文件草稿／创建／重命名跨 backend 旧目标写入亦先 Red 后 Green。`git diff --check` 无误。
+
+独立签名 Debug 实例使用 `--isolated-ui-test` 启动，PID 35438，窗口 96844；Peekaboo 4.6.0 具有 Accessibility／Screen Recording 权限并读到了文件选择按钮，但后台 AXPress 返回 `INTERACTION_FAILED`、`effect=unverifiable`，重新取树只得到 application-scoped partial semantics，无法确认真实点击或四区域滚动命中，因此**不能声称完整 App 菜单／键盘／滚动 E2E 通过**；其下层真实原生测试与受控功能测试另有证据。用户运行中 `/Applications/Kero.app` PID 18952 未被重启或操作。正式安装将当前签名 Debug App 在同磁盘暂存，验证后整包替换并严格验签，已安装二进制 SHA-256 为 `65cce98d1c311c4e934d20a9303af7f45ea449e21df2dacbf694450a1b5bdefb`，原进程未重启，安装并不等于新代码已在该进程生效。真实 SSH 需获准独立主机；当前不能以受控 actor 代替传输验收。
+
 ## 最终验证与未测范围
 
 T1 最终重验：`p4-t1-recheck.log` 的 GitStatusModelTests 16/0，`p4-t1-full-recheck.log` 全量 290 项、0 失败、3 项专用 SSH skipped，`p4-t1-build.log` 和 `p4-t1-release.log` 的 Debug／Release 构建与严格验签均通过。

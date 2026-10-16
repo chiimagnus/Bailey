@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P4-T3"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
@@ -119,18 +119,18 @@ note = "Red/Green真实 Git 命令，已知 index 仅 core+totals，分页只读
 [[tasks]]
 id = "P4-T3"
 title = "预聚合共享树状态装饰"
-status = "in_progress"
+status = "completed"
 plan = "plan-p4.md#p4-t3"
-commit = ""
-note = "全 entries 合法含同路径 tracked/untracked，不可 uniqueKeys；只替代逐行扫描，保留聚合语义。"
+commit = "cb1a245a78499c20d9a551bbdba1b36f5432558f"
+note = "同样本30轮：200目录中位14.876→0.690ms、1000文件22.654→3.027ms；修复删除文件/private路径规范化；四组定向37项、全量296项0失败3SSH跳过，Debug/Release签名通过，E2E/真SSH未测。"
 
 [[tasks]]
 id = "P4-T4"
 title = "验证并收敛文件树刷新成本"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t4"
-commit = ""
-note = "已有后台 list、相同 items 去重和两级合并不重做；只选实际主导分支。"
+commit = "618c77bc19e9876a8a4d4e76d0d0777ffe2f45c8"
+note = "外层PanelSyncQueue换目标不阻塞/保留最新事件，FileTreeModel换backend旧列表草稿清理与写前代次保护均实测Red→Green；本地150目录30轮中位18.209ms，无证据不加batch/cache；31项定向及304项全量0失败3SSH跳过，Debug/Release严格验签，正式Debug整包安装未重启用户；原生App AX点击不可验收/真SSH未测，详见evidence-p4。"
 
 [[tasks]]
 id = "P7-T1"
