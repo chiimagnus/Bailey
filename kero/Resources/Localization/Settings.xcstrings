@@ -71,16 +71,6 @@
         }
       }
     },
-    "Bark URL added" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已添加 Bark 推送链接"
-          }
-        }
-      }
-    },
     "Bark URL already exists" : {
       "localizations" : {
         "zh-Hans" : {
@@ -91,42 +81,12 @@
         }
       }
     },
-    "Bark URL removed" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已移除 Bark 推送链接"
-          }
-        }
-      }
-    },
     "Bark accepted %lld of %lld pushes" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Bark 已接受 %lld/%lld 条推送请求"
-          }
-        }
-      }
-    },
-    "Bark is enabled" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bark 已启用"
-          }
-        }
-      }
-    },
-    "Bark is not configured" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "尚未配置 Bark"
           }
         }
       }
