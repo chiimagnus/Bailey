@@ -62,8 +62,7 @@ struct SyntaxHighlightPlugin: STPlugin {
             coordinator.didChangeContent(
                 textView.textContentManager,
                 in: range,
-                delta: replacementString.utf16.count - range.length,
-                limit: textView.textContentManager.length
+                replacementString: replacementString
             )
         }
 
@@ -124,6 +123,7 @@ final class SyntaxHighlightCoordinator {
     private let language: SyntaxLanguage
     private let tsLanguage: SwiftTreeSitter.Language
     let tsClient: TreeSitterClient
+    private let coordinates: TextCoordinateIndex
     private let highlightsData: Data
     /// Injections query bytes for the root language, or `nil` when it embeds no
     /// other languages. Non-nil selects the injection-aware token provider.
@@ -146,24 +146,11 @@ final class SyntaxHighlightCoordinator {
         self.injectionsData = injectionsData
         tsLanguage = Language(language: language.parser)
 
-        // Weak throughout: this coordinator is reachable from the text view
-        // (view → plugins → events → coordinator), so any strong capture of
-        // the view here closes a retain cycle. See `SyntaxHighlightPlugin.setUp`.
-        tsClient = try! TreeSitterClient(language: tsLanguage) { [weak textView] codePointIndex in
-            guard let textView, codePointIndex >= 0 else { return nil }
-            let string = textView.textContentManager.attributedString(in: nil)?.string ?? ""
-            guard codePointIndex <= string.utf16.count else { return nil }
-            var row = 0
-            var column = 0
-            for unit in string.utf16.prefix(codePointIndex) {
-                if unit == 10 {
-                    row += 1
-                    column = 0
-                } else {
-                    column += 2
-                }
-            }
-            return Point(row: row, column: column)
+        let string = textView.textContentManager.attributedString(in: nil)?.string ?? ""
+        let coordinates = TextCoordinateIndex(string)
+        self.coordinates = coordinates
+        tsClient = try! TreeSitterClient(language: tsLanguage) { codePointIndex in
+            coordinates.point(at: codePointIndex)
         }
 
         tsClient.invalidationHandler = { [weak self] indexSet in
@@ -192,7 +179,7 @@ final class SyntaxHighlightCoordinator {
             in: .zero,
             delta: textView.textContentManager.length,
             limit: textView.textContentManager.length,
-            readHandler: Parser.readFunction(for: textView.textContentManager.attributedString(in: nil)?.string ?? ""),
+            readHandler: Parser.readFunction(for: string),
             completionHandler: {}
         )
 
@@ -437,13 +424,15 @@ final class SyntaxHighlightCoordinator {
         tsClient.willChangeContent(in: range)
     }
 
-    func didChangeContent(_ textContentManager: NSTextContentManager, in range: NSRange, delta: Int, limit: Int) {
+    func didChangeContent(_ textContentManager: NSTextContentManager, in range: NSRange, replacementString: String) {
         guard let string = textContentManager.attributedString(in: nil)?.string else { return }
+        coordinates.replace(in: range, with: replacementString)
+        let delta = replacementString.utf16.count - range.length
         highlighter?.didChangeContent(in: range, delta: delta)
         tsClient.didChangeContent(
             in: range,
             delta: delta,
-            limit: limit,
+            limit: string.utf16.count,
             readHandler: Parser.readFunction(for: string),
             completionHandler: {}
         )
