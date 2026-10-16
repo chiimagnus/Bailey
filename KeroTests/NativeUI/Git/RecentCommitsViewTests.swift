@@ -234,9 +234,9 @@ final class RecentCommitsViewTests: XCTestCase {
         let localMenu = String(localized: "Rename Branch…", table: "Git")
         let remoteMenu = String(localized: "Delete Remote Branch…", table: "Git")
         for (name, x, expected, excluded) in [
-            ("main", CGFloat(315), localMenu, remoteMenu),
-            ("origin/main", CGFloat(354), remoteMenu, localMenu),
-            ("upstream/main", CGFloat(402), remoteMenu, localMenu),
+            ("main", CGFloat(65), localMenu, remoteMenu),
+            ("origin/main", CGFloat(103), remoteMenu, localMenu),
+            ("upstream/main", CGFloat(141), remoteMenu, localMenu),
         ] {
             let point = NSPoint(x: x, y: height - 12)
             click(point, in: window)
@@ -520,8 +520,7 @@ final class RecentCommitsViewTests: XCTestCase {
                 .background(Color(nsColor: Theme.sidebar)))
             window.orderFront(nil)
             settle()
-            let gutter = max(41, 37 * scale)
-            let titlePoint = NSPoint(x: gutter + 18, y: height - 14 * scale)
+            let titlePoint = NSPoint(x: width - 45, y: height - 14 * scale)
             click(titlePoint, in: window)
             XCTAssertTrue(selection.expanded.contains(commit.hash),
                           "Commit title must remain clickable at width \(width)")
@@ -548,7 +547,7 @@ final class RecentCommitsViewTests: XCTestCase {
             let window = hostHistory([commit], selection: selection, height: height)
             defer { window.close() }
             let event = try XCTUnwrap(NSEvent.mouseEvent(
-                with: .rightMouseDown, location: NSPoint(x: 216, y: height - 12),
+                with: .rightMouseDown, location: NSPoint(x: 70, y: height - 12),
                 modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil, eventNumber: 0,
                 clickCount: 1, pressure: 1))
@@ -572,7 +571,7 @@ final class RecentCommitsViewTests: XCTestCase {
         let height: CGFloat = 110
         let window = hostHistory([commit], selection: selection, height: height)
         defer { window.close() }
-        let point = NSPoint(x: 216, y: height - 12)
+        let point = NSPoint(x: 70, y: height - 12)
         let event = try XCTUnwrap(NSEvent.mouseEvent(
             with: .rightMouseDown, location: point,
             modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
@@ -636,7 +635,7 @@ final class RecentCommitsViewTests: XCTestCase {
         let height: CGFloat = 180
         let window = hostHistory([commit], selection: selection, height: height)
         defer { window.close() }
-        let tagPoint = NSPoint(x: 216, y: height - 12)
+        let tagPoint = NSPoint(x: 70, y: height - 12)
         click(tagPoint, in: window)
         XCTAssertTrue(selection.expanded.contains(commit.hash),
                       "Tag badge should locate the tagged commit")

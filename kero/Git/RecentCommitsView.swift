@@ -226,14 +226,26 @@ struct RecentCommitsView: View {
             leadingInset: gutter, trailingInset: TreeRowStyle.contentInset,
             showsGuides: false,
             height: max(36, ceil(38 * fontScale))
-        ) { _, layout in
+        ) { hovering, layout in
             VStack(alignment: .leading, spacing: 2 * fontScale) {
                 HStack(spacing: 4 * fontScale) {
+                    if let stash = commit.stash {
+                        stashBadge(stash, in: commit, color: GitGraphPalette.color(graph.node.color))
+                            .layoutPriority(1)
+                    } else if !commit.references.isEmpty {
+                        referenceStrip(commit.references, commit: commit,
+                                       color: GitGraphPalette.color(graph.node.color))
+                            .layoutPriority(1)
+                    }
                     Button { toggle(commit) } label: {
                         ScrollView(.horizontal) {
                             Text(verbatim: commit.subject)
                                 .font(.system(size: 12.5 * fontScale))
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(
+                                    commit.stash == nil && commit.parentHashes.count > 1
+                                        && !hovering && !expanded
+                                        ? Color.primary.opacity(0.55) : Color.primary
+                                )
                                 .fixedSize(horizontal: true, vertical: false)
                         }
                         .scrollIndicators(.hidden)
@@ -247,14 +259,6 @@ struct RecentCommitsView: View {
                     .accessibilityValue(expanded
                         ? String(localized: "Expanded", table: "Git")
                         : String(localized: "Collapsed", table: "Git"))
-                    if let stash = commit.stash {
-                        stashBadge(stash, in: commit, color: GitGraphPalette.color(graph.node.color))
-                            .layoutPriority(1)
-                    } else if !commit.references.isEmpty {
-                        referenceStrip(commit.references, commit: commit,
-                                       color: GitGraphPalette.color(graph.node.color))
-                            .layoutPriority(1)
-                    }
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -272,7 +276,7 @@ struct RecentCommitsView: View {
                     .accessibilityLabel(String(localized: "Copy Commit Hash", table: "Git"))
 
                     Text(verbatim: commit.author)
-                        .font(.system(size: 11 * fontScale, design: .serif).italic())
+                        .font(.system(size: 11 * fontScale))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
