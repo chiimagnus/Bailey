@@ -609,6 +609,66 @@ final class GitStatusModelTests: XCTestCase {
         }
     }
 
+    func testReplacingSSHChannelKeepsCachedGitReadOnlyUntilCoreIsVerified() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [
+            ["init", "-q"], ["config", "user.name", "SSH Verification"],
+            ["config", "user.email", "ssh-verification@invalid"],
+            ["config", "commit.gpgsign", "false"]
+        ] {
+            let run = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(run.status, 0, run.stderr)
+        }
+        let file = directory.appendingPathComponent("tracked.txt")
+        try Data("baseline".utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", "."], in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: directory.path).status, 0)
+        try Data("changed".utf8).write(to: file)
+        let oldChannel = DiscardRemoteWorkspaceFixture()
+        let newChannel = DiscardRemoteWorkspaceFixture()
+        defer { Task { await newChannel.releaseGitRequest() } }
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: oldChannel, scope: "ssh:verification")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let pending = try XCTUnwrap(model.changedEntries.first)
+        XCTAssertTrue(model.isCurrent(model.actionTarget()))
+
+        await newChannel.suspendNextGitRequest()
+        model.sync(root: directory.path, backend: newChannel, scope: "ssh:verification")
+        let deadline = Date().addingTimeInterval(5)
+        while await !newChannel.awaitingGit, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let suspended = await newChannel.awaitingGit
+        XCTAssertTrue(suspended)
+        XCTAssertEqual(model.changedEntries.map(\.path), ["tracked.txt"])
+        XCTAssertFalse(model.isCurrent(model.actionTarget()),
+                       "A new SSH channel is not yet verified and cannot write from old Git status")
+        model.stage(pending)
+        XCTAssertFalse(model.isBusy)
+        XCTAssertEqual(GitCommandExecution.run(["diff", "--cached", "--name-only"], in: directory.path).stdout, "")
+        await newChannel.releaseGitRequest()
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.isCurrent(model.actionTarget()))
+
+        // Reopening the same repo from the remembered snapshot must also
+        // remain read-only until the restored checkout is freshly verified.
+        model.sync(root: "", backend: newChannel, scope: "ssh:verification")
+        await newChannel.suspendNextGitRequest()
+        model.sync(root: directory.path, backend: newChannel, scope: "ssh:verification")
+        XCTAssertEqual(model.changedEntries.map(\.path), ["tracked.txt"])
+        XCTAssertFalse(model.isCurrent(model.actionTarget()))
+        let reopenDeadline = Date().addingTimeInterval(5)
+        while await !newChannel.awaitingGit, Date() < reopenDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await newChannel.releaseGitRequest()
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.isCurrent(model.actionTarget()))
+    }
+
     func testReplacingSSHBackendDoesNotWaitForStaleGitWorker() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

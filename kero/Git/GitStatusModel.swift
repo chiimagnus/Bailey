@@ -6,12 +6,15 @@
 import Dispatch
 import Foundation
 import Observation
+import OSLog
 
 /// Loads repository state in response to explicit UI events and performs
 /// source-control operations without blocking the UI.
 @MainActor
 @Observable
 final class GitStatusModel {
+    private nonisolated static let statusLogger = Logger(subsystem: "chiimagnus.kero", category: "GitStatus")
+
     nonisolated struct Entry: Identifiable, Equatable, Sendable {
         var id: String { path }
         /// Relative to the repository root, as porcelain v2 reports it.
@@ -113,7 +116,7 @@ final class GitStatusModel {
     }
 
     func isCurrent(_ target: ActionTarget, requiresStableHead: Bool = true) -> Bool {
-        hasResolvedPanelTarget && isRepo && statusError == nil
+        canUseCurrentStatus && isRepo
             && target.generation == contextGeneration && target.repository == repoRoot
             && target.scope == currentScope
             && (!requiresStableHead || (target.head == headOID && target.branch == branch))
@@ -471,6 +474,12 @@ final class GitStatusModel {
     /// instead of flashing a loading placeholder.
     private(set) var hasResolvedStatus = false
     private(set) var statusError: String?
+    /// A cached snapshot or a previous SSH channel is display-only until the
+    /// new core status proves its repository, refs and operation state.
+    private(set) var needsCoreVerification = false
+    var canUseCurrentStatus: Bool {
+        hasResolvedPanelTarget && !needsCoreVerification && statusError == nil
+    }
     /// An optional Git history or metadata query failed; core status remains usable.
     private(set) var detailError: String?
     /// True while a user-initiated Git operation runs.
@@ -555,7 +564,7 @@ final class GitStatusModel {
     }
 
     func isCurrent(_ entry: Entry) -> Bool {
-        hasResolvedPanelTarget && entry.repositoryRoot == repoRoot
+        canUseCurrentStatus && entry.repositoryRoot == repoRoot
             && entry.snapshotGeneration == contextGeneration
             && entry.snapshotBranch == branch && entry.snapshotHeadOID == headOID
     }
@@ -666,6 +675,7 @@ final class GitStatusModel {
             if let cachedStatus = cachedStatusByRoot[scopedRoot] {
                 apply(cachedStatus)
                 hasResolvedStatus = true
+                needsCoreVerification = true
             }
         } else if channelChanged {
             // A new SSH channel must not queue behind a worker stalled on the
@@ -673,6 +683,7 @@ final class GitStatusModel {
             contextGeneration &+= 1
             stashFilesByOID = [:]
             invalidateStatusRefresh()
+            needsCoreVerification = true
         }
         refresh()
     }
@@ -723,7 +734,8 @@ final class GitStatusModel {
             guard let model = self else { return }
             let result = await Task.detached(priority: .utility) {
                 await Self.runGitStatus(
-                    in: root, recentCommitLimit: commitLimit, backend: backend
+                    in: root, recentCommitLimit: commitLimit, backend: backend,
+                    requestID: requestID
                 ) { partial in
                     await MainActor.run {
                         guard model.contextGeneration == generation,
@@ -899,7 +911,7 @@ final class GitStatusModel {
 
     /// Native local confirmation opens immediately, with no new loading state.
     func prepareLocalDiscard(_ entries: [Entry]) -> [PendingDiscard] {
-        guard backend is LocalWorkspaceBackend, isRepo, statusError == nil else { return [] }
+        guard backend is LocalWorkspaceBackend, isRepo, canUseCurrentStatus else { return [] }
         let context = discardContext
         return entries.filter { isCurrent($0) && changedEntries.contains($0) }.map { entry in
             let fingerprints = Dictionary(uniqueKeysWithValues: discardPaths(for: entry).map {
@@ -913,7 +925,7 @@ final class GitStatusModel {
     /// the Mac. The context must still match the identity held before awaits.
     func prepareRemoteDiscard(_ entries: [Entry]) async throws -> [PendingDiscard] {
         let selectedBackend = backend
-        guard !(selectedBackend is LocalWorkspaceBackend), isRepo, statusError == nil, !entries.isEmpty else {
+        guard !(selectedBackend is LocalWorkspaceBackend), isRepo, canUseCurrentStatus, !entries.isEmpty else {
             throw DiscardReviewError.stale
         }
         let context = discardContext
@@ -937,7 +949,7 @@ final class GitStatusModel {
     }
 
     private func isReviewedDiscardCurrent(_ review: PendingDiscard) -> Bool {
-        isRepo && statusError == nil && !isBusy && discardContext == review.context
+        isRepo && canUseCurrentStatus && !isBusy && discardContext == review.context
             && isCurrent(review.entry) && changedEntries.contains(review.entry)
     }
 
@@ -1102,7 +1114,7 @@ final class GitStatusModel {
     /// by an agent while the dialog is open from joining a bulk destructive action.
     func discardChanges(_ entries: [Entry]) {
         guard !entries.isEmpty else { return }
-        guard statusError == nil, entries.allSatisfy(isCurrent) else {
+        guard entries.allSatisfy(isCurrent) else {
             cancelStaleDiscard()
             return
         }
@@ -2022,7 +2034,7 @@ final class GitStatusModel {
     }
 
     private func validate(_ entry: Entry) -> Bool {
-        guard statusError == nil, isCurrent(entry) else {
+        guard isCurrent(entry) else {
             failImmediately(String(localized: "Repository changed; refresh and try the Git action again", table: "Git"))
             return false
         }
@@ -2046,7 +2058,7 @@ final class GitStatusModel {
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
         completion: (@MainActor (Bool) -> Void)? = nil
     ) {
-        if !hasResolvedPanelTarget || statusError != nil || (directory == nil && !isRepo) {
+        if !canUseCurrentStatus || (directory == nil && !isRepo) {
             failImmediately(
                 String(localized: "Repository changed; review the current directory and try the Git action again.", table: "Git"),
                 completion: completion
@@ -2382,7 +2394,7 @@ final class GitStatusModel {
     }
 
     private func trash(paths: [String], label: String, completedBefore: String? = nil) {
-        guard !paths.isEmpty, !isBusy, statusError == nil else { return }
+        guard !paths.isEmpty, !isBusy, canUseCurrentStatus else { return }
         let base = URL(fileURLWithPath: repoRoot, isDirectory: true)
         let expectedRepositoryRoot = repoRoot
         let expectedHeadOID = headOID
@@ -2661,6 +2673,7 @@ final class GitStatusModel {
         lastError = failedError
         statusError = nil
         detailError = nil
+        needsCoreVerification = false
         statusRequestID &+= 1
         if !preserveIdentity { repositoryIdentity = "" }
     }
@@ -2693,6 +2706,7 @@ final class GitStatusModel {
     }
 
     private func applyRepository(_ result: StatusResult) {
+        needsCoreVerification = false
         let sameRepository = isRepo && topLevel == result.topLevel
         isRepo = true
         branch = result.branch
@@ -2790,8 +2804,17 @@ final class GitStatusModel {
         in root: String,
         recentCommitLimit: Int,
         backend: WorkspaceBackend,
+        requestID: UInt,
         publishCore: @Sendable (StatusResult) async -> Void
     ) async -> StatusLoadResult {
+        let started = ProcessInfo.processInfo.systemUptime
+        let remote = !(backend is LocalWorkspaceBackend)
+        var phase = "core"
+        var outcome = "failed"
+        defer {
+            let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)
+            Self.statusLogger.debug("refresh id=\(requestID, privacy: .public) remote=\(remote, privacy: .public) phase=\(phase, privacy: .public) result=\(outcome, privacy: .public) elapsed_ms=\(elapsed, privacy: .public)")
+        }
         // A filesystem, Git helper, or corrupt repository must not leave the
         // initial sidebar spinner running forever. Share one deadline across
         // the full snapshot instead of allowing every detail command its own
@@ -2902,6 +2925,10 @@ final class GitStatusModel {
             return .failed(error.localizedDescription)
         }
 
+        phase = "details"
+        outcome = "partial"
+        let coreMs = Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)
+        Self.statusLogger.debug("core ready id=\(requestID, privacy: .public) remote=\(remote, privacy: .public) elapsed_ms=\(coreMs, privacy: .public)")
         await publishCore(result)
 
         // History, stashes and additions are independent of the minimal
@@ -2982,6 +3009,7 @@ final class GitStatusModel {
             }
         }
         result.detailsComplete = true
+        outcome = result.detailError == nil ? "complete" : "degraded"
         return .repository(result)
     }
 
