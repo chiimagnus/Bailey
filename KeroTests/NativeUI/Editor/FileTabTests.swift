@@ -26,11 +26,12 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
     init(path: String, contents: Data) { files = [path: contents] }
 
     func pauseOneRead() { nextReadPaused = true }
-    func finishRead(with data: Data) {
+    func finishRead(with data: Data? = nil) {
         guard !reading.isEmpty else { return }
         let continuation = reading.removeFirst()
         if reading.isEmpty { readingPath = nil }
-        continuation.resume(returning: data)
+        if let data { continuation.resume(returning: data) }
+        else { continuation.resume(throwing: Rejection.simulated) }
     }
     func finishWrite(failing: Bool = false) {
         guard let pending = writing else { return }
@@ -469,6 +470,15 @@ final class FileTabTests: XCTestCase {
             return false
         }
         let before = await backend.readCount
+        let revision = file.reloadRevision
+        await backend.pauseOneRead()
+        file.refreshWhenSelected()
+        try await wait { await backend.pendingReadCount == 1 }
+        await backend.finishRead()
+        try await Task.sleep(for: .milliseconds(60))
+        if case .image = file.content {} else { XCTFail("Transient read failure must keep preview") }
+        XCTAssertNotNil(file.reloadError)
+        XCTAssertEqual(file.reloadRevision, revision)
         await backend.replace(path: path, with: Data("external text".utf8))
         let unrelated = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
         unrelated.isReleasedWhenClosed = false
@@ -476,11 +486,216 @@ final class FileTabTests: XCTestCase {
         NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: unrelated)
         try await Task.sleep(for: .milliseconds(30))
         let afterUnrelated = await backend.readCount
-        XCTAssertEqual(afterUnrelated, before, "Other windows must not reload this image")
+        XCTAssertEqual(afterUnrelated, before + 1, "Other windows must not reload this image")
         NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
         try await wait { file.text == "external text" }
         let afterOwn = await backend.readCount
-        XCTAssertEqual(afterOwn, before + 1)
+        XCTAssertEqual(afterOwn, before + 2)
+        XCTAssertNil(file.reloadError)
+    }
+
+    func testRepeatedWindowFocusCoalescesInFlightCleanRefresh() async throws {
+        let path = "/fixture/\(UUID().uuidString)-focus.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        await backend.pauseOneRead()
+        file.refreshWhenSelected()
+        try await wait { await backend.pendingReadCount == 1 }
+        await backend.replace(path: path, with: Data("updated".utf8))
+        for _ in 0..<12 { file.refreshWhenSelected() }
+        try await Task.sleep(for: .milliseconds(100))
+        let reads = await backend.readCount
+        await backend.finishRead(with: Data("original".utf8))
+        try await wait { file.text == "updated" }
+        let total = await backend.readCount
+        XCTAssertEqual(reads, 2, "Repeated activation must reuse the pending disk read")
+        XCTAssertEqual(total, 3, "One follow-up read must observe later changes without a refresh storm")
+        XCTAssertEqual(file.text, "updated")
+    }
+
+    func testQueuedRefreshCannotResurrectAfterDirtyEdit() async throws {
+        let path = "/fixture/\(UUID().uuidString)-edit.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        await backend.pauseOneRead()
+        file.refreshWhenSelected()
+        try await wait { await backend.pendingReadCount == 1 }
+        file.refreshWhenSelected()
+        file.text = "user draft"
+        file.refreshDirtyState()
+        await backend.finishRead(with: Data("late disk snapshot".utf8))
+        try await Task.sleep(for: .milliseconds(70))
+        XCTAssertEqual(file.text, "user draft")
+        XCTAssertTrue(file.isDirty)
+        let reads = await backend.readCount
+        XCTAssertEqual(reads, 2)
+    }
+
+    func testQueuedRefreshCannotResurrectAfterSSHDisconnect() async throws {
+        let path = "/fixture/\(UUID().uuidString)-ssh.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
+        let file = FileTab(path: path, backend: backend,
+                           workspaceIdentity: "ssh:fixture-\(UUID().uuidString)")
+        try await file.waitForText()
+        await backend.pauseOneRead()
+        file.refreshWhenSelected()
+        try await wait { await backend.pendingReadCount == 1 }
+        file.refreshWhenSelected()
+        file.rebindWorkspace(to: nil)
+        await backend.finishRead(with: Data("late disconnected data".utf8))
+        try await Task.sleep(for: .milliseconds(70))
+        XCTAssertEqual(file.text, "original")
+        XCTAssertNotNil(file.readOnlyReason)
+        let reads = await backend.readCount
+        XCTAssertEqual(reads, 2, "Old pending focus must not retry over a disconnected channel")
+        file.rebindWorkspace(to: backend)
+        try await file.waitForText()
+        XCTAssertNil(file.readOnlyReason)
+        XCTAssertEqual(file.text, "original")
+        let recoveredCount = await backend.readCount
+        XCTAssertEqual(recoveredCount, 3)
+    }
+
+    func testTransientCleanRefreshErrorPreservesLoadedTextAndRecovers() async throws {
+        let path = "/fixture/\(UUID().uuidString)-transient.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        let revision = file.reloadRevision
+        await backend.pauseOneRead()
+        file.refreshWhenSelected()
+        try await wait { await backend.pendingReadCount == 1 }
+        await backend.finishRead()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(file.text, "original", "A transient refresh failure cannot erase a loaded preview")
+        if case .text = file.content {} else { XCTFail("A loaded document must survive a transient read error") }
+        XCTAssertEqual(file.reloadRevision, revision)
+        XCTAssertNotNil(file.reloadError, "Stale cached content must be visibly identified")
+        await backend.replace(path: path, with: Data("recovered".utf8))
+        file.refreshWhenSelected()
+        try await file.waitForText()
+        XCTAssertEqual(file.text, "recovered")
+        XCTAssertNil(file.reloadError)
+        try await backend.rename(from: path, to: path + ".gone")
+        file.refreshWhenSelected()
+        try await wait { if case .unavailable = file.content { return true }; return false }
+        XCTAssertEqual(file.text, "", "A genuinely removed file must not masquerade as loaded data")
+        XCTAssertNil(file.reloadError)
+    }
+
+    func testAppendRejectsStaleCachedTextWhenFreshReadFails() async throws {
+        let path = "/fixture/\(UUID().uuidString)-ignore.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("old-rule\n".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        await backend.pauseOneRead()
+        let append = Task {
+            try await file.waitForTextBeforeAppending()
+            file.appendText("/unsafe\n")
+        }
+        try await wait { await backend.pendingReadCount == 1 }
+        await backend.finishRead()
+        do {
+            try await append.value
+            XCTFail("A failed freshness check must not silently save stale .gitignore rules")
+        } catch {}
+        XCTAssertEqual(file.text, "old-rule\n")
+        XCTAssertFalse(file.isDirty)
+        let unchanged = await backend.data(at: path)
+        XCTAssertEqual(unchanged, Data("old-rule\n".utf8))
+        await backend.replace(path: path, with: Data("external-rule\n".utf8))
+        try await file.waitForTextBeforeAppending()
+        file.appendText("/safe\n")
+        XCTAssertEqual(file.text, "external-rule\n/safe\n")
+        XCTAssertTrue(file.isDirty)
+    }
+
+    func testFailedRefreshBlocksStaleWritesUntilSuccessfulRetry() async throws {
+        let path = "/fixture/\(UUID().uuidString)-protected.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        await backend.pauseOneRead()
+        file.refreshWhenSelected()
+        try await wait { await backend.pendingReadCount == 1 }
+        await backend.finishRead()
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertNotNil(file.reloadError)
+        file.text = "stale edit"
+        file.refreshDirtyState()
+        let attempted = Task { await file.save() }
+        try await Task.sleep(for: .milliseconds(100))
+        let unexpectedWrite = await backend.writingPath
+        if unexpectedWrite != nil { await backend.finishWrite(failing: true) }
+        await attempted.value
+        XCTAssertNil(unexpectedWrite, "A stale preview must not initiate a disk write")
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.reloadError)
+        let unchanged = await backend.data(at: path)
+        XCTAssertEqual(unchanged, Data("original".utf8), "Refresh failure must block a stale write")
+        file.text = "original"
+        file.refreshDirtyState()
+        file.refreshWhenSelected()
+        try await file.waitForText()
+        XCTAssertNil(file.reloadError)
+        file.text = "new edit"
+        file.refreshDirtyState()
+        let saved = Task { await file.save() }
+        try await wait { await backend.writingPath == path }
+        await backend.finishWrite()
+        await saved.value
+        XCTAssertFalse(file.isDirty)
+        let result = await backend.data(at: path)
+        XCTAssertEqual(result, Data("new edit".utf8))
+    }
+
+    func testNativeEditorSurvivesTransientRefreshFailureWithUndo() async throws {
+        let path = "/fixture/\(UUID().uuidString)-native.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 750, height: 480),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.mountedEditor(in: host) != nil
+        }
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        try await Task.sleep(for: .milliseconds(50))
+        let revision = file.reloadRevision
+        await backend.pauseOneRead()
+        file.refreshWhenSelected()
+        try await wait { await backend.pendingReadCount == 1 }
+        await backend.finishRead()
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(file.reloadRevision, revision)
+        XCTAssertTrue(mountedEditor(in: host) === editor)
+        XCTAssertEqual(editor.text, "original")
+        XCTAssertNotNil(file.reloadError)
+        guard !editor.isEditable else {
+            return XCTFail("A stale cached editor must stay read-only until a successful refresh")
+        }
+        editor.setAccessibilityValue("attempt overwrite")
+        XCTAssertEqual(file.text, "original")
+        file.refreshWhenSelected()
+        try await file.waitForText()
+        try await wait { host.layoutSubtreeIfNeeded(); return file.reloadError == nil && editor.isEditable }
+        XCTAssertTrue(mountedEditor(in: host) === editor)
+        editor.insertText("hello ", replacementRange: NSRange(location: 0, length: 0))
+        editor.breakUndoCoalescing()
+        XCTAssertEqual(file.text, "hello original")
+        editor.undoManager?.undo()
+        XCTAssertEqual(file.text, "original")
+        XCTAssertFalse(file.isDirty)
+        file.autoSaveSuspendedForClose = true
     }
 
     func testWindowActivationDoesNotRestartInFlightInitialRead() async throws {

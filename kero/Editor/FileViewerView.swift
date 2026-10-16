@@ -46,6 +46,7 @@ final class FileTab: nonisolated Identifiable {
 
     private(set) var isDirty = false
     var saveError: String?
+    private(set) var reloadError: String?
     /// Why this file cannot be written, or nil while it is writable. Set when
     /// the remote machine it lives on is no longer reachable.
     private(set) var readOnlyReason: String?
@@ -67,6 +68,7 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored private var imageFingerprint: Int?
     @ObservationIgnored private var reloadGeneration: UInt = 0
     @ObservationIgnored private var reloadTask: Task<Void, Never>?
+    @ObservationIgnored private var refreshPending = false
     /// A previously requested read must resume after reconnect; restored tabs
     /// that no consumer has touched must remain lazy.
     @ObservationIgnored private var hasReadDemand = false
@@ -128,6 +130,11 @@ final class FileTab: nonisolated Identifiable {
             reloadFromDiskIfClean()
         }
         try await waitForText()
+        if let reloadError {
+            throw NSError(domain: "Kero.Editor", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: reloadError,
+            ])
+        }
     }
 
     func loadIfNeeded() {
@@ -147,6 +154,8 @@ final class FileTab: nonisolated Identifiable {
         }
         if case .loading = content {
             loadIfNeeded()
+        } else if reloadTask != nil {
+            refreshPending = true
         } else {
             reloadFromDiskIfClean()
         }
@@ -280,6 +289,7 @@ final class FileTab: nonisolated Identifiable {
             saveError = readOnlyReason
             return
         }
+        guard reloadError == nil else { return }
         invalidateReload()
         let written = text
         let savedPath = path
@@ -292,6 +302,7 @@ final class FileTab: nonisolated Identifiable {
             // An edit landing while the write was in flight stays dirty.
             refreshDirtyState()
             saveError = nil
+            reloadError = nil
         } catch {
             guard generation == targetGeneration else { return }
             saveError = error.localizedDescription
@@ -307,6 +318,7 @@ final class FileTab: nonisolated Identifiable {
         // what the user was looking at. The banner already says why.
         guard readOnlyReason == nil, !isDirty else { return }
         hasReadDemand = true
+        refreshPending = false
         reloadTask?.cancel()
         reloadGeneration &+= 1
         let generation = reloadGeneration
@@ -315,13 +327,36 @@ final class FileTab: nonisolated Identifiable {
         let backend = self.backend
         reloadTask = Task { [weak self] in
             defer {
-                if self?.reloadGeneration == generation { self?.reloadTask = nil }
+                if let self, self.reloadGeneration == generation {
+                    self.reloadTask = nil
+                    if self.refreshPending {
+                        self.refreshPending = false
+                        self.reloadFromDiskIfClean()
+                    }
+                }
             }
             let loaded: LoadedContent
             do {
                 let (data, decoded) = try await Self.readContent(path: expectedPath, backend: backend)
                 loaded = Self.loadedContent(path: expectedPath, data: data, decoded: decoded)
             } catch {
+                let missingOrOversized: Bool
+                switch error {
+                case WorkspaceError.notFound, WorkspaceError.tooLarge: missingOrOversized = true
+                default: missingOrOversized = false
+                }
+                if !missingOrOversized, let self,
+                   self.reloadGeneration == generation, !self.isDirty, self.readOnlyReason == nil {
+                    switch self.content {
+                    case .text, .image:
+                        self.reloadError = String(
+                            localized: "Could not refresh file; showing last loaded content.",
+                            table: "Editor"
+                        )
+                        return
+                    case .loading, .unavailable: break
+                    }
+                }
                 let reason: String
                 if case WorkspaceError.tooLarge = error {
                     reason = String(localized: "File is too large to open", table: "Workspace")
@@ -339,6 +374,7 @@ final class FileTab: nonisolated Identifiable {
                   self.readOnlyReason == nil
             else { return }
 
+            self.reloadError = nil
             guard !self.matches(loaded) else { return }
             self.editorCoordinator = nil
             self.content = loaded.content
@@ -351,6 +387,7 @@ final class FileTab: nonisolated Identifiable {
     }
 
     private func invalidateReload() {
+        refreshPending = false
         reloadTask?.cancel()
         reloadTask = nil
         reloadGeneration &+= 1
@@ -453,8 +490,11 @@ struct FileViewerView: View {
                         RemoteReadOnlyBanner(message: reason)
                             .frame(height: 22)
                     }
+                    if let error = file.reloadError {
+                        errorBar(error)
+                    }
                     if let error = file.saveError {
-                        saveErrorBar(error)
+                        errorBar(String(localized: "Could not save: \(error)", table: "Editor"))
                     }
                     SourceTextEditor(
                         file: file,
@@ -467,9 +507,14 @@ struct FileViewerView: View {
                     .id(file.reloadRevision)
                 }
             case .image(let image):
-                ScrollView([.horizontal, .vertical]) {
-                    Image(nsImage: image)
-                        .padding(16)
+                VStack(spacing: 0) {
+                    if let error = file.reloadError {
+                        errorBar(error)
+                    }
+                    ScrollView([.horizontal, .vertical]) {
+                        Image(nsImage: image)
+                            .padding(16)
+                    }
                 }
             case .loading:
                 Color.clear
@@ -495,11 +540,11 @@ struct FileViewerView: View {
         }
     }
 
-    private func saveErrorBar(_ message: String) -> some View {
+    private func errorBar(_ message: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 10))
-            Text(String(localized: "Could not save: \(message)", table: "Editor"))
+            Text(message)
                 .font(.system(size: 11))
                 .lineLimit(1)
             Spacer(minLength: 0)
