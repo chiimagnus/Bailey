@@ -2,7 +2,7 @@
 
 **目标：** 原生 Diff 的行／范围正确，读取不吞失败或卡住加载，再减少真实首屏、滚动和编辑成本。
 **不做：** 恢复 Pierre／WebKit／JS、移植旧 hash 修复、增加新差异引擎、永久 blob cache 或全项目多文件 Diff。
-**前置／顺序：** P1；T1 初步归因 → T2 分行契约 → T3 读取收尾 → T4 选中性能措施。测 CRLF 正确结果须用 T2 修复后基线，不能把错误少算行当提速。
+**前置／顺序：** P1 与 P7 的插件 Gate／条件迁移完成后才开始本阶段；用户要求先处理插件，暂不执行 Git Diff 算法优化。T1 初步归因 → T2 分行契约 → T3 读取收尾 → T4 选中性能措施。测 CRLF 正确结果须用 T2 修复后基线，不能把错误少算行当提速。
 **验收：** 五种 Source、Unicode／容量／失败／编辑与重挂载正确；采用优化有可复核的首屏与工作量对照。
 
 现有 DiffTab 拥有 nativeSurface。refreshWhenSelected 跳过历史／首次在途，但 Project.openDiff/openHistoricalDiff 复用分支仍直接 reload；不能把“导航选回”与“再次点击 Git 行”混为一谈。保存、只读和源身份不可删；不要把 5 MiB 显示上限和 review 离线高亮 1,500,000 字节策略混淆。

@@ -40,6 +40,14 @@ macOS 27.2（26B5101f），MacBookPro18,3／arm64；Xcode beta 27.0（27A5209h�
 
 独立第一轮当前样本期间采了精确 XCTest PID 802 的5秒 sample（`p4-current-sample.txt`）；该轮 `p4-current-performance.log` 不作为无干扰 p95 对照。采样中主线程主要在测试 RunLoop 等待，Git／IO 不在主 actor。Instruments 的既有 beta 签名限制仍在，不用 sample 冒充 Allocations／RSS。
 
+## T2：按已知动作消除重复刷新工作
+
+先读取真实 `refresh/perform/loadMoreCommits` 和 Ref、Stash、log、numstat 的调用路径。使用固定 P1 仓库，各命令 30 次独立执行（当前 Mac、重复访问；仅判断重复工作成本，不冒充 App 可见延迟）：`git-many` 的 status／numstat／history／refs／stash 中位分别约 25.855／94.879／18.169／17.398／16.626 ms，`git-history` 对应 18.329／17.679／24.365／19.117／16.671 ms。总耗时尚未做同流程重复 A/B，不声称速度倍率。
+
+`p4-t2-red.log`：受控后端记录实际命令，暂存后仍执行 log、Ref 和 Stash，分页再做 numstat，4 项断言 Red。改为 `.full`／`.indexOnly`／`.historyOnly` 明确刷新请求，在同一请求失效机制下合并不同需求时升级 full；局部索引变更只读 core+totals，分页只读 core+Ref+更大 limit 的 log。固定 HEAD／scope 及引用一致性才保留已有已验证详情；外部 Ref 或 core 不一致时补全快照。已知动作不推断未知终端命令，显式刷新及前台周期仍完整执行。
+
+`p4-t2-green1.log`：暂存／分页的真实仓库 Green。`p4-t2-suite.log` 19 项 0 失败，随后补上分页间 Ref、工作区事件竞态；后一项测试明确模拟外部写入**后**发来的完整刷新事件，不能要求已经结束的 core 扫描凭空获知未来写入。`p4-t2-concurrent-fix.log` 定向测试 1 项通过。最终 `p4-t2-final-full.log`：294 项，0 失败，3 项专用 SSH skipped；`p4-t2-final-debug.log`／`p4-t2-final-release.log`：Debug／Release 构建和严格验签通过。均用真实 Git 临时仓库，不以受控 SSH 冒充真机。
+
 ## 最终验证与未测范围
 
 T1 最终重验：`p4-t1-recheck.log` 的 GitStatusModelTests 16/0，`p4-t1-full-recheck.log` 全量 290 项、0 失败、3 项专用 SSH skipped，`p4-t1-build.log` 和 `p4-t1-release.log` 的 Debug／Release 构建与严格验签均通过。
