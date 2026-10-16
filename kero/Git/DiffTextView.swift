@@ -286,7 +286,7 @@ final class DiffTextView: STTextView {
 
 /// One visible row resolved against the current layout: its index, metadata,
 /// and frame in text-view coordinates.
-private struct DiffVisibleRow {
+struct DiffVisibleRow {
     let index: Int
     let frame: CGRect
 }
@@ -295,11 +295,24 @@ private struct DiffVisibleRow {
 /// the viewport's layout fragments and yields one entry per visual row.
 ///
 /// Row indexes come from the immutable document's line-start table in review
-/// mode; in edit mode (live buffer) they're derived by counting the text
-/// elements before the viewport — the same technique STTextView's own gutter
-/// uses, always correct against the current buffer.
+/// mode; in edit mode the current TextKit paragraphs determine visible rows.
+/// Ordinary LF documents use native paragraph counting; when bare CR splits
+/// an additional paragraph, the Git row advances only at its next LF.
 @MainActor
-private enum DiffRowGeometry {
+enum DiffRowGeometry {
+    /// Git counts LF alone; TextKit also makes native paragraphs for bare CR.
+    static func hasNativeNonLFSeparators(_ text: String) -> Bool {
+        var previousCR = false
+        for scalar in text.unicodeScalars {
+            if (previousCR && scalar != "\n") ||
+                scalar == "\u{2028}" || scalar == "\u{2029}" || scalar == "\u{0085}" {
+                return true
+            }
+            previousCR = scalar == "\r"
+        }
+        return previousCR
+    }
+
     static func visibleRows(
         textView: STTextView, decorations: DiffDecorations
     ) -> [DiffVisibleRow] {
@@ -310,14 +323,23 @@ private enum DiffRowGeometry {
         }
 
         let byOffsets = !decorations.lineStartOffsets.isEmpty
+        let hasNativeBreaks = !byOffsets && hasNativeNonLFSeparators(textView.text ?? "")
         var nextCountedIndex = 0
         if !byOffsets {
-            nextCountedIndex = contentManager.textElements(
+            let preceding = contentManager.textElements(
                 for: NSTextRange(
                     location: layoutManager.documentRange.location,
                     end: viewportRange.location
                 )!
-            ).count
+            )
+            if hasNativeBreaks {
+                nextCountedIndex = preceding.reduce(0) { count, element in
+                    let paragraph = element as? NSTextParagraph
+                    return count + (paragraph?.attributedString.string.utf16.last == 10 ? 1 : 0)
+                }
+            } else {
+                nextCountedIndex = preceding.count
+            }
         }
 
         var rows: [DiffVisibleRow] = []
@@ -350,7 +372,14 @@ private enum DiffRowGeometry {
                 ))
                 lineOffset += 1
             }
-            nextCountedIndex = baseIndex + max(1, lineOffset)
+            if !hasNativeBreaks {
+                nextCountedIndex = baseIndex + max(1, lineOffset)
+            } else {
+                // Native CR paragraphs share a Git line until an LF is reached.
+                let paragraph = fragment.textElement as? NSTextParagraph
+                nextCountedIndex = baseIndex
+                    + (paragraph?.attributedString.string.utf16.last == 10 ? 1 : 0)
+            }
             return true
         }
         return rows
@@ -1249,20 +1278,10 @@ final class DiffCodePaneView: NSView {
 
         textView.attributedText = text
         decorations = newDecorations
-        // Git counts only LF lines; TextKit gives bare CR and Unicode line
-        // separators additional visual height. Never clip those paragraphs
-        // to the smaller Git row count; ordinary LF/CRLF stays fixed-height.
-        var previousCR = false
-        var usesNativeBreaks = false
-        for scalar in text.string.unicodeScalars {
-            if (previousCR && scalar != "\n") ||
-                scalar == "\u{2028}" || scalar == "\u{2029}" || scalar == "\u{0085}" {
-                usesNativeBreaks = true
-                break
-            }
-            previousCR = scalar == "\r"
-        }
-        setFixedRowCount(usesNativeBreaks || previousCR ? nil : newDecorations.rows.count)
+        // Preserve TextKit's real height when its paragraph boundaries do
+        // not match Git LF rows; ordinary files keep exact fixed row height.
+        let nativeBreaks = DiffRowGeometry.hasNativeNonLFSeparators(text.string)
+        setFixedRowCount(nativeBreaks ? nil : newDecorations.rows.count)
 
         if isExpansionSwap {
             setVerticalScrollOffset(savedOffset)

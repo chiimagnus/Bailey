@@ -124,6 +124,43 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class DiffTabTests: XCTestCase {
+    func testEditGeometryUsesGitLFLinesAcrossNativeBareCRParagraphs() async throws {
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(
+            contentRect: NSRect(x: -900, y: -900, width: 730, height: 410),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(
+            font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+            textColor: .textColor
+        )
+        let raw = "alpha\rbeta\nsecond\n"
+        pane.textView.text = raw
+        let lines = DiffLineSplitter.lines(of: raw).lines
+        let computation = DiffComputation.compute(oldText: "", newText: raw)
+        pane.decorations = DiffDecorations.edit(
+            state: computation.editState,
+            snapshotOffsets: lines.map(\.utf16Range.location),
+            lineCount: lines.count, ghostBlocks: []
+        )
+        try await wait {
+            DiffRowGeometry.visibleRows(
+                textView: pane.textView, decorations: pane.decorations
+            ).count >= 3
+        }
+        let rows = DiffRowGeometry.visibleRows(
+            textView: pane.textView, decorations: pane.decorations
+        )
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertEqual(Array(rows.prefix(3).map(\.index)), [0, 0, 1],
+                       "TextKit bare-CR paragraphs must share the same Git LF line number")
+    }
+
     func testBareCRReviewUsesTextKitParagraphHeightInsteadOfLFOnlyHeight() {
         let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
         let window = NSWindow(
