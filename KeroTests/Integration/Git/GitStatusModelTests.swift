@@ -537,6 +537,148 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertTrue(model.hasCurrentLineTotals)
     }
 
+    func testFileDecorationsMatchFullScanForModifiedRenamedIgnoredAndDuplicatePath() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func git(_ args: [String]) {
+            let result = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(result.status, 0, "\(args): \(result.stderr)")
+        }
+        func write(_ path: String, _ content: String) throws {
+            let file = directory.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(content.utf8).write(to: file)
+        }
+        git(["init", "-q", "-b", "main"])
+        git(["config", "user.name", "Decoration Test"])
+        git(["config", "user.email", "decor@invalid"])
+        git(["config", "commit.gpgsign", "false"])
+        try write(".gitignore", "ignored/\nfoo/ignored.log\n")
+        for path in ["foo/file.swift", "foobar/file.swift", "tracked/nested/first.swift",
+                     "tracked/nested/second.swift", "tracked/dupe.swift", "tracked/delete.swift"] {
+            try write(path, "distinct baseline for \(path)\n")
+        }
+        git(["add", "-A"])
+        git(["commit", "-qm", "baseline"])
+        try write("foo/file.swift", "modified\n")
+        try write("tracked/nested/first.swift", "staged\n")
+        git(["add", "tracked/nested/first.swift"])
+        try write("tracked/nested/first.swift", "staged\nagain\n")
+        git(["mv", "tracked/nested/second.swift", "tracked/nested/renamed.swift"])
+        git(["rm", "--cached", "--", "tracked/dupe.swift"])
+        git(["rm", "--", "tracked/delete.swift"])
+        try write("ignored/deeper/cache", "ignored\n")
+        try write("foo/ignored.log", "ignored\n")
+        try write("foo/untracked.swift", "new\n")
+        try write("foo/added.swift", "added\n")
+        git(["add", "foo/added.swift"])
+        try write("foo/added.swift", "added\nmodified\n")
+
+        let model = GitStatusModel()
+        model.sync(root: directory.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.isRepo)
+        XCTAssertTrue(model.stagedEntries.contains { $0.path == "tracked/dupe.swift" })
+        XCTAssertTrue(model.changedEntries.contains { $0.path == "tracked/dupe.swift" })
+        XCTAssertTrue(model.changedEntries.contains { $0.path == "foo/untracked.swift" })
+        XCTAssertEqual(model.fileDecorations["foo/added.swift"], .added)
+        XCTAssertEqual(model.fileDecorations["tracked/nested/first.swift"], .modified)
+        XCTAssertEqual(model.fileDecorations["tracked/nested/renamed.swift"], .renamed)
+        XCTAssertEqual(model.fileDecorations["tracked/delete.swift"], .deleted)
+        XCTAssertEqual(model.fileDecorations["tracked/dupe.swift"], .deleted)
+
+        // Contract oracle: the original complete scan, independent of the new index.
+        func slow(_ relative: String, isDirectory: Bool) -> GitStatusModel.FileDecoration? {
+            if let direct = model.fileDecorations[relative] { return direct }
+            if model.ignoredPaths.contains(where: { path in
+                if path.hasSuffix("/") {
+                    let prefix = String(path.dropLast())
+                    return relative == prefix || relative.hasPrefix(prefix + "/")
+                }
+                return relative == path
+            }) { return .ignored }
+            guard isDirectory, !relative.isEmpty else { return nil }
+            let prefix = relative + "/"
+            return model.fileDecorations.filter { $0.key.hasPrefix(prefix) }
+                .map(\.value).max { $0.directoryPriority < $1.directoryPriority }
+        }
+        let candidates = ["", "foo", "foo/file.swift", "foo/added.swift", "foo/untracked.swift", "foo/ignored.log",
+                          "foobar", "foobar/file.swift", "foobar-extra", "tracked", "tracked/nested",
+                          "tracked/nested/renamed.swift", "tracked/dupe.swift", "tracked/delete.swift",
+                          "ignored", "ignored/deeper", "ignored/deeper/cache", "ignored-extra",
+                          "other", "tracked-unrelated", "tracked/nested/file.swift"]
+        for path in candidates {
+            let absolute = (model.repoRoot as NSString).appendingPathComponent(path)
+            for isDirectory in [false, true] {
+                XCTAssertEqual(model.fileDecoration(for: absolute, isDirectory: isDirectory),
+                               slow(path, isDirectory: isDirectory), "path=\(path), directory=\(isDirectory)")
+            }
+        }
+        XCTAssertEqual(model.fileDecoration(for: (model.repoRoot as NSString).appendingPathComponent("ignored/deeper/cache"),
+                                            isDirectory: false), .ignored)
+        XCTAssertNil(model.fileDecoration(for: "/tmp/outside-kero-decoration-\(UUID().uuidString)", isDirectory: true))
+        XCTAssertNotNil(model.fileDecoration(for: model.repoRoot + "/tracked", isDirectory: true))
+
+        try write("foo/file.swift", "updated once more\n")
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        for path in candidates {
+            let absolute = (model.repoRoot as NSString).appendingPathComponent(path)
+            XCTAssertEqual(model.fileDecoration(for: absolute, isDirectory: true),
+                           slow(path, isDirectory: true), "after external update: \(path)")
+        }
+        model.sync(root: FileManager.default.temporaryDirectory.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertNil(model.fileDecoration(for: directory.appendingPathComponent("tracked").path, isDirectory: true))
+    }
+
+    func testDirectoryDecorationPreservesConflictPriorityAfterMerge() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func git(_ args: [String], expected: Int32 = 0) {
+            let run = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(run.status, expected, "\(args): \(run.stderr)")
+        }
+        func write(_ path: String, _ text: String) throws {
+            let url = directory.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: url)
+        }
+        git(["init", "-q", "-b", "main"])
+        git(["config", "user.name", "Conflict Test"])
+        git(["config", "user.email", "conflict@invalid"])
+        git(["config", "commit.gpgsign", "false"])
+        try write("nested/conflicted.txt", "original\n")
+        try write("nested/modified.txt", "unchanged\n")
+        git(["add", "-A"])
+        git(["commit", "-qm", "baseline"])
+        git(["switch", "-qc", "other"])
+        try write("nested/conflicted.txt", "other\n")
+        git(["commit", "-qam", "other change"])
+        git(["switch", "main"])
+        try write("nested/conflicted.txt", "main\n")
+        git(["commit", "-qam", "main change"])
+        try write("nested/modified.txt", "new\n")
+        git(["merge", "other", "--no-edit"], expected: 1)
+
+        let model = GitStatusModel()
+        model.sync(root: directory.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertEqual(model.fileDecorations["nested/conflicted.txt"], .conflict)
+        XCTAssertEqual(model.fileDecorations["nested/modified.txt"], .modified)
+        XCTAssertEqual(model.fileDecoration(for: directory.appendingPathComponent("nested").path,
+                                            isDirectory: true), .conflict)
+        XCTAssertNil(model.fileDecoration(for: directory.appendingPathComponent("nested-other").path,
+                                          isDirectory: true))
+        git(["merge", "--abort"])
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertEqual(model.fileDecoration(for: directory.appendingPathComponent("nested").path,
+                                            isDirectory: true), .modified)
+    }
+
     func testCoreStatusIsUsableWhileHistoryIsSuspended() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

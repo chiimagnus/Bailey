@@ -302,6 +302,7 @@ final class GitStatusModel {
     private(set) var repositoryIdentity = ""
     private(set) var isRepo = false
     private(set) var fileDecorations: [String: FileDecoration] = [:]
+    @ObservationIgnored private var directoryDecorations: [String: FileDecoration] = [:]
     /// Relative porcelain paths. Directory records retain their trailing slash
     /// so expanded descendants can inherit the ignored state.
     private(set) var ignoredPaths: Set<String> = []
@@ -564,36 +565,40 @@ final class GitStatusModel {
     /// file-tree appearance, even when their names resemble ignored paths.
     func fileDecoration(for absolutePath: String, isDirectory: Bool) -> FileDecoration? {
         guard isRepo, !topLevel.isEmpty else { return nil }
-        let repositoryPath = (topLevel as NSString).standardizingPath
-        let itemPath = (absolutePath as NSString).standardizingPath
         let relativePath: String
-        if itemPath == repositoryPath {
+        let literalPrefix = topLevel + "/"
+        if absolutePath == topLevel {
             relativePath = ""
+        } else if absolutePath.hasPrefix(literalPrefix),
+                  !absolutePath.dropFirst(literalPrefix.count).split(separator: "/")
+                    .contains(where: { $0 == "." || $0 == ".." }) {
+            // Git paths are lexical; standardizing a deleted leaf can resolve
+            // /private/var differently from its existing repository root.
+            relativePath = String(absolutePath.dropFirst(literalPrefix.count))
         } else {
-            let prefix = repositoryPath + "/"
-            guard itemPath.hasPrefix(prefix) else { return nil }
-            relativePath = String(itemPath.dropFirst(prefix.count))
+            let repositoryPath = (topLevel as NSString).standardizingPath
+            let itemPath = (absolutePath as NSString).standardizingPath
+            if itemPath == repositoryPath {
+                relativePath = ""
+            } else {
+                let prefix = repositoryPath + "/"
+                guard itemPath.hasPrefix(prefix) else { return nil }
+                relativePath = String(itemPath.dropFirst(prefix.count))
+            }
         }
 
         if let decoration = fileDecorations[relativePath] {
             return decoration
         }
-        if ignoredPaths.contains(where: { ignoredPath in
-            if ignoredPath.hasSuffix("/") {
-                let directory = String(ignoredPath.dropLast())
-                return relativePath == directory || relativePath.hasPrefix(directory + "/")
-            }
-            return relativePath == ignoredPath
-        }) {
+        if ignoredPaths.contains(relativePath) || ignoredPaths.contains(relativePath + "/") {
             return .ignored
         }
-        guard isDirectory, !relativePath.isEmpty else { return nil }
-
-        let descendantPrefix = relativePath + "/"
-        return fileDecorations
-            .filter { $0.key.hasPrefix(descendantPrefix) }
-            .map(\.value)
-            .max { $0.directoryPriority < $1.directoryPriority }
+        var parent = relativePath
+        while let slash = parent.lastIndex(of: "/") {
+            parent = String(parent[..<slash])
+            if ignoredPaths.contains(parent + "/") { return .ignored }
+        }
+        return isDirectory ? directoryDecorations[relativePath] : nil
     }
 
     /// The workspace selected by the project's current panel context.
@@ -2674,6 +2679,7 @@ final class GitStatusModel {
         mergeEntries = []
         stagedEntries = []
         changedEntries = []
+        directoryDecorations = [:]
         fileDecorations = [:]
         ignoredPaths = []
         repositoryOperation = nil
@@ -2781,16 +2787,28 @@ final class GitStatusModel {
             entry.snapshotHeadOID = result.headOID
             return entry
         }
-        // parseStatus already guarantees entries are unique per path, but a
-        // stray duplicate must degrade to a deterministic decoration instead of
-        // trapping the whole app on duplicate keys.
-        fileDecorations = Dictionary(
+        // A staged deletion and untracked file can legitimately share one path.
+        let decorations = Dictionary(
             entries.map {
                 ($0.path, FileDecoration(staged: $0.staged, unstaged: $0.unstaged, isConflict: $0.isConflict))
             },
             uniquingKeysWith: { first, _ in first }
         )
-        ignoredPaths = result.ignoredPaths
+        if decorations != fileDecorations {
+            var ancestors: [String: FileDecoration] = [:]
+            for (path, decoration) in decorations {
+                var parent = path
+                while let slash = parent.lastIndex(of: "/") {
+                    parent = String(parent[..<slash])
+                    if let current = ancestors[parent],
+                       current.directoryPriority >= decoration.directoryPriority { continue }
+                    ancestors[parent] = decoration
+                }
+            }
+            directoryDecorations = ancestors
+            fileDecorations = decorations
+        }
+        if ignoredPaths != result.ignoredPaths { ignoredPaths = result.ignoredPaths }
         mergeEntries = entries.filter(\.isConflict)
         stagedEntries = entries.filter {
             !$0.isConflict && $0.staged != "." && $0.staged != "?"
