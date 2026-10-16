@@ -12,6 +12,10 @@ struct SettingsView: View {
     @Bindable private var settings = AppSettings.shared
     @State private var relaunchError = ""
     @State private var isShowingRelaunchError = false
+    @State private var barkURLInput = ""
+    @State private var barkDestinations: [BarkDestination] = []
+    @State private var barkBusy = true
+    @State private var barkStatus: String?
 
     /// Installed fixed-pitch families (bundled default first).
     private let families = TerminalFont.selectableFamilies()
@@ -208,6 +212,53 @@ struct SettingsView: View {
                 }
             }
 
+            if !KeroInstanceMode.isIsolated {
+                Section(String(localized: "Phone Notifications", table: "Settings")) {
+                    HStack {
+                        SecureField(
+                            String(localized: "Bark push URL or device key", table: "Settings"),
+                            text: $barkURLInput
+                        )
+                        Button(String(localized: "Add", table: "Settings")) {
+                            addBarkDestination()
+                        }
+                        .disabled(barkBusy || BarkDestination(barkURLInput) == nil)
+                    }
+                    ForEach(barkDestinations) { destination in
+                        HStack {
+                            Text(verbatim: destination.displayName)
+                            Spacer()
+                            Button(String(localized: "Remove", table: "Settings")) {
+                                removeBarkDestination(destination)
+                            }
+                            .disabled(barkBusy)
+                            .accessibilityLabel(
+                                String(localized: "Remove \(destination.displayName)", table: "Settings")
+                            )
+                        }
+                    }
+                    HStack {
+                        Spacer()
+                        Button(String(localized: "Send Test Notification", table: "Settings")) {
+                            sendBarkTest()
+                        }
+                        .disabled(barkDestinations.isEmpty || barkBusy)
+                    }
+                    Text(String(
+                        localized: "Codex and other terminal notifications are sent to every Bark destination. Messages may contain sensitive output.",
+                        table: "Settings"
+                    ))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    if let barkStatus {
+                        Text(verbatim: barkStatus)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .task { await loadBarkDestinations() }
+            }
+
             Section(String(localized: "Port Forwarding", table: "Settings")) {
                 TunnelSettingsRow()
                     .frame(height: 176)
@@ -250,6 +301,75 @@ struct SettingsView: View {
             Button(String(localized: "OK", table: "Settings"), role: .cancel) {}
         } message: {
             Text(verbatim: relaunchError)
+        }
+    }
+
+    private func loadBarkDestinations() async {
+        do {
+            barkDestinations = try await Task.detached(priority: .utility) {
+                try BarkPushService.destinations()
+            }.value
+            barkStatus = nil
+        } catch {
+            barkStatus = String(localized: "Could not access Bark URLs in Keychain", table: "Settings")
+        }
+        barkBusy = false
+    }
+
+    private func addBarkDestination() {
+        let input = barkURLInput
+        barkBusy = true
+        barkStatus = nil
+        Task {
+            do {
+                let updated = try await Task.detached(priority: .utility) {
+                    try BarkPushService.add(input)
+                }.value
+                if let updated {
+                    barkDestinations = updated
+                    barkURLInput = ""
+                } else {
+                    barkStatus = String(localized: "Bark URL already exists", table: "Settings")
+                }
+            } catch {
+                barkStatus = String(localized: "Could not save Bark URL", table: "Settings")
+            }
+            barkBusy = false
+        }
+    }
+
+    private func removeBarkDestination(_ destination: BarkDestination) {
+        barkBusy = true
+        barkStatus = nil
+        Task {
+            do {
+                barkDestinations = try await Task.detached(priority: .utility) {
+                    try BarkPushService.remove(destination)
+                }.value
+            } catch {
+                barkStatus = String(localized: "Could not remove Bark URL", table: "Settings")
+            }
+            barkBusy = false
+        }
+    }
+
+    private func sendBarkTest() {
+        barkBusy = true
+        barkStatus = nil
+        let message = String(localized: "Test notification from Kero", table: "Settings")
+        Task {
+            do {
+                let result = try await Task.detached(priority: .utility) {
+                    try await BarkPushService.sendConfigured(title: "Kero", message: message)
+                }.value
+                barkStatus = String(
+                    localized: "Bark accepted \(result.accepted) of \(result.total) pushes",
+                    table: "Settings"
+                )
+            } catch {
+                barkStatus = String(localized: "Could not send the test notification", table: "Settings")
+            }
+            barkBusy = false
         }
     }
 
