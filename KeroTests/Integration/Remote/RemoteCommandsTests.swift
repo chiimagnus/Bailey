@@ -64,9 +64,10 @@ final class RemoteCommandsTests: XCTestCase {
     func testGitBatchAndPortParsers() {
         let input = RemoteCommands.untrackedLineCountsInput(paths: ["/a b", "/c"])
         XCTAssertEqual(input, Data("/a b\u{0}/c\u{0}".utf8))
-        let counts = RemoteCommands.parseUntrackedLineCounts("3\t27\t/repo/a.txt\n1\t0\t/repo/link\n")
+        let counts = RemoteCommands.parseUntrackedLineCounts("3\t27\t1\n1\t0\t1\n",
+            maximumFiles: 2, totalByteBudget: 27, perFileByteCap: 27)!
         XCTAssertEqual(counts.count, 2)
-        XCTAssertEqual(counts[0].path, "/repo/a.txt")
+        XCTAssertEqual(counts[0].bytesRead, 27)
         XCTAssertEqual(counts[0].lines, 3)
 
         var batch = Data("/repo".utf8)
@@ -84,6 +85,129 @@ final class RemoteCommandsTests: XCTestCase {
         XCTAssertEqual(ports.count, 2)
         XCTAssertTrue(ports.contains(WorkspacePort(port: 22, pid: 1234)))
         XCTAssertTrue(ports.contains(WorkspacePort(port: 8000, pid: 314000)))
+    }
+
+    func testUntrackedCountsRejectForgedFilenameRecordsAndNegativeCounts() {
+        for output in ["-1\t-1\t/repo/file\n", "0\t0\t/repo/file\n99999999\t0\tforged\n",
+                       "99999999\t0\t1\n", "1\t20\t1\n", "0\t0\t0", "0\t0\t2\n",
+                       "0\t8\t1\n0\t8\t1\n", "1\t1\t1\n\n"] {
+            XCTAssertNil(RemoteCommands.parseUntrackedLineCounts(output,
+                maximumFiles: 2, totalByteBudget: 10, perFileByteCap: 8), output)
+        }
+    }
+
+    func testUntrackedCountScriptPreservesUnusualNamesAndBoundsRealReads() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("name\n99999999\t0\t1")
+        let empty = directory.appendingPathComponent("empty")
+        let binary = directory.appendingPathComponent("binary")
+        let lateNul = directory.appendingPathComponent("late-nul")
+        let link = directory.appendingPathComponent("link")
+        let large = directory.appendingPathComponent("large")
+        try Data("one\ntwo".utf8).write(to: source)
+        try Data().write(to: empty)
+        try Data(repeating: 0, count: 20_000).write(to: binary)
+        try (Data(repeating: 65, count: 8_000) + Data([0, 10])).write(to: lateNul)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: source)
+        try Data(repeating: 65, count: 20_001).write(to: large)
+        let paths = [source, empty, binary, lateNul, link, large].map(\.path)
+        let script = RemoteCommands.untrackedLineCountsCommand(totalByteBudget: 40_000, perFileByteCap: 20_000)
+            .replacingOccurrences(of: "stat -c %s --", with: "stat -f %z --")
+        let result = try await LocalWorkspaceBackend.shared.run(
+            argv: ["/bin/sh", "-c", script], cwd: nil, env: nil,
+            stdin: RemoteCommands.untrackedLineCountsInput(paths: paths), timeout: 10
+        )
+        XCTAssertEqual(result.status, 0, String(decoding: result.stderr, as: UTF8.self))
+        let output = String(decoding: result.stdout, as: UTF8.self)
+        let counts = try XCTUnwrap(RemoteCommands.parseUntrackedLineCounts(output,
+            maximumFiles: paths.count, totalByteBudget: 40_000, perFileByteCap: 20_000))
+        XCTAssertEqual(counts.map(\.lines), [2, 0, 0, 1, 1, 0])
+        XCTAssertEqual(counts.map(\.bytesRead), [7, 0, 8_000, 8_002, 0, 0])
+        XCTAssertEqual(counts.map(\.complete), [true, true, true, true, true, false])
+        for (index, url) in [source, empty, binary, lateNul, link, large].enumerated() {
+            let local = try GitStatusModel.textLineCount(at: url, maximumBytes: 20_000,
+                deadline: Date().addingTimeInterval(10))
+            XCTAssertEqual(local.lines, counts[index].lines)
+            XCTAssertEqual(local.bytesRead, counts[index].bytesRead)
+            XCTAssertEqual(local.complete, counts[index].complete)
+        }
+        XCTAssertFalse(output.contains(source.path))
+    }
+
+    func testLocalLineReaderNeverReadsPastRemainingBudgetAndPropagatesFailure() throws {
+        for cap in [0, 3, 7_999, 8_000, 8_001, 100_001] {
+            var offset = 0
+            let count = try GitStatusModel.countTextLines(maximumBytes: cap) { requested in
+                XCTAssertLessThanOrEqual(requested, cap - offset)
+                XCTAssertGreaterThan(requested, 0)
+                offset += requested
+                return Data(repeating: 10, count: requested)
+            }
+            XCTAssertEqual(count.lines, cap)
+            XCTAssertEqual(count.bytesRead, cap)
+            XCTAssertEqual(offset, cap)
+        }
+        var reads = 0
+        XCTAssertThrowsError(try GitStatusModel.countTextLines(maximumBytes: 9_000) { requested in
+            reads += 1
+            if reads == 2 { throw WorkspaceError.notFound }
+            return Data(repeating: 65, count: requested)
+        })
+    }
+
+    func testRemoteCountBudgetSurvivesGrowthAfterStatAndCapsTheProbe() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("growing")
+        let next = directory.appendingPathComponent("next")
+        let marker = directory.appendingPathComponent("grow-once")
+        try Data("a".utf8).write(to: file)
+        try Data("b".utf8).write(to: next)
+        try Data().write(to: marker)
+        let growing = """
+            stat() {
+            /usr/bin/stat -f %z -- "$4"
+            if [ -e "\(marker.path)" ]; then
+            /bin/rm "\(marker.path)"; printf "0123456789" >> "$4"
+            fi
+            }
+            """
+        let command = RemoteCommands.untrackedLineCountsCommand(totalByteBudget: 3, perFileByteCap: 3)
+        let script = command.replacingOccurrences(of: "set -o pipefail", with: growing + "\nset -o pipefail")
+        let result = try await LocalWorkspaceBackend.shared.run(
+            argv: ["/bin/sh", "-c", script], cwd: nil, env: nil,
+            stdin: RemoteCommands.untrackedLineCountsInput(paths: [file.path, next.path]), timeout: 10
+        )
+        XCTAssertEqual(result.status, 0, String(decoding: result.stderr, as: UTF8.self))
+        let counts = try XCTUnwrap(RemoteCommands.parseUntrackedLineCounts(
+            String(decoding: result.stdout, as: UTF8.self), maximumFiles: 2,
+            totalByteBudget: 3, perFileByteCap: 3))
+        XCTAssertEqual(counts.count, 1)
+        XCTAssertEqual(counts.first?.bytesRead, 3)
+        XCTAssertEqual(counts.first?.lines, 0)
+        XCTAssertEqual(counts.first?.complete, false)
+        XCTAssertEqual(try Data(contentsOf: file).count, 11)
+    }
+
+    func testUntrackedDirectoryDoesNotFailTheRemoteSnapshot() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let result = try await LocalWorkspaceBackend.shared.run(
+            argv: ["/bin/sh", "-c", RemoteCommands.untrackedLineCountsCommand(
+                totalByteBudget: 10, perFileByteCap: 10)], cwd: nil, env: nil,
+            stdin: RemoteCommands.untrackedLineCountsInput(paths: [directory.path]), timeout: 10)
+        XCTAssertEqual(result.status, 0)
+        let counts = try XCTUnwrap(RemoteCommands.parseUntrackedLineCounts(
+            String(decoding: result.stdout, as: UTF8.self), maximumFiles: 1,
+            totalByteBudget: 10, perFileByteCap: 10))
+        XCTAssertEqual(counts.count, 1)
+        XCTAssertEqual(counts.first?.lines, 0)
+        XCTAssertEqual(counts.first?.bytesRead, 0)
+        XCTAssertEqual(counts.first?.complete, false)
     }
 
     func testLocalPortProbe() throws {

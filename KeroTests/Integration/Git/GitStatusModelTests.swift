@@ -15,6 +15,9 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     private var failGitDirectory = false
     private var failOperationMarker = false
     private var pauseNextGit = false
+    private var pauseHistory = false
+    private var emptyNextBatch = false
+    private(set) var requestTimeouts: [TimeInterval?] = []
     private var pausedGit: CheckedContinuation<Void, Never>?
     private(set) var awaitingGit = false
     private(set) var gitRuns = 0
@@ -31,6 +34,8 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     func setGitDirectoryUnavailable(_ value: Bool) { failGitDirectory = value }
     func setOperationMarkerUnavailable(_ value: Bool) { failOperationMarker = value }
     func suspendNextGitRequest() { pauseNextGit = true }
+    func suspendHistoryRequest() { pauseHistory = true }
+    func omitNextBatch() { emptyNextBatch = true }
     func releaseGitRequest() {
         pausedGit?.resume()
         pausedGit = nil
@@ -55,8 +60,15 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
         stdin: Data?, timeout: TimeInterval?
     ) async throws -> WorkspaceRunResult {
         gitRuns += 1
-        if pauseNextGit {
+        requestTimeouts.append(timeout)
+        if emptyNextBatch, argv == ["sh", "-s"] {
+            emptyNextBatch = false
+            return WorkspaceRunResult(status: 0, stdout: Data(), stderr: Data())
+        }
+        let historyRequest = stdin.flatMap { String(data: $0, encoding: .utf8) }?.contains("git 'log' ") == true
+        if pauseNextGit || (pauseHistory && historyRequest) {
             pauseNextGit = false
+            pauseHistory = false
             awaitingGit = true
             await withCheckedContinuation { pausedGit = $0 }
         }
@@ -94,8 +106,9 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
         } else {
             commandInput = stdin
         }
+        let localArguments = argv.map { $0.replacingOccurrences(of: "stat -c %s --", with: "stat -f %z --") }
         return try await LocalWorkspaceBackend.shared.run(
-            argv: ["/usr/bin/env"] + argv, cwd: cwd, env: variables,
+            argv: ["/usr/bin/env"] + localArguments, cwd: cwd, env: variables,
             stdin: commandInput, timeout: timeout
         )
     }
@@ -367,6 +380,134 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(attemptsAfterSwitch, 0)
     }
 
+    func testCoreStatusIsUsableWhileHistoryIsSuspended() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for arguments in [["init", "-q", "-b", "main"], ["config", "user.name", "Core Test"],
+                          ["config", "user.email", "core@invalid"], ["config", "commit.gpgsign", "false"],
+                          ["commit", "--allow-empty", "-qm", "initial"]] {
+            let result = GitCommandExecution.run(arguments, in: directory.path, timeout: 10)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        try Data("new text\n".utf8).write(to: directory.appendingPathComponent("new.txt"))
+        let backend = DiscardRemoteWorkspaceFixture()
+        await backend.suspendHistoryRequest()
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: backend, scope: "ssh:core-test")
+        let deadline = Date().addingTimeInterval(10)
+        while !(await backend.awaitingGit), Date() < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let suspended = await backend.awaitingGit
+        XCTAssertTrue(suspended)
+        XCTAssertTrue(model.hasResolvedStatus)
+        XCTAssertTrue(model.isRepo)
+        XCTAssertEqual(model.branch, "main")
+        XCTAssertTrue(model.hasHead)
+        XCTAssertNotNil(model.headOID)
+        XCTAssertEqual(model.changedEntries.map(\.path), ["new.txt"])
+        XCTAssertNil(model.repositoryOperation)
+        XCTAssertFalse(model.hasCurrentDetails)
+        XCTAssertFalse(model.hasCurrentLineTotals)
+        let timeouts = await backend.requestTimeouts
+        XCTAssertTrue(timeouts.allSatisfy { $0 != nil && $0! > 0 && $0! <= 24 })
+        let runsBeforeAction = await backend.gitRuns
+        model.fetch()
+        XCTAssertFalse(model.isBusy)
+        XCTAssertNotNil(model.lastError)
+        let runsAfterAction = await backend.gitRuns
+        XCTAssertEqual(runsBeforeAction, runsAfterAction)
+        model.commit(message: "amended without history", includeAll: true, amend: true)
+        try await wait { !model.isBusy && !model.isRefreshing }
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(model.recentCommits.map(\.subject), ["amended without history"])
+        XCTAssertTrue(model.hasCurrentDetails)
+        let amended = model.headOID
+        await backend.releaseGitRequest()
+        try await wait { !model.isRefreshing }
+        XCTAssertEqual(model.headOID, amended)
+        XCTAssertEqual(model.recentCommits.map(\.subject), ["amended without history"])
+        XCTAssertEqual(GitCommandExecution.run(["show", "HEAD:new.txt"], in: directory.path).stdout, "new text\n")
+    }
+
+    func testMissingRemoteCoreBatchIsFailureWithoutIndividualRetry() async throws {
+        let backend = DiscardRemoteWorkspaceFixture()
+        await backend.omitNextBatch()
+        let model = GitStatusModel()
+        model.sync(root: "/tmp", backend: backend, scope: "ssh:missing-frame")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertNotNil(model.statusError)
+        XCTAssertFalse(model.isRepo)
+        let runs = await backend.gitRuns
+        XCTAssertEqual(runs, 1)
+    }
+
+    func testCappedLineTotalsAreUnknownUntilACompleteReadSucceeds() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        XCTAssertEqual(GitCommandExecution.run(["init", "-q"], in: directory.path).status, 0)
+        let file = directory.appendingPathComponent("untracked")
+        try Data(repeating: 65, count: 8 * 1_024 * 1_024 + 1).write(to: file)
+        let model = GitStatusModel()
+        model.sync(root: directory.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.isRepo)
+        XCTAssertTrue(model.hasCurrentDetails)
+        XCTAssertFalse(model.hasCurrentLineTotals)
+        XCTAssertNil(model.statusError)
+        XCTAssertEqual(model.changedEntries.map(\.path), ["untracked"])
+        try Data("one\ntwo".utf8).write(to: file)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertTrue(model.hasCurrentLineTotals)
+        XCTAssertEqual(model.lineAdditions, 2)
+        XCTAssertEqual(model.lineDeletions, 0)
+    }
+
+    func testDetailsQualificationFollowsCoreIdentityRatherThanRefreshActivity() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for arguments in [["init", "-q", "-b", "main"], ["config", "user.name", "Qualification Test"],
+                          ["config", "user.email", "qualification@invalid"], ["config", "commit.gpgsign", "false"],
+                          ["commit", "--allow-empty", "-qm", "initial"]] {
+            XCTAssertEqual(GitCommandExecution.run(arguments, in: directory.path).status, 0)
+        }
+        let backend = DiscardRemoteWorkspaceFixture()
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: backend, scope: "ssh:qualification")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let oldHead = try XCTUnwrap(model.headOID)
+        for changesHead in [false, true] {
+            if changesHead {
+                XCTAssertEqual(GitCommandExecution.run(["commit", "--allow-empty", "-qm", "changed"],
+                    in: directory.path).status, 0)
+            }
+            await backend.suspendHistoryRequest()
+            model.refresh()
+            XCTAssertTrue(model.hasCurrentDetails, "Merely starting a query must not cancel a valid retry")
+            let deadline = Date().addingTimeInterval(10)
+            while !(await backend.awaitingGit), Date() < deadline {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            let suspended = await backend.awaitingGit
+            XCTAssertTrue(suspended)
+            XCTAssertEqual(model.hasCurrentDetails, !changesHead)
+            if changesHead { XCTAssertNotEqual(model.headOID, oldHead) }
+            await backend.releaseGitRequest()
+            try await wait { !model.isRefreshing }
+            XCTAssertTrue(model.hasCurrentDetails)
+        }
+        await backend.setHistoryLogUnavailable(true)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertNotNil(model.statusError)
+        XCTAssertFalse(model.hasCurrentDetails)
+        XCTAssertEqual(model.recentCommits.map(\.subject), ["changed", "initial"])
+    }
+
     func testTransientGitFailurePreservesLastRepositorySnapshotAndRecovers() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -423,6 +564,9 @@ final class GitStatusModelTests: XCTestCase {
         await backend.setHistoryLogUnavailable(true)
         model.refresh()
         try await wait { model.statusError != nil && !model.isRefreshing }
+        XCTAssertFalse(model.hasCurrentDetails)
+        model.fetch()
+        XCTAssertFalse(model.isBusy, "Old remotes must not drive a new action after details fail")
         XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
         XCTAssertEqual(model.changedEntries, priorChanges)
         await backend.setHistoryLogUnavailable(false)

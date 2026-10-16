@@ -38,6 +38,7 @@ struct BottomToolbarView: View {
 
     private var changesAccessibilityValue: String {
         guard model.totalChangeCount > 0 else { return String(localized: "Clean", table: "Workspace") }
+        guard model.hasCurrentLineTotals else { return String(localized: "Line totals unavailable", table: "Workspace") }
         return String(localized: "+\(model.lineAdditions), −\(model.lineDeletions)", table: "Workspace")
     }
 
@@ -130,7 +131,7 @@ struct BottomToolbarView: View {
                 branchPicker
             }
         }
-        .disabled(model.isBusy)
+        .disabled(model.isBusy || !model.hasCurrentDetails)
         .help(String(localized: "Switch Branch", table: "Interface"))
         .accessibilityLabel(
             String(localized: "Current branch, \(model.branch ?? String(localized: "detached HEAD", table: "Workspace"))", table: "Workspace")
@@ -145,13 +146,15 @@ struct BottomToolbarView: View {
                         .fill(Color(red: 0.25, green: 0.73, blue: 0.31))
                         .frame(width: 6, height: 6)
                     Text(String(localized: "Clean", table: "Interface"))
-                } else {
+                } else if model.hasCurrentLineTotals {
                     Text(verbatim: "+\(model.lineAdditions)")
                         .foregroundStyle(Color(red: 0.25, green: 0.73, blue: 0.31))
                         .monospacedDigit()
                     Text(verbatim: "−\(model.lineDeletions)")
                         .foregroundStyle(Color(red: 1.0, green: 0.48, blue: 0.45))
                         .monospacedDigit()
+                } else {
+                    Text(verbatim: "…")
                 }
             }
             .padding(.horizontal, 6)
