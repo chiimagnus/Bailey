@@ -94,6 +94,8 @@ TSX 使用独立解析器，不能用普通 TypeScript 替代。`Vendor/TreeSitt
 
 高亮查询由插件提供，Kero 合并 TypeScript 与 JSX 查询，不复制一份手工查询。更新后检查 TypeScript、TSX 元素／属性／表达式及 Markdown／HTML 嵌入语言。
 
+2026-10-16 已在隔离环境对照官方 `STTextView-Plugin-TreeSitter` 的 `346bbce` 版本：TypeScript／TSX 缺少 JavaScript／JSX 基础高亮，视口变化会触发全文重新解析，因此**暂不替换**当前 Neon／TSX。只有在上游解决这两项问题，并逐项核对 STTextView 本地补丁、输入／滚动性能及 Editor／Diff 回归后才重新评估；见 [P7 证据](../.github/features/editor-git-performance/evidence-p7.md)和[审计](../.github/features/editor-git-performance/audit-p7.md)。
+
 Diff 复用现有 STTextView/TextKit 与语法依赖，不引入 PierreDiffsSwift 或 WebKit 渲染；约束见 [diff.md](features/diff.md)。
 
 ## 生成资源

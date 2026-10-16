@@ -135,18 +135,20 @@ note = "已有后台 list、相同 items 去重和两级合并不重做；只选
 [[tasks]]
 id = "P7-T1"
 title = "隔离对照新旧Tree-sitter插件并判定迁移Gate"
-status = "pending"
+status = "completed"
 plan = "plan-p7.md#p7-t1"
 commit = ""
-note = ""
+no_commit_reason = "隔离试验无正式产品代码变更；结果通过当前文档提交保存"
+note = "固定官方346bbce；候选Gate Debug/Release各2/4通过、TS/TSX共缺5项着色捕获；旧Kero高亮/查询/Diff/输入39/39通过，Release全文reset中位65.22ms；结论No-Go，详见evidence-p7与audit-p7。"
 
 [[tasks]]
 id = "P7-T2"
 title = "通过Gate后迁移官方插件并删除旧高亮依赖链"
-status = "pending"
+status = "completed"
 plan = "plan-p7.md#p7-t2"
 commit = ""
-note = ""
+no_commit_reason = "P7-T1 Gate No-Go；按条件计划保留现有高亮依赖"
+note = "未迁移，不删除Vendor/Neon或TSX；等待上游补全TypeScript/TSX基础与JSX查询并避免视口全文reset后重评。"
 
 [[tasks]]
 id = "P5-T1"

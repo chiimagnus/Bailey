@@ -1,5 +1,7 @@
 # P7：Tree-sitter 插件隔离对照与条件迁移
 
+> 2026-10-16 已完成隔离评估，结论 **No-Go**。当前官方候选尚未满足 TypeScript／TSX 高亮和性能门槛，P7-T2 因前置条件未成立而不实施。这里保留当时的验证方法与重评条件，不是待执行的替换指令；详见[证据](evidence-p7.md)和[审计](audit-p7.md)。
+
 **目标：** 判断能否用官方 [STTextView-Plugin-TreeSitter](https://github.com/krzyzanowskim/STTextView-Plugin-TreeSitter) 替代旧的 STTextView-Plugin-Neon／本地 Neon／本地 TSX 维护链，保持 Kero 原生编辑器和 Diff 的既有行为，降低长期维护成本。
 
 **非目标：** 不把 Kero 改成通用 IDE，不主动添加 LSP／补全，不重写解析器；不为了删包改写 TextKit／终端；不在本阶段改 Git Diff 的 Myers／Patience 算法。上游插件内置的 38 种语法允许保留，不为裁成三种语法另建私有 fork；Kero 仍以 Swift、TypeScript／TSX、Rust 为日常重点，既有 JSON、Markdown、Shell、配置及嵌入语言能力不得回归。语言实际识别范围如无需求不主动扩大。
