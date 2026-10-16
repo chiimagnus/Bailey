@@ -52,6 +52,6 @@ Git Ignore 在普通 `.gitignore` 标签的原生缓冲末尾插入规则，不�
 
 ## 验证
 
-`FileTabTests` 覆盖读取、编辑、保存及原生行为；`SyntaxHighlightingTests` 检查真实解析器坐标、渲染色及字体／撤销不变；`EditorTextInputTests` 对照系统 NSTextView 验证组合输入结束、最终替换及撤销。工作区 UI 测试覆盖完整 `ContentView` 中的标签身份、多窗口和关闭。检查真实文件字节、原生文本、撤销和滚动，不只断言 ViewModel 字段。
+`FileTabTests` 覆盖读取、编辑、保存及原生行为；`SyntaxHighlightingTests` 检查真实解析器坐标、Unicode 分块字节、渲染色及字体／撤销不变；`EditorTextInputTests` 对照系统 NSTextView 验证组合输入结束、最终替换及撤销。工作区 UI 测试覆盖完整 `ContentView` 中的标签身份、多窗口和关闭。检查真实文件字节、原生文本、撤销和滚动，不只断言 ViewModel 字段。
 
 覆盖写入期间编辑、保存失败、重命名、干净／脏文件重载、大小和编码边界、中文／emoji／CRLF、嵌入语言、A→B→A 与关闭失败。具体运行及人工验收范围见 [testing.md](../testing.md)。

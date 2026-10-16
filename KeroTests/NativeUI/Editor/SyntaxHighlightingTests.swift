@@ -48,6 +48,49 @@ private struct ObservedSyntaxPlugin: STPlugin {
 
 @MainActor
 final class SyntaxHighlightingTests: XCTestCase {
+    func testParserReadsAcrossUTF16ChunkBoundariesAndEditShift() async throws {
+        let plugin = try XCTUnwrap(SyntaxHighlighting.plugin(for: "fixture.swift"))
+        let parser = Parser()
+        try parser.setLanguage(plugin.language.parser)
+        for prefixLength in [1022, 1023, 2047] {
+            for boundary in ["👋", "e\u{301}", "\r\n", "👨‍👩‍👧‍👦"] {
+                let source = "//" + String(repeating: "a", count: prefixLength - 2)
+                    + boundary + "\nlet value = \"完整\"\n"
+                let mounted = try mountedPlugin(source: source)
+                defer { mounted.window.close() }
+                for insertion in ["", " "] {
+                    if !insertion.isEmpty {
+                        mounted.editor.insertText(insertion, replacementRange: NSRange(location: 0, length: 0))
+                    }
+                    let text = insertion + source
+                    let actualText = try XCTUnwrap(mounted.editor.text)
+                    XCTAssertEqual(Data(actualText.utf8), Data(text.utf8))
+                    for snapshot in [text, actualText] {
+                        let expectedBytes = try XCTUnwrap(snapshot.data(using: .utf16LittleEndian))
+                        let reader = Parser.readFunction(for: snapshot)
+                        var bytes = Data()
+                        while let chunk = reader(bytes.count, .zero), !chunk.isEmpty {
+                            bytes.append(chunk)
+                            if bytes.count > expectedBytes.count { break }
+                        }
+                        XCTAssertEqual(bytes, expectedBytes, "\(prefixLength) \(boundary.debugDescription)")
+                    }
+                    let actual = try await mounted.coordinator.tsClient.currentTree()
+                    let expected = try XCTUnwrap(parser.parse(text)?.rootNode)
+                    XCTAssertEqual(actual.rootNode?.range, expected.range, "\(prefixLength) \(boundary.debugDescription) \(insertion.debugDescription)")
+                    XCTAssertEqual(actual.rootNode?.pointRange, expected.pointRange)
+                    XCTAssertEqual(actual.rootNode?.sExpressionString, expected.sExpressionString)
+                    guard actual.rootNode?.range == expected.range else { continue }
+                    let keyword = (text as NSString).range(of: "let").location
+                    try await wait {
+                        self.color(mounted.editor, at: keyword)
+                            == SyntaxHighlightCoordinator.themeColor(for: "keyword", theme: plugin.theme)
+                    }
+                }
+            }
+        }
+    }
+
     private func mountedPlugin(
         path: String = "fixture.swift", source: String = "let value = Capitalized.method()\n"
     ) throws -> (
