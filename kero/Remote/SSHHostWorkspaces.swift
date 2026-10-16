@@ -1,14 +1,31 @@
 
-import CryptoKit
 import Darwin
 import Foundation
 
+/// %C hashes the effective SSH host, user, port and jump path instead of an
+/// alias; both terminals and workspace commands share only compatible targets.
+nonisolated enum SSHMultiplexing {
+    static let options = [
+        "-o", "ControlMaster=auto",
+        "-o", "ControlPersist=180",
+        "-o", "ControlPath=/tmp/kero-\(getuid())-\(getpid())-%C.sock",
+    ]
+}
+
 /// Executes independent workspace commands through the user's OpenSSH configuration.
-/// A multiplexed master avoids a full handshake for every directory in the tree.
-/// It is separate from the interactive terminal's SSH lifecycle.
+/// A multiplexed master avoids a full handshake for every directory and terminal.
+/// OpenSSH persists the master independently of any single terminal tab.
 nonisolated struct SSHHostCommandRunner: RemoteCommandRunner {
     let host: String
-    let socket: String
+    private let multiplexOptions: [String]
+
+    init(host: String, socket: String? = nil) {
+        self.host = host
+        // Real SSH tests keep their own disposable master, never the user's.
+        multiplexOptions = socket.map {
+            ["-o", "ControlMaster=auto", "-o", "ControlPersist=180", "-o", "ControlPath=\($0)"]
+        } ?? SSHMultiplexing.options
+    }
 
     func run(
         _ argv: [String], stdin: Data?, timeout: TimeInterval
@@ -17,11 +34,7 @@ nonisolated struct SSHHostCommandRunner: RemoteCommandRunner {
             "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=yes",
             "-o", "ConnectTimeout=8",
-            "-o", "ControlMaster=auto",
-            "-o", "ControlPersist=180",
-            "-o", "ControlPath=\(socket)",
-            "-T", "--", host,
-        ] + argv
+        ] + multiplexOptions + ["-T", "--", host] + argv
         do {
             let result = try await Task.detached(priority: .utility) {
                 try ProcessRemoteCommandRunner.launch(
@@ -66,11 +79,8 @@ enum SSHHostWorkspaces {
 
     static func backend(for host: String) -> SSHWorkspaceBackend {
         if let existing = workspaces[host] { return existing }
-        let digest = SHA256.hash(data: Data(host.utf8))
-            .prefix(7).map { String(format: "%02x", $0) }.joined()
-        let socket = "/tmp/kero-\(getuid())-\(getpid())-\(digest).sock"
         let workspace = SSHWorkspaceBackend(
-            runner: SSHHostCommandRunner(host: host, socket: socket),
+            runner: SSHHostCommandRunner(host: host),
             timeout: 25
         )
         workspaces[host] = workspace

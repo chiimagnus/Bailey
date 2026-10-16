@@ -894,6 +894,16 @@
         }
       }
     },
+    "Git Details Unavailable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 详情暂不可用"
+          }
+        }
+      }
+    },
     "Git Status Unavailable" : {
       "localizations" : {
         "zh-Hans" : {

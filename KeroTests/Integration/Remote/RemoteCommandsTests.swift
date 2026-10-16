@@ -3,7 +3,74 @@ import Foundation
 import XCTest
 @testable import kero
 
+private actor BatchDirectoryRunnerFixture: RemoteCommandRunner {
+    private(set) var calls = 0
+    private var expectedPaths: [String] = []
+    private var entries: [[WorkspaceEntry]?] = []
+
+    func configure(paths: [String], entries: [[WorkspaceEntry]?]) {
+        expectedPaths = paths
+        self.entries = entries
+    }
+
+    func run(_ argv: [String], stdin: Data?, timeout: TimeInterval) async throws
+        -> (status: Int32, stdout: Data, stderr: Data)
+    {
+        calls += 1
+        let script = String(decoding: stdin ?? Data(), as: UTF8.self)
+        guard argv == ["sh", "-s"],
+              expectedPaths.allSatisfy({ script.contains(RemoteCommands.quote($0)) }),
+              let tag = script.components(separatedBy: "'").first(where: {
+                  $0.count == 36 && $0.filter({ $0 == "-" }).count == 4
+              })
+        else { return (1, Data(), Data("bad batch".utf8)) }
+        var output = Data()
+        for (index, directoryEntries) in entries.enumerated() {
+            for entry in directoryEntries ?? [] {
+                output.append(Data("\(entry.isSymlink ? "l" : entry.isDirectory ? "d" : "f")\t\(entry.isDirectory ? "d" : "f")\t\(entry.name)\0".utf8))
+            }
+            output.append(Data("\n\(tag) \(index) \(directoryEntries == nil ? 44 : 0)\n".utf8))
+        }
+        return (0, output, Data())
+    }
+}
+
+private actor GitRootRunnerFixture: RemoteCommandRunner {
+    private(set) var result: (status: Int32, stdout: Data, stderr: Data) = (128, Data(), Data())
+    func set(_ status: Int32, output: String, error: String) {
+        result = (status, Data(output.utf8), Data(error.utf8))
+    }
+    func run(_ argv: [String], stdin: Data?, timeout: TimeInterval) async throws
+        -> (status: Int32, stdout: Data, stderr: Data) { result }
+}
+
 final class RemoteCommandsTests: XCTestCase {
+    func testRemoteGitRootDistinguishesNonRepositoryAndSSHOrGitFailure() async throws {
+        let runner = GitRootRunnerFixture()
+        let backend = SSHWorkspaceBackend(runner: runner)
+        await runner.set(128, output: "", error: "fatal: not a git repository")
+        let missing = try await backend.gitRoot(containing: "/remote/plain")
+        XCTAssertNil(missing)
+        await runner.set(128, output: "", error: "fatal: detected dubious ownership")
+        do {
+            _ = try await backend.gitRoot(containing: "/remote/repo")
+            XCTFail("Git ownership failure cannot masquerade as a plain directory")
+        } catch let error as RemoteCommandFailure {
+            XCTAssertEqual(error.status, 128)
+        }
+        await runner.set(255, output: "", error: "Connection closed")
+        do {
+            _ = try await backend.gitRoot(containing: "/remote/repo")
+            XCTFail("SSH connection failure must propagate")
+        } catch let error as RemoteCommandFailure {
+            XCTAssertEqual(error.status, 255)
+        }
+        await runner.set(0, output: "/remote/repo\n", error: "")
+        let resolved = try await backend.gitRoot(containing: "/remote/repo")
+        XCTAssertEqual(resolved, "/remote/repo")
+    }
+
+
     func testSSHStartupDestinationSeparatorKeepsRemoteCommandsUnfollowable() {
         XCTAssertEqual(KeroSSHPassthrough.classify(["-tt", "--", "windows"]), .interactiveSession)
         XCTAssertEqual(KeroSSHPassthrough.classify(["--", "windows", "git", "status"]), .notFollowable)
@@ -208,6 +275,33 @@ final class RemoteCommandsTests: XCTestCase {
         XCTAssertEqual(counts.first?.lines, 0)
         XCTAssertEqual(counts.first?.bytesRead, 0)
         XCTAssertEqual(counts.first?.complete, false)
+    }
+
+    func testBatchDirectoryListingKeepsFailuresIndependent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let one = root.appendingPathComponent("dir' one")
+        let two = root.appendingPathComponent("二")
+        try FileManager.default.createDirectory(at: one, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: two, withIntermediateDirectories: true)
+        try Data().write(to: one.appendingPathComponent("a\nline.txt"))
+        try Data().write(to: two.appendingPathComponent("b.txt"))
+
+        let runner = BatchDirectoryRunnerFixture()
+        let paths = [one.path, root.appendingPathComponent("missing").path, two.path]
+        await runner.configure(paths: paths, entries: [
+            [WorkspaceEntry(name: "a\nline.txt", isDirectory: false, isSymlink: false)],
+            nil,
+            [WorkspaceEntry(name: "b.txt", isDirectory: false, isSymlink: false)],
+        ])
+        let backend = SSHWorkspaceBackend(runner: runner)
+        let result = await backend.list(directories: paths)
+        XCTAssertEqual(result[one.path]?.map(\.name), ["a\nline.txt"])
+        XCTAssertEqual(result[two.path]?.map(\.name), ["b.txt"])
+        XCTAssertNil(result[root.appendingPathComponent("missing").path])
+        let calls = await runner.calls
+        XCTAssertEqual(calls, 1)
     }
 
     func testLocalPortProbe() throws {

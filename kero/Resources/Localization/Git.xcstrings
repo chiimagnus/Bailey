@@ -1796,6 +1796,16 @@
         }
       }
     },
+    "Unable to read ignored files." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取被忽略的文件。"
+          }
+        }
+      }
+    },
     "Unified" : {
       "comment" : "A single-column diff layout.",
       "localizations" : {

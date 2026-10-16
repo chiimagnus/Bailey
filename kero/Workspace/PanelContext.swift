@@ -40,13 +40,13 @@ nonisolated struct PanelContext {
     var scope: String { identity.workspace ?? "local" }
     var isRemote: Bool { identity.workspace != nil }
 
-    func resolvedRoot() async -> (root: String, source: RootSource) {
+    func resolvedRoot() async throws -> (root: String, source: RootSource) {
         if case .pinned = identity { return (cwd, .pinned) }
-        let shellRoot = (try? await backend.gitRoot(containing: cwd)) ?? cwd
+        let shellRoot = try await backend.gitRoot(containing: cwd) ?? cwd
         if let foreground,
-           let foregroundRoot = try? await backend.gitRoot(containing: foreground),
+           let foregroundRoot = try await backend.gitRoot(containing: foreground),
            foregroundRoot != shellRoot {
-            let isWorktree = (try? await backend.isLinkedWorktree(foregroundRoot)) ?? false
+            let isWorktree = try await backend.isLinkedWorktree(foregroundRoot)
             return (foregroundRoot, .foreground(isWorktree: isWorktree))
         }
         return (shellRoot, .shell)

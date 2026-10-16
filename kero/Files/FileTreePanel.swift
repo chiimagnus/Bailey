@@ -131,6 +131,7 @@ private struct FileTreeRow: View {
     private var displayRow: TreeDisplayModel.Row {
         var row = item
         row.status = gitDecoration
+        row.isExpanded = model.isExpanded(item)
         return row
     }
 
@@ -288,7 +289,11 @@ private struct FileTreeRow: View {
     private var semanticRow: some View {
         if item.isDirectory {
             TreeFolderRow(row: displayRow, scale: fontScale) {
-                Task { await model.toggle(item) }
+                guard isCurrentTarget() else { return }
+                Task {
+                    guard isCurrentTarget() else { return }
+                    await model.toggle(item)
+                }
             }
         } else {
             TreeFileRow(row: displayRow, scale: fontScale, selected: isCurrent,

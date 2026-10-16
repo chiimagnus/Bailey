@@ -10,16 +10,20 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     private var failGit = false
     private var failHistoryLog = false
     private var failStashList = false
+    private var failIgnoredStatus = false
     private var failRefSnapshot = false
     private var failRemoteList = false
     private var failGitDirectory = false
     private var failOperationMarker = false
     private var pauseNextGit = false
     private var pauseHistory = false
+    private var pauseHistoryMain = false
     private var emptyNextBatch = false
     private(set) var requestTimeouts: [TimeInterval?] = []
     private(set) var commands: [String] = []
     private var pausedGit: CheckedContinuation<Void, Never>?
+    private var pausedHistory: CheckedContinuation<Void, Never>?
+    private(set) var historyWaiting = false
     private(set) var awaitingGit = false
     private(set) var gitRuns = 0
     private var pauseMetadata = false
@@ -30,6 +34,7 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     func setGitUnavailable(_ value: Bool) { failGit = value }
     func setHistoryLogUnavailable(_ value: Bool) { failHistoryLog = value }
     func setStashListUnavailable(_ value: Bool) { failStashList = value }
+    func setIgnoredStatusUnavailable(_ value: Bool) { failIgnoredStatus = value }
     func setRefSnapshotUnavailable(_ value: Bool) { failRefSnapshot = value }
     func setRemoteListUnavailable(_ value: Bool) { failRemoteList = value }
     func setGitDirectoryUnavailable(_ value: Bool) { failGitDirectory = value }
@@ -37,6 +42,12 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     func suspendNextGitRequest() { pauseNextGit = true }
     func suspendHistoryRequest() { pauseHistory = true }
     func omitNextBatch() { emptyNextBatch = true }
+    func suspendHistory() { pauseHistoryMain = true }
+    func releaseHistory() {
+        pausedHistory?.resume()
+        pausedHistory = nil
+        historyWaiting = false
+    }
     func releaseGitRequest() {
         pausedGit?.resume()
         pausedGit = nil
@@ -74,6 +85,12 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
             awaitingGit = true
             await withCheckedContinuation { pausedGit = $0 }
         }
+        if pauseHistoryMain, let stdin,
+           String(decoding: stdin, as: UTF8.self).contains(" LC_ALL=C git 'log' ") {
+            pauseHistoryMain = false
+            historyWaiting = true
+            await withCheckedContinuation { pausedHistory = $0 }
+        }
         if failGit { throw WorkspaceError.timedOut }
         if failOperationMarker, argv.count == 3,
            argv[0] == "sh", argv[1] == "-c",
@@ -85,7 +102,7 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
         var variables = ProcessInfo.processInfo.environment
         for (key, value) in env ?? [:] { variables[key] = value }
         let commandInput: Data?
-        if (failHistoryLog || failStashList || failRefSnapshot || failRemoteList || failGitDirectory),
+        if (failHistoryLog || failStashList || failIgnoredStatus || failRefSnapshot || failRemoteList || failGitDirectory),
            let stdin, let script = String(data: stdin, encoding: .utf8) {
             var failing = script
             if failHistoryLog {
@@ -93,6 +110,9 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
             }
             if failStashList {
                 failing = failing.replacingOccurrences(of: " LC_ALL=C git 'stash' 'list' ", with: " LC_ALL=C git 'invalid-test-stash' 'list' ")
+            }
+            if failIgnoredStatus {
+                failing = failing.replacingOccurrences(of: " '--ignored=matching'", with: " '--invalid-ignored-option'")
             }
             if failRefSnapshot {
                 failing = failing.replacingOccurrences(of: " LC_ALL=C git 'for-each-ref' ", with: " LC_ALL=C git 'invalid-test-refs' ")
@@ -399,7 +419,7 @@ final class GitStatusModelTests: XCTestCase {
         let model = GitStatusModel()
         model.sync(root: directory.path, backend: backend, scope: "ssh:scoped-refresh")
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
-        XCTAssertTrue(model.hasCurrentDetails)
+        XCTAssertTrue(model.canUseCurrentHistory)
         XCTAssertEqual(model.recentCommits.count, 30)
         XCTAssertTrue(model.hasMoreRecentCommits)
         let initialHead = model.headOID
@@ -410,7 +430,7 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertEqual(model.headOID, initialHead)
         XCTAssertEqual(model.recentCommits, initialHistory)
-        XCTAssertTrue(model.hasCurrentDetails)
+        XCTAssertTrue(model.canUseCurrentHistory)
         XCTAssertTrue(model.hasCurrentLineTotals)
         XCTAssertEqual(model.lineAdditions, 2)
         XCTAssertEqual(GitCommandExecution.run(["diff", "--cached", "--name-only"], in: directory.path).stdout,
@@ -435,7 +455,7 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertFalse(pageCommands.contains("git 'diff' '--numstat' "), pageCommands)
         XCTAssertFalse(pageCommands.contains("count_bytes()"), pageCommands)
         XCTAssertFalse(pageCommands.contains("git 'stash' 'list' "), pageCommands)
-        XCTAssertTrue(model.hasCurrentDetails)
+        XCTAssertTrue(model.canUseCurrentHistory)
         XCTAssertEqual(model.lineAdditions, 3)
 
         XCTAssertEqual(GitCommandExecution.run(["tag", "outside"], in: directory.path).status, 0)
@@ -497,7 +517,42 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { !model.isRefreshing && !model.isLoadingMoreCommits }
         XCTAssertEqual(model.recentCommits.count, 35)
         XCTAssertNotNil(model.refsByName["refs/tags/external-in-flight"])
-        XCTAssertTrue(model.hasCurrentDetails)
+        XCTAssertTrue(model.canUseCurrentHistory)
+    }
+
+    func testFailedHistoryPageRetainsLastPageWithoutRequeryingStashOrNumstat() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [["init", "-q", "-b", "main"], ["config", "user.name", "Page Failure Test"],
+                     ["config", "user.email", "page-failure@invalid"],
+                     ["config", "commit.gpgsign", "false"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        for number in 0..<32 {
+            XCTAssertEqual(GitCommandExecution.run(["commit", "--allow-empty", "-qm", "page \(number)"],
+                in: directory.path).status, 0)
+        }
+        let backend = DiscardRemoteWorkspaceFixture()
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: backend, scope: "ssh:page-error")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertEqual(model.recentCommits.count, 30)
+        await backend.setHistoryLogUnavailable(true)
+        let before = await backend.commands.count
+        XCTAssertTrue(model.loadMoreCommits())
+        try await wait { !model.isRefreshing && !model.isLoadingMoreCommits }
+        XCTAssertNotNil(model.detailError)
+        XCTAssertEqual(model.recentCommits.count, 30)
+        XCTAssertTrue(model.canUseCurrentHistory, "The previously loaded page remains verified")
+        let commands = Array((await backend.commands).dropFirst(before)).joined(separator: "\n")
+        XCTAssertFalse(commands.contains("git 'stash' 'list' "), commands)
+        XCTAssertFalse(commands.contains("git 'diff' '--numstat' "), commands)
+        await backend.setHistoryLogUnavailable(false)
+        model.refresh(kind: .historyOnly)
+        try await wait { !model.isRefreshing }
+        XCTAssertNil(model.detailError)
+        XCTAssertEqual(model.recentCommits.count, 32)
     }
 
     func testHistoryPageDoesNotLoseFullRefreshForConcurrentFileChange() async throws {
@@ -707,7 +762,7 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertNotNil(model.headOID)
         XCTAssertEqual(model.changedEntries.map(\.path), ["new.txt"])
         XCTAssertNil(model.repositoryOperation)
-        XCTAssertFalse(model.hasCurrentDetails)
+        XCTAssertFalse(model.canUseCurrentHistory)
         XCTAssertFalse(model.hasCurrentLineTotals)
         let timeouts = await backend.requestTimeouts
         XCTAssertTrue(timeouts.allSatisfy { $0 != nil && $0! > 0 && $0! <= 24 })
@@ -721,7 +776,7 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertNil(model.lastError)
         XCTAssertEqual(model.recentCommits.map(\.subject), ["amended without history"])
-        XCTAssertTrue(model.hasCurrentDetails)
+        XCTAssertTrue(model.canUseCurrentHistory)
         let amended = model.headOID
         await backend.releaseGitRequest()
         try await wait { !model.isRefreshing }
@@ -753,7 +808,7 @@ final class GitStatusModelTests: XCTestCase {
         model.sync(root: directory.path)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         XCTAssertTrue(model.isRepo)
-        XCTAssertTrue(model.hasCurrentDetails)
+        XCTAssertTrue(model.canUseCurrentHistory)
         XCTAssertFalse(model.hasCurrentLineTotals)
         XCTAssertNil(model.statusError)
         XCTAssertEqual(model.changedEntries.map(\.path), ["untracked"])
@@ -786,24 +841,25 @@ final class GitStatusModelTests: XCTestCase {
             }
             await backend.suspendHistoryRequest()
             model.refresh()
-            XCTAssertTrue(model.hasCurrentDetails, "Merely starting a query must not cancel a valid retry")
+            XCTAssertTrue(model.canUseCurrentHistory, "Merely starting a query must not cancel a valid retry")
             let deadline = Date().addingTimeInterval(10)
             while !(await backend.awaitingGit), Date() < deadline {
                 try await Task.sleep(for: .milliseconds(5))
             }
             let suspended = await backend.awaitingGit
             XCTAssertTrue(suspended)
-            XCTAssertEqual(model.hasCurrentDetails, !changesHead)
+            XCTAssertEqual(model.canUseCurrentHistory, !changesHead)
             if changesHead { XCTAssertNotEqual(model.headOID, oldHead) }
             await backend.releaseGitRequest()
             try await wait { !model.isRefreshing }
-            XCTAssertTrue(model.hasCurrentDetails)
+            XCTAssertTrue(model.canUseCurrentHistory)
         }
         await backend.setHistoryLogUnavailable(true)
         model.refresh()
         try await wait { !model.isRefreshing }
-        XCTAssertNotNil(model.statusError)
-        XCTAssertFalse(model.hasCurrentDetails)
+        XCTAssertNotNil(model.detailError)
+        XCTAssertNil(model.statusError, "An optional Git history failure must not disable verified core status")
+        XCTAssertFalse(model.canUseCurrentHistory)
         XCTAssertEqual(model.recentCommits.map(\.subject), ["changed", "initial"])
     }
 
@@ -820,6 +876,8 @@ final class GitStatusModelTests: XCTestCase {
         try git(["config", "user.email", "test@invalid"])
         try git(["config", "commit.gpgsign", "false"])
         try "baseline\n".write(to: directory.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        try "ignored.tmp\n".write(to: directory.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try "ignored contents".write(to: directory.appendingPathComponent("ignored.tmp"), atomically: true, encoding: .utf8)
         try git(["add", "."])
         try git(["commit", "-qm", "first"])
         try git(["commit", "--allow-empty", "-qm", "second"])
@@ -842,6 +900,10 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertNotNil(priorRefs["refs/heads/topic/safe"])
         XCTAssertNotNil(priorRefs["refs/tags/v1"])
         XCTAssertEqual(priorRemotes, ["origin"])
+        XCTAssertTrue(model.ignoredPaths.contains("ignored.tmp"))
+        XCTAssertTrue(model.canUseCurrentReferences)
+        XCTAssertTrue(model.canUseCurrentHistory)
+        XCTAssertTrue(model.canUseCurrentStashes)
 
         await backend.setGitUnavailable(true)
         model.refresh()
@@ -850,6 +912,10 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(model.branch, priorBranch)
         XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
         XCTAssertEqual(model.changedEntries, priorChanges)
+        XCTAssertFalse(model.isCurrent(model.actionTarget()), "Stale SSH status must not authorize writes")
+        model.stage(priorChanges[0])
+        let index = GitCommandExecution.run(["diff", "--cached", "--name-only"], in: directory.path)
+        XCTAssertEqual(index.stdout, "", "A stale snapshot must never stage user files")
 
         await backend.setGitUnavailable(false)
         model.refresh()
@@ -862,16 +928,54 @@ final class GitStatusModelTests: XCTestCase {
         // fails. That must not silently publish an empty Git Graph.
         await backend.setHistoryLogUnavailable(true)
         model.refresh()
-        try await wait { model.statusError != nil && !model.isRefreshing }
-        XCTAssertFalse(model.hasCurrentDetails)
-        model.fetch()
-        XCTAssertFalse(model.isBusy, "Old remotes must not drive a new action after details fail")
+        try await wait { model.detailError != nil && !model.isRefreshing }
+        XCTAssertNil(model.statusError, "History failure cannot invalidate the core Git status")
         XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
         XCTAssertEqual(model.changedEntries, priorChanges)
+        XCTAssertTrue(model.canUseCurrentReferences)
+        XCTAssertFalse(model.canUseCurrentHistory)
+        XCTAssertTrue(model.canUseCurrentStashes)
+
+        // Returning to the same repository restores readable Graph history,
+        // not fresh permission to act on that unverified history.
+        model.sync(root: "", backend: backend, scope: "ssh:fixture")
+        model.sync(root: directory.path, backend: backend, scope: "ssh:fixture")
+        XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
+        XCTAssertFalse(model.canUseCurrentStatus)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.canUseCurrentReferences)
+        XCTAssertFalse(model.canUseCurrentHistory)
+        XCTAssertTrue(model.canUseCurrentStashes)
+        XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
         await backend.setHistoryLogUnavailable(false)
         model.refresh()
-        try await wait { model.statusError == nil && !model.isRefreshing }
+        try await wait { model.detailError == nil && !model.isRefreshing }
         XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
+        XCTAssertTrue(model.canUseCurrentHistory)
+        XCTAssertTrue(model.canUseCurrentStashes)
+
+        // Ignored decorations can be expensive on large SSH repositories.
+        // A failure here cannot turn valid HEAD, refs, and working files stale.
+        await backend.setIgnoredStatusUnavailable(true)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertNil(model.statusError, "Ignored-file scanning must be optional")
+        XCTAssertNotNil(model.detailError)
+        XCTAssertTrue(model.canUseCurrentStatus)
+        XCTAssertTrue(model.canUseCurrentHistory, "Ignored decoration is not an input to Graph actions")
+        XCTAssertTrue(model.canUseCurrentStashes, "Ignored decoration is not an input to Stash actions")
+        XCTAssertTrue(model.canUseCurrentReferences)
+        XCTAssertTrue(model.canUseCurrentHistory)
+        XCTAssertEqual(model.changedEntries, priorChanges)
+        XCTAssertTrue(model.ignoredPaths.contains("ignored.tmp"))
+        model.refresh(kind: .historyOnly)
+        try await wait { !model.isRefreshing }
+        XCTAssertNotNil(model.detailError, "Paging must not erase an unrelated ignored-scan warning")
+        await backend.setIgnoredStatusUnavailable(false)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertNil(model.statusError)
+        XCTAssertNil(model.detailError)
 
         // An individual metadata query failing must not publish a partial
         // successful snapshot that hides Branch/Tag menus or an in-progress operation.
@@ -883,7 +987,7 @@ final class GitStatusModelTests: XCTestCase {
             }
             model.refresh()
             try await wait { !model.isRefreshing }
-            XCTAssertNotNil(model.statusError, "Metadata query \(kind) must fail the complete snapshot")
+            XCTAssertNotNil(model.statusError, "Core metadata query \(kind) must fail the complete snapshot")
             XCTAssertEqual(model.refsByName, priorRefs)
             XCTAssertEqual(model.remotes, priorRemotes)
             XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
@@ -904,14 +1008,19 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(priorStashes.count, 1)
         await backend.setStashListUnavailable(true)
         model.refresh()
-        try await wait { model.statusError != nil && !model.isRefreshing }
+        try await wait { model.detailError != nil && !model.isRefreshing }
+        XCTAssertNil(model.statusError)
         XCTAssertEqual(model.stashes, priorStashes)
         XCTAssertEqual(model.stashes.count, 1)
+        XCTAssertTrue(model.canUseCurrentReferences)
+        XCTAssertTrue(model.canUseCurrentHistory)
+        XCTAssertFalse(model.canUseCurrentStashes)
         await backend.setStashListUnavailable(false)
         try git(["stash", "clear"])
         model.refresh()
-        try await wait { model.statusError == nil && !model.isRefreshing }
+        try await wait { model.detailError == nil && !model.isRefreshing }
         XCTAssertTrue(model.stashes.isEmpty)
+        XCTAssertTrue(model.canUseCurrentStashes)
 
         // A failed remote marker check must not turn an in-progress merge
         // into a clean repository that enables other commit actions.
@@ -931,6 +1040,38 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { !model.isRefreshing }
         XCTAssertNil(model.statusError)
         XCTAssertNil(model.repositoryOperation)
+    }
+
+    func testSSHCoreStatusAppearsWhileSlowHistoryIsStillLoading() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [
+            ["init", "-q"], ["config", "user.name", "Core Status"],
+            ["config", "user.email", "core@invalid"], ["commit", "--allow-empty", "-qm", "first"]
+        ] {
+            let command = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(command.status, 0, command.stderr)
+        }
+        try Data("pending".utf8).write(to: directory.appendingPathComponent("new.txt"))
+        let backend = DiscardRemoteWorkspaceFixture()
+        await backend.suspendHistory()
+        defer { Task { await backend.releaseHistory() } }
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: backend, scope: "ssh:core-first")
+        let deadline = Date().addingTimeInterval(10)
+        while await !backend.historyWaiting && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let waiting = await backend.historyWaiting
+        XCTAssertTrue(waiting, "History must be a distinct SSH request")
+        XCTAssertTrue(model.hasResolvedStatus, "Core status must publish before history finishes")
+        XCTAssertTrue(model.isRepo)
+        XCTAssertEqual(model.changedEntries.map(\.path), ["new.txt"])
+        XCTAssertNil(model.statusError)
+        await backend.releaseHistory()
+        try await wait { !model.isRefreshing }
+        XCTAssertEqual(model.recentCommits.map(\.subject), ["first"])
     }
 
     func testStashFileLoadRejectsStaleSSHChannelAndRetriesAfterFailure() async throws {
@@ -997,6 +1138,66 @@ final class GitStatusModelTests: XCTestCase {
         } else {
             XCTFail("A completed new SSH read must not be overwritten by the old channel")
         }
+    }
+
+    func testReplacingSSHChannelKeepsCachedGitReadOnlyUntilCoreIsVerified() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [
+            ["init", "-q"], ["config", "user.name", "SSH Verification"],
+            ["config", "user.email", "ssh-verification@invalid"],
+            ["config", "commit.gpgsign", "false"]
+        ] {
+            let run = GitCommandExecution.run(args, in: directory.path)
+            XCTAssertEqual(run.status, 0, run.stderr)
+        }
+        let file = directory.appendingPathComponent("tracked.txt")
+        try Data("baseline".utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["add", "."], in: directory.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "baseline"], in: directory.path).status, 0)
+        try Data("changed".utf8).write(to: file)
+        let oldChannel = DiscardRemoteWorkspaceFixture()
+        let newChannel = DiscardRemoteWorkspaceFixture()
+        defer { Task { await newChannel.releaseGitRequest() } }
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: oldChannel, scope: "ssh:verification")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let pending = try XCTUnwrap(model.changedEntries.first)
+        XCTAssertTrue(model.isCurrent(model.actionTarget()))
+
+        await newChannel.suspendNextGitRequest()
+        model.sync(root: directory.path, backend: newChannel, scope: "ssh:verification")
+        let deadline = Date().addingTimeInterval(5)
+        while await !newChannel.awaitingGit, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let suspended = await newChannel.awaitingGit
+        XCTAssertTrue(suspended)
+        XCTAssertEqual(model.changedEntries.map(\.path), ["tracked.txt"])
+        XCTAssertFalse(model.isCurrent(model.actionTarget()),
+                       "A new SSH channel is not yet verified and cannot write from old Git status")
+        model.stage(pending)
+        XCTAssertFalse(model.isBusy)
+        XCTAssertEqual(GitCommandExecution.run(["diff", "--cached", "--name-only"], in: directory.path).stdout, "")
+        await newChannel.releaseGitRequest()
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.isCurrent(model.actionTarget()))
+
+        // Reopening the same repo from the remembered snapshot must also
+        // remain read-only until the restored checkout is freshly verified.
+        model.sync(root: "", backend: newChannel, scope: "ssh:verification")
+        await newChannel.suspendNextGitRequest()
+        model.sync(root: directory.path, backend: newChannel, scope: "ssh:verification")
+        XCTAssertEqual(model.changedEntries.map(\.path), ["tracked.txt"])
+        XCTAssertFalse(model.isCurrent(model.actionTarget()))
+        let reopenDeadline = Date().addingTimeInterval(5)
+        while await !newChannel.awaitingGit, Date() < reopenDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await newChannel.releaseGitRequest()
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.isCurrent(model.actionTarget()))
     }
 
     func testReplacingSSHBackendDoesNotWaitForStaleGitWorker() async throws {

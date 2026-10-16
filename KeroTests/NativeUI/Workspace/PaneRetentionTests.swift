@@ -535,8 +535,16 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertTrue(window.makeFirstResponder(editor))
         editor.insertText("E", replacementRange: NSRange(location: 0, length: 0))
         try await settle { file.isDirty }
-        // Keep the insertion point inside the viewport while checking native reparenting.
-        editor.textSelection = NSRange(location: (original as NSString).range(of: "Line 40").location + 1, length: 0)
+        scroll.contentView.setBoundsOrigin(NSPoint(x: 0, y: 900))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        // Derive the insertion point from the rendered viewport, not a fixed
+        // line number: fonts and pane heights vary across macOS/Xcode runners.
+        // A caret outside the pane makes AppKit legitimately scroll it into view.
+        let layout = editor.textLayoutManager
+        let documentStart = layout.documentRange.location
+        let point = CGPoint(x: 20, y: scroll.contentView.bounds.minY + 30)
+        let caret = try XCTUnwrap(layout.caretLocation(interactingAt: point, inContainerAt: documentStart))
+        editor.textSelection = NSRange(location: layout.offset(from: documentStart, to: caret), length: 0)
         scroll.contentView.setBoundsOrigin(NSPoint(x: 0, y: 900))
         scroll.reflectScrolledClipView(scroll.contentView)
         let scrollBefore = scroll.contentView.bounds.origin
@@ -551,6 +559,7 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertEqual(project.selectedTabID, pane.id)
         XCTAssertTrue(scroll.documentView === editor)
         try await settle { window.firstResponder === editor }
+        try await settle { scroll.contentView.bounds.origin == scrollBefore }
         XCTAssertEqual(scroll.contentView.bounds.origin, scrollBefore)
         let undo = try XCTUnwrap(editor.undoManager)
         XCTAssertTrue(undo.canUndo)
