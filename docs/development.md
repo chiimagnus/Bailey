@@ -58,7 +58,7 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 
 ### STTextView
 
-`Vendor/STTextView` 是基于 2.3.11 的本地副本，用于保留仍需维护的修复，不用上游 changelog 代替副本版本证据。
+`Vendor/STTextView` 是基于 2.3.11 的本地副本，用于保留仍需维护的修复，不用上游 changelog 代替副本版本证据。Kero 使用自己的 AppKit 视图桥接，不使用上游 `STTextViewSwiftUI`；本地包的库产品只链接 `STTextView`，避免构建无用的 SwiftUI 封装目标。
 
 | 修复 | 必须保持的行为 |
 | --- | --- |

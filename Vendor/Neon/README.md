@@ -4,6 +4,8 @@
 
 这是 Kero 的本地运行时子集，不是另一个解析器或通用跨平台包。Xcode 以相同 Neon 身份替换远程包；SwiftTreeSitter、Rearrange 和插件版本不变。最低 macOS 14 与插件一致，Kero 的最低 macOS 15.6 不变。
 
+上游主线是 [ChimeHQ/Neon](https://github.com/ChimeHQ/Neon)（现重定向至 `slsrepo/Neon`）。当前插件固定使用的 `kylemacomber/Neon` 具有旧版 `TreeSitterClient` 接口，与主线新版接口不同；本地补丁还修复了排队解析的失效坐标。不能仅替换仓库 URL 退回主线；未来优先核实主线的编辑、失效范围及嵌入高亮行为，确认覆盖后删除本地补丁和副本。
+
 仅保留 Kero 与该插件实际使用的高亮、token 和 TreeSitterClient 核心。未引入旧 NSTextView／UIKit 适配、未使用的 invalidation buffer、Region 别名或上游测试语法；回归继续进入 KeroTests。
 
 相对上游的运行时改动限于：
