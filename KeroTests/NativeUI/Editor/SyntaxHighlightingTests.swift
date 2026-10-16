@@ -48,6 +48,30 @@ private struct ObservedSyntaxPlugin: STPlugin {
 
 @MainActor
 final class SyntaxHighlightingTests: XCTestCase {
+    func testClosingFirstEditorDoesNotPreventSecondEditorAndDiffColors() async throws {
+        let source = "package main\n// shared 中文 👋\nfunc main() {}\n"
+        func openThenClose() async throws {
+            let first = try mountedPlugin(path: "first.go", source: source)
+            await Task.yield()
+            first.window.contentView = nil
+            first.window.close()
+        }
+        try await openThenClose()
+        let second = try mountedPlugin(path: "second.go", source: source)
+        defer { second.window.close() }
+        let contextResult = await DiffSyntaxHighlighter.context(for: "second.go")
+        let context = try XCTUnwrap(contextResult)
+        let comment = (source as NSString).range(of: "// shared").location
+        let expected = SyntaxHighlightCoordinator.themeColor(for: "comment", theme: SyntaxHighlighting.theme)
+        XCTAssertNotNil(expected)
+        try await wait { self.color(second.editor, at: comment) == expected }
+        let captures = await Task.detached {
+            DiffSyntaxHighlighter.captures(text: source, context: context)
+        }.value
+        let colors = DiffSyntaxHighlighter.colors(for: captures)
+        XCTAssertTrue(colors.contains { NSLocationInRange(comment, $0.range) && $0.color == expected })
+    }
+
     func testThemeCapturesMatchBundledPaletteAcrossAppearances() throws {
         let url = try XCTUnwrap(Bundle.main.url(
             forResource: "STTextView-Plugin-Neon_STPluginNeonAppKit", withExtension: "bundle"

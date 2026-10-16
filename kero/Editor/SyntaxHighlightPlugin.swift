@@ -81,55 +81,61 @@ struct SyntaxHighlightPlugin: STPlugin {
     }
 }
 
-/// Compiled highlight queries, cached per language.
-///
-/// Compiling a tree-sitter query (`ts_query_new`) costs O(grammar complexity),
-/// not O(query size): it resolves every pattern against the grammar's symbol
-/// table. For the Swift grammar (a 12 MB parser) that is ~190 ms, versus ~30 ms
-/// for TypeScript. The query is identical for every file of a language and is
-/// immutable and thread-safe once built, so it's compiled once and shared: the
-/// first file of a language compiles it (off the main thread — see
-/// `SyntaxHighlightCoordinator.installTokenProvider`), every later file reuses it.
 @MainActor
-enum HighlightQueryCache {
-    private static var cache: [SyntaxLanguage: SwiftTreeSitter.Query] = [:]
-    private static var injectionCache: [SyntaxLanguage: SwiftTreeSitter.Query] = [:]
+final class HighlightQueryCache {
+    static let shared = HighlightQueryCache()
 
-    static func cached(_ language: SyntaxLanguage) -> SwiftTreeSitter.Query? {
-        cache[language]
+    enum Kind: Hashable { case highlights, injections }
+
+    private struct Key: Hashable {
+        let language: SyntaxLanguage
+        let kind: Kind
     }
 
-    static func store(_ query: SwiftTreeSitter.Query, for language: SyntaxLanguage) {
-        cache[language] = query
+    private enum Entry {
+        case pending(Task<SwiftTreeSitter.Query?, Never>)
+        case complete(SwiftTreeSitter.Query?)
     }
 
-    /// A language's compiled *injections* query. Separate from the highlights
-    /// cache above because it's built from different `.scm` bytes against the
-    /// same grammar. A language embedded in another (bash inside markdown)
-    /// reuses the highlights cache via `cached(_:)` for its own tokens.
-    static func cachedInjection(_ language: SyntaxLanguage) -> SwiftTreeSitter.Query? {
-        injectionCache[language]
+    private var entries: [Key: Entry] = [:]
+
+    func cached(_ language: SyntaxLanguage, kind: Kind = .highlights) -> SwiftTreeSitter.Query? {
+        guard case .complete(let query) = entries[Key(language: language, kind: kind)] else { return nil }
+        return query
     }
 
-    static func storeInjection(_ query: SwiftTreeSitter.Query, for language: SyntaxLanguage) {
-        injectionCache[language] = query
+    func isComplete(_ language: SyntaxLanguage, kind: Kind = .highlights) -> Bool {
+        if case .complete = entries[Key(language: language, kind: kind)] { return true }
+        return false
+    }
+
+    func query(
+        for language: SyntaxLanguage, kind: Kind = .highlights, data: Data
+    ) async -> SwiftTreeSitter.Query? {
+        let key = Key(language: language, kind: kind)
+        let task: Task<SwiftTreeSitter.Query?, Never>
+        switch entries[key] {
+        case .complete(let query): return query
+        case .pending(let pending): task = pending
+        case nil:
+            guard let grammarIndex = language.grammarIndex else { return nil }
+            task = Task.detached(priority: .userInitiated) {
+                SyntaxLanguage.compileQuery(grammarIndex: grammarIndex, data: data)
+            }
+            entries[key] = .pending(task)
+        }
+        let query = await task.value
+        entries[key] = .complete(query)
+        return query
     }
 }
 
 @MainActor
 final class SyntaxHighlightCoordinator {
     private(set) var highlighter: Neon.Highlighter?
-    private let language: SyntaxLanguage
-    private let tsLanguage: SwiftTreeSitter.Language
     let tsClient: TreeSitterClient
     private let coordinates: TextCoordinateIndex
-    private let highlightsData: Data
-    /// Injections query bytes for the root language, or `nil` when it embeds no
-    /// other languages. Non-nil selects the injection-aware token provider.
-    private let injectionsData: Data?
-    /// Embedded languages whose highlights query is being compiled off the main
-    /// thread right now, so the token provider kicks off each compile only once.
-    private var pendingInjectionCompiles: Set<SyntaxLanguage> = []
+    private var pendingInjectionQueries: Set<SyntaxLanguage> = []
     private var contentRevision: UInt = 0
     private var prevViewportRange: NSTextRange?
 
@@ -140,16 +146,11 @@ final class SyntaxHighlightCoordinator {
         highlightsData: Data,
         injectionsData: Data?
     ) {
-        self.language = language
-        self.highlightsData = highlightsData
-        self.injectionsData = injectionsData
-        tsLanguage = Language(language: language.parser)
-
         let string = textView.textContentManager.attributedString(in: nil)?.string ?? ""
         let coordinates = TextCoordinateIndex(string)
         self.coordinates = coordinates
         tsClient = try! TreeSitterClient(
-            language: tsLanguage,
+            language: Language(language: language.parser),
             transformer: { coordinates.point(at: $0) },
             synchronousLengthThreshold: 0
         )
@@ -184,7 +185,8 @@ final class SyntaxHighlightCoordinator {
             completionHandler: {}
         )
 
-        installTokenProvider(textContentManager: textView.textContentManager)
+        installTokenProvider(language: language, highlightsData: highlightsData,
+                             injectionsData: injectionsData, textContentManager: textView.textContentManager)
     }
 
     /// tree-sitter capture names that carry no color — spell-check hints,
@@ -228,53 +230,28 @@ final class SyntaxHighlightCoordinator {
         "attribute": "method",
     ]
 
-    /// Install the highlighter's token provider. If the language's query is
-    /// already compiled, this is synchronous (instant); otherwise the compile —
-    /// the expensive part — runs on a background queue and the provider is
-    /// installed when it finishes, so the editor opens without blocking and the
-    /// colors appear a moment later.
-    private func installTokenProvider(textContentManager: NSTextContentManager) {
-        if let query = HighlightQueryCache.cached(language) {
-            finishInstall(highlightsQuery: query, textContentManager: textContentManager)
-            return
-        }
-
-        guard let grammarIndex = language.grammarIndex else { return }
-        let data = highlightsData
+    private func installTokenProvider(
+        language: SyntaxLanguage, highlightsData: Data, injectionsData: Data?, textContentManager: NSTextContentManager
+    ) {
         Task { @MainActor [weak self, weak textContentManager] in
-            let query = await Task.detached(priority: .userInitiated) {
-                SyntaxLanguage.compileQuery(grammarIndex: grammarIndex, data: data)
-            }.value
-            guard let self, let textContentManager, let query else { return }
-            HighlightQueryCache.store(query, for: self.language)
-            self.finishInstall(highlightsQuery: query, textContentManager: textContentManager)
+            guard let query = await HighlightQueryCache.shared.query(for: language, data: highlightsData) else { return }
+            let injectionsQuery: SwiftTreeSitter.Query?
+            if let injectionsData {
+                injectionsQuery = await HighlightQueryCache.shared.query(
+                    for: language, kind: .injections, data: injectionsData
+                )
+            } else {
+                injectionsQuery = nil
+            }
+            guard let self, let textContentManager else { return }
+            if let injectionsQuery {
+                self.setInjectionTokenProvider(
+                    highlightsQuery: query, injectionsQuery: injectionsQuery, textContentManager: textContentManager
+                )
+            } else {
+                self.setTokenProvider(query: query, textContentManager: textContentManager)
+            }
         }
-    }
-
-    /// Install the right token provider now that the highlights query is ready:
-    /// the injection-aware one when the root language embeds others (its
-    /// injections query compiles fast — a handful of patterns against the root
-    /// grammar — so it's done inline and cached), otherwise the plain
-    /// single-language provider, unchanged.
-    private func finishInstall(highlightsQuery: SwiftTreeSitter.Query, textContentManager: NSTextContentManager) {
-        guard let injectionsData else {
-            setTokenProvider(query: highlightsQuery, textContentManager: textContentManager)
-            return
-        }
-
-        let injectionsQuery = HighlightQueryCache.cachedInjection(language)
-            ?? (try? SwiftTreeSitter.Query(language: tsLanguage, data: injectionsData))
-        guard let injectionsQuery else {
-            setTokenProvider(query: highlightsQuery, textContentManager: textContentManager)
-            return
-        }
-        HighlightQueryCache.storeInjection(injectionsQuery, for: language)
-
-        setInjectionTokenProvider(
-            highlightsQuery: highlightsQuery,
-            injectionsQuery: injectionsQuery,
-            textContentManager: textContentManager
-        )
     }
 
     private func setTokenProvider(query: SwiftTreeSitter.Query, textContentManager: NSTextContentManager) {
@@ -381,34 +358,18 @@ final class SyntaxHighlightCoordinator {
         return tokens
     }
 
-    /// The compiled highlights query for an embedded language, reusing (and
-    /// populating) the shared `HighlightQueryCache`. On a miss the compile —
-    /// which can be costly for a big grammar dropped into a code fence — runs
-    /// off the main thread and `invalidate()` repaints when it lands; the region
-    /// stays plain until then. Mirrors `installTokenProvider`'s root compile.
     private func injectedHighlightsQuery(for language: SyntaxLanguage) -> SwiftTreeSitter.Query? {
-        if let query = HighlightQueryCache.cached(language) {
+        let cache = HighlightQueryCache.shared
+        if let query = cache.cached(language) {
             return query
         }
-        guard !pendingInjectionCompiles.contains(language) else { return nil }
-        pendingInjectionCompiles.insert(language)
-
-        guard let grammarIndex = language.grammarIndex else {
-            pendingInjectionCompiles.remove(language)
-            return nil
-        }
+        guard !cache.isComplete(language), pendingInjectionQueries.insert(language).inserted else { return nil }
         let data = SyntaxHighlighting.highlightsData(for: language)
         Task { @MainActor [weak self] in
-            let query = await Task.detached(priority: .userInitiated) {
-                SyntaxLanguage.compileQuery(grammarIndex: grammarIndex, data: data)
-            }.value
+            let query = await cache.query(for: language, data: data)
             guard let self else { return }
-            self.pendingInjectionCompiles.remove(language)
-            if let query {
-                HighlightQueryCache.store(query, for: language)
-            }
-            // Repaint: the token provider can now emit this region's tokens.
-            self.highlighter?.invalidate()
+            self.pendingInjectionQueries.remove(language)
+            if query != nil { self.highlighter?.invalidate() }
         }
         return nil
     }

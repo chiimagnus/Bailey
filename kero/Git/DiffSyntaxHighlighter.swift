@@ -44,15 +44,9 @@ enum DiffSyntaxHighlighter {
     static func context(for path: String) async -> DiffHighlightContext? {
         guard let language = SyntaxHighlighting.language(for: path) else { return nil }
         guard let grammarIndex = language.grammarIndex else { return nil }
-        if let cached = HighlightQueryCache.cached(language) {
-            return DiffHighlightContext(grammarIndex: grammarIndex, query: cached)
-        }
         let data = SyntaxHighlighting.highlightsData(for: language)
-        let query = await Task.detached(priority: .userInitiated) {
-            SyntaxLanguage.compileQuery(grammarIndex: grammarIndex, data: data)
-        }.value
+        let query = await HighlightQueryCache.shared.query(for: language, data: data)
         guard let query else { return nil }
-        HighlightQueryCache.store(query, for: language)
         return DiffHighlightContext(grammarIndex: grammarIndex, query: query)
     }
 
