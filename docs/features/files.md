@@ -28,6 +28,6 @@ Files、Git 工作区、暂存区和提交历史共用同一套树语义。本�
 
 ## 验证
 
-`FileTreeTests` 检查展开即时反馈、首次同层目录批量查询、按需复用、批量刷新、断线保留、目录创建、重命名、范围与失败；`SSHFileTreeLiveTests` 验证实际 Windows SSH 批量读取及失败隔离；`TreeRowHitTestingTests` 验证真实行命中。共享组件改变时同时验收 Files、Git 工作区、暂存区及历史树，包含窄面板、大字体、长名称、点击边缘、右侧动作、键盘和无障碍。
+`FileTreeTests` 检查展开即时反馈、首次同层目录批量查询、按需复用、批量刷新、断线保留、目录创建、重命名、范围与失败；`SSHFileTreeLiveTests` 验证实际 Windows SSH 批量读取、失败隔离及文件树冷开／热展开／刷新时的 SSH 请求次数；`TreeRowHitTestingTests` 验证真实行命中。共享组件改变时同时验收 Files、Git 工作区、暂存区及历史树，包含窄面板、大字体、长名称、点击边缘、右侧动作、键盘和无障碍。
 
 实现入口：[FileTreeModel.swift](../../kero/Files/FileTreeModel.swift)、[TreeDisplayModel.swift](../../kero/Shared/Tree/TreeDisplayModel.swift)、[TreeRowStyle.swift](../../kero/Shared/Tree/TreeRowStyle.swift)。运行方式见 [testing.md](../testing.md)。
