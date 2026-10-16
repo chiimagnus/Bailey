@@ -597,9 +597,10 @@ final class Project: nonisolated Identifiable {
             workspace: workspaceIdentity
         ),
            case .diff(let diff) = tab.content {
+            let changed = diff.untracked != untracked || diff.origPath != origPath
             diff.untracked = untracked
             diff.origPath = origPath
-            diff.reload()
+            if changed || !diff.isLoading { diff.reload() }
             selectedTabID = tab.id
             return
         }
@@ -636,8 +637,11 @@ final class Project: nonisolated Identifiable {
         if let tab = findDiffTab(repoRoot: repoRoot, path: path,
                                  source: source, workspace: workspaceIdentity),
            case .diff(let diff) = tab.content {
+            let changed = diff.origPath != origPath
             diff.origPath = origPath
-            diff.reload()
+            if changed || (!diff.isLoading && (source.isLive || diff.error != nil || !diff.hasLoadedContent)) {
+                diff.reload()
+            }
             selectedTabID = tab.id
             return
         }

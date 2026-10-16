@@ -14,6 +14,15 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
     private(set) var writing = false
     private(set) var reading = false
     private(set) var writes = 0
+    private var mutateIndexAfterSize = false
+    private var indexMoved = false
+    private var shortGitBlob = false
+
+    func simulateIndexChangeAfterSize() { mutateIndexAfterSize = true }
+    func simulateIncompleteGitBlob() {
+        mutateIndexAfterSize = true
+        shortGitBlob = true
+    }
 
     func finishWrite(failing: Bool = false) {
         guard let (data, continuation) = pendingWrite else { return }
@@ -42,7 +51,40 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
         }
     }
     func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
-        .init(status: 0, stdout: Data(), stderr: Data())
+        guard mutateIndexAfterSize else {
+            return .init(status: 0, stdout: Data(), stderr: Data())
+        }
+        let headID = String(repeating: "a", count: 40)
+        let indexID = String(repeating: "b", count: 40)
+        let newID = String(repeating: "c", count: 40)
+        let head = Data("head\n".utf8)
+        let index = Data("indexA\n".utf8)
+        let moved = Data("indexB\n".utf8)
+        func result(_ data: Data) -> WorkspaceRunResult {
+            .init(status: 0, stdout: data, stderr: Data())
+        }
+        if argv.contains("ls-tree") {
+            return result(Data("100644 blob \(headID)\tstable.txt\0".utf8))
+        }
+        if argv.contains("ls-files") {
+            let id = indexMoved ? newID : indexID
+            return result(Data("100644 \(id) 0\tstable.txt\0".utf8))
+        }
+        if argv.contains("cat-file"), argv.count >= 4 {
+            let id = argv.last ?? ""
+            let bytes = id == headID || id == "HEAD:stable.txt" ? head
+                : id == indexID ? index
+                : id == newID || id == ":stable.txt" ? (indexMoved ? moved : index)
+                : Data()
+            if argv.contains("-s") {
+                if id == indexID || id == ":stable.txt" { indexMoved = true }
+                return result(Data("\(bytes.count)\n".utf8))
+            }
+            if argv.contains("blob") {
+                return result(shortGitBlob && id == indexID ? Data(bytes.dropLast()) : bytes)
+            }
+        }
+        return .init(status: 128, stdout: Data(), stderr: Data("unexpected Git command".utf8))
     }
     func stat(path: String) async throws -> WorkspaceStat? {
         .init(isRegular: true, isDirectory: false, isSymlink: false, size: contents.count, mtime: .distantPast)
@@ -82,6 +124,75 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class DiffTabTests: XCTestCase {
+    func testIncompleteSelectedGitBlobFailsInsteadOfPublishingTruncatedContent() async throws {
+        let backend = DiffWorkspaceFixture()
+        await backend.simulateIncompleteGitBlob()
+        let domain = "kero-diff-short-git-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let tab = DiffTab(
+            repoRoot: "/fixture", path: "stable.txt", source: .staged,
+            untracked: false, origPath: nil, backend: backend,
+            workspaceIdentity: nil, preferences: DiffViewPreferences(defaults: defaults)
+        )
+        try await wait { !tab.isLoading }
+        XCTAssertNotNil(tab.error)
+        XCTAssertTrue(tab.error?.contains("Incomplete") == true)
+        XCTAssertFalse(tab.hasLoadedContent)
+        XCTAssertEqual(tab.newContent, "")
+    }
+
+    func testFoldingPreviousDisplayCannotOverrideNewLoadedDiff() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("pending.swift")
+        var lines = (0..<3600).map { "let value\($0) = \($0)\n" }
+        try Data(lines.joined().utf8).write(to: file)
+        for args in [["add", "."], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        lines[1800] = "let value1800 = 111111\n"
+        try Data(lines.joined().utf8).write(to: file)
+        let tab = DiffTab(
+            repoRoot: directory.path, path: "pending.swift", source: .worktree,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil
+        )
+        try await wait({ !tab.isLoading && tab.display != nil }, timeout: 15)
+        let oldDisplay = try XCTUnwrap(tab.display)
+        let oldFold = try XCTUnwrap(oldDisplay.computation.unified.rows.compactMap(\.collapsed).first)
+        lines[1800] = "let value1800 = 222222\n"
+        lines[2000] = "let value2000 = 333333\n"
+        let latest = lines.joined()
+        try Data(latest.utf8).write(to: file)
+        tab.reload()
+        try await wait({ tab.newContent.utf8.elementsEqual(latest.utf8) }, pollingInterval: .milliseconds(1), timeout: 15)
+        tab.expandRun(oldFold)
+        try await wait({ tab.display?.id != oldDisplay.id }, timeout: 15)
+        let rendered = try XCTUnwrap(tab.display)
+        XCTAssertEqual(Data(tab.newContent.utf8), Data(latest.utf8))
+        XCTAssertTrue(rendered.computation.unified.text.contains("333333"),
+                      "A fold from the previous display must not supersede the newest loaded source")
+    }
+
+    func testIndexMutationDuringGitContentReadUsesSelectedImmutableBlob() async throws {
+        let backend = DiffWorkspaceFixture()
+        await backend.simulateIndexChangeAfterSize()
+        let domain = "kero-diff-index-race-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let tab = DiffTab(
+            repoRoot: "/fixture", path: "stable.txt", source: .staged,
+            untracked: false, origPath: nil, backend: backend,
+            workspaceIdentity: nil, preferences: DiffViewPreferences(defaults: defaults)
+        )
+        try await wait { !tab.isLoading }
+        XCTAssertNil(tab.error)
+        XCTAssertEqual(tab.oldContent, "head\n")
+        XCTAssertEqual(tab.newContent, "indexA\n",
+                       "One stage read must keep the OID captured by metadata despite a later index mutation")
+    }
+
     func testCanonicalEquivalentEditDuringDiffWriteRemainsDirty() async throws {
         let domain = "kero-canonical-save-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))

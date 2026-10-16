@@ -133,6 +133,150 @@ final class GitHistoryFileTests: XCTestCase {
         XCTAssertEqual(try git(["show", selected + ":old.txt"], in: root), "old bytes")
     }
 
+    func testReopeningLoadedImmutableRevisionDoesNotRepeatGitRead() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("immutable text\n".utf8).write(to: root.appendingPathComponent("note.txt"))
+        _ = try git(["add", "."], in: root)
+        _ = try git(["commit", "-qm", "first"], in: root)
+        let hash = try git(["rev-parse", "HEAD"], in: root)
+        let project = Project(fallbackName: "Historical reuse", workspaceConfiguration: .standard)
+        project.customDirectory = root.path
+        project.openHistoricalDiff(
+            repoRoot: root.path, path: "note.txt", source: .revision(hash: hash), origPath: nil
+        )
+        guard case .diff(let old)? = project.selectedTab?.content else {
+            return XCTFail("Missing revision tab")
+        }
+        try await wait { !old.isLoading && old.newContent == "immutable text\n" }
+        let gitFolder = root.appendingPathComponent(".git")
+        let suspended = root.appendingPathComponent(".git-suspended")
+        try FileManager.default.moveItem(at: gitFolder, to: suspended)
+        defer { try? FileManager.default.moveItem(at: suspended, to: gitFolder) }
+        project.openHistoricalDiff(
+            repoRoot: root.path, path: "note.txt", source: .revision(hash: hash), origPath: nil
+        )
+        guard case .diff(let selected)? = project.selectedTab?.content else {
+            return XCTFail("Missing reused revision tab")
+        }
+        XCTAssertTrue(selected === old)
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertNil(old.error, "Immutable content already loaded must not be requeried on another click")
+        XCTAssertEqual(old.newContent, "immutable text\n")
+    }
+
+    func testUnmergedWorktreeUsesStageTwoAndPreservesConflictStatus() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("conflict.txt")
+        try Data("base\n".utf8).write(to: file)
+        _ = try git(["add", "."], in: root)
+        _ = try git(["commit", "-qm", "base"], in: root)
+        _ = try git(["checkout", "-qb", "other"], in: root)
+        try Data("theirs\n".utf8).write(to: file)
+        _ = try git(["commit", "-qam", "other"], in: root)
+        _ = try git(["checkout", "-q", "main"], in: root)
+        try Data("ours\n".utf8).write(to: file)
+        _ = try git(["commit", "-qam", "ours"], in: root)
+        let merge = GitCommandExecution.run(["merge", "other"], in: root.path)
+        XCTAssertNotEqual(merge.status, 0)
+        let conflict = DiffTab(
+            repoRoot: root.path, path: "conflict.txt", source: .worktree,
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !conflict.isLoading }
+        XCTAssertNil(conflict.error)
+        XCTAssertTrue(conflict.isUnmerged)
+        XCTAssertEqual(conflict.oldContent, "ours\n")
+        XCTAssertTrue(conflict.newContent.contains("<<<<<<<"))
+    }
+
+    func testUnbornIndexAndLiteralSpecialPathResolveCorrectBlobs() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let name = "folder/odd\tline\nname:colon.txt"
+        let directory = root.appendingPathComponent("folder")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent(name)
+        let first = "内容👋\r\n"
+        try Data(first.utf8).write(to: file)
+        _ = try git(["add", "--", name], in: root)
+        let unborn = DiffTab(
+            repoRoot: root.path, path: name, source: .staged,
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !unborn.isLoading }
+        XCTAssertNil(unborn.error)
+        XCTAssertEqual(unborn.oldContent, "")
+        XCTAssertEqual(Data(unborn.newContent.utf8), Data(first.utf8))
+        _ = try git(["commit", "-qm", "first"], in: root)
+        let hash = try git(["rev-parse", "HEAD"], in: root)
+        let historical = DiffTab(
+            repoRoot: root.path, path: name, source: .revision(hash: hash),
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !historical.isLoading }
+        XCTAssertNil(historical.error)
+        XCTAssertEqual(Data(historical.newContent.utf8), Data(first.utf8))
+        let updated = "新的行🪨\r\n"
+        try Data(updated.utf8).write(to: file)
+        _ = try git(["add", "--", name], in: root)
+        let staged = DiffTab(
+            repoRoot: root.path, path: name, source: .staged,
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !staged.isLoading }
+        XCTAssertNil(staged.error)
+        XCTAssertEqual(Data(staged.oldContent.utf8), Data(first.utf8))
+        XCTAssertEqual(Data(staged.newContent.utf8), Data(updated.utf8))
+    }
+
+    func testReadFailureDoesNotEraseAlreadyLoadedHistoricalText() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("historical text\n".utf8).write(to: root.appendingPathComponent("note.txt"))
+        _ = try git(["add", "."], in: root)
+        _ = try git(["commit", "-qm", "baseline"], in: root)
+        let hash = try git(["rev-parse", "HEAD"], in: root)
+        let tab = DiffTab(
+            repoRoot: root.path, path: "note.txt",
+            source: .revision(hash: hash), untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !tab.isLoading && tab.newContent == "historical text\n" }
+        let gitFolder = root.appendingPathComponent(".git")
+        let suspended = root.appendingPathComponent(".git-suspended")
+        try FileManager.default.moveItem(at: gitFolder, to: suspended)
+        defer { try? FileManager.default.moveItem(at: suspended, to: gitFolder) }
+        tab.reload()
+        try await wait { !tab.isLoading }
+        XCTAssertNotNil(tab.error)
+        XCTAssertEqual(tab.newContent, "historical text\n")
+        XCTAssertEqual(tab.display?.computation.unified.text, nil,
+                       "Plain revision uses its native text rather than a synthetic diff")
+    }
+
+    func testInvalidRevisionIsNotMisreportedAsAFileMissingFromValidCommit() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("valid\n".utf8).write(to: root.appendingPathComponent("note.txt"))
+        _ = try git(["add", "."], in: root)
+        _ = try git(["commit", "-qm", "baseline"], in: root)
+        let invalid = DiffTab(
+            repoRoot: root.path, path: "note.txt",
+            source: .revision(hash: "0000000000000000000000000000000000000001"),
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !invalid.isLoading }
+        let failure = try XCTUnwrap(invalid.error)
+        XCTAssertFalse(failure.contains("does not contain"), "An invalid Git object is not an absent path in a valid commit")
+    }
+
     func testMissingSelectedRevisionReportsErrorButRootAndDeletedSidesMayBeEmpty() async throws {
         let root = try repository()
         defer { try? FileManager.default.removeItem(at: root) }
