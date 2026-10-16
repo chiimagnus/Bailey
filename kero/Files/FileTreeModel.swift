@@ -362,18 +362,26 @@ final class FileTreeModel {
                 expanded.contains($0)
             }
             var visited: Set<String> = []
+            var queriedDirectories = refreshedDirectories
             while let directory = traversal.nextDirectory() {
                 visited.insert(directory)
-                var entries = cachedDirectories[directory]
-                if entries == nil && !refreshedDirectories.contains(directory) {
-                    entries = try? await backend.list(directory: directory)
+                if cachedDirectories[directory] == nil && !queriedDirectories.contains(directory) {
+                    // Directory compaction probes collapsed siblings too. Fetch
+                    // the current frontier together instead of N SSH round trips.
+                    let missing = ([directory] + traversal.pendingDirectories).filter {
+                        cachedDirectories[$0] == nil && !queriedDirectories.contains($0)
+                    }
+                    queriedDirectories.formUnion(missing)
+                    let fresh = await backend.list(directories: missing)
                     if epoch != treeEpoch || path != rootPath || scope != workspaceScope {
                         rebuildPending = true
                         break
                     }
-                    if let entries { cachedDirectories[directory] = entries }
+                    cachedDirectories.merge(fresh, uniquingKeysWith: { _, new in new })
                 }
-                traversal.receive(Self.children(of: directory, entries: entries, draft: draft))
+                traversal.receive(Self.children(
+                    of: directory, entries: cachedDirectories[directory], draft: draft
+                ))
             }
             if !rebuildPending, traversal.rootReadable,
                epoch == treeEpoch, path == rootPath, scope == workspaceScope {

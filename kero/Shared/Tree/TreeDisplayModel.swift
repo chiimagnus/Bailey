@@ -91,6 +91,15 @@ enum TreeDisplayModel {
         private(set) var rows: [Row] = []
         private(set) var rootReadable = true
 
+        /// The current traversal frontier, including collapsed folders whose
+        /// children must be checked to preserve directory compaction.
+        var pendingDirectories: [String] {
+            pending.compactMap { step in
+                guard case .row(let row, _) = step, row.isDirectory, !row.isDraft else { return nil }
+                return row.path
+            }
+        }
+
         init(root: String, directoryDepthLimit: Int? = nil, expanded: @escaping (String) -> Bool) {
             pending = [.root(root)]
             self.directoryDepthLimit = directoryDepthLimit

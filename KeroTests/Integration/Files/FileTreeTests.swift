@@ -230,6 +230,23 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(batch?.contains(sub.path), true)
     }
 
+    func testFirstLoadBatchesSiblingFolderLookahead() async throws {
+        let root = fixture.appendingPathComponent("siblings")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let folders = (0..<12).map { root.appendingPathComponent("dir\($0)") }
+        for folder in folders {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data().write(to: folder.appendingPathComponent("content.txt"))
+        }
+        let counting = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: counting)
+        XCTAssertEqual(tree.items.filter(\.isDirectory).count, folders.count)
+        let batch = await counting.lastBatch
+        XCTAssertEqual(Set(batch ?? []), Set(folders.map(\.path)),
+                       "Initial directory compression must not perform one SSH request per sibling")
+    }
+
     func testFolderIconChangesBeforeRemoteContentsArrive() async throws {
         let root = fixture.appendingPathComponent("slow")
         let parent = root.appendingPathComponent("parent")
