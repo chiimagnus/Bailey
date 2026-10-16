@@ -120,7 +120,7 @@ enum HighlightQueryCache {
 
 @MainActor
 final class SyntaxHighlightCoordinator {
-    private var highlighter: Neon.Highlighter?
+    private(set) var highlighter: Neon.Highlighter?
     private let language: SyntaxLanguage
     private let tsLanguage: SwiftTreeSitter.Language
     let tsClient: TreeSitterClient
@@ -131,6 +131,7 @@ final class SyntaxHighlightCoordinator {
     /// Embedded languages whose highlights query is being compiled off the main
     /// thread right now, so the token provider kicks off each compile only once.
     private var pendingInjectionCompiles: Set<SyntaxLanguage> = []
+    private var contentRevision: UInt = 0
     private var prevViewportRange: NSTextRange?
 
     init(
@@ -289,9 +290,17 @@ final class SyntaxHighlightCoordinator {
     }
 
     private func setTokenProvider(query: SwiftTreeSitter.Query, textContentManager: NSTextContentManager) {
-        highlighter?.tokenProvider = tsClient.tokenProvider(with: query) { range, _ in
+        let provider = tsClient.tokenProvider(with: query) { range, _ in
             guard !range.isEmpty else { return nil }
             return textContentManager.attributedString(in: NSTextRange(range, provider: textContentManager))?.string
+        }
+        highlighter?.tokenProvider = { [weak self] range, completion in
+            guard let self else { return }
+            let revision = self.contentRevision
+            provider(range) { [weak self] result in
+                guard self?.contentRevision == revision else { return }
+                completion(result)
+            }
         }
         // Re-run highlighting now that the provider exists (the no-op provider
         // produced nothing during the initial parse).
@@ -316,26 +325,24 @@ final class SyntaxHighlightCoordinator {
         }
 
         highlighter?.tokenProvider = { [weak self] range, completion in
-            guard let self else {
-                completion(.success(.noChange))
-                return
-            }
+            guard let self else { return }
+            let revision = self.contentRevision
 
             self.tsClient.executeHighlightsQuery(highlightsQuery, in: range, textProvider: textProvider) { baseResult in
+                guard self.contentRevision == revision else { return }
                 switch baseResult {
                 case .failure(let error):
                     completion(.failure(error))
                 case .success(let baseRanges):
                     var tokens = baseRanges.map { Neon.Token(name: $0.name, range: $0.range) }
-                    // Same tree, so this resolves against the state the base
-                    // tokens came from; an embedded region's own tokens are
-                    // appended so they layer over the base `@none`.
                     self.tsClient.executeInjectionsQuery(injectionsQuery, in: range, textProvider: textProvider) { injectionResult in
+                        guard self.contentRevision == revision else { return }
                         if case .success(let injections) = injectionResult {
                             for injection in injections {
                                 tokens.append(contentsOf: self.injectedTokens(for: injection, textProvider: textProvider))
                             }
                         }
+                        guard self.contentRevision == revision else { return }
                         completion(.success(TokenApplication(tokens: tokens)))
                     }
                 }
@@ -426,11 +433,13 @@ final class SyntaxHighlightCoordinator {
     }
 
     func willChangeContent(in range: NSRange) {
+        contentRevision &+= 1
         tsClient.willChangeContent(in: range)
     }
 
     func didChangeContent(_ textContentManager: NSTextContentManager, in range: NSRange, delta: Int, limit: Int) {
         guard let string = textContentManager.attributedString(in: nil)?.string else { return }
+        highlighter?.didChangeContent(in: range, delta: delta)
         tsClient.didChangeContent(
             in: range,
             delta: delta,
