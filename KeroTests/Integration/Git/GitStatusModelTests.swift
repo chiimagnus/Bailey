@@ -17,6 +17,7 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     private var failOperationMarker = false
     private var pauseNextGit = false
     private var pauseHistory = false
+    private var pauseRefs = false
     private var pauseHistoryMain = false
     private var emptyNextBatch = false
     private(set) var requestTimeouts: [TimeInterval?] = []
@@ -41,6 +42,7 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     func setOperationMarkerUnavailable(_ value: Bool) { failOperationMarker = value }
     func suspendNextGitRequest() { pauseNextGit = true }
     func suspendHistoryRequest() { pauseHistory = true }
+    func suspendRefSnapshotRequest() { pauseRefs = true }
     func omitNextBatch() { emptyNextBatch = true }
     func suspendHistory() { pauseHistoryMain = true }
     func releaseHistory() {
@@ -78,10 +80,13 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
             emptyNextBatch = false
             return WorkspaceRunResult(status: 0, stdout: Data(), stderr: Data())
         }
-        let historyRequest = stdin.flatMap { String(data: $0, encoding: .utf8) }?.contains("git 'log' ") == true
-        if pauseNextGit || (pauseHistory && historyRequest) {
+        let script = stdin.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        let historyRequest = script.contains("git 'log' ")
+        let refsRequest = script.contains(" LC_ALL=C git 'for-each-ref' ")
+        if pauseNextGit || (pauseHistory && historyRequest) || (pauseRefs && refsRequest) {
             pauseNextGit = false
             pauseHistory = false
+            pauseRefs = false
             awaitingGit = true
             await withCheckedContinuation { pausedGit = $0 }
         }
@@ -785,6 +790,61 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(GitCommandExecution.run(["show", "HEAD:new.txt"], in: directory.path).stdout, "new text\n")
     }
 
+    func testCoreIsDeliveredBeforeRefMetadataAndSurvivesRefFailure() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for args in [
+            ["init", "-q", "-b", "main"], ["config", "user.name", "Core Ref Test"],
+            ["config", "user.email", "core-ref@invalid"],
+            ["commit", "--allow-empty", "-qm", "initial"]
+        ] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        let file = directory.appendingPathComponent("untracked.txt")
+        try Data("new\n".utf8).write(to: file)
+        let backend = DiscardRemoteWorkspaceFixture()
+        await backend.suspendRefSnapshotRequest()
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: backend, scope: "ssh:slow-refs")
+        let deadline = Date().addingTimeInterval(10)
+        while !(await backend.awaitingGit), Date() < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let suspendedOnRefs = await backend.awaitingGit
+        XCTAssertTrue(suspendedOnRefs)
+        XCTAssertTrue(model.hasResolvedStatus, "Core must publish before waiting on refs")
+        XCTAssertTrue(model.canUseCurrentStatus)
+        XCTAssertEqual(model.changedEntries.map(\.path), ["untracked.txt"])
+        XCTAssertEqual(model.branch, "main")
+        XCTAssertFalse(model.canUseCurrentReferences)
+        await backend.releaseGitRequest()
+        try await wait { !model.isRefreshing }
+        XCTAssertTrue(model.canUseCurrentReferences)
+
+        let stashResult = GitCommandExecution.run(
+            ["stash", "push", "--include-untracked", "--message", "preserved"],
+            in: directory.path
+        )
+        XCTAssertEqual(stashResult.status, 0, stashResult.stderr)
+        await backend.setRefSnapshotUnavailable(true)
+        try Data("newer\n".utf8).write(to: file)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertNil(model.statusError)
+        XCTAssertNotNil(model.detailError)
+        XCTAssertTrue(model.canUseCurrentStatus)
+        XCTAssertFalse(model.canUseCurrentReferences)
+        XCTAssertEqual(model.changedEntries.map(\.path), ["untracked.txt"])
+        XCTAssertEqual(model.stashes.count, 1)
+        XCTAssertTrue(model.canUseCurrentStashes, "A verified Stash list does not depend on remote Ref metadata")
+        await backend.setRefSnapshotUnavailable(false)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertTrue(model.canUseCurrentReferences)
+        XCTAssertNil(model.detailError)
+    }
+
     func testMissingRemoteCoreBatchIsFailureWithoutIndividualRetry() async throws {
         let backend = DiscardRemoteWorkspaceFixture()
         await backend.omitNextBatch()
@@ -988,7 +1048,14 @@ final class GitStatusModelTests: XCTestCase {
             }
             model.refresh()
             try await wait { !model.isRefreshing }
-            XCTAssertNotNil(model.statusError, "Core metadata query \(kind) must fail the complete snapshot")
+            if kind == 2 {
+                XCTAssertNotNil(model.statusError, "Git directory is required before core can publish")
+            } else {
+                XCTAssertNil(model.statusError, "Ref/remote failure cannot invalidate core status")
+                XCTAssertNotNil(model.detailError)
+                XCTAssertTrue(model.canUseCurrentStatus)
+                XCTAssertFalse(model.canUseCurrentReferences)
+            }
             XCTAssertEqual(model.refsByName, priorRefs)
             XCTAssertEqual(model.remotes, priorRemotes)
             XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
