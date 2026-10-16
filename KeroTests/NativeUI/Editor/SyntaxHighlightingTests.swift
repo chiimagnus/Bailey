@@ -469,6 +469,35 @@ final class SyntaxHighlightingTests: XCTestCase {
         }
     }
 
+    func testEmbeddedQueryReadyDropsInFlightEarlierTokens() async throws {
+        let source = "```swift\n// embedded 中文 👋\nlet value = 42\n```\n"
+        let mounted = try mountedPlugin(path: "fixture.md", source: source)
+        defer { mounted.window.close() }
+        let marker = (source as NSString).range(of: "// embedded").location
+        let expected = SyntaxHighlightCoordinator.themeColor(for: "comment", theme: SyntaxHighlighting.theme)
+        try await wait { self.color(mounted.editor, at: marker) == expected }
+        let provider = try XCTUnwrap(mounted.coordinator.highlighter).tokenProvider
+        var oldDeliveries = 0
+        var queryBecameReady = false
+        mounted.storage.onNextRead = {
+            queryBecameReady = true
+            mounted.coordinator.injectedQueryBecameAvailable()
+        }
+        let range = NSRange(location: 0, length: source.utf16.count)
+        provider(range) { _ in oldDeliveries += 1 }
+        try await wait { queryBecameReady }
+        _ = try await mounted.coordinator.tsClient.currentTree()
+        XCTAssertEqual(oldDeliveries, 0, "A superseded highlight request must not apply tokens")
+        let current = expectation(description: "New query state completes the current request")
+        provider(range) { result in
+            if case .failure(let error) = result { XCTFail(error.localizedDescription) }
+            current.fulfill()
+        }
+        await fulfillment(of: [current], timeout: 5)
+        try await wait { self.color(mounted.editor, at: marker) == expected }
+        XCTAssertEqual(Data((mounted.editor.text ?? "").utf8), Data(source.utf8))
+    }
+
     func testInjectionReadCannotDeliverOldBaseAndCurrentViewportRecolors() async throws {
         let source = "```swift\n// embedded 中文 👋\nlet value = 42\n```\n"
         let mounted = try mountedPlugin(path: "fixture.md", source: source)

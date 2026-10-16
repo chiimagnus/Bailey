@@ -15,12 +15,6 @@ public class Highlighter {
 	/// Requests to the TokenProvider will not exceed this length.
 	public var requestLengthLimit = 1024
 
-	/// Highlighting may be done past the visible range by up to this amount.
-	public var visibleLookAheadLength = 1024
-
-	/// Highlighting may be done before the visible range by up to this amount.
-	public var visibleLookBehindLength = 1024
-
     public init(textInterface: TextSystemInterface, tokenProvider: TokenProvider? = nil) {
         self.textInterface = textInterface
         self.validSet = IndexSet()
