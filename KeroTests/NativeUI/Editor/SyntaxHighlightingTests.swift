@@ -48,6 +48,121 @@ private struct ObservedSyntaxPlugin: STPlugin {
 
 @MainActor
 final class SyntaxHighlightingTests: XCTestCase {
+    func testEmbeddedRequestsStayWithinRequestedRangeAndMatchFreshCaptures() async throws {
+        let cases = [
+            ("fixture.md", "```swift\n", "// 中文 👋 e\u{301}\nlet value = 42\n", "```\n", "fixture.swift", "//"),
+            ("fixture.md", "```swift\r\n", "// 中文 👋 e\u{301}\r\nlet value = 42\r\n", "```\r\n", "fixture.swift", "//"),
+            ("fixture.md", "```tsx\n", "// 中文 👋 e\u{301}\nconst view = <main/>;\n", "```\n", "fixture.tsx", "//"),
+            ("fixture.html", "<script>\n", "// 中文 👋 e\u{301}\nconst value = 42;\n", "</script>\n", "fixture.js", "//"),
+            ("fixture.html", "<style>\n", "/* 中文 👋 e\u{301} */\nbody { color: red; }\n", "</style>\n", "fixture.css", "/*")
+        ]
+        for (path, prefix, fragment, suffix, childPath, marker) in cases {
+            let mounted = try mountedPlugin(path: path, source: prefix + fragment + suffix)
+            defer { mounted.window.close() }
+            let child = try XCTUnwrap(SyntaxHighlighting.language(for: childPath))
+            let queryResult = await HighlightQueryCache.shared.query(
+                for: child, data: SyntaxHighlighting.highlightsData(for: child)
+            )
+            let query = try XCTUnwrap(queryResult)
+            let parser = Parser()
+            try parser.setLanguage(child.parser)
+            let tree = try XCTUnwrap(parser.parse(fragment))
+            let root = try XCTUnwrap(tree.rootNode)
+            let local = (fragment as NSString).range(of: marker).location
+            let captures = query.execute(node: root, in: tree)
+                .resolve(with: SwiftTreeSitter.Predicate.Context(string: fragment)).highlights()
+            let expected = captures.filter {
+                NSLocationInRange(local, $0.range) && !SyntaxHighlightCoordinator.ignoredCaptures.contains($0.name)
+            }.last.flatMap { SyntaxHighlightCoordinator.themeColor(for: $0.name, theme: SyntaxHighlighting.theme) }
+            XCTAssertNotNil(expected, childPath)
+            let offset = prefix.utf16.count + local
+            try await wait { self.color(mounted.editor, at: offset) == expected }
+            let range = NSRange(location: offset, length: 2)
+            let ready = expectation(description: "Current fragment matches fresh parser: \(childPath)")
+            try XCTUnwrap(mounted.coordinator.highlighter).tokenProvider(range) { result in
+                switch result {
+                case .failure(let error): XCTFail(error.localizedDescription)
+                case .success(let application):
+                    var color: NSColor?
+                    for token in application.tokens {
+                        XCTAssertEqual(NSIntersectionRange(token.range, range), token.range, childPath)
+                        if NSLocationInRange(offset, token.range)
+                            && !SyntaxHighlightCoordinator.ignoredCaptures.contains(token.name) {
+                            color = SyntaxHighlightCoordinator.themeColor(for: token.name, theme: SyntaxHighlighting.theme)
+                        }
+                    }
+                    XCTAssertEqual(color, expected, childPath)
+                }
+                ready.fulfill()
+            }
+            await fulfillment(of: [ready], timeout: 5)
+            XCTAssertEqual(Data((mounted.editor.text ?? "").utf8), Data((prefix + fragment + suffix).utf8))
+        }
+    }
+
+    func testEmbeddedSameLengthEditLanguageRemovalAndUndoKeepCurrentColors() async throws {
+        let source = "```swift\n// note\n```\n\n```swift\n// next\n```\n"
+        let mounted = try mountedPlugin(path: "fixture.md", source: source)
+        defer { mounted.window.close() }
+        let first = (source as NSString).range(of: "// note").location
+        let second = (source as NSString).range(of: "// next").location
+        let comment = SyntaxHighlightCoordinator.themeColor(for: "comment", theme: SyntaxHighlighting.theme)
+        let keyword = SyntaxHighlightCoordinator.themeColor(for: "keyword", theme: SyntaxHighlighting.theme)
+        try await wait {
+            self.color(mounted.editor, at: first) == comment && self.color(mounted.editor, at: second) == comment
+        }
+        mounted.editor.insertText("let n=1", replacementRange: NSRange(location: first, length: 7))
+        try await wait {
+            self.color(mounted.editor, at: first) == keyword && self.color(mounted.editor, at: second) == comment
+        }
+        mounted.editor.breakUndoCoalescing()
+        mounted.editor.undoManager?.undo()
+        try await wait { self.color(mounted.editor, at: first) == comment }
+        XCTAssertEqual(Data((mounted.editor.text ?? "").utf8), Data(source.utf8))
+        let language = (source as NSString).range(of: "swift")
+        mounted.editor.insertText("xxxxx", replacementRange: language)
+        let plain = SyntaxHighlightCoordinator.themeColor(for: "text.literal", theme: SyntaxHighlighting.theme)
+        XCTAssertNotEqual(plain, comment)
+        try await wait {
+            self.color(mounted.editor, at: first) == plain && self.color(mounted.editor, at: second) == comment
+        }
+        mounted.editor.breakUndoCoalescing()
+        mounted.editor.undoManager?.undo()
+        try await wait { self.color(mounted.editor, at: first) == comment }
+        let blockEnd = NSMaxRange((source as NSString).range(of: "```\n\n"))
+        mounted.editor.insertText("// note\n\n", replacementRange: NSRange(location: 0, length: blockEnd))
+        let remaining = try XCTUnwrap(mounted.editor.text)
+        let next = (remaining as NSString).range(of: "// next").location
+        try await wait {
+            self.color(mounted.editor, at: 0) == nil && self.color(mounted.editor, at: next) == comment
+        }
+        mounted.editor.breakUndoCoalescing()
+        mounted.editor.undoManager?.undo()
+        try await wait { self.color(mounted.editor, at: first) == comment }
+        XCTAssertEqual(Data((mounted.editor.text ?? "").utf8), Data(source.utf8))
+        mounted.editor.insertText("", replacementRange: NSRange(location: 0, length: (mounted.editor.text ?? "").utf16.count))
+        let tree = try await mounted.coordinator.tsClient.currentTree()
+        XCTAssertEqual(tree.rootNode?.range.length, 0)
+        XCTAssertEqual(mounted.editor.text, "")
+    }
+
+    func testClosingEmbeddedEditorReleasesPendingHighlightRequests() async throws {
+        weak var editor: STTextView?
+        weak var coordinator: SyntaxHighlightCoordinator?
+        func startAndClose() async throws {
+            let source = "```swift\n" + String(repeating: "// 中文 👋\nlet value = 42\n", count: 2048) + "```\n"
+            let mounted = try autoreleasepool { try mountedPlugin(path: "fixture.md", source: source) }
+            editor = mounted.editor
+            coordinator = mounted.coordinator
+            _ = try await mounted.coordinator.tsClient.currentTree()
+            try XCTUnwrap(mounted.coordinator.highlighter).tokenProvider(NSRange(location: 0, length: 1024)) { _ in }
+            mounted.window.contentView = nil
+            mounted.window.close()
+        }
+        try await startAndClose()
+        try await wait { editor == nil && coordinator == nil }
+    }
+
     func testClosingFirstEditorDoesNotPreventSecondEditorAndDiffColors() async throws {
         let source = "package main\n// shared 中文 👋\nfunc main() {}\n"
         func openThenClose() async throws {

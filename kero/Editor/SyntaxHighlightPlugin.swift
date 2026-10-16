@@ -136,6 +136,7 @@ final class SyntaxHighlightCoordinator {
     let tsClient: TreeSitterClient
     private let coordinates: TextCoordinateIndex
     private var pendingInjectionQueries: Set<SyntaxLanguage> = []
+    private var injectedFragments: [SwiftTreeSitter.NamedRange: Task<[SwiftTreeSitter.NamedRange], Never>] = [:]
     private var contentRevision: UInt = 0
     private var prevViewportRange: NSTextRange?
 
@@ -155,8 +156,8 @@ final class SyntaxHighlightCoordinator {
             synchronousLengthThreshold: 0
         )
 
-        tsClient.invalidationHandler = { [weak self] indexSet in
-            self?.highlighter?.invalidate(.set(indexSet))
+        tsClient.invalidationHandler = { [weak self, hasInjections = injectionsData != nil] indexSet in
+            self?.highlighter?.invalidate(hasInjections ? .all : .set(indexSet))
         }
 
         let textInterface = SyntaxHighlightTextInterface(textView: textView) { neonToken in
@@ -293,22 +294,39 @@ final class SyntaxHighlightCoordinator {
             guard let self else { return }
             let revision = self.contentRevision
 
-            self.tsClient.executeHighlightsQuery(highlightsQuery, in: range, textProvider: textProvider) { baseResult in
-                guard self.contentRevision == revision else { return }
+            self.tsClient.executeHighlightsQuery(highlightsQuery, in: range, textProvider: textProvider) { [weak self] baseResult in
+                guard let self, self.contentRevision == revision else { return }
                 switch baseResult {
                 case .failure(let error):
                     completion(.failure(error))
                 case .success(let baseRanges):
-                    var tokens = baseRanges.map { Neon.Token(name: $0.name, range: $0.range) }
-                    self.tsClient.executeInjectionsQuery(injectionsQuery, in: range, textProvider: textProvider) { injectionResult in
-                        guard self.contentRevision == revision else { return }
-                        if case .success(let injections) = injectionResult {
-                            for injection in injections {
-                                tokens.append(contentsOf: self.injectedTokens(for: injection, textProvider: textProvider))
+                    self.tsClient.executeInjectionsQuery(injectionsQuery, in: range, textProvider: textProvider) { [weak self] injectionResult in
+                        guard let self, self.contentRevision == revision else { return }
+                        Task { @MainActor [weak self] in
+                            guard let self, self.contentRevision == revision else { return }
+                            var tokens = baseRanges.compactMap { capture -> Neon.Token? in
+                                let clipped = NSIntersectionRange(capture.range, range)
+                                return clipped.length > 0 ? Neon.Token(name: capture.name, range: clipped) : nil
                             }
+                            if case .success(let injections) = injectionResult {
+                                for injection in injections {
+                                    let captures = await self.injectedCaptures(
+                                        for: injection, revision: revision, textProvider: textProvider
+                                    )
+                                    guard self.contentRevision == revision else { return }
+                                    for capture in captures {
+                                        let shifted = NSRange(location: capture.range.location + injection.range.location,
+                                                              length: capture.range.length)
+                                        let clipped = NSIntersectionRange(shifted, range)
+                                        if clipped.length > 0 {
+                                            tokens.append(Neon.Token(name: capture.name, range: clipped))
+                                        }
+                                    }
+                                }
+                            }
+                            guard self.contentRevision == revision else { return }
+                            completion(.success(TokenApplication(tokens: tokens)))
                         }
-                        guard self.contentRevision == revision else { return }
-                        completion(.success(TokenApplication(tokens: tokens)))
                     }
                 }
             }
@@ -316,46 +334,33 @@ final class SyntaxHighlightCoordinator {
         highlighter?.invalidate()
     }
 
-    /// Highlight one embedded region: parse its text with the embedded
-    /// language's grammar, run that language's highlights query, and shift each
-    /// token by the region's start so the ranges land in document coordinates.
-    /// Returns nothing (leaving the region plain) when the language isn't
-    /// bundled or its query hasn't finished compiling yet.
-    private func injectedTokens(
+    private func injectedCaptures(
         for injection: SwiftTreeSitter.NamedRange,
+        revision: UInt,
         textProvider: SwiftTreeSitter.Predicate.TextProvider
-    ) -> [Neon.Token] {
+    ) async -> [SwiftTreeSitter.NamedRange] {
         let injectionRange = injection.range
-        guard injectionRange.length > 0,
+        guard contentRevision == revision, injectionRange.length > 0,
               let language = SyntaxHighlighting.language(forInjectionName: injection.name),
-              let query = injectedHighlightsQuery(for: language),
+              let query = injectedHighlightsQuery(for: language)
+        else { return [] }
+        if let task = injectedFragments[injection] { return await task.value }
+        guard let grammarIndex = language.grammarIndex,
               let fragment = textProvider(injectionRange, Point.zero..<Point.zero),
-              !fragment.isEmpty
-        else {
-            return []
+              !fragment.isEmpty, contentRevision == revision
+        else { return [] }
+        let task = Task.detached(priority: .userInitiated) { () -> [SwiftTreeSitter.NamedRange] in
+            guard !Task.isCancelled, let grammar = SyntaxLanguage.parser(grammarIndex: grammarIndex) else { return [] }
+            let parser = Parser()
+            do { try parser.setLanguage(grammar) } catch { return [] }
+            guard let tree = parser.parse(fragment), let root = tree.rootNode, !Task.isCancelled else { return [] }
+            let context = SwiftTreeSitter.Predicate.Context(string: fragment)
+            return query.execute(node: root, in: tree).resolve(with: context).highlights().filter {
+                $0.range.length > 0 && !Self.ignoredCaptures.contains($0.name)
+            }
         }
-
-        let parser = Parser()
-        do {
-            try parser.setLanguage(language.parser)
-        } catch {
-            return []
-        }
-        guard let tree = parser.parse(fragment), let root = tree.rootNode else {
-            return []
-        }
-
-        // Fragment-relative NSRanges, so resolve predicates against the fragment
-        // text and offset the resulting ranges back into the document.
-        let context = SwiftTreeSitter.Predicate.Context(string: fragment)
-        let offset = injectionRange.location
-        var tokens: [Neon.Token] = []
-        for named in query.execute(node: root, in: tree).resolve(with: context).highlights() {
-            guard named.range.length > 0, !Self.ignoredCaptures.contains(named.name) else { continue }
-            let range = NSRange(location: named.range.location + offset, length: named.range.length)
-            tokens.append(Neon.Token(name: named.name, range: range))
-        }
-        return tokens
+        injectedFragments[injection] = task
+        return await task.value
     }
 
     private func injectedHighlightsQuery(for language: SyntaxLanguage) -> SwiftTreeSitter.Query? {
@@ -383,6 +388,8 @@ final class SyntaxHighlightCoordinator {
 
     func willChangeContent(in range: NSRange) {
         contentRevision &+= 1
+        for task in injectedFragments.values { task.cancel() }
+        injectedFragments.removeAll()
         tsClient.willChangeContent(in: range)
     }
 
