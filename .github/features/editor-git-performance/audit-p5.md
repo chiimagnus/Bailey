@@ -17,9 +17,9 @@
 ## 任务到文件的映射
 
 - **P5-T1（本地实验，不提交）**：`Project.openDiff/openHistoricalDiff` → `DiffTab.reload/recomputeDisplay` → `DiffEngine/DiffSyntaxHighlighter` → `DiffNativeSurface/DiffTextView`；临时 `DiffPipelinePerformanceTests.swift` 只在测试期间挂载，最终源码与日志归忽略的 `build/performance/diff/`，永久项目中已删除。
-- **P5-T2（`cae2cf6`，再审 `92ad0b4`、`8b3f742`）**：唯一 `DiffLineSplitter` 的 LF 标量扫描与 `DiffComputation.DocumentBuilder` 的展示行终止符；`DiffCodePaneView.setReviewDocument` 的原生布局高度、编辑态 TextKit 片段到 Git LF 行号的映射；`DiffEngineTests` 字节与 UTF-16、`DiffTabTests` CRLF／裸 CR／Unicode、原生编辑及保存；`docs/features/diff.md`。
-- **P5-T3（`b87f360`，再审 `00fed8c`、`a4dc9a0`）**：`DiffTab.reload`／`GitLocation/gitObject/gitContent`、失败保留与旧折叠；`Project.openHistoricalDiff` 的历史标签复用；新增验证暂存删除、错误后的展示保留、损坏 HEAD 和无效删除提交；`DiffTabTests`／`GitHistoryFileTests`／`GitExecutionTests`／`WorkspaceIdentityTests`；`docs/features/diff.md`。
-- **P5-T4（`0644d34`）**：`DiffTab.recomputeDisplay` 原有后台闭包中使用两侧 `async let`，无新 executor、缓存、渲染表面；`DiffTabTests`、`SyntaxHighlightingTests`、`EditorTextInputTests` 加交错 30 次 capture 等价及实际原生 30 次 A/B 的临时证据；`docs/features/diff.md`。
+- **P5-T2（`cae2cf6`，复查 `92ad0b4`、`8b3f742`、`c845cac`）**：共享 `DiffLineSplitter` 的 LF 标量扫描、`DiffComputation.DocumentBuilder` 的派生展示行；`DiffCodePaneView` 的真实段落首尾 ghost 占位、空文件虚拟行和 TextKit 行号映射；`DiffEngineTests`、`DiffTabTests` 的字节／坐标／撤销／删除与原生显示；`docs/features/diff.md`。
+- **P5-T3（`b87f360`，复查 `00fed8c`、`a4dc9a0`；边界测试 `c19cb2d`）**：`DiffTab.reload`、Git index/tree/OID reader、历史标签复用；核实暂存删除、错误保留、损坏 HEAD、错误历史 D、实际 SHA-1/SHA-256 64 字符对象和 5MiB 原始字节上限；`DiffTabTests`、`GitHistoryFileTests`、`GitExecutionTests`、`WorkspaceIdentityTests`；`docs/features/diff.md`。
+- **P5-T4（`0644d34`，复查 `c845cac`）**：原有 `recomputeDisplay` 的两侧 `async let`、原生布局热路径；删除 `DiffRowGeometry.visibleRows` 每次重绘扫描全文的代价，改由 `DiffTextView` 内容变化时更新唯一标记；`DiffTabTests`、`SyntaxHighlightingTests`、`EditorTextInputTests` 与原生 30 次 A/B 证据；`docs/features/diff.md`。
 
 ## 发现项
 
@@ -140,7 +140,7 @@
 - 解决证据：`00fed8c：Red p5-independent-red.log（staged D 文件误报 missing、无法绘制）；Green p5-native-final.log，真实 git rm HEAD→空 index、冲突 index 拒绝、NSWindow/TextKit 26/26 通过。`
 
 
-两轮独立源码复查对照 P5-T1～T4 的真实入口、原始提交、原生消费者及磁盘副作用，累计发现 F-17～F-22 共 6 项可复现缺陷。分别经 `00fed8c`、`a4dc9a0`、`92ad0b4`、`8b3f742` 的 Red→Green 修复；初版已解决的 CRLF 漏行／旧读取器等不重复列为新 finding。
+三轮独立源码复查对照 P5-T1～T4 的实际用户入口、提交、原生消费者及磁盘副作用，累计发现 F-17～F-25 **9 项可复现缺陷**。经 `00fed8c`、`a4dc9a0`、`92ad0b4`、`8b3f742`、`c845cac` 五个生产修复提交逐项 Red→Green，另有 `c19cb2d` 边界测试提交。既有修复不重复列为新 finding。
 
 明确验收边界：本机真实 Git／NSWindow／TextKit 已验证**文字进入原生表面、编辑保存回磁盘**，但不能冒充独立 App 的菜单点击或合成像素 E2E；真实 SSH 需使用授权专属连接。性能 A/B 为同机同文本的 Debug 热路径，冷启动／峰值 RSS／渲染像素／完整交互只能在 P6 综合复测中继续取证，不由组件时间外推。
 
@@ -153,6 +153,9 @@
 - 第二轮 F-19／F-20（`a4dc9a0`）：确认 HEAD 所指 branch ref 真不存在才能用 unborn 空侧；历史 D 文件必须在真实可读的选中提交中缺失，不再跳过 selected hash。
 - 第二轮 F-21（`92ad0b4`）：`DiffComputation.DocumentBuilder` 为派生只读文档补最后一行的布局 LF，原始字节、缺失换行标记不变；TextKit 对裸 CR／Unicode 分隔符采用实际高度，普通 LF／CRLF 保持固定行高。原有测试中隐含“人工渲染文档必须漏终止 LF”的旧断言同步改成正确显示契约。
 - 第二轮 F-22（`8b3f742`）：真实 TextKit 原生编辑段落在裸 CR 后产生错误行索引 `[0,1,2]`，修为 Git LF 索引 `[0,0,1]`；不存第二套行号索引。普通文件继续使用原生段落 `.count`，只有实际非 LF 分隔符才根据段落结尾 LF 计数。
+- 第三轮 F-23／F-25（`c845cac`）：TextKit 裸 CR 多段落中只向首／末真实段落加删除行占位；全部删除为空后使用虚拟行后的 EOF ghost 且内容高度足以滚动，不改用户文本；后续输入、恢复、移除 ghost 时重算正确。
+- 第三轮 F-24（`c845cac`）：4MiB 普通文本的特殊换行扫描在本机 Debug 30 次中位 9.738ms、p95 10.085ms。原实现每次 gutter 与底纹绘制都进行全量扫描，改为仅在文档安装／原生输入与撤销变化时失效，视口 O(1) 读取；这是明确减少扫描工作，不把该单项测量说成画面帧率提升。
+- 第三轮新增必要而非防御式的回归（`c19cb2d`）：500 组固定种子 Unicode／混合 CRLF／裸 CR／换行／组合字形，以及 820 行超阈值锚点差异，核对 UTF-8 原文、UTF-16 行内／来源范围和 Diff 操作不变量；真实 SHA-256 Git 仓库三类 Source 与 5MiB 精确容量边界，皆通过已有 XCTest。
 
 ## 验证日志
 
@@ -167,16 +170,16 @@
 - 同机 Apple M1 Pro、macOS 27.2、Debug 的 1200 行 Swift 样本：双侧 captures 30 次串行中位 74.670ms→并行 53.733ms，name/range 等价；Git→Diff→原生文本安装反向各 30 次中位 236.562ms→222.759ms，p95 242.726ms→237.101ms。内容安装不是屏幕合成或冷启动测量。
 - 已读源码调用链与测试确认旧动态 Git spec、stderr 缺失猜测、重复 isUnmerged、逐 Character 分行、历史不可变重复读取均已替代，临时性能类从正式 XCTest 目标删除，实验源码留在忽略目录。
 - 文档相关 8 个入口（docs/README、diff、git、editor、testing、development、idea、plan-p5）的相对 Markdown 文件路径均可达；git diff --check 通过。
-- P6 历史证据已包含专用 Windows SSH 读取五种 Diff 来源（1/1）及全量授权 SSH（315/315）、隔离 App 图片／编辑／滚动与短时内存测量；它们早于本次四个复查修复提交，不能冒充当前提交在真实 SSH／完整 App 的重新验收。完整独立 UI、用户输入的全部极端换行及 Instruments 运行时限制仍按实测边界区分。
+- P6 历史证据已包含专用 Windows SSH 读取五种 Diff 来源（1/1）及全量授权 SSH（315/315）、隔离 App 图片／编辑／滚动与短时内存测量；它们早于本次六个复查生产／测试提交，不能冒充当前提交在真实 SSH／完整 App 的重新验收。完整独立 UI、用户输入的全部极端换行及 Instruments 运行时限制仍按实测边界区分。
 
 ## Gate（是否允许进入下一阶段）
 
 - 结论：**P5 阶段自身 Go；当前整库集成测试 No-Go**。
-- 理由：P5 四项源码入口与原始提交经两轮独立复查，F-17～F-22 已在四个单独提交中修复并由真实 Git／原生 TextKit 回归证明，最后 P5 专项 78/78 passed；但各阶段审查仍并行变更源码，359 项全量有 P2 `FileTabTests` 失败，之后单独 `EditorTextInputTests` 还出现 P3 的 STTextView 崩溃，整库 Gate 需其他阶段修复后重跑才能变绿。历史 P6 的真实 SSH／App 证据未覆盖新提交。
+- 理由：P5 四项源码入口及原始提交经三轮独立复查，F-17～F-25 九项均有真实 Git／TextKit Red→Green 证据；第三轮正常路径、异常输入及容量边界专项 97/97，额外 SHA-256 真实 Git 仓库回归 20/20。当前整库授权 SSH 环境的全量 XCTest 正在独立运行，以该次最终结果判定 Gate；不能以此前 P2／P3 并行修改时的失败或局部绿色替代当前全量结果。P6 旧版完整 App 实测不能冒充新修复的 E2E。
 
 ## 最终状态与剩余风险
 
-- 当前状态：P5-T1～T4 及本次发现 F-17～F-22 均为 **Resolved**；P5 专项测试已复验，新提交仍需与其他并行变更一起完成整库 Gate。
+- 当前状态：P5-T1～T4 及 F-17～F-25 九个经证实的 finding 均为 **Resolved**。五个生产修复提交与一个边界回归提交已落在当前分支，P5 源码、测试、文档无未提交差异；需以当前源代码通过的完整测试及必要 UI 验收核对整库 Gate。
 - 剩余边界：旧版 P6 已完成授权 SSH 与隔离 App、短时资源观测；本次复查新修改尚未在同一完整 GUI／真实远端再跑完整路径。Xcode-beta 的 Instruments/DTServiceHub 限制仍未解决，不归因为 Kero 缺陷。
 
 ## 审计约束
