@@ -44,6 +44,20 @@ private actor GitRootRunnerFixture: RemoteCommandRunner {
         -> (status: Int32, stdout: Data, stderr: Data) { result }
 }
 
+private actor LocalShellRunnerFixture: RemoteCommandRunner {
+    func run(_ argv: [String], stdin: Data?, timeout: TimeInterval) async throws
+        -> (status: Int32, stdout: Data, stderr: Data)
+    {
+        guard argv.count == 1 else { return (1, Data(), Data("unexpected argv".utf8)) }
+        let command = argv[0].replacingOccurrences(of: "stat -c '%d:%i' --", with: "stat -f '%d:%i' --")
+        let result = try await LocalWorkspaceBackend.shared.run(
+            argv: ["/bin/sh", "-c", command], cwd: nil, env: nil,
+            stdin: stdin, timeout: timeout
+        )
+        return (result.status, result.stdout, result.stderr)
+    }
+}
+
 final class RemoteCommandsTests: XCTestCase {
     func testRemoteGitRootDistinguishesNonRepositoryAndSSHOrGitFailure() async throws {
         let runner = GitRootRunnerFixture()
@@ -96,6 +110,41 @@ final class RemoteCommandsTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
         XCTAssertTrue(RemoteCommands.atomicWriteCommand(path: "/tmp/x").contains("chmod --reference="))
         XCTAssertTrue(RemoteCommands.atomicWriteCommand(path: "/tmp/x").contains("mv -f"))
+    }
+
+    func testSSHFileRenamePreservesDanglingSymlinksAndRejectsOccupiedDestinations() async throws {
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture())
+        let missing = fixture.appendingPathComponent("missing")
+        let broken = fixture.appendingPathComponent("broken")
+        let moved = fixture.appendingPathComponent("moved")
+        try FileManager.default.createSymbolicLink(at: broken, withDestinationURL: missing)
+        try await backend.rename(from: broken.path, to: moved.path)
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: moved.path), missing.path)
+        XCTAssertThrowsError(try FileManager.default.destinationOfSymbolicLink(atPath: broken.path))
+
+        let source = fixture.appendingPathComponent("source")
+        let occupied = fixture.appendingPathComponent("occupied")
+        try Data("preserve".utf8).write(to: source)
+        try FileManager.default.createSymbolicLink(at: occupied, withDestinationURL: missing)
+        do {
+            try await backend.rename(from: source.path, to: occupied.path)
+            XCTFail("A dangling destination is still occupied and must not be overwritten")
+        } catch {}
+        XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "preserve")
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: occupied.path), missing.path)
+
+        let lower = fixture.appendingPathComponent("case.txt")
+        let upper = fixture.appendingPathComponent("Case.txt")
+        try Data("case preserved".utf8).write(to: lower)
+        if FileManager.default.fileExists(atPath: upper.path) {
+            try await backend.rename(from: lower.path, to: upper.path)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.path).filter {
+                $0.lowercased() == "case.txt"
+            }, ["Case.txt"])
+        }
     }
 
     func testDirectoryStatAndProcessParsers() {

@@ -155,17 +155,20 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         try await shell("mkdir -- \(RemoteCommands.quote(path))")
     }
 
-    /// `mv -n` would skip silently when the destination exists, so the check
-    /// is explicit and reports the same "already exists" the local move does.
+    /// Inspect directory entries, including broken symlinks. A case-only
+    /// rename can name the same inode on a case-insensitive remote volume.
     func rename(from: String, to: String) async throws {
         let source = RemoteCommands.quote(from)
         let destination = RemoteCommands.quote(to)
-        try await shell(
-            requiring(
-                from,
-                "[ -e \(destination) ] && exit \(ExitCode.exists); mv -- \(source) \(destination)"
-            )
-        )
+        try await shell("""
+            if [ ! -e \(source) ] && [ ! -L \(source) ]; then exit \(ExitCode.missing); fi
+            if [ -e \(destination) ] || [ -L \(destination) ]; then
+                fromID=$(stat -c '%d:%i' -- \(source)) || exit \(ExitCode.missing)
+                toID=$(stat -c '%d:%i' -- \(destination)) || exit \(ExitCode.exists)
+                [ "$fromID" = "$toID" ] || exit \(ExitCode.exists)
+            fi
+            mv -- \(source) \(destination)
+            """)
     }
 
     /// There is no remote Trash: freedesktop trash semantics vary between
