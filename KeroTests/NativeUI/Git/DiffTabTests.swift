@@ -124,6 +124,114 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class DiffTabTests: XCTestCase {
+    func testStagedDeletionShowsDeletedLinesInsteadOfMissingRevision() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("deleted.txt")
+        let original = "first\r\nsecond\r\n"
+        try Data(original.utf8).write(to: path)
+        for args in [["add", "deleted.txt"], ["commit", "-qm", "baseline"],
+                     ["rm", "deleted.txt"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: root.path).status, 0)
+        }
+        let diff = DiffTab(
+            repoRoot: root.path, path: "deleted.txt", source: .staged,
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !diff.isLoading }
+        XCTAssertNil(diff.error)
+        XCTAssertEqual(Data(diff.oldContent.utf8), Data(original.utf8))
+        XCTAssertEqual(diff.newContent, "")
+        try await wait { diff.display != nil }
+        let display = try XCTUnwrap(diff.display)
+        XCTAssertEqual(display.computation.unified.rows.compactMap(\.oldLine), [1, 2])
+        XCTAssertTrue(display.unifiedText.string.contains("second"))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 840, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: diff))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        try await wait {
+            self.findNativeTextView(in: host, editable: false)?.attributedText?.string
+                == display.unifiedText.string
+        }
+    }
+
+    func testStagedConflictWithoutStageZeroIsNotADeletion() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("conflict.txt")
+        try Data("base\n".utf8).write(to: file)
+        for args in [["add", "conflict.txt"], ["commit", "-qm", "base"],
+                     ["checkout", "-qb", "other"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: root.path).status, 0)
+        }
+        try Data("theirs\n".utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qam", "other"], in: root.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["checkout", "-q", "main"], in: root.path).status, 0)
+        try Data("ours\n".utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qam", "ours"], in: root.path).status, 0)
+        XCTAssertNotEqual(GitCommandExecution.run(["merge", "other"], in: root.path).status, 0)
+        let diff = DiffTab(
+            repoRoot: root.path, path: "conflict.txt", source: .staged,
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !diff.isLoading }
+        XCTAssertNotNil(diff.error)
+        XCTAssertFalse(diff.hasLoadedContent)
+    }
+
+    func testAppearanceChangeAfterReadErrorKeepsLastSuccessfulDiff() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("review.txt")
+        try Data("before\n".utf8).write(to: path)
+        for args in [["add", "review.txt"], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: root.path).status, 0)
+        }
+        try Data("after\n".utf8).write(to: path)
+        let diff = DiffTab(
+            repoRoot: root.path, path: "review.txt", source: .worktree,
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !diff.isLoading && diff.display != nil }
+        let before = try XCTUnwrap(diff.display)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 840, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: diff))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        try await wait {
+            self.findNativeTextView(in: host, editable: false)?.attributedText?.string
+                == before.unifiedText.string
+        }
+        let git = root.appendingPathComponent(".git")
+        let unavailable = root.appendingPathComponent(".git-unavailable")
+        try FileManager.default.moveItem(at: git, to: unavailable)
+        defer { try? FileManager.default.moveItem(at: unavailable, to: git) }
+        diff.reload()
+        try await wait { !diff.isLoading && diff.error != nil }
+        XCTAssertEqual(diff.display?.computation.unified.text, before.computation.unified.text)
+        diff.refreshNativeAppearance()
+        try await wait({ diff.display?.id != before.id && diff.display != nil }, timeout: 3)
+        XCTAssertEqual(diff.display?.computation.unified.text, before.computation.unified.text)
+        try await wait {
+            self.findNativeTextView(in: host, editable: false)?.attributedText?.string
+                == diff.display?.unifiedText.string
+                && diff.nativeSurface?.superview != nil
+        }
+        XCTAssertNotNil(diff.error)
+    }
+
     func testIncompleteSelectedGitBlobFailsInsteadOfPublishingTruncatedContent() async throws {
         let backend = DiffWorkspaceFixture()
         await backend.simulateIncompleteGitBlob()

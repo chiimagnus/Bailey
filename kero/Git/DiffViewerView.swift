@@ -67,9 +67,8 @@ private struct DiffDisplayInputs {
     let newRuns: [DiffHighlightRun]
 }
 
-/// A git diff opened as a tab from the git panel. Loads both sides of the
-/// change (via `git show` / the worktree) so they survive tab switches;
-/// reloads when the view reappears.
+/// Git and worktree text live with the tab, surviving view remounts and
+/// refreshing live sources when selected.
 @MainActor
 @Observable
 final class DiffTab: nonisolated Identifiable {
@@ -335,8 +334,14 @@ final class DiffTab: nonisolated Identifiable {
                         [.tree(revision: "HEAD", path: oldPath)], in: root, backend: backend
                     )
                     old = take((earlier.text, earlier.error))
-                    newFromGit = take(await Self.requiredGitContent(
-                        .index(path: path, stages: [0]), in: root, backend: backend))
+                    let staged = await Self.firstGitContent(
+                        [.index(path: path, stages: [0])], in: root, backend: backend
+                    )
+                    newFromGit = take((staged.text, staged.error))
+                    unmerged = staged.isUnmerged
+                    if staged.isUnmerged && staged.error == nil {
+                        failure = String(localized: "Unresolved merge conflict", table: "Git")
+                    }
                 case .worktree:
                     if !untracked {
                         let earlier = await Self.firstGitContent(
@@ -465,7 +470,7 @@ final class DiffTab: nonisolated Identifiable {
         displayGeneration &+= 1
         let generation = displayGeneration
         displayInputs = nil
-        guard !source.isPlainRevision, hasChanges, error == nil else {
+        guard !source.isPlainRevision, hasLoadedContent, hasChanges else {
             display = nil
             return
         }
