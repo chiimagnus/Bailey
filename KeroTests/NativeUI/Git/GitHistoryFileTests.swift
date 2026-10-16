@@ -277,6 +277,59 @@ final class GitHistoryFileTests: XCTestCase {
         XCTAssertFalse(failure.contains("does not contain"), "An invalid Git object is not an absent path in a valid commit")
     }
 
+    func testDanglingHeadRefIsNotMistakenForUnbornStagedDiff() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("baseline\n".utf8).write(to: root.appendingPathComponent("base.txt"))
+        _ = try git(["add", "base.txt"], in: root)
+        _ = try git(["commit", "-qm", "baseline"], in: root)
+        try Data("staged\n".utf8).write(to: root.appendingPathComponent("new.txt"))
+        _ = try git(["add", "new.txt"], in: root)
+
+        // Both unborn and a dangling branch report HEAD^{commit} status 1.
+        // Only the former has no refs/heads/main value at all.
+        let branchRef = root.appendingPathComponent(".git/refs/heads/main")
+        try Data((String(repeating: "1", count: 40) + "\n").utf8).write(to: branchRef)
+        let tab = DiffTab(
+            repoRoot: root.path, path: "new.txt", source: .staged,
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !tab.isLoading }
+        XCTAssertNotNil(tab.error, "Broken HEAD must fail rather than turn the staged diff into an addition")
+        XCTAssertFalse(tab.hasLoadedContent)
+    }
+
+    func testDeletedHistoricalDiffValidatesTheSelectedCommit() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("previous version\n".utf8).write(to: root.appendingPathComponent("removed.txt"))
+        _ = try git(["add", "removed.txt"], in: root)
+        _ = try git(["commit", "-qm", "baseline"], in: root)
+        let parent = try git(["rev-parse", "HEAD"], in: root)
+        _ = try git(["rm", "removed.txt"], in: root)
+        _ = try git(["commit", "-qm", "remove"], in: root)
+        let actual = try git(["rev-parse", "HEAD"], in: root)
+        let valid = DiffTab(
+            repoRoot: root.path, path: "removed.txt",
+            source: .commit(hash: actual, parent: parent, status: "D"),
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        let invalid = DiffTab(
+            repoRoot: root.path, path: "removed.txt",
+            source: .commit(hash: String(repeating: "1", count: 40), parent: parent, status: "D"),
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !valid.isLoading && !invalid.isLoading }
+        XCTAssertNil(valid.error)
+        XCTAssertEqual(valid.oldContent, "previous version\n")
+        XCTAssertEqual(valid.newContent, "")
+        XCTAssertNotNil(invalid.error, "A missing selected commit cannot be a successful file deletion")
+        XCTAssertFalse(invalid.hasLoadedContent)
+    }
+
     func testMissingSelectedRevisionReportsErrorButRootAndDeletedSidesMayBeEmpty() async throws {
         let root = try repository()
         defer { try? FileManager.default.removeItem(at: root) }
