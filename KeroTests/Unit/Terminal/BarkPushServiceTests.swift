@@ -17,13 +17,14 @@ final class BarkPushServiceTests: XCTestCase {
         let keyOnly = try XCTUnwrap(BarkDestination("Device_key1"))
         XCTAssertEqual(keyOnly.url.absoluteString, "https://api.day.app/Device_key1")
         XCTAssertEqual(BarkDestination("https://api.day.app/Device_key1"), keyOnly)
+        XCTAssertEqual(BarkDestination("push")?.key, "push")
 
         for invalid in [
             "", " ", "foo bar", "https://bark.example.com/",
             "http://api.day.app/example", "https://example.com/key/extra",
             "https://evil.example@api.day.app/key", "https://api.day.app/key#fragment",
             "https://api.day.app/key?body=private", "abc/key",
-            "https://api.day.app/%2f", "https://api.day.app/push",
+            "https://api.day.app/%2f",
         ] {
             XCTAssertNil(BarkDestination(invalid), invalid)
         }

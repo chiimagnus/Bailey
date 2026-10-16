@@ -19,8 +19,7 @@ nonisolated struct BarkDestination: Hashable, Identifiable, Sendable {
     init?(_ input: String) {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let source = text.contains("://") ? text : "https://api.day.app/\(text)"
-        guard source.utf8.count <= 2_048,
-              var components = URLComponents(string: source),
+        guard var components = URLComponents(string: source),
               components.scheme?.lowercased() == "https",
               let host = components.host, !host.isEmpty,
               components.user == nil, components.password == nil,
@@ -30,7 +29,7 @@ nonisolated struct BarkDestination: Hashable, Identifiable, Sendable {
         else { return nil }
 
         let key = String(part)
-        guard key != "push", !key.isEmpty, key.utf8.count <= 128,
+        guard !key.isEmpty, key.utf8.count <= 128,
               key.utf8.allSatisfy({
                   (48...57).contains($0) || (65...90).contains($0)
                       || (97...122).contains($0) || $0 == 45 || $0 == 95
@@ -88,31 +87,27 @@ nonisolated enum BarkPushService {
               let addresses = try? JSONDecoder().decode([String].self, from: data)
         else { throw Failure.corruptStorage }
 
-        var seen = Set<String>()
         return try addresses.map { address in
-            guard let destination = BarkDestination(address),
-                  seen.insert(destination.id).inserted
-            else { throw Failure.corruptStorage }
+            guard let destination = BarkDestination(address) else { throw Failure.corruptStorage }
             return destination
         }
     }
 
-    /// Returns false when the same URL is already configured.
-    @discardableResult
-    static func add(_ input: String) throws -> Bool {
+    /// Returns nil when the same URL is already configured.
+    static func add(_ input: String) throws -> [BarkDestination]? {
         guard let destination = BarkDestination(input) else { throw Failure.invalidDestination }
         var current = try destinations()
-        guard !current.contains(destination) else { return false }
+        guard !current.contains(destination) else { return nil }
         current.append(destination)
         try store(current)
-        return true
+        return current
     }
 
-    static func remove(_ destination: BarkDestination) throws {
+    static func remove(_ destination: BarkDestination) throws -> [BarkDestination] {
         let current = try destinations()
         let retained = current.filter { $0 != destination }
-        guard retained.count != current.count else { return }
-        try store(retained)
+        if retained.count != current.count { try store(retained) }
+        return retained
     }
 
     private static func store(_ destinations: [BarkDestination]) throws {

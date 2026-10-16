@@ -14,7 +14,7 @@ struct SettingsView: View {
     @State private var isShowingRelaunchError = false
     @State private var barkURLInput = ""
     @State private var barkDestinations: [BarkDestination] = []
-    @State private var barkBusy = false
+    @State private var barkBusy = true
     @State private var barkStatus: String?
 
     /// Installed fixed-pitch families (bundled default first).
@@ -238,10 +238,6 @@ struct SettingsView: View {
                         }
                     }
                     HStack {
-                        Text(barkDestinations.isEmpty
-                             ? String(localized: "Bark is not configured", table: "Settings")
-                             : String(localized: "Bark is enabled", table: "Settings"))
-                            .foregroundStyle(.secondary)
                         Spacer()
                         Button(String(localized: "Send Test Notification", table: "Settings")) {
                             sendBarkTest()
@@ -313,24 +309,28 @@ struct SettingsView: View {
             barkDestinations = try await Task.detached(priority: .utility) {
                 try BarkPushService.destinations()
             }.value
+            barkStatus = nil
         } catch {
             barkStatus = String(localized: "Could not access Bark URLs in Keychain", table: "Settings")
         }
+        barkBusy = false
     }
 
     private func addBarkDestination() {
         let input = barkURLInput
         barkBusy = true
+        barkStatus = nil
         Task {
             do {
-                let added = try await Task.detached(priority: .utility) {
+                let updated = try await Task.detached(priority: .utility) {
                     try BarkPushService.add(input)
                 }.value
-                await loadBarkDestinations()
-                if added { barkURLInput = "" }
-                barkStatus = added
-                    ? String(localized: "Bark URL added", table: "Settings")
-                    : String(localized: "Bark URL already exists", table: "Settings")
+                if let updated {
+                    barkDestinations = updated
+                    barkURLInput = ""
+                } else {
+                    barkStatus = String(localized: "Bark URL already exists", table: "Settings")
+                }
             } catch {
                 barkStatus = String(localized: "Could not save Bark URL", table: "Settings")
             }
@@ -340,13 +340,12 @@ struct SettingsView: View {
 
     private func removeBarkDestination(_ destination: BarkDestination) {
         barkBusy = true
+        barkStatus = nil
         Task {
             do {
-                try await Task.detached(priority: .utility) {
+                barkDestinations = try await Task.detached(priority: .utility) {
                     try BarkPushService.remove(destination)
                 }.value
-                await loadBarkDestinations()
-                barkStatus = String(localized: "Bark URL removed", table: "Settings")
             } catch {
                 barkStatus = String(localized: "Could not remove Bark URL", table: "Settings")
             }
@@ -356,6 +355,7 @@ struct SettingsView: View {
 
     private func sendBarkTest() {
         barkBusy = true
+        barkStatus = nil
         let message = String(localized: "Test notification from Kero", table: "Settings")
         Task {
             do {
