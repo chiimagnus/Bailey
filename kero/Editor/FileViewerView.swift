@@ -67,6 +67,9 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored private var imageFingerprint: Int?
     @ObservationIgnored private var reloadGeneration: UInt = 0
     @ObservationIgnored private var reloadTask: Task<Void, Never>?
+    /// A previously requested read must resume after reconnect; restored tabs
+    /// that no consumer has touched must remain lazy.
+    @ObservationIgnored private var hasReadDemand = false
     /// Changes when a rename or remote reconnect changes the save target.
     /// An in-flight write must not claim to have saved a different target.
     @ObservationIgnored private var targetGeneration: UInt = 0
@@ -121,6 +124,7 @@ final class FileTab: nonisolated Identifiable {
     }
 
     func loadIfNeeded() {
+        hasReadDemand = true
         guard reloadTask == nil else { return }
         switch content {
         case .loading, .unavailable: reloadFromDiskIfClean()
@@ -129,6 +133,7 @@ final class FileTab: nonisolated Identifiable {
     }
 
     func refreshWhenSelected() {
+        hasReadDemand = true
         if readOnlyReason != nil, let workspaceIdentity {
             SSHHostWorkspaces.retryConnection(for: workspaceIdentity, path: path)
             return
@@ -159,7 +164,12 @@ final class FileTab: nonisolated Identifiable {
     /// reconnecting to the same machine.
     func reevaluateWorkspace(in project: Project) {
         guard let workspaceIdentity else { return }
-        guard let live = project.connectedWorkspace(for: workspaceIdentity) else {
+        rebindWorkspace(to: project.connectedWorkspace(for: workspaceIdentity))
+    }
+
+    func rebindWorkspace(to live: WorkspaceBackend?) {
+        guard let workspaceIdentity else { return }
+        guard let live else {
             setReadOnly(true, destination: workspaceIdentity)
             return
         }
@@ -172,9 +182,9 @@ final class FileTab: nonisolated Identifiable {
         // fails, so the tab takes the live one.
         backend = live
         setReadOnly(false, destination: workspaceIdentity)
-        // No-op while the buffer is dirty, so edits made during the outage
-        // survive and can now be saved.
-        reloadFromDiskIfClean()
+        // Previously requested content must recover even without a new
+        // onAppear; an unconsumed restored tab must not start remote IO.
+        if hasReadDemand { reloadFromDiskIfClean() }
     }
 
     private func setReadOnly(_ isReadOnly: Bool, destination: String) {
@@ -288,6 +298,7 @@ final class FileTab: nonisolated Identifiable {
         // replacing the content with "Could not read file" would throw away
         // what the user was looking at. The banner already says why.
         guard readOnlyReason == nil, !isDirty else { return }
+        hasReadDemand = true
         reloadTask?.cancel()
         reloadGeneration &+= 1
         let generation = reloadGeneration
@@ -450,14 +461,14 @@ struct FileViewerView: View {
         .onReceive(NotificationCenter.default.publisher(
             for: NSApplication.didBecomeActiveNotification
         )) { _ in
-            file.reloadFromDiskIfClean()
+            if file.readOnlyReason == nil { file.refreshWhenSelected() }
         }
         // A window can become key without the app itself transitioning from
         // inactive (for example when moving between Kero windows).
         .onReceive(NotificationCenter.default.publisher(
             for: NSWindow.didBecomeKeyNotification
         )) { _ in
-            file.reloadFromDiskIfClean()
+            if file.readOnlyReason == nil { file.refreshWhenSelected() }
         }
     }
 
