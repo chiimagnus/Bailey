@@ -1,4 +1,4 @@
-/// Lanes are derived only from the loaded Git DAG; no visual-only connections.
+/// Commit rails use the loaded Git DAG; stash rails use their existing base-commit display link.
 nonisolated struct CommitGraphLayout {
     struct Node: Equatable {
         let lane: Int
@@ -33,55 +33,46 @@ nonisolated struct CommitGraphLayout {
         })
         var nodes = [Node?](repeating: nil, count: commits.count)
 
-        // A paged log may omit HEAD. Never color an unrelated tip as the main branch.
-        let loadedHead = commits.firstIndex(where: {
-            $0.references.contains {
-                $0.kind == .currentBranch || $0.kind == .detachedHead
-            }
-        })
-        if let start = loadedHead ?? commits.indices.first {
-            var cursor = start
-            while nodes[cursor] == nil {
-                nodes[cursor] = Node(lane: 0, color: loadedHead == nil ? 1 : 0)
-                guard let parent = commits[cursor].parentHashes.first,
-                      let next = positions[parent], next > cursor else { break }
-                cursor = next
-            }
-        }
-
-        var reservations: [(lane: Int, first: Int, last: Int)] = []
-        var nextColor = loadedHead == nil ? 2 : 1
-        for start in commits.indices where nodes[start] == nil {
+        var reservations: [(lane: Int, color: Int, first: Int, last: Int)] = []
+        // Stash display edges do not own the main commit's first-parent path.
+        let order = commits.indices.filter { commits[$0].stash == nil }
+            + commits.indices.filter { commits[$0].stash != nil }
+        for start in order where nodes[start] == nil {
             var path: [Int] = []
             var cursor = start
             var end = start
             while nodes[cursor] == nil {
                 path.append(cursor)
-                guard let parent = commits[cursor].parentHashes.first,
-                      let next = positions[parent], next > cursor else { break }
+                guard let parent = commits[cursor].parentHashes.first else { break }
+                guard let next = positions[parent], next > cursor else {
+                    // An incomplete page must keep this lane occupied until its parent arrives.
+                    end = commits.count
+                    break
+                }
                 end = next
-                if nodes[next] != nil { break }
+                if commits[cursor].stash != nil || nodes[next] != nil { break }
                 cursor = next
             }
-            var lane = 1
-            while reservations.contains(where: {
-                $0.lane == lane && $0.first <= end && start <= $0.last
-            }) {
-                lane += 1
+            let concurrent = reservations.filter {
+                $0.first <= end && start <= $0.last
             }
-            for index in path { nodes[index] = Node(lane: lane, color: nextColor) }
-            reservations.append((lane, start, end))
-            nextColor += 1
+            var lane = 0
+            while concurrent.contains(where: { $0.lane == lane }) { lane += 1 }
+            let occupiedColors = Set(concurrent.map(\.color))
+            let color = (0..<12).first { !occupiedColors.contains($0) }
+                ?? reservations.count % 12
+            for index in path { nodes[index] = Node(lane: lane, color: color) }
+            reservations.append((lane, color, start, end))
         }
 
         var graph = nodes.map { Row(node: $0!) }
         var largestLane = nodes.compactMap(\.self).map(\.lane).max() ?? -1
         for (index, commit) in commits.enumerated() {
             let from = graph[index].node
-            for hash in commit.parentHashes {
+            for (parentOffset, hash) in commit.parentHashes.enumerated() {
                 guard let parentIndex = positions[hash], parentIndex > index else { continue }
                 let to = graph[parentIndex].node
-                let color = from.lane == 0 && to.lane != 0 ? to.color : from.color
+                let color = parentOffset == 0 ? from.color : to.color
                 let between = (index + 1)..<parentIndex
 
                 func clear(_ lane: Int) -> Bool {
@@ -98,9 +89,9 @@ nonisolated struct CommitGraphLayout {
                     }
                 }
 
-                var lane = max(from.lane, to.lane)
+                var lane = parentOffset == 0 ? from.lane : to.lane
                 if !clear(lane) {
-                    let alternate = min(from.lane, to.lane)
+                    let alternate = parentOffset == 0 ? to.lane : from.lane
                     if clear(alternate) {
                         lane = alternate
                     } else {
