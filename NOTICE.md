@@ -17,6 +17,7 @@ Kero 使用 [GNU GPLv3](LICENSE)。本页用于定位项目来源、文档参考
 | 材料 | 来源或声明 |
 | --- | --- |
 | STTextView 本地副本 | [Vendor/STTextView/LICENSE.md](Vendor/STTextView/LICENSE.md) |
+| Neon 核心运行时 | [来源与裁剪范围](Vendor/Neon/README.md)、[BSD 许可证](Vendor/Neon/LICENSE)；同一原文随 [App 资源](kero/Resources/Licenses/LICENSE-neon.txt) 分发 |
 | Material Icon Theme 图标 | [来源与固定提交](kero/Resources/MaterialFileIcons/NOTICE-material-icon-theme.txt)、[许可证原文](kero/Resources/MaterialFileIcons/LICENSE-material-icon-theme.txt) |
 | JetBrains Mono 字体 | [OFL.txt](kero/Resources/Fonts/OFL.txt) |
 | Nerd Fonts 资源 | [LICENSE-nerd-fonts.txt](kero/Resources/Fonts/LICENSE-nerd-fonts.txt) |

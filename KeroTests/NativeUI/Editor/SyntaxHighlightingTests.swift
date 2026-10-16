@@ -48,6 +48,75 @@ private struct ObservedSyntaxPlugin: STPlugin {
 
 @MainActor
 final class SyntaxHighlightingTests: XCTestCase {
+    func testQueuedSemanticEditAndEarlierInsertionRecolorCurrentViewport() async throws {
+        let prefix = "/*\n" + String(repeating: String(repeating: "a", count: 64) + "\n", count: 16384) + "*/\n"
+        let source = prefix + "func target() {}\n"
+        let mounted = try mountedPlugin(source: source)
+        defer { mounted.window.close() }
+        mounted.editor.scrollsSelectionToVisibleOnTextChange = false
+        let highlighter = try XCTUnwrap(mounted.coordinator.highlighter)
+        let requestLimit = highlighter.requestLengthLimit
+        highlighter.requestLengthLimit = source.utf16.count + 16384
+        highlighter.invalidate()
+        _ = try await mounted.coordinator.tsClient.currentTree()
+        let oldName = (source as NSString).range(of: "target").location
+        mounted.editor.scrollRangeToVisible(NSRange(location: oldName, length: 6))
+        let declarationColor = SyntaxHighlightCoordinator.themeColor(for: "method", theme: SyntaxHighlighting.theme)
+        try await wait {
+            guard let viewport = mounted.editor.textLayoutManager.textViewportLayoutController.viewportRange else { return false }
+            return NSLocationInRange(oldName, NSRange(viewport, in: mounted.editor.textContentManager))
+                && self.color(mounted.editor, at: oldName) == declarationColor
+        }
+        let provider = highlighter.tokenProvider
+        var requests = 0
+        highlighter.tokenProvider = { range, completion in
+            requests += 1
+            provider(range) { result in
+                completion(result)
+                requests -= 1
+            }
+        }
+        highlighter.invalidate()
+        try await wait { requests == 0 && self.color(mounted.editor, at: oldName) == declarationColor }
+        highlighter.tokenProvider = provider
+        highlighter.requestLengthLimit = requestLimit
+
+        mounted.editor.insertText("", replacementRange: NSRange(location: prefix.utf16.count, length: 5))
+        let inserted = String(repeating: "a", count: 8192)
+        mounted.editor.insertText(inserted, replacementRange: NSRange(location: 100, length: 0))
+        let text = try XCTUnwrap(mounted.editor.text)
+        let currentName = (text as NSString).range(of: "target").location
+        let tree = try await mounted.coordinator.tsClient.currentTree()
+        let plugin = try XCTUnwrap(SyntaxHighlighting.plugin(for: "fixture.swift"))
+        let parser = Parser()
+        try parser.setLanguage(plugin.language.parser)
+        let fresh = try XCTUnwrap(parser.parse(text)?.rootNode)
+        XCTAssertEqual(tree.rootNode?.sExpressionString, fresh.sExpressionString)
+        XCTAssertEqual(tree.rootNode?.range, fresh.range)
+
+        let queried = expectation(description: "Actual current provider resolves the call color")
+        var expected: NSColor?
+        provider(NSRange(location: currentName, length: 6)) { result in
+            switch result {
+            case .failure(let error): XCTFail(error.localizedDescription)
+            case .success(let application):
+                for token in application.tokens where NSLocationInRange(currentName, token.range)
+                    && !SyntaxHighlightCoordinator.ignoredCaptures.contains(token.name) {
+                    expected = SyntaxHighlightCoordinator.themeColor(for: token.name, theme: plugin.theme)
+                }
+            }
+            queried.fulfill()
+        }
+        await fulfillment(of: [queried], timeout: 5)
+        XCTAssertEqual(expected, SyntaxHighlightCoordinator.themeColor(for: "function.call", theme: plugin.theme))
+        XCTAssertNotEqual(expected, declarationColor)
+        do {
+            try await wait { self.color(mounted.editor, at: currentName) == expected }
+        } catch {
+            XCTFail("Current tree/provider resolve the new call, but viewport color is \(String(describing: self.color(mounted.editor, at: currentName))); expected \(String(describing: expected))")
+        }
+    }
+
     func testParserReadsAcrossUTF16ChunkBoundariesAndEditShift() async throws {
         let plugin = try XCTUnwrap(SyntaxHighlighting.plugin(for: "fixture.swift"))
         let parser = Parser()

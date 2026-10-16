@@ -75,6 +75,16 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 
 升级时逐项检查上游是否已修复，删除不再需要的补丁，保留许可证和署名。运行 `FileTabTests`、`DiffTabTests`、`EditorTextInputTests` 并检查字体变化、组合输入、长行、短文档、Markdown、高亮空范围、固定行高和只读替换滚动。全部修复被上游覆盖后才考虑撤销副本，不以升级成功替代功能验收。
 
+### Neon
+
+[Vendor/Neon](../Vendor/Neon/README.md) 保留当前固定依赖的最小核心与原始许可证，以同一 package 身份替换远程 Neon，不引入第二份 parser 或队列。补丁让异步失效范围随尚未完成的编辑转换后再交付；只校验 token 版本不能补救旧坐标被当作有效的样式。
+
+不引入未使用的旧 NSTextView／UIKit 适配，旧系统 actor／队列兼容桥由当前平台原生能力替代；不删除真实主队列约束。升级时检查上游是否已修复，运行 `SyntaxHighlightingTests` 的连续语义编辑、前方插入与最终视口着色，以及 `EditorTextInputTests`、`TextCoordinateIndexTests`、`DiffTabTests`。同时验证完整 XCTest、Debug／Release 构建和签名；不能以当前 Tree 正确代替实际颜色更新。
+
+查询使用当前 SwiftTreeSitter 匹配序列，在后台取匹配、主线程读取谓词，读取前后都核对请求版本。未使用的同步查询模式、弃用游标及 noChange 样式叠加路径不保留；根解析仍使用原串行队列和现有同步阈值。
+
+源码与 App 资源中的 BSD 许可证须保持一致，来源归 [NOTICE](../NOTICE.md)。
+
 ### 语法解析与 Diff
 
 TSX 使用独立解析器，不能用普通 TypeScript 替代。`Vendor/TreeSitterTSX` 的来源是 `STTextView-Plugin-Neon` 固定提交 `5a30db4ce7908a5414e7b499e2379bdc49991cd1`，与工程依赖匹配。升级时从目标提交的 `Sources/TreeSitterTSX/` 更新 `include/` 和 `src/`，并核对插件查询与工程所用运行库的兼容性，不把查询或运行库一并复制进本地解析器包。
