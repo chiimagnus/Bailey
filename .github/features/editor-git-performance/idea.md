@@ -53,4 +53,6 @@
 | [P5](plan-p5.md) | 原生 Diff 分行／读取收尾正确及性能实测 | 用户要求先完成插件任务再开始；不再有 Pierre、JS 或桥接任务 |
 | [P6](plan-p6.md) | 综合复测、文档和证据核销 | 不接收延期清理／测试／文档 |
 
+源代码编辑器的触摸板滚动、首次可见绘制与渲染性能已单独归 [editor-rendering-performance](../editor-rendering-performance/idea.md)；本 Feature 仍负责已有输入／高亮优化与 Git／Diff 工作，不重复建立滚动任务。
+
 实现按仓库规则原子提交；Feature 计划／状态／证据按 Skill 默认保持本地，本轮不提交这些规划文件。实施完成才进入阶段审计，不预建实施 Gate，不把计划审查当性能验收。

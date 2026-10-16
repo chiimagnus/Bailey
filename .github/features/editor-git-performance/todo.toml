@@ -153,50 +153,53 @@ note = "未迁移，不删除Vendor/Neon或TSX；等待上游补全TypeScript/TS
 [[tasks]]
 id = "P5-T1"
 title = "归因原生 Diff 完整流水线"
-status = "pending"
+status = "completed"
 plan = "plan-p5.md#p5-t1"
 commit = ""
-note = "只归因当前原生 Git→DiffEngine→TextKit 链路，不再有网页阶段。"
+no_commit_reason = "仅本机阶段归因与单一隔离原型；生产代码未修改，实验源码/日志在被忽略的build/performance/diff"
+note = "M1 Pro macOS27.2 Debug：1200行双侧captures30次中位74.795ms为主要计算段；并行原型交错30轮75.588→52.728ms且captures逐条等价；本地真实Git→display 5次中位183.234ms，挂载到原生文本53.223ms；仅组件与原生安装，不冒充屏幕/SSH；详见evidence-p5。"
 
 [[tasks]]
 id = "P5-T2"
 title = "修复共享 LF／CRLF 分行契约"
-status = "pending"
+status = "completed"
 plan = "plan-p5.md#p5-t2"
-commit = ""
-note = "当前 Character LF 漏 CRLF；共享 splitter 精确范围／行号、review 和 edit 回归。"
+commit = "cae2cf69687f38150454a51767f93ba2e83ace73"
+note = "真实CRLF丢行与UTF16范围Red→Green；DiffEngine 4/4、DiffTab 20/20、GitHistoryFile 11/11，原生STTextView统一/双栏/编辑/undo/redo/实际磁盘字节Green。只替换共享Character分行，详见evidence-p5；全量最终验收留阶段末。"
 
 [[tasks]]
 id = "P5-T3"
 title = "收敛读取身份、错误与加载收尾"
-status = "pending"
+status = "completed"
 plan = "plan-p5.md#p5-t3"
-commit = ""
-note = "修 loading 收尾、结构化 OID 和旧 displayInputs 经 fold 重新获胜；保留已有保护，不预建新 reader。"
+commit = "b87f3601a8c88ced6a59112d8aaa8e862839e7ac"
+note = "Git index/tree通过NUL metadata解析固定OID，旧动态spec/stderr猜缺失/isUnmerged重复查询均删除；坏对象/失败旧文保留、unborn/merge stage2/特殊路径、旧fold不可发布、历史重复读Red→Green；四组定向47/47 0失败，见evidence-p5。"
 
 [[tasks]]
 id = "P5-T4"
 title = "接入实测选中的原生性能措施"
-status = "pending"
+status = "completed"
 plan = "plan-p5.md#p5-t4"
-commit = ""
-note = "旧 JS/hash/bridge 任务已替换为实测原生热点的最小措施；无证据不建缓存／调度。"
+commit = "0644d347e747e258b345849d2f5cf8562dfceaeb"
+note = "M1 Pro同机1200行Swift串并捕获交错30次74.670→53.733ms且name/range一致；真实Git→Diff→TextKit反向各30次完整原生文本中位236.562→222.759ms,p95 242.726→237.101ms；正式5组共61测试0失败，临时测速文件移出正式测试目标，见evidence-p5。"
 
 [[tasks]]
 id = "P6-T1"
 title = "完成同机综合复测与真机验收"
-status = "pending"
+status = "completed"
 plan = "plan-p6.md#p6-t1"
 commit = ""
-note = "综合复测不代替各任务验证；安装／恢复遵循现行 development，不重启用户进程。"
+no_commit_reason = "仅综合验证、隔离运行与本地证据，无需修改生产代码；Feature 证据默认不入库"
+note = "P5正式315/0/3 skipped，Windows SSH 315/0/0 skipped含三项实机通过；独立5类Diff SSH 1/1；隔离App真像素Diff/编辑器、5次启动中位1770.693ms、30s RSS/CPU稳定、leaks 0、原生12轮弱引用0/0/0；重新make test定向3/3+build成功；正式整包安装并验签，原PID42850不重启。前台E2E/Allocations记录受AX receipt与xctrace attach限制，已准确记为未测。详见evidence-p6。"
 
 [[tasks]]
 id = "P6-T2"
 title = "核销文档、引用与本地证据"
-status = "pending"
+status = "completed"
 plan = "plan-p6.md#p6-t2"
 commit = ""
-note = "只核销已同步文档和本地证据；不接收延期旧代码清理，无新事实不制造提交。"
+no_commit_reason = "仅核对现行文档/链接与本地证据，无需修改生产文档；Feature 状态和审计资料本地保留不入库"
+note = "23份相关文档/170个本地Markdown链接0坏链且现行docs无指向HEAD未跟踪特征资料；CodeGraph核对现行所有者，生产源码/文档无变更；临时XCTest与fixture清理，实际315/0/0+Debug/Release验签与安装证据见evidence-p6，前台E2E/Instruments/正式重启界限注明。"
 
 [[tasks]]
 id = "P3-T8"
