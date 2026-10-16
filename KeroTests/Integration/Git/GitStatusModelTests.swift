@@ -965,8 +965,9 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertTrue(model.canUseCurrentHistory, "Ignored decoration is not an input to Graph actions")
         XCTAssertTrue(model.canUseCurrentStashes, "Ignored decoration is not an input to Stash actions")
         XCTAssertTrue(model.canUseCurrentReferences)
-        XCTAssertTrue(model.canUseCurrentHistory)
-        XCTAssertEqual(model.changedEntries, priorChanges)
+        XCTAssertEqual(model.changedEntries.map(\.path), priorChanges.map(\.path))
+        XCTAssertFalse(model.isCurrent(priorChanges[0]), "The old row must stay invalid after switching repositories")
+        XCTAssertTrue(model.isCurrent(model.changedEntries[0]), "The fresh row must be writable once core status is verified")
         XCTAssertTrue(model.ignoredPaths.contains("ignored.tmp"))
         model.refresh(kind: .historyOnly)
         try await wait { !model.isRefreshing }
