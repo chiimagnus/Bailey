@@ -4,12 +4,7 @@
 //
 
 import AppKit
-import STPluginNeon
 import SwiftTreeSitter
-// TreeSitterResource defines TreeSitterLanguage. It's an internal module of the
-// plugin package (not re-exported by STPluginNeon), but it must be imported
-// directly: this toolchain enforces MemberImportVisibility, so an enum case is
-// only usable when its defining module is imported.
 import TreeSitterResource
 // Base query files, for languages whose highlights inherit another language's
 // (see `highlightsData(for:)`).
@@ -77,22 +72,8 @@ nonisolated enum SyntaxLanguage: Hashable {
 /// asks for a plugin per file; unsupported file types get `nil` and render as
 /// plain text. The highlighter itself lives in `SyntaxHighlightPlugin`.
 enum SyntaxHighlighting {
-    /// The theme kero hands the highlighter: the plugin's bundled *default
-    /// colors* — which ship light and dark asset variants, so they follow the
-    /// window appearance automatically — paired with an **empty** font table.
-    ///
-    /// The empty fonts are deliberate. The highlighter would otherwise tag each
-    /// token with `theme.font(forToken:)` and reset the view to SF Mono,
-    /// discarding kero's `TerminalFont.current()`. With no fonts, every token
-    /// keeps the editor's own font and only the foreground color changes.
-    ///
-    /// `STPluginNeonAppKit.Theme` is fully qualified because kero has its own
-    /// `Theme` (Theme.swift) in this module that would otherwise shadow it.
     @MainActor
-    static let theme = STPluginNeonAppKit.Theme(
-        colors: defaultColors(),
-        fonts: STPluginNeonAppKit.Theme.Fonts(fonts: [:])
-    )
+    static let theme = defaultColors()
 
     /// The plugin's default token colors, read one at a time from its resource
     /// bundle rather than through `Theme.default`, which force-unwraps all
@@ -106,7 +87,7 @@ enum SyntaxHighlighting {
     /// package resource bundles too, so they carry the app's identifier and
     /// their assets no longer resolve.
     @MainActor
-    private static func defaultColors() -> STPluginNeonAppKit.Theme.Colors {
+    private static func defaultColors() -> [String: NSColor] {
         let tokens = [
             "plain", "boolean", "comment", "constructor", "function.call",
             "include", "keyword", "keyword.function", "keyword.return",
@@ -115,7 +96,7 @@ enum SyntaxHighlighting {
             "type", "variable.builtin", "variable",
         ]
         guard let bundle = pluginResourceBundle else {
-            return STPluginNeonAppKit.Theme.Colors(colors: [:])
+            return [:]
         }
         var colors: [String: NSColor] = [:]
         for token in tokens {
@@ -123,7 +104,7 @@ enum SyntaxHighlighting {
                 colors[token] = color
             }
         }
-        return STPluginNeonAppKit.Theme.Colors(colors: colors)
+        return colors
     }
 
     /// The plugin's asset bundle inside the app. The package's own

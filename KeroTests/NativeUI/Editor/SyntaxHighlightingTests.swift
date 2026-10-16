@@ -48,6 +48,36 @@ private struct ObservedSyntaxPlugin: STPlugin {
 
 @MainActor
 final class SyntaxHighlightingTests: XCTestCase {
+    func testThemeCapturesMatchBundledPaletteAcrossAppearances() throws {
+        let url = try XCTUnwrap(Bundle.main.url(
+            forResource: "STTextView-Plugin-Neon_STPluginNeonAppKit", withExtension: "bundle"
+        ))
+        let bundle = try XCTUnwrap(Bundle(url: url))
+        let names = ["plain", "boolean", "comment", "constructor", "function.call", "include",
+                     "keyword", "keyword.function", "keyword.return", "method", "number", "operator",
+                     "parameter", "punctuation.special", "string", "text.literal", "text.title",
+                     "type", "variable.builtin", "variable"]
+        for name in [NSAppearance.Name.aqua, .darkAqua] {
+            let appearance = try XCTUnwrap(NSAppearance(named: name))
+            appearance.performAsCurrentDrawingAppearance {
+                for token in names {
+                    let expected = NSColor(named: "neon.plugin.default/\(token)", bundle: bundle)
+                    let actual = SyntaxHighlightCoordinator.themeColor(for: token, theme: SyntaxHighlighting.theme)
+                    XCTAssertNotNil(expected, "\(name.rawValue) \(token)")
+                    XCTAssertEqual(actual?.usingColorSpace(.deviceRGB), expected?.usingColorSpace(.deviceRGB))
+                }
+                for (capture, token) in [("tag", "constructor"), ("attribute", "method"),
+                                         ("variable.parameter", "variable"), ("unknown.capture", "plain")] {
+                    XCTAssertEqual(
+                        SyntaxHighlightCoordinator.themeColor(for: capture, theme: SyntaxHighlighting.theme)?
+                            .usingColorSpace(.deviceRGB),
+                        NSColor(named: "neon.plugin.default/\(token)", bundle: bundle)?.usingColorSpace(.deviceRGB)
+                    )
+                }
+            }
+        }
+    }
+
     func testClosingEditorDuringQueuedParsingReleasesItsContent() async throws {
         weak var editor: STTextView?
         weak var coordinator: SyntaxHighlightCoordinator?

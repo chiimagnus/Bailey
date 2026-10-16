@@ -4,7 +4,6 @@
 //
 
 import AppKit
-import STPluginNeon
 import STTextView
 import SwiftUI
 
@@ -114,7 +113,7 @@ struct SourceTextEditor: NSViewRepresentable {
         apply(to: textView, scrollView: scrollView)
         textView.text = file.text
 
-        // Tree-sitter syntax highlighting (STPluginNeon), for file types with
+        // Tree-sitter syntax highlighting, for file types with
         // a bundled grammar. Added after the text is set so the plugin's
         // initial full-document parse — which runs when the view lands in a
         // window — sees the whole document. The plugin only layers foreground

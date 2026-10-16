@@ -13,7 +13,6 @@
 //
 
 import AppKit
-import STPluginNeon
 import SwiftTreeSitter
 
 /// Background parser results contain only transferable source ranges/names.

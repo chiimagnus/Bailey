@@ -22,7 +22,6 @@
 import AppKit
 import Neon
 import Rearrange
-import STPluginNeon
 import STTextKitPlus
 import STTextView
 import SwiftTreeSitter
@@ -30,7 +29,7 @@ import TreeSitterClient
 
 /// STTextView plugin that drives Neon's tree-sitter highlighter.
 struct SyntaxHighlightPlugin: STPlugin {
-    let theme: STPluginNeonAppKit.Theme
+    let theme: [String: NSColor]
     let language: SyntaxLanguage
     /// The combined highlights query (`inherited base + language-specific`),
     /// already concatenated by `SyntaxHighlighting.highlightsData(for:)`.
@@ -136,7 +135,7 @@ final class SyntaxHighlightCoordinator {
 
     init(
         textView: STTextView,
-        theme: STPluginNeonAppKit.Theme,
+        theme: [String: NSColor],
         language: SyntaxLanguage,
         highlightsData: Data,
         injectionsData: Data?
@@ -199,19 +198,19 @@ final class SyntaxHighlightCoordinator {
     /// then the theme's `plain` default. The merged queries carry finer-grained
     /// capture names than the theme enumerates, so exact-match alone would leave
     /// many tokens uncolored.
-    nonisolated static func themeColor(for name: String, theme: STPluginNeonAppKit.Theme) -> NSColor? {
+    nonisolated static func themeColor(for name: String, theme: [String: NSColor]) -> NSColor? {
         var key = name
         while true {
-            if let color = theme.color(forToken: TokenName(key)) {
+            if let color = theme[key] {
                 return color
             }
-            if let alias = captureAliases[key], let color = theme.color(forToken: TokenName(alias)) {
+            if let alias = captureAliases[key], let color = theme[alias] {
                 return color
             }
             guard let dot = key.lastIndex(of: ".") else { break }
             key = String(key[..<dot])
         }
-        return theme.color(forToken: "plain")
+        return theme["plain"]
     }
 
     /// Capture names the theme's palette has no entry for, redirected onto ones

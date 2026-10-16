@@ -87,6 +87,8 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 
 ### 语法解析与 Diff
 
+Kero 只使用 `STTextView-Plugin-Neon` 中的语法、查询和默认配色资源；插件桥接及颜色字典由 Kero 自己持有，不再调用上游的插件适配、Theme／Fonts／TokenName 包装。上游包清单仍依赖 Neon，但 SwiftPM 实际只解析一份 `Vendor/Neon` 核心，不是两套运行时。该包没有单独的资源产品，彻底去包需要另行接管语法资源，不能只删除包引用而丢失语言支持。
+
 TSX 使用独立解析器，不能用普通 TypeScript 替代。`Vendor/TreeSitterTSX` 的来源是 `STTextView-Plugin-Neon` 固定提交 `5a30db4ce7908a5414e7b499e2379bdc49991cd1`，与工程依赖匹配。升级时从目标提交的 `Sources/TreeSitterTSX/` 更新 `include/` 和 `src/`，并核对插件查询与工程所用运行库的兼容性，不把查询或运行库一并复制进本地解析器包。
 
 高亮查询由插件提供，Kero 合并 TypeScript 与 JSX 查询，不复制一份手工查询。更新后检查 TypeScript、TSX 元素／属性／表达式及 Markdown／HTML 嵌入语言。
