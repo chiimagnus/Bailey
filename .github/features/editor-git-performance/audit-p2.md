@@ -21,6 +21,58 @@
 
 ## 发现项
 
+## 发现 F-09
+
+- 任务：`P2-T1`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Editor/SourceTextEditor.swift:213; kero/Editor/FileViewerView.swift:276-305`
+- 摘要：`刷新失败后保留旧预览却仍允许原生编辑及写回磁盘`
+- 风险：`Red 38 个 FileTabTests 中 2 项失败：瞬时读取失败后 editor.isEditable 仍为 true；模拟编辑并保存的确发起了旧缓存写盘，若外部文件已变更会覆盖新字节。`
+- 预期修复：`由 FileTab.reloadError 驱动现有原生 isEditable 资格，刷新成功前允许选择复制但拒绝编辑；模型保存入口同样禁止把未校验旧缓存写回，成功重读后自动解锁，不增加另一套确认 UI。`
+- 验证：`Red build/p2-audit-stale-write-red2.log；Green FileTabTests native disabled/AX/undo 恢复以及 backend.write 0调用后续正常保存，定向和完整回归。`
+- 解决证据：`Red build/p2-audit-stale-write-red2.log：原生编辑器刷新失败后仍可编辑且后台确实发出过期写；FileTab 保存前禁止 stale buffer write，SourceTextEditor 原生 isEditable 临时只读但仍能选择复制/查找，成功重读后恢复编辑/AX/undo/save。Green build/p2-audit-38-green.log FileTabTests 38/38，PaneRetentionTests 12/12 build/p2-audit-pane-final.log。`
+
+
+## 发现 F-08
+
+- 任务：`P2-T1`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Editor/FileViewerView.swift:126-131; kero/Workspace/Project.swift:518-526`
+- 摘要：`刷新失败保留旧预览后 Git Ignore 仍把旧文本当成最新磁盘内容并追加`
+- 风险：`受控现有 FileTab 初读 old-rule 成功；刷新失败保持旧显示后 waitForTextBeforeAppending 返回成功，随后 appendText 写旧缓存；真实磁盘外部规则可能丢失。`
+- 预期修复：`FileTab 的非视图追加前置读取必须检验本次磁盘刷新确已成功；失败显式抛错并保留编辑、不进入 append/save。`
+- 验证：`新增 FileTabTests.testAppendRejectsStaleCachedTextWhenFreshReadFails 实测 Red 四个断言失败；修复后 Green，后续成功刷新可以继续追加；现有 GitWorkspaceMenuTests 和真实 SSH 验证。`
+- 解决证据：`Red build/p2-audit-append-stale-red.log 4个断言：刷新失败后旧内容仍被 Git Ignore 消费并追加。FileTab.waitForTextBeforeAppending 检查 reloadError 并拒绝附加，原规则不变；恢复后重新读取外部规则且追加正常。Green build/p2-audit-38-green.log，GitWorkspaceMenuTests 7/7 build/p2-audit-gitignore-final.log。`
+
+
+## 发现 F-07
+
+- 任务：`P2-T1`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Editor/FileViewerView.swift:304-350`
+- 摘要：`干净已加载文件一次瞬时读取失败直接清空旧正文和编辑器身份`
+- 风险：`受控后端读取先成功再临时抛错，刷新后 FileTab.text 从原文变空、content 转 unavailable、reloadRevision 递增，原生编辑器与撤销可能被拆卸；真正恢复需再触发重读。`
+- 预期修复：`在 FileTab 读取所有者区分首次加载、文件确实不存在/超限和已加载视图的瞬时 I/O 错误：后者保留先前正文、原生编辑器、undo，显示明确刷新失败反馈；成功后清反馈。`
+- 验证：`FileTabTests 先 Red（33 tests 中 transient case 3断言失败），修复后 Green；增加真实原生挂载稳定回归和初读失败/明确文件删除反证；本机/SSH、make test/build。`
+- 解决证据：`受控已加载文本瞬时读取抛错，原文被清空且 reloadRevision 增加；Red build/p2-audit-extreme-red3.log。FileTab 对非缺失/超限临时错误保留旧内容和原生 TextKit，reloadError 展示中英警告并于恢复清理；图片回归、真实 native undo、后续文件真删除路径 Green build/p2-audit-38-green.log。`
+
+
+## 发现 F-06
+
+- 任务：`P2-T1`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`kero/Editor/FileViewerView.swift:142-153,304-351`
+- 摘要：`已加载文件在途刷新被连续激活反复取消重读`
+- 风险：`实测初读之后一次暂停刷新期间12次窗口激活使总读取次数达到14，旧任务继续占用IO/SSH，后到结果因代次失效丢弃，拖慢文件重新可用。`
+- 预期修复：`FileTab 唯一刷新所有者合并在途重复触发，并至多补一次刷新以获得在途期间发生的后续磁盘变化；路径/断线/dirty 仍取消旧任务。`
+- 验证：`受控 EditorWorkspaceFixture 在途读+12次激活先 Red；修改后在途仅1次、完成后至多1次补读，后发外部修改可见；FileTabTests、GitWorkspaceMenuTests、真实 SSH、make test/build。`
+- 解决证据：`受控 actor 首读成功后暂停重载，12次激活造成 14 次读；Red build/p2-audit-extreme-red3.log。FileTab.refreshPending 只允许在途1次+完成补读1次，三次读观察最新外部内容；撤销脏编辑和 SSH 断线立即取消补读；Green build/p2-audit-38-green.log 38/38。`
+
+
 ## 发现 F-05
 
 - 任务：`P2-T1`
@@ -117,15 +169,25 @@
 - 真实 Windows SSH：在专属 socket 和测试自建 `/tmp/kero-p4-git-*` 远端仓库验证外部 `.gitignore` 改写后再次追加；`GitWorkspaceSSHTests` 1/1 通过、102.862 秒，测试后清理临时目录和 master（`build/p2-audit-ssh-actual.log`），不复用用户会话。
 - P2 最终验证：F-04 后的 full suite 350 tests / 0 failures / 5 skipped（`build/p2-audit-full-second-round.log`）；F-05 后定向 FileTabTests 31/31、GitWorkspaceMenuTests 7/7、真实 Windows SSH 1/1；`make build DERIVED_DATA=build/DerivedData-P2-F05` 严格验签通过。最后一次整仓库 `make test` 353 tests / 4 failures / 5 skipped（`build/p2-audit-full-final-all.log`），失败来自 P3 `EditorTextInputTests`（2 断言）、P4 `RemoteCommandsTests`（1）、P5 `DiffTabTests`（1）；其他阶段并行处理，P2 不侵入其源码，不冒称整仓库通过。
 
+## 2026-10-17 极端条件追加复审
+
+- F-06：已加载文件的一次在途刷新被 12 次焦点事件取消重启，实测累计读数 14（`build/p2-audit-extreme-red3.log`）；在 `FileTab` 刷新所有者内合并重复事件，读取完成后至多再读取一次，读数降为 3 且显示最新外部字节。待执行的补读在 dirty edit、断线、目标变化时失效，不回写旧请求。
+- F-07：干净文件临时 I/O 故障时旧 `text` 清空、原生编辑器被替换；Red 测试实证。现在对临时故障保留原生 TextKit、旧内容、撤销与图片预览并显示中英双语警告；真实删除与超限仍按原契约显示不可用，成功刷新清除状态。
+- F-08：保留旧内容后，Git Ignore 不得绕过本次失败刷新来消费过期缓存；受控 Red 实证会追加旧规则，修改 `FileTab.waitForTextBeforeAppending` 的成功契约后，失败阻止追加和写入，恢复后可再读取最新内容。
+- F-09：刷新失败后仍可编辑和真实写盘的两项 Red 测试失败已复现；现在由 `reloadError` 驱动原生 `STTextView.isEditable` 与模型保存资格，成功重读前保留只读原文且 backend `write` 零调用，恢复后同一编辑器继续修改、Undo、Save。只保留原有 `FileTab` 所有者，没有新增保存/重试服务。
+- 定向 Green：FileTabTests 38/38（`build/p2-audit-38-green.log`），GitWorkspaceMenuTests 7/7（`build/p2-audit-gitignore-final.log`），SyntaxHighlightingTests 18/18（`build/p2-audit-highlights-final.log`），PaneRetentionTests 12/12（`build/p2-audit-pane-final.log`）。授权的真实 Windows SSH `GitWorkspaceSSHTests` 1/1、103.214 秒（`build/p2-audit-ssh-extreme-final.log`），专属临时 master 和文件夹，测试清理。整仓 XCTest 使用已获授权 Windows：`build/p2-audit-all-windows-final.log` / `build/p2-audit-all-summary.json`（`xcresulttool get test-results summary`），共 368，366 passed，2 failed，0 skipped。失败是 P3 的 `EditorTextInputTests/testInputGeometryAfterEditorDetachesDoesNotUseDisposedWindow` 独立进程 crash，以及 P4 的 `RemoteCommandsTests/testSSHFileRenamePreservesDanglingSymlinksAndRejectsOccupiedDestinations` 并发目录竞态断言；均非 P2 修改，P4 代码在测试启动后另行提交修复，不能视为复验通过。
+- 本轮仅 P2 五个文件的提交：`02d67dc`。严格区分先前 `c502a76` 和其他 AI 的 P3/P4/P5 提交，未混入跨阶段修改。旧的重复全局窗口通知、init 预读、字体重复事务不再恢复。
+- 独立 App：Debug 包已用 `open -g -n -a ... --args --isolated-ui-test` 启动，创建独立 PID 10227，不使用用户正式快照/隧道。Peekaboo 4.6 AX 检查仅得到不在屏幕上的像素窗口、无可复用元素树；其他 P1/P3 实例和用户正式 Kero 正在运行，为避免抢焦点未强行执行 `⌘⇧A`、512KiB/4MiB 文件选择、真正重启 E2E。仅终止本次 PID，确认用户/其他 AI 的三个 App 实例存活。两份 UTF-8 合成 fixture 大小正确，独立菜单 E2E 不宣称通过。
+
 ## Gate（是否允许进入下一阶段）
 
-- 结论：`Go（仅 P2）`；整仓库集成 Gate 待 P3/P4/P5 独立失败修复并复测。
+- 结论：`Go（仅 P2）`；整仓库 No-Go：P3 测试崩溃与 P4 SSH 重命名测试失败，须由对应阶段独立修复并复测。
 - 理由：正常与已证实失败路径到达真实磁盘、原生文字／颜色／撤销，旧路径同任务删除；组合自动回归与构建通过，纯性能措施有单变量等价与测量依据。
 
 ## 最终状态与剩余风险
 
 - 当前状态：`Resolved`
-- 剩余风险：真实 Windows SSH Git Ignore 已验收；正式安装、独立 App 菜单 E2E 和用户重启恢复未验收；beta Instruments 受 AMFI 限制。P3/P4/P5 各自测试失败仍待对应审查处理，P2 的 Go 不代表整仓库 Gate 通过。并行源码仍在修改，不安装混合构建或重启用户 Kero。
+- 剩余风险：真实 Windows SSH Git Ignore 已验收；正式安装、独立 App 菜单 E2E 和用户重启恢复未验收；beta Instruments 受 AMFI 限制。P3 崩溃与 P4 重命名测试失败仍待对应审查处理，P2 的 Go 不代表整仓库 Gate 通过。并行源码仍在修改，不安装混合构建或重启用户 Kero。
 
 ## 审计约束
 

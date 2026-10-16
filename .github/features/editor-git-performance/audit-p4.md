@@ -23,30 +23,56 @@
 
 ## 发现项
 
+## 发现 F-47
+
+- 任务：`P4-T4`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Remote/SSHWorkspaceBackend.swift:196`
+- 摘要：`mv -n 在目标路径竞态变成目录时会把源文件移动到其内部并误报重命名成功`
+- 风险：`真实 macOS shell 已复现源路径消失，文件变成 dest/source；目标由并发进程创建且仍无覆盖的假阳性`
+- 预期修复：`成功后校验目标目录语义并还原误移入目录的源文件；同时处理普通路径及大小写中转路径`
+- 验证：`RemoteCommandsTests 受控并发创建目标目录 Red->Green，Windows SSH 实际外部更名回归`
+- 解决证据：`修复 7beaea7；Red: 目标在检查后变为目录使源文件及源目录被移动进目录，测试失败；Green: portable ls -id 核验实际移动后目录项身份并恢复误移入路径，RemoteCommandsTests 13/13，Windows SSH 实机成功。`
+
+
+## 发现 F-46
+
+- 任务：`P4-T4`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Remote/SSHWorkspaceBackend.swift:165`
+- 摘要：`大小写重命名的临时阶段遇到远端命令中断可使源路径消失并遗留隐藏目录`
+- 风险：`注入首次移动后中断复现：文件仍在临时目录但原始源路径不存在，界面返回失败且文件不可见`
+- 预期修复：`为带临时目录的重命名阶段添加 shell EXIT/信号回滚与有界清理；故障时恢复原始路径且不覆盖并发文件`
+- 验证：`RemoteCommandsTests 注入临时阶段中断 Red->Green；实际 macOS shell + Windows SSH 目录副作用复核`
+- 解决证据：`修复 7beaea7；Red: 退出和 SIGTERM 后源路径消失、临时目录残留；Green: EXIT/HUP/INT/TERM trap 恢复源、删空临时目录，RemoteCommandsTests 13/13；SIGKILL/断电不承诺回滚，已在 files.md 标注。`
+
+
 ## 发现 F-45
 
 - 任务：`P4-T4`
 - 严重级别：`Medium`
-- 状态：`Open`
+- 状态：`Resolved`
 - 位置：`kero/Remote/SSHWorkspaceBackend.swift:166`
 - 摘要：`重命名引用 GNU stat -c 导致 macOS SSH 远端相同文件别名重命名失败`
 - 风险：`Mac remote shell 使用 BSD stat，不支持 -c；当前测试替换了该调用而掩盖兼容问题`
 - 预期修复：`改用在 POSIX 兼容 shell 可工作的同实体判断，不依赖 GNU stat`
 - 验证：`未做命令翻译的 macOS /bin/sh 回归以及 Windows SSH 回归`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`修复 7beaea7，移除 GNU stat -c 假设；测试不再替换命令，真实 macOS /bin/sh 与 Windows MSYS SSH 端到端正常。`
 
 
 ## 发现 F-44
 
 - 任务：`P4-T4`
 - 严重级别：`High`
-- 状态：`Open`
+- 状态：`Resolved`
 - 位置：`kero/Remote/SSHWorkspaceBackend.swift:166`
 - 摘要：`SSH 重命名以 inode 相同放行不同目录项硬链接并删除来源名`
 - 风险：`同 inode 的 hard link 可复现旧逻辑丢失源路径；跨目标真实数据完整性缺陷`
 - 预期修复：`以 no-clobber 保留目标，只有确实映射同一目录项的大小写更名才执行；区别硬链接`
 - 验证：`RemoteCommandsTests 真实磁盘硬链接 Red->Green，Windows SSH 真实路径回归`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`修复 7beaea7；硬链接相同 inode 不允许重命名覆盖。RemoteCommandsTests 13/13；真实 Windows SSH 重命名正常与硬链接碰撞通过；Debug/Release 严格签名成功。`
 
 
 ## 发现 F-43
@@ -156,3 +182,30 @@
 - 已按 `docs/development.md#本地安装` 将完整 Debug 构建替换至 `/Applications/Kero.app`：先同磁盘暂存并严格验签，整包移动替换，复验签名；安装后二进制与 Debug 构建逐字节一致，清除本次旧包与暂存，不遗留备份；未结束、启动或重启用户现有 App，新代码下次启动生效。
 - 两项独立中文 Git 提交已产生：`d84579b`（P4-T1，含 F-41/F-43）、`48607e5`（P4-T4，含 F-42）。`todo.toml` 中 P4 原四项已完成，不修改其他阶段任务；其他审查人员的文件未进入上述 commits。
 - Gate 结论：P4 自动化验收 **GO**（344/344、含真实 Windows SSH），Debug/Release 构建与本地安装 **GO**；GUI 的原生 AX 手工动作、Windows 真实失效符号链接的单独端到端副作用仍为未测边界，不声称已验证。
+
+## 2026-10-17 极端场景独立扩展（第二轮）
+
+此轮未采用旧 audit 的结论；依据 P4 原 plan/todo、当前 CodeGraph 调用路径、Red 失败数据、实际 Mac shell 与授权 Windows SSH 实机回归独立核对。
+
+### 新发现与根因修复
+
+- F-44（High，`7beaea7`）：真实硬链接相同 inode 但有两个目录项；旧远端重命名错误覆盖／移除原路径。加入同 inode 硬链接回归，不能把 inode 相同直接当同一名称。
+- F-45（Medium，`7beaea7`）：旧 GNU `stat -c` 在 macOS BSD stat 无效；删除测试里的命令转换，直接由 macOS `/bin/sh` 和真实 Windows MSYS shell 执行同一实现。
+- F-46（High，`7beaea7`）：受控中断发生在临时目录中转后，旧实现隐藏源文件且残留 `.kero-rename.*`。Red 复现，再验证普通 `exit 70` 与 `TERM` 的 EXIT/signal 回滚、源路径和数据保持、空临时目录清理。SIGKILL/机器掉电不保证回滚；残留不自动清理。
+- F-47（High，`7beaea7`）：并发进程在目标检查后创建目录，`mv -n` 会将源文件甚至源目录移动到此目录内并假报成功；Red 真实文件副作用，Green 用可移植 inode 身份检查并恢复异常嵌套移动。读写和目录检查均以实际文件内容／路径为结果，不仅检查返回码。
+
+### 其它 P4 条件矩阵
+
+- P4-T1：详情 Ref、History、Stash 同时失败与逐项恢复；核心状态独立可用，详情操作资格只由其真实快照验证决定。`GitStatusModelTests` 26/26。
+- P4-T2：已知索引变更、外部提交、分页失败、排队 full 不降级、HEAD/Ref 变化后重新取一致历史，相关 Git 测试组通过。
+- P4-T3：实际 Git rename、MM、冲突、staged deletion + untracked 同路径、ignore 后代、特殊名称（中文、换行、tab、引号、emoji），另加 1500 确定性路径 × 文件/目录查询与慢扫描 oracle 对照，通过。
+- P4-T4：三次目标切换、两个旧 SSH 列表同时阻塞、晚到结果不得覆盖第三目标；`PanelContextTests` 11/11。`RemoteCommandsTests` 13/13，Mac 真实临时磁盘含目录竞态、信号退出、硬链接、失效符号链接及大小写路径。Windows SSH 实机临时目录验证中文和引号、文件／目录占用、硬链接与 NTFS 大小写重命名，实际副作用通过；该测试主机 `ln -s` 返回 1，不能宣称 Windows 原生 symlink 通过。
+
+### 性能和环境证据
+
+- Windows SSH 同目录、同连接 30 轮：两目录逐次请求中位 1.500s、p95 1.557s；合批中位 1.024s、p95 1.089s（节约约 31.7%）。冷树 n=5 中位 2.383s；缓存目录展开／折叠 n=30 中位 0.001s；14 目录刷新 n=30 中位 1.422s。仅代表真实 Windows SSH 链路及后端读取，不冒充 UI FPS。
+- 前一次扩展全套 `make test`（真实 Windows SSH）：364 tests，1 failure；唯一失败属当时正在并行修改的 P5 `DiffTabTests.testEditGeometryUsesGitLFLinesAcrossNativeBareCRParagraphs`，不是 P4；对方代码更新后该用例单独复测通过。P4 各 Git、Files、PanelContext、Remote、原生树行、Windows SSH 测试组在该轮全部通过。
+- 最终 `make build` 和 `make build:release` 均 BUILD SUCCEEDED + `codesign --verify --deep --strict` 通过。额外 Release XCTest 探索因工程 Release kero 模块未开启 `-enable-testing`，无法 `@testable import kero` 而编译失败；并非 P4 运行期断言，工程既有常规 XCTest 使用 Debug 目标。
+- 原生 App 的测试由现有 macOS XCTest UI 测试覆盖；已在用户现有 Kero 进程运行时确认 Peekaboo Accessibility/Screen Recording 权限可用，但未操作或重启用户的旧进程，不能把这当作新安装包的人工 AX E2E 证据。
+
+本轮只提交 3 个 P4 原子提交：`7beaea7`（修复及实机/单元测试＋docs）、`fd731ee`（Git 详情＋装饰矩阵）、`52f840f`（三目标竞态）；未混入其他 AI 的 P2/P3/P5 代码、文档或测试。
