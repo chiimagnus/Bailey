@@ -656,6 +656,91 @@ final class SyntaxHighlightingTests: XCTestCase {
         XCTAssertFalse(editor.undoManager?.canUndo ?? false)
     }
 
+    func testRenamingMountedFileChangesGrammarWithoutDiscardingUndo() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let original = folder.appendingPathComponent("source.swift")
+        let renamed = folder.appendingPathComponent("source.md")
+        let source = "# Heading\n\nlet value = 42\n"
+        try Data(source.utf8).write(to: original)
+        let file = FileTab(path: original.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let host = NSHostingView(rootView: SourceTextEditor(file: file, font: font,
+            palette: .theme(dark: true), wrapLines: false, isFocused: false))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        let editor = try XCTUnwrap(scroll.documentView as? STTextView)
+        let heading = (source as NSString).range(of: "Heading").location
+        let markdownColor = try XCTUnwrap(SyntaxHighlightCoordinator.themeColor(
+            for: "text.title", theme: SyntaxHighlighting.theme))
+        XCTAssertNotEqual(self.color(editor, at: heading), markdownColor)
+        editor.insertText("// unsaved\n", replacementRange: NSRange(location: source.utf16.count, length: 0))
+        let undo = try XCTUnwrap(editor.undoManager)
+        XCTAssertTrue(undo.canUndo)
+        try FileManager.default.moveItem(at: original, to: renamed)
+        file.updatePath(renamed.path)
+        host.rootView = SourceTextEditor(file: file, font: font,
+            palette: .theme(dark: true), wrapLines: false, isFocused: false)
+        try await wait { self.color(editor, at: heading) == markdownColor }
+        let unsupported = folder.appendingPathComponent("source.txt")
+        try FileManager.default.moveItem(at: renamed, to: unsupported)
+        file.updatePath(unsupported.path)
+        try await wait { self.color(editor, at: heading) == nil }
+        try FileManager.default.moveItem(at: unsupported, to: original)
+        file.updatePath(original.path)
+        let keyword = (source as NSString).range(of: "let").location
+        let keywordColor = try XCTUnwrap(SyntaxHighlightCoordinator.themeColor(
+            for: "keyword", theme: SyntaxHighlighting.theme))
+        try await wait { self.color(editor, at: keyword) == keywordColor }
+        XCTAssertTrue((file.editorView as? NSScrollView)?.documentView === editor)
+        XCTAssertTrue(editor.undoManager === undo)
+        undo.undo()
+        XCTAssertEqual(Data((editor.text ?? "").utf8), Data(source.utf8))
+        XCTAssertFalse(file.isDirty)
+    }
+
+    func testRapidNativeUnicodeReplacementsKeepParserAndBytesAligned() async throws {
+        let plugin = try XCTUnwrap(SyntaxHighlighting.plugin(for: "fixture.swift"))
+        let parser = Parser()
+        try parser.setLanguage(plugin.language.parser)
+        var source = "// 中文 👋 e\u{301}\r\nlet value = 42\n"
+        let mounted = try mountedPlugin(source: source)
+        defer { mounted.window.close() }
+        var seed: UInt64 = 0x7E57A113
+        func next(_ bound: Int) -> Int {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Int((seed >> 32) % UInt64(bound))
+        }
+        let replacements = ["", "A", "\n", "\r\n", "👋", "中文", "e\u{301}", "/*", "*/", "let", "{ }", "\u{2028}"]
+        for edit in 0..<160 {
+            var boundaries = [0]
+            for character in source { boundaries.append(boundaries.last! + character.utf16.count) }
+            let first = next(boundaries.count)
+            let last = first + next(boundaries.count - first)
+            let range = NSRange(location: boundaries[first], length: boundaries[last] - boundaries[first])
+            let replacement = replacements[next(replacements.count)]
+            mounted.editor.insertText(replacement, replacementRange: range)
+            source = (source as NSString).replacingCharacters(in: range, with: replacement)
+            XCTAssertEqual(Data((mounted.editor.text ?? "").utf8), Data(source.utf8), "edit \(edit)")
+            if edit % 16 == 0 || edit == 159 {
+                let actual = try await mounted.coordinator.tsClient.currentTree()
+                let fresh = try XCTUnwrap(parser.parse(source)?.rootNode)
+                XCTAssertEqual(actual.rootNode?.range, fresh.range, "edit \(edit)")
+                XCTAssertEqual(actual.rootNode?.pointRange, fresh.pointRange, "edit \(edit)")
+                XCTAssertEqual(actual.rootNode?.sExpressionString, fresh.sExpressionString, "edit \(edit)")
+            }
+        }
+    }
+
     func testProductionTransformerMatchesUTF16ParserPoints() async throws {
         for source in ["", "let value = 1", "// 中文 👋\r\nlet value = 1\n", "// a\rb\u{2028}c\u{2029}d\n", "\n"] {
             let view = STTextView()

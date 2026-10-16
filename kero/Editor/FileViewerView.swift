@@ -228,6 +228,7 @@ final class FileTab: nonisolated Identifiable {
         invalidateReload()
         targetGeneration &+= 1
         path = newPath
+        editorCoordinator?.updateSyntaxHighlighting(for: newPath)
         if wasReading { loadIfNeeded() }
     }
 

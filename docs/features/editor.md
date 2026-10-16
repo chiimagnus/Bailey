@@ -38,7 +38,7 @@ Git Ignore 等非视图追加动作在文本缓冲干净时先读取磁盘当前
 
 ## 高亮与编辑
 
-沿用 STTextView/TextKit 和现有增量解析。TSX 使用独立解析器，Markdown／HTML 保留嵌入语言；未知语法显示纯文本。Markdown 是源码编辑，不承诺排版预览。
+沿用 STTextView/TextKit 和现有增量解析。TSX 使用独立解析器，Markdown／HTML 保留嵌入语言；未知语法显示纯文本。文件扩展名变更时，在同一个编辑器上切换语法并清除旧色，不丢未保存内容和撤销历史。Markdown 是源码编辑，不承诺排版预览。
 
 高亮只添加／清除临时前景色，不写入正文属性或重复设置字体；不能修改文本、污染撤销或更改用户字体。实际换字体仍由原生编辑器应用。第三方补丁与升级验证由 [development.md](../development.md#依赖与本地补丁) 维护，性能测量见 [testing.md](../testing.md#性能与内存测量)。
 

@@ -39,13 +39,9 @@ struct SyntaxHighlightPlugin: STPlugin {
     /// provider; see `SyntaxHighlighting.injectionsData(for:)`.
     let injectionsData: Data?
 
-    /// These handlers are stored on `STPluginEvents`, which the text view
-    /// itself retains (`STTextView.plugins`) for as long as it lives — and the
-    /// view has no way to drop a plugin, so anything they capture strongly
-    /// lives exactly as long as the view does. Capturing `context` whole would
-    /// therefore close a cycle: it holds `textView` strongly, so every editor
-    /// would stay alive for the life of the process. Capture the coordinator
-    /// (which is meant to share the view's lifetime) and a *weak* view instead.
+    /// The text view retains plugin event handlers until removal. Capturing
+    /// `context` would retain its `textView` and create a cycle. Keep the
+    /// coordinator, but capture the view weakly.
     func setUp(context: any Context) {
         let coordinator = context.coordinator
 
@@ -71,13 +67,15 @@ struct SyntaxHighlightPlugin: STPlugin {
     }
 
     func makeCoordinator(context: CoordinatorContext) -> SyntaxHighlightCoordinator {
-        SyntaxHighlightCoordinator(
+        let coordinator = SyntaxHighlightCoordinator(
             textView: context.textView,
             theme: theme,
             language: language,
             highlightsData: highlightsData,
             injectionsData: injectionsData
         )
+        (context.textView as? FocusReportingTextView)?.syntaxCoordinator = coordinator
+        return coordinator
     }
 }
 
@@ -391,6 +389,13 @@ final class SyntaxHighlightCoordinator {
             highlighter?.visibleContentDidChange()
         }
         prevViewportRange = range
+    }
+
+    func deactivate() {
+        highlightRevision &+= 1
+        for task in injectedFragments.values { task.cancel() }
+        injectedFragments.removeAll()
+        highlighter = nil
     }
 
     func willChangeContent(in range: NSRange) {
