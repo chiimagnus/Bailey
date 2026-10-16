@@ -82,6 +82,114 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class DiffTabTests: XCTestCase {
+    func testCanonicalEquivalentEditDuringDiffWriteRemainsDirty() async throws {
+        let domain = "kero-canonical-save-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let backend = DiffWorkspaceFixture()
+        let diff = DiffTab(repoRoot: "/fixture", path: "canonical.txt", source: .worktree,
+                           untracked: true, origPath: nil, backend: backend,
+                           workspaceIdentity: nil, preferences: DiffViewPreferences(defaults: defaults))
+        try await wait { !diff.isLoading }
+        diff.updateEditedContent("café")
+        let saving = Task { await diff.save() }
+        try await wait { await backend.writing }
+        diff.updateEditedContent("cafe\u{301}")
+        await backend.finishWrite()
+        await saving.value
+        let stored = await backend.stored()
+        XCTAssertEqual(stored, Data("café".utf8))
+        XCTAssertTrue(diff.isDirty)
+        XCTAssertEqual(Data(diff.editedNewContent.utf8), Data("cafe\u{301}".utf8))
+    }
+
+    func testCanonicalEquivalentGitContentIsARealDiff() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("canonical.txt")
+        let composed = "let café = 1\n"
+        let decomposed = "let cafe\u{301} = 1\n"
+        try Data(composed.utf8).write(to: path)
+        for arguments in [["add", "."], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(arguments, in: directory.path).status, 0)
+        }
+        try Data(decomposed.utf8).write(to: path)
+        let domain = "kero-canonical-diff-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.prefersEditing = false
+        let diff = DiffTab(repoRoot: directory.path, path: "canonical.txt", source: .worktree,
+                           untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil, preferences: preferences)
+        try await wait { !diff.isLoading }
+        XCTAssertNil(diff.error)
+        XCTAssertEqual(Data(diff.oldContent.utf8), Data(composed.utf8))
+        XCTAssertEqual(Data(diff.newContent.utf8), Data(decomposed.utf8))
+        XCTAssertTrue(diff.hasChanges)
+        guard diff.hasChanges else { return }
+        try await wait { diff.display != nil }
+        let display = try XCTUnwrap(diff.display)
+        XCTAssertTrue(display.computation.unified.rows.contains { $0.kind == .removed })
+        XCTAssertTrue(display.computation.unified.rows.contains { $0.kind == .added })
+    }
+
+    func testCanonicalEquivalentNativeDiffEditSaveModeSwitchAndReload() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("canonical.txt")
+        let composed = "café 中文👋\n"
+        let decomposed = "cafe\u{301} 中文👋\n"
+        try Data(composed.utf8).write(to: path)
+        let domain = "kero-canonical-edit-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.prefersEditing = true
+        let diff = DiffTab(repoRoot: directory.path, path: "canonical.txt", source: .worktree,
+                           untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil, preferences: preferences)
+        try await wait { !diff.isLoading && diff.display != nil }
+        diff.autoSaveSuspendedForClose = true
+        let host = NSHostingView(rootView: DiffViewerView(diff: diff))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(findNativeTextView(in: host, editable: true))
+        editor.insertText(decomposed, replacementRange: NSRange(location: 0, length: composed.utf16.count))
+        editor.breakUndoCoalescing()
+        XCTAssertEqual(Data(diff.editedNewContent.utf8), Data(decomposed.utf8))
+        XCTAssertTrue(diff.isDirty)
+        editor.undoManager?.undo()
+        XCTAssertFalse(diff.isDirty)
+        editor.undoManager?.redo()
+        XCTAssertTrue(diff.isDirty)
+        await diff.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data(decomposed.utf8))
+        XCTAssertFalse(diff.isDirty)
+        let oldDisplayID = diff.display?.id
+        diff.setEditing(false)
+        XCTAssertEqual(Data(diff.newContent.utf8), Data(decomposed.utf8))
+        if diff.newContent.utf8.elementsEqual(decomposed.utf8) {
+            try await wait { diff.display?.id != oldDisplayID }
+            XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.dropLast().utf8))
+        }
+        try Data(composed.utf8).write(to: path)
+        diff.reload()
+        try await wait { !diff.isLoading }
+        try await wait { diff.display?.computation.splitRight.text.utf8.elementsEqual(composed.dropLast().utf8) == true }
+        let newDisplayID = diff.display?.id
+        try Data(decomposed.utf8).write(to: path)
+        diff.reload()
+        try await wait { !diff.isLoading }
+        try await wait { diff.display?.id != newDisplayID }
+        XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.dropLast().utf8))
+    }
+
     private func findNativeSurface(in view: NSView) -> DiffNativeSurface? {
         if let surface = view as? DiffNativeSurface { return surface }
         return view.subviews.lazy.compactMap { self.findNativeSurface(in: $0) }.first

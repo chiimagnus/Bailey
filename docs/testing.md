@@ -58,7 +58,7 @@ make test ONLY_TESTING=KeroTests/FileTabTests
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
 | Git 环境、刷新、写操作与失败状态 | `GitExternalRefreshTests`、`GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitTagActionTests`、`GitWorkspaceActionTests`、`GitStashActionTests`、`GitBranchDialogTests`、`GitTagDialogTests`、`GitWorkspaceMenuTests`、`GitStashDialogTests` |
 | SSH 命令、断线、重连和过期结果 | `RemoteCommandsTests`、`RemoteLifetimeTests` |
-| 文件、Diff 和原生内容保留 | `FileTabTests`、`DiffTabTests`、`PaneRetentionTests` |
+| 文件、Diff 和原生内容保留 | `FileTabTests`、`DiffTabTests`、`DiffEngineTests`、`PaneRetentionTests` |
 | 高亮坐标、渲染色与字体／撤销 | `SyntaxHighlightingTests` |
 | Files 与所有 Git 树的命中与交互 | `TreeRowHitTestingTests` |
 | 快照、历史与测试隔离 | `SessionStoreTests` |

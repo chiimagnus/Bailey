@@ -117,7 +117,7 @@ nonisolated enum DiffEngine {
 
         func linesEqual(_ oldIndex: Int, _ newIndex: Int) -> Bool {
             oldHashes[oldIndex] == newHashes[newIndex]
-                && oldTexts[oldIndex] == newTexts[newIndex]
+                && oldTexts[oldIndex].utf8.elementsEqual(newTexts[newIndex].utf8)
         }
     }
 
@@ -513,7 +513,7 @@ nonisolated enum DiffIntraline {
     /// would be noise. Token sequences are diffed with the same Myers used for
     /// lines (token counts are small).
     static func diff(old: Substring, new: Substring) -> DiffIntralineResult? {
-        guard old != new else { return nil }
+        guard !old.utf8.elementsEqual(new.utf8) else { return nil }
         let oldTokens = tokenize(old)
         let newTokens = tokenize(new)
         guard oldTokens.count <= tokenLimit, newTokens.count <= tokenLimit,
@@ -615,7 +615,7 @@ nonisolated enum DiffIntraline {
         into builder: inout TokenOpsBuilder
     ) {
         func equalTokens(_ oldIndex: Int, _ newIndex: Int) -> Bool {
-            oldTexts[oldIndex] == newTexts[newIndex]
+            oldTexts[oldIndex].utf8.elementsEqual(newTexts[newIndex].utf8)
         }
 
         let n = oldTexts.count

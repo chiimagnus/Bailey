@@ -87,6 +87,87 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
 
 @MainActor
 final class FileTabTests: XCTestCase {
+    func testCanonicalEquivalentNativeReplacementUndoAndSavePreserveBytes() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        let composed = "café 中文👋\r\n"
+        let decomposed = "cafe\u{301} 中文👋\r\n"
+        try Data(composed.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        editor.insertText(decomposed, replacementRange: NSRange(location: 0, length: composed.utf16.count))
+        editor.breakUndoCoalescing()
+        XCTAssertEqual(Data((editor.text ?? "").utf8), Data(decomposed.utf8))
+        XCTAssertEqual(Data(file.text.utf8), Data(decomposed.utf8))
+        XCTAssertTrue(file.isDirty)
+        editor.undoManager?.undo()
+        XCTAssertEqual(Data(file.text.utf8), Data(composed.utf8))
+        XCTAssertFalse(file.isDirty)
+        editor.undoManager?.redo()
+        XCTAssertTrue(file.isDirty)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data(decomposed.utf8))
+        XCTAssertFalse(file.isDirty)
+        editor.setMarkedText("中文", selectedRange: NSRange(location: 2, length: 0),
+                             replacementRange: NSRange(location: 0, length: decomposed.utf16.count))
+        editor.setMarkedText("中文👋", selectedRange: NSRange(location: 4, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.insertText("中文👋", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(Data(file.text.utf8), Data("中文👋".utf8))
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data("中文👋".utf8))
+    }
+
+    func testCanonicalEquivalentCleanReloadInstallsNewBytes() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        let composed = "café 中文👋\r\n"
+        let decomposed = "cafe\u{301} 中文👋\r\n"
+        try Data(composed.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        let revision = file.reloadRevision
+        try Data(decomposed.utf8).write(to: path)
+        file.reloadFromDiskIfClean()
+        try await file.waitForText()
+        XCTAssertEqual(Data(file.text.utf8), Data(decomposed.utf8))
+        XCTAssertEqual(file.reloadRevision, revision + 1)
+        let updated = file.reloadRevision
+        file.reloadFromDiskIfClean()
+        try await file.waitForText()
+        XCTAssertEqual(file.reloadRevision, updated, "Identical bytes must not replace the document")
+        XCTAssertFalse(file.isDirty)
+    }
+
+    func testCanonicalEquivalentEditDuringWriteRemainsDirty() async throws {
+        let path = "/fixture/canonical.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("baseline".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.text = "café"
+        file.refreshDirtyState()
+        let saving = Task { await file.save() }
+        try await wait { await backend.writingPath == path }
+        file.text = "cafe\u{301}"
+        file.refreshDirtyState()
+        await backend.finishWrite()
+        await saving.value
+        let stored = await backend.data(at: path)
+        XCTAssertEqual(stored, Data("café".utf8))
+        XCTAssertTrue(file.isDirty, "A completed write must not claim different current bytes were saved")
+        XCTAssertEqual(Data(file.text.utf8), Data("cafe\u{301}".utf8))
+    }
+
     func testUnconsumedTabDoesNotReadAndWaitLoadsExactlyOnce() async throws {
         let path = "/fixture/lazy.txt"
         let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))

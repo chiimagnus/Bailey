@@ -278,9 +278,7 @@ struct SourceTextEditor: NSViewRepresentable {
 
         func textViewDidChangeText(_ notification: Notification) {
             guard let textView, let file, file.editorCoordinator === self else { return }
-            let newText = textView.text ?? ""
-            guard newText != file.text else { return }
-            file.text = newText
+            file.text = textView.text ?? ""
             file.refreshDirtyState()
         }
 

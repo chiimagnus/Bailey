@@ -220,7 +220,7 @@ final class FileTab: nonisolated Identifiable {
     func refreshDirtyState() {
         let dirty: Bool
         if case .text = content {
-            dirty = text != savedText
+            dirty = !text.utf8.elementsEqual(savedText.utf8)
         } else {
             dirty = false
         }
@@ -340,7 +340,7 @@ final class FileTab: nonisolated Identifiable {
     private func matches(_ loaded: LoadedContent) -> Bool {
         switch (content, loaded.content) {
         case (.text, .text):
-            return savedText == loaded.text
+            return savedText.utf8.elementsEqual(loaded.text.utf8)
         case (.image, .image):
             return imageFingerprint == loaded.imageFingerprint
         case (.unavailable(let current), .unavailable(let new)):

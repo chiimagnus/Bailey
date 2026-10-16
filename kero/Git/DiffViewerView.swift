@@ -132,7 +132,7 @@ final class DiffTab: nonisolated Identifiable {
     private(set) var editDecorations = DiffDecorations.empty
     /// Owned by the tab, never by a transient SwiftUI mount.
     @ObservationIgnored var nativeSurface: DiffNativeSurface?
-    var hasChanges: Bool { oldContent != newContent }
+    var hasChanges: Bool { !oldContent.utf8.elementsEqual(newContent.utf8) }
     var isEditing: Bool { isEditableNow && preferences.prefersEditing }
 
     private nonisolated static let maxBytes = 5 << 20
@@ -227,7 +227,7 @@ final class DiffTab: nonisolated Identifiable {
         readOnlyReason = reason
         // Going offline hides the editable pane; publish its unsaved text to
         // the read-only diff instead of making the draft disappear on screen.
-        if isReadOnly, isDirty, newContent != editedNewContent {
+        if isReadOnly, isDirty, !newContent.utf8.elementsEqual(editedNewContent.utf8) {
             newContent = editedNewContent
             runExpansions.removeAll()
             recomputeDisplay()
@@ -385,7 +385,8 @@ final class DiffTab: nonisolated Identifiable {
             self.isUnmerged = result.unmerged
             self.isEditable = result.editable && result.failure == nil
             self.resolvedWorktreePath = result.resolvedPath
-            let changed = self.oldContent != result.old || self.newContent != result.new
+            let changed = !self.oldContent.utf8.elementsEqual(result.old.utf8)
+                || !self.newContent.utf8.elementsEqual(result.new.utf8)
             self.oldContent = result.old
             self.newContent = result.new
             if changed { self.runExpansions.removeAll() }
@@ -419,7 +420,7 @@ final class DiffTab: nonisolated Identifiable {
     func updateEditedContent(_ contents: String) {
         guard isEditable else { return }
         editedNewContent = contents
-        isDirty = contents != savedNewContent
+        isDirty = !contents.utf8.elementsEqual(savedNewContent.utf8)
         if isDirty { invalidateReload() }
         refreshEditDecorations()
     }
@@ -433,7 +434,7 @@ final class DiffTab: nonisolated Identifiable {
     func setEditing(_ editing: Bool) {
         guard isEditableNow, editing != isEditing else { return }
         nativeSurface?.rememberScrollAnchor()
-        if !editing && newContent != editedNewContent {
+        if !editing && !newContent.utf8.elementsEqual(editedNewContent.utf8) {
             newContent = editedNewContent
             runExpansions.removeAll()
             recomputeDisplay()
@@ -648,7 +649,7 @@ final class DiffTab: nonisolated Identifiable {
             guard generation == targetGeneration, readOnlyReason == nil else { return }
             savedNewContent = written
             // An edit landing while the write was in flight stays dirty.
-            isDirty = editedNewContent != savedNewContent
+            isDirty = !editedNewContent.utf8.elementsEqual(savedNewContent.utf8)
             saveError = nil
         } catch {
             guard generation == targetGeneration else { return }
