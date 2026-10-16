@@ -1,6 +1,49 @@
 import AppKit
 import SwiftUI
 
+struct GitGraphReferenceGroup: Identifiable {
+    typealias Reference = GitStatusModel.RecentCommit.Reference
+
+    let primary: Reference
+    let remotes: [Reference]
+
+    var id: String { primary.id }
+    var references: [Reference] { [primary] + remotes }
+
+    func remoteTitle(_ reference: Reference) -> String {
+        String(reference.name.dropLast(primary.name.count + 1))
+    }
+
+    static func grouped(_ references: [Reference], remotes: [String]) -> [Self] {
+        let ordered = references.filter { $0.kind == .currentBranch }
+            + references.filter { $0.kind != .currentBranch }
+        let locals = ordered.filter {
+            $0.kind == .currentBranch || $0.kind == .localBranch
+        }
+        var ownerByName: [String: Reference] = [:]
+        for local in locals where ownerByName[local.name] == nil {
+            ownerByName[local.name] = local
+        }
+
+        var matchedRemoteIDs = Set<String>()
+        var followers: [String: [Reference]] = [:]
+        for reference in references where reference.kind == .remoteBranch {
+            guard let remote = remotes.filter({
+                reference.name.hasPrefix($0 + "/")
+            }).max(by: { $0.count < $1.count }) else { continue }
+            let branchName = String(reference.name.dropFirst(remote.count + 1))
+            guard let owner = ownerByName[branchName] else { continue }
+            followers[owner.id, default: []].append(reference)
+            matchedRemoteIDs.insert(reference.id)
+        }
+
+        return ordered.compactMap { reference in
+            guard !matchedRemoteIDs.contains(reference.id) else { return nil }
+            return Self(primary: reference, remotes: followers[reference.id] ?? [])
+        }
+    }
+}
+
 /// Commit history shares the file-tree rows while drawing its own real Git DAG.
 struct RecentCommitsView: View {
     typealias Commit = GitStatusModel.RecentCommit
@@ -18,6 +61,7 @@ struct RecentCommitsView: View {
     @State private var viewportWidth: CGFloat = 0
 
     let commits: [Commit]
+    let remotes: [String]
     let stashFilesByOID: [String: GitStatusModel.StashFilesState]
     let repoRoot: String
     let fileAction: (Commit, Commit.FileChange, HistoricalFileAction) -> Void
@@ -46,6 +90,7 @@ struct RecentCommitsView: View {
 
     init(
         commits: [Commit],
+        remotes: [String] = [],
         stashFilesByOID: [String: GitStatusModel.StashFilesState] = [:],
         repoRoot: String,
         fileAction: @escaping (Commit, Commit.FileChange, HistoricalFileAction) -> Void,
@@ -75,6 +120,7 @@ struct RecentCommitsView: View {
         stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in }
     ) {
         self.commits = commits
+        self.remotes = remotes
         self.stashFilesByOID = stashFilesByOID
         self.repoRoot = repoRoot
         self.fileAction = fileAction
@@ -202,10 +248,11 @@ struct RecentCommitsView: View {
                         ? String(localized: "Expanded", table: "Git")
                         : String(localized: "Collapsed", table: "Git"))
                     if let stash = commit.stash {
-                        stashBadge(stash, in: commit)
+                        stashBadge(stash, in: commit, color: GitGraphPalette.color(graph.node.color))
                             .layoutPriority(1)
                     } else if !commit.references.isEmpty {
-                        referenceStrip(commit.references, commit: commit)
+                        referenceStrip(commit.references, commit: commit,
+                                       color: GitGraphPalette.color(graph.node.color))
                             .layoutPriority(1)
                     }
                     Spacer(minLength: 0)
@@ -287,19 +334,27 @@ struct RecentCommitsView: View {
         }
     }
 
-    private func stashBadge(_ stash: GitStatusModel.Stash, in commit: Commit) -> some View {
-        Button { toggle(commit) } label: {
-            HStack(spacing: 3) {
+    private func stashBadge(
+        _ stash: GitStatusModel.Stash, in commit: Commit, color: Color
+    ) -> some View {
+        let outline = RoundedRectangle(cornerRadius: 5 * fontScale)
+        return Button { toggle(commit) } label: {
+            HStack(spacing: 0) {
                 Image(systemName: "archivebox")
                     .font(.system(size: 9 * fontScale))
+                    .foregroundStyle(.white)
+                    .frame(width: 18 * fontScale, height: 18 * fontScale)
+                    .background(color)
                 Text(verbatim: stash.selector)
+                    .font(.system(size: 10 * fontScale, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 5 * fontScale)
                     .fixedSize(horizontal: true, vertical: false)
             }
-            .font(.system(size: 10 * fontScale, weight: .medium))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 7 * fontScale)
-            .padding(.vertical, 3 * fontScale)
-            .background(Capsule().fill(Color(nsColor: .systemGray)))
+            .background(Color.primary.opacity(0.06))
+            .clipShape(outline)
+            .overlay(outline.stroke(Color.primary.opacity(0.35),
+                                    lineWidth: 1 * fontScale))
         }
         .buttonStyle(.plain)
         .help(stash.selector + ": " + stash.message)
@@ -317,84 +372,127 @@ struct RecentCommitsView: View {
         Button(String(localized: "Copy Stash Hash", table: "Git")) { copy(stash.oid) }
     }
 
-    private func referenceStrip(_ references: [Reference], commit: Commit) -> some View {
-        ViewThatFits(in: .horizontal) {
-            referenceGroup(references, shown: references.count, commit: commit)
-            if references.count > 2 {
-                referenceGroup(references, shown: 2, commit: commit)
+    private func referenceStrip(
+        _ references: [Reference], commit: Commit, color: Color
+    ) -> some View {
+        let groups = GitGraphReferenceGroup.grouped(references, remotes: remotes)
+        return ViewThatFits(in: .horizontal) {
+            referenceGroup(groups, shown: groups.count, commit: commit, color: color)
+            if groups.count > 2 {
+                referenceGroup(groups, shown: 2, commit: commit, color: color)
             }
-            if references.count > 1 {
-                referenceGroup(references, shown: 1, commit: commit)
+            if groups.count > 1 {
+                referenceGroup(groups, shown: 1, commit: commit, color: color)
             }
-            referenceGroup(references, shown: 0, commit: commit)
+            if !groups.isEmpty && !groups[0].remotes.isEmpty {
+                referenceGroup(groups, shown: 1, commit: commit,
+                               color: color, compactFirst: true)
+            }
+            referenceGroup(groups, shown: 0, commit: commit, color: color)
         }
     }
 
-    private func referenceGroup(_ references: [Reference], shown: Int, commit: Commit) -> some View {
-        HStack(spacing: 4 * fontScale) {
-            ForEach(Array(references.prefix(shown))) { reference in
-                referenceBadge(reference, commit: commit)
+    private func referenceGroup(
+        _ groups: [GitGraphReferenceGroup], shown: Int, commit: Commit, color: Color,
+        compactFirst: Bool = false
+    ) -> some View {
+        let shownGroups = Array(groups.prefix(shown)).enumerated().map { index, group in
+            compactFirst && index == 0
+                ? GitGraphReferenceGroup(primary: group.primary, remotes: []) : group
+        }
+        let hidden = (compactFirst ? groups.first?.remotes ?? [] : [])
+            + groups.dropFirst(shown).flatMap(\.references)
+        return HStack(spacing: 4 * fontScale) {
+            ForEach(shownGroups) { group in
+                referenceBadge(group, commit: commit, color: color)
             }
-            if shown < references.count {
+            if !hidden.isEmpty {
                 Menu {
-                    ForEach(Array(references.dropFirst(shown))) { reference in
+                    ForEach(hidden) { reference in
                         Menu(reference.name) {
                             referenceActions(reference, commit: commit)
                         }
                     }
                 } label: {
-                    Text("+\(references.count - shown)")
+                    Text("+\(hidden.count)")
                         .font(.system(size: 10 * fontScale, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .help(references.dropFirst(shown).map(\.name).joined(separator: ", "))
-                .accessibilityLabel(references.dropFirst(shown).map(\.name).joined(separator: ", "))
+                .help(hidden.map(\.name).joined(separator: ", "))
+                .accessibilityLabel(hidden.map(\.name).joined(separator: ", "))
             }
         }
         .fixedSize(horizontal: true, vertical: false)
     }
 
-    @ViewBuilder
-    private func referenceBadge(_ reference: Reference, commit: Commit) -> some View {
-        let background: Color = {
-            switch reference.kind {
-            case .currentBranch: Color(nsColor: .systemBlue)
-            case .localBranch, .remoteBranch: Color(nsColor: .systemIndigo)
-            case .remoteAlias: Color(nsColor: .systemGray)
-            case .tag: Color(nsColor: .systemBrown)
-            case .detachedHead: Color(nsColor: .systemGray)
+    private func referenceBadge(
+        _ group: GitGraphReferenceGroup, commit: Commit, color: Color
+    ) -> some View {
+        let current = group.primary.kind == .currentBranch
+        let outline = RoundedRectangle(cornerRadius: 5 * fontScale)
+        return HStack(spacing: 0) {
+            referenceSegment(group.primary, title: group.primary.name,
+                             color: color, commit: commit, isRemoteSuffix: false)
+            ForEach(group.remotes) { remote in
+                referenceSegment(remote, title: group.remoteTitle(remote),
+                                 color: color, commit: commit, isRemoteSuffix: true)
             }
-        }()
-        let label = HStack(spacing: 3) {
-            if reference.kind == .tag {
-                Image(systemName: "tag")
-                    .font(.system(size: 9 * fontScale))
-            }
-            Text(verbatim: reference.name)
-                .lineLimit(1)
-                .truncationMode(.middle)
         }
-        .font(.system(size: 10 * fontScale, weight: .medium))
-        .foregroundStyle(.white)
-        .padding(.horizontal, 7 * fontScale)
-        .padding(.vertical, 3 * fontScale)
-        .frame(maxWidth: 142 * fontScale)
-        .background(Capsule().fill(background))
-        .help(reference.name)
+        .fixedSize(horizontal: true, vertical: false)
+        .background(Color.primary.opacity(0.06))
+        .clipShape(outline)
+        .overlay(outline.stroke(current ? color : Color.primary.opacity(0.35),
+                                lineWidth: 1 * fontScale))
+    }
 
-        Button {
+    private func referenceSegment(
+        _ reference: Reference, title: String, color: Color,
+        commit: Commit, isRemoteSuffix: Bool
+    ) -> some View {
+        let current = reference.kind == .currentBranch
+        let titleFont: Font = isRemoteSuffix
+            ? .system(size: 10 * fontScale).italic()
+            : .system(size: 10 * fontScale, weight: current ? .semibold : .medium)
+        return Button {
             if reference.kind == .tag {
                 expandedCommitIDs.insert(commit.id)
             } else {
                 copy(reference.name)
             }
-        } label: { label }
-            .buttonStyle(.plain)
-            .contextMenu {
-                referenceActions(reference, commit: commit)
+        } label: {
+            HStack(spacing: 0) {
+                if isRemoteSuffix {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.3))
+                        .frame(width: 1 * fontScale, height: 12 * fontScale)
+                } else {
+                    Image(systemName: reference.kind == .tag ? "tag.fill"
+                          : reference.kind == .detachedHead ? "circle"
+                          : "arrow.triangle.branch")
+                        .font(.system(size: 9 * fontScale))
+                        .foregroundStyle(.white)
+                        .frame(width: 18 * fontScale, height: 18 * fontScale)
+                        .background(color)
+                }
+                Text(verbatim: title)
+                    .font(titleFont)
+                    .foregroundStyle(isRemoteSuffix ? Color.secondary : Color.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 142 * fontScale)
+                    .padding(.horizontal, 5 * fontScale)
             }
+            .frame(height: 18 * fontScale)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(reference.name)
+        .accessibilityLabel(reference.name)
+        .contextMenu {
+            referenceActions(reference, commit: commit)
+        }
     }
 
     @ViewBuilder

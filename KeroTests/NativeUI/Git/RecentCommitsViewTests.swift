@@ -59,10 +59,10 @@ final class RecentCommitsViewTests: XCTestCase {
 
     private func hostHistory(
         _ commits: [GitStatusModel.RecentCommit], selection: GraphSelection,
-        height: CGFloat = 200, viewMode: GitViewMode = .list,
+        width: CGFloat = 260, height: CGFloat = 200, viewMode: GitViewMode = .list,
+        remotes: [String] = [],
         stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in }
     ) -> NSWindow {
-        let width: CGFloat = 260
         let window = NSWindow(
             contentRect: NSRect(x: -1200, y: -1200, width: width, height: height),
             styleMask: [.borderless], backing: .buffered, defer: false
@@ -70,6 +70,7 @@ final class RecentCommitsViewTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: RecentCommitsView(
             commits: commits,
+            remotes: remotes,
             repoRoot: "/fixture", fileAction: { _, _, _ in },
             loadBinaryStatus: { _ in }, isBinaryFile: { _, _ in false },
             expandedCommitIDs: Binding(get: { selection.expanded }, set: { selection.expanded = $0 }),
@@ -132,6 +133,125 @@ final class RecentCommitsViewTests: XCTestCase {
             click(NSPoint(x: 8, y: 200 - 19), in: window)
             XCTAssertTrue(selection.expanded.contains(commits[0].id))
             window.close()
+        }
+    }
+
+    func testCompositeReferencesUseLongestConfiguredRemoteAndPreserveEveryTarget() throws {
+        typealias Ref = GitStatusModel.RecentCommit.Reference
+        let references: [Ref] = [
+            .init(kind: .localBranch, name: "team/topic/nested"),
+            .init(kind: .remoteBranch, name: "origin/team/topic/nested"),
+            .init(kind: .remoteBranch, name: "old/main"),
+            .init(kind: .currentBranch, name: "main"),
+            .init(kind: .remoteBranch, name: "upstream/main"),
+            .init(kind: .localBranch, name: "topic/nested"),
+            .init(kind: .tag, name: "v1,β"),
+            .init(kind: .remoteBranch, name: "origin/main"),
+            .init(kind: .remoteAlias, name: "origin/HEAD"),
+        ]
+        let groups = GitGraphReferenceGroup.grouped(
+            references, remotes: ["origin", "origin/team", "upstream"]
+        )
+        XCTAssertEqual(groups.first?.primary.name, "main")
+        XCTAssertEqual(groups.first?.remotes.map(\.name), ["upstream/main", "origin/main"])
+        XCTAssertEqual(groups.first?.remotes.map { groups[0].remoteTitle($0) },
+                       ["upstream", "origin"])
+        let topic = try XCTUnwrap(groups.first { $0.primary.name == "topic/nested" })
+        XCTAssertEqual(topic.remotes.map(\.name), ["origin/team/topic/nested"])
+        XCTAssertEqual(topic.remoteTitle(try XCTUnwrap(topic.remotes.first)), "origin/team")
+        XCTAssertTrue(groups.contains {
+            $0.primary.name == "team/topic/nested" && $0.remotes.isEmpty
+        })
+        XCTAssertTrue(groups.contains {
+            $0.primary.name == "old/main" && $0.remotes.isEmpty
+        })
+        XCTAssertTrue(groups.contains {
+            $0.primary.kind == .remoteAlias && $0.remotes.isEmpty
+        })
+        XCTAssertTrue(groups.contains { $0.primary.kind == .tag })
+        let flattened = groups.flatMap(\.references)
+        XCTAssertEqual(flattened.count, references.count)
+        XCTAssertEqual(Set(flattened), Set(references))
+    }
+
+    func testCompositeReferencesNeverJoinDifferentCommitRowsOrUnknownRemotes() {
+        typealias Ref = GitStatusModel.RecentCommit.Reference
+        let local = Ref(kind: .localBranch, name: "修复/feature,α")
+        let remote = Ref(kind: .remoteBranch, name: "origin/修复/feature,α")
+        let first = GitGraphReferenceGroup.grouped([local], remotes: ["origin"])
+        let second = GitGraphReferenceGroup.grouped([remote], remotes: ["origin"])
+        XCTAssertEqual(first.count, 1)
+        XCTAssertTrue(first[0].remotes.isEmpty)
+        XCTAssertEqual(second[0].primary, remote)
+        let stale = GitGraphReferenceGroup.grouped([local, remote], remotes: [])
+        XCTAssertEqual(stale.count, 2)
+        XCTAssertTrue(stale.allSatisfy { $0.remotes.isEmpty })
+        let matched = GitGraphReferenceGroup.grouped([local, remote], remotes: ["origin"])
+        XCTAssertEqual(matched.count, 1)
+        XCTAssertEqual(matched[0].remotes, [remote])
+        XCTAssertEqual(matched[0].remoteTitle(remote), "origin")
+    }
+
+    func testCompositeOverflowKeepsRealReferencesAvailableWithoutWholeRowScrolling() {
+        typealias Ref = GitStatusModel.RecentCommit.Reference
+        let refs: [Ref] = [.init(kind: .currentBranch, name: "main")]
+            + (0..<33).map { .init(kind: .remoteBranch, name: "remote-\($0)/main") }
+        let remoteNames = (0..<33).map { "remote-\($0)" }
+        let groups = GitGraphReferenceGroup.grouped(refs, remotes: remoteNames)
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].references.count, 34)
+        XCTAssertEqual(Set(groups.flatMap(\.references)), Set(refs))
+
+        let commit = GitStatusModel.RecentCommit(
+            hash: "many-refs", shortHash: "many", subject: "A change with many remotes",
+            author: "Tester", date: .now, parentHashes: [], references: refs, files: []
+        )
+        let window = hostHistory([commit], selection: GraphSelection(), height: 120,
+                                 remotes: remoteNames)
+        defer { window.close() }
+        XCTAssertFalse(horizontallyScrollableViews(in: window.contentView!).contains {
+            $0.contentView.bounds.height > 60
+                && ($0.documentView?.frame.width ?? 0) > $0.contentView.bounds.width + 10
+        }, "Many references must fold locally, not turn the graph into a scrolling table")
+    }
+
+    func testCompositeBranchSegmentsCopyAndUseTheirOwnMenus() throws {
+        let selection = GraphSelection()
+        let commit = GitStatusModel.RecentCommit(
+            hash: "composite", shortHash: "composite", subject: "Change",
+            author: "Developer", date: .now, parentHashes: [],
+            references: [
+                .init(kind: .currentBranch, name: "main"),
+                .init(kind: .remoteBranch, name: "origin/main"),
+                .init(kind: .remoteBranch, name: "upstream/main"),
+                .init(kind: .tag, name: "v1.0"),
+            ], files: []
+        )
+        let height: CGFloat = 150
+        let window = hostHistory([commit], selection: selection, width: 500,
+                                 height: height, remotes: ["origin", "upstream"])
+        defer { window.close() }
+        let localMenu = String(localized: "Rename Branch…", table: "Git")
+        let remoteMenu = String(localized: "Delete Remote Branch…", table: "Git")
+        for (name, x, expected, excluded) in [
+            ("main", CGFloat(315), localMenu, remoteMenu),
+            ("origin/main", CGFloat(354), remoteMenu, localMenu),
+            ("upstream/main", CGFloat(402), remoteMenu, localMenu),
+        ] {
+            let point = NSPoint(x: x, y: height - 12)
+            click(point, in: window)
+            XCTAssertEqual(NSPasteboard.general.string(forType: .string), name)
+            XCTAssertTrue(selection.expanded.isEmpty, "A label click must not expand the commit")
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: .rightMouseDown, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                clickCount: 1, pressure: 1
+            ))
+            let titles = try XCTUnwrap(window.contentView?.menu(for: event), name)
+                .items.map(\.title)
+            XCTAssertTrue(titles.contains(expected), "\(name): \(titles)")
+            XCTAssertFalse(titles.contains(excluded), "\(name): \(titles)")
         }
     }
 
