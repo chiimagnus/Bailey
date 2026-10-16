@@ -533,8 +533,9 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertTrue(window.makeFirstResponder(editor))
         editor.insertText("E", replacementRange: NSRange(location: 0, length: 0))
         try await settle { file.isDirty }
-        // Keep the insertion point inside the viewport while checking native reparenting.
-        editor.textSelection = NSRange(location: (original as NSString).range(of: "Line 40").location + 1, length: 0)
+        // Keep the caret inside the y=900 viewport, even after the dock shrinks.
+        // Otherwise AppKit legitimately scrolls it into view during reparenting.
+        editor.textSelection = NSRange(location: (original as NSString).range(of: "Line 55").location + 1, length: 0)
         scroll.contentView.setBoundsOrigin(NSPoint(x: 0, y: 900))
         scroll.reflectScrolledClipView(scroll.contentView)
         let scrollBefore = scroll.contentView.bounds.origin
@@ -549,6 +550,7 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertEqual(project.selectedTabID, pane.id)
         XCTAssertTrue(scroll.documentView === editor)
         try await settle { window.firstResponder === editor }
+        try await settle { scroll.contentView.bounds.origin == scrollBefore }
         XCTAssertEqual(scroll.contentView.bounds.origin, scrollBefore)
         let undo = try XCTUnwrap(editor.undoManager)
         XCTAssertTrue(undo.canUndo)
