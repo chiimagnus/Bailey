@@ -124,6 +124,122 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class DiffTabTests: XCTestCase {
+    func testDeletingEveryEditLineKeepsEOFRemovalGhostScrollAccessible() {
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(
+            contentRect: NSRect(x: -950, y: -950, width: 600, height: 160),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(
+            font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+            textColor: .textColor
+        )
+        pane.setEditBufferText("")
+        let core = DiffCore.compute(oldText: "deleted one\ndeleted two\n", newText: "")
+        let state = DiffComputation.editState(
+            ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
+        )
+        XCTAssertEqual(state.ghosts.first?.anchorLine, 0)
+        pane.decorations = .edit(
+            state: state, snapshotOffsets: [], lineCount: 0,
+            ghostBlocks: [
+                .init(anchorLine: 0, firstOldLine: 1, lines: [
+                    NSAttributedString(string: "deleted one"),
+                    NSAttributedString(string: "deleted two"),
+                ])
+            ]
+        )
+        XCTAssertEqual(pane.decorations.rows.count, 1, "Empty editable buffer keeps its virtual row")
+        XCTAssertEqual(pane.decorations.ghostsByAnchor[1]?.lines.count, 2,
+                       "Deletions from an empty buffer belong after its virtual row")
+        XCTAssertGreaterThanOrEqual(
+            pane.textView.overrideContentHeight ?? 0,
+            3 * DiffTypography.paragraphStyle(for: font).maximumLineHeight,
+            "An empty edit buffer still needs enough native scroll height to show deleted lines"
+        )
+        XCTAssertEqual(pane.textView.text, "")
+        pane.setEditBufferText("restored\n")
+        XCTAssertNil(pane.textView.overrideContentHeight,
+                     "Typing into the empty editor must remove its virtual ghost height")
+        pane.setEditBufferText("")
+        XCTAssertNotNil(pane.textView.overrideContentHeight)
+        pane.decorations = .empty
+        XCTAssertNil(pane.textView.overrideContentHeight)
+    }
+
+    func testDeletedGhostSpacingStaysOnOneTextKitParagraphWithBareCR() throws {
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(
+            font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+            textColor: .textColor
+        )
+        let source = "first\rsecond\nthird\n"
+        pane.setEditBufferText(source)
+        let split = DiffLineSplitter.lines(of: source)
+        let core = DiffCore.compute(oldText: "deleted\n", newText: source)
+        let state = DiffComputation.editState(
+            ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
+        )
+        XCTAssertEqual(state.ghosts.first?.anchorLine, 0)
+        pane.decorations = .edit(
+            state: state, snapshotOffsets: split.lines.map(\.utf16Range.location),
+            lineCount: split.lines.count,
+            ghostBlocks: [
+                .init(anchorLine: 0, firstOldLine: 1, lines: [NSAttributedString(string: "deleted")])
+            ]
+        )
+        let attributed = try XCTUnwrap(pane.textView.attributedText)
+        let firstStyle = try XCTUnwrap(
+            attributed.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        let secondStyle = try XCTUnwrap(
+            attributed.attribute(.paragraphStyle, at: 6, effectiveRange: nil) as? NSParagraphStyle
+        )
+        XCTAssertGreaterThan(firstStyle.paragraphSpacingBefore, 0)
+        XCTAssertEqual(secondStyle.paragraphSpacingBefore, 0,
+                       "One Git deletion must not insert ghost spacing into every native CR paragraph")
+
+        pane.decorations = .edit(
+            state: state, snapshotOffsets: split.lines.map(\.utf16Range.location),
+            lineCount: split.lines.count,
+            ghostBlocks: [
+                .init(anchorLine: split.lines.count, firstOldLine: 1,
+                      lines: [NSAttributedString(string: "deleted")])
+            ]
+        )
+        let endAttributes = try XCTUnwrap(pane.textView.attributedText)
+        let firstAtEnd = try XCTUnwrap(
+            endAttributes.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        let lastAtEnd = try XCTUnwrap(
+            endAttributes.attribute(.paragraphStyle, at: 13, effectiveRange: nil) as? NSParagraphStyle
+        )
+        XCTAssertEqual(firstAtEnd.paragraphSpacingBefore, 0)
+        XCTAssertEqual(firstAtEnd.paragraphSpacing, 0)
+        XCTAssertGreaterThan(lastAtEnd.paragraphSpacing, 0)
+
+        pane.decorations = .edit(
+            state: state, snapshotOffsets: split.lines.map(\.utf16Range.location),
+            lineCount: split.lines.count, ghostBlocks: []
+        )
+        let cleared = try XCTUnwrap(pane.textView.attributedText)
+        for offset in [0, 6, 13] {
+            let style = try XCTUnwrap(
+                cleared.attribute(.paragraphStyle, at: offset, effectiveRange: nil)
+                    as? NSParagraphStyle
+            )
+            XCTAssertEqual(style.paragraphSpacingBefore, 0)
+            XCTAssertEqual(style.paragraphSpacing, 0)
+        }
+        XCTAssertEqual(pane.textView.text, source)
+    }
+
     func testEditGeometryUsesGitLFLinesAcrossNativeBareCRParagraphs() async throws {
         let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
         let window = NSWindow(
@@ -140,7 +256,7 @@ final class DiffTabTests: XCTestCase {
             textColor: .textColor
         )
         let raw = "alpha\rbeta\nsecond\n"
-        pane.textView.text = raw
+        pane.setEditBufferText(raw)
         let lines = DiffLineSplitter.lines(of: raw).lines
         let computation = DiffComputation.compute(oldText: "", newText: raw)
         pane.decorations = DiffDecorations.edit(
@@ -159,6 +275,17 @@ final class DiffTabTests: XCTestCase {
         XCTAssertEqual(lines.count, 2)
         XCTAssertEqual(Array(rows.prefix(3).map(\.index)), [0, 0, 1],
                        "TextKit bare-CR paragraphs must share the same Git LF line number")
+        XCTAssertTrue(pane.textView.hasNativeNonLFSeparators)
+
+        pane.setEditBufferText("alpha\nsecond\n")
+        XCTAssertFalse(pane.textView.hasNativeNonLFSeparators)
+        pane.textView.insertText("\r", replacementRange: NSRange(location:2,length:0))
+        XCTAssertTrue(pane.textView.hasNativeNonLFSeparators,
+                      "Actual native editing must invalidate the prior layout mapping")
+        pane.textView.breakUndoCoalescing()
+        pane.textView.undoManager?.undo()
+        XCTAssertFalse(pane.textView.hasNativeNonLFSeparators,
+                       "Undo must restore the ordinary LF layout mapping")
     }
 
     func testBareCRReviewUsesTextKitParagraphHeightInsteadOfLFOnlyHeight() {
