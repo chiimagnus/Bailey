@@ -440,6 +440,34 @@ final class RecentCommitsViewTests: XCTestCase {
         }
     }
 
+    func testSymbolicRemoteAliasHasOnlyCopyActionAndDoesNotToggleCommit() throws {
+        let alias = GitStatusModel.RecentCommit.Reference(kind: .remoteAlias,
+                                                         name: "upstream/HEAD")
+        let commit = GitStatusModel.RecentCommit(
+            hash: "alias", shortHash: "alias", subject: "Small change",
+            author: "Developer", date: .now, parentHashes: [],
+            references: [alias], files: []
+        )
+        let selection = GraphSelection()
+        let height: CGFloat = 110
+        let window = hostHistory([commit], selection: selection, height: height)
+        defer { window.close() }
+        let point = NSPoint(x: 216, y: height - 12)
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .rightMouseDown, location: point,
+            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+            clickCount: 1, pressure: 1
+        ))
+        let titles = try XCTUnwrap(window.contentView?.menu(for: event)).items.map(\.title)
+        XCTAssertTrue(titles.contains(String(localized: "Copy Remote Branch Name", table: "Git")))
+        XCTAssertFalse(titles.contains(String(localized: "Delete Remote Branch…", table: "Git")))
+        XCTAssertFalse(titles.contains(String(localized: "Checkout Remote Branch…", table: "Git")))
+        click(point, in: window)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), alias.name)
+        XCTAssertTrue(selection.expanded.isEmpty)
+    }
+
     func testStashIsANodeInTheSameGraphWithOnlyStashActions() throws {
         let stash = GitStatusModel.Stash(
             selector: "stash@{0}", oid: String(repeating: "d", count: 40),

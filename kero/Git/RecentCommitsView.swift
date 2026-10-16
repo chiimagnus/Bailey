@@ -362,6 +362,7 @@ struct RecentCommitsView: View {
             switch reference.kind {
             case .currentBranch: Color(nsColor: .systemBlue)
             case .localBranch, .remoteBranch: Color(nsColor: .systemIndigo)
+            case .remoteAlias: Color(nsColor: .systemGray)
             case .tag: Color(nsColor: .systemBrown)
             case .detachedHead: Color(nsColor: .systemGray)
             }
@@ -461,6 +462,10 @@ struct RecentCommitsView: View {
             }
         case .detachedHead:
             Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
+        case .remoteAlias:
+            Button(String(localized: "Copy Remote Branch Name", table: "Git")) {
+                copy(reference.name)
+            }
         case .remoteBranch:
             Button(String(localized: "Checkout Remote Branch…", table: "Git")) {
                 remoteAction(reference, commit, .checkout)
