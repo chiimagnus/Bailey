@@ -32,7 +32,7 @@ Git Ref 归档在所选 SSH 工作区的临时目录生成，经 Git 原生进�
 
 ## 验证
 
-`RemoteCommandsTests`、`RemoteLifetimeTests`、`WorkspaceIdentityTests` 和工作区身份回归检查 SSH 批量目录读取、复用参数、绑定、取消、失败与过期结果。受控后端只能证明这些逻辑，不能证明真实传输；真实 SSH 另用专用、获准的测试 master 验收，记录主机环境、断线保存、重连和最终文件结果。
+`RemoteCommandsTests`、`RemoteLifetimeTests`、`WorkspaceIdentityTests` 和工作区身份回归检查 SSH 批量目录读取、复用参数、绑定、取消、失败与过期结果。受控后端只能证明这些逻辑，不能证明真实传输；`SSHFileTreeLiveTests` 使用专用、获准的 Windows SSH master 检查特殊目录名、批量读取与单个目录失败的隔离，并可在显式 `KERO_SSH_BENCHMARK=1` 时采集 30 次热目录读取的中位数/p95。此测量不代替 App 首次显示、图标响应或断线重连的 UI 验收。
 
 归档的验证分层：模拟 SSH 后端覆盖传输上限与远端清理失败；`GitWorkspaceSSHTests` 在真实 Windows SSH 中核对选定 Ref 的 ZIP 原始字节，远端分支经原生保存面板归档另有 [P4 现场证据](../../.github/features/git-manager-context-menus-graph/evidence-p4.md)。这些成功路径不代表断线时完整 App 的清理与恢复已完成验收。
 
