@@ -634,6 +634,9 @@ final class GitStatusModelTests: XCTestCase {
         try write("foo/added.swift", "added\n")
         git(["add", "foo/added.swift"])
         try write("foo/added.swift", "added\nmodified\n")
+        try write("foo/quote' and tab\t.swift", "untracked\n")
+        try write("tracked/nested/换行\n名字.swift", "special name\n")
+        try write("ignored/emoji-😀.txt", "ignored\n")
 
         let model = GitStatusModel()
         model.sync(root: directory.path)
@@ -664,6 +667,7 @@ final class GitStatusModelTests: XCTestCase {
                 .map(\.value).max { $0.directoryPriority < $1.directoryPriority }
         }
         let candidates = ["", "foo", "foo/file.swift", "foo/added.swift", "foo/untracked.swift", "foo/ignored.log",
+                          "foo/quote' and tab\t.swift", "tracked/nested/换行\n名字.swift", "ignored/emoji-😀.txt",
                           "foobar", "foobar/file.swift", "foobar-extra", "tracked", "tracked/nested",
                           "tracked/nested/renamed.swift", "tracked/dupe.swift", "tracked/delete.swift",
                           "ignored", "ignored/deeper", "ignored/deeper/cache", "ignored-extra",
@@ -679,6 +683,15 @@ final class GitStatusModelTests: XCTestCase {
                                             isDirectory: false), .ignored)
         XCTAssertNil(model.fileDecoration(for: "/tmp/outside-kero-decoration-\(UUID().uuidString)", isDirectory: true))
         XCTAssertNotNil(model.fileDecoration(for: model.repoRoot + "/tracked", isDirectory: true))
+        for index in 0..<1_500 {
+            let prefix = ["foo", "foobar", "tracked/nested", "ignored/deeper", "tracked-other"][index % 5]
+            let path = "\(prefix)/candidate-\(index)/leaf-\(index % 11).swift"
+            let absolute = (model.repoRoot as NSString).appendingPathComponent(path)
+            XCTAssertEqual(model.fileDecoration(for: absolute, isDirectory: false),
+                           slow(path, isDirectory: false), "seeded path \(index)")
+            XCTAssertEqual(model.fileDecoration(for: absolute, isDirectory: true),
+                           slow(path, isDirectory: true), "seeded directory \(index)")
+        }
 
         try write("foo/file.swift", "updated once more\n")
         model.refresh()
@@ -838,10 +851,31 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(model.changedEntries.map(\.path), ["untracked.txt"])
         XCTAssertEqual(model.stashes.count, 1)
         XCTAssertTrue(model.canUseCurrentStashes, "A verified Stash list does not depend on remote Ref metadata")
+
+        await backend.setStashListUnavailable(true)
+        await backend.setHistoryLogUnavailable(true)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertTrue(model.canUseCurrentStatus)
+        XCTAssertFalse(model.canUseCurrentReferences)
+        XCTAssertFalse(model.canUseCurrentHistory)
+        XCTAssertFalse(model.canUseCurrentStashes)
+        XCTAssertEqual(model.stashes.count, 1, "Failed optional queries must retain read-only contents")
         await backend.setRefSnapshotUnavailable(false)
         model.refresh()
         try await wait { !model.isRefreshing }
         XCTAssertTrue(model.canUseCurrentReferences)
+        XCTAssertFalse(model.canUseCurrentHistory)
+        XCTAssertFalse(model.canUseCurrentStashes)
+        await backend.setHistoryLogUnavailable(false)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertTrue(model.canUseCurrentHistory)
+        XCTAssertFalse(model.canUseCurrentStashes)
+        await backend.setStashListUnavailable(false)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertTrue(model.canUseCurrentStashes)
         XCTAssertNil(model.detailError)
     }
 
