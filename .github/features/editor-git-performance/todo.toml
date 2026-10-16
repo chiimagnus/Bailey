@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P3-T3"
+current_task_id = "P4-T2"
 
 [[tasks]]
 id = "P1-T1"
@@ -62,55 +62,56 @@ note = "字节契约Red→Green；45定向、261全量0失败3SSH skipped，Debu
 [[tasks]]
 id = "P3-T3"
 title = "验证并收敛坐标扫描热点"
-status = "in_progress"
+status = "completed"
 plan = "plan-p3.md#p3-t3"
-commit = ""
-note = "只测 P1-T3 修正后的坐标实现；无热点不建索引／文件。"
+commit = "8b3b2debfb7bc5d260c0434c52580bca9e96ca81"
+note = "生产转换540次等价；400固定seed+Parser；12定向/267全量0失败3SSH skipped，Debug验签；原生2×30 A/B实证；行数组前移成本明示，临时切换全删；evidence-p3。"
 
 [[tasks]]
 id = "P3-T4"
 title = "验证并优化根解析调度"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t4"
-commit = ""
-note = "只按同步 parse 实测调整公开参数，不新建队列或调度服务。"
+commit = "aae214d98d58d0494f10f2f7fa7f016856b97f74"
+note = "真实插件各2×30，sample确认同步parse；10定向/271全量0失败3SSH跳过，Debug验签；阈值0，无新调度层，关闭释放通过。"
 
 [[tasks]]
 id = "P3-T5"
 title = "修复查询失败闭环并按需共享编译"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t5"
-commit = ""
-note = "固定 Query 失败循环必修；共享准入后同时接入 root、embedded 和原生 Diff，删重复 compile/pending。"
+commit = "312fa77bf5ac24b109a40b6b7210eb1f0bbc0d6c"
+note = "6次真实同键冷编译→1；失败缓存Red→Green，37联合含1临时实验，275全量0失败3SSH跳过，Debug验签；root/embedded/Diff统一接入并删除重复编译。"
 
 [[tasks]]
 id = "P3-T6"
 title = "验证嵌入语言复用方案"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t6"
 commit = ""
-note = "先测同版片段复用／后台计算；仅跨 edit 重算仍主导才验证增量树，不默认 Layer 或增量引擎。"
+no_commit_reason = "本地单一原型与测量，按计划不入库；产品已恢复312fa77"
+note = "实际主线程片段约0.54秒；双向各30 provider约529/519ms→21/21ms，62次工作→1；13项Green。原生反向定位无高亮也失败，另列T12；T7只接同版Task结果缓存。"
 
 [[tasks]]
 id = "P3-T7"
 title = "接入已验证的子区域复用措施"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t7"
-commit = ""
-note = "只接入 T6 实测选中措施，同任务删除被替代路径；未准入不预建文件。"
+commit = "a001e095143fb6614862bc754c43528a64cf8cb9"
+note = "41定向/278全量0失败3SSH跳过，DebugRelease验签；同版Task/请求范围交付/嵌入样式按revision失效；移除逐请求主线程工作，关闭释放与所有权诊断闭环。T12原生定位单独待修。"
 
 [[tasks]]
 id = "P4-T1"
 title = "分阶段交付 Git 核心状态与详情"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t1"
-commit = ""
-note = "核心／详情分阶段，保留已有换通道与失败快照修复；同任务闭环 consumer、计数预算、回归及旧路径删除。"
+commit = "167be14b1e827c4d6bc187346d7f1853b710aa82"
+note = "16 定向、290 全量 0失败3SSH跳过；Debug/Release 严格验签；核心/详情分批、数字帧限额；独立 App AX 未能操作，真实 SSH 未测；evidence-p4。"
 
 [[tasks]]
 id = "P4-T2"
 title = "收敛详情失效与历史分页工作"
-status = "pending"
+status = "in_progress"
 plan = "plan-p4.md#p4-t2"
 commit = ""
 note = "按热点选 known mutation／分页精简；周期、手动、激活、未知命令仍 full，不用 HEAD 代替详情身份。"
@@ -186,3 +187,35 @@ status = "completed"
 plan = "plan-p3.md#p3-t8"
 commit = "f87b416f92abdb8ae424b4f567a12a7de3ec2c94"
 note = "系统NSTextView对照Red→Green；53联合、265全量0失败3SSH skipped，最终输入3/0；Debug/Release验签；及时修复T2发现的输入丢字，不建输入状态机。"
+
+[[tasks]]
+id = "P3-T9"
+title = "核实解析输入分块边界并按实证修复"
+status = "completed"
+plan = "plan-p3.md#p3-t9"
+commit = "823528598e0d03aeebeb73bbafeb089d2904bf36"
+note = "边界怀疑未复现：24状态、两类快照字节/真实AST/Point/末尾色一致；联合13项Green。只提交回归，不造reader/缓冲；产品267全量及Debug验证归T3。"
+
+[[tasks]]
+id = "P3-T10"
+title = "修复解析队列失效范围的旧坐标交付"
+status = "completed"
+plan = "plan-p3.md#p3-t10"
+commit = "f772bec383aa055854df5971b1f6702c263c38cf"
+note = "默认原生连续编辑旧色Red→Green；36联合/270全量0失败3SSH skipped；Debug/Release验签，许可证原文入包，弃用/并发诊断清理；SwiftPM覆盖提示已解释，evidence-p3。"
+
+[[tasks]]
+id = "P3-T11"
+title = "清理插件依赖与无用主题包装"
+status = "completed"
+plan = "plan-p3.md#p3-t11"
+commit = "8275787a493b6199b6e3d7ba040a4f68c22268dc"
+note = "0953fa3删除应用import/Theme/Fonts/TokenName，后续Xcode自动生成锁文件移除旧远程Neon pin；唯一Vendor/Neon，其他pins不变，76联合及Release验签。资源包仍保留，不接管118MiB，不冒称彻底去包。"
+
+[[tasks]]
+id = "P3-T12"
+title = "修复长文档反向定位的视口错误"
+status = "completed"
+plan = "plan-p3.md#p3-t12"
+commit = "3a1375330ed815d36231a2d2b5dff3ba5f56a1ce"
+note = "真实Source配置无插件Red→Green；单次请求双向60定位+实际几何；76联合含围栏60颜色，280全量0失败3SSH跳过，DebugRelease验签。只修通用原生锚点职责，无重试/新状态。"

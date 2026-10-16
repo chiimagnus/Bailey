@@ -23,6 +23,8 @@
 2. 同一 refresh worker 顺序交付核心后详情，不并发启动两套全快照。核心包括 canonical root、porcelain entries/ignored、branch／HEAD／upstream／ahead/behind、conflict、git-dir 与 repositoryOperation；后两者决定真实操作资格，不推迟到任意详情。
 3. 用最少的核心／完整详情结果、就绪身份和错误表达阶段。相同仓库可保留上次详情供展示，未验证的新详情不能驱动动作；换机器／仓库重置。缓存必须区分核心与完整详情，不把空默认值缓存为成功。详情按自身结果完整发布，不因某个子查询失败清掉其他已有有效字段。
 4. 明确消费者：amend／“有提交”由核心 hasHead 判定；stage／正常 commit 不等 history。Ref／branch／remote／stash 菜单、publish/fetch／graph 操作和底栏 picker 依赖详情的新鲜身份；UI 与模型动作两端一致，不能只禁按钮。行数待定／失败不伪报确定的零，真实空与失败分开。保留草稿和原操作失败反馈，不夹带 UI 重设计。
+   实施回归否定了把详情资格塞进通用 isCurrent 的做法：它会打断新建 Tag 后实时解析 OID→立即推送。isCurrent 继续只管目标身份，快照消费者在既有 perform 汇聚点检查资格；已明确用实时 OID 的该条链路保留实际对象校验，不靠增加等待恢复。分页是读取而非旧详情写操作，保留进行中合并，不能套同一个禁用条件。
+   全量原生回归进一步否定“任何刷新开始就撤销资格”：它会阻断已验证目标的失败重试／恢复文件。资格在目标、HEAD／分支／进行中操作变化或查询失败时撤销；普通后台读取保留已验证快照和既有执行前活体校验。这不是无条件信任旧详情，也不再给各个恢复路径追加绕过。
 5. 每次交付复用 contextGeneration、requestID、root/scope；perform 开始仍 invalidate 查询。保留同仓库换连接的已有失效机制与测试，不增加第二套 generation。核心／详情收尾、缓存、分页、isRefreshing 与 refreshPending 同义，进行中事件结束后合并一轮，不丢最后事件。
 6. SSH 拆核心／详情有限批次，复用 quoting／NUL／tag。batch 调用失败或缺必需帧就是该阶段失败，不再落回 prefetched miss 的逐命令完整重取；删除这条隐式双轨。正常 non-repo、unborn、无 stash 是业务结果，不是失败 fallback。
 7. 现有 worker 10／24 秒预算仅覆盖 statusGit，计数／operation 等另走默认超时。传递同一剩余预算到实际耗时调用；交互 RemoteConnection.check 目前另有 5 秒，需要计入实际调用时间，不声称参数已经包含它。不新增连接重试层，不承诺无法中断的文件系统调用一定停下；保留 12／30 秒独立 UI watchdog，核心成功后不能被 watchdog 清空。
