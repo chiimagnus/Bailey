@@ -31,10 +31,13 @@ nonisolated enum DiffLineSplitter {
         var lines: [DiffSourceLine] = []
         var lineStart = text.startIndex
         var utf16Offset = 0
-        let end = text.endIndex
-        var index = lineStart
+        // CRLF is one Swift Character but two Unicode scalars. Git splits at
+        // the LF code point; retain the CR and the original UTF-16 offsets.
+        let scalars = text.unicodeScalars
+        let end = scalars.endIndex
+        var index = scalars.startIndex
         while index < end {
-            if text[index] == "\n" {
+            if scalars[index] == "\n" {
                 let content = text[lineStart..<index]
                 let length = content.utf16.count
                 lines.append(DiffSourceLine(
@@ -42,10 +45,10 @@ nonisolated enum DiffLineSplitter {
                     utf16Range: NSRange(location: utf16Offset, length: length)
                 ))
                 utf16Offset += length + 1
-                index = text.index(after: index)
+                index = scalars.index(after: index)
                 lineStart = index
             } else {
-                index = text.index(after: index)
+                index = scalars.index(after: index)
             }
         }
         let hasTrailingNewline = !text.isEmpty && lineStart == end

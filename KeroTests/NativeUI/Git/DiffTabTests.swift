@@ -559,6 +559,72 @@ final class DiffTabTests: XCTestCase {
         }
     }
 
+    func testCRLFNativeReviewRowsAndEditUndoSavePreserveBytes() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("crlf.txt")
+        let old = "one\r\nold\r\nlast\n"
+        let new = "one\r\nnew\r\nlast\n"
+        try Data(old.utf8).write(to: file)
+        for args in [["add", "."], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        try Data(new.utf8).write(to: file)
+        let domain = "kero-crlf-native-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.prefersEditing = false
+        let diff = DiffTab(
+            repoRoot: directory.path, path: "crlf.txt", source: .worktree,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil, preferences: preferences
+        )
+        try await wait { !diff.isLoading && diff.display != nil }
+        XCTAssertNil(diff.error)
+        XCTAssertEqual(Data(diff.oldContent.utf8), Data(old.utf8))
+        XCTAssertEqual(Data(diff.newContent.utf8), Data(new.utf8))
+        let display = try XCTUnwrap(diff.display)
+        XCTAssertEqual(display.computation.unified.rows.compactMap(\.oldLine), [1, 2, 3])
+        XCTAssertEqual(display.computation.unified.rows.compactMap(\.newLine), [1, 2, 3])
+        XCTAssertEqual(display.computation.splitLeft.rows.count, display.computation.splitRight.rows.count)
+        let decorated = DiffDecorations.review(display.computation.unified)
+        XCTAssertEqual(decorated.rows.count, 4)
+        XCTAssertEqual(decorated.lineStartOffsets.count, 4)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 830, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: diff))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        try await wait { self.findNativeTextView(in: host, editable: false) != nil }
+        let textView = try XCTUnwrap(findNativeTextView(in: host, editable: false))
+        XCTAssertEqual(Data((textView.attributedText?.string ?? "").utf8), Data(display.unifiedText.string.utf8))
+        diff.setDiffStyle(.split)
+        let surface = try XCTUnwrap(diff.nativeSurface)
+        try await wait { surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }.count == 2 }
+        diff.setDiffStyle(.unified)
+        diff.setEditing(true)
+        try await wait { self.findNativeTextView(in: host, editable: true) != nil }
+        let editor = try XCTUnwrap(findNativeTextView(in: host, editable: true))
+        let replacement = (try XCTUnwrap(editor.text) as NSString).range(of: "new")
+        XCTAssertNotEqual(replacement.location, NSNotFound)
+        editor.insertText("newer", replacementRange: replacement)
+        let edited = "one\r\nnewer\r\nlast\n"
+        XCTAssertEqual(Data(diff.editedNewContent.utf8), Data(edited.utf8))
+        editor.undoManager?.undo()
+        XCTAssertEqual(Data(diff.editedNewContent.utf8), Data(new.utf8))
+        editor.undoManager?.redo()
+        XCTAssertEqual(Data(diff.editedNewContent.utf8), Data(edited.utf8))
+        await diff.save()
+        XCTAssertNil(diff.error)
+        XCTAssertEqual(try Data(contentsOf: file), Data(edited.utf8))
+        diff.setEditing(false)
+        try await wait { diff.newContent.utf8.elementsEqual(edited.utf8) }
+    }
+
     func testNativeDiffUnicodeAndSplitAlignmentWithFoldExpansion() {
         let old = "one\r\n中文😀\r\nlast\n"
         let new = "one\r\n中文🪨\r\nlast"
