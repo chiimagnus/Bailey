@@ -40,6 +40,7 @@ final class FileTreeModel {
     /// A rebuild is a round trip per visible directory, so only one runs at a
     /// time; anything arriving mid-flight is folded into one further pass.
     @ObservationIgnored private var isRebuilding = false
+    @ObservationIgnored private var rebuildGeneration: UInt = 0
     @ObservationIgnored private var rebuildPending = false
 
     /// The hosting window presents native operation errors even when Files is hidden.
@@ -56,20 +57,34 @@ final class FileTreeModel {
     /// Switches the visible root without discarding expansion state from the
     /// previously visited directory. Data is still reread on every refresh.
     func sync(root: String, backend: WorkspaceBackend, scope: String = "local") async {
+        let scopeChanged = root != rootPath || workspaceScope != scope
+        let backendChanged = (self.backend as AnyObject) !== (backend as AnyObject)
+        if scopeChanged || backendChanged {
+            // A replaced connection must not wait for a stalled old traversal.
+            rebuildGeneration &+= 1
+            isRebuilding = false
+            rebuildPending = false
+        }
         self.backend = backend
-        if root != rootPath || workspaceScope != scope {
+        if scopeChanged {
             if !rootPath.isEmpty {
                 expandedByRoot[Root(scope: workspaceScope, path: rootPath)] = expanded
             }
             expanded = expandedByRoot[Root(scope: scope, path: root)] ?? []
             workspaceScope = scope
             rootPath = root
+        }
+        if scopeChanged || backendChanged {
             items = []
-            // Inline editing cannot continue in an inactive workspace.
+            // Drafts and old file rows cannot cross backend or workspace identity.
             renamingPath = nil
             draft = nil
         }
         await rebuild()
+    }
+
+    private func matchesTarget(scope: String, root: String, generation: UInt) -> Bool {
+        scope == workspaceScope && root == rootPath && generation == rebuildGeneration
     }
 
     func toggle(_ item: Item) async {
@@ -85,10 +100,14 @@ final class FileTreeModel {
         let backend = self.backend
         let scope = workspaceScope
         let root = rootPath
+        let generation = rebuildGeneration
         do {
             try await backend.delete(paths: [item.path])
-            if scope == workspaceScope, root == rootPath { expanded.remove(item.path) }
+            if matchesTarget(scope: scope, root: root, generation: generation) {
+                expanded.remove(item.path)
+            }
         } catch {
+            guard matchesTarget(scope: scope, root: root, generation: generation) else { return }
             presentError(
                 String(
                     localized: "Couldn’t move “\(item.name)” to the Trash.", table: "Workspace",
@@ -97,7 +116,7 @@ final class FileTreeModel {
                 error.localizedDescription
             )
         }
-        if scope == workspaceScope, root == rootPath { await rebuild() }
+        if matchesTarget(scope: scope, root: root, generation: generation) { await rebuild() }
     }
 
     /// Deletes `item` outright, then rebuilds so it drops out of the tree.
@@ -107,10 +126,14 @@ final class FileTreeModel {
         let backend = self.backend
         let scope = workspaceScope
         let root = rootPath
+        let generation = rebuildGeneration
         do {
             try await backend.delete(paths: [item.path])
-            if scope == workspaceScope, root == rootPath { expanded.remove(item.path) }
+            if matchesTarget(scope: scope, root: root, generation: generation) {
+                expanded.remove(item.path)
+            }
         } catch {
+            guard matchesTarget(scope: scope, root: root, generation: generation) else { return }
             presentError(
                 String(
                     localized: "Couldn’t delete “\(item.name)”.", table: "Workspace",
@@ -119,7 +142,7 @@ final class FileTreeModel {
                 error.localizedDescription
             )
         }
-        if scope == workspaceScope, root == rootPath { await rebuild() }
+        if matchesTarget(scope: scope, root: root, generation: generation) { await rebuild() }
     }
 
     // MARK: - Rename
@@ -141,6 +164,7 @@ final class FileTreeModel {
         let backend = self.backend
         let scope = workspaceScope
         let root = rootPath
+        let generation = rebuildGeneration
         renamingPath = nil
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != item.name else { return nil }
@@ -157,7 +181,7 @@ final class FileTreeModel {
         // case-insensitive volume, so don't treat that as a collision.
         let caseOnlyChange = trimmed.lowercased() == item.name.lowercased()
         let exists = (try? await backend.stat(path: dest)) ?? nil
-        guard scope == workspaceScope, root == rootPath else { return nil }
+        guard matchesTarget(scope: scope, root: root, generation: generation) else { return nil }
         guard caseOnlyChange || exists == nil else {
             presentError(
                 String(localized: "Couldn’t rename to “\(trimmed)”.", table: "Workspace"),
@@ -167,15 +191,15 @@ final class FileTreeModel {
         }
         do {
             try await backend.rename(from: item.path, to: dest)
-            if scope == workspaceScope, root == rootPath {
-                remapExpanded(from: item.path, to: dest)
-            }
+            guard matchesTarget(scope: scope, root: root, generation: generation) else { return nil }
+            remapExpanded(from: item.path, to: dest)
         } catch {
+            guard matchesTarget(scope: scope, root: root, generation: generation) else { return nil }
             presentError(String(localized: "Couldn’t rename to “\(trimmed)”.", table: "Workspace"), error.localizedDescription)
             return nil
         }
-        if scope == workspaceScope, root == rootPath { await rebuild() }
-        return dest
+        await rebuild()
+        return matchesTarget(scope: scope, root: root, generation: generation) ? dest : nil
     }
 
     /// Keeps expansion state after a directory rename by rewriting the old
@@ -227,6 +251,7 @@ final class FileTreeModel {
         let backend = self.backend
         let scope = workspaceScope
         let root = rootPath
+        let generation = rebuildGeneration
         self.draft = nil
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { await rebuild(); return nil }
@@ -243,11 +268,13 @@ final class FileTreeModel {
         do {
             exists = try await backend.stat(path: dest)
         } catch {
+            guard matchesTarget(scope: scope, root: root, generation: generation) else { return nil }
             presentError(String(localized: "Couldn’t create “\(trimmed)”.", table: "Workspace"), error.localizedDescription)
             await rebuild()
             return nil
         }
-        guard isCurrentTarget(), scope == workspaceScope, root == rootPath else { return nil }
+        guard isCurrentTarget(), matchesTarget(scope: scope, root: root, generation: generation)
+        else { return nil }
         guard exists == nil else {
             presentError(
                 String(localized: "Couldn’t create “\(trimmed)”.", table: "Workspace"),
@@ -261,6 +288,7 @@ final class FileTreeModel {
             do {
                 try await backend.createDirectory(path: dest)
             } catch {
+                guard matchesTarget(scope: scope, root: root, generation: generation) else { return nil }
                 presentError(String(localized: "Couldn’t create the folder.", table: "Workspace"), error.localizedDescription)
             }
         } else {
@@ -268,12 +296,15 @@ final class FileTreeModel {
                 try await backend.createFile(path: dest)
                 createdFile = dest
             } catch {
+                guard matchesTarget(scope: scope, root: root, generation: generation) else { return nil }
                 presentError(String(localized: "Couldn’t create the file.", table: "Workspace"), error.localizedDescription)
             }
         }
-        if isCurrentTarget(), scope == workspaceScope, root == rootPath {
+        if isCurrentTarget(), matchesTarget(scope: scope, root: root, generation: generation) {
             await rebuild()
-            return createdFile
+            if isCurrentTarget(), matchesTarget(scope: scope, root: root, generation: generation) {
+                return createdFile
+            }
         }
         return nil
     }
@@ -291,6 +322,7 @@ final class FileTreeModel {
             return
         }
         isRebuilding = true
+        let generation = rebuildGeneration
         repeat {
             rebuildPending = false
             // A root that cannot be read leaves the tree as it was. On a
@@ -306,14 +338,16 @@ final class FileTreeModel {
                 expanded.contains($0)
             }
             while let directory = traversal.nextDirectory() {
-                traversal.receive(await children(of: directory, backend: backend, draft: draft))
+                let rows = await children(of: directory, backend: backend, draft: draft)
+                guard generation == rebuildGeneration else { return }
+                traversal.receive(rows)
             }
             if traversal.rootReadable,
-               path == rootPath, scope == workspaceScope, traversal.rows != items {
+               generation == rebuildGeneration, traversal.rows != items {
                 items = traversal.rows
             }
-        } while rebuildPending
-        isRebuilding = false
+        } while rebuildPending && generation == rebuildGeneration
+        if generation == rebuildGeneration { isRebuilding = false }
     }
 
     /// The rows for one directory, or nil when it could not be read at all —
