@@ -123,6 +123,13 @@ final class FileTab: nonisolated Identifiable {
         }
     }
 
+    func waitForTextBeforeAppending() async throws {
+        if case .text = content, !isDirty, reloadTask == nil {
+            reloadFromDiskIfClean()
+        }
+        try await waitForText()
+    }
+
     func loadIfNeeded() {
         hasReadDemand = true
         guard reloadTask == nil else { return }
@@ -397,6 +404,28 @@ final class FileTab: nonisolated Identifiable {
     }
 }
 
+/// Weakly tracks the actual AppKit window for every file content type,
+/// including images that do not mount a native text editor.
+@MainActor
+private final class FileWindowReference {
+    weak var view: NSView?
+    var window: NSWindow? { view?.window }
+}
+
+private struct FileWindowReader: NSViewRepresentable {
+    let reference: FileWindowReference
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        reference.view = view
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        reference.view = view
+    }
+}
+
 /// Content of a file tab: an STTextView editor (line numbers, system find
 /// bar), an image preview, or a placeholder for anything binary or
 /// oversized.
@@ -410,6 +439,7 @@ struct FileViewerView: View {
 
     private let settings = AppSettings.shared
     private let themeChanges = Theme.changes
+    @State private var windowReference = FileWindowReference()
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -453,22 +483,14 @@ struct FileViewerView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .background(FileWindowReader(reference: windowReference).frame(width: 0, height: 0))
         .onAppear {
             file.refreshWhenSelected()
         }
-        // The selected file view stays mounted while Kero is inactive, so
-        // returning from an external editor does not trigger `onAppear`.
-        .onReceive(NotificationCenter.default.publisher(
-            for: NSApplication.didBecomeActiveNotification
-        )) { _ in
-            if file.readOnlyReason == nil { file.refreshWhenSelected() }
-        }
-        // A window can become key without the app itself transitioning from
-        // inactive (for example when moving between Kero windows).
-        .onReceive(NotificationCenter.default.publisher(
-            for: NSWindow.didBecomeKeyNotification
-        )) { _ in
-            if file.readOnlyReason == nil { file.refreshWhenSelected() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
+            guard notification.object as? NSWindow === windowReference.window,
+                  file.readOnlyReason == nil else { return }
+            file.refreshWhenSelected()
         }
     }
 

@@ -44,6 +44,7 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
         }
     }
     func data(at path: String) -> Data? { files[path] }
+    func replace(path: String, with data: Data) { files[path] = data }
 
     func read(path: String, maxBytes: Int) async throws -> Data {
         readCount += 1
@@ -405,6 +406,81 @@ final class FileTabTests: XCTestCase {
         XCTAssertEqual(file.text, "visible")
         let readCount = await backend.readCount
         XCTAssertEqual(readCount, 1)
+    }
+
+    func testWindowFocusRefreshesOnlyItsMountedFile() async throws {
+        let pathA = "/fixture/\(UUID().uuidString)-A.txt"
+        let pathB = "/fixture/\(UUID().uuidString)-B.txt"
+        let backendA = EditorWorkspaceFixture(path: pathA, contents: Data("original A".utf8))
+        let backendB = EditorWorkspaceFixture(path: pathB, contents: Data("original B".utf8))
+        let fileA = FileTab(path: pathA, backend: backendA, workspaceIdentity: nil)
+        let fileB = FileTab(path: pathB, backend: backendB, workspaceIdentity: nil)
+        let windowA = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
+                               styleMask: [.titled], backing: .buffered, defer: false)
+        let windowB = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
+                               styleMask: [.titled], backing: .buffered, defer: false)
+        windowA.isReleasedWhenClosed = false
+        windowB.isReleasedWhenClosed = false
+        defer { windowA.close(); windowB.close() }
+        let hostA = NSHostingView(rootView: FileViewerView(file: fileA))
+        let hostB = NSHostingView(rootView: FileViewerView(file: fileB))
+        windowA.contentView = hostA
+        windowB.contentView = hostB
+        windowA.orderFront(nil)
+        windowB.orderFront(nil)
+        try await fileA.waitForText()
+        try await fileB.waitForText()
+        try await wait {
+            hostA.layoutSubtreeIfNeeded()
+            hostB.layoutSubtreeIfNeeded()
+            return self.mountedEditor(in: hostA) != nil && self.mountedEditor(in: hostB) != nil
+        }
+        let beforeB = await backendB.readCount
+        await backendA.replace(path: pathA, with: Data("external A".utf8))
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: windowA)
+        try await wait { fileA.text == "external A" }
+        try await Task.sleep(for: .milliseconds(40))
+        let afterB = await backendB.readCount
+        XCTAssertEqual(afterB, beforeB, "Switching to A must not re-read the mounted file in window B")
+        XCTAssertEqual(fileB.text, "original B")
+    }
+
+    func testImagePreviewReloadIsScopedToItsWindow() async throws {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let path = "/fixture/\(UUID().uuidString).png"
+        let backend = EditorWorkspaceFixture(path: path, contents: png)
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            if case .image = file.content { return true }
+            return false
+        }
+        let before = await backend.readCount
+        await backend.replace(path: path, with: Data("external text".utf8))
+        let unrelated = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
+        unrelated.isReleasedWhenClosed = false
+        defer { unrelated.close() }
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: unrelated)
+        try await Task.sleep(for: .milliseconds(30))
+        let afterUnrelated = await backend.readCount
+        XCTAssertEqual(afterUnrelated, before, "Other windows must not reload this image")
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        try await wait { file.text == "external text" }
+        let afterOwn = await backend.readCount
+        XCTAssertEqual(afterOwn, before + 1)
     }
 
     func testWindowActivationDoesNotRestartInFlightInitialRead() async throws {
