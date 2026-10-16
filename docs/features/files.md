@@ -12,7 +12,7 @@ Files、Git 工作区、暂存区和提交历史共用同一套树语义。本�
 
 ## 共享呈现
 
-`TreeDisplayModel` 负责显示结构，`TreeRowStyle` 及共享树行负责外观与命中。目录展开按工作范围保留；状态通过名称颜色、提示和辅助功能表达，不另设字母状态列。Git 快照变化时沿父目录聚合最高优先级状态；查询时不再扫描全部文件。文件自身状态优先于忽略规则，忽略目录的子项继续继承忽略状态；Git 已删除路径即使磁盘上不存在，仍可准确识别。视觉唯一来源见 [ui.md](../ui.md#共享树行)。
+`TreeDisplayModel` 负责显示结构，`TreeRowStyle` 及共享树行负责外观与命中。目录展开按工作范围保留；点击文件夹立即更新展开图标和无障碍状态，远端内容随后加载；首次显示时目录压缩需要探测的同层文件夹一起批量读取，不逐个等待 SSH。已读目录按机器、连接及根路径缓存，重复展开不重复查询；刷新合批读取已显示目录，失败保留原内容，创建、删除和重命名使对应目录缓存失效。状态通过名称颜色、提示和辅助功能表达，不另设字母状态列。Git 快照变化时沿父目录聚合最高优先级状态；查询时不再扫描全部文件。文件自身状态优先于忽略规则，忽略目录的子项继续继承忽略状态；Git 已删除路径即使磁盘上不存在，仍可准确识别。视觉唯一来源见 [ui.md](../ui.md#共享树行)。
 
 ## 文件操作
 
@@ -28,6 +28,6 @@ Files、Git 工作区、暂存区和提交历史共用同一套树语义。本�
 
 ## 验证
 
-`FileTreeTests` 检查目录、创建、重命名、范围与失败；`TreeRowHitTestingTests` 验证真实行命中。共享组件改变时同时验收 Files、Git 工作区、暂存区及历史树，包含窄面板、大字体、长名称、点击边缘、右侧动作、键盘和无障碍。
+`FileTreeTests` 检查展开即时反馈、首次同层目录批量查询、按需复用、批量刷新、断线保留、目录创建、重命名、范围与失败；`SSHFileTreeLiveTests` 验证实际 Windows SSH 批量读取、失败隔离及文件树冷开／热展开／刷新时的 SSH 请求次数；`TreeRowHitTestingTests` 验证真实行命中。共享组件改变时同时验收 Files、Git 工作区、暂存区及历史树，包含窄面板、大字体、长名称、点击边缘、右侧动作、键盘和无障碍。
 
 实现入口：[FileTreeModel.swift](../../kero/Files/FileTreeModel.swift)、[TreeDisplayModel.swift](../../kero/Shared/Tree/TreeDisplayModel.swift)、[TreeRowStyle.swift](../../kero/Shared/Tree/TreeRowStyle.swift)。运行方式见 [testing.md](../testing.md)。

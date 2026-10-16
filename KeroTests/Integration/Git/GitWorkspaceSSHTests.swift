@@ -106,6 +106,7 @@ final class GitWorkspaceSSHTests: XCTestCase {
             let index = await GitCommandExecution.runData(["show", ":literal[1].bin"],
                 in: repo, timeout: 25, backend: backend)
             XCTAssertEqual(worktree, historical)
+            XCTAssertEqual(index.status, 0, index.stderr)
             XCTAssertEqual(index.stdout, historical)
             let unchangedHead = try await git(["rev-parse", "HEAD"])
             XCTAssertEqual(unchangedHead, head)
@@ -121,6 +122,7 @@ final class GitWorkspaceSSHTests: XCTestCase {
             XCTAssertEqual(restored, historical)
             let restoredIndex = await GitCommandExecution.runData(["show", ":literal[1].bin"],
                 in: repo, timeout: 25, backend: backend)
+            XCTAssertEqual(restoredIndex.status, 0, restoredIndex.stderr)
             XCTAssertEqual(restoredIndex.stdout, historical)
             try await backend.createDirectory(path: repo + "/untracked-dir")
             try await backend.write(path: repo + "/untracked-dir/keep.txt", data: Data("keep".utf8))

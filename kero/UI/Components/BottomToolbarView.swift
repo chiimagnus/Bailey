@@ -131,7 +131,7 @@ struct BottomToolbarView: View {
                 branchPicker
             }
         }
-        .disabled(model.isBusy || !model.hasCurrentDetails)
+        .disabled(model.isBusy || !model.canUseCurrentReferences)
         .help(String(localized: "Switch Branch", table: "Interface"))
         .accessibilityLabel(
             String(localized: "Current branch, \(model.branch ?? String(localized: "detached HEAD", table: "Workspace"))", table: "Workspace")

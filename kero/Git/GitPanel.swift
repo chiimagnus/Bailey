@@ -74,29 +74,43 @@ struct GitPanel: View {
     var body: some View {
         let _ = themeChanges.revision
         VStack(spacing: 0) {
-            header
-            operationFailureBanner
+            header.disabled(!hasCurrentPanelTarget)
+            operationFailureBanner.disabled(!hasCurrentPanelTarget)
 
-            if !model.isRepo {
+            if !hasCurrentPanelTarget {
+                // Never display another project's tree while its Git root is
+                // still resolving. Keep the retry actionable after failures.
                 if let statusError = model.statusError {
                     statusFailure(statusError)
-                } else if model.isResolvingInitialStatus {
-                    placeholder(icon: "arrow.clockwise", text: String(localized: "Finding repository…", table: "Sidebar"))
                 } else {
-                    notRepository
+                    placeholder(icon: "arrow.clockwise", text: String(localized: "Finding repository…", table: "Sidebar"))
                 }
             } else {
-                if let statusError = model.statusError {
-                    statusWarning(statusError)
+                Group {
+                    if !model.isRepo {
+                        if let statusError = model.statusError {
+                            statusFailure(statusError)
+                        } else if model.isResolvingInitialStatus || model.needsCoreVerification {
+                            placeholder(icon: "arrow.clockwise", text: String(localized: "Finding repository…", table: "Sidebar"))
+                        } else {
+                            notRepository
+                        }
+                    } else {
+                        if let statusError = model.statusError {
+                            statusWarning(statusError)
+                        } else if let detailError = model.detailError {
+                            statusWarning(detailError, isDetail: true)
+                        }
+                        trackingBar
+                        repositoryOperationBanner
+                        commitBox
+                        filterBar
+                        changeList
+                    }
                 }
-                trackingBar
-                repositoryOperationBanner
-                commitBox
-                filterBar
-                changeList
+                .disabled(!hasCurrentPanelTarget)
             }
         }
-        .disabled(!hasCurrentPanelTarget)
         .confirmationDialog(
             discardTitle(for: pendingDiscard?.entry),
             isPresented: Binding(
@@ -126,7 +140,7 @@ struct GitPanel: View {
                 }
                 pendingDiscard = nil
             }
-            .disabled(model.isBusy)
+            .disabled(model.isBusy || !hasCurrentPanelTarget || !model.canUseCurrentStatus)
         }
         .confirmationDialog(
             discardAllTitle,
@@ -162,7 +176,7 @@ struct GitPanel: View {
                 pendingDiscardAll = []
                 confirmDiscardAll = false
             }
-            .disabled(model.isBusy)
+            .disabled(model.isBusy || !hasCurrentPanelTarget || !model.canUseCurrentStatus)
         }
         .onChange(of: model.rootPath) {
             // A dialog must never carry a destructive file target across cwd.
@@ -190,7 +204,7 @@ struct GitPanel: View {
     private var header: some View {
         HStack(spacing: 6) {
             if model.isRepo {
-                branchMenu
+                branchMenu.disabled(!model.canUseCurrentStatus)
             } else {
                 Image(systemName: "arrow.triangle.branch")
                     .panelFont(size: 11, weight: .medium)
@@ -199,7 +213,7 @@ struct GitPanel: View {
             }
             // User operations surface progress in their initiating control.
             // Keep repository discovery here because it has no trigger button.
-            if model.isResolvingInitialStatus {
+            if model.isResolvingInitialStatus || model.needsCoreVerification {
                 ProgressView()
                     .controlSize(.small)
                     .scaleEffect(0.6)
@@ -280,7 +294,7 @@ struct GitPanel: View {
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .help(String(localized: "Switch or Create Branch", table: "Sidebar"))
-        .disabled(!model.hasCurrentDetails)
+        .disabled(!model.canUseCurrentReferences)
         .accessibilityLabel(
             String(localized: "Current branch, \(model.branch ?? String(localized: "detached HEAD", table: "Sidebar"))", table: "Sidebar")
         )
@@ -289,12 +303,12 @@ struct GitPanel: View {
     private var moreMenu: some View {
         Menu {
             Button(String(localized: "Fetch", table: "Sidebar")) { performOperation(.moreMenu, model.fetch) }
-                .disabled(model.isBusy || model.remotes.isEmpty)
+                .disabled(model.isBusy || !model.canUseCurrentReferences || model.remotes.isEmpty)
             Button(String(localized: "Pull (Fast-forward Only)", table: "Sidebar")) { performOperation(.moreMenu, model.pull) }
-                .disabled(model.isBusy || !model.hasUpstream)
+                .disabled(model.isBusy || !model.canUseCurrentReferences || !model.hasUpstream)
             if model.hasUpstream {
                 Button(String(localized: "Push", table: "Sidebar")) { performOperation(.moreMenu, model.push) }
-                    .disabled(model.isBusy)
+                    .disabled(model.isBusy || !model.canUseCurrentReferences)
             } else if model.remotes.count > 1 {
                 Menu(String(localized: "Publish Branch to", table: "Sidebar")) {
                     ForEach(model.remotes, id: \.self) { remote in
@@ -303,14 +317,15 @@ struct GitPanel: View {
                         }
                     }
                 }
-                .disabled(model.isBusy || model.branch == "detached HEAD")
+                .disabled(model.isBusy || !model.canUseCurrentReferences || model.branch == "detached HEAD")
             } else {
                 Button(String(localized: "Publish Branch", table: "Sidebar")) { performOperation(.moreMenu, model.push) }
-                    .disabled(model.isBusy || model.remotes.isEmpty || model.branch == "detached HEAD")
+                    .disabled(model.isBusy || !model.canUseCurrentReferences
+                    || model.remotes.isEmpty || model.branch == "detached HEAD")
             }
             Button(String(localized: "Sync Changes", table: "Sidebar")) { performOperation(.moreMenu, model.syncChanges) }
                 .disabled(
-                    model.isBusy || model.remotes.isEmpty
+                    model.isBusy || !model.canUseCurrentReferences || model.remotes.isEmpty
                         || (!model.hasUpstream && model.remotes.count != 1)
                         || model.branch == "detached HEAD"
                 )
@@ -321,7 +336,7 @@ struct GitPanel: View {
             if let latest = model.stashes.first {
                 Button(String(localized: "Pop Latest Stash…", table: "Git")) {
                     presentStashDialog(latest, action: .pop)
-                }.disabled(model.isBusy)
+                }.disabled(model.isBusy || !model.canUseCurrentStashes)
             }
             Divider()
             Button(String(localized: "Copy Changed Paths", table: "Sidebar")) { copyChangedPaths() }
@@ -351,7 +366,7 @@ struct GitPanel: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help(String(localized: "More Actions…", table: "Sidebar"))
-        .disabled(!model.hasCurrentDetails)
+        .disabled(!model.canUseCurrentStatus)
         .accessibilityLabel(String(localized: "More Git Actions", table: "Sidebar"))
     }
 
@@ -1325,7 +1340,7 @@ struct GitPanel: View {
                 actionButton(
                     icon: "arrow.triangle.2.circlepath",
                     title: syncButtonTitle,
-                    enabled: !model.isBusy && model.hasCurrentDetails,
+                    enabled: !model.isBusy && model.canUseCurrentReferences,
                     isLoading: operationIsLoading(.syncButton),
                     help: String(localized: "Pull remote commits, then push local ones", table: "Sidebar"),
                     action: {
@@ -1457,6 +1472,7 @@ struct GitPanel: View {
         return !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && hasEligibleChanges
             && model.mergeEntries.isEmpty
+            && model.canUseCurrentStatus
             && !model.isBusy
     }
 
@@ -1469,6 +1485,7 @@ struct GitPanel: View {
             && hasCommit
             && hasEligibleChanges
             && model.mergeEntries.isEmpty
+            && model.canUseCurrentStatus
             && !model.isBusy
     }
 
@@ -1636,7 +1653,7 @@ struct GitPanel: View {
                             isLoadingMore: model.isLoadingMoreCommits,
                             loadMore: model.loadMoreCommits,
                             openDiff: openCommitDiff,
-                            canSwitchBranch: !model.isBusy && model.hasCurrentDetails,
+                            canSwitchBranch: !model.isBusy && model.canUseCurrentReferences,
                             switchBranch: { name in
                                 switchBranchSafely(to: name)
                             },
@@ -1661,12 +1678,12 @@ struct GitPanel: View {
                             addTag: { commit in
                                 presentTagCreate(at: commit)
                             },
-                            canActOnCommit: !model.isBusy && model.hasCurrentDetails && model.repositoryOperation == nil,
+                            canActOnCommit: !model.isBusy && model.canUseCurrentHistory && model.repositoryOperation == nil,
                             canDropCommit: model.canDrop,
                             commitAction: { commit, action in
                                 presentCommitDialog(commit, action: action)
                             },
-                            canActOnStash: !model.isBusy && model.hasCurrentDetails,
+                            canActOnStash: !model.isBusy && model.canUseCurrentStashes,
                             stashAction: { stash, action in
                                 presentStashDialog(stash, action: action)
                             }
@@ -1717,7 +1734,8 @@ struct GitPanel: View {
             model.toggleCollapsedFolder(kind.rawValue + ":" + item.path)
         }) { active in
             GitChangeRowActions(
-                kind: kind, active: active, disabled: model.isBusy,
+                kind: kind, active: active,
+                disabled: model.isBusy || !model.canUseCurrentStatus,
                 isStageLoading: operationIsLoading(stageTrigger),
                 isUnstageLoading: operationIsLoading(unstageTrigger),
                 isDiscardLoading: operationIsLoading(discardTrigger),
@@ -1786,7 +1804,7 @@ struct GitPanel: View {
             kind: kind,
             showDirectory: showDirectory,
             isRemote: remoteName != nil,
-            disabled: model.isBusy,
+            disabled: model.isBusy || !model.canUseCurrentStatus,
             isStageLoading: operationIsLoading(stageTrigger),
             isUnstageLoading: operationIsLoading(unstageTrigger),
             isDiscardLoading: operationIsLoading(discardTrigger),
@@ -1831,11 +1849,11 @@ struct GitPanel: View {
     private var uncommittedMenuActions: [PanelSectionHeader.MenuAction] {
         [
             .init(title: String(localized: "Stash…", table: "Git"),
-                  disabled: model.isBusy || !model.hasCurrentDetails || model.totalChangeCount == 0) { presentUncommittedDialog(.stash) },
+                  disabled: model.isBusy || !model.canUseCurrentStatus || model.totalChangeCount == 0) { presentUncommittedDialog(.stash) },
             .init(title: String(localized: "Reset…", table: "Git"),
-                  disabled: model.isBusy || !model.hasCurrentDetails || !model.hasHead) { presentUncommittedDialog(.reset) },
+                  disabled: model.isBusy || !model.canUseCurrentStatus || !model.hasHead) { presentUncommittedDialog(.reset) },
             .init(title: String(localized: "Clean…", table: "Git"),
-                  disabled: model.isBusy || !model.hasCurrentDetails) { presentUncommittedDialog(.clean) },
+                  disabled: model.isBusy || !model.canUseCurrentStatus) { presentUncommittedDialog(.clean) },
         ]
     }
 
@@ -1919,16 +1937,16 @@ struct GitPanel: View {
         if kind == .staged {
             Button(String(localized: "Unstage Changes", table: "Sidebar")) {
                 performOperation(unstageTrigger) { model.unstageEntries(selected) }
-            }.disabled(model.isBusy)
+            }.disabled(model.isBusy || !model.canUseCurrentStatus)
         } else {
             Button(kind == .merge ? String(localized: "Mark Resolved (Stage)", table: "Sidebar")
                    : String(localized: "Stage Changes", table: "Sidebar")) {
                 performOperation(stageTrigger) { model.stageEntries(selected) }
-            }.disabled(model.isBusy)
+            }.disabled(model.isBusy || !model.canUseCurrentStatus)
             if kind == .unstaged {
                 Button(String(localized: "Discard Changes…", table: "Sidebar")) {
                     requestDiscard(selected, trigger: .entry(path: path, operation: .discard))
-                }.disabled(model.isBusy)
+                }.disabled(model.isBusy || !model.canUseCurrentStatus)
                 if selected.contains(where: { $0.staged == "?" }) {
                     Button(String(localized: "Add to .gitignore", table: "Git")) {
                         ignorePaths([path], isDirectory: true)
@@ -2069,7 +2087,7 @@ struct GitPanel: View {
         _ entries: [GitStatusModel.Entry], all: Bool,
         trigger: OperationTrigger = .discardAll
     ) {
-        guard !preparingDiscard, !entries.isEmpty else { return }
+        guard !preparingDiscard, !entries.isEmpty, model.canUseCurrentStatus else { return }
         preparingDiscard = true
         Task {
             defer { preparingDiscard = false }
@@ -2178,14 +2196,16 @@ struct GitPanel: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func statusWarning(_ message: String) -> some View {
+    private func statusWarning(_ message: String, isDetail: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle")
-                Text(String(localized: "Git Status Unavailable", table: "Sidebar"))
+                Text(isDetail
+                     ? String(localized: "Git Details Unavailable", table: "Sidebar")
+                     : String(localized: "Git Status Unavailable", table: "Sidebar"))
                     .panelFont(size: 10.5, weight: .medium)
                 Spacer(minLength: 4)
-                Button(String(localized: "Retry", table: "Sidebar")) { model.refresh() }
+                Button(String(localized: "Retry", table: "Sidebar")) { model.syncSelectedProject(in: manager) }
                     .buttonStyle(.borderless)
                     .controlSize(.small)
                     .disabled(model.isBusy || model.isRefreshing)
@@ -2216,7 +2236,7 @@ struct GitPanel: View {
                     .lineLimit(5)
                     .textSelection(.enabled)
             }
-            Button(String(localized: "Retry", table: "Sidebar")) { model.refresh() }
+            Button(String(localized: "Retry", table: "Sidebar")) { model.syncSelectedProject(in: manager) }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(model.isBusy || model.isResolvingInitialStatus)

@@ -10,6 +10,8 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
     private var pauseNextList = false
     private var pausedList: CheckedContinuation<Void, Never>?
     private(set) var awaitingList = false
+    private var gitProbeUnavailable = false
+    func setGitProbeUnavailable(_ value: Bool) { gitProbeUnavailable = value }
     init(_ name: String) { self.name = name }
 
     func suspendNextList() { pauseNextList = true }
@@ -44,6 +46,7 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
     func rename(from: String, to: String) async throws { renamed.append((from, to)) }
     func delete(paths: [String]) async throws {}
     func gitRoot(containing path: String) async throws -> String? {
+        if gitProbeUnavailable { throw WorkspaceError.timedOut }
         try await Task.sleep(for: .milliseconds(path == "/old" ? 100 : 5))
         return path + "-repo"
     }
@@ -80,15 +83,30 @@ final class PanelContextTests: XCTestCase {
             automatic("/new", workspace: "remote", connection: secondConnection).identity
         )
 
-        let foreground = await automatic("/new", foreground: "/worktree").resolvedRoot()
-        XCTAssertEqual(foreground.root, "/worktree-repo")
-        XCTAssertEqual(foreground.source, .foreground(isWorktree: true))
+        let foreground = try? await automatic("/new", foreground: "/worktree").resolvedRoot()
+        XCTAssertEqual(foreground?.root, "/worktree-repo")
+        XCTAssertEqual(foreground?.source, .foreground(isWorktree: true))
 
         let pinned = PanelContext(identity: .pinned(project: project, workspace: nil, directory: "/pinned"), backend: backend)
-        let pinnedResult = await pinned.resolvedRoot()
-        XCTAssertEqual(pinnedResult.root, "/pinned")
-        XCTAssertEqual(pinnedResult.source, .pinned)
+        let pinnedResult = try? await pinned.resolvedRoot()
+        XCTAssertEqual(pinnedResult?.root, "/pinned")
+        XCTAssertEqual(pinnedResult?.source, .pinned)
         XCTAssertFalse(pinned.isRemote)
+    }
+
+    func testFailedSSHRepositoryProbeNeverLooksLikeAValidLocalDirectory() async throws {
+        let backend = DelayedWorkspaceFixture("disconnected")
+        await backend.setGitProbeUnavailable(true)
+        let context = PanelContext(identity: .automatic(
+            project: UUID(), workspace: "ssh:remote", directory: "/remote/work",
+            foreground: "/remote/another", session: UUID(), connection: UUID(), state: .disconnected
+        ), backend: backend)
+        do {
+            _ = try await context.resolvedRoot()
+            XCTFail("SSH failure must not silently resolve /remote/work as a repository")
+        } catch WorkspaceError.timedOut {
+            // Only confirmed non-repositories are allowed to fall back to cwd.
+        }
     }
 
     func testSelectedProjectOwnsGitAndFilesRefreshAcrossRapidSwitches() async throws {
