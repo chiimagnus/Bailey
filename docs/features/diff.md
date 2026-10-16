@@ -12,7 +12,7 @@ Diff 使用原生 STTextView/TextKit 显示统一或分栏差异。本页负责�
 
 ## 原生渲染
 
-`DiffEngine` 计算行级及行内差异，`DiffSyntaxHighlighter` 使用编辑器同一语法与主题，原生视图绘制行号、增删标记和折叠上下文。这里不使用 WebKit 或 PierreDiffsSwift；浏览器仍使用 WebKit，两者不要混淆。
+`DiffEngine` 计算行级及行内差异，`DiffSyntaxHighlighter` 使用编辑器同一语法与主题，两侧独立解析结果在后台并行捕获，主线程负责原生富文本。原生视图绘制行号、增删标记和折叠上下文。这里不使用 WebKit 或 PierreDiffsSwift；浏览器仍使用 WebKit，两者不要混淆。
 
 文本、行和行内 token 按 UTF-8 原始字节比较；Unicode 规范等价不意味着 Git 原文相同。按 LF 码点分行，CRLF 的 CR 留在原行文本中，不把 CRLF 当作不可拆的 Swift Character；源范围始终使用各侧原始 UTF-16 坐标，不归一化正文。保存、重载和查看／编辑切换保留原始字节。
 

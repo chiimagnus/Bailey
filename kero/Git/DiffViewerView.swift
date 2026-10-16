@@ -484,14 +484,15 @@ final class DiffTab: nonisolated Identifiable {
             // across actors. Only immutable token names and ranges return.
             let result = await Task.detached(priority: .userInitiated) {
                 let core = DiffCore.compute(oldText: before, newText: after)
-                let oldCaptures = context.map {
+                // Both sides parse independent source snapshots.
+                async let oldCaptures: [DiffCaptureRun] = context.map {
                     DiffSyntaxHighlighter.captures(text: before, context: $0)
                 } ?? []
-                let newCaptures = context.map {
+                async let newCaptures: [DiffCaptureRun] = context.map {
                     DiffSyntaxHighlighter.captures(text: after, context: $0)
                 } ?? []
                 let computation = DiffComputation.build(core: core, expansions: expansions)
-                return (core, oldCaptures, newCaptures, computation)
+                return (core, await oldCaptures, await newCaptures, computation)
             }.value
             guard let self, !Task.isCancelled, self.displayGeneration == generation else { return }
             let inputs = DiffDisplayInputs(
