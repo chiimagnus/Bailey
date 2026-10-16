@@ -1,0 +1,50 @@
+version = 1
+current_task_id = ""
+
+[[tasks]]
+id = "P1-T1"
+title = "以真实DAG分配路径颜色并消除Merge串色"
+status = "pending"
+plan = "plan-p1.md#p1-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T2"
+title = "统一图谱调色板及HEAD和Stash节点几何"
+status = "pending"
+plan = "plan-p1.md#p1-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T1"
+title = "符号远端Ref只读展示与原生接入"
+status = "pending"
+plan = "plan-p2.md#p2-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T2"
+title = "一次完成Ref分组复合标签与分段操作"
+status = "pending"
+plan = "plan-p2.md#p2-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T1"
+title = "对齐提交行布局密度与Merge状态"
+status = "pending"
+plan = "plan-p3.md#p3-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T2"
+title = "节点悬停与跨场景视觉回归验收"
+status = "pending"
+plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
