@@ -7,6 +7,14 @@ import STTextKitPlus
 
 /// NSAccessibility
 extension STTextView {
+
+    override open func isAccessibilitySelectorAllowed(_ selector: Selector) -> Bool {
+        if !isEditable,
+           selector == #selector(setAccessibilityValue(_:)) || selector == #selector(setAccessibilitySelectedText(_:)) {
+            return false
+        }
+        return super.isAccessibilitySelectorAllowed(selector)
+    }
     override open func accessibilitySharedCharacterRange() -> NSRange {
         NSRange(textContentManager.documentRange, in: textContentManager)
     }
@@ -45,6 +53,7 @@ extension STTextView {
     }
 
     override open func setAccessibilitySelectedText(_ accessibilitySelectedText: String?) {
+        guard isEditable else { return }
         self.replaceCharacters(in: selectedRange(), with: accessibilitySelectedText ?? "")
     }
 
@@ -137,7 +146,7 @@ extension STTextView {
     }
 
     override open func setAccessibilityValue(_ accessibilityValue: Any?) {
-        guard let string = accessibilityValue as? String else {
+        guard isEditable, let string = accessibilityValue as? String else {
             return
         }
 

@@ -25,8 +25,7 @@ final class FileTab: nonisolated Identifiable {
         case text
         case image(NSImage)
         case unavailable(String)
-        /// Waiting for the first read. Only reachable on a workspace that
-        /// cannot answer immediately, since this tab is created synchronously.
+        /// Waiting for a consumer to request the first read.
         case loading
     }
 
@@ -100,24 +99,14 @@ final class FileTab: nonisolated Identifiable {
         // that connection even while the panels follow another session.
         self.backend = backend
         self.workspaceIdentity = workspaceIdentity
-        // This initializer is synchronous (a file opens from a menu, a click,
-        // or session restore), so a workspace that can answer immediately does
-        // so here rather than flashing a placeholder on every open.
-        let loaded = (backend as? LocalWorkspaceBackend).map {
-            Self.loadedContent(path: path, data: $0.readImmediately(path: path))
-        }
-        content = loaded?.content ?? .loading
-        text = loaded?.text ?? ""
-        savedText = loaded?.text ?? ""
-        imageFingerprint = loaded?.imageFingerprint
-        if case .loading = content {
-            reloadFromDiskIfClean()
-        }
+        content = .loading
+        text = ""
     }
 
     // MARK: - Remote workspace
 
     func waitForText() async throws {
+        loadIfNeeded()
         let generation = targetGeneration
         var readGeneration: UInt
         repeat {
@@ -128,6 +117,26 @@ final class FileTab: nonisolated Identifiable {
               case .text = content else {
             throw NSError(domain: "Kero.Editor", code: 1, userInfo: [NSLocalizedDescriptionKey:
                 String(localized: "The file is unavailable or its workspace changed. Reopen it and try again.", table: "Editor")])
+        }
+    }
+
+    func loadIfNeeded() {
+        guard reloadTask == nil else { return }
+        switch content {
+        case .loading, .unavailable: reloadFromDiskIfClean()
+        case .text, .image: break
+        }
+    }
+
+    func refreshWhenSelected() {
+        if readOnlyReason != nil, let workspaceIdentity {
+            SSHHostWorkspaces.retryConnection(for: workspaceIdentity, path: path)
+            return
+        }
+        if case .loading = content {
+            loadIfNeeded()
+        } else {
+            reloadFromDiskIfClean()
         }
     }
 
@@ -179,6 +188,7 @@ final class FileTab: nonisolated Identifiable {
         targetGeneration &+= 1
         invalidateReload()
         readOnlyReason = reason
+        if let reason, case .loading = content { content = .unavailable(reason) }
     }
 
     var name: String {
@@ -193,13 +203,15 @@ final class FileTab: nonisolated Identifiable {
     }
 
     /// Re-points this tab at a new location after the file (or a directory
-    /// above it) was renamed on disk. The bytes are unchanged, so nothing
-    /// reloads; subsequent saves write to the new path.
+    /// above it) was renamed on disk. An initial read follows the new path;
+    /// loaded buffers and subsequent saves retain their content.
     func updatePath(_ newPath: String) {
         guard newPath != path else { return }
+        let wasReading = reloadTask != nil
         invalidateReload()
         targetGeneration &+= 1
         path = newPath
+        if wasReading { loadIfNeeded() }
     }
 
     /// Recompute `isDirty` from the current `text` against the saved
@@ -208,7 +220,7 @@ final class FileTab: nonisolated Identifiable {
     func refreshDirtyState() {
         let dirty: Bool
         if case .text = content {
-            dirty = text != savedText
+            dirty = !text.utf8.elementsEqual(savedText.utf8)
         } else {
             dirty = false
         }
@@ -257,14 +269,13 @@ final class FileTab: nonisolated Identifiable {
         let target = backend
         do {
             try await target.write(path: savedPath, data: Data(written.utf8))
-            guard generation == targetGeneration, path == savedPath,
-                  readOnlyReason == nil else { return }
+            guard generation == targetGeneration else { return }
             savedText = written
             // An edit landing while the write was in flight stays dirty.
             refreshDirtyState()
             saveError = nil
         } catch {
-            guard generation == targetGeneration, path == savedPath else { return }
+            guard generation == targetGeneration else { return }
             saveError = error.localizedDescription
         }
     }
@@ -284,18 +295,31 @@ final class FileTab: nonisolated Identifiable {
 
         let backend = self.backend
         reloadTask = Task { [weak self] in
-            let data = try? await backend.read(path: expectedPath, maxBytes: .max)
+            defer {
+                if self?.reloadGeneration == generation { self?.reloadTask = nil }
+            }
+            let loaded: LoadedContent
+            do {
+                let (data, decoded) = try await Self.readContent(path: expectedPath, backend: backend)
+                loaded = Self.loadedContent(path: expectedPath, data: data, decoded: decoded)
+            } catch {
+                let reason: String
+                if case WorkspaceError.tooLarge = error {
+                    reason = String(localized: "File is too large to open", table: "Workspace")
+                } else {
+                    reason = String(localized: "Could not read file", table: "Workspace")
+                }
+                loaded = LoadedContent(content: .unavailable(reason), text: "", imageFingerprint: nil)
+            }
             guard !Task.isCancelled,
                   let self,
                   self.reloadGeneration == generation,
-                  self.path == expectedPath,
                   !self.isDirty,
                   // The connection may have dropped while this read was in
                   // flight; its failure must not become the tab's content.
                   self.readOnlyReason == nil
             else { return }
 
-            let loaded = Self.loadedContent(path: expectedPath, data: data)
             guard !self.matches(loaded) else { return }
             self.editorCoordinator = nil
             self.content = loaded.content
@@ -316,7 +340,7 @@ final class FileTab: nonisolated Identifiable {
     private func matches(_ loaded: LoadedContent) -> Bool {
         switch (content, loaded.content) {
         case (.text, .text):
-            return savedText == loaded.text
+            return savedText.utf8.elementsEqual(loaded.text.utf8)
         case (.image, .image):
             return imageFingerprint == loaded.imageFingerprint
         case (.unavailable(let current), .unavailable(let new)):
@@ -326,15 +350,16 @@ final class FileTab: nonisolated Identifiable {
         }
     }
 
-    private static func loadedContent(path: String, data: Data?) -> LoadedContent {
+    @concurrent private static func readContent(
+        path: String, backend: WorkspaceBackend
+    ) async throws -> (Data, String?) {
+        let isImage = imageExtensions.contains((path as NSString).pathExtension.lowercased())
+        let data = try await backend.read(path: path, maxBytes: isImage ? .max : maxTextBytes)
+        return (data, data.count <= maxTextBytes ? String(data: data, encoding: .utf8) : nil)
+    }
+
+    private static func loadedContent(path: String, data: Data, decoded: String?) -> LoadedContent {
         let url = URL(fileURLWithPath: path)
-        guard let data else {
-            return LoadedContent(
-                content: .unavailable(String(localized: "Could not read file", table: "Workspace")),
-                text: "",
-                imageFingerprint: nil
-            )
-        }
         if imageExtensions.contains(url.pathExtension.lowercased()),
            let image = NSImage(data: data) {
             return LoadedContent(
@@ -350,7 +375,7 @@ final class FileTab: nonisolated Identifiable {
                 imageFingerprint: nil
             )
         }
-        guard let string = String(data: data, encoding: .utf8) else {
+        guard let string = decoded else {
             return LoadedContent(
                 content: .unavailable(String(localized: "Binary file", table: "Workspace")),
                 text: "",
@@ -418,7 +443,7 @@ struct FileViewerView: View {
             }
         }
         .onAppear {
-            file.reloadFromDiskIfClean()
+            file.refreshWhenSelected()
         }
         // The selected file view stays mounted while Kero is inactive, so
         // returning from an external editor does not trigger `onAppear`.

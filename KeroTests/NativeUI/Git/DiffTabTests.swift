@@ -14,6 +14,15 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
     private(set) var writing = false
     private(set) var reading = false
     private(set) var writes = 0
+    private var mutateIndexAfterSize = false
+    private var indexMoved = false
+    private var shortGitBlob = false
+
+    func simulateIndexChangeAfterSize() { mutateIndexAfterSize = true }
+    func simulateIncompleteGitBlob() {
+        mutateIndexAfterSize = true
+        shortGitBlob = true
+    }
 
     func finishWrite(failing: Bool = false) {
         guard let (data, continuation) = pendingWrite else { return }
@@ -42,7 +51,40 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
         }
     }
     func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
-        .init(status: 0, stdout: Data(), stderr: Data())
+        guard mutateIndexAfterSize else {
+            return .init(status: 0, stdout: Data(), stderr: Data())
+        }
+        let headID = String(repeating: "a", count: 40)
+        let indexID = String(repeating: "b", count: 40)
+        let newID = String(repeating: "c", count: 40)
+        let head = Data("head\n".utf8)
+        let index = Data("indexA\n".utf8)
+        let moved = Data("indexB\n".utf8)
+        func result(_ data: Data) -> WorkspaceRunResult {
+            .init(status: 0, stdout: data, stderr: Data())
+        }
+        if argv.contains("ls-tree") {
+            return result(Data("100644 blob \(headID)\tstable.txt\0".utf8))
+        }
+        if argv.contains("ls-files") {
+            let id = indexMoved ? newID : indexID
+            return result(Data("100644 \(id) 0\tstable.txt\0".utf8))
+        }
+        if argv.contains("cat-file"), argv.count >= 4 {
+            let id = argv.last ?? ""
+            let bytes = id == headID || id == "HEAD:stable.txt" ? head
+                : id == indexID ? index
+                : id == newID || id == ":stable.txt" ? (indexMoved ? moved : index)
+                : Data()
+            if argv.contains("-s") {
+                if id == indexID || id == ":stable.txt" { indexMoved = true }
+                return result(Data("\(bytes.count)\n".utf8))
+            }
+            if argv.contains("blob") {
+                return result(shortGitBlob && id == indexID ? Data(bytes.dropLast()) : bytes)
+            }
+        }
+        return .init(status: 128, stdout: Data(), stderr: Data("unexpected Git command".utf8))
     }
     func stat(path: String) async throws -> WorkspaceStat? {
         .init(isRegular: true, isDirectory: false, isSymlink: false, size: contents.count, mtime: .distantPast)
@@ -82,6 +124,183 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class DiffTabTests: XCTestCase {
+    func testIncompleteSelectedGitBlobFailsInsteadOfPublishingTruncatedContent() async throws {
+        let backend = DiffWorkspaceFixture()
+        await backend.simulateIncompleteGitBlob()
+        let domain = "kero-diff-short-git-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let tab = DiffTab(
+            repoRoot: "/fixture", path: "stable.txt", source: .staged,
+            untracked: false, origPath: nil, backend: backend,
+            workspaceIdentity: nil, preferences: DiffViewPreferences(defaults: defaults)
+        )
+        try await wait { !tab.isLoading }
+        XCTAssertNotNil(tab.error)
+        XCTAssertTrue(tab.error?.contains("Incomplete") == true)
+        XCTAssertFalse(tab.hasLoadedContent)
+        XCTAssertEqual(tab.newContent, "")
+    }
+
+    func testFoldingPreviousDisplayCannotOverrideNewLoadedDiff() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("pending.swift")
+        var lines = (0..<3600).map { "let value\($0) = \($0)\n" }
+        try Data(lines.joined().utf8).write(to: file)
+        for args in [["add", "."], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        lines[1800] = "let value1800 = 111111\n"
+        try Data(lines.joined().utf8).write(to: file)
+        let tab = DiffTab(
+            repoRoot: directory.path, path: "pending.swift", source: .worktree,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil
+        )
+        try await wait({ !tab.isLoading && tab.display != nil }, timeout: 15)
+        let oldDisplay = try XCTUnwrap(tab.display)
+        let oldFold = try XCTUnwrap(oldDisplay.computation.unified.rows.compactMap(\.collapsed).first)
+        lines[1800] = "let value1800 = 222222\n"
+        lines[2000] = "let value2000 = 333333\n"
+        let latest = lines.joined()
+        try Data(latest.utf8).write(to: file)
+        tab.reload()
+        try await wait({ tab.newContent.utf8.elementsEqual(latest.utf8) }, pollingInterval: .milliseconds(1), timeout: 15)
+        tab.expandRun(oldFold)
+        try await wait({ tab.display?.id != oldDisplay.id }, timeout: 15)
+        let rendered = try XCTUnwrap(tab.display)
+        XCTAssertEqual(Data(tab.newContent.utf8), Data(latest.utf8))
+        XCTAssertTrue(rendered.computation.unified.text.contains("333333"),
+                      "A fold from the previous display must not supersede the newest loaded source")
+    }
+
+    func testIndexMutationDuringGitContentReadUsesSelectedImmutableBlob() async throws {
+        let backend = DiffWorkspaceFixture()
+        await backend.simulateIndexChangeAfterSize()
+        let domain = "kero-diff-index-race-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let tab = DiffTab(
+            repoRoot: "/fixture", path: "stable.txt", source: .staged,
+            untracked: false, origPath: nil, backend: backend,
+            workspaceIdentity: nil, preferences: DiffViewPreferences(defaults: defaults)
+        )
+        try await wait { !tab.isLoading }
+        XCTAssertNil(tab.error)
+        XCTAssertEqual(tab.oldContent, "head\n")
+        XCTAssertEqual(tab.newContent, "indexA\n",
+                       "One stage read must keep the OID captured by metadata despite a later index mutation")
+    }
+
+    func testCanonicalEquivalentEditDuringDiffWriteRemainsDirty() async throws {
+        let domain = "kero-canonical-save-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let backend = DiffWorkspaceFixture()
+        let diff = DiffTab(repoRoot: "/fixture", path: "canonical.txt", source: .worktree,
+                           untracked: true, origPath: nil, backend: backend,
+                           workspaceIdentity: nil, preferences: DiffViewPreferences(defaults: defaults))
+        try await wait { !diff.isLoading }
+        diff.updateEditedContent("café")
+        let saving = Task { await diff.save() }
+        try await wait { await backend.writing }
+        diff.updateEditedContent("cafe\u{301}")
+        await backend.finishWrite()
+        await saving.value
+        let stored = await backend.stored()
+        XCTAssertEqual(stored, Data("café".utf8))
+        XCTAssertTrue(diff.isDirty)
+        XCTAssertEqual(Data(diff.editedNewContent.utf8), Data("cafe\u{301}".utf8))
+    }
+
+    func testCanonicalEquivalentGitContentIsARealDiff() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("canonical.txt")
+        let composed = "let café = 1\n"
+        let decomposed = "let cafe\u{301} = 1\n"
+        try Data(composed.utf8).write(to: path)
+        for arguments in [["add", "."], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(arguments, in: directory.path).status, 0)
+        }
+        try Data(decomposed.utf8).write(to: path)
+        let domain = "kero-canonical-diff-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.prefersEditing = false
+        let diff = DiffTab(repoRoot: directory.path, path: "canonical.txt", source: .worktree,
+                           untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil, preferences: preferences)
+        try await wait { !diff.isLoading }
+        XCTAssertNil(diff.error)
+        XCTAssertEqual(Data(diff.oldContent.utf8), Data(composed.utf8))
+        XCTAssertEqual(Data(diff.newContent.utf8), Data(decomposed.utf8))
+        XCTAssertTrue(diff.hasChanges)
+        guard diff.hasChanges else { return }
+        try await wait { diff.display != nil }
+        let display = try XCTUnwrap(diff.display)
+        XCTAssertTrue(display.computation.unified.rows.contains { $0.kind == .removed })
+        XCTAssertTrue(display.computation.unified.rows.contains { $0.kind == .added })
+    }
+
+    func testCanonicalEquivalentNativeDiffEditSaveModeSwitchAndReload() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("canonical.txt")
+        let composed = "café 中文👋\n"
+        let decomposed = "cafe\u{301} 中文👋\n"
+        try Data(composed.utf8).write(to: path)
+        let domain = "kero-canonical-edit-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.prefersEditing = true
+        let diff = DiffTab(repoRoot: directory.path, path: "canonical.txt", source: .worktree,
+                           untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil, preferences: preferences)
+        try await wait { !diff.isLoading && diff.display != nil }
+        diff.autoSaveSuspendedForClose = true
+        let host = NSHostingView(rootView: DiffViewerView(diff: diff))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(findNativeTextView(in: host, editable: true))
+        editor.insertText(decomposed, replacementRange: NSRange(location: 0, length: composed.utf16.count))
+        editor.breakUndoCoalescing()
+        XCTAssertEqual(Data(diff.editedNewContent.utf8), Data(decomposed.utf8))
+        XCTAssertTrue(diff.isDirty)
+        editor.undoManager?.undo()
+        XCTAssertFalse(diff.isDirty)
+        editor.undoManager?.redo()
+        XCTAssertTrue(diff.isDirty)
+        await diff.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data(decomposed.utf8))
+        XCTAssertFalse(diff.isDirty)
+        let oldDisplayID = diff.display?.id
+        diff.setEditing(false)
+        XCTAssertEqual(Data(diff.newContent.utf8), Data(decomposed.utf8))
+        if diff.newContent.utf8.elementsEqual(decomposed.utf8) {
+            try await wait { diff.display?.id != oldDisplayID }
+            XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.dropLast().utf8))
+        }
+        try Data(composed.utf8).write(to: path)
+        diff.reload()
+        try await wait { !diff.isLoading }
+        try await wait { diff.display?.computation.splitRight.text.utf8.elementsEqual(composed.dropLast().utf8) == true }
+        let newDisplayID = diff.display?.id
+        try Data(decomposed.utf8).write(to: path)
+        diff.reload()
+        try await wait { !diff.isLoading }
+        try await wait { diff.display?.id != newDisplayID }
+        XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.dropLast().utf8))
+    }
+
     private func findNativeSurface(in view: NSView) -> DiffNativeSurface? {
         if let surface = view as? DiffNativeSurface { return surface }
         return view.subviews.lazy.compactMap { self.findNativeSurface(in: $0) }.first
@@ -451,6 +670,72 @@ final class DiffTabTests: XCTestCase {
         }
     }
 
+    func testCRLFNativeReviewRowsAndEditUndoSavePreserveBytes() async throws {
+        let directory = try repository()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("crlf.txt")
+        let old = "one\r\nold\r\nlast\n"
+        let new = "one\r\nnew\r\nlast\n"
+        try Data(old.utf8).write(to: file)
+        for args in [["add", "."], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: directory.path).status, 0)
+        }
+        try Data(new.utf8).write(to: file)
+        let domain = "kero-crlf-native-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.prefersEditing = false
+        let diff = DiffTab(
+            repoRoot: directory.path, path: "crlf.txt", source: .worktree,
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil, preferences: preferences
+        )
+        try await wait { !diff.isLoading && diff.display != nil }
+        XCTAssertNil(diff.error)
+        XCTAssertEqual(Data(diff.oldContent.utf8), Data(old.utf8))
+        XCTAssertEqual(Data(diff.newContent.utf8), Data(new.utf8))
+        let display = try XCTUnwrap(diff.display)
+        XCTAssertEqual(display.computation.unified.rows.compactMap(\.oldLine), [1, 2, 3])
+        XCTAssertEqual(display.computation.unified.rows.compactMap(\.newLine), [1, 2, 3])
+        XCTAssertEqual(display.computation.splitLeft.rows.count, display.computation.splitRight.rows.count)
+        let decorated = DiffDecorations.review(display.computation.unified)
+        XCTAssertEqual(decorated.rows.count, 4)
+        XCTAssertEqual(decorated.lineStartOffsets.count, 4)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 830, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: diff))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        try await wait { self.findNativeTextView(in: host, editable: false) != nil }
+        let textView = try XCTUnwrap(findNativeTextView(in: host, editable: false))
+        XCTAssertEqual(Data((textView.attributedText?.string ?? "").utf8), Data(display.unifiedText.string.utf8))
+        diff.setDiffStyle(.split)
+        let surface = try XCTUnwrap(diff.nativeSurface)
+        try await wait { surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }.count == 2 }
+        diff.setDiffStyle(.unified)
+        diff.setEditing(true)
+        try await wait { self.findNativeTextView(in: host, editable: true) != nil }
+        let editor = try XCTUnwrap(findNativeTextView(in: host, editable: true))
+        let replacement = (try XCTUnwrap(editor.text) as NSString).range(of: "new")
+        XCTAssertNotEqual(replacement.location, NSNotFound)
+        editor.insertText("newer", replacementRange: replacement)
+        let edited = "one\r\nnewer\r\nlast\n"
+        XCTAssertEqual(Data(diff.editedNewContent.utf8), Data(edited.utf8))
+        editor.undoManager?.undo()
+        XCTAssertEqual(Data(diff.editedNewContent.utf8), Data(new.utf8))
+        editor.undoManager?.redo()
+        XCTAssertEqual(Data(diff.editedNewContent.utf8), Data(edited.utf8))
+        await diff.save()
+        XCTAssertNil(diff.error)
+        XCTAssertEqual(try Data(contentsOf: file), Data(edited.utf8))
+        diff.setEditing(false)
+        try await wait { diff.newContent.utf8.elementsEqual(edited.utf8) }
+    }
+
     func testNativeDiffUnicodeAndSplitAlignmentWithFoldExpansion() {
         let old = "one\r\n中文😀\r\nlast\n"
         let new = "one\r\n中文🪨\r\nlast"
@@ -691,6 +976,8 @@ final class DiffTabTests: XCTestCase {
         XCTAssertTrue(diff.isDirty)
         XCTAssertEqual(diff.newContent, baseline)
 
+        XCTAssertFalse(diff.isLoading, "Invalidated read must release its loading state")
+
         diff.updateEditedContent(baseline)
         XCTAssertFalse(diff.isDirty)
         await backend.pauseOneRead()
@@ -703,6 +990,7 @@ final class DiffTabTests: XCTestCase {
         XCTAssertNotNil(diff.readOnlyReason)
         XCTAssertEqual(diff.newContent, baseline)
         XCTAssertFalse(diff.isEditableNow)
+        XCTAssertFalse(diff.isLoading, "Disconnect must release the invalidated read")
     }
 
     func testGitReloadUpdatesCleanMountedEditSurfaceWithoutLosingDirtyText() async throws {

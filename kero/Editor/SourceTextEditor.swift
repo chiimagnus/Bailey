@@ -4,7 +4,6 @@
 //
 
 import AppKit
-import STPluginNeon
 import STTextView
 import SwiftUI
 
@@ -114,7 +113,7 @@ struct SourceTextEditor: NSViewRepresentable {
         apply(to: textView, scrollView: scrollView)
         textView.text = file.text
 
-        // Tree-sitter syntax highlighting (STPluginNeon), for file types with
+        // Tree-sitter syntax highlighting, for file types with
         // a bundled grammar. Added after the text is set so the plugin's
         // initial full-document parse — which runs when the view lands in a
         // window — sees the whole document. The plugin only layers foreground
@@ -213,6 +212,7 @@ struct SourceTextEditor: NSViewRepresentable {
     /// Guarded assignments: the font/color setters restyle the whole
     /// document, and this runs on every SwiftUI render.
     private func apply(to textView: STTextView, scrollView: NSScrollView) {
+        textView.isEditable = file.readOnlyReason == nil
         if textView.font != font {
             textView.font = font
         }
@@ -277,9 +277,7 @@ struct SourceTextEditor: NSViewRepresentable {
 
         func textViewDidChangeText(_ notification: Notification) {
             guard let textView, let file, file.editorCoordinator === self else { return }
-            let newText = textView.text ?? ""
-            guard newText != file.text else { return }
-            file.text = newText
+            file.text = textView.text ?? ""
             file.refreshDirtyState()
         }
 

@@ -272,72 +272,77 @@ nonisolated enum RemoteCommands {
             + "mv -f \"$1.kero-tmp\" \"$1\"' _ \(quote(path))"
     }
 
-    /// Counts the text lines of many files in ONE round trip.
-    ///
-    /// Asking per file costs two round trips each, which on a repository with a
-    /// few dozen untracked files is what pushes the Git snapshot past its
-    /// deadline. Paths arrive NUL-separated on standard input, so any filename
-    /// survives; one line comes back per path, `lines`, `bytesRead` and the
-    /// path itself, tab-separated with the path last because it is the only
-    /// field that may contain a tab.
-    ///
-    /// The rules match the local reader exactly: a symlink counts as one line
-    /// and no bytes, a file over the cap counts as nothing, a file whose first
-    /// 8 KB contain a NUL is binary and charges only that probe to the budget,
-    /// and a final line without a newline still counts.
-    ///
-    /// The script deliberately contains no single quote so it can be wrapped in
-    /// one, and runs under `bash` for its NUL-separated `read`.
     static func untrackedLineCountsCommand(
         totalByteBudget: Int, perFileByteCap: Int
     ) -> String {
         let script = """
+            set -o pipefail
             budget=\(totalByteBudget); cap=\(perFileByteCap)
+            count_bytes() {
+            od -An -v -tu1 | LC_ALL=C awk '{ for (i=1; i<=NF; i++) { n++; last=$i; if ($i==10) lines++; if ($i==0) binary=1 } } END { printf "%d %d %d %d", lines,n,last,binary }'
+            }
             while IFS= read -r -d "" p; do
             if [ "$budget" -le 0 ]; then break; fi
-            if [ -L "$p" ]; then printf "1\\t0\\t%s\\n" "$p"; continue; fi
-            if [ ! -f "$p" ]; then printf "0\\t0\\t%s\\n" "$p"; continue; fi
-            sz=$(stat -c %s -- "$p" 2>/dev/null || echo 0)
-            lim=$cap; if [ "$budget" -lt "$lim" ]; then lim=$budget; fi
-            if [ "$sz" -gt "$lim" ]; then printf "0\\t0\\t%s\\n" "$p"; continue; fi
-            if [ "$sz" -eq 0 ]; then printf "0\\t0\\t%s\\n" "$p"; continue; fi
-            probe=$(head -c 8000 -- "$p" | wc -c)
-            kept=$(head -c 8000 -- "$p" | LC_ALL=C tr -d "\\000" | wc -c)
-            if [ "$probe" -ne "$kept" ]; then
-            budget=$((budget - probe)); printf "0\\t%s\\t%s\\n" "$probe" "$p"; continue
+            if [ -L "$p" ]; then printf "1\\t0\\t1\\n"; continue; fi
+            if [ ! -f "$p" ]; then
+            if [ ! -e "$p" ]; then exit 1; fi
+            printf "0\\t0\\t0\\n"; continue
             fi
-            n=$(LC_ALL=C wc -l < "$p"); t=$(tail -c 1 -- "$p" | LC_ALL=C wc -l)
-            budget=$((budget - sz)); printf "%s\\t%s\\t%s\\n" "$((n + 1 - t))" "$sz" "$p"
+            sz=$(stat -c %s -- "$p") || exit 1
+            lim=$cap; if [ "$budget" -lt "$lim" ]; then lim=$budget; fi
+            if [ "$sz" -gt "$lim" ]; then printf "0\\t0\\t0\\n"; continue; fi
+            exec 3< "$p" || exit 1
+            probe=$lim; if [ "$probe" -gt 8000 ]; then probe=8000; fi
+            counts=$(dd bs="$probe" count=1 <&3 2>/dev/null | count_bytes) || exit 1
+            read -r lines bytes last binary <<< "$counts"
+            if [ "$binary" -eq 1 ]; then
+            exec 3<&-; budget=$((budget - bytes)); printf "0\\t%s\\t1\\n" "$bytes"; continue
+            fi
+            rest=$((lim - bytes))
+            if [ "$rest" -gt 0 ]; then
+            counts=$(dd bs="$rest" count=1 <&3 2>/dev/null | count_bytes) || exit 1
+            read -r more_lines more_bytes more_last ignored <<< "$counts"
+            lines=$((lines + more_lines)); bytes=$((bytes + more_bytes))
+            if [ "$more_bytes" -gt 0 ]; then last=$more_last; fi
+            fi
+            exec 3<&-
+            budget=$((budget - bytes))
+            sz=$(stat -c %s -- "$p") || exit 1
+            if [ "$sz" -ne "$bytes" ]; then printf "0\\t%s\\t0\\n" "$bytes"; continue; fi
+            if [ "$bytes" -gt 0 ] && [ "$last" -ne 10 ]; then lines=$((lines + 1)); fi
+            printf "%s\\t%s\\t1\\n" "$lines" "$bytes"
             done
             """
-        // The newlines stay: they are the statement separators, and they
-        // survive quoting on the way to the remote shell.
-        return "bash -c '" + script + "'"
+        return "bash -c " + quote(script)
     }
 
-    /// Paths for ``untrackedLineCountsCommand(totalByteBudget:perFileByteCap:)``
-    /// to read on standard input.
     static func untrackedLineCountsInput(paths: [String]) -> Data {
         var data = Data()
         for path in paths {
-            data.append(contentsOf: Array(path.utf8))
+            data.append(contentsOf: path.utf8)
             data.append(0)
         }
         return data
     }
 
     static func parseUntrackedLineCounts(
-        _ output: String
-    ) -> [(path: String, lines: Int, bytesRead: Int)] {
-        output.split(separator: "\n").compactMap { line in
-            let fields = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
-            guard fields.count == 3,
-                let lines = Int(fields[0]),
-                let bytes = Int(fields[1]),
-                !fields[2].isEmpty
-            else { return nil }
-            return (String(fields[2]), lines, bytes)
+        _ output: String, maximumFiles: Int, totalByteBudget: Int, perFileByteCap: Int
+    ) -> [(lines: Int, bytesRead: Int, complete: Bool)]? {
+        guard output.isEmpty || output.hasSuffix("\n") else { return nil }
+        let records = output.split(separator: "\n", omittingEmptySubsequences: false).dropLast()
+        guard records.count <= maximumFiles else { return nil }
+        var remainingBytes = totalByteBudget
+        var counts: [(lines: Int, bytesRead: Int, complete: Bool)] = []
+        for record in records {
+            let fields = record.split(separator: "\t", omittingEmptySubsequences: false)
+            guard fields.count == 3, let lines = Int(fields[0]), let bytes = Int(fields[1]),
+                  lines >= 0, bytes >= 0, bytes <= min(remainingBytes, perFileByteCap),
+                  lines <= bytes + 1, fields[2] == "0" || fields[2] == "1",
+                  fields[2] == "1" || lines == 0 else { return nil }
+            counts.append((lines, bytes, fields[2] == "1"))
+            remainingBytes -= bytes
         }
+        return counts
     }
 
     /// Which in-progress operation a repository is in, in one round trip.

@@ -7,27 +7,40 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Serialises tool-panel refreshes. Reading a panel costs a round trip
-/// per directory on a remote workspace, so a tick arriving while one refresh
-/// is in flight is folded into a single further pass rather than running
-/// alongside it — and never dropped, so a `cd` mid-refresh still lands.
+/// Coalesces refreshes for one panel target; a different target must not wait
+/// for an older SSH request to finish.
 @MainActor
-private final class PanelSyncQueue {
+final class PanelSyncQueue {
     private var isRunning = false
-    private var pending = false
+    private var target: PanelContext.Identity?
+    private var generation: UInt = 0
+    private var pendingBody: (() async -> Void)?
+    private var activeTask: Task<Void, Never>?
 
-    func run(_ body: @escaping () async -> Void) {
-        if isRunning {
-            pending = true
+    func run(for target: PanelContext.Identity?, _ body: @escaping () async -> Void) {
+        if isRunning && self.target == target {
+            pendingBody = body
             return
         }
+        activeTask?.cancel()
+        generation &+= 1
+        let currentGeneration = generation
+        self.target = target
         isRunning = true
-        Task { @MainActor in
-            repeat {
-                pending = false
-                await body()
-            } while pending
-            isRunning = false
+        pendingBody = nil
+        activeTask = Task { @MainActor in
+            var currentBody = body
+            while true {
+                await currentBody()
+                guard currentGeneration == generation else { return }
+                guard let next = pendingBody else {
+                    isRunning = false
+                    activeTask = nil
+                    return
+                }
+                pendingBody = nil
+                currentBody = next
+            }
         }
     }
 }
@@ -255,7 +268,9 @@ struct ToolPanelView: View {
         // Before the queue, not inside it: a refresh over a dead connection
         // waits out its deadlines, and the heading must not wait with it.
         applyRemoteHeading()
-        syncQueue.run { await performSync() }
+        syncQueue.run(for: manager.selectedProject?.panelContext?.identity) {
+            await performSync()
+        }
     }
 
     /// The heading belonging to the current connection.

@@ -5,10 +5,28 @@ import XCTest
 private actor DelayedWorkspaceFixture: WorkspaceBackend {
     let name: String
     private(set) var created: [String] = []
+    private(set) var renamed: [(String, String)] = []
     private(set) var statRequests = 0
+    private var pauseNextList = false
+    private var pausedList: CheckedContinuation<Void, Never>?
+    private(set) var awaitingList = false
     init(_ name: String) { self.name = name }
 
-    func list(directory: String) async throws -> [WorkspaceEntry] { [WorkspaceEntry(name: "tracked.txt", isDirectory: false, isSymlink: false)] }
+    func suspendNextList() { pauseNextList = true }
+    func releaseList() {
+        pausedList?.resume()
+        pausedList = nil
+        awaitingList = false
+    }
+    func list(directory: String) async throws -> [WorkspaceEntry] {
+        if pauseNextList {
+            pauseNextList = false
+            awaitingList = true
+            await withCheckedContinuation { pausedList = $0 }
+        }
+        let filename = name == "old-channel" ? "old.txt" : name == "new-channel" ? "new.txt" : "tracked.txt"
+        return [WorkspaceEntry(name: filename, isDirectory: false, isSymlink: false)]
+    }
     func stat(path: String) async throws -> WorkspaceStat? {
         if path.hasSuffix("stale.txt") {
             statRequests += 1
@@ -23,7 +41,7 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
     func write(path: String, data: Data) async throws {}
     func createFile(path: String) async throws { created.append(path); try await Task.sleep(for: .milliseconds(100)) }
     func createDirectory(path: String) async throws {}
-    func rename(from: String, to: String) async throws {}
+    func rename(from: String, to: String) async throws { renamed.append((from, to)) }
     func delete(paths: [String]) async throws {}
     func gitRoot(containing path: String) async throws -> String? {
         try await Task.sleep(for: .milliseconds(path == "/old" ? 100 : 5))
@@ -117,6 +135,133 @@ final class PanelContextTests: XCTestCase {
         XCTAssertEqual(firstProject.fileTree.rootPath, firstURL.path)
         XCTAssertTrue(firstProject.fileTree.items.contains { $0.path == firstURL.appendingPathComponent("one.txt").path })
         XCTAssertEqual(secondProject.fileTree.rootPath, secondURL.path)
+    }
+
+    func testFileTreeDoesNotPublishOldChannelAtSameRootAndScope() async throws {
+        let old = DelayedWorkspaceFixture("old-channel")
+        let replacement = DelayedWorkspaceFixture("new-channel")
+        await old.suspendNextList()
+        await replacement.suspendNextList()
+        let tree = FileTreeModel()
+        let first = Task { await tree.sync(root: "/root", backend: old, scope: "ssh:stable") }
+        try await wait { await old.awaitingList }
+        let second = Task { await tree.sync(root: "/root", backend: replacement, scope: "ssh:stable") }
+        try await wait { await replacement.awaitingList }
+        XCTAssertTrue(tree.items.isEmpty, "An old channel cannot publish while replacement is loading")
+        await replacement.releaseList()
+        await second.value
+        XCTAssertEqual(tree.items.map(\.path), ["/root/new.txt"],
+                       "The replacement must not wait for the stalled old channel")
+        await old.releaseList()
+        await first.value
+        XCTAssertEqual(tree.items.map(\.path), ["/root/new.txt"],
+                       "A late old channel must not overwrite the replacement")
+    }
+
+    func testPanelSyncQueueSwitchesTargetBeforeOldDirectoryCompletes() async throws {
+        let oldBackend = DelayedWorkspaceFixture("old-channel")
+        let freshBackend = DelayedWorkspaceFixture("new-channel")
+        await oldBackend.suspendNextList()
+        let tree = FileTreeModel()
+        let queue = PanelSyncQueue()
+        let project = UUID()
+        let oldTarget = PanelContext.Identity.pinned(
+            project: project, workspace: "ssh:fixture", directory: "/root/old"
+        )
+        let freshTarget = PanelContext.Identity.pinned(
+            project: project, workspace: "ssh:fixture", directory: "/root/new"
+        )
+        queue.run(for: oldTarget) {
+            await tree.sync(root: "/root", backend: oldBackend, scope: "ssh:fixture")
+        }
+        try await wait { await oldBackend.awaitingList }
+        queue.run(for: freshTarget) {
+            await tree.sync(root: "/root", backend: freshBackend, scope: "ssh:fixture")
+        }
+        let deadline = Date().addingTimeInterval(1)
+        while !tree.items.contains(where: { $0.path == "/root/new.txt" }), Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let publishedWhileOldBlocked = tree.items.map(\.path) == ["/root/new.txt"]
+        await oldBackend.releaseList()
+        XCTAssertTrue(publishedWhileOldBlocked, "A changed panel target must not wait for the old SSH request")
+        try await wait { tree.items.map(\.path) == ["/root/new.txt"] }
+    }
+
+    func testBackendSwitchClearsOldRowsAndDraftWithoutChangingPath() async throws {
+        let old = DelayedWorkspaceFixture("old-channel")
+        let fresh = DelayedWorkspaceFixture("new-channel")
+        let tree = FileTreeModel()
+        await tree.sync(root: "/root", backend: old, scope: "ssh:fixture")
+        XCTAssertEqual(tree.items.map(\.path), ["/root/old.txt"])
+        await tree.beginNewFile(in: "/root")
+        XCTAssertNotNil(tree.draft)
+        await fresh.suspendNextList()
+        let replace = Task { await tree.sync(root: "/root", backend: fresh, scope: "ssh:fixture") }
+        try await wait { await fresh.awaitingList }
+        XCTAssertTrue(tree.items.isEmpty, "Previous connection rows must not remain visible on the new channel")
+        XCTAssertNil(tree.draft, "A draft from the old connection must not target a new backend")
+        await fresh.releaseList()
+        await replace.value
+        XCTAssertEqual(tree.items.map(\.path), ["/root/new.txt"])
+    }
+
+    func testBackendSwitchDuringFileCreationAndRenameRejectsOldOperations() async throws {
+        let old = DelayedWorkspaceFixture("old-channel")
+        let fresh = DelayedWorkspaceFixture("new-channel")
+        let tree = FileTreeModel()
+        await tree.sync(root: "/root", backend: old, scope: "ssh:fixture")
+        await tree.beginNewFile(in: "/root")
+        let create = Task { await tree.commitDraft(name: "stale.txt") }
+        try await wait { await old.statRequests == 1 }
+        await tree.sync(root: "/root", backend: fresh, scope: "ssh:fixture")
+        let createdPath = await create.value
+        let createdByOldChannel = await old.created
+        XCTAssertNil(createdPath)
+        XCTAssertTrue(createdByOldChannel.isEmpty, "A stale channel must not create a file after replacement")
+
+        await tree.sync(root: "/root", backend: old, scope: "ssh:fixture")
+        let original = try XCTUnwrap(tree.items.first { $0.path == "/root/old.txt" })
+        let rename = Task { await tree.rename(original, to: "stale.txt") }
+        try await wait { await old.statRequests == 2 }
+        await tree.sync(root: "/root", backend: fresh, scope: "ssh:fixture")
+        let renamedPath = await rename.value
+        let renamedByOldChannel = await old.renamed
+        XCTAssertNil(renamedPath)
+        XCTAssertTrue(renamedByOldChannel.isEmpty, "A stale channel must not rename a file after replacement")
+    }
+
+    func testPanelSyncQueueCoalescesSameTargetWithLatestRequest() async throws {
+        let backend = DelayedWorkspaceFixture("old-channel")
+        await backend.suspendNextList()
+        let queue = PanelSyncQueue()
+        let target = PanelContext.Identity.pinned(
+            project: UUID(), workspace: "ssh:fixture", directory: "/root"
+        )
+        var completed: [String] = []
+        queue.run(for: target) {
+            _ = try? await backend.list(directory: "/root")
+            completed.append("first")
+        }
+        try await wait { await backend.awaitingList }
+        queue.run(for: target) { completed.append("superseded") }
+        queue.run(for: target) { completed.append("latest") }
+        await backend.releaseList()
+        try await wait { completed.count == 2 }
+        XCTAssertEqual(completed, ["first", "latest"])
+    }
+
+    func testOldTraversalCannotPublishAfterSwitchingRootOnSameBackend() async throws {
+        let backend = DelayedWorkspaceFixture("same-channel")
+        await backend.suspendNextList()
+        let tree = FileTreeModel()
+        let old = Task { await tree.sync(root: "/old", backend: backend, scope: "ssh:stable") }
+        try await wait { await backend.awaitingList }
+        await tree.sync(root: "/new", backend: backend, scope: "ssh:stable")
+        XCTAssertEqual(tree.items.map(\.path), ["/new/tracked.txt"])
+        await backend.releaseList()
+        await old.value
+        XCTAssertEqual(tree.items.map(\.path), ["/new/tracked.txt"])
     }
 
     func testLateFileCreationDoesNotPublishAfterTargetChanges() async throws {

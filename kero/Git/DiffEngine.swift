@@ -31,10 +31,13 @@ nonisolated enum DiffLineSplitter {
         var lines: [DiffSourceLine] = []
         var lineStart = text.startIndex
         var utf16Offset = 0
-        let end = text.endIndex
-        var index = lineStart
+        // CRLF is one Swift Character but two Unicode scalars. Git splits at
+        // the LF code point; retain the CR and the original UTF-16 offsets.
+        let scalars = text.unicodeScalars
+        let end = scalars.endIndex
+        var index = scalars.startIndex
         while index < end {
-            if text[index] == "\n" {
+            if scalars[index] == "\n" {
                 let content = text[lineStart..<index]
                 let length = content.utf16.count
                 lines.append(DiffSourceLine(
@@ -42,10 +45,10 @@ nonisolated enum DiffLineSplitter {
                     utf16Range: NSRange(location: utf16Offset, length: length)
                 ))
                 utf16Offset += length + 1
-                index = text.index(after: index)
+                index = scalars.index(after: index)
                 lineStart = index
             } else {
-                index = text.index(after: index)
+                index = scalars.index(after: index)
             }
         }
         let hasTrailingNewline = !text.isEmpty && lineStart == end
@@ -117,7 +120,7 @@ nonisolated enum DiffEngine {
 
         func linesEqual(_ oldIndex: Int, _ newIndex: Int) -> Bool {
             oldHashes[oldIndex] == newHashes[newIndex]
-                && oldTexts[oldIndex] == newTexts[newIndex]
+                && oldTexts[oldIndex].utf8.elementsEqual(newTexts[newIndex].utf8)
         }
     }
 
@@ -513,7 +516,7 @@ nonisolated enum DiffIntraline {
     /// would be noise. Token sequences are diffed with the same Myers used for
     /// lines (token counts are small).
     static func diff(old: Substring, new: Substring) -> DiffIntralineResult? {
-        guard old != new else { return nil }
+        guard !old.utf8.elementsEqual(new.utf8) else { return nil }
         let oldTokens = tokenize(old)
         let newTokens = tokenize(new)
         guard oldTokens.count <= tokenLimit, newTokens.count <= tokenLimit,
@@ -615,7 +618,7 @@ nonisolated enum DiffIntraline {
         into builder: inout TokenOpsBuilder
     ) {
         func equalTokens(_ oldIndex: Int, _ newIndex: Int) -> Bool {
-            oldTexts[oldIndex] == newTexts[newIndex]
+            oldTexts[oldIndex].utf8.elementsEqual(newTexts[newIndex].utf8)
         }
 
         let n = oldTexts.count

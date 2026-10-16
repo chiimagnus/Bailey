@@ -18,6 +18,7 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
     private var writing: PendingWrite?
     private var reading: [CheckedContinuation<Data, Error>] = []
     private var nextReadPaused = false
+    private(set) var readCount = 0
     private(set) var writingPath: String?
     private(set) var readingPath: String?
     var pendingReadCount: Int { reading.count }
@@ -45,13 +46,15 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
     func data(at path: String) -> Data? { files[path] }
 
     func read(path: String, maxBytes: Int) async throws -> Data {
+        readCount += 1
         guard let data = files[path] else { throw WorkspaceError.notFound }
+        guard data.count <= maxBytes else { throw WorkspaceError.tooLarge }
         if nextReadPaused {
             nextReadPaused = false
             readingPath = path
             return try await withCheckedThrowingContinuation { reading.append($0) }
         }
-        return Data(data.prefix(maxBytes))
+        return data
     }
     func write(path: String, data: Data) async throws {
         try await withCheckedThrowingContinuation { continuation in
@@ -65,7 +68,10 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
     func readSymlinkDestination(path: String) async throws -> String? { nil }
     func createFile(path: String) async throws { throw WorkspaceError.notFound }
     func createDirectory(path: String) async throws { throw WorkspaceError.notFound }
-    func rename(from: String, to: String) async throws { throw WorkspaceError.notFound }
+    func rename(from: String, to: String) async throws {
+        guard let data = files.removeValue(forKey: from) else { throw WorkspaceError.notFound }
+        files[to] = data
+    }
     func delete(paths: [String]) async throws { throw WorkspaceError.notFound }
     func gitRoot(containing path: String) async throws -> String? { nil }
     func isLinkedWorktree(_ root: String) async throws -> Bool { false }
@@ -81,12 +87,255 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
 
 @MainActor
 final class FileTabTests: XCTestCase {
+    func testCanonicalEquivalentNativeReplacementUndoAndSavePreserveBytes() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        let composed = "café 中文👋\r\n"
+        let decomposed = "cafe\u{301} 中文👋\r\n"
+        try Data(composed.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        editor.insertText(decomposed, replacementRange: NSRange(location: 0, length: composed.utf16.count))
+        editor.breakUndoCoalescing()
+        XCTAssertEqual(Data((editor.text ?? "").utf8), Data(decomposed.utf8))
+        XCTAssertEqual(Data(file.text.utf8), Data(decomposed.utf8))
+        XCTAssertTrue(file.isDirty)
+        editor.undoManager?.undo()
+        XCTAssertEqual(Data(file.text.utf8), Data(composed.utf8))
+        XCTAssertFalse(file.isDirty)
+        editor.undoManager?.redo()
+        XCTAssertTrue(file.isDirty)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data(decomposed.utf8))
+        XCTAssertFalse(file.isDirty)
+        editor.setMarkedText("中文", selectedRange: NSRange(location: 2, length: 0),
+                             replacementRange: NSRange(location: 0, length: decomposed.utf16.count))
+        editor.setMarkedText("中文👋", selectedRange: NSRange(location: 4, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+        editor.insertText("中文👋", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(Data(file.text.utf8), Data("中文👋".utf8))
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data("中文👋".utf8))
+    }
+
+    func testCanonicalEquivalentCleanReloadInstallsNewBytes() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        let composed = "café 中文👋\r\n"
+        let decomposed = "cafe\u{301} 中文👋\r\n"
+        try Data(composed.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        let revision = file.reloadRevision
+        try Data(decomposed.utf8).write(to: path)
+        file.reloadFromDiskIfClean()
+        try await file.waitForText()
+        XCTAssertEqual(Data(file.text.utf8), Data(decomposed.utf8))
+        XCTAssertEqual(file.reloadRevision, revision + 1)
+        let updated = file.reloadRevision
+        file.reloadFromDiskIfClean()
+        try await file.waitForText()
+        XCTAssertEqual(file.reloadRevision, updated, "Identical bytes must not replace the document")
+        XCTAssertFalse(file.isDirty)
+    }
+
+    func testCanonicalEquivalentEditDuringWriteRemainsDirty() async throws {
+        let path = "/fixture/canonical.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("baseline".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.text = "café"
+        file.refreshDirtyState()
+        let saving = Task { await file.save() }
+        try await wait { await backend.writingPath == path }
+        file.text = "cafe\u{301}"
+        file.refreshDirtyState()
+        await backend.finishWrite()
+        await saving.value
+        let stored = await backend.data(at: path)
+        XCTAssertEqual(stored, Data("café".utf8))
+        XCTAssertTrue(file.isDirty, "A completed write must not claim different current bytes were saved")
+        XCTAssertEqual(Data(file.text.utf8), Data("cafe\u{301}".utf8))
+    }
+
+    func testUnconsumedTabDoesNotReadAndWaitLoadsExactlyOnce() async throws {
+        let path = "/fixture/lazy.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        await Task.yield()
+        let before = await backend.readCount
+        XCTAssertEqual(before, 0)
+        try await backend.rename(from: path, to: "/fixture/renamed-lazy.txt")
+        file.updatePath("/fixture/renamed-lazy.txt")
+        await Task.yield()
+        let afterRename = await backend.readCount
+        XCTAssertEqual(afterRename, 0)
+        try await file.waitForText()
+        try await file.waitForText()
+        XCTAssertEqual(file.text, "original")
+        let after = await backend.readCount
+        XCTAssertEqual(after, 1)
+    }
+
+    func testInitialReadFollowsRenameAndOldReadCannotWin() async throws {
+        let backend = EditorWorkspaceFixture(path: "/fixture/old.txt", contents: Data("original".utf8))
+        await backend.pauseOneRead()
+        let file = FileTab(path: "/fixture/old.txt", backend: backend, workspaceIdentity: nil)
+        file.loadIfNeeded()
+        try await wait { await backend.pendingReadCount == 1 }
+        try await backend.rename(from: file.path, to: "/fixture/new.txt")
+        await backend.pauseOneRead()
+        file.updatePath("/fixture/new.txt")
+        try await wait { await backend.pendingReadCount == 2 }
+        await backend.finishRead(with: Data("stale".utf8))
+        XCTAssertEqual(file.text, "")
+        await backend.finishRead(with: Data("new path content".utf8))
+        try await file.waitForText()
+        XCTAssertEqual(file.text, "new path content")
+        XCTAssertEqual(file.path, "/fixture/new.txt")
+    }
+
+    func testLocalTextReadCapacityAndFailureKinds() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for count in [0, (5 << 20) - 1, 5 << 20, (5 << 20) + 1] {
+            let path = root.appendingPathComponent("\(count).txt")
+            try Data(repeating: 65, count: count).write(to: path)
+            let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            guard case .loading = file.content else { return XCTFail("init must remain lazy") }
+            if count <= 5 << 20 {
+                try await file.waitForText()
+                XCTAssertEqual(file.text.utf8.count, count)
+            } else {
+                do { try await file.waitForText(); XCTFail("Expected capacity rejection") } catch {}
+                guard case .unavailable(let reason) = file.content else { return XCTFail("Expected capacity placeholder") }
+                XCTAssertEqual(reason, String(localized: "File is too large to open", table: "Workspace"))
+            }
+        }
+        let missing = FileTab(path: root.appendingPathComponent("missing.txt").path,
+                              backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        do { try await missing.waitForText(); XCTFail("Expected missing read failure") } catch {}
+        guard case .unavailable(let reason) = missing.content else { return XCTFail("Expected read failure") }
+        XCTAssertEqual(reason, String(localized: "Could not read file", table: "Workspace"))
+        try Data("recovered".utf8).write(to: URL(fileURLWithPath: missing.path))
+        try await missing.waitForText()
+        XCTAssertEqual(missing.text, "recovered")
+    }
+
+    func testNativeReadOnlyRejectsAXValueAndSelectionReplacement() {
+        let editor = FocusReportingTextView()
+        editor.text = "original"
+        editor.isEditable = false
+        editor.textSelection = NSRange(location: 0, length: 8)
+        XCTAssertFalse(editor.isAccessibilitySelectorAllowed(#selector(editor.setAccessibilityValue(_:))))
+        editor.setAccessibilityValue("overwritten")
+        XCTAssertEqual(editor.text, "original")
+        editor.setAccessibilitySelectedText("overwritten selection")
+        XCTAssertEqual(editor.text, "original")
+        XCTAssertEqual(editor.accessibilityValue() as? String, "original")
+    }
+
+    func testMountedEditorDisconnectReconnectKeepsNativeBufferAndUndo() async throws {
+        let project = Project(fallbackName: "native read-only", workspaceConfiguration: .standard)
+        defer { project.terminateAll() }
+        let connection = RemoteConnection(user: "fixture", host: "invalid", port: 2222,
+            controlSocket: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString), sshPID: 0)
+        connection.workingDirectory = "/fixture"
+        connection.markConnected()
+        XCTAssertTrue(project.newSession().beginRemoteConnection(connection))
+        let backend = EditorWorkspaceFixture(path: "/fixture/file.txt", contents: Data("original".utf8))
+        let file = FileTab(path: "/fixture/file.txt", backend: backend, workspaceIdentity: connection.workspaceIdentity)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        file.text = "unsaved"
+        file.refreshDirtyState()
+        project.append(PaneTab(content: .file(file)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait { host.layoutSubtreeIfNeeded(); return self.mountedEditor(in: host) != nil }
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        XCTAssertTrue(editor.isEditable)
+        connection.markDisconnected(reason: "controlled outage")
+        try await wait { host.layoutSubtreeIfNeeded(); return !editor.isEditable }
+        editor.setAccessibilityValue("must not replace")
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: window.windowNumber, context: nil,
+            characters: "x", charactersIgnoringModifiers: "x", isARepeat: false, keyCode: 7))
+        editor.keyDown(with: event)
+        XCTAssertEqual(editor.text, "unsaved")
+        connection.markConnected()
+        try await wait { host.layoutSubtreeIfNeeded(); return editor.isEditable }
+        XCTAssertTrue(mountedEditor(in: host) === editor)
+        editor.insertText("new ", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(file.text, "new unsaved")
+        editor.breakUndoCoalescing()
+        editor.undoManager?.undo()
+        XCTAssertEqual(file.text, "unsaved")
+        XCTAssertTrue(file.isDirty)
+    }
+
+    func testFixedHostDisconnectRebindsDirtyFileWithoutLosingDraft() async throws {
+        let host = "fixture-\(UUID().uuidString)"
+        let project = Project(fallbackName: "fixed host", workspaceConfiguration: .standard)
+        project.sshHost = host
+        let path = "/fixture/file.txt"
+        let file = FileTab(path: path, backend: EditorWorkspaceFixture(path: path, contents: Data("original".utf8)),
+                           workspaceIdentity: "ssh:" + host)
+        try await file.waitForText()
+        file.text = "unsaved"
+        file.refreshDirtyState()
+        project.append(PaneTab(content: .file(file)))
+        SSHHostWorkspaces.setConnected(false, for: host)
+        XCTAssertNil(project.connectedWorkspace(for: "ssh:" + host))
+        try await wait { file.readOnlyReason != nil }
+        guard file.readOnlyReason != nil else { return }
+        await file.save()
+        XCTAssertEqual(file.text, "unsaved")
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        SSHHostWorkspaces.setConnected(true, for: host)
+        XCTAssertNil(file.readOnlyReason)
+        XCTAssertEqual(file.text, "unsaved")
+        XCTAssertTrue(file.isDirty)
+    }
+
+    func testFixedHostDisconnectBeforeLoadShowsReasonWithoutReading() async throws {
+        let host = "fixture-\(UUID().uuidString)"
+        let project = Project(fallbackName: "offline", workspaceConfiguration: .standard)
+        project.sshHost = host
+        let backend = EditorWorkspaceFixture(path: "/fixture/file.txt", contents: Data("original".utf8))
+        let file = FileTab(path: "/fixture/file.txt", backend: backend, workspaceIdentity: "ssh:" + host)
+        project.append(PaneTab(content: .file(file)))
+        SSHHostWorkspaces.setConnected(false, for: host)
+        guard case .unavailable(let reason) = file.content else { return XCTFail("Must not remain blank/loading") }
+        XCTAssertEqual(reason, file.readOnlyReason)
+        let reads = await backend.readCount
+        XCTAssertEqual(reads, 0)
+    }
+
     func testAppendWaitsForReplacementReadWithoutUsingLoadingOrCachedText() async throws {
         for initiallyLoading in [true, false] {
             let path = "/fixture/.gitignore"
             let backend = EditorWorkspaceFixture(path: path, contents: Data("cached\n".utf8))
             if initiallyLoading { await backend.pauseOneRead() }
             let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+            file.loadIfNeeded()
             file.autoSaveSuspendedForClose = true
             if !initiallyLoading {
                 try await wait { if case .text = file.content { return true }; return false }
@@ -123,6 +372,7 @@ final class FileTabTests: XCTestCase {
         let backend = EditorWorkspaceFixture(path: path, contents: Data("existing\n".utf8))
         await backend.pauseOneRead()
         let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        file.loadIfNeeded()
         try await wait { await backend.readingPath == path }
         let append = Task {
             try await file.waitForText()
@@ -160,6 +410,7 @@ final class FileTabTests: XCTestCase {
         let path = "/fixture/git/file.txt"
         let backend = EditorWorkspaceFixture(path: path, contents: Data("baseline".utf8))
         let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
+        try await file.waitForText()
         let tab = PaneTab(content: .file(file))
         project.append(tab)
         try await wait { if case .text = file.content { return true }; return false }
@@ -203,7 +454,9 @@ final class FileTabTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: outside) }
         let project = Project(fallbackName: "Aliases", workspaceConfiguration: .standard)
         let selected = FileTab(path: inside.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await selected.waitForText()
         let other = FileTab(path: outside.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await other.waitForText()
         project.append(PaneTab(content: .file(selected)))
         project.append(PaneTab(content: .file(other)))
         selected.text = "save selected"
@@ -234,6 +487,7 @@ final class FileTabTests: XCTestCase {
         try "before".write(to: firstURL, atomically: true, encoding: .utf8)
         let local = FileTab(path: firstURL.path, backend: LocalWorkspaceBackend.shared,
                             workspaceIdentity: nil)
+        try await local.waitForText()
         firstProject.append(PaneTab(content: .file(local)))
         local.text = "durably saved"
         local.refreshDirtyState()
@@ -248,7 +502,7 @@ final class FileTabTests: XCTestCase {
         let backend = EditorWorkspaceFixture(path: remotePath.path, contents: Data("old".utf8))
         let remote = FileTab(path: remotePath.path, backend: backend,
                              workspaceIdentity: "ssh:fixture")
-        try await wait { if case .text = remote.content { return true }; return false }
+        try await remote.waitForText()
         failingProject.append(PaneTab(content: .file(remote)))
         remote.text = "draft not yet persisted"
         remote.refreshDirtyState()
@@ -276,6 +530,7 @@ final class FileTabTests: XCTestCase {
         let url = root.appendingPathComponent("autosave.txt")
         try "original".write(to: url, atomically: true, encoding: .utf8)
         let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
         let project = Project(fallbackName: "autosave", workspaceConfiguration: .standard)
         let filePane = PaneTab(content: .file(file))
         project.append(filePane)
@@ -395,6 +650,7 @@ final class FileTabTests: XCTestCase {
         let url = root.appendingPathComponent("focus.txt")
         try "original".write(to: url, atomically: true, encoding: .utf8)
         let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -422,7 +678,7 @@ final class FileTabTests: XCTestCase {
         let path = "/fixture/\(UUID().uuidString).txt"
         let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
         let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
-        try await wait { if case .text = file.content { return true }; return false }
+        try await file.waitForText()
 
         file.text = "first🙂"
         file.refreshDirtyState()
@@ -481,6 +737,7 @@ final class FileTabTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(50))
         let backend = EditorWorkspaceFixture(path: path.path, contents: Data("baseline\n".utf8))
         let file = FileTab(path: path.path, backend: backend, workspaceIdentity: first.workspaceIdentity)
+        try await file.waitForText()
         project.append(PaneTab(content: .file(file)))
         try await wait { if case .text = file.content { return true }; return false }
         file.text = "old channel draft"
@@ -513,7 +770,7 @@ final class FileTabTests: XCTestCase {
         let original = "原文😀\r\n"
         let backend = EditorWorkspaceFixture(path: first, contents: Data(original.utf8))
         let file = FileTab(path: first, backend: backend, workspaceIdentity: "ssh:fixture")
-        try await wait { if case .text = file.content { return true }; return false }
+        try await file.waitForText()
         XCTAssertEqual(file.text, original)
         let pane = PaneTab(content: .file(file))
 
@@ -599,6 +856,7 @@ final class FileTabTests: XCTestCase {
             backend: EditorWorkspaceFixture(path: invalidPath, contents: Data([0xFF, 0x00, 0x80])),
             workspaceIdentity: "ssh:fixture"
         )
+        invalid.loadIfNeeded()
         try await wait { if case .loading = invalid.content { return false }; return true }
         guard case .unavailable = invalid.content else { return XCTFail("Expected binary placeholder") }
         XCTAssertFalse(invalid.isDirty)
@@ -609,6 +867,7 @@ final class FileTabTests: XCTestCase {
             backend: EditorWorkspaceFixture(path: largePath, contents: Data(repeating: 0x41, count: 5 * 1024 * 1024 + 1)),
             workspaceIdentity: "ssh:fixture"
         )
+        large.loadIfNeeded()
         try await wait { if case .loading = large.content { return false }; return true }
         guard case .unavailable = large.content else { return XCTFail("Expected size placeholder") }
         XCTAssertFalse(large.isDirty)
@@ -618,7 +877,7 @@ final class FileTabTests: XCTestCase {
         let path = "/fixture/\(UUID().uuidString).txt"
         let backend = EditorWorkspaceFixture(path: path, contents: Data("baseline".utf8))
         let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
-        try await wait { if case .text = file.content { return true }; return false }
+        try await file.waitForText()
         file.text = "unsaved"
         file.refreshDirtyState()
         let saving = Task { await file.save() }
@@ -641,7 +900,7 @@ final class FileTabTests: XCTestCase {
         let path = "/fixture/\(UUID().uuidString).txt"
         let backend = EditorWorkspaceFixture(path: path, contents: Data("baseline".utf8))
         let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
-        try await wait { if case .text = file.content { return true }; return false }
+        try await file.waitForText()
         let revision = file.reloadRevision
         await backend.pauseOneRead()
         file.reloadFromDiskIfClean()

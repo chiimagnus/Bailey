@@ -14,11 +14,9 @@ extension STTextView {
     func scrollToVisible(_ textRange: NSTextRange, type: NSTextLayoutManager.SegmentType) -> Bool {
         let viewportLayoutController = textLayoutManager.textViewportLayoutController
 
-        // Ensure layout for the target range before computing its rect
         textLayoutManager.ensureLayout(for: textRange)
+        updateContentSizeIfNeeded()
 
-        // If the range is outside the current viewport, relocate the viewport anchor
-        // so that TextKit2 lays out around the target location (O(1) jump)
         let isInViewport: Bool
         if let viewportRange = viewportLayoutController.viewportRange {
             if textRange.isEmpty {
@@ -31,11 +29,12 @@ extension STTextView {
         }
 
         if !isInViewport {
-            relocateViewport(to: textRange.location)
+            let suggestedAnchor = viewportLayoutController.relocateViewport(to: textRange.location)
+            var targetViewport = contentView.visibleRect
+            targetViewport.origin.y = suggestedAnchor
+            _ = contentView.scrollToVisible(targetViewport)
             layoutViewport()
         }
-
-        updateContentSizeIfNeeded()
 
         guard var rect = textLayoutManager.textSegmentFrame(in: textRange, type: type) else {
             return false

@@ -176,11 +176,11 @@ final class RemoteConnection: Identifiable, RemoteCommandRunner {
     // MARK: - Multiplex commands
 
     /// `ssh -S <socket> -O check <destination>`: does the master still answer?
-    nonisolated func check() async -> Bool {
+    nonisolated func check(timeout: TimeInterval = 5) async -> Bool {
         let result = await Self.runSSH(
             arguments: controlArguments + ["-O", "check", destination],
             stdin: nil,
-            timeout: 5
+            timeout: timeout
         )
         return result.status == 0
     }
@@ -207,16 +207,20 @@ final class RemoteConnection: Identifiable, RemoteCommandRunner {
         // happily with the network down, so it proves the socket is ours and
         // nothing more. It is kept as the cheap fast-fail; the channel options
         // below prevent a new transport even if the master exits next.
-        guard controlSocketExists, await check() else {
+        let started = ProcessInfo.processInfo.systemUptime
+        guard timeout > 0 else { throw WorkspaceError.timedOut }
+        guard controlSocketExists, await check(timeout: min(5, timeout)) else {
             await MainActor.run {
                 markDisconnected(reason: "control socket is gone")
             }
             throw RemoteConnectionError.notConnected
         }
+        let remaining = timeout - (ProcessInfo.processInfo.systemUptime - started)
+        guard remaining > 0 else { throw WorkspaceError.timedOut }
         return await Self.runSSH(
             arguments: controlArguments + ["-o", "BatchMode=yes", destination, "--"] + argv,
             stdin: stdin,
-            timeout: timeout
+            timeout: remaining
         )
     }
 

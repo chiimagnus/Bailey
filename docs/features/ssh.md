@@ -14,7 +14,7 @@ SSH 后端让文件和 Git 面板直接操作远端项目，不要求挂载文�
 
 复用既有 OpenSSH 配置、密钥和工作区 master。交互会话与文件／Git 操作不是同一条生命期路径：终端仍能输入，不足以证明后端连接正常。
 
-文件与 Git 操作使用已有 master；失联不能悄悄建立新的认证连接。保留批量执行和超时，避免改成逐文件往返或无限并发。
+文件与 Git 操作使用已有 master；失联不能悄悄建立新的认证连接。交互连接的命令超时包含本机 master 存活检查，检查结束后只使用剩余预算执行远端命令，不再额外叠加 5 秒。保留批量执行和超时，避免改成逐文件往返或无限并发。
 
 外部 Git 工具不会发出 Kero 终端的命令完成事件。当前 SSH 项目 Git 面板的前台可见刷新、暂停条件和失败提示由 [Git 刷新](git.md#刷新与显示) 统一维护；不增加独立的远端后台监控。
 
@@ -28,12 +28,14 @@ Git Ref 归档在所选 SSH 工作区的临时目录生成，经 Git 原生进�
 
 发布异步结果、开始副作用以及保存完成回写时，都核对当前绑定。旧通道的保存结果不能清除新通道／新目标的未保存标记。重连只恢复原机器上的操作能力，不通过创建另一份编辑缓冲来“修复”状态。
 
+固定 SSH 主机的命令结果也会通知项目重绑文件与 Diff；已知断线不再被当作可写后端，首次连接状态未知时仍允许原机器初读。面板查询或重新选择标签可探测原主机，成功后恢复原缓冲的操作资格；没有后台重连循环。
+
 远端删除不进入本机废纸篓。操作前确认范围和可恢复性，不能承诺像本机文件一样从废纸篓找回。安全边界统一见 [SECURITY.md](../../SECURITY.md)。
 
 ## 验证
 
 `RemoteCommandsTests`、`RemoteLifetimeTests` 和工作区身份回归检查命令、绑定、取消、失败与过期结果。受控后端只能证明这些逻辑，不能证明真实传输；真实 SSH 另用专用、获准的测试 master 验收，记录主机环境、断线保存、重连和最终文件结果。
 
-归档的验证分层：模拟 SSH 后端覆盖传输上限与远端清理失败；`GitWorkspaceSSHTests` 在真实 Windows SSH 中核对选定 Ref 的 ZIP 原始字节，远端分支经原生保存面板归档另有 [P4 现场证据](../../.github/features/git-manager-context-menus-graph/evidence-p4.md)。这些成功路径不代表断线时完整 App 的清理与恢复已完成验收。
+归档的验证分层：模拟 SSH 后端覆盖传输上限与远端清理失败；`GitWorkspaceSSHTests` 在获准的真实 Windows SSH 中核对选定 Ref 的 ZIP 原始字节。远端分支经原生保存面板归档仍需单独核对完整 App 操作；这些分层验证不代表断线时完整 App 的清理与恢复已完成验收。
 
 实现边界：[WorkspaceBackend.swift](../../kero/Workspace/WorkspaceBackend.swift)、[RemoteCommands.swift](../../kero/Remote/RemoteCommands.swift)。统一运行方式见 [testing.md](../testing.md)。

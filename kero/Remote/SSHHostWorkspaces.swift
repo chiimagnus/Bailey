@@ -44,13 +44,24 @@ nonisolated struct SSHHostCommandRunner: RemoteCommandRunner {
 /// user changes terminal tabs, and separate hosts cannot share the same path.
 @MainActor
 enum SSHHostWorkspaces {
+    static let connectionChanged = Notification.Name("Kero.SSHHostConnectionChanged")
     private static var workspaces: [String: SSHWorkspaceBackend] = [:]
     private static var connected: [String: Bool] = [:]
 
     static func connectionState(for host: String) -> Bool? { connected[host] }
 
     static func setConnected(_ value: Bool, for host: String) {
+        guard connected[host] != value else { return }
         connected[host] = value
+        NotificationCenter.default.post(name: connectionChanged, object: host)
+    }
+
+    static func retryConnection(for identity: String, path: String) {
+        guard identity.hasPrefix("ssh:") else { return }
+        let host = String(identity.dropFirst(4))
+        guard connected[host] == false else { return }
+        let workspace = backend(for: host)
+        Task { _ = try? await workspace.stat(path: path) }
     }
 
     static func backend(for host: String) -> SSHWorkspaceBackend {

@@ -350,6 +350,7 @@ final class PaneRetentionTests: XCTestCase {
         let browser = BrowserTab(initialFocus: .none)
         let browserTab = PaneTab(content: .browser(browser))
         let file = FileTab(path: filePath, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
         let fileTab = PaneTab(content: .file(file))
         let project = Project(fallbackName: "retention", workspaceConfiguration: .standard)
         project.append(browserTab)
@@ -438,6 +439,7 @@ final class PaneRetentionTests: XCTestCase {
         let contents = (0..<400).map { "Line \($0) 中文 😀\r\n" }.joined()
         try contents.write(to: path, atomically: true, encoding: .utf8)
         var file: FileTab? = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file?.waitForText()
         weak var releasedFile = file
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         let window = NSWindow(contentRect: container.frame, styleMask: [.titled], backing: .buffered, defer: false)

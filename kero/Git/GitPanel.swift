@@ -280,6 +280,7 @@ struct GitPanel: View {
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .help(String(localized: "Switch or Create Branch", table: "Sidebar"))
+        .disabled(!model.hasCurrentDetails)
         .accessibilityLabel(
             String(localized: "Current branch, \(model.branch ?? String(localized: "detached HEAD", table: "Sidebar"))", table: "Sidebar")
         )
@@ -350,6 +351,7 @@ struct GitPanel: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help(String(localized: "More Actions…", table: "Sidebar"))
+        .disabled(!model.hasCurrentDetails)
         .accessibilityLabel(String(localized: "More Git Actions", table: "Sidebar"))
     }
 
@@ -1323,7 +1325,7 @@ struct GitPanel: View {
                 actionButton(
                     icon: "arrow.triangle.2.circlepath",
                     title: syncButtonTitle,
-                    enabled: !model.isBusy,
+                    enabled: !model.isBusy && model.hasCurrentDetails,
                     isLoading: operationIsLoading(.syncButton),
                     help: String(localized: "Pull remote commits, then push local ones", table: "Sidebar"),
                     action: {
@@ -1414,7 +1416,7 @@ struct GitPanel: View {
 
     private var commitFieldPlaceholder: String {
         if model.stagedEntries.isEmpty {
-            return model.recentCommits.isEmpty
+            return !model.hasHead
                 ? String(localized: "Message (stage changes to use ⌘⏎)", table: "Sidebar")
                 : String(localized: "Message (stage changes to use ⌘⏎, or choose Amend)", table: "Sidebar")
         }
@@ -1459,7 +1461,7 @@ struct GitPanel: View {
     }
 
     private func canAmend(includeAll: Bool) -> Bool {
-        let hasCommit = !model.recentCommits.isEmpty
+        let hasCommit = model.hasHead
         let hasEligibleChanges = !includeAll
             || !model.changedEntries.isEmpty
             || !model.stagedEntries.isEmpty
@@ -1634,7 +1636,7 @@ struct GitPanel: View {
                             isLoadingMore: model.isLoadingMoreCommits,
                             loadMore: model.loadMoreCommits,
                             openDiff: openCommitDiff,
-                            canSwitchBranch: !model.isBusy,
+                            canSwitchBranch: !model.isBusy && model.hasCurrentDetails,
                             switchBranch: { name in
                                 switchBranchSafely(to: name)
                             },
@@ -1659,12 +1661,12 @@ struct GitPanel: View {
                             addTag: { commit in
                                 presentTagCreate(at: commit)
                             },
-                            canActOnCommit: !model.isBusy && model.repositoryOperation == nil,
+                            canActOnCommit: !model.isBusy && model.hasCurrentDetails && model.repositoryOperation == nil,
                             canDropCommit: model.canDrop,
                             commitAction: { commit, action in
                                 presentCommitDialog(commit, action: action)
                             },
-                            canActOnStash: !model.isBusy,
+                            canActOnStash: !model.isBusy && model.hasCurrentDetails,
                             stashAction: { stash, action in
                                 presentStashDialog(stash, action: action)
                             }
@@ -1829,11 +1831,11 @@ struct GitPanel: View {
     private var uncommittedMenuActions: [PanelSectionHeader.MenuAction] {
         [
             .init(title: String(localized: "Stash…", table: "Git"),
-                  disabled: model.isBusy || model.totalChangeCount == 0) { presentUncommittedDialog(.stash) },
+                  disabled: model.isBusy || !model.hasCurrentDetails || model.totalChangeCount == 0) { presentUncommittedDialog(.stash) },
             .init(title: String(localized: "Reset…", table: "Git"),
-                  disabled: model.isBusy || !model.hasHead) { presentUncommittedDialog(.reset) },
+                  disabled: model.isBusy || !model.hasCurrentDetails || !model.hasHead) { presentUncommittedDialog(.reset) },
             .init(title: String(localized: "Clean…", table: "Git"),
-                  disabled: model.isBusy) { presentUncommittedDialog(.clean) },
+                  disabled: model.isBusy || !model.hasCurrentDetails) { presentUncommittedDialog(.clean) },
         ]
     }
 

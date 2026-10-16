@@ -14,6 +14,7 @@
 		AA20000000000000000000A2 /* STTextView-Plugin-Neon in Frameworks */ = {isa = PBXBuildFile; productRef = AA20000000000000000000A1 /* STTextView-Plugin-Neon */; };
 		AA30000000000000000000A2 /* TreeSitterTSX in Frameworks */ = {isa = PBXBuildFile; productRef = AA30000000000000000000A1 /* TreeSitterTSX */; };
 		AA60000000000000000000A2 /* FuzzyMatch in Frameworks */ = {isa = PBXBuildFile; productRef = AA60000000000000000000A1 /* FuzzyMatch */; };
+		AA70000000000000000000A2 /* Neon in Frameworks */ = {isa = PBXBuildFile; productRef = AA70000000000000000000A1 /* Neon */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -58,6 +59,7 @@
 				AA20000000000000000000A2 /* STTextView-Plugin-Neon in Frameworks */,
 				AA30000000000000000000A2 /* TreeSitterTSX in Frameworks */,
 				AA60000000000000000000A2 /* FuzzyMatch in Frameworks */,
+				AA70000000000000000000A2 /* Neon in Frameworks */,
 			);
 		};
 		AA8000000000000000000005 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; files = (); };
@@ -128,6 +130,7 @@
 				AA20000000000000000000A1 /* STTextView-Plugin-Neon */,
 				AA30000000000000000000A1 /* TreeSitterTSX */,
 				AA60000000000000000000A1 /* FuzzyMatch */,
+				AA70000000000000000000A1 /* Neon */,
 			);
 			productName = kero;
 			productReference = FF3FDD73300B6A7400112486 /* Kero.app */;
@@ -174,6 +177,7 @@
 				AA10000000000000000000C0 /* XCLocalSwiftPackageReference "Vendor/STTextView" */,
 				AA10000000000000000000B0 /* XCRemoteSwiftPackageReference "libghostty-spm" */,
 				AA30000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/TreeSitterTSX" */,
+				AA70000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/Neon" */,
 				AA20000000000000000000A0 /* XCRemoteSwiftPackageReference "STTextView-Plugin-Neon" */,
 				AA60000000000000000000A0 /* XCRemoteSwiftPackageReference "FuzzyMatch" */,
 			);
@@ -428,6 +432,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/STTextView;
 		};
+		AA70000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/Neon" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/Neon;
+		};
 		AA30000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/TreeSitterTSX" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/TreeSitterTSX;
@@ -484,6 +492,10 @@
 		AA30000000000000000000A1 /* TreeSitterTSX */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TreeSitterTSX;
+		};
+		AA70000000000000000000A1 /* Neon */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Neon;
 		};
 		AA60000000000000000000A1 /* FuzzyMatch */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -4,6 +4,23 @@ import XCTest
 @testable import kero
 
 final class RemoteLifetimeTests: XCTestCase {
+    @MainActor
+    func testExhaustedMultiplexBudgetDoesNotStartALivenessCheck() async {
+        let connection = RemoteConnection(user: "fixture", host: "invalid", port: 2222,
+            controlSocket: URL(fileURLWithPath: "/tmp/kero-budget-" + UUID().uuidString), sshPID: 0)
+        for budget: TimeInterval in [0, -1] {
+            do {
+                _ = try await connection.run(["true"], timeout: budget)
+                XCTFail("Expected exhausted budget")
+            } catch {
+                guard case WorkspaceError.timedOut = error else {
+                    return XCTFail("Unexpected error: \(error)")
+                }
+            }
+            XCTAssertEqual(connection.state, .connecting)
+        }
+    }
+
     func testIndependentCommandRunnerPreservesStreamsAndBoundsPipes() throws {
         let normal = try ProcessRemoteCommandRunner.launch(
             sshPath: "/bin/sh",

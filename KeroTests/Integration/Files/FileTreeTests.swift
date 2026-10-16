@@ -153,6 +153,61 @@ final class FileTreeTests: XCTestCase {
                        ["candidate.txt", "existing.txt", "unique-smoke.txt"])
     }
 
+    func testExternalRefreshAndUnreadableRootPreservesDisplayedEntries() async throws {
+        let root = fixture.appendingPathComponent("external")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertTrue(tree.items.isEmpty)
+
+        let created = root.appendingPathComponent("created.txt")
+        try Data("created\n".utf8).write(to: created)
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertEqual(tree.items.map(\.path), [created.path])
+
+        let renamed = root.appendingPathComponent("renamed.txt")
+        try FileManager.default.moveItem(at: created, to: renamed)
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertEqual(tree.items.map(\.path), [renamed.path])
+
+        let savedRoot = fixture.appendingPathComponent("temporarily-unreachable")
+        try FileManager.default.moveItem(at: root, to: savedRoot)
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertEqual(tree.items.map(\.path), [renamed.path],
+                       "A failed directory read must not report an empty folder")
+        try FileManager.default.moveItem(at: savedRoot, to: root)
+        try FileManager.default.removeItem(at: renamed)
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertTrue(tree.items.isEmpty)
+    }
+
+    func testSymlinkDirectoryBrokenLinkAndCycleRemainBounded() async throws {
+        let root = fixture.appendingPathComponent("symlinks")
+        let nested = root.appendingPathComponent("real")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try Data("a".utf8).write(to: nested.appendingPathComponent("a.txt"))
+        try Data("b".utf8).write(to: nested.appendingPathComponent("b.txt"))
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("alias"),
+                                                    withDestinationURL: nested)
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("broken"),
+                                                    withDestinationURL: root.appendingPathComponent("absent"))
+        try FileManager.default.createSymbolicLink(at: nested.appendingPathComponent("loop"),
+                                                    withDestinationURL: nested)
+
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        let alias = try XCTUnwrap(tree.items.first { $0.path == root.appendingPathComponent("alias").path })
+        XCTAssertTrue(alias.isDirectory)
+        let broken = try XCTUnwrap(tree.items.first { $0.path == root.appendingPathComponent("broken").path })
+        XCTAssertFalse(broken.isDirectory)
+        await tree.toggle(alias)
+        XCTAssertTrue(tree.items.contains { $0.path == alias.path + "/a.txt" })
+        XCTAssertTrue(tree.items.contains { $0.path == alias.path + "/loop" })
+        let nestedCycle = try XCTUnwrap(tree.items.first { $0.path == alias.path + "/loop" })
+        await tree.toggle(nestedCycle)
+        XCTAssertLessThan(tree.items.count, 75, "Symlink loops cannot generate an unbounded tree")
+    }
+
     func testSharedTreeStatusAndCompaction() {
         let statuses: [(Character, TreeDisplayModel.Status)] = [
             ("M", .modified), ("A", .added), ("?", .untracked), ("D", .deleted),

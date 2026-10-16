@@ -58,26 +58,43 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 
 ### STTextView
 
-`Vendor/STTextView` 是基于 2.3.11 的本地副本，用于保留仍需维护的修复，不用上游 changelog 代替副本版本证据。
+`Vendor/STTextView` 是基于 2.3.11 的本地副本，用于保留仍需维护的修复，不用上游 changelog 代替副本版本证据。Kero 使用自己的 AppKit 视图桥接，不使用上游 `STTextViewSwiftUI`；本地包的库产品只链接 `STTextView`，避免构建无用的 SwiftUI 封装目标。
 
 | 修复 | 必须保持的行为 |
 | --- | --- |
 | 行号 | 字体或颜色变化后忽略已脱离视图的旧布局片段 |
 | 横向滚动 | 按最大内容宽度计算范围，不因末行较短截断长行 |
+| 查找定位 | 用原生目标锚点移动真实视口，不按中间位置缩短文档；远距离前后定位均显示目标 |
 | 短文档点击 | 文档高度至少覆盖视口，最后一行下方仍可聚焦 |
 | 空范围高亮 | 空范围不加临时属性，避免 TextKit 崩溃 |
 | Diff 固定行高 | 双栏只读文档高度准确，滚动范围一致 |
 | 只读替换 | 展开上下文或重载只读文本时保留滚动，普通编辑仍跟随插入点 |
+| 辅助功能只读 | 值／选中文本替换遵守原生 isEditable，文件与 Diff 共用底层保护 |
+| 组合输入 | 结束标记保留已输入正文；最终输入按组合范围替换，默认／显式范围和普通撤销不删字或重复插入 |
 
-补丁集中在 [STTextView+Gutter.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Gutter.swift)、[STTextView.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView.swift) 和 [STTextLayoutManager.swift](../Vendor/STTextView/Sources/STTextViewCommon/STTextLayoutManager.swift)。Kero 自己的裁切、内边距和字体初始化由 [SourceTextEditor.swift](../kero/Editor/SourceTextEditor.swift) 负责，不归入上游补丁。
+补丁集中在 [STTextView+Gutter.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Gutter.swift)、[STTextView.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView.swift)、[STTextView+Accessibility.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Accessibility.swift)、[STTextView+NSTextInputClient.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+NSTextInputClient.swift)、[STTextView+Scrolling.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Scrolling.swift) 和 [STTextLayoutManager.swift](../Vendor/STTextView/Sources/STTextViewCommon/STTextLayoutManager.swift)。Kero 自己的裁切、内边距和字体初始化由 [SourceTextEditor.swift](../kero/Editor/SourceTextEditor.swift) 负责，不归入上游补丁。
 
-升级时逐项检查上游是否已修复，删除不再需要的补丁，保留许可证和署名。运行 `FileTabTests`、`DiffTabTests` 并检查字体变化、长行、短文档、Markdown、高亮空范围、固定行高和只读替换滚动。全部修复被上游覆盖后才考虑撤销副本，不以升级成功替代功能验收。
+升级时逐项检查上游是否已修复，删除不再需要的补丁，保留许可证和署名。运行 `FileTabTests`、`DiffTabTests`、`EditorTextInputTests`、`EditorNavigationTests` 并检查字体变化、组合输入、长行、短文档、Markdown、高亮空范围、固定行高、远距离定位和只读替换滚动。全部修复被上游覆盖后才考虑撤销副本，不以升级成功替代功能验收。
+
+### Neon
+
+[Vendor/Neon](../Vendor/Neon/README.md) 保留当前固定依赖的最小核心与原始许可证，以同一 package 身份替换远程 Neon，不引入第二份 parser 或队列。补丁让异步失效范围随尚未完成的编辑转换后再交付；只校验 token 版本不能补救旧坐标被当作有效的样式。
+
+不引入未使用的旧 NSTextView／UIKit 适配，旧系统 actor／队列兼容桥由当前平台原生能力替代；不删除真实主队列约束。升级时检查上游是否已修复，运行 `SyntaxHighlightingTests` 的连续语义编辑、前方插入与最终视口着色，以及 `EditorTextInputTests`、`TextCoordinateIndexTests`、`DiffTabTests`。同时验证完整 XCTest、Debug／Release 构建和签名；不能以当前 Tree 正确代替实际颜色更新。
+
+查询使用当前 SwiftTreeSitter 匹配序列，在后台取匹配、主线程读取谓词，读取前后都核对请求版本。未使用的同步查询模式、弃用游标及 noChange 样式叠加路径不保留；根解析仍使用原串行队列和现有同步阈值。
+
+源码与 App 资源中的 BSD 许可证须保持一致，来源归 [NOTICE](../NOTICE.md)。
 
 ### 语法解析与 Diff
+
+Kero 只使用 `STTextView-Plugin-Neon` 中的语法、查询和默认配色资源；插件桥接及颜色字典由 Kero 自己持有，不再调用上游的插件适配、Theme／Fonts／TokenName 包装。上游包清单仍依赖 Neon，但 SwiftPM 实际只解析一份 `Vendor/Neon` 核心，不是两套运行时。该包没有单独的资源产品，彻底去包需要另行接管语法资源，不能只删除包引用而丢失语言支持。
 
 TSX 使用独立解析器，不能用普通 TypeScript 替代。`Vendor/TreeSitterTSX` 的来源是 `STTextView-Plugin-Neon` 固定提交 `5a30db4ce7908a5414e7b499e2379bdc49991cd1`，与工程依赖匹配。升级时从目标提交的 `Sources/TreeSitterTSX/` 更新 `include/` 和 `src/`，并核对插件查询与工程所用运行库的兼容性，不把查询或运行库一并复制进本地解析器包。
 
 高亮查询由插件提供，Kero 合并 TypeScript 与 JSX 查询，不复制一份手工查询。更新后检查 TypeScript、TSX 元素／属性／表达式及 Markdown／HTML 嵌入语言。
+
+2026-10-16 已在隔离环境对照官方 `STTextView-Plugin-TreeSitter` 的 `346bbce` 版本：TypeScript／TSX 缺少 JavaScript／JSX 基础高亮，视口变化会触发全文重新解析，因此**暂不替换**当前 Neon／TSX。只有在上游解决这两项问题，并逐项核对 STTextView 本地补丁、输入／滚动性能及 Editor／Diff 回归后才重新评估；见 [P7 证据](../.github/features/editor-git-performance/evidence-p7.md)和[审计](../.github/features/editor-git-performance/audit-p7.md)。
 
 Diff 复用现有 STTextView/TextKit 与语法依赖，不引入 PierreDiffsSwift 或 WebKit 渲染；约束见 [diff.md](features/diff.md)。
 

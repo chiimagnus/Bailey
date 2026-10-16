@@ -4,6 +4,7 @@
 //
 
 import AppKit
+import Combine
 import Foundation
 import Observation
 
@@ -67,6 +68,7 @@ final class Project: nonisolated Identifiable {
     /// opening a file — counts as a use.
     @ObservationIgnored private var recentTabIDs: [UUID] = []
     @ObservationIgnored private var isRemoteTabRebindPending = false
+    @ObservationIgnored private var hostConnectionObservation: AnyCancellable?
 
     @ObservationIgnored var onSnapshotChange: (() -> Void)?
     private let fallbackName: String
@@ -75,6 +77,12 @@ final class Project: nonisolated Identifiable {
         self.fallbackName = fallbackName
         dock = DockWorkspaceModel(configuration: workspaceConfiguration)
         dock.onSnapshotChange = { [weak self] in self?.onSnapshotChange?() }
+        hostConnectionObservation = NotificationCenter.default
+            .publisher(for: SSHHostWorkspaces.connectionChanged)
+            .sink { [weak self] notification in
+                guard let self, let host = notification.object as? String, self.sshHost == host else { return }
+                self.rebindRemoteTabs()
+            }
     }
 
     var name: String {
@@ -403,6 +411,7 @@ final class Project: nonisolated Identifiable {
     /// project makes those tabs writable again.
     func connectedWorkspace(for identity: String) -> WorkspaceBackend? {
         if let sshHost, identity == "ssh:" + sshHost {
+            guard SSHHostWorkspaces.connectionState(for: sshHost) != false else { return nil }
             return SSHHostWorkspaces.backend(for: sshHost)
         }
         for session in sessions {
@@ -458,6 +467,9 @@ final class Project: nonisolated Identifiable {
         // lookup below cannot reuse a tab from another machine.
         let context = selectedSession
         if let tab = findFileTab(path: path, workspace: workspaceIdentity) {
+            if selectedTabID == tab.id, let workspaceIdentity {
+                SSHHostWorkspaces.retryConnection(for: workspaceIdentity, path: path)
+            }
             selectedTabID = tab.id
             return
         }
@@ -585,9 +597,10 @@ final class Project: nonisolated Identifiable {
             workspace: workspaceIdentity
         ),
            case .diff(let diff) = tab.content {
+            let changed = diff.untracked != untracked || diff.origPath != origPath
             diff.untracked = untracked
             diff.origPath = origPath
-            diff.reload()
+            if changed || !diff.isLoading { diff.reload() }
             selectedTabID = tab.id
             return
         }
@@ -624,8 +637,11 @@ final class Project: nonisolated Identifiable {
         if let tab = findDiffTab(repoRoot: repoRoot, path: path,
                                  source: source, workspace: workspaceIdentity),
            case .diff(let diff) = tab.content {
+            let changed = diff.origPath != origPath
             diff.origPath = origPath
-            diff.reload()
+            if changed || (!diff.isLoading && (source.isLive || diff.error != nil || !diff.hasLoadedContent)) {
+                diff.reload()
+            }
             selectedTabID = tab.id
             return
         }
