@@ -51,4 +51,4 @@
 | [P2](plan-p2.md) | Ref 分组、符号别名区分、分段标签及各段操作 |
 | [P3](plan-p3.md) | 提交行布局、悬停反馈与完整可比 UI/UX 验收 |
 
-实现时以 `docs/features/git.md` 的 Git 不变量、`docs/ui.md` 的共享 UI 约束和 `docs/testing.md` 的完成标准为准；本规划与并行进行的 [编辑器／Git 性能计划](../editor-git-performance/idea.md) 不互相代替。
+实现时以 `docs/features/git.md` 的 Git 不变量、`docs/ui.md` 的共享 UI 约束和 `docs/testing.md` 的完成标准为准；本规划与此前已完成的编辑器／Git 性能优化不互相代替。
