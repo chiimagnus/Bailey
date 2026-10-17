@@ -356,7 +356,9 @@ nonisolated enum ProcessRemoteCommandRunner {
         } catch {
             return (-1, Data(), Data(error.localizedDescription.utf8))
         }
-        let writer = stdinPipe.flatMap { pipe in stdin.map { ProcessStdinWriter(data: $0, pipe: pipe) } }
+        let writer = stdinPipe.flatMap { pipe in
+            stdin.map { ProcessStdinWriter(data: $0, pipe: pipe, timeout: timeout) }
+        }
         let outFD = stdoutPipe.fileHandleForReading.fileDescriptor
         let errFD = stderrPipe.fileHandleForReading.fileDescriptor
         for descriptor in [outFD, errFD] {

@@ -84,6 +84,31 @@ private actor LocalShellRunnerFixture: RemoteCommandRunner {
 }
 
 final class RemoteCommandsTests: XCTestCase {
+    func testSuccessfulParentExitCannotHideStalledStdinDescendant() async throws {
+        let command = "sleep 2 <&0 >/dev/null 2>&1 & exit 0"
+        let payload = Data(repeating: 0x41, count: 1 << 20)
+
+        let localStart = ProcessInfo.processInfo.systemUptime
+        do {
+            let result = try await LocalWorkspaceBackend.shared.run(
+                argv: ["/bin/sh", "-c", command], cwd: nil, env: nil,
+                stdin: payload, timeout: 0.25
+            )
+            XCTAssertNotEqual(result.status, 0, "Unconsumed stdin cannot be considered successful")
+        } catch {}
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - localStart, 1.5,
+                          "Local process timeout must include outstanding stdin")
+
+        let remoteStart = ProcessInfo.processInfo.systemUptime
+        let remote = ProcessRemoteCommandRunner.run(
+            sshPath: "/bin/sh", arguments: ["-c", command],
+            stdin: payload, timeout: 0.25
+        )
+        XCTAssertNotEqual(remote.status, 0, "Unconsumed stdin cannot be considered successful")
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - remoteStart, 1.5,
+                          "Remote process timeout must include outstanding stdin")
+    }
+
     func testLocalProcessClosedStdinReturnsStatusWithoutTerminatingHost() async throws {
         let result = try await LocalWorkspaceBackend.shared.run(
             argv: ["/bin/sh", "-c", "exit 52"], cwd: nil, env: nil,
