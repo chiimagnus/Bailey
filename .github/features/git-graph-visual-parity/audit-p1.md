@@ -36,6 +36,7 @@
 - 预期修复：`沿唯一 CommitGraphRails Canvas 绘图路径，在轨道色和当前主题 sidebar 实际背景对比不足3:1时才用高对比黑/白 1pt 细底衬；轨道及节点保留原始12色与真实父边，不添加主题配置或独立第二色盘；每个 Canvas 绘制只计算12色一次`
 - 验证：`测试先基于现有60个内置主题×12调色板720个组合确认低对比场景；在 NativeUI 添加全部720组合的路径/衬线对比度判定与浅/深绘制测试；运行 Git Graph UI、图谱、完整401+授权 SSH、Debug+Release签名。`
 - 解决证据：`Red: read-only analyze all built-in Kero Ghostty themes (60) ×12 palette (720), 124 graph path vs actual theme sidebar backgrounds <2:1, lowest TokyoNight Day yellow 1.169:1. Root fix 603ced3: existing CommitGraphRails.Canvas renders a high-contrast 1pt underlying halo only if path contrast <3:1, for all link/HEAD/Stash nodes/expanded bottom rails, retaining 12 exact path colors; helper reused existing sRGB luminance. Green: RecentCommitsViewTests 24/24, new 720-combination contrast assertions with actual Theme.commonDarkThemes + commonLightThemes and other native click/scroll/menu tests. Logs /tmp/kero-graph-audit-60theme-720colors-20261017.log /tmp/kero-graph-audit-theme-postpatch-final-20261017.log; no user theme settings modified.`
+- 后续产品决策（2026-10-17）：用户明确要求取消黑／白对比度轮廓；已撤销 `603ced3` 新增的全部描边、颜色判定、专用断言及说明文案。本条仅保留当时的历史审计证据，**当前不再提供或要求自动高对比度描边**。
 
 
 ## 发现 F-14
