@@ -1,3 +1,5 @@
+import Foundation
+
 /// Commit rails use the loaded Git DAG; stash rails use their existing base-commit display link.
 nonisolated struct CommitGraphLayout {
     struct Node: Equatable {
@@ -84,6 +86,10 @@ nonisolated struct CommitGraphLayout {
         }
 
         var graph = nodes.map { Row(node: $0!) }
+        var occupied: [Int: IndexSet] = [:]
+        for (index, row) in graph.enumerated() {
+            occupied[row.node.lane, default: IndexSet()].insert(index)
+        }
         var largestLane = nodes.compactMap(\.self).map(\.lane).max() ?? -1
         for (index, commit) in commits.enumerated() {
             let from = graph[index].node
@@ -94,17 +100,7 @@ nonisolated struct CommitGraphLayout {
                 let between = (index + 1)..<parentIndex
 
                 func clear(_ lane: Int) -> Bool {
-                    between.allSatisfy { row in
-                        guard graph[row].node.lane != lane else { return false }
-                        return !graph[row].links.contains { link in
-                            switch link {
-                            case .incoming(let rail), .outgoing(let rail), .through(let rail):
-                                return rail.lane == lane
-                            case .depart(let a, let b, _), .arrive(let a, let b, _):
-                                return a == lane || b == lane
-                            }
-                        }
-                    }
+                    occupied[lane]?.intersects(integersIn: between) != true
                 }
 
                 var lane = parentOffset == 0 ? from.lane : to.lane
@@ -117,6 +113,7 @@ nonisolated struct CommitGraphLayout {
                     }
                 }
                 largestLane = max(largestLane, lane)
+                occupied[lane, default: IndexSet()].insert(integersIn: index..<(parentIndex + 1))
                 let rail = Rail(lane: lane, color: color)
                 if from.lane == lane {
                     graph[index].links.append(.outgoing(rail))

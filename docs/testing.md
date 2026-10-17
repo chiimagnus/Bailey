@@ -92,7 +92,7 @@ Xcode TestAction 向 Debug 宿主传入 `--isolated-ui-test`，不通过 XCTest 
 open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Kero.app" --args --isolated-ui-test
 ```
 
-该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。刻意测试重启恢复时，两次启动显式传入同一有效 UUID 环境变量 `KERO_UI_TEST_RUN_ID`。
+该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。隔离 XCTest 宿主会移除自身菜单中的 `⌘Q` 退出快捷键：Mac 的键盘和前台应用状态仍由各进程共享，普通 Kero 的退出快捷键不能误结束长时间运行的测试宿主；正式 Kero 的菜单及保存退出保护不变。该隔离不是独立的图形登录会话，执行原生 UI 回归时仍应避免与用户正在进行的前台快捷键／鼠标操作互相干扰。刻意测试重启恢复时，两次启动显式传入同一有效 UUID 环境变量 `KERO_UI_TEST_RUN_ID`。
 
 **普通设置仍然共享。** 隔离实例中不得直接改写用户设置；确需设置测试时使用独立 Home，并核实真正的配置、UserDefaults 与数据写入位置。临时文件、Git 仓库和受控后端不得指向正式项目。
 

@@ -1484,6 +1484,61 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(rows.first { $0.hash == side }?.files.map(\.path), ["side.txt"])
     }
 
+    func testGitGraphParsesRealSHA256MergeAndUnicodeRemoteDecorations() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kero-graph-sha256-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        func git(_ args: [String]) throws -> String {
+            let result = GitCommandExecution.run(args, in: directory.path, timeout: 15)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = try git(["init", "-q", "--object-format=sha256", "-b", "main"])
+        _ = try git(["config", "user.name", "Graph SHA256 Test"])
+        _ = try git(["config", "user.email", "sha256@invalid"])
+        _ = try git(["config", "commit.gpgsign", "false"])
+        _ = try git(["commit", "--allow-empty", "-qm", "root"])
+        _ = try git(["switch", "-qc", "修复/topic,β"])
+        _ = try git(["commit", "--allow-empty", "-qm", "side"])
+        let side = try git(["rev-parse", "HEAD"])
+        _ = try git(["switch", "-q", "main"])
+        _ = try git(["commit", "--allow-empty", "-qm", "main"])
+        let main = try git(["rev-parse", "HEAD"])
+        _ = try git(["merge", "--no-ff", "-qm", "merge", "修复/topic,β"])
+        let head = try git(["rev-parse", "HEAD"])
+        XCTAssertEqual(head.count, 64)
+        _ = try git(["tag", "版本,β"])
+        _ = try git(["remote", "add", "origin", directory.path])
+        _ = try git(["remote", "add", "upstream", directory.path])
+        _ = try git(["update-ref", "refs/remotes/origin/main", head])
+        _ = try git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"])
+        _ = try git(["symbolic-ref", "refs/remotes/origin/ALIAS", "refs/remotes/origin/main"])
+        _ = try git(["update-ref", "refs/remotes/upstream/HEAD", head])
+
+        let model = GitStatusModel()
+        model.sync(root: directory.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let commit = try XCTUnwrap(model.recentCommits.first { $0.hash == head })
+        XCTAssertEqual(commit.hash.count, 64)
+        XCTAssertEqual(commit.parentHashes, [main, side])
+        XCTAssertEqual(Set(commit.references), Set([
+            .init(kind: .currentBranch, name: "main"),
+            .init(kind: .tag, name: "版本,β"),
+            .init(kind: .remoteBranch, name: "origin/main"),
+            .init(kind: .remoteBranch, name: "upstream/HEAD"),
+            .init(kind: .remoteAlias, name: "origin/HEAD"),
+            .init(kind: .remoteAlias, name: "origin/ALIAS"),
+        ]))
+        XCTAssertEqual(
+            model.recentCommits.first { $0.hash == side }?.references,
+            [.init(kind: .localBranch, name: "修复/topic,β")]
+        )
+        XCTAssertEqual(CommitGraphLayout(commits: model.graphCommits).knownHeadHistory.count,
+                       4, "Both parents and the root must remain reachable from HEAD")
+    }
+
     func testGitGraphUsesCommitDateOrderWithoutBreakingMergeParents() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("kero-git-order-" + UUID().uuidString)
