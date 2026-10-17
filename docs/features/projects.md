@@ -23,6 +23,8 @@
 
 本机资源只交给本机后端。规范化路径和符号链接按文件系统事实判断；失效链接、包目录及非本机 URL 不被当成普通目录项目。原有自动保存仍由项目／标签失焦触发，外部打开不新增另一个写入路径。
 
+系统文件入口使用同一份 `Info.plist` 的 `CFBundleDocumentTypes` 将文本、图片和目录注册为 **Alternate**（备用程序）。`BaileyApplicationDelegate.application(_:openFiles:)` 接收 AppKit 文件批次后交给 `TerminalManager.openExternalFiles`；仅在已有窗口或恢复后的文件路由完成时回告系统。此入口不替换 Finder Service `openInBailey`，也不拦截任意非文件网页 URL。文件声明表示 Bailey 是候选打开程序，**不保证未知／二进制文件可编辑**。
+
 ## 切换、关闭与失败
 
 异步根目录查询、文件读取和动作在发布或执行前再次核对发起项目与机器身份。切换后旧结果不得覆盖新项目，也不能因读取失败打开另一个目标。

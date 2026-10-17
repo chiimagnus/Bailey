@@ -25,6 +25,79 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         }
     }
 
+    func testAppDelegateOpenFilesUsesTheActualMountedFileBuffers() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let first = folder.appendingPathComponent("入口.swift")
+        let second = folder.appendingPathComponent("two.json")
+        try "let value = 42".write(to: first, atomically: true, encoding: .utf8)
+        try "{\"number\":7}".write(to: second, atomically: true, encoding: .utf8)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 750, height: 490),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return manager.attachedWindow === window
+        }
+
+        let delegate = BaileyApplicationDelegate()
+        delegate.application(NSApp, openFiles: [first.path, second.path])
+        let project = try XCTUnwrap(manager.selectedProject)
+        XCTAssertEqual(manager.projects.count, 1)
+        XCTAssertEqual(project.customDirectory, folder.path)
+        XCTAssertNil(project.pinnedFile)
+        XCTAssertEqual(project.tabs.filter { $0.content.isFile }.count, 2)
+        guard case .file(let opened) = try XCTUnwrap(project.selectedTab).content else {
+            return XCTFail("The system callback must create a real file content tab")
+        }
+        try await opened.waitForText()
+        XCTAssertEqual(opened.text, "{\"number\":7}")
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "let value = 42")
+        XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "{\"number\":7}")
+
+        let existing = opened
+        delegate.application(NSApp, openFiles: [second.path])
+        guard case .file(let reused) = try XCTUnwrap(manager.selectedProject?.selectedTab).content
+        else { return XCTFail("The previous buffer must still exist") }
+        XCTAssertTrue(reused === existing)
+        XCTAssertEqual(manager.projects.count, 1)
+        XCTAssertEqual(project.tabs.count, 2)
+
+        delegate.application(NSApp, openFiles: [folder.path])
+        XCTAssertEqual(manager.projects.count, 1, "Opening a directory reuses the existing root")
+        XCTAssertEqual(manager.selectedProject?.customDirectory, folder.path)
+        XCTAssertEqual(project.tabs.count, 2, "A folder is a project, not a file editor")
+
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let imagePath = folder.appendingPathComponent("example.png")
+        try png.write(to: imagePath)
+        delegate.application(NSApp, openFiles: [imagePath.path])
+        guard case .file(let preview) = try XCTUnwrap(project.selectedTab).content else {
+            return XCTFail("System image open should create a native preview tab")
+        }
+        preview.loadIfNeeded()
+        try await wait {
+            if case .image = preview.content { return true }
+            return false
+        }
+        XCTAssertEqual(project.tabs.count, 3)
+        XCTAssertEqual(try Data(contentsOf: imagePath), png)
+    }
+
     func testExternalOpenFindsExistingFileInOtherWindowBeforeCreatingAnEditor() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let firstRoot = root.appendingPathComponent("first")

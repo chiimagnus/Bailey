@@ -31,6 +31,15 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
         NSApp.servicesProvider = self
     }
 
+    /// The one AppKit document-file entry point. Document types are declared
+    /// by the existing Info.plist, so application(_:open:) must not be added:
+    /// that callback excludes declared document types and supersedes openFiles.
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        TerminalManager.openExternalFiles(filenames.map { URL(fileURLWithPath: $0) }) { handled in
+            sender.reply(toOpenOrPrint: handled ? .success : .failure)
+        }
+    }
+
     /// Opens every directory Finder placed on the service pasteboard as a
     /// project in the active Bailey window.
     @objc func openInBailey(
