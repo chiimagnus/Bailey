@@ -105,6 +105,28 @@ final class RecentCommitsViewTests: XCTestCase {
         }
     }
 
+    func testPaletteIconsRemainReadableOverEveryGraphColor() {
+        func luminance(_ color: NSColor) -> CGFloat {
+            let rgb = color.usingColorSpace(.sRGB)!
+            func channel(_ value: CGFloat) -> CGFloat {
+                value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * channel(rgb.redComponent)
+                + 0.7152 * channel(rgb.greenComponent)
+                + 0.0722 * channel(rgb.blueComponent)
+        }
+
+        XCTAssertEqual(GitGraphPalette.iconInks.count, GitGraphPalette.colors.count)
+        for (index, background) in GitGraphPalette.colors.enumerated() {
+            let ink = GitGraphPalette.iconInks[index]
+            let lighter = max(luminance(background), luminance(ink))
+            let darker = min(luminance(background), luminance(ink))
+            let contrast = (lighter + 0.05) / (darker + 0.05)
+            XCTAssertGreaterThanOrEqual(contrast, 4.5,
+                "Palette color \(index) must keep the Git icon legible")
+        }
+    }
+
     func testHeadAndStashGraphGutterRemainsClickableInBothAppearances() throws {
         let stash = GitStatusModel.Stash(
             selector: "stash@{0}", oid: String(repeating: "d", count: 40),
