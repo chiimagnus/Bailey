@@ -1474,6 +1474,7 @@ final class GitStatusModelTests: XCTestCase {
                 .init(kind: .localBranch, name: "release/stable"),
                 .init(kind: .localBranch, name: "feature,hotfix"),
                 .init(kind: .remoteBranch, name: "origin/main"),
+                .init(kind: .remoteAlias, name: "origin/HEAD"),
                 .init(kind: .tag, name: "v1.0"),
                 .init(kind: .tag, name: "v1,hotfix"),
             ])

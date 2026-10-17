@@ -1630,6 +1630,7 @@ struct GitPanel: View {
                     if !historyCollapsed {
                         RecentCommitsView(
                             commits: graphCommits,
+                            remotes: model.remotes,
                             stashFilesByOID: model.stashFilesByOID,
                             repoRoot: model.repoRoot,
                             fileAction: { commit, file, action in

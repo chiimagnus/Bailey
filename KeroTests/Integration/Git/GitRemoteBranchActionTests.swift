@@ -387,7 +387,7 @@ final class GitRemoteBranchActionTests: XCTestCase {
         ], in: directory.path).status, 0)
     }
 
-    func testSymbolicRemoteHEADIsHiddenButRealHEADBranchRemains() async throws {
+    func testSymbolicRemoteAliasesAreReadonlyButRealHEADBranchRemains() async throws {
         let oid = try git(["rev-parse", "HEAD"])
         _ = try git(["remote", "add", "origin", directory.path])
         _ = try git(["remote", "add", "upstream", directory.path])
@@ -395,14 +395,21 @@ final class GitRemoteBranchActionTests: XCTestCase {
         _ = try git(["update-ref", "refs/remotes/upstream/main", oid])
         _ = try git(["symbolic-ref", "refs/remotes/upstream/HEAD",
                       "refs/remotes/upstream/main"])
+        _ = try git(["symbolic-ref", "refs/remotes/upstream/shortcut",
+                      "refs/remotes/upstream/main"])
         try await refresh()
-        let refs = try XCTUnwrap(model.recentCommits.first { $0.hash == oid }).references
-            .filter { $0.kind == .remoteBranch }.map(\.name)
-        XCTAssertTrue(refs.contains("origin/HEAD"),
-                      "A direct remote HEAD ref is a real branch and must remain")
-        XCTAssertFalse(refs.contains { $0.hasPrefix("upstream/HEAD") },
-                       "A symbolic remote HEAD is an alias, not a separately manageable branch")
-        XCTAssertTrue(refs.contains("upstream/main"))
+        let references = try XCTUnwrap(model.recentCommits.first { $0.hash == oid }).references
+        let branches = references.filter { $0.kind == .remoteBranch }.map(\.name)
+        let aliases = references.filter { $0.kind == .remoteAlias }.map(\.name)
+        XCTAssertEqual(Set(aliases), Set(["upstream/HEAD", "upstream/shortcut"]),
+                       "Every symbolic remote ref is visible but readonly")
+        XCTAssertTrue(branches.contains("origin/HEAD"))
+        XCTAssertTrue(branches.contains("upstream/main"))
+        XCTAssertFalse(branches.contains("upstream/HEAD"))
+        XCTAssertFalse(branches.contains("upstream/shortcut"))
+        XCTAssertNotNil(model.remoteBranch(named: "origin/HEAD"))
+        XCTAssertNil(model.remoteBranch(named: "upstream/HEAD"))
+        XCTAssertNil(model.remoteBranch(named: "upstream/shortcut"))
     }
 
     func testLongerConfiguredRemotePrefixIdentifiesCorrectRepository() async throws {

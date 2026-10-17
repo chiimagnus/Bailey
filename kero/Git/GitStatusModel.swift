@@ -231,7 +231,7 @@ final class GitStatusModel {
     nonisolated struct RecentCommit: Identifiable, Equatable, Sendable {
         nonisolated struct Reference: Identifiable, Hashable, Sendable {
             enum Kind: String, Sendable {
-                case currentBranch, localBranch, remoteBranch, tag, detachedHead
+                case currentBranch, localBranch, remoteBranch, remoteAlias, tag, detachedHead
             }
 
             let kind: Kind
@@ -3654,9 +3654,12 @@ final class GitStatusModel {
                 subject: String(fields[2]), author: String(fields[3]),
                 date: Date(timeIntervalSince1970: timestamp),
                 parentHashes: fields[5].split(separator: " ").map(String.init),
-                references: parseCommitReferences(String(fields[6])).filter { reference in
-                    reference.kind != .remoteBranch
-                        || refsByName["refs/remotes/" + reference.name]?.symbolic == nil
+                references: parseCommitReferences(String(fields[6])).map { reference in
+                    guard reference.kind == .remoteBranch,
+                          refsByName["refs/remotes/" + reference.name]?.symbolic != nil else {
+                        return reference
+                    }
+                    return .init(kind: .remoteAlias, name: reference.name)
                 },
                 files: files
             )

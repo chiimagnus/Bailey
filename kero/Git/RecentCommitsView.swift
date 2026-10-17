@@ -1,6 +1,49 @@
 import AppKit
 import SwiftUI
 
+struct GitGraphReferenceGroup: Identifiable {
+    typealias Reference = GitStatusModel.RecentCommit.Reference
+
+    let primary: Reference
+    let remotes: [Reference]
+
+    var id: String { primary.id }
+    var references: [Reference] { [primary] + remotes }
+
+    func remoteTitle(_ reference: Reference) -> String {
+        String(reference.name.dropLast(primary.name.count + 1))
+    }
+
+    static func grouped(_ references: [Reference], remotes: [String]) -> [Self] {
+        let ordered = references.filter { $0.kind == .currentBranch }
+            + references.filter { $0.kind != .currentBranch }
+        let locals = ordered.filter {
+            $0.kind == .currentBranch || $0.kind == .localBranch
+        }
+        var ownerByName: [String: Reference] = [:]
+        for local in locals where ownerByName[local.name] == nil {
+            ownerByName[local.name] = local
+        }
+
+        var matchedRemoteIDs = Set<String>()
+        var followers: [String: [Reference]] = [:]
+        for reference in references where reference.kind == .remoteBranch {
+            guard let remote = remotes.filter({
+                reference.name.hasPrefix($0 + "/")
+            }).max(by: { $0.count < $1.count }) else { continue }
+            let branchName = String(reference.name.dropFirst(remote.count + 1))
+            guard let owner = ownerByName[branchName] else { continue }
+            followers[owner.id, default: []].append(reference)
+            matchedRemoteIDs.insert(reference.id)
+        }
+
+        return ordered.compactMap { reference in
+            guard !matchedRemoteIDs.contains(reference.id) else { return nil }
+            return Self(primary: reference, remotes: followers[reference.id] ?? [])
+        }
+    }
+}
+
 /// Commit history shares the file-tree rows while drawing its own real Git DAG.
 struct RecentCommitsView: View {
     typealias Commit = GitStatusModel.RecentCommit
@@ -18,6 +61,7 @@ struct RecentCommitsView: View {
     @State private var viewportWidth: CGFloat = 0
 
     let commits: [Commit]
+    let remotes: [String]
     let stashFilesByOID: [String: GitStatusModel.StashFilesState]
     let repoRoot: String
     let fileAction: (Commit, Commit.FileChange, HistoricalFileAction) -> Void
@@ -46,6 +90,7 @@ struct RecentCommitsView: View {
 
     init(
         commits: [Commit],
+        remotes: [String] = [],
         stashFilesByOID: [String: GitStatusModel.StashFilesState] = [:],
         repoRoot: String,
         fileAction: @escaping (Commit, Commit.FileChange, HistoricalFileAction) -> Void,
@@ -75,6 +120,7 @@ struct RecentCommitsView: View {
         stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in }
     ) {
         self.commits = commits
+        self.remotes = remotes
         self.stashFilesByOID = stashFilesByOID
         self.repoRoot = repoRoot
         self.fileAction = fileAction
@@ -119,7 +165,8 @@ struct RecentCommitsView: View {
                 let expanded = expandedCommitIDs.contains(commit.id)
                 VStack(alignment: .leading, spacing: 0) {
                     commitRow(commit, graph: graph.rows[index], gutter: gutter,
-                              spacing: spacing, expanded: expanded)
+                              spacing: spacing, expanded: expanded,
+                              inHeadHistory: graph.knownHeadHistory.contains(commit.hash))
                     if expanded {
                         if let stash = commit.stash {
                             switch stashFilesByOID[stash.oid] {
@@ -171,23 +218,49 @@ struct RecentCommitsView: View {
         }
     }
 
+    static func nodeHelp(_ commit: Commit, inHeadHistory: Bool) -> String {
+        var lines = [commit.hash]
+        if !commit.subject.isEmpty { lines.append(commit.subject) }
+        if let stash = commit.stash {
+            lines.append(stash.selector)
+        } else if !commit.references.isEmpty {
+            lines.append(commit.references.map(\.name).joined(separator: ", "))
+        }
+        if inHeadHistory {
+            lines.append(String(localized: "In HEAD History", table: "Git"))
+        }
+        return lines.joined(separator: "\n")
+    }
+
     private func commitRow(
         _ commit: Commit, graph: CommitGraphLayout.Row, gutter: CGFloat,
-        spacing: CGFloat, expanded: Bool
+        spacing: CGFloat, expanded: Bool, inHeadHistory: Bool
     ) -> some View {
         TreeRowSurface(
             depth: 0, scale: fontScale, selected: expanded,
             leadingInset: gutter, trailingInset: TreeRowStyle.contentInset,
             showsGuides: false,
             height: max(36, ceil(38 * fontScale))
-        ) { _, layout in
+        ) { hovering, layout in
             VStack(alignment: .leading, spacing: 2 * fontScale) {
                 HStack(spacing: 4 * fontScale) {
+                    if let stash = commit.stash {
+                        stashBadge(stash, in: commit, colorIndex: graph.node.color)
+                            .layoutPriority(1)
+                    } else if !commit.references.isEmpty {
+                        referenceStrip(commit.references, commit: commit,
+                                       colorIndex: graph.node.color)
+                            .layoutPriority(1)
+                    }
                     Button { toggle(commit) } label: {
                         ScrollView(.horizontal) {
                             Text(verbatim: commit.subject)
                                 .font(.system(size: 12.5 * fontScale))
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(
+                                    commit.stash == nil && commit.parentHashes.count > 1
+                                        && !hovering && !expanded
+                                        ? Color.primary.opacity(0.55) : Color.primary
+                                )
                                 .fixedSize(horizontal: true, vertical: false)
                         }
                         .scrollIndicators(.hidden)
@@ -201,13 +274,6 @@ struct RecentCommitsView: View {
                     .accessibilityValue(expanded
                         ? String(localized: "Expanded", table: "Git")
                         : String(localized: "Collapsed", table: "Git"))
-                    if let stash = commit.stash {
-                        stashBadge(stash, in: commit)
-                            .layoutPriority(1)
-                    } else if !commit.references.isEmpty {
-                        referenceStrip(commit.references, commit: commit)
-                            .layoutPriority(1)
-                    }
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -225,7 +291,7 @@ struct RecentCommitsView: View {
                     .accessibilityLabel(String(localized: "Copy Commit Hash", table: "Git"))
 
                     Text(verbatim: commit.author)
-                        .font(.system(size: 11 * fontScale, design: .serif).italic())
+                        .font(.system(size: 11 * fontScale))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -250,7 +316,30 @@ struct RecentCommitsView: View {
             }
         }
         .background {
-            CommitGraphRails(row: graph, fontScale: fontScale, laneSpacing: spacing)
+            CommitGraphRails(
+                row: graph,
+                isHead: commit.references.contains {
+                    $0.kind == .currentBranch || $0.kind == .detachedHead
+                },
+                isStash: commit.stash != nil,
+                fontScale: fontScale, laneSpacing: spacing
+            )
+        }
+        .overlay(alignment: .topLeading) {
+            Button { toggle(commit) } label: {
+                Circle()
+                    .fill(Color.clear)
+                    .frame(width: 14 * fontScale, height: 14 * fontScale)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .offset(
+                x: (8 + CGFloat(graph.node.lane) * spacing - 7) * fontScale,
+                y: max(36, ceil(38 * fontScale)) / 2 - 7 * fontScale
+            )
+            .help(Self.nodeHelp(commit, inHeadHistory: inHeadHistory))
+            .accessibilityLabel(commit.shortHash + ": " + commit.subject)
+            .accessibilityValue(commit.hash)
         }
         .contentShape(Rectangle())
         .onTapGesture { toggle(commit) }
@@ -280,19 +369,27 @@ struct RecentCommitsView: View {
         }
     }
 
-    private func stashBadge(_ stash: GitStatusModel.Stash, in commit: Commit) -> some View {
-        Button { toggle(commit) } label: {
-            HStack(spacing: 3) {
+    private func stashBadge(
+        _ stash: GitStatusModel.Stash, in commit: Commit, colorIndex: Int
+    ) -> some View {
+        let outline = RoundedRectangle(cornerRadius: 5 * fontScale)
+        return Button { toggle(commit) } label: {
+            HStack(spacing: 0) {
                 Image(systemName: "archivebox")
                     .font(.system(size: 9 * fontScale))
+                    .foregroundStyle(GitGraphPalette.iconColor(colorIndex))
+                    .frame(width: 18 * fontScale, height: 18 * fontScale)
+                    .background(GitGraphPalette.color(colorIndex))
                 Text(verbatim: stash.selector)
+                    .font(.system(size: 10 * fontScale, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 5 * fontScale)
                     .fixedSize(horizontal: true, vertical: false)
             }
-            .font(.system(size: 10 * fontScale, weight: .medium))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 7 * fontScale)
-            .padding(.vertical, 3 * fontScale)
-            .background(Capsule().fill(Color(nsColor: .systemGray)))
+            .background(Color.primary.opacity(0.06))
+            .clipShape(outline)
+            .overlay(outline.stroke(Color.primary.opacity(0.35),
+                                    lineWidth: 1 * fontScale))
         }
         .buttonStyle(.plain)
         .help(stash.selector + ": " + stash.message)
@@ -310,83 +407,128 @@ struct RecentCommitsView: View {
         Button(String(localized: "Copy Stash Hash", table: "Git")) { copy(stash.oid) }
     }
 
-    private func referenceStrip(_ references: [Reference], commit: Commit) -> some View {
-        ViewThatFits(in: .horizontal) {
-            referenceGroup(references, shown: references.count, commit: commit)
-            if references.count > 2 {
-                referenceGroup(references, shown: 2, commit: commit)
+    private func referenceStrip(
+        _ references: [Reference], commit: Commit, colorIndex: Int
+    ) -> some View {
+        let groups = GitGraphReferenceGroup.grouped(references, remotes: remotes)
+        return ViewThatFits(in: .horizontal) {
+            referenceGroup(groups, shown: groups.count, commit: commit, colorIndex: colorIndex)
+            if groups.count > 2 {
+                referenceGroup(groups, shown: 2, commit: commit, colorIndex: colorIndex)
             }
-            if references.count > 1 {
-                referenceGroup(references, shown: 1, commit: commit)
+            if groups.count > 1 {
+                referenceGroup(groups, shown: 1, commit: commit, colorIndex: colorIndex)
             }
-            referenceGroup(references, shown: 0, commit: commit)
+            if !groups.isEmpty && !groups[0].remotes.isEmpty {
+                referenceGroup(groups, shown: 1, commit: commit,
+                               colorIndex: colorIndex, compactFirst: true)
+            }
+            referenceGroup(groups, shown: 0, commit: commit, colorIndex: colorIndex)
         }
     }
 
-    private func referenceGroup(_ references: [Reference], shown: Int, commit: Commit) -> some View {
-        HStack(spacing: 4 * fontScale) {
-            ForEach(Array(references.prefix(shown))) { reference in
-                referenceBadge(reference, commit: commit)
+    private func referenceGroup(
+        _ groups: [GitGraphReferenceGroup], shown: Int, commit: Commit, colorIndex: Int,
+        compactFirst: Bool = false
+    ) -> some View {
+        let shownGroups = Array(groups.prefix(shown)).enumerated().map { index, group in
+            compactFirst && index == 0
+                ? GitGraphReferenceGroup(primary: group.primary, remotes: []) : group
+        }
+        let hidden = (compactFirst ? groups.first?.remotes ?? [] : [])
+            + groups.dropFirst(shown).flatMap(\.references)
+        return HStack(spacing: 4 * fontScale) {
+            ForEach(shownGroups) { group in
+                referenceBadge(group, commit: commit, colorIndex: colorIndex)
             }
-            if shown < references.count {
+            if !hidden.isEmpty {
                 Menu {
-                    ForEach(Array(references.dropFirst(shown))) { reference in
+                    ForEach(hidden) { reference in
                         Menu(reference.name) {
                             referenceActions(reference, commit: commit)
                         }
                     }
                 } label: {
-                    Text("+\(references.count - shown)")
+                    Text("+\(hidden.count)")
                         .font(.system(size: 10 * fontScale, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .help(references.dropFirst(shown).map(\.name).joined(separator: ", "))
-                .accessibilityLabel(references.dropFirst(shown).map(\.name).joined(separator: ", "))
+                .help(hidden.map(\.name).joined(separator: ", "))
+                .accessibilityLabel(hidden.map(\.name).joined(separator: ", "))
             }
         }
         .fixedSize(horizontal: true, vertical: false)
     }
 
-    @ViewBuilder
-    private func referenceBadge(_ reference: Reference, commit: Commit) -> some View {
-        let background: Color = {
-            switch reference.kind {
-            case .currentBranch: Color(nsColor: .systemBlue)
-            case .localBranch, .remoteBranch: Color(nsColor: .systemIndigo)
-            case .tag: Color(nsColor: .systemBrown)
-            case .detachedHead: Color(nsColor: .systemGray)
+    private func referenceBadge(
+        _ group: GitGraphReferenceGroup, commit: Commit, colorIndex: Int
+    ) -> some View {
+        let current = group.primary.kind == .currentBranch
+        let color = GitGraphPalette.color(colorIndex)
+        let outline = RoundedRectangle(cornerRadius: 5 * fontScale)
+        return HStack(spacing: 0) {
+            referenceSegment(group.primary, title: group.primary.name,
+                             colorIndex: colorIndex, commit: commit, isRemoteSuffix: false)
+            ForEach(group.remotes) { remote in
+                referenceSegment(remote, title: group.remoteTitle(remote),
+                                 colorIndex: colorIndex, commit: commit, isRemoteSuffix: true)
             }
-        }()
-        let label = HStack(spacing: 3) {
-            if reference.kind == .tag {
-                Image(systemName: "tag")
-                    .font(.system(size: 9 * fontScale))
-            }
-            Text(verbatim: reference.name)
-                .lineLimit(1)
-                .truncationMode(.middle)
         }
-        .font(.system(size: 10 * fontScale, weight: .medium))
-        .foregroundStyle(.white)
-        .padding(.horizontal, 7 * fontScale)
-        .padding(.vertical, 3 * fontScale)
-        .frame(maxWidth: 142 * fontScale)
-        .background(Capsule().fill(background))
-        .help(reference.name)
+        .fixedSize(horizontal: true, vertical: false)
+        .background(Color.primary.opacity(0.06))
+        .clipShape(outline)
+        .overlay(outline.stroke(current ? color : Color.primary.opacity(0.35),
+                                lineWidth: 1 * fontScale))
+    }
 
-        Button {
+    private func referenceSegment(
+        _ reference: Reference, title: String, colorIndex: Int,
+        commit: Commit, isRemoteSuffix: Bool
+    ) -> some View {
+        let current = reference.kind == .currentBranch
+        let titleFont: Font = isRemoteSuffix
+            ? .system(size: 10 * fontScale).italic()
+            : .system(size: 10 * fontScale, weight: current ? .semibold : .medium)
+        return Button {
             if reference.kind == .tag {
                 expandedCommitIDs.insert(commit.id)
             } else {
                 copy(reference.name)
             }
-        } label: { label }
-            .buttonStyle(.plain)
-            .contextMenu {
-                referenceActions(reference, commit: commit)
+        } label: {
+            HStack(spacing: 0) {
+                if isRemoteSuffix {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.3))
+                        .frame(width: 1 * fontScale, height: 12 * fontScale)
+                } else {
+                    Image(systemName: reference.kind == .tag ? "tag.fill"
+                          : reference.kind == .detachedHead ? "circle"
+                          : "arrow.triangle.branch")
+                        .font(.system(size: 9 * fontScale))
+                        .foregroundStyle(GitGraphPalette.iconColor(colorIndex))
+                        .frame(width: 18 * fontScale, height: 18 * fontScale)
+                        .background(GitGraphPalette.color(colorIndex))
+                }
+                Text(verbatim: title)
+                    .font(titleFont)
+                    .foregroundStyle(isRemoteSuffix ? Color.secondary : Color.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 142 * fontScale)
+                    .padding(.horizontal, 5 * fontScale)
             }
+            .frame(height: 18 * fontScale)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(reference.name)
+        .accessibilityLabel(reference.name)
+        .contextMenu {
+            referenceActions(reference, commit: commit)
+        }
     }
 
     @ViewBuilder
@@ -454,6 +596,10 @@ struct RecentCommitsView: View {
             }
         case .detachedHead:
             Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
+        case .remoteAlias:
+            Button(String(localized: "Copy Remote Branch Name", table: "Git")) {
+                copy(reference.name)
+            }
         case .remoteBranch:
             Button(String(localized: "Checkout Remote Branch…", table: "Git")) {
                 remoteAction(reference, commit, .checkout)
@@ -614,6 +760,36 @@ struct RecentCommitsView: View {
     }
 }
 
+enum GitGraphPalette {
+    static let colors: [NSColor] = [
+        rgb(0, 133, 217), rgb(217, 0, 143), rgb(0, 217, 10), rgb(217, 133, 0),
+        rgb(163, 0, 217), rgb(255, 0, 0), rgb(0, 217, 204), rgb(225, 56, 232),
+        rgb(133, 217, 0), rgb(220, 91, 35), rgb(111, 36, 214), rgb(255, 204, 0),
+    ]
+
+    static let iconInks: [NSColor] = colors.map { color in
+        func linear(_ channel: CGFloat) -> CGFloat {
+            channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+        }
+        let luminance = 0.2126 * linear(color.redComponent)
+            + 0.7152 * linear(color.greenComponent)
+            + 0.0722 * linear(color.blueComponent)
+        return luminance >= 0.18 ? .black : .white
+    }
+
+    private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> NSColor {
+        NSColor(srgbRed: red / 255, green: green / 255, blue: blue / 255, alpha: 1)
+    }
+
+    static func color(_ index: Int) -> Color {
+        Color(nsColor: colors[index % colors.count])
+    }
+
+    static func iconColor(_ index: Int) -> Color {
+        Color(nsColor: iconInks[index % iconInks.count])
+    }
+}
+
 private struct CommitGraphRails: View {
     private let themeChanges = Theme.changes
     private static let firstLaneX: CGFloat = 8
@@ -630,6 +806,8 @@ private struct CommitGraphRails: View {
 
     var row: CommitGraphLayout.Row? = nil
     var bottomRails: [CommitGraphLayout.Rail] = []
+    var isHead = false
+    var isStash = false
     let fontScale: CGFloat
     let laneSpacing: CGFloat
 
@@ -637,17 +815,18 @@ private struct CommitGraphRails: View {
         (Self.firstLaneX + CGFloat(lane) * laneSpacing) * fontScale
     }
 
-    private func color(_ index: Int) -> Color {
-        if index == 0 { return Color(red: 0.41, green: 0.52, blue: 0.96) }
-        let colors: [NSColor] = [.systemGreen, .systemPurple, .systemTeal,
-                                 .systemYellow, .systemRed]
-        return Color(nsColor: colors[(index - 1) % colors.count])
-    }
-
     var body: some View {
         let _ = themeChanges.revision
         Canvas { context, size in
             let middle = size.height / 2
+            let backdrop = Color(nsColor: Theme.sidebar)
+            let separation = StrokeStyle(
+                lineWidth: min(4, max(2, laneSpacing - 0.6)) * fontScale,
+                lineCap: .round, lineJoin: .round
+            )
+            let stroke = StrokeStyle(
+                lineWidth: 2 * fontScale, lineCap: .round, lineJoin: .round
+            )
             if let row {
                 for link in row.links {
                     var path = Path()
@@ -686,26 +865,38 @@ private struct CommitGraphRails: View {
                         )
                         linkColor = color
                     }
-                    context.stroke(
-                        path, with: .color(color(linkColor)), style: StrokeStyle(
-                            lineWidth: 1.6 * fontScale, lineCap: .round, lineJoin: .round
-                        )
-                    )
+                    context.stroke(path, with: .color(backdrop), style: separation)
+                    context.stroke(path, with: .color(GitGraphPalette.color(linkColor)),
+                                   style: stroke)
                 }
-                let radius = 3.2 * fontScale
+                let radius = 4 * fontScale
                 let x = laneX(row.node.lane)
-                context.fill(
-                    Path(ellipseIn: CGRect(x: x - radius, y: middle - radius,
-                                           width: 2 * radius, height: 2 * radius)),
-                    with: .color(color(row.node.color))
-                )
+                let node = Path(ellipseIn: CGRect(
+                    x: x - radius, y: middle - radius, width: 2 * radius, height: 2 * radius
+                ))
+                let nodeColor = GitGraphPalette.color(row.node.color)
+                if isHead || isStash {
+                    context.fill(node, with: .color(backdrop))
+                    context.stroke(node, with: .color(nodeColor), lineWidth: 2 * fontScale)
+                    if isStash {
+                        let innerRadius = 1.8 * fontScale
+                        let inner = Path(ellipseIn: CGRect(
+                            x: x - innerRadius, y: middle - innerRadius,
+                            width: 2 * innerRadius, height: 2 * innerRadius
+                        ))
+                        context.stroke(inner, with: .color(nodeColor), lineWidth: fontScale)
+                    }
+                } else {
+                    context.fill(node, with: .color(nodeColor))
+                }
             } else {
                 for rail in bottomRails {
                     var path = Path()
                     path.move(to: CGPoint(x: laneX(rail.lane), y: 0))
                     path.addLine(to: CGPoint(x: laneX(rail.lane), y: size.height))
-                    context.stroke(path, with: .color(color(rail.color)),
-                                   lineWidth: 1.6 * fontScale)
+                    context.stroke(path, with: .color(backdrop), style: separation)
+                    context.stroke(path, with: .color(GitGraphPalette.color(rail.color)),
+                                   style: stroke)
                 }
             }
         }
