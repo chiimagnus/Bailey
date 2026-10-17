@@ -134,6 +134,8 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 
 热操作至少重复 30 次，记录样本数、中位数、p95 与最差值；少量冷启动只报中位数和最差值。用 Instruments Time Profiler 查 CPU，卡顿但 CPU 不高时查等待；用 Allocations 检查视图与缓冲生命周期。确需阶段对齐时才增加轻量 signpost，不先搭埋点框架。
 
+编辑器的可重复成本对照在 `EditorNavigationTests.testSourceGeometryAndEditCosts` 与 `TextCoordinateIndexTests.testLargeDocumentEditCosts`：四档文档、折行与三种编辑位置分别记录；前者等待真实非零视口。测试输出的成对原生变更耗时不代表键盘呈现延迟，Debug 结果也不代表优化构建。
+
 保留已有增量高亮、懒加载、刷新合并、视图复用及 SSH 批量操作。优化不能牺牲编辑内容、超时反馈、机器身份、Unicode 坐标、撤销和无障碍。测量日志可能包含用户数据，分享前脱敏，不默认入库。
 
 没有测量就不宣称提速。历史数据是带环境的观测，不是永久预算；当前没有统一内存硬阈值。实验和失败证据留在对应 Feature 资料，长期文档只提炼会影响后续行动的约束。

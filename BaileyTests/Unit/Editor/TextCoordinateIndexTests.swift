@@ -5,6 +5,26 @@ import XCTest
 
 @MainActor
 final class TextCoordinateIndexTests: XCTestCase {
+    func testLargeDocumentEditCosts() throws {
+        for rows in [382, 1_000, 10_000, 100_000] {
+            let source = String(repeating: "struct Item { let value = 123 } // 中文 👋\n", count: rows)
+            let index = TextCoordinateIndex(source)
+            for position in [0, source.utf16.count / 2, source.utf16.count] {
+                var durations: [Double] = []
+                for _ in 0..<30 {
+                    let started = CFAbsoluteTimeGetCurrent()
+                    index.replace(in: NSRange(location: position, length: 0), with: "a")
+                    index.replace(in: NSRange(location: position, length: 1), with: "")
+                    durations.append((CFAbsoluteTimeGetCurrent() - started) * 1_000)
+                }
+                durations.sort()
+                print("EDITOR_INDEX rows=\(rows) offset=\(position) pair_ms median=\(durations[15]) p95=\(durations[28]) max=\(durations[29])")
+                XCTAssertEqual(index.length, source.utf16.count)
+                XCTAssertEqual(index.point(at: source.utf16.count)?.row, UInt32(rows))
+            }
+        }
+    }
+
     private func check(_ index: TextCoordinateIndex, text: String, parser: Parser,
                        file: StaticString = #filePath, line: UInt = #line) throws {
         XCTAssertEqual(index.length, text.utf16.count, file: file, line: line)
