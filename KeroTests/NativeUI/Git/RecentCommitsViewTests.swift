@@ -128,6 +128,43 @@ final class RecentCommitsViewTests: XCTestCase {
         }
     }
 
+    func testEveryBuiltinGhosttyThemeKeepsAllTwelveGraphPathsDistinguishable() throws {
+        func luminance(_ color: NSColor) -> CGFloat {
+            let rgb = color.usingColorSpace(.sRGB)!
+            func linear(_ value: CGFloat) -> CGFloat {
+                value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * linear(rgb.redComponent)
+                + 0.7152 * linear(rgb.greenComponent)
+                + 0.0722 * linear(rgb.blueComponent)
+        }
+        func contrast(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            let first = luminance(a)
+            let second = luminance(b)
+            return (max(first, second) + 0.05) / (min(first, second) + 0.05)
+        }
+
+        let definitions = Theme.commonLightThemes + Theme.commonDarkThemes
+        XCTAssertEqual(definitions.count, 60)
+        for theme in definitions {
+            let background = theme.sidebarNSColor
+            for index in GitGraphPalette.colors.indices {
+                let path = GitGraphPalette.colors[index]
+                let pathContrast = contrast(path, background)
+                let separator = GitGraphPalette.separationColor(index, background: background)
+                if pathContrast < 3 {
+                    let outline = try XCTUnwrap(separator,
+                        "Low contrast must gain a visible stroke: \(theme.name), path \(index)")
+                    XCTAssertGreaterThanOrEqual(contrast(outline, background), 3,
+                        "Contrast outline must remain readable: \(theme.name), path \(index)")
+                } else {
+                    XCTAssertNil(separator,
+                        "A readable path needs no extra outline: \(theme.name), path \(index)")
+                }
+            }
+        }
+    }
+
     func testHeadAndStashGraphGutterRemainsClickableInBothAppearances() throws {
         let stash = GitStatusModel.Stash(
             selector: "stash@{0}", oid: String(repeating: "d", count: 40),
