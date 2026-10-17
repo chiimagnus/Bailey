@@ -409,6 +409,40 @@ final class CommitGraphLayoutTests: XCTestCase {
         XCTAssertFalse(graph.knownHeadHistory.contains("side-0"))
     }
 
+    func testFiveThousandLoadedCommitsWithOneHundredFiftyLanesStayConnected() {
+        let tips = (0..<149).map { commit("tip-\($0)", parents: ["root"]) }
+        let main = (0..<4_850).map { index in
+            commit("main-\(index)", parents: [
+                index == 4_849 ? "root" : "main-\(index + 1)"
+            ], current: index == 0)
+        }
+        let history = tips + main + [commit("root")]
+        let start = ProcessInfo.processInfo.systemUptime
+        let graph = CommitGraphLayout(commits: history)
+        print(String(format: "5000 Git rows / 150 lanes: %.3f s",
+                     ProcessInfo.processInfo.systemUptime - start))
+        XCTAssertEqual(graph.rows.count, 5_000)
+        XCTAssertEqual(graph.laneCount, 150)
+        XCTAssertEqual(graph.knownHeadHistory.count, 4_851)
+        for index in [0, 1, 74, 148] {
+            assertConnected(graph, from: index, to: 4_999,
+                            color: graph.rows[index].node.color)
+        }
+        assertConnected(graph, from: 4_998, to: 4_999,
+                        color: graph.rows[4_998].node.color)
+        for row in graph.rows {
+            for link in row.links {
+                if case .through(let rail) = link {
+                    XCTAssertNotEqual(rail.lane, row.node.lane,
+                                      "No long-range rail may pass through an unrelated commit")
+                }
+            }
+        }
+        let repeated = CommitGraphLayout(commits: history)
+        XCTAssertEqual(graph.rows.map(\.node), repeated.rows.map(\.node))
+        XCTAssertEqual(graph.laneCount, repeated.laneCount)
+    }
+
     func testOnlyLoadedGitAncestorsAreProvenReachableFromHEAD() {
         let graph = CommitGraphLayout(commits: [
             commit("tip", parents: ["main", "side"], current: true),
