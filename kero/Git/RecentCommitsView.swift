@@ -790,14 +790,14 @@ enum GitGraphPalette {
     }
 }
 
-private struct CommitGraphRails: View {
+struct CommitGraphRails: View {
     private let themeChanges = Theme.changes
     private static let firstLaneX: CGFloat = 8
 
     static func spacing(lanes: Int, viewportWidth: CGFloat, scale: CGFloat) -> CGFloat {
         guard lanes > 1, viewportWidth > 0 else { return 9 }
         let maxGutter = viewportWidth * 0.34 / scale
-        return min(9, max(1, (maxGutter - firstLaneX - 8) / CGFloat(lanes - 1)))
+        return min(9, max(0, (maxGutter - firstLaneX - 8) / CGFloat(lanes - 1)))
     }
 
     static func gutter(lanes: Int, spacing: CGFloat, scale: CGFloat) -> CGFloat {

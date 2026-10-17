@@ -27,6 +27,19 @@
 
 ## 发现项
 
+## 发现 F-32
+
+- 任务：`P3-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`KeroTests/Integration/Git/SSHGitRecoveryLiveTests.swift:21`
+- 摘要：`授权 Windows 全量 Git 回归中远端断线恢复测试的 XCTest 宿主进程提前以 code0 退出，405 项出现一次不完整运行`
+- 风险：`xcresult 明确记录 404 passed、1 failed、0 skipped；失败原因为 the test runner exited with code 0 before finishing running tests，测试宿主随后重启并将该案例标失败，不是 XCTAssert 失败；不能将这轮全量试验误报绿色，需排除并行构建、进程退出与 SSH 恢复流中的实际缺陷`
+- 预期修复：`先提取 xcresult/runner诊断，使用独立 DerivedData 单独多次运行专用 Windows SSH 真实失败恢复用例，再在无并行冲突环境运行最新 406 项全量；有产品可复现根因再修改责任代码，不为未知宿主退出添加重试安全围栏`
+- 验证：`xcrun xcresulttool get test-results summary --path ...; KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test DERIVED_DATA=build/DerivedData-graph-audit-theme ONLY_TESTING=KeroTests/SSHGitRecoveryLiveTests；最终最新 HEAD 全量406/406 0失败0跳过。`
+- 解决证据：`Root proven twice via native macOS xcresult logarchive: during 405/406 Windows full suites actual AppKit performKeyEquivalent→sendAction→NSApplication.terminate, normal code0 exit; xcodebuild reports 404/405 and 405/406 completed. Independent real Windows GitWorkspaceSSH (142.266s) and SSHGitRecovery (38.789s) passed. Commit e5c82e5 suppresses default App Quit Command-Q solely in --isolated-ui-test CommandGroup; no retry, no production quit behavior change. True test-host NSApp.mainMenu regression first Red failing, then Green passing; KeroTests/RecentCommitsViewTests 24/24, AppIdentityTests 3/3; make build:release + strict codesign exit0. Fresh whole authorized Windows SSH command KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test DERIVED_DATA=build/DerivedData-graph-audit-theme exit0 with xcresult 407/407 passed, failed0, skipped0, includes GitWorkspaceSSH 139.315s, SSHFileTreeLive 29.610s, SSHGitRecovery 35.891s, no runner exit. Full log /tmp/kero-graph-audit-post-isolation-windows-407-20261017.log, xcresult build/DerivedData-graph-audit-theme/Logs/Test/Test-kero-2026.10.17_15-06-16-+0800.xcresult; minimum macOS 15.6 GUI E2E still Deferred F-01.`
+
+
 ## 发现 F-31
 
 - 任务：`P3-T2`
@@ -125,3 +138,27 @@
 ### 按现行 AGENTS.md 完成本地安装（2026-10-17 14:00 左右）
 
 代码 `4b24cfa`、`1d232e6` 和测试 `2f9e170` 经授权 Windows 401/401、`make build` 与 `codesign --verify --deep --strict` 完整通过后，依据 `docs/development.md#本地安装` 将签名 Debug 包从 `build/DerivedData-graph-audit/Build/Products/Debug/Kero.app` 先以 `ditto --rsrc --extattr` 暂存到 `/Applications` 同盘临时目录，独立验签并核对新旧 `CFBundleIdentifier=chiimagnus.kero`；随后**整包**原子移动替换 `/Applications/Kero.app`，验签成功且 `valid on disk` / `satisfies its Designated Requirement`。安装脚本预设失败回滚至原包，实际未触发；已删除临时 stage 和旧包 backup，未留下过时的并行安装包。正式 Kero 原进程 PID 94982 在更新后仍运行，未结束、未启动或重启；用户下次自行重启后才会运行新文件。严格区分**已安装**与**当前旧进程尚未重启**，不把包验签代替当前进程 UI E2E。未对用户在用仓库、主题、SSH master 和保存会话执行破坏性操作。
+
+### 2026-10-17 F-32 进一步定位：隔离 XCTest 宿主接收了前台退出菜单快捷键
+
+此前 405 项授权 Windows SSH 全量测试得到 **404 passed / 1 failed / 0 skipped**，失败测试 `SSHGitRecoveryLiveTests.testAuthorizedWindowsGitSnapshotSurvivesTransportFailureAndCanWriteOnlyAfterRecovery`；随后 406 项全量得到 **405 passed / 1 failed / 0 skipped**，失败测试变成 `GitWorkspaceSSHTests.testAuthorizedSSHRefArchiveBinaryResetStashCleanAndIgnorePersistOnWindows`。两次 XCTest 的直接信息均为 `The test runner exited with code 0 before finishing running tests`，而不是 Git 命令结果或测试断言失败，完整命令均退出 65。
+
+这两次的 `.xcresult` 导出原生 macOS `logarchive` 后发现**共同且实际发生的进程退出路径**：14:39:30.609、14:53:16.680，测试宿主 `kero` 分别记录 `AppKit performKeyEquivalent:` → `sendAction:` → `[com.apple.AppKit:Application] terminate:` → `applicationShouldTerminate: NSTerminateNow` → `Termination complete. Exiting without sudden termination.`。其根因是长时间运行的原生 XCTest 宿主仍响应共享桌面的 `⌘Q` Quit 快捷键（系统日志未标明按键来源，不将其归咎于用户/其它代理）。`xcresulttool get test-results summary` 精确显示上述两轮失败总数，两者都没有孤立的 Git Assert 失败证据。
+
+隔离真实 SSH 用例各自重跑通过：`SSHGitRecoveryLiveTests` 38.789 秒 / 1 passed，`GitWorkspaceSSHTests` 142.266 秒 / 1 passed，真正执行了 Windows 远端失败/恢复、分支推送/删除/归档、二进制复位、Stash、Clean 与 Ignore 的最终结果。
+
+**Red→Green：** 新增 `KeroTests/NativeUI/App/AppMenuIsolationTests.swift`，先用真实 `NSApp.mainMenu` 确认 `⌘Q` 菜单快捷键存在导致 `XCTAssertTrue` 失败；修复 `kero/App/keroApp.swift`，只对 `--isolated-ui-test` 宿主执行 `CommandGroup(replacing: .appTermination) {}`，不阻断标准的程序性退出、不更改正式 Kero 的快捷键、保存与退出处理。随后同一用例 **1/1 通过**，`RecentCommitsViewTests` **24/24 通过**，`AppIdentityTests` **3/3 通过**，`make build:release DERIVED_DATA=build/DerivedData-graph-audit-release` 和严格 `codesign --verify --deep --strict` 均成功。同步 `docs/testing.md` 的实际测试隔离边界。独立原子提交 `e5c82e5`，不混入同期图标资源变动。
+
+**剩余边界：** 这项单一源修复消除了已观测到的 `⌘Q`-菜单 Quit 触发链路，但测试宿主与正在使用的用户桌面仍共享键盘焦点；它不代表完整的 macOS GUI 会话隔离。必须等待最新 HEAD 的 Windows 全量 XCTest `407/407`、退出 0 且 0 skipped，方可将该故障从 `Open` 调整为 `Resolved`；专用独立桌面 E2E、最低 macOS 15.6 和跨 DPI 的人工验收仍遵循 F-01 已声明的 `Deferred` 边界。
+
+### 2026-10-17 15:18 自动化重验最终 Gate
+
+**自动化测试与代码修复：Go。** 最新 Git Graph 与隔离 XCTest 宿主修复 `e5c82e5` 已真实编入 Debug/Test；授权 Windows SSH 完整命令 `KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test DERIVED_DATA=build/DerivedData-graph-audit-theme` 完整返回 0，`xcodebuild` 明确 `** TEST SUCCEEDED **`。`xcresulttool get test-results summary`：**407 total / 407 passed / 0 failed / 0 skipped / Passed**，macOS 27.2、Apple Silicon MacBook Pro；包含 F-32 原来失败的 `GitWorkspaceSSHTests`（139.315s）、`SSHGitRecoveryLiveTests`（35.891s）、`SSHFileTreeLiveTests`（29.610s）。新增菜单快捷键原生 XCTest Red→Green，图谱压力/主题/模型全部在同一轮再次通过。源日志 `/tmp/kero-graph-audit-post-isolation-windows-407-20261017.log`，`.xcresult` `build/DerivedData-graph-audit-theme/Logs/Test/Test-kero-2026.10.17_15-06-16-+0800.xcresult`。本轮修复的 Release 构建与严格签名验收通过。
+
+**完整独立 GUI E2E：维持 No-Go / F-01 Deferred。** 单个实际窗口从打开项目到操作弹窗、图谱滚动、真实鼠标、悬停辅助提示的完整流程，仍需要不打扰正式 Kero 的专用 GUI 桌面；最低 macOS 15.6 运行时、其它 DPI 下的实际视觉差异不能由目前 macOS 27.2 的 XCTest 替代。已有的 NativeUI、真实仓库、Windows SSH 验收不能被夸大为上述条件已全部通过。源码审查没有发现新的可复现产品缺陷，F-32 因本轮全量回归闭环确认为 Resolved。
+
+**安装归属边界：** 当时正式 `/Applications/Kero.app` 仍在运行，且同期另一个任务正在修改 Bailey App 图标并提交；本审计没有替换或重启其正式 App，以免用本次较旧的已签名构建覆盖另一任务正在变更的资源。代码提交已在当前分支；安装状态应由图标任务完成后以最新整体构建单独确认，不能宣称本轮已安装或已重启。
+
+### 2026-10-17 15:21 正式包安装核验（补充此前暂缓记录）
+
+图标任务在同一分支完成并提交后，本次以最新 `7aef9da`（包含 `e5c82e5` 及 Bailey 图标提交）重新运行 `make build:release DERIVED_DATA=build/DerivedData-graph-audit-release`，**BUILD SUCCEEDED** 且构建目标的严格签名检查通过。在 `/Applications` 的同盘临时路径完整 `ditto` 新包，复核 `CFBundleIdentifier=chiimagnus.kero`、arm64 与严格签名，再整包换入 `/Applications/Kero.app`，对最终包再次严格验签并核对实际二进制 SHA-256：`ea1ff234a99924b1faeed2e7c206634f3f727691c75ba1da114033a470eba42b`（替换前：`48383e78d6a3ff65942c5dcfa363d38222122561aec59e56e9b9f9760c0becad`）。`INSTALL_COMPLETE=YES`、备份临时目录随安全清理删除。没有结束或重新启动用户现有 Kero；原 PID `85027` 安装后仍存活，因此**已安装但新代码须由用户以后自行重启才能生效**。新版安装包未执行独立前台菜单 E2E，不据此改变 F-01 的 Deferred 状态。
