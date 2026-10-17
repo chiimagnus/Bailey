@@ -1,0 +1,511 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AA40000000000000000000B4 /* .zshenv in Copy Files */ = {isa = PBXBuildFile; fileRef = AA40000000000000000000B6 /* .zshenv */; };
+		AA10000000000000000000B2 /* GhosttyTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = AA10000000000000000000B1 /* GhosttyTerminal */; };
+		AA10000000000000000000B4 /* GhosttyTheme in Frameworks */ = {isa = PBXBuildFile; productRef = AA10000000000000000000B3 /* GhosttyTheme */; };
+		AA10000000000000000000C2 /* STTextView in Frameworks */ = {isa = PBXBuildFile; productRef = AA10000000000000000000C1 /* STTextView */; };
+		AA20000000000000000000A2 /* STTextView-Plugin-Neon in Frameworks */ = {isa = PBXBuildFile; productRef = AA20000000000000000000A1 /* STTextView-Plugin-Neon */; };
+		AA30000000000000000000A2 /* TreeSitterTSX in Frameworks */ = {isa = PBXBuildFile; productRef = AA30000000000000000000A1 /* TreeSitterTSX */; };
+		AA60000000000000000000A2 /* FuzzyMatch in Frameworks */ = {isa = PBXBuildFile; productRef = AA60000000000000000000A1 /* FuzzyMatch */; };
+		AA70000000000000000000A2 /* Neon in Frameworks */ = {isa = PBXBuildFile; productRef = AA70000000000000000000A1 /* Neon */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		AA40000000000000000000B6 /* .zshenv */ = {isa = PBXFileReference; lastKnownFileType = text; path = shell-integration/zsh/.zshenv; sourceTree = "<group>"; };
+		FF3FDD73300B6A7400112486 /* Bailey.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Bailey.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA8000000000000000000002 /* BaileyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = BaileyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		AA10000000000000000000F0 /* Exceptions for "Bailey" folder in "Bailey" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Resources/Info.plist,
+			);
+			target = FF3FDD72300B6A7400112486 /* Bailey */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		FF3FDD75300B6A7400112486 /* Bailey */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AA10000000000000000000F0 /* Exceptions for "Bailey" folder in "Bailey" target */,
+			);
+			path = Bailey;
+			sourceTree = "<group>";
+		};
+		AA8000000000000000000003 /* BaileyTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BaileyTests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		FF3FDD70300B6A7400112486 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+				AA10000000000000000000B2 /* GhosttyTerminal in Frameworks */,
+				AA10000000000000000000B4 /* GhosttyTheme in Frameworks */,
+				AA10000000000000000000C2 /* STTextView in Frameworks */,
+				AA20000000000000000000A2 /* STTextView-Plugin-Neon in Frameworks */,
+				AA30000000000000000000A2 /* TreeSitterTSX in Frameworks */,
+				AA60000000000000000000A2 /* FuzzyMatch in Frameworks */,
+				AA70000000000000000000A2 /* Neon in Frameworks */,
+			);
+		};
+		AA8000000000000000000005 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; files = (); };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		AA40000000000000000000B2 /* Copy zsh integration */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = shell-integration/zsh;
+			dstSubfolderSpec = 7;
+			files = (AA40000000000000000000B4 /* .zshenv in Copy Files */);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXContainerItemProxy section */
+		AA8000000000000000000008 = {isa = PBXContainerItemProxy; containerPortal = FF3FDD6B300B6A7400112486; proxyType = 1; remoteGlobalIDString = FF3FDD72300B6A7400112486; remoteInfo = bailey; };
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+		AA8000000000000000000007 = {isa = PBXTargetDependency; target = FF3FDD72300B6A7400112486; targetProxy = AA8000000000000000000008; };
+/* End PBXTargetDependency section */
+
+/* Begin PBXGroup section */
+		FF3FDD6A300B6A7400112486 = {
+			isa = PBXGroup;
+			children = (
+				FF3FDD75300B6A7400112486 /* Bailey */,
+				AA40000000000000000000B6 /* .zshenv */,
+				AA8000000000000000000003 /* BaileyTests */,
+				FF3FDD74300B6A7400112486 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		FF3FDD74300B6A7400112486 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				FF3FDD73300B6A7400112486 /* Bailey.app */,
+				AA8000000000000000000002 /* BaileyTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		FF3FDD72300B6A7400112486 /* Bailey */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FF3FDD7E300B6A7600112486 /* Build configuration list for PBXNativeTarget "bailey" */;
+			buildPhases = (
+				FF3FDD6F300B6A7400112486 /* Sources */,
+				FF3FDD70300B6A7400112486 /* Frameworks */,
+				FF3FDD71300B6A7400112486 /* Resources */,
+				AA40000000000000000000B2 /* Copy zsh integration */,
+				AA40000000000000000000A1 /* Link ssh helper */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				FF3FDD75300B6A7400112486 /* Bailey */,
+			);
+			name = Bailey;
+			packageProductDependencies = (
+				AA10000000000000000000B1 /* GhosttyTerminal */,
+				AA10000000000000000000B3 /* GhosttyTheme */,
+				AA10000000000000000000C1 /* STTextView */,
+				AA20000000000000000000A1 /* STTextView-Plugin-Neon */,
+				AA30000000000000000000A1 /* TreeSitterTSX */,
+				AA60000000000000000000A1 /* FuzzyMatch */,
+				AA70000000000000000000A1 /* Neon */,
+			);
+			productName = Bailey;
+			productReference = FF3FDD73300B6A7400112486 /* Bailey.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AA8000000000000000000001 /* BaileyTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA8000000000000000000009;
+			buildPhases = (AA8000000000000000000004, AA8000000000000000000005, AA8000000000000000000006);
+			buildRules = ();
+			dependencies = (AA8000000000000000000007);
+			fileSystemSynchronizedGroups = (AA8000000000000000000003);
+			name = BaileyTests;
+			productName = BaileyTests;
+			productReference = AA8000000000000000000002;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		FF3FDD6B300B6A7400112486 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					FF3FDD72300B6A7400112486 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+				};
+			};
+			buildConfigurationList = FF3FDD6E300B6A7400112486 /* Build configuration list for PBXProject "bailey" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				"zh-Hans",
+				Base,
+			);
+			mainGroup = FF3FDD6A300B6A7400112486;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				AA10000000000000000000C0 /* XCLocalSwiftPackageReference "Vendor/STTextView" */,
+				AA10000000000000000000B0 /* XCRemoteSwiftPackageReference "libghostty-spm" */,
+				AA30000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/TreeSitterTSX" */,
+				AA70000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/Neon" */,
+				AA20000000000000000000A0 /* XCRemoteSwiftPackageReference "STTextView-Plugin-Neon" */,
+				AA60000000000000000000A0 /* XCRemoteSwiftPackageReference "FuzzyMatch" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = FF3FDD74300B6A7400112486 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				FF3FDD72300B6A7400112486 /* Bailey */,
+				AA8000000000000000000001 /* BaileyTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		FF3FDD71300B6A7400112486 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		AA8000000000000000000006 /* Resources */ = {isa = PBXResourcesBuildPhase; files = (); };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		AA40000000000000000000A1 /* Link ssh helper */ = {
+			isa = PBXShellScriptBuildPhase;
+			inputPaths = ();
+			name = "Link ssh helper";
+			outputPaths = ("$(CODESIGNING_FOLDER_PATH)/Contents/MacOS/ssh");
+			shellPath = /bin/sh;
+			shellScript = "ln -sfn bailey \"${CODESIGNING_FOLDER_PATH}/Contents/MacOS/ssh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		FF3FDD6F300B6A7400112486 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		AA8000000000000000000004 /* Sources */ = {isa = PBXSourcesBuildPhase; files = (); };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		FF3FDD7C300B6A7600112486 /* Debug configuration for PBXProject "bailey" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		FF3FDD7F300B6A7600112486 /* Debug configuration for PBXNativeTarget "bailey" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Bailey/Resources/bailey.entitlements;
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				DEVELOPMENT_TEAM = RDQHYSDFFG;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 55;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Bailey/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = chiimagnus.bailey;
+				PRODUCT_NAME = Bailey;
+				EXECUTABLE_NAME = bailey;
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				WRAPPER_NAME = Bailey.app;
+			};
+			name = Debug;
+		};
+		AA7000000000000000000001 /* Release configuration for PBXProject "bailey" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		AA7000000000000000000002 /* Release configuration for PBXNativeTarget "bailey" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Bailey/Resources/bailey.entitlements;
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				DEVELOPMENT_TEAM = RDQHYSDFFG;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 55;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Bailey/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = chiimagnus.bailey;
+				PRODUCT_NAME = Bailey;
+				EXECUTABLE_NAME = bailey;
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				WRAPPER_NAME = Bailey.app;
+			};
+			name = Release;
+		};
+		AA800000000000000000000A /* Debug BaileyTests */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				DEVELOPMENT_TEAM = RDQHYSDFFG;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				PRODUCT_BUNDLE_IDENTIFIER = chiimagnus.bailey.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Bailey.app/Contents/MacOS/bailey";
+			};
+			name = Debug;
+		};
+		AA800000000000000000000B /* Release BaileyTests */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				DEVELOPMENT_TEAM = RDQHYSDFFG;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				PRODUCT_BUNDLE_IDENTIFIER = chiimagnus.bailey.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Bailey.app/Contents/MacOS/bailey";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		FF3FDD6E300B6A7400112486 /* Build configuration list for PBXProject "bailey" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FF3FDD7C300B6A7600112486 /* Debug configuration for PBXProject "bailey" */,
+				AA7000000000000000000001 /* Release configuration for PBXProject "bailey" */,
+			);
+			defaultConfigurationName = Debug;
+		};
+		FF3FDD7E300B6A7600112486 /* Build configuration list for PBXNativeTarget "bailey" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FF3FDD7F300B6A7600112486 /* Debug configuration for PBXNativeTarget "bailey" */,
+				AA7000000000000000000002 /* Release configuration for PBXNativeTarget "bailey" */,
+			);
+			defaultConfigurationName = Debug;
+		};
+		AA8000000000000000000009 = {isa = XCConfigurationList; buildConfigurations = (AA800000000000000000000A, AA800000000000000000000B); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		AA10000000000000000000C0 /* XCLocalSwiftPackageReference "Vendor/STTextView" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/STTextView;
+		};
+		AA70000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/Neon" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/Neon;
+		};
+		AA30000000000000000000A0 /* XCLocalSwiftPackageReference "Vendor/TreeSitterTSX" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/TreeSitterTSX;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		AA10000000000000000000B0 /* XCRemoteSwiftPackageReference "libghostty-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/egoist-labs/libghostty-spm";
+			requirement = {
+				kind = exactVersion;
+				version = 1.3.6;
+			};
+		};
+		AA20000000000000000000A0 /* XCRemoteSwiftPackageReference "STTextView-Plugin-Neon" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/krzyzanowskim/STTextView-Plugin-Neon";
+			requirement = {
+				kind = revision;
+				revision = 5a30db4ce7908a5414e7b499e2379bdc49991cd1;
+			};
+		};
+		AA60000000000000000000A0 /* XCRemoteSwiftPackageReference "FuzzyMatch" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ordo-one/FuzzyMatch";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.3.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AA10000000000000000000B1 /* GhosttyTerminal */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA10000000000000000000B0 /* XCRemoteSwiftPackageReference "libghostty-spm" */;
+			productName = GhosttyTerminal;
+		};
+		AA10000000000000000000B3 /* GhosttyTheme */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA10000000000000000000B0 /* XCRemoteSwiftPackageReference "libghostty-spm" */;
+			productName = GhosttyTheme;
+		};
+		AA10000000000000000000C1 /* STTextView */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = STTextView;
+		};
+		AA20000000000000000000A1 /* STTextView-Plugin-Neon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA20000000000000000000A0 /* XCRemoteSwiftPackageReference "STTextView-Plugin-Neon" */;
+			productName = "STTextView-Plugin-Neon";
+		};
+		AA30000000000000000000A1 /* TreeSitterTSX */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TreeSitterTSX;
+		};
+		AA70000000000000000000A1 /* Neon */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Neon;
+		};
+		AA60000000000000000000A1 /* FuzzyMatch */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA60000000000000000000A0 /* XCRemoteSwiftPackageReference "FuzzyMatch" */;
+			productName = FuzzyMatch;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = FF3FDD6B300B6A7400112486 /* Project object */;
+	validationLevel = 1;
+}

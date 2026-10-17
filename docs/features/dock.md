@@ -18,7 +18,7 @@
 
 ## 窗口与菜单
 
-主窗口由 `WindowRootView` 的 `TerminalManager` 协调。`.focusedSceneValue(\.keroManager, manager)` 和菜单中的 `@FocusedValue` 连接当前窗口；新增菜单动作要核对双窗口焦点切换。
+主窗口由 `WindowRootView` 的 `TerminalManager` 协调。`.focusedSceneValue(\.baileyManager, manager)` 和菜单中的 `@FocusedValue` 连接当前窗口；新增菜单动作要核对双窗口焦点切换。
 
 「显示」菜单使用统一面板、项目和标签动作。保存读取聚焦内容的未保存状态；设置窗口或空工作区的关闭仍使用系统窗口关闭语义，不强行路由到某个工作标签。
 
@@ -28,4 +28,4 @@
 
 `DockWorkspaceTests` 验证布局规则；`PaneRetentionTests` 和工作区 UI 测试验证原生身份、焦点、关闭保存与跨窗口隔离。模型测试不代替真实拖动、键盘和输入验收。覆盖上下／左右组合、跨区域拖动、A→B→A、双窗口切换、关闭失败与恢复。
 
-视觉不变量见 [ui.md](../ui.md)，运行入口见 [testing.md](../testing.md)。实现入口：[WorkspaceDockView.swift](../../kero/UI/WorkspaceDockView.swift)。
+视觉不变量见 [ui.md](../ui.md)，运行入口见 [testing.md](../testing.md)。实现入口：[WorkspaceDockView.swift](../../Bailey/UI/WorkspaceDockView.swift)。

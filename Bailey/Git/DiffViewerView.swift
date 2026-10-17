@@ -1,0 +1,1286 @@
+import AppKit
+import Foundation
+import Observation
+import SwiftUI
+
+/// Lightweight UI state that should follow Bailey across launches without
+/// becoming a user-facing TOML setting.
+@MainActor
+@Observable
+final class DiffViewPreferences {
+    static let shared = DiffViewPreferences()
+
+    private static let layoutKey = "diffView.layout"
+    private static let modeKey = "diffView.mode"
+    @ObservationIgnored private let defaults: UserDefaults
+
+    var diffStyle: DiffLayoutStyle {
+        didSet {
+            defaults.set(diffStyle.rawValue, forKey: Self.layoutKey)
+        }
+    }
+
+    var prefersEditing: Bool {
+        didSet {
+            defaults.set(
+                prefersEditing ? "edit" : "review",
+                forKey: Self.modeKey
+            )
+        }
+    }
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if let rawValue = defaults.string(forKey: Self.layoutKey),
+           let style = DiffLayoutStyle(rawValue: rawValue) {
+            diffStyle = style
+        } else {
+            diffStyle = .unified
+        }
+        prefersEditing = defaults.string(forKey: Self.modeKey) == "edit"
+    }
+}
+
+/// Values match the existing persisted unified/split preference.
+enum DiffLayoutStyle: String {
+    case unified
+    case split
+}
+
+/// One native review artifact shared across the unified and split layouts.
+struct DiffDisplay {
+    let id = UUID()
+    let computation: DiffComputation
+    let unifiedText: NSAttributedString
+    let leftText: NSAttributedString
+    let rightText: NSAttributedString
+}
+
+private struct DiffDisplayInputs {
+    let core: DiffCore
+    let oldRuns: [DiffHighlightRun]
+    let newRuns: [DiffHighlightRun]
+}
+
+/// Git and worktree text live with the tab, surviving view remounts and
+/// refreshing live sources when selected.
+@MainActor
+@Observable
+final class DiffTab: nonisolated Identifiable {
+    nonisolated enum Source: Hashable, Sendable, Codable {
+        case worktree
+        case staged
+        case commit(hash: String, parent: String?, status: String)
+        case revision(hash: String)
+        case revisionWorktree(hash: String)
+
+        var isLive: Bool {
+            switch self {
+            case .worktree, .staged, .revisionWorktree: true
+            case .commit, .revision: false
+            }
+        }
+
+        var isPlainRevision: Bool {
+            if case .revision = self { return true }
+            return false
+        }
+    }
+
+    nonisolated let id = UUID()
+
+    /// Absolute repository root the diff runs in.
+    let repoRoot: String
+    /// Repo-relative path, as porcelain reports it.
+    let path: String
+    /// The single source of truth for a worktree, index, historical diff, or revision.
+    /// Different sources of the same path own different native tabs and snapshots.
+    let source: Source
+    var untracked: Bool {
+        didSet { if untracked != oldValue { onSnapshotChange?() } }
+    }
+    @ObservationIgnored var onSnapshotChange: (() -> Void)?
+    /// Resolved current file path for Revision ↔ Worktree after an actual rename.
+    /// Nil if the worktree side is absent (a deletion).
+    private(set) var resolvedWorktreePath: String?
+    /// Previous path when the change is a rename/copy; the "before" side
+    /// reads from here so renames diff old file → new file like VS Code.
+    var origPath: String? {
+        didSet { if origPath != oldValue { onSnapshotChange?() } }
+    }
+
+    private(set) var error: String?
+    private(set) var hasLoadedContent = false
+    private(set) var isLoading = true
+    private(set) var isUnmerged = false
+    private(set) var isEditable = false
+    private(set) var isDirty = false
+    var saveError: String?
+    /// Why this file cannot be written, or nil while it is writable. Set when
+    /// the remote machine it lives on is no longer reachable.
+    private(set) var readOnlyReason: String?
+
+    let preferences: DiffViewPreferences
+    private(set) var oldContent = ""
+    private(set) var newContent = ""
+    private(set) var display: DiffDisplay?
+    private(set) var editDecorations = DiffDecorations.empty
+    /// Owned by the tab, never by a transient SwiftUI mount.
+    @ObservationIgnored var nativeSurface: DiffNativeSurface?
+    var hasChanges: Bool { !oldContent.utf8.elementsEqual(newContent.utf8) }
+    var isEditing: Bool { isEditableNow && preferences.prefersEditing }
+
+    private nonisolated static let maxBytes = 5 << 20
+    @ObservationIgnored private var savedNewContent = ""
+    @ObservationIgnored private(set) var editedNewContent = ""
+    @ObservationIgnored private(set) var editBufferRevision: UInt = 0
+    @ObservationIgnored private var displayGeneration: UInt = 0
+    @ObservationIgnored private var displayTask: Task<Void, Never>?
+    @ObservationIgnored private var displayInputs: DiffDisplayInputs?
+    @ObservationIgnored private var runExpansions: [Int: DiffRunExpansion] = [:]
+    @ObservationIgnored private var editGeneration: UInt = 0
+    @ObservationIgnored private var editTask: Task<Void, Never>?
+    @ObservationIgnored private var reloadGeneration: UInt = 0
+    @ObservationIgnored private var lastSaveTask: Task<Void, Never>?
+    var isSaving: Bool { lastSaveTask != nil }
+    @ObservationIgnored private var saveRequestGeneration: UInt = 0
+    @ObservationIgnored var autoSaveSuspendedForClose = false
+    @ObservationIgnored private var targetGeneration: UInt = 0
+    /// The workspace this diff reads. The tab keeps its own, so it never
+    /// follows the session onto another machine — and re-binds to a new
+    /// connection to the same machine when one arrives.
+    @ObservationIgnored private var backend: WorkspaceBackend
+    /// The workspace this diff belongs to: nil for this Mac, else the machine
+    /// it was opened from. Part of the tab's identity, so the same path on two
+    /// machines is two tabs, and a diff opened locally is never read-only.
+    let workspaceIdentity: String?
+
+    init(
+        repoRoot: String,
+        path: String,
+        source: Source,
+        untracked: Bool,
+        origPath: String?,
+        backend: WorkspaceBackend,
+        workspaceIdentity: String?,
+        preferences: DiffViewPreferences = .shared
+    ) {
+        self.backend = backend
+        self.workspaceIdentity = workspaceIdentity
+        self.preferences = preferences
+        self.repoRoot = repoRoot
+        self.path = path
+        self.source = source
+        self.untracked = untracked
+        self.origPath = origPath
+        reload()
+    }
+
+    /// Whether the file can be edited right now: a regular worktree file whose
+    /// machine is still reachable.
+    var isEditableNow: Bool {
+        isEditable && readOnlyReason == nil
+    }
+
+    // MARK: - Remote workspace
+
+    /// Re-checks this tab against the project's connections: adopts a live
+    /// workspace for its own machine, or marks it read-only. Driven by the
+    /// project rather than by the session the tab was opened from, because a
+    /// user who reconnects in another terminal of the same project is
+    /// reconnecting to the same machine.
+    func reevaluateWorkspace(in project: Project) {
+        guard let workspaceIdentity else { return }
+        guard let live = project.connectedWorkspace(for: workspaceIdentity) else {
+            setReadOnly(true, destination: workspaceIdentity)
+            return
+        }
+        guard readOnlyReason != nil || (backend as AnyObject) !== (live as AnyObject) else { return }
+        if readOnlyReason == nil {
+            targetGeneration &+= 1
+            invalidateReload()
+        }
+        // A reconnection is a new channel; reading or saving over the old one
+        // fails, so the tab takes the live one.
+        backend = live
+        setReadOnly(false, destination: workspaceIdentity)
+        // No-op while the buffer is dirty, so edits made during the outage
+        // survive and can now be saved.
+        reload()
+    }
+
+    private func setReadOnly(_ isReadOnly: Bool, destination: String) {
+        let reason = isReadOnly
+            ? String(
+                localized: "Disconnected from \(destination) — read-only until reconnected", table: "Git",
+                comment: "Diff banner. The placeholder is a remote machine as user@host."
+            )
+            : nil
+        guard readOnlyReason != reason else { return }
+        targetGeneration &+= 1
+        invalidateReload()
+        readOnlyReason = reason
+        // Going offline hides the editable pane; publish its unsaved text to
+        // the read-only diff instead of making the draft disappear on screen.
+        if isReadOnly, isDirty, !newContent.utf8.elementsEqual(editedNewContent.utf8) {
+            newContent = editedNewContent
+            runExpansions.removeAll()
+            recomputeDisplay()
+        }
+        // An edit made before the connection dropped remains saveable once
+        // the original machine is reachable again.
+        if isEditing { refreshEditDecorations(immediate: true) }
+    }
+
+    var name: String {
+        (path as NSString).lastPathComponent
+    }
+
+    var title: String {
+        switch source {
+        case .commit(let hash, let parent, let status):
+            let after = "\(name) (\(hash.prefix(7)))"
+            guard let parent else { return after }
+            let beforeName = ((origPath ?? path) as NSString).lastPathComponent
+            let before = "\(beforeName) (\(parent.prefix(7)))"
+            switch status {
+            case "A": return after
+            case "D": return before
+            default: return "\(before) ↔ \(after)"
+            }
+        case .revision(let hash):
+            return "\(name) (\(hash.prefix(7)))"
+        case .revisionWorktree(let hash):
+            return "\(name) (\(hash.prefix(7))) ↔ Worktree"
+        case .staged:
+            return String(localized: "\(name) (Staged)", table: "Git", comment: "Tab title for the staged diff of a file.")
+        case .worktree:
+            return name
+        }
+    }
+
+    /// Tab strip and switcher label. A remote diff says which machine it is
+    /// on; a local diff reads exactly as it always has.
+    var tabTitle: String {
+        guard let workspaceIdentity else { return title }
+        return "\(workspaceIdentity): \(title)"
+    }
+
+    private func invalidateReload() {
+        reloadGeneration &+= 1
+        isLoading = false
+    }
+
+    func reload(afterGitAction: Bool = false) {
+        // While the machine is unreachable both sides can only fail to load,
+        // and an error would replace the diff the user was reading.
+        guard readOnlyReason == nil, (!isEditing || afterGitAction), !isDirty else { return }
+        invalidateReload()
+        let generation = reloadGeneration
+        isLoading = true
+        error = nil
+        let root = repoRoot
+        let path = path
+        let oldPath = origPath ?? path
+        let source = source
+        let untracked = untracked
+
+        let backend = self.backend
+
+        Task { [weak self] in
+            // Git first, on its own thread, exactly as before.
+            let git = await Task.detached(priority: .userInitiated) {
+                var failure: String?
+                var old = ""
+                var newFromGit: String?
+                var worktreePath = path
+                var unmerged = false
+                func take(_ result: (text: String, error: String?)) -> String {
+                    if let error = result.error { failure = error }
+                    return result.text
+                }
+                switch source {
+                case .commit(let hash, let parent, let status):
+                    if status != "A", let parent {
+                        old = take(await Self.requiredGitContent(
+                            .tree(revision: parent, path: oldPath), in: root, backend: backend))
+                    }
+                    if status == "D" {
+                        let deleted = await Self.firstGitContent(
+                            [.tree(revision: hash, path: path)], in: root, backend: backend
+                        )
+                        newFromGit = take((deleted.text, deleted.error))
+                    } else {
+                        newFromGit = take(await Self.requiredGitContent(
+                            .tree(revision: hash, path: path), in: root, backend: backend))
+                    }
+                case .revision(let hash):
+                    newFromGit = take(await Self.requiredGitContent(
+                        .tree(revision: hash, path: path), in: root, backend: backend))
+                case .revisionWorktree(let hash):
+                    old = take(await Self.requiredGitContent(
+                        .tree(revision: hash, path: path), in: root, backend: backend))
+                    switch await GitHistoricalFileLocator.resolve(
+                        root: root, path: path, revision: hash, backend: backend
+                    ) {
+                    case .found(let current): worktreePath = current
+                    case .missing: newFromGit = ""
+                    case .failed(let message): failure = message
+                    }
+                case .staged:
+                    let earlier = await Self.firstGitContent(
+                        [.tree(revision: "HEAD", path: oldPath)], in: root, backend: backend
+                    )
+                    old = take((earlier.text, earlier.error))
+                    let staged = await Self.firstGitContent(
+                        [.index(path: path, stages: [0])], in: root, backend: backend
+                    )
+                    newFromGit = take((staged.text, staged.error))
+                    unmerged = staged.isUnmerged
+                    if staged.isUnmerged && staged.error == nil {
+                        failure = String(localized: "Unresolved merge conflict", table: "Git")
+                    }
+                case .worktree:
+                    if !untracked {
+                        let earlier = await Self.firstGitContent(
+                            [.index(path: oldPath, stages: [0, 2, 1]),
+                             .tree(revision: "HEAD", path: oldPath)],
+                            in: root, backend: backend
+                        )
+                        unmerged = earlier.isUnmerged
+                        old = take((earlier.text, earlier.error))
+                    }
+                }
+                return (old: old, newFromGit: newFromGit, worktreePath: worktreePath,
+                        failure: failure, unmerged: unmerged)
+            }.value
+
+            var failure = git.failure
+            let new: String
+            let editable: Bool
+            if let newFromGit = git.newFromGit {
+                new = newFromGit
+                editable = false
+            } else if failure != nil {
+                new = ""
+                editable = false
+            } else {
+                let worktree = await Self.readWorktreeFile(
+                    root: root, path: git.worktreePath, backend: backend
+                )
+                new = worktree.text
+                if let error = worktree.error { failure = error }
+                if case .worktree = source {
+                    editable = await Self.isEditableWorktreeFile(
+                        root: root, path: git.worktreePath, backend: backend)
+                } else {
+                    editable = false
+                }
+            }
+            let result = (
+                old: git.old, new: new, failure: failure,
+                unmerged: git.unmerged, editable: editable,
+                resolvedPath: source.isLive ? git.worktreePath : nil
+            )
+            // The connection may have dropped while these reads were in
+            // flight; their failure must not become the tab's content.
+            guard let self, self.reloadGeneration == generation,
+                  self.readOnlyReason == nil
+            else { return }
+            self.isLoading = false
+            guard (!self.isEditing || afterGitAction), !self.isDirty else { return }
+            self.error = result.failure
+            guard result.failure == nil else {
+                // A broken repository must not erase a previously loaded review.
+                self.isEditable = false
+                return
+            }
+            self.hasLoadedContent = true
+            self.isUnmerged = result.unmerged
+            self.isEditable = result.editable && result.failure == nil
+            self.resolvedWorktreePath = result.resolvedPath
+            let changed = !self.oldContent.utf8.elementsEqual(result.old.utf8)
+                || !self.newContent.utf8.elementsEqual(result.new.utf8)
+            self.oldContent = result.old
+            self.newContent = result.new
+            if changed { self.runExpansions.removeAll() }
+            if changed || (self.hasChanges && self.display == nil) {
+                self.recomputeDisplay()
+            }
+            self.editBufferRevision &+= 1
+            self.savedNewContent = result.new
+            self.editedNewContent = result.new
+            if self.isEditing { self.refreshEditDecorations(immediate: true) }
+            self.isDirty = false
+            self.saveError = nil
+        }
+    }
+
+    /// Refreshes a live diff when navigation brings it back on screen.
+    /// Historical blobs are immutable and already loaded by `init`; rerunning
+    /// Git operations and recomputing native rows on every project switch
+    /// would waste work without changing the visible diff. An initial live load also
+    /// stays in flight rather than being duplicated by the view's first mount.
+    func refreshWhenSelected() {
+        if readOnlyReason != nil, let workspaceIdentity {
+            SSHHostWorkspaces.retryConnection(for: workspaceIdentity, path: repoRoot + "/" + path)
+            return
+        }
+        guard source.isLive, !isLoading else { return }
+        reload()
+    }
+
+    /// Keep the native TextKit buffer as the editing source of truth.
+    func updateEditedContent(_ contents: String) {
+        guard isEditable else { return }
+        editedNewContent = contents
+        isDirty = !contents.utf8.elementsEqual(savedNewContent.utf8)
+        if isDirty { invalidateReload() }
+        refreshEditDecorations()
+    }
+
+    func setDiffStyle(_ style: DiffLayoutStyle) {
+        guard preferences.diffStyle != style else { return }
+        nativeSurface?.rememberScrollAnchor()
+        preferences.diffStyle = style
+    }
+
+    func setEditing(_ editing: Bool) {
+        guard isEditableNow, editing != isEditing else { return }
+        nativeSurface?.rememberScrollAnchor()
+        if !editing && !newContent.utf8.elementsEqual(editedNewContent.utf8) {
+            newContent = editedNewContent
+            runExpansions.removeAll()
+            recomputeDisplay()
+        }
+        preferences.prefersEditing = editing
+        if editing {
+            refreshEditDecorations(immediate: true)
+        } else {
+            autoSaveOnFocusLoss()
+        }
+    }
+
+
+    /// Generate review rows and syntax tokens off the main actor. Superseded
+    /// results never overwrite a newer local/remote target or edit.
+    func recomputeDisplay() {
+        displayGeneration &+= 1
+        let generation = displayGeneration
+        displayInputs = nil
+        guard !source.isPlainRevision, hasLoadedContent, hasChanges else {
+            display = nil
+            return
+        }
+        let before = oldContent
+        let after = newContent
+        let path = path
+        let expansions = runExpansions
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let font = TerminalFont.current()
+        let paragraphStyle = DiffTypography.paragraphStyle(for: font)
+        let textColor = Theme.terminal(dark: dark).foregroundNSColor
+        displayTask?.cancel()
+        displayTask = Task { [weak self] in
+            let context = await DiffSyntaxHighlighter.context(for: path)
+            // Parse/diff off-main; do not send NSColor or attributed strings
+            // across actors. Only immutable token names and ranges return.
+            let result = await Task.detached(priority: .userInitiated) {
+                let core = DiffCore.compute(oldText: before, newText: after)
+                // Both sides parse independent source snapshots.
+                async let oldCaptures: [DiffCaptureRun] = context.map {
+                    DiffSyntaxHighlighter.captures(text: before, context: $0)
+                } ?? []
+                async let newCaptures: [DiffCaptureRun] = context.map {
+                    DiffSyntaxHighlighter.captures(text: after, context: $0)
+                } ?? []
+                let computation = DiffComputation.build(core: core, expansions: expansions)
+                return (core, await oldCaptures, await newCaptures, computation)
+            }.value
+            guard let self, !Task.isCancelled, self.displayGeneration == generation else { return }
+            let inputs = DiffDisplayInputs(
+                core: result.0,
+                oldRuns: DiffSyntaxHighlighter.colors(for: result.1),
+                newRuns: DiffSyntaxHighlighter.colors(for: result.2)
+            )
+            self.displayInputs = inputs
+            self.display = Self.makeDisplay(
+                computation: result.3, inputs: inputs,
+                font: font, paragraphStyle: paragraphStyle, textColor: textColor
+            )
+        }
+    }
+
+    private static func makeDisplay(
+        computation: DiffComputation, inputs: DiffDisplayInputs,
+        font: NSFont, paragraphStyle: NSParagraphStyle, textColor: NSColor
+    ) -> DiffDisplay {
+        let base: [NSAttributedString.Key: Any] = [
+            .font: font, .foregroundColor: textColor, .paragraphStyle: paragraphStyle,
+        ]
+        return DiffDisplay(
+            computation: computation,
+            unifiedText: DiffSyntaxHighlighter.attributedDocument(
+                computation.unified, oldRuns: inputs.oldRuns, newRuns: inputs.newRuns,
+                baseAttributes: base
+            ),
+            leftText: DiffSyntaxHighlighter.attributedDocument(
+                computation.splitLeft, oldRuns: inputs.oldRuns, newRuns: inputs.newRuns,
+                baseAttributes: base
+            ),
+            rightText: DiffSyntaxHighlighter.attributedDocument(
+                computation.splitRight, oldRuns: inputs.oldRuns, newRuns: inputs.newRuns,
+                baseAttributes: base
+            )
+        )
+    }
+
+    func expandRun(_ fold: DiffCollapsedRun) {
+        guard hasChanges, let inputs = displayInputs else { return }
+        var expansion = runExpansions[fold.runIndex] ?? DiffRunExpansion()
+        switch fold.direction {
+        case .revealUp: expansion.fromEnd += DiffCollapse.expansionLineCount
+        case .revealDown: expansion.fromStart += DiffCollapse.expansionLineCount
+        case .both:
+            expansion.fromStart += DiffCollapse.expansionLineCount
+            expansion.fromEnd += DiffCollapse.expansionLineCount
+        }
+        runExpansions[fold.runIndex] = expansion
+        // Reuse only captures belonging to the current content, not a previous read.
+        displayGeneration &+= 1
+        let generation = displayGeneration
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let font = TerminalFont.current()
+        let style = DiffTypography.paragraphStyle(for: font)
+        let color = Theme.terminal(dark: dark).foregroundNSColor
+        let expansions = runExpansions
+        let core = inputs.core
+        displayTask?.cancel()
+        displayTask = Task { [weak self] in
+            let computation = await Task.detached(priority: .userInitiated) {
+                DiffComputation.build(core: core, expansions: expansions)
+            }.value
+            guard let self, !Task.isCancelled, self.displayGeneration == generation else { return }
+            self.display = Self.makeDisplay(
+                computation: computation, inputs: inputs,
+                font: font, paragraphStyle: style, textColor: color
+            )
+        }
+    }
+
+    func refreshEditDecorations(immediate: Bool = false) {
+        editGeneration &+= 1
+        let generation = editGeneration
+        let before = oldContent
+        let after = editedNewContent
+        let oldRuns = displayInputs?.oldRuns ?? []
+        let font = TerminalFont.current()
+        let style = DiffTypography.paragraphStyle(for: font)
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let theme = Theme.terminal(dark: dark)
+        let color = theme.foregroundNSColor
+        let emphasis = theme.backgroundNSColor.blended(
+            withFraction: 0.38, of: theme.paletteNSColor(1) ?? .systemRed
+        ) ?? .systemRed
+        editTask?.cancel()
+        editTask = Task { [weak self] in
+            if !immediate { try? await Task.sleep(for: .milliseconds(120)) }
+            guard !Task.isCancelled else { return }
+            // Pure edit-line diff remains in the background; AppKit ghost
+            // attributed strings and view decorations remain on MainActor.
+            let (state, offsets, lineCount) = await Task.detached(priority: .userInitiated) {
+                let (oldLines, _) = DiffLineSplitter.lines(of: before)
+                let (newLines, _) = DiffLineSplitter.lines(of: after)
+                let ops = DiffEngine.lineOps(old: oldLines, new: newLines)
+                return (
+                    DiffComputation.editState(ops: ops, oldLines: oldLines, newLines: newLines),
+                    newLines.map(\.utf16Range.location), newLines.count
+                )
+            }.value
+            guard let self, !Task.isCancelled, self.editGeneration == generation else { return }
+            let base: [NSAttributedString.Key: Any] = [
+                .font: font, .foregroundColor: color, .paragraphStyle: style,
+            ]
+            let ghosts = state.ghosts.map { block in
+                DiffDecorations.GhostBlock(
+                    anchorLine: block.anchorLine,
+                    firstOldLine: block.firstOldLine,
+                    lines: DiffSyntaxHighlighter.attributedGhostLines(
+                        oldText: before as NSString, block: block, runs: oldRuns,
+                        baseAttributes: base, emphasisColor: emphasis
+                    )
+                )
+            }
+            self.editDecorations = DiffDecorations.edit(
+                state: state, snapshotOffsets: offsets,
+                lineCount: lineCount, ghostBlocks: ghosts
+            )
+        }
+    }
+
+    /// No parallel editor state: the native STTextView keeps selection and undo.
+    func refreshNativeAppearance() {
+        recomputeDisplay()
+        if isEditing { refreshEditDecorations(immediate: true) }
+    }
+
+    func autoSaveOnFocusLoss() {
+        guard isDirty, !autoSaveSuspendedForClose else { return }
+        Task { await save() }
+    }
+
+    /// Keep worktree writes in edit order across manual and automatic saves.
+    func save() async {
+        saveRequestGeneration &+= 1
+        let generation = saveRequestGeneration
+        let preceding = lastSaveTask
+        let task = Task { [weak self] in
+            await preceding?.value
+            await self?.writeCurrentText()
+        }
+        lastSaveTask = task
+        await task.value
+        if saveRequestGeneration == generation { lastSaveTask = nil }
+    }
+
+    private func writeCurrentText() async {
+        guard isEditable, isDirty else { return }
+        // Refused, not silently dropped: the save-error bar says why.
+        if let readOnlyReason {
+            saveError = readOnlyReason
+            return
+        }
+        let filePath = (repoRoot as NSString).appendingPathComponent(path)
+        let written = editedNewContent
+        let target = backend
+        let generation = targetGeneration
+        invalidateReload()
+        do {
+            try await target.write(path: filePath, data: Data(written.utf8))
+            guard generation == targetGeneration, readOnlyReason == nil else { return }
+            savedNewContent = written
+            // An edit landing while the write was in flight stays dirty.
+            isDirty = !editedNewContent.utf8.elementsEqual(savedNewContent.utf8)
+            saveError = nil
+        } catch {
+            guard generation == targetGeneration else { return }
+            saveError = error.localizedDescription
+        }
+    }
+
+    private nonisolated enum GitContent {
+        case missing
+        case content(String)
+        case binary
+        case tooLarge
+        case failed(String)
+    }
+
+    /// Resolve path metadata once; reading a stable OID must not follow a
+    /// moving index or ref between the size query and blob read.
+    private nonisolated enum GitLocation {
+        case index(path: String, stages: [Int])
+        case tree(revision: String, path: String)
+    }
+
+    private nonisolated static func firstGitContent(
+        _ locations: [GitLocation], in root: String, backend: WorkspaceBackend
+    ) async -> (text: String, error: String?, isUnmerged: Bool) {
+        var isUnmerged = false
+        for location in locations {
+            let result = await gitContent(location, in: root, backend: backend)
+            isUnmerged = isUnmerged || result.isUnmerged
+            switch result.content {
+            case .missing: continue
+            case .content(let text): return (text, nil, isUnmerged)
+            case .binary: return ("", String(localized: "Binary file", table: "Git"), isUnmerged)
+            case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"), isUnmerged)
+            case .failed(let message): return ("", message, isUnmerged)
+            }
+        }
+        return ("", nil, isUnmerged)
+    }
+
+    private nonisolated static func requiredGitContent(
+        _ location: GitLocation, in root: String, backend: WorkspaceBackend
+    ) async -> (text: String, error: String?) {
+        let result = await gitContent(location, in: root, backend: backend)
+        switch result.content {
+        case .content(let text): return (text, nil)
+        case .missing:
+            return ("", String(localized: "Selected Git revision does not contain this file", table: "Git"))
+        case .binary: return ("", String(localized: "Binary file", table: "Git"))
+        case .tooLarge: return ("", String(localized: "File is too large to diff", table: "Git"))
+        case .failed(let message): return ("", message)
+        }
+    }
+
+    private nonisolated static func gitContent(
+        _ location: GitLocation, in root: String, backend: WorkspaceBackend
+    ) async -> (content: GitContent, isUnmerged: Bool) {
+        let selection = await gitObject(location, in: root, backend: backend)
+        if let error = selection.error { return (.failed(error), selection.isUnmerged) }
+        guard let oid = selection.oid else { return (.missing, selection.isUnmerged) }
+        let size = await GitCommandExecution.run(
+            ["cat-file", "-s", oid], in: root, backend: backend
+        )
+        guard size.status == 0 else {
+            return (.failed(size.stderr.isEmpty
+                ? String(localized: "Unable to read Git content", table: "Git") : size.stderr), selection.isUnmerged)
+        }
+        guard let byteCount = Int(size.stdout.trimmingCharacters(in: .whitespacesAndNewlines)),
+              byteCount >= 0 else {
+            return (.failed(String(localized: "Unable to read Git content", table: "Git")), selection.isUnmerged)
+        }
+        guard byteCount <= maxBytes else { return (.tooLarge, selection.isUnmerged) }
+        let blob = await GitCommandExecution.runData(
+            ["cat-file", "blob", oid], in: root, stdoutLimit: maxBytes + 1, backend: backend
+        )
+        guard blob.status == 0 else {
+            return (.failed(blob.stderr.isEmpty
+                ? String(localized: "Unable to read Git content", table: "Git") : blob.stderr), selection.isUnmerged)
+        }
+        guard blob.stdout.count <= maxBytes else { return (.tooLarge, selection.isUnmerged) }
+        guard blob.stdout.count == byteCount else {
+            return (.failed(String(localized: "Incomplete Git content", table: "Git")), selection.isUnmerged)
+        }
+        guard !blob.stdout.contains(0), let text = String(data: blob.stdout, encoding: .utf8) else {
+            return (.binary, selection.isUnmerged)
+        }
+        return (.content(text), selection.isUnmerged)
+    }
+
+    private nonisolated static func gitObject(
+        _ location: GitLocation, in root: String, backend: WorkspaceBackend
+    ) async -> (oid: String?, isUnmerged: Bool, error: String?) {
+        let path: String
+        let args: [String]
+        switch location {
+        case .index(let name, _):
+            path = name
+            args = ["--literal-pathspecs", "ls-files", "--stage", "-z", "--", name]
+        case .tree(let revision, let name):
+            path = name
+            args = ["--literal-pathspecs", "ls-tree", "-rz", "--full-tree", revision, "--", name]
+        }
+        let limit = 1 << 16
+        let metadata = await GitCommandExecution.runData(
+            args, in: root, stdoutLimit: limit + 1, backend: backend
+        )
+        if metadata.status != 0 {
+            if case .tree("HEAD", _) = location {
+                // A verified unborn HEAD has no tree. An arbitrary bad ref,
+                // missing repository or failed command must not masquerade as one.
+                let head = await GitCommandExecution.run(
+                    ["rev-parse", "-q", "--verify", "HEAD^{commit}"], in: root, backend: backend
+                )
+                if head.status == 1 {
+                    let symbolic = await GitCommandExecution.run(
+                        ["symbolic-ref", "-q", "HEAD"], in: root, backend: backend
+                    )
+                    if symbolic.status == 0 {
+                        let branch = symbolic.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let ref = await GitCommandExecution.run(
+                            ["show-ref", "--verify", "--quiet", branch], in: root, backend: backend
+                        )
+                        if ref.status == 1 { return (nil, false, nil) }
+                    }
+                }
+            }
+            return (nil, false, metadata.stderr.isEmpty
+                ? String(localized: "Unable to read Git content", table: "Git") : metadata.stderr)
+        }
+        guard metadata.stdout.count <= limit,
+              metadata.stdout.isEmpty || metadata.stdout.last == 0 else {
+            return (nil, false, String(localized: "Unable to read Git content", table: "Git"))
+        }
+        var found: [(stage: Int, oid: String)] = []
+        for record in metadata.stdout.split(separator: 0, omittingEmptySubsequences: true) {
+            guard let tab = record.firstIndex(of: 9),
+                  Data(record[record.index(after: tab)...]) == Data(path.utf8),
+                  let header = String(bytes: record[..<tab], encoding: .utf8)
+            else {
+                return (nil, false, String(localized: "Unable to read Git content", table: "Git"))
+            }
+            let fields = header.split(separator: " ")
+            let oid: String
+            let stage: Int
+            switch location {
+            case .index:
+                guard fields.count == 3, let parsedStage = Int(fields[2]),
+                      (0...3).contains(parsedStage) else {
+                    return (nil, false, String(localized: "Unable to read Git content", table: "Git"))
+                }
+                oid = String(fields[1])
+                stage = parsedStage
+            case .tree:
+                guard fields.count == 3, fields[1] == "blob" else {
+                    return (nil, false, String(localized: "Unable to read Git content", table: "Git"))
+                }
+                oid = String(fields[2])
+                stage = 0
+            }
+            guard (oid.count == 40 || oid.count == 64),
+                  oid.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+                return (nil, false, String(localized: "Unable to read Git content", table: "Git"))
+            }
+            found.append((stage, oid))
+        }
+        switch location {
+        case .index(_, let stages):
+            let unmerged = found.contains { $0.stage != 0 }
+            for stage in stages {
+                if let entry = found.first(where: { $0.stage == stage }) {
+                    return (entry.oid, unmerged, nil)
+                }
+            }
+            return (nil, unmerged, nil)
+        case .tree:
+            return (found.first?.oid, false, nil)
+        }
+    }
+
+    /// Editing is limited to regular worktree files. In particular, writing a
+    /// symlink atomically would replace the link itself with a regular file.
+    private nonisolated static func isEditableWorktreeFile(
+        root: String, path: String, backend: WorkspaceBackend
+    ) async -> Bool {
+        let filePath = (root as NSString).appendingPathComponent(path)
+        guard let stat = try? await backend.stat(path: filePath) else { return false }
+        return !stat.isSymlink && stat.isRegular
+    }
+
+    private nonisolated static func readWorktreeFile(
+        root: String, path: String, backend: WorkspaceBackend
+    ) async -> (text: String, error: String?) {
+        let filePath = (root as NSString).appendingPathComponent(path)
+        let symlink = (try? await backend.readSymlinkDestination(path: filePath)) ?? nil
+        if let symlink {
+            guard symlink.utf8.count <= maxBytes else {
+                return ("", String(localized: "File is too large to diff", table: "Git"))
+            }
+            return (symlink, nil)
+        }
+        do {
+            let data = try await backend.read(path: filePath, maxBytes: maxBytes)
+            guard !data.contains(0),
+                  let text = String(data: data, encoding: .utf8)
+            else {
+                return ("", String(localized: "Binary file", table: "Git"))
+            }
+            return (text, nil)
+        } catch WorkspaceError.tooLarge {
+            return ("", String(localized: "File is too large to diff", table: "Git"))
+        } catch WorkspaceError.notFound {
+            // Deleted from the worktree: an empty "after" side is the diff.
+            return ("", nil)
+        } catch {
+            return ("", String(
+                localized: "Unable to read file: \(error.localizedDescription)", table: "Git",
+                comment: "Diff error followed by a system-provided error description."
+            ))
+        }
+    }
+}
+
+/// Native TextKit-backed diff with a tab-retained editor and scroll state.
+struct DiffViewerView: View {
+    let diff: DiffTab
+    private let themeChanges = Theme.changes
+    private let settings = AppSettings.shared
+    private let preferences: DiffViewPreferences
+    /// The view stays mounted while other tabs are selected (see
+    /// ContentView); this flags when it is the frontmost tab so content
+    /// refreshes on each re-visit, not just on first mount.
+    let isSelected: Bool
+
+    init(diff: DiffTab, isSelected: Bool = true) {
+        self.diff = diff
+        preferences = diff.preferences
+        self.isSelected = isSelected
+    }
+
+    var body: some View {
+        let _ = themeChanges.revision
+        let _ = preferences.prefersEditing
+        let _ = preferences.diffStyle
+        let _ = diff.editDecorations
+        VStack(spacing: 0) {
+            if let reason = diff.readOnlyReason {
+                RemoteReadOnlyBanner(message: reason)
+                    .frame(height: 22)
+            }
+            if diff.isUnmerged {
+                conflictBanner
+            }
+            if let saveError = diff.saveError {
+                saveErrorBar(saveError)
+            }
+            if let error = diff.error, diff.hasLoadedContent {
+                readErrorBar(error)
+            }
+            Group {
+                if let error = diff.error, !diff.hasLoadedContent {
+                    placeholder(icon: "exclamationmark.triangle", text: error)
+                } else if !diff.hasChanges && !diff.source.isPlainRevision {
+                    if diff.isLoading {
+                        initialLoadingSkeleton
+                    } else if diff.isUnmerged {
+                        placeholder(
+                            icon: "arrow.triangle.merge",
+                            text: String(localized: "Conflict is still unresolved", table: "Git")
+                        )
+                    } else {
+                        placeholder(icon: "checkmark.circle", text: String(localized: "No changes", table: "Git"))
+                    }
+                } else {
+                    VStack(spacing: 0) {
+                        if !diff.source.isPlainRevision { controlBar }
+                        if diff.source.isPlainRevision || diff.display != nil {
+                            // Each tab retains its own TextKit document; never reuse another tab's NSView.
+                            DiffNativeRoot(diff: diff)
+                                .id(diff.id)
+                        } else {
+                            DiffSkeletonView()
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .onAppear {
+            if isSelected {
+                diff.refreshWhenSelected()
+            }
+        }
+        .onChange(of: isSelected) {
+            if isSelected { diff.refreshWhenSelected() }
+        }
+        .onChange(of: settings.fontFamily) { _, _ in diff.refreshNativeAppearance() }
+        .onChange(of: settings.fontSize) { _, _ in diff.refreshNativeAppearance() }
+        .onChange(of: themeChanges.revision) { _, _ in diff.refreshNativeAppearance() }
+    }
+
+    private var conflictBanner: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.triangle.merge")
+            Text(String(localized: "Unresolved merge conflict", table: "Git"))
+                .fontWeight(.medium)
+            Spacer(minLength: 0)
+            Text(String(localized: "Resolve before committing", table: "Git"))
+                .foregroundStyle(.secondary)
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(Color.orange)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.orange.opacity(0.1))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.orange.opacity(0.22))
+                .frame(height: 1)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var controlBar: some View {
+        DiffControlsBar(
+            diffStyle: Binding(
+                get: { preferences.diffStyle },
+                set: { diff.setDiffStyle($0) }
+            ),
+            isEditing: Binding(
+                get: { diff.isEditableNow && preferences.prefersEditing },
+                set: { diff.setEditing($0) }
+            ),
+            canEdit: diff.isEditableNow
+        )
+        .frame(height: DiffViewerLayout.controlsHeight)
+    }
+
+    /// Reserve the toolbar row while the native diff is computing so its
+    /// layout never jumps when the text panes become available.
+    private var initialLoadingSkeleton: some View {
+        VStack(spacing: 0) {
+            DiffControlsSkeletonBar(
+                showsModePlaceholder: diff.source == .worktree
+            )
+            .frame(height: DiffViewerLayout.controlsHeight)
+            DiffSkeletonView()
+        }
+    }
+
+    private func placeholder(icon: String, text: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 24, weight: .light))
+                .foregroundStyle(.quaternary)
+            Text(text)
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func saveErrorBar(_ message: String) -> some View {
+        readErrorBar(String(localized: "Could not save: \(message)", table: "Git"))
+    }
+
+    private func readErrorBar(_ message: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10))
+            Text(message)
+                .font(.system(size: 11))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(Color(red: 0.82, green: 0.60, blue: 0.13))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(Color.primary.opacity(0.04))
+    }
+}
+
+private enum DiffViewerLayout {
+    static let controlsHeight: CGFloat = 37
+}
+
+/// AppKit diff controls mounted in the SwiftUI diff toolbar.
+private struct DiffControlsBar: NSViewRepresentable {
+    @Binding var diffStyle: DiffLayoutStyle
+    @Binding var isEditing: Bool
+    let canEdit: Bool
+
+    func makeNSView(context: Context) -> DiffControlsNSView {
+        DiffControlsNSView()
+    }
+
+    func updateNSView(_ view: DiffControlsNSView, context: Context) {
+        view.update(
+            diffStyle: diffStyle,
+            isEditing: isEditing,
+            canEdit: canEdit,
+            onDiffStyleChange: { diffStyle = $0 },
+            onEditingChange: { isEditing = $0 }
+        )
+    }
+}
+
+/// Matches the native controls row while the diff metadata is still loading.
+/// Keeping this in AppKit gives the placeholder the same sizing and divider
+/// behavior as the toolbar that replaces it.
+private struct DiffControlsSkeletonBar: NSViewRepresentable {
+    let showsModePlaceholder: Bool
+
+    func makeNSView(context: Context) -> DiffControlsSkeletonNSView {
+        DiffControlsSkeletonNSView()
+    }
+
+    func updateNSView(_ view: DiffControlsSkeletonNSView, context: Context) {
+        view.update(showsModePlaceholder: showsModePlaceholder)
+    }
+}
+
+private final class DiffControlsSkeletonNSView: NSView {
+    private let modePlaceholder = NSView()
+    private let layoutPlaceholder = NSView()
+    private let divider = NSView()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        setAccessibilityElement(false)
+
+        for placeholder in [modePlaceholder, layoutPlaceholder] {
+            placeholder.wantsLayer = true
+            placeholder.layer?.cornerRadius = 5
+            placeholder.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(placeholder)
+        }
+
+        divider.wantsLayer = true
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(divider)
+
+        NSLayoutConstraint.activate([
+            layoutPlaceholder.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            layoutPlaceholder.centerYAnchor.constraint(equalTo: centerYAnchor),
+            layoutPlaceholder.widthAnchor.constraint(equalToConstant: 111),
+            layoutPlaceholder.heightAnchor.constraint(equalToConstant: 20),
+            modePlaceholder.trailingAnchor.constraint(
+                equalTo: layoutPlaceholder.leadingAnchor, constant: -8
+            ),
+            modePlaceholder.centerYAnchor.constraint(equalTo: centerYAnchor),
+            modePlaceholder.widthAnchor.constraint(equalToConstant: 93),
+            modePlaceholder.heightAnchor.constraint(equalToConstant: 20),
+            divider.leadingAnchor.constraint(equalTo: leadingAnchor),
+            divider.trailingAnchor.constraint(equalTo: trailingAnchor),
+            divider.bottomAnchor.constraint(equalTo: bottomAnchor),
+            divider.heightAnchor.constraint(equalToConstant: 1),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func update(showsModePlaceholder: Bool) {
+        updateAppearanceColors()
+        modePlaceholder.isHidden = !showsModePlaceholder
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateAppearanceColors()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateAppearanceColors()
+    }
+
+    private func updateAppearanceColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = Theme.background.cgColor
+            divider.layer?.backgroundColor = Theme.divider.cgColor
+            let fill = NSColor.labelColor.withAlphaComponent(0.05).cgColor
+            modePlaceholder.layer?.backgroundColor = fill
+            layoutPlaceholder.layer?.backgroundColor = fill
+        }
+    }
+}
+
+private final class DiffControlsNSView: NSView {
+    private let modeControl = NSSegmentedControl(
+        labels: [
+            String(localized: "Review", table: "Git", comment: "Read-only mode for a diff."),
+            String(localized: "Edit", table: "Git", comment: "Editable mode for a diff."),
+        ],
+        trackingMode: .selectOne,
+        target: nil,
+        action: nil
+    )
+    private let layoutControl = NSSegmentedControl(
+        labels: [
+            String(localized: "Unified", table: "Git", comment: "A single-column diff layout."),
+            String(localized: "Split", table: "Git", comment: "A side-by-side diff layout."),
+        ],
+        trackingMode: .selectOne,
+        target: nil,
+        action: nil
+    )
+    private let divider = NSView()
+    private var onDiffStyleChange: ((DiffLayoutStyle) -> Void)?
+    private var onEditingChange: ((Bool) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+
+        for control in [modeControl, layoutControl] {
+            control.controlSize = .small
+            control.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(control)
+        }
+        modeControl.target = self
+        modeControl.action = #selector(modeChanged)
+        modeControl.setAccessibilityLabel(String(localized: "Diff Mode", table: "Git"))
+        layoutControl.target = self
+        layoutControl.action = #selector(layoutChanged)
+        layoutControl.setAccessibilityLabel(String(localized: "Diff Layout", table: "Git"))
+
+        divider.wantsLayer = true
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(divider)
+
+        NSLayoutConstraint.activate([
+            layoutControl.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            layoutControl.centerYAnchor.constraint(equalTo: centerYAnchor),
+            modeControl.trailingAnchor.constraint(equalTo: layoutControl.leadingAnchor, constant: -8),
+            modeControl.centerYAnchor.constraint(equalTo: centerYAnchor),
+            divider.leadingAnchor.constraint(equalTo: leadingAnchor),
+            divider.trailingAnchor.constraint(equalTo: trailingAnchor),
+            divider.bottomAnchor.constraint(equalTo: bottomAnchor),
+            divider.heightAnchor.constraint(equalToConstant: 1),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func update(
+        diffStyle: DiffLayoutStyle,
+        isEditing: Bool,
+        canEdit: Bool,
+        onDiffStyleChange: @escaping (DiffLayoutStyle) -> Void,
+        onEditingChange: @escaping (Bool) -> Void
+    ) {
+        self.onDiffStyleChange = onDiffStyleChange
+        self.onEditingChange = onEditingChange
+        updateAppearanceColors()
+
+        layoutControl.selectedSegment = diffStyle == .split ? 1 : 0
+        modeControl.isHidden = !canEdit
+        modeControl.setEnabled(canEdit, forSegment: 1)
+        modeControl.selectedSegment = canEdit && isEditing ? 1 : 0
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateAppearanceColors()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateAppearanceColors()
+        modeControl.needsDisplay = true
+        layoutControl.needsDisplay = true
+    }
+
+    private func updateAppearanceColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = Theme.background.cgColor
+            divider.layer?.backgroundColor = Theme.divider.cgColor
+        }
+    }
+
+    @objc private func modeChanged() {
+        onEditingChange?(modeControl.selectedSegment == 1)
+    }
+
+    @objc private func layoutChanged() {
+        onDiffStyleChange?(layoutControl.selectedSegment == 1 ? .split : .unified)
+    }
+}
+
+/// Code-shaped gray bars shown while native diff computation completes.
+private struct DiffSkeletonView: View {
+    /// (indent level, width fraction) per line, repeated to fill the pane.
+    private static let pattern: [(indent: CGFloat, width: CGFloat)] = [
+        (0, 0.42), (1, 0.62), (1, 0.30), (1, 0.55),
+        (2, 0.38), (2, 0.50), (1, 0.24), (0, 0.16),
+    ]
+
+    var body: some View {
+        GeometryReader { geo in
+            VStack(alignment: .leading, spacing: 9) {
+                ForEach(0..<24, id: \.self) { index in
+                    let line = Self.pattern[index % Self.pattern.count]
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.primary.opacity(0.05))
+                        .frame(width: geo.size.width * line.width * 0.55, height: 9)
+                        .padding(.leading, line.indent * 18)
+                }
+            }
+            .padding(16)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .clipped()
+    }
+}

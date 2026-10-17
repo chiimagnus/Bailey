@@ -5,7 +5,7 @@
 ## Invariants
 
 - **隧道由应用拥有。** 启动和停止不依赖某个终端或浏览器标签，关闭页面不能误停用户配置的转发。
-- **规则单独持久化。** `~/.config/kero/tunnels.toml` 不合并进可能被普通偏好重写的字段。
+- **规则单独持久化。** `~/.config/Bailey/tunnels.toml` 不合并进可能被普通偏好重写的字段。
 - **后台不弹密码认证。** 使用既有密钥或 SSH agent；主机信任失败不能关闭校验绕过。
 - **监听地址和端口必须检查。** 端口不是整数或超过整数范围时只跳过对应规则，不阻断其余有效规则。
 - **测试实例不启动保存的隧道。** 不因验收 App 而抢占真实服务端口或修改用户连接。
@@ -22,4 +22,4 @@
 
 `TunnelStoreTests` 验证配置解析、有效规则和异常端口；`RemoteCommandsTests` 检查相关命令与端口边界。真实转发要用专用连接、空闲端口和受控服务检查启停、认证失败、实际监听及连接结果，不能仅以命令构建成功判定隧道正常。
 
-实现入口：[TunnelManager.swift](../../kero/Remote/Tunnels/TunnelManager.swift)。安全要求见 [SECURITY.md](../../SECURITY.md)，执行方式见 [testing.md](../testing.md)。
+实现入口：[TunnelManager.swift](../../Bailey/Remote/Tunnels/TunnelManager.swift)。安全要求见 [SECURITY.md](../../SECURITY.md)，执行方式见 [testing.md](../testing.md)。

@@ -1,6 +1,6 @@
-# Kero's zsh integration.
+# Bailey's zsh integration.
 #
-# Kero starts zsh with ZDOTDIR pointing at this directory so it can add one
+# Bailey starts zsh with ZDOTDIR pointing at this directory so it can add one
 # interactive convenience after the user's own startup files have run. Nothing
 # else about the shell changes: the user's ZDOTDIR is restored before anything
 # is sourced, so .zprofile, .zshrc and .zlogin are read from where they always
@@ -8,16 +8,16 @@
 #
 # This exists because PATH cannot be used for the job on macOS. /etc/zprofile
 # runs `path_helper`, which rebuilds PATH with the system directories first, so
-# a directory Kero prepends ends up behind /usr/bin and never shadows anything.
+# a directory Bailey prepends ends up behind /usr/bin and never shadows anything.
 
 # Restore before sourcing: every later startup file must come from the user's
 # directory, not this one. A user who had no ZDOTDIR must end up with none.
-if [[ -n "${KERO_ZSH_ZDOTDIR-}" ]]; then
-  ZDOTDIR="$KERO_ZSH_ZDOTDIR"
+if [[ -n "${BAILEY_ZSH_ZDOTDIR-}" ]]; then
+  ZDOTDIR="$BAILEY_ZSH_ZDOTDIR"
 else
   unset ZDOTDIR
 fi
-unset KERO_ZSH_ZDOTDIR
+unset BAILEY_ZSH_ZDOTDIR
 
 # The user's own .zshenv may set ZDOTDIR itself; zsh reads the remaining
 # startup files from whatever it holds once this file returns.
@@ -26,9 +26,9 @@ if [[ -r "${ZDOTDIR:-$HOME}/.zshenv" ]]; then
 fi
 
 # Everything below is interactive-only. Scripts, `zsh -c`, and anything an
-# agent runs must behave exactly as they do outside Kero.
-if [[ -o interactive ]] && [[ -n "${KERO_SSH_HELPER-}" ]]; then
-  kero_ssh_integration() {
+# agent runs must behave exactly as they do outside Bailey.
+if [[ -o interactive ]] && [[ -n "${BAILEY_SSH_HELPER-}" ]]; then
+  bailey_ssh_integration() {
     emulate -L zsh
     # Runs once, before the first prompt, which is after .zprofile, .zshrc and
     # .zlogin. Defining ssh any earlier would let the user's own files replace
@@ -36,20 +36,20 @@ if [[ -o interactive ]] && [[ -n "${KERO_SSH_HELPER-}" ]]; then
     #
     # A nested interactive zsh started by hand does not inherit the function,
     # so ssh typed there is not followed. That is the same outcome as any
-    # other shell Kero is not in front of, and needs no fix.
-    add-zsh-hook -d precmd kero_ssh_integration
-    unfunction kero_ssh_integration 2>/dev/null
+    # other shell Bailey is not in front of, and needs no fix.
+    add-zsh-hook -d precmd bailey_ssh_integration
+    unfunction bailey_ssh_integration 2>/dev/null
 
     # Preserve user aliases and custom functions. Kaku's known wrapper is
     # different: it delegates to `command ssh`, so give only that invocation
-    # Kero's helper first on PATH, retaining Kaku's SSH options and behavior.
+    # Bailey's helper first on PATH, retaining Kaku's SSH options and behavior.
     (( $+aliases[ssh] )) && return
-    [[ -x "$KERO_SSH_HELPER" ]] || return
+    [[ -x "$BAILEY_SSH_HELPER" ]] || return
     if (( $+functions[ssh] )); then
       (( $+functions[_kaku_wrapped_ssh] )) || return
       [[ ${functions[ssh]} == *'_kaku_wrapped_ssh "$@"'* ]] || return
       ssh() {
-        local PATH="${KERO_SSH_HELPER:h}:$PATH"
+        local PATH="${BAILEY_SSH_HELPER:h}:$PATH"
         _kaku_wrapped_ssh "$@"
       }
       return
@@ -68,9 +68,9 @@ if [[ -o interactive ]] && [[ -n "${KERO_SSH_HELPER-}" ]]; then
       # close the terminal when the connection ended. The helper execs the real
       # ssh over itself, so the process id, the terminal and the exit status
       # are the ones ssh would have had anyway.
-      "$KERO_SSH_HELPER" "$@"
+      "$BAILEY_SSH_HELPER" "$@"
     }
   }
   autoload -Uz add-zsh-hook
-  add-zsh-hook precmd kero_ssh_integration
+  add-zsh-hook precmd bailey_ssh_integration
 fi

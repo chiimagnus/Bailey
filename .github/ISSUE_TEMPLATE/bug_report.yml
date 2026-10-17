@@ -1,5 +1,5 @@
 name: Bug report
-description: Report something that isn't working in Kero
+description: Report something that isn't working in Bailey
 title: "[Bug]: "
 labels: ["bug"]
 body:
@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         中文优先，英文也可以。Chinese preferred; English is welcome.
-        安全漏洞请按 [SECURITY.md](https://github.com/chiimagnus/kero/blob/main/SECURITY.md) 私下报告；截图与日志请移除密钥、私人路径和终端内容。
+        安全漏洞请按 [SECURITY.md](https://github.com/chiimagnus/Bailey/blob/main/SECURITY.md) 私下报告；截图与日志请移除密钥、私人路径和终端内容。
 
   - type: checkboxes
     id: existing-search
@@ -49,7 +49,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Kero version or commit
+      label: Bailey version or commit
       placeholder: 0.1.48 or abc1234
     validations:
       required: true

@@ -1,4 +1,4 @@
-# Kero 文档
+# Bailey 文档
 
 本目录维护当前实现及开发约束。开始修改前先读 [AGENTS.md](../AGENTS.md)，本地开发从 [development.md](development.md) 开始。
 

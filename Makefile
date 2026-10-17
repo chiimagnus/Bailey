@@ -1,16 +1,16 @@
-# Kero: Xcode 负责构建与测试，Make 只提供统一入口。
+# Bailey: Xcode 负责构建与测试，Make 只提供统一入口。
 .DEFAULT_GOAL := help
 .NOTPARALLEL:
 
-PROJECT := kero.xcodeproj
-SCHEME := kero
+PROJECT := Bailey.xcodeproj
+SCHEME := Bailey
 CONFIGURATION ?= Debug
 DESTINATION := platform=macOS,arch=arm64
 DERIVED_DATA := build/DerivedData
 SOURCE_PACKAGES := build/SourcePackages
-APP = $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/Kero.app
-RELEASE_APP := $(DERIVED_DATA)/Build/Products/Release/Kero.app
-ARCHIVE := build/releases/kero-$(VERSION)-macos-arm64.zip
+APP = $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/Bailey.app
+RELEASE_APP := $(DERIVED_DATA)/Build/Products/Release/Bailey.app
+ARCHIVE := build/releases/bailey-$(VERSION)-macos-arm64.zip
 
 # 按 Package.resolved 固定版本；与 Xcode 的工程、scheme、测试目标共用。
 XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
@@ -34,13 +34,13 @@ endif
 
 help:
 	@printf '%s\n' \
-		'Kero · Xcode 原生构建与测试' \
+		'Bailey · Xcode 原生构建与测试' \
 		'  make build                              Debug 构建并验签' \
 		'  make test                               运行 Xcode XCTest' \
 		'  make test SIGNING=adhoc                 临时签名运行 XCTest（CI）' \
 		'  make build:release                      Release 构建并验签' \
 		'  make build:release SIGNING=adhoc        无开发证书时验证 Release 构建' \
-		'  make test ONLY_TESTING=KeroTests/类名     只运行指定 XCTest' \
+		'  make test ONLY_TESTING=BaileyTests/类名     只运行指定 XCTest' \
 		'  make package VERSION=X.Y.Z BUILD_NUMBER=N  验证正式签名并制作 ZIP' \
 		'  make clean                              Xcode 清理构建产物' \
 		'  make doctor                             检查 Xcode 工具链'
@@ -60,7 +60,7 @@ build\:release: build
 test:
 	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(TEST_SELECTION) test
 ifeq ($(SIGNING),adhoc)
-	@set -eu; for bundle in '$(APP)' '$(APP)/Contents/PlugIns/KeroTests.xctest'; do \
+	@set -eu; for bundle in '$(APP)' '$(APP)/Contents/PlugIns/BaileyTests.xctest'; do \
 		codesign --verify --deep --strict "$$bundle"; \
 		codesign -dvvv "$$bundle" 2>&1 | grep -Fx 'Signature=adhoc' >/dev/null; \
 	done
@@ -76,19 +76,19 @@ package:
 		app='$(RELEASE_APP)'; \
 		ditto -c -k --sequesterRsrc --keepParent "$$app" "$$temp/package.zip"; \
 		ditto -x -k "$$temp/package.zip" "$$temp/unpacked"; \
-		for bundle in "$$app" "$$temp/unpacked/Kero.app"; do \
+		for bundle in "$$app" "$$temp/unpacked/Bailey.app"; do \
 			info="$$bundle/Contents/Info.plist"; \
 			codesign --verify --deep --strict "$$bundle"; \
 			codesign -d --extract-certificates="$$temp/cert-" "$$bundle"; \
 			fingerprint=$$(shasum -a 1 "$$temp/cert-0" | awk '{print toupper($$1)}'); \
 			test "$$fingerprint" = '$(SIGNING_IDENTITY)'; \
 			openssl x509 -inform DER -in "$$temp/cert-0" -checkend 0 -noout; \
-			test "$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$$info")" = chiimagnus.kero; \
-			test "$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$$info")" = Kero; \
-			test "$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$$info")" = kero; \
+			test "$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$$info")" = chiimagnus.bailey; \
+			test "$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$$info")" = Bailey; \
+			test "$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$$info")" = bailey; \
 			test "$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$$info")" = '$(VERSION)'; \
 			test "$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$$info")" = '$(BUILD_NUMBER)'; \
-			lipo "$$bundle/Contents/MacOS/kero" -verify_arch arm64; \
+			lipo "$$bundle/Contents/MacOS/bailey" -verify_arch arm64; \
 			signature=$$(codesign -dv --verbose=4 "$$bundle" 2>&1); \
 			printf '%s\n' "$$signature" | grep -Fx 'TeamIdentifier=$(SIGNING_TEAM)' >/dev/null; \
 			printf '%s\n' "$$signature" | grep '^Authority=Apple Development:' >/dev/null; \

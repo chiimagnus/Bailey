@@ -4,7 +4,7 @@
 
 ## 平台与现代化
 
-Kero 支持 Apple Silicon、macOS 15.6 及以后版本，自有 App 和 XCTest 使用 Swift 6。语言模式、默认隔离和 SDK 以 Xcode 工程及 CI 配置为准，不为使用新写法擅自提高最低系统版本。
+Bailey 支持 Apple Silicon、macOS 15.6 及以后版本，自有 App 和 XCTest 使用 Swift 6。语言模式、默认隔离和 SDK 以 Xcode 工程及 CI 配置为准，不为使用新写法擅自提高最低系统版本。
 
 优先当前可用的 Swift 和 Apple API。迁移时直接采用等价实现、删除被替代调用，不保留仅包装旧写法的兼容层；遇到废弃 API 核对替代语义，不把未解决的编译诊断当作正常状态。必要的平台桥接和依赖能力缺口按真实证据处理。
 

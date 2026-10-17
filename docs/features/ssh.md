@@ -18,7 +18,7 @@ SSH 后端让文件和 Git 面板直接操作远端项目，不要求挂载文�
 
 自动跟随终端的远程工作区沿用该终端已认证的 master，失联时不会另建连接；它的本机 master 存活检查计入命令总超时。固定 SSH 主机使用 `ControlMaster=auto`，旧连接失效时可能通过现有 OpenSSH 密钥新建**无需交互认证**的连接；仍不绕过主机密钥校验。用户在 Shell 中手动建立的 SSH 会话不被接管。真实 SSH 验收必须使用测试专属 socket，不借用或关闭用户 master。
 
-外部 Git 工具不会发出 Kero 终端的命令完成事件。当前 SSH 项目 Git 面板的前台可见刷新、暂停条件和失败提示由 [Git 刷新](git.md#刷新与显示) 统一维护；不增加独立的远端后台监控。
+外部 Git 工具不会发出 Bailey 终端的命令完成事件。当前 SSH 项目 Git 面板的前台可见刷新、暂停条件和失败提示由 [Git 刷新](git.md#刷新与显示) 统一维护；不增加独立的远端后台监控。
 
 交互式变基是明确创建的新终端，拥有独立的 SSH 连接。固定主机与自动跟随的项目都捕获原机器、端口和 Git 根；握手前暂存启动目标，握手后由真实 RemoteConnection 接管。以普通登录终端接收原生启动输入，不把复杂远端 command 的 Windows 参数重组当作 POSIX 语义。连接或会话结束后保留断线目标与结果，不回退操作 Mac。
 
@@ -36,8 +36,8 @@ Git Ref 归档在所选 SSH 工作区的临时目录生成，经 Git 原生进�
 
 ## 验证
 
-`RemoteCommandsTests`、`RemoteLifetimeTests`、`WorkspaceIdentityTests` 和工作区身份回归检查 SSH 批量目录读取、复用参数、绑定、取消、失败与过期结果。受控后端只能证明这些逻辑，不能证明真实传输；`SSHFileTreeLiveTests` 使用专用、获准的 Windows SSH master 检查特殊目录名、批量读取、单目录失败隔离和文件树冷加载／缓存展开／批量刷新各自的 SSH 请求次数；显式 `KERO_SSH_BENCHMARK=1` 时再测冷加载与 30 次热路径的中位数/p95。`SSHGitRecoveryLiveTests` 使用另一个专用 master 和 Windows 临时仓库，模拟仅该测试传输失联，验证 Git Graph 保留、写操作拒绝、恢复后重新允许暂存；显式开启 `KERO_SSH_BENCHMARK=1` 时测首次 Git 核心/详情耗时和 30 次热刷新。不会切断用户或系统网络连接。测量不代替完整 App 视觉响应或原生网络异常的 UI 验收。
+`RemoteCommandsTests`、`RemoteLifetimeTests`、`WorkspaceIdentityTests` 和工作区身份回归检查 SSH 批量目录读取、复用参数、绑定、取消、失败与过期结果。受控后端只能证明这些逻辑，不能证明真实传输；`SSHFileTreeLiveTests` 使用专用、获准的 Windows SSH master 检查特殊目录名、批量读取、单目录失败隔离和文件树冷加载／缓存展开／批量刷新各自的 SSH 请求次数；显式 `BAILEY_SSH_BENCHMARK=1` 时再测冷加载与 30 次热路径的中位数/p95。`SSHGitRecoveryLiveTests` 使用另一个专用 master 和 Windows 临时仓库，模拟仅该测试传输失联，验证 Git Graph 保留、写操作拒绝、恢复后重新允许暂存；显式开启 `BAILEY_SSH_BENCHMARK=1` 时测首次 Git 核心/详情耗时和 30 次热刷新。不会切断用户或系统网络连接。测量不代替完整 App 视觉响应或原生网络异常的 UI 验收。
 
 归档的验证分层：模拟 SSH 后端覆盖传输上限与远端清理失败；`GitWorkspaceSSHTests` 在真实 Windows SSH 中核对选定 Ref 的 ZIP 原始字节，远端分支经原生保存面板归档仍需单独验收完整 App 操作。这些成功路径不代表断线时完整 App 的清理与恢复已完成验收。
 
-实现边界：[WorkspaceBackend.swift](../../kero/Workspace/WorkspaceBackend.swift)、[RemoteCommands.swift](../../kero/Remote/RemoteCommands.swift)。统一运行方式见 [testing.md](../testing.md)。
+实现边界：[WorkspaceBackend.swift](../../Bailey/Workspace/WorkspaceBackend.swift)、[RemoteCommands.swift](../../Bailey/Remote/RemoteCommands.swift)。统一运行方式见 [testing.md](../testing.md)。
