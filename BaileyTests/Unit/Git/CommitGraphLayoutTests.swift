@@ -48,6 +48,49 @@ final class CommitGraphLayoutTests: XCTestCase {
                       file: file, line: line)
     }
 
+    func testWorktreeNodesUseRealHeadsWithoutBecomingCommitsOrChangingHeadAncestors() {
+        let head = String(repeating: "a", count: 40)
+        let root = String(repeating: "b", count: 40)
+        let commits = [commit(head, parents: [root], current: true), commit(root)]
+        let changes = [
+            GitStatusModel.WorktreeChanges(
+                path: "/tmp/main", branch: "main", headOID: head,
+                entries: [.init(path: "file.txt", staged: ".", unstaged: "M")],
+                isCurrent: true
+            ),
+            GitStatusModel.WorktreeChanges(
+                path: "/tmp/worktree", branch: "feature", headOID: head,
+                entries: [.init(path: "other.txt", staged: "?", unstaged: "?")],
+                isCurrent: false
+            )
+        ]
+        let rows = GitStatusModel.graphCommits(commits, stashes: [], worktrees: changes)
+        XCTAssertEqual(rows.count, 4)
+        XCTAssertEqual(rows.compactMap(\.worktree).count, 2)
+        XCTAssertTrue(rows.prefix(2).allSatisfy { $0.worktree != nil })
+        XCTAssertEqual(rows.suffix(2).map(\.hash), [head, root])
+        let layout = CommitGraphLayout(commits: rows)
+        XCTAssertEqual(layout.knownHeadHistory, Set([head, root]))
+        assertConnected(layout, from: 0, to: 2, color: layout.rows[0].node.color)
+        assertConnected(layout, from: 1, to: 2, color: layout.rows[1].node.color)
+        assertConnected(layout, from: 2, to: 3, color: layout.rows[2].node.color)
+    }
+
+    func testUnknownWorktreeHeadRemainsVisibleWithoutInventingAParentLine() {
+        let head = String(repeating: "c", count: 40)
+        let missingHead = String(repeating: "d", count: 40)
+        let orphan = GitStatusModel.WorktreeChanges(
+            path: "/tmp/detached", branch: nil, headOID: missingHead,
+            entries: [.init(path: "new.txt", staged: "?", unstaged: "?")],
+            isCurrent: false
+        )
+        let rows = GitStatusModel.graphCommits([commit(head, current: true)],
+                                                 stashes: [], worktrees: [orphan])
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows[0].worktree?.path, orphan.path)
+        XCTAssertTrue(CommitGraphLayout(commits: rows).rows[0].links.isEmpty)
+    }
+
     func testLinearHistoryUsesOneLaneAndEndsAtRoot() {
         let graph = CommitGraphLayout(commits: [
             commit("C", parents: ["B"], current: true),

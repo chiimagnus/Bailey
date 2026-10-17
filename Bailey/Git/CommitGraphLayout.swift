@@ -32,11 +32,12 @@ nonisolated struct CommitGraphLayout {
 
     init(commits: [GitStatusModel.RecentCommit]) {
         let positions = Dictionary(uniqueKeysWithValues: commits.enumerated().compactMap {
-            $0.element.stash == nil ? ($0.element.hash, $0.offset) : nil
+            $0.element.stash == nil && $0.element.worktree == nil
+                ? ($0.element.hash, $0.offset) : nil
         })
         var headHistory: Set<String> = []
         if let headIndex = commits.firstIndex(where: {
-            $0.stash == nil && $0.references.contains {
+            $0.stash == nil && $0.worktree == nil && $0.references.contains {
                 $0.kind == .currentBranch || $0.kind == .detachedHead
             }
         }) {
@@ -55,8 +56,8 @@ nonisolated struct CommitGraphLayout {
 
         var reservations: [(lane: Int, color: Int, first: Int, last: Int)] = []
         // Stash display edges do not own the main commit's first-parent path.
-        let order = commits.indices.filter { commits[$0].stash == nil }
-            + commits.indices.filter { commits[$0].stash != nil }
+        let order = commits.indices.filter { commits[$0].stash == nil && commits[$0].worktree == nil }
+            + commits.indices.filter { commits[$0].stash != nil || commits[$0].worktree != nil }
         for start in order where nodes[start] == nil {
             var path: [Int] = []
             var cursor = start
@@ -66,7 +67,9 @@ nonisolated struct CommitGraphLayout {
                 guard let parent = commits[cursor].parentHashes.first else { break }
                 guard let next = positions[parent], next > cursor else {
                     // Only real commits can continue beyond the loaded page.
-                    if commits[cursor].stash == nil { end = commits.count }
+                    if commits[cursor].stash == nil && commits[cursor].worktree == nil {
+                        end = commits.count
+                    }
                     break
                 }
                 end = next

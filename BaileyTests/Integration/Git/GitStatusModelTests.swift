@@ -15,6 +15,7 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     private var failRemoteList = false
     private var failGitDirectory = false
     private var failOperationMarker = false
+    private var failWorktreeList = false
     private var pauseNextGit = false
     private var pauseHistory = false
     private var pauseRefs = false
@@ -40,6 +41,7 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     func setRemoteListUnavailable(_ value: Bool) { failRemoteList = value }
     func setGitDirectoryUnavailable(_ value: Bool) { failGitDirectory = value }
     func setOperationMarkerUnavailable(_ value: Bool) { failOperationMarker = value }
+    func setWorktreeListUnavailable(_ value: Bool) { failWorktreeList = value }
     func suspendNextGitRequest() { pauseNextGit = true }
     func suspendHistoryRequest() { pauseHistory = true }
     func suspendRefSnapshotRequest() { pauseRefs = true }
@@ -96,7 +98,9 @@ private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
             historyWaiting = true
             await withCheckedContinuation { pausedHistory = $0 }
         }
-        if failGit { throw WorkspaceError.timedOut }
+        if failGit || (failWorktreeList && argv == ["git", "worktree", "list", "--porcelain", "-z"]) {
+            throw WorkspaceError.timedOut
+        }
         if failOperationMarker, argv.count == 3,
            argv[0] == "sh", argv[1] == "-c",
            argv[2].contains("for n in rebase-merge rebase-apply MERGE_HEAD") {
@@ -1482,6 +1486,218 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(rows.first { $0.hash == side }?.references,
                        [.init(kind: .localBranch, name: "feature/nested")])
         XCTAssertEqual(rows.first { $0.hash == side }?.files.map(\.path), ["side.txt"])
+    }
+
+    func testWorktreeListParserPreservesExactPathsAndRejectsMalformedMetadata() {
+        let sha1 = String(repeating: "a", count: 40)
+        let sha256 = String(repeating: "b", count: 64)
+        let source = "worktree /tmp/空 格\n路径\u{0}HEAD \(sha1)\u{0}branch refs/heads/topic/a\u{0}\u{0}"
+            + "worktree /tmp/detached\u{0}HEAD \(sha256)\u{0}detached\u{0}\u{0}"
+            + "worktree C:/Users/workspace folder\u{0}HEAD \(sha1)\u{0}branch refs/heads/windows\u{0}\u{0}"
+            + "worktree /tmp/removed\u{0}HEAD \(sha1)\u{0}prunable gitdir file points to non-existent location\u{0}\u{0}"
+        let locations = GitStatusModel.parseWorktreeList(source)
+        XCTAssertEqual(locations?.count, 3)
+        XCTAssertEqual(locations?.first?.path, "/tmp/空 格\n路径")
+        XCTAssertEqual(locations?.first?.branch, "topic/a")
+        XCTAssertEqual(locations?[1].path, "/tmp/detached")
+        XCTAssertNil(locations?[1].branch)
+        XCTAssertEqual(locations?[1].headOID, sha256)
+        XCTAssertEqual(locations?.last?.path, "C:/Users/workspace folder")
+        XCTAssertEqual(locations?.last?.branch, "windows")
+        XCTAssertNil(GitStatusModel.parseWorktreeList("worktree /tmp/bad\u{0}HEAD malformed\u{0}\u{0}"))
+        XCTAssertNil(GitStatusModel.parseWorktreeList("worktree /tmp/truncated\u{0}"))
+    }
+
+    func testUnavailableRemoteWorktreeListRetainsLastGraphSnapshot() async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-worktree-failure-" + UUID().uuidString)
+        let root = fixture.appendingPathComponent("root")
+        let other = fixture.appendingPathComponent("checkout\n更新")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        func git(_ args: [String]) throws {
+            let result = GitCommandExecution.run(args, in: root.path, timeout: 10)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        try git(["init", "-q", "-b", "main"])
+        try git(["config", "user.name", "Test"])
+        try git(["config", "user.email", "test@invalid"])
+        try git(["config", "commit.gpgsign", "false"])
+        try git(["commit", "--allow-empty", "-qm", "baseline"])
+        try git(["worktree", "add", "-q", "-b", "feature", other.path, "HEAD"])
+        try Data("other checkout untracked".utf8).write(
+            to: other.appendingPathComponent("new.txt")
+        )
+
+        let backend = DiscardRemoteWorkspaceFixture()
+        let model = GitStatusModel()
+        model.sync(root: root.path, backend: backend, scope: "ssh:fixture")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.graphCommits.contains {
+            $0.worktree?.entries.contains(where: { $0.path == "new.txt" }) == true
+        })
+        await backend.setWorktreeListUnavailable(true)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertNotNil(model.detailError)
+        XCTAssertTrue(model.canUseCurrentStatus)
+        XCTAssertTrue(model.graphCommits.contains {
+            $0.worktree?.entries.contains(where: { $0.path == "new.txt" }) == true
+        }, "A partial SSH status failure is not evidence of a clean checkout")
+    }
+
+    func testGitGraphReadsUncommittedChangesFromEachRealWorktree() async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-worktree-graph-" + UUID().uuidString)
+        let main = fixture.appendingPathComponent("main")
+        let other = fixture.appendingPathComponent("另一个 worktree")
+        let detached = fixture.appendingPathComponent("detached")
+        try FileManager.default.createDirectory(at: main, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+
+        func git(_ args: [String], at path: URL = main) throws -> String {
+            let result = GitCommandExecution.run(args, in: path.path, timeout: 12)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = try git(["init", "-q", "-b", "main"])
+        _ = try git(["config", "user.name", "Working Tree Test"])
+        _ = try git(["config", "user.email", "worktrees@invalid"])
+        _ = try git(["config", "commit.gpgsign", "false"])
+        try Data("base\n".utf8).write(to: main.appendingPathComponent("tracked.txt"))
+        _ = try git(["add", "."])
+        _ = try git(["commit", "-qm", "base"])
+        let head = try git(["rev-parse", "HEAD"])
+        _ = try git(["worktree", "add", "-q", "-b", "feature/topic", other.path, "HEAD"])
+        _ = try git(["worktree", "add", "-q", "--detach", detached.path, "HEAD"])
+
+        try Data("staged\n".utf8).write(to: main.appendingPathComponent("tracked.txt"))
+        _ = try git(["add", "tracked.txt"])
+        try Data("unstaged\n".utf8).write(to: main.appendingPathComponent("tracked.txt"))
+        try Data("other\n".utf8).write(to: other.appendingPathComponent("特殊\n目录.txt"))
+        try Data("detached\n".utf8).write(to: detached.appendingPathComponent("detached.txt"))
+        let model = GitStatusModel()
+        model.sync(root: main.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+
+        let gitMain = try git(["rev-parse", "--show-toplevel"], at: main)
+        let gitOther = try git(["rev-parse", "--show-toplevel"], at: other)
+        let gitDetached = try git(["rev-parse", "--show-toplevel"], at: detached)
+        let trees = model.graphCommits.compactMap(\.worktree)
+        XCTAssertEqual(trees.count, 3)
+        XCTAssertEqual(Set(trees.map(\.path)), Set([gitMain, gitOther, gitDetached]))
+        XCTAssertEqual(trees.first(where: { $0.path == gitMain })?.entries.first?.staged, "M")
+        XCTAssertEqual(trees.first(where: { $0.path == gitMain })?.entries.first?.unstaged, "M")
+        XCTAssertEqual(trees.first(where: { $0.path == gitOther })?.branch, "feature/topic")
+        XCTAssertEqual(trees.first(where: { $0.path == gitDetached })?.branch, nil)
+        XCTAssertEqual(trees.first(where: { $0.path == gitOther })?.entries.first?.path, "特殊\n目录.txt")
+        XCTAssertTrue(trees.allSatisfy { $0.headOID == head })
+        XCTAssertEqual(Set(model.graphCommits.map(\.id)).count, model.graphCommits.count)
+        let graph = CommitGraphLayout(commits: model.graphCommits)
+        XCTAssertEqual(graph.knownHeadHistory, [head])
+        for (index, record) in model.graphCommits.enumerated() where record.worktree != nil {
+            XCTAssertFalse(graph.rows[index].links.isEmpty, "Dirty worktree must lead to the actual HEAD")
+        }
+
+        // Independently changing another checkout cannot be inferred from main's status.
+        try FileManager.default.removeItem(at: detached.appendingPathComponent("detached.txt"))
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        XCTAssertEqual(model.graphCommits.compactMap(\.worktree).count, 2)
+        XCTAssertTrue(model.changedEntries.contains { $0.path == "tracked.txt" })
+        XCTAssertEqual(try git(["status", "--porcelain", "--untracked-files=all"], at: detached), "")
+    }
+
+    func testWorktreeFileActionsReadIndependentIndexAndWorkingBytes() async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-diff-worktree-" + UUID().uuidString)
+        let main = fixture.appendingPathComponent("main")
+        let other = fixture.appendingPathComponent("feature workspace")
+        try FileManager.default.createDirectory(at: main, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+
+        func git(_ args: [String], in directory: URL = main) throws -> String {
+            let result = GitCommandExecution.run(args, in: directory.path, timeout: 10)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = try git(["init", "-q", "-b", "main"])
+        _ = try git(["config", "user.name", "Diff Worktree Test"])
+        _ = try git(["config", "user.email", "worktree-diff@invalid"])
+        _ = try git(["config", "commit.gpgsign", "false"])
+        try Data("baseline\n".utf8).write(to: main.appendingPathComponent("tracked.txt"))
+        _ = try git(["add", "."])
+        _ = try git(["commit", "-qm", "baseline"])
+        _ = try git(["worktree", "add", "-q", "-b", "feature", other.path, "HEAD"])
+
+        try Data("mac main content\n".utf8).write(to: main.appendingPathComponent("tracked.txt"))
+        try Data("other staged\n".utf8).write(to: other.appendingPathComponent("tracked.txt"))
+        _ = try git(["add", "tracked.txt"], in: other)
+        try Data("other latest content\n".utf8).write(to: other.appendingPathComponent("tracked.txt"))
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([main])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let otherRoot = try git(["rev-parse", "--show-toplevel"], in: other)
+
+        manager.openDiff(
+            repoRoot: otherRoot, path: "tracked.txt",
+            staged: true, untracked: false, origPath: nil
+        )
+        guard case .diff(let staged)? = project.focusedContent else {
+            return XCTFail("Expected staged DiffTab")
+        }
+        try await wait { staged.hasLoadedContent || staged.error != nil }
+        XCTAssertNil(staged.error)
+        XCTAssertEqual(staged.oldContent, "baseline\n")
+        XCTAssertEqual(staged.newContent, "other staged\n")
+        XCTAssertEqual(staged.repoRoot, otherRoot)
+        XCTAssertEqual(staged.source, .staged)
+
+        manager.openDiff(
+            repoRoot: otherRoot, path: "tracked.txt",
+            staged: false, untracked: false, origPath: nil
+        )
+        guard case .diff(let unstaged)? = project.focusedContent else {
+            return XCTFail("Expected worktree DiffTab")
+        }
+        try await wait { unstaged.hasLoadedContent || unstaged.error != nil }
+        XCTAssertNil(unstaged.error)
+        XCTAssertEqual(unstaged.oldContent, "other staged\n")
+        XCTAssertEqual(unstaged.newContent, "other latest content\n")
+        XCTAssertEqual(unstaged.repoRoot, otherRoot)
+        XCTAssertEqual(unstaged.source, .worktree)
+
+        // Neither opening another checkout's diff nor switching tabs may
+        // rewrite the branch's index or the Mac checkout's working files.
+        XCTAssertEqual(
+            try String(contentsOf: main.appendingPathComponent("tracked.txt"), encoding: .utf8),
+            "mac main content\n"
+        )
+        XCTAssertEqual(
+            try git(["show", ":tracked.txt"], in: other),
+            "other staged"
+        )
+    }
+
+    func testUnbornRepositoryWithUntrackedFilesHasUncommittedGraphNode() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-unborn-graph-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        XCTAssertEqual(GitCommandExecution.run(["init", "-q", "-b", "main"],
+                       in: root.path).status, 0)
+        try Data("fixture".utf8).write(to: root.appendingPathComponent("尚未跟踪.txt"))
+        let model = GitStatusModel()
+        model.sync(root: root.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertTrue(model.isRepo)
+        XCTAssertFalse(model.hasHead)
+        XCTAssertTrue(model.recentCommits.isEmpty)
+        XCTAssertEqual(model.graphCommits.count, 1)
+        XCTAssertEqual(model.graphCommits[0].worktree?.entries.first?.path, "尚未跟踪.txt")
+        XCTAssertTrue(CommitGraphLayout(commits: model.graphCommits).rows[0].links.isEmpty)
     }
 
     func testGitGraphParsesRealSHA256MergeAndUnicodeRemoteDecorations() async throws {
