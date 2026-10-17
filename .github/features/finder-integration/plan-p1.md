@@ -4,11 +4,11 @@
 
 **Non-goals：** 本阶段不注册 macOS 文件类型、不处理 Finder 拖放、不改变手动添加或 SSH 添加的产品行为，不改文件编辑／预览能力。
 
-**Approach：** `TerminalManager.addLocalItems` 当前承担用户主动「添加一个文件或目录为项目」的行为，文件使用 `pinnedFile`，其语义影响项目图标、命名与恢复；不可拿「Finder 打开」覆盖它。对外部文件请求增加一个**很薄的意图入口**，其项目创建仍复用 `addLocalItems`，打开文件仍调用 `Project.openFile`；全局窗口路由和现有冷启动队列在第二个任务打通。
+**Approach：** `TerminalManager.addLocalItems` 是用户明确「添加文件／目录为项目」的入口；单文件 `pinnedFile` 参与名称、图标和恢复。外部打开另用薄入口决定选哪个**现有本机项目和标签**，具体项目创建仍复用 `addLocalItems`，文件标签仍由 `Project.openFile` 管理。跨窗选择在第二任务利用现有 `registry` 与窗口生命周期接入；**不预先规定必须合并两个语义不同的冷启动队列**。
 
 **Acceptance：** 已打开文件只定位一份编辑缓冲；新文件选择正确本机目录项目，不绑定远端；批量不同路径不制造重复项目；手动文件／文件夹添加与原 `pinnedFile` 快照完全不变；冷启、末窗关闭、恢复多窗口和原 Finder 文件夹服务均正常。
 
-**Rules：** `TerminalManager` 管窗口和项目列表，`Project` 管标签，`FileTab` 管编辑缓冲；不建平行应用容器、文件模型、持久化层或跨窗口共享编辑器；更换旧队列时同一任务删旧队列，不拖到 P3。
+**Rules：** `TerminalManager` 管窗口和项目列表，`Project` 管标签，`FileTab` 管编辑缓冲；不建平行应用容器、文件模型、持久化层或跨窗口共享编辑器。**只有确实被新实现取代的旧队列和调用分支才在该任务删除**；已有 Finder Service 继续使用仍有实际调用者的最小逻辑。
 
 ---
 
@@ -32,19 +32,19 @@
 建立独立临时目录、源文件与真实 `TerminalManager`。新增测试需先因缺少外部文件打开入口而失败，同时守住既有手动添加：
 
 1. 手动连续 `addLocalItems([a.txt,b.txt])`：两个独立 file-pinned 项目、各自图标／`customName`／`pinnedFile` 不变；重复添加同一 URL 仍选旧项目；选择文件夹只新增／定位目录项目且**不启动终端**。
-2. 外部打开位于现有本机目录项目根及深层子目录的文件：用最深、真实路径分量包含该文件的项目；`/tmp/app` 不能错误匹配 `/tmp/apple`；先已有标签后寻找目录，不复制项目。
-3. 本机有 file-pinned 项目且打开同一文件：保留原 `Project`、`PaneTab`、`FileTab`、dirty 状态与撤销；打开同目录第二个文件时不能悄悄改写先前 `pinnedFile` 或自定义名称。
+2. 外部打开位于现有**目录型本机项目**（`pinnedFile == nil`）根及深层子目录的文件：先找已有同一机器的真实 FileTab，再用实际已确认的**路径分量**选最深适用目录项目；`/tmp/app` 不能错误匹配 `/tmp/apple`。自动跟随 Shell 的项目只有在当前有效本机根确实覆盖文件且身份未改变时才可候选，不能把暂时处于 SSH 的自动项目当成本机根。
+3. 本机有 file-pinned 项目且打开**同一文件**：保留原 `Project`、`PaneTab`、`FileTab`、dirty 和撤销；打开其**同级另一文件**时**不得把 file-pinned 项目当通用目录项目来复用**，应寻找真正目录项目或按需新建目录／独立文件项目，不能修改原有 `pinnedFile`、名称和归属。
 4. 本机有同名 SSH 项目、正在 SSH 的自动项目、断线状态；只使用 `sshHost == nil` 且 `workspaceIdentity == nil` 的项目／标签，绝不触发远端后端。不同机器的同名路径不能判成已打开。
-5. 没有可用本机项目时，单个文件复用现有「添加该文件为项目」能力；同批同目录多文件可通过**一次添加目录项目＋多次 `Project.openFile`** 建立一个可用工作区，而不是 N 次自造 `Project`；不同目录分组，无隐式创建 Shell。
+5. 没有可用本机项目时，单个文件复用现有「添加该文件为项目」能力；同批同目录多文件通过**一次创建／复用目录项目＋多次 `Project.openFile`** 建立同一范围，不为 N 个文件创建 N 个临时项目；不同目录按根分组。若批次同时含目录和其内部文件，先复用该明确目录而不是另造父目录项目；多个文件和目录混排保留用户文件选择的可理解顺序及最终焦点，不启动 Shell。
 6. URL 非 `file://`、无路径、缺失、拒绝访问、符号链接与失效符号链接、Finder alias、`/var`／`/private/var` 等同一路径别名、大小写敏感盘的不同文件、中文／emoji／空格／引号／换行、空文件、重复顺序与混合目录文件；单批失败不阻断其他有效项，失败不能悄悄丢弃。系统传来 alias 目标还是 alias 文件须实测，不自行假设所有 Finder alias 都是普通目录。文件内容是 PDF／二进制／图片／大于 8 MiB 时保持现有 `FileTab` 结果，不增加格式解析器。
 7. 既有目录项目已打开脏编辑或运行 Shell 时再调用外部打开，**原生编辑对象、用户编辑内容与 Shell 不被丢弃**；`TerminalManager.selectedProjectID`／`Project.selectedTabID` 的既有失焦自动保存可以合法写入旧文件，必须按此验证，不把原本自动保存误算为「外部打开修改磁盘」，也不让新逻辑额外写错目标；同时核对 `SessionStore` 中手动 `pinnedFile` 项目仍能按当前格式恢复。
 
 ### Step 2：Green／Refactor
 
 - 实现 **`openExternalLocalItems(_ urls: [URL])`（实例级，名称允许依现有编码惯例调整）**，专门决定 Finder 式打开；用 `URL.isFileURL`、`standardizedFileURL` 和文件系统事实识别输入，聚合合法路径与必要错误。不要把 `addLocalItems` 当成全部外部打开的通用语义；它继续服务手动添加和新建项目。
-- 已在本窗口某项目的本机 file tab → 选中该项目并 `Project.openFile` 定位；否则选中适用的本机目录项目并 `Project.openFile`；找不到时依已有 `addLocalItems` 创建最小本地项目。项目匹配须核对根的路径分量，不为快速匹配引入新索引或复杂类层次。
-- 对批次中同目录的新文件一次选择／添加目录项目，文件逐个使用现有 `Project.openFile`；保留原顺序与最终激活目标，避免多轮项目选中导致错误自动保存。目录本身只走既有添加目录行为。
-- 外部打开路径同时产生**简单可观测的本批次接收结果**（合法项是否完成窗口接管、哪些资源被拒绝），供 P2 的 AppKit 文件打开回复使用；这是接收状态，不伪装成尚未异步完成的文件正文读取成功。失败用已有窗口对话框汇总呈现；无 attached window 时不直接 `runModal()`（交给 P1-T2 在附着后呈现）。`FileTab` 的容量、二进制和图片判断继续由原文件模型负责。不要对每个未证实的异常新建 error enum、队列或 fallback。
+- 已在本窗口某项目的本机 file tab → 选中该项目并 `Project.openFile` 定位；否则**只选择目录型本机项目**且确认文件在其真实范围内，再 `Project.openFile`。既有 `pinnedFile` 项目只复用自己的文件，不作为其同级全部文件的容器。找不到时依已有 `addLocalItems` 创建最小本机项目。自动项目的跟随范围可能随前台 Shell 变化，只有当前可靠本机根满足条件才参与，不能通过路径字符串把 SSH 误当 Mac。路径匹配核对分量、标准化与软链语义，不新增全局索引。
+- 对批次中同目录的新文件**仅在确有多个需要同工作范围的文件时**一次选择／添加目录项目，逐个使用现有 `Project.openFile`；单文件继续沿原有文件项目能力。文件夹与其内文件混入同一批时复用该文件夹的真实 root；保留原顺序和最后可用文件的焦点，避免在项目之间反复跳动触发不必要失焦保存。目录本身沿既有添加目录行为。
+- 如 P2 的实际 AppKit 文档打开入口需要回告，则让本批次产生**最小接受／拒绝结果**供系统回调使用；这只代表路由完成，不伪装异步正文已成功读取。不得为还没选择接收 API 就先建立大量 Result 枚举、跨任务 completion registry。失败用已有窗口对话框汇总呈现；无 attached window 时不直接 `runModal()`（交给 P1-T2 在附着后呈现）。`FileTab` 的容量、二进制和图片判断继续由原文件模型负责。不要对每个未证实的异常新建 error enum、队列或 fallback。
 - 替代分支如有实际失效就在本任务清除；保留仍被原「添加」和 SSH 调用的 `addLocalItems`。本任务同时同步文档。
 
 ### Step 3：验证及原子提交
@@ -82,9 +82,9 @@
 
 ### Step 2：Green／Refactor
 
-- `TerminalManager` 增加**一个**由本机 URL 批次和简短意图（系统打开／旧服务添加）组成的待接收路径；需要对系统批量文件打开做结果回复时仅携带一次性接收完成回调，待真正附着和路由后返回可观察的批次结果，不保留第二份完成队列；不新建全局 manager cache 或 actor。优先路由现有 `registry` 的真实 attached 主窗口／已打开文件；窗口准备完成后在原有 `WindowGroup` 消费同一待处理请求。
-- 必须保留 **`TerminalManager.init` 已有取 pending 的可行场景**；当仍有未完成恢复窗口时，将系统打开请求延迟至能决定正确归属的事件点（实际窗口创建／恢复完成），而不是盲目移到 `attach(to:)` 或加固定延时。针对恢复先后顺序做可重复测试，按测试证据取最小实现。
-- 旧 `pendingDirectories`、`takePendingDirectories`、`requestWindowForPendingDirectories`、`openDirectories` 如已由统一入口取代，**在 P1-T2 同一提交移除其死分支与重复窗口开启状态**；原短暂启动让步若仍是 `WindowGroup` 所需则保留一处，不双重定时或堆叠 guard。
+- 复用 `TerminalManager.registry`、已有窗口开启器和 attached-window 选择，新增**有界的外部打开 URL 批次**待处理路径（仅冷启／无窗口等实际需要时）。原服务的 `pendingDirectories` 若仍在工作且两个意图时序不同，**继续保留**，不要为了「统一」强行混成一大队列；复用共用的窗口唤醒部分即可。若源代码和测试确证可以统一且减少状态，则本任务一并删除被替代分支，不保留两个窗口开启定时器。系统回告若需 completion，只保留单次请求的实际结果回调，不能长久悬挂。
+- 保留旧 Finder Service 在 `TerminalManager.init` 取待处理目录的既有行为，除非被新实现**有实测证据地**等价替换。新系统打开请求若可能命中尚未恢复的第二窗口中的文件，需要在实际恢复窗口可判定后再去重路由；不能提前造第二个 FileTab，也不能依靠任意 100ms/500ms 睡眠。验收冷启动快照数量不同、最后窗口被关闭再打开和 `WindowRootView.onAppear` 竞态。
+- 逐一查实际调用者：旧 `pendingDirectories`、`takePendingDirectories`、`requestWindowForPendingDirectories`、`openDirectories` **仍被 Finder Service 使用就保留**；只有真的被新共用路径完全替换时，在 P1-T2 **同一提交删除全部无引用死分支**。不要重写 `windowClosed` 和快照恢复；已有短暂窗口调度仅在原本必要时沿用一处，不增加重试轮询或仅为安抚竞态的 guard 链。
 - `NSApp.keyWindow/mainWindow` 仅用于寻找 attached 的 Bailey 主窗口，不把 Settings 或无 owner 的原生测试窗口误当接收者；窗口与项目选中处理由所属 manager，不能在视图内缓存另一份 project selection。
 - 窗口未附着时不弹 `runModal()`，一次失败批次汇总到实际接收窗口；取消／失效不能打开无主窗口。继续用当前关闭与恢复快照保护。
 
