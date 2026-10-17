@@ -2,6 +2,9 @@ import Foundation
 
 /// Commit rails use the loaded Git DAG; stash rails use their existing base-commit display link.
 nonisolated struct CommitGraphLayout {
+    /// An uncommitted checkout with no visible HEAD has no known branch color.
+    static let unconnectedWorktreeColor = -1
+
     struct Node: Equatable {
         let lane: Int
         let color: Int
@@ -82,8 +85,18 @@ nonisolated struct CommitGraphLayout {
             var lane = 0
             while concurrent.contains(where: { $0.lane == lane }) { lane += 1 }
             let occupiedColors = Set(concurrent.map(\.color))
-            let color = (0..<12).first { !occupiedColors.contains($0) }
-                ?? reservations.count % 12
+            let color: Int
+            if commits[start].worktree != nil {
+                // The attached checkout is a state of HEAD, not an independent
+                // branch. Reuse the real node's color instead of spending a
+                // new bright palette color on each dirty worktree.
+                color = commits[start].parentHashes.first
+                    .flatMap { positions[$0] }
+                    .flatMap { nodes[$0] }?.color ?? Self.unconnectedWorktreeColor
+            } else {
+                color = (0..<12).first { !occupiedColors.contains($0) }
+                    ?? reservations.count % 12
+            }
             for index in path { nodes[index] = Node(lane: lane, color: color) }
             reservations.append((lane, color, start, end))
         }

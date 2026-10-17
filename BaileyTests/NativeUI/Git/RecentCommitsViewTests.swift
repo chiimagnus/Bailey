@@ -743,6 +743,61 @@ final class RecentCommitsViewTests: XCTestCase {
         XCTAssertTrue(selection.expanded.isEmpty)
     }
 
+    func testLongWorktreeBranchBadgeDoesNotObscureTheTitleInNarrowSidebar() throws {
+        let branch = "feature/" + String(repeating: "极长的分支名称-long-name-", count: 10)
+        let head = String(repeating: "a", count: 40)
+        let tree = GitStatusModel.WorktreeChanges(
+            path: "/Users/fixture/worktrees/very-long-worktree-name",
+            branch: branch, headOID: head,
+            entries: [.init(path: "edit.txt", staged: ".", unstaged: "M")],
+            isCurrent: false
+        )
+        let commit = GitStatusModel.RecentCommit(
+            hash: head, shortHash: "aaaaaaa", subject: "Base",
+            author: "Tester", date: .now, parentHashes: [],
+            references: [.init(kind: .currentBranch, name: "main")], files: []
+        )
+        let rows = GitStatusModel.graphCommits([commit], stashes: [], worktrees: [tree])
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            for (width, scale) in [(CGFloat(180), CGFloat(0.8)),
+                                   (CGFloat(260), CGFloat(1)),
+                                   (CGFloat(260), CGFloat(1.6)),
+                                   (CGFloat(400), CGFloat(2))] {
+                let window = hostHistory(rows, selection: GraphSelection(),
+                                         width: width, height: 175, fontScale: scale)
+                window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+                settle()
+                let layout = CommitGraphLayout(commits: rows)
+                let spacing = CommitGraphRails.spacing(
+                    lanes: layout.laneCount, viewportWidth: width, scale: scale)
+                let gutter = CommitGraphRails.gutter(
+                    lanes: layout.laneCount, spacing: spacing, scale: scale)
+                let badge = RecentCommitsView.worktreeBadgeWidth(
+                    branch, viewportWidth: width, gutter: gutter, scale: scale)
+                XCTAssertLessThanOrEqual(badge, 112 * scale)
+                XCTAssertGreaterThanOrEqual(badge, 18 * scale)
+                let shortBadge = RecentCommitsView.worktreeBadgeWidth(
+                    "main", viewportWidth: width, gutter: gutter, scale: scale)
+                XCTAssertLessThanOrEqual(shortBadge, badge,
+                                         "Short branches should use less space than long ones")
+                if width >= 260, scale <= 1.6 {
+                    XCTAssertLessThanOrEqual(shortBadge, 62 * scale,
+                                             "The 'main' label must not expand into a long empty pill")
+                    XCTAssertGreaterThan(shortBadge, 18 * scale,
+                                         "Common sidebar sizes must still display the short branch name")
+                }
+                XCTAssertLessThanOrEqual(badge + gutter + 64 * scale + 24 * scale,
+                                         max(width, gutter + 18 * scale + 88 * scale) + 1,
+                                         "Badge must not crowd out the title at \(width)pt / \(scale)x")
+                XCTAssertFalse(horizontallyScrollableViews(in: window.contentView!).contains {
+                    $0.contentView.bounds.height > 60 * scale
+                        && ($0.documentView?.frame.width ?? 0) > $0.contentView.bounds.width + 10
+                }, "Worktree header must not become a horizontally scrolling row")
+                window.close()
+            }
+        }
+    }
+
     func testUncommittedWorktreeNodeHasSafeMenuAndNativeStageAwareFileActions() throws {
         let head = String(repeating: "a", count: 40)
         let worktree = GitStatusModel.WorktreeChanges(

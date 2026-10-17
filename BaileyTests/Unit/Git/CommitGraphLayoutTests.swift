@@ -71,9 +71,55 @@ final class CommitGraphLayoutTests: XCTestCase {
         XCTAssertEqual(rows.suffix(2).map(\.hash), [head, root])
         let layout = CommitGraphLayout(commits: rows)
         XCTAssertEqual(layout.knownHeadHistory, Set([head, root]))
+        XCTAssertEqual(layout.rows[0].node.color, layout.rows[2].node.color,
+                       "Uncommitted changes must follow their HEAD color, not create another branch color")
+        XCTAssertEqual(layout.rows[1].node.color, layout.rows[2].node.color,
+                       "Two worktrees at the same HEAD must share that color")
         assertConnected(layout, from: 0, to: 2, color: layout.rows[0].node.color)
         assertConnected(layout, from: 1, to: 2, color: layout.rows[1].node.color)
         assertConnected(layout, from: 2, to: 3, color: layout.rows[2].node.color)
+    }
+
+    func testDirtyWorktreesAtDifferentHeadsInheritOnlyTheirOwnHistoryColors() throws {
+        let base = String(repeating: "b", count: 40)
+        let left = String(repeating: "a", count: 40)
+        let right = String(repeating: "c", count: 40)
+        let commits = [
+            commit(left, parents: [base], current: true),
+            commit(right, parents: [base]),
+            commit(base),
+        ]
+        let trees = [
+            GitStatusModel.WorktreeChanges(
+                path: "/tmp/left", branch: "main", headOID: left,
+                entries: [.init(path: "left.txt", staged: ".", unstaged: "M")],
+                isCurrent: true
+            ),
+            GitStatusModel.WorktreeChanges(
+                path: "/tmp/right", branch: "topic/极长的分支名称", headOID: right,
+                entries: [.init(path: "right.txt", staged: "?", unstaged: "?")],
+                isCurrent: false
+            ),
+        ]
+        let graphCommits = GitStatusModel.graphCommits(commits, stashes: [], worktrees: trees)
+        let graph = CommitGraphLayout(commits: graphCommits)
+        let original = CommitGraphLayout(commits: commits)
+        for tree in trees {
+            let source = try XCTUnwrap(graphCommits.firstIndex {
+                $0.worktree?.path == tree.path
+            })
+            let parent = try XCTUnwrap(graphCommits.firstIndex {
+                $0.hash == tree.headOID && $0.worktree == nil
+            })
+            let unmodifiedHead = try XCTUnwrap(commits.firstIndex {
+                $0.hash == tree.headOID
+            })
+            XCTAssertEqual(graph.rows[source].node.color, graph.rows[parent].node.color)
+            XCTAssertEqual(graph.rows[parent].node.color, original.rows[unmodifiedHead].node.color,
+                           "Dirty worktrees must not recolor real Git history")
+            assertConnected(graph, from: source, to: parent,
+                            color: graph.rows[parent].node.color)
+        }
     }
 
     func testUnknownWorktreeHeadRemainsVisibleWithoutInventingAParentLine() {
@@ -89,6 +135,9 @@ final class CommitGraphLayoutTests: XCTestCase {
         XCTAssertEqual(rows.count, 2)
         XCTAssertEqual(rows[0].worktree?.path, orphan.path)
         XCTAssertTrue(CommitGraphLayout(commits: rows).rows[0].links.isEmpty)
+        XCTAssertEqual(CommitGraphLayout(commits: rows).rows[0].node.color,
+                       CommitGraphLayout.unconnectedWorktreeColor,
+                       "No loaded HEAD means a subdued neutral node, not an arbitrary branch color")
     }
 
     func testLinearHistoryUsesOneLaneAndEndsAtRoot() {

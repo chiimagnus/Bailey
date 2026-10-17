@@ -256,7 +256,7 @@ struct RecentCommitsView: View {
             VStack(alignment: .leading, spacing: 2 * fontScale) {
                 HStack(spacing: 4 * fontScale) {
                     if let worktree = commit.worktree {
-                        worktreeBadge(worktree, in: commit, colorIndex: graph.node.color)
+                        worktreeBadge(worktree, in: commit, gutter: gutter)
                             .layoutPriority(1)
                     } else if let stash = commit.stash {
                         stashBadge(stash, in: commit, colorIndex: graph.node.color)
@@ -267,19 +267,30 @@ struct RecentCommitsView: View {
                             .layoutPriority(1)
                     }
                     Button { toggle(commit) } label: {
-                        ScrollView(.horizontal) {
+                        if commit.worktree != nil {
                             Text(verbatim: commit.subject)
-                                .font(.system(size: 12.5 * fontScale))
-                                .foregroundStyle(
-                                    commit.stash == nil && commit.parentHashes.count > 1
-                                        && !hovering && !expanded
-                                        ? Color.primary.opacity(0.55) : Color.primary
-                                )
-                                .fixedSize(horizontal: true, vertical: false)
+                                .font(.system(size: 12 * fontScale))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(minWidth: 64 * fontScale,
+                                       maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            ScrollView(.horizontal) {
+                                Text(verbatim: commit.subject)
+                                    .font(.system(size: 12.5 * fontScale))
+                                    .foregroundStyle(
+                                        commit.stash == nil && commit.parentHashes.count > 1
+                                            && !hovering && !expanded
+                                            ? Color.primary.opacity(0.55) : Color.primary
+                                    )
+                                    .fixedSize(horizontal: true, vertical: false)
+                            }
+                            .scrollIndicators(.hidden)
+                            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                            .frame(minWidth: 64 * fontScale,
+                                   maxWidth: .infinity, alignment: .leading)
                         }
-                        .scrollIndicators(.hidden)
-                        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-                        .frame(minWidth: 64 * fontScale, maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.plain)
                     .layoutPriority(-1)
@@ -294,7 +305,7 @@ struct RecentCommitsView: View {
 
                 HStack(alignment: .firstTextBaseline, spacing: 6 * fontScale) {
                     if let worktree = commit.worktree {
-                        Text(verbatim: worktree.path)
+                        Text(verbatim: (worktree.path as NSString).lastPathComponent)
                             .font(.system(size: 10 * fontScale, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -397,32 +408,51 @@ struct RecentCommitsView: View {
         }
     }
 
+    static func worktreeBadgeWidth(_ branch: String, viewportWidth: CGFloat,
+                                   gutter: CGFloat, scale: CGFloat) -> CGFloat {
+        let nameWidth = ceil((branch as NSString).size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: 10 * scale, weight: .medium)
+        ]).width)
+        let available = min(112 * scale, max(18 * scale, viewportWidth - gutter - 88 * scale))
+        let offered = min(nameWidth + 28 * scale, available)
+        return offered >= 42 * scale ? offered : 18 * scale
+    }
+
     private func worktreeBadge(
-        _ worktree: GitStatusModel.WorktreeChanges, in commit: Commit, colorIndex: Int
+        _ worktree: GitStatusModel.WorktreeChanges, in commit: Commit, gutter: CGFloat
     ) -> some View {
+        let branch = worktree.branch ?? String(localized: "Detached HEAD", table: "Git")
+        let badgeWidth = Self.worktreeBadgeWidth(
+            branch, viewportWidth: viewportWidth, gutter: gutter, scale: fontScale
+        )
+        let showBranch = badgeWidth > 18 * fontScale
         let outline = RoundedRectangle(cornerRadius: 5 * fontScale)
         return Button { toggle(commit) } label: {
             HStack(spacing: 0) {
                 Image(systemName: "square.stack")
                     .font(.system(size: 9 * fontScale))
-                    .foregroundStyle(GitGraphPalette.iconColor(colorIndex))
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                     .frame(width: 18 * fontScale, height: 18 * fontScale)
-                    .background(GitGraphPalette.color(colorIndex))
-                Text(verbatim: worktree.branch ?? String(localized: "Detached HEAD", table: "Git"))
-                    .font(.system(size: 10 * fontScale, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: 115 * fontScale)
-                    .padding(.horizontal, 5 * fontScale)
+                    .background(Color.primary.opacity(0.09))
+                if showBranch {
+                    Text(verbatim: branch)
+                        .font(.system(size: 10 * fontScale, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(width: badgeWidth - 28 * fontScale, alignment: .leading)
+                        .padding(.horizontal, 5 * fontScale)
+                }
             }
-            .background(Color.primary.opacity(0.06))
+            .frame(width: badgeWidth, height: 18 * fontScale, alignment: .leading)
+            .background(Color.primary.opacity(0.04))
             .clipShape(outline)
-            .overlay(outline.stroke(Color.primary.opacity(0.35),
+            .overlay(outline.stroke(Color.primary.opacity(0.22),
                                     lineWidth: 1 * fontScale))
         }
         .buttonStyle(.plain)
-        .help(worktree.path)
+        .help(branch + "\n" + worktree.path)
+        .accessibilityLabel(branch)
     }
 
     private func stashBadge(
@@ -973,7 +1003,10 @@ enum GitGraphPalette {
     }
 
     static func color(_ index: Int) -> Color {
-        Color(nsColor: colors[index % colors.count])
+        if index == CommitGraphLayout.unconnectedWorktreeColor {
+            return Color(nsColor: .secondaryLabelColor)
+        }
+        return Color(nsColor: colors[index % colors.count])
     }
 
     static func iconColor(_ index: Int) -> Color {
