@@ -102,6 +102,8 @@ Diff 复用现有 STTextView/TextKit 与语法依赖，不引入 PierreDiffsSwif
 
 ## 生成资源
 
+应用图标由 Xcode 自带的 Icon Composer 维护，源文件位于 [`kero/Resources/AppIcon.icon`](../kero/Resources/AppIcon.icon)；浅色、深色和单色外观在同一文件中配置，由 Xcode 编译，无需手动生成 PNG。
+
 文件图标与 Swift 查询表由 [generate-material-file-icons.ts](../scripts/generate-material-file-icons.ts) 一起生成。按脚本指定的 Material Icon Theme 版本和提交准备上游源码，使用已有 Bun 环境：
 
 ```sh
