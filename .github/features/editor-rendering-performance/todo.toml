@@ -1,37 +1,37 @@
 version = 1
-current_task_id = "P1-T1"
+current_task_id = "P1-T4"
 
 [[tasks]]
 id = "P1-T1"
 title = "定位文档高度与滚动条跳变的布局反馈"
-status = "in_progress"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
-commit = ""
-note = ""
+commit = "f0a0cc0"
+note = "原生四档/折行/三位置30次基线、历史小样本及坐标索引已取证；几何Red与sample/Allocations见evidence-p1.md；平台/帧率/精确分配缺口不冒充验收。"
 
 [[tasks]]
 id = "P1-T2"
 title = "稳定文档几何与可见内容滚动锚点"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = ""
-note = ""
+commit = "9f11b53"
+note = "修复字体、折行、重挂载与固定行高锚点；导航12/12、坐标4/4、完整含windows 418/418；Debug/Release构建验签成功，独立UI E2E与最低系统留T5核销。"
 
 [[tasks]]
 id = "P1-T3"
 title = "支持小文件首开与十万行代码完整编辑"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t3"
-commit = ""
-note = ""
+commit = "171cd1b"
+note = "主提交171cd1b与输入管道后代悬挂补充提交237f91e；100k行>旧5MiB编辑撤销重做和8MiB边界、Windows 25秒单命令实机完整读写通过；完整XCTest 425/425，补充命令17/17、Windows1/1。"
 
 [[tasks]]
 id = "P1-T4"
 title = "降低编辑热路径的整文成本和内存占用"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t4"
 commit = ""
-note = ""
+note = "既有增量优化提交e97494b；10月18日多组100k行XCTest证明视口滚动会对已跨越范围大量创建段落（25/50/75/100%=24992/49982/74974/99963次），其后文首输入10ms→350ms；单点location/ensure不触发。TextKit2缓存范围更新为主热点。自定义provider必须先过公开API的末尾空行、UTF16、IME/Undo/AX等门槛，不满足则评估成熟macOS行布局内核；详见evidence-p1.md。不得完成T4/T5。"
 
 [[tasks]]
 id = "P1-T5"

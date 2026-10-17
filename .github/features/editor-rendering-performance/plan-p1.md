@@ -2,7 +2,7 @@
 
 ## 范围与执行顺序
 
-目标与验收由 [idea.md](idea.md) 定义。保留五个任务：T1 复现并测基线 → T2 修已证实的滚动根因 → T3 验证并调整文件容量 → T4 消除已测编辑热点 → T5 综合验收。实时状态只在 [todo.toml](todo.toml)，本轮不启动实现。
+目标与验收由 [idea.md](idea.md) 定义。保留五个任务：T1 复现并测基线 → T2 修已证实的滚动根因 → T3 验证并调整文件容量 → T4 消除已测编辑热点 → T5 综合验收。实时状态只在 [todo.toml](todo.toml)；用户于 2026-10-17 授权执行全部任务，另授权 windows 专用临时 SSH 测试和隔离实例前台验收。
 
 T2／T4 是有证据后选最小修复，不是预先批准几何引擎、正文所有权迁移或分段树。T3 若容量候选因现有编辑成本不满足 T1 确立的资源条件，不得先宣布完成：记录具体依赖，先推进不依赖新容量的 T4 组件工作，再回到真实 FileTab 验证。不要为顺序整齐放行不安全的大文件。
 
@@ -107,6 +107,7 @@ T1 建立同一份 `evidence-p1.md`，以后各任务补事实与缺口，不另
 
 1. 先在现有原生 XCTest 中建立能失败的回归：真实 Source 与裸 view、固定不变文件的多轮正反向滚动，记录 frame／knob 和实际文字位置；原生目标 reveal、文首／末、Find 前后均检查结果。历史小样本是首要用例，1k／10k 必测，100k 在现有目标用筛选命令独立运行，不建额外 target 或把大文件永久 skip。
 2. 先验证最小平台修复／错误反馈消除。若候选用“原生段落数 × 实际行高”确定高度，必须在默认 Source 字体／样式下证明固定行高，并同时验证 TextKit 段落 Y／远处布局／反向命中。不能从 Diff 复制固定样式改变 Source 外观，不用 Tree-sitter LF 数直接当 TextKit 段落数；行高不等时该候选不成立。一次初始化扫描与真实编辑增量更新可以测量，滚动时不再扫全文。
+   - T1／T2 实验已经证明删除到底重定位不足、仅固定 frame 也不足。当前候选在 Source 内使用 NSString 原生行边界与实测行高，并将同一内容／选区／行号视图的 bounds 坐标统一转换；TextKit 内部的估算 Y 不冒充文档 Y。`adjustViewport` 没有把现有 fragment 的 Y 直接改成期望值，故已撤掉该失败候选；所有验收使用真实屏幕矩形／反向命中与坐标转换，而不是比较两个不在同一坐标系的数。新辅助只保留在一个几何文件，不引入第二个排版器。
 3. 软换行／回退字体／可变高度先用现有 relocate／adjust 能力做最小文本位置＋可视偏移实验；测试静止阅读与用户主动滚动的区别，尺寸修正不能取消用户输入、反向滚动或夺回查找目标。准确全文高度不凭估算承诺；不把活跃 AppKit content manager 交给后台。若只能靠另一套排版器才能满足目标，先交实验限制并修订后续方案，不能自动扩建 WrapMap。
 4. frame 的垂直范围与原生内容位置必须一致。修复所有被证实冲突的实际写入点，包括 `relocateViewport(to:)` 对 frame 的更新以及文首／末调用，而不仅是 didLayout；维持水平范围、viewport 最小高度、短文末尾点击、末尾 extra fragment 与稳定 Diff override。现在已有近似相等才 setFrameSize 的判断，不额外包一层同义守卫／新 generation。
 5. 若 gutter 是已测热点，在原 owner 更新绝对段落号／复用可见 cell，替换前缀数组和反复销毁路径；覆盖空文档、折行只显示首段号、marker、字体切换后的旧 fragment、行号位数引发宽度变化与软换行回流。不引入常驻整篇正文／第二套 LF 索引。
@@ -151,6 +152,15 @@ T1 建立同一份 `evidence-p1.md`，以后各任务补事实与缺口，不另
 - 不是“旧”就删：coordinator 身份／reloadRevision、targetGeneration、保存串行化、断线只读、失效窗口检查、空 rendering range 崩溃保护与布局重入控制，都有当前消费者／回归；如更简单路径接管其职责，在相应任务证明等价后删除旧实现，不能只删除 if。插件的空 token 早返回也在避免无效转换，不能把共同底层仍需保护误判为全部冗余。
 
 **验证与文档：** 每一逻辑块先读懂→Red→最小改动→Green／测量→清旧路径→复验→原子提交，再进入下一块，不把正文、parser、索引一起盲改。复用 FileTab／SyntaxHighlighting／TextCoordinateIndex／HighlightQueryCache／EditorTextInput／PaneRetention 和受影响 Workspace／Diff 回归；覆盖表的编辑、时序、生命周期与内存维度尽可能跑尽。相关／完整 test、build；Vendor 更改加 Release 与严格验签。同步 editor 的实际数据流和坐标更新契约，依赖修改同步 development／必要 NOTICE；不把未做的快照架构写成已实现。无净收益不接入，但需求未达标也不能因撤回试验就宣布任务完成。
+
+**新实测与推进门禁（2026-10-18，仍为 in_progress）：** `e97494b` 已实现增量事件与卸载状态一致性；Release 100k 文首单次插入约 330／233 ms（无折行／折行），未达 16 ms median／32 ms p95。随后隔离 XCTest 证明：只挂首屏 Debug 文首插入约 10 ms；浏览全文后 358／292 ms；只做远距 `location` 与局部 `ensureLayout` 仍约 10 ms，但 `relocateViewport`／真滚动后 >130 ms。`NSTextContentStorageDelegate.textParagraphWithRange` 在跳到文档 25／50／75／100% 后累计被请求 24,992／49,982／74,974／99,963 次。`invalidateLayout` 无效，且采样定位 `NSTextContentStorage.processEditingForTextStorage → EnumerateCachedElements → updateRangesForTextElement`。`evidence-p1.md` 记录全部日志、不可比系统原生对照与 1 GiB 终止线。
+
+**下一实现边界：**
+
+1. 先在隔离测试中按 Apple 官方 `NSTextElementProvider` 契约验证按需段落提供器（基于 `NSTextContentManager`、稳定 `NSTextLocation` 与 UTF-16 偏移），验证真正跳至 100k 文末、反向、编辑后定位是否仍正确。**首个独立门槛是结尾 LF／CRLF、空尾行 fragment、光标命中和选区**：公共 `NSTextParagraph.paragraphSeparatorRange` 只读，公开 [自定义 manager 实例](https://stackoverflow.com/questions/77569002/new-lines-not-generating-a-textlinefragment-when-using-a-custom-nstextcontentman) 曾出现不能生成末尾空行的严重缺口。必须仅用公开 API 得到等价结果；若需要 KVC 写只读属性或私有 `NSCountableTextRange` 就直接判该原型 No-Go。不得通过限制返回元素个数、禁用正文编辑或固定高度制造假的可见内容。
+2. 用对应测试证明仅创建/保留实际需要的段落（测真实对象与请求数，不混淆）、30 次热输入 median／p95、峰值内存，避免在已访问段落上的逐次全量迁移；以先红后绿验证文首中部末尾、相同长度及长度变化、Unicode／CRLF、全文保存字节。
+3. 对照 `STTextView.swift`／`STTextView+NSTextInputClient.swift`／`STTextView+LineGeometry.swift` 的 `NSTextContentStorage` 具体强转及附带读取／写入假设，连同 `SourceTextEditor`、`SyntaxHighlightPlugin`、TextFinder、Undo／IME／selection／AX、Diff 共享依赖逐项验证后才能决定是否进入正式运行路径。复用已有原生编辑器和标签所有权；未完成等价性不得保留试验兼容开关或替换正式编辑器。
+4. 自定义 manager 原型不能成立就记录明确失败和约束，再以成熟实现为参照评估可替换的代码编辑内核：<https://github.com/CodeEditApp/CodeEditTextView> 已有 macOS 行驱动布局、光标选择、Undo 等功能，但其官方 README 明确没有系统 NSTextView 完整特性（例如部分复杂文字布局），不能把“大文件快”当作与 Bailey 现有 IME／查找／AX 功能等价；<https://github.com/simonbs/Runestone> 更适合作为增量行索引设计参照，主体目标为 iOS，不能直接假定 AppKit 可用。先列现有功能的可复用／缺失边界并对照可运行测试，绝不同时维护两套正式编辑器。不以 8 MiB 限制、禁用高亮或只读偷换 T4/T5。Apple 接口：<https://developer.apple.com/documentation/appkit/nstextelementprovider>；STTextView 上游存储边界：<https://github.com/krzyzanowskim/STTextView/discussions/79>。
 
 <a id="p1-t5"></a>
 ## P1-T5 验收四档文件的稳定滚动和低资源编辑
