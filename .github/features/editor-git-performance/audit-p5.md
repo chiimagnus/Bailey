@@ -23,6 +23,19 @@
 
 ## 发现项
 
+## 发现 F-26
+
+- 任务：`P5-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`kero/Git/DiffTextView.swift:360-400`
+- 摘要：`Unicode U+2028 行分隔在同一 TextKit 段落生成多行，而原生 Diff 几何丢弃非首行的绘制范围`
+- 风险：`macOS NSTextLayoutManager 实测 A+U2028+B+LF 只有一个 NSTextParagraph，却含 3 个 textLineFragments（2 条正文+1 extra）；当前 DiffRowGeometry 只接收 first 或 extra，忽略中间正文视觉行，导致该行的 diff tint、强调、gutter 可见区域不覆盖后半文本`
+- 预期修复：`保持 Git LF 每行唯一元数据，把同一 TextKit 段落所有非 extra 视觉行布局框合并成一个逻辑行的绘制范围，extra 仍独立；复用现有统一行几何，不增加第二套行号计算`
+- 验证：`真实 DiffCodePaneView + NSTextLayoutManager U2028/0085/CR/CRLF 的 viewport 行框 Red→Green，统一/分栏/编辑和 ghost 原生回归`
+- 解决证据：`5b48bed：真实 NSWindow/TextKit 的 U+2028/U+0085 两行装饰最初均只有 1/2 片段（Red p5-third-audit-unicode-geometry-red.log），Green p5-third-audit-visual-terminal-green.log；额外覆盖 U+2029、裸 CR 的续行且没有重复 gutter/ghost。150 个裸 CR 长 Git 行小视口下 EOF 仅在真实最后片段（p5-third-audit-long-cr-viewport.log）。最终 DiffTabTests 32/32（p5-third-audit-final-geometry-suite.log），未新增缓存或另一绘制器。`
+
+
 ## 发现 F-25
 
 - 任务：`P5-T2`
@@ -140,7 +153,7 @@
 - 解决证据：`00fed8c：Red p5-independent-red.log（staged D 文件误报 missing、无法绘制）；Green p5-native-final.log，真实 git rm HEAD→空 index、冲突 index 拒绝、NSWindow/TextKit 26/26 通过。`
 
 
-三轮独立源码复查对照 P5-T1～T4 的实际用户入口、提交、原生消费者及磁盘副作用，累计发现 F-17～F-25 **9 项可复现缺陷**。经 `00fed8c`、`a4dc9a0`、`92ad0b4`、`8b3f742`、`c845cac` 五个生产修复提交逐项 Red→Green，另有 `c19cb2d` 边界测试提交。既有修复不重复列为新 finding。
+三轮独立源码复查对照 P5-T1～T4 的实际用户入口、提交、原生消费者及磁盘副作用，累计发现 F-17～F-26 **10 项可复现缺陷**。经 `00fed8c`、`a4dc9a0`、`92ad0b4`、`8b3f742`、`c845cac`、`5b48bed` 六个生产修复提交逐项 Red→Green，另有 `c19cb2d` 边界测试提交。既有修复不重复列为新 finding。
 
 明确验收边界：本机真实 Git／NSWindow／TextKit 已验证**文字进入原生表面、编辑保存回磁盘**，但不能冒充独立 App 的菜单点击或合成像素 E2E；真实 SSH 需使用授权专属连接。性能 A/B 为同机同文本的 Debug 热路径，冷启动／峰值 RSS／渲染像素／完整交互只能在 P6 综合复测中继续取证，不由组件时间外推。
 
@@ -155,6 +168,7 @@
 - 第二轮 F-22（`8b3f742`）：真实 TextKit 原生编辑段落在裸 CR 后产生错误行索引 `[0,1,2]`，修为 Git LF 索引 `[0,0,1]`；不存第二套行号索引。普通文件继续使用原生段落 `.count`，只有实际非 LF 分隔符才根据段落结尾 LF 计数。
 - 第三轮 F-23／F-25（`c845cac`）：TextKit 裸 CR 多段落中只向首／末真实段落加删除行占位；全部删除为空后使用虚拟行后的 EOF ghost 且内容高度足以滚动，不改用户文本；后续输入、恢复、移除 ghost 时重算正确。
 - 第三轮 F-24（`c845cac`）：4MiB 普通文本的特殊换行扫描在本机 Debug 30 次中位 9.738ms、p95 10.085ms。原实现每次 gutter 与底纹绘制都进行全量扫描，改为仅在文档安装／原生输入与撤销变化时失效，视口 O(1) 读取；这是明确减少扫描工作，不把该单项测量说成画面帧率提升。
+- 第三轮 F-26（`5b48bed`）：根因是一个 Git LF 行可能分解成多个 TextKit 视觉片段。使用共享 `DiffRowGeometry` 为 `U+2028`／`U+0085` 的同一段落视觉换行以及 `U+2029`／裸 CR 的跨段落换行保留完整 tint／强调范围，只在首段绘制行号及起始 ghost，末尾标记与 EOF ghost 只在真实行尾而非视口边界绘制；150 个裸 CR 的单 Git 行短窗口原生回归通过，无新增独立渲染器。
 - 第三轮新增必要而非防御式的回归（`c19cb2d`）：500 组固定种子 Unicode／混合 CRLF／裸 CR／换行／组合字形，以及 820 行超阈值锚点差异，核对 UTF-8 原文、UTF-16 行内／来源范围和 Diff 操作不变量；真实 SHA-256 Git 仓库三类 Source 与 5MiB 精确容量边界，皆通过已有 XCTest。
 
 ## 验证日志
@@ -170,17 +184,19 @@
 - 同机 Apple M1 Pro、macOS 27.2、Debug 的 1200 行 Swift 样本：双侧 captures 30 次串行中位 74.670ms→并行 53.733ms，name/range 等价；Git→Diff→原生文本安装反向各 30 次中位 236.562ms→222.759ms，p95 242.726ms→237.101ms。内容安装不是屏幕合成或冷启动测量。
 - 已读源码调用链与测试确认旧动态 Git spec、stderr 缺失猜测、重复 isUnmerged、逐 Character 分行、历史不可变重复读取均已替代，临时性能类从正式 XCTest 目标删除，实验源码留在忽略目录。
 - 文档相关 8 个入口（docs/README、diff、git、editor、testing、development、idea、plan-p5）的相对 Markdown 文件路径均可达；git diff --check 通过。
-- P6 历史证据已包含专用 Windows SSH 读取五种 Diff 来源（1/1）及全量授权 SSH（315/315）、隔离 App 图片／编辑／滚动与短时内存测量；它们早于本次六个复查生产／测试提交，不能冒充当前提交在真实 SSH／完整 App 的重新验收。完整独立 UI、用户输入的全部极端换行及 Instruments 运行时限制仍按实测边界区分。
+- 第三轮专项：`p5-third-audit-difftab-30.log`、`p5-third-audit-final-geometry-suite.log` 的 DiffTab 从 30/30 扩至 **32/32**；DiffEngineTests 6/6（含 500 组固定种子），GitHistoryFileTests 20/20（含 SHA-256 和 5MiB 边界），SyntaxHighlightingTests 20/20、GitExecutionTests 4/4、WorkspaceIdentityTests 5/5、WorkspaceContentIdentityTests 3/3、EditorTextInputTests 9/9，总计 **99/99** 对应分组通过。`p5-third-audit-unicode-geometry-red.log` 的原生 U+2028／U+0085 均漏了第二视觉片段，`p5-third-audit-final-geometry-suite.log` Red→Green；`p5-third-audit-long-cr-viewport.log` 单独通过 150 裸 CR 视口边界。
+- 在 `c19cb2d` 之后、`5b48bed` 之前，带授权 Windows SSH 的 `p5-third-audit-full-windows.log` 真实 **376/376 passed、0 failures、0 skipped**，包含远端文件树、Git panel 自动刷新、交互式 Rebase、二进制历史恢复、Stash/Clean/Ignore；这是该时点代码的完整集成证据，不能替代最后的视觉几何提交。`5b48bed` 之后启动的最终验证已完成：`p5-third-audit-final-{debug,release}.log` 记录 Debug／Release 均 `BUILD SUCCEEDED` 且 `codesign --verify --deep --strict` 通过；`p5-third-audit-full-windows-after-visual.log` 记录授权 Windows SSH 整库 **388 tests、0 failures、0 skipped、TEST SUCCEEDED**，包含真实 SSH Git、文件树、Git 自动刷新、断线恢复及历史文件等。测试启动时 HEAD 为 `5b48bed95ba0`，运行期间另一个开发任务在相同分支追加了 Git Graph 提交，不能把该次结果冒充后续 Git Graph 提交的重新验收。
+- P6 历史证据已包含专用 Windows SSH 读取五种 Diff 来源（1/1）及全量授权 SSH（315/315）、隔离 App 图片／编辑／滚动与短时内存测量；它们早于本次七个复查生产／测试提交，不能冒充当前提交在真实 SSH／完整 App 的重新验收。完整独立 UI、用户输入的全部极端换行及 Instruments 运行时限制仍按实测边界区分。
 
 ## Gate（是否允许进入下一阶段）
 
-- 结论：**P5 阶段自身 Go；当前整库集成测试 No-Go**。
-- 理由：P5 四项源码入口及原始提交经三轮独立复查，F-17～F-25 九项均有真实 Git／TextKit Red→Green 证据；第三轮正常路径、异常输入及容量边界专项 97/97，额外 SHA-256 真实 Git 仓库回归 20/20。当前整库授权 SSH 环境的全量 XCTest 正在独立运行，以该次最终结果判定 Gate；不能以此前 P2／P3 并行修改时的失败或局部绿色替代当前全量结果。P6 旧版完整 App 实测不能冒充新修复的 E2E。
+- 结论：**P5 阶段 Go，已完成要求的构建、签名、专项测试及授权 Windows SSH 整库集成测试**；独立 App 菜单点击／屏幕合成 E2E 仍未运行，不属于已验证项。
+- 理由：P5-T1～T4 已完成，F-17～F-26 十项均有真实 Git／TextKit Red→Green 证据；专项 99/99（含 SHA-256、5MiB 和 Unicode 极端输入）。最终 `5b48bed` 的 Debug／Release 构建及严格签名通过，之后启动的授权 Windows SSH 整库 XCTest **388/388 passed、0 failures、0 skipped**。未连接外接测试屏幕，因此未抢占主屏执行独立 App 前台 UI 自动化；该边界不冒充完整 E2E，也不否定实际通过的 P5 集成 Gate。
 
 ## 最终状态与剩余风险
 
-- 当前状态：P5-T1～T4 及 F-17～F-25 九个经证实的 finding 均为 **Resolved**。五个生产修复提交与一个边界回归提交已落在当前分支，P5 源码、测试、文档无未提交差异；需以当前源代码通过的完整测试及必要 UI 验收核对整库 Gate。
-- 剩余边界：旧版 P6 已完成授权 SSH 与隔离 App、短时资源观测；本次复查新修改尚未在同一完整 GUI／真实远端再跑完整路径。Xcode-beta 的 Instruments/DTServiceHub 限制仍未解决，不归因为 Kero 缺陷。
+- 当前状态：P5-T1～T4 及 F-17～F-26 十项 finding 均为 **Resolved**，六个生产修复提交及一个边界回归提交已入库；最终 Build、Code Sign、P5 专项和授权 Windows SSH 全量 XCTest 均已通过。Git Graph Feature 仍由另一个任务推进，不属于 P5 验收。
+- 剩余边界：本轮已重新运行真实 Windows SSH 端到端后端／宿主 XCTest 路径，但没有独立 App 菜单操作的像素与键盘 E2E；外接测试屏幕当前未连接。没有重新完成 Instruments 长时间 RSS、FPS 及内存泄漏专项测量；已有 Xcode-beta Instruments/DTServiceHub 限制不能直接归因为 Kero 缺陷。正式 App 没有安装或重启。
 
 ## 审计约束
 
