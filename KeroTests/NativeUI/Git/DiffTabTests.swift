@@ -471,6 +471,10 @@ final class DiffTabTests: XCTestCase {
         try Data("ours\n".utf8).write(to: file)
         XCTAssertEqual(GitCommandExecution.run(["commit", "-qam", "ours"], in: root.path).status, 0)
         XCTAssertNotEqual(GitCommandExecution.run(["merge", "other"], in: root.path).status, 0)
+        let unmerged = GitCommandExecution.run(["ls-files", "-u", "--", "conflict.txt"], in: root.path)
+        XCTAssertEqual(unmerged.status, 0, unmerged.stderr)
+        XCTAssertEqual(unmerged.stdout.split(separator: "\n").count, 3,
+                       "The fixture must contain all three conflict stages")
         let diff = DiffTab(
             repoRoot: root.path, path: "conflict.txt", source: .staged,
             untracked: false, origPath: nil,
@@ -736,7 +740,7 @@ final class DiffTabTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for arguments in [
-            ["init", "-q"], ["config", "user.name", "Diff Test"],
+            ["init", "-q", "-b", "main"], ["config", "user.name", "Diff Test"],
             ["config", "user.email", "test@invalid"], ["config", "commit.gpgsign", "false"],
             ["config", "core.hooksPath", "/dev/null"],
         ] {
