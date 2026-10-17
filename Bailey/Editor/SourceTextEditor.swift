@@ -1,4 +1,5 @@
 import AppKit
+import STTextKitPlus
 import STTextView
 import SwiftUI
 
@@ -235,6 +236,8 @@ struct SourceTextEditor: NSViewRepresentable {
         let revision: UInt
         private(set) var scrollView: NSScrollView?
         private weak var textView: STTextView?
+        private var pendingReplacement: (range: NSRange, removed: String, inserted: String)?
+        private var receivedIncrementalChange = false
         private var scrollObserver: (any NSObjectProtocol)?
         /// Last-applied focus state, so `updateNSView` can act only on the
         /// unfocused→focused edge.
@@ -271,13 +274,42 @@ struct SourceTextEditor: NSViewRepresentable {
             }
         }
 
+        func currentText() -> String? { textView?.text }
+
+        func appendText(_ suffix: String) -> Bool {
+            guard let textView else { return false }
+            textView.breakUndoCoalescing()
+            textView.insertText(suffix, replacementRange: NSRange(
+                location: textView.textContentManager.length, length: 0
+            ))
+            textView.breakUndoCoalescing()
+            return true
+        }
+
         func updateSyntaxHighlighting(for path: String) {
             (textView as? FocusReportingTextView)?.updateSyntaxHighlighting(for: path)
         }
 
+        func textView(_ view: STTextView, willChangeTextIn range: NSTextRange, replacementString: String) {
+            guard view === textView, let file, file.editorCoordinator === self,
+                  let storage = (view.textContentManager as? NSTextContentStorage)?.textStorage else { return }
+            let originalRange = NSRange(range, in: view.textContentManager)
+            pendingReplacement = (originalRange, storage.attributedSubstring(from: originalRange).string, replacementString)
+        }
+
+        func textView(_ view: STTextView, didChangeTextIn range: NSTextRange, replacementString: String) {
+            guard view === textView, let file, file.editorCoordinator === self,
+                  let pendingReplacement else { return }
+            file.recordNativeReplacement(at: pendingReplacement.range, removing: pendingReplacement.removed,
+                                         inserting: pendingReplacement.inserted)
+            self.pendingReplacement = nil
+            receivedIncrementalChange = true
+        }
+
         func textViewDidChangeText(_ notification: Notification) {
             guard let textView, let file, file.editorCoordinator === self else { return }
-            file.text = textView.text ?? ""
+            if !receivedIncrementalChange { file.nativeTextChangedWithoutReplacement() }
+            receivedIncrementalChange = false
             file.refreshDirtyState()
         }
 

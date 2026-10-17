@@ -1,5 +1,7 @@
 import AppKit
+import Darwin
 import Observation
+import STTextKitPlus
 import STTextView
 import SwiftUI
 
@@ -25,9 +27,27 @@ final class FileTab: nonisolated Identifiable {
     }
 
     private(set) var content: Content
-    /// Current editor text, written back by the editor on every edit. Not
-    /// published: the editor owns display, this is only read back for saves.
-    @ObservationIgnored var text: String
+    /// The retained native editor holds the live buffer. Materialize a Swift
+    /// String only when another consumer needs the bytes (save, preview, etc.).
+    @ObservationIgnored private var bufferedText = ""
+    @ObservationIgnored private var nativeTextIsCurrent = false
+    @ObservationIgnored private var nativeCodeUnitDelta: [UInt16: Int]? = [:]
+    @ObservationIgnored private var reversibleEdit: (range: NSRange, removed: String, inserted: String, wasClean: Bool)?
+    @ObservationIgnored private var restoredSavedBytes = false
+    @ObservationIgnored var text: String {
+        get {
+            if nativeTextIsCurrent, editorCoordinator?.revision == reloadRevision,
+               let text = editorCoordinator?.currentText() { return text }
+            return bufferedText
+        }
+        set {
+            bufferedText = newValue
+            nativeTextIsCurrent = false
+            nativeCodeUnitDelta = nil
+            reversibleEdit = nil
+            restoredSavedBytes = false
+        }
+    }
     /// The content as last loaded from or saved to disk. `isDirty` is the
     /// difference between this and `text`, so undoing edits back to it (or
     /// retyping the same characters) clears the dirty indicator rather than
@@ -100,7 +120,6 @@ final class FileTab: nonisolated Identifiable {
         self.backend = backend
         self.workspaceIdentity = workspaceIdentity
         content = .loading
-        text = ""
     }
 
     // MARK: - Remote workspace
@@ -157,14 +176,9 @@ final class FileTab: nonisolated Identifiable {
     }
 
     func appendText(_ suffix: String) {
-        if editorCoordinator?.revision == reloadRevision, let textView {
-            textView.breakUndoCoalescing()
-            textView.insertText(suffix, replacementRange: NSRange(location: text.utf16.count, length: 0))
-            textView.breakUndoCoalescing()
-            text = textView.text ?? text
-        } else {
-            text += suffix
-        }
+        if editorCoordinator?.revision == reloadRevision,
+           editorCoordinator?.appendText(suffix) == true { return }
+        text += suffix
         refreshDirtyState()
     }
 
@@ -236,13 +250,59 @@ final class FileTab: nonisolated Identifiable {
         if wasReading { loadIfNeeded() }
     }
 
-    /// Recompute `isDirty` from the current `text` against the saved
-    /// baseline. Called after every editor change (including undo/redo), so
-    /// reverting to the saved content clears the dirty state.
+    /// A changed UTF-16 frequency proves the bytes differ. Equal frequencies
+    /// are only a filter: reorders and canonically equivalent text must still
+    /// be checked byte-for-byte before clearing the dirty state.
+    func recordNativeReplacement(at range: NSRange, removing old: String, inserting new: String) {
+        let returnedToBaseline = reversibleEdit.map { prior in
+            prior.wasClean && prior.range.location == range.location
+                && range.length == prior.inserted.utf16.count
+                && Self.hasIdenticalBytes(old, prior.inserted)
+                && Self.hasIdenticalBytes(new, prior.removed)
+        } ?? false
+        reversibleEdit = returnedToBaseline ? nil : (range, old, new, !isDirty)
+        restoredSavedBytes = returnedToBaseline
+        nativeTextIsCurrent = true
+        guard nativeCodeUnitDelta != nil else { return }
+        adjustNativeDelta(old, by: -1)
+        adjustNativeDelta(new, by: 1)
+    }
+
+    func nativeTextChangedWithoutReplacement() {
+        nativeTextIsCurrent = true
+        nativeCodeUnitDelta = nil
+        reversibleEdit = nil
+        restoredSavedBytes = false
+    }
+
+    private func adjustNativeDelta(_ string: String, by direction: Int) {
+        guard var delta = nativeCodeUnitDelta else { return }
+        for unit in string.utf16 {
+            let count = (delta[unit] ?? 0) + direction
+            if count == 0 { delta.removeValue(forKey: unit) }
+            else { delta[unit] = count }
+        }
+        nativeCodeUnitDelta = delta
+    }
+
+    /// Called after native, programmatic and undo edits. A full comparison is
+    /// needed only when character frequencies cannot prove the buffer differs.
     func refreshDirtyState() {
         let dirty: Bool
         if case .text = content {
-            dirty = !text.utf8.elementsEqual(savedText.utf8)
+            if nativeTextIsCurrent, nativeCodeUnitDelta == nil {
+                var delta: [UInt16: Int] = [:]
+                for unit in savedText.utf16 { delta[unit, default: 0] -= 1 }
+                for unit in text.utf16 { delta[unit, default: 0] += 1 }
+                nativeCodeUnitDelta = delta.filter { $0.value != 0 }
+            }
+            if nativeTextIsCurrent, nativeCodeUnitDelta?.isEmpty == false {
+                dirty = true
+            } else if nativeTextIsCurrent, restoredSavedBytes {
+                dirty = false
+            } else {
+                dirty = !Self.hasIdenticalBytes(text, savedText)
+            }
         } else {
             dirty = false
         }
@@ -287,6 +347,7 @@ final class FileTab: nonisolated Identifiable {
         guard reloadError == nil else { return }
         invalidateReload()
         let written = text
+        let deltaAtWrite = nativeCodeUnitDelta
         let savedPath = path
         let generation = targetGeneration
         let target = backend
@@ -294,7 +355,16 @@ final class FileTab: nonisolated Identifiable {
             try await target.write(path: savedPath, data: Data(written.utf8))
             guard generation == targetGeneration else { return }
             savedText = written
-            // An edit landing while the write was in flight stays dirty.
+            reversibleEdit = nil
+            restoredSavedBytes = false
+            // Rebase changes made during the write onto the new saved bytes.
+            if let deltaAtWrite, nativeCodeUnitDelta != nil {
+                for (unit, count) in deltaAtWrite {
+                    let updated = (nativeCodeUnitDelta?[unit] ?? 0) - count
+                    if updated == 0 { nativeCodeUnitDelta?.removeValue(forKey: unit) }
+                    else { nativeCodeUnitDelta?[unit] = updated }
+                }
+            }
             refreshDirtyState()
             saveError = nil
             reloadError = nil
@@ -375,6 +445,9 @@ final class FileTab: nonisolated Identifiable {
             self.content = loaded.content
             self.text = loaded.text
             self.savedText = loaded.text
+            self.nativeCodeUnitDelta = [:]
+            self.reversibleEdit = nil
+            self.restoredSavedBytes = false
             self.imageFingerprint = loaded.imageFingerprint
             self.saveError = nil
             self.reloadRevision &+= 1
@@ -388,10 +461,21 @@ final class FileTab: nonisolated Identifiable {
         reloadGeneration &+= 1
     }
 
+    private static func hasIdenticalBytes(_ lhs: String, _ rhs: String) -> Bool {
+        var leftText = lhs
+        var rightText = rhs
+        return leftText.withUTF8 { left in
+            rightText.withUTF8 { right in
+                left.count == right.count
+                    && (left.isEmpty || memcmp(left.baseAddress, right.baseAddress, left.count) == 0)
+            }
+        }
+    }
+
     private func matches(_ loaded: LoadedContent) -> Bool {
         switch (content, loaded.content) {
         case (.text, .text):
-            return savedText.utf8.elementsEqual(loaded.text.utf8)
+            return Self.hasIdenticalBytes(savedText, loaded.text)
         case (.image, .image):
             return imageFingerprint == loaded.imageFingerprint
         case (.unavailable(let current), .unavailable(let new)):

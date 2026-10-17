@@ -424,18 +424,6 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
     var processingKeyEvent = false
 
     /// The delegate for all text views sharing the same layout manager.
-    @available(*, deprecated, renamed: "textDelegate")
-    public weak var delegate: (any STTextViewDelegate)? {
-        set {
-            textDelegate = newValue
-        }
-
-        get {
-            textDelegate
-        }
-    }
-
-    /// The delegate for all text views sharing the same layout manager.
     public weak var textDelegate: (any STTextViewDelegate)? {
         set {
             delegateProxy.source = newValue
@@ -462,11 +450,6 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
             setupTextLayoutManager(textLayoutManager)
             self.text = text
         }
-    }
-
-    @available(*, deprecated, renamed: "textContentManager")
-    open var textContentStorage: NSTextContentStorage {
-        textContentManager as! NSTextContentStorage
     }
 
     /// The text view's text storage object.
@@ -1613,12 +1596,6 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
         let notification = Notification(name: Self.textWillChangeNotification, object: self, userInfo: nil)
         NotificationCenter.default.post(notification)
         delegateProxy.textViewWillChangeText(notification)
-    }
-
-    /// Sends out necessary notifications when a text change completes.
-    @available(*, deprecated, message: "Use didChangeText() instead")
-    open func textDidChange(_ sender: Any?) {
-        didChangeText()
     }
 
     func didChangeText(in textRange: NSTextRange) {

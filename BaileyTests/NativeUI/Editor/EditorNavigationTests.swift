@@ -413,15 +413,24 @@ final class EditorNavigationTests: XCTestCase {
                 print("EDITOR_SOURCE rows=\(rows) wrap=\(wraps) bytes=\(source.utf8.count) heights=\(heights) origins=\(origins)")
                 for position in [0, source.utf16.count / 2, source.utf16.count] {
                     var durations: [Double] = []
+                    var insertions: [Double] = []
+                    var deletions: [Double] = []
                     for _ in 0..<30 {
                         let started = CFAbsoluteTimeGetCurrent()
                         editor.replaceCharacters(in: NSRange(location: position, length: 0), with: "a")
+                        let inserted = CFAbsoluteTimeGetCurrent()
                         editor.replaceCharacters(in: NSRange(location: position, length: 1), with: "")
-                        durations.append((CFAbsoluteTimeGetCurrent() - started) * 1_000)
+                        let deleted = CFAbsoluteTimeGetCurrent()
+                        insertions.append((inserted - started) * 1_000)
+                        deletions.append((deleted - inserted) * 1_000)
+                        durations.append((deleted - started) * 1_000)
                         await Task.yield()
                     }
                     durations.sort()
+                    insertions.sort()
+                    deletions.sort()
                     print("EDITOR_INPUT rows=\(rows) wrap=\(wraps) position=\(position) pair_ms median=\(durations[15]) p95=\(durations[28]) max=\(durations[29])")
+                    print("EDITOR_SINGLE rows=\(rows) wrap=\(wraps) position=\(position) insert_ms median=\(insertions[15]) p95=\(insertions[28]) delete_ms median=\(deletions[15]) p95=\(deletions[28])")
                 }
                 XCTAssertEqual(Data(file.text.utf8), Data(source.utf8))
             }

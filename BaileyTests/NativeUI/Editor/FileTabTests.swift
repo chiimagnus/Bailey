@@ -89,6 +89,91 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
 
 @MainActor
 final class FileTabTests: XCTestCase {
+    func testDetachedEditorAppendKeepsSameNativeDocumentAndUndo() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
+        let original = "first 中文👋\n"
+        try Data(original.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let host = NSHostingView(rootView: AnyView(FileViewerView(file: file)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        editor.insertText("// prior\n", replacementRange: NSRange(location: 0, length: 0))
+        editor.breakUndoCoalescing()
+        XCTAssertTrue(file.isDirty)
+
+        host.rootView = AnyView(Color.clear)
+        try await wait { host.layoutSubtreeIfNeeded(); return file.editorView == nil }
+        file.appendText("// appended\n")
+        let expected = "// prior\n" + original + "// appended\n"
+        XCTAssertEqual(file.text, expected)
+        XCTAssertEqual(editor.text, expected, "An unmounted retained editor is still the document owner")
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data(expected.utf8))
+        XCTAssertFalse(file.isDirty)
+
+        host.rootView = AnyView(FileViewerView(file: file))
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.mountedEditor(in: host) === editor
+        }
+        editor.undoManager?.undo()
+        XCTAssertEqual(editor.text, "// prior\n" + original)
+        XCTAssertEqual(file.text, editor.text)
+        XCTAssertTrue(file.isDirty)
+    }
+
+    func testNativeReorderAndInFlightSaveKeepExactDirtyBytes() async throws {
+        let path = "/fixture/\(UUID().uuidString)-permutation.txt"
+        let original = "abc 中文👋\r\n"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data(original.utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        editor.insertText("ba", replacementRange: NSRange(location: 0, length: 2))
+        editor.breakUndoCoalescing()
+        XCTAssertEqual(file.text, "bac 中文👋\r\n")
+        XCTAssertTrue(file.isDirty, "Equal code-unit frequencies do not prove equal bytes")
+
+        let saving = Task { await file.save() }
+        try await wait { await backend.writingPath == path }
+        editor.insertText("ab", replacementRange: NSRange(location: 0, length: 2))
+        editor.breakUndoCoalescing()
+        XCTAssertEqual(Data(file.text.utf8), Data(original.utf8))
+        XCTAssertFalse(file.isDirty, "Exact inverse edit returns to the original baseline")
+        await backend.finishWrite()
+        await saving.value
+        XCTAssertTrue(file.isDirty, "An in-flight write establishes a new baseline")
+        let stale = await backend.data(at: path)
+        XCTAssertEqual(stale, Data("bac 中文👋\r\n".utf8))
+
+        let secondSave = Task { await file.save() }
+        try await wait { await backend.writingPath == path }
+        await backend.finishWrite()
+        await secondSave.value
+        XCTAssertFalse(file.isDirty)
+        let final = await backend.data(at: path)
+        XCTAssertEqual(final, Data(original.utf8))
+    }
+
     func testCanonicalEquivalentNativeReplacementUndoAndSavePreserveBytes() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
         let composed = "café 中文👋\r\n"
