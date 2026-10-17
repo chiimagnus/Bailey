@@ -385,6 +385,12 @@ final class GitExternalRefreshTests: XCTestCase {
             try await wait(seconds: 30) {
                 model.changedEntries.contains { $0.path == "tracked.txt" }
             }
+            // SSH delivers working-tree status before its Ref/history details.
+            // Finish this visible-panel refresh before checking whether hiding
+            // the view prevents NEW polling, not completion of an old request.
+            try await wait(seconds: 35) {
+                !model.isRefreshing && model.recentCommits.first?.hash == newHead
+            }
 
             window.contentView = NSHostingView(rootView: Text("Git panel hidden"))
             try await Task.sleep(for: .milliseconds(350))
