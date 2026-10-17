@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '验证现有版本签名（不重新发布）'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -27,10 +33,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - name: Preflight release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
@@ -52,7 +59,8 @@ jobs:
           if versions.get("Debug") != expected or versions.get("Release") != expected:
               sys.exit(f"Tag 版本 {expected} 与 Xcode 项目版本不一致：{versions}")
           '
-          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name' | python3 -c '
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name' | python3 -c '
           import re, sys
           tag = sys.argv[1]
           version = tuple(map(int, tag[1:].split(".")))
@@ -61,6 +69,7 @@ jobs:
                                      and tuple(map(int, existing[1:].split("."))) >= version):
                   sys.exit("拒绝重复或倒退发布：" + existing)
           ' "$RELEASE_TAG"
+          fi
       - name: Test tagged source
         run: make test SIGNING=adhoc
       - name: Import Apple Development signing identity
@@ -88,13 +97,14 @@ jobs:
           python3 -c 'import os, pathlib; pathlib.Path(os.environ["RUNNER_TEMP"], "bailey-signing.p12").unlink()'
       - name: Build and verify release archive
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           BUILD_NUMBER: ${{ github.run_number }}
         run: make package VERSION="${RELEASE_TAG#v}" BUILD_NUMBER="$BUILD_NUMBER"
       - name: Publish release archive
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           gh release create "$RELEASE_TAG" \
             "build/releases/bailey-${RELEASE_TAG#v}-macos-arm64.zip" \
