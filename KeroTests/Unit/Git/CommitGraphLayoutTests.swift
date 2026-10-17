@@ -318,6 +318,44 @@ final class CommitGraphLayoutTests: XCTestCase {
         }
     }
 
+    func testNonoverlappingMergeDetoursReuseTheSameFreeLane() {
+        // Both extra parents are already reachable from each first parent.
+        // Git permits these edges, and their transit intervals do not overlap.
+        let commits = (0..<9).map { index -> GitStatusModel.RecentCommit in
+            let first = index == 8 ? [] : ["n-\(index + 1)"]
+            let other = index == 0 ? ["n-2"] : index == 4 ? ["n-6"] : []
+            return commit("n-\(index)", parents: first + other, current: index == 0)
+        }
+        let graph = CommitGraphLayout(commits: commits)
+        XCTAssertEqual(Set(graph.rows.map(\.node.lane)), [0])
+        assertConnected(graph, from: 0, to: 2, color: graph.rows[2].node.color)
+        assertConnected(graph, from: 4, to: 6, color: graph.rows[6].node.color)
+        XCTAssertEqual(graph.laneCount, 2,
+                       "Two disjoint detours must reuse one transit lane, not grow the gutter")
+    }
+
+    func testUnloadedStashBasesDoNotReserveInvisibleRails() {
+        let stashes = (0..<40).map { index in
+            GitStatusModel.Stash(
+                selector: "stash@{\(index)}",
+                oid: String(format: "%040x", index + 1),
+                message: "Saved work",
+                baseHash: "missing-base",
+                untrackedFilesHash: nil,
+                author: "Tester", date: .distantPast
+            )
+        }
+        let commits = GitStatusModel.graphCommits([
+            commit("head", parents: ["not-yet-loaded"], current: true)
+        ], stashes: stashes)
+        let graph = CommitGraphLayout(commits: commits)
+        XCTAssertEqual(commits.count, 41)
+        XCTAssertEqual(Set(commits.compactMap { $0.stash?.id }).count, 40)
+        XCTAssertTrue(graph.rows.dropFirst().allSatisfy { $0.links.isEmpty })
+        XCTAssertEqual(graph.laneCount, 2,
+                       "Missing stash bases must not consume a new lane for each invisible edge")
+    }
+
     func testThirtyParallelTipsReusePaletteWithoutOverlappingNodes() {
         let tips = (0..<30).map { commit("tip-\($0)", parents: ["root"]) }
         let graph = CommitGraphLayout(commits: tips + [commit("root")])

@@ -63,8 +63,8 @@ nonisolated struct CommitGraphLayout {
                 path.append(cursor)
                 guard let parent = commits[cursor].parentHashes.first else { break }
                 guard let next = positions[parent], next > cursor else {
-                    // An incomplete page must keep this lane occupied until its parent arrives.
-                    end = commits.count
+                    // Only real commits can continue beyond the loaded page.
+                    if commits[cursor].stash == nil { end = commits.count }
                     break
                 }
                 end = next
@@ -113,8 +113,7 @@ nonisolated struct CommitGraphLayout {
                     if clear(alternate) {
                         lane = alternate
                     } else {
-                        lane = max(largestLane, lane) + 1
-                        while !clear(lane) { lane += 1 }
+                        lane = (0...largestLane).first(where: clear) ?? (largestLane + 1)
                     }
                 }
                 largestLane = max(largestLane, lane)
