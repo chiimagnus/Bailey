@@ -59,7 +59,8 @@ final class RecentCommitsViewTests: XCTestCase {
 
     private func hostHistory(
         _ commits: [GitStatusModel.RecentCommit], selection: GraphSelection,
-        width: CGFloat = 260, height: CGFloat = 200, viewMode: GitViewMode = .list,
+        width: CGFloat = 260, height: CGFloat = 200, fontScale: CGFloat = 1,
+        viewMode: GitViewMode = .list,
         remotes: [String] = [],
         stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in }
     ) -> NSWindow {
@@ -75,7 +76,7 @@ final class RecentCommitsViewTests: XCTestCase {
             loadBinaryStatus: { _ in }, isBinaryFile: { _, _ in false },
             expandedCommitIDs: Binding(get: { selection.expanded }, set: { selection.expanded = $0 }),
             collapsedFolders: Binding(get: { selection.folders }, set: { selection.folders = $0 }),
-            viewMode: viewMode, fontScale: 1,
+            viewMode: viewMode, fontScale: fontScale,
             hasMoreCommits: false, isLoadingMore: false, loadMore: { false },
             openDiff: { _, _ in }, canSwitchBranch: true,
             switchBranch: { _ in }, branchAction: { _, _, _ in }, remoteAction: { _, _, _ in }, tagAction: { _, _, _ in },
@@ -355,6 +356,70 @@ final class RecentCommitsViewTests: XCTestCase {
         let window = hostHistory([commit], selection: selection, height: 110)
         defer { window.close() }
         assertHorizontalScroll(in: window.contentView!)
+    }
+
+    func testGraphGutterLeavesRoomForCommitContentAtExtremeLaneCounts() {
+        let widths: [CGFloat] = [48, 120, 260, 400, 800]
+        let scales: [CGFloat] = [0.8, 1, 1.6, 2]
+        let laneCounts = [0, 1, 2, 12, 30, 100, 237, 1_000]
+        for width in widths {
+            for scale in scales {
+                for lanes in laneCounts {
+                    let spacing = CommitGraphRails.spacing(
+                        lanes: lanes, viewportWidth: width, scale: scale)
+                    let gutter = CommitGraphRails.gutter(
+                        lanes: lanes, spacing: spacing, scale: scale)
+                    let minimumNodeGutter = 16 * scale
+                    XCTAssertTrue(spacing.isFinite && spacing >= 0,
+                                  "Invalid spacing at \(width)pt, \(scale)x, \(lanes) lanes")
+                    XCTAssertLessThanOrEqual(
+                        gutter, max(width * 0.34, minimumNodeGutter) + 0.01,
+                        "Commit title is displaced by \(lanes) lanes at \(width)pt / \(scale)x"
+                    )
+                    if width >= minimumNodeGutter {
+                        XCTAssertLessThanOrEqual(gutter, width,
+                                                 "Graph must not consume the whole sidebar")
+                    }
+                }
+            }
+        }
+    }
+
+    func testDenseRealNativeGraphRetainsVisibleTitleScrollerInBothThemes() throws {
+        let commits: [GitStatusModel.RecentCommit] = (0..<237).map { index in
+            .init(hash: "tip-\(index)", shortHash: "tip-\(index)",
+                  subject: "Branch \(index) is still readable",
+                  author: "Tester", date: .now, parentHashes: ["root"],
+                  references: [], files: [])
+        } + [.init(hash: "root", shortHash: "root", subject: "Root",
+                    author: "Tester", date: .now, parentHashes: [],
+                    references: [], files: [])]
+
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            for (width, scale) in [(CGFloat(260), CGFloat(1)),
+                                   (CGFloat(260), CGFloat(1.6)),
+                                   (CGFloat(400), CGFloat(2))] {
+                let window = hostHistory(commits, selection: GraphSelection(),
+                                         width: width, height: 180,
+                                         fontScale: scale)
+                defer { window.close() }
+                window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+                settle()
+                let titleScrollers = horizontallyScrollableViews(in: window.contentView!).filter {
+                    $0.contentView.bounds.height < 30 * scale
+                        && $0.contentView.bounds.width >= 64 * scale
+                }
+                let title = try XCTUnwrap(titleScrollers.first,
+                    "Dense graph must still have a native commit title viewport")
+                let visible = title.convert(title.bounds, to: window.contentView)
+                XCTAssertLessThanOrEqual(
+                    visible.minX, width * 0.34 + 24,
+                    "Title must start beside the bounded graph gutter")
+                XCTAssertGreaterThanOrEqual(visible.width, 64 * scale)
+                XCTAssertLessThanOrEqual(visible.minX + visible.width, width + 1,
+                    "Title must not be pushed beyond the sidebar's right edge")
+            }
+        }
     }
 
     func testManyParallelBranchesDoNotScrollWholeGraphSideways() {
