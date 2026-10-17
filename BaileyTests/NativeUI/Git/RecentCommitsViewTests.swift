@@ -62,7 +62,8 @@ final class RecentCommitsViewTests: XCTestCase {
         width: CGFloat = 260, height: CGFloat = 200, fontScale: CGFloat = 1,
         viewMode: GitViewMode = .list,
         remotes: [String] = [],
-        stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in }
+        stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in },
+        openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void = { _, _, _ in }
     ) -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(x: -1200, y: -1200, width: width, height: height),
@@ -83,7 +84,8 @@ final class RecentCommitsViewTests: XCTestCase {
             isAnnotatedTag: { _ in false },
             canFetchRemoteBranch: { _ in false }, createBranch: { _ in }, addTag: { _ in },
             canActOnCommit: true, canDropCommit: { _ in false }, commitAction: { _, _ in },
-            stashAction: stashAction
+            stashAction: stashAction,
+            openWorktreeDiff: openWorktreeDiff
         ).frame(width: width, height: height, alignment: .topLeading)
             .background(Color(nsColor: Theme.sidebar)))
         window.orderFront(nil)
@@ -739,6 +741,73 @@ final class RecentCommitsViewTests: XCTestCase {
         click(point, in: window)
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), alias.name)
         XCTAssertTrue(selection.expanded.isEmpty)
+    }
+
+    func testUncommittedWorktreeNodeHasSafeMenuAndNativeStageAwareFileActions() throws {
+        let head = String(repeating: "a", count: 40)
+        let worktree = GitStatusModel.WorktreeChanges(
+            path: "/private/tmp/另一个 worktree", branch: "topic/修改", headOID: head,
+            entries: [.init(path: "Scripts/更改.swift", staged: "M", unstaged: "M")],
+            isCurrent: false
+        )
+        let commit = GitStatusModel.RecentCommit(
+            hash: head, shortHash: String(head.prefix(7)), subject: "Base",
+            author: "Tester", date: .now, parentHashes: [],
+            references: [.init(kind: .currentBranch, name: "main")], files: []
+        )
+        let graph = GitStatusModel.graphCommits([commit], stashes: [], worktrees: [worktree])
+        let node = try XCTUnwrap(graph.first)
+        XCTAssertEqual(node.worktree?.path, worktree.path)
+        XCTAssertEqual(graph.count, 2)
+        XCTAssertTrue(CommitGraphLayout(commits: graph).rows[0].links.count > 0)
+        XCTAssertTrue(RecentCommitsView.nodeHelp(node, inHeadHistory: false).contains(worktree.path))
+        XCTAssertFalse(RecentCommitsView.nodeHelp(node, inHeadHistory: false).contains("worktree:" + worktree.path))
+
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            for mode in [GitViewMode.list, .tree] {
+                let selection = GraphSelection()
+                let height: CGFloat = 380
+                var opened: [(path: String, file: String, staged: Bool)] = []
+                let window = hostHistory(
+                    graph, selection: selection, width: 430, height: height,
+                    viewMode: mode,
+                    openWorktreeDiff: { tree, entry, staged in
+                        opened.append((tree.path, entry.path, staged))
+                    }
+                )
+                window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+                settle()
+                let menuEvent = try XCTUnwrap(NSEvent.mouseEvent(
+                    with: .rightMouseDown, location: NSPoint(x: 220, y: height - 12),
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                    clickCount: 1, pressure: 1
+                ))
+                let titles = try XCTUnwrap(window.contentView?.menu(for: menuEvent)).items.map(\.title)
+                XCTAssertTrue(titles.contains(String(localized: "Copy Worktree Path", table: "Git")))
+                XCTAssertFalse(titles.contains(String(localized: "Checkout Commit…", table: "Git")))
+                XCTAssertFalse(titles.contains(String(localized: "Reset Current Branch to Commit…", table: "Git")))
+                XCTAssertFalse(titles.contains(String(localized: "Apply Stash…", table: "Git")))
+
+                click(NSPoint(x: 245, y: height - 19), in: window)
+                XCTAssertTrue(selection.expanded.contains(node.id))
+                let row = TreeRowStyle.rowHeight(1)
+                // Staged header + first file row. Tree mode adds a folder
+                // parent for Scripts; its nested row is one step below.
+                let stagedFileY = height - 38 - row - (mode == .tree ? row : 0) - row / 2
+                click(NSPoint(x: 255, y: stagedFileY), in: window)
+                XCTAssertTrue(opened.contains {
+                    $0.path == worktree.path && $0.file == "Scripts/更改.swift" && $0.staged
+                }, "Staged diff must target the source checkout, not the displayed repository")
+                let unstagedFileY = height - 38 - 3 * row
+                    - (mode == .tree ? 2 * row : 0) - row / 2
+                click(NSPoint(x: 255, y: unstagedFileY), in: window)
+                XCTAssertTrue(opened.contains {
+                    $0.path == worktree.path && $0.file == "Scripts/更改.swift" && !$0.staged
+                }, "Working changes must not silently open the staged version")
+                window.close()
+            }
+        }
     }
 
     func testStashIsANodeInTheSameGraphWithOnlyStashActions() throws {

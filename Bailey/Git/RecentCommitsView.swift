@@ -87,6 +87,7 @@ struct RecentCommitsView: View {
     let commitAction: (Commit, GitStatusModel.CommitAction) -> Void
     let canActOnStash: Bool
     let stashAction: (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void
+    let openWorktreeDiff: (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void
 
     init(
         commits: [Commit],
@@ -117,7 +118,8 @@ struct RecentCommitsView: View {
         canDropCommit: @escaping (Commit) -> Bool,
         commitAction: @escaping (Commit, GitStatusModel.CommitAction) -> Void,
         canActOnStash: Bool = true,
-        stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in }
+        stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in },
+        openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void = { _, _, _ in }
     ) {
         self.commits = commits
         self.remotes = remotes
@@ -148,6 +150,7 @@ struct RecentCommitsView: View {
         self.commitAction = commitAction
         self.canActOnStash = canActOnStash
         self.stashAction = stashAction
+        self.openWorktreeDiff = openWorktreeDiff
     }
 
     var body: some View {
@@ -168,7 +171,10 @@ struct RecentCommitsView: View {
                               spacing: spacing, expanded: expanded,
                               inHeadHistory: graph.knownHeadHistory.contains(commit.hash))
                     if expanded {
-                        if let stash = commit.stash {
+                        if let worktree = commit.worktree {
+                            worktreeFiles(worktree, rails: graph.rows[index].bottomRails,
+                                          gutter: gutter, spacing: spacing)
+                        } else if let stash = commit.stash {
                             switch stashFilesByOID[stash.oid] {
                             case .loaded(let files):
                                 commitFiles(commit, files: files, rails: graph.rows[index].bottomRails,
@@ -213,12 +219,17 @@ struct RecentCommitsView: View {
     private func toggle(_ commit: Commit) {
         if !expandedCommitIDs.insert(commit.id).inserted {
             expandedCommitIDs.remove(commit.id)
-        } else {
+        } else if commit.worktree == nil {
             loadBinaryStatus(commit)
         }
     }
 
     static func nodeHelp(_ commit: Commit, inHeadHistory: Bool) -> String {
+        if let worktree = commit.worktree {
+            return [String(localized: "Uncommitted Changes", table: "Git"),
+                    worktree.branch ?? String(localized: "Detached HEAD", table: "Git"),
+                    worktree.path].joined(separator: "\n")
+        }
         var lines = [commit.hash]
         if !commit.subject.isEmpty { lines.append(commit.subject) }
         if let stash = commit.stash {
@@ -244,7 +255,10 @@ struct RecentCommitsView: View {
         ) { hovering, layout in
             VStack(alignment: .leading, spacing: 2 * fontScale) {
                 HStack(spacing: 4 * fontScale) {
-                    if let stash = commit.stash {
+                    if let worktree = commit.worktree {
+                        worktreeBadge(worktree, in: commit, colorIndex: graph.node.color)
+                            .layoutPriority(1)
+                    } else if let stash = commit.stash {
                         stashBadge(stash, in: commit, colorIndex: graph.node.color)
                             .layoutPriority(1)
                     } else if !commit.references.isEmpty {
@@ -279,6 +293,14 @@ struct RecentCommitsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(alignment: .firstTextBaseline, spacing: 6 * fontScale) {
+                    if let worktree = commit.worktree {
+                        Text(verbatim: worktree.path)
+                            .font(.system(size: 10 * fontScale, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(worktree.path)
+                    } else {
                     Button { copy(commit.hash) } label: {
                         Text(verbatim: commit.shortHash)
                             .font(.system(size: 10.5 * fontScale, design: .monospaced))
@@ -304,6 +326,7 @@ struct RecentCommitsView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
+                    }
                 }
             }
             .modifier(layout)
@@ -322,6 +345,7 @@ struct RecentCommitsView: View {
                     $0.kind == .currentBranch || $0.kind == .detachedHead
                 },
                 isStash: commit.stash != nil,
+                isWorktree: commit.worktree != nil,
                 fontScale: fontScale, laneSpacing: spacing
             )
         }
@@ -338,13 +362,17 @@ struct RecentCommitsView: View {
                 y: max(36, ceil(38 * fontScale)) / 2 - 7 * fontScale
             )
             .help(Self.nodeHelp(commit, inHeadHistory: inHeadHistory))
-            .accessibilityLabel(commit.shortHash + ": " + commit.subject)
-            .accessibilityValue(commit.hash)
+            .accessibilityLabel(commit.worktree.map { $0.branch ?? $0.path } ?? commit.shortHash + ": " + commit.subject)
+            .accessibilityValue(commit.worktree?.path ?? commit.hash)
         }
         .contentShape(Rectangle())
         .onTapGesture { toggle(commit) }
         .contextMenu {
-            if let stash = commit.stash {
+            if let worktree = commit.worktree {
+                Button(String(localized: "Copy Worktree Path", table: "Git")) {
+                    copy(worktree.path)
+                }
+            } else if let stash = commit.stash {
                 stashActions(stash)
             } else {
                 Button(String(localized: "Create Branch at Commit…", table: "Git")) {
@@ -367,6 +395,34 @@ struct RecentCommitsView: View {
                 }
             }
         }
+    }
+
+    private func worktreeBadge(
+        _ worktree: GitStatusModel.WorktreeChanges, in commit: Commit, colorIndex: Int
+    ) -> some View {
+        let outline = RoundedRectangle(cornerRadius: 5 * fontScale)
+        return Button { toggle(commit) } label: {
+            HStack(spacing: 0) {
+                Image(systemName: "square.stack")
+                    .font(.system(size: 9 * fontScale))
+                    .foregroundStyle(GitGraphPalette.iconColor(colorIndex))
+                    .frame(width: 18 * fontScale, height: 18 * fontScale)
+                    .background(GitGraphPalette.color(colorIndex))
+                Text(verbatim: worktree.branch ?? String(localized: "Detached HEAD", table: "Git"))
+                    .font(.system(size: 10 * fontScale, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 115 * fontScale)
+                    .padding(.horizontal, 5 * fontScale)
+            }
+            .background(Color.primary.opacity(0.06))
+            .clipShape(outline)
+            .overlay(outline.stroke(Color.primary.opacity(0.35),
+                                    lineWidth: 1 * fontScale))
+        }
+        .buttonStyle(.plain)
+        .help(worktree.path)
     }
 
     private func stashBadge(
@@ -634,6 +690,141 @@ struct RecentCommitsView: View {
         }
     }
 
+    @ViewBuilder
+    private func worktreeFiles(
+        _ worktree: GitStatusModel.WorktreeChanges, rails: [CommitGraphLayout.Rail],
+        gutter: CGFloat, spacing: CGFloat
+    ) -> some View {
+        let conflicts = worktree.entries.filter(\.isConflict)
+        let staged = worktree.entries.filter {
+            !$0.isConflict && $0.staged != "." && $0.staged != "?"
+        }
+        let changed = worktree.entries.filter {
+            !$0.isConflict && $0.unstaged != "."
+        }
+        if !conflicts.isEmpty {
+            worktreeSection(
+                conflicts, label: String(localized: "MERGE CHANGES", table: "Sidebar"),
+                section: "merge", staged: false, worktree: worktree,
+                rails: rails, gutter: gutter, spacing: spacing
+            )
+        }
+        if !staged.isEmpty {
+            worktreeSection(
+                staged, label: String(localized: "STAGED CHANGES", table: "Sidebar"),
+                section: "staged", staged: true, worktree: worktree,
+                rails: rails, gutter: gutter, spacing: spacing
+            )
+        }
+        if !changed.isEmpty {
+            worktreeSection(
+                changed, label: String(localized: "CHANGES", table: "Sidebar"),
+                section: "changes", staged: false, worktree: worktree,
+                rails: rails, gutter: gutter, spacing: spacing
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func worktreeSection(
+        _ entries: [GitStatusModel.Entry], label: String, section: String, staged: Bool,
+        worktree: GitStatusModel.WorktreeChanges, rails: [CommitGraphLayout.Rail],
+        gutter: CGFloat, spacing: CGFloat
+    ) -> some View {
+        let inset = gutter + 8 * fontScale
+        TreeRowSurface(
+            depth: 0, scale: fontScale, hoverEnabled: false, leadingInset: inset
+        ) { _, layout in
+            HStack {
+                Text(verbatim: label)
+                    .font(.system(size: 9 * fontScale, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(entries.count, format: .number)
+                    .font(.system(size: 9 * fontScale))
+                    .foregroundStyle(.tertiary)
+            }
+            .modifier(layout)
+        }
+        .background { fileRails(rails, spacing: spacing) }
+
+        if viewMode == .tree {
+            let rows = entries.map { entry in
+                TreeDisplayModel.Row(
+                    name: entry.fileName, path: entry.path, isDirectory: false,
+                    status: .init(staged ? entry.staged : entry.unstaged)
+                )
+            }
+            let byPath = Dictionary(entries.map { ($0.path, $0) },
+                                    uniquingKeysWith: { first, _ in first })
+            let key = "worktree:" + worktree.path + ":" + section
+            let nodes = TreeDisplayModel.pathRows(
+                rows, section: key, collapsed: collapsedFolders
+            )
+            ForEach(nodes) { node in
+                if node.isDirectory {
+                    TreeFolderRow(
+                        row: node, scale: fontScale, leadingInset: inset
+                    ) {
+                        let folder = key + ":" + node.path
+                        if !collapsedFolders.insert(folder).inserted {
+                            collapsedFolders.remove(folder)
+                        }
+                    }
+                    .background { fileRails(rails, spacing: spacing) }
+                    .contextMenu {
+                        Button(String(localized: "Copy Absolute Path", table: "Git")) {
+                            copy((worktree.path as NSString).appendingPathComponent(node.path))
+                        }
+                    }
+                } else if let entry = byPath[node.path] {
+                    worktreeFile(entry, row: node, staged: staged,
+                                 worktree: worktree, inset: inset, showDirectory: false)
+                        .background { fileRails(rails, spacing: spacing) }
+                }
+            }
+        } else {
+            ForEach(entries, id: \.id) { entry in
+                let node = TreeDisplayModel.Row(
+                    name: entry.fileName, path: entry.path, isDirectory: false,
+                    status: .init(staged ? entry.staged : entry.unstaged)
+                )
+                worktreeFile(entry, row: node, staged: staged,
+                             worktree: worktree, inset: inset, showDirectory: true)
+                    .background { fileRails(rails, spacing: spacing) }
+            }
+        }
+    }
+
+    private func worktreeFile(
+        _ entry: GitStatusModel.Entry, row: TreeDisplayModel.Row, staged: Bool,
+        worktree: GitStatusModel.WorktreeChanges, inset: CGFloat, showDirectory: Bool
+    ) -> some View {
+        TreeFileRow(
+            row: row, scale: fontScale,
+            directory: showDirectory ? entry.directory : nil,
+            leadingInset: inset,
+            accessibilityHint: staged
+                ? String(localized: "Open Staged Diff", table: "Git")
+                : String(localized: "Open Working Changes", table: "Git"),
+            open: { openWorktreeDiff(worktree, entry, staged) }
+        ) { _ in EmptyView() }
+        .contextMenu {
+            Button(staged
+                   ? String(localized: "Open Staged Diff", table: "Git")
+                   : String(localized: "Open Working Changes", table: "Git")) {
+                openWorktreeDiff(worktree, entry, staged)
+            }
+            Divider()
+            Button(String(localized: "Copy Absolute Path", table: "Git")) {
+                copy((worktree.path as NSString).appendingPathComponent(entry.path))
+            }
+            Button(String(localized: "Copy Relative Path", table: "Git")) {
+                copy(entry.path)
+            }
+        }
+    }
+
     private func stashDetailPlaceholder(
         _ message: String, rails: [CommitGraphLayout.Rail], gutter: CGFloat, spacing: CGFloat
     ) -> some View {
@@ -808,6 +999,7 @@ struct CommitGraphRails: View {
     var bottomRails: [CommitGraphLayout.Rail] = []
     var isHead = false
     var isStash = false
+    var isWorktree = false
     let fontScale: CGFloat
     let laneSpacing: CGFloat
 
@@ -875,7 +1067,16 @@ struct CommitGraphRails: View {
                     x: x - radius, y: middle - radius, width: 2 * radius, height: 2 * radius
                 ))
                 let nodeColor = GitGraphPalette.color(row.node.color)
-                if isHead || isStash {
+                if isWorktree {
+                    var diamond = Path()
+                    diamond.move(to: CGPoint(x: x, y: middle - radius - 1.5 * fontScale))
+                    diamond.addLine(to: CGPoint(x: x + radius + 1.5 * fontScale, y: middle))
+                    diamond.addLine(to: CGPoint(x: x, y: middle + radius + 1.5 * fontScale))
+                    diamond.addLine(to: CGPoint(x: x - radius - 1.5 * fontScale, y: middle))
+                    diamond.closeSubpath()
+                    context.fill(diamond, with: .color(backdrop))
+                    context.stroke(diamond, with: .color(nodeColor), lineWidth: 2 * fontScale)
+                } else if isHead || isStash {
                     context.fill(node, with: .color(backdrop))
                     context.stroke(node, with: .color(nodeColor), lineWidth: 2 * fontScale)
                     if isStash {
