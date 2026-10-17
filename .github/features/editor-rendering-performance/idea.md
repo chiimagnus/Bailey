@@ -6,7 +6,7 @@
 
 Kero 会将文本**完整读入** `FileTab` 和 STTextView，并非滚动到哪里才从磁盘加载哪里；按需发生的是 **TextKit 2 的文本排版和可视片段绘制**。现有 STTextView 的 `updateContentSizeIfNeeded()` 在视口布局完成时根据文末布局**估算文档高度并更新 documentView 的 frame**，`usageBounds` 变化还会触发约束更新；这些与滚动条跳变有直接机制关联，尚需实际记录文档高度／滑块／视口位置来确认是否为最终根因。此前 P3 输入、解析及跳转性能数据不能证明滚动几何稳定。
 
-此问题独立于 [editor-git-performance](../editor-git-performance/idea.md) 的 Git／Diff 任务；共享 STTextView 修改须保护 Diff 的固定行高与同步滚动。另有两个与资源占用直接相关的当前实现：`SourceTextEditor.textViewDidChangeText` 每次编辑取 `textView.text` 全文，`FileTab.refreshDirtyState` 随即逐字节比较保存基线；`SyntaxHighlightCoordinator.didChangeContent` 也每次取得全文供 Tree-sitter 读取，`TextCoordinateIndex.replace` 会平移编辑位置之后的全部行起点。这些是已确认的工作量路径，实际耗时与分配仍需实测。`FileTab.maxTextBytes = 5 MiB` 还可能拒绝真实十万行文件；不能只用每行几个字符的样本掩盖限制。
+此问题独立于此前已完成的 Git／Diff 性能优化；共享 STTextView 修改须保护 Diff 的固定行高与同步滚动。另有两个与资源占用直接相关的当前实现：`SourceTextEditor.textViewDidChangeText` 每次编辑取 `textView.text` 全文，`FileTab.refreshDirtyState` 随即逐字节比较保存基线；`SyntaxHighlightCoordinator.didChangeContent` 也每次取得全文供 Tree-sitter 读取，`TextCoordinateIndex.replace` 会平移编辑位置之后的全部行起点。这些是已确认的工作量路径，实际耗时与分配仍需实测。`FileTab.maxTextBytes = 5 MiB` 还可能拒绝真实十万行文件；不能只用每行几个字符的样本掩盖限制。
 
 ## 需求与边界
 
@@ -18,7 +18,7 @@ Kero 会将文本**完整读入** `FileTab` 和 STTextView，并非滚动到哪�
 
 ## 明确不做
 
-- 不把触控板事件处理或追求 120 FPS 当作默认方案；**滚动条范围和阅读位置正确优先于纯帧率**。不重写 Git、Files、Diff，也不重启已 [No-Go 的 Tree-sitter 插件迁移](../editor-git-performance/evidence-p7.md)。
+- 不把触控板事件处理或追求 120 FPS 当作默认方案；**滚动条范围和阅读位置正确优先于纯帧率**。不重写 Git、Files、Diff，也不重启已 [否决的 Tree-sitter 插件迁移](../../../docs/development.md)。
 - 不强制全篇 TextKit layout、不为小文件建立第二套缓冲或永久缓存、不先引入 Rope／SumTree／Metal 或新第三方依赖。仅当 10,000／100,000 行的真实采样证明现有增量索引仍随全文规模增长，才借鉴 Zed 的结构化索引思想并用 Swift 在原所有者处替换；不新建常驻诊断系统，不撤销输入、保存和 Diff 保护。
 - 当前请求**只审查并修订计划**，不实施产品改动、不触碰并行 P6 工作区与用户正在运行的 Kero。
 
