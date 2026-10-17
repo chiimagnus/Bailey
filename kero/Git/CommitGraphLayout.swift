@@ -26,11 +26,29 @@ nonisolated struct CommitGraphLayout {
 
     let rows: [Row]
     let laneCount: Int
+    let knownHeadHistory: Set<String>
 
     init(commits: [GitStatusModel.RecentCommit]) {
         let positions = Dictionary(uniqueKeysWithValues: commits.enumerated().compactMap {
             $0.element.stash == nil ? ($0.element.hash, $0.offset) : nil
         })
+        var headHistory: Set<String> = []
+        if let headIndex = commits.firstIndex(where: {
+            $0.stash == nil && $0.references.contains {
+                $0.kind == .currentBranch || $0.kind == .detachedHead
+            }
+        }) {
+            var pending = [headIndex]
+            while let index = pending.popLast() {
+                let commit = commits[index]
+                guard headHistory.insert(commit.hash).inserted else { continue }
+                pending += commit.parentHashes.compactMap { hash in
+                    guard let parentIndex = positions[hash], parentIndex > index else { return nil }
+                    return parentIndex
+                }
+            }
+        }
+        knownHeadHistory = headHistory
         var nodes = [Node?](repeating: nil, count: commits.count)
 
         var reservations: [(lane: Int, color: Int, first: Int, last: Int)] = []

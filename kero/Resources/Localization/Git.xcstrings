@@ -11,6 +11,16 @@
         }
       }
     },
+    "In HEAD History" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "属于当前 HEAD 的历史"
+          }
+        }
+      }
+    },
     "Branch Name" : {
       "localizations" : {
         "zh-Hans" : {

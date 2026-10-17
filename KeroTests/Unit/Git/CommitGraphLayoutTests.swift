@@ -277,6 +277,47 @@ final class CommitGraphLayoutTests: XCTestCase {
         }
     }
 
+    func testDeterministicCrossMergeHistoriesConnectEveryLoadedParent() {
+        var state: UInt64 = 0xA0B1_C2D3_E4F5
+        func roll(_ count: Int) -> Int {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Int(state % UInt64(count))
+        }
+        for _ in 0..<6 {
+            let count = 120
+            let history: [GitStatusModel.RecentCommit] = (0..<count).map { index in
+                guard index < count - 1 else { return commit("id-119") }
+                let first = index + 1 + roll(count - index - 1)
+                var parents = ["id-\(first)"]
+                if index < count - 2 && roll(3) == 0 {
+                    let second = index + 1 + roll(count - index - 1)
+                    if second != first { parents.append("id-\(second)") }
+                }
+                if index < count - 3 && roll(12) == 0 {
+                    let third = index + 1 + roll(count - index - 1)
+                    if !parents.contains("id-\(third)") { parents.append("id-\(third)") }
+                }
+                return commit("id-\(index)", parents: parents, current: index == 0)
+            }
+            let graph = CommitGraphLayout(commits: history)
+            XCTAssertEqual(graph.rows.count, count)
+            for (index, item) in history.enumerated() {
+                for (offset, hash) in item.parentHashes.enumerated() {
+                    let parent = Int(hash.dropFirst(3))!
+                    let color = offset == 0
+                        ? graph.rows[index].node.color : graph.rows[parent].node.color
+                    assertConnected(graph, from: index, to: parent, color: color)
+                }
+                for link in graph.rows[index].links {
+                    if case .through(let rail) = link {
+                        XCTAssertNotEqual(rail.lane, graph.rows[index].node.lane,
+                                          "Rails must not pass through unrelated commits")
+                    }
+                }
+            }
+        }
+    }
+
     func testThirtyParallelTipsReusePaletteWithoutOverlappingNodes() {
         let tips = (0..<30).map { commit("tip-\($0)", parents: ["root"]) }
         let graph = CommitGraphLayout(commits: tips + [commit("root")])
@@ -297,6 +338,74 @@ final class CommitGraphLayoutTests: XCTestCase {
         XCTAssertEqual(graph.laneCount, 1)
         XCTAssertTrue(graph.rows.allSatisfy { $0.node.color == 0 })
         XCTAssertTrue(graph.rows.last?.bottomRails.isEmpty == true)
+    }
+
+    func testThousandRowsWithThirtyParallelRefsDoNotCreatePhantomConnections() {
+        let sideTips = (0..<30).map { index in
+            commit("side-\(index)", parents: ["root"])
+        }
+        let main = (0..<970).map { index in
+            commit("main-\(index)", parents: [
+                index == 969 ? "root" : "main-\(index + 1)"
+            ], current: index == 0)
+        }
+        let history = sideTips + main + [commit("root")]
+        var timings: [Double] = []
+        for _ in 0..<30 {
+            let start = ProcessInfo.processInfo.systemUptime
+            let layout = CommitGraphLayout(commits: history)
+            timings.append(ProcessInfo.processInfo.systemUptime - start)
+            XCTAssertEqual(layout.laneCount, 31)
+        }
+        let sorted = timings.sorted()
+        let graph = CommitGraphLayout(commits: history)
+        print(String(format: "Git graph %d rows, 31 lanes, n=%d: median %.3f s, p95 %.3f s, max %.3f s",
+                     history.count, timings.count, sorted[15], sorted[28], sorted[29]))
+        XCTAssertEqual(graph.rows.count, 1_001)
+        XCTAssertEqual(graph.laneCount, 31)
+        XCTAssertEqual(graph.knownHeadHistory.count, 971)
+        for index in [0, 15, 29] {
+            assertConnected(graph, from: index, to: 1_000,
+                            color: graph.rows[index].node.color)
+        }
+        XCTAssertFalse(graph.knownHeadHistory.contains("side-0"))
+    }
+
+    func testOnlyLoadedGitAncestorsAreProvenReachableFromHEAD() {
+        let graph = CommitGraphLayout(commits: [
+            commit("tip", parents: ["main", "side"], current: true),
+            commit("side", parents: ["base"]),
+            commit("main", parents: ["base"]),
+            commit("unrelated", parents: ["root"]),
+            commit("base", parents: ["root"]),
+            commit("root"),
+        ])
+        XCTAssertEqual(graph.knownHeadHistory,
+                       Set(["tip", "side", "main", "base", "root"]))
+        let withoutHead = CommitGraphLayout(commits: [
+            commit("side", parents: ["root"]),
+            commit("root"),
+        ])
+        XCTAssertTrue(withoutHead.knownHeadHistory.isEmpty,
+                      "Visible refs are not proof that an unseen HEAD reaches a commit")
+        let missingParent = CommitGraphLayout(commits: [
+            commit("tip", parents: ["not-loaded"], current: true),
+            commit("unrelated"),
+        ])
+        XCTAssertEqual(missingParent.knownHeadHistory, Set(["tip"]),
+                       "Unknown ancestors cannot be inferred from a truncated page")
+    }
+
+    func testDetachedHeadHistoryUsesTheRealDetachedTip() {
+        let detached = GitStatusModel.RecentCommit(
+            hash: "detached", shortHash: "detached", subject: "Detached",
+            author: "Test", date: .distantPast, parentHashes: ["root"],
+            references: [.init(kind: .detachedHead, name: "HEAD")], files: []
+        )
+        let graph = CommitGraphLayout(commits: [
+            detached, commit("unrelated"), commit("root"),
+        ])
+        XCTAssertEqual(graph.knownHeadHistory, Set(["detached", "root"]))
     }
 
     func testEmptyHistoryDoesNotReserveAVisualLane() {

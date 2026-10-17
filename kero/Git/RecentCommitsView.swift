@@ -165,7 +165,8 @@ struct RecentCommitsView: View {
                 let expanded = expandedCommitIDs.contains(commit.id)
                 VStack(alignment: .leading, spacing: 0) {
                     commitRow(commit, graph: graph.rows[index], gutter: gutter,
-                              spacing: spacing, expanded: expanded)
+                              spacing: spacing, expanded: expanded,
+                              inHeadHistory: graph.knownHeadHistory.contains(commit.hash))
                     if expanded {
                         if let stash = commit.stash {
                             switch stashFilesByOID[stash.oid] {
@@ -217,9 +218,23 @@ struct RecentCommitsView: View {
         }
     }
 
+    static func nodeHelp(_ commit: Commit, inHeadHistory: Bool) -> String {
+        var lines = [commit.hash]
+        if !commit.subject.isEmpty { lines.append(commit.subject) }
+        if let stash = commit.stash {
+            lines.append(stash.selector)
+        } else if !commit.references.isEmpty {
+            lines.append(commit.references.map(\.name).joined(separator: ", "))
+        }
+        if inHeadHistory {
+            lines.append(String(localized: "In HEAD History", table: "Git"))
+        }
+        return lines.joined(separator: "\n")
+    }
+
     private func commitRow(
         _ commit: Commit, graph: CommitGraphLayout.Row, gutter: CGFloat,
-        spacing: CGFloat, expanded: Bool
+        spacing: CGFloat, expanded: Bool, inHeadHistory: Bool
     ) -> some View {
         TreeRowSurface(
             depth: 0, scale: fontScale, selected: expanded,
@@ -309,6 +324,22 @@ struct RecentCommitsView: View {
                 isStash: commit.stash != nil,
                 fontScale: fontScale, laneSpacing: spacing
             )
+        }
+        .overlay(alignment: .topLeading) {
+            Button { toggle(commit) } label: {
+                Circle()
+                    .fill(Color.clear)
+                    .frame(width: 14 * fontScale, height: 14 * fontScale)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .offset(
+                x: (8 + CGFloat(graph.node.lane) * spacing - 7) * fontScale,
+                y: max(36, ceil(38 * fontScale)) / 2 - 7 * fontScale
+            )
+            .help(Self.nodeHelp(commit, inHeadHistory: inHeadHistory))
+            .accessibilityLabel(commit.shortHash + ": " + commit.subject)
+            .accessibilityValue(commit.hash)
         }
         .contentShape(Rectangle())
         .onTapGesture { toggle(commit) }

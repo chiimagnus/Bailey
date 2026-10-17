@@ -255,6 +255,73 @@ final class RecentCommitsViewTests: XCTestCase {
         }
     }
 
+    func testGraphNodeHelpOnlyStatesConfirmedHEADMembershipAndActualReferences() throws {
+        let commit = GitStatusModel.RecentCommit(
+            hash: String(repeating: "a", count: 40),
+            shortHash: "aaaaaaa", subject: "Merge branch",
+            author: "Tester", date: .now, parentHashes: ["parent", "side"],
+            references: [
+                .init(kind: .remoteBranch, name: "origin/main"),
+                .init(kind: .tag, name: "v1.0"),
+            ], files: []
+        )
+        let confirmed = RecentCommitsView.nodeHelp(commit, inHeadHistory: true)
+        XCTAssertTrue(confirmed.contains(commit.hash))
+        XCTAssertTrue(confirmed.contains(commit.subject))
+        XCTAssertTrue(confirmed.contains("origin/main"))
+        XCTAssertTrue(confirmed.contains("v1.0"))
+        XCTAssertTrue(confirmed.contains(
+            String(localized: "In HEAD History", table: "Git")
+        ))
+        let unknown = RecentCommitsView.nodeHelp(commit, inHeadHistory: false)
+        XCTAssertFalse(unknown.contains(
+            String(localized: "In HEAD History", table: "Git")
+        ))
+        let stash = GitStatusModel.Stash(
+            selector: "stash@{1}", oid: String(repeating: "b", count: 40),
+            message: "saved", baseHash: "parent", untrackedFilesHash: nil,
+            author: "Tester", date: .now
+        )
+        let stashCommit = try XCTUnwrap(
+            GitStatusModel.graphCommits([], stashes: [stash]).first
+        )
+        XCTAssertTrue(RecentCommitsView.nodeHelp(
+            stashCommit, inHeadHistory: false
+        ).contains(stash.selector))
+    }
+
+    func testNodeHoverTargetRetainsSingleClickAndCommitContextMenu() throws {
+        let selection = GraphSelection()
+        let commit = GitStatusModel.RecentCommit(
+            hash: "node", shortHash: "node", subject: "One commit",
+            author: "Tester", date: .now, parentHashes: [],
+            references: [.init(kind: .currentBranch, name: "main")], files: []
+        )
+        let height: CGFloat = 160
+        let window = hostHistory([commit], selection: selection, height: height)
+        defer { window.close() }
+        let node = NSPoint(x: 8, y: height - 19)
+        click(node, in: window)
+        XCTAssertTrue(selection.expanded.contains(commit.id))
+        click(node, in: window)
+        XCTAssertFalse(selection.expanded.contains(commit.id),
+                       "Node hit area must not trigger both its own and the row action")
+        click(NSPoint(x: 20, y: height - 19), in: window)
+        XCTAssertTrue(selection.expanded.contains(commit.id),
+                      "Clicking the gutter outside the node still toggles the row")
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .rightMouseDown, location: node,
+            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+            clickCount: 1, pressure: 1
+        ))
+        let titles = try XCTUnwrap(window.contentView?.menu(for: event)).items.map(\.title)
+        XCTAssertTrue(titles.contains(String(localized: "Create Branch at Commit…",
+                                              table: "Git")))
+        XCTAssertFalse(titles.contains(String(localized: "Delete Remote Branch…",
+                                               table: "Git")))
+    }
+
     func testLongCommitMessageCanScrollHorizontallyInNarrowSidebar() {
         let selection = GraphSelection()
         let longSubject = "修复远程工作区同步并保留所有 Git 分支的真实关系 " + String(repeating: "very-long-commit-message-", count: 12)
