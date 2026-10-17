@@ -767,26 +767,14 @@ enum GitGraphPalette {
         rgb(133, 217, 0), rgb(220, 91, 35), rgb(111, 36, 214), rgb(255, 204, 0),
     ]
 
-    private static func luminance(_ color: NSColor) -> CGFloat {
-        let rgb = color.usingColorSpace(.sRGB)!
+    static let iconInks: [NSColor] = colors.map { color in
         func linear(_ channel: CGFloat) -> CGFloat {
             channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
         }
-        return 0.2126 * linear(rgb.redComponent)
-            + 0.7152 * linear(rgb.greenComponent)
-            + 0.0722 * linear(rgb.blueComponent)
-    }
-
-    static let iconInks: [NSColor] = colors.map {
-        luminance($0) >= 0.18 ? .black : .white
-    }
-
-    static func separationColor(_ index: Int, background: NSColor) -> NSColor? {
-        let base = luminance(background)
-        let path = luminance(colors[index % colors.count])
-        let contrast = (max(base, path) + 0.05) / (min(base, path) + 0.05)
-        guard contrast < 3 else { return nil }
-        return base >= 0.18 ? .black : .white
+        let luminance = 0.2126 * linear(color.redComponent)
+            + 0.7152 * linear(color.greenComponent)
+            + 0.0722 * linear(color.blueComponent)
+        return luminance >= 0.18 ? .black : .white
     }
 
     private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> NSColor {
@@ -803,7 +791,6 @@ enum GitGraphPalette {
 }
 
 struct CommitGraphRails: View {
-    @Environment(\.colorScheme) private var colorScheme
     private let themeChanges = Theme.changes
     private static let firstLaneX: CGFloat = 8
 
@@ -833,16 +820,8 @@ struct CommitGraphRails: View {
         Canvas { context, size in
             let middle = size.height / 2
             let backdrop = Color(nsColor: Theme.sidebar)
-            let resolvedBackground = Theme.sidebarFill(dark: colorScheme == .dark)
-            let separationColors = GitGraphPalette.colors.indices.map {
-                GitGraphPalette.separationColor($0, background: resolvedBackground)
-            }
             let separation = StrokeStyle(
                 lineWidth: min(4, max(2, laneSpacing - 0.6)) * fontScale,
-                lineCap: .round, lineJoin: .round
-            )
-            let visibleSeparation = StrokeStyle(
-                lineWidth: min(4, max(3, laneSpacing - 0.6)) * fontScale,
                 lineCap: .round, lineJoin: .round
             )
             let stroke = StrokeStyle(
@@ -886,12 +865,7 @@ struct CommitGraphRails: View {
                         )
                         linkColor = color
                     }
-                    if let outline = separationColors[linkColor % separationColors.count] {
-                        context.stroke(path, with: .color(Color(nsColor: outline)),
-                                       style: visibleSeparation)
-                    } else {
-                        context.stroke(path, with: .color(backdrop), style: separation)
-                    }
+                    context.stroke(path, with: .color(backdrop), style: separation)
                     context.stroke(path, with: .color(GitGraphPalette.color(linkColor)),
                                    style: stroke)
                 }
@@ -901,10 +875,6 @@ struct CommitGraphRails: View {
                     x: x - radius, y: middle - radius, width: 2 * radius, height: 2 * radius
                 ))
                 let nodeColor = GitGraphPalette.color(row.node.color)
-                if let outline = separationColors[row.node.color % separationColors.count] {
-                    context.stroke(node, with: .color(Color(nsColor: outline)),
-                                   lineWidth: (isHead || isStash ? 4 : 2) * fontScale)
-                }
                 if isHead || isStash {
                     context.fill(node, with: .color(backdrop))
                     context.stroke(node, with: .color(nodeColor), lineWidth: 2 * fontScale)
@@ -914,10 +884,6 @@ struct CommitGraphRails: View {
                             x: x - innerRadius, y: middle - innerRadius,
                             width: 2 * innerRadius, height: 2 * innerRadius
                         ))
-                        if let outline = separationColors[row.node.color % separationColors.count] {
-                            context.stroke(inner, with: .color(Color(nsColor: outline)),
-                                           lineWidth: 2.5 * fontScale)
-                        }
                         context.stroke(inner, with: .color(nodeColor), lineWidth: fontScale)
                     }
                 } else {
@@ -928,12 +894,7 @@ struct CommitGraphRails: View {
                     var path = Path()
                     path.move(to: CGPoint(x: laneX(rail.lane), y: 0))
                     path.addLine(to: CGPoint(x: laneX(rail.lane), y: size.height))
-                    if let outline = separationColors[rail.color % separationColors.count] {
-                        context.stroke(path, with: .color(Color(nsColor: outline)),
-                                       style: visibleSeparation)
-                    } else {
-                        context.stroke(path, with: .color(backdrop), style: separation)
-                    }
+                    context.stroke(path, with: .color(backdrop), style: separation)
                     context.stroke(path, with: .color(GitGraphPalette.color(rail.color)),
                                    style: stroke)
                 }
