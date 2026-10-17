@@ -12,16 +12,16 @@ import { pathToFileURL } from 'node:url';
 
 // Usage: bun scripts/generate-material-file-icons.ts /path/to/vscode-material-icon-theme
 //
-// The input checkout must be the pinned version below. Kero vendors the SVGs
-// and generated lookup table, so building Kero never downloads or generates
+// The input checkout must be the pinned version below. Bailey vendors the SVGs
+// and generated lookup table, so building Bailey never downloads or generates
 // icon resources.
 const upstreamVersion = '5.37.0';
 const upstreamCommit = '850c06c7fb7ea73d873a0ce2f966bbd20850946d';
 const upstreamRoot = resolve(process.argv[2] ?? '');
 const packagePath = join(upstreamRoot, 'package.json');
 const iconSourceDirectory = join(upstreamRoot, 'icons');
-const outputDirectory = resolve('kero/Resources/MaterialFileIcons');
-const swiftOutputPath = resolve('kero/Editor/MaterialFileIcon.swift');
+const outputDirectory = resolve('Bailey/Resources/MaterialFileIcons');
+const swiftOutputPath = resolve('Bailey/Editor/MaterialFileIcon.swift');
 const resourcePrefix = 'material-file-icon-';
 
 if (!existsSync(packagePath)) {
@@ -342,7 +342,7 @@ writeFileSync(
   `Material Icon Theme ${upstreamVersion}\n`
     + `Source: https://github.com/PKief/vscode-material-icon-theme\n`
     + `Pinned commit: ${upstreamCommit}\n`
-    + 'Kero includes a curated catalog of 300 logical file icons.\n',
+    + 'Bailey includes a curated catalog of 300 logical file icons.\n',
 );
 
 // Reproduce the default Angular-pack mappings, using later upstream entries to

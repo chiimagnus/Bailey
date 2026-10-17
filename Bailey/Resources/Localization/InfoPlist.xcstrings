@@ -1,0 +1,23 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "NSMicrophoneUsageDescription": {
+      "comment": "Privacy prompt shown when a program running in a Bailey terminal requests microphone access.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A program running within Bailey would like to use your microphone."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 Bailey 中运行的程序请求使用你的麦克风。"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

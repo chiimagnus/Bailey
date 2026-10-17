@@ -19,4 +19,4 @@
 
 `ProjectFileIndexTests` 验证本机文件索引；实际面板验收覆盖查询、空结果、键盘／鼠标、切项目、文件打开和会话定位。不能仅断言“动作已派发”；要检查实际打开内容与最终焦点。SSH 搜索限制要包含本机同名路径的反例。
 
-实现入口：[CommandPaletteView.swift](../../kero/UI/CommandPaletteView.swift)、[ProjectFileIndex.swift](../../kero/Workspace/ProjectFileIndex.swift)。统一验证方式见 [testing.md](../testing.md)。
+实现入口：[CommandPaletteView.swift](../../Bailey/UI/CommandPaletteView.swift)、[ProjectFileIndex.swift](../../Bailey/Workspace/ProjectFileIndex.swift)。统一验证方式见 [testing.md](../testing.md)。

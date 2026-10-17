@@ -6,7 +6,7 @@
 
 - **一个会话拥有一个长生命周期进程与表面。** SwiftUI 重绘、切换项目或移动标签不重新启动 Shell。
 - **切换保留上下文。** 选区、滚动、查找和后台命令不能因为原生视图重挂载而丢失。
-- **关闭仅结束明确关闭的内容。** 测试和安装不能中断用户正在运行的 Kero 或其中任务。
+- **关闭仅结束明确关闭的内容。** 测试和安装不能中断用户正在运行的 Bailey 或其中任务。
 - **重启不能恢复进程。** 终端历史回放只恢复输出，不恢复正在执行的命令。
 
 ## 入口与输入
@@ -33,4 +33,4 @@ Codex CLI 在 `~/.codex/config.toml` 的 `[tui]` 下配置 `notifications = true
 
 检查多项目、多标签、双窗口、拖动、关闭、重挂载和主题改变后的输入与 Shell 身份；macOS 通知必须走到原会话。`BarkPushServiceTests` 验证地址规范化、跨服务器分发、HTTPS JSON 负载和单地址失败隔离；「发送测试通知」报告 Bark 服务端接受请求的数量，iPhone 实际显示须另行确认，不能把 HTTP 成功当作设备已收到。`PaneRetentionTests` 与工作区 UI 回归覆盖可自动化部分；真实 CLI 通知、快捷键及重启恢复按 [testing.md](../testing.md#人工回归) 单独记录。
 
-实现入口：[TerminalSession.swift](../../kero/Terminal/TerminalSession.swift)。升级 Ghostty 还需执行 [development.md](../development.md#依赖与本地补丁) 的回归。
+实现入口：[TerminalSession.swift](../../Bailey/Terminal/TerminalSession.swift)。升级 Ghostty 还需执行 [development.md](../development.md#依赖与本地补丁) 的回归。

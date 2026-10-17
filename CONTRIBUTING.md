@@ -1,6 +1,6 @@
-# 参与 Kero 开发
+# 参与 Bailey 开发
 
-先查看已有 [Issues](https://github.com/chiimagnus/kero/issues) 和 [Pull Requests](https://github.com/chiimagnus/kero/pulls)。非平凡功能先在 Issue 中确认需求与范围，再写实现；已有维护者明确授权的工作和纯文档修正说明对应背景即可，不重复创建同义需求。
+先查看已有 [Issues](https://github.com/chiimagnus/Bailey/issues) 和 [Pull Requests](https://github.com/chiimagnus/Bailey/pulls)。非平凡功能先在 Issue 中确认需求与范围，再写实现；已有维护者明确授权的工作和纯文档修正说明对应背景即可，不重复创建同义需求。
 
 ## 不可破坏的约束
 
@@ -12,7 +12,7 @@
 
 环境、本地构建、签名和安装见 [docs/development.md](docs/development.md)，结构见 [docs/architecture.md](docs/architecture.md)。[docs 索引](docs/README.md)列出每个功能的文档及更新时机。
 
-Kero 只有一套 App 身份；开发构建和正式 App 不天然隔离，先阅读[测试隔离](docs/testing.md#隔离环境)。不要为了测试退出用户已有 App、占用其连接或改写个人配置。
+Bailey 只有一套 App 身份；开发构建和正式 App 不天然隔离，先阅读[测试隔离](docs/testing.md#隔离环境)。不要为了测试退出用户已有 App、占用其连接或改写个人配置。
 
 ## 提交之前
 
@@ -38,7 +38,7 @@ Kero 只有一套 App 身份；开发构建和正式 App 不天然隔离，先�
 
 ## 报告问题
 
-Bug 提供 Kero 版本或提交、macOS 与设备、复现步骤、预期和实际结果；SSH 问题补充远端系统与 shell。截图、录屏和日志先移除私人路径、凭据、终端内容与会话信息。
+Bug 提供 Bailey 版本或提交、macOS 与设备、复现步骤、预期和实际结果；SSH 问题补充远端系统与 shell。截图、录屏和日志先移除私人路径、凭据、终端内容与会话信息。
 
 Feature 说明希望完成什么、解决哪个使用问题。安全漏洞不要放到公开 Issue，按 [SECURITY.md](SECURITY.md) 私下联系。
 

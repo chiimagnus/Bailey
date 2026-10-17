@@ -20,18 +20,18 @@
 
 ## 终端历史
 
-回放默认关闭，启用后由 `TerminalHistoryStore` 单独持久化输出。正常历史位于 Application Support 下的 `kero/`，不是普通偏好文件；它只能恢复显示内容，不能恢复原进程。
+回放默认关闭，启用后由 `TerminalHistoryStore` 单独持久化输出。正常历史位于 Application Support 下的 `Bailey/`，不是普通偏好文件；它只能恢复显示内容，不能恢复原进程。
 
 终端输出可能包含凭据或私人数据，不默认采集、不提交测试日志中的真实输出，见 [SECURITY.md](../../SECURITY.md)。
 
 ## 测试实例
 
-`KeroInstanceMode` 识别 `--isolated-ui-test`。每个进程生成 UUID，以独立 UserDefaults suite 保存窗口快照，并使用临时终端历史；不读取其他实例残留的项目，不启动保存的隧道。
+`BaileyInstanceMode` 识别 `--isolated-ui-test`。每个进程生成 UUID，以独立 UserDefaults suite 保存窗口快照，并使用临时终端历史；不读取其他实例残留的项目，不启动保存的隧道。
 
-刻意测试跨进程恢复时，两次启动传入相同的有效 UUID 环境变量 `KERO_UI_TEST_RUN_ID`。无有效 ID 时各自独立；这不隔离普通设置，完整测试边界见 [testing.md](../testing.md#隔离环境)。
+刻意测试跨进程恢复时，两次启动传入相同的有效 UUID 环境变量 `BAILEY_UI_TEST_RUN_ID`。无有效 ID 时各自独立；这不隔离普通设置，完整测试边界见 [testing.md](../testing.md#隔离环境)。
 
 ## 验证
 
 `SessionStoreTests` 检查当前快照和隔离标识，工作区 UI 测试检查标签、窗口及保存归属。真实重启另外核对布局、选中内容和位置；分别报告可以恢复的显示状态与不会恢复的工作。
 
-实现入口：[SessionStore.swift](../../kero/Workspace/SessionStore.swift)、[TerminalHistory.swift](../../kero/Terminal/TerminalHistory.swift)。
+实现入口：[SessionStore.swift](../../Bailey/Workspace/SessionStore.swift)、[TerminalHistory.swift](../../Bailey/Terminal/TerminalHistory.swift)。

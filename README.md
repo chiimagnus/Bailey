@@ -1,4 +1,4 @@
-# Kero
+# Bailey
 
 **自由组装的 AI IDE。**
 
@@ -8,7 +8,7 @@
 
 ## 功能
 
-| 使用场景 | Kero 提供什么 |
+| 使用场景 | Bailey 提供什么 |
 | --- | --- |
 | 多项目工作 | 统一添加本机或 SSH 文件与目录，Files／Git 跟随项目范围 |
 | 组织工作区 | 自由组合终端、文件、Diff、浏览器与工具面板，移动标签保留内容 |
@@ -23,16 +23,16 @@
 
 ## 安装
 
-1. 从 [GitHub Releases](https://github.com/chiimagnus/kero/releases) 下载 `kero-版本-macos-arm64.zip`。
-2. 解压，将 `Kero.app` 放入 `/Applications`。
+1. 从 [GitHub Releases](https://github.com/chiimagnus/Bailey/releases) 下载 `bailey-版本-macos-arm64.zip`。
+2. 解压，将 `Bailey.app` 放入 `/Applications`。
 3. 打开应用。确认包来自可信的维护者发布后，若被下载隔离属性拦截，仅对这个 App 执行：
 
 ```sh
-xattr -dr com.apple.quarantine "/Applications/Kero.app"
-open "/Applications/Kero.app"
+xattr -dr com.apple.quarantine "/Applications/Bailey.app"
+open "/Applications/Bailey.app"
 ```
 
-已有 Kero 正在运行时，先自行保存工作；替换磁盘上的 App 不代表当前进程已经使用新版本。签名与首次运行说明见 [signing.md](docs/signing.md)。
+已有 Bailey 正在运行时，先自行保存工作；替换磁盘上的 App 不代表当前进程已经使用新版本。签名与首次运行说明见 [signing.md](docs/signing.md)。
 
 ## 开始使用
 
@@ -40,15 +40,15 @@ open "/Applications/Kero.app"
 
 在标签栏的「＋」添加终端、浏览器或面板，拖动它们组织工作区。文件与 Git 使用当前项目范围，而不是面板所在位置。
 
-打开「Git 管理器」后，可以右键提交、分支、标签或文件查看适用的操作。其他工具修改本机或 SSH 仓库时，Git 面板在 Kero 前台可见期间会自动更新；网络较慢时可能延迟，仍可手动刷新。
+打开「Git 管理器」后，可以右键提交、分支、标签或文件查看适用的操作。其他工具修改本机或 SSH 仓库时，Git 面板在 Bailey 前台可见期间会自动更新；网络较慢时可能延迟，仍可手动刷新。
 
 常用快捷键：⌘T 新建终端，⌘N 新建文件，⌘S 保存聚焦内容，⌘P 打开命令面板，⇧⌘N 新建窗口。界面支持英语和简体中文。
 
-需要手机提醒时，在「设置 → 手机通知」逐条添加 Bark HTTPS 推送链接（也可直接填写官方设备 Key）。支持多个设备及自建 HTTPS Bark 服务器，可单独移除地址；「发送测试通知」会尝试向所有地址推送。Kero 只转发终端主动发出的通知（例如 Codex 的 OSC 9），不转发普通终端响铃；不支持手机回复。推送内容会经过各自配置的 Bark 服务器，可能包含敏感终端输出。
+需要手机提醒时，在「设置 → 手机通知」逐条添加 Bark HTTPS 推送链接（也可直接填写官方设备 Key）。支持多个设备及自建 HTTPS Bark 服务器，可单独移除地址；「发送测试通知」会尝试向所有地址推送。Bailey 只转发终端主动发出的通知（例如 Codex 的 OSC 9），不转发普通终端响铃；不支持手机回复。推送内容会经过各自配置的 Bark 服务器，可能包含敏感终端输出。
 
 ## 数据与权限
 
-普通设置位于 `~/.config/kero/config.toml`，长期隧道位于同目录的 `tunnels.toml`。Bark 推送地址及设备 Key 保存在 macOS 钥匙串，不写入配置文件。终端历史回放默认关闭；启用后其中可能包含私人输出。工作区快照不保存尚未成功写盘的编辑内容。
+普通设置位于 `~/.config/Bailey/config.toml`，长期隧道位于同目录的 `tunnels.toml`。Bark 推送地址及设备 Key 保存在 macOS 钥匙串，不写入配置文件。终端历史回放默认关闭；启用后其中可能包含私人输出。工作区快照不保存尚未成功写盘的编辑内容。
 
 终端程序读取剪贴板须经确认，SSH 使用已有配置与密钥。不要把包含凭据的日志或录屏贴到公开 Issue；安全问题按 [SECURITY.md](SECURITY.md) 私下报告。
 

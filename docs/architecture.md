@@ -1,10 +1,10 @@
 # 架构
 
-本页负责 Kero 的分层、装配、状态所有权和目录边界。所有者、依赖方向或文件归属改变时同步更新；功能内部契约见[功能文档](README.md#功能文档)，编码约定见 [standards.md](standards.md)。
+本页负责 Bailey 的分层、装配、状态所有权和目录边界。所有者、依赖方向或文件归属改变时同步更新；功能内部契约见[功能文档](README.md#功能文档)，编码约定见 [standards.md](standards.md)。
 
 ## 分层
 
-Kero 自有 SwiftUI 状态采用 **MVVM + Observation**。分层是职责，不是强制把全仓拆成 `Models/`、`Views/`、`ViewModels/` 三个目录。
+Bailey 自有 SwiftUI 状态采用 **MVVM + Observation**。分层是职责，不是强制把全仓拆成 `Models/`、`Views/`、`ViewModels/` 三个目录。
 
 | 层次 | 拥有什么 | 不应承担什么 |
 | --- | --- | --- |
@@ -19,7 +19,7 @@ Kero 自有 SwiftUI 状态采用 **MVVM + Observation**。分层是职责，不�
 
 | 生命周期 | 当前所有者 | 必须保持的边界 |
 | --- | --- | --- |
-| 应用 | `keroApp`、`KeroApplicationDelegate` 与现有应用级服务 | 启动装配和退出协调不复制成另一套容器 |
+| 应用 | `baileyApp`、`BaileyApplicationDelegate` 与现有应用级服务 | 启动装配和退出协调不复制成另一套容器 |
 | 窗口 | `WindowRootView` 持有 `TerminalManager` | 每个窗口有自己的管理者；菜单不能操作后台窗口 |
 | Git 面板展示 | `ContentView` 持有 `GitStatusModel` | 跟随当前项目与机器身份，不因一次失败丢弃有效展示 |
 | 项目 | `Project` | 持有标签、文件树和停靠状态；视图重建不更换项目 |
@@ -31,7 +31,7 @@ Kero 自有 SwiftUI 状态采用 **MVVM + Observation**。分层是职责，不�
 
 ## 入口与数据流
 
-`keroApp` 声明主 `WindowGroup` 和设置场景。`WindowRootView` 用 `@State` 持有窗口管理者，将它交给 `ContentView`，并通过 `.focusedSceneValue(\.keroManager, manager)` 提供当前窗口上下文；菜单由 `@FocusedValue` 读取。
+`baileyApp` 声明主 `WindowGroup` 和设置场景。`WindowRootView` 用 `@State` 持有窗口管理者，将它交给 `ContentView`，并通过 `.focusedSceneValue(\.baileyManager, manager)` 提供当前窗口上下文；菜单由 `@FocusedValue` 读取。
 
 用户动作经所属 ViewModel 到达本机或 SSH 后端。异步结果回写前再次核对项目、机器、连接、路径与请求代次；失败留在原目标，不回退到本机同名路径。最终文件字节、Git index/HEAD 或原生视图内容才是结果，不以事件派发替代。
 
@@ -53,13 +53,13 @@ SwiftUI 负责外层布局，Ghostty 负责终端，WebKit 只负责浏览器，
 
 | 目录 | 负责内容 |
 | --- | --- |
-| `kero/App/` | App、设置、主题与应用入口 |
-| `kero/Workspace/` | 项目、标签、窗口、布局和工作区后端 |
-| `kero/Files/`、`Editor/`、`Git/`、`Terminal/`、`Browser/`、`Remote/` | 各业务领域的状态、效果及界面 |
-| `kero/UI/` | 窗口布局、面板外壳和共享交互组件 |
-| `kero/Shared/` | 跨功能共享表达，包括 Files/Git 共用树 |
-| `kero/Resources/` | 本地化、字体、图标与应用资源 |
-| `KeroTests/` | 测试层次 → 业务功能；仍为一个 XCTest 目标 |
+| `Bailey/App/` | App、设置、主题与应用入口 |
+| `Bailey/Workspace/` | 项目、标签、窗口、布局和工作区后端 |
+| `Bailey/Files/`、`Editor/`、`Git/`、`Terminal/`、`Browser/`、`Remote/` | 各业务领域的状态、效果及界面 |
+| `Bailey/UI/` | 窗口布局、面板外壳和共享交互组件 |
+| `Bailey/Shared/` | 跨功能共享表达，包括 Files/Git 共用树 |
+| `Bailey/Resources/` | 本地化、字体、图标与应用资源 |
+| `BaileyTests/` | 测试层次 → 业务功能；仍为一个 XCTest 目标 |
 | `scripts/`、`shell-integration/` | 资源生成和 Shell 集成 |
 | `Vendor/` | 确实需要随仓库维护的第三方源码 |
 

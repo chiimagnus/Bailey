@@ -4,7 +4,7 @@
 
 ## 当前身份
 
-Kero 的 Debug 和 Release 都使用唯一的 `Kero.app`／`chiimagnus.kero`，可执行文件名为 `kero`。工程使用 Apple Development 手动签名，当前 Team ID 为 `RDQHYSDFFG`；构建者须选择自己确实有权使用且有效的证书，不共享维护者私钥。
+Bailey 的 Debug 和 Release 都使用唯一的 `Bailey.app`／`chiimagnus.bailey`，可执行文件名为 `bailey`。工程使用 Apple Development 手动签名，当前 Team ID 为 `RDQHYSDFFG`；构建者须选择自己确实有权使用且有效的证书，不共享维护者私钥。
 
 ```sh
 security find-identity -v -p codesigning
@@ -16,9 +16,9 @@ security find-identity -v -p codesigning
 
 `make build` 构建 Debug 并执行 `codesign --verify --deep --strict`。`SIGNING=adhoc` 是 Makefile 的临时签名选项，不等于 Apple Development 签名；发布不能静默退回临时或未签名产物。
 
-App 的 Debug／Release 配置当前启用 Hardened Runtime，关闭 App Sandbox，entitlements 由 [kero.entitlements](../kero/Resources/kero.entitlements) 定义。不要照搬另一个 App 的权限；增加受保护资源时同时核对用途文案、实际授权路径和构建权限。
+App 的 Debug／Release 配置当前启用 Hardened Runtime，关闭 App Sandbox，entitlements 由 [bailey.entitlements](../Bailey/Resources/bailey.entitlements) 定义。不要照搬另一个 App 的权限；增加受保护资源时同时核对用途文案、实际授权路径和构建权限。
 
-签名完整性、证书身份、Gatekeeper 接受和公证不是同一个结果。Kero 的现有发布流程没有公证步骤，不能因严格验签通过就宣称产物已公证。
+签名完整性、证书身份、Gatekeeper 接受和公证不是同一个结果。Bailey 的现有发布流程没有公证步骤，不能因严格验签通过就宣称产物已公证。
 
 ## 发布凭据
 

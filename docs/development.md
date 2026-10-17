@@ -4,7 +4,7 @@
 
 ## 环境
 
-Kero 面向 Apple Silicon，最低 macOS 为 15.6。构建使用完整 Xcode 的 SDK、Swift 6 编译器与 SwiftUI 宏支持，不以 Command Line Tools 的存在代替完整开发环境。工程实际设置以 `kero.xcodeproj` 为准。
+Bailey 面向 Apple Silicon，最低 macOS 为 15.6。构建使用完整 Xcode 的 SDK、Swift 6 编译器与 SwiftUI 宏支持，不以 Command Line Tools 的存在代替完整开发环境。工程实际设置以 `Bailey.xcodeproj` 为准。
 
 先运行 `make doctor` 查看工具链。若 `xcode-select` 指向错误位置，可对本次命令指定实际安装的 Xcode：
 
@@ -24,19 +24,19 @@ make test
 make build:release
 ```
 
-也可以打开 `kero.xcodeproj`，使用 `kero` scheme。App 与 `KeroTests` 由工程和共享 scheme 关联；不创建额外 scheme、独立构建／测试 shell 脚本或启动时断言自检。
+也可以打开 `Bailey.xcodeproj`，使用 `Bailey` scheme。App 与 `BaileyTests` 由工程和共享 scheme 关联；不创建额外 scheme、独立构建／测试 shell 脚本或启动时断言自检。
 
-构建产物位于 `build/DerivedData/Build/Products/Debug/Kero.app` 或 `Release/Kero.app`，包下载位于 `build/SourcePackages/`。`make build` 同时执行严格验签。两种配置使用同一 Bundle ID，不是两套应用；不会天然隔离用户数据。
+构建产物位于 `build/DerivedData/Build/Products/Debug/Bailey.app` 或 `Release/Bailey.app`，包下载位于 `build/SourcePackages/`。`make build` 同时执行严格验签。两种配置使用同一 Bundle ID，不是两套应用；不会天然隔离用户数据。
 
 测试筛选、目录和安全启动示例统一见 [testing.md](testing.md#测试目录与入口)。不要为了查看界面直接运行会触及用户配置或会话的另一实例。
 
-资源通过 Xcode Copy Files 打包；`ssh → kero` 符号链接由现有 Build Phase 创建。不另建一套资源拷贝或终端安装脚本。
+资源通过 Xcode Copy Files 打包；`ssh → bailey` 符号链接由现有 Build Phase 创建。不另建一套资源拷贝或终端安装脚本。
 
 ## 本地安装
 
-功能代码通过测试、Debug 构建和签名检查后，默认整包更新 `/Applications/Kero.app`，用户要求跳过时除外。纯文档改动不构建、不安装 App。
+功能代码通过测试、Debug 构建和签名检查后，默认整包更新 `/Applications/Bailey.app`，用户要求跳过时除外。纯文档改动不构建、不安装 App。
 
-先在同一磁盘暂存完整新包并验签，再整包替换并复验。失败恢复原包；不逐文件覆盖，也不遗留旧版备份。**不退出、启动或重启用户现有 Kero**：原进程继续使用旧代码，用户自行重启后新包生效。
+先在同一磁盘暂存完整新包并验签，再整包替换并复验。失败恢复原包；不逐文件覆盖，也不遗留旧版备份。**不退出、启动或重启用户现有 Bailey**：原进程继续使用旧代码，用户自行重启后新包生效。
 
 安装与验收分别报告已构建、已验签、已安装、已重启和恢复检查结果；隔离实例成功不能代替正式包安装证据。
 
@@ -48,7 +48,7 @@ make build:release
 
 ## 依赖与本地补丁
 
-依赖声明在 Xcode 工程与本地包清单，解析版本在 [Package.resolved](../kero.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved)。不要在别处维护第二份完整版本清单；升级时同步检查下面的必要契约和 [NOTICE](../NOTICE.md)。
+依赖声明在 Xcode 工程与本地包清单，解析版本在 [Package.resolved](../Bailey.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved)。不要在别处维护第二份完整版本清单；升级时同步检查下面的必要契约和 [NOTICE](../NOTICE.md)。
 
 ### Ghostty
 
@@ -58,7 +58,7 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 
 ### STTextView
 
-`Vendor/STTextView` 是基于 2.3.11 的本地副本，用于保留仍需维护的修复，不用上游 changelog 代替副本版本证据。Kero 使用自己的 AppKit 视图桥接，不使用上游 `STTextViewSwiftUI`；本地包的库产品只链接 `STTextView`，避免构建无用的 SwiftUI 封装目标。
+`Vendor/STTextView` 是基于 2.3.11 的本地副本，用于保留仍需维护的修复，不用上游 changelog 代替副本版本证据。Bailey 使用自己的 AppKit 视图桥接，不使用上游 `STTextViewSwiftUI`；本地包的库产品只链接 `STTextView`，避免构建无用的 SwiftUI 封装目标。
 
 | 修复 | 必须保持的行为 |
 | --- | --- |
@@ -74,7 +74,7 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 | 输入法屏幕坐标 | 编辑器拆卸后候选框矩形和命中查询不再访问失效窗口；附着时返回屏幕坐标，跨多行返回首行对应的实际字符范围 |
 | 语法插件切换 | 文件扩展名改变时可从现有 STTextView 移除旧插件，终止过期高亮并加载新语法；编辑缓冲与撤销历史不重建 |
 
-补丁集中在 [STTextView+Gutter.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Gutter.swift)、[STTextView.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView.swift)、[STTextView+Accessibility.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Accessibility.swift)、[STTextView+NSTextInputClient.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+NSTextInputClient.swift)、[STTextView+Scrolling.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Scrolling.swift) 和 [STTextLayoutManager.swift](../Vendor/STTextView/Sources/STTextViewCommon/STTextLayoutManager.swift)。Kero 自己的裁切、内边距和字体初始化由 [SourceTextEditor.swift](../kero/Editor/SourceTextEditor.swift) 负责，不归入上游补丁。
+补丁集中在 [STTextView+Gutter.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Gutter.swift)、[STTextView.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView.swift)、[STTextView+Accessibility.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Accessibility.swift)、[STTextView+NSTextInputClient.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+NSTextInputClient.swift)、[STTextView+Scrolling.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Scrolling.swift) 和 [STTextLayoutManager.swift](../Vendor/STTextView/Sources/STTextViewCommon/STTextLayoutManager.swift)。Bailey 自己的裁切、内边距和字体初始化由 [SourceTextEditor.swift](../Bailey/Editor/SourceTextEditor.swift) 负责，不归入上游补丁。
 
 升级时逐项检查上游是否已修复，删除不再需要的补丁，保留许可证和署名。运行 `FileTabTests`、`DiffTabTests`、`EditorTextInputTests`、`EditorNavigationTests`、`SyntaxHighlightingTests` 并检查字体变化、组合输入、扩展名重命名后的语法切换与 Undo、长行、短文档、Markdown、高亮空范围、固定行高、远距离定位和只读替换滚动。全部修复被上游覆盖后才考虑撤销副本，不以升级成功替代功能验收。
 
@@ -90,19 +90,19 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 
 ### 语法解析与 Diff
 
-Kero 只使用 `STTextView-Plugin-Neon` 中的语法、查询和默认配色资源；插件桥接及颜色字典由 Kero 自己持有，不再调用上游的插件适配、Theme／Fonts／TokenName 包装。上游包清单仍依赖 Neon，但 SwiftPM 实际只解析一份 `Vendor/Neon` 核心，不是两套运行时。该包没有单独的资源产品，彻底去包需要另行接管语法资源，不能只删除包引用而丢失语言支持。
+Bailey 只使用 `STTextView-Plugin-Neon` 中的语法、查询和默认配色资源；插件桥接及颜色字典由 Bailey 自己持有，不再调用上游的插件适配、Theme／Fonts／TokenName 包装。上游包清单仍依赖 Neon，但 SwiftPM 实际只解析一份 `Vendor/Neon` 核心，不是两套运行时。该包没有单独的资源产品，彻底去包需要另行接管语法资源，不能只删除包引用而丢失语言支持。
 
 TSX 使用独立解析器，不能用普通 TypeScript 替代。`Vendor/TreeSitterTSX` 的来源是 `STTextView-Plugin-Neon` 固定提交 `5a30db4ce7908a5414e7b499e2379bdc49991cd1`，与工程依赖匹配。升级时从目标提交的 `Sources/TreeSitterTSX/` 更新 `include/` 和 `src/`，并核对插件查询与工程所用运行库的兼容性，不把查询或运行库一并复制进本地解析器包。
 
-高亮查询由插件提供，Kero 合并 TypeScript 与 JSX 查询，不复制一份手工查询。更新后检查 TypeScript、TSX 元素／属性／表达式及 Markdown／HTML 嵌入语言。
+高亮查询由插件提供，Bailey 合并 TypeScript 与 JSX 查询，不复制一份手工查询。更新后检查 TypeScript、TSX 元素／属性／表达式及 Markdown／HTML 嵌入语言。
 
-2026-10-16 已在隔离环境对照官方 `STTextView-Plugin-TreeSitter` 的 `346bbce` 版本：TypeScript／TSX 缺少 JavaScript／JSX 基础高亮，视口变化会触发全文重新解析，因此**暂不替换**当前 Neon／TSX。只有在上游解决这两项问题，并逐项核对 STTextView 本地补丁、输入／滚动性能及 Editor／Diff 回归后才重新评估；[原始实验与审计记录](https://github.com/chiimagnus/kero/tree/08adf2c45b4f3354b1d2af2a54d97fafb6b52271/.github/features/editor-git-performance)保留在 Git 历史中。
+2026-10-16 已在隔离环境对照官方 `STTextView-Plugin-TreeSitter` 的 `346bbce` 版本：TypeScript／TSX 缺少 JavaScript／JSX 基础高亮，视口变化会触发全文重新解析，因此**暂不替换**当前 Neon／TSX。只有在上游解决这两项问题，并逐项核对 STTextView 本地补丁、输入／滚动性能及 Editor／Diff 回归后才重新评估；[原始实验与审计记录](https://github.com/chiimagnus/Bailey/tree/08adf2c45b4f3354b1d2af2a54d97fafb6b52271/.github/features/editor-git-performance)保留在 Git 历史中。
 
 Diff 复用现有 STTextView/TextKit 与语法依赖，不引入 PierreDiffsSwift 或 WebKit 渲染；约束见 [diff.md](features/diff.md)。
 
 ## 生成资源
 
-应用图标由 Xcode 自带的 Icon Composer 维护，源文件位于 [`kero/Resources/AppIcon.icon`](../kero/Resources/AppIcon.icon)；浅色、深色和单色外观在同一文件中配置，由 Xcode 编译，无需手动生成 PNG。
+应用图标由 Xcode 自带的 Icon Composer 维护，源文件位于 [`Bailey/Resources/AppIcon.icon`](../Bailey/Resources/AppIcon.icon)；浅色、深色和单色外观在同一文件中配置，由 Xcode 编译，无需手动生成 PNG。
 
 文件图标与 Swift 查询表由 [generate-material-file-icons.ts](../scripts/generate-material-file-icons.ts) 一起生成。按脚本指定的 Material Icon Theme 版本和提交准备上游源码，使用已有 Bun 环境：
 
@@ -110,9 +110,9 @@ Diff 复用现有 STTextView/TextKit 与语法依赖，不引入 PierreDiffsSwif
 bun scripts/generate-material-file-icons.ts /path/to/vscode-material-icon-theme
 ```
 
-脚本校验版本；生成前另核对上游提交。输出为 `kero/Resources/MaterialFileIcons/` 和 `kero/Editor/MaterialFileIcon.swift`，均入库，禁止手改；普通构建不会重新生成或下载图标。
+脚本校验版本；生成前另核对上游提交。输出为 `Bailey/Resources/MaterialFileIcons/` 和 `Bailey/Editor/MaterialFileIcon.swift`，均入库，禁止手改；普通构建不会重新生成或下载图标。
 
-更新资源后检查明暗主题、常见扩展名与未知文件图标，保留生成的许可证和来源声明。字体位于 `kero/Resources/Fonts/`，更换时保留相应许可；具体声明见 [NOTICE](../NOTICE.md)。
+更新资源后检查明暗主题、常见扩展名与未知文件图标，保留生成的许可证和来源声明。字体位于 `Bailey/Resources/Fonts/`，更换时保留相应许可；具体声明见 [NOTICE](../NOTICE.md)。
 
 ## 文档与收尾
 

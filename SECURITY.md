@@ -6,9 +6,9 @@
 
 先通过[维护者主页](https://github.com/chiimagnus)确认可用的私下联系渠道，不在公开 Issue 粘贴利用细节、密钥、令牌或私人终端输出。修复前不公开敏感复现材料。
 
-报告提供 Kero 版本或提交、macOS、相关本机／远端环境、最小复现与影响。说明是否在当前可用版本复现；不要把未经确认的旧版本支持承诺或响应时限写入报告。
+报告提供 Bailey 版本或提交、macOS、相关本机／远端环境、最小复现与影响。说明是否在当前可用版本复现；不要把未经确认的旧版本支持承诺或响应时限写入报告。
 
-Ghostty 内核漏洞同时参考 [Ghostty 安全渠道](https://github.com/ghostty-org/ghostty/security)；Kero 的集成、剪贴板、远程路由和数据保护问题由本仓库处理。
+Ghostty 内核漏洞同时参考 [Ghostty 安全渠道](https://github.com/ghostty-org/ghostty/security)；Bailey 的集成、剪贴板、远程路由和数据保护问题由本仓库处理。
 
 ## 信任边界
 

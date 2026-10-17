@@ -1,10 +1,10 @@
 # UI 与交互规范
 
-本页描述 **Kero 当前界面** 的主题、共享组件和行为，不是未来设计稿。修改 View、主题、窗口外壳、交互或本地化前阅读；相关变化同步更新本页和对应功能文档。
+本页描述 **Bailey 当前界面** 的主题、共享组件和行为，不是未来设计稿。修改 View、主题、窗口外壳、交互或本地化前阅读；相关变化同步更新本页和对应功能文档。
 
 ## 产品与视觉方向
 
-Kero 是自由组装的 AI IDE，以原生终端工作区支持开发者使用 CLI 和代码智能体。文件、Git 与浏览器辅助终端工作，不争夺注意力，不做网页仪表盘式装饰，不逐像素模仿其他编辑器。
+Bailey 是自由组装的 AI IDE，以原生终端工作区支持开发者使用 CLI 和代码智能体。文件、Git 与浏览器辅助终端工作，不争夺注意力，不做网页仪表盘式装饰，不逐像素模仿其他编辑器。
 
 保留上下文、明确操作目标、常用操作就近；破坏性操作不能出其不意。项目与各面板可自由停靠，默认三列只是初始布局，不存在特殊左右侧栏。
 
@@ -20,13 +20,13 @@ Kero 是自由组装的 AI IDE，以原生终端工作区支持开发者使用 C
 
 | 所有者 | 负责内容 |
 | --- | --- |
-| [Theme.swift](../kero/App/Theme.swift) | 应用外观、终端主题解析、窗口背景、强调色和分隔线 |
-| [PanelTypography.swift](../kero/UI/Panels/PanelTypography.swift) | 面板文字的共享缩放 |
-| [TreeRowStyle.swift](../kero/Shared/Tree/TreeRowStyle.swift) | 文件／Git 树的缩进、尺寸、状态颜色、选择和悬停 |
-| [WorkspaceChrome.swift](../kero/UI/Components/WorkspaceChrome.swift) | 标签、工具按钮及其共享外壳 |
-| [WindowChrome.swift](../kero/UI/Components/WindowChrome.swift) | 原生窗口接入与窗口外壳 |
+| [Theme.swift](../Bailey/App/Theme.swift) | 应用外观、终端主题解析、窗口背景、强调色和分隔线 |
+| [PanelTypography.swift](../Bailey/UI/Panels/PanelTypography.swift) | 面板文字的共享缩放 |
+| [TreeRowStyle.swift](../Bailey/Shared/Tree/TreeRowStyle.swift) | 文件／Git 树的缩进、尺寸、状态颜色、选择和悬停 |
+| [WorkspaceChrome.swift](../Bailey/UI/Components/WorkspaceChrome.swift) | 标签、工具按钮及其共享外壳 |
+| [WindowChrome.swift](../Bailey/UI/Components/WindowChrome.swift) | 原生窗口接入与窗口外壳 |
 
-外观支持系统、浅色、深色。终端和周边 UI 从选择的 Ghostty 主题解析，Kero 内置 Default 主题保留既有材质效果，其他主题按对应颜色呈现；动态主题改变应更新现有原生表面，而不是重新创建内容。
+外观支持系统、浅色、深色。终端和周边 UI 从选择的 Ghostty 主题解析，Bailey 内置 Default 主题保留既有材质效果，其他主题按对应颜色呈现；动态主题改变应更新现有原生表面，而不是重新创建内容。
 
 共享值由表中各自所有者维护；文档不复制数值表，也不为“统一”新建并行设计系统。
 
@@ -60,7 +60,7 @@ Git 图谱使用独立于应用强调色的 12 色路径调色板，节点和所
 
 ## 本地化
 
-应用维护英语 `en` 与简体中文 `zh-Hans`，开发语言为英语；自有文档为中文。字符串表位于 `kero/Resources/Localization/`。
+应用维护英语 `en` 与简体中文 `zh-Hans`，开发语言为英语；自有文档为中文。字符串表位于 `Bailey/Resources/Localization/`。
 
 `Git`、`Sidebar`、`Terminal`、`Workspace`、`Browser`、`Editor`、`Settings` 对应功能；`Interface` 负责菜单、命令面板、标签和窗口，`InfoPlist` 负责权限说明，`ServicesMenu` 负责 Finder 服务。调用必须指定正确表，移动文案同步修改 `table`。
 

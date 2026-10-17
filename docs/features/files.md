@@ -22,7 +22,7 @@ Files、Git 工作区、暂存区和提交历史共用同一套树语义。本�
 
 历史 Git 文件右键沿用共用树行，提供查看历史版本、对当前工作区比较、真实 Git 恢复和路径复制；这不会改变普通 Files 树的双击、悬停或滚动行为。历史路径不存在时仅按确认的 Git 重命名关系打开当前文件，不能误打开同名但不同机器的文件。
 
-重命名同步更新已打开文件的路径，后续保存写入新路径。SSH 大小写更名可能使用同目录临时项，常规失败会回滚；机器断电或强制终止无法保证回滚，异常残留的 `.kero-rename.*` 不自动删除。删除本机内容与删除远端内容的恢复能力不同；远端不进入本机废纸篓，确认和数据保护见 [SECURITY.md](../../SECURITY.md)。
+重命名同步更新已打开文件的路径，后续保存写入新路径。SSH 大小写更名可能使用同目录临时项，常规失败会回滚；机器断电或强制终止无法保证回滚，异常残留的 `.bailey-rename.*` 不自动删除。删除本机内容与删除远端内容的恢复能力不同；远端不进入本机废纸篓，确认和数据保护见 [SECURITY.md](../../SECURITY.md)。
 
 共享文件夹行允许像文件行一样在右侧显示独立操作按钮；Git 未提交树按分组使用此入口，Files 树和历史 Git 目录不新增操作。目录右侧按钮与右键菜单批量处理当前显示的子文件，不影响目录外或搜索隐藏的路径；压缩目录仍以真实末级目录为目标。CHANGES 中的文件或目录可追加精确的 `.gitignore` 规则，使用普通编辑标签与保存路径，详见 [Git 文件菜单](git.md#未提交改动与文件菜单)。
 
@@ -30,4 +30,4 @@ Files、Git 工作区、暂存区和提交历史共用同一套树语义。本�
 
 `FileTreeTests` 检查展开即时反馈、首次同层目录批量查询、按需复用、批量刷新、断线保留、目录创建、重命名、范围与失败；`SSHFileTreeLiveTests` 验证实际 Windows SSH 批量读取、失败隔离及文件树冷开／热展开／刷新时的 SSH 请求次数；`TreeRowHitTestingTests` 验证真实行命中。共享组件改变时同时验收 Files、Git 工作区、暂存区及历史树，包含窄面板、大字体、长名称、点击边缘、右侧动作、键盘和无障碍。
 
-实现入口：[FileTreeModel.swift](../../kero/Files/FileTreeModel.swift)、[TreeDisplayModel.swift](../../kero/Shared/Tree/TreeDisplayModel.swift)、[TreeRowStyle.swift](../../kero/Shared/Tree/TreeRowStyle.swift)。运行方式见 [testing.md](../testing.md)。
+实现入口：[FileTreeModel.swift](../../Bailey/Files/FileTreeModel.swift)、[TreeDisplayModel.swift](../../Bailey/Shared/Tree/TreeDisplayModel.swift)、[TreeRowStyle.swift](../../Bailey/Shared/Tree/TreeRowStyle.swift)。运行方式见 [testing.md](../testing.md)。

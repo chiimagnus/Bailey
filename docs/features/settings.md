@@ -5,10 +5,10 @@
 ## Invariants
 
 - **`AppSettings` 是唯一偏好来源。** View 不另存一份全局设置，原生表面由所属窗口应用变更。
-- **配置不是工作区备份。** `~/.config/kero/config.toml` 保存偏好和布局初始值，不承载项目快照或未保存文本。
+- **配置不是工作区备份。** `~/.config/Bailey/config.toml` 保存偏好和布局初始值，不承载项目快照或未保存文本。
 - **写入不能破坏手工配置。** 保存偏好使用原子写入并保留手工调整的工作区字段；失败保留原文件。
 - **初始布局只影响新项目。** 已有项目按自己的停靠状态恢复，不因设置改变被重置。
-- **只有一个应用身份。** Debug 和 Release 共用 `chiimagnus.kero`；测试模式不代表全局偏好也已隔离。
+- **只有一个应用身份。** Debug 和 Release 共用 `chiimagnus.bailey`；测试模式不代表全局偏好也已隔离。
 
 ## 布局配置
 
@@ -26,7 +26,7 @@ Git 检出提交的“总是接受”写入 `git.always-accept-checkout`，默�
 
 ## 隔离与关联数据
 
-普通配置目录固定为 `~/.config/kero/`。`--isolated-ui-test` 隔离窗口快照和终端历史并跳过保存的隧道，但**普通设置仍共享**；需要改设置的测试必须使用独立 Home，并核实实际读写位置，见 [testing.md](../testing.md#隔离环境)。
+普通配置目录固定为 `~/.config/Bailey/`。`--isolated-ui-test` 隔离窗口快照和终端历史并跳过保存的隧道，但**普通设置仍共享**；需要改设置的测试必须使用独立 Home，并核实实际读写位置，见 [testing.md](../testing.md#隔离环境)。
 
 隧道规则独立存储在 `tunnels.toml`，不并入普通配置；其生命周期见 [tunnels.md](tunnels.md)。
 
@@ -36,4 +36,4 @@ Git 检出提交的“总是接受”写入 `git.always-accept-checkout`，默�
 
 `AppSettingsTests` 使用临时配置检查默认值、往返、无效类型、手工布局保留及写入失败。真实设置传播还应验证修改前后使用的是同一终端进程、原生显示确实变化、非目标设置没有被重写。
 
-实现入口：[AppSettings.swift](../../kero/App/AppSettings.swift)。统一验收见 [testing.md](../testing.md)。
+实现入口：[AppSettings.swift](../../Bailey/App/AppSettings.swift)。统一验收见 [testing.md](../testing.md)。
