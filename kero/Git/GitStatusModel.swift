@@ -481,7 +481,7 @@ final class GitStatusModel {
     private(set) var hasCurrentStashes = false
     var canUseCurrentReferences: Bool { canUseCurrentStatus && hasCurrentReferences }
     var canUseCurrentHistory: Bool { canUseCurrentReferences && hasCurrentHistory }
-    var canUseCurrentStashes: Bool { canUseCurrentReferences && hasCurrentStashes }
+    var canUseCurrentStashes: Bool { canUseCurrentStatus && hasCurrentStashes }
     private(set) var hasCurrentLineTotals = false
     /// A restored cache or a replaced SSH channel is display-only until
     /// the current core status verifies the active repository and HEAD.
@@ -767,6 +767,7 @@ final class GitStatusModel {
                     self.fullDetailError = timeout
                     self.historyPageError = nil
                     if requestKind == .full {
+                        self.hasCurrentReferences = false
                         self.hasCurrentHistory = false
                         self.hasCurrentStashes = false
                     }
@@ -2836,6 +2837,7 @@ final class GitStatusModel {
         if result.detailsCompleted {
             fullDetailError = result.detailError
             historyPageError = nil
+            if result.coreMetadata == nil { hasCurrentReferences = false }
         }
         let changed = repositoryIdentity != result.topLevel || headOID != result.headOID
             || branch != result.branch || repositoryOperation != result.repositoryOperation
@@ -3031,13 +3033,8 @@ final class GitStatusModel {
         )
         let timeoutMessage = String(localized: "Git did not respond in time.", table: "Git")
         let statusArguments = ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]
-        var coreArguments = [["rev-parse", "--show-toplevel"], statusArguments,
+        let coreArguments = [["rev-parse", "--show-toplevel"], statusArguments,
                              ["rev-parse", "--absolute-git-dir"]]
-        if kind == .full {
-            // Ref and remote metadata is needed to verify a writable core.
-            // Index-only refreshes already retain a verified snapshot and skip it.
-            coreArguments += [Self.refSnapshotArguments, ["remote"]]
-        }
         var prefetched = await prefetchedSnapshotCommands(
             in: root, argumentSets: coreArguments, discoverRoot: true,
             backend: backend, deadline: deadline
@@ -3090,31 +3087,6 @@ final class GitStatusModel {
             ))
         }
         let path = strippingTrailingLineEnding(gitDir.stdout)
-        if kind == .full {
-            let refs = await statusGit(Self.refSnapshotArguments, in: resolvedRoot)
-            guard refs.status == 0 else {
-                return .failed(gitFailureMessage(refs,
-                    fallback: String(localized: "Unable to read Git status.", table: "Git")))
-            }
-            let remoteRun = await statusGit(["remote"], in: resolvedRoot)
-            guard remoteRun.status == 0 else {
-                return .failed(gitFailureMessage(remoteRun,
-                    fallback: String(localized: "Unable to read Git status.", table: "Git")))
-            }
-            var metadata = StatusCoreMetadata()
-            metadata.refsByName = parseRefSnapshot(refs.stdout)
-            metadata.branches = metadata.refsByName.keys.compactMap { name in
-                name.hasPrefix("refs/heads/") ? String(name.dropFirst("refs/heads/".count)) : nil
-            }.sorted()
-            metadata.remotes = remoteRun.stdout.split(separator: "\n").map(String.init).sorted()
-            if let remote = metadata.remotes.contains("origin") ? "origin" : metadata.remotes.first,
-               let ref = metadata.refsByName["refs/remotes/\(remote)/HEAD"]?.symbolic,
-               ref.hasPrefix("refs/remotes/\(remote)/") {
-                let name = String(ref.dropFirst("refs/remotes/\(remote)/".count))
-                if metadata.branches.contains(name) { metadata.defaultBranch = name }
-            }
-            result.coreMetadata = metadata
-        }
         do {
             result.repositoryOperation = try await detectRepositoryOperation(
                 gitDirectory: path, backend: backend, deadline: deadline
@@ -3157,9 +3129,10 @@ final class GitStatusModel {
             return .repository(result)
         }
 
-        if kind == .full, let verified = result.coreMetadata {
+        if kind == .full {
             result.detailsCompleted = true
             let optionalArguments = [
+                Self.refSnapshotArguments, ["remote"],
                 recentCommitLogArguments(limit: recentCommitLimit), stashListArguments,
                 ["status", "--porcelain=v2", "-z", "--untracked-files=normal", "--ignored=matching"],
             ]
@@ -3167,30 +3140,54 @@ final class GitStatusModel {
                 in: resolvedRoot, argumentSets: optionalArguments,
                 discoverRoot: false, backend: backend, deadline: deadline
             )
-            let log = await statusGit(recentCommitLogArguments(limit: recentCommitLimit), in: resolvedRoot)
-            if log.status == 0 {
-                let commits = parseRecentCommits(log.stdout, refsByName: verified.refsByName)
-                if !result.hasHead || !commits.isEmpty {
-                    result.history = StatusHistory(
-                        refsByName: verified.refsByName,
-                        commits: Array(commits.prefix(recentCommitLimit)),
-                        hasMore: commits.count > recentCommitLimit
-                    )
-                } else {
-                    result.detailError = String(localized: "Unable to read Git history.", table: "Git")
+            let refs = await statusGit(Self.refSnapshotArguments, in: resolvedRoot)
+            let remoteRun = await statusGit(["remote"], in: resolvedRoot)
+            if refs.status == 0, remoteRun.status == 0 {
+                var metadata = StatusCoreMetadata()
+                metadata.refsByName = parseRefSnapshot(refs.stdout)
+                metadata.branches = metadata.refsByName.keys.compactMap { name in
+                    name.hasPrefix("refs/heads/") ? String(name.dropFirst("refs/heads/".count)) : nil
+                }.sorted()
+                metadata.remotes = remoteRun.stdout.split(separator: "\n").map(String.init).sorted()
+                if let remote = metadata.remotes.contains("origin") ? "origin" : metadata.remotes.first,
+                   let ref = metadata.refsByName["refs/remotes/\(remote)/HEAD"]?.symbolic,
+                   ref.hasPrefix("refs/remotes/\(remote)/") {
+                    let name = String(ref.dropFirst("refs/remotes/\(remote)/".count))
+                    if metadata.branches.contains(name) { metadata.defaultBranch = name }
                 }
-            } else if result.hasHead {
-                result.detailError = gitFailureMessage(log,
-                    fallback: String(localized: "Unable to read Git history.", table: "Git"))
+                result.coreMetadata = metadata
             } else {
-                // Unborn repositories have no commit history to fetch.
-                result.history = StatusHistory(refsByName: verified.refsByName, commits: [], hasMore: false)
+                result.detailError = gitFailureMessage(
+                    refs.status != 0 ? refs : remoteRun,
+                    fallback: String(localized: "Unable to read Git references.", table: "Git")
+                )
+            }
+            if let verified = result.coreMetadata {
+                let log = await statusGit(recentCommitLogArguments(limit: recentCommitLimit), in: resolvedRoot)
+                if log.status == 0 {
+                    let commits = parseRecentCommits(log.stdout, refsByName: verified.refsByName)
+                    if !result.hasHead || !commits.isEmpty {
+                        result.history = StatusHistory(
+                            refsByName: verified.refsByName,
+                            commits: Array(commits.prefix(recentCommitLimit)),
+                            hasMore: commits.count > recentCommitLimit
+                        )
+                    } else {
+                        result.detailError = String(localized: "Unable to read Git history.", table: "Git")
+                    }
+                } else if result.hasHead {
+                    result.detailError = gitFailureMessage(log,
+                        fallback: String(localized: "Unable to read Git history.", table: "Git"))
+                } else {
+                    // Unborn repositories have no commit history to fetch.
+                    result.history = StatusHistory(refsByName: verified.refsByName, commits: [], hasMore: false)
+                }
             }
 
             let stash = await statusGit(stashListArguments, in: resolvedRoot)
             if stash.status == 0, let values = parseStashes(stash.stdout) {
                 result.stashes = values
-            } else {
+            } else if result.detailError == nil {
                 result.detailError = gitFailureMessage(stash,
                     fallback: String(localized: "Unable to read the stash list.", table: "Git"))
             }
@@ -3201,7 +3198,7 @@ final class GitStatusModel {
             if ignored.status == 0 {
                 result.ignoredPaths = parseStatus(ignored.stdout).ignoredPaths
                 result.ignoredLoaded = true
-            } else {
+            } else if result.detailError == nil {
                 result.detailError = gitFailureMessage(ignored,
                     fallback: String(localized: "Unable to read ignored files.", table: "Git"))
             }

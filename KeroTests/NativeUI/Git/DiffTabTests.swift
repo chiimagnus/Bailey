@@ -124,6 +124,409 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class DiffTabTests: XCTestCase {
+    func testLongCRLogicalRowDoesNotPutEOFGhostsAtViewportBoundary() {
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(
+            contentRect: NSRect(x: -990, y: -990, width: 600, height: 170),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(
+            font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+            textColor: .textColor
+        )
+        let source = (0..<150).map { "part\($0)" }.joined(separator: "\r") + "\n"
+        pane.setEditBufferText(source)
+        let split = DiffLineSplitter.lines(of: source).lines
+        let core = DiffCore.compute(oldText: "deleted\n", newText: source)
+        let state = DiffComputation.editState(
+            ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
+        )
+        XCTAssertEqual(split.count, 1)
+        pane.decorations = .edit(
+            state: state, snapshotOffsets: split.map(\.utf16Range.location),
+            lineCount: split.count,
+            ghostBlocks: [
+                .init(anchorLine: 1, firstOldLine: 1, lines: [NSAttributedString(string: "deleted")])
+            ]
+        )
+        pane.layoutSubtreeIfNeeded()
+        let visible = DiffRowGeometry.visibleRows(
+            textView: pane.textView, decorations: pane.decorations
+        ).filter { $0.index == 0 }
+        XCTAssertGreaterThan(visible.count, 1)
+        XCTAssertLessThan(visible.count, 150, "Viewport must not eagerly paint the entire CR file")
+        XCTAssertTrue(visible.allSatisfy { !$0.isLastSegment },
+                      "The viewport edge is not the real EOF ghost anchor")
+    }
+
+    func testUnicodeLineSeparatorsDecorateEveryNativeVisualSegment() {
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        let window = NSWindow(
+            contentRect: NSRect(x: -960, y: -960, width: 650, height: 340),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(
+            font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+            textColor: .textColor
+        )
+
+        for separator in ["\u{2028}", "\u{0085}", "\u{2029}", "\r"] {
+            let text = "before" + separator + "after\n"
+            let document = DiffComputation.compute(oldText: "", newText: text).unified
+            XCTAssertEqual(document.rows.count, 1)
+            pane.setReviewDocument(NSAttributedString(string: document.text),
+                                   decorations: .review(document))
+            pane.layoutSubtreeIfNeeded()
+            let paintedRows = DiffRowGeometry.visibleRows(
+                textView: pane.textView, decorations: pane.decorations
+            ).filter { $0.index == 0 }
+            XCTAssertEqual(paintedRows.count, 2,
+                           "Both native visual lines within one Git LF row must have decoration geometry")
+            if paintedRows.count == 2 {
+                XCTAssertFalse(paintedRows[0].isContinuation)
+                XCTAssertTrue(paintedRows[1].isContinuation,
+                              "A continuation must not draw the same gutter number or ghost again")
+                XCTAssertFalse(paintedRows[0].isLastSegment,
+                               "EOF markers and deletion ghosts belong after the final native part")
+                XCTAssertTrue(paintedRows[1].isLastSegment)
+                XCTAssertGreaterThan(paintedRows[1].frame.minY, paintedRows[0].frame.minY)
+                XCTAssertTrue(paintedRows[0].frame.maxY <= paintedRows[1].frame.minY + 1)
+            }
+        }
+    }
+
+    func testDeletingEveryEditLineKeepsEOFRemovalGhostScrollAccessible() {
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(
+            contentRect: NSRect(x: -950, y: -950, width: 600, height: 160),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(
+            font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+            textColor: .textColor
+        )
+        pane.setEditBufferText("")
+        let core = DiffCore.compute(oldText: "deleted one\ndeleted two\n", newText: "")
+        let state = DiffComputation.editState(
+            ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
+        )
+        XCTAssertEqual(state.ghosts.first?.anchorLine, 0)
+        pane.decorations = .edit(
+            state: state, snapshotOffsets: [], lineCount: 0,
+            ghostBlocks: [
+                .init(anchorLine: 0, firstOldLine: 1, lines: [
+                    NSAttributedString(string: "deleted one"),
+                    NSAttributedString(string: "deleted two"),
+                ])
+            ]
+        )
+        XCTAssertEqual(pane.decorations.rows.count, 1, "Empty editable buffer keeps its virtual row")
+        XCTAssertEqual(pane.decorations.ghostsByAnchor[1]?.lines.count, 2,
+                       "Deletions from an empty buffer belong after its virtual row")
+        XCTAssertGreaterThanOrEqual(
+            pane.textView.overrideContentHeight ?? 0,
+            3 * DiffTypography.paragraphStyle(for: font).maximumLineHeight,
+            "An empty edit buffer still needs enough native scroll height to show deleted lines"
+        )
+        XCTAssertEqual(pane.textView.text, "")
+        pane.setEditBufferText("restored\n")
+        XCTAssertNil(pane.textView.overrideContentHeight,
+                     "Typing into the empty editor must remove its virtual ghost height")
+        pane.setEditBufferText("")
+        XCTAssertNotNil(pane.textView.overrideContentHeight)
+        pane.decorations = .empty
+        XCTAssertNil(pane.textView.overrideContentHeight)
+    }
+
+    func testDeletedGhostSpacingStaysOnOneTextKitParagraphWithBareCR() throws {
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(
+            font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+            textColor: .textColor
+        )
+        let source = "first\rsecond\nthird\n"
+        pane.setEditBufferText(source)
+        let split = DiffLineSplitter.lines(of: source)
+        let core = DiffCore.compute(oldText: "deleted\n", newText: source)
+        let state = DiffComputation.editState(
+            ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
+        )
+        XCTAssertEqual(state.ghosts.first?.anchorLine, 0)
+        pane.decorations = .edit(
+            state: state, snapshotOffsets: split.lines.map(\.utf16Range.location),
+            lineCount: split.lines.count,
+            ghostBlocks: [
+                .init(anchorLine: 0, firstOldLine: 1, lines: [NSAttributedString(string: "deleted")])
+            ]
+        )
+        let attributed = try XCTUnwrap(pane.textView.attributedText)
+        let firstStyle = try XCTUnwrap(
+            attributed.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        let secondStyle = try XCTUnwrap(
+            attributed.attribute(.paragraphStyle, at: 6, effectiveRange: nil) as? NSParagraphStyle
+        )
+        XCTAssertGreaterThan(firstStyle.paragraphSpacingBefore, 0)
+        XCTAssertEqual(secondStyle.paragraphSpacingBefore, 0,
+                       "One Git deletion must not insert ghost spacing into every native CR paragraph")
+
+        pane.decorations = .edit(
+            state: state, snapshotOffsets: split.lines.map(\.utf16Range.location),
+            lineCount: split.lines.count,
+            ghostBlocks: [
+                .init(anchorLine: split.lines.count, firstOldLine: 1,
+                      lines: [NSAttributedString(string: "deleted")])
+            ]
+        )
+        let endAttributes = try XCTUnwrap(pane.textView.attributedText)
+        let firstAtEnd = try XCTUnwrap(
+            endAttributes.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        let lastAtEnd = try XCTUnwrap(
+            endAttributes.attribute(.paragraphStyle, at: 13, effectiveRange: nil) as? NSParagraphStyle
+        )
+        XCTAssertEqual(firstAtEnd.paragraphSpacingBefore, 0)
+        XCTAssertEqual(firstAtEnd.paragraphSpacing, 0)
+        XCTAssertGreaterThan(lastAtEnd.paragraphSpacing, 0)
+
+        pane.decorations = .edit(
+            state: state, snapshotOffsets: split.lines.map(\.utf16Range.location),
+            lineCount: split.lines.count, ghostBlocks: []
+        )
+        let cleared = try XCTUnwrap(pane.textView.attributedText)
+        for offset in [0, 6, 13] {
+            let style = try XCTUnwrap(
+                cleared.attribute(.paragraphStyle, at: offset, effectiveRange: nil)
+                    as? NSParagraphStyle
+            )
+            XCTAssertEqual(style.paragraphSpacingBefore, 0)
+            XCTAssertEqual(style.paragraphSpacing, 0)
+        }
+        XCTAssertEqual(pane.textView.text, source)
+    }
+
+    func testEditGeometryUsesGitLFLinesAcrossNativeBareCRParagraphs() async throws {
+        let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
+        let window = NSWindow(
+            contentRect: NSRect(x: -900, y: -900, width: 730, height: 410),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(
+            font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+            textColor: .textColor
+        )
+        let raw = "alpha\rbeta\nsecond\n"
+        pane.setEditBufferText(raw)
+        let lines = DiffLineSplitter.lines(of: raw).lines
+        let computation = DiffComputation.compute(oldText: "", newText: raw)
+        pane.decorations = DiffDecorations.edit(
+            state: computation.editState,
+            snapshotOffsets: lines.map(\.utf16Range.location),
+            lineCount: lines.count, ghostBlocks: []
+        )
+        try await wait {
+            DiffRowGeometry.visibleRows(
+                textView: pane.textView, decorations: pane.decorations
+            ).count >= 3
+        }
+        let rows = DiffRowGeometry.visibleRows(
+            textView: pane.textView, decorations: pane.decorations
+        )
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertEqual(Array(rows.prefix(3).map(\.index)), [0, 0, 1],
+                       "TextKit bare-CR paragraphs must share the same Git LF line number")
+        XCTAssertEqual(Array(rows.prefix(3).map(\.isContinuation)), [false, true, false],
+                       "Only the first native visual fragment may draw Git gutter/ghost metadata")
+        XCTAssertEqual(Array(rows.prefix(3).map(\.isLastSegment)), [false, true, true])
+        XCTAssertTrue(pane.textView.hasNativeNonLFSeparators)
+
+        pane.setEditBufferText("alpha\nsecond\n")
+        XCTAssertFalse(pane.textView.hasNativeNonLFSeparators)
+        pane.textView.insertText("\r", replacementRange: NSRange(location:2,length:0))
+        XCTAssertTrue(pane.textView.hasNativeNonLFSeparators,
+                      "Actual native editing must invalidate the prior layout mapping")
+        pane.textView.breakUndoCoalescing()
+        pane.textView.undoManager?.undo()
+        XCTAssertFalse(pane.textView.hasNativeNonLFSeparators,
+                       "Undo must restore the ordinary LF layout mapping")
+    }
+
+    func testBareCRReviewUsesTextKitParagraphHeightInsteadOfLFOnlyHeight() {
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 700, height: 420),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        pane.applyTypography(
+            font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+            textColor: .textColor
+        )
+
+        let normal = DiffComputation.compute(oldText: "before\n", newText: "after\n").unified
+        pane.setReviewDocument(NSAttributedString(string: normal.text), decorations: .review(normal))
+        XCTAssertNotNil(pane.textView.overrideContentHeight)
+        let crlf = DiffComputation.compute(oldText: "before\r\n", newText: "after\r\n").unified
+        pane.setReviewDocument(NSAttributedString(string: crlf.text), decorations: .review(crlf))
+        XCTAssertNotNil(pane.textView.overrideContentHeight,
+                        "Normal CRLF remains one TextKit paragraph per Git line")
+
+        let manyCRs = (0..<90).map { "part\($0)" }.joined(separator: "\r")
+        let unusual = DiffComputation.compute(
+            oldText: manyCRs + "\n", newText: manyCRs + "\rchanged\n"
+        ).unified
+        pane.setReviewDocument(NSAttributedString(string: unusual.text), decorations: .review(unusual))
+        pane.layoutSubtreeIfNeeded()
+        let elements = pane.textView.textContentManager.textElements(
+            for: pane.textView.textLayoutManager.documentRange
+        )
+        XCTAssertGreaterThan(elements.count, unusual.rows.count,
+                             "Bare CR forms additional TextKit paragraphs within one Git LF line")
+        XCTAssertNil(pane.textView.overrideContentHeight,
+                     "Git LF-only row count must not clip additional native paragraphs")
+        XCTAssertEqual(pane.textView.attributedText?.string, unusual.text)
+
+        let unicode = DiffComputation.compute(
+            oldText: "before\u{2028}after\n", newText: "before\u{2028}updated\n"
+        ).unified
+        pane.setReviewDocument(NSAttributedString(string: unicode.text), decorations: .review(unicode))
+        XCTAssertNil(pane.textView.overrideContentHeight,
+                     "Unicode line separators also require native content height")
+    }
+
+    func testStagedDeletionShowsDeletedLinesInsteadOfMissingRevision() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("deleted.txt")
+        let original = "first\r\nsecond\r\n"
+        try Data(original.utf8).write(to: path)
+        for args in [["add", "deleted.txt"], ["commit", "-qm", "baseline"],
+                     ["rm", "deleted.txt"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: root.path).status, 0)
+        }
+        let diff = DiffTab(
+            repoRoot: root.path, path: "deleted.txt", source: .staged,
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !diff.isLoading }
+        XCTAssertNil(diff.error)
+        XCTAssertEqual(Data(diff.oldContent.utf8), Data(original.utf8))
+        XCTAssertEqual(diff.newContent, "")
+        try await wait { diff.display != nil }
+        let display = try XCTUnwrap(diff.display)
+        XCTAssertEqual(display.computation.unified.rows.compactMap(\.oldLine), [1, 2])
+        XCTAssertTrue(display.unifiedText.string.contains("second"))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 840, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: diff))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        try await wait {
+            self.findNativeTextView(in: host, editable: false)?.attributedText?.string
+                == display.unifiedText.string
+        }
+    }
+
+    func testStagedConflictWithoutStageZeroIsNotADeletion() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("conflict.txt")
+        try Data("base\n".utf8).write(to: file)
+        for args in [["add", "conflict.txt"], ["commit", "-qm", "base"],
+                     ["checkout", "-qb", "other"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: root.path).status, 0)
+        }
+        try Data("theirs\n".utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qam", "other"], in: root.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["checkout", "-q", "main"], in: root.path).status, 0)
+        try Data("ours\n".utf8).write(to: file)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qam", "ours"], in: root.path).status, 0)
+        XCTAssertNotEqual(GitCommandExecution.run(["merge", "other"], in: root.path).status, 0)
+        let diff = DiffTab(
+            repoRoot: root.path, path: "conflict.txt", source: .staged,
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !diff.isLoading }
+        XCTAssertNotNil(diff.error)
+        XCTAssertFalse(diff.hasLoadedContent)
+    }
+
+    func testAppearanceChangeAfterReadErrorKeepsLastSuccessfulDiff() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("review.txt")
+        try Data("before\n".utf8).write(to: path)
+        for args in [["add", "review.txt"], ["commit", "-qm", "baseline"]] {
+            XCTAssertEqual(GitCommandExecution.run(args, in: root.path).status, 0)
+        }
+        try Data("after\n".utf8).write(to: path)
+        let diff = DiffTab(
+            repoRoot: root.path, path: "review.txt", source: .worktree,
+            untracked: false, origPath: nil,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+        )
+        try await wait { !diff.isLoading && diff.display != nil }
+        let before = try XCTUnwrap(diff.display)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 840, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: DiffViewerView(diff: diff))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        try await wait {
+            self.findNativeTextView(in: host, editable: false)?.attributedText?.string
+                == before.unifiedText.string
+        }
+        let git = root.appendingPathComponent(".git")
+        let unavailable = root.appendingPathComponent(".git-unavailable")
+        try FileManager.default.moveItem(at: git, to: unavailable)
+        defer { try? FileManager.default.moveItem(at: unavailable, to: git) }
+        diff.reload()
+        try await wait { !diff.isLoading && diff.error != nil }
+        XCTAssertEqual(diff.display?.computation.unified.text, before.computation.unified.text)
+        diff.refreshNativeAppearance()
+        try await wait({ diff.display?.id != before.id && diff.display != nil }, timeout: 3)
+        XCTAssertEqual(diff.display?.computation.unified.text, before.computation.unified.text)
+        try await wait {
+            self.findNativeTextView(in: host, editable: false)?.attributedText?.string
+                == diff.display?.unifiedText.string
+                && diff.nativeSurface?.superview != nil
+        }
+        XCTAssertNotNil(diff.error)
+    }
+
     func testIncompleteSelectedGitBlobFailsInsteadOfPublishingTruncatedContent() async throws {
         let backend = DiffWorkspaceFixture()
         await backend.simulateIncompleteGitBlob()
@@ -287,18 +690,18 @@ final class DiffTabTests: XCTestCase {
         XCTAssertEqual(Data(diff.newContent.utf8), Data(decomposed.utf8))
         if diff.newContent.utf8.elementsEqual(decomposed.utf8) {
             try await wait { diff.display?.id != oldDisplayID }
-            XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.dropLast().utf8))
+            XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.utf8))
         }
         try Data(composed.utf8).write(to: path)
         diff.reload()
         try await wait { !diff.isLoading }
-        try await wait { diff.display?.computation.splitRight.text.utf8.elementsEqual(composed.dropLast().utf8) == true }
+        try await wait { diff.display?.computation.splitRight.text.utf8.elementsEqual(composed.utf8) == true }
         let newDisplayID = diff.display?.id
         try Data(decomposed.utf8).write(to: path)
         diff.reload()
         try await wait { !diff.isLoading }
         try await wait { diff.display?.id != newDisplayID }
-        XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.dropLast().utf8))
+        XCTAssertEqual(Data(try XCTUnwrap(diff.display).computation.splitRight.text.utf8), Data(decomposed.utf8))
     }
 
     private func findNativeSurface(in view: NSView) -> DiffNativeSurface? {

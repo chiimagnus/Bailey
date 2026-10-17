@@ -1789,6 +1789,14 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
         }
     }
 
+    public func removePlugins<P: STPlugin>(of type: P.Type) {
+        plugins.removeAll { plugin in
+            guard plugin.instance is P else { return false }
+            plugin.instance.tearDown()
+            return true
+        }
+    }
+
     private func setupPlugins() {
         for (offset, plugin) in plugins.enumerated() where plugin.events == nil {
             // set events handler

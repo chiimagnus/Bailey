@@ -70,11 +70,13 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 | Diff 固定行高 | 双栏只读文档高度准确，滚动范围一致 |
 | 只读替换 | 展开上下文或重载只读文本时保留滚动，普通编辑仍跟随插入点 |
 | 辅助功能只读 | 值／选中文本替换遵守原生 isEditable，文件与 Diff 共用底层保护 |
-| 组合输入 | 结束标记保留已输入正文；最终输入按组合范围替换，默认／显式范围和普通撤销不删字或重复插入 |
+| 组合输入 | 结束标记保留正文；隐式替换使用当前选区，最终输入按组合范围替换。直接确认和替换已有文字均可一次撤销／重做，不保留中间候选的撤销步骤 |
+| 输入法屏幕坐标 | 编辑器拆卸后候选框矩形和命中查询不再访问失效窗口；附着时返回屏幕坐标，跨多行返回首行对应的实际字符范围 |
+| 语法插件切换 | 文件扩展名改变时可从现有 STTextView 移除旧插件，终止过期高亮并加载新语法；编辑缓冲与撤销历史不重建 |
 
 补丁集中在 [STTextView+Gutter.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Gutter.swift)、[STTextView.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView.swift)、[STTextView+Accessibility.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Accessibility.swift)、[STTextView+NSTextInputClient.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+NSTextInputClient.swift)、[STTextView+Scrolling.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Scrolling.swift) 和 [STTextLayoutManager.swift](../Vendor/STTextView/Sources/STTextViewCommon/STTextLayoutManager.swift)。Kero 自己的裁切、内边距和字体初始化由 [SourceTextEditor.swift](../kero/Editor/SourceTextEditor.swift) 负责，不归入上游补丁。
 
-升级时逐项检查上游是否已修复，删除不再需要的补丁，保留许可证和署名。运行 `FileTabTests`、`DiffTabTests`、`EditorTextInputTests`、`EditorNavigationTests` 并检查字体变化、组合输入、长行、短文档、Markdown、高亮空范围、固定行高、远距离定位和只读替换滚动。全部修复被上游覆盖后才考虑撤销副本，不以升级成功替代功能验收。
+升级时逐项检查上游是否已修复，删除不再需要的补丁，保留许可证和署名。运行 `FileTabTests`、`DiffTabTests`、`EditorTextInputTests`、`EditorNavigationTests`、`SyntaxHighlightingTests` 并检查字体变化、组合输入、扩展名重命名后的语法切换与 Undo、长行、短文档、Markdown、高亮空范围、固定行高、远距离定位和只读替换滚动。全部修复被上游覆盖后才考虑撤销副本，不以升级成功替代功能验收。
 
 ### Neon
 
@@ -82,7 +84,7 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 
 不引入未使用的旧 NSTextView／UIKit 适配，旧系统 actor／队列兼容桥由当前平台原生能力替代；不删除真实主队列约束。升级时检查上游是否已修复，运行 `SyntaxHighlightingTests` 的连续语义编辑、前方插入与最终视口着色，以及 `EditorTextInputTests`、`TextCoordinateIndexTests`、`DiffTabTests`。同时验证完整 XCTest、Debug／Release 构建和签名；不能以当前 Tree 正确代替实际颜色更新。
 
-查询使用当前 SwiftTreeSitter 匹配序列，在后台取匹配、主线程读取谓词，读取前后都核对请求版本。未使用的同步查询模式、弃用游标及 noChange 样式叠加路径不保留；根解析仍使用原串行队列和现有同步阈值。
+查询使用当前 SwiftTreeSitter 匹配序列，在后台取匹配、主线程读取谓词，读取前后都核对请求版本。正文编辑与嵌入语言查询首次就绪均推进同一个高亮交付代次，避免旧的根语言结果覆盖新片段颜色。未生效的可视范围前后配置已删除，实际请求长度由 `requestLengthLimit` 限制。未使用的同步查询模式、弃用游标及 noChange 样式叠加路径不保留；根解析仍使用原串行队列和现有同步阈值。
 
 源码与 App 资源中的 BSD 许可证须保持一致，来源归 [NOTICE](../NOTICE.md)。
 
@@ -94,7 +96,7 @@ TSX 使用独立解析器，不能用普通 TypeScript 替代。`Vendor/TreeSitt
 
 高亮查询由插件提供，Kero 合并 TypeScript 与 JSX 查询，不复制一份手工查询。更新后检查 TypeScript、TSX 元素／属性／表达式及 Markdown／HTML 嵌入语言。
 
-2026-10-16 已在隔离环境对照官方 `STTextView-Plugin-TreeSitter` 的 `346bbce` 版本：TypeScript／TSX 缺少 JavaScript／JSX 基础高亮，视口变化会触发全文重新解析，因此**暂不替换**当前 Neon／TSX。只有在上游解决这两项问题，并逐项核对 STTextView 本地补丁、输入／滚动性能及 Editor／Diff 回归后才重新评估；见 [P7 证据](../.github/features/editor-git-performance/evidence-p7.md)和[审计](../.github/features/editor-git-performance/audit-p7.md)。
+2026-10-16 已在隔离环境对照官方 `STTextView-Plugin-TreeSitter` 的 `346bbce` 版本：TypeScript／TSX 缺少 JavaScript／JSX 基础高亮，视口变化会触发全文重新解析，因此**暂不替换**当前 Neon／TSX。只有在上游解决这两项问题，并逐项核对 STTextView 本地补丁、输入／滚动性能及 Editor／Diff 回归后才重新评估；[原始实验与审计记录](https://github.com/chiimagnus/kero/tree/08adf2c45b4f3354b1d2af2a54d97fafb6b52271/.github/features/editor-git-performance)保留在 Git 历史中。
 
 Diff 复用现有 STTextView/TextKit 与语法依赖，不引入 PierreDiffsSwift 或 WebKit 渲染；约束见 [diff.md](features/diff.md)。
 

@@ -39,13 +39,9 @@ struct SyntaxHighlightPlugin: STPlugin {
     /// provider; see `SyntaxHighlighting.injectionsData(for:)`.
     let injectionsData: Data?
 
-    /// These handlers are stored on `STPluginEvents`, which the text view
-    /// itself retains (`STTextView.plugins`) for as long as it lives — and the
-    /// view has no way to drop a plugin, so anything they capture strongly
-    /// lives exactly as long as the view does. Capturing `context` whole would
-    /// therefore close a cycle: it holds `textView` strongly, so every editor
-    /// would stay alive for the life of the process. Capture the coordinator
-    /// (which is meant to share the view's lifetime) and a *weak* view instead.
+    /// The text view retains plugin event handlers until removal. Capturing
+    /// `context` would retain its `textView` and create a cycle. Keep the
+    /// coordinator, but capture the view weakly.
     func setUp(context: any Context) {
         let coordinator = context.coordinator
 
@@ -71,13 +67,15 @@ struct SyntaxHighlightPlugin: STPlugin {
     }
 
     func makeCoordinator(context: CoordinatorContext) -> SyntaxHighlightCoordinator {
-        SyntaxHighlightCoordinator(
+        let coordinator = SyntaxHighlightCoordinator(
             textView: context.textView,
             theme: theme,
             language: language,
             highlightsData: highlightsData,
             injectionsData: injectionsData
         )
+        (context.textView as? FocusReportingTextView)?.syntaxCoordinator = coordinator
+        return coordinator
     }
 }
 
@@ -137,7 +135,9 @@ final class SyntaxHighlightCoordinator {
     private let coordinates: TextCoordinateIndex
     private var pendingInjectionQueries: Set<SyntaxLanguage> = []
     private var injectedFragments: [SwiftTreeSitter.NamedRange: Task<[SwiftTreeSitter.NamedRange], Never>] = [:]
-    private var contentRevision: UInt = 0
+    // Both text edits and newly available embedded queries change which tokens
+    // a pending request may validly deliver.
+    private var highlightRevision: UInt = 0
     private var prevViewportRange: NSTextRange?
 
     init(
@@ -262,9 +262,9 @@ final class SyntaxHighlightCoordinator {
         }
         highlighter?.tokenProvider = { [weak self] range, completion in
             guard let self else { return }
-            let revision = self.contentRevision
+            let revision = self.highlightRevision
             provider(range) { [weak self] result in
-                guard self?.contentRevision == revision else { return }
+                guard self?.highlightRevision == revision else { return }
                 completion(result)
             }
         }
@@ -292,18 +292,18 @@ final class SyntaxHighlightCoordinator {
 
         highlighter?.tokenProvider = { [weak self] range, completion in
             guard let self else { return }
-            let revision = self.contentRevision
+            let revision = self.highlightRevision
 
             self.tsClient.executeHighlightsQuery(highlightsQuery, in: range, textProvider: textProvider) { [weak self] baseResult in
-                guard let self, self.contentRevision == revision else { return }
+                guard let self, self.highlightRevision == revision else { return }
                 switch baseResult {
                 case .failure(let error):
                     completion(.failure(error))
                 case .success(let baseRanges):
                     self.tsClient.executeInjectionsQuery(injectionsQuery, in: range, textProvider: textProvider) { [weak self] injectionResult in
-                        guard let self, self.contentRevision == revision else { return }
+                        guard let self, self.highlightRevision == revision else { return }
                         Task { @MainActor [weak self] in
-                            guard let self, self.contentRevision == revision else { return }
+                            guard let self, self.highlightRevision == revision else { return }
                             var tokens = baseRanges.compactMap { capture -> Neon.Token? in
                                 let clipped = NSIntersectionRange(capture.range, range)
                                 return clipped.length > 0 ? Neon.Token(name: capture.name, range: clipped) : nil
@@ -313,7 +313,7 @@ final class SyntaxHighlightCoordinator {
                                     let captures = await self.injectedCaptures(
                                         for: injection, revision: revision, textProvider: textProvider
                                     )
-                                    guard self.contentRevision == revision else { return }
+                                    guard self.highlightRevision == revision else { return }
                                     for capture in captures {
                                         let shifted = NSRange(location: capture.range.location + injection.range.location,
                                                               length: capture.range.length)
@@ -324,7 +324,7 @@ final class SyntaxHighlightCoordinator {
                                     }
                                 }
                             }
-                            guard self.contentRevision == revision else { return }
+                            guard self.highlightRevision == revision else { return }
                             completion(.success(TokenApplication(tokens: tokens)))
                         }
                     }
@@ -340,14 +340,14 @@ final class SyntaxHighlightCoordinator {
         textProvider: SwiftTreeSitter.Predicate.TextProvider
     ) async -> [SwiftTreeSitter.NamedRange] {
         let injectionRange = injection.range
-        guard contentRevision == revision, injectionRange.length > 0,
+        guard highlightRevision == revision, injectionRange.length > 0,
               let language = SyntaxHighlighting.language(forInjectionName: injection.name),
               let query = injectedHighlightsQuery(for: language)
         else { return [] }
         if let task = injectedFragments[injection] { return await task.value }
         guard let grammarIndex = language.grammarIndex,
               let fragment = textProvider(injectionRange, Point.zero..<Point.zero),
-              !fragment.isEmpty, contentRevision == revision
+              !fragment.isEmpty, highlightRevision == revision
         else { return [] }
         let task = Task.detached(priority: .userInitiated) { () -> [SwiftTreeSitter.NamedRange] in
             guard !Task.isCancelled, let grammar = SyntaxLanguage.parser(grammarIndex: grammarIndex) else { return [] }
@@ -374,9 +374,14 @@ final class SyntaxHighlightCoordinator {
             let query = await cache.query(for: language, data: data)
             guard let self else { return }
             self.pendingInjectionQueries.remove(language)
-            if query != nil { self.highlighter?.invalidate() }
+            if query != nil { self.injectedQueryBecameAvailable() }
         }
         return nil
+    }
+
+    func injectedQueryBecameAvailable() {
+        highlightRevision &+= 1
+        highlighter?.invalidate()
     }
 
     func updateViewportRange(_ range: NSTextRange?) {
@@ -386,8 +391,15 @@ final class SyntaxHighlightCoordinator {
         prevViewportRange = range
     }
 
+    func deactivate() {
+        highlightRevision &+= 1
+        for task in injectedFragments.values { task.cancel() }
+        injectedFragments.removeAll()
+        highlighter = nil
+    }
+
     func willChangeContent(in range: NSRange) {
-        contentRevision &+= 1
+        highlightRevision &+= 1
         for task in injectedFragments.values { task.cancel() }
         injectedFragments.removeAll()
         tsClient.willChangeContent(in: range)

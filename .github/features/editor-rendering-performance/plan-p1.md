@@ -2,11 +2,11 @@
 
 **目标：** 根治源代码浏览新区域时**滚动条长度／阅读位置异常跳变**，同时让 382、1,000、10,000、100,000 行 Swift 文件的打开、查看、连续编辑与关闭具备低 CPU／内存成本。真实复现文件：`kero/Files/FileTreeModel.swift`（382 行／16,050 字节）。坚持 Swift 6／AppKit／TextKit 2 按需布局；不修并不存在的自定义触控板事件层，也不靠强制全文排版换取稳定。
 
-**不做：** 触控板 `scrollWheel` 事件补丁、独立 Git／Files／Diff 算法、Rust／GPUI／Rope、Neon 插件迁移或第二套编辑器。共享 STTextView 修复须验证 [原 P5 的 Diff](../editor-git-performance/plan-p5.md) 使用者；不覆盖正在进行的 P6 工作区或暂存文件。
+**不做：** 触控板 `scrollWheel` 事件补丁、独立 Git／Files／Diff 算法、Rust／GPUI／Rope、Neon 插件迁移或第二套编辑器。共享 STTextView 修复须验证 [原生 Diff](../../../docs/features/diff.md) 使用者；不覆盖正在进行的 P6 工作区或暂存文件。
 
 **方案与顺序：** T1 建立滚动几何、编辑主线程成本及内存基线；T2 在 STTextView 的**唯一几何所有者**处稳定滚动范围与文本锚点；T3 解决真实十万行文件的容量、初开与资源成本；T4 消除已确认的**每次按键整文快照／比较、全量坐标平移**等热路径；T5 用相同样本综合验收。不预置第二套编辑器或 Rope，只有 T1/T4 测量表明原生数据结构无法满足目标才做最小 Swift 分段索引替换。每个实现任务**同次接入新路径、删除旧路径、测试并更新拥有者文档**；实验放 `build/performance/editor-rendering/`，结论归 `evidence-p1.md`。
 
-**与既有优化的关系：** [原 P3](../editor-git-performance/evidence-p3.md) 已改善 Tree-sitter 后台解析、初次 Query 编译和长文档定位，但先前测得的输入延迟不代表对十万行文件持续按键的低开销。文件加载时完整进入 `FileTab.text` 和 STTextView；动态发生的是 TextKit **视口排版**，不是滚动时读取文件块。沿用现有 Neon、查询缓存和 STTextView 可见正文 fragment 复用；保留高亮正确性，不重做解析器。
+**与既有优化的关系：** [此前 P3 实验证据](https://github.com/chiimagnus/kero/blob/08adf2c45b4f3354b1d2af2a54d97fafb6b52271/.github/features/editor-git-performance/evidence-p3.md) 表明，已有实现改善了 Tree-sitter 后台解析、初次 Query 编译和长文档定位，但先前测得的输入延迟不代表对十万行文件持续按键的低开销。文件加载时完整进入 `FileTab.text` 和 STTextView；动态发生的是 TextKit **视口排版**，不是滚动时读取文件块。沿用现有 Neon、查询缓存和 STTextView 可见正文 fragment 复用；保留高亮正确性，不重做解析器。
 
 **按实际调用链核对的事实（具体异常仍需 T1 记录）：**
 - **完整读取与容量**：`FileTab.reloadFromDiskIfClean` 后台完整读取／UTF-8 解码、比对旧字节后才更新 `reloadRevision`；`SourceTextEditor.makeScrollView` 一次将全文赋给 STTextView，并非按滚动位置分块读取。`FileTab.maxTextBytes = 5 << 20`（5 MiB），`LocalWorkspaceBackend.read`／`SSHWorkspaceBackend.read` 遵守传入上限，`FileTabTests` 专门断言超限拒绝。**十万行真实 Swift 文件可能超限**，T3 必须连带修订读入额度与测试／文档，不能只做一个十万行极短文本的假测试。

@@ -46,6 +46,7 @@ final class FileTab: nonisolated Identifiable {
 
     private(set) var isDirty = false
     var saveError: String?
+    private(set) var reloadError: String?
     /// Why this file cannot be written, or nil while it is writable. Set when
     /// the remote machine it lives on is no longer reachable.
     private(set) var readOnlyReason: String?
@@ -67,6 +68,10 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored private var imageFingerprint: Int?
     @ObservationIgnored private var reloadGeneration: UInt = 0
     @ObservationIgnored private var reloadTask: Task<Void, Never>?
+    @ObservationIgnored private var refreshPending = false
+    /// A previously requested read must resume after reconnect; restored tabs
+    /// that no consumer has touched must remain lazy.
+    @ObservationIgnored private var hasReadDemand = false
     /// Changes when a rename or remote reconnect changes the save target.
     /// An in-flight write must not claim to have saved a different target.
     @ObservationIgnored private var targetGeneration: UInt = 0
@@ -120,7 +125,20 @@ final class FileTab: nonisolated Identifiable {
         }
     }
 
+    func waitForTextBeforeAppending() async throws {
+        if case .text = content, !isDirty, reloadTask == nil {
+            reloadFromDiskIfClean()
+        }
+        try await waitForText()
+        if let reloadError {
+            throw NSError(domain: "Kero.Editor", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: reloadError,
+            ])
+        }
+    }
+
     func loadIfNeeded() {
+        hasReadDemand = true
         guard reloadTask == nil else { return }
         switch content {
         case .loading, .unavailable: reloadFromDiskIfClean()
@@ -129,12 +147,15 @@ final class FileTab: nonisolated Identifiable {
     }
 
     func refreshWhenSelected() {
+        hasReadDemand = true
         if readOnlyReason != nil, let workspaceIdentity {
             SSHHostWorkspaces.retryConnection(for: workspaceIdentity, path: path)
             return
         }
         if case .loading = content {
             loadIfNeeded()
+        } else if reloadTask != nil {
+            refreshPending = true
         } else {
             reloadFromDiskIfClean()
         }
@@ -159,7 +180,12 @@ final class FileTab: nonisolated Identifiable {
     /// reconnecting to the same machine.
     func reevaluateWorkspace(in project: Project) {
         guard let workspaceIdentity else { return }
-        guard let live = project.connectedWorkspace(for: workspaceIdentity) else {
+        rebindWorkspace(to: project.connectedWorkspace(for: workspaceIdentity))
+    }
+
+    func rebindWorkspace(to live: WorkspaceBackend?) {
+        guard let workspaceIdentity else { return }
+        guard let live else {
             setReadOnly(true, destination: workspaceIdentity)
             return
         }
@@ -172,9 +198,9 @@ final class FileTab: nonisolated Identifiable {
         // fails, so the tab takes the live one.
         backend = live
         setReadOnly(false, destination: workspaceIdentity)
-        // No-op while the buffer is dirty, so edits made during the outage
-        // survive and can now be saved.
-        reloadFromDiskIfClean()
+        // Previously requested content must recover even without a new
+        // onAppear; an unconsumed restored tab must not start remote IO.
+        if hasReadDemand { reloadFromDiskIfClean() }
     }
 
     private func setReadOnly(_ isReadOnly: Bool, destination: String) {
@@ -211,6 +237,7 @@ final class FileTab: nonisolated Identifiable {
         invalidateReload()
         targetGeneration &+= 1
         path = newPath
+        editorCoordinator?.updateSyntaxHighlighting(for: newPath)
         if wasReading { loadIfNeeded() }
     }
 
@@ -262,6 +289,7 @@ final class FileTab: nonisolated Identifiable {
             saveError = readOnlyReason
             return
         }
+        guard reloadError == nil else { return }
         invalidateReload()
         let written = text
         let savedPath = path
@@ -274,6 +302,7 @@ final class FileTab: nonisolated Identifiable {
             // An edit landing while the write was in flight stays dirty.
             refreshDirtyState()
             saveError = nil
+            reloadError = nil
         } catch {
             guard generation == targetGeneration else { return }
             saveError = error.localizedDescription
@@ -288,6 +317,8 @@ final class FileTab: nonisolated Identifiable {
         // replacing the content with "Could not read file" would throw away
         // what the user was looking at. The banner already says why.
         guard readOnlyReason == nil, !isDirty else { return }
+        hasReadDemand = true
+        refreshPending = false
         reloadTask?.cancel()
         reloadGeneration &+= 1
         let generation = reloadGeneration
@@ -296,13 +327,36 @@ final class FileTab: nonisolated Identifiable {
         let backend = self.backend
         reloadTask = Task { [weak self] in
             defer {
-                if self?.reloadGeneration == generation { self?.reloadTask = nil }
+                if let self, self.reloadGeneration == generation {
+                    self.reloadTask = nil
+                    if self.refreshPending {
+                        self.refreshPending = false
+                        self.reloadFromDiskIfClean()
+                    }
+                }
             }
             let loaded: LoadedContent
             do {
                 let (data, decoded) = try await Self.readContent(path: expectedPath, backend: backend)
                 loaded = Self.loadedContent(path: expectedPath, data: data, decoded: decoded)
             } catch {
+                let missingOrOversized: Bool
+                switch error {
+                case WorkspaceError.notFound, WorkspaceError.tooLarge: missingOrOversized = true
+                default: missingOrOversized = false
+                }
+                if !missingOrOversized, let self,
+                   self.reloadGeneration == generation, !self.isDirty, self.readOnlyReason == nil {
+                    switch self.content {
+                    case .text, .image:
+                        self.reloadError = String(
+                            localized: "Could not refresh file; showing last loaded content.",
+                            table: "Editor"
+                        )
+                        return
+                    case .loading, .unavailable: break
+                    }
+                }
                 let reason: String
                 if case WorkspaceError.tooLarge = error {
                     reason = String(localized: "File is too large to open", table: "Workspace")
@@ -320,6 +374,7 @@ final class FileTab: nonisolated Identifiable {
                   self.readOnlyReason == nil
             else { return }
 
+            self.reloadError = nil
             guard !self.matches(loaded) else { return }
             self.editorCoordinator = nil
             self.content = loaded.content
@@ -332,6 +387,7 @@ final class FileTab: nonisolated Identifiable {
     }
 
     private func invalidateReload() {
+        refreshPending = false
         reloadTask?.cancel()
         reloadTask = nil
         reloadGeneration &+= 1
@@ -386,6 +442,28 @@ final class FileTab: nonisolated Identifiable {
     }
 }
 
+/// Weakly tracks the actual AppKit window for every file content type,
+/// including images that do not mount a native text editor.
+@MainActor
+private final class FileWindowReference {
+    weak var view: NSView?
+    var window: NSWindow? { view?.window }
+}
+
+private struct FileWindowReader: NSViewRepresentable {
+    let reference: FileWindowReference
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        reference.view = view
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        reference.view = view
+    }
+}
+
 /// Content of a file tab: an STTextView editor (line numbers, system find
 /// bar), an image preview, or a placeholder for anything binary or
 /// oversized.
@@ -399,6 +477,7 @@ struct FileViewerView: View {
 
     private let settings = AppSettings.shared
     private let themeChanges = Theme.changes
+    @State private var windowReference = FileWindowReference()
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -411,8 +490,11 @@ struct FileViewerView: View {
                         RemoteReadOnlyBanner(message: reason)
                             .frame(height: 22)
                     }
+                    if let error = file.reloadError {
+                        errorBar(error)
+                    }
                     if let error = file.saveError {
-                        saveErrorBar(error)
+                        errorBar(String(localized: "Could not save: \(error)", table: "Editor"))
                     }
                     SourceTextEditor(
                         file: file,
@@ -425,9 +507,14 @@ struct FileViewerView: View {
                     .id(file.reloadRevision)
                 }
             case .image(let image):
-                ScrollView([.horizontal, .vertical]) {
-                    Image(nsImage: image)
-                        .padding(16)
+                VStack(spacing: 0) {
+                    if let error = file.reloadError {
+                        errorBar(error)
+                    }
+                    ScrollView([.horizontal, .vertical]) {
+                        Image(nsImage: image)
+                            .padding(16)
+                    }
                 }
             case .loading:
                 Color.clear
@@ -442,30 +529,22 @@ struct FileViewerView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .background(FileWindowReader(reference: windowReference).frame(width: 0, height: 0))
         .onAppear {
             file.refreshWhenSelected()
         }
-        // The selected file view stays mounted while Kero is inactive, so
-        // returning from an external editor does not trigger `onAppear`.
-        .onReceive(NotificationCenter.default.publisher(
-            for: NSApplication.didBecomeActiveNotification
-        )) { _ in
-            file.reloadFromDiskIfClean()
-        }
-        // A window can become key without the app itself transitioning from
-        // inactive (for example when moving between Kero windows).
-        .onReceive(NotificationCenter.default.publisher(
-            for: NSWindow.didBecomeKeyNotification
-        )) { _ in
-            file.reloadFromDiskIfClean()
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
+            guard notification.object as? NSWindow === windowReference.window,
+                  file.readOnlyReason == nil else { return }
+            file.refreshWhenSelected()
         }
     }
 
-    private func saveErrorBar(_ message: String) -> some View {
+    private func errorBar(_ message: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 10))
-            Text(String(localized: "Could not save: \(message)", table: "Editor"))
+            Text(message)
                 .font(.system(size: 11))
                 .lineLimit(1)
             Spacer(minLength: 0)

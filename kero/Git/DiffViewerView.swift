@@ -67,9 +67,8 @@ private struct DiffDisplayInputs {
     let newRuns: [DiffHighlightRun]
 }
 
-/// A git diff opened as a tab from the git panel. Loads both sides of the
-/// change (via `git show` / the worktree) so they survive tab switches;
-/// reloads when the view reappears.
+/// Git and worktree text live with the tab, surviving view remounts and
+/// refreshing live sources when selected.
 @MainActor
 @Observable
 final class DiffTab: nonisolated Identifiable {
@@ -312,7 +311,10 @@ final class DiffTab: nonisolated Identifiable {
                             .tree(revision: parent, path: oldPath), in: root, backend: backend))
                     }
                     if status == "D" {
-                        newFromGit = ""
+                        let deleted = await Self.firstGitContent(
+                            [.tree(revision: hash, path: path)], in: root, backend: backend
+                        )
+                        newFromGit = take((deleted.text, deleted.error))
                     } else {
                         newFromGit = take(await Self.requiredGitContent(
                             .tree(revision: hash, path: path), in: root, backend: backend))
@@ -335,8 +337,14 @@ final class DiffTab: nonisolated Identifiable {
                         [.tree(revision: "HEAD", path: oldPath)], in: root, backend: backend
                     )
                     old = take((earlier.text, earlier.error))
-                    newFromGit = take(await Self.requiredGitContent(
-                        .index(path: path, stages: [0]), in: root, backend: backend))
+                    let staged = await Self.firstGitContent(
+                        [.index(path: path, stages: [0])], in: root, backend: backend
+                    )
+                    newFromGit = take((staged.text, staged.error))
+                    unmerged = staged.isUnmerged
+                    if staged.isUnmerged && staged.error == nil {
+                        failure = String(localized: "Unresolved merge conflict", table: "Git")
+                    }
                 case .worktree:
                     if !untracked {
                         let earlier = await Self.firstGitContent(
@@ -465,7 +473,7 @@ final class DiffTab: nonisolated Identifiable {
         displayGeneration &+= 1
         let generation = displayGeneration
         displayInputs = nil
-        guard !source.isPlainRevision, hasChanges, error == nil else {
+        guard !source.isPlainRevision, hasLoadedContent, hasChanges else {
             display = nil
             return
         }
@@ -775,7 +783,13 @@ final class DiffTab: nonisolated Identifiable {
                     let symbolic = await GitCommandExecution.run(
                         ["symbolic-ref", "-q", "HEAD"], in: root, backend: backend
                     )
-                    if symbolic.status == 0 { return (nil, false, nil) }
+                    if symbolic.status == 0 {
+                        let branch = symbolic.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let ref = await GitCommandExecution.run(
+                            ["show-ref", "--verify", "--quiet", branch], in: root, backend: backend
+                        )
+                        if ref.status == 1 { return (nil, false, nil) }
+                    }
                 }
             }
             return (nil, false, metadata.stderr.isEmpty

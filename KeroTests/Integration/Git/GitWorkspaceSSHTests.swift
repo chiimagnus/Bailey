@@ -155,6 +155,14 @@ final class GitWorkspaceSSHTests: XCTestCase {
             }
             XCTAssertFalse(file.isDirty)
             XCTAssertEqual(file.workspaceIdentity, "ssh:" + host)
+
+            try await backend.write(path: repo + "/.gitignore", data: Data("external-remote-rule\n".utf8))
+            try await project.ignoreGitPaths(["new-remote.txt"], isDirectory: false,
+                repository: repo, context: context, isCurrent: { true })
+            let refreshed = try await backend.read(path: repo + "/.gitignore", maxBytes: 1024)
+            XCTAssertEqual(String(decoding: refreshed, as: UTF8.self),
+                           "external-remote-rule\n/new-remote.txt\n")
+            XCTAssertFalse(file.isDirty)
         } catch {
             await cleanup()
             throw error

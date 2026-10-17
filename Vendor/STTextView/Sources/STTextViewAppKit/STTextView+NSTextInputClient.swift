@@ -38,6 +38,11 @@ extension STTextView: NSTextInputClient {
     ///   - selectedRange: The range to set as the selection, computed from the beginning of the inserted string.
     ///   - replacementRange: The range to replace, computed from the beginning of the marked text.
     @objc public func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        var replacementRange = replacementRange
+        if markedText == nil, replacementRange.location == NSNotFound {
+            replacementRange = self.selectedRange()
+            guard replacementRange.location != NSNotFound else { return }
+        }
         let attributedMarkedString: NSAttributedString
         switch string {
         case let attributedString as NSAttributedString:
@@ -62,6 +67,17 @@ extension STTextView: NSTextInputClient {
         #if DEBUG
             logger.debug("\(#function) \(attributedMarkedString.string), selectedRange: \(selectedRange), replacementRange: \(replacementRange)")
         #endif
+
+        let originalContent: (range: NSRange, text: NSAttributedString)?
+        if markedText == nil {
+            let originalRange = replacementRange.location == NSNotFound
+                ? NSRange(location: self.selectedRange().location, length: 0)
+                : replacementRange
+            let attributes = (textContentManager as! NSTextContentStorage).attributedString!
+            originalContent = (originalRange, attributes.attributedSubstring(from: originalRange))
+        } else {
+            originalContent = nil
+        }
 
         if replacementRange.location != NSNotFound {
             if markedText == nil {
@@ -99,6 +115,8 @@ extension STTextView: NSTextInputClient {
             }
         }
 
+        if let originalContent { markedText?.originalContent = originalContent }
+
         // Insert new marked text (or replace replacementRange)
         let insertionRangeLenght = replacementRange.location == NSNotFound ? 0 : replacementRange.length
         let insertionRange = NSRange(location: markedText!.markedRange.location, length: insertionRangeLenght)
@@ -118,6 +136,16 @@ extension STTextView: NSTextInputClient {
             removeAttribute(attribute, range: markedText.markedRange)
         }
         addAttributes(typingAttributes, range: markedText.markedRange)
+        if allowsUndo, let undoManager, undoManager.isUndoRegistrationEnabled,
+           let original = markedText.originalContent {
+            let acceptedRange = markedText.markedRange
+            (undoManager as? CoalescingUndoManager)?.endCoalescing()
+            undoManager.beginUndoGrouping()
+            undoManager.registerUndo(withTarget: self) { textView in
+                textView.replaceCharacters(in: acceptedRange, with: original.text)
+            }
+            undoManager.endUndoGrouping()
+        }
         self.markedText = nil
     }
 
@@ -169,13 +197,16 @@ extension STTextView: NSTextInputClient {
     }
 
     @objc public func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
-        guard let textRange = NSTextRange(range, in: textContentManager) else {
+        guard let window, let textRange = NSTextRange(range, in: textContentManager) else {
             return .zero
         }
 
         var rect: CGRect = .zero
-        textLayoutManager.enumerateTextSegments(in: textRange, type: .standard, options: .rangeNotRequired) { _, textSegmentFrame, _, _ in
-            rect = window!.convertToScreen(contentView.convert(textSegmentFrame, to: nil))
+        textLayoutManager.enumerateTextSegments(in: textRange, type: .standard) { segmentRange, textSegmentFrame, _, _ in
+            if let segmentRange {
+                actualRange?.pointee = NSRange(segmentRange, in: textContentManager)
+            }
+            rect = window.convertToScreen(contentView.convert(textSegmentFrame, to: nil))
             return false
         }
 
@@ -183,7 +214,8 @@ extension STTextView: NSTextInputClient {
     }
 
     @objc public func characterIndex(for point: CGPoint) -> Int {
-        let eventPoint = contentView.convert(window!.convertPoint(fromScreen: point), from: nil)
+        guard let window else { return NSNotFound }
+        let eventPoint = contentView.convert(window.convertPoint(fromScreen: point), from: nil)
         guard let location = textLayoutManager.caretLocation(interactingAt: eventPoint, inContainerAt: textLayoutManager.documentRange.location) else {
             return NSNotFound
         }
@@ -193,6 +225,23 @@ extension STTextView: NSTextInputClient {
 
     @objc open func insertText(_ string: Any, replacementRange: NSRange) {
         var replacementRange = replacementRange
+        let isCompletingComposition = markedText != nil
+        let originalContent = markedText?.originalContent
+        let compositionUndo: UndoManager?
+        if allowsUndo, let undoManager, undoManager.isUndoRegistrationEnabled,
+           let originalContent, originalContent.range.length > 0 {
+            (undoManager as? CoalescingUndoManager)?.endCoalescing()
+            undoManager.beginUndoGrouping()
+            undoManager.registerUndo(withTarget: self) { textView in
+                textView.replaceCharacters(in: NSRange(location: originalContent.range.location, length: 0),
+                                           with: originalContent.text)
+            }
+            compositionUndo = undoManager
+        } else {
+            compositionUndo = nil
+        }
+        defer { compositionUndo?.endUndoGrouping() }
+
         if let markedText {
             let markedRange = markedText.markedRange
             if replacementRange.location == NSNotFound {
@@ -227,12 +276,14 @@ extension STTextView: NSTextInputClient {
         switch string {
         case let string as String:
             if shouldChangeText(in: textRanges, replacementString: string) {
-                replaceCharacters(in: textRanges, with: string, useTypingAttributes: true, allowsTypingCoalescing: true)
+                replaceCharacters(in: textRanges, with: string, useTypingAttributes: true,
+                                  allowsTypingCoalescing: !isCompletingComposition)
                 updateTypingAttributes()
             }
         case let attributedString as NSAttributedString:
             if shouldChangeText(in: textRanges, replacementString: attributedString.string) {
-                replaceCharacters(in: textRanges, with: attributedString, allowsTypingCoalescing: true)
+                replaceCharacters(in: textRanges, with: attributedString,
+                                  allowsTypingCoalescing: !isCompletingComposition)
                 updateTypingAttributes()
             }
         default:

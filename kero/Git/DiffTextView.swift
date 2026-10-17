@@ -218,7 +218,9 @@ struct DiffDecorations {
         var ghostsByAnchor: [Int: GhostBlock] = [:]
         var maxOld = 0
         for block in ghostBlocks {
-            ghostsByAnchor[block.anchorLine] = block
+            // A deleted-to-empty file has one virtual editable row, but
+            // no source line to anchor its EOF ghosts above.
+            ghostsByAnchor[lineCount == 0 ? rowCount : block.anchorLine] = block
             maxOld = max(maxOld, block.firstOldLine + block.lines.count - 1)
         }
         var decorations = DiffDecorations(
@@ -264,6 +266,24 @@ struct DiffViewportSyncPlugin: STPlugin {
 /// The pane's text view expands collapsed-run separators on click instead
 /// of placing a caret in the separator row.
 final class DiffTextView: STTextView {
+    private var nativeBreaksSnapshot: Bool?
+
+    var hasNativeNonLFSeparators: Bool {
+        if let nativeBreaksSnapshot { return nativeBreaksSnapshot }
+        let value = DiffRowGeometry.hasNativeNonLFSeparators(text ?? "")
+        nativeBreaksSnapshot = value
+        return value
+    }
+
+    func updateNativeLineBreaks(for text: String) {
+        nativeBreaksSnapshot = DiffRowGeometry.hasNativeNonLFSeparators(text)
+    }
+
+    override func didChangeText() {
+        nativeBreaksSnapshot = nil
+        super.didChangeText()
+    }
+
     /// Returns true when the click landed on a collapsed-run separator and
     /// was consumed by expanding it.
     var handleCollapsedClick: ((NSPoint) -> Bool)?
@@ -286,22 +306,39 @@ final class DiffTextView: STTextView {
 
 /// One visible row resolved against the current layout: its index, metadata,
 /// and frame in text-view coordinates.
-private struct DiffVisibleRow {
+struct DiffVisibleRow {
     let index: Int
     let frame: CGRect
+    /// Additional native visual line belonging to the same Git LF row.
+    let isContinuation: Bool
+    /// True only at the actual end of a Git line, not merely the viewport.
+    let isLastSegment: Bool
 }
 
 /// Shared row-geometry walk used by the underlay and the gutter. Enumerates
 /// the viewport's layout fragments and yields one entry per visual row.
 ///
 /// Row indexes come from the immutable document's line-start table in review
-/// mode; in edit mode (live buffer) they're derived by counting the text
-/// elements before the viewport — the same technique STTextView's own gutter
-/// uses, always correct against the current buffer.
+/// mode; in edit mode the current TextKit paragraphs determine visible rows.
+/// Ordinary LF documents use native paragraph counting; when bare CR splits
+/// an additional paragraph, the Git row advances only at its next LF.
 @MainActor
-private enum DiffRowGeometry {
+enum DiffRowGeometry {
+    /// Git counts LF alone; TextKit also makes native paragraphs for bare CR.
+    static func hasNativeNonLFSeparators(_ text: String) -> Bool {
+        var previousCR = false
+        for scalar in text.unicodeScalars {
+            if (previousCR && scalar != "\n") ||
+                scalar == "\u{2028}" || scalar == "\u{2029}" || scalar == "\u{0085}" {
+                return true
+            }
+            previousCR = scalar == "\r"
+        }
+        return previousCR
+    }
+
     static func visibleRows(
-        textView: STTextView, decorations: DiffDecorations
+        textView: DiffTextView, decorations: DiffDecorations
     ) -> [DiffVisibleRow] {
         let layoutManager = textView.textLayoutManager
         let contentManager = textView.textContentManager
@@ -310,14 +347,29 @@ private enum DiffRowGeometry {
         }
 
         let byOffsets = !decorations.lineStartOffsets.isEmpty
+        let nativeBreaks = textView.hasNativeNonLFSeparators
+        let hasNativeBreaks = !byOffsets && nativeBreaks
         var nextCountedIndex = 0
+        var previousGitRow: Int?
         if !byOffsets {
-            nextCountedIndex = contentManager.textElements(
+            let preceding = contentManager.textElements(
                 for: NSTextRange(
                     location: layoutManager.documentRange.location,
                     end: viewportRange.location
                 )!
-            ).count
+            )
+            if hasNativeBreaks {
+                nextCountedIndex = preceding.reduce(0) { count, element in
+                    let paragraph = element as? NSTextParagraph
+                    return count + (paragraph?.attributedString.string.utf16.last == 10 ? 1 : 0)
+                }
+                if let last = preceding.last as? NSTextParagraph,
+                   last.attributedString.string.utf16.last != 10 {
+                    previousGitRow = nextCountedIndex
+                }
+            } else {
+                nextCountedIndex = preceding.count
+            }
         }
 
         var rows: [DiffVisibleRow] = []
@@ -330,27 +382,59 @@ private enum DiffRowGeometry {
                     to: fragment.rangeInElement.location
                 )
                 baseIndex = decorations.rowIndex(forUTF16Offset: offset) ?? 0
+                if previousGitRow == nil, baseIndex < decorations.lineStartOffsets.count,
+                   offset > decorations.lineStartOffsets[baseIndex] {
+                    previousGitRow = baseIndex
+                }
             } else {
                 baseIndex = nextCountedIndex
             }
 
+            let bodyEnd = fragment.textLineFragments.lastIndex { !$0.isExtraLineFragment }
+            let atDocumentEnd = fragment.rangeInElement.endLocation.compare(
+                layoutManager.documentRange.endLocation
+            ) == .orderedSame
+            let terminatesGitLine = !nativeBreaks || atDocumentEnd
+                || (fragment.textElement as? NSTextParagraph)?
+                    .attributedString.string.utf16.last == 10
             var lineOffset = 0
-            for lineFragment in fragment.textLineFragments
-            where lineFragment.isExtraLineFragment
-                || fragment.textLineFragments.first == lineFragment {
+            var emittedBody = false
+            for (linePosition, lineFragment) in fragment.textLineFragments.enumerated() {
+                let extra = lineFragment.isExtraLineFragment
+                let rowIndex = baseIndex + (extra && emittedBody ? 1 : 0)
+                let continued = !extra && (emittedBody || previousGitRow == rowIndex)
+                let endsGitLine = extra
+                    ? bodyEnd == nil && atDocumentEnd
+                    : linePosition == bodyEnd && terminatesGitLine
                 let bounds = lineFragment.typographicBounds
                 rows.append(DiffVisibleRow(
-                    index: baseIndex + lineOffset,
+                    index: rowIndex,
                     frame: CGRect(
                         x: fragmentFrame.origin.x,
                         y: fragmentFrame.origin.y + bounds.minY,
                         width: fragmentFrame.width,
                         height: bounds.height
-                    )
+                    ),
+                    isContinuation: continued,
+                    isLastSegment: endsGitLine
                 ))
-                lineOffset += 1
+                if extra {
+                    lineOffset += 1
+                    previousGitRow = nil
+                } else {
+                    if !emittedBody { lineOffset += 1 }
+                    emittedBody = true
+                    previousGitRow = rowIndex
+                }
             }
-            nextCountedIndex = baseIndex + max(1, lineOffset)
+            if !hasNativeBreaks {
+                nextCountedIndex = baseIndex + max(1, lineOffset)
+            } else {
+                // Native CR paragraphs share a Git line until an LF is reached.
+                let paragraph = fragment.textElement as? NSTextParagraph
+                nextCountedIndex = baseIndex
+                    + (paragraph?.attributedString.string.utf16.last == 10 ? 1 : 0)
+            }
             return true
         }
         return rows
@@ -363,7 +447,7 @@ private enum DiffRowGeometry {
 /// per-row diff tints, word-level emphasis, edit-mode deletion markers, and
 /// the "no newline at end of file" glyph.
 final class DiffDecorationUnderlayView: NSView {
-    weak var textView: STTextView?
+    weak var textView: DiffTextView?
     weak var clipView: NSClipView?
     var decorations: DiffDecorations = .empty {
         didSet { needsDisplay = true }
@@ -410,6 +494,7 @@ final class DiffDecorationUnderlayView: NSView {
 
         for row in rows {
             guard row.index < decorations.rows.count else { continue }
+            let lastVisualSegment = row.isLastSegment
             let metadata = decorations.rows[row.index]
             let rowRect = CGRect(
                 x: 0,
@@ -466,7 +551,7 @@ final class DiffDecorationUnderlayView: NSView {
                 }
             }
 
-            if metadata.missingNewline {
+            if metadata.missingNewline, lastVisualSegment {
                 drawMissingNewlineBadge(
                     after: converted(row.frame), scheme: scheme
                 )
@@ -475,7 +560,7 @@ final class DiffDecorationUnderlayView: NSView {
             // Read-only deletion ghosts (edit mode): the paragraph carries
             // spacing above it exactly tall enough for the block, and the
             // lines are drawn into that gap.
-            if let block = decorations.ghostsByAnchor[row.index] {
+            if !row.isContinuation, let block = decorations.ghostsByAnchor[row.index] {
                 drawGhostBlock(
                     block,
                     endingAt: rowRect.minY,
@@ -486,7 +571,7 @@ final class DiffDecorationUnderlayView: NSView {
             }
             // A deletion at end-of-file anchors past the last row and draws
             // below it (the last paragraph carries spacing after).
-            if row.index == decorations.rows.count - 1,
+            if lastVisualSegment, row.index == decorations.rows.count - 1,
                let block = decorations.ghostsByAnchor[decorations.rows.count] {
                 drawGhostBlock(
                     block,
@@ -585,7 +670,7 @@ enum DiffGutterLayout {
 /// wedges. Sits outside the scroll view and repaints on scroll, so its
 /// content never scrolls horizontally with the code.
 final class DiffGutterView: NSView {
-    weak var textView: STTextView?
+    weak var textView: DiffTextView?
     weak var clipView: NSClipView?
     var layoutStyle: DiffGutterLayout = .single
     var decorations: DiffDecorations = .empty {
@@ -696,6 +781,7 @@ final class DiffGutterView: NSView {
 
         for row in rows {
             guard row.index < decorations.rows.count else { continue }
+            let lastVisualSegment = row.isLastSegment
             let metadata = decorations.rows[row.index]
             let y = row.frame.origin.y - clipView.bounds.origin.y
             let rowRect = CGRect(x: 0, y: y, width: bounds.width, height: row.frame.height)
@@ -739,6 +825,23 @@ final class DiffGutterView: NSView {
                 CGRect(x: 0, y: rowRect.minY, width: 3, height: rowRect.height).fill()
             }
 
+            // EOF ghosts are drawn after the last physical segment, including
+            // a native continuation from CR or a Unicode line separator.
+            if lastVisualSegment, row.index == decorations.rows.count - 1,
+               let block = decorations.ghostsByAnchor[decorations.rows.count] {
+                drawGhostGutterRows(
+                    block,
+                    endingAt: rowRect.maxY + CGFloat(block.lines.count) * row.frame.height,
+                    rowHeight: row.frame.height,
+                    numberFont: numberFont,
+                    numberRight: numberRight,
+                    markerX: markerX,
+                    scheme: scheme
+                )
+            }
+            // A physical continuation needs tint, not another number/ghost.
+            if row.isContinuation { continue }
+
             // The number a row shows is its own side's: old for removed rows,
             // new for added and context (matching diffs.com's inline gutter);
             // split sides carry their fixed file side.
@@ -781,18 +884,7 @@ final class DiffGutterView: NSView {
                     scheme: scheme
                 )
             }
-            if row.index == decorations.rows.count - 1,
-               let block = decorations.ghostsByAnchor[decorations.rows.count] {
-                drawGhostGutterRows(
-                    block,
-                    endingAt: rowRect.maxY + CGFloat(block.lines.count) * rowRect.height,
-                    rowHeight: rowRect.height,
-                    numberFont: numberFont,
-                    numberRight: numberRight,
-                    markerX: markerX,
-                    scheme: scheme
-                )
-            }
+
         }
     }
 
@@ -1014,6 +1106,7 @@ final class DiffCodePaneView: NSView {
             }
             if mode == .edit {
                 applyGhostSpacing()
+                applyContentHeightOverride()
             }
         }
     }
@@ -1033,6 +1126,8 @@ final class DiffCodePaneView: NSView {
     func setEditBufferText(_ text: String) {
         appliedGhostSpacing = [:]
         textView.text = text
+        textView.updateNativeLineBreaks(for: text)
+        applyContentHeightOverride()
     }
 
     /// Gives each ghost anchor paragraph spacing above it (or after it, for
@@ -1056,30 +1151,37 @@ final class DiffCodePaneView: NSView {
         }
         guard wanted != appliedGhostSpacing else { return }
 
-        let documentLength = (textView.text ?? "").utf16.count
-
-        func paragraphRange(forLine line: Int) -> NSRange? {
-            guard line < offsets.count else { return nil }
+        let source = textView.text ?? ""
+        let documentLength = source.utf16.count
+        let nsSource = source as NSString
+        func paragraphRange(forLine line: Int, atEnd: Bool) -> NSRange? {
+            guard line < offsets.count, documentLength > 0 else { return nil }
             let start = offsets[line]
             let end = line + 1 < offsets.count ? offsets[line + 1] : documentLength
-            guard start <= documentLength else { return nil }
-            return NSRange(location: start, length: max(0, min(end, documentLength) - start))
+            guard start < documentLength else { return nil }
+            let position = atEnd ? max(start, min(end, documentLength) - 1) : start
+            return nsSource.paragraphRange(for: NSRange(location: position, length: 0))
         }
 
         let base = DiffTypography.paragraphStyle(for: textView.font)
-
-        for (line, _) in appliedGhostSpacing where wanted[line] == nil {
-            if let range = paragraphRange(forLine: line) {
-                textView.addAttributes([.paragraphStyle: base], range: range)
-            }
-        }
-        for (line, spacing) in wanted where appliedGhostSpacing[line] != spacing {
-            guard let range = paragraphRange(forLine: line),
-                  let style = base.mutableCopy() as? NSMutableParagraphStyle
-            else { continue }
+        func applyStyle(_ spacing: GhostSpacing, to range: NSRange) {
+            guard let style = base.mutableCopy() as? NSMutableParagraphStyle else { return }
             style.paragraphSpacingBefore = CGFloat(spacing.rowsBefore) * rowHeight
             style.paragraphSpacing = CGFloat(spacing.rowsAfter) * rowHeight
             textView.addAttributes([.paragraphStyle: style], range: range)
+        }
+        for line in Set(appliedGhostSpacing.keys).union(wanted.keys) {
+            let current = wanted[line] ?? GhostSpacing()
+            guard current != (appliedGhostSpacing[line] ?? GhostSpacing()),
+                  let first = paragraphRange(forLine: line, atEnd: false),
+                  let last = paragraphRange(forLine: line, atEnd: true) else { continue }
+            if first == last {
+                applyStyle(current, to: first)
+            } else {
+                // A Git LF line can contain several native CR paragraphs.
+                applyStyle(GhostSpacing(rowsBefore: current.rowsBefore), to: first)
+                applyStyle(GhostSpacing(rowsAfter: current.rowsAfter), to: last)
+            }
         }
         appliedGhostSpacing = wanted
         textView.needsLayout = true
@@ -1249,7 +1351,10 @@ final class DiffCodePaneView: NSView {
 
         textView.attributedText = text
         decorations = newDecorations
-        setFixedRowCount(newDecorations.rows.count)
+        // Preserve TextKit's real height when its paragraph boundaries do
+        // not match Git LF rows; reuse the text-owned line-break flag.
+        textView.updateNativeLineBreaks(for: text.string)
+        setFixedRowCount(textView.hasNativeNonLFSeparators ? nil : newDecorations.rows.count)
 
         if isExpansionSwap {
             setVerticalScrollOffset(savedOffset)
@@ -1276,7 +1381,11 @@ final class DiffCodePaneView: NSView {
     }
 
     private func applyContentHeightOverride() {
-        let height = fixedRowCount.map { CGFloat($0) * rowHeight }
+        var height = fixedRowCount.map { CGFloat($0) * rowHeight }
+        if mode == .edit, textView.textContentManager.documentRange.isEmpty,
+           let ghosts = decorations.ghostsByAnchor[decorations.rows.count] {
+            height = CGFloat(ghosts.lines.count + 1) * rowHeight
+        }
         if textView.overrideContentHeight != height {
             textView.overrideContentHeight = height
             textView.needsLayout = true

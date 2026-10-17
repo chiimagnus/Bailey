@@ -79,6 +79,34 @@ final class GitWorkspaceMenuTests: XCTestCase {
         file.autoSaveSuspendedForClose = true
     }
 
+    func testIgnoreReloadsCleanCachedFileBeforeAppendingWithoutMountedView() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kero-ignore-external-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let path = root.appendingPathComponent(".gitignore")
+        try Data("cached-rule\n".utf8).write(to: path)
+        project.openFile(path.path)
+        guard case .file(let file) = project.selectedTab?.content else {
+            return XCTFail("Expected cached file tab")
+        }
+        try await file.waitForText()
+        XCTAssertEqual(file.text, "cached-rule\n")
+        try Data("external-rule\n".utf8).write(to: path)
+        XCTAssertEqual(file.text, "cached-rule\n", "File remains cached until explicitly consumed")
+        let context = try XCTUnwrap(project.panelContext)
+        try await project.ignoreGitPaths(["new-rule.txt"], isDirectory: false, repository: root.path,
+                                         context: context, isCurrent: { true })
+        let expected = "external-rule\n/new-rule.txt\n"
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), expected,
+                       "Non-view Git Ignore must preserve external edits, not write a stale cached baseline")
+        XCTAssertEqual(file.text, expected)
+        XCTAssertFalse(file.isDirty)
+    }
+
     func testIgnoreCreatesOrdinaryFileTabAndRejectsStaleTarget() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("kero-ignore-create-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

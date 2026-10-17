@@ -1,6 +1,16 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Could not refresh file; showing last loaded content." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法刷新文件，继续显示上次加载的内容。"
+          }
+        }
+      }
+    },
     "The file is unavailable or its workspace changed. Reopen it and try again." : {
       "localizations" : {
         "zh-Hans" : {

@@ -243,7 +243,9 @@ final class DiffNativeSurface: NSView, STTextViewDelegate {
     func textViewDidChangeText(_ notification: Notification) {
         guard let textView = editPane?.textView,
               (notification.object as? STTextView) === textView else { return }
-        diff?.updateEditedContent(textView.text ?? "")
+        let text = textView.text ?? ""
+        textView.updateNativeLineBreaks(for: text)
+        diff?.updateEditedContent(text)
     }
 
 }

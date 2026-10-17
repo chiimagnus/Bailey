@@ -44,6 +44,45 @@ private actor GitRootRunnerFixture: RemoteCommandRunner {
         -> (status: Int32, stdout: Data, stderr: Data) { result }
 }
 
+private actor LocalShellRunnerFixture: RemoteCommandRunner {
+    private var raceDestination: (path: String, directory: Bool)?
+    private var stageInterruption: String?
+
+    func insertDestinationImmediatelyBeforeMove(_ path: String, asDirectory: Bool = false) {
+        raceDestination = (path, asDirectory)
+    }
+    func interruptDuringCaseOnlyRename(signal: Bool = false) {
+        stageInterruption = signal ? "kill -TERM $$" : "exit 70"
+    }
+
+    func run(_ argv: [String], stdin: Data?, timeout: TimeInterval) async throws
+        -> (status: Int32, stdout: Data, stderr: Data)
+    {
+        guard argv.count == 1 else { return (1, Data(), Data("unexpected argv".utf8)) }
+        var command = argv[0]
+        if let stageInterruption {
+            self.stageInterruption = nil
+            command = command.replacingOccurrences(
+                of: "\"$temp/item\" || exit 1",
+                with: "\"$temp/item\" || exit 1; " + stageInterruption
+            )
+        }
+        if let raceDestination {
+            self.raceDestination = nil
+            let marker = command.contains("mv -n -- ") ? "mv -n -- " : "mv -- "
+            let mutation = raceDestination.directory
+                ? "mkdir -- \(RemoteCommands.quote(raceDestination.path)); "
+                : "printf 'concurrent target' > \(RemoteCommands.quote(raceDestination.path)); "
+            command = command.replacingOccurrences(of: marker, with: mutation + marker)
+        }
+        let result = try await LocalWorkspaceBackend.shared.run(
+            argv: ["/bin/sh", "-c", command], cwd: nil, env: nil,
+            stdin: stdin, timeout: timeout
+        )
+        return (result.status, result.stdout, result.stderr)
+    }
+}
+
 final class RemoteCommandsTests: XCTestCase {
     func testRemoteGitRootDistinguishesNonRepositoryAndSSHOrGitFailure() async throws {
         let runner = GitRootRunnerFixture()
@@ -96,6 +135,131 @@ final class RemoteCommandsTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
         XCTAssertTrue(RemoteCommands.atomicWriteCommand(path: "/tmp/x").contains("chmod --reference="))
         XCTAssertTrue(RemoteCommands.atomicWriteCommand(path: "/tmp/x").contains("mv -f"))
+    }
+
+    func testSSHFileRenamePreservesDanglingSymlinksAndRejectsOccupiedDestinations() async throws {
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let runner = LocalShellRunnerFixture()
+        let backend = SSHWorkspaceBackend(runner: runner)
+        let missing = fixture.appendingPathComponent("missing")
+        let broken = fixture.appendingPathComponent("broken")
+        let moved = fixture.appendingPathComponent("moved")
+        try FileManager.default.createSymbolicLink(at: broken, withDestinationURL: missing)
+        try await backend.rename(from: broken.path, to: moved.path)
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: moved.path), missing.path)
+        XCTAssertThrowsError(try FileManager.default.destinationOfSymbolicLink(atPath: broken.path))
+
+        let source = fixture.appendingPathComponent("source")
+        let occupied = fixture.appendingPathComponent("occupied")
+        try Data("preserve".utf8).write(to: source)
+        try FileManager.default.createSymbolicLink(at: occupied, withDestinationURL: missing)
+        do {
+            try await backend.rename(from: source.path, to: occupied.path)
+            XCTFail("A dangling destination is still occupied and must not be overwritten")
+        } catch {}
+        XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "preserve")
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: occupied.path), missing.path)
+
+        // Two hard links share an inode but are different directory entries.
+        // Treating equal inode numbers as permission to overwrite loses a name.
+        let hardSource = fixture.appendingPathComponent("hard-source")
+        let hardDestination = fixture.appendingPathComponent("hard-destination")
+        try Data("shared payload".utf8).write(to: hardSource)
+        try FileManager.default.linkItem(at: hardSource, to: hardDestination)
+        do {
+            try await backend.rename(from: hardSource.path, to: hardDestination.path)
+            XCTFail("Identical inode does not authorize replacing a separate hard-link entry")
+        } catch {}
+        XCTAssertEqual(try String(contentsOf: hardSource, encoding: .utf8), "shared payload")
+        XCTAssertEqual(try String(contentsOf: hardDestination, encoding: .utf8), "shared payload")
+
+        // Another process can create the destination after the shell check.
+        let racingSource = fixture.appendingPathComponent("racing-source")
+        let racingTarget = fixture.appendingPathComponent("racing-target")
+        try Data("original source".utf8).write(to: racingSource)
+        await runner.insertDestinationImmediatelyBeforeMove(racingTarget.path)
+        do {
+            try await backend.rename(from: racingSource.path, to: racingTarget.path)
+            XCTFail("A destination created during rename may not be overwritten")
+        } catch {}
+        XCTAssertEqual(try String(contentsOf: racingSource, encoding: .utf8), "original source")
+        XCTAssertEqual(try String(contentsOf: racingTarget, encoding: .utf8), "concurrent target")
+
+        let directoryRaceSource = fixture.appendingPathComponent("race-directory-source")
+        let directoryRaceDestination = fixture.appendingPathComponent("race-directory-destination")
+        try Data("must not move into folder".utf8).write(to: directoryRaceSource)
+        await runner.insertDestinationImmediatelyBeforeMove(directoryRaceDestination.path, asDirectory: true)
+        do {
+            try await backend.rename(from: directoryRaceSource.path, to: directoryRaceDestination.path)
+            XCTFail("Concurrent directory creation cannot convert rename into move-inside-directory")
+        } catch {}
+        XCTAssertEqual(try String(contentsOf: directoryRaceSource, encoding: .utf8), "must not move into folder")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directoryRaceDestination.path), [])
+
+        let directorySource = fixture.appendingPathComponent("race-source-folder")
+        let destinationDirectory = fixture.appendingPathComponent("race-target-folder")
+        try FileManager.default.createDirectory(at: directorySource, withIntermediateDirectories: true)
+        try Data("nested content".utf8).write(to: directorySource.appendingPathComponent("nested.txt"))
+        await runner.insertDestinationImmediatelyBeforeMove(destinationDirectory.path, asDirectory: true)
+        do {
+            try await backend.rename(from: directorySource.path, to: destinationDirectory.path)
+            XCTFail("Concurrent directory creation cannot move a source directory into another directory")
+        } catch {}
+        XCTAssertEqual(try String(contentsOf: directorySource.appendingPathComponent("nested.txt"), encoding: .utf8),
+                       "nested content")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destinationDirectory.path), [])
+
+        for signal in [false, true] {
+            let interruptedSource = fixture.appendingPathComponent("interrupted-source-\(signal)")
+            let interruptedTarget = fixture.appendingPathComponent("interrupted-hardlink-\(signal)")
+            try Data("interrupt-safe".utf8).write(to: interruptedSource)
+            try FileManager.default.linkItem(at: interruptedSource, to: interruptedTarget)
+            await runner.interruptDuringCaseOnlyRename(signal: signal)
+            do {
+                try await backend.rename(from: interruptedSource.path, to: interruptedTarget.path)
+                XCTFail("An interrupted staged rename must fail")
+            } catch {}
+            XCTAssertEqual(try String(contentsOf: interruptedSource, encoding: .utf8), "interrupt-safe")
+            XCTAssertEqual(try String(contentsOf: interruptedTarget, encoding: .utf8), "interrupt-safe")
+            let residual = try FileManager.default.contentsOfDirectory(atPath: fixture.path)
+            XCTAssertFalse(residual.contains { $0.hasPrefix(".kero-rename.") })
+        }
+
+        let escaped = fixture.appendingPathComponent("-quotes'\tnewline\n😀")
+        let escapedTarget = fixture.appendingPathComponent("-renamed'\n😀")
+        try Data("special path payload".utf8).write(to: escaped)
+        try await backend.rename(from: escaped.path, to: escapedTarget.path)
+        XCTAssertEqual(try String(contentsOf: escapedTarget, encoding: .utf8), "special path payload")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: escaped.path))
+
+        let missingSource = fixture.appendingPathComponent("absent-source")
+        do {
+            try await backend.rename(from: missingSource.path, to: fixture.appendingPathComponent("absent-target").path)
+            XCTFail("A nonexistent remote source must fail")
+        } catch WorkspaceError.notFound {}
+
+        let lowerLink = fixture.appendingPathComponent("dangling-lower")
+        let upperLink = fixture.appendingPathComponent("DANGLING-LOWER")
+        try FileManager.default.createSymbolicLink(at: lowerLink, withDestinationURL: missing)
+        if (try? FileManager.default.destinationOfSymbolicLink(atPath: upperLink.path)) == missing.path {
+            try await backend.rename(from: lowerLink.path, to: upperLink.path)
+            XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: upperLink.path), missing.path)
+            let present = try FileManager.default.contentsOfDirectory(atPath: fixture.path)
+            XCTAssertTrue(present.contains("DANGLING-LOWER"))
+            XCTAssertFalse(present.contains("dangling-lower"))
+        }
+
+        let lower = fixture.appendingPathComponent("case.txt")
+        let upper = fixture.appendingPathComponent("Case.txt")
+        try Data("case preserved".utf8).write(to: lower)
+        if FileManager.default.fileExists(atPath: upper.path) {
+            try await backend.rename(from: lower.path, to: upper.path)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.path).filter {
+                $0.lowercased() == "case.txt"
+            }, ["Case.txt"])
+        }
     }
 
     func testDirectoryStatAndProcessParsers() {

@@ -6,6 +6,7 @@ import Foundation
 package final class STMarkedText: CustomDebugStringConvertible {
     package var markedText: NSAttributedString
     package var markedRange: NSRange
+    package var originalContent: (range: NSRange, text: NSAttributedString)?
 
     // Not used currently in STTextView.
     // that turned out to be good because it's buggy FB13789916 https://gist.github.com/krzyzanowskim/340c5810fc427e346b7c4b06d46b1e10

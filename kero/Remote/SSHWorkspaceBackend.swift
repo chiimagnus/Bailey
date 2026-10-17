@@ -155,17 +155,73 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         try await shell("mkdir -- \(RemoteCommands.quote(path))")
     }
 
-    /// `mv -n` would skip silently when the destination exists, so the check
-    /// is explicit and reports the same "already exists" the local move does.
+    /// Never overwrite a competing name, including a dangling symlink.
+    /// Case-only renames on case-insensitive volumes need a temporary sibling:
+    /// equal inodes alone cannot distinguish an alias from two hard links.
     func rename(from: String, to: String) async throws {
         let source = RemoteCommands.quote(from)
         let destination = RemoteCommands.quote(to)
-        try await shell(
-            requiring(
-                from,
-                "[ -e \(destination) ] && exit \(ExitCode.exists); mv -- \(source) \(destination)"
-            )
+        let nestedDestination = RemoteCommands.quote(
+            (to as NSString).appendingPathComponent((from as NSString).lastPathComponent)
         )
+        let temporary = RemoteCommands.quote(
+            ((from as NSString).deletingLastPathComponent as NSString)
+                .appendingPathComponent(".kero-rename.XXXXXXXX")
+        )
+        try await shell("""
+            if [ ! -e \(source) ] && [ ! -L \(source) ]; then exit \(ExitCode.missing); fi
+            sourceID=$(ls -id -- \(source)) || exit \(ExitCode.missing)
+            sourceID=${sourceID%% *}
+            restoreNested() {
+                if [ ! -e \(source) ] && [ ! -L \(source) ] && [ -d \(destination) ]; then
+                    nestedID=$(ls -id -- \(nestedDestination) 2>/dev/null) || return 0
+                    nestedID=${nestedID%% *}
+                    if [ "$nestedID" = "$sourceID" ]; then
+                        mv -n -- \(nestedDestination) \(source) || return 1
+                    fi
+                fi
+            }
+            verifyDestination() {
+                actualID=$(ls -id -- \(destination)) || return 1
+                actualID=${actualID%% *}
+                if [ "$actualID" != "$sourceID" ]; then
+                    restoreNested || return 1
+                    return \(ExitCode.exists)
+                fi
+            }
+            if [ -e \(destination) ] || [ -L \(destination) ]; then
+                if [ ! \(source) -ef \(destination) ] && [ ! -L \(source) ]; then
+                    exit \(ExitCode.exists)
+                fi
+                temp=$(mktemp -d \(temporary)) || exit 1
+                restoreSource() {
+                    if [ -e "$temp/item" ] || [ -L "$temp/item" ]; then
+                        if [ ! -e \(source) ] && [ ! -L \(source) ]; then
+                            mv -n -- "$temp/item" \(source) || :
+                        fi
+                    fi
+                    rmdir "$temp" 2>/dev/null || :
+                    restoreNested || :
+                }
+                trap 'restoreSource' EXIT
+                trap 'exit 1' HUP INT TERM
+                mv -- \(source) "$temp/item" || exit 1
+                if [ -e \(destination) ] || [ -L \(destination) ]; then
+                    exit \(ExitCode.exists)
+                fi
+                mv -n -- "$temp/item" \(destination) || exit 1
+                if [ -e "$temp/item" ] || [ -L "$temp/item" ]; then
+                    exit \(ExitCode.exists)
+                fi
+                verifyDestination || exit "$?"
+                trap - EXIT HUP INT TERM
+                rmdir "$temp"
+            else
+                mv -n -- \(source) \(destination) || exit 1
+                if [ -e \(source) ] || [ -L \(source) ]; then exit \(ExitCode.exists); fi
+                verifyDestination || exit "$?"
+            fi
+            """)
     }
 
     /// There is no remote Trash: freedesktop trash semantics vary between

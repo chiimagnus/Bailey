@@ -119,9 +119,7 @@ struct SourceTextEditor: NSViewRepresentable {
         // window — sees the whole document. The plugin only layers foreground
         // colors as rendering attributes; the font stays kero's (see
         // SyntaxHighlighting.theme).
-        if let plugin = SyntaxHighlighting.plugin(for: file.path) {
-            textView.addPlugin(plugin)
-        }
+        textView.updateSyntaxHighlighting(for: file.path)
 
         // Captured before the coordinator attaches, because its scroll
         // observer starts overwriting `editorState` immediately.
@@ -212,7 +210,7 @@ struct SourceTextEditor: NSViewRepresentable {
     /// Guarded assignments: the font/color setters restyle the whole
     /// document, and this runs on every SwiftUI render.
     private func apply(to textView: STTextView, scrollView: NSScrollView) {
-        textView.isEditable = file.readOnlyReason == nil
+        textView.isEditable = file.readOnlyReason == nil && file.reloadError == nil
         if textView.font != font {
             textView.font = font
         }
@@ -275,6 +273,10 @@ struct SourceTextEditor: NSViewRepresentable {
             }
         }
 
+        func updateSyntaxHighlighting(for path: String) {
+            (textView as? FocusReportingTextView)?.updateSyntaxHighlighting(for: path)
+        }
+
         func textViewDidChangeText(_ notification: Notification) {
             guard let textView, let file, file.editorCoordinator === self else { return }
             file.text = textView.text ?? ""
@@ -329,6 +331,19 @@ private final class SourceEditorContainer: NSView {
 final class FocusReportingTextView: STTextView {
     var onBecomeFirstResponder: (() -> Void)?
     var onResignFirstResponder: (() -> Void)?
+    weak var syntaxCoordinator: SyntaxHighlightCoordinator?
+    private var syntaxLanguage: SyntaxLanguage?
+
+    func updateSyntaxHighlighting(for path: String) {
+        let language = SyntaxHighlighting.language(for: path)
+        guard language != syntaxLanguage else { return }
+        syntaxCoordinator?.deactivate()
+        syntaxCoordinator = nil
+        removePlugins(of: SyntaxHighlightPlugin.self)
+        textLayoutManager.removeRenderingAttribute(.foregroundColor, for: textContentManager.documentRange)
+        if let plugin = SyntaxHighlighting.plugin(for: path) { addPlugin(plugin) }
+        syntaxLanguage = language
+    }
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
         if became { onBecomeFirstResponder?() }

@@ -206,6 +206,43 @@ final class PanelContextTests: XCTestCase {
         try await wait { tree.items.map(\.path) == ["/root/new.txt"] }
     }
 
+    func testPanelSyncQueueRapidThreeTargetSwitchesPublishOnlyNewestTree() async throws {
+        let oldBackend = DelayedWorkspaceFixture("old-channel")
+        let middleBackend = DelayedWorkspaceFixture("old-channel")
+        let newestBackend = DelayedWorkspaceFixture("new-channel")
+        await oldBackend.suspendNextList()
+        await middleBackend.suspendNextList()
+        let tree = FileTreeModel()
+        let queue = PanelSyncQueue()
+        let project = UUID()
+        let oldTarget = PanelContext.Identity.pinned(
+            project: project, workspace: "ssh:fixture", directory: "/root/old"
+        )
+        let middleTarget = PanelContext.Identity.pinned(
+            project: project, workspace: "ssh:fixture", directory: "/root/middle"
+        )
+        let newestTarget = PanelContext.Identity.pinned(
+            project: project, workspace: "ssh:fixture", directory: "/root/new"
+        )
+        queue.run(for: oldTarget) {
+            await tree.sync(root: "/root/old", backend: oldBackend, scope: "ssh:fixture")
+        }
+        try await wait { await oldBackend.awaitingList }
+        queue.run(for: middleTarget) {
+            await tree.sync(root: "/root/middle", backend: middleBackend, scope: "ssh:fixture")
+        }
+        try await wait { await middleBackend.awaitingList }
+        queue.run(for: newestTarget) {
+            await tree.sync(root: "/root/new", backend: newestBackend, scope: "ssh:fixture")
+        }
+        try await wait { tree.items.map(\.path) == ["/root/new/new.txt"] }
+        await middleBackend.releaseList()
+        await oldBackend.releaseList()
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertEqual(tree.rootPath, "/root/new")
+        XCTAssertEqual(tree.items.map(\.path), ["/root/new/new.txt"])
+    }
+
     func testBackendSwitchClearsOldRowsAndDraftWithoutChangingPath() async throws {
         let old = DelayedWorkspaceFixture("old-channel")
         let fresh = DelayedWorkspaceFixture("new-channel")

@@ -518,7 +518,7 @@ final class Project: nonisolated Identifiable {
         openFile(path)
         guard let tab = findFileTab(path: path, workspace: workspaceIdentity),
               case .file(let file) = tab.content else { throw WorkspaceError.notFound }
-        try await file.waitForText()
+        try await file.waitForTextBeforeAppending()
         guard isCurrent(), file.path == path else { throw CancellationError() }
         let newline = file.text.contains("\r\n") ? "\r\n" : "\n"
         let separator = file.text.isEmpty || file.text.hasSuffix("\n") ? "" : newline

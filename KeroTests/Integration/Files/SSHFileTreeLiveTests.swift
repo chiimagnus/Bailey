@@ -161,4 +161,131 @@ final class SSHFileTreeLiveTests: XCTestCase {
         }
         await cleanup()
     }
+
+    func testAuthorizedWindowsSSHRenamePreservesActualDirectoryEntries() async throws {
+        guard let host = ProcessInfo.processInfo.environment["KERO_P4_TEST_SSH_HOST"] else {
+            throw XCTSkip("Requires an explicitly authorized Windows SSH host")
+        }
+        let socket = "/tmp/kero-rename-\(UUID().uuidString.prefix(8)).sock"
+        let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 25)
+        let created = try await backend.run(
+            argv: ["mktemp", "-d", "/tmp/kero-rename-XXXXXX"],
+            cwd: nil, env: nil, stdin: nil, timeout: 25
+        )
+        XCTAssertEqual(created.status, 0, String(decoding: created.stderr, as: UTF8.self))
+        let root = String(decoding: created.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (root as NSString).deletingLastPathComponent == "/tmp",
+              (root as NSString).lastPathComponent.hasPrefix("kero-rename-") else {
+            throw WorkspaceError.notFound
+        }
+        func cleanup() async {
+            do { try await backend.delete(paths: [root]) }
+            catch { XCTFail("Could not remove test-owned folder: \(error)") }
+            do {
+                let closed = try await Task.detached {
+                    try ProcessRemoteCommandRunner.launch(
+                        sshPath: "/usr/bin/ssh", arguments: ["-S", socket, "-O", "exit", host],
+                        stdin: nil, timeout: 10
+                    )
+                }.value
+                XCTAssertEqual(closed.status, 0)
+            } catch { XCTFail("Could not close test SSH socket: \(error)") }
+        }
+        do {
+            let source = root + "/source' 中文.txt"
+            let moved = root + "/moved' 中文.txt"
+            try await backend.createFile(path: source)
+            try await backend.write(path: source, data: Data("keep source".utf8))
+            try await backend.rename(from: source, to: moved)
+            let oldStat = try await backend.stat(path: source)
+            XCTAssertNil(oldStat)
+            let movedContents = try await backend.read(path: moved, maxBytes: 256)
+            XCTAssertEqual(String(decoding: movedContents, as: UTF8.self), "keep source")
+
+            let occupied = root + "/occupied.txt"
+            try await backend.createFile(path: occupied)
+            try await backend.write(path: occupied, data: Data("keep destination".utf8))
+            do {
+                try await backend.rename(from: moved, to: occupied)
+                XCTFail("Cannot replace an occupied remote destination")
+            } catch {}
+            let sourceAfterCollision = try await backend.read(path: moved, maxBytes: 256)
+            let destinationAfterCollision = try await backend.read(path: occupied, maxBytes: 256)
+            XCTAssertEqual(String(decoding: sourceAfterCollision, as: UTF8.self), "keep source")
+            XCTAssertEqual(String(decoding: destinationAfterCollision, as: UTF8.self), "keep destination")
+
+            let sourceFolder = root + "/source-folder"
+            let occupiedFolder = root + "/occupied-folder"
+            try await backend.createDirectory(path: sourceFolder)
+            try await backend.createDirectory(path: occupiedFolder)
+            try await backend.createFile(path: sourceFolder + "/nested.txt")
+            do {
+                try await backend.rename(from: sourceFolder, to: occupiedFolder)
+                XCTFail("A real remote folder cannot be moved into an occupied target folder")
+            } catch {}
+            let sourceFolderAfter = try await backend.list(directory: sourceFolder)
+            let occupiedFolderAfter = try await backend.list(directory: occupiedFolder)
+            XCTAssertEqual(sourceFolderAfter.map(\.name), ["nested.txt"])
+            XCTAssertTrue(occupiedFolderAfter.isEmpty)
+
+            let hardlink = root + "/hardlink.txt"
+            let hardlinkResult = try await backend.run(argv: ["ln", moved, hardlink],
+                                                       cwd: nil, env: nil, stdin: nil, timeout: 25)
+            if hardlinkResult.status == 0 {
+                do {
+                    try await backend.rename(from: moved, to: hardlink)
+                    XCTFail("Identical inode does not permit removing a different hard link")
+                } catch {}
+                let sourceStat = try await backend.stat(path: moved)
+                let hardlinkStat = try await backend.stat(path: hardlink)
+                XCTAssertNotNil(sourceStat)
+                XCTAssertNotNil(hardlinkStat)
+            } else {
+                print("P4_LIVE_HARDLINK_UNAVAILABLE status=\(hardlinkResult.status)")
+            }
+
+            let missing = root + "/nonexistent"
+            let dangling = root + "/dangling"
+            let symlinkResult = try await backend.run(argv: ["ln", "-s", missing, dangling],
+                                                      cwd: nil, env: nil, stdin: nil, timeout: 25)
+            if symlinkResult.status == 0 {
+                let link = try await backend.stat(path: dangling)
+                if link?.isSymlink == true {
+                    let renamed = root + "/renamed-dangling"
+                    try await backend.rename(from: dangling, to: renamed)
+                    let target = try await backend.readSymlinkDestination(path: renamed)
+                    XCTAssertEqual(target, missing)
+                    let collision = root + "/collision"
+                    try await backend.createFile(path: collision)
+                    do {
+                        try await backend.rename(from: collision, to: renamed)
+                        XCTFail("An existing dangling symlink must not be overwritten")
+                    } catch {}
+                    let afterCollision = try await backend.stat(path: collision)
+                    XCTAssertNotNil(afterCollision)
+                } else {
+                    print("P4_LIVE_SYMLINK_NOT_NATIVE")
+                }
+            } else {
+                print("P4_LIVE_SYMLINK_UNAVAILABLE status=\(symlinkResult.status)")
+            }
+
+            let lower = root + "/lower-case.txt"
+            let upper = root + "/LOWER-CASE.TXT"
+            try await backend.createFile(path: lower)
+            if try await backend.stat(path: upper) != nil {
+                try await backend.rename(from: lower, to: upper)
+                let names = try await backend.list(directory: root).map(\.name)
+                XCTAssertTrue(names.contains("LOWER-CASE.TXT"))
+                XCTAssertFalse(names.contains("lower-case.txt"))
+            } else {
+                print("P4_LIVE_CASE_SENSITIVE_VOLUME")
+            }
+        } catch {
+            await cleanup()
+            throw error
+        }
+        await cleanup()
+    }
 }

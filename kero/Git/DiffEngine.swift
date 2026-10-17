@@ -1148,8 +1148,10 @@ nonisolated struct DiffComputation {
         }
 
         func document() -> DiffSideDocument {
-            DiffSideDocument(
-                text: parts.joined(separator: "\n"),
+            var rendered = parts.joined(separator: "\n")
+            if !parts.isEmpty { rendered.append("\n") }
+            return DiffSideDocument(
+                text: rendered,
                 rows: rows,
                 lineStartOffsets: lineStartOffsets
             )
