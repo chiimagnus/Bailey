@@ -62,7 +62,8 @@ final class RecentCommitsViewTests: XCTestCase {
         width: CGFloat = 260, height: CGFloat = 200, fontScale: CGFloat = 1,
         viewMode: GitViewMode = .list,
         remotes: [String] = [],
-        stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in }
+        stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in },
+        openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void = { _, _, _ in }
     ) -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(x: -1200, y: -1200, width: width, height: height),
@@ -83,7 +84,8 @@ final class RecentCommitsViewTests: XCTestCase {
             isAnnotatedTag: { _ in false },
             canFetchRemoteBranch: { _ in false }, createBranch: { _ in }, addTag: { _ in },
             canActOnCommit: true, canDropCommit: { _ in false }, commitAction: { _, _ in },
-            stashAction: stashAction
+            stashAction: stashAction,
+            openWorktreeDiff: openWorktreeDiff
         ).frame(width: width, height: height, alignment: .topLeading)
             .background(Color(nsColor: Theme.sidebar)))
         window.orderFront(nil)
@@ -238,6 +240,86 @@ final class RecentCommitsViewTests: XCTestCase {
         }, "Many references must fold locally, not turn the graph into a scrolling table")
     }
 
+    func testCurrentAndFeatureUncommittedDiamondsAlignAndToggleInNativeGraph() throws {
+        typealias Commit = GitStatusModel.RecentCommit
+        let baseOID = String(repeating: "b", count: 40)
+        let featureOID = String(repeating: "f", count: 40)
+        let mainOID = String(repeating: "a", count: 40)
+        let commits: [Commit] = [
+            .init(hash: featureOID, shortHash: "fffffff", subject: "Feature tip",
+                  author: "Dev", date: .now, parentHashes: [baseOID],
+                  references: [.init(kind: .localBranch, name: "feature")], files: []),
+            .init(hash: mainOID, shortHash: "aaaaaaa", subject: "Main checkout",
+                  author: "Dev", date: .now, parentHashes: [baseOID],
+                  references: [.init(kind: .currentBranch, name: "main")], files: []),
+            .init(hash: baseOID, shortHash: "bbbbbbb", subject: "Shared ancestor",
+                  author: "Dev", date: .now, parentHashes: [],
+                  references: [], files: []),
+        ]
+        let worktrees = [
+            GitStatusModel.WorktreeChanges(
+                path: "/tmp/feature", branch: "feature", headOID: featureOID,
+                entries: [.init(path: "feature-file", staged: "M", unstaged: ".")],
+                isCurrent: false),
+            GitStatusModel.WorktreeChanges(
+                path: "/tmp/main", branch: "main", headOID: mainOID,
+                entries: [.init(path: "main-file", staged: ".", unstaged: "M")],
+                isCurrent: true),
+        ]
+        let rows = GitStatusModel.graphCommits(commits, stashes: [], worktrees: worktrees)
+        let graph = CommitGraphLayout(commits: rows)
+        let featureRow = try XCTUnwrap(rows.firstIndex { $0.hash == featureOID && $0.worktree == nil })
+        let mainRow = try XCTUnwrap(rows.firstIndex { $0.hash == mainOID && $0.worktree == nil })
+        XCTAssertEqual(graph.rows[mainRow].node.lane, 0)
+        XCTAssertEqual(graph.rows[featureRow].node.lane, 1)
+        for (tree, headRow) in [(worktrees[0], featureRow), (worktrees[1], mainRow)] {
+            let source = try XCTUnwrap(rows.firstIndex { $0.worktree?.path == tree.path })
+            XCTAssertEqual(graph.rows[source].node, graph.rows[headRow].node)
+        }
+        let height: CGFloat = 260
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let selection = GraphSelection()
+            let window = hostHistory(rows, selection: selection, width: 400, height: height)
+            defer { window.close() }
+            window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+            settle()
+            for tree in worktrees {
+                let index = try XCTUnwrap(rows.firstIndex { $0.worktree?.path == tree.path })
+                let lane = graph.rows[index].node.lane
+                let point = NSPoint(x: CGFloat(8 + lane * 9),
+                                    y: height - CGFloat(index * 38 + 19))
+                click(point, in: window)
+                XCTAssertTrue(selection.expanded.contains(rows[index].id),
+                              "Diamond in lane \(lane) must open its own worktree")
+                click(point, in: window)
+                XCTAssertFalse(selection.expanded.contains(rows[index].id))
+                let badge = NSPoint(x: 70, y: point.y)
+                click(badge, in: window)
+                XCTAssertTrue(selection.expanded.contains(rows[index].id),
+                              "The worktree label must toggle the same details as its diamond")
+                click(badge, in: window)
+                XCTAssertFalse(selection.expanded.contains(rows[index].id))
+            }
+        }
+    }
+
+    func testShortCommitHashCopiesWithoutExpandingDetails() {
+        let selection = GraphSelection()
+        let fullHash = String(repeating: "a", count: 40)
+        let commit = GitStatusModel.RecentCommit(
+            hash: fullHash, shortHash: "aaaaaaa", subject: "Unchanged commit",
+            author: "Dev", date: .now, parentHashes: [],
+            references: [], files: []
+        )
+        let height: CGFloat = 160
+        let window = hostHistory([commit], selection: selection, height: height)
+        defer { window.close() }
+        click(NSPoint(x: 62, y: height - 29), in: window)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), fullHash)
+        XCTAssertTrue(selection.expanded.isEmpty,
+                      "Copying the hash must not implicitly expand commit details")
+    }
+
     func testCompositeBranchSegmentsCopyAndUseTheirOwnMenus() throws {
         let selection = GraphSelection()
         let commit = GitStatusModel.RecentCommit(
@@ -257,9 +339,9 @@ final class RecentCommitsViewTests: XCTestCase {
         let localMenu = String(localized: "Rename Branch…", table: "Git")
         let remoteMenu = String(localized: "Delete Remote Branch…", table: "Git")
         for (name, x, expected, excluded) in [
-            ("main", CGFloat(65), localMenu, remoteMenu),
-            ("origin/main", CGFloat(103), remoteMenu, localMenu),
-            ("upstream/main", CGFloat(141), remoteMenu, localMenu),
+            ("main", CGFloat(52), localMenu, remoteMenu),
+            ("origin/main", CGFloat(87), remoteMenu, localMenu),
+            ("upstream/main", CGFloat(119), remoteMenu, localMenu),
         ] {
             let point = NSPoint(x: x, y: height - 12)
             click(point, in: window)
@@ -701,7 +783,7 @@ final class RecentCommitsViewTests: XCTestCase {
             let window = hostHistory([commit], selection: selection, height: height)
             defer { window.close() }
             let event = try XCTUnwrap(NSEvent.mouseEvent(
-                with: .rightMouseDown, location: NSPoint(x: 70, y: height - 12),
+                with: .rightMouseDown, location: NSPoint(x: 50, y: height - 12),
                 modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil, eventNumber: 0,
                 clickCount: 1, pressure: 1))
@@ -739,6 +821,233 @@ final class RecentCommitsViewTests: XCTestCase {
         click(point, in: window)
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), alias.name)
         XCTAssertTrue(selection.expanded.isEmpty)
+    }
+
+    func testLongWorktreeBranchBadgeDoesNotObscureTheTitleInNarrowSidebar() throws {
+        let branch = "feature/" + String(repeating: "极长的分支名称-long-name-", count: 10)
+        let head = String(repeating: "a", count: 40)
+        let tree = GitStatusModel.WorktreeChanges(
+            path: "/Users/fixture/worktrees/very-long-worktree-name",
+            branch: branch, headOID: head,
+            entries: [.init(path: "edit.txt", staged: ".", unstaged: "M")],
+            isCurrent: false
+        )
+        let commit = GitStatusModel.RecentCommit(
+            hash: head, shortHash: "aaaaaaa", subject: "Base",
+            author: "Tester", date: .now, parentHashes: [],
+            references: [.init(kind: .currentBranch, name: "main")], files: []
+        )
+        let rows = GitStatusModel.graphCommits([commit], stashes: [], worktrees: [tree])
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            for (width, scale) in [(CGFloat(180), CGFloat(0.8)),
+                                   (CGFloat(260), CGFloat(1)),
+                                   (CGFloat(260), CGFloat(1.6)),
+                                   (CGFloat(400), CGFloat(2))] {
+                let window = hostHistory(rows, selection: GraphSelection(),
+                                         width: width, height: 175, fontScale: scale)
+                window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+                settle()
+                let layout = CommitGraphLayout(commits: rows)
+                let spacing = CommitGraphRails.spacing(
+                    lanes: layout.laneCount, viewportWidth: width, scale: scale)
+                let gutter = CommitGraphRails.gutter(
+                    lanes: layout.laneCount, spacing: spacing, scale: scale)
+                let badge = RecentCommitsView.worktreeBadgeWidth(
+                    branch, viewportWidth: width, gutter: gutter, scale: scale)
+                XCTAssertLessThanOrEqual(badge, 112 * scale)
+                XCTAssertGreaterThanOrEqual(badge, 18 * scale)
+                let shortBadge = RecentCommitsView.worktreeBadgeWidth(
+                    "main", viewportWidth: width, gutter: gutter, scale: scale)
+                XCTAssertLessThanOrEqual(shortBadge, badge,
+                                         "Short branches should use less space than long ones")
+                if width >= 260, scale <= 1.6 {
+                    XCTAssertLessThanOrEqual(shortBadge, 62 * scale,
+                                             "The 'main' label must not expand into a long empty pill")
+                    XCTAssertGreaterThan(shortBadge, 18 * scale,
+                                         "Common sidebar sizes must still display the short branch name")
+                }
+                XCTAssertLessThanOrEqual(badge + gutter + 64 * scale + 24 * scale,
+                                         max(width, gutter + 18 * scale + 88 * scale) + 1,
+                                         "Badge must not crowd out the title at \(width)pt / \(scale)x")
+                XCTAssertFalse(horizontallyScrollableViews(in: window.contentView!).contains {
+                    $0.contentView.bounds.height > 60 * scale
+                        && ($0.documentView?.frame.width ?? 0) > $0.contentView.bounds.width + 10
+                }, "Worktree header must not become a horizontally scrolling row")
+                window.close()
+            }
+        }
+    }
+
+    func testWorktreeDisplayPathsStayUniqueWithSameCheckoutDirectoryNames() {
+        let paths = [
+            "/Users/test/A/shared",
+            "/Users/test/B/shared",
+            "/Users/test/C/one/shared",
+            "/Users/test/D/one/shared",
+            "/Users/test/独特工作树",
+        ]
+        let labels = paths.map { RecentCommitsView.worktreeDisplayPath($0, among: paths) }
+        XCTAssertEqual(labels.count, Set(labels).count)
+        XCTAssertEqual(labels[0], "A/shared")
+        XCTAssertEqual(labels[1], "B/shared")
+        XCTAssertEqual(labels[2], "C/one/shared")
+        XCTAssertEqual(labels[3], "D/one/shared")
+        XCTAssertEqual(labels[4], "独特工作树")
+        XCTAssertEqual(RecentCommitsView.worktreeDisplayPath("/Users/test/B/shared",
+                         among: ["/Users/test/B/shared"]), "shared")
+    }
+
+    func testWorktreeConflictStatusAlwaysUsesUInTreeAndList() {
+        let conflicts: [(Character, Character)] = [
+            ("U", "U"), ("A", "A"), ("D", "D"), ("A", "U"), ("U", "D")
+        ]
+        for (index, status) in conflicts.enumerated() {
+            let entry = GitStatusModel.Entry(
+                path: "conflict-\(index).txt", staged: status.0,
+                unstaged: status.1, isConflict: true
+            )
+            XCTAssertEqual(RecentCommitsView.worktreeDisplayStatus(entry, staged: true), "U")
+            XCTAssertEqual(RecentCommitsView.worktreeDisplayStatus(entry, staged: false), "U")
+        }
+        let modified = GitStatusModel.Entry(path: "modified", staged: "R", unstaged: "M")
+        XCTAssertEqual(RecentCommitsView.worktreeDisplayStatus(modified, staged: true), "R")
+        XCTAssertEqual(RecentCommitsView.worktreeDisplayStatus(modified, staged: false), "M")
+    }
+
+    func testGraphBadgeRowsStayCompactAcrossAppearanceAndFontSizes() throws {
+        let base = String(repeating: "a", count: 40)
+        let stash = GitStatusModel.Stash(
+            selector: "stash@{12}", oid: String(repeating: "b", count: 40),
+            message: "Kept changes", baseHash: base,
+            untrackedFilesHash: nil, author: "Test", date: .now
+        )
+        let worktree = GitStatusModel.WorktreeChanges(
+            path: "/tmp/team/feature/branch workspace",
+            branch: "feature/很长很长的分支名称-v2",
+            headOID: base,
+            entries: [.init(path: "file.txt", staged: "M", unstaged: "M")],
+            isCurrent: false
+        )
+        let commit = GitStatusModel.RecentCommit(
+            hash: base, shortHash: "aaaaaaa", subject: "Base commit is readable",
+            author: "Test", date: .now, parentHashes: [],
+            references: [
+                .init(kind: .currentBranch, name: "main"),
+                .init(kind: .remoteBranch, name: "origin/main"),
+                .init(kind: .tag, name: "v12.34.56"),
+            ], files: []
+        )
+        let rows = GitStatusModel.graphCommits(
+            [commit], stashes: [stash], worktrees: [worktree]
+        )
+        XCTAssertEqual(rows.count, 3)
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            for (width, scale) in [
+                (CGFloat(120), CGFloat(0.8)),
+                (CGFloat(180), CGFloat(1)),
+                (CGFloat(260), CGFloat(1.6)),
+                (CGFloat(400), CGFloat(2)),
+                (CGFloat(400), CGFloat(1)),
+            ] {
+                let window = hostHistory(
+                    rows, selection: GraphSelection(),
+                    width: width, height: 210, fontScale: scale, remotes: ["origin"]
+                )
+                window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+                settle()
+                XCTAssertFalse(
+                    horizontallyScrollableViews(in: window.contentView!).contains {
+                        $0.contentView.bounds.height > 60 * scale
+                            && ($0.documentView?.frame.width ?? 0)
+                                > $0.contentView.bounds.width + 10
+                    },
+                    "Badges must not scroll the whole graph at \(width)pt, \(scale)x"
+                )
+                let graph = CommitGraphLayout(commits: rows)
+                let worktreeIndex = try XCTUnwrap(rows.firstIndex { $0.worktree != nil })
+                let headIndex = try XCTUnwrap(rows.firstIndex {
+                    $0.hash == base && $0.worktree == nil && $0.stash == nil
+                })
+                XCTAssertEqual(graph.rows[worktreeIndex].node.color,
+                               graph.rows[headIndex].node.color,
+                               "Badges cannot change node-to-HEAD color")
+                window.close()
+            }
+        }
+    }
+
+    func testGraphBadgesUseCompactSharedMetrics() {
+        XCTAssertEqual(RecentCommitsView.badgeHeight, 16)
+        XCTAssertEqual(RecentCommitsView.badgeIconSize, 16)
+        XCTAssertEqual(RecentCommitsView.badgeFontSize, 9)
+        XCTAssertEqual(RecentCommitsView.badgeHorizontalPadding, 4)
+    }
+
+    func testUncommittedWorktreeNodeHasSafeMenuAndNativeStageAwareFileActions() throws {
+        let head = String(repeating: "a", count: 40)
+        let worktree = GitStatusModel.WorktreeChanges(
+            path: "/private/tmp/另一个 worktree", branch: "topic/修改", headOID: head,
+            entries: [.init(path: "Scripts/更改.swift", staged: "M", unstaged: "M")],
+            isCurrent: false
+        )
+        let commit = GitStatusModel.RecentCommit(
+            hash: head, shortHash: String(head.prefix(7)), subject: "Base",
+            author: "Tester", date: .now, parentHashes: [],
+            references: [.init(kind: .currentBranch, name: "main")], files: []
+        )
+        let graph = GitStatusModel.graphCommits([commit], stashes: [], worktrees: [worktree])
+        let node = try XCTUnwrap(graph.first)
+        XCTAssertEqual(node.worktree?.path, worktree.path)
+        XCTAssertEqual(graph.count, 2)
+        XCTAssertTrue(CommitGraphLayout(commits: graph).rows[0].links.count > 0)
+        XCTAssertTrue(RecentCommitsView.nodeHelp(node, inHeadHistory: false).contains(worktree.path))
+        XCTAssertFalse(RecentCommitsView.nodeHelp(node, inHeadHistory: false).contains("worktree:" + worktree.path))
+
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            for mode in [GitViewMode.list, .tree] {
+                let selection = GraphSelection()
+                let height: CGFloat = 380
+                var opened: [(path: String, file: String, staged: Bool)] = []
+                let window = hostHistory(
+                    graph, selection: selection, width: 430, height: height,
+                    viewMode: mode,
+                    openWorktreeDiff: { tree, entry, staged in
+                        opened.append((tree.path, entry.path, staged))
+                    }
+                )
+                window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+                settle()
+                let menuEvent = try XCTUnwrap(NSEvent.mouseEvent(
+                    with: .rightMouseDown, location: NSPoint(x: 220, y: height - 12),
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                    clickCount: 1, pressure: 1
+                ))
+                let titles = try XCTUnwrap(window.contentView?.menu(for: menuEvent)).items.map(\.title)
+                XCTAssertTrue(titles.contains(String(localized: "Copy Worktree Path", table: "Git")))
+                XCTAssertFalse(titles.contains(String(localized: "Checkout Commit…", table: "Git")))
+                XCTAssertFalse(titles.contains(String(localized: "Reset Current Branch to Commit…", table: "Git")))
+                XCTAssertFalse(titles.contains(String(localized: "Apply Stash…", table: "Git")))
+
+                click(NSPoint(x: 245, y: height - 19), in: window)
+                XCTAssertTrue(selection.expanded.contains(node.id))
+                let row = TreeRowStyle.rowHeight(1)
+                // Staged header + first file row. Tree mode adds a folder
+                // parent for Scripts; its nested row is one step below.
+                let stagedFileY = height - 38 - row - (mode == .tree ? row : 0) - row / 2
+                click(NSPoint(x: 255, y: stagedFileY), in: window)
+                XCTAssertTrue(opened.contains {
+                    $0.path == worktree.path && $0.file == "Scripts/更改.swift" && $0.staged
+                }, "Staged diff must target the source checkout, not the displayed repository")
+                let unstagedFileY = height - 38 - 3 * row
+                    - (mode == .tree ? 2 * row : 0) - row / 2
+                click(NSPoint(x: 255, y: unstagedFileY), in: window)
+                XCTAssertTrue(opened.contains {
+                    $0.path == worktree.path && $0.file == "Scripts/更改.swift" && !$0.staged
+                }, "Working changes must not silently open the staged version")
+                window.close()
+            }
+        }
     }
 
     func testStashIsANodeInTheSameGraphWithOnlyStashActions() throws {

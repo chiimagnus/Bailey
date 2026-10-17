@@ -1687,6 +1687,23 @@ struct GitPanel: View {
                             canActOnStash: !model.isBusy && model.canUseCurrentStashes,
                             stashAction: { stash, action in
                                 presentStashDialog(stash, action: action)
+                            },
+                            openWorktreeDiff: { worktree, entry, staged in
+                                guard let project, manager.selectedProject === project,
+                                      let context = project.panelContext,
+                                      project.matchesPanelTarget(context.identity),
+                                      model.matchesPanelTarget(context.identity),
+                                      model.canUseCurrentStatus,
+                                      model.graphCommits.contains(where: {
+                                          $0.worktree?.path == worktree.path
+                                              && $0.worktree?.entries.contains(entry) == true
+                                      })
+                                else { return }
+                                manager.openDiff(
+                                    repoRoot: worktree.path, path: entry.path,
+                                    staged: staged, untracked: entry.isUntracked,
+                                    origPath: entry.diffOriginalPath(staged: staged)
+                                )
                             }
                         )
                         .frame(maxWidth: .infinity)
@@ -1812,11 +1829,7 @@ struct GitPanel: View {
             openDiff: {
                 guard model.isCurrent(entry) else { return }
                 var diffEntry = entry
-                if kind == .unstaged && (entry.staged == "R" || entry.staged == "C") {
-                    // A staged rename/copy's unstaged side compares the
-                    // destination in the index with that same worktree path.
-                    diffEntry.origPath = nil
-                }
+                diffEntry.origPath = entry.diffOriginalPath(staged: kind == .staged)
                 openDiff(diffEntry, kind == .staged)
             },
             openFile: { openIfPossible(entry) },

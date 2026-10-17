@@ -41,6 +41,11 @@ final class GitStatusModel {
         var isWorktreeRename: Bool { unstaged == "R" && origPath != nil }
         var isWorktreeCopy: Bool { unstaged == "C" && origPath != nil }
 
+        /// The unstaged half of an indexed rename/copy compares the index
+        /// destination with the working destination, not the pre-rename path.
+        func diffOriginalPath(staged: Bool) -> String? {
+            !staged && (self.staged == "R" || self.staged == "C") ? nil : origPath
+        }
     }
 
     typealias FileDecoration = TreeDisplayModel.Status
@@ -223,6 +228,16 @@ final class GitStatusModel {
         )
     }
 
+    /// Working-tree state is not a Git object. Its identity is the checkout
+    /// path, never a branch name or a fabricated commit hash.
+    nonisolated struct WorktreeChanges: Equatable, Sendable {
+        let path: String
+        let branch: String?
+        let headOID: String?
+        let entries: [Entry]
+        let isCurrent: Bool
+    }
+
     nonisolated struct RecentCommit: Identifiable, Equatable, Sendable {
         nonisolated struct Reference: Identifiable, Hashable, Sendable {
             enum Kind: String, Sendable {
@@ -250,7 +265,7 @@ final class GitStatusModel {
             }
         }
 
-        var id: String { stash?.id ?? hash }
+        var id: String { worktree.map { "worktree:" + $0.path } ?? stash?.id ?? hash }
         let hash: String
         let shortHash: String
         let subject: String
@@ -260,6 +275,7 @@ final class GitStatusModel {
         let references: [Reference]
         let files: [FileChange]
         var stash: Stash? = nil
+        var worktree: WorktreeChanges? = nil
 
         var relativeDate: String {
             date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated))
@@ -432,6 +448,8 @@ final class GitStatusModel {
     private(set) var isLoadingMoreCommits = false
     private(set) var repositoryOperation: String?
     private(set) var stashes: [Stash] = []
+    private(set) var currentWorktree: WorktreeChanges?
+    private(set) var otherWorktrees: [WorktreeChanges] = []
 
     nonisolated enum StashFilesState: Equatable, Sendable {
         case loading
@@ -440,10 +458,19 @@ final class GitStatusModel {
     }
 
     private(set) var stashFilesByOID: [String: StashFilesState] = [:]
-    var graphCommits: [RecentCommit] { Self.graphCommits(recentCommits, stashes: stashes) }
+    var graphCommits: [RecentCommit] {
+        Self.graphCommits(
+            recentCommits, stashes: stashes,
+            worktrees: ([currentWorktree].compactMap { $0 } + otherWorktrees)
+        )
+    }
 
-    /// A stash has several real parents, but the graph follows only its base commit.
-    nonisolated static func graphCommits(_ commits: [RecentCommit], stashes: [Stash]) -> [RecentCommit] {
+    /// A stash follows its base commit; each dirty checkout follows its own
+    /// HEAD, not another checkout's current branch.
+    nonisolated static func graphCommits(
+        _ commits: [RecentCommit], stashes: [Stash],
+        worktrees: [WorktreeChanges] = []
+    ) -> [RecentCommit] {
         let positions = Dictionary(uniqueKeysWithValues: commits.enumerated().map {
             ($0.element.hash, $0.offset)
         })
@@ -462,6 +489,19 @@ final class GitStatusModel {
                 subject: stash.message, author: stash.author, date: stash.date,
                 parentHashes: [stash.baseHash], references: [], files: [], stash: stash
             ), at: entry.position)
+        }
+        for worktree in worktrees.filter({ !$0.entries.isEmpty })
+            .sorted(by: { $0.path > $1.path }) {
+            let at = worktree.headOID.flatMap { oid in
+                graph.firstIndex { $0.hash == oid && $0.stash == nil && $0.worktree == nil }
+            } ?? 0
+            graph.insert(RecentCommit(
+                hash: "worktree:" + worktree.path, shortHash: "",
+                subject: String(localized: "Uncommitted Changes", table: "Git"),
+                author: "", date: .distantPast,
+                parentHashes: worktree.headOID.map { [$0] } ?? [],
+                references: [], files: [], worktree: worktree
+            ), at: at)
         }
         return graph
     }
@@ -2795,6 +2835,8 @@ final class GitStatusModel {
         hasMoreRecentCommits = false
         isLoadingMoreCommits = false
         stashes = []
+        currentWorktree = nil
+        otherWorktrees = []
     }
 
     private func apply(_ loadResult: StatusLoadResult) {
@@ -2858,6 +2900,12 @@ final class GitStatusModel {
         repositoryOperation = result.repositoryOperation
         topLevel = result.topLevel
         repositoryIdentity = result.topLevel
+        currentWorktree = WorktreeChanges(
+            path: result.topLevel,
+            branch: result.branch == "detached HEAD" ? nil : result.branch,
+            headOID: result.headOID, entries: result.entries, isCurrent: true
+        )
+        if let worktrees = result.worktrees { otherWorktrees = worktrees }
         if let core = result.coreMetadata {
             branches = core.branches
             refsByName = core.refsByName
@@ -2955,6 +3003,7 @@ final class GitStatusModel {
         var lineTotals: StatusLineTotals?
         var history: StatusHistory?
         var stashes: [Stash]?
+        var worktrees: [WorktreeChanges]?
 
         // A missing optional query must preserve its last readable result in
         // the tab cache, without treating that copy as freshly verified.
@@ -2964,6 +3013,7 @@ final class GitStatusModel {
             if snapshot.coreMetadata == nil { snapshot.coreMetadata = previous.coreMetadata }
             if snapshot.history == nil { snapshot.history = previous.history }
             if snapshot.stashes == nil { snapshot.stashes = previous.stashes }
+            if snapshot.worktrees == nil { snapshot.worktrees = previous.worktrees }
             if !snapshot.ignoredLoaded, previous.ignoredLoaded {
                 snapshot.ignoredLoaded = true
                 snapshot.ignoredPaths = previous.ignoredPaths
@@ -3229,8 +3279,121 @@ final class GitStatusModel {
         } else {
             result.lineTotals = .unavailable
         }
+        if kind == .full {
+            let worktrees = await loadOtherWorktrees(
+                in: resolvedRoot, backend: backend, deadline: deadline
+            )
+            if worktrees.complete { result.worktrees = worktrees.worktrees }
+            if !worktrees.complete, result.detailError == nil {
+                result.detailError = String(
+                    localized: "Unable to read every worktree status.", table: "Git"
+                )
+            }
+        }
         outcome = result.detailError == nil ? "complete" : "degraded"
         return .repository(result)
+    }
+
+
+    /// A checkout path may contain spaces, Unicode or newlines. Porcelain -z
+    /// separates fields and records without quoting any path contents.
+    nonisolated struct WorktreeLocation: Equatable, Sendable {
+        let path: String
+        let headOID: String?
+        let branch: String?
+    }
+
+    nonisolated static func parseWorktreeList(_ output: String) -> [WorktreeLocation]? {
+        guard output.hasSuffix("\0\0") else { return nil }
+        var worktrees: [WorktreeLocation] = []
+        var path: String?
+        var headOID: String?
+        var branch: String?
+        var hasHead = false
+        var skip = false
+        for field in output.split(separator: "\0", omittingEmptySubsequences: false) {
+            if field.isEmpty {
+                if let path, hasHead, !skip,
+                   path.hasPrefix("/") || (path.count >= 3 && path.first?.isLetter == true
+                                           && path.dropFirst().hasPrefix(":/")) {
+                    worktrees.append(WorktreeLocation(path: path, headOID: headOID, branch: branch))
+                }
+                path = nil
+                headOID = nil
+                branch = nil
+                hasHead = false
+                skip = false
+            } else if field.hasPrefix("worktree ") {
+                path = String(field.dropFirst("worktree ".count))
+            } else if field.hasPrefix("HEAD ") {
+                let oid = String(field.dropFirst("HEAD ".count))
+                guard (oid.count == 40 || oid.count == 64),
+                      oid.allSatisfy(\.isHexDigit) else { return nil }
+                headOID = oid.allSatisfy { $0 == "0" } ? nil : oid
+                hasHead = true
+            } else if field.hasPrefix("branch refs/heads/") {
+                branch = String(field.dropFirst("branch refs/heads/".count))
+            } else if field == "bare" || field.hasPrefix("prunable ") {
+                skip = true
+            }
+        }
+        return worktrees
+    }
+
+    /// An optional detail read, never a source of Git actions. Read external
+    /// worktrees through the selected workspace backend (including SSH).
+    private nonisolated static func loadOtherWorktrees(
+        in root: String, backend: WorkspaceBackend, deadline: Date
+    ) async -> (worktrees: [WorktreeChanges], complete: Bool) {
+        let remaining = deadline.timeIntervalSinceNow
+        guard remaining > 0 else { return ([], false) }
+        let list = await GitCommandExecution.run(
+            ["worktree", "list", "--porcelain", "-z"],
+            in: root, timeout: remaining, backend: backend
+        )
+        guard list.status == 0,
+              let locations = parseWorktreeList(list.stdout) else { return ([], false) }
+        let current = (root as NSString).standardizingPath
+        let others = locations.filter { ($0.path as NSString).standardizingPath != current }
+        let statusArguments = ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]
+        let commandSets = others.map { ["-C", $0.path] + statusArguments }
+        let batched = await prefetchedSnapshotCommands(
+            in: root, argumentSets: commandSets, discoverRoot: false,
+            backend: backend, deadline: deadline
+        )
+        var loaded: [WorktreeChanges] = []
+        var complete = true
+        for (location, args) in zip(others, commandSets) {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { complete = false; break }
+            let run: (status: Int32, stdout: String, stderr: String)
+            if backend is LocalWorkspaceBackend {
+                run = await GitCommandExecution.run(
+                    args, in: root, timeout: remaining, backend: backend
+                )
+            } else {
+                run = batched[args.joined(separator: " ")] ?? (-1, "", "")
+            }
+            guard run.status == 0 else {
+                complete = false
+                continue
+            }
+            let state = parseStatus(run.stdout)
+            let branch = state.branch == "detached HEAD" ? nil : state.branch
+            // A checkout may have moved its HEAD during this read; never
+            // connect its changes to an out-of-date ref from the first query.
+            guard state.headOID == location.headOID, branch == location.branch else {
+                complete = false
+                continue
+            }
+            if !state.entries.isEmpty {
+                loaded.append(WorktreeChanges(
+                    path: location.path, branch: branch, headOID: state.headOID,
+                    entries: state.entries, isCurrent: false
+                ))
+            }
+        }
+        return (loaded, complete)
     }
 
     private nonisolated static func prefetchedSnapshotCommands(
@@ -3239,9 +3402,9 @@ final class GitStatusModel {
     ) async -> [String: (status: Int32, stdout: String, stderr: String)] {
         guard !(backend is LocalWorkspaceBackend), !argumentSets.isEmpty else { return [:] }
         let tag = UUID().uuidString
-        let commands = argumentSets.map { args in
+        let commands = argumentSets.enumerated().map { index, args in
             (
-                name: args.joined(separator: " "),
+                name: "command-\(index)",
                 command: "env GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 LC_ALL=C git "
                     + args.map(RemoteCommands.quote).joined(separator: " ") + " 2>&1"
             )
@@ -3269,8 +3432,10 @@ final class GitStatusModel {
         else { return [:] }
 
         var answers: [String: (status: Int32, stdout: String, stderr: String)] = [:]
-        for (name, batched) in RemoteCommands.parseBatch(result.stdout, tag: tag) {
-            answers[name] = (
+        let parsed = RemoteCommands.parseBatch(result.stdout, tag: tag)
+        for (index, args) in argumentSets.enumerated() {
+            guard let batched = parsed["command-\(index)"] else { continue }
+            answers[args.joined(separator: " ")] = (
                 batched.status, String(decoding: batched.stdout, as: UTF8.self), ""
             )
         }

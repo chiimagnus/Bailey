@@ -1395,6 +1395,66 @@
         }
       }
     },
+    "Uncommitted Changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未提交更改"
+          }
+        }
+      }
+    },
+    "Copy Worktree Path" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制工作树路径"
+          }
+        }
+      }
+    },
+    "Detached HEAD" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "游离 HEAD"
+          }
+        }
+      }
+    },
+    "Unable to read every worktree status." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取全部工作树状态。"
+          }
+        }
+      }
+    },
+    "Open Staged Diff" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开暂存区差异"
+          }
+        }
+      }
+    },
+    "Open Working Changes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开工作区更改"
+          }
+        }
+      }
+    },
     "No changed files" : {},
     "No changes" : {
       "localizations" : {
