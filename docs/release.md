@@ -31,6 +31,8 @@ Makefile 校验版本、凭据和输出路径，构建 Release，通过 `ditto` 
 
 Tag、工程版本、App 版本、Release 标题和 ZIP 文件名保持一致。上传失败时先检查实际已有 Release 与附件，再按授权恢复，不自动重复发布。
 
+已有版本可手动运行 `Release` 工作流，输入现有 `vX.Y.Z` Tag：它会在 GitHub Runner 上重新执行测试、导入签名身份、构建并复验 ZIP，但**不会再次创建或覆盖 GitHub Release**。正式 Tag 推送仍保留重复版本拦截。
+
 ## 分发边界
 
 当前通过 GitHub Releases 分发 Apple Silicon ZIP，更新沿 README 的下载与替换流程进行。新增渠道或应用内更新须同步维护此页与用户入口。
