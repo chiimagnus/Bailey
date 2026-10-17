@@ -31,15 +31,16 @@
 ### Step 1：平台 API 和当前代码核对，先写 Red
 
 - Apple [CFBundleDocumentTypes](https://developer.apple.com/documentation/bundleresources/information-property-list/cfbundledocumenttypes)、[LSHandlerRank](https://developer.apple.com/documentation/bundleresources/information-property-list/cfbundledocumenttypes/lshandlerrank)、[application(_:openFiles:)](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/application%28_%3Aopenfiles%3A%29) 和 [application(_:open:)](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/application%28_%3Aopen%3A%29) 是平台契约。**后者的 URL 列表明示排除已声明文档类型的文件，且会抑制 `openFile(s)`**；前者要对文件批次调用 `reply(toOpenOrPrint:)`。SwiftUI `WindowGroup` 的实际文件投递仍要独立进程验证，不能把 delegate 单测当作 Finder E2E。
-- 对照 [Zed DocumentTypes.plist](https://github.com/zed-industries/zed/blob/main/crates/zed/resources/info/DocumentTypes.plist) 的 `public.text`、`public.folder`、`Alternate`，与 [VS Code app.ts](https://github.com/microsoft/vscode/blob/main/src/vs/code/electron-main/app.ts) 的多 URL 批量接入；借鉴用户结果，不移植框架或 VS Code 偏好新窗的默认策略。
+- 对照 [Zed DocumentTypes.plist](https://github.com/zed-industries/zed/blob/main/crates/zed/resources/info/DocumentTypes.plist)：其通用 `public.text`、`public.folder` 用 `Alternate`，还有**第二组旧式扩展名声明（`CFBundleTypeOSTypes = ****`、`LSHandlerRank = Default`）**，并不意味着 Bailey 应复制这些过时通配规则或提升默认优先级。Apple [InfoPlist 文档类型说明](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html) 指出使用 `LSItemContentTypes` 时旧式扩展名／OSType 不再生效。VS Code [macOS 打开文件回调](https://github.com/microsoft/vscode/blob/main/src/vs/code/electron-main/app.ts) 对多事件短暂聚合、NFC 规范化并显式 `preferNewWindow: true`；此窗口选择是 VS Code 产品策略，不应盲从。
 - 首先证明构建包无文档类型注册，然后用进程内可触发的**实际 App delegate → P1 窗口管理者**路径做 Red 测试：一个文件、多文件与目录；已有标签、不同窗口、待恢复请求；测试最终窗口与内容，而非仅断言方法调用计数。
 
 ### Step 2：最小实现和明确的关联试验
 
-1. 在唯一 Info.plist 声明 **文本／源代码、图片、目录**的合适公共 Uniform Type Identifier；角色只承诺现有 TextKit 文本编辑与图片预览；各项均 `LSHandlerRank = Alternate`。未知扩展名与无后缀文本先验证公共类型的实际 Finder 覆盖，**不要预先用 `public.data` 宣称能处理所有文件**，或搬运数十个过时后缀。系统选择 UI 不支持的类型仍可通过显式打开操作验证，但要说清候选限制。
-2. 对已声明 `CFBundleDocumentTypes` 的普通 Finder 文件，优先在 App delegate 实现 `application(_:openFiles:)`，将文件名形成的本机 URL 批次转给 P1 路由，依真实请求结果调用 `reply(toOpenOrPrint:)`（接受、失败、取消分别明确）；冷启排队时不能抢先把未实际接收的失败报告成成功。使用真正 Finder／Dock／`open -a` 验证接收层；若 SwiftUI 场景接管了文档事件，采用测试证明有效的**唯一入口**并删除无用回调。不可将 `application(_:open:)` 与 `openFile(s)` 叠加做万能兜底，不能靠全局事件 ID 黑名单为多次接收打补丁。
-3. 原 `openInBailey`、Services 所需 plist 键、`applicationShouldTerminate` 和主题初始化都必须保留；只改确实归本任务的业务代码。文档类型图标键不可引用不存在的 `Document.icns`；不引入单独 document filetype 图标资产。
-4. 不把 `lsregister -f`、重置 Launch Services 数据库、修改用户默认文件打开程序当作正常应用安装步骤。真实包签名和候选查验失败时追实际构建、系统缓存／版本及 Bundle ID，再定位根因。
+1. 在唯一 Info.plist 声明**TextKit 支持的文本／源码、现有图片预览、目录**适用的 Uniform Type Identifiers 和 `CFBundleTypeRole`；一律使用 `LSHandlerRank = Alternate`，不抢默认程序。核对 macOS 实际 UTI 归属，不把 `public.text` 当成所有未知后缀或无扩展名的万能匹配；优先少量宽泛公共类型，而不是逐项复制 Zed 旧式扩展名列表。
+2. **未知／无扩展名文件是明确验收场景，不是无限扩注册的许可。** 用真实 Finder 的「推荐应用／全部应用」、系统 `open -a` 和实际 UTI 识别观察覆盖范围；只有存在明确且必须解决的缺口时，才以最小副作用比较 `public.data` 或自有 UTI 的必要性。不能为了出现在 Finder 候选中把 Bailey 宣称为所有二进制数据的默认编辑器，也不修改系统默认关联。
+3. 对已声明 `CFBundleDocumentTypes` 的普通 Finder 文件，优先在 App delegate 实现 `application(_:openFiles:)`，将文件名形成的本机 URL 批次转给 P1 路由，按 AppKit 契约 `reply(toOpenOrPrint:)`，避免在窗口尚未准备、请求实际未交付时抢答成功。**用真正 Finder／Dock／`open -a` 分别验证**：SwiftUI `WindowGroup` 是否先消费事件、冷启与已运行时是否一致、文件夹是否同样进入正确入口；若证据表明 App delegate 并非实际接收者，则只采用被真实测试证实的有效入口并删除无效回调。不可将 `application(_:open:)` 与 `openFile(s)` 叠加做万能兜底，不靠全局 eventID 黑名单处理重复派发。
+4. 原 `openInBailey`、Services 所需 plist 键、`applicationShouldTerminate` 和主题初始化都必须保留；只改确实归本任务的业务代码。文档类型图标键不可引用不存在的 `Document.icns`；不引入单独 document filetype 图标资产。注意 VS Code 的 `open-file` 对文件名使用 NFC，Bailey 应验证文件系统两种 Unicode 规范的路径身份，而不是简单统一字符串后打开了另一个文件。
+5. 不把 `lsregister -f`、重置 Launch Services 数据库、修改用户默认文件打开程序当作正常安装步骤。真实包签名和候选查验失败时追实际构建、系统缓存／版本及 Bundle ID，再定位根因。**静态 `plutil` 和一个 AppKit delegate 单测不构成 Finder 候选与打开成功的证据。**
 
 ### Step 3：覆盖全部适用的系统路径、失败与兼容边界
 
@@ -47,10 +48,10 @@
 
 **必须另验的原生系统用户路径：**
 - Finder「打开方式」、Finder「显示简介」候选、文件拖 Dock 图标、`open -a Bailey /path/to/file`、多个文件连续请求与单批请求。比较当前和先前默认打开 App，Bailey 不能主动抢系统默认。
-- `swift`、`md`、`txt`、`json`、`py`、常见源代码后缀，PNG/JPEG/HEIC，未知后缀、无扩展名、隐藏文本、目录、PDF／二进制；分别记录是否能选择 Bailey、是否被系统投递、实际编辑／不可用结果，**不把「所有应用」与「推荐应用」混为一谈**。Finder 对文件夹的菜单形式由 macOS 决定，使用 Dock／系统命令另验目录处理。
+- `swift`、`md`、`txt`、`json`、`py`、常见源代码后缀，PNG/JPEG/HEIC，未知后缀、无扩展名、隐藏文本、目录、PDF／二进制：逐项记录 macOS 识别的 UTI、Finder「推荐／全部」候选、实际投递和内容结果，**不把系统候选可见性等同于可编辑**。核查多选列表中有不同 UTI 时是否丢项、包目录是否按 Folder 还是文档、文件夹 Finder 菜单因系统版本差异的实际行为。
 - App 未启动、在前台已开文件、后台已有不同窗、当前是 SSH 项目、最后一个窗口关闭、跨进程恢复第二个窗口后目标文件才出现、窗未 attach 时多文件并发到达；新系统入口不能制造重复 editor、错误 project 或多余 Shell。
 - 拒绝访问、失效软链、路径别名、Unicode／控制字符、文件被删除、读入时移除、多文件部分失败、文本超限、不可预览图片；应显示已有错误／不可用 UI 且不改源文件。
-- 当前支持 macOS 与最低 15.6、深／浅色、中／英文、安装后签名与运行，能够安全执行的逐项记录。**独立测试登录环境或同等真正隔离的签名实例**才可用于 Finder 的进程外实测：已有用户 Bailey 正在运行时，不能通过同 Bundle ID 的 `open` 意外操作用户会话；无法隔离则本项明确 blocked，低层回调测试不是完成证明。
+- 当前支持 macOS 与最低 15.6、深／浅色、中／英文、安装后签名与运行，能够安全执行的逐项记录。**首先检查 `--isolated-ui-test` 是否真的隔离目标窗口、工作区快照和文件关联；它不提供独立 Bundle ID，Launch Services 的按 Bundle ID 投递仍可能到用户在用的正式实例。**真实 Finder/Dock E2E 应在独立图形登录用户／测试主机或同等真正隔离的系统环境下执行；不能盲用 `open -a Bailey` 影响用户现有进程。无法安全隔离则记明确 blocked，不伪报完成。
 
 **Uncovered / Gate：** macOS 15.6 主机、进程外 Finder/Dock UI、真实签名、不同系统语言如缺条件，逐项列出环境、替代证据、用户风险和所需补验，未完成的强制 Finder 路径不得宣称已验收。资料可留在任务 note／后续阶段 audit，不事先创建 audit 文件。
 

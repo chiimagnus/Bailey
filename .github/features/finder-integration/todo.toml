@@ -11,7 +11,7 @@ note = ""
 
 [[tasks]]
 id = "P1-T2"
-title = "统一窗口路由和冷启动请求队列"
+title = "跨窗口复用与冷启动请求接入"
 status = "pending"
 plan = "plan-p1.md#p1-t2"
 commit = ""
@@ -43,7 +43,7 @@ note = ""
 
 [[tasks]]
 id = "P3-T3"
-title = "Files 本地目录导入与远端拖动修正"
+title = "Files 专用落点隔离与原生验收"
 status = "pending"
 plan = "plan-p3.md#p3-t3"
 commit = ""
