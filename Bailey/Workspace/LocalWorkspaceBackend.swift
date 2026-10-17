@@ -7,6 +7,27 @@ private nonisolated final class RunPipeData: @unchecked Sendable {
     var value = Data()
 }
 
+// A process can exit successfully without consuming its entire stdin.
+nonisolated final class ProcessStdinWriter: @unchecked Sendable {
+    private let completion = DispatchGroup()
+    private var writeError: Error?
+
+    init(data: Data, pipe: Pipe) {
+        completion.enter()
+        DispatchQueue.global(qos: .utility).async {
+            do { try pipe.fileHandleForWriting.write(contentsOf: data) }
+            catch { self.writeError = error }
+            try? pipe.fileHandleForWriting.close()
+            self.completion.leave()
+        }
+    }
+
+    func finish() -> Error? {
+        completion.wait()
+        return writeError
+    }
+}
+
 /// The Mac's own disk and process table. Wraps exactly the calls the panels
 /// made inline before the seam existed.
 ///
@@ -217,16 +238,13 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         let stderr = Pipe()
         process.standardOutput = stdout
         process.standardError = stderr
-        if let stdin {
-            let input = Pipe()
-            process.standardInput = input
-            try process.run()
-            try? input.fileHandleForWriting.write(contentsOf: stdin)
-            try? input.fileHandleForWriting.close()
-        } else {
-            process.standardInput = FileHandle.nullDevice
-            try process.run()
+        let input: Pipe? = stdin == nil ? nil : Pipe()
+        if let input, fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != 0 {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
+        process.standardInput = input ?? FileHandle.nullDevice
+        try process.run()
+        let writer = input.flatMap { pipe in stdin.map { ProcessStdinWriter(data: $0, pipe: pipe) } }
 
         // Drain both pipes on their own threads so a chatty child cannot
         // deadlock against our wait for it to exit.
@@ -252,6 +270,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         }
         readers.wait()
         process.waitUntilExit()
+        if let error = writer?.finish(), process.terminationStatus == 0 { throw error }
         return WorkspaceRunResult(
             status: process.terminationStatus,
             stdout: outData.value,

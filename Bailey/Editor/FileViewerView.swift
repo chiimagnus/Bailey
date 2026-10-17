@@ -56,7 +56,7 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored weak var editorView: NSView?
     @ObservationIgnored var editorCoordinator: SourceTextEditor.Coordinator?
 
-    private nonisolated static let maxTextBytes = 5 << 20
+    private nonisolated static let maxTextBytes = 8 << 20
     private nonisolated static let imageExtensions: Set<String> = [
         "png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp", "icns",
     ]
@@ -406,7 +406,8 @@ final class FileTab: nonisolated Identifiable {
     ) async throws -> (Data, String?) {
         let isImage = imageExtensions.contains((path as NSString).pathExtension.lowercased())
         let data = try await backend.read(path: path, maxBytes: isImage ? .max : maxTextBytes)
-        return (data, data.count <= maxTextBytes ? String(data: data, encoding: .utf8) : nil)
+        return (data, data.count <= maxTextBytes && !data.contains(0)
+            ? String(data: data, encoding: .utf8) : nil)
     }
 
     private static func loadedContent(path: String, data: Data, decoded: String?) -> LoadedContent {

@@ -211,12 +211,13 @@ final class FileTabTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        for count in [0, (5 << 20) - 1, 5 << 20, (5 << 20) + 1] {
+        let limit = 8 << 20
+        for count in [0, limit - 1, limit, limit + 1] {
             let path = root.appendingPathComponent("\(count).txt")
             try Data(repeating: 65, count: count).write(to: path)
             let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
             guard case .loading = file.content else { return XCTFail("init must remain lazy") }
-            if count <= 5 << 20 {
+            if count <= limit {
                 try await file.waitForText()
                 XCTAssertEqual(file.text.utf8.count, count)
             } else {
@@ -225,6 +226,27 @@ final class FileTabTests: XCTestCase {
                 XCTAssertEqual(reason, String(localized: "File is too large to open", table: "Workspace"))
             }
         }
+        let emoji = Data("👋".utf8)
+        let exactPath = root.appendingPathComponent("utf8-at-boundary.txt")
+        let exactBytes = Data(repeating: 65, count: limit - emoji.count) + emoji
+        try exactBytes.write(to: exactPath)
+        let exact = FileTab(path: exactPath.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await exact.waitForText()
+        XCTAssertEqual(Data(exact.text.utf8), exactBytes)
+
+        let overflowPath = root.appendingPathComponent("utf8-beyond-boundary.txt")
+        try (Data(repeating: 65, count: limit - emoji.count + 1) + emoji).write(to: overflowPath)
+        let overflow = FileTab(path: overflowPath.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        do { try await overflow.waitForText(); XCTFail("Exceeded UTF-8 byte capacity") } catch {}
+        guard case .unavailable = overflow.content else { return XCTFail("Expected size placeholder") }
+
+        let truncatedPath = root.appendingPathComponent("invalid-utf8-boundary.txt")
+        try (Data(repeating: 65, count: limit - 2) + emoji.prefix(2)).write(to: truncatedPath)
+        let truncated = FileTab(path: truncatedPath.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        do { try await truncated.waitForText(); XCTFail("Truncated UTF-8 cannot be decoded") } catch {}
+        guard case .unavailable(let invalidReason) = truncated.content else { return XCTFail("Expected binary placeholder") }
+        XCTAssertEqual(invalidReason, String(localized: "Binary file", table: "Workspace"))
+
         let missing = FileTab(path: root.appendingPathComponent("missing.txt").path,
                               backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         do { try await missing.waitForText(); XCTFail("Expected missing read failure") } catch {}
@@ -233,6 +255,61 @@ final class FileTabTests: XCTestCase {
         try Data("recovered".utf8).write(to: URL(fileURLWithPath: missing.path))
         try await missing.waitForText()
         XCTAssertEqual(missing.text, "recovered")
+    }
+
+    func testHundredThousandLineSwiftFileCanLoadAbovePreviousCapacity() async throws {
+        let source = (0..<100_000).map { row in
+            "let value_\(row) = \(row) // 中文 👋 edit undo find verify\n"
+        }.joined()
+        let data = Data(source.utf8)
+        XCTAssertGreaterThan(data.count, 5 << 20)
+        XCTAssertLessThan(data.count, 8 << 20)
+
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".swift")
+        try data.write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        XCTAssertEqual(Data(file.text.utf8), data)
+        file.autoSaveSuspendedForClose = true
+
+        let host = NSHostingView(rootView: FileViewerView(file: file))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        let deadline = Date().addingTimeInterval(10)
+        while mountedEditor(in: host) == nil, Date() < deadline {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        for position in [0, source.utf16.count / 2, source.utf16.count - 1, 0] {
+            editor.scrollRangeToVisible(NSRange(location: position, length: 0))
+            editor.layoutSubtreeIfNeeded()
+            let visible = try XCTUnwrap(editor.textLayoutManager.textViewportLayoutController.viewportRange)
+            let range = NSRange(visible, in: editor.textContentManager)
+            XCTAssertLessThanOrEqual(range.location, position)
+            XCTAssertGreaterThanOrEqual(NSMaxRange(range), position)
+        }
+
+        let appended = "let appended = \"中文 👋\"\n"
+        editor.insertText(appended, replacementRange: NSRange(location: source.utf16.count, length: 0))
+        editor.breakUndoCoalescing()
+        XCTAssertEqual(Data(file.text.utf8), data + Data(appended.utf8))
+        XCTAssertTrue(file.isDirty)
+        editor.undoManager?.undo()
+        XCTAssertEqual(Data(file.text.utf8), data)
+        XCTAssertFalse(file.isDirty)
+        editor.undoManager?.redo()
+        XCTAssertEqual(Data(file.text.utf8), data + Data(appended.utf8))
+        XCTAssertTrue(file.isDirty)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), data + Data(appended.utf8))
+        XCTAssertFalse(file.isDirty)
     }
 
     func testLocalSymbolicLinkUsesTargetContents() async throws {
@@ -259,8 +336,9 @@ final class FileTabTests: XCTestCase {
         let sizeReason = String(localized: "File is too large to open", table: "Workspace")
         for (name, data, expected) in [
             ("invalid.txt", Data([0xff, 0xfe, 0x00]), binaryReason),
+            ("embedded-nul.txt", Data([0x61, 0x00, 0x62]), binaryReason),
             ("invalid.png", Data([0xff, 0xfe, 0x00]), binaryReason),
-            ("oversized.png", Data(repeating: 0xff, count: (5 << 20) + 1), sizeReason),
+            ("oversized.png", Data(repeating: 0xff, count: (8 << 20) + 1), sizeReason),
         ] {
             let path = directory.appendingPathComponent(name)
             try data.write(to: path)
@@ -1270,7 +1348,7 @@ final class FileTabTests: XCTestCase {
         let largePath = "/fixture/\(UUID().uuidString).txt"
         let large = FileTab(
             path: largePath,
-            backend: EditorWorkspaceFixture(path: largePath, contents: Data(repeating: 0x41, count: 5 * 1024 * 1024 + 1)),
+            backend: EditorWorkspaceFixture(path: largePath, contents: Data(repeating: 0x41, count: (8 << 20) + 1)),
             workspaceIdentity: "ssh:fixture"
         )
         large.loadIfNeeded()

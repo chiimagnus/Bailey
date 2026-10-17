@@ -84,6 +84,79 @@ private actor LocalShellRunnerFixture: RemoteCommandRunner {
 }
 
 final class RemoteCommandsTests: XCTestCase {
+    func testLocalProcessClosedStdinReturnsStatusWithoutTerminatingHost() async throws {
+        let result = try await LocalWorkspaceBackend.shared.run(
+            argv: ["/bin/sh", "-c", "exit 52"], cwd: nil, env: nil,
+            stdin: Data(repeating: 0x41, count: 1 << 20), timeout: 5
+        )
+        XCTAssertEqual(result.status, 52)
+        do {
+            let ignored = try await LocalWorkspaceBackend.shared.run(
+                argv: ["/bin/sh", "-c", "exit 0"], cwd: nil, env: nil,
+                stdin: Data(repeating: 0x41, count: 1 << 20), timeout: 5
+            )
+            XCTAssertNotEqual(ignored.status, 0, "A successful exit cannot excuse dropped stdin bytes")
+        } catch {
+            XCTAssertFalse(error is CancellationError)
+        }
+    }
+
+    func testRemoteProcessClosedStdinReturnsErrorWithoutTerminatingHost() {
+        let result = ProcessRemoteCommandRunner.run(
+            sshPath: "/bin/sh", arguments: ["-c", "exit 52"],
+            stdin: Data(repeating: 0x41, count: 1 << 20), timeout: 5
+        )
+        XCTAssertEqual(result.status, 52)
+        let ignored = ProcessRemoteCommandRunner.run(
+            sshPath: "/bin/sh", arguments: ["-c", "exit 0"],
+            stdin: Data(repeating: 0x41, count: 1 << 20), timeout: 5
+        )
+        XCTAssertNotEqual(ignored.status, 0, "A successful exit cannot excuse dropped stdin bytes")
+    }
+
+    func testSSHBackendEnforcesByteLimitAndPreservesBinaryWrites() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture())
+        let limit = 8 << 20
+        for length in [0, limit - 1, limit, limit + 1] {
+            let path = root.appendingPathComponent("file' 中文 \(length).bin")
+            let bytes = Data(repeating: 0x41, count: length)
+            try bytes.write(to: path)
+            if length <= limit {
+                let received = try await backend.read(path: path.path, maxBytes: limit)
+                XCTAssertEqual(received, bytes)
+            } else {
+                do {
+                    _ = try await backend.read(path: path.path, maxBytes: limit)
+                    XCTFail("Remote read must reject maxBytes + 1")
+                } catch WorkspaceError.tooLarge {}
+            }
+        }
+        let target = root.appendingPathComponent("atomic' 二进制.bin")
+        try Data("old".utf8).write(to: target)
+        let replacement = Data([0x00, 0xFF, 0x0A, 0x80, 0x22, 0x27])
+        try await backend.write(path: target.path, data: replacement)
+        XCTAssertEqual(try Data(contentsOf: target), replacement)
+        let reloaded = try await backend.read(path: target.path, maxBytes: 6)
+        XCTAssertEqual(reloaded, replacement)
+        do {
+            _ = try await backend.read(path: root.appendingPathComponent("missing").path, maxBytes: limit)
+            XCTFail("Expected remote not-found failure")
+        } catch WorkspaceError.notFound {}
+
+        let failing = GitRootRunnerFixture()
+        let disconnected = SSHWorkspaceBackend(runner: failing)
+        await failing.set(255, output: "", error: "Disconnected")
+        do {
+            _ = try await disconnected.read(path: target.path, maxBytes: limit)
+            XCTFail("Connection loss must propagate")
+        } catch let error as RemoteCommandFailure {
+            XCTAssertEqual(error.status, 255)
+        }
+    }
+
     func testRemoteGitRootDistinguishesNonRepositoryAndSSHOrGitFailure() async throws {
         let runner = GitRootRunnerFixture()
         let backend = SSHWorkspaceBackend(runner: runner)

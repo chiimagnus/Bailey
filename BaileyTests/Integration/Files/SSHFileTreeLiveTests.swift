@@ -288,4 +288,81 @@ final class SSHFileTreeLiveTests: XCTestCase {
         }
         await cleanup()
     }
+
+    func testAuthorizedWindowsSSHFileTabCapacityAndBytePreservingSave() async throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
+            throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST to an explicitly authorized SSH test host")
+        }
+        let socket = "/tmp/bailey-cap-\(UUID().uuidString.prefix(8)).sock"
+        let runner = CountingLiveSSHRunner(host: host, socket: socket)
+        let backend = SSHWorkspaceBackend(runner: runner, timeout: 25)
+        let created = try await backend.run(
+            argv: ["mktemp", "-d", "/tmp/bailey-editor-cap-XXXXXX"],
+            cwd: nil, env: nil, stdin: nil, timeout: 25
+        )
+        XCTAssertEqual(created.status, 0, String(decoding: created.stderr, as: UTF8.self))
+        let root = String(decoding: created.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (root as NSString).deletingLastPathComponent == "/tmp",
+              (root as NSString).lastPathComponent.hasPrefix("bailey-editor-cap-") else {
+            throw WorkspaceError.notFound
+        }
+        func cleanup() async {
+            do { try await backend.delete(paths: [root]) }
+            catch { XCTFail("Could not clean up test-owned remote fixture: \(error)") }
+            do {
+                let exited = try await Task.detached {
+                    try ProcessRemoteCommandRunner.launch(
+                        sshPath: "/usr/bin/ssh",
+                        arguments: ["-S", socket, "-O", "exit", host], stdin: nil, timeout: 10
+                    )
+                }.value
+                XCTAssertEqual(exited.status, 0)
+            } catch { XCTFail("Could not close test-owned SSH socket: \(error)") }
+        }
+        do {
+            let limit = 8 << 20
+            let emoji = Data("👋".utf8)
+            let exact = Data(repeating: 0x41, count: limit - emoji.count) + emoji
+            let path = root + "/代码' boundary.swift"
+            print("EDITOR_CAP_LIVE beginning 8 MiB transfer")
+            try await backend.write(path: path, data: exact)
+            print("EDITOR_CAP_LIVE finished 8 MiB upload")
+            let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:\(host)")
+            try await file.waitForText()
+            print("EDITOR_CAP_LIVE finished 8 MiB download")
+            XCTAssertEqual(Data(file.text.utf8), exact)
+
+            var revised = file.text
+            revised.replaceSubrange(revised.startIndex...revised.startIndex, with: "Z")
+            file.text = revised
+            file.refreshDirtyState()
+            await file.save()
+            XCTAssertFalse(file.isDirty)
+            let onDisk = try await backend.read(path: path, maxBytes: limit)
+            XCTAssertEqual(onDisk, Data(file.text.utf8))
+            let reopened = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:\(host)")
+            try await reopened.waitForText()
+            XCTAssertEqual(reopened.text, revised)
+
+            let overflowing = root + "/too-large.swift"
+            try await backend.write(path: overflowing, data: exact + Data([0x21]))
+            let rejected = FileTab(path: overflowing, backend: backend, workspaceIdentity: "ssh:\(host)")
+            do { try await rejected.waitForText(); XCTFail("Remote 8 MiB + 1 must be rejected") }
+            catch {
+                guard case .unavailable = rejected.content else { return XCTFail("Expected capacity placeholder") }
+            }
+            let binaryPath = root + "/binary.swift"
+            try await backend.write(path: binaryPath, data: Data([0x41, 0x00, 0x42]))
+            let binary = FileTab(path: binaryPath, backend: backend, workspaceIdentity: "ssh:\(host)")
+            do { try await binary.waitForText(); XCTFail("NUL binary must be rejected") }
+            catch {
+                guard case .unavailable = binary.content else { return XCTFail("Expected binary placeholder") }
+            }
+        } catch {
+            await cleanup()
+            throw error
+        }
+        await cleanup()
+    }
 }
