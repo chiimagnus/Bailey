@@ -58,9 +58,19 @@ nonisolated struct CommitGraphLayout {
         var nodes = [Node?](repeating: nil, count: commits.count)
 
         var reservations: [(lane: Int, color: Int, first: Int, last: Int)] = []
-        // Stash display edges do not own the main commit's first-parent path.
-        let order = commits.indices.filter { commits[$0].stash == nil && commits[$0].worktree == nil }
-            + commits.indices.filter { commits[$0].stash != nil || commits[$0].worktree != nil }
+        // The checked-out HEAD owns the leftmost rail even when a newer
+        // unrelated branch tip precedes it in Git's date-ordered history.
+        let real = commits.indices.filter {
+            commits[$0].stash == nil && commits[$0].worktree == nil
+        }
+        let current = real.first { index in
+            commits[index].references.contains {
+                $0.kind == .currentBranch || $0.kind == .detachedHead
+            }
+        }
+        // Stashes retain their separate display lanes; dirty worktrees do not.
+        let order = (current.map { [$0] } ?? []) + real
+            + commits.indices.filter { commits[$0].stash != nil }
         for start in order where nodes[start] == nil {
             var path: [Int] = []
             var cursor = start
@@ -86,19 +96,24 @@ nonisolated struct CommitGraphLayout {
             while concurrent.contains(where: { $0.lane == lane }) { lane += 1 }
             let occupiedColors = Set(concurrent.map(\.color))
             let color: Int
-            if commits[start].worktree != nil {
-                // The attached checkout is a state of HEAD, not an independent
-                // branch. Reuse the real node's color instead of spending a
-                // new bright palette color on each dirty worktree.
-                color = commits[start].parentHashes.first
-                    .flatMap { positions[$0] }
-                    .flatMap { nodes[$0] }?.color ?? Self.unconnectedWorktreeColor
-            } else {
-                color = (0..<12).first { !occupiedColors.contains($0) }
-                    ?? reservations.count % 12
-            }
+            color = (0..<12).first { !occupiedColors.contains($0) }
+                ?? reservations.count % 12
             for index in path { nodes[index] = Node(lane: lane, color: color) }
             reservations.append((lane, color, start, end))
+        }
+
+        for index in commits.indices where commits[index].worktree != nil {
+            if let parentHash = commits[index].parentHashes.first,
+               let parentIndex = positions[parentHash], let parentNode = nodes[parentIndex] {
+                // A checkout's dirty state belongs on its actual HEAD rail.
+                nodes[index] = parentNode
+            } else {
+                let occupied = reservations.filter { $0.first <= index && index <= $0.last }
+                var lane = 0
+                while occupied.contains(where: { $0.lane == lane }) { lane += 1 }
+                nodes[index] = Node(lane: lane, color: Self.unconnectedWorktreeColor)
+                reservations.append((lane, Self.unconnectedWorktreeColor, index, index))
+            }
         }
 
         var graph = nodes.map { Row(node: $0!) }
@@ -114,6 +129,16 @@ nonisolated struct CommitGraphLayout {
                 let to = graph[parentIndex].node
                 let color = parentOffset == 0 ? from.color : to.color
                 let between = (index + 1)..<parentIndex
+
+                if commit.worktree != nil {
+                    let rail = Rail(lane: to.lane, color: to.color)
+                    graph[index].links.append(.outgoing(rail))
+                    graph[parentIndex].links.append(.incoming(rail))
+                    for intermediate in between {
+                        graph[intermediate].links.append(.through(rail))
+                    }
+                    continue
+                }
 
                 func clear(_ lane: Int) -> Bool {
                     occupied[lane]?.intersects(integersIn: between) != true

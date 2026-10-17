@@ -240,6 +240,86 @@ final class RecentCommitsViewTests: XCTestCase {
         }, "Many references must fold locally, not turn the graph into a scrolling table")
     }
 
+    func testCurrentAndFeatureUncommittedDiamondsAlignAndToggleInNativeGraph() throws {
+        typealias Commit = GitStatusModel.RecentCommit
+        let baseOID = String(repeating: "b", count: 40)
+        let featureOID = String(repeating: "f", count: 40)
+        let mainOID = String(repeating: "a", count: 40)
+        let commits: [Commit] = [
+            .init(hash: featureOID, shortHash: "fffffff", subject: "Feature tip",
+                  author: "Dev", date: .now, parentHashes: [baseOID],
+                  references: [.init(kind: .localBranch, name: "feature")], files: []),
+            .init(hash: mainOID, shortHash: "aaaaaaa", subject: "Main checkout",
+                  author: "Dev", date: .now, parentHashes: [baseOID],
+                  references: [.init(kind: .currentBranch, name: "main")], files: []),
+            .init(hash: baseOID, shortHash: "bbbbbbb", subject: "Shared ancestor",
+                  author: "Dev", date: .now, parentHashes: [],
+                  references: [], files: []),
+        ]
+        let worktrees = [
+            GitStatusModel.WorktreeChanges(
+                path: "/tmp/feature", branch: "feature", headOID: featureOID,
+                entries: [.init(path: "feature-file", staged: "M", unstaged: ".")],
+                isCurrent: false),
+            GitStatusModel.WorktreeChanges(
+                path: "/tmp/main", branch: "main", headOID: mainOID,
+                entries: [.init(path: "main-file", staged: ".", unstaged: "M")],
+                isCurrent: true),
+        ]
+        let rows = GitStatusModel.graphCommits(commits, stashes: [], worktrees: worktrees)
+        let graph = CommitGraphLayout(commits: rows)
+        let featureRow = try XCTUnwrap(rows.firstIndex { $0.hash == featureOID && $0.worktree == nil })
+        let mainRow = try XCTUnwrap(rows.firstIndex { $0.hash == mainOID && $0.worktree == nil })
+        XCTAssertEqual(graph.rows[mainRow].node.lane, 0)
+        XCTAssertEqual(graph.rows[featureRow].node.lane, 1)
+        for (tree, headRow) in [(worktrees[0], featureRow), (worktrees[1], mainRow)] {
+            let source = try XCTUnwrap(rows.firstIndex { $0.worktree?.path == tree.path })
+            XCTAssertEqual(graph.rows[source].node, graph.rows[headRow].node)
+        }
+        let height: CGFloat = 260
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let selection = GraphSelection()
+            let window = hostHistory(rows, selection: selection, width: 400, height: height)
+            defer { window.close() }
+            window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+            settle()
+            for tree in worktrees {
+                let index = try XCTUnwrap(rows.firstIndex { $0.worktree?.path == tree.path })
+                let lane = graph.rows[index].node.lane
+                let point = NSPoint(x: CGFloat(8 + lane * 9),
+                                    y: height - CGFloat(index * 38 + 19))
+                click(point, in: window)
+                XCTAssertTrue(selection.expanded.contains(rows[index].id),
+                              "Diamond in lane \(lane) must open its own worktree")
+                click(point, in: window)
+                XCTAssertFalse(selection.expanded.contains(rows[index].id))
+                let badge = NSPoint(x: 70, y: point.y)
+                click(badge, in: window)
+                XCTAssertTrue(selection.expanded.contains(rows[index].id),
+                              "The worktree label must toggle the same details as its diamond")
+                click(badge, in: window)
+                XCTAssertFalse(selection.expanded.contains(rows[index].id))
+            }
+        }
+    }
+
+    func testShortCommitHashCopiesWithoutExpandingDetails() {
+        let selection = GraphSelection()
+        let fullHash = String(repeating: "a", count: 40)
+        let commit = GitStatusModel.RecentCommit(
+            hash: fullHash, shortHash: "aaaaaaa", subject: "Unchanged commit",
+            author: "Dev", date: .now, parentHashes: [],
+            references: [], files: []
+        )
+        let height: CGFloat = 160
+        let window = hostHistory([commit], selection: selection, height: height)
+        defer { window.close() }
+        click(NSPoint(x: 62, y: height - 29), in: window)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), fullHash)
+        XCTAssertTrue(selection.expanded.isEmpty,
+                      "Copying the hash must not implicitly expand commit details")
+    }
+
     func testCompositeBranchSegmentsCopyAndUseTheirOwnMenus() throws {
         let selection = GraphSelection()
         let commit = GitStatusModel.RecentCommit(
