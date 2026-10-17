@@ -1536,6 +1536,13 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertTrue(model.graphCommits.contains {
             $0.worktree?.entries.contains(where: { $0.path == "new.txt" }) == true
         })
+        // A commit in the other checkout changes for-each-ref while main's HEAD
+        // stays unchanged. Failure must not mistake invalidated refs for clean status.
+        let moved = GitCommandExecution.run(
+            ["commit", "--allow-empty", "-qm", "other branch advanced"],
+            in: other.path, timeout: 10
+        )
+        XCTAssertEqual(moved.status, 0, moved.stderr)
         await backend.setWorktreeListUnavailable(true)
         model.refresh()
         try await wait { !model.isRefreshing }
@@ -1543,7 +1550,16 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertTrue(model.canUseCurrentStatus)
         XCTAssertTrue(model.graphCommits.contains {
             $0.worktree?.entries.contains(where: { $0.path == "new.txt" }) == true
-        }, "A partial SSH status failure is not evidence of a clean checkout")
+        }, "Updated refs and an unavailable worktree query must retain the last known dirty state")
+
+        await backend.setWorktreeListUnavailable(false)
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        let actual = GitCommandExecution.run(["rev-parse", "HEAD"], in: other.path)
+        XCTAssertEqual(actual.status, 0)
+        XCTAssertEqual(model.otherWorktrees.first?.headOID,
+                       actual.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+        XCTAssertNil(model.detailError)
     }
 
     func testGitGraphReadsUncommittedChangesFromEachRealWorktree() async throws {
@@ -1679,6 +1695,94 @@ final class GitStatusModelTests: XCTestCase {
             try git(["show", ":tracked.txt"], in: other),
             "other staged"
         )
+    }
+
+    func testIndexedRenameAndCopyDiffPathsPreserveBothCorrectStages() {
+        for indexStatus: Character in ["R", "C"] {
+            let entry = GitStatusModel.Entry(
+                path: "new name.txt", staged: indexStatus, unstaged: "M",
+                origPath: "old name.txt"
+            )
+            XCTAssertEqual(entry.diffOriginalPath(staged: true), "old name.txt")
+            XCTAssertNil(entry.diffOriginalPath(staged: false))
+        }
+        let unstagedRename = GitStatusModel.Entry(
+            path: "destination", staged: ".", unstaged: "R", origPath: "original"
+        )
+        XCTAssertEqual(unstagedRename.diffOriginalPath(staged: false), "original")
+        let plain = GitStatusModel.Entry(path: "plain.txt", staged: "M", unstaged: "M")
+        XCTAssertNil(plain.diffOriginalPath(staged: true))
+        XCTAssertNil(plain.diffOriginalPath(staged: false))
+    }
+
+    func testStagedRenameInOtherWorktreeUsesDestinationIndexForUnstagedDiff() async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-graph-rename-" + UUID().uuidString)
+        let main = fixture.appendingPathComponent("main")
+        let other = fixture.appendingPathComponent("other checkout")
+        try FileManager.default.createDirectory(at: main, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+
+        func git(_ arguments: [String], in directory: URL = main) throws -> String {
+            let run = GitCommandExecution.run(arguments, in: directory.path, timeout: 12)
+            XCTAssertEqual(run.status, 0, run.stderr)
+            return run.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        try git(["init", "-q", "-b", "main"])
+        try git(["config", "user.name", "Git Graph"])
+        try git(["config", "user.email", "git-graph@invalid"])
+        try git(["config", "commit.gpgsign", "false"])
+        let baseline = "alpha\nbeta\ngamma\ndelta\nepsilon\n"
+        try Data(baseline.utf8).write(to: main.appendingPathComponent("before.txt"))
+        try git(["add", "before.txt"])
+        try git(["commit", "-qm", "base"])
+        try git(["worktree", "add", "-q", "-b", "feature", other.path, "HEAD"])
+        try git(["mv", "before.txt", "after.txt"], in: other)
+        let modified = baseline + "uncommitted addition\n"
+        try Data(modified.utf8).write(to: other.appendingPathComponent("after.txt"))
+
+        let model = GitStatusModel()
+        model.sync(root: main.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let entry = try XCTUnwrap(
+            model.graphCommits.compactMap(\.worktree)
+                .first(where: { !$0.isCurrent })?.entries.first
+        )
+        XCTAssertEqual(entry.staged, "R")
+        XCTAssertEqual(entry.unstaged, "M")
+        XCTAssertEqual(entry.origPath, "before.txt")
+        XCTAssertEqual(entry.diffOriginalPath(staged: true), "before.txt")
+        XCTAssertNil(entry.diffOriginalPath(staged: false),
+                     "The working tree must compare the renamed destination with its own index")
+        let otherRoot = try git(["rev-parse", "--show-toplevel"], in: other)
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([main])
+        let project = try XCTUnwrap(manager.selectedProject)
+
+        manager.openDiff(repoRoot: otherRoot, path: entry.path,
+                         staged: true, untracked: false,
+                         origPath: entry.diffOriginalPath(staged: true))
+        guard case .diff(let stagedTab)? = project.focusedContent else {
+            return XCTFail("Expected staged diff")
+        }
+        try await wait { stagedTab.hasLoadedContent || stagedTab.error != nil }
+        XCTAssertNil(stagedTab.error)
+        XCTAssertEqual(stagedTab.oldContent, baseline)
+        XCTAssertEqual(stagedTab.newContent, baseline)
+
+        manager.openDiff(repoRoot: otherRoot, path: entry.path,
+                         staged: false, untracked: false,
+                         origPath: entry.diffOriginalPath(staged: false))
+        guard case .diff(let workingTab)? = project.focusedContent else {
+            return XCTFail("Expected working tree diff")
+        }
+        try await wait { workingTab.hasLoadedContent || workingTab.error != nil }
+        XCTAssertNil(workingTab.error)
+        XCTAssertEqual(workingTab.oldContent, baseline)
+        XCTAssertEqual(workingTab.newContent, modified)
+        XCTAssertEqual(try git(["show", ":after.txt"], in: other), baseline.trimmingCharacters(in: .newlines))
+        XCTAssertEqual(try String(contentsOf: main.appendingPathComponent("before.txt"), encoding: .utf8), baseline)
     }
 
     func testUnbornRepositoryWithUntrackedFilesHasUncommittedGraphNode() async throws {

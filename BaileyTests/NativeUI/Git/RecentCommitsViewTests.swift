@@ -259,9 +259,9 @@ final class RecentCommitsViewTests: XCTestCase {
         let localMenu = String(localized: "Rename Branch…", table: "Git")
         let remoteMenu = String(localized: "Delete Remote Branch…", table: "Git")
         for (name, x, expected, excluded) in [
-            ("main", CGFloat(65), localMenu, remoteMenu),
-            ("origin/main", CGFloat(103), remoteMenu, localMenu),
-            ("upstream/main", CGFloat(141), remoteMenu, localMenu),
+            ("main", CGFloat(52), localMenu, remoteMenu),
+            ("origin/main", CGFloat(87), remoteMenu, localMenu),
+            ("upstream/main", CGFloat(119), remoteMenu, localMenu),
         ] {
             let point = NSPoint(x: x, y: height - 12)
             click(point, in: window)
@@ -703,7 +703,7 @@ final class RecentCommitsViewTests: XCTestCase {
             let window = hostHistory([commit], selection: selection, height: height)
             defer { window.close() }
             let event = try XCTUnwrap(NSEvent.mouseEvent(
-                with: .rightMouseDown, location: NSPoint(x: 70, y: height - 12),
+                with: .rightMouseDown, location: NSPoint(x: 50, y: height - 12),
                 modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil, eventNumber: 0,
                 clickCount: 1, pressure: 1))
@@ -796,6 +796,111 @@ final class RecentCommitsViewTests: XCTestCase {
                 window.close()
             }
         }
+    }
+
+    func testWorktreeDisplayPathsStayUniqueWithSameCheckoutDirectoryNames() {
+        let paths = [
+            "/Users/test/A/shared",
+            "/Users/test/B/shared",
+            "/Users/test/C/one/shared",
+            "/Users/test/D/one/shared",
+            "/Users/test/独特工作树",
+        ]
+        let labels = paths.map { RecentCommitsView.worktreeDisplayPath($0, among: paths) }
+        XCTAssertEqual(labels.count, Set(labels).count)
+        XCTAssertEqual(labels[0], "A/shared")
+        XCTAssertEqual(labels[1], "B/shared")
+        XCTAssertEqual(labels[2], "C/one/shared")
+        XCTAssertEqual(labels[3], "D/one/shared")
+        XCTAssertEqual(labels[4], "独特工作树")
+        XCTAssertEqual(RecentCommitsView.worktreeDisplayPath("/Users/test/B/shared",
+                         among: ["/Users/test/B/shared"]), "shared")
+    }
+
+    func testWorktreeConflictStatusAlwaysUsesUInTreeAndList() {
+        let conflicts: [(Character, Character)] = [
+            ("U", "U"), ("A", "A"), ("D", "D"), ("A", "U"), ("U", "D")
+        ]
+        for (index, status) in conflicts.enumerated() {
+            let entry = GitStatusModel.Entry(
+                path: "conflict-\(index).txt", staged: status.0,
+                unstaged: status.1, isConflict: true
+            )
+            XCTAssertEqual(RecentCommitsView.worktreeDisplayStatus(entry, staged: true), "U")
+            XCTAssertEqual(RecentCommitsView.worktreeDisplayStatus(entry, staged: false), "U")
+        }
+        let modified = GitStatusModel.Entry(path: "modified", staged: "R", unstaged: "M")
+        XCTAssertEqual(RecentCommitsView.worktreeDisplayStatus(modified, staged: true), "R")
+        XCTAssertEqual(RecentCommitsView.worktreeDisplayStatus(modified, staged: false), "M")
+    }
+
+    func testGraphBadgeRowsStayCompactAcrossAppearanceAndFontSizes() throws {
+        let base = String(repeating: "a", count: 40)
+        let stash = GitStatusModel.Stash(
+            selector: "stash@{12}", oid: String(repeating: "b", count: 40),
+            message: "Kept changes", baseHash: base,
+            untrackedFilesHash: nil, author: "Test", date: .now
+        )
+        let worktree = GitStatusModel.WorktreeChanges(
+            path: "/tmp/team/feature/branch workspace",
+            branch: "feature/很长很长的分支名称-v2",
+            headOID: base,
+            entries: [.init(path: "file.txt", staged: "M", unstaged: "M")],
+            isCurrent: false
+        )
+        let commit = GitStatusModel.RecentCommit(
+            hash: base, shortHash: "aaaaaaa", subject: "Base commit is readable",
+            author: "Test", date: .now, parentHashes: [],
+            references: [
+                .init(kind: .currentBranch, name: "main"),
+                .init(kind: .remoteBranch, name: "origin/main"),
+                .init(kind: .tag, name: "v12.34.56"),
+            ], files: []
+        )
+        let rows = GitStatusModel.graphCommits(
+            [commit], stashes: [stash], worktrees: [worktree]
+        )
+        XCTAssertEqual(rows.count, 3)
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            for (width, scale) in [
+                (CGFloat(120), CGFloat(0.8)),
+                (CGFloat(180), CGFloat(1)),
+                (CGFloat(260), CGFloat(1.6)),
+                (CGFloat(400), CGFloat(2)),
+                (CGFloat(400), CGFloat(1)),
+            ] {
+                let window = hostHistory(
+                    rows, selection: GraphSelection(),
+                    width: width, height: 210, fontScale: scale, remotes: ["origin"]
+                )
+                window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+                settle()
+                XCTAssertFalse(
+                    horizontallyScrollableViews(in: window.contentView!).contains {
+                        $0.contentView.bounds.height > 60 * scale
+                            && ($0.documentView?.frame.width ?? 0)
+                                > $0.contentView.bounds.width + 10
+                    },
+                    "Badges must not scroll the whole graph at \(width)pt, \(scale)x"
+                )
+                let graph = CommitGraphLayout(commits: rows)
+                let worktreeIndex = try XCTUnwrap(rows.firstIndex { $0.worktree != nil })
+                let headIndex = try XCTUnwrap(rows.firstIndex {
+                    $0.hash == base && $0.worktree == nil && $0.stash == nil
+                })
+                XCTAssertEqual(graph.rows[worktreeIndex].node.color,
+                               graph.rows[headIndex].node.color,
+                               "Badges cannot change node-to-HEAD color")
+                window.close()
+            }
+        }
+    }
+
+    func testGraphBadgesUseCompactSharedMetrics() {
+        XCTAssertEqual(RecentCommitsView.badgeHeight, 16)
+        XCTAssertEqual(RecentCommitsView.badgeIconSize, 16)
+        XCTAssertEqual(RecentCommitsView.badgeFontSize, 9)
+        XCTAssertEqual(RecentCommitsView.badgeHorizontalPadding, 4)
     }
 
     func testUncommittedWorktreeNodeHasSafeMenuAndNativeStageAwareFileActions() throws {

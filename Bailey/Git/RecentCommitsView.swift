@@ -54,6 +54,11 @@ struct RecentCommitsView: View {
     enum TagAction { case details, delete, push, archive }
     enum HistoricalFileAction { case viewRevision, compareWorktree, openWorkingFile, resetFile }
 
+    static let badgeHeight: CGFloat = 16
+    static let badgeIconSize: CGFloat = 16
+    static let badgeFontSize: CGFloat = 9
+    static let badgeHorizontalPadding: CGFloat = 4
+
     private let themeChanges = Theme.changes
     @Binding private var expandedCommitIDs: Set<String>
     @Binding private var collapsedFolders: Set<String>
@@ -305,12 +310,15 @@ struct RecentCommitsView: View {
 
                 HStack(alignment: .firstTextBaseline, spacing: 6 * fontScale) {
                     if let worktree = commit.worktree {
-                        Text(verbatim: (worktree.path as NSString).lastPathComponent)
+                        Text(verbatim: Self.worktreeDisplayPath(
+                            worktree.path, among: commits.compactMap { $0.worktree?.path }
+                        ))
                             .font(.system(size: 10 * fontScale, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .help(worktree.path)
+                            .accessibilityLabel(worktree.path)
                     } else {
                     Button { copy(commit.hash) } label: {
                         Text(verbatim: commit.shortHash)
@@ -411,11 +419,32 @@ struct RecentCommitsView: View {
     static func worktreeBadgeWidth(_ branch: String, viewportWidth: CGFloat,
                                    gutter: CGFloat, scale: CGFloat) -> CGFloat {
         let nameWidth = ceil((branch as NSString).size(withAttributes: [
-            .font: NSFont.systemFont(ofSize: 10 * scale, weight: .medium)
+            .font: NSFont.systemFont(ofSize: badgeFontSize * scale, weight: .medium)
         ]).width)
-        let available = min(112 * scale, max(18 * scale, viewportWidth - gutter - 88 * scale))
-        let offered = min(nameWidth + 28 * scale, available)
-        return offered >= 42 * scale ? offered : 18 * scale
+        let icon = badgeIconSize * scale
+        let available = min(104 * scale, max(icon, viewportWidth - gutter - 88 * scale))
+        let offered = min(nameWidth + (badgeIconSize + 2 * badgeHorizontalPadding) * scale,
+                          available)
+        return offered >= 36 * scale ? offered : icon
+    }
+
+    static func worktreeDisplayPath(_ path: String, among paths: [String]) -> String {
+        let components = (path as NSString).pathComponents.filter { $0 != "/" }
+        guard !components.isEmpty else { return path }
+        for length in 1...components.count {
+            let suffix = Array(components.suffix(length))
+            let matches = paths.filter {
+                Array(($0 as NSString).pathComponents.filter { $0 != "/" }.suffix(length))
+                    == suffix
+            }
+            if matches.count == 1 { return suffix.joined(separator: "/") }
+        }
+        return path
+    }
+
+    static func worktreeDisplayStatus(_ entry: GitStatusModel.Entry,
+                                      staged: Bool) -> Character {
+        entry.isConflict ? "U" : staged ? entry.staged : entry.unstaged
     }
 
     private func worktreeBadge(
@@ -425,26 +454,30 @@ struct RecentCommitsView: View {
         let badgeWidth = Self.worktreeBadgeWidth(
             branch, viewportWidth: viewportWidth, gutter: gutter, scale: fontScale
         )
-        let showBranch = badgeWidth > 18 * fontScale
-        let outline = RoundedRectangle(cornerRadius: 5 * fontScale)
+        let showBranch = badgeWidth > Self.badgeIconSize * fontScale
+        let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
         return Button { toggle(commit) } label: {
             HStack(spacing: 0) {
                 Image(systemName: "square.stack")
-                    .font(.system(size: 9 * fontScale))
+                    .font(.system(size: Self.badgeFontSize * fontScale))
                     .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                    .frame(width: 18 * fontScale, height: 18 * fontScale)
+                    .frame(width: Self.badgeIconSize * fontScale,
+                           height: Self.badgeHeight * fontScale)
                     .background(Color.primary.opacity(0.09))
                 if showBranch {
                     Text(verbatim: branch)
-                        .font(.system(size: 10 * fontScale, weight: .medium))
+                        .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .frame(width: badgeWidth - 28 * fontScale, alignment: .leading)
-                        .padding(.horizontal, 5 * fontScale)
+                        .frame(width: badgeWidth -
+                               (Self.badgeIconSize + 2 * Self.badgeHorizontalPadding) * fontScale,
+                               alignment: .leading)
+                        .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
                 }
             }
-            .frame(width: badgeWidth, height: 18 * fontScale, alignment: .leading)
+            .frame(width: badgeWidth, height: Self.badgeHeight * fontScale,
+                   alignment: .leading)
             .background(Color.primary.opacity(0.04))
             .clipShape(outline)
             .overlay(outline.stroke(Color.primary.opacity(0.22),
@@ -452,26 +485,28 @@ struct RecentCommitsView: View {
         }
         .buttonStyle(.plain)
         .help(branch + "\n" + worktree.path)
-        .accessibilityLabel(branch)
+        .accessibilityLabel(branch + ", " + worktree.path)
     }
 
     private func stashBadge(
         _ stash: GitStatusModel.Stash, in commit: Commit, colorIndex: Int
     ) -> some View {
-        let outline = RoundedRectangle(cornerRadius: 5 * fontScale)
+        let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
         return Button { toggle(commit) } label: {
             HStack(spacing: 0) {
                 Image(systemName: "archivebox")
-                    .font(.system(size: 9 * fontScale))
+                    .font(.system(size: Self.badgeFontSize * fontScale))
                     .foregroundStyle(GitGraphPalette.iconColor(colorIndex))
-                    .frame(width: 18 * fontScale, height: 18 * fontScale)
+                    .frame(width: Self.badgeIconSize * fontScale,
+                           height: Self.badgeHeight * fontScale)
                     .background(GitGraphPalette.color(colorIndex))
                 Text(verbatim: stash.selector)
-                    .font(.system(size: 10 * fontScale, weight: .medium))
+                    .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
                     .foregroundStyle(.primary)
-                    .padding(.horizontal, 5 * fontScale)
+                    .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
                     .fixedSize(horizontal: true, vertical: false)
             }
+            .frame(height: Self.badgeHeight * fontScale)
             .background(Color.primary.opacity(0.06))
             .clipShape(outline)
             .overlay(outline.stroke(Color.primary.opacity(0.35),
@@ -523,7 +558,7 @@ struct RecentCommitsView: View {
         }
         let hidden = (compactFirst ? groups.first?.remotes ?? [] : [])
             + groups.dropFirst(shown).flatMap(\.references)
-        return HStack(spacing: 4 * fontScale) {
+        return HStack(spacing: 3 * fontScale) {
             ForEach(shownGroups) { group in
                 referenceBadge(group, commit: commit, colorIndex: colorIndex)
             }
@@ -536,7 +571,7 @@ struct RecentCommitsView: View {
                     }
                 } label: {
                     Text("+\(hidden.count)")
-                        .font(.system(size: 10 * fontScale, weight: .medium))
+                        .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
                 .menuStyle(.borderlessButton)
@@ -553,7 +588,7 @@ struct RecentCommitsView: View {
     ) -> some View {
         let current = group.primary.kind == .currentBranch
         let color = GitGraphPalette.color(colorIndex)
-        let outline = RoundedRectangle(cornerRadius: 5 * fontScale)
+        let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
         return HStack(spacing: 0) {
             referenceSegment(group.primary, title: group.primary.name,
                              colorIndex: colorIndex, commit: commit, isRemoteSuffix: false)
@@ -575,8 +610,9 @@ struct RecentCommitsView: View {
     ) -> some View {
         let current = reference.kind == .currentBranch
         let titleFont: Font = isRemoteSuffix
-            ? .system(size: 10 * fontScale).italic()
-            : .system(size: 10 * fontScale, weight: current ? .semibold : .medium)
+            ? .system(size: Self.badgeFontSize * fontScale).italic()
+            : .system(size: Self.badgeFontSize * fontScale,
+                      weight: current ? .semibold : .medium)
         return Button {
             if reference.kind == .tag {
                 expandedCommitIDs.insert(commit.id)
@@ -588,14 +624,15 @@ struct RecentCommitsView: View {
                 if isRemoteSuffix {
                     Rectangle()
                         .fill(Color.primary.opacity(0.3))
-                        .frame(width: 1 * fontScale, height: 12 * fontScale)
+                        .frame(width: 1 * fontScale, height: 10 * fontScale)
                 } else {
                     Image(systemName: reference.kind == .tag ? "tag.fill"
                           : reference.kind == .detachedHead ? "circle"
                           : "arrow.triangle.branch")
-                        .font(.system(size: 9 * fontScale))
+                        .font(.system(size: Self.badgeFontSize * fontScale))
                         .foregroundStyle(GitGraphPalette.iconColor(colorIndex))
-                        .frame(width: 18 * fontScale, height: 18 * fontScale)
+                        .frame(width: Self.badgeIconSize * fontScale,
+                               height: Self.badgeHeight * fontScale)
                         .background(GitGraphPalette.color(colorIndex))
                 }
                 Text(verbatim: title)
@@ -603,10 +640,10 @@ struct RecentCommitsView: View {
                     .foregroundStyle(isRemoteSuffix ? Color.secondary : Color.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .frame(maxWidth: 142 * fontScale)
-                    .padding(.horizontal, 5 * fontScale)
+                    .frame(maxWidth: 112 * fontScale)
+                    .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
             }
-            .frame(height: 18 * fontScale)
+            .frame(height: Self.badgeHeight * fontScale)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -782,7 +819,7 @@ struct RecentCommitsView: View {
             let rows = entries.map { entry in
                 TreeDisplayModel.Row(
                     name: entry.fileName, path: entry.path, isDirectory: false,
-                    status: .init(staged ? entry.staged : entry.unstaged)
+                    status: .init(Self.worktreeDisplayStatus(entry, staged: staged))
                 )
             }
             let byPath = Dictionary(entries.map { ($0.path, $0) },
@@ -817,7 +854,7 @@ struct RecentCommitsView: View {
             ForEach(entries, id: \.id) { entry in
                 let node = TreeDisplayModel.Row(
                     name: entry.fileName, path: entry.path, isDirectory: false,
-                    status: .init(staged ? entry.staged : entry.unstaged)
+                    status: .init(Self.worktreeDisplayStatus(entry, staged: staged))
                 )
                 worktreeFile(entry, row: node, staged: staged,
                              worktree: worktree, inset: inset, showDirectory: true)

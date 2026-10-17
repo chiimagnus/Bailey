@@ -41,6 +41,11 @@ final class GitStatusModel {
         var isWorktreeRename: Bool { unstaged == "R" && origPath != nil }
         var isWorktreeCopy: Bool { unstaged == "C" && origPath != nil }
 
+        /// The unstaged half of an indexed rename/copy compares the index
+        /// destination with the working destination, not the pre-rename path.
+        func diffOriginalPath(staged: Bool) -> String? {
+            !staged && (self.staged == "R" || self.staged == "C") ? nil : origPath
+        }
     }
 
     typealias FileDecoration = TreeDisplayModel.Status
@@ -2879,7 +2884,6 @@ final class GitStatusModel {
             hasCurrentHistory = false
             hasCurrentStashes = false
             hasCurrentLineTotals = false
-            otherWorktrees = []
         }
         if repositoryIdentity != result.topLevel {
             clearDetails()

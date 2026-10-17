@@ -1702,7 +1702,7 @@ struct GitPanel: View {
                                 manager.openDiff(
                                     repoRoot: worktree.path, path: entry.path,
                                     staged: staged, untracked: entry.isUntracked,
-                                    origPath: entry.origPath
+                                    origPath: entry.diffOriginalPath(staged: staged)
                                 )
                             }
                         )
@@ -1829,11 +1829,7 @@ struct GitPanel: View {
             openDiff: {
                 guard model.isCurrent(entry) else { return }
                 var diffEntry = entry
-                if kind == .unstaged && (entry.staged == "R" || entry.staged == "C") {
-                    // A staged rename/copy's unstaged side compares the
-                    // destination in the index with that same worktree path.
-                    diffEntry.origPath = nil
-                }
+                diffEntry.origPath = entry.diffOriginalPath(staged: kind == .staged)
                 openDiff(diffEntry, kind == .staged)
             },
             openFile: { openIfPossible(entry) },
