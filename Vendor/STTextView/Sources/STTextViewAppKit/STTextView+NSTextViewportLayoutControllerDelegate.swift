@@ -7,6 +7,7 @@ import STTextKitPlus
 extension STTextView: NSTextViewportLayoutControllerDelegate {
 
     public func textViewportLayoutControllerWillLayout(_ textViewportLayoutController: NSTextViewportLayoutController) {
+        captureViewportTextAnchor()
         lastUsedFragmentViews = Set(fragmentViewMap.objectEnumerator()?.allObjects as? [STTextLayoutFragmentView] ?? [])
 
         if ProcessInfo().environment["ST_LAYOUT_DEBUG"] == "YES" {
@@ -26,6 +27,7 @@ extension STTextView: NSTextViewportLayoutControllerDelegate {
         var prepared = preparedContentRect
         prepared.origin.x += gutterWidth
         prepared.size.width -= gutterWidth
+        prepared.origin.y += contentView.bounds.minY
 
         // visibleRect is already in contentView coords (contentView.origin.x = gutterWidth)
         var visible = contentView.visibleRect
@@ -97,14 +99,10 @@ extension STTextView: NSTextViewportLayoutControllerDelegate {
             textLayoutManager.ensureLayout(for: viewportRange)
         }
 
+        updateUniformLineHeight()
+        correctUniformViewportOrigin()
         updateContentSizeIfNeeded()
-
-        // When scrolled to the end of the document, relocate viewport to ensure proper layout
-        if let scrollView, let documentView = scrollView.documentView, scrollView.contentView.bounds.maxY >= documentView.bounds.maxY,
-           let viewportRange = textViewportLayoutController.viewportRange,
-           let textRange = NSTextRange(location: viewportRange.endLocation, end: textLayoutManager.documentRange.endLocation), !textRange.isEmpty {
-            relocateViewport(to: textLayoutManager.documentRange.endLocation)
-        }
+        restoreViewportTextAnchor()
 
         updateSelectedRangeHighlight()
         updateSelectedLineHighlight()

@@ -106,7 +106,11 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
         }
 
         set {
+            captureViewportTextAnchor(force: true)
+            resetTextCoordinateOffset()
             _defaultTypingAttributes[.font] = newValue
+            uniformLineHeight = nil
+            hasVariableLineHeight = false
 
             // apply to the document
             if !textLayoutManager.documentRange.isEmpty {
@@ -249,15 +253,6 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
         return typingAttrs.merging(_defaultTypingAttributes, uniquingKeysWith: { current, _ in current })
     }
 
-    // line height based on current typing font and current typing paragraph
-    // Not used since extraLineFragmentAttributes workaround fixed most of measurements
-    @available(*, deprecated, message: "Use STTextLayoutFragment metrics")
-    var typingLineHeight: CGFloat {
-        let font = typingAttributes[.font] as? NSFont ?? _defaultTypingAttributes[.font] as! NSFont
-        let paragraphStyle = typingAttributes[.paragraphStyle] as? NSParagraphStyle ?? self._defaultTypingAttributes[.paragraphStyle] as! NSParagraphStyle
-        return calculateDefaultLineHeight(for: font) * paragraphStyle.stLineHeightMultiple
-    }
-
     /// The characters of the receiver’s text.
     ///
     /// For performance reasons, this value is the current backing store of the text object.
@@ -309,6 +304,12 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
 
     private var _isHorizontallyResizable = true
 
+    public var usesPlainTextGeometry = false
+    var textLineIndex: STTextLineIndex?
+    var uniformLineHeight: CGFloat?
+    var hasVariableLineHeight = false
+    var viewportTextAnchor: (location: Int, offset: CGFloat)?
+
     /// A Boolean that controls whether the receiver changes its width to fit the width of its text.
     ///
     /// When `true` (default), text does not wrap and the view expands horizontally.
@@ -317,8 +318,10 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
     public var isHorizontallyResizable: Bool {
         set {
             if _isHorizontallyResizable != newValue {
+                captureViewportTextAnchor(force: true)
                 _isHorizontallyResizable = newValue
                 updateTextContainerSize()
+                resetTextCoordinateOffset()
                 needsLayout = true
             }
         }
@@ -326,14 +329,6 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
         get {
             _isHorizontallyResizable
         }
-    }
-
-    /// NSTextView compatibility. Equivalent to `!isHorizontallyResizable`.
-    @available(*, deprecated, renamed: "isHorizontallyResizable")
-    @objc
-    public var widthTracksTextView: Bool {
-        set { isHorizontallyResizable = !newValue }
-        get { !isHorizontallyResizable }
     }
 
     private var _isVerticallyResizable = true
@@ -354,14 +349,6 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
         get {
             _isVerticallyResizable
         }
-    }
-
-    /// NSTextView compatibility. Equivalent to `!isVerticallyResizable`.
-    @available(*, deprecated, renamed: "isVerticallyResizable")
-    @objc
-    public var heightTracksTextView: Bool {
-        set { isVerticallyResizable = !newValue }
-        get { !isVerticallyResizable }
     }
 
     /// A Boolean that controls whether the text view highlights the currently selected line.
@@ -626,6 +613,7 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
 
     private var liveResizeLayoutSuppression = false
     private var inLayout = false
+    private var inViewportLayout = false
     private var needsRelayout = false
 
     private var shouldUpdateLayout: Bool {
@@ -879,6 +867,13 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
         }
     }
 
+    override open func viewWillMove(toWindow newWindow: NSWindow?) {
+        if window != nil, newWindow == nil {
+            captureViewportTextAnchor(force: true)
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
     override open func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
 
@@ -1047,6 +1042,11 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
     }
 
     func setString(_ string: Any?) {
+        viewportTextAnchor = nil
+        textLineIndex = nil
+        resetTextCoordinateOffset()
+        uniformLineHeight = nil
+        hasVariableLineHeight = false
         undoManager?.disableUndoRegistration()
         defer {
             undoManager?.enableUndoRegistration()
@@ -1496,11 +1496,18 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
     }
 
     func layoutViewport() {
+        guard !inViewportLayout else {
+            needsRelayout = true
+            return
+        }
+        inViewportLayout = true
+        defer { inViewportLayout = false }
         // Convergence loop - max 5 iterations
         // If layout triggers changes that require re-layout, needsRelayout is set
         var iterations = 5
         while iterations > 0 {
             needsRelayout = false
+            alignUniformViewport()
             textLayoutManager.textViewportLayoutController.layoutViewport()
             if !needsRelayout { break }
             iterations -= 1
@@ -1523,12 +1530,22 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
         var estimatedSize = CGSize.zero
         let documentEndLocation = textLayoutManager.documentRange.endLocation
 
-        textLayoutManager.enumerateTextLayoutFragments(
-            from: documentEndLocation,
-            options: [.reverse, .ensuresLayout, .ensuresExtraLineFragment]
-        ) { layoutFragment in
-            estimatedSize.width = max(estimatedSize.width, layoutFragment.layoutFragmentFrame.size.width)
-            return false
+        if let height = uniformDocumentHeight {
+            estimatedSize.height = height
+        } else {
+            textLayoutManager.enumerateTextLayoutFragments(
+                from: documentEndLocation,
+                options: [.reverse, .ensuresLayout, .ensuresExtraLineFragment]
+            ) { layoutFragment in
+                estimatedSize.width = max(estimatedSize.width, layoutFragment.layoutFragmentFrame.size.width)
+                return false
+            }
+            let segmentRange = NSTextRange(location: documentEndLocation)
+            textLayoutManager.ensureLayout(for: segmentRange)
+            textLayoutManager.enumerateTextSegments(in: segmentRange, type: .standard, options: .middleFragmentsExcluded) { _, rect, _, _ in
+                estimatedSize.height = max(estimatedSize.height, rect.origin.y + rect.size.height)
+                return true
+            }
         }
         // kero patch: the final fragment is not necessarily the widest one.
         // Preserve the widest laid-out line so NSScrollView has a horizontal
@@ -1542,13 +1559,6 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
             // the glyphs' trailing typographic edge. Add that missing padding
             // plus a readable gap after the final glyph.
             estimatedSize.width += textContainer.lineFragmentPadding + 16
-        }
-
-        let segmentRange = NSTextRange(location: documentEndLocation)
-        textLayoutManager.ensureLayout(for: segmentRange)
-        textLayoutManager.enumerateTextSegments(in: segmentRange, type: .standard, options: .middleFragmentsExcluded) { _, rect, _, _ in
-            estimatedSize.height = max(estimatedSize.height, rect.origin.y + rect.size.height)
-            return true
         }
 
         if let overrideContentHeight {
@@ -1584,32 +1594,6 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
 
         if !newFrame.size.isAlmostEqual(to: frame.size) {
             setFrameSize(newFrame.size)
-        }
-    }
-
-    func relocateViewport(to location: NSTextLocation) {
-        let textViewportLayoutController = textLayoutManager.textViewportLayoutController
-
-        let suggestedAnchor = textViewportLayoutController.relocateViewport(to: location)
-
-        var lastLineMaxY = suggestedAnchor
-        let segmentRange = NSTextRange(location: location)
-        textLayoutManager.ensureLayout(for: segmentRange)
-        textLayoutManager.enumerateTextSegments(in: segmentRange, type: .standard, options: .middleFragmentsExcluded) { _, rect, _, _ in
-            lastLineMaxY = rect.origin.y + rect.size.height
-            return true
-        }
-
-        if let overrideContentHeight {
-            lastLineMaxY = max(lastLineMaxY, overrideContentHeight)
-        }
-        if !lastLineMaxY.isAlmostEqual(to: frame.height) {
-            setFrameSize(CGSize(width: frame.width, height: lastLineMaxY))
-        }
-
-        let offset = frame.height - suggestedAnchor
-        if !offset.isAlmostZero() {
-            textViewportLayoutController.adjustViewport(byVerticalOffset: -offset)
         }
     }
 
@@ -1705,7 +1689,10 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
     }
 
     func replaceCharacters(in textRange: NSTextRange, with replacementString: NSAttributedString, allowsTypingCoalescing: Bool) {
-        let previousStringInRange = (textContentManager as? NSTextContentStorage)!.attributedString!.attributedSubstring(from: NSRange(textRange, in: textContentManager))
+        let originalRange = NSRange(textRange, in: textContentManager)
+        let previousStringInRange = (textContentManager as? NSTextContentStorage)!.attributedString!.attributedSubstring(from: originalRange)
+
+        if hasVariableLineHeight { captureViewportTextAnchor(force: true) }
 
         textWillChange(self)
         delegateProxy.textView(self, willChangeTextIn: textRange, replacementString: replacementString.string)
@@ -1715,6 +1702,23 @@ open class STTextView: NSView, NSTextInput, NSTextContent, STTextViewProtocol {
                 in: textRange,
                 with: [NSTextParagraph(attributedString: replacementString)]
             )
+        }
+
+        if let storage = (textContentManager as? NSTextContentStorage)?.textStorage {
+            textLineIndex?.replace(in: originalRange, replacementLength: replacementString.length,
+                                   text: storage.string as NSString)
+        }
+        if var anchor = viewportTextAnchor {
+            if anchor.location >= NSMaxRange(originalRange) {
+                anchor.location += replacementString.length - originalRange.length
+            } else if anchor.location >= originalRange.location {
+                anchor.location = originalRange.location + replacementString.length
+            }
+            viewportTextAnchor = anchor
+        }
+        if hasVariableLineHeight {
+            hasVariableLineHeight = false
+            uniformLineHeight = nil
         }
 
         delegateProxy.textView(self, didChangeTextIn: textRange, replacementString: replacementString.string)

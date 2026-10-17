@@ -85,7 +85,7 @@ extension STTextView {
                 let lineNumber = 1
 
                 // Use typingAttributes to calculate baseline position for empty document.
-                // The cell is sized for typingLineHeight, so baseline calculation should use typing font metrics
+                // The cell baseline uses typing font metrics
                 // to match where text baseline would be. Line number is still drawn with gutter font.
                 let ctNumberLine = CTLineCreateWithAttributedString(NSAttributedString(string: "\(lineNumber)", attributes: typingAttributes))
                 let baselineParagraphStyle = typingAttributes[.paragraphStyle] as? NSParagraphStyle ?? defaultParagraphStyle
@@ -139,16 +139,17 @@ extension STTextView {
                 return
             }
 
-            // Calculate how many lines exist before the viewport
-            let textElementsBeforeViewport = textContentManager.textElements(
-                for: NSTextRange(
-                    location: textLayoutManager.documentRange.location,
-                    end: viewportRange.location
-                )!
-            )
-
+            updateTextLineIndexIfNeeded()
+            let startLineIndex: Int
+            if let textLineIndex, let first = visibleFragmentViews.first {
+                let offset = textContentManager.offset(from: textLayoutManager.documentRange.location,
+                                                       to: first.0.rangeInElement.location)
+                startLineIndex = textLineIndex.paragraph(at: offset)
+            } else {
+                startLineIndex = textContentManager.textElements(for: NSTextRange(
+                    location: textLayoutManager.documentRange.location, end: viewportRange.location)!).count
+            }
             var requiredWidthFitText = gutterView.minimumThickness
-            let startLineIndex = textElementsBeforeViewport.count
             var linesCount = 0
 
             for (layoutFragment, fragmentView) in visibleFragmentViews {

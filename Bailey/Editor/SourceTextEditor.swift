@@ -106,7 +106,9 @@ struct SourceTextEditor: NSViewRepresentable {
         // STTextView.
         textView.isIncrementalSearchingEnabled = true
         apply(to: textView, scrollView: scrollView)
+        textView.scrollsSelectionToVisibleOnTextChange = false
         textView.text = file.text
+        textView.scrollsSelectionToVisibleOnTextChange = true
 
         // Tree-sitter syntax highlighting, for file types with
         // a bundled grammar. Added after the text is set so the plugin's
@@ -220,6 +222,7 @@ struct SourceTextEditor: NSViewRepresentable {
         textView.selectedLineHighlightColor = palette.lineHighlight
         // false = wrap at the view width, true = expand horizontally.
         textView.isHorizontallyResizable = !wrapLines
+        textView.usesPlainTextGeometry = true
         if let gutter = textView.gutterView {
             gutter.textColor = palette.gutterText
             gutter.selectedLineTextColor = palette.text
@@ -306,7 +309,6 @@ private final class SourceEditorContainer: NSView {
               let editor = scrollView.documentView as? FocusReportingTextView else { return }
         focusOnAttach = false
         window.makeFirstResponder(editor)
-        (scrollView as? RestorableScrollView)?.restoreScrollAfterFocus()
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -359,30 +361,6 @@ private final class RestorableScrollView: NSScrollView {
     var restoreOnFirstLayout: (() -> Void)?
     private var lastViewportSize: NSSize = .zero
     private var geometryUpdateScheduled = false
-    private var detachedScrollOrigin: NSPoint?
-
-    override func viewWillMove(toWindow newWindow: NSWindow?) {
-        if window != nil, newWindow == nil, restoreOnFirstLayout == nil {
-            let offset = contentView.bounds.origin
-            detachedScrollOrigin = offset
-            restoreOnFirstLayout = { [weak self] in
-                guard let self else { return }
-                let clip = self.contentView
-                clip.setBoundsOrigin(offset)
-                self.reflectScrolledClipView(clip)
-                self.documentView?.needsLayout = true
-            }
-        }
-        super.viewWillMove(toWindow: newWindow)
-    }
-
-    func restoreScrollAfterFocus() {
-        guard let detachedScrollOrigin else { return }
-        self.detachedScrollOrigin = nil
-        let clip = contentView
-        clip.setBoundsOrigin(detachedScrollOrigin)
-        reflectScrolledClipView(clip)
-    }
 
     override func layout() {
         super.layout()

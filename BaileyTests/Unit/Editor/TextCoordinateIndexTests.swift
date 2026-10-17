@@ -1,10 +1,58 @@
 import Foundation
 import SwiftTreeSitter
 import XCTest
+@testable import STTextViewAppKit
 @testable import Bailey
 
 @MainActor
 final class TextCoordinateIndexTests: XCTestCase {
+    func testNativeLineIndexHandlesBoundaryJoinsAndRandomEdits() throws {
+        var trailing = STTextLineIndex("a\nb\nc\n")
+        trailing.replace(in: NSRange(location: 2, length: 1), replacementLength: 1, text: "a\nx\nc\n")
+        XCTAssertEqual(trailing.starts, [0, 2, 4, 6])
+        func expectedStarts(_ text: String) -> [Int] {
+            let units = Array(text.utf16)
+            var starts = [0]
+            var offset = 0
+            while offset < units.count {
+                let unit = units[offset]
+                offset += 1
+                if unit == 13, offset < units.count, units[offset] == 10 { offset += 1 }
+                if [10, 13, 0x2028, 0x2029].contains(unit) { starts.append(offset) }
+            }
+            return starts
+        }
+        var seed: UInt64 = 0xABCDEF1234
+        func next(_ limit: Int) -> Int {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Int((seed >> 32) % UInt64(limit))
+        }
+        for original in ["", "\r\n", "a\r\nb\r", "中文👋\u{2028}e\u{301}\u{2029}\n", String(repeating: "x\r\n", count: 1_000)] {
+            var text = original
+            var index = STTextLineIndex(text as NSString)
+            for _ in 0..<300 {
+                XCTAssertEqual(index.starts, expectedStarts(text))
+                let units = Array(text.utf16)
+                var paragraph = 0
+                for (row, start) in expectedStarts(text).enumerated() {
+                    if row > 0, units[start - 1] != 0x2028 { paragraph += 1 }
+                    XCTAssertEqual(index.paragraph(at: start), paragraph)
+                }
+                var boundaries = [0]
+                for scalar in text.unicodeScalars { boundaries.append(boundaries.last! + scalar.utf16.count) }
+                let first = next(boundaries.count)
+                let last = first + next(boundaries.count - first)
+                let range = NSRange(location: boundaries[first], length: boundaries[last] - boundaries[first])
+                let replacement = ["", "\r", "\n", "\r\n", "👋", "\u{2028}", "\u{2029}", "abc"][next(8)]
+                text = (text as NSString).replacingCharacters(in: range, with: replacement)
+                index.replace(in: range, replacementLength: replacement.utf16.count, text: text as NSString)
+                XCTAssertEqual(index.length, text.utf16.count)
+                for (row, start) in expectedStarts(text).enumerated() { XCTAssertEqual(index.row(at: start), row) }
+            }
+            XCTAssertEqual(index.starts, expectedStarts(text))
+        }
+    }
+
     func testLargeDocumentEditCosts() throws {
         for rows in [382, 1_000, 10_000, 100_000] {
             let source = String(repeating: "struct Item { let value = 123 } // 中文 👋\n", count: rows)

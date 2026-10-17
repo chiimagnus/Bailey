@@ -7,12 +7,20 @@ import AppKit
 extension STTextView {
 
     override open func scroll(_ point: NSPoint) {
-        contentView.scroll(point.applying(.init(translationX: -(gutterView?.frame.width ?? 0), y: 0)))
+        contentView.scroll(convert(point, to: contentView))
     }
 
     @discardableResult
     func scrollToVisible(_ textRange: NSTextRange, type: NSTextLayoutManager.SegmentType) -> Bool {
         let viewportLayoutController = textLayoutManager.textViewportLayoutController
+
+        if uniformDocumentHeight != nil, let textLineIndex, let uniformLineHeight {
+            let offset = textContentManager.offset(from: textContentManager.documentRange.location, to: textRange.location)
+            let target = CGRect(x: visibleRect.minX, y: CGFloat(textLineIndex.row(at: offset)) * uniformLineHeight,
+                                width: 1, height: uniformLineHeight)
+            _ = scrollToVisible(target)
+            layoutViewport()
+        }
 
         textLayoutManager.ensureLayout(for: textRange)
         updateContentSizeIfNeeded()
@@ -28,7 +36,7 @@ extension STTextView {
             isInViewport = false
         }
 
-        if !isInViewport {
+        if !isInViewport, uniformDocumentHeight == nil {
             let suggestedAnchor = viewportLayoutController.relocateViewport(to: textRange.location)
             var targetViewport = contentView.visibleRect
             targetViewport.origin.y = suggestedAnchor
@@ -99,13 +107,13 @@ extension STTextView {
     }
 
     override open func scrollToBeginningOfDocument(_ sender: Any?) {
-        relocateViewport(to: textLayoutManager.documentRange.location)
+        textLayoutManager.textViewportLayoutController.relocateViewport(to: textLayoutManager.documentRange.location)
         layoutViewport()
         scroll(CGPoint(x: visibleRect.origin.x, y: frame.minY))
     }
 
     override open func scrollToEndOfDocument(_ sender: Any?) {
-        relocateViewport(to: textLayoutManager.documentRange.endLocation)
+        textLayoutManager.textViewportLayoutController.relocateViewport(to: textLayoutManager.documentRange.endLocation)
         layoutViewport()
         updateContentSizeIfNeeded()
         scroll(CGPoint(x: visibleRect.origin.x, y: frame.maxY))

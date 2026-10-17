@@ -23,9 +23,7 @@ package protocol STTextViewProtocol {
     var textContentManager: NSTextContentManager { get }
     var textContainer: NSTextContainer { get set }
 
-    var widthTracksTextView: Bool { get set }
     var isHorizontallyResizable: Bool { get set }
-    var heightTracksTextView: Bool { get set }
     var isVerticallyResizable: Bool { get set }
 
     var highlightSelectedLine: Bool { get set }
