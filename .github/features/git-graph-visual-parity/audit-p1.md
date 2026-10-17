@@ -25,6 +25,45 @@
 
 ## 发现项
 
+## 发现 F-15
+
+- 任务：`P1-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`kero/Git/RecentCommitsView.swift:837`
+- 摘要：`固定图谱轨道色与 60 种内置 Ghostty 主题的背景重叠，黄色在 TokyoNight Day 对比仅1.17:1`
+- 风险：`当前所有线条背景描边颜色与 Theme.sidebar 一致，12 色中多种与浅色主题背景几乎同色，720 个主题/轨道色组合中124个对比度低于2:1；节点与 Merge 路径不可辨认，不满足图谱在所支持主题下的可读性约束`
+- 预期修复：`沿唯一 CommitGraphRails Canvas 绘图路径，在轨道色和当前主题 sidebar 实际背景对比不足3:1时才用高对比黑/白 1pt 细底衬；轨道及节点保留原始12色与真实父边，不添加主题配置或独立第二色盘；每个 Canvas 绘制只计算12色一次`
+- 验证：`测试先基于现有60个内置主题×12调色板720个组合确认低对比场景；在 NativeUI 添加全部720组合的路径/衬线对比度判定与浅/深绘制测试；运行 Git Graph UI、图谱、完整401+授权 SSH、Debug+Release签名。`
+- 解决证据：`Red: read-only analyze all built-in Kero Ghostty themes (60) ×12 palette (720), 124 graph path vs actual theme sidebar backgrounds <2:1, lowest TokyoNight Day yellow 1.169:1. Root fix 603ced3: existing CommitGraphRails.Canvas renders a high-contrast 1pt underlying halo only if path contrast <3:1, for all link/HEAD/Stash nodes/expanded bottom rails, retaining 12 exact path colors; helper reused existing sRGB luminance. Green: RecentCommitsViewTests 24/24, new 720-combination contrast assertions with actual Theme.commonDarkThemes + commonLightThemes and other native click/scroll/menu tests. Logs /tmp/kero-graph-audit-60theme-720colors-20261017.log /tmp/kero-graph-audit-theme-postpatch-final-20261017.log; no user theme settings modified.`
+
+
+## 发现 F-14
+
+- 任务：`P1-T1`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Git/CommitGraphLayout.swift:104`
+- 摘要：`深度分页的 Merge 轨道每条边重复逐行逐 Link 判断是否可用，Debug 5000 行/150 车道布局中位 4.72 秒`
+- 风险：`RecentCommitsView.body 每次状态/UI 更新都会重新构造布局；现有 clear(lane) 对所有中间行及已添加的链接重复逐层扫描，3000 行/100 车道中位 1.46s，5000/150 达 4.72s，造成真实 UI 主线程卡顿风险`
+- 预期修复：`仅在 CommitGraphLayout.init 内建立临时车道占用 IndexSet，节点先占位，生成每条父边时把两端及中间区间一次性登记；clear 由区间相交代替逐行逐 Link 检索，移除旧重复扫描逻辑，不加跨刷新状态/缓存或新图谱模型`
+- 验证：`先留存当前同生产 Swift 源码构建的 1001/31、3000/100、5000/150 Debug+Release 中位耗时日志；修复后相同 fixture 30 次热操作中位/p95/最差对比，22+ graph/test、随机 DAG 真实父边/避障/分页/Stash、401+ 本机及授权 Windows SSH 全量测试、Release 构建签名`
+- 解决证据：`d615831 时原生产源码为基线：同fixture Onone Debug 1001/31=75.4ms、3000/100=1.459s、5000/150=4.716s，中间多段图谱链接扫描为根因。98f2c2a 用仅构造期间的 IndexSet 占用区间替换 clear(lane) 嵌套扫描，不新增永久缓存；绿测23/23(新增5000/150父边/避障/重复稳定性)；优化后同样测量 Debug中位38.7ms、437.7ms、996.1ms，Release-like6.2ms、58.9ms、125.9ms。旧/新生产源码经812组随机包括Stash/缺页/DAG的节点、每行links、bottomRails和knownHeadHistory逐值完全相等。日志 /tmp/kero-graph-large-layout-*-20261017.log /tmp/kero-graph-layout-equivalence-*。`
+
+
+## 发现 F-13
+
+- 任务：`P1-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`kero/Git/RecentCommitsView.swift:783`
+- 摘要：`100+ 图谱车道时最小 1pt 间距让轨道区超过侧栏，237 车道下提交标题只剩 8pt 且 1.6 倍字体下完全被挤走`
+- 风险：`计划承诺窄侧栏不整体横向滚动并尽量保持提交标题可读；现有 spacing 的 max(1,...) 使 gutter 不能按 34% 侧栏上限收缩，极端分支下无法显示或访问提交内容，真实用户路径受阻`
+- 预期修复：`只在 CommitGraphRails.spacing 的唯一布局处计算非负自适应间距并严格约束总 gutter；保留全部真实 DAG 与点击/菜单路径，不添加持久色盘、第二绘制路径或裁断父关系；过密轨道仍应诚实记录视觉重叠的物理上限`
+- 验证：`对 260/400/800pt、0.8/1/1.6/2 倍字体、0/1/12/30/100/237/1000 lanes 逐组合对照原生产公式先 Red，Green 断言 gutter 上限与可用提交标题空间，随后 NativeUI、图谱、全量 401 Git/Windows SSH 和 Release 构建验签`
+- 解决证据：`旧 spacing 1pt 下 260pt宽、237车道 gutter=252pt（1.6x字体403.2pt），XCTest 新160组合回归先 Red；根因更改 in d615831，仅允许非负间距而不另建渲染器，Red→Green：RecentCommitsViewTests 23/23；6个真实NSHostingView组合（237车道、浅/深、260/400pt、1/1.6/2x）标题可视滚动区域仍在侧栏内；docs/ui.md 同提交。日志 /tmp/kero-graph-density-red-20261017.log /tmp/kero-graph-density-native-green-20261017.log。`
+
+
 ## 发现 F-12
 
 - 任务：`P1-T1`
@@ -98,3 +137,16 @@
 ### 本轮 P1 最终 Gate（2026-10-17）
 
 **Go（P1 所列可自动验证的范围）。** 逐提交 `48be515`/`b848abf` 已实际接入唯一 Git Graph 渲染路径；旧固定蓝色及按 lane 着色、无复用临时车道和缺页 Stash 无谓预约已从同一路径删除。F-11、F-12 Red→Green 并提交 `4b24cfa`；22/22 图谱用例及真实 Stash/NativeUI 回归全绿；额外 27 组 300/1000 节点 DAG 逐边验收 16,022 条父关系全通过。授权 Windows 全量 `make test DERIVED_DATA=build/DerivedData-graph-audit` 401/401、0 failed、0 skipped，完整命令退出 0；同目录 `make build`、严格 `codesign` 均退出 0。上述只保证 P1 确定的拓扑与 UI 组件调用；237 并行车道的有限宽度可读性没有被冒称完美。
+
+## 2026-10-17 追加极端条件审查（独立于本文件既有结论）
+
+- **F-13 / `d615831`**：单个 `CommitGraphRails.spacing` 在车道多于约 100 时仍强制每条至少 1pt。原代码实际算出 260pt 侧栏、237 车道时图谱宽 252pt，字体 1.6x 时 403.2pt，标题消失；Red 的原生 XCTest 包含 160 个窗口宽度/字号/车道数组合。仅将最小 `spacing` 由 1pt 改为 0pt，既没有删掉真实父边，也没有引入截断图谱的兼容渲染器。Green：同 160 组合通过；NativeUI 237 车道，浅/深两主题与 260pt/400pt + 1x/1.6x/2x 字号六组真实 NSHostingView 均保留可见标题滚动区域。`RecentCommitsViewTests` 23/23，日志 `/tmp/kero-graph-density-red-20261017.log`、`/tmp/kero-graph-density-native-green-20261017.log`。
+- **F-14 / `98f2c2a`**：原布局在排每条 Merge 父边时逐行扫描所有现存 Link 判空，重复成本随历史页数和车道数放大。直接用原生产源码 Debug 测量 1001/31 为75.4ms、3000/100 为1.459s、5000/150 为4.716s（中位）。替换成同一个 `CommitGraphLayout.init` 内临时 `IndexSet` 车道占用区间，无跨刷新状态/第二图谱缓存，删除逐行逐 Link 扫描。新实现分别 38.7ms、437.7ms、996.1ms；同输入 Release 优化版 6.2ms、58.9ms、125.9ms（基线原版 6.5ms、72.3ms、178.1ms）。23/23 DAG 单测，额外用**原源码与新源码各自独立编译**跑 812 组确定性 DAG/缺页/Stash/多父历史，规范化比对完整 rows/laneCount/links/bottomRails/knownHeadHistory，812/812 **逐值一致**。5k Debug 约1s 与237条并行轨道不可完全肉眼分辨是已声明的规模上限，不以性能修复冒充可阅读无限车道。测试源只在 `/tmp`，日志 `/tmp/kero-graph-large-layout-{debug,release}{,-green}-20261017.log`，未新增永久 profiler。
+- **F-15 / `603ced3`**：从项目真正提供的60个 Ghostty 浅/深主题及12路径色遍历720种背景/轨道组合，发现124种小于2:1，最差TokyoNight Day上的黄线1.169:1；之前使用和背景相同颜色绘制底衬，线条几乎不可见。保留12色路径身份不变；仅当路径对比<3:1时，在**同一个** `CommitGraphRails.Canvas` 用背景对比明显的黑/白细衬绘制 path、HEAD/Stash 节点及展开文件行 `bottomRails`，每次 Canvas 绘制只计算12种底衬一次，沿用原有 sRGB 亮度公式且不更改用户主题配置。Green：`RecentCommitsViewTests` 24/24（720组合逐项验证路径或底衬能达3:1，图谱/Ref/Stash点击及横滚均通过），日志 `/tmp/kero-graph-audit-theme-postpatch-final-20261017.log`。这是原生宿主 + 主题模型证据，不冒充60个主题均有人眼截图审阅。
+- **P2/P3 跨阶段补充 / `8b60625`**：新的临时真实 Git SHA256 仓库通过真实 `GitStatusModel.sync` 检查 64位 SHA、双父 Merge、中文逗号名称分支/Tag、`origin/HEAD`/`origin/ALIAS` 符号别名与真实非符号 `upstream/HEAD`，连真实 `CommitGraphLayout.knownHeadHistory` 一起校验。`GitStatusModelTests` 27/27；不靠虚拟 Git log 假数据证实。日志 `/tmp/kero-graph-sha256-integrated-20261017.log`。临时 Git repo 在 test defer 内删除。
+
+**新增测试分层边界：** 图谱计算/随机拓扑、真实 Git IO、原生 NSHostingView/主题模型各自检查了最终数据或控件几何。macOS 15.6 真实运行时及正在使用中的 Kero 正式进程没有被擅自更改；不同 Retina 屏幕缩放、所有自定义 Ghostty 主题的人眼截图和完整独立 App 鼠标操作仍需专用无干扰图形测试会话，不能把本轮单元/原生宿主当作全场景人工 E2E。
+
+### 2026-10-17 极端条件最终自动化复验
+
+在最终隔离测试宿主修复 `e5c82e5` 后，授权 Windows SSH 完整 `make test` 重新返回 **407/407 passed，0 failed，0 skipped，退出码 0**，`xcresult` 状态 Passed。新增 5k 行/150 车道确定性拓扑压力、160 个视口/字体/车道组合、720 个主题/路径色组合、真实 Git SHA-256 Merge 均实测执行并通过；独立程序另完成 812 个随机 DAG 与旧算法逐值一致性比较。相应测试环境：macOS 27.2 arm64 + 授权 Windows SSH，最低 macOS 15.6 和专用 GUI 人工 E2E 仍属 P3 的显式 Deferred 边界。
