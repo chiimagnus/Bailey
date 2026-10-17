@@ -27,6 +27,19 @@
 
 ## 发现项
 
+## 发现 F-31
+
+- 任务：`P3-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`KeroTests/NativeUI/Git/GitExternalRefreshTests.swift:389`
+- 摘要：`Windows SSH 面板隐藏测试没有排除隐藏前已经开始的分阶段历史查询`
+- 风险：`只等 changedEntries 这一早到核心信号，不等 isRefreshing false 就移除 View 并写入新 HEAD，可能把之前启动的历史查询结果错误判定为隐藏后新轮询；本轮授权实机运行对此断言 1 项失败，须隔离竞争条件才能判断产品实际缺陷`
+- 预期修复：`在模拟隐藏前先等当前 SSH Git 全量刷新完成，再更改实际 HEAD 并验证没有隐藏后的周期请求；如果在严格闲置后仍失败，再沿 ToolPanelView .task(id:) 与生命周期修根因，不能添加定时重试或无关防护`
+- 验证：`KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test ONLY_TESTING=KeroTests/GitExternalRefreshTests；实机确认背景、恢复、隐藏期间无新查询，以及当前模型真正刷新后恢复`
+- 解决证据：`Red (authorized Windows): 401 executed/1 failed/0 skipped, GitExternalRefreshTests.testVisibleSSHPanelRefreshesExternalGitChanges failed hidden polling assertion; before removal view a prior remote staged/core update was observed but pending full detail read not yet settled. Add precondition !model.isRefreshing and old newHead history confirmed before hiding; commit 2f9e170. Green: KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test DERIVED_DATA=build/DerivedData-graph-audit ONLY_TESTING=KeroTests/GitExternalRefreshTests: 3 passed, 0 failures, 0 skipped, command exit 0; Windows SSH case passed 69.053 s. Real product ToolPanelView .task cancellation unchanged. Log /tmp/kero-graph-audit-ssh-refresh-green.log.`
+
+
 ## 发现 F-01
 
 - 任务：`P3-T2`
@@ -73,3 +86,42 @@
 
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
+
+## 本轮独立逐提交复审（2026-10-17；不采用既有 audit 结论）
+
+- P3-T1：`todo.toml` 中原 SHA `48506e9` 的提交在当前分支对应 `91d0a34`，两者 `git patch-id --stable` 完全相同。检查 `GitPanel.changeList → RecentCommitsView.commitRow`：Ref/Stash 位于标题前，Merge 仅弱化标题、悬停后恢复，第二行 SHA/系统字体作者/右侧日期不改变；实际按钮、全文标题单独滚动、文件树折叠均复用原生共享行。旧的作者斜体衬线/标题优先样式已替换，不存在另一个 Merge 专用图谱渲染器。
+- P3-T2：原 SHA `d12e937` 对应本分支 `68ee700`，patch-id 一致。`CommitGraphLayout.knownHeadHistory` 仅沿已加载父边自当前 HEAD/Detached HEAD 追踪；`nodeHelp` 只写完整 SHA、真实 Ref/Stash 和已证明的 HEAD 祖先；圆形 Button 位于绘制节点上，原生 `.help`、鼠标主键展开、右键提交菜单皆复用现有路径而不创建自定义悬停任务或新增 Git 查询。测试对直接按钮、`+N` 分段菜单、宽窄侧栏、Stash、Merge、多父/未知祖先和展开文件均有覆盖。
+- 两份参考截图与主机已有隔离 App 截图本轮重新读取核对：图谱路径、Ref 分段、节点形状与提交信息的顺序一致；截图来自不同仓库/主题/窗口宽度，不能伪称逐像素相等。用户正在使用中的正式 Kero 不用于 UI 自动化，也不重启。
+- `todo.toml` 原记录的是改分支前的提交；本轮在全部六个稳定 patch-id 对应后，用 `feature_tool.py todo set-status` 逐条修正为当前分支真实 SHA。原始提交证据未删除，当前六个新 SHA 均已被 Git HEAD 包含，`todo validate` 已通过。
+- F-31：授权 Windows SSH 实机测试揭示隐藏期间的历史更新断言失败；只等分阶段的 `changedEntries` 而未等 `isRefreshing=false`，不能据此直接证明隐藏后仍启动周期请求。先把前次查询与被测新轮询分离，再决定是否修产品的可见性生命周期。详见本轮 finding 与随后实机复测日志。
+
+### 本轮适用条件与极端边界核销（独立于既有审计结论）
+
+| 已识别的环境或条件 | 本轮实际覆盖与原始证据 | 范围与未测情况 |
+| --- | --- | --- |
+| 真实 macOS / 工具链 | macOS 27.2、Xcode 27.2、Apple Git 2.54.0、Apple Silicon；`make build` 命令退出 0，`make test` 401 项、0 失败、6 项因未设置专用 SSH 主机跳过 | 真实最低支持的 macOS 15.6 没有可使用的测试主机，未验证最低 OS 运行时；编译与现有 SDK 部署检查不能冒充 15.6 运行 |
+| Git DAG 正常、异常、极端规模 | `CommitGraphLayoutTests` 22/22：空图、unborn、线性/root/非连通、并行 tip、交叉/多父/Octopus/Merge、两条非重叠绕行、缺页与翻页、随机 120 节点多父序列、1000 线性、1001 行和 31 车道重复布局 30 次 | 1001 行布局本轮日志中中位约 0.073 秒、p95 约 0.075 秒，未把 CPU 估计等同独立前台滚动帧率 |
+| Stash 与可见性边界 | `GitStashActionTests` 12/12：同 OID 不同 selector、base 有/无、真实 Apply/Pop/历史及文件；新增 40 个 base 缺页 Stash 的 Red（41 车道）→Green（2 车道） | 未在用户真实工作仓库制造/清空 Stash，所有变更限独立临时 fixture |
+| 引用／解析／组合／目标安全 | `GitRemoteBranchActionTests` 15/15、`GitStatusModelTests` 26/26、`RecentCommitsViewTests` 21/21：真实符号/非符号 `origin/HEAD`、多个已配置/未配置 remote、最长前缀、Tag、同一提交的 34 个 Ref、跨提交不合并、Unicode／逗号、分段左键复制/右键；原目标身份、OID 和授权校验仍完整生效 | 还以真实 Git SHA-256 临时仓库预检 64 位哈希、Unicode+逗号分支/Tag 与符号远端，Git 命令成功；这项独立 Git 预检**不等于**已经从完整 Kero App 走完该 fixture 的点击 E2E |
+| 颜色、主题、缩放、命中 | 原生 NSHostingView 测试：12 色准确性、12 色图标对比至少 4.5:1、aqua/darkAqua 下 HEAD 和 Stash 可点击、260pt+1.6 字号和 420pt+正常字号、30 并行车道无整表横滚、左右键、Tag 重复点击、Git 文件 tree/list、短标题防回弹、菜单复制及 hover 帮助 | 自定义 Ghostty 主题、独立 2x 外接显示器、触控板长距离拖拽、运行时连续调整侧栏宽度和系统 VoiceOver 人工路径暂未单独做全功能手动 E2E。不能因原生宿主绿色宣称这些已测 |
+| 本机生命周期、恢复与两窗口 | `GitExternalRefreshTests` 本机实时变更/隐藏/激活均验证；`WorkspaceWindowIsolationTests` 等完整工作区宿主测试运行。更高层对外部工具启动的 Git 变化没有增设新查询路径 | 不在真实用户正在使用的 Kero 安装包里测试、重启或更改设置；只能在隔离实例中测试 |
+| 获授权 Windows SSH | 首轮完整 401 项、1 个旧测试前置竞态失败、0 跳过；`GitExternalRefreshTests` 修正前提后专用主机重测 3/3、0 跳过（SSH case 69.053 s）；真实远端 Rebase、文件树、Git Push/Delete/Zip/历史恢复/Stash/Clean、连接故障恢复测试已经分别运行通过 | 最终已修正代码的 `windows` 主机全量命令再次独立执行中，待最终完整退出状态核销；不对用户现有 SSH master 注入真实断网或杀进程，故仅验证专用 socket 与独立失败注入 |
+
+禁忌边界：不修改或导出用户机密、不访问用户在用仓库执行破坏性 Git 命令、不清理共享构建目录、不使用正在打开的 Kero 窗口进行无授权的自动化。具体用户路径在独立 App 做过的部分只按实际证据报告；XCTest 原生宿主/静态截图不冒充独立完整前台 E2E。
+
+**64 位对象及特殊 Ref 的命令级夹具细化：** 在 `/tmp` 创建 SHA-256 Git 仓库，使用生产 `recentCommitLogArguments` 完全相同的 `--decorate=full`、`--date-order`、`--diff-merges=first-parent` 与 `%(decorate:separator=%x1d)` 格式直接查询，得到 64 字符完整提交 OID、两条 64 字符父 OID，以及用 `\x1d` 独立分隔的 4 个引用：`HEAD -> refs/heads/main`、`tag: refs/tags/版本,β`、`refs/remotes/origin/main`、`refs/remotes/origin/HEAD`。说明 Git 真实命令输出没有丢失 UTF-8/逗号或符号 Ref，且与生产解析器的 7 个 Unit Separator 字段输入格式一致；这仍是 CLI 输入事实，不夸大成完整 App 的 SHA-256 E2E。原始二进制响应记录仅在 `/tmp/kero-graph-audit-sha256-native-log.bin`，未提交含用户信息的夹具或新增非 XCTest 永久实现。
+
+### 本轮授权 Windows 全量重验与严格签名（最终结果）
+
+- 首轮的 SSH 401 项、1 失败、0 跳过，根因是原 `GitExternalRefreshTests` 在 SSH `changedEntries` 早到后立即隐藏视图，未等待历史／Ref 部分完成；修复为**校验已启动刷新真正结束**，不改产品轮询。代码以单独原子提交 `2f9e170` 落地。F-31 已用审计脚本回填 Resolved。
+- 有同一正式 Kero XCTest 目标的实际 Green：`KERO_P4_TEST_SSH_HOST=windows TEST_RUNNER_KERO_P4_TEST_SSH_HOST=windows make test DERIVED_DATA=build/DerivedData-graph-audit`，**401 项，0 failures，0 skipped，退出码 0**，合计 682.719s，日志 `/tmp/kero-graph-audit-windows-full-final.log`。明确逐项包括 `GitExternalRefreshTests` SSH 隐藏面板、`GitWorkspaceSSHTests` 真远端 Git 文件与操作、`SSHFileTreeLiveTests`、`SSHGitRecoveryLiveTests`、SSH Rebase、普通原生图谱和 WorkspaceWindowIsolation，所有通过。
+- `make build DERIVED_DATA=build/DerivedData-graph-audit` 完整退出 0，日志 `/tmp/kero-graph-audit-build-final.log`。紧随其后的 `codesign --verify --deep --strict --verbose=2 build/DerivedData-graph-audit/Build/Products/Debug/Kero.app` 返回 0，输出 `valid on disk`、`satisfies its Designated Requirement`，日志 `/tmp/kero-graph-audit-codesign-final.log`；构建／签名是独立检查，不由 XCTest 绿色推断。
+- 隔离 App 当前代码实测：执行 `open -g -n -a build/DerivedData-graph-audit/Build/Products/Debug/Kero.app --args --isolated-ui-test`，获得**独立测试 PID 83554**，正式安装包 `/Applications/Kero.app` 的 PID 94982 始终保持运行，桌面前台仍为用户自己的 Helium。隔离 Kero 的背景窗口可列出，但 Peekaboo 精确窗口 AX 仅返回不完整的 application menu bar，`snapshot_reusable=false`／`mutation_targeting_available=false`，像素+AX 捕获失败；不允许用未核验的坐标冒充点击，也不升级为前台抢用户焦点。只向 PID 83554 发出 SIGTERM 清理该测试实例，正式 Kero 未退出、未修改、未重启。此前保留的隔离 App 图谱截图可证明实际应用曾能展示 Git Graph，但本轮**没有完成独立 App 前台的图谱→菜单→历史文件→分页全程点击**。
+
+### 本轮 P3 最终 Gate（严格按完整验收，不作虚假全绿）
+
+**No-Go（仅对“完整独立 App 前台 E2E 已彻底验收”的无条件声明）；功能代码与所有可安全自动执行的 Unit／Integration／NativeUI／授权 SSH 验证已通过。** P3 两个原始 commit `91d0a34`、`68ee700` 确认真实接入；用户路径的 NativeUI/真实 git 工作区和上一轮隔离运行截图均有证据，F-31 已解决，最新 401/401 + build + codesign 都为 0 错误。未覆盖的条件明确为：① macOS 15.6 最低版本真实运行时（当前只有 macOS 27.2；需独立兼容机），②自定义 Ghostty 主题与独立 Retina/DPI、系统辅助功能人工测试（不能擅自更改用户共享设置／显示器），③完整独立 App 前台鼠标、右键与动态面板缩放／分页流程（背景 AX 不可用、抢占用户工作会话不合适；需获准可占用焦点的隔离 UI 环境）。风险：不同系统视觉细节、极限车道可读性和全 App 路由仍缺独立人工认证。补验方式：在用户明确可交出前台、没有正在使用 Kero 的隔离桌面／测试会话，使用同一临时 Git fixture 从真实 Kero 项目选择到图谱标签、菜单、历史文件、30→60 分页、缩放及悬停逐项完成，不改正式用户环境；另在 macOS 15.6 主机和独立主题/DPI fixture 复核。未完成前不能把 401/401 当作上述环境的 E2E 通行证。
+
+### 按现行 AGENTS.md 完成本地安装（2026-10-17 14:00 左右）
+
+代码 `4b24cfa`、`1d232e6` 和测试 `2f9e170` 经授权 Windows 401/401、`make build` 与 `codesign --verify --deep --strict` 完整通过后，依据 `docs/development.md#本地安装` 将签名 Debug 包从 `build/DerivedData-graph-audit/Build/Products/Debug/Kero.app` 先以 `ditto --rsrc --extattr` 暂存到 `/Applications` 同盘临时目录，独立验签并核对新旧 `CFBundleIdentifier=chiimagnus.kero`；随后**整包**原子移动替换 `/Applications/Kero.app`，验签成功且 `valid on disk` / `satisfies its Designated Requirement`。安装脚本预设失败回滚至原包，实际未触发；已删除临时 stage 和旧包 backup，未留下过时的并行安装包。正式 Kero 原进程 PID 94982 在更新后仍运行，未结束、未启动或重启；用户下次自行重启后才会运行新文件。严格区分**已安装**与**当前旧进程尚未重启**，不把包验签代替当前进程 UI E2E。未对用户在用仓库、主题、SSH master 和保存会话执行破坏性操作。

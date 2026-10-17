@@ -6,7 +6,7 @@ id = "P1-T1"
 title = "以真实DAG分配路径颜色并消除Merge串色"
 status = "completed"
 plan = "plan-p1.md#p1-t1"
-commit = "312af32e1c565d2e07a9943a4642b770f8b1e6b4"
+commit = "48be5159f35b25a83568dbf6859774dfc28a8f74"
 note = "16 图谱单测、12 Stash 集成及 26 Git 状态集成通过；旧颜色规则已删除"
 
 [[tasks]]
@@ -14,7 +14,7 @@ id = "P1-T2"
 title = "统一图谱调色板及HEAD和Stash节点几何"
 status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = "8158774b2484b18f56a768bcb1b01edadeb7d4ee"
+commit = "b848abf3876cf512e8c1ee07548e6e906a15c6bf"
 note = "13 原生 Git 历史测试通过；12 色精确值与深浅点击回归通过"
 
 [[tasks]]
@@ -22,7 +22,7 @@ id = "P2-T1"
 title = "符号远端Ref只读展示与原生接入"
 status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = "a4f1e06763d7e5cd70fbe1c151875599b0f5a521"
+commit = "73815df9a8427f2f973f69215473e6d717597beb"
 note = "15 远端操作、26 Git 状态、14 原生菜单测试通过；别名只读菜单已接入"
 
 [[tasks]]
@@ -30,7 +30,7 @@ id = "P2-T2"
 title = "一次完成Ref分组复合标签与分段操作"
 status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = "04a6ec918ec5bee6261b6788f6541a5d9c0a1172"
+commit = "7b3dae7928a47fbfb7c05520f15f2e3d056317ee"
 note = "18 原生 UI、15 远端动作、12 Stash 测试通过，宽窄截图核对；旧 Capsule 已清理"
 
 [[tasks]]
@@ -38,7 +38,7 @@ id = "P3-T1"
 title = "对齐提交行布局密度与Merge状态"
 status = "completed"
 plan = "plan-p3.md#p3-t1"
-commit = "48506e9c937fb8ba7b4bcfc3247e09a069c3e1a8"
+commit = "91d0a346731a180bfa26a101a2b9aee661409b1c"
 note = "18 原生 Git Graph、5 共享树命中用例通过；260/420/500pt 截图核对"
 
 [[tasks]]
@@ -46,5 +46,5 @@ id = "P3-T2"
 title = "节点悬停与跨场景视觉回归验收"
 status = "completed"
 plan = "plan-p3.md#p3-t2"
-commit = "d12e93718264ac5975bc2c1b2de12d5e6610b21e"
+commit = "68ee7006eb7b0d5fb1363ce598231cf1d71b046d"
 note = "make build+签名通过；make test 397 例0失败、6项Windows SSH跳过；新增图谱20/20；隔离App实际显示与节点展开通过，独立App菜单/分页未逐项走通"
