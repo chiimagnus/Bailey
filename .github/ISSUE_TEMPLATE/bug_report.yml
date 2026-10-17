@@ -23,7 +23,7 @@ body:
       label: What happened?
       placeholder: |
         What you did, what you expected, and what happened instead.
-        A short recording beats a paragraph.
+        只需补充图片无法呈现的前因或结果。
     validations:
       required: true
 
@@ -42,7 +42,7 @@ body:
     id: screenshots
     attributes:
       label: Screenshots or recording
-      description: Drag and drop images or a recording here. Optional but speeds up triage.
+      description: 可直接上传截图或短录屏；静态问题优先截图，交互问题使用录屏。不要将排障截图提交到 Git 仓库。
     validations:
       required: false
 

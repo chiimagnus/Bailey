@@ -21,3 +21,11 @@ body:
       description: Bailey is a terminal-first native macOS workspace for projects, Git, files, and SSH. Tell us how this improves that workflow.
     validations:
       required: true
+
+  - type: textarea
+    id: visual-reference
+    attributes:
+      label: Screenshot or sketch (optional)
+      description: 界面需求优先上传截图或草图；动态交互可附短录屏。直接附在 Issue 中，不提交进 Git。
+    validations:
+      required: false
