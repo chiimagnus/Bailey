@@ -97,6 +97,14 @@ final class TerminalManager {
     /// Folder requests can arrive while macOS is still launching Bailey, before
     /// a WindowGroup has produced a manager/window to receive them.
     private static var pendingDirectories: [String] = []
+    /// System document events can precede SwiftUI windows and saved-window recovery.
+    /// Keep one receipt per OS batch so AppKit receives exactly one reply.
+    private struct PendingExternalOpen {
+        let urls: [URL]
+        let preferred: TerminalManager?
+        let completion: (Bool) -> Void
+    }
+    private static var pendingExternalFiles: [PendingExternalOpen] = []
     /// Captured from SwiftUI's openWindow environment so a Finder request can
     /// reopen Bailey after the user has closed its last window.
     private static var windowOpener: (() -> Void)?
@@ -420,12 +428,128 @@ final class TerminalManager {
         selectedProjectID = project.id
     }
 
+    /// Finder/Dock documents use the original file tab in any window, then the
+    /// receiving main window. Delay until all restored windows are registered
+    /// and attached so cold launch never creates a second writable buffer.
+    static func openExternalFiles(
+        _ urls: [URL], preferred: TerminalManager? = nil,
+        completion: @escaping (Bool) -> Void = { _ in }
+    ) {
+        guard !urls.isEmpty else { completion(false); return }
+        guard preferred == nil || preferred?.window != nil else {
+            completion(false)
+            return
+        }
+        // This queue exists only while the OS is bringing a window on screen.
+        // If window creation genuinely cannot complete, fail new requests
+        // rather than retaining unbounded AppKit reply closures.
+        guard pendingExternalFiles.count < 64 else {
+            completion(false)
+            return
+        }
+        pendingExternalFiles.append(.init(
+            urls: urls, preferred: preferred, completion: completion
+        ))
+        deliverPendingExternalFiles()
+        requestWindowForPendingDirectories()
+    }
+
+    private static func deliverPendingExternalFiles() {
+        guard !pendingExternalFiles.isEmpty, pendingRestores.isEmpty,
+              registry.contains(where: { $0.window != nil })
+        else { return }
+
+        let requests = pendingExternalFiles
+        pendingExternalFiles = []
+        for request in requests {
+            // Not every manager in the process represents a window that will
+            // appear. Only defer for an unmounted owner of a requested file.
+            // Otherwise one unattached manager could block Finder permanently.
+            let requestedPaths = Set(request.urls.filter(\.isFileURL).map {
+                resolvedLocalPath($0.standardizedFileURL.path)
+            })
+            let awaitingOwner = registry.contains { manager in
+                manager.window == nil && manager.projects.contains { project in
+                    project.sshHost == nil && project.tabs.contains { tab in
+                        guard case .file(let file) = tab.content,
+                              file.workspaceIdentity == nil else { return false }
+                        return requestedPaths.contains(resolvedLocalPath(file.path))
+                    }
+                }
+            }
+            if awaitingOwner {
+                pendingExternalFiles.append(request)
+                continue
+            }
+            let defaultManager = request.preferred
+                ?? registry.first { $0.window != nil && $0.window === NSApp.keyWindow }
+                ?? registry.first { $0.window != nil && $0.window === NSApp.mainWindow }
+                ?? registry.last { $0.window != nil }
+            guard let defaultManager, defaultManager.window != nil else {
+                request.completion(false)
+                continue
+            }
+            // Group by final owning window, rather than process each file as a
+            // separate batch (that would create N pinned projects on multi-open).
+            var groups: [(manager: TerminalManager, urls: [URL], lastIndex: Int)] = []
+            for (index, url) in request.urls.enumerated() {
+                let resolved = url.isFileURL
+                    ? resolvedLocalPath(url.standardizedFileURL.path) : nil
+                let alreadyOpen = resolved.flatMap { path in
+                    registry.first { manager in
+                        manager.projects.contains { project in
+                            project.sshHost == nil && project.tabs.contains { tab in
+                                guard case .file(let file) = tab.content,
+                                      file.workspaceIdentity == nil else { return false }
+                                return resolvedLocalPath(file.path) == path
+                            }
+                        }
+                    }
+                }
+                let target = alreadyOpen ?? defaultManager
+                if let position = groups.firstIndex(where: { $0.manager === target }) {
+                    groups[position].urls.append(url)
+                    groups[position].lastIndex = index
+                } else {
+                    groups.append((manager: target, urls: [url], lastIndex: index))
+                }
+            }
+            // The final input determines focus, including interleaved files
+            // that were already open in two other windows.
+            groups.sort { $0.lastIndex < $1.lastIndex }
+            var handled = false
+            var lastReceiver: TerminalManager?
+            for group in groups {
+                let rejected = group.manager.openExternalLocalItems(group.urls)
+                handled = handled || rejected.count < group.urls.count
+                if let owner = group.manager.window, !rejected.isEmpty {
+                    let message = String(
+                        localized: "Some files or folders could not be opened in Bailey.",
+                        table: "Interface"
+                    )
+                    let details = rejected.map(\.lastPathComponent).joined(separator: "\n")
+                    let error = NSError(domain: "Bailey.Finder", code: 1, userInfo: [
+                        NSLocalizedDescriptionKey: message,
+                        NSLocalizedRecoverySuggestionErrorKey: details,
+                    ])
+                    WorkspaceNativeDialogs.showError(error, in: owner)
+                }
+                if rejected.count < group.urls.count { lastReceiver = group.manager }
+            }
+            if handled {
+                NSApp.activate()
+                lastReceiver?.window?.makeKeyAndOrderFront(nil)
+            }
+            request.completion(handled)
+        }
+    }
+
     /// Routes folders from the Finder service into the active Bailey window.
     /// If no window exists yet, the next WindowGroup manager claims them.
     static func openDirectories(_ directories: [String]) {
         guard !directories.isEmpty else { return }
-        let manager = registry.first { $0.window === NSApp.keyWindow }
-            ?? registry.first { $0.window === NSApp.mainWindow }
+        let manager = registry.first { $0.window != nil && $0.window === NSApp.keyWindow }
+            ?? registry.first { $0.window != nil && $0.window === NSApp.mainWindow }
             ?? registry.last { $0.window != nil }
         guard let manager else {
             pendingDirectories.append(contentsOf: directories)
@@ -449,6 +573,7 @@ final class TerminalManager {
         if !directories.isEmpty {
             window.makeKeyAndOrderFront(nil)
         }
+        Self.deliverPendingExternalFiles()
     }
 
     private static func takePendingDirectories() -> [String] {
@@ -462,11 +587,12 @@ final class TerminalManager {
     /// solely to handle a service request.
     static func registerWindowOpener(_ open: @escaping () -> Void) {
         windowOpener = open
+        deliverPendingExternalFiles()
         requestWindowForPendingDirectories()
     }
 
     private static func requestWindowForPendingDirectories() {
-        guard !pendingDirectories.isEmpty,
+        guard (!pendingDirectories.isEmpty || !pendingExternalFiles.isEmpty),
               !registry.contains(where: { $0.window != nil }),
               !windowRequestScheduled,
               !isOpeningWindow
@@ -476,7 +602,7 @@ final class TerminalManager {
         // Give SwiftUI's normal cold-launch window one turn to attach first.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             windowRequestScheduled = false
-            guard !pendingDirectories.isEmpty,
+            guard (!pendingDirectories.isEmpty || !pendingExternalFiles.isEmpty),
                   !registry.contains(where: { $0.window != nil }),
                   !isOpeningWindow
             else { return }
@@ -925,6 +1051,10 @@ final class TerminalManager {
     func windowClosed() {
         // A pending async Files error must not bring back the closed window.
         window = nil
+        // A drop tied to a closing window must never reappear in another one.
+        let abandoned = Self.pendingExternalFiles.filter { $0.preferred === self }
+        Self.pendingExternalFiles.removeAll { $0.preferred === self }
+        for request in abandoned { request.completion(false) }
         guard !Self.isQuitting else { return }
         pendingSave?.cancel()
         Self.registry.removeAll { $0 === self }

@@ -534,6 +534,16 @@
       }
     },
     "Show FPS Counter" : {},
+    "Some files or folders could not be opened in Bailey." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分文件或文件夹无法在 Bailey 中打开。"
+          }
+        }
+      }
+    },
     "Stop Loading" : {
       "localizations" : {
         "zh-Hans" : {
