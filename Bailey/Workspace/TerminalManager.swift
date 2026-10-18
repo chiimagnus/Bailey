@@ -98,7 +98,8 @@ final class TerminalManager {
     /// a WindowGroup has produced a manager/window to receive them.
     private static var pendingDirectories: [String] = []
     /// System document events can precede SwiftUI windows and saved-window recovery.
-    /// Keep one receipt per OS batch so AppKit receives exactly one reply.
+    /// Keep the request and its completion together until the actual receiving
+    /// window is ready; a queued event is not proof a file was opened.
     private struct PendingExternalOpen {
         let urls: [URL]
         let preferred: TerminalManager?

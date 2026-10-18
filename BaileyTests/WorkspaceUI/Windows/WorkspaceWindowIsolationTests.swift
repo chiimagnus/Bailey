@@ -25,7 +25,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         }
     }
 
-    func testAppDelegateOpenFilesUsesTheActualMountedFileBuffers() async throws {
+    func testExternalBatchRoutesToActualMountedFileBuffers() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -48,15 +48,21 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             return manager.attachedWindow === window
         }
 
-        let delegate = BaileyApplicationDelegate()
-        delegate.application(NSApp, openFiles: [first.path, second.path])
+        // XCTest hosts can have unrelated windows from other integration tests.
+        // Choose the mounted recipient explicitly; process-wide activation and
+        // default window selection are covered by the separate Launch Services E2E.
+        var replies: [Bool] = []
+        TerminalManager.openExternalFiles([first, second], preferred: manager) {
+            replies.append($0)
+        }
+        XCTAssertEqual(replies, [true])
         let project = try XCTUnwrap(manager.selectedProject)
         XCTAssertEqual(manager.projects.count, 1)
         XCTAssertEqual(project.customDirectory, folder.path)
         XCTAssertNil(project.pinnedFile)
         XCTAssertEqual(project.tabs.filter { $0.content.isFile }.count, 2)
         guard case .file(let opened) = try XCTUnwrap(project.selectedTab).content else {
-            return XCTFail("The system callback must create a real file content tab")
+            return XCTFail("The system batch route must create a real file content tab")
         }
         try await opened.waitForText()
         XCTAssertEqual(opened.text, "{\"number\":7}")
@@ -64,14 +70,14 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "{\"number\":7}")
 
         let existing = opened
-        delegate.application(NSApp, openFiles: [second.path])
+        TerminalManager.openExternalFiles([second], preferred: manager)
         guard case .file(let reused) = try XCTUnwrap(manager.selectedProject?.selectedTab).content
         else { return XCTFail("The previous buffer must still exist") }
         XCTAssertTrue(reused === existing)
         XCTAssertEqual(manager.projects.count, 1)
         XCTAssertEqual(project.tabs.count, 2)
 
-        delegate.application(NSApp, openFiles: [folder.path])
+        TerminalManager.openExternalFiles([folder], preferred: manager)
         XCTAssertEqual(manager.projects.count, 1, "Opening a directory reuses the existing root")
         XCTAssertEqual(manager.selectedProject?.customDirectory, folder.path)
         XCTAssertEqual(project.tabs.count, 2, "A folder is a project, not a file editor")
@@ -85,7 +91,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
         let imagePath = folder.appendingPathComponent("example.png")
         try png.write(to: imagePath)
-        delegate.application(NSApp, openFiles: [imagePath.path])
+        TerminalManager.openExternalFiles([imagePath], preferred: manager)
         guard case .file(let preview) = try XCTUnwrap(project.selectedTab).content else {
             return XCTFail("System image open should create a native preview tab")
         }

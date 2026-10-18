@@ -28,9 +28,9 @@ Finder／Dock 的外部打开请求不是工作区快照。冷启动及末窗关
 
 ## 测试实例
 
-`BaileyInstanceMode` 识别 `--isolated-ui-test`。每个进程生成 UUID，以独立 UserDefaults suite 保存窗口快照，并使用临时终端历史；不读取其他实例残留的项目，不启动保存的隧道。
+`BaileyInstanceMode` 识别 `--isolated-ui-test` **或**有效 UUID 的 `BAILEY_UI_TEST_RUN_ID` 环境变量。隔离进程以专用 UserDefaults suite 保存窗口快照，并使用临时终端历史；不读取正式 Bailey 的窗口，也不启动已保存隧道。
 
-刻意测试跨进程恢复时，两次启动传入相同的有效 UUID 环境变量 `BAILEY_UI_TEST_RUN_ID`。无有效 ID 时各自独立；这不隔离普通设置，完整测试边界见 [testing.md](../testing.md#隔离环境)。
+刻意测试跨进程恢复时，两次启动传入同一有效 UUID。使用 `open -a <测试 App> <文件>` 验证真实 Launch Services 文档事件时，先确认正式 Bailey 已退出，再以 `open -n -a` 配合 `--env BAILEY_UI_TEST_RUN_ID=<UUID>` 启动测试 App：不要同时使用 `--args`，以免系统文件事件丢失。它只隔离数据，不隔离 Bundle ID、鼠标、键盘或图形会话；完整测试边界见 [testing.md](../testing.md#隔离环境)。
 
 ## 验证
 

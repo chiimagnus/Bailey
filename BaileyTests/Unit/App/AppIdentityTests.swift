@@ -40,6 +40,32 @@ final class AppIdentityTests: XCTestCase {
         XCTAssertEqual(services[0]["NSMessage"] as? String, "openInBailey")
     }
 
+    @MainActor
+    func testSystemDocumentBatchUsesAllAppleEventFileURLs() {
+        let first = URL(fileURLWithPath: "/tmp/bailey one.swift")
+        let second = URL(fileURLWithPath: "/tmp/中文 B.md")
+        let third = URL(fileURLWithPath: "/tmp/dir", isDirectory: true)
+        let fileList = NSAppleEventDescriptor.list()
+        fileList.insert(NSAppleEventDescriptor(fileURL: first), at: 1)
+        fileList.insert(NSAppleEventDescriptor(fileURL: second), at: 2)
+        fileList.insert(NSAppleEventDescriptor(fileURL: third), at: 3)
+        XCTAssertEqual(
+            BaileyApplicationDelegate.documentURLs(from: fileList),
+            [first, second, third],
+            "One kAEOpenDocuments event must preserve every file and its original order"
+        )
+        XCTAssertEqual(
+            BaileyApplicationDelegate.documentURLs(from: nil),
+            []
+        )
+        XCTAssertEqual(
+            BaileyApplicationDelegate.documentURLs(
+                from: NSAppleEventDescriptor.list()
+            ),
+            []
+        )
+    }
+
     func testSingleApplicationIdentity() {
         XCTAssertEqual(AppIdentity.bundleIdentifier, "chiimagnus.bailey")
         XCTAssertEqual(AppIdentity.displayName, "Bailey")

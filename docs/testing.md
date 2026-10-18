@@ -65,7 +65,7 @@ make test ONLY_TESTING=BaileyTests/FileTabTests
 
 | 改动 | 相关测试 |
 | --- | --- |
-| 应用身份、Finder 类型注册与系统文件委托 | `AppIdentityTests`、`WorkspaceWindowIsolationTests`；真实 Finder/Dock 进程外投递另需独立图形登录环境 |
+| 应用身份、Finder 类型注册与原生 Apple Event 系统入口 | `AppIdentityTests`、`WorkspaceWindowIsolationTests`；真实 Finder/Dock 进程外投递另需独立图形登录环境 |
 | Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests` |
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
@@ -98,7 +98,7 @@ open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Bailey.app" --args --iso
 
 并行构建或测试同一项目时，为各任务指定独立的 `DERIVED_DATA`（如 `make test DERIVED_DATA=build/DerivedData-review`），避免共用产物被另一任务覆盖或重新签名；不得清理其他任务的构建目录。
 
-Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 使用 Launch Services 的正式 Bundle ID 路由；`--isolated-ui-test` 只能隔离快照，不能隔离系统的 App 身份。若当前用户会话已有 `/Applications/Bailey.app` 在运行，不向它发送测试文件；进程外系统验收应在独立图形登录用户／测试 Mac 上执行。进程内 AppKit delegate XCTest 和构建包类型检查不替代该验收。
+Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 使用 Launch Services 的正式 Bundle ID 路由。测试工具不能只因有 `--isolated-ui-test` 就向工作目录中的 App 发文件：该参数会成为 `open --args` 的启动参数，但**不改变系统对 App 身份与文件事件的分发**。当用户确认正式 Bailey 已退出、核对系统进程后，可对独立构建包使用 `open -n -a "$TEST_APP" --env "BAILEY_UI_TEST_RUN_ID=$UUID" "$TEMP_FILE"`，其中有效 UUID 环境变量使进程隔离快照与后台隧道；不传 `--args`，否则可能丢掉系统文件事件。后续 `open -a "$TEST_APP" "$TEMP_FILE"` 时必须先核对系统实际送达的是所持有的测试 PID。通过隔离快照、真实窗口数、FileTab、文件正文或图片和源文件 SHA-256 共同验证。**此方式隔离工作区数据，不隔离 GUI 会话或 Bundle ID**，不能在用户正常 Bailey 运行时测试，也不能把 `open -a` 当成 Finder「打开方式」和物理 Dock 拖动已验收的证据。
 
 真实 SSH 只使用专用且获准的测试 master；不借用用户连接或结束其后台任务。真实 Windows SSH 回归必须**明确指定获授权的测试主机**。`BAILEY_P4_TEST_SSH_HOST` 是已有的共用参数名，P4 与后续 Git 外部刷新测试都使用它；未提供时专用用例按条件跳过，不能视为真实 SSH 验收。
 
