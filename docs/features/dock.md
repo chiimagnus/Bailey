@@ -18,7 +18,7 @@
 
 ## 窗口与菜单
 
-主窗口由 `WindowRootView` 的 `TerminalManager` 协调。`.focusedSceneValue(\.baileyManager, manager)` 和菜单中的 `@FocusedValue` 连接当前窗口；菜单栏「文件 → 打开文件…」（⌘O）打开当前窗口的本机文件选择面板，标签栏「＋ → 打开文件…」在发起的停靠组打开。两者均支持单／多选、只选择文件且要求已有项目。设置窗口或切换窗口后不得把 Sheet 和结果错误投到后台项目。
+主窗口由 `WindowRootView` 的 `TerminalManager` 协调。`WindowChromeAccessor` 在原生视图实际挂载到窗口时绑定 `NSWindow`，不能依赖一次异步检查或 SwiftUI 恰好再次更新；否则新建的空工作区窗口会显示「添加文件夹」却无法弹出选择器。`.focusedSceneValue(\.baileyManager, manager)` 和菜单中的 `@FocusedValue` 连接当前窗口；菜单栏「文件 → 打开文件…」（⌘O）打开当前窗口的本机文件选择面板，标签栏「＋ → 打开文件…」在发起的停靠组打开。两者均支持单／多选、只选择文件且要求已有项目。设置窗口或切换窗口后不得把 Sheet 和结果错误投到后台项目。
 
 系统从 Finder／Dock 交给 Bailey 的本机文件请求，先检查所有窗口内已有的**本机文件标签**，即使标签属于 SSH 项目也按文件自身的机器身份判断：存在时激活原窗口／原项目／原标签，不制造第二份可写缓冲。否则在实际接收窗口的**当前项目**中新建本机标签，项目目录范围不限制能打开的文件；没有项目时不自动创建项目。恢复中的窗口先完成附着再处理文件；原 Finder 文件夹 Service 保留添加目录项目的语义。
 
