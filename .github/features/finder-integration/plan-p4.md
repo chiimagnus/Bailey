@@ -135,3 +135,9 @@
 - **F-04 原生窗口挂载缺陷**：P4 的打开文件／目录菜单依赖 `TerminalManager.attachedWindow`。新建空项目窗口的 SwiftUI 宿主可能在进入原生 `NSWindow` 前已完成初次布局，原 `WindowChromeAccessor` 只在 make 后一次异步时刻、以及 SwiftUI 再次 update 时尝试附着；无后续更新就永远不附着，导致按钮和菜单无响应。Red：`WorkspaceWindowCloseTests` 离屏渲染再装窗测试失败；Green：改为 `NSView.viewDidMoveToWindow` 原生装窗回调并保留唯一 Coordinator/Delegate，连同双窗口隔离测试共 3/3 全通过。
 - **已证 E2E**：签名独立 App 恢复后，新空窗口真实点击添加文件夹弹出 Sheet，选择 Project C 成功且保持窗口隔离；C 中打开 B 已有文件自动把原 B 窗口置前并复用原标签，C 中首次打开 `inside-C.swift` 只在 C 增加标签并显示真实文本。Finder 双窗口与原生 Sheet 坐标均核对不越过显示器左半屏；前次 Finder 多选和重叠窗口造成的意外目标已找出真实前提，不能归咎为产品 Bug。
 - **当前命令与收尾**：代码 `0398a24` 已提交，当前 macOS 上的严格签名构建与授权 Windows SSH 的最终全量 `make test` 完成，**472 项 / 0 失败 / 0 跳过**。无项目 Finder 实际拖放显示原生错误 Sheet，空窗口仍 0 项目／0 标签；F-04 已解决。尚未实测 Finder「打开方式」、Dock、部分多分屏与 SSH GUI 组合，不冒充完成；完整结果见 `audit-p4.md` 最终补验小节。
+
+### 2026-10-19 PR #34 追加验收边界
+
+在现有 Mac 的隔离实例补充了深浅 × 中英文实际启动和会话恢复、5 MiB + 1 byte／无效 UTF-8 占位提示及异常后继续打开正常文件、SSH `windows` 项目同一路径 Mac/远端双标签的原生正文与两侧磁盘 SHA 核对。原生 `open -a` 正向打开文件到已有 Project B，项目数不变。Issue #10 已评论确认“无项目独立打开新文件”延期，PR #34 按模板创建且 CI build 通过。
+
+**仍需补验**：Finder「打开方式」有项目的原生点击结果、实体 Dock 图标文件投递、完整 SSH 图形断线／恢复和其它未覆盖的复杂交互组合。多个 `chiimagnus.bailey` 同时运行、Finder 全局选中项及 Space 前台变化会使接收者不唯一；出现时停止物理投递，不退出其它 App 或把工具事件派发成功记为产品成功。详细触发前提、通过／未通过证据与环境边界以 `audit-p4.md` 的最新补验小节为准。
