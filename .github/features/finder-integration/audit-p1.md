@@ -57,3 +57,10 @@
 
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
+
+## 2026-10-19 独立复核（按原始提交与当前调用链）
+
+- **P1-T1 · `0d994fe`**：原提交确曾实现「已有本机标签 → 包含该文件的目录 Project → 必要时创建本机 Project」的当时要求；它不是 P4 当前行为。独立核对 HEAD 的 `TerminalManager.openExternalLocalItems` 和 `addLocalItems`：`filesByParent`、`explicitDirectories`、`contains(path:in:)` 与普通文件创建 Project 的分支均不再存在；`addLocalItems` 仅接受目录。旧 `pinnedFile` 数据的恢复、重命名及明确 SSH 文件项目的写入仍可达，不能为了清理旧策略误删。
+- **P1-T2 · `aa999e9`**：`openExternalFiles → deliverPendingExternalFiles → openExternalLocalItems → Project.openLocalFile` 在当前源码仍连通；通过真实 `registry`／已附着窗口查找现存本机标签，`pendingRestores` 未清空时延后消费，关闭指定接收窗口时取消其批次。原目录 Service 与系统文件事件的待处理数据仍有不同调用方，不能按「重复队列」名称机械删除。
+- **重新运行的证据**：在本 worktree 执行含获授权 Windows SSH 的全量 `make test`，完整退出 0，**472 项／0 失败／0 跳过**；`WorkspaceIdentityTests`、`WorkspaceWindowIsolationTests` 真实执行。19 个原始分支提交各自的 `git show --check` 通过；原生 Finder 完整图形组合不能由这些 XCTest 推导。
+- **独立 Gate**：P1 的**历史任务**可保留完成，**不能**将原 P1 按目录建项目规则作为当前验收或恢复依据；现行归属、安全和 GUI Gate 交给 P4。无新增 P1 阻塞 finding。

@@ -21,6 +21,19 @@
 
 ## 发现项
 
+## 发现 F-05
+
+- 任务：`P4-T1`
+- 严重级别：`Low`
+- 状态：`Resolved`
+- 位置：`BaileyTests/Integration/Workspace/WorkspaceIdentityTests.swift:220,289`
+- 摘要：`两项 Finder XCTest 名称仍描述 P1 的 pinned-file 与最深目录选择策略，但断言已切换为 P4 当前项目语义`
+- 风险：`测试名称与真实断言互相矛盾，后续审查或重构容易据旧名称错误恢复按目录建项目行为`
+- 预期修复：`仅按现行行为准确重命名两项 XCTest，不改变断言、历史提交或应用逻辑`
+- 验证：`make test ONLY_TESTING=BaileyTests/WorkspaceIdentityTests; git diff --check`
+- 解决证据：`Commit effaf46，准确重命名两项与 P4 当前语义矛盾的测试名称；针对性 make test 24/0 退出0，完整 make test 472/0/0 退出0，make build + codesign 严格验签退出0；测试断言和应用逻辑未变。`
+
+
 ## 发现 F-04
 
 - 任务：`P4-T3`
@@ -112,3 +125,12 @@
 - **SSH 真实 GUI 本机／远端隔离**：隔离 Bailey 的 SSH `windows` 项目 `/tmp/bailey-p4-gui-fRmd2B` 有两个名字和 POSIX 路径相同的 `remote-p4.txt` 标签，但一个使用 SSH 后端、一个使用 Mac 本地后端；实际点击远端标签的原生 Text Editor 显示 `remote-saved-chang`，点击本机同路径标签显示 `mac-local-saved-change`。独立使用 `ssh -T -o BatchMode=yes -o ControlMaster=no -o ControlPath=none windows` 读取 Windows 侧文件，同时直接读取 Mac 侧文件；远端 SHA-256 为 `38afb178367be2539702db6e286a8f765d37ea1ece5261dd4172bb880135e647`，本机为 `f13ddde8865055afbbf7ecf3f3779576e824800002ac8a0b4845d9a8d3c51c44`，内容与 GUI 各自一致。会话快照还确认同 SSH 项目中 `mac-in-ssh-project-p4.swift` 为本机标签。**此处实测读取及身份隔离，不冒称本轮重新执行了远端保存／GUI 断网重连**；授权 Windows 后端六项真主机测试已在上述 472 项全量回归中通过。
 - **Dock 与 Finder 物理剩余条件**：Dock 在尝试独占测试时又出现另一个工作树启动的同 `chiimagnus.bailey` 进程，后来正式 `/Applications/Bailey.app` 也再次运行；无法可靠指定物理 Dock 落点的接收 PID。为避免把文件投递到别人的 App，**没有执行这次 Dock 图标拖放**。Finder「打开方式」的**有项目正向点击**也因 Finder 全局选择／Space 前台被其它应用改变而未完成；`open -a` 及 Finder AppleScript 不能冒充它的完整鼠标路径。某次 Peekaboo 只能取得空窗口的 `Application-scoped partial semantics`，是 Space／AX 目标不可辨认时的测试工具限制，不能直接定性为 Bailey Bug。
 - **范围与待办**：当前 Mac 上 Finder 右键正向打开、Dock 图标物理拖入、部分组合式分屏／触控板、SSH GUI 真断线恢复与 Mac 保存到远端的全过程，仍需要**可独占的安全图形会话**并核对实际接收 PID、真实标签及磁盘最终字节。系统默认应用的修改／恢复不是本阶段必要操作；没有 macOS 15.6 真机，按用户决定不列为当前验收阻塞。现有 `make build` 严格签名与授权 Windows SSH 全量 `make test` **472/0/0** 的历史日志仍然有效；本轮只添加原生 E2E 证据，**未修改生产代码，不冒称重新运行全部 XCTest**。
+
+## 2026-10-19 本轮独立审计结论（覆盖先前执行者的 Gate 判断）
+
+- **P4-T1 · `1121e74`**：当前 `openExternalLocalItems` 先按解析后的本机真实路径查找已有 `FileTab.workspaceIdentity == nil`，未命中才开在接收窗口原选中 Project；`Project.openLocalFile` 使用 `LocalWorkspaceBackend.shared`，不会把 Mac 文件送给 SSH。既有 `SessionStore.TabSnapshot.localFile` 保持新旧快照兼容；`WorkspaceIdentityTests`、`SessionStoreTests` 和多窗口集成均实际执行。
+- **P4-T2 · `6269ac9`／`b426b30`**：系统文件菜单 `⌘O` 与 Dock 各组「＋」共用文件型 `NSOpenPanel`，项目添加共用目录型 `NSOpenPanel`；异步组目标失效时拒绝越界投放。核对生产源码无 `chooseLocalItems`、`filesByParent`、`explicitDirectories`、`documentProject` 或新建 Mac 单文件 Project 分支；仍有消费者的 `pinnedFile` 是历史快照／显式 SSH 项目，不删除。
+- **P4-T3 · `b4e29bc`／`0398a24`**：新 Finder 文件的普通文件／可读性门槛，以及空窗口 `NSView.viewDidMoveToWindow` 附着回调，均连入生产路径；权限、FIFO、延迟挂载、真正 `NSWindow` 文件选择器及关闭路径有测试。新独立发现 **F-05 / Low**：两项 XCTest 名称仍宣称 P1 的旧项目策略，而断言验证 P4；按准入规则先登记后仅更名，提交 `effaf46`，不更改实现或断言，**已 Resolved**。
+- **本轮重测事实**：macOS 27.2、Xcode 27.2。带 `BAILEY_P4_TEST_SSH_HOST=windows` 的完整 `make test` 在重命名前实际运行 **472 项、0 失败、0 跳过、整体退出 0**（`build/audit-logs/finder-audit-test.log`）；更名后 `WorkspaceIdentityTests` **24／24 通过、退出 0**（`build/audit-logs/finder-f05-focused-test.log`）；随后 `make build` **退出 0、严格 `codesign` 验签通过**（`build/audit-logs/finder-audit-build.log`）。19 个原分支提交 `git show --check` 全部通过，`todo validate`、`git diff --check` 通过。**不得声称更名后重新运行了整套 472 项**，尽管测试体没有变化。
+- **边界与内部跳过**：`SSHFileTreeLiveTests` 日志有 `P4_LIVE_SYMLINK_UNAVAILABLE status=1`，表示该次真实 Windows 环境未成功建立该特定符号链接测试前提，**不把整体 XCTest 的 0 skipped 当作这项内部前提也测到了**；本机符号链接拒绝与重复标签有独立测试。当前轮次**未实际完成** Finder「打开方式」有项目正向点击、Dock 图标物理文件投放、全部分屏／触控板位置组合和 SSH GUI 真断线恢复。之前证据不能冒充本次复测；同 Bundle ID 多进程、前台窗口归属不确定时不得发送可能落入正式 Bailey 的鼠标／文件事件。macOS 15.6 真机不属于用户要求的本轮环境，不列为缺陷。
+- **独立 Gate**：**自动测试、构建验签和可核查的源码不变量为 Go；完整 P4 真实 GUI 验收为 No-Go（尚未全部实测，不代表发现新生产 Bug）**。在可安全独占且只使用屏幕左半边的图形会话中，核对真实接收 PID、窗口、文件标签、目标副本／源 SHA 后补齐上述具体操作；授权 Windows SSH 图形断线／恢复另行核对最终本机与远端文件字节。不得为测到绿色而退出、替换或误操作用户现有 App。本轮仅提交了测试更名，计划与审计文件仍是本地待提交记录，未 push。

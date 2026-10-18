@@ -1,6 +1,6 @@
 # Plan P3 — Finder 按实际放置区域执行对应动作
 
-> **历史阶段，已完成。** 当时的 Projects 文件投放会建立独立 `pinnedFile` 项目，后经用户明确修正为「普通文件只打开标签，目录才添加项目」。新需求和其测试见 [Plan P4](plan-p4.md)，P3 的 Files 复制、终端/WebKit 所有权及真实 Finder 验收继续有效；以下任务和审计保留原有完成证据，不改写历史。
+> **历史阶段，已完成；Projects 文件落点已被 P4 替换。** P3 当时的 Projects 文件投放会建立独立 `pinnedFile` 项目；P4 改为「文件只在已有项目打开标签、目录才添加项目」。当前行为以 [idea.md](idea.md)、[Plan P4](plan-p4.md) 为准。P3 的 Files 本机复制、终端本机路径输入／SSH 拒绝、WebKit 原生上传、精确 Dock 组投放仍应回归；以下任务、Red→Green 和提交按当时条件保留，不能将历史的 Projects 文件建项目验收作为当前要求。
 
 **Goal：** Finder 文件／文件夹按 Bailey 实际命中区域执行不同且互斥的动作：编辑区和分屏标签栏打开或复用文件（新标签进入实际落点组）、Projects 新增本机项目、Files 将文件及目录复制到准确的本机目录、本机 Ghostty 只插入转义路径、WebKit 网页内容保留原生上传；SSH 不误接本机路径，Dock／Projects 内部拖动不受影响。2026-10-18 用户将原本留给 Issue #5 的 Finder→本机 Files 复制子集提前纳入本阶段。
 
@@ -18,7 +18,7 @@
 
 ---
 
-**阶段演进说明：** 下面 P3-T1／T2 保留当时的 Red→Green、真实 Finder 实验及代码快照，部分文案是用户扩展 Files／Projects 交互**之前**的历史语境（例如「Files 留白打开」或「Files 导入留给 #5」）。**当前目标与验收以以上说明、P3-T3/T4 及 `idea.md` 为准**，不能按 T2 历史语义回退已经实现的复制与项目添加。
+**阶段演进说明：** 下面 P3-T1／T2 保留当时的 Red→Green、真实 Finder 实验及代码快照，部分文案是用户扩展 Files／Projects 交互**之前**的历史语境（例如「Files 留白打开」或「Files 导入留给 #5」）。**P3 阶段历史验收以 P3-T3/T4 的当时要求理解；现行行为以 `idea.md` 和 P4 为准。** 不得按任何早期 P3 任务恢复 Files 留白打开文件或 Projects 单文件建项目。Files 精确复制、终端和 WebKit 的既有正确行为继续保留。
 
 ---
 

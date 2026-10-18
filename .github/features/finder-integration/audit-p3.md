@@ -69,3 +69,12 @@
 - **工作标签栏**：Finder 从新建的目录项目 `FolderA` 拖 `nested.md` 到空中央分屏顶部标签栏，实际生成文件标签且持久化 Dock Group `0AD6D0CA-AF66-4CF0-9C40-906C3AF099FE` 中可观察到该标签；右侧 `File Manager/Git Manager` 分组原工具项保留。右侧另一个分屏的**物理 Finder 鼠标投放及暗／亮外观组合尚未得到可靠 E2E**：过程中 Finder 临时 Info 窗口和桌面 Space 可见性切换使 AX 观察失败，自动化在拖动前停止；不能以事件发送成功或 XCTest 代称通过。原生 `NSWindow` / `NSItemProvider` 的非选中/空组/跨项目测试 44 项通过仍是替代证据，而非真实 Finder 鼠标全部覆盖。
 - **反例归属修正**：重启后最初两次拖放失败时，UI 窗口从 `(29,68)` 移至 `(0,39)` 而脚本仍使用旧全局坐标，目标实际落在不同 Files 行／不可见窗口；后改用单实例＋每次实时 AX bounds，压缩目录复制成功。**旧两次不计为代码缺陷或验收证据**。连续拖放期间 Finder 选择与原生自动化窗口竞争还曾污染独立快照；明确单文件验证后确认无额外标签，不能仅凭此前未控制选择的累积标签数量推断产品重复打开。
 - **验收限制**：本轮没有改动源码，沿用已经验证的最终 `make build` 和 `make test` **455 项、0 failures、6 skipped**；未重新跑全套。macOS 15.6 真机、6 个获授权专用 SSH 实机用例和暗／亮多分屏真实 Finder 组合仍需相应测试环境。没有推送 PR；本次补充记录只保存在本地 Feature 审计文件。
+
+## 2026-10-19 独立复核（P3 区域所有权及 P4 覆盖边界）
+
+- **P3-T1 · 无代码提交**：该任务确为 Finder 粘贴板／原生接收者调查，`todo.toml` 的无提交原因与计划匹配。没有把实验误计作生产功能；本轮未重新执行全部物理 Finder 坐标实验，不冒充复现。
+- **P3-T2 · `69cc3b5`**：当前 `FinderWindowDrop` 只在普通 SwiftUI 区域及浏览器工具栏接收文件，网页正文和 Ghostty 终端保留自己的拖放；`BaileyTerminalView.fileDropText` 整批拒绝控制字符，`performDragOperation` 只 `sendText`、不发 Return；`TerminalSession.acceptsLocalFileDrop` 区分固定 SSH、动态连接和手动 SSH 前台进程。远端 Files 行不再生成伪本机 `fileURL`。
+- **P3-T3 · `c7f64ee`**：`FileTreeImportDrop → FileTreeModel.importFromFinder → LocalWorkspaceBackend.copyFromFinder` 仍是 Files 唯一复制路径。核对目录／文件行与根落点、目标属于本机、符号链接越界拒绝、后台复制到暂存目录及 `renamex_np(RENAME_EXCL)` 的原子不覆盖发布；`FileTreeTests` 实测源字节保留、目标副本、冲突、失败清理与 12 并发竞争。
+- **P3-T4 · `a85d10c`**：`DockTabGroupView` 将实际 `(projectID, groupID)` 传给共享文件入口，当前 `Project.openLocalFile` 将新标签放入对应组，旧标签不迁组；跨窗、空组、晚到 provider 由 `WorkspaceWindowIsolationTests` 覆盖。P3 当时的 Projects 单文件新建 `pinnedFile` 行为已由 P4 替换，现为文件开标签、目录添加项目。
+- **本轮自动回归**：`make test` **472 项／0 失败／0 跳过**、完整退出 0；`make build` 严格验签退出 0。P3 的历史真实 Finder 行／根／终端/WebKit 观察留作当时证据，**不是**本次最新版所有 GUI 放置组合均已重跑的证明。
+- **独立 Gate**：P3 已实施的代码和安全副作用在当前静态／集成层未发现新的确定性缺陷，历史交付可保留；当前版本的 Finder 精确物理落点、双窗口和主题组合仍应纳入 P4 未闭合的 GUI Gate。不把旧 Projects 文件建项目路径恢复为回归目标。

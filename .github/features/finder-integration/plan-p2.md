@@ -1,5 +1,7 @@
 # Plan P2 — macOS 系统文件注册与 Finder/Dock 打开
 
+> **历史阶段，已完成；系统接收机制仍有效。** P2 的交付是 Finder／Dock／`open -a` 文件事件注册、批量 Apple Event 接收及窗口投递，并非永久规定「文件对应哪个项目」。P2 当时复用的 P1 自动项目选择／创建策略已由 [Plan P4](plan-p4.md) 取代；当前普通文件只在已有项目中开本机标签，目录经显式添加才建项目。以下任务的原始实现过程、实验、提交和验收按当时条件保留；当前行为以 [idea.md](idea.md) 和 P4 为准。
+
 **Goal：** 正式签名的唯一 Bailey.app 被 Launch Services 识别为文件／文件夹的备用打开应用；Finder、Dock、`open -a` 的真实文件事件进入 P1 的共同路由。
 
 **Non-goals：** 不建立 `NSDocument`、`DocumentGroup`、Finder Extension、第二 Bundle ID、安装脚本、注册守护进程；不更改任一文件类型的系统默认应用，也不替换原 Finder 文件夹服务。

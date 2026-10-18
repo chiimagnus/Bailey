@@ -54,3 +54,10 @@
 
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
+
+## 2026-10-19 独立复核（现行系统接收机制）
+
+- **P2-T1 · `833f571`**：核对唯一 `Bailey/Resources/Info.plist` 及本轮 `make build` 的实际包：文本、图片、目录均声明 `LSHandlerRank=Alternate`，保留原 `NSServices/openInBailey`；没有修改默认文件关联、增加第二 Bundle ID 或创建 Finder Extension。
+- **P2-T1 修复 · `de65f88`**：核对现行 `BaileyApplicationDelegate.applicationWillFinishLaunching` 安装 `NSAppleEventManager` 的唯一 `kAEOpenDocuments` 接收者，`handleOpenDocuments` 解析整批 URL 后调用 `TerminalManager.openExternalFiles`。旧无效 `application(_:openFiles:)` 和 SwiftUI `.onOpenURL` 并行接收分支已从生产源码消失；Finder 的文件夹 Service 仍通过 `openDirectories` 执行目录项目添加。
+- **独立运行证据**：`AppIdentityTests`、`WorkspaceWindowIsolationTests` 在本轮全量 `make test` 中通过（**472 项／0 失败／0 跳过，完整退出 0**）；`make build` 执行成功并严格验签；编译后 Info.plist 内容与源码声明一致。
+- **独立 Gate**：系统注册与事件分发的当前源码、构建和集成层可通过复核；**本轮未重新点击 Finder「打开方式」的有项目正向路径，也未物理拖文件至 Dock 图标**。旧 P2 的实际 Finder E2E 属于历史证据，不能替代 P4 当前版本的完整跨进程 GUI 验收。最低 macOS 15.6 真机不是用户要求的本轮补验条件，不声称旧系统实测通过。无新增 P2 源码缺陷 finding。

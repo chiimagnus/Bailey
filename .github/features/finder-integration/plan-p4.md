@@ -1,6 +1,6 @@
 # Plan P4 — 在现有项目中直接打开任意本机文件
 
-> **待执行方案，基于 2026-10-18 的 P3 基线 `a85d10c`。** 此文档不是实现或测试结果。用户已明确取消「没有项目也能打开文件」；不得恢复此前已删除的 P4 隐藏文件工作区实现。P1～P3 的历史任务及审计不改写。
+> **现行方案已实施，正在进行执行后独立审计。** P4 最初基于 2026-10-18 的 P3 基线 `a85d10c` 制定；`todo.toml` 记录 P4-T1～T3 已完成，相关修复还延续至 `0398a24`。**任务完成记录、执行者提供的 E2E 证据及现有 `audit-p*.md` 均不等于本轮独立审计通过**；需逐项核对当前源码、提交、真实调用链和最终效果，再决定 Gate。用户已明确不支持「无项目时独立打开新文件」；不得恢复隐藏文件工作区。P1～P3 的历史任务和提交保留当时语义，不倒改为 P4 规则。
 
 ## Goal / Non-goals / Decision
 
@@ -10,9 +10,11 @@
 
 **架构决定：** **不解耦／搬走 `Project.tabs` 与 `Project.dock`**。现有 `Project.openFile` 已能打开根目录外路径，真正要分开的是「本机文件打开意图」和「添加项目意图」，以及**单个 FileTab 的本机／远端身份**。继续由 `TerminalManager` 选中窗口与项目、`Project` 持有标签和 Dock、`FileTab` 持有读写与撤销；不增加并行所有者。
 
-### 源码与文档事实（执行前取证）
+### P4 设计前的源码与文档事实（历史基线，不代表当前实现）
 
-按仓库 `AGENTS.md` 与 `docs/architecture.md`、`standards.md`、`ui.md`、`testing.md`、`features/projects.md`、`dock.md`、`session-restore.md`、`editor.md`、`files.md`、`command-palette.md` 阅读对应不变量，并使用 `rg` 枚举 `Bailey`、`BaileyTests` 中以下符号的直接调用者。此 worktree 的 CodeGraph 未初始化，`rtk codegraph sync` 明确报错，因此沿现有源码、测试和调用链核验，不自行初始化索引。本轮尚未运行新的 P4 运行时实验。
+以下表格保存的是 P4 实施前的根因和拟修改方向。右列「P4 处理」是当时的计划，不是本轮审计的完成证明。P4 实施后的现行路径和审计核对顺序见下文。
+
+P4 最初制定时阅读了仓库 `AGENTS.md` 与 `docs/architecture.md`、`standards.md`、`ui.md`、`testing.md`、`features/projects.md`、`dock.md`、`session-restore.md`、`editor.md`、`files.md`、`command-palette.md` 等不变量，并以 `rg` 追溯下面的调用者；当时此 worktree 未初始化 CodeGraph、尚未实施 P4 运行时验证。这是**制定时的取证条件**，不是当前的开发环境事实。本轮独立审计已初始化 CodeGraph，仍须结合当前源码、Git 与实际测试结果核对。
 
 | 现有事实／根因 | 源码证据 | P4 处理 |
 | --- | --- | --- |
@@ -27,6 +29,36 @@
 | **历史单文件项目是真实用户资料**：项目名、图标、路径、快照仍依赖 `pinnedFile`；远端添加文件另走 `addSSHItems` | `ProjectsPanelView`、`Project.updateFilePaths`、`SessionStore.ProjectSnapshot`、`TerminalManager.restore` | 删**新的 Mac 文件 → pinned 项目**创建逻辑；保留旧快照的读取、重命名、图标和 SSH 显式文件项目语义，不对用户数据做自动删除／迁移 |
 
 **已经正确且不应重构的公共路径：** `TerminalManager.fileRenamed` 会遍历所有 Project；`Project.updateFilePaths` 逐个按 `FileTab.workspaceIdentity` 判断文件路径是否需要更新，随后才按 Project 身份调整项目根或 `pinnedFile`。因此 Mac 文件位于 SSH Project 时，文件重命名通知已有机器隔离，无需新增重命名系统。`TerminalManager.saveBeforeWindowClose`／`saveBeforeTermination` 也遍历项目内每个脏标签，新增本机 FileTab 可以使用现有保存保护；验证真实字节即可，不改另一套关闭流程。
+
+### 执行后审计坐标（不替代审计结论）
+
+**当前可达执行流，需追到用户可见结果：**
+
+- Finder／Dock／系统 Apple Event：`BaileyApplicationDelegate.handleOpenDocuments` → `TerminalManager.openExternalFiles` → `deliverPendingExternalFiles` → `openExternalLocalItems` → `Project.openLocalFile` → 原有 `PaneTab`／`FileTab`。菜单 `⌘O`、每组「＋」与普通文件 Drop 都接入相同文件路由；既有标签先跨窗口判重，首次打开才归接收窗口当前 Project，指定组只对有效的原始项目／组生效。
+- 目录添加：`chooseFolders`、原 Finder 文件夹 Service 和 Projects 目录 Drop → `addLocalItems`；只允许新建／复用目录 Project。普通文件不能以父目录推导出新 Project。既有 `pinnedFile` 快照和显式 SSH 文件项目仍必须可恢复。
+- Files 精确落点：`FileTreeImportDrop` → `FileTreeModel.importFromFinder` → `LocalWorkspaceBackend.copyFromFinder`，核对真实本机副本、源文件保留、冲突不覆盖和失败提示，不能用普通文件打开路由替代。Ghostty 与 WebKit 各保留原生落点所有权。
+- 混合机器与恢复：本机 `FileTab.workspaceIdentity == nil` 使用 `LocalWorkspaceBackend`，即使所属 Project 在 SSH；快照 `TabSnapshot.localFile` → `Project.restoreTab` 保留这一身份。原生新窗口由 `WindowChromeAccessor` 装载后才能使用文件选择 Sheet。
+
+**逐任务、逐提交取证顺序：**
+
+| 任务 | 主要实现／补修提交 | 审计重点 |
+| --- | --- | --- |
+| P1-T1 | `0d994fe` | 当时的自动项目策略是否真的实现；P4 后是否删除，不把历史旧行为误判为当前目标 |
+| P1-T2 | `aa999e9` | 跨窗已开文件复用、冷启／恢复顺序和接收窗口归属是否仍成立 |
+| P2-T1 | `833f571`、`de65f88` | 系统文件注册、Apple Event 整批接收、Finder Service 与多余窗口修复是否仍被实际调用 |
+| P3-T1 | 无代码提交（原生实验） | 调查证据能否支持真正的目标独占，不用实验结果冒充产品交付 |
+| P3-T2 | `69cc3b5` | 普通区域与终端／WebKit 互斥，SSH 终端拒绝 Mac 路径，移除远端伪本机 URL |
+| P3-T3 | `c7f64ee` | Files 行／目录／根落点及真实安全复制，无覆盖、残留或错误机器写入 |
+| P3-T4 | `a85d10c` | 原生 Dock 组落点／已有标签不迁组；Projects 文件建项目仅作为当时历史，不能恢复 |
+| P4-T1 | `1121e74` | 当前项目内本机文件、SSH 项目中的 Mac 文件、跨窗判重及可选快照标记 |
+| P4-T2 | `6269ac9`、`b426b30` | 系统菜单／每组 `⌘O` 与文件选择器、目录限定、异步目标失效，清理旧创建分支 |
+| P4-T3 | `b4e29bc`、`0398a24` | 无权限／FIFO 等边界、空窗口 AppKit 挂载、原生 Finder 和双窗口最终效果 |
+
+计划及审计文档的提交（含 `6b93896`、`5d5a41e`、`2c84b28`、`4644134`、`991e5a1`）只证明当时记录发生了修改；需核对与源码和实际运行是否吻合，不能据此免除审计。以上映射是本次审阅的检索入口，实时 task 状态仍只属于 `todo.toml`。
+
+**审计 Gate：** 先独立检查 `git show`、当前调用链、测试夹具和最终副作用，再记录 finding；只有确证的可达缺陷才在记录后修复，并重新验证全部受影响入口。无项目独立打开新文件属于明确非目标，不作为遗留 Bug。当前真机为 macOS 27.2，不要求另备 macOS 15.6；未实测的 Finder「打开方式」／Dock 物理投递、窗口与 SSH GUI 组合按 `docs/testing.md` 逐项说明具体阻塞、影响与补验，不把 XCTest、已生成的审计文件或 `open -a` 冒充这些路径的 E2E。
+
+---
 
 ### 单一文件路由：必须维持的规则
 
