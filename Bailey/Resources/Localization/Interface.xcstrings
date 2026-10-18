@@ -17,6 +17,16 @@
         }
       }
     },
+    "Add a project folder before opening files." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先添加项目文件夹，再打开文件。"
+          }
+        }
+      }
+    },
     "Add Folder…" : {
       "localizations" : {
         "zh-Hans" : {

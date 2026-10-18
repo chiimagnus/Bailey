@@ -443,6 +443,92 @@ final class WorkspaceIdentityTests: XCTestCase {
         XCTAssertEqual(selected.tabs.count, 2)
     }
 
+    func testExplicitGroupNeverFallsThroughToAnotherSelectedProject() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let aRoot = root.appendingPathComponent("A")
+        let bRoot = root.appendingPathComponent("B")
+        for directory in [aRoot, bRoot] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("delayed.swift")
+        try "should not open in B".write(to: file, atomically: true, encoding: .utf8)
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([aRoot])
+        let a = try XCTUnwrap(manager.selectedProject)
+        let targetGroup = try XCTUnwrap(a.dock.root.groups.first)
+        manager.addLocalItems([bRoot])
+        let b = try XCTUnwrap(manager.selectedProject)
+
+        // The group was selected when a Finder provider began loading, but
+        // the user switched to B before its local file URL was delivered.
+        let destination = (projectID: a.id, groupID: targetGroup.id)
+        XCTAssertEqual(manager.openExternalLocalItems([file], destination: destination), [file])
+        XCTAssertTrue(manager.selectedProject === b)
+        XCTAssertTrue(a.tabs.isEmpty)
+        XCTAssertTrue(b.tabs.isEmpty)
+        manager.selectedProjectID = a.id
+        let invalidGroup = (projectID: a.id, groupID: UUID())
+        XCTAssertEqual(manager.openExternalLocalItems([file], destination: invalidGroup), [file])
+        XCTAssertTrue(a.tabs.isEmpty)
+    }
+
+    func testFinderReopensFileOwnedByProjectAAfterSwitchingToB() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let aRoot = root.appendingPathComponent("A")
+        let bRoot = root.appendingPathComponent("B")
+        for directory in [aRoot, bRoot] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = aRoot.appendingPathComponent("A-owned.swift")
+        try "owned A".write(to: file, atomically: true, encoding: .utf8)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([aRoot])
+        let a = try XCTUnwrap(manager.selectedProject)
+        a.openFile(file.path)
+        let original = try XCTUnwrap(a.selectedTab)
+        manager.addLocalItems([bRoot])
+        let b = try XCTUnwrap(manager.selectedProject)
+        XCTAssertTrue(manager.openExternalLocalItems([file]).isEmpty)
+        XCTAssertTrue(manager.selectedProject === a)
+        XCTAssertTrue(a.selectedTab === original)
+        XCTAssertTrue(b.tabs.isEmpty)
+        XCTAssertEqual(manager.projects.count, 2)
+    }
+
+    func testFinderLargeRepeatedBatchDoesNotCreateProjectOrDuplicateTabs() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let projectRoot = root.appendingPathComponent("project")
+        let externalRoot = root.appendingPathComponent("external")
+        try FileManager.default.createDirectory(at: projectRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: externalRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let urls = (0..<52).map { index in
+            externalRoot.appendingPathComponent("测试 文件 \(index) – a b.swift")
+        }
+        for url in urls {
+            try "same content".write(to: url, atomically: true, encoding: .utf8)
+        }
+        let alias = externalRoot.appendingPathComponent("symlink.swift")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: urls[5])
+        let missing = externalRoot.appendingPathComponent("missing.swift")
+        let input = urls + Array(urls.reversed().prefix(9)) + [alias, missing]
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([projectRoot])
+        let project = try XCTUnwrap(manager.selectedProject)
+        XCTAssertEqual(manager.openExternalLocalItems(input), [missing])
+        XCTAssertTrue(manager.selectedProject === project)
+        XCTAssertEqual(manager.projects.count, 1)
+        XCTAssertEqual(project.tabs.filter { $0.content.isFile }.count, urls.count)
+        XCTAssertEqual(project.customDirectory, projectRoot.path)
+        XCTAssertNil(project.pinnedFile)
+    }
+
     func testFinderFileDoesNotCreateProjectWithoutExplicitFolder() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -482,6 +568,12 @@ final class WorkspaceIdentityTests: XCTestCase {
         try await local.waitForText()
         XCTAssertEqual(local.text, "mac disk")
         XCTAssertEqual(macTabs.count, 1)
+        local.text = "Mac edit from an SSH project 🪨"
+        local.refreshDirtyState()
+        XCTAssertTrue(local.isDirty)
+        await local.save()
+        XCTAssertFalse(local.isDirty)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "Mac edit from an SSH project 🪨")
     }
 
     func testExplicitLocalAddOnlyCreatesFolderProjects() throws {

@@ -211,6 +211,10 @@ final class TerminalManager {
     func openExternalLocalItems(
         _ urls: [URL], destination: (projectID: UUID, groupID: UUID)? = nil
     ) -> [URL] {
+        if let destination {
+            guard let project = selectedProject, project.id == destination.projectID,
+                  project.dock.root.group(id: destination.groupID) != nil else { return urls }
+        }
         typealias Item = (url: URL, path: String, resolved: String, isDirectory: Bool)
         var items: [Item] = []
         var rejected: [URL] = []
@@ -262,16 +266,8 @@ final class TerminalManager {
                 rejected.append(item.url)
                 continue
             }
-            if let destination, targetProject.id == destination.projectID,
-               targetProject.dock.root.group(id: destination.groupID) == nil {
-                rejected.append(item.url)
-                continue
-            }
             selectedProjectID = targetProject.id
-            targetProject.openLocalFile(
-                item.path,
-                inGroup: targetProject.id == destination?.projectID ? destination?.groupID : nil
-            )
+            targetProject.openLocalFile(item.path, inGroup: destination?.groupID)
         }
         return rejected
     }
@@ -498,10 +494,9 @@ final class TerminalManager {
                 )
                 handled = handled || rejected.count < group.urls.count
                 if let owner = group.manager.window, !rejected.isEmpty {
-                    let message = String(
-                        localized: "Some files or folders could not be opened in Bailey.",
-                        table: "Interface"
-                    )
+                    let message = group.manager.selectedProject == nil
+                        ? String(localized: "Add a project folder before opening files.", table: "Interface")
+                        : String(localized: "Some files or folders could not be opened in Bailey.", table: "Interface")
                     let details = rejected.map(\.lastPathComponent).joined(separator: "\n")
                     let error = NSError(domain: "Bailey.Finder", code: 1, userInfo: [
                         NSLocalizedDescriptionKey: message,

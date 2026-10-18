@@ -130,6 +130,40 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertTrue(remote !== restoredMac)
     }
 
+    func testRealWindowSnapshotPersistsMacFileInsideSSHProject() async throws {
+        XCTAssertTrue(BaileyInstanceMode.isIsolated)
+        let previous = SessionStore.load()
+        let previousHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(previous)
+            TerminalHistoryStore.save(previousHistories)
+        }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("open-in-ssh.swift")
+        try "disk bytes".write(to: file, atomically: true, encoding: .utf8)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        let ssh = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
+        ssh.sshHost = "invalid-p4-autosave"
+        ssh.customDirectory = "/remote/project"
+        manager.projects.append(ssh)
+        manager.selectedProjectID = ssh.id
+        XCTAssertTrue(manager.openExternalLocalItems([file]).isEmpty)
+        try await waitForSnapshot { windows in
+            windows.flatMap(\.projects).contains { project in
+                project.sshHost == "invalid-p4-autosave" && project.tabs.contains { tab in
+                    guard case .file(let path, _) = tab.content else { return false }
+                    return path == file.path && tab.localFile == true
+                }
+            }
+        }
+        XCTAssertEqual(manager.projects.count, 1)
+        XCTAssertEqual(manager.selectedProjectID, ssh.id)
+    }
+
     func testSavedHistoryKeysPairWithSidecarAndOrphansAreCleared() throws {
         XCTAssertTrue(BaileyInstanceMode.isIsolated)
         let previousWindows = SessionStore.load()
