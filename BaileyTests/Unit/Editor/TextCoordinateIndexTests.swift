@@ -30,7 +30,12 @@ final class TextCoordinateIndexTests: XCTestCase {
             var text = original
             var index = NativeTextLineIndex(text as NSString)
             for _ in 0..<300 {
-                XCTAssertEqual((0..<index.lineCount).map { index.offset(atLine: $0) }, expectedStarts(text))
+                let starts = expectedStarts(text)
+                XCTAssertEqual((0..<index.lineCount).map { index.offset(atLine: $0) }, starts)
+                let maximum = starts.enumerated().map { row, start in
+                    (row + 1 < starts.count ? starts[row + 1] : text.utf16.count) - start
+                }.max() ?? 0
+                XCTAssertEqual(index.maximumLineUnits, maximum)
                 var boundaries = [0]
                 for scalar in text.unicodeScalars { boundaries.append(boundaries.last! + scalar.utf16.count) }
                 let first = next(boundaries.count)
@@ -104,6 +109,7 @@ final class TextCoordinateIndexTests: XCTestCase {
             index.replace(in: range, replacementLength: replacement.utf16.count, text: source)
             let fresh = NativeTextLineIndex(source)
             XCTAssertEqual(index.length, source.length)
+            XCTAssertEqual(index.maximumLineUnits, fresh.maximumLineUnits)
             XCTAssertEqual((0..<index.lineCount).map { index.offset(atLine: $0) },
                            (0..<fresh.lineCount).map { fresh.offset(atLine: $0) },
                            "iteration=\(iteration)")

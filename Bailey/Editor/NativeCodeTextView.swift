@@ -113,7 +113,6 @@ class NativeCodeTextView: NSTextView {
     var highlightSelectedLine = false
     private(set) var gutterView: NativeLineNumberRuler?
     private var lineIndex: NativeTextLineIndex?
-    private var longestLineUnits = 0
     private var isWrappingLines = false
     var wrapsLines: Bool { isWrappingLines }
 
@@ -377,17 +376,6 @@ class NativeCodeTextView: NSTextView {
 
     private func resetDocumentIndex(_ document: String) {
         lineIndex = NativeTextLineIndex(document as NSString)
-        var current = 0
-        var maximum = 0
-        for character in document.utf16 {
-            if character == 10 || character == 13 || character == 0x2028 || character == 0x2029 {
-                maximum = max(maximum, current)
-                current = 0
-            } else {
-                current += 1
-            }
-        }
-        longestLineUnits = max(maximum, current)
         gutterView?.needsDisplay = true
     }
 
@@ -409,7 +397,7 @@ class NativeCodeTextView: NSTextView {
         // Grow the actual document *and* container, rather than handing TextKit 2
         // a container wider than its owning view (which materializes all rows).
         let codeWidth = wraps ? viewportWidth :
-            max(viewportWidth, ceil(CGFloat(longestLineUnits) * characterWidth * 2 + 24))
+            max(viewportWidth, ceil(CGFloat(lineIndex?.maximumLineUnits ?? 0) * characterWidth * 2 + 24))
         setCodeWidth(codeWidth)
     }
 
@@ -431,11 +419,6 @@ class NativeCodeTextView: NSTextView {
         } else {
             resetDocumentIndex(storage.string)
         }
-        let finalPoint = min(NSMaxRange(edited), storage.length)
-        let changedLine = (storage.string as NSString).lineRange(
-            for: NSRange(location: finalPoint, length: 0)
-        )
-        longestLineUnits = max(longestLineUnits, changedLine.length)
         syntaxCoordinator?.didChangeContent(nativeContentManager, in: previousRange,
                                            replacementString: replacement)
         gutterView?.needsDisplay = true

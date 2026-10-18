@@ -326,6 +326,30 @@ final class EditorNavigationTests: XCTestCase {
         }
     }
 
+    func testDeletingLongestUnwrappedLineRestoresHorizontalExtent() async throws {
+        let long = "let veryLong = \"" + String(repeating: "a", count: 2_000) + "\"\n"
+        let short = "let value = \"中文 👋\"\n"
+        let (window, scroll, editor) = mount(long + short, width: 500)
+        defer { window.close() }
+        editor.allowsUndo = true
+        let originalWidth = editor.frame.width
+        XCTAssertGreaterThan(originalWidth, 5_000)
+
+        editor.insertText("", replacementRange: NSRange(location: 0, length: long.utf16.count))
+        scroll.layoutSubtreeIfNeeded()
+        XCTAssertEqual(editor.string, short)
+        XCTAssertLessThan(editor.frame.width, originalWidth / 3,
+            "Removing the widest line must not leave a stale horizontal scroll range")
+        XCTAssertEqual(editor.frame.width, editor.textContainer?.size.width ?? -1, accuracy: 1)
+        try await reveal(NSRange(location: short.utf16.count - 1, length: 1), in: editor)
+
+        editor.undoManager?.undo()
+        scroll.layoutSubtreeIfNeeded()
+        XCTAssertEqual(editor.string, long + short)
+        XCTAssertGreaterThan(editor.frame.width, originalWidth - 1)
+        XCTAssertEqual(editor.frame.width, editor.textContainer?.size.width ?? -1, accuracy: 1)
+    }
+
     func testColdAndWarmScrollbarGeometryAcrossFourFileSizes() async throws {
         let line = "let value = \"中文 👋\" // fixed row\n"
         for rows in [382, 1_000, 10_000, 100_000] {
