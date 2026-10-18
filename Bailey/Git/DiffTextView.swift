@@ -1197,6 +1197,9 @@ final class DiffCodePaneView: NSView {
             self?.handleScrolled()
         }
 
+        // Native NSTextView paints an opaque system background by default;
+        // keep diff row tints, word emphasis and deletion ghosts visible below it.
+        textView.drawsBackground = false
         textView.isEditable = mode == .edit
         textView.isSelectable = true
         textView.highlightSelectedLine = false

@@ -123,6 +123,159 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class DiffTabTests: XCTestCase {
+    func testNativeDiffRendersRowsThroughTransparentTextSurface() throws {
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        let window = NSWindow(
+            contentRect: NSRect(x: -900, y: -900, width: 680, height: 300),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.appearance = NSAppearance(named: .aqua)
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        let document = DiffComputation.compute(
+            oldText: "old value\nshared value\n", newText: "new value\nshared value\n"
+        ).unified
+        pane.setReviewDocument(NSAttributedString(string: document.text),
+                               decorations: .review(document))
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertTrue(document.rows.contains { $0.kind == .removed })
+        XCTAssertTrue(document.rows.contains { $0.kind == .added })
+        XCTAssertFalse(pane.textView.drawsBackground,
+                       "Native text must not paint over the diff's underlay tints and emphasis")
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds))
+        pane.cacheDisplay(in: pane.bounds, to: bitmap)
+        let scheme = DiffColorScheme.current(dark: false)
+        func near(_ color: NSColor?, _ expected: NSColor) -> Bool {
+            guard let a = color?.usingColorSpace(.deviceRGB),
+                  let b = expected.usingColorSpace(.deviceRGB) else { return false }
+            return abs(a.redComponent - b.redComponent) < 0.06
+                && abs(a.greenComponent - b.greenComponent) < 0.06
+                && abs(a.blueComponent - b.blueComponent) < 0.06
+        }
+        let x = bitmap.pixelsWide - 50
+        let samples = (0..<bitmap.pixelsHigh).map { bitmap.colorAt(x: x, y: $0) }
+        XCTAssertTrue(samples.contains { near($0, scheme.addedRow) },
+                      "Added-row tint must actually reach rendered pixels")
+        XCTAssertTrue(samples.contains { near($0, scheme.removedRow) },
+                      "Removed-row tint must actually reach rendered pixels")
+    }
+
+    func testSplitAndUnifiedDiffRowTintsReachPixelsInBothThemes() throws {
+        let compared = DiffComputation.compute(
+            oldText: "header\nold value\nfooter\n",
+            newText: "header\nnew value\nfooter\n"
+        )
+        for dark in [false, true] {
+            let scheme = DiffColorScheme.current(dark: dark)
+            let cases: [(DiffSideDocument, DiffGutterLayout, [NSColor])] = [
+                (compared.unified, .single, [scheme.addedRow, scheme.removedRow]),
+                (compared.splitLeft, .oldOnly, [scheme.removedRow]),
+                (compared.splitRight, .newOnly, [scheme.addedRow]),
+            ]
+            for (document, layout, requiredTints) in cases {
+                let pane = DiffCodePaneView(mode: .review, gutterLayout: layout)
+                let window = NSWindow(
+                    contentRect: NSRect(x: -920, y: -920, width: 690, height: 300),
+                    styleMask: [.titled], backing: .buffered, defer: false
+                )
+                window.isReleasedWhenClosed = false
+                window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                window.contentView = pane
+                window.orderFront(nil)
+                let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+                let paragraphStyle = DiffTypography.paragraphStyle(for: font)
+                let textColor = Theme.terminal(dark: dark).foregroundNSColor
+                pane.applyTypography(font: font, paragraphStyle: paragraphStyle,
+                                     textColor: textColor)
+                pane.setReviewDocument(NSAttributedString(string: document.text, attributes: [
+                    .font: font, .foregroundColor: textColor, .paragraphStyle: paragraphStyle,
+                ]), decorations: .review(document))
+                pane.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds))
+                pane.cacheDisplay(in: pane.bounds, to: bitmap)
+                let x = bitmap.pixelsWide - 50
+                let colors = (0..<bitmap.pixelsHigh).compactMap {
+                    bitmap.colorAt(x: x, y: $0)?.usingColorSpace(.deviceRGB)
+                }
+                // Display HDR transforms lightness nonlinearly; relative RGB
+                // channel differences preserve the actual theme tint identity.
+                for tint in requiredTints {
+                    let expected = try XCTUnwrap(tint.usingColorSpace(.deviceRGB))
+                    let matching = colors.filter { sample in
+                        abs((sample.greenComponent - sample.redComponent)
+                            - (expected.greenComponent - expected.redComponent)) < 0.03
+                            && abs((sample.blueComponent - sample.redComponent)
+                                - (expected.blueComponent - expected.redComponent)) < 0.03
+                    }.count
+                    XCTAssertGreaterThan(matching, 8,
+                                         "Native \(layout) diff tint must reach pixels, dark=\(dark)")
+                }
+                window.close()
+            }
+        }
+    }
+
+    func testNativeEditableDiffPaintsDeletedGhostRowsInBothThemes() throws {
+        let old = "first\ndeleted\nlast\n"
+        let current = "first\nlast\n"
+        let core = DiffCore.compute(oldText: old, newText: current)
+        let state = DiffComputation.editState(
+            ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
+        )
+        let starts = DiffLineSplitter.lines(of: current).lines.map(\.utf16Range.location)
+        for dark in [false, true] {
+            let pane = DiffCodePaneView(mode: .edit, gutterLayout: .newOnly)
+            let window = NSWindow(
+                contentRect: NSRect(x: -920, y: -920, width: 680, height: 300),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            window.contentView = pane
+            window.orderFront(nil)
+            let scheme = DiffColorScheme.current(dark: dark)
+            let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+            let foreground = Theme.terminal(dark: dark).foregroundNSColor
+            pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                                 textColor: foreground)
+            pane.setEditBufferText(current)
+            pane.decorations = .edit(
+                state: state, snapshotOffsets: starts, lineCount: starts.count,
+                ghostBlocks: [.init(anchorLine: 1, firstOldLine: 2, lines: [
+                    NSAttributedString(string: "deleted", attributes: [
+                        .font: font, .foregroundColor: foreground,
+                    ]),
+                ])]
+            )
+            XCTAssertEqual(pane.decorations.ghostsByAnchor[1]?.lines.count, 1)
+            pane.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds))
+            pane.cacheDisplay(in: pane.bounds, to: bitmap)
+            let expected = try XCTUnwrap(scheme.removedRow.usingColorSpace(.deviceRGB))
+            let x = bitmap.pixelsWide - 50
+            let matching = (0..<bitmap.pixelsHigh).reduce(0) { total, y in
+                guard let sample = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                else { return total }
+                let isRemoval = abs((sample.greenComponent - sample.redComponent)
+                    - (expected.greenComponent - expected.redComponent)) < 0.03
+                    && abs((sample.blueComponent - sample.redComponent)
+                        - (expected.blueComponent - expected.redComponent)) < 0.03
+                return total + (isRemoval ? 1 : 0)
+            }
+            XCTAssertGreaterThan(matching, 8,
+                                 "Editable diff deletion ghosts must be visibly red, dark=\(dark)")
+            window.close()
+        }
+    }
+
     func testLongCRLogicalRowDoesNotPutEOFGhostsAtViewportBoundary() {
         let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
         let window = NSWindow(
@@ -485,6 +638,12 @@ final class DiffTabTests: XCTestCase {
     }
 
     func testAppearanceChangeAfterReadErrorKeepsLastSuccessfulDiff() async throws {
+        let suite = "bailey-diff-appearance-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.prefersEditing = false
+        preferences.diffStyle = .unified
         let root = try repository()
         defer { try? FileManager.default.removeItem(at: root) }
         let path = root.appendingPathComponent("review.txt")
@@ -496,7 +655,8 @@ final class DiffTabTests: XCTestCase {
         let diff = DiffTab(
             repoRoot: root.path, path: "review.txt", source: .worktree,
             untracked: false, origPath: nil,
-            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+            preferences: preferences
         )
         try await wait { !diff.isLoading && diff.display != nil }
         let before = try XCTUnwrap(diff.display)
