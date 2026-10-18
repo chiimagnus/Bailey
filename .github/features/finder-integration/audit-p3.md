@@ -23,6 +23,45 @@
 
 ## 发现项
 
+## 发现 F-09
+
+- 任务：`P3-T3`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/Files/FileTreeModel.swift:120`
+- 摘要：`Finder 向 Files 树可见的跨根符号链接目录投放时操作被接受但静默丢弃，没有错误 Sheet`
+- 风险：`用户看到复制拖放成功指针却没有副本或错误原因，难以定位错误目标和数据去向`
+- 预期修复：`在 FileTreeModel 的同一目标范围校验位置对真实越界投放调用已有 onError，保持失效目标/SSH 不接收和无磁盘写入`
+- 验证：`FileTreeTests 的越界目标 onError Red/Green；原窗口 NSAlert 由现有 onError 连线保证；完整 build/test`
+- 解决证据：`8738e27。原始 Red：finder-f09-rejected-target-red.log，实际 symlink 越界/直接外部根共 3 失败断言；原被接受的投放没有副本也没有原窗口提示。沿同一 FileTreeModel.onError 展示中英错误且仍拒绝磁盘写入；Green：finder-f09-rejected-target-green.log 22/22，全量 windows SSH XCTest 480/480，Debug/Release 严格 codesign 全通过。`
+
+
+## 发现 F-08
+
+- 任务：`P3-T3`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/Workspace/LocalWorkspaceBackend.swift:129`
+- 摘要：`Finder 导入把有效的失效符号链接误判为来源不存在，并对目录符号链接误用实体目录的递归复制防护`
+- 风险：`合法 Finder 符号链接无法复制；包含普通文件与符号链接的批次发生不必要的部分失败`
+- 预期修复：`按 lstat 区分源项本体类型，符号链接按链接复制，真正目录才进行子目录递归防护；拒绝非文件目录的特殊项`
+- 验证：`FileTreeTests 的真实 dangling 和指向目标根目录的链接 Red/Green；后续 Makefile 完整 build/test 与验签`
+- 解决证据：`8738e27。原始 Red：finder-f08-symlink-red.log，FileTreeTests 20 项含 4 个失败断言，失效链接来源和祖先目录符号链接无法复制。使用 lstat 按源项本体识别且仅真实目录执行递归防护；Green：finder-f08-symlink-green.log，22/22；含 55 文件大批次、重复同名、FIFO/设备拒绝及原始字节保留。授权 windows SSH 全量 480/480（finder-f08-f09-f10-full-test-final.log）；make build 和 make build:release 退出 0、均通过严格 codesign（finder-f08-f09-f10-{debug,release}-build.log）。`
+
+
+## 发现 F-07
+
+- 任务：`P3-T3`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/Files/FileTreeModel.swift:114`
+- 摘要：`Finder→Files 根目录为 / 时错误拒绝子路径，复制后端同一前缀算法漏拦截从 / 递归复制`
+- 风险：`文件管理器无法向 / 下子目录导入文件；在极端根源目录拖放时复制后端可能对整个根目录执行递归复制，产生耗时与磁盘空间风险`
+- 预期修复：`复用一处正确处理 POSIX / 的路径包含判定，应用于模型的标准化/解析路径检查和后端的目录自复制拦截`
+- 验证：`FileTreeTests 真实临时文件导入 Red→Green + 根目录纯判定，无危险根目录复制；make build；全量 make test`
+- 解决证据：`9a63a2e。Red：finder-f07-root-red.log 根 / 下的真实临时目标错误拒绝并有 3 个失败断言。Green：finder-f07-root-green.log FileTreeTests 19/19；真实源/副本字节比对、相似前缀路径、POSIX / 与空根纯判定；模型和后端共同使用 LocalPathScope；根目录自复制只核对实际生产谓词，不危险地复制系统 /。完整 Debug make build+codesign exit 0，授权 Windows SSH 全量 XCTest 477/0 exit 0，日志 build/audit-logs/finder-f06-f07-final-{build,test}.log。`
+
+
 逐一核查 P3 四项及其直接调用方、异步 provider、原文件打开后端、Dock 分组、FileTree 真实磁盘复制与错误回调、原生 Ghostty/WebKit 消费者，并与实际 Finder E2E、原生 XCTest 和当前功能文档对照。未发现达到可复现缺陷、可达不变量违背或平台契约直接冲突准入门槛的**未解决 finding**。历史 T2 曾写「Files 行禁放、留白打开、Projects 普通打开」，是 T3/T4 用户扩展需求以前的真实 Red/Green 记录：已修正 `plan-p3.md` 首页为当前目标并标记旧段落历史语境；未擅自删除历史验证或当作生产缺陷。
 
 下列环境缺口单独在验证日志登记，不凭猜测增添产品缺陷或安全补丁；本阶段完成不等于这些系统组合已经真机执行。
@@ -78,3 +117,10 @@
 - **P3-T4 · `a85d10c`**：`DockTabGroupView` 将实际 `(projectID, groupID)` 传给共享文件入口，当前 `Project.openLocalFile` 将新标签放入对应组，旧标签不迁组；跨窗、空组、晚到 provider 由 `WorkspaceWindowIsolationTests` 覆盖。P3 当时的 Projects 单文件新建 `pinnedFile` 行为已由 P4 替换，现为文件开标签、目录添加项目。
 - **本轮自动回归**：`make test` **472 项／0 失败／0 跳过**、完整退出 0；`make build` 严格验签退出 0。P3 的历史真实 Finder 行／根／终端/WebKit 观察留作当时证据，**不是**本次最新版所有 GUI 放置组合均已重跑的证明。
 - **独立 Gate**：P3 已实施的代码和安全副作用在当前静态／集成层未发现新的确定性缺陷，历史交付可保留；当前版本的 Finder 精确物理落点、双窗口和主题组合仍应纳入 P4 未闭合的 GUI Gate。不把旧 Projects 文件建项目路径恢复为回归目标。
+
+## 2026-10-19 F-08 / F-09 补强验收（本轮最新）
+
+- **根因**：Finder→Files 复制后端使用解引用链接的 `fileExists` 判断来源，致失效软链接和指向父目录的目录链接被误拒绝；树目标校验拒绝目录链接越界时没有走既有 `onError`，用户看到已接收投放却没有副本及错误。`8738e27` 分别在原后端使用 `lstat` 识别链接本体、真实目录、普通文件及拒绝 FIFO/设备节点，在 `FileTreeModel` 共用校验处把目标越界错误接回原窗口提示，不新增第二套导入链。
+- **原始 Red**：`build/audit-logs/finder-f08-symlink-red.log` 20 项、4 个失败断言；`finder-f09-rejected-target-red.log` 22 项、3 个失败断言。**Green**：`finder-f08-symlink-green.log` 与 `finder-f09-rejected-target-green.log` 各 22/22；真实磁盘验证失效链接/目录链接复制链接本身、源字节不变、55 个真实来源的大批次、重复与同名冲突、特殊文件拒绝及越界目录不写入。
+- **完整验证**：当前 macOS 27.2 / Xcode 27.2，含获授权 Windows SSH 的 `BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test` **480 项、0 失败、退出 0**，`** TEST SUCCEEDED **`，日志 `build/audit-logs/finder-f08-f09-f10-full-test-final.log`。`make build` 和 `make build:release` 皆退出 0，Debug/Release 各有严格 `codesign --verify --deep --strict`，日志 `finder-f08-f09-f10-{debug,release}-build.log`。`todo validate` 与 `git show --check 8738e27` 通过。
+- **明确未覆盖**：本轮通过的是 FileTree 真磁盘测试、原生 XCTest 和已有 Finder UI 所有权的历史 E2E；新的失效软链接和越界提示**没有再进行实体 Finder 鼠标投放**，因为同一 Bundle ID 有其它 Bailey GUI 会话并行运行，前台接收进程无法安全独占。Windows 远端 `P4_LIVE_SYMLINK_UNAVAILABLE status=1` 意味着该单项远端前置条件未建立，本机符号链接验证不能替代它。最低 macOS 15.6 真机不属于本次用户要求的设备范围。

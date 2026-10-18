@@ -21,6 +21,32 @@
 
 ## 发现项
 
+## 发现 F-10
+
+- 任务：`P4-T3`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`BaileyTests/NativeUI/Git/DiffTabTests.swift:488`
+- 摘要：`Finder 全量回归的 Diff 原生测试读取用户全局 split 偏好，错误断言为 unified 导致可重现的无关超时`
+- 风险：`用户或并行 GUI 修改全局 Diff 布局后，整套 XCTest 误报失败，无法稳定验证真实回归；测试夹具也可能受用户配置污染`
+- 预期修复：`使用现成的 DiffViewPreferences 注入独立 UserDefaults suite，把当前专测 unified 的原生渲染用例固定到 isolated unified，保持生产行为不变`
+- 验证：`原测试在真实用户 split 布局下独立 Red；修改后本机 isolated 测试和全量 Windows SSH make test；不读改用户偏好`
+- 解决证据：`fe2a55c。真实用户持久化 diffView.layout=split，旧 DiffTabTests 的统一文本等待在完整回归与单用例复测均超时：finder-f08-f09-full-test.log、finder-f08-f09-diff-isolation.log（单项 2 失败断言）。测试注入唯一 UserDefaults suite，不写用户配置；绿：finder-f10-diff-isolation-green.log 单项 1/1，完整 480/480（DiffTabTests 32/32），配置继续为 split；Debug/Release 全构建与严格验签。`
+
+
+## 发现 F-06
+
+- 任务：`P4-T3`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/UI/ContentView.swift:166-181`
+- 摘要：`Finder普通区域异步NSItemProvider加载后使用已切换的项目，导致文件误开到其它项目或空态越权打开`
+- 风险：`真实Finder拖向Projects或空态后用户切换项目/添加目录，晚到回调错误修改别的项目标签；违背投放目标和无项目拒绝的不变量`
+- 预期修复：`在Finder普通投放入口捕获发起项目ID，provider完成前核对仍为同一项目，不复用后来的选中项目；保留已有分组和原窗口校验`
+- 验证：`make test ONLY_TESTING=BaileyTests/WorkspaceWindowIsolationTests; make build; make test`
+- 解决证据：`c3fd135。Red：finder-project-switch-red.log 原 15 项中 2 项失败（Project A->B 误开与无项目->添加文件夹后误开）；finder-f06-queued-red.log 延迟跨窗口路由额外 2 个失败断言。Green：finder-project-switch-green.log 15/15，finder-f06-queued-green.log 16/16；真实 NSWindow 与 NSItemProvider、原标签不重复、源文件字节未变。完整 Debug make build+codesign 严格验签 exit 0；BAILEY_P4_TEST_SSH_HOST=windows 全量 make test 477/0 exit 0，日志 build/audit-logs/finder-f06-f07-final-{build,test}.log。未将原有 Finder GUI 历史证据冒充本轮真鼠标重新 E2E。`
+
+
 ## 发现 F-05
 
 - 任务：`P4-T1`
@@ -134,3 +160,18 @@
 - **本轮重测事实**：macOS 27.2、Xcode 27.2。带 `BAILEY_P4_TEST_SSH_HOST=windows` 的完整 `make test` 在重命名前实际运行 **472 项、0 失败、0 跳过、整体退出 0**（`build/audit-logs/finder-audit-test.log`）；更名后 `WorkspaceIdentityTests` **24／24 通过、退出 0**（`build/audit-logs/finder-f05-focused-test.log`）；随后 `make build` **退出 0、严格 `codesign` 验签通过**（`build/audit-logs/finder-audit-build.log`）。19 个原分支提交 `git show --check` 全部通过，`todo validate`、`git diff --check` 通过。**不得声称更名后重新运行了整套 472 项**，尽管测试体没有变化。
 - **边界与内部跳过**：`SSHFileTreeLiveTests` 日志有 `P4_LIVE_SYMLINK_UNAVAILABLE status=1`，表示该次真实 Windows 环境未成功建立该特定符号链接测试前提，**不把整体 XCTest 的 0 skipped 当作这项内部前提也测到了**；本机符号链接拒绝与重复标签有独立测试。当前轮次**未实际完成** Finder「打开方式」有项目正向点击、Dock 图标物理文件投放、全部分屏／触控板位置组合和 SSH GUI 真断线恢复。之前证据不能冒充本次复测；同 Bundle ID 多进程、前台窗口归属不确定时不得发送可能落入正式 Bailey 的鼠标／文件事件。macOS 15.6 真机不属于用户要求的本轮环境，不列为缺陷。
 - **独立 Gate**：**自动测试、构建验签和可核查的源码不变量为 Go；完整 P4 真实 GUI 验收为 No-Go（尚未全部实测，不代表发现新生产 Bug）**。在可安全独占且只使用屏幕左半边的图形会话中，核对真实接收 PID、窗口、文件标签、目标副本／源 SHA 后补齐上述具体操作；授权 Windows SSH 图形断线／恢复另行核对最终本机与远端文件字节。不得为测到绿色而退出、替换或误操作用户现有 App。本轮仅提交了测试更名，计划与审计文件仍是本地待提交记录，未 push。
+
+## 2026-10-19 F-06 / F-07 修复后最终核验
+
+- **已复现并解决的实现缺陷**：P4-T3 `F-06` 由 `c3fd135` 修复 Finder 普通区域的异步项目错投及跨窗口待恢复队列错投；文件选择器也锁定发起时项目。P3-T3 `F-07` 由 `9a63a2e` 统一处理本机 POSIX 根 `/` 的目录包含关系，同时用于 Files 范围校验和复制后端的递归自复制保护。各 finding 的原始失败断言、针对性通过与提交证据见 `audit-p3.md` / 本文件 finding 记录。
+- **最终测试与签名**：当前 macOS 27.2 / Xcode 27.2；`FileTreeTests` **19/19**，`WorkspaceWindowIsolationTests` **16/16**。`make build` 与 `make build:release` 均完整退出 **0**，Debug/Release 的严格 `codesign --verify --deep --strict` 均成功；日志 `build/audit-logs/finder-f06-f07-{final-build,release-build}.log`。授权真实 `windows` SSH 主机的全量 `make test` **477 项／0 失败**、完整退出 **0**、`** TEST SUCCEEDED **`，日志 `build/audit-logs/finder-f06-f07-final-test.log`。
+- **覆盖边界**：SSH 文件树日志仍出现 `P4_LIVE_SYMLINK_UNAVAILABLE status=1`，该远端符号链接前提未建立，不按完整覆盖宣称；本机符号链接保护已有独立通过测试。Finder 右键、Dock 物理投放及各区域鼠标操作在 P2/P3/P4 有既往真机证据，但**本轮未重新做全部物理 GUI 组合**；不能将旧 E2E 冒称本轮重测。当前 macOS 27.2 是用户要求的验收系统，无 macOS 15.6 机器不作为此阶段阻塞项。
+- **安装边界**：已签名的新 Debug App 位于 `build/DerivedData/Build/Products/Debug/Bailey.app`；`/Applications/Bailey.app` 的二进制 SHA 与本分支及并行主仓库的当前构建均不同、来源无法确定，且另一 Bailey 主仓库仍在并行更改编辑器。为避免覆盖更近的无关变更，**本轮未替换系统安装包，未退出或重启用户 App**。安装不视为已完成，需先确认其它并行工作与安装包版本归属。
+- **Git**：生产修复分别以 `c3fd135`、`9a63a2e` 原子提交，`git show --check`、`todo validate` 与 `git diff --check` 均通过。两份 Feature audit 作为本地审计记录不入代码提交；未 push、未合并。
+
+## 2026-10-19 F-10、真实偏好隔离与 480 项总回归
+
+- **回归工具链根因 F-10**：原 `DiffTabTests.testAppearanceChangeAfterReadErrorKeepsLastSuccessfulDiff` 把全局用户偏好 `diffView.layout=split` 的原生视图错误地断言为 `unified` 文本，导致首次完整回归和单项重测在约 10 秒发生确定性超时，不能误归因给 Finder。本机 `defaults read chiimagnus.bailey diffView.layout` 确认是 `split`，绝不更改该用户设置。`fe2a55c` 只向 XCTest 注入独立 `DiffViewPreferences` / 临时 `UserDefaults` suite，不修改生产 Diff、渲染或环境配置；旧独立 Red 日志 `finder-f08-f09-diff-isolation.log`，新独立 Green `finder-f10-diff-isolation-green.log` **1/1**，完整回归中的 `DiffTabTests` **32/32**。
+- **最终全量/签名 Gate**：所有最新代码修改后，`BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test` 完整退出 **0**、`** TEST SUCCEEDED **`、**480 项／0 失败（XCTest 总计 0 跳过）**，日志 `build/audit-logs/finder-f08-f09-f10-full-test-final.log`，耗时约 686 秒；包含真实 Windows SSH 文件树、Git Workspace、Git 断线恢复及全部窗口/Finder、Files、Diff、编辑器用例。Debug `make build`、Release `make build:release` 均完整退出 0，`** BUILD SUCCEEDED **` 和严格 `codesign --verify --deep --strict`，分别见 `build/audit-logs/finder-f08-f09-f10-{debug,release}-build.log`。`todo validate`、Git 两新提交 `8738e27`/`fe2a55c` 的 `git show --check`、`git diff --check` 均通过。首次全量因工具命令使用 120 秒执行时限而被终止，不能当测试完成；另一次旧的 Diff 偏好 Red 保留，不与最终绿色结果混淆。
+- **诚实边界**：真实 Windows `SSHFileTreeLiveTests` 输出 `P4_LIVE_SYMLINK_UNAVAILABLE status=1`，所以整体 XCTest 的「0 skipped」并不代表这项特定远端链接建立前提成功。Finder 物理 Dock 图标拖放、有项目右键「打开方式」正向点击、所有主题/多分屏组合和 SSH GUI 断线恢复仍不能凭 480 项回归冒称已物理执行；本轮多份同 Bundle ID Bailey 并行占用图形会话，防误投未在不确定窗口重新做真鼠标验证。正式 `/Applications/Bailey.app` 的二进制哈希与本分支构建仍不同，另一个主仓库正并行进行原生编辑器迁移，为避免覆盖其工作，本轮不执行安装/重启。两份 audit 为本地独立证据，不随上述原子代码 commit 推送。
+- **Gate**：已验证范围（本机文件系统极端输入、原生多窗路径、授权 Windows SSH、Debug/Release 验签）为 **Go**；尚无唯一接收进程的实体 GUI 完整矩阵及 Windows 符号链接前提为 **未完成补验**，不是已验证通过，也不能无据断言它们存在产品 Bug。
