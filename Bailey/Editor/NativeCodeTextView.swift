@@ -320,18 +320,45 @@ class NativeCodeTextView: NSTextView {
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
-        guard highlightSelectedLine, let viewport = textLayoutManager?.textViewportLayoutController.viewportRange,
+        guard highlightSelectedLine, selectedRange().length == 0,
               let manager = textContentStorage, let layout = textLayoutManager else { return }
+        if manager.documentRange.isEmpty {
+            // No TextKit fragment exists for an empty buffer's insertion line.
+            let lineHeight = ceil(NSLayoutManager().defaultLineHeight(
+                for: font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+            ))
+            let row = NSRect(x: rect.minX, y: 0, width: rect.width, height: lineHeight)
+            if row.intersects(rect) {
+                selectedLineHighlightColor.setFill()
+                row.intersection(rect).fill()
+            }
+            return
+        }
+        guard let viewport = layout.textViewportLayoutController.viewportRange else { return }
         let offset = selectedRange().location
         let start = manager.offset(from: manager.documentRange.location, to: viewport.location)
         let end = manager.offset(from: manager.documentRange.location, to: viewport.endLocation)
         guard offset >= start, offset <= end,
-              let location = manager.location(manager.documentRange.location, offsetBy: offset),
-              let fragment = layout.textLayoutFragment(for: location) else { return }
+              let location = manager.location(manager.documentRange.location, offsetBy: offset)
+        else { return }
+        // The document-end caret has no owning TextKit 2 fragment. Resolve
+        // the preceding text position, whose fragment also owns the extra line.
+        let fragment = layout.textLayoutFragment(for: location) ?? (
+            offset > 0
+                ? manager.location(manager.documentRange.location, offsetBy: offset - 1)
+                    .flatMap { layout.textLayoutFragment(for: $0) }
+                : nil
+        )
+        guard let fragment else { return }
         let local = manager.offset(from: fragment.rangeInElement.location, to: location)
-        guard let line = fragment.textLineFragments.first(where: {
-            local >= $0.characterRange.location && local <= NSMaxRange($0.characterRange)
-        }) else { return }
+        let lines = fragment.textLineFragments
+        // The insertion point after a final newline belongs to TextKit 2's
+        // zero-length extra line, not the preceding line's inclusive end.
+        guard let line = lines.first(where: {
+            $0.characterRange.length == 0 && $0.characterRange.location == local
+        }) ?? lines.first(where: {
+            local >= $0.characterRange.location && local < NSMaxRange($0.characterRange)
+        }) ?? lines.last else { return }
         let bounds = line.typographicBounds
         let row = NSRect(x: rect.minX, y: fragment.layoutFragmentFrame.minY + bounds.minY,
                          width: rect.width, height: bounds.height)
@@ -361,22 +388,54 @@ class NativeCodeTextView: NSTextView {
             let ruler = gutterView ?? NativeLineNumberRuler(scrollView: scroll, orientation: .verticalRuler)
             ruler.editor = self
             ruler.clientView = self
-            ruler.ruleThickness = 48
+            ruler.ruleThickness = gutterThickness
             ruler.reservedThicknessForMarkers = 0
+            ruler.backgroundColor = backgroundColor
+            ruler.selectedLineHighlightColor = selectedLineHighlightColor
             scroll.verticalRulerView = ruler
             scroll.hasVerticalRuler = true
             scroll.rulersVisible = true
             gutterView = ruler
+            applyGutterTextInset(ruler.ruleThickness)
         } else {
             scroll.hasVerticalRuler = false
             scroll.rulersVisible = false
             gutterView = nil
+            applyGutterTextInset(0)
         }
+    }
+
+    private func applyGutterTextInset(_ width: CGFloat) {
+        guard abs(textContainerInset.width - width) > 0.5 else { return }
+        var insets = textContainerInset
+        insets.width = width
+        textContainerInset = insets
+    }
+
+    var gutterNumberFont: NSFont {
+        font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    }
+
+    private var gutterThickness: CGFloat {
+        let digitWidth = ("8" as NSString).size(withAttributes: [
+            .font: gutterNumberFont
+        ]).width
+        return max(35, ceil(CGFloat(String(lineIndex?.lineCount ?? 1).count) * digitWidth + 10))
     }
 
     private func resetDocumentIndex(_ document: String) {
         lineIndex = NativeTextLineIndex(document as NSString)
-        gutterView?.needsDisplay = true
+        updateGutter()
+    }
+
+    func updateGutter() {
+        guard let gutterView else { return }
+        let thickness = gutterThickness
+        if abs(gutterView.ruleThickness - thickness) > 0.5 {
+            gutterView.ruleThickness = thickness
+        }
+        applyGutterTextInset(thickness)
+        gutterView.needsDisplay = true
     }
 
     func lineNumber(atUTF16Offset offset: Int) -> Int {
@@ -421,7 +480,7 @@ class NativeCodeTextView: NSTextView {
         }
         syntaxCoordinator?.didChangeContent(nativeContentManager, in: previousRange,
                                            replacementString: replacement)
-        gutterView?.needsDisplay = true
+        updateGutter()
         if !isWrappingLines, let width = enclosingScrollView?.contentView.bounds.width {
             configureWrapping(false, viewportWidth: width)
         }
@@ -479,31 +538,70 @@ extension NSTextContentManager {
 @MainActor
 final class NativeLineNumberRuler: NSRulerView {
     weak var editor: NativeCodeTextView?
+    var backgroundColor: NSColor = .textBackgroundColor { didSet { needsDisplay = true } }
     var textColor: NSColor = .secondaryLabelColor { didSet { needsDisplay = true } }
     var selectedLineTextColor: NSColor = .labelColor { didSet { needsDisplay = true } }
+    var selectedLineHighlightColor: NSColor = .clear { didSet { needsDisplay = true } }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // Ruler rendering is hosted as an NSScrollView floating subview.
+        // AppKit can supply its parent's dirty region here; without explicit
+        // clipping, the opaque gutter background covers the TextKit 2 glyphs
+        // across the entire editor even though this ruler is only ~35pt wide.
+        let visible = dirtyRect.intersection(bounds)
+        guard !visible.isNull else { return }
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSBezierPath(rect: bounds).addClip()
+        backgroundColor.setFill()
+        visible.fill()
+        drawHashMarksAndLabels(in: visible)
+        NSColor.separatorColor.withAlphaComponent(0.1).setStroke()
+        NSBezierPath.strokeLine(from: NSPoint(x: bounds.maxX - 0.5, y: visible.minY),
+                                to: NSPoint(x: bounds.maxX - 0.5, y: visible.maxY))
+    }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
         guard let editor, let content = editor.textContentStorage,
-              let layout = editor.textLayoutManager,
-              let viewport = layout.textViewportLayoutController.viewportRange else { return }
-        let font = NSFont.monospacedDigitSystemFont(
-            ofSize: max(9, (editor.font?.pointSize ?? 13) - 1.5), weight: .regular
-        )
+              let layout = editor.textLayoutManager else { return }
+        let font = editor.gutterNumberFont
         let selectedRow = editor.lineNumber(atUTF16Offset: editor.selectedRange().location)
+        func drawLine(_ number: Int, at centerY: CGFloat, height: CGFloat) {
+            let selected = number == selectedRow && editor.selectedRange().length == 0
+            if selected && editor.highlightSelectedLine {
+                selectedLineHighlightColor.setFill()
+                NSRect(x: 0, y: centerY - height / 2, width: bounds.width, height: height)
+                    .intersection(rect).fill()
+            }
+            let label = NSAttributedString(string: String(number), attributes: [
+                .font: font,
+                .foregroundColor: selected ? selectedLineTextColor : textColor
+            ])
+            let y = centerY - label.size().height / 2
+            if y + label.size().height >= rect.minY, y <= rect.maxY {
+                label.draw(at: NSPoint(x: bounds.maxX - label.size().width - 6, y: y))
+            }
+        }
+        if content.documentRange.isEmpty {
+            // TextKit 2 has no paragraph to enumerate for an empty document.
+            let height = ceil(NSLayoutManager().defaultLineHeight(for: editor.font ?? font))
+            let centerY = isFlipped ? bounds.minY + height / 2 : bounds.maxY - height / 2
+            drawLine(1, at: centerY, height: height)
+            return
+        }
+        guard let viewport = layout.textViewportLayoutController.viewportRange else { return }
         layout.enumerateTextLayoutFragments(in: viewport) { fragment in
             let offset = content.offset(from: content.documentRange.location,
                                         to: fragment.rangeInElement.location)
-            let number = editor.lineNumber(atUTF16Offset: offset)
-            guard let first = fragment.textLineFragments.first else { return true }
-            let point = editor.convert(NSPoint(x: 0,
-                y: fragment.layoutFragmentFrame.minY + first.typographicBounds.midY), to: self)
-            let label = NSAttributedString(string: String(number), attributes: [
-                .font: font,
-                .foregroundColor: number == selectedRow ? selectedLineTextColor : textColor
-            ])
-            let y = point.y - label.size().height / 2
-            if y + label.size().height >= rect.minY, y <= rect.maxY {
-                label.draw(at: NSPoint(x: bounds.maxX - label.size().width - 10, y: y))
+            // A trailing line break contributes a zero-length *second* native
+            // line fragment: preserve its own visible line number.
+            for (index, line) in fragment.textLineFragments.enumerated() {
+                guard index == 0 || line.characterRange.length == 0 else { continue }
+                let position = offset + line.characterRange.location
+                let number = editor.lineNumber(atUTF16Offset: position)
+                let point = editor.convert(NSPoint(x: 0,
+                    y: fragment.layoutFragmentFrame.minY + line.typographicBounds.midY), to: self)
+                drawLine(number, at: point.y, height: line.typographicBounds.height)
             }
             return true
         }

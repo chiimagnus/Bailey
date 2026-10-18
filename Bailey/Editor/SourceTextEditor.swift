@@ -212,6 +212,7 @@ struct SourceTextEditor: NSViewRepresentable {
         textView.isEditable = file.readOnlyReason == nil && file.reloadError == nil
         if textView.font != font {
             textView.font = font
+            textView.updateGutter()
         }
         if textView.textColor != palette.text {
             textView.textColor = palette.text
@@ -225,8 +226,10 @@ struct SourceTextEditor: NSViewRepresentable {
         // false = wrap at the view width, true = expand horizontally.
         textView.configureWrapping(wrapLines, viewportWidth: scrollView.contentView.bounds.width)
         if let gutter = textView.gutterView {
+            gutter.backgroundColor = palette.background
             gutter.textColor = palette.gutterText
             gutter.selectedLineTextColor = palette.text
+            gutter.selectedLineHighlightColor = palette.lineHighlight
         }
     }
 
@@ -448,6 +451,11 @@ private final class RestorableScrollView: NSScrollView {
             guard let self else { return }
             self.geometryUpdateScheduled = false
             guard let textView = self.documentView as? NativeCodeTextView else { return }
+            let clipView = self.contentView
+            // TextKit 2 can revise the estimated document height during tile().
+            // Save the reader's position before layout, not after AppKit has
+            // already anchored the scroll view to a new document end.
+            let previousOrigin = self.reparentedOffset ?? clipView.bounds.origin
 
             textView.configureWrapping(textView === self.documentView && textView.wrapsLines,
                                          viewportWidth: self.contentView.bounds.width)
@@ -461,26 +469,18 @@ private final class RestorableScrollView: NSScrollView {
             // mid-document with text running past it.
             self.tile()
 
-            let clipView = self.contentView
-            let constrainedBounds = clipView.constrainBoundsRect(clipView.bounds)
+            // Reparenting can shift the horizontal origin by the ruler width.
+            // Restore the same clamped position after layout, without a second
+            // caret-follow scrollRangeToVisible that later overrides it.
+            let desiredBounds = NSRect(
+                origin: NSPoint(x: max(0, previousOrigin.x), y: max(0, previousOrigin.y)),
+                size: clipView.bounds.size
+            )
+            let constrainedBounds = clipView.constrainBoundsRect(desiredBounds)
             if constrainedBounds.origin != clipView.bounds.origin {
                 clipView.setBoundsOrigin(constrainedBounds.origin)
             }
-            if let offset = self.reparentedOffset {
-                // Reparenting an NSScrollView with a vertical NSRulerView can
-                // shift the horizontal document origin by the ruler thickness.
-                // Restore the same document position *after* tiling the native
-                // scrollers; neither a fresh text view nor another text layout
-                // manager is needed.
-                if let textOffset = textView.approximateCharacterOffset(atDocumentY: offset.y) {
-                    // A detached NSTextViewportLayoutController can still
-                    // address the previous EOF fragment. Give TextKit the
-                    // actual region before restoring the visual scroll point.
-                    textView.scrollRangeToVisible(NSRange(location: textOffset, length: 0))
-                }
-                clipView.setBoundsOrigin(NSPoint(x: max(0, offset.x), y: max(0, offset.y)))
-                self.reparentedOffset = nil
-            }
+            self.reparentedOffset = nil
             self.reflectScrolledClipView(clipView)
             self.restoreInitialOffsetIfReady()
         }

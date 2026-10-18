@@ -546,6 +546,35 @@ final class FileTabTests: XCTestCase {
         XCTAssertEqual(editor.accessibilityValue() as? String, "original")
     }
 
+    func testWritableNativeAXValueReplacementUpdatesDirtyStateAndDisk() async throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".txt")
+        try Data("original\n".utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let host = NSHostingView(rootView: AnyView(FileViewerView(file: file)))
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 600, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        XCTAssertTrue(editor.isEditable)
+        editor.setAccessibilityValue("updated via AX\n")
+        XCTAssertEqual(editor.string, "updated via AX\n")
+        XCTAssertEqual(file.text, "updated via AX\n",
+                       "Native AX input must update the file model before Save")
+        XCTAssertTrue(file.isDirty)
+        await file.save()
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "updated via AX\n")
+        XCTAssertFalse(file.isDirty)
+    }
+
     func testMountedEditorDisconnectReconnectKeepsNativeBufferAndUndo() async throws {
         let project = Project(fallbackName: "native read-only", workspaceConfiguration: .standard)
         defer { project.terminateAll() }

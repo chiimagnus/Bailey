@@ -117,6 +117,316 @@ final class EditorNavigationTests: XCTestCase {
         }
     }
 
+    func testNativeGutterKeepsEditorThemeBackgroundInBothAppearances() throws {
+        for dark in [false, true] {
+            let (window, scroll, editor) = mount(
+                "first line\nsecond line\n", width: 480,
+                appearance: dark ? .darkAqua : .aqua
+            )
+            defer { window.close() }
+            let palette = EditorPalette.theme(dark: dark)
+            editor.backgroundColor = palette.background
+            scroll.backgroundColor = palette.background
+            editor.showsLineNumbers = true
+            let ruler = try XCTUnwrap(editor.gutterView)
+            ruler.textColor = palette.gutterText
+            ruler.selectedLineTextColor = palette.text
+            scroll.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds))
+            ruler.cacheDisplay(in: ruler.bounds, to: bitmap)
+            let sampled = try XCTUnwrap(bitmap.colorAt(x: 2, y: bitmap.pixelsHigh / 2))
+            let actual = try XCTUnwrap(sampled.usingColorSpace(.deviceRGB))
+            let expected = try XCTUnwrap(palette.background.usingColorSpace(.deviceRGB))
+            XCTAssertEqual(actual.redComponent, expected.redComponent, accuracy: 0.035,
+                           "The gutter must not use system gray instead of the editor theme")
+            XCTAssertEqual(actual.greenComponent, expected.greenComponent, accuracy: 0.035)
+            XCTAssertEqual(actual.blueComponent, expected.blueComponent, accuracy: 0.035)
+        }
+    }
+
+    func testNativeGutterSelectedLineAndLargeDocumentWidth() throws {
+        let (window, scroll, editor) = mount("one\ntwo\n", width: 480)
+        defer { window.close() }
+        editor.showsLineNumbers = true
+        editor.highlightSelectedLine = true
+        let ruler = try XCTUnwrap(editor.gutterView)
+        let activeRow = NSColor(calibratedRed: 0.73, green: 0.15, blue: 0.28, alpha: 1)
+        ruler.selectedLineHighlightColor = activeRow
+        editor.textSelection = NSRange(location: 0, length: 0)
+        scroll.layoutSubtreeIfNeeded()
+        ruler.needsDisplay = true
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds))
+        ruler.cacheDisplay(in: ruler.bounds, to: bitmap)
+        let found = (0..<bitmap.pixelsHigh).contains { y in
+            guard let color = bitmap.colorAt(x: 2, y: y)?.usingColorSpace(.deviceRGB) else {
+                return false
+            }
+            return color.redComponent - color.greenComponent > 0.35
+                && color.redComponent - color.blueComponent > 0.25
+        }
+        XCTAssertTrue(found, "The selected line must retain its gutter background highlight")
+        XCTAssertEqual(ruler.ruleThickness, 35, accuracy: 1)
+        editor.text = String(repeating: "x\n", count: 100_000)
+        XCTAssertGreaterThan(ruler.ruleThickness, 35,
+                             "Six-digit line numbers must not be clipped by a fixed gutter width")
+    }
+
+    func testEmptyNativeEditorStillPaintsFirstGutterNumber() throws {
+        let (window, scroll, editor) = mount("", width: 450)
+        defer { window.close() }
+        editor.showsLineNumbers = true
+        let ruler = try XCTUnwrap(editor.gutterView)
+        ruler.backgroundColor = .black
+        ruler.textColor = .white
+        ruler.selectedLineTextColor = .white
+        ruler.selectedLineHighlightColor = .black
+        scroll.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds))
+        ruler.cacheDisplay(in: ruler.bounds, to: bitmap)
+        let brightPixels = (0..<min(80, bitmap.pixelsHigh)).reduce(0) { count, y in
+            count + (max(0, bitmap.pixelsWide - 40)..<max(1, bitmap.pixelsWide - 8)).filter { x in
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                else { return false }
+                return color.redComponent > 0.6 && color.greenComponent > 0.6
+            }.count
+        }
+        XCTAssertGreaterThan(brightPixels, 4,
+                             "An empty source file must display line number 1 like the old gutter")
+    }
+
+    func testFinalBlankLineRetainsVisibleGutterNumber() throws {
+        for source in ["one\n", "one\r\n"] {
+            let (window, scroll, editor) = mount(source, width: 450)
+            defer { window.close() }
+            editor.showsLineNumbers = true
+            let ruler = try XCTUnwrap(editor.gutterView)
+            ruler.backgroundColor = .black
+            ruler.textColor = .white
+            ruler.selectedLineTextColor = .white
+            ruler.selectedLineHighlightColor = .black
+            editor.textSelection = NSRange(location: source.utf16.count, length: 0)
+            scroll.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds))
+            ruler.cacheDisplay(in: ruler.bounds, to: bitmap)
+            let lineHeight = ceil(NSLayoutManager().defaultLineHeight(for: try XCTUnwrap(editor.font)))
+            let scale = CGFloat(bitmap.pixelsHigh) / ruler.bounds.height
+            let start = min(bitmap.pixelsHigh - 1, Int(lineHeight * scale))
+            let end = min(bitmap.pixelsHigh, Int(lineHeight * scale * 3))
+            let bright = (start..<end).reduce(0) { count, y in
+                count + (max(0, bitmap.pixelsWide - 40)..<max(1, bitmap.pixelsWide - 8)).filter { x in
+                    guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                    else { return false }
+                    return color.redComponent > 0.6 && color.greenComponent > 0.6
+                }.count
+            }
+            XCTAssertGreaterThan(bright, 4,
+                                 "The final empty line must show its own gutter number for \(source.debugDescription)")
+        }
+    }
+
+    func testSelectedFinalBlankLineHighlightsItsOwnTextRow() throws {
+        let source = "one\n"
+        let (window, scroll, editor) = mount(source, width: 450)
+        defer { window.close() }
+        editor.backgroundColor = .black
+        editor.selectedLineHighlightColor = NSColor(srgbRed: 0.75, green: 0.13, blue: 0.27, alpha: 1)
+        editor.highlightSelectedLine = true
+        editor.textSelection = NSRange(location: source.utf16.count, length: 0)
+        scroll.layoutSubtreeIfNeeded()
+        editor.needsDisplay = true
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(editor.bitmapImageRepForCachingDisplay(in: editor.bounds))
+        editor.cacheDisplay(in: editor.bounds, to: bitmap)
+        let lineHeight = ceil(NSLayoutManager().defaultLineHeight(for: try XCTUnwrap(editor.font)))
+        let scale = CGFloat(bitmap.pixelsHigh) / editor.bounds.height
+        let rowPixels = Int(lineHeight * scale)
+        let x = bitmap.pixelsWide - 60
+        func redPixels(_ range: Range<Int>) -> Int {
+            range.filter { y in
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                else { return false }
+                return color.redComponent - color.greenComponent > 0.35
+                    && color.redComponent - color.blueComponent > 0.25
+            }.count
+        }
+        XCTAssertGreaterThan(redPixels(rowPixels..<(2 * rowPixels)), 8,
+                             "The EOF caret must highlight the empty second row")
+        XCTAssertEqual(redPixels(0..<rowPixels), 0,
+                       "The preceding nonempty line must not be highlighted")
+    }
+
+    func testEmptyEditorPaintsSelectedLineAtTheCaret() throws {
+        let (window, scroll, editor) = mount("", width: 420, viewportHeight: 200)
+        defer { window.close() }
+        editor.backgroundColor = .black
+        editor.selectedLineHighlightColor = NSColor(
+            srgbRed: 0.75, green: 0.13, blue: 0.27, alpha: 1
+        )
+        editor.highlightSelectedLine = true
+        editor.textSelection = NSRange(location: 0, length: 0)
+        scroll.layoutSubtreeIfNeeded()
+        editor.needsDisplay = true
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(editor.bitmapImageRepForCachingDisplay(in: editor.bounds))
+        editor.cacheDisplay(in: editor.bounds, to: bitmap)
+        let y = min(bitmap.pixelsHigh - 1, 14)
+        let x = bitmap.pixelsWide - 30
+        let pixel = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+        XCTAssertGreaterThan(pixel.redComponent - pixel.greenComponent, 0.35,
+                             "The empty document caret must retain the selected-line background")
+    }
+
+    func testGutterWidthUsesTheSameUserFontAsSourceText() throws {
+        let font = NSFont(name: "Menlo", size: 26)
+            ?? NSFont.monospacedSystemFont(ofSize: 26, weight: .regular)
+        let source = String(repeating: "entry\n", count: 10_000)
+        let (window, _, editor) = mount(source, font: font, width: 500)
+        defer { window.close() }
+        editor.showsLineNumbers = true
+        let gutter = try XCTUnwrap(editor.gutterView)
+        let digitWidth = ("8" as NSString).size(withAttributes: [.font: font]).width
+        let expected = max(35, ceil(digitWidth * 5 + 10))
+        XCTAssertEqual(gutter.ruleThickness, expected, accuracy: 1,
+                       "Line numbers must use the editor font, not smaller system mono")
+    }
+
+    func testGutterTransitionsAcrossDigitBoundariesWithoutShiftingTextUnderIt() throws {
+        for wraps in [false, true] {
+            let (window, scroll, editor) = mount("initial", width: 340, wraps: wraps)
+            defer { window.close() }
+            editor.showsLineNumbers = true
+            let ruler = try XCTUnwrap(editor.gutterView)
+            let font = try XCTUnwrap(editor.font)
+            let digitWidth = ("8" as NSString).size(withAttributes: [.font: font]).width
+            for rowCount in [1, 9, 10, 99, 100, 999, 1_000, 9_999, 10_000, 1] {
+                let source = String(repeating: "q\n", count: rowCount - 1) + "last"
+                editor.text = source
+                editor.configureWrapping(wraps, viewportWidth: 340)
+                scroll.layoutSubtreeIfNeeded()
+                let expectedWidth = max(35, ceil(CGFloat(String(rowCount).count) * digitWidth + 10))
+                XCTAssertEqual(ruler.ruleThickness, expectedWidth, accuracy: 1,
+                    "Gutter width must follow live row count: \(rowCount)")
+                XCTAssertEqual(editor.textContainerInset.width, expectedWidth, accuracy: 1,
+                    "Text origin must follow the actual gutter, including after narrowing")
+                let fragment = try XCTUnwrap(editor.nativeLayoutManager.textLayoutFragment(
+                    for: editor.nativeLayoutManager.documentRange.location
+                ))
+                let leading = editor.convert(NSPoint(
+                    x: fragment.layoutFragmentFrame.minX + editor.textContainerInset.width,
+                    y: fragment.layoutFragmentFrame.minY
+                ), to: ruler).x
+                XCTAssertGreaterThanOrEqual(leading, ruler.bounds.maxX - 1,
+                    "First glyph overlaps gutter after crossing \(rowCount) lines")
+            }
+            editor.showsLineNumbers = false
+            XCTAssertNil(editor.gutterView)
+            XCTAssertEqual(editor.textContainerInset.width, 0, accuracy: 0.5)
+            editor.showsLineNumbers = true
+            XCTAssertEqual(editor.textContainerInset.width,
+                           try XCTUnwrap(editor.gutterView).ruleThickness, accuracy: 1)
+        }
+    }
+
+    func testWrappingAndUnwrappedLongUnicodeLinesKeepRealCharacterHitTargets() async throws {
+        let line = "中文👋" + String(repeating: "ABcd", count: 180) + "終"
+        let source = String(repeating: "short\n", count: 15) + line + "\nend"
+        let target = (source as NSString).range(of: "終").location
+        for wraps in [false, true] {
+            let (window, scroll, editor) = mount(source, width: 360, wraps: wraps)
+            defer { window.close() }
+            editor.showsLineNumbers = true
+            editor.configureWrapping(wraps, viewportWidth: 360)
+            try await reveal(NSRange(location: target, length: 1), in: editor)
+            let rect = editor.firstRect(forCharacterRange: NSRange(location: target, length: 1),
+                                        actualRange: nil)
+            XCTAssertTrue(rect.width > 0 && rect.height > 0)
+            let windowPoint = try XCTUnwrap(editor.window).convertPoint(
+                fromScreen: NSPoint(x: rect.midX, y: rect.midY)
+            )
+            let localPoint = editor.convert(windowPoint, from: nil)
+            // NSTextInputClient takes a screen-space point, not a local view point.
+            let hit = editor.characterIndex(for: NSPoint(x: rect.midX, y: rect.midY))
+            XCTAssertNotEqual(hit, NSNotFound, "Native TextKit 2 must map the actual glyph to a character")
+            if hit != NSNotFound {
+                XCTAssertLessThanOrEqual(abs(hit - target), 1,
+                    "Long Unicode line must preserve native reverse hit testing")
+            }
+            if wraps {
+                let visible = scroll.contentView.bounds
+                XCTAssertGreaterThanOrEqual(localPoint.x, visible.minX)
+                XCTAssertLessThanOrEqual(localPoint.x, visible.maxX + 2,
+                                         "Wrapped final glyph must fit inside the viewport")
+            } else {
+                XCTAssertGreaterThan(scroll.documentView?.frame.width ?? 0, scroll.frame.width,
+                                     "Long unwrapped line must remain horizontally reachable")
+            }
+        }
+    }
+
+    func testMountedSourceEditorActuallyPaintsVisibleTextInBothAppearances() async throws {
+        for (ext, dark) in [("txt", true), ("txt", false), ("swift", true), ("swift", false)] {
+            for count in [2, 10_000] {
+                let path = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString + "." + ext)
+                let source = String(repeating: "let visibleText = \"中文 123\"\n", count: count)
+                try Data(source.utf8).write(to: path)
+                defer { try? FileManager.default.removeItem(at: path) }
+                let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                                   workspaceIdentity: nil)
+                try await file.waitForText()
+                let host = NSHostingView(rootView: SourceTextEditor(
+                    file: file, font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+                    palette: .theme(dark: dark), wrapLines: false, isFocused: false
+                ))
+                let window = NSWindow(contentRect: NSRect(x: -950, y: -950, width: 840, height: 650),
+                                      styleMask: [.titled], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                window.contentView = host
+                window.orderFront(nil)
+                defer { window.close() }
+                host.layoutSubtreeIfNeeded()
+                let editor = try XCTUnwrap((file.editorView as? NSScrollView)?.documentView
+                                           as? NativeCodeTextView)
+                XCTAssertEqual(editor.text, source)
+                let ruler = try XCTUnwrap(editor.gutterView)
+                let firstFragment = try XCTUnwrap(editor.nativeLayoutManager.textLayoutFragment(
+                    for: editor.nativeLayoutManager.documentRange.location
+                ))
+                let firstGlyph = editor.convert(NSPoint(
+                    x: firstFragment.layoutFragmentFrame.minX + editor.textContainerInset.width,
+                    y: firstFragment.layoutFragmentFrame.minY
+                ), to: ruler)
+                XCTAssertGreaterThanOrEqual(firstGlyph.x, ruler.bounds.maxX - 1,
+                    "Source \(ext), \(count) lines, dark=\(dark): gutter must never cover initial glyph")
+                window.displayIfNeeded()
+                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
+                let x0 = Int(80 * scale)
+                let x1 = min(bitmap.pixelsWide, Int(380 * scale))
+                let y1 = min(bitmap.pixelsHigh, Int(75 * scale))
+                let background = try XCTUnwrap(EditorPalette.theme(dark: dark)
+                    .background.usingColorSpace(.deviceRGB))
+                let visiblePixels = (0..<y1).reduce(0) { total, y in
+                    total + (x0..<x1).filter { x in
+                        guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                        else { return false }
+                        return max(abs(color.redComponent - background.redComponent),
+                                   abs(color.greenComponent - background.greenComponent),
+                                   abs(color.blueComponent - background.blueComponent)) > 0.3
+                    }.count
+                }
+                XCTAssertGreaterThan(visiblePixels, 30,
+                                     "Source \(ext), \(count) lines, dark=\(dark): the real window must paint glyphs, not only expose AX text")
+            }
+        }
+    }
+
     func testAvailableEditorFontsKeepUsableGeometry() async throws {
         let source = (0..<382).map { "let item\($0) = 1 // " + String(repeating: "wide", count: $0 % 43) }
             .joined(separator: "\n")

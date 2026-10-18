@@ -631,6 +631,24 @@ final class PaneRetentionTests: XCTestCase {
         print("DOCK_TRACE afterMove actual=\(scroll.contentView.bounds.origin) editorFrame=\(editor.frame) selection=\(editor.selectedRange()) viewport=\(String(describing: editor.textLayoutManager?.textViewportLayoutController.viewportRange))")
         try await settle { scroll.contentView.bounds.origin == scrollBefore }
         XCTAssertEqual(scroll.contentView.bounds.origin, scrollBefore)
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(scroll.bitmapImageRepForCachingDisplay(in: scroll.bounds))
+        scroll.cacheDisplay(in: scroll.bounds, to: bitmap)
+        let background = try XCTUnwrap(scroll.backgroundColor.usingColorSpace(.deviceRGB))
+        let scale = CGFloat(bitmap.pixelsWide) / scroll.bounds.width
+        let glyphPixels = (Int(25 * scale)..<min(bitmap.pixelsHigh, Int(140 * scale)))
+            .reduce(0) { count, y in
+                count + (Int(80 * scale)..<min(bitmap.pixelsWide, Int(260 * scale)))
+                    .filter { x in
+                        guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                        else { return false }
+                        return max(abs(c.redComponent - background.redComponent),
+                                   abs(c.greenComponent - background.greenComponent),
+                                   abs(c.blueComponent - background.blueComponent)) > 0.3
+                    }.count
+            }
+        XCTAssertGreaterThan(glyphPixels, 30,
+            "Dock reparent must restore visible Source glyphs, not only the scroll origin")
         let undo = try XCTUnwrap(editor.undoManager)
         XCTAssertTrue(undo.canUndo)
         undo.undo()
