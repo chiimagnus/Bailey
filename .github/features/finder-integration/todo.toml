@@ -61,23 +61,23 @@ note = "Projects显式添加、Finder普通分屏目标组含非选中/空组、
 [[tasks]]
 id = "P4-T1"
 title = "统一当前项目的本机文件标签路由"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t1"
-commit = ""
-note = ""
+commit = "1121e7413f604b1d19f2565ccba951df8ae67e74"
+note = "外部文件当前项目路由、本机/SSH文件身份、跨窗口复用及快照；Red复现；make build签名通过；完整XCTest460项0失败6项SSH跳过；提交1121e74"
 
 [[tasks]]
 id = "P4-T2"
 title = "Open File 菜单、目录添加与旧路径清理"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t2"
-commit = ""
-note = ""
+commit = "6269ac95955a27a59fac82bbc82d5eb2c888ef20"
+note = "Mac系统File菜单⌘O/Dock组＋打开文件、目录-only添加、Projects Finder文件路由、原生Sheet/多窗口/本地化与全域文档；Red→Green；make build验签通过、完整make test462项0失败6 SSH环境跳过；提交6269ac9"
 
 [[tasks]]
 id = "P4-T3"
 title = "真实 Finder、极端条件与独立验收"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t3"
-commit = ""
-note = ""
+commit = "b4e29bc8ace21c39d9fee1da87369e2758afc9c3"
+note = "真实Finder Projects文件开标签/Files根复制/顶部标签按组、NSOpenPanel系统File与每组＋、cmd-O多文件、A与B跨根复用、原生保存及图片、68唯一文件含别名重复、2项目11标签原生重启恢复均经隔离签名App和磁盘快照核对。chmod000文件/目录及FIFO Red复现后根因修复，WorkspaceIdentity24项通过；make build与codesign严格验签退出0，授权Windows实机完整make test 470项0失败0跳过退出0；新完整App整包安全安装校验SHA一致，正式PID59877未重启；macOS15.6真机和官方App在用期间无法安全执行的物理Finder/Dock/双窗/暗亮组合逐项记入plan-p4执行证据，独立审计依剩余边界给Gate。"
