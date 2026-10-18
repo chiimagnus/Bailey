@@ -159,7 +159,7 @@ final class EditorNavigationTests: XCTestCase {
                 guard Date() < deadline else {
                     let scroll = file.editorView as? NSScrollView
                     let editor = scroll?.documentView as? STTextView
-                    XCTFail("Source geometry did not settle: clip=\(String(describing: scroll?.contentView.bounds)) frame=\(String(describing: editor?.frame)) uniform=\(String(describing: editor?.uniformLineHeight)) variable=\(String(describing: editor?.hasVariableLineHeight)) rows=\(String(describing: editor?.textLineIndex?.starts.count))")
+                    XCTFail("Source geometry did not settle: clip=\(String(describing: scroll?.contentView.bounds)) frame=\(String(describing: editor?.frame)) uniform=\(String(describing: editor?.uniformLineHeight)) variable=\(String(describing: editor?.hasVariableLineHeight)) rows=\(String(describing: editor?.textLineIndex?.lineCount))")
                     throw WorkspaceError.timedOut
                 }
                 host.layoutSubtreeIfNeeded()

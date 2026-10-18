@@ -5,7 +5,7 @@ extension STTextView {
     var uniformDocumentHeight: CGFloat? {
         guard usesPlainTextGeometry, isHorizontallyResizable, !hasVariableLineHeight,
               let uniformLineHeight, let textLineIndex else { return nil }
-        return CGFloat(textLineIndex.starts.count) * uniformLineHeight
+        return CGFloat(textLineIndex.lineCount) * uniformLineHeight
     }
 
     func updateUniformLineHeight() {
@@ -42,9 +42,9 @@ extension STTextView {
     func alignUniformViewport() {
         guard uniformDocumentHeight != nil, let uniformLineHeight, let textLineIndex else { return }
         let top = max(0, visibleRect.minY)
-        let row = min(textLineIndex.starts.count - 1, Int(top / uniformLineHeight))
+        let row = min(textLineIndex.lineCount - 1, Int(top / uniformLineHeight))
         guard let location = textContentManager.location(textContentManager.documentRange.location,
-                                                        offsetBy: textLineIndex.starts[row]) else { return }
+                                                        offsetBy: textLineIndex.offset(atLine: row)) else { return }
         let controller = textLayoutManager.textViewportLayoutController
         controller.relocateViewport(to: location)
         let range = NSTextRange(location: location)
@@ -134,59 +134,124 @@ extension STTextView {
 }
 
 struct STTextLineIndex {
-    private(set) var starts: [Int]
-    private var paragraphs: [Int]
+    private var lineLengths: [Int]
+    private var paragraphBreaks: [Int]
+    private var lengths: PrefixSums
+    private var paragraphs: PrefixSums
     private(set) var length: Int
+
+    var lineCount: Int { lineLengths.count }
 
     init(_ text: NSString) {
         length = text.length
-        starts = Self.starts(in: text, from: 0, to: text.length)
-        paragraphs = Self.paragraphs(in: text, starts: starts, first: 0)
-    }
-
-    func paragraph(at offset: Int) -> Int { paragraphs[row(at: offset)] }
-
-    func row(at offset: Int) -> Int {
-        var lower = 0
-        var upper = starts.count
-        while lower < upper {
-            let middle = lower + (upper - lower) / 2
-            if starts[middle] <= offset { lower = middle + 1 } else { upper = middle }
+        let positions = Self.starts(in: text, from: 0, to: text.length)
+        lineLengths = positions.enumerated().map { index, start in
+            (index + 1 < positions.count ? positions[index + 1] : text.length) - start
         }
-        return max(0, lower - 1)
+        paragraphBreaks = positions.map { $0 > 0 && text.character(at: $0 - 1) != 0x2028 ? 1 : 0 }
+        lengths = PrefixSums(lineLengths)
+        paragraphs = PrefixSums(paragraphBreaks)
     }
+
+    func offset(atLine row: Int) -> Int { lengths.sum(before: row) }
+    func paragraph(at offset: Int) -> Int { paragraphs.sum(before: row(at: offset) + 1) }
+    func row(at offset: Int) -> Int { min(lengths.containing(offset), lineCount - 1) }
 
     mutating func replace(in range: NSRange, replacementLength: Int, text: NSString) {
+        precondition(range.location >= 0 && range.length >= 0 && NSMaxRange(range) <= length)
+        let originalCount = lineCount
         let first = max(0, row(at: range.location) - 1)
-        let last = min(starts.count, row(at: NSMaxRange(range)) + 2)
-        let end = last < starts.count ? starts[last] : length
+        let last = min(originalCount, row(at: NSMaxRange(range)) + 2)
+        let oldEnd = last < originalCount ? offset(atLine: last) : length
         let delta = replacementLength - range.length
-        let inserted = Self.starts(in: text, from: starts[first], to: end + delta,
-                                   includesEnd: last == starts.count)
-        let insertedParagraphs = Self.paragraphs(in: text, starts: inserted, first: paragraphs[first])
-        let paragraphDelta = last < starts.count
-            ? insertedParagraphs.last! + (text.character(at: end + delta - 1) == 0x2028 ? 0 : 1) - paragraphs[last]
-            : 0
-        starts.replaceSubrange(first..<last, with: inserted)
-        paragraphs.replaceSubrange(first..<last, with: insertedParagraphs)
-        if delta != 0 {
-            starts.withUnsafeMutableBufferPointer { buffer in
-                for index in (first + inserted.count)..<buffer.count { buffer[index] += delta }
-            }
+        let end = oldEnd + delta
+        let inserted = Self.starts(in: text, from: offset(atLine: first), to: end,
+                                   includesEnd: last == originalCount)
+        let newLengths = inserted.enumerated().map { index, start in
+            (index + 1 < inserted.count ? inserted[index + 1] : end) - start
         }
-        if paragraphDelta != 0 {
-            paragraphs.withUnsafeMutableBufferPointer { buffer in
-                for index in (first + inserted.count)..<buffer.count { buffer[index] += paragraphDelta }
+        let newBreaks = inserted.map { $0 > 0 && text.character(at: $0 - 1) != 0x2028 ? 1 : 0 }
+        let nextBreak = last < originalCount && end > 0
+            ? (text.character(at: end - 1) == 0x2028 ? 0 : 1) : 0
+
+        if newLengths.count == last - first {
+            for (offset, value) in newLengths.enumerated() {
+                let row = first + offset
+                let shift = value - lineLengths[row]
+                lineLengths[row] = value
+                lengths.add(shift, at: row)
+                let breakShift = newBreaks[offset] - paragraphBreaks[row]
+                paragraphBreaks[row] = newBreaks[offset]
+                paragraphs.add(breakShift, at: row)
             }
+            if last < originalCount {
+                let breakShift = nextBreak - paragraphBreaks[last]
+                paragraphBreaks[last] = nextBreak
+                paragraphs.add(breakShift, at: last)
+            }
+        } else {
+            lineLengths.replaceSubrange(first..<last, with: newLengths)
+            paragraphBreaks.replaceSubrange(first..<last, with: newBreaks)
+            if last < originalCount {
+                paragraphBreaks[first + newBreaks.count] = nextBreak
+            }
+            lengths = PrefixSums(lineLengths)
+            paragraphs = PrefixSums(paragraphBreaks)
         }
         length = text.length
     }
 
-    private static func paragraphs(in text: NSString, starts: [Int], first: Int) -> [Int] {
-        var paragraph = first
-        return starts.enumerated().map { index, offset in
-            if index > 0, text.character(at: offset - 1) != 0x2028 { paragraph += 1 }
-            return paragraph
+    private struct PrefixSums {
+        private var tree: [Int]
+
+        init(_ values: [Int]) {
+            tree = Array(repeating: 0, count: values.count + 1)
+            tree.withUnsafeMutableBufferPointer { buffer in
+                values.withUnsafeBufferPointer { input in
+                    for row in input.indices {
+                        let index = row + 1
+                        buffer[index] += input[row]
+                        let parent = index + (index & -index)
+                        if parent < buffer.count { buffer[parent] += buffer[index] }
+                    }
+                }
+            }
+        }
+
+        func sum(before row: Int) -> Int {
+            var index = row
+            var result = 0
+            while index > 0 {
+                result += tree[index]
+                index -= index & -index
+            }
+            return result
+        }
+
+        func containing(_ offset: Int) -> Int {
+            var index = 0
+            var covered = 0
+            var step = 1
+            while step < tree.count { step <<= 1 }
+            step >>= 1
+            while step > 0 {
+                let next = index + step
+                if next < tree.count && covered + tree[next] <= offset {
+                    index = next
+                    covered += tree[next]
+                }
+                step >>= 1
+            }
+            return index
+        }
+
+        mutating func add(_ delta: Int, at row: Int) {
+            guard delta != 0 else { return }
+            var index = row + 1
+            while index < tree.count {
+                tree[index] += delta
+                index += index & -index
+            }
         }
     }
 
