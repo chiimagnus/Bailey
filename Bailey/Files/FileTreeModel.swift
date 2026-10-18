@@ -99,6 +99,40 @@ final class FileTreeModel {
         await rebuild()
     }
 
+    /// Copies Finder content only into this tree's current local workspace.
+    /// The actual recursive disk operation runs in LocalWorkspaceBackend.
+    func importFromFinder(
+        _ sources: [URL], into directory: String, isCurrentTarget: () -> Bool
+    ) async -> LocalFileImportResult? {
+        let root = rootPath
+        let scope = workspaceScope
+        let epoch = treeEpoch
+        let requested = URL(fileURLWithPath: directory, isDirectory: true).standardizedFileURL.path
+        let targetRoot = URL(fileURLWithPath: root, isDirectory: true).standardizedFileURL.path
+        guard !sources.isEmpty, !root.isEmpty, scope == "local",
+              backend is LocalWorkspaceBackend, isCurrentTarget(),
+              requested == targetRoot || requested.hasPrefix(targetRoot + "/")
+        else { return nil }
+        // An expanded symlink can point outside the project. Never turn a
+        // drop inside this tree into an unannounced write to that other root.
+        let resolvedRoot = URL(fileURLWithPath: root).resolvingSymlinksInPath().path
+        let resolvedTarget = URL(fileURLWithPath: requested).resolvingSymlinksInPath().path
+        guard resolvedTarget == resolvedRoot || resolvedTarget.hasPrefix(resolvedRoot + "/") else {
+            return nil
+        }
+        let result = await LocalWorkspaceBackend.shared.copyFromFinder(sources, into: requested)
+        if epoch == treeEpoch, scope == workspaceScope, root == rootPath, isCurrentTarget() {
+            await rebuild(refresh: true)
+            if !result.failures.isEmpty {
+                presentError(
+                    String(localized: "Couldn’t import some files or folders.", table: "Workspace"),
+                    result.failures.joined(separator: "\n")
+                )
+            }
+        }
+        return result
+    }
+
     /// Moves `item` to the Trash, then rebuilds so it drops out of the tree.
     func moveToTrash(_ item: Item) async {
         let backend = self.backend

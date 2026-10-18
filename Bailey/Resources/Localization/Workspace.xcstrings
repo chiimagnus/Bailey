@@ -11,6 +11,16 @@
         }
       }
     },
+    "Already exists: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已存在同名文件或文件夹：%@"
+          }
+        }
+      }
+    },
     "An item named “%@” already exists here." : {
       "localizations" : {
         "zh-Hans" : {
@@ -37,6 +47,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "取消"
+          }
+        }
+      }
+    },
+    "Cannot copy %@ into itself or a subfolder." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不能将 %@ 复制到自身或其子文件夹中。"
           }
         }
       }
@@ -72,6 +92,16 @@
         }
       }
     },
+    "Couldn’t copy %@: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法复制 %@：%@"
+          }
+        }
+      }
+    },
     "Couldn’t create the file." : {
       "localizations" : {
         "zh-Hans" : {
@@ -98,6 +128,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法创建“%@”。"
+          }
+        }
+      }
+    },
+    "Couldn’t import some files or folders." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分文件或文件夹导入失败。"
           }
         }
       }
@@ -225,6 +265,16 @@
         }
       }
     },
+    "Not a local Finder file: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不是本机 Finder 文件：%@"
+          }
+        }
+      }
+    },
     "Save" : {
       "localizations" : {
         "zh-Hans" : {
@@ -246,6 +296,16 @@
         }
       }
     },
+    "Source no longer exists: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "源文件或文件夹已不存在：%@"
+          }
+        }
+      }
+    },
     "Tab" : {
       "localizations" : {
         "zh-Hans" : {
@@ -263,6 +323,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "标签页 %lld，%@"
+          }
+        }
+      }
+    },
+    "Target folder no longer exists: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目标文件夹已不存在：%@"
           }
         }
       }

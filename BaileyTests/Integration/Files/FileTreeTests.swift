@@ -69,6 +69,178 @@ final class FileTreeTests: XCTestCase {
         try? FileManager.default.removeItem(at: fixture)
     }
 
+    func testFinderDropCopiesFilesAndDirectoriesIntoExactLocalTargetAndRefreshesTree() async throws {
+        let sources = fixture.appendingPathComponent("source")
+        let workspace = fixture.appendingPathComponent("workspace")
+        let nested = workspace.appendingPathComponent("nested")
+        let package = sources.appendingPathComponent("folder")
+        for folder in [sources, nested, package] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        let sourceFile = sources.appendingPathComponent("文件 with spaces.txt")
+        let nestedSource = package.appendingPathComponent("inner.md")
+        try Data("source-content".utf8).write(to: sourceFile)
+        try Data("nested-content".utf8).write(to: nestedSource)
+
+        let tree = FileTreeModel()
+        await tree.sync(root: workspace.path, backend: backend)
+        let folderRow = try XCTUnwrap(tree.items.first { $0.path == nested.path })
+        await tree.toggle(folderRow)
+        let dropped = await tree.importFromFinder(
+            [sourceFile, package], into: nested.path, isCurrentTarget: { true }
+        )
+        let report = try XCTUnwrap(dropped)
+        XCTAssertEqual(report.copied.count, 2)
+        XCTAssertTrue(report.failures.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: nested.appendingPathComponent(sourceFile.lastPathComponent)),
+                       Data("source-content".utf8))
+        XCTAssertEqual(try Data(contentsOf: nested.appendingPathComponent("folder/inner.md")),
+                       Data("nested-content".utf8))
+        XCTAssertEqual(try Data(contentsOf: sourceFile), Data("source-content".utf8))
+        XCTAssertEqual(try Data(contentsOf: nestedSource), Data("nested-content".utf8))
+        XCTAssertTrue(tree.items.contains { $0.path == nested.appendingPathComponent("folder").path },
+                      "Visible Files tree must refresh after the copy")
+    }
+
+    func testFinderDropNeverOverwritesAndReportsPartialConflictsAndSelfCopy() async throws {
+        let sources = fixture.appendingPathComponent("origin")
+        let target = fixture.appendingPathComponent("dest")
+        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let duplicate = sources.appendingPathComponent("duplicate.txt")
+        let unique = sources.appendingPathComponent("unique.txt")
+        try Data("source-value".utf8).write(to: duplicate)
+        try Data("unique-value".utf8).write(to: unique)
+        try Data("keep-original".utf8).write(to: target.appendingPathComponent("duplicate.txt"))
+
+        let tree = FileTreeModel()
+        await tree.sync(root: target.path, backend: backend)
+        var shownErrors: [String] = []
+        tree.onError = { _, detail in shownErrors.append(detail) }
+        let dropped = await tree.importFromFinder(
+            [duplicate, unique], into: target.path, isCurrentTarget: { true }
+        )
+        let report = try XCTUnwrap(dropped)
+        XCTAssertEqual(report.copied.count, 1)
+        XCTAssertEqual(report.failures.count, 1)
+        XCTAssertEqual(shownErrors.count, 1)
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("duplicate.txt")),
+                       Data("keep-original".utf8))
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("unique.txt")),
+                       Data("unique-value".utf8))
+        XCTAssertEqual(try Data(contentsOf: duplicate), Data("source-value".utf8))
+        XCTAssertEqual(try Data(contentsOf: unique), Data("unique-value".utf8))
+
+        let sub = target.appendingPathComponent("sub")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        let recursive = await tree.importFromFinder(
+            [target], into: sub.path, isCurrentTarget: { true }
+        )
+        let selfReport = try XCTUnwrap(recursive)
+        XCTAssertTrue(selfReport.copied.isEmpty)
+        XCTAssertEqual(selfReport.failures.count, 1, "A folder cannot be copied into its descendant")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sub.appendingPathComponent("dest").path))
+    }
+
+    func testFinderCopyFailureDoesNotPublishPartiallyCopiedDirectory() async throws {
+        let source = fixture.appendingPathComponent("incomplete-folder")
+        let target = fixture.appendingPathComponent("target")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let readable = source.appendingPathComponent("a-allowed.txt")
+        let blocked = source.appendingPathComponent("z-unreadable.txt")
+        try Data("allowed".utf8).write(to: readable)
+        try Data("blocked".utf8).write(to: blocked)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: blocked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: blocked.path) }
+        if (try? Data(contentsOf: blocked)) != nil {
+            throw XCTSkip("Test host bypasses POSIX source-read protection")
+        }
+
+        let result = await backend.copyFromFinder([source], into: target.path)
+        XCTAssertTrue(result.copied.isEmpty)
+        XCTAssertEqual(result.failures.count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.appendingPathComponent(source.lastPathComponent).path),
+                       "A failed recursive import must not leave a partial visible folder")
+        XCTAssertEqual(try Data(contentsOf: readable), Data("allowed".utf8))
+    }
+
+    func testConcurrentFinderCopySameDestinationHasOneWinnerWithoutOverwrite() async throws {
+        let sourceDirectory = fixture.appendingPathComponent("source")
+        let target = fixture.appendingPathComponent("target")
+        try FileManager.default.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let source = sourceDirectory.appendingPathComponent("same.txt")
+        let content = Data("concurrent-copy-source".utf8)
+        try content.write(to: source)
+
+        let reports = await withTaskGroup(of: LocalFileImportResult.self) { group in
+            for _ in 0..<12 {
+                group.addTask {
+                    await LocalWorkspaceBackend.shared.copyFromFinder([source], into: target.path)
+                }
+            }
+            var reports: [LocalFileImportResult] = []
+            for await report in group { reports.append(report) }
+            return reports
+        }
+        XCTAssertEqual(reports.flatMap(\.copied).count, 1,
+                       "Atomic no-overwrite publish admits only one concurrent importer")
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent(source.lastPathComponent)), content)
+        XCTAssertEqual(try Data(contentsOf: source), content)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: target.path), [source.lastPathComponent],
+                       "Failed imports leave no partial or temporary workspace entries")
+    }
+
+    func testFinderCopyRefusesOutsideSymlinkTargetsAndExistingDanglingDestinations() async throws {
+        let workspace = fixture.appendingPathComponent("root")
+        let outside = fixture.appendingPathComponent("outside")
+        let sourceFolder = fixture.appendingPathComponent("source")
+        for folder in [workspace, outside, sourceFolder] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        let source = sourceFolder.appendingPathComponent("dangling.txt")
+        try Data("safe".utf8).write(to: source)
+        let link = workspace.appendingPathComponent("escape")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        let tree = FileTreeModel()
+        await tree.sync(root: workspace.path, backend: backend)
+        let rejected = await tree.importFromFinder([source], into: link.path, isCurrentTarget: { true })
+        XCTAssertNil(rejected, "A symlink row must not redirect Finder import beyond project root")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent(source.lastPathComponent).path))
+
+        let destination = workspace.appendingPathComponent("dangling.txt")
+        try FileManager.default.createSymbolicLink(
+            at: destination, withDestinationURL: fixture.appendingPathComponent("missing.txt")
+        )
+        let attempted = await tree.importFromFinder(
+            [source], into: workspace.path, isCurrentTarget: { true }
+        )
+        let report = try XCTUnwrap(attempted)
+        XCTAssertTrue(report.copied.isEmpty)
+        XCTAssertEqual(report.failures.count, 1)
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: destination.path),
+                       fixture.appendingPathComponent("missing.txt").path)
+        XCTAssertEqual(try Data(contentsOf: source), Data("safe".utf8))
+    }
+
+    func testFinderDropRejectsRemoteOrStaleTreeAndOutsideRoot() async throws {
+        let root = fixture.appendingPathComponent("root")
+        let external = fixture.appendingPathComponent("outside.txt")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("remain outside".utf8).write(to: external)
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend, scope: "ssh:remote")
+        let remote = await tree.importFromFinder([external], into: root.path, isCurrentTarget: { true })
+        XCTAssertNil(remote)
+        await tree.sync(root: root.path, backend: backend)
+        let stale = await tree.importFromFinder([external], into: root.path, isCurrentTarget: { false })
+        XCTAssertNil(stale)
+        let outside = await tree.importFromFinder([external], into: fixture.path, isCurrentTarget: { true })
+        XCTAssertNil(outside)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("outside.txt").path))
+    }
+
     func testExclusiveCreationAndConcurrentRace() async throws {
         let file = fixture.appendingPathComponent("exclusive.txt")
         try await backend.createFile(path: file.path)

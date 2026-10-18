@@ -15,6 +15,8 @@ struct FileTreePanel: View {
     let onRename: (_ oldPath: String, _ newPath: String) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
+    let canImportFromFinder: Bool
+    let importFromFinder: ([NSItemProvider], String) -> Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,21 +58,38 @@ struct FileTreePanel: View {
                 model: model, git: git, session: session,
                 sshHost: sshHost, currentFilePath: currentFilePath,
                 openFile: openFile, onRename: onRename,
-                refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget
+                refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget,
+                canImportFromFinder: canImportFromFinder,
+                importFromFinder: importFromFinder
             )
         }
+        .onDrop(of: [UTType.fileURL.identifier], delegate: FileTreeImportDrop(
+            directory: model.rootPath,
+            enabled: canImportFromFinder && isCurrentTarget(),
+            importFromFinder: importFromFinder
+        ))
     }
 }
 
-/// File management drops belong to Issue #5, not Finder's ordinary opener.
-/// This exact row is a forbidden target until copy/move is implemented; a
-/// rejected operation cannot silently fall through to the window-level open.
-private struct UnavailableFileTreeDrop: DropDelegate {
-    func validateDrop(info: DropInfo) -> Bool { true }
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: .forbidden)
+/// File Manager has a different drop action from the surrounding workspace:
+/// copy into its actual directory, never open an editor or move the source.
+private struct FileTreeImportDrop: DropDelegate {
+    let directory: String
+    let enabled: Bool
+    let importFromFinder: ([NSItemProvider], String) -> Bool
+
+    func validateDrop(info: DropInfo) -> Bool {
+        enabled && !directory.isEmpty && info.hasItemsConforming(to: [UTType.fileURL.identifier])
     }
-    func performDrop(info: DropInfo) -> Bool { false }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: validateDrop(info: info) ? .copy : .forbidden)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard validateDrop(info: info) else { return false }
+        return importFromFinder(info.itemProviders(for: [UTType.fileURL.identifier]), directory)
+    }
 }
 
 /// The same SwiftUI rows, 22 pt layout and hierarchy lines as the Git tree.
@@ -85,6 +104,8 @@ private struct FileTreeScrollView: View {
     let onRename: (String, String) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
+    let canImportFromFinder: Bool
+    let importFromFinder: ([NSItemProvider], String) -> Bool
     @Environment(\.panelFontScale) private var fontScale
 
     var body: some View {
@@ -101,10 +122,12 @@ private struct FileTreeScrollView: View {
                             isCurrentTarget: isCurrentTarget
                         )
                         .id(item.path)
-                        .onDrop(
-                            of: [UTType.fileURL.identifier],
-                            delegate: UnavailableFileTreeDrop()
-                        )
+                        .onDrop(of: [UTType.fileURL.identifier], delegate: FileTreeImportDrop(
+                            directory: item.isDirectory ? item.path
+                                : (item.path as NSString).deletingLastPathComponent,
+                            enabled: canImportFromFinder && !item.isDraft && isCurrentTarget(),
+                            importFromFinder: importFromFinder
+                        ))
                     }
                 }
                 .padding(.bottom, 7)

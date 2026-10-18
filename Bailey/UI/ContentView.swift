@@ -111,7 +111,8 @@ struct ContentView: View {
                 alert.informativeText = detail
                 alert.alertStyle = .warning
                 window.makeKeyAndOrderFront(nil)
-                alert.runModal()
+                NSApp.activate()
+                alert.beginSheetModal(for: window, completionHandler: { _ in })
             }
         }
     }
@@ -160,6 +161,15 @@ struct FinderWindowDrop: DropDelegate {
     }
 
     static func receive(_ providers: [NSItemProvider], preferred manager: TerminalManager) -> Bool {
+        receive(providers, preferred: manager) { urls, manager in
+            TerminalManager.openExternalFiles(urls, preferred: manager)
+        }
+    }
+
+    static func receive(
+        _ providers: [NSItemProvider], preferred manager: TerminalManager,
+        action: @escaping @MainActor ([URL], TerminalManager) -> Void
+    ) -> Bool {
         guard let receivingWindow = manager.attachedWindow else { return false }
         let providers = providers.filter {
             $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
@@ -178,11 +188,10 @@ struct FinderWindowDrop: DropDelegate {
             }
             guard let manager, let receivingWindow,
                   manager.attachedWindow === receivingWindow, !urls.isEmpty else { return }
-            TerminalManager.openExternalFiles(urls, preferred: manager)
+            action(urls, manager)
         }
         return true
     }
-
 }
 
 /// Native presentation only. Project handles the save and tab-removal decision.

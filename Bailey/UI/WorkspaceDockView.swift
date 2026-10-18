@@ -494,7 +494,6 @@ private struct DockTabGroupView: View {
             .onDrop(of: [UTType.fileURL.identifier], delegate: FinderWindowDrop(manager: manager))
         case .files:
             ToolPanelView(manager: manager, git: git, panel: .files)
-                .onDrop(of: [UTType.fileURL.identifier], delegate: FinderWindowDrop(manager: manager))
         case .git:
             ToolPanelView(manager: manager, git: git, panel: .git)
                 .onDrop(of: [UTType.fileURL.identifier], delegate: FinderWindowDrop(manager: manager))

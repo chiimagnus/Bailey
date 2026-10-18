@@ -167,6 +167,27 @@ struct ToolPanelView: View {
                             guard let target else { return false }
                             return manager.selectedProjectID == project.id
                                 && project.matchesPanelTarget(target)
+                        },
+                        canImportFromFinder: filesTarget?.workspace == nil
+                            && project.workspaceBackend is LocalWorkspaceBackend,
+                        importFromFinder: { [target = filesTarget] providers, directory in
+                            guard let target, target.workspace == nil,
+                                  manager.selectedProjectID == project.id,
+                                  project.matchesPanelTarget(target) else { return false }
+                            return FinderWindowDrop.receive(providers, preferred: manager) { urls, owner in
+                                guard owner.selectedProjectID == project.id,
+                                      project.matchesPanelTarget(target) else { return }
+                                Task { @MainActor in
+                                    let result = await project.fileTree.importFromFinder(
+                                        urls, into: directory, isCurrentTarget: {
+                                            owner.attachedWindow != nil
+                                                && owner.selectedProjectID == project.id
+                                                && project.matchesPanelTarget(target)
+                                        }
+                                    )
+                                    if result?.copied.isEmpty == false { git.refresh() }
+                                }
+                            }
                         }
                     )
                 }
