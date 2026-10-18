@@ -124,8 +124,8 @@ struct ContentView: View {
     private var emptyState: some View {
         emptyStatePrompt(
             title: String(localized: "No open projects", table: "Interface"),
-            buttonTitle: String(localized: "Add Files or Folders…", table: "Interface"),
-            action: { manager.chooseLocalItems() }
+            buttonTitle: String(localized: "Add Folder…", table: "Interface"),
+            action: { manager.chooseFolders() }
         )
     }
 
@@ -238,26 +238,41 @@ enum ProjectCloseConfirmation {
 /// validation and project mutations remain on TerminalManager.
 @MainActor
 enum WorkspaceNativeDialogs {
-    static func localPanel() -> NSOpenPanel {
+    static func folderPanel() -> NSOpenPanel {
         let panel = NSOpenPanel()
-        panel.canChooseFiles = true
+        panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
         panel.prompt = String(localized: "Add", table: "Terminal")
-        panel.message = String(localized: "Add files and folders to Bailey", table: "Terminal")
+        panel.message = String(localized: "Add folders to Bailey", table: "Terminal")
         return panel
     }
 
-    static func chooseLocalItems(in window: NSWindow?, onSelection: @escaping ([URL]) -> Void) {
-        let panel = localPanel()
-        let finish: (NSApplication.ModalResponse) -> Void = { response in
+    static func filePanel() -> NSOpenPanel {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = String(localized: "Open", table: "Sidebar")
+        panel.message = String(localized: "Open files in Bailey", table: "Terminal")
+        return panel
+    }
+
+    static func chooseFolders(in window: NSWindow, onSelection: @escaping ([URL]) -> Void) {
+        choose(folderPanel(), in: window, onSelection: onSelection)
+    }
+
+    static func chooseFiles(in window: NSWindow, onSelection: @escaping ([URL]) -> Void) {
+        choose(filePanel(), in: window, onSelection: onSelection)
+    }
+
+    private static func choose(
+        _ panel: NSOpenPanel, in window: NSWindow,
+        onSelection: @escaping ([URL]) -> Void
+    ) {
+        panel.beginSheetModal(for: window) { response in
             guard response == .OK else { return }
             onSelection(panel.urls)
-        }
-        if let window {
-            panel.beginSheetModal(for: window, completionHandler: finish)
-        } else {
-            finish(panel.runModal())
         }
     }
 

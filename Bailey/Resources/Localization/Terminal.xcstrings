@@ -32,12 +32,12 @@
         }
       }
     },
-    "Add files and folders to Bailey" : {
+    "Add folders to Bailey" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将文件和文件夹添加到 Bailey"
+            "value" : "将文件夹添加到 Bailey"
           }
         }
       }
@@ -209,6 +209,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "下一个匹配"
+          }
+        }
+      }
+    },
+    "Open files in Bailey" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Bailey 中打开文件"
           }
         }
       }

@@ -66,7 +66,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "second body")
     }
 
-    func testProjectsDropKeepsExplicitPinnedFilesAndDistinctProjectOwnership() async throws {
+    func testProjectsDropFilesOpenTabsAndFoldersAddProjects() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let first = base.appendingPathComponent("one")
         let other = base.appendingPathComponent("two")
@@ -84,24 +84,28 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         manager.attach(to: window)
         defer { window.close() }
         let providers = [pinned, other].map { NSItemProvider(object: $0 as NSURL) }
+        let originalProject = try XCTUnwrap(manager.selectedProject)
         XCTAssertTrue(FinderWindowDrop.receive(providers, preferred: manager) { urls, owner in
-            owner.addLocalItems(urls)
+            TerminalManager.openExternalFiles(urls, preferred: owner)
         })
-        try await wait { manager.projects.count == 3 }
+        try await wait { manager.projects.count == 2 && originalProject.tabs.count == 1 }
         XCTAssertEqual(manager.projects.first?.customDirectory, first.path)
-        let fileProject = try XCTUnwrap(manager.projects.first { $0.pinnedFile == pinned.path })
-        XCTAssertEqual(fileProject.customDirectory, other.path)
-        XCTAssertEqual(fileProject.tabs.filter { $0.content.isFile }.count, 1)
+        XCTAssertEqual(originalProject.tabs.first?.content.title, "pinned.md")
+        XCTAssertNil(originalProject.pinnedFile)
         let folderProject = try XCTUnwrap(manager.projects.first {
             $0.customDirectory == other.path && $0.pinnedFile == nil
         })
-        XCTAssertNotEqual(fileProject.id, folderProject.id)
+        XCTAssertTrue(folderProject.tabs.isEmpty)
+        XCTAssertEqual(manager.selectedProjectID, originalProject.id)
         let originalIDs = Set(manager.projects.map(\.id))
+        let openedTab = try XCTUnwrap(originalProject.selectedTab)
         XCTAssertTrue(FinderWindowDrop.receive(providers, preferred: manager) { urls, owner in
-            owner.addLocalItems(urls)
+            TerminalManager.openExternalFiles(urls, preferred: owner)
         })
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(Set(manager.projects.map(\.id)), originalIDs)
+        XCTAssertTrue(originalProject.selectedTab === openedTab)
+        XCTAssertEqual(originalProject.tabs.count, 1)
         XCTAssertEqual(try String(contentsOf: pinned, encoding: .utf8), "content")
     }
 
@@ -444,7 +448,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let first = TerminalManager()
         let restored = TerminalManager()
         defer { first.windowClosed(); restored.windowClosed() }
-        restored.addLocalItems([file])
+        restored.addLocalItems([directory])
+        restored.openFile(file.path)
         let project = try XCTUnwrap(restored.selectedProject)
         guard case .file(let original) = try XCTUnwrap(project.selectedTab).content else {
             return XCTFail("Saved window already owns the file")
@@ -531,7 +536,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         defer { a.windowClosed(); b.windowClosed() }
         // The not-yet-attached B really owns this file; this is the
         // condition that must defer even if unrelated unmounted managers exist.
-        b.addLocalItems([file])
+        b.addLocalItems([root])
+        b.openFile(file.path)
         let priorTab = try XCTUnwrap(b.selectedProject?.selectedTab)
         let owner = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 340),
                              styleMask: [.titled], backing: .buffered, defer: false)

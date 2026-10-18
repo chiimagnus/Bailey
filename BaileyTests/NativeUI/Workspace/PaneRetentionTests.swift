@@ -86,12 +86,18 @@ final class PaneRetentionTests: XCTestCase {
     }
 
     func testNativeFileAndSSHChoosersStayOnOwningWindow() async throws {
-        let local = WorkspaceNativeDialogs.localPanel()
-        XCTAssertTrue(local.canChooseFiles)
+        let local = WorkspaceNativeDialogs.folderPanel()
+        XCTAssertFalse(local.canChooseFiles, "Add Folder must not offer to create pinned-file projects")
         XCTAssertTrue(local.canChooseDirectories)
         XCTAssertTrue(local.allowsMultipleSelection)
         XCTAssertEqual(local.prompt, String(localized: "Add", table: "Terminal"))
-        XCTAssertEqual(local.message, String(localized: "Add files and folders to Bailey", table: "Terminal"))
+        XCTAssertEqual(local.message, String(localized: "Add folders to Bailey", table: "Terminal"))
+        let files = WorkspaceNativeDialogs.filePanel()
+        XCTAssertTrue(files.canChooseFiles)
+        XCTAssertFalse(files.canChooseDirectories)
+        XCTAssertTrue(files.allowsMultipleSelection)
+        XCTAssertEqual(files.prompt, String(localized: "Open", table: "Sidebar"))
+        XCTAssertEqual(files.message, String(localized: "Open files in Bailey", table: "Terminal"))
         let ssh = WorkspaceNativeDialogs.sshForm(aliases: ["fixture-one", "fixture-two"])
         XCTAssertEqual(ssh.alert.buttons.map(\.title), [
             String(localized: "Add", table: "Terminal"),
@@ -129,12 +135,29 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertNil(second.attachedSheet, "A menu action must not attach to the key window of another manager")
         first.endSheet(try XCTUnwrap(first.attachedSheet), returnCode: .alertSecondButtonReturn)
         try await settle { first.attachedSheet == nil }
-        firstManager.chooseLocalItems()
+        firstManager.chooseFolders()
         try await settle { first.attachedSheet != nil }
         XCTAssertNil(second.attachedSheet)
         first.endSheet(try XCTUnwrap(first.attachedSheet), returnCode: .cancel)
         try await settle { first.attachedSheet == nil }
         XCTAssertEqual(firstManager.projects.count, initialProjectCount)
+
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("p4-picker-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        firstManager.addLocalItems([folder])
+        second.makeKeyAndOrderFront(nil)
+        firstManager.chooseFiles()
+        try await settle { first.attachedSheet != nil }
+        XCTAssertNil(second.attachedSheet, "The Open File sheet belongs to its caller")
+        let panel = try XCTUnwrap(first.attachedSheet as? NSOpenPanel)
+        XCTAssertTrue(panel.canChooseFiles)
+        XCTAssertFalse(panel.canChooseDirectories)
+        first.endSheet(panel, returnCode: .cancel)
+        try await settle { first.attachedSheet == nil }
+        XCTAssertTrue(firstManager.selectedProject?.tabs.isEmpty == true)
+        XCTAssertEqual(firstManager.projects.count, initialProjectCount + 1)
     }
 
     func testTabSwitcherKeepsProvisionalSelectionAndCancelsWithoutSideEffects() async throws {
@@ -514,7 +537,8 @@ final class PaneRetentionTests: XCTestCase {
         try original.write(to: path, atomically: true, encoding: .utf8)
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([path])
+        manager.addLocalItems([directory])
+        manager.openFile(path.path)
         let project = try XCTUnwrap(manager.selectedProject)
         let pane = try XCTUnwrap(project.selectedTab)
         guard case .file(let file) = pane.content else { return XCTFail("Expected a file") }

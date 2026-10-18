@@ -183,22 +183,17 @@ final class TerminalManager {
 
     // MARK: - Projects
 
-    /// Finder, the sidebar and the keyboard shortcut all add entries to the
-    /// same project list. A selected file opens in an editor; its parent is
-    /// the Files/Git root and initial terminal directory.
+    /// Only an explicitly selected folder creates or selects a local project.
     func addLocalItems(_ urls: [URL]) {
         for url in urls {
-            let path = url.standardizedFileURL.path
+            guard url.isFileURL, url.host == nil || url.host == "localhost" else { continue }
+            let root = url.standardizedFileURL.path
             var directory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: path, isDirectory: &directory) else {
-                continue
-            }
-            let root = directory.boolValue
-                ? path : (path as NSString).deletingLastPathComponent
-            let file = directory.boolValue ? nil : path
+            guard FileManager.default.fileExists(atPath: root, isDirectory: &directory),
+                  directory.boolValue,
+                  !NSWorkspace.shared.isFilePackage(atPath: root) else { continue }
             if let existing = projects.first(where: {
-                $0.sshHost == nil && $0.customDirectory == root
-                    && $0.pinnedFile == file
+                $0.sshHost == nil && $0.customDirectory == root && $0.pinnedFile == nil
             }) {
                 selectedProjectID = existing.id
                 continue
@@ -206,8 +201,6 @@ final class TerminalManager {
             let project = makeProject()
             project.customName = url.lastPathComponent
             project.customDirectory = root
-            project.pinnedFile = file
-            if let file { project.openFile(file) }
             insert(project)
         }
     }
@@ -287,9 +280,28 @@ final class TerminalManager {
         URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
     }
 
-    func chooseLocalItems() {
-        WorkspaceNativeDialogs.chooseLocalItems(in: window) { [weak self] urls in
-            self?.addLocalItems(urls)
+    func chooseFolders() {
+        guard let receivingWindow = window else { return }
+        WorkspaceNativeDialogs.chooseFolders(in: receivingWindow) { [weak self, weak receivingWindow] urls in
+            guard let self, let receivingWindow, self.window === receivingWindow else { return }
+            self.addLocalItems(urls)
+        }
+    }
+
+    func chooseFiles(inGroup destination: (projectID: UUID, groupID: UUID)? = nil) {
+        guard let receivingWindow = window, selectedProject != nil else { return }
+        if let destination {
+            guard selectedProjectID == destination.projectID,
+                  selectedProject?.dock.root.group(id: destination.groupID) != nil else { return }
+        }
+        WorkspaceNativeDialogs.chooseFiles(in: receivingWindow) { [weak self, weak receivingWindow] urls in
+            guard let self, let receivingWindow, self.window === receivingWindow,
+                  self.selectedProject != nil else { return }
+            if let destination {
+                guard self.selectedProjectID == destination.projectID,
+                      self.selectedProject?.dock.root.group(id: destination.groupID) != nil else { return }
+            }
+            Self.openExternalFiles(urls, preferred: self, destination: destination)
         }
     }
 

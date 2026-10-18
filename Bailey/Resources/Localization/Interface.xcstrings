@@ -7,22 +7,22 @@
     "%lld" : {
       "shouldTranslate" : false
     },
-    "Add Files or Folders" : {
+    "Add Folder" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加文件或文件夹"
+            "value" : "添加文件夹"
           }
         }
       }
     },
-    "Add Files or Folders…" : {
+    "Add Folder…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加文件或文件夹…"
+            "value" : "添加文件夹…"
           }
         }
       }
@@ -409,6 +409,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "打开更改"
+          }
+        }
+      }
+    },
+    "Open File…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开文件…"
           }
         }
       }

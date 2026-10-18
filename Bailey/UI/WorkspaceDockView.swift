@@ -360,6 +360,7 @@ private struct DockTabGroupView: View {
                         Divider()
                     }
                     if action.item == nil {
+                        openFileButton
                         newItemButton(isDirectory: false)
                         newItemButton(isDirectory: true)
                     }
@@ -382,6 +383,19 @@ private struct DockTabGroupView: View {
             .padding(6)
             .frame(width: 170)
         }
+    }
+
+    private var openFileButton: some View {
+        Button {
+            showingPanelPicker = false
+            manager.chooseFiles(inGroup: (projectID: project.id, groupID: group.id))
+        } label: {
+            Label(String(localized: "Open File…", table: "Interface"), systemImage: "doc")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(7)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func newItemButton(isDirectory: Bool) -> some View {
@@ -495,11 +509,7 @@ private struct DockTabGroupView: View {
                 bottomBarHeight: BottomToolbarLayout.height
             )
             .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil) { providers in
-                FinderWindowDrop.receive(providers, preferred: manager) { urls, owner in
-                    owner.addLocalItems(urls.filter {
-                        $0.isFileURL && ($0.host == nil || $0.host == "localhost")
-                    })
-                }
+                FinderWindowDrop.receive(providers, preferred: manager)
             }
         case .files:
             ToolPanelView(manager: manager, git: git, panel: .files)

@@ -227,8 +227,14 @@ final class WorkspaceIdentityTests: XCTestCase {
         let manager = TerminalManager()
         defer { manager.windowClosed() }
 
-        manager.addLocalItems([first])
-        let pinned = try XCTUnwrap(manager.selectedProject)
+        // Real pre-P4 snapshots may still contain pinned-file projects.
+        let pinned = Project(fallbackName: "legacy", workspaceConfiguration: .standard)
+        pinned.customName = "first.txt"
+        pinned.customDirectory = folder.path
+        pinned.pinnedFile = first.path
+        pinned.openFile(first.path)
+        manager.projects.append(pinned)
+        manager.selectedProjectID = pinned.id
         guard case .file(let originalFile) = try XCTUnwrap(pinned.selectedTab).content else {
             return XCTFail("Manual file should already be open")
         }
@@ -323,7 +329,8 @@ final class WorkspaceIdentityTests: XCTestCase {
         )
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([actual])
+        manager.addLocalItems([folder])
+        manager.openFile(actual.path)
         let originalProject = try XCTUnwrap(manager.selectedProject)
         guard case .file(let file) = try XCTUnwrap(originalProject.selectedTab).content else {
             return XCTFail("Original file must be open")
@@ -475,6 +482,26 @@ final class WorkspaceIdentityTests: XCTestCase {
         try await local.waitForText()
         XCTAssertEqual(local.text, "mac disk")
         XCTAssertEqual(macTabs.count, 1)
+    }
+
+    func testExplicitLocalAddOnlyCreatesFolderProjects() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("do-not-pin.swift")
+        try "content".write(to: file, atomically: true, encoding: .utf8)
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+
+        manager.addLocalItems([file])
+        XCTAssertTrue(manager.projects.isEmpty, "Mac files are not project entries")
+        manager.addLocalItems([root])
+        XCTAssertEqual(manager.projects.count, 1)
+        XCTAssertEqual(manager.selectedProject?.customDirectory, root.path)
+        XCTAssertNil(manager.selectedProject?.pinnedFile)
+        XCTAssertTrue(manager.selectedProject?.tabs.isEmpty == true)
+        manager.addLocalItems([root])
+        XCTAssertEqual(manager.projects.count, 1)
     }
 
     func testTerminalManagerCreatesFileInSelectedLocalProject() async throws {
