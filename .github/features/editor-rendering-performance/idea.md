@@ -18,9 +18,10 @@
 ## 非目标与授权
 
 - 2026-10-17 用户已授权执行计划、构建／测试和专用 windows SSH 临时测试；允许隔离实例取得前台焦点，不退出、启动或重启正在使用的 Bailey。
+- **2026-10-18 用户已撤销旧的 STTextView 唯一编辑器限制，明确要求全部迁移至 Apple 原生 NSTextView + TextKit 2。** 当前以单一 `NativeCodeTextView` 承载 Source 与 Diff，移除 `Vendor/STTextView` 和插件运行时；仍不使用 CodeEditTextView、Electron、WebKit 或第二套编辑器。历史 STTextView 实验仅作为迁移依据，不是回退候选。
 - 不预设触控板补丁、响应式滚动开关、固定 FPS 目标、新依赖、Rope／SumTree、Metal、第二套缓冲或编辑器；不重启已停止的 Tree-sitter 插件迁移。
 - Zed 的文本锚点与可见区工作量只是设计参考，不是必须复制其 DisplayMap／WrapMap／快照架构的需求。
-- 不改无关 Git／Files 行为；共享 STTextView、Neon 与 Diff 的受影响路径必须回归。文件编辑容量与 Diff 目前各自的 5 MiB 契约分别维护，不顺手扩大 Git blob／Diff 上限。
+- 不改无关 Git／Files 行为；共享的原生 NSTextView、Neon 核心、Tree-sitter 查询及 Diff 的受影响路径必须回归。文件编辑容量与 Diff 目前各自的 5 MiB 契约分别维护，不顺手扩大 Git blob／Diff 上限。
 
 ## 验收
 

@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P1-T4"
+current_task_id = "P1-T5"
 
 [[tasks]]
 id = "P1-T1"
@@ -28,15 +28,15 @@ note = "主提交171cd1b与输入管道后代悬挂补充提交237f91e；100k行
 [[tasks]]
 id = "P1-T4"
 title = "降低编辑热路径的整文成本和内存占用"
-status = "in_progress"
+status = "completed"
 plan = "plan-p1.md#p1-t4"
-commit = ""
-note = "既有增量优化提交e97494b；10月18日多组100k行XCTest证明视口滚动会对已跨越范围大量创建段落（25/50/75/100%=24992/49982/74974/99963次），其后文首输入10ms→350ms；单点location/ensure不触发。TextKit2缓存范围更新为主热点。自定义provider必须先过公开API的末尾空行、UTF16、IME/Undo/AX等门槛，不满足则评估成熟macOS行布局内核；详见evidence-p1.md。不得完成T4/T5。"
+commit = "647dc444136161f0612ee9c7368f0eb6a53f2220"
+note = "单一NSTextView+TextKit2完全接入Source/Diff，移除STTextView运行时/插件/Vendor，20种grammar独立，IME/多光标Undo、Find、AX只读、增量高亮、滚动恢复、离屏追加均经真实测试。完整带独立Windows SSH的make test 436/436、0失败、0跳过、exit0；10万行普通输入Debug median1.536ms p951.727ms；Debug/Release make build严格codesign均pass。83MiB Release整包安装 /Applications/Bailey.app 并双重验签，原PID32870未重启；commit 647dc44。结构性换行、最低macOS15.6、CI/物理滚动、RSS等T5继续独立验收。"
 
 [[tasks]]
 id = "P1-T5"
 title = "验收四档文件的稳定滚动和低资源编辑"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t5"
 commit = ""
-note = ""
+note = "2026-10-19 T5：f687758追加四档17次稳定滚动、24组30次输入和五编辑器释放测试；561a0f3根治不折行最长行删减后横向范围只增不减（先Red后Green）。本机带独立Windows SSH完整XCTest 440/440、0失败0跳过、exit0、708.552s；Debug/Release构建及严格验签通过，83MiB Release同盘整包替换/Applications/Bailey.app并核对SHA256；空工作区Release 30秒RSS约158MiB、CPU增0.04秒。Peekaboo实际点击打开文件选择器，但后续面板AX失焦阻塞完整GUI E2E；五文档长期RSS、Release帧/Allocations、物理触控板、不可得macOS15.6/CI26及Windows symlink创建仍缺直接验收，保持T5 in_progress，不做audit、推送或重启用户App。详细见evidence-p1.md。"
