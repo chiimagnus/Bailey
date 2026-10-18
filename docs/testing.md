@@ -134,7 +134,7 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 
 热操作至少重复 30 次，记录样本数、中位数、p95 与最差值；少量冷启动只报中位数和最差值。用 Instruments Time Profiler 查 CPU，卡顿但 CPU 不高时查等待；用 Allocations 检查视图与缓冲生命周期。确需阶段对齐时才增加轻量 signpost，不先搭埋点框架。
 
-编辑器的可重复成本对照在 `EditorNavigationTests.testSourceGeometryAndEditCosts` 与 `TextCoordinateIndexTests.testLargeDocumentEditCosts`：四档文档、折行与三种编辑位置分别记录；前者等待真实非零视口。测试输出的成对原生变更耗时不代表键盘呈现延迟，Debug 结果也不代表优化构建。
+编辑器的可重复成本对照在 `EditorNavigationTests.testSourceGeometryAndEditCosts`、`testFourSizesWrappingAndThreeInputPositionsKeepDataAndLatency` 与 `TextCoordinateIndexTests.testLargeDocumentEditCosts`：覆盖 382／1000／10000／100000 行、折行开关、文首／中／末，各组重复 30 次真实输入和恢复；等待可见 TextKit 2 视口后再测。`testColdAndWarmScrollbarGeometryAcrossFourFileSizes` 对同档文件 17 次交错远跳断言固定行高下文档高度／滑块比例不变。`PaneRetentionTests.testFiveConcurrentNativeEditorsReleaseDocumentAndParsingTasks` 验证五份带高亮的编辑器及其文件 owner 关闭后 weak 引用全部释放，但不代替多轮 RSS/Allocations 或 30 秒空闲 CPU 测量。测试输出的成对原生变更耗时不代表键盘呈现延迟，Debug 结果也不代表优化构建。
 
 保留已有增量高亮、懒加载、刷新合并、视图复用及 SSH 批量操作。优化不能牺牲编辑内容、超时反馈、机器身份、Unicode 坐标、撤销和无障碍。测量日志可能包含用户数据，分享前脱敏，不默认入库。
 

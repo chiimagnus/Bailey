@@ -282,6 +282,86 @@ final class EditorNavigationTests: XCTestCase {
         XCTAssertEqual(editor.text, source)
     }
 
+    func testFourSizesWrappingAndThreeInputPositionsKeepDataAndLatency() async throws {
+        let line = "let message = \"中文 👋\" // long readable code\n"
+        for rows in [382, 1_000, 10_000, 100_000] {
+            let source = String(repeating: line, count: rows)
+            let originalLength = source.utf16.count
+            for wraps in [false, true] {
+                let (window, _, editor) = mount(source, width: wraps ? 280 : 820, wraps: wraps)
+                defer { window.close() }
+                let positions = [
+                    ("head", 0),
+                    ("middle", (rows / 2) * line.utf16.count),
+                    ("tail", originalLength),
+                ]
+                for (position, offset) in positions {
+                    try await reveal(NSRange(location: offset, length: 0), in: editor)
+                    var costs: [Double] = []
+                    for _ in 0..<30 {
+                        let started = CFAbsoluteTimeGetCurrent()
+                        editor.insertText("X", replacementRange: NSRange(location: offset, length: 0))
+                        costs.append((CFAbsoluteTimeGetCurrent() - started) * 1_000)
+                        XCTAssertEqual((editor.string as NSString).substring(
+                            with: NSRange(location: offset, length: 1)), "X")
+                        editor.insertText("", replacementRange: NSRange(location: offset, length: 1))
+                        XCTAssertEqual(editor.string.utf16.count, originalLength)
+                    }
+                    XCTAssertEqual(editor.string, source,
+                                   "No text loss after \(rows) rows, \(wraps), \(position)")
+                    costs.sort()
+                    let median = costs[15]
+                    let p95 = costs[28]
+                    let worst = costs[29]
+                    print("T5_INPUT rows=\(rows) wraps=\(wraps) position=\(position) count=30 median=\(median) p95=\(p95) worst=\(worst)")
+                    if rows == 100_000 {
+                        XCTAssertLessThanOrEqual(median, 16,
+                            "100k native editor must retain its agreed median latency budget")
+                        XCTAssertLessThanOrEqual(p95, 32,
+                            "100k native editor must retain its agreed p95 latency budget")
+                    }
+                }
+                XCTAssertEqual(editor.text, source)
+            }
+        }
+    }
+
+    func testColdAndWarmScrollbarGeometryAcrossFourFileSizes() async throws {
+        let line = "let value = \"中文 👋\" // fixed row\n"
+        for rows in [382, 1_000, 10_000, 100_000] {
+            let document = String(repeating: line, count: rows)
+            let (window, scroll, editor) = mount(document, width: 820, wraps: false)
+            defer { window.close() }
+            var heightSamples: [CGFloat] = []
+            var knobSamples: [CGFloat] = []
+            var offsets: [CGFloat] = []
+            let visits = [0, rows/4, rows/10, rows/4, 0, rows/2,
+                          rows*3/4, rows-1, rows/2, 0, rows*3/4,
+                          rows/10, rows-1, rows/4, rows/2, rows/10, 0]
+            for row in visits {
+                let location = row * line.utf16.count
+                try await reveal(NSRange(location: location, length: 1), in: editor)
+                scroll.layoutSubtreeIfNeeded()
+                let height = editor.frame.height
+                let knob = scroll.verticalScroller?.knobProportion ?? .nan
+                heightSamples.append(height)
+                knobSamples.append(knob)
+                offsets.append(scroll.contentView.bounds.minY)
+                XCTAssertTrue(height.isFinite && height >= scroll.contentView.bounds.height)
+                XCTAssertTrue(knob.isFinite && knob >= 0 && knob <= 1)
+                XCTAssertTrue(offsets.last!.isFinite)
+                XCTAssertEqual(editor.string.utf16.count, document.utf16.count)
+            }
+            let swing = (heightSamples.max() ?? 0) - (heightSamples.min() ?? 0)
+            let knobSwing = (knobSamples.max() ?? 0) - (knobSamples.min() ?? 0)
+            XCTAssertLessThanOrEqual(swing, 1,
+                "A fixed-height document must not change its scroll height during cold/warm jumps")
+            XCTAssertLessThanOrEqual(knobSwing, 0.00000001,
+                "A fixed-height document must not change the scrollbar thumb ratio")
+            print("T5_SCROLLER rows=\(rows) visits=\(visits.count) heightSwing=\(swing) knobSwing=\(knobSwing) minY=\(offsets.min() ?? -1) maxY=\(offsets.max() ?? -1)")
+        }
+    }
+
     func testShortAndFixedRowDocumentsKeepEndAndBeginningVisible() async throws {
         for source in ["short\n中文 👋\n", String(repeating: "row 中文 👋\n", count: 1_000)] {
             let (window, scroll, editor) = mount(source)
