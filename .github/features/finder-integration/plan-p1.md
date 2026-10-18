@@ -84,7 +84,7 @@
 
 ### Step 2：Green／Refactor
 
-- 复用 `TerminalManager.registry`、已有窗口开启器和 attached-window 选择，新增**有界的外部打开 URL 批次**待处理路径（仅冷启／无窗口等实际需要时）。原服务的 `pendingDirectories` 若仍在工作且两个意图时序不同，**继续保留**，不要为了「统一」强行混成一大队列；复用共用的窗口唤醒部分即可。若源代码和测试确证可以统一且减少状态，则本任务一并删除被替代分支，不保留两个窗口开启定时器。系统回告若需 completion，只保留单次请求的实际结果回调，不能长久悬挂。
+- 复用 `TerminalManager.registry`、已有窗口开启器和 attached-window 选择，新增**随窗口附着、恢复后排空的外部打开 URL 批次**待处理路径（仅冷启／无窗口等实际需要时）。按实际接收请求的生命周期管理，不设置任意 64 次硬拒绝；2026-10-19 的 F-11 复测已证实此限额会丢弃有效的晚到文件打开事件。原服务的 `pendingDirectories` 若仍在工作且两个意图时序不同，**继续保留**，不要为了「统一」强行混成一大队列；复用共用的窗口唤醒部分即可。若源代码和测试确证可以统一且减少状态，则本任务一并删除被替代分支，不保留两个窗口开启定时器。系统回告若需 completion，只保留单次请求的实际结果回调，不能长久悬挂。
 - 保留旧 Finder Service 在 `TerminalManager.init` 取待处理目录的既有行为，除非被新实现**有实测证据地**等价替换。新系统打开请求若可能命中尚未恢复的第二窗口中的文件，需要在实际恢复窗口可判定后再去重路由；不能提前造第二个 FileTab，也不能依靠任意 100ms/500ms 睡眠。验收冷启动快照数量不同、最后窗口被关闭再打开和 `WindowRootView.onAppear` 竞态。
 - 逐一查实际调用者：旧 `pendingDirectories`、`takePendingDirectories`、`requestWindowForPendingDirectories`、`openDirectories` **仍被 Finder Service 使用就保留**；只有真的被新共用路径完全替换时，在 P1-T2 **同一提交删除全部无引用死分支**。不要重写 `windowClosed` 和快照恢复；已有短暂窗口调度仅在原本必要时沿用一处，不增加重试轮询或仅为安抚竞态的 guard 链。
 - `NSApp.keyWindow/mainWindow` 仅用于寻找 attached 的 Bailey 主窗口，不把 Settings 或无 owner 的原生测试窗口误当接收者；窗口与项目选中处理由所属 manager，不能在视图内缓存另一份 project selection。
