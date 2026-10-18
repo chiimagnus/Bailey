@@ -1,44 +1,45 @@
 # Bailey Finder 打开与原生拖放
 
-关联：[Issue #10](https://github.com/chiimagnus/Bailey/issues/10)。Issue 只是起点；最终行为参考 Zed、VS Code，遵守 Bailey 现有项目和自由停靠模型。
+关联：[Issue #10](https://github.com/chiimagnus/Bailey/issues/10)。P1～P3 已完成 Finder 系统入口、目标区域的原生拖放和 Files 复制；其完成证据保留在 `plan-p1.md`～`plan-p3.md` 与各阶段审计。以下是 **2026-10-18 确认的 P4 新行为**，不改写历史任务的完成记录。
 
-## 目标
+## 为什么需要 P4
 
-让 Bailey 成为 macOS 文件的可选打开应用，让 Finder 文件／目录可直接拖进 Bailey：普通工作区打开文件、终端接收本机路径、Files 的明确文件夹目标保留给独立的文件管理器功能 #5。必须通过真实命中目标决定动作，不能因为存在通用拖放接收器就误执行命令、误操作 SSH 机器或未经授权复制文件。参考 Zed／VS Code 的源码和交互语义，但只复用契合 Bailey 原生架构的方案。
+现有 Finder／Dock 打开文件会沿文件父目录查找或创建 Project；Projects 拖入单文件还会创建 `pinnedFile` Project。用户只是要在 Bailey 的**现有工作标签**打开其他位置的单个／多个文件，这两种“打开文件即创建项目”的行为均不正确。
 
-## 必须满足的行为
+**核心原则：Project 是用户主动添加的工作范围；Open File 只是向当前已有项目的 Dock 添加文件标签。**
 
-1. **系统入口**：Finder「打开方式」、文件拖到 Dock 图标、从 Finder 选定 Bailey、`open -a Bailey /path/to/file` 都能打开本地文件；批量文件、目录、冷启动及已运行时的请求均能处理。Bailey 只注册备用处理程序，不修改系统默认应用。
-2. **打开与复用**：同一 Mac 文件已在某个窗口的本机文件标签打开时，定位并激活**原有**窗口、项目及标签，不能另开可写缓冲。否则优先使用实际接收窗口中适用的**本机目录项目**（不把手动 `pinnedFile` 单文件项目误当可容纳所有同级文件的普通目录项目）；确实没有才按文件父目录创建项目。同一批的多文件按需要合并到目录项目，保持原有顺序；一个单独的新文件仍可沿既有手动单文件项目能力创建。Finder 没有明确接收窗口时复用适当主窗口，普通拖放优先实际落点窗口，绝不误入 SSH 后端。路径别名是否视为同一文件由实测和现有磁盘语义决定，不为此建立全局文件索引。
-3. **保留手动添加语义**：`Add Files or Folders…` / 项目面板「＋」及 Finder 的 `Add Folder to Bailey` 服务仍走 `TerminalManager.addLocalItems`：每个显式添加的文件可以拥有自己的 `pinnedFile` 项目；目录只添加项目、不启动 Shell。**不得以本需求为由整体改变手动添加和 SSH 添加规则**，不清除、迁移用户已有 `pinnedFile`、手动名称或工作区快照。
-4. **窗口普通区域拖放**：文件拖进空项目区、编辑器区域、普通标签栏或没有更具体语义的面板区域，是「打开文件」；拖入目录是「添加项目」。**网页内容若本身接收文件上传，由 WebKit 保留该专用行为**，普通 Bailey 标题／面板留白才执行打开，不能用根层覆盖网页文件上传。不移动、不复制 Finder 原始内容；拖入另一窗口中已打开文件，优先定位原有标签，不制造冲突写入者。
-5. **本机终端拖放**：与 Zed 及 Bailey 现有 Ghostty 一致，向终端表面拖文件／目录只插入正确 shell 转义的路径文本，**不得自动发送 Return 或执行命令**。除了 Shell 引号，还必须在真实 PTY 中验证换行、回车、ESC 等文件名控制字符不会被模拟成按键；无法安全编码时明确拒绝这些路径，不向 PTY 写危险控制字节。SSH 终端不把 Mac 的绝对路径伪装为远端路径，也不隐式上传。
-6. **Files 专用放置边界（#5）**：Zed、VS Code 均将「编辑区打开」与「Explorer 文件夹导入」明确分开。**本 Feature 不实现 Files 目标目录复制、移动、覆盖确认或上传**；这些行为完整归 [文件管理器 Issue #5](https://github.com/chiimagnus/Bailey/issues/5)。Finder 文件明确放在 Files 的目录行、压缩目录末级、文件行或树根的专用目标时，**不得静默降级成普通窗口打开，更不得假装已复制成功**；在 #5 实现前，精确专用目标应表现为未支持／不可放置。Files 面板外壳、标题或其它非专用普通区域可以按通用窗口打开。未来 #5 接入时由其真正处理复制／移动，不在本计划预置空壳服务。
-7. **其它拖动无回归**：Bailey 自身 Dock 标签移动、项目排序、Files 外拖、普通文本在编辑器中拖放、网页的文件上传与链接拖动、Git 行为和非文件数据均继续按原语义执行。当前远端 Files 行会把 SSH 路径伪装成 Mac `fileURL`，接入通用打开前必须在**源头**纠正，不给每个接收者写例外。原生编辑器当前仅注册文本／RTF 拖动类型：必须先测 Finder 实际 pasteboard 内容，不能未经验证认定它必然抢夺文件 URL。
-8. **编辑能力和自动保存保持现状**：文本限 UTF-8、无 NUL、8 MiB；支持原有图片预览。二进制、PDF、超限、缺失、无法访问和破损文件应给出正确的已有不可用说明或入口错误；不开发新格式预览，不覆盖脏缓冲。**Bailey 原有项目／标签切换会触发失焦自动保存**；外部打开不能新增未经授权的写入，也不能禁止或误判既有的合法自动保存。文件系统软链／Finder alias／包目录不得被不加辨别地当作普通目录打开或复制。
-9. **窗口与恢复**：未挂载窗口、无窗口、重启恢复多窗口与已有终端时，系统请求只被正确窗口消费一次；不能额外重复开窗、结束 Shell 或破坏之前保存的工作区。失败反馈属于真实接收窗口，不能因另一个窗口成为 key 就送错。
-10. **无额外架构**：保持单一 `Bailey.app` / `chiimagnus.bailey`、SwiftUI + AppKit + Ghostty + STTextView；复用 `TerminalManager`、`Project`、`FileTab`、`FileTreeModel`，不引入第二套会话、DnD 框架、持续轮询、Finder Extension、辅助常驻进程或无用设置开关。
+## 当前必须实现的行为
 
-## 有证据的设计依据
+1. **必须已有选中项目。** P4 暂不支持无项目时独立打开文件。无项目时保留现有 `ContentView` 空态：文件选择入口不可用，Finder／Dock 传入的**新文件**不创建项目或隐藏工作区，并给出清楚的未打开反馈；已在其他窗口打开的文件可定位其原标签。
+2. **统一的 Open File 入口。** 在现有每个 Dock 组的「＋」菜单新增 `Open File…`；同时在 macOS **「文件（File）→ Open File…」** 菜单加入命令，使用标准快捷键 **⌘O**（当前 `BaileyCommands` 中尚未占用）。二者共用同一个原生文件选择器和文件打开逻辑：支持一次选择多个本机文件，不能选目录。标签栏入口将新文件放进触发的 Dock 组；系统菜单栏命令使用当前窗口／当前项目的活动组。均不创建 Project、不移动文件。「New File…」仍表示在项目内创建新文件。没有选中项目时 Open File 菜单命令禁用。
+3. **Finder／Dock 和窗口拖放。** 保留现有 `kAEOpenDocuments`、Finder 打开方式、Dock 文件投递、`open -a`、`FinderWindowDrop` 等入口，将普通文件交给同一条本机文件路由。新文件默认进入实际接收窗口的**当前选中项目**，即使路径不在项目根内，也不切换到文件所在的其他项目；精确投放至某个 Dock 组时进入该组。**如果文件 X 已在项目 A 打开，后来切换到项目 B，再通过 Finder 打开 X，不论 X 实际位于 A 目录内还是目录外，都回到 A 的原 FileTab**；不在 B 复制标签，也不根据文件路径改变 X 的标签归属。跨窗口同理。Finder 直接双击仅在 Bailey 是该文件的系统默认打开应用时才会送达 Bailey；否则由用户选择「打开方式 → Bailey」。
+4. **本机文件身份独立于项目后端。** 即使当前是固定 SSH 项目、动态 SSH 会话或远端断线，Mac 文件也只能用 `LocalWorkspaceBackend` 读取／保存，可在**当前已有项目**内显示为本机 `FileTab`；同名远端文件是不同标签，不能把 Mac 路径交给 SSH、隐式上传或改写远端数据。重启后仍从本机恢复该文件标签，旧项目和窗口快照继续可读。
+5. **项目范围不变。** 打开外部文件不新增／改名／重排 Project，不变更 `customDirectory`、`pinnedFile`、Files/Git 面板根、终端 cwd 或运行中 Shell。切换项目、停靠、关闭标签、撤销、自动保存、窗口关闭保护和会话恢复全部沿用现有 `Project → PaneTab → FileTab → Dock` 链路。
+6. **文件夹才创建本机项目。** Projects「＋」、现有 `⇧⌘A` 与命令面板的本机“添加”入口改为**添加文件夹**，使用目录专用选择器；不再提供“把 Mac 单文件添加为项目”的新入口。Finder 文件夹 Service 与目录落点仍按原逻辑添加／复用目录 Project，不启动 Shell；显式 SSH 添加远端文件／目录的现有功能不变。Projects 面板整体 Finder Drop 的文件走 Open File、目录走 Add Folder，不新增项目行级 Drop；原生混合批次按文件／目录类型分流。
+7. **原 P3 拖放职责不变。** Files 行／树根仅复制本机文件／目录到实际目标，不覆盖、不移动源项；Ghostty 本机终端只插入安全转义路径文本、不发送 Return，SSH 终端拒绝 Mac 路径；WebKit 正文保留文件上传；Git／Diff／普通编辑和标签栏按现有精确 Dock 组处理文件；内部 Dock／Projects 拖动不被 Finder 外部拖放接管。
+8. **已保存的旧项目数据保留。** 历史快照里的本机 `pinnedFile` 项目、显式 SSH 文件项目仍可以正确显示、编辑和恢复。禁止**再创建新的本机单文件项目**，但不得为了删除旧代码损坏现存快照；只有确证不再可达的建项目算法与 helper 才删除。
 
-- [Apple CFBundleDocumentTypes](https://developer.apple.com/documentation/bundleresources/information-property-list/cfbundledocumenttypes) 与 [LSHandlerRank](https://developer.apple.com/documentation/bundleresources/information-property-list/cfbundledocumenttypes/lshandlerrank)：文档类型由实际 bundle 声明，使用 `Alternate` 不抢默认关联。
-- Apple [application(_:openFiles:)](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/application%28_%3Aopenfiles%3A%29) 面向文档文件名批量投递，并要求以 `reply(toOpenOrPrint:)` 回告；[application(_:open:)](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/application%28_%3Aopen%3A%29) 明确说明 URL 列表不包含已注册文档类型的文件，且实现它会抑制前述 `openFile(s)` 回调。**先按文件类型选择正确单一回调，再通过真实 Finder + SwiftUI `WindowGroup` 验证**，不先把 openURLs 视为万能文件入口。
-- [Zed 文档类型](https://github.com/zed-industries/zed/blob/main/crates/zed/resources/info/DocumentTypes.plist)：通用文本和文件夹使用 `Alternate`，另有旧式扩展名列表并使用 `Default`（**不照抄旧式通配类型或 Default**）；[统一打开入口](https://github.com/zed-industries/zed/blob/main/crates/zed/src/main.rs) 接入专属 OpenListener；[终端处理](https://github.com/zed-industries/zed/blob/main/crates/terminal_view/src/terminal_view.rs) 对本机 ExternalPaths 用 Shell 引用并走 `terminal.paste`、远端拒绝；[Project Panel 复制入口](https://github.com/zed-industries/zed/blob/main/crates/project_panel/src/project_panel.rs) 与编辑区打开分离，属于 Bailey #5。
-- [VS Code macOS 文件批量事件](https://github.com/microsoft/vscode/blob/main/src/vs/code/electron-main/app.ts)：以短批次合并系统文件请求，默认 `preferNewWindow: true` 是 VS Code 自身策略，不适合无依据复制给 Bailey；[编辑区目标分流](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/browser/parts/editor/editorDropTarget.ts) 与 [Explorer 外部文件导入](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/files/browser/views/explorerViewer.ts) 不共享放置动作，后者属 Bailey #5。
-- 本仓库实际路径：`FinderService.openInBailey → TerminalManager.openDirectories → addLocalItems`；`TerminalManager.addLocalItems → Project.openFile → FileTab`；`ContentView → WorkspaceDockView → PanelContentView → Ghostty/STTextView/WKWebView`；`ToolPanelView → FileTreePanel → FileTreeModel`。现有文件项目的 `pinnedFile` 被 `SessionStore` 持久化并影响项目图标，不能草率合并。
+## 输入、错误与恢复
 
-## 不做
+- 支持单文件、多文件、跨目录、重复或符号链接别名、图片、纯文本、未知扩展名；沿用 `FileTab` 的 UTF-8、无 NUL、5 MiB 限制及原有不可用说明。不存在、无权限、包目录、断链或非法 URL 不应制造 Project／空标签；混合成功与失败能反馈原始窗口。
+- 本机文件首次打开不复制、不移动、不隐式修改源项；**既有**标签／项目失焦自动保存可能正常写入旧脏文件，必须区别于错误的外部写入。
+- 快照只恢复支持的标签、Dock 布局、路径、光标和滚动；未写盘正文仍不承诺恢复。异步 Finder 请求在窗口挂载／恢复后路由，关闭的接收窗口不得将文件误送其他窗口。
+- 无项目且仅投递文件：拒绝新增文件。混合批次中**显式添加文件夹**可以先创建正常目录项目，再打开该批次文件；不能仅根据文件父目录推断项目。文件／目录投递、重复文件和跨窗焦点需要确定且可测试。
 
-- 不在 #10 做 Files 目录目标的文件复制、移动、覆盖对话框、远端上传、内部文件树搬移或任何新文件管理系统；这些归 Issue #5。
-- 不做 PDF/二进制预览增强、Quick Look、Finder Extension、文件关联设置页或终端执行文件。
-- 不移植 Zed GPUI 或 VS Code Electron，也不重写整个 workspace／session restore。
-- 不为了未知扩展名预先将 `public.data` 宣告为万能可编辑类型；先用 `public.text`、明确的代码／图片类型和 `public.folder`，在真实 Finder 上核对需要的类型覆盖。
+## 明确不做
 
-## 验收真源
+- **不做无项目打开文件**，不创建 `documentProject`、隐藏 `Open Files` Project、独立文件工作区、第二套标签／Dock／持久化系统，也不增加“返回隐藏文件区”的命令。
+- 不做临时目录浏览、文件夹预览、PDF／二进制预览扩展、Quick Look、文件关联设置页、Finder Extension、远端文件上传或项目行级别的新拖放系统。
+- 不因为新建文件选择器而增加不需要的快捷键／并行文件接收器；原有「添加本机文件或文件夹」混合选择器应按新的两个明确意图拆分，而不是继续保留歧义。
+- 不迁移或批量删除历史 `pinnedFile` 用户资料，不改动已有 SSH 显式远端文件项目的产品语义；P1～P3 完成证据和当时的验收口径仍视为历史事实。
 
-- **完整系统入口**：Bundle 包内的文档声明、LS 候选、Finder「打开方式」、Dock 拖入、`open -a` 各自独立验证；真实文件字节或原生预览可见。
-- **窗口与项目**：单／多窗口、零项目、单文件项目、目录项目、已运行 SSH 终端、混合批次、重启恢复、重复打开、输入次序；用户项目命名、`pinnedFile`、缓冲、焦点、Shell 均保持正确。
-- **拖放目标**：普通区打开、本机终端仅输入引用路径、固定 SSH 项目连接前／中／后及动态 SSH 终端都拒绝 Mac 路径、Files 精确目录目标在 #5 前不承诺复制／不降级普通打开、远端 Files 不输出伪 Mac URL；取消／跨目标／内外拖动不双触发。测试 STTextView 和 WebKit 既有原生拖动语义。
-- **输入与失败**：同目录／跨目录、文件／文件夹、相同／别名路径、符号链接／失效链接、未知／无扩展名、Unicode／空格／引号／控制字符、权限／删除、空与超限、二进制／损坏图片、无窗口／重启、部分合法批次／重复请求；所有普通打开与不支持的专用放置**不得修改源文件或隐式复制**，原有编辑内容必须保留；切换导致的**既有**失焦自动保存单独核对，不误报为拖放写入。
-- **环境**：最低 macOS 15.6 和当前支持版本、唯一签名身份、中文／英文、浅／深色、鼠标／触控板、不同窗口和面板布局；可安全执行者必须逐项覆盖，不能实测者记录具体原因、替代证据与阻塞结论。XCTest/CI 不代替真实 Finder E2E。
-- 执行细目在 `plan-p1.md` / `plan-p2.md` / `plan-p3.md`，唯一当前进度在 `todo.toml`。**当前仅审查并更新计划，不实施功能代码。**
+## 可观察验收
+
+- **已有项目 A，任意路径的 Mac 文件 → A 的文件标签**；Projects 数量、名称、顺序、目录和 Files/Git 根都不变。打开多个文件不能因父目录相同／不同而添加项目。
+- **已有项目 A，标签栏组 G 的 Open File → G**；系统菜单「文件 → Open File…」（⌘O）使用当前窗口的活动组；Finder→其他指定组也落到该组。重复打开原文件复用同一个 `FileTab`，不搬动旧标签。**A 中已打开 X → 切换 B → Finder 再打开 X → 返回 A 的原标签**；X 在 A 目录内／目录外两种情况结果一致。只有 X 从未打开时才进入当前 B。跨窗口先找到原标签。
+- **当前 SSH 项目**：新 Mac 文件仍在当前项目中作为本机标签打开，读写、重启恢复均为 Mac 文件；与远端同名文件分离，SSH 连接变化不会把本机标签转成远端。
+- **无项目**：没有新文件标签、没有隐藏 Project 和自动生成的目录项目；Finder 失败有明确反馈。显式添加目录以后才能在该项目打开文件。
+- **项目添加**：本机 Add Folder、`⇧⌘A`、Projects 文件夹 Drop 和 Finder Service 只添加／复用目录项目；Projects 文件 Drop 只打开文件；已有旧单文件项目仍能恢复。
+- **无回归**：Files Copy、Ghostty、WebKit、窗口焦点、原生保存、Git、SSH、原生 Dock、亮暗／中英、当前与最低支持 macOS、极端输入和失败恢复尽可能完整验收。用 XCTest、`make build`／`make test` 和真实 Finder 分别核对最终效果，无法实测的条件写明影响、替代证据和补验条件。
+
+实施锚点与分任务验证见 [Plan P4](plan-p4.md)；实时状态以 `todo.toml` 为准。

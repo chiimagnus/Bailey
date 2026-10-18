@@ -1,8 +1,10 @@
-# Plan P3 — Finder 原生窗口拖放与专用目标隔离
+# Plan P3 — Finder 按实际放置区域执行对应动作
 
-**Goal：** Finder 文件／文件夹放到 Bailey 的普通窗口内容区域时打开本地资源；放到本机 Ghostty 终端时按既有 IDE 语义插入文件路径；明确的 Files 文件树目标留给 Issue #5。三类区域互不抢事件，也不影响现有原生编辑、网页拖动、SSH 和 Dock 操作。
+> **历史阶段，已完成。** 当时的 Projects 文件投放会建立独立 `pinnedFile` 项目，后经用户明确修正为「普通文件只打开标签，目录才添加项目」。新需求和其测试见 [Plan P4](plan-p4.md)，P3 的 Files 复制、终端/WebKit 所有权及真实 Finder 验收继续有效；以下任务和审计保留原有完成证据，不改写历史。
 
-**Non-goals：** 本阶段不提供 Files 文件／目录的复制、移动、粘贴、覆盖确认、Finder→目录导入、远端上传或任何文件系统新写操作；这些是 [Issue #5 的 F1/F2](https://github.com/chiimagnus/Bailey/issues/5)。不做新的 Drag-and-Drop 引擎、覆盖全窗口的透明层、通用 NSEvent monitor、Shell 自动执行、PDF 预览或独立设置项。
+**Goal：** Finder 文件／文件夹按 Bailey 实际命中区域执行不同且互斥的动作：编辑区和分屏标签栏打开或复用文件（新标签进入实际落点组）、Projects 新增本机项目、Files 将文件及目录复制到准确的本机目录、本机 Ghostty 只插入转义路径、WebKit 网页内容保留原生上传；SSH 不误接本机路径，Dock／Projects 内部拖动不受影响。2026-10-18 用户将原本留给 Issue #5 的 Finder→本机 Files 复制子集提前纳入本阶段。
+
+**Non-goals：** 除 Finder→本机 Files 复制导入外，不做文件树多选、内部移动、剪贴板、覆盖确认、远端上传与跨机器传输；这些继续属于 [Issue #5](https://github.com/chiimagnus/Bailey/issues/5)。不做第二套拖放引擎、全窗口透明层、全局 NSEvent monitor、Shell 自动执行、PDF 预览或独立设置项。
 
 **真实前提：**
 - `Bailey/UI/ContentView.swift` 的工作区分为空状态和 `WorkspaceDockView`；其多个 Overlay、`WindowChromeAccessor` 都参与命中／生命周期。
@@ -10,9 +12,13 @@
 - `BaileyTerminalView` 已是 `NSDraggingDestination`，注册 `.fileURL`，现有 `performDragOperation` 转义路径后 `sendText`，**不显式发送 Return**。
 - `TerminalSession.workspaceIdentity` 从动态连接／`initialWorkspace` 推断机器，但 **`Project.makeSession` 以 `sshHost` 直接生成远端 SSH 启动命令时 `initialWorkspace` 可以为 nil**；连接尚未接管前 `workspaceIdentity` 也可能为 nil，绝不只用该字段来判断远端路径是否允许输入。
 - `Vendor/STTextView/.../STTextView+NSServicesMenuRequestor.swift` 注册的拖动类型只有字符串／RTF；`.../STTextView+NSDraggingDestination.swift` 可接受外部文本并插入正文。**不能直接推断 Finder 的文件 URL 一定被它抢走**，先看实际 pasteboard 类型和命中结果。
-- `FileTreeRow` 目前不论本机还是 SSH 都把路径作为 Mac `NSURL(fileURLWithPath:)` 外拖，属于**真实错误的源头**；必须在启用新通用文件 URL 接收器之前改掉。Files 专用落点由 Issue #5 处理，不在本次建设 FileManager.copy。
+- **T1 调查时的旧状态**：`FileTreeRow` 曾错误地将 SSH 路径外拖为 Mac `fileURL`，P3-T2 已从源头修复。后续用户明确要求本次实现 Finder→本机 Files 复制，P3-T3 已沿 `FileTreeModel`／`LocalWorkspaceBackend` 接入实际复制与错误反馈。
 
-**Acceptance：** Finder 多文件／文件夹在窗口非专用区域正确打开；本机终端只安全插路径，不提交命令；固定 SSH 项目连接前／中／后、自动项目中动态 SSH 均不把 Mac 路径发给远端；Files 具体文件树落点不被外层 opener 吞掉、也不假复制；文本编辑器、WebKit 网页文件上传、Dock 与项目内部移动照旧。真实外部拖入须独立 Finder E2E 验证，不能只测 ViewModel。
+**Acceptance：** Finder 单／多文件和文件夹在普通区域打开；每个分屏的顶部标签栏打开到实际落点组（空组亦支持），已有文件复用原组原缓冲；Projects 添加本机文件／文件夹项目；Files 真实复制到指定目录、不覆盖、部分失败保留源且不留半成品；本机终端只插安全路径不执行，固定／动态 SSH 拒绝 Mac 路径；WebKit 上传、STTextView、Dock 与项目内部拖动保持原语义。分别用 XCTest 与真实 Finder E2E 核对最终效果，不以 Drop 回调返回成功代替验收。
+
+---
+
+**阶段演进说明：** 下面 P3-T1／T2 保留当时的 Red→Green、真实 Finder 实验及代码快照，部分文案是用户扩展 Files／Projects 交互**之前**的历史语境（例如「Files 留白打开」或「Files 导入留给 #5」）。**当前目标与验收以以上说明、P3-T3/T4 及 `idea.md` 为准**，不能按 T2 历史语义回退已经实现的复制与项目添加。
 
 ---
 
@@ -44,6 +50,18 @@
 
 - 必须确认「普通窗口打开」与「Ghostty 输入」互斥、网页上传仍生效、STTextView 普通文本仍插入、Dock／Files 内部拖动不触发通用 opener、Files 文件树具体目标保留给 #5。
 - 实测缺口决定 P3-T2/T3 的**最小归属位置**；不先加透明 overlay、全局 event 过滤、持续轮询或一套新 coordinator。若是平台确有无法消除的事件竞争，按真实根因修改计划，不叠加补丁链。
+
+---
+
+## P3-T1 执行证据（2026-10-18，原生 Finder 拖动）
+
+- **系统真实输入类型：** 经过 Finder 原生文件图标拖动后，系统 `NSPasteboard(name: .drag)` 的 item 类型实测为 `public.file-url` + `com.apple.finder.node`，没有 `public.plain-text` 或 RTF；Vendor/STTextView 仅以 `plainText/rtf` 实际写入，因此当前 Finder 文件不会因“文件名像文字”而覆盖编辑缓冲。不要因为 `draggingEntered` 返回 `.copy` 就推测文本真的插入。
+- **进程与实际接收者：** 唯一运行测试 Bailey PID 98469，测试快照 `BAILEY_UI_TEST_RUN_ID=8B79EF69-D894-420C-9E2A-E3D198F1279A`，Finder PID 1318、测试窗口 136140，临时目录 `/tmp/bailey-drop-p3.wuIWxq`。正式 Bailey 已在 P2 授权下正常退出，没有动正式数据。
+- **Red/实际落点矩阵：** Finder `alpha.txt/beta.txt` 分别拖至 (1) 无项目空白工作区 (2) 原生 `FocusReportingTextView` 正文 (3) Files 文件行明确目标 (4) Files 留白 (5) Projects 项目行 (6) Dock 工作标签标题 (7) Git 面板普通空白；全都未新建 FileTab 或项目（P1 文件路由没有被调用），原始编辑器正文 `let p3 = 3` 未改变，SHA-256 完全一致。普通区需要一个真正的 URL 接收者；不靠猜测添加全窗口透明罩。
+- **既有终端 Green：** 同 Finder `alpha.txt` 真鼠标拖到本机 Ghostty 终端 body，系统只在当前 shell prompt 中插入 `/private/tmp/bailey-drop-p3.wuIWxq/alpha.txt `（真实截图 `/tmp/bailey-p3-terminal-after-drag.png`），没有 Enter、没有新 FileTab/项目/文件修改，证明 `BaileyTerminalView` 的 `NSDraggingDestination` 已有合法路径；须保留，并在 T2 仅加固定/动态远端拒绝和控制字节安全检查。
+- **现有源码所有权：** `ContentView`、`WorkspaceDockView` 及普通 `PanelContentView` 没有 `fileURL` 目标，WorkspaceDockView 的 `DockTabDragCoordinator` 只接应用内部标签移动；`FileTreeRow.onDrag` 当前把本机与 SSH 都误作为本机 NSURL，需在 T2 改源头；Git/Projects 的 DragGesture 是内部交互，不得被覆盖。WKWebView 自身页面文件上传的实际回归留在 T2/T3 接入通用 opener 后，不能以本轮无浏览器实例假称实测。
+- **归属决策：** 原生终端最内层继续独立接收和输入；编辑器正文之外的普通 Window/Dock 占位接入 P1；Files 文件/目录专用目标明确定义为不接受普通 opener、复制留给 Issue #5；浏览器页面区域保留 WebKit 接收，文件放浏览器 chrome 可按普通打开。这些假设在 T2/T3 真 GUI 复验，真正竞争时修所有者而非加蒙层。
+- **提交例外：** T1 仅完成可审查的调查/原生行为确认，未修改永久代码或测试，不制造空 Git commit；证据存当前 `plan-p3.md`、临时图与日志，下一步 T2 写 Red 自动测试并逐根因修复。
 
 ---
 
@@ -87,38 +105,58 @@
 
 ---
 
+## P3-T2 实施与真实验收证据（2026-10-18）
+
+- **真实根因与修正：** 原本在 `ContentView` 根挂 `fileURL` `.onDrop`，Finder 投放网页 `input[type=file]` 后 WebKit 虽显示选中文件，父级仍另开 FileTab；即使改 `NSEvent.mouseLocation` + `NSWindow.hitTest` 屏幕换算也有实际复现，说明**不是坐标偏差补丁能保证事件独占**。现已完全移除根接收和猜测命中逻辑，仅在已确认的普通 SwiftUI 区域局部注册：无项目空态、各 Dock 分组的标题／空组、编辑器与 Diff、Projects/Git/Files 普通面板；浏览器**仅 toolbar** 使用普通打开，其网页正文不注册；Ghostty 终端正文也不注册。通过唯一 `FinderWindowDrop.receive` 加载 `NSItemProvider` 并复用 P1 路由，无第二套队列、全屏透明层或 native view override。
+- **空态补救 Red→Green：** 首次 scoped `.onDrop` 挂在未撑满的空态提示本身，真实 Finder 拖到提示外的大空白时无效果；检查 SwiftUI 树后移到 `.frame(maxWidth:.infinity,maxHeight:.infinity).contentShape(Rectangle())` 的整体容器上。相同临时样本从 Finder 拖到 `x334<Finder.minX377` 的有效空白区域后，新隔离快照明确为 **1 window + 1 pinnedFile project + 1 FileTab**，原生 AX 编辑器正文与临时文件内容一致，SHA-256 前后不变。
+- **WebKit 结构性独占：** 再用**以前未打开过**的 `upload-only-new.txt` 从 Finder 真鼠标拖入本地 HTML 上传区；页面 AX 明确 `Selected: upload-only-new.txt`，项目仍为 3、已有标签数量 `[1,3,2]`、所选浏览器不变、新文件**没有**进入任何 FileTab，源文件哈希不变。随后将另一独立文件拖到浏览器工具栏，真正新增文件标签，原生 Text Editor 显示对应正文且源文件不变。两种动作不能仅看网页“已选中”就算通过；之前父级双接收日志为真实 Red，已移除诊断 `BAILEY_P3_PROBE`。
+- **其它真实目标：** Finder→已有原生编辑区正常新增文件 FileTab，未覆盖当前文件和原始字节；Finder→Files 明确文件行不打开文件、不切换项目，→Files 普通留白新增正确标签、可读正文、源文件 SHA 相同；Finder→本机 Ghostty 原生提示符只插入 `'/private/tmp/.../upload-only-new.txt '` 文本，不发送 Return、无新 FileTab/项目或源文件更改。T1 里真实原始终端路径截图、P2 的 Finder 右键/Dock 文件与目录入口仍为独立原生证据。
+- **远端与输入边界：** `Project.makeSession` 显式将固定 `sshHost` 启动意图注入 `TerminalSession`；`acceptsLocalFileDrop` 覆盖固定握手前/中/断线、动态已连接/断线/进程真正退出返回 Mac。本机路径先整批检查 CR/LF/ESC/TAB 等控制字符再做 Shell 转义；无 Return。`FileTreeRow` **源头**不再把 SSH POSIX 路径包装成本机 fileURL；本机行仍保持原生外拖。`WorkspaceIdentityTests` 13/13 通过，`WorkspaceWindowIsolationTests` 增加真实 `NSItemProvider` 双文件打开、异步结果晚到但窗口关闭／改挂其它窗口后不误送，合并 22/22 通过。额外发现并核销**手动前台 ssh 未接管**：通过真实原生 Ghostty 运行 `/usr/bin/ssh -F /dev/null -o 'ProxyCommand=/bin/sleep 12' fixture.invalid`，无任何真实主机／用户 SSH master 网络连接；旧 `acceptsLocalFileDrop` 判断实际 Red 失败、新复用 `unmanagedSSH` 进程事实后 Green 通过，关联 14/14 测试成功。随后检查到 `exec ssh` 会替换原 Shell 而**不变更根 PID**，原 `unmanagedSSH` 只看不同于根 PID 的前台进程导致真实 Red；修订原生测试分别覆盖子进程与 `exec` 两种真实进程形态，直接读 `proc_pidpath`，对 Bailey 固定 SSH 启动保留 `isRemoteLaunch` 排除；Green `PaneRetentionTests + WorkspaceIdentityTests` **27 项、0 失败**，无真实 SSH 连接、无残留受控进程。
+- **测试事故/恢复边界：** 一轮拖放目标点错误落进前台 Finder 自己的侧栏，**不是** Bailey 编辑区 E2E，Finder 将仅本轮新建的临时 `editor-drop-new.txt` 移到废纸篓；经逐字节 `cmp` 与 SHA 核对后已从废纸篓还原至独立测试目录，没有触碰用户项目，并将“先确认窗口屏幕边界”写入 `docs/testing.md`。该无效尝试不计为产品成败。
+- **仍待 P3-T3 与总体 Gate：** 两窗口真实指向／Files 压缩目录、树根／取消与切出／主题和窄面板、SSH 真机及最低 macOS 15.6 环境覆盖，按 P3-T3 与阶段审计处理。T2 完整 `make build` / `make test` 及原子提交后才可将其标完成；不能拿以上局部 Green 代替全套验收。
+
+---
+
 ## P3-T3
 
-**独立结果：Files 的文件树精确落点与通用窗口接收互斥，预留 #5 的完整文件管理职责；完成 #10 的端到端原生拖动验收。**
+**交付：Finder 文件/目录拖入 Files 时，按行、目录或树根真正复制到指定本机文件夹；不会额外打开 FileTab。** 2026-10-18 用户明确扩展了现行目标，提前完成 Issue #5 F2 的 Finder→本机项目导入子集；完整多选、内部拖动移动、剪贴板和远端传输仍由 #5 后续处理。
 
 **证据与边界：**
-- GitHub [Issue #10](https://github.com/chiimagnus/Bailey/issues/10) 明确写出「窗口通用打开 ≠ Files 树复制／移动，#5 负责目标目录操作」。[Issue #5](https://github.com/chiimagnus/Bailey/issues/5) 的 F2 涵盖 Finder 文件放进本地 Files、复制／移动、名称冲突；本阶段不提前实现 F2 的磁盘动作。
+- [Issue #10](https://github.com/chiimagnus/Bailey/issues/10) 的普通区域打开与 [Issue #5](https://github.com/chiimagnus/Bailey/issues/5) 的 Finder→Files 本机导入被用户明确要求在同一拖放体验中完成；保留其它 F1/F2/F3/F6 的独立后续范围。
 - Zed `project_panel.rs::drop_external_files` 与 VS Code `explorerViewer.ts` 的 external import 均是**文件管理器专属**动作；不可照搬到 #10 通用 opener。
 - Bailey 当前 `FileTreePanel` 依靠 `FileTreeModel` 展示行、目录压缩、懒加载、右键及 `.onDrag`；`ToolPanelView` 有 `filesTarget`，`isCurrentTarget` 已维护实际工作区后端身份；共享树 `TreeRowStyle` 也服务 Git，不能为未来 #5 先改 shared tree 的语义。
 
 **Files：**
-- 如 P3-T1 的真实命中测试表明有 FileTree row 与外层 opener 冲突，仅修改 `Bailey/Files/FileTreePanel.swift` / `Bailey/UI/Panels/ToolPanelView.swift` / `Bailey/UI/ContentView.swift` 中**必需的局部文件树落点边界**；不得改 `FileTreeModel`、`WorkspaceBackend`、`LocalWorkspaceBackend`、文件操作 UI 或添加复制函数。
+- FileTreePanel 与 ToolPanelView 决定目标文件夹；FileTreeModel 负责刷新与错误显示；LocalWorkspaceBackend 使用 FileManager.copyItem 真正复制并拒绝覆盖，耗时 IO 不阻塞主线程。移除 P3-T2 的临时 `UnavailableFileTreeDrop` 和 Files 外层通用打开，不另写 provider loader 或第二份复制路径。
 - Tests：`BaileyTests/NativeUI/Shared/TreeRowHitTestingTests.swift`、`BaileyTests/WorkspaceUI/Windows/WorkspaceWindowIsolationTests.swift`；如已有 `ExternalFileDropTests` 则扩充同一测试类。文档 `docs/features/files.md`、`docs/features/dock.md` 只更新本次**已实现**的 drop 边界，不宣称 #5 已完成。
 
-### Step 1：Red — 只验证真正属于 #10 的结果
+### Step 1：Red — 真实 Finder 导入与副作用
 
-1. Finder 文件放在**FileTree 明确文件夹行、文件行、目录压缩末级或文件树 root 的可确定专用目标**：若 #5 尚未处理，此动作不能被通用窗口 opener 截获，也不能在项目根执行不被用户知道的复制／移动；鼠标反馈不得说「已接受复制」。不把这类专用区域的「当前暂不支持」错误地算成 #10 漏开文件。
-2. Finder 文件放在**Files 面板真正的普通非专用留白、标题区**或该面板外的普通工作区：执行 #10 的「打开文件」，不能误触发已有 Files 行右键／新建／重命名。真实目标界限依据 P3-T1 实测，不猜测 SwiftUI 父子顺序。
-3. Files **本机行向 Finder／终端外拖**仍保留合法 fileURL，**SSH 行不再伪装 Mac URL**；项目快速切换、断线、不同远端同名、拖放取消与 Files/Git 共享行交互不损坏。
-4. 多文件、拖过多个文件树行后移出、窄面板、水平滚动、压缩目录、深色/浅色、中英文、两窗口不同 project：不能遗留错误 hovered/drop 状态，也不出现双开、本机/SSH 串目标、已有 Shell 被重建。
-5. 复制/移动、批量粘贴、文件树内拖动和覆盖对话框**完全不实现**；对应正向 E2E 留给 #5，不能为本期制造重复 helper 和未使用状态。
+1. Finder 文件/目录放在 Files **目录行（含压缩目录末级）**复制到该目录；放在**文件行**复制到其父目录；放在**文件树留白或根目录标题**复制到真实当前根目录。不得另开编辑标签或移动原始文件，成功后原生树及时显示副本。
+2. 空、单/多、重复/同名、来源已失效、两个来源同名、文件夹递归进自己或子级、损坏软链接与路径大小写、Unicode、无权限目录、在途切换项目/窗口关闭：不能覆盖既有目标或误写 SSH。有效来源继续复制，失败逐项报告；没有复制前不显示“已导入”。
+3. 只有目标实际为本机且当前项目/根目录/原窗口仍有效时接受；固定 SSH、动态远端 Files 显示禁放，不回退到父级普通打开、更不自动上传。本机 Files 外拖仍提供原 fileURL，远端路径不伪装 Mac URL。
+4. 窄/宽面板、压缩目录、混合文件夹/文件、行之间移动或取消、深/浅、中英文、双窗口与不同 project 不能出现双消费或错误提示；原有 Git 树、文件名编辑、目录展开、菜单和 Shell 身份维持。
+5. Finder→Files **默认复制**，不移动源项、不自动覆盖；明确的冲突报错代替危险 Replace。多选/剪切/粘贴、树内移动、跨机器导入仍交给 #5。
 
 ### Step 2：Green／Refactor
 
-- 只修 **实际能复现**的外层 opener 与 FileTree 精确目标优先级冲突；首选最小局部行为，使**不支持的目标返回不接受，而不是接受后无操作**。不为未来 #5 加空 `copy` 方法、悬浮文件管理器状态机、覆盖确认或有歧义的视觉假阳性。
-- 如 P3-T1 已证明当前根层能够正确区分 Files 行，P3-T3 可只落永久回归测试和准确文档；**没有生产代码需要修就不为了凑 commit 添加代码**。
-- P3-T2 已移除的远端伪 URL 旧分支只回归检查，不留第二层兼容绕过。内容保存和焦点仍遵守 `Project` 与 `TerminalManager` 现有失焦自动保存契约。
+- 普通 `FinderWindowDrop` 唯一异步 provider 加载器保留原窗口身份，目标区域只选择末端动作（打开、添加项目、复制）。Files 外壳不再拥有普通打开入口，子目录和文件行由自己的本机 DropDelegate 指向准确的绝对目录。
+- `LocalWorkspaceBackend` 后台用 FileManager.copyItem 批量处理，拒绝同名目标（包括 dangling link）、递归复制、无权限/失效路径，返回成功/逐项失败；不自行删除源项。`FileTreeModel` 校验原 root/scope，刷新当前可见目录和缓存，并经现有 `onError` 呈现失败，不设第二套复制 API/queue。
+- 不接入新的 hover 状态机、跨机器上传、隐式替换或过度文件管理器模块；本 task 同时删除 `UnavailableFileTreeDrop` 的旧语义并更新文档。
 
 ### Step 3：真实 E2E／提交条件
 
-- 自动相关用例：`TreeRowHitTestingTests`、`WorkspaceWindowIsolationTests`、新增 `ExternalFileDropTests`（若存在），并按实际影响复测 `FileTreeTests` 和 `PaneRetentionTests`；运行 `make build`／`make test`／`git diff --check`，检查退出码、测试发现和签名。
-- 在隔离图形环境完整覆盖 Finder `Open With`／Dock／`open -a`／普通区/终端/Files 精确目标/网页上传/文本拖动/内部移动。检查真实文件标签、原有文本缓冲、Shell 的输入、Files 行表现和源文件磁盘字节；**#5 的实际复制／移动不纳入 #10 验收**。
-- 无法安全实测的系统或目标逐项记录阻塞、影响和补验条件；不能以模型测试充数。本 Task 仅在产生真正测试／功能／文档变更时原子提交，不推送。
+- 测试实际磁盘文件与目录树的复制、重名、符号链接、双来源冲突、自/子目录、批次部分成功、切换根目录、SSH 拒绝及源文件字节，接入原 `FileTreeTests`、`TreeRowHitTestingTests` 和 `WorkspaceWindowIsolationTests`；`make build`、`make test`、严格验签、`git diff --check` 全部核对退出码。
+- 原生隔离 App 中从 Finder 拖到 Files 根标题、空白、文件行、目录行与压缩目录：核对物理目标新文件、源 SHA、行出现时间、项目标签数和错误弹窗；原有普通编辑区/终端/WebKit/Projects 行为留到 P3-T4 做总体验收。
+- 每项不可安全执行的环境记录阻塞与补验条件。同步 Files、Dock、README、testing 文档，代码与测试一个中文 commit，不推送。
+
+---
+
+## P3-T4
+
+**交付：每个区域各行其职。** Projects 面板用 `TerminalManager.addLocalItems` 新增/复用**显式本机项目**（文件保留 pinnedFile，目录不建 Shell），而非 `openExternalFiles` 的普通文件标签意图；项目行内部排序手势不被外部文件 URL 冒充。顶部工作标签栏与普通编辑区用既有 `TerminalManager.openExternalFiles`，将普通打开区域（顶部标签栏、空组、编辑／Diff、Git 面板及浏览器工具栏）的项目和 `DockGroup` ID 传至原文件路由，同一文件复用原窗口原 FileTab（不迁组），新文件落入实际命中分屏（含空组），目录按普通打开建项目，不覆盖当前内容。Git 普通面板、空态仍执行普通打开；WebKit 正文上传、Ghostty 本机路径输入和 SSH 拒绝不变。
+
+Red→Green：在同一受控图形会话用真实 Finder 验证 Projects 文件/文件夹批次/重复/不同窗口，顶部标签栏新/旧文件、非选中分屏与空标签组、跨项目新旧文件、真实空态/编辑区、网页上传、终端本机/SSH、Files 目标与内部 Dock/Projects 排序互斥，核对项目数、pinnedFile、标签身份/顺序、磁盘字节、原生 WebKit 文件表单和终端无 Return；Build/全量 XCTest/验签/长期文档，原子提交不推送。
 
 ---
 
@@ -127,5 +165,5 @@
 按实际源码和每项 commits 核对：
 - P1 已打开文件的唯一标签、固定 file-pinned 与目录项目分离、SSH 目标和恢复时序；没有新全局文件索引或重复队列。
 - P2 真实 `CFBundleDocumentTypes`、`LSHandlerRank=Alternate`、正确系统文件回调和签名包验证；Finder Services、用户默认关联不变。
-- P3 普通窗口打开、终端纯路径输入且拒绝固定/动态 SSH 错误路径、STTextView/网页和内部拖动行为；Files 精确专用目标**不能被通用打开吞掉**，与 #5 边界可后续无冲突地接入。
-- 所有替换分支在各自 Task 即时清理，旧 SSH→Mac 伪 fileURL 不保留；无透明全窗口阻断、无第二套 drag engine、无文件树复制补丁、无过度防护。覆盖适用的全部环境、失败与极端组合，实测缺口标记，不能用全绿的模型单测替代真正 Finder E2E。**执行前审查不创建 `audit**.md`，实施完成后才按真实 commits 审查。**
+- P3 每个区域的语义分别兑现：普通工作标签打开、Projects 显式添加项目、Files 真正复制文件／目录进指定**本机**文件夹且无静默覆盖，终端纯路径输入并拒绝所有 SSH 误投，WebKit 原生上传；Files 复制与其他区域无双重消费。#5 剩余内部文件管理功能仍可独立演进。
+- 所有替换分支在各自 Task 即时清理，旧 SSH→Mac 伪 fileURL 不保留；无透明全窗口阻断、无第二套 drag engine、无重复复制引擎、无过度防护。覆盖适用的全部环境、失败与极端组合，实测缺口标记，不能用全绿的模型单测替代真正 Finder E2E。**执行前审查不创建 `audit**.md`，实施完成后才按真实 commits 审查。**
