@@ -151,18 +151,32 @@ struct ContentView: View {
 @MainActor
 struct FinderWindowDrop: DropDelegate {
     let manager: TerminalManager
+    var destination: (projectID: UUID, groupID: UUID)? = nil
 
     func validateDrop(info: DropInfo) -> Bool {
         info.hasItemsConforming(to: [UTType.fileURL.identifier])
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        Self.receive(info.itemProviders(for: [UTType.fileURL.identifier]), preferred: manager)
+        Self.receive(
+            info.itemProviders(for: [UTType.fileURL.identifier]),
+            preferred: manager, destination: destination
+        )
     }
 
-    static func receive(_ providers: [NSItemProvider], preferred manager: TerminalManager) -> Bool {
-        receive(providers, preferred: manager) { urls, manager in
-            TerminalManager.openExternalFiles(urls, preferred: manager)
+    static func receive(
+        _ providers: [NSItemProvider], preferred manager: TerminalManager,
+        destination: (projectID: UUID, groupID: UUID)? = nil
+    ) -> Bool {
+        receive(providers, preferred: manager) { urls, owner in
+            if let destination {
+                guard owner.selectedProjectID == destination.projectID,
+                      owner.selectedProject?.dock.root.group(id: destination.groupID) != nil
+                else { return }
+            }
+            TerminalManager.openExternalFiles(
+                urls, preferred: owner, destination: destination
+            )
         }
     }
 

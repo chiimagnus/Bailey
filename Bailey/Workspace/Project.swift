@@ -461,7 +461,7 @@ final class Project: nonisolated Identifiable {
 
     /// Opens `path` as a new file tab, reusing an existing tab for the
     /// same path. `editorState` seeds scroll/cursor state when restoring.
-    func openFile(_ path: String, editorState: EditorState? = nil) {
+    func openFile(_ path: String, editorState: EditorState? = nil, inGroup groupID: UUID? = nil) {
         // Capture the current directory context *before* selection moves to the
         // new tab, so its panels track the tab the file was opened from. The
         // same session decides which workspace the path belongs to, so the
@@ -483,6 +483,12 @@ final class Project: nonisolated Identifiable {
         }
         let tab = makeTab(content: .file(file))
         tab.contextSession = context
+        // A Finder drop targets this Dock group, not the group containing
+        // the previously selected tab. Stage placement before tabs didSet
+        // synchronizes layout, so an empty target group is not discarded.
+        if let groupID, dock.root.group(id: groupID) != nil {
+            _ = dock.place(.tab(tab.id), in: groupID)
+        }
         insertNextToSelected(tab)
         selectedTabID = tab.id
     }

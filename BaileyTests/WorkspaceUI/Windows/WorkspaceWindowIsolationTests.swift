@@ -65,6 +65,147 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "second body")
     }
 
+    func testProjectsDropKeepsExplicitPinnedFilesAndDistinctProjectOwnership() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let first = base.appendingPathComponent("one")
+        let other = base.appendingPathComponent("two")
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let pinned = other.appendingPathComponent("pinned.md")
+        try "content".write(to: pinned, atomically: true, encoding: .utf8)
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([first])
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 440),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        manager.attach(to: window)
+        defer { window.close() }
+        let providers = [pinned, other].map { NSItemProvider(object: $0 as NSURL) }
+        XCTAssertTrue(FinderWindowDrop.receive(providers, preferred: manager) { urls, owner in
+            owner.addLocalItems(urls)
+        })
+        try await wait { manager.projects.count == 3 }
+        XCTAssertEqual(manager.projects.first?.customDirectory, first.path)
+        let fileProject = try XCTUnwrap(manager.projects.first { $0.pinnedFile == pinned.path })
+        XCTAssertEqual(fileProject.customDirectory, other.path)
+        XCTAssertEqual(fileProject.tabs.filter { $0.content.isFile }.count, 1)
+        let folderProject = try XCTUnwrap(manager.projects.first {
+            $0.customDirectory == other.path && $0.pinnedFile == nil
+        })
+        XCTAssertNotEqual(fileProject.id, folderProject.id)
+        let originalIDs = Set(manager.projects.map(\.id))
+        XCTAssertTrue(FinderWindowDrop.receive(providers, preferred: manager) { urls, owner in
+            owner.addLocalItems(urls)
+        })
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(Set(manager.projects.map(\.id)), originalIDs)
+        XCTAssertEqual(try String(contentsOf: pinned, encoding: .utf8), "content")
+    }
+
+    func testFinderDropIntoAnotherTabStripKeepsNewTabsInTheActualTargetGroup() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let files = (1...4).map { directory.appendingPathComponent("drop-\($0).swift") }
+        for file in files { try "let file = 1".write(to: file, atomically: true, encoding: .utf8) }
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([directory])
+        let project = try XCTUnwrap(manager.selectedProject)
+        project.openFile(files[0].path)
+        project.openFile(files[1].path)
+        let initialTabs = project.tabs
+        let left = try XCTUnwrap(project.dock.group(containing: .tab(initialTabs[0].id)))
+        let right = try XCTUnwrap(project.dock.root.groups.last)
+        XCTAssertNotEqual(left.id, right.id)
+        XCTAssertTrue(project.dock.move(.tab(initialTabs[1].id), into: right.id))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 850, height: 550),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        manager.attach(to: window)
+
+        let target = (projectID: project.id, groupID: left.id)
+        var responses: [Bool] = []
+        TerminalManager.openExternalFiles(Array(files[2...3]), preferred: manager, destination: target) {
+            responses.append($0)
+        }
+        XCTAssertEqual(responses, [true])
+        XCTAssertEqual(project.tabs.count, 4)
+        let newTabs = Array(project.tabs.filter { tab in
+            guard case .file(let file) = tab.content else { return false }
+            return files[2...3].contains { $0.path == file.path }
+        })
+        XCTAssertEqual(newTabs.count, 2)
+        XCTAssertTrue(newTabs.allSatisfy {
+            project.dock.group(containing: .tab($0.id))?.id == left.id
+        }, "Finder files must open in the drop target's actual Dock group")
+        XCTAssertEqual(project.dock.group(containing: .tab(initialTabs[1].id))?.id, right.id)
+
+        TerminalManager.openExternalFiles([files[1]], preferred: manager, destination: target) {
+            responses.append($0)
+        }
+        XCTAssertEqual(responses, [true, true])
+        XCTAssertEqual(project.tabs.count, 4)
+        XCTAssertEqual(project.dock.group(containing: .tab(initialTabs[1].id))?.id, right.id,
+                       "Reusing an existing tab must not move it to the drop target")
+        XCTAssertTrue(project.tabs.contains { $0.id == initialTabs[0].id })
+        XCTAssertEqual(try String(contentsOf: files[1], encoding: .utf8), "let file = 1")
+    }
+
+    func testFinderDropIntoEmptyTabGroupKeepsGroupAndDoesNotMoveFilesAcrossProjects() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let firstRoot = root.appendingPathComponent("one")
+        let otherRoot = root.appendingPathComponent("two")
+        try FileManager.default.createDirectory(at: firstRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: otherRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstFile = firstRoot.appendingPathComponent("new.swift")
+        let otherFile = otherRoot.appendingPathComponent("other.swift")
+        try "first".write(to: firstFile, atomically: true, encoding: .utf8)
+        try "other".write(to: otherFile, atomically: true, encoding: .utf8)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([firstRoot])
+        let first = try XCTUnwrap(manager.selectedProject)
+        let empty = try XCTUnwrap(first.dock.root.groups.first(where: { $0.items.isEmpty }))
+        manager.addLocalItems([otherRoot])
+        let other = try XCTUnwrap(manager.selectedProject)
+        manager.selectedProjectID = first.id
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 780, height: 500),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        manager.attach(to: window)
+        let destination = (projectID: first.id, groupID: empty.id)
+        XCTAssertTrue(FinderWindowDrop.receive(
+            [NSItemProvider(object: firstFile as NSURL)],
+            preferred: manager, destination: destination
+        ))
+        try await wait { first.tabs.count == 1 }
+        let firstTab = try XCTUnwrap(first.tabs.first)
+        XCTAssertEqual(first.dock.group(containing: .tab(firstTab.id))?.id, empty.id,
+                       "Empty groups must survive the first Finder tab insertion")
+        XCTAssertEqual(other.tabs.count, 0)
+
+        // The Finder drop belongs to one visible group, but a file already
+        // owned by another local directory project keeps that project identity.
+        TerminalManager.openExternalFiles([otherFile], preferred: manager, destination: destination)
+        XCTAssertEqual(first.tabs.count, 1)
+        XCTAssertEqual(other.tabs.count, 1)
+        XCTAssertEqual(manager.selectedProjectID, other.id)
+        XCTAssertEqual(first.dock.group(containing: .tab(firstTab.id))?.id, empty.id)
+        XCTAssertEqual(try String(contentsOf: otherFile, encoding: .utf8), "other")
+    }
+
     func testFinderDropDoesNotRouteLateProvidersIntoAnotherOrClosedWindow() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

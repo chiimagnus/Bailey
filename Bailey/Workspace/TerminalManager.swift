@@ -103,6 +103,7 @@ final class TerminalManager {
     private struct PendingExternalOpen {
         let urls: [URL]
         let preferred: TerminalManager?
+        let destination: (projectID: UUID, groupID: UUID)?
         let completion: (Bool) -> Void
     }
     private static var pendingExternalFiles: [PendingExternalOpen] = []
@@ -214,7 +215,9 @@ final class TerminalManager {
     /// Finder/Open With means open a local file, not create one pinned project
     /// per file as the explicit Add Files action does.
     @discardableResult
-    func openExternalLocalItems(_ urls: [URL]) -> [URL] {
+    func openExternalLocalItems(
+        _ urls: [URL], destination: (projectID: UUID, groupID: UUID)? = nil
+    ) -> [URL] {
         typealias Item = (url: URL, path: String, resolved: String, isDirectory: Bool)
         var items: [Item] = []
         var rejected: [URL] = []
@@ -285,7 +288,10 @@ final class TerminalManager {
 
             if let containing {
                 selectedProjectID = containing.project.id
-                containing.project.openFile(item.path)
+                containing.project.openFile(
+                    item.path,
+                    inGroup: containing.project.id == destination?.projectID ? destination?.groupID : nil
+                )
                 continue
             }
 
@@ -434,6 +440,7 @@ final class TerminalManager {
     /// and attached so cold launch never creates a second writable buffer.
     static func openExternalFiles(
         _ urls: [URL], preferred: TerminalManager? = nil,
+        destination: (projectID: UUID, groupID: UUID)? = nil,
         completion: @escaping (Bool) -> Void = { _ in }
     ) {
         guard !urls.isEmpty else { completion(false); return }
@@ -449,7 +456,7 @@ final class TerminalManager {
             return
         }
         pendingExternalFiles.append(.init(
-            urls: urls, preferred: preferred, completion: completion
+            urls: urls, preferred: preferred, destination: destination, completion: completion
         ))
         deliverPendingExternalFiles()
         requestWindowForPendingDirectories()
@@ -521,7 +528,10 @@ final class TerminalManager {
             var handled = false
             var lastReceiver: TerminalManager?
             for group in groups {
-                let rejected = group.manager.openExternalLocalItems(group.urls)
+                let groupDestination = group.manager === request.preferred ? request.destination : nil
+                let rejected = group.manager.openExternalLocalItems(
+                    group.urls, destination: groupDestination
+                )
                 handled = handled || rejected.count < group.urls.count
                 if let owner = group.manager.window, !rejected.isEmpty {
                     let message = String(

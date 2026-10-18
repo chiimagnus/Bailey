@@ -280,7 +280,10 @@ private struct DockTabGroupView: View {
             header
                 .frame(height: 38)
                 .background(Color(nsColor: Theme.background))
-                .onDrop(of: [UTType.fileURL.identifier], delegate: FinderWindowDrop(manager: manager))
+                .onDrop(of: [UTType.fileURL.identifier], delegate: FinderWindowDrop(
+                    manager: manager,
+                    destination: (projectID: project.id, groupID: group.id)
+                ))
                 .overlay(alignment: .bottom) {
                     Color(nsColor: Theme.divider).frame(height: 1)
                 }
@@ -491,12 +494,21 @@ private struct DockTabGroupView: View {
                 manager: manager,
                 bottomBarHeight: BottomToolbarLayout.height
             )
-            .onDrop(of: [UTType.fileURL.identifier], delegate: FinderWindowDrop(manager: manager))
+            .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil) { providers in
+                FinderWindowDrop.receive(providers, preferred: manager) { urls, owner in
+                    owner.addLocalItems(urls.filter {
+                        $0.isFileURL && ($0.host == nil || $0.host == "localhost")
+                    })
+                }
+            }
         case .files:
             ToolPanelView(manager: manager, git: git, panel: .files)
         case .git:
             ToolPanelView(manager: manager, git: git, panel: .git)
-                .onDrop(of: [UTType.fileURL.identifier], delegate: FinderWindowDrop(manager: manager))
+                .onDrop(of: [UTType.fileURL.identifier], delegate: FinderWindowDrop(
+                    manager: manager,
+                    destination: (projectID: project.id, groupID: group.id)
+                ))
         case .tab(let id):
             if let tab = project.tabs.first(where: { $0.id == id }) {
                 PanelContentView(
@@ -507,7 +519,10 @@ private struct DockTabGroupView: View {
                     },
                     onNewBrowserTab: { manager.newBrowserTab(initialURL: $0) },
                     onNewFileTab: { manager.openFile($0) },
-                    onExternalFilesDropped: { FinderWindowDrop.receive($0, preferred: manager) }
+                    onExternalFilesDropped: { FinderWindowDrop.receive(
+                        $0, preferred: manager,
+                        destination: (projectID: project.id, groupID: group.id)
+                    ) }
                 )
                 .id(tab.id)
             }
@@ -527,7 +542,10 @@ private struct DockTabGroupView: View {
         .font(.system(size: 12))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: Theme.background))
-        .onDrop(of: [UTType.fileURL.identifier], delegate: FinderWindowDrop(manager: manager))
+        .onDrop(of: [UTType.fileURL.identifier], delegate: FinderWindowDrop(
+            manager: manager,
+            destination: (projectID: project.id, groupID: group.id)
+        ))
     }
 
     private func add(_ item: DockItem) { _ = project.dock.place(item, in: group.id) }

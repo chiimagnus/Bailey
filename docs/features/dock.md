@@ -22,7 +22,7 @@
 
 系统从 Finder／Dock 交给 Bailey 的本机文件请求，先检查所有已挂载窗口内已有的**本机文件标签**：存在时激活原窗口，不创建第二份可能写回同一文件的编辑缓冲。其它文件优先实际接收的主窗口；无窗口时走已有 `WindowGroup` 开窗能力。多窗口恢复尚未就绪时只在恢复完成后消费一次，避免把第二窗口的文件提前打开到第一窗口。原 Finder 文件夹 Service 保持其「添加目录项目」语义。
 
-Finder 文件 URL 只在**有普通打开语义**的 SwiftUI 区域注册 Drop：空工作区、普通编辑／Diff、标签栏、空停靠组，以及 Projects／Git／Files 面板的普通区域。WebKit 网页和 Ghostty 终端正文拥有各自的原生拖动行为，**不在外层挂通用 Drop**；浏览器工具栏才接受通用文件打开。Files 文件树的精确行独立拒绝导入，后续文件复制／移动归文件管理功能。URL 异步解析时仍绑定拖入时的 `TerminalManager` 与原 `NSWindow`；窗口关闭或更换后不能重定向到后来获得焦点的窗口。内部 Dock 标签移动只走 `DockTabDragCoordinator`，不伪装 Finder 文件 URL。
+Finder 的 `fileURL` 拖放按接收区域分流：空工作区、普通编辑／Diff、顶部工作标签栏、空停靠组及 Git 面板为**打开或复用文件标签**；每个分屏的顶部标签栏、空组内容区及普通编辑／Diff／Git／浏览器工具栏区域锁定实际接收的 `DockGroup`，新文件在该组建立标签（含空组），已打开的文件仍激活原标签而不强制搬组；Projects 面板为**手动添加本机文件／目录项目**；Files 面板则依据行／根标题／留白准确把文件或目录**复制进目标文件夹**，不额外打开 FileTab。原生 WebKit 正文自行处理网页文件上传，Ghostty 终端正文只处理本机 Shell 路径文本，**两者上方都不挂通用 Drop**；浏览器工具栏可打开文件。唯一的 Finder `NSItemProvider<NSURL>` 异步转换由 `FinderWindowDrop.receive` 持有，再交给相应动作；始终绑定触发时的 `TerminalManager` 和 `NSWindow`，不能因延迟加载重定向到另一窗口。内部 Dock 标签移动只走 `DockTabDragCoordinator`，不伪装 Finder 文件 URL。
 
 「显示」菜单使用统一面板、项目和标签动作。保存读取聚焦内容的未保存状态；设置窗口或空工作区的关闭仍使用系统窗口关闭语义，不强行路由到某个工作标签。
 
