@@ -17,7 +17,7 @@
 
 - **P4-T1 · `1121e74`**：`TerminalManager.openExternalLocalItems/openExternalFiles`、`Project.openLocalFile`、`SessionStore.TabSnapshot.localFile` 与恢复分支；`WorkspaceIdentityTests`、`SessionStoreTests`、`WorkspaceWindowIsolationTests`；`docs/features/{projects,dock,editor,session-restore}.md`。取代按父目录统计／最长目录匹配创建项目的旧路径；本机标签不依赖 SSH 项目后端，跨窗复用以 `FileTab.workspaceIdentity == nil` 为准。
 - **P4-T2 · `6269ac9`**：`BaileyApp.BaileyCommands` 的 `⌘O`，`WorkspaceDockView` 每组「＋」的 Open File，`ContentView.WorkspaceNativeDialogs` 原生文件／目录面板，`ProjectsPanelView`、`CommandPaletteView` 等新增意图入口；`TerminalManager.chooseFiles/chooseFolders/addLocalItems`；`AppMenuIsolationTests`、`PaneRetentionTests`、`WorkspaceWindowIsolationTests`、`WorkspaceIdentityTests`；`Interface/Sidebar/Terminal.xcstrings`、`README.md`、当前功能与 UI/测试文档。新建 Mac 单文件项目的入口已删，历史单文件快照保留。
-- **P4-T3 · `b426b30` + `b4e29bc`**：前者修正失效 `(projectID, groupID)` 异步投放禁止回退，补 A→B→A、空组、52+、无项目等测试；后者修复 Finder 新文件权限、目录权限、FIFO 特殊文件，新添 4 项回归并同步 `docs/features/projects.md`。`plan-p4.md` 与 `todo.toml` 为本地执行记录，不属于任何代码提交。
+- **P4-T3 · `b426b30` + `b4e29bc`**：前者修正失效 `(projectID, groupID)` 异步投放禁止回退，补 A→B→A、空组、52+、无项目等测试；后者修复 Finder 新文件权限、目录权限、FIFO 特殊文件，新添 4 项回归并同步 `docs/features/projects.md`。`plan-p4.md`、`todo.toml` 及 `audit-p4.md` 已按用户后续明确要求在 `5d5a41e` 单独提交，不属于 P4 功能实现提交。
 
 ## 发现项
 
@@ -39,28 +39,35 @@
 - **真正 Finder 物理落点**：独立签名 App／Finder 两个实际窗口核对边界后，Finder→Projects 文件落点在现有项目打开而不建项目；Finder→Files 根留白产生逐字节相同副本而不打开标签；Finder→顶部 Dock 标签栏产生实际组内标签。三次源文件完整保留并核对 SHA-256。P3 的 Files 目录行／文件行／根标题、Ghostty 和 WebKit 真实 Finder 记录在 `audit-p3.md`；P4 对相应不可前台重测的位置使用 `FileTreeTests`、`WorkspaceWindowIsolationTests` 和 `PaneRetentionTests` 分层替代，不冒充本轮真鼠标 E2E。
 - **容量、身份、恢复**：独立真实 App 一次收取 **68 个唯一文件及重复／软链合计 72 个输入**，最终仅 1 个正常目录项目、68 个唯一 FileTab；68 个源文件 SHA 全不变。另一个隔离 App 在两个项目打开 11 个标签，执行真实退出及同 UUID 重启；原生 UI、文件路径、选中标签、Dock 树和本机身份恢复，先前保存的源内容在磁盘可读。无项目空态、坏链、非法 URL、跨窗优先原有 buffer、原生关窗保存／失败、旧 `pinnedFile` 快照、SSH 项目内本机/远端同路径隔离，均有已实际执行的模型／NSWindow／FileTab / SessionStore 测试；不可据此推断所有独立进程 GUI 组合。
 - **路径与异常矩阵**：0/1/多/68 个、根内/根外/不同父目录、重复/软链/断链、Unicode/空格/引号、未知后缀/PNG/普通文本、只读可读、不可读新文件、不可浏览目录、FIFO、受控 SSH 断开/重连、5 MiB 边界/NUL/无效 UTF-8 的底层处理，以及 Files 的局部成功/失败、重名原子无覆盖，均有不同层次测试；把“已运行 XCTest”和“实际 GUI 看见用户结果”逐条区分。本机实际补出的权限/FIFO 缺陷均有 Red→Green，原始测试素材只在 `/tmp/bailey-p4-e2e-2p9m03uq/`。
-- **安装与用户保护**：最终签名 Debug `Bailey.app` 先同卷 `/Applications/.bailey-p4-install.qyPKHM` 完整暂存、验证签名与哈希，再整包替换；现有正式包及新包严格验签成功，安装后二进制 SHA-256 与构建一致 `fd05597363ffc87eefe704df6781cab448722be7f9384f7a3328e1c3f1ea542e`。仅临时空目录由 `rmdir` 清理；正式运行中的 Bailey PID **59877 保持不变**，未退出／启动／重启。安装成功不等于旧进程已加载新逻辑，须用户自行正常重启生效。未推送／未合并，Feature 文件未加入 Git。
+- **安装与用户保护**：最终签名 Debug `Bailey.app` 先同卷 `/Applications/.bailey-p4-install.qyPKHM` 完整暂存、验证签名与哈希，再整包替换；现有正式包及新包严格验签成功，安装后二进制 SHA-256 与构建一致 `fd05597363ffc87eefe704df6781cab448722be7f9384f7a3328e1c3f1ea542e`。仅临时空目录由 `rmdir` 清理；正式运行中的 Bailey PID **59877 保持不变**，未退出／启动／重启。安装成功不等于旧进程已加载新逻辑，须用户自行正常重启生效。未推送／未合并；Feature 文件随后按用户要求在 `5d5a41e` 独立入库。
 - **功能文档**：`docs/features/{projects,dock,editor,session-restore,files,ssh,command-palette}.md` 与 `docs/{ui,testing}.md` 按真实职责记录项目范围、原生菜单、窗口与 Git/Files 根、Local vs SSH、保存和隔离；`README.md` 中入口对齐。`docs/features/projects.md` 在本次修复提交同步说明普通文件／目录权限、不抛弃已开缓冲。对应文件、索引和文档引用均实际存在，历史 P1～P3 审计不被改写为 P4 的新 UI 成功记录。
 
 ### 无法在当前环境完成的实际 E2E（不冒充通过）
 
-1. **macOS 15.6 最低系统真机**：仅有 macOS 27.2 和对 15.6 的部署编译，无 15.6 主机。风险是 15.6 原生 Finder Drop、NSOpenPanel/Apple Event 与窗口外观兼容尚无真机结论；应在 15.6 设备以签名包复测启动、菜单、物理落点、保存／关闭和 SSH 项目文件身份。**不作为当前 27.2 验收的失败，但不能宣布最低系统全验。**
-2. **Finder 系统上下文与 Dock**：P4 最新构建尚未逐个通过实际 Finder「打开方式」、设置 Bailey 为默认程序后的双击、Dock 图标物理文件/目录投放；P2 对系统右键／Dock 已有旧版 E2E，P4 使用相同 `kAEOpenDocuments` 且本轮 `open -a` 及真 Finder 部分落点已证，但**不能替代最新版本逐入口真机重测**。需要独占图形会话、明确观察接收 PID/窗口/原生 FileTab 和源 SHA。
-3. **真实 Finder 其它落点／多窗／主题组合**：真实编辑／Diff／Git／浏览器工具栏、空组和非选中组、Files 目录行／文件行／根标题、混合目录/文件一批、两个独立 App 窗口焦点、窗口关闭时迟到 provider、暗/亮／中英文／窄宽／触控板的全部物理组合未在最终 P4 进程逐一点击拖放。正式 Bailey PID 59877 已在使用，共享鼠标／系统菜单／同 Bundle ID 的 Launch Services 可能误操作用户数据；不能擅自关闭正式 App。底层及原生 `NSWindow` 测试验证组所有权与拒绝错目标，P3 某些落点实际真鼠标测过；这仍非完整独立 App E2E。**需安全隔离 GUI 登录会话，或用户明确空出前台后补测。**
-4. **真实 GUI 错误提示和复杂输入**：无项目文件投递、不可读文件／目录、部分失败批次、二进制/5 MiB 超限对话框、包目录、系统文件别名及权限在请求和读取之间变化时的用户可见错误 Sheet，未在安全的独立 GUI 中逐项观察。`WorkspaceIdentityTests`、`FileTabTests`、NativeUI 组件测试覆盖现有错误判定／内容限额，**不等于原生提示已经 E2E 验证**；应在独占会话逐个触发并检查错误 Sheet、取消及后续继续操作。
-5. **远端混合的完整图形交互**：授权 Windows SSH 的六项真后端测试已过，但“固定/动态 SSH 项目中由 Finder 打开 Mac 文件并在 GUI 保存、重启、断线再连接”的全部原生交互没有在专用前台完成；项目文件身份和保存有真实本地字节/受控后端测试，仍需独占 GUI + 授权专用远端主机补测，严禁使用用户长期 SSH master。
+1. **Finder 系统上下文与 Dock**：P4 最新构建尚未逐个通过实际 Finder「打开方式」、设置 Bailey 为默认程序后的双击、Dock 图标物理文件/目录投放；P2 对系统右键／Dock 已有旧版 E2E，P4 使用相同 `kAEOpenDocuments` 且本轮 `open -a` 及真 Finder 部分落点已证，但**不能替代最新版本逐入口真机重测**。需要独占图形会话、明确观察接收 PID/窗口/原生 FileTab 和源 SHA。
+2. **真实 Finder 其它落点／多窗／主题组合**：真实编辑／Diff／Git／浏览器工具栏、空组和非选中组、Files 目录行／文件行／根标题、混合目录/文件一批、两个独立 App 窗口焦点、窗口关闭时迟到 provider、暗/亮／中英文／窄宽／触控板的全部物理组合未在最终 P4 进程逐一点击拖放。正式 Bailey PID 59877 已在使用，共享鼠标／系统菜单／同 Bundle ID 的 Launch Services 可能误操作用户数据；不能擅自关闭正式 App。底层及原生 `NSWindow` 测试验证组所有权与拒绝错目标，P3 某些落点实际真鼠标测过；这仍非完整独立 App E2E。**需安全隔离 GUI 登录会话，或用户明确空出前台后补测。**
+3. **真实 GUI 错误提示和复杂输入**：无项目文件投递、不可读文件／目录、部分失败批次、二进制/5 MiB 超限对话框、包目录、系统文件别名及权限在请求和读取之间变化时的用户可见错误 Sheet，未在安全的独立 GUI 中逐项观察。`WorkspaceIdentityTests`、`FileTabTests`、NativeUI 组件测试覆盖现有错误判定／内容限额，**不等于原生提示已经 E2E 验证**；应在独占会话逐个触发并检查错误 Sheet、取消及后续继续操作。
+4. **远端混合的完整图形交互**：授权 Windows SSH 的六项真后端测试已过，但“固定/动态 SSH 项目中由 Finder 打开 Mac 文件并在 GUI 保存、重启、断线再连接”的全部原生交互没有在专用前台完成；项目文件身份和保存有真实本地字节/受控后端测试，仍需独占 GUI + 授权专用远端主机补测，严禁使用用户长期 SSH master。
 
 ## Gate（是否允许进入下一阶段）
 
 - 结论：`Go`
-- 理由：本机**所有已安全执行的实现路径及新增缺陷**有代码、真实原生/系统落点、Red→Green 和授权远端最终副作用证据；**470/0/0、构建验签、整包安装及 T1~T3 提交审查均通过**，没有未解决的确定性实现 finding。本结论**仅涵盖当前环境可完成的阶段交付，不表示最低 15.6、所有 Finder/Dock 物理 E2E 和全部外观／多窗组合已验收**；上述独占 GUI/新系统条件应另补。
+- 理由：本机**所有已安全执行的实现路径及新增缺陷**有代码、真实原生/系统落点、Red→Green 和授权远端最终副作用证据；**470/0/0、构建验签、整包安装及 T1~T3 提交审查均通过**，没有未解决的确定性实现 finding。本结论**仅涵盖当前环境可完成的阶段交付，不表示所有 Finder/Dock 物理 E2E 和全部外观／多窗组合已验收**；上述独占 GUI/新系统条件应另补。
 
 ## 最终状态与剩余风险
 
 - 当前状态：`Resolved`
-- 剩余风险：上述 5 类有条件的真实 GUI/最低系统补验尚缺；已有模型、原生、真 Finder 部分落点与真 Windows SSH 证据降低回归不确定性，但不能消除未测运行环境风险。正式 Bailey 已整包安装最新签名构建，当前运行进程仍加载原有代码，待用户自行退出再启动后新功能生效。没有远端 Git push/PR，也未留下本轮安装备份。
+- 剩余风险：上述 4 类有条件的真实 GUI 补验尚缺；已有模型、原生、真 Finder 部分落点与真 Windows SSH 证据降低回归不确定性，但不能消除未测运行环境风险。正式 Bailey 已整包安装最新签名构建，当前运行进程仍加载原有代码，待用户自行退出再启动后新功能生效。没有远端 Git push/PR，也未留下本轮安装备份；按用户要求已独立提交 P4 Feature 记录。
 
 ## 审计约束
 
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
+
+## 2026-10-18 左半屏后续 E2E 与用户系统范围更新
+
+用户现已明确：只要求**当前 macOS 27.2 机器**，不要将缺少 macOS 15.6 真机当作 P4 未完成条件。15.6 仍是工程 deployment target，仅没有该系统的真机证据；不是本轮 Gate 的补验项。
+
+用户要求把本地 Feature 记录也提交 Git，已生成 `5d5a41e`（仅 `plan-p4.md`、`todo.toml`、`audit-p4.md`），未推送。追加测试独立 Bailey PID `97058` 和专用 Finder 窗口均保持在显示器左半屏（右边界 x=1680），正式 Bailey PID `96141` 未终止。新增当前系统上**实际验证**：Finder→空编辑区显示真实正文；菜单添加 Project B；Open File 跨项目复用 A 原缓冲；Finder→Git 面板文件直接变编辑标签；Finder→Files 复制最终字节且无立即额外标签；重复复制出现原生非覆盖错误 Sheet，副本哈希不变；Finder→顶部标签栏打开新文件且显示正文。完整触发前提、文件及窗口证据见 `plan-p4.md` 末尾“本机左半屏补充 E2E”。
+
+**待确认而不是 finding**：后续观察到 Project B 消失并伴随标签重新归属，但未核对可靠的鼠标源窗口和修改瞬间，不能认定 Bailey 自动删除项目；该过程不得标记成功或归因。随后 GUI 会话锁定，`peekaboo` 报 `CAPTURE_FAILED`，物理 Finder 拖放、双窗口／Dock 和原生错误组合无法安全继续。**这不推翻已完成的 470 项自动测试与上述可靠 GUI 操作，也不代表新要求的全部 E2E 已完成**。屏幕解锁后应在新的受控会话补验该异常及四类尚缺 GUI 组合，不触碰正式 App 或屏幕右半边。

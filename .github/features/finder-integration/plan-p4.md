@@ -101,7 +101,7 @@
 | 布局与生命周期 | 窗口 1／2+，上／下／左／右组，选中／非选中／空组、已打开复用、迟到／取消／关窗、冷启动／末窗重开／旧新快照、脏缓冲保存／失败／退出；单份 native buffer 与最终磁盘字节 |
 | 保留子系统与 UI | Files Copy、Ghostty 路径、WebKit 上传、Git/Diff/SSH、项目与标签重排；英文／中文、亮／暗、窄／宽、鼠标／触控板、键盘／无障碍，无现行行为回退 |
 
-**已有环境边界**：当前 Mac 为 macOS 27.2，最低部署 macOS 15.6 的真实 Finder/UI 仍需 15.6 设备补验，不能由 SDK 编译推断。专用 Windows SSH 运行条件可能需获授权主机；无权限只使用受控后端测试，并逐项标注真实 SSH 未测。真正 Finder、Dock、`open -a` 采用 Launch Services 同 Bundle ID 路由，`BAILEY_UI_TEST_RUN_ID` 仅隔离用户数据、**不隔离 Bundle ID 和前台图形会话**；不可为了做 E2E 擅自退出／重启用户正式 Bailey、覆盖偏好或结束后台 SSH。不能确认真实接收 App 时必须标阻塞，不谎称成功。执行阶段需要符合 `docs/testing.md` 的隔离、证据与完整命令检查。
+**当前验收系统**：按 2026-10-18 用户决定，只要求现有 macOS 27.2 真机完成 P4 实际 Finder／UI 验收；不把没有的 macOS 15.6 设备列为本阶段待办或阻塞。工程最低部署版本仍为 15.6，但不能将编译通过表述为 15.6 真机通过。专用 Windows SSH 运行条件可能需获授权主机；无权限只使用受控后端测试，并逐项标注真实 SSH 未测。真正 Finder、Dock、`open -a` 采用 Launch Services 同 Bundle ID 路由，`BAILEY_UI_TEST_RUN_ID` 仅隔离用户数据、**不隔离 Bundle ID 和前台图形会话**；不可为了做 E2E 擅自退出／重启用户正式 Bailey、覆盖偏好或结束后台 SSH。不能确认真实接收 App 时必须标阻塞，不谎称成功。执行阶段需要符合 `docs/testing.md` 的隔离、证据与完整命令检查。
 
 ### P4-T3 执行证据（2026-10-18，当前环境已完成，其他系统／GUI 条件待补）
 
@@ -111,11 +111,20 @@
 - **编辑、容量、恢复**：在原生 File 菜单 Save 后，直接读取项目外文件确认正文由 `let edited = 0` 变成 `let edited = 1234`；68 个不同文件 + 重复/软链接共 72 个批次项由新隔离进程实际接收，唯一 Project、68 个不同标签、68 个源 SHA 全不变。退出并以同一 UUID 重启隔离 App：原生界面和快照中的 2 个项目、11 个标签、Dock 分组及已保存正文均恢复。
 - **新增真实缺陷与 TDD**：POSIX `chmod 000` 文件和目录分别仍被误开成空文件标签/不可浏览 Project，FIFO 被错误打开成编辑器；三个 Red 场景先证明 7 个失败断言。`TerminalManager` 的现有路由在新建前核对普通文件类型、文件可读、目录可读且可遍历；已有标签优先复用。`WorkspaceIdentityTests` 四项新增条件含原标签权限变化、只读文件可读、失败批次合法项继续；最新 **24/24，0 失败**；同步 `docs/features/projects.md`。日志 `/tmp/bailey-p4-{nonregular-red,access-green,regress-final}.log`。
 - **完整命令**：此前授权 Windows 主机实机套件 `make test` **466 项、0 失败、0 跳过**，退出 0；本轮修复后 `make build` **退出 0**、`** BUILD SUCCEEDED **`、完整 App 严格验签成功（`/tmp/bailey-p4-final-build.log`）。随后使用 `BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test`，**470 项、0 失败、0 跳过**，完整退出 **0**、`** TEST SUCCEEDED **`，耗时 **828.482 秒**（`/tmp/bailey-p4-final-ssh-test.log`）；6 个需要真实 SSH 主机的用例全部实际 passed，无权限跳过。
-- **提交与整包安装**：阶段剩余缺陷已原子提交 `b4e29bc8ace21c39d9fee1da87369e2758afc9c3`，仅 `TerminalManager.swift`、`WorkspaceIdentityTests.swift` 和 `docs/features/projects.md` 入库，Feature 状态/审计保持本地。完整已验签新 App 在 `/Applications` 同卷暂存并整包替换，安装后二进制 SHA-256 `fd05597363ffc87eefe704df6781cab448722be7f9384f7a3328e1c3f1ea542e` 与测试构建完全一致；暂存与旧包备份已清理。正式 Bailey PID 59877 未退出／重启，新磁盘包须用户下次正常重启才加载。独立阶段审计见 `audit-p4.md`，Gate `Go` 仅针对现有可安全执行的范围。
-- **待核销而不冒称已测**：macOS 15.6 真机、Finder「打开方式」/默认双击/物理 Dock 图标、另一个窗口、Git/Diff/浏览器工具栏及空组的真实鼠标组合、外观明暗/中英文与触控板交互，以及 GUI 权限拒绝提示。当前正式 Bailey 正在使用；`Peekaboo` 的实体鼠标会共享桌面，不能未经同意抢正式会话。已有 `WorkspaceWindowIsolationTests`、`PaneRetentionTests` 与原生/集成测试是替代验证，**不等于上述物理 E2E 已通过**。获安全独立图形会话和最低系统设备后应逐项补验，独立 Gate 按实际未验影响判断。
+- **提交与整包安装**：阶段剩余缺陷已原子提交 `b4e29bc8ace21c39d9fee1da87369e2758afc9c3`，仅 `TerminalManager.swift`、`WorkspaceIdentityTests.swift` 和 `docs/features/projects.md` 入库，Feature 状态/审计随后按用户明确要求通过 `5d5a41e` 入库。完整已验签新 App 在 `/Applications` 同卷暂存并整包替换，安装后二进制 SHA-256 `fd05597363ffc87eefe704df6781cab448722be7f9384f7a3328e1c3f1ea542e` 与测试构建完全一致；暂存与旧包备份已清理。正式 Bailey PID 59877 未退出／重启，新磁盘包须用户下次正常重启才加载。独立阶段审计见 `audit-p4.md`，Gate `Go` 仅针对现有可安全执行的范围。
+- **待核销而不冒称已测**：Finder「打开方式」/默认双击/物理 Dock 图标、另一个窗口、Git/Diff/浏览器工具栏及空组的真实鼠标组合、外观明暗/中英文与触控板交互，以及 GUI 权限拒绝提示。当前正式 Bailey 正在使用；`Peekaboo` 的实体鼠标会共享桌面，不能未经同意抢正式会话。已有 `WorkspaceWindowIsolationTests`、`PaneRetentionTests` 与原生/集成测试是替代验证，**不等于上述物理 E2E 已通过**。图形会话可用时应在现有 Mac 上逐项补验，独立 Gate 按实际未验影响判断。
 
 ### Gate
 
 - T1/T2 各自可运行的 Red→Green→Refactor、删除替代旧代码、同步真实功能文档与中英本地化、按仓库规范形成单一原子提交；若验证揭示共享核心假设不成立，**先修正计划，不能临时叠加补丁式架构**。
 - T3 对全部可执行条件完成原生可观察验证，分别报告 XCTest、签名构建、真实 Finder、最低系统与真实 SSH 的结果；独立 `plan-task-auditor` 检查提交、旧代码删除和残余缺口后才可关闭 P4。
-- 实施前设计评审曾仅限计划文件；用户随后已授权执行 P4，因此以实际代码、测试、当前文档和 `todo.toml` 为准。Feature 计划与审计仍仅保留本地，不擅自推送。
+- 实施前设计评审曾仅限计划文件；用户随后已授权执行 P4，因此以实际代码、测试、当前文档和 `todo.toml` 为准。Feature 计划与审计已由用户明确要求通过 `5d5a41e` 单独提交，仍不擅自推送。
+
+### 2026-10-18 本机左半屏补充 E2E
+
+- **Git 基线**：用户明确要求把尚未提交的 P4 计划／待办／审计记录一并提交，形成 `5d5a41e`，提交后工作树清洁，未 push。
+- **显示与隔离**：显示器 3360×1440 pt，左半屏边界 `x=1680`。独立签名 Debug Bailey `PID 97058` 的主窗口初始 `x=650,width=1000`，自建 Finder `windowID=152437` 初始 `x=20,width=605`；正式 `/Applications/Bailey.app` `PID 96141` 未被退出/重启。两测试窗口始终未跨越右半屏。
+- **新增实 GUI 证据**：Finder `drag-edit.swift` 进入空 Dock 内容组后，原生 Text Editor 出现 `let editorDrop = 1`，源 SHA 不变；File → Add Folder… 实际选择 Project B，快照显示 A/B 两项目并保留原 A 缓冲；在 B 选中时 File → Open File… 选 A 已开文件，快照显示回到 A 同一标签，没有重复；Finder 文件拖入 B 的 Git 面板后出现本机文件标签，编辑器实际显示 `let projectsDrop = 1`；Finder→B Files 面板留白实复制 `drag-files.txt` 到 B 根目录，`cmp` 证实副本完全一致，源未更改，首次复制没有新 FileTab；再次拖同名文件原生警告为 `Couldn’t import some files or folders. / Already exists: drag-files.txt`，既有副本 SHA 不变；Finder→顶部标签栏实际显示 `drag-tab.swift` 原生正文，源 SHA 未改变。每项都在事后查隔离 UUID `SessionStore`、AX 元素或磁盘实际字节，不把 `dispatched_unverified` 当成功。
+- **未决观察**：随后检查到测试实例项目列表从 A+B 变为仅 A，部分测试文件标签仍留在 A；没有直接证据确定是用户/自动化点击、窗口恢复还是 Bailey 代码造成，不准据此记录产品 Bug。后续再次尝试原生目录拖放时，目标窗口位置变化但未新增目标项目，且无法核对前台 Finder 接收者，亦不准记为通过或缺陷。
+- **当前阻塞**：后续 `peekaboo see --window-id 152437` 明确返回 `CAPTURE_FAILED: Screen capture is unavailable while the macOS GUI session is locked`，Finder 无法获得可靠 AX 聚焦，AppleScript 查询 Finder 挂起超时。因此立即停止一切物理鼠标/键盘 E2E，不解锁设备、不触及凭据或正式 App。解锁后重新取窗口 ID/边界与用户前台状态，先用新隔离会话复现上述未决观察，再继续 Finder「打开方式」、Dock 图标、Projects 目录/混合批次、双窗口、原生错误 Sheet 与本机/SSH 场景。
+- **系统范围修正**：依用户明确要求，**macOS 15.6 真机不是 P4 验收条件**；本次以现有 macOS 27.2 为准，工程部署目标仍保留 15.6，不声称该旧系统已实测。
