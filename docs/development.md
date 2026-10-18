@@ -77,6 +77,24 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 
 补丁集中在 [STTextView+Gutter.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Gutter.swift)、[STTextView+Insert.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Insert.swift)、[STTextView+LineGeometry.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+LineGeometry.swift)、[STTextView.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView.swift)、[STTextView+Accessibility.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Accessibility.swift)、[STTextView+NSTextInputClient.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+NSTextInputClient.swift)、[STTextView+Scrolling.swift](../Vendor/STTextView/Sources/STTextViewAppKit/STTextView+Scrolling.swift) 和 [STTextLayoutManager.swift](../Vendor/STTextView/Sources/STTextViewCommon/STTextLayoutManager.swift)。Bailey 自己的裁切、内边距和字体初始化由 [SourceTextEditor.swift](../Bailey/Editor/SourceTextEditor.swift) 负责，不归入上游补丁。
 
+2026-10-18 实际核对当前上游 `krzyzanowskim/STTextView@c7d5193`：它仍使用
+`STTextContentStorage: NSTextContentStorage`，离屏定位仍调用
+`NSTextViewportLayoutController.relocateViewport(to:)`；不能把版本升级当作段落缓存问题已修复。
+本地 STTextView 与苹果 `NSTextView(usingTextLayoutManager: true)` 均证实：
+不折行超宽容器／远距导航可能使默认内容管理器创建全部 10 万个段落，局部编辑随缓存量变慢；
+而系统 NSTextView 折行可保持只物化少量可见段落，但不等于不折行文本也能直接套用。
+同机进一步确认：900pt 视图内，原生 TextKit 2 容器限制为 600pt 能避免物化全部 10 万段落，
+但 250 字符长行要么折行，要么无法正确水平显示。
+按 UTF-16 索引段落的独立 `NSTextContentStorage` 原型虽然能有界读取段落，
+却没有解决 STTextView 的实际视口布局：10 万行交错导航仍物化全部段落，
+最慢回跳约 1.5s，编辑时的全范围布局失效还有 76ms 尖峰。
+这些实验只保存在 Feature 忽略目录，不得直接升级或复制到 Vendor。
+当前候选中的跳过 relocate、提前 ensureLayout、按估计矩形直滚都未通过联合正确性／性能，
+所以仍维持既有生产实现。临时探针不保留在正式源码／测试；
+实验数据见编辑器性能 Feature 的 `evidence-p1.md`，迁移时必须先验证真实正文、
+行号、长行、软折行、鼠标命中、原生输入、Undo、Find、AX 和 Diff 全部条件。
+升级前还须比较上游最新 viewport/通知变化是否与本地补丁冲突，不能盲目覆盖。
+
 升级时逐项检查上游是否已修复，删除不再需要的补丁，保留许可证和署名。运行 `FileTabTests`、`DiffTabTests`、`EditorTextInputTests`、`EditorNavigationTests`、`SyntaxHighlightingTests` 并检查字体变化、组合输入、扩展名重命名后的语法切换与 Undo、长行、短文档、Markdown、高亮空范围、固定行高、远距离定位和只读替换滚动。全部修复被上游覆盖后才考虑撤销副本，不以升级成功替代功能验收。
 
 ### Neon

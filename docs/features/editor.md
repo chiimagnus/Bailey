@@ -32,6 +32,28 @@ Bailey 只使用 STTextView + TextKit 2。文档内容由同一个原生存储�
 NSTextParagraph 元素缓存有界**。深度滚动后，局部编辑仍可能在系统内容管理器中遍历、同步大量历史段落；
 优化字体、高亮、可见渲染视图、行号前缀索引或反复清理视口都不能代替这一步。
 
+2026-10-18 已用强制 TextKit 2 的系统 `NSTextView(usingTextLayoutManager: true)`
+对照同机 `STTextView`：在 10 万行、17 次远距回跳之后，原生不折行控件文首输入仍约
+569ms，而 STTextView 约 342ms；因此**仅替换第三方视图并不能根治输入瓶颈**。
+但原生折行仅请求创建约 304 个段落，文首输入约 1ms，编辑后真正布局的段落内容也正确；
+STTextView 折行跳到文末则累计请求约 10 万个段落，文首输入约 349ms。
+STTextView 的远距 `relocateViewport` 会导致大量沿途段落物化；原生不折行控件
+在首次导航之前也会因超宽文本布局请求全部段落。即现有视图层和默认内容管理层的成本
+**相互叠加，不能归罪于某一个类本身**。这些是隔离原生窗口、短行合成样本的性能观察，
+并非 Bailey 当前正式 App 的验收指标。
+
+额外将原生文本容器从 1000pt 限到 600pt（900pt 窗口），10 万行的段落创建
+确实从全部降至数百；但长代码行要么被拆成多个视觉行，要么裁剪后无法有效横向滚到末字，
+不满足不折行要求。隔离的 `NSTextContentStorage` 子类能让低层 10 万行 17 次定位
+只创建 106 段；放入真实 STTextView 后，视口布局仍逐段创建全部 10 万个，
+回跳最长约 1.5s，编辑时全范围布局失效还出现 76ms 尖峰。
+正式 Bailey **没有**采用这两种候选。
+
+因此，改造必须先同时通过不折行横向完整呈现、折行／无折行切换和原生位置／段落元素缓存
+**有界**的联合测试；不能把原生折行的 1ms 直接移植到不折行，也不能只删除重定位
+让 `viewportRange` 变成 nil，或用按估计坐标滚动把卡顿转移到布局回调。
+系统 API 的边界和未通过候选见本功能计划，正式应用仍保留唯一编辑器。
+
 这个边界不同于 [Zed 的聚合 Rope 与显示映射](https://github.com/zed-industries/zed/blob/56934ec0560bce8929025497411de7f5322fb6ca/crates/editor/src/display_map.rs)
 及 [VS Code 的 Piece Tree 和可见行集合](https://github.com/microsoft/vscode/blob/789f2c470d13c4760f2b5cc6a9e1919c05d04f7d/src/vs/editor/browser/view/viewLayer.ts)：
 两者拥有独立的正文位置及显示位置模型，可以让一次局部编辑不必逐个更新所有历史渲染对象；
