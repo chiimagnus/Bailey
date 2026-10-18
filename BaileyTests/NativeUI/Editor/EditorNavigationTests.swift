@@ -8,6 +8,33 @@ import XCTest
 
 @MainActor
 final class EditorNavigationTests: XCTestCase {
+    func testViewportFragmentAccessIsLimitedToAttachedFragmentViews() throws {
+        let source = String(repeating: "let target = \"中文 👋\" // repeated line\r\n", count: 10_000)
+        for wraps in [false, true] {
+            let (window, editor) = mount(source, width: wraps ? 280 : 900, wraps: wraps)
+            defer { window.close() }
+            let scroll = try XCTUnwrap(editor.enclosingScrollView)
+            for fraction: CGFloat in [0, 0.25, 0.75, 0.5, 1, 0.25, 0] {
+                let y = max(0, editor.frame.height - scroll.contentView.bounds.height) * fraction
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                editor.prepareContent(in: editor.visibleRect)
+                editor.layoutSubtreeIfNeeded()
+                let visible = editor.attachedLayoutFragments()
+                let attached = editor.contentViewportView.subviews.compactMap {
+                    ($0 as? STTextLayoutFragmentView)?.layoutFragment
+                }
+                let old = (editor.fragmentViewMap.keyEnumerator().allObjects as? [NSTextLayoutFragment] ?? [])
+                    .filter { editor.fragmentViewMap.object(forKey: $0)?.superview != nil }
+                XCTAssertEqual(Set(visible.map(ObjectIdentifier.init)), Set(attached.map(ObjectIdentifier.init)))
+                XCTAssertEqual(Set(visible.map(ObjectIdentifier.init)), Set(old.map(ObjectIdentifier.init)))
+                XCTAssertGreaterThan(visible.count, 0)
+                XCTAssertLessThan(visible.count, 150, "Previous viewport surfaces must be detached")
+                print("EDITOR_VISIBLE_FRAGMENTS wraps=\(wraps) position=\(fraction) active=\(visible.count) allMapped=\(editor.fragmentViewMap.keyEnumerator().allObjects.count)")
+            }
+        }
+    }
+
     func testCurrentSourceFileKeepsGeometry() throws {
         let sourceFile = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()

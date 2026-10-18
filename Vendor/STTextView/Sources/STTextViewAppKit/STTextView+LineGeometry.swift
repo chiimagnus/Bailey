@@ -2,6 +2,10 @@ import AppKit
 import STTextKitPlus
 
 extension STTextView {
+    func attachedLayoutFragments() -> [NSTextLayoutFragment] {
+        contentViewportView.subviews.compactMap { ($0 as? STTextLayoutFragmentView)?.layoutFragment }
+    }
+
     var uniformDocumentHeight: CGFloat? {
         guard usesPlainTextGeometry, isHorizontallyResizable, !hasVariableLineHeight,
               let uniformLineHeight, let textLineIndex else { return nil }
@@ -11,8 +15,7 @@ extension STTextView {
     func updateUniformLineHeight() {
         guard usesPlainTextGeometry, isHorizontallyResizable, overrideContentHeight == nil,
               !hasVariableLineHeight else { return }
-        let fragments = (fragmentViewMap.keyEnumerator().allObjects as? [NSTextLayoutFragment] ?? [])
-            .filter { fragmentViewMap.object(forKey: $0)?.superview != nil }
+        let fragments = attachedLayoutFragments()
         guard let first = fragments.first?.textLineFragments.first else { return }
         let height = uniformLineHeight ?? first.typographicBounds.height
         updateTextLineIndexIfNeeded()
@@ -92,8 +95,8 @@ extension STTextView {
         guard viewportTextAnchor == nil, usesPlainTextGeometry, window != nil,
               force || !isHorizontallyResizable || hasVariableLineHeight else { return }
         let visible = contentView.visibleRect
-        let fragments = (fragmentViewMap.keyEnumerator().allObjects as? [NSTextLayoutFragment] ?? [])
-            .filter { fragmentViewMap.object(forKey: $0)?.superview != nil && $0.textElement?.textContentManager === textContentManager }
+        let fragments = attachedLayoutFragments()
+            .filter { $0.textElement?.textContentManager === textContentManager }
             .sorted { $0.rangeInElement.location < $1.rangeInElement.location }
         for fragment in fragments {
             for line in fragment.textLineFragments {

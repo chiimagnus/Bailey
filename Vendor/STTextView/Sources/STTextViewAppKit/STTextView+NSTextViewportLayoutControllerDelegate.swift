@@ -8,7 +8,7 @@ extension STTextView: NSTextViewportLayoutControllerDelegate {
 
     public func textViewportLayoutControllerWillLayout(_ textViewportLayoutController: NSTextViewportLayoutController) {
         captureViewportTextAnchor()
-        lastUsedFragmentViews = Set(fragmentViewMap.objectEnumerator()?.allObjects as? [STTextLayoutFragmentView] ?? [])
+        lastUsedFragmentViews = Set(contentViewportView.subviews.compactMap { $0 as? STTextLayoutFragmentView })
 
         if ProcessInfo().environment["ST_LAYOUT_DEBUG"] == "YES" {
             let viewportDebugView = NSView(frame: viewportBounds(for: textViewportLayoutController))
