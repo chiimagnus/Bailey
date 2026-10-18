@@ -65,22 +65,13 @@ nonisolated enum SyntaxLanguage: Hashable {
 
 /// Tree-sitter syntax highlighting for the source editor. `SourceTextEditor`
 /// asks for a plugin per file; unsupported file types get `nil` and render as
-/// plain text. The highlighter itself lives in `SyntaxHighlightPlugin`.
+/// plain text. The highlighter itself lives in `SyntaxHighlightConfiguration`.
 enum SyntaxHighlighting {
     @MainActor
     static let theme = defaultColors()
 
-    /// The plugin's default token colors, read one at a time from its resource
-    /// bundle rather than through `Theme.default`, which force-unwraps all
-    /// twenty asset lookups: one nil there traps and takes down every terminal
-    /// in the app. A color bailey cannot read is left out instead — the
-    /// highlighter falls back to `plain`, and with none the editor is plain
-    /// text.
-    ///
-    /// A build that overrides `PRODUCT_BUNDLE_IDENTIFIER` on the xcodebuild
-    /// command line reaches exactly that trap: the override applies to the
-    /// package resource bundles too, so they carry the app's identifier and
-    /// their assets no longer resolve.
+    /// Bailey owns this palette as a native asset catalog; no editor plugin
+    /// needs to be linked to resolve the syntax colors.
     @MainActor
     private static func defaultColors() -> [String: NSColor] {
         let tokens = [
@@ -90,35 +81,21 @@ enum SyntaxHighlighting {
             "punctuation.special", "string", "text.literal", "text.title",
             "type", "variable.builtin", "variable",
         ]
-        guard let bundle = pluginResourceBundle else {
-            return [:]
-        }
         var colors: [String: NSColor] = [:]
         for token in tokens {
-            if let color = NSColor(named: "neon.plugin.default/\(token)", bundle: bundle) {
+            if let color = NSColor(named: "neon.plugin.default/\(token)", bundle: .main) {
                 colors[token] = color
             }
         }
         return colors
     }
 
-    /// The plugin's asset bundle inside the app. The package's own
-    /// `Bundle.module` is internal to it, so bailey resolves the bundle SwiftPM
-    /// named and copied in beside the executable's other resources.
-    private static let pluginResourceBundle: Bundle? = {
-        guard let url = Bundle.main.url(
-            forResource: "STTextView-Plugin-Neon_STPluginNeonAppKit",
-            withExtension: "bundle"
-        ) else { return nil }
-        return Bundle(url: url)
-    }()
-
     /// A syntax-highlighting plugin for `path`, or `nil` when the file type has
     /// no bundled grammar (the editor then shows plain text).
     @MainActor
-    static func plugin(for path: String) -> SyntaxHighlightPlugin? {
+    static func configuration(for path: String) -> SyntaxHighlightConfiguration? {
         guard let language = language(for: path) else { return nil }
-        return SyntaxHighlightPlugin(
+        return SyntaxHighlightConfiguration(
             theme: theme,
             language: language,
             highlightsData: highlightsData(for: language),

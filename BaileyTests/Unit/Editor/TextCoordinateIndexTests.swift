@@ -1,13 +1,12 @@
 import Foundation
 import SwiftTreeSitter
 import XCTest
-@testable import STTextViewAppKit
 @testable import Bailey
 
 @MainActor
 final class TextCoordinateIndexTests: XCTestCase {
     func testNativeLineIndexHandlesBoundaryJoinsAndRandomEdits() throws {
-        var trailing = STTextLineIndex("a\nb\nc\n")
+        var trailing = NativeTextLineIndex("a\nb\nc\n")
         trailing.replace(in: NSRange(location: 2, length: 1), replacementLength: 1, text: "a\nx\nc\n")
         XCTAssertEqual((0..<trailing.lineCount).map { trailing.offset(atLine: $0) }, [0, 2, 4, 6])
         func expectedStarts(_ text: String) -> [Int] {
@@ -29,15 +28,9 @@ final class TextCoordinateIndexTests: XCTestCase {
         }
         for original in ["", "\r\n", "a\r\nb\r", "中文👋\u{2028}e\u{301}\u{2029}\n", String(repeating: "x\r\n", count: 1_000)] {
             var text = original
-            var index = STTextLineIndex(text as NSString)
+            var index = NativeTextLineIndex(text as NSString)
             for _ in 0..<300 {
                 XCTAssertEqual((0..<index.lineCount).map { index.offset(atLine: $0) }, expectedStarts(text))
-                let units = Array(text.utf16)
-                var paragraph = 0
-                for (row, start) in expectedStarts(text).enumerated() {
-                    if row > 0, units[start - 1] != 0x2028 { paragraph += 1 }
-                    XCTAssertEqual(index.paragraph(at: start), paragraph)
-                }
                 var boundaries = [0]
                 for scalar in text.unicodeScalars { boundaries.append(boundaries.last! + scalar.utf16.count) }
                 let first = next(boundaries.count)
@@ -75,7 +68,7 @@ final class TextCoordinateIndexTests: XCTestCase {
 
     func testNativeLineIndexEditCosts() {
         let source = NSMutableString(string: String(repeating: "item line\n", count: 100_000))
-        var index = STTextLineIndex(source)
+        var index = NativeTextLineIndex(source)
         for position in [0, source.length / 2, source.length] {
             var durations: [Double] = []
             for _ in 0..<30 {
@@ -97,7 +90,7 @@ final class TextCoordinateIndexTests: XCTestCase {
 
     func testNativeHundredThousandLineEditsMatchFreshIndex() throws {
         let source = NSMutableString(string: String(repeating: "a\r\nb\u{2028}c\u{2029}d\n", count: 25_000))
-        var index = STTextLineIndex(source)
+        var index = NativeTextLineIndex(source)
         let replacements = ["", "👋", "\r", "\n", "\r\n", "a\u{2028}b", "\u{2029}", "\n\n"]
         for iteration in 0..<24 {
             let starts = (0..<index.lineCount).map { index.offset(atLine: $0) }
@@ -109,7 +102,7 @@ final class TextCoordinateIndexTests: XCTestCase {
             let replacement = replacements[iteration % replacements.count]
             source.replaceCharacters(in: range, with: replacement)
             index.replace(in: range, replacementLength: replacement.utf16.count, text: source)
-            let fresh = STTextLineIndex(source)
+            let fresh = NativeTextLineIndex(source)
             XCTAssertEqual(index.length, source.length)
             XCTAssertEqual((0..<index.lineCount).map { index.offset(atLine: $0) },
                            (0..<fresh.lineCount).map { fresh.offset(atLine: $0) },
@@ -117,8 +110,6 @@ final class TextCoordinateIndexTests: XCTestCase {
             for offset in [0, 1, source.length / 4, source.length / 2,
                            3 * source.length / 4, source.length - 1, source.length] {
                 XCTAssertEqual(index.row(at: offset), fresh.row(at: offset), "iteration=\(iteration)")
-                XCTAssertEqual(index.paragraph(at: offset), fresh.paragraph(at: offset),
-                               "iteration=\(iteration)")
             }
         }
     }
@@ -127,7 +118,7 @@ final class TextCoordinateIndexTests: XCTestCase {
         let original = String(repeating: "item\n", count: 100_000)
         for position in [0, original.utf16.count / 2, original.utf16.count] {
             let source = NSMutableString(string: original)
-            var native = STTextLineIndex(source)
+            var native = NativeTextLineIndex(source)
             let coordinates = TextCoordinateIndex(original)
             for insertion in ["\n", "\r\n", "\u{2028}", "\u{2029}"] {
                 let count = insertion.utf16.count
@@ -143,12 +134,11 @@ final class TextCoordinateIndexTests: XCTestCase {
                     coordinates.replace(in: NSRange(location: position, length: 0), with: insertion)
                     coordinateDurations.append((CFAbsoluteTimeGetCurrent() - started) * 1_000)
                     if iteration == 0 {
-                        let freshNative = STTextLineIndex(source)
+                        let freshNative = NativeTextLineIndex(source)
                         let freshCoordinates = TextCoordinateIndex(source as String)
                         XCTAssertEqual(native.lineCount, freshNative.lineCount)
                         for offset in [0, position, position + count, source.length] {
                             XCTAssertEqual(native.row(at: offset), freshNative.row(at: offset))
-                            XCTAssertEqual(native.paragraph(at: offset), freshNative.paragraph(at: offset))
                             XCTAssertEqual(coordinates.point(at: offset), freshCoordinates.point(at: offset))
                         }
                     }
@@ -167,12 +157,10 @@ final class TextCoordinateIndexTests: XCTestCase {
                 nativeDurations.sort()
                 coordinateDurations.sort()
                 print("EDITOR_STRUCTURAL_INDEX utf16=\(count) offset=\(position) native_ms=\(nativeDurations[12]) coordinate_ms=\(coordinateDurations[12])")
-                let fresh = STTextLineIndex(source)
+                let fresh = NativeTextLineIndex(source)
                 XCTAssertEqual(native.lineCount, fresh.lineCount)
                 for row in [0, 1, native.lineCount / 4, native.lineCount / 2, native.lineCount - 1] {
                     XCTAssertEqual(native.offset(atLine: row), fresh.offset(atLine: row))
-                    XCTAssertEqual(native.paragraph(at: native.offset(atLine: row)),
-                                   fresh.paragraph(at: fresh.offset(atLine: row)))
                 }
                 XCTAssertEqual(coordinates.point(at: position),
                                Point(row: position / 5, column: 0))
@@ -183,7 +171,7 @@ final class TextCoordinateIndexTests: XCTestCase {
     func testHundredThousandLinesEraseToEmptyAndRestore() {
         let original = String(repeating: "a\r\nb\u{2028}c\u{2029}d\n", count: 25_000)
         let source = NSMutableString(string: original)
-        var native = STTextLineIndex(source)
+        var native = NativeTextLineIndex(source)
         let coordinates = TextCoordinateIndex(original)
         let length = source.length
         source.setString("")
@@ -198,12 +186,10 @@ final class TextCoordinateIndexTests: XCTestCase {
         source.setString(original)
         native.replace(in: NSRange(location: 0, length: 0), replacementLength: length, text: source)
         coordinates.replace(in: NSRange(location: 0, length: 0), with: original)
-        let fresh = STTextLineIndex(source)
+        let fresh = NativeTextLineIndex(source)
         XCTAssertEqual(native.lineCount, fresh.lineCount)
         for row in [0, native.lineCount / 4, native.lineCount / 2, native.lineCount - 1] {
             XCTAssertEqual(native.offset(atLine: row), fresh.offset(atLine: row))
-            XCTAssertEqual(native.paragraph(at: native.offset(atLine: row)),
-                           fresh.paragraph(at: fresh.offset(atLine: row)))
         }
         let freshCoordinates = TextCoordinateIndex(original)
         for offset in [0, length / 4, length / 2, length] {

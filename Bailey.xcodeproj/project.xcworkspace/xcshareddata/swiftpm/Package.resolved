@@ -2,15 +2,6 @@
   "originHash" : "6a413bee16efe148602acb6f340dcf7392f6256b35687dee46f1aaa2a465c778",
   "pins" : [
     {
-      "identity" : "coretextswift",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/krzyzanowskim/CoreTextSwift",
-      "state" : {
-        "revision" : "833177201d6421e6322296f39fce6ff6ae52618a",
-        "version" : "0.2.0"
-      }
-    },
-    {
       "identity" : "fuzzymatch",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ordo-one/FuzzyMatch",
@@ -44,23 +35,6 @@
       "state" : {
         "revision" : "5ff7f3363f7a08f77e0d761e38e6add31c2136e1",
         "version" : "1.8.1"
-      }
-    },
-    {
-      "identity" : "sttextkitplus",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/krzyzanowskim/STTextKitPlus",
-      "state" : {
-        "revision" : "2ee74906f4d753458eeaa9a2f6d4538aacb86a1d",
-        "version" : "0.3.0"
-      }
-    },
-    {
-      "identity" : "sttextview-plugin-neon",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/krzyzanowskim/STTextView-Plugin-Neon",
-      "state" : {
-        "revision" : "5a30db4ce7908a5414e7b499e2379bdc49991cd1"
       }
     },
     {

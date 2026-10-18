@@ -1,9 +1,8 @@
 import AppKit
-import STTextView
 
 /// Find and replace inside a file tab's editor.
 ///
-/// STTextView already carries the AppKit find interface — an `NSTextFinder`
+/// NSTextView already carries the AppKit find interface — an `NSTextFinder`
 /// over the document, with the search-and-replace bar hosted by the editor's
 /// enclosing scroll view — so all that is left is translating bailey's Find menu
 /// into finder actions and aiming them at the text view this file is currently
@@ -11,8 +10,8 @@ import STTextView
 extension FileTab {
     /// The mounted editor's text view, or nil while this file has no pane on
     /// screen: `editorView` is weak and lives only as long as the editor does.
-    var textView: STTextView? {
-        (editorView as? NSScrollView)?.documentView as? STTextView
+    var textView: NativeCodeTextView? {
+        (editorView as? NSScrollView)?.documentView as? NativeCodeTextView
     }
 
     func performFindAction(_ action: FindAction) {
@@ -28,7 +27,8 @@ extension FileTab {
             }
         // Asking for the next match before anything has been searched for, or
         // for the selection with none, does nothing rather than beeping.
-        guard textView.textFinder.validateAction(finderAction) else { return }
-        textView.textFinder.performAction(finderAction)
+        let item = NSMenuItem()
+        item.tag = finderAction.rawValue
+        textView.performFindPanelAction(item)
     }
 }

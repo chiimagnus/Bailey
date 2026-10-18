@@ -89,6 +89,79 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
 
 @MainActor
 final class FileTabTests: XCTestCase {
+    func testMountedNativeMultipleSelectionsPreserveBytesDirtyStateAndUndo() async throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".txt")
+        let original = "中文👋 + 中文👋\r\n"
+        try Data(original.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        file.autoSaveSuspendedForClose = true
+        let host = NSHostingView(rootView: AnyView(FileViewerView(file: file)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        let nsOriginal = original as NSString
+        let first = nsOriginal.range(of: "中文👋")
+        let tail = NSRange(location: NSMaxRange(first), length: nsOriginal.length - NSMaxRange(first))
+        let second = nsOriginal.range(of: "中文👋", range: tail)
+        XCTAssertNotEqual(second.location, NSNotFound)
+        editor.selectedRanges = [NSValue(range: first), NSValue(range: second)]
+        editor.insertText("🪨", replacementRange: .notFound)
+        editor.breakUndoCoalescing()
+        let edited = "🪨 + 🪨\r\n"
+        XCTAssertEqual(editor.string, edited)
+        XCTAssertEqual(file.text, edited)
+        XCTAssertTrue(file.isDirty)
+        editor.undoManager?.undo()
+        XCTAssertEqual(editor.string, original)
+        XCTAssertEqual(file.text, original)
+        XCTAssertFalse(file.isDirty)
+        editor.undoManager?.redo()
+        XCTAssertEqual(file.text, edited)
+        XCTAssertTrue(file.isDirty)
+        await file.save()
+        XCTAssertEqual(try Data(contentsOf: path), Data(edited.utf8))
+        XCTAssertFalse(file.isDirty)
+    }
+
+    func testNativeFindBarRoutesThroughMountedFileEditor() async throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".txt")
+        try Data("first keyword\nsecond keyword\n".utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        let host = NSHostingView(rootView: AnyView(FileViewerView(file: file)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        let scroll = try XCTUnwrap(editor.enclosingScrollView)
+        XCTAssertTrue(editor.usesFindBar)
+        XCTAssertTrue(editor.isIncrementalSearchingEnabled)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        file.performFindAction(.show)
+        try await wait { (scroll as NSTextFinderBarContainer).isFindBarVisible }
+        file.performFindAction(.hide)
+        try await wait { !(scroll as NSTextFinderBarContainer).isFindBarVisible }
+        XCTAssertEqual(editor.string, "first keyword\nsecond keyword\n")
+        XCTAssertFalse(file.isDirty)
+    }
+
     func testDetachedEditorAppendKeepsSameNativeDocumentAndUndo() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
         let original = "first 中文👋\n"
@@ -375,8 +448,8 @@ final class FileTabTests: XCTestCase {
         for position in [0, source.utf16.count / 2, source.utf16.count - 1, 0] {
             editor.scrollRangeToVisible(NSRange(location: position, length: 0))
             editor.layoutSubtreeIfNeeded()
-            let visible = try XCTUnwrap(editor.textLayoutManager.textViewportLayoutController.viewportRange)
-            let range = NSRange(visible, in: editor.textContentManager)
+            let visible = try XCTUnwrap(editor.nativeLayoutManager.textViewportLayoutController.viewportRange)
+            let range = NSRange(visible, in: editor.nativeContentManager)
             XCTAssertLessThanOrEqual(range.location, position)
             XCTAssertGreaterThanOrEqual(NSMaxRange(range), position)
         }

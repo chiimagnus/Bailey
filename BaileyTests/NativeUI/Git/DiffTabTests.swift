@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import Observation
-import STTextView
 import SwiftUI
 import XCTest
 @testable import Bailey
@@ -402,14 +401,14 @@ final class DiffTabTests: XCTestCase {
         ).unified
         pane.setReviewDocument(NSAttributedString(string: unusual.text), decorations: .review(unusual))
         pane.layoutSubtreeIfNeeded()
-        let elements = pane.textView.textContentManager.textElements(
-            for: pane.textView.textLayoutManager.documentRange
+        let elements = pane.textView.nativeContentManager.textElements(
+            for: pane.textView.nativeLayoutManager.documentRange
         )
         XCTAssertGreaterThan(elements.count, unusual.rows.count,
                              "Bare CR forms additional TextKit paragraphs within one Git LF line")
         XCTAssertNil(pane.textView.overrideContentHeight,
                      "Git LF-only row count must not clip additional native paragraphs")
-        XCTAssertEqual(pane.textView.attributedText?.string, unusual.text)
+        XCTAssertEqual(pane.textView.attributedText.string, unusual.text)
 
         let unicode = DiffComputation.compute(
             oldText: "before\u{2028}after\n", newText: "before\u{2028}updated\n"
@@ -451,7 +450,7 @@ final class DiffTabTests: XCTestCase {
         window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
         try await wait {
-            self.findNativeTextView(in: host, editable: false)?.attributedText?.string
+            self.findNativeTextView(in: host, editable: false)?.attributedText.string
                 == display.unifiedText.string
         }
     }
@@ -510,7 +509,7 @@ final class DiffTabTests: XCTestCase {
         window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
         try await wait {
-            self.findNativeTextView(in: host, editable: false)?.attributedText?.string
+            self.findNativeTextView(in: host, editable: false)?.attributedText.string
                 == before.unifiedText.string
         }
         let git = root.appendingPathComponent(".git")
@@ -524,7 +523,7 @@ final class DiffTabTests: XCTestCase {
         try await wait({ diff.display?.id != before.id && diff.display != nil }, timeout: 3)
         XCTAssertEqual(diff.display?.computation.unified.text, before.computation.unified.text)
         try await wait {
-            self.findNativeTextView(in: host, editable: false)?.attributedText?.string
+            self.findNativeTextView(in: host, editable: false)?.attributedText.string
                 == diff.display?.unifiedText.string
                 && diff.nativeSurface?.superview != nil
         }
@@ -1037,7 +1036,7 @@ final class DiffTabTests: XCTestCase {
         try await wait { diff.nativeSurface != nil && self.findNativeTextView(in: first) != nil }
         let surface = try XCTUnwrap(diff.nativeSurface)
         let textView = try XCTUnwrap(findNativeTextView(in: surface))
-        XCTAssertTrue(textView.attributedText?.string.contains("baseline") == true)
+        XCTAssertTrue(textView.attributedText.string.contains("baseline") == true)
         XCTAssertFalse(textView.isEditable)
         XCTAssertTrue(textView.window === window)
 
@@ -1046,7 +1045,7 @@ final class DiffTabTests: XCTestCase {
         try await wait { self.findNativeTextView(in: second) === textView }
         XCTAssertTrue(diff.nativeSurface === surface)
         XCTAssertTrue(findNativeTextView(in: second) === textView)
-        XCTAssertTrue(textView.attributedText?.string.contains("baseline") == true)
+        XCTAssertTrue(textView.attributedText.string.contains("baseline") == true)
         second.removeFromSuperview()
     }
 
@@ -1119,7 +1118,7 @@ final class DiffTabTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         try await wait { self.findNativeTextView(in: host, editable: false) != nil }
         let textView = try XCTUnwrap(findNativeTextView(in: host, editable: false))
-        XCTAssertEqual(Data((textView.attributedText?.string ?? "").utf8), Data(display.unifiedText.string.utf8))
+        XCTAssertEqual(Data((textView.attributedText.string ?? "").utf8), Data(display.unifiedText.string.utf8))
         diff.setDiffStyle(.split)
         let surface = try XCTUnwrap(diff.nativeSurface)
         try await wait { surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }.count == 2 }
@@ -1241,7 +1240,7 @@ final class DiffTabTests: XCTestCase {
         try await wait { diff.nativeSurface != nil && self.findNativeTextView(in: host) != nil }
         let surface = try XCTUnwrap(diff.nativeSurface)
         let firstUnified = try XCTUnwrap(findNativeTextView(in: surface))
-        XCTAssertTrue(firstUnified.attributedText?.string.contains("baseline") == true)
+        XCTAssertTrue(firstUnified.attributedText.string.contains("baseline") == true)
 
         diff.setDiffStyle(.split)
         try await wait {
@@ -1250,7 +1249,7 @@ final class DiffTabTests: XCTestCase {
         let visible = surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }
         XCTAssertEqual(visible.count, 2)
         XCTAssertTrue(visible.allSatisfy { !$0.textView.isEditable })
-        XCTAssertTrue(visible.contains { $0.textView.attributedText?.string.contains("baseline") == true })
+        XCTAssertTrue(visible.contains { $0.textView.attributedText.string.contains("baseline") == true })
         XCTAssertEqual(visible[0].scrollView.contentView.bounds.height, visible[1].scrollView.contentView.bounds.height)
 
         diff.setDiffStyle(.unified)

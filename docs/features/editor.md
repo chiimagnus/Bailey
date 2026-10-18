@@ -4,7 +4,7 @@
 
 ## Invariants
 
-- **唯一正式编辑器是 STTextView + TextKit 2。** 不引入 CodeEditTextView 或第二套编辑器；性能问题继续在现有技术路线内解决，不能以输入速度换取文字命中、输入法、撤销或保存正确性的退步。
+- **唯一正式编辑器是 Apple 原生 NSTextView + TextKit 2。** 文件与 Diff 都复用同一原生控件，不引入 STTextView、CodeEditTextView 或第二套编辑器。优化不能损失输入法、撤销、命中、保存、辅助功能与行号。
 - **编辑内容属于长生命周期标签。** 文本、保存基线、原生编辑器、撤销栈、光标和滚动不能由临时 View 持有。
 - **A 与 B 标签身份不同。** 同一停靠位置切换内容时按标签 ID 区分视图；切回或拖动后复用各自原有编辑器。
 - **未保存状态来自原始字节比较。** 原生小范围编辑先用变更范围快速判定，只有能够确认原字节相同时才清除未保存标记；Unicode 规范等价但编码不同仍需保存，撤销回原字节必须清除标记。保存和外部消费者按需读取完整正文，不在普通输入后无条件回写全文。
@@ -27,45 +27,30 @@ Git Ignore 等非视图追加动作在文本缓冲干净时先读取磁盘当前
 
 ## 大文件编辑的内容管理边界
 
-Bailey 只使用 STTextView + TextKit 2。文档内容由同一个原生存储持有；行号和语法索引仅负责查询坐标，
-不是第二份正文。视口布局只控制当前渲染片段，**不保证 NSTextContentStorage 曾访问的
-NSTextParagraph 元素缓存有界**。深度滚动后，局部编辑仍可能在系统内容管理器中遍历、同步大量历史段落；
-优化字体、高亮、可见渲染视图、行号前缀索引或反复清理视口都不能代替这一步。
+2026-10-18 的原生隔离实验确认：`NSTextView` 的文档视图和 `NSTextContainer`
+**必须保持同宽且为有限宽度**。不折行时两者一起扩大，外层 `NSScrollView`
+可以更窄；若仅扩大容器，10 万行远距导航会让 TextKit 2 提前创建所有段落。
+匹配宽度后，17 次交错远跳只请求约 399 个段落；
+系统编辑中位约 1.34ms。此前的 STTextView 在相同宽度下仍沿途请求大量段落，
+是其视口管理逻辑带来的额外成本，而不只是系统 TextKit 2 的限制。
 
-2026-10-18 的同机隔离测试发现了决定性的**视图与文本容器宽度关系**：
+Bailey 已改用 `NativeCodeTextView: NSTextView`，不再绕过系统原生视口布局。
+应用级 `EditorNavigationTests` 在 10 万行和深度跳转后实测文首字符插入
+中位约 1.54ms、P95 约 1.73ms（2026-10-19 Debug XCTest，30 次）。
+该数字只说明已测内容输入路径，**不是所有 macOS 版本、输入法／视觉帧延迟的完整保证**。
+长行横滚、变宽、UTF-16 命中、字体／折行、尾行、短文档、滚动位置恢复
+必须同时通过验证，不能靠牺牲数据和命中正确性换速度。
 
-- 把原生 `NSTextView(usingTextLayoutManager: true)` 放进 900pt 滚动窗口，
-  但其文档视图仍为 900pt、文本容器却设为 1000pt 或更大时，10 万行会提前请求
-  全部段落；17 次导航后的文首输入中位约 569ms。这是**不匹配的布局配置**，
-  不能据此认定原生 NSTextView 不折行也无法保持按需布局。
-- 若文档视图宽度与文本容器宽度**同为 1000pt**，外部视口仍为 900pt，
-  保持不折行的 10 万行、17 次交错导航仅累计创建 **399 个段落**，
-  首次跳到 25% 约 **7.4ms**，文首原生输入中位／P95 **1.34／1.68ms**。
-  当文档视图与容器都扩成 2300pt，250 字符的真实长行仍是一行，
-  横向滚动、末字绘制和屏幕点击反查均正确。1000→2300pt 变化后继续深跳，
-  段落创建请求仍是 399。该数据仅属于隔离原生窗口，不等于 Bailey 集成验收。
-- `STTextView` 采用相同的文档视图／容器宽度也**没有**取得相同结果：
-  10 万行深跳最终仍请求约 10 万个段落。抓取的系统调用栈显示，
-  其 `prepareContent → layoutViewport/alignUniformViewport` 会使
-  TextKit 2 沿途枚举段落；单独替换布局管理器、跳过重定位或更改宽度均不能根治。
+正文仍仅由原生 `NSTextStorage` 持有。行号使用增量的本地行起点索引，
+Tree-sitter 的 LF 行列索引独立于 TextKit 的自然段落。
+从 `NSTextStorage.didProcessEditing` 得到真实编辑范围，避免系统 Undo/Redo
+绕过 `NSTextViewDelegate.textDidChange` 导致脏状态和语法解析不同步。
+组合输入保持一条 Undo 事务；离屏追加也必须拥有独立可撤销操作。
+不能引入多段合并占位、无效缓存清理或丢全文的内容管理器来冒充优化。
 
-因此，原生 NSTextView 是**已通过核心性能基线、尚未通过全部产品功能验收**的候选，
-而非已经获准替换的编辑器。任何正式迁移都必须先完整验收中文输入法、Undo/Redo、
-多光标、Neon/Tree-sitter、Find/替换、行号、AX、RTL、长行与宽度变化、保存及 Diff，
-并最终只保留**一套编辑器**。现行 Bailey 仍使用 STTextView + TextKit 2，
-失败的动态占位、全局清缓存和分块方案都没有进入产品源码。
-
-这个边界不同于 [Zed 的聚合 Rope 与显示映射](https://github.com/zed-industries/zed/blob/56934ec0560bce8929025497411de7f5322fb6ca/crates/editor/src/display_map.rs)
-及 [VS Code 的 Piece Tree 和可见行集合](https://github.com/microsoft/vscode/blob/789f2c470d13c4760f2b5cc6a9e1919c05d04f7d/src/vs/editor/browser/view/viewLayer.ts)：
-两者拥有独立的正文位置及显示位置模型，可以让一次局部编辑不必逐个更新所有历史渲染对象；
-直接在 Bailey 增加相同的索引或复制其渲染算法，**不会改变默认 NSTextContentStorage 的元素同步开销**。
-
-Apple 的 [TextKit 2 内容模型](https://developer.apple.com/videos/play/wwdc2021/10061/) 允许使用自定义
-NSTextContentManager，但自定义元素必须保证真实段落边界、可靠的位置比较／范围调整、强缓存与布局失效、
-完整正文、屏幕点命中及输入事务一致。不能把多个真实段落合成一个 NSTextParagraph，也不能用会截断全文读取、
-破坏回跳命中、丢失文本或撤销的动态占位／临时重绑来换取微基准速度。只有经过远距交错访问、折行、复杂脚本、
-中文输入法、Undo／Redo、Find／AX、保存字节及内存生命周期的联合测试，才允许在现有编辑器中替换内容管理层；
-未达条件继续使用现有正确实现，不安装实验候选。
+历史方案与 Zed Rope／VS Code Piece Tree 的源码对比仍保留在
+`.github/features/editor-rendering-performance/evidence-p1.md`；
+当前已经决定使用 Apple 原生实现，不再把 STTextView 作为可回退路线。
 
 ## 保存与关闭
 
@@ -83,9 +68,9 @@ NSTextContentManager，但自定义元素必须保证真实段落边界、可靠
 
 ## 高亮与编辑
 
-沿用 STTextView/TextKit 和现有增量解析。TSX 使用独立解析器，Markdown／HTML 保留嵌入语言；未知语法显示纯文本。文件扩展名变更时，在同一个编辑器上切换语法并清除旧色，不丢未保存内容和撤销历史。Markdown 是源码编辑，不承诺排版预览。
+使用原生 NSTextView/TextKit 2 和现有增量解析。TSX 使用独立解析器，Markdown／HTML 保留嵌入语言；未知语法显示纯文本。文件扩展名变更时，在同一个编辑器上切换语法并清除旧色，不丢未保存内容和撤销历史。Markdown 是源码编辑，不承诺排版预览。
 
-高亮只添加／清除临时前景色，不写入正文属性或重复设置字体；不能修改文本、污染撤销或更改用户字体。实际换字体仍由原生编辑器应用。第三方补丁与升级验证由 [development.md](../development.md#依赖与本地补丁) 维护，性能测量见 [testing.md](../testing.md#性能与内存测量)。
+高亮只添加／清除临时前景色，不写入正文属性或重复设置字体；不能修改文本、污染撤销或更改用户字体。实际换字体仍由原生编辑器应用。原生视图与语法资源维护由 [development.md](../development.md#依赖与本地补丁) 说明，性能测量见 [testing.md](../testing.md#性能与内存测量)。
 
 首次解析按空文档插入全文通知解析器。Tree-sitter 的行只按 LF 递增，列按 UTF-16 字节计数；不能使用 TextKit 的段落／字符列代替。CRLF、裸 CR、Unicode 段分隔符和代理对保留原字节，非法位置不伪装成文首。
 
@@ -111,4 +96,4 @@ Git Ignore 在普通 `.gitignore` 标签持有的原生缓冲末尾插入规则�
 
 `FileTabTests` 覆盖读取、编辑、保存及原生行为；`TextCoordinateIndexTests` 对照完整扫描、重建索引与真实解析器，覆盖十万行文首／中／末、LF／CRLF／LS／PS、全文清空恢复及随机编辑；`SyntaxHighlightingTests` 检查真实解析器坐标、Unicode 分块字节、渲染色及字体／撤销不变；`EditorTextInputTests` 对照系统 NSTextView 验证组合输入结束、最终替换及撤销。工作区 UI 测试覆盖完整 `ContentView` 中的标签身份、多窗口和关闭。检查真实文件字节、原生文本、撤销和滚动，不只断言 ViewModel 字段。
 
-覆盖写入期间编辑、保存失败、重命名、干净／脏文件重载、大小和编码边界、中文／emoji／CRLF、嵌入语言、A→B→A 与关闭失败。具体运行及人工验收范围见 [testing.md](../testing.md)。
+覆盖写入期间编辑、保存失败、重命名、干净／脏文件重载、大小和编码边界、中文／emoji／CRLF、嵌入语言、A→B→A 与关闭失败。2026-10-19 在当前 Mac 上运行带独立 Windows SSH 测试主机的完整 XCTest，**436/436 通过、0 跳过**；Debug／Release 构建和严格签名校验通过。真实触控板连续拖动、长时间多标签内存与 macOS 15.6 最低运行时仍未在相应环境验收。具体运行及人工验收范围见 [testing.md](../testing.md)。

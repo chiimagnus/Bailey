@@ -163,7 +163,7 @@ private struct BaileyCommands: Commands {
         CommandGroup(after: .pasteboard) {
             // SwiftUI's Edit menu ships no Find submenu, so Bailey owns these
             // outright. They act on the focused pane — Ghostty's search in a
-            // terminal, STTextView's find bar in a file editor — rather than on
+            // terminal, NSTextView's find bar in a file editor — rather than on
             // the first responder, which keeps them live while the find bar's
             // text field has keyboard focus. ⇧⌘G is already Toggle Git Panel,
             // so Find Previous is reachable by ⇧↩ in the bar instead.

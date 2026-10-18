@@ -540,15 +540,17 @@ final class PaneRetentionTests: XCTestCase {
         // Derive the insertion point from the rendered viewport, not a fixed
         // line number: fonts and pane heights vary across macOS/Xcode runners.
         // A caret outside the pane makes AppKit legitimately scroll it into view.
-        let layout = editor.textLayoutManager
-        let documentStart = layout.documentRange.location
         let point = CGPoint(x: 20, y: scroll.contentView.bounds.minY + 30)
-        let caret = try XCTUnwrap(layout.caretLocation(interactingAt: point, inContainerAt: documentStart))
-        editor.textSelection = NSRange(location: layout.offset(from: documentStart, to: caret), length: 0)
+        let screenPoint = window.convertPoint(toScreen: editor.convert(point, to: nil))
+        let offset = editor.characterIndex(for: screenPoint)
+        print("DOCK_TRACE beforeHit offset=\(offset) editorSize=\(editor.frame) scroll=\(scroll.contentView.bounds) selected=\(editor.selectedRange()) firstResponder=\(window.firstResponder === editor)")
+        XCTAssertNotEqual(offset, NSNotFound)
+        editor.textSelection = NSRange(location: offset, length: 0)
         scroll.contentView.setBoundsOrigin(NSPoint(x: 0, y: 900))
         scroll.reflectScrolledClipView(scroll.contentView)
         let scrollBefore = scroll.contentView.bounds.origin
         let heightBefore = scroll.bounds.height
+        print("DOCK_TRACE beforeMove desired=\(scrollBefore) editorFrame=\(editor.frame) selection=\(editor.selectedRange()) viewport=\(String(describing: editor.textLayoutManager?.textViewportLayoutController.viewportRange))")
         let target = try XCTUnwrap(project.dock.group(containing: .files))
         XCTAssertTrue(project.dock.move(.tab(pane.id), into: target.id, edge: .bottom))
         try await settle {
@@ -559,6 +561,7 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertEqual(project.selectedTabID, pane.id)
         XCTAssertTrue(scroll.documentView === editor)
         try await settle { window.firstResponder === editor }
+        print("DOCK_TRACE afterMove actual=\(scroll.contentView.bounds.origin) editorFrame=\(editor.frame) selection=\(editor.selectedRange()) viewport=\(String(describing: editor.textLayoutManager?.textViewportLayoutController.viewportRange))")
         try await settle { scroll.contentView.bounds.origin == scrollBefore }
         XCTAssertEqual(scroll.contentView.bounds.origin, scrollBefore)
         let undo = try XCTUnwrap(editor.undoManager)

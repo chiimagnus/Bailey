@@ -1,8 +1,6 @@
 import AppKit
 import Darwin
 import Observation
-import STTextKitPlus
-import STTextView
 import SwiftUI
 
 /// A file opened as a tab in a project. Text content lives here (not in the
@@ -544,7 +542,7 @@ private struct FileWindowReader: NSViewRepresentable {
     }
 }
 
-/// Content of a file tab: an STTextView editor (line numbers, system find
+/// Content of a file tab: a native NSTextView editor (line numbers, system find
 /// bar), an image preview, or a placeholder for anything binary or
 /// oversized.
 struct FileViewerView: View {
