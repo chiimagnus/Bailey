@@ -103,6 +103,7 @@ final class TerminalManager {
     private struct PendingExternalOpen {
         let urls: [URL]
         let preferred: TerminalManager?
+        let originalProjectID: UUID?
         let destination: (projectID: UUID, groupID: UUID)?
         let completion: (Bool) -> Void
     }
@@ -296,13 +297,14 @@ final class TerminalManager {
     }
 
     func chooseFiles(inGroup destination: (projectID: UUID, groupID: UUID)? = nil) {
-        guard let receivingWindow = window, selectedProject != nil else { return }
+        guard let receivingWindow = window, let originalProjectID = selectedProject?.id else { return }
         if let destination {
             guard selectedProjectID == destination.projectID,
                   selectedProject?.dock.root.group(id: destination.groupID) != nil else { return }
         }
         WorkspaceNativeDialogs.chooseFiles(in: receivingWindow) { [weak self, weak receivingWindow] urls in
             guard let self, let receivingWindow, self.window === receivingWindow,
+                  self.selectedProjectID == originalProjectID,
                   self.selectedProject != nil else { return }
             if let destination {
                 guard self.selectedProjectID == destination.projectID,
@@ -428,7 +430,8 @@ final class TerminalManager {
             return
         }
         pendingExternalFiles.append(.init(
-            urls: urls, preferred: preferred, destination: destination, completion: completion
+            urls: urls, preferred: preferred, originalProjectID: preferred?.selectedProjectID,
+            destination: destination, completion: completion
         ))
         deliverPendingExternalFiles()
         requestWindowForPendingDirectories()
@@ -442,6 +445,11 @@ final class TerminalManager {
         let requests = pendingExternalFiles
         pendingExternalFiles = []
         for request in requests {
+            if let preferred = request.preferred,
+               preferred.selectedProjectID != request.originalProjectID {
+                request.completion(false)
+                continue
+            }
             // Not every manager in the process represents a window that will
             // appear. Only defer for an unmounted owner of a requested file.
             // Otherwise one unattached manager could block Finder permanently.

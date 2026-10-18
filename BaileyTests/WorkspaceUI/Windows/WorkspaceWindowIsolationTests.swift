@@ -212,6 +212,123 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: otherFile, encoding: .utf8), "other")
     }
 
+    func testQueuedFinderBatchRejectsChangedReceivingProjectBeforeRestoredOwnerAttaches() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let firstRoot = root.appendingPathComponent("first")
+        let secondRoot = root.appendingPathComponent("second")
+        for directory in [firstRoot, secondRoot] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let existing = secondRoot.appendingPathComponent("existing.swift")
+        let newFile = firstRoot.appendingPathComponent("new.swift")
+        try "already open".write(to: existing, atomically: true, encoding: .utf8)
+        try "new data".write(to: newFile, atomically: true, encoding: .utf8)
+
+        let receiver = TerminalManager()
+        let waitingOwner = TerminalManager()
+        defer { receiver.windowClosed(); waitingOwner.windowClosed() }
+        receiver.addLocalItems([firstRoot, secondRoot])
+        let initial = try XCTUnwrap(receiver.projects.first { $0.customDirectory == firstRoot.path })
+        let changed = try XCTUnwrap(receiver.projects.first { $0.customDirectory == secondRoot.path })
+        receiver.selectedProjectID = initial.id
+        waitingOwner.addLocalItems([secondRoot])
+        waitingOwner.selectedProject?.openLocalFile(existing.path)
+        let previousTabID = waitingOwner.selectedProject?.selectedTabID
+
+        let receiverWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        let ownerWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        receiverWindow.isReleasedWhenClosed = false
+        ownerWindow.isReleasedWhenClosed = false
+        defer { receiverWindow.close(); ownerWindow.close() }
+        receiver.attach(to: receiverWindow)
+
+        var replies: [Bool] = []
+        TerminalManager.openExternalFiles([existing, newFile], preferred: receiver) {
+            replies.append($0)
+        }
+        XCTAssertTrue(replies.isEmpty, "Wait for the file's original owner before routing the batch")
+        receiver.selectedProjectID = changed.id
+        waitingOwner.attach(to: ownerWindow)
+
+        XCTAssertEqual(replies, [false], "The delayed request belongs to the original Project")
+        XCTAssertTrue(initial.tabs.isEmpty)
+        XCTAssertTrue(changed.tabs.isEmpty, "New files cannot migrate to a later-selected Project")
+        XCTAssertEqual(waitingOwner.selectedProject?.selectedTabID, previousTabID)
+        XCTAssertEqual(try String(contentsOf: newFile, encoding: .utf8), "new data")
+    }
+
+    func testFinderProjectsDropDoesNotSwitchTargetDuringProviderLoading() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let firstRoot = root.appendingPathComponent("first")
+        let secondRoot = root.appendingPathComponent("second")
+        for directory in [firstRoot, secondRoot] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("project-drop.swift")
+        try "let owner = 1".write(to: source, atomically: true, encoding: .utf8)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([firstRoot, secondRoot])
+        let first = try XCTUnwrap(manager.projects.first { $0.customDirectory == firstRoot.path })
+        let second = try XCTUnwrap(manager.projects.first { $0.customDirectory == secondRoot.path })
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 650, height: 450),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        manager.attach(to: window)
+
+        manager.selectedProjectID = first.id
+        XCTAssertTrue(FinderWindowDrop.receive(
+            [NSItemProvider(object: source as NSURL)], preferred: manager
+        ))
+        // The URL provider is still loading when the user selects another Project.
+        manager.selectedProjectID = second.id
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(first.tabs.isEmpty)
+        XCTAssertTrue(second.tabs.isEmpty, "A late Finder drop must never open in a different Project")
+        XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "let owner = 1")
+    }
+
+    func testFinderEmptyStateDropCannotOpenIntoFolderAddedWhileProviderLoads() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("empty-state.txt")
+        try "original".write(to: source, atomically: true, encoding: .utf8)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 650, height: 450),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        manager.attach(to: window)
+        XCTAssertNil(manager.selectedProject)
+
+        XCTAssertTrue(FinderWindowDrop.receive(
+            [NSItemProvider(object: source as NSURL)], preferred: manager
+        ))
+        manager.addLocalItems([root])
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(manager.projects.count, 1)
+        XCTAssertTrue(manager.projects[0].tabs.isEmpty,
+                      "A file dropped into an empty state cannot become an implicit open")
+        XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "original")
+    }
+
     func testFinderDropDoesNotRouteLateProvidersIntoAnotherOrClosedWindow() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

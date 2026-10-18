@@ -168,7 +168,9 @@ struct FinderWindowDrop: DropDelegate {
         _ providers: [NSItemProvider], preferred manager: TerminalManager,
         destination: (projectID: UUID, groupID: UUID)? = nil
     ) -> Bool {
-        receive(providers, preferred: manager) { urls, owner in
+        let projectID = manager.selectedProjectID
+        return receive(providers, preferred: manager) { urls, owner in
+            guard owner.selectedProjectID == projectID else { return }
             if let destination {
                 guard owner.selectedProjectID == destination.projectID,
                       owner.selectedProject?.dock.root.group(id: destination.groupID) != nil
