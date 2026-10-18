@@ -700,6 +700,49 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         XCTAssertTrue(unmounted.projects.isEmpty)
     }
 
+    func testPendingFinderDocumentsSurviveMoreThan64EventsBeforeOwnerWindowAttaches() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("pending-owner.txt")
+        try "unchanged".write(to: file, atomically: true, encoding: .utf8)
+
+        let receiver = TerminalManager()
+        let awaitingOwner = TerminalManager()
+        defer { receiver.windowClosed(); awaitingOwner.windowClosed() }
+        receiver.addLocalItems([root])
+        awaitingOwner.addLocalItems([root])
+        awaitingOwner.selectedProject?.openLocalFile(file.path)
+        let ownerTab = try XCTUnwrap(awaitingOwner.selectedProject?.selectedTab)
+
+        let firstWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 350),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        let ownerWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 350),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        firstWindow.isReleasedWhenClosed = false
+        ownerWindow.isReleasedWhenClosed = false
+        defer { firstWindow.close(); ownerWindow.close() }
+        receiver.attach(to: firstWindow)
+
+        var replies: [Bool] = []
+        for _ in 0..<80 {
+            TerminalManager.openExternalFiles([file], preferred: receiver) { replies.append($0) }
+        }
+        XCTAssertTrue(replies.isEmpty, "Wait for the actual existing file owner, not the receiving window")
+
+        awaitingOwner.attach(to: ownerWindow)
+        XCTAssertEqual(replies.count, 80, "Every deferred Finder event needs a completion")
+        XCTAssertTrue(replies.allSatisfy { $0 })
+        XCTAssertEqual(receiver.selectedProject?.tabs.count, 0)
+        XCTAssertEqual(awaitingOwner.selectedProject?.tabs.count, 1)
+        XCTAssertTrue(awaitingOwner.selectedProject?.selectedTab === ownerTab)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "unchanged")
+    }
+
     func testClosingOneWorkspaceWindowKeepsOtherManagerEditorAndSnapshot() async throws {
         let previousSnapshots = SessionStore.load()
         let previousHistories = TerminalHistoryStore.load()

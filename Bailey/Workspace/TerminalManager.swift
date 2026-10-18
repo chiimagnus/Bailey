@@ -422,13 +422,6 @@ final class TerminalManager {
             completion(false)
             return
         }
-        // This queue exists only while the OS is bringing a window on screen.
-        // If window creation genuinely cannot complete, fail new requests
-        // rather than retaining unbounded AppKit reply closures.
-        guard pendingExternalFiles.count < 64 else {
-            completion(false)
-            return
-        }
         pendingExternalFiles.append(.init(
             urls: urls, preferred: preferred, originalProjectID: preferred?.selectedProjectID,
             destination: destination, completion: completion
