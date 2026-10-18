@@ -128,3 +128,10 @@
 - **未决观察**：随后检查到测试实例项目列表从 A+B 变为仅 A，部分测试文件标签仍留在 A；没有直接证据确定是用户/自动化点击、窗口恢复还是 Bailey 代码造成，不准据此记录产品 Bug。后续再次尝试原生目录拖放时，目标窗口位置变化但未新增目标项目，且无法核对前台 Finder 接收者，亦不准记为通过或缺陷。
 - **当前阻塞**：后续 `peekaboo see --window-id 152437` 明确返回 `CAPTURE_FAILED: Screen capture is unavailable while the macOS GUI session is locked`，Finder 无法获得可靠 AX 聚焦，AppleScript 查询 Finder 挂起超时。因此立即停止一切物理鼠标/键盘 E2E，不解锁设备、不触及凭据或正式 App。解锁后重新取窗口 ID/边界与用户前台状态，先用新隔离会话复现上述未决观察，再继续 Finder「打开方式」、Dock 图标、Projects 目录/混合批次、双窗口、原生错误 Sheet 与本机/SSH 场景。
 - **系统范围修正**：依用户明确要求，**macOS 15.6 真机不是 P4 验收条件**；本次以现有 macOS 27.2 为准，工程部署目标仍保留 15.6，不声称该旧系统已实测。
+
+### 本机多窗口 E2E 补充（2026-10-18，修复过程）
+
+- **用户决定**：继续仅在当前 macOS 真机进行验收，所有受控 Finder/Bailey E2E 主窗口位于左半屏；不能使用 15.6 真机，也不应据此声称最低版本兼容已真机验收。
+- **F-04 原生窗口挂载缺陷**：P4 的打开文件／目录菜单依赖 `TerminalManager.attachedWindow`。新建空项目窗口的 SwiftUI 宿主可能在进入原生 `NSWindow` 前已完成初次布局，原 `WindowChromeAccessor` 只在 make 后一次异步时刻、以及 SwiftUI 再次 update 时尝试附着；无后续更新就永远不附着，导致按钮和菜单无响应。Red：`WorkspaceWindowCloseTests` 离屏渲染再装窗测试失败；Green：改为 `NSView.viewDidMoveToWindow` 原生装窗回调并保留唯一 Coordinator/Delegate，连同双窗口隔离测试共 3/3 全通过。
+- **已证 E2E**：签名独立 App 恢复后，新空窗口真实点击添加文件夹弹出 Sheet，选择 Project C 成功且保持窗口隔离；C 中打开 B 已有文件自动把原 B 窗口置前并复用原标签，C 中首次打开 `inside-C.swift` 只在 C 增加标签并显示真实文本。Finder 双窗口与原生 Sheet 坐标均核对不越过显示器左半屏；前次 Finder 多选和重叠窗口造成的意外目标已找出真实前提，不能归咎为产品 Bug。
+- **当前命令与收尾**：代码 `0398a24` 已提交，当前 macOS 上的严格签名构建与授权 Windows SSH 的最终全量 `make test` 完成，**472 项 / 0 失败 / 0 跳过**。无项目 Finder 实际拖放显示原生错误 Sheet，空窗口仍 0 项目／0 标签；F-04 已解决。尚未实测 Finder「打开方式」、Dock、部分多分屏与 SSH GUI 组合，不冒充完成；完整结果见 `audit-p4.md` 最终补验小节。

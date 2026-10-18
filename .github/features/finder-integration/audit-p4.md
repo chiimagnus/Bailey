@@ -21,10 +21,23 @@
 
 ## 发现项
 
+## 发现 F-04
+
+- 任务：`P4-T3`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/UI/Components/WindowChrome.swift:33`
+- 摘要：`新建空项目窗口在离屏渲染后挂载时丢失 NSWindow 绑定，添加文件夹按钮及菜单无响应`
+- 风险：`空工作区无法添加第一个项目；File 菜单依赖 focused window 也可能误路由，Finder 跨窗口验收无法继续`
+- 预期修复：`保留原窗口拥有者与 NSWindowDelegate 转发，改由 NSView.viewDidMoveToWindow 在真实装入窗口时同步调用 Coordinator.attach，删除一次性 runloop 挂载检查`
+- 验证：`旧实现 WorkspaceWindowCloseTests 延后装配用例失败，修复后3/3通过；独立签名 Bailey 第二窗口真实点击 Add Folder 原生 Sheet 并成功加入 Project C；make build 和 Windows SSH 全量 make test`
+- 解决证据：`Commit 0398a24; native Red failed prior attachment path; Green WorkspaceWindowCloseTests 3/3; make build and strict codesign PASS; SSH full make test 472/0/0 PASS; real two-window Finder NSOpenPanel, cross-window buffer reuse, and no-project Finder drop error E2E PASS on macOS 27.2.`
+
+
 - **已解决的真实缺陷 1（P4-T3 / High）**：对新 Finder 文件只做 `fileExists` 验证，`chmod 000` 文件会创建无法读取的编辑标签；混合批次同时影响合法邻居的用户结果记录。`WorkspaceIdentityTests.testFinderUnreadableFileRejectsNewTabButOpensValidNeighbor` 原版失败，现由唯一文件接收入口拒绝新建并允许合法项继续，且不破坏已有打开标签。
 - **已解决的真实缺陷 2（P4-T3 / Medium）**：不可读取／遍历的目录被 `addLocalItems` 添加为无法浏览的 Project；`testFinderUnreadableFolderCannotBecomeProjectOrMaskValidFolder` 原版失败；现目录添加与 Finder 文件夹两处入口共用可读／可遍历约束。
 - **已解决的真实缺陷 3（P4-T3 / High）**：命名管道等非普通文件仅因路径存在就进入 `FileTab`，后续读取可能阻塞；`testFinderNamedPipeDoesNotCreateEditorThatCouldBlockOnRead` 原版失败；现新文件校验实际目标的普通文件类型。
-- **当前没有尚未解决、达到可复现或代码不变量违背门槛的 finding。** 未获执行条件的原生 E2E 不能被写成已修复 Bug，也不视为已完成的真机组合，具体见下方缺口。
+- **四个已发现的可复现缺陷均已解决；F-04 已有 Red→Green、代码提交、本轮 472 项全量回归与双窗 GUI 验收。** 未执行的其它原生 E2E 不得冒充通过；也不能把受工具前台、锁屏和 Finder 多选影响的操作当成产品 Bug。
 
 ## 修复日志
 
@@ -71,3 +84,20 @@
 用户要求把本地 Feature 记录也提交 Git，已生成 `5d5a41e`（仅 `plan-p4.md`、`todo.toml`、`audit-p4.md`），未推送。追加测试独立 Bailey PID `97058` 和专用 Finder 窗口均保持在显示器左半屏（右边界 x=1680），正式 Bailey PID `96141` 未终止。新增当前系统上**实际验证**：Finder→空编辑区显示真实正文；菜单添加 Project B；Open File 跨项目复用 A 原缓冲；Finder→Git 面板文件直接变编辑标签；Finder→Files 复制最终字节且无立即额外标签；重复复制出现原生非覆盖错误 Sheet，副本哈希不变；Finder→顶部标签栏打开新文件且显示正文。完整触发前提、文件及窗口证据见 `plan-p4.md` 末尾“本机左半屏补充 E2E”。
 
 **待确认而不是 finding**：后续观察到 Project B 消失并伴随标签重新归属，但未核对可靠的鼠标源窗口和修改瞬间，不能认定 Bailey 自动删除项目；该过程不得标记成功或归因。随后 GUI 会话锁定，`peekaboo` 报 `CAPTURE_FAILED`，物理 Finder 拖放、双窗口／Dock 和原生错误组合无法安全继续。**这不推翻已完成的 470 项自动测试与上述可靠 GUI 操作，也不代表新要求的全部 E2E 已完成**。屏幕解锁后应在新的受控会话补验该异常及四类尚缺 GUI 组合，不触碰正式 App 或屏幕右半边。
+
+## 2026-10-18 第二窗口挂载根因修复与现场验收
+
+- **Red**：在当前 Mac 左半屏创建一个正常项目窗口和一个新建的无项目窗口。新窗口的「Add Folder…」按钮和 File 菜单可见，但实际点击后没有原生 Sheet。沿 `ContentView → TerminalManager.chooseFolders → WindowChromeAccessor` 发现窗口管理者缺少 `NSWindow`。新增 `WorkspaceWindowCloseTests.testEmptyWorkspaceAttachesToWindowWhenHostingViewWasRenderedOffscreen`：先离屏渲染 `ContentView`、让一次性 dispatch 执行，再把宿主视图挂入真实 `NSWindow`；旧实现持续 6 秒无法满足附着条件，Red 证据 `/tmp/bailey-p4-red-newwindow.log`。这不是加延迟重试能解决的事件时序问题。
+- **Green／清理**：`WindowChromeAccessor` 改用 `WindowChromeAttachmentView.viewDidMoveToWindow` 接收 AppKit 真正的安装事件，直接交给原有 `Coordinator.attach`；删除旧的一次性 async 检查，保留同窗口防重复和 NSWindowDelegate 原转发。补第二个原生测试：已有项目窗口、延迟安装的空项目窗口同时存在，各自文件夹 Sheet 只出现在所属窗口，互不影响。精简为 `weak coordinator` 后 `WorkspaceWindowCloseTests` **3/3，0 失败**，日志 `/tmp/bailey-p4-final-native-window-target.log`。同步 `docs/features/dock.md`。
+- **真实已签名 App E2E**：完整退出本轮自行启动的隔离旧 PID 97058，使用相同隔离 UUID 在已重新构建的签名 App 内重新启动（PID 6079），重新归位两个 Bailey 窗口至屏幕左半边。实际点击新无项目窗口的「Add Folder…」→ `NSOpenPanel` 真 Sheet 被 AppKit/辅助功能看到（为守左半屏将宿主移动至 x=675，原生 Sheet 跟随至 x=610..1570）→ 原生选中 `Project C` 并点击 Add → 最新会话快照和实际 AX 项目行均证实新窗口只拥有 Project C、原窗口仍拥有 A/Finder Sources/B。随后在 C 窗口原生「File → Open File…」选择 B 窗口已打开的 `drag-projects.swift`，Bailey 真正把**原 B 窗口**恢复为 key/main、原 B 标签不重复，C 不增加标签；之后在 C 中选择其首次打开的 `inside-C.swift`，仅 C 新增一个标签且原生编辑器显示 `let cUnique = 42`。两个 Bailey 主窗口坐标均满足 x+width≤1680。
+- **仍待复核**：此前未消除的窗口遮挡、Finder 多选干扰已在单一选中源文件的物理 E2E 中排除；无项目窗口的错误 Sheet 现已验证通过。Finder「打开方式」与 Dock 图标属于同 Bundle ID 的 Launch Services，若它指向正式 Bailey 会影响用户资源，不能为验收改系统默认打开应用。暗/亮、触控板、部分浏览器/Git 组合和 SSH 项目的所有图形联动尚无独立真实 E2E；真实 Windows SSH 自动回归不替代 UI。只有当前 macOS 27.2 是用户要求的真机环境，不再要求 15.6 设备。
+- **最终回归结果**：`make build` 已完成并严格验签，日志 `/tmp/bailey-p4-window-attach-final-build.log`；含授权 Windows SSH 的最终 `make test` 完整退出 0，**472 项 / 0 失败 / 0 跳过**、`** TEST SUCCEEDED **`，用时约 838 秒，日志 `/tmp/bailey-p4-window-attach-final-test.log`。生产修复、两项新增窗口测试与 `docs/features/dock.md` 已由 `0398a24` 单独提交；F-04 已标记 Resolved。未将本轮 Debug 签名包覆盖安装到正式 `/Applications/Bailey.app`，也未推送。
+
+## 2026-10-18 本轮最终补验与 Git 结论
+
+- **验收环境**：用户要求仅使用当前 macOS 27.2 真机；没有 macOS 15.6 真机，因此既不把它作为本阶段阻塞，也不声称该旧版系统 GUI 已通过。工程最低 deployment target 不变。
+- **真实完整回归**：修复后 `make build` 退出 0，`** BUILD SUCCEEDED **`，严格 `codesign --verify --deep --strict` 成功；`BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test` 退出 0，`** TEST SUCCEEDED **`，**472 项／0 失败／0 跳过**，耗时约 838 秒。日志 `/tmp/bailey-p4-window-attach-final-{build,test}.log`。`WorkspaceWindowCloseTests` **3/3**、`WorkspaceWindowIsolationTests` **13/13**，含真实 SSH 的 GitExternalRefresh 也通过。
+- **真实双窗验证**：签名隔离 Bailey 的新空窗口因旧挂载时序无法打开原生文件夹选择器，F-04 修复后实际点击 `Add Folder…` 弹出 NSOpenPanel，选择 Project C 后只在新窗口增加 Project C，不改原窗口 A/Finder Sources/B；随后在 C 窗口打开 B 已有文件，App 自动切回原 B 窗口／原标签，C 不新增缓冲；在 C 中首次打开 `inside-C.swift`，只在 C 新增标签并显示真实文件正文。关闭仅用于隔离测试的 C 后，新窗口恢复到无项目状态。
+- **无项目物理 Finder 错误 E2E**：Finder `windowID=154106` 中经真实辅助功能确认**唯一选中** `new-import.txt`，从 Finder 真实拖入无项目的 Bailey 窗口，原生 NSAlert 实际显示 `Add a project folder before opening files.`，详情只有 `new-import.txt`；确认后快照显示该窗口继续 **0 项目／0 标签**，其他窗口已有 A/Finder Sources/B 和标签全部保留，源文件哈希未变。已排除此前 Finder 9 项多选与双窗重叠造成的不确定性。
+- **屏幕边界**：本轮两个测试 Bailey 主窗口、Finder 和真正弹出的 Sheet 均满足 x+width ≤ 1680（显示器宽 3360）；测试资源均为 `/tmp/bailey-p4-left-e2e-hazgvu6v` 内的人工数据，未移动/退出正式 Bailey。修复代码已提交 `0398a24`，审计状态 F-04 `Resolved`。
+- **Gate**：可复现的四项实现缺陷均已修复，当前 macOS 上的上述真 GUI 场景和含 SSH 全量测试通过。但 Finder「打开方式」/默认双击、实体 Dock 图标文件拖放、全部明暗语言与多分屏排列和 SSH 端到端 GUI 组合仍没有本轮逐项实测证据，必须诚实标记为**尚未全验**；本阶段的 `Go` 只涵盖已经安全执行且有实测证据的范围。本轮计划／审计文件独立提交 Git，不擅自 push。
