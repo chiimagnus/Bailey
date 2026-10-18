@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import XCTest
 @testable import Bailey
 
@@ -313,6 +314,109 @@ final class WorkspaceIdentityTests: XCTestCase {
                       "External paths cannot change which project was selected")
         XCTAssertEqual(manager.selectedProject?.customDirectory, inner.path)
         XCTAssertEqual(manager.projects.count, 2)
+    }
+
+    func testFinderUnreadableFileRejectsNewTabButOpensValidNeighbor() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let projectRoot = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: projectRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let denied = root.appendingPathComponent("denied.txt")
+        let valid = root.appendingPathComponent("valid.txt")
+        try "unreadable".write(to: denied, atomically: true, encoding: .utf8)
+        try "valid text".write(to: valid, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: denied.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: denied.path) }
+        XCTAssertFalse(FileManager.default.isReadableFile(atPath: denied.path))
+        if (try? Data(contentsOf: denied)) != nil {
+            throw XCTSkip("Test host bypasses source-read protection")
+        }
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([projectRoot])
+        let project = try XCTUnwrap(manager.selectedProject)
+        XCTAssertEqual(manager.openExternalLocalItems([denied, valid]), [denied])
+        XCTAssertEqual(manager.projects.count, 1)
+        XCTAssertEqual(project.tabs.count, 1, "Unreadable Finder files must not create empty editor tabs")
+        guard case .file(let file) = try XCTUnwrap(project.selectedTab).content else {
+            return XCTFail("The valid sibling should open as a file")
+        }
+        XCTAssertEqual(file.path, valid.path)
+        try await file.waitForText()
+        XCTAssertEqual(file.text, "valid text")
+        XCTAssertEqual(try String(contentsOf: valid, encoding: .utf8), "valid text")
+
+        // 已打开的文件仍复用原缓冲，不能因权限变化丢失编辑状态。
+        let originalTab = project.selectedTab
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: valid.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: valid.path) }
+        XCTAssertTrue(manager.openExternalLocalItems([valid]).isEmpty)
+        XCTAssertTrue(project.selectedTab === originalTab)
+        XCTAssertEqual(project.tabs.count, 1)
+    }
+
+    func testFinderReadableButReadOnlyFileCanOpen() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let projectRoot = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: projectRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appendingPathComponent("read-only.swift")
+        try "let readOnly = true".write(to: fileURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: fileURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path) }
+        XCTAssertTrue(FileManager.default.isReadableFile(atPath: fileURL.path))
+        XCTAssertFalse(FileManager.default.isWritableFile(atPath: fileURL.path))
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([projectRoot])
+        XCTAssertTrue(manager.openExternalLocalItems([fileURL]).isEmpty)
+        let project = try XCTUnwrap(manager.selectedProject)
+        guard case .file(let file) = try XCTUnwrap(project.selectedTab).content else {
+            return XCTFail("A readable file must open even when saving requires permission")
+        }
+        try await file.waitForText()
+        XCTAssertEqual(file.text, "let readOnly = true")
+    }
+
+    func testFinderUnreadableFolderCannotBecomeProjectOrMaskValidFolder() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let denied = root.appendingPathComponent("denied-folder")
+        let valid = root.appendingPathComponent("valid-folder")
+        for folder in [denied, valid] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: denied.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: denied.path) }
+        XCTAssertFalse(FileManager.default.isReadableFile(atPath: denied.path))
+        if (try? FileManager.default.contentsOfDirectory(atPath: denied.path)) != nil {
+            throw XCTSkip("Test host bypasses directory-read protection")
+        }
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([denied])
+        XCTAssertTrue(manager.projects.isEmpty, "Unreadable folders must not be added as projects")
+        XCTAssertEqual(manager.openExternalLocalItems([denied, valid]), [denied])
+        XCTAssertEqual(manager.projects.count, 1)
+        XCTAssertEqual(manager.selectedProject?.customDirectory, valid.path)
+    }
+
+    func testFinderNamedPipeDoesNotCreateEditorThatCouldBlockOnRead() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let projectRoot = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: projectRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fifo = root.appendingPathComponent("stream.fifo")
+        XCTAssertEqual(mkfifo(fifo.path, mode_t(0o600)), 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fifo.path))
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([projectRoot])
+        XCTAssertEqual(manager.openExternalLocalItems([fifo]), [fifo])
+        XCTAssertEqual(manager.projects.count, 1)
+        XCTAssertTrue(manager.selectedProject?.tabs.isEmpty == true)
     }
 
     func testFinderSymlinkReusesOriginalNativeFileAndRejectsBrokenLink() throws {

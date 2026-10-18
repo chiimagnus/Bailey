@@ -191,6 +191,8 @@ final class TerminalManager {
             var directory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: root, isDirectory: &directory),
                   directory.boolValue,
+                  FileManager.default.isReadableFile(atPath: root),
+                  FileManager.default.isExecutableFile(atPath: root),
                   !NSWorkspace.shared.isFilePackage(atPath: root) else { continue }
             if let existing = projects.first(where: {
                 $0.sshHost == nil && $0.customDirectory == root && $0.pinnedFile == nil
@@ -231,6 +233,12 @@ final class TerminalManager {
                 rejected.append(url)
                 continue
             }
+            if isDirectory.boolValue &&
+                (!FileManager.default.isReadableFile(atPath: path)
+                 || !FileManager.default.isExecutableFile(atPath: path)) {
+                rejected.append(url)
+                continue
+            }
             items.append((
                 url: url, path: path, resolved: Self.resolvedLocalPath(path),
                 isDirectory: isDirectory.boolValue
@@ -262,7 +270,10 @@ final class TerminalManager {
                 continue
             }
 
-            guard let targetProject else {
+            let fileType = (try? FileManager.default.attributesOfItem(atPath: item.resolved))?[.type]
+                as? FileAttributeType
+            guard fileType == .typeRegular, FileManager.default.isReadableFile(atPath: item.path),
+                  let targetProject else {
                 rejected.append(item.url)
                 continue
             }
