@@ -110,14 +110,19 @@ final class FileTreeModel {
         let requested = URL(fileURLWithPath: directory, isDirectory: true).standardizedFileURL.path
         let targetRoot = URL(fileURLWithPath: root, isDirectory: true).standardizedFileURL.path
         guard !sources.isEmpty, !root.isEmpty, scope == "local",
-              backend is LocalWorkspaceBackend, isCurrentTarget(),
-              LocalPathScope.contains(requested, in: targetRoot)
+              backend is LocalWorkspaceBackend, isCurrentTarget()
         else { return nil }
-        // An expanded symlink can point outside the project. Never turn a
-        // drop inside this tree into an unannounced write to that other root.
+        // A visible symlink may resolve outside the project. Reject both
+        // lexical escapes and resolved escapes, and tell the user why this
+        // otherwise accepted Finder drop did not create any files.
         let resolvedRoot = URL(fileURLWithPath: root).resolvingSymlinksInPath().path
         let resolvedTarget = URL(fileURLWithPath: requested).resolvingSymlinksInPath().path
-        guard LocalPathScope.contains(resolvedTarget, in: resolvedRoot) else {
+        guard LocalPathScope.contains(requested, in: targetRoot),
+              LocalPathScope.contains(resolvedTarget, in: resolvedRoot) else {
+            presentError(
+                String(localized: "Couldn’t import some files or folders.", table: "Workspace"),
+                String(localized: "Target folder is outside this project: \(directory)", table: "Workspace")
+            )
             return nil
         }
         let result = await LocalWorkspaceBackend.shared.copyFromFinder(sources, into: requested)

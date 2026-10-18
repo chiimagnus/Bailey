@@ -327,6 +327,16 @@
         }
       }
     },
+    "Target folder is outside this project: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目标文件夹超出当前项目范围：%@"
+          }
+        }
+      }
+    },
     "Target folder no longer exists: %@" : {
       "localizations" : {
         "zh-Hans" : {

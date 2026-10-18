@@ -129,18 +129,32 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             }
             let original = source.standardizedFileURL
             guard seen.insert(original.path).inserted else { continue }
-            var sourceIsDirectory: ObjCBool = false
-            guard fm.fileExists(atPath: original.path, isDirectory: &sourceIsDirectory) else {
+            // Copy the directory entry, not the symlink's resolved destination.
+            // fileExists follows links and incorrectly rejects dangling links;
+            // treating a directory link as a real folder also falsely blocks
+            // copying the link when it points to an ancestor of the target.
+            var sourceInfo = Darwin.stat()
+            guard lstat(original.path, &sourceInfo) == 0 else {
                 failures.append(String(
                     localized: "Source no longer exists: \(original.lastPathComponent)", table: "Workspace"
                 ))
                 continue
             }
+            let sourceType = sourceInfo.st_mode & S_IFMT
+            guard sourceType == S_IFREG || sourceType == S_IFDIR || sourceType == S_IFLNK else {
+                let error = NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTSUP))
+                failures.append(String(
+                    localized: "Couldn’t copy \(original.lastPathComponent): \(error.localizedDescription)",
+                    table: "Workspace"
+                ))
+                continue
+            }
+            let isRealDirectory = sourceType == S_IFDIR
             let destination = target.appendingPathComponent(
-                original.lastPathComponent, isDirectory: sourceIsDirectory.boolValue
+                original.lastPathComponent, isDirectory: isRealDirectory
             )
             let sourceReal = original.resolvingSymlinksInPath().path
-            if sourceIsDirectory.boolValue, LocalPathScope.contains(targetReal, in: sourceReal) {
+            if isRealDirectory, LocalPathScope.contains(targetReal, in: sourceReal) {
                 failures.append(String(
                     localized: "Cannot copy \(original.lastPathComponent) into itself or a subfolder.",
                     table: "Workspace"
