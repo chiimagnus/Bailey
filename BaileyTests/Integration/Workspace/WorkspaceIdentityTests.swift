@@ -217,7 +217,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         XCTAssertEqual(commandCount, 1)
     }
 
-    func testFinderOpenReusesExistingFileTabButNotPinnedFileProjectForSiblings() throws {
+    func testFinderOpenReusesExistingTabAndKeepsSiblingInsideLegacyPinnedProject() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -286,7 +286,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         XCTAssertEqual(manager.projects.count, 1)
     }
 
-    func testFinderOpenUsesDeepestLocalDirectoryAndRejectsInvalidBatchMembers() throws {
+    func testFinderOpenKeepsSelectedProjectAcrossSiblingRootsAndRejectsInvalidBatchMembers() throws {
         let parent = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let inner = parent.appendingPathComponent("app")
         let similar = parent.appendingPathComponent("apple")
