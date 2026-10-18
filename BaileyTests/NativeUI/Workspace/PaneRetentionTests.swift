@@ -146,7 +146,7 @@ final class PaneRetentionTests: XCTestCase {
             .appendingPathComponent("p4-picker-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
-        firstManager.addLocalItems([folder])
+        firstManager.addLocalFolders([folder])
         second.makeKeyAndOrderFront(nil)
         firstManager.chooseFiles()
         try await settle { first.attachedSheet != nil }
@@ -171,7 +171,7 @@ final class PaneRetentionTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([directory])
+        manager.addLocalFolders([directory])
         let project = try XCTUnwrap(manager.selectedProject)
         let tabs = (0..<3).map { _ in PaneTab(content: .browser(BrowserTab(initialFocus: .none))) }
         tabs.forEach(project.append)
@@ -537,7 +537,7 @@ final class PaneRetentionTests: XCTestCase {
         try original.write(to: path, atomically: true, encoding: .utf8)
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([directory])
+        manager.addLocalFolders([directory])
         manager.openFile(path.path)
         let project = try XCTUnwrap(manager.selectedProject)
         let pane = try XCTUnwrap(project.selectedTab)

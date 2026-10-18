@@ -146,7 +146,7 @@ final class TerminalManager {
             Self.pendingHistories = [:]
         }
         let queuedDirectories = Self.takePendingDirectories()
-        addLocalItems(queuedDirectories.map { URL(fileURLWithPath: $0, isDirectory: true) })
+        addLocalFolders(queuedDirectories.map { URL(fileURLWithPath: $0, isDirectory: true) })
         // The debounce can swallow changes made just before quitting;
         // capture a final snapshot while the shells are still alive.
         terminationObservation = NotificationCenter.default
@@ -185,7 +185,7 @@ final class TerminalManager {
     // MARK: - Projects
 
     /// Only an explicitly selected folder creates or selects a local project.
-    func addLocalItems(_ urls: [URL]) {
+    func addLocalFolders(_ urls: [URL]) {
         for url in urls {
             guard url.isFileURL, url.host == nil || url.host == "localhost" else { continue }
             let root = url.standardizedFileURL.path
@@ -250,7 +250,7 @@ final class TerminalManager {
         // new files if this batch began in an existing project.
         let originalProject = selectedProject
         for item in items where item.isDirectory {
-            addLocalItems([URL(fileURLWithPath: item.path, isDirectory: true)])
+            addLocalFolders([URL(fileURLWithPath: item.path, isDirectory: true)])
         }
         let targetProject = originalProject ?? selectedProject
 
@@ -292,7 +292,7 @@ final class TerminalManager {
         guard let receivingWindow = window else { return }
         WorkspaceNativeDialogs.chooseFolders(in: receivingWindow) { [weak self, weak receivingWindow] urls in
             guard let self, let receivingWindow, self.window === receivingWindow else { return }
-            self.addLocalItems(urls)
+            self.addLocalFolders(urls)
         }
     }
 
@@ -304,11 +304,9 @@ final class TerminalManager {
         }
         WorkspaceNativeDialogs.chooseFiles(in: receivingWindow) { [weak self, weak receivingWindow] urls in
             guard let self, let receivingWindow, self.window === receivingWindow,
-                  self.selectedProjectID == originalProjectID,
-                  self.selectedProject != nil else { return }
+                  self.selectedProject?.id == originalProjectID else { return }
             if let destination {
-                guard self.selectedProjectID == destination.projectID,
-                      self.selectedProject?.dock.root.group(id: destination.groupID) != nil else { return }
+                guard self.selectedProject?.dock.root.group(id: destination.groupID) != nil else { return }
             }
             Self.openExternalFiles(urls, preferred: self, destination: destination)
         }
@@ -539,7 +537,7 @@ final class TerminalManager {
             return
         }
 
-        manager.addLocalItems(
+        manager.addLocalFolders(
             directories.map { URL(fileURLWithPath: $0, isDirectory: true) }
         )
         manager.window?.makeKeyAndOrderFront(nil)
@@ -551,7 +549,7 @@ final class TerminalManager {
         self.window = window
         Self.isOpeningWindow = false
         let directories = Self.takePendingDirectories()
-        addLocalItems(directories.map { URL(fileURLWithPath: $0, isDirectory: true) })
+        addLocalFolders(directories.map { URL(fileURLWithPath: $0, isDirectory: true) })
         if !directories.isEmpty {
             window.makeKeyAndOrderFront(nil)
         }

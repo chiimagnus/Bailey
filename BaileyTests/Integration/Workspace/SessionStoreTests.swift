@@ -231,7 +231,7 @@ final class SessionStoreTests: XCTestCase {
 
         let projectAdded = expectation(description: "Window manager directly observes project insertion")
         withObservationTracking({ _ = first.projects.map(\.id) }) { projectAdded.fulfill() }
-        first.addLocalItems([directory])
+        first.addLocalFolders([directory])
         await fulfillment(of: [projectAdded], timeout: 1)
         let project = try XCTUnwrap(first.selectedProject)
         project.customName = "Edited Project"
@@ -347,7 +347,7 @@ final class SessionStoreTests: XCTestCase {
         let second = TerminalManager()
         var secondClosed = false
         defer { if !secondClosed { second.windowClosed() } }
-        second.addLocalItems([directory])
+        second.addLocalFolders([directory])
         try await waitForSnapshot { $0.count == existingManagerCount + 2 }
         first.windowClosed()
         firstClosed = true

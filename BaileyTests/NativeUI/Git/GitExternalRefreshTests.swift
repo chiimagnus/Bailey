@@ -29,7 +29,7 @@ final class GitExternalRefreshTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([directory])
+        manager.addLocalFolders([directory])
         let model = GitStatusModel()
         model.syncSelectedProject(in: manager)
         try await wait { model.hasResolvedStatus && !model.isRefreshing && !model.isRepo }
@@ -103,7 +103,7 @@ final class GitExternalRefreshTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let model = GitStatusModel()
         model.syncSelectedProject(in: manager)
         try await wait { model.hasResolvedStatus && !model.isRefreshing && model.isRepo }
@@ -213,7 +213,7 @@ final class GitExternalRefreshTests: XCTestCase {
         secondGit(["commit", "-qm", "other baseline"])
         let secondHead = secondGit(["rev-parse", "HEAD"])
 
-        manager.addLocalItems([second])
+        manager.addLocalFolders([second])
         model.syncSelectedProject(in: manager)
         try await wait {
             model.rootPath == second.path && model.hasResolvedStatus

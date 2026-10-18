@@ -887,7 +887,7 @@ final class FileTabTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let firstProject = try XCTUnwrap(manager.selectedProject)
         let firstURL = root.appendingPathComponent("must-save.txt")
         try "before".write(to: firstURL, atomically: true, encoding: .utf8)
@@ -901,7 +901,7 @@ final class FileTabTests: XCTestCase {
         try await wait { !manager.projects.contains(where: { $0 === firstProject }) }
         XCTAssertEqual(try String(contentsOf: firstURL, encoding: .utf8), "durably saved")
 
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let failingProject = try XCTUnwrap(manager.selectedProject)
         let remotePath = root.appendingPathComponent("remote.txt")
         try "local sentinel".write(to: remotePath, atomically: true, encoding: .utf8)
@@ -972,7 +972,7 @@ final class FileTabTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1080, height: 700),

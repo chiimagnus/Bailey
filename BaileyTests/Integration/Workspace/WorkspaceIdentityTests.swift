@@ -267,7 +267,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         try "b".write(to: second, atomically: true, encoding: .utf8)
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([folder])
+        manager.addLocalFolders([folder])
         XCTAssertTrue(manager.openExternalLocalItems([first, second]).isEmpty)
         XCTAssertEqual(manager.projects.count, 1)
         let project = try XCTUnwrap(manager.selectedProject)
@@ -299,7 +299,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         try "other".write(to: other, atomically: true, encoding: .utf8)
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([parent, inner])
+        manager.addLocalFolders([parent, inner])
         let selected = try XCTUnwrap(manager.selectedProject)
         let invalid = URL(string: "https://example.com/not-a-local-file")!
         let missing = inner.appendingPathComponent("absent.md")
@@ -334,7 +334,7 @@ final class WorkspaceIdentityTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([projectRoot])
+        manager.addLocalFolders([projectRoot])
         let project = try XCTUnwrap(manager.selectedProject)
         XCTAssertEqual(manager.openExternalLocalItems([denied, valid]), [denied])
         XCTAssertEqual(manager.projects.count, 1)
@@ -369,7 +369,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         XCTAssertFalse(FileManager.default.isWritableFile(atPath: fileURL.path))
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([projectRoot])
+        manager.addLocalFolders([projectRoot])
         XCTAssertTrue(manager.openExternalLocalItems([fileURL]).isEmpty)
         let project = try XCTUnwrap(manager.selectedProject)
         guard case .file(let file) = try XCTUnwrap(project.selectedTab).content else {
@@ -396,7 +396,7 @@ final class WorkspaceIdentityTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([denied])
+        manager.addLocalFolders([denied])
         XCTAssertTrue(manager.projects.isEmpty, "Unreadable folders must not be added as projects")
         XCTAssertEqual(manager.openExternalLocalItems([denied, valid]), [denied])
         XCTAssertEqual(manager.projects.count, 1)
@@ -413,7 +413,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: fifo.path))
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([projectRoot])
+        manager.addLocalFolders([projectRoot])
         XCTAssertEqual(manager.openExternalLocalItems([fifo]), [fifo])
         XCTAssertEqual(manager.projects.count, 1)
         XCTAssertTrue(manager.selectedProject?.tabs.isEmpty == true)
@@ -433,7 +433,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         )
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([folder])
+        manager.addLocalFolders([folder])
         manager.openFile(actual.path)
         let originalProject = try XCTUnwrap(manager.selectedProject)
         guard case .file(let file) = try XCTUnwrap(originalProject.selectedTab).content else {
@@ -521,7 +521,7 @@ final class WorkspaceIdentityTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([aRoot, bRoot])
+        manager.addLocalFolders([aRoot, bRoot])
         let selected = try XCTUnwrap(manager.selectedProject)
         XCTAssertEqual(selected.customDirectory, bRoot.path)
         XCTAssertTrue(manager.openExternalLocalItems([fromA, fromOutside]).isEmpty)
@@ -559,10 +559,10 @@ final class WorkspaceIdentityTests: XCTestCase {
         try "should not open in B".write(to: file, atomically: true, encoding: .utf8)
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([aRoot])
+        manager.addLocalFolders([aRoot])
         let a = try XCTUnwrap(manager.selectedProject)
         let targetGroup = try XCTUnwrap(a.dock.root.groups.first)
-        manager.addLocalItems([bRoot])
+        manager.addLocalFolders([bRoot])
         let b = try XCTUnwrap(manager.selectedProject)
 
         // The group was selected when a Finder provider began loading, but
@@ -591,11 +591,11 @@ final class WorkspaceIdentityTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([aRoot])
+        manager.addLocalFolders([aRoot])
         let a = try XCTUnwrap(manager.selectedProject)
         a.openFile(file.path)
         let original = try XCTUnwrap(a.selectedTab)
-        manager.addLocalItems([bRoot])
+        manager.addLocalFolders([bRoot])
         let b = try XCTUnwrap(manager.selectedProject)
         XCTAssertTrue(manager.openExternalLocalItems([file]).isEmpty)
         XCTAssertTrue(manager.selectedProject === a)
@@ -623,7 +623,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         let input = urls + Array(urls.reversed().prefix(9)) + [alias, missing]
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([projectRoot])
+        manager.addLocalFolders([projectRoot])
         let project = try XCTUnwrap(manager.selectedProject)
         XCTAssertEqual(manager.openExternalLocalItems(input), [missing])
         XCTAssertTrue(manager.selectedProject === project)
@@ -689,14 +689,14 @@ final class WorkspaceIdentityTests: XCTestCase {
         let manager = TerminalManager()
         defer { manager.windowClosed() }
 
-        manager.addLocalItems([file])
+        manager.addLocalFolders([file])
         XCTAssertTrue(manager.projects.isEmpty, "Mac files are not project entries")
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         XCTAssertEqual(manager.projects.count, 1)
         XCTAssertEqual(manager.selectedProject?.customDirectory, root.path)
         XCTAssertNil(manager.selectedProject?.pinnedFile)
         XCTAssertTrue(manager.selectedProject?.tabs.isEmpty == true)
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         XCTAssertEqual(manager.projects.count, 1)
     }
 
@@ -706,7 +706,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let manager = TerminalManager()
-        manager.addLocalItems([directory])
+        manager.addLocalFolders([directory])
         let project = try XCTUnwrap(manager.selectedProject)
         await manager.newFile()
         XCTAssertEqual(project.fileTree.draft?.parentDir, directory.path)

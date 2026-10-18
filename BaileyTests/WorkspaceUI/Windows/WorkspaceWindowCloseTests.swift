@@ -128,7 +128,7 @@ final class WorkspaceWindowCloseTests: XCTestCase {
             first.windowClosed()
             second.windowClosed()
         }
-        first.addLocalItems([root])
+        first.addLocalFolders([root])
         XCTAssertTrue(second.projects.isEmpty)
 
         let firstWindow = NSWindow(
@@ -183,7 +183,7 @@ final class WorkspaceWindowCloseTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
         let backend = WindowSaveFixture("original")
         let tab = FileTab(path: root.appendingPathComponent("case.txt").path,

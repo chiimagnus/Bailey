@@ -1653,7 +1653,7 @@ final class GitStatusModelTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([main])
+        manager.addLocalFolders([main])
         let project = try XCTUnwrap(manager.selectedProject)
         let otherRoot = try git(["rev-parse", "--show-toplevel"], in: other)
 
@@ -1757,7 +1757,7 @@ final class GitStatusModelTests: XCTestCase {
         let otherRoot = try git(["rev-parse", "--show-toplevel"], in: other)
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([main])
+        manager.addLocalFolders([main])
         let project = try XCTUnwrap(manager.selectedProject)
 
         manager.openDiff(repoRoot: otherRoot, path: entry.path,

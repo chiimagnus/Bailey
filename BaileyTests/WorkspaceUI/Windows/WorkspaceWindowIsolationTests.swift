@@ -36,7 +36,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 700, height: 440),
             styleMask: [.titled], backing: .buffered, defer: false
@@ -77,7 +77,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         try "content".write(to: pinned, atomically: true, encoding: .utf8)
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([first])
+        manager.addLocalFolders([first])
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 440),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -118,7 +118,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([directory])
+        manager.addLocalFolders([directory])
         let project = try XCTUnwrap(manager.selectedProject)
         project.openFile(files[0].path)
         project.openFile(files[1].path)
@@ -177,10 +177,10 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([firstRoot])
+        manager.addLocalFolders([firstRoot])
         let first = try XCTUnwrap(manager.selectedProject)
         let empty = try XCTUnwrap(first.dock.root.groups.first(where: { $0.items.isEmpty }))
-        manager.addLocalItems([otherRoot])
+        manager.addLocalFolders([otherRoot])
         let other = try XCTUnwrap(manager.selectedProject)
         manager.selectedProjectID = first.id
         let window = NSWindow(
@@ -228,11 +228,11 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let receiver = TerminalManager()
         let waitingOwner = TerminalManager()
         defer { receiver.windowClosed(); waitingOwner.windowClosed() }
-        receiver.addLocalItems([firstRoot, secondRoot])
+        receiver.addLocalFolders([firstRoot, secondRoot])
         let initial = try XCTUnwrap(receiver.projects.first { $0.customDirectory == firstRoot.path })
         let changed = try XCTUnwrap(receiver.projects.first { $0.customDirectory == secondRoot.path })
         receiver.selectedProjectID = initial.id
-        waitingOwner.addLocalItems([secondRoot])
+        waitingOwner.addLocalFolders([secondRoot])
         waitingOwner.selectedProject?.openLocalFile(existing.path)
         let previousTabID = waitingOwner.selectedProject?.selectedTabID
 
@@ -277,7 +277,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([firstRoot, secondRoot])
+        manager.addLocalFolders([firstRoot, secondRoot])
         let first = try XCTUnwrap(manager.projects.first { $0.customDirectory == firstRoot.path })
         let second = try XCTUnwrap(manager.projects.first { $0.customDirectory == secondRoot.path })
         let window = NSWindow(
@@ -321,7 +321,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         XCTAssertTrue(FinderWindowDrop.receive(
             [NSItemProvider(object: source as NSURL)], preferred: manager
         ))
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(manager.projects.count, 1)
         XCTAssertTrue(manager.projects[0].tabs.isEmpty,
@@ -372,7 +372,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([folder])
+        manager.addLocalFolders([folder])
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 750, height: 490),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -456,8 +456,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let a = TerminalManager()
         let b = TerminalManager()
         defer { a.windowClosed(); b.windowClosed() }
-        a.addLocalItems([firstRoot])
-        b.addLocalItems([secondRoot])
+        a.addLocalFolders([firstRoot])
+        b.addLocalFolders([secondRoot])
         b.openFile(file.path)
         let bProject = try XCTUnwrap(b.selectedProject)
         guard case .file(let original) = try XCTUnwrap(bProject.selectedTab).content else {
@@ -520,7 +520,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let a = TerminalManager()
         let b = TerminalManager()
         defer { a.windowClosed(); b.windowClosed() }
-        a.addLocalItems([folder])
+        a.addLocalFolders([folder])
         let remote = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
         remote.sshHost = "invalid-p4-cross-window"
         remote.customDirectory = "/remote/workspace"
@@ -565,7 +565,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let first = TerminalManager()
         let restored = TerminalManager()
         defer { first.windowClosed(); restored.windowClosed() }
-        restored.addLocalItems([directory])
+        restored.addLocalFolders([directory])
         restored.openFile(file.path)
         let project = try XCTUnwrap(restored.selectedProject)
         guard case .file(let original) = try XCTUnwrap(project.selectedTab).content else {
@@ -615,8 +615,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let a = TerminalManager()
         let b = TerminalManager()
         defer { a.windowClosed(); b.windowClosed() }
-        a.addLocalItems([local])
-        b.addLocalItems([existing])
+        a.addLocalFolders([local])
+        b.addLocalFolders([existing])
         b.openFile(opened.path)
         let bTab = try XCTUnwrap(b.selectedProject?.selectedTab)
         let windowA = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 510, height: 350),
@@ -653,7 +653,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         defer { a.windowClosed(); b.windowClosed() }
         // The not-yet-attached B really owns this file; this is the
         // condition that must defer even if unrelated unmounted managers exist.
-        b.addLocalItems([root])
+        b.addLocalFolders([root])
         b.openFile(file.path)
         let priorTab = try XCTUnwrap(b.selectedProject?.selectedTab)
         let owner = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 340),
@@ -687,7 +687,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("unrelated.txt")
         try "fixture".write(to: url, atomically: true, encoding: .utf8)
-        receiver.addLocalItems([root])
+        receiver.addLocalFolders([root])
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 430, height: 320),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -710,8 +710,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let receiver = TerminalManager()
         let awaitingOwner = TerminalManager()
         defer { receiver.windowClosed(); awaitingOwner.windowClosed() }
-        receiver.addLocalItems([root])
-        awaitingOwner.addLocalItems([root])
+        receiver.addLocalFolders([root])
+        awaitingOwner.addLocalFolders([root])
         awaitingOwner.selectedProject?.openLocalFile(file.path)
         let ownerTab = try XCTUnwrap(awaitingOwner.selectedProject?.selectedTab)
 
@@ -767,8 +767,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             first.windowClosed()
             second.windowClosed()
         }
-        first.addLocalItems([aFolder])
-        second.addLocalItems([bFolder])
+        first.addLocalFolders([aFolder])
+        second.addLocalFolders([bFolder])
         first.openFile(aURL.path)
         second.openFile(bURL.path)
 
