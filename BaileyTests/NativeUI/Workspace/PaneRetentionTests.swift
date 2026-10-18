@@ -625,6 +625,65 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertTrue(terminal.surface === surface)
     }
 
+    func testUnmanagedForegroundSSHRejectsLocalFinderPathsBeforeAnyRemoteHandoff() async throws {
+        try await assertUnmanagedSSHRejectsLocalDrop(replacesRootShell: false)
+    }
+
+    func testUnmanagedExecSSHRejectsLocalFinderPathsEvenWhenForegroundPIDIsShellPID() async throws {
+        try await assertUnmanagedSSHRejectsLocalDrop(replacesRootShell: true)
+    }
+
+    private func assertUnmanagedSSHRejectsLocalDrop(replacesRootShell: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let terminal = TerminalSession(initialDirectory: directory.path, launchCommand: "exec /bin/sh -i")
+        defer { terminal.terminate() }
+        let tab = PaneTab(content: .session(terminal))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: PanelContentView(
+            tab: tab, isSelected: false,
+            onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in }
+        ))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        try await settle { terminal.shellPid != nil }
+        XCTAssertTrue(terminal.acceptsLocalFileDrop)
+
+        // An SSH client that bypasses Bailey's helper keeps location == .local.
+        // ProxyCommand sleeps over local pipes only: no network, credentials,
+        // user SSH config, authorized hosts, or shared ControlMaster is touched.
+        terminal.sendCommand(
+            (replacesRootShell ? "exec " : "")
+                + "/usr/bin/ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=20 "
+                + "-o 'ProxyCommand=/bin/sleep 30' fixture.invalid\r"
+        )
+        if replacesRootShell {
+            try await settle {
+                guard let root = terminal.shellPid,
+                      let executable = processExecutablePath(pid: root)
+                else { return false }
+                return (executable as NSString).lastPathComponent == "ssh"
+            }
+        } else {
+            try await settle {
+                guard let foreground = terminal.surface.foregroundPid,
+                      let executable = processExecutablePath(pid: foreground)
+                else { return false }
+                return (executable as NSString).lastPathComponent == "ssh"
+            }
+            XCTAssertNotEqual(terminal.surface.foregroundPid, terminal.shellPid)
+        }
+        XCTAssertNil(terminal.location.remoteConnection)
+        XCTAssertFalse(terminal.acceptsLocalFileDrop,
+                       "A foreground ssh is remote input regardless of whether it replaced the root shell")
+    }
+
     func testTerminalKeepsSameShellAcrossParkingAndRemount() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

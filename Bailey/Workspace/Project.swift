@@ -336,7 +336,8 @@ final class Project: nonisolated Identifiable {
             restoredHistory: restoredHistory,
             launchCommand: launchCommand ?? remoteCommand,
             initialWorkspace: initialWorkspace,
-            initialInput: initialInput
+            initialInput: initialInput,
+            fixedSSHLaunch: sshHost != nil
         )
         session.onExited = { [weak self] session in
             // Already dead — just drop its pane, no second terminate.

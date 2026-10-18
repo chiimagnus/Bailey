@@ -65,7 +65,7 @@ make test ONLY_TESTING=BaileyTests/FileTabTests
 
 | 改动 | 相关测试 |
 | --- | --- |
-| 应用身份、Finder 类型注册与原生 Apple Event 系统入口 | `AppIdentityTests`、`WorkspaceWindowIsolationTests`；真实 Finder/Dock 进程外投递另需独立图形登录环境 |
+| 应用身份、Finder 类型注册与原生 Apple Event 系统入口 | `AppIdentityTests`、`WorkspaceWindowIsolationTests`；真实 Finder/Dock 进程外投递需获授权的受控图形会话 |
 | Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests` |
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
@@ -97,6 +97,8 @@ open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Bailey.app" --args --iso
 **普通设置仍然共享。** 隔离实例中不得直接改写用户设置；确需设置测试时使用独立 Home，并核实真正的配置、UserDefaults 与数据写入位置。临时文件、Git 仓库和受控后端不得指向正式项目。
 
 并行构建或测试同一项目时，为各任务指定独立的 `DERIVED_DATA`（如 `make test DERIVED_DATA=build/DerivedData-review`），避免共用产物被另一任务覆盖或重新签名；不得清理其他任务的构建目录。
+
+Finder 拖进运行中 Bailey 时，**先核对 Finder 与 Bailey 两个窗口的屏幕边界，目标点不能落在 Finder 自身窗口或侧栏内**，否则会被 Finder 执行移动／废纸篓等本机操作，不能归因于 Bailey。核对系统当前选中项与拖动的真实 provider 数量；双窗口、文件树精确行和网页上传必须检查最终编辑标签／Shell／网页内容，而不是只看鼠标事件已派发。
 
 Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 使用 Launch Services 的正式 Bundle ID 路由。测试工具不能只因有 `--isolated-ui-test` 就向工作目录中的 App 发文件：该参数会成为 `open --args` 的启动参数，但**不改变系统对 App 身份与文件事件的分发**。当用户确认正式 Bailey 已退出、核对系统进程后，可对独立构建包使用 `open -n -a "$TEST_APP" --env "BAILEY_UI_TEST_RUN_ID=$UUID" "$TEMP_FILE"`，其中有效 UUID 环境变量使进程隔离快照与后台隧道；不传 `--args`，否则可能丢掉系统文件事件。后续 `open -a "$TEST_APP" "$TEMP_FILE"` 时必须先核对系统实际送达的是所持有的测试 PID。通过隔离快照、真实窗口数、FileTab、文件正文或图片和源文件 SHA-256 共同验证。**此方式隔离工作区数据，不隔离 GUI 会话或 Bundle ID**，不能在用户正常 Bailey 运行时测试，也不能把 `open -a` 当成 Finder「打开方式」和物理 Dock 拖动已验收的证据。
 
@@ -153,6 +155,7 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 | Git 外部刷新 | 独立 CLI 修改本机或 SSH 仓库后，前台可见 Git 面板自动更新；隐藏／后台暂停、恢复前台重新读取、失败后手动重试 |
 | 共享树 | Files、工作区、暂存和历史一致；窄面板、放大字体、长名称和动作命中 |
 | 浏览器 | 表单、滚动、前进后退和重挂载；默认浏览器交接与开发服务 |
+| Finder 与原生文件拖放 | Finder 右键／Dock／普通窗口和空态单／多文件，原生文本编辑器、浏览器页面上传及工具栏、Ghostty 本机路径输入、Files 明确文件行拒绝与普通留白打开；原窗口归属、标签去重、关闭后晚到、终端不执行／SSH 不串机与源文件 SHA-256 分别核对 |
 | 设置与恢复 | 隔离配置的即时传播、快照和真实重启，区分显示恢复与任务恢复 |
 | 通知与命令面板 | 定位原会话、键盘选择和文件实际打开，而非仅收到事件 |
 | 视觉、键盘与基础无障碍 | 两种外观、长文案、键盘焦点与动作目标、原生按钮辅助功能名称、不同字体；纯架构改动前后无变化 |

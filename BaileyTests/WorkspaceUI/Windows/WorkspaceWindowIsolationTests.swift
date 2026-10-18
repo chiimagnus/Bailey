@@ -25,6 +25,78 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         }
     }
 
+    func testFinderWindowDropLoadsURLProvidersIntoItsOriginalWindow() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("first drop.swift")
+        let second = root.appendingPathComponent("second-drop.txt")
+        try "first body".write(to: first, atomically: true, encoding: .utf8)
+        try "second body".write(to: second, atomically: true, encoding: .utf8)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 440),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        manager.attach(to: window)
+        defer { window.close() }
+        XCTAssertFalse(FinderWindowDrop.receive([], preferred: manager))
+        XCTAssertFalse(FinderWindowDrop.receive(
+            [NSItemProvider(object: "not a local file" as NSString)], preferred: manager
+        ))
+        let providers = [first, second].map { NSItemProvider(object: $0 as NSURL) }
+        XCTAssertTrue(FinderWindowDrop.receive(providers, preferred: manager))
+        try await wait {
+            manager.selectedProject?.tabs.filter { $0.content.isFile }.count == 2
+        }
+        let project = try XCTUnwrap(manager.selectedProject)
+        XCTAssertEqual(manager.projects.count, 1)
+        XCTAssertEqual(project.customDirectory, root.path)
+        XCTAssertEqual(project.selectedTab?.content.title, "second-drop.txt")
+        guard case .file(let editor) = try XCTUnwrap(project.selectedTab).content else {
+            return XCTFail("The drop must create a real file buffer")
+        }
+        try await editor.waitForText()
+        XCTAssertEqual(editor.text, "second body")
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "first body")
+        XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "second body")
+    }
+
+    func testFinderDropDoesNotRouteLateProvidersIntoAnotherOrClosedWindow() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("slow.swift")
+        try "original".write(to: file, atomically: true, encoding: .utf8)
+
+        let manager = TerminalManager()
+        defer { if manager.attachedWindow != nil { manager.windowClosed() } }
+        let original = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 650, height: 450),
+                                styleMask: [.titled], backing: .buffered, defer: false)
+        let replacement = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 650, height: 450),
+                                   styleMask: [.titled], backing: .buffered, defer: false)
+        original.isReleasedWhenClosed = false
+        replacement.isReleasedWhenClosed = false
+        defer { original.close(); replacement.close() }
+
+        manager.attach(to: original)
+        XCTAssertTrue(FinderWindowDrop.receive([NSItemProvider(object: file as NSURL)], preferred: manager))
+        // The provider callback runs asynchronously; even if the manager is
+        // reattached, it must not redirect a pending drop to the new window.
+        manager.attach(to: replacement)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(manager.projects.isEmpty)
+
+        XCTAssertTrue(FinderWindowDrop.receive([NSItemProvider(object: file as NSURL)], preferred: manager))
+        manager.windowClosed()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(manager.projects.isEmpty)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "original")
+    }
+
     func testExternalBatchRoutesToActualMountedFileBuffers() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

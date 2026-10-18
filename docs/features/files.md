@@ -18,6 +18,8 @@ Files、Git 工作区、暂存区和提交历史共用同一套树语义。本�
 
 文件菜单、命令面板和标签栏「＋」使用同一创建路径：新建文件 ⌘N，新建文件夹 ⌥⌘N，默认目标为项目根目录；目录右键在相应目录创建。
 
+Finder 文件 URL 落在**文件树明确文件／目录行**时，由行级原生 Drop 返回禁止，不交给窗口的普通「打开文件」，也不声称已复制成功。文件树普通留白及面板标题仍可打开文件。Finder→Files 目录导入、覆盖、复制、移动和上传尚未提供，归文件管理功能 [Issue #5](https://github.com/chiimagnus/Bailey/issues/5)，不能在普通打开路径里悄悄执行。文件树向外拖动时，仅本机条目提供 Mac `fileURL`；SSH 条目的 POSIX 路径不能伪造本机 URL，仍可通过「复制路径」菜单获取。
+
 异步操作核对发起时的项目、机器与路径。文件树读取中切换路径、机器或后端连接，新范围立即开始遍历，旧连接结果不能阻塞或覆盖新树；同时清除旧连接的文件行与输入草稿，创建或重命名不能在换连接后继续写旧目标。同一范围的重复刷新合并；当前连接暂时读取失败时保留已有列表，而非伪装成空目录。失败应显示原因，不能回退到本机、覆盖其他内容或打开另一项目中的文件。后端必须承担实际创建的排他性，UI 预检查不是数据保护。
 
 历史 Git 文件右键沿用共用树行，提供查看历史版本、对当前工作区比较、真实 Git 恢复和路径复制；这不会改变普通 Files 树的双击、悬停或滚动行为。历史路径不存在时仅按确认的 Git 重命名关系打开当前文件，不能误打开同名但不同机器的文件。
@@ -28,6 +30,6 @@ Files、Git 工作区、暂存区和提交历史共用同一套树语义。本�
 
 ## 验证
 
-`FileTreeTests` 检查展开即时反馈、首次同层目录批量查询、按需复用、批量刷新、断线保留、目录创建、重命名、范围与失败；`SSHFileTreeLiveTests` 验证实际 Windows SSH 批量读取、失败隔离及文件树冷开／热展开／刷新时的 SSH 请求次数；`TreeRowHitTestingTests` 验证真实行命中。共享组件改变时同时验收 Files、Git 工作区、暂存区及历史树，包含窄面板、大字体、长名称、点击边缘、右侧动作、键盘和无障碍。
+`FileTreeTests` 检查展开即时反馈、首次同层目录批量查询、按需复用、批量刷新、断线保留、目录创建、重命名、范围与失败；`SSHFileTreeLiveTests` 验证实际 Windows SSH 批量读取、失败隔离及文件树冷开／热展开／刷新时的 SSH 请求次数；`TreeRowHitTestingTests` 验证真实行命中；Finder→文件树精确目标和留白还需在签名测试 App 上分别实测实际文件标签／文件系统不变量，确认禁止目标没有被外层 Drop 截获。共享组件改变时同时验收 Files、Git 工作区、暂存区及历史树，包含窄面板、大字体、长名称、点击边缘、右侧动作、键盘和无障碍。
 
 实现入口：[FileTreeModel.swift](../../Bailey/Files/FileTreeModel.swift)、[TreeDisplayModel.swift](../../Bailey/Shared/Tree/TreeDisplayModel.swift)、[TreeRowStyle.swift](../../Bailey/Shared/Tree/TreeRowStyle.swift)。运行方式见 [testing.md](../testing.md)。

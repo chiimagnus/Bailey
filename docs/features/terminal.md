@@ -13,6 +13,8 @@
 
 通过标签栏「＋」或「新建终端」创建会话；仅添加项目目录不会创建 Shell。SwiftUI 转发交互，AppKit／Ghostty 负责输入与原生焦点。焦点错误应修复路由或重挂载，不以重建表面绕过。
 
+Finder 文件或目录落在**本机** Ghostty 终端正文时，由该终端原生拖放接收：按 Shell 语法转义绝对路径，多项以空格分隔，只插入输入缓冲，**不发送 Return**。文件名含 CR/LF、ESC 或其它终端控制字符时整批拒绝，不能只靠 Shell 引号防止模拟按键。固定 SSH 终端从创建之初就是远端目标（即使连接尚未握手），动态 SSH 在进程仍存活／断线时也不接受 Mac 文件 URL；用户自行启动的前台系统 `ssh` 进程即使未被 Bailey 接管，同样拒绝；`exec ssh` 替换根 Shell 且保留 PID 时也按进程真实可执行文件判别。真正退出返回本地 Shell 后恢复本机路径拖放。拒绝的拖动不得回落到父级普通文件打开或隐式上传。
+
 交互式 Git 变基创建独立终端，在目标仓库运行真正的序列编辑器，不占用已有会话。SSH 先通过现有 helper 建立该终端自己的连接，再使用 Ghostty 原生启动输入发送命令，不等待 OSC 或猜测 prompt；工作目录以纯文本八进制表示，避免文件名控制字符被终端当按键执行。主题更新和重挂载不重发启动输入。SSH 会话结束后保留结果直到用户按 Enter 关闭，专用远端标签不转为本机工作区。
 
 查找菜单指向聚焦内容；终端使用 Ghostty 查找，文件使用原生编辑器查找。菜单已有快捷键不能与 Shell 输入、查找栏或标签切换互相抢占。窗口与停靠规则见 [dock.md](dock.md)。
@@ -31,6 +33,8 @@ Codex CLI 在 `~/.codex/config.toml` 的 `[tui]` 下配置 `notifications = true
 
 ## 验证
 
-检查多项目、多标签、双窗口、拖动、关闭、重挂载和主题改变后的输入与 Shell 身份；macOS 通知必须走到原会话。`BarkPushServiceTests` 验证地址规范化、跨服务器分发、HTTPS JSON 负载和单地址失败隔离；「发送测试通知」报告 Bark 服务端接受请求的数量，iPhone 实际显示须另行确认，不能把 HTTP 成功当作设备已收到。`PaneRetentionTests` 与工作区 UI 回归覆盖可自动化部分；真实 CLI 通知、快捷键及重启恢复按 [testing.md](../testing.md#人工回归) 单独记录。
+检查多项目、多标签、双窗口、拖动、关闭、重挂载和主题改变后的输入与 Shell 身份；macOS 通知必须走到原会话。`BarkPushServiceTests` 验证地址规范化、跨服务器分发、HTTPS JSON 负载和单地址失败隔离；「发送测试通知」报告 Bark 服务端接受请求的数量，iPhone 实际显示须另行确认，不能把 HTTP 成功当作设备已收到。`WorkspaceIdentityTests` 覆盖本机／固定 SSH 握手前后、断线和动态 SSH 返回本机的文件 URL 接收资格，并核对 Shell 特殊字符与控制字符拒绝；真实 Finder→Ghostty E2E 核对终端输入和源文件字节，不能仅凭返回 `.copy` 当作已成功插入或已执行命令。
+
+`PaneRetentionTests` 与工作区 UI 回归覆盖可自动化部分；真实 CLI 通知、快捷键及重启恢复按 [testing.md](../testing.md#人工回归) 单独记录。
 
 实现入口：[TerminalSession.swift](../../Bailey/Terminal/TerminalSession.swift)。升级 Ghostty 还需执行 [development.md](../development.md#依赖与本地补丁) 的回归。

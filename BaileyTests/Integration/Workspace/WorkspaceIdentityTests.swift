@@ -51,6 +51,47 @@ final class WorkspaceIdentityTests: XCTestCase {
         return connection
     }
 
+    func testFinderTerminalDropDoesNotInjectControlCharactersOrExecute() {
+        let simple = URL(fileURLWithPath: "/tmp/simple.txt")
+        let quoted = URL(fileURLWithPath: "/tmp/it's a $cost; 🚀.md")
+        XCTAssertEqual(
+            BaileyTerminalView.fileDropText(for: [simple, quoted]),
+            "/tmp/simple.txt '/tmp/it'\\''s a $cost; 🚀.md' "
+        )
+        XCTAssertNil(BaileyTerminalView.fileDropText(for: []))
+        XCTAssertNil(BaileyTerminalView.fileDropText(for: [URL(string: "https://example.com")!]))
+        for unsafe in ["new\nline", "return\rname", "escape\u{001B}name", "bell\u{0007}name", "tab\tname"] {
+            let unsafeURL = URL(fileURLWithPath: "/tmp/" + unsafe)
+            XCTAssertNil(
+                BaileyTerminalView.fileDropText(for: [simple, unsafeURL]),
+                "Reject the entire batch before any control byte reaches the PTY"
+            )
+        }
+    }
+
+    func testFinderTerminalDropRespectsFixedSSHLaunchAndDynamicConnection() {
+        let local = TerminalSession(launchCommand: "exec /bin/sh -i")
+        XCTAssertTrue(local.acceptsLocalFileDrop)
+        let activeRemote = connection()
+        local.location = .remote(activeRemote)
+        XCTAssertFalse(local.acceptsLocalFileDrop)
+        activeRemote.markDisconnected(reason: "fixture disconnect")
+        XCTAssertFalse(local.acceptsLocalFileDrop, "Disconnected ssh is not a Mac shell")
+        local.location = .local
+        XCTAssertTrue(local.acceptsLocalFileDrop, "A dynamic ssh session can return to its local shell")
+
+        let fixed = Project(fallbackName: "remote", workspaceConfiguration: .standard)
+        fixed.sshHost = "fixture-ssh-host"
+        let waiting = fixed.newSession()
+        defer { fixed.terminateAll() }
+        XCTAssertNil(waiting.workspaceIdentity, "Before SSH handoff the remote identity is not populated")
+        XCTAssertFalse(waiting.acceptsLocalFileDrop, "Fixed SSH launch intent is already remote")
+        waiting.location = .remote(connection())
+        XCTAssertFalse(waiting.acceptsLocalFileDrop)
+        waiting.location = .local
+        XCTAssertFalse(waiting.acceptsLocalFileDrop, "A fixed SSH terminal never accepts a Mac path")
+    }
+
     func testProjectSSHAndWorkspaceCommandsUseTheSameScopedControlSocket() {
         let options = SSHMultiplexing.options
         XCTAssertTrue(options.contains("ControlMaster=auto"))

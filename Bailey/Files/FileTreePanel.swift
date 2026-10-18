@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct FileTreePanel: View {
     let model: FileTreeModel
@@ -61,6 +62,17 @@ struct FileTreePanel: View {
     }
 }
 
+/// File management drops belong to Issue #5, not Finder's ordinary opener.
+/// This exact row is a forbidden target until copy/move is implemented; a
+/// rejected operation cannot silently fall through to the window-level open.
+private struct UnavailableFileTreeDrop: DropDelegate {
+    func validateDrop(info: DropInfo) -> Bool { true }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .forbidden)
+    }
+    func performDrop(info: DropInfo) -> Bool { false }
+}
+
 /// The same SwiftUI rows, 22 pt layout and hierarchy lines as the Git tree.
 /// The tree stays viewport-sized; only long names scroll horizontally.
 private struct FileTreeScrollView: View {
@@ -89,6 +101,10 @@ private struct FileTreeScrollView: View {
                             isCurrentTarget: isCurrentTarget
                         )
                         .id(item.path)
+                        .onDrop(
+                            of: [UTType.fileURL.identifier],
+                            delegate: UnavailableFileTreeDrop()
+                        )
                     }
                 }
                 .padding(.bottom, 7)
@@ -161,6 +177,10 @@ private struct FileTreeRow: View {
                     .modifier(layout)
             }
             .contextMenu { rowMenu }
+        } else if isRemote {
+            // A remote POSIX path is not a Mac file URL, even when the same
+            // spelling happens to exist on disk here. Keep Copy Path only.
+            semanticRow.contextMenu { rowMenu }
         } else {
             semanticRow
                 .contextMenu { rowMenu }
