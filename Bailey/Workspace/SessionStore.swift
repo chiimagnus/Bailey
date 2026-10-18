@@ -23,6 +23,8 @@ struct SessionSnapshot: Codable {
             var historyKey: String?
             var customName: String?
             var contextSessionIndex: Int?
+            /// True only for a Mac file tab; absent in snapshots saved before P4.
+            var localFile: Bool? = nil
         }
 
         var customName: String?

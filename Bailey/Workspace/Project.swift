@@ -462,21 +462,29 @@ final class Project: nonisolated Identifiable {
     /// Opens `path` as a new file tab, reusing an existing tab for the
     /// same path. `editorState` seeds scroll/cursor state when restoring.
     func openFile(_ path: String, editorState: EditorState? = nil, inGroup groupID: UUID? = nil) {
-        // Capture the current directory context *before* selection moves to the
-        // new tab, so its panels track the tab the file was opened from. The
-        // same session decides which workspace the path belongs to, so the
-        // lookup below cannot reuse a tab from another machine.
+        openFile(path, backend: workspaceBackend, workspace: workspaceIdentity,
+                 editorState: editorState, inGroup: groupID)
+    }
+
+    /// Finder opens a Mac document regardless of the project's terminal machine.
+    func openLocalFile(_ path: String, inGroup groupID: UUID? = nil) {
+        openFile(path, backend: LocalWorkspaceBackend.shared, workspace: nil, inGroup: groupID)
+    }
+
+    private func openFile(
+        _ path: String, backend: WorkspaceBackend, workspace: String?,
+        editorState: EditorState? = nil, inGroup groupID: UUID? = nil
+    ) {
         let context = selectedSession
-        if let tab = findFileTab(path: path, workspace: workspaceIdentity) {
-            if selectedTabID == tab.id, let workspaceIdentity {
-                SSHHostWorkspaces.retryConnection(for: workspaceIdentity, path: path)
+        if let tab = findFileTab(path: path, workspace: workspace) {
+            if selectedTabID == tab.id, let workspace {
+                SSHHostWorkspaces.retryConnection(for: workspace, path: path)
             }
             selectedTabID = tab.id
             return
         }
         let file = FileTab(
-            path: path,
-            backend: workspaceBackend, workspaceIdentity: workspaceIdentity
+            path: path, backend: backend, workspaceIdentity: workspace
         )
         if let editorState {
             file.editorState = editorState
@@ -861,6 +869,7 @@ final class Project: nonisolated Identifiable {
     ) -> PaneTab {
         let tab = PaneTab(content: makeContent(
             from: snap.content,
+            localFile: snap.localFile == true,
             restoredHistory: snap.historyKey.flatMap { histories[$0] }
         ))
         tab.customName = snap.customName
@@ -870,6 +879,7 @@ final class Project: nonisolated Identifiable {
 
     private func makeContent(
         from snap: SessionSnapshot.ProjectSnapshot.ContentSnapshot,
+        localFile: Bool = false,
         restoredHistory: String? = nil
     ) -> PaneContent {
         switch snap {
@@ -877,8 +887,9 @@ final class Project: nonisolated Identifiable {
             return .session(makeSession(directory: workingDirectory, restoredHistory: restoredHistory))
         case .file(let path, let editorState):
             let file = FileTab(
-                path: path, backend: workspaceBackend,
-                workspaceIdentity: workspaceIdentity
+                path: path,
+                backend: localFile ? LocalWorkspaceBackend.shared : workspaceBackend,
+                workspaceIdentity: localFile ? nil : workspaceIdentity
             )
             if let editorState { file.editorState = editorState }
             return .file(file)

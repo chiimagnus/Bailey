@@ -242,12 +242,12 @@ final class WorkspaceIdentityTests: XCTestCase {
         XCTAssertTrue(reused === originalFile)
 
         XCTAssertTrue(manager.openExternalLocalItems([sibling]).isEmpty)
-        let other = try XCTUnwrap(manager.selectedProject)
-        XCTAssertFalse(other === pinned)
-        XCTAssertEqual(other.pinnedFile, sibling.path)
+        XCTAssertTrue(manager.selectedProject === pinned)
         XCTAssertEqual(pinned.pinnedFile, first.path)
         XCTAssertEqual(pinned.customName, "first.txt")
-        XCTAssertEqual(manager.projects.count, 2)
+        XCTAssertEqual(pinned.tabs.filter { $0.content.isFile }.count, 2)
+        XCTAssertEqual(pinned.selectedTab?.content.title, "sibling.txt")
+        XCTAssertEqual(manager.projects.count, 1)
     }
 
     func testFinderBatchOpensSameDirectoryIntoOneProjectAndKeepsLocalScope() async throws {
@@ -260,6 +260,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         try "b".write(to: second, atomically: true, encoding: .utf8)
         let manager = TerminalManager()
         defer { manager.windowClosed() }
+        manager.addLocalItems([folder])
         XCTAssertTrue(manager.openExternalLocalItems([first, second]).isEmpty)
         XCTAssertEqual(manager.projects.count, 1)
         let project = try XCTUnwrap(manager.selectedProject)
@@ -302,8 +303,9 @@ final class WorkspaceIdentityTests: XCTestCase {
         XCTAssertEqual(selected.selectedTab?.content.title, actual.lastPathComponent)
 
         XCTAssertTrue(manager.openExternalLocalItems([other]).isEmpty)
-        XCTAssertEqual(manager.selectedProject?.customDirectory, parent.path,
-                       "Path containment must not match app with apple")
+        XCTAssertTrue(manager.selectedProject === selected,
+                      "External paths cannot change which project was selected")
+        XCTAssertEqual(manager.selectedProject?.customDirectory, inner.path)
         XCTAssertEqual(manager.projects.count, 2)
     }
 
@@ -379,16 +381,100 @@ final class WorkspaceIdentityTests: XCTestCase {
         manager.selectedProjectID = remote.id
 
         XCTAssertTrue(manager.openExternalLocalItems([file]).isEmpty)
-        let local = try XCTUnwrap(manager.selectedProject)
-        XCTAssertFalse(local === remote)
-        XCTAssertNil(local.workspaceIdentity)
-        guard case .file(let openedFile) = try XCTUnwrap(local.selectedTab).content,
-              case .file(let remoteFile) = try XCTUnwrap(remote.selectedTab).content
+        XCTAssertTrue(manager.selectedProject === remote)
+        guard case .file(let openedFile) = try XCTUnwrap(remote.selectedTab).content,
+              case .file(let remoteFile) = try XCTUnwrap(remote.tabs.first).content
         else { return XCTFail("Both targets must stay separate") }
         XCTAssertNil(openedFile.workspaceIdentity)
         XCTAssertNotNil(remoteFile.workspaceIdentity)
-        XCTAssertEqual(manager.projects.count, 2)
+        XCTAssertEqual(remote.tabs.count, 2)
+        XCTAssertEqual(manager.projects.count, 1)
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "mac")
+    }
+
+    func testFinderNewFileUsesSelectedProjectEvenOutsideItsRoot() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let aRoot = root.appendingPathComponent("A")
+        let bRoot = root.appendingPathComponent("B")
+        let outside = root.appendingPathComponent("outside")
+        for directory in [aRoot, bRoot, outside] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fromA = aRoot.appendingPathComponent("source.swift")
+        let fromOutside = outside.appendingPathComponent("other.swift")
+        let ownedByA = outside.appendingPathComponent("owned-by-a.swift")
+        try "in A".write(to: fromA, atomically: true, encoding: .utf8)
+        try "outside".write(to: fromOutside, atomically: true, encoding: .utf8)
+        try "A buffer".write(to: ownedByA, atomically: true, encoding: .utf8)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([aRoot, bRoot])
+        let selected = try XCTUnwrap(manager.selectedProject)
+        XCTAssertEqual(selected.customDirectory, bRoot.path)
+        XCTAssertTrue(manager.openExternalLocalItems([fromA, fromOutside]).isEmpty)
+        XCTAssertTrue(manager.selectedProject === selected)
+        XCTAssertEqual(manager.projects.count, 2)
+        XCTAssertEqual(selected.customDirectory, bRoot.path)
+        XCTAssertNil(selected.pinnedFile)
+        XCTAssertEqual(selected.tabs.filter { $0.content.isFile }.count, 2)
+        guard case .file(let file) = try XCTUnwrap(selected.selectedTab).content else {
+            return XCTFail("Expected the second file in the selected project")
+        }
+        try await file.waitForText()
+        XCTAssertEqual(file.text, "outside")
+
+        // A owns the already-open file regardless of its location, even while B is selected.
+        let a = try XCTUnwrap(manager.projects.first { $0.customDirectory == aRoot.path })
+        a.openFile(ownedByA.path)
+        let original = try XCTUnwrap(a.selectedTab)
+        manager.selectedProjectID = selected.id
+        XCTAssertTrue(manager.openExternalLocalItems([ownedByA]).isEmpty)
+        XCTAssertTrue(manager.selectedProject === a)
+        XCTAssertTrue(a.selectedTab === original)
+        XCTAssertEqual(selected.tabs.count, 2)
+    }
+
+    func testFinderFileDoesNotCreateProjectWithoutExplicitFolder() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("untitled.swift")
+        try "hello".write(to: file, atomically: true, encoding: .utf8)
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+
+        XCTAssertEqual(manager.openExternalLocalItems([file]), [file])
+        XCTAssertTrue(manager.projects.isEmpty)
+        XCTAssertNil(manager.selectedProject)
+    }
+
+    func testFinderMacFileInSSHProjectUsesLocalBackend() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("same.swift")
+        try "mac disk".write(to: file, atomically: true, encoding: .utf8)
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        let remote = Project(fallbackName: "remote", workspaceConfiguration: .standard)
+        remote.sshHost = "invalid-p4-fixture"
+        remote.customDirectory = "/remote/source"
+        remote.openFile(file.path)
+        manager.projects.append(remote)
+        manager.selectedProjectID = remote.id
+        XCTAssertTrue(manager.openExternalLocalItems([file]).isEmpty)
+        XCTAssertEqual(manager.projects.count, 1)
+        XCTAssertTrue(manager.selectedProject === remote)
+        let macTabs = remote.tabs.compactMap { tab -> FileTab? in
+            guard case .file(let file) = tab.content, file.workspaceIdentity == nil else { return nil }
+            return file
+        }
+        let local = try XCTUnwrap(macTabs.first)
+        try await local.waitForText()
+        XCTAssertEqual(local.text, "mac disk")
+        XCTAssertEqual(macTabs.count, 1)
     }
 
     func testTerminalManagerCreatesFileInSelectedLocalProject() async throws {

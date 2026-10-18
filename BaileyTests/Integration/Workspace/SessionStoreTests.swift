@@ -87,6 +87,49 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(restored.groups.flatMap(\.items).count, 2)
     }
 
+    func testMacFileInSSHProjectRestoresFromMacAndLegacyRemoteTabKeepsItsMachine() async throws {
+        typealias Snapshot = SessionSnapshot.ProjectSnapshot
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("same.swift")
+        try "Mac bytes".write(to: path, atomically: true, encoding: .utf8)
+
+        let mac = Snapshot.TabSnapshot(
+            content: .file(path: path.path, editorState: EditorState(selectionLocation: 3)),
+            historyKey: nil, customName: "Mac", contextSessionIndex: nil,
+            localFile: true
+        )
+        let json = try JSONEncoder().encode(mac)
+        let decoded = try JSONDecoder().decode(Snapshot.TabSnapshot.self, from: json)
+        XCTAssertEqual(decoded.localFile, true)
+
+        let project = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
+        project.sshHost = "invalid-p4-snapshot"
+        let tab = project.restoreTab(from: decoded)
+        guard case .file(let restoredMac) = tab.content else {
+            return XCTFail("Restored file must be a native FileTab")
+        }
+        XCTAssertNil(restoredMac.workspaceIdentity)
+        try await restoredMac.waitForText()
+        XCTAssertEqual(restoredMac.text, "Mac bytes")
+        XCTAssertEqual(restoredMac.editorState.selectionLocation, 3)
+
+        // A snapshot from before P4 has no localFile key. Preserve SSH identity.
+        var legacyObject = try XCTUnwrap(JSONSerialization.jsonObject(with: json) as? [String: Any])
+        legacyObject.removeValue(forKey: "localFile")
+        let legacy = try JSONDecoder().decode(
+            Snapshot.TabSnapshot.self, from: JSONSerialization.data(withJSONObject: legacyObject)
+        )
+        XCTAssertNil(legacy.localFile)
+        let remoteTab = project.restoreTab(from: legacy)
+        guard case .file(let remote) = remoteTab.content else {
+            return XCTFail("Legacy remote file tab must be restored")
+        }
+        XCTAssertEqual(remote.workspaceIdentity, "ssh:invalid-p4-snapshot")
+        XCTAssertTrue(remote !== restoredMac)
+    }
+
     func testSavedHistoryKeysPairWithSidecarAndOrphansAreCleared() throws {
         XCTAssertTrue(BaileyInstanceMode.isIsolated)
         let previousWindows = SessionStore.load()

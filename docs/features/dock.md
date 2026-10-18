@@ -20,7 +20,7 @@
 
 主窗口由 `WindowRootView` 的 `TerminalManager` 协调。`.focusedSceneValue(\.baileyManager, manager)` 和菜单中的 `@FocusedValue` 连接当前窗口；新增菜单动作要核对双窗口焦点切换。
 
-系统从 Finder／Dock 交给 Bailey 的本机文件请求，先检查所有已挂载窗口内已有的**本机文件标签**：存在时激活原窗口，不创建第二份可能写回同一文件的编辑缓冲。其它文件优先实际接收的主窗口；无窗口时走已有 `WindowGroup` 开窗能力。多窗口恢复尚未就绪时只在恢复完成后消费一次，避免把第二窗口的文件提前打开到第一窗口。原 Finder 文件夹 Service 保持其「添加目录项目」语义。
+系统从 Finder／Dock 交给 Bailey 的本机文件请求，先检查所有窗口内已有的**本机文件标签**，即使标签属于 SSH 项目也按文件自身的机器身份判断：存在时激活原窗口／原项目／原标签，不制造第二份可写缓冲。否则在实际接收窗口的**当前项目**中新建本机标签，项目目录范围不限制能打开的文件；没有项目时不自动创建项目。恢复中的窗口先完成附着再处理文件；原 Finder 文件夹 Service 保留添加目录项目的语义。
 
 Finder 的 `fileURL` 拖放按接收区域分流：空工作区、普通编辑／Diff、顶部工作标签栏、空停靠组及 Git 面板为**打开或复用文件标签**；每个分屏的顶部标签栏、空组内容区及普通编辑／Diff／Git／浏览器工具栏区域锁定实际接收的 `DockGroup`，新文件在该组建立标签（含空组），已打开的文件仍激活原标签而不强制搬组；Projects 面板为**手动添加本机文件／目录项目**；Files 面板则依据行／根标题／留白准确把文件或目录**复制进目标文件夹**，不额外打开 FileTab。原生 WebKit 正文自行处理网页文件上传，Ghostty 终端正文只处理本机 Shell 路径文本，**两者上方都不挂通用 Drop**；浏览器工具栏可打开文件。唯一的 Finder `NSItemProvider<NSURL>` 异步转换由 `FinderWindowDrop.receive` 持有，再交给相应动作；始终绑定触发时的 `TerminalManager` 和 `NSWindow`，不能因延迟加载重定向到另一窗口。内部 Dock 标签移动只走 `DockTabDragCoordinator`，不伪装 Finder 文件 URL。
 

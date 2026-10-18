@@ -212,8 +212,8 @@ final class TerminalManager {
         }
     }
 
-    /// Finder/Open With means open a local file, not create one pinned project
-    /// per file as the explicit Add Files action does.
+    /// Finder and the Open File picker reuse a Mac buffer in this window;
+    /// new files belong to the current project, never to their parent folder.
     @discardableResult
     func openExternalLocalItems(
         _ urls: [URL], destination: (projectID: UUID, groupID: UUID)? = nil
@@ -221,8 +221,6 @@ final class TerminalManager {
         typealias Item = (url: URL, path: String, resolved: String, isDirectory: Bool)
         var items: [Item] = []
         var rejected: [URL] = []
-        let fileManager = FileManager.default
-
         for url in urls {
             guard url.isFileURL, url.host == nil || url.host == "localhost" else {
                 rejected.append(url)
@@ -230,108 +228,63 @@ final class TerminalManager {
             }
             let path = url.standardizedFileURL.path
             var isDirectory: ObjCBool = false
-            guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory),
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
                   !NSWorkspace.shared.isFilePackage(atPath: path)
             else {
                 rejected.append(url)
                 continue
             }
             items.append((
-                url: url, path: path,
-                resolved: URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path,
+                url: url, path: path, resolved: Self.resolvedLocalPath(path),
                 isDirectory: isDirectory.boolValue
             ))
         }
 
-        // Count different files, not duplicate drag payloads.
-        var filesByParent: [String: Set<String>] = [:]
-        let explicitDirectories = items.filter(\.isDirectory)
-        for item in items where !item.isDirectory {
-            let parent = (item.resolved as NSString).deletingLastPathComponent
-            filesByParent[parent, default: []].insert(item.resolved)
+        // Directory additions are explicit. They never change the target for
+        // new files if this batch began in an existing project.
+        let originalProject = selectedProject
+        for item in items where item.isDirectory {
+            addLocalItems([URL(fileURLWithPath: item.path, isDirectory: true)])
         }
+        let targetProject = originalProject ?? selectedProject
 
-        for item in items {
-            if item.isDirectory {
-                addLocalItems([URL(fileURLWithPath: item.path, isDirectory: true)])
-                continue
-            }
-
-            // A file already being edited must keep its original native buffer,
-            // even when the new Finder spelling uses a symlink to the same path.
-            if let existing = projects.first(where: { project in
-                project.sshHost == nil && project.tabs.contains { tab in
+        for item in items where !item.isDirectory {
+            let existing = projects.lazy.compactMap { project -> (Project, FileTab)? in
+                for tab in project.tabs {
                     guard case .file(let file) = tab.content,
-                          file.workspaceIdentity == nil else { return false }
-                    return Self.resolvedLocalPath(file.path) == item.resolved
+                          file.workspaceIdentity == nil,
+                          Self.resolvedLocalPath(file.path) == item.resolved
+                    else { continue }
+                    return (project, file)
                 }
-            }), let tab = existing.tabs.first(where: { tab in
-                guard case .file(let file) = tab.content,
-                      file.workspaceIdentity == nil else { return false }
-                return Self.resolvedLocalPath(file.path) == item.resolved
-            }), case .file(let file) = tab.content {
-                selectedProjectID = existing.id
-                existing.openFile(file.path)
+                return nil
+            }.first
+            if let (project, file) = existing {
+                selectedProjectID = project.id
+                project.openLocalFile(file.path)
                 continue
             }
 
-            // A pinned single-file project is not a general directory project.
-            let containing = projects.compactMap { project -> (project: Project, root: String)? in
-                guard project.sshHost == nil, project.workspaceIdentity == nil,
-                      project.pinnedFile == nil,
-                      let root = project.customDirectory ?? project.panelContext?.cwd
-                else { return nil }
-                let resolved = Self.resolvedLocalPath(root)
-                guard Self.contains(path: item.resolved, in: resolved) else { return nil }
-                return (project, resolved)
-            }.max { $0.root.count < $1.root.count }
-
-            if let containing {
-                selectedProjectID = containing.project.id
-                containing.project.openFile(
-                    item.path,
-                    inGroup: containing.project.id == destination?.projectID ? destination?.groupID : nil
-                )
-                continue
-            }
-
-            let explicitlySelected = explicitDirectories
-                .filter { Self.contains(path: item.resolved, in: $0.resolved) }
-                .max { $0.resolved.count < $1.resolved.count }
-            if let explicitlySelected {
-                addLocalItems([URL(fileURLWithPath: explicitlySelected.path, isDirectory: true)])
-                selectedProject?.openFile(item.path)
-            } else {
-                let parent = (item.resolved as NSString).deletingLastPathComponent
-                if (filesByParent[parent]?.count ?? 0) > 1 {
-                    let directory = (item.path as NSString).deletingLastPathComponent
-                    addLocalItems([URL(fileURLWithPath: directory, isDirectory: true)])
-                    selectedProject?.openFile(item.path)
-                } else {
-                    addLocalItems([URL(fileURLWithPath: item.path)])
-                }
-            }
-
-            // A file can disappear between validation and project creation.
-            if !projects.contains(where: { project in
-                project.sshHost == nil && project.tabs.contains { tab in
-                    guard case .file(let file) = tab.content,
-                          file.workspaceIdentity == nil else { return false }
-                    return Self.resolvedLocalPath(file.path) == item.resolved
-                }
-            }) {
+            guard let targetProject else {
                 rejected.append(item.url)
+                continue
             }
+            if let destination, targetProject.id == destination.projectID,
+               targetProject.dock.root.group(id: destination.groupID) == nil {
+                rejected.append(item.url)
+                continue
+            }
+            selectedProjectID = targetProject.id
+            targetProject.openLocalFile(
+                item.path,
+                inGroup: targetProject.id == destination?.projectID ? destination?.groupID : nil
+            )
         }
         return rejected
     }
 
     private static func resolvedLocalPath(_ path: String) -> String {
         URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
-    }
-
-    private static func contains(path: String, in directory: String) -> Bool {
-        path == directory || path.hasPrefix(directory == "/" ? "/" : directory + "/")
     }
 
     func chooseLocalItems() {
@@ -478,7 +431,7 @@ final class TerminalManager {
             })
             let awaitingOwner = registry.contains { manager in
                 manager.window == nil && manager.projects.contains { project in
-                    project.sshHost == nil && project.tabs.contains { tab in
+                    project.tabs.contains { tab in
                         guard case .file(let file) = tab.content,
                               file.workspaceIdentity == nil else { return false }
                         return requestedPaths.contains(resolvedLocalPath(file.path))
@@ -497,8 +450,7 @@ final class TerminalManager {
                 request.completion(false)
                 continue
             }
-            // Group by final owning window, rather than process each file as a
-            // separate batch (that would create N pinned projects on multi-open).
+            // Group by the actual owning window, including interleaved existing files.
             var groups: [(manager: TerminalManager, urls: [URL], lastIndex: Int)] = []
             for (index, url) in request.urls.enumerated() {
                 let resolved = url.isFileURL
@@ -506,7 +458,7 @@ final class TerminalManager {
                 let alreadyOpen = resolved.flatMap { path in
                     registry.first { manager in
                         manager.projects.contains { project in
-                            project.sshHost == nil && project.tabs.contains { tab in
+                            project.tabs.contains { tab in
                                 guard case .file(let file) = tab.content,
                                       file.workspaceIdentity == nil else { return false }
                                 return resolvedLocalPath(file.path) == path
@@ -1130,12 +1082,16 @@ final class TerminalManager {
                         histories[key] = history
                         historyKey = key
                     }
+                    let isLocalFile: Bool? = if case .file(let file) = tab.content {
+                        file.workspaceIdentity == nil ? true : nil
+                    } else { nil }
                     return (tab, ProjectSnapshot.TabSnapshot(
                         content: content, historyKey: historyKey,
                         customName: tab.customName,
                         contextSessionIndex: tab.contextSession.flatMap { context in
                             projectSessions.firstIndex { $0.id == context.id }
-                        }
+                        },
+                        localFile: isLocalFile
                     ))
                 }
                 let tabs = savedTabs.map(\.1)
@@ -1159,7 +1115,7 @@ final class TerminalManager {
     private static func isSnapshotable(_ content: PaneContent, sshHost: String?) -> Bool {
         let identity = sshHost.map { "ssh:" + $0 }
         switch content {
-        case .file(let file): return file.workspaceIdentity == identity
+        case .file(let file): return file.workspaceIdentity == nil || file.workspaceIdentity == identity
         case .diff(let diff): return diff.workspaceIdentity == identity
         case .session, .browser: return true
         }

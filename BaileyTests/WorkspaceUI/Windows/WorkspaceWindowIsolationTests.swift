@@ -36,6 +36,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
+        manager.addLocalItems([root])
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 700, height: 440),
             styleMask: [.titled], backing: .buffered, defer: false
@@ -196,12 +197,13 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
                        "Empty groups must survive the first Finder tab insertion")
         XCTAssertEqual(other.tabs.count, 0)
 
-        // The Finder drop belongs to one visible group, but a file already
-        // owned by another local directory project keeps that project identity.
+        // An unopened file under B still opens in the actual receiving A group.
         TerminalManager.openExternalFiles([otherFile], preferred: manager, destination: destination)
-        XCTAssertEqual(first.tabs.count, 1)
-        XCTAssertEqual(other.tabs.count, 1)
-        XCTAssertEqual(manager.selectedProjectID, other.id)
+        XCTAssertEqual(first.tabs.count, 2)
+        XCTAssertEqual(other.tabs.count, 0)
+        XCTAssertEqual(manager.selectedProjectID, first.id)
+        let secondTab = try XCTUnwrap(first.selectedTab)
+        XCTAssertEqual(first.dock.group(containing: .tab(secondTab.id))?.id, empty.id)
         XCTAssertEqual(first.dock.group(containing: .tab(firstTab.id))?.id, empty.id)
         XCTAssertEqual(try String(contentsOf: otherFile, encoding: .utf8), "other")
     }
@@ -249,6 +251,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
+        manager.addLocalItems([folder])
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 750, height: 490),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -386,6 +389,51 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "original")
     }
 
+    func testFinderReusesMacFileInsideRemoteProjectInAnotherWindow() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("same.swift")
+        try "local bytes".write(to: file, atomically: true, encoding: .utf8)
+
+        let a = TerminalManager()
+        let b = TerminalManager()
+        defer { a.windowClosed(); b.windowClosed() }
+        a.addLocalItems([folder])
+        let remote = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
+        remote.sshHost = "invalid-p4-cross-window"
+        remote.customDirectory = "/remote/workspace"
+        b.projects.append(remote)
+        b.selectedProjectID = remote.id
+        XCTAssertTrue(b.openExternalLocalItems([file]).isEmpty)
+        let originalTab = try XCTUnwrap(remote.selectedTab)
+        guard case .file(let originalFile) = originalTab.content else {
+            return XCTFail("Expected Mac file in SSH project")
+        }
+        XCTAssertNil(originalFile.workspaceIdentity)
+
+        let windowA = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 340),
+                               styleMask: [.titled], backing: .buffered, defer: false)
+        let windowB = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 340),
+                               styleMask: [.titled], backing: .buffered, defer: false)
+        windowA.isReleasedWhenClosed = false
+        windowB.isReleasedWhenClosed = false
+        defer { windowA.close(); windowB.close() }
+        a.attach(to: windowA)
+        b.attach(to: windowB)
+
+        var handled: Bool?
+        TerminalManager.openExternalFiles([file], preferred: a) { handled = $0 }
+        XCTAssertEqual(handled, true)
+        XCTAssertTrue(b.selectedProject === remote)
+        XCTAssertTrue(remote.selectedTab === originalTab)
+        XCTAssertEqual(remote.tabs.filter { $0.content.isFile }.count, 1)
+        XCTAssertEqual(a.selectedProject?.tabs.filter { $0.content.isFile }.count, 0)
+        try await originalFile.waitForText()
+        XCTAssertEqual(originalFile.text, "local bytes")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "local bytes")
+    }
+
     func testExternalOpenDefersUntilAllCreatedWindowsHaveAttached() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -445,7 +493,9 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let a = TerminalManager()
         let b = TerminalManager()
         defer { a.windowClosed(); b.windowClosed() }
-        b.addLocalItems([opened])
+        a.addLocalItems([local])
+        b.addLocalItems([existing])
+        b.openFile(opened.path)
         let bTab = try XCTUnwrap(b.selectedProject?.selectedTab)
         let windowA = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 510, height: 350),
                                styleMask: [.titled], backing: .buffered, defer: false)
@@ -460,7 +510,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         var result: Bool?
         TerminalManager.openExternalFiles([first, opened, last], preferred: a) { result = $0 }
         XCTAssertEqual(result, true)
-        XCTAssertEqual(a.projects.count, 1, "Separated entries in one batch share the same directory project")
+        XCTAssertEqual(a.projects.count, 1, "New files stay in A even when B owns the interleaved open file")
         let aProject = try XCTUnwrap(a.selectedProject)
         XCTAssertNil(aProject.pinnedFile)
         XCTAssertEqual(aProject.customDirectory, local.path)
@@ -514,6 +564,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("unrelated.txt")
         try "fixture".write(to: url, atomically: true, encoding: .utf8)
+        receiver.addLocalItems([root])
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 430, height: 320),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
