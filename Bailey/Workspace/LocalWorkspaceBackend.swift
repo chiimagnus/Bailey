@@ -7,6 +7,14 @@ nonisolated struct LocalFileImportResult: Sendable {
     let failures: [String]
 }
 
+/// Absolute, normalized POSIX paths; the filesystem root is its own separator.
+nonisolated enum LocalPathScope {
+    static func contains(_ path: String, in directory: String) -> Bool {
+        guard !directory.isEmpty else { return false }
+        return path == directory || path.hasPrefix(directory.hasSuffix("/") ? directory : directory + "/")
+    }
+}
+
 /// Mutable pipe storage for one reader thread each, so a child process can
 /// never deadlock on a full pipe while we wait for it to exit.
 private nonisolated final class RunPipeData: @unchecked Sendable {
@@ -132,8 +140,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                 original.lastPathComponent, isDirectory: sourceIsDirectory.boolValue
             )
             let sourceReal = original.resolvingSymlinksInPath().path
-            if sourceIsDirectory.boolValue,
-               (targetReal == sourceReal || targetReal.hasPrefix(sourceReal + "/")) {
+            if sourceIsDirectory.boolValue, LocalPathScope.contains(targetReal, in: sourceReal) {
                 failures.append(String(
                     localized: "Cannot copy \(original.lastPathComponent) into itself or a subfolder.",
                     table: "Workspace"

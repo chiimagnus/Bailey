@@ -111,13 +111,13 @@ final class FileTreeModel {
         let targetRoot = URL(fileURLWithPath: root, isDirectory: true).standardizedFileURL.path
         guard !sources.isEmpty, !root.isEmpty, scope == "local",
               backend is LocalWorkspaceBackend, isCurrentTarget(),
-              requested == targetRoot || requested.hasPrefix(targetRoot + "/")
+              LocalPathScope.contains(requested, in: targetRoot)
         else { return nil }
         // An expanded symlink can point outside the project. Never turn a
         // drop inside this tree into an unannounced write to that other root.
         let resolvedRoot = URL(fileURLWithPath: root).resolvingSymlinksInPath().path
         let resolvedTarget = URL(fileURLWithPath: requested).resolvingSymlinksInPath().path
-        guard resolvedTarget == resolvedRoot || resolvedTarget.hasPrefix(resolvedRoot + "/") else {
+        guard LocalPathScope.contains(resolvedTarget, in: resolvedRoot) else {
             return nil
         }
         let result = await LocalWorkspaceBackend.shared.copyFromFinder(sources, into: requested)

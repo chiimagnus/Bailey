@@ -69,6 +69,42 @@ final class FileTreeTests: XCTestCase {
         try? FileManager.default.removeItem(at: fixture)
     }
 
+    func testFinderImportDirectoryBoundaryIncludesRootButNotSiblingNames() {
+        let root = "/"
+        XCTAssertTrue(LocalPathScope.contains(root, in: root))
+        XCTAssertTrue(LocalPathScope.contains("/tmp", in: root))
+        XCTAssertTrue(LocalPathScope.contains("/private/tmp/child.txt", in: root))
+        XCTAssertTrue(LocalPathScope.contains("/tmp/child", in: "/tmp"))
+        XCTAssertTrue(LocalPathScope.contains("/tmp", in: "/tmp"))
+        XCTAssertFalse(LocalPathScope.contains("/tmp-other", in: "/tmp"))
+        XCTAssertFalse(LocalPathScope.contains("/tmp/child", in: "/tmp/children"))
+        XCTAssertFalse(LocalPathScope.contains("/tmp", in: "/tmp/child"))
+        XCTAssertFalse(LocalPathScope.contains("tmp/child", in: "/"))
+        XCTAssertFalse(LocalPathScope.contains("/", in: "/tmp"))
+        XCTAssertFalse(LocalPathScope.contains("/tmp", in: ""))
+    }
+
+    func testFinderImportIntoSubdirectoryWhenWorkspaceRootIsSlash() async throws {
+        let sourceDir = fixture.appendingPathComponent("source")
+        let targetDir = fixture.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: sourceDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: targetDir, withIntermediateDirectories: true)
+        let source = sourceDir.appendingPathComponent("root-scope.txt")
+        let destination = targetDir.appendingPathComponent(source.lastPathComponent)
+        let data = Data("root-project-import".utf8)
+        try data.write(to: source)
+
+        let tree = FileTreeModel()
+        await tree.sync(root: "/", backend: backend)
+        let result = await tree.importFromFinder(
+            [source], into: targetDir.path, isCurrentTarget: { true }
+        )
+        XCTAssertEqual(result?.copied, [destination.path])
+        XCTAssertEqual(result?.failures, [])
+        XCTAssertEqual(try Data(contentsOf: destination), data)
+        XCTAssertEqual(try Data(contentsOf: source), data)
+    }
+
     func testFinderDropCopiesFilesAndDirectoriesIntoExactLocalTargetAndRefreshesTree() async throws {
         let sources = fixture.appendingPathComponent("source")
         let workspace = fixture.appendingPathComponent("workspace")

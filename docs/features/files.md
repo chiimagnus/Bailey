@@ -30,6 +30,6 @@ Files、Git 工作区、暂存区和提交历史共用同一套树语义。本�
 
 ## 验证
 
-`FileTreeTests` 检查展开即时反馈、首次同层目录批量查询、按需复用、批量刷新、断线保留、目录创建、重命名、范围与失败；`SSHFileTreeLiveTests` 验证实际 Windows SSH 批量读取、失败隔离及文件树冷开／热展开／刷新时的 SSH 请求次数；`TreeRowHitTestingTests` 验证真实行命中；`FileTreeTests` 覆盖真实复制字节、文件夹/子目录、中文、同名冲突、原子失败不留部分目录、并发唯一发布、失效符号链接及超出根路径的禁放。签名测试 App 的 Finder 实际拖放需要逐一检查目录行、文件行、根标题、留白、复制后的磁盘文件和 Files 刷新、冲突 Sheet、项目及文件标签数量，不能拿 `.copy` 指针反馈当复制成功。共享组件改变时同时验收 Files、Git 工作区、暂存区及历史树，包含窄面板、大字体、长名称、点击边缘、右侧动作、键盘和无障碍。
+`FileTreeTests` 检查展开即时反馈、首次同层目录批量查询、按需复用、批量刷新、断线保留、目录创建、重命名、范围与失败；`SSHFileTreeLiveTests` 验证实际 Windows SSH 批量读取、失败隔离及文件树冷开／热展开／刷新时的 SSH 请求次数；`TreeRowHitTestingTests` 验证真实行命中；`FileTreeTests` 覆盖真实复制字节、文件夹/子目录、中文、同名冲突、原子失败不留部分目录、并发唯一发布、失效符号链接、超出根路径的禁放，以及 POSIX 根目录 `/`、相似前缀目录和禁止目录递归自复制。签名测试 App 的 Finder 实际拖放需要逐一检查目录行、文件行、根标题、留白、复制后的磁盘文件和 Files 刷新、冲突 Sheet、项目及文件标签数量，不能拿 `.copy` 指针反馈当复制成功。共享组件改变时同时验收 Files、Git 工作区、暂存区及历史树，包含窄面板、大字体、长名称、点击边缘、右侧动作、键盘和无障碍。
 
 实现入口：[FileTreeModel.swift](../../Bailey/Files/FileTreeModel.swift)、[TreeDisplayModel.swift](../../Bailey/Shared/Tree/TreeDisplayModel.swift)、[TreeRowStyle.swift](../../Bailey/Shared/Tree/TreeRowStyle.swift)。运行方式见 [testing.md](../testing.md)。
