@@ -458,91 +458,109 @@ final class PaneRetentionTests: XCTestCase {
                 .write(to: path, atomically: true, encoding: .utf8)
             return path
         }
-        let manager = TerminalManager()
-        defer { manager.windowClosed() }
-        manager.addLocalItems([paths[0]])
-        let project = try XCTUnwrap(manager.selectedProject)
-        for path in paths.dropFirst() { project.openFile(path.path) }
-        let tabs = project.tabs.map(\.id)
-        XCTAssertEqual(tabs.count, 5)
-        let groups = (0..<5).map { index in
-            DockSavedNode.group(DockSavedGroup(id: UUID(), items: [.tab(index)], selected: .tab(index)))
-        }
-        let layout = groups.dropFirst().reduce(groups[0]) { partial, group in
-            DockSavedNode.split(id: UUID(), axis: .horizontal, fraction: 0.5,
-                                first: partial, second: group)
-        }
-        project.dock.restore(layout, tabIDs: tabs)
-        let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: GitStatusModel()))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1_700, height: 650),
-                              styleMask: [.titled], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        defer { window.close() }
-        window.contentView = host
-        manager.attach(to: window)
-        window.orderFront(nil)
-        try await settle {
-            host.layoutSubtreeIfNeeded()
-            return project.tabs.allSatisfy { tab in
-                guard case .file(let file) = tab.content else { return false }
-                return (file.editorView as? NSScrollView)?.documentView is FocusReportingTextView
-            }
-        }
         var weakContents: [WeakNativeContent] = []
-        for tab in project.tabs {
-            guard case .file(let file) = tab.content else { continue }
-            let editor = try XCTUnwrap((file.editorView as? NSScrollView)?
-                .documentView as? FocusReportingTextView)
-            XCTAssertNotNil(editor.syntaxCoordinator)
-            weakContents.append(WeakNativeContent(file: file, editor: editor))
-        }
-        XCTAssertEqual(weakContents.count, 5)
-        let cachedScrollViews = project.tabs.compactMap { tab -> NSScrollView? in
-            guard case .file(let file) = tab.content else { return nil }
-            return file.editorView as? NSScrollView
-        }
-        XCTAssertEqual(cachedScrollViews.count, 5)
+        var secondWeakContents: [WeakNativeContent] = []
         do {
-            let selected = try XCTUnwrap(project.selectedTab)
-            guard case .file(let file) = selected.content else {
-                return XCTFail("Expected selected file")
+            let manager = TerminalManager()
+            defer { manager.windowClosed() }
+            manager.addLocalItems([paths[0]])
+            let project = try XCTUnwrap(manager.selectedProject)
+            for path in paths.dropFirst() { project.openFile(path.path) }
+            let tabs = project.tabs.map(\.id)
+            XCTAssertEqual(tabs.count, 5)
+            let groups = (0..<5).map { index in
+                DockSavedNode.group(DockSavedGroup(id: UUID(), items: [.tab(index)], selected: .tab(index)))
             }
-            let focusedEditor = try XCTUnwrap((file.editorView as? NSScrollView)?
-                .documentView as? FocusReportingTextView)
-            XCTAssertTrue(window.makeFirstResponder(focusedEditor))
-            XCTAssertTrue(window.firstResponder === focusedEditor)
-        }
-        project.closeFiles()
-        XCTAssertTrue(project.tabs.isEmpty)
-        XCTAssertTrue(cachedScrollViews.allSatisfy { $0.documentView == nil },
-                      "Actual tab closure must retire document views even when AppKit caches old scroll views")
-        try await settle {
-            host.layoutSubtreeIfNeeded()
-            return weakContents.allSatisfy { $0.file == nil && $0.editor == nil }
-        }
-        XCTAssertTrue(weakContents.allSatisfy { $0.file == nil && $0.editor == nil })
+            let layout = groups.dropFirst().reduce(groups[0]) { partial, group in
+                DockSavedNode.split(id: UUID(), axis: .horizontal, fraction: 0.5,
+                                    first: partial, second: group)
+            }
+            project.dock.restore(layout, tabIDs: tabs)
+            let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: GitStatusModel()))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1_700, height: 650),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.contentView = host
+            manager.attach(to: window)
+            window.orderFront(nil)
+            try await settle {
+                host.layoutSubtreeIfNeeded()
+                return project.tabs.allSatisfy { tab in
+                    guard case .file(let file) = tab.content else { return false }
+                    return (file.editorView as? NSScrollView)?.documentView is FocusReportingTextView
+                }
+            }
+            for tab in project.tabs {
+                guard case .file(let file) = tab.content else { continue }
+                let editor = try XCTUnwrap((file.editorView as? NSScrollView)?
+                    .documentView as? FocusReportingTextView)
+                XCTAssertNotNil(editor.syntaxCoordinator)
+                weakContents.append(WeakNativeContent(file: file, editor: editor))
+            }
+            XCTAssertEqual(weakContents.count, 5)
+            let cachedScrollViews = project.tabs.compactMap { tab -> NSScrollView? in
+                guard case .file(let file) = tab.content else { return nil }
+                return file.editorView as? NSScrollView
+            }
+            XCTAssertEqual(cachedScrollViews.count, 5)
+            do {
+                let selected = try XCTUnwrap(project.selectedTab)
+                guard case .file(let file) = selected.content else {
+                    return XCTFail("Expected selected file")
+                }
+                let focusedEditor = try XCTUnwrap((file.editorView as? NSScrollView)?
+                    .documentView as? FocusReportingTextView)
+                XCTAssertTrue(window.makeFirstResponder(focusedEditor))
+                XCTAssertTrue(window.firstResponder === focusedEditor)
+            }
+            project.closeFiles()
+            XCTAssertTrue(project.tabs.isEmpty)
+            XCTAssertTrue(cachedScrollViews.allSatisfy { $0.documentView == nil },
+                          "Actual tab closure must retire document views even when AppKit caches old scroll views")
+            try await settle { weakContents.allSatisfy { $0.file == nil } }
+            XCTAssertTrue(weakContents.allSatisfy { $0.editor?.syntaxCoordinator == nil },
+                          "An AppKit-cached native view must not keep its retired parser active")
 
-        // Closing the whole project is another semantic close; the window
-        // remains alive and AppKit may retain all five former scroll views.
-        for path in paths { project.openFile(path.path) }
-        XCTAssertEqual(project.tabs.count, 5)
-        project.dock.restore(layout, tabIDs: project.tabs.map(\.id))
-        try await settle {
-            host.layoutSubtreeIfNeeded()
-            return project.tabs.allSatisfy { tab in
-                guard case .file(let file) = tab.content else { return false }
-                return (file.editorView as? NSScrollView)?.documentView is FocusReportingTextView
+            // Closing the whole project is another semantic close; the window
+            // remains alive and AppKit may retain all five former scroll views.
+            for path in paths { project.openFile(path.path) }
+            XCTAssertEqual(project.tabs.count, 5)
+            project.dock.restore(layout, tabIDs: project.tabs.map(\.id))
+            try await settle {
+                host.layoutSubtreeIfNeeded()
+                return project.tabs.allSatisfy { tab in
+                    guard case .file(let file) = tab.content else { return false }
+                    return (file.editorView as? NSScrollView)?.documentView is FocusReportingTextView
+                }
             }
+            let projectScrollViews = project.tabs.compactMap { tab -> NSScrollView? in
+                guard case .file(let file) = tab.content else { return nil }
+                return file.editorView as? NSScrollView
+            }
+            XCTAssertEqual(projectScrollViews.count, 5)
+            for tab in project.tabs {
+                if case .file(let file) = tab.content,
+                   let editor = (file.editorView as? NSScrollView)?.documentView as? FocusReportingTextView {
+                    secondWeakContents.append(WeakNativeContent(file: file, editor: editor))
+                }
+            }
+            XCTAssertEqual(secondWeakContents.count, 5)
+            manager.close(project)
+            XCTAssertFalse(manager.projects.contains { $0 === project })
+            XCTAssertTrue(project.tabs.isEmpty, "Closing a project must release every owned tab")
+            XCTAssertTrue(projectScrollViews.allSatisfy { $0.documentView == nil },
+                          "Closing a project must retire native documents retained by cached AppKit views")
+            XCTAssertTrue(secondWeakContents.allSatisfy { $0.editor?.syntaxCoordinator == nil })
         }
-        let projectScrollViews = project.tabs.compactMap { tab -> NSScrollView? in
-            guard case .file(let file) = tab.content else { return nil }
-            return file.editorView as? NSScrollView
+        // AppKit may retain a detached text view while the hosting window is alive.
+        // After its real owners are torn down, neither generation may survive.
+        try await settle {
+            (weakContents + secondWeakContents).allSatisfy { $0.file == nil && $0.editor == nil }
         }
-        XCTAssertEqual(projectScrollViews.count, 5)
-        manager.close(project)
-        XCTAssertFalse(manager.projects.contains { $0 === project })
-        XCTAssertTrue(projectScrollViews.allSatisfy { $0.documentView == nil },
-                      "Closing a project must retire native documents retained by cached AppKit views")
+        XCTAssertTrue((weakContents + secondWeakContents).allSatisfy {
+            $0.file == nil && $0.editor == nil
+        })
     }
 
     func testFiveConcurrentNativeEditorsReleaseDocumentAndParsingTasks() async throws {

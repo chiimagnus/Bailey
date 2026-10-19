@@ -429,6 +429,9 @@ final class TerminalManager {
         guard let index = projects.firstIndex(where: { $0.id == project.id }) else { return }
         projects.remove(at: index)
         project.onSnapshotChange = nil
+        // A dismissed SwiftUI host may still cache this Project; its retired
+        // editors must no longer be owned by the removed project's tab array.
+        project.tabs.removeAll()
         if selectedProjectID == project.id {
             let neighbor = min(index, projects.count - 1)
             selectedProjectID = neighbor >= 0 ? projects[neighbor].id : nil

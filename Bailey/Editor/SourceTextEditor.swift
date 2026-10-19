@@ -285,7 +285,7 @@ struct SourceTextEditor: NSViewRepresentable {
                 NotificationCenter.default.removeObserver(scrollObserver)
                 self.scrollObserver = nil
             }
-            if let editor = scrollView?.documentView as? FocusReportingTextView {
+            if let editor = textView as? FocusReportingTextView {
                 editor.syntaxCoordinator?.deactivate()
                 editor.syntaxCoordinator = nil
                 editor.delegate = nil
