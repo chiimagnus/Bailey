@@ -33,13 +33,13 @@
 
 - 任务：`P1-T5`
 - 严重级别：`Low`
-- 状态：`Open`
+- 状态：`Resolved`
 - 位置：`Bailey/UI/WorkspaceDockView.swift:467-470`
 - 摘要：`独立优化 Release 反复停靠标签后，SwiftUI 原生标签菜单存在约 3.5KiB 的 ContextMenuResponder 根引用环`
 - 风险：`在两次独立进程的真实 xcrun leaks 中重现约 31-32 对象的 ContextMenuResponder.AppKitMenuDelegate 与 ContextMenuResponder 强引用环，包含 pane-4.swift 的菜单字符串；当前未见 FileTab 或语法高亮对象被该链持有，尚不能确定 AppKit/SwiftUI 自身问题还是 Bailey 触发方式。单独 12 次右键取消出现的每次 32B _NSMenuIntelligentAssistantConfiguration 与此不同，只有小量资源影响证据。`
 - 预期修复：`先用真实可见菜单／取消、Close Files、Dock 重挂载及短/长静置对照复现条件；通过 Instruments 持久对象反查实际分配与平台链路。仅在证实 Bailey 自有闭包或对象所有权导致环后从真正所有者修复，不为约 3.5KiB 的框架保留链直接重写原生菜单或破坏 UI/UX。`
 - 验证：`复用隔离 Release 原生 GUI，分别测试 12 次菜单开关、执行 Close Files、关闭后重挂载五分屏及应用失焦；leaks/heap/vmmap/Allocations 每阶段取证，重复多个 PID，确认是否累积且文件内容不变；必要时按 AGENTS 执行完整 Debug/Release XCTest 与严格签名。`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`macOS 27.2 SwiftUI 框架复现：独立 TabDockProbe.app（dev.local.BaileyTabDockF08），真实右键 Close Files、销毁并重新创建标签后，leaks PID15366 报 29 个对象、3.08KiB 的 ContextMenuResponder.AppKitMenuDelegate → ContextMenuResponder → delegate 自循环（tabdock-stage2-pane-1.swift.leaks.txt；静置复核 f08-final-idle-15366.txt）。真实隔离 Release Bailey PID13946 的 12 次菜单取消及 Close Files 只有 Apple 每次约32B 的菜单配置对象；重新打开两个文件后，同构自循环为 28 个对象、3.23KiB（real-before-dock-drag.leaks.txt），未包含 FileTab/语法协调器，5 个夹具 SHA-256 不变。属系统 SwiftUI 内部实现，当前产品行为和所有权无需改动；接受此 macOS 27.2 小额框架残留，不宣称 macOS 自身泄漏已被修复。`
 
 
 ## 发现 F-07
@@ -170,19 +170,19 @@
 
 ## Gate（是否允许进入下一阶段）
 
-- 结论：**No-Go（整个 P1 尚不能无保留完成）**；F-01～F-05、F-07 均已 Resolved，**F-06、F-08 Open**。最终生产源码 7aa3633 的 Debug 与优化 Release 授权 Windows SSH 全量 XCTest 分别 **467/467、467/467、均无失败或跳过**；Debug 和 Release 构建、严格个人签名及新版正式整包安装已通过。
-- 理由：独立 Release 已有两个同 PID 的真实五分屏挂载／关闭 Allocations 周期，均核对五个文件全文、关闭对象释放和 120.1/120.0 MiB 物理足迹基线；目前数据未显示两轮累积泄漏，但第三轮只恢复四分屏，距离五轮以上真正五分屏长时曲线仍有差距。另有未归因的约 3.5KiB SwiftUI 菜单引用环、F-06 实际内容 FPS 不可直接由 CADisplayLink 证明，以及未具备的实体环境；P1-T5 继续 in_progress。
+- 结论：**No-Go（整个 P1 尚不能无保留完成）**；F-01～F-05、F-07 和 **F-08** 均已 Resolved，仅 **F-06 Open**。F-08 是经过独立原生 SwiftUI 对照确认的系统框架引用环，按本轮授权接受其小额残留，不等于 Apple 已修复。最终生产源码 7aa3633 的 Debug 与优化 Release 授权 Windows SSH 全量 XCTest 分别 **467/467、467/467、均无失败或跳过**；Debug 和 Release 构建、严格个人签名及新版正式整包安装已通过。
+- 理由：真实 Release 两轮五分屏关闭后的物理足迹基线为 120.1/120.0 MiB，自有 FileTab／高亮对象归零；尚未完成五轮完整五分屏长期曲线，**用户本轮明确暂时接受该内存补验缺口**，不将其冒充已测。F-08 引用环已在无 Bailey 依赖的 SwiftUI Dock 对照程序重现，判断为框架自身循环引用，产品无需为此替换原生菜单。F-06 实际内容 FPS 和部分实体环境仍未核销；P1-T5 继续 in_progress。
 
 ## 本轮补充核查（2026-10-20）
 
 - **F-06 帧率合同：**`FPSCounter` 只计算 CADisplayLink 回调；用同一份 Instruments `Animation Hitches` 导出的 `hitches-frame-lifetimes` 又确认三种 surface ID 合计 1,982 行，缺少 Bailey 单个编辑器实际新内容帧的归属字段。显示表面频率不可用来关闭本 finding；保持 Open。
-- **F-08 根链对照：**独立使用 macOS 27.2 SwiftUI + `NSHostingView`/WindowGroup 构造原生 `.contextMenu`，确认单次右键菜单显示、Escape 关闭及 `leaks` 基线/结束均为 0。12 次循环因共享 Space 前台身份变化中止；单次对照不能归因 3.5KiB 框架引用环。保留 Low/Open，不改 Bailey 菜单和原生编辑器，详见新增 `evidence-p1.md` 段落。
+- **F-08 早期对照：**独立使用 macOS 27.2 SwiftUI + `NSHostingView`/WindowGroup 构造原生 `.contextMenu`，单次右键／Escape 和关闭后 `leaks` 为 0；当时重复操作受共享 Space 干扰、尚无法归因。**该中间结论已被本轮完整 TabDock 对照复现取代**，最终结果见 F-08 解决证据和 `evidence-p1.md` 最新小节。
 - **环境及副作用：**控制 App 单独使用 `dev.local.BaileyMenuProbeF08`，中间一次录制由后台任务 120s 超时结束，并非 Bailey 闪退。构建目录已被 `.gitignore` 忽略；本轮无正式 Bailey App 安装/重启、无远端推送或产品源码修改。已有双配置 467/467 测试证据继续有效，但本轮未重新声称全量执行；总体仍 No-Go。
 
 ## 最终状态与剩余风险
 
-- 当前状态：**6/8 findings Resolved，F-06、F-08 Open**；P1-T1～T4 completed，P1-T5 in_progress。新 Release 已于 2026-10-20 整包安装至 /Applications/Bailey.app 并严格验签，源包／安装包 executable SHA-256 均为 f791514a1f5ea74a1c48c1167ab0720212b5b6a82154c67c8924d4c7bbdb2d；用户正式 PID 20461 在安装前后不变，未重启，旧运行时仍可能使用旧代码。
-- 剩余风险：F-03／F-05 FileTab、编辑器、高亮对象退役的回归和两轮独立 Release GUI 已证明关闭文件后自有对象归零；AppKit 失焦前有短时原生视图缓存，不能误报 FileTab 泄漏。另见右键原生菜单固定增长 32B/次和两次 SwiftUI ContextMenuResponder 根引用环约 3.5KiB；当前无 FileTab 被该链持有的证据，须再区分框架问题和产品触发方式，不能通过改变 UI/UX 猜测修复。缺连续五轮完整五分屏的 Allocations、真实内容帧时间、macOS 15.6／CI26/触控板/屏幕组合、Windows 符号链接权限环境，故保留 No-Go。
+- 当前状态：**7/8 findings Resolved，仅 F-06 Open**；P1-T1～T4 completed，P1-T5 in_progress。2026-10-20 本轮仅使用隔离 Release／独立对照程序，没有修改或重启正式 Bailey，也没有推送。此前新 Release 的整包安装和验签记录保留在上文，其当时的 PID 与 SHA-256 属历史测量，不当作本轮重新验收。
+- 剩余风险：F-03／F-05 已证明关闭后自有 FileTab／解析器对象归零；AppKit 的短时原生视图缓存不能混称文件泄漏。F-08 原生菜单每次约 32B 配置对象，以及约 3KiB 的 SwiftUI `ContextMenuResponder` 框架自身循环引用**客观存在但已归因并接受**；尚无证据表明它保持 Bailey 的文件或解析器。完整五分屏五轮 Allocations 本轮暂准延后，不当作通过；真实编辑器内容帧时间、macOS 15.6／CI26、实体触控板／屏幕组合和 Windows symlink 权限环境仍有缺口，整体 No-Go。
 
 ## 审计约束
 
