@@ -260,10 +260,19 @@ final class GitStatusModelTests: XCTestCase {
         ] {
             XCTAssertEqual(GitCommandExecution.run(arguments, in: directory.path).status, 0)
         }
+        let tracked = directory.appendingPathComponent("tracked.txt")
+        try Data("initial\n".utf8).write(to: tracked)
+        for arguments in [["add", "tracked.txt"], ["commit", "-qm", "tracked"]] {
+            XCTAssertEqual(GitCommandExecution.run(arguments, in: directory.path).status, 0)
+        }
         let model = GitStatusModel()
         model.sync(root: directory.path)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         XCTAssertTrue(model.isRepo)
+
+        try Data("modified\n".utf8).write(to: tracked)
+        try await wait { model.changedEntries.contains { $0.path == "tracked.txt" } }
+        XCTAssertTrue(model.changedEntries.contains { $0.path == "tracked.txt" })
 
         let nested = directory.appendingPathComponent("nested", isDirectory: true)
         try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)

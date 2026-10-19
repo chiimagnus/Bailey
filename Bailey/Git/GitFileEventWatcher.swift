@@ -26,9 +26,7 @@ nonisolated final class GitFileEventWatcher {
             guard count > 0, let info else { return }
             Unmanaged<Listener>.fromOpaque(info).takeUnretainedValue().notify()
         }
-        let flags = FSEventStreamCreateFlags(
-            kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagWatchRoot
-        )
+        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagWatchRoot)
         guard let stream = FSEventStreamCreate(
             nil, callback, &context, paths as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.3, flags

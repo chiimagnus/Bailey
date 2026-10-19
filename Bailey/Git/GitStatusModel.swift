@@ -920,11 +920,6 @@ final class GitStatusModel {
                     guard let self, self.contextGeneration == generation,
                           self.statusRequestID == requestID, self.rootPath == root else { return false }
                     self.apply(.repository(core))
-                    if self.backend is LocalWorkspaceBackend {
-                        self.configureLocalWatcher(
-                            root: core.topLevel, gitDirectory: core.gitDirectory
-                        )
-                    }
                     self.coreCompletedRequestID = requestID
                     let previous: StatusResult?
                     if case .repository(let saved) = self.cachedStatusByRoot[self.scopedRoot] {
@@ -3095,9 +3090,6 @@ final class GitStatusModel {
         if let locations = result.worktreeLocations {
             if worktreeLocations != locations { worktreeLocations = locations }
             if !hasCurrentWorktrees { hasCurrentWorktrees = true }
-            if backend is LocalWorkspaceBackend {
-                configureLocalWatcher(root: result.topLevel, gitDirectory: result.gitDirectory)
-            }
         } else if result.detailsCompleted, hasCurrentWorktrees {
             hasCurrentWorktrees = false
         }
@@ -3180,6 +3172,9 @@ final class GitStatusModel {
         if mergeEntries != conflicts { mergeEntries = conflicts }
         if stagedEntries != staged { stagedEntries = staged }
         if changedEntries != changedFiles { changedEntries = changedFiles }
+        if backend is LocalWorkspaceBackend {
+            configureLocalWatcher(root: result.topLevel, gitDirectory: result.gitDirectory)
+        }
     }
 
     nonisolated enum StatusLoadResult: Equatable, Sendable {
