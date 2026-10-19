@@ -84,6 +84,49 @@ private actor LocalShellRunnerFixture: RemoteCommandRunner {
 }
 
 final class RemoteCommandsTests: XCTestCase {
+    func testLocalCommandTimeoutDoesNotWaitForInheritedOutputPipe() async throws {
+        for descriptor in [1, 2] {
+            for parentExitsImmediately in [false, true] {
+                let fixture = """
+                    import os, time
+                    if os.fork() == 0:
+                        os.setsid()
+                        time.sleep(1.5)
+                        os.write(\(descriptor), b"inherited pipe still open\\n")
+                        os._exit(0)
+                    \(parentExitsImmediately ? "os._exit(0)" : "time.sleep(0.6)")
+                    """
+                let started = ProcessInfo.processInfo.systemUptime
+                do {
+                    _ = try await LocalWorkspaceBackend.shared.run(
+                        argv: ["/usr/bin/python3", "-c", fixture], cwd: nil, env: nil,
+                        stdin: nil, timeout: 0.2
+                    )
+                    XCTFail("Inherited output pipe must not bypass the command deadline")
+                } catch WorkspaceError.timedOut {}
+                XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 0.85,
+                                  "Descendant-held pipes cannot extend the command timeout")
+            }
+        }
+    }
+
+    func testLocalCommandDrainsLargeStdoutAndStderrWithoutDataLoss() async throws {
+        let fixture = """
+            import sys
+            sys.stdout.buffer.write(b"A" * 262144)
+            sys.stdout.flush()
+            sys.stderr.buffer.write(b"B" * 262144)
+            sys.stderr.flush()
+            """
+        let result = try await LocalWorkspaceBackend.shared.run(
+            argv: ["/usr/bin/python3", "-c", fixture], cwd: nil, env: nil,
+            stdin: nil, timeout: 5
+        )
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(result.stdout, Data(repeating: 65, count: 262144))
+        XCTAssertEqual(result.stderr, Data(repeating: 66, count: 262144))
+    }
+
     func testSuccessfulParentExitCannotHideStalledStdinDescendant() async throws {
         let command = "sleep 2 <&0 >/dev/null 2>&1 & exit 0"
         let payload = Data(repeating: 0x41, count: 1 << 20)
