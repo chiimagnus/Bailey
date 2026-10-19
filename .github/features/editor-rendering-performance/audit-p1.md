@@ -173,6 +173,12 @@
 - 结论：**No-Go（整个 P1 尚不能无保留完成）**；F-01～F-05、F-07 均已 Resolved，**F-06、F-08 Open**。最终生产源码 7aa3633 的 Debug 与优化 Release 授权 Windows SSH 全量 XCTest 分别 **467/467、467/467、均无失败或跳过**；Debug 和 Release 构建、严格个人签名及新版正式整包安装已通过。
 - 理由：独立 Release 已有两个同 PID 的真实五分屏挂载／关闭 Allocations 周期，均核对五个文件全文、关闭对象释放和 120.1/120.0 MiB 物理足迹基线；目前数据未显示两轮累积泄漏，但第三轮只恢复四分屏，距离五轮以上真正五分屏长时曲线仍有差距。另有未归因的约 3.5KiB SwiftUI 菜单引用环、F-06 实际内容 FPS 不可直接由 CADisplayLink 证明，以及未具备的实体环境；P1-T5 继续 in_progress。
 
+## 本轮补充核查（2026-10-20）
+
+- **F-06 帧率合同：**`FPSCounter` 只计算 CADisplayLink 回调；用同一份 Instruments `Animation Hitches` 导出的 `hitches-frame-lifetimes` 又确认三种 surface ID 合计 1,982 行，缺少 Bailey 单个编辑器实际新内容帧的归属字段。显示表面频率不可用来关闭本 finding；保持 Open。
+- **F-08 根链对照：**独立使用 macOS 27.2 SwiftUI + `NSHostingView`/WindowGroup 构造原生 `.contextMenu`，确认单次右键菜单显示、Escape 关闭及 `leaks` 基线/结束均为 0。12 次循环因共享 Space 前台身份变化中止；单次对照不能归因 3.5KiB 框架引用环。保留 Low/Open，不改 Bailey 菜单和原生编辑器，详见新增 `evidence-p1.md` 段落。
+- **环境及副作用：**控制 App 单独使用 `dev.local.BaileyMenuProbeF08`，中间一次录制由后台任务 120s 超时结束，并非 Bailey 闪退。构建目录已被 `.gitignore` 忽略；本轮无正式 Bailey App 安装/重启、无远端推送或产品源码修改。已有双配置 467/467 测试证据继续有效，但本轮未重新声称全量执行；总体仍 No-Go。
+
 ## 最终状态与剩余风险
 
 - 当前状态：**6/8 findings Resolved，F-06、F-08 Open**；P1-T1～T4 completed，P1-T5 in_progress。新 Release 已于 2026-10-20 整包安装至 /Applications/Bailey.app 并严格验签，源包／安装包 executable SHA-256 均为 f791514a1f5ea74a1c48c1167ab0720212b5b6a82154c67c8924d4c7bbdb2d；用户正式 PID 20461 在安装前后不变，未重启，旧运行时仍可能使用旧代码。
