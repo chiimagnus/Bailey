@@ -276,6 +276,7 @@ final class GitStatusModel {
         let files: [FileChange]
         var stash: Stash? = nil
         var worktree: WorktreeChanges? = nil
+        var checkedOutWorktrees: [WorktreeLocation] = []
 
         var relativeDate: String {
             date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated))
@@ -450,6 +451,14 @@ final class GitStatusModel {
     private(set) var stashes: [Stash] = []
     private(set) var currentWorktree: WorktreeChanges?
     private(set) var otherWorktrees: [WorktreeChanges] = []
+    private(set) var worktreeLocations: [WorktreeLocation] = []
+    private(set) var hasCurrentWorktrees = false
+
+    func canCreateWorktree(for branchName: String) -> Bool {
+        hasCurrentWorktrees && canUseCurrentReferences
+            && refsByName["refs/heads/" + branchName] != nil
+            && !worktreeLocations.contains { $0.branch == branchName }
+    }
 
     nonisolated enum StashFilesState: Equatable, Sendable {
         case loading
@@ -461,7 +470,8 @@ final class GitStatusModel {
     var graphCommits: [RecentCommit] {
         Self.graphCommits(
             recentCommits, stashes: stashes,
-            worktrees: ([currentWorktree].compactMap { $0 } + otherWorktrees)
+            worktrees: ([currentWorktree].compactMap { $0 } + otherWorktrees),
+            locations: worktreeLocations
         )
     }
 
@@ -469,8 +479,16 @@ final class GitStatusModel {
     /// HEAD, not another checkout's current branch.
     nonisolated static func graphCommits(
         _ commits: [RecentCommit], stashes: [Stash],
-        worktrees: [WorktreeChanges] = []
+        worktrees: [WorktreeChanges] = [], locations: [WorktreeLocation] = []
     ) -> [RecentCommit] {
+        let locationsByHead = Dictionary(grouping: locations.compactMap { location -> (String, WorktreeLocation)? in
+            location.headOID.map { ($0, location) }
+        }, by: { $0.0 })
+        let commits = commits.map { commit -> RecentCommit in
+            var annotated = commit
+            annotated.checkedOutWorktrees = (locationsByHead[commit.hash] ?? []).map(\.1)
+            return annotated
+        }
         let positions = Dictionary(uniqueKeysWithValues: commits.enumerated().map {
             ($0.element.hash, $0.offset)
         })
@@ -730,6 +748,7 @@ final class GitStatusModel {
                 hasCurrentReferences = false
                 hasCurrentHistory = false
                 hasCurrentStashes = false
+                hasCurrentWorktrees = false
                 hasCurrentLineTotals = false
                 needsCoreVerification = true
             }
@@ -740,6 +759,7 @@ final class GitStatusModel {
             hasCurrentReferences = false
             hasCurrentHistory = false
             hasCurrentStashes = false
+            hasCurrentWorktrees = false
             stashFilesByOID = [:]
             invalidateStatusRefresh()
             needsCoreVerification = true
@@ -805,6 +825,7 @@ final class GitStatusModel {
                         self.hasCurrentReferences = false
                         self.hasCurrentHistory = false
                         self.hasCurrentStashes = false
+                        self.hasCurrentWorktrees = false
                     }
                 }
             } else {
@@ -1557,6 +1578,46 @@ final class GitStatusModel {
                 completion: completion)
     }
 
+    func createWorktree(
+        for branchName: String, at path: String, expectedOID: String, target: ActionTarget,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        let validPath = path.hasPrefix("/") || (
+            path.count >= 3 && path.first?.isLetter == true && path.dropFirst().hasPrefix(":/")
+        )
+        guard isCurrent(target), canCreateWorktree(for: branchName),
+              refsByName["refs/heads/" + branchName]?.oid == expectedOID,
+              validPath, !path.contains("\0"), path != repoRoot else {
+            failImmediately(String(localized: "The branch, repository, or worktree path changed. Review and try again.", table: "Git"),
+                            completion: completion)
+            return
+        }
+        perform(label: String(localized: "Create Worktree", table: "Git"),
+                commands: [["worktree", "add", "--", path, branchName]],
+                expectedRef: ("refs/heads/" + branchName, expectedOID),
+                expectedVacantWorktreeBranch: branchName,
+                isCurrentTarget: isCurrentTarget, completion: completion)
+    }
+
+    func removeWorktree(
+        _ selected: WorktreeLocation, target: ActionTarget,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        guard isCurrent(target), hasCurrentWorktrees, canUseCurrentReferences,
+              !selected.isMain, !selected.isLocked, !selected.isPrunable,
+              worktreeLocations.contains(selected) else {
+            failImmediately(String(localized: "The selected Worktree is unavailable or protected. Refresh and try again.", table: "Git"),
+                            completion: completion)
+            return
+        }
+        perform(label: String(localized: "Remove Worktree", table: "Git"),
+                commands: [["worktree", "remove", "--", selected.path]],
+                expectedWorktree: selected,
+                isCurrentTarget: isCurrentTarget, completion: completion)
+    }
+
     func pushBranch(
         _ name: String, remotes selected: [String], setUpstream: Bool,
         mode: BranchPushMode, target: ActionTarget,
@@ -2197,6 +2258,7 @@ final class GitStatusModel {
         dropCommit: String? = nil,
         terminalAction: (@MainActor () throws -> Void)? = nil,
         preflight: [[String]] = [], expectedRef: (name: String, oid: String)? = nil,
+        expectedWorktree: WorktreeLocation? = nil, expectedVacantWorktreeBranch: String? = nil,
         expectedFileState: (path: String, state: FileState)? = nil,
         expectedStashes: [Stash]? = nil,
         continueAfterFirstSuccess: Bool = false,
@@ -2327,6 +2389,40 @@ final class GitStatusModel {
                           actual.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == expectedRef.oid else {
                         let message = String(localized: "The selected Git reference changed. Reopen the menu and try again.", table: "Git")
                         return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
+                    }
+                }
+                if expectedWorktree != nil || expectedVacantWorktreeBranch != nil {
+                    let list = await GitCommandExecution.run(
+                        ["worktree", "list", "--porcelain", "-z"], in: dir, backend: backend
+                    )
+                    guard list.status == 0, let locations = Self.parseWorktreeList(list.stdout) else {
+                        let message = String(localized: "Could not verify the current Worktree list. Nothing was changed.", table: "Git")
+                        return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
+                    }
+                    if let branch = expectedVacantWorktreeBranch,
+                       locations.contains(where: { $0.branch == branch }) {
+                        let message = String(localized: "The branch is already checked out in another Worktree.", table: "Git")
+                        return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
+                    }
+                    if let expectedWorktree {
+                        guard !expectedWorktree.isMain, !expectedWorktree.isLocked,
+                              !expectedWorktree.isPrunable,
+                              locations.contains(expectedWorktree) else {
+                            let message = String(localized: "The selected Worktree changed, is locked, or is the main Worktree.", table: "Git")
+                            return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
+                        }
+                        let status = await GitCommandExecution.run(
+                            ["-C", expectedWorktree.path, "status", "--porcelain=v2",
+                             "--branch", "-z", "--untracked-files=all"],
+                            in: dir, backend: backend
+                        )
+                        let live = status.status == 0 ? Self.parseStatus(status.stdout) : nil
+                        guard let live, live.headOID == expectedWorktree.headOID,
+                              (live.branch == "detached HEAD" ? nil : live.branch) == expectedWorktree.branch,
+                              live.entries.isEmpty else {
+                            let message = String(localized: "The Worktree changed or contains uncommitted files. Nothing was removed.", table: "Git")
+                            return CommandBatchResult(output: message, failureCode: -1, failureMessage: message)
+                        }
                     }
                 }
                 for args in preflight {
@@ -2837,6 +2933,8 @@ final class GitStatusModel {
         stashes = []
         currentWorktree = nil
         otherWorktrees = []
+        worktreeLocations = []
+        hasCurrentWorktrees = false
     }
 
     private func apply(_ loadResult: StatusLoadResult) {
@@ -2862,6 +2960,7 @@ final class GitStatusModel {
             hasCurrentReferences = false
             hasCurrentHistory = false
             hasCurrentStashes = false
+            hasCurrentWorktrees = false
             return
         case .repository(let result):
             statusError = nil
@@ -2883,6 +2982,7 @@ final class GitStatusModel {
             hasCurrentReferences = false
             hasCurrentHistory = false
             hasCurrentStashes = false
+            hasCurrentWorktrees = false
             hasCurrentLineTotals = false
         }
         if repositoryIdentity != result.topLevel {
@@ -2906,6 +3006,12 @@ final class GitStatusModel {
             headOID: result.headOID, entries: result.entries, isCurrent: true
         )
         if let worktrees = result.worktrees { otherWorktrees = worktrees }
+        if let locations = result.worktreeLocations {
+            worktreeLocations = locations
+            hasCurrentWorktrees = true
+        } else if result.detailsCompleted {
+            hasCurrentWorktrees = false
+        }
         if let core = result.coreMetadata {
             branches = core.branches
             refsByName = core.refsByName
@@ -3004,6 +3110,7 @@ final class GitStatusModel {
         var history: StatusHistory?
         var stashes: [Stash]?
         var worktrees: [WorktreeChanges]?
+        var worktreeLocations: [WorktreeLocation]?
 
         // A missing optional query must preserve its last readable result in
         // the tab cache, without treating that copy as freshly verified.
@@ -3014,6 +3121,7 @@ final class GitStatusModel {
             if snapshot.history == nil { snapshot.history = previous.history }
             if snapshot.stashes == nil { snapshot.stashes = previous.stashes }
             if snapshot.worktrees == nil { snapshot.worktrees = previous.worktrees }
+            if snapshot.worktreeLocations == nil { snapshot.worktreeLocations = previous.worktreeLocations }
             if !snapshot.ignoredLoaded, previous.ignoredLoaded {
                 snapshot.ignoredLoaded = true
                 snapshot.ignoredPaths = previous.ignoredPaths
@@ -3283,6 +3391,7 @@ final class GitStatusModel {
             let worktrees = await loadOtherWorktrees(
                 in: resolvedRoot, backend: backend, deadline: deadline
             )
+            result.worktreeLocations = worktrees.locations
             if worktrees.complete { result.worktrees = worktrees.worktrees }
             if !worktrees.complete, result.detailError == nil {
                 result.detailError = String(
@@ -3301,6 +3410,9 @@ final class GitStatusModel {
         let path: String
         let headOID: String?
         let branch: String?
+        var isMain = false
+        var isLocked = false
+        var isPrunable = false
     }
 
     nonisolated static func parseWorktreeList(_ output: String) -> [WorktreeLocation]? {
@@ -3310,19 +3422,26 @@ final class GitStatusModel {
         var headOID: String?
         var branch: String?
         var hasHead = false
-        var skip = false
+        var isLocked = false
+        var isPrunable = false
+        var bare = false
         for field in output.split(separator: "\0", omittingEmptySubsequences: false) {
             if field.isEmpty {
-                if let path, hasHead, !skip,
+                if let path, hasHead, !bare,
                    path.hasPrefix("/") || (path.count >= 3 && path.first?.isLetter == true
                                            && path.dropFirst().hasPrefix(":/")) {
-                    worktrees.append(WorktreeLocation(path: path, headOID: headOID, branch: branch))
+                    worktrees.append(WorktreeLocation(
+                        path: path, headOID: headOID, branch: branch,
+                        isMain: worktrees.isEmpty, isLocked: isLocked, isPrunable: isPrunable
+                    ))
                 }
                 path = nil
                 headOID = nil
                 branch = nil
                 hasHead = false
-                skip = false
+                isLocked = false
+                isPrunable = false
+                bare = false
             } else if field.hasPrefix("worktree ") {
                 path = String(field.dropFirst("worktree ".count))
             } else if field.hasPrefix("HEAD ") {
@@ -3333,8 +3452,12 @@ final class GitStatusModel {
                 hasHead = true
             } else if field.hasPrefix("branch refs/heads/") {
                 branch = String(field.dropFirst("branch refs/heads/".count))
-            } else if field == "bare" || field.hasPrefix("prunable ") {
-                skip = true
+            } else if field == "bare" {
+                bare = true
+            } else if field == "locked" || field.hasPrefix("locked ") {
+                isLocked = true
+            } else if field == "prunable" || field.hasPrefix("prunable ") {
+                isPrunable = true
             }
         }
         return worktrees
@@ -3344,17 +3467,19 @@ final class GitStatusModel {
     /// worktrees through the selected workspace backend (including SSH).
     private nonisolated static func loadOtherWorktrees(
         in root: String, backend: WorkspaceBackend, deadline: Date
-    ) async -> (worktrees: [WorktreeChanges], complete: Bool) {
+    ) async -> (worktrees: [WorktreeChanges], locations: [WorktreeLocation]?, complete: Bool) {
         let remaining = deadline.timeIntervalSinceNow
-        guard remaining > 0 else { return ([], false) }
+        guard remaining > 0 else { return ([], nil, false) }
         let list = await GitCommandExecution.run(
             ["worktree", "list", "--porcelain", "-z"],
             in: root, timeout: remaining, backend: backend
         )
         guard list.status == 0,
-              let locations = parseWorktreeList(list.stdout) else { return ([], false) }
+              let locations = parseWorktreeList(list.stdout) else { return ([], nil, false) }
         let current = (root as NSString).standardizingPath
-        let others = locations.filter { ($0.path as NSString).standardizingPath != current }
+        let others = locations.filter {
+            !($0.isPrunable) && ($0.path as NSString).standardizingPath != current
+        }
         let statusArguments = ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]
         let commandSets = others.map { ["-C", $0.path] + statusArguments }
         let batched = await prefetchedSnapshotCommands(
@@ -3393,7 +3518,7 @@ final class GitStatusModel {
                 ))
             }
         }
-        return (loaded, complete)
+        return (loaded, locations, complete)
     }
 
     private nonisolated static func prefetchedSnapshotCommands(
