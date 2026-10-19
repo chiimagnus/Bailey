@@ -100,6 +100,10 @@ struct ToolPanelView: View {
 
     /// A pinned local path must not inherit a different machine just because
     /// its terminal happens to be inside an interactive SSH session.
+    private var periodicRefreshID: String {
+        "\(applicationIsActive):\(panel):\(git.currentScope)"
+    }
+
     private var fileActionSession: TerminalSession? {
         guard let project = manager.selectedProject else { return nil }
         if project.sshHost == nil, project.customDirectory != nil,
@@ -225,34 +229,20 @@ struct ToolPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: Theme.sidebar))
         .onAppear { syncModels() }
-        .task {
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .seconds(2))
-                } catch {
-                    return
-                }
-                applyRemoteHeading()
-            }
-        }
-        // Local filesystem events handle external changes. Polling is only a
-        // recovery check; remote SSH has no local FSEvents subscription.
-        .task(id: applicationIsActive) {
+        .task(id: periodicRefreshID) {
             guard applicationIsActive else { return }
+            if panel == .git && git.currentScope == "local" { return }
+            let interval: Duration = panel == .git ? .seconds(5) : .seconds(2)
             while !Task.isCancelled {
-                let interval: Double = panel != .git ? 2
-                    : git.currentScope != "local" ? 5
-                    : git.hasLocalFileEvents ? 60 : 10
                 do {
-                    try await Task.sleep(for: .seconds(interval))
+                    try await Task.sleep(for: interval)
                 } catch {
                     return
                 }
                 guard applicationIsActive else { return }
                 if panel == .git {
-                    if !git.isRefreshing && !git.isBusy {
-                        git.refresh()
-                    }
+                    guard git.currentScope != "local" else { return }
+                    if !git.isRefreshing && !git.isBusy { git.refresh() }
                 } else {
                     syncModels()
                 }
@@ -276,6 +266,15 @@ struct ToolPanelView: View {
         // A connection appearing, connecting, dying or being replaced changes
         // what the heading says; repaint it without waiting for the next tick.
         .onChange(of: remoteConnectionToken) { syncModels() }
+        .onChange(of: manager.selectedProject?.selectedSession?.panelDirectoryPath) {
+            applyRemoteHeading()
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: SSHHostWorkspaces.connectionChanged
+        )) { notification in
+            guard notification.object as? String == manager.selectedProject?.sshHost else { return }
+            applyRemoteHeading()
+        }
         .environment(\.panelFontScale, panelFontScale)
         // Native button and control labels without a designed hierarchy use
         // the configured base size directly.

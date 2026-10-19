@@ -128,7 +128,15 @@ final class GitExternalRefreshTests: XCTestCase {
         XCTAssertTrue(window.isVisible)
         XCTAssertEqual(manager.selectedProject?.panelContext?.isRemote, false)
         NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
-        try await Task.sleep(for: .milliseconds(250))
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertTrue(model.hasLocalFileEvents)
+
+        let unwantedPoll = expectation(description: "Local Git must not poll while files are unchanged")
+        unwantedPoll.isInverted = true
+        withObservationTracking({ _ = model.isRefreshing }) {
+            unwantedPoll.fulfill()
+        }
+        await fulfillment(of: [unwantedPoll], timeout: 6)
 
         // External process changes the repository without a Bailey terminal completion.
         try "first external change\n".write(to: file, atomically: true, encoding: .utf8)
@@ -181,7 +189,7 @@ final class GitExternalRefreshTests: XCTestCase {
         model.refresh()
         try await wait { !model.isRefreshing }
 
-        // The docked panel's timer stops; model-owned FSEvents still keep the
+        // The panel has no local Git timer; model-owned FSEvents still keep the
         // bottom toolbar current while the App remains in the foreground.
         window.contentView = NSHostingView(rootView: Text("Git panel hidden"))
         try await Task.sleep(for: .milliseconds(250))
