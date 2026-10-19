@@ -162,6 +162,205 @@ final class FileTabTests: XCTestCase {
         XCTAssertFalse(file.isDirty)
     }
 
+    func testNativeFindBarKeepsSelectedGutterAndTextRowsPixelAligned() async throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".txt")
+        let original = String(repeating: "keyword visible 中文\n", count: 35)
+        try Data(original.utf8).write(to: path)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        let host = NSHostingView(rootView: AnyView(FileViewerView(file: file)))
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        let editor = try XCTUnwrap(mountedEditor(in: host))
+        let scroll = try XCTUnwrap(editor.enclosingScrollView)
+        let ruler = try XCTUnwrap(editor.gutterView)
+        let highlight = NSColor(srgbRed: 0.9, green: 0.12, blue: 0.15, alpha: 1)
+        editor.backgroundColor = .black
+        scroll.backgroundColor = .black
+        ruler.backgroundColor = .black
+        editor.highlightSelectedLine = true
+        editor.selectedLineHighlightColor = highlight
+        ruler.selectedLineHighlightColor = highlight
+        editor.textSelection = NSRange(location: 0, length: 0)
+
+        func verify(_ stage: String) throws {
+            host.layoutSubtreeIfNeeded()
+            scroll.layoutSubtreeIfNeeded()
+            editor.needsDisplay = true
+            ruler.needsDisplay = true
+            window.displayIfNeeded()
+            let image = try XCTUnwrap(scroll.bitmapImageRepForCachingDisplay(in: scroll.bounds))
+            scroll.cacheDisplay(in: scroll.bounds, to: image)
+            let scale = CGFloat(image.pixelsWide) / scroll.bounds.width
+            func tintedY(at x: Int) -> [Int] {
+                (0..<image.pixelsHigh).filter { y in
+                    guard let c = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                    else { return false }
+                    return c.redComponent - c.greenComponent > 0.45
+                        && c.redComponent - c.blueComponent > 0.45
+                }
+            }
+            let gutter = tintedY(at: min(image.pixelsWide - 1, Int(2 * scale)))
+            let text = tintedY(at: max(0, Int((scroll.bounds.width - 80) * scale)))
+            XCTAssertGreaterThan(gutter.count, 8, "\(stage): gutter must draw the caret row")
+            XCTAssertGreaterThan(text.count, 8, "\(stage): editor must draw the caret row")
+            if let firstGutter = gutter.first, let firstText = text.first {
+                XCTAssertLessThanOrEqual(abs(firstGutter - firstText), Int(2 * scale),
+                    "\(stage): native gutter must align with the text after find-bar layout")
+            }
+        }
+
+        try verify("before find")
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        file.performFindAction(.show)
+        try await wait {
+            scroll.layoutSubtreeIfNeeded()
+            return (scroll as NSTextFinderBarContainer).isFindBarVisible
+                && scroll.contentView.contentInsets.top > 0
+        }
+        let findHeight = try XCTUnwrap(scroll.findBarView).bounds.height
+        XCTAssertEqual(scroll.contentView.contentInsets.top, findHeight, accuracy: 0.5)
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, -findHeight, accuracy: 1)
+        try verify("find bar shown")
+        // Switching directly between Find and Replace changes overlay height
+        // without hiding the find bar or changing the current document.
+        file.performFindAction(.replace)
+        try await wait {
+            scroll.layoutSubtreeIfNeeded()
+            return (scroll.findBarView?.bounds.height ?? 0) > findHeight
+        }
+        let expandedHeight = try XCTUnwrap(scroll.findBarView).bounds.height
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, -expandedHeight, accuracy: 1)
+        try verify("replace expanded in place")
+        file.performFindAction(.show)
+        scroll.layoutSubtreeIfNeeded()
+        let heightAfterShow = try XCTUnwrap(scroll.findBarView).bounds.height
+        XCTAssertTrue((scroll as NSTextFinderBarContainer).isFindBarVisible)
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, -heightAfterShow, accuracy: 1)
+        try verify("find command during replace")
+        file.performFindAction(.hide)
+        try await wait {
+            scroll.layoutSubtreeIfNeeded()
+            return !(scroll as NSTextFinderBarContainer).isFindBarVisible
+                && scroll.contentView.contentInsets.top == 0
+        }
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, 0, accuracy: 1)
+        try verify("find bar hidden")
+
+        // Repeat with a previously scrolled document: neither opening nor
+        // dismissing Find may jump the reader to a different text row.
+        let middleY: CGFloat = 80
+        let lineUnits = ("keyword visible 中文\n" as NSString).length
+        editor.textSelection = NSRange(location: lineUnits * 10, length: 0)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        scroll.contentView.setBoundsOrigin(NSPoint(x: 0, y: middleY))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        try verify("middle before find")
+        file.performFindAction(.show)
+        try await wait {
+            scroll.layoutSubtreeIfNeeded()
+            return (scroll as NSTextFinderBarContainer).isFindBarVisible
+                && scroll.contentView.contentInsets.top > 0
+        }
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, middleY - findHeight, accuracy: 1)
+        XCTAssertEqual(file.editorState.scrollY ?? .nan, Double(middleY), accuracy: 1,
+            "Find must not alter the scroll position persisted for session restoration")
+        try verify("middle find shown")
+        window.setContentSize(NSSize(width: 620, height: 380))
+        host.layoutSubtreeIfNeeded()
+        scroll.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, middleY - findHeight, accuracy: 1,
+            "Resizing a window while Find is open must keep the same reading position")
+        try verify("middle find after resize")
+        file.performFindAction(.hide)
+        try await wait {
+            scroll.layoutSubtreeIfNeeded()
+            return !(scroll as NSTextFinderBarContainer).isFindBarVisible
+                && scroll.contentView.contentInsets.top == 0
+        }
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, middleY, accuracy: 1)
+        XCTAssertEqual(file.editorState.scrollY ?? .nan, Double(middleY), accuracy: 1)
+        try verify("middle find hidden")
+
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        file.performFindAction(.replace)
+        try await wait {
+            scroll.layoutSubtreeIfNeeded()
+            return (scroll as NSTextFinderBarContainer).isFindBarVisible
+                && scroll.contentView.contentInsets.top > 0
+        }
+        let replaceHeight = try XCTUnwrap(scroll.findBarView).bounds.height
+        XCTAssertGreaterThanOrEqual(replaceHeight, findHeight)
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, middleY - replaceHeight, accuracy: 1)
+        try verify("find replace shown")
+        file.performFindAction(.hide)
+        try await wait {
+            scroll.layoutSubtreeIfNeeded()
+            return !(scroll as NSTextFinderBarContainer).isFindBarVisible
+                && scroll.contentView.contentInsets.top == 0
+        }
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, middleY, accuracy: 1)
+        try verify("find replace hidden")
+
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        file.performFindAction(.show)
+        try await wait {
+            scroll.layoutSubtreeIfNeeded()
+            return (scroll as NSTextFinderBarContainer).isFindBarVisible
+                && scroll.contentView.contentInsets.top > 0
+        }
+        scroll.contentView.setBoundsOrigin(NSPoint(x: 0, y: 32))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        XCTAssertEqual(file.editorState.scrollY ?? .nan, Double(32 + findHeight), accuracy: 1)
+        try verify("user scrolls while find shown")
+        let offsetBeforeDockMove = scroll.contentView.bounds.origin
+        host.rootView = AnyView(Color.clear)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return file.editorView == nil
+        }
+        host.rootView = AnyView(FileViewerView(file: file))
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.mountedEditor(in: host) === editor
+        }
+        scroll.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, offsetBeforeDockMove.y, accuracy: 1,
+            "Dock reattachment with Find active must keep the reading position")
+        XCTAssertTrue((scroll as NSTextFinderBarContainer).isFindBarVisible)
+        // Remounting reapplies the user's theme, which replaces the synthetic
+        // bright-red diagnostic palette used by this test before detachment.
+        XCTAssertEqual(editor.backgroundColor, ruler.backgroundColor)
+        XCTAssertEqual(editor.selectedLineHighlightColor, ruler.selectedLineHighlightColor)
+        editor.backgroundColor = .black
+        ruler.backgroundColor = .black
+        editor.selectedLineHighlightColor = highlight
+        ruler.selectedLineHighlightColor = highlight
+        try verify("find after dock reattachment")
+        file.performFindAction(.hide)
+        try await wait {
+            scroll.layoutSubtreeIfNeeded()
+            return !(scroll as NSTextFinderBarContainer).isFindBarVisible
+                && scroll.contentView.contentInsets.top == 0
+        }
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, 32 + findHeight, accuracy: 1,
+            "Find dismissal must preserve user scrolling performed while the bar was open")
+        XCTAssertEqual(file.editorState.scrollY ?? .nan, Double(32 + findHeight), accuracy: 1)
+        try verify("find hidden after user scroll")
+        XCTAssertEqual(try Data(contentsOf: path), Data(original.utf8))
+        XCTAssertFalse(file.isDirty)
+    }
+
     func testDetachedEditorAppendKeepsSameNativeDocumentAndUndo() async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".txt")
         let original = "first 中文👋\n"

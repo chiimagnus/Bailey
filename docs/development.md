@@ -81,7 +81,7 @@ Find、行号、选区和滚动可在标签重挂载后恢复。
 `SyntaxHighlightingTests`、`FileTabTests`、`DiffTabTests`、
 `PaneRetentionTests`、`TextCoordinateIndexTests` 和完整 `make test`；
 依赖变化还要求 Debug／Release 构建和签名。
-2026-10-19 当前 Mac 的完整测试 **436/436、0 失败、0 跳过**，包含独立 Windows SSH 主机的实际操作；Debug／Release 均完成 `make build` 严格签名校验。仅证明当前 macOS／Xcode 环境；没有 macOS 15.6 真机时不得写成实际验证过。
+原生迁移完成时（2026-10-19）的完整测试 **436/436、0 失败、0 跳过**，包含独立 Windows SSH 主机的实际操作；当时 Debug／Release 均完成严格签名校验。这是迁移提交的历史基线，不代表后续提交已验收；当前追加回归与环境限制记录于本地 `.github/features/editor-rendering-performance/evidence-p1.md`。没有 macOS 15.6 真机时不得写成实际验证过。
 
 ### Neon
 

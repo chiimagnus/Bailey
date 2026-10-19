@@ -269,7 +269,8 @@ struct SourceTextEditor: NSViewRepresentable {
                     // position is applied to a sized document view.
                     if (scrollView as? RestorableScrollView)?.restoreOnFirstLayout != nil { return }
                     file.editorState.scrollX = clipView.bounds.origin.x
-                    file.editorState.scrollY = clipView.bounds.origin.y
+                    file.editorState.scrollY = (scrollView as? RestorableScrollView)?
+                        .sessionScrollY ?? clipView.bounds.origin.y
                     (scrollView?.documentView as? NativeCodeTextView)?
                         .syntaxCoordinator?.updateViewportRange(
                             (scrollView?.documentView as? NativeCodeTextView)?
@@ -404,6 +405,10 @@ private final class RestorableScrollView: NSScrollView {
     private var lastViewportSize: NSSize = .zero
     private var geometryUpdateScheduled = false
     private var reparentedOffset: NSPoint?
+    private var appliedFindBarHeight: CGFloat = 0
+    private var lastVisibleFindBarOriginY: CGFloat?
+
+    var sessionScrollY: CGFloat { contentView.bounds.origin.y + appliedFindBarHeight }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if window != nil, newWindow == nil {
@@ -419,12 +424,42 @@ private final class RestorableScrollView: NSScrollView {
 
     override func layout() {
         super.layout()
+        alignFindBarAndDocument()
         let viewportSize = contentView.bounds.size
         if viewportSize != lastViewportSize {
             lastViewportSize = viewportSize
             scheduleEditorGeometryUpdate()
         }
         restoreInitialOffsetIfReady()
+    }
+
+    override func reflectScrolledClipView(_ clipView: NSClipView) {
+        super.reflectScrolledClipView(clipView)
+        if isFindBarVisible { lastVisibleFindBarOriginY = clipView.bounds.origin.y }
+    }
+
+    private func alignFindBarAndDocument() {
+        let findHeight = isFindBarVisible ? (findBarView?.bounds.height ?? 0) : 0
+        guard abs(findHeight - appliedFindBarHeight) > 0.5 else { return }
+        let clipView = contentView
+        let origin = clipView.bounds.origin
+        // On hide, AppKit clamps a previously negative find-bar origin to 0
+        // before laying out the scroll view. Recover that last visible origin
+        // so we never apply the bar-height adjustment a second time.
+        let previousY: CGFloat
+        if findHeight == 0, origin.y == 0,
+           let visibleY = lastVisibleFindBarOriginY, visibleY < 0 {
+            previousY = visibleY
+        } else {
+            previousY = origin.y
+        }
+        let offset = appliedFindBarHeight - findHeight
+        appliedFindBarHeight = findHeight
+        if findHeight == 0 { lastVisibleFindBarOriginY = nil }
+        // AppKit owns the find-bar content inset. We only reconcile the
+        // document's visible origin when that top overlay changes height.
+        clipView.setBoundsOrigin(NSPoint(x: origin.x, y: previousY + offset))
+        reflectScrolledClipView(clipView)
     }
 
     private func restoreInitialOffsetIfReady() {
@@ -473,7 +508,8 @@ private final class RestorableScrollView: NSScrollView {
             // Restore the same clamped position after layout, without a second
             // caret-follow scrollRangeToVisible that later overrides it.
             let desiredBounds = NSRect(
-                origin: NSPoint(x: max(0, previousOrigin.x), y: max(0, previousOrigin.y)),
+                origin: NSPoint(x: max(0, previousOrigin.x),
+                                y: max(-clipView.contentInsets.top, previousOrigin.y)),
                 size: clipView.bounds.size
             )
             let constrainedBounds = clipView.constrainBoundsRect(desiredBounds)
