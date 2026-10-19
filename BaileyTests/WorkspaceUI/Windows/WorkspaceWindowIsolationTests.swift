@@ -25,6 +25,91 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         }
     }
 
+    func testTwoMountedWorkspaceManagersSaveTheirOwnNativeAXBuffers() async throws {
+        let previousSnapshots = SessionStore.load()
+        let previousHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(previousSnapshots)
+            TerminalHistoryStore.save(previousHistories)
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let aFolder = root.appendingPathComponent("A")
+        let bFolder = root.appendingPathComponent("B")
+        try FileManager.default.createDirectory(at: aFolder, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: bFolder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let aURL = aFolder.appendingPathComponent("same-name.swift")
+        let bURL = bFolder.appendingPathComponent("same-name.swift")
+        let originalA = "let origin = \"A\"\n"
+        let originalB = "let origin = \"B\"\n"
+        let changedA = "let origin = \"甲 中文 😀\"\n"
+        let changedB = "let origin = \"乙 emoji 👋\"\n"
+        try originalA.write(to: aURL, atomically: true, encoding: .utf8)
+        try originalB.write(to: bURL, atomically: true, encoding: .utf8)
+
+        let first = TerminalManager()
+        let second = TerminalManager()
+        defer { first.windowClosed(); second.windowClosed() }
+        first.addLocalItems([aFolder])
+        second.addLocalItems([bFolder])
+        first.openFile(aURL.path)
+        second.openFile(bURL.path)
+        guard case .file(let aFile)? = first.selectedProject?.focusedContent,
+              case .file(let bFile)? = second.selectedProject?.focusedContent else {
+            XCTFail("Both windows must own independent focused file tabs")
+            return
+        }
+        aFile.autoSaveSuspendedForClose = true
+        bFile.autoSaveSuspendedForClose = true
+        let aWindow = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 780, height: 490),
+                               styleMask: [.titled], backing: .buffered, defer: false)
+        let bWindow = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 780, height: 490),
+                               styleMask: [.titled], backing: .buffered, defer: false)
+        aWindow.isReleasedWhenClosed = false
+        bWindow.isReleasedWhenClosed = false
+        defer { aWindow.close(); bWindow.close() }
+        let aHost = NSHostingView(rootView: ContentView(manager: first))
+        let bHost = NSHostingView(rootView: ContentView(manager: second))
+        aWindow.contentView = aHost
+        bWindow.contentView = bHost
+        aWindow.orderFront(nil)
+        bWindow.makeKeyAndOrderFront(nil)
+        try await wait {
+            aHost.layoutSubtreeIfNeeded()
+            bHost.layoutSubtreeIfNeeded()
+            return self.editor(in: aHost)?.text == originalA
+                && self.editor(in: bHost)?.text == originalB
+                && first.attachedWindow === aWindow
+                && second.attachedWindow === bWindow
+        }
+        let aEditor = try XCTUnwrap(editor(in: aHost))
+        let bEditor = try XCTUnwrap(editor(in: bHost))
+        aEditor.setAccessibilityValue(changedA)
+        bEditor.setAccessibilityValue(changedB)
+        XCTAssertTrue(aFile.isDirty)
+        XCTAssertTrue(bFile.isDirty)
+        XCTAssertEqual(try String(contentsOf: aURL, encoding: .utf8), originalA)
+        XCTAssertEqual(try String(contentsOf: bURL, encoding: .utf8), originalB)
+
+        first.saveSelectedFile()
+        try await wait {
+            (try? String(contentsOf: aURL, encoding: .utf8)) == changedA && !aFile.isDirty
+        }
+        XCTAssertEqual(try String(contentsOf: bURL, encoding: .utf8), originalB,
+                       "Saving workspace A must not write workspace B's focused buffer")
+        XCTAssertTrue(bFile.isDirty)
+        XCTAssertTrue(editor(in: aHost) === aEditor)
+        XCTAssertTrue(editor(in: bHost) === bEditor)
+
+        second.saveSelectedFile()
+        try await wait {
+            (try? String(contentsOf: bURL, encoding: .utf8)) == changedB && !bFile.isDirty
+        }
+        XCTAssertEqual(try String(contentsOf: aURL, encoding: .utf8), changedA)
+        XCTAssertEqual(aEditor.text, changedA)
+        XCTAssertEqual(bEditor.text, changedB)
+    }
+
     func testClosingOneWorkspaceWindowKeepsOtherManagerEditorAndSnapshot() async throws {
         let previousSnapshots = SessionStore.load()
         let previousHistories = TerminalHistoryStore.load()
