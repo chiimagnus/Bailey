@@ -227,9 +227,17 @@ struct ToolPanelView: View {
                 }
                 guard applicationIsActive else { return }
                 if panel == .git {
-                    if !git.isRefreshing && !git.isBusy {
-                        git.refresh()
+                    guard !git.isBusy else { continue }
+                    // Keep the follow-up in this task so hiding the panel cancels it.
+                    while git.isRefreshing && !Task.isCancelled {
+                        do {
+                            try await Task.sleep(for: .milliseconds(250))
+                        } catch {
+                            return
+                        }
                     }
+                    guard applicationIsActive, !Task.isCancelled else { return }
+                    if !git.isBusy { git.refresh() }
                 } else {
                     syncModels()
                 }

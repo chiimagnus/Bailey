@@ -39,12 +39,14 @@ final class GitExternalRefreshTests: XCTestCase {
             styleMask: [.borderless], backing: .buffered, defer: false
         )
         window.isReleasedWhenClosed = false
+        var mounted = false
         window.contentView = NSHostingView(rootView:
             ToolPanelView(manager: manager, git: model, panel: .git)
-                .frame(width: 420, height: 560))
+                .frame(width: 420, height: 560)
+                .onAppear { mounted = true })
         window.orderFront(nil)
         defer { window.close() }
-        try await Task.sleep(for: .milliseconds(350))
+        try await wait { mounted }
         XCTAssertTrue(window.isVisible)
         NotificationCenter.default.post(
             name: NSApplication.didBecomeActiveNotification, object: NSApp
@@ -118,13 +120,15 @@ final class GitExternalRefreshTests: XCTestCase {
             styleMask: [.titled], backing: .buffered, defer: false
         )
         window.isReleasedWhenClosed = false
+        var mounted = false
         window.contentView = NSHostingView(
             rootView: ToolPanelView(manager: manager, git: model, panel: .git)
                 .frame(width: 460, height: 740)
+                .onAppear { mounted = true }
         )
         window.orderFront(nil)
         defer { window.close() }
-        try await Task.sleep(for: .milliseconds(350))
+        try await wait { mounted }
         XCTAssertTrue(window.isVisible)
         XCTAssertEqual(manager.selectedProject?.panelContext?.isRemote, false)
         NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
@@ -219,11 +223,13 @@ final class GitExternalRefreshTests: XCTestCase {
             model.rootPath == second.path && model.hasResolvedStatus
                 && !model.isRefreshing && model.recentCommits.first?.hash == secondHead
         }
+        var secondMounted = false
         window.contentView = NSHostingView(
             rootView: ToolPanelView(manager: manager, git: model, panel: .git)
                 .frame(width: 460, height: 740)
+                .onAppear { secondMounted = true }
         )
-        try await Task.sleep(for: .milliseconds(250))
+        try await wait { secondMounted }
         NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
         try await Task.sleep(for: .milliseconds(150))
         try "old project change\n".write(to: file, atomically: true, encoding: .utf8)
@@ -235,6 +241,107 @@ final class GitExternalRefreshTests: XCTestCase {
         XCTAssertEqual(model.rootPath, second.path)
         XCTAssertEqual(model.recentCommits.first?.hash, secondHead)
         XCTAssertFalse(model.changedEntries.contains { $0.path == "tracked.txt" })
+    }
+
+    func testVisibleGitPanelKeepsRefreshPendingWhileRemoteDetailsAreSlow() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-git-slow-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        func git(_ args: [String]) {
+            let result = GitCommandExecution.run(args, in: directory.path, timeout: 10)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        git(["init", "-q", "-b", "main"])
+        git(["config", "user.name", "Slow Refresh Test"])
+        git(["config", "user.email", "fixture@invalid"])
+        git(["config", "commit.gpgsign", "false"])
+        let file = directory.appendingPathComponent("tracked.txt")
+        try "original\n".write(to: file, atomically: true, encoding: .utf8)
+        git(["add", "tracked.txt"])
+        git(["commit", "-qm", "baseline"])
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([directory])
+        let backend = DiscardRemoteWorkspaceFixture()
+        let model = GitStatusModel()
+        model.sync(root: directory.path, backend: backend, scope: "ssh:slow-details")
+        try await wait { model.hasResolvedStatus && !model.isRefreshing && model.isRepo }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: -1200, y: -1200, width: 460, height: 740),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        var mounted = false
+        var unmounted = false
+        window.contentView = NSHostingView(rootView:
+            ToolPanelView(manager: manager, git: model, panel: .git)
+                .frame(width: 460, height: 740)
+                .onAppear { mounted = true }
+                .onDisappear { unmounted = true })
+        window.orderFront(nil)
+        defer { window.close() }
+        try await wait { mounted }
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+
+        await backend.suspendHistoryRequest()
+        model.refresh()
+        let pendingDeadline = Date().addingTimeInterval(10)
+        while !(await backend.awaitingGit), Date() < pendingDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let awaitingDetails = await backend.awaitingGit
+        XCTAssertTrue(awaitingDetails, "The original status snapshot must be in flight")
+        try "external change\n".write(to: file, atomically: true, encoding: .utf8)
+        git(["add", "tracked.txt"])
+        XCTAssertTrue(model.stagedEntries.isEmpty)
+
+        // One foreground SSH polling tick must queue the new observation
+        // even if the older snapshot is still awaiting its optional details.
+        try await Task.sleep(for: .seconds(6.2))
+        await backend.releaseGitRequest()
+        try await wait(seconds: 3) {
+            model.stagedEntries.contains { $0.path == "tracked.txt" }
+                && !model.changedEntries.contains { $0.path == "tracked.txt" }
+        }
+        let staged = GitCommandExecution.run(["diff", "--cached", "--name-only"], in: directory.path)
+        XCTAssertEqual(staged.status, 0)
+        XCTAssertEqual(staged.stdout, "tracked.txt\n")
+
+        // Queued visible-panel work must not start another query after that
+        // panel disappears. The suspended core was read before the edit below.
+        try await wait { !model.isRefreshing }
+        await backend.suspendHistoryRequest()
+        model.refresh()
+        let hidingDeadline = Date().addingTimeInterval(10)
+        while !(await backend.awaitingGit), Date() < hidingDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let hidingDetails = await backend.awaitingGit
+        XCTAssertTrue(hidingDetails)
+        let coreReadsBeforeHide = await backend.commands.filter {
+            $0.contains("'--show-toplevel'")
+        }.count
+        XCTAssertGreaterThan(coreReadsBeforeHide, 0)
+        try await Task.sleep(for: .seconds(6.2))
+        window.contentView = NSHostingView(rootView: Text("Git panel hidden"))
+        try await wait { unmounted }
+        try "modified after hiding\n".write(to: file, atomically: true, encoding: .utf8)
+        await backend.releaseGitRequest()
+        try await wait(seconds: 8) { !model.isRefreshing }
+        let coreReadsAfterHide = await backend.commands.filter {
+            $0.contains("'--show-toplevel'")
+        }.count
+        XCTAssertEqual(coreReadsAfterHide, coreReadsBeforeHide,
+                       "A hidden panel must not start a previously queued poll")
+        XCTAssertTrue(model.changedEntries.isEmpty,
+                      "A hidden Git panel must not read new external changes")
+        let truth = GitCommandExecution.run(["status", "--short"], in: directory.path)
+        XCTAssertEqual(truth.status, 0)
+        XCTAssertTrue(truth.stdout.hasPrefix("MM "), truth.stdout)
     }
 
     func testVisibleSSHPanelRefreshesExternalGitChanges() async throws {
@@ -326,12 +433,14 @@ final class GitExternalRefreshTests: XCTestCase {
                 styleMask: [.titled], backing: .buffered, defer: false
             )
             window.isReleasedWhenClosed = false
+            var mounted = false
             window.contentView = NSHostingView(rootView:
                 ToolPanelView(manager: manager, git: model, panel: .git)
-                    .frame(width: 460, height: 740))
+                    .frame(width: 460, height: 740)
+                    .onAppear { mounted = true })
             window.orderFront(nil)
             defer { window.close() }
-            try await Task.sleep(for: .milliseconds(350))
+            try await wait { mounted }
             XCTAssertTrue(window.isVisible)
             NotificationCenter.default.post(
                 name: NSApplication.didBecomeActiveNotification, object: NSApp
