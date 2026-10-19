@@ -318,6 +318,79 @@ final class SyntaxHighlightingTests: XCTestCase {
         }
     }
 
+    func testFourSizeRealFileTabHighlightedInputAndParserBudget() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-audit-editor-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        for rows in [382, 1_000, 10_000, 100_000] {
+            // Preserve T1's mixed length, blank row, Unicode and long-row fixture.
+            let lines = (0..<rows).map { row in
+                switch row % 5 {
+                case 0: "struct Item\(row) {"
+                case 1: "    let title = \"中文 👋 e\u{301}\" // a fairly realistic code line"
+                case 2: "    let value = 1234567890 // " + String(repeating: "wide", count: row % 31)
+                case 3: "}"
+                default: ""
+                }
+            }
+            let source = lines.joined(separator: "\n")
+            let midpointRow = (rows / 2) / 5 * 5
+            let midpoint = (source as NSString).range(of: "struct Item\(midpointRow) {").location
+            XCTAssertNotEqual(midpoint, NSNotFound)
+            for wraps in [false, true] {
+                let url = directory.appendingPathComponent("fixture-\(rows)-\(wraps).swift")
+                try Data(source.utf8).write(to: url)
+                let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared,
+                                   workspaceIdentity: nil)
+                try await file.waitForText()
+                file.autoSaveSuspendedForClose = true
+                let host = NSHostingView(rootView: SourceTextEditor(
+                    file: file, font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+                    palette: .theme(dark: true), wrapLines: wraps, isFocused: false
+                ))
+                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+                                      styleMask: [.titled], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                defer { window.close() }
+                window.contentView = host
+                window.orderFront(nil)
+                let deadline = Date().addingTimeInterval(12)
+                while file.editorView == nil, Date() < deadline {
+                    host.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                let editor = try XCTUnwrap((file.editorView as? NSScrollView)?.documentView as? NativeCodeTextView)
+                let syntax = try XCTUnwrap(editor.syntaxCoordinator)
+                let initialTree = try await syntax.tsClient.currentTree()
+                XCTAssertEqual(initialTree.rootNode?.range.length, source.utf16.count)
+                for (label, offset) in [("head", 0), ("middle", midpoint), ("tail", source.utf16.count)] {
+                    editor.scrollRangeToVisible(NSRange(location: offset, length: 0))
+                    host.layoutSubtreeIfNeeded()
+                    var costs: [Double] = []
+                    for _ in 0..<30 {
+                        let started = CFAbsoluteTimeGetCurrent()
+                        editor.insertText("X", replacementRange: NSRange(location: offset, length: 0))
+                        costs.append((CFAbsoluteTimeGetCurrent() - started) * 1_000)
+                        editor.insertText("", replacementRange: NSRange(location: offset, length: 1))
+                    }
+                    XCTAssertEqual(editor.text, source, "\(rows) rows \(wraps) \(label)")
+                    XCTAssertEqual(file.text, source, "Real FileTab must match the native buffer")
+                    costs.sort()
+                    print("AUDIT_P1_HIGHLIGHT_INPUT rows=\(rows) wraps=\(wraps) position=\(label) median=\(costs[15]) p95=\(costs[28]) worst=\(costs[29])")
+                    if rows == 100_000 {
+                        XCTAssertLessThanOrEqual(costs[15], 16, "Real highlighted input median must meet P1 budget")
+                        XCTAssertLessThanOrEqual(costs[28], 32, "Real highlighted input p95 must meet P1 budget")
+                    }
+                }
+                let currentTree = try await syntax.tsClient.currentTree()
+                XCTAssertEqual(currentTree.rootNode?.range.length, source.utf16.count)
+                XCTAssertFalse(file.isDirty)
+            }
+        }
+    }
+
     private func mountedPlugin(
         path: String = "fixture.swift", source: String = "let value = Capitalized.method()\n"
     ) throws -> (
