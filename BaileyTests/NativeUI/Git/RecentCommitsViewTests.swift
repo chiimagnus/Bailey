@@ -119,6 +119,95 @@ final class RecentCommitsViewTests: XCTestCase {
         }
     }
 
+    func testColoredBadgeIconsRemainReadableOverEveryGraphLaneColor() {
+        func luminance(_ color: NSColor) -> CGFloat {
+            let rgb = color.usingColorSpace(.sRGB)!
+            func linear(_ channel: CGFloat) -> CGFloat {
+                channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * linear(rgb.redComponent)
+                + 0.7152 * linear(rgb.greenComponent)
+                + 0.0722 * linear(rgb.blueComponent)
+        }
+        XCTAssertEqual(GitGraphPalette.iconInks.count, GitGraphPalette.colors.count)
+        for (index, fill) in GitGraphPalette.colors.enumerated() {
+            let ink = GitGraphPalette.iconInks[index]
+            let lighter = max(luminance(fill), luminance(ink))
+            let darker = min(luminance(fill), luminance(ink))
+            XCTAssertGreaterThanOrEqual((lighter + 0.05) / (darker + 0.05), 4.5,
+                                        "Graph lane \(index) badge icon contrast")
+        }
+    }
+
+    func testTagStashDetachedAndStandaloneWorktreeIconsMatchGraphColors() throws {
+        typealias Commit = GitStatusModel.RecentCommit
+        let taggedHash = String(repeating: "a", count: 40)
+        let detachedHash = String(repeating: "b", count: 40)
+        let standaloneHash = String(repeating: "c", count: 40)
+        let stashHash = String(repeating: "d", count: 40)
+        let commits: [Commit] = [
+            .init(hash: taggedHash, shortHash: "aaaaaaa", subject: "Tagged",
+                  author: "Tester", date: .now, parentHashes: [],
+                  references: [.init(kind: .tag, name: "v1.0")], files: []),
+            .init(hash: detachedHash, shortHash: "bbbbbbb", subject: "Detached HEAD",
+                  author: "Tester", date: .now, parentHashes: [],
+                  references: [.init(kind: .detachedHead, name: "HEAD")], files: []),
+            .init(hash: standaloneHash, shortHash: "ccccccc", subject: "No Ref",
+                  author: "Tester", date: .now, parentHashes: [],
+                  references: [], files: []),
+        ]
+        let stash = GitStatusModel.Stash(
+            selector: "stash@{0}", oid: stashHash, message: "Saved edits",
+            baseHash: taggedHash, untrackedFilesHash: nil,
+            author: "Tester", date: .now
+        )
+        let locations: [GitStatusModel.WorktreeLocation] = [
+            .init(path: "/tmp/worktree-detached", headOID: detachedHash, branch: nil),
+            .init(path: "/tmp/worktree-no-ref", headOID: standaloneHash, branch: nil),
+        ]
+        let rows = GitStatusModel.graphCommits(
+            commits, stashes: [stash], locations: locations
+        )
+        XCTAssertEqual(rows.count, 4)
+        let layout = CommitGraphLayout(commits: rows)
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            for width in [CGFloat(180), 320] {
+                let window = hostHistory(
+                    rows, selection: GraphSelection(), width: width, height: 230
+                )
+                defer { window.close() }
+                window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+                settle()
+                let view = try XCTUnwrap(window.contentView)
+                let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                let scale = CGFloat(bitmap.pixelsWide) / width
+                let spacing = CommitGraphRails.spacing(
+                    lanes: layout.laneCount, viewportWidth: width, scale: 1
+                )
+                let gutter = CommitGraphRails.gutter(
+                    lanes: layout.laneCount, spacing: spacing, scale: 1
+                )
+                let x = Int((TreeRowStyle.outerInset + gutter + 3) * scale)
+                for (index, commit) in rows.enumerated() {
+                    let y = Int((CGFloat(index) * 38 + 10) * scale)
+                    let paint = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?
+                        .usingColorSpace(.sRGB))
+                    let lane = layout.rows[index].node.color
+                    XCTAssertGreaterThanOrEqual(lane, 0)
+                    let expected = GitGraphPalette.colors[lane % GitGraphPalette.colors.count]
+                    let channels = [paint.redComponent, paint.greenComponent,
+                                    paint.blueComponent]
+                    XCTAssertGreaterThan(channels.max()! - channels.min()!, 0.25,
+                                         "\(commit.id) icon must not be gray")
+                    let delta = abs(paint.hueComponent - expected.hueComponent)
+                    XCTAssertLessThan(min(delta, 1 - delta), 0.08,
+                                      "\(commit.id) badge must match Git lane color")
+                }
+            }
+        }
+    }
+
     func testHeadAndStashGraphGutterRemainsClickableInBothAppearances() throws {
         let stash = GitStatusModel.Stash(
             selector: "stash@{0}", oid: String(repeating: "d", count: 40),
@@ -1008,10 +1097,30 @@ final class RecentCommitsViewTests: XCTestCase {
                         && ($0.documentView?.frame.width ?? 0) > $0.contentView.bounds.width + 10
                 }, "Dense graph must not become a horizontally scrolling table")
 
+                let view = try XCTUnwrap(window.contentView)
+                let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                let layout = CommitGraphLayout(commits: rows)
+                for (index, commit) in rows.enumerated()
+                    where commit.worktree == nil && commit.stash == nil {
+                    let paint = try XCTUnwrap(bitmap.colorAt(x: 85, y: index * 76 + 19)?
+                        .usingColorSpace(.sRGB))
+                    let expected = GitGraphPalette.colors[layout.rows[index].node.color]
+                    let paintedChannels = [paint.redComponent, paint.greenComponent,
+                                           paint.blueComponent]
+                    let expectedChannels = [expected.redComponent, expected.greenComponent,
+                                            expected.blueComponent]
+                    let saturation = paintedChannels.max()! - paintedChannels.min()!
+                    XCTAssertGreaterThan(saturation, 0.25,
+                                         "Ref icon must be colored, not neutral gray at row \(index)")
+                    XCTAssertEqual(paintedChannels.firstIndex(of: paintedChannels.max()!),
+                                   expectedChannels.firstIndex(of: expectedChannels.max()!),
+                                   "Badge and Git lane must share the dominant color")
+                    let hueDelta = abs(paint.hueComponent - expected.hueComponent)
+                    XCTAssertLessThan(min(hueDelta, 1 - hueDelta), 0.08,
+                                      "Ref icon must follow its graph lane hue")
+                }
                 if let directory = ProcessInfo.processInfo.environment["BAILEY_GIT_GRAPH_SCREENSHOT_DIR"] {
-                    let view = try XCTUnwrap(window.contentView)
-                    let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-                    view.cacheDisplay(in: view.bounds, to: bitmap)
                     let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
                     let name = "git-graph-compact-\(Int(width))-\(appearance.rawValue).png"
                     try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name))
