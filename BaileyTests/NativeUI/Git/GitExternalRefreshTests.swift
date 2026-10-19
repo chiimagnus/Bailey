@@ -181,17 +181,18 @@ final class GitExternalRefreshTests: XCTestCase {
         model.refresh()
         try await wait { !model.isRefreshing }
 
-        // Replacing the docked Git panel must cancel its view-owned task.
+        // The docked panel's timer stops; model-owned FSEvents still keep the
+        // bottom toolbar current while the App remains in the foreground.
         window.contentView = NSHostingView(rootView: Text("Git panel hidden"))
         try await Task.sleep(for: .milliseconds(250))
         git(["add", "tracked.txt"])
         git(["commit", "-qm", "hidden external commit"])
         let hiddenHead = git(["rev-parse", "HEAD"])
-        try await Task.sleep(for: .seconds(3.1))
-        XCTAssertNotEqual(model.recentCommits.first?.hash, hiddenHead,
-                          "A non-visible Git panel must not keep polling")
-        model.refresh()
-        try await wait { !model.isRefreshing && model.recentCommits.first?.hash == hiddenHead }
+        try await wait(seconds: 6) {
+            !model.isRefreshing && model.recentCommits.first?.hash == hiddenHead
+        }
+        XCTAssertEqual(model.recentCommits.first?.hash, hiddenHead,
+                       "A hidden Git panel must still receive local file events")
 
         let second = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-git-next-" + UUID().uuidString)

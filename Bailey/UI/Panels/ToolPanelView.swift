@@ -235,12 +235,14 @@ struct ToolPanelView: View {
                 applyRemoteHeading()
             }
         }
-        // External Git processes do not emit Bailey command-completion events.
-        // Poll only visible, foreground panels; SSH uses a slower interval.
+        // Local filesystem events handle external changes. Polling is only a
+        // recovery check; remote SSH has no local FSEvents subscription.
         .task(id: applicationIsActive) {
             guard applicationIsActive else { return }
             while !Task.isCancelled {
-                let interval = panel == .git && git.currentScope != "local" ? 5 : 2
+                let interval: Double = panel != .git ? 2
+                    : git.currentScope != "local" ? 5
+                    : git.hasLocalFileEvents ? 60 : 10
                 do {
                     try await Task.sleep(for: .seconds(interval))
                 } catch {
