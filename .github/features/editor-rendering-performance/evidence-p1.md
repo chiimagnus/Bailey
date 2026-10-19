@@ -393,3 +393,20 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 - **五分屏资源补测尚不完整**：独立 Release 的 5 个 `AXTextArea`（各 10,000 行）已真实挂载，`leaks -quiet` 在基线观察到 0 leaks；`xctrace Allocations` 可附加并完成 12 秒和 35 秒采集。但尝试从后台右键菜单执行 `Close All` 时，共享桌面引发窗口边界或精确 AX 身份变化，操作被拒绝／状态不可验证，后续读取仍有 5 个文本区域。**没有获得关闭后的对象、分配或内存对照，不标为通过，也不据此认定产品泄漏。** 对应本地 `pr36-five-release/` 记录仅作为诊断证据。
 - **PR 状态**：[Draft #36](https://github.com/chiimagnus/Bailey/pull/36) 已推送；四张低质量 JPG 在评论附件，非 Git 文件。分支与 `origin/main` 的现存冲突依要求暂不处理。完整 Windows SSH XCTest 458/458、Debug/Release 验签及五分屏空闲资源的早期证据保留在上文。
 - **剩余门槛**：五编辑器实际关闭／重开后的 Release Allocations，实体触控板、其他显示/刷新率、最低 macOS 15.6／CI、Windows symlink 权限。单独 E2E 保存缺口已核销；P1-T5 仍进行中。
+
+## 2026-10-19 20:49：P1 审计后 Release 同进程五轮标签关闭
+
+- **前提与入口**：提交 `cd039a1` 的独立签名 Release（macOS 27.2、arm64），测试进程 PID 16723，专用 UUID 用户设置与 5 份各 10,000 行的 Swift 测试文件。首轮真实 `WorkspaceDockView` 同时挂载 5 个 `AXTextArea`；经标签右键 **Close Files** 关闭，后续通过 Files 面板逐一重开 5 个文件标签。Dock 关闭后收拢：**第 2～5 轮每次重开均有 5 个标签，但仅 1 个同时挂载的文本视图**，不得将它们冒称五分屏实测。
+- **同 PID 五轮闭环**：每轮均从精确 PID／窗口／AX 快照确认 5 个标签，执行真实右键菜单并重新观察 0 个文件标签／0 个 `AXTextArea`；每轮 `heap` 核对 `FileTab=0`、`SyntaxHighlightCoordinator=0`。试验文件的原始 SHA-256 在五轮前后逐份不变。
+
+  | 轮次 | `FocusReportingTextView`（前台关闭后） | 布局控制器 | 段落缓存 | 物理内存 |
+  | --- | ---: | ---: | ---: | ---: |
+  | 第 1 轮（五分屏） | 1 | 5 | 998 | 98.0 MiB |
+  | 第 2 轮 | 1 | 5 | 745 | 85.7 MiB |
+  | 第 3 轮 | 1 | 5 | 745 | 90.0 MiB |
+  | 第 4 轮 | 1 | 5 | 745 | 90.1 MiB |
+  | 第 5 轮 | 1 | 5 | 745 | 83.0 MiB |
+
+- **残留归因与收尾**：应用保持前台时一个原生文本视图及系统布局缓存可持续存在；`leaks --traceTree` 指向 AppKit 的 `_NSTextViewportElementView`／视图布局引用，未发现旧 `FileTab` 或高亮协调器存活。切回原先的 Helium 后，对同一进程重新 `heap`：`FileTab=0`、文本视图=0、高亮协调器=0、布局控制器=0、段落缓存=0；物理足迹约 **86.5 MiB**。五轮无对象数量或内存逐次攀升。仅结束此次隔离进程并删除对应 UUID 设置域，未退出／重启用户正式 Bailey，Helium 前台已恢复。
+- **交叉验证**：额外 Release 优化编译 XCTest（仅隔离测试传 `ENABLE_TESTABILITY=YES`）中 `PaneRetentionTests` **15/15**，含五轮 × 五个同时挂载原生编辑器的真实窗口／Undo／弱引用释放；最终提交版获授权 Windows SSH 全量 XCTest **462/462**，Debug／Release 签名与正式整包安装均已核销。
+- **证据与界限**：本地忽略目录 `build/performance/editor-rendering/audit-p1-bounded-release/gui-five-cycles-d3a6e550-bf0e-4055-b575-7592c4a9d13d/` 的 `five-cycle-results.json`、`steady-gui-cycle-output.log`、`active-close-focused-trace.txt` 和 `after-five-rounds-deactivated-heap.txt`。五分屏**在同一进程中连续五轮同时挂载、编辑并释放**的完整前台 GUI/Allocations 曲线仍未直接取得；物理触控板、其他刷新率、VoiceOver、最低 macOS 15.6、CI 26 与 Windows symlink 权限仍按 T5 未测边界管理，**不宣布整个 P1 无条件 Go**。

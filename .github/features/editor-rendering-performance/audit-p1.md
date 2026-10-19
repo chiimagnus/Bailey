@@ -88,22 +88,23 @@
 
 - **最终提交版实测：** 在提交 `cd039a1` 后重新运行 `BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test DERIVED_DATA=build/DerivedData-native-parity SOURCE_PACKAGES=build/SourcePackages`，**462/462、0 failures、exit0**，耗时 813.962s（`build/performance/editor-rendering/audit-p1-bounded-release/f03-committed-full-windows.log`）。覆盖 Windows SSH 文件树/8MiB 双向传输/断线恢复、真实 Dock 五编辑器关闭与整个 Project 关闭、原生 UI 颜色/几何和文本保存；远端主机不支持创建 symlink 的条件仍独立记录，未冒称通过。
 - **优化 Release 生命周期 XCTest 补验：** 原生 Release `make test CONFIGURATION=Release` 首次未通过编译，因为优化模块没有 `-enable-testing`，`@testable import Bailey` 无法解析；这不是产品 Release 构建错误。随后仅在独立 XCTest 构建命令中传入 `ENABLE_TESTABILITY=YES`，完整 `PaneRetentionTests` **15/15、0 failures、`TEST SUCCEEDED`**，包括五轮各五个原生编辑器输入与释放、真实 Dock 关闭文件及关闭整个 Project 的回归；日志 `build/performance/editor-rendering/audit-p1-bounded-release/f03-release-xctest-testability.log`。正式 Release 配置未改变，该测试不等同于独立 App 五轮 GUI 内存趋势验收。
+- **独立 Release 五轮真实文件标签开关：** 在同一个隔离签名 Release 进程 PID16723、同一窗口中，首轮同时挂载 5 个 10k 行原生文本视图；执行真实标签右键 `Close Files`，确认 0 个文件标签／`AXTextArea`。随后连续四轮通过 Files 面板重开 5 个文件标签再关闭：Dock 自动收拢，后四轮各只有 1 个同时挂载的编辑器，不能冒称 5 分屏循环。五轮结束时 `FileTab`／`SyntaxHighlightCoordinator` 始终为 0；第 2～5 轮 `NSTextViewportLayoutController=5`、`NSTextParagraph=745` 均不增长，物理足迹 85.7／90.0／90.1／83.0 MiB。前台保留 1 个 AppKit 文本视图，在应用失焦后与全部布局缓存一起回落到 0，失焦后物理足迹 86.5 MiB。每份测试文件 SHA-256 保持不变，测试进程及独立 UUID 设置域已清理。详细原始 `heap`、窗口快照与循环报告见 `evidence-p1.md` 最新小节和 `build/performance/editor-rendering/audit-p1-bounded-release/gui-five-cycles-d3a6e550-bf0e-4055-b575-7592c4a9d13d/`。未额外改动生产源码。
 - **正式 App 整包安装：** 最终 Release 构建 `BUILD SUCCEEDED`，源包、同磁盘暂存包和 `/Applications/Bailey.app` 均通过 `codesign --verify --deep --strict`，安装后 executable SHA-256 与源包完全相同：`1da5c6d785e139dfa0a9339a886c1c0fb40116a95c90d6f03d642e5c136aa840`。整包替换、无残留安装暂存或旧包备份；原正式 PID `86913` 未退出、启动或重启，新版需用户自行重启后生效。
 
-- **构建验签：** `make build` 与 `make build:release`（同独立 DerivedData）各退出 0，均 `BUILD SUCCEEDED`，后置 `codesign --verify --deep --strict` 成功；日志 `audit-p1-debug-sign.log`、`audit-p1-release-sign.log`。Release 仍有 Tree-sitter C/C++ 生成/第三方源码固有编译警告，未篡改 vendor 或误称无警告；这份早期日志生成时尚未正式安装；最终整包安装与未重启证据见下文。
-- **历史真实 App 证据的使用边界：** 原 `evidence-p1.md` 已有独立 Release 五个 10k 行分屏实际截图、120s/90s 静置 RSS/CPU 采样，以及前台真实 ⌘S 写盘/重启仍匹配字节的后续 E2E；此为之前运行的证据，**本次后续补做了上述独立 Release 关闭与内存验收，但未完成五轮重开及全程 FPS**。本轮对 UI 生产绘制源码无修改，并复跑已有真实 AppKit/WorkspaceUI 文本、颜色、行号、Diff、找回、撤销及双窗口保存回归；不能据此宣称覆盖所有实体屏幕组合。
-- **未测及 Gate 影响（逐项）：** (1) 独立 Release 已实际执行五编辑器关闭和内存/Allocations 取证，但 **编辑后的连续五轮关闭／重开及完整增长曲线** 未完成；历史 `leaks -quiet` 基线 0 和 5 AXTextArea/静置 RSS 不证明关闭后释放，阻塞 T5 长周期内存 Gate；补验需隔离 Release 实际关闭五个面板并核对对象图/分配。(2) 无可用于测试的 **macOS 15.6／CI26** 设备/系统；本轮只有 macOS 27.2，历史项目最低系统组合未经实测，补验需对应设备/CI，保留兼容性风险。(3) 当前无隔离可验证的**真实手指触控板、不同物理刷新率/显示缩放与 VoiceOver 完整交互**；AppKit 窗口像素、AX 与测试鼠标事件不能冒充实体条件；补验需对应硬件和辅助功能交互。(4) Windows SSH 主机返回 `P4_LIVE_SYMLINK_UNAVAILABLE status=1`，说明其权限环境不能创建 symlink；已验非符号链接的重命名/二进制/读写，不把专属符号链接能力写成通过；补验需具备 symlink 权限的授权 Windows 环境。(5) 未重跑独立 Release 的完整人工高帧率滚动 FPS，Debug 插入/布局回归与既有 Release 截图不等于物理显示帧时间；补验需独立显示采样。前三项及 FPS 限制尚使阶段无法无保留放行。
+- **构建验签：** `make build` 与 `make build:release`（同独立 DerivedData）各退出 0，均 `BUILD SUCCEEDED`，后置 `codesign --verify --deep --strict` 成功；日志 `audit-p1-debug-sign.log`、`audit-p1-release-sign.log`。Release 仍有 Tree-sitter C/C++ 生成/第三方源码固有编译警告，未篡改 vendor 或误称无警告；该早期验证时尚未安装，最终安装证据见上条。
+- **历史真实 App 证据的使用边界：** 原 `evidence-p1.md` 已有独立 Release 五个 10k 行分屏实际截图、120s/90s 静置 RSS/CPU 采样，以及前台真实 ⌘S 写盘/重启仍匹配字节的后续 E2E；此为之前运行的证据，**本次后续补做了上述独立 Release 关闭与内存验收，已完成同 PID 的五轮真实文件标签开关；但后四轮仅一个编辑器同时挂载，全程 FPS 仍未测**。本轮对 UI 生产绘制源码无修改，并复跑已有真实 AppKit/WorkspaceUI 文本、颜色、行号、Diff、找回、撤销及双窗口保存回归；不能据此宣称覆盖所有实体屏幕组合。
+- **未测及 Gate 影响（逐项）：** (1) 独立 Release 首轮五分屏实际关闭、后续四轮五文件标签重开／关闭及每轮 `heap`／物理内存对照已通过，但关闭后 Dock 自动收拢，尚缺五个分屏同时挂载、编辑、反复关闭的完整 GUI Allocations 曲线；`leaks` 基线和本次五标签结果不能替代该组合，仍阻塞 T5 长周期资源 Gate。(2) 无可用于测试的 **macOS 15.6／CI26** 设备/系统；本轮只有 macOS 27.2，历史项目最低系统组合未经实测，补验需对应设备/CI，保留兼容性风险。(3) 当前无隔离可验证的**真实手指触控板、不同物理刷新率/显示缩放与 VoiceOver 完整交互**；AppKit 窗口像素、AX 与测试鼠标事件不能冒充实体条件；补验需对应硬件和辅助功能交互。(4) Windows SSH 主机返回 `P4_LIVE_SYMLINK_UNAVAILABLE status=1`，说明其权限环境不能创建 symlink；已验非符号链接的重命名/二进制/读写，不把专属符号链接能力写成通过；补验需具备 symlink 权限的授权 Windows 环境。(5) 未重跑独立 Release 的完整人工高帧率滚动 FPS，Debug 插入/布局回归与既有 Release 截图不等于物理显示帧时间；补验需独立显示采样。前三项及 FPS 限制尚使阶段无法无保留放行。
 - **文档核对：** `docs/README.md` 索引、`docs/features/editor.md`/`diff.md`/`ssh.md`、`docs/testing.md` 与当前实际入口一致；保留前期历史 No-Go STTextView 原型作为取证时间线，不重新加入双轨兼容，`audit*.md` 不作为审查结论。审计文档后由并行流程独立提交 `0c9b1a2`；本轮最终证据追加到同一文档，未擅自推送。
 
 ## Gate（是否允许进入下一阶段）
 
-- 结论：**No-Go（整个 P1 的无保留完成）**；**F-01、F-02、F-03 均 Resolved**（旧强引用链已实证修复且最终提交版完整 XCTest 通过；T5 连续五轮 Release GUI 尚未完成）。
-- 理由：已核销的本机与授权 Windows 测试、Debug/Release 编译验签、真实文件高亮输入预算全部满足；但 `P1-T5` 明确要求的独立 Release 五编辑器关闭/重开后内存与若干实体环境条件仍无充分证据，`todo.toml` 必须保持 `in_progress`，不能用 462/462 单独关闭 Gate。
+- 结论：**No-Go（整个 P1 的无保留完成）**；**F-01、F-02、F-03 均 Resolved**（旧强引用链已实证修复且最终提交版完整 XCTest 通过；T5 五分屏同时挂载编辑器的五轮 GUI／帧时长验收尚未完成）。
+- 理由：本机及授权 Windows 回归、构建验签、真实高亮性能和同 PID 五轮文件标签关闭均通过，未见对象累积；但五分屏同时挂载／编辑的连续 GUI Allocations、真实帧时长及部分实体环境尚无证据，`todo.toml` 继续保持 `in_progress`。
 
 ## 最终状态与剩余风险
 
-- 当前状态：发现项 **3/3 Resolved**；正式 App **已整包安装但仍运行旧进程**；阶段 **P1-T1～T4 完成，P1-T5 in_progress**。
-- 剩余风险：F-03 的已复现旧标签/原生正文保留已有针对性 Red→Green 和最终 Release 首次真实关闭证据，但持续五轮打开／关闭的增长趋势尚未完整测完；实体 15.6、物理触控板、多刷新率、部分 Windows 符号链接与完整 FPS 也未实测。保留原计划 Gate，未经证据不得称为无残余风险。
+- 当前状态：发现项 **3/3 Resolved**；正式 App **已整包安装、未由审计重启**（安装时旧 PID 86913 仍运行，目前该进程已不在进程表中）；阶段 **P1-T1～T4 完成，P1-T5 in_progress**。
+- 剩余风险：F-03 的旧强引用已按 Red→Green 修复；真实 Release 五轮文件标签开关没有对象累计，前台暂存的 1 个原生视图在应用失焦后归零。仍缺五分屏持续同时挂载／编辑的 GUI 分配趋势、Release 实际帧时长，以及 macOS 15.6／CI 26、物理触控板、不同刷新率、VoiceOver 与 Windows symlink 权限环境。保留 T5 Gate，不冒称全部验证。
 
 ## 审计约束
 
