@@ -173,6 +173,61 @@ final class EditorNavigationTests: XCTestCase {
                              "Six-digit line numbers must not be clipped by a fixed gutter width")
     }
 
+    func testSelectedTextRangeKeepsAllTouchedGutterNumbersHighlighted() throws {
+        for dark in [false, true] {
+            let (window, scroll, editor) = mount("first\nsecond\nthird", width: 480,
+                appearance: dark ? .darkAqua : .aqua)
+            defer { window.close() }
+            editor.showsLineNumbers = true
+            editor.highlightSelectedLine = true
+            let ruler = try XCTUnwrap(editor.gutterView)
+            ruler.backgroundColor = .black
+            ruler.textColor = .white
+            ruler.selectedLineTextColor = .red
+            ruler.selectedLineHighlightColor = .black
+            // The legacy gutter tints every line containing selected text,
+            // even though only an insertion caret gets a row background.
+            editor.textSelection = NSRange(location: 2, length: 7)
+            scroll.layoutSubtreeIfNeeded()
+            ruler.needsDisplay = true
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds))
+            ruler.cacheDisplay(in: ruler.bounds, to: bitmap)
+            let scale = CGFloat(bitmap.pixelsHigh) / ruler.bounds.height
+            let lineHeight = ceil(NSLayoutManager().defaultLineHeight(
+                for: try XCTUnwrap(editor.font))) * scale
+            func coloredPixels(in image: NSBitmapImageRep, on row: Int) -> Int {
+                let start = max(0, Int(CGFloat(row) * lineHeight))
+                let end = min(bitmap.pixelsHigh, Int(CGFloat(row + 1) * lineHeight))
+                return (start..<end).reduce(0) { total, y in
+                    total + (0..<image.pixelsWide).filter { x in
+                        guard let c = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                        else { return false }
+                        return c.redComponent - c.greenComponent > 0.35
+                            && c.redComponent - c.blueComponent > 0.35
+                    }.count
+                }
+            }
+            XCTAssertGreaterThan(coloredPixels(in: bitmap, on: 0), 3,
+                "First selected row must tint its number")
+            XCTAssertGreaterThan(coloredPixels(in: bitmap, on: 1), 3,
+                "Second selected row must tint its number")
+            XCTAssertEqual(coloredPixels(in: bitmap, on: 2), 0,
+                "Unselected row must retain subdued number color")
+
+            // Selection ending exactly at the next line's first offset must
+            // not tint that untouched line or add the caret-only row fill.
+            editor.textSelection = NSRange(location: 0, length: 6)
+            ruler.needsDisplay = true
+            window.displayIfNeeded()
+            let edge = try XCTUnwrap(ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds))
+            ruler.cacheDisplay(in: ruler.bounds, to: edge)
+            XCTAssertGreaterThan(coloredPixels(in: edge, on: 0), 3)
+            XCTAssertEqual(coloredPixels(in: edge, on: 1), 0,
+                "A selection must not highlight the row at its exclusive end")
+        }
+    }
+
     func testEmptyNativeEditorStillPaintsFirstGutterNumber() throws {
         let (window, scroll, editor) = mount("", width: 450)
         defer { window.close() }

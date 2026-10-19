@@ -565,17 +565,21 @@ final class NativeLineNumberRuler: NSRulerView {
         guard let editor, let content = editor.textContentStorage,
               let layout = editor.textLayoutManager else { return }
         let font = editor.gutterNumberFont
-        let selectedRow = editor.lineNumber(atUTF16Offset: editor.selectedRange().location)
+        let selection = editor.selectedRange()
+        let firstSelectedRow = editor.lineNumber(atUTF16Offset: selection.location)
+        let lastSelectedRow = editor.lineNumber(atUTF16Offset:
+            selection.length == 0 ? selection.location : NSMaxRange(selection) - 1)
         func drawLine(_ number: Int, at centerY: CGFloat, height: CGFloat) {
-            let selected = number == selectedRow && editor.selectedRange().length == 0
-            if selected && editor.highlightSelectedLine {
+            let selected = number >= firstSelectedRow && number <= lastSelectedRow
+            if selected && selection.length == 0 && editor.highlightSelectedLine {
                 selectedLineHighlightColor.setFill()
                 NSRect(x: 0, y: centerY - height / 2, width: bounds.width, height: height)
                     .intersection(rect).fill()
             }
             let label = NSAttributedString(string: String(number), attributes: [
                 .font: font,
-                .foregroundColor: selected ? selectedLineTextColor : textColor
+                .foregroundColor: selected && editor.highlightSelectedLine
+                    ? selectedLineTextColor : textColor
             ])
             let y = centerY - label.size().height / 2
             if y + label.size().height >= rect.minY, y <= rect.maxY {
