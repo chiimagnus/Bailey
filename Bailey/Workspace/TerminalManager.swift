@@ -83,14 +83,16 @@ final class TerminalManager {
                 guard !tab.content.isDirty else { return false }
             }
         }
-        return true
+        // A previously clean tab can become dirty while another save awaits IO.
+        return !hasUnsavedEditorsInWindow
     }
 
     static func saveBeforeTermination() async -> Bool {
         for manager in registry {
             guard await manager.saveBeforeWindowClose() else { return false }
         }
-        return true
+        // Recheck earlier windows after later windows finish their writes.
+        return !hasUnsavedEditors
     }
     /// Read-only access for the private, authenticated SSH handoff.
     static var activeManagers: [TerminalManager] { registry }
@@ -413,6 +415,11 @@ final class TerminalManager {
             }
             guard let self, let project,
                   self.projects.contains(where: { $0 === project }) else { return }
+            // New drafts in tabs skipped before an awaited save must survive.
+            guard !project.tabs.contains(where: { $0.content.isDirty }) else {
+                dirty.forEach { $0.suspendAutoSaveForClose(false) }
+                return
+            }
             project.terminateAll()
             self.remove(project)
         }

@@ -1393,6 +1393,185 @@ final class FileTabTests: XCTestCase {
         XCTAssertTrue(remote.isDirty)
     }
 
+    func testCloseFilesSavesOriginallyCleanTabEditedDuringAnotherTabWrite() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = Project(fallbackName: "Close Files", workspaceConfiguration: .standard)
+        let remotePath = root.appendingPathComponent("blocked-remote.txt").path
+        let backend = EditorWorkspaceFixture(path: remotePath, contents: Data("remote original".utf8))
+        let remote = FileTab(path: remotePath, backend: backend, workspaceIdentity: "ssh:fixture")
+        try await remote.waitForText()
+        let localURL = root.appendingPathComponent("newly-edited.txt")
+        try "local original".write(to: localURL, atomically: true, encoding: .utf8)
+        let local = FileTab(path: localURL.path, backend: LocalWorkspaceBackend.shared,
+                            workspaceIdentity: nil)
+        try await local.waitForText()
+        project.append(PaneTab(content: .file(remote)))
+        project.append(PaneTab(content: .file(local)))
+        remote.text = "remote saved"
+        remote.refreshDirtyState()
+        project.closeFiles()
+        try await wait { await backend.writingPath == remotePath }
+
+        local.text = "new draft before close finishes"
+        local.refreshDirtyState()
+        await backend.finishWrite()
+        try await wait { project.tabs.isEmpty }
+
+        XCTAssertFalse(local.isDirty)
+        XCTAssertEqual(try String(contentsOf: localURL, encoding: .utf8),
+                       "new draft before close finishes")
+        let persistedRemote = await backend.data(at: remotePath)
+        XCTAssertEqual(persistedRemote, Data("remote saved".utf8))
+    }
+
+    func testProjectCloseKeepsNewDraftCreatedInAnotherTabDuringPendingSave() async throws {
+        let previous = SessionStore.load()
+        let previousHistory = TerminalHistoryStore.load()
+        defer { SessionStore.save(previous); TerminalHistoryStore.save(previousHistory) }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let remotePath = root.appendingPathComponent("blocked-remote.txt").path
+        let backend = EditorWorkspaceFixture(path: remotePath, contents: Data("original".utf8))
+        let remote = FileTab(path: remotePath, backend: backend, workspaceIdentity: "ssh:fixture")
+        try await remote.waitForText()
+        let localURL = root.appendingPathComponent("newly-edited.txt")
+        try "local original".write(to: localURL, atomically: true, encoding: .utf8)
+        let local = FileTab(path: localURL.path, backend: LocalWorkspaceBackend.shared,
+                            workspaceIdentity: nil)
+        try await local.waitForText()
+        project.append(PaneTab(content: .file(remote)))
+        project.append(PaneTab(content: .file(local)))
+        remote.text = "remote saved"
+        remote.refreshDirtyState()
+        manager.close(project)
+        try await wait { await backend.writingPath == remotePath }
+
+        local.text = "new draft while remote save is pending"
+        local.refreshDirtyState()
+        XCTAssertTrue(local.isDirty)
+        await backend.finishWrite()
+        try await wait { !remote.isDirty }
+        for _ in 0..<5 { await Task.yield() }
+
+        XCTAssertTrue(manager.projects.contains { $0 === project },
+                      "A new draft in another tab must not disappear during project close")
+        XCTAssertTrue(local.isDirty)
+        XCTAssertEqual(local.text, "new draft while remote save is pending")
+        XCTAssertEqual(try String(contentsOf: localURL, encoding: .utf8), "local original")
+        let persistedRemote = await backend.data(at: remotePath)
+        XCTAssertEqual(persistedRemote, Data("remote saved".utf8))
+        XCTAssertFalse(remote.autoSaveSuspendedForClose)
+
+        // Retrying close should persist the new draft rather than strand it.
+        manager.close(project)
+        try await wait { !manager.projects.contains(where: { $0 === project }) }
+        XCTAssertEqual(try String(contentsOf: localURL, encoding: .utf8),
+                       "new draft while remote save is pending")
+    }
+
+    func testWindowCloseVetoesNewDraftCreatedInAnotherTabDuringPendingSave() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let remotePath = root.appendingPathComponent("blocked-remote.txt").path
+        let backend = EditorWorkspaceFixture(path: remotePath, contents: Data("original".utf8))
+        let remote = FileTab(path: remotePath, backend: backend, workspaceIdentity: "ssh:fixture")
+        try await remote.waitForText()
+        let localURL = root.appendingPathComponent("newly-edited.txt")
+        try "local original".write(to: localURL, atomically: true, encoding: .utf8)
+        let local = FileTab(path: localURL.path, backend: LocalWorkspaceBackend.shared,
+                            workspaceIdentity: nil)
+        try await local.waitForText()
+        // The clean tab is visited before the pending remote write. It can
+        // become dirty after the close flow has already skipped it.
+        project.append(PaneTab(content: .file(local)))
+        project.append(PaneTab(content: .file(remote)))
+        remote.text = "remote saved"
+        remote.refreshDirtyState()
+        let closing = Task { await manager.saveBeforeWindowClose() }
+        try await wait { await backend.writingPath == remotePath }
+
+        local.text = "new draft while window close is pending"
+        local.refreshDirtyState()
+        await backend.finishWrite()
+        let mayClose = await closing.value
+
+        XCTAssertFalse(mayClose, "A new draft must veto window closure until it is saved")
+        XCTAssertTrue(manager.projects.contains { $0 === project })
+        XCTAssertTrue(local.isDirty)
+        XCTAssertEqual(local.text, "new draft while window close is pending")
+        XCTAssertEqual(try String(contentsOf: localURL, encoding: .utf8), "local original")
+        let persistedRemote = await backend.data(at: remotePath)
+        XCTAssertEqual(persistedRemote, Data("remote saved".utf8))
+
+        let mayCloseOnRetry = await manager.saveBeforeWindowClose()
+        XCTAssertTrue(mayCloseOnRetry,
+                      "A second close must successfully save the newly edited tab")
+        XCTAssertEqual(try String(contentsOf: localURL, encoding: .utf8),
+                       "new draft while window close is pending")
+    }
+
+    func testApplicationTerminationRechecksEarlierWindowAfterAnotherWindowSave() async throws {
+        let previous = SessionStore.load()
+        let previousHistory = TerminalHistoryStore.load()
+        defer { SessionStore.save(previous); TerminalHistoryStore.save(previousHistory) }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = TerminalManager()
+        let second = TerminalManager()
+        defer { first.windowClosed(); second.windowClosed() }
+        first.addLocalItems([root])
+        second.addLocalItems([root])
+        let firstProject = try XCTUnwrap(first.selectedProject)
+        let secondProject = try XCTUnwrap(second.selectedProject)
+
+        let localURL = root.appendingPathComponent("earlier-window.txt")
+        try "original".write(to: localURL, atomically: true, encoding: .utf8)
+        let local = FileTab(path: localURL.path, backend: LocalWorkspaceBackend.shared,
+                            workspaceIdentity: nil)
+        try await local.waitForText()
+        firstProject.append(PaneTab(content: .file(local)))
+        let remotePath = root.appendingPathComponent("later-window.txt").path
+        let backend = EditorWorkspaceFixture(path: remotePath, contents: Data("remote original".utf8))
+        let remote = FileTab(path: remotePath, backend: backend, workspaceIdentity: "ssh:fixture")
+        try await remote.waitForText()
+        secondProject.append(PaneTab(content: .file(remote)))
+        remote.text = "remote saved"
+        remote.refreshDirtyState()
+
+        let terminating = Task { await TerminalManager.saveBeforeTermination() }
+        try await wait { await backend.writingPath == remotePath }
+        local.text = "new draft in the already checked window"
+        local.refreshDirtyState()
+        await backend.finishWrite()
+        let mayQuit = await terminating.value
+
+        XCTAssertFalse(mayQuit, "Quit must recheck other windows edited during a pending save")
+        XCTAssertTrue(local.isDirty)
+        XCTAssertEqual(local.text, "new draft in the already checked window")
+        XCTAssertEqual(try String(contentsOf: localURL, encoding: .utf8), "original")
+        let persistedRemote = await backend.data(at: remotePath)
+        XCTAssertEqual(persistedRemote, Data("remote saved".utf8))
+
+        let retryMayQuit = await TerminalManager.saveBeforeTermination()
+        XCTAssertTrue(retryMayQuit, "The next quit must save drafts in all windows")
+        XCTAssertEqual(try String(contentsOf: localURL, encoding: .utf8),
+                       "new draft in the already checked window")
+    }
+
     func testProjectTabSwitchAndCloseAutomaticallySaveBeforeRemoving() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
