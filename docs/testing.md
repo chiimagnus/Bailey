@@ -92,7 +92,7 @@ Xcode TestAction 向 Debug 宿主传入 `--isolated-ui-test`，不通过 XCTest 
 open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Bailey.app" --args --isolated-ui-test
 ```
 
-需要单独检查深色设置 UI 时，可在此隔离进程额外传入 `--isolated-dark-ui`；仅改变该窗口的 SwiftUI 外观，不修改正式应用或全局主题设置。原生窗口的缩放必须通过真实 Settings 场景的 `AXSize` 可写性及实际宽高变化确认；单纯挂载普通 `NSWindow` 只证明桥接能力，不代表 Settings 场景已通过。
+设置窗口使用 macOS 原生 `Settings` 场景的固定尺寸行为，不添加仅为强行缩放窗口而存在的 AppKit 桥接。中英文及深浅色视觉验收仍须实际截图与检查；隔离进程的配置和 UserDefaults 并未自动隔离，未经确认不得改动用户现有语言或主题偏好。
 
 该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。隔离 XCTest 宿主会移除自身菜单中的 `⌘Q` 退出快捷键：Mac 的键盘和前台应用状态仍由各进程共享，普通 Bailey 的退出快捷键不能误结束长时间运行的测试宿主；正式 Bailey 的菜单及保存退出保护不变。该隔离不是独立的图形登录会话，执行原生 UI 回归时仍应避免与用户正在进行的前台快捷键／鼠标操作互相干扰。刻意测试重启恢复时，两次启动显式传入同一有效 UUID 环境变量 `BAILEY_UI_TEST_RUN_ID`。
 

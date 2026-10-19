@@ -229,9 +229,6 @@ struct SettingsView: View {
         }
         .navigationTitle(selectedPage.title)
         .frame(minWidth: 780, idealWidth: 820, minHeight: 500, idealHeight: 610)
-        .background {
-            SettingsWindowResizer().frame(width: 0, height: 0)
-        }
         .alert(
             String(localized: "Couldn’t Relaunch Bailey", table: "Settings"),
             isPresented: $isShowingRelaunchError
@@ -606,28 +603,6 @@ struct SettingsView: View {
 
     private static let darkThemeNames = Theme.commonDarkThemes.map(\.name)
     private static let lightThemeNames = Theme.commonLightThemes.map(\.name)
-}
-
-/// macOS Settings scenes create fixed-size NSWindows despite SwiftUI's
-/// minimum content size. Configure only the containing window's resize style.
-private struct SettingsWindowResizer: NSViewRepresentable {
-    func makeNSView(context: Context) -> SettingsWindowResizerView {
-        SettingsWindowResizerView()
-    }
-
-    func updateNSView(_ view: SettingsWindowResizerView, context: Context) {}
-}
-
-private final class SettingsWindowResizerView: NSView {
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard let window else { return }
-        // The Settings scene installs its fixed-size style after mounting its content.
-        DispatchQueue.main.async { [weak self, weak window] in
-            guard self?.window === window, let window else { return }
-            window.styleMask.insert(.resizable)
-        }
-    }
 }
 
 /// Matches macOS Settings: a title and explanation form one label stack,

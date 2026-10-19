@@ -33,11 +33,6 @@ struct BaileyApp: App {
 
         Settings {
             SettingsView()
-                .preferredColorScheme(
-                    BaileyInstanceMode.isIsolated
-                        && ProcessInfo.processInfo.arguments.contains("--isolated-dark-ui")
-                        ? .dark : nil
-                )
         }
         .defaultSize(width: 820, height: 580)
     }
