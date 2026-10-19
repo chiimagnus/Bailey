@@ -70,6 +70,7 @@ make test ONLY_TESTING=BaileyTests/FileTabTests
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
 | Git 环境、刷新、写操作与失败状态 | `GitExternalRefreshTests`、`GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitTagActionTests`、`GitWorkspaceActionTests`、`GitStashActionTests`、`GitBranchDialogTests`、`GitTagDialogTests`、`GitWorkspaceMenuTests`、`GitStashDialogTests` |
+| Git 图谱拓扑、引用标签、颜色、Worktree 菜单与窄侧栏 | `CommitGraphLayoutTests`、`RecentCommitsViewTests` |
 | SSH 命令、断线、重连和过期结果 | `RemoteCommandsTests`、`RemoteLifetimeTests` |
 | 文件、Diff 和原生内容保留 | `FileTabTests`、`DiffTabTests`、`DiffEngineTests`、`PaneRetentionTests` |
 | 高亮坐标、渲染色与字体／撤销 | `TextCoordinateIndexTests`、`SyntaxHighlightingTests` |

@@ -272,15 +272,16 @@ struct RecentCommitsView: View {
             VStack(alignment: .leading, spacing: 2 * fontScale) {
                 HStack(spacing: 4 * fontScale) {
                     if let stash = commit.stash {
-                        stashBadge(stash, in: commit)
+                        stashBadge(stash, in: commit, colorIndex: graph.node.color)
                             .layoutPriority(1)
                     } else if commit.worktree == nil {
                         if !commit.references.isEmpty {
-                            referenceStrip(commit.references, commit: commit)
+                            referenceStrip(commit.references, commit: commit,
+                                           colorIndex: graph.node.color)
                                 .layoutPriority(1)
                         }
                         if needsWorktreeIndicator(commit) {
-                            checkedOutWorktreeIndicator(commit)
+                            checkedOutWorktreeIndicator(commit, colorIndex: graph.node.color)
                                 .layoutPriority(1)
                         }
                     }
@@ -469,20 +470,26 @@ struct RecentCommitsView: View {
         return primary.map { worktrees(for: $0, in: commit).isEmpty } ?? true
     }
 
-    private func checkedOutWorktreeIndicator(_ commit: Commit) -> some View {
+    private func checkedOutWorktreeIndicator(
+        _ commit: Commit, colorIndex: Int
+    ) -> some View {
         let locations = commit.checkedOutWorktrees
         let paths = locations.map(\.path)
         return Button { toggle(commit) } label: {
             HStack(spacing: 2 * fontScale) {
                 Image(systemName: "square.stack")
                     .font(.system(size: Self.badgeFontSize * fontScale))
+                    .foregroundStyle(GitGraphPalette.iconColor(colorIndex))
+                    .frame(width: Self.badgeIconSize * fontScale,
+                           height: Self.badgeHeight * fontScale)
+                    .background(GitGraphPalette.color(colorIndex))
                 if locations.count > 1 {
                     Text("\(locations.count)")
                         .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
                 }
             }
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 4 * fontScale)
+            .padding(.trailing, 4 * fontScale)
             .frame(height: Self.badgeHeight * fontScale)
             .background(Color.primary.opacity(0.05))
             .clipShape(RoundedRectangle(cornerRadius: 4 * fontScale))
@@ -528,17 +535,17 @@ struct RecentCommitsView: View {
     }
 
     private func stashBadge(
-        _ stash: GitStatusModel.Stash, in commit: Commit
+        _ stash: GitStatusModel.Stash, in commit: Commit, colorIndex: Int
     ) -> some View {
         let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
         return Button { toggle(commit) } label: {
             HStack(spacing: 0) {
                 Image(systemName: "archivebox")
                     .font(.system(size: Self.badgeFontSize * fontScale))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(GitGraphPalette.iconColor(colorIndex))
                     .frame(width: Self.badgeIconSize * fontScale,
                            height: Self.badgeHeight * fontScale)
-                    .background(Color.primary.opacity(0.08))
+                    .background(GitGraphPalette.color(colorIndex))
                 Text(verbatim: stash.selector)
                     .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
                     .foregroundStyle(.primary)
@@ -568,24 +575,24 @@ struct RecentCommitsView: View {
     }
 
     private func referenceStrip(
-        _ references: [Reference], commit: Commit
+        _ references: [Reference], commit: Commit, colorIndex: Int
     ) -> some View {
         let groups = GitGraphReferenceGroup.grouped(references, remotes: remotes)
         return ViewThatFits(in: .horizontal) {
-            referenceGroup(groups, showPrimary: true, commit: commit)
-            referenceGroup(groups, showPrimary: false, commit: commit)
+            referenceGroup(groups, showPrimary: true, commit: commit, colorIndex: colorIndex)
+            referenceGroup(groups, showPrimary: false, commit: commit, colorIndex: colorIndex)
         }
     }
 
     private func referenceGroup(
-        _ groups: [GitGraphReferenceGroup], showPrimary: Bool, commit: Commit
+        _ groups: [GitGraphReferenceGroup], showPrimary: Bool, commit: Commit, colorIndex: Int
     ) -> some View {
         let hidden = showPrimary
             ? (groups.first?.remotes ?? []) + groups.dropFirst().flatMap(\.references)
             : groups.flatMap(\.references)
         return HStack(spacing: 3 * fontScale) {
             if showPrimary, let first = groups.first {
-                referenceBadge(first.primary, commit: commit)
+                referenceBadge(first.primary, commit: commit, colorIndex: colorIndex)
             }
             if !hidden.isEmpty {
                 Menu {
@@ -609,7 +616,7 @@ struct RecentCommitsView: View {
     }
 
     private func referenceBadge(
-        _ reference: Reference, commit: Commit
+        _ reference: Reference, commit: Commit, colorIndex: Int
     ) -> some View {
         let current = reference.kind == .currentBranch
         let matched = worktrees(for: reference, in: commit)
@@ -620,10 +627,10 @@ struct RecentCommitsView: View {
                       : reference.kind == .detachedHead ? "circle"
                       : "arrow.triangle.branch")
                     .font(.system(size: Self.badgeFontSize * fontScale))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(GitGraphPalette.iconColor(colorIndex))
                     .frame(width: Self.badgeIconSize * fontScale,
                            height: Self.badgeHeight * fontScale)
-                    .background(Color.primary.opacity(0.08))
+                    .background(GitGraphPalette.color(colorIndex))
                 Text(verbatim: reference.name)
                     .font(.system(size: Self.badgeFontSize * fontScale,
                                   weight: current ? .semibold : .medium))
@@ -651,7 +658,8 @@ struct RecentCommitsView: View {
         .buttonStyle(.plain)
         .background(Color.primary.opacity(0.04))
         .clipShape(outline)
-        .overlay(outline.stroke(Color.primary.opacity(current ? 0.42 : 0.24),
+        .overlay(outline.stroke(current ? GitGraphPalette.color(colorIndex)
+                                        : Color.primary.opacity(0.35),
                                 lineWidth: 1 * fontScale))
         .help(reference.name + (matched.isEmpty ? ""
               : "\n" + matched.map(\.path).joined(separator: "\n")))
@@ -1056,6 +1064,16 @@ enum GitGraphPalette {
         rgb(133, 217, 0), rgb(220, 91, 35), rgb(111, 36, 214), rgb(255, 204, 0),
     ]
 
+    static let iconInks: [NSColor] = colors.map { color in
+        func linear(_ channel: CGFloat) -> CGFloat {
+            channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+        }
+        let luminance = 0.2126 * linear(color.redComponent)
+            + 0.7152 * linear(color.greenComponent)
+            + 0.0722 * linear(color.blueComponent)
+        return luminance >= 0.18 ? .black : .white
+    }
+
     private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> NSColor {
         NSColor(srgbRed: red / 255, green: green / 255, blue: blue / 255, alpha: 1)
     }
@@ -1067,6 +1085,9 @@ enum GitGraphPalette {
         return Color(nsColor: colors[index % colors.count])
     }
 
+    static func iconColor(_ index: Int) -> Color {
+        Color(nsColor: iconInks[index % iconInks.count])
+    }
 }
 
 struct CommitGraphRails: View {
