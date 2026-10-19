@@ -330,7 +330,7 @@ final class RecentCommitsViewTests: XCTestCase {
                       "Copying the hash must not implicitly expand commit details")
     }
 
-    func testCompositeBranchSegmentsCopyAndUseTheirOwnMenus() throws {
+    func testCompositeBranchSegmentsToggleCommitAndKeepIndependentMenus() throws {
         let selection = GraphSelection()
         let commit = GitStatusModel.RecentCommit(
             hash: "composite", shortHash: "composite", subject: "Change",
@@ -354,9 +354,13 @@ final class RecentCommitsViewTests: XCTestCase {
             ("upstream/main", CGFloat(119), remoteMenu, localMenu),
         ] {
             let point = NSPoint(x: x, y: height - 12)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("unchanged", forType: .string)
             click(point, in: window)
-            XCTAssertEqual(NSPasteboard.general.string(forType: .string), name)
-            XCTAssertTrue(selection.expanded.isEmpty, "A label click must not expand the commit")
+            XCTAssertEqual(selection.expanded, [commit.id], "\(name) should expand its commit")
+            XCTAssertEqual(NSPasteboard.general.string(forType: .string), "unchanged")
+            click(point, in: window)
+            XCTAssertTrue(selection.expanded.isEmpty, "\(name) should collapse its commit")
             let event = try XCTUnwrap(NSEvent.mouseEvent(
                 with: .rightMouseDown, location: point, modifierFlags: [],
                 timestamp: ProcessInfo.processInfo.systemUptime,
@@ -367,6 +371,10 @@ final class RecentCommitsViewTests: XCTestCase {
                 .items.map(\.title)
             XCTAssertTrue(titles.contains(expected), "\(name): \(titles)")
             XCTAssertFalse(titles.contains(excluded), "\(name): \(titles)")
+            let copyTitle = name == "main"
+                ? String(localized: "Copy Branch Name", table: "Git")
+                : String(localized: "Copy Remote Branch Name", table: "Git")
+            XCTAssertTrue(titles.contains(copyTitle), name)
         }
     }
 
@@ -777,13 +785,17 @@ final class RecentCommitsViewTests: XCTestCase {
     }
 
     func testNativeContextMenuAtDirectReferencesContainsOnlyTheSelectedObjectActions() throws {
-        let cases: [(GitStatusModel.RecentCommit.Reference.Kind, String, String)] = [
-            (.currentBranch, "main", String(localized: "Rename Branch…", table: "Git")),
-            (.localBranch, "topic", String(localized: "Delete Branch…", table: "Git")),
-            (.remoteBranch, "origin/topic", String(localized: "Delete Remote Branch…", table: "Git")),
-            (.tag, "v1.2.3", String(localized: "Delete Tag…", table: "Git")),
+        let cases: [(GitStatusModel.RecentCommit.Reference.Kind, String, String, String)] = [
+            (.currentBranch, "main", String(localized: "Rename Branch…", table: "Git"),
+             String(localized: "Copy Branch Name", table: "Git")),
+            (.localBranch, "topic", String(localized: "Delete Branch…", table: "Git"),
+             String(localized: "Copy Branch Name", table: "Git")),
+            (.remoteBranch, "origin/topic", String(localized: "Delete Remote Branch…", table: "Git"),
+             String(localized: "Copy Remote Branch Name", table: "Git")),
+            (.tag, "v1.2.3", String(localized: "Delete Tag…", table: "Git"),
+             String(localized: "Copy Tag Name", table: "Git")),
         ]
-        for (kind, name, expected) in cases {
+        for (kind, name, expected, copyTitle) in cases {
             let selection = GraphSelection()
             let commit = GitStatusModel.RecentCommit(
                 hash: "menu", shortHash: "menu", subject: "Small change", author: "Developer",
@@ -800,12 +812,55 @@ final class RecentCommitsViewTests: XCTestCase {
             let menu = try XCTUnwrap(window.contentView?.menu(for: event), name)
             let titles = menu.items.map(\.title)
             XCTAssertTrue(titles.contains(expected), name)
+            XCTAssertTrue(titles.contains(copyTitle), "\(name): Copy must remain in the context menu")
             XCTAssertFalse(titles.contains(String(localized: "Create Branch at Commit…", table: "Git")), name)
             XCTAssertTrue(selection.expanded.isEmpty, "Requesting a context menu must not trigger a left action")
+            let copyIndex = try XCTUnwrap(menu.items.firstIndex(where: { $0.title == copyTitle }))
+            NSPasteboard.general.clearContents()
+            menu.performActionForItem(at: copyIndex)
+            XCTAssertEqual(NSPasteboard.general.string(forType: .string), name,
+                           "\(name): Context menu must still copy the selected reference")
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("unchanged", forType: .string)
+            click(NSPoint(x: 50, y: height - 12), in: window)
+            XCTAssertEqual(selection.expanded, [commit.id], "\(name) must expand the selected commit")
+            XCTAssertEqual(NSPasteboard.general.string(forType: .string), "unchanged")
+            click(NSPoint(x: 50, y: height - 12), in: window)
+            XCTAssertTrue(selection.expanded.isEmpty, "\(name) must collapse the selected commit")
         }
     }
 
-    func testSymbolicRemoteAliasHasOnlyCopyActionAndDoesNotToggleCommit() throws {
+    func testDetachedHeadBadgeExpandsCommitAndKeepsCopyHashInMenu() throws {
+        let commit = GitStatusModel.RecentCommit(
+            hash: String(repeating: "f", count: 40), shortHash: "fffffff",
+            subject: "Detached revision", author: "Developer", date: .now,
+            parentHashes: [],
+            references: [.init(kind: .detachedHead, name: "HEAD")], files: []
+        )
+        let selection = GraphSelection()
+        let height: CGFloat = 120
+        let window = hostHistory([commit], selection: selection, height: height)
+        defer { window.close() }
+        let point = NSPoint(x: 50, y: height - 12)
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .rightMouseDown, location: point, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+        let titles = try XCTUnwrap(window.contentView?.menu(for: event)).items.map(\.title)
+        XCTAssertTrue(titles.contains(String(localized: "Copy Commit Hash", table: "Git")))
+        XCTAssertFalse(titles.contains(String(localized: "Checkout Commit…", table: "Git")))
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("unchanged", forType: .string)
+        click(point, in: window)
+        XCTAssertEqual(selection.expanded, [commit.id])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "unchanged")
+        click(point, in: window)
+        XCTAssertTrue(selection.expanded.isEmpty)
+    }
+
+    func testSymbolicRemoteAliasOnlyCopiesFromMenuAndTogglesCommit() throws {
         let alias = GitStatusModel.RecentCommit.Reference(kind: .remoteAlias,
                                                          name: "upstream/HEAD")
         let commit = GitStatusModel.RecentCommit(
@@ -828,8 +883,12 @@ final class RecentCommitsViewTests: XCTestCase {
         XCTAssertTrue(titles.contains(String(localized: "Copy Remote Branch Name", table: "Git")))
         XCTAssertFalse(titles.contains(String(localized: "Delete Remote Branch…", table: "Git")))
         XCTAssertFalse(titles.contains(String(localized: "Checkout Remote Branch…", table: "Git")))
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("unchanged", forType: .string)
         click(point, in: window)
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), alias.name)
+        XCTAssertEqual(selection.expanded, [commit.id])
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "unchanged")
+        click(point, in: window)
         XCTAssertTrue(selection.expanded.isEmpty)
     }
 
@@ -1042,18 +1101,28 @@ final class RecentCommitsViewTests: XCTestCase {
                 XCTAssertFalse(try XCTUnwrap(menu.items.first(where: {
                     $0.title == String(localized: "Remove Worktree…", table: "Git")
                 })).isEnabled, "Main Worktree must not be removable")
+                let copyIndex = try XCTUnwrap(menu.items.firstIndex(where: {
+                    $0.title == String(localized: "Copy Worktree Path", table: "Git")
+                }))
                 NSPasteboard.general.clearContents()
+                menu.performActionForItem(at: copyIndex)
+                XCTAssertEqual(NSPasteboard.general.string(forType: .string), main.path)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString("unchanged", forType: .string)
                 click(NSPoint(x: 68, y: h - 12), in: window)
-                XCTAssertEqual(NSPasteboard.general.string(forType: .string), main.path,
-                               "Clicking a Worktree badge should copy its path like a branch badge")
+                XCTAssertEqual(selection.expanded, [commit.id],
+                               "The main Worktree badge must expand the actual commit")
+                XCTAssertEqual(NSPasteboard.general.string(forType: .string), "unchanged")
                 XCTAssertTrue(calls.events.isEmpty, "Badge click must not open a project")
-                XCTAssertTrue(selection.expanded.isEmpty, "Badge click must not expand its commit")
+                click(NSPoint(x: 68, y: h - 12), in: window)
+                XCTAssertTrue(selection.expanded.isEmpty)
                 if width == 430 {
-                    NSPasteboard.general.clearContents()
                     click(NSPoint(x: 135, y: h - 12), in: window)
-                    XCTAssertEqual(NSPasteboard.general.string(forType: .string), linked.path,
-                                   "The second badge must copy its own Worktree path")
+                    XCTAssertEqual(selection.expanded, [commit.id],
+                                   "Another Worktree at the same HEAD must expand that commit")
+                    XCTAssertEqual(NSPasteboard.general.string(forType: .string), "unchanged")
                     XCTAssertTrue(calls.events.isEmpty)
+                    click(NSPoint(x: 135, y: h - 12), in: window)
                     XCTAssertTrue(selection.expanded.isEmpty)
                 }
             }
@@ -1164,7 +1233,7 @@ final class RecentCommitsViewTests: XCTestCase {
         XCTAssertTrue(selection.expanded.isEmpty, "A right click must not toggle the stash")
     }
 
-    func testTagBadgeDoesNotToggleExpandedCommitClosed() {
+    func testTagBadgeTogglesSameCommitAsOtherReferences() {
         let selection = GraphSelection()
         let commit = GitStatusModel.RecentCommit(
             hash: "tag-commit", shortHash: "tag-commit", subject: "Small change",
@@ -1180,7 +1249,7 @@ final class RecentCommitsViewTests: XCTestCase {
         XCTAssertTrue(selection.expanded.contains(commit.hash),
                       "Tag badge should locate the tagged commit")
         click(tagPoint, in: window)
-        XCTAssertTrue(selection.expanded.contains(commit.hash),
-                      "Clicking Tag again must not collapse its commit")
+        XCTAssertFalse(selection.expanded.contains(commit.hash),
+                       "Clicking Tag again must collapse the same commit")
     }
 }

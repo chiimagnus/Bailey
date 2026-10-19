@@ -515,13 +515,13 @@ struct RecentCommitsView: View {
         return ViewThatFits(in: .horizontal) {
             HStack(spacing: 3 * fontScale) {
                 ForEach(locations, id: \.path) { location in
-                    checkedOutWorktreeBadge(location)
+                    checkedOutWorktreeBadge(location, in: commit)
                 }
             }
             .fixedSize(horizontal: true, vertical: false)
             if locations.count > 1 {
                 HStack(spacing: 3 * fontScale) {
-                    checkedOutWorktreeBadge(locations[0])
+                    checkedOutWorktreeBadge(locations[0], in: commit)
                     Menu {
                         ForEach(locations.dropFirst(), id: \.path) { location in
                             Menu(Self.worktreeDisplayPath(location.path, among: locations.map(\.path))) {
@@ -541,11 +541,13 @@ struct RecentCommitsView: View {
         }
     }
 
-    private func checkedOutWorktreeBadge(_ location: GitStatusModel.WorktreeLocation) -> some View {
+    private func checkedOutWorktreeBadge(
+        _ location: GitStatusModel.WorktreeLocation, in commit: Commit
+    ) -> some View {
         let allPaths = commits.flatMap { $0.checkedOutWorktrees.map(\.path) }
         let title = Self.worktreeDisplayPath(location.path, among: allPaths)
         let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
-        return Button { copy(location.path) } label: {
+        return Button { toggle(commit) } label: {
             HStack(spacing: 0) {
                 Image(systemName: "square.stack")
                     .font(.system(size: Self.badgeFontSize * fontScale))
@@ -721,13 +723,7 @@ struct RecentCommitsView: View {
             ? .system(size: Self.badgeFontSize * fontScale).italic()
             : .system(size: Self.badgeFontSize * fontScale,
                       weight: current ? .semibold : .medium)
-        return Button {
-            if reference.kind == .tag {
-                expandedCommitIDs.insert(commit.id)
-            } else {
-                copy(reference.name)
-            }
-        } label: {
+        return Button { toggle(commit) } label: {
             HStack(spacing: 0) {
                 if isRemoteSuffix {
                     Rectangle()
