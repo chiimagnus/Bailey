@@ -121,6 +121,16 @@
         }
       }
     },
+    "Connections" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接"
+          }
+        }
+      }
+    },
     "Could not access Bark URLs in Keychain" : {
       "localizations" : {
         "zh-Hans" : {
@@ -359,6 +369,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "端口转发"
+          }
+        }
+      }
+    },
+    "Preferences" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "偏好设置"
           }
         }
       }

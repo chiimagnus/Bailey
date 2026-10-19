@@ -59,16 +59,29 @@ struct SettingsView: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $selectedPage) {
-                ForEach(SettingsPage.allCases.filter {
-                    !BaileyInstanceMode.isIsolated || $0 != .notifications
-                }) { page in
-                    Label {
-                        Text(page.title)
-                    } icon: {
-                        Image(systemName: page.icon)
-                            .foregroundStyle(.secondary)
+                Section(String(localized: "Preferences", table: "Settings")) {
+                    ForEach([SettingsPage.general, .terminal, .workspace]) { page in
+                        Label {
+                            Text(page.title)
+                        } icon: {
+                            Image(systemName: page.icon)
+                                .foregroundStyle(.secondary)
+                        }
+                        .tag(page)
                     }
-                    .tag(page)
+                }
+                Section(String(localized: "Connections", table: "Settings")) {
+                    ForEach([SettingsPage.portForwarding, .notifications]) { page in
+                        if !BaileyInstanceMode.isIsolated || page != .notifications {
+                            Label {
+                                Text(page.title)
+                            } icon: {
+                                Image(systemName: page.icon)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .tag(page)
+                        }
+                    }
                 }
             }
             .listStyle(.sidebar)
