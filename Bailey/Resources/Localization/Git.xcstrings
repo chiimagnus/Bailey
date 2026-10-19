@@ -1,6 +1,176 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Worktree" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作树"
+          }
+        }
+      }
+    },
+    "Create Worktree…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建工作树…"
+          }
+        }
+      }
+    },
+    "Create Worktree" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建工作树"
+          }
+        }
+      }
+    },
+    "Remove Worktree…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除工作树…"
+          }
+        }
+      }
+    },
+    "Remove Worktree" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除工作树"
+          }
+        }
+      }
+    },
+    "Absolute Worktree Directory" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作树绝对路径"
+          }
+        }
+      }
+    },
+    "Open Worktree" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Bailey 中打开工作树"
+          }
+        }
+      }
+    },
+    "Reveal in Finder" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在访达中显示"
+          }
+        }
+      }
+    },
+    "Worktree is in use" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作树正在使用中"
+          }
+        }
+      }
+    },
+    "Close the Worktree's projects, editors and terminals before removing it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先关闭正在使用该工作树的项目、编辑器和终端。"
+          }
+        }
+      }
+    },
+    "Only clean Worktrees can be removed. The branch is preserved." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只能移除无未提交修改的工作树，分支将被保留。"
+          }
+        }
+      }
+    },
+    "The branch, repository, or worktree path changed. Review and try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分支、仓库或工作树路径已变化。请检查后重试。"
+          }
+        }
+      }
+    },
+    "The selected Worktree is unavailable or protected. Refresh and try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选工作树不可用或受到保护。请刷新后重试。"
+          }
+        }
+      }
+    },
+    "Could not verify the current Worktree list. Nothing was changed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法验证当前工作树列表。未执行任何修改。"
+          }
+        }
+      }
+    },
+    "The branch is already checked out in another Worktree." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该分支已经在其他工作树中检出。"
+          }
+        }
+      }
+    },
+    "The selected Worktree changed, is locked, or is the main Worktree." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所选工作树已变化、已锁定或属于主工作树。"
+          }
+        }
+      }
+    },
+    "The Worktree changed or contains uncommitted files. Nothing was removed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作树已变化或存在未提交文件。未移除任何内容。"
+          }
+        }
+      }
+    },
     "Commit" : {
       "localizations" : {
         "zh-Hans" : {

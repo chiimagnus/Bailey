@@ -12,6 +12,11 @@ private final class GraphSelection {
 }
 
 @MainActor
+private final class WorktreeMenuCalls {
+    var events: [(String, RecentCommitsView.WorktreeAction)] = []
+}
+
+@MainActor
 final class RecentCommitsViewTests: XCTestCase {
     private func settle() {
         let until = Date().addingTimeInterval(0.12)
@@ -63,7 +68,9 @@ final class RecentCommitsViewTests: XCTestCase {
         viewMode: GitViewMode = .list,
         remotes: [String] = [],
         stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in },
-        openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void = { _, _, _ in }
+        openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void = { _, _, _ in },
+        canActOnWorktrees: Bool = false,
+        worktreeAction: @escaping (GitStatusModel.WorktreeLocation, RecentCommitsView.WorktreeAction) -> Void = { _, _ in }
     ) -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(x: -1200, y: -1200, width: width, height: height),
@@ -85,7 +92,10 @@ final class RecentCommitsViewTests: XCTestCase {
             canFetchRemoteBranch: { _ in false }, createBranch: { _ in }, addTag: { _ in },
             canActOnCommit: true, canDropCommit: { _ in false }, commitAction: { _, _ in },
             stashAction: stashAction,
-            openWorktreeDiff: openWorktreeDiff
+            openWorktreeDiff: openWorktreeDiff,
+            canActOnWorktrees: canActOnWorktrees,
+            canRevealWorktreeInFinder: true,
+            worktreeAction: worktreeAction
         ).frame(width: width, height: height, alignment: .topLeading)
             .background(Color(nsColor: Theme.sidebar)))
         window.orderFront(nil)
@@ -981,6 +991,58 @@ final class RecentCommitsViewTests: XCTestCase {
         XCTAssertEqual(RecentCommitsView.badgeIconSize, 16)
         XCTAssertEqual(RecentCommitsView.badgeFontSize, 9)
         XCTAssertEqual(RecentCommitsView.badgeHorizontalPadding, 4)
+    }
+
+    func testCleanWorktreeBadgesAreSeparateFromUncommittedChangesInBothThemes() throws {
+        let oid = String(repeating: "c", count: 40)
+        let main = GitStatusModel.WorktreeLocation(
+            path: "/tmp/bailey-main", headOID: oid, branch: "main", isMain: true
+        )
+        let linked = GitStatusModel.WorktreeLocation(
+            path: "/tmp/feature 重名", headOID: oid, branch: "topic"
+        )
+        let commit = GitStatusModel.RecentCommit(
+            hash: oid, shortHash: "ccccccc", subject: "One HEAD, two Worktrees",
+            author: "Dev", date: .now, parentHashes: [],
+            references: [.init(kind: .currentBranch, name: "main")], files: []
+        )
+        let graph = GitStatusModel.graphCommits(
+            [commit], stashes: [], locations: [main, linked]
+        )
+        XCTAssertEqual(graph.count, 1, "Clean Worktrees must not insert synthetic DAG nodes")
+        XCTAssertEqual(graph[0].checkedOutWorktrees.count, 2)
+        XCTAssertEqual(CommitGraphLayout(commits: graph).rows.count, 1)
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let calls = WorktreeMenuCalls()
+            let window = hostHistory(
+                graph, selection: GraphSelection(), width: 430,
+                canActOnWorktrees: true,
+                worktreeAction: { item, action in
+                    calls.events.append((item.path, action))
+                }
+            )
+            defer { window.close() }
+            window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+            settle()
+            let h = window.frame.height
+            let menuEvent = try XCTUnwrap(NSEvent.mouseEvent(
+                with: .rightMouseDown, location: NSPoint(x: 68, y: h - 12),
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                eventNumber: 0, clickCount: 1, pressure: 1
+            ))
+            let menu = try XCTUnwrap(window.contentView?.menu(for: menuEvent))
+            let titles = menu.items.map(\.title)
+            XCTAssertTrue(titles.contains(String(localized: "Open Worktree", table: "Git")), "Actual menu: \(titles)")
+            XCTAssertTrue(titles.contains(String(localized: "Remove Worktree…", table: "Git")))
+            XCTAssertTrue(titles.contains(String(localized: "Copy Worktree Path", table: "Git")))
+            XCTAssertFalse(titles.contains(String(localized: "Checkout Commit…", table: "Git")))
+            XCTAssertFalse(try XCTUnwrap(menu.items.first(where: {
+                $0.title == String(localized: "Remove Worktree…", table: "Git")
+            })).isEnabled, "Main Worktree must not be removable")
+            click(NSPoint(x: 68, y: h - 12), in: window)
+            XCTAssertTrue(calls.events.contains(where: { $0.0 == main.path && $0.1 == .open }))
+        }
     }
 
     func testUncommittedWorktreeNodeHasSafeMenuAndNativeStageAwareFileActions() throws {

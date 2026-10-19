@@ -49,10 +49,11 @@ struct RecentCommitsView: View {
     typealias Commit = GitStatusModel.RecentCommit
     typealias Reference = Commit.Reference
 
-    enum BranchAction { case rename, delete, push, merge, rebase, archive }
+    enum BranchAction { case rename, delete, push, merge, rebase, archive, createWorktree }
     enum RemoteAction { case checkout, fetch, merge, pull, delete, archive }
     enum TagAction { case details, delete, push, archive }
     enum HistoricalFileAction { case viewRevision, compareWorktree, openWorkingFile, resetFile }
+    enum WorktreeAction { case open, revealInFinder, remove }
 
     static let badgeHeight: CGFloat = 16
     static let badgeIconSize: CGFloat = 16
@@ -93,6 +94,11 @@ struct RecentCommitsView: View {
     let canActOnStash: Bool
     let stashAction: (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void
     let openWorktreeDiff: (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void
+    let canActOnWorktrees: Bool
+    let canRevealWorktreeInFinder: Bool
+    let worktreeAction: (GitStatusModel.WorktreeLocation, WorktreeAction) -> Void
+    let canCreateWorktree: (Reference) -> Bool
+    let createWorktree: (Reference, Commit) -> Void
 
     init(
         commits: [Commit],
@@ -124,7 +130,12 @@ struct RecentCommitsView: View {
         commitAction: @escaping (Commit, GitStatusModel.CommitAction) -> Void,
         canActOnStash: Bool = true,
         stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in },
-        openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void = { _, _, _ in }
+        openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void = { _, _, _ in },
+        canActOnWorktrees: Bool = false,
+        canRevealWorktreeInFinder: Bool = false,
+        worktreeAction: @escaping (GitStatusModel.WorktreeLocation, WorktreeAction) -> Void = { _, _ in },
+        canCreateWorktree: @escaping (Reference) -> Bool = { _ in false },
+        createWorktree: @escaping (Reference, Commit) -> Void = { _, _ in }
     ) {
         self.commits = commits
         self.remotes = remotes
@@ -156,6 +167,11 @@ struct RecentCommitsView: View {
         self.canActOnStash = canActOnStash
         self.stashAction = stashAction
         self.openWorktreeDiff = openWorktreeDiff
+        self.canActOnWorktrees = canActOnWorktrees
+        self.canRevealWorktreeInFinder = canRevealWorktreeInFinder
+        self.worktreeAction = worktreeAction
+        self.canCreateWorktree = canCreateWorktree
+        self.createWorktree = createWorktree
     }
 
     var body: some View {
@@ -266,10 +282,16 @@ struct RecentCommitsView: View {
                     } else if let stash = commit.stash {
                         stashBadge(stash, in: commit, colorIndex: graph.node.color)
                             .layoutPriority(1)
-                    } else if !commit.references.isEmpty {
-                        referenceStrip(commit.references, commit: commit,
-                                       colorIndex: graph.node.color)
-                            .layoutPriority(1)
+                    } else {
+                        if !commit.checkedOutWorktrees.isEmpty {
+                            checkedOutWorktreeStrip(commit)
+                                .layoutPriority(1)
+                        }
+                        if !commit.references.isEmpty {
+                            referenceStrip(commit.references, commit: commit,
+                                           colorIndex: graph.node.color)
+                                .layoutPriority(1)
+                        }
                     }
                     Button { toggle(commit) } label: {
                         if commit.worktree != nil {
@@ -488,6 +510,92 @@ struct RecentCommitsView: View {
         .accessibilityLabel(branch + ", " + worktree.path)
     }
 
+    private func checkedOutWorktreeStrip(_ commit: Commit) -> some View {
+        let locations = commit.checkedOutWorktrees
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 3 * fontScale) {
+                ForEach(locations, id: \.path) { location in
+                    checkedOutWorktreeBadge(location)
+                }
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            if locations.count > 1 {
+                HStack(spacing: 3 * fontScale) {
+                    checkedOutWorktreeBadge(locations[0])
+                    Menu {
+                        ForEach(locations.dropFirst(), id: \.path) { location in
+                            Menu(Self.worktreeDisplayPath(location.path, among: locations.map(\.path))) {
+                                worktreeActions(location)
+                            }
+                        }
+                    } label: {
+                        Text("+\(locations.count - 1)")
+                            .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                }
+                .fixedSize(horizontal: true, vertical: false)
+            }
+        }
+    }
+
+    private func checkedOutWorktreeBadge(_ location: GitStatusModel.WorktreeLocation) -> some View {
+        let allPaths = commits.flatMap { $0.checkedOutWorktrees.map(\.path) }
+        let title = Self.worktreeDisplayPath(location.path, among: allPaths)
+        let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
+        return Button { worktreeAction(location, .open) } label: {
+            HStack(spacing: 0) {
+                Image(systemName: "square.stack")
+                    .font(.system(size: Self.badgeFontSize * fontScale))
+                    .foregroundStyle(.secondary)
+                    .frame(width: Self.badgeIconSize * fontScale,
+                           height: Self.badgeHeight * fontScale)
+                    .background(Color.primary.opacity(0.09))
+                Text(verbatim: title)
+                    .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 82 * fontScale)
+                    .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
+            }
+            .frame(height: Self.badgeHeight * fontScale)
+            .background(Color.primary.opacity(0.06))
+            .clipShape(outline)
+            .overlay(outline.stroke(Color.primary.opacity(0.35), lineWidth: fontScale))
+        }
+        .buttonStyle(.plain)
+        .help((location.branch ?? String(localized: "Detached HEAD", table: "Git"))
+              + "\n" + location.path)
+        .accessibilityLabel(String(localized: "Worktree", table: "Git") + ": " + location.path)
+        .contextMenu { worktreeActions(location) }
+    }
+
+    @ViewBuilder
+    private func worktreeActions(_ location: GitStatusModel.WorktreeLocation) -> some View {
+        Button(String(localized: "Open Worktree", table: "Git")) {
+            worktreeAction(location, .open)
+        }
+        .disabled(!canActOnWorktrees || location.isPrunable)
+        if canRevealWorktreeInFinder {
+            Button(String(localized: "Reveal in Finder", table: "Git")) {
+                worktreeAction(location, .revealInFinder)
+            }
+            .disabled(!canActOnWorktrees || location.isPrunable)
+        }
+        Button(String(localized: "Remove Worktree…", table: "Git"), role: .destructive) {
+            worktreeAction(location, .remove)
+        }
+        .disabled(!canActOnWorktrees || location.isMain
+                  || location.isLocked || location.isPrunable)
+        Divider()
+        Button(String(localized: "Copy Worktree Path", table: "Git")) {
+            copy(location.path)
+        }
+    }
+
     private func stashBadge(
         _ stash: GitStatusModel.Stash, in commit: Commit, colorIndex: Int
     ) -> some View {
@@ -658,6 +766,12 @@ struct RecentCommitsView: View {
     private func referenceActions(_ reference: Reference, commit: Commit) -> some View {
         switch reference.kind {
         case .currentBranch, .localBranch:
+            if reference.kind == .localBranch && canCreateWorktree(reference) {
+                Button(String(localized: "Create Worktree…", table: "Git")) {
+                    createWorktree(reference, commit)
+                }
+                .disabled(!canActOnWorktrees)
+            }
             if reference.kind == .localBranch {
                 Button(String(localized: "Switch to This Branch", table: "Git")) {
                     switchBranch(reference.name)

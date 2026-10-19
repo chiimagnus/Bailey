@@ -94,6 +94,40 @@ final class TerminalManager {
     }
     /// Read-only access for the private, authenticated SSH handoff.
     static var activeManagers: [TerminalManager] { registry }
+
+    /// A worktree used by any live project, terminal, file or Diff tab is not
+    /// eligible for removal. Machine identity is part of every comparison.
+    static func isWorktreeInUse(path: String, scope: String) -> Bool {
+        func contains(_ candidate: String) -> Bool {
+            let root = scope == "local"
+                ? URL(fileURLWithPath: path).resolvingSymlinksInPath().path : path
+            let value = scope == "local"
+                ? URL(fileURLWithPath: candidate).resolvingSymlinksInPath().path : candidate
+            return LocalPathScope.contains(value, in: root)
+        }
+        return registry.contains { manager in
+            manager.projects.contains { project in
+                guard project.panelContext?.scope == scope else { return false }
+                if let directory = project.customDirectory,
+                   contains(directory) { return true }
+                if project.sessions.contains(where: { contains($0.panelDirectoryPath) }) {
+                    return true
+                }
+                return project.tabs.contains { tab in
+                    switch tab.content {
+                    case .file(let file):
+                        return (file.workspaceIdentity ?? "local") == scope
+                            && contains(file.path)
+                    case .diff(let diff):
+                        return (diff.workspaceIdentity ?? "local") == scope
+                            && contains(diff.repoRoot)
+                    case .session, .browser: return false
+                    }
+                }
+            }
+        }
+    }
+
     /// Folder requests can arrive while macOS is still launching Bailey, before
     /// a WindowGroup has produced a manager/window to receive them.
     private static var pendingDirectories: [String] = []
@@ -314,7 +348,8 @@ final class TerminalManager {
 
     /// One SSH host can supply several independent roots. The remote file
     /// browser uses the already-supported POSIX shell on the SSH destination.
-    func addSSHItems(host: String, paths: [String]) async throws {
+    func addSSHItems(host: String, paths: [String],
+                     isCurrentTarget: (@MainActor () -> Bool)? = nil) async throws {
         let host = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard SSHHostWorkspaces.validHost(host) else {
             throw SSHItemError.invalidHost
@@ -331,6 +366,7 @@ final class TerminalManager {
             else { throw SSHItemError.notFound(path) }
             validated.append((path, stat.isDirectory))
         }
+        guard isCurrentTarget?() ?? true else { return }
         for item in validated {
             let root = item.directory ? item.path
                 : (item.path as NSString).deletingLastPathComponent
