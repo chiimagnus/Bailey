@@ -296,7 +296,7 @@ struct ToolPanelView: View {
     /// workspace, so it stays correct while the panels are stalled.
     private func applyRemoteHeading() {
         guard let project = manager.selectedProject else {
-            remoteHeaderState = .local
+            updateRemoteHeading(.local, directory: nil)
             return
         }
         if let host = project.sshHost {
@@ -306,28 +306,29 @@ struct ToolPanelView: View {
             case .some(false): state = .disconnected(destination: host)
             case .none: state = .connecting(destination: host)
             }
-            remoteHeader.apply(state: state)
-            remoteHeader.workingDirectory = project.customDirectory
-            if remoteHeaderState != state { remoteHeaderState = state }
+            updateRemoteHeading(state, directory: project.customDirectory)
             return
         }
         if project.customDirectory != nil {
-            remoteHeader.apply(state: .local)
-            remoteHeaderState = .local
+            updateRemoteHeading(.local, directory: nil)
             return
         }
         guard let session = project.selectedSession else {
-            remoteHeaderState = .local
+            updateRemoteHeading(.local, directory: nil)
             return
         }
         // An automatically scoped project may still follow its terminal's
         // connection. A pinned project never does.
-        let headerState = session.remoteHeaderState
-        remoteHeader.apply(state: headerState)
-        remoteHeader.workingDirectory = headerState == .local
-            ? nil
-            : session.panelDirectoryPath
-        if remoteHeaderState != headerState { remoteHeaderState = headerState }
+        let state = session.remoteHeaderState
+        updateRemoteHeading(state, directory: state == .local ? nil : session.panelDirectoryPath)
+    }
+
+    private func updateRemoteHeading(_ state: RemotePaneHeaderState, directory: String?) {
+        if remoteHeaderState != state {
+            remoteHeader.apply(state: state)
+            remoteHeaderState = state
+        }
+        remoteHeader.workingDirectory = directory
     }
 
     /// Which workspace a refresh belongs to. A connection changing state, or
