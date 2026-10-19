@@ -298,7 +298,6 @@ final class GitStatusModelTests: XCTestCase {
         let model = GitStatusModel()
         model.sync(root: linked.path)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
-        XCTAssertTrue(model.hasLocalFileEvents)
         let gitDir = GitCommandExecution.run(["rev-parse", "--absolute-git-dir"], in: linked.path)
         XCTAssertEqual(gitDir.status, 0)
         let watched = GitFileEventWatcher.paths(
@@ -343,7 +342,6 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { model.hasResolvedStatus && !model.isRefreshing
             && model.worktreeLocations.count == 2 }
         XCTAssertTrue(model.otherWorktrees.allSatisfy { $0.entries.isEmpty })
-        XCTAssertTrue(model.hasLocalFileEvents)
         let linkedRoot = GitCommandExecution.run(
             ["rev-parse", "--show-toplevel"], in: linked.path
         ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -408,7 +406,6 @@ final class GitStatusModelTests: XCTestCase {
         model.sync(root: directory.path)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         XCTAssertFalse(model.isRepo)
-        XCTAssertTrue(model.hasLocalFileEvents)
         XCTAssertEqual(GitCommandExecution.run(["init", "-q", "-b", "main"], in: directory.path).status, 0)
         try await wait { model.isRepo && model.hasResolvedStatus && !model.isRefreshing }
         XCTAssertTrue(model.isRepo)
@@ -429,17 +426,14 @@ final class GitStatusModelTests: XCTestCase {
         let model = GitStatusModel()
         model.sync(root: directory.path)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
-        XCTAssertTrue(model.hasLocalFileEvents)
 
         model.setLocalFileEventsForeground(false)
-        XCTAssertFalse(model.hasLocalFileEvents)
         try Data("background edit\n".utf8).write(to: directory.appendingPathComponent("background.txt"))
         try await Task.sleep(for: .seconds(1))
         XCTAssertTrue(model.changedEntries.isEmpty,
                       "Background filesystem events must not start Git queries")
 
         model.setLocalFileEventsForeground(true)
-        XCTAssertTrue(model.hasLocalFileEvents)
         try await wait { model.changedEntries.contains(where: { $0.path == "background.txt" }) }
         XCTAssertTrue(model.changedEntries.contains(where: { $0.path == "background.txt" }))
 

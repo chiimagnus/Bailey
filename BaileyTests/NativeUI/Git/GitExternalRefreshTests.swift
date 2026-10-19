@@ -129,7 +129,6 @@ final class GitExternalRefreshTests: XCTestCase {
         XCTAssertEqual(manager.selectedProject?.panelContext?.isRemote, false)
         NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
         try await Task.sleep(for: .seconds(1))
-        XCTAssertTrue(model.hasLocalFileEvents)
 
         let unwantedPoll = expectation(description: "Local Git must not poll while files are unchanged")
         unwantedPoll.isInverted = true

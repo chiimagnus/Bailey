@@ -610,7 +610,6 @@ final class GitStatusModel {
     @ObservationIgnored private var localWatcherPaths: [String] = []
     @ObservationIgnored private var pendingFileEvent: Task<Void, Never>?
     @ObservationIgnored private var localWatcherForeground = true
-    var hasLocalFileEvents: Bool { localWatcher != nil }
     private static let recentCommitPageSize = 30
     private var recentCommitLimit = recentCommitPageSize
     private var recentCommitLimitByRoot: [String: Int] = [:]
