@@ -175,3 +175,47 @@
 - **最终全量/签名 Gate**：所有最新代码修改后，`BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test` 完整退出 **0**、`** TEST SUCCEEDED **`、**480 项／0 失败（XCTest 总计 0 跳过）**，日志 `build/audit-logs/finder-f08-f09-f10-full-test-final.log`，耗时约 686 秒；包含真实 Windows SSH 文件树、Git Workspace、Git 断线恢复及全部窗口/Finder、Files、Diff、编辑器用例。Debug `make build`、Release `make build:release` 均完整退出 0，`** BUILD SUCCEEDED **` 和严格 `codesign --verify --deep --strict`，分别见 `build/audit-logs/finder-f08-f09-f10-{debug,release}-build.log`。`todo validate`、Git 两新提交 `8738e27`/`fe2a55c` 的 `git show --check`、`git diff --check` 均通过。首次全量因工具命令使用 120 秒执行时限而被终止，不能当测试完成；另一次旧的 Diff 偏好 Red 保留，不与最终绿色结果混淆。
 - **诚实边界**：真实 Windows `SSHFileTreeLiveTests` 输出 `P4_LIVE_SYMLINK_UNAVAILABLE status=1`，所以整体 XCTest 的「0 skipped」并不代表这项特定远端链接建立前提成功。Finder 物理 Dock 图标拖放、有项目右键「打开方式」正向点击、所有主题/多分屏组合和 SSH GUI 断线恢复仍不能凭 480 项回归冒称已物理执行；本轮多份同 Bundle ID Bailey 并行占用图形会话，防误投未在不确定窗口重新做真鼠标验证。正式 `/Applications/Bailey.app` 的二进制哈希与本分支构建仍不同，另一个主仓库正并行进行原生编辑器迁移，为避免覆盖其工作，本轮不执行安装/重启。两份 audit 为本地独立证据，不随上述原子代码 commit 推送。
 - **Gate**：已验证范围（本机文件系统极端输入、原生多窗路径、授权 Windows SSH、Debug/Release 验签）为 **Go**；尚无唯一接收进程的实体 GUI 完整矩阵及 Windows 符号链接前提为 **未完成补验**，不是已验证通过，也不能无据断言它们存在产品 Bug。
+
+## 2026-10-19 P4 旧混合添加接口与冗余校验清理
+
+- **真实可达调用检查**：CodeGraph 与 rg 检出旧接口在 16 个生产/测试 Swift 文件共 75 处引用，当前方法从 P4 开始仅接收合法目录而从未添加本机单文件项目。已全部原位更名为 addLocalFolders，不留兼容别名；同步 docs/features/projects.md 中当前 API 名称；rg 对 Bailey、BaileyTests、docs 中旧接口无匹配。
+- **实际重复校验**：chooseFiles(inGroup:) 发起时核对当前项目 ID 与显式 Dock 组，回调时原有两次项目 ID 检查和 selectedProject != nil 重叠，改为一次 selectedProject?.id == originalProjectID，保留实际接收 NSWindow 和目标 groupID 必须仍存在的约束，不放宽已关闭窗口、错项目、失效分屏的限制。
+- **必须保留**：pinnedFile 仍由历史本机单文件项目快照的恢复、重命名，以及当前显式 SSH 文件项目写入/恢复使用；Finder 文件夹 Service openInBailey 及系统 NSServices 的旧文件类型输入是现行 macOS 平台 Service 合约；pendingDirectories 与 pendingExternalFiles 各服务不同真实入口；无覆盖原子 renamex_np(RENAME_EXCL)、符号链接类型判定、目标工作区/连接/窗口 ID 检查属于实际数据完整性条件。删除会破坏现有功能，不属于冗余防护。
+- **已执行针对性回归**：make test ONLY_TESTING=BaileyTests/WorkspaceIdentityTests 24/24、退出 0（build/audit-logs/finder-cleanup-workspace-identity-test.log）；WorkspaceWindowIsolationTests 17/17、退出 0（finder-cleanup-window-test.log）；PaneRetentionTests 14/14、退出 0（finder-cleanup-pane-test.log）。最新全量与签名已通过，证据见以下单独最终复验。GUI 全部物理拖放组合未因此视为完成。
+
+
+## 2026-10-19 F-11、旧入口清理后 481 项最终复验
+
+- **独立生产提交**：P1 F-11 取消人为拒绝 Finder 待恢复队列第 65 条及后续事件，a323544；P4 删除不再支持本机文件作为新项目的旧 addLocalItems 入口及全部 75 个调用，统一为 addLocalFolders、去掉文件选择器重复项目 ID 检查，e56309e。无兼容别名、无多余防御分支，也未删除真正的会话恢复或数据安全保护。
+- **旧实现失败和定向通过**：80 次有真实未挂载文件所有者的事件旧版 Red 1 项／2 失败，日志 build/audit-logs/finder-f11-owner-red.log；新代码 Green 1/1，finder-f11-owner-green.log；最终 WorkspaceWindowIsolationTests 17/17（finder-cleanup-window-test.log）、WorkspaceIdentityTests 24/24（finder-cleanup-workspace-identity-test.log）、PaneRetentionTests 14/14（finder-cleanup-pane-test.log）均退出 0。
+- **首轮全量保留红灯**：授权 Windows SSH 全量 make test 在另一 Bailey 工作树同时执行完整 xcodebuild test 时退出 65，481 项／2 失败断言，集中在一个 GitExternalRefreshTests.testVisibleGitPanelRefreshesTwoExternalMutationsWithoutActivation，日志 build/audit-logs/finder-cleanup-full-test.log。当时另外一份测试使用独立 DerivedData-native-parity，但并发占用 Xcode/Windows SSH。失败不能证明完全由资源争用导致，也不能直接认定产品缺陷；临时终端历史文件 NSCocoaErrorDomain Code 4 作为同次失败的附属证据保存。
+- **独立重复验证**：不更改 Git 生产代码和测试超时，直接重跑原失败测试完整通过，工作树／索引／提交刷新分别约 1.91／2.00／1.86 秒，日志 finder-cleanup-git-refresh-focused.log。
+- **最终完整 Green**：其它 Xcode 构建结束、无并行 xcodebuild 后，再次运行 BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test，481 tests、0 failures、0 skipped、完整退出 0、TEST SUCCEEDED，历时约 682 秒，日志 build/audit-logs/finder-cleanup-full-test-final.log。包含真实 Windows SSH 文件树、Git/恢复、编辑器及窗口。之前失败的 Git 自动刷新测试在完整 XCTest 环境中也通过，三次刷新约 1.51／2.01／1.87 秒。
+- **Debug/Release Gate**：make build 及 make build:release 均退出 0、BUILD SUCCEEDED，严格 codesign --verify --deep --strict 两份 App 皆通过，日志 finder-cleanup-debug-build.log／finder-cleanup-release-build.log。macOS 27.2、Xcode 27.2；两个原子提交 git show --check、git diff --check 与 Feature todo validate 均成功。
+- **边界**：Windows 测试主机仍有 P4_LIVE_SYMLINK_UNAVAILABLE status=1，代表远端符号链接前置条件没有成立，不能计为该环境条件已覆盖。最新 Finder 右键、Dock 物理落点、多分屏外观组合和 SSH GUI 真断线未全部实测，正式 /Applications/Bailey.app 因另一工作树原生编辑器迁移未覆盖或重启。自动测试／构建 Gate = Go；完整物理 GUI Gate = 尚未全部完成。未推送、未合并。
+
+
+## 2026-10-19 P4-T1/T3 真实双窗口 Finder + Windows SSH GUI 补验
+
+- **隔离与边界**：仅在当前 macOS 27.2，使用 finder-integration 自有的签名 Debug Bailey，显式 --isolated-ui-test 和本次独立 BAILEY_UI_TEST_RUN_ID，实际运行 PID 46338。独立会话快照有两个真实 NSWindow：本机窗口包含 E2E Local A/B 两项目，SSH 窗口包含一个 Windows SSH 项目，其根目录及两个具有完全相同 POSIX 路径的 Mac/Windows file tab 都使用 /tmp/bailey-finder-e2e- 前缀的专用文件。正式 Bailey 及其他工作树进程没有退出、安装或修改。
+- **真实 SSH GUI 读取与保存**：专用 Windows SSH Host 别名 bailey-e2e-b24aee22 指向原有 Windows 主机，并只由单独 ProxyCommand/ControlPath 作为本轮连接门闩。第一次选择同名 Mac/Windows 标签，原生 NSTextView 实际读到 MAC_BEFORE_E2E 与 WIN_BEFORE_E2E；在 SSH 项目内分别修改并使用 Bailey 菜单 File > Save，独立核对 Mac 磁盘变为 MAC_EDITED_E2E_20261019、Windows 变为 WIN_EDITED_IN_REAL_BAILEY_GUI_20261019，未串写另一端。远端 remote.txt 始终保留原字节。
+- **真实断线与重连**：在 Windows same.txt 原生 NSTextView 内留下 WIN_UNSAVED_E2E_DURING_DISCONNECT 后，只移除专用连接门闩并以 OpenSSH 控制命令关闭测试 PID 的专用 SSH master；新建此别名 SSH 连接确证状态码 255。真实 Bailey File > Save 出现 read-only / Could not save 提示，原生编辑正文仍在，直接用另一条授权 Windows SSH 连接核对远端磁盘未改变；本机同路径文件亦未变化。恢复专用门闩、重新选择该标签后只读状态消失，重新触发 File > Save，最终 Windows 文件含原未保存正文，Mac 文件仍是自己的数据，保存错误条也消失。独立字节长度、文件修改时间及 SHA-256 已再次核对。
+- **真实 Finder 拖入跨机器项目**：在同一图形登录会话，真实访达 drop-source 目录的 alpha.swift 图标经约 1.8 秒鼠标物理拖放到 Bailey 的编辑内容区；因原生两个 Bailey 窗口实际堆叠，接收者是 SSH 项目窗口，而非原拟选中的 Local A。必须按真实接收窗口记录：SSH 窗口出现 alpha.swift 原生文本标签，编辑器正文为 E2E_DROP_ALPHA，本机文件未更改；同一隔离快照的 SSH 项目有四个标签，alpha.swift 的 localFile=true，原 Mac A/B 各自仍只有一个标签。独立 Windows SSH 核对不存在 alpha.swift 远端副本，确认没有错误上传。
+- **GUI 未完全通过的组合**：Finder 拖到本机窗口指定 Dock 组、Files 行/树根目录复制、多分屏任意主题/语言、触控板组合，在实际窗口重叠和桌面切到另一 Space 后，Peekaboo 精确目标变为 offscreen/no_matching_accessibility_window，无法安全完成；不在其他 Bailey 用户窗口前继续盲目鼠标投放，不能把该缺口算绿色，也不据此定性产品 Bug。模拟及原生 XCTest 不等于这些实体操作。
+- **本轮额外原生回归（真实运行）**：WorkspaceWindowIsolationTests 17/17、FileTreeTests 22/22、DockWorkspaceTests 5/5、PaneRetentionTests 14/14，全部退出码 0，合计 58 项／0 失败。日志分别为 build/audit-logs/finder-e2e-20261019-{WorkspaceWindowIsolationTests,FileTreeTests,DockWorkspaceTests,PaneRetentionTests}.log。逐项证据汇总到本 worktree 仅本机的 build/audit-logs/finder-native-e2e-20261019.json。
+- **误报已纠正**：一次对同一远端文件的验证命令错误使用 ssh host sh -c STRING，OpenSSH 对命令参数进行拼接，导致 cat 未收到文件名，返回空标准输出；不是文件变空。经 ssh host sh -s 从标准输入执行明确的远端脚本、远端 stat/sha256sum 复核，文件保持 33 字节，修改时间仍为成功重连保存时刻，未发现迟到写盘/截断。不得将此工具夹具错误当作 Bailey 缺陷。
+- **清理**：测试 PID46338 通过受控 process-start-identity 正常退出，访达专用测试窗口已关闭，测试 SSH ControlMaster 专用 socket 正常收到退出确认；用户 ~/.ssh/config 的临时 Host 前缀经前后 SHA 验证已精确移除，剩余原配置哈希与测试前完全相同；用户原 windows SSH 主机直接 BatchMode 连接仍正常。正式其他 Bailey 进程未触碰，右半屏未做测试 GUI 鼠标交互。
+- **Gate**：第四项真实 GUI 的同路径文件隔离、双向保存、断线只读、恢复后再次保存为 PASS；第三项跨 Finder -> SSH 项目原生编辑拖放为 PASS，其余实体多区域／多窗口接收的完整矩阵仍为 PARTIAL/待补验，不得以 58 项 XCTest 替代。
+
+## 2026-10-19 Finder 多窗口与多 Dock 区域物理拖放补验（R2/R3）
+
+**真实执行，不是仅凭 XCTest 推断。** 在当前 macOS 27.2，创建两轮独立 UUID 会话快照的签名 Debug Bailey（R2 PID 59604，R3 PID 68576），每轮两个真实 NSWindow，全部使用独立临时 Mac 文件。Finder 与 Bailey 的物理鼠标拖动由 Peekaboo 在真实桌面前台发送；目标窗口与源 Finder 窗口固定在左半屏。每项都核对实际接收窗口、原生编辑器正文、会话快照按路径还原的 Dock 组，或源／目标磁盘 SHA-256。为解决窗口重叠、Space 切换，实际最小化非目标测试窗口并重新固定目标焦点，不触碰正在工作的正式 Bailey。
+
+- **R2／Files 真实复制落点**：Finder 文件分别投向 Files 的目录行、普通文件行、树根标题、列表留白，目标目录均正确。递归文件夹拖入目录行保留嵌套相对路径；所有已创建副本与源文件 SHA-256 一致，原文件保持存在。Unicode／中文、空格路径参与实测。
+- **R2／58 项并行拖入**：Finder 真实全选 58 项，辅助功能实际显示「选择了58项（共58项）」，随后通过一次真实拖放落入同一目标目录。57 项复制成功并逐项按 SHA-256 验证，第 58 项与既有 collision.txt 同名，被原生错误 Sheet 拒绝；目标原文件字节 DO_NOT_OVERWRITE 不变。58 个来源全部保留。覆盖零字节文件、6 MiB 二进制、空格／中文／重音文件名。
+- **R2／不同区域和多窗**：真实 Finder→普通编辑区、工作标签栏、Git 面板、Projects 面板、独立仓库真实 Git Diff 正文的拖放均成功。Git Diff 测试预先建真实提交和未暂存更改，导入新文件后原 Diff 标签和 Git 工作区状态保持；Projects 的文件仅打开标签，文件夹仅增加目录项目，重复文件夹不重复创建项目。空 Dock 组接收文件后成为原分组的 FileTab。双窗口首次在 B 中打开一个 Finder 文件，随后投向 A，系统激活 B 的既有 FileTab，A 不创建第二份可写缓冲。R2 的 14 条逐次拖放记录外，另有首次编辑区、目录行、Projects 初次目录添加和暗色模式中文文件投放的真实证据。
+- **R3／上下及左右分屏**：窗口 V 的上下两组各自有原生编辑器，窗口 H 左右两组同样有编辑器。物理 Finder 分别拖入上组内容、下组非选中内容、上下各自标签栏、右侧非选中内容、左侧内容及右侧中文文件，实际正文及组归属均正确；已在上组打开的文件再投向下组，只激活原缓冲，不复制／搬组。将独立 H 窗口改为 620 pt 窄宽，再投入右侧，左右组和原生正文仍互相隔离。R3 合计 9 次物理拖放（包括窄窗口）。
+- **外观和语言边界**：临时切换系统深色模式、在真实 Finder→Bailey 投放中文文件，核对深色原生界面、中文标签及正文，然后恢复原本浅色模式。中文文件名及内容验收通过。**没有成功核验简体中文 App 界面下的所有物理拖放**：本机正式 App 的语言偏好是 English，单独给隔离进程加语言启动参数未产生可操作窗口；没有修改用户全局应用语言偏好来制造绿色。
+- **硬件边界**：本轮所有物理拖放是真 Finder→Bailey 桌面鼠标事件，自动化模拟共享鼠标轨迹，不是操作者手指在触控板上的实体手势。不能声称实际指腹触控板组合已测。Finder「打开方式」、Dock 系统图标拖放是清单的第 1、2 项，本轮用户优先第 3、4 项，没有将它们标记完成。
+
+**证据和 Gate**：R2 当前工作树本地证据 build/audit-logs/finder-physical-r2-20261019.json；R3 为 build/audit-logs/finder-physical-r3-20261019.json，分屏原生截图为 build/audit-logs/finder-r3-{vertical,horizontal}-gui.png（分组索引依文件路径复核，测试夹具最初把正常的标签数组重排误判错误，非产品 Bug）。本机针对性 XCTest 还分别有 WorkspaceWindowIsolationTests 17/17、FileTreeTests 22/22、DockWorkspaceTests 5/5、PaneRetentionTests 14/14，合计 58/58，均退出 0，但并不替代本轮实际物理 E2E。Windows SSH GUI 的两机器隔离、实际断线／恢复／双向保存验证见本文件此前的 2026-10-19 专题。**当前 Mac 的自动化鼠标用户路径及各主要多窗口／多分屏／文件树异常／大批量条件为 PASS；人工实体触控板和中文 UI 下的完整组合为未验证，不冒称覆盖了所有测试条件。** 未修改生产代码、系统默认应用、用户项目及用户 SSH master，未 push、未更新正式 App。

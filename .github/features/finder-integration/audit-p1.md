@@ -26,6 +26,19 @@
 
 ## 发现项
 
+## 发现 F-11
+
+- 任务：`P1-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/Workspace/TerminalManager.swift:428`
+- 摘要：`冷启动文件请求队列按64个事件硬拒绝后续请求，合法连续Finder事件会丢失`
+- 风险：`窗口稍后正常挂载时，第65个及后续合法独立事件已收到completion(false)，无法再恢复该次文件打开；这是人为配额而非真实的系统故障。`
+- 预期修复：`首先通过真实未挂载窗口和超过64个请求复现；确认能够正常排空后删除人为事件配额，不增加额外缓存或恢复分支。`
+- 验证：`make test ONLY_TESTING=BaileyTests/WorkspaceWindowIsolationTests；含授权Windows SSH完整make test及Debug/Release验签`
+- 解决证据：`旧实现独立真NSWindow owner等待夹具：make test ONLY_TESTING=BaileyTests/WorkspaceWindowIsolationTests/testPendingFinderDocumentsSurviveMoreThan64EventsBeforeOwnerWindowAttaches，build/audit-logs/finder-f11-owner-red.log，1项2失败，第65+事件提前失败；删除64次人为上限后同命令 build/audit-logs/finder-f11-owner-green.log，1/1、退出0；全WorkspaceWindowIsolationTests build/audit-logs/finder-f11-window-green.log 17/17、退出0，磁盘字节不变；文档docs/features/dock.md同步。`
+
+
 逐任务审查提交与当前源码、直接调用者、复用的 `Project.openFile`、`FileTab`、`SessionStore`、`WindowGroup`、旧 Finder Service 及相关测试，未发现尚需单独提交的确定性 P1 代码缺陷。审查时识别的「未附着无关管理者阻塞」和「两个 nil 窗口误判为 key/main」均已在 P1-T2 提交前以 Red→Green→完整套件修复。
 
 ## 修复日志
@@ -64,3 +77,9 @@
 - **P1-T2 · `aa999e9`**：`openExternalFiles → deliverPendingExternalFiles → openExternalLocalItems → Project.openLocalFile` 在当前源码仍连通；通过真实 `registry`／已附着窗口查找现存本机标签，`pendingRestores` 未清空时延后消费，关闭指定接收窗口时取消其批次。原目录 Service 与系统文件事件的待处理数据仍有不同调用方，不能按「重复队列」名称机械删除。
 - **重新运行的证据**：在本 worktree 执行含获授权 Windows SSH 的全量 `make test`，完整退出 0，**472 项／0 失败／0 跳过**；`WorkspaceIdentityTests`、`WorkspaceWindowIsolationTests` 真实执行。19 个原始分支提交各自的 `git show --check` 通过；原生 Finder 完整图形组合不能由这些 XCTest 推导。
 - **独立 Gate**：P1 的**历史任务**可保留完成，**不能**将原 P1 按目录建项目规则作为当前验收或恢复依据；现行归属、安全和 GUI Gate 交给 P4。无新增 P1 阻塞 finding。
+
+
+## 2026-10-19 F-11 关闭后最终实测
+
+- 生产提交 a323544 删除 64 次上限；后续 P4 的 e56309e 把只接受目录的旧 addLocalItems 入口及全部 75 个 Swift 引用更名为 addLocalFolders，不留兼容别名。旧历史审计段落的方法名仍反映其当时版本，不表示当前还有该接口。
+- F-11 真实 Red 1 项／2 失败、Green 1/1；窗口隔离 17/17；授权 Windows SSH 完整最新 make test 481/0/0、退出 0（build/audit-logs/finder-cleanup-full-test-final.log）；Debug/Release 与严格 codesign 通过。首轮并发测试中出现 2 个 Git 失败断言，独立及第二次全量重跑通过，旧红灯保留。远端 Windows symlink 前提不成立及 Finder/Dock 最新完整物理 GUI 未测，见 audit-p4.md。
