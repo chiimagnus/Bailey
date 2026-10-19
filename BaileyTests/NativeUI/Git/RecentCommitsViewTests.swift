@@ -1015,8 +1015,9 @@ final class RecentCommitsViewTests: XCTestCase {
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {
             for width in [CGFloat(180), 260, 430] {
                 let calls = WorktreeMenuCalls()
+                let selection = GraphSelection()
                 let window = hostHistory(
-                    graph, selection: GraphSelection(), width: width,
+                    graph, selection: selection, width: width,
                     canActOnWorktrees: true,
                     worktreeAction: { item, action in
                         calls.events.append((item.path, action))
@@ -1041,8 +1042,20 @@ final class RecentCommitsViewTests: XCTestCase {
                 XCTAssertFalse(try XCTUnwrap(menu.items.first(where: {
                     $0.title == String(localized: "Remove Worktree…", table: "Git")
                 })).isEnabled, "Main Worktree must not be removable")
+                NSPasteboard.general.clearContents()
                 click(NSPoint(x: 68, y: h - 12), in: window)
-                XCTAssertTrue(calls.events.contains(where: { $0.0 == main.path && $0.1 == .open }))
+                XCTAssertEqual(NSPasteboard.general.string(forType: .string), main.path,
+                               "Clicking a Worktree badge should copy its path like a branch badge")
+                XCTAssertTrue(calls.events.isEmpty, "Badge click must not open a project")
+                XCTAssertTrue(selection.expanded.isEmpty, "Badge click must not expand its commit")
+                if width == 430 {
+                    NSPasteboard.general.clearContents()
+                    click(NSPoint(x: 135, y: h - 12), in: window)
+                    XCTAssertEqual(NSPasteboard.general.string(forType: .string), linked.path,
+                                   "The second badge must copy its own Worktree path")
+                    XCTAssertTrue(calls.events.isEmpty)
+                    XCTAssertTrue(selection.expanded.isEmpty)
+                }
             }
         }
     }

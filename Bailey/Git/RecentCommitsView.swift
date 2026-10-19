@@ -545,7 +545,7 @@ struct RecentCommitsView: View {
         let allPaths = commits.flatMap { $0.checkedOutWorktrees.map(\.path) }
         let title = Self.worktreeDisplayPath(location.path, among: allPaths)
         let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
-        return Button { worktreeAction(location, .open) } label: {
+        return Button { copy(location.path) } label: {
             HStack(spacing: 0) {
                 Image(systemName: "square.stack")
                     .font(.system(size: Self.badgeFontSize * fontScale))
