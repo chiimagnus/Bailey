@@ -639,7 +639,7 @@ final class GitStatusModel {
     /// flight, so later event-driven refreshes do not replace resolved content
     /// with a loading state.
     var isResolvingInitialStatus: Bool {
-        isRefreshing && !hasResolvedStatus
+        !hasResolvedStatus && isRefreshing
     }
 
     var repoRoot: String {

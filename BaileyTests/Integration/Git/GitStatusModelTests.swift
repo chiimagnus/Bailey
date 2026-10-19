@@ -224,6 +224,7 @@ final class GitStatusModelTests: XCTestCase {
             _ = model.worktreeLocations
             _ = model.statusError
             _ = model.hasResolvedStatus
+            _ = model.isResolvingInitialStatus
         }) { menuChanged.fulfill() }
 
         await backend.suspendNextGitRequest()
