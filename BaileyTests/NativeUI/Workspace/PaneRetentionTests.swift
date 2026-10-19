@@ -437,65 +437,77 @@ final class PaneRetentionTests: XCTestCase {
             weak var editor: FocusReportingTextView?
             init(_ editor: FocusReportingTextView) { self.editor = editor }
         }
+        final class WeakFile {
+            weak var file: FileTab?
+            init(_ file: FileTab) { self.file = file }
+        }
 
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-native-5tabs-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let baseline = String(repeating: "let item = \"中文 👋\" // exact data\n", count: 10_000)
-        var files: [FileTab] = []
-        var windows: [NSWindow] = []
-        var hosts: [NSHostingView<SourceTextEditor>] = []
-        var weakEditors: [WeakEditor] = []
-        for i in 0..<5 {
-            let url = folder.appendingPathComponent("source\(i).swift")
-            try baseline.write(to: url, atomically: true, encoding: .utf8)
-            let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared,
-                               workspaceIdentity: nil)
-            try await file.waitForText()
-            let host = NSHostingView(rootView: SourceTextEditor(
-                file: file, font: .monospacedSystemFont(ofSize: 13, weight: .regular),
-                palette: .theme(dark: i.isMultiple(of: 2)),
-                wrapLines: !i.isMultiple(of: 2), isFocused: false
-            ))
-            host.frame = NSRect(x: 0, y: 0, width: 680, height: 450)
-            let window = NSWindow(contentRect: host.frame, styleMask: [.titled],
-                                  backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            window.contentView = host
-            window.orderFront(nil)
-            host.layoutSubtreeIfNeeded()
-            try await settle { file.editorView != nil }
-            let editor = try XCTUnwrap((file.editorView as? NSScrollView)?
-                .documentView as? FocusReportingTextView)
-            XCTAssertEqual(editor.string, baseline)
-            XCTAssertNotNil(editor.syntaxCoordinator)
-            editor.insertText(String(i), replacementRange: NSRange(location: 0, length: 0))
-            try await settle { file.isDirty && file.text.hasPrefix(String(i)) }
-            editor.undoManager?.undo()
-            try await settle { file.text == baseline && !file.isDirty }
-            XCTAssertEqual(editor.string, baseline)
-            files.append(file)
-            hosts.append(host)
-            windows.append(window)
-            weakEditors.append(WeakEditor(editor))
+        for cycle in 0..<5 {
+            var files: [FileTab] = []
+            var windows: [NSWindow] = []
+            var hosts: [NSHostingView<SourceTextEditor>] = []
+            var weakEditors: [WeakEditor] = []
+            var weakFiles: [WeakFile] = []
+            for i in 0..<5 {
+                let url = folder.appendingPathComponent("source\(cycle)-\(i).swift")
+                try baseline.write(to: url, atomically: true, encoding: .utf8)
+                let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared,
+                                   workspaceIdentity: nil)
+                try await file.waitForText()
+                let host = NSHostingView(rootView: SourceTextEditor(
+                    file: file, font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+                    palette: .theme(dark: (cycle + i).isMultiple(of: 2)),
+                    wrapLines: !(cycle + i).isMultiple(of: 2), isFocused: false
+                ))
+                host.frame = NSRect(x: 0, y: 0, width: 680, height: 450)
+                let window = NSWindow(contentRect: host.frame, styleMask: [.titled],
+                                      backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.contentView = host
+                window.orderFront(nil)
+                host.layoutSubtreeIfNeeded()
+                try await settle { file.editorView != nil }
+                let editor = try XCTUnwrap((file.editorView as? NSScrollView)?
+                    .documentView as? FocusReportingTextView)
+                XCTAssertEqual(editor.string, baseline)
+                XCTAssertNotNil(editor.syntaxCoordinator)
+                editor.insertText(String(i), replacementRange: NSRange(location: 0, length: 0))
+                try await settle { file.isDirty && file.text.hasPrefix(String(i)) }
+                editor.undoManager?.undo()
+                try await settle { file.text == baseline && !file.isDirty }
+                XCTAssertEqual(editor.string, baseline)
+                files.append(file)
+                hosts.append(host)
+                windows.append(window)
+                weakEditors.append(WeakEditor(editor))
+                weakFiles.append(WeakFile(file))
+            }
+            print("T5_NATIVE_LIFETIME cycle=\(cycle) simultaneous=\(weakEditors.count) allRetained=\(weakEditors.allSatisfy { $0.editor != nil })")
+            XCTAssertTrue(weakEditors.allSatisfy { $0.editor != nil })
+            // Destroy real owners, not just the currently visible NSView. The
+            // editor's notification subscription and queued parser work must not
+            // retain retired documents after the last FileTab is gone.
+            for i in (0..<windows.count).reversed() {
+                hosts[i].removeFromSuperview()
+                windows[i].contentView = nil
+                windows[i].close()
+            }
+            hosts.removeAll()
+            windows.removeAll()
+            files.removeAll()
+            try await settle {
+                weakEditors.allSatisfy { $0.editor == nil }
+                    && weakFiles.allSatisfy { $0.file == nil }
+            }
+            XCTAssertTrue(weakEditors.allSatisfy { $0.editor == nil })
+            XCTAssertTrue(weakFiles.allSatisfy { $0.file == nil })
+            print("T5_NATIVE_LIFETIME cycle=\(cycle) simultaneous=5 released=5 filesReleased=5")
         }
-        print("T5_NATIVE_LIFETIME simultaneous=\(weakEditors.count) allRetained=\(weakEditors.allSatisfy { $0.editor != nil })")
-        XCTAssertTrue(weakEditors.allSatisfy { $0.editor != nil })
-        // Destroy real owners, not just the currently visible NSView. The
-        // editor's notification subscription and queued parser work must not
-        // retain retired documents after the last FileTab is gone.
-        for i in (0..<windows.count).reversed() {
-            hosts[i].removeFromSuperview()
-            windows[i].contentView = nil
-            windows[i].close()
-        }
-        hosts.removeAll()
-        windows.removeAll()
-        files.removeAll()
-        try await settle { weakEditors.allSatisfy { $0.editor == nil } }
-        XCTAssertTrue(weakEditors.allSatisfy { $0.editor == nil })
-        print("T5_NATIVE_LIFETIME simultaneous=5 released=5")
     }
 
     func testEditorRetainsScrollAndReleasesRetiredNativeResources() async throws {
