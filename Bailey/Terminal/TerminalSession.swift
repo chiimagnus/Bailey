@@ -40,6 +40,14 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     var location: WorkspaceLocation = .local
     private var initialWorkspace: PanelContext?
     private let isRemoteLaunch: Bool
+    /// A fixed-SSH project has a remote launch target even before the private
+    /// handoff has populated location. A dynamic SSH session becomes local
+    /// again only after its actual ssh process has exited. A manually launched
+    /// foreground ssh is remote input too, even without Bailey's handoff.
+    var acceptsLocalFileDrop: Bool {
+        !isRemoteLaunch && location.remoteConnection == nil
+            && unmanagedSSH == nil && !hasExited
+    }
     /// The connection this session most recently left. Open editor tabs use it
     /// to recognise their own remote after `exit` has returned the pane to the
     /// local machine.
@@ -76,7 +84,8 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         restoredHistory: String? = nil,
         launchCommand: String? = nil,
         initialWorkspace: PanelContext? = nil,
-        initialInput: String? = nil
+        initialInput: String? = nil,
+        fixedSSHLaunch: Bool = false
     ) {
         let sessionID = UUID()
         let shellPath = LocalWorkspaceBackend.loginShell
@@ -100,7 +109,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         zshIntegrationActive = environment["ZDOTDIR"] != nil
         self.shellPath = shellPath
         self.initialWorkspace = initialWorkspace
-        isRemoteLaunch = initialWorkspace != nil
+        isRemoteLaunch = fixedSSHLaunch || initialWorkspace != nil
         launchWorkingDirectory = directory
         launchDirectoryURL = artifacts.directoryURL
         shellPidFileURL = artifacts.pidFileURL
@@ -509,13 +518,18 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     /// The kernel-reported image is used rather than the tab title, which is
     /// terminal output the remote can write.
     /// A foreground ssh that did not come through Bailey, with its executable.
+    /// `exec ssh` replaces the root shell without changing its PID; Ghostty
+    /// does not always report that root as a separate foreground child.
     private var unmanagedSSH: (pid: pid_t, path: String)? {
-        guard let foreground = surface.foregroundPid, foreground > 0,
-              foreground != shellPid,
-              let path = processExecutablePath(pid: foreground),
-              (path as NSString).lastPathComponent == "ssh"
-        else { return nil }
-        return (foreground, path)
+        guard !isRemoteLaunch else { return nil }
+        for candidate in [surface.foregroundPid, shellPid] {
+            guard let pid = candidate, pid > 0,
+                  let path = processExecutablePath(pid: pid),
+                  (path as NSString).lastPathComponent == "ssh"
+            else { continue }
+            return (pid, path)
+        }
+        return nil
     }
 
     /// True when this session had Bailey's zsh integration and a stock ssh ran

@@ -76,6 +76,103 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         }
     }
 
+    func testEmptyWorkspaceAttachesToWindowWhenHostingViewWasRenderedOffscreen() async throws {
+        let oldSnapshots = SessionStore.load()
+        let oldHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(oldSnapshots)
+            TerminalHistoryStore.save(oldHistories)
+        }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        XCTAssertTrue(manager.projects.isEmpty)
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        host.frame = NSRect(x: 0, y: 0, width: 620, height: 410)
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertNil(manager.attachedWindow)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 20, y: 20, width: 620, height: 410),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return manager.attachedWindow === window
+        }
+        XCTAssertTrue(window.delegate is WindowChromeAccessor.Coordinator)
+        manager.chooseFolders()
+        try await wait { window.attachedSheet != nil }
+        window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .cancel)
+        try await wait { window.attachedSheet == nil }
+        XCTAssertTrue(manager.projects.isEmpty)
+    }
+
+    func testTwoNativeWorkspacesAttachOwnWindowsAndKeepFolderPickerIsolated() async throws {
+        let snapshots = SessionStore.load()
+        let histories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(snapshots)
+            TerminalHistoryStore.save(histories)
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = TerminalManager()
+        let second = TerminalManager()
+        defer {
+            first.windowClosed()
+            second.windowClosed()
+        }
+        first.addLocalFolders([root])
+        XCTAssertTrue(second.projects.isEmpty)
+
+        let firstWindow = NSWindow(
+            contentRect: NSRect(x: 10, y: 10, width: 570, height: 400),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false
+        )
+        let secondWindow = NSWindow(
+            contentRect: NSRect(x: 600, y: 10, width: 570, height: 400),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false
+        )
+        firstWindow.isReleasedWhenClosed = false
+        secondWindow.isReleasedWhenClosed = false
+        defer { firstWindow.close(); secondWindow.close() }
+        let firstView = NSHostingView(rootView: ContentView(manager: first))
+        let secondView = NSHostingView(rootView: ContentView(manager: second))
+        firstWindow.contentView = firstView
+        secondView.frame = NSRect(x: 0, y: 0, width: 570, height: 400)
+        secondView.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertNil(second.attachedWindow)
+        secondWindow.contentView = secondView
+        firstWindow.orderFront(nil)
+        secondWindow.makeKeyAndOrderFront(nil)
+        try await wait {
+            firstView.layoutSubtreeIfNeeded()
+            secondView.layoutSubtreeIfNeeded()
+            return first.attachedWindow === firstWindow && second.attachedWindow === secondWindow
+        }
+        XCTAssertTrue(firstWindow.delegate is WindowChromeAccessor.Coordinator)
+        XCTAssertTrue(secondWindow.delegate is WindowChromeAccessor.Coordinator)
+        second.chooseFolders()
+        try await wait { secondWindow.attachedSheet != nil }
+        XCTAssertNil(firstWindow.attachedSheet)
+        secondWindow.endSheet(try XCTUnwrap(secondWindow.attachedSheet), returnCode: .cancel)
+        try await wait { secondWindow.attachedSheet == nil }
+        XCTAssertTrue(second.projects.isEmpty)
+        XCTAssertEqual(first.projects.count, 1)
+        first.chooseFolders()
+        try await wait { firstWindow.attachedSheet != nil }
+        XCTAssertNil(secondWindow.attachedSheet)
+        firstWindow.endSheet(try XCTUnwrap(firstWindow.attachedSheet), returnCode: .cancel)
+        try await wait { firstWindow.attachedSheet == nil }
+    }
+
     func testNativeCloseDoesNotDiscardFailedSaveThenClosesAfterRetry() async throws {
         let oldWindows = SessionStore.load()
         let oldHistories = TerminalHistoryStore.load()
@@ -86,7 +183,7 @@ final class WorkspaceWindowCloseTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
         let backend = WindowSaveFixture("original")
         let tab = FileTab(path: root.appendingPathComponent("case.txt").path,

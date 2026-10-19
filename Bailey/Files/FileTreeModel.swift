@@ -99,6 +99,45 @@ final class FileTreeModel {
         await rebuild()
     }
 
+    /// Copies Finder content only into this tree's current local workspace.
+    /// The actual recursive disk operation runs in LocalWorkspaceBackend.
+    func importFromFinder(
+        _ sources: [URL], into directory: String, isCurrentTarget: () -> Bool
+    ) async -> LocalFileImportResult? {
+        let root = rootPath
+        let scope = workspaceScope
+        let epoch = treeEpoch
+        let requested = URL(fileURLWithPath: directory, isDirectory: true).standardizedFileURL.path
+        let targetRoot = URL(fileURLWithPath: root, isDirectory: true).standardizedFileURL.path
+        guard !sources.isEmpty, !root.isEmpty, scope == "local",
+              backend is LocalWorkspaceBackend, isCurrentTarget()
+        else { return nil }
+        // A visible symlink may resolve outside the project. Reject both
+        // lexical escapes and resolved escapes, and tell the user why this
+        // otherwise accepted Finder drop did not create any files.
+        let resolvedRoot = URL(fileURLWithPath: root).resolvingSymlinksInPath().path
+        let resolvedTarget = URL(fileURLWithPath: requested).resolvingSymlinksInPath().path
+        guard LocalPathScope.contains(requested, in: targetRoot),
+              LocalPathScope.contains(resolvedTarget, in: resolvedRoot) else {
+            presentError(
+                String(localized: "Couldn’t import some files or folders.", table: "Workspace"),
+                String(localized: "Target folder is outside this project: \(directory)", table: "Workspace")
+            )
+            return nil
+        }
+        let result = await LocalWorkspaceBackend.shared.copyFromFinder(sources, into: requested)
+        if epoch == treeEpoch, scope == workspaceScope, root == rootPath, isCurrentTarget() {
+            await rebuild(refresh: true)
+            if !result.failures.isEmpty {
+                presentError(
+                    String(localized: "Couldn’t import some files or folders.", table: "Workspace"),
+                    result.failures.joined(separator: "\n")
+                )
+            }
+        }
+        return result
+    }
+
     /// Moves `item` to the Trash, then rebuilds so it drops out of the tree.
     func moveToTrash(_ item: Item) async {
         let backend = self.backend

@@ -47,13 +47,13 @@ struct ProjectsPanelView: View {
             HStack(spacing: 2) {
                 ChromeIconButton(
                     systemImage: "plus",
-                    tooltip: String(localized: "Add files, folders, or SSH paths", table: "Sidebar")
+                    tooltip: String(localized: "Add folders or SSH paths", table: "Sidebar")
                 ) { showingProjectPicker.toggle() }
                 .popover(isPresented: $showingProjectPicker, arrowEdge: .top) {
                     VStack(spacing: 2) {
-                        Button(String(localized: "Add Files or Folders…", table: "Sidebar")) {
+                        Button(String(localized: "Add Folder…", table: "Sidebar")) {
                             showingProjectPicker = false
-                            manager.chooseLocalItems()
+                            manager.chooseFolders()
                         }
                         Button(String(localized: "Add SSH Files or Folders…", table: "Sidebar")) {
                             showingProjectPicker = false

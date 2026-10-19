@@ -123,8 +123,14 @@ private struct BaileyCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Add Files or Folders…", table: "Interface")) {
-                manager?.chooseLocalItems()
+            Button(String(localized: "Open File…", table: "Interface")) {
+                manager?.chooseFiles()
+            }
+            .keyboardShortcut("o", modifiers: .command)
+            .disabled(manager?.selectedProject == nil)
+
+            Button(String(localized: "Add Folder…", table: "Interface")) {
+                manager?.chooseFolders()
             }
             .keyboardShortcut("a", modifiers: [.command, .shift])
             .disabled(manager == nil)

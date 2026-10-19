@@ -486,6 +486,12 @@ final class DiffTabTests: XCTestCase {
     }
 
     func testAppearanceChangeAfterReadErrorKeepsLastSuccessfulDiff() async throws {
+        let domain = "bailey-diff-appearance-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        // This test asserts unified native text. It must not inherit the user's
+        // persisted split/edit preference from another Bailey process.
+        let preferences = DiffViewPreferences(defaults: defaults)
         let root = try repository()
         defer { try? FileManager.default.removeItem(at: root) }
         let path = root.appendingPathComponent("review.txt")
@@ -497,7 +503,8 @@ final class DiffTabTests: XCTestCase {
         let diff = DiffTab(
             repoRoot: root.path, path: "review.txt", source: .worktree,
             untracked: false, origPath: nil,
-            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+            preferences: preferences
         )
         try await wait { !diff.isLoading && diff.display != nil }
         let before = try XCTUnwrap(diff.display)

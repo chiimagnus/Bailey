@@ -7,22 +7,32 @@
     "%lld" : {
       "shouldTranslate" : false
     },
-    "Add Files or Folders" : {
+    "Add Folder" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加文件或文件夹"
+            "value" : "添加文件夹"
           }
         }
       }
     },
-    "Add Files or Folders…" : {
+    "Add a project folder before opening files." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加文件或文件夹…"
+            "value" : "请先添加项目文件夹，再打开文件。"
+          }
+        }
+      }
+    },
+    "Add Folder…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加文件夹…"
           }
         }
       }
@@ -413,6 +423,16 @@
         }
       }
     },
+    "Open File…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开文件…"
+          }
+        }
+      }
+    },
     "Open in Default Browser" : {
       "localizations" : {
         "zh-Hans" : {
@@ -534,6 +554,16 @@
       }
     },
     "Show FPS Counter" : {},
+    "Some files or folders could not be opened in Bailey." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分文件或文件夹无法在 Bailey 中打开。"
+          }
+        }
+      }
+    },
     "Stop Loading" : {
       "localizations" : {
         "zh-Hans" : {

@@ -1,6 +1,20 @@
 import Darwin
 import Foundation
 
+/// Completed paths and independent failures from one Finder copy batch.
+nonisolated struct LocalFileImportResult: Sendable {
+    let copied: [String]
+    let failures: [String]
+}
+
+/// Absolute, normalized POSIX paths; the filesystem root is its own separator.
+nonisolated enum LocalPathScope {
+    static func contains(_ path: String, in directory: String) -> Bool {
+        guard !directory.isEmpty else { return false }
+        return path == directory || path.hasPrefix(directory.hasSuffix("/") ? directory : directory + "/")
+    }
+}
+
 /// Mutable pipe storage for one reader thread each, so a child process can
 /// never deadlock on a full pipe while we wait for it to exit.
 private nonisolated final class RunPipeData: @unchecked Sendable {
@@ -89,6 +103,101 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
 
     @concurrent func write(path: String, data: Data) async throws {
         try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+    }
+
+    /// The Finder-to-Files action copies on a background executor and never
+    /// replaces a destination, removes a source, or uploads to a remote host.
+    @concurrent func copyFromFinder(_ sources: [URL], into directory: String) async -> LocalFileImportResult {
+        let fm = FileManager.default
+        let target = URL(fileURLWithPath: directory, isDirectory: true).standardizedFileURL
+        let targetReal = target.resolvingSymlinksInPath().path
+        var copied: [String] = []
+        var failures: [String] = []
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: target.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return LocalFileImportResult(copied: [], failures: [
+                String(localized: "Target folder no longer exists: \(directory)", table: "Workspace")
+            ])
+        }
+        var seen = Set<String>()
+        for source in sources {
+            guard source.isFileURL, source.host == nil || source.host == "localhost" else {
+                failures.append(String(
+                    localized: "Not a local Finder file: \(source.lastPathComponent)", table: "Workspace"
+                ))
+                continue
+            }
+            let original = source.standardizedFileURL
+            guard seen.insert(original.path).inserted else { continue }
+            // Copy the directory entry, not the symlink's resolved destination.
+            // fileExists follows links and incorrectly rejects dangling links;
+            // treating a directory link as a real folder also falsely blocks
+            // copying the link when it points to an ancestor of the target.
+            var sourceInfo = Darwin.stat()
+            guard lstat(original.path, &sourceInfo) == 0 else {
+                failures.append(String(
+                    localized: "Source no longer exists: \(original.lastPathComponent)", table: "Workspace"
+                ))
+                continue
+            }
+            let sourceType = sourceInfo.st_mode & S_IFMT
+            guard sourceType == S_IFREG || sourceType == S_IFDIR || sourceType == S_IFLNK else {
+                let error = NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTSUP))
+                failures.append(String(
+                    localized: "Couldn’t copy \(original.lastPathComponent): \(error.localizedDescription)",
+                    table: "Workspace"
+                ))
+                continue
+            }
+            let isRealDirectory = sourceType == S_IFDIR
+            let destination = target.appendingPathComponent(
+                original.lastPathComponent, isDirectory: isRealDirectory
+            )
+            let sourceReal = original.resolvingSymlinksInPath().path
+            if isRealDirectory, LocalPathScope.contains(targetReal, in: sourceReal) {
+                failures.append(String(
+                    localized: "Cannot copy \(original.lastPathComponent) into itself or a subfolder.",
+                    table: "Workspace"
+                ))
+                continue
+            }
+            var existing = Darwin.stat()
+            if lstat(destination.path, &existing) == 0 {
+                failures.append(String(
+                    localized: "Already exists: \(destination.lastPathComponent)", table: "Workspace"
+                ))
+                continue
+            }
+            do {
+                // Copy to a system replacement directory on the destination
+                // volume. A recursive copy failure must never publish a
+                // partial folder inside the user's actual workspace.
+                let stagingDirectory = try fm.url(
+                    for: .itemReplacementDirectory, in: .userDomainMask,
+                    appropriateFor: target, create: true
+                )
+                defer { try? fm.removeItem(at: stagingDirectory) }
+                let staged = stagingDirectory.appendingPathComponent(original.lastPathComponent)
+                try fm.copyItem(at: original, to: staged)
+                // A source can finish copying after another process created
+                // the destination. RENAME_EXCL makes no-overwrite atomic.
+                let status = staged.path.withCString { from in
+                    destination.path.withCString { to in
+                        renamex_np(from, to, UInt32(RENAME_EXCL))
+                    }
+                }
+                guard status == 0 else {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                }
+                copied.append(destination.path)
+            } catch {
+                failures.append(String(
+                    localized: "Couldn’t copy \(original.lastPathComponent): \(error.localizedDescription)",
+                    table: "Workspace"
+                ))
+            }
+        }
+        return LocalFileImportResult(copied: copied, failures: failures)
     }
 
     @concurrent func createFile(path: String) async throws {

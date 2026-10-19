@@ -38,7 +38,7 @@ final class GitRefReplacementTests: XCTestCase {
         let moved = try git(["rev-parse", "HEAD"])
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
         let window = NSWindow(contentRect: .init(x: -1200, y: -1200, width: 540, height: 440),
                               styleMask: [.titled], backing: .buffered, defer: false)

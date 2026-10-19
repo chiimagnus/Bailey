@@ -18,6 +18,10 @@
 
 关闭前文件保存是独立的数据保护步骤，见 [editor.md](editor.md#保存与关闭)；有快照不代表编辑内容已经写盘。
 
+本机文件可以作为标签放在 SSH 项目里。现有 `ProjectSnapshot.TabSnapshot` 使用可选 `localFile` 标记保留 Mac 后端身份，恢复时仍从 Mac 磁盘读写，不随项目的 SSH 后端重绑；旧快照没有该键时保留其原有项目后端解释。旧单文件 `pinnedFile` 项目和窗口布局不迁移。
+
+Finder／Dock 的外部打开请求不是工作区快照。冷启动及末窗关闭后收到的文件请求，会先等待已经保存的窗口完成创建和原生窗口附着，再检查所有恢复文件标签是否已有目标；避免同一文件被提前打开为第二份可写缓冲。该等待只用于应用窗口生命周期，不新增持久化队列或任意重试计时器。
+
 ## 终端历史
 
 回放默认关闭，启用后由 `TerminalHistoryStore` 单独持久化输出。正常历史位于 Application Support 下的 `Bailey/`，不是普通偏好文件；它只能恢复显示内容，不能恢复原进程。
@@ -26,9 +30,9 @@
 
 ## 测试实例
 
-`BaileyInstanceMode` 识别 `--isolated-ui-test`。每个进程生成 UUID，以独立 UserDefaults suite 保存窗口快照，并使用临时终端历史；不读取其他实例残留的项目，不启动保存的隧道。
+`BaileyInstanceMode` 识别 `--isolated-ui-test` **或**有效 UUID 的 `BAILEY_UI_TEST_RUN_ID` 环境变量。隔离进程以专用 UserDefaults suite 保存窗口快照，并使用临时终端历史；不读取正式 Bailey 的窗口，也不启动已保存隧道。
 
-刻意测试跨进程恢复时，两次启动传入相同的有效 UUID 环境变量 `BAILEY_UI_TEST_RUN_ID`。无有效 ID 时各自独立；这不隔离普通设置，完整测试边界见 [testing.md](../testing.md#隔离环境)。
+刻意测试跨进程恢复时，两次启动传入同一有效 UUID。使用 `open -a <测试 App> <文件>` 验证真实 Launch Services 文档事件时，先确认正式 Bailey 已退出，再以 `open -n -a` 配合 `--env BAILEY_UI_TEST_RUN_ID=<UUID>` 启动测试 App：不要同时使用 `--args`，以免系统文件事件丢失。它只隔离数据，不隔离 Bundle ID、鼠标、键盘或图形会话；完整测试边界见 [testing.md](../testing.md#隔离环境)。
 
 ## 验证
 

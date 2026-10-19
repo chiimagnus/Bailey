@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 
 /// Provides Bailey's Finder service. The advertised menu item lives in
 /// Info.plist; AppKit forwards matching service requests to this object.
@@ -21,6 +22,12 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleOpenDocuments(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kCoreEventClass),
+            andEventID: AEEventID(kAEOpenDocuments)
+        )
         // AppSettings is first initialized from SwiftUI's App.init(), where
         // NSApp may not exist yet. Reapply the saved override once AppKit is
         // ready, before SwiftUI creates the first window.
@@ -29,6 +36,25 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.servicesProvider = self
+    }
+
+    /// Receive the entire Finder Apple Event before SwiftUI WindowGroup can
+    /// turn one document-open event into an additional workspace window.
+    @objc private func handleOpenDocuments(
+        _ event: NSAppleEventDescriptor,
+        withReplyEvent replyEvent: NSAppleEventDescriptor
+    ) {
+        let urls = Self.documentURLs(
+            from: event.paramDescriptor(forKeyword: keyDirectObject)
+        )
+        TerminalManager.openExternalFiles(urls)
+    }
+
+    static func documentURLs(from fileList: NSAppleEventDescriptor?) -> [URL] {
+        guard let fileList, fileList.numberOfItems > 0 else { return [] }
+        return (1...fileList.numberOfItems).compactMap {
+            fileList.atIndex($0)?.fileURLValue
+        }
     }
 
     /// Opens every directory Finder placed on the service pasteboard as a

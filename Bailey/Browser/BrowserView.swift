@@ -3,6 +3,7 @@ import Combine
 import ImageIO
 import Observation
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
 
 private enum BrowserContextMenuSupport {
@@ -728,6 +729,7 @@ struct BrowserView: View {
     let isFocused: Bool
     let onFocused: () -> Void
     let onNewBrowserTab: (String?) -> Void
+    var onExternalFilesDropped: ([NSItemProvider]) -> Bool = { _ in false }
 
     private let themeChanges = Theme.changes
     @State private var address = ""
@@ -856,6 +858,7 @@ struct BrowserView: View {
                 .fill(Color(nsColor: Theme.divider))
                 .frame(height: 1)
         }
+        .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil, perform: onExternalFilesDropped)
     }
 
     private var addressField: some View {

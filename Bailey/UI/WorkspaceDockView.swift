@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Window-wide docking gesture. One hit-tested destination and one preview:
 /// the pointer's proximity to a pane edge determines the split, while the
@@ -279,6 +280,10 @@ private struct DockTabGroupView: View {
             header
                 .frame(height: 38)
                 .background(Color(nsColor: Theme.background))
+                .onDrop(of: [UTType.fileURL.identifier], delegate: FinderWindowDrop(
+                    manager: manager,
+                    destination: (projectID: project.id, groupID: group.id)
+                ))
                 .overlay(alignment: .bottom) {
                     Color(nsColor: Theme.divider).frame(height: 1)
                 }
@@ -355,6 +360,7 @@ private struct DockTabGroupView: View {
                         Divider()
                     }
                     if action.item == nil {
+                        openFileButton
                         newItemButton(isDirectory: false)
                         newItemButton(isDirectory: true)
                     }
@@ -377,6 +383,19 @@ private struct DockTabGroupView: View {
             .padding(6)
             .frame(width: 170)
         }
+    }
+
+    private var openFileButton: some View {
+        Button {
+            showingPanelPicker = false
+            manager.chooseFiles(inGroup: (projectID: project.id, groupID: group.id))
+        } label: {
+            Label(String(localized: "Open File…", table: "Interface"), systemImage: "doc")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(7)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func newItemButton(isDirectory: Bool) -> some View {
@@ -489,10 +508,17 @@ private struct DockTabGroupView: View {
                 manager: manager,
                 bottomBarHeight: BottomToolbarLayout.height
             )
+            .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil) { providers in
+                FinderWindowDrop.receive(providers, preferred: manager)
+            }
         case .files:
             ToolPanelView(manager: manager, git: git, panel: .files)
         case .git:
             ToolPanelView(manager: manager, git: git, panel: .git)
+                .onDrop(of: [UTType.fileURL.identifier], delegate: FinderWindowDrop(
+                    manager: manager,
+                    destination: (projectID: project.id, groupID: group.id)
+                ))
         case .tab(let id):
             if let tab = project.tabs.first(where: { $0.id == id }) {
                 PanelContentView(
@@ -502,7 +528,11 @@ private struct DockTabGroupView: View {
                         if project.selectedTabID != id { project.selectedTabID = id }
                     },
                     onNewBrowserTab: { manager.newBrowserTab(initialURL: $0) },
-                    onNewFileTab: { manager.openFile($0) }
+                    onNewFileTab: { manager.openFile($0) },
+                    onExternalFilesDropped: { FinderWindowDrop.receive(
+                        $0, preferred: manager,
+                        destination: (projectID: project.id, groupID: group.id)
+                    ) }
                 )
                 .id(tab.id)
             }
@@ -522,6 +552,10 @@ private struct DockTabGroupView: View {
         .font(.system(size: 12))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: Theme.background))
+        .onDrop(of: [UTType.fileURL.identifier], delegate: FinderWindowDrop(
+            manager: manager,
+            destination: (projectID: project.id, groupID: group.id)
+        ))
     }
 
     private func add(_ item: DockItem) { _ = project.dock.place(item, in: group.id) }

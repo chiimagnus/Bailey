@@ -184,8 +184,8 @@ struct CommandPaletteView: View {
             PaletteCommand(id: "clear-terminal", title: LocalizedStringResource("Clear Terminal", table: "Interface"), systemImage: "eraser", shortcut: "⌘K") {
                 manager.clearActiveTerminal()
             },
-            PaletteCommand(id: "add-items", title: LocalizedStringResource("Add Files or Folders", table: "Interface"), systemImage: "folder.badge.plus", shortcut: "⇧⌘A") {
-                manager.chooseLocalItems()
+            PaletteCommand(id: "add-folder", title: LocalizedStringResource("Add Folder", table: "Interface"), systemImage: "folder.badge.plus", shortcut: "⇧⌘A") {
+                manager.chooseFolders()
             },
             PaletteCommand(id: "add-ssh-items", title: LocalizedStringResource("Add SSH Files or Folders", table: "Interface"), systemImage: "network", shortcut: nil) {
                 manager.chooseSSHItems()

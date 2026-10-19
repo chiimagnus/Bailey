@@ -23,6 +23,8 @@ struct SessionSnapshot: Codable {
             var historyKey: String?
             var customName: String?
             var contextSessionIndex: Int?
+            /// True only for a Mac file tab; absent in snapshots saved before P4.
+            var localFile: Bool? = nil
         }
 
         var customName: String?
@@ -50,6 +52,7 @@ struct AppSnapshot: Codable {
 /// Bailey window snapshot or start its saved background forwards.
 nonisolated enum BaileyInstanceMode {
     static let isIsolated = ProcessInfo.processInfo.arguments.contains("--isolated-ui-test")
+        || ProcessInfo.processInfo.environment["BAILEY_UI_TEST_RUN_ID"].flatMap(UUID.init(uuidString:)) != nil
 
     /// Each isolated process must have its own snapshot. A caller-supplied
     /// UUID allows a deliberate restart test to reopen that same snapshot.

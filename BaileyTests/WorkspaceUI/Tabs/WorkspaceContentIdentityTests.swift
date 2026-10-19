@@ -53,7 +53,7 @@ final class WorkspaceContentIdentityTests: XCTestCase {
         defer { SessionStore.save(snapshots); TerminalHistoryStore.save(histories) }
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let file = root.appendingPathComponent("a.swift")
         try "let value = 1\n".write(to: file, atomically: true, encoding: .utf8)
         manager.openFile(file.path)
@@ -130,7 +130,7 @@ final class WorkspaceContentIdentityTests: XCTestCase {
         defer { SessionStore.save(snapshots); TerminalHistoryStore.save(histories) }
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
         let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 1080, height: 700),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -190,7 +190,7 @@ final class WorkspaceContentIdentityTests: XCTestCase {
         defer { SessionStore.save(snapshots); TerminalHistoryStore.save(histories) }
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
         let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 1100, height: 700),
                               styleMask: [.titled], backing: .buffered, defer: false)

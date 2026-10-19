@@ -4,6 +4,22 @@ import XCTest
 
 @MainActor
 final class AppMenuIsolationTests: XCTestCase {
+    func testFileMenuProvidesOpenFileKeyboardShortcut() throws {
+        let root = try XCTUnwrap(NSApp.mainMenu)
+        func items(in menu: NSMenu) -> [NSMenuItem] {
+            menu.items.flatMap { item in
+                [item] + (item.submenu.map { items(in: $0) } ?? [])
+            }
+        }
+        let commands = items(in: root)
+        let open = commands.filter {
+            $0.keyEquivalent.lowercased() == "o"
+                && $0.keyEquivalentModifierMask.contains(.command)
+        }
+        XCTAssertEqual(open.count, 1)
+        XCTAssertEqual(open.first?.title, String(localized: "Open File…", table: "Interface"))
+    }
+
     func testTestHostHasNoQuitKeyboardEquivalent() throws {
         XCTAssertTrue(BaileyInstanceMode.isIsolated)
         let root = try XCTUnwrap(NSApp.mainMenu)
