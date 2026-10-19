@@ -45,7 +45,7 @@ SwiftUI 负责外层布局，Ghostty 负责终端，WebKit 只负责浏览器，
 
 可观察 ViewModel 使用 `@Observable`。由 View 拥有生命周期的对象用 `@State`，需要双向绑定时用 `@Bindable`，只读则直接传入对象；局部输入和动画仍使用局部状态。协作者和不应触发重绘的缓存按实际依赖使用 `@ObservationIgnored`。
 
-**属性观察不是事件总线。** 设置变化、文件自动保存和窗口快照使用当前语义触发，不恢复旧 `objectWillChange` 发布级联。`TunnelManager.$tunnels/$states` 仍供原生 `NSTableView` 刷新，WebKit 的 KVO 仍承担平台桥接；这些必要事件不应为了“全部 Observation”被删除。
+**属性观察不是事件总线。** 设置变化、文件自动保存和窗口快照使用当前语义触发，不恢复旧 `objectWillChange` 发布级联。`TunnelManager.$tunnels/$states` 由 SwiftUI `@ObservedObject` 订阅以显示端口转发状态；WebKit 的 KVO 仍承担平台桥接。既有 `@Published` 是服务与界面的真实事件边界，不另造一套展示缓存。
 
 新增 `NSHostingView` 或窗口时核对依赖注入和事件订阅的建立、取消。编译成功不能证明注入站点、变化传播和原生效果正确。
 

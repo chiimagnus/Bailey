@@ -11,6 +11,26 @@
         }
       }
     },
+    "A1 desktop" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A1 桌面"
+          }
+        }
+      }
+    },
+    "Add forward" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加端口转发"
+          }
+        }
+      }
+    },
     "Already exists: %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -27,6 +47,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这里已有名为“%@”的项目。"
+          }
+        }
+      }
+    },
+    "Anything that can reach that port on the remote machine reaches this Mac through it. To reach this Mac's own ssh, turn on Remote Login in System Settings → General → Sharing." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端机器上能够访问该端口的客户端可以通过转发连接本机。如果要访问本机 SSH，请在“系统设置 → 通用 → 共享”中开启远程登录。"
           }
         }
       }
@@ -78,6 +108,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "命令"
+          }
+        }
+      }
+    },
+    "Connected" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已连接"
+          }
+        }
+      }
+    },
+    "Connecting…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接中…"
+          }
+        }
+      }
+    },
+    "Copy Local Address" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制本地地址"
+          }
+        }
+      }
+    },
+    "Copy Remote Address" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制远端地址"
           }
         }
       }
@@ -173,12 +243,32 @@
         }
       }
     },
-    "detached HEAD" : {
+    "Delete" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "分离 HEAD"
+            "value" : "删除"
+          }
+        }
+      }
+    },
+    "Delete this forward?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除这条端口转发？"
+          }
+        }
+      }
+    },
+    "Direction:" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "方向："
           }
         }
       }
@@ -200,6 +290,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "不保存"
+          }
+        }
+      }
+    },
+    "Edit…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑…"
+          }
+        }
+      }
+    },
+    "Enter the local port as a number." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入有效的本地端口号。"
+          }
+        }
+      }
+    },
+    "Enter the remote port as a number." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入有效的远端端口号。"
+          }
+        }
+      }
+    },
+    "Failed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失败"
           }
         }
       }
@@ -245,12 +375,52 @@
         }
       }
     },
+    "Forwards stay open while Bailey is running, even with no terminal connected. They use your ssh keys and ~/.ssh/config; Bailey never asks for a password." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只要 Bailey 正在运行，即使没有连接终端，端口转发也会保持连接。使用现有 SSH 密钥和 ~/.ssh/config，不会要求输入密码。"
+          }
+        }
+      }
+    },
     "Hide" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "隐藏"
+          }
+        }
+      }
+    },
+    "Keep %@ open" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保持%@转发"
+          }
+        }
+      }
+    },
+    "Keep this forward open" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保持此转发连接"
+          }
+        }
+      }
+    },
+    "Let the remote machine reach this Mac" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让远端机器访问本机"
           }
         }
       }
@@ -265,6 +435,56 @@
         }
       }
     },
+    "Local host:" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本地主机："
+          }
+        }
+      }
+    },
+    "Local port %@ is already used by “%@”." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本地端口 %@ 已被“%@”使用。"
+          }
+        }
+      }
+    },
+    "Local port:" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本地端口："
+          }
+        }
+      }
+    },
+    "Name:" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名称："
+          }
+        }
+      }
+    },
+    "No saved forwards. Click + to add one." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚无端口转发，点击＋添加。"
+          }
+        }
+      }
+    },
     "Not a local Finder file: %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -275,12 +495,122 @@
         }
       }
     },
+    "Off" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已关闭"
+          }
+        }
+      }
+    },
+    "Port %@ on %@ is already used by “%@”." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "端口 %@（主机 %@）已被“%@”使用。"
+          }
+        }
+      }
+    },
+    "Port Conflict" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "端口冲突"
+          }
+        }
+      }
+    },
+    "Reach a remote port from this Mac" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从本机连接远端端口"
+          }
+        }
+      }
+    },
+    "Reconnect" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新连接"
+          }
+        }
+      }
+    },
+    "Remote host:" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端主机："
+          }
+        }
+      }
+    },
+    "Remote port:" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端端口："
+          }
+        }
+      }
+    },
+    "Remove selected forward" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除选中的端口转发"
+          }
+        }
+      }
+    },
+    "SSH host:" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH 主机："
+          }
+        }
+      }
+    },
+    "Same as remote" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "与远端端口相同"
+          }
+        }
+      }
+    },
     "Save" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "保存"
+          }
+        }
+      }
+    },
+    "Saved port forwards" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存的端口转发"
           }
         }
       }
@@ -302,6 +632,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "源文件或文件夹已不存在：%@"
+          }
+        }
+      }
+    },
+    "Stopped" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停止"
           }
         }
       }
@@ -347,12 +687,52 @@
         }
       }
     },
+    "Turn that forward off or give this one a different port." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先停用另一条转发，或为本条转发设置不同端口。"
+          }
+        }
+      }
+    },
     "Your changes will be lost if you don't save them." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "如果不保存，更改将会丢失。"
+          }
+        }
+      }
+    },
+    "detached HEAD" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分离 HEAD"
+          }
+        }
+      }
+    },
+    "oracle or user@host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "oracle 或 user@host"
+          }
+        }
+      }
+    },
+    "retrying in %@ s" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 秒后重试"
           }
         }
       }

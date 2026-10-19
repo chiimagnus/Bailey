@@ -2,209 +2,187 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// The Port Forwarding section of Settings: saved forwards with a switch,
-/// the name over its route (listener → target) and a live status in words.
-///
-/// Three columns and two-line rows: the Settings pane is 600 pt wide and
-/// not resizable, and a column per fact truncated every cell at that width.
-///
-/// AppKit-owned, mounted into the SwiftUI Settings form through
-/// ``TunnelSettingsRow`` like the terminal cursor rows.
-@MainActor
-final class TunnelSettingsView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
-    private enum Column {
-        static let enabled = NSUserInterfaceItemIdentifier("enabled")
-        static let route = NSUserInterfaceItemIdentifier("route")
-        static let status = NSUserInterfaceItemIdentifier("status")
-    }
-
-    private let manager = TunnelManager.shared
-    private let tableView = NSTableView()
-    private let scrollView = NSScrollView()
-    private let addRemoveControl = NSSegmentedControl()
-    private let emptyLabel = NSTextField(
-        labelWithString: String(localized: "No saved forwards. Click + to add one.", table: "Workspace")
-    )
-    private var subscriptions: Set<AnyCancellable> = []
-    /// Ticks once a second while any row counts down to a retry, so
-    /// "retrying in 12 s" stays true without redrawing an idle table.
-    private var countdownTimer: Timer?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        buildTable()
-        buildControls()
-
-        manager.$tunnels
-            .combineLatest(manager.$states)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _, _ in self?.reload() }
-            .store(in: &subscriptions)
-        reload()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: 176)
-    }
-
-    // MARK: - Layout
-
-    private func buildTable() {
-        // Only the route column takes the width the pane leaves: the switch
-        // and the status word are fixed. Its minimum has to stay well under
-        // what the pane offers beside them, about 260 pt with the scroller
-        // showing, or the table overflows its clip view and the status
-        // column is cut off instead.
-        let columns: [(NSUserInterfaceItemIdentifier, String, CGFloat, CGFloat)] = [
-            (Column.enabled, "", 24, 24),
-            (Column.route, String(localized: "Forward", table: "Workspace"), 200, 120),
-            (Column.status, String(localized: "Status", table: "Workspace"), 96, 96),
-        ]
-        for (identifier, title, width, minimum) in columns {
-            let column = NSTableColumn(identifier: identifier)
-            column.title = title
-            column.width = width
-            column.minWidth = minimum
-            column.resizingMask = identifier == Column.route ? .autoresizingMask : []
-            if identifier != Column.route { column.maxWidth = width }
-            tableView.addTableColumn(column)
-        }
-        tableView.dataSource = self
-        tableView.delegate = self
-        tableView.usesAlternatingRowBackgroundColors = true
-        tableView.allowsMultipleSelection = false
-        tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
-        tableView.rowHeight = 40
-        tableView.style = .inset
-        tableView.target = self
-        tableView.doubleAction = #selector(editClickedRow)
-        tableView.setAccessibilityLabel(String(localized: "Saved port forwards", table: "Workspace"))
-
-        let menu = NSMenu()
-        menu.delegate = self
-        tableView.menu = menu
-
-        scrollView.documentView = tableView
-        scrollView.hasVerticalScroller = true
-        scrollView.borderType = .bezelBorder
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(scrollView)
-
-        emptyLabel.textColor = .secondaryLabelColor
-        emptyLabel.alignment = .center
-        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(emptyLabel)
-    }
-
-    private func buildControls() {
-        addRemoveControl.segmentCount = 2
-        addRemoveControl.trackingMode = .momentary
-        addRemoveControl.segmentStyle = .smallSquare
-        addRemoveControl.setImage(
-            NSImage(systemSymbolName: "plus", accessibilityDescription: String(localized: "Add forward", table: "Workspace")),
-            forSegment: 0)
-        addRemoveControl.setImage(
-            NSImage(systemSymbolName: "minus", accessibilityDescription: String(localized: "Remove forward", table: "Workspace")),
-            forSegment: 1)
-        addRemoveControl.setToolTip(String(localized: "Add forward", table: "Workspace"), forSegment: 0)
-        addRemoveControl.setToolTip(String(localized: "Remove selected forward", table: "Workspace"), forSegment: 1)
-        addRemoveControl.target = self
-        addRemoveControl.action = #selector(addRemoveClicked)
-        addRemoveControl.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(addRemoveControl)
-
-        let note = NSTextField(
-            wrappingLabelWithString: String(
-                localized: "Forwards stay open while Bailey is running, even with no terminal connected. They use your ssh keys and ~/.ssh/config; Bailey never asks for a password.", table: "Workspace"
-            ))
-        note.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        note.textColor = .secondaryLabelColor
-        note.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(note)
-
-        NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: topAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scrollView.heightAnchor.constraint(equalToConstant: 112),
-
-            emptyLabel.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
-            emptyLabel.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
-
-            addRemoveControl.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: 6),
-            addRemoveControl.leadingAnchor.constraint(equalTo: leadingAnchor),
-
-            note.topAnchor.constraint(equalTo: addRemoveControl.bottomAnchor, constant: 6),
-            note.leadingAnchor.constraint(equalTo: leadingAnchor),
-            note.trailingAnchor.constraint(equalTo: trailingAnchor),
-            note.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
-        ])
-    }
-
-    // MARK: - Data
-
-    private func reload() {
-        let selectedID = selectedTunnel?.id
-        tableView.reloadData()
-        if let selectedID, let row = manager.tunnels.firstIndex(where: { $0.id == selectedID }) {
-            tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-        }
-        emptyLabel.isHidden = !manager.tunnels.isEmpty
-        addRemoveControl.setEnabled(selectedTunnel != nil, forSegment: 1)
-        updateCountdownTimer()
-    }
+/// Native Settings list. TunnelManager, not this page, owns connections and
+/// persistence; opening or leaving Settings never changes a running forward.
+struct TunnelSettingsPane: View {
+    @ObservedObject private var manager = TunnelManager.shared
+    @Binding var selection: UUID?
+    @Binding var editor: TunnelEditDraft?
+    @State private var now = Date()
+    @State private var conflictMessage = ""
+    @State private var showsConflict = false
+    @State private var deletingID: UUID?
+    @State private var showsDeleteConfirmation = false
 
     private var selectedTunnel: TunnelDefinition? {
-        tunnel(at: tableView.selectedRow)
+        manager.tunnels.first { $0.id == selection }
     }
 
-    private func tunnel(at row: Int) -> TunnelDefinition? {
-        manager.tunnels.indices.contains(row) ? manager.tunnels[row] : nil
-    }
+    var body: some View {
+        Section {
+            if manager.tunnels.isEmpty {
+                ContentUnavailableView(
+                    String(localized: "No saved forwards. Click + to add one.", table: "Workspace"),
+                    systemImage: "network"
+                )
+                .frame(maxWidth: .infinity, minHeight: 175)
+            } else {
+                List(selection: $selection) {
+                    ForEach(manager.tunnels) { tunnel in
+                        tunnelRow(tunnel)
+                            .tag(tunnel.id)
+                            .contextMenu {
+                                Button(
+                                    tunnel.direction == .local
+                                        ? String(localized: "Copy Local Address", table: "Workspace")
+                                        : String(localized: "Copy Remote Address", table: "Workspace")
+                                ) {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(tunnel.listenAddress, forType: .string)
+                                }
 
-    private func updateCountdownTimer() {
-        let counting = manager.states.values.contains {
-            if case .failed(_, let retryAt?) = $0 { return retryAt > Date() }
-            return false
-        }
-        if counting, countdownTimer == nil {
-            countdownTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refreshStatusColumn() }
+                                if tunnel.isEnabled {
+                                    Button(String(localized: "Reconnect", table: "Workspace")) {
+                                        manager.restart(id: tunnel.id)
+                                    }
+                                }
+                                Divider()
+                                Button(String(localized: "Edit…", table: "Workspace")) {
+                                    editor = TunnelEditDraft(existing: tunnel)
+                                }
+                                Button(String(localized: "Delete", table: "Workspace"), role: .destructive) {
+                                    requestDelete(tunnel)
+                                }
+                            }
+                    }
+                }
+                .listStyle(.bordered)
+                .frame(minHeight: 180, idealHeight: 290)
+                .accessibilityLabel(String(localized: "Saved port forwards", table: "Workspace"))
             }
-        } else if !counting {
-            countdownTimer?.invalidate()
-            countdownTimer = nil
+
+            HStack(spacing: 8) {
+                Button {
+                    editor = TunnelEditDraft(existing: nil)
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .accessibilityLabel(String(localized: "Add forward", table: "Workspace"))
+                .help(String(localized: "Add forward", table: "Workspace"))
+
+                Button {
+                    if let selectedTunnel { requestDelete(selectedTunnel) }
+                } label: {
+                    Image(systemName: "minus")
+                }
+                .disabled(selectedTunnel == nil)
+                .accessibilityLabel(String(localized: "Remove selected forward", table: "Workspace"))
+                .help(String(localized: "Remove selected forward", table: "Workspace"))
+
+                Spacer()
+
+                Button(String(localized: "Edit…", table: "Workspace")) {
+                    if let selectedTunnel { editor = TunnelEditDraft(existing: selectedTunnel) }
+                }
+                .disabled(selectedTunnel == nil)
+            }
+
+            Text(String(
+                localized: "Forwards stay open while Bailey is running, even with no terminal connected. They use your ssh keys and ~/.ssh/config; Bailey never asks for a password.",
+                table: "Workspace"
+            ))
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { date in
+            // Only advance the clock when a retry countdown is visible.
+            if manager.states.values.contains(where: {
+                if case .failed(_, let retryAt?) = $0 { return retryAt > date }
+                return false
+            }) {
+                now = date
+            }
+        }
+        .alert(String(localized: "Port Conflict", table: "Workspace"), isPresented: $showsConflict) {
+            Button(String(localized: "OK", table: "Settings"), role: .cancel) {}
+        } message: {
+            Text(verbatim: conflictMessage)
+        }
+        .confirmationDialog(
+            String(localized: "Delete this forward?", table: "Workspace"),
+            isPresented: $showsDeleteConfirmation
+        ) {
+            Button(String(localized: "Delete", table: "Workspace"), role: .destructive) {
+                if let deletingID {
+                    manager.remove(id: deletingID)
+                    if selection == deletingID { selection = nil }
+                }
+                deletingID = nil
+            }
         }
     }
 
-    private func refreshStatusColumn() {
-        let column = tableView.column(withIdentifier: Column.status)
-        guard column >= 0, tableView.numberOfRows > 0 else { return }
-        tableView.reloadData(
-            forRowIndexes: IndexSet(integersIn: 0..<tableView.numberOfRows),
-            columnIndexes: IndexSet(integer: column))
-    }
+    private func tunnelRow(_ tunnel: TunnelDefinition) -> some View {
+        let status = status(for: tunnel)
+        return HStack(alignment: .center, spacing: 12) {
+            Toggle(
+                String(localized: "Keep \(tunnel.name) open", table: "Workspace"),
+                isOn: Binding(
+                    get: { manager.tunnels.first { $0.id == tunnel.id }?.isEnabled ?? false },
+                    set: { enabled in
+                        guard let current = manager.tunnels.first(where: { $0.id == tunnel.id }) else { return }
+                        if enabled, let other = manager.conflict(with: current) {
+                            conflictMessage = current.conflictMessage(with: other) + "\n"
+                                + String(localized: "Turn that forward off or give this one a different port.", table: "Workspace")
+                            showsConflict = true
+                            return
+                        }
+                        manager.setEnabled(enabled, id: tunnel.id)
+                    }
+                )
+            )
+            .labelsHidden()
+            .accessibilityLabel(String(localized: "Keep \(tunnel.name) open", table: "Workspace"))
 
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window == nil {
-            countdownTimer?.invalidate()
-            countdownTimer = nil
-        } else {
-            updateCountdownTimer()
+            VStack(alignment: .leading, spacing: 3) {
+                Text(verbatim: tunnel.name)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                Text(verbatim: tunnel.routeDescription)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help("\(tunnel.name)\n\(tunnel.routeDescription)")
+            .onTapGesture(count: 2) {
+                editor = TunnelEditDraft(existing: tunnel)
+            }
+
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(verbatim: status.text)
+                    .lineLimit(1)
+                if let detail = status.detail {
+                    Text(verbatim: detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            .frame(width: 135, alignment: .trailing)
+            .help(status.reason ?? status.text)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(
+                [status.text, status.detail, status.reason].compactMap { $0 }.joined(separator: ", ")
+            )
         }
+        .padding(.vertical, 5)
     }
 
-    /// The status in words, never by color alone: one word on the first
-    /// line, the retry countdown under it, and ssh's reason as the tooltip
-    /// and accessibility value, since a 96 pt column can't hold it.
-    private func statusText(for tunnel: TunnelDefinition) -> (text: String, detail: String?, reason: String?) {
-        guard tunnel.isEnabled else { return (String(localized: "Off", table: "Workspace"), nil, nil) }
+    private func status(for tunnel: TunnelDefinition) -> (text: String, detail: String?, reason: String?) {
+        if !tunnel.isEnabled {
+            return (String(localized: "Off", table: "Workspace"), nil, nil)
+        }
         switch manager.state(for: tunnel.id) {
         case .stopped:
             return (String(localized: "Stopped", table: "Workspace"), nil, nil)
@@ -212,470 +190,194 @@ final class TunnelSettingsView: NSView, NSTableViewDataSource, NSTableViewDelega
             return (String(localized: "Connecting…", table: "Workspace"), nil, nil)
         case .up:
             return (String(localized: "Connected", table: "Workspace"), nil, nil)
-        case .failed(let message, let retryAt):
-            guard let retryAt else { return (String(localized: "Failed", table: "Workspace"), nil, message) }
-            let seconds = max(0, Int(retryAt.timeIntervalSinceNow.rounded(.up)))
-            return (String(localized: "Failed", table: "Workspace"), String(localized: "retrying in \(String(seconds)) s", table: "Workspace"), message)
-        }
-    }
-
-    // MARK: - NSTableViewDataSource / Delegate
-
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        manager.tunnels.count
-    }
-
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard let tableColumn, let tunnel = tunnel(at: row) else { return nil }
-
-        if tableColumn.identifier == Column.enabled {
-            let checkbox = NSButton(checkboxWithTitle: "", target: self, action: #selector(enabledToggled(_:)))
-            checkbox.state = tunnel.isEnabled ? .on : .off
-            checkbox.tag = row
-            checkbox.setAccessibilityLabel(String(localized: "Keep \(tunnel.name) open", table: "Workspace"))
-            return checkbox
-        }
-
-        let identifier = tableColumn.identifier
-        let cell = (tableView.makeView(withIdentifier: identifier, owner: self) as? TwoLineCellView)
-            ?? TwoLineCellView(identifier: identifier)
-        switch identifier {
-        case Column.route:
-            let route = tunnel.routeDescription
-            cell.title.stringValue = tunnel.name
-            cell.subtitle.stringValue = route
-            // The full text for a route too long for the column.
-            cell.toolTip = "\(tunnel.name)\n\(route)"
-            cell.title.setAccessibilityValue("\(tunnel.name), \(route)")
-        default:
-            let status = statusText(for: tunnel)
-            cell.title.stringValue = status.text
-            cell.subtitle.stringValue = status.detail ?? ""
-            cell.toolTip = status.reason
-            cell.title.setAccessibilityValue(
-                [status.text, status.detail, status.reason].compactMap { $0 }.joined(separator: ", "))
-        }
-        return cell
-    }
-
-    func tableViewSelectionDidChange(_ notification: Notification) {
-        addRemoveControl.setEnabled(selectedTunnel != nil, forSegment: 1)
-    }
-
-    // MARK: - Context menu
-
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-        guard let tunnel = tunnel(at: tableView.clickedRow) else { return }
-        func item(_ title: String, _ action: Selector) -> NSMenuItem {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = self
-            item.representedObject = tunnel.id
-            return item
-        }
-        // The address is loopback on whichever machine listens: pasted into
-        // a local app for a local forward, into a remote shell for a remote one.
-        let copyTitle =
-            switch tunnel.direction {
-            case .local: String(localized: "Copy Local Address", table: "Workspace")
-            case .remote: String(localized: "Copy Remote Address", table: "Workspace")
-            }
-        menu.addItem(item(copyTitle, #selector(copyListenAddress(_:))))
-        if tunnel.isEnabled {
-            menu.addItem(item(String(localized: "Reconnect", table: "Workspace"), #selector(restartTunnel(_:))))
-        }
-        menu.addItem(.separator())
-        menu.addItem(item(String(localized: "Edit…", table: "Workspace"), #selector(editTunnel(_:))))
-        menu.addItem(item(String(localized: "Delete", table: "Workspace"), #selector(deleteTunnel(_:))))
-    }
-
-    // MARK: - Actions
-
-    @objc private func enabledToggled(_ sender: NSButton) {
-        guard let tunnel = tunnel(at: sender.tag) else { return }
-        let enable = sender.state == .on
-        if enable, let other = manager.conflict(with: tunnel) {
-            sender.state = .off
-            showAlert(
-                TunnelSettingsView.conflictMessage(for: tunnel, with: other),
-                detail: String(localized: "Turn that forward off or give this one a different port.", table: "Workspace"))
-            return
-        }
-        manager.setEnabled(enable, id: tunnel.id)
-    }
-
-    @objc private func addRemoveClicked() {
-        if addRemoveControl.selectedSegment == 0 {
-            presentEditor(for: nil)
-        } else if let tunnel = selectedTunnel {
-            manager.remove(id: tunnel.id)
-        }
-    }
-
-    @objc private func editClickedRow() {
-        guard let tunnel = tunnel(at: tableView.clickedRow) else { return }
-        presentEditor(for: tunnel)
-    }
-
-    @objc private func copyListenAddress(_ sender: NSMenuItem) {
-        guard let tunnel = tunnel(withID: sender.representedObject) else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(tunnel.listenAddress, forType: .string)
-    }
-
-    @objc private func restartTunnel(_ sender: NSMenuItem) {
-        guard let tunnel = tunnel(withID: sender.representedObject) else { return }
-        manager.restart(id: tunnel.id)
-    }
-
-    @objc private func editTunnel(_ sender: NSMenuItem) {
-        guard let tunnel = tunnel(withID: sender.representedObject) else { return }
-        presentEditor(for: tunnel)
-    }
-
-    @objc private func deleteTunnel(_ sender: NSMenuItem) {
-        guard let tunnel = tunnel(withID: sender.representedObject) else { return }
-        manager.remove(id: tunnel.id)
-    }
-
-    private func tunnel(withID object: Any?) -> TunnelDefinition? {
-        guard let id = object as? UUID else { return nil }
-        return manager.tunnels.first { $0.id == id }
-    }
-
-    private func presentEditor(for existing: TunnelDefinition?) {
-        guard let window else { return }
-        let editor = TunnelEditorController(existing: existing)
-        editor.onSave = { [weak self] tunnel in
-            guard let self else { return }
-            if existing == nil {
-                self.manager.add(tunnel)
+        case .failed(let reason, let retryAt):
+            let detail: String?
+            if let retryAt {
+                let seconds = max(0, Int(retryAt.timeIntervalSince(now).rounded(.up)))
+                detail = String(localized: "retrying in \(String(seconds)) s", table: "Workspace")
             } else {
-                self.manager.update(tunnel)
+                detail = nil
             }
-        }
-        editor.present(on: window)
-    }
-
-    /// Why `tunnel` can't be switched on beside `other`, naming the machine
-    /// that would have to listen twice.
-    static func conflictMessage(for tunnel: TunnelDefinition, with other: TunnelDefinition) -> String {
-        switch tunnel.direction {
-        case .local:
-            String(localized: "Local port \(String(tunnel.localPort)) is already used by “\(other.name)”.", table: "Workspace")
-        case .remote:
-            String(
-                localized: "Port \(String(tunnel.remotePort)) on \(tunnel.host) is already used by “\(other.name)”.", table: "Workspace")
+            return (String(localized: "Failed", table: "Workspace"), detail, reason)
         }
     }
 
-    private func showAlert(_ message: String, detail: String) {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.informativeText = detail
-        if let window {
-            alert.beginSheetModal(for: window)
-        } else {
-            alert.runModal()
-        }
+    private func requestDelete(_ tunnel: TunnelDefinition) {
+        deletingID = tunnel.id
+        showsDeleteConfirmation = true
     }
 }
 
-// MARK: - Two-line cell
-
-/// A name over a secondary line, for a row that carries two facts in one
-/// column. `title` doubles as the cell's `textField` so the table treats it
-/// as the row's text.
-@MainActor
-private final class TwoLineCellView: NSTableCellView {
-    let title = NSTextField(labelWithString: "")
-    let subtitle = NSTextField(labelWithString: "")
-
-    init(identifier: NSUserInterfaceItemIdentifier) {
-        super.init(frame: .zero)
-        self.identifier = identifier
-        subtitle.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        subtitle.textColor = .secondaryLabelColor
-        for field in [title, subtitle] {
-            field.lineBreakMode = .byTruncatingTail
-            field.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(field)
-        }
-        textField = title
-        NSLayoutConstraint.activate([
-            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
-            title.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
-            title.topAnchor.constraint(equalTo: topAnchor, constant: 4),
-            subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            subtitle.trailingAnchor.constraint(equalTo: title.trailingAnchor),
-            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 1),
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-}
-
-// MARK: - Editor sheet
-
-/// The add/edit sheet: name, direction, host, the port to listen on, what
-/// it reaches, and whether to open it now. The direction picker relabels
-/// the port rows and swaps which host row is shown, so the sheet always
-/// reads as one listener and one target. Validation runs on Save and keeps
-/// the sheet open with the reason shown under the fields.
-@MainActor
-private final class TunnelEditorController: NSObject, NSTextFieldDelegate {
-    var onSave: ((TunnelDefinition) -> Void)?
-
-    private let existing: TunnelDefinition?
-    private let sheet: NSWindow
-    private let nameField = NSTextField()
-    private let directionPopUp = NSPopUpButton()
-    private let hostField = NSTextField()
-    private let remoteHostField = NSTextField()
-    private let remotePortField = NSTextField()
-    private let localHostField = NSTextField()
-    private let localPortField = NSTextField()
-    private let remoteHostLabel = NSTextField(labelWithString: "")
-    private let remotePortLabel = NSTextField(labelWithString: "")
-    private let localHostLabel = NSTextField(labelWithString: "")
-    private let localPortLabel = NSTextField(labelWithString: "")
-    private var remoteHostRow: NSGridRow?
-    private var localHostRow: NSGridRow?
-    private let enabledCheckbox = NSButton(
-        checkboxWithTitle: String(localized: "Keep this forward open", table: "Workspace"), target: nil, action: nil)
-    /// Only a remote forward exposes something on this Mac, so only that
-    /// direction says what it is exposing and to whom.
-    private let exposureNote = NSTextField(
-        wrappingLabelWithString: String(
-            localized:
-                "Anything that can reach that port on the remote machine reaches this Mac through it. To reach this Mac's own ssh, turn on Remote Login in System Settings → General → Sharing.", table: "Workspace"
-        ))
-    private let problemLabel = NSTextField(wrappingLabelWithString: "")
-    /// Until the user types a local port, it follows the remote one, since
-    /// the same number is what pages that hardcode their own port need.
-    private var localPortEdited = false
-    /// Keeps the controller alive while its sheet is up.
-    private var retainedSelf: TunnelEditorController?
-
-    private var direction: TunnelDirection {
-        TunnelDirection.allCases[max(0, directionPopUp.indexOfSelectedItem)]
-    }
+/// In-progress form values are strings so invalid ports never disappear while
+/// editing. Conversion and conflict checks happen once, on Save.
+struct TunnelEditDraft: Identifiable {
+    let id = UUID()
+    let existing: TunnelDefinition?
+    var name: String
+    var host: String
+    var direction: TunnelDirection
+    var localHost: String
+    var localPort: String
+    var remoteHost: String
+    var remotePort: String
+    var isEnabled: Bool
 
     init(existing: TunnelDefinition?) {
         self.existing = existing
-        sheet = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 10),
-            styleMask: [.titled], backing: .buffered, defer: true)
-        super.init()
-        build()
+        name = existing?.name ?? ""
+        host = existing?.host ?? ""
+        direction = existing?.direction ?? .local
+        localHost = existing?.localHost ?? "127.0.0.1"
+        localPort = existing.map { String($0.localPort) } ?? ""
+        remoteHost = existing?.remoteHost ?? "127.0.0.1"
+        remotePort = existing.map { String($0.remotePort) } ?? ""
+        isEnabled = existing?.isEnabled ?? true
     }
 
-    func present(on window: NSWindow) {
-        retainedSelf = self
-        window.beginSheet(sheet) { [weak self] _ in
-            self?.retainedSelf = nil
+    func build(against saved: [TunnelDefinition]) -> (tunnel: TunnelDefinition?, problem: String?) {
+        let remote = remotePort.trimmingCharacters(in: .whitespaces)
+        guard let remoteNumber = Int(remote) else {
+            return (nil, String(localized: "Enter the remote port as a number.", table: "Workspace"))
         }
-        sheet.makeFirstResponder(existing == nil ? hostField : nameField)
-    }
-
-    private func build() {
-        let tunnel = existing
-        nameField.stringValue = tunnel?.name ?? ""
-        nameField.placeholderString = String(localized: "A1 desktop", table: "Workspace")
-        // In the order of TunnelDirection.allCases, which `direction` relies on.
-        directionPopUp.addItems(withTitles: [
-            String(localized: "Reach a remote port from this Mac", table: "Workspace"),
-            String(localized: "Let the remote machine reach this Mac", table: "Workspace"),
-        ])
-        directionPopUp.selectItem(
-            at: TunnelDirection.allCases.firstIndex(of: tunnel?.direction ?? .local) ?? 0)
-        directionPopUp.target = self
-        directionPopUp.action = #selector(directionChanged)
-        hostField.stringValue = tunnel?.host ?? ""
-        hostField.placeholderString = String(localized: "oracle or user@host", table: "Workspace")
-        remoteHostField.stringValue = tunnel?.remoteHost ?? "127.0.0.1"
-        remotePortField.stringValue = tunnel.map { String($0.remotePort) } ?? ""
-        localHostField.stringValue = tunnel?.localHost ?? "127.0.0.1"
-        localPortField.stringValue = tunnel.map { String($0.localPort) } ?? ""
-        enabledCheckbox.state = (tunnel?.isEnabled ?? true) ? .on : .off
-        localPortEdited = tunnel != nil
-        remotePortField.delegate = self
-        localPortField.delegate = self
-
-        for field in [nameField, hostField, remoteHostField, remotePortField, localHostField, localPortField] {
-            field.translatesAutoresizingMaskIntoConstraints = false
-            field.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        let local = localPort.trimmingCharacters(in: .whitespaces)
+        guard let localNumber = local.isEmpty ? remoteNumber : Int(local) else {
+            return (nil, String(localized: "Enter the local port as a number.", table: "Workspace"))
         }
-        directionPopUp.translatesAutoresizingMaskIntoConstraints = false
-        directionPopUp.widthAnchor.constraint(equalToConstant: 240).isActive = true
 
-        func label(_ text: String) -> NSTextField {
-            let label = NSTextField(labelWithString: text)
-            label.alignment = .right
-            return label
-        }
-        for portLabel in [remoteHostLabel, remotePortLabel, localHostLabel, localPortLabel] {
-            portLabel.alignment = .right
-        }
-        let grid = NSGridView(views: [
-            [label(String(localized: "Name:", table: "Workspace")), nameField],
-            [label(String(localized: "Direction:", table: "Workspace")), directionPopUp],
-            [label(String(localized: "SSH host:", table: "Workspace")), hostField],
-            [remoteHostLabel, remoteHostField],
-            [remotePortLabel, remotePortField],
-            [localHostLabel, localHostField],
-            [localPortLabel, localPortField],
-            [NSGridCell.emptyContentView, enabledCheckbox],
-        ])
-        grid.rowSpacing = 8
-        grid.columnSpacing = 8
-        grid.column(at: 0).xPlacement = .trailing
-        grid.translatesAutoresizingMaskIntoConstraints = false
-        remoteHostRow = grid.row(at: 3)
-        localHostRow = grid.row(at: 5)
-
-        exposureNote.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        exposureNote.textColor = .secondaryLabelColor
-        exposureNote.translatesAutoresizingMaskIntoConstraints = false
-
-        problemLabel.textColor = .systemRed
-        problemLabel.isHidden = true
-        problemLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        let cancelButton = NSButton(
-            title: String(localized: "Cancel", table: "Workspace"), target: self, action: #selector(cancelClicked))
-        cancelButton.keyEquivalent = "\u{1b}"
-        let saveButton = NSButton(
-            title: String(localized: "Save", table: "Workspace"), target: self, action: #selector(saveClicked))
-        saveButton.keyEquivalent = "\r"
-        let buttons = NSStackView()
-        buttons.orientation = .horizontal
-        buttons.spacing = 8
-        buttons.addView(cancelButton, in: .trailing)
-        buttons.addView(saveButton, in: .trailing)
-
-        // A stack rather than a constraint chain: the exposure note and the
-        // problem label come and go, and a stack drops a hidden view from the
-        // layout along with its spacing.
-        let stack = NSStackView(views: [grid, exposureNote, problemLabel, buttons])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 10
-        stack.setCustomSpacing(12, after: problemLabel)
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        let content = NSView()
-        content.addSubview(stack)
-        NSLayoutConstraint.activate([
-            content.widthAnchor.constraint(equalToConstant: 440),
-            stack.topAnchor.constraint(equalTo: content.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            exposureNote.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -20),
-            problemLabel.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -20),
-            buttons.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -20),
-        ])
-        sheet.contentView = content
-        applyDirection()
-    }
-
-    /// Relabels the port rows, shows the host row for the target side only,
-    /// and resizes the sheet to fit.
-    private func applyDirection() {
-        switch direction {
-        case .local:
-            remoteHostLabel.stringValue = String(localized: "Remote host:", table: "Workspace")
-            remotePortLabel.stringValue = String(localized: "Remote port:", table: "Workspace")
-            localPortLabel.stringValue = String(localized: "Local port:", table: "Workspace")
-            remotePortField.placeholderString = "3389"
-            localPortField.placeholderString = String(localized: "Same as remote", table: "Workspace")
-        case .remote:
-            remotePortLabel.stringValue = String(localized: "Remote port:", table: "Workspace")
-            localHostLabel.stringValue = String(localized: "Local host:", table: "Workspace")
-            localPortLabel.stringValue = String(localized: "Local port:", table: "Workspace")
-            remotePortField.placeholderString = "2222"
-            localPortField.placeholderString = "22"
-        }
-        remoteHostRow?.isHidden = direction != .local
-        localHostRow?.isHidden = direction != .remote
-        exposureNote.isHidden = direction != .remote
-        sheet.setContentSize(sheet.contentView?.fittingSize ?? sheet.frame.size)
-    }
-
-    @objc private func directionChanged() {
-        applyDirection()
-    }
-
-    func controlTextDidChange(_ notification: Notification) {
-        guard let field = notification.object as? NSTextField else { return }
-        if field === localPortField {
-            localPortEdited = !localPortField.stringValue.isEmpty
-        } else if field === remotePortField, !localPortEdited, direction == .local,
-            let remote = Int(remotePortField.stringValue),
-            TunnelDefinition.localPortRange.contains(remote)
-        {
-            localPortField.stringValue = String(remote)
-        }
-    }
-
-    @objc private func cancelClicked() {
-        sheet.sheetParent?.endSheet(sheet, returnCode: .cancel)
-    }
-
-    @objc private func saveClicked() {
-        func trimmed(_ field: NSTextField) -> String {
-            field.stringValue.trimmingCharacters(in: .whitespaces)
-        }
-        guard let remotePort = Int(trimmed(remotePortField)) else {
-            return show(String(localized: "Enter the remote port as a number.", table: "Workspace"))
-        }
-        let localText = trimmed(localPortField)
-        guard let localPort = localText.isEmpty ? remotePort : Int(localText) else {
-            return show(String(localized: "Enter the local port as a number.", table: "Workspace"))
-        }
-        let host = trimmed(hostField)
-        let name = trimmed(nameField)
+        let host = host.trimmingCharacters(in: .whitespaces)
+        let name = name.trimmingCharacters(in: .whitespaces)
         var tunnel = existing ?? TunnelDefinition(name: "", host: "", localPort: 0, remotePort: 0)
-        tunnel.name = name.isEmpty ? "\(host):\(remotePort)" : name
-        tunnel.direction = direction
+        tunnel.name = name.isEmpty ? "\(host):\(remoteNumber)" : name
         tunnel.host = host
-        tunnel.remoteHost = trimmed(remoteHostField)
-        tunnel.remotePort = remotePort
-        tunnel.localHost = trimmed(localHostField)
-        tunnel.localPort = localPort
-        tunnel.isEnabled = enabledCheckbox.state == .on
+        tunnel.direction = direction
+        tunnel.localHost = localHost.trimmingCharacters(in: .whitespaces)
+        tunnel.localPort = localNumber
+        tunnel.remoteHost = remoteHost.trimmingCharacters(in: .whitespaces)
+        tunnel.remotePort = remoteNumber
+        tunnel.isEnabled = isEnabled
 
-        if let problem = tunnel.validationProblem {
-            return show(problem)
+        if let problem = tunnel.validationProblem { return (nil, problem) }
+        if tunnel.isEnabled, let other = saved.first(where: {
+            $0.isEnabled && $0.id != tunnel.id && $0.listensAlongside(tunnel)
+        }) {
+            return (nil, tunnel.conflictMessage(with: other))
         }
-        if tunnel.isEnabled, let other = TunnelManager.shared.conflict(with: tunnel) {
-            return show(TunnelSettingsView.conflictMessage(for: tunnel, with: other))
-        }
-        onSave?(tunnel)
-        sheet.sheetParent?.endSheet(sheet, returnCode: .OK)
-    }
-
-    private func show(_ problem: String) {
-        problemLabel.stringValue = problem
-        problemLabel.isHidden = false
-        sheet.setContentSize(sheet.contentView?.fittingSize ?? sheet.frame.size)
-        NSAccessibility.post(
-            element: problemLabel, notification: .announcementRequested,
-            userInfo: [.announcement: problem, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+        return (tunnel, nil)
     }
 }
 
-// MARK: - SwiftUI mount point
+extension TunnelDefinition {
+    func conflictMessage(with other: TunnelDefinition) -> String {
+        switch direction {
+        case .local:
+            String(localized: "Local port \(String(localPort)) is already used by “\(other.name)”.", table: "Workspace")
+        case .remote:
+            String(localized: "Port \(String(remotePort)) on \(host) is already used by “\(other.name)”.", table: "Workspace")
+        }
+    }
+}
 
-struct TunnelSettingsRow: NSViewRepresentable {
-    func makeNSView(context: Context) -> TunnelSettingsView {
-        TunnelSettingsView(frame: .zero)
+/// A native SwiftUI sheet; the actual TunnelManager remains outside its lifetime.
+struct TunnelEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: TunnelEditDraft
+    @State private var problem: String?
+    @FocusState private var isHostFocused: Bool
+
+    let onSave: (TunnelDefinition) -> Void
+
+    init(draft: TunnelEditDraft, onSave: @escaping (TunnelDefinition) -> Void) {
+        _draft = State(initialValue: draft)
+        self.onSave = onSave
     }
 
-    func updateNSView(_ view: TunnelSettingsView, context: Context) {}
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    TextField(
+                        String(localized: "Name:", table: "Workspace"),
+                        text: $draft.name,
+                        prompt: Text(String(localized: "A1 desktop", table: "Workspace"))
+                    )
+                    Picker(String(localized: "Direction:", table: "Workspace"), selection: $draft.direction) {
+                        Text(String(localized: "Reach a remote port from this Mac", table: "Workspace"))
+                            .tag(TunnelDirection.local)
+                        Text(String(localized: "Let the remote machine reach this Mac", table: "Workspace"))
+                            .tag(TunnelDirection.remote)
+                    }
+                    TextField(
+                        String(localized: "SSH host:", table: "Workspace"),
+                        text: $draft.host,
+                        prompt: Text(String(localized: "oracle or user@host", table: "Workspace"))
+                    )
+                        .focused($isHostFocused)
+                }
+
+                Section {
+                    if draft.direction == .local {
+                        TextField(String(localized: "Remote host:", table: "Workspace"), text: $draft.remoteHost)
+                    } else {
+                        TextField(String(localized: "Local host:", table: "Workspace"), text: $draft.localHost)
+                    }
+                    TextField(
+                        String(localized: "Remote port:", table: "Workspace"),
+                        text: $draft.remotePort,
+                        prompt: Text(verbatim: draft.direction == .local ? "3389" : "2222")
+                    )
+                    TextField(
+                        String(localized: "Local port:", table: "Workspace"),
+                        text: $draft.localPort,
+                        prompt: Text(draft.direction == .local
+                            ? String(localized: "Same as remote", table: "Workspace") : "22")
+                    )
+                }
+
+                Section {
+                    Toggle(
+                        String(localized: "Keep this forward open", table: "Workspace"),
+                        isOn: $draft.isEnabled
+                    )
+                    if draft.direction == .remote {
+                        Text(String(
+                            localized: "Anything that can reach that port on the remote machine reaches this Mac through it. To reach this Mac's own ssh, turn on Remote Login in System Settings → General → Sharing.",
+                            table: "Workspace"
+                        ))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+
+                if let problem {
+                    Text(verbatim: problem)
+                        .foregroundStyle(.red)
+                        .accessibilityAddTraits(.isStaticText)
+                }
+            }
+            .formStyle(.grouped)
+
+            Divider()
+            HStack {
+                Spacer()
+                Button(String(localized: "Cancel", table: "Workspace")) {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button(String(localized: "Save", table: "Workspace")) {
+                    let result = draft.build(against: TunnelManager.shared.tunnels)
+                    guard let tunnel = result.tunnel else {
+                        problem = result.problem
+                        return
+                    }
+                    onSave(tunnel)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(16)
+        }
+        .frame(minWidth: 490, idealWidth: 530, minHeight: 420, idealHeight: 480)
+        .onAppear { isHostFocused = draft.existing == nil }
+    }
 }

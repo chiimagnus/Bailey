@@ -12,7 +12,7 @@
 
 ## 生命周期与监听
 
-`TunnelManager` 管理启用规则与运行状态，应用启动时启动相应转发，设置提供明确的启停入口。原生列表仍通过必要的 Combine 发布事件更新，不因替换 SwiftUI 观察方式而删除这条桥接。
+`TunnelManager` 管理启用规则与运行状态，应用启动时启动相应转发。设置页通过 SwiftUI `@ObservedObject` 观察现有 `@Published` 状态；列表提供启停、添加、编辑、确认删除、重连、复制地址和失败原因／倒计时。编辑 Sheet 保留未提交输入，保存前复用 `TunnelDefinition` 校验、监听机器及端口冲突规则。切换设置分类只销毁展示内容，不创建或结束任何 SSH 连接。
 
 向 SSH 请求仅监听回环地址；服务端 `GatewayPorts` 可能改变最终监听范围，因此必须检查实际结果，不能把客户端请求当作服务端保证。
 
@@ -20,6 +20,6 @@
 
 ## 验证
 
-`TunnelStoreTests` 验证配置解析、有效规则和异常端口；`RemoteCommandsTests` 检查相关命令与端口边界。真实转发要用专用连接、空闲端口和受控服务检查启停、认证失败、实际监听及连接结果，不能仅以命令构建成功判定隧道正常。
+`TunnelStoreTests` 验证配置解析、有效规则和异常端口；`SettingsNavigationTests` 验证新增和编辑、极端端口输入以及本地／远端冲突；`RemoteCommandsTests` 检查相关命令与端口边界。真实转发要用专用连接、空闲端口和受控服务检查启停、认证失败、实际监听及连接结果，不能仅以命令构建成功判定隧道正常。
 
 实现入口：[TunnelManager.swift](../../Bailey/Remote/Tunnels/TunnelManager.swift)。安全要求见 [SECURITY.md](../../SECURITY.md)，执行方式见 [testing.md](../testing.md)。

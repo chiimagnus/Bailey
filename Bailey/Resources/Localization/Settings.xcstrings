@@ -232,6 +232,16 @@
         }
       }
     },
+    "General" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通用"
+          }
+        }
+      }
+    },
     "Git" : {
       "localizations" : {
         "zh-Hans" : {
@@ -313,6 +323,26 @@
         }
       }
     },
+    "Panel font size" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "面板字体大小"
+          }
+        }
+      }
+    },
+    "Panels" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "面板"
+          }
+        }
+      }
+    },
     "Phone Notifications" : {
       "localizations" : {
         "zh-Hans" : {
@@ -329,6 +359,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "端口转发"
+          }
+        }
+      }
+    },
+    "Port forwarding rules and phone notification destinations will be kept." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存的端口转发规则和手机通知地址会保留。"
           }
         }
       }
@@ -403,6 +443,16 @@
         }
       }
     },
+    "Reset all app preferences?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复所有应用偏好设置？"
+          }
+        }
+      }
+    },
     "Reset to Defaults" : {
       "localizations" : {
         "zh-Hans" : {
@@ -469,26 +519,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "仅在 Git 仓库中显示工具栏"
-          }
-        }
-      }
-    },
-    "Panels" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "面板"
-          }
-        }
-      }
-    },
-    "Panel font size" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "面板字体大小"
           }
         }
       }
@@ -601,6 +631,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "将 Option 用作 Alt/Meta"
+          }
+        }
+      }
+    },
+    "Workspace" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作区"
           }
         }
       }
