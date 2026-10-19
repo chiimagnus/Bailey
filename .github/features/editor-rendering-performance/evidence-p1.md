@@ -386,3 +386,10 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 - **清理、进程边界**：安装前正式 `/Applications/Bailey.app` PID34739 运行、安装时未启动／终止／重启，后续该原进程不再运行（未人为对其发送退出信号；不能猜测退出原因）。两个临时隔离 Release PID80957／82452／86425 均只结束本轮自行启动的进程，专属 UUID `UserDefaults` suite 与 `/tmp/bailey-t5-gui.*` 被核实后清理。**其他工作目录 `/Users/chii_magnus/Github/Bailey-issue-11` 的测试进程 PID87793 未操作**。仅保留本任务 `build/performance/editor-rendering/` 中的图像、CSV、vmmap 和固定 snapshot 证据，未把截图加进生产 Git commits。
 
 **P1-T5 此时的判断**：跨本机可执行的 AppKit、工作区、完整 Windows SSH XCTest 458/458、Debug/Release 签名、完整包安装、独立 Release 五分屏真实像素和 120s/90s 空闲资源均有证据。仍欠正式完整 GUI ⌘S 前台路径、Release 五标签反复真实编辑切换后 Allocations 对照、真实手指触控板／不同实体显示器、VoiceOver、最低 macOS15.6 与 CI 工具链、Windows symlink 前提；这些条件的限制不可冒称覆盖，**P1-T5 保持 in_progress，不启动阶段 Go 审计**。
+
+## 2026-10-19：PR #36 续验
+
+- **独立 Release ⌘S 已通过**：隔离进程 PID 25279，单独临时 Swift 文件。真实键盘输入后 AX 显示中文、emoji 新文本，磁盘仍是旧字节；后台 ⌘S 虽投递成功但未写盘。将该隔离窗口切到前台执行 ⌘S 后，磁盘与预期 UTF-8 字节完全相等（SHA-256 `febfb95cd06a744ecbc0a77c3150ee004bc699fa74ca2cab8c5f7e69bb5f7282`）。仅重启测试实例为 PID 38611，AX 与磁盘均保持新内容；恢复原本的前台应用。原始观察与比较留在忽略目录 `build/performance/editor-rendering/pr36-actual-app/e2e-receipt.json`，截图上传至 [PR #36 评论](https://github.com/chiimagnus/Bailey/pull/36#issuecomment-6261950758)，未入 Git。
+- **五分屏资源补测尚不完整**：独立 Release 的 5 个 `AXTextArea`（各 10,000 行）已真实挂载，`leaks -quiet` 在基线观察到 0 leaks；`xctrace Allocations` 可附加并完成 12 秒和 35 秒采集。但尝试从后台右键菜单执行 `Close All` 时，共享桌面引发窗口边界或精确 AX 身份变化，操作被拒绝／状态不可验证，后续读取仍有 5 个文本区域。**没有获得关闭后的对象、分配或内存对照，不标为通过，也不据此认定产品泄漏。** 对应本地 `pr36-five-release/` 记录仅作为诊断证据。
+- **PR 状态**：[Draft #36](https://github.com/chiimagnus/Bailey/pull/36) 已推送；四张低质量 JPG 在评论附件，非 Git 文件。分支与 `origin/main` 的现存冲突依要求暂不处理。完整 Windows SSH XCTest 458/458、Debug/Release 验签及五分屏空闲资源的早期证据保留在上文。
+- **剩余门槛**：五编辑器实际关闭／重开后的 Release Allocations，实体触控板、其他显示/刷新率、最低 macOS 15.6／CI、Windows symlink 权限。单独 E2E 保存缺口已核销；P1-T5 仍进行中。

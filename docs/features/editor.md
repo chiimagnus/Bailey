@@ -98,8 +98,8 @@ Git Ignore 在普通 `.gitignore` 标签持有的原生缓冲末尾插入规则�
 
 ## 验证
 
-`FileTabTests` 覆盖读取、编辑、保存及原生行为；`TextCoordinateIndexTests` 对照完整扫描、重建索引与真实解析器，覆盖十万行文首／中／末、LF／CRLF／LS／PS、全文清空恢复及随机编辑；`SyntaxHighlightingTests` 检查真实解析器坐标、Unicode 分块字节、渲染色及字体／撤销不变；`EditorTextInputTests` 对照系统 NSTextView 验证组合输入结束、最终替换及撤销。工作区 UI 测试覆盖完整 `ContentView` 中的标签身份、多窗口和关闭。检查真实文件字节、原生文本、撤销和滚动，不只断言 ViewModel 字段。
+原生编辑、输入法、Undo、查找、保存、重载及高亮由 `FileTabTests`、`EditorTextInputTests`、`SyntaxHighlightingTests` 和工作区测试共同验证。行号、Diff、滚动坐标与多标签释放也必须在真实 AppKit 窗口中检查；具体环境、极端组合及完成标准由 [测试文档](../testing.md) 统一规定。
 
-覆盖写入期间编辑、保存失败、重命名、干净／脏文件重载、大小和编码边界、中文／emoji／CRLF、嵌入语言、A→B→A 与关闭失败。2026-10-19 在当前 Mac 上运行带独立 Windows SSH 测试主机的完整 XCTest，迁移提交时 **436/436 通过、0 跳过**；Debug／Release 构建和严格签名校验通过。
+独立 App 验收必须实际输入、执行前台 ⌘S、核对磁盘字节，并在重启后再次读取。单纯派发快捷键、读取 AX 值或显示截图均不能代替最终保存结果。
 
-P1-T5 新增四档文件的17次冷／热远跳回归：固定行高情况下，文档高度与滚动条滑块比例波动均为零。另有四档 × 折行开关 × 文首／中／末 24 组、每组30次编辑与全文恢复测试，10万行普通输入全部满足中位16ms／P95 32ms预算；五份带语法高亮的原生编辑器在释放标签/窗口 owner 后也全部析构。新增回归后再次使用**独立 Windows SSH 主机执行完整 `make test`：439/439，通过、0 失败、0 跳过、退出码 0（2026-10-19）**。测试没有测量最终实际呈现帧耗时、RSS峰值或30秒静置CPU。隔离 Release 进程可启动空项目工作区，但自动化工具的窗口 Accessibility 快照不稳定，未能完成实际点击；不把只读截图等同于界面E2E。真实触控板连续拖动、长期内存、最低 macOS 15.6 运行时和 CI 26.x 仍待验收。具体运行及人工验收范围见 [testing.md](../testing.md)。
+本次 TextKit 2 迁移的测试数字、已修复缺陷及未完成条件见 [P1-T5 验收记录](../../.github/features/editor-rendering-performance/evidence-p1.md)；实时任务状态以同目录 `todo.toml` 为准，不在本页重复维护。
