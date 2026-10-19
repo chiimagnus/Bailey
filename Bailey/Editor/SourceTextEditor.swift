@@ -280,6 +280,27 @@ struct SourceTextEditor: NSViewRepresentable {
             }
         }
 
+        func retireObsoleteDocument() {
+            if let scrollObserver {
+                NotificationCenter.default.removeObserver(scrollObserver)
+                self.scrollObserver = nil
+            }
+            if let editor = scrollView?.documentView as? FocusReportingTextView {
+                editor.syntaxCoordinator?.deactivate()
+                editor.syntaxCoordinator = nil
+                editor.delegate = nil
+                editor.onCharacterEdit = nil
+                editor.onBecomeFirstResponder = nil
+                editor.onResignFirstResponder = nil
+            }
+            // The prior SwiftUI host can outlive a file generation while
+            // AppKit finishes its layout. Its scroll view must not keep the
+            // obsolete text document alive after the new bytes are accepted.
+            scrollView?.documentView = nil
+            scrollView = nil
+            textView = nil
+        }
+
         isolated deinit {
             if let scrollObserver {
                 NotificationCenter.default.removeObserver(scrollObserver)

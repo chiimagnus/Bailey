@@ -510,6 +510,89 @@ final class PaneRetentionTests: XCTestCase {
         }
     }
 
+    func testExternalReloadReleasesObsoleteDocumentEvenWhenOldScrollViewIsCached() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("reload.swift")
+        let oldText = String(repeating: "let stale = \"中文 😀\"\n", count: 400)
+        let newText = "let current = \"updated 👋\"\n"
+        try oldText.write(to: path, atomically: true, encoding: .utf8)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        let host = NSHostingView(rootView: SourceTextEditor(
+            file: file, font: .monospacedSystemFont(ofSize: 14, weight: .regular),
+            palette: .theme(dark: false), wrapLines: false, isFocused: false
+        ))
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 700, height: 460),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        try await settle { host.layoutSubtreeIfNeeded(); return file.editorView != nil }
+        // The old SwiftUI host and scroll may be retained by a pending AppKit
+        // layout even after its tab's document generation becomes obsolete.
+        let cachedScroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        var editor: FocusReportingTextView? = try XCTUnwrap(
+            cachedScroll.documentView as? FocusReportingTextView)
+        weak var retiredEditor = editor
+        XCTAssertEqual(editor?.text, oldText)
+        let initialRevision = file.reloadRevision
+        // A successful refresh of byte-identical content must not retire the
+        // document, reset Undo or replace the tab's native view.
+        file.reloadFromDiskIfClean()
+        try await file.waitForText()
+        XCTAssertEqual(file.reloadRevision, initialRevision)
+        XCTAssertTrue(file.editorView === cachedScroll)
+        XCTAssertTrue(cachedScroll.documentView === editor)
+        XCTAssertTrue(window.makeFirstResponder(editor),
+            "Retiring a clean editor must also handle a previously focused NSTextView")
+        host.removeFromSuperview()
+        try newText.write(to: path, atomically: true, encoding: .utf8)
+        file.reloadFromDiskIfClean()
+        try await settle { file.text == newText && file.reloadRevision > 0 }
+        editor = nil
+        XCTAssertNil(file.editorView, "The file must not expose a stale native editor after reload")
+        XCTAssertNil(cachedScroll.documentView,
+                     "A retired file generation must not keep its obsolete native text document")
+        try await settle { retiredEditor == nil }
+
+        let replacementHost = NSHostingView(rootView: FileViewerView(file: file))
+        window.contentView = replacementHost
+        try await settle {
+            replacementHost.layoutSubtreeIfNeeded()
+            return file.editorView !== cachedScroll && file.editorView != nil
+        }
+        let freshScroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        var freshEditor: FocusReportingTextView? = try XCTUnwrap(
+            freshScroll.documentView as? FocusReportingTextView)
+        weak var retiredReplacement = freshEditor
+        XCTAssertEqual(freshEditor?.text, newText)
+        XCTAssertFalse(freshEditor?.undoManager?.canUndo ?? true)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), newText)
+
+        // The same generation handoff also applies when valid text becomes
+        // binary: the old document must leave memory while the real file tab
+        // switches to its unsupported-content view.
+        let binary = Data([0xFF, 0x00, 0xFE])
+        try binary.write(to: path)
+        file.reloadFromDiskIfClean()
+        try await settle {
+            replacementHost.layoutSubtreeIfNeeded()
+            if case .unavailable = file.content { return true }
+            return false
+        }
+        freshEditor = nil
+        XCTAssertNil(freshScroll.documentView)
+        try await settle { retiredReplacement == nil }
+        XCTAssertTrue(file.text.isEmpty)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), binary)
+    }
+
     func testEditorRetainsScrollAndReleasesRetiredNativeResources() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

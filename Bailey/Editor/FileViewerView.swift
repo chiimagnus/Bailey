@@ -439,7 +439,10 @@ final class FileTab: nonisolated Identifiable {
 
             self.reloadError = nil
             guard !self.matches(loaded) else { return }
+            let obsoleteCoordinator = self.editorCoordinator
             self.editorCoordinator = nil
+            self.editorView = nil
+            obsoleteCoordinator?.retireObsoleteDocument()
             self.content = loaded.content
             self.text = loaded.text
             self.savedText = loaded.text
