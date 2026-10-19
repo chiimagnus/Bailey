@@ -29,6 +29,58 @@
 
 ## 发现项
 
+## 发现 F-07
+
+- 任务：`P1-T5`
+- 严重级别：`High`
+- 状态：`Open`
+- 位置：`Bailey/UI/Panels/ToolPanelView.swift:205-250; BaileyTests/NativeUI/Git/GitExternalRefreshTests.swift:309-356`
+- 摘要：`真实 Windows SSH 外部 Git 已暂存成功，但可见面板在无需操作的空闲状态下持续显示旧未暂存快照`
+- 风险：`完整 466 项回归外部 Git 自动刷新失败；完整 GitExternalRefreshTests 重复第 2 轮复现远端 status 已为 M staged、模型 staged=0/changed=1/isRefreshing=false/isBusy=false/statusError=nil；前台轮询任务或测试模拟的激活通知可能未实际运行，用户可被持续陈旧的远端 Git 视图误导。`
+- 预期修复：`确认已挂载可见面板的 active notification 与 task 生命周期和实际远端命令结果；修复共有所有权/信号边界，而不是加长刷新超时或只重跑 XCTest。若确系模拟系统前后台的测试夹具缺陷，则以真实 onAppear/Task 生命周期握手取代固定 sleep，并验证真实最终 Git staged/ref 副作用。`
+- 验证：`完整 GitExternalRefreshTests 重复、两种 Git 变更阶段及真实 Windows SSH 外部写入；远端 porcelain 与本地模型一致、前台可见自动刷新、后台停止、恢复补读、隐藏停止、错误恢复；完整有授权的 Windows SSH XCTest 与 Debug/Release 签名。`
+- 解决证据：`<commit diff note or test/build output>`
+
+
+## 发现 F-06
+
+- 任务：`P1-T5`
+- 严重级别：`Medium`
+- 状态：`Open`
+- 位置：`Bailey/Support/FPSCounter.swift:20-31,64-73; Bailey/UI/Components/WorkspaceChrome.swift:331-348`
+- 摘要：`FPSBadge 把 CADisplayLink 的显示器回调频率标成 fps，无法证明 Bailey 确实绘制并呈现相同数量的新帧`
+- 风险：`用户在 120Hz 内建屏或 60Hz 外接屏看到数值时会误以为编辑器达到了对应实际 FPS；跨屏移动时链接只在 start 时绑定 NSScreen.main，难以代表当前视图刷新。不能用该读数关闭 T5 性能 Gate`
+- 预期修复：`保持本轮原生编辑器 UI/UX 不变；测量必须用 Instruments 实际合成帧/卡顿数据。以后如需产品 FPS HUD，必须对实际呈现帧取得可靠观测；否则把数字明确改称显示刷新回调/Hz，不伪称绘制 FPS`
+- 验证：`CGDisplayCopyDisplayMode 与 NSScreen.maximumFramesPerSecond 核验屏幕 Hz；Core Animation Animation Hitches 真实 Release 窗口滚动期间追踪；区别 CADisplayLink tick 与新内容帧`
+- 解决证据：`<commit diff note or test/build output>`
+
+
+## 发现 F-05
+
+- 任务：`P1-T5`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`BaileyTests/NativeUI/Workspace/PaneRetentionTests.swift:435-546; Bailey/Editor/SourceTextEditor.swift:283-301; Bailey/UI/WorkspaceDockView.swift:453-472`
+- 摘要：`连续两轮完整 Windows SSH XCTest 的真实 WorkspaceDockView 原生编辑器退役后存在未释放对象，且失败目标随顺序变化`
+- 风险：`第一轮 466 项中旧视图退役释放超时，第二轮无并行编译仍在 Close Files 五编辑器 weak FileTab/editor 的回收失败；可能是 AppKit First Responder/SwiftUI 旧宿主或长生命周期强引用，真实 Release 前台也曾缓存单个旧 TextView，需要区分系统有界保留和应用残留`
+- 预期修复：`在原有 XCTest 与受控窗口中记录究竟是哪类旧对象/窗口 First Responder 仍被强持有；以真正所有权边界修复，不扩大任意等待超时或用定时释放补丁；若只是系统正常短暂缓存则修正测试的不当假设并提供可证明确切最终回收/有界峰值的等价断言`
+- 验证：`重复真实五分屏窗口关闭及外部重载，记录按 file/editor 分别统计的残留和引用树，Run focused + full PaneRetentionTests、完整 Windows SSH 466 项、Debug/Release 构建严格验签、独立 Release GUI 五轮和物理内存对照`
+- 解决证据：`commit e0e147f: old Project.tabs ownership persists after TerminalManager.remove, and retireObsoleteDocument skipped previously detached FocusReportingTextView; both reproduced Red. Green: 5 complete PaneRetentionTests runs x15/15, 0 failures; full Windows SSH suite PaneRetentionTests 15/15 including former failing five-pane Close Files and retired editor release. Test checks immediate project tabs removal, parser deactivation, detach, and weak file/editor nil after host teardown; AppKit transient view cache not confused with a lasting owner. Latest full suite still has an unrelated SSH Git external refresh timeout under investigation.`
+
+
+## 发现 F-04
+
+- 任务：`P1-T5`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/Workspace/TerminalManager.swift:79-86,396-418`
+- 摘要：`关闭项目或窗口时，另一个原本干净的编辑器在等待首个文件写入期间产生新草稿，关闭流程不再复查其脏状态`
+- 风险：`单次批量关闭先采样待保存文件；等待远端写盘期间其它标签可被编辑，后续直接 project.terminateAll/remove 或返回允许窗口销毁，丢失刚产生的未保存编辑`
+- 预期修复：`在项目与窗口关闭共同的最终销毁边界重新核验全部在场文件，不吞掉关闭期间新出现的 dirty；保持现有保存串行与失败阻止关闭语义`
+- 验证：`EditorWorkspaceFixture 受控暂停第一个远端写入，另一个原本干净的本地文件修改，再继续写入；两入口先 Red、后 Green，并核对磁盘字节和关闭取消；运行 FileTabTests/WorkspaceWindowCloseTests 与全量 Windows SSH XCTest、Debug/Release 严格验签`
+- 解决证据：`commit 2347f45: 受控远端写暂停覆盖 Project.closeFiles、关闭项目、关闭窗口和跨窗口 App 退出；Red 3 入口复现失效，Green FileTabTests 49/49、0 failures；最终提交版完整授权 Windows SSH XCTest 466 项中 F04 新增全部通过，但 PaneRetentionTests 既有弱引用时序一项间歇失败，独立列 F05；make build:release DERIVED_DATA=build/DerivedData-audit-f04-fps-release 退出0，codesign --verify --deep --strict 通过。不将全量 466 项误报为全部通过。`
+
+
 ## 发现 F-03
 
 - 任务：`P1-T5`
@@ -70,6 +122,10 @@
 
 ## 修复日志
 
+- **F-05，P1-T5，提交 `e0e147f`，根因修复完成、全量回归中：** Red 复现表明旧 Project 从 `TerminalManager.projects` 移除后仍保留 `tabs`；SwiftUI 旧宿主短暂引用项目时，文件不能及时释放。同时，旧原生文本视图先被 AppKit 从 `NSScrollView.documentView` 分离后，`Coordinator.retireObsoleteDocument()` 仅查当前 documentView，遗漏确切旧视图的 `syntaxCoordinator`。修复仅在**显式关闭项目**的 `TerminalManager.remove` 清空标签数组（不改通用 `terminateAll()` 的重挂载／恢复语义），并利用 Coordinator 既有弱 `textView` 清除语法资源。真实五分屏测试继续核对第一轮 `Close Files`、第二轮关闭整个 Project，立刻检查容器/语法资源脱钩；AppKit 的旧视图可被活窗口暂存，宿主关闭后对两代编辑器和文件全部要求弱引用归零。无超时扩容、无新缓存或兼容层。`audit-f05-closed-project-red.log` 和 `audit-f05-project-and-native-clean-green.log` 记录根因 Red 阶段，修复后 `audit-f05-root-green-one.log` 及 `audit-f05-lifecycle-green-{1..5}.log`：完整 `PaneRetentionTests` **5 次 × 15/15 = 75/75 Green**；当前授权 Windows SSH 全量回归进行中，仍需按最终结果核销。
+
+- **F-04，P1-T5，提交 `2347f45`，全量回归进行中：** `TerminalManager.close(_:)` 原先只保存开始关闭时已脏的文件，在等待远端文件保存期间，另一原本干净的标签变脏后依然执行 `project.terminateAll()`，实际丢失未保存草稿；`saveBeforeWindowClose()` 和 `saveBeforeTermination()` 同样允许在首次扫描后遗漏新草稿。受控真实 `FileTab` + 暂停远端写盘测试复现 **Red**：`audit-f04-close-race-red-confirmed.log`（47 项中 2 项失败：项目/窗口关闭），`audit-f04-quit-race-red.log`（退出应用时跨两个窗口的新草稿，1/1 失败）。根因修复仅在三个最终销毁/退出边界重新核对当前所有标签的 `isDirty`，中止可能丢失草稿的关闭；不添加新的保存管线、超时轮询或兼容状态。**Green**：`audit-f04-close-race-expanded-green.log`（`FileTabTests` 49/49），包含原本干净的文件在其它文件异步保存期间发生编辑、关闭被阻止、再次关闭写入正确字节，以及 `Project.closeFiles()` 的同源入口。更新 `docs/features/editor.md` 和 `docs/testing.md`，独立提交 `2347f45`。首轮最终源码完整 Windows SSH XCTest 执行 466 项，仅 `PaneRetentionTests.testEditorRetainsScrollAndReleasesRetiredNativeResources` 一项超时失败（10s，`audit-f04-full-windows-final.log`）；该用例执行时不慎与另一个 Release 编译重叠，已终止并行编译，随后无并行任务独立复跑该用例 3 次均通过（1.267／1.237／1.264s，`audit-f04-retired-editor-isolated-{1,2,3}.log`）。为避免误报已启动独占式完整 Windows SSH 重跑（`audit-f04-full-windows-clean-rerun.log`），未在结果出现前宣称全量通过；Debug/Release 构建验签仍待核销。
+
 - **F-03，T5，闭环验证中：** 本机旧 Release 真实显示五个 10k 行编辑器，精确右键标签执行 `Close Files`，0 个 `AXTextArea`；在相同 PID 重新打开五个文件、再次关闭后，`heap` 连续三次间隔采样仍有 **6 个 `FileTab`、`FocusReportingTextView`、`SyntaxHighlightCoordinator`、`NSTextViewportLayoutController`**。旧进程关闭后物理足迹虽从 287 MiB 降至 168 MiB，但存活对象数量没有随关闭减少。`leaks --traceTree=0x796f5bf600 43351` 证实保留链为 `PaneTab → SwiftUI 闭包 → HoverResponder → ContextMenuResponder / SwiftUI 视图缓存`，不是 TreeSitter parser 本身。`PaneRetentionTests.testClosingMountedFiveFileTabsReleasesTheirNativeDocuments` 在真正 `WorkspaceDockView/Project.closeFiles()` 中复现 Red（exit2，10.494s 后五份弱引用不释放）；UI 层的 tab close/context menu 回调改为按当前 UUID 解析 `project.tabs`，浏览器/文件菜单也只捕获 path/address 值，不继续强捕获已关闭的 Tab。原测试 Green（exit0，0.758s），日志 `build/performance/editor-rendering/audit-p1-release-memory/f03-red.log` 和 `f03-green-attempt1.log`；本轮全量 Windows 回归和改动后的独立 Release heap／Allocations 仍待终局核销，不据此提前标 Resolved。
 
 - **F-03 第二层实证，闭环验证中：** 第一次修复后的独立 Release PID87374 在真实 `Close Files` 后 **`FileTab=0`**，但四秒后 `FocusReportingTextView=1`、`SyntaxHighlightCoordinator=1`、布局控制器仍 5 个（随后收敛到 1）；`leaks --traceTree` 指向窗口旧 First Responder／AppKit 焦点和暂存布局视图，而非标签闭包。增强原测试强持有 5 个旧 `NSScrollView` 并将编辑器设为窗口 First Responder，明确断言真正关闭后 `documentView=nil`，再次 Red（exit2，旧滚动视图仍持有原生正文且弱编辑器不能释放；`f03-retired-red.log`）。根因修复在 `FileTab.retireNativeEditor()` 统一处理已存在的 `Coordinator.retireObsoleteDocument()`；`Project.remove(tabID:)` 仅在语义关闭时调用，磁盘内容真正替换也复用同一方法，**普通 Dock 视图重挂载不退役**。`PaneRetentionTests` 完整 15/15、exit0（`f03-retired-green.log`）；本轮最终完整 Windows suite 和再次更新后的 Release 内存验证仍需核销，未提前关闭 F-03。
@@ -98,12 +154,12 @@
 
 ## Gate（是否允许进入下一阶段）
 
-- 结论：**No-Go（整个 P1 的无保留完成）**；**F-01、F-02、F-03 均 Resolved**（旧强引用链已实证修复且最终提交版完整 XCTest 通过；T5 五分屏同时挂载编辑器的五轮 GUI／帧时长验收尚未完成）。
+- 结论：**No-Go（整个 P1 的无保留完成）**；**F-01～F-03 Resolved，F-04 已 Red→Green、全量回归中**（旧强引用链已实证修复且最终提交版完整 XCTest 通过；T5 五分屏同时挂载编辑器的五轮 GUI／帧时长验收尚未完成）。
 - 理由：本机及授权 Windows 回归、构建验签、真实高亮性能和同 PID 五轮文件标签关闭均通过，未见对象累积；但五分屏同时挂载／编辑的连续 GUI Allocations、真实帧时长及部分实体环境尚无证据，`todo.toml` 继续保持 `in_progress`。
 
 ## 最终状态与剩余风险
 
-- 当前状态：发现项 **3/3 Resolved**；正式 App **已整包安装、未由审计重启**（安装时旧 PID 86913 仍运行，目前该进程已不在进程表中）；阶段 **P1-T1～T4 完成，P1-T5 in_progress**。
+- 当前状态：发现项 **3/4 Resolved，F-04 待全量确认**；正式 App **已整包安装、未由审计重启**（安装时旧 PID 86913 仍运行，目前该进程已不在进程表中）；阶段 **P1-T1～T4 完成，P1-T5 in_progress**。
 - 剩余风险：F-03 的旧强引用已按 Red→Green 修复；真实 Release 五轮文件标签开关没有对象累计，前台暂存的 1 个原生视图在应用失焦后归零。仍缺五分屏持续同时挂载／编辑的 GUI 分配趋势、Release 实际帧时长，以及 macOS 15.6／CI 26、物理触控板、不同刷新率、VoiceOver 与 Windows symlink 权限环境。保留 T5 Gate，不冒称全部验证。
 
 ## 审计约束
