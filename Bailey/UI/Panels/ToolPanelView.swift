@@ -282,9 +282,8 @@ struct ToolPanelView: View {
     }
 
     private func syncModels() {
-        // Before the queue, not inside it: a refresh over a dead connection
-        // waits out its deadlines, and the heading must not wait with it.
         applyRemoteHeading()
+        guard panel == .files else { return }
         syncQueue.run(for: manager.selectedProject?.panelContext?.identity) {
             await performSync()
         }
@@ -340,11 +339,11 @@ struct ToolPanelView: View {
     }
 
     private func performSync() async {
-        guard panel == .files, let project = manager.selectedProject,
+        guard let project = manager.selectedProject,
               let (source, target) = await project.syncFiles(in: manager),
               manager.selectedProject === project else { return }
         if rootSource != source { rootSource = source }
-        filesTarget = target
+        if filesTarget != target { filesTarget = target }
     }
 
     /// Text badge for the Files header while the panels follow the foreground
