@@ -2,6 +2,12 @@
 
 先查看已有 [Issues](https://github.com/chiimagnus/Bailey/issues) 和 [Pull Requests](https://github.com/chiimagnus/Bailey/pulls)。非平凡功能先在 Issue 中确认需求与范围，再写实现；已有维护者明确授权的工作和纯文档修正说明对应背景即可，不重复创建同义需求。
 
+## Issue 与标签
+
+使用 Bug / Feature 模板分别自动添加 `bug` / `enhancement`；文档任务使用 `documentation`，性能相关问题额外标记 `performance`。同一 Issue 确实兼有缺陷修复和功能扩展时，可以同时标记两种类型。
+
+`Open` / `Closed` 表示是否结案。只有实际开始开发时才添加 `in-progress`，明确暂缓时使用 `on-hold`；两者不并存，恢复或结案后移除。默认不设优先级、模块标签或 GitHub Projects，避免与 Issue 重复维护进度。
+
 ## 不可破坏的约束
 
 [AGENTS.md](AGENTS.md#不可破坏的约束) 同时适用于人工贡献者和 AI。保存用户数据、机器身份、后台进程与原生视图生命周期，优先于让代码看起来更整齐。
@@ -24,7 +30,7 @@ Bailey 只有一套 App 身份；开发构建和正式 App 不天然隔离，先
 
 ## Pull Request
 
-填写 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)，关联已经讨论的 Issue；没有对应 Issue 时说明来源和范围。自动检查的实际范围见 [release.md](docs/release.md#pr-检查)，提交者仍对未自动化的验收负责。
+填写 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)，关联已经讨论的 Issue。只有覆盖全部需求并完成验收才使用 `Closes #编号`；部分交付或尚需补验时使用 `Refs #编号`，避免提前关闭 Issue。没有对应 Issue 时说明来源和范围。自动检查的实际范围见 [release.md](docs/release.md#pr-检查)，提交者仍对未自动化的验收负责。
 
 说明改动、必要架构取舍、数据／权限／兼容影响、剩余限制及测试证据。视觉改动附同窗口尺寸、内容和动作的前后并排录屏，静态截图仅作补充；非视觉改动说明所测路径。
 

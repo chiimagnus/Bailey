@@ -2,7 +2,8 @@
 
 ## Related issue
 
-Closes #
+<!-- 全部需求实现并验收后，改为 Closes #编号；部分交付或未完成验收时保留 Refs #编号。见 CONTRIBUTING.md。 -->
+Refs #
 
 ## What changed
 
