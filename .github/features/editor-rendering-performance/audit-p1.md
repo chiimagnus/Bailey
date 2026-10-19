@@ -33,13 +33,13 @@
 
 - 任务：`P1-T5`
 - 严重级别：`High`
-- 状态：`Open`
+- 状态：`Resolved`
 - 位置：`Bailey/UI/Panels/ToolPanelView.swift:205-250; BaileyTests/NativeUI/Git/GitExternalRefreshTests.swift:309-356`
 - 摘要：`真实 Windows SSH 外部 Git 已暂存成功，但可见面板在无需操作的空闲状态下持续显示旧未暂存快照`
 - 风险：`完整 466 项回归外部 Git 自动刷新失败；完整 GitExternalRefreshTests 重复第 2 轮复现远端 status 已为 M staged、模型 staged=0/changed=1/isRefreshing=false/isBusy=false/statusError=nil；前台轮询任务或测试模拟的激活通知可能未实际运行，用户可被持续陈旧的远端 Git 视图误导。`
 - 预期修复：`确认已挂载可见面板的 active notification 与 task 生命周期和实际远端命令结果；修复共有所有权/信号边界，而不是加长刷新超时或只重跑 XCTest。若确系模拟系统前后台的测试夹具缺陷，则以真实 onAppear/Task 生命周期握手取代固定 sleep，并验证真实最终 Git staged/ref 副作用。`
 - 验证：`完整 GitExternalRefreshTests 重复、两种 Git 变更阶段及真实 Windows SSH 外部写入；远端 porcelain 与本地模型一致、前台可见自动刷新、后台停止、恢复补读、隐藏停止、错误恢复；完整有授权的 Windows SSH XCTest 与 Debug/Release 签名。`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`提交 7aa3633：真实 Windows SSH 外部 git add 与正在进行的慢详情查询交错时，原 ToolPanelView 忽略当前 poll 丢失新状态；受控 NativeUI 旧代码连续两次 Red。改为可见 SwiftUI .task 内可取消等待，轮询结束补读；隐藏后不发新命令，中间全局 pendingRefresh 方案隐藏后额外 SSH 查询的 Red 已排除；最终 NativeUI 并发+隐藏五轮 Green。GitExternalRefreshTests 真实 Windows SSH 四轮 4/4=16/16，GitStatusModelTests 27/27；最终提交版完整 BAILEY_P4_TEST_SSH_HOST=windows make test 467/467、0 failure、0 skip、exit0、765.296s（audit-p1-final-full-windows-7aa3633.log）；make build 和 make build:release 同一提交均 BUILD SUCCEEDED，严格 codesign 退出0，macOS minos15.6/arm64 已验证。独立优化 Release 全量测试另行进行，F06 按 UI/UX 不变约束独立处理。`
 
 
 ## 发现 F-06
@@ -122,6 +122,7 @@
 
 ## 修复日志
 
+- **F-07，P1-T5，提交 7aa3633，Resolved：** 远端 Git 在查询慢详情期间完成暂存时，旧可见面板直接跳过周期请求而遗漏新的核心状态；最小 NativeUI 两次 Red。全局模型排队的中间方案曾在面板隐藏后额外查询，再经隐藏后外部写入 Red 排除。最终将补读留在可取消的 SwiftUI 可见任务内，不增加超时或全局缓存。并发／隐藏组合五轮 Green、授权 Windows SSH GitExternalRefreshTests 四轮 16/16、GitStatusModelTests 27/27、完整 Debug XCTest 467/467、0 失败，Debug／Release 严格验签通过；UI 布局、颜色和交互不变。优化 Release 全量测试另证。
 - **F-05，P1-T5，提交 `e0e147f`，根因修复完成、全量回归中：** Red 复现表明旧 Project 从 `TerminalManager.projects` 移除后仍保留 `tabs`；SwiftUI 旧宿主短暂引用项目时，文件不能及时释放。同时，旧原生文本视图先被 AppKit 从 `NSScrollView.documentView` 分离后，`Coordinator.retireObsoleteDocument()` 仅查当前 documentView，遗漏确切旧视图的 `syntaxCoordinator`。修复仅在**显式关闭项目**的 `TerminalManager.remove` 清空标签数组（不改通用 `terminateAll()` 的重挂载／恢复语义），并利用 Coordinator 既有弱 `textView` 清除语法资源。真实五分屏测试继续核对第一轮 `Close Files`、第二轮关闭整个 Project，立刻检查容器/语法资源脱钩；AppKit 的旧视图可被活窗口暂存，宿主关闭后对两代编辑器和文件全部要求弱引用归零。无超时扩容、无新缓存或兼容层。`audit-f05-closed-project-red.log` 和 `audit-f05-project-and-native-clean-green.log` 记录根因 Red 阶段，修复后 `audit-f05-root-green-one.log` 及 `audit-f05-lifecycle-green-{1..5}.log`：完整 `PaneRetentionTests` **5 次 × 15/15 = 75/75 Green**；当前授权 Windows SSH 全量回归进行中，仍需按最终结果核销。
 
 - **F-04，P1-T5，提交 `2347f45`，全量回归进行中：** `TerminalManager.close(_:)` 原先只保存开始关闭时已脏的文件，在等待远端文件保存期间，另一原本干净的标签变脏后依然执行 `project.terminateAll()`，实际丢失未保存草稿；`saveBeforeWindowClose()` 和 `saveBeforeTermination()` 同样允许在首次扫描后遗漏新草稿。受控真实 `FileTab` + 暂停远端写盘测试复现 **Red**：`audit-f04-close-race-red-confirmed.log`（47 项中 2 项失败：项目/窗口关闭），`audit-f04-quit-race-red.log`（退出应用时跨两个窗口的新草稿，1/1 失败）。根因修复仅在三个最终销毁/退出边界重新核对当前所有标签的 `isDirty`，中止可能丢失草稿的关闭；不添加新的保存管线、超时轮询或兼容状态。**Green**：`audit-f04-close-race-expanded-green.log`（`FileTabTests` 49/49），包含原本干净的文件在其它文件异步保存期间发生编辑、关闭被阻止、再次关闭写入正确字节，以及 `Project.closeFiles()` 的同源入口。更新 `docs/features/editor.md` 和 `docs/testing.md`，独立提交 `2347f45`。首轮最终源码完整 Windows SSH XCTest 执行 466 项，仅 `PaneRetentionTests.testEditorRetainsScrollAndReleasesRetiredNativeResources` 一项超时失败（10s，`audit-f04-full-windows-final.log`）；该用例执行时不慎与另一个 Release 编译重叠，已终止并行编译，随后无并行任务独立复跑该用例 3 次均通过（1.267／1.237／1.264s，`audit-f04-retired-editor-isolated-{1,2,3}.log`）。为避免误报已启动独占式完整 Windows SSH 重跑（`audit-f04-full-windows-clean-rerun.log`），未在结果出现前宣称全量通过；Debug/Release 构建验签仍待核销。
@@ -154,13 +155,13 @@
 
 ## Gate（是否允许进入下一阶段）
 
-- 结论：**No-Go（整个 P1 的无保留完成）**；**F-01～F-03 Resolved，F-04 已 Red→Green、全量回归中**（旧强引用链已实证修复且最终提交版完整 XCTest 通过；T5 五分屏同时挂载编辑器的五轮 GUI／帧时长验收尚未完成）。
-- 理由：本机及授权 Windows 回归、构建验签、真实高亮性能和同 PID 五轮文件标签关闭均通过，未见对象累积；但五分屏同时挂载／编辑的连续 GUI Allocations、真实帧时长及部分实体环境尚无证据，`todo.toml` 继续保持 `in_progress`。
+- 结论：**No-Go（整个 P1 的无保留完成）**；F-01～F-05、F-07 均已 Resolved，F-06 仍 Open。提交 7aa3633 的完整 Windows SSH Debug XCTest **467/467、零失败、零跳过、exit0**；Debug 和正式 Release 构建及严格个人签名均通过。Release 优化 XCTest 正在独立验证。
+- 理由：真实原生四档输入、高亮／字节一致、Diff、Unicode／IME／Undo、五轮原生编辑器释放、真实 SSH、两种主题和主要窗口交互均有证据。仍缺独立 Release GUI 中五分屏反复同时挂载的完整 Allocations 曲线、真正归属于编辑器内容的稳定 FPS，以及尚无环境的真实系统／硬件组合；P1-T5 继续 in_progress。
 
 ## 最终状态与剩余风险
 
-- 当前状态：发现项 **3/4 Resolved，F-04 待全量确认**；正式 App **已整包安装、未由审计重启**（安装时旧 PID 86913 仍运行，目前该进程已不在进程表中）；阶段 **P1-T1～T4 完成，P1-T5 in_progress**。
-- 剩余风险：F-03 的旧强引用已按 Red→Green 修复；真实 Release 五轮文件标签开关没有对象累计，前台暂存的 1 个原生视图在应用失焦后归零。仍缺五分屏持续同时挂载／编辑的 GUI 分配趋势、Release 实际帧时长，以及 macOS 15.6／CI 26、物理触控板、不同刷新率、VoiceOver 与 Windows symlink 权限环境。保留 T5 Gate，不冒称全部验证。
+- 当前状态：**6/7 findings Resolved，F-06 Open**；P1-T1～T4 completed，P1-T5 in_progress。现有 /Applications/Bailey.app 在本次新构建前是旧安装包，用户 PID 20461 仍运行；本轮已完成构建和验签，但不把构建等同于安装，后续安装必须另作核对，不退出、启动或重启用户进程。
+- 剩余风险：F-03／F-05 的编辑器强引用与旧文档退役已通过 Red→Green；五轮 × 五个原生编辑器与真实五分屏两代文档释放通过。历史独立 Release 五轮标签关闭后四轮只有单分屏，不能冒称完整五分屏长期 Allocations。F-06 中 CADisplayLink 的数字不是实际编辑器 FPS；120 Hz 屏幕 111 次/秒多表面交换事件也不能证明稳定内容帧率。最低 macOS 15.6／CI 26 运行、实体触控板、跨 60/120 Hz 实际 GUI、Windows symlink 权限环境仍未核销；VoiceOver 仅在明确涉及屏幕阅读器时专项验收。
 
 ## 审计约束
 
