@@ -232,6 +232,16 @@
         }
       }
     },
+    "General" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通用"
+          }
+        }
+      }
+    },
     "Git" : {
       "localizations" : {
         "zh-Hans" : {
@@ -309,6 +319,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "好"
+          }
+        }
+      }
+    },
+    "Panel font size" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "面板字体大小"
+          }
+        }
+      }
+    },
+    "Panels" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "面板"
           }
         }
       }
@@ -473,26 +503,6 @@
         }
       }
     },
-    "Panels" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "面板"
-          }
-        }
-      }
-    },
-    "Panel font size" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "面板字体大小"
-          }
-        }
-      }
-    },
     "Size" : {
       "localizations" : {
         "zh-Hans" : {
@@ -601,6 +611,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "将 Option 用作 Alt/Meta"
+          }
+        }
+      }
+    },
+    "Workspace" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作区"
           }
         }
       }
