@@ -51,6 +51,16 @@
         }
       }
     },
+    "App preferences" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用偏好"
+          }
+        }
+      }
+    },
     "Appearance" : {
       "localizations" : {
         "zh-Hans" : {
@@ -67,6 +77,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "自动"
+          }
+        }
+      }
+    },
+    "Back" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "返回"
           }
         }
       }
@@ -117,6 +137,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "颜色"
+          }
+        }
+      }
+    },
+    "Connections" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接"
           }
         }
       }
@@ -228,6 +258,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "字体大小"
+          }
+        }
+      }
+    },
+    "Forward" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前进"
           }
         }
       }
@@ -373,6 +413,16 @@
         }
       }
     },
+    "Preferences" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "偏好设置"
+          }
+        }
+      }
+    },
     "Preview" : {
       "localizations" : {
         "zh-Hans" : {
@@ -443,6 +493,16 @@
         }
       }
     },
+    "Reset" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重置"
+          }
+        }
+      }
+    },
     "Reset all app preferences?" : {
       "localizations" : {
         "zh-Hans" : {
@@ -469,6 +529,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "重新启动时恢复会话历史"
+          }
+        }
+      }
+    },
+    "Results" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索结果"
+          }
+        }
+      }
+    },
+    "Search Settings" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索设置"
           }
         }
       }

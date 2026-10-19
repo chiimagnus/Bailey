@@ -67,7 +67,7 @@ make test ONLY_TESTING=BaileyTests/FileTabTests
 | --- | --- |
 | 应用身份、Finder 类型注册与原生 Apple Event 系统入口 | `AppIdentityTests`、`WorkspaceWindowIsolationTests`；真实 Finder/Dock 进程外投递需获授权的受控图形会话 |
 | Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests` |
-| 偏好、设置窗口分类、端口编辑和异常输入 | `AppSettingsTests`、`SettingsNavigationTests`、`TunnelStoreTests` |
+| 偏好、设置窗口分类／搜索／历史导航、端口编辑和异常输入 | `AppSettingsTests`、`SettingsNavigationTests`、`TunnelStoreTests` |
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
 | Git 环境、刷新、写操作与失败状态 | `GitExternalRefreshTests`、`GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitTagActionTests`、`GitWorkspaceActionTests`、`GitStashActionTests`、`GitBranchDialogTests`、`GitTagDialogTests`、`GitWorkspaceMenuTests`、`GitStashDialogTests` |
 | SSH 命令、断线、重连和过期结果 | `RemoteCommandsTests`、`RemoteLifetimeTests` |
@@ -91,6 +91,8 @@ Xcode TestAction 向 Debug 宿主传入 `--isolated-ui-test`，不通过 XCTest 
 ```sh
 open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Bailey.app" --args --isolated-ui-test
 ```
+
+需要单独检查深色设置 UI 时，可在此隔离进程额外传入 `--isolated-dark-ui`；仅改变该窗口的 SwiftUI 外观，不修改正式应用或全局主题设置。原生窗口的缩放必须通过真实 Settings 场景的 `AXSize` 可写性及实际宽高变化确认；单纯挂载普通 `NSWindow` 只证明桥接能力，不代表 Settings 场景已通过。
 
 该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。隔离 XCTest 宿主会移除自身菜单中的 `⌘Q` 退出快捷键：Mac 的键盘和前台应用状态仍由各进程共享，普通 Bailey 的退出快捷键不能误结束长时间运行的测试宿主；正式 Bailey 的菜单及保存退出保护不变。该隔离不是独立的图形登录会话，执行原生 UI 回归时仍应避免与用户正在进行的前台快捷键／鼠标操作互相干扰。刻意测试重启恢复时，两次启动显式传入同一有效 UUID 环境变量 `BAILEY_UI_TEST_RUN_ID`。
 

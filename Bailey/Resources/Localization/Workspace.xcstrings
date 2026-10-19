@@ -475,6 +475,16 @@
         }
       }
     },
+    "No saved forwards" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚无端口转发"
+          }
+        }
+      }
+    },
     "No saved forwards. Click + to add one." : {
       "localizations" : {
         "zh-Hans" : {

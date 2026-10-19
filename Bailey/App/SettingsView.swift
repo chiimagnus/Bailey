@@ -37,7 +37,12 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 /// this root, not a detail page which is destroyed on navigation.
 struct SettingsView: View {
     @Bindable private var settings = AppSettings.shared
-    @State private var selection: SettingsPage? = .general
+    @State private var navigation = SettingsNavigationHistory()
+    @State private var searchText = ""
+    @State private var isSearching = false
+    @State private var highlightedField: SettingsField?
+    @State private var requestedField: SettingsField?
+    @State private var searchRevision = 0
     @State private var tunnelSelection: UUID?
     @State private var tunnelEditor: TunnelEditDraft?
     @State private var isConfirmingReset = false
@@ -51,7 +56,27 @@ struct SettingsView: View {
 
     private let families = TerminalFont.selectableFamilies()
 
-    private var selectedPage: SettingsPage { selection ?? .general }
+    private var selectedPage: SettingsPage { navigation.current }
+
+    private var pageSelection: Binding<SettingsPage?> {
+        Binding(
+            get: { navigation.current },
+            set: { if let page = $0 { navigation.select(page) } }
+        )
+    }
+
+    private var visiblePages: [SettingsPage] {
+        SettingsPage.allCases.filter { !BaileyInstanceMode.isIsolated || $0 != .notifications }
+    }
+
+    private func navigateTo(_ field: SettingsField) {
+        navigation.select(field.page)
+        requestedField = field
+        searchRevision += 1
+        highlightedField = nil
+        searchText = ""
+        isSearching = false
+    }
 
     private var toolbarVisibilityDescription: String {
         switch settings.toolbarVisibility {
@@ -86,32 +111,127 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $selection) {
-                ForEach(SettingsPage.allCases.filter {
-                    !BaileyInstanceMode.isIsolated || $0 != .notifications
-                }) { page in
-                    Label(page.title, systemImage: page.symbol)
-                        .tag(page)
+            Group {
+                if searchText.isEmpty {
+                    List(selection: pageSelection) {
+                        Section(String(localized: "Preferences", table: "Settings")) {
+                            ForEach(visiblePages.filter { $0 != .notifications && $0 != .portForwarding }) { page in
+                                Label {
+                                    Text(page.title)
+                                } icon: {
+                                    Image(systemName: page.symbol)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .tag(page)
+                            }
+                        }
+                        Section(String(localized: "Connections", table: "Settings")) {
+                            ForEach(visiblePages.filter { $0 == .notifications || $0 == .portForwarding }) { page in
+                                Label {
+                                    Text(page.title)
+                                } icon: {
+                                    Image(systemName: page.symbol)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .tag(page)
+                            }
+                        }
+                    }
+                    .listStyle(.sidebar)
+                } else {
+                    let results = SettingsField.search(
+                        searchText, includeNotifications: !BaileyInstanceMode.isIsolated
+                    )
+                    if results.isEmpty {
+                        ContentUnavailableView.search(text: searchText)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        List(selection: $highlightedField) {
+                            Section(String(localized: "Results", table: "Settings")) {
+                                ForEach(results) { field in
+                                    Label {
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(field.title)
+                                                .font(.body)
+                                            Text("\(field.page.title) · \(field.section)")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    } icon: {
+                                        Image(systemName: field.page.symbol)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .tag(field)
+                                }
+                            }
+                        }
+                        .listStyle(.sidebar)
+                        .onChange(of: highlightedField) { _, field in
+                            if let field { navigateTo(field) }
+                        }
+                    }
                 }
             }
-            .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 164, ideal: 185, max: 230)
+            .searchable(
+                text: $searchText,
+                isPresented: $isSearching,
+                placement: .sidebar,
+                prompt: String(localized: "Search Settings", table: "Settings")
+            )
+            .toolbar(removing: .sidebarToggle)
+            .background {
+                HStack(spacing: 0) {
+                    Button(String(localized: "Search Settings", table: "Settings")) {
+                        isSearching = true
+                    }
+                    .keyboardShortcut("f", modifiers: .command)
+                    Button(String(localized: "Back", table: "Settings")) {
+                        navigation.goBack()
+                    }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .disabled(!navigation.canGoBack)
+                    Button(String(localized: "Forward", table: "Settings")) {
+                        navigation.goForward()
+                    }
+                    .keyboardShortcut("]", modifiers: .command)
+                    .disabled(!navigation.canGoForward)
+                }
+                .buttonStyle(.plain)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
+            }
+            .navigationSplitViewColumnWidth(min: 208, ideal: 224, max: 224)
         } detail: {
-            Form {
-                switch selectedPage {
-                case .general: generalSettings
-                case .terminal: terminalSettings
-                case .workspace: workspaceSettings
-                case .notifications: notificationSettings
-                case .portForwarding:
-                    TunnelSettingsPane(selection: $tunnelSelection, editor: $tunnelEditor)
+            ScrollViewReader { proxy in
+                Form {
+                    switch selectedPage {
+                    case .general: generalSettings
+                    case .terminal: terminalSettings
+                    case .workspace: workspaceSettings
+                    case .notifications: notificationSettings
+                    case .portForwarding:
+                        TunnelSettingsPane(selection: $tunnelSelection, editor: $tunnelEditor)
+                            .id(SettingsField.portForwarding)
+                    }
+                }
+                .formStyle(.grouped)
+                .task(id: searchRevision) {
+                    guard let field = requestedField, field.page == selectedPage else { return }
+                    await Task.yield()
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        proxy.scrollTo(field, anchor: .center)
+                    }
                 }
             }
-            .formStyle(.grouped)
-            .navigationTitle(selectedPage.title)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(minWidth: 740, idealWidth: 820, minHeight: 480, idealHeight: 610)
+        .navigationTitle(selectedPage.title)
+        .frame(minWidth: 780, idealWidth: 820, minHeight: 500, idealHeight: 610)
+        .background {
+            SettingsWindowResizer().frame(width: 0, height: 0)
+        }
         .alert(
             String(localized: "Couldn’t Relaunch Bailey", table: "Settings"),
             isPresented: $isShowingRelaunchError
@@ -148,18 +268,20 @@ struct SettingsView: View {
     @ViewBuilder
     private var generalSettings: some View {
         Section(String(localized: "Appearance", table: "Settings")) {
-            // Every thumbnail remains an independent VoiceOver button.
-            HStack {
-                Text(String(localized: "Theme", table: "Settings"))
-                Spacer()
-                ThemePicker(selection: $settings.theme)
+            Picker(String(localized: "Theme", table: "Settings"), selection: $settings.theme) {
+                ForEach(AppTheme.allCases) { theme in
+                    Text(theme.title).tag(theme)
+                }
             }
+            .pickerStyle(.segmented)
+            .id(SettingsField.appearance)
 
             Picker(String(localized: "Language", table: "Settings"), selection: $settings.language) {
                 ForEach(AppLanguage.allCases) { language in
                     Text(verbatim: language.title).tag(language)
                 }
             }
+            .id(SettingsField.language)
 
             DescribedSettingsRow(
                 String(localized: "Toolbar", table: "Settings"),
@@ -172,6 +294,7 @@ struct SettingsView: View {
                 }
                 .labelsHidden()
             }
+            .id(SettingsField.toolbar)
 
             if settings.languageRequiresRelaunch {
                 HStack(alignment: .firstTextBaseline) {
@@ -186,14 +309,20 @@ struct SettingsView: View {
             }
         }
 
-        Section {
-            HStack {
-                Spacer()
+        Section(String(localized: "Reset", table: "Settings")) {
+            DescribedSettingsRow(
+                String(localized: "App preferences", table: "Settings"),
+                description: String(
+                    localized: "Port forwarding rules and phone notification destinations will be kept.",
+                    table: "Settings"
+                )
+            ) {
                 Button(String(localized: "Reset to Defaults", table: "Settings")) {
                     isConfirmingReset = true
                 }
                 .disabled(!hasCustomizedPreferences)
             }
+            .id(SettingsField.reset)
         }
     }
 
@@ -205,11 +334,13 @@ struct SettingsView: View {
                     Text(name).tag(name)
                 }
             }
+            .id(SettingsField.darkTheme)
             Picker(String(localized: "Light theme", table: "Settings"), selection: $settings.themeLight) {
                 ForEach(Self.lightThemeNames, id: \.self) { name in
                     Text(name).tag(name)
                 }
             }
+            .id(SettingsField.lightTheme)
         }
 
         Section(String(localized: "Font", table: "Settings")) {
@@ -220,6 +351,7 @@ struct SettingsView: View {
                     Text(family).tag(family)
                 }
             }
+            .id(SettingsField.fontFamily)
 
             HStack {
                 Text(String(localized: "Size", table: "Settings"))
@@ -233,6 +365,7 @@ struct SettingsView: View {
                     .labelsHidden()
                     .accessibilityLabel(String(localized: "Size", table: "Settings"))
             }
+            .id(SettingsField.fontSize)
         }
 
         Section(String(localized: "Preview", table: "Settings")) {
@@ -246,6 +379,7 @@ struct SettingsView: View {
                 bold — permission denied (os error 13)
                 """))
                 .accessibilityAddTraits(.isStaticText)
+                .id(SettingsField.preview)
         }
 
         Section(String(localized: "Terminal", table: "Settings")) {
@@ -254,7 +388,9 @@ struct SettingsView: View {
                     Text(shape.title).tag(shape)
                 }
             }
+            .id(SettingsField.cursorShape)
             Toggle(String(localized: "Blink cursor", table: "Terminal"), isOn: $settings.cursorBlinking)
+                .id(SettingsField.cursorBlinking)
 
             DescribedSettingsRow(
                 String(localized: "Thicken font strokes", table: "Settings"),
@@ -263,6 +399,7 @@ struct SettingsView: View {
                 Toggle(String(localized: "Thicken font strokes", table: "Settings"), isOn: $settings.fontThicken)
                     .labelsHidden()
             }
+            .id(SettingsField.fontThicken)
 
             DescribedSettingsRow(
                 String(localized: "Use Option as Alt/Meta", table: "Settings"),
@@ -271,6 +408,7 @@ struct SettingsView: View {
                 Toggle(String(localized: "Use Option as Alt/Meta", table: "Settings"), isOn: $settings.macosOptionAsAlt)
                     .labelsHidden()
             }
+            .id(SettingsField.optionAsAlt)
 
             DescribedSettingsRow(
                 String(localized: "Restore session history on relaunch", table: "Settings"),
@@ -282,6 +420,7 @@ struct SettingsView: View {
                 )
                 .labelsHidden()
             }
+            .id(SettingsField.restoreHistory)
         }
     }
 
@@ -300,6 +439,7 @@ struct SettingsView: View {
                     .labelsHidden()
                     .accessibilityLabel(String(localized: "Panel font size", table: "Settings"))
             }
+            .id(SettingsField.panelFontSize)
         }
 
         Section(String(localized: "Git", table: "Settings")) {
@@ -307,10 +447,12 @@ struct SettingsView: View {
                 Text(String(localized: "Tree", table: "Settings")).tag(GitViewMode.tree)
                 Text(String(localized: "List", table: "Settings")).tag(GitViewMode.list)
             }
+            .id(SettingsField.gitLayout)
         }
 
         Section(String(localized: "Text Editing", table: "Settings")) {
             Toggle(String(localized: "Wrap lines to editor width", table: "Settings"), isOn: $settings.wrapLines)
+                .id(SettingsField.wrapLines)
         }
     }
 
@@ -364,6 +506,7 @@ struct SettingsView: View {
                     barkLoaded = true
                 }
             }
+            .id(SettingsField.barkDestinations)
         }
     }
 
@@ -463,6 +606,28 @@ struct SettingsView: View {
 
     private static let darkThemeNames = Theme.commonDarkThemes.map(\.name)
     private static let lightThemeNames = Theme.commonLightThemes.map(\.name)
+}
+
+/// macOS Settings scenes create fixed-size NSWindows despite SwiftUI's
+/// minimum content size. Configure only the containing window's resize style.
+private struct SettingsWindowResizer: NSViewRepresentable {
+    func makeNSView(context: Context) -> SettingsWindowResizerView {
+        SettingsWindowResizerView()
+    }
+
+    func updateNSView(_ view: SettingsWindowResizerView, context: Context) {}
+}
+
+private final class SettingsWindowResizerView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        // The Settings scene installs its fixed-size style after mounting its content.
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard self?.window === window, let window else { return }
+            window.styleMask.insert(.resizable)
+        }
+    }
 }
 
 /// Matches macOS Settings: a title and explanation form one label stack,
@@ -568,161 +733,6 @@ private final class FontThickenPreviewView: NSView {
             (text as NSString).draw(at: NSPoint(x: 0, y: y), withAttributes: attrs)
             y += lineHeight + lineSpacing
         }
-    }
-}
-
-/// Theme chooser modelled on the Appearance control in System Settings: one
-/// tappable preview per option instead of a row of words.
-private struct ThemePicker: View {
-    @Binding var selection: AppTheme
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(AppTheme.allCases) { theme in
-                ThemeOption(
-                    theme: theme,
-                    isSelected: selection == theme,
-                    select: { selection = theme }
-                )
-            }
-        }
-    }
-}
-
-private struct ThemeOption: View {
-    let theme: AppTheme
-    let isSelected: Bool
-    let select: () -> Void
-
-    var body: some View {
-        Button(action: select) {
-            VStack(spacing: 4) {
-                ThemePreview(theme: theme)
-                Text(theme.title)
-                    .font(.callout)
-                    .fontWeight(isSelected ? .semibold : .regular)
-                    .foregroundStyle(isSelected ? .primary : .secondary)
-                    // Without this the row's HStack can squeeze a label to
-                    // zero width, wrapping it into blank lines that stretch
-                    // that one option taller than its neighbours.
-                    .lineLimit(1)
-                    .fixedSize()
-            }
-            .padding(5)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.accentColor.opacity(isSelected ? 0.15 : 0))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(Color.accentColor, lineWidth: isSelected ? 2 : 0)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 10))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(theme.title)
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-    }
-}
-
-/// A miniature bailey window painted in one appearance's real colors. `system`
-/// splits down the middle — light on the left, dark on the right — the same
-/// way System Settings previews "Auto".
-private struct ThemePreview: View {
-    let theme: AppTheme
-
-    private static let size = CGSize(width: 76, height: 50)
-    private static let corner: CGFloat = 7
-
-    var body: some View {
-        ZStack {
-            switch theme {
-            case .light:
-                MiniWindow(dark: false)
-            case .dark:
-                MiniWindow(dark: true)
-            case .system:
-                MiniWindow(dark: false)
-                MiniWindow(dark: true)
-                    .mask(alignment: .trailing) {
-                        Rectangle().frame(width: Self.size.width / 2)
-                    }
-            }
-        }
-        .frame(width: Self.size.width, height: Self.size.height)
-        .clipShape(RoundedRectangle(cornerRadius: Self.corner))
-        .overlay(
-            RoundedRectangle(cornerRadius: Self.corner)
-                .strokeBorder(.primary.opacity(0.15), lineWidth: 0.5)
-        )
-    }
-}
-
-/// Sidebar, traffic lights, a tab, and a few lines of terminal output —
-/// enough of bailey's layout to read at thumbnail size.
-private struct MiniWindow: View {
-    let dark: Bool
-
-    var body: some View {
-        let theme = Theme.terminal(dark: dark)
-        let text = Color(nsColor: theme.foregroundNSColor)
-        let cursor = Color(nsColor: theme.cursorNSColor)
-
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 2.5) {
-                    dot(0xFF5F57)
-                    dot(0xFEBC2E)
-                    dot(0x28C840)
-                }
-                .padding(.bottom, 3)
-
-                bar(11, text.opacity(0.35))
-                bar(8, text.opacity(0.35))
-                bar(11, text.opacity(0.35))
-            }
-            .padding(5)
-            .frame(minWidth: 22, maxWidth: 22, maxHeight: .infinity, alignment: .topLeading)
-            .background(Color(nsColor: Theme.sidebarFill(dark: dark)))
-
-            VStack(alignment: .leading, spacing: 3.5) {
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(text.opacity(0.12))
-                    .frame(width: 14, height: 5)
-                    .padding(.bottom, 1)
-
-                HStack(spacing: 2) {
-                    bar(3, cursor)
-                    bar(22, text.opacity(0.8))
-                }
-                bar(30, text.opacity(0.45))
-                bar(16, text.opacity(0.45))
-                HStack(spacing: 2) {
-                    bar(3, cursor)
-                    bar(7, text.opacity(0.8))
-                }
-            }
-            .padding(5)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(Color(nsColor: theme.backgroundNSColor))
-        }
-    }
-
-    private func dot(_ hex: Int) -> some View {
-        Circle()
-            .fill(Color(
-                .sRGB,
-                red: Double((hex >> 16) & 0xff) / 255,
-                green: Double((hex >> 8) & 0xff) / 255,
-                blue: Double(hex & 0xff) / 255
-            ))
-            .frame(width: 3.5, height: 3.5)
-    }
-
-    private func bar(_ width: CGFloat, _ fill: Color) -> some View {
-        RoundedRectangle(cornerRadius: 1)
-            .fill(fill)
-            .frame(width: width, height: 2.5)
     }
 }
 

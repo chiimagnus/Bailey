@@ -10,6 +10,46 @@ final class SettingsNavigationTests: XCTestCase {
         XCTAssertTrue(SettingsPage.allCases.allSatisfy { !$0.title.isEmpty && !$0.symbol.isEmpty })
     }
 
+    func testSettingsNavigationBackForwardAndRepeatedSelection() {
+        var history = SettingsNavigationHistory()
+        XCTAssertEqual(history.current, .general)
+        XCTAssertFalse(history.canGoBack)
+        XCTAssertFalse(history.canGoForward)
+
+        history.select(.terminal)
+        history.select(.terminal)
+        history.select(.workspace)
+        XCTAssertTrue(history.canGoBack)
+        history.goBack()
+        XCTAssertEqual(history.current, .terminal)
+        history.goBack()
+        XCTAssertEqual(history.current, .general)
+        XCTAssertFalse(history.canGoBack)
+        history.goForward()
+        XCTAssertEqual(history.current, .terminal)
+        history.select(.portForwarding)
+        XCTAssertFalse(history.canGoForward)
+        history.goForward()
+        XCTAssertEqual(history.current, .portForwarding)
+    }
+
+    func testSearchLocatesIndividualSettingsNotJustPages() {
+        let fontResults = SettingsField.search("FoNt", includeNotifications: true)
+        XCTAssertTrue(fontResults.contains(.fontFamily))
+        XCTAssertTrue(fontResults.contains(.fontSize))
+        XCTAssertTrue(fontResults.contains(.panelFontSize))
+        XCTAssertEqual(SettingsField.search("cursor blink", includeNotifications: true), [.cursorBlinking])
+        XCTAssertEqual(SettingsField.search("port forwarding", includeNotifications: true), [.portForwarding])
+        XCTAssertEqual(SettingsField.search("折行", includeNotifications: true), [.wrapLines])
+        XCTAssertEqual(SettingsField.search("not-a-real-setting", includeNotifications: true), [])
+    }
+
+    func testSearchHidesSensitiveNotificationsInIsolatedMode() {
+        XCTAssertEqual(SettingsField.search("bark", includeNotifications: false), [])
+        XCTAssertEqual(SettingsField.search("bark", includeNotifications: true), [.barkDestinations])
+        XCTAssertTrue(SettingsField.search("font", includeNotifications: false).allSatisfy { $0.page != .notifications })
+    }
+
     func testNewLocalForwardUsesRemotePortUntilLocalPortIsSet() {
         var draft = TunnelEditDraft(existing: nil)
         draft.host = "ssh-alias"

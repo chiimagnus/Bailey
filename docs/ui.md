@@ -48,7 +48,7 @@ Finder 文件投放按目标区处理：Projects 的文件打开／复用当前�
 
 ## 对话框、设置与原生桥接
 
-设置窗口使用系统 `Settings` 场景中的 `NavigationSplitView`：分类以原生侧栏选择，高度稳定，详情表单独立滚动。通用、终端、工作区、手机通知和端口转发按功能分组；普通 Picker／Toggle／Slider／列表／Sheet 使用 SwiftUI 原生控件。语言重启、恢复默认、隧道删除有清楚的反馈或确认；CoreText 字体加粗预览保留必要的原生绘制。切换分类不结束隧道后台连接或丢弃正在编辑的 Sheet。
+设置窗口使用系统 `Settings` 场景中的 `NavigationSplitView`：分类以原生侧栏选择，高度稳定，详情表单独立滚动。参考 Tinycast 的分组侧栏和搜索交互，以及 Zed 的具体设置项定位；搜索结果经原生 `List(selection:)` 选择后滚动到对应 `Form` 行，支持中英文搜索、键盘导航与历史前进后退。移除多余侧栏折叠按钮和自绘主题缩略图。通用、终端、工作区、手机通知和端口转发按功能分组；普通 Picker／Toggle／Slider／列表／Sheet 使用 SwiftUI 原生控件。语言重启、恢复默认、隧道删除有清楚的反馈或确认；CoreText 字体加粗预览保留必要的原生绘制。切换分类不结束隧道后台连接或丢弃正在编辑的 Sheet。
 
 SwiftUI 是主要界面，AppKit、TextKit、Ghostty 与 WebKit 分别承担已有能力。确认、错误和文件选择沿用所属窗口的原生呈现路径，不另建一套弹窗或反馈实现。
 

@@ -21,11 +21,17 @@ struct TunnelSettingsPane: View {
     var body: some View {
         Section {
             if manager.tunnels.isEmpty {
-                ContentUnavailableView(
-                    String(localized: "No saved forwards. Click + to add one.", table: "Workspace"),
-                    systemImage: "network"
-                )
-                .frame(maxWidth: .infinity, minHeight: 175)
+                VStack(spacing: 12) {
+                    Label(
+                        String(localized: "No saved forwards", table: "Workspace"),
+                        systemImage: "network"
+                    )
+                    .foregroundStyle(.secondary)
+                    Button(String(localized: "Add forward", table: "Workspace")) {
+                        editor = TunnelEditDraft(existing: nil)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 132)
             } else {
                 List(selection: $selection) {
                     ForEach(manager.tunnels) { tunnel in
@@ -59,32 +65,32 @@ struct TunnelSettingsPane: View {
                 .listStyle(.bordered)
                 .frame(minHeight: 180, idealHeight: 290)
                 .accessibilityLabel(String(localized: "Saved port forwards", table: "Workspace"))
-            }
 
-            HStack(spacing: 8) {
-                Button {
-                    editor = TunnelEditDraft(existing: nil)
-                } label: {
-                    Image(systemName: "plus")
+                HStack(spacing: 8) {
+                    Button {
+                        editor = TunnelEditDraft(existing: nil)
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel(String(localized: "Add forward", table: "Workspace"))
+                    .help(String(localized: "Add forward", table: "Workspace"))
+
+                    Button {
+                        if let selectedTunnel { requestDelete(selectedTunnel) }
+                    } label: {
+                        Image(systemName: "minus")
+                    }
+                    .disabled(selectedTunnel == nil)
+                    .accessibilityLabel(String(localized: "Remove selected forward", table: "Workspace"))
+                    .help(String(localized: "Remove selected forward", table: "Workspace"))
+
+                    Spacer()
+
+                    Button(String(localized: "Edit…", table: "Workspace")) {
+                        if let selectedTunnel { editor = TunnelEditDraft(existing: selectedTunnel) }
+                    }
+                    .disabled(selectedTunnel == nil)
                 }
-                .accessibilityLabel(String(localized: "Add forward", table: "Workspace"))
-                .help(String(localized: "Add forward", table: "Workspace"))
-
-                Button {
-                    if let selectedTunnel { requestDelete(selectedTunnel) }
-                } label: {
-                    Image(systemName: "minus")
-                }
-                .disabled(selectedTunnel == nil)
-                .accessibilityLabel(String(localized: "Remove selected forward", table: "Workspace"))
-                .help(String(localized: "Remove selected forward", table: "Workspace"))
-
-                Spacer()
-
-                Button(String(localized: "Edit…", table: "Workspace")) {
-                    if let selectedTunnel { editor = TunnelEditDraft(existing: selectedTunnel) }
-                }
-                .disabled(selectedTunnel == nil)
             }
 
             Text(String(
