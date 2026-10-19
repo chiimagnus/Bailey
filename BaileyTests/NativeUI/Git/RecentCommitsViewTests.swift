@@ -1013,35 +1013,37 @@ final class RecentCommitsViewTests: XCTestCase {
         XCTAssertEqual(graph[0].checkedOutWorktrees.count, 2)
         XCTAssertEqual(CommitGraphLayout(commits: graph).rows.count, 1)
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {
-            let calls = WorktreeMenuCalls()
-            let window = hostHistory(
-                graph, selection: GraphSelection(), width: 430,
-                canActOnWorktrees: true,
-                worktreeAction: { item, action in
-                    calls.events.append((item.path, action))
-                }
-            )
-            defer { window.close() }
-            window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
-            settle()
-            let h = window.frame.height
-            let menuEvent = try XCTUnwrap(NSEvent.mouseEvent(
-                with: .rightMouseDown, location: NSPoint(x: 68, y: h - 12),
-                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber, context: nil,
-                eventNumber: 0, clickCount: 1, pressure: 1
-            ))
-            let menu = try XCTUnwrap(window.contentView?.menu(for: menuEvent))
-            let titles = menu.items.map(\.title)
-            XCTAssertTrue(titles.contains(String(localized: "Open Worktree", table: "Git")), "Actual menu: \(titles)")
-            XCTAssertTrue(titles.contains(String(localized: "Remove Worktree…", table: "Git")))
-            XCTAssertTrue(titles.contains(String(localized: "Copy Worktree Path", table: "Git")))
-            XCTAssertFalse(titles.contains(String(localized: "Checkout Commit…", table: "Git")))
-            XCTAssertFalse(try XCTUnwrap(menu.items.first(where: {
-                $0.title == String(localized: "Remove Worktree…", table: "Git")
-            })).isEnabled, "Main Worktree must not be removable")
-            click(NSPoint(x: 68, y: h - 12), in: window)
-            XCTAssertTrue(calls.events.contains(where: { $0.0 == main.path && $0.1 == .open }))
+            for width in [CGFloat(180), 260, 430] {
+                let calls = WorktreeMenuCalls()
+                let window = hostHistory(
+                    graph, selection: GraphSelection(), width: width,
+                    canActOnWorktrees: true,
+                    worktreeAction: { item, action in
+                        calls.events.append((item.path, action))
+                    }
+                )
+                defer { window.close() }
+                window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+                settle()
+                let h = window.frame.height
+                let menuEvent = try XCTUnwrap(NSEvent.mouseEvent(
+                    with: .rightMouseDown, location: NSPoint(x: 68, y: h - 12),
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil,
+                    eventNumber: 0, clickCount: 1, pressure: 1
+                ))
+                let menu = try XCTUnwrap(window.contentView?.menu(for: menuEvent))
+                let titles = menu.items.map(\.title)
+                XCTAssertTrue(titles.contains(String(localized: "Open Worktree", table: "Git")), "Actual menu: \(titles)")
+                XCTAssertTrue(titles.contains(String(localized: "Remove Worktree…", table: "Git")))
+                XCTAssertTrue(titles.contains(String(localized: "Copy Worktree Path", table: "Git")))
+                XCTAssertFalse(titles.contains(String(localized: "Checkout Commit…", table: "Git")))
+                XCTAssertFalse(try XCTUnwrap(menu.items.first(where: {
+                    $0.title == String(localized: "Remove Worktree…", table: "Git")
+                })).isEnabled, "Main Worktree must not be removable")
+                click(NSPoint(x: 68, y: h - 12), in: window)
+                XCTAssertTrue(calls.events.contains(where: { $0.0 == main.path && $0.1 == .open }))
+            }
         }
     }
 

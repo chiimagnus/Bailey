@@ -132,4 +132,4 @@ Stash 直接作为带 `stash@{n}` 标签的节点嵌入 Git 图谱，而非单�
 
 `GitExecutionTests`、`GitStatusModelTests`（包含核心先于慢 Ref／历史、详情查询独立失败、忽略文件扫描独立失败、查询失败时只读快照及恢复、Worktree 创建/删除/锁定/脏文件/外部移动/多路径）、`GitBranchActionTests` 与 `GitRemoteBranchActionTests` 使用临时仓库核对工作区、index、HEAD、Ref、多个裸仓库推送和选中版本归档；`GitBranchDialogTests` 核对原生弹窗默认值与禁用条件；`RecentCommitsViewTests` 在原生窗口核对窄侧栏、完整 Stash 序号与专属右键、整行点击、Tag 独立操作、短文字无回弹、长标题/路径独立滚动、图谱固定、文件 Diff 命中及只在滚至末端时加载历史；`GitStashActionTests` 验证真实 Stash 多 selector 同 OID 的图谱节点、基础提交连线、第三父未跟踪文件和精确 Pop/Drop/Branch；`GitExternalRefreshTests` 在原生 SwiftUI Git 面板中执行本机与真实 Windows SSH 的独立外部修改、暂存和提交，检查前台刷新、后台与隐藏面板停止轮询以及手动刷新；真实 SSH 需要显式提供测试主机。覆盖首次提交前、特殊路径、重命名、超时、失败草稿、提交期间编辑、快速切换和临时刷新失败。
 
-执行环境检查从精简 GUI PATH 出发，包含启动噪声、变量、Git 与 hook 解析、失败和超时。推送测试使用临时接收仓库并核对实际提交；涉及 LFS 时还核对接收端对象。真实 SSH 另行验收，不以 fake 后端结果代替。统一方式见 [testing.md](../testing.md)。
+执行环境检查从精简 GUI PATH 出发，包含启动噪声、变量、Git 与 hook 解析、失败和超时。推送测试使用临时接收仓库并核对实际提交；涉及 LFS 时还核对接收端对象。真实 SSH 另行验收，不以 fake 后端结果代替；`GitWorkspaceSSHTests` 使用专用 SSH master 和远端临时仓库验证 Worktree 创建、未提交改动拒删、成功删除后保留分支。统一方式见 [testing.md](../testing.md)。
