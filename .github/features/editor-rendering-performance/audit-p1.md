@@ -29,6 +29,19 @@
 
 ## 发现项
 
+## 发现 F-08
+
+- 任务：`P1-T5`
+- 严重级别：`Low`
+- 状态：`Open`
+- 位置：`Bailey/UI/WorkspaceDockView.swift:467-470`
+- 摘要：`独立优化 Release 反复停靠标签后，SwiftUI 原生标签菜单存在约 3.5KiB 的 ContextMenuResponder 根引用环`
+- 风险：`在两次独立进程的真实 xcrun leaks 中重现约 31-32 对象的 ContextMenuResponder.AppKitMenuDelegate 与 ContextMenuResponder 强引用环，包含 pane-4.swift 的菜单字符串；当前未见 FileTab 或语法高亮对象被该链持有，尚不能确定 AppKit/SwiftUI 自身问题还是 Bailey 触发方式。单独 12 次右键取消出现的每次 32B _NSMenuIntelligentAssistantConfiguration 与此不同，只有小量资源影响证据。`
+- 预期修复：`先用真实可见菜单／取消、Close Files、Dock 重挂载及短/长静置对照复现条件；通过 Instruments 持久对象反查实际分配与平台链路。仅在证实 Bailey 自有闭包或对象所有权导致环后从真正所有者修复，不为约 3.5KiB 的框架保留链直接重写原生菜单或破坏 UI/UX。`
+- 验证：`复用隔离 Release 原生 GUI，分别测试 12 次菜单开关、执行 Close Files、关闭后重挂载五分屏及应用失焦；leaks/heap/vmmap/Allocations 每阶段取证，重复多个 PID，确认是否累积且文件内容不变；必要时按 AGENTS 执行完整 Debug/Release XCTest 与严格签名。`
+- 解决证据：`<commit diff note or test/build output>`
+
+
 ## 发现 F-07
 
 - 任务：`P1-T5`
@@ -152,16 +165,18 @@
 - **历史真实 App 证据的使用边界：** 原 `evidence-p1.md` 已有独立 Release 五个 10k 行分屏实际截图、120s/90s 静置 RSS/CPU 采样，以及前台真实 ⌘S 写盘/重启仍匹配字节的后续 E2E；此为之前运行的证据，**本次后续补做了上述独立 Release 关闭与内存验收，已完成同 PID 的五轮真实文件标签开关；但后四轮仅一个编辑器同时挂载，全程 FPS 仍未测**。本轮对 UI 生产绘制源码无修改，并复跑已有真实 AppKit/WorkspaceUI 文本、颜色、行号、Diff、找回、撤销及双窗口保存回归；不能据此宣称覆盖所有实体屏幕组合。
 - **未测及 Gate 影响（逐项）：** (1) 独立 Release 首轮五分屏实际关闭、后续四轮五文件标签重开／关闭及每轮 `heap`／物理内存对照已通过，但关闭后 Dock 自动收拢，尚缺五个分屏同时挂载、编辑、反复关闭的完整 GUI Allocations 曲线；`leaks` 基线和本次五标签结果不能替代该组合，仍阻塞 T5 长周期资源 Gate。(2) 无可用于测试的 **macOS 15.6／CI26** 设备/系统；本轮只有 macOS 27.2，历史项目最低系统组合未经实测，补验需对应设备/CI，保留兼容性风险。(3) 当前无隔离可验证的**真实手指触控板、不同物理刷新率/显示缩放与 VoiceOver 完整交互**；AppKit 窗口像素、AX 与测试鼠标事件不能冒充实体条件；补验需对应硬件和辅助功能交互。(4) Windows SSH 主机返回 `P4_LIVE_SYMLINK_UNAVAILABLE status=1`，说明其权限环境不能创建 symlink；已验非符号链接的重命名/二进制/读写，不把专属符号链接能力写成通过；补验需具备 symlink 权限的授权 Windows 环境。(5) 未重跑独立 Release 的完整人工高帧率滚动 FPS，Debug 插入/布局回归与既有 Release 截图不等于物理显示帧时间；补验需独立显示采样。前三项及 FPS 限制尚使阶段无法无保留放行。
 - **文档核对：** `docs/README.md` 索引、`docs/features/editor.md`/`diff.md`/`ssh.md`、`docs/testing.md` 与当前实际入口一致；保留前期历史 No-Go STTextView 原型作为取证时间线，不重新加入双轨兼容，`audit*.md` 不作为审查结论。审计文档后由并行流程独立提交 `0c9b1a2`；本轮最终证据追加到同一文档，未擅自推送。
+- **最新优化 Release 验证／安装／真实 GUI**：最终 Debug／Release 两套 467/467 零失败（对应日志 audit-p1-final-full-windows-7aa3633.log 与 audit-p1-final-optimized-release-windows.log），独立 Release 五分屏真实 AX 和滚动／关闭、heap、vmmap、leaks 与测试文件 SHA-256，及新 Release 整包严格验签安装已经完成；具体物理内存未回落、7 个共 144B 的 OS 对象泄漏、独立界面五分屏重复生命周期缺口与截图目录见 evidence-p1.md 最新小节。保留 No-Go，不将 XCTest、UI 数量或显示回调当作全环境完成。
+- **最新 Instruments 双轮取证：** 同一个独立优化 Release PID45322 已用原生 Allocations 录制 211s、211s、126s，真正五个各 10k 行编辑器重复打开／关闭两轮；关闭后物理足迹 **120.1/120.0 MiB**，FileTab／语法协调器归零。第三轮 PID56097 的 300.87s 录制只有四个同时挂载，不作五分屏成功证据。右键菜单 12 次呈现 Apple 菜单配置对象 32B/次；另见两进程中约 3.5KiB 的 SwiftUI ContextMenuResponder 引用环但未归因 Bailey 自有状态。详见 evidence-p1.md 最新小节。
 
 ## Gate（是否允许进入下一阶段）
 
-- 结论：**No-Go（整个 P1 的无保留完成）**；F-01～F-05、F-07 均已 Resolved，F-06 仍 Open。提交 7aa3633 的完整 Windows SSH Debug XCTest **467/467、零失败、零跳过、exit0**；Debug 和正式 Release 构建及严格个人签名均通过。Release 优化 XCTest 正在独立验证。
-- 理由：真实原生四档输入、高亮／字节一致、Diff、Unicode／IME／Undo、五轮原生编辑器释放、真实 SSH、两种主题和主要窗口交互均有证据。仍缺独立 Release GUI 中五分屏反复同时挂载的完整 Allocations 曲线、真正归属于编辑器内容的稳定 FPS，以及尚无环境的真实系统／硬件组合；P1-T5 继续 in_progress。
+- 结论：**No-Go（整个 P1 尚不能无保留完成）**；F-01～F-05、F-07 均已 Resolved，**F-06、F-08 Open**。最终生产源码 7aa3633 的 Debug 与优化 Release 授权 Windows SSH 全量 XCTest 分别 **467/467、467/467、均无失败或跳过**；Debug 和 Release 构建、严格个人签名及新版正式整包安装已通过。
+- 理由：独立 Release 已有两个同 PID 的真实五分屏挂载／关闭 Allocations 周期，均核对五个文件全文、关闭对象释放和 120.1/120.0 MiB 物理足迹基线；目前数据未显示两轮累积泄漏，但第三轮只恢复四分屏，距离五轮以上真正五分屏长时曲线仍有差距。另有未归因的约 3.5KiB SwiftUI 菜单引用环、F-06 实际内容 FPS 不可直接由 CADisplayLink 证明，以及未具备的实体环境；P1-T5 继续 in_progress。
 
 ## 最终状态与剩余风险
 
-- 当前状态：**6/7 findings Resolved，F-06 Open**；P1-T1～T4 completed，P1-T5 in_progress。现有 /Applications/Bailey.app 在本次新构建前是旧安装包，用户 PID 20461 仍运行；本轮已完成构建和验签，但不把构建等同于安装，后续安装必须另作核对，不退出、启动或重启用户进程。
-- 剩余风险：F-03／F-05 的编辑器强引用与旧文档退役已通过 Red→Green；五轮 × 五个原生编辑器与真实五分屏两代文档释放通过。历史独立 Release 五轮标签关闭后四轮只有单分屏，不能冒称完整五分屏长期 Allocations。F-06 中 CADisplayLink 的数字不是实际编辑器 FPS；120 Hz 屏幕 111 次/秒多表面交换事件也不能证明稳定内容帧率。最低 macOS 15.6／CI 26 运行、实体触控板、跨 60/120 Hz 实际 GUI、Windows symlink 权限环境仍未核销；VoiceOver 仅在明确涉及屏幕阅读器时专项验收。
+- 当前状态：**6/8 findings Resolved，F-06、F-08 Open**；P1-T1～T4 completed，P1-T5 in_progress。新 Release 已于 2026-10-20 整包安装至 /Applications/Bailey.app 并严格验签，源包／安装包 executable SHA-256 均为 f791514a1f5ea74a1c48c1167ab0720212b5b6a82154c67c8924d4c7bbdb2d；用户正式 PID 20461 在安装前后不变，未重启，旧运行时仍可能使用旧代码。
+- 剩余风险：F-03／F-05 FileTab、编辑器、高亮对象退役的回归和两轮独立 Release GUI 已证明关闭文件后自有对象归零；AppKit 失焦前有短时原生视图缓存，不能误报 FileTab 泄漏。另见右键原生菜单固定增长 32B/次和两次 SwiftUI ContextMenuResponder 根引用环约 3.5KiB；当前无 FileTab 被该链持有的证据，须再区分框架问题和产品触发方式，不能通过改变 UI/UX 猜测修复。缺连续五轮完整五分屏的 Allocations、真实内容帧时间、macOS 15.6／CI26/触控板/屏幕组合、Windows 符号链接权限环境，故保留 No-Go。
 
 ## 审计约束
 
