@@ -451,6 +451,11 @@ final class Project: nonisolated Identifiable {
     }
 
     func terminateAll() {
+        for tab in tabs {
+            if case .file(let file) = tab.content {
+                file.retireNativeEditor()
+            }
+        }
         for session in sessions {
             session.terminate()
         }
@@ -921,7 +926,9 @@ final class Project: nonisolated Identifiable {
             session.onSnapshotChange = nil
             session.onRemoteContextChange = nil
         case .browser(let browser): browser.onSnapshotChange = nil
-        case .file(let file): file.onSnapshotChange = nil
+        case .file(let file):
+            file.onSnapshotChange = nil
+            file.retireNativeEditor()
         case .diff(let diff): diff.onSnapshotChange = nil
         }
         recentTabIDs.removeAll { $0 == tabID }

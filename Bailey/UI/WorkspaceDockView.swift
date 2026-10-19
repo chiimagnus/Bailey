@@ -457,10 +457,18 @@ private struct DockTabGroupView: View {
             PaneTabItem(
                 tab: paneTab, isSelected: active == item,
                 select: { select(item) },
-                close: { project.close(paneTab) },
+                close: {
+                    if let current = project.tabs.first(where: { $0.id == id }) {
+                        project.close(current)
+                    }
+                },
                 renamingTabID: $renamingTabID
             )
-            .contextMenu { projectTabMenu(paneTab) }
+            .contextMenu {
+                if let current = project.tabs.first(where: { $0.id == id }) {
+                    projectTabMenu(current)
+                }
+            }
         } else {
             TabItemChrome(
                 systemImage: item.symbol, title: item.label(project: project),
@@ -535,37 +543,51 @@ private struct DockTabGroupView: View {
 
     @ViewBuilder
     private func projectTabMenu(_ tab: PaneTab) -> some View {
-        Button(String(localized: "Rename…", table: "Interface")) { renamingTabID = tab.id }
+        let tabID = tab.id
+        Button(String(localized: "Rename…", table: "Interface")) { renamingTabID = tabID }
         if tab.customName != nil {
-            Button(String(localized: "Use Automatic Title", table: "Interface")) { tab.customName = nil }
+            Button(String(localized: "Use Automatic Title", table: "Interface")) {
+                project.tabs.first(where: { $0.id == tabID })?.customName = nil
+            }
         }
         Divider()
         if case .file(let file) = tab.content {
+            let path = file.path
             Button(String(localized: "Reveal in Finder", table: "Interface")) {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)])
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
             }
             Button(String(localized: "Copy Absolute Path", table: "Interface")) {
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(file.path, forType: .string)
+                NSPasteboard.general.setString(path, forType: .string)
             }
             Divider()
         }
         if case .browser(let browser) = tab.content, !browser.urlString.isEmpty {
+            let address = browser.urlString
             Button(String(localized: "Open in Default Browser", table: "Interface")) {
-                browser.openInDefaultBrowser()
+                if let current = project.tabs.first(where: { $0.id == tabID }),
+                   case .browser(let currentBrowser) = current.content {
+                    currentBrowser.openInDefaultBrowser()
+                }
             }
             .disabled(browser.shareURL == nil)
             Button(String(localized: "Copy Address", table: "Interface")) {
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(browser.urlString, forType: .string)
+                NSPasteboard.general.setString(address, forType: .string)
             }
             Divider()
         }
-        Button(String(localized: "Close", table: "Interface")) { project.close(tab) }
-        Button(String(localized: "Close Others", table: "Interface")) { project.closeOthers(tab) }
+        Button(String(localized: "Close", table: "Interface")) {
+            if let current = project.tabs.first(where: { $0.id == tabID }) { project.close(current) }
+        }
+        Button(String(localized: "Close Others", table: "Interface")) {
+            if let current = project.tabs.first(where: { $0.id == tabID }) { project.closeOthers(current) }
+        }
             .disabled(group.items.compactMap(\.tabID).count < 2)
-        Button(String(localized: "Close Tabs to the Right", table: "Interface")) { project.closeToRight(of: tab) }
-            .disabled(group.items.compactMap(\.tabID).last == tab.id)
+        Button(String(localized: "Close Tabs to the Right", table: "Interface")) {
+            if let current = project.tabs.first(where: { $0.id == tabID }) { project.closeToRight(of: current) }
+        }
+            .disabled(group.items.compactMap(\.tabID).last == tabID)
         Divider()
         Button(String(localized: "Close Files", table: "Interface")) { project.closeFiles() }
         Button(String(localized: "Close Diffs", table: "Interface")) { project.closeDiffs() }

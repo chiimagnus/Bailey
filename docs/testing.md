@@ -138,7 +138,7 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 
 - **性能与坐标**：`EditorNavigationTests`、`TextCoordinateIndexTests` 验证 382／1,000／10,000／100,000 行，折行两态、文首／中／末各 30 次编辑，以及至少 17 次交错远跳；检查滚动条、长行横滚、Unicode 命中及撤销后的真实字节。
 - **真实绘制**：`EditorNavigationTests`、`DiffTabTests`、`FileTabTests` 验证亮暗主题、行号与跨行选区、空行、查找栏展开、窗口缩放、Diff 及行号与首字形不互相遮挡；颜色和位置以窗口像素为准。
-- **生命周期**：`PaneRetentionTests` 验证 Dock 重挂载不换编辑器、五轮各五个编辑器的输入与释放，以及外部文本重载、旧窗口仍被缓存、转为二进制时不保留过期文档。XCTest 中对象释放不等同于独立 Release 的长周期内存回落。
+- **生命周期**：`PaneRetentionTests` 验证 Dock 重挂载不换编辑器、五轮各五个编辑器的输入与释放、真实 `WorkspaceDockView` 执行 `Close Files`／关闭整个项目（含焦点停在待关闭编辑器、旧 `NSScrollView` 仍被持有）后旧标签和原生正文弱引用释放，以及外部文本重载、旧窗口仍被缓存、转为二进制时不保留过期文档。独立 Release 须补充打开／关闭／重开后的 heap、Allocations 与实际 GUI 对照；XCTest 中对象释放不等同于长期内存回落。
 - **保存**：`FileTabTests` 验证原生 AX 编辑后的脏状态和写盘；多窗口使用 `WorkspaceWindowIsolationTests` 核对各自目标。完整 App 的 ⌘S 另须核对前台焦点、真实磁盘字节与重启结果；后台事件派发不能直接算成功。
 
 `WorkspaceWindowIsolationTests.testTwoMountedWorkspaceManagersSaveTheirOwnNativeAXBuffers` 在两个真实 `ContentView`／`NSWindow` 中使用同名不同路径文件，通过原生 AX 修改两个缓冲区、经各自 `TerminalManager.saveSelectedFile()` 保存并核对独立磁盘字节、脏状态和原编辑器身份。隔离 XCTest 无法保证目标窗口实际成为系统 Key Window，因此这只证明工作区保存路由和最终写盘，不代替独立 App 的 ⌘S 菜单、窗口焦点 E2E。

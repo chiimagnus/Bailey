@@ -74,6 +74,15 @@ final class FileTab: nonisolated Identifiable {
     @ObservationIgnored weak var editorView: NSView?
     @ObservationIgnored var editorCoordinator: SourceTextEditor.Coordinator?
 
+    /// A true tab close or accepted replacement must release the old native
+    /// document even if SwiftUI/AppKit still caches its former scroll view.
+    func retireNativeEditor() {
+        let coordinator = editorCoordinator
+        editorCoordinator = nil
+        editorView = nil
+        coordinator?.retireObsoleteDocument()
+    }
+
     private nonisolated static let maxTextBytes = 8 << 20
     private nonisolated static let imageExtensions: Set<String> = [
         "png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp", "icns",
@@ -439,10 +448,7 @@ final class FileTab: nonisolated Identifiable {
 
             self.reloadError = nil
             guard !self.matches(loaded) else { return }
-            let obsoleteCoordinator = self.editorCoordinator
-            self.editorCoordinator = nil
-            self.editorView = nil
-            obsoleteCoordinator?.retireObsoleteDocument()
+            self.retireNativeEditor()
             self.content = loaded.content
             self.text = loaded.text
             self.savedText = loaded.text
