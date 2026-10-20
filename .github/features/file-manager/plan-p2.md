@@ -4,7 +4,7 @@
 
 **Non-goals：** 不增加跨项目／跨窗口传输协议，不支持本机与 SSH、不同 SSH 机器间传输；不修改 Projects／Dock／终端／浏览器的拖放意图。
 
-**Approach：** `FileTreePanel` 的现有本机 `onDrag` 仅提供 Mac 文件 URL；`FileTreeImportDrop` 接收 Finder URL 并固定执行复制。本期只扩展 **同一活动 Files 树内部**的源／目标识别，内部动作调用 P1 已验证的文件操作，不借 Mac `fileURL` 表示 SSH。只有确实需要区分同机内部拖动与 Finder 提供者时才增加最小的本 App 拖动类型，不预建跨 App 粘贴／拖动协议。
+**Approach：** 前置复用 [#13 Focus](../focus-navigation/idea.md) 的 Dock 活动组和真实键盘接收者，以及 P1-T1 已实现的行选择；拖放预览不抢活动焦点。`FileTreePanel` 的现有本机 `onDrag` 仅提供 Mac 文件 URL；`FileTreeImportDrop` 接收 Finder URL 并固定执行复制。本期只扩展 **同一活动 Files 树内部**的源／目标识别，内部动作调用 P1 已验证的文件操作，不借 Mac `fileURL` 表示 SSH。只有确实需要区分同机内部拖动与 Finder 提供者时才增加最小的本 App 拖动类型，不预建跨 App 粘贴／拖动协议。
 
 **Acceptance：** 拖放落到真实目录，默认移动、Option 复制；移动后已打开文件正确保存和改路径；Finder 导入不改变来源；其它面板拖放无回归。
 
@@ -17,9 +17,9 @@
 
 **源码锚点：** `Bailey/Files/FileTreePanel.swift`（`FileTreeRow.body/onDrag`、`FileTreeImportDrop`、`FileTreeScrollView` 根／行落点）、`Bailey/Files/FileTreeModel.swift`（选中集合、`rootPath`、统一操作）、`Bailey/Shared/Tree/TreeDisplayModel.swift`（`row.path/compactPrefix`）、`Bailey/UI/Panels/ToolPanelView.swift`（`filesTarget/isCurrentTarget`）。
 
-1. **Red：** 用原生真实 Drag 证明现有 Files 仅提供本机 `fileURL`、不能执行树内移动，远端没有 `onDrag`；新增单项、多选、拖非选中行、根/空白、文件行父目录、目录行、目录压缩链最终路径、Option 修饰键及放弃拖动用例。核查拖放完成后源与目标**实际文件内容**。
-2. **Green：** 拖动源为当时已选中成员集合（拖未选中的单项时仅该项），绑定当前 Files 根／机器／连接；仅同一活动 Files 树接受内部操作，变化、源或目标失效则拒绝。落点使用 `TreeDisplayModel.Row.path` 的真实末级目录；普通文件目标使用父目录，压缩链不可写到错误祖先。默认移动，按下 Option 时复制；委托只负责识别动作，统一调用 P1 操作，不自行写 Shell 命令。仅本机继续对 Finder 提供现有 Mac URL，远端拖动不泄露为 Mac `fileURL`；先验证是否需要新增一个内部 provider 类型，避免为技术上的可能性建立全局拖放服务。
-3. **覆盖：** 0/1/N 项，父子同时选中，非空目录、压缩目录、当前选中与编辑文件，Drop 的边缘／行内留白／标题／根、纵横滚动、Option 按下与放开，悬停期间目录关闭／切根、已开始保存、目标外部抢占、循环软链、目录自身或后代、同名异机器、远端断线／再连、双窗口与焦点、中文／明暗／字号变化。分别使用 `FileTreeTests`、`TreeRowHitTestingTests`、`WorkspaceWindowIsolationTests` 和真实原生 GUI；不把 SwiftUI Drop 提示颜色当操作成功。
+1. **Red：** 先证明 #13 及 P1-T1 的分屏／Files 真焦点、选择集合与源路径已经成立；用原生真实 Drag 证明现有 Files 仅提供本机 `fileURL`、不能执行树内移动，远端没有 `onDrag`；新增单项、多选、拖非选中行、根/空白、文件行父目录、目录行、目录压缩链最终路径、Option 修饰键及放弃拖动用例。核查拖放完成后源与目标**实际文件内容**。
+2. **Green：** 拖动源为当时已选中成员集合（拖未选中的单项时仅该项），绑定当前 Files 根／机器／连接；拖动期间的 hover、目标边框与 #13 的正式 Focus 分开，成功落地后再恢复有效活动组／键盘焦点；仅同一活动 Files 树接受内部操作，变化、源或目标失效则拒绝。落点使用 `TreeDisplayModel.Row.path` 的真实末级目录；普通文件目标使用父目录，压缩链不可写到错误祖先。默认移动，按下 Option 时复制；委托只负责识别动作，统一调用 P1 操作，不自行写 Shell 命令。仅本机继续对 Finder 提供现有 Mac URL，远端拖动不泄露为 Mac `fileURL`；先验证是否需要新增一个内部 provider 类型，避免为技术上的可能性建立全局拖放服务。
+3. **覆盖：** 0/1/N 项，父子同时选中，非空目录、压缩目录、当前选中与编辑文件，Drop 的边缘／行内留白／标题／根、纵横滚动、Option 按下与放开，悬停期间目录关闭／切根、已开始保存、目标外部抢占、循环软链、目录自身或后代、同名异机器、远端断线／再连、双窗口前后台、Dock 活动组、工具与编辑器真实 first responder、拖动悬停/取消/完成前后焦点归属、中文／明暗／字号变化。分别使用 `FileTreeTests`、`TreeRowHitTestingTests`、`WorkspaceWindowIsolationTests` 和真实原生 GUI；不把 SwiftUI Drop 提示颜色当操作成功。
 4. **闭环：** `docs/features/files.md` 和 `docs/ui.md` 当次更新；内部拖放若取代旧的仅内部 URL 分支，**在本任务删掉对应旧路由**，但不得删除对 Finder 有真实用途的外拖 URL；测试、真实文件结果、中文原子提交同次完成。
 
 ---

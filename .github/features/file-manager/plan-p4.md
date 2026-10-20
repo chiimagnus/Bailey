@@ -6,7 +6,7 @@
 
 **Approach：** 当前 `ToolPanelView.syncModels → Project.syncFiles → FileTreeModel.sync/rebuild` 在 Files 前台每 2 秒刷新，也响应终端命令完成、项目变化及 App 激活；本机 Git 已用独立 FSEvents。P4 仅消费这些既有或 #40 后续提供的刷新触发，在 Files／项目当前所有者内核对选中项、隐藏显示和 `⌘P` 文件结果的更新，不维护第二套文件状态。#40 不在当前分支已完成时，不把「靠旧轮询正确」说成「事件通知已验收」。
 
-**Acceptance：** 在已成功确认文件真实变化后，Files 行、选择、临时定位及 `⌘P` 文件结果与磁盘一致；旧 SSH 失败留住有效数据，当前编辑不丢失，额外监听/扫描为零；每项涉及 UI 的任务已有原生或完整 App 测试记录。
+**Acceptance：** 在已成功确认文件真实变化后，Files 行、选择、临时定位及 `⌘P` 文件结果与磁盘一致；#13 窗口/分屏/原生控件的真实 Focus 与 Files 多选视觉及快捷键归属一致，#44 的 File Manager 设置入口可见且持久化正确；旧 SSH 失败留住有效数据，当前编辑不丢失，额外监听/扫描为零；每项涉及 UI 的任务已有原生或完整 App 测试记录。
 
 **Rules：** 真实刷新所见的目录条目才是内容真源；失败不伪装删除，SSH 不回退 Mac；P4 只补**跨功能连接点**及确实验证的缺口。
 
@@ -30,9 +30,9 @@
 **源码锚点：** `Bailey/Files/{FileTreeModel,FileTreePanel}.swift`、`Bailey/Shared/Tree/{TreeDisplayModel,TreeRowStyle}.swift`、`Bailey/UI/{CommandPaletteView,Panels/ToolPanelView}.swift`、`Bailey/Workspace/{Project,TerminalManager,ProjectFileIndex,WorkspaceBackend}.swift`、`Bailey/Editor/FileViewerView.swift`、`Bailey/App/{BaileyApp,AppSettings}.swift`、`Bailey/Remote/SSHWorkspaceBackend.swift` 以及相应 `BaileyTests/Integration`、`NativeUI`、`WorkspaceUI`。
 
 1. **复核任务证据而非补拖欠功能：** 对 P1–P3 每个任务的实现、原子提交、Red→Green、旧代码清理、功能文档和原生测试进行交叉审查；当发现某前置任务没有完成其自身所需验收时，**回到对应任务修复**，不能把剩余代码和文档堆到 P4。不要参考已有 `audit*.md` 的结论，直接从当前源码、Git diff、测试与真实界面核实。
-2. **完整受控 App 用户流：** 本机和获授权 Windows SSH 临时仓库执行：文件／目录多选、复制剪切粘贴／副本、删除及保存中移动、内部拖放和 Finder 外拖、Show Excluded 与设置、Reveal、SSH `⌘P`、外部 Git／CLI 改动。逐项覆盖 `idea.md` 的全部适用环境与正常/异常/极端输入，实际确认源／目标字节、原生缓冲/Undo、真实菜单焦点、Git Graph、Files 行和错误 Sheet；不让模拟测试替代完整 GUI。
-3. **交叉竞争与环境：** 对重名抢占、父子混选、移动中自动保存、Finder 投放窗口坐标、源目标同路径但不同机器、断网重连、改分支时索引返回、不同 Dock 组/窗口/项目、弱网络与高频事件、特殊 Unicode／大小写／软链/深层结构，在安全隔离临时根最大程度实测。覆盖 macOS 当前版本、中英/明暗/窄宽/字体缩放、所有可用本机权限/文件系统条件；缺失 macOS 15.6 真机、未授权 SSH／物理输入设备明确登记**条件、尝试、替代证据、影响、补验与是否阻塞**，不假称通过。
-4. **与 #40 分工核对：** 分开报告 #5 F1–F4 是否完成和 #40 的 F6 是否完成：实际代码若仍是本机 Files 2 秒轮询，F6 事件化**未完成**；SSH 若未真实 Go 保留旧 2/5 秒可靠轮询。不能为让 #5 “结案”越权删除 #40 轮询或增加远端 watcher。
+2. **完整受控 App 用户流：** 本机和获授权 Windows SSH 临时仓库执行：先按 #13 验收窗口 key/Dock 活动组/原生 first responder、Files 行多选/聚焦键盘语义，再做文件／目录多选、复制剪切粘贴／副本、删除及保存中移动、内部拖放和 Finder 外拖、#44 的 Settings → File Manager 中 Exclude 规则编辑与临时 Show Excluded、Reveal、SSH `⌘P`、外部 Git／CLI 改动。逐项覆盖 `idea.md` 的全部适用环境与正常/异常/极端输入，实际确认源／目标字节、原生缓冲/Undo、真实菜单焦点、Git Graph、Files 行和错误 Sheet；不让模拟测试替代完整 GUI。
+3. **交叉竞争与环境：** 对前台/后台多窗口、分屏切换、工具面板/终端/编辑器/浏览器/Diff 首响应者切换、Cmd+A/C/X/V 等快捷键不串目标、所选文件与当前编辑文件不同、重名抢占、父子混选、移动中自动保存、Finder 投放窗口坐标、源目标同路径但不同机器、断网重连、改分支时索引返回、不同 Dock 组/窗口/项目、弱网络与高频事件、特殊 Unicode／大小写／软链/深层结构，在安全隔离临时根最大程度实测。覆盖 macOS 当前版本、中英/明暗/窄宽/字体缩放、所有可用本机权限/文件系统条件；缺失 macOS 15.6 真机、未授权 SSH／物理输入设备明确登记**条件、尝试、替代证据、影响、补验与是否阻塞**，不假称通过。
+4. **与 #13／#44／#40 分工核对：** #13 负责窗口/停靠组/原生内容 Focus 真源，#5 只拥有 Files 行选择和文件操作；#44 负责 Settings 功能页面，#5 只添加 Files Exclude 控件；#40 拥有文件监听与是否引入将来的 watcherExclude，#5 不添加监听配置。分别报告各自真实已通过的代码与验收，尤其区分 #5 F1–F4 和 #40 F6 是否完成：实际代码若仍是本机 Files 2 秒轮询，F6 事件化**未完成**；SSH 若未真实 Go 保留旧 2/5 秒可靠轮询。不能为让 #5 “结案”越权删除 #40 轮询或增加远端 watcher。
 5. **验证与收尾：** 已在对应任务跑过定向 `make test ONLY_TESTING=...` 和 E2E，本阶段执行完整 `make test`、`make build`、`codesign --verify --deep --strict` 与原生签名 App 组合复验，检查完整命令退出状态。仅清理本阶段实际引入的临时数据及经证实的冗余，独立中文提交真正发生的修复及相应文档；纯审查/无代码变动不制造无用提交。同步完成报告到现有计划任务证据，不另建永久矩阵。
 
 ---

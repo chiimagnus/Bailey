@@ -2,26 +2,26 @@
 
 **Goal：** 在现有 Files 中增加可配置隐藏规则、临时显示被排除文件和当前文件定位；保留已有 `⌘P` 并补齐 SSH 项目文件快速打开。
 
-**Non-goals：** **不实现 Files 面板内搜索框、按名称或路径过滤、未展开目录递归搜索及其索引**；不实现文件排序、`search.exclude`、VS Code `when`、项目级 `.vscode/settings.json`、全文搜索或新设置页面。
+**Non-goals：** **不实现 Files 面板内搜索框、按名称或路径过滤、未展开目录递归搜索及其索引**；不实现文件排序、跨文件搜索及它的 `search.exclude`、监听器的 `files.watcherExclude`、VS Code `when`、项目级 `.vscode/settings.json`、全文搜索或新设置页面。本计划只登记后续 Exclude 的语义边界，不预建未接入的注册表或设置控件。
 
-**Approach：** 替换 `FileTreeModel.children` 现有的 `.git` 硬编码过滤为 `files.exclude` Glob 匹配；仅在树行投影前过滤，不改变 `TreeDisplayModel.Traversal`、现有惰性目录缓存及 Git UI。配置归 `AppSettings` 现有全局 TOML，UI 放 `SettingsView.workspaceSettings` 的「文件」分区；Files 面板只需临时显示开关。SSH `⌘P` 沿原 `ProjectFileIndex` 扩展；Reveal 沿已有文件树逐级展开，不另建索引。
+**Approach：** 替换 `FileTreeModel.children` 现有的 `.git` 硬编码过滤为 `files.exclude` Glob 匹配；仅在树行投影前过滤，不改变 `TreeDisplayModel.Traversal`、现有惰性目录缓存及 Git UI。配置归 `AppSettings` 现有全局 TOML，UI 放 **[#44 的 Settings → File Manager 页面](../settings-by-feature/plan-p1.md)**（按功能分类）；Files 面板只需临时显示开关。`search.exclude` 未来归跨文件搜索，`files.watcherExclude` 未来归 #40 的实际事件监听；各自拥有独立设置键和消费者，可复用经过实际验证的分段 Glob 匹配，但当前不引入通用规则注册框架。SSH `⌘P` 沿原 `ProjectFileIndex` 扩展；Reveal 沿已有文件树逐级展开，不另建索引。
 
 **Acceptance：** 默认只隐藏 `.git`，用户按 Glob 设置可显示／隐藏，原始目录顺序与 Git 忽略状态不变；配置立刻传播到本机／SSH Files，临时查看不改持久值；`⌘P` 能准确打开远端文件；Reveal 不误定位同名异机器文件。
 
-**Rules：** 不在 Files 标题栏新增搜索输入，不因隐藏规则对整仓扫描；失效配置不覆盖上次有效规则；涉及真实文件 IO 的结果继续按已有项目和后端边界校验。
+**Rules：** #44 先把 File Manager 页面挂入现有原生 Settings，P3-T1 再把 Exclude 控件接入它，不能回退到混合 Workspace 设置页或新建另一套 Settings；不在 Files 标题栏新增搜索输入，不因隐藏规则对整仓扫描；失效配置不覆盖上次有效规则；涉及真实文件 IO 的结果继续按已有项目和后端边界校验。
 
 ---
 
 <a id="p3-t1"></a>
 ## P3-T1 Files 隐藏规则及原生设置 UI
 
-**源码锚点：** `Bailey/Files/FileTreeModel.swift.children/rebuild`（当前唯一 `.git` 硬编码过滤）、`Bailey/Shared/Tree/TreeDisplayModel.swift.Traversal`、`Bailey/App/AppSettings.swift`（`TOML.parse/save/resetToDefaults`，当前仅识别**单行数组**）、`Bailey/App/SettingsView.swift.workspaceSettings`（已有 Panels／Git／Text Editing Sections）、`Bailey/Files/FileTreePanel.swift`（现有 Files 标题栏）。
+**源码锚点：** `Bailey/Files/FileTreeModel.swift.children/rebuild`（当前唯一 `.git` 硬编码过滤）、`Bailey/Shared/Tree/TreeDisplayModel.swift.Traversal`、`Bailey/App/AppSettings.swift`（`TOML.parse/save/resetToDefaults`，当前仅识别**单行数组**）、`Bailey/App/SettingsView.swift`（#44 改造后的独立 `File Manager` 页面，当前旧代码把 Panels／Git／Text Editing 混在 `workspaceSettings`）、`Bailey/Files/FileTreePanel.swift`（现有 Files 标题栏）。
 
 1. **Red：** `FileTreeTests` 验证 `.git` 在根／嵌套目录默认隐藏、其它点文件和 `node_modules` 默认仍显示；Glob `*`（当前目录段）、`?`（一个字符）、`**`（零层／多层目录）按**当前 Files 根**的相对路径匹配。验证 `**/.git`、`**/node_modules`、`**/*.log`、仅文件名与相对目录模式；命中目录后整个子树不再出现在树上。旧代码与新需求形成真实 Red；`AppSettingsTests` 覆盖配置初装、无效模式／类型、持久化、重置、其他设置触发保存，以及 `[]` 明确关闭所有排除规则。
-2. **Green：** `AppSettings` 新增唯一 `files.exclude` 字符串数组，**默认 `["**/.git"]`**；当前 TOML 解析器只支持单行数组，文件应由现有 `TOML.list` 写为 `files.exclude = ["**/.git", "**/node_modules"]`，不要引入多行 TOML 解析层。实现最小分段 Glob 匹配，`**` 可匹配零级子目录，文件夹匹配后整棵子树不可见；在 `FileTreeModel.children` 原过滤位置**直接替换**旧 `.git` 分支，不在磁盘／SSH 后端分别过滤。改变规则时复用已读目录缓存重建显示，不增加扫描；规则无效时保留上次有效配置和明确报错。
-3. **设置界面：** **不新建左侧设置页面**。在 `Settings → Workspace` 已有原生 `Form` 中增加 `Files / Excluded Items` 分区：一个 SwiftUI `TextEditor`，**每行一条 Glob**，配简短示例、**应用**和**恢复默认**按钮。输入仅为临时草稿，点击应用且全部校验通过才一次写入 `AppSettings`，避免每次按键重写配置；错误直接在编辑区下面说明、不影响此前有效规则。全局规则对本机和所有 SSH 项目一致生效，暂不增加逐项目配置或开关。现有 `Reset to Defaults`／`hasCustomizedPreferences` 也须包含该选项。
+2. **Green：** `AppSettings` 新增仅供 Files 显示使用的 `files.exclude` 字符串数组，**默认 `["**/.git"]`**；当前 TOML 解析器只支持单行数组，文件应由现有 `TOML.list` 写为 `files.exclude = ["**/.git", "**/node_modules"]`，不要引入多行 TOML 解析层。实现最小且可独立测试的分段 Glob 匹配（`*`/`?`/`**`，`**` 可匹配零级子目录），文件夹匹配后整棵子树不可见；**只让 Files 在本任务消费它**。以后搜索或 watcher 需要规则时再复用被测试过的纯匹配函数、增加各自的配置键/默认值与测试，不能将本次 `files.exclude` 扩大为跨系统隐藏总开关；在 `FileTreeModel.children` 原过滤位置**直接替换**旧 `.git` 分支，不在磁盘／SSH 后端分别过滤。改变规则时复用已读目录缓存重建显示，不增加扫描；规则无效时保留上次有效配置和明确报错。
+3. **设置界面：** 先核实 [#44](https://github.com/chiimagnus/Bailey/issues/44) 已建立功能分类的独立 **Settings → File Manager** 页面；本任务直接在其原生 `Form` 增加 `Excluded Items` 区块，**不回填 Workspace 页面，也不重新实现 Settings 导航**：一个 SwiftUI `TextEditor`，**每行一条 Glob**，配简短示例、**应用**和**恢复默认**按钮。输入仅为临时草稿，点击应用且全部校验通过才一次写入 `AppSettings`，避免每次按键重写配置；错误直接在编辑区下面说明、不影响此前有效规则。全局规则对本机和所有 SSH 项目一致生效，暂不增加逐项目配置或开关。现有 `Reset to Defaults`／`hasCustomizedPreferences` 也须包含该选项。
 4. **Files 临时查看：** 在现有 Files 标题栏右侧加入一个简洁的省略号菜单，其中勾选项「显示被排除的文件」只作用于当前 Files 树/目标，不写 `config.toml`，切回关闭后恢复隐藏；`Reveal` 可临时显示被隐藏的目标及必要祖先。禁止为它另造搜索框或持久化显示状态。
-5. **验证与闭环：** 实测根／嵌套/压缩目录、空规则和删除默认 `.git`、符号链接与循环、Unicode／大小写差异、规则更改期间 Files 打开、多个项目/窗口、本机/SSH、离线及重连、隐藏的当前打开文件／Git status／`⌘P` 结果不变；中英/浅暗/窄 Settings 和键盘辅助功能。跑 `FileTreeTests`、`AppSettingsTests`、`TreeRowHitTestingTests`、原生 Settings／Files GUI；核对磁盘内容及无新增 SSH 遍历。更新 `docs/features/files.md`、`settings.md`、`docs/ui.md`；同任务删除已替代的 `.git` 硬编码和多余配置路径，独立中文提交。
+5. **验证与闭环：** 实测根／嵌套/压缩目录、空规则和删除默认 `.git`、符号链接与循环、Unicode／大小写差异、规则更改期间 Files 打开、多个项目/窗口、本机/SSH、离线及重连、隐藏的当前打开文件／Git status／`⌘P` 结果不变；尤其断言 File Manager 的规则**不会**改变 `⌘P`、Git 或 #40 watcher 的数据集合。设置 UI 验证 #44 的 File Manager 页面确实为唯一入口、其它类别设置不丢失；中英/浅暗/窄 Settings 和键盘辅助功能。跑 `FileTreeTests`、`AppSettingsTests`、`TreeRowHitTestingTests`、原生 Settings／Files GUI；核对磁盘内容及无新增 SSH 遍历。更新 `docs/features/files.md`、`settings.md`、`docs/ui.md`；同任务删除已替代的 `.git` 硬编码和多余配置路径，独立中文提交。
 
 ---
 
