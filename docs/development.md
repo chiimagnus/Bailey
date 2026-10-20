@@ -97,8 +97,9 @@ Find、行号、选区和滚动可在标签重挂载后恢复。
 
 `Vendor/BaileyGrammars` 从
 [`STTextView-Plugin-Neon` 的固定提交](https://github.com/krzyzanowskim/STTextView-Plugin-Neon/tree/5a30db4ce7908a5414e7b499e2379bdc49991cd1)
-独立保留 Bailey 实际使用的 20 种 Tree-sitter parser 与查询，保留原许可，
-不含 STTextView／插件运行时。独立 `Vendor/TreeSitterTSX` 负责 TSX；
+独立保留 Bailey 实际使用的 20 种 Tree-sitter parser，以及 25 份实际读取的
+高亮／JSX／嵌入语言查询；不再打包旧插件未使用的 tags、locals 等查询。
+保留原许可，不含 STTextView／插件运行时。独立 `Vendor/TreeSitterTSX` 负责 TSX；
 不能用普通 TypeScript grammar 代替，因为它不解析 JSX。
 语法查询沿用 JavaScript／JSX 与 TypeScript、C 与 C++ 的继承合并，以及 Markdown／HTML 嵌入语言。
 

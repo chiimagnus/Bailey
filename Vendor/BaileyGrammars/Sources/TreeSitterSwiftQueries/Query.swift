@@ -4,10 +4,6 @@ public enum Query {
     public static var highlightsFileURL: URL {
         return url(named: "highlights")
     }
-
-    public static var localsFileURL: URL {
-        return url(named: "locals")
-    }
 }
 
 private extension Query {

@@ -110,7 +110,7 @@ public enum TreeSitterLanguage: CaseIterable, Hashable {
         }
     }
 
-    public var highlightQueryURL: URL? {
+    public var highlightQueryURL: URL {
         switch self {
         case .bash:
             TreeSitterBashQueries.Query.highlightsFileURL
@@ -155,48 +155,4 @@ public enum TreeSitterLanguage: CaseIterable, Hashable {
         }
     }
 
-    public var localsQueryURL: URL? {
-        switch self {
-        case .bash:
-            nil
-        case .c:
-            nil
-        case .cpp:
-            nil
-        case .csharp:
-            nil
-        case .css:
-            nil
-        case .go:
-            nil
-        case .html:
-            nil
-        case .java:
-            nil
-        case .javascript:
-            TreeSitterJavaScriptQueries.Query.localsFileURL
-        case .json:
-            nil
-        case .markdown:
-            nil
-        case .php:
-            nil
-        case .python:
-            nil
-        case .ruby:
-            TreeSitterRubyQueries.Query.localsFileURL
-        case .rust:
-            nil
-        case .swift:
-            TreeSitterSwiftQueries.Query.localsFileURL
-        case .sql:
-            nil
-        case .toml:
-            nil
-        case .typescript:
-            TreeSitterTypeScriptQueries.Query.localsFileURL
-        case .yaml:
-            nil
-        }
-    }
 }

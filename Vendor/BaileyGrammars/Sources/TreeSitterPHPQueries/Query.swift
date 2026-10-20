@@ -8,10 +8,6 @@ public enum Query {
     public static var injectionsFileURL: URL {
         return url(named: "injections")
     }
-
-    public static var tagsFileURL: URL {
-        return url(named: "tags")
-    }
 }
 
 private extension Query {

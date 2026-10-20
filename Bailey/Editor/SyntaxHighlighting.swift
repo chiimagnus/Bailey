@@ -135,9 +135,7 @@ enum SyntaxHighlighting {
             default:
                 break
             }
-            if let own = language.highlightQueryURL {
-                urls.append(own)
-            }
+            urls.append(language.highlightQueryURL)
             // The JavaScript grammar parses JSX too (`.jsx`, and `.js` in
             // practice), but keeps its element captures in a second file.
             if language == .javascript {
