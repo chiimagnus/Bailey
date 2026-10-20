@@ -513,8 +513,8 @@ private final class RestorableScrollView: NSScrollView {
             // already anchored the scroll view to a new document end.
             let previousOrigin = self.reparentedOffset ?? clipView.bounds.origin
 
-            textView.configureWrapping(textView === self.documentView && textView.wrapsLines,
-                                         viewportWidth: self.contentView.bounds.width)
+            textView.configureWrapping(textView.wrapsLines,
+                                       viewportWidth: self.contentView.bounds.width)
             textView.needsLayout = true
             textView.layoutSubtreeIfNeeded()
 
