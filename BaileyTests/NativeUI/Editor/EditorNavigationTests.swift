@@ -431,25 +431,6 @@ final class EditorNavigationTests: XCTestCase {
                                              "Wrapped final glyph must be visible above the clip")
                 XCTAssertLessThanOrEqual(localPoint.y, visible.maxY + 2,
                                          "Wrapped final glyph must be visible below the clip")
-                if rect.isEmpty {
-                    // Diagnostic only after the actual user-path assertions fail:
-                    // distinguish an unscrollable clip from a TextKit layout
-                    // pass that discards the scroll origin on macOS 26.
-                    let clip = scroll.contentView
-                    let original = clip.bounds.origin
-                    let documentRect = clip.documentRect
-                    clip.scroll(to: NSPoint(x: original.x, y: 30))
-                    let direct = clip.bounds.origin
-                    scroll.reflectScrolledClipView(clip)
-                    let reflected = clip.bounds.origin
-                    scroll.layoutSubtreeIfNeeded()
-                    editor.layoutSubtreeIfNeeded()
-                    let relaid = clip.bounds.origin
-                    let afterRect = editor.firstRect(
-                        forCharacterRange: NSRange(location: target, length: 1),
-                        actualRange: nil)
-                    print("TEXTKIT26_SCROLL_PROBE clip=\(visible) documentRect=\(documentRect) editorFlipped=\(editor.isFlipped) clipFlipped=\(clip.isFlipped) direct=\(direct) reflected=\(reflected) relaid=\(relaid) afterRect=\(afterRect)")
-                }
             } else {
                 XCTAssertGreaterThan(scroll.documentView?.frame.width ?? 0, scroll.frame.width,
                                      "Long unwrapped line must remain horizontally reachable")
