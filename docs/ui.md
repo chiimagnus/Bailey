@@ -72,7 +72,7 @@ Git 图谱使用独立于 App 强调色的 12 色路径调色板。节点、轨�
 
 ## 本地化
 
-应用维护英语 `en` 与简体中文 `zh-Hans`，开发语言为英语；自有文档为中文。字符串表位于 `Bailey/Resources/Localization/`。
+应用维护英语 `en` 与简体中文 `zh-Hans`，开发语言为英语；维护者文档以中文为主，用户 README 提供中英文。字符串表位于 `Bailey/Resources/Localization/`。
 
 `Git`、`Sidebar`、`Terminal`、`Workspace`、`Browser`、`Editor`、`Settings` 对应功能；`Interface` 负责菜单、命令面板、标签和窗口，`InfoPlist` 负责权限说明，`ServicesMenu` 负责 Finder 服务。调用必须指定正确表，移动文案同步修改 `table`。
 

@@ -37,7 +37,16 @@ workflow 使用临时钥匙串，结束时删除临时签名材料并恢复钥�
 
 ## 下载隔离属性
 
-下载后的首次运行与构建签名分别验收。直接下载者应先确认来自维护者发布的包；系统拦截时再按 [README](../README.md#安装) 对单个已确认可信的 App 处理，不关闭系统整体安全检查。
+从 [GitHub Releases](https://github.com/chiimagnus/Bailey/releases) 下载后，先确认来源可信。若 macOS 阻止首次打开，可在「系统设置 → 隐私与安全性」中选择允许打开该 App。
+
+如果仍需手动移除下载隔离标记，**仅对已确认可信的 Bailey** 执行：
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/Bailey.app"
+open "/Applications/Bailey.app"
+```
+
+不要关闭系统级安全检查。Bailey 当前没有公证流程，代码签名验证通过不代表 Gatekeeper 一定放行。
 
 ## 验证记录
 

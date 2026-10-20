@@ -1,17 +1,7 @@
-# Neon 核心运行时
+# Neon 本地运行时
 
-来源为 [kylemacomber/Neon 的固定提交 ce8d252c8fd53ea0b6960e02c423315eef11f141](https://github.com/kylemacomber/Neon/tree/ce8d252c8fd53ea0b6960e02c423315eef11f141)，与当前锁定的 STTextView-Plugin-Neon 一致。版权和 BSD 3-Clause 原文保留在 [LICENSE](LICENSE)，同一原文随 App 资源分发。
+Bailey 保留 [kylemacomber/Neon 固定提交](https://github.com/kylemacomber/Neon/tree/ce8d252c8fd53ea0b6960e02c423315eef11f141) 中实际使用的 Tree-sitter 高亮核心，以原有 Neon 包身份接入 Xcode。版权与 BSD 3-Clause 许可见 [LICENSE](LICENSE)，原文也随 App 分发。
 
-这是 Kero 的本地运行时子集，不是另一个解析器或通用跨平台包。Xcode 以相同 Neon 身份替换远程包；SwiftTreeSitter、Rearrange 和插件版本不变。最低 macOS 14 与插件一致，Kero 的最低 macOS 15.6 不变。
+本地改动修正异步解析返回的失效范围，移除当前平台不再需要的兼容接口和未使用的查询／样式路径。不能只把依赖 URL 换成新版 [Neon](https://github.com/ChimeHQ/Neon)：其 API 与当前固定版本不同，升级前必须验证编辑、取消、嵌入语法与可见颜色。
 
-上游主线是 [ChimeHQ/Neon](https://github.com/ChimeHQ/Neon)（现重定向至 `slsrepo/Neon`）。当前插件固定使用的 `kylemacomber/Neon` 具有旧版 `TreeSitterClient` 接口，与主线新版接口不同；本地补丁还修复了排队解析的失效坐标。不能仅替换仓库 URL 退回主线；未来优先核实主线的编辑、失效范围及嵌入高亮行为，确认覆盖后删除本地补丁和副本。
-
-仅保留 Kero 与该插件实际使用的高亮、token 和 TreeSitterClient 核心。未引入旧 NSTextView／UIKit 适配、未使用的 invalidation buffer、Region 别名或上游测试语法；回归继续进入 KeroTests。
-
-相对上游的运行时改动限于：
-- 返回已随排队编辑转换后的失效范围，而不是丢弃结果返回旧坐标。
-- 使用当前平台的 MainActor／主队列能力，删除旧系统兼容桥及冗余可用性标记；必要队列断言保留。
-- 使用已锁定 SwiftTreeSitter 0.25 的匹配序列，移除弃用游标及没有调用者的查询模式／便捷接口；保留后台匹配、主线程谓词和现有解析调度。谓词读取后再次校验请求版本。
-- 删除无调用者的 noChange／样式叠加分支；当前 provider 始终以请求结果替换颜色。复制时清理行尾空白，不改其他核心算法。
-
-其余核心实现按上游维护，不顺手翻译或重写。补丁行为、升级与验证归 [开发文档](../../docs/development.md#neon)；升级时同步核对源码许可证与 App 中的副本。
+补丁细节、依赖更新与回归入口由[开发文档](../../docs/development.md#neon)维护，不在此复制实现或测试清单。升级时保留许可证，并同步核对 App 中分发的副本。

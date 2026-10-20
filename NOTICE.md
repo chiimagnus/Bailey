@@ -25,4 +25,4 @@ Bailey 使用 [GNU GPLv3](LICENSE)。本页用于定位项目来源、文档参�
 | Ghostty 及 Swift 包依赖 | [Package.resolved](Bailey.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved) 记录来源和解析提交；许可证随各依赖源码维护 |
 | TSX 本地解析器 | 来源、固定修订和更新边界见 [development.md](docs/development.md#语法解析与-diff) |
 
-升级依赖或重新生成资源时，保留原有许可证与版权文本；自有中文文档整理不翻译、覆盖或删减这些原文。补丁的行为与验证由 [development.md](docs/development.md#依赖与本地补丁) 维护。
+升级依赖或重新生成资源时，保留原有许可证与版权文本；自有文档整理不翻译、覆盖或删减这些原文。补丁的行为与验证由 [development.md](docs/development.md#依赖与本地补丁) 维护。

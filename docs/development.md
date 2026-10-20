@@ -58,30 +58,9 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 
 ### 原生文件与 Diff 编辑器
 
-Bailey 的唯一文本控件是系统 `NSTextView + TextKit 2`。
-`NativeCodeTextView` 持有一份 `NSTextContentStorage` 与 `NSTextLayoutManager`，
-由文件／Diff 标签保留，SwiftUI 重绘、窗口停靠与视图重挂载不重新创建正文或 Undo 栈。
-不再引用、构建或维护 `Vendor/STTextView` 及其上游插件；不回退 TextKit 1，也不采用 WebKit／Electron 编辑器。
+文件与 Diff 共用系统 `NSTextView + TextKit 2`，原生视图由标签保留；不再依赖 STTextView 文本控件或插件。编辑器需要保留有限且一致的视图／文本容器宽度，否则远距导航可能意外排版全文。
 
-**性能的关键不变量是视图宽度与文本容器宽度一致且有限**。
-不折行时同步扩大两者，避免 TextKit 2 因容器与拥有它的视图宽度不一致而沿途物化整个文档。
-原生方案在 2026-10-19 当前 Mac 的 10 万行、文首插入 30 次测试中实测中位数约 1.54ms、
-P95 约 1.73ms；这是原生 XCTest 宿主指标，不等于正式前台 E2E 帧延迟。
-历史 STTextView 在远距跳转时累计创建大量段落；隔离研究与调用栈详见本地
-`.github/features/editor-rendering-performance/evidence-p1.md`。
-
-原生状态桥接仍必须保留以下可观察行为：组合输入的一次 Undo/Redo；
-`NSTextStorage` 字符事件同步文件脏状态与增量高亮（包括撤销）；
-离屏追加使用独立 Undo 事务；原生只读及辅助功能写入都拒绝修改；
-Find、行号、选区和滚动可在标签重挂载后恢复。
-如系统默认行为不符合这些数据／访问约束，应在拥有状态的原生编辑器层修复，
-不能修改正文副本、跳过危险测试或恢复旧插件。
-
-验收至少执行 `EditorNavigationTests`、`EditorTextInputTests`、
-`SyntaxHighlightingTests`、`FileTabTests`、`DiffTabTests`、
-`PaneRetentionTests`、`TextCoordinateIndexTests` 和完整 `make test`；
-依赖变化还要求 Debug／Release 构建和签名。
-原生迁移完成时（2026-10-19）的完整测试 **436/436、0 失败、0 跳过**，包含独立 Windows SSH 主机的实际操作；当时 Debug／Release 均完成严格签名校验。这是迁移提交的历史基线，不代表后续提交已验收；当前追加回归与环境限制记录于本地 `.github/features/editor-rendering-performance/evidence-p1.md`。没有 macOS 15.6 真机时不得写成实际验证过。
+输入法、Undo、保存、行号、只读辅助功能及视图重挂载的契约由[编辑器文档](features/editor.md)维护；相关测试选择与完成标准见 [testing.md](testing.md)。历史性能数据、取舍和验收限制见[固定提交中的 P1 证据](https://github.com/chiimagnus/Bailey/blob/e1b9fe700424a561910c6dedb0c5653150212740/.github/features/editor-rendering-performance/evidence-p1.md)，不作为所有版本的性能承诺。依赖变化同时核对 Debug／Release 构建与签名。
 
 ### Neon
 

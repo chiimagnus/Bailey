@@ -82,4 +82,4 @@ Bailey 支持 Apple Silicon、macOS 15.6 及以后版本，自有 App 和 XCTest
 
 本页约定指导新改动，不表示所有历史代码已经逐条通过静态规则。当前没有独立的 SwiftLint、格式化或纯层扫描 gate；以真实 Swift 6 构建、XCTest、变更审查和必要实测验证。机械入口、完成标准和未测范围统一见 [testing.md](testing.md)。
 
-文档按 [docs 索引](README.md#文档维护) 保持单一归属，行为变化的同一任务更新事实、原因、导航和验证边界。仓库自有文档使用中文，第三方原文及许可证保留；提交规范见 [CONTRIBUTING.md](../CONTRIBUTING.md)。
+文档按 [docs 索引](README.md#文档维护) 保持单一归属，行为变化的同一任务更新事实、原因、导航和验证边界。维护者文档以中文为主，用户 README 提供中英文；第三方原文及许可证保留；提交规范见 [CONTRIBUTING.md](../CONTRIBUTING.md)。

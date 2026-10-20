@@ -52,9 +52,7 @@ Tree-sitter 的 LF 行列索引独立于 TextKit 的自然段落。
 组合输入保持一条 Undo 事务；离屏追加也必须拥有独立可撤销操作。
 不能引入多段合并占位、无效缓存清理或丢全文的内容管理器来冒充优化。
 
-历史方案与 Zed Rope／VS Code Piece Tree 的源码对比仍保留在
-`.github/features/editor-rendering-performance/evidence-p1.md`；
-当前已经决定使用 Apple 原生实现，不再把 STTextView 作为可回退路线。
+历史方案及与 Zed Rope／VS Code Piece Tree 的对比见[归档证据](https://github.com/chiimagnus/Bailey/blob/e1b9fe700424a561910c6dedb0c5653150212740/.github/features/editor-rendering-performance/evidence-p1.md)。当前使用 Apple 原生实现，不再回退 STTextView。
 
 ## 保存与关闭
 
@@ -102,4 +100,4 @@ Git Ignore 在普通 `.gitignore` 标签持有的原生缓冲末尾插入规则�
 
 独立 App 验收必须实际输入、执行前台 ⌘S、核对磁盘字节，并在重启后再次读取。单纯派发快捷键、读取 AX 值或显示截图均不能代替最终保存结果。
 
-本次 TextKit 2 迁移的测试数字、已修复缺陷及未完成条件见 [P1-T5 验收记录](../../.github/features/editor-rendering-performance/evidence-p1.md)；实时任务状态以同目录 `todo.toml` 为准，不在本页重复维护。
+TextKit 2 迁移的测试结果、历史缺陷及未完成验收条件见 [P1-T5 归档记录](https://github.com/chiimagnus/Bailey/blob/e1b9fe700424a561910c6dedb0c5653150212740/.github/features/editor-rendering-performance/evidence-p1.md)。当前的验证要求以本页与[测试文档](../testing.md)为准。
