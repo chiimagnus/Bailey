@@ -763,7 +763,7 @@ final class TerminalManager {
             for tab in project.tabs {
                 guard tab.content.id == session.id else { continue }
                 selectedProjectID = project.id
-                project.selectedTabID = tab.id
+                project.selectTab(tab.id)
                 return
             }
         }
@@ -1237,7 +1237,7 @@ final class TerminalManager {
                 context.tab.contextSession = restoredSessions[context.sessionIndex]
             }
             if let index = saved.selectedTabIndex, project.tabs.indices.contains(index) {
-                project.selectedTabID = project.tabs[index].id
+                project.selectTab(project.tabs[index].id)
             }
             project.dock.restore(saved.dock, tabIDs: project.tabs.map(\.id))
             project.resetRecency()

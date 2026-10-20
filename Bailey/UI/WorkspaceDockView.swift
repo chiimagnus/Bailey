@@ -74,7 +74,7 @@ final class DockTabDragCoordinator {
             position.item, into: destination,
             edge: position.edge, index: position.index
         ) else { return }
-        if case .tab(let id) = position.item { project.selectedTabID = id }
+        if case .tab(let id) = position.item { project.selectTab(id) }
     }
 }
 
@@ -290,7 +290,7 @@ private struct DockTabGroupView: View {
         project.dock.activate(group.id)
         if case .tab(let id)? = project.dock.root.group(id: group.id)?.selected,
            project.selectedTabID != id {
-            project.selectedTabID = id
+            project.selectTab(id)
         }
     }
 
@@ -529,7 +529,7 @@ private struct DockTabGroupView: View {
 
     private func select(_ item: DockItem) {
         project.dock.select(item)
-        if case .tab(let id) = item { project.selectedTabID = id }
+        if case .tab(let id) = item { project.selectTab(id) }
     }
 
     private func closeTool(_ item: DockItem) { project.dock.removeTool(item) }

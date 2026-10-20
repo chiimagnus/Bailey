@@ -189,7 +189,7 @@ final class GitInteractiveRebaseTests: XCTestCase {
                     session.location = .remote(connection)
                     let tab = PaneTab(content: .session(session))
                     project.append(tab)
-                    project.selectedTabID = tab.id
+                    project.selectTab(tab.id)
                     context = try XCTUnwrap(project.panelContext)
                 }
                 defer { source?.terminate() }

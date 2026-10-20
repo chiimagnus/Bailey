@@ -43,9 +43,8 @@ final class Project: nonisolated Identifiable {
             onSnapshotChange?()
         }
     }
-    var selectedTabID: UUID? {
+    private(set) var selectedTabID: UUID? {
         didSet {
-            if let selectedTabID { dock.select(.tab(selectedTabID)) }
             guard selectedTabID != oldValue else { return }
             if let selectedTabID {
                 recentTabIDs.removeAll { $0 == selectedTabID }
@@ -108,6 +107,12 @@ final class Project: nonisolated Identifiable {
 
     var selectedTab: PaneTab? {
         tabs.first { $0.id == selectedTabID }
+    }
+
+    func selectTab(_ id: UUID) {
+        guard tabs.contains(where: { $0.id == id }) else { return }
+        dock.select(.tab(id))
+        selectedTabID = id
     }
 
     /// Tabs by recency of use, selected first. Tabs not yet selected this
@@ -313,7 +318,7 @@ final class Project: nonisolated Identifiable {
         let session = makeSession(directory: directory, launchCommand: launchCommand, initialWorkspace: initialWorkspace, initialInput: initialInput)
         let tab = makeTab(content: .session(session))
         insertNextToSelected(tab)
-        selectedTabID = tab.id
+        selectTab(tab.id)
         return session
     }
 
@@ -486,7 +491,7 @@ final class Project: nonisolated Identifiable {
             if selectedTabID == tab.id, let workspace {
                 SSHHostWorkspaces.retryConnection(for: workspace, path: path)
             }
-            selectedTabID = tab.id
+            selectTab(tab.id)
             return
         }
         let file = FileTab(
@@ -504,7 +509,7 @@ final class Project: nonisolated Identifiable {
             _ = dock.place(.tab(tab.id), in: groupID)
         }
         insertNextToSelected(tab)
-        selectedTabID = tab.id
+        selectTab(tab.id)
     }
 
     private func findFileTab(path: String, workspace: String?) -> PaneTab? {
@@ -563,7 +568,7 @@ final class Project: nonisolated Identifiable {
         let tab = makeTab(content: .browser(browser))
         tab.contextSession = context
         insertNextToSelected(tab)
-        selectedTabID = tab.id
+        selectTab(tab.id)
         return browser
     }
 
@@ -622,7 +627,7 @@ final class Project: nonisolated Identifiable {
             diff.untracked = untracked
             diff.origPath = origPath
             if changed || !diff.isLoading { diff.reload() }
-            selectedTabID = tab.id
+            selectTab(tab.id)
             return
         }
         let diff = DiffTab(
@@ -633,7 +638,7 @@ final class Project: nonisolated Identifiable {
         let tab = makeTab(content: .diff(diff))
         tab.contextSession = context
         insertNextToSelected(tab)
-        selectedTabID = tab.id
+        selectTab(tab.id)
     }
 
     /// Opens one file as it changed in a historical commit, comparing the
@@ -663,7 +668,7 @@ final class Project: nonisolated Identifiable {
             if changed || (!diff.isLoading && (source.isLive || diff.error != nil || !diff.hasLoadedContent)) {
                 diff.reload()
             }
-            selectedTabID = tab.id
+            selectTab(tab.id)
             return
         }
         let diff = DiffTab(repoRoot: repoRoot, path: path, source: source,
@@ -672,7 +677,7 @@ final class Project: nonisolated Identifiable {
         let tab = makeTab(content: .diff(diff))
         tab.contextSession = context
         insertNextToSelected(tab)
-        selectedTabID = tab.id
+        selectTab(tab.id)
     }
 
     private func findDiffTab(
@@ -724,7 +729,7 @@ final class Project: nonisolated Identifiable {
     /// an unrelated dock region elsewhere in the same workspace.
     func closeOthers(_ keep: PaneTab) {
         guard let group = dock.group(containing: .tab(keep.id)) else { return }
-        selectedTabID = keep.id
+        selectTab(keep.id)
         let ids = Set(group.items.compactMap { item -> UUID? in
             if case .tab(let id) = item, id != keep.id { return id }
             return nil
@@ -829,7 +834,7 @@ final class Project: nonisolated Identifiable {
     func select(index: Int) {
         let ids = dock.tabOrder
         guard ids.indices.contains(index) else { return }
-        selectedTabID = ids[index]
+        selectTab(ids[index])
     }
 
     func selectNext() {
@@ -844,7 +849,7 @@ final class Project: nonisolated Identifiable {
         let ids = dock.tabOrder
         guard !ids.isEmpty, let current = ids.firstIndex(where: { $0 == selectedTabID })
         else { return }
-        selectedTabID = ids[(current + offset + ids.count) % ids.count]
+        selectTab(ids[(current + offset + ids.count) % ids.count])
     }
 
     // MARK: - Layout mutation plumbing
@@ -928,7 +933,7 @@ final class Project: nonisolated Identifiable {
     func append(_ tab: PaneTab) {
         register(tab)
         tabs.append(tab)
-        selectedTabID = tab.id
+        selectTab(tab.id)
     }
 
     private func removeTabWithContent(_ contentID: UUID) {

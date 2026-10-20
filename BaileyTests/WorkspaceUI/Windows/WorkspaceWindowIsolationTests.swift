@@ -52,7 +52,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             XCTAssertNil(project.focusedContent)
             XCTAssertTrue(self.editor(in: host) === editor)
             XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), file.text)
-            project.selectedTabID = tab.id
+            project.selectTab(tab.id)
             if NSApp.isActive && window.isKeyWindow {
                 try await wait { window.firstResponder === editor }
             }

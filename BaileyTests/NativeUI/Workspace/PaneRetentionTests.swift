@@ -39,7 +39,7 @@ final class PaneRetentionTests: XCTestCase {
         project.append(other)
         let selected = expectation(description: "Project selection is directly observed")
         withObservationTracking({ _ = project.selectedTabID }) { selected.fulfill() }
-        project.selectedTabID = tab.id
+        project.selectTab(tab.id)
         await fulfillment(of: [selected], timeout: 1)
         XCTAssertTrue(project.selectedTab === tab)
         XCTAssertEqual(project.dock.group(containing: .tab(tab.id))?.selected, .tab(tab.id))

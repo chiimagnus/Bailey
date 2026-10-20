@@ -5,6 +5,20 @@ import XCTest
 
 @MainActor
 final class DockWorkspaceTests: XCTestCase {
+    func testClosingRecentWorkDoesNotOverrideAnActiveTool() throws {
+        let project = Project(fallbackName: "close focus", workspaceConfiguration: .standard)
+        project.newBrowserTab(initialFocus: .none)
+        project.newBrowserTab(initialFocus: .none)
+        let recent = try XCTUnwrap(project.selectedTab)
+        project.dock.select(.files)
+        let tools = project.dock.activeGroupID
+        project.close(recent)
+        XCTAssertEqual(project.tabs.count, 1)
+        XCTAssertEqual(project.dock.activeGroupID, tools)
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+        XCTAssertNil(project.focusedContent)
+    }
+
     func testMovingActiveContentDoesNotDeactivateItThroughAnIntermediateGroup() throws {
         let dock = DockWorkspaceModel()
         let id = UUID()
@@ -50,9 +64,9 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertEqual(snapshots, 0)
         XCTAssertEqual(try encoder.encode(dock.snapshot(tabIDs: project.tabs.map(\.id))), before)
         XCTAssertTrue(first.webView === webView)
-        project.selectedTabID = firstTab.id
+        project.selectTab(firstTab.id)
         dock.select(.files)
-        project.selectedTabID = firstTab.id
+        project.selectTab(firstTab.id)
         XCTAssertEqual(project.focusedContent?.id, first.id, "Reselecting MRU must reactivate its group")
     }
 
