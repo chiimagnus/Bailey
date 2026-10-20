@@ -127,10 +127,10 @@ final class PanelContextTests: XCTestCase {
         let manager = TerminalManager()
         defer { manager.windowClosed() }
         let git = GitStatusModel()
-        manager.addLocalItems([firstURL])
+        manager.addLocalFolders([firstURL])
         let firstProject = try XCTUnwrap(manager.selectedProject)
         git.syncSelectedProject(in: manager)
-        manager.addLocalItems([secondURL])
+        manager.addLocalFolders([secondURL])
         let secondProject = try XCTUnwrap(manager.selectedProject)
         git.syncSelectedProject(in: manager)
         try await wait { git.rootPath == secondURL.path && git.hasResolvedStatus && !git.isRefreshing }

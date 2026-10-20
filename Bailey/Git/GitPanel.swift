@@ -785,6 +785,33 @@ struct GitPanel: View {
                 && model.refsByName["refs/heads/" + name]?.oid == commit.hash
         }
         switch action {
+        case .createWorktree:
+            guard model.canCreateWorktree(for: name) else { return }
+            let parent = (target.repository as NSString).deletingLastPathComponent
+            let basename = (target.repository as NSString).lastPathComponent
+            let suggested = (parent as NSString).appendingPathComponent(
+                basename + "-" + name.replacingOccurrences(of: "/", with: "-")
+            )
+            let dialog = NSAlert()
+            dialog.messageText = String(localized: "Create Worktree…", table: "Git")
+            dialog.informativeText = name
+            let path = NSTextField(string: suggested)
+            path.placeholderString = String(localized: "Absolute Worktree Directory", table: "Git")
+            path.frame = NSRect(x: 0, y: 0, width: 410, height: 24)
+            dialog.accessoryView = path
+            dialog.window.initialFirstResponder = path
+            dialog.addButton(withTitle: String(localized: "Create Worktree", table: "Git"))
+            dialog.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+            dialog.beginSheetModal(for: window) { response in
+                guard response == .alertFirstButtonReturn, isCurrent(),
+                      model.canCreateWorktree(for: name) else { return }
+                performOperation(.branchMenu) {
+                    model.createWorktree(
+                        for: name, at: path.stringValue, expectedOID: commit.hash,
+                        target: target, isCurrentTarget: isCurrent
+                    )
+                }
+            }
         case .merge, .rebase:
             presentCommitDialog(commit, action: action == .merge ? .merge : .rebase,
                                 selectedRefName: "refs/heads/" + name)
@@ -845,6 +872,80 @@ struct GitPanel: View {
             presentArchiveDialog(reference: "refs/heads/" + name,
                                  objectOID: commit.hash, target: target,
                                  context: context, window: window, isCurrent: isCurrent)
+        }
+    }
+
+    private func presentWorktreeAction(
+        _ location: GitStatusModel.WorktreeLocation,
+        action: RecentCommitsView.WorktreeAction
+    ) {
+        guard let window = manager.attachedWindow, let project,
+              manager.selectedProject === project, let context = project.panelContext,
+              model.matchesPanelTarget(context.identity), !model.isBusy,
+              model.hasCurrentWorktrees, model.worktreeLocations.contains(location) else { return }
+        let target = model.actionTarget()
+        let isCurrent: @MainActor () -> Bool = {
+            manager.attachedWindow === window && manager.selectedProject === project
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity)
+                && model.isCurrent(target) && model.worktreeLocations.contains(location)
+        }
+        guard isCurrent() else { return }
+        switch action {
+        case .open:
+            guard !location.isPrunable else { return }
+            if context.isRemote {
+                guard target.scope.hasPrefix("ssh:") else { return }
+                let host = String(target.scope.dropFirst(4))
+                Task { @MainActor in
+                    do {
+                        try await manager.addSSHItems(
+                            host: host, paths: [location.path], isCurrentTarget: isCurrent
+                        )
+                    } catch {
+                        if isCurrent() { WorkspaceNativeDialogs.showError(error, in: window) }
+                    }
+                }
+            } else {
+                manager.addLocalFolders([URL(fileURLWithPath: location.path, isDirectory: true)])
+            }
+        case .revealInFinder:
+            guard !context.isRemote, !location.isPrunable else { return }
+            NSWorkspace.shared.activateFileViewerSelecting([
+                URL(fileURLWithPath: location.path, isDirectory: true)
+            ])
+        case .remove:
+            guard !location.isMain, !location.isLocked, !location.isPrunable else { return }
+            guard !TerminalManager.isWorktreeInUse(path: location.path, scope: target.scope) else {
+                let warning = NSAlert()
+                warning.messageText = String(localized: "Worktree is in use", table: "Git")
+                warning.informativeText = String(
+                    localized: "Close the Worktree's projects, editors and terminals before removing it.",
+                    table: "Git"
+                )
+                warning.addButton(withTitle: String(localized: "OK", table: "Sidebar"))
+                warning.beginSheetModal(for: window)
+                return
+            }
+            let dialog = NSAlert()
+            dialog.messageText = String(localized: "Remove Worktree…", table: "Git")
+            dialog.informativeText = [
+                location.path,
+                location.branch ?? String(localized: "Detached HEAD", table: "Git"),
+                String(localized: "Only clean Worktrees can be removed. The branch is preserved.", table: "Git")
+            ].joined(separator: "\n")
+            dialog.addButton(withTitle: String(localized: "Remove Worktree", table: "Git"))
+            dialog.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+            dialog.beginSheetModal(for: window) { response in
+                guard response == .alertFirstButtonReturn, isCurrent() else { return }
+                performOperation(.moreMenu) {
+                    model.removeWorktree(location, target: target, isCurrentTarget: {
+                        isCurrent() && !TerminalManager.isWorktreeInUse(
+                            path: location.path, scope: target.scope
+                        )
+                    })
+                }
+            }
         }
     }
 
@@ -1687,6 +1788,35 @@ struct GitPanel: View {
                             canActOnStash: !model.isBusy && model.canUseCurrentStashes,
                             stashAction: { stash, action in
                                 presentStashDialog(stash, action: action)
+                            },
+                            openWorktreeDiff: { worktree, entry, staged in
+                                guard let project, manager.selectedProject === project,
+                                      let context = project.panelContext,
+                                      project.matchesPanelTarget(context.identity),
+                                      model.matchesPanelTarget(context.identity),
+                                      model.canUseCurrentStatus,
+                                      model.graphCommits.contains(where: {
+                                          $0.worktree?.path == worktree.path
+                                              && $0.worktree?.entries.contains(entry) == true
+                                      })
+                                else { return }
+                                manager.openDiff(
+                                    repoRoot: worktree.path, path: entry.path,
+                                    staged: staged, untracked: entry.isUntracked,
+                                    origPath: entry.diffOriginalPath(staged: staged)
+                                )
+                            },
+                            canActOnWorktrees: !model.isBusy && model.hasCurrentWorktrees
+                                && model.canUseCurrentReferences,
+                            canRevealWorktreeInFinder: model.actionTarget().scope == "local",
+                            worktreeAction: { location, action in
+                                presentWorktreeAction(location, action: action)
+                            },
+                            canCreateWorktree: { ref in
+                                model.canCreateWorktree(for: ref.name)
+                            },
+                            createWorktree: { ref, commit in
+                                presentBranchAction(ref, commit: commit, action: .createWorktree)
                             }
                         )
                         .frame(maxWidth: .infinity)
@@ -1812,11 +1942,7 @@ struct GitPanel: View {
             openDiff: {
                 guard model.isCurrent(entry) else { return }
                 var diffEntry = entry
-                if kind == .unstaged && (entry.staged == "R" || entry.staged == "C") {
-                    // A staged rename/copy's unstaged side compares the
-                    // destination in the index with that same worktree path.
-                    diffEntry.origPath = nil
-                }
+                diffEntry.origPath = entry.diffOriginalPath(staged: kind == .staged)
                 openDiff(diffEntry, kind == .staged)
             },
             openFile: { openIfPossible(entry) },

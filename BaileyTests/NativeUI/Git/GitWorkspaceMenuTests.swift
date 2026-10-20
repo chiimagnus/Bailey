@@ -38,7 +38,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         XCTAssertEqual(result.status, 0, result.stderr)
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
         let path = root.appendingPathComponent(".gitignore").path
         try Data("existing-rule\r\n".utf8).write(to: URL(fileURLWithPath: path))
@@ -85,7 +85,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
         let path = root.appendingPathComponent(".gitignore")
         try Data("cached-rule\n".utf8).write(to: path)
@@ -113,7 +113,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
         let context = try XCTUnwrap(project.panelContext)
         try await project.ignoreGitPaths(["build"], isDirectory: true, repository: root.path,
@@ -155,7 +155,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let model = GitStatusModel()
         model.syncSelectedProject(in: manager)
         try await wait {
@@ -226,7 +226,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         try Data("keep".utf8).write(to: untracked)
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
         let window = NSWindow(contentRect: NSRect(x: -1200, y: -1200, width: 500, height: 400),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -293,7 +293,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let model = GitStatusModel()
         model.syncSelectedProject(in: manager)
         try await wait { model.hasResolvedStatus && !model.isRefreshing && model.changedEntries.count == 3 }

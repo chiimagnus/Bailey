@@ -638,9 +638,10 @@ final class DiffTabTests: XCTestCase {
     }
 
     func testAppearanceChangeAfterReadErrorKeepsLastSuccessfulDiff() async throws {
-        let suite = "bailey-diff-appearance-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let domain = "bailey-diff-appearance-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        // The native-text assertion needs an isolated, explicitly unified review mode.
         let preferences = DiffViewPreferences(defaults: defaults)
         preferences.prefersEditing = false
         preferences.diffStyle = .unified

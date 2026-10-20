@@ -87,6 +87,83 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(restored.groups.flatMap(\.items).count, 2)
     }
 
+    func testMacFileInSSHProjectRestoresFromMacAndLegacyRemoteTabKeepsItsMachine() async throws {
+        typealias Snapshot = SessionSnapshot.ProjectSnapshot
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("same.swift")
+        try "Mac bytes".write(to: path, atomically: true, encoding: .utf8)
+
+        let mac = Snapshot.TabSnapshot(
+            content: .file(path: path.path, editorState: EditorState(selectionLocation: 3)),
+            historyKey: nil, customName: "Mac", contextSessionIndex: nil,
+            localFile: true
+        )
+        let json = try JSONEncoder().encode(mac)
+        let decoded = try JSONDecoder().decode(Snapshot.TabSnapshot.self, from: json)
+        XCTAssertEqual(decoded.localFile, true)
+
+        let project = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
+        project.sshHost = "invalid-p4-snapshot"
+        let tab = project.restoreTab(from: decoded)
+        guard case .file(let restoredMac) = tab.content else {
+            return XCTFail("Restored file must be a native FileTab")
+        }
+        XCTAssertNil(restoredMac.workspaceIdentity)
+        try await restoredMac.waitForText()
+        XCTAssertEqual(restoredMac.text, "Mac bytes")
+        XCTAssertEqual(restoredMac.editorState.selectionLocation, 3)
+
+        // A snapshot from before P4 has no localFile key. Preserve SSH identity.
+        var legacyObject = try XCTUnwrap(JSONSerialization.jsonObject(with: json) as? [String: Any])
+        legacyObject.removeValue(forKey: "localFile")
+        let legacy = try JSONDecoder().decode(
+            Snapshot.TabSnapshot.self, from: JSONSerialization.data(withJSONObject: legacyObject)
+        )
+        XCTAssertNil(legacy.localFile)
+        let remoteTab = project.restoreTab(from: legacy)
+        guard case .file(let remote) = remoteTab.content else {
+            return XCTFail("Legacy remote file tab must be restored")
+        }
+        XCTAssertEqual(remote.workspaceIdentity, "ssh:invalid-p4-snapshot")
+        XCTAssertTrue(remote !== restoredMac)
+    }
+
+    func testRealWindowSnapshotPersistsMacFileInsideSSHProject() async throws {
+        XCTAssertTrue(BaileyInstanceMode.isIsolated)
+        let previous = SessionStore.load()
+        let previousHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(previous)
+            TerminalHistoryStore.save(previousHistories)
+        }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("open-in-ssh.swift")
+        try "disk bytes".write(to: file, atomically: true, encoding: .utf8)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        let ssh = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
+        ssh.sshHost = "invalid-p4-autosave"
+        ssh.customDirectory = "/remote/project"
+        manager.projects.append(ssh)
+        manager.selectedProjectID = ssh.id
+        XCTAssertTrue(manager.openExternalLocalItems([file]).isEmpty)
+        try await waitForSnapshot { windows in
+            windows.flatMap(\.projects).contains { project in
+                project.sshHost == "invalid-p4-autosave" && project.tabs.contains { tab in
+                    guard case .file(let path, _) = tab.content else { return false }
+                    return path == file.path && tab.localFile == true
+                }
+            }
+        }
+        XCTAssertEqual(manager.projects.count, 1)
+        XCTAssertEqual(manager.selectedProjectID, ssh.id)
+    }
+
     func testSavedHistoryKeysPairWithSidecarAndOrphansAreCleared() throws {
         XCTAssertTrue(BaileyInstanceMode.isIsolated)
         let previousWindows = SessionStore.load()
@@ -154,7 +231,7 @@ final class SessionStoreTests: XCTestCase {
 
         let projectAdded = expectation(description: "Window manager directly observes project insertion")
         withObservationTracking({ _ = first.projects.map(\.id) }) { projectAdded.fulfill() }
-        first.addLocalItems([directory])
+        first.addLocalFolders([directory])
         await fulfillment(of: [projectAdded], timeout: 1)
         let project = try XCTUnwrap(first.selectedProject)
         project.customName = "Edited Project"
@@ -270,7 +347,7 @@ final class SessionStoreTests: XCTestCase {
         let second = TerminalManager()
         var secondClosed = false
         defer { if !secondClosed { second.windowClosed() } }
-        second.addLocalItems([directory])
+        second.addLocalFolders([directory])
         try await waitForSnapshot { $0.count == existingManagerCount + 2 }
         first.windowClosed()
         firstClosed = true

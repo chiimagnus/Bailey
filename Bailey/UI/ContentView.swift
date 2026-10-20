@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     private let themeChanges = Theme.changes
@@ -28,7 +29,10 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     HStack { WindowDragArea().frame(maxWidth: .infinity) }
                         .frame(height: 38)
-                    emptyState.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    emptyState
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .onDrop(of: [UTType.fileURL.identifier], delegate: FinderWindowDrop(manager: manager))
                 }
                 .background(Color(nsColor: Theme.background))
             }
@@ -62,6 +66,7 @@ struct ContentView: View {
         ))
         .onAppear {
             installFileErrorPresentation()
+            git.setLocalFileEventsForeground(NSApp.isActive)
             syncGit()
         }
         .onChange(of: manager.projects.map(\.id)) { installFileErrorPresentation() }
@@ -107,7 +112,8 @@ struct ContentView: View {
                 alert.informativeText = detail
                 alert.alertStyle = .warning
                 window.makeKeyAndOrderFront(nil)
-                alert.runModal()
+                NSApp.activate()
+                alert.beginSheetModal(for: window, completionHandler: { _ in })
             }
         }
     }
@@ -119,8 +125,8 @@ struct ContentView: View {
     private var emptyState: some View {
         emptyStatePrompt(
             title: String(localized: "No open projects", table: "Interface"),
-            buttonTitle: String(localized: "Add Files or Folders…", table: "Interface"),
-            action: { manager.chooseLocalItems() }
+            buttonTitle: String(localized: "Add Folder…", table: "Interface"),
+            action: { manager.chooseFolders() }
         )
     }
 
@@ -137,6 +143,71 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
             Button(action: action) { Text(verbatim: buttonTitle) }
         }
+    }
+}
+
+/// Shared Finder URL conversion for ordinary SwiftUI drop regions. Never
+/// mount this delegate above a native Ghostty terminal or WKWebView: those
+/// surfaces own their own drag events.
+@MainActor
+struct FinderWindowDrop: DropDelegate {
+    let manager: TerminalManager
+    var destination: (projectID: UUID, groupID: UUID)? = nil
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [UTType.fileURL.identifier])
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        Self.receive(
+            info.itemProviders(for: [UTType.fileURL.identifier]),
+            preferred: manager, destination: destination
+        )
+    }
+
+    static func receive(
+        _ providers: [NSItemProvider], preferred manager: TerminalManager,
+        destination: (projectID: UUID, groupID: UUID)? = nil
+    ) -> Bool {
+        let projectID = manager.selectedProjectID
+        return receive(providers, preferred: manager) { urls, owner in
+            guard owner.selectedProjectID == projectID else { return }
+            if let destination {
+                guard owner.selectedProjectID == destination.projectID,
+                      owner.selectedProject?.dock.root.group(id: destination.groupID) != nil
+                else { return }
+            }
+            TerminalManager.openExternalFiles(
+                urls, preferred: owner, destination: destination
+            )
+        }
+    }
+
+    static func receive(
+        _ providers: [NSItemProvider], preferred manager: TerminalManager,
+        action: @escaping @MainActor ([URL], TerminalManager) -> Void
+    ) -> Bool {
+        guard let receivingWindow = manager.attachedWindow else { return false }
+        let providers = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+                && $0.canLoadObject(ofClass: NSURL.self)
+        }
+        guard !providers.isEmpty else { return false }
+        Task { @MainActor [weak manager, weak receivingWindow] in
+            var urls: [URL] = []
+            for provider in providers {
+                let url: URL? = await withCheckedContinuation { continuation in
+                    _ = provider.loadObject(ofClass: NSURL.self) { object, _ in
+                        continuation.resume(returning: (object as? NSURL).map { $0 as URL })
+                    }
+                }
+                if let url, url.isFileURL { urls.append(url) }
+            }
+            guard let manager, let receivingWindow,
+                  manager.attachedWindow === receivingWindow, !urls.isEmpty else { return }
+            action(urls, manager)
+        }
+        return true
     }
 }
 
@@ -170,26 +241,41 @@ enum ProjectCloseConfirmation {
 /// validation and project mutations remain on TerminalManager.
 @MainActor
 enum WorkspaceNativeDialogs {
-    static func localPanel() -> NSOpenPanel {
+    static func folderPanel() -> NSOpenPanel {
         let panel = NSOpenPanel()
-        panel.canChooseFiles = true
+        panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
         panel.prompt = String(localized: "Add", table: "Terminal")
-        panel.message = String(localized: "Add files and folders to Bailey", table: "Terminal")
+        panel.message = String(localized: "Add folders to Bailey", table: "Terminal")
         return panel
     }
 
-    static func chooseLocalItems(in window: NSWindow?, onSelection: @escaping ([URL]) -> Void) {
-        let panel = localPanel()
-        let finish: (NSApplication.ModalResponse) -> Void = { response in
+    static func filePanel() -> NSOpenPanel {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = String(localized: "Open", table: "Sidebar")
+        panel.message = String(localized: "Open files in Bailey", table: "Terminal")
+        return panel
+    }
+
+    static func chooseFolders(in window: NSWindow, onSelection: @escaping ([URL]) -> Void) {
+        choose(folderPanel(), in: window, onSelection: onSelection)
+    }
+
+    static func chooseFiles(in window: NSWindow, onSelection: @escaping ([URL]) -> Void) {
+        choose(filePanel(), in: window, onSelection: onSelection)
+    }
+
+    private static func choose(
+        _ panel: NSOpenPanel, in window: NSWindow,
+        onSelection: @escaping ([URL]) -> Void
+    ) {
+        panel.beginSheetModal(for: window) { response in
             guard response == .OK else { return }
             onSelection(panel.urls)
-        }
-        if let window {
-            panel.beginSheetModal(for: window, completionHandler: finish)
-        } else {
-            finish(panel.runModal())
         }
     }
 

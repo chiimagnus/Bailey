@@ -65,11 +65,12 @@ make test ONLY_TESTING=BaileyTests/FileTabTests
 
 | 改动 | 相关测试 |
 | --- | --- |
-| 应用身份与资源标识 | `AppIdentityTests` |
+| 应用身份、Finder 类型注册与原生 Apple Event 系统入口 | `AppIdentityTests`、`WorkspaceWindowIsolationTests`；真实 Finder/Dock 进程外投递需获授权的受控图形会话 |
 | Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests` |
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
 | Git 环境、刷新、写操作与失败状态 | `GitExternalRefreshTests`、`GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitTagActionTests`、`GitWorkspaceActionTests`、`GitStashActionTests`、`GitBranchDialogTests`、`GitTagDialogTests`、`GitWorkspaceMenuTests`、`GitStashDialogTests` |
+| Git 图谱拓扑、引用标签、颜色、Worktree 菜单与窄侧栏 | `CommitGraphLayoutTests`、`RecentCommitsViewTests` |
 | SSH 命令、断线、重连和过期结果 | `RemoteCommandsTests`、`RemoteLifetimeTests` |
 | 文件、Diff 和原生内容保留 | `FileTabTests`、`DiffTabTests`、`DiffEngineTests`、`PaneRetentionTests` |
 | 高亮坐标、渲染色与字体／撤销 | `TextCoordinateIndexTests`、`SyntaxHighlightingTests` |
@@ -97,6 +98,10 @@ open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Bailey.app" --args --iso
 **普通设置仍然共享。** 隔离实例中不得直接改写用户设置；确需设置测试时使用独立 Home，并核实真正的配置、UserDefaults 与数据写入位置。临时文件、Git 仓库和受控后端不得指向正式项目。
 
 并行构建或测试同一项目时，为各任务指定独立的 `DERIVED_DATA`（如 `make test DERIVED_DATA=build/DerivedData-review`），避免共用产物被另一任务覆盖或重新签名；不得清理其他任务的构建目录。
+
+Finder 拖进运行中 Bailey 时，**先核对 Finder 与 Bailey 两个窗口的屏幕边界，目标点不能落在 Finder 自身窗口或侧栏内**，否则会被 Finder 执行移动／废纸篓等本机操作，不能归因于 Bailey。核对系统当前选中项与拖动的真实 provider 数量；双窗口、文件树精确行和网页上传必须检查最终编辑标签／Shell／网页内容，而不是只看鼠标事件已派发。
+
+Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 使用 Launch Services 的正式 Bundle ID 路由。测试工具不能只因有 `--isolated-ui-test` 就向工作目录中的 App 发文件：该参数会成为 `open --args` 的启动参数，但**不改变系统对 App 身份与文件事件的分发**。当用户确认正式 Bailey 已退出、核对系统进程后，可对独立构建包使用 `open -n -a "$TEST_APP" --env "BAILEY_UI_TEST_RUN_ID=$UUID" "$TEMP_FILE"`，其中有效 UUID 环境变量使进程隔离快照与后台隧道；不传 `--args`，否则可能丢掉系统文件事件。后续 `open -a "$TEST_APP" "$TEMP_FILE"` 时必须先核对系统实际送达的是所持有的测试 PID。通过隔离快照、真实窗口数、FileTab、文件正文或图片和源文件 SHA-256 共同验证。**此方式隔离工作区数据，不隔离 GUI 会话或 Bundle ID**，不能在用户正常 Bailey 运行时测试，也不能把 `open -a` 当成 Finder「打开方式」和物理 Dock 拖动已验收的证据。
 
 真实 SSH 只使用专用且获准的测试 master；不借用用户连接或结束其后台任务。真实 Windows SSH 回归必须**明确指定获授权的测试主机**。`BAILEY_P4_TEST_SSH_HOST` 是已有的共用参数名，P4 与后续 Git 外部刷新测试都使用它；未提供时专用用例按条件跳过，不能视为真实 SSH 验收。
 
@@ -158,10 +163,13 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 | 项目与 SSH | 本机／远端同名路径隔离，切换、断线、重连和失败不串目标 |
 | 停靠与窗口 | 上下／左右组合、跨区移动、关闭、双窗口菜单和焦点，后台 Shell 不重启 |
 | 文件与编辑 | 创建／重命名、中文输入、查找、撤销、滚动、保存失败和关闭保护 |
+| Files 外部刷新 | 外部程序在根目录及已展开目录新建、覆盖、重命名、移动、删除文件；核对真实磁盘与文件树一致。检查面板隐藏／重新打开、App 前后台、切项目／SSH 连接、失败保留旧列表，以及空闲目录查询次数；未来改为事件驱动时还须证明无周期读取 |
 | Git 与 Diff | 工作区／索引／历史、首次提交、特殊路径、失败草稿、两侧滚动及真实写入 |
-| Git 外部刷新 | 独立 CLI 修改本机或 SSH 仓库后，前台可见 Git 面板自动更新；隐藏／后台暂停、恢复前台重新读取、失败后手动重试 |
+| Git 外部刷新 | 独立 CLI 修改本机后由文件事件更新，空闲时不周期查询；SSH 前台 5 秒兜底；Git 面板隐藏但 App 在前台时底栏仍更新，App 后台暂停，恢复前台重新读取，失败后可手动重试 |
+| Git Graph 多级菜单 | 多 Ref、多 Worktree 下用真实鼠标和键盘依次展开 `+N → Branch → Worktree → 目录 → 操作`。菜单保持打开时分别触发无数据变化的手动刷新、外部文件修改及分支／Worktree 变更，调整侧栏宽度并核对菜单宿主没有被替换，录屏确认同一菜单不因纯查询进度或布局切换而关闭，真实目标变化后操作仍经过校验；检查超过 10 秒的悬停、首次加载、明暗与窄宽面板；短 Branch（含 Worktree 数量标记）不可被拉宽，`+N` 与提交标题必须仍可见。`GitStatusModelTests` 还须验证观察依赖不因无变化刷新失效；静态 XCTest 菜单结构不能冒充真实悬停 |
 | 共享树 | Files、工作区、暂存和历史一致；窄面板、放大字体、长名称和动作命中 |
 | 浏览器 | 表单、滚动、前进后退和重挂载；默认浏览器交接与开发服务 |
+| Finder 与原生文件拖放 | Finder 右键／Dock／空态（无项目时新文件拒绝）、编辑区、顶部标签栏新增与复用 FileTab，分屏非选中组／空组／普通编辑与 Git 面板落点及已打开文件不搬组；系统「文件 → 打开文件…」⌘O、每组「＋」原生文件多选与窗口焦点、添加本机目录 ⇧⌘A 仅选目录；Projects 文件打开标签、文件夹添加目录项目，重复项目不增加，旧 `pinnedFile` 仅作历史恢复；Files 目录行/文件行/根标题/留白复制到指定本机目录，核对原文件 SHA-256、新副本、可见树刷新、部分成功、同名冲突 Sheet 和失败复制无部分目录；Ghostty 纯路径无 Return、SSH 拒绝 Mac 路径、WebKit 网页上传但不另开标签。单／双窗口原始目标、取消／晚到（包括发起后切项目、指定 Dock 组消失而拒绝错误落点）、本机／SSH 相同路径与 50+ 混合重复文件，以及内部标签／Projects 重排互不干扰 |
 | 设置与恢复 | 隔离配置的即时传播、快照和真实重启，区分显示恢复与任务恢复 |
 | 通知与命令面板 | 定位原会话、键盘选择和文件实际打开，而非仅收到事件 |
 | 视觉、键盘与基础无障碍 | 两种外观、长文案、键盘焦点与动作目标、原生按钮辅助功能名称、不同字体；纯架构改动前后无变化 |

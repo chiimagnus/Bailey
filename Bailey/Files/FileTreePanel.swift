@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct FileTreePanel: View {
     let model: FileTreeModel
@@ -14,6 +15,8 @@ struct FileTreePanel: View {
     let onRename: (_ oldPath: String, _ newPath: String) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
+    let canImportFromFinder: Bool
+    let importFromFinder: ([NSItemProvider], String) -> Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -55,9 +58,37 @@ struct FileTreePanel: View {
                 model: model, git: git, session: session,
                 sshHost: sshHost, currentFilePath: currentFilePath,
                 openFile: openFile, onRename: onRename,
-                refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget
+                refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget,
+                canImportFromFinder: canImportFromFinder,
+                importFromFinder: importFromFinder
             )
         }
+        .onDrop(of: [UTType.fileURL.identifier], delegate: FileTreeImportDrop(
+            directory: model.rootPath,
+            enabled: canImportFromFinder && isCurrentTarget(),
+            importFromFinder: importFromFinder
+        ))
+    }
+}
+
+/// File Manager has a different drop action from the surrounding workspace:
+/// copy into its actual directory, never open an editor or move the source.
+private struct FileTreeImportDrop: DropDelegate {
+    let directory: String
+    let enabled: Bool
+    let importFromFinder: ([NSItemProvider], String) -> Bool
+
+    func validateDrop(info: DropInfo) -> Bool {
+        enabled && !directory.isEmpty && info.hasItemsConforming(to: [UTType.fileURL.identifier])
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: validateDrop(info: info) ? .copy : .forbidden)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard validateDrop(info: info) else { return false }
+        return importFromFinder(info.itemProviders(for: [UTType.fileURL.identifier]), directory)
     }
 }
 
@@ -73,6 +104,8 @@ private struct FileTreeScrollView: View {
     let onRename: (String, String) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
+    let canImportFromFinder: Bool
+    let importFromFinder: ([NSItemProvider], String) -> Bool
     @Environment(\.panelFontScale) private var fontScale
 
     var body: some View {
@@ -89,6 +122,12 @@ private struct FileTreeScrollView: View {
                             isCurrentTarget: isCurrentTarget
                         )
                         .id(item.path)
+                        .onDrop(of: [UTType.fileURL.identifier], delegate: FileTreeImportDrop(
+                            directory: item.isDirectory ? item.path
+                                : (item.path as NSString).deletingLastPathComponent,
+                            enabled: canImportFromFinder && !item.isDraft && isCurrentTarget(),
+                            importFromFinder: importFromFinder
+                        ))
                     }
                 }
                 .padding(.bottom, 7)
@@ -161,6 +200,10 @@ private struct FileTreeRow: View {
                     .modifier(layout)
             }
             .contextMenu { rowMenu }
+        } else if isRemote {
+            // A remote POSIX path is not a Mac file URL, even when the same
+            // spelling happens to exist on disk here. Keep Copy Path only.
+            semanticRow.contextMenu { rowMenu }
         } else {
             semanticRow
                 .contextMenu { rowMenu }

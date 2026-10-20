@@ -98,9 +98,54 @@ final class TerminalManager {
     }
     /// Read-only access for the private, authenticated SSH handoff.
     static var activeManagers: [TerminalManager] { registry }
+
+    /// A worktree used by any live project, terminal, file or Diff tab is not
+    /// eligible for removal. Machine identity is part of every comparison.
+    static func isWorktreeInUse(path: String, scope: String) -> Bool {
+        func contains(_ candidate: String) -> Bool {
+            let root = scope == "local"
+                ? URL(fileURLWithPath: path).resolvingSymlinksInPath().path : path
+            let value = scope == "local"
+                ? URL(fileURLWithPath: candidate).resolvingSymlinksInPath().path : candidate
+            return LocalPathScope.contains(value, in: root)
+        }
+        return registry.contains { manager in
+            manager.projects.contains { project in
+                guard project.panelContext?.scope == scope else { return false }
+                if let directory = project.customDirectory,
+                   contains(directory) { return true }
+                if project.sessions.contains(where: { contains($0.panelDirectoryPath) }) {
+                    return true
+                }
+                return project.tabs.contains { tab in
+                    switch tab.content {
+                    case .file(let file):
+                        return (file.workspaceIdentity ?? "local") == scope
+                            && contains(file.path)
+                    case .diff(let diff):
+                        return (diff.workspaceIdentity ?? "local") == scope
+                            && contains(diff.repoRoot)
+                    case .session, .browser: return false
+                    }
+                }
+            }
+        }
+    }
+
     /// Folder requests can arrive while macOS is still launching Bailey, before
     /// a WindowGroup has produced a manager/window to receive them.
     private static var pendingDirectories: [String] = []
+    /// System document events can precede SwiftUI windows and saved-window recovery.
+    /// Keep the request and its completion together until the actual receiving
+    /// window is ready; a queued event is not proof a file was opened.
+    private struct PendingExternalOpen {
+        let urls: [URL]
+        let preferred: TerminalManager?
+        let originalProjectID: UUID?
+        let destination: (projectID: UUID, groupID: UUID)?
+        let completion: (Bool) -> Void
+    }
+    private static var pendingExternalFiles: [PendingExternalOpen] = []
     /// Captured from SwiftUI's openWindow environment so a Finder request can
     /// reopen Bailey after the user has closed its last window.
     private static var windowOpener: (() -> Void)?
@@ -139,7 +184,7 @@ final class TerminalManager {
             Self.pendingHistories = [:]
         }
         let queuedDirectories = Self.takePendingDirectories()
-        addLocalItems(queuedDirectories.map { URL(fileURLWithPath: $0, isDirectory: true) })
+        addLocalFolders(queuedDirectories.map { URL(fileURLWithPath: $0, isDirectory: true) })
         // The debounce can swallow changes made just before quitting;
         // capture a final snapshot while the shells are still alive.
         terminationObservation = NotificationCenter.default
@@ -177,22 +222,19 @@ final class TerminalManager {
 
     // MARK: - Projects
 
-    /// Finder, the sidebar and the keyboard shortcut all add entries to the
-    /// same project list. A selected file opens in an editor; its parent is
-    /// the Files/Git root and initial terminal directory.
-    func addLocalItems(_ urls: [URL]) {
+    /// Only an explicitly selected folder creates or selects a local project.
+    func addLocalFolders(_ urls: [URL]) {
         for url in urls {
-            let path = url.standardizedFileURL.path
+            guard url.isFileURL, url.host == nil || url.host == "localhost" else { continue }
+            let root = url.standardizedFileURL.path
             var directory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: path, isDirectory: &directory) else {
-                continue
-            }
-            let root = directory.boolValue
-                ? path : (path as NSString).deletingLastPathComponent
-            let file = directory.boolValue ? nil : path
+            guard FileManager.default.fileExists(atPath: root, isDirectory: &directory),
+                  directory.boolValue,
+                  FileManager.default.isReadableFile(atPath: root),
+                  FileManager.default.isExecutableFile(atPath: root),
+                  !NSWorkspace.shared.isFilePackage(atPath: root) else { continue }
             if let existing = projects.first(where: {
-                $0.sshHost == nil && $0.customDirectory == root
-                    && $0.pinnedFile == file
+                $0.sshHost == nil && $0.customDirectory == root && $0.pinnedFile == nil
             }) {
                 selectedProjectID = existing.id
                 continue
@@ -200,21 +242,118 @@ final class TerminalManager {
             let project = makeProject()
             project.customName = url.lastPathComponent
             project.customDirectory = root
-            project.pinnedFile = file
-            if let file { project.openFile(file) }
             insert(project)
         }
     }
 
-    func chooseLocalItems() {
-        WorkspaceNativeDialogs.chooseLocalItems(in: window) { [weak self] urls in
-            self?.addLocalItems(urls)
+    /// Finder and the Open File picker reuse a Mac buffer in this window;
+    /// new files belong to the current project, never to their parent folder.
+    @discardableResult
+    func openExternalLocalItems(
+        _ urls: [URL], destination: (projectID: UUID, groupID: UUID)? = nil
+    ) -> [URL] {
+        if let destination {
+            guard let project = selectedProject, project.id == destination.projectID,
+                  project.dock.root.group(id: destination.groupID) != nil else { return urls }
+        }
+        typealias Item = (url: URL, path: String, resolved: String, isDirectory: Bool)
+        var items: [Item] = []
+        var rejected: [URL] = []
+        for url in urls {
+            guard url.isFileURL, url.host == nil || url.host == "localhost" else {
+                rejected.append(url)
+                continue
+            }
+            let path = url.standardizedFileURL.path
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+                  !NSWorkspace.shared.isFilePackage(atPath: path)
+            else {
+                rejected.append(url)
+                continue
+            }
+            if isDirectory.boolValue &&
+                (!FileManager.default.isReadableFile(atPath: path)
+                 || !FileManager.default.isExecutableFile(atPath: path)) {
+                rejected.append(url)
+                continue
+            }
+            items.append((
+                url: url, path: path, resolved: Self.resolvedLocalPath(path),
+                isDirectory: isDirectory.boolValue
+            ))
+        }
+
+        // Directory additions are explicit. They never change the target for
+        // new files if this batch began in an existing project.
+        let originalProject = selectedProject
+        for item in items where item.isDirectory {
+            addLocalFolders([URL(fileURLWithPath: item.path, isDirectory: true)])
+        }
+        let targetProject = originalProject ?? selectedProject
+
+        for item in items where !item.isDirectory {
+            let existing = projects.lazy.compactMap { project -> (Project, FileTab)? in
+                for tab in project.tabs {
+                    guard case .file(let file) = tab.content,
+                          file.workspaceIdentity == nil,
+                          Self.resolvedLocalPath(file.path) == item.resolved
+                    else { continue }
+                    return (project, file)
+                }
+                return nil
+            }.first
+            if let (project, file) = existing {
+                selectedProjectID = project.id
+                project.openLocalFile(file.path)
+                continue
+            }
+
+            let fileType = (try? FileManager.default.attributesOfItem(atPath: item.resolved))?[.type]
+                as? FileAttributeType
+            guard fileType == .typeRegular, FileManager.default.isReadableFile(atPath: item.path),
+                  let targetProject else {
+                rejected.append(item.url)
+                continue
+            }
+            selectedProjectID = targetProject.id
+            targetProject.openLocalFile(item.path, inGroup: destination?.groupID)
+        }
+        return rejected
+    }
+
+    private static func resolvedLocalPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
+    func chooseFolders() {
+        guard let receivingWindow = window else { return }
+        WorkspaceNativeDialogs.chooseFolders(in: receivingWindow) { [weak self, weak receivingWindow] urls in
+            guard let self, let receivingWindow, self.window === receivingWindow else { return }
+            self.addLocalFolders(urls)
+        }
+    }
+
+    func chooseFiles(inGroup destination: (projectID: UUID, groupID: UUID)? = nil) {
+        guard let receivingWindow = window, let originalProjectID = selectedProject?.id else { return }
+        if let destination {
+            guard selectedProjectID == destination.projectID,
+                  selectedProject?.dock.root.group(id: destination.groupID) != nil else { return }
+        }
+        WorkspaceNativeDialogs.chooseFiles(in: receivingWindow) { [weak self, weak receivingWindow] urls in
+            guard let self, let receivingWindow, self.window === receivingWindow,
+                  self.selectedProject?.id == originalProjectID else { return }
+            if let destination {
+                guard self.selectedProject?.dock.root.group(id: destination.groupID) != nil else { return }
+            }
+            Self.openExternalFiles(urls, preferred: self, destination: destination)
         }
     }
 
     /// One SSH host can supply several independent roots. The remote file
     /// browser uses the already-supported POSIX shell on the SSH destination.
-    func addSSHItems(host: String, paths: [String]) async throws {
+    func addSSHItems(host: String, paths: [String],
+                     isCurrentTarget: (@MainActor () -> Bool)? = nil) async throws {
         let host = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard SSHHostWorkspaces.validHost(host) else {
             throw SSHItemError.invalidHost
@@ -231,6 +370,7 @@ final class TerminalManager {
             else { throw SSHItemError.notFound(path) }
             validated.append((path, stat.isDirectory))
         }
+        guard isCurrentTarget?() ?? true else { return }
         for item in validated {
             let root = item.directory ? item.path
                 : (item.path as NSString).deletingLastPathComponent
@@ -307,12 +447,129 @@ final class TerminalManager {
         selectedProjectID = project.id
     }
 
+    /// Finder/Dock documents use the original file tab in any window, then the
+    /// receiving main window. Delay until all restored windows are registered
+    /// and attached so cold launch never creates a second writable buffer.
+    static func openExternalFiles(
+        _ urls: [URL], preferred: TerminalManager? = nil,
+        destination: (projectID: UUID, groupID: UUID)? = nil,
+        completion: @escaping (Bool) -> Void = { _ in }
+    ) {
+        guard !urls.isEmpty else { completion(false); return }
+        guard preferred == nil || preferred?.window != nil else {
+            completion(false)
+            return
+        }
+        pendingExternalFiles.append(.init(
+            urls: urls, preferred: preferred, originalProjectID: preferred?.selectedProjectID,
+            destination: destination, completion: completion
+        ))
+        deliverPendingExternalFiles()
+        requestWindowForPendingDirectories()
+    }
+
+    private static func deliverPendingExternalFiles() {
+        guard !pendingExternalFiles.isEmpty, pendingRestores.isEmpty,
+              registry.contains(where: { $0.window != nil })
+        else { return }
+
+        let requests = pendingExternalFiles
+        pendingExternalFiles = []
+        for request in requests {
+            if let preferred = request.preferred,
+               preferred.selectedProjectID != request.originalProjectID {
+                request.completion(false)
+                continue
+            }
+            // Not every manager in the process represents a window that will
+            // appear. Only defer for an unmounted owner of a requested file.
+            // Otherwise one unattached manager could block Finder permanently.
+            let requestedPaths = Set(request.urls.filter(\.isFileURL).map {
+                resolvedLocalPath($0.standardizedFileURL.path)
+            })
+            let awaitingOwner = registry.contains { manager in
+                manager.window == nil && manager.projects.contains { project in
+                    project.tabs.contains { tab in
+                        guard case .file(let file) = tab.content,
+                              file.workspaceIdentity == nil else { return false }
+                        return requestedPaths.contains(resolvedLocalPath(file.path))
+                    }
+                }
+            }
+            if awaitingOwner {
+                pendingExternalFiles.append(request)
+                continue
+            }
+            let defaultManager = request.preferred
+                ?? registry.first { $0.window != nil && $0.window === NSApp.keyWindow }
+                ?? registry.first { $0.window != nil && $0.window === NSApp.mainWindow }
+                ?? registry.last { $0.window != nil }
+            guard let defaultManager, defaultManager.window != nil else {
+                request.completion(false)
+                continue
+            }
+            // Group by the actual owning window, including interleaved existing files.
+            var groups: [(manager: TerminalManager, urls: [URL], lastIndex: Int)] = []
+            for (index, url) in request.urls.enumerated() {
+                let resolved = url.isFileURL
+                    ? resolvedLocalPath(url.standardizedFileURL.path) : nil
+                let alreadyOpen = resolved.flatMap { path in
+                    registry.first { manager in
+                        manager.projects.contains { project in
+                            project.tabs.contains { tab in
+                                guard case .file(let file) = tab.content,
+                                      file.workspaceIdentity == nil else { return false }
+                                return resolvedLocalPath(file.path) == path
+                            }
+                        }
+                    }
+                }
+                let target = alreadyOpen ?? defaultManager
+                if let position = groups.firstIndex(where: { $0.manager === target }) {
+                    groups[position].urls.append(url)
+                    groups[position].lastIndex = index
+                } else {
+                    groups.append((manager: target, urls: [url], lastIndex: index))
+                }
+            }
+            // The final input determines focus, including interleaved files
+            // that were already open in two other windows.
+            groups.sort { $0.lastIndex < $1.lastIndex }
+            var handled = false
+            var lastReceiver: TerminalManager?
+            for group in groups {
+                let groupDestination = group.manager === request.preferred ? request.destination : nil
+                let rejected = group.manager.openExternalLocalItems(
+                    group.urls, destination: groupDestination
+                )
+                handled = handled || rejected.count < group.urls.count
+                if let owner = group.manager.window, !rejected.isEmpty {
+                    let message = group.manager.selectedProject == nil
+                        ? String(localized: "Add a project folder before opening files.", table: "Interface")
+                        : String(localized: "Some files or folders could not be opened in Bailey.", table: "Interface")
+                    let details = rejected.map(\.lastPathComponent).joined(separator: "\n")
+                    let error = NSError(domain: "Bailey.Finder", code: 1, userInfo: [
+                        NSLocalizedDescriptionKey: message,
+                        NSLocalizedRecoverySuggestionErrorKey: details,
+                    ])
+                    WorkspaceNativeDialogs.showError(error, in: owner)
+                }
+                if rejected.count < group.urls.count { lastReceiver = group.manager }
+            }
+            if handled {
+                NSApp.activate()
+                lastReceiver?.window?.makeKeyAndOrderFront(nil)
+            }
+            request.completion(handled)
+        }
+    }
+
     /// Routes folders from the Finder service into the active Bailey window.
     /// If no window exists yet, the next WindowGroup manager claims them.
     static func openDirectories(_ directories: [String]) {
         guard !directories.isEmpty else { return }
-        let manager = registry.first { $0.window === NSApp.keyWindow }
-            ?? registry.first { $0.window === NSApp.mainWindow }
+        let manager = registry.first { $0.window != nil && $0.window === NSApp.keyWindow }
+            ?? registry.first { $0.window != nil && $0.window === NSApp.mainWindow }
             ?? registry.last { $0.window != nil }
         guard let manager else {
             pendingDirectories.append(contentsOf: directories)
@@ -320,7 +577,7 @@ final class TerminalManager {
             return
         }
 
-        manager.addLocalItems(
+        manager.addLocalFolders(
             directories.map { URL(fileURLWithPath: $0, isDirectory: true) }
         )
         manager.window?.makeKeyAndOrderFront(nil)
@@ -338,10 +595,11 @@ final class TerminalManager {
         self.window = window
         Self.isOpeningWindow = false
         let directories = Self.takePendingDirectories()
-        addLocalItems(directories.map { URL(fileURLWithPath: $0, isDirectory: true) })
+        addLocalFolders(directories.map { URL(fileURLWithPath: $0, isDirectory: true) })
         if !directories.isEmpty {
             window.makeKeyAndOrderFront(nil)
         }
+        Self.deliverPendingExternalFiles()
     }
 
     private static func takePendingDirectories() -> [String] {
@@ -355,11 +613,12 @@ final class TerminalManager {
     /// solely to handle a service request.
     static func registerWindowOpener(_ open: @escaping () -> Void) {
         windowOpener = open
+        deliverPendingExternalFiles()
         requestWindowForPendingDirectories()
     }
 
     private static func requestWindowForPendingDirectories() {
-        guard !pendingDirectories.isEmpty,
+        guard (!pendingDirectories.isEmpty || !pendingExternalFiles.isEmpty),
               !registry.contains(where: { $0.window != nil }),
               !windowRequestScheduled,
               !isOpeningWindow
@@ -369,7 +628,7 @@ final class TerminalManager {
         // Give SwiftUI's normal cold-launch window one turn to attach first.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             windowRequestScheduled = false
-            guard !pendingDirectories.isEmpty,
+            guard (!pendingDirectories.isEmpty || !pendingExternalFiles.isEmpty),
                   !registry.contains(where: { $0.window != nil }),
                   !isOpeningWindow
             else { return }
@@ -829,6 +1088,10 @@ final class TerminalManager {
         windowCloseObservation = nil
         // A pending async Files error must not bring back the closed window.
         window = nil
+        // A drop tied to a closing window must never reappear in another one.
+        let abandoned = Self.pendingExternalFiles.filter { $0.preferred === self }
+        Self.pendingExternalFiles.removeAll { $0.preferred === self }
+        for request in abandoned { request.completion(false) }
         guard !Self.isQuitting else { return }
         pendingSave?.cancel()
         Self.registry.removeAll { $0 === self }
@@ -895,12 +1158,16 @@ final class TerminalManager {
                         histories[key] = history
                         historyKey = key
                     }
+                    let isLocalFile: Bool? = if case .file(let file) = tab.content {
+                        file.workspaceIdentity == nil ? true : nil
+                    } else { nil }
                     return (tab, ProjectSnapshot.TabSnapshot(
                         content: content, historyKey: historyKey,
                         customName: tab.customName,
                         contextSessionIndex: tab.contextSession.flatMap { context in
                             projectSessions.firstIndex { $0.id == context.id }
-                        }
+                        },
+                        localFile: isLocalFile
                     ))
                 }
                 let tabs = savedTabs.map(\.1)
@@ -924,7 +1191,7 @@ final class TerminalManager {
     private static func isSnapshotable(_ content: PaneContent, sshHost: String?) -> Bool {
         let identity = sshHost.map { "ssh:" + $0 }
         switch content {
-        case .file(let file): return file.workspaceIdentity == identity
+        case .file(let file): return file.workspaceIdentity == nil || file.workspaceIdentity == identity
         case .diff(let diff): return diff.workspaceIdentity == identity
         case .session, .browser: return true
         }

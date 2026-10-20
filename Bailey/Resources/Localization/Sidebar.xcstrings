@@ -198,22 +198,22 @@
         }
       }
     },
-    "Add Files or Folders…" : {
+    "Add Folder…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加文件或文件夹…"
+            "value" : "添加文件夹…"
           }
         }
       }
     },
-    "Add files, folders, or SSH paths" : {
+    "Add folders or SSH paths" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加文件、文件夹或 SSH 路径"
+            "value" : "添加文件夹或 SSH 路径"
           }
         }
       }

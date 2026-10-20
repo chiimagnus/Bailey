@@ -86,12 +86,18 @@ final class PaneRetentionTests: XCTestCase {
     }
 
     func testNativeFileAndSSHChoosersStayOnOwningWindow() async throws {
-        let local = WorkspaceNativeDialogs.localPanel()
-        XCTAssertTrue(local.canChooseFiles)
+        let local = WorkspaceNativeDialogs.folderPanel()
+        XCTAssertFalse(local.canChooseFiles, "Add Folder must not offer to create pinned-file projects")
         XCTAssertTrue(local.canChooseDirectories)
         XCTAssertTrue(local.allowsMultipleSelection)
         XCTAssertEqual(local.prompt, String(localized: "Add", table: "Terminal"))
-        XCTAssertEqual(local.message, String(localized: "Add files and folders to Bailey", table: "Terminal"))
+        XCTAssertEqual(local.message, String(localized: "Add folders to Bailey", table: "Terminal"))
+        let files = WorkspaceNativeDialogs.filePanel()
+        XCTAssertTrue(files.canChooseFiles)
+        XCTAssertFalse(files.canChooseDirectories)
+        XCTAssertTrue(files.allowsMultipleSelection)
+        XCTAssertEqual(files.prompt, String(localized: "Open", table: "Sidebar"))
+        XCTAssertEqual(files.message, String(localized: "Open files in Bailey", table: "Terminal"))
         let ssh = WorkspaceNativeDialogs.sshForm(aliases: ["fixture-one", "fixture-two"])
         XCTAssertEqual(ssh.alert.buttons.map(\.title), [
             String(localized: "Add", table: "Terminal"),
@@ -129,12 +135,29 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertNil(second.attachedSheet, "A menu action must not attach to the key window of another manager")
         first.endSheet(try XCTUnwrap(first.attachedSheet), returnCode: .alertSecondButtonReturn)
         try await settle { first.attachedSheet == nil }
-        firstManager.chooseLocalItems()
+        firstManager.chooseFolders()
         try await settle { first.attachedSheet != nil }
         XCTAssertNil(second.attachedSheet)
         first.endSheet(try XCTUnwrap(first.attachedSheet), returnCode: .cancel)
         try await settle { first.attachedSheet == nil }
         XCTAssertEqual(firstManager.projects.count, initialProjectCount)
+
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("p4-picker-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        firstManager.addLocalFolders([folder])
+        second.makeKeyAndOrderFront(nil)
+        firstManager.chooseFiles()
+        try await settle { first.attachedSheet != nil }
+        XCTAssertNil(second.attachedSheet, "The Open File sheet belongs to its caller")
+        let panel = try XCTUnwrap(first.attachedSheet as? NSOpenPanel)
+        XCTAssertTrue(panel.canChooseFiles)
+        XCTAssertFalse(panel.canChooseDirectories)
+        first.endSheet(panel, returnCode: .cancel)
+        try await settle { first.attachedSheet == nil }
+        XCTAssertTrue(firstManager.selectedProject?.tabs.isEmpty == true)
+        XCTAssertEqual(firstManager.projects.count, initialProjectCount + 1)
     }
 
     func testTabSwitcherKeepsProvisionalSelectionAndCancelsWithoutSideEffects() async throws {
@@ -148,7 +171,7 @@ final class PaneRetentionTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([directory])
+        manager.addLocalFolders([directory])
         let project = try XCTUnwrap(manager.selectedProject)
         let tabs = (0..<3).map { _ in PaneTab(content: .browser(BrowserTab(initialFocus: .none))) }
         tabs.forEach(project.append)
@@ -463,7 +486,8 @@ final class PaneRetentionTests: XCTestCase {
         do {
             let manager = TerminalManager()
             defer { manager.windowClosed() }
-            manager.addLocalItems([paths[0]])
+            manager.addLocalFolders([folder])
+            manager.openFile(paths[0].path)
             let project = try XCTUnwrap(manager.selectedProject)
             for path in paths.dropFirst() { project.openFile(path.path) }
             let tabs = project.tabs.map(\.id)
@@ -571,14 +595,17 @@ final class PaneRetentionTests: XCTestCase {
             TerminalHistoryStore.save(previousHistories)
         }
 
-        let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("bailey-closed-window-" + UUID().uuidString + ".swift")
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-closed-window-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("sample.swift")
         try "let value = \"中文 👋\"\n".write(to: path, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: path) }
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([path])
+        manager.addLocalFolders([folder])
+        manager.openFile(path.path)
         weak var retiredFile: FileTab?
         do {
             let pane = try XCTUnwrap(manager.selectedProject?.selectedTab)
@@ -626,7 +653,8 @@ final class PaneRetentionTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([path])
+        manager.addLocalFolders([folder])
+        manager.openFile(path.path)
         let project = try XCTUnwrap(manager.selectedProject)
         let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: GitStatusModel()))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1_200, height: 720),
@@ -933,7 +961,8 @@ final class PaneRetentionTests: XCTestCase {
         try original.write(to: path, atomically: true, encoding: .utf8)
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([path])
+        manager.addLocalFolders([directory])
+        manager.openFile(path.path)
         let project = try XCTUnwrap(manager.selectedProject)
         let pane = try XCTUnwrap(project.selectedTab)
         guard case .file(let file) = pane.content else { return XCTFail("Expected a file") }
@@ -1063,6 +1092,65 @@ final class PaneRetentionTests: XCTestCase {
         )
         XCTAssertEqual(decisions, [false])
         XCTAssertTrue(terminal.surface === surface)
+    }
+
+    func testUnmanagedForegroundSSHRejectsLocalFinderPathsBeforeAnyRemoteHandoff() async throws {
+        try await assertUnmanagedSSHRejectsLocalDrop(replacesRootShell: false)
+    }
+
+    func testUnmanagedExecSSHRejectsLocalFinderPathsEvenWhenForegroundPIDIsShellPID() async throws {
+        try await assertUnmanagedSSHRejectsLocalDrop(replacesRootShell: true)
+    }
+
+    private func assertUnmanagedSSHRejectsLocalDrop(replacesRootShell: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let terminal = TerminalSession(initialDirectory: directory.path, launchCommand: "exec /bin/sh -i")
+        defer { terminal.terminate() }
+        let tab = PaneTab(content: .session(terminal))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: PanelContentView(
+            tab: tab, isSelected: false,
+            onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in }
+        ))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        try await settle { terminal.shellPid != nil }
+        XCTAssertTrue(terminal.acceptsLocalFileDrop)
+
+        // An SSH client that bypasses Bailey's helper keeps location == .local.
+        // ProxyCommand sleeps over local pipes only: no network, credentials,
+        // user SSH config, authorized hosts, or shared ControlMaster is touched.
+        terminal.sendCommand(
+            (replacesRootShell ? "exec " : "")
+                + "/usr/bin/ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=20 "
+                + "-o 'ProxyCommand=/bin/sleep 30' fixture.invalid\r"
+        )
+        if replacesRootShell {
+            try await settle {
+                guard let root = terminal.shellPid,
+                      let executable = processExecutablePath(pid: root)
+                else { return false }
+                return (executable as NSString).lastPathComponent == "ssh"
+            }
+        } else {
+            try await settle {
+                guard let foreground = terminal.surface.foregroundPid,
+                      let executable = processExecutablePath(pid: foreground)
+                else { return false }
+                return (executable as NSString).lastPathComponent == "ssh"
+            }
+            XCTAssertNotEqual(terminal.surface.foregroundPid, terminal.shellPid)
+        }
+        XCTAssertNil(terminal.location.remoteConnection)
+        XCTAssertFalse(terminal.acceptsLocalFileDrop,
+                       "A foreground ssh is remote input regardless of whether it replaced the root shell")
     }
 
     func testTerminalKeepsSameShellAcrossParkingAndRemount() async throws {

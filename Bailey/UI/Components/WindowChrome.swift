@@ -31,16 +31,14 @@ struct WindowChromeAccessor: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            if let window = view.window {
-                context.coordinator.attach(window)
-            }
-        }
+        let view = WindowChromeAttachmentView()
+        view.coordinator = context.coordinator
         return view
     }
 
     func updateNSView(_ view: NSView, context: Context) {
+        guard let view = view as? WindowChromeAttachmentView else { return }
+        view.coordinator = context.coordinator
         if let window = view.window {
             context.coordinator.attach(window)
         }
@@ -179,6 +177,17 @@ struct WindowChromeAccessor: NSViewRepresentable {
                 NotificationCenter.default.removeObserver(observer)
             }
         }
+    }
+}
+
+/// SwiftUI may finish its initial update before AppKit installs the view in a window.
+/// The attachment event, not a one-shot runloop check, owns that transition.
+private final class WindowChromeAttachmentView: NSView {
+    weak var coordinator: WindowChromeAccessor.Coordinator?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let window { coordinator?.attach(window) }
     }
 }
 

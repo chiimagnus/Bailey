@@ -26,9 +26,9 @@
 | [ssh.md](features/ssh.md) | 远端身份、后端、断线和重连 | 连接、远端操作或目标绑定改变 |
 | [dock.md](features/dock.md) | 自由停靠、标签、焦点与窗口生命周期 | 布局、移动、关闭或动作路由改变 |
 | [terminal.md](features/terminal.md) | Shell、终端表面、输入、查找与通知 | 终端生命周期或输入输出改变 |
-| [files.md](features/files.md) | 共享文件树、创建、重命名与删除 | 树行或文件操作改变 |
+| [files.md](features/files.md) | 共享文件树、自动刷新与文件操作 | 树行、刷新或文件操作改变 |
 | [editor.md](features/editor.md) | 文件缓冲、自动保存、重载和文本编辑 | 读取、编辑、保存或高亮改变 |
-| [git.md](features/git.md) | 仓库状态、命令执行、提交与草稿 | Git 操作、刷新或执行环境改变 |
+| [git.md](features/git.md) | 提交图谱、工作树、Git 操作与安全边界 | Git 图谱、工作树、刷新或执行行为改变 |
 | [diff.md](features/diff.md) | 差异读取、原生渲染、编辑与重挂载 | Diff 数据、布局或保存改变 |
 | [browser.md](features/browser.md) | 浏览器标签、导航和开发服务入口 | WebView、地址处理或导航改变 |
 | [command-palette.md](features/command-palette.md) | 命令面板、本机文件搜索与会话定位 | 搜索、选择或命令接入改变 |

@@ -13,6 +13,116 @@ final class GitWorkspaceSSHTests: XCTestCase {
         XCTAssertNil(model.lastError, model.lastError ?? "")
     }
 
+    func testAuthorizedSSHWorktreeCreationAndRemovalPreservesBranch() async throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
+            throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST to an authorized dedicated SSH test host")
+        }
+        let socket = "/tmp/bailey-issue33-ssh-\(UUID().uuidString.prefix(8)).sock"
+        let backend = SSHWorkspaceBackend(
+            runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 25
+        )
+        let created = try await backend.run(
+            argv: ["mktemp", "-d", "/tmp/bailey-issue33-XXXXXX"],
+            cwd: nil, env: nil, stdin: nil, timeout: 25
+        )
+        XCTAssertEqual(created.status, 0, String(decoding: created.stderr, as: UTF8.self))
+        let root = String(decoding: created.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (root as NSString).deletingLastPathComponent == "/tmp",
+              (root as NSString).lastPathComponent.hasPrefix("bailey-issue33-") else {
+            throw WorkspaceError.notFound
+        }
+        let repo = root + "/repo"
+        let linked = root + "/linked-with-space"
+        func cleanup() async {
+            do { try await backend.delete(paths: [root]) }
+            catch { XCTFail("Could not remove test-owned SSH directory \(root): \(error)") }
+            do {
+                let stopped = try await Task.detached {
+                    try ProcessRemoteCommandRunner.launch(
+                        sshPath: "/usr/bin/ssh",
+                        arguments: ["-S", socket, "-O", "exit", host], stdin: nil, timeout: 10
+                    )
+                }.value
+                XCTAssertEqual(stopped.status, 0)
+            } catch { XCTFail("Could not close test-owned SSH socket \(socket): \(error)") }
+        }
+        func git(_ args: [String]) async throws -> String {
+            let result = await GitCommandExecution.run(
+                args, in: repo, timeout: 25, backend: backend
+            )
+            guard result.status == 0 else {
+                XCTFail(result.stderr)
+                throw WorkspaceError.notFound
+            }
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        do {
+            let setup = """
+            set -eu
+            git init -q -b main repo
+            cd repo
+            git config user.name 'Worktree SSH Test'
+            git config user.email worktree-ssh@invalid
+            git config commit.gpgsign false
+            git config core.hooksPath /dev/null
+            git commit --allow-empty -qm baseline
+            git branch feature/worktree-ssh
+            """
+            let run = try await backend.run(
+                argv: ["sh", "-s"], cwd: root, env: nil,
+                stdin: Data(setup.utf8), timeout: 25
+            )
+            XCTAssertEqual(run.status, 0, String(decoding: run.stderr, as: UTF8.self))
+            let oid = try await git(["rev-parse", "refs/heads/feature/worktree-ssh"])
+            let model = GitStatusModel()
+            model.sync(root: repo, backend: backend, scope: "ssh:" + host)
+            try await settle(model)
+            XCTAssertTrue(model.canCreateWorktree(for: "feature/worktree-ssh"))
+            model.createWorktree(
+                for: "feature/worktree-ssh", at: linked,
+                expectedOID: oid, target: model.actionTarget()
+            )
+            try await settle(model)
+            let remoteBranch = try await git(["-C", linked, "symbolic-ref", "HEAD"])
+            XCTAssertEqual(remoteBranch, "refs/heads/feature/worktree-ssh")
+            let location = try XCTUnwrap(model.worktreeLocations.first { $0.path == linked })
+            XCTAssertFalse(location.isMain)
+            XCTAssertEqual(model.graphCommits.first {
+                $0.hash == oid && $0.worktree == nil
+            }?.checkedOutWorktrees.count, 2)
+            XCTAssertFalse(model.canCreateWorktree(for: "feature/worktree-ssh"))
+
+            try await backend.write(
+                path: linked + "/untracked.txt", data: Data("preserve".utf8)
+            )
+            model.removeWorktree(location, target: model.actionTarget())
+            let deadline = Date().addingTimeInterval(40)
+            while model.isBusy || model.isRefreshing {
+                guard Date() < deadline else { throw WorkspaceError.timedOut }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertNotNil(model.lastError, "Remote dirty Worktree must not be removed")
+            let protectedBytes = try await backend.read(path: linked + "/untracked.txt", maxBytes: 32)
+            XCTAssertEqual(protectedBytes, Data("preserve".utf8))
+            model.dismissOperation()
+            try await backend.delete(paths: [linked + "/untracked.txt"])
+            model.refresh()
+            try await settle(model)
+            let clean = try XCTUnwrap(model.worktreeLocations.first { $0.path == linked })
+            model.removeWorktree(clean, target: model.actionTarget())
+            try await settle(model)
+            let removed = try await backend.stat(path: linked)
+            XCTAssertNil(removed)
+            let persistedOID = try await git(["rev-parse", "refs/heads/feature/worktree-ssh"])
+            XCTAssertEqual(persistedOID, oid)
+        } catch {
+            await cleanup()
+            throw error
+        }
+        await cleanup()
+    }
+
     func testAuthorizedSSHRefArchiveBinaryResetStashCleanAndIgnorePersistOnWindows() async throws {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
             throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST to an explicitly authorized dedicated SSH test host")

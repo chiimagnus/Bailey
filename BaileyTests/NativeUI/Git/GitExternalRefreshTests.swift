@@ -29,7 +29,7 @@ final class GitExternalRefreshTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([directory])
+        manager.addLocalFolders([directory])
         let model = GitStatusModel()
         model.syncSelectedProject(in: manager)
         try await wait { model.hasResolvedStatus && !model.isRefreshing && !model.isRepo }
@@ -105,7 +105,7 @@ final class GitExternalRefreshTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([root])
+        manager.addLocalFolders([root])
         let model = GitStatusModel()
         model.syncSelectedProject(in: manager)
         try await wait { model.hasResolvedStatus && !model.isRefreshing && model.isRepo }
@@ -132,7 +132,14 @@ final class GitExternalRefreshTests: XCTestCase {
         XCTAssertTrue(window.isVisible)
         XCTAssertEqual(manager.selectedProject?.panelContext?.isRemote, false)
         NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
-        try await Task.sleep(for: .milliseconds(250))
+        try await Task.sleep(for: .seconds(1))
+
+        let unwantedPoll = expectation(description: "Local Git must not poll while files are unchanged")
+        unwantedPoll.isInverted = true
+        withObservationTracking({ _ = model.isRefreshing }) {
+            unwantedPoll.fulfill()
+        }
+        await fulfillment(of: [unwantedPoll], timeout: 6)
 
         // External process changes the repository without a Bailey terminal completion.
         try "first external change\n".write(to: file, atomically: true, encoding: .utf8)
@@ -185,17 +192,18 @@ final class GitExternalRefreshTests: XCTestCase {
         model.refresh()
         try await wait { !model.isRefreshing }
 
-        // Replacing the docked Git panel must cancel its view-owned task.
+        // The panel has no local Git timer; model-owned FSEvents still keep the
+        // bottom toolbar current while the App remains in the foreground.
         window.contentView = NSHostingView(rootView: Text("Git panel hidden"))
         try await Task.sleep(for: .milliseconds(250))
         git(["add", "tracked.txt"])
         git(["commit", "-qm", "hidden external commit"])
         let hiddenHead = git(["rev-parse", "HEAD"])
-        try await Task.sleep(for: .seconds(3.1))
-        XCTAssertNotEqual(model.recentCommits.first?.hash, hiddenHead,
-                          "A non-visible Git panel must not keep polling")
-        model.refresh()
-        try await wait { !model.isRefreshing && model.recentCommits.first?.hash == hiddenHead }
+        try await wait(seconds: 6) {
+            !model.isRefreshing && model.recentCommits.first?.hash == hiddenHead
+        }
+        XCTAssertEqual(model.recentCommits.first?.hash, hiddenHead,
+                       "A hidden Git panel must still receive local file events")
 
         let second = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-git-next-" + UUID().uuidString)
@@ -217,7 +225,7 @@ final class GitExternalRefreshTests: XCTestCase {
         secondGit(["commit", "-qm", "other baseline"])
         let secondHead = secondGit(["rev-parse", "HEAD"])
 
-        manager.addLocalItems([second])
+        manager.addLocalFolders([second])
         model.syncSelectedProject(in: manager)
         try await wait {
             model.rootPath == second.path && model.hasResolvedStatus
@@ -264,7 +272,7 @@ final class GitExternalRefreshTests: XCTestCase {
 
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([directory])
+        manager.addLocalFolders([directory])
         let backend = DiscardRemoteWorkspaceFixture()
         let model = GitStatusModel()
         model.sync(root: directory.path, backend: backend, scope: "ssh:slow-details")

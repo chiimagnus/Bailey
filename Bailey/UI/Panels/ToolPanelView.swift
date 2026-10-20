@@ -167,6 +167,27 @@ struct ToolPanelView: View {
                             guard let target else { return false }
                             return manager.selectedProjectID == project.id
                                 && project.matchesPanelTarget(target)
+                        },
+                        canImportFromFinder: filesTarget?.workspace == nil
+                            && project.workspaceBackend is LocalWorkspaceBackend,
+                        importFromFinder: { [target = filesTarget] providers, directory in
+                            guard let target, target.workspace == nil,
+                                  manager.selectedProjectID == project.id,
+                                  project.matchesPanelTarget(target) else { return false }
+                            return FinderWindowDrop.receive(providers, preferred: manager) { urls, owner in
+                                guard owner.selectedProjectID == project.id,
+                                      project.matchesPanelTarget(target) else { return }
+                                Task { @MainActor in
+                                    let result = await project.fileTree.importFromFinder(
+                                        urls, into: directory, isCurrentTarget: {
+                                            owner.attachedWindow != nil
+                                                && owner.selectedProjectID == project.id
+                                                && project.matchesPanelTarget(target)
+                                        }
+                                    )
+                                    if result?.copied.isEmpty == false { git.refresh() }
+                                }
+                            }
                         }
                     )
                 }
@@ -204,29 +225,20 @@ struct ToolPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: Theme.sidebar))
         .onAppear { syncModels() }
-        .task {
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .seconds(2))
-                } catch {
-                    return
-                }
-                applyRemoteHeading()
-            }
-        }
-        // External Git processes do not emit Bailey command-completion events.
-        // Poll only visible, foreground panels; SSH uses a slower interval.
-        .task(id: applicationIsActive) {
+        .task(id: "\(applicationIsActive):\(panel):\(git.currentScope)") {
             guard applicationIsActive else { return }
+            if panel == .git && git.currentScope == "local" { return }
+            let interval: Duration = panel == .git ? .seconds(5) : .seconds(2)
             while !Task.isCancelled {
-                let interval = panel == .git && git.currentScope != "local" ? 5 : 2
                 do {
-                    try await Task.sleep(for: .seconds(interval))
+                    try await Task.sleep(for: interval)
                 } catch {
                     return
                 }
                 guard applicationIsActive else { return }
                 if panel == .git {
+                    // The local repository is event-driven; only SSH needs this poll.
+                    guard git.currentScope != "local" else { return }
                     guard !git.isBusy else { continue }
                     // Keep the follow-up in this task so hiding the panel cancels it.
                     while git.isRefreshing && !Task.isCancelled {
@@ -261,6 +273,15 @@ struct ToolPanelView: View {
         // A connection appearing, connecting, dying or being replaced changes
         // what the heading says; repaint it without waiting for the next tick.
         .onChange(of: remoteConnectionToken) { syncModels() }
+        .onChange(of: manager.selectedProject?.selectedSession?.panelDirectoryPath) {
+            applyRemoteHeading()
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: SSHHostWorkspaces.connectionChanged
+        )) { notification in
+            guard notification.object as? String == manager.selectedProject?.sshHost else { return }
+            applyRemoteHeading()
+        }
         .environment(\.panelFontScale, panelFontScale)
         // Native button and control labels without a designed hierarchy use
         // the configured base size directly.
@@ -268,9 +289,8 @@ struct ToolPanelView: View {
     }
 
     private func syncModels() {
-        // Before the queue, not inside it: a refresh over a dead connection
-        // waits out its deadlines, and the heading must not wait with it.
         applyRemoteHeading()
+        guard panel == .files else { return }
         syncQueue.run(for: manager.selectedProject?.panelContext?.identity) {
             await performSync()
         }
@@ -281,7 +301,7 @@ struct ToolPanelView: View {
     /// workspace, so it stays correct while the panels are stalled.
     private func applyRemoteHeading() {
         guard let project = manager.selectedProject else {
-            remoteHeaderState = .local
+            updateRemoteHeading(.local, directory: nil)
             return
         }
         if let host = project.sshHost {
@@ -291,28 +311,29 @@ struct ToolPanelView: View {
             case .some(false): state = .disconnected(destination: host)
             case .none: state = .connecting(destination: host)
             }
-            remoteHeader.apply(state: state)
-            remoteHeader.workingDirectory = project.customDirectory
-            if remoteHeaderState != state { remoteHeaderState = state }
+            updateRemoteHeading(state, directory: project.customDirectory)
             return
         }
         if project.customDirectory != nil {
-            remoteHeader.apply(state: .local)
-            remoteHeaderState = .local
+            updateRemoteHeading(.local, directory: nil)
             return
         }
         guard let session = project.selectedSession else {
-            remoteHeaderState = .local
+            updateRemoteHeading(.local, directory: nil)
             return
         }
         // An automatically scoped project may still follow its terminal's
         // connection. A pinned project never does.
-        let headerState = session.remoteHeaderState
-        remoteHeader.apply(state: headerState)
-        remoteHeader.workingDirectory = headerState == .local
-            ? nil
-            : session.panelDirectoryPath
-        if remoteHeaderState != headerState { remoteHeaderState = headerState }
+        let state = session.remoteHeaderState
+        updateRemoteHeading(state, directory: state == .local ? nil : session.panelDirectoryPath)
+    }
+
+    private func updateRemoteHeading(_ state: RemotePaneHeaderState, directory: String?) {
+        if remoteHeaderState != state {
+            remoteHeader.apply(state: state)
+            remoteHeaderState = state
+        }
+        remoteHeader.workingDirectory = directory
     }
 
     /// Which workspace a refresh belongs to. A connection changing state, or
@@ -325,11 +346,11 @@ struct ToolPanelView: View {
     }
 
     private func performSync() async {
-        guard panel == .files, let project = manager.selectedProject,
+        guard let project = manager.selectedProject,
               let (source, target) = await project.syncFiles(in: manager),
               manager.selectedProject === project else { return }
         if rootSource != source { rootSource = source }
-        filesTarget = target
+        if filesTarget != target { filesTarget = target }
     }
 
     /// Text badge for the Files header while the panels follow the foreground

@@ -44,7 +44,7 @@ final class GitRemoteBranchDialogTests: XCTestCase {
         _ = try git(["fetch", "origin"])
         let manager = TerminalManager()
         defer { manager.windowClosed() }
-        manager.addLocalItems([repo])
+        manager.addLocalFolders([repo])
         let project = try XCTUnwrap(manager.selectedProject)
         let window = NSWindow(contentRect: .init(x: -1200, y: -1200, width: 520, height: 400),
                               styleMask: [.titled], backing: .buffered, defer: false)

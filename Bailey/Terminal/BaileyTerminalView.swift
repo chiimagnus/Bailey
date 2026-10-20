@@ -286,27 +286,36 @@ final class BaileyTerminalView: AppTerminalView, TerminalBackendSurface {
     // MARK: - File drops
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        canReadFileURLs(sender) ? .copy : []
+        fileDropText(sender) == nil ? [] : .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        canReadFileURLs(sender) ? .copy : []
+        fileDropText(sender) == nil ? [] : .copy
     }
 
-    /// Inserts dropped absolute paths, shell-escaped and space-separated, at
-    /// the active prompt exactly as a paste would.
+    /// Only local terminals paste Finder paths, and never send Return.
+    /// Reject entire batches with control bytes: shell quoting does not stop
+    /// Ghostty from interpreting CR/LF/ESC as terminal input events.
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let urls = fileURLs(sender), !urls.isEmpty else { return false }
+        guard let text = fileDropText(sender) else { return false }
         focusForInteraction()
-        let text = urls.map { Self.shellToken(for: $0.path) }.joined(separator: " ")
-        sendText(text + " ")
+        sendText(text)
         return true
     }
 
-    private func canReadFileURLs(_ sender: NSDraggingInfo) -> Bool {
-        sender.draggingPasteboard.canReadObject(
-            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]
-        )
+    private func fileDropText(_ sender: NSDraggingInfo) -> String? {
+        guard (events as? TerminalSession)?.acceptsLocalFileDrop == true,
+              let urls = fileURLs(sender) else { return nil }
+        return Self.fileDropText(for: urls)
+    }
+
+    static func fileDropText(for urls: [URL]) -> String? {
+        guard !urls.isEmpty, urls.allSatisfy(\.isFileURL) else { return nil }
+        let paths = urls.map(\.path)
+        guard paths.allSatisfy({ path in
+            !path.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+        }) else { return nil }
+        return paths.map(shellToken).joined(separator: " ") + " "
     }
 
     private func fileURLs(_ sender: NSDraggingInfo) -> [URL]? {
