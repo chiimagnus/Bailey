@@ -398,11 +398,19 @@ final class EditorNavigationTests: XCTestCase {
             try await reveal(NSRange(location: target, length: 1), in: editor)
             let rect = editor.firstRect(forCharacterRange: NSRange(location: target, length: 1),
                                         actualRange: nil)
-            let fragment = editor.nativeContentManager.location(
-                editor.nativeContentManager.documentRange.location, offsetBy: target
-            ).flatMap { editor.nativeLayoutManager.textLayoutFragment(for: $0) }
+            let manager = editor.nativeContentManager
+            let position = manager.location(manager.documentRange.location, offsetBy: target)
+            let fragment = position.flatMap { editor.nativeLayoutManager.textLayoutFragment(for: $0) }
+            let local = position.flatMap { location in
+                fragment.map { manager.offset(from: $0.rangeInElement.location, to: location) }
+            }
+            let line = fragment?.textLineFragments.first {
+                guard let local else { return false }
+                return local >= $0.characterRange.location
+                    && local < NSMaxRange($0.characterRange)
+            }
             XCTAssertTrue(rect.width > 0 && rect.height > 0,
-                          "Glyph rect for wraps=\(wraps): screen=\(rect), editor=\(editor.frame), clip=\(scroll.contentView.bounds), textContainer=\(String(describing: editor.textContainer?.size)), used=\(editor.nativeLayoutManager.usageBoundsForTextContainer), fragment=\(String(describing: fragment?.layoutFragmentFrame)), lines=\(String(describing: fragment?.textLineFragments.count)), lastRange=\(String(describing: fragment?.textLineFragments.last?.characterRange))")
+                          "Glyph rect for wraps=\(wraps): screen=\(rect), editor=\(editor.frame), clip=\(scroll.contentView.bounds), textContainer=\(String(describing: editor.textContainer?.size)), used=\(editor.nativeLayoutManager.usageBoundsForTextContainer), fragment=\(String(describing: fragment?.layoutFragmentFrame)), local=\(String(describing: local)), line=\(String(describing: line?.typographicBounds)), lineRange=\(String(describing: line?.characterRange))")
             let windowPoint = try XCTUnwrap(editor.window).convertPoint(
                 fromScreen: NSPoint(x: rect.midX, y: rect.midY)
             )
@@ -428,6 +436,30 @@ final class EditorNavigationTests: XCTestCase {
                                      "Long unwrapped line must remain horizontally reachable")
             }
         }
+    }
+
+    func testWrappedUnicodeTailReallyScrollsIntoShortViewport() async throws {
+        let line = "中文👋" + String(repeating: "ABcd", count: 180) + "終"
+        let source = String(repeating: "short\n", count: 15) + line + "\nend"
+        let target = (source as NSString).range(of: "終").location
+        let (window, scroll, editor) = mount(source, width: 360, wraps: true,
+                                             viewportHeight: 300)
+        defer { window.close() }
+        editor.showsLineNumbers = true
+        editor.configureWrapping(true, viewportWidth: 360)
+        try await reveal(NSRange(location: target, length: 1), in: editor)
+        let rect = editor.firstRect(forCharacterRange: NSRange(location: target, length: 1),
+                                    actualRange: nil)
+        XCTAssertTrue(rect.width > 0 && rect.height > 0,
+                      "Short viewport must expose glyph: clip=\(scroll.contentView.bounds), doc=\(editor.frame), used=\(editor.nativeLayoutManager.usageBoundsForTextContainer)")
+        let windowPoint = try XCTUnwrap(editor.window).convertPoint(
+            fromScreen: NSPoint(x: rect.midX, y: rect.midY))
+        let localPoint = editor.convert(windowPoint, from: nil)
+        XCTAssertTrue(scroll.contentView.bounds.contains(localPoint),
+                      "The final wrapped character must be visible in a short viewport")
+        let hit = editor.characterIndex(for: NSPoint(x: rect.midX, y: rect.midY))
+        XCTAssertNotEqual(hit, NSNotFound)
+        if hit != NSNotFound { XCTAssertLessThanOrEqual(abs(hit - target), 1) }
     }
 
     func testMountedSourceEditorActuallyPaintsVisibleTextInBothAppearances() async throws {
