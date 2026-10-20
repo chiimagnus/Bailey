@@ -601,6 +601,7 @@ struct RecentCommitsView: View {
                 .accessibilityLabel(hidden.map(\.name).joined(separator: ", "))
             }
         }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func referenceBadge(

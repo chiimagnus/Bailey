@@ -434,6 +434,49 @@ final class RecentCommitsViewTests: XCTestCase {
                        "Secondary remote refs and Tag must remain available in overflow")
     }
 
+    func testShortPrimaryBranchBadgeKeepsIntrinsicWidth() throws {
+        let commit = GitStatusModel.RecentCommit(
+            hash: String(repeating: "a", count: 40), shortHash: "aaaaaaa",
+            subject: "Commit subject remains visible", author: "Developer",
+            date: .now, parentHashes: [],
+            references: [
+                .init(kind: .currentBranch, name: "main"),
+                .init(kind: .remoteBranch, name: "origin/main"),
+                .init(kind: .tag, name: "v1.0"),
+            ], files: []
+        )
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            for width in [CGFloat(320), 520] {
+                let window = hostHistory(
+                    [commit], selection: GraphSelection(), width: width,
+                    height: 160, remotes: ["origin"]
+                )
+                defer { window.close() }
+                window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+                settle()
+
+                let view = try XCTUnwrap(window.contentView)
+                let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                let colorfulFarRight = stride(
+                    from: 180, through: Int(width) - 40, by: 2
+                ).contains { x in
+                    (0..<40).contains { y in
+                        guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+                        else { return false }
+                        let channels = [color.redComponent, color.greenComponent,
+                                        color.blueComponent]
+                        return channels.max()! - channels.min()! > 0.35
+                    }
+                }
+                XCTAssertFalse(
+                    colorfulFarRight,
+                    "Short Branch must not stretch across \(width)pt in \(appearance.rawValue)"
+                )
+            }
+        }
+    }
+
     func testPrimaryBranchContextMenuRemainsAvailableThroughWidthChanges() throws {
         let branch = "feature/" + String(repeating: "long-", count: 12)
         let commit = GitStatusModel.RecentCommit(
