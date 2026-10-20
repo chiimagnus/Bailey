@@ -1182,24 +1182,48 @@ final class RecentCommitsViewTests: XCTestCase {
                 let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
                 view.cacheDisplay(in: view.bounds, to: bitmap)
                 let layout = CommitGraphLayout(commits: rows)
+                let pixelScale = CGFloat(bitmap.pixelsWide) / view.bounds.width
+                let laneSpacing = CommitGraphRails.spacing(
+                    lanes: layout.laneCount, viewportWidth: width, scale: 1
+                )
+                let gutter = CommitGraphRails.gutter(
+                    lanes: layout.laneCount, spacing: laneSpacing, scale: 1
+                )
+                // Read the colored badge background, not the SF Symbol glyph.
+                // Raster coordinates and row heights differ across macOS runners.
+                let iconX = Int(
+                    (TreeRowStyle.outerInset + gutter + 3) * pixelScale
+                )
+                let requiredPixels = max(3, Int(3 * pixelScale))
+                var nextY = 0
                 for (index, commit) in rows.enumerated()
                     where commit.worktree == nil && commit.stash == nil {
-                    let paint = try XCTUnwrap(bitmap.colorAt(x: 85, y: index * 76 + 19)?
-                        .usingColorSpace(.sRGB))
                     let expected = GitGraphPalette.colors[layout.rows[index].node.color]
-                    let paintedChannels = [paint.redComponent, paint.greenComponent,
-                                           paint.blueComponent]
                     let expectedChannels = [expected.redComponent, expected.greenComponent,
                                             expected.blueComponent]
-                    let saturation = paintedChannels.max()! - paintedChannels.min()!
-                    XCTAssertGreaterThan(saturation, 0.25,
-                                         "Ref icon must be colored, not neutral gray at row \(index)")
-                    XCTAssertEqual(paintedChannels.firstIndex(of: paintedChannels.max()!),
-                                   expectedChannels.firstIndex(of: expectedChannels.max()!),
-                                   "Badge and Git lane must share the dominant color")
-                    let hueDelta = abs(paint.hueComponent - expected.hueComponent)
-                    XCTAssertLessThan(min(hueDelta, 1 - hueDelta), 0.08,
-                                      "Ref icon must follow its graph lane hue")
+                    let dominant = expectedChannels.firstIndex(of: expectedChannels.max()!)
+                    var matchingPixels = 0
+                    var found = false
+                    for y in nextY..<bitmap.pixelsHigh {
+                        guard let pixel = bitmap.colorAt(x: iconX, y: y)?.usingColorSpace(.sRGB)
+                        else { matchingPixels = 0; continue }
+                        let channels = [pixel.redComponent, pixel.greenComponent,
+                                        pixel.blueComponent]
+                        let hueDelta = abs(pixel.hueComponent - expected.hueComponent)
+                        if channels.max()! - channels.min()! > 0.25,
+                           channels.firstIndex(of: channels.max()!) == dominant,
+                           min(hueDelta, 1 - hueDelta) < 0.08 {
+                            matchingPixels += 1
+                            if matchingPixels >= requiredPixels {
+                                nextY = y + 1
+                                found = true
+                                break
+                            }
+                        } else {
+                            matchingPixels = 0
+                        }
+                    }
+                    XCTAssertTrue(found, "Reference badge must match lane color at row \(index)")
                 }
                 if let directory = ProcessInfo.processInfo.environment["BAILEY_GIT_GRAPH_SCREENSHOT_DIR"] {
                     let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
