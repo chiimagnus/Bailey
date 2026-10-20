@@ -6,14 +6,12 @@
 
 围绕原生终端，在同一个窗口使用代码文件、Git、浏览器和 AI 命令行工具，并自由排列。支持 Apple Silicon，最低 macOS 15.6。
 
-## 能做什么
+## 截图
 
-- **终端与 AI CLI**：使用你习惯的命令行工具，切换面板时保留正在运行的会话。
-- **本机与 SSH 项目**：在同一工作区管理本机或远程文件、终端和 Git。
-- **代码与差异**：原生编辑、查找、语法高亮，以及统一或分栏 Diff。
-- **Git 图谱**：查看提交历史、未提交改动、分支、标签、Stash 和 Worktree。
-- **自由布局**：拖动标签组合终端、文件管理器、Git 面板和浏览器。
-- **辅助工具**：命令面板、文件搜索、SSH 隧道和可选的手机通知。
+<p>
+  <img src="docs/assets/screenshot-1.png" alt="screenshot-1" width="49%">
+  <img src="docs/assets/screenshot-2.png" alt="screenshot-2" width="49%">
+</p>
 
 ## 安装
 

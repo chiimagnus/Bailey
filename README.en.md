@@ -6,14 +6,12 @@
 
 Work with source files, Git, a browser, and AI command-line tools around your terminal in one customizable window. Requires an Apple Silicon Mac running macOS 15.6 or later.
 
-## What you can do
+## Screenshots
 
-- **Terminals and AI CLIs:** Run your preferred command-line tools without restarting sessions when switching panels.
-- **Local and SSH projects:** Work with files, terminals, and Git on your Mac or a remote machine.
-- **Code and diffs:** Edit and search files with native text controls, syntax highlighting, and unified or side-by-side diffs.
-- **Git graph:** Explore commits, uncommitted changes, branches, tags, stashes, and worktrees.
-- **Flexible layout:** Drag tabs to arrange terminals, the file manager, Git panels, and browser tabs.
-- **Useful extras:** A command palette, file search, SSH tunnels, and optional phone notifications.
+<p>
+  <img src="docs/assets/screenshot-1.png" alt="screenshot-1" width="49%">
+  <img src="docs/assets/screenshot-2.png" alt="screenshot-2" width="49%">
+</p>
 
 ## Install
 
