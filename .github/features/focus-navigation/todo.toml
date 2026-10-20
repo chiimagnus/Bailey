@@ -1,5 +1,5 @@
 version = 1
-current_task_id = ""
+current_task_id = "P2-T1"
 
 [[tasks]]
 id = "P1-T1"
@@ -20,15 +20,15 @@ note = "101 tests/0 failures；make build+验签成功；独立App原始输入/�
 [[tasks]]
 id = "P2-T1"
 title = "区域 Focus 与 selected 视觉区分"
-status = "completed"
+status = "in_progress"
 plan = "plan-p2.md#p2-t1"
-commit = "eeb96f8b070a950eb963371fbd9f996daefdeac0"
-note = "30 tests/0 failures；build+严格验签；隔离App截图/录屏验证区域切换及后台无边框"
+commit = ""
+note = "复核Issue13原型，补齐活动标题栏与selected标签额外强调（F-03）"
 
 [[tasks]]
 id = "P2-T2"
 title = "拖放和多窗口焦点恢复验收"
-status = "completed"
+status = "in_progress"
 plan = "plan-p2.md#p2-t2"
-commit = "9c95cc2"
-note = "962abba主体及9c95cc2审计根因；最终Debug579/Release119项0失败0跳过；两配置构建验签、GUI输入/落点与整包安装通过，未重启；环境缺口见audit-p2/evidence"
+commit = ""
+note = "审计F-02重开：补GitGraph/Files内部控件及复杂布局真实焦点验收，不能用区域标题与组件测试代替"

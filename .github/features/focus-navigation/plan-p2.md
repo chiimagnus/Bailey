@@ -18,7 +18,7 @@
 **源码锚点：** `Bailey/UI/WorkspaceDockView.swift.DockTabGroupView`（`header/content`）、`Bailey/UI/Components/WorkspaceChrome.swift.TabItemChrome`、`Bailey/Shared/Tree/TreeRowStyle.swift.TreeRowSurface`、`Bailey/App/Theme.swift` 及 `Bailey/UI/Panels/ToolPanelView.swift`。
 
 1. **Red：** 对照当前 selected tab 背景与工具面板行态，验证旧 UI 只显示各自选中却不能标明窗口/区域级活动焦点；实测两窗口失焦后是否仍有高亮、Hover 是否能误判聚焦。涵盖深浅主题、窄宽区域、不同编辑/终端/Diff/工具组。
-2. **Green：** 当前 Key Window 的活动 Dock 组显示轻量、稳定的统一强调，其它组保留组内 `selected`，不显示 active；不强行改主题色、布局或 Git 行。`TreeRowSurface.focused` 当前只是与 hover 相同的 0.05 透明度填充，**不是可辨认的键盘焦点环**：#13 仅负责 Dock 组视觉，不预先给 Git/Files 所有行加外观；#5 P1-T1 按实际 Files 键盘导航需要，复用行组件的 `focused` 参数并补可识别的行焦点反馈。
+2. **Green：** 当前 Key Window 的活动 Dock 组显示整体内描边与轻量标签栏底色。遵照用户 2026-10-21 最新确认，不增加 selected 标签专属底色或下划线，各组保留原有 selected 样式；这条明确覆盖 HTML 原型中的标签额外强调。后台、Palette 或 Sheet 接管时同时撤掉活动区域强调；不复制原型强度设置和演示键位，不强行改主题色、布局或 Git 行。`TreeRowSurface.focused` 当前只是与 hover 相同的 0.05 透明度填充，**不是可辨认的键盘焦点环**：#13 仅负责 Dock 组视觉，不预先给 Git/Files 所有行加外观；#5 P1-T1 按实际 Files 键盘导航需要，复用行组件的 `focused` 参数并补可识别的行焦点反馈。
 3. **覆盖与闭环：** 单/多/6+ 组、浅暗、动态主题、缩放、超长标签/路径、窄栏、鼠标 hover/drag、不同窗口 key 状态、Settings/Sheet/菜单、辅助功能文字与形状提示；检查尺寸无抖动且 Terminal/TextKit/WebKit 实例不重建。更新 `docs/ui.md`、`docs/features/dock.md`；验证真实像素与输入接收者、跑 `DockWorkspaceTests` 和原生 GUI；清理被替代的旧视觉判断，独立中文提交。
 
 ---
