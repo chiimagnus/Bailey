@@ -133,15 +133,17 @@ final class EditorNavigationTests: XCTestCase {
             ruler.selectedLineTextColor = palette.text
             scroll.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
-            let bitmap = try XCTUnwrap(ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds))
+            let bitmap = try XCTUnwrap(ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds)?
+                .retagging(with: .sRGB))
             ruler.cacheDisplay(in: ruler.bounds, to: bitmap)
-            let sampled = try XCTUnwrap(bitmap.colorAt(x: 2, y: bitmap.pixelsHigh / 2))
-            let actual = try XCTUnwrap(sampled.usingColorSpace(.deviceRGB))
-            let expected = try XCTUnwrap(palette.background.usingColorSpace(.deviceRGB))
-            XCTAssertEqual(actual.redComponent, expected.redComponent, accuracy: 0.035,
+            var pixel = [Int](repeating: 0, count: bitmap.samplesPerPixel)
+            bitmap.getPixel(&pixel, atX: 2, y: bitmap.pixelsHigh / 2)
+            let maximum = CGFloat((1 << bitmap.bitsPerSample) - 1)
+            let expected = try XCTUnwrap(palette.background.usingColorSpace(.sRGB))
+            XCTAssertEqual(CGFloat(pixel[0]) / maximum, expected.redComponent, accuracy: 0.035,
                            "The gutter must not use system gray instead of the editor theme")
-            XCTAssertEqual(actual.greenComponent, expected.greenComponent, accuracy: 0.035)
-            XCTAssertEqual(actual.blueComponent, expected.blueComponent, accuracy: 0.035)
+            XCTAssertEqual(CGFloat(pixel[1]) / maximum, expected.greenComponent, accuracy: 0.035)
+            XCTAssertEqual(CGFloat(pixel[2]) / maximum, expected.blueComponent, accuracy: 0.035)
         }
     }
 
