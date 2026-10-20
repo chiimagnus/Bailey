@@ -5,6 +5,92 @@ import XCTest
 
 @MainActor
 final class DockWorkspaceTests: XCTestCase {
+    func testActivityIsTransientAndDoesNotChangeOtherGroupSelections() throws {
+        let project = Project(fallbackName: "focus", workspaceConfiguration: .standard)
+        let first = project.newBrowserTab(initialFocus: .none)
+        let webView = first.webView
+        let firstTab = try XCTUnwrap(project.selectedTab)
+        project.newBrowserTab(initialFocus: .none)
+        let dock = project.dock
+        let tools = try XCTUnwrap(dock.group(containing: .files))
+        XCTAssertTrue(dock.move(.tab(firstTab.id), into: tools.id, edge: .bottom))
+        let selected = dock.root.groups.map(\.selected)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let before = try encoder.encode(dock.snapshot(tabIDs: project.tabs.map(\.id)))
+        var snapshots = 0
+        project.onSnapshotChange = { snapshots += 1 }
+        for group in dock.root.groups {
+            dock.activate(group.id)
+            XCTAssertEqual(dock.activeGroupID, group.id)
+            XCTAssertEqual(dock.root.groups.map(\.selected), selected)
+        }
+        let active = dock.activeGroupID
+        dock.activate(UUID())
+        XCTAssertEqual(dock.activeGroupID, active)
+        XCTAssertEqual(snapshots, 0)
+        XCTAssertEqual(try encoder.encode(dock.snapshot(tabIDs: project.tabs.map(\.id))), before)
+        XCTAssertTrue(first.webView === webView)
+        project.selectedTabID = firstTab.id
+        dock.select(.files)
+        project.selectedTabID = firstTab.id
+        XCTAssertEqual(project.focusedContent?.id, first.id, "Reselecting MRU must reactivate its group")
+    }
+
+    func testActiveGroupSurvivesNestedMovesAndFallsBackAfterRemovalAndRestore() throws {
+        let dock = DockWorkspaceModel()
+        let ids = (0..<8).map { _ in UUID() }
+        dock.syncTabs(ids, near: nil)
+        for (index, id) in ids.enumerated() {
+            let target = try XCTUnwrap(dock.group(containing: .files))
+            XCTAssertTrue(dock.move(.tab(id), into: target.id, edge: index.isMultiple(of: 2) ? .bottom : .right))
+            XCTAssertEqual(dock.activeGroup?.selected, .tab(id))
+        }
+        XCTAssertGreaterThan(dock.root.groups.count, 6)
+        let oldActive = dock.activeGroupID
+        dock.syncTabs(Array(ids.dropLast()), near: nil)
+        XCTAssertNotEqual(dock.activeGroupID, oldActive)
+        XCTAssertNotNil(dock.activeGroup)
+        for tool in [DockItem.files, .git, .projects] {
+            dock.select(tool)
+            dock.removeTool(tool)
+            XCTAssertNotNil(dock.activeGroup)
+        }
+        let other = DockWorkspaceModel()
+        dock.restore(other.snapshot(tabIDs: []), tabIDs: [])
+        XCTAssertNotNil(dock.activeGroup)
+        XCTAssertTrue(dock.root.groups.contains { $0.id == dock.activeGroupID })
+        dock.syncTabs([], near: nil)
+        if let empty = dock.root.groups.first(where: { $0.items.isEmpty }) {
+            dock.activate(empty.id)
+            XCTAssertNil(dock.activeGroup?.selected)
+        }
+    }
+
+    func testToolsAreNotTheMostRecentWorkContentAndCloseTheirOwnPanel() throws {
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "focus", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        let browser = project.newBrowserTab(initialFocus: .none)
+        let workID = try XCTUnwrap(project.selectedTabID)
+        for tool in [DockItem.files, .git, .projects] {
+            manager.showPanel(tool)
+            XCTAssertNil(project.focusedContent)
+            XCTAssertEqual(project.selectedTabID, workID)
+            XCTAssertFalse(manager.hasSelectedBrowser)
+            XCTAssertFalse(manager.canFind)
+            XCTAssertFalse(manager.canReplace)
+            XCTAssertFalse(manager.canClearActiveTerminal)
+            XCTAssertFalse(manager.canSaveSelectedFile)
+            manager.closeSelectedTab()
+            XCTAssertNil(project.dock.group(containing: tool))
+            XCTAssertEqual(project.tabs.count, 1)
+            XCTAssertEqual(project.tabs.first?.content.id, browser.id)
+        }
+    }
+
     func testNestedLayoutObservationAndDragCancelPreserveUniqueOwners() async throws {
         let project = Project(fallbackName: "dock observation", workspaceConfiguration: .standard)
         let browser = BrowserTab(initialFocus: .none)

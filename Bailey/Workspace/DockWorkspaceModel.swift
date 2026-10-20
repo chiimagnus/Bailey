@@ -374,20 +374,42 @@ indirect enum DockSavedNode: Codable {
 final class DockWorkspaceModel {
     let configuration: DockWorkspaceConfiguration
     private(set) var root: DockNode {
-        didSet { onSnapshotChange?() }
+        didSet {
+            let previous = activeGroupID.flatMap { oldValue.group(id: $0)?.selected }
+            if activeGroupID.flatMap({ root.group(id: $0) }) == nil {
+                activeGroupID = root.groups.first?.id
+            }
+            if previous != activeGroup?.selected, let previous { onDeactivate?(previous) }
+            onSnapshotChange?()
+        }
     }
+    private(set) var activeGroupID: UUID?
     @ObservationIgnored var onSnapshotChange: (() -> Void)?
+    @ObservationIgnored var onDeactivate: ((DockItem) -> Void)?
 
     init(configuration: DockWorkspaceConfiguration = .standard) {
         self.configuration = configuration
         root = configuration.makeInitialLayout()
+        activeGroupID = root.groups.first?.id
+    }
+
+    var activeGroup: DockGroup? { activeGroupID.flatMap { root.group(id: $0) } }
+
+    func activate(_ groupID: UUID) {
+        guard root.group(id: groupID) != nil, activeGroupID != groupID else { return }
+        let previous = activeGroup?.selected
+        activeGroupID = groupID
+        if let previous { onDeactivate?(previous) }
     }
 
     func group(containing item: DockItem) -> DockGroup? { root.group(containing: item) }
 
     func select(_ item: DockItem) {
-        guard let owner = group(containing: item), owner.selected != item else { return }
-        root = root.editingGroup(owner.id) { $0.selected = item }
+        guard let owner = group(containing: item) else { return }
+        if owner.selected != item {
+            root = root.editingGroup(owner.id) { $0.selected = item }
+        }
+        activate(owner.id)
     }
 
     /// Keep new tabs near the selected tab, otherwise prefer an empty group.
@@ -431,7 +453,11 @@ final class DockWorkspaceModel {
         guard let source = root.group(containing: item),
               root.group(id: destinationID) != nil
         else { return false }
-        if source.id == destinationID && source.items.count == 1 { return edge == nil }
+        if source.id == destinationID && source.items.count == 1 {
+            guard edge == nil else { return false }
+            select(item)
+            return true
+        }
         guard let remaining = root.removing(item) else { return false }
         if let edge {
             guard remaining.group(id: destinationID) != nil else { return false }
@@ -452,6 +478,7 @@ final class DockWorkspaceModel {
                 group.selected = item
             }
         }
+        select(item)
         return true
     }
 
@@ -463,6 +490,7 @@ final class DockWorkspaceModel {
             group.items.append(item)
             group.selected = item
         }
+        activate(groupID)
         return true
     }
 
@@ -487,6 +515,8 @@ final class DockWorkspaceModel {
     }
 
     func restore(_ saved: DockSavedNode, tabIDs: [UUID]) {
+        if let previous = activeGroup?.selected { onDeactivate?(previous) }
+        activeGroupID = nil
         root = saved.restore(tabIDs: tabIDs)
         // Normalize the saved tree: missing/unsnapshotable references and
         // project tabs opened since the snapshot must never disappear.

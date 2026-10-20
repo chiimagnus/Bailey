@@ -7,6 +7,35 @@ import XCTest
 /// not a valid substitute for the manager that owns a file or its save target.
 @MainActor
 final class WorkspaceWindowIsolationTests: XCTestCase {
+    func testWindowFocusLossSavesAllDirtyBuffersNotOnlyTheMostRecentTab() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        var files: [FileTab] = []
+        for name in ["甲.swift", "乙.swift"] {
+            let url = root.appendingPathComponent(name)
+            try "original".write(to: url, atomically: true, encoding: .utf8)
+            manager.openFile(url.path)
+            guard case .file(let file)? = project.selectedTab?.content else { return XCTFail("File required") }
+            try await file.waitForText()
+            files.append(file)
+        }
+        for file in files {
+            file.text = "changed \(file.tabTitle) 😀"
+            file.refreshDirtyState()
+        }
+        XCTAssertTrue(files.allSatisfy(\.isDirty))
+        manager.autoSaveEditedTabs()
+        try await wait { files.allSatisfy { !$0.isDirty } }
+        for file in files {
+            XCTAssertEqual(try String(contentsOfFile: file.path, encoding: .utf8), file.text)
+        }
+    }
+
     private func editor(in view: NSView) -> FocusReportingTextView? {
         if let editor = view as? FocusReportingTextView { return editor }
         return view.subviews.lazy.compactMap { self.editor(in: $0) }.first

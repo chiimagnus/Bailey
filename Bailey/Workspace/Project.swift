@@ -45,14 +45,11 @@ final class Project: nonisolated Identifiable {
     }
     var selectedTabID: UUID? {
         didSet {
+            if let selectedTabID { dock.select(.tab(selectedTabID)) }
             guard selectedTabID != oldValue else { return }
-            if let oldValue {
-                tabs.first { $0.id == oldValue }?.content.autoSaveOnFocusLoss()
-            }
             if let selectedTabID {
                 recentTabIDs.removeAll { $0 == selectedTabID }
                 recentTabIDs.insert(selectedTabID, at: 0)
-                dock.select(.tab(selectedTabID))
             }
             onSnapshotChange?()
         }
@@ -72,6 +69,10 @@ final class Project: nonisolated Identifiable {
         self.fallbackName = fallbackName
         dock = DockWorkspaceModel(configuration: workspaceConfiguration)
         dock.onSnapshotChange = { [weak self] in self?.onSnapshotChange?() }
+        dock.onDeactivate = { [weak self] item in
+            guard case .tab(let id) = item else { return }
+            self?.tabs.first { $0.id == id }?.content.autoSaveOnFocusLoss()
+        }
         hostConnectionObservation = NotificationCenter.default
             .publisher(for: SSHHostWorkspaces.connectionChanged)
             .sink { [weak self] notification in
@@ -135,9 +136,9 @@ final class Project: nonisolated Identifiable {
         recentTabIDs = selectedTabID.map { [$0] } ?? []
     }
 
-    /// Content of the selected work tab.
     var focusedContent: PaneContent? {
-        selectedTab?.content
+        guard case .tab(let id)? = dock.activeGroup?.selected else { return nil }
+        return tabs.first { $0.id == id }?.content
     }
 
     var hasFiles: Bool {
@@ -150,7 +151,7 @@ final class Project: nonisolated Identifiable {
 
     /// Non-terminal tabs retain the session whose directory they were opened from.
     var selectedSession: TerminalSession? {
-        if case .session(let session)? = focusedContent {
+        if case .session(let session)? = selectedTab?.content {
             return session
         }
         return selectedTab?.contextSession ?? sessions.first

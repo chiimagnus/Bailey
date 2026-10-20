@@ -36,7 +36,7 @@ final class TerminalManager {
         didSet {
             guard selectedProjectID != oldValue else { return }
             if let oldValue {
-                projects.first { $0.id == oldValue }?.selectedTab?.content.autoSaveOnFocusLoss()
+                projects.first { $0.id == oldValue }?.tabs.forEach { $0.content.autoSaveOnFocusLoss() }
             }
             requestSave()
         }
@@ -656,10 +656,10 @@ final class TerminalManager {
         return project
     }
 
-    /// Losing the window's focus saves its active editor, not every open
-    /// file across unrelated projects and remote machines.
     func autoSaveEditedTabs() {
-        selectedProject?.selectedTab?.content.autoSaveOnFocusLoss()
+        for project in projects {
+            for tab in project.tabs { tab.content.autoSaveOnFocusLoss() }
+        }
     }
 
     func close(_ project: Project) {
@@ -839,13 +839,14 @@ final class TerminalManager {
         return false
     }
 
-    /// Closes the selected work tab, or the empty project.
     func closeSelectedTab() {
         guard let project = selectedProject else { return }
-        if project.tabs.isEmpty {
-            close(project)
-        } else {
-            project.closeSelected()
+        switch project.dock.activeGroup?.selected {
+        case .tab: project.closeSelected()
+        case .files?, .git?, .projects?:
+            if let item = project.dock.activeGroup?.selected { project.dock.removeTool(item) }
+        case nil:
+            if project.tabs.isEmpty { close(project) }
         }
     }
 
