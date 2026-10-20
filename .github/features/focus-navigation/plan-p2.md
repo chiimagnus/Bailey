@@ -4,7 +4,7 @@
 
 **Non-goals：** 不创建焦点样式设置、不改变未请求的 Tree/Git 外观、不实现 Files 多选集合（#5）、不实现可编辑快捷键映射（#43）。
 
-**Approach：** `WorkspaceDockView` 直接消费 P1 的组目标与系统 key window 状态；复用 `Theme`、`TreeRowSurface` 原有 selected/focused 基础，不新增一套标签/树组件。菜单仍经 `BaileyApp` 当前窗口 focused manager 分发。
+**Approach：** `WorkspaceDockView` 消费 P1 的瞬时活动组与系统 key window 状态，不将焦点放进布局快照。复用 `Theme` 与共享树行，不新增标签/树组件。菜单经 `BaileyApp` 当前窗口 focused manager 分发，但**实际内容目标必须匹配活动组**。
 
 **Acceptance：** 后台不显示假活动焦点、前台仅一个组有可感知的强调；多选与键盘行焦点的不同由 #5 在共享树表面上接入；正常窗口切换、拖动、关组后快捷键与首响应者吻合。
 
@@ -18,7 +18,7 @@
 **源码锚点：** `Bailey/UI/WorkspaceDockView.swift.DockTabGroupView`（`header/content`）、`Bailey/UI/Components/WorkspaceChrome.swift.TabItemChrome`、`Bailey/Shared/Tree/TreeRowStyle.swift.TreeRowSurface`、`Bailey/App/Theme.swift` 及 `Bailey/UI/Panels/ToolPanelView.swift`。
 
 1. **Red：** 对照当前 selected tab 背景与工具面板行态，验证旧 UI 只显示各自选中却不能标明窗口/区域级活动焦点；实测两窗口失焦后是否仍有高亮、Hover 是否能误判聚焦。涵盖深浅主题、窄宽区域、不同编辑/终端/Diff/工具组。
-2. **Green：** 在当前活跃窗口仅为被 P1 选中的 Dock 组绘制克制的原生强调（例如统一边界/标题条对比），不改变它组的 `selected`。同组真正 selected 标签可加一层适量区别；其它组虽有 selected 但不显示 active。对于共享 `TreeRowSurface`，沿现有参数区分行选中与键盘聚焦，而不是把 `focused=true` 当成「Files 多选」或对全部 Git 行强行换样式。Files 选中集合仍待 #5 P1-T1 接入；基础焦点样式不得覆盖文件状态色。
+2. **Green：** 当前 Key Window 的活动 Dock 组显示轻量、稳定的统一强调，其它组保留组内 `selected`，不显示 active；不强行改主题色、布局或 Git 行。`TreeRowSurface.focused` 当前只是与 hover 相同的 0.05 透明度填充，**不是可辨认的键盘焦点环**：#13 仅负责 Dock 组视觉，不预先给 Git/Files 所有行加外观；#5 P1-T1 按实际 Files 键盘导航需要，复用行组件的 `focused` 参数并补可识别的行焦点反馈。
 3. **覆盖与闭环：** 单/多/6+ 组、浅暗、动态主题、缩放、超长标签/路径、窄栏、鼠标 hover/drag、不同窗口 key 状态、Settings/Sheet/菜单、辅助功能文字与形状提示；检查尺寸无抖动且 Terminal/TextKit/WebKit 实例不重建。更新 `docs/ui.md`、`docs/features/dock.md`；验证真实像素与输入接收者、跑 `DockWorkspaceTests` 和原生 GUI；清理被替代的旧视觉判断，独立中文提交。
 
 ---
@@ -28,9 +28,9 @@
 
 **源码锚点：** `Bailey/UI/WorkspaceDockView.swift.DockTabDragCoordinator.finish`、`Bailey/Workspace/DockWorkspaceModel.swift.move/place/removeTool/restore`、`Bailey/Workspace/TerminalManager.swift`（导航、窗口目标及 `restoreFocusAfterCommandPalette`）、`Bailey/App/BaileyApp.swift.BaileyCommands`、`Bailey/UI/CommandPaletteView.swift`、`Bailey/Editor/FileViewerView.swift.autoSaveOnFocusLoss`。
 
-1. **Red：** 真正拖动工具面板与工作标签到不同组/边缘、关闭唯一活跃组、恢复带旧 group ID 的布局、打开/关闭 ⌘P、切前台和两个窗口，再执行 ⌘F/⌘S/⌘C/⌘V 与终端输入，确认实际路由、原生第一响应者和不丢未保存数据。Drag hover 期间不允许改变活跃组，落地后仅新有效组成为活动目标。
-2. **Green：** 对现有 Dock 移动成功的唯一入口补齐 P1 的活动组转移或有效 fallback；使用现有 `@FocusedValue` 路由当前窗口，不实现第二个菜单目标或自定义快捷键框架。关闭临时焦点输入（palette/rename/sheet）后在其所属窗口恢复可用的内容焦点；不在 App 后台抢键盘，也不吞掉终端编辑快捷键。
-3. **覆盖与闭环：** 纯横/纵/多层嵌套、合并/拆分/取消拖动、窗口和 App 激活、Files/Projects/Git/Browser/TextKit/Diff/终端、Settings 打开关闭、P1 文件未保存与重命名状态、SSH 断线时工具切换、五分屏长期运行。逐项对比 actual firstResponder、命令作用的项目/Tab、保存后真实文件内容、视图对象身份和帧率。用 `DockWorkspaceTests`、`PaneRetentionTests`、`WorkspaceWindowIsolationTests`、`WorkspaceContentIdentityTests` 与完整签名 App E2E 验证。相关 `docs/features/{dock,editor,command-palette,session-restore}.md` 当次同步；清理本任务替代路径，独立中文提交。
+1. **Red：** 真正拖动工具与工作标签到其它组/边缘、关闭活动组、恢复布局、打开/关闭 ⌘P、切前台与两个窗口，再执行 ⌘F/S/K/W/L/R、⌘C/V 及终端输入，核对实际命令目标、first responder、文件字节与快照。特别复现 `TerminalManager.restoreFocusAfterCommandPalette` 目前仅判断旧 responder 类型仍稳定：旧终端**可能被 `TerminalParkingContainerView` 挂在同一窗口但已非可见活动组**；`TerminalFind.restoreTerminalFocus` 也只核对 window key，不核对源组是否仍活动。`CommandPaletteView.run` 会先 dismiss 再执行命令，因此 **Palette 执行「显示 Files」「切项目／终端」「打开文件」后 onDisappear 的旧 responder 恢复，不能覆盖新命令设置的真正活动组**。Drag hover 不能切焦点，落地后应转到实际有效组。
+2. **Green：** 在既有 `DockWorkspaceModel.move/place/removeTool/syncTabs/restore` 与 `DockTabDragCoordinator.finish` 的实际成功路径维护 P1 的唯一活动组/有效 fallback，不因预览改变。沿现有 `@FocusedValue`/`TerminalManager` 路由菜单，**修正仍按旧 `selectedTabID` 错投的命令**；用户明确选择标签的动作继续以其显式目标为准。⌘P/查找栏/rename/sheet 关闭时，恢复的原生 responder 必须仍在**当前 key window 的实际活动组与可见视图层级**，并且属于本次打开临时界面时实际被打断的内容；Palette 内从列表执行菜单动作时必须以命令产生的新目标为准；否则交给当前活动内容或保持无焦点，不能把 parked Ghostty、旧编辑器或后台窗口抢回。先复用现有焦点恢复入口并删除重复抢焦点分支，不创建统一恢复协调器。
+3. **覆盖与闭环：** 纯横/纵/6+ 嵌套、合并/拆分/拖放取消、活动组被删除/替换、窗口和 App 激活、Files/Projects/Git/Browser/TextKit/Diff/Ghostty、Settings/Sheet/原生 Find/Palette/rename 间转换，特别包含 **Palette 取消 vs 执行命令、关闭后立刻切项目、终端被停车、旧编辑器已关闭、旧窗口已关闭、窗口切走又返回**；双窗口、SSH 断线、五分屏长用、保留失焦前脏缓冲、Undo 与中文输入。逐项比对真实 first responder、前台组、命令所作用的文件/标签/机器、最终字节、原生对象身份与资源；不能以 `isFocused=true` 或 `NSView.window != nil` 代替输入焦点。用现有 `DockWorkspaceTests`、`PaneRetentionTests`、`WorkspaceWindowIsolationTests`、`WorkspaceContentIdentityTests` 及完整签名 App GUI 验收。`docs/features/{dock,editor,command-palette,session-restore}.md` 按实际改变同步，本任务即刻删除被取代的旧恢复逻辑；中文提交。
 
 ---
 

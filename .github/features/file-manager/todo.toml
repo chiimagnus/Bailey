@@ -35,17 +35,9 @@ note = ""
 
 [[tasks]]
 id = "P2-T1"
-title = "Files 内部多选拖放及目标判定"
+title = "Files 内部拖放及 Finder 完整回归"
 status = "pending"
 plan = "plan-p2.md#p2-t1"
-commit = ""
-note = ""
-
-[[tasks]]
-id = "P2-T2"
-title = "Finder 复制导入与通用操作整合"
-status = "pending"
-plan = "plan-p2.md#p2-t2"
 commit = ""
 note = ""
 

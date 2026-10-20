@@ -4,7 +4,7 @@
 
 **Non-goals：** 不做 Files 多选、文件操作、任意快捷键重映射、视觉配色可配置或新的窗口协调器。
 
-**Approach：** 在当前 `Project.dock / DockWorkspaceModel` 上维护最小的**当前有效焦点组 ID**，系统 `NSWindow` key 状态决定是否显示活动焦点，`NSWindow.firstResponder` 是内容键盘焦点的真源。保留每组 `selected`、现有 `@FocusedValue` 和原生焦点回调；不引入全局并行状态管理。
+**Approach：** 在每个 `Project.dock / DockWorkspaceModel` 中保存**一个瞬时活动组 ID**（独立于会触发快照保存的 `root`）；系统 `NSWindow` key 状态决定可否显示焦点，`NSWindow.firstResponder` 决定键盘实际输入目标。保留组内 `selected`、`Project.selectedTabID` 的 MRU/会话上下文、窗口的 `@FocusedValue` 和已有原生回调；**菜单从活动组解析内容而不是直接复用 `selectedTabID`**。不引入全局 Focus Manager 或新焦点事件总线。
 
 **Acceptance：** 单一活动窗口/项目至多一个活动 Dock 组；切到 Files／Git／Projects 不再假装选中了旧工作标签，真实按键不落到旧原生控件；组移除后焦点自动指向有效组。
 
@@ -17,9 +17,9 @@
 
 **源码锚点：** `Bailey/Workspace/DockWorkspaceModel.swift`（`DockGroup.selected`、`root`、`select/move/place/removeTool/syncTabs/restore`）、`Bailey/Workspace/Project.swift.selectedTabID/focusedContent`、`Bailey/Workspace/TerminalManager.swift`（`selectedProjectID` 及菜单目标）与 `Bailey/App/BaileyApp.swift.WindowRootView`（`focusedSceneValue`／key window）。
 
-1. **Red：** `DockWorkspaceTests` 与 `WorkspaceWindowIsolationTests` 先证明当前一个项目可有多个独立 selected 组，但没有工具面板活动组标识；选择文件/工具不能由 `selectedTabID` 推导活动区域。测试单／多组、空组、切项目 A→B→A、组分割／移动／合并／删除、恢复无效组 ID、两个窗口的真实 key 状态，及后台命令不作用于其它窗口。
-2. **Green：** 由项目原有 `DockWorkspaceModel` 持有唯一活动组目标（具体最少状态由测试确定）；选择一组中的标签时同时更新活动组，但不覆盖其它组的 `selected`；关闭或移动活动内容、树重排、恢复时按现存组与真实当前输入选择一个有效目标。Key Window/NSApp 是否激活从系统读取，不缓存成第二个永久真源。现有 `TerminalManager` 与 `Project` 仍是窗口/标签所有者。切标签导致的 `autoSaveOnFocusLoss` 调用序列保持原有语义。
-3. **覆盖与闭环：** 组合 1/2/6+ 组、纯横/纵/嵌套、工具/工作标签/空组、快速切项目、两个窗口／独立注册、重排/删除后悬空 ID 和恢复时缺失内容、首次显示及多次切换；确认快照树格式、原生对象数量及未保存文件不被错误重建。更新 `docs/features/dock.md`、必要的 `docs/features/session-restore.md`；仅删除已被新焦点真源取代的旧判断。执行相应 XCTest 及能安全执行的原生 GUI，独立中文提交。
+1. **Red：** `DockWorkspaceTests` 与 `WorkspaceWindowIsolationTests` 先证明当前一个项目可有多个独立 selected 组，但没有工具面板活动组标识；选择文件/工具不能由 `selectedTabID` 推导活动区域。**现有 `Project.focusedContent` 实际返回 `selectedTab?.content`**，直接供 `TerminalManager.clearActiveTerminal/canClearActiveTerminal/performFindAction/canFind/canReplace/saveSelectedFile/canSaveSelectedFile/selectedBrowser` 使用；`closeSelectedTab` 与项目切换自动保存又直接读取 selected work tab；`TerminalManager.autoSaveEditedTabs()` 在窗口 `didResignKey` 时也**只保存 selectedTab**，若同时可见两个脏编辑器会漏掉另一个。逐一测试焦点在工具时不得对旧工作标签做保存/清空/查找/浏览器操作，并区分显式「关闭标签」语义：前台活动组为工作标签时 `⌘W` 关闭该标签；活动组为可关闭的 Files/Git/Projects 时关闭该工具面板，不得关闭其它组的旧 selectedTab；非主窗口如 Settings 应只关闭自身。测试单／多组、空组、切项目 A→B→A、组分割／移动／合并／删除、恢复无效组 ID、两个窗口 key 状态及后台命令。
+2. **Green：** 原有 `DockWorkspaceModel` 增加最小、可观察的**瞬时**活动组 ID 与选择/失效回退入口，**不复用 `root.didSet/onSnapshotChange` 写入快照**；组内 `selected` 只更新显示，活动组可切到 Projects/Files/Git/空组。先沿所有实际调用者区分「最近工作标签」和「当前活动内容」：供菜单的内容目标只能从有效的活动组 `selected .tab(id)` 推得，工具组为 nil；`selectedSession`、标签 MRU、项目工作目录等确需最近标签上下文者保留其语义，不盲目全量替换 `focusedContent`。`TerminalManager` 的菜单使能与最终操作目标必须一致；操作性快捷键在工具聚焦时不能落到隐藏工作标签。窗口 key 状态不复制存储；原来的 `selectedTabID` 改变时保存保护仍有，但转入工具组的**真实编辑失焦**也必须保存，不让视图重挂载把保存触发重复或漏掉；窗口失去 key 时应覆盖同窗口**实际存在的所有脏文件与可编辑 Diff**，复用已有 `autoSaveOnFocusLoss`/保存队列，不假定仅有一个工作标签，更不能对后台窗口错误保存。
+3. **覆盖与闭环：** 组合 1/2/6+ 组、纯横/纵/嵌套、工具/工作标签/空组、快速切项目、两个窗口／独立注册、重排/删除后悬空 ID、项目恢复及无效组回退；断言**纯活动组切换不触发 `onSnapshotChange/SessionStore` 写盘**、其它组 selected 不变、未保存编辑未丢、同一原生表面不重建。执行 `DockWorkspaceTests`、`SessionStoreTests`、`WorkspaceWindowIsolationTests` 及真实 GUI 的菜单目标验证，包含 `⌘W/S/F/K/L/R`、工具组中 `⌘W` 的可见关闭结果、Settings 的独立 `⌘W`、一个窗口同时两个脏工作分屏失去 key（最终核对两份磁盘内容）及原生窗口 key 切换。更新 `docs/features/dock.md`、必要的 `docs/features/session-restore.md`；同任务删除已取代的旧菜单/焦点目标判断，不保留兼容桥接；中文原子提交。
 
 ---
 
@@ -28,9 +28,9 @@
 
 **源码锚点：** `Bailey/UI/WorkspaceDockView.swift.DockTabGroupView.tab/select/content`、`Bailey/UI/Panes/PanelContentView.swift`（`onFocused`）、`Bailey/UI/Panels/{ToolPanelView,ProjectsPanelView}.swift`、`Bailey/Files/FileTreePanel.swift`、`Bailey/Git/GitPanel.swift`、`Bailey/Terminal/TerminalHostView.swift`、`Bailey/Editor/SourceTextEditor.swift`、`Bailey/Browser/BrowserView.swift`、`Bailey/Git/DiffViewerView.swift` 及原生 first-responder 桥。
 
-1. **Red：** 在真实主窗口验证点击编辑器、终端、浏览器、Diff 以及 Projects/Files/Git/区域空白的聚焦回调和 **`NSWindow.firstResponder` 实际对象**。当前工具面板没有 `PanelContentView.onFocused` 同等入口；测试点击 Files 后立即键入或使用菜单不能意外发给旧 Ghostty/编辑器。覆盖新建/重命名 TextField 获取焦点及失焦提交、窗口变 key、从弹窗关闭、输入法组合态。
-2. **Green：** 现有的原生 `onBecomeFirstResponder`、`@FocusState` 和 SwiftUI 点击/键盘事件只负责**通知所属组取得活动焦点**；工具面板／空白区域按确实收到的输入激活其组，不能在每次重绘中抢 first responder。需要时为整个工具树建立最小可聚焦入口，不增加不可见遮罩或更换原生 Shell/TextKit/WebKit 宿主。并在原生焦点真实移出时触发已有失焦保存/终端 FocusOut；不能为了使界面变亮就主动派发写入。
-3. **覆盖与闭环：** TextKit 中文输入/查找/Undo、Ghostty 输入和剪贴板、WebKit 地址栏/正文、Diff 输入、Files/Git/Projects 行和右键、重命名/新建编辑态、⌘P/Sheet/Settings、应用前后台与两窗口切换、窄面板/明暗/长文件名/语音辅助；验证**真实键入目标与最终编辑字节**。运行 `PaneRetentionTests`、`WorkspaceContentIdentityTests`、`WorkspaceWindowIsolationTests`、`TreeRowHitTestingTests` 和原生 App；发现同一调用链中的旧焦点桥重复处理即在本任务删掉。更新 `docs/features/dock.md` 和实际改变的工具文档，独立中文提交。
+1. **Red：** 在真实主窗口验证点击编辑器、终端、浏览器、Diff 以及 Projects/Files/Git/区域空白的聚焦回调和 `NSWindow.firstResponder`。当前 `PanelContentView(isSelected: project.selectedTabID == id)` **误把项目最近标签当分屏焦点**，且 Diff 分支固定传 `isSelected: true`、工具面板无聚焦回调；测试同一项目两个可见工作分屏、切到 Files 后再键入/使用菜单、跨窗口激活、失焦编辑缓冲的真实保存。覆盖新建/重命名 TextField、Sheet、查找栏与输入法组合态。
+2. **Green：** `DockTabGroupView` 的点击/原生 `onBecomeFirstResponder` 将所属组设为活动；`PanelContentView` 的工作内容 `isFocused` 应从**真实活动组 + 此组当前 `selected` + 前台窗口**取得，而不是全局 `selectedTabID`。保留已验证的 `TerminalHostView` 失焦→聚焦边缘请求、TextKit 焦点桥、WebKit 地址栏/正文焦点，不在 `body` 重绘时重新派发强制聚焦；Diff 的 `isSelected` 只表达其原有可见/刷新需求，确需操作焦点时通过实际编辑控件/明确动作通道建立，不把该 bool 改成误导的 Focus。工具面板、组标题/空白区域提供最小可聚焦交互，不增加透明覆盖层、另一套 `NSHostingView` 或事件总线；切离脏编辑器时沿现有失焦保存链触发一次正确保存。
+3. **覆盖与闭环：** TextKit 中文输入/查找/Undo、Ghostty 输入/查找与剪贴板、WebKit 地址栏/正文、Diff 编辑、Files/Git/Projects 行和右键、重命名/新建编辑态、⌘P/Sheet/Settings、应用前后台/两个窗口/同时显示两个工作标签、窄面板/明暗/长文件名/基础无障碍；验证**真实键入目标、原生响应者与最终保存字节**，尤其 `NSWindow.didResignKey` 保存的是刚离开的实际编辑内容而非无关 selectedTab。运行 `PaneRetentionTests`、`WorkspaceContentIdentityTests`、`WorkspaceWindowIsolationTests`、`TreeRowHitTestingTests` 和原生 App；同任务删除本次取代的旧焦点判断/重复回调。更新 `docs/features/dock.md` 与实际改变的功能文档；中文原子提交。
 
 ---
 
