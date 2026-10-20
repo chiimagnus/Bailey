@@ -419,6 +419,10 @@ final class EditorNavigationTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(localPoint.x, visible.minX)
                 XCTAssertLessThanOrEqual(localPoint.x, visible.maxX + 2,
                                          "Wrapped final glyph must fit inside the viewport")
+                XCTAssertGreaterThanOrEqual(localPoint.y, visible.minY - 2,
+                                             "Wrapped final glyph must be visible above the clip")
+                XCTAssertLessThanOrEqual(localPoint.y, visible.maxY + 2,
+                                         "Wrapped final glyph must be visible below the clip")
             } else {
                 XCTAssertGreaterThan(scroll.documentView?.frame.width ?? 0, scroll.frame.width,
                                      "Long unwrapped line must remain horizontally reachable")

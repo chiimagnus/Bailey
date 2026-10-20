@@ -326,11 +326,27 @@ class NativeCodeTextView: NSTextView {
     }
 
     override func scrollRangeToVisible(_ range: NSRange) {
-        if let layout = textLayoutManager, let manager = textContentStorage,
-           let target = layoutRange(for: range, in: manager) {
-            layout.ensureLayout(for: target)
+        guard let layout = textLayoutManager, let manager = textContentStorage,
+              let target = layoutRange(for: range, in: manager) else {
+            super.scrollRangeToVisible(range)
+            return
         }
+        layout.ensureLayout(for: target)
         super.scrollRangeToVisible(range)
+        guard isWrappingLines, range.location < manager.length,
+              let character = NSTextRange(NSRange(location: range.location, length: 1),
+                                          in: manager) else { return }
+        // On macOS 26 a paragraph can be part of the viewport even when its
+        // final wrapped glyph is below the visible clip. Scroll to the actual
+        // text segment, not only the containing paragraph.
+        layout.enumerateTextSegments(in: character, type: .standard,
+                                     options: .rangeNotRequired) { _, segment, _, _ in
+            guard segment.width > 0, segment.height > 0 else { return true }
+            let rect = segment.offsetBy(dx: self.textContainerInset.width,
+                                        dy: self.textContainerInset.height)
+            self.scrollToVisible(rect)
+            return false
+        }
     }
 
     override func characterIndex(for point: NSPoint) -> Int {
