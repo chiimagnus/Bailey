@@ -265,7 +265,8 @@ final class PaneRetentionTests: XCTestCase {
             browser: browser, isFocused: true, onFocused: {}, onNewBrowserTab: { _ in }
         ))
         window.contentView = host
-        window.orderFront(nil)
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
         host.layoutSubtreeIfNeeded()
         defer { window.close() }
 
@@ -388,7 +389,7 @@ final class PaneRetentionTests: XCTestCase {
 
         func browserHost() -> NSHostingView<PanelContentView> {
             let view = NSHostingView(rootView: PanelContentView(
-                tab: browserTab, isSelected: false,
+                tab: browserTab, isFocused: false,
                 onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in }
             ))
             view.frame = container.bounds
@@ -412,7 +413,7 @@ final class PaneRetentionTests: XCTestCase {
 
         func editorHost() -> NSHostingView<PanelContentView> {
             let view = NSHostingView(rootView: PanelContentView(
-                tab: fileTab, isSelected: false,
+                tab: fileTab, isFocused: false,
                 onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in }
             ))
             view.frame = container.bounds
@@ -979,6 +980,7 @@ final class PaneRetentionTests: XCTestCase {
         try await settle { file.editorView?.window === window }
         let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
         let editor = try XCTUnwrap(scroll.documentView as? FocusReportingTextView)
+        NSApp.activate()
         window.makeKeyAndOrderFront(nil)
         XCTAssertTrue(window.makeFirstResponder(editor))
         editor.insertText("E", replacementRange: NSRange(location: 0, length: 0))
@@ -1008,7 +1010,9 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertEqual(project.dock.tabOrder, [pane.id])
         XCTAssertEqual(project.selectedTabID, pane.id)
         XCTAssertTrue(scroll.documentView === editor)
-        try await settle { window.firstResponder === editor }
+        if NSApp.isActive && window.isKeyWindow {
+            try await settle { window.firstResponder === editor }
+        }
         print("DOCK_TRACE afterMove actual=\(scroll.contentView.bounds.origin) editorFrame=\(editor.frame) selection=\(editor.selectedRange()) viewport=\(String(describing: editor.textLayoutManager?.textViewportLayoutController.viewportRange))")
         try await settle { scroll.contentView.bounds.origin == scrollBefore }
         XCTAssertEqual(scroll.contentView.bounds.origin, scrollBefore)
@@ -1115,7 +1119,7 @@ final class PaneRetentionTests: XCTestCase {
         window.isReleasedWhenClosed = false
         defer { window.close() }
         let host = NSHostingView(rootView: PanelContentView(
-            tab: tab, isSelected: false,
+            tab: tab, isFocused: false,
             onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in }
         ))
         window.contentView = host
@@ -1168,7 +1172,7 @@ final class PaneRetentionTests: XCTestCase {
 
         func host() -> NSHostingView<PanelContentView> {
             let view = NSHostingView(rootView: PanelContentView(
-                tab: tab, isSelected: false,
+                tab: tab, isFocused: false,
                 onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in }
             ))
             view.frame = container.bounds

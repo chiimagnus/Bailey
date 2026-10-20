@@ -122,10 +122,8 @@ struct ToolPanelView: View {
         )
     }
 
-    /// Path of the file in the focused pane, so the tree can highlight it.
-    /// Reactive: focus/selection is published up through the project to `manager`.
     private var openFilePath: String? {
-        if case .file(let file)? = manager.selectedProject?.focusedContent {
+        if case .file(let file)? = manager.selectedProject?.selectedTab?.content {
             return file.path
         }
         return nil

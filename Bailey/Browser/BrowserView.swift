@@ -727,6 +727,7 @@ struct BrowserFaviconView: View {
 struct BrowserView: View {
     let browser: BrowserTab
     let isFocused: Bool
+    var canFocus: () -> Bool = { true }
     let onFocused: () -> Void
     let onNewBrowserTab: (String?) -> Void
     var onExternalFilesDropped: ([NSItemProvider]) -> Bool = { _ in false }
@@ -746,7 +747,8 @@ struct BrowserView: View {
                     browser: browser,
                     onFocused: onFocused,
                     onNewBrowserTab: onNewBrowserTab,
-                    focusRequest: webContentFocusRequest
+                    focusRequest: webContentFocusRequest,
+                    canFocus: canFocus
                 )
 
                 if browser.isBlank {
@@ -777,8 +779,8 @@ struct BrowserView: View {
             // the one-shot request for the stable browser view.
             try? await Task.sleep(nanoseconds: 50_000_000)
             guard !Task.isCancelled else { return }
+            guard isFocused, canFocus() else { return }
             let initialFocus = browser.consumeInitialFocus()
-            guard isFocused else { return }
             applyFocus(initialFocus ?? currentFocusStrategy)
         }
         .onChange(of: isFocused) { _, focused in
@@ -884,7 +886,8 @@ struct BrowserView: View {
                 },
                 onCancel: {
                     address = browser.urlString
-                }
+                },
+                canFocus: canFocus
             )
             .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 20)
         }
@@ -1034,6 +1037,7 @@ private struct BrowserAddressField: NSViewRepresentable {
     let onBlur: () -> Void
     let onSubmit: () -> Void
     let onCancel: () -> Void
+    var canFocus: () -> Bool = { true }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -1063,6 +1067,7 @@ private struct BrowserAddressField: NSViewRepresentable {
 
     func updateNSView(_ field: BrowserAddressTextField, context: Context) {
         context.coordinator.update(from: self)
+        context.coordinator.canFocus = canFocus
         if field.stringValue != text {
             field.stringValue = text
             field.currentEditor()?.string = text
@@ -1073,6 +1078,7 @@ private struct BrowserAddressField: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
+        var canFocus: () -> Bool = { true }
         var text: Binding<String>
         var handledFocusRequest: UInt?
         private var onFocus: () -> Void
@@ -1117,7 +1123,7 @@ private struct BrowserAddressField: NSViewRepresentable {
             attemptsRemaining: Int
         ) {
             DispatchQueue.main.async { [weak self, weak field] in
-                guard let self, let field else { return }
+                guard let self, let field, self.canFocus() else { return }
                 if field.focusAndSelectAll() { return }
                 guard attemptsRemaining > 1 else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -1171,6 +1177,7 @@ private struct BrowserWebViewRepresentable: NSViewRepresentable {
     let onFocused: () -> Void
     let onNewBrowserTab: (String?) -> Void
     let focusRequest: UInt
+    var canFocus: () -> Bool = { true }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(handledFocusRequest: focusRequest)
@@ -1183,6 +1190,7 @@ private struct BrowserWebViewRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: BrowserWebView, context: Context) {
+        context.coordinator.canFocus = canFocus
         webView.onFocused = onFocused
         webView.onNewBrowserTab = onNewBrowserTab
         guard focusRequest != context.coordinator.handledFocusRequest else {
@@ -1202,6 +1210,7 @@ private struct BrowserWebViewRepresentable: NSViewRepresentable {
 
     final class Coordinator {
         var handledFocusRequest: UInt?
+        var canFocus: () -> Bool = { true }
 
         init(handledFocusRequest: UInt) {
             // Preserve a request issued before the representable was mounted.
@@ -1221,7 +1230,7 @@ private struct BrowserWebViewRepresentable: NSViewRepresentable {
             attemptsRemaining: Int
         ) {
             DispatchQueue.main.async { [weak self, weak webView] in
-                guard let self, let webView else { return }
+                guard let self, let webView, self.canFocus() else { return }
                 if let window = webView.window,
                    window.makeFirstResponder(webView) {
                     return

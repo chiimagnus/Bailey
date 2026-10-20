@@ -7,6 +7,63 @@ import XCTest
 /// not a valid substitute for the manager that owns a file or its save target.
 @MainActor
 final class WorkspaceWindowIsolationTests: XCTestCase {
+    func testDockToolsTakeNativeFocusWithoutReplacingVisibleEditors() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let url = root.appendingPathComponent("focus 中文.swift")
+        try "let value = 1\n".write(to: url, atomically: true, encoding: .utf8)
+        manager.openFile(url.path)
+        let tab = try XCTUnwrap(project.selectedTab)
+        guard case .file(let file) = tab.content else { return XCTFail("File required") }
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 1100, height: 700),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.editor(in: host) != nil && manager.attachedWindow === window
+        }
+        let editor = try XCTUnwrap(editor(in: host))
+        let original = try XCTUnwrap(editor.text)
+        for tool in [DockItem.files, .git, .projects] {
+            XCTAssertTrue(window.makeFirstResponder(editor))
+            XCTAssertEqual(project.focusedContent?.id, file.id)
+            editor.insertText("// \(tool) 中文 😀\n", replacementRange: NSRange(location: 0, length: 0))
+            XCTAssertTrue(file.isDirty)
+            let ownsKeyboard = NSApp.isActive && window.isKeyWindow
+            manager.showPanel(tool)
+            try await wait {
+                host.layoutSubtreeIfNeeded()
+                return (!ownsKeyboard || window.firstResponder is DockGroupFocusView) && !file.isDirty
+            }
+            if ownsKeyboard {
+                let scope = try XCTUnwrap(window.firstResponder as? DockGroupFocusView)
+                XCTAssertEqual(scope.groupID, project.dock.group(containing: tool)?.id)
+            }
+            XCTAssertNil(project.focusedContent)
+            XCTAssertTrue(self.editor(in: host) === editor)
+            XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), file.text)
+            project.selectedTabID = tab.id
+            if NSApp.isActive && window.isKeyWindow {
+                try await wait { window.firstResponder === editor }
+            }
+        }
+        XCTAssertTrue(file.text.hasSuffix(original))
+        let before = file.text
+        editor.undoManager?.undo()
+        XCTAssertNotEqual(file.text, before)
+        XCTAssertTrue(editor === self.editor(in: host))
+    }
+
     func testWindowFocusLossSavesAllDirtyBuffersNotOnlyTheMostRecentTab() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

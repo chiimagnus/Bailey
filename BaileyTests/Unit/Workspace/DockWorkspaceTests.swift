@@ -5,6 +5,25 @@ import XCTest
 
 @MainActor
 final class DockWorkspaceTests: XCTestCase {
+    func testMovingActiveContentDoesNotDeactivateItThroughAnIntermediateGroup() throws {
+        let dock = DockWorkspaceModel()
+        let id = UUID()
+        dock.syncTabs([id], near: nil)
+        dock.select(.tab(id))
+        var deactivated: [DockItem] = []
+        dock.onDeactivate = { deactivated.append($0) }
+        for edge in [DockEdge.left, .right, .top, .bottom] {
+            let target = try XCTUnwrap(dock.group(containing: .files))
+            XCTAssertTrue(dock.move(.tab(id), into: target.id, edge: edge))
+            XCTAssertEqual(dock.activeGroup?.selected, .tab(id))
+            XCTAssertTrue(deactivated.isEmpty)
+        }
+        XCTAssertFalse(dock.move(.tab(id), into: UUID()))
+        XCTAssertEqual(dock.activeGroup?.selected, .tab(id))
+        dock.select(.files)
+        XCTAssertEqual(deactivated, [.tab(id)])
+    }
+
     func testActivityIsTransientAndDoesNotChangeOtherGroupSelections() throws {
         let project = Project(fallbackName: "focus", workspaceConfiguration: .standard)
         let first = project.newBrowserTab(initialFocus: .none)

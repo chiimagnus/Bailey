@@ -268,6 +268,13 @@ final class DiffTextView: NativeCodeTextView {
     /// was consumed by expanding it.
     var handleCollapsedClick: ((NSPoint) -> Bool)?
     var onResignFirstResponder: (() -> Void)?
+    var onBecomeFirstResponder: (() -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { onBecomeFirstResponder?() }
+        return became
+    }
 
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()

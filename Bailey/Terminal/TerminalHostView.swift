@@ -8,6 +8,7 @@ struct TerminalHostView: NSViewRepresentable {
     let session: TerminalSession
     /// Whether this terminal's work tab is selected.
     var isFocused: Bool = true
+    var canFocus: () -> Bool = { true }
     /// Called when the terminal takes focus itself (e.g. a click), so the
     /// selected work tab can follow.
     var onFocused: () -> Void = {}
@@ -20,6 +21,7 @@ struct TerminalHostView: NSViewRepresentable {
         let container = TerminalContainerView()
         container.terminal = session.surface
         container.focusOnAppear = isFocused
+        container.canFocus = canFocus
         let terminal = session.surface
         terminal.onBecomeFirstResponder = onFocused
         terminal.openMenuTarget.onNewBrowserTab = onNewBrowserTab
@@ -61,6 +63,7 @@ struct TerminalHostView: NSViewRepresentable {
         let container = view as? TerminalContainerView
         container?.activateSurfaceAfterLayout()
         container?.focusOnAppear = isFocused
+        container?.canFocus = canFocus
         // Take focus only on the unfocused→focused edge (keyboard navigation,
         // a tab becoming selected), never on every render — that would fight the
         // user for focus and make sidebar text fields untypable.
@@ -171,6 +174,7 @@ final class TerminalParkingContainerView: NSView {
 /// this only performs the makeFirstResponder.
 private final class TerminalContainerView: NSView {
     weak var terminal: NSView?
+    var canFocus: () -> Bool = { true }
     var focusOnAppear = true {
         didSet {
             if !focusOnAppear { pendingFocusRequest = false }
@@ -243,6 +247,7 @@ private final class TerminalContainerView: NSView {
                 let window,
                 let terminal,
                 self.focusOnAppear,
+                self.canFocus(),
                 NSApp.isActive,
                 window.isKeyWindow,
                 terminal.window === window

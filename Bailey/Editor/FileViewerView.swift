@@ -558,6 +558,7 @@ struct FileViewerView: View {
     let file: FileTab
     /// Whether this file's work tab is selected.
     var isFocused: Bool = true
+    var canFocus: () -> Bool = { true }
     /// Called when the editor takes focus itself (e.g. a click), so the
     /// selected work tab can follow.
     var onFocused: () -> Void = {}
@@ -589,6 +590,7 @@ struct FileViewerView: View {
                         palette: .theme(dark: colorScheme == .dark),
                         wrapLines: settings.wrapLines,
                         isFocused: isFocused,
+                        canFocus: canFocus,
                         onFocused: onFocused
                     )
                     .id(file.reloadRevision)
