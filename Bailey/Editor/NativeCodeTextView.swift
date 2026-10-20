@@ -307,16 +307,28 @@ class NativeCodeTextView: NSTextView {
         }
     }
 
+    private func layoutRange(for range: NSRange,
+                             in manager: NSTextContentManager) -> NSTextRange? {
+        guard range.location != NSNotFound, range.location >= 0,
+              range.length >= 0, NSMaxRange(range) <= manager.length else { return nil }
+        if isWrappingLines, let index = lineIndex, index.length == manager.length {
+            // One TextKit 2 paragraph can contain many visual lines. Layout
+            // for just the last character need not realize those lines on
+            // macOS 26 even though the paragraph is in the viewport range.
+            let row = index.row(at: range.location)
+            let start = index.offset(atLine: row)
+            let end = index.offset(atLine: row + 1)
+            return NSTextRange(NSRange(location: start, length: end - start), in: manager)
+        }
+        let requested = range.length == 0 && range.location < manager.length
+            ? NSRange(location: range.location, length: 1) : range
+        return NSTextRange(requested, in: manager)
+    }
+
     override func scrollRangeToVisible(_ range: NSRange) {
-        // TextKit 2 may report a long wrapped paragraph in the viewport before
-        // its final visual glyph is laid out. Resolve only the requested range
-        // before asking NSTextView to reveal it, not the entire document.
-        if let layout = textLayoutManager, let manager = textContentStorage {
-            let requested = range.length == 0 && range.location < manager.length
-                ? NSRange(location: range.location, length: 1) : range
-            if let target = NSTextRange(requested, in: manager) {
-                layout.ensureLayout(for: target)
-            }
+        if let layout = textLayoutManager, let manager = textContentStorage,
+           let target = layoutRange(for: range, in: manager) {
+            layout.ensureLayout(for: target)
         }
         super.scrollRangeToVisible(range)
     }
@@ -331,7 +343,7 @@ class NativeCodeTextView: NSTextView {
         guard window != nil else { return .zero }
         let rect = super.firstRect(forCharacterRange: range, actualRange: actualRange)
         guard rect.isEmpty, let content = textContentStorage,
-              let target = NSTextRange(range, in: content) else { return rect }
+              let target = layoutRange(for: range, in: content) else { return rect }
         textLayoutManager?.ensureLayout(for: target)
         return super.firstRect(forCharacterRange: range, actualRange: actualRange)
     }

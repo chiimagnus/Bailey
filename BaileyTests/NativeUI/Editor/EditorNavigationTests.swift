@@ -398,8 +398,11 @@ final class EditorNavigationTests: XCTestCase {
             try await reveal(NSRange(location: target, length: 1), in: editor)
             let rect = editor.firstRect(forCharacterRange: NSRange(location: target, length: 1),
                                         actualRange: nil)
+            let fragment = editor.nativeContentManager.location(
+                editor.nativeContentManager.documentRange.location, offsetBy: target
+            ).flatMap { editor.nativeLayoutManager.textLayoutFragment(for: $0) }
             XCTAssertTrue(rect.width > 0 && rect.height > 0,
-                          "Glyph rect for wraps=\(wraps): screen=\(rect), editor=\(editor.frame), clip=\(scroll.contentView.bounds), textContainer=\(String(describing: editor.textContainer?.size))")
+                          "Glyph rect for wraps=\(wraps): screen=\(rect), editor=\(editor.frame), clip=\(scroll.contentView.bounds), textContainer=\(String(describing: editor.textContainer?.size)), used=\(editor.nativeLayoutManager.usageBoundsForTextContainer), fragment=\(String(describing: fragment?.layoutFragmentFrame)), lines=\(String(describing: fragment?.textLineFragments.count)), lastRange=\(String(describing: fragment?.textLineFragments.last?.characterRange))")
             let windowPoint = try XCTUnwrap(editor.window).convertPoint(
                 fromScreen: NSPoint(x: rect.midX, y: rect.midY)
             )
