@@ -578,20 +578,9 @@ struct RecentCommitsView: View {
         _ references: [Reference], commit: Commit, colorIndex: Int
     ) -> some View {
         let groups = GitGraphReferenceGroup.grouped(references, remotes: remotes)
-        return ViewThatFits(in: .horizontal) {
-            referenceGroup(groups, showPrimary: true, commit: commit, colorIndex: colorIndex)
-            referenceGroup(groups, showPrimary: false, commit: commit, colorIndex: colorIndex)
-        }
-    }
-
-    private func referenceGroup(
-        _ groups: [GitGraphReferenceGroup], showPrimary: Bool, commit: Commit, colorIndex: Int
-    ) -> some View {
-        let hidden = showPrimary
-            ? (groups.first?.remotes ?? []) + groups.dropFirst().flatMap(\.references)
-            : groups.flatMap(\.references)
+        let hidden = (groups.first?.remotes ?? []) + groups.dropFirst().flatMap(\.references)
         return HStack(spacing: 3 * fontScale) {
-            if showPrimary, let first = groups.first {
+            if let first = groups.first {
                 referenceBadge(first.primary, commit: commit, colorIndex: colorIndex)
             }
             if !hidden.isEmpty {

@@ -1,3 +1,5 @@
+import AppKit
+import Combine
 import Dispatch
 import Foundation
 import Observation
@@ -9,6 +11,22 @@ import OSLog
 @Observable
 final class GitStatusModel {
     private nonisolated static let statusLogger = Logger(subsystem: "chiimagnus.bailey", category: "GitStatus")
+
+    @ObservationIgnored private var activeObserver: AnyCancellable?
+    @ObservationIgnored private var inactiveObserver: AnyCancellable?
+
+    init() {
+        activeObserver = NotificationCenter.default.publisher(
+            for: NSApplication.didBecomeActiveNotification
+        ).sink { [weak self] _ in
+            Task { @MainActor [weak self] in self?.setLocalFileEventsForeground(true) }
+        }
+        inactiveObserver = NotificationCenter.default.publisher(
+            for: NSApplication.didResignActiveNotification
+        ).sink { [weak self] _ in
+            Task { @MainActor [weak self] in self?.setLocalFileEventsForeground(false) }
+        }
+    }
 
     nonisolated struct Entry: Identifiable, Equatable, Sendable {
         var id: String { path }
@@ -588,6 +606,10 @@ final class GitStatusModel {
     /// stale indefinitely.
     nonisolated enum RefreshKind: Sendable { case full, indexOnly, historyOnly }
     private var pendingRefresh: RefreshKind?
+    @ObservationIgnored private var localWatcher: GitFileEventWatcher?
+    @ObservationIgnored private var localWatcherPaths: [String] = []
+    @ObservationIgnored private var pendingFileEvent: Task<Void, Never>?
+    @ObservationIgnored private var localWatcherForeground = true
     private static let recentCommitPageSize = 30
     private var recentCommitLimit = recentCommitPageSize
     private var recentCommitLimitByRoot: [String: Int] = [:]
@@ -617,7 +639,7 @@ final class GitStatusModel {
     /// flight, so later event-driven refreshes do not replace resolved content
     /// with a loading state.
     var isResolvingInitialStatus: Bool {
-        isRefreshing && !hasResolvedStatus
+        !hasResolvedStatus && isRefreshing
     }
 
     var repoRoot: String {
@@ -733,7 +755,13 @@ final class GitStatusModel {
         isResolvingPanelTarget = false
         let targetBackend = backend ?? LocalWorkspaceBackend.shared
         let channelChanged = (self.backend as AnyObject) !== (targetBackend as AnyObject)
+        let targetChanged = root != rootPath || workspaceScope != scope || channelChanged
         self.backend = targetBackend
+        if targetChanged {
+            pendingFileEvent?.cancel()
+            localWatcher = nil
+            localWatcherPaths = []
+        }
         if root != rootPath || workspaceScope != scope {
             workspaceScope = scope
             contextGeneration &+= 1
@@ -764,7 +792,55 @@ final class GitStatusModel {
             invalidateStatusRefresh()
             needsCoreVerification = true
         }
+        if self.backend is LocalWorkspaceBackend, targetChanged || localWatcher == nil {
+            configureLocalWatcher(root: root, gitDirectory: nil)
+        }
         refresh()
+    }
+
+    func setLocalFileEventsForeground(_ foreground: Bool) {
+        guard localWatcherForeground != foreground else { return }
+        localWatcherForeground = foreground
+        if !foreground {
+            pendingFileEvent?.cancel()
+            localWatcher = nil
+            localWatcherPaths = []
+        } else {
+            if case .repository(let previous) = cachedStatusByRoot[scopedRoot] {
+                configureLocalWatcher(root: previous.topLevel, gitDirectory: previous.gitDirectory)
+            } else {
+                configureLocalWatcher(root: rootPath, gitDirectory: nil)
+            }
+            if !rootPath.isEmpty { refresh() }
+        }
+    }
+
+    private func configureLocalWatcher(root: String, gitDirectory: String?) {
+        guard localWatcherForeground else { return }
+        let paths = backend is LocalWorkspaceBackend
+            ? GitFileEventWatcher.paths(
+                root: root, gitDirectory: gitDirectory,
+                worktrees: worktreeLocations.map(\.path)
+            ) : []
+        guard paths != localWatcherPaths || localWatcher == nil else { return }
+        pendingFileEvent?.cancel()
+        localWatcher = nil
+        localWatcherPaths = paths
+        let generation = contextGeneration
+        localWatcher = GitFileEventWatcher(paths: paths) { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.localWatcherForeground,
+                      self.contextGeneration == generation else { return }
+                self.pendingFileEvent?.cancel()
+                self.pendingFileEvent = Task { [weak self] in
+                    do { try await Task.sleep(for: .milliseconds(400)) }
+                    catch { return }
+                    guard let self, self.localWatcherForeground,
+                          self.contextGeneration == generation else { return }
+                    self.refresh()
+                }
+            }
+        }
     }
 
     private func queueRefresh(_ kind: RefreshKind) {
@@ -797,7 +873,6 @@ final class GitStatusModel {
         let requestID = statusRequestID
         coreCompletedRequestID = nil
         isRefreshing = true
-        if requestKind != .historyOnly { hasCurrentLineTotals = false }
 
         // A blocked filesystem may outlive the Git command timeout.
         let refreshTimeout: Duration = backend is LocalWorkspaceBackend
@@ -855,7 +930,7 @@ final class GitStatusModel {
                     self.cachedStatusByRoot[self.scopedRoot] = .repository(
                         core.retainingDisplayMetadata(from: previous)
                     )
-                    self.hasResolvedStatus = true
+                    if !self.hasResolvedStatus { self.hasResolvedStatus = true }
                     return true
                 }
             }.value
@@ -863,7 +938,8 @@ final class GitStatusModel {
                   self.statusRequestID == requestID,
                   self.rootPath == root else { return }
             self.isRefreshing = false
-            self.isLoadingMoreCommits = commitLimit < self.recentCommitLimit
+            let loadingMore = commitLimit < self.recentCommitLimit
+            if self.isLoadingMoreCommits != loadingMore { self.isLoadingMoreCommits = loadingMore }
             switch result {
             case .repository(let latest):
                 if requestKind == .historyOnly {
@@ -873,9 +949,11 @@ final class GitStatusModel {
                        let history = latest.history,
                        history.refsByName == self.refsByName,
                        self.canUseCurrentReferences {
-                        self.recentCommits = history.commits
-                        self.hasMoreRecentCommits = history.hasMore
-                        self.hasCurrentHistory = true
+                        if self.recentCommits != history.commits { self.recentCommits = history.commits }
+                        if self.hasMoreRecentCommits != history.hasMore {
+                            self.hasMoreRecentCommits = history.hasMore
+                        }
+                        if !self.hasCurrentHistory { self.hasCurrentHistory = true }
                         self.historyPageError = nil
                         if case .repository(let cached) = self.cachedStatusByRoot[self.scopedRoot] {
                             var updated = cached
@@ -913,7 +991,7 @@ final class GitStatusModel {
             case .failed:
                 self.apply(result)
             }
-            self.hasResolvedStatus = true
+            if !self.hasResolvedStatus { self.hasResolvedStatus = true }
             if let pending = self.pendingRefresh {
                 self.pendingRefresh = nil
                 self.refresh(kind: pending)
@@ -2956,24 +3034,24 @@ final class GitStatusModel {
             // A failed refresh is not evidence that the repository disappeared.
             // Keep its last successful snapshot until a refresh succeeds or the
             // selected workspace is proven to be a different/non-Git root.
-            statusError = message
-            hasCurrentReferences = false
-            hasCurrentHistory = false
-            hasCurrentStashes = false
-            hasCurrentWorktrees = false
+            if statusError != message { statusError = message }
+            if hasCurrentReferences { hasCurrentReferences = false }
+            if hasCurrentHistory { hasCurrentHistory = false }
+            if hasCurrentStashes { hasCurrentStashes = false }
+            if hasCurrentWorktrees { hasCurrentWorktrees = false }
             return
         case .repository(let result):
-            statusError = nil
+            if statusError != nil { statusError = nil }
             applyRepository(result)
         }
     }
 
     private func applyRepository(_ result: StatusResult) {
-        needsCoreVerification = false
+        if needsCoreVerification { needsCoreVerification = false }
         if result.detailsCompleted {
-            fullDetailError = result.detailError
-            historyPageError = nil
-            if result.coreMetadata == nil { hasCurrentReferences = false }
+            if fullDetailError != result.detailError { fullDetailError = result.detailError }
+            if historyPageError != nil { historyPageError = nil }
+            if result.coreMetadata == nil, hasCurrentReferences { hasCurrentReferences = false }
         }
         let changed = repositoryIdentity != result.topLevel || headOID != result.headOID
             || branch != result.branch || repositoryOperation != result.repositoryOperation
@@ -2989,59 +3067,67 @@ final class GitStatusModel {
             clearDetails()
             ignoredPaths = []
         }
-        isRepo = true
-        branch = result.branch
-        headOID = result.headOID
-        hasHead = result.hasHead
-        upstream = result.upstream
-        ahead = result.ahead
-        behind = result.behind
-        hasUpstream = result.upstream != nil
-        repositoryOperation = result.repositoryOperation
-        topLevel = result.topLevel
-        repositoryIdentity = result.topLevel
-        currentWorktree = WorktreeChanges(
+        if !isRepo { isRepo = true }
+        if branch != result.branch { branch = result.branch }
+        if headOID != result.headOID { headOID = result.headOID }
+        if hasHead != result.hasHead { hasHead = result.hasHead }
+        if upstream != result.upstream { upstream = result.upstream }
+        if ahead != result.ahead { ahead = result.ahead }
+        if behind != result.behind { behind = result.behind }
+        if hasUpstream != (result.upstream != nil) { hasUpstream = result.upstream != nil }
+        if repositoryOperation != result.repositoryOperation { repositoryOperation = result.repositoryOperation }
+        if topLevel != result.topLevel { topLevel = result.topLevel }
+        if repositoryIdentity != result.topLevel { repositoryIdentity = result.topLevel }
+        let current = WorktreeChanges(
             path: result.topLevel,
             branch: result.branch == "detached HEAD" ? nil : result.branch,
             headOID: result.headOID, entries: result.entries, isCurrent: true
         )
-        if let worktrees = result.worktrees { otherWorktrees = worktrees }
+        if currentWorktree != current { currentWorktree = current }
+        if let worktrees = result.worktrees, otherWorktrees != worktrees {
+            otherWorktrees = worktrees
+        }
         if let locations = result.worktreeLocations {
-            worktreeLocations = locations
-            hasCurrentWorktrees = true
-        } else if result.detailsCompleted {
+            if worktreeLocations != locations { worktreeLocations = locations }
+            if !hasCurrentWorktrees { hasCurrentWorktrees = true }
+        } else if result.detailsCompleted, hasCurrentWorktrees {
             hasCurrentWorktrees = false
         }
         if let core = result.coreMetadata {
-            branches = core.branches
-            refsByName = core.refsByName
-            remotes = core.remotes
-            defaultBranch = core.defaultBranch
-            hasCurrentReferences = true
+            if branches != core.branches { branches = core.branches }
+            if refsByName != core.refsByName { refsByName = core.refsByName }
+            if remotes != core.remotes { remotes = core.remotes }
+            if defaultBranch != core.defaultBranch { defaultBranch = core.defaultBranch }
+            if !hasCurrentReferences { hasCurrentReferences = true }
         }
         if let history = result.history {
-            recentCommits = history.commits
-            hasMoreRecentCommits = history.hasMore
-            hasCurrentHistory = true
+            if recentCommits != history.commits { recentCommits = history.commits }
+            if hasMoreRecentCommits != history.hasMore { hasMoreRecentCommits = history.hasMore }
+            if !hasCurrentHistory { hasCurrentHistory = true }
         }
         if let freshStashes = result.stashes {
-            stashes = freshStashes
-            hasCurrentStashes = true
-            let liveStashOIDs = Set(stashes.map(\.oid))
-            stashFilesByOID = stashFilesByOID.filter { liveStashOIDs.contains($0.key) }
+            if stashes != freshStashes { stashes = freshStashes }
+            if !hasCurrentStashes { hasCurrentStashes = true }
+            let liveStashOIDs = Set(freshStashes.map(\.oid))
+            let surviving = stashFilesByOID.filter { liveStashOIDs.contains($0.key) }
+            if stashFilesByOID != surviving { stashFilesByOID = surviving }
         }
         if result.detailsCompleted {
-            hasCurrentHistory = result.history != nil
-            hasCurrentStashes = result.stashes != nil
+            if hasCurrentHistory != (result.history != nil) {
+                hasCurrentHistory = result.history != nil
+            }
+            if hasCurrentStashes != (result.stashes != nil) {
+                hasCurrentStashes = result.stashes != nil
+            }
         }
         if let totals = result.lineTotals {
             switch totals {
             case .available(let additions, let deletions):
-                lineAdditions = additions
-                lineDeletions = deletions
-                hasCurrentLineTotals = true
+                if lineAdditions != additions { lineAdditions = additions }
+                if lineDeletions != deletions { lineDeletions = deletions }
+                if !hasCurrentLineTotals { hasCurrentLineTotals = true }
             case .unavailable:
-                hasCurrentLineTotals = false
+                if hasCurrentLineTotals { hasCurrentLineTotals = false }
             }
         }
         let entries = result.entries.map { entry in
@@ -3076,12 +3162,18 @@ final class GitStatusModel {
         if result.ignoredLoaded {
             if ignoredPaths != result.ignoredPaths { ignoredPaths = result.ignoredPaths }
         }
-        mergeEntries = entries.filter(\.isConflict)
-        stagedEntries = entries.filter {
+        let conflicts = entries.filter(\.isConflict)
+        let staged = entries.filter {
             !$0.isConflict && $0.staged != "." && $0.staged != "?"
         }
-        changedEntries = entries.filter {
+        let changedFiles = entries.filter {
             !$0.isConflict && $0.unstaged != "."
+        }
+        if mergeEntries != conflicts { mergeEntries = conflicts }
+        if stagedEntries != staged { stagedEntries = staged }
+        if changedEntries != changedFiles { changedEntries = changedFiles }
+        if backend is LocalWorkspaceBackend {
+            configureLocalWatcher(root: result.topLevel, gitDirectory: result.gitDirectory)
         }
     }
 
@@ -3099,6 +3191,7 @@ final class GitStatusModel {
         var ahead = 0
         var behind = 0
         var topLevel = ""
+        var gitDirectory: String?
         var entries: [Entry] = []
         var ignoredPaths: Set<String> = []
         var ignoredLoaded = false
@@ -3240,6 +3333,7 @@ final class GitStatusModel {
             ))
         }
         let path = strippingTrailingLineEnding(gitDir.stdout)
+        result.gitDirectory = path
         do {
             result.repositoryOperation = try await detectRepositoryOperation(
                 gitDirectory: path, backend: backend, deadline: deadline

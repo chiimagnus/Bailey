@@ -66,6 +66,7 @@ struct ContentView: View {
         ))
         .onAppear {
             installFileErrorPresentation()
+            git.setLocalFileEventsForeground(NSApp.isActive)
             syncGit()
         }
         .onChange(of: manager.projects.map(\.id)) { installFileErrorPresentation() }
