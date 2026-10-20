@@ -334,12 +334,16 @@ class NativeCodeTextView: NSTextView {
         layout.ensureLayout(for: target)
         super.scrollRangeToVisible(range)
         guard isWrappingLines, range.location < manager.length,
-              let position = manager.location(manager.documentRange.location,
+              let scrollView = enclosingScrollView else { return }
+        // The text container can know its last wrapped line before AppKit has
+        // resized the document and clip. Reconcile those two views *before*
+        // calculating the scroll target, or a valid Y offset gets clamped to
+        // zero against the provisional document size on macOS 26.
+        scrollView.layoutSubtreeIfNeeded()
+        layout.ensureLayout(for: target)
+        guard let position = manager.location(manager.documentRange.location,
                                               offsetBy: range.location),
               let fragment = layout.textLayoutFragment(for: position) else { return }
-        // The macOS 26 viewport can include the entire paragraph while its
-        // last visual line remains below the clip. Use the native line frame,
-        // which is available even when text segment enumeration is not.
         let local = manager.offset(from: fragment.rangeInElement.location, to: position)
         guard let line = fragment.textLineFragments.first(where: {
             local >= $0.characterRange.location && local < NSMaxRange($0.characterRange)
@@ -350,10 +354,18 @@ class NativeCodeTextView: NSTextView {
             y: fragment.layoutFragmentFrame.minY + bounds.minY + textContainerInset.height,
             width: max(1, bounds.width), height: bounds.height
         )
-        // Let the document view reconcile its text layout and clipping extent.
-        // Scrolling the clip directly can be reverted when AppKit resizes the
-        // document near its last visual line on macOS 26.
-        scrollToVisible(lineRect)
+        let clip = scrollView.contentView
+        let visible = clip.bounds
+        let newY: CGFloat
+        if lineRect.maxY > visible.maxY {
+            newY = lineRect.maxY - visible.height
+        } else if lineRect.minY < visible.minY {
+            newY = lineRect.minY
+        } else {
+            return
+        }
+        clip.scroll(to: NSPoint(x: visible.minX, y: newY))
+        scrollView.reflectScrolledClipView(clip)
     }
 
     override func characterIndex(for point: NSPoint) -> Int {
