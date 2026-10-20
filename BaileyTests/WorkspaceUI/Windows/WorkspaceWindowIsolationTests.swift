@@ -7,6 +7,43 @@ import XCTest
 /// not a valid substitute for the manager that owns a file or its save target.
 @MainActor
 final class WorkspaceWindowIsolationTests: XCTestCase {
+    func testDockGroupClickDoesNotPreemptNativeFieldFocus() async throws {
+        let bounds = NSRect(x: 0, y: 0, width: 560, height: 280)
+        let window = NSWindow(contentRect: bounds, styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = NSView(frame: bounds)
+        let oldEditor = NSTextView(frame: NSRect(x: 12, y: 200, width: 140, height: 45))
+        let group = DockGroupFocusView(groupID: UUID())
+        group.frame = NSRect(x: 180, y: 0, width: 380, height: 280)
+        group.canFocus = { true }
+        group.isActive = true
+        let input = NSTextField(frame: NSRect(x: 20, y: 190, width: 260, height: 28))
+        group.addSubview(input)
+        root.addSubview(oldEditor)
+        root.addSubview(group)
+        window.contentView = root
+        window.orderFront(nil)
+
+        XCTAssertTrue(window.makeFirstResponder(oldEditor))
+        group.requestFocusAfterClick()
+        XCTAssertTrue(window.firstResponder === oldEditor,
+                      "A click observed before native dispatch must not steal the first responder")
+        input.selectText(nil)
+        let fieldEditor = try XCTUnwrap(window.firstResponder as? NSTextView)
+        XCTAssertTrue(fieldEditor.isFieldEditor)
+        try await wait { window.firstResponder === fieldEditor }
+        XCTAssertTrue(window.firstResponder === fieldEditor,
+                      "The newly focused control must win over the background focus reader")
+
+        XCTAssertTrue(window.makeFirstResponder(oldEditor))
+        group.requestFocusAfterClick()
+        try await wait { window.firstResponder === group }
+        XCTAssertTrue(window.firstResponder === group,
+                      "Clicking empty pane space should release the previous editor")
+    }
+
     func testNarrowTerminalFindFieldEditorBelongsOnlyToItsActualDockGroup() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

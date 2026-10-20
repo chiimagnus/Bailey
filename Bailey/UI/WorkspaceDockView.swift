@@ -340,16 +340,10 @@ private struct DockTabGroupView: View {
         .background(DockGroupFocusReader(
             groupID: group.id,
             isActive: isFocused,
-            canFocus: canFocusGroup,
-            onFocused: focusGroup
+            focusesEmptySpace: active?.tabID == nil,
+            canFocus: { canFocusGroup() && dragging.position == nil },
+            onFocused: { if dragging.position == nil { focusGroup() } }
         ).id(group.id))
-        .overlay {
-            Rectangle()
-                .strokeBorder(isFocused ? Color(nsColor: Theme.accent).opacity(0.7) : .clear,
-                              lineWidth: 1)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
         .background {
             GeometryReader { geometry in
                 Color.clear.preference(
@@ -507,7 +501,7 @@ private struct DockTabGroupView: View {
         if case .tab(let id) = item,
            let paneTab = project.tabs.first(where: { $0.id == id }) {
             PaneTabItem(
-                tab: paneTab, isSelected: active == item,
+                tab: paneTab, isSelected: active == item, isPaneFocused: isFocused,
                 select: { select(item) },
                 close: {
                     if let current = project.tabs.first(where: { $0.id == id }) {
@@ -524,7 +518,7 @@ private struct DockTabGroupView: View {
         } else {
             TabItemChrome(
                 systemImage: item.symbol, title: item.label(project: project),
-                isSelected: active == item,
+                isSelected: active == item, isPaneFocused: isFocused,
                 select: { select(item) },
                 close: { closeTool(item) }
             )
@@ -689,6 +683,7 @@ private struct DockTabGroupView: View {
 private struct DockGroupFocusReader: NSViewRepresentable {
     let groupID: UUID
     let isActive: Bool
+    let focusesEmptySpace: Bool
     let canFocus: () -> Bool
     let onFocused: () -> Void
 
@@ -701,7 +696,8 @@ private struct DockGroupFocusReader: NSViewRepresentable {
         view.onFocused = onFocused
         let becameActive = isActive && !view.isActive
         view.isActive = isActive
-        if becameActive { view.focusIfNeeded() }
+        view.focusesEmptySpace = focusesEmptySpace
+        if becameActive && focusesEmptySpace { view.requestFocusAfterClick() }
     }
 
     static func dismantleNSView(_ view: DockGroupFocusView, coordinator: ()) {
@@ -714,6 +710,7 @@ private struct DockGroupFocusReader: NSViewRepresentable {
 final class DockGroupFocusView: NSView {
     let groupID: UUID
     var isActive = false
+    var focusesEmptySpace = true
     var canFocus: (() -> Bool)?
     var onFocused: (() -> Void)?
     private var monitor: Any?
@@ -740,7 +737,7 @@ final class DockGroupFocusView: NSView {
         super.viewDidMoveToWindow()
         stopMonitoring()
         guard window != nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) {
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp, .rightMouseDown, .keyDown]) {
             [weak self] event in
             guard let self, let window = self.window, event.window === window,
                   !self.isHiddenOrHasHiddenAncestor else { return event }
@@ -748,11 +745,11 @@ final class DockGroupFocusView: NSView {
                 if self.containsResponder(window.firstResponder) { self.onFocused?() }
             } else if self.bounds.contains(self.convert(event.locationInWindow, from: nil)) {
                 self.onFocused?()
-                self.focusIfNeeded()
+                if self.focusesEmptySpace { self.requestFocusAfterClick() }
             }
             return event
         }
-        if isActive { focusIfNeeded() }
+        if isActive && focusesEmptySpace { requestFocusAfterClick() }
     }
 
     func stopMonitoring() {
@@ -760,7 +757,16 @@ final class DockGroupFocusView: NSView {
         monitor = nil
     }
 
-    func focusIfNeeded() {
+    func requestFocusAfterClick() {
+        // Allow the clicked native control to become first responder before
+        // empty space in a tool pane can release the previous editor.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isActive, self.focusesEmptySpace else { return }
+            self.focusIfNeeded()
+        }
+    }
+
+    private func focusIfNeeded() {
         guard canFocus?() == true, let window,
               !containsResponder(window.firstResponder) else { return }
         window.makeFirstResponder(self)
