@@ -123,9 +123,12 @@ struct SourceTextEditor: NSViewRepresentable {
             let start = min(max(0, location), limit)
             let length = min(max(0, state.selectionLength ?? 0), limit - start)
             textView.textSelection = NSRange(location: start, length: length)
+        } else if state.scrollY != nil {
+            // A newly loaded NSTextView can leave its insertion point at EOF.
+            // With a restored scroll but no saved caret, that would make AppKit
+            // scroll to EOF again while attaching the view.
+            textView.textSelection = NSRange(location: 0, length: 0)
         }
-
-        coordinator.attach(textView: textView, scrollView: scrollView)
 
         // Restore the saved scroll offset during the first layout pass — while
         // the frame is finally known but before the first paint — so the file
@@ -143,14 +146,17 @@ struct SourceTextEditor: NSViewRepresentable {
                 if let offset = textView.approximateCharacterOffset(atDocumentY: state.scrollY ?? 0) {
                     textView.scrollRangeToVisible(NSRange(location: offset, length: 0))
                 }
+                // Finish TextKit's layout before applying the exact saved offset;
+                // older AppKit versions can otherwise scroll to the provisional
+                // paragraph anchor during their next layout pass.
+                textView.needsLayout = true
+                textView.layoutSubtreeIfNeeded()
                 clipView.setBoundsOrigin(NSPoint(x: state.scrollX ?? 0, y: state.scrollY ?? 0))
                 scrollView.reflectScrolledClipView(clipView)
-                // Lay out the viewport around the restored offset in this same
-                // pass so the region is painted in place, not after a scroll.
-                textView.needsLayout = true
             }
         }
 
+        coordinator.attach(textView: textView, scrollView: scrollView)
         return scrollView
     }
 
@@ -487,6 +493,11 @@ private final class RestorableScrollView: NSScrollView {
         guard window != nil, bounds.width > 0, bounds.height > 0,
               let textView = documentView as? NativeCodeTextView,
               textView.frame.width > 0, let restore = restoreOnFirstLayout else { return }
+        // The initial 1000pt TextKit container may wrap long lines until the
+        // scroll view gets its actual width. Size it first, before mapping a
+        // persisted document Y position back to a paragraph.
+        textView.configureWrapping(textView.wrapsLines,
+                                   viewportWidth: contentView.bounds.width)
         restoreOnFirstLayout = nil
         restore()
     }

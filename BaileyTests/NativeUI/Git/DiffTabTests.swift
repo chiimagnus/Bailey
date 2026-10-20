@@ -208,15 +208,26 @@ final class DiffTabTests: XCTestCase {
                     String(format: "%.3f,%.3f,%.3f",
                            $0.redComponent, $0.greenComponent, $0.blueComponent)
                 })).sorted()
-                // Display HDR transforms lightness nonlinearly; relative RGB
-                // channel differences preserve the actual theme tint identity.
+                // HDR rendering may scale colors nonlinearly. Check that the
+                // tint is visible and has the expected chromatic direction
+                // *relative to the actual theme background*, not identical
+                // device RGB deltas across different displays and macOS SDKs.
+                let background = try XCTUnwrap(scheme.background.usingColorSpace(.deviceRGB))
+                let backgroundGreen = background.greenComponent - background.redComponent
+                let backgroundBlue = background.blueComponent - background.redComponent
                 for tint in requiredTints {
                     let expected = try XCTUnwrap(tint.usingColorSpace(.deviceRGB))
+                    let expectedGreen = expected.greenComponent - expected.redComponent - backgroundGreen
+                    let expectedBlue = expected.blueComponent - expected.redComponent - backgroundBlue
+                    let expectedMagnitude = hypot(expectedGreen, expectedBlue)
+                    XCTAssertGreaterThan(expectedMagnitude, 0.01)
                     let matching = colors.filter { sample in
-                        abs((sample.greenComponent - sample.redComponent)
-                            - (expected.greenComponent - expected.redComponent)) < 0.03
-                            && abs((sample.blueComponent - sample.redComponent)
-                                - (expected.blueComponent - expected.redComponent)) < 0.03
+                        let green = sample.greenComponent - sample.redComponent - backgroundGreen
+                        let blue = sample.blueComponent - sample.redComponent - backgroundBlue
+                        let magnitude = hypot(green, blue)
+                        guard magnitude >= expectedMagnitude * 0.6 else { return false }
+                        return (green * expectedGreen + blue * expectedBlue)
+                            / (magnitude * expectedMagnitude) > 0.9
                     }.count
                     XCTAssertGreaterThan(matching, 8,
                                          "Native \(layout) diff tint must reach pixels, dark=\(dark); appearance=\(pane.effectiveAppearance.name.rawValue); expectedRGB=\(expected); sampledRGB=\(observedPalette.prefix(24))")

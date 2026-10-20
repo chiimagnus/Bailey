@@ -307,6 +307,20 @@ class NativeCodeTextView: NSTextView {
         }
     }
 
+    override func scrollRangeToVisible(_ range: NSRange) {
+        // TextKit 2 may report a long wrapped paragraph in the viewport before
+        // its final visual glyph is laid out. Resolve only the requested range
+        // before asking NSTextView to reveal it, not the entire document.
+        if let layout = textLayoutManager, let manager = textContentStorage {
+            let requested = range.length == 0 && range.location < manager.length
+                ? NSRange(location: range.location, length: 1) : range
+            if let target = NSTextRange(requested, in: manager) {
+                layout.ensureLayout(for: target)
+            }
+        }
+        super.scrollRangeToVisible(range)
+    }
+
     override func characterIndex(for point: NSPoint) -> Int {
         guard window != nil else { return NSNotFound }
         return super.characterIndex(for: point)
@@ -315,6 +329,10 @@ class NativeCodeTextView: NSTextView {
     override func firstRect(forCharacterRange range: NSRange,
                             actualRange: NSRangePointer?) -> NSRect {
         guard window != nil else { return .zero }
+        let rect = super.firstRect(forCharacterRange: range, actualRange: actualRange)
+        guard rect.isEmpty, let content = textContentStorage,
+              let target = NSTextRange(range, in: content) else { return rect }
+        textLayoutManager?.ensureLayout(for: target)
         return super.firstRect(forCharacterRange: range, actualRange: actualRange)
     }
 

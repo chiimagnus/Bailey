@@ -39,14 +39,18 @@ final class DiffNativeSurface: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { restorePendingViewports() }
+        if window != nil, !pendingViewportOffsets.isEmpty { needsLayout = true }
     }
 
     private func restorePendingViewports() {
-        guard window != nil, !pendingViewportOffsets.isEmpty else { return }
+        guard window != nil, bounds.width > 0, bounds.height > 0,
+              !pendingViewportOffsets.isEmpty else { return }
         let offsets = pendingViewportOffsets
         pendingViewportOffsets = []
         for (pane, origin) in offsets {
+            pane.layoutSubtreeIfNeeded()
+            pane.scrollView.layoutSubtreeIfNeeded()
+            pane.textView.layoutSubtreeIfNeeded()
             let scroll = pane.scrollView
             scroll.contentView.setBoundsOrigin(origin)
             scroll.reflectScrolledClipView(scroll.contentView)
