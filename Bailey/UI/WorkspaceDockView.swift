@@ -343,6 +343,13 @@ private struct DockTabGroupView: View {
             canFocus: canFocusGroup,
             onFocused: focusGroup
         ))
+        .overlay {
+            Rectangle()
+                .strokeBorder(isFocused ? Color(nsColor: Theme.accent).opacity(0.7) : .clear,
+                              lineWidth: 1)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
         .background {
             GeometryReader { geometry in
                 Color.clear.preference(
