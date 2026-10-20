@@ -29,6 +29,19 @@
 
 ## 发现项
 
+## 发现 F-09
+
+- 任务：`P1-T5`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/Workspace/TerminalManager.swift:818-840; Bailey/App/BaileyApp.swift:75-77`
+- 摘要：`原生窗口已关闭而 SwiftUI onDisappear 尚未触发，TerminalManager.registry 仍强持有旧项目及十万行 FileTab/原生文档`
+- 风险：`关闭整窗后仍保留旧项目的文件与 TextKit 段落，真实优化 Release 100k 文件测试维持 1 FileTab、1 NSTextView、30888 段落和约159MiB 物理足迹；长期窗口开关可能累计对象。`
+- 预期修复：`以 NSWindow.willCloseNotification 为真实销毁事件，仅清理对应 manager；在持久化最后窗口快照后注销管理器、退役项目原生文档并清空 projects；保持对 onDisappear 的幂等保护。`
+- 验证：`PaneRetentionTests.testClosingNativeWindowReleasesItsProjectBeforeSwiftUIDisappears Red/Green；PaneRetentionTests／SessionStoreTests／WorkspaceWindowIsolationTests；优化 Release 新独立 100k GUI 再次验证关闭与 heap/vmmap。`
+- 解决证据：`2026-10-20：原生 NSWindow.close 红灯 1项/4断言（window-close-red.log），修复后 Green 1/1；PaneRetention＋SessionStore＋WorkspaceWindowIsolation＋WorkspaceWindowClose 26/26通过（f09-workspace-broad.log）。独立优化 Release 实机原生十万行，初版关闭仍 1 FileTab 和 30888 NSTextParagraph，经 willClose 生命周期及 WindowGroup 两组菜单快照值所有权修复后，真实窗口关闭验证 FileTab/FocusReportingTextView/SyntaxHighlightCoordinator 1→0，物理足迹85.2MiB且12秒稳定，隔离 SessionSnapshot JSON 解码还原包含100k路径；make build:release BUILD SUCCEEDED及 codesign --verify --deep --strict exit0；残留仅204系统段落缓存与2个TSMInputSource共64B，无 Bailey 自有文件解析器泄漏。全部证据 build/performance/editor-rendering/audit-p1-100k-release-20261020/。`
+
+
 ## 发现 F-08
 
 - 任务：`P1-T5`
@@ -59,13 +72,13 @@
 
 - 任务：`P1-T5`
 - 严重级别：`Medium`
-- 状态：`Open`
+- 状态：`Deferred`
 - 位置：`Bailey/Support/FPSCounter.swift:20-31,64-73; Bailey/UI/Components/WorkspaceChrome.swift:331-348`
 - 摘要：`FPSBadge 把 CADisplayLink 的显示器回调频率标成 fps，无法证明 Bailey 确实绘制并呈现相同数量的新帧`
 - 风险：`用户在 120Hz 内建屏或 60Hz 外接屏看到数值时会误以为编辑器达到了对应实际 FPS；跨屏移动时链接只在 start 时绑定 NSScreen.main，难以代表当前视图刷新。不能用该读数关闭 T5 性能 Gate`
 - 预期修复：`保持本轮原生编辑器 UI/UX 不变；测量必须用 Instruments 实际合成帧/卡顿数据。以后如需产品 FPS HUD，必须对实际呈现帧取得可靠观测；否则把数字明确改称显示刷新回调/Hz，不伪称绘制 FPS`
 - 验证：`CGDisplayCopyDisplayMode 与 NSScreen.maximumFramesPerSecond 核验屏幕 Hz；Core Animation Animation Hitches 真实 Release 窗口滚动期间追踪；区别 CADisplayLink tick 与新内容帧`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`2026-10-20 本轮按用户决定不再测试/开发真实编辑器内容 FPS；原 FPSBadge 仅显示 CADisplayLink 显示回调频率，未修复或证明实际新内容帧率。该行为为已知范围外限制，未来若恢复产品 FPS HUD 精确性任务需重新立项，不冒充性能测量通过。`
 
 
 ## 发现 F-05
@@ -170,26 +183,26 @@
 
 ## Gate（是否允许进入下一阶段）
 
-- 结论：**No-Go（整个 P1 尚不能无保留完成）**；F-01～F-05、F-07 和 **F-08** 均已 Resolved，仅 **F-06 Open**。F-08 是经过独立原生 SwiftUI 对照确认的系统框架引用环，按本轮授权接受其小额残留，不等于 Apple 已修复。最终生产源码 7aa3633 的 Debug 与优化 Release 授权 Windows SSH 全量 XCTest 分别 **467/467、467/467、均无失败或跳过**；Debug 和 Release 构建、严格个人签名及新版正式整包安装已通过。
-- 理由：真实 Release 两轮五分屏关闭后的物理足迹基线为 120.1/120.0 MiB，自有 FileTab／高亮对象归零；尚未完成五轮完整五分屏长期曲线，**用户本轮明确暂时接受该内存补验缺口**，不将其冒充已测。F-08 引用环已在无 Bailey 依赖的 SwiftUI Dock 对照程序重现，判断为框架自身循环引用，产品无需为此替换原生菜单。F-06 实际内容 FPS 和部分实体环境仍未核销；P1-T5 继续 in_progress。
+- 结论：**Go（本次用户同意的编辑器优化范围已结项，不是全环境无条件 Go）**。P1-T1～T5 均 completed；F-01～F-05、F-07～F-09 均 Resolved，**F-06 Deferred（未修复）**。最新产品提交 `2ca0e68` 的完整含 Windows SSH Debug XCTest **469/469、0 失败、`TEST SUCCEEDED`**（`f09-final-full-windows.log`），F-09 窗口/项目相关测试另有 **26/26**，优化 Release `make build:release`／严格 `codesign` 均通过；旧版本的 Debug／Release 各 467/467 是历史证据，不混称新版 Release 全量执行。
+- 理由：四档原生编辑回归和单文件十万行真实工作区字节验证已完成，独立优化 Release 的十万行滚动 **12/12**、60 秒静置 CPU／内存、真实原生窗口关闭和自有 `FileTab`／编辑器／高亮协调器 **1→0** 已取证。五分屏内存旧基线 120.1／120.0 MiB 仍只代表相应负载，关闭后 159.1／85.2 MiB 两次场景不可作同条件提速百分比。用户明确暂缓真实内容 FPS（现 HUD 不代表实际渲染 FPS）、macOS 15.6／CI26 实机、实体触控板／屏幕与长期完整 Allocations 组合；另外独立 App 十万行真实键盘保存 E2E 因 AX 焦点检查无法完成，Windows SSH 悬空 symlink 分支受 MSYS2 `ln -s` 测试夹具命令限制。**这些均记为明确接受的残余验证边界，非已通过项；本 PR 代码完成不等于当前分支无合并冲突。**
 
 ## 本轮补充核查（2026-10-20）
 
-- **F-06 帧率合同：**`FPSCounter` 只计算 CADisplayLink 回调；用同一份 Instruments `Animation Hitches` 导出的 `hitches-frame-lifetimes` 又确认三种 surface ID 合计 1,982 行，缺少 Bailey 单个编辑器实际新内容帧的归属字段。显示表面频率不可用来关闭本 finding；保持 Open。
+- **F-06 帧率合同（Deferred）：**`FPSCounter` 只计算 CADisplayLink 回调；用同一份 Instruments `Animation Hitches` 导出的 `hitches-frame-lifetimes` 又确认三种 surface ID 合计 1,982 行，缺少 Bailey 单个编辑器实际新内容帧的归属字段。显示表面频率不可冒充实际内容 FPS；按用户决定本轮不继续该指标的开发/验收，保留真实缺陷记录，不将其标为 Resolved。
 - **F-08 早期对照：**独立使用 macOS 27.2 SwiftUI + `NSHostingView`/WindowGroup 构造原生 `.contextMenu`，单次右键／Escape 和关闭后 `leaks` 为 0；当时重复操作受共享 Space 干扰、尚无法归因。**该中间结论已被本轮完整 TabDock 对照复现取代**，最终结果见 F-08 解决证据和 `evidence-p1.md` 最新小节。
-- **环境及副作用：**控制 App 单独使用 `dev.local.BaileyMenuProbeF08`，中间一次录制由后台任务 120s 超时结束，并非 Bailey 闪退。构建目录已被 `.gitignore` 忽略；本轮无正式 Bailey App 安装/重启、无远端推送或产品源码修改。已有双配置 467/467 测试证据继续有效，但本轮未重新声称全量执行；总体仍 No-Go。
+- **环境及副作用：**控制 App 单独使用 `dev.local.BaileyMenuProbeF08`，中间一次录制由后台任务 120s 超时结束，并非 Bailey 闪退。构建目录已被 `.gitignore` 忽略；本轮无正式 Bailey App 安装/重启、无远端推送或产品源码修改。已有双配置 467/467 测试证据继续有效，但当时尚未重新执行 F-09 全量回归，故阶段中间结论仍为 No-Go；最后验收与收尾决策以上方 Gate 为准。
 
 ## 最终状态与剩余风险
 
-- 当前状态：**7/8 findings Resolved，仅 F-06 Open**；P1-T1～T4 completed，P1-T5 in_progress。2026-10-20 本轮仅使用隔离 Release／独立对照程序，没有修改或重启正式 Bailey，也没有推送。此前新 Release 的整包安装和验签记录保留在上文，其当时的 PID 与 SHA-256 属历史测量，不当作本轮重新验收。
-- 剩余风险：F-03／F-05 已证明关闭后自有 FileTab／解析器对象归零；AppKit 的短时原生视图缓存不能混称文件泄漏。F-08 原生菜单每次约 32B 配置对象，以及约 3KiB 的 SwiftUI `ContextMenuResponder` 框架自身循环引用**客观存在但已归因并接受**；尚无证据表明它保持 Bailey 的文件或解析器。完整五分屏五轮 Allocations 本轮暂准延后，不当作通过；真实编辑器内容帧时间、macOS 15.6／CI26、实体触控板／屏幕组合和 Windows symlink 权限环境仍有缺口，整体 No-Go。
+- 当前状态：**8/9 findings Resolved、F-06 Deferred；P1-T1～T5 completed（按用户批准的剩余风险收尾）**。最后实现为 `78fae8e`（十万行工作区正确性回归）与 `2ca0e68`（窗口生命周期＋全局菜单资源持有）；含 Windows SSH 的完整 Debug XCTest 469/469 无失败，优化 Release 构建／验签和十万行真实窗口关闭后零 Bailey 文件／编辑器／高亮协调器已验证。此次没有重启或替换正在使用的正式 Bailey；此前的整包安装证据只对应旧构建，不冒称新构建已安装或真正重启验收。
+- 剩余风险：F-08 原生 SwiftUI 菜单框架本身的小额引用环已独立复现、接受，不代表系统已修复；F-09 真正窗口关闭后自有 `FileTab`／解析器已归零，但保留少量 AppKit 段落缓存不可称为应用文件泄漏。五分屏长周期 Allocations、真实内容 FPS、macOS 15.6／CI26、实体触控板／屏幕、独立 App 十万行键盘保存 E2E 均**未完整核销并由用户接受留档**；Windows SSH 悬空 symlink 测试失败的已证实原因是 MSYS2 命令行为，开发者模式和 `cmd.exe /c mklink` 已在授权 Windows 机器验证，并非简单缺失权限。编辑器优化范围 Go，不冒称所有环境均已验证或 PR 已合并。
 
 ## 2026-10-20：十万行真实 Release 压力验收补核
 
 - **独立完整 App 直接证据**：6,077,780 字节／100,000 行 Swift 文件在优化 Release PID56350 的窗口成功呈现、代码首末行可见、12 次后台精确滚动均实际完成。60 秒后 RSS 441,568 KiB、物理足迹 298.5 MiB、累计 CPU 时间不增加，进程曾达峰值物理内存 485.9 MiB。第二个隔离优化 Release 在启动约 1.60 秒内被 AX 首次观察到文件文本（含 1.50 秒工具观察时间，不代表精确首帧）。同文件在当前已安装 Debug 式 App 则提示超限，两包内容不一致，未判明安装包旧代码/签名版本来源；本轮没有替换用户正式 App。
 - **真实关闭成功但原生对象归属未核销**：标签右键 `Close Files` 真实关闭，屏幕及 AX 均为空工作区，稳定物理足迹约 159.5 MiB；`heap` 仍有 1 FileTab、1 原生文本视图及 30,888 个 NSTextParagraph，逆向引用路径涉及旧 PaneTab／SwiftUI 容器。`leaks` 只定位已接受的 F-08 菜单引用环，没有证明这些可达对象为新泄漏。既有五分屏释放结论不能自动推广为十万行 App 关闭后的零对象结论，继续追踪所有权。
 - **新增正确性回归 Green**：`PaneRetentionTests.testHundredThousandLineWorkspaceEditsSavesAndReleasesFile` 用真实 Project＋WorkspaceDockView＋FileTab／原生 NSTextView 加载、跨区滚动、插入／Undo／Redo、保存后磁盘字节核验，关闭后原生文档及高亮资源退役、FileTab 弱引用消失。单项 `make test` **1/1、0 failures、exit0、3.023s**。这比裸编辑器测试更完整，但不是独立 App 的键盘事件 E2E；当前 Peekaboo 由于长文本 AX 焦点 frame 超出窗口拒绝输入，未把事件派发算成功。
-- **Gate**：本轮十万行主目标取得真实 Release GUI／内存证据，但完整 App 键盘编辑保存及关闭后存留对象归属仍未核销，P1-T5 保持 in_progress、阶段 No-Go。旧的 FPS、最低系统和实体硬件补验按用户决定暂缓，不重新作为本轮行动项。详见 `evidence-p1.md` 最后一节与忽略的 `audit-p1-100k-release-20261020/` 原始证据。
+- **Gate（根因修复后的最终核对）**：F-09 初步窗口清理后虽将 30,888 个布局段落降到 166 个、物理足迹降至 85.0 MiB，但 `FileTab` 尚残存 1 个。后续反向引用树定位到 `BaileyApp.swift` 全局 Tabs／Switch Project 菜单持有完整 `PaneTab`／`Project` 数组；两处改为轻量 `WindowMenuItem` 值快照后，**新版签名优化 Release** PID65860 真实载入 100,000 行，在精确 PID 前台激活（此前位于不可访问的后台 Space）后经原生窗口按钮关闭，实测 `FileTab`、`FocusReportingTextView`、`SyntaxHighlightCoordinator` 均 **1→0**，留 204 个 AppKit/TextKit 段落缓存和 1 个视口控制器，物理足迹 **85.2 MiB**，12s 不增。`leaks` 2 个系统 `TSMInputSource`／64B，不是 Bailey 文件；最后窗口的隔离会话 JSON 解码后可保留原 100k 文件绝对路径、Dock 和滚动状态。F-09 已 Resolved；独立 App 键盘输入 E2E 的最终副作用未核销、FPS／最低系统／实体硬件按用户决定暂缓，P1-T5 已按本轮接受范围完成，详细以本文件上方「Gate」为准。详见 `evidence-p1.md` 最后两节及忽略的 `audit-p1-100k-release-20261020/` 原始证据。
 
 ## 审计约束
 

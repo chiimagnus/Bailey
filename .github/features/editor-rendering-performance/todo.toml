@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P1-T5"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
@@ -36,7 +36,7 @@ note = "单一NSTextView+TextKit2完全接入Source/Diff，移除STTextView运�
 [[tasks]]
 id = "P1-T5"
 title = "验收四档文件的稳定滚动和低资源编辑"
-status = "in_progress"
+status = "completed"
 plan = "plan-p1.md#p1-t5"
-commit = ""
-note = "2026-10-20：F01～F05/F07已修复；F08 在真实隔离 Release Bailey 与不依赖 Bailey 的原生 SwiftUI Dock 对照中都复现 ContextMenuResponder 自引用环，确认系统框架归属；用户接受本机 macOS27.2 小额菜单残留与暂缓长期内存压力补验，F08 Resolved，不改产品菜单。前期 Debug/优化 Release Windows SSH XCTest 各467/467通过、两轮真实五分屏关闭基线120.1/120.0MiB。仅 F06 实际内容 FPS 仍 Open；最低系统/CI、实体触控板/屏幕组合和 Windows symlink 权限环境仍未完整实测，P1-T5 in_progress/No-Go。详见 audit-p1.md/evidence-p1.md。"
+commit = "2ca0e686b6fd0943a72113fbea049f98887b397e"
+note = "2026-10-20 按用户同意的验收范围完成：四档/100k原生编辑与保存、独立优化Release 100k真实GUI滚动12/12、静置60秒内存CPU、关闭窗口后FileTab/原生编辑器/解析器归零；F09 Red→Green及完整含Windows SSH Debug 469/469、Release构建验签通过。用户明确暂缓F06真实内容FPS、macOS15.6及实体硬件、长期组合压力；十万行独立App前台键盘E2E未核销，Windows MSYS2 dangling symlink 测试夹具特例未核销。F06标Deferred，不宣称通过或修复。实现提交78fae8e及2ca0e68。"
