@@ -204,6 +204,10 @@ final class DiffTabTests: XCTestCase {
                 let colors = (0..<bitmap.pixelsHigh).compactMap {
                     bitmap.colorAt(x: x, y: $0)?.usingColorSpace(.deviceRGB)
                 }
+                let observedPalette = Array(Set(colors.map {
+                    String(format: "%.3f,%.3f,%.3f",
+                           $0.redComponent, $0.greenComponent, $0.blueComponent)
+                })).sorted()
                 // Display HDR transforms lightness nonlinearly; relative RGB
                 // channel differences preserve the actual theme tint identity.
                 for tint in requiredTints {
@@ -215,7 +219,7 @@ final class DiffTabTests: XCTestCase {
                                 - (expected.blueComponent - expected.redComponent)) < 0.03
                     }.count
                     XCTAssertGreaterThan(matching, 8,
-                                         "Native \(layout) diff tint must reach pixels, dark=\(dark)")
+                                         "Native \(layout) diff tint must reach pixels, dark=\(dark); appearance=\(pane.effectiveAppearance.name.rawValue); expectedRGB=\(expected); sampledRGB=\(observedPalette.prefix(24))")
                 }
                 window.close()
             }
@@ -1652,7 +1656,8 @@ final class DiffTabTests: XCTestCase {
         try await wait { self.findNativeTextView(in: container, editable: true) === editor }
         XCTAssertTrue(diff.nativeSurface === surface)
         XCTAssertTrue(findNativeTextView(in: container, editable: true) === editor)
-        XCTAssertEqual(scroll.contentView.bounds.origin, previousOffset)
+        XCTAssertEqual(scroll.contentView.bounds.origin, previousOffset,
+                       "Reparent scroll: editor=\(editor.frame), clip=\(scroll.contentView.bounds), doc=\(String(describing: scroll.documentView?.frame))")
         XCTAssertTrue(undoManager.canUndo)
         undoManager.undo()
         try await wait { !diff.isDirty }

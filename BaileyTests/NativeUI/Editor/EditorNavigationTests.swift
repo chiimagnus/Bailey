@@ -398,14 +398,15 @@ final class EditorNavigationTests: XCTestCase {
             try await reveal(NSRange(location: target, length: 1), in: editor)
             let rect = editor.firstRect(forCharacterRange: NSRange(location: target, length: 1),
                                         actualRange: nil)
-            XCTAssertTrue(rect.width > 0 && rect.height > 0)
+            XCTAssertTrue(rect.width > 0 && rect.height > 0,
+                          "Glyph rect for wraps=\(wraps): screen=\(rect), editor=\(editor.frame), clip=\(scroll.contentView.bounds), textContainer=\(String(describing: editor.textContainer?.size))")
             let windowPoint = try XCTUnwrap(editor.window).convertPoint(
                 fromScreen: NSPoint(x: rect.midX, y: rect.midY)
             )
             let localPoint = editor.convert(windowPoint, from: nil)
             // NSTextInputClient takes a screen-space point, not a local view point.
             let hit = editor.characterIndex(for: NSPoint(x: rect.midX, y: rect.midY))
-            XCTAssertNotEqual(hit, NSNotFound, "Native TextKit 2 must map the actual glyph to a character")
+            XCTAssertNotEqual(hit, NSNotFound, "Native TextKit 2 must map the actual glyph to a character; wraps=\(wraps), rect=\(rect), editor=\(editor.frame), clip=\(scroll.contentView.bounds)")
             if hit != NSNotFound {
                 XCTAssertLessThanOrEqual(abs(hit - target), 1,
                     "Long Unicode line must preserve native reverse hit testing")
@@ -538,7 +539,8 @@ final class EditorNavigationTests: XCTestCase {
         let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
         let editor = try XCTUnwrap(scroll.documentView as? NativeCodeTextView)
         XCTAssertEqual(editor.text, text)
-        XCTAssertEqual(scroll.contentView.bounds.minY, 5_000, accuracy: 2)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 5_000, accuracy: 2,
+                       "Initial restoration: editor=\(editor.frame), clip=\(scroll.contentView.bounds), state=\(String(describing: file.editorState.scrollY)), selected=\(editor.selectedRange())")
         for size in [NSSize(width: 280, height: 300), NSSize(width: 900, height: 700),
                      NSSize(width: 900, height: 600)] {
             window.setContentSize(size)
