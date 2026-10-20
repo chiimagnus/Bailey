@@ -1,11 +1,10 @@
 import AppKit
-import STTextView
 import SwiftUI
 
 /// One retained TextKit surface for a diff tab. Layout and gestures never
 /// create a second editor document when SwiftUI moves the enclosing pane.
 @MainActor
-final class DiffNativeSurface: NSView, STTextViewDelegate {
+final class DiffNativeSurface: NSView {
     weak var diff: DiffTab?
 
     private var unifiedPane: DiffCodePaneView?
@@ -40,14 +39,18 @@ final class DiffNativeSurface: NSView, STTextViewDelegate {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { restorePendingViewports() }
+        if window != nil, !pendingViewportOffsets.isEmpty { needsLayout = true }
     }
 
     private func restorePendingViewports() {
-        guard window != nil, !pendingViewportOffsets.isEmpty else { return }
+        guard window != nil, bounds.width > 0, bounds.height > 0,
+              !pendingViewportOffsets.isEmpty else { return }
         let offsets = pendingViewportOffsets
         pendingViewportOffsets = []
         for (pane, origin) in offsets {
+            pane.layoutSubtreeIfNeeded()
+            pane.scrollView.layoutSubtreeIfNeeded()
+            pane.textView.layoutSubtreeIfNeeded()
             let scroll = pane.scrollView
             scroll.contentView.setBoundsOrigin(origin)
             scroll.reflectScrolledClipView(scroll.contentView)
@@ -122,8 +125,8 @@ final class DiffNativeSurface: NSView, STTextViewDelegate {
                 // cannot be detached, so the review panes remain separate.
                 if !paneHasSyntaxPlugin {
                     paneHasSyntaxPlugin = true
-                    if let plugin = SyntaxHighlighting.plugin(for: diff.path) {
-                        pane.textView.addPlugin(plugin)
+                    if let plugin = SyntaxHighlighting.configuration(for: diff.path) {
+                        pane.textView.installSyntaxHighlighting(plugin)
                     }
                 }
             }
@@ -159,7 +162,9 @@ final class DiffNativeSurface: NSView, STTextViewDelegate {
 
         for pane in [unifiedPane, leftPane, rightPane, editPane] where pane?.isHidden == true {
             guard let pane, pane.scrollView.isFindBarVisible else { continue }
-            pane.textView.textFinder.performAction(.hideFindInterface)
+            let item = NSMenuItem()
+            item.tag = NSTextFinder.Action.hideFindInterface.rawValue
+            pane.textView.performFindPanelAction(item)
         }
         needsLayout = true
     }
@@ -175,7 +180,7 @@ final class DiffNativeSurface: NSView, STTextViewDelegate {
 
     private func makeEditPane() -> DiffCodePaneView {
         let pane = makePane(mode: .edit, gutter: .single)
-        pane.textView.textDelegate = self
+        pane.textView.onCharacterEdit = { [weak self] in self?.editTextDidChange() }
         pane.textView.onResignFirstResponder = { [weak self] in
             self?.diff?.autoSaveOnFocusLoss()
         }
@@ -235,12 +240,9 @@ final class DiffNativeSurface: NSView, STTextViewDelegate {
         }
     }
 
-    func textViewDidChangeText(_ notification: Notification) {
-        guard let textView = editPane?.textView,
-              (notification.object as? STTextView) === textView else { return }
-        let text = textView.text ?? ""
-        textView.updateNativeLineBreaks(for: text)
-        diff?.updateEditedContent(text)
+    private func editTextDidChange() {
+        guard let diff, diff.isEditing, let textView = editPane?.textView else { return }
+        diff.updateEditedContent(textView.string)
     }
 
 }

@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import Observation
-import STTextView
 import SwiftUI
 import XCTest
 @testable import Bailey
@@ -124,6 +123,174 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class DiffTabTests: XCTestCase {
+    func testNativeDiffRendersRowsThroughTransparentTextSurface() throws {
+        let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
+        let window = NSWindow(
+            contentRect: NSRect(x: -900, y: -900, width: 680, height: 300),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = pane
+        window.appearance = NSAppearance(named: .aqua)
+        window.orderFront(nil)
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                             textColor: .textColor)
+        let document = DiffComputation.compute(
+            oldText: "old value\nshared value\n", newText: "new value\nshared value\n"
+        ).unified
+        pane.setReviewDocument(NSAttributedString(string: document.text),
+                               decorations: .review(document))
+        pane.layoutSubtreeIfNeeded()
+        XCTAssertTrue(document.rows.contains { $0.kind == .removed })
+        XCTAssertTrue(document.rows.contains { $0.kind == .added })
+        XCTAssertFalse(pane.textView.drawsBackground,
+                       "Native text must not paint over the diff's underlay tints and emphasis")
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds))
+        pane.cacheDisplay(in: pane.bounds, to: bitmap)
+        let scheme = DiffColorScheme.current(dark: false)
+        func near(_ color: NSColor?, _ expected: NSColor) -> Bool {
+            guard let a = color?.usingColorSpace(.deviceRGB),
+                  let b = expected.usingColorSpace(.deviceRGB) else { return false }
+            return abs(a.redComponent - b.redComponent) < 0.06
+                && abs(a.greenComponent - b.greenComponent) < 0.06
+                && abs(a.blueComponent - b.blueComponent) < 0.06
+        }
+        let x = bitmap.pixelsWide - 50
+        let samples = (0..<bitmap.pixelsHigh).map { bitmap.colorAt(x: x, y: $0) }
+        XCTAssertTrue(samples.contains { near($0, scheme.addedRow) },
+                      "Added-row tint must actually reach rendered pixels")
+        XCTAssertTrue(samples.contains { near($0, scheme.removedRow) },
+                      "Removed-row tint must actually reach rendered pixels")
+    }
+
+    func testSplitAndUnifiedDiffRowTintsReachPixelsInBothThemes() throws {
+        let compared = DiffComputation.compute(
+            oldText: "header\nold value\nfooter\n",
+            newText: "header\nnew value\nfooter\n"
+        )
+        for dark in [false, true] {
+            let scheme = DiffColorScheme.current(dark: dark)
+            let cases: [(DiffSideDocument, DiffGutterLayout, [NSColor])] = [
+                (compared.unified, .single, [scheme.addedRow, scheme.removedRow]),
+                (compared.splitLeft, .oldOnly, [scheme.removedRow]),
+                (compared.splitRight, .newOnly, [scheme.addedRow]),
+            ]
+            for (document, layout, requiredTints) in cases {
+                let pane = DiffCodePaneView(mode: .review, gutterLayout: layout)
+                let window = NSWindow(
+                    contentRect: NSRect(x: -920, y: -920, width: 690, height: 300),
+                    styleMask: [.titled], backing: .buffered, defer: false
+                )
+                window.isReleasedWhenClosed = false
+                window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                window.contentView = pane
+                window.orderFront(nil)
+                let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+                let paragraphStyle = DiffTypography.paragraphStyle(for: font)
+                let textColor = Theme.terminal(dark: dark).foregroundNSColor
+                pane.applyTypography(font: font, paragraphStyle: paragraphStyle,
+                                     textColor: textColor)
+                pane.setReviewDocument(NSAttributedString(string: document.text, attributes: [
+                    .font: font, .foregroundColor: textColor, .paragraphStyle: paragraphStyle,
+                ]), decorations: .review(document))
+                pane.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds))
+                pane.cacheDisplay(in: pane.bounds, to: bitmap)
+                let x = bitmap.pixelsWide - 50
+                let colors = (0..<bitmap.pixelsHigh).compactMap {
+                    bitmap.colorAt(x: x, y: $0)?.usingColorSpace(.deviceRGB)
+                }
+                let observedPalette = Array(Set(colors.map {
+                    String(format: "%.3f,%.3f,%.3f",
+                           $0.redComponent, $0.greenComponent, $0.blueComponent)
+                })).sorted()
+                // HDR rendering may scale colors nonlinearly. Check that the
+                // tint is visible and has the expected chromatic direction
+                // *relative to the actual theme background*, not identical
+                // device RGB deltas across different displays and macOS SDKs.
+                let background = try XCTUnwrap(scheme.background.usingColorSpace(.deviceRGB))
+                let backgroundGreen = background.greenComponent - background.redComponent
+                let backgroundBlue = background.blueComponent - background.redComponent
+                for tint in requiredTints {
+                    let expected = try XCTUnwrap(tint.usingColorSpace(.deviceRGB))
+                    let expectedGreen = expected.greenComponent - expected.redComponent - backgroundGreen
+                    let expectedBlue = expected.blueComponent - expected.redComponent - backgroundBlue
+                    let expectedMagnitude = hypot(expectedGreen, expectedBlue)
+                    XCTAssertGreaterThan(expectedMagnitude, 0.01)
+                    let matching = colors.filter { sample in
+                        let green = sample.greenComponent - sample.redComponent - backgroundGreen
+                        let blue = sample.blueComponent - sample.redComponent - backgroundBlue
+                        let magnitude = hypot(green, blue)
+                        guard magnitude >= expectedMagnitude * 0.6 else { return false }
+                        return (green * expectedGreen + blue * expectedBlue)
+                            / (magnitude * expectedMagnitude) > 0.9
+                    }.count
+                    XCTAssertGreaterThan(matching, 8,
+                                         "Native \(layout) diff tint must reach pixels, dark=\(dark); appearance=\(pane.effectiveAppearance.name.rawValue); expectedRGB=\(expected); sampledRGB=\(observedPalette.prefix(24))")
+                }
+                window.close()
+            }
+        }
+    }
+
+    func testNativeEditableDiffPaintsDeletedGhostRowsInBothThemes() throws {
+        let old = "first\ndeleted\nlast\n"
+        let current = "first\nlast\n"
+        let core = DiffCore.compute(oldText: old, newText: current)
+        let state = DiffComputation.editState(
+            ops: core.ops, oldLines: core.oldLines, newLines: core.newLines
+        )
+        let starts = DiffLineSplitter.lines(of: current).lines.map(\.utf16Range.location)
+        for dark in [false, true] {
+            let pane = DiffCodePaneView(mode: .edit, gutterLayout: .newOnly)
+            let window = NSWindow(
+                contentRect: NSRect(x: -920, y: -920, width: 680, height: 300),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            window.contentView = pane
+            window.orderFront(nil)
+            let scheme = DiffColorScheme.current(dark: dark)
+            let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+            let foreground = Theme.terminal(dark: dark).foregroundNSColor
+            pane.applyTypography(font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                                 textColor: foreground)
+            pane.setEditBufferText(current)
+            pane.decorations = .edit(
+                state: state, snapshotOffsets: starts, lineCount: starts.count,
+                ghostBlocks: [.init(anchorLine: 1, firstOldLine: 2, lines: [
+                    NSAttributedString(string: "deleted", attributes: [
+                        .font: font, .foregroundColor: foreground,
+                    ]),
+                ])]
+            )
+            XCTAssertEqual(pane.decorations.ghostsByAnchor[1]?.lines.count, 1)
+            pane.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds))
+            pane.cacheDisplay(in: pane.bounds, to: bitmap)
+            let expected = try XCTUnwrap(scheme.removedRow.usingColorSpace(.deviceRGB))
+            let x = bitmap.pixelsWide - 50
+            let matching = (0..<bitmap.pixelsHigh).reduce(0) { total, y in
+                guard let sample = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                else { return total }
+                let isRemoval = abs((sample.greenComponent - sample.redComponent)
+                    - (expected.greenComponent - expected.redComponent)) < 0.03
+                    && abs((sample.blueComponent - sample.redComponent)
+                        - (expected.blueComponent - expected.redComponent)) < 0.03
+                return total + (isRemoval ? 1 : 0)
+            }
+            XCTAssertGreaterThan(matching, 8,
+                                 "Editable diff deletion ghosts must be visibly red, dark=\(dark)")
+            window.close()
+        }
+    }
+
     func testLongCRLogicalRowDoesNotPutEOFGhostsAtViewportBoundary() {
         let pane = DiffCodePaneView(mode: .edit, gutterLayout: .single)
         let window = NSWindow(
@@ -402,14 +569,14 @@ final class DiffTabTests: XCTestCase {
         ).unified
         pane.setReviewDocument(NSAttributedString(string: unusual.text), decorations: .review(unusual))
         pane.layoutSubtreeIfNeeded()
-        let elements = pane.textView.textContentManager.textElements(
-            for: pane.textView.textLayoutManager.documentRange
+        let elements = pane.textView.nativeContentManager.textElements(
+            for: pane.textView.nativeLayoutManager.documentRange
         )
         XCTAssertGreaterThan(elements.count, unusual.rows.count,
                              "Bare CR forms additional TextKit paragraphs within one Git LF line")
         XCTAssertNil(pane.textView.overrideContentHeight,
                      "Git LF-only row count must not clip additional native paragraphs")
-        XCTAssertEqual(pane.textView.attributedText?.string, unusual.text)
+        XCTAssertEqual(pane.textView.attributedText.string, unusual.text)
 
         let unicode = DiffComputation.compute(
             oldText: "before\u{2028}after\n", newText: "before\u{2028}updated\n"
@@ -451,7 +618,7 @@ final class DiffTabTests: XCTestCase {
         window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
         try await wait {
-            self.findNativeTextView(in: host, editable: false)?.attributedText?.string
+            self.findNativeTextView(in: host, editable: false)?.attributedText.string
                 == display.unifiedText.string
         }
     }
@@ -489,9 +656,10 @@ final class DiffTabTests: XCTestCase {
         let domain = "bailey-diff-appearance-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
-        // This test asserts unified native text. It must not inherit the user's
-        // persisted split/edit preference from another Bailey process.
+        // The native-text assertion needs an isolated, explicitly unified review mode.
         let preferences = DiffViewPreferences(defaults: defaults)
+        preferences.prefersEditing = false
+        preferences.diffStyle = .unified
         let root = try repository()
         defer { try? FileManager.default.removeItem(at: root) }
         let path = root.appendingPathComponent("review.txt")
@@ -517,7 +685,7 @@ final class DiffTabTests: XCTestCase {
         window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
         try await wait {
-            self.findNativeTextView(in: host, editable: false)?.attributedText?.string
+            self.findNativeTextView(in: host, editable: false)?.attributedText.string
                 == before.unifiedText.string
         }
         let git = root.appendingPathComponent(".git")
@@ -531,7 +699,7 @@ final class DiffTabTests: XCTestCase {
         try await wait({ diff.display?.id != before.id && diff.display != nil }, timeout: 3)
         XCTAssertEqual(diff.display?.computation.unified.text, before.computation.unified.text)
         try await wait {
-            self.findNativeTextView(in: host, editable: false)?.attributedText?.string
+            self.findNativeTextView(in: host, editable: false)?.attributedText.string
                 == diff.display?.unifiedText.string
                 && diff.nativeSurface?.superview != nil
         }
@@ -1044,7 +1212,7 @@ final class DiffTabTests: XCTestCase {
         try await wait { diff.nativeSurface != nil && self.findNativeTextView(in: first) != nil }
         let surface = try XCTUnwrap(diff.nativeSurface)
         let textView = try XCTUnwrap(findNativeTextView(in: surface))
-        XCTAssertTrue(textView.attributedText?.string.contains("baseline") == true)
+        XCTAssertTrue(textView.attributedText.string.contains("baseline") == true)
         XCTAssertFalse(textView.isEditable)
         XCTAssertTrue(textView.window === window)
 
@@ -1053,7 +1221,7 @@ final class DiffTabTests: XCTestCase {
         try await wait { self.findNativeTextView(in: second) === textView }
         XCTAssertTrue(diff.nativeSurface === surface)
         XCTAssertTrue(findNativeTextView(in: second) === textView)
-        XCTAssertTrue(textView.attributedText?.string.contains("baseline") == true)
+        XCTAssertTrue(textView.attributedText.string.contains("baseline") == true)
         second.removeFromSuperview()
     }
 
@@ -1126,7 +1294,7 @@ final class DiffTabTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         try await wait { self.findNativeTextView(in: host, editable: false) != nil }
         let textView = try XCTUnwrap(findNativeTextView(in: host, editable: false))
-        XCTAssertEqual(Data((textView.attributedText?.string ?? "").utf8), Data(display.unifiedText.string.utf8))
+        XCTAssertEqual(Data((textView.attributedText.string ?? "").utf8), Data(display.unifiedText.string.utf8))
         diff.setDiffStyle(.split)
         let surface = try XCTUnwrap(diff.nativeSurface)
         try await wait { surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }.count == 2 }
@@ -1248,7 +1416,7 @@ final class DiffTabTests: XCTestCase {
         try await wait { diff.nativeSurface != nil && self.findNativeTextView(in: host) != nil }
         let surface = try XCTUnwrap(diff.nativeSurface)
         let firstUnified = try XCTUnwrap(findNativeTextView(in: surface))
-        XCTAssertTrue(firstUnified.attributedText?.string.contains("baseline") == true)
+        XCTAssertTrue(firstUnified.attributedText.string.contains("baseline") == true)
 
         diff.setDiffStyle(.split)
         try await wait {
@@ -1257,7 +1425,7 @@ final class DiffTabTests: XCTestCase {
         let visible = surface.subviews.compactMap { $0 as? DiffCodePaneView }.filter { !$0.isHidden }
         XCTAssertEqual(visible.count, 2)
         XCTAssertTrue(visible.allSatisfy { !$0.textView.isEditable })
-        XCTAssertTrue(visible.contains { $0.textView.attributedText?.string.contains("baseline") == true })
+        XCTAssertTrue(visible.contains { $0.textView.attributedText.string.contains("baseline") == true })
         XCTAssertEqual(visible[0].scrollView.contentView.bounds.height, visible[1].scrollView.contentView.bounds.height)
 
         diff.setDiffStyle(.unified)
@@ -1499,7 +1667,8 @@ final class DiffTabTests: XCTestCase {
         try await wait { self.findNativeTextView(in: container, editable: true) === editor }
         XCTAssertTrue(diff.nativeSurface === surface)
         XCTAssertTrue(findNativeTextView(in: container, editable: true) === editor)
-        XCTAssertEqual(scroll.contentView.bounds.origin, previousOffset)
+        XCTAssertEqual(scroll.contentView.bounds.origin, previousOffset,
+                       "Reparent scroll: editor=\(editor.frame), clip=\(scroll.contentView.bounds), doc=\(String(describing: scroll.documentView?.frame))")
         XCTAssertTrue(undoManager.canUndo)
         undoManager.undo()
         try await wait { !diff.isDirty }

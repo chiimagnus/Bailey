@@ -618,7 +618,7 @@ final class DiffTab: nonisolated Identifiable {
         }
     }
 
-    /// No parallel editor state: the native STTextView keeps selection and undo.
+    /// No parallel editor state: native NSTextView keeps selection and undo.
     func refreshNativeAppearance() {
         recomputeDisplay()
         if isEditing { refreshEditDecorations(immediate: true) }

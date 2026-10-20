@@ -84,6 +84,147 @@ private actor LocalShellRunnerFixture: RemoteCommandRunner {
 }
 
 final class RemoteCommandsTests: XCTestCase {
+    func testLocalCommandTimeoutDoesNotWaitForInheritedOutputPipe() async throws {
+        for descriptor in [1, 2] {
+            for parentExitsImmediately in [false, true] {
+                let fixture = """
+                    import os, time
+                    if os.fork() == 0:
+                        os.setsid()
+                        time.sleep(1.5)
+                        os.write(\(descriptor), b"inherited pipe still open\\n")
+                        os._exit(0)
+                    \(parentExitsImmediately ? "os._exit(0)" : "time.sleep(0.6)")
+                    """
+                let started = ProcessInfo.processInfo.systemUptime
+                do {
+                    _ = try await LocalWorkspaceBackend.shared.run(
+                        argv: ["/usr/bin/python3", "-c", fixture], cwd: nil, env: nil,
+                        stdin: nil, timeout: 0.2
+                    )
+                    XCTFail("Inherited output pipe must not bypass the command deadline")
+                } catch WorkspaceError.timedOut {}
+                XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 0.85,
+                                  "Descendant-held pipes cannot extend the command timeout")
+            }
+        }
+    }
+
+    func testLocalCommandDrainsLargeStdoutAndStderrWithoutDataLoss() async throws {
+        let fixture = """
+            import sys
+            sys.stdout.buffer.write(b"A" * 262144)
+            sys.stdout.flush()
+            sys.stderr.buffer.write(b"B" * 262144)
+            sys.stderr.flush()
+            """
+        let result = try await LocalWorkspaceBackend.shared.run(
+            argv: ["/usr/bin/python3", "-c", fixture], cwd: nil, env: nil,
+            stdin: nil, timeout: 5
+        )
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(result.stdout, Data(repeating: 65, count: 262144))
+        XCTAssertEqual(result.stderr, Data(repeating: 66, count: 262144))
+    }
+
+    func testSuccessfulParentExitCannotHideStalledStdinDescendant() async throws {
+        let command = "sleep 2 <&0 >/dev/null 2>&1 & exit 0"
+        let payload = Data(repeating: 0x41, count: 1 << 20)
+
+        let localStart = ProcessInfo.processInfo.systemUptime
+        do {
+            let result = try await LocalWorkspaceBackend.shared.run(
+                argv: ["/bin/sh", "-c", command], cwd: nil, env: nil,
+                stdin: payload, timeout: 0.25
+            )
+            XCTAssertNotEqual(result.status, 0, "Unconsumed stdin cannot be considered successful")
+        } catch {}
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - localStart, 1.5,
+                          "Local process timeout must include outstanding stdin")
+
+        let remoteStart = ProcessInfo.processInfo.systemUptime
+        let remote = ProcessRemoteCommandRunner.run(
+            sshPath: "/bin/sh", arguments: ["-c", command],
+            stdin: payload, timeout: 0.25
+        )
+        XCTAssertNotEqual(remote.status, 0, "Unconsumed stdin cannot be considered successful")
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - remoteStart, 1.5,
+                          "Remote process timeout must include outstanding stdin")
+    }
+
+    func testLocalProcessClosedStdinReturnsStatusWithoutTerminatingHost() async throws {
+        let result = try await LocalWorkspaceBackend.shared.run(
+            argv: ["/bin/sh", "-c", "exit 52"], cwd: nil, env: nil,
+            stdin: Data(repeating: 0x41, count: 1 << 20), timeout: 5
+        )
+        XCTAssertEqual(result.status, 52)
+        do {
+            let ignored = try await LocalWorkspaceBackend.shared.run(
+                argv: ["/bin/sh", "-c", "exit 0"], cwd: nil, env: nil,
+                stdin: Data(repeating: 0x41, count: 1 << 20), timeout: 5
+            )
+            XCTAssertNotEqual(ignored.status, 0, "A successful exit cannot excuse dropped stdin bytes")
+        } catch {
+            XCTAssertFalse(error is CancellationError)
+        }
+    }
+
+    func testRemoteProcessClosedStdinReturnsErrorWithoutTerminatingHost() {
+        let result = ProcessRemoteCommandRunner.run(
+            sshPath: "/bin/sh", arguments: ["-c", "exit 52"],
+            stdin: Data(repeating: 0x41, count: 1 << 20), timeout: 5
+        )
+        XCTAssertEqual(result.status, 52)
+        let ignored = ProcessRemoteCommandRunner.run(
+            sshPath: "/bin/sh", arguments: ["-c", "exit 0"],
+            stdin: Data(repeating: 0x41, count: 1 << 20), timeout: 5
+        )
+        XCTAssertNotEqual(ignored.status, 0, "A successful exit cannot excuse dropped stdin bytes")
+    }
+
+    func testSSHBackendEnforcesByteLimitAndPreservesBinaryWrites() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture())
+        let limit = 8 << 20
+        for length in [0, limit - 1, limit, limit + 1] {
+            let path = root.appendingPathComponent("file' 中文 \(length).bin")
+            let bytes = Data(repeating: 0x41, count: length)
+            try bytes.write(to: path)
+            if length <= limit {
+                let received = try await backend.read(path: path.path, maxBytes: limit)
+                XCTAssertEqual(received, bytes)
+            } else {
+                do {
+                    _ = try await backend.read(path: path.path, maxBytes: limit)
+                    XCTFail("Remote read must reject maxBytes + 1")
+                } catch WorkspaceError.tooLarge {}
+            }
+        }
+        let target = root.appendingPathComponent("atomic' 二进制.bin")
+        try Data("old".utf8).write(to: target)
+        let replacement = Data([0x00, 0xFF, 0x0A, 0x80, 0x22, 0x27])
+        try await backend.write(path: target.path, data: replacement)
+        XCTAssertEqual(try Data(contentsOf: target), replacement)
+        let reloaded = try await backend.read(path: target.path, maxBytes: 6)
+        XCTAssertEqual(reloaded, replacement)
+        do {
+            _ = try await backend.read(path: root.appendingPathComponent("missing").path, maxBytes: limit)
+            XCTFail("Expected remote not-found failure")
+        } catch WorkspaceError.notFound {}
+
+        let failing = GitRootRunnerFixture()
+        let disconnected = SSHWorkspaceBackend(runner: failing)
+        await failing.set(255, output: "", error: "Disconnected")
+        do {
+            _ = try await disconnected.read(path: target.path, maxBytes: limit)
+            XCTFail("Connection loss must propagate")
+        } catch let error as RemoteCommandFailure {
+            XCTAssertEqual(error.status, 255)
+        }
+    }
+
     func testRemoteGitRootDistinguishesNonRepositoryAndSSHOrGitFailure() async throws {
         let runner = GitRootRunnerFixture()
         let backend = SSHWorkspaceBackend(runner: runner)

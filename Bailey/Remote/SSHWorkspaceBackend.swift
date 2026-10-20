@@ -345,6 +345,9 @@ nonisolated enum ProcessRemoteCommandRunner {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         let stdinPipe: Pipe? = stdin == nil ? nil : Pipe()
+        if let stdinPipe, fcntl(stdinPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != 0 {
+            return (-1, Data(), Data(String(cString: strerror(errno)).utf8))
+        }
         process.standardInput = stdinPipe ?? FileHandle.nullDevice
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
@@ -353,11 +356,8 @@ nonisolated enum ProcessRemoteCommandRunner {
         } catch {
             return (-1, Data(), Data(error.localizedDescription.utf8))
         }
-        if let stdinPipe, let stdin {
-            DispatchQueue.global(qos: .utility).async {
-                try? stdinPipe.fileHandleForWriting.write(contentsOf: stdin)
-                try? stdinPipe.fileHandleForWriting.close()
-            }
+        let writer = stdinPipe.flatMap { pipe in
+            stdin.map { ProcessStdinWriter(data: $0, pipe: pipe, timeout: timeout) }
         }
         let outFD = stdoutPipe.fileHandleForReading.fileDescriptor
         let errFD = stderrPipe.fileHandleForReading.fileDescriptor
@@ -411,6 +411,10 @@ nonisolated enum ProcessRemoteCommandRunner {
             }
             errData.append(Data("\nssh did not respond in time.\n".utf8))
             return (-2, outData, errData)
+        }
+        if let error = writer?.finish(), process.terminationStatus == 0 {
+            errData.append(Data(error.localizedDescription.utf8))
+            return (-1, outData, errData)
         }
         return (process.terminationStatus, outData, errData)
     }

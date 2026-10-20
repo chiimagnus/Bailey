@@ -1,5 +1,4 @@
 import AppKit
-import STTextView
 import SwiftUI
 import XCTest
 @testable import Bailey
@@ -95,7 +94,8 @@ final class GitHistoryFileTests: XCTestCase {
     }
 
     func testNativeDiffAccessibilityAllowsOnlyEditableTextChanges() {
-        let editor = DiffTextView(frame: .init(x: 0, y: 0, width: 300, height: 150))
+        let editor = DiffTextView()
+        editor.frame = .init(x: 0, y: 0, width: 300, height: 150)
         editor.text = "original"
         for editable in [false, true, false] {
             editor.isEditable = editable

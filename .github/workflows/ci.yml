@@ -3,6 +3,7 @@ name: CI
 on:
   pull_request:
     branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review, labeled]
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -19,6 +20,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.event.action != 'labeled' || github.event.label.name == 'ci/full'
     runs-on: macos-26
     timeout-minutes: 45
     env:
@@ -27,6 +29,67 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          fetch-depth: 0
           persist-credentials: false
+      - name: Select affected XCTest classes
+        id: selection
+        env:
+          PR_ACTION: ${{ github.event.action }}
+          PR_BEFORE: ${{ github.event.before }}
+          PR_AFTER: ${{ github.event.after }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          full() {
+            echo 'only_testing=' >> "$GITHUB_OUTPUT"
+            echo 'run_tests=true' >> "$GITHUB_OUTPUT"
+            echo 'Full XCTest: initial/final review, unknown changes, or unsafe diff'
+          }
+          if [[ "$PR_ACTION" != synchronize ]]; then
+            full
+            exit 0
+          fi
+          if [[ ! "$PR_BEFORE" =~ ^[0-9a-f]{40}$ ||
+                ! "$PR_AFTER" =~ ^[0-9a-f]{40}$ ||
+                "$PR_AFTER" != "$PR_HEAD" ]] ||
+             ! git cat-file -e "$PR_BEFORE^{commit}" 2>/dev/null ||
+             ! git cat-file -e "$PR_AFTER^{commit}" 2>/dev/null ||
+             ! git merge-base --is-ancestor "$PR_BEFORE" "$PR_AFTER"; then
+            full
+            exit 0
+          fi
+          git diff --check "$PR_BEFORE" "$PR_AFTER"
+          tests=()
+          while IFS= read -r -d '' file; do
+            case "$file" in
+              *.md|LICENSE|docs/*|.github/features/*|.github/ISSUE_TEMPLATE/*) ;;
+              Bailey/Editor/*)
+                tests+=(EditorNavigationTests EditorTextInputTests FileTabTests
+                        DiffTabTests PaneRetentionTests SyntaxHighlightingTests
+                        TextCoordinateIndexTests HighlightQueryCacheTests
+                        WorkspaceWindowIsolationTests) ;;
+              Bailey/Git/Diff*.swift)
+                tests+=(DiffTabTests DiffEngineTests PaneRetentionTests EditorNavigationTests) ;;
+              BaileyTests/*Tests.swift)
+                tests+=("${file##*/}") ;;
+              *)
+                full
+                exit 0 ;;
+            esac
+          done < <(git diff --name-only -z "$PR_BEFORE" "$PR_AFTER")
+          if ((${#tests[@]} == 0)); then
+            echo 'only_testing=' >> "$GITHUB_OUTPUT"
+            echo 'run_tests=false' >> "$GITHUB_OUTPUT"
+            echo 'Documentation-only update: no XCTest needed'
+          else
+            classes=$(printf '%s\n' "${tests[@]}" | sed 's/\.swift$//' | sort -u |
+              sed 's@^@BaileyTests/@' | paste -sd ' ' -)
+            echo "only_testing=$classes" >> "$GITHUB_OUTPUT"
+            echo 'run_tests=true' >> "$GITHUB_OUTPUT"
+            echo "Affected XCTest: $classes"
+          fi
       - name: Run Xcode tests
-        run: make test SIGNING=adhoc
+        if: steps.selection.outputs.run_tests == 'true'
+        env:
+          ONLY_TESTING: ${{ steps.selection.outputs.only_testing }}
+        run: make test SIGNING=adhoc ONLY_TESTING="$ONLY_TESTING"

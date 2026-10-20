@@ -5,7 +5,7 @@ import XCTest
 
 /// Git commands operate only in a temporary test repository. Remote metadata
 /// is independently controllable so a failed SSH stat can never trash a Mac file.
-private actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
+actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     private var online = true
     private var failGit = false
     private var failHistoryLog = false

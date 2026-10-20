@@ -1,15 +1,12 @@
 import AppKit
 import Neon
-import STTextKitPlus
-import STTextView
-import STTextViewCommon
 import SwiftUI
 import SwiftTreeSitter
 import TreeSitterClient
 import XCTest
 @testable import Bailey
 
-private final class ReadInterceptingContentStorage: STTextContentStorage {
+private final class ReadInterceptingContentStorage: NSTextContentStorage {
     var onNextRead: (() -> Void)?
 
     override var textStorage: NSTextStorage? {
@@ -20,29 +17,6 @@ private final class ReadInterceptingContentStorage: STTextContentStorage {
             return super.textStorage
         }
         set { super.textStorage = newValue }
-    }
-}
-
-private struct ObservedSyntaxPlugin: STPlugin {
-    let plugin: SyntaxHighlightPlugin
-    let observe: (SyntaxHighlightCoordinator) -> Void
-
-    func makeCoordinator(context: CoordinatorContext) -> SyntaxHighlightCoordinator {
-        let coordinator = plugin.makeCoordinator(context: context)
-        observe(coordinator)
-        return coordinator
-    }
-
-    func setUp(context: any Context) {
-        plugin.setUp(context: SyntaxContext(coordinator: context.coordinator,
-            textView: context.textView, events: context.events))
-    }
-
-    private struct SyntaxContext: PluginContext {
-        typealias Plugin = SyntaxHighlightPlugin
-        let coordinator: SyntaxHighlightCoordinator
-        let textView: STTextView
-        let events: STPluginEvents
     }
 }
 
@@ -147,7 +121,7 @@ final class SyntaxHighlightingTests: XCTestCase {
     }
 
     func testClosingEmbeddedEditorReleasesPendingHighlightRequests() async throws {
-        weak var editor: STTextView?
+        weak var editor: NativeCodeTextView?
         weak var coordinator: SyntaxHighlightCoordinator?
         func startAndClose() async throws {
             let source = "```swift\n" + String(repeating: "// 中文 👋\nlet value = 42\n", count: 2048) + "```\n"
@@ -188,10 +162,7 @@ final class SyntaxHighlightingTests: XCTestCase {
     }
 
     func testThemeCapturesMatchBundledPaletteAcrossAppearances() throws {
-        let url = try XCTUnwrap(Bundle.main.url(
-            forResource: "STTextView-Plugin-Neon_STPluginNeonAppKit", withExtension: "bundle"
-        ))
-        let bundle = try XCTUnwrap(Bundle(url: url))
+        let bundle = Bundle.main
         let names = ["plain", "boolean", "comment", "constructor", "function.call", "include",
                      "keyword", "keyword.function", "keyword.return", "method", "number", "operator",
                      "parameter", "punctuation.special", "string", "text.literal", "text.title",
@@ -218,7 +189,7 @@ final class SyntaxHighlightingTests: XCTestCase {
     }
 
     func testClosingEditorDuringQueuedParsingReleasesItsContent() async throws {
-        weak var editor: STTextView?
+        weak var editor: NativeCodeTextView?
         weak var coordinator: SyntaxHighlightCoordinator?
         try autoreleasepool {
             let mounted = try mountedPlugin()
@@ -241,7 +212,6 @@ final class SyntaxHighlightingTests: XCTestCase {
         let source = prefix + "func target() {}\n"
         let mounted = try mountedPlugin(source: source)
         defer { mounted.window.close() }
-        mounted.editor.scrollsSelectionToVisibleOnTextChange = false
         let highlighter = try XCTUnwrap(mounted.coordinator.highlighter)
         let requestLimit = highlighter.requestLengthLimit
         highlighter.requestLengthLimit = source.utf16.count + 16384
@@ -251,8 +221,8 @@ final class SyntaxHighlightingTests: XCTestCase {
         mounted.editor.scrollRangeToVisible(NSRange(location: oldName, length: 6))
         let declarationColor = SyntaxHighlightCoordinator.themeColor(for: "method", theme: SyntaxHighlighting.theme)
         try await wait {
-            guard let viewport = mounted.editor.textLayoutManager.textViewportLayoutController.viewportRange else { return false }
-            return NSLocationInRange(oldName, NSRange(viewport, in: mounted.editor.textContentManager))
+            guard let viewport = mounted.editor.nativeLayoutManager.textViewportLayoutController.viewportRange else { return false }
+            return NSLocationInRange(oldName, NSRange(viewport, in: mounted.editor.nativeContentManager))
                 && self.color(mounted.editor, at: oldName) == declarationColor
         }
         let provider = highlighter.tokenProvider
@@ -275,7 +245,7 @@ final class SyntaxHighlightingTests: XCTestCase {
         let text = try XCTUnwrap(mounted.editor.text)
         let currentName = (text as NSString).range(of: "target").location
         let tree = try await mounted.coordinator.tsClient.currentTree()
-        let plugin = try XCTUnwrap(SyntaxHighlighting.plugin(for: "fixture.swift"))
+        let plugin = try XCTUnwrap(SyntaxHighlighting.configuration(for: "fixture.swift"))
         let parser = Parser()
         try parser.setLanguage(plugin.language.parser)
         let fresh = try XCTUnwrap(parser.parse(text)?.rootNode)
@@ -306,7 +276,7 @@ final class SyntaxHighlightingTests: XCTestCase {
     }
 
     func testParserReadsAcrossUTF16ChunkBoundariesAndEditShift() async throws {
-        let plugin = try XCTUnwrap(SyntaxHighlighting.plugin(for: "fixture.swift"))
+        let plugin = try XCTUnwrap(SyntaxHighlighting.configuration(for: "fixture.swift"))
         let parser = Parser()
         try parser.setLanguage(plugin.language.parser)
         for prefixLength in [1022, 1023, 2047] {
@@ -348,20 +318,91 @@ final class SyntaxHighlightingTests: XCTestCase {
         }
     }
 
+    func testFourSizeRealFileTabHighlightedInputAndParserBudget() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-audit-editor-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        for rows in [382, 1_000, 10_000, 100_000] {
+            // Preserve T1's mixed length, blank row, Unicode and long-row fixture.
+            let lines = (0..<rows).map { row in
+                switch row % 5 {
+                case 0: "struct Item\(row) {"
+                case 1: "    let title = \"中文 👋 e\u{301}\" // a fairly realistic code line"
+                case 2: "    let value = 1234567890 // " + String(repeating: "wide", count: row % 31)
+                case 3: "}"
+                default: ""
+                }
+            }
+            let source = lines.joined(separator: "\n")
+            let midpointRow = (rows / 2) / 5 * 5
+            let midpoint = (source as NSString).range(of: "struct Item\(midpointRow) {").location
+            XCTAssertNotEqual(midpoint, NSNotFound)
+            for wraps in [false, true] {
+                let url = directory.appendingPathComponent("fixture-\(rows)-\(wraps).swift")
+                try Data(source.utf8).write(to: url)
+                let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared,
+                                   workspaceIdentity: nil)
+                try await file.waitForText()
+                file.autoSaveSuspendedForClose = true
+                let host = NSHostingView(rootView: SourceTextEditor(
+                    file: file, font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+                    palette: .theme(dark: true), wrapLines: wraps, isFocused: false
+                ))
+                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+                                      styleMask: [.titled], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                defer { window.close() }
+                window.contentView = host
+                window.orderFront(nil)
+                let deadline = Date().addingTimeInterval(12)
+                while file.editorView == nil, Date() < deadline {
+                    host.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                let editor = try XCTUnwrap((file.editorView as? NSScrollView)?.documentView as? NativeCodeTextView)
+                let syntax = try XCTUnwrap(editor.syntaxCoordinator)
+                let initialTree = try await syntax.tsClient.currentTree()
+                XCTAssertEqual(initialTree.rootNode?.range.length, source.utf16.count)
+                for (label, offset) in [("head", 0), ("middle", midpoint), ("tail", source.utf16.count)] {
+                    editor.scrollRangeToVisible(NSRange(location: offset, length: 0))
+                    host.layoutSubtreeIfNeeded()
+                    var costs: [Double] = []
+                    for _ in 0..<30 {
+                        let started = CFAbsoluteTimeGetCurrent()
+                        editor.insertText("X", replacementRange: NSRange(location: offset, length: 0))
+                        costs.append((CFAbsoluteTimeGetCurrent() - started) * 1_000)
+                        editor.insertText("", replacementRange: NSRange(location: offset, length: 1))
+                    }
+                    XCTAssertEqual(editor.text, source, "\(rows) rows \(wraps) \(label)")
+                    XCTAssertEqual(file.text, source, "Real FileTab must match the native buffer")
+                    costs.sort()
+                    print("AUDIT_P1_HIGHLIGHT_INPUT rows=\(rows) wraps=\(wraps) position=\(label) median=\(costs[15]) p95=\(costs[28]) worst=\(costs[29])")
+                    if rows == 100_000 {
+                        XCTAssertLessThanOrEqual(costs[15], 16, "Real highlighted input median must meet P1 budget")
+                        XCTAssertLessThanOrEqual(costs[28], 32, "Real highlighted input p95 must meet P1 budget")
+                    }
+                }
+                let currentTree = try await syntax.tsClient.currentTree()
+                XCTAssertEqual(currentTree.rootNode?.range.length, source.utf16.count)
+                XCTAssertFalse(file.isDirty)
+            }
+        }
+    }
+
     private func mountedPlugin(
         path: String = "fixture.swift", source: String = "let value = Capitalized.method()\n"
     ) throws -> (
-        window: NSWindow, editor: STTextView, coordinator: SyntaxHighlightCoordinator,
+        window: NSWindow, editor: NativeCodeTextView, coordinator: SyntaxHighlightCoordinator,
         storage: ReadInterceptingContentStorage
     ) {
-        let plugin = try XCTUnwrap(SyntaxHighlighting.plugin(for: path))
+        let plugin = try XCTUnwrap(SyntaxHighlighting.configuration(for: path))
         let storage = ReadInterceptingContentStorage()
         storage.textStorage = NSTextStorage()
-        let editor = STTextView()
-        editor.textContentManager = storage
+        let editor = NativeCodeTextView(contentStorage: storage)
         editor.text = source
-        var observed: SyntaxHighlightCoordinator?
-        editor.addPlugin(ObservedSyntaxPlugin(plugin: plugin) { observed = $0 })
+        editor.installSyntaxHighlighting(plugin)
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
         editor.frame = scroll.bounds
         scroll.documentView = editor
@@ -369,14 +410,14 @@ final class SyntaxHighlightingTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = scroll
         window.orderFront(nil)
-        return (window, editor, try XCTUnwrap(observed), storage)
+        return (window, editor, try XCTUnwrap(editor.syntaxCoordinator), storage)
     }
 
-    private func hasRenderingColor(_ editor: STTextView) -> Bool {
+    private func hasRenderingColor(_ editor: NativeCodeTextView) -> Bool {
         var colored = false
         editor.layoutSubtreeIfNeeded()
-        editor.textLayoutManager.enumerateRenderingAttributes(
-            from: editor.textContentManager.documentRange.location, reverse: false
+        editor.nativeLayoutManager.enumerateRenderingAttributes(
+            from: editor.nativeContentManager.documentRange.location, reverse: false
         ) { _, attributes, _ in
             colored = attributes[.foregroundColor] != nil
             return !colored
@@ -384,13 +425,13 @@ final class SyntaxHighlightingTests: XCTestCase {
         return colored
     }
 
-    private func color(_ editor: STTextView, at offset: Int) -> NSColor? {
+    private func color(_ editor: NativeCodeTextView, at offset: Int) -> NSColor? {
         var found: NSColor?
         editor.layoutSubtreeIfNeeded()
-        editor.textLayoutManager.enumerateRenderingAttributes(
-            from: editor.textContentManager.documentRange.location, reverse: false
+        editor.nativeLayoutManager.enumerateRenderingAttributes(
+            from: editor.nativeContentManager.documentRange.location, reverse: false
         ) { _, attributes, range in
-            if NSLocationInRange(offset, NSRange(range, in: editor.textContentManager)) {
+            if NSLocationInRange(offset, NSRange(range, in: editor.nativeContentManager)) {
                 found = attributes[.foregroundColor] as? NSColor
                 return false
             }
@@ -437,7 +478,7 @@ final class SyntaxHighlightingTests: XCTestCase {
         let expected = source.replacingOccurrences(of: "value", with: "新值")
         XCTAssertEqual(Data((mounted.editor.text ?? "").utf8), Data(expected.utf8))
         let actual = try await mounted.coordinator.tsClient.currentTree()
-        let plugin = try XCTUnwrap(SyntaxHighlighting.plugin(for: "fixture.swift"))
+        let plugin = try XCTUnwrap(SyntaxHighlighting.configuration(for: "fixture.swift"))
         let parser = Parser()
         try parser.setLanguage(plugin.language.parser)
         let fresh = try XCTUnwrap(parser.parse(expected)?.rootNode)
@@ -538,12 +579,11 @@ final class SyntaxHighlightingTests: XCTestCase {
     }
 
     func testRealPluginTailDeleteAllDeleteAndQueuedEditsMatchFreshParserAndColors() async throws {
-        let plugin = try XCTUnwrap(SyntaxHighlighting.plugin(for: "fixture.swift"))
-        let editor = STTextView()
+        let plugin = try XCTUnwrap(SyntaxHighlighting.configuration(for: "fixture.swift"))
+        let editor = NativeCodeTextView()
         editor.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
         editor.text = "// 中文 👋\r\nlet value = 42\n"
-        var observed: SyntaxHighlightCoordinator?
-        editor.addPlugin(ObservedSyntaxPlugin(plugin: plugin) { observed = $0 })
+        editor.installSyntaxHighlighting(plugin)
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
         editor.frame = scroll.bounds
         scroll.documentView = editor
@@ -552,8 +592,7 @@ final class SyntaxHighlightingTests: XCTestCase {
         defer { window.close() }
         window.contentView = scroll
         window.orderFront(nil)
-        try await wait { observed != nil }
-        let coordinator = try XCTUnwrap(observed)
+        let coordinator = try XCTUnwrap(editor.syntaxCoordinator)
         let parser = Parser()
         try parser.setLanguage(plugin.language.parser)
         func checkTree() async throws {
@@ -582,10 +621,10 @@ final class SyntaxHighlightingTests: XCTestCase {
         let keyword = (final as NSString).range(of: "let").location
         func color(at offset: Int) -> NSColor? {
             var found: NSColor?
-            editor.textLayoutManager.enumerateRenderingAttributes(
-                from: editor.textContentManager.documentRange.location, reverse: false
+            editor.nativeLayoutManager.enumerateRenderingAttributes(
+                from: editor.nativeContentManager.documentRange.location, reverse: false
             ) { _, attributes, range in
-                if NSLocationInRange(offset, NSRange(range, in: editor.textContentManager)) {
+                if NSLocationInRange(offset, NSRange(range, in: editor.nativeContentManager)) {
                     found = attributes[.foregroundColor] as? NSColor
                     return false
                 }
@@ -621,17 +660,17 @@ final class SyntaxHighlightingTests: XCTestCase {
         window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
         let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
-        let editor = try XCTUnwrap(scroll.documentView as? STTextView)
+        let editor = try XCTUnwrap(scroll.documentView as? NativeCodeTextView)
         var commentColor: NSColor?
         try await wait {
             host.layoutSubtreeIfNeeded()
             var colors = 0
-            editor.textLayoutManager.enumerateRenderingAttributes(
-                from: editor.textContentManager.documentRange.location, reverse: false
+            editor.nativeLayoutManager.enumerateRenderingAttributes(
+                from: editor.nativeContentManager.documentRange.location, reverse: false
             ) { _, attributes, range in
                 if let color = attributes[.foregroundColor] as? NSColor {
                     colors += 1
-                    if NSRange(range, in: editor.textContentManager).location == 0 { commentColor = color }
+                    if NSRange(range, in: editor.nativeContentManager).location == 0 { commentColor = color }
                 }
                 return true
             }
@@ -647,7 +686,7 @@ final class SyntaxHighlightingTests: XCTestCase {
         host.rootView = SourceTextEditor(file: file, font: changedFont,
             palette: .theme(dark: true), wrapLines: false, isFocused: false)
         try await wait { host.layoutSubtreeIfNeeded(); return editor.font == changedFont }
-        let document = try XCTUnwrap(editor.textContentManager.attributedString(in: nil))
+        let document = try XCTUnwrap(editor.nativeContentManager.attributedString(in: nil))
         document.enumerateAttribute(.font, in: NSRange(location: 0, length: document.length)) { value, _, _ in
             XCTAssertEqual(value as? NSFont, changedFont)
         }
@@ -677,7 +716,7 @@ final class SyntaxHighlightingTests: XCTestCase {
             window.contentView = host
             window.orderFront(nil)
             host.layoutSubtreeIfNeeded()
-            let editor = try XCTUnwrap((file.editorView as? NSScrollView)?.documentView as? STTextView)
+            let editor = try XCTUnwrap((file.editorView as? NSScrollView)?.documentView as? NativeCodeTextView)
             let selection = (source as NSString).range(of: "after")
             editor.textSelection = selection
             editor.setMarkedText("中文", selectedRange: NSRange(location: 2, length: 0), replacementRange: .notFound)
@@ -752,7 +791,7 @@ final class SyntaxHighlightingTests: XCTestCase {
         window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
         let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
-        let editor = try XCTUnwrap(scroll.documentView as? STTextView)
+        let editor = try XCTUnwrap(scroll.documentView as? NativeCodeTextView)
         let heading = (source as NSString).range(of: "Heading").location
         let markdownColor = try XCTUnwrap(SyntaxHighlightCoordinator.themeColor(
             for: "text.title", theme: SyntaxHighlighting.theme))
@@ -783,7 +822,7 @@ final class SyntaxHighlightingTests: XCTestCase {
     }
 
     func testRapidNativeUnicodeReplacementsKeepParserAndBytesAligned() async throws {
-        let plugin = try XCTUnwrap(SyntaxHighlighting.plugin(for: "fixture.swift"))
+        let plugin = try XCTUnwrap(SyntaxHighlighting.configuration(for: "fixture.swift"))
         let parser = Parser()
         try parser.setLanguage(plugin.language.parser)
         var source = "// 中文 👋 e\u{301}\r\nlet value = 42\n"
@@ -815,11 +854,42 @@ final class SyntaxHighlightingTests: XCTestCase {
         }
     }
 
+    func testAtomicMultiCursorUnicodeEditAndUndoKeepParserAndNativeStorageAligned() async throws {
+        let plugin = try XCTUnwrap(SyntaxHighlighting.configuration(for: "fixture.swift"))
+        let parser = Parser()
+        try parser.setLanguage(plugin.language.parser)
+        let original = "// 中文 👋\nlet first = 1\nlet second = 2\n"
+        let edited = "// 中文 👋\nlet 标志 = 1\nlet 标志 = 2\n"
+        let mounted = try mountedPlugin(source: original)
+        defer { mounted.window.close() }
+        let old = original as NSString
+        mounted.editor.selectedRanges = [
+            NSValue(range: old.range(of: "first")),
+            NSValue(range: old.range(of: "second"))
+        ]
+        mounted.editor.insertText("标志", replacementRange: .notFound)
+        XCTAssertEqual(Data((mounted.editor.text ?? "").utf8), Data(edited.utf8))
+        let changed = try await mounted.coordinator.tsClient.currentTree()
+        let freshlyParsed = try XCTUnwrap(parser.parse(edited)?.rootNode)
+        XCTAssertEqual(changed.rootNode?.sExpressionString, freshlyParsed.sExpressionString)
+        XCTAssertEqual(changed.rootNode?.range, freshlyParsed.range)
+        XCTAssertEqual(changed.rootNode?.pointRange, freshlyParsed.pointRange)
+        mounted.editor.undoManager?.undo()
+        XCTAssertEqual(Data((mounted.editor.text ?? "").utf8), Data(original.utf8))
+        let restored = try await mounted.coordinator.tsClient.currentTree()
+        let freshOriginal = try XCTUnwrap(parser.parse(original)?.rootNode)
+        XCTAssertEqual(restored.rootNode?.sExpressionString, freshOriginal.sExpressionString)
+        mounted.editor.undoManager?.redo()
+        XCTAssertEqual(Data((mounted.editor.text ?? "").utf8), Data(edited.utf8))
+        let redone = try await mounted.coordinator.tsClient.currentTree()
+        XCTAssertEqual(redone.rootNode?.sExpressionString, freshlyParsed.sExpressionString)
+    }
+
     func testProductionTransformerMatchesUTF16ParserPoints() async throws {
         for source in ["", "let value = 1", "// 中文 👋\r\nlet value = 1\n", "// a\rb\u{2028}c\u{2029}d\n", "\n"] {
-            let view = STTextView()
+            let view = NativeCodeTextView()
             view.text = source
-            let plugin = try XCTUnwrap(SyntaxHighlighting.plugin(for: "fixture.swift"))
+            let plugin = try XCTUnwrap(SyntaxHighlighting.configuration(for: "fixture.swift"))
             let coordinator = SyntaxHighlightCoordinator(
                 textView: view, theme: plugin.theme, language: plugin.language,
                 highlightsData: plugin.highlightsData, injectionsData: nil

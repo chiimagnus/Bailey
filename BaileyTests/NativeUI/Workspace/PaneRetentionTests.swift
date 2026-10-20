@@ -454,6 +454,430 @@ final class PaneRetentionTests: XCTestCase {
         editorView?.removeFromSuperview()
     }
 
+
+    func testClosingMountedFiveFileTabsReleasesTheirNativeDocuments() async throws {
+        final class WeakNativeContent {
+            weak var file: FileTab?
+            weak var editor: FocusReportingTextView?
+            init(file: FileTab, editor: FocusReportingTextView) {
+                self.file = file
+                self.editor = editor
+            }
+        }
+
+        let previousWindows = SessionStore.load()
+        let previousHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(previousWindows)
+            TerminalHistoryStore.save(previousHistories)
+        }
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-native-close-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let paths = try (0..<5).map { i -> URL in
+            let path = folder.appendingPathComponent("pane-\(i).swift")
+            try String(repeating: "let value = \"中文 👋\"\n", count: 1_000)
+                .write(to: path, atomically: true, encoding: .utf8)
+            return path
+        }
+        var weakContents: [WeakNativeContent] = []
+        var secondWeakContents: [WeakNativeContent] = []
+        do {
+            let manager = TerminalManager()
+            defer { manager.windowClosed() }
+            manager.addLocalFolders([folder])
+            manager.openFile(paths[0].path)
+            let project = try XCTUnwrap(manager.selectedProject)
+            for path in paths.dropFirst() { project.openFile(path.path) }
+            let tabs = project.tabs.map(\.id)
+            XCTAssertEqual(tabs.count, 5)
+            let groups = (0..<5).map { index in
+                DockSavedNode.group(DockSavedGroup(id: UUID(), items: [.tab(index)], selected: .tab(index)))
+            }
+            let layout = groups.dropFirst().reduce(groups[0]) { partial, group in
+                DockSavedNode.split(id: UUID(), axis: .horizontal, fraction: 0.5,
+                                    first: partial, second: group)
+            }
+            project.dock.restore(layout, tabIDs: tabs)
+            let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: GitStatusModel()))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1_700, height: 650),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.contentView = host
+            manager.attach(to: window)
+            window.orderFront(nil)
+            try await settle {
+                host.layoutSubtreeIfNeeded()
+                return project.tabs.allSatisfy { tab in
+                    guard case .file(let file) = tab.content else { return false }
+                    return (file.editorView as? NSScrollView)?.documentView is FocusReportingTextView
+                }
+            }
+            for tab in project.tabs {
+                guard case .file(let file) = tab.content else { continue }
+                let editor = try XCTUnwrap((file.editorView as? NSScrollView)?
+                    .documentView as? FocusReportingTextView)
+                XCTAssertNotNil(editor.syntaxCoordinator)
+                weakContents.append(WeakNativeContent(file: file, editor: editor))
+            }
+            XCTAssertEqual(weakContents.count, 5)
+            let cachedScrollViews = project.tabs.compactMap { tab -> NSScrollView? in
+                guard case .file(let file) = tab.content else { return nil }
+                return file.editorView as? NSScrollView
+            }
+            XCTAssertEqual(cachedScrollViews.count, 5)
+            do {
+                let selected = try XCTUnwrap(project.selectedTab)
+                guard case .file(let file) = selected.content else {
+                    return XCTFail("Expected selected file")
+                }
+                let focusedEditor = try XCTUnwrap((file.editorView as? NSScrollView)?
+                    .documentView as? FocusReportingTextView)
+                XCTAssertTrue(window.makeFirstResponder(focusedEditor))
+                XCTAssertTrue(window.firstResponder === focusedEditor)
+            }
+            project.closeFiles()
+            XCTAssertTrue(project.tabs.isEmpty)
+            XCTAssertTrue(cachedScrollViews.allSatisfy { $0.documentView == nil },
+                          "Actual tab closure must retire document views even when AppKit caches old scroll views")
+            try await settle { weakContents.allSatisfy { $0.file == nil } }
+            XCTAssertTrue(weakContents.allSatisfy { $0.editor?.syntaxCoordinator == nil },
+                          "An AppKit-cached native view must not keep its retired parser active")
+
+            // Closing the whole project is another semantic close; the window
+            // remains alive and AppKit may retain all five former scroll views.
+            for path in paths { project.openFile(path.path) }
+            XCTAssertEqual(project.tabs.count, 5)
+            project.dock.restore(layout, tabIDs: project.tabs.map(\.id))
+            try await settle {
+                host.layoutSubtreeIfNeeded()
+                return project.tabs.allSatisfy { tab in
+                    guard case .file(let file) = tab.content else { return false }
+                    return (file.editorView as? NSScrollView)?.documentView is FocusReportingTextView
+                }
+            }
+            let projectScrollViews = project.tabs.compactMap { tab -> NSScrollView? in
+                guard case .file(let file) = tab.content else { return nil }
+                return file.editorView as? NSScrollView
+            }
+            XCTAssertEqual(projectScrollViews.count, 5)
+            for tab in project.tabs {
+                if case .file(let file) = tab.content,
+                   let editor = (file.editorView as? NSScrollView)?.documentView as? FocusReportingTextView {
+                    secondWeakContents.append(WeakNativeContent(file: file, editor: editor))
+                }
+            }
+            XCTAssertEqual(secondWeakContents.count, 5)
+            manager.close(project)
+            XCTAssertFalse(manager.projects.contains { $0 === project })
+            XCTAssertTrue(project.tabs.isEmpty, "Closing a project must release every owned tab")
+            XCTAssertTrue(projectScrollViews.allSatisfy { $0.documentView == nil },
+                          "Closing a project must retire native documents retained by cached AppKit views")
+            XCTAssertTrue(secondWeakContents.allSatisfy { $0.editor?.syntaxCoordinator == nil })
+        }
+        // AppKit may retain a detached text view while the hosting window is alive.
+        // After its real owners are torn down, neither generation may survive.
+        try await settle {
+            (weakContents + secondWeakContents).allSatisfy { $0.file == nil && $0.editor == nil }
+        }
+        XCTAssertTrue((weakContents + secondWeakContents).allSatisfy {
+            $0.file == nil && $0.editor == nil
+        })
+    }
+
+    func testClosingNativeWindowReleasesItsProjectBeforeSwiftUIDisappears() throws {
+        let previousWindows = SessionStore.load()
+        let previousHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(previousWindows)
+            TerminalHistoryStore.save(previousHistories)
+        }
+
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-closed-window-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("sample.swift")
+        try "let value = \"中文 👋\"\n".write(to: path, atomically: true, encoding: .utf8)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([folder])
+        manager.openFile(path.path)
+        weak var retiredFile: FileTab?
+        do {
+            let pane = try XCTUnwrap(manager.selectedProject?.selectedTab)
+            guard case .file(let file) = pane.content else {
+                return XCTFail("Expected file to be owned by closed window")
+            }
+            retiredFile = file
+        }
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        manager.attach(to: window)
+        window.orderFront(nil)
+        window.close()
+
+        XCTAssertNil(manager.attachedWindow,
+                     "NSWindow close must release its manager before SwiftUI onDisappear")
+        XCTAssertFalse(TerminalManager.activeManagers.contains { $0 === manager })
+        XCTAssertTrue(manager.projects.isEmpty,
+                      "A retained WindowRootView must not keep projects from a closed window")
+        XCTAssertNil(retiredFile, "Closing the window must release its owned FileTab")
+    }
+
+    func testHundredThousandLineWorkspaceEditsSavesAndReleasesFile() async throws {
+        let previousWindows = SessionStore.load()
+        let previousHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(previousWindows)
+            TerminalHistoryStore.save(previousHistories)
+        }
+
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-100k-workspace-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("large.swift")
+        let source = (0..<100_000).map { row in
+            "let value_\(row) = \(row) // 中文 👋 edit undo find verify\n"
+        }.joined()
+        let original = Data(source.utf8)
+        XCTAssertGreaterThan(original.count, 5 << 20)
+        XCTAssertLessThan(original.count, 8 << 20)
+        try original.write(to: path)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([folder])
+        manager.openFile(path.path)
+        let project = try XCTUnwrap(manager.selectedProject)
+        let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: GitStatusModel()))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1_200, height: 720),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderFront(nil)
+        defer { window.close() }
+
+        weak var retiredFile: FileTab?
+        do {
+            let pane = try XCTUnwrap(project.selectedTab)
+            guard case .file(let file) = pane.content else {
+                return XCTFail("Expected a real file tab in WorkspaceDockView")
+            }
+            retiredFile = file
+            try await file.waitForText()
+            try await settle {
+                host.layoutSubtreeIfNeeded()
+                return (file.editorView as? NSScrollView)?.documentView is FocusReportingTextView
+            }
+            let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
+            let editor = try XCTUnwrap(scroll.documentView as? FocusReportingTextView)
+            XCTAssertNotNil(editor.syntaxCoordinator)
+            XCTAssertEqual(Data(editor.string.utf8), original)
+
+            for position in [0, source.utf16.count / 2, source.utf16.count - 1, 0] {
+                editor.scrollRangeToVisible(NSRange(location: position, length: 0))
+                editor.layoutSubtreeIfNeeded()
+                let viewport = try XCTUnwrap(editor.nativeLayoutManager.textViewportLayoutController.viewportRange)
+                let visible = NSRange(viewport, in: editor.nativeContentManager)
+                XCTAssertLessThanOrEqual(visible.location, position)
+                XCTAssertGreaterThanOrEqual(NSMaxRange(visible), position)
+            }
+
+            let appended = "let appended = \"中文 👋\"\n"
+            editor.insertText(appended,
+                              replacementRange: NSRange(location: source.utf16.count, length: 0))
+            editor.breakUndoCoalescing()
+            try await settle { file.isDirty }
+            XCTAssertEqual(Data(file.text.utf8), original + Data(appended.utf8))
+            editor.undoManager?.undo()
+            try await settle { !file.isDirty }
+            XCTAssertEqual(Data(file.text.utf8), original)
+            editor.undoManager?.redo()
+            try await settle { file.isDirty }
+            XCTAssertEqual(Data(file.text.utf8), original + Data(appended.utf8))
+
+            await file.save()
+            XCTAssertFalse(file.isDirty)
+            XCTAssertEqual(try Data(contentsOf: path), original + Data(appended.utf8))
+            project.closeFiles()
+            XCTAssertTrue(project.tabs.isEmpty)
+            XCTAssertNil(scroll.documentView, "Closing the file must detach its TextKit document")
+            XCTAssertNil(editor.syntaxCoordinator, "Closing the file must retire its parser")
+        }
+
+        try await settle { retiredFile == nil }
+        XCTAssertNil(retiredFile, "The live Dock must not retain a closed 100k FileTab")
+    }
+
+    func testFiveConcurrentNativeEditorsReleaseDocumentAndParsingTasks() async throws {
+        final class WeakEditor {
+            weak var editor: FocusReportingTextView?
+            init(_ editor: FocusReportingTextView) { self.editor = editor }
+        }
+        final class WeakFile {
+            weak var file: FileTab?
+            init(_ file: FileTab) { self.file = file }
+        }
+
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-native-5tabs-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let baseline = String(repeating: "let item = \"中文 👋\" // exact data\n", count: 10_000)
+        for cycle in 0..<5 {
+            var files: [FileTab] = []
+            var windows: [NSWindow] = []
+            var hosts: [NSHostingView<SourceTextEditor>] = []
+            var weakEditors: [WeakEditor] = []
+            var weakFiles: [WeakFile] = []
+            for i in 0..<5 {
+                let url = folder.appendingPathComponent("source\(cycle)-\(i).swift")
+                try baseline.write(to: url, atomically: true, encoding: .utf8)
+                let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared,
+                                   workspaceIdentity: nil)
+                try await file.waitForText()
+                let host = NSHostingView(rootView: SourceTextEditor(
+                    file: file, font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+                    palette: .theme(dark: (cycle + i).isMultiple(of: 2)),
+                    wrapLines: !(cycle + i).isMultiple(of: 2), isFocused: false
+                ))
+                host.frame = NSRect(x: 0, y: 0, width: 680, height: 450)
+                let window = NSWindow(contentRect: host.frame, styleMask: [.titled],
+                                      backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.contentView = host
+                window.orderFront(nil)
+                host.layoutSubtreeIfNeeded()
+                try await settle { file.editorView != nil }
+                let editor = try XCTUnwrap((file.editorView as? NSScrollView)?
+                    .documentView as? FocusReportingTextView)
+                XCTAssertEqual(editor.string, baseline)
+                XCTAssertNotNil(editor.syntaxCoordinator)
+                editor.insertText(String(i), replacementRange: NSRange(location: 0, length: 0))
+                try await settle { file.isDirty && file.text.hasPrefix(String(i)) }
+                editor.undoManager?.undo()
+                try await settle { file.text == baseline && !file.isDirty }
+                XCTAssertEqual(editor.string, baseline)
+                files.append(file)
+                hosts.append(host)
+                windows.append(window)
+                weakEditors.append(WeakEditor(editor))
+                weakFiles.append(WeakFile(file))
+            }
+            print("T5_NATIVE_LIFETIME cycle=\(cycle) simultaneous=\(weakEditors.count) allRetained=\(weakEditors.allSatisfy { $0.editor != nil })")
+            XCTAssertTrue(weakEditors.allSatisfy { $0.editor != nil })
+            // Destroy real owners, not just the currently visible NSView. The
+            // editor's notification subscription and queued parser work must not
+            // retain retired documents after the last FileTab is gone.
+            for i in (0..<windows.count).reversed() {
+                hosts[i].removeFromSuperview()
+                windows[i].contentView = nil
+                windows[i].close()
+            }
+            hosts.removeAll()
+            windows.removeAll()
+            files.removeAll()
+            try await settle {
+                weakEditors.allSatisfy { $0.editor == nil }
+                    && weakFiles.allSatisfy { $0.file == nil }
+            }
+            XCTAssertTrue(weakEditors.allSatisfy { $0.editor == nil })
+            XCTAssertTrue(weakFiles.allSatisfy { $0.file == nil })
+            print("T5_NATIVE_LIFETIME cycle=\(cycle) simultaneous=5 released=5 filesReleased=5")
+        }
+    }
+
+    func testExternalReloadReleasesObsoleteDocumentEvenWhenOldScrollViewIsCached() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("reload.swift")
+        let oldText = String(repeating: "let stale = \"中文 😀\"\n", count: 400)
+        let newText = "let current = \"updated 👋\"\n"
+        try oldText.write(to: path, atomically: true, encoding: .utf8)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        let host = NSHostingView(rootView: SourceTextEditor(
+            file: file, font: .monospacedSystemFont(ofSize: 14, weight: .regular),
+            palette: .theme(dark: false), wrapLines: false, isFocused: false
+        ))
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 700, height: 460),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        try await settle { host.layoutSubtreeIfNeeded(); return file.editorView != nil }
+        // The old SwiftUI host and scroll may be retained by a pending AppKit
+        // layout even after its tab's document generation becomes obsolete.
+        let cachedScroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        var editor: FocusReportingTextView? = try XCTUnwrap(
+            cachedScroll.documentView as? FocusReportingTextView)
+        weak var retiredEditor = editor
+        XCTAssertEqual(editor?.text, oldText)
+        let initialRevision = file.reloadRevision
+        // A successful refresh of byte-identical content must not retire the
+        // document, reset Undo or replace the tab's native view.
+        file.reloadFromDiskIfClean()
+        try await file.waitForText()
+        XCTAssertEqual(file.reloadRevision, initialRevision)
+        XCTAssertTrue(file.editorView === cachedScroll)
+        XCTAssertTrue(cachedScroll.documentView === editor)
+        XCTAssertTrue(window.makeFirstResponder(editor),
+            "Retiring a clean editor must also handle a previously focused NSTextView")
+        host.removeFromSuperview()
+        try newText.write(to: path, atomically: true, encoding: .utf8)
+        file.reloadFromDiskIfClean()
+        try await settle { file.text == newText && file.reloadRevision > 0 }
+        editor = nil
+        XCTAssertNil(file.editorView, "The file must not expose a stale native editor after reload")
+        XCTAssertNil(cachedScroll.documentView,
+                     "A retired file generation must not keep its obsolete native text document")
+        try await settle { retiredEditor == nil }
+
+        let replacementHost = NSHostingView(rootView: FileViewerView(file: file))
+        window.contentView = replacementHost
+        try await settle {
+            replacementHost.layoutSubtreeIfNeeded()
+            return file.editorView !== cachedScroll && file.editorView != nil
+        }
+        let freshScroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        var freshEditor: FocusReportingTextView? = try XCTUnwrap(
+            freshScroll.documentView as? FocusReportingTextView)
+        weak var retiredReplacement = freshEditor
+        XCTAssertEqual(freshEditor?.text, newText)
+        XCTAssertFalse(freshEditor?.undoManager?.canUndo ?? true)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), newText)
+
+        // The same generation handoff also applies when valid text becomes
+        // binary: the old document must leave memory while the real file tab
+        // switches to its unsupported-content view.
+        let binary = Data([0xFF, 0x00, 0xFE])
+        try binary.write(to: path)
+        file.reloadFromDiskIfClean()
+        try await settle {
+            replacementHost.layoutSubtreeIfNeeded()
+            if case .unavailable = file.content { return true }
+            return false
+        }
+        freshEditor = nil
+        XCTAssertNil(freshScroll.documentView)
+        try await settle { retiredReplacement == nil }
+        XCTAssertTrue(file.text.isEmpty)
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try Data(contentsOf: path), binary)
+    }
+
     func testEditorRetainsScrollAndReleasesRetiredNativeResources() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -564,15 +988,17 @@ final class PaneRetentionTests: XCTestCase {
         // Derive the insertion point from the rendered viewport, not a fixed
         // line number: fonts and pane heights vary across macOS/Xcode runners.
         // A caret outside the pane makes AppKit legitimately scroll it into view.
-        let layout = editor.textLayoutManager
-        let documentStart = layout.documentRange.location
         let point = CGPoint(x: 20, y: scroll.contentView.bounds.minY + 30)
-        let caret = try XCTUnwrap(layout.caretLocation(interactingAt: point, inContainerAt: documentStart))
-        editor.textSelection = NSRange(location: layout.offset(from: documentStart, to: caret), length: 0)
+        let screenPoint = window.convertPoint(toScreen: editor.convert(point, to: nil))
+        let offset = editor.characterIndex(for: screenPoint)
+        print("DOCK_TRACE beforeHit offset=\(offset) editorSize=\(editor.frame) scroll=\(scroll.contentView.bounds) selected=\(editor.selectedRange()) firstResponder=\(window.firstResponder === editor)")
+        XCTAssertNotEqual(offset, NSNotFound)
+        editor.textSelection = NSRange(location: offset, length: 0)
         scroll.contentView.setBoundsOrigin(NSPoint(x: 0, y: 900))
         scroll.reflectScrolledClipView(scroll.contentView)
         let scrollBefore = scroll.contentView.bounds.origin
         let heightBefore = scroll.bounds.height
+        print("DOCK_TRACE beforeMove desired=\(scrollBefore) editorFrame=\(editor.frame) selection=\(editor.selectedRange()) viewport=\(String(describing: editor.textLayoutManager?.textViewportLayoutController.viewportRange))")
         let target = try XCTUnwrap(project.dock.group(containing: .files))
         XCTAssertTrue(project.dock.move(.tab(pane.id), into: target.id, edge: .bottom))
         try await settle {
@@ -583,8 +1009,27 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertEqual(project.selectedTabID, pane.id)
         XCTAssertTrue(scroll.documentView === editor)
         try await settle { window.firstResponder === editor }
+        print("DOCK_TRACE afterMove actual=\(scroll.contentView.bounds.origin) editorFrame=\(editor.frame) selection=\(editor.selectedRange()) viewport=\(String(describing: editor.textLayoutManager?.textViewportLayoutController.viewportRange))")
         try await settle { scroll.contentView.bounds.origin == scrollBefore }
         XCTAssertEqual(scroll.contentView.bounds.origin, scrollBefore)
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(scroll.bitmapImageRepForCachingDisplay(in: scroll.bounds))
+        scroll.cacheDisplay(in: scroll.bounds, to: bitmap)
+        let background = try XCTUnwrap(scroll.backgroundColor.usingColorSpace(.deviceRGB))
+        let scale = CGFloat(bitmap.pixelsWide) / scroll.bounds.width
+        let glyphPixels = (Int(25 * scale)..<min(bitmap.pixelsHigh, Int(140 * scale)))
+            .reduce(0) { count, y in
+                count + (Int(80 * scale)..<min(bitmap.pixelsWide, Int(260 * scale)))
+                    .filter { x in
+                        guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                        else { return false }
+                        return max(abs(c.redComponent - background.redComponent),
+                                   abs(c.greenComponent - background.greenComponent),
+                                   abs(c.blueComponent - background.blueComponent)) > 0.3
+                    }.count
+            }
+        XCTAssertGreaterThan(glyphPixels, 30,
+            "Dock reparent must restore visible Source glyphs, not only the scroll origin")
         let undo = try XCTUnwrap(editor.undoManager)
         XCTAssertTrue(undo.canUndo)
         undo.undo()

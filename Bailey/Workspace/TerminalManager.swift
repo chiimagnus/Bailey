@@ -50,6 +50,8 @@ final class TerminalManager {
     @ObservationIgnored private var pendingSave: Task<Void, Never>?
     @ObservationIgnored private var isInitialized = false
     @ObservationIgnored private var terminationObservation: AnyCancellable?
+    @ObservationIgnored private var windowCloseObservation: AnyCancellable?
+    @ObservationIgnored private var didCloseWindow = false
     /// The stable terminal/editor responder displaced by the command palette's
     /// search field. AppKit field editors are deliberately excluded because a
     /// SwiftUI TextField can reuse the same responder for the palette itself.
@@ -83,14 +85,16 @@ final class TerminalManager {
                 guard !tab.content.isDirty else { return false }
             }
         }
-        return true
+        // A previously clean tab can become dirty while another save awaits IO.
+        return !hasUnsavedEditorsInWindow
     }
 
     static func saveBeforeTermination() async -> Bool {
         for manager in registry {
             guard await manager.saveBeforeWindowClose() else { return false }
         }
-        return true
+        // Recheck earlier windows after later windows finish their writes.
+        return !hasUnsavedEditors
     }
     /// Read-only access for the private, authenticated SSH handoff.
     static var activeManagers: [TerminalManager] { registry }
@@ -582,6 +586,12 @@ final class TerminalManager {
     /// Called as soon as SwiftUI gives this manager an AppKit window. A
     /// launch-time Finder request may have been queued before that happened.
     func attach(to window: NSWindow) {
+        guard !didCloseWindow else { return }
+        if self.window !== window {
+            windowCloseObservation = NotificationCenter.default
+                .publisher(for: NSWindow.willCloseNotification, object: window)
+                .sink { [weak self] _ in self?.windowClosed() }
+        }
         self.window = window
         Self.isOpeningWindow = false
         let directories = Self.takePendingDirectories()
@@ -672,6 +682,11 @@ final class TerminalManager {
             }
             guard let self, let project,
                   self.projects.contains(where: { $0 === project }) else { return }
+            // New drafts in tabs skipped before an awaited save must survive.
+            guard !project.tabs.contains(where: { $0.content.isDirty }) else {
+                dirty.forEach { $0.suspendAutoSaveForClose(false) }
+                return
+            }
             project.terminateAll()
             self.remove(project)
         }
@@ -681,6 +696,9 @@ final class TerminalManager {
         guard let index = projects.firstIndex(where: { $0.id == project.id }) else { return }
         projects.remove(at: index)
         project.onSnapshotChange = nil
+        // A dismissed SwiftUI host may still cache this Project; its retired
+        // editors must no longer be owned by the removed project's tab array.
+        project.tabs.removeAll()
         if selectedProjectID == project.id {
             let neighbor = min(index, projects.count - 1)
             selectedProjectID = neighbor >= 0 ? projects[neighbor].id : nil
@@ -1065,6 +1083,9 @@ final class TerminalManager {
     /// saved and queued so reopening (or relaunching) restores it — and
     /// kill its shells.
     func windowClosed() {
+        guard !didCloseWindow else { return }
+        didCloseWindow = true
+        windowCloseObservation = nil
         // A pending async Files error must not bring back the closed window.
         window = nil
         // A drop tied to a closing window must never reappear in another one.
@@ -1090,6 +1111,8 @@ final class TerminalManager {
         for project in projects {
             project.terminateAll()
         }
+        projects.removeAll()
+        selectedProjectID = nil
     }
 
     // MARK: - Persistence

@@ -1,5 +1,5 @@
 //  Native diff computation for the diff viewer: line-level diff, word-level
-//  intraline highlights, and the row/document models the STTextView-based
+//  intraline highlights, and the row/document models the NSTextView-based
 //  viewer renders. Everything here is pure and nonisolated so a diff can be
 //  computed off the main actor.
 //
@@ -833,7 +833,7 @@ nonisolated struct DiffRow {
     var collapsed: DiffCollapsedRun? = nil
 }
 
-/// A full document the viewer hands to one STTextView: the joined text plus
+/// A full document the viewer hands to one native NSTextView: the joined text plus
 /// per-row metadata aligned with its paragraphs.
 nonisolated struct DiffSideDocument {
     let text: String

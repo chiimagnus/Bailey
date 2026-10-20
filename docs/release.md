@@ -4,9 +4,11 @@
 
 ## PR 检查
 
-[CI workflow](../.github/workflows/ci.yml) 仅在面向 `main` 的 PR 上运行。纯 Markdown、`docs/`、`.github/features/`（计划／审计／设计稿）、`.github/ISSUE_TEMPLATE/` 或 `LICENSE` 变更会跳过；只要 PR 同时改动了其他文件（如 Swift、测试、工程、Makefile 或 workflow），仍运行完整 CI。普通 `main` 提交不会触发；版本 Tag 发布不受此过滤影响。Runner 为 `macos-26`，`DEVELOPER_DIR` 指定 Xcode 26.6。将来若配置必需 CI 检查，须同步调整跳过策略，避免检查一直 Pending 而阻止纯文档 PR 合并。
+[CI workflow](../.github/workflows/ci.yml) 仅在面向 `main` 的 PR 上运行。纯 Markdown、`docs/`、`.github/features/`、`.github/ISSUE_TEMPLATE/` 或 `LICENSE` 的独立 PR 会跳过；如果历史 PR 差异包含代码，即使本次只改文档，事件仍可能触发 CI。普通 `main` 提交不触发；版本 Tag 发布不受此过滤影响。Runner 为 `macos-26`，使用 Xcode 26.6。
 
-PR CI 只执行 `make test SIGNING=adhoc`（Debug）：构建实际测试宿主、运行全部 XCTest，再严格验签 `Bailey.app` 和 `BaileyTests.xctest`，确认均为 ad hoc 签名。`AppIdentityTests` 同时检查测试宿主的 Bundle ID 和显示名称；失败会使 CI 失败。它不是完整 UI 或真实 SSH 验收，提交者仍须执行 [testing.md](testing.md#完成标准) 中与改动相关的检查。
+**日常增量检查**：`synchronize` 事件比较本次推送前后的 PR Head 提交，不重复把整份长期 PR 与 `main` 的所有历史差异当作新修改。仅改某个 XCTest 文件时运行该类；编辑器源码改动覆盖原生编辑器、Diff、输入法、文件标签、语法高亮、窗口保留等交叉测试；Diff 源码改动执行关联套件；不受支持的变更范围、缺失/改写的提交历史、工程或 CI 配置修改则运行全量。仅新增文档时检查差异，不运行无关 XCTest。所有实际执行的 XCTest 仍通过同一个 `make test SIGNING=adhoc`，并对 App 与测试 Bundle 做严格 ad hoc 验签，不另写测试执行器。
+
+**合并前的完整检查不可省略**：PR 首次打开、重新打开、由草稿转为可审查状态会跑全部 XCTest；正式准备合并时，在最新提交上给 PR 添加 `ci/full` 标签（已有标签则移除后重新添加），以 `labeled` 事件重新触发全量测试，核对对应 Head SHA 的绿色运行记录。只凭增量 CI 通过不得宣称整份 PR 已完整验收；Release workflow 继续在 Tag 阶段执行全量测试。若配置必需 CI 检查，应确保文档变更和显式跳过仍有预期状态，不制造永久 Pending。`AppIdentityTests` 继续负责验证宿主身份，CI 不等于完整 App 图形 E2E 或真实用户 SSH 验收；详见 [testing.md](testing.md#完成标准)。
 
 PR 不再额外编译 Release，也不重复进行 YAML 中的验签；正式 Release 编译、版本和签名检查仍由标签触发的发布流程执行。**PR 通过不等于 Release 构建通过**：修改工程、依赖或发布路径时，提交前另运行 `make build:release`；无开发证书的隔离环境可用 `make build:release SIGNING=adhoc`。本地 `make test` 未指定 `SIGNING` 时使用工程自己的 Apple Development 配置；临时签名不代表正式发布身份，本地成功也不代表 GitHub Actions 已通过。
 

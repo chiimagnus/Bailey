@@ -34,6 +34,7 @@ nonisolated struct SSHHostCommandRunner: RemoteCommandRunner {
             "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=yes",
             "-o", "ConnectTimeout=8",
+            "-o", "Compression=yes",
         ] + multiplexOptions + ["-T", "--", host] + argv
         do {
             let result = try await Task.detached(priority: .utility) {

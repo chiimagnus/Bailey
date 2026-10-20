@@ -17,7 +17,7 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
 	-configuration $(CONFIGURATION) -destination '$(DESTINATION)' \
 	-derivedDataPath $(DERIVED_DATA) -clonedSourcePackagesDirPath $(SOURCE_PACKAGES) \
 	-skipPackageUpdates -disableAutomaticPackageResolution
-TEST_SELECTION = $(if $(strip $(ONLY_TESTING)),-only-testing:$(ONLY_TESTING))
+TEST_SELECTION = $(foreach TEST,$(ONLY_TESTING),-only-testing:$(TEST))
 VERSION_FLAGS = $(if $(strip $(VERSION)),MARKETING_VERSION=$(VERSION)) \
 	$(if $(strip $(BUILD_NUMBER)),CURRENT_PROJECT_VERSION=$(BUILD_NUMBER))
 
@@ -40,7 +40,7 @@ help:
 		'  make test SIGNING=adhoc                 临时签名运行 XCTest（CI）' \
 		'  make build:release                      Release 构建并验签' \
 		'  make build:release SIGNING=adhoc        无开发证书时验证 Release 构建' \
-		'  make test ONLY_TESTING=BaileyTests/类名     只运行指定 XCTest' \
+		'  make test ONLY_TESTING="BaileyTests/类名1 BaileyTests/类名2"  运行多个 XCTest 类' \
 		'  make package VERSION=X.Y.Z BUILD_NUMBER=N  验证正式签名并制作 ZIP' \
 		'  make clean                              Xcode 清理构建产物' \
 		'  make doctor                             检查 Xcode 工具链'

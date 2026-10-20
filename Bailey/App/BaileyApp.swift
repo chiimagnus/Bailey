@@ -169,7 +169,7 @@ private struct BaileyCommands: Commands {
         CommandGroup(after: .pasteboard) {
             // SwiftUI's Edit menu ships no Find submenu, so Bailey owns these
             // outright. They act on the focused pane — Ghostty's search in a
-            // terminal, STTextView's find bar in a file editor — rather than on
+            // terminal, NSTextView's find bar in a file editor — rather than on
             // the first responder, which keeps them live while the find bar's
             // text field has keyboard focus. ⇧⌘G is already Toggle Git Panel,
             // so Find Previous is reachable by ⇧↩ in the bar instead.
@@ -260,11 +260,13 @@ private struct BaileyCommands: Commands {
 
                 Divider()
 
-                ForEach(Array((manager?.projects ?? []).prefix(9).enumerated()), id: \.element.id) { index, project in
-                    Button(project.name) {
-                        manager?.selectProject(index: index)
+                ForEach(Array((manager?.projects ?? []).prefix(9).enumerated()).map {
+                    WindowMenuItem(id: $0.element.id, index: $0.offset, title: $0.element.name)
+                }) { item in
+                    Button(item.title) {
+                        manager?.selectProject(index: item.index)
                     }
-                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                    .keyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .command)
                 }
             }
             .disabled(manager?.projects.isEmpty != false)
@@ -312,13 +314,21 @@ private struct BaileyCommands: Commands {
 
                 Divider()
 
-                ForEach(Array((manager?.selectedProject?.tabs ?? []).prefix(9).enumerated()), id: \.element.id) { index, tab in
-                    Button(tab.displayTitle) {
-                        manager?.selectTab(index: index)
+                ForEach(Array((manager?.selectedProject?.tabs ?? []).prefix(9).enumerated()).map {
+                    WindowMenuItem(id: $0.element.id, index: $0.offset, title: $0.element.displayTitle)
+                }) { item in
+                    Button(item.title) {
+                        manager?.selectTab(index: item.index)
                     }
                 }
             }
             .disabled(manager?.selectedProject?.tabs.isEmpty != false)
         }
     }
+}
+
+private struct WindowMenuItem: Identifiable {
+    let id: UUID
+    let index: Int
+    let title: String
 }

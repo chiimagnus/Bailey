@@ -1,4 +1,4 @@
-//  STTextView-based rendering for the diff viewer: one "code pane" is a text
+//  Native NSTextView rendering for the diff viewer: one "code pane" is a text
 //  view inside a scroll view, a full-width decoration underlay behind it
 //  (row tints, word-level emphasis, deletion markers), and a native gutter
 //  with per-file line numbers to its left.
@@ -12,8 +12,6 @@
 //
 
 import AppKit
-import STTextKitPlus
-import STTextView
 
 /// Fixed line spacing keeps the rows of side-by-side native diffs aligned.
 enum DiffTypography {
@@ -243,25 +241,11 @@ struct DiffDecorations {
     }
 }
 
-// MARK: - Viewport layout hook
-
-/// Repaints the decoration underlay and gutter after each viewport layout
-/// pass — the moment fragment frames for the visible range are final.
-struct DiffViewportSyncPlugin: STPlugin {
-    let onLayout: () -> Void
-
-    func setUp(context: any Context) {
-        context.events.onDidLayoutViewport { _ in
-            onLayout()
-        }
-    }
-}
-
 // MARK: - Text view
 
 /// The pane's text view expands collapsed-run separators on click instead
 /// of placing a caret in the separator row.
-final class DiffTextView: STTextView {
+final class DiffTextView: NativeCodeTextView {
     private var nativeBreaksSnapshot: Bool?
 
     var hasNativeNonLFSeparators: Bool {
@@ -275,9 +259,9 @@ final class DiffTextView: STTextView {
         nativeBreaksSnapshot = DiffRowGeometry.hasNativeNonLFSeparators(text)
     }
 
-    override func didChangeText() {
+    override func storageCharactersDidChange() {
         nativeBreaksSnapshot = nil
-        super.didChangeText()
+        super.storageCharactersDidChange()
     }
 
     /// Returns true when the click landed on a collapsed-run separator and
@@ -336,8 +320,8 @@ enum DiffRowGeometry {
     static func visibleRows(
         textView: DiffTextView, decorations: DiffDecorations
     ) -> [DiffVisibleRow] {
-        let layoutManager = textView.textLayoutManager
-        let contentManager = textView.textContentManager
+        let layoutManager = textView.nativeLayoutManager
+        let contentManager = textView.nativeContentManager
         guard let viewportRange = layoutManager.textViewportLayoutController.viewportRange else {
             return []
         }
@@ -386,7 +370,10 @@ enum DiffRowGeometry {
                 baseIndex = nextCountedIndex
             }
 
-            let bodyEnd = fragment.textLineFragments.lastIndex { !$0.isExtraLineFragment }
+            // Native NSTextLineFragment.attributedString is the whole source
+            // paragraph even for the synthetic zero-character terminal line.
+            // Only characterRange identifies that extra line reliably.
+            let bodyEnd = fragment.textLineFragments.lastIndex { $0.characterRange.length > 0 }
             let atDocumentEnd = fragment.rangeInElement.endLocation.compare(
                 layoutManager.documentRange.endLocation
             ) == .orderedSame
@@ -396,7 +383,7 @@ enum DiffRowGeometry {
             var lineOffset = 0
             var emittedBody = false
             for (linePosition, lineFragment) in fragment.textLineFragments.enumerated() {
-                let extra = lineFragment.isExtraLineFragment
+                let extra = lineFragment.characterRange.length == 0
                 let rowIndex = baseIndex + (extra && emittedBody ? 1 : 0)
                 let continued = !extra && (emittedBody || previousGitRow == rowIndex)
                 let endsGitLine = extra
@@ -604,10 +591,10 @@ final class DiffDecorationUnderlayView: NSView {
     /// always within a single row, so segment enumeration yields one rect.
     private func segmentRects(for range: NSRange) -> [CGRect] {
         guard let textView,
-              let textRange = NSTextRange(range, in: textView.textContentManager)
+              let textRange = NSTextRange(range, in: textView.nativeContentManager)
         else { return [] }
         var rects: [CGRect] = []
-        textView.textLayoutManager.enumerateTextSegments(
+        textView.nativeLayoutManager.enumerateTextSegments(
             in: textRange, type: .standard, options: .rangeNotRequired
         ) { _, frame, _, _ in
             if frame.width > 0 { rects.append(frame) }
@@ -1064,7 +1051,7 @@ private final class DiffClipView: NSClipView {
 /// One diff column: gutter + decoration underlay + transparent scroll/text
 /// stack. Configured once as review (immutable attributed document) or edit
 /// (live buffer with the editor's syntax plugin); the mode never changes for
-/// a given instance because STTextView plugins cannot be detached.
+/// a given instance: review and editable content retain distinct state.
 final class DiffCodePaneView: NSView {
     enum Mode {
         case review
@@ -1159,12 +1146,12 @@ final class DiffCodePaneView: NSView {
             return nsSource.paragraphRange(for: NSRange(location: position, length: 0))
         }
 
-        let base = DiffTypography.paragraphStyle(for: textView.font)
+        let base = DiffTypography.paragraphStyle(for: textView.font ?? TerminalFont.current())
         func applyStyle(_ spacing: GhostSpacing, to range: NSRange) {
             guard let style = base.mutableCopy() as? NSMutableParagraphStyle else { return }
             style.paragraphSpacingBefore = CGFloat(spacing.rowsBefore) * rowHeight
             style.paragraphSpacing = CGFloat(spacing.rowsAfter) * rowHeight
-            textView.addAttributes([.paragraphStyle: style], range: range)
+            textView.textStorage?.addAttributes([.paragraphStyle: style], range: range)
         }
         for line in Set(appliedGhostSpacing.keys).union(wanted.keys) {
             let current = wanted[line] ?? GhostSpacing()
@@ -1210,16 +1197,18 @@ final class DiffCodePaneView: NSView {
             self?.handleScrolled()
         }
 
+        // Native NSTextView paints an opaque system background by default;
+        // keep diff row tints, word emphasis and deletion ghosts visible below it.
+        textView.drawsBackground = false
         textView.isEditable = mode == .edit
         textView.isSelectable = true
         textView.highlightSelectedLine = false
         textView.showsLineNumbers = false
-        textView.isHorizontallyResizable = true
+        textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
         textView.isIncrementalSearchingEnabled = true
         // Review documents are swapped wholesale (fold expansion, reloads);
         // the caret-follow scroll after such a swap would jump to the top and
         // discard the restored scroll position. Editors keep it for typing.
-        textView.scrollsSelectionToVisibleOnTextChange = mode == .edit
 
         underlay.textView = textView
         underlay.clipView = scrollView.contentView
@@ -1239,10 +1228,6 @@ final class DiffCodePaneView: NSView {
 
         // Repaint decorations after every viewport layout pass; scroll
         // movements are reported synchronously by DiffClipView above.
-        textView.addPlugin(DiffViewportSyncPlugin { [weak self] in
-            self?.underlay.needsDisplay = true
-            self?.gutter.needsDisplay = true
-        })
     }
 
     /// Repaint viewport decorations and synchronize both axes in split mode.
@@ -1267,6 +1252,7 @@ final class DiffCodePaneView: NSView {
             width: max(0, bounds.width - gutterWidth), height: bounds.height
         )
         scrollView.frame = contentFrame
+        textView.configureWrapping(false, viewportWidth: scrollView.contentView.bounds.width)
         underlay.frame = contentFrame
         // Row rects span the current width; a resize must repaint them.
         underlay.needsDisplay = true
@@ -1378,7 +1364,7 @@ final class DiffCodePaneView: NSView {
 
     private func applyContentHeightOverride() {
         var height = fixedRowCount.map { CGFloat($0) * rowHeight }
-        if mode == .edit, textView.textContentManager.documentRange.isEmpty,
+        if mode == .edit, textView.nativeContentManager.documentRange.isEmpty,
            let ghosts = decorations.ghostsByAnchor[decorations.rows.count] {
             height = CGFloat(ghosts.lines.count + 1) * rowHeight
         }
@@ -1395,7 +1381,7 @@ final class DiffCodePaneView: NSView {
         if textView.font != font {
             textView.font = font
         }
-        if !textView.defaultParagraphStyle.isEqual(paragraphStyle) {
+        if textView.defaultParagraphStyle?.isEqual(paragraphStyle) != true {
             textView.defaultParagraphStyle = paragraphStyle
             textView.typingAttributes[.paragraphStyle] = paragraphStyle
         }

@@ -1,11 +1,10 @@
 import AppKit
-import STTextKitPlus
-import STTextView
 import XCTest
+@testable import Bailey
 
 @MainActor
 final class EditorTextInputTests: XCTestCase {
-    private func beginComposition(_ editor: STTextView) {
+    private func beginComposition(_ editor: NativeCodeTextView) {
         editor.text = "before after"
         editor.setMarkedText("中文", selectedRange: NSRange(location: 2, length: 0),
                              replacementRange: NSRange(location: 7, length: 0))
@@ -22,7 +21,7 @@ final class EditorTextInputTests: XCTestCase {
     }
 
     func testUnmarkAcceptsCompositionLikeSystemTextViewAndClearsMarking() throws {
-        let editor = STTextView()
+        let editor = NativeCodeTextView()
         let reference = NSTextView()
         let font = NSFont.monospacedSystemFont(ofSize: 19, weight: .regular)
         editor.font = font
@@ -37,7 +36,7 @@ final class EditorTextInputTests: XCTestCase {
         XCTAssertEqual(reference.string, "before 中文👋after")
         XCTAssertEqual(Data((editor.text ?? "").utf8), Data(reference.string.utf8))
         XCTAssertFalse(editor.hasMarkedText())
-        let text = try XCTUnwrap(editor.textContentManager.attributedString(in: nil))
+        let text = try XCTUnwrap(editor.nativeContentManager.attributedString(in: nil))
         XCTAssertNil(text.attribute(.underlineStyle, at: 7, effectiveRange: nil))
         XCTAssertEqual(text.attribute(.foregroundColor, at: 7, effectiveRange: nil) as? NSColor, .systemBlue)
         XCTAssertEqual(text.attribute(.font, at: 7, effectiveRange: nil) as? NSFont, font)
@@ -46,7 +45,7 @@ final class EditorTextInputTests: XCTestCase {
     }
 
     func testCompositionWithImplicitReplacementReplacesSelectedTextAndRestoresUndo() throws {
-        let editor = STTextView()
+        let editor = NativeCodeTextView()
         let reference = NSTextView()
         let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 240), styleMask: [.titled], backing: .buffered, defer: false)
         let native = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 240), styleMask: [.titled], backing: .buffered, defer: false)
@@ -75,7 +74,7 @@ final class EditorTextInputTests: XCTestCase {
     }
 
     func testAttachedInputGeometryRemainsUsable() throws {
-        let editor = STTextView()
+        let editor = NativeCodeTextView()
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 500, height: 240))
         scroll.documentView = editor
         let window = NSWindow(contentRect: scroll.frame, styleMask: [.titled], backing: .buffered, defer: false)
@@ -85,7 +84,7 @@ final class EditorTextInputTests: XCTestCase {
         editor.text = "hello 中文 👋\nsecond line\n"
         window.orderFront(nil)
         scroll.layoutSubtreeIfNeeded()
-        editor.textLayoutManager.ensureLayout(for: editor.textContentManager.documentRange)
+        editor.nativeLayoutManager.ensureLayout(for: editor.nativeContentManager.documentRange)
         var actual = NSRange(location: NSNotFound, length: 0)
         let requested = NSRange(location: 0, length: (editor.text ?? "").utf16.count)
         let rect = editor.firstRect(forCharacterRange: requested, actualRange: &actual)
@@ -97,7 +96,7 @@ final class EditorTextInputTests: XCTestCase {
     }
 
     func testInputGeometryAfterEditorDetachesDoesNotUseDisposedWindow() {
-        let editor = STTextView()
+        let editor = NativeCodeTextView()
         editor.text = "中文 👋"
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -119,7 +118,7 @@ final class EditorTextInputTests: XCTestCase {
         ]
         for range in selectedRanges {
             for completesWithInsert in [false, true] {
-                let editor = STTextView()
+                let editor = NativeCodeTextView()
                 let reference = NSTextView()
                 editor.allowsUndo = true
                 reference.allowsUndo = true
@@ -160,7 +159,7 @@ final class EditorTextInputTests: XCTestCase {
 
     func testDirectUnmarkUndoMatchesNativeTextView() throws {
         for replacedLength in [0, 5] {
-            let editor = STTextView()
+            let editor = NativeCodeTextView()
             let reference = NSTextView()
             editor.allowsUndo = true
             reference.allowsUndo = true
@@ -198,7 +197,7 @@ final class EditorTextInputTests: XCTestCase {
     }
 
     func testCompositionReplacingExistingTextRestoresOriginalOnUndo() throws {
-        let editor = STTextView()
+        let editor = NativeCodeTextView()
         let reference = NSTextView()
         editor.allowsUndo = true
         reference.allowsUndo = true
@@ -233,7 +232,7 @@ final class EditorTextInputTests: XCTestCase {
     func testFinalCompositionDefaultAndExplicitRangesMatchSystemAndKeepUndo() throws {
         for replacement in [NSRange(location: NSNotFound, length: 0),
                             NSRange(location: 7, length: 4), NSRange(location: 0, length: 11)] {
-            let editor = STTextView()
+            let editor = NativeCodeTextView()
             let reference = NSTextView()
             beginComposition(editor)
             beginComposition(reference)
@@ -251,8 +250,30 @@ final class EditorTextInputTests: XCTestCase {
         }
     }
 
+    func testNativeMultipleSelectionsShareDocumentAndUndo() throws {
+        let editor = NativeCodeTextView()
+        editor.text = "first second third"
+        editor.selectedRanges = [NSValue(range: NSRange(location: 0, length: 5)),
+                                 NSValue(range: NSRange(location: 13, length: 5))]
+        XCTAssertEqual(editor.selectedRanges.map(\.rangeValue),
+                       [NSRange(location: 0, length: 5), NSRange(location: 13, length: 5)])
+        editor.insertText("X", replacementRange: .notFound)
+        editor.breakUndoCoalescing()
+        XCTAssertEqual(editor.text, "X second X")
+        XCTAssertEqual(editor.nativeLayoutManager.textSelections.count, 2)
+        editor.insertText("Y", replacementRange: .notFound)
+        XCTAssertEqual(editor.text, "XY second XY")
+        editor.undoManager?.undo()
+        XCTAssertEqual(editor.text, "X second X")
+        editor.undoManager?.undo()
+        XCTAssertEqual(editor.text, "first second third")
+        editor.undoManager?.redo()
+        editor.undoManager?.redo()
+        XCTAssertEqual(editor.text, "XY second XY")
+    }
+
     func testOrdinaryInputAndSelectedReplacementKeepUndo() throws {
-        let editor = STTextView()
+        let editor = NativeCodeTextView()
         editor.text = "before after"
         editor.insertText("中文👋", replacementRange: NSRange(location: 0, length: 6))
         editor.breakUndoCoalescing()

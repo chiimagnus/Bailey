@@ -41,9 +41,10 @@
 ```sh
 make test
 make test ONLY_TESTING=BaileyTests/FileTabTests
+make test ONLY_TESTING='BaileyTests/EditorNavigationTests BaileyTests/DiffTabTests'
 ```
 
-文件夹不进入 XCTest 类名选择参数。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
+`ONLY_TESTING` 可传单个或空格分隔的多个 XCTest 类；不会跳过构建与签名后置检查。CI 依据本次推送实际修改的文件增量选择关联类，第一次开启／恢复 PR 及合并前通过 `ci/full` 标签验证全量；增量绿色不代替最终完整回归。文件夹不进入 XCTest 类名选择参数。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
 
 ## 测试层次
 
@@ -105,7 +106,7 @@ Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 使用 Launch S
 
 真实 SSH 只使用专用且获准的测试 master；不借用用户连接或结束其后台任务。真实 Windows SSH 回归必须**明确指定获授权的测试主机**。`BAILEY_P4_TEST_SSH_HOST` 是已有的共用参数名，P4 与后续 Git 外部刷新测试都使用它；未提供时专用用例按条件跳过，不能视为真实 SSH 验收。
 
-`GitInteractiveRebaseTests` 检查固定与自动跟随项目的真实 PTY；`GitWorkspaceSSHTests` 检查专属远端临时仓库的 Push/Delete、ZIP 二进制内容、历史文件 index/工作区复位、Stash、Clean 和普通 FileTab Ignore；`GitExternalRefreshTests` 检查独立 SSH 外部写入后的可见面板自动更新和面板隐藏／App 后台暂停查询；`SSHGitRecoveryLiveTests` 验证专属 Windows 临时仓库在测试后端失联期间保留 Git 快照、拒绝写操作并于恢复后重新允许写操作。这些是实际 SSH 后端与原生面板集成验证，不是完整独立 App 的菜单 E2E。当前已获授权的 `windows` 主机完整执行命令是：
+`GitInteractiveRebaseTests` 检查固定与自动跟随项目的真实 PTY；`GitWorkspaceSSHTests` 检查专属远端临时仓库的 Push/Delete、ZIP 二进制内容、历史文件 index/工作区复位、Stash、Clean 和普通 FileTab Ignore；`GitExternalRefreshTests` 检查真实 SSH 外部写入后的可见面板自动更新和面板隐藏／App 后台暂停查询，并以可暂停的远端详情查询验证外部暂存不会因周期请求被跳过而遗失、视图隐藏时不会启动延迟补查；原生窗口测试须等 SwiftUI `onAppear` 完成后再模拟应用激活，不能用固定延迟代替订阅已挂载；`SSHGitRecoveryLiveTests` 验证专属 Windows 临时仓库在测试后端失联期间保留 Git 快照、拒绝写操作并于恢复后重新允许写操作。这些是实际 SSH 后端与原生面板集成验证，不是完整独立 App 的菜单 E2E。当前已获授权的 `windows` 主机完整执行命令是：
 
 ```sh
 BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test
@@ -135,9 +136,20 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 | Diff | 数据读取、差异计算、TextKit 首屏、滚动与编辑 |
 | 多标签和空闲 | 冷开、重复切换、峰值内存、关闭后稳定内存、CPU 与唤醒 |
 
-在同一机器、配置和公开／合成样本上前后比较，记录提交、系统、硬件、屏幕、字体、布局与缓存。Debug 与优化构建分开，冷开和热操作分开；按实际改动选择小／中／接近上限文件、长行、密集高亮、大变更、多标签和本机／SSH，包含受影响的空内容、Unicode、二进制和超限边界。
+在同一机器、配置和公开／合成样本上前后比较，记录提交、系统、硬件、屏幕、字体、布局与缓存。Debug 与优化构建分开，冷开和热操作分开；按实际改动选择小／中／接近上限文件、长行、密集高亮、大变更、多标签和本机／SSH，包含受影响的空内容、Unicode、二进制和超限边界。单独在 Release 优化配置运行 `@testable` XCTest 时，仅对隔离测试构建传 `ENABLE_TESTABILITY=YES`；正式 Release 保持原配置，优化 XCTest 也不能替代独立 App 的 GUI 内存验收。
 
-热操作至少重复 30 次，记录样本数、中位数、p95 与最差值；少量冷启动只报中位数和最差值。用 Instruments Time Profiler 查 CPU，卡顿但 CPU 不高时查等待；用 Allocations 检查视图与缓冲生命周期。确需阶段对齐时才增加轻量 signpost，不先搭埋点框架。
+热操作至少重复 30 次，记录样本数、中位数、p95 与最差值；少量冷启动只报中位数和最差值。代码编辑性能要分别测裸原生视图与真实加载 Tree-sitter／Neon 高亮的文件，不得拿前者的输入延迟代替后者；同步核对正文原字节及解析后的语法树。用 Instruments Time Profiler 查 CPU，卡顿但 CPU 不高时查等待；用 Allocations 检查视图与缓冲生命周期。确需阶段对齐时才增加轻量 signpost，不先搭埋点框架。
+
+编辑器回归必须覆盖下列实际结果，不能只检查状态字段：
+
+- **性能与坐标**：`EditorNavigationTests`、`TextCoordinateIndexTests` 验证 382／1,000／10,000／100,000 行，折行两态、文首／中／末各 30 次编辑，以及至少 17 次交错远跳；检查滚动条、长行横滚、Unicode 命中及撤销后的真实字节。
+- **真实绘制**：`EditorNavigationTests`、`DiffTabTests`、`FileTabTests` 验证亮暗主题、行号与跨行选区、空行、查找栏展开、窗口缩放、Diff 及行号与首字形不互相遮挡；颜色和位置以窗口像素为准。
+- **十万行真实工作区闭环**：`PaneRetentionTests.testHundredThousandLineWorkspaceEditsSavesAndReleasesFile` 在真实 `WorkspaceDockView` 挂载超过旧 5 MiB 上限的十万行 Swift 文件，核对首／中／末位置、编辑、Undo／Redo、磁盘保存和关闭后所有权；它仍属于原生工作区测试，不得充当独立 Release 的键盘 E2E。大文件压力测试另以隔离正式 App 按阶段记录首次可见时间、峰值与稳定物理内存、CPU 时间、真实滚动后的缓存波动及关闭后 heap 引用；`leaks` 只发现不可达内存，不等于关闭后所有可达 FileTab 已释放。
+- **窗口生命周期**：`PaneRetentionTests.testClosingNativeWindowReleasesItsProjectBeforeSwiftUIDisappears` 直接关闭已关联 manager 的真实 `NSWindow`，验证关闭通知会同步注销管理器、清除所属项目和文件，而不是等待 SwiftUI `.onDisappear`；重复清理不得覆盖最后窗口快照。运行相关 `SessionStoreTests`、`WorkspaceWindowIsolationTests` 和窗口关闭测试，避免只修内存而破坏窗口恢复。
+- **生命周期**：`PaneRetentionTests` 验证 Dock 重挂载不换编辑器、五轮各五个编辑器的输入与释放，以及真实 `WorkspaceDockView` 执行 `Close Files`／关闭整个项目（含焦点停在待关闭编辑器、旧 `NSScrollView` 仍被持有）。关闭时立即核对标签所有权已解除、滚动容器不再挂载原文档、原视图语法解析已停用；AppKit／SwiftUI 可能延迟释放旧 `NSView`，故另在宿主窗口销毁后核对两轮原生视图和文件弱引用全部归零，不以单次 10 秒窗口内析构代替清理语义。外部重载、旧窗口缓存、转为二进制也不得保留过期文档。独立 Release 须补充打开／关闭／重开后的 heap、Allocations 与实际 GUI 对照；XCTest 对象释放不等同于长期内存回落。
+- **保存**：`FileTabTests` 验证原生 AX 编辑后的脏状态和写盘，并用受控远端挂起写入构造「关闭项目／关闭文件／关闭窗口／退出应用时，另一个原本干净的文件突然变脏」的并发时序，逐项核对未保存正文、实际磁盘、关闭否决和重试成功；多窗口使用 `WorkspaceWindowIsolationTests` 核对各自目标。完整 App 的 ⌘S 另须核对前台焦点、真实磁盘字节与重启结果；后台事件派发不能直接算成功。
+
+`WorkspaceWindowIsolationTests.testTwoMountedWorkspaceManagersSaveTheirOwnNativeAXBuffers` 在两个真实 `ContentView`／`NSWindow` 中使用同名不同路径文件，通过原生 AX 修改两个缓冲区、经各自 `TerminalManager.saveSelectedFile()` 保存并核对独立磁盘字节、脏状态和原编辑器身份。隔离 XCTest 无法保证目标窗口实际成为系统 Key Window，因此这只证明工作区保存路由和最终写盘，不代替独立 App 的 ⌘S 菜单、窗口焦点 E2E。
 
 保留已有增量高亮、懒加载、刷新合并、视图复用及 SSH 批量操作。优化不能牺牲编辑内容、超时反馈、机器身份、Unicode 坐标、撤销和无障碍。测量日志可能包含用户数据，分享前脱敏，不默认入库。
 

@@ -1,0 +1,50 @@
+version = 1
+current_task_id = ""
+
+[[tasks]]
+id = "P1-T1"
+title = "本机项目与文件标签复用"
+status = "pending"
+plan = "plan-p1.md#p1-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T2"
+title = "跨窗口复用与冷启动请求接入"
+status = "pending"
+plan = "plan-p1.md#p1-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T1"
+title = "Finder 注册与系统打开事件"
+status = "pending"
+plan = "plan-p2.md#p2-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T1"
+title = "验证原生拖放事件所有权"
+status = "pending"
+plan = "plan-p3.md#p3-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T2"
+title = "窗口拖放与终端目标接入"
+status = "pending"
+plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T3"
+title = "Files 专用落点隔离与原生验收"
+status = "pending"
+plan = "plan-p3.md#p3-t3"
+commit = ""
+note = ""
