@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P2-T1"
+current_task_id = "P2-T2"
 
 [[tasks]]
 id = "P1-T1"
@@ -23,7 +23,7 @@ title = "区域 Focus 与 selected 视觉区分"
 status = "in_progress"
 plan = "plan-p2.md#p2-t1"
 commit = ""
-note = "复核Issue13原型，补齐活动标题栏与selected标签额外强调（F-03）"
+note = "蓝色整框已由 f698e1c 取消；剩余是参照用户两张 Zed 截图复核独立 App 的各布局与活动标签视觉，不再添加旧原型蓝框/底色"
 
 [[tasks]]
 id = "P2-T2"
@@ -31,4 +31,36 @@ title = "拖放和多窗口焦点恢复验收"
 status = "in_progress"
 plan = "plan-p2.md#p2-t2"
 commit = ""
-note = "审计F-02重开：补GitGraph/Files内部控件及复杂布局真实焦点验收，不能用区域标题与组件测试代替"
+note = "保留多窗口、拖放、原生输入与恢复验收；Files 单击不抢焦点及行边框归 P3，Git Changes/Graph 列表与输入框归 P4，不再在 P2 重做"
+
+[[tasks]]
+id = "P3-T1"
+title = "文件展示与活动 Dock 焦点解耦"
+status = "pending"
+plan = "plan-p3.md#p3-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T2"
+title = "Files 单行选择及键盘焦点边框"
+status = "pending"
+plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T1"
+title = "Git Changes 文件行和 Diff 焦点"
+status = "pending"
+plan = "plan-p4.md#p4-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T2"
+title = "Git Graph 行焦点与内部输入焦点"
+status = "pending"
+plan = "plan-p4.md#p4-t2"
+commit = ""
+note = ""

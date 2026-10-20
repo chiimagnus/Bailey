@@ -4,7 +4,7 @@
 
 **Non-goals：** 本阶段不加拖放（P2）、隐藏及 ⌘P SSH 支持（P3）、事件监听（#40）、排序选项；不重做文件树、编辑器或 Finder 已有导入。
 
-**Approach：** **先以 [#13 Focus 计划](../focus-navigation/plan-p1.md)的真实窗口／Dock 活动组及 first responder 契约作为 P1-T1 前置门槛**，不在 Files 实现第二套全局焦点。`FileTreeModel` 管理 Files 行选择和锚点、展开与刷新；文件操作在其现有目标后端执行，`Project`／`TerminalManager` 负责已打开内容的保存及路径更新；`FileTreePanel` 只转发交互。复用 `WorkspaceBackend.rename/delete` 和已经安全的 `LocalWorkspaceBackend.copyFromFinder` 底层复制能力，**仅在现有协议不能表达真实复制时**添加最小接口，不为批处理、移动和剪贴板分别造框架。分清 Files 的选择与 FileTab 当前文件高亮。
+**Approach：** **先以 [#13 Focus P3](../focus-navigation/plan-p3.md) 的文件浏览不抢输入、单行游标及行焦点反馈作为 P1-T1 前置门槛**；P1/P2 的窗口、活动 Dock 组和 first responder 契约继续生效，不在 Files 新建全局焦点。待 Focus P3 实施后，`FileTreeModel` 才会有单行游标；本任务在此基础上扩展多选集合/锚点，并继续管理展开和刷新；文件操作在其现有目标后端执行，`Project`／`TerminalManager` 负责已打开内容的保存及路径更新；`FileTreePanel` 只转发交互。复用 `WorkspaceBackend.rename/delete` 和已经安全的 `LocalWorkspaceBackend.copyFromFinder` 底层复制能力，**仅在现有协议不能表达真实复制时**添加最小接口，不为批处理、移动和剪贴板分别造框架。分清 Files 的选择与 FileTab 当前文件高亮。
 
 **Acceptance：** 真实本机和获授权 SSH 后端的源／目标字节、目录、废纸篓行为与用户意图一致；中途失败不丢编辑或误改另一台机器；菜单与焦点正确。
 
@@ -17,10 +17,10 @@
 
 **源码锚点：** `Bailey/Files/FileTreeModel.swift`（`items/expanded/sync`）、`Bailey/Files/FileTreePanel.swift`（`FileTreeScrollView/FileTreeRow.semanticRow`）、`Bailey/Shared/Tree/{TreeDisplayModel,TreeRowStyle}.swift`、`Bailey/UI/Panels/ToolPanelView.swift`（`openFilePath`）。
 
-1. **前置焦点检查 + Red：** 核对 #13 的活动 Dock 组和原生 first responder 已完成相应验收；没有完成则先在 #13 修复，不给文件树加一个局部假焦点。以 `DockWorkspaceTests`、`WorkspaceWindowIsolationTests` 的真实结果证明窗口及工具面板 Focus；再在 `FileTreeTests`、`TreeRowHitTestingTests` 和原生宿主验证：普通点击选中并保持现有**文件打开／目录展开**；⌘ 点击只增减离散选择、⇧ 点击只按当前可见行顺序扩展选择，二者**不打开或折叠**行；右键已选中项对整个集合，右键未选中行仅对该项且不打开。键盘 ↑↓ 移动焦点、⇧+↑↓ 扩展范围、→/← 展开／收起目录、Return 打开聚焦文件、Esc 清除选择；Files 真正聚焦时 ⌘A 选中当前可见项。明确选中集合和「当前编辑文件」是两种状态，原始双击、按钮及无障碍行为不能倒退。
-2. **Green：** 当前 `FileTreeModel` 持有路径集合和选择锚点；行键盘焦点归 Files 自己真正接收输入的视图，Dock 活动组归 #13。已有 `TreeFolderRow/TreeFileRow` 的 `@FocusState` 和共享 `TreeRowSurface(focused:)` 可复用；**现有两类行均是单一 `Button(action:)`，仅有打开/折叠动作，⌘/Shift 点击不能额外挂一套与 Button 同时触发的 Gesture 导致又选择又打开**，应在 Files 专属动作入口统一分发修饰键语义且保证 Git 行仍用原本 API；**但目前 focused 和 hover 都只是 0.05 透明度底色，不构成清楚的键盘焦点**；为 Files 补可辨认的键盘聚焦指示，保持多选填充、当前编辑文件强调为三种独立状态，不能给全部 Git 树强行改样式。选中项消失时清理，折叠后锚点/键盘聚焦转到仍可见的行；**目录压缩只影响展示，选择/操作使用 `TreeDisplayModel.Row.path` 的真实末端路径而非 `compactPrefix` 拼接出的名称**；换根、机器、连接时按已有 `sync` 身份重置，不以相同路径跨通道继承。
-3. **覆盖：** 空、单项、混合目录／文件、Cmd+A、范围反选、连续 Shift、键盘展开/收起、压缩链、折叠/展开、重建、重名异路径、失去焦点、改名输入焦点、菜单开启；键盘焦点环在浅暗和多选下可辨认，折叠/过滤后不会停在不可见行；**前台/后台、不同 Dock 组工具面板之间与终端、TextKit 编辑器、WebKit 浏览器、Diff 来回切焦点后，⌘A/C/X/V、Return、方向键真正送到谁；不能由 `Project.selectedTabID` 的旧值误判**；A→B→A、SSH 失联／换通道、多窗口、浅暗／中英／窄面板／缩放及键盘与辅助功能。验证命中后的真实选择集合、焦点与屏幕状态，而非只检查事件回调。
-4. **闭环：** `docs/features/files.md`、必要的 `docs/features/dock.md` 和 `docs/ui.md` 在本任务同步 Files 新增行选中契约；#13 的通用 Dock Focus 文档由 #13 自己维护，不复制内容；保留 Git 树现有行和 22pt 命中。按 `docs/testing.md` 运行相关真实 XCTest／原生验收，删除本任务确已替换的局部选择处理（若有），独立中文提交源码与对应文档。
+1. **前置焦点检查 + Red：** 核对 #13 的 P3 单击打开仍留 Files 键盘焦点、双击转编辑器、当前行仅在列表聚焦时描边，以及与 P4 的共享树行兼容；未完成则回到 #13 修复，**不能在 #5 重做第二套单击/焦点方案**。以 `DockWorkspaceTests`、`WorkspaceWindowIsolationTests` 的原生结果证明窗口及工具面板 Focus；再在 `FileTreeTests`、`TreeRowHitTestingTests` 和原生宿主验证：普通点击仍执行 P3 的选中/展示或目录展开，Files 保持可见时键盘继续属于 Files；双击/显式打开遵守 P3 的编辑器焦点语义；⌘ 点击只增减离散选择、⇧ 点击只按当前可见行顺序扩展选择，二者**不打开或折叠**行；右键已选中项对整个集合，右键未选中行仅对该项且不打开。键盘 ↑↓ 移动焦点、⇧+↑↓ 扩展范围、→/← 展开／收起目录、Return 打开聚焦文件、Esc 清除选择；Files 真正聚焦时 ⌘A 选中当前可见项。明确选中集合和「当前编辑文件」是两种状态，原始双击、按钮及无障碍行为不能倒退。
+2. **Green：** 复用 Focus P3 完成后在 `FileTreeModel` 中提供的**单行游标**，只增加多选路径集合与范围锚点；行键盘输入归 Files 真正接收输入的原生视图，Dock 活动组仍归 #13。Focus P3 已将共享 `TreeFolderRow/TreeFileRow` 规划为**非 Button 可聚焦行**；本 task 复用其稳定单行游标和 `TreeRowSurface(focused:)` 的细描边，#5 只增加多选背景，不为同一行造第二个当前焦点或重新设计 Git 外观。Cmd/Shift 的点击语义必须在 Files 专属入口统一分发，不叠加第二套会重复触发的手势；独立操作 Button 仍须只响应自己；普通点击显示文件仍留 Files 焦点，双击激活编辑器，修饰键只改选择不意外打开或折叠。选中项消失时清理，折叠后锚点/键盘聚焦转到仍可见的行；**目录压缩只影响展示，选择/操作使用 `TreeDisplayModel.Row.path` 的真实末端路径而非 `compactPrefix` 拼接出的名称**；换根、机器、连接时按已有 `sync` 身份重置，不以相同路径跨通道继承。
+3. **覆盖：** 空、单项、混合目录／文件、Cmd+A、范围反选、连续 Shift、键盘展开/收起、压缩链、折叠/展开、重建、重名异路径、失去焦点、改名输入焦点、菜单开启；键盘焦点环在浅暗和多选下可辨认，折叠/过滤后不会停在不可见行；**Files 单击显示文件后继续使用 ↑↓/Return/⌘A，双击转入编辑器后继续输入与 Undo；前台/后台、不同 Dock 组工具面板之间与终端、TextKit 编辑器、WebKit 浏览器、Diff 来回切焦点后，⌘A/C/X/V、Return、方向键真正送到谁；不能由 `Project.selectedTabID` 的旧值误判**；A→B→A、SSH 失联／换通道、多窗口、浅暗／中英／窄面板／缩放及键盘与辅助功能。验证命中后的真实选择集合、焦点与屏幕状态，而非只检查事件回调。
+4. **闭环：** `docs/features/files.md`、必要的 `docs/features/dock.md` 和 `docs/ui.md` 在本任务同步 **Cmd/Shift 多选** 契约，不重复叙述/重新实现 #13 P3 的单行游标与预览焦点；保证 Git 树复用焦点外观，仍保留原 22pt 命中。按 `docs/testing.md` 运行相关真实 XCTest／原生验收，删除本任务确已替换的局部选择处理（若有），独立中文提交源码与对应文档。
 
 ---
 
