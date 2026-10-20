@@ -184,6 +184,13 @@
 - 当前状态：**7/8 findings Resolved，仅 F-06 Open**；P1-T1～T4 completed，P1-T5 in_progress。2026-10-20 本轮仅使用隔离 Release／独立对照程序，没有修改或重启正式 Bailey，也没有推送。此前新 Release 的整包安装和验签记录保留在上文，其当时的 PID 与 SHA-256 属历史测量，不当作本轮重新验收。
 - 剩余风险：F-03／F-05 已证明关闭后自有 FileTab／解析器对象归零；AppKit 的短时原生视图缓存不能混称文件泄漏。F-08 原生菜单每次约 32B 配置对象，以及约 3KiB 的 SwiftUI `ContextMenuResponder` 框架自身循环引用**客观存在但已归因并接受**；尚无证据表明它保持 Bailey 的文件或解析器。完整五分屏五轮 Allocations 本轮暂准延后，不当作通过；真实编辑器内容帧时间、macOS 15.6／CI26、实体触控板／屏幕组合和 Windows symlink 权限环境仍有缺口，整体 No-Go。
 
+## 2026-10-20：十万行真实 Release 压力验收补核
+
+- **独立完整 App 直接证据**：6,077,780 字节／100,000 行 Swift 文件在优化 Release PID56350 的窗口成功呈现、代码首末行可见、12 次后台精确滚动均实际完成。60 秒后 RSS 441,568 KiB、物理足迹 298.5 MiB、累计 CPU 时间不增加，进程曾达峰值物理内存 485.9 MiB。第二个隔离优化 Release 在启动约 1.60 秒内被 AX 首次观察到文件文本（含 1.50 秒工具观察时间，不代表精确首帧）。同文件在当前已安装 Debug 式 App 则提示超限，两包内容不一致，未判明安装包旧代码/签名版本来源；本轮没有替换用户正式 App。
+- **真实关闭成功但原生对象归属未核销**：标签右键 `Close Files` 真实关闭，屏幕及 AX 均为空工作区，稳定物理足迹约 159.5 MiB；`heap` 仍有 1 FileTab、1 原生文本视图及 30,888 个 NSTextParagraph，逆向引用路径涉及旧 PaneTab／SwiftUI 容器。`leaks` 只定位已接受的 F-08 菜单引用环，没有证明这些可达对象为新泄漏。既有五分屏释放结论不能自动推广为十万行 App 关闭后的零对象结论，继续追踪所有权。
+- **新增正确性回归 Green**：`PaneRetentionTests.testHundredThousandLineWorkspaceEditsSavesAndReleasesFile` 用真实 Project＋WorkspaceDockView＋FileTab／原生 NSTextView 加载、跨区滚动、插入／Undo／Redo、保存后磁盘字节核验，关闭后原生文档及高亮资源退役、FileTab 弱引用消失。单项 `make test` **1/1、0 failures、exit0、3.023s**。这比裸编辑器测试更完整，但不是独立 App 的键盘事件 E2E；当前 Peekaboo 由于长文本 AX 焦点 frame 超出窗口拒绝输入，未把事件派发算成功。
+- **Gate**：本轮十万行主目标取得真实 Release GUI／内存证据，但完整 App 键盘编辑保存及关闭后存留对象归属仍未核销，P1-T5 保持 in_progress、阶段 No-Go。旧的 FPS、最低系统和实体硬件补验按用户决定暂缓，不重新作为本轮行动项。详见 `evidence-p1.md` 最后一节与忽略的 `audit-p1-100k-release-20261020/` 原始证据。
+
 ## 审计约束
 
 - 本文件对应一个 phase，不对应单个 task

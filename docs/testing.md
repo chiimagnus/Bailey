@@ -138,6 +138,7 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 
 - **性能与坐标**：`EditorNavigationTests`、`TextCoordinateIndexTests` 验证 382／1,000／10,000／100,000 行，折行两态、文首／中／末各 30 次编辑，以及至少 17 次交错远跳；检查滚动条、长行横滚、Unicode 命中及撤销后的真实字节。
 - **真实绘制**：`EditorNavigationTests`、`DiffTabTests`、`FileTabTests` 验证亮暗主题、行号与跨行选区、空行、查找栏展开、窗口缩放、Diff 及行号与首字形不互相遮挡；颜色和位置以窗口像素为准。
+- **十万行真实工作区闭环**：`PaneRetentionTests.testHundredThousandLineWorkspaceEditsSavesAndReleasesFile` 在真实 `WorkspaceDockView` 挂载超过旧 5 MiB 上限的十万行 Swift 文件，核对首／中／末位置、编辑、Undo／Redo、磁盘保存和关闭后所有权；它仍属于原生工作区测试，不得充当独立 Release 的键盘 E2E。大文件压力测试另以隔离正式 App 按阶段记录首次可见时间、峰值与稳定物理内存、CPU 时间、真实滚动后的缓存波动及关闭后 heap 引用；`leaks` 只发现不可达内存，不等于关闭后所有可达 FileTab 已释放。
 - **生命周期**：`PaneRetentionTests` 验证 Dock 重挂载不换编辑器、五轮各五个编辑器的输入与释放，以及真实 `WorkspaceDockView` 执行 `Close Files`／关闭整个项目（含焦点停在待关闭编辑器、旧 `NSScrollView` 仍被持有）。关闭时立即核对标签所有权已解除、滚动容器不再挂载原文档、原视图语法解析已停用；AppKit／SwiftUI 可能延迟释放旧 `NSView`，故另在宿主窗口销毁后核对两轮原生视图和文件弱引用全部归零，不以单次 10 秒窗口内析构代替清理语义。外部重载、旧窗口缓存、转为二进制也不得保留过期文档。独立 Release 须补充打开／关闭／重开后的 heap、Allocations 与实际 GUI 对照；XCTest 对象释放不等同于长期内存回落。
 - **保存**：`FileTabTests` 验证原生 AX 编辑后的脏状态和写盘，并用受控远端挂起写入构造「关闭项目／关闭文件／关闭窗口／退出应用时，另一个原本干净的文件突然变脏」的并发时序，逐项核对未保存正文、实际磁盘、关闭否决和重试成功；多窗口使用 `WorkspaceWindowIsolationTests` 核对各自目标。完整 App 的 ⌘S 另须核对前台焦点、真实磁盘字节与重启结果；后台事件派发不能直接算成功。
 

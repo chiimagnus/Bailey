@@ -563,6 +563,92 @@ final class PaneRetentionTests: XCTestCase {
         })
     }
 
+    func testHundredThousandLineWorkspaceEditsSavesAndReleasesFile() async throws {
+        let previousWindows = SessionStore.load()
+        let previousHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(previousWindows)
+            TerminalHistoryStore.save(previousHistories)
+        }
+
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-100k-workspace-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appendingPathComponent("large.swift")
+        let source = (0..<100_000).map { row in
+            "let value_\(row) = \(row) // 中文 👋 edit undo find verify\n"
+        }.joined()
+        let original = Data(source.utf8)
+        XCTAssertGreaterThan(original.count, 5 << 20)
+        XCTAssertLessThan(original.count, 8 << 20)
+        try original.write(to: path)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([path])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: GitStatusModel()))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1_200, height: 720),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        manager.attach(to: window)
+        window.orderFront(nil)
+        defer { window.close() }
+
+        weak var retiredFile: FileTab?
+        do {
+            let pane = try XCTUnwrap(project.selectedTab)
+            guard case .file(let file) = pane.content else {
+                return XCTFail("Expected a real file tab in WorkspaceDockView")
+            }
+            retiredFile = file
+            try await file.waitForText()
+            try await settle {
+                host.layoutSubtreeIfNeeded()
+                return (file.editorView as? NSScrollView)?.documentView is FocusReportingTextView
+            }
+            let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
+            let editor = try XCTUnwrap(scroll.documentView as? FocusReportingTextView)
+            XCTAssertNotNil(editor.syntaxCoordinator)
+            XCTAssertEqual(Data(editor.string.utf8), original)
+
+            for position in [0, source.utf16.count / 2, source.utf16.count - 1, 0] {
+                editor.scrollRangeToVisible(NSRange(location: position, length: 0))
+                editor.layoutSubtreeIfNeeded()
+                let viewport = try XCTUnwrap(editor.nativeLayoutManager.textViewportLayoutController.viewportRange)
+                let visible = NSRange(viewport, in: editor.nativeContentManager)
+                XCTAssertLessThanOrEqual(visible.location, position)
+                XCTAssertGreaterThanOrEqual(NSMaxRange(visible), position)
+            }
+
+            let appended = "let appended = \"中文 👋\"\n"
+            editor.insertText(appended,
+                              replacementRange: NSRange(location: source.utf16.count, length: 0))
+            editor.breakUndoCoalescing()
+            try await settle { file.isDirty }
+            XCTAssertEqual(Data(file.text.utf8), original + Data(appended.utf8))
+            editor.undoManager?.undo()
+            try await settle { !file.isDirty }
+            XCTAssertEqual(Data(file.text.utf8), original)
+            editor.undoManager?.redo()
+            try await settle { file.isDirty }
+            XCTAssertEqual(Data(file.text.utf8), original + Data(appended.utf8))
+
+            await file.save()
+            XCTAssertFalse(file.isDirty)
+            XCTAssertEqual(try Data(contentsOf: path), original + Data(appended.utf8))
+            project.closeFiles()
+            XCTAssertTrue(project.tabs.isEmpty)
+            XCTAssertNil(scroll.documentView, "Closing the file must detach its TextKit document")
+            XCTAssertNil(editor.syntaxCoordinator, "Closing the file must retire its parser")
+        }
+
+        try await settle { retiredFile == nil }
+        XCTAssertNil(retiredFile, "The live Dock must not retain a closed 100k FileTab")
+    }
+
     func testFiveConcurrentNativeEditorsReleaseDocumentAndParsingTasks() async throws {
         final class WeakEditor {
             weak var editor: FocusReportingTextView?
