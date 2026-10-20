@@ -59,7 +59,7 @@ note = ""
 
 [[tasks]]
 id = "P3-T2"
-title = "本机／SSH 共享可取消文件索引"
+title = "扩展 Cmd+P SSH 文件快速打开"
 status = "pending"
 plan = "plan-p3.md#p3-t2"
 commit = ""
@@ -67,23 +67,15 @@ note = ""
 
 [[tasks]]
 id = "P3-T3"
-title = "Files 内名称路径过滤"
+title = "定位当前文件并保护机器身份"
 status = "pending"
 plan = "plan-p3.md#p3-t3"
 commit = ""
 note = ""
 
 [[tasks]]
-id = "P3-T4"
-title = "定位当前文件并保护机器身份"
-status = "pending"
-plan = "plan-p3.md#p3-t4"
-commit = ""
-note = ""
-
-[[tasks]]
 id = "P4-T1"
-title = "外部变更后选中与索引一致性"
+title = "外部变更后选择与快速打开一致性"
 status = "pending"
 plan = "plan-p4.md#p4-t1"
 commit = ""
