@@ -334,7 +334,6 @@ class NativeCodeTextView: NSTextView {
         layout.ensureLayout(for: target)
         super.scrollRangeToVisible(range)
         guard isWrappingLines, range.location < manager.length,
-              let scrollView = enclosingScrollView,
               let position = manager.location(manager.documentRange.location,
                                               offsetBy: range.location),
               let fragment = layout.textLayoutFragment(for: position) else { return }
@@ -346,20 +345,15 @@ class NativeCodeTextView: NSTextView {
             local >= $0.characterRange.location && local < NSMaxRange($0.characterRange)
         }) else { return }
         let bounds = line.typographicBounds
-        let lineTop = fragment.layoutFragmentFrame.minY + bounds.minY + textContainerInset.height
-        let lineBottom = lineTop + bounds.height
-        let clip = scrollView.contentView
-        let visible = clip.bounds
-        let newY: CGFloat
-        if lineBottom > visible.maxY {
-            newY = lineBottom - visible.height
-        } else if lineTop < visible.minY {
-            newY = lineTop
-        } else {
-            return
-        }
-        clip.scroll(to: NSPoint(x: visible.minX, y: newY))
-        scrollView.reflectScrolledClipView(clip)
+        let lineRect = NSRect(
+            x: fragment.layoutFragmentFrame.minX + bounds.minX + textContainerInset.width,
+            y: fragment.layoutFragmentFrame.minY + bounds.minY + textContainerInset.height,
+            width: max(1, bounds.width), height: bounds.height
+        )
+        // Let the document view reconcile its text layout and clipping extent.
+        // Scrolling the clip directly can be reverted when AppKit resizes the
+        // document near its last visual line on macOS 26.
+        scrollToVisible(lineRect)
     }
 
     override func characterIndex(for point: NSPoint) -> Int {
