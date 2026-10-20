@@ -79,7 +79,7 @@ final class TreeRowHitTestingTests: XCTestCase {
         }
     }
 
-    private func click(_ point: NSPoint, in window: NSWindow) {
+    private func click(_ point: NSPoint, in window: NSWindow, count: Int = 1) {
         for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             let event = NSEvent.mouseEvent(
                 with: eventType,
@@ -89,7 +89,7 @@ final class TreeRowHitTestingTests: XCTestCase {
                 windowNumber: window.windowNumber,
                 context: nil,
                 eventNumber: 0,
-                clickCount: 1,
+                clickCount: count,
                 pressure: 1
             )!
             window.sendEvent(event)
@@ -267,6 +267,33 @@ final class TreeRowHitTestingTests: XCTestCase {
         )
         XCTAssertEqual(scroll.horizontalScrollElasticity, .none,
                        "Widening the sidebar must disable now-unnecessary horizontal bounce")
+    }
+
+    func testSharedFileRowSeparatesImmediateBrowseFromDoubleClickActivation() {
+        let actions = Actions()
+        let row = TreeDisplayModel.Row(name: "preview.swift", path: "preview.swift", isDirectory: false)
+        let window = NSWindow(contentRect: NSRect(x: -1000, y: -1000, width: 280, height: 26),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView:
+            TreeFileRow(row: row, scale: 1,
+                        open: { actions.primary += 1 },
+                        activate: { actions.accessory += 1 }) { _ in EmptyView() }
+                .frame(width: 280, height: 26)
+        )
+        window.orderFront(nil)
+        settle()
+        defer { window.close() }
+
+        let point = NSPoint(x: 90, y: 13)
+        click(point, in: window)
+        XCTAssertEqual(actions.primary, 1, "A single click should preview without waiting for a double click")
+        XCTAssertEqual(actions.accessory, 0)
+        click(point, in: window, count: 2)
+        XCTAssertEqual(actions.accessory, 1, "Double-click activation must occur exactly once")
+        XCTAssertGreaterThanOrEqual(actions.primary, 1)
+        XCTAssertLessThanOrEqual(actions.primary, 2,
+                                 "A second click may select but must not create multiple file tabs")
     }
 
     func testFilesAndGitRowsOwnTheirFullHitArea() {

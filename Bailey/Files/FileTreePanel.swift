@@ -11,7 +11,7 @@ struct FileTreePanel: View {
     /// checkout, so the header says why the root moved.
     let rootBadge: (text: String, description: String)?
     let currentFilePath: String?
-    let openFile: (String) -> Void
+    let openFile: (String, Bool) -> Void
     let onRename: (_ oldPath: String, _ newPath: String) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
@@ -100,7 +100,7 @@ private struct FileTreeScrollView: View {
     let session: TerminalSession?
     let sshHost: String?
     let currentFilePath: String?
-    let openFile: (String) -> Void
+    let openFile: (String, Bool) -> Void
     let onRename: (String, String) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
@@ -149,7 +149,7 @@ private struct FileTreeRow: View {
     let session: TerminalSession?
     let sshHost: String?
     let currentFilePath: String?
-    let openFile: (String) -> Void
+    let openFile: (String, Bool) -> Void
     let onRename: (_ oldPath: String, _ newPath: String) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
@@ -217,7 +217,7 @@ private struct FileTreeRow: View {
     private var rowMenu: some View {
         if !item.isDirectory {
             Button(String(localized: "Open", table: "Sidebar")) {
-                if isCurrentTarget() { openFile(item.path) }
+                if isCurrentTarget() { openFile(item.path, true) }
             }
         }
         // Finder and the default app can only reach the local disk.
@@ -322,7 +322,7 @@ private struct FileTreeRow: View {
         Task {
             guard isCurrentTarget() else { return }
             if let created = await model.commitDraft(name: name, isCurrentTarget: isCurrentTarget) {
-                if isCurrentTarget() { openFile(created) }
+                if isCurrentTarget() { openFile(created, true) }
             }
             refreshGitStatus()
         }
@@ -339,8 +339,11 @@ private struct FileTreeRow: View {
                 }
             }
         } else {
-            TreeFileRow(row: displayRow, scale: fontScale, selected: isCurrent,
-                        open: { if isCurrentTarget() { openFile(item.path) } }) { _ in EmptyView() }
+            TreeFileRow(
+                row: displayRow, scale: fontScale, selected: isCurrent,
+                open: { if isCurrentTarget() { openFile(item.path, false) } },
+                activate: { if isCurrentTarget() { openFile(item.path, true) } }
+            ) { _ in EmptyView() }
         }
     }
 

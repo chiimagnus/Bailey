@@ -108,9 +108,9 @@ final class Project: nonisolated Identifiable {
         tabs.first { $0.id == selectedTabID }
     }
 
-    func selectTab(_ id: UUID) {
+    func selectTab(_ id: UUID, activating: Bool = true) {
         guard tabs.contains(where: { $0.id == id }) else { return }
-        dock.select(.tab(id))
+        dock.select(.tab(id), activating: activating)
         selectedTabID = id
     }
 
@@ -471,9 +471,10 @@ final class Project: nonisolated Identifiable {
 
     /// Opens `path` as a new file tab, reusing an existing tab for the
     /// same path. `editorState` seeds scroll/cursor state when restoring.
-    func openFile(_ path: String, editorState: EditorState? = nil, inGroup groupID: UUID? = nil) {
+    func openFile(_ path: String, editorState: EditorState? = nil,
+                  inGroup groupID: UUID? = nil, activating: Bool = true) {
         openFile(path, backend: workspaceBackend, workspace: workspaceIdentity,
-                 editorState: editorState, inGroup: groupID)
+                 editorState: editorState, inGroup: groupID, activating: activating)
     }
 
     /// Finder opens a Mac document regardless of the project's terminal machine.
@@ -483,14 +484,15 @@ final class Project: nonisolated Identifiable {
 
     private func openFile(
         _ path: String, backend: WorkspaceBackend, workspace: String?,
-        editorState: EditorState? = nil, inGroup groupID: UUID? = nil
+        editorState: EditorState? = nil, inGroup groupID: UUID? = nil,
+        activating: Bool = true
     ) {
         let context = selectedSession
         if let tab = findFileTab(path: path, workspace: workspace) {
-            if selectedTabID == tab.id, let workspace {
+            if activating, selectedTabID == tab.id, let workspace {
                 SSHHostWorkspaces.retryConnection(for: workspace, path: path)
             }
-            selectTab(tab.id)
+            selectTab(tab.id, activating: activating)
             return
         }
         let file = FileTab(
@@ -508,7 +510,7 @@ final class Project: nonisolated Identifiable {
             _ = dock.place(.tab(tab.id), in: groupID)
         }
         insertNextToSelected(tab)
-        selectTab(tab.id)
+        selectTab(tab.id, activating: activating)
     }
 
     private func findFileTab(path: String, workspace: String?) -> PaneTab? {

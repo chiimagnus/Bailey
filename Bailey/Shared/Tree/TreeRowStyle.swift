@@ -37,7 +37,7 @@ struct TreeRowLayout: ViewModifier {
 }
 
 /// The one row surface shared by Files, working-tree Git and committed Git.
-/// Callers apply the supplied layout inside button labels so hover and hit areas agree.
+/// Callers apply the supplied layout to interactive rows so hover and hit areas agree.
 struct TreeRowSurface<Content: View>: View {
     let depth: Int
     let scale: CGFloat
@@ -205,13 +205,13 @@ struct TreeFolderRow<Accessory: View>: View {
     var body: some View {
         TreeRowSurface(depth: row.depth, scale: scale, focused: focused, leadingInset: leadingInset) { hovering, layout in
             HStack(spacing: 0) {
-                Button(action: toggle) {
-                    TreeRowLabel(row: row, iconPath: row.path, scale: scale)
-                        .modifier(layout)
-                }
-                .buttonStyle(.plain)
-                .focused($focused)
-                .help(row.accessibilityLabel + "\n" + row.path)
+                TreeRowLabel(row: row, iconPath: row.path, scale: scale)
+                    .modifier(layout)
+                    .focusable()
+                    .focused($focused)
+                    .onTapGesture(perform: toggle)
+                    .accessibilityAction(.default) { toggle() }
+                    .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel)
                 .accessibilityValue(row.isExpanded
                     ? String(localized: "Expanded", table: "Sidebar")
@@ -238,6 +238,7 @@ struct TreeFileRow<Accessory: View>: View {
     var leadingInset = TreeRowStyle.contentInset
     var accessibilityHint = ""
     let open: () -> Void
+    var activate: (() -> Void)? = nil
     @ViewBuilder var accessory: (Bool) -> Accessory
     @FocusState private var focused: Bool
 
@@ -245,14 +246,15 @@ struct TreeFileRow<Accessory: View>: View {
         TreeRowSurface(depth: row.depth, scale: scale, selected: selected,
                        focused: focused, leadingInset: leadingInset) { hovering, layout in
             HStack(spacing: 0) {
-                Button(action: open) {
-                    TreeRowLabel(row: row, iconPath: iconPath ?? row.path, scale: scale,
-                                 directory: directory)
-                        .modifier(layout)
-                }
-                .buttonStyle(.plain)
-                .focused($focused)
-                .help(row.accessibilityLabel + "\n" + row.path)
+                TreeRowLabel(row: row, iconPath: iconPath ?? row.path, scale: scale,
+                             directory: directory)
+                    .modifier(layout)
+                    .focusable()
+                    .focused($focused)
+                    .onTapGesture(perform: open)
+                    .simultaneousGesture(TapGesture(count: 2).onEnded { activate?() })
+                    .accessibilityAction(.default) { open() }
+                    .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel + ", " + row.path)
                 .accessibilityHint(accessibilityHint)
                 accessory(hovering || focused)

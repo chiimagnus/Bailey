@@ -406,11 +406,12 @@ final class DockWorkspaceModel {
 
     func group(containing item: DockItem) -> DockGroup? { root.group(containing: item) }
 
-    func select(_ item: DockItem) {
+    func select(_ item: DockItem, activating: Bool = true) {
         guard let owner = group(containing: item) else { return }
         if owner.selected != item {
-            updateLayout(root.editingGroup(owner.id) { $0.selected = item }, activating: owner.id)
-        } else {
+            updateLayout(root.editingGroup(owner.id) { $0.selected = item },
+                         activating: activating ? owner.id : nil)
+        } else if activating {
             activate(owner.id)
         }
     }

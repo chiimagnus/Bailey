@@ -154,7 +154,7 @@ struct ToolPanelView: View {
                         sshHost: project.sshHost,
                         rootBadge: rootBadge,
                         currentFilePath: openFilePath,
-                        openFile: { manager.openFile($0) },
+                        openFile: { manager.openFile($0, activating: $1) },
                         onRename: { [workspace = project.workspaceIdentity] oldPath, newPath in
                             manager.fileRenamed(
                                 from: oldPath, to: newPath, workspace: workspace

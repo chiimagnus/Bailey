@@ -5,6 +5,47 @@ import XCTest
 
 @MainActor
 final class DockWorkspaceTests: XCTestCase {
+    func testBrowsingFilesShowsNewAndExistingDocumentsWithoutActivatingEditor() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("preview.swift").path
+        try "let preview = 1\n".write(toFile: path, atomically: true, encoding: .utf8)
+        let project = Project(fallbackName: "preview", workspaceConfiguration: .standard)
+        let files = try XCTUnwrap(project.dock.group(containing: .files))
+        project.dock.activate(files.id)
+        project.openFile(path, activating: false)
+        let tab = try XCTUnwrap(project.selectedTab)
+        let fileGroup = try XCTUnwrap(project.dock.group(containing: .tab(tab.id)))
+        XCTAssertNotEqual(fileGroup.id, files.id)
+        XCTAssertEqual(fileGroup.selected, .tab(tab.id))
+        XCTAssertEqual(project.dock.activeGroupID, files.id)
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+        XCTAssertNil(project.focusedContent)
+        project.openFile(path, activating: false)
+        XCTAssertEqual(project.tabs.count, 1)
+        XCTAssertEqual(project.dock.activeGroupID, files.id)
+        project.openFile(path)
+        XCTAssertEqual(project.dock.activeGroupID, fileGroup.id)
+        XCTAssertEqual(project.focusedContent?.id, tab.content.id)
+    }
+
+    func testBrowsingSameGroupMustNotKeepFocusOnHiddenFilesPanel() throws {
+        let configuration = try XCTUnwrap(DockWorkspaceConfiguration(
+            groupNames: ["projects,files,git"], selectedNames: ["files"],
+            weights: [1], actionNames: ["session", "projects", "files", "git"],
+            edgeThreshold: 0.22
+        ))
+        let project = Project(fallbackName: "same group", workspaceConfiguration: configuration)
+        let path = "/tmp/preview-in-same-group.swift"
+        project.dock.select(.files)
+        project.openFile(path, activating: false)
+        let tab = try XCTUnwrap(project.selectedTab)
+        XCTAssertEqual(project.dock.activeGroup?.selected, .tab(tab.id))
+        XCTAssertEqual(project.focusedContent?.id, tab.content.id,
+                       "When Files is hidden, a visible document must receive focus")
+    }
+
     func testFocusingAlreadyVisibleWorkTabsDoesNotRequestASnapshot() throws {
         let project = Project(fallbackName: "transient focus", workspaceConfiguration: .standard)
         project.newBrowserTab(initialFocus: .none)

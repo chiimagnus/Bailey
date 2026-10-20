@@ -923,8 +923,8 @@ final class TerminalManager {
     }
 
     /// Opens `path` as a file tab in the current project.
-    func openFile(_ path: String) {
-        selectedProject?.openFile(path)
+    func openFile(_ path: String, activating: Bool = true) {
+        selectedProject?.openFile(path, activating: activating)
     }
 
     /// Opens a git diff tab in the current project.

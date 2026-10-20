@@ -54,6 +54,8 @@ Tree-sitter 的 LF 行列索引独立于 TextKit 的自然段落。
 
 历史方案及与 Zed Rope／VS Code Piece Tree 的对比见[归档证据](https://github.com/chiimagnus/Bailey/blob/e1b9fe700424a561910c6dedb0c5653150212740/.github/features/editor-rendering-performance/evidence-p1.md)。当前使用 Apple 原生实现，不再回退 STTextView。
 
+文件树单击文件可以在其它 Dock 组显示常规 FileTab，但不抢走仍可见的 Files 输入焦点；双击或显式打开转入编辑器。这里复用已有文件标签和原生 TextKit 2 缓冲，不引入独立临时预览标签，也不改变已有 Undo 或延迟读取语义。
+
 ## 保存与关闭
 
 自动保存由编辑器失焦、工作标签／项目切换、窗口失焦等事件触发；文件内容不设保存定时器。⌘S 仍可用，读取当前聚焦内容的保存资格。
