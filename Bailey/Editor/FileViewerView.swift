@@ -556,7 +556,7 @@ private struct FileWindowReader: NSViewRepresentable {
 /// oversized.
 struct FileViewerView: View {
     let file: FileTab
-    /// Whether this file's work tab is selected.
+    /// Whether this file is visible in the foreground active Dock group.
     var isFocused: Bool = true
     var canFocus: () -> Bool = { true }
     /// Called when the editor takes focus itself (e.g. a click), so the

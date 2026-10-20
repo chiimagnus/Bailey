@@ -50,7 +50,6 @@ final class Project: nonisolated Identifiable {
                 recentTabIDs.removeAll { $0 == selectedTabID }
                 recentTabIDs.insert(selectedTabID, at: 0)
             }
-            onSnapshotChange?()
         }
     }
 

@@ -7,6 +7,73 @@ import XCTest
 
 @MainActor
 final class PaneRetentionTests: XCTestCase {
+    func testParkingDropsObsoleteHostActionsBeforeDelayedDismantle() async throws {
+        let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
+        defer { terminal.terminate() }
+        let container = NSView(frame: .init(x: 0, y: 0, width: 600, height: 400))
+        let window = NSWindow(contentRect: container.frame, styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = container
+        let host = NSHostingView(rootView: TerminalHostView(
+            session: terminal, isFocused: false, onFocused: {},
+            onNewBrowserTab: { _ in }, onNewFileTab: { _ in }
+        ))
+        host.frame = container.bounds
+        container.addSubview(host)
+        window.orderFront(nil)
+        try await settle {
+            host.layoutSubtreeIfNeeded()
+            return terminal.surface.superview is TerminalContainerView
+        }
+        let previous = try XCTUnwrap(terminal.surface.superview as? TerminalContainerView)
+        XCTAssertNotNil(terminal.surface.onBecomeFirstResponder)
+        XCTAssertNotNil(terminal.surface.openMenuTarget.onNewBrowserTab)
+        let parking = TerminalParkingContainerView(frame: .zero)
+        container.addSubview(parking)
+        parking.mount([terminal])
+        XCTAssertTrue(terminal.surface.superview === parking)
+        XCTAssertTrue(terminal.surface.window === window)
+        XCTAssertNil(terminal.surface.onBecomeFirstResponder)
+        XCTAssertNil(terminal.surface.openMenuTarget.onNewBrowserTab)
+        XCTAssertNil(terminal.surface.openMenuTarget.onNewFileTab)
+        TerminalHostView.dismantleNSView(previous, coordinator: TerminalHostView.Coordinator())
+        XCTAssertTrue(terminal.surface.superview === parking)
+    }
+
+    func testTerminalFindFieldStaysInsideNarrowAndWidePanes() async throws {
+        let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
+        defer { terminal.terminate() }
+        let host = NSHostingView(rootView: TerminalFindBar(find: terminal.find))
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 400, height: 100),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        func field(in view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField, field.isEditable,
+               field.window === window, !field.isHiddenOrHasHiddenAncestor { return field }
+            return view.subviews.lazy.compactMap { field(in: $0) }.first
+        }
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            window.appearance = NSAppearance(named: appearance)
+            for width in [150.0, 210.0, 400.0, 900.0] {
+                window.setContentSize(NSSize(width: width, height: 100))
+                try await settle {
+                    host.layoutSubtreeIfNeeded()
+                    return field(in: host) != nil && abs(host.bounds.width - width) < 1
+                }
+                let input = try XCTUnwrap(field(in: host))
+                let frame = host.convert(input.bounds, from: input)
+                XCTAssertGreaterThanOrEqual(frame.minX, 0)
+                XCTAssertLessThanOrEqual(frame.maxX, host.bounds.maxX)
+                XCTAssertGreaterThan(frame.width, 20)
+            }
+        }
+    }
+
     private func settle(
         _ predicate: () -> Bool,
         file: StaticString = #filePath,

@@ -342,7 +342,7 @@ private struct DockTabGroupView: View {
             isActive: isFocused,
             canFocus: canFocusGroup,
             onFocused: focusGroup
-        ))
+        ).id(group.id))
         .overlay {
             Rectangle()
                 .strokeBorder(isFocused ? Color(nsColor: Theme.accent).opacity(0.7) : .clear,

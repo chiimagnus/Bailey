@@ -7,6 +7,150 @@ import XCTest
 /// not a valid substitute for the manager that owns a file or its save target.
 @MainActor
 final class WorkspaceWindowIsolationTests: XCTestCase {
+    func testRestoredGroupIDsReplaceOnlyTheFocusScopesNotTheEditor() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("restored.swift")
+        try "let value = 1\n".write(to: url, atomically: true, encoding: .utf8)
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        manager.openFile(url.path)
+        let project = try XCTUnwrap(manager.selectedProject)
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 1100, height: 700),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.editor(in: host) != nil
+        }
+        let editor = try XCTUnwrap(editor(in: host))
+        func scopeIDs(in view: NSView) -> Set<UUID> {
+            let own = (view as? DockGroupFocusView).map { Set([$0.groupID]) } ?? []
+            return view.subviews.reduce(into: own) { $0.formUnion(scopeIDs(in: $1)) }
+        }
+        let replacement = DockWorkspaceModel().snapshot(tabIDs: [])
+        project.dock.restore(replacement, tabIDs: project.tabs.map(\.id))
+        let expected = Set(project.dock.root.groups.map(\.id))
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return scopeIDs(in: host) == expected
+        }
+        XCTAssertTrue(self.editor(in: host) === editor)
+        XCTAssertEqual(editor.text, "let value = 1\n")
+    }
+
+    func testFocusAcrossAppearancesAndSizesKeepsTheNativeDocument() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent(String(repeating: "长标题😀", count: 8) + ".swift")
+        let text = "let greeting = \"中文 😀\"\n"
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        manager.openFile(url.path)
+        let project = try XCTUnwrap(manager.selectedProject)
+        let tab = try XCTUnwrap(project.selectedTab)
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 1100, height: 700),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.editor(in: host) != nil && manager.attachedWindow === window
+        }
+        let editor = try XCTUnwrap(editor(in: host))
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            window.appearance = NSAppearance(named: appearance)
+            for size in [NSSize(width: 480, height: 320), NSSize(width: 1100, height: 700),
+                         NSSize(width: 1800, height: 1000)] {
+                window.setContentSize(size)
+                for item in [DockItem.projects, .files, .git, .tab(tab.id)] {
+                    project.dock.select(item)
+                    host.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                    XCTAssertTrue(self.editor(in: host) === editor)
+                    XCTAssertEqual(editor.text, text)
+                    XCTAssertEqual(project.dock.activeGroup?.selected, item)
+                    XCTAssertEqual(manager.ownsActiveResponder(editor), item == .tab(tab.id))
+                    XCTAssertTrue(editor.visibleRect.width.isFinite)
+                    XCTAssertTrue(editor.visibleRect.height.isFinite)
+                }
+            }
+        }
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), text)
+    }
+
+    func testResponderOwnershipRejectsInactiveProjectsHiddenTabsAndParking() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let url = root.appendingPathComponent("owner.swift")
+        try "let value = 1\n".write(to: url, atomically: true, encoding: .utf8)
+        manager.openFile(url.path)
+        let fileTab = try XCTUnwrap(project.selectedTab)
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 1100, height: 700),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.editor(in: host) != nil && manager.attachedWindow === window
+        }
+        let editor = try XCTUnwrap(editor(in: host))
+        XCTAssertTrue(manager.ownsActiveResponder(editor))
+        manager.showPanel(.files)
+        XCTAssertFalse(manager.ownsActiveResponder(editor))
+        project.selectTab(fileTab.id)
+        XCTAssertTrue(manager.ownsActiveResponder(editor))
+
+        let terminal = project.newSession(launchCommand: "exec /bin/sh -i")
+        let terminalTab = try XCTUnwrap(project.selectedTab)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return terminal.surface.superview is TerminalContainerView
+        }
+        XCTAssertTrue(manager.ownsActiveResponder(terminal.surface))
+        project.selectTab(fileTab.id)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return terminal.surface.superview is TerminalParkingContainerView
+                && self.editor(in: host) === editor
+        }
+        XCTAssertTrue(terminal.surface.window === window, "Parking must really retain this window")
+        XCTAssertNil(terminal.surface.onBecomeFirstResponder)
+        XCTAssertNil(terminal.surface.openMenuTarget.onNewBrowserTab)
+        XCTAssertNil(terminal.surface.openMenuTarget.onNewFileTab)
+        XCTAssertFalse(manager.ownsActiveResponder(terminal.surface))
+        XCTAssertTrue(manager.ownsActiveResponder(editor))
+
+        manager.selectedProjectID = nil
+        XCTAssertFalse(manager.ownsActiveResponder(editor))
+        manager.selectedProjectID = project.id
+        project.selectTab(terminalTab.id)
+        project.close(fileTab)
+        XCTAssertFalse(manager.ownsActiveResponder(editor))
+        manager.windowClosed()
+        XCTAssertFalse(manager.ownsActiveResponder(terminal.surface))
+    }
+
     func testDockToolsTakeNativeFocusWithoutReplacingVisibleEditors() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -36,6 +180,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let original = try XCTUnwrap(editor.text)
         for tool in [DockItem.files, .git, .projects] {
             XCTAssertTrue(window.makeFirstResponder(editor))
+            XCTAssertTrue(manager.ownsActiveResponder(editor))
             XCTAssertEqual(project.focusedContent?.id, file.id)
             editor.insertText("// \(tool) 中文 😀\n", replacementRange: NSRange(location: 0, length: 0))
             XCTAssertTrue(file.isDirty)
@@ -50,6 +195,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
                 XCTAssertEqual(scope.groupID, project.dock.group(containing: tool)?.id)
             }
             XCTAssertNil(project.focusedContent)
+            XCTAssertFalse(manager.ownsActiveResponder(editor))
             XCTAssertTrue(self.editor(in: host) === editor)
             XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), file.text)
             project.selectTab(tab.id)

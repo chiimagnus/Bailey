@@ -693,7 +693,7 @@ struct CommandPaletteView: View {
     }
 
     private func run(_ command: PaletteCommand) {
-        dismiss()
+        manager.dismissCommandPalette(restoringFocus: false)
         command.action()
     }
 

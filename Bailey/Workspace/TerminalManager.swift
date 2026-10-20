@@ -57,6 +57,7 @@ final class TerminalManager {
     /// SwiftUI TextField can reuse the same responder for the palette itself.
     @ObservationIgnored private weak var commandPalettePreviousResponder: NSResponder?
     @ObservationIgnored private weak var commandPaletteWindow: NSWindow?
+    @ObservationIgnored private var commandPaletteContentID: UUID?
     /// Window hosting this manager, once SwiftUI has attached its content.
     /// Finder service requests use it to target the active Bailey window.
     @ObservationIgnored private weak var window: NSWindow?
@@ -981,9 +982,11 @@ final class TerminalManager {
         if isCommandPaletteVisible {
             dismissCommandPalette()
         } else {
-            commandPaletteWindow = NSApp.keyWindow
+            commandPaletteWindow = window
+            commandPaletteContentID = selectedProject?.focusedContent?.id
             if let responder = commandPaletteWindow?.firstResponder,
-               isStableWorkspaceResponder(responder) {
+               commandPaletteWindow?.isKeyWindow == true, NSApp.isActive,
+               isStableWorkspaceResponder(responder), ownsActiveResponder(responder) {
                 commandPalettePreviousResponder = responder
             } else {
                 commandPalettePreviousResponder = nil
@@ -992,8 +995,13 @@ final class TerminalManager {
         }
     }
 
-    func dismissCommandPalette() {
+    func dismissCommandPalette(restoringFocus: Bool = true) {
         guard isCommandPaletteVisible else { return }
+        if !restoringFocus {
+            commandPaletteWindow = nil
+            commandPalettePreviousResponder = nil
+            commandPaletteContentID = nil
+        }
         isCommandPaletteVisible = false
     }
 
@@ -1002,13 +1010,19 @@ final class TerminalManager {
     func restoreFocusAfterCommandPalette() {
         let window = commandPaletteWindow
         let responder = commandPalettePreviousResponder
+        let contentID = commandPaletteContentID
         commandPaletteWindow = nil
         commandPalettePreviousResponder = nil
+        commandPaletteContentID = nil
 
         // Let the removal transaction finish before restoring the displaced
         // AppKit responder.
         DispatchQueue.main.async {
-            guard let window, let responder else { return }
+            guard let window, let responder, NSApp.isActive, window.isKeyWindow,
+                  window === self.window, window.attachedSheet == nil,
+                  !self.isCommandPaletteVisible,
+                  self.selectedProject?.focusedContent?.id == contentID,
+                  self.ownsActiveResponder(responder) else { return }
             // A palette command may already have focused a new terminal or
             // editor. Never let restoration race that newer focus and win.
             if let current = window.firstResponder,
@@ -1025,7 +1039,8 @@ final class TerminalManager {
     /// AppKit ancestry before deciding whether palette dismissal can restore
     /// the page's keyboard focus.
     private func isStableWorkspaceResponder(_ responder: NSResponder) -> Bool {
-        if responder is any TerminalBackendSurface || responder is FocusReportingTextView {
+        if responder is any TerminalBackendSurface || responder is FocusReportingTextView
+            || responder is DiffTextView {
             return true
         }
         var view = responder as? NSView
@@ -1034,6 +1049,24 @@ final class TerminalManager {
             view = current.superview
         }
         return false
+    }
+
+    func ownsActiveResponder(_ responder: NSResponder) -> Bool {
+        guard let window, let view = responder as? NSView, view.window === window,
+              !view.isHiddenOrHasHiddenAncestor,
+              let content = selectedProject?.focusedContent else { return false }
+        let root: NSView?
+        switch content {
+        case .session(let session):
+            guard session.surface.superview is TerminalContainerView else { return false }
+            root = session.surface
+        case .file(let file): root = file.editorView
+        case .browser(let browser): root = browser.webView
+        case .diff(let diff): root = diff.nativeSurface
+        }
+        guard let root, root.window === window, !root.visibleRect.isEmpty,
+              !root.isHiddenOrHasHiddenAncestor else { return false }
+        return view === root || view.isDescendant(of: root)
     }
 
     /// Reuse an existing panel or reopen it in a tool group; never create

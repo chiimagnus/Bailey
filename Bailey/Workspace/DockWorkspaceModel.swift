@@ -229,6 +229,7 @@ indirect enum DockNode {
     func removing(_ item: DockItem) -> DockNode? {
         switch self {
         case .group(var group):
+            guard group.items.contains(item) else { return .group(group) }
             group.items.removeAll { $0 == item }
             if group.selected == item { group.selected = group.items.first }
             return group.items.isEmpty ? nil : .group(group)
