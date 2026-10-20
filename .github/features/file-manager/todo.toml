@@ -1,0 +1,82 @@
+version = 1
+current_task_id = ""
+
+[[tasks]]
+id = "P1-T1"
+title = "Files 多选、焦点与键盘导航"
+status = "pending"
+plan = "plan-p1.md#p1-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T2"
+title = "本机／SSH 安全文件复制移动与批处理"
+status = "pending"
+plan = "plan-p1.md#p1-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T3"
+title = "统一操作模型与编辑标签路径保护"
+status = "pending"
+plan = "plan-p1.md#p1-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T4"
+title = "右键、快捷键与批量确认入口"
+status = "pending"
+plan = "plan-p1.md#p1-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T1"
+title = "Files 内部拖放及 Finder 完整回归"
+status = "pending"
+plan = "plan-p2.md#p2-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T1"
+title = "Files 隐藏规则及设置持久化"
+status = "pending"
+plan = "plan-p3.md#p3-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T2"
+title = "扩展 Cmd+P SSH 文件快速打开"
+status = "pending"
+plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T3"
+title = "定位当前文件并保护机器身份"
+status = "pending"
+plan = "plan-p3.md#p3-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T1"
+title = "外部变更后选择与快速打开一致性"
+status = "pending"
+plan = "plan-p4.md#p4-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T2"
+title = "全入口 E2E 与 Issue #40 集成验收"
+status = "pending"
+plan = "plan-p4.md#p4-t2"
+commit = ""
+note = ""
