@@ -100,10 +100,6 @@ struct ToolPanelView: View {
 
     /// A pinned local path must not inherit a different machine just because
     /// its terminal happens to be inside an interactive SSH session.
-    private var periodicRefreshID: String {
-        "\(applicationIsActive):\(panel):\(git.currentScope)"
-    }
-
     private var fileActionSession: TerminalSession? {
         guard let project = manager.selectedProject else { return nil }
         if project.sshHost == nil, project.customDirectory != nil,
@@ -229,7 +225,7 @@ struct ToolPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: Theme.sidebar))
         .onAppear { syncModels() }
-        .task(id: periodicRefreshID) {
+        .task(id: "\(applicationIsActive):\(panel):\(git.currentScope)") {
             guard applicationIsActive else { return }
             if panel == .git && git.currentScope == "local" { return }
             let interval: Duration = panel == .git ? .seconds(5) : .seconds(2)
