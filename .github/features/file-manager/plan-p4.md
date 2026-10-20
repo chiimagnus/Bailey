@@ -1,42 +1,42 @@
-# P4：外部变更集成与跨功能最终验收
+# P4：与外部变化刷新整合并验证全部用户路径
 
-**Goal：** 让新多选、隐藏、过滤、`⌘P` 索引、Reveal 和文件操作在现有外部文件变更链路下保持一致；联合 #40 完成 F6 的真实用户验收。
+**Goal：** 新增 Files 操作、选择、过滤、隐藏和 `⌘P` 搜索在**已存在的外部变更链路**中准确反映真实目录，跨功能和异常组合不退化。
 
-**Non-goals：** 不在 #5 再实现 macOS FSEvents 事件监听／SSH 通知／定时器替换，不擅自改 #40 的 Go／No-Go 结论、不为追求“无轮询”引入远端 Server 或守护进程。
+**Non-goals：** 不在 #5 另建 FSEvents watcher、SSH 后台服务、轮询替代或独立事件总线；这些由 [Issue #40](https://github.com/chiimagnus/Bailey/issues/40) 及 `../event-driven-workspace-refresh/` 拥有。不因为本阶段 E2E 才补 P1–P3 本该同任务完成的测试、文档或旧代码清理。
 
-**Approach：** 当前 `ToolPanelView.syncModels → Project.syncFiles → FileTreeModel.sync` 在 Files 可见时每 2 秒刷新，终端命令完成／前台恢复也可触发。#40 的 `plan-p1.md` 已承担本机 Files FSEvents，`plan-p2.md` 已承担远端临时通知的可行性与条件实现。此阶段只在**现有 FileTreeModel／ProjectFileIndex 状态所有者**接入缓存失效、选中清理及索引更新，并对 #40 产出的实际刷新来源做集成测量；不能从 FileManager／Git 数据推断另一个后端的结果。
+**Approach：** 当前 `ToolPanelView.syncModels → Project.syncFiles → FileTreeModel.sync/rebuild` 在 Files 前台每 2 秒刷新，也响应终端命令完成、项目变化及 App 激活；本机 Git 已用独立 FSEvents。P4 仅消费这些既有或 #40 后续提供的刷新触发，在 Files／项目当前所有者内核对选中项与过滤/搜索数据的更新，不维护第二套文件状态。#40 不在当前分支已完成时，不把「靠旧轮询正确」说成「事件通知已验收」。
 
-**Acceptance：** 外部创建／移动／删除／分支切换使 Files 可见状态、选中、过滤／Reveal 及 `⌘P` 结果与真实目录一致；空闲不会因新功能增加重复 IO；无法实现的 SSH 原生通知保留 #40 已确认的轮询回退。#40 未完成前，F6 验收必须明确保持未完成。
+**Acceptance：** 在已成功确认文件真实变化后，Files 行、选择及搜索与磁盘一致；旧 SSH 失败留住有效数据，当前编辑不丢失，额外监听/扫描为零；每项涉及 UI 的任务已有原生或完整 App 测试记录。
 
-**Rules：** 真正的文件事件与读取完成是不同边界；最终以磁盘／远端真实目录为准。事件丢失补偿、根 watcher 生命周期和远端取消属于 #40；不复刻其任务、测试夹具或配置。每个 #5 实现 task 已完成自身 TDD／文档，此阶段只负责跨功能联动和最终系统组合。
+**Rules：** 真实刷新所见的目录条目才是内容真源；失败不伪装删除，SSH 不回退 Mac；P4 只补**跨功能连接点**及确实验证的缺口。
 
 ---
 
 <a id="p4-t1"></a>
-## P4-T1 外部更新后的选择／过滤／搜索索引一致性
+## P4-T1 已有刷新后的选择和搜索结果一致性
 
-**源码锚点：** `Bailey/UI/Panels/ToolPanelView.swift`（`syncModels`、`performSync`、`PanelSyncQueue`、`commandCompletionSequences`）、`Bailey/Workspace/Project.swift.syncFiles`、`Bailey/Files/FileTreeModel.swift`（`sync`、`rebuild(refresh:)`、`cachedDirectories`、现有及 P1/P3 新选择／隐藏／过滤状态）、`Bailey/Workspace/ProjectFileIndex.swift`（P3 共用索引）、`Bailey/UI/CommandPaletteView.swift`（`indexedTarget`、取消与查询），以及 #40 的 `GitFileEventWatcher` 及监听结果接口（仅消费，不重复创建）。
+**源码锚点：** `Bailey/UI/Panels/ToolPanelView.swift`（`syncModels/performSync/PanelSyncQueue/commandCompletionSequences`）、`Bailey/Workspace/Project.swift.syncFiles`、`Bailey/Files/FileTreeModel.swift`（`sync/rebuild/cachedDirectories/items`）、`Bailey/UI/CommandPaletteView.swift`（`indexedTarget/task(id:)`）、`Bailey/Workspace/ProjectFileIndex.swift`、#40 对当前 Files 刷新实际提供的事件（只有确认其代码已落地才接入）。
 
-1. **Red：** 在独立 CLI／Finder／Git 进程中真实新建、重命名、移动、删除文件和切换分支，同时保持 Files、过滤文本、部分多选和 `⌘P` 打开；核对当前版本已支持哪种触发（2 秒轮询或终端命令完成）、哪一种内容没有重查索引。用受控阻塞后端制造“扫描启动→外部改名→旧响应迟到→切项目”的真实时序，断言最终不保留失效选中、不将旧索引提供为可点击文件。
-2. **Green：** 文件树成功发布**已确认的当前目标目录变化**时，按需使当前可见过滤／文件索引失效和重算；当前仍存在的选中按真实路径保留、消失的清除、已知成功移动的使用 P1 路径映射；不因未变更目录或 SSH 读取失败抹除有效树。新索引失效直接接 P3 的唯一索引缓存／取消通道，不每次触发整棵树和全量 SSH 搜索。#40 发布本机事件驱动时复用其现有事件到 `Project.syncFiles` 路径；远端若 No-Go，仍需通过实际 2 秒读取最终内容，且不增加额外 SSH 请求。
-3. **验证：** 本机 Finder、外部编辑器与独立 CLI（不是 Bailey 自己的动作），普通目录与 Git Worktree、检出切分支、原子替换、重命名/跨目录移动、软链接与压缩链、缓存未加载／已加载、Files 前后台切换、等待中的读／写／索引任务、两窗口和同名跨机器项目、SSH 超时／失败／重连、批量数百次突发更新。逐项记录**触发来源、真实目录内容、Files 行、选择集、过滤结果、`⌘P` 路径**，测空闲及变化下的读取次数、CPU、RSS 和 UI 重绘；使用 `FileTreeTests`、`PanelContextTests`、`ProjectFileIndexTests`、`GitExternalRefreshTests` 及真实 GUI／受控 SSH。
-4. **文档与完成：** 此 task 只更新因新功能确实变化的 `docs/features/files.md`、`command-palette.md`、`docs/testing.md`；监听器所有权及 SSH 通知决策留给 #40 文档，不写冲突版本。与同次测试一并独立中文提交。
+1. **Red：** 用独立 CLI／Finder／Git 进程创建、删除、移动或原子替换文件，验证树在实际读取成功前后的选择、过滤、临时 Reveal 与打开的 `⌘P` 索引。`CommandPaletteView.task(id:)` 当前仅依目标变化重新索引，同一根内真实文件变化不一定触发重索引；这才是要检查的失效不变量。制造扫描被阻塞、项目 A→B→A 和 SSH 读失败，确认当前树不清空、不串旧结果。
+2. **Green：** 真实读取导致 Files 数据变化时，仅针对**当前活跃且需要这些结果的 UI**更新选中集/按需重跑当前查询；如 `⌘P` 当前打开，使用已存在的观察／任务身份使其过期并重索引，不添加永久共享索引缓存。外部变化不一定经过 Files 面板时，`⌘P` 每次新打开都应从真实目标加载，不依赖隐藏面板的旧缓存。失败时保留已确认的树并显示无法确认的搜索状态，而不是清空所有条目。#40 后续替换调度时仅接入其最终一致性读取，不复制 watcher。缓存和已被确认删除的选择应在**产生变化的本任务**清理，不能推迟到 P4-T2。
+3. **覆盖：** 0/多项、已展开／未展开／压缩目录、选中正被移动项、临时 Show Excluded、查询中继续输入、Git Branch/Worktree 切换、后台／前台、CLI 高频改名／删除／原子替换、旧扫描回写、SSH 超时/断线/恢复、多个不同机器同名路径、两窗口、没有 Files 面板但直接打开 `⌘P`。比较真实磁盘、`items`、聚焦选择、过滤内容、Quick Open 文件路径与源机器、目录读取请求数、CPU/RSS；扩展 `FileTreeTests`、`PanelContextTests`、`ProjectFileIndexTests`、`GitExternalRefreshTests` 和真实 GUI／获授权 SSH。
+4. **闭环：** 只同步 `docs/features/files.md`、`command-palette.md` 与 `docs/testing.md` 中被集成行为真实改变的内容；不重写属于 #40 的监听文档。本任务引入的新旧状态处理替换后当次清理，独立中文提交。
 
 ---
 
 <a id="p4-t2"></a>
-## P4-T2 全入口极端组合 E2E 与 #40 F6 验收对接
+## P4-T2 全用户入口与极端组合联动验收
 
-**源码与测试锚点：** `Bailey/Files/{FileTreeModel,FileTreePanel}.swift`、`Bailey/Shared/Tree/{TreeDisplayModel,TreeRowStyle}.swift`、`Bailey/UI/{CommandPaletteView,Panels/ToolPanelView}.swift`、`Bailey/Workspace/{Project,TerminalManager,ProjectFileIndex,WorkspaceBackend}.swift`、`Bailey/App/{BaileyApp,AppSettings}.swift`、`Bailey/Remote/SSHWorkspaceBackend.swift`、`Bailey/Editor/FileViewerView.swift`。对应 `BaileyTests/Integration/Files`、`BaileyTests/Integration/Workspace`、`BaileyTests/NativeUI`、`BaileyTests/WorkspaceUI`；#40 状态以其 `todo.toml` 和可复验的代码／证据为准。
+**源码锚点：** `Bailey/Files/{FileTreeModel,FileTreePanel}.swift`、`Bailey/Shared/Tree/{TreeDisplayModel,TreeRowStyle}.swift`、`Bailey/UI/{CommandPaletteView,Panels/ToolPanelView}.swift`、`Bailey/Workspace/{Project,TerminalManager,ProjectFileIndex,WorkspaceBackend}.swift`、`Bailey/Editor/FileViewerView.swift`、`Bailey/App/{BaileyApp,AppSettings}.swift`、`Bailey/Remote/SSHWorkspaceBackend.swift` 以及相应 `BaileyTests/Integration`、`NativeUI`、`WorkspaceUI`。
 
-1. **建立环境和覆盖账本：** 确认目标仓库与授权的临时文件夹／SSH 临时测试根、macOS 15.6+ 可用设备、Swift 6 / Debug 正式 UI 隔离方式，以及每项测试的实际前置条件。按 `idea.md` 的**全集**展开为实际执行记录，覆盖环境、正常／异常／极端输入与有成本限制的组合；每个可获得且可安全执行的条件都要测，不能只挑代表场景。测试不能写入正式工程文件或借用用户 SSH master，也不关闭当前用户使用的 Bailey。
-2. **真实系统主线：** 以临时项目执行完整路径：多选／剪切／复制／粘贴／副本／批量删除（本机 Trash、SSH 确认），目录和单文件移动后编辑器继续编辑、Undo、保存；内部拖放默认移动和 Option 复制、Finder 外部拷贝及 Projects／Dock 其它意图；配置隐藏、临时显示、深层 Files 过滤、Reveal、Cmd+P 本机／SSH；外部 CLI/Finder/Git 更新并再次操作。每条覆盖明暗、中英、窄/宽面板、键盘/鼠标、同机跨项目／跨窗口、不同机器同名路径、1000+ 文件、Unicode/链接/目录压缩、错误 Sheet 与数据完整性。不能用单元 Mock 或 App 未实际运行的检查代替 E2E。
-3. **极端竞争和资源：** 用可控阻塞和真实 OS 操作复核：复制中目标被抢占、剪切后源消失、改名/移动与 FileTab 旧写重叠、Git 检出同时搜索／拖放、窗口关闭/恢复期间 SSH 失联/重连、索引取消仍有迟到消息、重复触发相同外部变化；比较源/目标字节、已打开缓冲/Undo、SSH 请求数、目录扫描数、Git Graph 与底栏不闪烁、内存、CPU 和 watcher 释放。全部已识别边界逐项执行，超过笛卡尔组合预算时记录覆盖面并对已知失效组合做多因素交叉。
-4. **#40 边界与完成门槛：** 独立核对 #40 当前真正已完成的任务和同环境证据：本机是否已删除旧 2 秒 Files 目录轮询，SSH Files/Git 事件方案实测 Go 才替换轮询，No-Go 则保持 2/5 秒可靠回退；不能把 `#5` 的轮询正确性说成 `#40` 的事件化已完成。#40 如果仍待验，标明 F6 整体联动**未结案**，但已完成且独立验证的 F1–F4 可单独汇报。不得替 #40 创建额外 watcher、远程服务、任务状态或审计。
-5. **验证、文档与清理：** 所有相应 `ONLY_TESTING` 定向测试先独立通过，再运行 `make test`、`make build`、`codesign --verify --deep --strict` 检查及当前许可的原生 Debug App GUI；核对完整命令退出状态，CI 与本地结果不互相冒充。按 `docs/testing.md` 记录环境、提交、命令、测试数、真实 GUI/磁盘/SSH 证据、性能与每项无法实测条件的限制、替代证据、影响及补验，必要的文件 UI / Settings / SSH / Command Palette 文档于对应改动同次同步。只清理本功能替代的代码和自己生成的测试资源，不动 README、其它计划或用户工作区；独立中文提交验证相关变更。
+1. **复核任务证据而非补拖欠功能：** 对 P1–P3 每个任务的实现、原子提交、Red→Green、旧代码清理、功能文档和原生测试进行交叉审查；当发现某前置任务没有完成其自身所需验收时，**回到对应任务修复**，不能把剩余代码和文档堆到 P4。不要参考已有 `audit*.md` 的结论，直接从当前源码、Git diff、测试与真实界面核实。
+2. **完整受控 App 用户流：** 本机和获授权 Windows SSH 临时仓库执行：文件／目录多选、复制剪切粘贴／副本、删除及保存中移动、内部拖放和 Finder 外拖、Show Excluded 与设置、深层搜索／Reveal、SSH `⌘P`、外部 Git／CLI 改动。逐项覆盖 ``idea.md`` 的全部适用环境与正常/异常/极端输入，实际确认源／目标字节、原生缓冲/Undo、真实菜单焦点、Git Graph、Files 行和错误 Sheet；不让模拟测试替代完整 GUI。
+3. **交叉竞争与环境：** 对重名抢占、父子混选、移动中自动保存、Finder 投放窗口坐标、源目标同路径但不同机器、断网重连、改分支时索引返回、不同 Dock 组/窗口/项目、弱网络与高频事件、特殊 Unicode／大小写／软链/深层结构，在安全隔离临时根最大程度实测。覆盖 macOS 当前版本、中英/明暗/窄宽/字体缩放、所有可用本机权限/文件系统条件；缺失 macOS 15.6 真机、未授权 SSH／物理输入设备明确登记**条件、尝试、替代证据、影响、补验与是否阻塞**，不假称通过。
+4. **与 #40 分工核对：** 分开报告 #5 F1–F4 是否完成和 #40 的 F6 是否完成：实际代码若仍是本机 Files 2 秒轮询，F6 事件化**未完成**；SSH 若未真实 Go 保留旧 2/5 秒可靠轮询。不能为让 #5 “结案”越权删除 #40 轮询或增加远端 watcher。
+5. **验证与收尾：** 已在对应任务跑过定向 `make test ONLY_TESTING=...` 和 E2E，本阶段执行完整 `make test`、`make build`、`codesign --verify --deep --strict` 与原生签名 App 组合复验，检查完整命令退出状态。仅清理本阶段实际引入的临时数据及经证实的冗余，独立中文提交真正发生的修复及相应文档；纯审查/无代码变动不制造无用提交。同步完成报告到现有计划任务证据，不另建永久矩阵。
 
 ---
 
 ## Phase Audit
 
-全部实际实施后用计划工具生成 `audit-p4.md`，按真实任务、提交和最终磁盘／SSH／GUI 结果独立审查。只有 #5 的各项验收以及 #40 相关 F6 的实际证据都齐全，才能宣布 Issue #5 的全部范围完成；否则明确留下受约束项与补验条件。
+仅全部实际完成后用计划工具新建 `audit-p4.md`；它记录独立复核及未覆盖条件，不替代阶段内实际测试。#40 的 F6 未过验收时，不能宣称 #5 全部联动已经完成。
