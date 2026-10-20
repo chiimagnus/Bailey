@@ -7,6 +7,51 @@ import XCTest
 /// not a valid substitute for the manager that owns a file or its save target.
 @MainActor
 final class WorkspaceWindowIsolationTests: XCTestCase {
+    func testNarrowTerminalFindFieldEditorBelongsOnlyToItsActualDockGroup() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let terminal = project.newSession(launchCommand: "exec /bin/sh -i")
+        let terminalTab = try XCTUnwrap(project.selectedTab)
+        let target = try XCTUnwrap(project.dock.group(containing: .projects))
+        XCTAssertTrue(project.dock.move(.tab(terminalTab.id), into: target.id))
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 1800, height: 700),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        window.orderFront(nil)
+        terminal.find.present()
+        func input(in view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField, field.isEditable,
+               !field.isHiddenOrHasHiddenAncestor { return field }
+            return view.subviews.lazy.compactMap { input(in: $0) }.first
+        }
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return input(in: host) != nil
+        }
+        let field = try XCTUnwrap(input(in: host))
+        field.selectText(nil)
+        let fieldEditor = try XCTUnwrap(window.firstResponder as? NSTextView)
+        XCTAssertTrue(fieldEditor.isFieldEditor)
+        func scopes(in view: NSView) -> [DockGroupFocusView] {
+            (view as? DockGroupFocusView).map { [$0] } ?? view.subviews.flatMap { scopes(in: $0) }
+        }
+        let readers = scopes(in: host)
+        XCTAssertEqual(readers.count, project.dock.root.groups.count)
+        fieldEditor.insertText("owner check 中文", replacementRange: NSRange(location: 0, length: 0))
+        try await wait { terminal.find.query == "owner check 中文" }
+        for reader in readers {
+            XCTAssertEqual(reader.containsResponder(fieldEditor), reader.groupID == target.id)
+        }
+    }
+
     func testRestoredGroupIDsReplaceOnlyTheFocusScopesNotTheEditor() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

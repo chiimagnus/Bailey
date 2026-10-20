@@ -766,7 +766,7 @@ final class DockGroupFocusView: NSView {
         window.makeFirstResponder(self)
     }
 
-    private func containsResponder(_ responder: NSResponder?) -> Bool {
+    func containsResponder(_ responder: NSResponder?) -> Bool {
         guard var view = responder as? NSView, view.window === window else { return false }
         if let editor = view as? NSTextView, editor.isFieldEditor,
            let control = editor.delegate as? NSView { view = control }
@@ -775,8 +775,8 @@ final class DockGroupFocusView: NSView {
             if current is TerminalParkingContainerView { return false }
             ancestor = current.superview
         }
-        guard !view.isHiddenOrHasHiddenAncestor, !view.visibleRect.isEmpty else { return false }
-        let visible = view.visibleRect
+        let visible = view.visibleRect.intersection(view.bounds)
+        guard !view.isHiddenOrHasHiddenAncestor, !visible.isEmpty else { return false }
         return bounds.contains(convert(NSPoint(x: visible.midX, y: visible.midY), from: view))
     }
 }
