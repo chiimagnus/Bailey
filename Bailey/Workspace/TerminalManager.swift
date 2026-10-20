@@ -50,6 +50,8 @@ final class TerminalManager {
     @ObservationIgnored private var pendingSave: Task<Void, Never>?
     @ObservationIgnored private var isInitialized = false
     @ObservationIgnored private var terminationObservation: AnyCancellable?
+    @ObservationIgnored private var windowCloseObservation: AnyCancellable?
+    @ObservationIgnored private var didCloseWindow = false
     /// The stable terminal/editor responder displaced by the command palette's
     /// search field. AppKit field editors are deliberately excluded because a
     /// SwiftUI TextField can reuse the same responder for the palette itself.
@@ -327,6 +329,12 @@ final class TerminalManager {
     /// Called as soon as SwiftUI gives this manager an AppKit window. A
     /// launch-time Finder request may have been queued before that happened.
     func attach(to window: NSWindow) {
+        guard !didCloseWindow else { return }
+        if self.window !== window {
+            windowCloseObservation = NotificationCenter.default
+                .publisher(for: NSWindow.willCloseNotification, object: window)
+                .sink { [weak self] _ in self?.windowClosed() }
+        }
         self.window = window
         Self.isOpeningWindow = false
         let directories = Self.takePendingDirectories()
@@ -816,6 +824,9 @@ final class TerminalManager {
     /// saved and queued so reopening (or relaunching) restores it — and
     /// kill its shells.
     func windowClosed() {
+        guard !didCloseWindow else { return }
+        didCloseWindow = true
+        windowCloseObservation = nil
         // A pending async Files error must not bring back the closed window.
         window = nil
         guard !Self.isQuitting else { return }
@@ -837,6 +848,8 @@ final class TerminalManager {
         for project in projects {
             project.terminateAll()
         }
+        projects.removeAll()
+        selectedProjectID = nil
     }
 
     // MARK: - Persistence

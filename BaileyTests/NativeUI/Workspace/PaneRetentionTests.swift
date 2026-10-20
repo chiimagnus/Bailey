@@ -563,6 +563,46 @@ final class PaneRetentionTests: XCTestCase {
         })
     }
 
+    func testClosingNativeWindowReleasesItsProjectBeforeSwiftUIDisappears() throws {
+        let previousWindows = SessionStore.load()
+        let previousHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(previousWindows)
+            TerminalHistoryStore.save(previousHistories)
+        }
+
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-closed-window-" + UUID().uuidString + ".swift")
+        try "let value = \"中文 👋\"\n".write(to: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: path) }
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalItems([path])
+        weak var retiredFile: FileTab?
+        do {
+            let pane = try XCTUnwrap(manager.selectedProject?.selectedTab)
+            guard case .file(let file) = pane.content else {
+                return XCTFail("Expected file to be owned by closed window")
+            }
+            retiredFile = file
+        }
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        manager.attach(to: window)
+        window.orderFront(nil)
+        window.close()
+
+        XCTAssertNil(manager.attachedWindow,
+                     "NSWindow close must release its manager before SwiftUI onDisappear")
+        XCTAssertFalse(TerminalManager.activeManagers.contains { $0 === manager })
+        XCTAssertTrue(manager.projects.isEmpty,
+                      "A retained WindowRootView must not keep projects from a closed window")
+        XCTAssertNil(retiredFile, "Closing the window must release its owned FileTab")
+    }
+
     func testHundredThousandLineWorkspaceEditsSavesAndReleasesFile() async throws {
         let previousWindows = SessionStore.load()
         let previousHistories = TerminalHistoryStore.load()
