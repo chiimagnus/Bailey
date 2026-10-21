@@ -8,7 +8,7 @@
 
 | 文档 | 职责 | 什么时候更新 |
 | --- | --- | --- |
-| [architecture.md](architecture.md) | 分层、状态所有权、装配、窗口和目录边界 | 所有者、依赖方向或文件归属改变 |
+| [architecture.md](architecture.md) | macOS 范围、模块依赖、状态与生命周期、窗口及焦点协调边界 | 平台范围、模块职责、所有者或依赖方向改变 |
 | [standards.md](standards.md) | Swift、命名、并发、注释、简化与性能原则 | 开发约定或平台基线改变 |
 | [testing.md](testing.md) | 唯一完成标准、测试层次、回归选择、性能测量与人工验收 | 测试入口、覆盖范围或验收要求改变 |
 | [development.md](development.md) | 环境、本地构建与安装、依赖和生成资源 | 工具链、构建入口、依赖或生成方式改变 |

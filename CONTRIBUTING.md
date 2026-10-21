@@ -18,6 +18,8 @@
 
 环境、本地构建、签名和安装见 [docs/development.md](docs/development.md)，结构见 [docs/architecture.md](docs/architecture.md)。[docs 索引](docs/README.md)列出每个功能的文档及更新时机。
 
+当前只开发 macOS。开始职责重构前，按 [模块化与依赖](docs/architecture.md#模块化与依赖) 说明责任从谁移给谁、依赖如何减少及行为如何保持；不要只搬文件、改名或为暂缓平台增加抽象。
+
 Bailey 只有一套 App 身份；开发构建和正式 App 不天然隔离，先阅读[测试隔离](docs/testing.md#隔离环境)。不要为了测试退出用户已有 App、占用其连接或改写个人配置。
 
 ## 提交之前
