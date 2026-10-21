@@ -27,6 +27,14 @@ private final class FocusRecordingWindow: NSWindow {
 /// not a valid substitute for the manager that owns a file or its save target.
 @MainActor
 final class WorkspaceWindowIsolationTests: XCTestCase {
+    private func hasForegroundKeyWindow(_ window: NSWindow) async -> Bool {
+        for _ in 0..<100 {
+            if NSApp.isActive && window.isKeyWindow { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return false
+    }
+
     func testAsyncFilesTargetBecomingCurrentRestoresVisibleFileCursor() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -135,7 +143,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         window.contentView = host
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
-        guard window.isKeyWindow, NSApp.isActive else {
+        guard await hasForegroundKeyWindow(window) else {
             throw XCTSkip("Native Files focus requires a foreground XCTest key window")
         }
         try await wait {
@@ -276,7 +284,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             return manager.attachedWindow === window && self.editor(in: host) != nil
         }
-        guard window.isKeyWindow, NSApp.isActive else {
+        guard await hasForegroundKeyWindow(window) else {
             throw XCTSkip("Foreground key window is required to validate native palette focus")
         }
         let oldEditor = try XCTUnwrap(editor(in: host))
@@ -348,7 +356,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
         try await wait { host.layoutSubtreeIfNeeded(); return manager.attachedWindow === window }
-        guard window.isKeyWindow, NSApp.isActive else {
+        guard await hasForegroundKeyWindow(window) else {
             throw XCTSkip("Native overlay focus requires a foreground XCTest key window; cannot seize the user's Bailey")
         }
         try await wait {
@@ -434,7 +442,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             window.contentView = host
             NSApp.activate()
             window.makeKeyAndOrderFront(nil)
-            guard window.isKeyWindow, NSApp.isActive else {
+            guard await hasForegroundKeyWindow(window) else {
                 throw XCTSkip("Native Git focus requires a foreground XCTest key window")
             }
             try await wait {
@@ -519,7 +527,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         window.contentView = host
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
-        guard window.isKeyWindow, NSApp.isActive else {
+        guard await hasForegroundKeyWindow(window) else {
             throw XCTSkip("Native input requires a foreground key window")
         }
         try await wait {
