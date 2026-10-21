@@ -22,6 +22,32 @@
 
 ## 发现项
 
+## 发现 F-06
+
+- 任务：`P2-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/UI/WorkspaceDockView.swift:740`
+- 摘要：`跨分屏拖动结束的leftMouseUp被当作目标分屏点击激活`
+- 风险：`在A分屏按住鼠标拖动文本或内容并在B分屏释放时，目标分屏无需接收点击或成功drop就切换Dock活动组并可能夺走键盘焦点`
+- 预期修复：`DockGroupFocusView只在同组收到leftMouseDown且同组释放时报告左键点击；仍在鼠标释放后交给原生控件先处理输入，并保留右键和键盘归属原逻辑`
+- 验证：`新增真实NSApp事件派发：A鼠标按下-跨组drag-B释放不激活B，同时同组正常click可激活；确认Red→Green并回归P2原生窗口、拖放和多组键盘测试`
+- 解决证据：`Red: build/audit-p2-drag-red.log reproduces cross-pane drag release activating destination (1 extra onFocused), then true click yields cumulative 2 instead of 1. Green: build/audit-p2-drag-green.log 2/0, after-drag focused build/audit-p2-after-drag-focused.log 99 tests / 0 failed / 6 conditional skips. Monitor now tracks leftMouseDown origin, reports focus only on a matching same-group release, leaves native input focus until release; right-click and keyboard routing unchanged. Red/Green tests dispatch native NSApp events.`
+
+
+## 发现 F-05
+
+- 任务：`P2-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/UI/WorkspaceDockView.swift:772`
+- 摘要：`整窗NSHostingView被可见区域几何中心误认作某个Dock组响应者，工具空白无法取得真正焦点`
+- 风险：`根宿主覆盖多个分屏，按其中心点判属组会让焦点组误报，并阻断空白区域的原生响应者交接；旧根宿主特殊早返回又重复阻断`
+- 预期修复：`在DockGroupFocusView.containsResponder源头排除整窗根宿主、保留真实控件的可见范围归属；删除已失效的根宿主特殊早返回；不破坏新TreeKeyboardView、停车终端或field editor`
+- 验证：`独立NativeUI测试DockFocusP2RegressionTests先Red后Green，回归WorkspaceWindowIsolationTests与Files/Git原生树及多窗口场景，并运行完整make test和build`
+- 解决证据：`Red: build/audit-p2-root-red.log reproduces root NSHostingView false ownership and first responder failure. Green: build/audit-p2-root-green.log 1/0; event dispatch: build/audit-p2-event-recheck.log 1/0; P2 focused: build/audit-p2-final-focused.log 97 tests, 0 failures, 6 conditional skips. Deleted stale window.contentView early return and excluded the window root from per-group responder ownership.`
+
+
 ## 发现 F-04
 
 - 任务：`P2-T2`
@@ -116,4 +142,14 @@
 | P2-T2 | `962abba`、`9c95cc2`、本轮 `86f8ff8` | `DockGroupFocusView` 以当前 window/group 判断 NativeResponder，`TerminalFind` 以实际可见终端宿主恢复，`CommandPaletteView.run` 显式放弃旧焦点；本轮发现原恢复链遗漏了 Files/Git 的 `TreeKeyboardView`，已补入相同焦点所有权校验入口，且只对当前可见活动 Dock 组生效。 |
 
 本轮 **F-04** 有独立 Red：`/tmp/bailey-focus-audit-palette-red-tree.log`，取消 `⌘P` 后 Files 的原生键盘响应者没有恢复。修复 `86f8ff8` 的 Green：`/tmp/bailey-focus-audit-palette-git-files-green.log` 共 9 项/0 失败，`/tmp/bailey-focus-audit-palette-command-execute.log` 2 项/0 失败；覆盖 Files 方向键、Git 清洁图谱/有改动列表、Palette 取消和执行新命令不回抢旧树。现行 `NSWindow`/Dock 几何归属校验为防止后台窗口、停车终端和不同组交叉夺焦点的**实际必要条件**，不能为减少 guard 而删。最终跨套件复核另记，不使用历史 Go 代替新结果。
+
+## 本轮 P2 增量复核（独立于上方历史 Gate）
+
+- **按提交复查**：P2-T1 原型 `eeb96f8` 已由 `f698e1c` 替换；P2-T2 的 `962abba`、`9c95cc2`、`86f8ff8` 均沿现行 Dock → 原生响应者 → Palette/Find/菜单路径使用，并非离线实现。本轮新增 `f8a36c8`（F-05 根宿主归属）、`aee22c1`（F-06 跨组拖动），只修改实际生效的 Dock 监听、回归测试和功能文档。
+- **可重现的两处缺陷均已 Red→Green**：F-05 原窗口根宿主错认导致工具空白焦点不转移；F-06 从 A 组拖动至 B 组释放导致 B 误激活。后者验证了拖动不切组、有效点击切组、孤立 mouseUp 无副作用、右键保留；全部使用挂载的原生 AppKit View 和 `NSApp.sendEvent`，不是只调用模型。
+- **最新 P2 测试**：`make test ONLY_TESTING='BaileyTests/DockFocusP2RegressionTests BaileyTests/DockWorkspaceTests BaileyTests/WorkspaceWindowIsolationTests BaileyTests/PaneRetentionTests BaileyTests/WorkspaceContentIdentityTests BaileyTests/PanelContextTests BaileyTests/TreeRowHitTestingTests'`；`build/audit-p2-after-drag-focused.log`：99 项、0 失败、6 条前台 key-window 条件跳过。
+- **全仓复核不冒称通过**：第一次不加排除的 `make test` 在并行 P1 新增的窗口关闭用例卡住，隔离 XCTest 进程已终止；第二次只排除 `WorkspaceWindowCloseTests/testBackgroundProjectDirtyCloseSheetStaysInItsOwningWindow`，`build/audit-p2-full-minus-hung.log` 完成 615 项、14 跳过、1 条 `SyntaxHighlightingTests.testParserReadsAcrossUTF16ChunkBoundariesAndEditShift` 超时，命令非零。该超时在单独运行 `build/audit-p2-syntax-isolated-retry.log` 2.009 秒通过，但不抵消原失败。P4 的 GitWorkspaceMenuTests 已在第二次全仓复测中全部通过。
+- **最终构建验签**：macOS 27.2 / Xcode 27.2，`make build` 与 `make build:release` 均退出 0；日志 `build/audit-p2-final-debug-build.log`、`build/audit-p2-final-release-build.log`；两个 App 均通过 `codesign --verify --deep --strict`。未安装或重启正式 App，构建不能代替安装验收。
+- **无法覆盖的真实条件**：6 条前台窗口测试因共享桌面不能取得 XCTest key window，涉及 Palette 取消/执行、Files/Git 键盘行焦点及重命名；已执行其它原生窗口/输入替代测试，未冒充这些跳过项。全仓另有 8 条获授权 Windows SSH 专项未提供专用环境；未在本次重跑 macOS 15.6、VoiceOver 实体操作及 F-05/F-06 修复后的独立完整 App GUI。它们会影响对应环境/交互的完整认证，但不抹去当前原生 Red→Green。
+- **阶段判断**：`Go` 限于 P2 当前系统上的根因修复和已执行原生回归；**不代表全仓测试、正式 App GUI、最低系统与远端组合完整通过**。上述未核销项不计为通过。正式用户 Bailey 进程未重启、未推送；并行 P1/P3 仍在审查，不将其未验收代码包直接替换进正式 App。
 
