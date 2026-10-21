@@ -714,6 +714,7 @@ final class DockGroupFocusView: NSView {
     var canFocus: (() -> Bool)?
     var onFocused: (() -> Void)?
     private var monitor: Any?
+    private var leftMousePressedHere = false
 
     init(groupID: UUID) {
         self.groupID = groupID
@@ -737,15 +738,26 @@ final class DockGroupFocusView: NSView {
         super.viewDidMoveToWindow()
         stopMonitoring()
         guard window != nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp, .rightMouseDown, .keyDown]) {
-            [weak self] event in
+        monitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown, .keyDown]
+        ) { [weak self] event in
             guard let self, let window = self.window, event.window === window,
                   !self.isHiddenOrHasHiddenAncestor else { return event }
-            if event.type == .keyDown {
+            if event.type == .leftMouseDown {
+                self.leftMousePressedHere = self.bounds.contains(
+                    self.convert(event.locationInWindow, from: nil))
+            } else if event.type == .keyDown {
                 if self.containsResponder(window.firstResponder) { self.onFocused?() }
-            } else if self.bounds.contains(self.convert(event.locationInWindow, from: nil)) {
-                self.onFocused?()
-                if self.focusesEmptySpace { self.requestFocusAfterClick() }
+            } else {
+                if event.type == .leftMouseUp {
+                    let pressedHere = self.leftMousePressedHere
+                    self.leftMousePressedHere = false
+                    guard pressedHere else { return event }
+                }
+                if self.bounds.contains(self.convert(event.locationInWindow, from: nil)) {
+                    self.onFocused?()
+                    if self.focusesEmptySpace { self.requestFocusAfterClick() }
+                }
             }
             return event
         }
@@ -755,6 +767,7 @@ final class DockGroupFocusView: NSView {
     func stopMonitoring() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        leftMousePressedHere = false
     }
 
     func requestFocusAfterClick() {

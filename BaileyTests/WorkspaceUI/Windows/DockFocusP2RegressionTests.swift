@@ -62,9 +62,66 @@ final class DockFocusP2RegressionTests: XCTestCase {
             windowNumber: window.windowNumber, context: nil,
             eventNumber: 1, clickCount: 1, pressure: 0
         ))
+        let down = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: point, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 0
+        ))
+        NSApp.sendEvent(down)
         NSApp.sendEvent(event)
         try await until { window.firstResponder === group }
         XCTAssertTrue(group.containsResponder(window.firstResponder))
+    }
+
+    func testDragReleasedOverAnotherDockGroupDoesNotActivateIt() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: -900, y: -900, width: 640, height: 320),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let source = DockGroupFocusView(groupID: UUID())
+        let destination = DockGroupFocusView(groupID: UUID())
+        let host = NSHostingView(rootView: HStack(spacing: 0) {
+            DockFocusP2Mount(view: source).frame(width: 320, height: 320)
+            DockFocusP2Mount(view: destination, isActive: false).frame(width: 320, height: 320)
+        }.frame(width: 640, height: 320))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertTrue(source.window === window)
+        XCTAssertTrue(destination.window === window)
+
+        var destinationActivations = 0
+        destination.onFocused = { destinationActivations += 1 }
+        func mouse(_ type: NSEvent.EventType, at point: NSPoint, number: Int) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                eventNumber: number, clickCount: 1, pressure: 0
+            ))
+        }
+        let start = source.convert(NSPoint(x: source.bounds.midX, y: source.bounds.midY), to: nil)
+        let end = destination.convert(
+            NSPoint(x: destination.bounds.midX, y: destination.bounds.midY), to: nil)
+        NSApp.sendEvent(try mouse(.leftMouseDown, at: start, number: 1))
+        NSApp.sendEvent(try mouse(.leftMouseDragged, at: end, number: 2))
+        NSApp.sendEvent(try mouse(.leftMouseUp, at: end, number: 3))
+        XCTAssertEqual(destinationActivations, 0,
+                       "Releasing a cross-pane drag is not a click in the destination pane")
+
+        NSApp.sendEvent(try mouse(.leftMouseDown, at: end, number: 4))
+        NSApp.sendEvent(try mouse(.leftMouseUp, at: end, number: 5))
+        XCTAssertEqual(destinationActivations, 1,
+                       "A genuine click in the destination must activate it once")
+        NSApp.sendEvent(try mouse(.leftMouseUp, at: end, number: 6))
+        XCTAssertEqual(destinationActivations, 1,
+                       "A stray mouse release cannot activate a Dock group")
+        NSApp.sendEvent(try mouse(.rightMouseDown, at: end, number: 7))
+        XCTAssertEqual(destinationActivations, 2,
+                       "Context-click activation must still work")
     }
 
     func testPaletteNoTargetChangeLeavesNativeEditorReadyForTyping() async throws {
