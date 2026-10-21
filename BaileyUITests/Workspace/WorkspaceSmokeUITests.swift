@@ -1,5 +1,6 @@
 import XCTest
 
+@MainActor
 final class WorkspaceSmokeUITests: XCTestCase {
     func testIsolatedLaunchAndPaletteKeyboardFocus() throws {
         let app = XCUIApplication()
@@ -19,6 +20,13 @@ final class WorkspaceSmokeUITests: XCTestCase {
         XCTAssertTrue(search.waitForExistence(timeout: 10))
         app.typeKey("z", modifierFlags: [])
         XCTAssertEqual(search.value as? String, "z", "The palette must receive actual keyboard input")
+
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(search.exists)
+        let cleared = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value != %@", "z"), object: search
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 5), .completed)
 
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         let dismissed = XCTNSPredicateExpectation(
