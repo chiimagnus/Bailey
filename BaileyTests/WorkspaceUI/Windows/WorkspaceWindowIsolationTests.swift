@@ -192,7 +192,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             return manager.isCommandPaletteVisible
                 && (window.firstResponder as? NSTextView)?.isFieldEditor == true
         }
-        manager.dismissCommandPalette(restoringFocus: false)
+        manager.dismissCommandPalette()
         project.selectTab(workTab.id)
         try await wait {
             host.layoutSubtreeIfNeeded()
@@ -694,29 +694,37 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let oldEditor = try XCTUnwrap(editor(in: host))
         XCTAssertTrue(window.makeFirstResponder(oldEditor),
                       "Reproduce the existing editor owning keyboard input before the Files click")
-        // Synthetic NSWindow.sendEvent bypasses NSEvent's Dock click monitor.
-        // Explicitly model the user switching the active Dock group to Files.
+        // Explicitly switch to Files: synthesized events bypass Dock's mouse monitor.
+        // Its native keyboard preview is independent of window-size click coordinates.
         project.dock.select(.files)
         XCTAssertEqual(project.dock.activeGroup?.selected, .files)
-        let x: CGFloat = 1290
-        for y in stride(from: CGFloat(590), through: 425, by: -5) {
-            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-                let event = try XCTUnwrap(NSEvent.mouseEvent(
-                    with: type, location: NSPoint(x: x, y: y), modifierFlags: [],
-                    timestamp: ProcessInfo.processInfo.systemUptime,
-                    windowNumber: window.windowNumber, context: nil,
-                    eventNumber: 0, clickCount: 1, pressure: 1
-                ))
-                window.sendEvent(event)
-            }
-            try await Task.sleep(for: .milliseconds(20))
-            if project.tabs.count == 2 { break }
+        func keyboards(in view: NSView) -> [TreeKeyboardView] {
+            (view as? TreeKeyboardView).map { [$0] } ?? view.subviews.flatMap(keyboards(in:))
         }
-        XCTAssertNotNil(project.fileTree.selectedPath, "Integrated Files must have a current row")
-        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return keyboards(in: host).first?.window === window
+                && project.fileTree.selectedPath != nil
+        }
+        let filesKeyboard = try XCTUnwrap(keyboards(in: host).first)
+        XCTAssertTrue(window.makeFirstResponder(filesKeyboard))
+        let firstRow = try XCTUnwrap(project.fileTree.items.first { $0.path == first.path })
+        project.fileTree.select(firstRow)
+        let space = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            characters: " ", charactersIgnoringModifiers: " ",
+            isARepeat: false, keyCode: 49
+        ))
+        filesKeyboard.keyDown(with: space)
         try await wait { project.tabs.count == 2 }
+        XCTAssertEqual(project.fileTree.selectedPath, first.path)
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+        XCTAssertTrue(window.firstResponder === filesKeyboard,
+                      "Files Space preview must retain the native tree keyboard responder")
         XCTAssertFalse(window.firstResponder === oldEditor,
-                       "Clicking Files must release the old native editor first responder")
+                       "Opening Files must release the old editor first responder")
         XCTAssertFalse(window.firstResponder is DockGroupFocusView,
                        "The Files keyboard receiver, not a Dock background, must own input")
         func scopes(in view: NSView) -> [DockGroupFocusView] {

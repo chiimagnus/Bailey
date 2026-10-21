@@ -323,8 +323,11 @@ final class RecentCommitsViewTests: XCTestCase {
         try press(125, characters: "\u{F701}")
         try press(49, characters: " ")
         XCTAssertEqual(opened.count, 1)
-        XCTAssertEqual(opened[0].0, first.hash)
-        XCTAssertEqual(opened[0].1, historyFile.path)
+        let firstOpened = try XCTUnwrap(
+            opened.first, "Space must open the selected file before accessing the result"
+        )
+        XCTAssertEqual(firstOpened.0, first.hash)
+        XCTAssertEqual(firstOpened.1, historyFile.path)
         XCTAssertTrue(window.firstResponder === receiver)
         try press(125, characters: "\u{F701}")
         try press(49, characters: " ")
