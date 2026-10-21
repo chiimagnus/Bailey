@@ -84,6 +84,14 @@ enum PaneContent: nonisolated Identifiable {
         }
     }
 
+    @MainActor var isClosing: Bool {
+        switch self {
+        case .file(let file): file.autoSaveSuspendedForClose
+        case .diff(let diff): diff.autoSaveSuspendedForClose
+        case .session, .browser: false
+        }
+    }
+
     @MainActor func suspendAutoSaveForClose(_ suspended: Bool) {
         switch self {
         case .file(let file): file.autoSaveSuspendedForClose = suspended

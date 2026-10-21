@@ -664,7 +664,8 @@ final class TerminalManager {
     }
 
     func close(_ project: Project) {
-        guard projects.contains(where: { $0 === project }) else { return }
+        guard projects.contains(where: { $0 === project }),
+              !project.tabs.contains(where: { $0.content.isClosing }) else { return }
         let dirty = project.tabs.map(\.content).filter(\.isDirty)
         guard !dirty.isEmpty else {
             project.terminateAll()

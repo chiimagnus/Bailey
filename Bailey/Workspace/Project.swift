@@ -696,9 +696,16 @@ final class Project: nonisolated Identifiable {
 
     // MARK: - Closing
 
+    private var closeSheetWindow: NSWindow? {
+        TerminalManager.activeManagers.first {
+            $0.projects.contains { $0 === self }
+        }?.attachedWindow
+    }
+
     /// Closes one tab's content. Dirty edits require confirmation; an exited
     /// shell is removed without terminating it again.
     func closeContent(_ content: PaneContent, terminate: Bool = true) {
+        guard !content.isClosing else { return }
         switch content {
         case .session(let session):
             if terminate { session.terminate() }
@@ -711,7 +718,7 @@ final class Project: nonisolated Identifiable {
             // Closing is a focus transition, but it must not let a late
             // background save defeat an explicit Don't Save choice.
             content.suspendAutoSaveForClose(true)
-            let window = NSApp.keyWindow ?? NSApp.mainWindow
+            let window = closeSheetWindow
             Task { @MainActor in
                 _ = await saveBeforeClosing(content, in: window)
             }
@@ -811,6 +818,7 @@ final class Project: nonisolated Identifiable {
     /// Clean tabs close after the prompts; Cancel stops the remaining prompts
     /// without rolling back tabs already closed by Save or Don't Save.
     private func closeBatch(_ targets: [PaneContent]) {
+        guard !targets.contains(where: \.isClosing) else { return }
         let dirtyContents = targets.filter(\.isDirty)
         let cleanContents = targets.filter { !$0.isDirty }
 
@@ -819,7 +827,7 @@ final class Project: nonisolated Identifiable {
             return
         }
 
-        let window = NSApp.keyWindow ?? NSApp.mainWindow
+        let window = closeSheetWindow
         dirtyContents.forEach { $0.suspendAutoSaveForClose(true) }
         Task { @MainActor in
             for content in dirtyContents {
