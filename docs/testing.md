@@ -11,7 +11,7 @@
 | 行为回归 | 新增或调整受影响测试；可测试的新行为和缺陷先确认 Red，再修复为 Green，最后 Refactor |
 | 自动测试 | 本地只运行受影响的 XCTest，正式完整验收时运行 `make test`；测试必须实际被发现和执行 |
 | 构建与签名 | 功能代码通过 `make build`；Swift 6 全面迁移、依赖或发布路径变更还检查 `make build:release`，无未解释的新诊断 |
-| 架构与数据保护 | 按 [模块边界](architecture.md#模块化与依赖) 核对职责、唯一所有者、依赖及取消／目标失效后的真实副作用；迁移后的调用方不再依赖旧内部细节，旧实现同任务清理 |
+| 架构与数据保护 | 按 [模块边界](architecture.md#模块化与依赖) 核对旧／新所有者、减少的反向依赖与镜像状态、明确动作意图及取消／目标失效后的真实副作用；每个独立迁移任务立即删除自己替代的旧路径 |
 | 用户路径 | 按下文运行受影响的原生／工作区和人工回归；未执行的 E2E、真实网络与恢复明确列出 |
 | 文档与差异 | 受影响文档在同一提交更新，现行链接可达；通读 diff，`git diff --check` 通过 |
 
@@ -67,7 +67,7 @@ make test  # 全量测试
 | 改动 | 相关测试 |
 | --- | --- |
 | 应用身份、Finder 类型注册与原生 Apple Event 系统入口 | `AppIdentityTests`、`WorkspaceWindowIsolationTests`；真实 Finder/Dock 进程外投递需获授权的受控图形会话 |
-| Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests` |
+| Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests`；改变焦点许可或活动组时补 `DockFocusP2RegressionTests`、`WorkspaceWindowIsolationTests` 的原生输入与双窗路径 |
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
 | Git 环境、刷新、写操作与失败状态 | `GitExternalRefreshTests`、`GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitTagActionTests`、`GitWorkspaceActionTests`、`GitStashActionTests`、`GitBranchDialogTests`、`GitTagDialogTests`、`GitWorkspaceMenuTests`、`GitStashDialogTests` |
@@ -122,7 +122,11 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 
 纯 Model 不引入 UI 或环境效果；其时钟、文件事实和外部输入按实际边界注入。按真实职责和调用关系检查分层，不以文件名、目录名或一次文本扫描代替验证。
 
-职责重构须对照迁移前后的真实入口、状态所有者和最终结果，证明责任只移交一次、旧决策路径已删除，且未新增镜像状态、隐藏全局依赖或只转发的壳。应用／窗口拆分覆盖跨窗口路由、关闭保存与恢复；焦点拆分按 [焦点协调边界](architecture.md#焦点协调边界) 覆盖各内容、工具、临时输入、重挂载和过期请求，核对真实第一响应者及最终输入，不能只断言协调者收到请求。
+职责重构须逐任务记录**原所有者 → 新的唯一所有者 → 被删除的重复状态／反向依赖 → 用户最终结果**。新增 Manager／Coordinator／Protocol 本身不算模块化；未使用的协议、镜像状态或只转发的壳必须删除。应用／窗口拆分覆盖外部路由、双窗隔离、关闭保存与恢复；各项完成前没有第二套全局登记或保存路径。
+
+焦点和列表交互必须分别验证六种事实：**展开、选中、悬停、展示、激活、真实键盘焦点**。在同一动作可合法联动时，也要核对动作是否明确要求联动；目录展开不误打开文件，Files／Git 浏览可展示 Diff 但不抢另一组焦点，图谱提交展开不制造持续灰底，行边框只随实际键盘接收者变化。核对 `NSWindow.firstResponder`／原生 field editor、实际按键文本或 Shell marker、选区、当前展示内容与对应文件／Git 结果；`selected` 字段、视觉高亮、请求已排队或事件已发出都不能单独证明焦点成功。具体状态所有权见 [焦点协调边界](architecture.md#焦点协调边界)。
+
+跨组件焦点迁移按 Dock／Files、Git、原生 Terminal／Editor／Diff、Browser、Palette 等**已触及的真实调用链逐段交付**；每段在原始实现基线和上一验收点上验证静态画面、中间帧、交互步骤、输入及对象身份**零 UI/UX 变化**，不把旧实现清理和重要 E2E 留到全部迁移结束。新旧策略不能同时争夺焦点；尚未迁移的功能继续独立维持原行为。按全部可行条件／组合验证，并逐条记录无法执行的系统级路径、原因、影响及 Gate 限制。
 
 平台范围以 [architecture.md](architecture.md#平台范围) 为准：当前验收仍须尽可能覆盖受影响的 macOS 最低／当前系统、配置和原生路径，不为暂缓的 iOS、iPadOS 或 visionOS 建立测试目标或承诺兼容性。新规则的静态文档检查不等于架构迁移或产品验收通过。
 

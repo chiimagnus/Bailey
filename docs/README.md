@@ -8,7 +8,7 @@
 
 | 文档 | 职责 | 什么时候更新 |
 | --- | --- | --- |
-| [architecture.md](architecture.md) | macOS 范围、模块依赖、状态与生命周期、窗口及焦点协调边界 | 平台范围、模块职责、所有者或依赖方向改变 |
+| [architecture.md](architecture.md) | macOS 范围、单一状态所有者、依赖方向、动作意图与窗口焦点边界 | 平台范围、状态真源、交接意图、模块职责或依赖方向改变 |
 | [standards.md](standards.md) | Swift、命名、并发、注释、简化与性能原则 | 开发约定或平台基线改变 |
 | [testing.md](testing.md) | 唯一完成标准、测试层次、回归选择、性能测量与人工验收 | 测试入口、覆盖范围或验收要求改变 |
 | [development.md](development.md) | 环境、本地构建与安装、依赖和生成资源 | 工具链、构建入口、依赖或生成方式改变 |
@@ -24,11 +24,11 @@
 | --- | --- | --- |
 | [projects.md](features/projects.md) | 项目身份、添加、工作范围和切换 | 项目或面板范围改变 |
 | [ssh.md](features/ssh.md) | 远端身份、后端、断线和重连 | 连接、远端操作或目标绑定改变 |
-| [dock.md](features/dock.md) | 自由停靠、标签、焦点与窗口生命周期 | 布局、移动、关闭或动作路由改变 |
+| [dock.md](features/dock.md) | 自由停靠、展示与活动组、交接和窗口生命周期 | 展示／激活语义、布局、移动、关闭或窗口动作路由改变 |
 | [terminal.md](features/terminal.md) | Shell、终端表面、输入、查找与通知 | 终端生命周期或输入输出改变 |
-| [files.md](features/files.md) | 共享文件树、自动刷新与文件操作 | 树行、刷新或文件操作改变 |
+| [files.md](features/files.md) | 共享文件树、展开／选择与焦点、刷新及文件操作 | 树行状态／键盘导航、刷新或文件操作改变 |
 | [editor.md](features/editor.md) | 文件缓冲、自动保存、重载和文本编辑 | 读取、编辑、保存或高亮改变 |
-| [git.md](features/git.md) | 提交图谱、工作树、Git 操作与安全边界 | Git 图谱、工作树、刷新或执行行为改变 |
+| [git.md](features/git.md) | Git Changes／Graph 局部状态、图谱、工作树、操作与安全边界 | Git 行状态／焦点、图谱、工作树、刷新或执行行为改变 |
 | [diff.md](features/diff.md) | 差异读取、原生渲染、编辑与重挂载 | Diff 数据、布局或保存改变 |
 | [browser.md](features/browser.md) | 浏览器标签、导航和开发服务入口 | WebView、地址处理或导航改变 |
 | [command-palette.md](features/command-palette.md) | 命令面板、本机文件搜索与会话定位 | 搜索、选择或命令接入改变 |
