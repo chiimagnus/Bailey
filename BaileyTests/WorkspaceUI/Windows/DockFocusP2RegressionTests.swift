@@ -163,7 +163,7 @@ final class DockFocusP2RegressionTests: XCTestCase {
             return (window.firstResponder as? NSTextView)?.isFieldEditor == true
         }
         // The Palette's current FPS action does not change the active Dock pane.
-        manager.dismissCommandPalette(restoringFocus: false)
+        manager.dismissCommandPalette()
         manager.toggleFPSCounter()
         try await until {
             host.layoutSubtreeIfNeeded()

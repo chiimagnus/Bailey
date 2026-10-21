@@ -999,13 +999,8 @@ final class TerminalManager {
         }
     }
 
-    func dismissCommandPalette(restoringFocus: Bool = true) {
+    func dismissCommandPalette() {
         guard isCommandPaletteVisible else { return }
-        if !restoringFocus {
-            commandPaletteWindow = nil
-            commandPalettePreviousResponder = nil
-            commandPaletteContentID = nil
-        }
         isCommandPaletteVisible = false
     }
 
