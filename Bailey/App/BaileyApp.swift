@@ -84,7 +84,12 @@ extension FocusedValues {
 
 /// Menu commands routed to the focused window's manager.
 private struct BaileyCommands: Commands {
-    @FocusedValue(\.baileyManager) private var manager: TerminalManager?
+    @FocusedValue(\.baileyManager) private var focusedManager: TerminalManager?
+    private var manager: TerminalManager? {
+        guard let focusedManager, NSApp.isActive,
+              focusedManager.attachedWindow === NSApp.keyWindow else { return nil }
+        return focusedManager
+    }
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
@@ -156,8 +161,7 @@ private struct BaileyCommands: Commands {
                 // an open project is key. Otherwise close the key window
                 // itself — a non-main window (e.g. Settings), or a main window
                 // showing the empty "No open projects" state with no tab left.
-                if let manager, manager.selectedProject != nil,
-                   NSApp.keyWindow?.identifier?.rawValue.hasPrefix("main") == true {
+                if let manager, manager.selectedProject != nil {
                     manager.closeSelectedTab()
                 } else {
                     NSApp.keyWindow?.performClose(nil)

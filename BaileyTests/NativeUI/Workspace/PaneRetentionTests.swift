@@ -7,6 +7,73 @@ import XCTest
 
 @MainActor
 final class PaneRetentionTests: XCTestCase {
+    func testParkingDropsObsoleteHostActionsBeforeDelayedDismantle() async throws {
+        let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
+        defer { terminal.terminate() }
+        let container = NSView(frame: .init(x: 0, y: 0, width: 600, height: 400))
+        let window = NSWindow(contentRect: container.frame, styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = container
+        let host = NSHostingView(rootView: TerminalHostView(
+            session: terminal, isFocused: false, onFocused: {},
+            onNewBrowserTab: { _ in }, onNewFileTab: { _ in }
+        ))
+        host.frame = container.bounds
+        container.addSubview(host)
+        window.orderFront(nil)
+        try await settle {
+            host.layoutSubtreeIfNeeded()
+            return terminal.surface.superview is TerminalContainerView
+        }
+        let previous = try XCTUnwrap(terminal.surface.superview as? TerminalContainerView)
+        XCTAssertNotNil(terminal.surface.onBecomeFirstResponder)
+        XCTAssertNotNil(terminal.surface.openMenuTarget.onNewBrowserTab)
+        let parking = TerminalParkingContainerView(frame: .zero)
+        container.addSubview(parking)
+        parking.mount([terminal])
+        XCTAssertTrue(terminal.surface.superview === parking)
+        XCTAssertTrue(terminal.surface.window === window)
+        XCTAssertNil(terminal.surface.onBecomeFirstResponder)
+        XCTAssertNil(terminal.surface.openMenuTarget.onNewBrowserTab)
+        XCTAssertNil(terminal.surface.openMenuTarget.onNewFileTab)
+        TerminalHostView.dismantleNSView(previous, coordinator: TerminalHostView.Coordinator())
+        XCTAssertTrue(terminal.surface.superview === parking)
+    }
+
+    func testTerminalFindFieldStaysInsideNarrowAndWidePanes() async throws {
+        let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
+        defer { terminal.terminate() }
+        let host = NSHostingView(rootView: TerminalFindBar(find: terminal.find))
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 400, height: 100),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        func field(in view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField, field.isEditable,
+               field.window === window, !field.isHiddenOrHasHiddenAncestor { return field }
+            return view.subviews.lazy.compactMap { field(in: $0) }.first
+        }
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            window.appearance = NSAppearance(named: appearance)
+            for width in [150.0, 210.0, 400.0, 900.0] {
+                window.setContentSize(NSSize(width: width, height: 100))
+                try await settle {
+                    host.layoutSubtreeIfNeeded()
+                    return field(in: host) != nil && abs(host.bounds.width - width) < 1
+                }
+                let input = try XCTUnwrap(field(in: host))
+                let frame = host.convert(input.bounds, from: input)
+                XCTAssertGreaterThanOrEqual(frame.minX, 0)
+                XCTAssertLessThanOrEqual(frame.maxX, host.bounds.maxX)
+                XCTAssertGreaterThan(frame.width, 20)
+            }
+        }
+    }
+
     private func settle(
         _ predicate: () -> Bool,
         file: StaticString = #filePath,
@@ -39,7 +106,7 @@ final class PaneRetentionTests: XCTestCase {
         project.append(other)
         let selected = expectation(description: "Project selection is directly observed")
         withObservationTracking({ _ = project.selectedTabID }) { selected.fulfill() }
-        project.selectedTabID = tab.id
+        project.selectTab(tab.id)
         await fulfillment(of: [selected], timeout: 1)
         XCTAssertTrue(project.selectedTab === tab)
         XCTAssertEqual(project.dock.group(containing: .tab(tab.id))?.selected, .tab(tab.id))
@@ -265,7 +332,8 @@ final class PaneRetentionTests: XCTestCase {
             browser: browser, isFocused: true, onFocused: {}, onNewBrowserTab: { _ in }
         ))
         window.contentView = host
-        window.orderFront(nil)
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
         host.layoutSubtreeIfNeeded()
         defer { window.close() }
 
@@ -388,7 +456,7 @@ final class PaneRetentionTests: XCTestCase {
 
         func browserHost() -> NSHostingView<PanelContentView> {
             let view = NSHostingView(rootView: PanelContentView(
-                tab: browserTab, isSelected: false,
+                tab: browserTab, isFocused: false,
                 onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in }
             ))
             view.frame = container.bounds
@@ -412,7 +480,7 @@ final class PaneRetentionTests: XCTestCase {
 
         func editorHost() -> NSHostingView<PanelContentView> {
             let view = NSHostingView(rootView: PanelContentView(
-                tab: fileTab, isSelected: false,
+                tab: fileTab, isFocused: false,
                 onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in }
             ))
             view.frame = container.bounds
@@ -923,11 +991,23 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertEqual(retiredScroll?.contentView.bounds.origin, before)
         XCTAssertEqual(retiredEditor?.text, contents)
 
+        // An old, now-clean document can still have redo transactions.
+        // Replacing its bytes must retire that Undo history, not just its callbacks.
+        retiredEditor?.insertText("temporary edit", replacementRange: NSRange(location: 0, length: 0))
+        try await settle { file?.isDirty == true }
+        retiredEditor?.undoManager?.undo()
+        try await settle { file?.isDirty == false }
+        XCTAssertTrue(retiredEditor?.undoManager?.canRedo == true)
         host?.removeFromSuperview()
         host = nil
         try "changed on disk\n".write(to: path, atomically: true, encoding: .utf8)
         file?.reloadFromDiskIfClean()
         try await settle { file?.text == "changed on disk\n" }
+        XCTAssertFalse(retiredEditor?.isEditable ?? true,
+                       "The retired NSTextView must not accept new edits or undo registrations")
+        XCTAssertFalse(retiredEditor?.undoManager?.canUndo ?? true)
+        XCTAssertFalse(retiredEditor?.undoManager?.canRedo ?? true,
+                       "Retired document's UndoManager must not retain obsolete TextKit storage")
         retiredEditor?.insertText("stale editor", replacementRange: NSRange(location: 0, length: 0))
         XCTAssertEqual(file?.text, "changed on disk\n")
         XCTAssertFalse(try XCTUnwrap(file).isDirty)
@@ -979,6 +1059,7 @@ final class PaneRetentionTests: XCTestCase {
         try await settle { file.editorView?.window === window }
         let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
         let editor = try XCTUnwrap(scroll.documentView as? FocusReportingTextView)
+        NSApp.activate()
         window.makeKeyAndOrderFront(nil)
         XCTAssertTrue(window.makeFirstResponder(editor))
         editor.insertText("E", replacementRange: NSRange(location: 0, length: 0))
@@ -1008,7 +1089,9 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertEqual(project.dock.tabOrder, [pane.id])
         XCTAssertEqual(project.selectedTabID, pane.id)
         XCTAssertTrue(scroll.documentView === editor)
-        try await settle { window.firstResponder === editor }
+        if NSApp.isActive && window.isKeyWindow {
+            try await settle { window.firstResponder === editor }
+        }
         print("DOCK_TRACE afterMove actual=\(scroll.contentView.bounds.origin) editorFrame=\(editor.frame) selection=\(editor.selectedRange()) viewport=\(String(describing: editor.textLayoutManager?.textViewportLayoutController.viewportRange))")
         try await settle { scroll.contentView.bounds.origin == scrollBefore }
         XCTAssertEqual(scroll.contentView.bounds.origin, scrollBefore)
@@ -1115,7 +1198,7 @@ final class PaneRetentionTests: XCTestCase {
         window.isReleasedWhenClosed = false
         defer { window.close() }
         let host = NSHostingView(rootView: PanelContentView(
-            tab: tab, isSelected: false,
+            tab: tab, isFocused: false,
             onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in }
         ))
         window.contentView = host
@@ -1168,7 +1251,7 @@ final class PaneRetentionTests: XCTestCase {
 
         func host() -> NSHostingView<PanelContentView> {
             let view = NSHostingView(rootView: PanelContentView(
-                tab: tab, isSelected: false,
+                tab: tab, isFocused: false,
                 onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in }
             ))
             view.frame = container.bounds

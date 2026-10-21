@@ -16,6 +16,8 @@ final class FileTreeModel {
 
     private(set) var rootPath = ""
     private(set) var items: [Item] = []
+    /// Files' current keyboard selection, independent of the most recent FileTab.
+    private(set) var selectedPath: String?
     /// Path of the row currently being renamed inline, if any.
     private(set) var renamingPath: String?
     /// The pending new-file/folder input row, if any.
@@ -52,6 +54,36 @@ final class FileTreeModel {
         expanded.contains(item.path)
     }
 
+    var selectedItem: Item? {
+        items.first { !$0.isDraft && $0.path == selectedPath }
+    }
+
+    func select(_ item: Item) {
+        guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path })
+        else { return }
+        selectedPath = item.path
+    }
+
+    @discardableResult
+    func moveSelection(by delta: Int) -> Item? {
+        let visible = items.filter { !$0.isDraft }
+        guard !visible.isEmpty else { selectedPath = nil; return nil }
+        let current = selectedPath.flatMap { path in visible.firstIndex { $0.path == path } }
+        let start = current ?? (delta >= 0 ? -1 : visible.count)
+        let next = max(0, min(visible.count - 1, start + delta))
+        selectedPath = visible[next].path
+        return visible[next]
+    }
+
+    func clearSelection() { selectedPath = nil }
+
+    func nextVisibleChild(of item: Item) -> Item? {
+        guard item.isDirectory, let index = items.firstIndex(where: { $0.path == item.path }),
+              index + 1 < items.count else { return nil }
+        let next = items[index + 1]
+        return !next.isDraft && next.path.hasPrefix(item.path + "/") ? next : nil
+    }
+
     /// Switches the visible root without discarding expansion state from the
     /// previously visited directory. Data is still reread on every refresh.
     func sync(root: String, backend: WorkspaceBackend, scope: String = "local") async {
@@ -77,6 +109,7 @@ final class FileTreeModel {
         }
         if scopeChanged || channelChanged {
             items = []
+            selectedPath = nil
             // Inline editing and old rows cannot cross backend identity.
             renamingPath = nil
             draft = nil
@@ -252,6 +285,10 @@ final class FileTreeModel {
         }
         guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return nil }
         remapExpanded(from: item.path, to: dest)
+        if let selectedPath,
+           selectedPath == item.path || selectedPath.hasPrefix(item.path + "/") {
+            self.selectedPath = dest + String(selectedPath.dropFirst(item.path.count))
+        }
         invalidateDirectory(containing: item.path)
         let currentEpoch = treeEpoch
         await rebuild()
@@ -436,6 +473,12 @@ final class FileTreeModel {
             if !rebuildPending, traversal.rootReadable,
                generation == rebuildGeneration, epoch == treeEpoch,
                path == rootPath, scope == workspaceScope {
+                if let selectedPath, !traversal.rows.contains(where: { $0.path == selectedPath }) {
+                    // A collapsed or deleted descendant cannot hold an invisible cursor.
+                    self.selectedPath = traversal.rows
+                        .filter { $0.isDirectory && selectedPath.hasPrefix($0.path + "/") }
+                        .max(by: { $0.path.count < $1.path.count })?.path
+                }
                 if traversal.rows != items { items = traversal.rows }
                 cachedDirectories = cachedDirectories.filter { visited.contains($0.key) }
             } else if epoch != treeEpoch || path != rootPath || scope != workspaceScope {

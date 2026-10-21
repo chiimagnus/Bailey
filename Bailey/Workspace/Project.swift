@@ -43,18 +43,13 @@ final class Project: nonisolated Identifiable {
             onSnapshotChange?()
         }
     }
-    var selectedTabID: UUID? {
+    private(set) var selectedTabID: UUID? {
         didSet {
             guard selectedTabID != oldValue else { return }
-            if let oldValue {
-                tabs.first { $0.id == oldValue }?.content.autoSaveOnFocusLoss()
-            }
             if let selectedTabID {
                 recentTabIDs.removeAll { $0 == selectedTabID }
                 recentTabIDs.insert(selectedTabID, at: 0)
-                dock.select(.tab(selectedTabID))
             }
-            onSnapshotChange?()
         }
     }
 
@@ -72,6 +67,10 @@ final class Project: nonisolated Identifiable {
         self.fallbackName = fallbackName
         dock = DockWorkspaceModel(configuration: workspaceConfiguration)
         dock.onSnapshotChange = { [weak self] in self?.onSnapshotChange?() }
+        dock.onDeactivate = { [weak self] item in
+            guard case .tab(let id) = item else { return }
+            self?.tabs.first { $0.id == id }?.content.autoSaveOnFocusLoss()
+        }
         hostConnectionObservation = NotificationCenter.default
             .publisher(for: SSHHostWorkspaces.connectionChanged)
             .sink { [weak self] notification in
@@ -109,6 +108,12 @@ final class Project: nonisolated Identifiable {
         tabs.first { $0.id == selectedTabID }
     }
 
+    func selectTab(_ id: UUID, activating: Bool = true) {
+        guard tabs.contains(where: { $0.id == id }) else { return }
+        dock.select(.tab(id), activating: activating)
+        selectedTabID = id
+    }
+
     /// Tabs by recency of use, selected first. Tabs not yet selected this
     /// session trail in strip order, so the sequence covers every tab even
     /// before any switching has happened.
@@ -135,9 +140,9 @@ final class Project: nonisolated Identifiable {
         recentTabIDs = selectedTabID.map { [$0] } ?? []
     }
 
-    /// Content of the selected work tab.
     var focusedContent: PaneContent? {
-        selectedTab?.content
+        guard case .tab(let id)? = dock.activeGroup?.selected else { return nil }
+        return tabs.first { $0.id == id }?.content
     }
 
     var hasFiles: Bool {
@@ -150,7 +155,7 @@ final class Project: nonisolated Identifiable {
 
     /// Non-terminal tabs retain the session whose directory they were opened from.
     var selectedSession: TerminalSession? {
-        if case .session(let session)? = focusedContent {
+        if case .session(let session)? = selectedTab?.content {
             return session
         }
         return selectedTab?.contextSession ?? sessions.first
@@ -312,7 +317,7 @@ final class Project: nonisolated Identifiable {
         let session = makeSession(directory: directory, launchCommand: launchCommand, initialWorkspace: initialWorkspace, initialInput: initialInput)
         let tab = makeTab(content: .session(session))
         insertNextToSelected(tab)
-        selectedTabID = tab.id
+        selectTab(tab.id)
         return session
     }
 
@@ -466,9 +471,10 @@ final class Project: nonisolated Identifiable {
 
     /// Opens `path` as a new file tab, reusing an existing tab for the
     /// same path. `editorState` seeds scroll/cursor state when restoring.
-    func openFile(_ path: String, editorState: EditorState? = nil, inGroup groupID: UUID? = nil) {
+    func openFile(_ path: String, editorState: EditorState? = nil,
+                  inGroup groupID: UUID? = nil, activating: Bool = true) {
         openFile(path, backend: workspaceBackend, workspace: workspaceIdentity,
-                 editorState: editorState, inGroup: groupID)
+                 editorState: editorState, inGroup: groupID, activating: activating)
     }
 
     /// Finder opens a Mac document regardless of the project's terminal machine.
@@ -478,14 +484,15 @@ final class Project: nonisolated Identifiable {
 
     private func openFile(
         _ path: String, backend: WorkspaceBackend, workspace: String?,
-        editorState: EditorState? = nil, inGroup groupID: UUID? = nil
+        editorState: EditorState? = nil, inGroup groupID: UUID? = nil,
+        activating: Bool = true
     ) {
         let context = selectedSession
         if let tab = findFileTab(path: path, workspace: workspace) {
-            if selectedTabID == tab.id, let workspace {
+            if activating, selectedTabID == tab.id, let workspace {
                 SSHHostWorkspaces.retryConnection(for: workspace, path: path)
             }
-            selectedTabID = tab.id
+            selectTab(tab.id, activating: activating)
             return
         }
         let file = FileTab(
@@ -503,7 +510,7 @@ final class Project: nonisolated Identifiable {
             _ = dock.place(.tab(tab.id), in: groupID)
         }
         insertNextToSelected(tab)
-        selectedTabID = tab.id
+        selectTab(tab.id, activating: activating)
     }
 
     private func findFileTab(path: String, workspace: String?) -> PaneTab? {
@@ -562,7 +569,7 @@ final class Project: nonisolated Identifiable {
         let tab = makeTab(content: .browser(browser))
         tab.contextSession = context
         insertNextToSelected(tab)
-        selectedTabID = tab.id
+        selectTab(tab.id)
         return browser
     }
 
@@ -609,7 +616,8 @@ final class Project: nonisolated Identifiable {
     /// Opens a git diff as a new tab, reusing (and reloading) an existing tab
     /// for the same file and stage side.
     func openDiff(
-        repoRoot: String, path: String, staged: Bool, untracked: Bool, origPath: String?
+        repoRoot: String, path: String, staged: Bool, untracked: Bool, origPath: String?,
+        activating: Bool = true
     ) {
         let context = selectedSession
         if let tab = findDiffTab(
@@ -621,7 +629,7 @@ final class Project: nonisolated Identifiable {
             diff.untracked = untracked
             diff.origPath = origPath
             if changed || !diff.isLoading { diff.reload() }
-            selectedTabID = tab.id
+            selectTab(tab.id, activating: activating)
             return
         }
         let diff = DiffTab(
@@ -632,7 +640,7 @@ final class Project: nonisolated Identifiable {
         let tab = makeTab(content: .diff(diff))
         tab.contextSession = context
         insertNextToSelected(tab)
-        selectedTabID = tab.id
+        selectTab(tab.id, activating: activating)
     }
 
     /// Opens one file as it changed in a historical commit, comparing the
@@ -643,15 +651,17 @@ final class Project: nonisolated Identifiable {
         commitHash: String,
         parentHash: String?,
         status: Character,
-        origPath: String?
+        origPath: String?,
+        activating: Bool = true
     ) {
         openHistoricalDiff(repoRoot: repoRoot, path: path,
             source: .commit(hash: commitHash, parent: parentHash, status: String(status)),
-            origPath: origPath)
+            origPath: origPath, activating: activating)
     }
 
     func openHistoricalDiff(
-        repoRoot: String, path: String, source: DiffTab.Source, origPath: String?
+        repoRoot: String, path: String, source: DiffTab.Source, origPath: String?,
+        activating: Bool = true
     ) {
         let context = selectedSession
         if let tab = findDiffTab(repoRoot: repoRoot, path: path,
@@ -662,7 +672,7 @@ final class Project: nonisolated Identifiable {
             if changed || (!diff.isLoading && (source.isLive || diff.error != nil || !diff.hasLoadedContent)) {
                 diff.reload()
             }
-            selectedTabID = tab.id
+            selectTab(tab.id, activating: activating)
             return
         }
         let diff = DiffTab(repoRoot: repoRoot, path: path, source: source,
@@ -671,7 +681,7 @@ final class Project: nonisolated Identifiable {
         let tab = makeTab(content: .diff(diff))
         tab.contextSession = context
         insertNextToSelected(tab)
-        selectedTabID = tab.id
+        selectTab(tab.id, activating: activating)
     }
 
     private func findDiffTab(
@@ -686,9 +696,16 @@ final class Project: nonisolated Identifiable {
 
     // MARK: - Closing
 
+    private var closeSheetWindow: NSWindow? {
+        TerminalManager.activeManagers.first {
+            $0.projects.contains { $0 === self }
+        }?.attachedWindow
+    }
+
     /// Closes one tab's content. Dirty edits require confirmation; an exited
     /// shell is removed without terminating it again.
     func closeContent(_ content: PaneContent, terminate: Bool = true) {
+        guard !content.isClosing else { return }
         switch content {
         case .session(let session):
             if terminate { session.terminate() }
@@ -701,7 +718,7 @@ final class Project: nonisolated Identifiable {
             // Closing is a focus transition, but it must not let a late
             // background save defeat an explicit Don't Save choice.
             content.suspendAutoSaveForClose(true)
-            let window = NSApp.keyWindow ?? NSApp.mainWindow
+            let window = closeSheetWindow
             Task { @MainActor in
                 _ = await saveBeforeClosing(content, in: window)
             }
@@ -723,7 +740,7 @@ final class Project: nonisolated Identifiable {
     /// an unrelated dock region elsewhere in the same workspace.
     func closeOthers(_ keep: PaneTab) {
         guard let group = dock.group(containing: .tab(keep.id)) else { return }
-        selectedTabID = keep.id
+        selectTab(keep.id)
         let ids = Set(group.items.compactMap { item -> UUID? in
             if case .tab(let id) = item, id != keep.id { return id }
             return nil
@@ -801,6 +818,7 @@ final class Project: nonisolated Identifiable {
     /// Clean tabs close after the prompts; Cancel stops the remaining prompts
     /// without rolling back tabs already closed by Save or Don't Save.
     private func closeBatch(_ targets: [PaneContent]) {
+        guard !targets.contains(where: \.isClosing) else { return }
         let dirtyContents = targets.filter(\.isDirty)
         let cleanContents = targets.filter { !$0.isDirty }
 
@@ -809,7 +827,7 @@ final class Project: nonisolated Identifiable {
             return
         }
 
-        let window = NSApp.keyWindow ?? NSApp.mainWindow
+        let window = closeSheetWindow
         dirtyContents.forEach { $0.suspendAutoSaveForClose(true) }
         Task { @MainActor in
             for content in dirtyContents {
@@ -828,7 +846,7 @@ final class Project: nonisolated Identifiable {
     func select(index: Int) {
         let ids = dock.tabOrder
         guard ids.indices.contains(index) else { return }
-        selectedTabID = ids[index]
+        selectTab(ids[index])
     }
 
     func selectNext() {
@@ -843,7 +861,7 @@ final class Project: nonisolated Identifiable {
         let ids = dock.tabOrder
         guard !ids.isEmpty, let current = ids.firstIndex(where: { $0 == selectedTabID })
         else { return }
-        selectedTabID = ids[(current + offset + ids.count) % ids.count]
+        selectTab(ids[(current + offset + ids.count) % ids.count])
     }
 
     // MARK: - Layout mutation plumbing
@@ -927,7 +945,7 @@ final class Project: nonisolated Identifiable {
     func append(_ tab: PaneTab) {
         register(tab)
         tabs.append(tab)
-        selectedTabID = tab.id
+        selectTab(tab.id)
     }
 
     private func removeTabWithContent(_ contentID: UUID) {

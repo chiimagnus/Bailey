@@ -4,7 +4,8 @@ import UniformTypeIdentifiers
 struct PanelContentView: View {
     private let themeChanges = Theme.changes
     let tab: PaneTab
-    var isSelected: Bool
+    var isFocused: Bool
+    var canFocus: () -> Bool = { true }
     var onFocused: () -> Void
     var onNewBrowserTab: (String?) -> Void
     var onNewFileTab: (String) -> Void
@@ -17,7 +18,8 @@ struct PanelContentView: View {
             case .session(let session):
                 TerminalHostView(
                     session: session,
-                    isFocused: isSelected,
+                    isFocused: isFocused,
+                    canFocus: canFocus,
                     onFocused: onFocused,
                     onNewBrowserTab: onNewBrowserTab,
                     onNewFileTab: onNewFileTab
@@ -26,18 +28,20 @@ struct PanelContentView: View {
                     TerminalFindOverlay(find: session.find)
                 }
             case .file(let file):
-                FileViewerView(file: file, isFocused: isSelected, onFocused: onFocused)
+                FileViewerView(file: file, isFocused: isFocused, canFocus: canFocus, onFocused: onFocused)
                     .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil, perform: onExternalFilesDropped)
             case .browser(let browser):
                 BrowserView(
                     browser: browser,
-                    isFocused: isSelected,
+                    isFocused: isFocused,
+                    canFocus: canFocus,
                     onFocused: onFocused,
                     onNewBrowserTab: onNewBrowserTab,
                     onExternalFilesDropped: onExternalFilesDropped
                 )
             case .diff(let diff):
-                DiffViewerView(diff: diff, isSelected: true)
+                DiffViewerView(diff: diff, isSelected: true, isFocused: isFocused,
+                               canFocus: canFocus, onFocused: onFocused)
                     .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil, perform: onExternalFilesDropped)
             }
         }

@@ -45,6 +45,7 @@ struct SourceTextEditor: NSViewRepresentable {
     let palette: EditorPalette
     let wrapLines: Bool
     var isFocused: Bool = true
+    var canFocus: () -> Bool = { true }
     var onFocused: () -> Void = {}
 
     func makeCoordinator() -> Coordinator {
@@ -68,6 +69,7 @@ struct SourceTextEditor: NSViewRepresentable {
         file.editorView = scrollView
         let container = SourceEditorContainer(scrollView: scrollView)
         container.focusOnAttach = isFocused
+        container.canFocus = canFocus
         return container
     }
 
@@ -164,6 +166,8 @@ struct SourceTextEditor: NSViewRepresentable {
         guard let container = container as? SourceEditorContainer,
               container.scrollView.superview === container else { return }
         let scrollView = container.scrollView
+        container.canFocus = canFocus
+        container.focusOnAttach = isFocused
         guard let textView = scrollView.documentView as? NativeCodeTextView else { return }
         (textView as? FocusReportingTextView)?.onBecomeFirstResponder = onFocused
         (textView as? FocusReportingTextView)?.onResignFirstResponder = {
@@ -173,8 +177,11 @@ struct SourceTextEditor: NSViewRepresentable {
         // Take focus on the unfocused→focused edge (keyboard navigation moving
         // focus here), never on every render.
         if isFocused, !context.coordinator.wasFocused {
-            DispatchQueue.main.async {
-                textView.window?.makeFirstResponder(textView)
+            DispatchQueue.main.async { [weak container, weak textView] in
+                guard let container, let textView, container.canFocus(),
+                      container.focusOnAttach, let window = textView.window,
+                      window.isKeyWindow, NSApp.isActive else { return }
+                window.makeFirstResponder(textView)
             }
         }
         context.coordinator.wasFocused = isFocused
@@ -292,6 +299,10 @@ struct SourceTextEditor: NSViewRepresentable {
                 self.scrollObserver = nil
             }
             if let editor = textView as? FocusReportingTextView {
+                // A retired native document must not create new Undo actions or
+                // retain the old NSTextStorage through obsolete Undo targets.
+                editor.isEditable = false
+                editor.undoManager?.removeAllActions()
                 editor.syntaxCoordinator?.deactivate()
                 editor.syntaxCoordinator = nil
                 editor.delegate = nil
@@ -359,6 +370,7 @@ struct SourceTextEditor: NSViewRepresentable {
 private final class SourceEditorContainer: NSView {
     let scrollView: NSScrollView
     var focusOnAttach = false
+    var canFocus: () -> Bool = { true }
 
     init(scrollView: NSScrollView) {
         self.scrollView = scrollView
@@ -371,9 +383,8 @@ private final class SourceEditorContainer: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard focusOnAttach, let window,
+        guard focusOnAttach, canFocus(), let window, window.isKeyWindow, NSApp.isActive,
               let editor = scrollView.documentView as? FocusReportingTextView else { return }
-        focusOnAttach = false
         window.makeFirstResponder(editor)
     }
 

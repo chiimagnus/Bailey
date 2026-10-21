@@ -7,6 +7,7 @@ import SwiftUI
 struct PaneTabItem: View {
     let tab: PaneTab
     let isSelected: Bool
+    let isPaneFocused: Bool
     let select: () -> Void
     let close: () -> Void
     @Binding var renamingTabID: UUID?
@@ -27,16 +28,29 @@ struct PaneTabItem: View {
         } else {
             switch tab.content {
             case .session(let session):
-                SessionTabLabel(session: session, customTitle: tab.customName, isSelected: isSelected, select: select, close: close)
+                SessionTabLabel(
+                    session: session, customTitle: tab.customName,
+                    isSelected: isSelected, isPaneFocused: isPaneFocused,
+                    select: select, close: close
+                )
             case .file(let file):
-                FileTabLabel(file: file, customTitle: tab.customName, isSelected: isSelected, select: select, close: close)
+                FileTabLabel(
+                    file: file, customTitle: tab.customName,
+                    isSelected: isSelected, isPaneFocused: isPaneFocused,
+                    select: select, close: close
+                )
             case .browser(let browser):
-                BrowserTabLabel(browser: browser, customTitle: tab.customName, isSelected: isSelected, select: select, close: close)
+                BrowserTabLabel(
+                    browser: browser, customTitle: tab.customName,
+                    isSelected: isSelected, isPaneFocused: isPaneFocused,
+                    select: select, close: close
+                )
             case .diff(let diff):
                 DiffTabLabel(
                     diff: diff,
                     customTitle: tab.customName,
                     isSelected: isSelected,
+                    isPaneFocused: isPaneFocused,
                     select: select,
                     close: close
                 )
@@ -138,6 +152,7 @@ private struct SessionTabLabel: View {
     /// User-assigned tab name overriding the live terminal title.
     var customTitle: String?
     let isSelected: Bool
+    let isPaneFocused: Bool
     let select: () -> Void
     let close: () -> Void
 
@@ -146,6 +161,7 @@ private struct SessionTabLabel: View {
             systemImage: "terminal",
             title: customTitle ?? session.title,
             isSelected: isSelected,
+            isPaneFocused: isPaneFocused,
             select: select,
             close: close
         )
@@ -157,6 +173,7 @@ private struct FileTabLabel: View {
     /// User-assigned tab name overriding the file name.
     var customTitle: String?
     let isSelected: Bool
+    let isPaneFocused: Bool
     let select: () -> Void
     let close: () -> Void
 
@@ -166,6 +183,7 @@ private struct FileTabLabel: View {
             fileIconPath: file.path,
             title: customTitle ?? file.name,
             isSelected: isSelected,
+            isPaneFocused: isPaneFocused,
             isDirty: file.isDirty,
             select: select,
             close: close
@@ -179,6 +197,7 @@ private struct BrowserTabLabel: View {
     /// User-assigned tab name overriding the webpage title.
     var customTitle: String?
     let isSelected: Bool
+    let isPaneFocused: Bool
     let select: () -> Void
     let close: () -> Void
 
@@ -188,6 +207,7 @@ private struct BrowserTabLabel: View {
             browserIcon: browser,
             title: customTitle ?? browser.title,
             isSelected: isSelected,
+            isPaneFocused: isPaneFocused,
             select: select,
             close: close
         )
@@ -199,6 +219,7 @@ private struct DiffTabLabel: View {
     let diff: DiffTab
     var customTitle: String?
     let isSelected: Bool
+    let isPaneFocused: Bool
     let select: () -> Void
     let close: () -> Void
 
@@ -208,6 +229,7 @@ private struct DiffTabLabel: View {
             fileIconPath: diff.path,
             title: customTitle ?? diff.title,
             isSelected: isSelected,
+            isPaneFocused: isPaneFocused,
             isDirty: diff.isDirty,
             select: select,
             close: close
@@ -223,6 +245,7 @@ struct TabItemChrome: View {
     var fileIconPath: String? = nil
     let title: String
     let isSelected: Bool
+    let isPaneFocused: Bool
     var isDirty = false
     let select: () -> Void
     let close: () -> Void
@@ -248,31 +271,31 @@ struct TabItemChrome: View {
                         BrowserFaviconView(browser: browserIcon, size: 11)
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(
-                                isSelected
+                                isSelected && isPaneFocused
                                     ? AnyShapeStyle(Color(nsColor: Theme.accent))
-                                    : AnyShapeStyle(.tertiary)
+                                    : (isSelected ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
                             )
                             .opacity(isSelected ? 1 : 0.78)
                     } else if let fileIconPath {
                         MaterialFileIconView(
                             path: fileIconPath,
                             size: 12,
-                            opacity: isSelected ? 1 : 0.82
+                            opacity: isSelected && isPaneFocused ? 1 : 0.82
                         )
                     } else {
                         Image(systemName: systemImage)
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(
-                                isSelected
+                                isSelected && isPaneFocused
                                     ? AnyShapeStyle(Color(nsColor: Theme.accent))
-                                    : AnyShapeStyle(.tertiary)
+                                    : (isSelected ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
                             )
                     }
                 }
                 .frame(width: 14, height: 14)
                 Text(verbatim: title)
                     .font(.system(size: 11.5))
-                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .foregroundStyle(isSelected && isPaneFocused ? .primary : .secondary)
                     .lineLimit(1)
                 if isDirty {
                     Circle()

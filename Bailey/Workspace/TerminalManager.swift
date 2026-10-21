@@ -36,7 +36,7 @@ final class TerminalManager {
         didSet {
             guard selectedProjectID != oldValue else { return }
             if let oldValue {
-                projects.first { $0.id == oldValue }?.selectedTab?.content.autoSaveOnFocusLoss()
+                projects.first { $0.id == oldValue }?.tabs.forEach { $0.content.autoSaveOnFocusLoss() }
             }
             requestSave()
         }
@@ -57,6 +57,7 @@ final class TerminalManager {
     /// SwiftUI TextField can reuse the same responder for the palette itself.
     @ObservationIgnored private weak var commandPalettePreviousResponder: NSResponder?
     @ObservationIgnored private weak var commandPaletteWindow: NSWindow?
+    @ObservationIgnored private var commandPaletteContentID: UUID?
     /// Window hosting this manager, once SwiftUI has attached its content.
     /// Finder service requests use it to target the active Bailey window.
     @ObservationIgnored private weak var window: NSWindow?
@@ -656,14 +657,15 @@ final class TerminalManager {
         return project
     }
 
-    /// Losing the window's focus saves its active editor, not every open
-    /// file across unrelated projects and remote machines.
     func autoSaveEditedTabs() {
-        selectedProject?.selectedTab?.content.autoSaveOnFocusLoss()
+        for project in projects {
+            for tab in project.tabs { tab.content.autoSaveOnFocusLoss() }
+        }
     }
 
     func close(_ project: Project) {
-        guard projects.contains(where: { $0 === project }) else { return }
+        guard projects.contains(where: { $0 === project }),
+              !project.tabs.contains(where: { $0.content.isClosing }) else { return }
         let dirty = project.tabs.map(\.content).filter(\.isDirty)
         guard !dirty.isEmpty else {
             project.terminateAll()
@@ -763,7 +765,7 @@ final class TerminalManager {
             for tab in project.tabs {
                 guard tab.content.id == session.id else { continue }
                 selectedProjectID = project.id
-                project.selectedTabID = tab.id
+                project.selectTab(tab.id)
                 return
             }
         }
@@ -839,13 +841,14 @@ final class TerminalManager {
         return false
     }
 
-    /// Closes the selected work tab, or the empty project.
     func closeSelectedTab() {
         guard let project = selectedProject else { return }
-        if project.tabs.isEmpty {
-            close(project)
-        } else {
-            project.closeSelected()
+        switch project.dock.activeGroup?.selected {
+        case .tab: project.closeSelected()
+        case .files?, .git?, .projects?:
+            if let item = project.dock.activeGroup?.selected { project.dock.removeTool(item) }
+        case nil:
+            if project.tabs.isEmpty { close(project) }
         }
     }
 
@@ -921,17 +924,18 @@ final class TerminalManager {
     }
 
     /// Opens `path` as a file tab in the current project.
-    func openFile(_ path: String) {
-        selectedProject?.openFile(path)
+    func openFile(_ path: String, activating: Bool = true) {
+        selectedProject?.openFile(path, activating: activating)
     }
 
     /// Opens a git diff tab in the current project.
     func openDiff(
-        repoRoot: String, path: String, staged: Bool, untracked: Bool, origPath: String?
+        repoRoot: String, path: String, staged: Bool, untracked: Bool, origPath: String?,
+        activating: Bool = true
     ) {
         selectedProject?.openDiff(
             repoRoot: repoRoot, path: path, staged: staged,
-            untracked: untracked, origPath: origPath
+            untracked: untracked, origPath: origPath, activating: activating
         )
     }
 
@@ -942,7 +946,8 @@ final class TerminalManager {
         commitHash: String,
         parentHash: String?,
         status: Character,
-        origPath: String?
+        origPath: String?,
+        activating: Bool = true
     ) {
         selectedProject?.openCommitDiff(
             repoRoot: repoRoot,
@@ -950,7 +955,8 @@ final class TerminalManager {
             commitHash: commitHash,
             parentHash: parentHash,
             status: status,
-            origPath: origPath
+            origPath: origPath,
+            activating: activating
         )
     }
 
@@ -980,9 +986,11 @@ final class TerminalManager {
         if isCommandPaletteVisible {
             dismissCommandPalette()
         } else {
-            commandPaletteWindow = NSApp.keyWindow
+            commandPaletteWindow = window
+            commandPaletteContentID = selectedProject?.focusedContent?.id
             if let responder = commandPaletteWindow?.firstResponder,
-               isStableWorkspaceResponder(responder) {
+               commandPaletteWindow?.isKeyWindow == true, NSApp.isActive,
+               isStableWorkspaceResponder(responder), ownsActiveResponder(responder) {
                 commandPalettePreviousResponder = responder
             } else {
                 commandPalettePreviousResponder = nil
@@ -991,8 +999,13 @@ final class TerminalManager {
         }
     }
 
-    func dismissCommandPalette() {
+    func dismissCommandPalette(restoringFocus: Bool = true) {
         guard isCommandPaletteVisible else { return }
+        if !restoringFocus {
+            commandPaletteWindow = nil
+            commandPalettePreviousResponder = nil
+            commandPaletteContentID = nil
+        }
         isCommandPaletteVisible = false
     }
 
@@ -1001,22 +1014,42 @@ final class TerminalManager {
     func restoreFocusAfterCommandPalette() {
         let window = commandPaletteWindow
         let responder = commandPalettePreviousResponder
+        let contentID = commandPaletteContentID
         commandPaletteWindow = nil
         commandPalettePreviousResponder = nil
+        commandPaletteContentID = nil
 
         // Let the removal transaction finish before restoring the displaced
         // AppKit responder.
         DispatchQueue.main.async {
-            guard let window, let responder else { return }
+            guard let window, NSApp.isActive, window.isKeyWindow,
+                  window === self.window, window.attachedSheet == nil,
+                  !self.isCommandPaletteVisible else { return }
             // A palette command may already have focused a new terminal or
             // editor. Never let restoration race that newer focus and win.
             if let current = window.firstResponder,
-               current !== responder,
-               self.isStableWorkspaceResponder(current) {
-                return
+               self.isStableWorkspaceResponder(current),
+               self.ownsActiveResponder(current) { return }
+            if let responder, self.selectedProject?.focusedContent?.id == contentID,
+               self.ownsActiveResponder(responder) {
+                window.makeFirstResponder(responder)
+            } else if let activeTree = self.activeTreeResponder(in: window) {
+                // A palette switch can move from an editor, terminal, or old
+                // tree into Files/Git. Restore the tool that is now visible.
+                window.makeFirstResponder(activeTree)
             }
-            window.makeFirstResponder(responder)
         }
+    }
+
+    func activeTreeResponder(in window: NSWindow) -> TreeKeyboardView? {
+        guard let root = window.contentView,
+              let selected = selectedProject?.dock.activeGroup?.selected,
+              selected == .files || selected == .git else { return nil }
+        func findTree(_ view: NSView) -> TreeKeyboardView? {
+            if let tree = view as? TreeKeyboardView, ownsActiveResponder(tree) { return tree }
+            return view.subviews.lazy.compactMap(findTree).first
+        }
+        return findTree(root)
     }
 
     /// Terminal and editor responders are public host views. WebKit instead
@@ -1024,7 +1057,8 @@ final class TerminalManager {
     /// AppKit ancestry before deciding whether palette dismissal can restore
     /// the page's keyboard focus.
     private func isStableWorkspaceResponder(_ responder: NSResponder) -> Bool {
-        if responder is any TerminalBackendSurface || responder is FocusReportingTextView {
+        if responder is any TerminalBackendSurface || responder is FocusReportingTextView
+            || responder is DiffTextView || responder is TreeKeyboardView {
             return true
         }
         var view = responder as? NSView
@@ -1033,6 +1067,37 @@ final class TerminalManager {
             view = current.superview
         }
         return false
+    }
+
+    func ownsActiveResponder(_ responder: NSResponder) -> Bool {
+        guard let window, let view = responder as? NSView, view.window === window,
+              !view.isHiddenOrHasHiddenAncestor else { return false }
+        if view is TreeKeyboardView,
+           let activeGroup = selectedProject?.dock.activeGroup,
+           activeGroup.selected == .files || activeGroup.selected == .git,
+           let windowContent = window.contentView {
+            func belongsToActiveGroup(_ current: NSView) -> Bool {
+                if let group = current as? DockGroupFocusView,
+                   group.groupID == activeGroup.id {
+                    return group.containsResponder(responder)
+                }
+                return current.subviews.contains(where: belongsToActiveGroup)
+            }
+            return belongsToActiveGroup(windowContent)
+        }
+        guard let content = selectedProject?.focusedContent else { return false }
+        let root: NSView?
+        switch content {
+        case .session(let session):
+            guard session.surface.superview is TerminalContainerView else { return false }
+            root = session.surface
+        case .file(let file): root = file.editorView
+        case .browser(let browser): root = browser.webView
+        case .diff(let diff): root = diff.nativeSurface
+        }
+        guard let root, root.window === window, !root.visibleRect.isEmpty,
+              !root.isHiddenOrHasHiddenAncestor else { return false }
+        return view === root || view.isDescendant(of: root)
     }
 
     /// Reuse an existing panel or reopen it in a tool group; never create
@@ -1236,7 +1301,7 @@ final class TerminalManager {
                 context.tab.contextSession = restoredSessions[context.sessionIndex]
             }
             if let index = saved.selectedTabIndex, project.tabs.indices.contains(index) {
-                project.selectedTabID = project.tabs[index].id
+                project.selectTab(project.tabs[index].id)
             }
             project.dock.restore(saved.dock, tabIDs: project.tabs.map(\.id))
             project.resetRecency()

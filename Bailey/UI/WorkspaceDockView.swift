@@ -74,7 +74,7 @@ final class DockTabDragCoordinator {
             position.item, into: destination,
             edge: position.edge, index: position.index
         ) else { return }
-        if case .tab(let id) = position.item { project.selectedTabID = id }
+        if case .tab(let id) = position.item { project.selectTab(id) }
     }
 }
 
@@ -271,8 +271,28 @@ private struct DockTabGroupView: View {
     private let settings = AppSettings.shared
     @State private var renamingTabID: UUID?
     @State private var showingPanelPicker = false
+    @Environment(\.appearsActive) private var windowAppearsActive
 
     private var active: DockItem? { group.selected ?? group.items.first }
+    private var isFocused: Bool {
+        windowAppearsActive && canFocusGroup()
+    }
+
+    private func canFocusGroup() -> Bool {
+        manager.selectedProject === project && project.dock.activeGroupID == group.id
+            && manager.attachedWindow?.isKeyWindow == true && NSApp.isActive
+            && !manager.isCommandPaletteVisible && manager.attachedWindow?.attachedSheet == nil
+    }
+
+    private func focusGroup() {
+        guard manager.selectedProject === project, !manager.isCommandPaletteVisible,
+              manager.attachedWindow?.attachedSheet == nil else { return }
+        project.dock.activate(group.id)
+        if case .tab(let id)? = project.dock.root.group(id: group.id)?.selected,
+           project.selectedTabID != id {
+            project.selectTab(id)
+        }
+    }
 
     var body: some View {
         let _ = themeChanges.revision
@@ -317,6 +337,13 @@ private struct DockTabGroupView: View {
             }
         }
         .background(Color(nsColor: Theme.background))
+        .background(DockGroupFocusReader(
+            groupID: group.id,
+            isActive: isFocused,
+            focusesEmptySpace: active?.tabID == nil,
+            canFocus: { canFocusGroup() && dragging.position == nil },
+            onFocused: { if dragging.position == nil { focusGroup() } }
+        ).id(group.id))
         .background {
             GeometryReader { geometry in
                 Color.clear.preference(
@@ -474,7 +501,7 @@ private struct DockTabGroupView: View {
         if case .tab(let id) = item,
            let paneTab = project.tabs.first(where: { $0.id == id }) {
             PaneTabItem(
-                tab: paneTab, isSelected: active == item,
+                tab: paneTab, isSelected: active == item, isPaneFocused: isFocused,
                 select: { select(item) },
                 close: {
                     if let current = project.tabs.first(where: { $0.id == id }) {
@@ -491,7 +518,7 @@ private struct DockTabGroupView: View {
         } else {
             TabItemChrome(
                 systemImage: item.symbol, title: item.label(project: project),
-                isSelected: active == item,
+                isSelected: active == item, isPaneFocused: isFocused,
                 select: { select(item) },
                 close: { closeTool(item) }
             )
@@ -503,7 +530,7 @@ private struct DockTabGroupView: View {
 
     private func select(_ item: DockItem) {
         project.dock.select(item)
-        if case .tab(let id) = item { project.selectedTabID = id }
+        if case .tab(let id) = item { project.selectTab(id) }
     }
 
     private func closeTool(_ item: DockItem) { project.dock.removeTool(item) }
@@ -531,10 +558,9 @@ private struct DockTabGroupView: View {
             if let tab = project.tabs.first(where: { $0.id == id }) {
                 PanelContentView(
                     tab: tab,
-                    isSelected: project.selectedTabID == id,
-                    onFocused: {
-                        if project.selectedTabID != id { project.selectedTabID = id }
-                    },
+                    isFocused: isFocused,
+                    canFocus: canFocusGroup,
+                    onFocused: focusGroup,
                     onNewBrowserTab: { manager.newBrowserTab(initialURL: $0) },
                     onNewFileTab: { manager.openFile($0) },
                     onExternalFilesDropped: { FinderWindowDrop.receive(
@@ -651,6 +677,129 @@ private struct DockTabGroupView: View {
                     .allowsHitTesting(false)
             }
         }
+    }
+}
+
+private struct DockGroupFocusReader: NSViewRepresentable {
+    let groupID: UUID
+    let isActive: Bool
+    let focusesEmptySpace: Bool
+    let canFocus: () -> Bool
+    let onFocused: () -> Void
+
+    func makeNSView(context: Context) -> DockGroupFocusView {
+        DockGroupFocusView(groupID: groupID)
+    }
+
+    func updateNSView(_ view: DockGroupFocusView, context: Context) {
+        view.canFocus = canFocus
+        view.onFocused = onFocused
+        let becameActive = isActive && !view.isActive
+        view.isActive = isActive
+        view.focusesEmptySpace = focusesEmptySpace
+        if becameActive && focusesEmptySpace { view.requestFocusAfterClick() }
+    }
+
+    static func dismantleNSView(_ view: DockGroupFocusView, coordinator: ()) {
+        view.stopMonitoring()
+        view.onFocused = nil
+        view.canFocus = nil
+    }
+}
+
+final class DockGroupFocusView: NSView {
+    let groupID: UUID
+    var isActive = false
+    var focusesEmptySpace = true
+    var canFocus: (() -> Bool)?
+    var onFocused: (() -> Void)?
+    private var monitor: Any?
+    private var leftMousePressedHere = false
+
+    init(groupID: UUID) {
+        self.groupID = groupID
+        super.init(frame: .zero)
+        setAccessibilityElement(false)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override var acceptsFirstResponder: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { onFocused?() }
+        return became
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        stopMonitoring()
+        guard window != nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown, .keyDown]
+        ) { [weak self] event in
+            guard let self, let window = self.window, event.window === window,
+                  !self.isHiddenOrHasHiddenAncestor else { return event }
+            if event.type == .leftMouseDown {
+                self.leftMousePressedHere = self.bounds.contains(
+                    self.convert(event.locationInWindow, from: nil))
+            } else if event.type == .keyDown {
+                if self.containsResponder(window.firstResponder) { self.onFocused?() }
+            } else {
+                if event.type == .leftMouseUp {
+                    let pressedHere = self.leftMousePressedHere
+                    self.leftMousePressedHere = false
+                    guard pressedHere else { return event }
+                }
+                if self.bounds.contains(self.convert(event.locationInWindow, from: nil)) {
+                    self.onFocused?()
+                    if self.focusesEmptySpace { self.requestFocusAfterClick() }
+                }
+            }
+            return event
+        }
+        if isActive && focusesEmptySpace { requestFocusAfterClick() }
+    }
+
+    func stopMonitoring() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        leftMousePressedHere = false
+    }
+
+    func requestFocusAfterClick() {
+        // Allow the clicked native control to become first responder before
+        // empty space in a tool pane can release the previous editor.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isActive, self.focusesEmptySpace else { return }
+            self.focusIfNeeded()
+        }
+    }
+
+    private func focusIfNeeded() {
+        guard canFocus?() == true, let window,
+              !containsResponder(window.firstResponder) else { return }
+        window.makeFirstResponder(self)
+    }
+
+    func containsResponder(_ responder: NSResponder?) -> Bool {
+        guard var view = responder as? NSView, view.window === window else { return false }
+        // The window's hosting root spans every Dock group, so its midpoint
+        // cannot establish ownership of a particular group.
+        if view === window?.contentView { return false }
+        if let editor = view as? NSTextView, editor.isFieldEditor,
+           let control = editor.delegate as? NSView { view = control }
+        var ancestor: NSView? = view
+        while let current = ancestor {
+            if current is TerminalParkingContainerView { return false }
+            ancestor = current.superview
+        }
+        let visible = view.visibleRect.intersection(view.bounds)
+        guard !view.isHiddenOrHasHiddenAncestor, !visible.isEmpty else { return false }
+        return bounds.contains(convert(NSPoint(x: visible.midX, y: visible.midY), from: view))
     }
 }
 

@@ -95,7 +95,7 @@ final class TabSwitcherController {
            project.selectedTabID == originalTabID,
            let highlightedTabID,
            project.tabs.contains(where: { $0.id == highlightedTabID }) {
-            project.selectedTabID = highlightedTabID
+            project.selectTab(highlightedTabID)
         }
         previewTask?.cancel()
         previewTask = nil
@@ -110,7 +110,7 @@ final class TabSwitcherController {
 
     func select(_ tabID: UUID, in project: Project) {
         guard project.tabs.contains(where: { $0.id == tabID }) else { return }
-        project.selectedTabID = tabID
+        project.selectTab(tabID)
         dismiss(commitSelection: false)
     }
 

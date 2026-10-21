@@ -34,9 +34,7 @@ final class TerminalFind {
     /// does. A counter rather than a flag: repeated requests must each land.
     private(set) var focusRequest = 0
 
-    /// The session owning this also owns the surface, so an unowned reference
-    /// is safe and keeps the session's object graph acyclic.
-    @ObservationIgnored private unowned let surface: any TerminalBackendSurface
+    @ObservationIgnored private let surface: any TerminalBackendSurface
 
     /// Set while a needle the backend resolved for us (⌘E's selection) is
     /// being written into `query`, so echoing it back as a fresh search —
@@ -94,14 +92,19 @@ final class TerminalFind {
     /// field editor afterwards and the window is left without a first
     /// responder, so the terminal silently stops receiving keystrokes.
     func restoreTerminalFocus() {
-        DispatchQueue.main.async { [surface] in
-            guard NSApp.isActive,
+        DispatchQueue.main.async { [weak self, surface] in
+            guard let self, !self.isPresented, self.canFocusSource,
                   let window = surface.window,
-                  window.isKeyWindow,
                   window.firstResponder !== surface
             else { return }
             window.makeFirstResponder(surface)
         }
+    }
+
+    var canFocusSource: Bool {
+        guard NSApp.isActive, surface.window?.isKeyWindow == true,
+              let container = surface.superview as? TerminalContainerView else { return false }
+        return container.focusOnAppear && container.canFocus()
     }
 
     func navigate(forward: Bool) {

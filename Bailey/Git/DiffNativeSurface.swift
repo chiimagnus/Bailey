@@ -6,6 +6,27 @@ import SwiftUI
 @MainActor
 final class DiffNativeSurface: NSView {
     weak var diff: DiffTab?
+    var canFocus: () -> Bool = { false }
+    private var pendingFocus = false
+
+    func requestFocus(_ focused: Bool) {
+        pendingFocus = focused
+        if focused { needsLayout = true }
+    }
+
+    private func focusIfRequested() {
+        guard pendingFocus, canFocus(), NSApp.isActive, let window, window.isKeyWindow,
+              let pane = [editPane, rightPane, unifiedPane, leftPane].compactMap({ $0 })
+                .first(where: { !$0.isHidden }) else { return }
+        if window.makeFirstResponder(pane.textView) { pendingFocus = false }
+    }
+    var onFocused: (() -> Void)? {
+        didSet {
+            for pane in [unifiedPane, leftPane, rightPane, editPane].compactMap({ $0 }) {
+                pane.textView.onBecomeFirstResponder = onFocused
+            }
+        }
+    }
 
     private var unifiedPane: DiffCodePaneView?
     private var leftPane: DiffCodePaneView?
@@ -71,6 +92,7 @@ final class DiffNativeSurface: NSView {
             )
         }
         if bounds.width > 0, bounds.height > 0 { restorePendingViewports() }
+        focusIfRequested()
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -173,6 +195,7 @@ final class DiffNativeSurface: NSView {
 
     private func makePane(mode: DiffCodePaneView.Mode, gutter: DiffGutterLayout) -> DiffCodePaneView {
         let pane = DiffCodePaneView(mode: mode, gutterLayout: gutter)
+        pane.textView.onBecomeFirstResponder = onFocused
         pane.onExpandCollapsedRun = { [weak self] run in self?.diff?.expandRun(run) }
         addSubview(pane)
         return pane
@@ -250,6 +273,15 @@ final class DiffNativeSurface: NSView {
 /// SwiftUI owns only the mount, never the native diff document and undo stack.
 struct DiffNativeRoot: NSViewRepresentable {
     let diff: DiffTab
+    var isFocused = false
+    var canFocus: () -> Bool = { true }
+    var onFocused: () -> Void = {}
+
+    final class Coordinator {
+        var wasFocused = false
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> DiffNativeSurface {
         if let existing = diff.nativeSurface { return existing }
@@ -259,7 +291,17 @@ struct DiffNativeRoot: NSViewRepresentable {
     }
 
     func updateNSView(_ view: DiffNativeSurface, context: Context) {
+        view.canFocus = canFocus
+        view.onFocused = onFocused
         view.render()
+        if isFocused != context.coordinator.wasFocused { view.requestFocus(isFocused) }
+        context.coordinator.wasFocused = isFocused
+    }
+
+    static func dismantleNSView(_ view: DiffNativeSurface, coordinator: Coordinator) {
+        view.onFocused = nil
+        view.canFocus = { false }
+        view.requestFocus(false)
     }
 
     func sizeThatFits(

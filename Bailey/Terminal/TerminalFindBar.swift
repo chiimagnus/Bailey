@@ -14,49 +14,32 @@ struct TerminalFindBar: View {
 
     var body: some View {
         let _ = themeChanges.revision
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-
-            TextField(String(localized: "Find", table: "Terminal"), text: $find.query)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .frame(width: 150)
-                .focused($fieldFocused)
-                .onKeyPress(.escape) {
-                    find.dismiss()
-                    return .handled
-                }
-                .onKeyPress(keys: [.return], phases: .down) { press in
-                    find.navigate(forward: !press.modifiers.contains(.shift))
-                    return .handled
-                }
-
-            Text(counterText)
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundStyle(find.total == 0 ? AnyShapeStyle(.red) : AnyShapeStyle(.tertiary))
-                // Fixed width so typing doesn't shuffle the controls sideways
-                // as the tally grows and shrinks.
-                .frame(width: 52, alignment: .trailing)
-
-            navigationButton("chevron.up", forward: false)
-            navigationButton("chevron.down", forward: true)
-
-            Button {
-                find.dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .medium))
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 18, height: 18)
-                    .contentShape(.rect)
+                queryField.frame(width: 150)
+                counter
+                navigationButton("chevron.up", forward: false)
+                navigationButton("chevron.down", forward: true)
+                closeButton
             }
-            .buttonStyle(.plain)
-            .help(String(localized: "Close find bar", table: "Terminal"))
+            .frame(height: 30)
+            VStack(spacing: 2) {
+                HStack(spacing: 6) {
+                    queryField.frame(minWidth: 0, maxWidth: .infinity)
+                    closeButton
+                }
+                HStack(spacing: 6) {
+                    counter
+                    navigationButton("chevron.up", forward: false)
+                    navigationButton("chevron.down", forward: true)
+                }
+            }
+            .frame(height: 52)
         }
         .padding(.horizontal, 8)
-        .frame(height: 30)
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color(nsColor: Theme.background))
@@ -76,6 +59,40 @@ struct TerminalFindBar: View {
         // view tree, so AppKit cannot resign the field editor afterwards and
         // undo it.
         .onDisappear { find.restoreTerminalFocus() }
+    }
+
+    private var queryField: some View {
+        TextField(String(localized: "Find", table: "Terminal"), text: $find.query)
+            .textFieldStyle(.plain)
+            .font(.system(size: 12))
+            .focused($fieldFocused)
+            .onKeyPress(.escape) {
+                find.dismiss()
+                return .handled
+            }
+            .onKeyPress(keys: [.return], phases: .down) { press in
+                find.navigate(forward: !press.modifiers.contains(.shift))
+                return .handled
+            }
+    }
+
+    private var counter: some View {
+        Text(counterText)
+            .font(.system(size: 11).monospacedDigit())
+            .foregroundStyle(find.total == 0 ? AnyShapeStyle(.red) : AnyShapeStyle(.tertiary))
+            .frame(width: 52, alignment: .trailing)
+    }
+
+    private var closeButton: some View {
+        Button { find.dismiss() } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 18, height: 18)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(String(localized: "Close find bar", table: "Terminal"))
     }
 
     private func navigationButton(_ symbol: String, forward: Bool) -> some View {
@@ -106,6 +123,7 @@ struct TerminalFindBar: View {
 
     private func focusField() {
         DispatchQueue.main.async {
+            guard find.isPresented, find.canFocusSource else { return }
             fieldFocused = true
             selectQuery()
         }
@@ -115,6 +133,7 @@ struct TerminalFindBar: View {
     /// lets you type straight over it.
     private func selectQuery() {
         DispatchQueue.main.async {
+            guard fieldFocused, find.isPresented, find.canFocusSource else { return }
             NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
         }
     }

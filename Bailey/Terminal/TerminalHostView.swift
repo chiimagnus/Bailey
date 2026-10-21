@@ -6,8 +6,9 @@ import SwiftUI
 /// overlay scrollbar to the container's true trailing edge.
 struct TerminalHostView: NSViewRepresentable {
     let session: TerminalSession
-    /// Whether this terminal's work tab is selected.
+    /// Whether this terminal is visible in the foreground active Dock group.
     var isFocused: Bool = true
+    var canFocus: () -> Bool = { true }
     /// Called when the terminal takes focus itself (e.g. a click), so the
     /// selected work tab can follow.
     var onFocused: () -> Void = {}
@@ -19,7 +20,9 @@ struct TerminalHostView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let container = TerminalContainerView()
         container.terminal = session.surface
+        container.find = session.find
         container.focusOnAppear = isFocused
+        container.canFocus = canFocus
         let terminal = session.surface
         terminal.onBecomeFirstResponder = onFocused
         terminal.openMenuTarget.onNewBrowserTab = onNewBrowserTab
@@ -55,16 +58,18 @@ struct TerminalHostView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: NSView, context: Context) {
+        guard let container = view as? TerminalContainerView,
+              session.surface.superview === container else { return }
         session.surface.onBecomeFirstResponder = onFocused
         session.surface.openMenuTarget.onNewBrowserTab = onNewBrowserTab
         session.surface.openMenuTarget.onNewFileTab = onNewFileTab
-        let container = view as? TerminalContainerView
-        container?.activateSurfaceAfterLayout()
-        container?.focusOnAppear = isFocused
+        container.activateSurfaceAfterLayout()
+        container.focusOnAppear = isFocused
+        container.canFocus = canFocus
         // Take focus only on the unfocused→focused edge (keyboard navigation,
         // a tab becoming selected), never on every render — that would fight the
         // user for focus and make sidebar text fields untypable.
-        if isFocused, !context.coordinator.isFocused, let container {
+        if isFocused, !context.coordinator.isFocused {
             container.requestTerminalFocus()
         }
         context.coordinator.isFocused = isFocused
@@ -72,7 +77,8 @@ struct TerminalHostView: NSViewRepresentable {
 
     static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
         guard let container = view as? TerminalContainerView,
-              let terminal = container.terminal as? any TerminalBackendSurface
+              let terminal = container.terminal as? any TerminalBackendSurface,
+              terminal.superview === container
         else { return }
         // These closures originate on PanelContentView and therefore capture its
         // PaneContent, including the same TerminalSession that owns `terminal`.
@@ -135,6 +141,9 @@ final class TerminalParkingContainerView: NSView {
 
         for session in sessions {
             let terminal = session.surface
+            terminal.onBecomeFirstResponder = nil
+            terminal.openMenuTarget.onNewBrowserTab = nil
+            terminal.openMenuTarget.onNewFileTab = nil
             // Parked panes stay attached at full size so the grid survives
             // unparking, but nothing composites them. Marking them occluded
             // lets the backend drop the renderer's pane-sized IOSurfaces
@@ -169,8 +178,10 @@ final class TerminalParkingContainerView: NSView {
 /// Focuses the terminal when its pane is the focused one — on first appearance
 /// and when navigation moves focus here. `TerminalHostView` drives the edge;
 /// this only performs the makeFirstResponder.
-private final class TerminalContainerView: NSView {
+final class TerminalContainerView: NSView {
     weak var terminal: NSView?
+    weak var find: TerminalFind?
+    var canFocus: () -> Bool = { true }
     var focusOnAppear = true {
         didSet {
             if !focusOnAppear { pendingFocusRequest = false }
@@ -216,6 +227,7 @@ private final class TerminalContainerView: NSView {
               window != nil,
               bounds.width > 0, bounds.height > 0,
               let terminal = terminal as? any TerminalBackendSurface,
+              terminal.superview === self,
               terminal.window != nil,
               terminal.bounds.width > 0, terminal.bounds.height > 0
         else { return }
@@ -243,8 +255,11 @@ private final class TerminalContainerView: NSView {
                 let window,
                 let terminal,
                 self.focusOnAppear,
+                self.canFocus(),
+                self.find?.isPresented != true,
                 NSApp.isActive,
                 window.isKeyWindow,
+                terminal.superview === self,
                 terminal.window === window
             else { return }
             if window.makeFirstResponder(terminal) {

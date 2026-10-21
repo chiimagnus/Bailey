@@ -1,6 +1,74 @@
 import AppKit
 import SwiftUI
 
+/// Per-tree native keyboard focus. Does not intercept mouse input or own row selection.
+@MainActor
+final class TreeKeyboardOwner {
+    weak var view: TreeKeyboardView?
+
+    func focus() {
+        guard let view, let window = view.window else { return }
+        window.makeFirstResponder(view)
+    }
+}
+
+final class TreeKeyboardView: NSView {
+    var onKeyDown: (NSEvent) -> Bool = { _ in false }
+    var onFocusChanged: (Bool) -> Void = { _ in }
+    var onAttachedToWindow: () -> Void = {}
+
+    override var acceptsFirstResponder: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { onAttachedToWindow() }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { onFocusChanged(true) }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onFocusChanged(false) }
+        return resigned
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if !onKeyDown(event) { super.keyDown(with: event) }
+    }
+}
+
+struct TreeKeyboardHost: NSViewRepresentable {
+    let owner: TreeKeyboardOwner
+    let onKeyDown: (NSEvent) -> Bool
+    let onFocusChanged: (Bool) -> Void
+    let onAttachedToWindow: () -> Void
+
+    func makeNSView(context: Context) -> TreeKeyboardView {
+        let view = TreeKeyboardView()
+        owner.view = view
+        updateNSView(view, context: context)
+        return view
+    }
+
+    func updateNSView(_ view: TreeKeyboardView, context: Context) {
+        owner.view = view
+        view.onKeyDown = onKeyDown
+        view.onFocusChanged = onFocusChanged
+        view.onAttachedToWindow = onAttachedToWindow
+    }
+
+    static func dismantleNSView(_ view: TreeKeyboardView, coordinator: ()) {
+        view.onKeyDown = { _ in false }
+        view.onFocusChanged = { _ in }
+        view.onAttachedToWindow = {}
+    }
+}
+
 /// One file-tree layout for Files, working-tree changes and commit history.
 enum TreeRowStyle {
     static let indent: CGFloat = 18
@@ -37,12 +105,12 @@ struct TreeRowLayout: ViewModifier {
 }
 
 /// The one row surface shared by Files, working-tree Git and committed Git.
-/// Callers apply the supplied layout inside button labels so hover and hit areas agree.
+/// Callers apply the supplied layout to interactive rows so hover and hit areas agree.
 struct TreeRowSurface<Content: View>: View {
     let depth: Int
     let scale: CGFloat
     var selected = false
-    var focused = false
+    var focusRing = false
     var hoverEnabled = true
     var leadingInset = TreeRowStyle.contentInset
     var trailingInset = TreeRowStyle.contentInset
@@ -57,7 +125,7 @@ struct TreeRowSurface<Content: View>: View {
         depth: Int,
         scale: CGFloat,
         selected: Bool = false,
-        focused: Bool = false,
+        focusRing: Bool = false,
         hoverEnabled: Bool = true,
         leadingInset: CGFloat = TreeRowStyle.contentInset,
         trailingInset: CGFloat = TreeRowStyle.contentInset,
@@ -69,7 +137,7 @@ struct TreeRowSurface<Content: View>: View {
         self.depth = depth
         self.scale = scale
         self.selected = selected
-        self.focused = focused
+        self.focusRing = focusRing
         self.hoverEnabled = hoverEnabled
         self.leadingInset = leadingInset
         self.trailingInset = trailingInset
@@ -89,10 +157,15 @@ struct TreeRowSurface<Content: View>: View {
             .contentShape(RoundedRectangle(cornerRadius: 4))
             .background(
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(selected
-                        ? Color.primary.opacity(0.09)
-                        : (isHovering || focused ? Color.primary.opacity(0.05) : .clear))
+                    .fill(selected ? Color.primary.opacity(0.09)
+                                   : (isHovering ? Color.primary.opacity(0.05) : .clear))
             )
+            .overlay {
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(focusRing ? Color(nsColor: Theme.accent).opacity(0.65) : .clear,
+                                  lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
             .onHover { if hoverEnabled { isHovering = $0 } }
             .padding(.horizontal, outerInset)
             .background {
@@ -198,25 +271,25 @@ struct TreeFolderRow<Accessory: View>: View {
     let row: TreeDisplayModel.Row
     let scale: CGFloat
     var leadingInset = TreeRowStyle.contentInset
+    var focusRing = false
     let toggle: () -> Void
     @ViewBuilder var accessory: (Bool) -> Accessory
-    @FocusState private var focused: Bool
 
     var body: some View {
-        TreeRowSurface(depth: row.depth, scale: scale, focused: focused, leadingInset: leadingInset) { hovering, layout in
+        TreeRowSurface(depth: row.depth, scale: scale,
+                       focusRing: focusRing, leadingInset: leadingInset) { hovering, layout in
             HStack(spacing: 0) {
-                Button(action: toggle) {
-                    TreeRowLabel(row: row, iconPath: row.path, scale: scale)
-                        .modifier(layout)
-                }
-                .buttonStyle(.plain)
-                .focused($focused)
-                .help(row.accessibilityLabel + "\n" + row.path)
+                TreeRowLabel(row: row, iconPath: row.path, scale: scale)
+                    .modifier(layout)
+                    .onTapGesture(perform: toggle)
+                    .accessibilityAction(.default) { toggle() }
+                    .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel)
+                .accessibilityAddTraits(focusRing ? .isSelected : [])
                 .accessibilityValue(row.isExpanded
                     ? String(localized: "Expanded", table: "Sidebar")
                     : String(localized: "Collapsed", table: "Sidebar"))
-                accessory(hovering || focused)
+                accessory(hovering || focusRing)
             }
         }
     }
@@ -224,8 +297,11 @@ struct TreeFolderRow<Accessory: View>: View {
 
 extension TreeFolderRow where Accessory == EmptyView {
     init(row: TreeDisplayModel.Row, scale: CGFloat,
-         leadingInset: CGFloat = TreeRowStyle.contentInset, toggle: @escaping () -> Void) {
-        self.init(row: row, scale: scale, leadingInset: leadingInset, toggle: toggle) { _ in EmptyView() }
+         leadingInset: CGFloat = TreeRowStyle.contentInset,
+         focusRing: Bool = false,
+         toggle: @escaping () -> Void) {
+        self.init(row: row, scale: scale, leadingInset: leadingInset,
+                  focusRing: focusRing, toggle: toggle) { _ in EmptyView() }
     }
 }
 
@@ -235,27 +311,28 @@ struct TreeFileRow<Accessory: View>: View {
     var iconPath: String? = nil
     var directory: String? = nil
     var selected = false
+    var focusRing = false
     var leadingInset = TreeRowStyle.contentInset
     var accessibilityHint = ""
     let open: () -> Void
+    var activate: (() -> Void)? = nil
     @ViewBuilder var accessory: (Bool) -> Accessory
-    @FocusState private var focused: Bool
 
     var body: some View {
         TreeRowSurface(depth: row.depth, scale: scale, selected: selected,
-                       focused: focused, leadingInset: leadingInset) { hovering, layout in
+                       focusRing: focusRing, leadingInset: leadingInset) { hovering, layout in
             HStack(spacing: 0) {
-                Button(action: open) {
-                    TreeRowLabel(row: row, iconPath: iconPath ?? row.path, scale: scale,
-                                 directory: directory)
-                        .modifier(layout)
-                }
-                .buttonStyle(.plain)
-                .focused($focused)
-                .help(row.accessibilityLabel + "\n" + row.path)
+                TreeRowLabel(row: row, iconPath: iconPath ?? row.path, scale: scale,
+                             directory: directory)
+                    .modifier(layout)
+                    .onTapGesture(perform: open)
+                    .simultaneousGesture(TapGesture(count: 2).onEnded { activate?() })
+                    .accessibilityAction(.default) { open() }
+                    .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel + ", " + row.path)
+                .accessibilityAddTraits(focusRing ? .isSelected : [])
                 .accessibilityHint(accessibilityHint)
-                accessory(hovering || focused)
+                accessory(hovering || focusRing)
             }
         }
     }

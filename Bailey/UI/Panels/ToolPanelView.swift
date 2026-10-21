@@ -122,13 +122,11 @@ struct ToolPanelView: View {
         )
     }
 
-    /// Path of the file in the focused pane, so the tree can highlight it.
-    /// Reactive: focus/selection is published up through the project to `manager`.
     private var openFilePath: String? {
-        if case .file(let file)? = manager.selectedProject?.focusedContent {
-            return file.path
-        }
-        return nil
+        guard let target = filesTarget,
+              case .file(let file)? = manager.selectedProject?.selectedTab?.content,
+              file.workspaceIdentity == target.workspace else { return nil }
+        return file.path
     }
 
     var body: some View {
@@ -156,7 +154,13 @@ struct ToolPanelView: View {
                         sshHost: project.sshHost,
                         rootBadge: rootBadge,
                         currentFilePath: openFilePath,
-                        openFile: { manager.openFile($0) },
+                        openFile: { manager.openFile($0, activating: $1) },
+                        isActive: project.dock.activeGroup?.selected == .files,
+                        canFocusKeyboard: {
+                            guard !manager.isCommandPaletteVisible,
+                                  let files = project.dock.group(containing: .files) else { return false }
+                            return project.dock.activeGroupID == files.id && files.selected == .files
+                        },
                         onRename: { [workspace = project.workspaceIdentity] oldPath, newPath in
                             manager.fileRenamed(
                                 from: oldPath, to: newPath, workspace: workspace
@@ -205,7 +209,8 @@ struct ToolPanelView: View {
                             path: entry.path,
                             staged: staged,
                             untracked: entry.isUntracked,
-                            origPath: entry.origPath
+                            origPath: entry.origPath,
+                            activating: false
                         )
                     },
                     openCommitDiff: { commit, file in
@@ -216,7 +221,8 @@ struct ToolPanelView: View {
                                 ? (commit.stash?.untrackedFilesHash ?? commit.hash) : commit.hash,
                             parentHash: file.fromStashUntracked ? nil : commit.parentHashes.first,
                             status: file.fromStashUntracked ? "A" : file.status,
-                            origPath: file.originalPath
+                            origPath: file.originalPath,
+                            activating: false
                         )
                     }
                 )

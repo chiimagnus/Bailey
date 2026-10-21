@@ -62,13 +62,59 @@ struct GitPanel: View {
     @State private var expandedCommitIDs: Set<String> = []
     @State private var filterText = ""
     @State private var showFilter = false
+    @State private var keyboardOwner = TreeKeyboardOwner()
+    @State private var graphKeyboardOwner = TreeKeyboardOwner()
+    @State private var lastKeyboardRegion: KeyboardRegion = .changes
+    @State private var keyboardFocused = false
+    @State private var selectedChange: ChangeSelection?
+    @State private var waitingForChanges = false
+    @Environment(\.controlActiveState) private var controlActiveState
     @State private var operationExpanded = false
     @State private var operationTrigger: OperationTrigger?
     @Environment(\.panelFontScale) private var panelFontScale
 
+    private enum KeyboardRegion { case changes, graph }
+
+    private struct ChangeSelection: Hashable {
+        let scope: String
+        let repository: String
+        let section: GitEntryRow.Kind
+        let path: String
+    }
+
+    private struct VisibleChange {
+        let kind: GitEntryRow.Kind
+        let row: TreeDisplayModel.Row
+        let entry: GitStatusModel.Entry?
+    }
+
+    private var isGitActive: Bool {
+        guard let project, manager.selectedProject === project,
+              let group = project.dock.group(containing: .git) else { return false }
+        return project.dock.activeGroupID == group.id && group.selected == .git
+    }
+
+    private func selection(for row: VisibleChange) -> ChangeSelection {
+        ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
+                        section: row.kind, path: row.row.path)
+    }
+
     private var hasCurrentPanelTarget: Bool {
-        guard let context = project?.panelContext else { return false }
+        guard let project, manager.selectedProject === project,
+              let context = project.panelContext else { return false }
         return model.matchesPanelTarget(context.identity)
+    }
+
+    private var displayedDiff: DiffTab? {
+        guard let project, case .diff(let diff)? = project.selectedTab?.content,
+              diff.workspaceIdentity == project.workspaceIdentity else { return nil }
+        return diff
+    }
+
+    private func isDisplayedChange(_ entry: GitStatusModel.Entry, kind: GitEntryRow.Kind) -> Bool {
+        guard let diff = displayedDiff else { return false }
+        return diff.repoRoot == model.repoRoot && diff.path == entry.path
+            && diff.source == (kind == .staged ? .staged : .worktree)
     }
 
     var body: some View {
@@ -121,7 +167,7 @@ struct GitPanel: View {
         ) {
             Button(discardActionTitle(for: pendingDiscard?.entry),
                    role: .destructive) {
-                if let pendingDiscard {
+                if hasCurrentPanelTarget, let pendingDiscard {
                     let trigger = OperationTrigger.entry(
                         path: pendingDiscard.entry.path, operation: .discard
                     )
@@ -159,6 +205,11 @@ struct GitPanel: View {
             Button(pendingDiscardAllTrigger == .discardAll
                    ? String(localized: "Discard All Changes", table: "Sidebar")
                    : String(localized: "Discard Changes", table: "Sidebar"), role: .destructive) {
+                guard hasCurrentPanelTarget else {
+                    pendingDiscardAll = []
+                    confirmDiscardAll = false
+                    return
+                }
                 let snapshot = pendingDiscardAll
                 let trigger = pendingDiscardAllTrigger
                 if remoteName != nil {
@@ -1648,7 +1699,8 @@ struct GitPanel: View {
     // anchored to the visible sidebar, even for exceptionally long paths.
     private var changeList: some View {
         let graphCommits = model.graphCommits
-        return ScrollView(.vertical) {
+        return ScrollViewReader { proxy in
+            ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if model.totalChangeCount == 0 {
                     cleanState
@@ -1734,6 +1786,8 @@ struct GitPanel: View {
                             remotes: model.remotes,
                             stashFilesByOID: model.stashFilesByOID,
                             repoRoot: model.repoRoot,
+                            selectionScope: model.currentScope,
+                            displayedDiff: displayedDiff,
                             fileAction: { commit, file, action in
                                 handleHistoricalFile(commit, file: file, action: action)
                             },
@@ -1754,7 +1808,10 @@ struct GitPanel: View {
                             hasMoreCommits: model.hasMoreRecentCommits,
                             isLoadingMore: model.isLoadingMoreCommits,
                             loadMore: model.loadMoreCommits,
-                            openDiff: openCommitDiff,
+                            openDiff: { commit, file in
+                                guard hasCurrentPanelTarget else { return }
+                                openCommitDiff(commit, file)
+                            },
                             canSwitchBranch: !model.isBusy && model.canUseCurrentReferences,
                             switchBranch: { name in
                                 switchBranchSafely(to: name)
@@ -1803,7 +1860,8 @@ struct GitPanel: View {
                                 manager.openDiff(
                                     repoRoot: worktree.path, path: entry.path,
                                     staged: staged, untracked: entry.isUntracked,
-                                    origPath: entry.diffOriginalPath(staged: staged)
+                                    origPath: entry.diffOriginalPath(staged: staged),
+                                    activating: false
                                 )
                             },
                             canActOnWorktrees: !model.isBusy && model.hasCurrentWorktrees
@@ -1817,7 +1875,12 @@ struct GitPanel: View {
                             },
                             createWorktree: { ref, commit in
                                 presentBranchAction(ref, commit: commit, action: .createWorktree)
-                            }
+                            },
+                            keyboardOwner: graphKeyboardOwner,
+                            isKeyboardActive: isGitActive && hasCurrentPanelTarget,
+                            onKeyboardFocused: { lastKeyboardRegion = .graph },
+                            onKeyboardAttached: focusGitChanges,
+                            scrollToKeyboardRow: { proxy.scrollTo($0) }
                         )
                         .frame(maxWidth: .infinity)
                     }
@@ -1826,29 +1889,188 @@ struct GitPanel: View {
             .padding(.horizontal, 6)
             .padding(.bottom, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background {
+                TreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleGitChangeKey,
+                                 onFocusChanged: { focused in
+                                     keyboardFocused = focused
+                                     if focused { lastKeyboardRegion = .changes }
+                                 },
+                                 onAttachedToWindow: focusGitChanges)
+            }
+            .onAppear { focusGitChanges() }
+            .onChange(of: isGitActive) { _, active in
+                if active { focusGitChanges() }
+                else { waitingForChanges = false }
+            }
+            .onChange(of: hasCurrentPanelTarget) { _, current in
+                if current { focusGitChanges() }
+            }
+            .onChange(of: model.repositoryIdentity) { _, _ in
+                selectedChange = nil
+                if isGitActive { focusGitChanges() }
+            }
+            .onChange(of: model.currentScope) { _, _ in
+                selectedChange = nil
+                lastKeyboardRegion = .changes
+                if isGitActive { focusGitChanges() }
+            }
+            .onChange(of: historyCollapsed) { _, collapsed in
+                if collapsed, lastKeyboardRegion == .graph {
+                    lastKeyboardRegion = .changes
+                    focusGitChanges()
+                }
+            }
+            .onChange(of: model.graphCommits.map(\.id)) { _, _ in
+                if isGitActive && navigableChanges.isEmpty { focusGitChanges() }
+            }
+            .onChange(of: navigableChanges.map { selection(for: $0) }) { _, choices in
+                if waitingForChanges { focusGitChanges() }
+                else if let selectedChange, !choices.contains(selectedChange) {
+                    self.selectedChange = choices.first
+                }
+            }
+            .onChange(of: selectedChange) { _, key in
+                if let key, keyboardFocused { proxy.scrollTo(key) }
+            }
+            .onChange(of: keyboardFocused) { _, focused in
+                if focused, let selectedChange { proxy.scrollTo(selectedChange) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) {
+                notification in
+                if (notification.object as? NSWindow) === keyboardOwner.view?.window {
+                    focusGitChanges()
+                }
+            }
         }
     }
 
-    @ViewBuilder
-    private func changedFileRows(
+    private func visibleRows(
         _ entries: [GitStatusModel.Entry], kind: GitEntryRow.Kind
-    ) -> some View {
+    ) -> [VisibleChange] {
         if settings.gitViewMode == .tree {
             let files = entries.map { entry in
                 TreeDisplayModel.Row(name: entry.fileName, path: entry.path, isDirectory: false,
                                      status: .init(entryStatus(entry, kind: kind)))
             }
             let byPath = Dictionary(entries.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
-            ForEach(TreeDisplayModel.pathRows(files, section: kind.rawValue, collapsed: collapsedFolders)) { item in
-                if item.isDirectory {
-                    directoryRow(item, entries: entries, kind: kind)
-                } else if let entry = byPath[item.path] {
-                    row(entry, kind: kind, showDirectory: false, displayRow: item)
-                }
+            return TreeDisplayModel.pathRows(
+                files, section: kind.rawValue, collapsed: collapsedFolders
+            ).compactMap { row in
+                if row.isDirectory { return VisibleChange(kind: kind, row: row, entry: nil) }
+                guard let entry = byPath[row.path] else { return nil }
+                return VisibleChange(kind: kind, row: row, entry: entry)
             }
-        } else {
-            ForEach(entries, id: \.path) { entry in
-                row(entry, kind: kind)
+        }
+        return entries.map { entry in
+            VisibleChange(kind: kind, row: TreeDisplayModel.Row(
+                name: entry.fileName, path: entry.path, isDirectory: false,
+                status: .init(entryStatus(entry, kind: kind))
+            ), entry: entry)
+        }
+    }
+
+    private var navigableChanges: [VisibleChange] {
+        var rows: [VisibleChange] = []
+        if !mergeCollapsed { rows += visibleRows(filteredMergeEntries, kind: .merge) }
+        if !stagedCollapsed { rows += visibleRows(filteredStagedEntries, kind: .staged) }
+        if !changesCollapsed { rows += visibleRows(filteredChangedEntries, kind: .unstaged) }
+        return rows
+    }
+
+    private func focusGitChanges() {
+        guard isGitActive, hasCurrentPanelTarget, model.canUseCurrentStatus else { return }
+        let rows = navigableChanges
+        if !rows.isEmpty, !rows.contains(where: { selection(for: $0) == selectedChange }) {
+            selectedChange = selection(for: rows[0])
+        }
+        waitingForChanges = rows.isEmpty
+        guard let window = keyboardOwner.view?.window ?? graphKeyboardOwner.view?.window,
+              window.isKeyWindow, NSApp.isActive else { return }
+        // An active native input always owns its field editor.
+        if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor { return }
+        if (lastKeyboardRegion == .graph || rows.isEmpty),
+           graphKeyboardOwner.view?.window === window {
+            graphKeyboardOwner.focus()
+        } else if !rows.isEmpty {
+            keyboardOwner.focus()
+        }
+    }
+
+    private func browseGitChange(_ change: VisibleChange) {
+        guard let entry = change.entry, hasCurrentPanelTarget,
+              model.canUseCurrentStatus, model.isCurrent(entry) else { return }
+        selectedChange = selection(for: change)
+        var diffEntry = entry
+        diffEntry.origPath = entry.diffOriginalPath(staged: change.kind == .staged)
+        openDiff(diffEntry, change.kind == .staged)
+        if isGitActive, let window = keyboardOwner.view?.window,
+           window.isKeyWindow, NSApp.isActive {
+            keyboardOwner.focus()
+        }
+    }
+
+    private func handleGitChangeKey(_ event: NSEvent) -> Bool {
+        guard keyboardOwner.view?.window?.firstResponder === keyboardOwner.view,
+              isGitActive, hasCurrentPanelTarget, model.canUseCurrentStatus,
+              event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+        else { return false }
+        let rows = navigableChanges
+        guard !rows.isEmpty else { return false }
+        let current = selectedChange.flatMap { key in
+            rows.firstIndex { selection(for: $0) == key }
+        }
+        switch event.keyCode {
+        case 125, 126: // Down / Up
+            let start = current ?? (event.keyCode == 125 ? -1 : rows.count)
+            let index = max(0, min(rows.count - 1, start + (event.keyCode == 125 ? 1 : -1)))
+            selectedChange = selection(for: rows[index])
+        case 124: // Right opens the directory; a second press selects its first child.
+            guard let current, rows[current].row.isDirectory else { return false }
+            let row = rows[current]
+            if !row.row.isExpanded {
+                model.toggleCollapsedFolder(row.kind.rawValue + ":" + row.row.path)
+            } else if current + 1 < rows.count,
+                      rows[current + 1].row.path.hasPrefix(row.row.path + "/") {
+                selectedChange = selection(for: rows[current + 1])
+            }
+        case 123: // Left collapses the directory or moves to its parent.
+            guard let current else { return false }
+            let row = rows[current]
+            if row.row.isDirectory && row.row.isExpanded {
+                model.toggleCollapsedFolder(row.kind.rawValue + ":" + row.row.path)
+            } else if let parent = rows[..<current].last(where: {
+                $0.kind == row.kind && $0.row.isDirectory
+                    && row.row.path.hasPrefix($0.row.path + "/")
+            }) {
+                selectedChange = selection(for: parent)
+            } else { return false }
+        case 36, 49, 76: // Return / Space / Enter browse the selected change.
+            guard let current else { return false }
+            if rows[current].row.isDirectory {
+                let row = rows[current]
+                model.toggleCollapsedFolder(row.kind.rawValue + ":" + row.row.path)
+            } else {
+                browseGitChange(rows[current])
+            }
+        case 53: selectedChange = nil // Escape
+        default: return false
+        }
+        return true
+    }
+
+    @ViewBuilder
+    private func changedFileRows(
+        _ entries: [GitStatusModel.Entry], kind: GitEntryRow.Kind
+    ) -> some View {
+        ForEach(visibleRows(entries, kind: kind), id: \.row.id) { change in
+            if change.row.isDirectory {
+                directoryRow(change.row, entries: entries, kind: kind)
+                    .id(selection(for: change))
+            } else if let entry = change.entry {
+                row(entry, kind: kind,
+                    showDirectory: settings.gitViewMode != .tree, displayRow: change.row)
+                    .id(selection(for: change))
             }
         }
     }
@@ -1861,8 +2083,15 @@ struct GitPanel: View {
         let stageTrigger = OperationTrigger.entry(path: item.path, operation: .stage)
         let unstageTrigger = OperationTrigger.entry(path: item.path, operation: .unstage)
         let discardTrigger = OperationTrigger.entry(path: item.path, operation: .discard)
-        return TreeFolderRow(row: item, scale: panelFontScale, toggle: {
+        let key = ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
+                                  section: kind, path: item.path)
+        let focused = selectedChange == key && keyboardFocused && isGitActive
+            && controlActiveState == .key
+        return TreeFolderRow(row: item, scale: panelFontScale, focusRing: focused, toggle: {
+            guard hasCurrentPanelTarget, model.canUseCurrentStatus else { return }
+            selectedChange = key
             model.toggleCollapsedFolder(kind.rawValue + ":" + item.path)
+            if isGitActive { keyboardOwner.focus() }
         }) { active in
             GitChangeRowActions(
                 kind: kind, active: active,
@@ -1926,24 +2155,27 @@ struct GitPanel: View {
         let stageTrigger = OperationTrigger.entry(path: entry.path, operation: .stage)
         let unstageTrigger = OperationTrigger.entry(path: entry.path, operation: .unstage)
         let discardTrigger = OperationTrigger.entry(path: entry.path, operation: .discard)
+        let presentation = displayRow ?? TreeDisplayModel.Row(
+            name: entry.fileName, path: entry.path, isDirectory: false,
+            status: .init(entryStatus(entry, kind: kind))
+        )
+        let key = ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
+                                  section: kind, path: entry.path)
         return GitEntryRow(
             entry: entry,
-            displayRow: displayRow ?? TreeDisplayModel.Row(
-                name: entry.fileName, path: entry.path, isDirectory: false,
-                status: .init(entryStatus(entry, kind: kind))
-            ),
+            displayRow: presentation,
             kind: kind,
             showDirectory: showDirectory,
+            selected: isDisplayedChange(entry, kind: kind),
+            focusRing: selectedChange == key && keyboardFocused && isGitActive
+                && controlActiveState == .key,
             isRemote: remoteName != nil,
             disabled: model.isBusy || !model.canUseCurrentStatus,
             isStageLoading: operationIsLoading(stageTrigger),
             isUnstageLoading: operationIsLoading(unstageTrigger),
             isDiscardLoading: operationIsLoading(discardTrigger),
             openDiff: {
-                guard model.isCurrent(entry) else { return }
-                var diffEntry = entry
-                diffEntry.origPath = entry.diffOriginalPath(staged: kind == .staged)
-                openDiff(diffEntry, kind == .staged)
+                browseGitChange(VisibleChange(kind: kind, row: presentation, entry: entry))
             },
             openFile: { openIfPossible(entry) },
             openHead: kind != .merge && model.hasHead && entry.staged != "A" && !entry.isUntracked ? {
@@ -1954,6 +2186,7 @@ struct GitPanel: View {
             stage: { performOperation(stageTrigger) { model.stage(entry) } },
             unstage: { performOperation(unstageTrigger) { model.unstage(entry) } },
             discard: {
+                guard hasCurrentPanelTarget else { return }
                 if remoteName == nil {
                     pendingDiscard = model.prepareLocalDiscard([entry]).first
                 } else {
@@ -1969,7 +2202,8 @@ struct GitPanel: View {
     }
 
     private func openIfPossible(_ entry: GitStatusModel.Entry) {
-        guard model.canOpen(entry, isRemote: remoteName != nil) else { return }
+        guard hasCurrentPanelTarget,
+              model.canOpen(entry, isRemote: remoteName != nil) else { return }
         openFile(model.absolutePath(for: entry))
     }
 
@@ -2086,6 +2320,7 @@ struct GitPanel: View {
     private func requestDiscard(
         _ entries: [GitStatusModel.Entry], trigger: OperationTrigger
     ) {
+        guard hasCurrentPanelTarget else { return }
         if remoteName != nil {
             prepareRemoteDiscard(entries, all: true, trigger: trigger)
         } else {
@@ -2117,7 +2352,8 @@ struct GitPanel: View {
     }
 
     private func openHeadFile(_ entry: GitStatusModel.Entry) {
-        guard model.isCurrent(entry), let project, let hash = model.headOID else { return }
+        guard hasCurrentPanelTarget, model.isCurrent(entry),
+              let project, let hash = model.headOID else { return }
         project.openHistoricalDiff(repoRoot: model.repoRoot,
             path: (entry.staged == "R" || entry.staged == "C") ? entry.origPath ?? entry.path : entry.path,
             source: .revision(hash: hash), origPath: nil)
@@ -2201,6 +2437,7 @@ struct GitPanel: View {
     }
 
     private func requestDiscardAll() {
+        guard hasCurrentPanelTarget else { return }
         if remoteName != nil {
             prepareRemoteDiscard(model.changedEntries, all: true)
         } else {
@@ -2214,12 +2451,14 @@ struct GitPanel: View {
         _ entries: [GitStatusModel.Entry], all: Bool,
         trigger: OperationTrigger = .discardAll
     ) {
-        guard !preparingDiscard, !entries.isEmpty, model.canUseCurrentStatus else { return }
+        guard hasCurrentPanelTarget, !preparingDiscard, !entries.isEmpty,
+              model.canUseCurrentStatus else { return }
         preparingDiscard = true
         Task {
             defer { preparingDiscard = false }
             do {
                 let snapshots = try await model.prepareRemoteDiscard(entries)
+                guard hasCurrentPanelTarget else { return }
                 if all {
                     pendingDiscardAll = snapshots
                     pendingDiscardAllTrigger = trigger
@@ -2241,6 +2480,7 @@ struct GitPanel: View {
     // MARK: Bits
 
     private func performOperation(_ trigger: OperationTrigger, _ action: () -> Void) {
+        guard hasCurrentPanelTarget else { return }
         operationExpanded = false
         operationTrigger = trigger
         action()
@@ -2418,7 +2658,7 @@ struct GitPanel: View {
 }
 
 private struct GitEntryRow: View {
-    enum Kind: String {
+    enum Kind: String, Hashable {
         case merge, staged, unstaged
     }
 
@@ -2426,6 +2666,8 @@ private struct GitEntryRow: View {
     let displayRow: TreeDisplayModel.Row
     let kind: Kind
     let showDirectory: Bool
+    let selected: Bool
+    let focusRing: Bool
     /// Whether this repository is on another machine, where discarding an
     /// untracked or copied file deletes it rather than moving it to the Trash.
     let isRemote: Bool
@@ -2451,6 +2693,7 @@ private struct GitEntryRow: View {
             row: displayRow,
             scale: fontScale, iconPath: absolutePath,
             directory: showDirectory ? entry.directory : nil,
+            selected: selected, focusRing: focusRing,
             accessibilityHint: kind == .merge
                 ? String(localized: "Opens conflict changes", table: "Sidebar")
                 : String(localized: "Opens changes", table: "Sidebar"),

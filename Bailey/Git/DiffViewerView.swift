@@ -893,11 +893,18 @@ struct DiffViewerView: View {
     /// ContentView); this flags when it is the frontmost tab so content
     /// refreshes on each re-visit, not just on first mount.
     let isSelected: Bool
+    let isFocused: Bool
+    let canFocus: () -> Bool
+    let onFocused: () -> Void
 
-    init(diff: DiffTab, isSelected: Bool = true) {
+    init(diff: DiffTab, isSelected: Bool = true, isFocused: Bool = false,
+         canFocus: @escaping () -> Bool = { true }, onFocused: @escaping () -> Void = {}) {
         self.diff = diff
         preferences = diff.preferences
         self.isSelected = isSelected
+        self.isFocused = isFocused
+        self.canFocus = canFocus
+        self.onFocused = onFocused
     }
 
     var body: some View {
@@ -938,7 +945,8 @@ struct DiffViewerView: View {
                         if !diff.source.isPlainRevision { controlBar }
                         if diff.source.isPlainRevision || diff.display != nil {
                             // Each tab retains its own TextKit document; never reuse another tab's NSView.
-                            DiffNativeRoot(diff: diff)
+                            DiffNativeRoot(diff: diff, isFocused: isFocused,
+                                           canFocus: canFocus, onFocused: onFocused)
                                 .id(diff.id)
                         } else {
                             DiffSkeletonView()

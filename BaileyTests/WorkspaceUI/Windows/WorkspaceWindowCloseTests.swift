@@ -173,6 +173,195 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         try await wait { firstWindow.attachedSheet == nil }
     }
 
+    func testBackgroundProjectDirtyCloseSheetStaysInItsOwningWindow() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let firstFolder = root.appendingPathComponent("first")
+        let secondFolder = root.appendingPathComponent("second")
+        try FileManager.default.createDirectory(at: firstFolder, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondFolder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let first = TerminalManager()
+        let second = TerminalManager()
+        defer { first.windowClosed(); second.windowClosed() }
+        first.addLocalFolders([firstFolder])
+        second.addLocalFolders([secondFolder])
+        let project = try XCTUnwrap(first.selectedProject)
+        let backend = WindowSaveFixture("original")
+        let file = FileTab(path: firstFolder.appendingPathComponent("draft.txt").path,
+                           backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        let tab = PaneTab(content: .file(file))
+        project.append(tab)
+
+        let frame = NSRect(x: -900, y: -900, width: 850, height: 560)
+        let firstWindow = NSWindow(contentRect: frame, styleMask: [.titled, .closable],
+                                   backing: .buffered, defer: false)
+        let secondWindow = NSWindow(contentRect: frame, styleMask: [.titled, .closable],
+                                    backing: .buffered, defer: false)
+        firstWindow.isReleasedWhenClosed = false
+        secondWindow.isReleasedWhenClosed = false
+        defer {
+            if let sheet = firstWindow.attachedSheet {
+                firstWindow.endSheet(sheet, returnCode: .alertThirdButtonReturn)
+            }
+            if let sheet = secondWindow.attachedSheet {
+                secondWindow.endSheet(sheet, returnCode: .alertThirdButtonReturn)
+            }
+            firstWindow.close()
+            secondWindow.close()
+        }
+        firstWindow.contentView = NSView(frame: frame)
+        secondWindow.contentView = NSView(frame: frame)
+        first.attach(to: firstWindow)
+        second.attach(to: secondWindow)
+        firstWindow.orderFront(nil)
+        secondWindow.orderFront(nil)
+        secondWindow.makeMain()
+
+        file.text = "unsaved 中文 😀"
+        file.refreshDirtyState()
+        XCTAssertTrue(file.isDirty)
+        project.close(tab)
+        project.close(tab)
+        try await wait { firstWindow.attachedSheet != nil }
+        XCTAssertNil(secondWindow.attachedSheet,
+                     "Another window must never own this project's close alert")
+        let firstSheet = try XCTUnwrap(firstWindow.attachedSheet)
+        firstWindow.endSheet(firstSheet, returnCode: .alertThirdButtonReturn)
+        try await wait { !file.autoSaveSuspendedForClose }
+        let firstAttempts = await backend.writes
+        XCTAssertEqual(firstAttempts, 1, "Repeated closing must share a single save and sheet")
+        XCTAssertTrue(file.isDirty)
+
+        project.close(tab)
+        try await wait { firstWindow.attachedSheet != nil }
+        let retrySheet = try XCTUnwrap(firstWindow.attachedSheet)
+        firstWindow.endSheet(retrySheet, returnCode: .alertThirdButtonReturn)
+        try await wait { !file.autoSaveSuspendedForClose }
+        let retryAttempts = await backend.writes
+        XCTAssertEqual(retryAttempts, 2, "Cancel must allow a later explicit retry")
+        XCTAssertTrue(file.isDirty)
+        let stored = await backend.currentText()
+        XCTAssertEqual(stored, "original")
+        XCTAssertEqual(project.tabs.map(\.id), [tab.id])
+
+        let secondBackend = WindowSaveFixture("second original")
+        let secondFile = FileTab(
+            path: firstFolder.appendingPathComponent("second.txt").path,
+            backend: secondBackend, workspaceIdentity: nil
+        )
+        try await secondFile.waitForText()
+        secondFile.text = "second unsaved"
+        secondFile.refreshDirtyState()
+        file.autoSaveSuspendedForClose = true
+        project.append(PaneTab(content: .file(secondFile)))
+        file.autoSaveSuspendedForClose = false
+        let retainedBrowser = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
+        secondFile.autoSaveSuspendedForClose = true
+        project.append(retainedBrowser)
+        secondFile.autoSaveSuspendedForClose = false
+        project.closeAll()
+        project.closeAll()
+        try await wait { firstWindow.attachedSheet != nil }
+        XCTAssertNil(secondWindow.attachedSheet)
+        let batchSheet = try XCTUnwrap(firstWindow.attachedSheet)
+        firstWindow.endSheet(batchSheet, returnCode: .alertThirdButtonReturn)
+        try await wait { !file.autoSaveSuspendedForClose && !secondFile.autoSaveSuspendedForClose }
+        XCTAssertEqual(project.tabs.count, 3, "Cancel must retain unclosed clean and dirty tabs")
+        XCTAssertTrue(project.tabs.contains { $0 === retainedBrowser },
+                      "A repeated batch close must not discard a clean tab before the first batch resolves")
+        XCTAssertTrue(file.isDirty)
+        XCTAssertTrue(secondFile.isDirty)
+        let firstBatchWrites = await backend.writes
+        let secondBatchWrites = await secondBackend.writes
+        XCTAssertEqual(firstBatchWrites, 3)
+        XCTAssertEqual(secondBatchWrites, 0, "Cancel must stop later batch saves")
+        let secondStored = await secondBackend.currentText()
+        XCTAssertEqual(secondStored, "second original")
+
+        await backend.permitWrites()
+        await secondBackend.permitWrites()
+        project.closeAll()
+        try await wait { project.tabs.isEmpty }
+        let savedFirst = await backend.currentText()
+        let savedSecond = await secondBackend.currentText()
+        XCTAssertEqual(savedFirst, "unsaved 中文 😀")
+        XCTAssertEqual(savedSecond, "second unsaved")
+        XCTAssertNil(firstWindow.attachedSheet)
+        XCTAssertNil(secondWindow.attachedSheet)
+    }
+
+    func testRepeatedCloseAllKeepsCleanTabsUntilDirtyConfirmationResolves() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let backend = WindowSaveFixture("original")
+        let dirtyFile = FileTab(path: root.appendingPathComponent("draft.txt").path,
+                                backend: backend, workspaceIdentity: nil)
+        try await dirtyFile.waitForText()
+        let draft = PaneTab(content: .file(dirtyFile))
+        project.append(draft)
+        let cleanTab = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
+        project.append(cleanTab)
+
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 720, height: 520),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer {
+            if let sheet = window.attachedSheet {
+                window.endSheet(sheet, returnCode: .alertThirdButtonReturn)
+            }
+            window.close()
+        }
+        manager.attach(to: window)
+        window.orderFront(nil)
+        dirtyFile.text = "edited while awaiting confirmation"
+        dirtyFile.refreshDirtyState()
+        XCTAssertTrue(dirtyFile.isDirty)
+
+        project.closeAll()
+        project.closeAll()
+        XCTAssertEqual(project.tabs.count, 2,
+                       "Repeating Close All must not remove clean tabs while Cancel remains possible")
+        try await wait { window.attachedSheet != nil }
+        XCTAssertEqual(project.tabs.count, 2)
+        let sheet = try XCTUnwrap(window.attachedSheet)
+        window.endSheet(sheet, returnCode: .alertThirdButtonReturn)
+        try await wait { !dirtyFile.autoSaveSuspendedForClose }
+        XCTAssertEqual(project.tabs.map(\.id), [draft.id, cleanTab.id])
+        XCTAssertTrue(dirtyFile.isDirty)
+    }
+
+    func testProjectCloseCannotBypassAnActiveTabClose() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let backend = WindowSaveFixture("original")
+        let file = FileTab(path: root.appendingPathComponent("clean.txt").path,
+                           backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        project.append(PaneTab(content: .file(file)))
+        XCTAssertFalse(file.isDirty)
+
+        file.autoSaveSuspendedForClose = true
+        manager.close(project)
+        XCTAssertTrue(manager.projects.contains { $0 === project },
+                      "Project close must not destroy a tab while its close is still finalizing")
+        file.autoSaveSuspendedForClose = false
+        manager.close(project)
+        XCTAssertFalse(manager.projects.contains { $0 === project })
+    }
+
     func testNativeCloseDoesNotDiscardFailedSaveThenClosesAfterRetry() async throws {
         let oldWindows = SessionStore.load()
         let oldHistories = TerminalHistoryStore.load()

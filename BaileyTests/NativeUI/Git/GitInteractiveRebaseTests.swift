@@ -69,7 +69,7 @@ final class GitInteractiveRebaseTests: XCTestCase {
         window.isReleasedWhenClosed = false
         defer { window.close() }
         window.contentView = NSHostingView(rootView: PanelContentView(
-            tab: tab, isSelected: true, onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in }
+            tab: tab, isFocused: true, onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in }
         ))
         window.orderFront(nil)
         window.contentView?.layoutSubtreeIfNeeded()
@@ -189,7 +189,7 @@ final class GitInteractiveRebaseTests: XCTestCase {
                     session.location = .remote(connection)
                     let tab = PaneTab(content: .session(session))
                     project.append(tab)
-                    project.selectedTabID = tab.id
+                    project.selectTab(tab.id)
                     context = try XCTUnwrap(project.panelContext)
                 }
                 defer { source?.terminate() }
@@ -204,7 +204,7 @@ final class GitInteractiveRebaseTests: XCTestCase {
                                       styleMask: [.titled], backing: .buffered, defer: false)
                 window.isReleasedWhenClosed = false
                 defer { window.close() }
-                window.contentView = NSHostingView(rootView: PanelContentView(tab: tab, isSelected: true,
+                window.contentView = NSHostingView(rootView: PanelContentView(tab: tab, isFocused: true,
                     onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in }))
                 window.orderFront(nil)
                 window.contentView?.layoutSubtreeIfNeeded()

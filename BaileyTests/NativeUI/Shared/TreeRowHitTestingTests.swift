@@ -21,6 +21,56 @@ final class TreeRowHitTestingTests: XCTestCase {
         }
     }
 
+    func testSelectionFillAndKeyboardOutlineRenderIndependently() throws {
+        func centerColor(selected: Bool, outlined: Bool,
+                         appearance: NSAppearance.Name) throws -> NSColor {
+            let window = NSWindow(
+                contentRect: NSRect(x: -1000, y: -1000, width: 240, height: 22),
+                styleMask: [.borderless], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: appearance)
+            defer { window.close() }
+            let host = NSHostingView(rootView:
+                TreeRowSurface(depth: 0, scale: 1, selected: selected,
+                               focusRing: outlined,
+                               showsGuides: false) { _, layout in
+                    Color.clear.modifier(layout)
+                }
+                .frame(width: 240, height: 22)
+                .background(Color(nsColor: .windowBackgroundColor))
+            )
+            window.contentView = host
+            window.orderFront(nil)
+            settle()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            return try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2,
+                                                y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+        }
+        func difference(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            abs(a.redComponent - b.redComponent)
+                + abs(a.greenComponent - b.greenComponent)
+                + abs(a.blueComponent - b.blueComponent)
+        }
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let neutral = try centerColor(selected: false, outlined: false,
+                                          appearance: appearance)
+            let cursor = try centerColor(selected: false, outlined: true,
+                                         appearance: appearance)
+            let selected = try centerColor(selected: true, outlined: false,
+                                           appearance: appearance)
+            let both = try centerColor(selected: true, outlined: true,
+                                       appearance: appearance)
+            XCTAssertLessThan(difference(neutral, cursor), 0.025,
+                              "Keyboard focus alone must not paint a grey selection on \(appearance)")
+            XCTAssertGreaterThan(difference(neutral, selected), 0.04,
+                                 "A selected row must retain its own background on \(appearance)")
+            XCTAssertLessThan(difference(selected, both), 0.025,
+                              "The keyboard outline must not change the selected fill on \(appearance)")
+        }
+    }
+
     func testTreeFileAndFolderNamesOpenNativeContextMenuWithoutPrimaryAction() {
         let row = TreeDisplayModel.Row(name: "file.swift", path: "src/file.swift", isDirectory: false)
         let folder = TreeDisplayModel.Row(name: "src", path: "src", isDirectory: true)
@@ -79,7 +129,7 @@ final class TreeRowHitTestingTests: XCTestCase {
         }
     }
 
-    private func click(_ point: NSPoint, in window: NSWindow) {
+    private func click(_ point: NSPoint, in window: NSWindow, count: Int = 1) {
         for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             let event = NSEvent.mouseEvent(
                 with: eventType,
@@ -89,7 +139,7 @@ final class TreeRowHitTestingTests: XCTestCase {
                 windowNumber: window.windowNumber,
                 context: nil,
                 eventNumber: 0,
-                clickCount: 1,
+                clickCount: count,
                 pressure: 1
             )!
             window.sendEvent(event)
@@ -267,6 +317,33 @@ final class TreeRowHitTestingTests: XCTestCase {
         )
         XCTAssertEqual(scroll.horizontalScrollElasticity, .none,
                        "Widening the sidebar must disable now-unnecessary horizontal bounce")
+    }
+
+    func testSharedFileRowSeparatesImmediateBrowseFromDoubleClickActivation() {
+        let actions = Actions()
+        let row = TreeDisplayModel.Row(name: "preview.swift", path: "preview.swift", isDirectory: false)
+        let window = NSWindow(contentRect: NSRect(x: -1000, y: -1000, width: 280, height: 26),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView:
+            TreeFileRow(row: row, scale: 1,
+                        open: { actions.primary += 1 },
+                        activate: { actions.accessory += 1 }) { _ in EmptyView() }
+                .frame(width: 280, height: 26)
+        )
+        window.orderFront(nil)
+        settle()
+        defer { window.close() }
+
+        let point = NSPoint(x: 90, y: 13)
+        click(point, in: window)
+        XCTAssertEqual(actions.primary, 1, "A single click should preview without waiting for a double click")
+        XCTAssertEqual(actions.accessory, 0)
+        click(point, in: window, count: 2)
+        XCTAssertEqual(actions.accessory, 1, "Double-click activation must occur exactly once")
+        XCTAssertGreaterThanOrEqual(actions.primary, 1)
+        XCTAssertLessThanOrEqual(actions.primary, 2,
+                                 "A second click may select but must not create multiple file tabs")
     }
 
     func testFilesAndGitRowsOwnTheirFullHitArea() {
