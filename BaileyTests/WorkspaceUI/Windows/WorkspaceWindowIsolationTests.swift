@@ -7,6 +7,272 @@ import XCTest
 /// not a valid substitute for the manager that owns a file or its save target.
 @MainActor
 final class WorkspaceWindowIsolationTests: XCTestCase {
+    func testFilesTreeClickTransfersNativeKeyboardAndArrowsMoveTheVisibleCursor() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("alpha.swift")
+        let second = directory.appendingPathComponent("beta.swift")
+        for path in [first, second] {
+            try "unchanged\n".write(to: path, atomically: true, encoding: .utf8)
+        }
+        let tree = FileTreeModel()
+        await tree.sync(root: directory.path, backend: LocalWorkspaceBackend.shared)
+        XCTAssertEqual(tree.items.count, 2)
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 380, height: 240),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        var opened: [(String, Bool)] = []
+        let host = NSHostingView(rootView: FileTreePanel(
+            model: tree, git: GitStatusModel(), session: nil, sshHost: nil,
+            rootBadge: nil, currentFilePath: nil,
+            openFile: { opened.append(($0, $1)) },
+            onRename: { _, _ in }, refreshGitStatus: {}, isCurrentTarget: { true },
+            canImportFromFinder: false, importFromFinder: { _, _ in false }
+        ))
+        let surface = NSView(frame: window.contentView?.bounds ?? .zero)
+        let focusReader = DockGroupFocusView(groupID: UUID())
+        focusReader.frame = surface.bounds
+        focusReader.isActive = true
+        focusReader.focusesEmptySpace = true
+        focusReader.canFocus = { true }
+        surface.addSubview(focusReader)
+        host.frame = surface.bounds
+        surface.addSubview(host)
+        window.contentView = surface
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+
+        for y in stride(from: CGFloat(211), through: 19, by: -8) {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let click = try XCTUnwrap(NSEvent.mouseEvent(
+                    with: type, location: NSPoint(x: 130, y: y), modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil,
+                    eventNumber: 0, clickCount: 1, pressure: 1
+                ))
+                window.sendEvent(click)
+            }
+            try await Task.sleep(for: .milliseconds(20))
+            if tree.selectedPath != nil {
+                break
+            }
+        }
+        XCTAssertNotNil(tree.selectedPath, "The native click must actually select a visible file row")
+        XCTAssertEqual(opened.count, 1, "Clicking the file should browse once")
+        let focused = try XCTUnwrap(window.firstResponder)
+        focusReader.requestFocusAfterClick()
+        try await Task.sleep(for: .milliseconds(70))
+        XCTAssertTrue(window.firstResponder === focused,
+                      "Dock fallback must not replace a SwiftUI row's first responder")
+        for (keyCode, text, expected) in [
+            (UInt16(126), "\u{F700}", first.path),
+            (UInt16(125), "\u{F701}", second.path),
+        ] {
+            let key = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                characters: text, charactersIgnoringModifiers: text,
+                isARepeat: false, keyCode: keyCode
+            ))
+            window.sendEvent(key)
+            try await wait { tree.selectedPath == expected }
+        }
+        func sendKey(_ code: UInt16, _ characters: String, modifiers: NSEvent.ModifierFlags = []) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: modifiers,
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                characters: characters, charactersIgnoringModifiers: characters,
+                isARepeat: false, keyCode: code
+            ))
+            window.sendEvent(event)
+        }
+        try sendKey(125, "\u{F701}", modifiers: [.command])
+        XCTAssertEqual(tree.selectedPath, second.path, "Modified shortcuts must not navigate Files")
+        try sendKey(49, " ")
+        XCTAssertEqual(opened.count, 2)
+        XCTAssertEqual(opened.last?.0, second.path)
+        XCTAssertEqual(opened.last?.1, false, "Space previews without activating editor")
+        try sendKey(36, "\r")
+        XCTAssertEqual(opened.last?.1, true, "Return explicitly activates editor")
+        try sendKey(53, "\u{1b}")
+        XCTAssertNil(tree.selectedPath, "Escape clears the row cursor")
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "unchanged\n")
+        XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "unchanged\n")
+    }
+
+    func testDockIntegratedFilesRowsKeepNativeFocusWhenOpeningAnotherPane() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("alpha.swift")
+        let second = directory.appendingPathComponent("beta.swift")
+        for path in [first, second] {
+            try "doNotEdit\n".write(to: path, atomically: true, encoding: .utf8)
+        }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([directory])
+        let project = try XCTUnwrap(manager.selectedProject)
+        manager.openFile(second.path)
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 1450, height: 650),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return project.fileTree.rootPath == directory.path && project.fileTree.items.count == 2
+        }
+        let oldEditor = try XCTUnwrap(editor(in: host))
+        XCTAssertTrue(window.makeFirstResponder(oldEditor),
+                      "Reproduce the existing editor owning keyboard input before the Files click")
+        // Synthetic NSWindow.sendEvent bypasses NSEvent's Dock click monitor.
+        // Explicitly model the user switching the active Dock group to Files.
+        project.dock.select(.files)
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+        let x: CGFloat = 1290
+        for y in stride(from: CGFloat(590), through: 425, by: -5) {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(
+                    with: type, location: NSPoint(x: x, y: y), modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil,
+                    eventNumber: 0, clickCount: 1, pressure: 1
+                ))
+                window.sendEvent(event)
+            }
+            try await Task.sleep(for: .milliseconds(20))
+            if project.fileTree.selectedPath != nil {
+                break
+            }
+        }
+        XCTAssertNotNil(project.fileTree.selectedPath, "Integrated Files must receive real mouse input")
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+        try await wait { project.tabs.count == 2 }
+        XCTAssertFalse(window.firstResponder === oldEditor,
+                       "Clicking Files must release the old native editor first responder")
+        XCTAssertFalse(window.firstResponder is DockGroupFocusView,
+                       "The Files keyboard receiver, not a Dock background, must own input")
+        func scopes(in view: NSView) -> [DockGroupFocusView] {
+            (view as? DockGroupFocusView).map { [$0] } ?? view.subviews.flatMap(scopes(in:))
+        }
+        let filesGroup = try XCTUnwrap(project.dock.group(containing: .files))
+        let reader = try XCTUnwrap(scopes(in: host).first { $0.groupID == filesGroup.id })
+        // A separate active Bailey window can keep this test process non-key.
+        // Model the same positive activation predicates as a real key-window click.
+        reader.isActive = true
+        reader.focusesEmptySpace = true
+        reader.canFocus = { true }
+        reader.requestFocusAfterClick()
+        try await Task.sleep(for: .milliseconds(70))
+        XCTAssertFalse(window.firstResponder === reader,
+                       "A late Dock fallback must not replace a focused Files keyboard row")
+        for (keyCode, text, expected) in [
+            (UInt16(126), "\u{F700}", first.path),
+            (UInt16(125), "\u{F701}", second.path),
+        ] {
+            let key = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                characters: text, charactersIgnoringModifiers: text,
+                isARepeat: false, keyCode: keyCode
+            ))
+            window.sendEvent(key)
+            try await wait { project.fileTree.selectedPath == expected }
+        }
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files,
+                       "Arrow navigation must not activate the editor group")
+        project.dock.select(.git)
+        host.layoutSubtreeIfNeeded()
+        let gitGroup = try XCTUnwrap(project.dock.group(containing: .git))
+        let gitReader = try XCTUnwrap(scopes(in: host).first { $0.groupID == gitGroup.id })
+        gitReader.isActive = true
+        gitReader.canFocus = { true }
+        gitReader.focusesEmptySpace = true
+        gitReader.requestFocusAfterClick()
+        try await Task.sleep(for: .milliseconds(70))
+        XCTAssertTrue(window.firstResponder === gitReader,
+                      "Switching from a Files row to Git must release the old row responder")
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "doNotEdit\n")
+        XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "doNotEdit\n")
+    }
+
+    func testFilesOpenedInItsOwnDockGroupDoNotRetainHiddenKeyboardFocus() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("same-group.swift")
+        try "let value = 1\n".write(to: file, atomically: true, encoding: .utf8)
+        let configuration = try XCTUnwrap(DockWorkspaceConfiguration(
+            groupNames: ["projects,files,git"], selectedNames: ["files"],
+            weights: [1], actionNames: ["session", "projects", "files", "git"], edgeThreshold: 0.22
+        ))
+        let project = Project(fallbackName: "one-group", workspaceConfiguration: configuration)
+        project.customDirectory = root.path
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 900, height: 650),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return project.fileTree.rootPath == root.path && project.fileTree.items.count == 1
+        }
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+        for y in stride(from: CGFloat(570), through: 540, by: -4) {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let click = try XCTUnwrap(NSEvent.mouseEvent(
+                    with: type, location: NSPoint(x: 90, y: y), modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil,
+                    eventNumber: 0, clickCount: 1, pressure: 1
+                ))
+                window.sendEvent(click)
+            }
+            try await Task.sleep(for: .milliseconds(15))
+            if project.fileTree.selectedPath != nil { break }
+        }
+        XCTAssertEqual(project.fileTree.selectedPath, file.path)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.editor(in: host) != nil
+        }
+        let tab = try XCTUnwrap(project.selectedTab)
+        XCTAssertEqual(project.dock.activeGroup?.selected, .tab(tab.id),
+                       "When the only Files panel is replaced, the visible editor must own the group")
+        let editor = try XCTUnwrap(editor(in: host))
+        XCTAssertFalse(editor.isHiddenOrHasHiddenAncestor)
+        if NSApp.isActive && window.isKeyWindow {
+            try await wait { window.firstResponder === editor }
+        } else {
+            XCTAssertTrue(window.makeFirstResponder(editor),
+                          "The visible editor must accept keyboard input in a non-key test window")
+        }
+        XCTAssertEqual(window.firstResponder as? NSView, editor)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "let value = 1\n")
+    }
+
     func testDockGroupClickDoesNotPreemptNativeFieldFocus() async throws {
         let bounds = NSRect(x: 0, y: 0, width: 560, height: 280)
         let window = NSWindow(contentRect: bounds, styleMask: [.titled],

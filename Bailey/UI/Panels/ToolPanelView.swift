@@ -123,10 +123,10 @@ struct ToolPanelView: View {
     }
 
     private var openFilePath: String? {
-        if case .file(let file)? = manager.selectedProject?.selectedTab?.content {
-            return file.path
-        }
-        return nil
+        guard let target = filesTarget,
+              case .file(let file)? = manager.selectedProject?.selectedTab?.content,
+              file.workspaceIdentity == target.workspace else { return nil }
+        return file.path
     }
 
     var body: some View {
@@ -155,6 +155,11 @@ struct ToolPanelView: View {
                         rootBadge: rootBadge,
                         currentFilePath: openFilePath,
                         openFile: { manager.openFile($0, activating: $1) },
+                        isActive: project.dock.activeGroup?.selected == .files,
+                        canFocusKeyboard: {
+                            guard let files = project.dock.group(containing: .files) else { return false }
+                            return project.dock.activeGroupID == files.id && files.selected == .files
+                        },
                         onRename: { [workspace = project.workspaceIdentity] oldPath, newPath in
                             manager.fileRenamed(
                                 from: oldPath, to: newPath, workspace: workspace

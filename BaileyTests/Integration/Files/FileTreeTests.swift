@@ -58,6 +58,85 @@ private actor CountingFileBackend: WorkspaceBackend {
 
 @MainActor
 final class FileTreeTests: XCTestCase {
+    func testLargeDirectoryCursorClampsToVisibleBoundsAndPreservesUnicodeIdentity() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for index in 0..<1_024 {
+            let path = root.appendingPathComponent(String(format: "entry-%04d.swift", index))
+            XCTAssertTrue(FileManager.default.createFile(atPath: path.path, contents: Data()))
+        }
+        let unicode = ["空格 名字.swift", "emoji-😀.swift", String(repeating: "长", count: 48) + ".swift"]
+        for name in unicode {
+            try Data().write(to: root.appendingPathComponent(name))
+        }
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        XCTAssertEqual(tree.items.count, 1_024 + unicode.count)
+        let first = try XCTUnwrap(tree.items.first)
+        let last = try XCTUnwrap(tree.items.last)
+        XCTAssertEqual(tree.moveSelection(by: tree.items.count + 10)?.path, last.path)
+        XCTAssertEqual(tree.moveSelection(by: 1)?.path, last.path)
+        XCTAssertEqual(tree.moveSelection(by: -(tree.items.count + 10))?.path, first.path)
+        XCTAssertEqual(tree.moveSelection(by: -1)?.path, first.path)
+        for name in unicode {
+            let path = root.appendingPathComponent(name).path
+            let item = try XCTUnwrap(tree.items.first { $0.path == path })
+            tree.select(item)
+            XCTAssertEqual(tree.selectedPath, path)
+        }
+        tree.clearSelection()
+        XCTAssertNil(tree.selectedPath)
+    }
+
+    func testFocusedRowNavigationTracksVisibleItemsAndResetsOnRootChange() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let otherRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: otherRoot, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: otherRoot)
+        }
+        for name in ["alpha.swift", "beta.swift"] {
+            try "let x = 1\n".write(to: root.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        let folder = root.appendingPathComponent("nested")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try "let nested = 1\n".write(to: folder.appendingPathComponent("child.swift"),
+                                       atomically: true, encoding: .utf8)
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        XCTAssertNil(tree.selectedPath)
+        let first = try XCTUnwrap(tree.items.first { !$0.isDraft })
+        tree.select(first)
+        XCTAssertEqual(tree.selectedPath, first.path)
+        let next = try XCTUnwrap(tree.moveSelection(by: 1))
+        XCTAssertEqual(tree.selectedPath, next.path)
+        XCTAssertEqual(tree.moveSelection(by: -1)?.path, first.path)
+        XCTAssertEqual(tree.selectedPath, first.path)
+
+        let directory = try XCTUnwrap(tree.items.first { $0.path == folder.path })
+        XCTAssertNil(tree.nextVisibleChild(of: directory),
+                     "Right Arrow on a collapsed directory must not jump to a sibling")
+        await tree.toggle(directory)
+        let child = try XCTUnwrap(tree.items.first { $0.path == folder.appendingPathComponent("child.swift").path })
+        XCTAssertEqual(tree.nextVisibleChild(of: directory)?.path, child.path)
+        tree.select(child)
+        XCTAssertEqual(tree.selectedPath, child.path)
+        await tree.toggle(directory)
+        XCTAssertEqual(tree.selectedPath, folder.path,
+                       "Collapsing a selected descendant should focus the visible ancestor")
+        XCTAssertNil(tree.nextVisibleChild(of: directory),
+                     "Right Arrow on a collapsed tree must not choose another directory")
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared,
+                        scope: "remote-workspace-with-same-directory-string")
+        XCTAssertNil(tree.selectedPath, "A machine change with the same pathname must clear selection")
+        tree.select(try XCTUnwrap(tree.items.first { !$0.isDraft }))
+        await tree.sync(root: otherRoot.path, backend: LocalWorkspaceBackend.shared)
+        XCTAssertNil(tree.selectedPath, "A new root must never inherit the old selection")
+    }
+
     private var fixture: URL!
     private let backend = LocalWorkspaceBackend.shared
 

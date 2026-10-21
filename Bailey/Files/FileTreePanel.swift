@@ -12,6 +12,8 @@ struct FileTreePanel: View {
     let rootBadge: (text: String, description: String)?
     let currentFilePath: String?
     let openFile: (String, Bool) -> Void
+    var isActive = true
+    var canFocusKeyboard: () -> Bool = { true }
     let onRename: (_ oldPath: String, _ newPath: String) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
@@ -57,7 +59,8 @@ struct FileTreePanel: View {
             FileTreeScrollView(
                 model: model, git: git, session: session,
                 sshHost: sshHost, currentFilePath: currentFilePath,
-                openFile: openFile, onRename: onRename,
+                openFile: openFile, isActive: isActive,
+                canFocusKeyboard: canFocusKeyboard, onRename: onRename,
                 refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget,
                 canImportFromFinder: canImportFromFinder,
                 importFromFinder: importFromFinder
@@ -92,6 +95,66 @@ private struct FileTreeImportDrop: DropDelegate {
     }
 }
 
+/// Files has one native keyboard owner for its entire tree. Selection remains
+/// in FileTreeModel; the owner only establishes actual AppKit input focus.
+@MainActor
+private final class FileTreeKeyboardOwner {
+    weak var view: FileTreeKeyboardView?
+
+    func focus() {
+        guard let view, let window = view.window else { return }
+        window.makeFirstResponder(view)
+    }
+}
+
+private final class FileTreeKeyboardView: NSView {
+    var onKeyDown: (NSEvent) -> Bool = { _ in false }
+    var onFocusChanged: (Bool) -> Void = { _ in }
+
+    override var acceptsFirstResponder: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { onFocusChanged(true) }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onFocusChanged(false) }
+        return resigned
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if !onKeyDown(event) { super.keyDown(with: event) }
+    }
+}
+
+private struct FileTreeKeyboardHost: NSViewRepresentable {
+    let owner: FileTreeKeyboardOwner
+    let onKeyDown: (NSEvent) -> Bool
+    let onFocusChanged: (Bool) -> Void
+
+    func makeNSView(context: Context) -> FileTreeKeyboardView {
+        let view = FileTreeKeyboardView()
+        owner.view = view
+        updateNSView(view, context: context)
+        return view
+    }
+
+    func updateNSView(_ view: FileTreeKeyboardView, context: Context) {
+        owner.view = view
+        view.onKeyDown = onKeyDown
+        view.onFocusChanged = onFocusChanged
+    }
+
+    static func dismantleNSView(_ view: FileTreeKeyboardView, coordinator: ()) {
+        view.onKeyDown = { _ in false }
+        view.onFocusChanged = { _ in }
+    }
+}
+
 /// The same SwiftUI rows, 22 pt layout and hierarchy lines as the Git tree.
 /// The tree stays viewport-sized; only long names scroll horizontally.
 private struct FileTreeScrollView: View {
@@ -101,12 +164,17 @@ private struct FileTreeScrollView: View {
     let sshHost: String?
     let currentFilePath: String?
     let openFile: (String, Bool) -> Void
+    let isActive: Bool
+    let canFocusKeyboard: () -> Bool
     let onRename: (String, String) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
     let canImportFromFinder: Bool
     let importFromFinder: ([NSItemProvider], String) -> Bool
     @Environment(\.panelFontScale) private var fontScale
+    @Environment(\.controlActiveState) private var controlActiveState
+    @State private var keyboardOwner = FileTreeKeyboardOwner()
+    @State private var keyboardFocused = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -118,6 +186,10 @@ private struct FileTreeScrollView: View {
                             session: session, sshHost: sshHost,
                             currentFilePath: currentFilePath,
                             openFile: openFile,
+                            listFocused: keyboardFocused && isActive && controlActiveState == .key,
+                            focusKeyboard: {
+                                if canFocusKeyboard() { keyboardOwner.focus() }
+                            },
                             onRename: onRename, refreshGitStatus: refreshGitStatus,
                             isCurrentTarget: isCurrentTarget
                         )
@@ -133,11 +205,54 @@ private struct FileTreeScrollView: View {
                 .padding(.bottom, 7)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
+            .background {
+                FileTreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleKey,
+                                     onFocusChanged: { keyboardFocused = $0 })
+            }
+            .onChange(of: model.rootPath) { _, _ in keyboardFocused = false }
+            .onChange(of: model.selectedPath) { _, path in
+                if let path { proxy.scrollTo(path) }
+            }
             .onChange(of: model.items.first(where: \.isDraft)?.path) { _, path in
                 if let path { proxy.scrollTo(path, anchor: .top) }
             }
         }
         .id(model.rootPath)
+    }
+
+    private func handleKey(_ event: NSEvent) -> Bool {
+        guard keyboardOwner.view?.window?.firstResponder === keyboardOwner.view,
+              isActive, canFocusKeyboard(), isCurrentTarget(),
+              event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+        else { return false }
+        switch event.keyCode {
+        case 125: model.moveSelection(by: 1) // Down
+        case 126: model.moveSelection(by: -1) // Up
+        case 124: // Right
+            guard let row = model.selectedItem, row.isDirectory else { return false }
+            if !model.isExpanded(row) { Task { await model.toggle(row) } }
+            else if let child = model.nextVisibleChild(of: row) { model.select(child) }
+        case 123: // Left
+            guard let row = model.selectedItem else { return false }
+            if row.isDirectory, model.isExpanded(row) {
+                Task { await model.toggle(row) }
+            } else if let parent = model.items
+                .filter({ $0.isDirectory && row.path.hasPrefix($0.path + "/") })
+                .max(by: { $0.path.count < $1.path.count }) {
+                model.select(parent)
+            }
+        case 36, 76: // Return and keypad Enter
+            guard let row = model.selectedItem else { return false }
+            if row.isDirectory { Task { await model.toggle(row) } }
+            else { openFile(row.path, true) }
+        case 49: // Space previews without moving keyboard focus
+            guard let row = model.selectedItem else { return false }
+            if row.isDirectory { Task { await model.toggle(row) } }
+            else { openFile(row.path, false) }
+        case 53: model.clearSelection() // Escape
+        default: return false
+        }
+        return true
     }
 }
 
@@ -150,6 +265,8 @@ private struct FileTreeRow: View {
     let sshHost: String?
     let currentFilePath: String?
     let openFile: (String, Bool) -> Void
+    let listFocused: Bool
+    let focusKeyboard: () -> Void
     let onRename: (_ oldPath: String, _ newPath: String) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
@@ -159,6 +276,9 @@ private struct FileTreeRow: View {
     @Environment(\.panelFontScale) private var fontScale
 
     private var isRenaming: Bool { model.renamingPath == item.path }
+    private var hasKeyboardCursor: Bool {
+        model.selectedPath == item.path && listFocused
+    }
 
     /// The file open in the active tab, so it reads as selected in the tree.
     private var isCurrent: Bool { !item.isDirectory && item.path == currentFilePath }
@@ -331,8 +451,11 @@ private struct FileTreeRow: View {
     @ViewBuilder
     private var semanticRow: some View {
         if item.isDirectory {
-            TreeFolderRow(row: displayRow, scale: fontScale) {
+            TreeFolderRow(row: displayRow, scale: fontScale,
+                          focusRing: hasKeyboardCursor) {
                 guard isCurrentTarget() else { return }
+                model.select(item)
+                focusKeyboard()
                 Task {
                     guard isCurrentTarget() else { return }
                     await model.toggle(item)
@@ -341,8 +464,17 @@ private struct FileTreeRow: View {
         } else {
             TreeFileRow(
                 row: displayRow, scale: fontScale, selected: isCurrent,
-                open: { if isCurrentTarget() { openFile(item.path, false) } },
-                activate: { if isCurrentTarget() { openFile(item.path, true) } }
+                focusRing: hasKeyboardCursor,
+                open: {
+                    guard isCurrentTarget() else { return }
+                    model.select(item)
+                    openFile(item.path, false)
+                    focusKeyboard()
+                },
+                activate: {
+                    guard isCurrentTarget() else { return }
+                    openFile(item.path, true)
+                }
             ) { _ in EmptyView() }
         }
     }

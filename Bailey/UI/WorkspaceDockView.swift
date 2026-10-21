@@ -769,6 +769,9 @@ final class DockGroupFocusView: NSView {
     private func focusIfNeeded() {
         guard canFocus?() == true, let window,
               !containsResponder(window.firstResponder) else { return }
+        // SwiftUI rows use the root hosting view as the native first responder.
+        // Moving focus off it would discard their keyboard selection.
+        if window.firstResponder === window.contentView { return }
         window.makeFirstResponder(self)
     }
 
