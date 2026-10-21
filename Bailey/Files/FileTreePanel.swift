@@ -169,6 +169,9 @@ private struct FileTreeScrollView: View {
                 if waitingForFirstRow { focusSelectedRow() }
             }
             .onChange(of: model.rootPath) { _, _ in keyboardFocused = false }
+            .onChange(of: model.renamingPath == nil && model.draft == nil) { _, ready in
+                if ready { DispatchQueue.main.async { focusSelectedRow() } }
+            }
             .onChange(of: keyboardFocused) { _, focused in
                 if focused, let path = model.selectedPath { proxy.scrollTo(path) }
             }

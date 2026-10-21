@@ -285,6 +285,10 @@ final class FileTreeModel {
         }
         guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return nil }
         remapExpanded(from: item.path, to: dest)
+        if let selectedPath,
+           selectedPath == item.path || selectedPath.hasPrefix(item.path + "/") {
+            self.selectedPath = dest + String(selectedPath.dropFirst(item.path.count))
+        }
         invalidateDirectory(containing: item.path)
         let currentEpoch = treeEpoch
         await rebuild()

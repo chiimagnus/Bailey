@@ -137,6 +137,40 @@ final class FileTreeTests: XCTestCase {
         XCTAssertNil(tree.selectedPath, "A new root must never inherit the old selection")
     }
 
+    func testRenameKeepsFilesCursorOnRenamedFileAndDirectoryDescendant() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("old-file.swift")
+        try "unchanged\n".write(to: file, atomically: true, encoding: .utf8)
+        let folder = root.appendingPathComponent("old-folder")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let child = folder.appendingPathComponent("child.swift")
+        try "child\n".write(to: child, atomically: true, encoding: .utf8)
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+
+        let originalFile = try XCTUnwrap(tree.items.first { $0.path == file.path })
+        tree.select(originalFile)
+        let renamedFile = root.appendingPathComponent("new-file.swift")
+        let movedFilePath = await tree.rename(originalFile, to: renamedFile.lastPathComponent)
+        XCTAssertEqual(movedFilePath, renamedFile.path)
+        XCTAssertEqual(tree.selectedPath, renamedFile.path)
+        XCTAssertEqual(try String(contentsOf: renamedFile, encoding: .utf8), "unchanged\n")
+
+        let originalFolder = try XCTUnwrap(tree.items.first { $0.path == folder.path })
+        await tree.toggle(originalFolder)
+        let descendant = try XCTUnwrap(tree.items.first { $0.path == child.path })
+        tree.select(descendant)
+        let renamedFolder = root.appendingPathComponent("new-folder")
+        let movedFolderPath = await tree.rename(originalFolder, to: renamedFolder.lastPathComponent)
+        XCTAssertEqual(movedFolderPath, renamedFolder.path)
+        XCTAssertEqual(tree.selectedPath, renamedFolder.appendingPathComponent("child.swift").path)
+        XCTAssertNotNil(tree.selectedItem)
+        XCTAssertEqual(try String(contentsOf: renamedFolder.appendingPathComponent("child.swift"),
+                                  encoding: .utf8), "child\n")
+    }
+
     private var fixture: URL!
     private let backend = LocalWorkspaceBackend.shared
 

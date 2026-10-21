@@ -433,6 +433,68 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         XCTAssertEqual(tree.items.count, 2)
     }
 
+    func testFilesInlineRenameAndDraftExitRestoreNativeTreeKeyboardFocus() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["alpha.swift", "beta.swift"] {
+            try "unchanged\n".write(to: root.appendingPathComponent(name),
+                                      atomically: true, encoding: .utf8)
+        }
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let window = NSWindow(contentRect: NSRect(x: -1000, y: -1000, width: 440, height: 250),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: FileTreePanel(
+            model: tree, git: GitStatusModel(), session: nil, sshHost: nil,
+            rootBadge: nil, currentFilePath: nil, openFile: { _, _ in },
+            onRename: { _, _ in }, refreshGitStatus: {}, isCurrentTarget: { true },
+            canImportFromFinder: false, importFromFinder: { _, _ in false }
+        ))
+        window.contentView = host
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+        guard window.isKeyWindow, NSApp.isActive else {
+            throw XCTSkip("Native input requires a foreground key window")
+        }
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return window.firstResponder is TreeKeyboardView && tree.selectedItem != nil
+        }
+        let first = try XCTUnwrap(tree.selectedItem)
+        tree.beginRename(first)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return (window.firstResponder as? NSTextView)?.isFieldEditor == true
+        }
+        tree.cancelRename()
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return window.firstResponder is TreeKeyboardView
+        }
+        await tree.beginNewFile(in: root.path)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return (window.firstResponder as? NSTextView)?.isFieldEditor == true
+        }
+        await tree.cancelDraft()
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return window.firstResponder is TreeKeyboardView
+        }
+        let down = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            characters: "\u{F701}", charactersIgnoringModifiers: "\u{F701}",
+            isARepeat: false, keyCode: 125
+        ))
+        window.sendEvent(down)
+        try await wait { tree.selectedPath == root.appendingPathComponent("beta.swift").path }
+    }
+
     func testFilesTreeClickTransfersNativeKeyboardAndArrowsMoveTheVisibleCursor() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
