@@ -991,11 +991,23 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertEqual(retiredScroll?.contentView.bounds.origin, before)
         XCTAssertEqual(retiredEditor?.text, contents)
 
+        // An old, now-clean document can still have redo transactions.
+        // Replacing its bytes must retire that Undo history, not just its callbacks.
+        retiredEditor?.insertText("temporary edit", replacementRange: NSRange(location: 0, length: 0))
+        try await settle { file?.isDirty == true }
+        retiredEditor?.undoManager?.undo()
+        try await settle { file?.isDirty == false }
+        XCTAssertTrue(retiredEditor?.undoManager?.canRedo == true)
         host?.removeFromSuperview()
         host = nil
         try "changed on disk\n".write(to: path, atomically: true, encoding: .utf8)
         file?.reloadFromDiskIfClean()
         try await settle { file?.text == "changed on disk\n" }
+        XCTAssertFalse(retiredEditor?.isEditable ?? true,
+                       "The retired NSTextView must not accept new edits or undo registrations")
+        XCTAssertFalse(retiredEditor?.undoManager?.canUndo ?? true)
+        XCTAssertFalse(retiredEditor?.undoManager?.canRedo ?? true,
+                       "Retired document's UndoManager must not retain obsolete TextKit storage")
         retiredEditor?.insertText("stale editor", replacementRange: NSRange(location: 0, length: 0))
         XCTAssertEqual(file?.text, "changed on disk\n")
         XCTAssertFalse(try XCTUnwrap(file).isDirty)
