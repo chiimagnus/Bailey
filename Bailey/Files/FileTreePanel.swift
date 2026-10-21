@@ -110,9 +110,15 @@ private final class FileTreeKeyboardOwner {
 private final class FileTreeKeyboardView: NSView {
     var onKeyDown: (NSEvent) -> Bool = { _ in false }
     var onFocusChanged: (Bool) -> Void = { _ in }
+    var onAttachedToWindow: () -> Void = {}
 
     override var acceptsFirstResponder: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { onAttachedToWindow() }
+    }
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
@@ -135,6 +141,7 @@ private struct FileTreeKeyboardHost: NSViewRepresentable {
     let owner: FileTreeKeyboardOwner
     let onKeyDown: (NSEvent) -> Bool
     let onFocusChanged: (Bool) -> Void
+    let onAttachedToWindow: () -> Void
 
     func makeNSView(context: Context) -> FileTreeKeyboardView {
         let view = FileTreeKeyboardView()
@@ -147,11 +154,13 @@ private struct FileTreeKeyboardHost: NSViewRepresentable {
         owner.view = view
         view.onKeyDown = onKeyDown
         view.onFocusChanged = onFocusChanged
+        view.onAttachedToWindow = onAttachedToWindow
     }
 
     static func dismantleNSView(_ view: FileTreeKeyboardView, coordinator: ()) {
         view.onKeyDown = { _ in false }
         view.onFocusChanged = { _ in }
+        view.onAttachedToWindow = {}
     }
 }
 
@@ -175,6 +184,7 @@ private struct FileTreeScrollView: View {
     @Environment(\.controlActiveState) private var controlActiveState
     @State private var keyboardOwner = FileTreeKeyboardOwner()
     @State private var keyboardFocused = false
+    @State private var waitingForFirstRow = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -207,9 +217,30 @@ private struct FileTreeScrollView: View {
             }
             .background {
                 FileTreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleKey,
-                                     onFocusChanged: { keyboardFocused = $0 })
+                                     onFocusChanged: { keyboardFocused = $0 },
+                                     onAttachedToWindow: focusSelectedRow)
+            }
+            .onAppear { if isActive { focusSelectedRow() } }
+            .onChange(of: isActive) { _, active in
+                if active { focusSelectedRow() }
+                else { waitingForFirstRow = false }
+            }
+            .onChange(of: isCurrentTarget()) { _, current in
+                if current { focusSelectedRow() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) {
+                notification in
+                if (notification.object as? NSWindow) === keyboardOwner.view?.window, isActive {
+                    focusSelectedRow()
+                }
+            }
+            .onChange(of: model.items.first(where: { !$0.isDraft })?.path) { _, _ in
+                if waitingForFirstRow { focusSelectedRow() }
             }
             .onChange(of: model.rootPath) { _, _ in keyboardFocused = false }
+            .onChange(of: keyboardFocused) { _, focused in
+                if focused, let path = model.selectedPath { proxy.scrollTo(path) }
+            }
             .onChange(of: model.selectedPath) { _, path in
                 if let path { proxy.scrollTo(path) }
             }
@@ -218,6 +249,22 @@ private struct FileTreeScrollView: View {
             }
         }
         .id(model.rootPath)
+    }
+
+    private func focusSelectedRow() {
+        guard isActive, canFocusKeyboard(), isCurrentTarget(),
+              model.renamingPath == nil, model.draft == nil else { return }
+        if model.selectedItem == nil {
+            let item = model.items.first { !$0.isDraft && $0.path == currentFilePath }
+                ?? model.items.first { !$0.isDraft }
+            if let item { model.select(item) }
+            waitingForFirstRow = item == nil
+        } else {
+            waitingForFirstRow = false
+        }
+        guard let window = keyboardOwner.view?.window,
+              window.isKeyWindow, NSApp.isActive else { return }
+        keyboardOwner.focus()
     }
 
     private func handleKey(_ event: NSEvent) -> Bool {

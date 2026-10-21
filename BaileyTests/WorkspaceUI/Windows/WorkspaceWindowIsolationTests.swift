@@ -1,12 +1,95 @@
 import AppKit
+import Observation
 import SwiftUI
 import XCTest
 @testable import Bailey
+
+@MainActor
+@Observable
+private final class FilesPanelReadiness {
+    var ready = false
+}
 
 /// Two full workspaces in separate native windows. The current key window is
 /// not a valid substitute for the manager that owns a file or its save target.
 @MainActor
 final class WorkspaceWindowIsolationTests: XCTestCase {
+    func testAsyncFilesTargetBecomingCurrentRestoresVisibleFileCursor() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("alpha.swift")
+        let second = directory.appendingPathComponent("beta.swift")
+        for path in [first, second] {
+            try "unchanged\n".write(to: path, atomically: true, encoding: .utf8)
+        }
+        let tree = FileTreeModel()
+        await tree.sync(root: directory.path, backend: LocalWorkspaceBackend.shared)
+        let gate = FilesPanelReadiness()
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 440, height: 250),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        var opened = 0
+        let host = NSHostingView(rootView: FileTreePanel(
+            model: tree, git: GitStatusModel(), session: nil, sshHost: nil,
+            rootBadge: nil, currentFilePath: second.path,
+            openFile: { _, _ in opened += 1 },
+            onRename: { _, _ in }, refreshGitStatus: {},
+            isCurrentTarget: { gate.ready },
+            canImportFromFinder: false, importFromFinder: { _, _ in false }
+        ))
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertNil(tree.selectedPath, "An outdated Files target cannot select a row")
+        gate.ready = true
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return tree.selectedPath == second.path
+        }
+        XCTAssertEqual(opened, 0, "Target readiness must not open a FileTab")
+    }
+
+    func testFilesActivationBeforeDirectoryListingFocusesFirstVisibleRowWhenLoaded() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("alpha.swift")
+        let second = root.appendingPathComponent("beta.swift")
+        for file in [first, second] {
+            try "original\n".write(to: file, atomically: true, encoding: .utf8)
+        }
+        let tree = FileTreeModel()
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 380, height: 240),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        var browsed = 0
+        let host = NSHostingView(rootView: FileTreePanel(
+            model: tree, git: GitStatusModel(), session: nil, sshHost: nil,
+            rootBadge: nil, currentFilePath: nil,
+            openFile: { _, _ in browsed += 1 },
+            onRename: { _, _ in }, refreshGitStatus: {}, isCurrentTarget: { true },
+            canImportFromFinder: false, importFromFinder: { _, _ in false }
+        ))
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertNil(tree.selectedPath)
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return tree.selectedPath == first.path
+        }
+        XCTAssertEqual(browsed, 0, "Focusing Files must not open files automatically")
+        XCTAssertEqual(tree.items.count, 2)
+    }
+
     func testFilesTreeClickTransfersNativeKeyboardAndArrowsMoveTheVisibleCursor() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -57,12 +140,10 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
                 window.sendEvent(click)
             }
             try await Task.sleep(for: .milliseconds(20))
-            if tree.selectedPath != nil {
-                break
-            }
+            if !opened.isEmpty { break }
         }
-        XCTAssertNotNil(tree.selectedPath, "The native click must actually select a visible file row")
-        XCTAssertEqual(opened.count, 1, "Clicking the file should browse once")
+        XCTAssertEqual(opened.count, 1, "The native click must actually browse a file")
+        XCTAssertNotNil(tree.selectedPath, "The clicked file must have a row cursor")
         let focused = try XCTUnwrap(window.firstResponder)
         focusReader.requestFocusAfterClick()
         try await Task.sleep(for: .milliseconds(70))
@@ -153,11 +234,9 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
                 window.sendEvent(event)
             }
             try await Task.sleep(for: .milliseconds(20))
-            if project.fileTree.selectedPath != nil {
-                break
-            }
+            if project.tabs.count == 2 { break }
         }
-        XCTAssertNotNil(project.fileTree.selectedPath, "Integrated Files must receive real mouse input")
+        XCTAssertNotNil(project.fileTree.selectedPath, "Integrated Files must have a current row")
         XCTAssertEqual(project.dock.activeGroup?.selected, .files)
         try await wait { project.tabs.count == 2 }
         XCTAssertFalse(window.firstResponder === oldEditor,
@@ -205,8 +284,84 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(70))
         XCTAssertTrue(window.firstResponder === gitReader,
                       "Switching from a Files row to Git must release the old row responder")
+        project.dock.select(.files)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return project.dock.activeGroup?.selected == .files
+                && (!(window.isKeyWindow && NSApp.isActive)
+                    || window.firstResponder !== gitReader)
+        }
+        XCTAssertEqual(project.fileTree.selectedPath, second.path,
+                       "Reentering Files must retain its existing file cursor")
+        if window.isKeyWindow && NSApp.isActive {
+            let up = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                characters: "\u{F700}", charactersIgnoringModifiers: "\u{F700}",
+                isARepeat: false, keyCode: 126
+            ))
+            window.sendEvent(up)
+            try await wait { project.fileTree.selectedPath == first.path }
+            XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+        }
         XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "doNotEdit\n")
         XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "doNotEdit\n")
+    }
+
+    func testSwitchingToFileManagerSelectsVisibleCurrentFileAndTakesNativeKeyboard() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("alpha.swift")
+        let second = directory.appendingPathComponent("beta.swift")
+        for file in [first, second] {
+            try "original\n".write(to: file, atomically: true, encoding: .utf8)
+        }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([directory])
+        manager.openFile(second.path)
+        let project = try XCTUnwrap(manager.selectedProject)
+        XCTAssertNil(project.fileTree.selectedPath)
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 1450, height: 650),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return project.fileTree.rootPath == directory.path && project.fileTree.items.count == 2
+        }
+        let editor = try XCTUnwrap(editor(in: host))
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        XCTAssertNotEqual(project.dock.activeGroup?.selected, .files)
+        project.dock.select(.files)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return project.fileTree.selectedPath == second.path
+                && (!(window.isKeyWindow && NSApp.isActive)
+                    || window.firstResponder !== editor)
+        }
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+        if window.isKeyWindow && NSApp.isActive {
+            let up = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                characters: "\u{F700}", charactersIgnoringModifiers: "\u{F700}",
+                isARepeat: false, keyCode: 126
+            ))
+            window.sendEvent(up)
+            try await wait { project.fileTree.selectedPath == first.path }
+        }
+        XCTAssertEqual(project.tabs.count, 1, "Activating File Manager must not create a new FileTab")
+        XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "original\n")
     }
 
     func testFilesOpenedInItsOwnDockGroupDoNotRetainHiddenKeyboardFocus() async throws {
@@ -251,9 +406,10 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
                 window.sendEvent(click)
             }
             try await Task.sleep(for: .milliseconds(15))
-            if project.fileTree.selectedPath != nil { break }
+            if project.tabs.count == 1 { break }
         }
         XCTAssertEqual(project.fileTree.selectedPath, file.path)
+        XCTAssertEqual(project.tabs.count, 1, "The native click must open the file")
         try await wait {
             host.layoutSubtreeIfNeeded()
             return self.editor(in: host) != nil
