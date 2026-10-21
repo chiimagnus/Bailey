@@ -6,7 +6,7 @@
 
 **路径：** 沿现有 App／delegate 装配一个应用级所有者；窗口继续拥有项目。既有 SessionStore 和 TerminalHistoryStore 负责原有持久化，不新增 Registry／Router／Store 多层门面。
 
-**验收：** 所有实际应用入口使用同一所有者；窗口间隔离，关闭保存与恢复结果不变；无 TerminalManager 兼容类或静态转发。P1 同样受 [UI/UX 零变化硬门槛](idea.md#uiux-零变化硬门槛) 与 [每任务放行条件](idea.md#每任务放行条件) 约束，不能因“不修改焦点策略”免做原生验收。当前仍是实施计划，不授权本轮修改产品代码。
+**验收：** 所有实际应用入口使用同一所有者；窗口间隔离，关闭保存与恢复结果不变；无 TerminalManager 兼容类或静态转发。P1 同样受 [UI/UX 零变化硬门槛](idea.md#uiux-零变化硬门槛) 与 [每任务放行条件](idea.md#每任务放行条件) 约束，不能因“不修改焦点策略”免做原生验收。本文保留 P1 实施前的步骤与原始入口；P1 已实施，现行状态以 [todo.toml](todo.toml) 和实际提交为准。
 
 <a id="p1-t1"></a>
 ## P1-T1 建立可重复的重构基线
@@ -123,4 +123,4 @@ make build DERIVED_DATA=build/DerivedData-workspace-refactor
 
 ## 阶段审计
 
-实施结束后由 executing-plans 进入 plan-task-auditor，再创建 audit-p1.md；按 idea 的硬门槛独立核对原始基线、真实输入／最终副作用、完整适用条件及每条删除证据，不能仅看名字消失或 XCTest 绿色。未解释 UI/UX 差异、漏掉可安全执行条件或主路径证据缺失时不给 Gate；P1 Gate 通过再进 P2。本轮不创建实施完成审计。
+实施结束后由 executing-plans 进入 plan-task-auditor，再创建 audit-p1.md；按 idea 的硬门槛独立核对原始基线、真实输入／最终副作用、完整适用条件及每条删除证据，不能仅看名字消失或 XCTest 绿色。未解释 UI/UX 差异、漏掉可安全执行条件或主路径证据缺失时不给 Gate；P1 Gate 通过再进 P2。审计记录保留在 [audit-p1.md](audit-p1.md)；本计划中的历史路径不应被误认为仍存在于当前源码。

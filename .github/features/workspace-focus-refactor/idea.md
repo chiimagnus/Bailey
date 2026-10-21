@@ -2,7 +2,7 @@
 
 ## 目标与授权
 
-先做好 macOS App，iOS、iPadOS 与 visionOS 暂缓。当前 `TerminalManager` 混合单窗口状态、跨窗口注册／恢复／外部请求和焦点恢复；Dock、Files、Git、原生内容又重复决定谁能接收输入。目标是**重新明确状态所有者和依赖方向，而不是增加 Manager、Coordinator、Protocol 或文件数量**。
+先做好 macOS App，iOS、iPadOS 与 visionOS 暂缓。重构前 `TerminalManager` 同时持有窗口状态与应用级注册／恢复／外部请求；P1 已分离为 `WorkspaceApplication` 和 `WorkspaceWindowModel`。Dock、Files、Git 与原生内容的焦点职责仍属 P2。目标是**重新明确状态所有者和依赖方向，而不是增加 Manager、Coordinator、Protocol 或文件数量**。
 
 本 Feature 已获授权实施 P1；P2 仍停留在规划。用户已明确要求本 Feature 计划提交 Git；需求、计划和脱敏审查证据入库，原始终端输出、凭据和私人录屏不入库。实时任务状态只在 `todo.toml`，长期要求归 [架构文档](../../../docs/architecture.md)。
 
@@ -19,8 +19,8 @@
 
 ## 基线与证据
 
-- **当前实施产品基线**：`origin/main@097dac7a78b3308cde950d43446b635fcb1ff3d6`（2026-10-22 已获取并重基）。原调研基线 `654cd5567df8a706f9b509b91e7ecdc1913d5608` 及当时的规则提交 `035e8ff` 仅属历史证据；P1-T1 必须在当前实施基线上重新采集 UI/UX 原生对照，不能沿用旧截图代表最新 main。
-- 工作区：独立 worktree，四个 Feature 提交已在上述最新 `origin/main` 上重基，仍为分离 HEAD；不改原 checkout、不建分支、不推送。真正实施前重新核对最新 main、HEAD、工作树和产品基线，不依赖机器专属绝对路径。
+- **P1 固定实施基线（历史，不代表当前 main）**：`origin/main@097dac7a78b3308cde950d43446b635fcb1ff3d6`（2026-10-22 获取并重基）。原调研基线 `654cd5567df8a706f9b509b91e7ecdc1913d5608` 及当时的规则提交 `035e8ff` 仅属历史证据；P1-T1 必须在当前实施基线上重新采集 UI/UX 原生对照，不能沿用旧截图代表最新 main。
+- 当前工作区是独立 worktree，分支 `feature/workspace-focus-refactor`。P1 已按任务提交；P2 尚未实施。上述 SHA 只定义重构前的产品对照，不代表当前远端主线；验证以实际提交和证据记录为准。
 - 当前源码、现行文档与测试是本计划的证据；不读取或引用历史 `audit*.md` 来决定正确性。覆盖范围、发现和阅读边界见 [执行前审查](review-preflight.md)。
 - 当前已包含跨组拖动释放、空工具区释放焦点及 Palette 不切目标动作的回归；不能把旧版本问题重新当作当前缺陷。
 
@@ -105,7 +105,7 @@ Feature 最终还须通过完整 XCTest、要求的 Debug／Release 与受影响
 
 ## 未验证条件与验收限制
 
-本轮未执行产品验收。P1-T1 建立届时可重复基线，不复用历史测试数字。前次审查记录的只读环境为 macOS 27.2、Xcode 27.2 beta；当时仓库 CI 声明 macOS 26／Xcode 26.6，实施前须重新核对，不能据此称这些环境已运行通过。
+P1 已有隔离测试及构建证据，具体命令和覆盖缺口见 [evidence-p1.md](evidence-p1.md)。本节仍列出必须核销的系统入口与环境，**不把构建通过等同于完整 GUI 验收**；历史调研时的 CI 工具链版本不代表当前 CI。
 
 - **最低系统与 CI 工具链**：尚未在本轮运行。部署目标编译及当前系统原生回归只能替代部分证据，最低运行时和不同工具链须补验；不作全环境通过声明。
 - **前台 key window、物理键鼠、IME 与 App 菜单**：共享桌面不能随意抢占。原生事件／marked-text 测试不是独立 App E2E；缺少安全受控会话会阻塞完整焦点验收。

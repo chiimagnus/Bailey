@@ -157,7 +157,7 @@
 | [Bailey/Workspace/Project.swift](../../../Bailey/Workspace/Project.swift) | 链路 | 沿本次入口／状态／焦点或生命周期执行链核对 |
 | [Bailey/Workspace/ProjectFileIndex.swift](../../../Bailey/Workspace/ProjectFileIndex.swift) | 链路 | 沿本次入口／状态／焦点或生命周期执行链核对 |
 | [Bailey/Workspace/SessionStore.swift](../../../Bailey/Workspace/SessionStore.swift) | 链路 | 沿本次入口／状态／焦点或生命周期执行链核对 |
-| [Bailey/Workspace/TerminalManager.swift](../../../Bailey/Workspace/TerminalManager.swift) | 链路 | 沿本次入口／状态／焦点或生命周期执行链核对 |
+| `Bailey/Workspace/TerminalManager.swift`（仅存在于 P1 实施前基线 `097dac7`；现行窗口类型见 [WorkspaceWindowModel.swift](../../../Bailey/Workspace/WorkspaceWindowModel.swift)） | 链路 | 沿本次入口／状态／焦点或生命周期执行链核对 |
 | [Bailey/Workspace/WorkspaceBackend.swift](../../../Bailey/Workspace/WorkspaceBackend.swift) | 边界 | 后端及纯值边界 |
 
 ## 测试影响核销
