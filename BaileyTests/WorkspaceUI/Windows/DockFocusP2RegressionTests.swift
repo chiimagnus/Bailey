@@ -137,8 +137,10 @@ final class DockFocusP2RegressionTests: XCTestCase {
         let project = try XCTUnwrap(manager.selectedProject)
         let tab = try XCTUnwrap(project.selectedTab)
         guard case .file(let file) = tab.content else { return XCTFail("FileTab expected") }
+        let screen = NSScreen.main?.visibleFrame ?? .zero
         let window = NSWindow(
-            contentRect: NSRect(x: -900, y: -900, width: 1100, height: 700),
+            contentRect: NSRect(x: screen.minX + 20, y: screen.minY + 20,
+                                width: 1100, height: 700),
             styleMask: [.titled, .resizable], backing: .buffered, defer: false
         )
         window.isReleasedWhenClosed = false
@@ -169,12 +171,13 @@ final class DockFocusP2RegressionTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             return !manager.isCommandPaletteVisible && window.firstResponder === editor
         }
-        NSLog("Palette result: active=%d key=%d showing=%d first=%@ ownsEditor=%d editorWindow=%d",
+        NSLog("Palette focus: active=%d key=%d showing=%d first=%@ original=%@ current=%@ owns=%d",
               NSApp.isActive ? 1 : 0, window.isKeyWindow ? 1 : 0,
               manager.isCommandPaletteVisible ? 1 : 0,
-              String(describing: window.firstResponder),
-              manager.ownsActiveResponder(editor) ? 1 : 0,
-              editor.window === window ? 1 : 0)
+              String(describing: window.firstResponder.map { ObjectIdentifier($0) }),
+              String(describing: ObjectIdentifier(editor)),
+              String(describing: file.editorView.map { ObjectIdentifier($0) }),
+              manager.ownsActiveResponder(editor) ? 1 : 0)
         XCTAssertTrue(window.firstResponder === editor)
         XCTAssertTrue(manager.ownsActiveResponder(editor))
         XCTAssertTrue(manager.isFPSCounterVisible)

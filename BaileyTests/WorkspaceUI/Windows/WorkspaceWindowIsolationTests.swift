@@ -27,6 +27,12 @@ private final class FocusRecordingWindow: NSWindow {
 /// not a valid substitute for the manager that owns a file or its save target.
 @MainActor
 final class WorkspaceWindowIsolationTests: XCTestCase {
+    private func visibleTestFrame(width: CGFloat, height: CGFloat) -> NSRect {
+        let screen = NSScreen.main?.visibleFrame ?? .zero
+        return NSRect(x: screen.minX + 20, y: screen.minY + 20,
+                      width: width, height: height)
+    }
+
     private func hasForegroundKeyWindow(_ window: NSWindow) async -> Bool {
         for _ in 0..<100 {
             if NSApp.isActive && window.isKeyWindow { return true }
@@ -134,7 +140,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         project.dock.select(.files)
 
         let window = NSWindow(
-            contentRect: NSRect(x: -1000, y: -1000, width: 1200, height: 700),
+            contentRect: visibleTestFrame(width: 1200, height: 700),
             styleMask: [.titled, .resizable], backing: .buffered, defer: false
         )
         window.isReleasedWhenClosed = false
@@ -346,7 +352,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let project = try XCTUnwrap(manager.selectedProject)
         project.dock.select(.git)
         let window = FocusRecordingWindow(
-            contentRect: NSRect(x: -1000, y: -1000, width: 1200, height: 700),
+            contentRect: visibleTestFrame(width: 1200, height: 700),
             styleMask: [.titled, .resizable], backing: .buffered, defer: false
         )
         window.isReleasedWhenClosed = false
@@ -433,7 +439,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             let project = try XCTUnwrap(manager.selectedProject)
             project.dock.select(.git)
             let window = NSWindow(
-                contentRect: NSRect(x: -1000, y: -1000, width: 1200, height: 700),
+                contentRect: visibleTestFrame(width: 1200, height: 700),
                 styleMask: [.titled, .resizable], backing: .buffered, defer: false
             )
             window.isReleasedWhenClosed = false
@@ -1245,8 +1251,13 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let deadline = Date().addingTimeInterval(8)
         while !condition() {
             guard Date() < deadline else {
+                func trees(in view: NSView) -> Int {
+                    (view is TreeKeyboardView ? 1 : 0) + view.subviews.reduce(0) {
+                        $0 + trees(in: $1)
+                    }
+                }
                 let state = NSApp.windows.filter(\.isVisible).map { window in
-                    "key=\(window.isKeyWindow), first=\(String(describing: type(of: window.firstResponder)))"
+                    "key=\(window.isKeyWindow), first=\(String(describing: type(of: window.firstResponder))), trees=\(window.contentView.map { trees(in: $0) } ?? 0)"
                 }
                 NSLog("Workspace UI timeout: active=%d windows=%@",
                       NSApp.isActive ? 1 : 0, state.description)
