@@ -1942,6 +1942,9 @@ struct GitPanel: View {
                     focusGitChanges()
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) {
+                _ in focusGitChanges()
+            }
         }
     }
 
@@ -1985,7 +1988,8 @@ struct GitPanel: View {
             selectedChange = selection(for: rows[0])
         }
         waitingForChanges = rows.isEmpty
-        guard let window = keyboardOwner.view?.window ?? graphKeyboardOwner.view?.window,
+        guard !manager.isCommandPaletteVisible,
+              let window = keyboardOwner.view?.window ?? graphKeyboardOwner.view?.window,
               window.isKeyWindow, NSApp.isActive else { return }
         // An active native input always owns its field editor.
         if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor { return }

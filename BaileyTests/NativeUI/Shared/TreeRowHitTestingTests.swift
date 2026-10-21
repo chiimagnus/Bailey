@@ -21,6 +21,31 @@ final class TreeRowHitTestingTests: XCTestCase {
         }
     }
 
+    func testTreeKeyboardAttachmentNotifiesAfterCallbackRegistration() {
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 240, height: 90),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let keyboard = TreeKeyboardView(frame: NSRect(x: 0, y: 0, width: 240, height: 90))
+        window.contentView?.addSubview(keyboard)
+        XCTAssertTrue(keyboard.window === window)
+
+        var attachments = 0
+        keyboard.onAttachedToWindow = { attachments += 1 }
+        settle()
+        XCTAssertEqual(attachments, 1, "Attaching before SwiftUI installs the callback must still notify")
+        keyboard.onAttachedToWindow = { attachments += 1 }
+        settle()
+        XCTAssertEqual(attachments, 1, "Ordinary SwiftUI updates must not repeat attachment focus")
+
+        keyboard.removeFromSuperview()
+        window.contentView?.addSubview(keyboard)
+        settle()
+        XCTAssertEqual(attachments, 2, "Reattaching to a window must notify the new mount")
+    }
+
     func testSelectionFillAndKeyboardOutlineRenderIndependently() throws {
         func centerColor(selected: Bool, outlined: Bool,
                          appearance: NSAppearance.Name) throws -> NSColor {

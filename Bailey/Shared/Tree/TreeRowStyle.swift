@@ -15,14 +15,29 @@ final class TreeKeyboardOwner {
 final class TreeKeyboardView: NSView {
     var onKeyDown: (NSEvent) -> Bool = { _ in false }
     var onFocusChanged: (Bool) -> Void = { _ in }
-    var onAttachedToWindow: () -> Void = {}
+    var onAttachedToWindow: (() -> Void)? {
+        didSet { notifyAttachmentIfNeeded() }
+    }
+    private var attachmentNotified = false
 
     override var acceptsFirstResponder: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { onAttachedToWindow() }
+        attachmentNotified = false
+        notifyAttachmentIfNeeded()
+    }
+
+    private func notifyAttachmentIfNeeded() {
+        guard let attachedWindow = window, !attachmentNotified,
+              onAttachedToWindow != nil else { return }
+        attachmentNotified = true
+        DispatchQueue.main.async { [weak self, weak attachedWindow] in
+            guard let self, let attachedWindow,
+                  self.window === attachedWindow else { return }
+            self.onAttachedToWindow?()
+        }
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -65,7 +80,7 @@ struct TreeKeyboardHost: NSViewRepresentable {
     static func dismantleNSView(_ view: TreeKeyboardView, coordinator: ()) {
         view.onKeyDown = { _ in false }
         view.onFocusChanged = { _ in }
-        view.onAttachedToWindow = {}
+        view.onAttachedToWindow = nil
     }
 }
 

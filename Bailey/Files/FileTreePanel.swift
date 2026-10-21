@@ -168,6 +168,9 @@ private struct FileTreeScrollView: View {
                     focusSelectedRow()
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) {
+                _ in focusSelectedRow()
+            }
             .onChange(of: model.items.first(where: { !$0.isDraft })?.path) { _, _ in
                 if waitingForFirstRow { focusSelectedRow() }
             }
