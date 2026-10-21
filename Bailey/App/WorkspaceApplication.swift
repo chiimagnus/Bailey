@@ -114,10 +114,10 @@ final class WorkspaceApplication {
         windows.removeAll { $0 === manager }
         if windows.isEmpty {
             let snapshot = manager.makeWindowSnapshot(captureTerminalHistory: true)
-            SessionStore.save([snapshot.snapshot])
-            TerminalHistoryStore.save(snapshot.histories)
-            pendingRestores = [snapshot.snapshot]
-            pendingHistories = snapshot.histories
+            pendingRestores.insert(snapshot.snapshot, at: 0)
+            pendingHistories.merge(snapshot.histories) { _, new in new }
+            SessionStore.save(pendingRestores)
+            TerminalHistoryStore.save(pendingHistories)
         } else {
             saveAll(captureTerminalHistory: false)
         }
@@ -126,7 +126,7 @@ final class WorkspaceApplication {
     private func saveAll(captureTerminalHistory: Bool) {
         guard !windows.isEmpty else { return }
         var snapshots: [SessionSnapshot] = []
-        var histories: [String: String] = [:]
+        var histories = pendingHistories
         for manager in windows {
             let snapshot = manager.makeWindowSnapshot(
                 captureTerminalHistory: captureTerminalHistory
@@ -134,7 +134,7 @@ final class WorkspaceApplication {
             snapshots.append(snapshot.snapshot)
             histories.merge(snapshot.histories) { _, new in new }
         }
-        SessionStore.save(snapshots)
+        SessionStore.save(snapshots + pendingRestores)
         TerminalHistoryStore.save(histories)
     }
 

@@ -8,6 +8,61 @@ import XCTest
 final class SessionStoreTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
+    func testSavingDuringPartialRestorePreservesUnclaimedWindowsAndHistory() async throws {
+        XCTAssertTrue(BaileyInstanceMode.isIsolated)
+        let previousWindows = SessionStore.load()
+        let previousHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(previousWindows)
+            TerminalHistoryStore.save(previousHistories)
+        }
+        for count in [1, 2, 3] {
+            for action in ["relaunch", "terminate", "close", "debounce"] {
+                let snapshots = (0..<count).map { index in
+                    SessionSnapshot(projects: [.init(
+                        customName: "window-\(index)", customDirectory: "/fixture/\(index)",
+                        sshHost: nil, pinnedFile: nil,
+                        tabs: index == 0 ? [] : [.init(
+                            content: .session(workingDirectory: "/fixture/\(index)"),
+                            historyKey: "history-\(index)", customName: nil, contextSessionIndex: nil
+                        )], selectedTabIndex: nil,
+                        dock: .group(.init(id: UUID(), items: [.files], selected: .files))
+                    )], selectedProjectIndex: 0)
+                }
+                let histories = Dictionary(uniqueKeysWithValues: (1..<count).map {
+                    ("history-\($0)", "output-\($0)")
+                })
+                SessionStore.save(snapshots)
+                TerminalHistoryStore.save(histories)
+                let application = WorkspaceApplication(loadSavedState: true)
+                let window = application.makeWindow()
+                window.selectedProject?.customName = "updated"
+                switch action {
+                case "relaunch": application.saveForRelaunch()
+                case "terminate": application.willTerminate()
+                case "close": window.windowClosed()
+                default:
+                    let deadline = Date().addingTimeInterval(5)
+                    while SessionStore.load().first?.projects.first?.customName != "updated",
+                          Date() < deadline {
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                }
+                let saved = SessionStore.load()
+                XCTAssertEqual(saved.count, count, "\(action), \(count) windows")
+                XCTAssertEqual(saved.first?.projects.first?.customName, "updated", action)
+                XCTAssertEqual(saved.dropFirst().compactMap { $0.projects.first?.customName },
+                               (1..<count).map { "window-\($0)" }, action)
+                XCTAssertEqual(TerminalHistoryStore.load(), histories, action)
+                window.windowClosed()
+                window.windowClosed()
+                application.willTerminate()
+                XCTAssertEqual(SessionStore.load().count, count, "Repeated close/quit: \(action)")
+                XCTAssertEqual(TerminalHistoryStore.load(), histories, action)
+            }
+        }
+    }
+
     func testIsolatedSnapshotsDoNotReadOrOverwritePreviousTestRuns() {
         XCTAssertTrue(BaileyInstanceMode.isIsolated)
         let oldSuite = UserDefaults(suiteName: AppIdentity.bundleIdentifier + ".isolated-ui-test")
