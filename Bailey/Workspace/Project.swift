@@ -651,15 +651,17 @@ final class Project: nonisolated Identifiable {
         commitHash: String,
         parentHash: String?,
         status: Character,
-        origPath: String?
+        origPath: String?,
+        activating: Bool = true
     ) {
         openHistoricalDiff(repoRoot: repoRoot, path: path,
             source: .commit(hash: commitHash, parent: parentHash, status: String(status)),
-            origPath: origPath)
+            origPath: origPath, activating: activating)
     }
 
     func openHistoricalDiff(
-        repoRoot: String, path: String, source: DiffTab.Source, origPath: String?
+        repoRoot: String, path: String, source: DiffTab.Source, origPath: String?,
+        activating: Bool = true
     ) {
         let context = selectedSession
         if let tab = findDiffTab(repoRoot: repoRoot, path: path,
@@ -670,7 +672,7 @@ final class Project: nonisolated Identifiable {
             if changed || (!diff.isLoading && (source.isLive || diff.error != nil || !diff.hasLoadedContent)) {
                 diff.reload()
             }
-            selectTab(tab.id)
+            selectTab(tab.id, activating: activating)
             return
         }
         let diff = DiffTab(repoRoot: repoRoot, path: path, source: source,
@@ -679,7 +681,7 @@ final class Project: nonisolated Identifiable {
         let tab = makeTab(content: .diff(diff))
         tab.contextSession = context
         insertNextToSelected(tab)
-        selectTab(tab.id)
+        selectTab(tab.id, activating: activating)
     }
 
     private func findDiffTab(

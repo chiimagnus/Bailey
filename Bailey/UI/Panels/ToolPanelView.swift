@@ -220,7 +220,8 @@ struct ToolPanelView: View {
                                 ? (commit.stash?.untrackedFilesHash ?? commit.hash) : commit.hash,
                             parentHash: file.fromStashUntracked ? nil : commit.parentHashes.first,
                             status: file.fromStashUntracked ? "A" : file.status,
-                            origPath: file.originalPath
+                            origPath: file.originalPath,
+                            activating: false
                         )
                     }
                 )

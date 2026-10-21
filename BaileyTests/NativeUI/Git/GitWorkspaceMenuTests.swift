@@ -265,7 +265,14 @@ final class GitWorkspaceMenuTests: XCTestCase {
                                  staged: staged, untracked: entry.isUntracked,
                                  origPath: entry.origPath, activating: false)
             },
-            openCommitDiff: { _, _ in }
+            openCommitDiff: { commit, file in
+                manager.openCommitDiff(
+                    repoRoot: model.repoRoot, path: file.path,
+                    commitHash: commit.hash, parentHash: commit.parentHashes.first,
+                    status: file.status, origPath: file.originalPath,
+                    activating: false
+                )
+            }
         ).frame(width: width, height: height))
         window.contentView = host
         window.orderFront(nil)
@@ -365,11 +372,170 @@ final class GitWorkspaceMenuTests: XCTestCase {
         XCTAssertEqual(git(["rev-parse", "HEAD"]), headBefore)
         XCTAssertEqual(git(["hash-object", "alpha.swift"]), worktreeBefore)
         XCTAssertEqual(project.tabs.count, 2, "Unstage must not open another Diff")
+
+        try await wait { model.graphCommits.count > 0 }
+        func descendants(_ view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(descendants)
+        }
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return descendants(host).compactMap { $0 as? TreeKeyboardView }.count >= 2
+        }
+        let graphReceiver = try XCTUnwrap(descendants(host)
+            .compactMap { $0 as? TreeKeyboardView }
+            .first { $0 !== receiver })
+        let createBranch = String(localized: "Create Branch at Commit…", table: "Git")
+        func graphCommitY() -> CGFloat? {
+            for y in stride(from: Int(height - 12), through: 12, by: -4) {
+                guard let event = NSEvent.mouseEvent(
+                    with: .rightMouseDown, location: NSPoint(x: 155, y: CGFloat(y)),
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil,
+                    eventNumber: 0, clickCount: 1, pressure: 1
+                ) else { continue }
+                if window.contentView?.menu(for: event)?.items.contains(where: {
+                    $0.title == createBranch
+                }) == true { return CGFloat(y) }
+            }
+            return nil
+        }
+        let graphY = try XCTUnwrap(graphCommitY(), "Graph commit must be mouse-hittable")
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+        try click(x: 155, y: graphY)
+        XCTAssertTrue(window.firstResponder === graphReceiver,
+                      "Clicking a Graph commit must release Git Changes' native keyboard")
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertTrue(window.firstResponder === graphReceiver,
+                      "Key-window restoration must not pull Graph focus back to Changes")
+        try press(49, characters: " ") // Space toggles the clicked Graph commit
+        XCTAssertEqual(project.tabs.count, 2,
+                       "Toggling a Graph commit must not open a Diff or mutate Git")
+        XCTAssertTrue(window.firstResponder === graphReceiver)
+        try press(49, characters: " ") // Reopen that commit's historical file list
+        try press(125, characters: "\u{F701}") // Down selects its first history file
+        try press(49, characters: " ") // Space previews the actual historical Diff
+        try await wait { project.tabs.count == 3 }
+        guard case .diff(let historyDiff)? = project.selectedTab?.content else {
+            return XCTFail("Graph Space must open the selected historical Diff")
+        }
+        try await wait { historyDiff.hasLoadedContent }
+        XCTAssertEqual(historyDiff.source,
+                       .commit(hash: headBefore, parent: nil, status: "A"))
+        XCTAssertEqual(historyDiff.oldContent, "")
+        XCTAssertEqual(historyDiff.newContent, "baseline\n")
+        XCTAssertEqual(project.dock.activeGroupID, gitGroup.id)
+        XCTAssertTrue(window.firstResponder === graphReceiver)
+
+        let input = try XCTUnwrap(descendants(host)
+            .compactMap { $0 as? NSTextField }
+            .first { $0.isEditable && $0.isEnabled },
+            "The commit message must be a real native text field")
+        XCTAssertTrue(window.makeFirstResponder(input))
+        let oldText = input.currentEditor()?.string ?? input.stringValue
+        try press(49, characters: " ")
+        let edited = input.currentEditor()?.string ?? input.stringValue
+        XCTAssertEqual(edited, oldText + " ",
+                       "Space must type into the commit field, not activate a Graph row")
+        XCTAssertFalse(window.firstResponder === graphReceiver)
+        XCTAssertFalse(window.firstResponder === receiver)
+        XCTAssertEqual(project.tabs.count, 3)
+        XCTAssertEqual(git(["rev-parse", "HEAD"]), headBefore)
+
     }
 
     private func findTreeKeyboard(in view: NSView) -> TreeKeyboardView? {
         if let keyboard = view as? TreeKeyboardView { return keyboard }
         return view.subviews.lazy.compactMap { self.findTreeKeyboard(in: $0) }.first
+    }
+
+    func testGitGraphIsKeyboardReadyWhenRepositoryHasNoChangedFiles() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-graph-only-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func git(_ args: [String]) {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        git(["init", "-q", "-b", "main"])
+        git(["config", "user.name", "Graph Only"])
+        git(["config", "user.email", "graph@invalid"])
+        git(["config", "commit.gpgsign", "false"])
+        try "history\n".write(to: root.appendingPathComponent("note.txt"),
+                              atomically: true, encoding: .utf8)
+        git(["add", "note.txt"])
+        git(["commit", "-qm", "history"])
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        project.dock.select(.git)
+        let model = GitStatusModel()
+        model.syncSelectedProject(in: manager)
+        try await wait {
+            model.hasResolvedStatus && model.canUseCurrentStatus
+                && model.graphCommits.count == 1 && model.totalChangeCount == 0
+        }
+        let window = NSWindow(
+            contentRect: NSRect(x: 20, y: 100, width: 450, height: 660),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        var opened: [String] = []
+        let host = NSHostingView(rootView: GitPanel(
+            model: model, manager: manager, project: project, session: nil, sshHost: nil,
+            openFile: { _ in }, openDiff: { _, _ in },
+            openCommitDiff: { _, file in opened.append(file.path) }
+        ).frame(width: 450, height: 660))
+        window.contentView = host
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.treeKeyboards(in: host).count == 2
+        }
+        let owners = treeKeyboards(in: host)
+        let graph = try XCTUnwrap(owners.last)
+        if window.isKeyWindow && NSApp.isActive {
+            try await wait {
+                host.layoutSubtreeIfNeeded()
+                return window.firstResponder === graph
+            }
+        } else {
+            // Xcode's isolated XCTest host may never gain foreground activation.
+            // Exercise the real NSWindow responder and keyboard path without
+            // pretending this verified automatic key-window activation.
+            XCTAssertTrue(window.makeFirstResponder(graph))
+        }
+        let key = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            characters: " ", charactersIgnoringModifiers: " ",
+            isARepeat: false, keyCode: 49
+        ))
+        window.sendEvent(key) // Expand the initially selected commit
+        let down = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            characters: "\u{F701}", charactersIgnoringModifiers: "\u{F701}",
+            isARepeat: false, keyCode: 125
+        ))
+        window.sendEvent(down)
+        window.sendEvent(key) // Browse its first file without switching panels
+        try await wait { opened == ["note.txt"] }
+        XCTAssertTrue(window.firstResponder === graph)
+        XCTAssertTrue(project.tabs.isEmpty, "The callback fixture is not a real editor")
+    }
+
+    private func treeKeyboards(in view: NSView) -> [TreeKeyboardView] {
+        (view as? TreeKeyboardView).map { [$0] }
+            ?? view.subviews.flatMap { self.treeKeyboards(in: $0) }
     }
 
     func testUncommittedSheetCancelAndConfirmReachRealStash() async throws {

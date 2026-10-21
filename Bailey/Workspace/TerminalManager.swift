@@ -945,7 +945,8 @@ final class TerminalManager {
         commitHash: String,
         parentHash: String?,
         status: Character,
-        origPath: String?
+        origPath: String?,
+        activating: Bool = true
     ) {
         selectedProject?.openCommitDiff(
             repoRoot: repoRoot,
@@ -953,7 +954,8 @@ final class TerminalManager {
             commitHash: commitHash,
             parentHash: parentHash,
             status: status,
-            origPath: origPath
+            origPath: origPath,
+            activating: activating
         )
     }
 

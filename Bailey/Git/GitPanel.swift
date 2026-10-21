@@ -63,6 +63,8 @@ struct GitPanel: View {
     @State private var filterText = ""
     @State private var showFilter = false
     @State private var keyboardOwner = TreeKeyboardOwner()
+    @State private var graphKeyboardOwner = TreeKeyboardOwner()
+    @State private var lastKeyboardRegion: KeyboardRegion = .changes
     @State private var keyboardFocused = false
     @State private var selectedChange: ChangeSelection?
     @State private var waitingForChanges = false
@@ -70,6 +72,8 @@ struct GitPanel: View {
     @State private var operationExpanded = false
     @State private var operationTrigger: OperationTrigger?
     @Environment(\.panelFontScale) private var panelFontScale
+
+    private enum KeyboardRegion { case changes, graph }
 
     private struct ChangeSelection: Hashable {
         let scope: String
@@ -1764,6 +1768,7 @@ struct GitPanel: View {
                             remotes: model.remotes,
                             stashFilesByOID: model.stashFilesByOID,
                             repoRoot: model.repoRoot,
+                            selectionScope: model.currentScope,
                             fileAction: { commit, file, action in
                                 handleHistoricalFile(commit, file: file, action: action)
                             },
@@ -1833,7 +1838,8 @@ struct GitPanel: View {
                                 manager.openDiff(
                                     repoRoot: worktree.path, path: entry.path,
                                     staged: staged, untracked: entry.isUntracked,
-                                    origPath: entry.diffOriginalPath(staged: staged)
+                                    origPath: entry.diffOriginalPath(staged: staged),
+                                    activating: false
                                 )
                             },
                             canActOnWorktrees: !model.isBusy && model.hasCurrentWorktrees
@@ -1847,7 +1853,12 @@ struct GitPanel: View {
                             },
                             createWorktree: { ref, commit in
                                 presentBranchAction(ref, commit: commit, action: .createWorktree)
-                            }
+                            },
+                            keyboardOwner: graphKeyboardOwner,
+                            isKeyboardActive: isGitActive && hasCurrentPanelTarget,
+                            onKeyboardFocused: { lastKeyboardRegion = .graph },
+                            onKeyboardAttached: focusGitChanges,
+                            scrollToKeyboardRow: { proxy.scrollTo($0) }
                         )
                         .frame(maxWidth: .infinity)
                     }
@@ -1859,7 +1870,10 @@ struct GitPanel: View {
             }
             .background {
                 TreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleGitChangeKey,
-                                 onFocusChanged: { keyboardFocused = $0 },
+                                 onFocusChanged: { focused in
+                                     keyboardFocused = focused
+                                     if focused { lastKeyboardRegion = .changes }
+                                 },
                                  onAttachedToWindow: focusGitChanges)
             }
             .onAppear { focusGitChanges() }
@@ -1876,7 +1890,17 @@ struct GitPanel: View {
             }
             .onChange(of: model.currentScope) { _, _ in
                 selectedChange = nil
+                lastKeyboardRegion = .changes
                 if isGitActive { focusGitChanges() }
+            }
+            .onChange(of: historyCollapsed) { _, collapsed in
+                if collapsed, lastKeyboardRegion == .graph {
+                    lastKeyboardRegion = .changes
+                    focusGitChanges()
+                }
+            }
+            .onChange(of: model.graphCommits.map(\.id)) { _, _ in
+                if isGitActive && navigableChanges.isEmpty { focusGitChanges() }
             }
             .onChange(of: navigableChanges.map { selection(for: $0) }) { _, choices in
                 if waitingForChanges { focusGitChanges() }
@@ -1935,16 +1959,20 @@ struct GitPanel: View {
     private func focusGitChanges() {
         guard isGitActive, hasCurrentPanelTarget, model.canUseCurrentStatus else { return }
         let rows = navigableChanges
-        guard !rows.isEmpty else { waitingForChanges = true; return }
-        if !rows.contains(where: { selection(for: $0) == selectedChange }) {
+        if !rows.isEmpty, !rows.contains(where: { selection(for: $0) == selectedChange }) {
             selectedChange = selection(for: rows[0])
         }
-        waitingForChanges = false
-        guard let window = keyboardOwner.view?.window,
+        waitingForChanges = rows.isEmpty
+        guard let window = keyboardOwner.view?.window ?? graphKeyboardOwner.view?.window,
               window.isKeyWindow, NSApp.isActive else { return }
-        // The commit message and filter field must retain their native field editor.
+        // An active native input always owns its field editor.
         if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor { return }
-        keyboardOwner.focus()
+        if (lastKeyboardRegion == .graph || rows.isEmpty),
+           graphKeyboardOwner.view?.window === window {
+            graphKeyboardOwner.focus()
+        } else if !rows.isEmpty {
+            keyboardOwner.focus()
+        }
     }
 
     private func browseGitChange(_ change: VisibleChange) {

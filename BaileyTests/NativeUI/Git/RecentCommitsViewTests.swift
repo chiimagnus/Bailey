@@ -71,7 +71,9 @@ final class RecentCommitsViewTests: XCTestCase {
         openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void = { _, _, _ in },
         canActOnWorktrees: Bool = false,
         canRevealWorktreeInFinder: Bool = true,
-        worktreeAction: @escaping (GitStatusModel.WorktreeLocation, RecentCommitsView.WorktreeAction) -> Void = { _, _ in }
+        worktreeAction: @escaping (GitStatusModel.WorktreeLocation, RecentCommitsView.WorktreeAction) -> Void = { _, _ in },
+        openDiff: @escaping (GitStatusModel.RecentCommit, GitStatusModel.RecentCommit.FileChange) -> Void = { _, _ in },
+        onKeyboardFocused: @escaping () -> Void = {}
     ) -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(x: -1200, y: -1200, width: width, height: height),
@@ -87,7 +89,7 @@ final class RecentCommitsViewTests: XCTestCase {
             collapsedFolders: Binding(get: { selection.folders }, set: { selection.folders = $0 }),
             viewMode: viewMode, fontScale: fontScale,
             hasMoreCommits: false, isLoadingMore: false, loadMore: { false },
-            openDiff: { _, _ in }, canSwitchBranch: true,
+            openDiff: openDiff, canSwitchBranch: true,
             switchBranch: { _ in }, branchAction: { _, _, _ in }, remoteAction: { _, _, _ in }, tagAction: { _, _, _ in },
             isAnnotatedTag: { _ in false },
             canFetchRemoteBranch: { _ in false }, createBranch: { _ in }, addTag: { _ in },
@@ -96,12 +98,100 @@ final class RecentCommitsViewTests: XCTestCase {
             openWorktreeDiff: openWorktreeDiff,
             canActOnWorktrees: canActOnWorktrees,
             canRevealWorktreeInFinder: canRevealWorktreeInFinder,
-            worktreeAction: worktreeAction
+            worktreeAction: worktreeAction,
+            onKeyboardFocused: onKeyboardFocused
         ).frame(width: resizable ? nil : width, height: height, alignment: .topLeading)
             .background(Color(nsColor: Theme.sidebar)))
         window.orderFront(nil)
         settle()
         return window
+    }
+
+    func testGraphClickRecordsFocusIntentBeforeMovingNativeResponder() throws {
+        let selection = GraphSelection()
+        let commit = GitStatusModel.RecentCommit(
+            hash: String(repeating: "a", count: 40), shortHash: "aaaaaaa",
+            subject: "Focus Intent", author: "Tester", date: .now,
+            parentHashes: [], references: [], files: []
+        )
+        var windowForEvent: NSWindow?
+        var oldResponder: NSResponder?
+        var responderAtIntent: NSResponder?
+        var capture = false
+        let height: CGFloat = 240
+        let window = hostHistory([commit], selection: selection, width: 420, height: height,
+            onKeyboardFocused: {
+                if capture, responderAtIntent == nil {
+                    responderAtIntent = windowForEvent?.firstResponder
+                }
+            })
+        defer { window.close() }
+        windowForEvent = window
+        let old = TreeKeyboardView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+        window.contentView?.addSubview(old)
+        XCTAssertTrue(window.makeFirstResponder(old))
+        oldResponder = old
+        capture = true
+        click(NSPoint(x: 150, y: height - 19), in: window)
+        XCTAssertTrue(selection.expanded.contains(commit.id))
+        XCTAssertTrue(responderAtIntent === oldResponder,
+                      "Graph click intent must precede focus transfer, so parent recovery cannot reclaim Changes")
+        XCTAssertFalse(window.firstResponder === old)
+    }
+
+    func testGraphSpaceUsesTheSelectedCommitAndFileWithoutStealingKeyboard() throws {
+        let selection = GraphSelection()
+        let historyFile = GitStatusModel.RecentCommit.FileChange(
+            status: "M", path: "Sources/alpha.swift", originalPath: nil
+        )
+        let first = GitStatusModel.RecentCommit(
+            hash: String(repeating: "a", count: 40), shortHash: "aaaaaaa", subject: "First commit",
+            author: "Tester", date: .now, parentHashes: [], references: [], files: [historyFile]
+        )
+        let second = GitStatusModel.RecentCommit(
+            hash: String(repeating: "b", count: 40), shortHash: "bbbbbbb", subject: "Second commit",
+            author: "Tester", date: .now, parentHashes: [], references: [], files: [historyFile]
+        )
+        var opened: [(String, String)] = []
+        let height: CGFloat = 280
+        let window = hostHistory(
+            [first, second], selection: selection, width: 420, height: height,
+            openDiff: { commit, file in opened.append((commit.hash, file.path)) }
+        )
+        defer { window.close() }
+        func keyboard(in view: NSView) -> TreeKeyboardView? {
+            if let view = view as? TreeKeyboardView { return view }
+            return view.subviews.lazy.compactMap { keyboard(in: $0) }.first
+        }
+        let receiver = try XCTUnwrap(keyboard(in: try XCTUnwrap(window.contentView)),
+                                     "Git Graph must own a native keyboard receiver")
+        click(NSPoint(x: 150, y: height - 19), in: window)
+        XCTAssertTrue(selection.expanded.contains(first.id), "A single click must expand a commit")
+        XCTAssertTrue(window.firstResponder === receiver, "Click must focus Git Graph, not the editor")
+        func press(_ keyCode: UInt16, characters: String) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                characters: characters, charactersIgnoringModifiers: characters,
+                isARepeat: false, keyCode: keyCode
+            ))
+            window.sendEvent(event)
+            settle()
+        }
+        try press(125, characters: "\u{F701}")
+        try press(49, characters: " ")
+        XCTAssertEqual(opened.count, 1)
+        XCTAssertEqual(opened[0].0, first.hash)
+        XCTAssertEqual(opened[0].1, historyFile.path)
+        XCTAssertTrue(window.firstResponder === receiver)
+        try press(125, characters: "\u{F701}")
+        try press(49, characters: " ")
+        XCTAssertTrue(selection.expanded.contains(second.id), "Space must toggle the next commit")
+        XCTAssertTrue(selection.expanded.contains(first.id), "Selecting must not collapse the prior commit")
+        try press(126, characters: "\u{F700}")
+        try press(36, characters: "\r")
+        XCTAssertEqual(opened.last?.0, first.hash, "Return must browse the historical file")
     }
 
     func testGraphPaletteKeepsTwelveLaneColors() {
@@ -1543,6 +1633,40 @@ final class RecentCommitsViewTests: XCTestCase {
                 XCTAssertTrue(opened.contains {
                     $0.path == worktree.path && $0.file == "Scripts/更改.swift" && !$0.staged
                 }, "Working changes must not silently open the staged version")
+
+                func graphKeyboard(in view: NSView) -> TreeKeyboardView? {
+                    if let keyboard = view as? TreeKeyboardView { return keyboard }
+                    return view.subviews.lazy.compactMap { graphKeyboard(in: $0) }.first
+                }
+                let receiver = try XCTUnwrap(graphKeyboard(in: try XCTUnwrap(window.contentView)))
+                XCTAssertTrue(window.firstResponder === receiver,
+                              "Clicking a worktree file must focus Git Graph")
+                func press(_ keyCode: UInt16, _ chars: String) throws {
+                    let event = try XCTUnwrap(NSEvent.keyEvent(
+                        with: .keyDown, location: .zero, modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil,
+                        characters: chars, charactersIgnoringModifiers: chars,
+                        isARepeat: false, keyCode: keyCode
+                    ))
+                    window.sendEvent(event)
+                    settle()
+                }
+                try press(126, "\u{F700}") // Up: previous folder (tree) or staged file (list)
+                if mode == .tree { try press(126, "\u{F700}") }
+                try press(49, " ")
+                XCTAssertTrue(opened.last?.staged == true,
+                              "Space must browse the selected staged side even for identical paths")
+                XCTAssertEqual(opened.last?.path, worktree.path)
+                XCTAssertTrue(window.firstResponder === receiver)
+                if mode == .tree {
+                    try press(126, "\u{F700}") // The staged directory
+                    try press(123, "\u{F702}") // Left collapses
+                    let key = "worktree:" + worktree.path + ":staged:Scripts"
+                    XCTAssertTrue(selection.folders.contains(key))
+                    try press(124, "\u{F703}") // Right expands
+                    XCTAssertFalse(selection.folders.contains(key))
+                }
                 window.close()
             }
         }

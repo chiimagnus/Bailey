@@ -688,15 +688,22 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             XCTAssertEqual(project.focusedContent?.id, file.id)
             editor.insertText("// \(tool) 中文 😀\n", replacementRange: NSRange(location: 0, length: 0))
             XCTAssertTrue(file.isDirty)
-            let ownsKeyboard = NSApp.isActive && window.isKeyWindow
             manager.showPanel(tool)
             try await wait {
                 host.layoutSubtreeIfNeeded()
-                return (!ownsKeyboard || window.firstResponder is DockGroupFocusView) && !file.isDirty
+                let active = NSApp.isActive && window.isKeyWindow
+                let validResponder = window.firstResponder is DockGroupFocusView
+                    || (tool == .files && window.firstResponder is TreeKeyboardView)
+                return (!active || validResponder) && !file.isDirty
             }
-            if ownsKeyboard {
-                let scope = try XCTUnwrap(window.firstResponder as? DockGroupFocusView)
-                XCTAssertEqual(scope.groupID, project.dock.group(containing: tool)?.id)
+            if NSApp.isActive && window.isKeyWindow {
+                if let scope = window.firstResponder as? DockGroupFocusView {
+                    XCTAssertEqual(scope.groupID, project.dock.group(containing: tool)?.id)
+                } else {
+                    XCTAssertEqual(tool, .files,
+                                   "Only Files has its own keyboard receiver in this fixture")
+                    XCTAssertTrue(window.firstResponder is TreeKeyboardView)
+                }
             }
             XCTAssertNil(project.focusedContent)
             XCTAssertFalse(manager.ownsActiveResponder(editor))

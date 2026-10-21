@@ -133,6 +133,57 @@ final class GitHistoryFileTests: XCTestCase {
         XCTAssertEqual(try git(["show", selected + ":old.txt"], in: root), "old bytes")
     }
 
+    func testHistoricalDiffPreviewKeepsGitActiveAndExplicitActivationStillWorks() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("history.txt")
+        try Data("baseline\n".utf8).write(to: file)
+        _ = try git(["add", "history.txt"], in: root)
+        _ = try git(["commit", "-qm", "base"], in: root)
+        let base = try git(["rev-parse", "HEAD"], in: root)
+        try Data("updated\n".utf8).write(to: file)
+        _ = try git(["commit", "-qam", "update"], in: root)
+        let update = try git(["rev-parse", "HEAD"], in: root)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        project.dock.select(.git)
+        let gitGroup = try XCTUnwrap(project.dock.group(containing: .git))
+        let initialGroup = project.dock.activeGroupID
+
+        func open(activating: Bool) {
+            manager.openCommitDiff(
+                repoRoot: root.path, path: "history.txt", commitHash: update,
+                parentHash: base, status: "M", origPath: nil,
+                activating: activating
+            )
+        }
+        open(activating: false)
+        XCTAssertEqual(project.dock.activeGroupID, initialGroup)
+        guard case .diff(let diff)? = project.selectedTab?.content else {
+            return XCTFail("Historical preview must create a DiffTab")
+        }
+        try await wait { diff.hasLoadedContent }
+        XCTAssertEqual(diff.oldContent, "baseline\n")
+        XCTAssertEqual(diff.newContent, "updated\n")
+        XCTAssertEqual(diff.source, .commit(hash: update, parent: base, status: "M"))
+        XCTAssertEqual(project.dock.activeGroupID, gitGroup.id)
+        open(activating: false)
+        XCTAssertEqual(project.tabs.count, 1, "Reopening identical history must reuse the Diff")
+        guard case .diff(let same)? = project.selectedTab?.content else {
+            return XCTFail("Expected reused DiffTab")
+        }
+        XCTAssertTrue(same === diff)
+        XCTAssertEqual(project.dock.activeGroupID, gitGroup.id)
+        open(activating: true)
+        XCTAssertNotEqual(project.dock.activeGroupID, gitGroup.id,
+                          "Explicit activation must focus the Diff's visible group")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"], in: root), update)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "updated\n")
+    }
+
     func testReopeningLoadedImmutableRevisionDoesNotRepeatGitRead() async throws {
         let root = try repository()
         defer { try? FileManager.default.removeItem(at: root) }
