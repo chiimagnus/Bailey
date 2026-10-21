@@ -2164,6 +2164,39 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         withExtendedLifetime([discarded, redundant]) {}
     }
 
+    func testLocalWorktreeUseProtectsMacFileInsideAnSSHProject() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let checkout = root.appendingPathComponent("checkout", isDirectory: true)
+        let sibling = root.appendingPathComponent("checkout-other", isDirectory: true)
+        try FileManager.default.createDirectory(at: checkout, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = checkout.appendingPathComponent("unsaved.swift")
+        try "original".write(to: file, atomically: true, encoding: .utf8)
+
+        let manager = self.workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let remote = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
+        remote.sshHost = "invalid-worktree-protection-fixture"
+        remote.customDirectory = "/remote/unrelated"
+        manager.projects.append(remote)
+        manager.selectedProjectID = remote.id
+        XCTAssertTrue(manager.openExternalLocalItems([file]).isEmpty)
+        let tab = try XCTUnwrap(remote.selectedTab)
+        guard case .file(let localFile) = tab.content else {
+            return XCTFail("Mac file should open in an SSH project's editor tab")
+        }
+        XCTAssertNil(localFile.workspaceIdentity)
+        XCTAssertEqual(remote.panelContext?.scope, "ssh:invalid-worktree-protection-fixture")
+
+        XCTAssertTrue(self.workspaceApplication.isWorktreeInUse(path: checkout.path, scope: "local"),
+                      "A local editor inside an SSH project must block worktree removal")
+        XCTAssertFalse(self.workspaceApplication.isWorktreeInUse(path: sibling.path, scope: "local"))
+        XCTAssertFalse(self.workspaceApplication.isWorktreeInUse(path: checkout.path,
+                                                                scope: "ssh:invalid-worktree-protection-fixture"))
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "original")
+    }
+
     func testTwoApplicationOwnersNeverShareWorkspaceRegistryOrWorktreeProtection() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let aFolder = root.appendingPathComponent("first", isDirectory: true)
