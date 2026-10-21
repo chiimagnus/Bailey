@@ -16,6 +16,10 @@ private final class WorktreeMenuCalls {
     var events: [(String, RecentCommitsView.WorktreeAction)] = []
 }
 
+private final class GraphNativeTestWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+}
+
 @MainActor
 final class RecentCommitsViewTests: XCTestCase {
     private func settle() {
@@ -33,7 +37,7 @@ final class RecentCommitsViewTests: XCTestCase {
                 windowNumber: window.windowNumber, context: nil,
                 eventNumber: 0, clickCount: 1, pressure: 1
             )!
-            window.sendEvent(event)
+            NSApp.sendEvent(event)
         }
         settle()
     }
@@ -75,8 +79,12 @@ final class RecentCommitsViewTests: XCTestCase {
         openDiff: @escaping (GitStatusModel.RecentCommit, GitStatusModel.RecentCommit.FileChange) -> Void = { _, _ in },
         onKeyboardFocused: @escaping () -> Void = {}
     ) -> NSWindow {
-        let window = NSWindow(
-            contentRect: NSRect(x: -1200, y: -1200, width: width, height: height),
+        let screen = NSScreen.main?.visibleFrame ?? .zero
+        let window = GraphNativeTestWindow(
+            contentRect: NSRect(
+                x: screen.minX + 20, y: screen.minY + 20,
+                width: width, height: height
+            ),
             styleMask: [.borderless], backing: .buffered, defer: false
         )
         window.isReleasedWhenClosed = false
@@ -103,8 +111,14 @@ final class RecentCommitsViewTests: XCTestCase {
             onKeyboardFocused: onKeyboardFocused
         ).frame(width: resizable ? nil : width, height: height, alignment: .topLeading)
             .background(Color(nsColor: Theme.sidebar)))
-        window.orderFront(nil)
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
         settle()
+        if ProcessInfo.processInfo.environment["CI"] == "true" {
+            NSLog("Graph UI host: active=%d key=%d visible=%d screen=%@",
+                  NSApp.isActive ? 1 : 0, window.isKeyWindow ? 1 : 0,
+                  window.isVisible ? 1 : 0, String(describing: window.screen))
+        }
         return window
     }
 

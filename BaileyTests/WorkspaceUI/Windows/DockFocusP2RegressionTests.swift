@@ -169,6 +169,14 @@ final class DockFocusP2RegressionTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             return !manager.isCommandPaletteVisible && window.firstResponder === editor
         }
+        if ProcessInfo.processInfo.environment["CI"] == "true" {
+            NSLog("Palette result: active=%d key=%d showing=%d first=%@ ownsEditor=%d editorWindow=%d",
+                  NSApp.isActive ? 1 : 0, window.isKeyWindow ? 1 : 0,
+                  manager.isCommandPaletteVisible ? 1 : 0,
+                  String(describing: window.firstResponder),
+                  manager.ownsActiveResponder(editor) ? 1 : 0,
+                  editor.window === window ? 1 : 0)
+        }
         XCTAssertTrue(window.firstResponder === editor)
         XCTAssertTrue(manager.ownsActiveResponder(editor))
         XCTAssertTrue(manager.isFPSCounterVisible)

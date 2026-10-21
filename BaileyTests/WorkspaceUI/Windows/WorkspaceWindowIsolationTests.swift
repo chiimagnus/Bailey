@@ -1245,7 +1245,14 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let deadline = Date().addingTimeInterval(8)
         while !condition() {
             guard Date() < deadline else {
-                XCTFail("Window did not finish rendering", file: file, line: line)
+                if ProcessInfo.processInfo.environment["CI"] == "true" {
+                    let state = NSApp.windows.filter(\.isVisible).map { window in
+                        "key=\(window.isKeyWindow), first=\(String(describing: window.firstResponder))"
+                    }
+                    NSLog("Workspace UI timeout: active=%d windows=%@",
+                          NSApp.isActive ? 1 : 0, state.description)
+                }
+                XCTFail("Window did not reach the expected state", file: file, line: line)
                 throw WorkspaceError.timedOut
             }
             try await Task.sleep(for: .milliseconds(20))
