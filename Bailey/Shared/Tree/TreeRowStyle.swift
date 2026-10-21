@@ -1,6 +1,74 @@
 import AppKit
 import SwiftUI
 
+/// Per-tree native keyboard focus. Does not intercept mouse input or own row selection.
+@MainActor
+final class TreeKeyboardOwner {
+    weak var view: TreeKeyboardView?
+
+    func focus() {
+        guard let view, let window = view.window else { return }
+        window.makeFirstResponder(view)
+    }
+}
+
+final class TreeKeyboardView: NSView {
+    var onKeyDown: (NSEvent) -> Bool = { _ in false }
+    var onFocusChanged: (Bool) -> Void = { _ in }
+    var onAttachedToWindow: () -> Void = {}
+
+    override var acceptsFirstResponder: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { onAttachedToWindow() }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { onFocusChanged(true) }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onFocusChanged(false) }
+        return resigned
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if !onKeyDown(event) { super.keyDown(with: event) }
+    }
+}
+
+struct TreeKeyboardHost: NSViewRepresentable {
+    let owner: TreeKeyboardOwner
+    let onKeyDown: (NSEvent) -> Bool
+    let onFocusChanged: (Bool) -> Void
+    let onAttachedToWindow: () -> Void
+
+    func makeNSView(context: Context) -> TreeKeyboardView {
+        let view = TreeKeyboardView()
+        owner.view = view
+        updateNSView(view, context: context)
+        return view
+    }
+
+    func updateNSView(_ view: TreeKeyboardView, context: Context) {
+        owner.view = view
+        view.onKeyDown = onKeyDown
+        view.onFocusChanged = onFocusChanged
+        view.onAttachedToWindow = onAttachedToWindow
+    }
+
+    static func dismantleNSView(_ view: TreeKeyboardView, coordinator: ()) {
+        view.onKeyDown = { _ in false }
+        view.onFocusChanged = { _ in }
+        view.onAttachedToWindow = {}
+    }
+}
+
 /// One file-tree layout for Files, working-tree changes and commit history.
 enum TreeRowStyle {
     static let indent: CGFloat = 18

@@ -616,7 +616,8 @@ final class Project: nonisolated Identifiable {
     /// Opens a git diff as a new tab, reusing (and reloading) an existing tab
     /// for the same file and stage side.
     func openDiff(
-        repoRoot: String, path: String, staged: Bool, untracked: Bool, origPath: String?
+        repoRoot: String, path: String, staged: Bool, untracked: Bool, origPath: String?,
+        activating: Bool = true
     ) {
         let context = selectedSession
         if let tab = findDiffTab(
@@ -628,7 +629,7 @@ final class Project: nonisolated Identifiable {
             diff.untracked = untracked
             diff.origPath = origPath
             if changed || !diff.isLoading { diff.reload() }
-            selectTab(tab.id)
+            selectTab(tab.id, activating: activating)
             return
         }
         let diff = DiffTab(
@@ -639,7 +640,7 @@ final class Project: nonisolated Identifiable {
         let tab = makeTab(content: .diff(diff))
         tab.contextSession = context
         insertNextToSelected(tab)
-        selectTab(tab.id)
+        selectTab(tab.id, activating: activating)
     }
 
     /// Opens one file as it changed in a historical commit, comparing the

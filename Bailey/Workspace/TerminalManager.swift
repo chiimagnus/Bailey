@@ -929,11 +929,12 @@ final class TerminalManager {
 
     /// Opens a git diff tab in the current project.
     func openDiff(
-        repoRoot: String, path: String, staged: Bool, untracked: Bool, origPath: String?
+        repoRoot: String, path: String, staged: Bool, untracked: Bool, origPath: String?,
+        activating: Bool = true
     ) {
         selectedProject?.openDiff(
             repoRoot: repoRoot, path: path, staged: staged,
-            untracked: untracked, origPath: origPath
+            untracked: untracked, origPath: origPath, activating: activating
         )
     }
 

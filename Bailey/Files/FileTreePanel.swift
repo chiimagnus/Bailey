@@ -95,75 +95,6 @@ private struct FileTreeImportDrop: DropDelegate {
     }
 }
 
-/// Files has one native keyboard owner for its entire tree. Selection remains
-/// in FileTreeModel; the owner only establishes actual AppKit input focus.
-@MainActor
-private final class FileTreeKeyboardOwner {
-    weak var view: FileTreeKeyboardView?
-
-    func focus() {
-        guard let view, let window = view.window else { return }
-        window.makeFirstResponder(view)
-    }
-}
-
-private final class FileTreeKeyboardView: NSView {
-    var onKeyDown: (NSEvent) -> Bool = { _ in false }
-    var onFocusChanged: (Bool) -> Void = { _ in }
-    var onAttachedToWindow: () -> Void = {}
-
-    override var acceptsFirstResponder: Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window != nil { onAttachedToWindow() }
-    }
-
-    override func becomeFirstResponder() -> Bool {
-        let accepted = super.becomeFirstResponder()
-        if accepted { onFocusChanged(true) }
-        return accepted
-    }
-
-    override func resignFirstResponder() -> Bool {
-        let resigned = super.resignFirstResponder()
-        if resigned { onFocusChanged(false) }
-        return resigned
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if !onKeyDown(event) { super.keyDown(with: event) }
-    }
-}
-
-private struct FileTreeKeyboardHost: NSViewRepresentable {
-    let owner: FileTreeKeyboardOwner
-    let onKeyDown: (NSEvent) -> Bool
-    let onFocusChanged: (Bool) -> Void
-    let onAttachedToWindow: () -> Void
-
-    func makeNSView(context: Context) -> FileTreeKeyboardView {
-        let view = FileTreeKeyboardView()
-        owner.view = view
-        updateNSView(view, context: context)
-        return view
-    }
-
-    func updateNSView(_ view: FileTreeKeyboardView, context: Context) {
-        owner.view = view
-        view.onKeyDown = onKeyDown
-        view.onFocusChanged = onFocusChanged
-        view.onAttachedToWindow = onAttachedToWindow
-    }
-
-    static func dismantleNSView(_ view: FileTreeKeyboardView, coordinator: ()) {
-        view.onKeyDown = { _ in false }
-        view.onFocusChanged = { _ in }
-        view.onAttachedToWindow = {}
-    }
-}
-
 /// The same SwiftUI rows, 22 pt layout and hierarchy lines as the Git tree.
 /// The tree stays viewport-sized; only long names scroll horizontally.
 private struct FileTreeScrollView: View {
@@ -182,7 +113,7 @@ private struct FileTreeScrollView: View {
     let importFromFinder: ([NSItemProvider], String) -> Bool
     @Environment(\.panelFontScale) private var fontScale
     @Environment(\.controlActiveState) private var controlActiveState
-    @State private var keyboardOwner = FileTreeKeyboardOwner()
+    @State private var keyboardOwner = TreeKeyboardOwner()
     @State private var keyboardFocused = false
     @State private var waitingForFirstRow = false
 
@@ -216,7 +147,7 @@ private struct FileTreeScrollView: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .background {
-                FileTreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleKey,
+                TreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleKey,
                                      onFocusChanged: { keyboardFocused = $0 },
                                      onAttachedToWindow: focusSelectedRow)
             }

@@ -208,7 +208,8 @@ struct ToolPanelView: View {
                             path: entry.path,
                             staged: staged,
                             untracked: entry.isUntracked,
-                            origPath: entry.origPath
+                            origPath: entry.origPath,
+                            activating: false
                         )
                     },
                     openCommitDiff: { commit, file in

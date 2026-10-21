@@ -208,6 +208,170 @@ final class GitWorkspaceMenuTests: XCTestCase {
             "Untracked changes must retain the Ignore action")
     }
 
+    func testGitChangeRowPreviewKeepsNativeKeyboardAndUsesCorrectIndexSide() async throws {
+        let sandbox = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-git-preview-" + UUID().uuidString)
+        let root = sandbox.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+        func git(_ args: [String]) -> String {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = git(["init", "-q", "-b", "main"])
+        _ = git(["config", "user.name", "Preview Test"])
+        _ = git(["config", "user.email", "preview@invalid"])
+        _ = git(["config", "commit.gpgsign", "false"])
+        let file = root.appendingPathComponent("alpha.swift")
+        try "baseline\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = git(["add", "alpha.swift"])
+        _ = git(["commit", "-qm", "baseline"])
+        try "staged\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = git(["add", "alpha.swift"])
+        try "worktree\n".write(to: file, atomically: true, encoding: .utf8)
+        let headBefore = git(["rev-parse", "HEAD"])
+        let indexBefore = git(["rev-parse", ":alpha.swift"])
+        let worktreeBefore = git(["hash-object", "alpha.swift"])
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        project.dock.select(.git)
+        let gitGroup = try XCTUnwrap(project.dock.group(containing: .git))
+        let model = GitStatusModel()
+        model.syncSelectedProject(in: manager)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        XCTAssertEqual(model.stagedEntries.map(\.path), ["alpha.swift"],
+                       "Unexpected staged entries or status error: \(model.statusError ?? "none")")
+        XCTAssertEqual(model.changedEntries.map(\.path), ["alpha.swift"],
+                       "Unexpected worktree entries or status error: \(model.statusError ?? "none")")
+        let settings = AppSettings(configURL: sandbox.appendingPathComponent("settings.toml"))
+        settings.gitViewMode = .list
+        let width: CGFloat = 450
+        let height: CGFloat = 680
+        let window = NSWindow(
+            contentRect: NSRect(x: -1200, y: -1200, width: width, height: height),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: GitPanel(
+            settings: settings, model: model, manager: manager, project: project,
+            session: nil, sshHost: nil, openFile: { _ in },
+            openDiff: { entry, staged in
+                manager.openDiff(repoRoot: model.repoRoot, path: entry.path,
+                                 staged: staged, untracked: entry.isUntracked,
+                                 origPath: entry.origPath, activating: false)
+            },
+            openCommitDiff: { _, _ in }
+        ).frame(width: width, height: height))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return findTreeKeyboard(in: host) != nil
+        }
+        let receiver = try XCTUnwrap(findTreeKeyboard(in: host))
+        XCTAssertTrue(window.makeFirstResponder(receiver))
+
+        let openChanges = String(localized: "Open Changes", table: "Sidebar")
+        let unstage = String(localized: "Unstage Changes", table: "Sidebar")
+        let stage = String(localized: "Stage Changes", table: "Sidebar")
+        func yOfRow(with action: String) -> CGFloat? {
+            for y in stride(from: Int(height - 10), through: 12, by: -4) {
+                guard let event = NSEvent.mouseEvent(
+                    with: .rightMouseDown, location: NSPoint(x: 75, y: CGFloat(y)),
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil,
+                    eventNumber: 0, clickCount: 1, pressure: 1
+                ) else { continue }
+                let titles = window.contentView?.menu(for: event)?.items.map(\.title) ?? []
+                if titles.contains(openChanges) && titles.contains(action) { return CGFloat(y) }
+            }
+            return nil
+        }
+        let stagedY = try XCTUnwrap(yOfRow(with: unstage), "Staged file row must be hittable")
+        let changedY = try XCTUnwrap(yOfRow(with: stage), "Unstaged file row must be hittable")
+        XCTAssertGreaterThan(stagedY, changedY)
+        func click(x: CGFloat, y: CGFloat) throws {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(
+                    with: type, location: NSPoint(x: x, y: y), modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil,
+                    eventNumber: 0, clickCount: 1, pressure: 1
+                ))
+                window.sendEvent(event)
+            }
+        }
+        try click(x: 75, y: stagedY)
+        try await wait { project.tabs.count == 1 }
+        guard case .diff(let stagedDiff)? = project.selectedTab?.content else {
+            return XCTFail("Clicking staged changes must create a DiffTab")
+        }
+        try await wait { stagedDiff.hasLoadedContent }
+        XCTAssertEqual(stagedDiff.source, .staged)
+        XCTAssertEqual(stagedDiff.path, "alpha.swift")
+        XCTAssertEqual(stagedDiff.oldContent, "baseline\n")
+        XCTAssertEqual(stagedDiff.newContent, "staged\n")
+        XCTAssertEqual(project.dock.activeGroupID, gitGroup.id)
+        XCTAssertTrue(window.firstResponder === receiver, "Git must retain its keyboard receiver")
+
+        func press(_ code: UInt16, characters: String) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                characters: characters, charactersIgnoringModifiers: characters,
+                isARepeat: false, keyCode: code
+            ))
+            window.sendEvent(event)
+        }
+        try press(125, characters: "\u{F701}") // Down to same path's unstaged side
+        try press(49, characters: " ")         // Space previews like a row click
+        try await wait { project.tabs.count == 2 }
+        guard case .diff(let worktreeDiff)? = project.selectedTab?.content else {
+            return XCTFail("Return must open the worktree side as a separate DiffTab")
+        }
+        try await wait { worktreeDiff.hasLoadedContent }
+        XCTAssertEqual(worktreeDiff.source, .worktree)
+        XCTAssertEqual(worktreeDiff.path, "alpha.swift")
+        XCTAssertEqual(worktreeDiff.oldContent, "staged\n")
+        XCTAssertEqual(worktreeDiff.newContent, "worktree\n")
+        XCTAssertEqual(project.dock.activeGroupID, gitGroup.id)
+        XCTAssertTrue(window.firstResponder === receiver)
+        XCTAssertEqual(git(["rev-parse", "HEAD"]), headBefore)
+        XCTAssertEqual(git(["rev-parse", ":alpha.swift"]), indexBefore)
+        XCTAssertEqual(git(["hash-object", "alpha.swift"]), worktreeBefore)
+
+        // Inline buttons must perform only their Git operation, never browse a Diff.
+        try click(x: width - 22, y: changedY)
+        try await wait {
+            model.changedEntries.isEmpty && model.stagedEntries.count == 1
+                && !model.isBusy && !model.isRefreshing
+        }
+        XCTAssertEqual(git(["rev-parse", ":alpha.swift"]), worktreeBefore)
+        XCTAssertEqual(project.tabs.count, 2, "Stage must not open another Diff")
+        XCTAssertEqual(project.dock.activeGroupID, gitGroup.id)
+        let unstagingY = try XCTUnwrap(yOfRow(with: unstage))
+        try click(x: width - 22, y: unstagingY)
+        try await wait {
+            model.stagedEntries.isEmpty && model.changedEntries.count == 1
+                && !model.isBusy && !model.isRefreshing
+        }
+        XCTAssertEqual(git(["diff", "--cached", "--name-only"]), "")
+        XCTAssertEqual(git(["rev-parse", "HEAD"]), headBefore)
+        XCTAssertEqual(git(["hash-object", "alpha.swift"]), worktreeBefore)
+        XCTAssertEqual(project.tabs.count, 2, "Unstage must not open another Diff")
+    }
+
+    private func findTreeKeyboard(in view: NSView) -> TreeKeyboardView? {
+        if let keyboard = view as? TreeKeyboardView { return keyboard }
+        return view.subviews.lazy.compactMap { self.findTreeKeyboard(in: $0) }.first
+    }
+
     func testUncommittedSheetCancelAndConfirmReachRealStash() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("bailey-uncommitted-sheet-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

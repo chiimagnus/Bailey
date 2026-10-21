@@ -5,6 +5,28 @@ import XCTest
 
 @MainActor
 final class DockWorkspaceTests: XCTestCase {
+    func testGitChangesPreviewDisplaysDiffWithoutActivatingEditorGroup() throws {
+        let project = Project(fallbackName: "Git preview", workspaceConfiguration: .standard)
+        let gitGroup = try XCTUnwrap(project.dock.group(containing: .git))
+        project.dock.select(.git)
+        let repo = "/tmp/bailey-focus-git-preview"
+        project.openDiff(repoRoot: repo, path: "src/alpha.swift", staged: false,
+                         untracked: true, origPath: nil, activating: false)
+        let diff = try XCTUnwrap(project.selectedTab)
+        let destination = try XCTUnwrap(project.dock.group(containing: .tab(diff.id)))
+        XCTAssertEqual(project.dock.activeGroupID, gitGroup.id)
+        XCTAssertEqual(destination.selected, .tab(diff.id))
+        XCTAssertNil(project.focusedContent)
+        project.openDiff(repoRoot: repo, path: "src/alpha.swift", staged: false,
+                         untracked: true, origPath: nil, activating: false)
+        XCTAssertEqual(project.tabs.count, 1, "Preview reuses the existing Diff tab")
+        XCTAssertEqual(project.dock.activeGroupID, gitGroup.id)
+        project.openDiff(repoRoot: repo, path: "src/alpha.swift", staged: false,
+                         untracked: true, origPath: nil, activating: true)
+        XCTAssertEqual(project.dock.activeGroupID, destination.id)
+        XCTAssertEqual(project.focusedContent?.id, diff.content.id)
+    }
+
     func testBrowsingFilesShowsNewAndExistingDocumentsWithoutActivatingEditor() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
