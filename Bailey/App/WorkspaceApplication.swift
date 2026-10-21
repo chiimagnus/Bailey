@@ -149,9 +149,11 @@ final class WorkspaceApplication {
         }
         return windows.contains { manager in
             manager.projects.contains { project in
-                guard project.panelContext?.scope == scope else { return false }
-                if let directory = project.customDirectory, contains(directory) { return true }
-                if project.sessions.contains(where: { contains($0.panelDirectoryPath) }) {
+                if project.panelContext?.scope == scope,
+                   let directory = project.customDirectory, contains(directory) { return true }
+                if project.sessions.contains(where: {
+                    ($0.workspaceIdentity ?? "local") == scope && contains($0.panelDirectoryPath)
+                }) {
                     return true
                 }
                 return project.tabs.contains { tab in

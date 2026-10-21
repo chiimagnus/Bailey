@@ -2185,6 +2185,52 @@ final class GitStatusModelTests: XCTestCase {
                        "Removing a Worktree must never remove its branch")
     }
 
+    func testWorktreeProtectionUsesEachContentsMachineInsteadOfItsProjectsMachine() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("bailey-混合-\(UUID())")
+        let tree = root.appendingPathComponent("checkout")
+        let alias = root.appendingPathComponent("alias")
+        try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: tree)
+        try Data("keep".utf8).write(to: tree.appendingPathComponent("file.txt"))
+        defer { try? FileManager.default.removeItem(at: root) }
+        for projectScope in ["local", "ssh:alpha"] {
+            for contentScope in ["local", "ssh:alpha", "ssh:beta"] {
+                for kind in ["file", "diff", "session"] {
+                    let application = WorkspaceApplication()
+                    let window = application.makeWindow()
+                    defer { window.windowClosed() }
+                    let project = Project(fallbackName: "Mixed", workspaceConfiguration: .standard)
+                    project.customDirectory = root.appendingPathComponent("elsewhere").path
+                    project.sshHost = projectScope == "local" ? nil : "alpha"
+                    let identity = contentScope == "local" ? nil : contentScope
+                    let content: PaneContent
+                    switch kind {
+                    case "file":
+                        content = .file(FileTab(path: tree.appendingPathComponent("file.txt").path,
+                            backend: LocalWorkspaceBackend.shared, workspaceIdentity: identity))
+                    case "diff":
+                        content = .diff(DiffTab(repoRoot: tree.path, path: "file.txt", source: .worktree,
+                            untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared,
+                            workspaceIdentity: identity))
+                    default:
+                        let context = PanelContext(identity: .pinned(project: project.id,
+                            workspace: identity, directory: tree.path), backend: LocalWorkspaceBackend.shared)
+                        content = .session(TerminalSession(initialDirectory: tree.path, initialWorkspace: context))
+                    }
+                    project.tabs = [PaneTab(content: content)]
+                    window.projects = [project]
+                    for scope in ["local", "ssh:alpha", "ssh:beta"] {
+                        XCTAssertEqual(application.isWorktreeInUse(path: tree.path, scope: scope),
+                                       scope == contentScope, "\(projectScope), \(contentScope), \(kind), \(scope)")
+                    }
+                    XCTAssertFalse(application.isWorktreeInUse(path: tree.path + "-other", scope: contentScope))
+                    XCTAssertEqual(application.isWorktreeInUse(path: alias.path, scope: contentScope),
+                                   contentScope == "local")
+                }
+            }
+        }
+    }
+
     func testWorktreeInUseProtectsOpenProjectAndKeepsMachineAndSiblingPathsSeparate() throws {
         let fixture = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-worktree-in-use-" + UUID().uuidString)
