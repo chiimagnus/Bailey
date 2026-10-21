@@ -63,3 +63,13 @@
 
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
+
+## 2026-10-21 独立按提交复核（不采用上方历史 Gate 作依据）
+
+| Task | 独立核对的提交 | 当前真实调用链与不变量 |
+| --- | --- | --- |
+| P1-T1 | `1594966`、`3dd7dd2` | `DockWorkspaceModel.activeGroupID` 单独持有当前组，`root.group.selected` 只决定该组显示标签，`Project.selectedTabID` 仍保存最近工作内容；`Project.focusedContent` 和 `TerminalManager` 菜单目标从当前活动组求值。工具关闭与后台标签关闭不写错组。 |
+| P1-T2 | `737871b` | `WorkspaceDockView/PanelContentView` 向 TextKit、Ghostty、WebKit 与 Diff 下发焦点许可；原生 `NSWindow.firstResponder` 变化反向通知 Dock 活动组；原生内容本体由各 Pane 持有，未因本次 UI 切换重新创建。 |
+
+本轮重新读了两个任务所改生产源码及 `DockWorkspaceTests`、`WorkspaceWindowIsolationTests`、`WorkspaceContentIdentityTests` 的实际消费测试。暂未发现新的可达 P1 代码缺陷；事件监听保护只有在控件实际获取第一响应者之后补齐工具空白焦点，不能删成鼠标按下即抢键盘。最终测试与环境核销在此轮最后记录，不使用上方历史 Go 代替本轮判断。
+

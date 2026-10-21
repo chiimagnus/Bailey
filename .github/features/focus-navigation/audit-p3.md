@@ -19,6 +19,32 @@
 
 ## 发现项
 
+## 发现 F-02
+
+- 任务：`P3-T2`
+- 严重级别：`High`
+- 状态：`Open`
+- 位置：`Bailey/Files/FileTreePanel.swift:183`
+- 摘要：`Command Palette 正在编辑查询时，切换/挂载 File Manager 会无视临时输入层并调用 makeFirstResponder 抢走搜索框键盘焦点`
+- 风险：`命令面板仍显示但无法输入，键盘被不可交互的后层文件树接收；与 P2 原生当前输入焦点所有权相冲突`
+- 预期修复：`在 Files 原有 canFocusKeyboard 权限入口要求没有激活的 Command Palette/Sheet；禁止按键属于临时输入框时接管，恢复仍交给既有 Palette dismiss 的有效归属逻辑，不重复构造全局焦点系统`
+- 验证：`WorkspaceWindowIsolationTests.testSwitchingToFilesBehindCommandPaletteDoesNotStealItsSearchField 真实 NSWindow Red→Green；取消 Palette 后 Files 恢复；已有 Files/Git/Graph 混合回归、完整 make test 和签名 App GUI`
+- 解决证据：`<commit diff note or test/build output>`
+
+
+## 发现 F-01
+
+- 任务：`P3-T2`
+- 严重级别：`Low`
+- 状态：`Resolved`
+- 位置：`Bailey/Shared/Tree/TreeRowStyle.swift:274`
+- 摘要：`生产中 Files/Git 树行统一传入 focusRing，旧 nil fallback 的 @FocusState 与 .focusable 已无实际生产调用者`
+- 风险：`双轨焦点逻辑仅由组件测试默认参数触发，与真实 TreeKeyboardHost 机制不一致，后续组件误用会重现系统与主题焦点环叠加`
+- 预期修复：`共享 TreeFileRow/TreeFolderRow 使用明确 Bool 焦点外观，删除仅测试调用的旧 nil 分支与私有 @FocusState，并让组件测试明确以 false 传入`
+- 验证：`覆盖 TreeRowHitTestingTests、Files/Git NativeUI、焦点环浅暗主题与双击、原生窗口键盘回归`
+- 解决证据：`e37fe88 删除 TreeFileRow/TreeFolderRow 的 nil focusRing、SwiftUI @FocusState 和 .focusable 旧双轨，所有生产 Files/Git 使用方统一传 Bool 绘制单一环；/tmp/bailey-focus-audit-palette-red-tree.log TreeRowHitTestingTests 7 项/0 失败，/tmp/bailey-focus-audit-palette-extended.log 11 项/0 失败（含 Graph Space 与 Git Changes）。`
+
+
 - 本阶段在本轮复核后无剩余满足准入标准的未解决 P3 finding。已复现并修复的真实故障：Files 单击后旧编辑器仍持有原生 `firstResponder`，SwiftUI 行状态未接管键盘；Dock 随后错误切回编辑器；原生 SwiftUI 自动焦点环叠加主题细环。Red/Green 的原生事件、隔离 App 截图及日志已核对。
 - `GitPanel`/`RecentCommitsView` 单击变更或历史项的独立焦点问题归 **P4-T1/P4-T2**，此轮在真实隔离 App 中仍可见“Git 行打开内容同时激活编辑器”的行为。Git 不是 P3 文件树选中游标的所有者；不把尚未实施的 P4 冒称 P3 失败或已经完成。
 
@@ -61,4 +87,14 @@
 
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
+
+## 2026-10-21 独立按提交复核（不采用上方历史 Gate 作依据）
+
+| Task | 独立核对的提交 | 当前真实调用链与不变量 |
+| --- | --- | --- |
+| P3-T1 | `e3104c6` | 共享 `TreeFileRow` 的文件整行使用 `.onTapGesture` 而非 Button，双击仍有单独的激活动作；`FileTreeRow` 单击经 `TerminalManager.openFile(...,activating:false)` 只在其它可见组展示文件，不改当前 Files 第一响应者；双击才激活编辑器。 |
+| P3-T2 | `dc2f77a`、`c40ac5a`、本轮 `e37fe88` | `FileTreeModel.selectedPath` 是唯一列表游标；`TreeKeyboardHost` 接收真实方向键/空格并恢复当前文件；`isCurrentTarget`、当前 Dock 组及窗口有效性保护防止 SSH/项目串线。本轮删除所有生产使用方已淘汰的共享行 `@FocusState` 双轨及系统默认焦点环后备。 |
+
+本轮 **F-01** 源码穷尽共享 `TreeFileRow/TreeFolderRow` 的所有生产调用方，皆显式传入 `focusRing: Bool`；只有旧组件测试曾走 `nil` 后备。删除后的 `TreeRowHitTestingTests` 7 项/0 失败，混合 Files、Git Changes、Git Graph 原生焦点测试 11 项/0 失败（`/tmp/bailey-focus-audit-palette-extended.log`）。共享行视觉现在只有显式 `selected` 灰底、`focusRing` 细环及 Hover 三状态，不再存在第二个系统聚焦路径。无证据支持删除原生键盘宿主或禁用真实输入框的原生焦点。
+
 

@@ -22,6 +22,19 @@
 
 ## 发现项
 
+## 发现 F-04
+
+- 任务：`P2-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/Workspace/TerminalManager.swift:984`
+- 摘要：`从 Files/Git 树行打开并取消 Command Palette 时，旧树键盘 first responder 没有保存或恢复路径`
+- 风险：`关闭搜索面板后方向键可能落在 Dock 背景/已消失的 TextField，文件或 Git 行选中留存但无法继续键盘导航；焦点视觉和真实输入不一致`
+- 预期修复：`复用现有前台 key-window/活动组的焦点交接入口恢复当前可见树接收者；禁止恢复已切换或已隐藏组；不新增全局事件总线`
+- 验证：`新增 WorkspaceWindowIsolationTests 原生窗口 Files 与 Git、Palette 取消/执行、旧编辑器接管的 Red→Green；make test ONLY_TESTING=BaileyTests/WorkspaceWindowIsolationTests；隔离 App 真实方向键`
+- 解决证据：`Red: /tmp/bailey-focus-audit-palette-red-tree.log，Files取消 Palette 后 8 秒仍无法恢复 TreeKeyboardView；86f8ff8 修复 TerminalManager 对当前活动 Dock 组内 TreeKeyboardView 的保存与原生归属验证。Green: /tmp/bailey-focus-audit-palette-git-files-green.log 9 项/0 失败；/tmp/bailey-focus-audit-palette-command-execute.log 2 项/0 失败，覆盖 Git 清洁/脏仓库、Files 取消后 ↓、执行 Palette 新命令不夺回旧焦点。`
+
+
 ## 发现 F-03
 
 - 任务：`P2-T1`
@@ -94,3 +107,13 @@
 
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
+
+## 2026-10-21 独立按提交复核（不采用上方历史 Gate 作依据）
+
+| Task | 独立核对的提交 | 当前真实调用链与不变量 |
+| --- | --- | --- |
+| P2-T1 | `eeb96f8`、`f698e1c` | 旧整组强调边框来自先行原型，后续提交已删除；当前仅在 `DockTabGroupView` 对真正活动组的 selected 标签保留较高图标/文字对比度，灰底/行焦点环不等价于分屏焦点。不能再恢复旧边框。 |
+| P2-T2 | `962abba`、`9c95cc2`、本轮 `86f8ff8` | `DockGroupFocusView` 以当前 window/group 判断 NativeResponder，`TerminalFind` 以实际可见终端宿主恢复，`CommandPaletteView.run` 显式放弃旧焦点；本轮发现原恢复链遗漏了 Files/Git 的 `TreeKeyboardView`，已补入相同焦点所有权校验入口，且只对当前可见活动 Dock 组生效。 |
+
+本轮 **F-04** 有独立 Red：`/tmp/bailey-focus-audit-palette-red-tree.log`，取消 `⌘P` 后 Files 的原生键盘响应者没有恢复。修复 `86f8ff8` 的 Green：`/tmp/bailey-focus-audit-palette-git-files-green.log` 共 9 项/0 失败，`/tmp/bailey-focus-audit-palette-command-execute.log` 2 项/0 失败；覆盖 Files 方向键、Git 清洁图谱/有改动列表、Palette 取消和执行新命令不回抢旧树。现行 `NSWindow`/Dock 几何归属校验为防止后台窗口、停车终端和不同组交叉夺焦点的**实际必要条件**，不能为减少 guard 而删。最终跨套件复核另记，不使用历史 Go 代替新结果。
+

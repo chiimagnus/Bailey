@@ -60,3 +60,13 @@
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
 
+## 2026-10-21 独立按提交复核（不采用上方历史 Gate 作依据）
+
+| Task | 独立核对的提交 | 当前真实调用链与不变量 |
+| --- | --- | --- |
+| P4-T1 | `474a46a` | Git Changes 的唯一当前行键由 scope/repository/section/path 确定；`TreeKeyboardHost` 接 ↑↓←→、Space/Return 及 Escape，打开 Diff 经 `ToolPanelView → TerminalManager → Project.openDiff(activating:false)`，不强抢 Git 原生响应者；Stage/Unstage/Discard 是独立按钮。 |
+| P4-T2 | `3de8241`、`fe2fa76` | `RecentCommitsView` 的图谱行游标、commit 展开集合、已显示 Diff 灰底和 Focus 主题描边分别拥有不同状态；Graph Space/Return 按当前提交/目录/历史文件动作分发，历史 Diff 经 `openCommitDiff(activating:false)`，输入框保留原生 first responder。 |
+
+逐个阅读 GitChanges → GitIndex/工作区、Graph → HistoricalDiff → `DiffTab` 原生加载以及 Workspace 的调用链。已有真实临时仓库的 `GitWorkspaceMenuTests` 验证同路径 Staged/Unstaged 内容正确、Stage/Unstage 只在显式操作时修改 index、Head/工作区保持正确；`RecentCommitsViewTests` 验证单击与 Space 展开、历史浏览、灰底与描边独立。图谱在 repo/scope 不匹配时 `GitPanel` 只显示仓库查找占位而非旧图谱，不能据旧调用方缺少重复判断臆断跨仓库错误。此前 `PaneRetentionTests` 旧编辑器释放超时属于需单独复核的间歇性资源回收问题，尚不能仅因一次新的全套测试通过就声称原因消失；本轮 Gate 在最终压力与全量验证后另记。
+
+
