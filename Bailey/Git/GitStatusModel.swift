@@ -948,6 +948,7 @@ final class GitStatusModel {
                     if expectedCore?.matchesCore(latest) == true,
                        let history = latest.history,
                        history.refsByName == self.refsByName,
+                       latest.worktreeLocations == self.worktreeLocations,
                        self.canUseCurrentReferences {
                         if self.recentCommits != history.commits { self.recentCommits = history.commits }
                         if self.hasMoreRecentCommits != history.hasMore {
@@ -962,6 +963,7 @@ final class GitStatusModel {
                         }
                     } else if expectedCore?.matchesCore(latest) != true
                                 || !self.canUseCurrentReferences
+                                || (latest.worktreeLocations != nil && latest.worktreeLocations != self.worktreeLocations)
                                 || (latest.history != nil && latest.history?.refsByName != self.refsByName) {
                         self.hasCurrentLineTotals = false
                         self.queueRefresh(.full)
@@ -3349,10 +3351,25 @@ final class GitStatusModel {
         let coreMilliseconds = Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)
         Self.statusLogger.debug("core ready id=\(requestID, privacy: .public) remote=\(remote, privacy: .public) elapsed_ms=\(coreMilliseconds, privacy: .public)")
         guard await onCore(result) else { return .repository(result) }
+        if kind != .indexOnly {
+            let worktrees = await statusGit(
+                ["worktree", "list", "--porcelain", "-z"], in: resolvedRoot, batched: false
+            )
+            if worktrees.status == 0, let locations = parseWorktreeList(worktrees.stdout) {
+                result.worktreeLocations = locations
+            } else {
+                result.detailError = gitFailureMessage(worktrees,
+                    fallback: String(localized: "Unable to read every worktree status.", table: "Git"))
+            }
+        }
+        let logArguments = recentCommitLogArguments(
+            limit: recentCommitLimit, hasHead: result.hasHead, worktrees: result.worktreeLocations ?? []
+        )
         if kind == .historyOnly {
+            guard result.worktreeLocations != nil else { return .repository(result) }
             prefetched = await prefetchedSnapshotCommands(
                 in: resolvedRoot,
-                argumentSets: [Self.refSnapshotArguments, recentCommitLogArguments(limit: recentCommitLimit)],
+                argumentSets: [Self.refSnapshotArguments, logArguments],
                 discoverRoot: false, backend: backend, deadline: deadline
             )
             let refs = await statusGit(Self.refSnapshotArguments, in: resolvedRoot)
@@ -3361,7 +3378,7 @@ final class GitStatusModel {
                 return .repository(result)
             }
             let names = parseRefSnapshot(refs.stdout)
-            let log = await statusGit(recentCommitLogArguments(limit: recentCommitLimit), in: resolvedRoot)
+            let log = await statusGit(logArguments, in: resolvedRoot)
             guard log.status == 0 else {
                 result.detailError = gitFailureMessage(log, fallback: timeoutMessage)
                 return .repository(result)
@@ -3378,11 +3395,12 @@ final class GitStatusModel {
 
         if kind == .full {
             result.detailsCompleted = true
-            let optionalArguments = [
+            var optionalArguments = [
                 Self.refSnapshotArguments, ["remote"],
-                recentCommitLogArguments(limit: recentCommitLimit), stashListArguments,
+                stashListArguments,
                 ["status", "--porcelain=v2", "-z", "--untracked-files=normal", "--ignored=matching"],
             ]
+            if result.worktreeLocations != nil { optionalArguments.append(logArguments) }
             prefetched = await prefetchedSnapshotCommands(
                 in: resolvedRoot, argumentSets: optionalArguments,
                 discoverRoot: false, backend: backend, deadline: deadline
@@ -3409,8 +3427,8 @@ final class GitStatusModel {
                     fallback: String(localized: "Unable to read Git references.", table: "Git")
                 )
             }
-            if let verified = result.coreMetadata {
-                let log = await statusGit(recentCommitLogArguments(limit: recentCommitLimit), in: resolvedRoot)
+            if let verified = result.coreMetadata, result.worktreeLocations != nil {
+                let log = await statusGit(logArguments, in: resolvedRoot)
                 if log.status == 0 {
                     let commits = parseRecentCommits(log.stdout, refsByName: verified.refsByName)
                     if !result.hasHead || !commits.isEmpty {
@@ -3422,7 +3440,8 @@ final class GitStatusModel {
                     } else {
                         result.detailError = String(localized: "Unable to read Git history.", table: "Git")
                     }
-                } else if result.hasHead {
+                } else if result.hasHead || !verified.refsByName.isEmpty
+                            || result.worktreeLocations?.contains(where: { !$0.isPrunable && $0.headOID != nil }) == true {
                     result.detailError = gitFailureMessage(log,
                         fallback: String(localized: "Unable to read Git history.", table: "Git"))
                 } else {
@@ -3481,11 +3500,10 @@ final class GitStatusModel {
         } else {
             result.lineTotals = .unavailable
         }
-        if kind == .full {
+        if kind == .full, let locations = result.worktreeLocations {
             let worktrees = await loadOtherWorktrees(
-                in: resolvedRoot, backend: backend, deadline: deadline
+                in: resolvedRoot, locations: locations, backend: backend, deadline: deadline
             )
-            result.worktreeLocations = worktrees.locations
             if worktrees.complete { result.worktrees = worktrees.worktrees }
             if !worktrees.complete, result.detailError == nil {
                 result.detailError = String(
@@ -3560,16 +3578,8 @@ final class GitStatusModel {
     /// An optional detail read, never a source of Git actions. Read external
     /// worktrees through the selected workspace backend (including SSH).
     private nonisolated static func loadOtherWorktrees(
-        in root: String, backend: WorkspaceBackend, deadline: Date
-    ) async -> (worktrees: [WorktreeChanges], locations: [WorktreeLocation]?, complete: Bool) {
-        let remaining = deadline.timeIntervalSinceNow
-        guard remaining > 0 else { return ([], nil, false) }
-        let list = await GitCommandExecution.run(
-            ["worktree", "list", "--porcelain", "-z"],
-            in: root, timeout: remaining, backend: backend
-        )
-        guard list.status == 0,
-              let locations = parseWorktreeList(list.stdout) else { return ([], nil, false) }
+        in root: String, locations: [WorktreeLocation], backend: WorkspaceBackend, deadline: Date
+    ) async -> (worktrees: [WorktreeChanges], complete: Bool) {
         let current = (root as NSString).standardizingPath
         let others = locations.filter {
             !($0.isPrunable) && ($0.path as NSString).standardizingPath != current
@@ -3612,7 +3622,7 @@ final class GitStatusModel {
                 ))
             }
         }
-        return (loaded, locations, complete)
+        return (loaded, complete)
     }
 
     private nonisolated static func prefetchedSnapshotCommands(
@@ -3945,9 +3955,13 @@ final class GitStatusModel {
         return refs
     }
 
-    private nonisolated static func recentCommitLogArguments(limit: Int) -> [String] {
-        [
-            "log", "-n", "\(limit + 1)", "--branches", "--remotes", "--tags", "HEAD",
+    private nonisolated static func recentCommitLogArguments(
+        limit: Int, hasHead: Bool, worktrees: [WorktreeLocation]
+    ) -> [String] {
+        let heads = Set(worktrees.filter { !$0.isPrunable }.compactMap(\.headOID)).sorted()
+        return [
+            "log", "-n", "\(limit + 1)", "--branches", "--remotes", "--tags",
+        ] + (hasHead ? ["HEAD"] : []) + heads + [
             "--date-order", "--diff-merges=first-parent", "--decorate=full",
             "--pretty=format:%x1e%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%P%x1f%(decorate:prefix=,suffix=,separator=%x1d)",
             "--name-status", "-z",
