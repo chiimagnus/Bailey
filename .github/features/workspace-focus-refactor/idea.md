@@ -4,7 +4,7 @@
 
 先做好 macOS App，iOS、iPadOS 与 visionOS 暂缓。当前 `TerminalManager` 混合单窗口状态、跨窗口注册／恢复／外部请求和焦点恢复；Dock、Files、Git、原生内容又重复决定谁能接收输入。目标是**重新明确状态所有者和依赖方向，而不是增加 Manager、Coordinator、Protocol 或文件数量**。
 
-本轮只审查和更新文档、准备重构，不实施产品代码。实施需明确继续。用户已明确要求本 Feature 计划提交 Git；需求、计划和脱敏审查证据入库，原始终端输出、凭据和私人录屏不入库。实时任务状态只在 `todo.toml`，长期要求归 [架构文档](../../../docs/architecture.md)。
+本 Feature 已获授权实施 P1；P2 仍停留在规划。用户已明确要求本 Feature 计划提交 Git；需求、计划和脱敏审查证据入库，原始终端输出、凭据和私人录屏不入库。实时任务状态只在 `todo.toml`，长期要求归 [架构文档](../../../docs/architecture.md)。
 
 ## 设计依据与取舍
 
