@@ -6,7 +6,7 @@ final class WorkspaceGitUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture()
         let committed = try fixture.file("history-marker.swift", text: "let historyMarker = true\n")
         try fixture.initializeGit()
-        let app = try WorkspaceUITestSupport.launch()
+        let app = try WorkspaceUITestSupport.launch(in: self)
         defer {
             app.terminate()
             fixture.remove()
@@ -32,7 +32,7 @@ final class WorkspaceGitUITests: XCTestCase {
         let changed = try fixture.file("changed-file.swift", text: "let saved = 1\n")
         try fixture.initializeGit()
         try "let saved = 2\n".write(to: changed, atomically: true, encoding: .utf8)
-        let app = try WorkspaceUITestSupport.launch()
+        let app = try WorkspaceUITestSupport.launch(in: self)
         defer {
             app.terminate()
             fixture.remove()

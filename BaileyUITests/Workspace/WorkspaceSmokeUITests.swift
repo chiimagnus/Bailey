@@ -3,14 +3,7 @@ import XCTest
 @MainActor
 final class WorkspaceSmokeUITests: XCTestCase {
     func testIsolatedLaunchAndPaletteKeyboardFocus() throws {
-        let app = XCUIApplication()
-        guard app.state == .notRunning else {
-            throw XCTSkip("A Bailey instance is already running; UI automation must not terminate it")
-        }
-        app.launchArguments = ["--isolated-ui-test"]
-        app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
-        app.launch()
-        defer { app.terminate() }
+        let app = try WorkspaceUITestSupport.launch(in: self)
 
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
         XCTAssertTrue(app.buttons["bailey.emptyState.addFolder"].waitForExistence(timeout: 15))

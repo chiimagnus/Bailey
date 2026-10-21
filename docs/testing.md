@@ -63,7 +63,7 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 | 完整用户路径 | 独立 UI 测试 | 仍保留的底层回归 |
 | --- | --- | --- |
 | 冷启动、命令面板搜索／Escape、键盘焦点 | `WorkspaceSmokeUITests`、`WorkspaceFilesUITests` | `DockFocusP2RegressionTests`、`WorkspaceWindowIsolationTests` |
-| 系统 Add Folder、Files 预览／打开、焦点恢复 | `WorkspaceFilesUITests` | `FileTreeTests`、`TreeRowHitTestingTests` |
+| 系统 Add Folder、Files 预览／打开、焦点恢复、文件去重、编辑保存到磁盘 | `WorkspaceFilesUITests` | `FileTreeTests`、`TreeRowHitTestingTests`、`FileTabTests` |
 | Git Changes 状态、Git Graph 提交展开 | `WorkspaceGitUITests` | `GitStatusModelTests`、`RecentCommitsViewTests` |
 | 多窗口、设置、系统选择器取消 | `WorkspaceWindowsUITests` | `WorkspaceWindowCloseTests`、`WorkspaceWindowIsolationTests` |
 

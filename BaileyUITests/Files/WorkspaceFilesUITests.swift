@@ -6,7 +6,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture()
         let first = try fixture.file("a-first.swift", text: "let first = 1\n")
         let second = try fixture.file("b-second.swift", text: "let second = 2\n")
-        let app = try WorkspaceUITestSupport.launch()
+        let app = try WorkspaceUITestSupport.launch(in: self)
         defer {
             app.terminate()
             fixture.remove()
@@ -37,7 +37,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture()
         let first = try fixture.file("a-first.swift", text: "let first = 1\n")
         let second = try fixture.file("b-second.swift", text: "let second = 2\n")
-        let app = try WorkspaceUITestSupport.launch()
+        let app = try WorkspaceUITestSupport.launch(in: self)
         defer {
             app.terminate()
             fixture.remove()
@@ -65,5 +65,60 @@ final class WorkspaceFilesUITests: XCTestCase {
                 .waitForExistence(timeout: 15),
             "After closing the palette, Down+Space must act on the real Files selection"
         )
+    }
+
+    func testNativeEditorSavesActualFileContentsToDisk() throws {
+        let fixture = try WorkspaceUITestFixture()
+        let file = try fixture.file("editable.swift", text: "let original = 1\n")
+        let app = try WorkspaceUITestSupport.launch(in: self)
+        defer {
+            app.terminate()
+            fixture.remove()
+        }
+
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let row = WorkspaceUITestSupport.element("bailey.tree.file.\(file.path)", in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 20))
+        row.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.element("bailey.tab.file.\(file.path)", in: app)
+            .waitForExistence(timeout: 15))
+        let editor = app.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        editor.click()
+        editor.typeText("bailey_native_editor_saved_marker")
+        app.typeKey("s", modifierFlags: .command)
+
+        let saved = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                (try? String(contentsOf: file, encoding: .utf8))?
+                    .contains("bailey_native_editor_saved_marker") == true
+            }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 15), .completed,
+                       "Command-S must persist real editor bytes, not only publish a model change")
+    }
+
+    func testOpeningTheSameFileFromMenuReusesItsExistingTab() throws {
+        let fixture = try WorkspaceUITestFixture()
+        let file = try fixture.file("deduplicate.swift", text: "let one = 1\n")
+        let app = try WorkspaceUITestSupport.launch(in: self)
+        defer {
+            app.terminate()
+            fixture.remove()
+        }
+
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let row = WorkspaceUITestSupport.element("bailey.tree.file.\(file.path)", in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 20))
+        row.doubleClick()
+        let id = "bailey.tab.file.\(file.path)"
+        XCTAssertTrue(WorkspaceUITestSupport.element(id, in: app).waitForExistence(timeout: 15))
+
+        app.typeKey("o", modifierFlags: .command)
+        try WorkspaceUITestSupport.choose(file, button: "Open", in: app)
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: id).count, 1,
+                       "Reopening an existing file through Open File must reuse its editor tab")
     }
 }

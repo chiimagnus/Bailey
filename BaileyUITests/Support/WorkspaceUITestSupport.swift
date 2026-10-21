@@ -3,13 +3,16 @@ import XCTest
 
 @MainActor
 enum WorkspaceUITestSupport {
-    static func launch() throws -> XCUIApplication {
+    static func launch(in test: XCTestCase) throws -> XCUIApplication {
         let app = XCUIApplication()
         guard app.state == .notRunning else {
             throw XCTSkip("UI automation must not terminate an existing Bailey instance")
         }
         app.launchArguments = ["--isolated-ui-test"]
         app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
+        test.addTeardownBlock { @MainActor in
+            if app.state != .notRunning { app.terminate() }
+        }
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
         return app
@@ -30,7 +33,7 @@ enum WorkspaceUITestSupport {
         app.typeKey("g", modifierFlags: [.command, .shift])
         app.typeText(url.path)
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
-        let confirmation = app.buttons[button].firstMatch
+        let confirmation = app.sheets.firstMatch.buttons[button].firstMatch
         XCTAssertTrue(confirmation.waitForExistence(timeout: 15),
                       "The native picker must expose its \(button) action")
         XCTAssertTrue(confirmation.isEnabled, "The selected path must be valid")
