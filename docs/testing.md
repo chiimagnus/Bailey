@@ -9,7 +9,7 @@
 | 检查 | 完成条件与证据 |
 | --- | --- |
 | 行为回归 | 新增或调整受影响测试；可测试的新行为和缺陷先确认 Red，再修复为 Green，最后 Refactor |
-| 自动测试 | 功能代码变更通过相关回归及 `make test`；测试必须实际被 XCTest 发现和执行 |
+| 自动测试 | 本地只运行受影响的 XCTest，正式完整验收时运行 `make test`；测试必须实际被发现和执行 |
 | 构建与签名 | 功能代码通过 `make build`；Swift 6 全面迁移、依赖或发布路径变更还检查 `make build:release`，无未解释的新诊断 |
 | 架构与数据保护 | 核对状态所有者、依赖、取消、目标失效和真实副作用；旧实现的接入与清理在同一任务完成 |
 | 用户路径 | 按下文运行受影响的原生／工作区和人工回归；未执行的 E2E、真实网络与恢复明确列出 |
@@ -39,12 +39,12 @@
 每个文件按主要职责归档，不因混合用例机械拆类，不创建空目录或空测试。移动文件时核对工程发现路径，不能让它退出真实测试集合。
 
 ```sh
-make test
-make test ONLY_TESTING=BaileyTests/FileTabTests
-make test ONLY_TESTING='BaileyTests/EditorNavigationTests BaileyTests/DiffTabTests'
+make test:FileTabTests
+make test:FileTabTests,GitStatusModelTests,RecentCommitsViewTests
+make test  # 全量测试
 ```
 
-`ONLY_TESTING` 可传单个或空格分隔的多个 XCTest 类；不会跳过构建与签名后置检查。CI 依据本次推送实际修改的文件增量选择关联类，第一次开启／恢复 PR 及合并前通过 `ci/full` 标签验证全量；增量绿色不代替最终完整回归。CI 的空白检查仅覆盖非 Markdown 文件，不因文档末尾空行阻断 XCTest。文件夹不进入 XCTest 类名选择参数。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
+本地迭代人工指定 `make test:类名1,类名2,...`（逗号分隔，不加空格），可选择任意数量的现有 XCTest 类；涉及共享组件时补测相关类。CI 依据本次推送实际修改的文件增量选择关联类，第一次开启／恢复 PR 及合并前通过 `ci/full` 标签验证全量；增量绿色不代替最终完整回归。CI 的空白检查仅覆盖非 Markdown 文件，不因文档末尾空行阻断 XCTest。文件夹不进入 XCTest 类名选择参数。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
 
 ## 测试层次
 

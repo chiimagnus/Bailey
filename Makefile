@@ -18,6 +18,7 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
 	-derivedDataPath $(DERIVED_DATA) -clonedSourcePackagesDirPath $(SOURCE_PACKAGES) \
 	-skipPackageUpdates -disableAutomaticPackageResolution
 TEST_SELECTION = $(foreach TEST,$(ONLY_TESTING),-only-testing:$(TEST))
+comma := ,
 VERSION_FLAGS = $(if $(strip $(VERSION)),MARKETING_VERSION=$(VERSION)) \
 	$(if $(strip $(BUILD_NUMBER)),CURRENT_PROJECT_VERSION=$(BUILD_NUMBER))
 
@@ -36,7 +37,8 @@ help:
 	@printf '%s\n' \
 		'Bailey · Xcode 原生构建与测试' \
 		'  make build                              Debug 构建并验签' \
-		'  make test                               运行 Xcode XCTest' \
+		'  make test                               运行完整 XCTest' \
+		'  make test:类名1,类名2,...              运行一个或多个 XCTest 类' \
 		'  make test SIGNING=adhoc                 临时签名运行 XCTest（CI）' \
 		'  make build:release                      Release 构建并验签' \
 		'  make build:release SIGNING=adhoc        无开发证书时验证 Release 构建' \
@@ -65,6 +67,10 @@ ifeq ($(SIGNING),adhoc)
 		codesign -dvvv "$$bundle" 2>&1 | grep -Fx 'Signature=adhoc' >/dev/null; \
 	done
 endif
+
+test\:%:
+	@test -n "$(strip $(subst $(comma), ,$*))" || { echo '请指定 XCTest 类名' >&2; exit 2; }
+	@$(MAKE) --no-print-directory test ONLY_TESTING="$(addprefix BaileyTests/,$(subst $(comma), ,$*))"
 
 package:
 	@python3 -c 'import re,sys; v,n,identity,team=sys.argv[1:]; assert re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",v), "版本必须为 X.Y.Z"; assert re.fullmatch(r"[1-9][0-9]*",n), "构建号无效"; assert re.fullmatch(r"[A-F0-9]{40}",identity), "签名 SHA-1 无效"; assert re.fullmatch(r"[A-Z0-9]{10}",team), "Team ID 无效"' '$(VERSION)' '$(BUILD_NUMBER)' '$(SIGNING_IDENTITY)' '$(SIGNING_TEAM)'
