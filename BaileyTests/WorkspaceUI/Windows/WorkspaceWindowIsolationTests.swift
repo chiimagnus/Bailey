@@ -10,6 +10,19 @@ private final class FilesPanelReadiness {
     var ready = false
 }
 
+@MainActor
+private final class FocusRecordingWindow: NSWindow {
+    var hasPalette: () -> Bool = { false }
+    private(set) var treeFocusAttemptsBehindPalette = 0
+
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        if responder is TreeKeyboardView, hasPalette() {
+            treeFocusAttemptsBehindPalette += 1
+        }
+        return super.makeFirstResponder(responder)
+    }
+}
+
 /// Two full workspaces in separate native windows. The current key window is
 /// not a valid substitute for the manager that owns a file or its save target.
 @MainActor
@@ -51,6 +64,51 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             return tree.selectedPath == second.path
         }
         XCTAssertEqual(opened, 0, "Target readiness must not open a FileTab")
+    }
+
+    func testFilesCursorDoesNotActivateBehindPaletteBeforeSearchFieldFocus() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["alpha.swift", "beta.swift"] {
+            try "unchanged\n".write(to: root.appendingPathComponent(name),
+                                      atomically: true, encoding: .utf8)
+        }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        project.dock.select(.git)
+        manager.toggleCommandPalette()
+        manager.showPanel(.files)
+
+        // This assertion does not require a foreground key window: the
+        // Palette owns input before SwiftUI installs its native field editor.
+        let window = NSWindow(
+            contentRect: NSRect(x: -1200, y: -1200, width: 1100, height: 620),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return manager.attachedWindow === window && project.fileTree.items.count == 2
+        }
+        XCTAssertTrue(manager.isCommandPaletteVisible)
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+        XCTAssertNil(project.fileTree.selectedPath,
+                     "Files cannot install its keyboard cursor under a pending Palette")
+
+        manager.dismissCommandPalette()
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return project.fileTree.selectedPath == root.appendingPathComponent("alpha.swift").path
+        }
+        XCTAssertEqual(project.tabs.count, 0,
+                       "Recovering Files selection must not open an editor automatically")
     }
 
     func testCancelingCommandPaletteRestoresFilesRowKeyboardNavigation() async throws {
@@ -279,7 +337,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
         project.dock.select(.git)
-        let window = NSWindow(
+        let window = FocusRecordingWindow(
             contentRect: NSRect(x: -1000, y: -1000, width: 1200, height: 700),
             styleMask: [.titled, .resizable], backing: .buffered, defer: false
         )
@@ -299,13 +357,18 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         }
         let gitReceiver = try XCTUnwrap(manager.activeTreeResponder(in: window))
         XCTAssertTrue(window.makeFirstResponder(gitReceiver))
+        window.hasPalette = { [weak manager] in manager?.isCommandPaletteVisible == true }
         manager.toggleCommandPalette()
+        // Switch immediately, before the search field can become first responder.
+        manager.showPanel(.files)
+        host.layoutSubtreeIfNeeded()
         try await wait {
             host.layoutSubtreeIfNeeded()
             return manager.isCommandPaletteVisible
                 && (window.firstResponder as? NSTextView)?.isFieldEditor == true
         }
-        manager.showPanel(.files)
+        XCTAssertEqual(window.treeFocusAttemptsBehindPalette, 0,
+                       "Files must not even request keyboard focus behind a pending Palette")
         try await wait {
             host.layoutSubtreeIfNeeded()
             return project.dock.activeGroup?.selected == .files

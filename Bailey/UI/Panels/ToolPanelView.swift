@@ -157,7 +157,8 @@ struct ToolPanelView: View {
                         openFile: { manager.openFile($0, activating: $1) },
                         isActive: project.dock.activeGroup?.selected == .files,
                         canFocusKeyboard: {
-                            guard let files = project.dock.group(containing: .files) else { return false }
+                            guard !manager.isCommandPaletteVisible,
+                                  let files = project.dock.group(containing: .files) else { return false }
                             return project.dock.activeGroupID == files.id && files.selected == .files
                         },
                         onRename: { [workspace = project.workspaceIdentity] oldPath, newPath in

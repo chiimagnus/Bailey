@@ -39,7 +39,7 @@ title = "文件展示与活动 Dock 焦点解耦"
 status = "completed"
 plan = "plan-p3.md#p3-t1"
 commit = "e3104c6d34276489eee9aad9436b70d78b557de2"
-note = "Red：隔离 App 单击 alpha.swift 后 AXTextArea 错误聚焦、所需模型 API 编译 Red；Green：105 相关 XCTest 0 失败，隔离签名 Debug App PID36353 单击 beta.swift 展示并保留 Files，双击才转编辑器 AXTextArea，标签只有一份；共享行去整行 Button。完整 XCTest 仍在跑。"
+note = "e3104c6 建立 Files 单击仅展示、双击激活编辑器的真实调用链；新建和复用标签及同组隐藏 Files 的退路均在 Dock/原生测试中覆盖。后续复核及未验条件见 audit-p3.md。"
 
 [[tasks]]
 id = "P3-T2"
@@ -47,7 +47,7 @@ title = "Files 单行选择及键盘焦点边框"
 status = "completed"
 plan = "plan-p3.md#p3-t2"
 commit = "dc2f77a1fa3c8b133e43ed3ed496e700b958eb5e"
-note = "Red：真实隔离 App Files 单击后旧编辑器仍为原生 firstResponder，方向键跳回编辑器；默认系统环与主题环重叠。Green：Files 唯一 AppKit 键盘 responder 接管，E2E 单击 alpha、↓ 移 beta、双击转编辑器；同组隐藏 Files 在前台窗口自动聚焦可见编辑器。最终 make test 588项/0失败/8 SSH 跳过，make build + codesign 通过；加强的自动焦点回归针对性复测通过。"
+note = "dc2f77a 建立唯一 Files 行游标与原生键盘输入；c40ac5a 恢复切回 Files 焦点，e37fe88 删除旧双轨，cdd8452 修复改名后游标及输入结束焦点。本轮审计专项及剩余 GUI/SSH 验收见 audit-p3.md。"
 
 [[tasks]]
 id = "P4-T1"

@@ -159,6 +159,9 @@ private struct FileTreeScrollView: View {
             .onChange(of: isCurrentTarget()) { _, current in
                 if current { focusSelectedRow() }
             }
+            .onChange(of: canFocusKeyboard()) { _, available in
+                if available { focusSelectedRow() }
+            }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) {
                 notification in
                 if (notification.object as? NSWindow) === keyboardOwner.view?.window, isActive {
@@ -197,7 +200,7 @@ private struct FileTreeScrollView: View {
             waitingForFirstRow = false
         }
         guard let window = keyboardOwner.view?.window,
-              window.isKeyWindow, NSApp.isActive else { return }
+              window.isKeyWindow, NSApp.isActive, window.attachedSheet == nil else { return }
         // A visible command palette or another native text field owns its input.
         if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor { return }
         keyboardOwner.focus()
