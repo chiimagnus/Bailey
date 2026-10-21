@@ -58,7 +58,16 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 | WorkspaceUI | 真实 `ContentView`、项目、Dock、标签与多窗口的集成 | 独立进程的完整端到端 UI 自动化 |
 | E2E | 启动完整 App，从用户入口操作并核对最终结果 | 不能由上面的测试数量或绿色状态推断 |
 
-独立 `BaileyUITests` 目前从冷启动和命令面板的真实键盘输入验证起步；它与宿主 `WorkspaceUI` 互补，不意味着原有所有模拟窗口用例已经迁移或完整的 Files/Git 跨窗口 E2E 已通过。宿主 XCTest 即使创建原生窗口也不等于 E2E；报告按实际层次命名。
+`BaileyUITests` 通过一次性本机临时文件／Git 仓库作为输入，并经真实 App 的系统文件选择器、Dock 和键盘操作核对结果：
+
+| 完整用户路径 | 独立 UI 测试 | 仍保留的底层回归 |
+| --- | --- | --- |
+| 冷启动、命令面板搜索／Escape、键盘焦点 | `WorkspaceSmokeUITests`、`WorkspaceFilesUITests` | `DockFocusP2RegressionTests`、`WorkspaceWindowIsolationTests` |
+| 系统 Add Folder、Files 预览／打开、焦点恢复 | `WorkspaceFilesUITests` | `FileTreeTests`、`TreeRowHitTestingTests` |
+| Git Changes 状态、Git Graph 提交展开 | `WorkspaceGitUITests` | `GitStatusModelTests`、`RecentCommitsViewTests` |
+| 多窗口、设置、系统选择器取消 | `WorkspaceWindowsUITests` | `WorkspaceWindowCloseTests`、`WorkspaceWindowIsolationTests` |
+
+这些 UI 用例不取代原有 `NSWindow`／`NSHostingView` 回归。未覆盖的完整外部路径（Finder/Dock 拖放、真实 SSH、脏文件保存冲突和不同窗口混合停靠）仍必须独立验收，不能因为 UI Test Target 存在而宣称已全部迁移；宿主 XCTest 也不等于 E2E。
 
 按行为风险选择层次，不给每个功能机械配五套测试。纯计算优先单元测试；影响标签身份、焦点、保存、连接、停靠和窗口生命周期时，加入真实原生或工作区回归，并补足相应人工路径。
 

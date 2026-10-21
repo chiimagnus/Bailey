@@ -520,6 +520,7 @@ private struct DockTabGroupView: View {
                 select: { select(item) },
                 close: { closeTool(item) }
             )
+            .accessibilityIdentifier("bailey.dock.\(item.configurationName ?? "unknown")")
             .contextMenu {
                 Button(String(localized: "Close Panel", table: "Interface")) { closeTool(item) }
             }
