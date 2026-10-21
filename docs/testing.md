@@ -34,17 +34,19 @@
 
 ## 测试目录与入口
 
-`BaileyTests/` 使用**测试层次 → 业务功能**两级目录，全部仍归一个 `BaileyTests` XCTest 目标。一级分 `Unit/`、`Integration/`、`NativeUI/`、`WorkspaceUI/`；二级按 App、Settings、Files、Editor、Git、Remote、Workspace 等领域，共享组件归 Shared，完整工作区中的标签／窗口分别归 Tabs／Windows。
+`BaileyTests/` 保留 `Unit/`、`Integration/`、`NativeUI/`、`WorkspaceUI/` 四层宿主 XCTest（`Bailey` Scheme）；二级按 App、Settings、Files、Editor、Git、Remote、Workspace 等领域归档。`BaileyUITests/` 使用独立 UI Test Target（`Bailey-UI` Scheme），通过 `XCUIApplication` 操作完整 App，不导入产品模块。只有跨进程、从用户入口执行的操作放入这个目标。
 
 每个文件按主要职责归档，不因混合用例机械拆类，不创建空目录或空测试。移动文件时核对工程发现路径，不能让它退出真实测试集合。
 
 ```sh
 make test:FileTabTests
 make test:FileTabTests,GitStatusModelTests,RecentCommitsViewTests
-make test  # 全量测试
+make test            # 完整宿主 XCTest
+make build:ui        # 只编译独立 UI Test，不启动 App
+make test:ui         # 独立图形会话中运行完整 App UI Test
 ```
 
-本地迭代人工指定 `make test:类名1,类名2,...`（逗号分隔，不加空格），可选择任意数量的现有 XCTest 类；涉及共享组件时补测相关类。CI 依据本次推送实际修改的文件增量选择关联类，第一次开启／恢复 PR 及合并前通过 `ci/full` 标签验证全量；增量绿色不代替最终完整回归。CI 的空白检查仅覆盖非 Markdown 文件，不因文档末尾空行阻断 XCTest。文件夹不进入 XCTest 类名选择参数。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
+本地迭代人工指定 `make test:类名1,类名2,...`（逗号分隔，不加空格）选择任意数量的宿主 XCTest 类；涉及共享组件时补测相关类。`make test:ui` 单独执行整个 UI Test Target，不混入本机日常宿主测试。CI 依据本次推送修改的文件增量选择宿主测试类；非 Draft PR 同时在独立 Runner 上运行完整 App UI Test。首次打开、由草稿转为可审查及合并前 `ci/full` 标签会跑完整宿主 XCTest；增量绿色不代替最终完整回归。CI 的空白检查仅覆盖非 Markdown 文件，不因文档末尾空行阻断 XCTest。文件夹不进入 XCTest 类名选择参数。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
 
 ## 测试层次
 
@@ -56,7 +58,7 @@ make test  # 全量测试
 | WorkspaceUI | 真实 `ContentView`、项目、Dock、标签与多窗口的集成 | 独立进程的完整端到端 UI 自动化 |
 | E2E | 启动完整 App，从用户入口操作并核对最终结果 | 不能由上面的测试数量或绿色状态推断 |
 
-**当前没有独立 XCUITest 测试目标。** 宿主 XCTest 即使创建了原生窗口也不等于 E2E；报告按实际层次命名。
+独立 `BaileyUITests` 目前从冷启动和命令面板的真实键盘输入验证起步；它与宿主 `WorkspaceUI` 互补，不意味着原有所有模拟窗口用例已经迁移或完整的 Files/Git 跨窗口 E2E 已通过。宿主 XCTest 即使创建原生窗口也不等于 E2E；报告按实际层次命名。
 
 按行为风险选择层次，不给每个功能机械配五套测试。纯计算优先单元测试；影响标签身份、焦点、保存、连接、停靠和窗口生命周期时，加入真实原生或工作区回归，并补足相应人工路径。
 
@@ -90,7 +92,7 @@ Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言
 
 ## 隔离环境
 
-Xcode TestAction 向 Debug 宿主传入 `--isolated-ui-test`，不通过 XCTest 私有环境变量在产品入口加入另一套行为。
+宿主 `Bailey` Scheme 的 TestAction 向 Debug 宿主传入 `--isolated-ui-test`。独立 UI Test 使用 `XCUIApplication` 启动正式 Bundle ID 的隔离实例，并显式传入 `--isolated-ui-test` 和一次性 `BAILEY_UI_TEST_RUN_ID`；不通过 XCTest 私有变量在产品入口加入另一套行为。
 
 需要单独检查原生界面时使用相同签名的 Debug 包：
 
@@ -98,7 +100,7 @@ Xcode TestAction 向 Debug 宿主传入 `--isolated-ui-test`，不通过 XCTest 
 open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Bailey.app" --args --isolated-ui-test
 ```
 
-该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。隔离 XCTest 宿主会移除自身菜单中的 `⌘Q` 退出快捷键：Mac 的键盘和前台应用状态仍由各进程共享，普通 Bailey 的退出快捷键不能误结束长时间运行的测试宿主；正式 Bailey 的菜单及保存退出保护不变。该隔离不是独立的图形登录会话，执行原生 UI 回归时仍应避免与用户正在进行的前台快捷键／鼠标操作互相干扰。刻意测试重启恢复时，两次启动显式传入同一有效 UUID 环境变量 `BAILEY_UI_TEST_RUN_ID`。
+该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。**隔离的是工作区数据，不是 App 的 Bundle ID 或图形桌面**：XCUITest 的 `XCUIApplication.launch()` 可能终止同 Bundle ID 的正式 Bailey。因此 `make test:ui` 发现正在运行的 `bailey` 进程就拒绝执行；只在专用 GUI 会话／CI Runner 上运行，不能通过强制退出用户 App 绕过。安全编译用 `make build:ui`，不启动 App。隔离 XCTest 宿主会移除自身菜单中的 `⌘Q` 退出快捷键：Mac 的键盘和前台应用状态仍由各进程共享，普通 Bailey 的退出快捷键不能误结束长时间运行的测试宿主；正式 Bailey 的菜单及保存退出保护不变。该隔离不是独立的图形登录会话，执行原生 UI 回归时仍应避免与用户正在进行的前台快捷键／鼠标操作互相干扰。刻意测试重启恢复时，两次启动显式传入同一有效 UUID 环境变量 `BAILEY_UI_TEST_RUN_ID`。
 
 **普通设置仍然共享。** 隔离实例中不得直接改写用户设置；确需设置测试时使用独立 Home，并核实真正的配置、UserDefaults 与数据写入位置。临时文件、Git 仓库和受控后端不得指向正式项目。
 

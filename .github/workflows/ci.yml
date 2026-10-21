@@ -94,3 +94,17 @@ jobs:
         env:
           ONLY_TESTING: ${{ steps.selection.outputs.only_testing }}
         run: make test SIGNING=adhoc ONLY_TESTING="$ONLY_TESTING"
+
+  ui:
+    if: ${{ !github.event.pull_request.draft && (github.event.action != 'labeled' || github.event.label.name == 'ci/full') }}
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Run isolated App UI tests
+        run: make test:ui SIGNING=adhoc

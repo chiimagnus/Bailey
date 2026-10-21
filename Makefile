@@ -31,14 +31,16 @@ else
 SIGNING_FLAGS =
 endif
 
-.PHONY: help doctor build build\:release test package clean
+.PHONY: help doctor build build\:release build\:ui test test\:ui package clean
 
 help:
 	@printf '%s\n' \
 		'Bailey · Xcode 原生构建与测试' \
 		'  make build                              Debug 构建并验签' \
-		'  make test                               运行完整 XCTest' \
-		'  make test:类名1,类名2,...              运行一个或多个 XCTest 类' \
+		'  make test                               运行完整宿主 XCTest' \
+		'  make test:类名1,类名2,...              运行一个或多个宿主 XCTest 类' \
+		'  make build:ui                           只编译独立 UI Test（不启动 App）' \
+		'  make test:ui                            独立 GUI 会话执行完整 App UI Test' \
 		'  make test SIGNING=adhoc                 临时签名运行 XCTest（CI）' \
 		'  make build:release                      Release 构建并验签' \
 		'  make build:release SIGNING=adhoc        无开发证书时验证 Release 构建' \
@@ -58,6 +60,18 @@ build:
 
 build\:release: CONFIGURATION = Release
 build\:release: build
+
+build\:ui: SCHEME = Bailey-UI
+build\:ui:
+	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) build-for-testing
+
+test\:ui: SCHEME = Bailey-UI
+test\:ui:
+	@if pgrep -x bailey >/dev/null; then \
+		printf '%s\n' '存在运行中的 Bailey；UI Test 可能终止同 Bundle ID 的 App，已拒绝执行。'; \
+		exit 2; \
+	fi
+	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(TEST_SELECTION) test
 
 test:
 	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(TEST_SELECTION) test
