@@ -1,7 +1,6 @@
 import AppKit
 import Observation
 import SwiftUI
-import Vision
 import XCTest
 @testable import Bailey
 
@@ -51,20 +50,6 @@ final class RecentCommitsViewTests: XCTestCase {
         let spacing = CommitGraphRails.spacing(lanes: layout.laneCount, viewportWidth: width, scale: scale)
         let gutter = CommitGraphRails.gutter(lanes: layout.laneCount, spacing: spacing, scale: scale)
         return NSPoint(x: TreeRowStyle.outerInset + gutter + 10 * scale, y: height - 12 * scale)
-    }
-
-    private func renderedFirstRowText(in view: NSView, scale: CGFloat = 1) throws -> String {
-        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
-        let chinese = Bundle.main.preferredLocalizations.first?.hasPrefix("zh") == true
-        request.recognitionLanguages = chinese ? ["zh-Hans", "en-US"] : ["en-US"]
-        request.usesLanguageCorrection = false
-        let height = min(1, 38 * scale / view.bounds.height)
-        request.regionOfInterest = CGRect(x: 0, y: 1 - height, width: 1, height: height)
-        try VNImageRequestHandler(cgImage: XCTUnwrap(bitmap.cgImage), options: [:]).perform([request])
-        return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
     }
 
     private func assertHorizontalScroll(
@@ -1683,9 +1668,15 @@ final class RecentCommitsViewTests: XCTestCase {
                                  worktreeAction: { calls.events.append(($0.path, $1)) })
         defer { window.close() }
         let view = try XCTUnwrap(window.contentView)
-        let text = try renderedFirstRowText(in: view)
-        XCTAssertTrue(text.contains("a904"), text)
-        XCTAssertTrue(text.contains("No branch") || text.contains("未关联分支"), text)
+        let locations = try XCTUnwrap(rows.first { $0.hash == tip }?.checkedOutWorktrees)
+        let primary = try XCTUnwrap(locations.first { $0.path == main.path }
+            ?? locations.first { $0.branch == nil } ?? locations.first)
+        XCTAssertEqual(primary.path, detached.path)
+        let label = RecentCommitsView.worktreeDisplayLabel(
+            primary, among: ["/fixture", main.path, detached.path, shared.path]
+        )
+        XCTAssertTrue(label.contains("a904/Bailey"), label)
+        XCTAssertTrue(label.contains("No branch") || label.contains("未关联分支"), label)
         let point = primaryBadgePoint(commits: rows, width: 420, height: window.frame.height)
         click(point, in: window)
         XCTAssertEqual(selection.expanded, [tip])
@@ -1743,12 +1734,21 @@ final class RecentCommitsViewTests: XCTestCase {
                         settle()
                         let view = try XCTUnwrap(window.contentView)
                         if width == 360 {
-                            let text = try renderedFirstRowText(in: view, scale: scale)
-                            XCTAssertTrue(text.contains(branch ?? "a904"), "\(state): \(text)")
-                            if branch == nil {
-                                XCTAssertTrue(text.contains("No branch") || text.contains("未关联分支"), text)
+                            let row = try XCTUnwrap(graph.first { $0.hash == tip })
+                            let groups = GitGraphReferenceGroup.grouped(
+                                row.references, remotes: ["origin"], worktrees: row.checkedOutWorktrees
+                            )
+                            if branch != nil {
+                                XCTAssertEqual(groups.first?.primary.name, "main", state)
+                            } else {
+                                let location = try XCTUnwrap(row.checkedOutWorktrees.first)
+                                let label = RecentCommitsView.worktreeDisplayLabel(
+                                    location, among: ["/fixture"] + locations.map(\.path)
+                                )
+                                XCTAssertTrue(label.contains("a904/Bailey"), "\(state): \(label)")
+                                XCTAssertTrue(label.contains("No branch") || label.contains("未关联分支"), label)
                             }
-                            XCTAssertFalse(text.contains("origin/HEAD"), text)
+                            XCTAssertFalse(groups.first?.primary.name == "origin/HEAD", state)
                         }
                         let point = primaryBadgePoint(commits: graph, width: width,
                                                       height: window.frame.height, scale: scale)
