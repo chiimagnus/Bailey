@@ -126,6 +126,9 @@ final class WorkspaceApplication {
         } else {
             saveAll(captureTerminalHistory: false)
         }
+        // A removed, not-yet-attached window may have held the only copy of
+        // a file that a surviving Finder receiver is waiting to reuse.
+        deliverPendingExternalFiles()
     }
 
     private func saveAll(captureTerminalHistory: Bool) {

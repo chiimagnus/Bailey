@@ -1982,6 +1982,56 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "sentinel")
     }
 
+    func testClosingAnUnattachedFileOwnerDrainsAllWaitingFinderEventsWithoutRetargeting() throws {
+        for changesReceivingProject in [false, true] {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("bailey-owner-close-\(UUID().uuidString)")
+            let original = root.appendingPathComponent("original", isDirectory: true)
+            let unrelated = root.appendingPathComponent("unrelated", isDirectory: true)
+            try FileManager.default.createDirectory(at: original, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: unrelated, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let file = original.appendingPathComponent("buffer.swift")
+            try "important bytes".write(to: file, atomically: true, encoding: .utf8)
+
+            let receiver = self.workspaceApplication.makeWindow()
+            let awaitingOwner = self.workspaceApplication.makeWindow()
+            defer { receiver.windowClosed(); awaitingOwner.windowClosed() }
+            receiver.addLocalFolders([original, unrelated])
+            let target = try XCTUnwrap(receiver.projects.first { $0.customDirectory == original.path })
+            let other = try XCTUnwrap(receiver.projects.first { $0.customDirectory == unrelated.path })
+            receiver.selectedProjectID = target.id
+            awaitingOwner.addLocalFolders([original])
+            awaitingOwner.openFile(file.path)
+            XCTAssertTrue(awaitingOwner.selectedProject?.selectedTab?.content.isFile == true)
+
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 490, height: 350),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            receiver.attach(to: window)
+            var replies: [Bool] = []
+            let count = changesReceivingProject ? 3 : 67
+            for _ in 0..<count {
+                self.workspaceApplication.openExternalFiles([file], preferred: receiver) {
+                    replies.append($0)
+                }
+            }
+            XCTAssertTrue(replies.isEmpty, "Existing FileTab belongs to the unattached owner")
+            if changesReceivingProject { receiver.selectedProjectID = other.id }
+
+            awaitingOwner.windowClosed()
+            XCTAssertEqual(replies, Array(repeating: !changesReceivingProject, count: count),
+                           "An owner can close before attaching; every Finder event must complete once")
+            XCTAssertEqual(target.tabs.filter { $0.content.isFile }.count,
+                           changesReceivingProject ? 0 : 1)
+            XCTAssertTrue(other.tabs.isEmpty, "Never redirect late events to a newly selected project")
+            XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "important bytes")
+        }
+    }
+
     func testAnUnattachedUnrelatedManagerCannotHoldFinderRequestsForever() throws {
         // Other features may construct a WorkspaceWindowModel before they ever mount
         // a window. It must not block an independent, attached Finder receiver.
