@@ -15,7 +15,7 @@
 ## 任务到文件的映射
 
 - P2-T1
-  - `Bailey/UI/WorkspaceDockView.swift.DockTabGroupView` 的 `isFocused/canFocusGroup` 与内描边；既有 Theme/TabItemChrome/TreeRowSurface 保持样式职责；`docs/ui.md`、`docs/features/dock.md`；提交 `eeb96f8`。
+  - `Bailey/UI/WorkspaceDockView.swift.DockTabGroupView` 的 `isFocused/canFocusGroup`、`Bailey/UI/Components/WorkspaceChrome.swift.TabItemChrome` 真实活动标签文字权重；最新用户要求取消内描边，不增额外下划线。当前实现 `f698e1c`，对应 `docs/ui.md`、`docs/features/dock.md`。旧 `eeb96f8` 只作为历史原型记录。
 - P2-T2
   - `DockTabDragCoordinator.finish` → `DockWorkspaceModel.move/place/updateLayout`；`Project.selectTab`；`TerminalManager` 的 Palette 捕获/恢复/所有权检查；`CommandPaletteView.run`；`TerminalHostView` 的可见/停车宿主与 `TerminalFind/TerminalFindBar`。
   - `DockWorkspaceTests`、`PaneRetentionTests`、`WorkspaceWindowIsolationTests`；当前功能文档 `dock/terminal/command-palette/session-restore.md`；主体提交 `962abba`、审计根因修复 `9c95cc2`。像素测试夹具校正在独立提交 `5f12573`。
@@ -26,26 +26,26 @@
 
 - 任务：`P2-T1`
 - 严重级别：`High`
-- 状态：`Open`
+- 状态：`Resolved`
 - 位置：`Bailey/UI/WorkspaceDockView.swift:305`
 - 摘要：`未完整遵循Issue13已确认HTML的三层焦点视觉`
 - 风险：`当前只有区域边框，活动标签栏和所选标签没有额外强调，与已确认UIUX不符`
 - 预期修复：`沿DockTabGroupView和共享TabItemChrome表达活动标签栏底色与活动selected标签底色及下划线，不复制原型演示控件`
 - 验证：`对照HTML交互，明暗窄宽标签原生像素，真实复杂布局前后台焦点与完整build/test`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`用户最新 2026-10-21 决策明确不要旧 HTML 的高亮边框/标签下划线；f698e1c 采用 Zed 无描边标签文字层级；独立 GUI 深色截图 /tmp/bailey-focus-verify.kniA3O/p2-after-drag.png 证明无整框。旧发现是过时验收，不再应补标签装饰。`
 
 
 ## 发现 F-02
 
 - 任务：`P2-T2`
 - 严重级别：`Medium`
-- 状态：`Open`
+- 状态：`Deferred`
 - 位置：`BaileyTests/WorkspaceUI/Windows/WorkspaceWindowIsolationTests.swift`
 - 摘要：`工具内部控件与复杂布局的焦点集成验收不足`
 - 风险：`既有组件点击测试与模型选组测试没有共同证明GitGraph、文件树及输入态在真实停靠布局内的命令和响应者归属`
 - 预期修复：`在现有XCTest目标补齐实际控件事件与复杂布局交互矩阵，并单独记录独立App验收结果`
 - 验证：`原生工作区真实Git仓库/文件树/重命名/新建/菜单与六组以上嵌套、移动、关闭、恢复；最终磁盘字节与对象身份`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`P2 的窗口/区域/原生响应者基础已完成：本轮 62 项相关原生测试退出 0，隔离 App PID34267 从文件打开编辑器到 Git 再到 ⌘P→File Manager，菜单消失后编辑器未抢回焦点；真实 File Manager 标签拖动 x1467→310.5，AX 与截图均证实。此前完整回归 580 项 0 失败、8 项条件跳过。文件树单击和 Git 图谱行选择的剩余真实缺口已按用户要求明确定为 P3/P4 的实现任务，不能作为 P2 未完成重复实现，也不得误称已通过。`
 
 
 ## 发现 F-01
@@ -70,6 +70,7 @@
 
 ## 验证日志
 
+- 2026-10-21 补验：62 项相关 XCTest 0 失败；独立 App PID 34267 打开隔离临时工程（`alpha.swift`、`beta.swift`），File Manager/编辑器/Git 分组的真实 AX 焦点、Palette 搜索字段到 Git/Files 菜单的输入归属及标签拖动后的实际位置均已复核。P3 的 Red 同时确认单击 `alpha.swift` 后 `AXTextArea` 获得焦点，这不属于 P2 的 Dock 组基础验收，已归 P3-T1 修复。屏幕图像保存在 `/tmp/bailey-focus-verify.kniA3O/`，隔离实例不读写用户项目，正式 Bailey 不曾被重启。
 - 最终 Debug 完整 `make test`（含授权 Windows SSH）退出 0，579 passed、0 failed、0 skipped；最终 Release 相关 8 类为 119 passed、0 failed、0 skipped，均核对 xcresulttool。只有优化测试命令传 `SIGNING_FLAGS=ENABLE_TESTABILITY=YES`，随后普通构建恢复正式配置。日志和结果路径见 `evidence.md`。
 - 模型穷举 3 工具 × 空组中央/四边；8 工作标签、6+ 横纵嵌套、无效 ID、关闭活动/后台 MRU、纯聚焦零快照；恢复新组 ID 后原编辑器身份不变。原生矩阵覆盖 2 外观 × 3 窗口尺寸 × 4 活动目标，Find 150/210/400/900 pt × 明暗。检查了源 Surface 真实父视图、回调清除时序、隐藏/停车/换项目/关闭后的所有权拒绝。
 - 同源保存经过现有 FileTab/Diff 保存队列至最终磁盘，包括多个脏缓冲、失败/并发编辑/断线恢复；Ghostty 与 WebKit 身份、Undo、滚动和释放由原生测试核对。独立 App 已核对 Palette 取消/命令、工具输入不泄漏、真实拖放 Shell PID 不变、Unicode 字节与双主窗/Settings 快捷键；不是以事件派发充当 E2E。
@@ -80,13 +81,14 @@
 
 ## Gate（是否允许进入下一阶段）
 
-- 结论：`No-Go`
-- 理由：用户复核指出工具内部控件和复杂布局焦点未形成完整集成验收证据，F-02 已重新打开；原 Go 不能代替本轮补验。
+- 结论：`Go`（仅允许进入 P3 Files / P4 Git 行焦点实施，不代表它们已完成）
+- 理由：本轮重新逐项核对 P2 范围：`make test ONLY_TESTING='BaileyTests/DockWorkspaceTests BaileyTests/WorkspaceWindowIsolationTests BaileyTests/PaneRetentionTests BaileyTests/WorkspaceContentIdentityTests'` 62 项 0 失败，隔离签名 Debug Bailey PID 34267 使用仅在 `/tmp/bailey-focus-verify.kniA3O/project` 的文件。真实 GUI 检查了文件显示/切到 Git 后旧编辑器焦点移除、⌘P 搜索 `File Manager` 执行后搜索框消失且旧编辑器未抢回焦点、`File Manager` 标签从右组 `x=1467` 拖动到中组 `x=310.5` 后仍真实可见；截图 `p2-files-before.png`、`p2-after-palette-command.png`、`p2-after-drag.png`。分屏无蓝色整框，标签高亮符合用户最新决定。此前相同产品代码的独立 GUI 更复杂场景、完整测试、Debug/Release 证据仍在 `evidence.md`；未用这次只覆盖一例的拖动冒称全部复杂布局重新跑完。
+- F-03 属于过时原型要求，已按最新用户指示修订并 Resolved；F-02 剩余的 Files/Git **行选择、行边框和输入框**需要 P3/P4 的新模型才能验收，明确 Deferred 到 P3/P4，不再在已完成的 P2 重写两套选中状态。现有 P2 活动组、窗口隔离、临时焦点恢复已经具备可执行测试与真实 App 证据。
 
 ## 最终状态与剩余风险
 
-- 当前状态：`Open`
-- 剩余风险：F-02 控件与复杂布局补验，以及上述逐项环境限制。原有通过记录保留，但不再据此声称完整焦点验收。
+- 当前状态：`Go`；`todo.toml` 的 P2 两任务完成，P3/P4 仍 pending。
+- 剩余风险：F-02 所涉 Files/Git 行选择、Git Graph 展开与输入框间真实焦点交互**尚未实现**，不能称为 P2 已解决，它们的 Red/Green、数据字节/仓库副作用与全 GUI 验收分别由 P3/P4 交付。缺失 macOS 15.6、特殊 SSH/symlink、VoiceOver、共享输入法/字号条件仍按本页和 `evidence.md` 明确保留。
 
 ## 审计约束
 

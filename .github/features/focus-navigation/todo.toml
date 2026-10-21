@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P2-T2"
+current_task_id = "P4-T1"
 
 [[tasks]]
 id = "P1-T1"
@@ -20,42 +20,42 @@ note = "101 tests/0 failures；make build+验签成功；独立App原始输入/�
 [[tasks]]
 id = "P2-T1"
 title = "区域 Focus 与 selected 视觉区分"
-status = "in_progress"
+status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = ""
-note = "蓝色整框已由 f698e1c 取消；剩余是参照用户两张 Zed 截图复核独立 App 的各布局与活动标签视觉，不再添加旧原型蓝框/底色"
+commit = "f698e1c17547a6431f6c0309389d306943d3a6a2"
+note = "已按最新 Zed 视觉取消整框；本轮隔离 App 明暗基线外的深色截图复核、真实多组选中状态，62 项 Dock/原生相关 XCTest 通过"
 
 [[tasks]]
 id = "P2-T2"
 title = "拖放和多窗口焦点恢复验收"
-status = "in_progress"
+status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = ""
-note = "保留多窗口、拖放、原生输入与恢复验收；Files 单击不抢焦点及行边框归 P3，Git Changes/Graph 列表与输入框归 P4，不再在 P2 重做"
+commit = "9c95cc24270f1d4577469382ee935af89d57f49a"
+note = "此前 9c95cc2 完成原生焦点归属修复；本轮 62 项相关 XCTest 0 失败，隔离 App 真实 ⌘P→File Manager、AX 焦点及 File Manager 跨组拖放落点 x1467→310.5；P3/P4 行选择另阶段"
 
 [[tasks]]
 id = "P3-T1"
 title = "文件展示与活动 Dock 焦点解耦"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t1"
-commit = ""
-note = ""
+commit = "e3104c6d34276489eee9aad9436b70d78b557de2"
+note = "Red：隔离 App 单击 alpha.swift 后 AXTextArea 错误聚焦、所需模型 API 编译 Red；Green：105 相关 XCTest 0 失败，隔离签名 Debug App PID36353 单击 beta.swift 展示并保留 Files，双击才转编辑器 AXTextArea，标签只有一份；共享行去整行 Button。完整 XCTest 仍在跑。"
 
 [[tasks]]
 id = "P3-T2"
 title = "Files 单行选择及键盘焦点边框"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t2"
-commit = ""
-note = ""
+commit = "dc2f77a1fa3c8b133e43ed3ed496e700b958eb5e"
+note = "Red：真实隔离 App Files 单击后旧编辑器仍为原生 firstResponder，方向键跳回编辑器；默认系统环与主题环重叠。Green：Files 唯一 AppKit 键盘 responder 接管，E2E 单击 alpha、↓ 移 beta、双击转编辑器；同组隐藏 Files 在前台窗口自动聚焦可见编辑器。最终 make test 588项/0失败/8 SSH 跳过，make build + codesign 通过；加强的自动焦点回归针对性复测通过。"
 
 [[tasks]]
 id = "P4-T1"
 title = "Git Changes 文件行和 Diff 焦点"
-status = "pending"
+status = "in_progress"
 plan = "plan-p4.md#p4-t1"
 commit = ""
-note = ""
+note = "已核实根因但尚未实施：GitEntryRow 点击 openDiff -> ToolPanelView -> TerminalManager.openDiff -> Project.openDiff/selectTab 默认激活编辑器，隔离 App 原生 AXTextArea 曾复现；需像 P3 只展示 Diff 不抢 Git 键盘焦点，并处理 Git 行游标、Stage 按钮与真实键盘事件。Red 缺少 activating 参数的模型测试与小范围探索性 Green 已完成，但同库另外执行流程持续修改 Files/FileTreePanel.swift 与 WorkspaceWindowIsolationTests.swift；为避免覆盖，已精准撤销本轮全部未完成 P4 生产代码和模型测试，待工作区不再并发修改后继续，未冒充 P4 完成。"
 
 [[tasks]]
 id = "P4-T2"
