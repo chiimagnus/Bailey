@@ -19,6 +19,19 @@
 
 ## 发现项
 
+## 发现 F-05
+
+- 任务：`P4-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/Files/FileTreePanel.swift:185`
+- 摘要：`Palette 覆盖时切换 Files 会请求原生键盘焦点，可能抢走命令面板搜索框`
+- 风险：`ToolPanelView 的 Files 活动组焦点判定未区分命令面板，FileTreeScrollView.focusSelectedRow 在窗口为 key 且 App 活动时调用 makeFirstResponder，覆盖模态搜索框的输入；退出面板后此前 Git 行已不是可恢复目标`
+- 预期修复：`在 Files/Git 自动焦点入口尊重正在显示的命令面板，并在其关闭后由实际可见工具树恢复焦点；不改变显式文件点击与原生 TextField 所有权`
+- 验证：`make test ONLY_TESTING=BaileyTests/WorkspaceWindowIsolationTests + 真正 key-window 的 Palette/Files/Git 交接验收`
+- 解决证据：`2026-10-21 19:34 make test: 604 tests, 0 failures, 8 authorized SSH skipped; key-window Palette -> Files -> dismiss -> arrow navigation test PASSED; native Files<->Git active tree ownership test PASSED; targeted 24/0; 21 PaneRetention/0. Code: FileTreePanel native field editor priority, TerminalManager restores valid active TreeKeyboardView only.`
+
+
 - P4 本身尚无经复现证实的未修复焦点功能缺陷。Graph 的提交、目录和文件选择不再借用展开状态；Git Changes 和 Graph 共享原生行机制，但拥有各自的选中状态与第一响应者。
 - **全量回归的外部阻断（非已证实 P4 回归）：** `PaneRetentionTests.swift:1010` 的旧 `NSTextView` 弱引用有时未能在 10 秒内释放。连续两次全量运行分别出现 2 项及 1 项生命周期失败；仅运行对应两项、或者运行此前 5 项最小前置组合时通过，而完整 `PaneRetentionTests` 类（21 项）出现 1 项失败。已排除简单的必现点击/键码错误；尚未证明真实持有者及是否是系统运行时延迟，不因与本阶段源码不同而冒称问题已解决。**不延长超时、不修改无关编辑器逻辑来伪造 Green。**
 

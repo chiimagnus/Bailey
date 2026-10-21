@@ -195,6 +195,8 @@ private struct FileTreeScrollView: View {
         }
         guard let window = keyboardOwner.view?.window,
               window.isKeyWindow, NSApp.isActive else { return }
+        // A visible command palette or another native text field owns its input.
+        if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor { return }
         keyboardOwner.focus()
     }
 

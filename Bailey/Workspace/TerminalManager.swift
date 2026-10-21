@@ -1021,20 +1021,34 @@ final class TerminalManager {
         // Let the removal transaction finish before restoring the displaced
         // AppKit responder.
         DispatchQueue.main.async {
-            guard let window, let responder, NSApp.isActive, window.isKeyWindow,
+            guard let window, NSApp.isActive, window.isKeyWindow,
                   window === self.window, window.attachedSheet == nil,
-                  !self.isCommandPaletteVisible,
-                  self.selectedProject?.focusedContent?.id == contentID,
-                  self.ownsActiveResponder(responder) else { return }
+                  !self.isCommandPaletteVisible else { return }
             // A palette command may already have focused a new terminal or
             // editor. Never let restoration race that newer focus and win.
             if let current = window.firstResponder,
-               current !== responder,
-               self.isStableWorkspaceResponder(current) {
-                return
+               self.isStableWorkspaceResponder(current),
+               self.ownsActiveResponder(current) { return }
+            if let responder, self.selectedProject?.focusedContent?.id == contentID,
+               self.ownsActiveResponder(responder) {
+                window.makeFirstResponder(responder)
+            } else if let activeTree = self.activeTreeResponder(in: window) {
+                // A palette switch can move from an editor, terminal, or old
+                // tree into Files/Git. Restore the tool that is now visible.
+                window.makeFirstResponder(activeTree)
             }
-            window.makeFirstResponder(responder)
         }
+    }
+
+    func activeTreeResponder(in window: NSWindow) -> TreeKeyboardView? {
+        guard let root = window.contentView,
+              let selected = selectedProject?.dock.activeGroup?.selected,
+              selected == .files || selected == .git else { return nil }
+        func findTree(_ view: NSView) -> TreeKeyboardView? {
+            if let tree = view as? TreeKeyboardView, ownsActiveResponder(tree) { return tree }
+            return view.subviews.lazy.compactMap(findTree).first
+        }
+        return findTree(root)
     }
 
     /// Terminal and editor responders are public host views. WebKit instead

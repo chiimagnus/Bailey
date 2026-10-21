@@ -77,6 +77,9 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         window.contentView = host
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
+        guard window.isKeyWindow, NSApp.isActive else {
+            throw XCTSkip("Native Files focus requires a foreground XCTest key window")
+        }
         try await wait {
             host.layoutSubtreeIfNeeded()
             return manager.attachedWindow === window
@@ -134,6 +137,203 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         XCTAssertFalse(window.firstResponder === displaced)
     }
 
+    func testCurrentToolTreeResponderFollowsDockGroupAfterPanelSwitch() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "unchanged\n".write(
+            to: root.appendingPathComponent("file.swift"), atomically: true, encoding: .utf8)
+        let commands = [
+            ["init", "-q", "-b", "main"], ["add", "file.swift"],
+            ["-c", "user.name=Test", "-c", "user.email=test@invalid", "commit", "-qm", "baseline"]
+        ]
+        for arguments in commands {
+            let result = GitCommandExecution.run(arguments, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "focus scope", workspaceConfiguration: .standard)
+        project.customDirectory = root.path
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        let window = NSWindow(
+            contentRect: NSRect(x: -1100, y: -1100, width: 1200, height: 700),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        window.orderFront(nil)
+        project.dock.select(.files)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return manager.activeTreeResponder(in: window) != nil
+        }
+        let filesReceiver = try XCTUnwrap(manager.activeTreeResponder(in: window))
+        XCTAssertTrue(filesReceiver.window === window)
+        project.dock.select(.git)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return manager.activeTreeResponder(in: window) != nil
+                && manager.activeTreeResponder(in: window) !== filesReceiver
+        }
+        XCTAssertFalse(manager.activeTreeResponder(in: window) === filesReceiver,
+                       "Restoring Git must not select the hidden Files responder")
+        let gitReceiver = try XCTUnwrap(manager.activeTreeResponder(in: window))
+        project.dock.select(.files)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return manager.activeTreeResponder(in: window) != nil
+                && manager.activeTreeResponder(in: window) !== gitReceiver
+        }
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+    }
+
+    func testEditorPaletteSwitchToFilesRestoresNewToolKeyboardFocus() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["alpha.swift", "beta.swift"] {
+            try "unchanged\n".write(to: root.appendingPathComponent(name),
+                                      atomically: true, encoding: .utf8)
+        }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        manager.openFile(root.appendingPathComponent("alpha.swift").path)
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 1200, height: 700),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return manager.attachedWindow === window && self.editor(in: host) != nil
+        }
+        guard window.isKeyWindow, NSApp.isActive else {
+            throw XCTSkip("Foreground key window is required to validate native palette focus")
+        }
+        let oldEditor = try XCTUnwrap(editor(in: host))
+        XCTAssertTrue(window.makeFirstResponder(oldEditor))
+        XCTAssertTrue(manager.ownsActiveResponder(oldEditor))
+        manager.toggleCommandPalette()
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return manager.isCommandPaletteVisible
+                && (window.firstResponder as? NSTextView)?.isFieldEditor == true
+        }
+        manager.showPanel(.files)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return project.dock.activeGroup?.selected == .files
+                && project.fileTree.items.count == 2
+        }
+        XCTAssertTrue((window.firstResponder as? NSTextView)?.isFieldEditor == true,
+                      "The palette still owns input while Files becomes visible")
+        manager.dismissCommandPalette()
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return !manager.isCommandPaletteVisible
+                && window.firstResponder === manager.activeTreeResponder(in: window)
+        }
+        let first = project.fileTree.selectedPath
+        XCTAssertNotNil(first)
+        let down = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            characters: "\u{F701}", charactersIgnoringModifiers: "\u{F701}",
+            isARepeat: false, keyCode: 125
+        ))
+        window.sendEvent(down)
+        try await wait { project.fileTree.selectedPath != first }
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+    }
+
+    func testSwitchingToFilesBehindCommandPaletteDoesNotStealItsSearchField() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["alpha.swift", "beta.swift"] {
+            try "unchanged\n".write(to: root.appendingPathComponent(name),
+                                      atomically: true, encoding: .utf8)
+        }
+        let commands = [
+            ["init", "-q", "-b", "main"], ["add", "alpha.swift", "beta.swift"],
+            ["-c", "user.name=Test", "-c", "user.email=test@invalid", "commit", "-qm", "baseline"]
+        ]
+        for arguments in commands {
+            let result = GitCommandExecution.run(arguments, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        project.dock.select(.git)
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 1200, height: 700),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+        try await wait { host.layoutSubtreeIfNeeded(); return manager.attachedWindow === window }
+        guard window.isKeyWindow, NSApp.isActive else {
+            throw XCTSkip("Native overlay focus requires a foreground XCTest key window; cannot seize the user's Bailey")
+        }
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return manager.activeTreeResponder(in: window) != nil
+        }
+        let gitReceiver = try XCTUnwrap(manager.activeTreeResponder(in: window))
+        XCTAssertTrue(window.makeFirstResponder(gitReceiver))
+        manager.toggleCommandPalette()
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return manager.isCommandPaletteVisible
+                && (window.firstResponder as? NSTextView)?.isFieldEditor == true
+        }
+        manager.showPanel(.files)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return project.dock.activeGroup?.selected == .files
+                && project.fileTree.items.count == 2
+        }
+        // The palette is an actual overlay, not an instruction to focus the hidden tool.
+        XCTAssertTrue(manager.isCommandPaletteVisible)
+        XCTAssertTrue((window.firstResponder as? NSTextView)?.isFieldEditor == true,
+                      "File Manager becoming visible must not steal Palette's text input")
+        manager.dismissCommandPalette()
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return !manager.isCommandPaletteVisible
+                && window.firstResponder === manager.activeTreeResponder(in: window)
+        }
+        let first = project.fileTree.selectedPath
+        XCTAssertNotNil(first)
+        let down = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            characters: "\u{F701}", charactersIgnoringModifiers: "\u{F701}",
+            isARepeat: false, keyCode: 125
+        ))
+        window.sendEvent(down)
+        try await wait { project.fileTree.selectedPath != first }
+    }
+
     func testCancelingCommandPaletteRestoresGitTreeKeyboardNavigation() async throws {
         for dirty in [false, true] {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -171,6 +371,9 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             window.contentView = host
             NSApp.activate()
             window.makeKeyAndOrderFront(nil)
+            guard window.isKeyWindow, NSApp.isActive else {
+                throw XCTSkip("Native Git focus requires a foreground XCTest key window")
+            }
             try await wait {
                 host.layoutSubtreeIfNeeded()
                 return manager.attachedWindow === window
