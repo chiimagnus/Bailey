@@ -44,7 +44,7 @@ make test ONLY_TESTING=BaileyTests/FileTabTests
 make test ONLY_TESTING='BaileyTests/EditorNavigationTests BaileyTests/DiffTabTests'
 ```
 
-`ONLY_TESTING` 可传单个或空格分隔的多个 XCTest 类；不会跳过构建与签名后置检查。CI 依据本次推送实际修改的文件增量选择关联类，第一次开启／恢复 PR 及合并前通过 `ci/full` 标签验证全量；增量绿色不代替最终完整回归。文件夹不进入 XCTest 类名选择参数。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
+`ONLY_TESTING` 可传单个或空格分隔的多个 XCTest 类；不会跳过构建与签名后置检查。CI 依据本次推送实际修改的文件增量选择关联类，第一次开启／恢复 PR 及合并前通过 `ci/full` 标签验证全量；增量绿色不代替最终完整回归。CI 的空白检查仅覆盖非 Markdown 文件，不因文档末尾空行阻断 XCTest。文件夹不进入 XCTest 类名选择参数。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
 
 ## 测试层次
 

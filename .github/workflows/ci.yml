@@ -58,7 +58,8 @@ jobs:
             full
             exit 0
           fi
-          git diff --check "$PR_BEFORE" "$PR_AFTER"
+          # Keep source/config whitespace checks; prose-only Markdown formatting does not gate XCTest.
+          git diff --check "$PR_BEFORE" "$PR_AFTER" -- . ':(exclude,glob)**/*.md'
           tests=()
           while IFS= read -r -d '' file; do
             case "$file" in
