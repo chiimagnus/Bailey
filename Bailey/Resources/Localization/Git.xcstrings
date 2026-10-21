@@ -1,6 +1,16 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@ · No branch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · 未关联分支"
+          }
+        }
+      }
+    },
     "Worktree" : {
       "localizations" : {
         "zh-Hans" : {

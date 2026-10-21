@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 import SwiftUI
+import Vision
 import XCTest
 @testable import Bailey
 
@@ -41,6 +42,29 @@ final class RecentCommitsViewTests: XCTestCase {
     private func horizontallyScrollableViews(in root: NSView) -> [NSScrollView] {
         let own = (root as? NSScrollView).map { [$0] } ?? []
         return own + root.subviews.flatMap(horizontallyScrollableViews)
+    }
+
+    private func primaryBadgePoint(
+        commits: [GitStatusModel.RecentCommit], width: CGFloat, height: CGFloat, scale: CGFloat = 1
+    ) -> NSPoint {
+        let layout = CommitGraphLayout(commits: commits)
+        let spacing = CommitGraphRails.spacing(lanes: layout.laneCount, viewportWidth: width, scale: scale)
+        let gutter = CommitGraphRails.gutter(lanes: layout.laneCount, spacing: spacing, scale: scale)
+        return NSPoint(x: TreeRowStyle.outerInset + gutter + 10 * scale, y: height - 12 * scale)
+    }
+
+    private func renderedFirstRowText(in view: NSView, scale: CGFloat = 1) throws -> String {
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        let chinese = Bundle.main.preferredLocalizations.first?.hasPrefix("zh") == true
+        request.recognitionLanguages = chinese ? ["zh-Hans", "en-US"] : ["en-US"]
+        request.usesLanguageCorrection = false
+        let height = min(1, 38 * scale / view.bounds.height)
+        request.regionOfInterest = CGRect(x: 0, y: 1 - height, width: 1, height: height)
+        try VNImageRequestHandler(cgImage: XCTUnwrap(bitmap.cgImage), options: [:]).perform([request])
+        return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
     }
 
     private func assertHorizontalScroll(
@@ -1584,6 +1608,165 @@ final class RecentCommitsViewTests: XCTestCase {
         XCTAssertEqual(RecentCommitsView.badgeIconSize, 16)
         XCTAssertEqual(RecentCommitsView.badgeFontSize, 9)
         XCTAssertEqual(RecentCommitsView.badgeHorizontalPadding, 4)
+    }
+
+    func testLocalBranchTakesPriorityOverRemoteDefaultAliasWithoutLosingReferences() {
+        typealias Reference = GitStatusModel.RecentCommit.Reference
+        let references: [Reference] = [
+            .init(kind: .remoteAlias, name: "origin/HEAD"),
+            .init(kind: .remoteBranch, name: "origin/main"),
+            .init(kind: .localBranch, name: "main"),
+            .init(kind: .tag, name: "v1"),
+        ]
+        let groups = GitGraphReferenceGroup.grouped(references, remotes: ["origin"])
+        XCTAssertEqual(groups.first?.primary.name, "main")
+        XCTAssertEqual(Set(groups.flatMap(\.references)), Set(references))
+        let current = Reference(kind: .currentBranch, name: "topic")
+        XCTAssertEqual(GitGraphReferenceGroup.grouped(references + [current], remotes: ["origin"])
+            .first?.primary, current)
+        let detached = Reference(kind: .detachedHead, name: "HEAD")
+        XCTAssertEqual(GitGraphReferenceGroup.grouped(references + [detached], remotes: ["origin"])
+            .first?.primary, detached)
+        let feature = Reference(kind: .localBranch, name: "feature")
+        let location = GitStatusModel.WorktreeLocation(path: "/fixture/feature", headOID: nil, branch: "feature")
+        let checkedOut = GitGraphReferenceGroup.grouped(
+            references + [feature], remotes: ["origin"], worktrees: [location]
+        )
+        XCTAssertEqual(checkedOut.first?.primary, feature)
+        XCTAssertEqual(Set(checkedOut.flatMap(\.references)), Set(references + [feature]))
+    }
+
+    func testUnassociatedWorktreeLabelChineseTranslationPreservesDirectoryName() throws {
+        let path = try XCTUnwrap(Bundle.main.path(forResource: "zh-Hans", ofType: "lproj"))
+        let bundle = try XCTUnwrap(Bundle(path: path))
+        let pattern = bundle.localizedString(forKey: "%@ · No branch", value: nil, table: "Git")
+        XCTAssertEqual(String(format: pattern, "a904/Bailey"), "a904/Bailey · 未关联分支")
+    }
+
+    func testRealWorktreeHistoryRendersNamedLabelsAndPreservesSharedHeadActions() async throws {
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-worktree-label-" + UUID().uuidString)
+        let main = fixture.appendingPathComponent("main/Bailey")
+        let detached = fixture.appendingPathComponent("a904/Bailey")
+        let shared = fixture.appendingPathComponent("b905/Bailey")
+        try FileManager.default.createDirectory(at: main, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        func git(_ args: [String], at path: URL = main) throws -> String {
+            let result = GitCommandExecution.run(args, in: path.path, timeout: 10)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = try git(["init", "-q", "-b", "main"])
+        _ = try git(["config", "user.name", "Label Test"])
+        _ = try git(["config", "user.email", "labels@invalid"])
+        _ = try git(["config", "commit.gpgsign", "false"])
+        _ = try git(["commit", "--allow-empty", "-qm", "base"])
+        let base = try git(["rev-parse", "HEAD"])
+        _ = try git(["worktree", "add", "-q", "--detach", detached.path, base])
+        _ = try git(["commit", "--allow-empty", "-qm", "independent worktree commit"], at: detached)
+        let tip = try git(["rev-parse", "HEAD"], at: detached)
+        _ = try git(["worktree", "add", "-q", "--detach", shared.path, tip])
+        let model = GitStatusModel()
+        model.sync(root: main.path)
+        let deadline = Date().addingTimeInterval(12)
+        while !model.hasResolvedStatus || model.isRefreshing {
+            guard Date() < deadline else { XCTFail("Worktree history did not load"); return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let rows = model.graphCommits
+        XCTAssertEqual(Set(model.recentCommits.map(\.hash)), Set([base, tip]))
+        XCTAssertEqual(rows.first { $0.hash == tip }?.checkedOutWorktrees.count, 2)
+        XCTAssertTrue(rows.first { $0.hash == tip }?.references.isEmpty == true)
+        let selection = GraphSelection()
+        let calls = WorktreeMenuCalls()
+        let window = hostHistory(rows, selection: selection, width: 420, canActOnWorktrees: true,
+                                 worktreeAction: { calls.events.append(($0.path, $1)) })
+        defer { window.close() }
+        let view = try XCTUnwrap(window.contentView)
+        let text = try renderedFirstRowText(in: view)
+        XCTAssertTrue(text.contains("a904"), text)
+        XCTAssertTrue(text.contains("No branch") || text.contains("未关联分支"), text)
+        let point = primaryBadgePoint(commits: rows, width: 420, height: window.frame.height)
+        click(point, in: window)
+        XCTAssertEqual(selection.expanded, [tip])
+        XCTAssertTrue(calls.events.isEmpty)
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .rightMouseDown, location: point,
+            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        let menu = try XCTUnwrap(view.menu(for: event))
+        XCTAssertEqual(Set(menu.items.map(\.title)), Set(["a904/Bailey", "b905/Bailey"]))
+        let firstMenu = try XCTUnwrap(menu.items.first { $0.title == "a904/Bailey" }?.submenu)
+        let openIndex = try XCTUnwrap(firstMenu.items.firstIndex {
+            $0.title == String(localized: "Open Worktree", table: "Git")
+        })
+        firstMenu.performActionForItem(at: openIndex)
+        XCTAssertEqual(calls.events.first?.0, try git(["rev-parse", "--show-toplevel"], at: detached))
+        XCTAssertEqual(calls.events.first?.1, .open)
+        XCTAssertEqual(try git(["for-each-ref", "--contains", tip]), "")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), base)
+    }
+
+    func testWorktreePrimaryLabelsReplaceAliasAndIconOnlyCombinations() throws {
+        typealias Commit = GitStatusModel.RecentCommit
+        let tip = String(repeating: "a", count: 40)
+        let base = String(repeating: "b", count: 40)
+        for state in ["unreferenced", "detached", "alias", "branch"] {
+            let path = "/fixture/a904/Bailey"
+            let branch: String? = state == "branch" ? "main" : nil
+            let references: [Commit.Reference] = state == "detached"
+                ? [.init(kind: .detachedHead, name: "HEAD")]
+                : state == "unreferenced" ? [] : [
+                    .init(kind: .remoteAlias, name: "origin/HEAD"),
+                    .init(kind: .localBranch, name: "main"),
+                    .init(kind: .remoteBranch, name: "origin/main"),
+                ]
+            let commits: [Commit] = [
+                .init(hash: tip, shortHash: "aaaaaaa", subject: "Worktree change",
+                      author: "Dev", date: .now, parentHashes: [base], references: references, files: []),
+                .init(hash: base, shortHash: "bbbbbbb", subject: "Base",
+                      author: "Dev", date: .now, parentHashes: [], references: [], files: []),
+            ]
+            let locations: [GitStatusModel.WorktreeLocation] = [
+                .init(path: path, headOID: tip, branch: branch),
+                .init(path: "/fixture/main/Bailey", headOID: base, branch: "base", isMain: true),
+            ]
+            let graph = GitStatusModel.graphCommits(commits, stashes: [], locations: locations)
+            for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                for width in [CGFloat(180), 360] {
+                    for scale in [CGFloat(1), 1.5] {
+                        let selection = GraphSelection()
+                        let window = hostHistory(graph, selection: selection, width: width,
+                                                 height: 190, fontScale: scale, remotes: ["origin"])
+                        defer { window.close() }
+                        window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+                        settle()
+                        let view = try XCTUnwrap(window.contentView)
+                        if width == 360 {
+                            let text = try renderedFirstRowText(in: view, scale: scale)
+                            XCTAssertTrue(text.contains(branch ?? "a904"), "\(state): \(text)")
+                            if branch == nil {
+                                XCTAssertTrue(text.contains("No branch") || text.contains("未关联分支"), text)
+                            }
+                            XCTAssertFalse(text.contains("origin/HEAD"), text)
+                        }
+                        let point = primaryBadgePoint(commits: graph, width: width,
+                                                      height: window.frame.height, scale: scale)
+                        click(point, in: window)
+                        XCTAssertEqual(selection.expanded, [tip])
+                        click(point, in: window)
+                        XCTAssertTrue(selection.expanded.isEmpty)
+                        if let directory = ProcessInfo.processInfo.environment["BAILEY_GIT_GRAPH_SCREENSHOT_DIR"], scale == 1 {
+                            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                            view.cacheDisplay(in: view.bounds, to: bitmap)
+                            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                            try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent(
+                                "worktree-\(state)-\(appearance.rawValue)-\(Int(width)).png"))
+                        }
+                    }
+                }
+            }
+        }
     }
 
     func testDetachedAndUnreferencedWorktreesRetainNativeActionsWithoutDuplicatePills() throws {

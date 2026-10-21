@@ -9,9 +9,19 @@ struct GitGraphReferenceGroup {
 
     var references: [Reference] { [primary] + remotes }
 
-    static func grouped(_ references: [Reference], remotes: [String]) -> [Self] {
-        let ordered = references.filter { $0.kind == .currentBranch }
-            + references.filter { $0.kind != .currentBranch }
+    static func grouped(
+        _ references: [Reference], remotes: [String],
+        worktrees: [GitStatusModel.WorktreeLocation] = []
+    ) -> [Self] {
+        let checkedOut = Set(worktrees.compactMap(\.branch))
+        let branches = references.filter { $0.kind == .localBranch }
+        var ordered = references.filter { $0.kind == .currentBranch }
+        ordered += references.filter { $0.kind == .detachedHead }
+        ordered += branches.filter { checkedOut.contains($0.name) }
+        ordered += branches.filter { !checkedOut.contains($0.name) }
+        for kind in [Reference.Kind.remoteBranch, .tag, .remoteAlias] {
+            ordered += references.filter { $0.kind == kind }
+        }
         let locals = ordered.filter {
             $0.kind == .currentBranch || $0.kind == .localBranch
         }
@@ -565,13 +575,9 @@ struct RecentCommitsView: View {
                         stashBadge(stash, in: commit, colorIndex: graph.node.color)
                             .layoutPriority(1)
                     } else if commit.worktree == nil {
-                        if !commit.references.isEmpty {
+                        if !commit.references.isEmpty || !commit.checkedOutWorktrees.isEmpty {
                             referenceStrip(commit.references, commit: commit,
                                            colorIndex: graph.node.color)
-                                .layoutPriority(1)
-                        }
-                        if needsWorktreeIndicator(commit) {
-                            checkedOutWorktreeIndicator(commit, colorIndex: graph.node.color)
                                 .layoutPriority(1)
                         }
                     }
@@ -615,7 +621,7 @@ struct RecentCommitsView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 6 * fontScale) {
                     if let worktree = commit.worktree {
                         Text(verbatim: Self.worktreeDisplayPath(
-                            worktree.path, among: commits.compactMap { $0.worktree?.path }
+                            worktree.path, among: worktreePaths
                         ))
                             .font(.system(size: 10 * fontScale, design: .monospaced))
                             .foregroundStyle(.secondary)
@@ -752,12 +758,9 @@ struct RecentCommitsView: View {
         }
     }
 
-    private func needsWorktreeIndicator(_ commit: Commit) -> Bool {
-        guard !commit.checkedOutWorktrees.isEmpty else { return false }
-        let primary = GitGraphReferenceGroup.grouped(
-            commit.references, remotes: remotes
-        ).first?.primary
-        return primary.map { worktrees(for: $0, in: commit).isEmpty } ?? true
+    private var worktreePaths: [String] {
+        Array(Set([repoRoot] + commits.flatMap { $0.checkedOutWorktrees.map(\.path) }
+            + commits.compactMap { $0.worktree?.path }))
     }
 
     private func checkedOutWorktreeIndicator(
@@ -765,35 +768,50 @@ struct RecentCommitsView: View {
     ) -> some View {
         let locations = commit.checkedOutWorktrees
         let paths = locations.map(\.path)
+        let location = locations.first { $0.path == repoRoot }
+            ?? locations.first { $0.branch == nil } ?? locations[0]
+        let name = Self.worktreeDisplayPath(location.path, among: worktreePaths)
+        let label = location.branch ?? String(localized: "\(name) · No branch", table: "Git")
+        let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
         return Button { toggle(commit) } label: {
-            HStack(spacing: 2 * fontScale) {
+            HStack(spacing: 0) {
                 Image(systemName: "square.stack")
                     .font(.system(size: Self.badgeFontSize * fontScale))
                     .foregroundStyle(GitGraphPalette.iconColor(colorIndex))
                     .frame(width: Self.badgeIconSize * fontScale,
                            height: Self.badgeHeight * fontScale)
                     .background(GitGraphPalette.color(colorIndex))
+                Text(verbatim: label)
+                    .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: min(128, max(52, viewportWidth * 0.32)) * fontScale)
+                    .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
                 if locations.count > 1 {
                     Text("\(locations.count)")
                         .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
+                        .padding(.trailing, Self.badgeHorizontalPadding * fontScale)
                 }
             }
             .foregroundStyle(.secondary)
-            .padding(.trailing, 4 * fontScale)
             .frame(height: Self.badgeHeight * fontScale)
-            .background(Color.primary.opacity(0.05))
-            .clipShape(RoundedRectangle(cornerRadius: 4 * fontScale))
+            .background(Color.primary.opacity(0.04))
+            .clipShape(outline)
+            .overlay(outline.stroke(Color.primary.opacity(0.35), lineWidth: 1 * fontScale))
         }
         .buttonStyle(.plain)
-        .help(paths.joined(separator: "\n"))
-        .accessibilityLabel(String(localized: "Worktree", table: "Git")
+        .help(label + "\n" + paths.joined(separator: "\n"))
+        .accessibilityLabel(label + ", " + String(localized: "Worktree", table: "Git")
                             + ": " + paths.joined(separator: ", "))
         .contextMenu {
-            if let location = locations.first, locations.count == 1 {
+            if let head = commit.references.first(where: { $0.kind == .detachedHead }) {
+                referenceActions(head, commit: commit)
+            } else if let location = locations.first, locations.count == 1 {
                 worktreeActions(location)
             } else {
                 ForEach(locations, id: \.path) { location in
-                    Menu(Self.worktreeDisplayPath(location.path, among: paths)) {
+                    Menu(Self.worktreeDisplayPath(location.path, among: worktreePaths)) {
                         worktreeActions(location)
                     }
                 }
@@ -867,11 +885,21 @@ struct RecentCommitsView: View {
     private func referenceStrip(
         _ references: [Reference], commit: Commit, colorIndex: Int
     ) -> some View {
-        let groups = GitGraphReferenceGroup.grouped(references, remotes: remotes)
-        let hidden = (groups.first?.remotes ?? []) + groups.dropFirst().flatMap(\.references)
+        let groups = GitGraphReferenceGroup.grouped(
+            references, remotes: remotes, worktrees: commit.checkedOutWorktrees
+        )
+        let primary = groups.first?.primary
+        let showsWorktree = !commit.checkedOutWorktrees.isEmpty
+            && (primary == nil || primary?.kind == .detachedHead
+                || primary.map { worktrees(for: $0, in: commit).isEmpty } == true)
+        let hidden = showsWorktree
+            ? groups.flatMap(\.references).filter { $0.kind != .detachedHead }
+            : (groups.first?.remotes ?? []) + groups.dropFirst().flatMap(\.references)
         return HStack(spacing: 3 * fontScale) {
-            if let first = groups.first {
-                referenceBadge(first.primary, commit: commit, colorIndex: colorIndex)
+            if showsWorktree {
+                checkedOutWorktreeIndicator(commit, colorIndex: colorIndex)
+            } else if let primary {
+                referenceBadge(primary, commit: commit, colorIndex: colorIndex)
             }
             if !hidden.isEmpty {
                 Menu {
@@ -960,7 +988,7 @@ struct RecentCommitsView: View {
                     worktreeActions(location)
                 } else {
                     ForEach(locations, id: \.path) { location in
-                        Menu(Self.worktreeDisplayPath(location.path, among: locations.map(\.path))) {
+                        Menu(Self.worktreeDisplayPath(location.path, among: worktreePaths)) {
                             worktreeActions(location)
                         }
                     }
