@@ -844,9 +844,11 @@ final class PaneRetentionTests: XCTestCase {
             }
             print("T5_NATIVE_LIFETIME cycle=\(cycle) simultaneous=\(weakEditors.count) allRetained=\(weakEditors.allSatisfy { $0.editor != nil })")
             XCTAssertTrue(weakEditors.allSatisfy { $0.editor != nil })
-            // Destroy real owners, not just the currently visible NSView. The
-            // editor's notification subscription and queued parser work must not
-            // retain retired documents after the last FileTab is gone.
+            // A real tab/window close retires its TextKit document before
+            // releasing the SwiftUI host (Project.close / terminateAll). This
+            // test must exercise that ownership contract, not rely on AppKit
+            // eventually discarding a cached NSHostingView by itself.
+            for file in files { file.retireNativeEditor() }
             for i in (0..<windows.count).reversed() {
                 hosts[i].removeFromSuperview()
                 windows[i].contentView = nil
@@ -859,9 +861,11 @@ final class PaneRetentionTests: XCTestCase {
                 weakEditors.allSatisfy { $0.editor == nil }
                     && weakFiles.allSatisfy { $0.file == nil }
             }
-            XCTAssertTrue(weakEditors.allSatisfy { $0.editor == nil })
-            XCTAssertTrue(weakFiles.allSatisfy { $0.file == nil })
-            print("T5_NATIVE_LIFETIME cycle=\(cycle) simultaneous=5 released=5 filesReleased=5")
+            let releasedEditors = weakEditors.filter { $0.editor == nil }.count
+            let releasedFiles = weakFiles.filter { $0.file == nil }.count
+            XCTAssertEqual(releasedEditors, 5, "cycle \(cycle): TextKit views still held")
+            XCTAssertEqual(releasedFiles, 5, "cycle \(cycle): FileTab owners still held")
+            print("T5_NATIVE_LIFETIME cycle=\(cycle) simultaneous=5 released=\(releasedEditors) filesReleased=\(releasedFiles)")
         }
     }
 
