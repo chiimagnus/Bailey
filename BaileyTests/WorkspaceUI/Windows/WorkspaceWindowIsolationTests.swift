@@ -1259,8 +1259,12 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
                 let state = NSApp.windows.filter(\.isVisible).map { window in
                     "key=\(window.isKeyWindow), first=\(String(describing: type(of: window.firstResponder))), trees=\(window.contentView.map { trees(in: $0) } ?? 0)"
                 }
-                NSLog("Workspace UI timeout: active=%d windows=%@",
-                      NSApp.isActive ? 1 : 0, state.description)
+                let contexts = TerminalManager.activeManagers.map { manager in
+                    let project = manager.selectedProject
+                    return "hostKey=\(manager.attachedWindow?.isKeyWindow == true), panel=\(String(describing: project?.dock.activeGroup?.selected)), files=\(project?.fileTree.items.count ?? -1), selected=\(project?.fileTree.selectedPath != nil), context=\(project?.panelContext != nil), palette=\(manager.isCommandPaletteVisible)"
+                }
+                NSLog("Workspace UI timeout: active=%d windows=%@ managers=%@",
+                      NSApp.isActive ? 1 : 0, state.description, contexts.description)
                 XCTFail("Window did not reach the expected state", file: file, line: line)
                 throw WorkspaceError.timedOut
             }
