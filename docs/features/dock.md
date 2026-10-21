@@ -32,11 +32,11 @@
 
 ## 窗口与菜单
 
-**当前实现**由 `WindowRootView` 持有 `TerminalManager` 协调单窗，后续应用／窗口职责迁移与焦点策略调整见 [架构规范](../architecture.md#唯一所有者)；本段说明的是当前可观察入口，不表示迁移已完成。`WindowChromeAccessor` 在原生视图实际挂载到窗口时绑定 `NSWindow`，不能依赖一次异步检查或 SwiftUI 恰好再次更新；否则新建的空工作区窗口会显示「添加文件夹」却无法弹出选择器。`.focusedSceneValue(\.baileyManager, manager)` 和菜单中的 `@FocusedValue` 连接当前窗口；菜单栏「文件 → 打开文件…」（⌘O）打开当前窗口的本机文件选择面板，标签栏「＋ → 打开文件…」在发起的停靠组打开。两者均支持单／多选、只选择文件且要求已有项目。设置窗口或切换窗口后不得把 Sheet 和结果错误投到后台项目。
+`WindowRootView` 持有 `WorkspaceWindowModel` 协调单窗，delegate 的 `WorkspaceApplication` 只负责跨窗口登记、路由及恢复。焦点策略下一阶段再集中，见 [架构规范](../architecture.md#唯一所有者)。`WindowChromeAccessor` 在原生视图实际挂载到窗口时绑定 `NSWindow`，不能依赖一次异步检查或 SwiftUI 恰好再次更新；否则新建的空工作区窗口会显示「添加文件夹」却无法弹出选择器。`.focusedSceneValue(\.baileyManager, manager)` 和菜单中的 `@FocusedValue` 连接当前窗口；菜单栏「文件 → 打开文件…」（⌘O）打开当前窗口的本机文件选择面板，标签栏「＋ → 打开文件…」在发起的停靠组打开。两者均支持单／多选、只选择文件且要求已有项目。设置窗口或切换窗口后不得把 Sheet 和结果错误投到后台项目。
 
 系统从 Finder／Dock 交给 Bailey 的本机文件请求，先检查所有窗口内已有的**本机文件标签**，即使标签属于 SSH 项目也按文件自身的机器身份判断：存在时激活原窗口／原项目／原标签，不制造第二份可写缓冲。否则在实际接收窗口的**当前项目**中新建本机标签，项目目录范围不限制能打开的文件；没有项目时不自动创建项目。恢复中的窗口先完成附着再处理文件；连续到达的合法文件打开事件逐个等待实际文件所有者附着，不以固定的请求条数丢弃后续事件，已打开文件仍只保留一个标签。原 Finder 文件夹 Service 保留添加目录项目的语义。
 
-Finder 的 `fileURL` 拖放按接收区域分流：空工作区、普通编辑／Diff、顶部工作标签栏、空停靠组及 Git 面板为**打开或复用文件标签**；每个分屏的顶部标签栏、空组内容区及普通编辑／Diff／Git／浏览器工具栏区域锁定实际接收的 `DockGroup`，新文件在该组建立标签（含空组），已打开的文件仍激活原标签而不强制搬组；Projects 面板为**文件打开当前项目的标签、文件夹添加目录项目**；Files 面板则依据行／根标题／留白准确把文件或目录**复制进目标文件夹**，不额外打开 FileTab。原生 WebKit 正文自行处理网页文件上传，Ghostty 终端正文只处理本机 Shell 路径文本，**两者上方都不挂通用 Drop**；浏览器工具栏可打开文件。唯一的 Finder `NSItemProvider<NSURL>` 异步转换由 `FinderWindowDrop.receive` 持有，再交给相应动作；始终绑定触发时的 `TerminalManager`、`NSWindow` 和项目身份；文件 provider 晚到或跨窗口恢复队列延迟时，也不得重定向到后来选中的项目。显式 `(projectID, groupID)` 在真正打开前还须核对组是否仍有效；若用户已切换项目或原组已消失，拒绝该投放，不能无声改投另一个项目或默认组。内部 Dock 标签移动只走 `DockTabDragCoordinator`，不伪装 Finder 文件 URL。
+Finder 的 `fileURL` 拖放按接收区域分流：空工作区、普通编辑／Diff、顶部工作标签栏、空停靠组及 Git 面板为**打开或复用文件标签**；每个分屏的顶部标签栏、空组内容区及普通编辑／Diff／Git／浏览器工具栏区域锁定实际接收的 `DockGroup`，新文件在该组建立标签（含空组），已打开的文件仍激活原标签而不强制搬组；Projects 面板为**文件打开当前项目的标签、文件夹添加目录项目**；Files 面板则依据行／根标题／留白准确把文件或目录**复制进目标文件夹**，不额外打开 FileTab。原生 WebKit 正文自行处理网页文件上传，Ghostty 终端正文只处理本机 Shell 路径文本，**两者上方都不挂通用 Drop**；浏览器工具栏可打开文件。唯一的 Finder `NSItemProvider<NSURL>` 异步转换由 `FinderWindowDrop.receive` 持有，再交给相应动作；始终绑定触发时的 `WorkspaceWindowModel`、`NSWindow` 和项目身份；文件 provider 晚到或跨窗口恢复队列延迟时，也不得重定向到后来选中的项目。显式 `(projectID, groupID)` 在真正打开前还须核对组是否仍有效；若用户已切换项目或原组已消失，拒绝该投放，不能无声改投另一个项目或默认组。内部 Dock 标签移动只走 `DockTabDragCoordinator`，不伪装 Finder 文件 URL。
 
 「显示」菜单使用统一面板、项目和标签动作。保存读取聚焦内容的未保存状态；设置窗口或空工作区的关闭仍使用系统窗口关闭语义，不强行路由到某个工作标签。
 

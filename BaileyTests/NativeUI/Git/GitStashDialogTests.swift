@@ -4,6 +4,8 @@ import XCTest
 
 @MainActor
 final class GitStashDialogTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     func testSpecificStashIdentityIndexDefaultsAndBranchInputValidation() {
         let stash = GitStatusModel.Stash(
             selector: "stash@{2}", oid: String(repeating: "a", count: 40),
@@ -57,7 +59,7 @@ final class GitStashDialogTests: XCTestCase {
             _ = git(["add", "."]); _ = git(["stash", "push", "-qm", message])
         }
         let retained = git(["rev-parse", "stash@{0}"])
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)

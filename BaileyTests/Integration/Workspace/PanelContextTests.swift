@@ -59,6 +59,8 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
 
 @MainActor
 final class PanelContextTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func wait(_ predicate: () async -> Bool) async throws {
         let deadline = Date().addingTimeInterval(5)
         while !(await predicate()) {
@@ -124,7 +126,7 @@ final class PanelContextTests: XCTestCase {
         try Data("first".utf8).write(to: firstURL.appendingPathComponent("one.txt"))
         try Data("second".utf8).write(to: secondURL.appendingPathComponent("two.txt"))
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         let git = GitStatusModel()
         manager.addLocalFolders([firstURL])

@@ -27,6 +27,8 @@ private final class FocusRecordingWindow: NSWindow {
 /// not a valid substitute for the manager that owns a file or its save target.
 @MainActor
 final class WorkspaceWindowIsolationTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func hasForegroundKeyWindow(_ window: NSWindow) async -> Bool {
         for _ in 0..<100 {
             if NSApp.isActive && window.isKeyWindow { return true }
@@ -82,7 +84,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             try "unchanged\n".write(to: root.appendingPathComponent(name),
                                       atomically: true, encoding: .utf8)
         }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -127,7 +129,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             try "unchanged\n".write(
                 to: root.appendingPathComponent(name), atomically: true, encoding: .utf8)
         }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -217,7 +219,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             let result = GitCommandExecution.run(arguments, in: root.path)
             XCTAssertEqual(result.status, 0, result.stderr)
         }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         let project = Project(fallbackName: "focus scope", workspaceConfiguration: .standard)
         project.customDirectory = root.path
@@ -265,7 +267,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             try "unchanged\n".write(to: root.appendingPathComponent(name),
                                       atomically: true, encoding: .utf8)
         }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -340,7 +342,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             let result = GitCommandExecution.run(arguments, in: root.path)
             XCTAssertEqual(result.status, 0, result.stderr)
         }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -427,7 +429,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
                                          atomically: true, encoding: .utf8)
             }
 
-            let manager = TerminalManager()
+            let manager = self.workspaceApplication.makeWindow()
             defer { manager.windowClosed() }
             manager.addLocalFolders([root])
             let project = try XCTUnwrap(manager.selectedProject)
@@ -672,7 +674,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         for path in [first, second] {
             try "doNotEdit\n".write(to: path, atomically: true, encoding: .utf8)
         }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([directory])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -794,7 +796,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         for file in [first, second] {
             try "original\n".write(to: file, atomically: true, encoding: .utf8)
         }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([directory])
         manager.openFile(second.path)
@@ -852,7 +854,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         ))
         let project = Project(fallbackName: "one-group", workspaceConfiguration: configuration)
         project.customDirectory = root.path
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.projects = [project]
         manager.selectedProjectID = project.id
@@ -946,7 +948,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -993,7 +995,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("restored.swift")
         try "let value = 1\n".write(to: url, atomically: true, encoding: .utf8)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         manager.openFile(url.path)
@@ -1032,7 +1034,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let url = root.appendingPathComponent(String(repeating: "长标题😀", count: 8) + ".swift")
         let text = "let greeting = \"中文 😀\"\n"
         try text.write(to: url, atomically: true, encoding: .utf8)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         manager.openFile(url.path)
@@ -1075,7 +1077,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -1135,7 +1137,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -1201,7 +1203,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -1266,8 +1268,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         try originalA.write(to: aURL, atomically: true, encoding: .utf8)
         try originalB.write(to: bURL, atomically: true, encoding: .utf8)
 
-        let first = TerminalManager()
-        let second = TerminalManager()
+        let first = self.workspaceApplication.makeWindow()
+        let second = self.workspaceApplication.makeWindow()
         defer { first.windowClosed(); second.windowClosed() }
         first.addLocalFolders([aFolder])
         second.addLocalFolders([bFolder])
@@ -1338,7 +1340,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         try "first body".write(to: first, atomically: true, encoding: .utf8)
         try "second body".write(to: second, atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let window = NSWindow(
@@ -1379,7 +1381,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: base) }
         let pinned = other.appendingPathComponent("pinned.md")
         try "content".write(to: pinned, atomically: true, encoding: .utf8)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([first])
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 440),
@@ -1390,7 +1392,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let providers = [pinned, other].map { NSItemProvider(object: $0 as NSURL) }
         let originalProject = try XCTUnwrap(manager.selectedProject)
         XCTAssertTrue(FinderWindowDrop.receive(providers, preferred: manager) { urls, owner in
-            TerminalManager.openExternalFiles(urls, preferred: owner)
+            self.workspaceApplication.openExternalFiles(urls, preferred: owner)
         })
         try await wait { manager.projects.count == 2 && originalProject.tabs.count == 1 }
         XCTAssertEqual(manager.projects.first?.customDirectory, first.path)
@@ -1404,7 +1406,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let originalIDs = Set(manager.projects.map(\.id))
         let openedTab = try XCTUnwrap(originalProject.selectedTab)
         XCTAssertTrue(FinderWindowDrop.receive(providers, preferred: manager) { urls, owner in
-            TerminalManager.openExternalFiles(urls, preferred: owner)
+            self.workspaceApplication.openExternalFiles(urls, preferred: owner)
         })
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(Set(manager.projects.map(\.id)), originalIDs)
@@ -1420,7 +1422,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let files = (1...4).map { directory.appendingPathComponent("drop-\($0).swift") }
         for file in files { try "let file = 1".write(to: file, atomically: true, encoding: .utf8) }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([directory])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -1441,7 +1443,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
 
         let target = (projectID: project.id, groupID: left.id)
         var responses: [Bool] = []
-        TerminalManager.openExternalFiles(Array(files[2...3]), preferred: manager, destination: target) {
+        self.workspaceApplication.openExternalFiles(Array(files[2...3]), preferred: manager, destination: target) {
             responses.append($0)
         }
         XCTAssertEqual(responses, [true])
@@ -1456,7 +1458,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         }, "Finder files must open in the drop target's actual Dock group")
         XCTAssertEqual(project.dock.group(containing: .tab(initialTabs[1].id))?.id, right.id)
 
-        TerminalManager.openExternalFiles([files[1]], preferred: manager, destination: target) {
+        self.workspaceApplication.openExternalFiles([files[1]], preferred: manager, destination: target) {
             responses.append($0)
         }
         XCTAssertEqual(responses, [true, true])
@@ -1479,7 +1481,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         try "first".write(to: firstFile, atomically: true, encoding: .utf8)
         try "other".write(to: otherFile, atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([firstRoot])
         let first = try XCTUnwrap(manager.selectedProject)
@@ -1506,7 +1508,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         XCTAssertEqual(other.tabs.count, 0)
 
         // An unopened file under B still opens in the actual receiving A group.
-        TerminalManager.openExternalFiles([otherFile], preferred: manager, destination: destination)
+        self.workspaceApplication.openExternalFiles([otherFile], preferred: manager, destination: destination)
         XCTAssertEqual(first.tabs.count, 2)
         XCTAssertEqual(other.tabs.count, 0)
         XCTAssertEqual(manager.selectedProjectID, first.id)
@@ -1529,8 +1531,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         try "already open".write(to: existing, atomically: true, encoding: .utf8)
         try "new data".write(to: newFile, atomically: true, encoding: .utf8)
 
-        let receiver = TerminalManager()
-        let waitingOwner = TerminalManager()
+        let receiver = self.workspaceApplication.makeWindow()
+        let waitingOwner = self.workspaceApplication.makeWindow()
         defer { receiver.windowClosed(); waitingOwner.windowClosed() }
         receiver.addLocalFolders([firstRoot, secondRoot])
         let initial = try XCTUnwrap(receiver.projects.first { $0.customDirectory == firstRoot.path })
@@ -1554,7 +1556,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         receiver.attach(to: receiverWindow)
 
         var replies: [Bool] = []
-        TerminalManager.openExternalFiles([existing, newFile], preferred: receiver) {
+        self.workspaceApplication.openExternalFiles([existing, newFile], preferred: receiver) {
             replies.append($0)
         }
         XCTAssertTrue(replies.isEmpty, "Wait for the file's original owner before routing the batch")
@@ -1579,7 +1581,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let source = root.appendingPathComponent("project-drop.swift")
         try "let owner = 1".write(to: source, atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([firstRoot, secondRoot])
         let first = try XCTUnwrap(manager.projects.first { $0.customDirectory == firstRoot.path })
@@ -1611,7 +1613,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let source = root.appendingPathComponent("empty-state.txt")
         try "original".write(to: source, atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 650, height: 450),
@@ -1640,7 +1642,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let file = folder.appendingPathComponent("slow.swift")
         try "original".write(to: file, atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { if manager.attachedWindow != nil { manager.windowClosed() } }
         let original = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 650, height: 450),
                                 styleMask: [.titled], backing: .buffered, defer: false)
@@ -1674,7 +1676,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         try "let value = 42".write(to: first, atomically: true, encoding: .utf8)
         try "{\"number\":7}".write(to: second, atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([folder])
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 750, height: 490),
@@ -1693,7 +1695,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         // Choose the mounted recipient explicitly; process-wide activation and
         // default window selection are covered by the separate Launch Services E2E.
         var replies: [Bool] = []
-        TerminalManager.openExternalFiles([first, second], preferred: manager) {
+        self.workspaceApplication.openExternalFiles([first, second], preferred: manager) {
             replies.append($0)
         }
         XCTAssertEqual(replies, [true])
@@ -1711,14 +1713,14 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "{\"number\":7}")
 
         let existing = opened
-        TerminalManager.openExternalFiles([second], preferred: manager)
+        self.workspaceApplication.openExternalFiles([second], preferred: manager)
         guard case .file(let reused) = try XCTUnwrap(manager.selectedProject?.selectedTab).content
         else { return XCTFail("The previous buffer must still exist") }
         XCTAssertTrue(reused === existing)
         XCTAssertEqual(manager.projects.count, 1)
         XCTAssertEqual(project.tabs.count, 2)
 
-        TerminalManager.openExternalFiles([folder], preferred: manager)
+        self.workspaceApplication.openExternalFiles([folder], preferred: manager)
         XCTAssertEqual(manager.projects.count, 1, "Opening a directory reuses the existing root")
         XCTAssertEqual(manager.selectedProject?.customDirectory, folder.path)
         XCTAssertEqual(project.tabs.count, 2, "A folder is a project, not a file editor")
@@ -1732,7 +1734,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
         let imagePath = folder.appendingPathComponent("example.png")
         try png.write(to: imagePath)
-        TerminalManager.openExternalFiles([imagePath], preferred: manager)
+        self.workspaceApplication.openExternalFiles([imagePath], preferred: manager)
         guard case .file(let preview) = try XCTUnwrap(project.selectedTab).content else {
             return XCTFail("System image open should create a native preview tab")
         }
@@ -1757,8 +1759,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         try "original".write(to: file, atomically: true, encoding: .utf8)
         try "new".write(to: extra, atomically: true, encoding: .utf8)
 
-        let a = TerminalManager()
-        let b = TerminalManager()
+        let a = self.workspaceApplication.makeWindow()
+        let b = self.workspaceApplication.makeWindow()
         defer { a.windowClosed(); b.windowClosed() }
         a.addLocalFolders([firstRoot])
         b.addLocalFolders([secondRoot])
@@ -1788,7 +1790,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         }
 
         var replies: [Bool] = []
-        TerminalManager.openExternalFiles([file], preferred: a) { replies.append($0) }
+        self.workspaceApplication.openExternalFiles([file], preferred: a) { replies.append($0) }
         XCTAssertEqual(replies, [true])
         XCTAssertTrue(b.selectedProject === bProject)
         guard case .file(let located) = try XCTUnwrap(bProject.selectedTab).content else {
@@ -1807,7 +1809,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         if NSApp.isActive { try await wait { windowB.isKeyWindow } }
 
         // A genuinely new file is opened in the explicit receiving window.
-        TerminalManager.openExternalFiles([extra], preferred: a) { replies.append($0) }
+        self.workspaceApplication.openExternalFiles([extra], preferred: a) { replies.append($0) }
         XCTAssertEqual(replies, [true, true])
         XCTAssertEqual(a.selectedProject?.selectedTab?.content.title, "new.swift")
         XCTAssertEqual(bProject.tabs.filter { $0.content.isFile }.count, 1)
@@ -1821,8 +1823,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let file = folder.appendingPathComponent("same.swift")
         try "local bytes".write(to: file, atomically: true, encoding: .utf8)
 
-        let a = TerminalManager()
-        let b = TerminalManager()
+        let a = self.workspaceApplication.makeWindow()
+        let b = self.workspaceApplication.makeWindow()
         defer { a.windowClosed(); b.windowClosed() }
         a.addLocalFolders([folder])
         let remote = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
@@ -1848,7 +1850,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         b.attach(to: windowB)
 
         var handled: Bool?
-        TerminalManager.openExternalFiles([file], preferred: a) { handled = $0 }
+        self.workspaceApplication.openExternalFiles([file], preferred: a) { handled = $0 }
         XCTAssertEqual(handled, true)
         XCTAssertTrue(b.selectedProject === remote)
         XCTAssertTrue(remote.selectedTab === originalTab)
@@ -1866,8 +1868,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let file = directory.appendingPathComponent("restored.md")
         try "saved".write(to: file, atomically: true, encoding: .utf8)
 
-        let first = TerminalManager()
-        let restored = TerminalManager()
+        let first = self.workspaceApplication.makeWindow()
+        let restored = self.workspaceApplication.makeWindow()
         defer { first.windowClosed(); restored.windowClosed() }
         restored.addLocalFolders([directory])
         restored.openFile(file.path)
@@ -1885,7 +1887,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         first.attach(to: firstWindow)
 
         var replies = 0
-        TerminalManager.openExternalFiles([file]) { handled in
+        self.workspaceApplication.openExternalFiles([file]) { handled in
             XCTAssertTrue(handled)
             replies += 1
         }
@@ -1916,8 +1918,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         for (url, text) in [(first, "one"), (last, "two"), (opened, "three")] {
             try text.write(to: url, atomically: true, encoding: .utf8)
         }
-        let a = TerminalManager()
-        let b = TerminalManager()
+        let a = self.workspaceApplication.makeWindow()
+        let b = self.workspaceApplication.makeWindow()
         defer { a.windowClosed(); b.windowClosed() }
         a.addLocalFolders([local])
         b.addLocalFolders([existing])
@@ -1934,7 +1936,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         b.attach(to: windowB)
 
         var result: Bool?
-        TerminalManager.openExternalFiles([first, opened, last], preferred: a) { result = $0 }
+        self.workspaceApplication.openExternalFiles([first, opened, last], preferred: a) { result = $0 }
         XCTAssertEqual(result, true)
         XCTAssertEqual(a.projects.count, 1, "New files stay in A even when B owns the interleaved open file")
         let aProject = try XCTUnwrap(a.selectedProject)
@@ -1952,8 +1954,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("pending.txt")
         try "sentinel".write(to: file, atomically: true, encoding: .utf8)
-        let a = TerminalManager()
-        let b = TerminalManager()
+        let a = self.workspaceApplication.makeWindow()
+        let b = self.workspaceApplication.makeWindow()
         defer { a.windowClosed(); b.windowClosed() }
         // The not-yet-attached B really owns this file; this is the
         // condition that must defer even if unrelated unmounted managers exist.
@@ -1969,7 +1971,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         defer { owner.close(); second.close() }
         a.attach(to: owner)
         var replies: [Bool] = []
-        TerminalManager.openExternalFiles([file], preferred: a) { replies.append($0) }
+        self.workspaceApplication.openExternalFiles([file], preferred: a) { replies.append($0) }
         XCTAssertTrue(replies.isEmpty)
         a.windowClosed()
         XCTAssertEqual(replies, [false], "The closed window cancels its own outstanding drop")
@@ -1981,10 +1983,10 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
     }
 
     func testAnUnattachedUnrelatedManagerCannotHoldFinderRequestsForever() throws {
-        // Other features may construct a TerminalManager before they ever mount
+        // Other features may construct a WorkspaceWindowModel before they ever mount
         // a window. It must not block an independent, attached Finder receiver.
-        let unmounted = TerminalManager()
-        let receiver = TerminalManager()
+        let unmounted = self.workspaceApplication.makeWindow()
+        let receiver = self.workspaceApplication.makeWindow()
         defer { unmounted.windowClosed(); receiver.windowClosed() }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -1998,7 +2000,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         defer { window.close() }
         receiver.attach(to: window)
         var handled: Bool?
-        TerminalManager.openExternalFiles([url], preferred: receiver) { handled = $0 }
+        self.workspaceApplication.openExternalFiles([url], preferred: receiver) { handled = $0 }
         XCTAssertEqual(handled, true)
         XCTAssertEqual(receiver.selectedProject?.selectedTab?.content.title, "unrelated.txt")
         XCTAssertTrue(unmounted.projects.isEmpty)
@@ -2011,8 +2013,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         let file = root.appendingPathComponent("pending-owner.txt")
         try "unchanged".write(to: file, atomically: true, encoding: .utf8)
 
-        let receiver = TerminalManager()
-        let awaitingOwner = TerminalManager()
+        let receiver = self.workspaceApplication.makeWindow()
+        let awaitingOwner = self.workspaceApplication.makeWindow()
         defer { receiver.windowClosed(); awaitingOwner.windowClosed() }
         receiver.addLocalFolders([root])
         awaitingOwner.addLocalFolders([root])
@@ -2034,7 +2036,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
 
         var replies: [Bool] = []
         for _ in 0..<80 {
-            TerminalManager.openExternalFiles([file], preferred: receiver) { replies.append($0) }
+            self.workspaceApplication.openExternalFiles([file], preferred: receiver) { replies.append($0) }
         }
         XCTAssertTrue(replies.isEmpty, "Wait for the actual existing file owner, not the receiving window")
 
@@ -2065,8 +2067,8 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         try "window A".write(to: aURL, atomically: true, encoding: .utf8)
         try "window B".write(to: bURL, atomically: true, encoding: .utf8)
 
-        let first = TerminalManager()
-        let second = TerminalManager()
+        let first = self.workspaceApplication.makeWindow()
+        let second = self.workspaceApplication.makeWindow()
         defer {
             first.windowClosed()
             second.windowClosed()
@@ -2112,5 +2114,79 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         XCTAssertFalse(savedProjects.contains { $0.customDirectory == aFolder.path })
         XCTAssertEqual(try String(contentsOf: aURL, encoding: .utf8), "window A")
         XCTAssertEqual(try String(contentsOf: bURL, encoding: .utf8), "window B")
+    }
+
+    func testSpeculativeSceneConstructionDoesNotRegisterOrConsumeRestoredWindows() throws {
+        XCTAssertTrue(BaileyInstanceMode.isIsolated)
+        let saved = SessionStore.load()
+        let histories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(saved)
+            TerminalHistoryStore.save(histories)
+        }
+
+        func snapshot(named name: String) -> SessionSnapshot {
+            let project = SessionSnapshot.ProjectSnapshot(
+                customName: name,
+                customDirectory: "/fixture/" + name,
+                sshHost: nil,
+                pinnedFile: nil,
+                tabs: [],
+                selectedTabIndex: nil,
+                dock: .group(.init(id: UUID(), items: [.files], selected: .files))
+            )
+            return SessionSnapshot(projects: [project], selectedProjectIndex: 0)
+        }
+        SessionStore.save([snapshot(named: "one"), snapshot(named: "two")])
+        let application = WorkspaceApplication(loadSavedState: true)
+        let discarded = WorkspaceWindowModel(application: application)
+        let redundant = WorkspaceWindowModel(application: application)
+        XCTAssertEqual(application.windowCount, 0)
+        XCTAssertTrue(discarded.projects.isEmpty)
+        XCTAssertTrue(redundant.projects.isEmpty)
+
+        let first = application.makeWindow()
+        let second = application.makeWindow()
+        defer {
+            first.windowClosed()
+            second.windowClosed()
+        }
+        XCTAssertEqual(application.windowCount, 2)
+        XCTAssertEqual(first.selectedProject?.customName, "one")
+        XCTAssertEqual(second.selectedProject?.customName, "two")
+        application.register(first)
+        application.register(second)
+        XCTAssertEqual(application.windowCount, 2,
+                       "Repeated SwiftUI appear or native attachment cannot claim another snapshot")
+        XCTAssertEqual(first.selectedProject?.customName, "one")
+        XCTAssertEqual(second.selectedProject?.customName, "two")
+        XCTAssertTrue(SessionStore.load().count == 2)
+        withExtendedLifetime([discarded, redundant]) {}
+    }
+
+    func testTwoApplicationOwnersNeverShareWorkspaceRegistryOrWorktreeProtection() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let aFolder = root.appendingPathComponent("first", isDirectory: true)
+        let bFolder = root.appendingPathComponent("second", isDirectory: true)
+        try FileManager.default.createDirectory(at: aFolder, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: bFolder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let otherApplication = WorkspaceApplication()
+        let first = self.workspaceApplication.makeWindow()
+        let second = otherApplication.makeWindow()
+        defer {
+            first.windowClosed()
+            second.windowClosed()
+        }
+        first.addLocalFolders([aFolder])
+        second.addLocalFolders([bFolder])
+        XCTAssertEqual(self.workspaceApplication.windowCount, 1)
+        XCTAssertEqual(otherApplication.windowCount, 1)
+        XCTAssertTrue(self.workspaceApplication.isWorktreeInUse(path: aFolder.path, scope: "local"))
+        XCTAssertFalse(self.workspaceApplication.isWorktreeInUse(path: bFolder.path, scope: "local"))
+        XCTAssertTrue(otherApplication.isWorktreeInUse(path: bFolder.path, scope: "local"))
+        XCTAssertFalse(otherApplication.isWorktreeInUse(path: aFolder.path, scope: "local"))
+        XCTAssertFalse(otherApplication.containsWindow(first))
+        XCTAssertFalse(self.workspaceApplication.containsWindow(second))
     }
 }

@@ -38,23 +38,23 @@ Bailey 自有 SwiftUI 状态采用 **MVVM + Observation**。分层是职责，�
 
 | 生命周期 | 当前所有者 | 必须保持的边界 |
 | --- | --- | --- |
-| 应用 | `baileyApp`、`BaileyApplicationDelegate` 与现有应用级服务 | 启动装配和退出协调不复制成另一套容器 |
-| 窗口 | `WindowRootView` 持有 `TerminalManager` | 每个窗口有自己的管理者；菜单不能操作后台窗口 |
+| 应用 | `BaileyApp`、`BaileyApplicationDelegate.workspace: WorkspaceApplication` | 唯一注册已存在的窗口、协调 Finder 路由、快照认领、保存与退出；不复制项目状态 |
+| 窗口 | `WindowRootView` 的 `WorkspaceWindowModel` | 每窗独立拥有项目与动作、原生宿主；菜单不能操作后台窗口 |
 | Git 面板展示 | `ContentView` 持有 `GitStatusModel` | 跟随当前项目与机器身份，不因一次失败丢弃有效展示 |
 | 项目 | `Project` | 持有标签、文件树和停靠状态；视图重建不更换项目 |
 | 标签内容 | `PaneTab` 及其 `TerminalSession`、`FileTab`、`DiffTab`、`BrowserTab` | 每个标签只有一份内容，原生对象随内容生存 |
 | 设置与主题 | `AppSettings`、`Theme` | 现有应用级共享状态仍是唯一来源，不再缓存另一份偏好 |
 | 长期隧道 | `TunnelManager` | 独立于某个终端或浏览器标签 |
 
-表中类型是当前实现，不是禁止调整的永久名称。`Project`、`TerminalManager` 等名称不代表纯 Model；命名按 [standards.md](standards.md#职责与命名) 随真实职责更新，不另建并行状态容器。
+表中类型是当前实现，不是永久名称。应用与窗口分别拥有真实生命周期，不再由单窗类型的可变静态状态充当全局注册表；命名随真实职责调整，不另建并行状态容器。
 
-**现状：** `TerminalManager` 实例持有单窗口项目与动作，又通过静态状态承担跨窗口注册、外部请求和快照汇集，还含命令面板的原生焦点恢复；这些职责尚未分离。`Project.syncFiles(in:)`、`GitStatusModel.syncSelectedProject(in:)` 目前还反向读取整个窗口管理对象。
+**现状：** `WorkspaceApplication` 由 delegate 持有，负责窗口登记、Finder 队列、恢复认领、合并快照保存、通知与 SSH 会话定位及应用退出。`WorkspaceWindowModel` 保留单窗项目、选择、焦点与原生宿主。`Project`／`DockNode`／`PaneTab` 继续拥有项目布局、局部状态与长期原生内容；创建 SwiftUI View 的中间对象不会登记或提前认领窗口。
 
-**目标（未实施）：** 应用／delegate 装配一份应用级窗口登记和路由所有者；每个 `WindowRootView` 保留一个窗口级 `WorkspaceWindowModel`；`Project`／`DockNode`／`PaneTab` 继续分别拥有项目布局与真实内容。项目、Files、Git 只接收实际需要的项目身份、后端及当前目标校验，不依赖整个窗口或全局可遍历窗口表。窗口模型的名称改变必须与应用级职责真实迁移一致，不能靠 alias 保留旧双轨；实施步骤只在 [.github/features/workspace-focus-refactor](../.github/features/workspace-focus-refactor/idea.md) 维护。
+**下一边界：** Project／Git 不应反向依赖整个窗口模型；已在 [P1 计划](../.github/features/workspace-focus-refactor/plan-p1.md#p1-t3) 中按调用链收窄参数。P2 的各组件焦点策略仍未迁移，不把本轮 P1 当成整个 Feature 已完成。
 
 ## 入口与数据流
 
-`baileyApp` 声明主 `WindowGroup` 和设置场景。`WindowRootView` 用 `@State` 持有窗口管理者，将它交给 `ContentView`，并通过 `.focusedSceneValue(\.baileyManager, manager)` 提供当前窗口上下文；菜单由 `@FocusedValue` 读取。
+`BaileyApp` 声明主 `WindowGroup` 和设置场景；App delegate 提前持有应用所有者。`WindowRootView` 用 `@State` 持有单窗模型，在实际进入场景或附着原生窗口时向应用登记；`ContentView` 接收该模型，菜单仍通过 `.focusedSceneValue(\.baileyManager, manager)`／`@FocusedValue` 定位前台窗口。
 
 用户动作先表达**必要的目标与意图**，由对应所有者执行业务操作、窗口交接或局部输入；不是把可观察状态变化当作操作命令。领域动作经所属 Model／ViewModel 到达本机或 SSH 后端。异步结果回写前再次核对项目、机器、连接、路径与请求代次；失败留在原目标，不回退到本机同名路径。最终文件字节、Git index/HEAD、原生视图内容或真实第一响应者才是结果，不以事件派发替代。
 
@@ -89,7 +89,7 @@ Bailey 自有 SwiftUI 状态采用 **MVVM + Observation**。分层是职责，�
 
 自动请求只作用于当前前台 key window 的有效可见目标；临时输入（即使原生 field editor 尚未就绪）接管时，底层不能抢回。延迟执行、取消恢复和重挂载后的真正聚焦前，重新确认请求仍属于当前窗口与目标；关闭、隐藏、停车、切项目或更新的交接使旧请求失效。组件报告原生挂载、实际响应者和最终结果，**已请求 ≠ 已获得**；不要用无理由的定时轮询掩盖归属错误，也不能为消除轮询而删除真实的 AppKit 挂载顺序。菜单、Sheet 和弹窗的有效原生生命周期检查必须保留。
 
-当前决策仍分布在 `WorkspaceDockView`、`TerminalManager` 与各内容／工具组件；以上是重构目标。具体单击、双击、临时输入和恢复行为由 [dock.md](features/dock.md)、[command-palette.md](features/command-palette.md) 与各功能页维护，不能借职责迁移改变交互。
+当前窗口级焦点决策仍分布在 `WorkspaceDockView`、`WorkspaceWindowModel` 与各内容／工具组件；P2 的焦点职责收敛仍是重构目标。具体单击、双击、临时输入和恢复行为由 [dock.md](features/dock.md)、[command-palette.md](features/command-palette.md) 与各功能页维护，不能借职责迁移改变交互。
 
 ## 原生表面与生命周期
 

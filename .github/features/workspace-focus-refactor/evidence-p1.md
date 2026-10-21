@@ -26,6 +26,18 @@
 - 真实 Windows SSH handoff：没有使用专属 socket/master，不调用用户正在工作的认证通道。P1-T2 可用受控本机 socket 证明接线，真实 SSH 仍待独立验收。
 - 视觉对照与真实输入：基线有原生窗口 XCTest 行为，不具备完整 App 截图／逐帧录屏及六条被跳过的前台焦点步骤。P1 其它受影响路径可独立继续实现和验证；缺少关键完整 GUI 证据时，审计 Gate 必须据实记为待验收／No-Go，不能宣称完整完成。
 
-## P1-T2／P1-T3 追证
+## P1-T2 应用级／窗口级职责迁移
 
-实施后在本页按任务添加变更提交、真实测试／构建退出码、跳过与最终副作用，直到阶段审计完成。
+- 新的 GUI 应用所有者：`BaileyApplicationDelegate.workspace: WorkspaceApplication`。在 App 中只注册一次跨窗列表、恢复快照认领、Finder 批次／恢复队列、500ms 合并保存、终止保存、Git 工作树使用范围以及终端通知和私有 SSH 会话定位；没有注册表 static 镜像。
+- 单窗所有者：`WorkspaceWindowModel`。由 SwiftUI 的纯 `State(initialValue:)` 构造，在真正场景 onAppear／NSWindow attach 时向应用注册；移除旧 `TerminalManager.swift` 及其所有生产和 XCTest 引用，不保留 alias／旧静态路由。
+- Project 的原生保存确认使用所属窗的弱闭包（即使项目是直接赋值／append），不再扫所有窗口；多窗口关闭仍只注销被关闭的窗口。
+- 测试 A：`make test:SessionStoreTests,PanelContextTests,WorkspaceIdentityTests,FileTabTests,PaneRetentionTests,DockWorkspaceTests,WorkspaceContentIdentityTests,DockFocusP2RegressionTests,WorkspaceWindowCloseTests,WorkspaceWindowIsolationTests,AppMenuIsolationTests,AppIdentityTests,RemoteLifetimeTests DERIVED_DATA=build/DerivedData-workspace-refactor` → 退出 0，**194 executed，6 skipped，0 failed**。包含新增的 SwiftUI 模型推测构造／恢复只消费一次、不同应用 owner 隔离、受控 Unix socket→实际 SSHService→所属 TerminalSession 的成功与拒绝路径（含非法 token、跨 owner、关闭后重放），不连接真实 SSH。
+- 测试 B：`make test:GitStatusModelTests,GitCommitDialogTests,GitExternalRefreshTests,GitHistoryFileTests,GitInteractiveRebaseTests,GitRefReplacementTests,GitRemoteBranchDialogTests,GitStashDialogTests,GitTagDialogTests,GitWorkspaceMenuTests DERIVED_DATA=build/DerivedData-workspace-refactor` → 退出 0，**96 executed，2 skipped，0 failed**。两项跳过分别是授权 SSH Rebase 与真实 SSH Git 外部刷新。
+- 最后修正直接赋值／移除项目时的所属窗口回调解除后，重新运行 `make test:SessionStoreTests,WorkspaceWindowIsolationTests,WorkspaceWindowCloseTests DERIVED_DATA=build/DerivedData-workspace-refactor` → 退出 0，**54 executed，5 skipped，0 failed**；确保最新绑定清理的生产代码也得到实际验证。
+- `make build DERIVED_DATA=build/DerivedData-workspace-refactor` → 退出 0，`BUILD SUCCEEDED`、`codesign --verify --deep --strict` 通过，未安装／启动正式 App。
+- 仅通过源码单向装配与可执行 XCTest 验证；完整独立进程 Launch Services、语言重启、通知点击与未抢占系统键盘的真实 GUI E2E 仍属未执行，不能将此段写成零 UI/UX 变化的全环境证明。P1-T1 的六项原生焦点 Skip 未被这次重构消除。
+- 已知待核对边界：`isWorktreeInUse` 仍保留原算法，即先按 Project.panelContext.scope 筛项目；本机 FileTab 放在 SSH 项目时可能被提前过滤。按原计划先保持旧行为，若证实遗漏，另做明确的缺陷验证及修复，不在纯重构中偷偷改变。
+
+## P1-T3 追证
+
+实施后记录新 API 的所有调用方、异步身份失效、测试和文档完整校验。

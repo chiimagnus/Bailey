@@ -12,7 +12,7 @@ SSH 后端让文件和 Git 面板直接操作远端项目，不要求挂载文�
 
 ## 连接与后端
 
-复用既有 OpenSSH 配置、密钥和工作区 master。交互会话与文件／Git 操作不是同一条生命期路径：终端仍能输入，不足以证明后端连接正常。
+复用既有 OpenSSH 配置、密钥和工作区 master。GUI 启动时将应用级 `WorkspaceApplication` 显式提供给已存在的 `BaileySSHService`；私有 handoff 经 token、终端 ID、端口和 PID 校验后，仅查找该所有者内仍存活的 Session，不能遍历窗口单例或误交给测试宿主的其它所有者。交互会话与文件／Git 操作不是同一条生命期路径：终端仍能输入，不足以证明后端连接正常。
 
 固定 SSH 主机的新终端与 Files/Git 使用相同的 OpenSSH `ControlMaster=auto`、`ControlPersist=180` 以及按有效主机、用户、端口与跳板隔离的 `%C` socket；标签关闭不主动关闭共享连接。固定主机的文件／Git 后台命令在新建 SSH 连接时启用标准压缩，已存在的 master 不重新协商。后台命令使用 `BatchMode=yes`，不弹出交互式认证，也不跨机器回退到本机。首次加载与刷新按同层目录批量读取；网络读取由后端异步执行，已读取目录优先使用缓存，失联保留原内容与绑定。
 

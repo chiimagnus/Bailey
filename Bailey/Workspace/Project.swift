@@ -7,7 +7,7 @@ import Observation
 /// holds one terminal, file, browser, or diff; see
 /// `PaneTab`. A project can have zero terminal sessions or tabs; closing the last
 /// tab leaves the project open — only the explicit "Close Project" action (see
-/// `TerminalManager.close(_:)`) removes it from the manager.
+/// `WorkspaceWindowModel.close(_:)`) removes it from the manager.
 @MainActor
 @Observable
 final class Project: nonisolated Identifiable {
@@ -61,6 +61,7 @@ final class Project: nonisolated Identifiable {
     @ObservationIgnored private var hostConnectionObservation: AnyCancellable?
 
     @ObservationIgnored var onSnapshotChange: (() -> Void)?
+    @ObservationIgnored var onPresentationWindow: (() -> NSWindow?)?
     private let fallbackName: String
 
     init(fallbackName: String, workspaceConfiguration: DockWorkspaceConfiguration) {
@@ -256,7 +257,7 @@ final class Project: nonisolated Identifiable {
 
     /// Synchronize the project's Files tree; only the latest active workspace
     /// may publish its root, and a disconnected shell retains the last tree.
-    func syncFiles(in manager: TerminalManager) async -> (PanelContext.RootSource, PanelContext.Identity)? {
+    func syncFiles(in manager: WorkspaceWindowModel) async -> (PanelContext.RootSource, PanelContext.Identity)? {
         guard manager.selectedProject === self,
               let context = panelContext else { return nil }
         if sshHost == nil, customDirectory == nil,
@@ -696,11 +697,7 @@ final class Project: nonisolated Identifiable {
 
     // MARK: - Closing
 
-    private var closeSheetWindow: NSWindow? {
-        TerminalManager.activeManagers.first {
-            $0.projects.contains { $0 === self }
-        }?.attachedWindow
-    }
+    private var closeSheetWindow: NSWindow? { onPresentationWindow?() }
 
     /// Closes one tab's content. Dirty edits require confirmation; an exited
     /// shell is removed without terminating it again.

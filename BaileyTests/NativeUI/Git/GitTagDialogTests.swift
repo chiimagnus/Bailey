@@ -4,6 +4,8 @@ import XCTest
 
 @MainActor
 final class GitTagDialogTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func wait(_ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(10)
         while !condition() {
@@ -43,7 +45,7 @@ final class GitTagDialogTests: XCTestCase {
         _ = try git(["config", "branch.main.pushRemote", "origin"])
         _ = try git(["tag", "allowed"])
         _ = try git(["tag", "blocked"])
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([repo])
         let project = try XCTUnwrap(manager.selectedProject)

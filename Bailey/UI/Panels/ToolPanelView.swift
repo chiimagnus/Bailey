@@ -74,7 +74,7 @@ private struct RemotePaneHeaderHost: NSViewRepresentable {
 /// Renders one tool within a dock tab. Files and Git retain their
 /// original models and actions regardless of where the tab is parked.
 struct ToolPanelView: View {
-    let manager: TerminalManager
+    let manager: WorkspaceWindowModel
     let git: GitStatusModel
     let panel: ToolPanel
     private let settings = AppSettings.shared

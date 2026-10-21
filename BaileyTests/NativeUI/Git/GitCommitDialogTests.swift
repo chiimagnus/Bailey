@@ -4,6 +4,8 @@ import XCTest
 
 @MainActor
 final class GitCommitDialogTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func wait(_ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(8)
         while !condition() {
@@ -68,7 +70,7 @@ final class GitCommitDialogTests: XCTestCase {
         let first = git(["rev-parse", "HEAD"])
         _ = git(["commit", "--allow-empty", "-qm", "second"])
         let second = git(["rev-parse", "HEAD"])
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         let project = Project(fallbackName: "First", workspaceConfiguration: .standard)
         project.customDirectory = root.path
         let other = Project(fallbackName: "Other", workspaceConfiguration: .standard)
@@ -177,7 +179,7 @@ final class GitCommitDialogTests: XCTestCase {
             }
         }
         defer { try? FileManager.default.removeItem(at: root) }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         let first = Project(fallbackName: "First", workspaceConfiguration: .standard)
         first.customDirectory = firstRoot.path

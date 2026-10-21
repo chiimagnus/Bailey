@@ -23,7 +23,7 @@ final class TabSwitcherController {
     @ObservationIgnored private var acceptsPointerHighlight = false
 
     /// Returns nil for an event consumed by the switcher.
-    func handle(_ event: NSEvent, manager: TerminalManager) -> NSEvent? {
+    func handle(_ event: NSEvent, manager: WorkspaceWindowModel) -> NSEvent? {
         switch event.type {
         case .mouseMoved:
             // AppKit sends mouseEntered when a tracking area is created under
@@ -132,7 +132,7 @@ final class TabSwitcherController {
         return ordered.isEmpty ? project.tabs : ordered
     }
 
-    private func cycle(in manager: TerminalManager, reverse: Bool) -> Bool {
+    private func cycle(in manager: WorkspaceWindowModel, reverse: Bool) -> Bool {
         guard let project = manager.selectedProject,
               project.tabs.count > 1,
               let selectedID = project.selectedTabID
@@ -202,7 +202,7 @@ final class TabSwitcherController {
 /// `keyboardShortcut` cannot observe the Control key being released, which is
 /// the gesture that commits a Cmd-Tab-style switch.
 struct TabSwitcherEventMonitor: NSViewRepresentable {
-    let manager: TerminalManager
+    let manager: WorkspaceWindowModel
     let controller: TabSwitcherController
 
     func makeNSView(context: Context) -> TabSwitcherMonitorView {
@@ -226,7 +226,7 @@ struct TabSwitcherEventMonitor: NSViewRepresentable {
 
 @MainActor
 final class TabSwitcherMonitorView: NSView {
-    weak var manager: TerminalManager?
+    weak var manager: WorkspaceWindowModel?
     weak var controller: TabSwitcherController?
 
     private var eventMonitor: Any?

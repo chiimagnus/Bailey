@@ -5,6 +5,8 @@ import XCTest
 
 @MainActor
 final class GitExternalRefreshTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func wait(
         seconds: TimeInterval = 10, until condition: () -> Bool
     ) async throws {
@@ -27,7 +29,7 @@ final class GitExternalRefreshTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([directory])
         let model = GitStatusModel()
@@ -103,7 +105,7 @@ final class GitExternalRefreshTests: XCTestCase {
         git(["tag", "v0.1"])
         git(["update-ref", "refs/remotes/origin/main", "HEAD"])
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let model = GitStatusModel()
@@ -270,7 +272,7 @@ final class GitExternalRefreshTests: XCTestCase {
         git(["add", "tracked.txt"])
         git(["commit", "-qm", "baseline"])
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([directory])
         let backend = DiscardRemoteWorkspaceFixture()
@@ -412,7 +414,7 @@ final class GitExternalRefreshTests: XCTestCase {
                 git commit -qm baseline
                 """, via: backend)
 
-            let manager = TerminalManager()
+            let manager = self.workspaceApplication.makeWindow()
             defer { manager.windowClosed() }
             let project = Project(
                 fallbackName: "External SSH Fixture", workspaceConfiguration: .standard

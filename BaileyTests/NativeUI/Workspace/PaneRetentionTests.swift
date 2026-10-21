@@ -7,6 +7,8 @@ import XCTest
 
 @MainActor
 final class PaneRetentionTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     func testParkingDropsObsoleteHostActionsBeforeDelayedDismantle() async throws {
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }
@@ -182,8 +184,8 @@ final class PaneRetentionTests: XCTestCase {
             SessionStore.save(previous)
             TerminalHistoryStore.save(histories)
         }
-        let firstManager = TerminalManager()
-        let secondManager = TerminalManager()
+        let firstManager = self.workspaceApplication.makeWindow()
+        let secondManager = self.workspaceApplication.makeWindow()
         defer { firstManager.windowClosed(); secondManager.windowClosed() }
         let first = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 650, height: 420),
                              styleMask: [.titled], backing: .buffered, defer: false)
@@ -236,7 +238,7 @@ final class PaneRetentionTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([directory])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -552,7 +554,7 @@ final class PaneRetentionTests: XCTestCase {
         var weakContents: [WeakNativeContent] = []
         var secondWeakContents: [WeakNativeContent] = []
         do {
-            let manager = TerminalManager()
+            let manager = self.workspaceApplication.makeWindow()
             defer { manager.windowClosed() }
             manager.addLocalFolders([folder])
             manager.openFile(paths[0].path)
@@ -670,7 +672,7 @@ final class PaneRetentionTests: XCTestCase {
         let path = folder.appendingPathComponent("sample.swift")
         try "let value = \"中文 👋\"\n".write(to: path, atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([folder])
         manager.openFile(path.path)
@@ -692,7 +694,7 @@ final class PaneRetentionTests: XCTestCase {
 
         XCTAssertNil(manager.attachedWindow,
                      "NSWindow close must release its manager before SwiftUI onDisappear")
-        XCTAssertFalse(TerminalManager.activeManagers.contains { $0 === manager })
+        XCTAssertFalse(self.workspaceApplication.containsWindow(manager))
         XCTAssertTrue(manager.projects.isEmpty,
                       "A retained WindowRootView must not keep projects from a closed window")
         XCTAssertNil(retiredFile, "Closing the window must release its owned FileTab")
@@ -719,7 +721,7 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertLessThan(original.count, 8 << 20)
         try original.write(to: path)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([folder])
         manager.openFile(path.path)
@@ -1039,7 +1041,7 @@ final class PaneRetentionTests: XCTestCase {
         let path = directory.appendingPathComponent("dock.txt")
         let original = (0..<400).map { "Line \($0) 中文😀\n" }.joined()
         try original.write(to: path, atomically: true, encoding: .utf8)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([directory])
         manager.openFile(path.path)

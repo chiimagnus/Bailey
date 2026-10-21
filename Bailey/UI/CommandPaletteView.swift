@@ -105,7 +105,7 @@ struct CommandPaletteView: View {
 
     private typealias ProjectFile = ProjectFileIndex.File
 
-    let manager: TerminalManager
+    let manager: WorkspaceWindowModel
     private let themeChanges = Theme.changes
     @Environment(\.openSettings) private var openSettings
 

@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     private let themeChanges = Theme.changes
-    let manager: TerminalManager
+    let manager: WorkspaceWindowModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var tabSwitcher = TabSwitcherController()
     @State private var git = GitStatusModel()
@@ -151,7 +151,7 @@ struct ContentView: View {
 /// surfaces own their own drag events.
 @MainActor
 struct FinderWindowDrop: DropDelegate {
-    let manager: TerminalManager
+    let manager: WorkspaceWindowModel
     var destination: (projectID: UUID, groupID: UUID)? = nil
 
     func validateDrop(info: DropInfo) -> Bool {
@@ -166,7 +166,7 @@ struct FinderWindowDrop: DropDelegate {
     }
 
     static func receive(
-        _ providers: [NSItemProvider], preferred manager: TerminalManager,
+        _ providers: [NSItemProvider], preferred manager: WorkspaceWindowModel,
         destination: (projectID: UUID, groupID: UUID)? = nil
     ) -> Bool {
         let projectID = manager.selectedProjectID
@@ -177,15 +177,15 @@ struct FinderWindowDrop: DropDelegate {
                       owner.selectedProject?.dock.root.group(id: destination.groupID) != nil
                 else { return }
             }
-            TerminalManager.openExternalFiles(
+            manager.application.openExternalFiles(
                 urls, preferred: owner, destination: destination
             )
         }
     }
 
     static func receive(
-        _ providers: [NSItemProvider], preferred manager: TerminalManager,
-        action: @escaping @MainActor ([URL], TerminalManager) -> Void
+        _ providers: [NSItemProvider], preferred manager: WorkspaceWindowModel,
+        action: @escaping @MainActor ([URL], WorkspaceWindowModel) -> Void
     ) -> Bool {
         guard let receivingWindow = manager.attachedWindow else { return false }
         let providers = providers.filter {
@@ -238,7 +238,7 @@ enum ProjectCloseConfirmation {
 }
 
 /// AppKit dialogs for the currently owned Bailey window. Business-side
-/// validation and project mutations remain on TerminalManager.
+/// validation and project mutations remain on WorkspaceWindowModel.
 @MainActor
 enum WorkspaceNativeDialogs {
     static func folderPanel() -> NSOpenPanel {

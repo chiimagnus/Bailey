@@ -28,7 +28,7 @@ struct GitPanel: View {
     }
 
     let model: GitStatusModel
-    let manager: TerminalManager
+    let manager: WorkspaceWindowModel
     let project: Project?
     let session: TerminalSession?
     let sshHost: String?
@@ -967,7 +967,7 @@ struct GitPanel: View {
             ])
         case .remove:
             guard !location.isMain, !location.isLocked, !location.isPrunable else { return }
-            guard !TerminalManager.isWorktreeInUse(path: location.path, scope: target.scope) else {
+            guard !manager.application.isWorktreeInUse(path: location.path, scope: target.scope) else {
                 let warning = NSAlert()
                 warning.messageText = String(localized: "Worktree is in use", table: "Git")
                 warning.informativeText = String(
@@ -991,7 +991,7 @@ struct GitPanel: View {
                 guard response == .alertFirstButtonReturn, isCurrent() else { return }
                 performOperation(.moreMenu) {
                     model.removeWorktree(location, target: target, isCurrentTarget: {
-                        isCurrent() && !TerminalManager.isWorktreeInUse(
+                        isCurrent() && !manager.application.isWorktreeInUse(
                             path: location.path, scope: target.scope
                         )
                     })

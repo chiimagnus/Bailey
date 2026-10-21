@@ -357,6 +357,7 @@ nonisolated final class BaileySSHSocketServer: @unchecked Sendable {
 @MainActor
 final class BaileySSHService {
     static let shared = BaileySSHService()
+    weak var application: WorkspaceApplication?
 
     private var tokens: [String: UUID] = [:]
     private var listener: BaileySSHSocketServer?
@@ -398,10 +399,7 @@ final class BaileySSHService {
               request.pid > 1
         else { return refused }
 
-        let session = TerminalManager.activeManagers
-            .flatMap(\.projects)
-            .flatMap(\.sessions)
-            .first { $0.id == id }
+        let session = application?.session(id: id)
         guard let session else { return refused }
 
         do {

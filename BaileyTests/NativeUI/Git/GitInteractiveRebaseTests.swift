@@ -5,6 +5,8 @@ import XCTest
 
 @MainActor
 final class GitInteractiveRebaseTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func wait(_ condition: () async throws -> Bool) async throws {
         let deadline = Date().addingTimeInterval(30)
         while try await !condition() {
@@ -51,7 +53,7 @@ final class GitInteractiveRebaseTests: XCTestCase {
         try script.write(to: editorPath, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: editorPath.path)
         _ = try git(["config", "sequence.editor", RemoteCommands.quote(editorPath.path)])
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         let project = Project(fallbackName: "PTY Rebase", workspaceConfiguration: .standard)
         project.customDirectory = directory.path
@@ -167,7 +169,7 @@ final class GitInteractiveRebaseTests: XCTestCase {
                 let cleared = try await backend.run(argv: ["rm", "-f", "editor-ready"], cwd: root,
                                                     env: nil, stdin: nil, timeout: 25)
                 XCTAssertEqual(cleared.status, 0)
-                let manager = TerminalManager()
+                let manager = self.workspaceApplication.makeWindow()
                 defer { manager.windowClosed() }
                 let project = Project(fallbackName: "SSH PTY Rebase", workspaceConfiguration: .standard)
                 manager.projects = [project]

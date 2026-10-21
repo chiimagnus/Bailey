@@ -6,6 +6,8 @@ import XCTest
 
 @MainActor
 final class SessionStoreTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     func testIsolatedSnapshotsDoNotReadOrOverwritePreviousTestRuns() {
         XCTAssertTrue(BaileyInstanceMode.isIsolated)
         let oldSuite = UserDefaults(suiteName: AppIdentity.bundleIdentifier + ".isolated-ui-test")
@@ -31,7 +33,7 @@ final class SessionStoreTests: XCTestCase {
             TerminalHistoryStore.save(previousHistories)
         }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
             styleMask: [.titled], backing: .buffered, defer: false
@@ -144,7 +146,7 @@ final class SessionStoreTests: XCTestCase {
         let file = folder.appendingPathComponent("open-in-ssh.swift")
         try "disk bytes".write(to: file, atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         let ssh = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
         ssh.sshHost = "invalid-p4-autosave"
@@ -219,13 +221,13 @@ final class SessionStoreTests: XCTestCase {
         let page = directory.appendingPathComponent("page.html")
         try Data("<title>Fixture</title>".utf8).write(to: page)
 
-        let existingManagerCount = TerminalManager.activeManagers.count
+        let existingManagerCount = self.workspaceApplication.windowCount
         func savedProject(_ windows: [SessionSnapshot]) -> SessionSnapshot.ProjectSnapshot? {
             windows.flatMap(\.projects).first {
                 $0.customDirectory == directory.path && $0.customName == "Edited Project"
             }
         }
-        let first = TerminalManager()
+        let first = self.workspaceApplication.makeWindow()
         var firstClosed = false
         defer { if !firstClosed { first.windowClosed() } }
 
@@ -344,7 +346,7 @@ final class SessionStoreTests: XCTestCase {
             } == true
         }
 
-        let second = TerminalManager()
+        let second = self.workspaceApplication.makeWindow()
         var secondClosed = false
         defer { if !secondClosed { second.windowClosed() } }
         second.addLocalFolders([directory])
@@ -362,7 +364,7 @@ final class SessionStoreTests: XCTestCase {
         if existingManagerCount == 0 {
             // The last window retains its snapshot for re-opening.
             XCTAssertEqual(SessionStore.load().first?.projects.first?.customDirectory, directory.path)
-            let restored = TerminalManager()
+            let restored = self.workspaceApplication.makeWindow()
             for project in restored.projects { restored.close(project) }
             restored.windowClosed()
         } else {

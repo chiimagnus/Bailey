@@ -5,6 +5,8 @@ import XCTest
 
 @MainActor
 final class GitWorkspaceMenuTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func wait(_ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(12)
         while !condition() {
@@ -36,7 +38,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let result = GitCommandExecution.run(["init", "-q"], in: root.path)
         XCTAssertEqual(result.status, 0, result.stderr)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -83,7 +85,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("bailey-ignore-external-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -111,7 +113,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("bailey-ignore-create-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -153,7 +155,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         try "new".write(to: root.appendingPathComponent("zz-untracked.txt"),
                         atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let model = GitStatusModel()
@@ -234,7 +236,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         let indexBefore = git(["rev-parse", ":alpha.swift"])
         let worktreeBefore = git(["hash-object", "alpha.swift"])
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -473,7 +475,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         try "modified\n".write(to: firstRoot.appendingPathComponent("first.txt"),
                                atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([firstRoot, secondRoot])
         let firstIndex = try XCTUnwrap(manager.projects.firstIndex {
@@ -607,7 +609,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
             try "new \(name)\n".write(to: folder.appendingPathComponent(name),
                                         atomically: true, encoding: .utf8)
         }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -703,7 +705,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         git(["add", "note.txt"])
         git(["commit", "-qm", "history"])
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -789,7 +791,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         _ = git(["commit", "--allow-empty", "-qm", "base"])
         let untracked = root.appendingPathComponent("keep.txt")
         try Data("keep".utf8).write(to: untracked)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -856,7 +858,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
                                  atomically: true, encoding: .utf8)
         }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let model = GitStatusModel()

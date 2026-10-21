@@ -18,6 +18,8 @@ private struct DockFocusP2Mount: NSViewRepresentable {
 
 @MainActor
 final class DockFocusP2RegressionTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     func testClickingEmptyToolPaneReleasesHostingRootResponder() async throws {
         let window = NSWindow(
             contentRect: NSRect(x: -900, y: -900, width: 650, height: 360),
@@ -130,7 +132,7 @@ final class DockFocusP2RegressionTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("palette-focus.swift")
         try "let previous = true\n".write(to: url, atomically: true, encoding: .utf8)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         manager.openFile(url.path)

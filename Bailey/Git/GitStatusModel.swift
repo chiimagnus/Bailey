@@ -711,7 +711,7 @@ final class GitStatusModel {
 
     /// Only the focused project's latest directory resolution may select a
     /// repository. Its backend can complete after the user switches projects.
-    func syncSelectedProject(in manager: TerminalManager) {
+    func syncSelectedProject(in manager: WorkspaceWindowModel) {
         panelResolveGeneration &+= 1
         let generation = panelResolveGeneration
         guard let project = manager.selectedProject,

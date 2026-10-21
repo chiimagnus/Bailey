@@ -5,6 +5,8 @@ import XCTest
 
 @MainActor
 final class GitHistoryFileTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func repository() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-history-" + UUID().uuidString)
@@ -145,7 +147,7 @@ final class GitHistoryFileTests: XCTestCase {
         _ = try git(["commit", "-qam", "update"], in: root)
         let update = try git(["rev-parse", "HEAD"], in: root)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)

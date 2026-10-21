@@ -168,6 +168,8 @@ actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
 
 @MainActor
 final class GitStatusModelTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func wait(_ predicate: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(10)
         while !predicate() {
@@ -2192,25 +2194,25 @@ final class GitStatusModelTests: XCTestCase {
         try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: fixture) }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([tree])
-        XCTAssertTrue(TerminalManager.isWorktreeInUse(path: tree.path, scope: "local"))
-        XCTAssertTrue(TerminalManager.isWorktreeInUse(
+        XCTAssertTrue(self.workspaceApplication.isWorktreeInUse(path: tree.path, scope: "local"))
+        XCTAssertTrue(self.workspaceApplication.isWorktreeInUse(
             path: tree.resolvingSymlinksInPath().path, scope: "local"
         ), "Equivalent /var and /private/var paths must identify the same checkout")
-        XCTAssertFalse(TerminalManager.isWorktreeInUse(path: sibling.path, scope: "local"))
-        XCTAssertFalse(TerminalManager.isWorktreeInUse(path: tree.path, scope: "ssh:windows"))
+        XCTAssertFalse(self.workspaceApplication.isWorktreeInUse(path: sibling.path, scope: "local"))
+        XCTAssertFalse(self.workspaceApplication.isWorktreeInUse(path: tree.path, scope: "ssh:windows"))
 
         manager.selectedProject?.sshHost = "windows"
         manager.selectedProject?.customDirectory = "/d/Github/bailey-test-worktree"
-        XCTAssertTrue(TerminalManager.isWorktreeInUse(
+        XCTAssertTrue(self.workspaceApplication.isWorktreeInUse(
             path: "/d/Github/bailey-test-worktree", scope: "ssh:windows"
         ))
-        XCTAssertFalse(TerminalManager.isWorktreeInUse(
+        XCTAssertFalse(self.workspaceApplication.isWorktreeInUse(
             path: "/d/Github/bailey-test-worktree", scope: "local"
         ))
-        XCTAssertFalse(TerminalManager.isWorktreeInUse(
+        XCTAssertFalse(self.workspaceApplication.isWorktreeInUse(
             path: "/d/Github/bailey-test-worktree-copy", scope: "ssh:windows"
         ))
     }
@@ -2273,7 +2275,7 @@ final class GitStatusModelTests: XCTestCase {
         _ = try git(["add", "tracked.txt"], in: other)
         try Data("other latest content\n".utf8).write(to: other.appendingPathComponent("tracked.txt"))
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([main])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -2377,7 +2379,7 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertNil(entry.diffOriginalPath(staged: false),
                      "The working tree must compare the renamed destination with its own index")
         let otherRoot = try git(["rev-parse", "--show-toplevel"], in: other)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([main])
         let project = try XCTUnwrap(manager.selectedProject)

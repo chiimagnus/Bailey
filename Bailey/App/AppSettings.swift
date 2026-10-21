@@ -86,7 +86,7 @@ enum GitViewMode: String, CaseIterable, Identifiable {
 }
 
 /// User-configurable settings, persisted to `$HOME/.config/Bailey/config.toml`.
-/// Views observe this directly; `TerminalManager` re-themes live sessions on
+/// Views observe this directly; `WorkspaceWindowModel` re-themes live sessions on
 /// any change.
 @MainActor
 @Observable

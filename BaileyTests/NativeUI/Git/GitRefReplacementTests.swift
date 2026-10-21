@@ -4,6 +4,8 @@ import XCTest
 
 @MainActor
 final class GitRefReplacementTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func wait(_ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(10)
         while !condition() {
@@ -36,7 +38,7 @@ final class GitRefReplacementTests: XCTestCase {
         let existing = try git(["rev-parse", "HEAD"])
         _ = try git(["commit", "--allow-empty", "-qm", "external update"])
         let moved = try git(["rev-parse", "HEAD"])
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
