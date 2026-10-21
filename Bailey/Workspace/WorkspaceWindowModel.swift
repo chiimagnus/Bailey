@@ -378,7 +378,6 @@ final class WorkspaceWindowModel {
             fallbackName: "Project \(projectCounter)",
             workspaceConfiguration: AppSettings.shared.workspaceConfiguration
         )
-        bind(project)
         return project
     }
 
@@ -422,8 +421,6 @@ final class WorkspaceWindowModel {
     private func remove(_ project: Project) {
         guard let index = projects.firstIndex(where: { $0.id == project.id }) else { return }
         projects.remove(at: index)
-        project.onSnapshotChange = nil
-        project.onPresentationWindow = nil
         // A dismissed SwiftUI host may still cache this Project; its retired
         // editors must no longer be owned by the removed project's tab array.
         project.tabs.removeAll()
@@ -832,8 +829,6 @@ final class WorkspaceWindowModel {
         guard !application.isQuitting else { return }
         for project in projects {
             project.terminateAll()
-            project.onSnapshotChange = nil
-            project.onPresentationWindow = nil
         }
         projects.removeAll()
         selectedProjectID = nil
