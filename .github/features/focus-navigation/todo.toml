@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P4-T1"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
@@ -52,15 +52,15 @@ note = "Red：真实隔离 App Files 单击后旧编辑器仍为原生 firstResp
 [[tasks]]
 id = "P4-T1"
 title = "Git Changes 文件行和 Diff 焦点"
-status = "in_progress"
+status = "completed"
 plan = "plan-p4.md#p4-t1"
-commit = ""
-note = "已核实根因但尚未实施：GitEntryRow 点击 openDiff -> ToolPanelView -> TerminalManager.openDiff -> Project.openDiff/selectTab 默认激活编辑器，隔离 App 原生 AXTextArea 曾复现；需像 P3 只展示 Diff 不抢 Git 键盘焦点，并处理 Git 行游标、Stage 按钮与真实键盘事件。Red 缺少 activating 参数的模型测试与小范围探索性 Green 已完成，但同库另外执行流程持续修改 Files/FileTreePanel.swift 与 WorkspaceWindowIsolationTests.swift；为避免覆盖，已精准撤销本轮全部未完成 P4 生产代码和模型测试，待工作区不再并发修改后继续，未冒充 P4 完成。"
+commit = "474a46a"
+note = "Space Red->Green; native Git staged/worktree Diff bytes, keyboard, Stage/Unstage and HEAD/index verified; 593 XCTest pass overall with 8 skips before Space, targeted Space test green; real App click/down observed."
 
 [[tasks]]
 id = "P4-T2"
 title = "Git Graph 行焦点与内部输入焦点"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t2"
-commit = ""
-note = ""
+commit = "3de8241"
+note = "Red->Green：Git Graph 提交/目录/文件独立行游标与单击、方向键、Space/Return 原生事件；历史及 worktree Diff 预览保持 Git 焦点，TextField/菜单不被抢。RecentCommitsViewTests、GitWorkspaceMenuTests、GitHistoryFileTests、WorkspaceWindowIsolationTests 等受影响测试 100 项/0失败，真机隔离 GUI 截图，make build/codesign严格验签及正式整包安装成功；正式 App PID 96412 未重启。完整 make test 597 项/8 SSH 跳过/1项 PaneRetentionTests:1010 旧 NSTextView 释放时间偶发超时（同组 21项/1失败、两项隔离复验0失败、前置5项组合0失败），未确认属于 P4 回归，阶段审计 Gate 不冒称全部通过。"
