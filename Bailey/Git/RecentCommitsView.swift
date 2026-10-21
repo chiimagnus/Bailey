@@ -80,6 +80,7 @@ struct RecentCommitsView: View {
     let stashFilesByOID: [String: GitStatusModel.StashFilesState]
     let repoRoot: String
     let selectionScope: String
+    let displayedDiff: DiffTab?
     let fileAction: (Commit, Commit.FileChange, HistoricalFileAction) -> Void
     let loadBinaryStatus: (Commit) -> Void
     let isBinaryFile: (Commit, Commit.FileChange) -> Bool
@@ -116,6 +117,7 @@ struct RecentCommitsView: View {
         stashFilesByOID: [String: GitStatusModel.StashFilesState] = [:],
         repoRoot: String,
         selectionScope: String = "local",
+        displayedDiff: DiffTab? = nil,
         fileAction: @escaping (Commit, Commit.FileChange, HistoricalFileAction) -> Void,
         loadBinaryStatus: @escaping (Commit) -> Void,
         isBinaryFile: @escaping (Commit, Commit.FileChange) -> Bool,
@@ -158,6 +160,7 @@ struct RecentCommitsView: View {
         self.stashFilesByOID = stashFilesByOID
         self.repoRoot = repoRoot
         self.selectionScope = selectionScope
+        self.displayedDiff = displayedDiff
         self.fileAction = fileAction
         self.loadBinaryStatus = loadBinaryStatus
         self.isBinaryFile = isBinaryFile
@@ -431,6 +434,23 @@ struct RecentCommitsView: View {
             && controlActiveState == .key
     }
 
+    private func isDisplayedHistoryFile(_ file: Commit.FileChange, in commit: Commit) -> Bool {
+        guard let diff = displayedDiff, diff.repoRoot == repoRoot,
+              diff.path == file.path else { return false }
+        let hash = file.fromStashUntracked
+            ? (commit.stash?.untrackedFilesHash ?? commit.hash) : commit.hash
+        if case .commit(let openedHash, _, _) = diff.source { return openedHash == hash }
+        return false
+    }
+
+    private func isDisplayedWorktreeFile(
+        _ entry: GitStatusModel.Entry, staged: Bool, in worktree: GitStatusModel.WorktreeChanges
+    ) -> Bool {
+        guard let diff = displayedDiff else { return false }
+        return diff.repoRoot == worktree.path && diff.path == entry.path
+            && diff.source == (staged ? .staged : .worktree)
+    }
+
     private func selectRow(_ id: String) {
         selectedRowID = id
         if isKeyboardActive {
@@ -534,7 +554,6 @@ struct RecentCommitsView: View {
     ) -> some View {
         TreeRowSurface(
             depth: 0, scale: fontScale, selected: expanded,
-            focused: isFocusedRow(commitRowID(commit)),
             focusRing: isFocusedRow(commitRowID(commit)),
             leadingInset: gutter, trailingInset: TreeRowStyle.contentInset,
             showsGuides: false,
@@ -1179,6 +1198,7 @@ struct RecentCommitsView: View {
         return TreeFileRow(
             row: row, scale: fontScale,
             directory: showDirectory ? entry.directory : nil,
+            selected: isDisplayedWorktreeFile(entry, staged: staged, in: worktree),
             focusRing: isFocusedRow(id), leadingInset: inset,
             accessibilityHint: staged
                 ? String(localized: "Open Staged Diff", table: "Git")
@@ -1283,6 +1303,7 @@ struct RecentCommitsView: View {
         TreeFileRow(
             row: row, scale: fontScale,
             directory: showDirectory ? file.directory : nil,
+            selected: isDisplayedHistoryFile(file, in: commit),
             focusRing: isFocusedRow(historicalFileRowID(commit, file: file)),
             leadingInset: inset,
             accessibilityHint: String(localized: "Opens changes", table: "Sidebar"),

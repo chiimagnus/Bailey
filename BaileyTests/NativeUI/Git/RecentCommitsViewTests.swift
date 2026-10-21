@@ -66,7 +66,7 @@ final class RecentCommitsViewTests: XCTestCase {
         _ commits: [GitStatusModel.RecentCommit], selection: GraphSelection,
         width: CGFloat = 260, height: CGFloat = 200, fontScale: CGFloat = 1,
         resizable: Bool = false, viewMode: GitViewMode = .list,
-        remotes: [String] = [],
+        remotes: [String] = [], displayedDiff: DiffTab? = nil,
         stashAction: @escaping (GitStatusModel.Stash, GitStatusModel.StashAction) -> Void = { _, _ in },
         openWorktreeDiff: @escaping (GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool) -> Void = { _, _, _ in },
         canActOnWorktrees: Bool = false,
@@ -83,7 +83,8 @@ final class RecentCommitsViewTests: XCTestCase {
         window.contentView = NSHostingView(rootView: RecentCommitsView(
             commits: commits,
             remotes: remotes,
-            repoRoot: "/fixture", fileAction: { _, _, _ in },
+            repoRoot: "/fixture", displayedDiff: displayedDiff,
+            fileAction: { _, _, _ in },
             loadBinaryStatus: { _ in }, isBinaryFile: { _, _ in false },
             expandedCommitIDs: Binding(get: { selection.expanded }, set: { selection.expanded = $0 }),
             collapsedFolders: Binding(get: { selection.folders }, set: { selection.folders = $0 }),
@@ -105,6 +106,79 @@ final class RecentCommitsViewTests: XCTestCase {
         window.orderFront(nil)
         settle()
         return window
+    }
+
+    func testDisplayedHistoricalDiffHasGreySelectionIndependentOfGraphFocus() throws {
+        let hash = String(repeating: "a", count: 40)
+        let file = GitStatusModel.RecentCommit.FileChange(
+            status: "M", path: "Sources/alpha.swift", originalPath: nil
+        )
+        let commit = GitStatusModel.RecentCommit(
+            hash: hash, shortHash: "aaaaaaa", subject: "Change file",
+            author: "Tester", date: .now, parentHashes: [], references: [], files: [file]
+        )
+        let displayed = DiffTab(
+            repoRoot: "/fixture", path: file.path,
+            source: .commit(hash: hash, parent: nil, status: "M"),
+            untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
+            workspaceIdentity: nil
+        )
+        func render(_ activeDiff: DiffTab?, appearance: NSAppearance.Name) throws -> NSBitmapImageRep {
+            let selection = GraphSelection()
+            selection.expanded.insert(commit.id)
+            let window = hostHistory([commit], selection: selection,
+                                     width: 420, height: 120, displayedDiff: activeDiff)
+            window.appearance = NSAppearance(named: appearance)
+            defer { window.close() }
+            settle()
+            let host = try XCTUnwrap(window.contentView)
+            let image = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: image)
+            return image
+        }
+        func difference(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            abs(a.redComponent - b.redComponent)
+                + abs(a.greenComponent - b.greenComponent)
+                + abs(a.blueComponent - b.blueComponent)
+        }
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let plain = try render(nil, appearance: appearance)
+            let selected = try render(displayed, appearance: appearance)
+            let x = plain.pixelsWide * 4 / 5
+            let rowY = Int(CGFloat(plain.pixelsHigh) * (38 + 11) / 120)
+            let ys = [rowY, plain.pixelsHigh - rowY - 1]
+            let changes = ys.compactMap { y -> CGFloat? in
+                guard let p = plain.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                      let s = selected.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return nil }
+                return difference(p, s)
+            }
+            XCTAssertGreaterThan(changes.max() ?? 0, 0.045,
+                "A historical file being displayed needs a grey fill independent of keyboard focus")
+        }
+    }
+
+    func testGraphReferenceBadgeTakesKeyboardFocusFromAnotherTree() throws {
+        let selection = GraphSelection()
+        let commit = GitStatusModel.RecentCommit(
+            hash: String(repeating: "a", count: 40), shortHash: "aaaaaaa",
+            subject: "Reference focus", author: "Tester", date: .now,
+            parentHashes: [], references: [.init(kind: .localBranch, name: "topic")], files: []
+        )
+        let height: CGFloat = 200
+        let window = hostHistory([commit], selection: selection, width: 420, height: height)
+        defer { window.close() }
+        func keyboard(in view: NSView) -> TreeKeyboardView? {
+            if let owner = view as? TreeKeyboardView { return owner }
+            return view.subviews.lazy.compactMap { keyboard(in: $0) }.first
+        }
+        let receiver = try XCTUnwrap(keyboard(in: try XCTUnwrap(window.contentView)))
+        let old = TreeKeyboardView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+        window.contentView?.addSubview(old)
+        XCTAssertTrue(window.makeFirstResponder(old))
+        click(NSPoint(x: 45, y: height - 19), in: window)
+        XCTAssertTrue(selection.expanded.contains(commit.id), "A reference badge must expand the commit")
+        XCTAssertTrue(window.firstResponder === receiver,
+                      "Clicking a graph reference must hand keyboard focus to Git Graph")
     }
 
     func testGraphClickRecordsFocusIntentBeforeMovingNativeResponder() throws {

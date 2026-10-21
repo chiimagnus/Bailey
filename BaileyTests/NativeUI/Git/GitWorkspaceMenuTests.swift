@@ -336,7 +336,12 @@ final class GitWorkspaceMenuTests: XCTestCase {
             ))
             window.sendEvent(event)
         }
-        try press(125, characters: "\u{F701}") // Down to same path's unstaged side
+        try press(125, characters: "\u{F701}") // Down moves focus, not the displayed Diff.
+        guard case .diff(let displayedBeforeSpace)? = project.selectedTab?.content else {
+            return XCTFail("Keyboard navigation must keep the displayed DiffTab")
+        }
+        XCTAssertTrue(displayedBeforeSpace === stagedDiff,
+                      "The grey preview selection must not follow the blue keyboard cursor")
         try press(49, characters: " ")         // Space previews like a row click
         try await wait { project.tabs.count == 2 }
         guard case .diff(let worktreeDiff)? = project.selectedTab?.content else {

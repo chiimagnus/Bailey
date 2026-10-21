@@ -104,6 +104,18 @@ struct GitPanel: View {
         return model.matchesPanelTarget(context.identity)
     }
 
+    private var displayedDiff: DiffTab? {
+        guard let project, case .diff(let diff)? = project.selectedTab?.content,
+              diff.workspaceIdentity == project.workspaceIdentity else { return nil }
+        return diff
+    }
+
+    private func isDisplayedChange(_ entry: GitStatusModel.Entry, kind: GitEntryRow.Kind) -> Bool {
+        guard let diff = displayedDiff else { return false }
+        return diff.repoRoot == model.repoRoot && diff.path == entry.path
+            && diff.source == (kind == .staged ? .staged : .worktree)
+    }
+
     var body: some View {
         let _ = themeChanges.revision
         VStack(spacing: 0) {
@@ -1769,6 +1781,7 @@ struct GitPanel: View {
                             stashFilesByOID: model.stashFilesByOID,
                             repoRoot: model.repoRoot,
                             selectionScope: model.currentScope,
+                            displayedDiff: displayedDiff,
                             fileAction: { commit, file, action in
                                 handleHistoricalFile(commit, file: file, action: action)
                             },
@@ -2144,6 +2157,7 @@ struct GitPanel: View {
             displayRow: presentation,
             kind: kind,
             showDirectory: showDirectory,
+            selected: isDisplayedChange(entry, kind: kind),
             focusRing: selectedChange == key && keyboardFocused && isGitActive
                 && controlActiveState == .key,
             isRemote: remoteName != nil,
@@ -2635,6 +2649,7 @@ private struct GitEntryRow: View {
     let displayRow: TreeDisplayModel.Row
     let kind: Kind
     let showDirectory: Bool
+    let selected: Bool
     let focusRing: Bool
     /// Whether this repository is on another machine, where discarding an
     /// untracked or copied file deletes it rather than moving it to the Trash.
@@ -2661,7 +2676,7 @@ private struct GitEntryRow: View {
             row: displayRow,
             scale: fontScale, iconPath: absolutePath,
             directory: showDirectory ? entry.directory : nil,
-            focusRing: focusRing,
+            selected: selected, focusRing: focusRing,
             accessibilityHint: kind == .merge
                 ? String(localized: "Opens conflict changes", table: "Sidebar")
                 : String(localized: "Opens changes", table: "Sidebar"),

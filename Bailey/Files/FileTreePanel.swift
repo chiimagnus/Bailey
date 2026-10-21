@@ -282,13 +282,12 @@ private struct FileTreeRow: View {
     var body: some View {
         let _ = themeChanges.revision
         if item.isDraft {
-            // The transient input keeps the same focused fill but has no hover/menu.
-            TreeRowSurface(
-                depth: item.depth, scale: fontScale,
-                focused: true, hoverEnabled: false
-            ) { _, layout in
+            // Draft editing keeps its existing subtle fill independently of keyboard focus.
+            TreeRowSurface(depth: item.depth, scale: fontScale, hoverEnabled: false) { _, layout in
                 draftRow
                     .modifier(layout)
+                    .background(RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.primary.opacity(0.05)))
             }
         } else if isRenaming {
             TreeRowSurface(

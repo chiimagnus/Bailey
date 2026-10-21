@@ -110,7 +110,6 @@ struct TreeRowSurface<Content: View>: View {
     let depth: Int
     let scale: CGFloat
     var selected = false
-    var focused = false
     var focusRing = false
     var hoverEnabled = true
     var leadingInset = TreeRowStyle.contentInset
@@ -126,7 +125,6 @@ struct TreeRowSurface<Content: View>: View {
         depth: Int,
         scale: CGFloat,
         selected: Bool = false,
-        focused: Bool = false,
         focusRing: Bool = false,
         hoverEnabled: Bool = true,
         leadingInset: CGFloat = TreeRowStyle.contentInset,
@@ -139,7 +137,6 @@ struct TreeRowSurface<Content: View>: View {
         self.depth = depth
         self.scale = scale
         self.selected = selected
-        self.focused = focused
         self.focusRing = focusRing
         self.hoverEnabled = hoverEnabled
         self.leadingInset = leadingInset
@@ -160,9 +157,8 @@ struct TreeRowSurface<Content: View>: View {
             .contentShape(RoundedRectangle(cornerRadius: 4))
             .background(
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(selected
-                        ? Color.primary.opacity(0.09)
-                        : (isHovering || focused ? Color.primary.opacity(0.05) : .clear))
+                    .fill(selected ? Color.primary.opacity(0.09)
+                                   : (isHovering ? Color.primary.opacity(0.05) : .clear))
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 4)
@@ -290,7 +286,7 @@ struct TreeFolderRow<Accessory: View>: View {
     }
 
     var body: some View {
-        TreeRowSurface(depth: row.depth, scale: scale, focused: focused || focusRing == true,
+        TreeRowSurface(depth: row.depth, scale: scale,
                        focusRing: focusRing == true, leadingInset: leadingInset) { hovering, layout in
             HStack(spacing: 0) {
                 focusableRow(TreeRowLabel(row: row, iconPath: row.path, scale: scale)
@@ -344,8 +340,7 @@ struct TreeFileRow<Accessory: View>: View {
 
     var body: some View {
         TreeRowSurface(depth: row.depth, scale: scale, selected: selected,
-                       focused: focused || focusRing == true, focusRing: focusRing == true,
-                       leadingInset: leadingInset) { hovering, layout in
+                       focusRing: focusRing == true, leadingInset: leadingInset) { hovering, layout in
             HStack(spacing: 0) {
                 focusableRow(TreeRowLabel(row: row, iconPath: iconPath ?? row.path, scale: scale,
                                          directory: directory)
