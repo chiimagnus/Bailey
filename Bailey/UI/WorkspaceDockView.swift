@@ -769,14 +769,14 @@ final class DockGroupFocusView: NSView {
     private func focusIfNeeded() {
         guard canFocus?() == true, let window,
               !containsResponder(window.firstResponder) else { return }
-        // SwiftUI rows use the root hosting view as the native first responder.
-        // Moving focus off it would discard their keyboard selection.
-        if window.firstResponder === window.contentView { return }
         window.makeFirstResponder(self)
     }
 
     func containsResponder(_ responder: NSResponder?) -> Bool {
         guard var view = responder as? NSView, view.window === window else { return false }
+        // The window's hosting root spans every Dock group, so its midpoint
+        // cannot establish ownership of a particular group.
+        if view === window?.contentView { return false }
         if let editor = view as? NSTextView, editor.isFieldEditor,
            let control = editor.delegate as? NSView { view = control }
         var ancestor: NSView? = view
