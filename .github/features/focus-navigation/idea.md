@@ -16,7 +16,7 @@
 - **Files 的真实错误链**：`FileTreePanel.FileTreeRow.semanticRow` → `ToolPanelView.openFile` → `TerminalManager.openFile` → `Project.openFile` → `Project.selectTab` → `DockWorkspaceModel.select`。无论新建还是复用文件标签，都会**同时切换显示内容与活动组**。Git 的 `Project.openDiff/openHistoricalDiff` 也一样；在面板浏览文件时不应总把键盘移入编辑器。
 - **Files 的行状态缺失**：`FileTreeModel` 没有独立当前行游标，`ToolPanelView.openFilePath` 提供的只是最近工作 FileTab 的路径；不能由此推断键盘选中的文件，尤其不能混淆本机/SSH 同名路径。
 - **Git 的状态混同**：`GitPanel.GitEntryRow` 走无条件激活 Diff 的回调，当前 `GitPanel` 尚无独立的当前文件行游标；`RecentCommitsView.expandedCommitIDs` 是展开集合，不是焦点游标。Git Changes 文件可在 staged/unstaged/merge 中同路径重复；Git Graph 同路径可出现在不同 commit/stash/worktree，身份不能仅用路径或数组位置。
-- **树行视觉不充分**：`TreeRowSurface.focused` 当前与 hover 都是浅背景。Files 行 `@FocusState`、Git 提交/过滤 `TextField`、Projects 重命名、Command Palette 搜索字段分别拥有真实输入焦点；一个 Dock 活动组里不等于所有行同时获得焦点。
+- **树行视觉原有缺陷**：旧 `TreeRowSurface.focused` 曾与 Hover 共用灰底；现由 `selected`、`focusRing`、Hover 分别控制灰底、描边、临时悬停。Files 行 `@FocusState`、Git 提交/过滤 `TextField`、Projects 重命名、Command Palette 搜索字段分别拥有真实输入焦点；一个 Dock 活动组里不等于所有行同时获得焦点。
 
 ## 必须满足的交互
 

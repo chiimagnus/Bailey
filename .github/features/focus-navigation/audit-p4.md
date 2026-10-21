@@ -38,6 +38,13 @@
 - **其它环境缺口：** 无 macOS 15.6 真机、实体触控板与完整 VoiceOver／所有物理显示组合。影响是最低系统和真实辅助输入效果仍有边界；已用当前 macOS 的原生 `NSWindow` 事件、同尺寸明暗和缩放 GUI、共享行命中与无障碍用例作替代，但不是这些缺位环境的实测结果。
 - **文档与状态：** `docs/features/git.md`、`docs/features/dock.md`、`docs/ui.md` 已写入 Space／Return／展开与选择分离、单层焦点边框和 Diff 预览语义。`todo.toml` 的 P4 两项对应提交已回填；`todo validate`、`git diff --check` 通过。Feature 计划及审计保留本地，不混入两个功能提交。
 
+## 后续视觉缺陷修复（2026-10-21）
+
+- **根因：** 共享 `TreeRowSurface` 曾由 `focused` 同时绘制浅灰底与主题色边框，Git 的键盘游标因此带动灰底；之前 `focused && !focusRing` 只遮住有描边的情形。浅／深模式下，无描边 Focus 的 Red 像素差分别为 `0.103`／`0.153`。
+- **修复 `fe2fa76`：** 删除共享行的 `focused` 输入和底色分支：`selected` 只绘制当前文件／Diff 或展开提交的灰底，`focusRing` 只绘制键盘边框，Hover 仍只由 `.onHover` 绘制；保留 Files 新建草稿的原浅灰底及既有 AX 导航语义。Git Changes 与 Graph 使用实际展示的 Diff 来源计算 `selected`，而非键盘行身份。
+- **验证：** 浅／深像素、Git Changes 同路径暂存／未暂存 Diff、Git Graph 历史 Diff 及原生键盘回归 Red→Green；受影响 155 项／0 失败，`make test` **600 项、8 条条件跳过、0 失败、退出码 0**（`/tmp/bailey-focus-separation-full-final.log`），本轮 `PaneRetentionTests` 21 项亦全部通过；Debug 签名、整包安装 `/Applications/Bailey.app` 与新包 dylib SHA-256 一致。原正式进程 PID `97289` 未重启，当前 `crh` 未推送。
+- **边界：** 离屏 XCTest 的合成鼠标进入事件无法驱动 SwiftUI `.onHover`，不将其冒充真实 Hover 验收；共享桌面的前台为 Helium，未抢占其指针与键盘。实际 Hover 指针行为、macOS 15.6 与 8 条 SSH 条件跳过仍待对应环境补验。旧编辑器释放超时的历史复现原因未被本次视觉修复证明消失，因此原 No-Go 门禁暂不改判。
+
 ## Gate（是否允许进入下一阶段）
 
 - 结论：**`No-Go`（仅指完整阶段回归最终验收；两项 P4 功能已实现、独立提交及安装）**。
