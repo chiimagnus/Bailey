@@ -1043,7 +1043,7 @@ final class TerminalManager {
     /// the page's keyboard focus.
     private func isStableWorkspaceResponder(_ responder: NSResponder) -> Bool {
         if responder is any TerminalBackendSurface || responder is FocusReportingTextView
-            || responder is DiffTextView {
+            || responder is DiffTextView || responder is TreeKeyboardView {
             return true
         }
         var view = responder as? NSView
@@ -1056,8 +1056,21 @@ final class TerminalManager {
 
     func ownsActiveResponder(_ responder: NSResponder) -> Bool {
         guard let window, let view = responder as? NSView, view.window === window,
-              !view.isHiddenOrHasHiddenAncestor,
-              let content = selectedProject?.focusedContent else { return false }
+              !view.isHiddenOrHasHiddenAncestor else { return false }
+        if view is TreeKeyboardView,
+           let activeGroup = selectedProject?.dock.activeGroup,
+           activeGroup.selected == .files || activeGroup.selected == .git,
+           let windowContent = window.contentView {
+            func belongsToActiveGroup(_ current: NSView) -> Bool {
+                if let group = current as? DockGroupFocusView,
+                   group.groupID == activeGroup.id {
+                    return group.containsResponder(responder)
+                }
+                return current.subviews.contains(where: belongsToActiveGroup)
+            }
+            return belongsToActiveGroup(windowContent)
+        }
+        guard let content = selectedProject?.focusedContent else { return false }
         let root: NSView?
         switch content {
         case .session(let session):

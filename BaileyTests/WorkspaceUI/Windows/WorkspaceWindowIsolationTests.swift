@@ -53,6 +53,146 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         XCTAssertEqual(opened, 0, "Target readiness must not open a FileTab")
     }
 
+    func testCancelingCommandPaletteRestoresFilesRowKeyboardNavigation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["alpha.swift", "beta.swift"] {
+            try "unchanged\n".write(
+                to: root.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        project.dock.select(.files)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 1200, height: 700),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return manager.attachedWindow === window
+                && project.fileTree.items.count == 2
+                && window.firstResponder is TreeKeyboardView
+        }
+        let first = try XCTUnwrap(project.fileTree.selectedPath)
+        XCTAssertEqual((first as NSString).lastPathComponent, "alpha.swift")
+        manager.toggleCommandPalette()
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return manager.isCommandPaletteVisible
+                && (window.firstResponder as? NSTextView)?.isFieldEditor == true
+        }
+        manager.dismissCommandPalette()
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return !manager.isCommandPaletteVisible
+                && window.firstResponder is TreeKeyboardView
+        }
+        let key = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            characters: "\u{F701}", charactersIgnoringModifiers: "\u{F701}",
+            isARepeat: false, keyCode: 125
+        ))
+        window.sendEvent(key)
+        try await wait {
+            project.fileTree.selectedPath == root.appendingPathComponent("beta.swift").path
+        }
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+        XCTAssertEqual(project.tabs.count, 0)
+
+        // Executing a palette action must not later restore the displaced Files row.
+        manager.openFile(root.appendingPathComponent("beta.swift").path)
+        let workTab = try XCTUnwrap(project.selectedTab)
+        project.dock.select(.files)
+        try await wait { window.firstResponder is TreeKeyboardView }
+        let displaced = window.firstResponder
+        manager.toggleCommandPalette()
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return manager.isCommandPaletteVisible
+                && (window.firstResponder as? NSTextView)?.isFieldEditor == true
+        }
+        manager.dismissCommandPalette(restoringFocus: false)
+        project.selectTab(workTab.id)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return !manager.isCommandPaletteVisible
+                && project.dock.activeGroup?.selected == .tab(workTab.id)
+                && window.firstResponder is FocusReportingTextView
+        }
+        XCTAssertFalse(window.firstResponder === displaced)
+    }
+
+    func testCancelingCommandPaletteRestoresGitTreeKeyboardNavigation() async throws {
+        for dirty in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            func git(_ args: [String]) throws {
+                let result = GitCommandExecution.run(args, in: root.path)
+                XCTAssertEqual(result.status, 0, result.stderr)
+            }
+            try git(["init", "-q", "-b", "main"])
+            try git(["config", "user.name", "Palette Focus Test"])
+            try git(["config", "user.email", "palette@invalid"])
+            try git(["config", "commit.gpgsign", "false"])
+            try "committed\n".write(to: root.appendingPathComponent("file.txt"),
+                                      atomically: true, encoding: .utf8)
+            try git(["add", "file.txt"])
+            try git(["commit", "-qm", "history"])
+            if dirty {
+                try "modified\n".write(to: root.appendingPathComponent("file.txt"),
+                                         atomically: true, encoding: .utf8)
+            }
+
+            let manager = TerminalManager()
+            defer { manager.windowClosed() }
+            manager.addLocalFolders([root])
+            let project = try XCTUnwrap(manager.selectedProject)
+            project.dock.select(.git)
+            let window = NSWindow(
+                contentRect: NSRect(x: -1000, y: -1000, width: 1200, height: 700),
+                styleMask: [.titled, .resizable], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let host = NSHostingView(rootView: ContentView(manager: manager))
+            window.contentView = host
+            NSApp.activate()
+            window.makeKeyAndOrderFront(nil)
+            try await wait {
+                host.layoutSubtreeIfNeeded()
+                return manager.attachedWindow === window
+                    && window.firstResponder is TreeKeyboardView
+            }
+            let previous = try XCTUnwrap(window.firstResponder as? TreeKeyboardView)
+            manager.toggleCommandPalette()
+            try await wait {
+                host.layoutSubtreeIfNeeded()
+                return manager.isCommandPaletteVisible
+                    && (window.firstResponder as? NSTextView)?.isFieldEditor == true
+            }
+            manager.dismissCommandPalette()
+            try await wait {
+                host.layoutSubtreeIfNeeded()
+                return !manager.isCommandPaletteVisible && window.firstResponder === previous
+            }
+            XCTAssertEqual(project.dock.activeGroup?.selected, .git)
+            XCTAssertEqual(project.tabs.count, 0)
+        }
+    }
+
     func testFilesActivationBeforeDirectoryListingFocusesFirstVisibleRowWhenLoaded() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
