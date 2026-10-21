@@ -6,7 +6,7 @@
 
 **路径：** 从现有窗口策略和原生适配中收拢重复决策，一次接通受影响内容和工具。复用现有 ID、请求序号、取消和局部状态；不预设必须新增 FocusManager 类型。需要独立承载已存在的焦点状态时最多提取一个具体窗口协作者，不为单一实现加协议／工厂／多层 registry。
 
-**验收：** 窗口策略不识别 TreeKeyboardView、TextKit、WebKit 私有控件；恢复和真实输入保持基线；组件不再重复窗口级规则，必要原生检查不丢失。
+**验收：** 窗口策略不识别 TreeKeyboardView、TextKit、WebKit 私有控件；恢复和真实输入保持基线；组件不再重复窗口级规则，必要原生检查不丢失。必须满足 [UI/UX 零变化硬门槛](idea.md#uiux-零变化硬门槛) 与 [每任务放行条件](idea.md#每任务放行条件)，不是“新协调者收到请求”即可通过。
 
 **前提：** P1 Gate 通过，并明确获准实施。遵守 [焦点边界](../../../docs/architecture.md#焦点协调边界) 和 [验证全集](idea.md#验收条件与验证全集)。
 
@@ -33,6 +33,7 @@
 2. 单独验证底栏分支 popover：原生呈现窗口与工作区不同，不能简单用“不是工作区 keyWindow”拒绝其搜索，也不能在关闭异步回调中夺回新输入。反复开关、先关闭再重开、输入／清除、取消／选择分支、双窗口切换均检查最终行为。这里不增加新的代次；现有 presentationGeneration 不是冗余围栏。
 3. 确认组件的实际输入映射与挂载事件足以替代窗口类型搜索。共享 field editor 按其真正输入控件归属，WebKit 私有响应者由 Browser 适配解释；工具和空组无需虚构工作标签 ID。几何可用于点击／拖放、控件可见性和原生局部命中，不作为全局业务身份。
 4. 若在受控原生宿主仍无法证明映射或附着时序，先完成最小实验和结论再替换该链路；不先引入通用目标 registry、全窗 NSView 搜索 fallback 或多层 generation 来掩盖未知。
+5. 使用原始产品基线与 P1 已验收点双重对照。提前写出每个受影响入口的响应者、输入文本、选区／滚动、视觉状态及错误／恢复结果；覆盖 idea 中所有适用配置、输入极值与时序组合。缺少可靠原生基线的链路先补证，不能通过改写预期、更新截图或放宽容差让新实现成为自己的验收标准。
 
 ### 步骤 2：在一个闭环任务内接通并删除
 
@@ -60,7 +61,7 @@
 ### 验证与组合
 
 ```sh
-make test:DockWorkspaceTests,DockFocusP2RegressionTests,WorkspaceWindowIsolationTests,WorkspaceWindowCloseTests,WorkspaceContentIdentityTests,TreeRowHitTestingTests,RecentCommitsViewTests,GitWorkspaceMenuTests,GitHistoryFileTests,PaneRetentionTests,EditorTextInputTests,FileTabTests,DiffTabTests,SessionStoreTests,FileTreeTests,PanelContextTests,AppMenuIsolationTests DERIVED_DATA=build/DerivedData-workspace-refactor
+make test:DockWorkspaceTests,DockFocusP2RegressionTests,WorkspaceWindowIsolationTests,WorkspaceWindowCloseTests,WorkspaceContentIdentityTests,TreeRowHitTestingTests,RecentCommitsViewTests,GitWorkspaceMenuTests,GitHistoryFileTests,PaneRetentionTests,EditorTextInputTests,EditorNavigationTests,SyntaxHighlightingTests,FileTabTests,DiffTabTests,SessionStoreTests,FileTreeTests,PanelContextTests,AppMenuIsolationTests,AppSettingsTests DERIVED_DATA=build/DerivedData-workspace-refactor
 make build DERIVED_DATA=build/DerivedData-workspace-refactor
 ```
 
@@ -75,8 +76,11 @@ make build DERIVED_DATA=build/DerivedData-workspace-refactor
 - field editor／WebKit 内部输入 × Dock 点击／右键／跨组拖放释放 × 前后台；真实按键不得进入旧内容。
 - 多脏缓冲 × 保存失败／保存中新编辑 × 切换／关闭／退出；磁盘、保留正文与 Undo 正确。
 - 重复重挂载／关闭 × 当前容量边界、Unicode、字体／外观／窄宽；复用原生对象且监听／回调释放正确。
+- 新增维度按 idea 的 [环境、异常与极端条件](idea.md#环境异常与极端条件) 全部展开：包括默认／最小／最大字号、四种既有查找栏宿主宽度、显示缩放／窗口状态、快捷键重复与修饰键中断、IME、容量临界值和受控失败；不能只从上列组合挑几条。受控继续点用于构造可达乱序与关闭／取消，不以随机延时、反复重跑直到通过代替断言。
 
 保留原生基线对照；实际安全条件具备时分别验证真正 ⌘S／⌘F／⌘P／⌘W、Shell marker／PID、Files／Git 键盘、网页表单、拖放和弹窗最终输入。窗口 sendEvent 不是独立 App E2E。
+
+**P2-T1 零变化放行：** 在相同环境逐项对照原始基线和 P1 验收点，检查静态几何／可确定像素、交接录屏、实际按键与文本、组标签／树行／悬停视觉、原生菜单／弹窗、错误与恢复、基础 AX 和响应／资源。动效和中间状态也不能变化，不允许以最终响应者正确掩盖一次闪动、丢键、错投或滚动跳跃。按 idea 保留每条件及组合的实际证据；任一未解释差异、漏测的安全可执行条件、关键 E2E 缺证或旧策略未删除均不得通过本任务验收，不等最终审计再清理。
 
 Feature 正式验收运行完整 `make test DERIVED_DATA=build/DerivedData-workspace-refactor`，核对实际发现的测试、失败／跳过、后置签名及完整退出码。生命周期／原生回调的优化配置用 `make build:release DERIVED_DATA=build/DerivedData-workspace-refactor` 和受影响原生用户路径复核；若更改跨 actor 回调或优化相关代码，按 testing.md 对相应类补 Release XCTest，隔离构建才传 `ENABLE_TESTABILITY=YES`，不把全套 Debug 再原样复制成全套 Release 门槛。正式 Release 恢复原配置。
 
@@ -90,4 +94,4 @@ Feature 正式验收运行完整 `make test DERIVED_DATA=build/DerivedData-works
 
 ## 阶段审计
 
-实施结束后由 executing-plans 进入 plan-task-auditor，再创建 audit-p2.md。独立核对原生内容／工具／popover、P1 应用回归、UI/UX 和每项删除证据；未核销的关键原生验收不能用 XCTest 全绿代替。本轮不预建实施审计。
+实施结束后由 executing-plans 进入 plan-task-auditor，再创建 audit-p2.md。独立核对原生内容／工具／popover、P1 应用回归和每项删除证据，并从原始产品基线做最终 UI/UX 对照，防止阶段累计漂移。按 idea 逐项核销环境、极值、异常、时序及其可执行组合；未解释差异、可执行场景漏测、关键原生／系统入口缺证均不给无保留 Gate，不能以全量 XCTest 绿色或截图更新代替。本轮不预建实施审计。
