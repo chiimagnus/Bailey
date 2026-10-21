@@ -1,12 +1,85 @@
 import AppKit
 import Foundation
 import Observation
+import SwiftUI
 import XCTest
 @testable import Bailey
+
+private struct WindowRootConstructionProbe: View {
+    let application: WorkspaceApplication
+    let revision: Int
+    let didRender: () -> Void
+
+    var body: some View {
+        WindowRootView(application: application)
+            .onChange(of: revision, initial: true) { didRender() }
+    }
+}
 
 @MainActor
 final class SessionStoreTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
+    func testRealWindowRootRetainsItsRegistrationAndEditorAcrossViewConstruction() async throws {
+        XCTAssertTrue(BaileyInstanceMode.isIsolated)
+        let previousWindows = SessionStore.load()
+        let previousHistories = TerminalHistoryStore.load()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("retained.swift")
+        let text = "let retained = true\n"
+        try text.write(to: file, atomically: true, encoding: .utf8)
+        defer {
+            SessionStore.save(previousWindows)
+            TerminalHistoryStore.save(previousHistories)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        SessionStore.save([.init(projects: [.init(
+            customName: "Restored", customDirectory: directory.path, sshHost: nil, pinnedFile: nil,
+            tabs: [.init(content: .file(path: file.path, editorState: nil), historyKey: nil,
+                         customName: nil, contextSessionIndex: nil, localFile: true)],
+            selectedTabIndex: 0,
+            dock: .group(.init(id: UUID(), items: [.tab(0)], selected: .tab(0)))
+        )], selectedProjectIndex: 0)])
+        let application = WorkspaceApplication(loadSavedState: true)
+        let firstRender = expectation(description: "Production root mounted")
+        let host = NSHostingView(rootView: WindowRootConstructionProbe(
+            application: application, revision: 0, didRender: { firstRender.fulfill() }
+        ))
+        let window = NSWindow(contentRect: .init(x: -1200, y: -1200, width: 900, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        await fulfillment(of: [firstRender], timeout: 5)
+        func editor(in view: NSView) -> NSTextView? {
+            if let editor = view as? NSTextView, editor.string == text { return editor }
+            return view.subviews.lazy.compactMap { editor(in: $0) }.first
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while editor(in: host) == nil, Date() < deadline {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let originalEditor = try XCTUnwrap(editor(in: host))
+        for revision in 1...4 {
+            let rendered = expectation(description: "Production root re-evaluated \(revision)")
+            host.rootView = WindowRootConstructionProbe(
+                application: application, revision: revision, didRender: { rendered.fulfill() }
+            )
+            host.layoutSubtreeIfNeeded()
+            await fulfillment(of: [rendered], timeout: 5)
+            XCTAssertEqual(application.windowCount, 1)
+            XCTAssertTrue(editor(in: host) === originalEditor)
+            application.saveForRelaunch()
+            XCTAssertEqual(SessionStore.load().count, 1)
+            XCTAssertEqual(SessionStore.load().first?.projects.first?.customName, "Restored")
+        }
+        window.close()
+        XCTAssertEqual(application.windowCount, 0)
+        XCTAssertEqual(SessionStore.load().first?.projects.first?.tabs.count, 1)
+    }
 
     func testSavingDuringPartialRestorePreservesUnclaimedWindowsAndHistory() async throws {
         XCTAssertTrue(BaileyInstanceMode.isIsolated)

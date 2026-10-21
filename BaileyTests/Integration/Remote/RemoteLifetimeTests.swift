@@ -161,10 +161,12 @@ final class RemoteLifetimeTests: XCTestCase {
 
         let service = BaileySSHService.shared
         let previousOwner = service.application
+        let previousNotificationOwner = TerminalNotificationService.shared.application
         defer {
             first.windowClosed()
             second.windowClosed()
             service.application = previousOwner
+            TerminalNotificationService.shared.application = previousNotificationOwner
         }
         let environment = service.terminalEnvironment(for: session.id)
         let socket = try XCTUnwrap(environment["BAILEY_SSH_SOCKET"])
@@ -181,12 +183,12 @@ final class RemoteLifetimeTests: XCTestCase {
         }
 
         // Even a genuine token must not find a session in another window owner.
-        service.application = firstOwner
+        firstOwner.connectServices()
         let wrongOwnerResponse = try await exchange(request)
         XCTAssertNil(wrongOwnerResponse.socket)
         XCTAssertNil(session.location.remoteConnection)
 
-        service.application = otherOwner
+        otherOwner.connectServices()
         let wrongToken = BaileySSHRequest(
             token: "unrecognized", terminalID: request.terminalID,
             user: request.user, host: request.host, port: request.port, pid: request.pid

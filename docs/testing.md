@@ -86,6 +86,8 @@ Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言
 
 测试断言应到达磁盘字节、Git index/HEAD、原生内容、窗口归属或实际焦点。只验证 mock 被调用、字段改变或事件送出，不足以守住最终结果。临时 Git 仓库若依赖固定分支名，应在 `git init -b` 时明确指定，不能依赖本机或 CI 的 `init.defaultBranch`。
 
+`SessionStoreTests` 还在真实 `NSHostingView` 中挂载生产 `WindowRootView`，反复构造同一位置的 View，核对登记数量、恢复内容和原生编辑器身份不变。此测试覆盖根视图装配，不代替 `WindowGroup` 的系统恢复与独立 App 验收。
+
 ## 隔离环境
 
 Xcode TestAction 向 Debug 宿主传入 `--isolated-ui-test`，不通过 XCTest 私有环境变量在产品入口加入另一套行为。

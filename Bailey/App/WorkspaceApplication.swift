@@ -31,6 +31,11 @@ final class WorkspaceApplication {
         pendingHistories = loadSavedState ? TerminalHistoryStore.load() : [:]
     }
 
+    func connectServices() {
+        BaileySSHService.shared.application = self
+        TerminalNotificationService.shared.application = self
+    }
+
     func makeWindow() -> WorkspaceWindowModel {
         let window = WorkspaceWindowModel(application: self)
         register(window)

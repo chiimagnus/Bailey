@@ -7,9 +7,8 @@ struct BaileyApp: App {
 
     init() {
         TerminalFont.registerBundledFonts()
-        TerminalNotificationService.shared.application = applicationDelegate.workspace
+        applicationDelegate.workspace.connectServices()
         TerminalNotificationService.shared.configure()
-        BaileySSHService.shared.application = applicationDelegate.workspace
         // Saved forwards are for other apps too (an RDP client, a browser),
         // so they open at launch rather than when Settings is first shown.
         if !BaileyInstanceMode.isIsolated { TunnelManager.shared.start() }
@@ -42,7 +41,7 @@ struct BaileyApp: App {
 /// Root of one terminal window. Each window owns its own manager, which
 /// claims the next unclaimed window snapshot; the first window to appear
 /// reopens windows for any snapshots left over.
-private struct WindowRootView: View {
+struct WindowRootView: View {
     let application: WorkspaceApplication
     @State private var manager: WorkspaceWindowModel
 
