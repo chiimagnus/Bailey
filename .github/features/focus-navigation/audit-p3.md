@@ -131,24 +131,24 @@
 - **P3-T2 / dc2f77a**：核对 FileTreeModel.selectedPath、rebuild、toggle、sync、TreeKeyboardHost/handleKey、共享行样式和 XCTest，追溯 c40ac5a 重入 Files 焦点与 e37fe88 删除多余 SwiftUI 焦点后备。实际生产已只用唯一行游标和原生键盘视图；旧 @FocusState/.focusable fallback 无有效生产调用者，不再保留。
 - **F-03 根因修复**：后端 rename 成功且身份有效时，连同 expanded 将 selectedPath 按原目录前缀迁移，再 rebuild。Red：/tmp/bailey-p3-audit-red-v2.log（1 case、3 断言失败）；Green：/tmp/bailey-p3-audit-green-v1.log（1 case 通过），核验文件内容及重命名目录下当前子项。
 - **F-04 焦点生命周期修复**：最后一个内联改名／新建输入退出后才触发已有 focusSelectedRow；焦点归属仍检查当前 Dock 组、目标、key window 和 fieldEditor。首轮 Red 尝试因 key window 不可用而跳过，不伪报 Red；最终原生 NSWindow 测试通过，核对 fieldEditor → TreeKeyboardView 和真实 Down 后游标移动。
-- **F-02 已核销**：Palette 已显示而搜索 fieldEditor 尚未就绪时，旧守卫允许 Files 抢占焦点。现在 Files 的焦点资格由 `manager.isCommandPaletteVisible` 统一约束，取消后同一个原生输入宿主恢复。前台 `NSWindow` 已实测搜索框、Files 行游标、真实方向键和零抢焦点请求（下表），不再以此前跳过记录阻塞 F-02。原生 Sheet 仍优先。
+- **F-02 Red→Green 已核销**：临时仅移除 Palette 焦点资格守卫，`testFilesCursorDoesNotActivateBehindPaletteBeforeSearchFieldFocus` 立即复现错误选中（1 test/1 failure），恢复原代码后同例 Green；`git diff --exit-code` 确认生产代码原样还原。前台 `NSWindow` 再独立实测搜索 fieldEditor、零抢焦点请求、关闭面板后 Files 原生键盘恢复及方向键；原生 Sheet 仍优先。
 
 ### 现行可验证证据
 
 | 项目 | 结果 |
 | --- | --- |
-| P3 专项 | 初次 /tmp/bailey-p3-audit-scoped.log：**123 项、0 失败、1 skipped**；新增焦点门槛后 /tmp/bailey-p3-focus-scoped-v3.log：**123 项、0 失败、5 skipped，命令退出 0**，因共享前台窗口被其它 AI 测试占用，跳过的主要是原生焦点用例；非 GUI 逻辑及共享树行结果仍通过。 |
-| Palette 前置时序／真实原生焦点 | /tmp/bailey-p3-palette-pending-green.log：真实 `ContentView` 的前置时序 1 passed；/tmp/bailey-p3-palette-foreground-verify.log：前台原生焦点关键路径 **1 passed/0 skipped**；/tmp/bailey-p3-foreground-matrix.log：**7 native tests passed/0 skipped/0 failures**，包括 Files 点击、方向键、同组退路、改名输入、命令面板与跨组恢复，完整 `make test` 选择运行退出 0；隔离 host 获焦后前台已恢复原用户应用。 |
+| P3 专项 | /tmp/bailey-p3-focus-scoped-v3.log：**123 项、0 失败、5 skipped、退出 0**。当时共享桌面焦点不可用；本轮又单独使原生前台 7 项全实际执行通过，弥补 P3 核心跳过条件；其余 P2/Git 的后台跳过不冒称已测。 |
+| Palette 前置时序／真实原生焦点 | `/tmp/bailey-p3-palette-red-proof.log` 旧守卫模拟 **Red 1 失败**；`/tmp/bailey-p3-palette-red-green-final.log` 恢复后 **Green 1 通过**；`/tmp/bailey-p3-foreground-matrix.log` **7 项原生前台 Green、0 跳过**（Files 点击、方向键、同组退路、内联输入、命令面板和跨组恢复）。独立进程前台验证结束，原用户应用恢复，正式 Bailey 未操作。 |
 | Debug / 严格签名 | 最后一次 /tmp/bailey-p3-focus-debug-final.log：`make build DERIVED_DATA=build/DerivedData-p3-audit` 退出 0，BUILD SUCCEEDED，`codesign --verify --deep --strict` 通过。 |
 | Release / 严格签名 | 本轮最新 /tmp/bailey-p3-focus-release-final.log：`make build:release DERIVED_DATA=build/DerivedData-p3-audit` 退出 0，BUILD SUCCEEDED，`codesign --verify --deep --strict` 通过。仅见第三方 Tree-sitter C/C++ 旧诊断和 App Intents 元数据提示，无 P3 Swift 新诊断。 |
 | 修复与文档提交 | `cdd8452` 修复改名游标与内联焦点，`c357435` 修复 Palette/Sheet 焦点资格并提交 audit-p3.md、plan-p3.md、todo.toml 与命令面板文档。两个提交只包含 P3 专属源码、测试、文档；P1/P2/P4 的工作内容均未混入。 |
 | 正式 App | 用户本轮明确跳过正式 App 替换；没有替换、启动或重启 `/Applications/Bailey.app`。隔离 XCTest/AppKit 不等于正式 App 已部署。 |
 | 全量首次 | /tmp/bailey-p3-audit-full.log：被 P2 并行新测试编译错误阻断。 |
-| 全量再试 | /tmp/bailey-p3-audit-full-v2.log：P2 DockFocus、P4 GitWorkspaceMenu、P1 PaneRetention 等失败，P1 原生窗口关闭用例长期不进展，仅终止本轮自身测试进程；全量没有成功结束。 |
+| 全量最终成功 | `/tmp/bailey-p3-full-audit-final.log`：`make test DERIVED_DATA=build/DerivedData-p3-audit` **618 tests、0 failures、14 skipped、完整命令退出 0**。8 项需专用 Windows SSH 主机，另 6 项需前台 key window（含 P3 核心 5 项，其 7 项核心组已在前台独立补验）；此前中途受其它阶段 WIP 干扰而失败／阻塞的旧日志不是本次结果。 |
 | 规范 | todo validate 通过；git diff --check 通过。 |
 
 ### 未验证条件及 Gate
 
 F-02 真实前台 GUI 回归已通过；仍缺 macOS 15.6 真机、实体触控板、完整 VoiceOver、语言／外观／显示器组合和获授权专用 Windows SSH 真实联机／断线重连／慢网络 E2E。当前 scope、异步和远端模拟测试不等于实际 SSH 网络验收。跨阶段全量 XCTest 的最新结果须与本段专项验证分别记录。
 
-**本轮 Gate：待最终全量回归确认。** P3-T1/T2 的当前真实调用链存在且 F-01～F-04 均为 `Resolved`；F-02 已有原生前台 Green。最末版全量测试仍在复测，具体退出码与环境缺口以其完成后的记录为准。源码修复和 P3 文档已按 `cdd8452`、`c357435`、`8cef0f2` 提交，未混入其它阶段。
+**本轮 Gate：Go（当前 macOS 27.2 上的 P3 功能验收）。** P3-T1/T2 的源码、Dock→FileTab 真实调用链、唯一原生游标、F-01～F-04 均已逐项核销；全量 618 tests／0 failed／退出 0，关键 P3 前台 GUI 7 tests／0 skipped。**不等于全部环境验收**：macOS 15.6、实体触控板／完整 VoiceOver 及专用授权 Windows SSH 仍属明确的环境缺口，不将其当作通过。正式 App 按用户要求未替换。源码和 P3 文档提交为 `cdd8452`、`c357435`、`8cef0f2`、`8b13fd3`；本次最新测试证据随本文件再次提交，不包含 P1/P2/P4。
