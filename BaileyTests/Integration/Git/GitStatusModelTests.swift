@@ -2195,7 +2195,7 @@ final class GitStatusModelTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         for projectScope in ["local", "ssh:alpha"] {
             for contentScope in ["local", "ssh:alpha", "ssh:beta"] {
-                for kind in ["file", "diff", "session"] {
+                for kind in ["file", "diff"] {
                     let application = WorkspaceApplication()
                     let window = application.makeWindow()
                     defer { window.windowClosed() }
@@ -2208,14 +2208,10 @@ final class GitStatusModelTests: XCTestCase {
                     case "file":
                         content = .file(FileTab(path: tree.appendingPathComponent("file.txt").path,
                             backend: LocalWorkspaceBackend.shared, workspaceIdentity: identity))
-                    case "diff":
+                    default:
                         content = .diff(DiffTab(repoRoot: tree.path, path: "file.txt", source: .worktree,
                             untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared,
                             workspaceIdentity: identity))
-                    default:
-                        let context = PanelContext(identity: .pinned(project: project.id,
-                            workspace: identity, directory: tree.path), backend: LocalWorkspaceBackend.shared)
-                        content = .session(TerminalSession(initialDirectory: tree.path, initialWorkspace: context))
                     }
                     project.tabs = [PaneTab(content: content)]
                     window.projects = [project]
@@ -2228,6 +2224,35 @@ final class GitStatusModelTests: XCTestCase {
                                    contentScope == "local")
                 }
             }
+        }
+    }
+
+    func testFixedSSHTerminalWorktreeProtectionKeepsItsProjectsScope() throws {
+        let application = WorkspaceApplication()
+        let window = application.makeWindow()
+        defer { window.windowClosed() }
+        let project = Project(fallbackName: "Pinned SSH", workspaceConfiguration: .standard)
+        project.sshHost = "fixture-alias"
+        project.customDirectory = "/fixture/original"
+        window.projects = [project]
+        let session = project.newSession(launchCommand: "exec /bin/sh -i")
+        session.workingDirectory = "/fixture/other-worktree/subdirectory"
+        XCTAssertFalse(session.acceptsLocalFileDrop)
+        XCTAssertNil(session.workspaceIdentity)
+        XCTAssertEqual(project.panelContext?.scope, "ssh:fixture-alias")
+        for connected in [false, true] {
+            if connected {
+                let connection = RemoteConnection(user: "fixture", host: "fixture.invalid", port: 2222,
+                    controlSocket: URL(fileURLWithPath: "/tmp/bailey-unused-\(UUID())"), sshPID: 0)
+                connection.workingDirectory = session.workingDirectory
+                connection.markConnected()
+                session.location = .remote(connection)
+                XCTAssertNotEqual(session.workspaceIdentity, project.panelContext?.scope)
+            }
+            XCTAssertTrue(application.isWorktreeInUse(path: "/fixture/other-worktree", scope: "ssh:fixture-alias"))
+            XCTAssertFalse(application.isWorktreeInUse(path: "/fixture/other-worktree", scope: "local"))
+            XCTAssertFalse(application.isWorktreeInUse(path: "/fixture/other-worktree", scope: "ssh:other"))
+            XCTAssertFalse(application.isWorktreeInUse(path: "/fixture/other-worktree-copy", scope: "ssh:fixture-alias"))
         }
     }
 
