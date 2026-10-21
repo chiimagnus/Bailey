@@ -50,7 +50,7 @@ Bailey 自有 SwiftUI 状态采用 **MVVM + Observation**。分层是职责，�
 
 **现状：** `WorkspaceApplication` 由 delegate 持有，负责窗口登记、Finder 队列、恢复认领、合并快照保存、通知与 SSH 会话定位及应用退出。`WorkspaceWindowModel` 保留单窗项目、选择、焦点与原生宿主。`Project`／`DockNode`／`PaneTab` 继续拥有项目布局、局部状态与长期原生内容；创建 SwiftUI View 的中间对象不会登记或提前认领窗口。
 
-**下一边界：** Project／Git 不应反向依赖整个窗口模型；已在 [P1 计划](../.github/features/workspace-focus-refactor/plan-p1.md#p1-t3) 中按调用链收窄参数。P2 的各组件焦点策略仍未迁移，不把本轮 P1 当成整个 Feature 已完成。
+**领域接入：** Project 的 Files 同步只接收调用者提供的当前目标许可，GitStatusModel 接收选中的 Project 和项目仍有效的检查；窗口在 `syncGitStatus` 接入点提供事实，异步请求仍由 Git 的代次和 `PanelContext.Identity` 校验。Files／Git 不再持有完整窗口模型，也不复制项目选择。P2 的各组件焦点策略仍未迁移，不把 P1 当成整个 Feature 已完成。
 
 ## 入口与数据流
 

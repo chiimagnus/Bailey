@@ -119,7 +119,7 @@ struct ContentView: View {
     }
 
     private func syncGit() {
-        git.syncSelectedProject(in: manager)
+        manager.syncGitStatus(git)
     }
 
     private var emptyState: some View {

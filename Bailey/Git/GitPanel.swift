@@ -2572,7 +2572,7 @@ struct GitPanel: View {
                      : String(localized: "Git Status Unavailable", table: "Sidebar"))
                     .panelFont(size: 10.5, weight: .medium)
                 Spacer(minLength: 4)
-                Button(String(localized: "Retry", table: "Sidebar")) { model.syncSelectedProject(in: manager) }
+                Button(String(localized: "Retry", table: "Sidebar")) { manager.syncGitStatus(model) }
                     .buttonStyle(.borderless)
                     .controlSize(.small)
                     .disabled(model.isBusy || model.isRefreshing)
@@ -2603,7 +2603,7 @@ struct GitPanel: View {
                     .lineLimit(5)
                     .textSelection(.enabled)
             }
-            Button(String(localized: "Retry", table: "Sidebar")) { model.syncSelectedProject(in: manager) }
+            Button(String(localized: "Retry", table: "Sidebar")) { manager.syncGitStatus(model) }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(model.isBusy || model.isResolvingInitialStatus)

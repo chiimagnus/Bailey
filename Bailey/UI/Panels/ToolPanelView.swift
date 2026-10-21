@@ -353,7 +353,9 @@ struct ToolPanelView: View {
 
     private func performSync() async {
         guard let project = manager.selectedProject,
-              let (source, target) = await project.syncFiles(in: manager),
+              let (source, target) = await project.syncFiles(isCurrent: {
+                  manager.selectedProject === project
+              }),
               manager.selectedProject === project else { return }
         if rootSource != source { rootSource = source }
         if filesTarget != target { filesTarget = target }

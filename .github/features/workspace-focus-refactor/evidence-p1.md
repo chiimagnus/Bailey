@@ -38,6 +38,15 @@
 - 仅通过源码单向装配与可执行 XCTest 验证；完整独立进程 Launch Services、语言重启、通知点击与未抢占系统键盘的真实 GUI E2E 仍属未执行，不能将此段写成零 UI/UX 变化的全环境证明。P1-T1 的六项原生焦点 Skip 未被这次重构消除。
 - 已知待核对边界：`isWorktreeInUse` 仍保留原算法，即先按 Project.panelContext.scope 筛项目；本机 FileTab 放在 SSH 项目时可能被提前过滤。按原计划先保持旧行为，若证实遗漏，另做明确的缺陷验证及修复，不在纯重构中偷偷改变。
 
-## P1-T3 追证
+## P1-T3 领域 API 收窄与异步目标判定
 
-实施后记录新 API 的所有调用方、异步身份失效、测试和文档完整校验。
+- Project 的 Files 同步改为 `syncFiles(isCurrent:)`：前置、异步根解析后、文件树同步后核对来自当前窗口的目标许可，继续以 `PanelContext.Identity` 判定机器、连接和路径，原有失败／缓存规则未变。
+- GitStatusModel 的 `syncSelectedProject(project:isCurrent:)` 不再持有或反向读取完整窗口；`WorkspaceWindowModel.syncGitStatus` 负责提供当前项目和弱捕获的窗口存活／目标校验。异步查询仍核对 `panelResolveGeneration` 与 `PanelContext.Identity`，旧任务无法将仓库写到新项目；两处 Git Retry 与全部生产、测试调用方已收窄。
+- `make build DERIVED_DATA=build/DerivedData-workspace-refactor` → `BUILD SUCCEEDED`，退出 0，Debug 严格验签通过。
+- `make test:PanelContextTests,GitStatusModelTests,GitCommitDialogTests,GitExternalRefreshTests,GitRefReplacementTests,GitRemoteBranchDialogTests,GitStashDialogTests,GitTagDialogTests,GitWorkspaceMenuTests,WorkspaceWindowIsolationTests,WorkspaceIdentityTests DERIVED_DATA=build/DerivedData-workspace-refactor` → 退出 0，**148 executed，6 skipped，0 failed**（5 项需独占前台原生焦点、1 项需授权真实 SSH）；不把跳过当通过。
+- 新增使用 XCTest expectation 的 `testGitSelectedTargetPredicateRejectsLateResultEvenWhenProjectStillExists`，明确在 `Task` 异步根解析之前撤销项目许可，验证完成时确实重新核对并拒绝旧 Git 结果，且不修改原项目身份。新增后单独运行 `make test:PanelContextTests DERIVED_DATA=build/DerivedData-workspace-refactor` → 退出 0，**12 executed，0 skipped，0 failed**；不用固定睡眠猜测异步任务是否完成。
+- 受影响功能文档已同步；未实现 P2 焦点统一或其它 Git/Files 刷新重构。正式 App 进程外 Finder／通知／真实 SSH／最低系统和物理输入的未测项仍在 P1-T1 的范围内，不能以这些低层绿色代替完整 GUI 验收。
+
+## 阶段最终验收与审计
+
+由 P1 任务全部完成后独立核对全量 `make test`、Debug／Release 验签、Git diff、文档导航、未测边界与阶段 Gate。

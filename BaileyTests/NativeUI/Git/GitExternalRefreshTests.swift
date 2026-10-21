@@ -33,7 +33,7 @@ final class GitExternalRefreshTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([directory])
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait { model.hasResolvedStatus && !model.isRefreshing && !model.isRepo }
 
         let window = NSWindow(
@@ -109,7 +109,7 @@ final class GitExternalRefreshTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait { model.hasResolvedStatus && !model.isRefreshing && model.isRepo }
         let oldHead = try XCTUnwrap(model.recentCommits.first?.hash)
         XCTAssertEqual(model.recentCommits.first?.parentHashes.count, 2)
@@ -228,7 +228,7 @@ final class GitExternalRefreshTests: XCTestCase {
         let secondHead = secondGit(["rev-parse", "HEAD"])
 
         manager.addLocalFolders([second])
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait {
             model.rootPath == second.path && model.hasResolvedStatus
                 && !model.isRefreshing && model.recentCommits.first?.hash == secondHead
@@ -424,7 +424,7 @@ final class GitExternalRefreshTests: XCTestCase {
             manager.projects = [project]
             manager.selectedProjectID = project.id
             let model = GitStatusModel()
-            model.syncSelectedProject(in: manager)
+            manager.syncGitStatus(model)
             do {
                 try await wait(seconds: 35) {
                     model.hasResolvedStatus && !model.isRefreshing && model.isRepo

@@ -49,7 +49,7 @@ final class GitRefReplacementTests: XCTestCase {
         window.orderFront(nil)
         defer { window.close() }
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         let panel = GitPanel(settings: AppSettings(configURL: root.appendingPathComponent("settings.toml")),
             model: model, manager: manager, project: project, session: nil, sshHost: nil,

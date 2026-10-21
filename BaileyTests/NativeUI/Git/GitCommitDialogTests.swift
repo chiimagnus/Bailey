@@ -89,7 +89,7 @@ final class GitCommitDialogTests: XCTestCase {
         anotherWindow.makeKeyAndOrderFront(nil)
         let model = GitStatusModel()
         let projectTarget = try XCTUnwrap(project.panelContext).identity
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait {
             model.hasResolvedStatus && !model.isRefreshing
                 && model.matchesPanelTarget(projectTarget)
@@ -113,14 +113,14 @@ final class GitCommitDialogTests: XCTestCase {
         panel.presentCommitDialog(commit, action: .checkout)
         try await wait { window.attachedSheet != nil }
         manager.selectedProjectID = other.id
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         let staleSheet = try XCTUnwrap(window.attachedSheet?.contentView)
         try XCTUnwrap(buttons(in: staleSheet).first { $0.title == String(localized: "Yes, Checkout", table: "Git") }).performClick(nil)
         try await wait { window.attachedSheet == nil }
         XCTAssertEqual(git(["rev-parse", "HEAD"]), second)
 
         manager.selectedProjectID = project.id
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait {
             !model.isRefreshing && model.matchesPanelTarget(projectTarget)
         }
@@ -190,13 +190,13 @@ final class GitCommitDialogTests: XCTestCase {
         let model = GitStatusModel()
         let firstIdentity = try XCTUnwrap(first.panelContext).identity
         let secondIdentity = try XCTUnwrap(second.panelContext).identity
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait { model.matchesPanelTarget(firstIdentity) && model.hasResolvedStatus && !model.isRefreshing }
         let old = try XCTUnwrap(model.recentCommits.last)
         let oldTarget = model.actionTarget()
         let originalHead = model.headOID
         manager.selectedProjectID = second.id
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         XCTAssertFalse(model.matchesPanelTarget(firstIdentity))
         XCTAssertFalse(model.isCurrent(oldTarget))
         model.actOnCommit(old, action: .checkout, target: model.actionTarget())
@@ -207,7 +207,7 @@ final class GitCommitDialogTests: XCTestCase {
         XCTAssertEqual(GitCommandExecution.run(["branch", "--show-current"], in: secondRoot.path)
             .stdout.trimmingCharacters(in: .whitespacesAndNewlines), "main")
         manager.selectedProjectID = first.id
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait { model.matchesPanelTarget(firstIdentity) && !model.isRefreshing }
         XCTAssertFalse(model.isCurrent(oldTarget), "Switching away and back must not revive an old confirmation")
     }

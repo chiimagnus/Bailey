@@ -257,18 +257,15 @@ final class Project: nonisolated Identifiable {
 
     /// Synchronize the project's Files tree; only the latest active workspace
     /// may publish its root, and a disconnected shell retains the last tree.
-    func syncFiles(in manager: WorkspaceWindowModel) async -> (PanelContext.RootSource, PanelContext.Identity)? {
-        guard manager.selectedProject === self,
-              let context = panelContext else { return nil }
+    func syncFiles(isCurrent: () -> Bool) async -> (PanelContext.RootSource, PanelContext.Identity)? {
+        guard isCurrent(), let context = panelContext else { return nil }
         if sshHost == nil, customDirectory == nil,
            selectedSession?.location.remoteConnection?.state == .disconnected { return nil }
         // An SSH probe failure is not evidence that cwd changed or became local.
         guard let (root, source) = try? await context.resolvedRoot() else { return nil }
-        guard manager.selectedProject === self,
-              matchesPanelTarget(context.identity) else { return nil }
+        guard isCurrent(), matchesPanelTarget(context.identity) else { return nil }
         await fileTree.sync(root: root, backend: context.backend, scope: context.scope)
-        guard manager.selectedProject === self,
-              matchesPanelTarget(context.identity) else { return nil }
+        guard isCurrent(), matchesPanelTarget(context.identity) else { return nil }
         return (source, context.identity)
     }
 

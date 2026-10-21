@@ -159,7 +159,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait {
             model.hasResolvedStatus && !model.isRefreshing && model.changedEntries.count == 3
         }
@@ -243,7 +243,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         project.dock.select(.git)
         let gitGroup = try XCTUnwrap(project.dock.group(containing: .git))
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         XCTAssertEqual(model.stagedEntries.map(\.path), ["alpha.swift"],
                        "Unexpected staged entries or status error: \(model.statusError ?? "none")")
@@ -488,7 +488,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         let firstProject = try XCTUnwrap(manager.selectedProject)
         firstProject.dock.select(.git)
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait {
             model.hasResolvedStatus && !model.isRefreshing
                 && model.changedEntries.map(\.path) == ["first.txt"]
@@ -615,7 +615,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         let project = try XCTUnwrap(manager.selectedProject)
         project.dock.select(.git)
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait {
             model.hasResolvedStatus && !model.isRefreshing && model.changedEntries.count == 2
         }
@@ -711,7 +711,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         let project = try XCTUnwrap(manager.selectedProject)
         project.dock.select(.git)
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait {
             model.hasResolvedStatus && model.canUseCurrentStatus
                 && model.graphCommits.count == 1 && model.totalChangeCount == 0
@@ -802,7 +802,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         window.orderFront(nil)
         defer { window.close() }
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         let panel = GitPanel(model: model, manager: manager, project: project, session: nil,
             sshHost: nil, openFile: { _ in }, openDiff: { _, _ in }, openCommitDiff: { _, _ in })
@@ -862,7 +862,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait { model.hasResolvedStatus && !model.isRefreshing && model.changedEntries.count == 3 }
         let width: CGFloat = 440
         let height: CGFloat = 640

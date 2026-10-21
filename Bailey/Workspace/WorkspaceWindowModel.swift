@@ -117,6 +117,15 @@ final class WorkspaceWindowModel {
         selectedProject?.selectedSession
     }
 
+    /// The window supplies the current selection check without passing its
+    /// entire model into the Git domain or retaining it across async work.
+    func syncGitStatus(_ model: GitStatusModel) {
+        model.syncSelectedProject(project: selectedProject) { [weak self] project in
+            guard let self, !self.isClosed else { return false }
+            return self.selectedProject === project
+        }
+    }
+
     // MARK: - Projects
 
     /// Only an explicitly selected folder creates or selects a local project.

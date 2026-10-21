@@ -70,7 +70,7 @@ final class GitStashDialogTests: XCTestCase {
         window.orderFront(nil)
         defer { window.close() }
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         let selected = model.stashes[1]
         let panel = GitPanel(model: model, manager: manager, project: project, session: nil, sshHost: nil,
