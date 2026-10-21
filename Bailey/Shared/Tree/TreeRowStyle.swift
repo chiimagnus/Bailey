@@ -271,35 +271,25 @@ struct TreeFolderRow<Accessory: View>: View {
     let row: TreeDisplayModel.Row
     let scale: CGFloat
     var leadingInset = TreeRowStyle.contentInset
-    var focusRing: Bool? = nil
+    var focusRing = false
     let toggle: () -> Void
     @ViewBuilder var accessory: (Bool) -> Accessory
-    @FocusState private var focused: Bool
-
-    @ViewBuilder
-    private func focusableRow<Content: View>(_ content: Content) -> some View {
-        if focusRing != nil {
-            content
-        } else {
-            content.focusable().focused($focused)
-        }
-    }
 
     var body: some View {
         TreeRowSurface(depth: row.depth, scale: scale,
-                       focusRing: focusRing == true, leadingInset: leadingInset) { hovering, layout in
+                       focusRing: focusRing, leadingInset: leadingInset) { hovering, layout in
             HStack(spacing: 0) {
-                focusableRow(TreeRowLabel(row: row, iconPath: row.path, scale: scale)
-                    .modifier(layout))
+                TreeRowLabel(row: row, iconPath: row.path, scale: scale)
+                    .modifier(layout)
                     .onTapGesture(perform: toggle)
                     .accessibilityAction(.default) { toggle() }
                     .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel)
-                .accessibilityAddTraits(focusRing == true ? .isSelected : [])
+                .accessibilityAddTraits(focusRing ? .isSelected : [])
                 .accessibilityValue(row.isExpanded
                     ? String(localized: "Expanded", table: "Sidebar")
                     : String(localized: "Collapsed", table: "Sidebar"))
-                accessory(hovering || (focusRing ?? focused))
+                accessory(hovering || focusRing)
             }
         }
     }
@@ -308,7 +298,7 @@ struct TreeFolderRow<Accessory: View>: View {
 extension TreeFolderRow where Accessory == EmptyView {
     init(row: TreeDisplayModel.Row, scale: CGFloat,
          leadingInset: CGFloat = TreeRowStyle.contentInset,
-         focusRing: Bool? = nil,
+         focusRing: Bool = false,
          toggle: @escaping () -> Void) {
         self.init(row: row, scale: scale, leadingInset: leadingInset,
                   focusRing: focusRing, toggle: toggle) { _ in EmptyView() }
@@ -321,38 +311,28 @@ struct TreeFileRow<Accessory: View>: View {
     var iconPath: String? = nil
     var directory: String? = nil
     var selected = false
-    var focusRing: Bool? = nil
+    var focusRing = false
     var leadingInset = TreeRowStyle.contentInset
     var accessibilityHint = ""
     let open: () -> Void
     var activate: (() -> Void)? = nil
     @ViewBuilder var accessory: (Bool) -> Accessory
-    @FocusState private var focused: Bool
-
-    @ViewBuilder
-    private func focusableRow<Content: View>(_ content: Content) -> some View {
-        if focusRing != nil {
-            content
-        } else {
-            content.focusable().focused($focused)
-        }
-    }
 
     var body: some View {
         TreeRowSurface(depth: row.depth, scale: scale, selected: selected,
-                       focusRing: focusRing == true, leadingInset: leadingInset) { hovering, layout in
+                       focusRing: focusRing, leadingInset: leadingInset) { hovering, layout in
             HStack(spacing: 0) {
-                focusableRow(TreeRowLabel(row: row, iconPath: iconPath ?? row.path, scale: scale,
-                                         directory: directory)
-                    .modifier(layout))
+                TreeRowLabel(row: row, iconPath: iconPath ?? row.path, scale: scale,
+                             directory: directory)
+                    .modifier(layout)
                     .onTapGesture(perform: open)
                     .simultaneousGesture(TapGesture(count: 2).onEnded { activate?() })
                     .accessibilityAction(.default) { open() }
                     .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel + ", " + row.path)
-                .accessibilityAddTraits(focusRing == true ? .isSelected : [])
+                .accessibilityAddTraits(focusRing ? .isSelected : [])
                 .accessibilityHint(accessibilityHint)
-                accessory(hovering || (focusRing ?? focused))
+                accessory(hovering || focusRing)
             }
         }
     }
