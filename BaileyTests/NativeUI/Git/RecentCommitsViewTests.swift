@@ -268,6 +268,58 @@ final class RecentCommitsViewTests: XCTestCase {
         XCTAssertEqual(opened.last?.0, first.hash, "Return must browse the historical file")
     }
 
+    func testGraphTreeKeyboardTraversesFoldersAndBothHistoricalFiles() throws {
+        let selection = GraphSelection()
+        let files = [
+            GitStatusModel.RecentCommit.FileChange(
+                status: "M", path: "nested/alpha.swift", originalPath: nil),
+            GitStatusModel.RecentCommit.FileChange(
+                status: "A", path: "nested/beta.swift", originalPath: nil),
+        ]
+        let commit = GitStatusModel.RecentCommit(
+            hash: String(repeating: "a", count: 40), shortHash: "aaaaaaa",
+            subject: "Nested history", author: "Tester", date: .now,
+            parentHashes: [], references: [], files: files
+        )
+        var opened: [String] = []
+        let height: CGFloat = 280
+        let window = hostHistory([commit], selection: selection,
+                                 width: 420, height: height, viewMode: .tree,
+                                 openDiff: { _, file in opened.append(file.path) })
+        defer { window.close() }
+        func keyboard(in view: NSView) -> TreeKeyboardView? {
+            if let view = view as? TreeKeyboardView { return view }
+            return view.subviews.lazy.compactMap { keyboard(in: $0) }.first
+        }
+        let receiver = try XCTUnwrap(keyboard(in: try XCTUnwrap(window.contentView)))
+        click(NSPoint(x: 150, y: height - 19), in: window)
+        XCTAssertTrue(selection.expanded.contains(commit.id))
+        XCTAssertTrue(window.firstResponder === receiver)
+        func press(_ keyCode: UInt16, characters: String) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                characters: characters, charactersIgnoringModifiers: characters,
+                isARepeat: false, keyCode: keyCode
+            ))
+            window.sendEvent(event)
+            settle()
+        }
+        try press(125, characters: "\u{F701}") // Enter nested folder row.
+        try press(124, characters: "\u{F703}") // Select its first visible child.
+        try press(49, characters: " ")
+        XCTAssertEqual(opened, ["nested/alpha.swift"])
+        try press(125, characters: "\u{F701}")
+        try press(36, characters: "\r")
+        XCTAssertEqual(opened, ["nested/alpha.swift", "nested/beta.swift"])
+        try press(123, characters: "\u{F702}") // Select folder.
+        try press(123, characters: "\u{F702}") // Collapse folder, not the commit.
+        XCTAssertTrue(selection.folders.contains("commit:" + commit.id + ":nested"))
+        XCTAssertTrue(selection.expanded.contains(commit.id))
+        XCTAssertTrue(window.firstResponder === receiver)
+    }
+
     func testGraphPaletteKeepsTwelveLaneColors() {
         let expected: [(CGFloat, CGFloat, CGFloat)] = [
             (0, 133, 217), (217, 0, 143), (0, 217, 10), (217, 133, 0),

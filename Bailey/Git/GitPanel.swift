@@ -100,7 +100,8 @@ struct GitPanel: View {
     }
 
     private var hasCurrentPanelTarget: Bool {
-        guard let context = project?.panelContext else { return false }
+        guard let project, manager.selectedProject === project,
+              let context = project.panelContext else { return false }
         return model.matchesPanelTarget(context.identity)
     }
 
@@ -166,7 +167,7 @@ struct GitPanel: View {
         ) {
             Button(discardActionTitle(for: pendingDiscard?.entry),
                    role: .destructive) {
-                if let pendingDiscard {
+                if hasCurrentPanelTarget, let pendingDiscard {
                     let trigger = OperationTrigger.entry(
                         path: pendingDiscard.entry.path, operation: .discard
                     )
@@ -204,6 +205,11 @@ struct GitPanel: View {
             Button(pendingDiscardAllTrigger == .discardAll
                    ? String(localized: "Discard All Changes", table: "Sidebar")
                    : String(localized: "Discard Changes", table: "Sidebar"), role: .destructive) {
+                guard hasCurrentPanelTarget else {
+                    pendingDiscardAll = []
+                    confirmDiscardAll = false
+                    return
+                }
                 let snapshot = pendingDiscardAll
                 let trigger = pendingDiscardAllTrigger
                 if remoteName != nil {
@@ -1802,7 +1808,10 @@ struct GitPanel: View {
                             hasMoreCommits: model.hasMoreRecentCommits,
                             isLoadingMore: model.isLoadingMoreCommits,
                             loadMore: model.loadMoreCommits,
-                            openDiff: openCommitDiff,
+                            openDiff: { commit, file in
+                                guard hasCurrentPanelTarget else { return }
+                                openCommitDiff(commit, file)
+                            },
                             canSwitchBranch: !model.isBusy && model.canUseCurrentReferences,
                             switchBranch: { name in
                                 switchBranchSafely(to: name)
@@ -2177,6 +2186,7 @@ struct GitPanel: View {
             stage: { performOperation(stageTrigger) { model.stage(entry) } },
             unstage: { performOperation(unstageTrigger) { model.unstage(entry) } },
             discard: {
+                guard hasCurrentPanelTarget else { return }
                 if remoteName == nil {
                     pendingDiscard = model.prepareLocalDiscard([entry]).first
                 } else {
@@ -2192,7 +2202,8 @@ struct GitPanel: View {
     }
 
     private func openIfPossible(_ entry: GitStatusModel.Entry) {
-        guard model.canOpen(entry, isRemote: remoteName != nil) else { return }
+        guard hasCurrentPanelTarget,
+              model.canOpen(entry, isRemote: remoteName != nil) else { return }
         openFile(model.absolutePath(for: entry))
     }
 
@@ -2309,6 +2320,7 @@ struct GitPanel: View {
     private func requestDiscard(
         _ entries: [GitStatusModel.Entry], trigger: OperationTrigger
     ) {
+        guard hasCurrentPanelTarget else { return }
         if remoteName != nil {
             prepareRemoteDiscard(entries, all: true, trigger: trigger)
         } else {
@@ -2340,7 +2352,8 @@ struct GitPanel: View {
     }
 
     private func openHeadFile(_ entry: GitStatusModel.Entry) {
-        guard model.isCurrent(entry), let project, let hash = model.headOID else { return }
+        guard hasCurrentPanelTarget, model.isCurrent(entry),
+              let project, let hash = model.headOID else { return }
         project.openHistoricalDiff(repoRoot: model.repoRoot,
             path: (entry.staged == "R" || entry.staged == "C") ? entry.origPath ?? entry.path : entry.path,
             source: .revision(hash: hash), origPath: nil)
@@ -2424,6 +2437,7 @@ struct GitPanel: View {
     }
 
     private func requestDiscardAll() {
+        guard hasCurrentPanelTarget else { return }
         if remoteName != nil {
             prepareRemoteDiscard(model.changedEntries, all: true)
         } else {
@@ -2437,12 +2451,14 @@ struct GitPanel: View {
         _ entries: [GitStatusModel.Entry], all: Bool,
         trigger: OperationTrigger = .discardAll
     ) {
-        guard !preparingDiscard, !entries.isEmpty, model.canUseCurrentStatus else { return }
+        guard hasCurrentPanelTarget, !preparingDiscard, !entries.isEmpty,
+              model.canUseCurrentStatus else { return }
         preparingDiscard = true
         Task {
             defer { preparingDiscard = false }
             do {
                 let snapshots = try await model.prepareRemoteDiscard(entries)
+                guard hasCurrentPanelTarget else { return }
                 if all {
                     pendingDiscardAll = snapshots
                     pendingDiscardAllTrigger = trigger
@@ -2464,6 +2480,7 @@ struct GitPanel: View {
     // MARK: Bits
 
     private func performOperation(_ trigger: OperationTrigger, _ action: () -> Void) {
+        guard hasCurrentPanelTarget else { return }
         operationExpanded = false
         operationTrigger = trigger
         action()

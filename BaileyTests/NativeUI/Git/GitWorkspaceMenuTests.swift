@@ -450,6 +450,236 @@ final class GitWorkspaceMenuTests: XCTestCase {
 
     }
 
+    func testStaleGitChangeClickCannotOpenDiffInAnotherProject() async throws {
+        let sandbox = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-git-stale-focus-" + UUID().uuidString)
+        let firstRoot = sandbox.appendingPathComponent("first")
+        let secondRoot = sandbox.appendingPathComponent("second")
+        try FileManager.default.createDirectory(at: firstRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+        func git(_ args: [String]) {
+            let result = GitCommandExecution.run(args, in: firstRoot.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        git(["init", "-q", "-b", "main"])
+        git(["config", "user.name", "Focus Test"])
+        git(["config", "user.email", "focus@invalid"])
+        git(["config", "commit.gpgsign", "false"])
+        try "original\n".write(to: firstRoot.appendingPathComponent("first.txt"),
+                               atomically: true, encoding: .utf8)
+        git(["add", "first.txt"])
+        git(["commit", "-qm", "baseline"])
+        try "modified\n".write(to: firstRoot.appendingPathComponent("first.txt"),
+                               atomically: true, encoding: .utf8)
+
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([firstRoot, secondRoot])
+        let firstIndex = try XCTUnwrap(manager.projects.firstIndex {
+            $0.customDirectory == firstRoot.path
+        })
+        let secondIndex = try XCTUnwrap(manager.projects.firstIndex {
+            $0.customDirectory == secondRoot.path
+        })
+        manager.selectProject(index: firstIndex)
+        let firstProject = try XCTUnwrap(manager.selectedProject)
+        firstProject.dock.select(.git)
+        let model = GitStatusModel()
+        model.syncSelectedProject(in: manager)
+        try await wait {
+            model.hasResolvedStatus && !model.isRefreshing
+                && model.changedEntries.map(\.path) == ["first.txt"]
+        }
+        let window = NSWindow(contentRect: NSRect(x: -1200, y: -1200, width: 460, height: 650),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: GitPanel(
+            model: model, manager: manager, project: firstProject,
+            session: nil, sshHost: nil, openFile: { _ in },
+            openDiff: { entry, staged in
+                manager.openDiff(repoRoot: model.repoRoot, path: entry.path,
+                                 staged: staged, untracked: entry.isUntracked,
+                                 origPath: entry.origPath, activating: false)
+            }, openCommitDiff: { commit, file in
+                manager.openCommitDiff(
+                    repoRoot: model.repoRoot, path: file.path,
+                    commitHash: commit.hash, parentHash: commit.parentHashes.first,
+                    status: file.status, origPath: file.originalPath,
+                    activating: false
+                )
+            }
+        ).frame(width: 460, height: 650))
+        window.contentView = host
+        window.orderFront(nil)
+        let openChanges = String(localized: "Open Changes", table: "Sidebar")
+        let stage = String(localized: "Stage Changes", table: "Sidebar")
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.findTreeKeyboard(in: host) != nil
+        }
+        func rowY(x: CGFloat, matching titles: [String]) -> CGFloat? {
+            for y in stride(from: 640, through: 12, by: -4) {
+                guard let event = NSEvent.mouseEvent(
+                    with: .rightMouseDown, location: NSPoint(x: x, y: CGFloat(y)),
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                    clickCount: 1, pressure: 1
+                ) else { continue }
+                let actions = window.contentView?.menu(for: event)?.items.map(\.title) ?? []
+                if titles.allSatisfy(actions.contains) { return CGFloat(y) }
+            }
+            return nil
+        }
+        func click(x: CGFloat, y: CGFloat) throws {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(
+                    with: type, location: NSPoint(x: x, y: y), modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil,
+                    eventNumber: 0, clickCount: 1, pressure: 1
+                ))
+                window.sendEvent(event)
+            }
+        }
+        let changedY = try XCTUnwrap(rowY(x: 95, matching: [openChanges, stage]),
+                                     "The original project must have an actionable change row")
+        let graphY = try XCTUnwrap(rowY(x: 155, matching: [
+            String(localized: "Create Branch at Commit…", table: "Git")
+        ]), "The original project's graph commit must be actionable")
+        try click(x: 155, y: graphY)
+        var historyY: CGFloat?
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            historyY = rowY(x: 155, matching: [String(localized: "Open Historical Diff", table: "Git")])
+            return historyY != nil
+        }
+        manager.selectProject(index: secondIndex)
+        let secondProject = try XCTUnwrap(manager.selectedProject)
+        XCTAssertFalse(firstProject === secondProject)
+        try click(x: 95, y: changedY)
+        let tabsAfterChanges = secondProject.tabs.count
+        XCTAssertEqual(tabsAfterChanges, 0,
+                       "A stale Git Changes row must not open a diff in another project")
+        try click(x: 155, y: try XCTUnwrap(historyY))
+        XCTAssertEqual(secondProject.tabs.count, tabsAfterChanges,
+                       "A stale Git Graph file must not open another project's history diff")
+        XCTAssertTrue(firstProject.tabs.isEmpty,
+                      "Old Git rows must not browse in the inactive project")
+        let indexBefore = GitCommandExecution.run(["diff", "--cached", "--name-only"],
+                                                 in: firstRoot.path)
+        XCTAssertEqual(indexBefore.status, 0)
+        XCTAssertEqual(indexBefore.stdout, "")
+        try click(x: 460 - 22, y: changedY)
+        try await Task.sleep(for: .milliseconds(600))
+        let indexAfter = GitCommandExecution.run(["diff", "--cached", "--name-only"],
+                                                in: firstRoot.path)
+        XCTAssertEqual(indexAfter.status, 0)
+        XCTAssertEqual(indexAfter.stdout, "",
+                       "A stale Stage button must not modify the inactive repository's index")
+    }
+
+    func testGitChangesTreeKeyboardBrowsesNestedFilesWithoutWritingIndex() async throws {
+        let sandbox = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-git-tree-keys-" + UUID().uuidString)
+        let root = sandbox.appendingPathComponent("repo")
+        let folder = root.appendingPathComponent("nested")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+        func git(_ args: [String]) -> String {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = git(["init", "-q", "-b", "main"])
+        _ = git(["config", "user.name", "Tree Navigation"])
+        _ = git(["config", "user.email", "tree@invalid"])
+        _ = git(["config", "commit.gpgsign", "false"])
+        for name in ["alpha.txt", "beta.txt"] {
+            try "old \(name)\n".write(to: folder.appendingPathComponent(name),
+                                        atomically: true, encoding: .utf8)
+        }
+        _ = git(["add", "nested"])
+        _ = git(["commit", "-qm", "two files"])
+        let headBefore = git(["rev-parse", "HEAD"])
+        for name in ["alpha.txt", "beta.txt"] {
+            try "new \(name)\n".write(to: folder.appendingPathComponent(name),
+                                        atomically: true, encoding: .utf8)
+        }
+        let manager = TerminalManager()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        project.dock.select(.git)
+        let model = GitStatusModel()
+        model.syncSelectedProject(in: manager)
+        try await wait {
+            model.hasResolvedStatus && !model.isRefreshing && model.changedEntries.count == 2
+        }
+        let settings = AppSettings(configURL: sandbox.appendingPathComponent("settings.toml"))
+        settings.gitViewMode = .tree
+        let window = NSWindow(contentRect: NSRect(x: -1200, y: -1200, width: 460, height: 660),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: GitPanel(
+            settings: settings, model: model, manager: manager, project: project,
+            session: nil, sshHost: nil, openFile: { _ in },
+            openDiff: { entry, staged in
+                manager.openDiff(repoRoot: model.repoRoot, path: entry.path,
+                                 staged: staged, untracked: entry.isUntracked,
+                                 origPath: entry.origPath, activating: false)
+            }, openCommitDiff: { _, _ in }
+        ).frame(width: 460, height: 660))
+        window.contentView = host
+        window.orderFront(nil)
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return self.treeKeyboards(in: host).count == 2
+        }
+        let receiver = try XCTUnwrap(treeKeyboards(in: host).first)
+        XCTAssertTrue(window.makeFirstResponder(receiver))
+        func press(_ code: UInt16, characters: String) async throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                characters: characters, charactersIgnoringModifiers: characters,
+                isARepeat: false, keyCode: code
+            ))
+            window.sendEvent(event)
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        try await press(124, characters: "\u{F703}") // Expand the first folder or select its child.
+        try await press(49, characters: " ") // Browse nested/alpha.txt.
+        try await wait { project.tabs.count == 1 }
+        guard case .diff(let alpha)? = project.selectedTab?.content else {
+            return XCTFail("Space should open the first nested DiffTab")
+        }
+        try await wait { alpha.hasLoadedContent }
+        XCTAssertEqual(alpha.path, "nested/alpha.txt")
+        XCTAssertEqual(alpha.oldContent, "old alpha.txt\n")
+        XCTAssertEqual(alpha.newContent, "new alpha.txt\n")
+        XCTAssertTrue(window.firstResponder === receiver)
+        try await press(125, characters: "\u{F701}")
+        try await press(36, characters: "\r") // Return browses the second sibling.
+        try await wait { project.tabs.count == 2 }
+        guard case .diff(let beta)? = project.selectedTab?.content else {
+            return XCTFail("Return should open the second nested DiffTab")
+        }
+        try await wait { beta.hasLoadedContent }
+        XCTAssertEqual(beta.path, "nested/beta.txt")
+        XCTAssertEqual(beta.oldContent, "old beta.txt\n")
+        XCTAssertEqual(beta.newContent, "new beta.txt\n")
+        XCTAssertEqual(project.dock.activeGroup?.selected, .git)
+        XCTAssertTrue(window.firstResponder === receiver)
+        try await press(123, characters: "\u{F702}") // Select parent folder.
+        try await press(123, characters: "\u{F702}") // Collapse parent.
+        XCTAssertEqual(git(["rev-parse", "HEAD"]), headBefore)
+        XCTAssertEqual(git(["diff", "--cached", "--name-only"]), "")
+    }
+
     private func findTreeKeyboard(in view: NSView) -> TreeKeyboardView? {
         if let keyboard = view as? TreeKeyboardView { return keyboard }
         return view.subviews.lazy.compactMap { self.findTreeKeyboard(in: $0) }.first
