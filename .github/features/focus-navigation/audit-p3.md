@@ -140,8 +140,8 @@
 | P3 专项 | 初次 /tmp/bailey-p3-audit-scoped.log：**123 项、0 失败、1 skipped**；新增焦点门槛后 /tmp/bailey-p3-focus-scoped-v3.log：**123 项、0 失败、5 skipped，命令退出 0**，因共享前台窗口被其它 AI 测试占用，跳过的主要是原生焦点用例；非 GUI 逻辑及共享树行结果仍通过。 |
 | Palette 前置时序 | /tmp/bailey-p3-palette-pending-green.log：**1 项通过**。真实 `ContentView` + ToolPanelView 在 Palette 早于搜索框获焦时切到 Files，确认不选树行；Palette 关闭后恢复游标且文件标签未新增。/tmp/bailey-p3-palette-race-red.log：原生前台测试 1 skipped（无 key window），不当作 Red。 |
 | Debug / 严格签名 | 最后一次 /tmp/bailey-p3-focus-debug-final.log：`make build DERIVED_DATA=build/DerivedData-p3-audit` 退出 0，BUILD SUCCEEDED，`codesign --verify --deep --strict` 通过。 |
-| Release / 严格签名 | /tmp/bailey-p3-audit-release.log：BUILD SUCCEEDED，codesign --verify --deep --strict 通过；第三方 parser 的旧 C/C++ 告警与无 App Intents 元数据提示保留，不误记 P3 Swift 新诊断。 |
-| 修复提交 | cdd84524cf94c51e53225bac51ecae8ef7541397；只包含 FileTreeModel、FileTreePanel、两份回归测试和 docs/features/files.md（5 文件）；P1/P2/P4/CI 的未提交改动未包含。 |
+| Release / 严格签名 | 本轮最新 /tmp/bailey-p3-focus-release-final.log：`make build:release DERIVED_DATA=build/DerivedData-p3-audit` 退出 0，BUILD SUCCEEDED，`codesign --verify --deep --strict` 通过。仅见第三方 Tree-sitter C/C++ 旧诊断和 App Intents 元数据提示，无 P3 Swift 新诊断。 |
+| 修复与文档提交 | `cdd8452` 修复改名游标与内联焦点，`c357435` 修复 Palette/Sheet 焦点资格并提交 audit-p3.md、plan-p3.md、todo.toml 与命令面板文档。两个提交只包含 P3 专属源码、测试、文档；P1/P2/P4 的工作内容均未混入。 |
 | 正式 App | 用户本轮明确跳过正式 App 替换；没有替换、启动或重启 `/Applications/Bailey.app`。隔离 XCTest/AppKit 不等于正式 App 已部署。 |
 | 全量首次 | /tmp/bailey-p3-audit-full.log：被 P2 并行新测试编译错误阻断。 |
 | 全量再试 | /tmp/bailey-p3-audit-full-v2.log：P2 DockFocus、P4 GitWorkspaceMenu、P1 PaneRetention 等失败，P1 原生窗口关闭用例长期不进展，仅终止本轮自身测试进程；全量没有成功结束。 |
