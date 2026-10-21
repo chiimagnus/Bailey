@@ -553,7 +553,7 @@ struct RecentCommitsView: View {
         spacing: CGFloat, expanded: Bool, inHeadHistory: Bool
     ) -> some View {
         TreeRowSurface(
-            depth: 0, scale: fontScale, selected: expanded,
+            depth: 0, scale: fontScale,
             focusRing: isFocusedRow(commitRowID(commit)),
             leadingInset: gutter, trailingInset: TreeRowStyle.contentInset,
             showsGuides: false,
@@ -590,7 +590,7 @@ struct RecentCommitsView: View {
                                     .font(.system(size: 12.5 * fontScale))
                                     .foregroundStyle(
                                         commit.stash == nil && commit.parentHashes.count > 1
-                                            && !hovering && !expanded
+                                            && !hovering
                                             ? Color.primary.opacity(0.55) : Color.primary
                                     )
                                     .fixedSize(horizontal: true, vertical: false)

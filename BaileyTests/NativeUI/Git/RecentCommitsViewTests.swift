@@ -157,6 +157,73 @@ final class RecentCommitsViewTests: XCTestCase {
         }
     }
 
+    func testExpandedHistoryAndUncommittedNodesHaveNoPersistentSelectionFill() throws {
+        typealias Commit = GitStatusModel.RecentCommit
+        let hash = String(repeating: "a", count: 40)
+        let commit = Commit(
+            hash: hash, shortHash: "aaaaaaa", subject: "Changed history",
+            author: "Tester", date: .now, parentHashes: [], references: [],
+            files: [.init(status: "M", path: "Sources/alpha.swift", originalPath: nil)]
+        )
+        let worktree = GitStatusModel.WorktreeChanges(
+            path: "/tmp/bailey-graph-selection", branch: "main", headOID: hash,
+            entries: [.init(path: "Sources/beta.swift", staged: ".", unstaged: "M")],
+            isCurrent: true
+        )
+        let uncommitted = try XCTUnwrap(
+            GitStatusModel.graphCommits([commit], stashes: [], worktrees: [worktree])
+                .first(where: { $0.worktree != nil })
+        )
+        let width: CGFloat = 420
+        let height: CGFloat = 126
+
+        func capture(
+            _ node: Commit, expanded: Bool, appearance: NSAppearance.Name,
+            mode: GitViewMode
+        ) throws -> NSBitmapImageRep {
+            let selection = GraphSelection()
+            if expanded { selection.expanded.insert(node.id) }
+            let window = hostHistory([node], selection: selection,
+                                     width: width, height: height, viewMode: mode)
+            defer { window.close() }
+            window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+            settle()
+            let host = try XCTUnwrap(window.contentView)
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            return bitmap
+        }
+
+        for node in [commit, uncommitted] {
+            for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                for mode in [GitViewMode.list, .tree] {
+                    let collapsed = try capture(node, expanded: false,
+                                                appearance: appearance, mode: mode)
+                    let expanded = try capture(node, expanded: true,
+                                               appearance: appearance, mode: mode)
+                    XCTAssertEqual(collapsed.pixelsWide, expanded.pixelsWide)
+                    XCTAssertEqual(collapsed.pixelsHigh, expanded.pixelsHigh)
+                    // Compare empty space inside the commit header, away from
+                    // its text and graph rails. Expanding may add child rows,
+                    // but must never tint the parent header like a selected file.
+                    for y in [10, 14, 18] {
+                        let px = collapsed.pixelsWide * 94 / 100
+                        let py = Int(CGFloat(collapsed.pixelsHigh) * CGFloat(y) / height)
+                        let a = try XCTUnwrap(collapsed.colorAt(x: px, y: py)?
+                            .usingColorSpace(.sRGB))
+                        let b = try XCTUnwrap(expanded.colorAt(x: px, y: py)?
+                            .usingColorSpace(.sRGB))
+                        let difference = abs(a.redComponent - b.redComponent)
+                            + abs(a.greenComponent - b.greenComponent)
+                            + abs(a.blueComponent - b.blueComponent)
+                        XCTAssertLessThan(difference, 0.035,
+                            "Expanded \(node.worktree == nil ? "commit" : "worktree") header must match its collapsed background (\(appearance.rawValue), \(mode), y=\(y))")
+                    }
+                }
+            }
+        }
+    }
+
     func testGraphReferenceBadgeTakesKeyboardFocusFromAnotherTree() throws {
         let selection = GraphSelection()
         let commit = GitStatusModel.RecentCommit(
