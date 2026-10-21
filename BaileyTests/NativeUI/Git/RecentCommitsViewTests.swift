@@ -37,7 +37,11 @@ final class RecentCommitsViewTests: XCTestCase {
                 windowNumber: window.windowNumber, context: nil,
                 eventNumber: 0, clickCount: 1, pressure: 1
             )!
-            NSApp.sendEvent(event)
+            if window is GraphNativeTestWindow {
+                NSApp.sendEvent(event)
+            } else {
+                window.sendEvent(event)
+            }
         }
         settle()
     }
@@ -79,14 +83,27 @@ final class RecentCommitsViewTests: XCTestCase {
         openDiff: @escaping (GitStatusModel.RecentCommit, GitStatusModel.RecentCommit.FileChange) -> Void = { _, _ in },
         onKeyboardFocused: @escaping () -> Void = {}
     ) -> NSWindow {
-        let screen = NSScreen.main?.visibleFrame ?? .zero
-        let window = GraphNativeTestWindow(
-            contentRect: NSRect(
-                x: screen.minX + 20, y: screen.minY + 20,
-                width: width, height: height
-            ),
-            styleMask: [.borderless], backing: .buffered, defer: false
-        )
+        NSApp.activate()
+        settle()
+        let frame: NSRect
+        let window: NSWindow
+        if NSApp.isActive {
+            let screen = NSScreen.main?.visibleFrame ?? .zero
+            frame = NSRect(x: screen.minX + 20, y: screen.minY + 20,
+                           width: width, height: height)
+            window = GraphNativeTestWindow(
+                contentRect: frame, styleMask: [.borderless],
+                backing: .buffered, defer: false
+            )
+        } else {
+            // Another Bailey instance owns the desktop (local development).
+            // Keep independent, non-key, offscreen rendering tests usable.
+            frame = NSRect(x: -1200, y: -1200, width: width, height: height)
+            window = NSWindow(
+                contentRect: frame, styleMask: [.borderless],
+                backing: .buffered, defer: false
+            )
+        }
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: RecentCommitsView(
             commits: commits,
@@ -111,14 +128,12 @@ final class RecentCommitsViewTests: XCTestCase {
             onKeyboardFocused: onKeyboardFocused
         ).frame(width: resizable ? nil : width, height: height, alignment: .topLeading)
             .background(Color(nsColor: Theme.sidebar)))
-        NSApp.activate()
-        window.makeKeyAndOrderFront(nil)
-        settle()
-        if ProcessInfo.processInfo.environment["CI"] == "true" {
-            NSLog("Graph UI host: active=%d key=%d visible=%d screen=%@",
-                  NSApp.isActive ? 1 : 0, window.isKeyWindow ? 1 : 0,
-                  window.isVisible ? 1 : 0, String(describing: window.screen))
+        if window is GraphNativeTestWindow {
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            window.orderFront(nil)
         }
+        settle()
         return window
     }
 

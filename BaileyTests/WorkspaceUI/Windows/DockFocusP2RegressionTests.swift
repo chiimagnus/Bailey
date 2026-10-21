@@ -156,8 +156,10 @@ final class DockFocusP2RegressionTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             return manager.attachedWindow === window && file.editorView?.window === window
         }
-        let editor = try XCTUnwrap(file.editorView)
+        let editor = try XCTUnwrap((file.editorView as? NSScrollView)?.documentView as? FocusReportingTextView)
         XCTAssertTrue(window.makeFirstResponder(editor))
+        XCTAssertTrue(window.firstResponder === editor,
+                      "The text view, not its enclosing scroll view, must receive typing")
         XCTAssertTrue(manager.ownsActiveResponder(editor))
         manager.toggleCommandPalette()
         try await until {
@@ -171,13 +173,6 @@ final class DockFocusP2RegressionTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             return !manager.isCommandPaletteVisible && window.firstResponder === editor
         }
-        NSLog("Palette focus: active=%d key=%d showing=%d first=%@ original=%@ current=%@ owns=%d",
-              NSApp.isActive ? 1 : 0, window.isKeyWindow ? 1 : 0,
-              manager.isCommandPaletteVisible ? 1 : 0,
-              String(describing: window.firstResponder.map { ObjectIdentifier($0) }),
-              String(describing: ObjectIdentifier(editor)),
-              String(describing: file.editorView.map { ObjectIdentifier($0) }),
-              manager.ownsActiveResponder(editor) ? 1 : 0)
         XCTAssertTrue(window.firstResponder === editor)
         XCTAssertTrue(manager.ownsActiveResponder(editor))
         XCTAssertTrue(manager.isFPSCounterVisible)
