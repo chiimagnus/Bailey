@@ -740,6 +740,13 @@ struct RecentCommitsView: View {
         return path
     }
 
+    static func worktreeDisplayLabel(
+        _ location: GitStatusModel.WorktreeLocation, among paths: [String]
+    ) -> String {
+        let name = worktreeDisplayPath(location.path, among: paths)
+        return location.branch ?? String(localized: "\(name) · No branch", table: "Git")
+    }
+
     static func worktreeDisplayStatus(_ entry: GitStatusModel.Entry,
                                       staged: Bool) -> Character {
         entry.isConflict ? "U" : staged ? entry.staged : entry.unstaged
@@ -770,8 +777,7 @@ struct RecentCommitsView: View {
         let paths = locations.map(\.path)
         let location = locations.first { $0.path == repoRoot }
             ?? locations.first { $0.branch == nil } ?? locations[0]
-        let name = Self.worktreeDisplayPath(location.path, among: worktreePaths)
-        let label = location.branch ?? String(localized: "\(name) · No branch", table: "Git")
+        let label = Self.worktreeDisplayLabel(location, among: worktreePaths)
         let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
         return Button { toggle(commit) } label: {
             HStack(spacing: 0) {
