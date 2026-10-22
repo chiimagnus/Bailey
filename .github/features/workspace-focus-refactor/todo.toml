@@ -4,26 +4,26 @@ current_task_id = ""
 [[tasks]]
 id = "P1-T1"
 title = "建立可重复的重构基线"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
-commit = ""
-note = ""
+commit = "6189946c8dd67c23d776657c78a73e005b5192eb"
+note = "隔离原生基线 76 项、6 跳过；正式 App GUI/最低系统保留未验收限制"
 
 [[tasks]]
 id = "P1-T2"
 title = "分离应用级所有者并修正窗口命名"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = ""
-note = ""
+commit = "433c80fa9a2033e2d594053ffbbc29f16440a939"
+note = "Debug 签名通过；受影响 194+96+54 项测试 0 failure；原生前台与授权 SSH 测试仍跳过"
 
 [[tasks]]
 id = "P1-T3"
 title = "收窄领域依赖与验证异步目标"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t3"
-commit = ""
-note = ""
+commit = "0348d5f7dbed0bd2c1e47be2626b0421c7d7eef8"
+note = "Debug 签名通过；148 项受影响测试 0 失败/6 跳过；新增异步目标校验 12 项通过"
 
 [[tasks]]
 id = "P2-T1"
