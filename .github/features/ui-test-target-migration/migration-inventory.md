@@ -316,12 +316,11 @@
 - `testStashIsANodeInTheSameGraphWithOnlyStashActions`（旧 L2051）
 - `testTagBadgeTogglesSameCommitAsOtherReferences`（旧 L2088）
 
-### P4-T1 — 12 条
+### P4-T1 — 11 条
 
-**[AppMenuIsolationTests.swift](../../../BaileyTests/NativeUI/App/AppMenuIsolationTests.swift)：2 条** — 原生菜单与测试入口。初判：UI，执行前核对每项真实断言。
+**[AppMenuIsolationTests.swift](../../../BaileyTests/NativeUI/App/AppMenuIsolationTests.swift)：1 条** — 真正用户可见的 Open File 菜单。原有隔离宿主 ⌘Q 断言仍有后续 NativeUI 消费者，归 P4-T5。
 
 - `testFileMenuProvidesOpenFileKeyboardShortcut`（旧 L7）
-- `testTestHostHasNoQuitKeyboardEquivalent`（旧 L23）
 
 **[TreeRowHitTestingTests.swift](../../../BaileyTests/NativeUI/Shared/TreeRowHitTestingTests.swift)：7 条** — 共享 Files／Git 行命中与滚动。初判：UI，执行前核对每项真实断言。
 
@@ -411,7 +410,7 @@
 - `testLocalWorktreeUseProtectsMacFileInsideAnSSHProject`（旧 L2172）
 - `testTwoApplicationOwnersNeverShareWorkspaceRegistryOrWorktreeProtection`（旧 L2205）
 
-### P4-T5 — 20 条
+### P4-T5 — 21 条
 
 **[PaneRetentionTests.swift](../../../BaileyTests/NativeUI/Workspace/PaneRetentionTests.swift)：20 条** — Terminal／Browser／Editor 原生资源生命周期。初判：UI+逻辑，执行前核对每项真实断言。
 
@@ -436,6 +435,10 @@
 - `testUnmanagedExecSSHRejectsLocalFinderPathsEvenWhenForegroundPIDIsShellPID`（旧 L1181）
 - `testTerminalKeepsSameShellAcrossParkingAndRemount`（旧 L1236）
 
+**[AppMenuIsolationTests.swift](../../../BaileyTests/NativeUI/App/AppMenuIsolationTests.swift)：1 条** — 前期 NativeUI 宿主仍需防止 ⌘Q 意外结束测试；直到最后一条原生宿主测试迁走才一起删除覆盖与产品中的测试专属拦截。
+
+- `testTestHostHasNoQuitKeyboardEquivalent`（旧 L23）
+
 ## 非 UI Target 的混入检查
 
 原有 Unit 8 文件／75 方法、Integration 20 文件／231 方法；目录名不能证明没有图形依赖。P1-T3 对 306 个方法及其 transitive fixtures 复核：以「实际创建窗口、绘制、聚焦、事件输入、UI 表现」而非单独 `import AppKit` 判断。
@@ -445,7 +448,7 @@
 - `testRealWindowRootRetainsItsRegistrationAndEditorAcrossViewConstruction`（`NSHostingView`／`NSWindow`／`NSTextView` 身份）：P4-T4 将用户可见保留行为归 UI，快照单一性逻辑归非 UI。
 - `testClosedWindowCannotBeUsedForLateFileOperationErrors`（真实 `NSWindow` 装配）：P4-T4 将窗口关后错误不可回送的最终行为归 UI，目标识别不变量可保留非 UI。
 
-**[`AppSettingsTests.swift`](../../../BaileyTests/Integration/Settings/AppSettingsTests.swift)**：5 方法；`testCheckoutConsentIsPersistedAndResetWithTemporaryConfig` 与 `testObservationTracksAllNativeTerminalSettingsWithTemporaryConfig` 的 teardown 直接恢复共享 `NSApp?.appearance`，后者设置 theme 时还可能直接改变 App 外观。它们的配置/Observation 核心断言可留在非 UI Target，但应在 P4-T5 将真实外观改变验证归独立 App UI，去除低层测试中**不必要的真实 GUI 副作用**，或证明不可避免的宿主行为和隔离；不能仅因为没有显式 `NSWindow` 就称已经完全纯化。
+**[`AppSettingsTests.swift`](../../../BaileyTests/Integration/Settings/AppSettingsTests.swift)**：5 方法，**全部都需审查隐藏的全局 UI 副作用**。源码 `AppSettings.init(configURL:)` 最后无条件执行 `applyAppearance()`（写 `NSApp?.appearance`）和 `reloadThemeSelection()`（写 `Theme` 全局选择），即使某条测试只验证 TOML 解析也会触发；其中两项还显式在 teardown 恢复 `NSApp?.appearance`，一项设置 `.theme = .dark` 再次写入。P1-T3 先查明并清理可安全去掉的非 UI 初始化/测试副作用，证明共享 `AppSettings.shared` 启动外观不变；P4-T5 再验真实 Settings GUI。保留具有实质断言的配置/Observation/Theme 回归，不能以“仅两条触及 NSApp”漏掉其余三条。
 
 ## 已存在的 BaileyUITests：必须重验的 10 条
 

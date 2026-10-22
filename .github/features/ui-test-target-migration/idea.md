@@ -13,9 +13,9 @@
 
 - 规划时当前分支：`test/native-xcuitest-layering@019765f`，基于 `origin/main@837ac9c`（2026-10-22）；后续实现先核对最新 HEAD、当前并行修改、可用 OS 与 CI 结果，不能用该 SHA 假装未来基线。
 - 源码静态盘点：`BaileyTests/NativeUI` 19 文件、275 个 `test*` 方法；`BaileyTests/WorkspaceUI` 4 文件、54 个方法；**329 个方法需要逐一映射与核销**。`BaileyUITests` 当前 4 个测试文件、10 个方法（另有一个 Support 文件），并非已替代 329 项。`BaileyTests/Unit` 8 文件、75 方法；`Integration` 20 文件、231 方法，亦需扫描隐藏的 UI 操作。
-- 额外混合源已确认：`BaileyTests/Integration/Workspace/SessionStoreTests.swift`（10 方法）含生产 `WindowRootView`、`NSWindow`／`NSHostingView` 装配；`BaileyTests/Integration/Settings/AppSettingsTests.swift`（5 方法）涉及 `NSApp` 外观状态但主要验证配置和 Observation，必须按断言行为判断而非见 `AppKit` 即移动。
+- 额外混合源已确认：`BaileyTests/Integration/Workspace/SessionStoreTests.swift`（10 方法）含 2 个生产 `WindowRootView`、`NSWindow`／`NSHostingView` 装配用例；`BaileyTests/Integration/Settings/AppSettingsTests.swift` **5 个方法全部会构造 `AppSettings`，其 `init` 会调用 `applyAppearance()` 写 `NSApp.appearance` 并更新全局 `Theme`**，不仅仅是两项显式访问 `NSApp` 的测试。需先核对构造/观察/保存调用链，再将无需 GUI 的配置断言纯化；真正主题界面归独立 App UI。
 - [方法级迁移清单](migration-inventory.md)是固定快照：对上述 329 项一条不漏地登记旧入口、预定 task 与迁移去向；执行中逐项填充真实替代用例／非 UI 归属及执行证据，不能只根据新用例总数宣称覆盖。
-- 既有 10 条独立 UI 用例须在最新产品上重新实测；此前 CI 的选择器、超长 AX Identifier 与 Git Graph 问题只能作为排查线索，不把编译成功等同于运行通过。
+- 既有 10 条独立 UI 用例须在最新产品上重新实测；此前 CI 的选择器、超长 AX Identifier 与 Git Graph 问题只能作为排查线索，不把编译成功等同于运行通过。现有 Git fixture 的 `Process.waitUntilExit()` 在 stdout/stderr `Pipe` 未排空时可能阻塞；测试数据创建异常时旧 `defer` 尚未注册也可能留下临时目录，必须在 P1-T2 修正。
 - 预审源码覆盖全部 23 个旧 UI suite、另外 28 个 Unit/Integration suite、现有 5 份 UI Test 源文件，以及关联的 App、编辑器、Git、文件树、Dock、窗口、持久化、终端、浏览器与 CI/Makefile 调用路径。**静态阅读和方法索引不等于 329 项已证明等价**；逐方法真实断言及新结果仍在执行时核销。
 
 ## 必须保持的契约
@@ -24,9 +24,10 @@
 2. **逐方法可追踪**：每一旧 `test*` 必须标记为「真正 UI 路径 → 新 UI 断言」、「纯逻辑 → 单元／集成断言」或「原测试混合 → 两类拆分」。迁移任务必须写明原条件、实际效果、目标用例、替代证据；旧方法所保护的不变量缺证则不能删。
 3. **不要制造测试后门**：仅在现有控件缺少稳定 AX 语义时，经过真实 UI 语义核对后添加适度标识；不添加生产启动时跑测试、以 `--isolated-ui-test` 绕过业务逻辑、测试专用伪结果或额外隐藏控制页面。稳定 Identifier 不含沙盒绝对路径，不以长 sleep／无条件 retry／跳过用例制造绿色。
 4. **测试真实副作用**：XCUITest 核对保存后的文件字节、Git status/index/HEAD、界面可见数据、目标窗口与真实键盘结果，以及窗口关闭／重开后的内容；夹具证明初始分支、冲突状态、权限、符号链接、文件编码和失败触发条件确实成立。
-5. **安全隔离**：用户的正式 `/Applications/Bailey.app` 正在运行时，不启动同 Bundle ID 的 XCUITest，也不结束用户进程。GUI 回归只在专用 CI Runner／经确认不会影响用户进程的会话执行。`--isolated-ui-test` 仅隔离快照、终端历史并跳过保存的隧道，**不隔离普通设置、Bundle ID 或桌面**。当前配置由 `AppIdentity.configDirectory` 取 `FileManager.default.homeDirectoryForCurrentUser/.config/bailey`，实测仅覆盖 `HOME` 环境变量不会改变该路径；修改偏好的 UI 测试必须在独立用户/CI 环境运行并核对真实写入，不能以设置 `HOME` 冒充隔离。
+5. **安全隔离**：用户的正式 `/Applications/Bailey.app` 正在运行时，不启动同 Bundle ID 的 XCUITest，也不结束用户进程。GUI 回归只在专用 CI Runner／经确认不会影响用户进程的会话执行。**`make test` 亦非天然无进程风险**：现有 `BaileyTests` 的 `TEST_HOST` 是真正的 `Bailey.app/Contents/MacOS/bailey`，但 Makefile 只有 `test:ui` 有 `pgrep` 预检；P1 先验证宿主是否会占用桌面或触及共享用户状态，本机正式 App 活跃时在验证前不启动它。`--isolated-ui-test` 仅隔离快照、终端历史并跳过保存的隧道，**不隔离普通设置、Bundle ID 或桌面**。当前配置由 `AppIdentity.configDirectory` 取 `FileManager.default.homeDirectoryForCurrentUser/.config/bailey`，实测仅覆盖 `HOME` 环境变量不会改变该路径；修改偏好的 UI 测试必须在独立用户/CI 环境运行并核对真实写入，不能以设置 `HOME` 冒充隔离。
 6. **同一任务当场替换并删除**：对应新 E2E 与非 UI 断言证实覆盖后，同任务删除原 `NativeUI`／`WorkspaceUI` 中已经被替代的方法、旧窗口 fixture 和其测试专属辅助代码；同步更新 CI 中硬编码的旧类名、使用该类名的文档与调用方。未证实可替代的原生对象内部断言不能先删或延到最后再说。
-7. **复用现有入口**：`make test`／`make test:类名1,类名2` 只跑非 UI；`make test:ui` 跑实际 App UI。保留现有两 Target、Makefile、Scheme 和 CI，不另建测试框架或专用 App。CI 当前 `Bailey/Editor/*` 与 `Bailey/Git/Diff*` 分支仍硬编码旧测试类，迁移这些类的 task 必须同步修改，不能拖到 P5。
+7. **复用现有入口**：`make test`／`make test:类名1,类名2` 只跑非 UI；`make test:ui` 跑实际 App UI。保留现有两 Target、Makefile、Scheme 和 CI，不另建测试框架或专用 App。CI 当前 `Bailey/Editor/*` 与 `Bailey/Git/Diff*` 分支仍硬编码旧测试类，迁移这些类的 task 必须同步修改，不能拖到 P5。定点 `-only-testing` 必须对照 xcresult 核验真实执行项，不能只看退出码。
+8. **有消费才保留守卫**：隔离宿主的 `⌘Q` 屏蔽目前仍保护未迁出的原生窗口测试，归最后一项宿主 UI 迁移 P4-T5 与原断言一起裁撤；P4-T1 不得提前删除。与其不同的 `BaileyInstanceMode` 快照、历史和隧道隔离仍承担真实职责。
 
 ## 非目标
 
@@ -46,6 +47,8 @@
 
 ### 全条件核对范围（执行前逐项展开，非抽样上限）
 
+**分层而不重复穷举。** 下表要求覆盖所有与迁移的实际断言相关且可安全执行的条件；确定性算法、超大输入、异常注入、乱序时序由非 UI 测试精确组合，独立 App UI 验证这些真实功能的接线与用户结果。不要把每个非 UI 数据组合再机械复制成一遍 GUI 脚本，也不要把未触及的功能、未获准设备或生产修复夹带进测试迁移。任何旧方法的重要界面断言不能仅靠底层测试取代。
+
 | 维度 | 必须涵盖的适用状态与最终验证 |
 | --- | --- |
 | 工具链与系统 | 项目最低 macOS 15.6、当前可用 macOS 与 CI Xcode 27；Debug／Release、签名／无签名、测试宿主／独立 Runner；实际运行能力与编译支持分别说明 |
@@ -63,6 +66,6 @@
 ## 任务与来源
 
 - [全方法基线与去向](migration-inventory.md)：本次一次性执行核销清单，不另作实时状态机。
-- [P1 清点、可行性和隔离执行基础](plan-p1.md) · [P2 编辑器与 Diff](plan-p2.md) · [P3 Git 界面](plan-p3.md) · [P4 工作区和窗口](plan-p4.md) · [P5 入口一致性与最终验收](plan-p5.md)。
+- [P1 清点、可行性和隔离执行基础](plan-p1.md) · [P2 编辑器与 Diff](plan-p2.md) · [P3 Git 界面](plan-p3.md) · [P4 工作区和窗口](plan-p4.md) · [P5 入口一致性与最终验收](plan-p5.md)。当前 PR CI 固定 Xcode 27，Release workflow 固定 Xcode 26.6（本机 Xcode 27.2）；工具链兼容须按两条真实工作流分别验证，不自动升级发布工具链作为本测试迁移的附加任务。
 - 实时状态仅 [todo.toml](todo.toml)，审计由阶段实际执行后生成，不在规划阶段预建。
 - 当前产品契约以 `docs/testing.md`、`docs/ui.md`、`docs/architecture.md` 和各 `docs/features/*.md` 为准。本文描述**迁移要求**，不宣称该分层已经完成。

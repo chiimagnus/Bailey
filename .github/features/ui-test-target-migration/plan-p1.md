@@ -40,16 +40,18 @@
 **Why / verified risk:**
 - 现有 `fileRow(_:,in:)` 搜索全 App 中标识相同的 `bailey.tree.file`，只以 `lastPathComponent` 模糊匹配；Files/Git 并列、两个目录同名文件时可能拿到错误区域和对象。`fileTab` 同样只用 basename；不能以 `firstMatch` 存在证明来源正确。
 - 既有 Sheet 操作写死 `Add/Open/Cancel` 文案，系统语言或 Touch Bar 重名可能破坏测试选择。旧的 AX 全路径标识已遇到 128 字符限制；应按真正控件/窗口做可靠查询，不增加隐藏测试 UI。
-- `WorkspaceUITestSupport.launch` 已注册 App teardown，多数具体用例又在 `defer` 中 `app.terminate()`。核对正常/异常/断言失败的实际资源归属，只保留必需的一份关闭逻辑，不制造新的保护层。
+- `WorkspaceUITestSupport.launch` 已注册 App teardown，多数具体用例又在 `defer` 中 `app.terminate()`。更重要的是，Files/Git 测试**先创建 fixture / 写文件 / 初始化 Git，再调用会抛错的 `launch()`，直到成功返回后才注册 `defer { fixture.remove() }`**；启动失败就漏清理临时目录。应用关闭应仅有统一 teardown，fixture 创建成功后应立即登记清理，测试内后续任意抛错都能清理。
+- `WorkspaceUITestFixture.git(_:)` 将 stdout 和 stderr 都设为 `Pipe`，却在 `process.waitUntilExit()` 前不读取它们；复杂 Git fixture 的输出塞满管道时会互相等待。使用无需输出的安全重定向或可靠排空，并核实退出码和错误信息；不要因此开发第三套命令执行器。`WorkspaceUITestFixture.file(_:)` 仅向 `root.appendingPathComponent(name)` 写文件，不创建中间目录；同名不同路径测试须先建立各自父目录，或仅扩展该现有 helper，不能以根目录里的同名标签假装覆盖。
 - `--isolated-ui-test` 仅隔离快照与终端历史并禁启保存的隧道；`AppIdentity.configDirectory` 实际为 `FileManager.default.homeDirectoryForCurrentUser/.config/bailey`。本机已核验：仅给 `HOME` 赋临时值不改变该 Foundation 路径。因此修改设置的 UI 测试只在真正独立的 CI 用户/系统账户运行并验证写入归属，用户本机不执行。
+- `BaileyTests` 虽被称为 Unit Target，Xcode 构建配置却明确 `TEST_HOST = $(BUILT_PRODUCTS_DIR)/Bailey.app/Contents/MacOS/bailey`，`make test` 没有 `make test:ui` 的在用 App 预检；先通过工程配置和安全环境的真实运行证实宿主不会占用/污染用户会话，决定是否只限独立 Runner 或在现有 Makefile 上做最小前置保护。**在未证明安全前，本机正式 Bailey 运行时也不要启动 `make test`**，不能因测试名为 Unit 就擅自启动第二个 App。
 
 **Steps:**
 1. 保留现有 `make test:ui` 的 `pgrep -x bailey` 安全拒绝；专用 CI GUI Runner 从真实 `XCUIApplication.launch()` 开始依次执行原 10 项，核验原生文件选择器、项目载入、文件 Tab/真实保存、Palette 焦点、Git history/Changes、多窗和 Settings 只读入口。先用 fixture 建好仓库并检查分支、commit 和实际文件，失败要有精准诊断，不能通过加 `sleep` 或 `XCTSkip` 隐藏。
 2. 用实际面板/列表/窗口限定 AX 查询，验证不同目录同名、Files 与 Git 同时展示、两个 Tab 同名、超长/Unicode 路径及目标选择准确；需要时补充不含绝对路径的真实 AX 语义。系统文件选择器须在所附 Sheet 和当前语言中操作，不能命中其他窗口的同名按钮。
-3. 统一本次 UI 测试拥有的 App、fixture 和 git 子进程的 teardown；失败也清理本次对象，不结束同 Bundle ID 的用户进程。`BAILEY_UI_TEST_RUN_ID` 明确用于有意重启恢复，同一次测试内复用；独立用例之间不同 UUID。
+3. 统一本次 UI 测试拥有的 App、fixture 和 Git 子进程的 teardown：**创建临时目录成功后立即注册同一 XCTest 用例的清理**，不等到 `launch()` 成功；App 的关闭只由 `WorkspaceUITestSupport.launch` 登记一次；Git 子进程的 stdout/stderr 必须在退出前避免管道反压阻塞，验证真实失败能退出并报告错误。`BAILEY_UI_TEST_RUN_ID` 供有意重启恢复，同一次测试直接复用现有 `XCUIApplication`（其 `launchEnvironment` 已保持 UUID）即可；不同用例各自独立 UUID，无需另建重启管理器。
 4. 本任务修掉的旧 helper、重复 teardown、无效测试查询或过时 fixture 在同一提交直接移除；不能留到 P5。保留产品当前有效的数据保护守卫。
 
-**Verification:** 本机只允许 `make build:ui SIGNING=adhoc`（Bailey 运行时不启动 UI Test）；专用 Runner 跑 `make test:ui SIGNING=adhoc` 和相应 `ONLY_TESTING=BaileyUITests/WorkspaceFilesUITests`／Git/Windows/Smoke 定点选择，核对完整命令退出状态、用例实际发现、0 意外 skipped。遍历本任务实际可达的空/非空项目、长/重名路径、文件选择器确认/取消、同名跨组、不同语言窗口、脏数据写盘、重复打开、失败清理与现有 Bailey 进程安全拒绝。无法安全自动操作的真 GUI/系统权限逐项说明原因、替代证据及 Gate，不把 `build-for-testing` 称为 E2E。
+**Verification:** 本机正式 App 活跃时只允许安全的 `make build:ui SIGNING=adhoc`，不运行 UI Test；`make test` 因真实 `TEST_HOST` 未证明本机会话安全也先不执行。专用 Runner 跑 `make test:ui SIGNING=adhoc` 和相应 `ONLY_TESTING=BaileyUITests/WorkspaceFilesUITests`／Git/Windows/Smoke 定点选择，核对完整命令退出状态、用例实际发现、0 意外 skipped。遍历本任务实际可达的空/非空项目、长/重名路径、文件选择器确认/取消、同名跨组、不同语言窗口、脏数据写盘、重复打开、失败清理与现有 Bailey 进程安全拒绝。无法安全自动操作的真 GUI/系统权限逐项说明原因、替代证据及 Gate，不把 `build-for-testing` 称为 E2E。
 
 ---
 
@@ -59,16 +61,16 @@
 
 **Files:** `BaileyTests/Unit`（8 文件、75 方法）、`BaileyTests/Integration`（20 文件、231 方法）；重点 `BaileyTests/Integration/Workspace/SessionStoreTests.swift` 与 `BaileyTests/Integration/Settings/AppSettingsTests.swift`，必要的源锚点 `Bailey/Workspace/SessionStore.swift`、`Bailey/App/AppSettings.swift`。
 
-**Why:** 迁移目标是两个纯职责 Target，而非只删除 `NativeUI`/`WorkspaceUI` 目录。`SessionStoreTests` 中有实际 `NSWindow`/`NSHostingView`。另经逐方法核对，`AppSettingsTests.testCheckoutConsentIsPersistedAndResetWithTemporaryConfig` 与 `testObservationTracksAllNativeTerminalSettingsWithTemporaryConfig` 的 teardown 访问/恢复共享 `NSApp.appearance`，后者还会经主题属性触发实际 App 外观副作用；即使没渲染测试窗口，也不能把它们当作纯粹无 UI 副作用测试。
+**Why:** 迁移目标是两个纯职责 Target，而非只删除 `NativeUI`/`WorkspaceUI` 目录。`SessionStoreTests` 中有实际 `NSWindow`/`NSHostingView`。**源码已证实 `AppSettingsTests` 全部 5 个方法都有隐藏的原生副作用**：它们反复构造 `AppSettings(configURL:)`，而 `AppSettings.init` 在结束前无条件调用 `applyAppearance()` → `NSApp?.appearance = theme.nsAppearance` 和 `reloadThemeSelection()` → 全局 `Theme.reloadSelection`；其中两方法另直接恢复 `NSApp`，一方法修改 `.theme`。不能用“只有两项显式引用 NSApp”的扫描结论证明其余三项纯净。
 
 **Steps:**
 1. 核对全部 28 个 Unit/Integration 文件的 306 个方法及共享测试 helper，辨别窗口装配、原生输入、图形断言与纯 model/文件、Git/远端、配置/Observation。测试只引用 `NSColor` 或 Foundation 兼容类型，但不渲染/发事件时可保留在低层。
-2. 两条 `SessionStoreTests.testRealWindowRootRetainsItsRegistrationAndEditorAcrossViewConstruction`、`testClosedWindowCannotBeUsedForLateFileOperationErrors` 含原生窗口依赖：P4-T4 负责真实 App 替代与**同任务删除旧原生部分**，快照身份/退出队列逻辑留在非 UI Target。其他 8 项逐项查；`AppSettingsTests` 5 项中，保存/解析/Observation 断言保留非 UI，但 `NSApp.appearance` 的触发、全局修改与恢复要在 P4-T5 用隔离 CI 用户核对真实 Settings 应用效果，若纯配置测试可避免操作正式 GUI 状态，则从这两个低层方法中移除该不必要副作用，不能直接删除有意义的设置断言。
+2. 两条 `SessionStoreTests.testRealWindowRootRetainsItsRegistrationAndEditorAcrossViewConstruction`、`testClosedWindowCannotBeUsedForLateFileOperationErrors` 含原生窗口依赖：P4-T4 负责真实 App 替代与**同任务删除旧原生部分**，快照身份/退出队列逻辑留在非 UI Target。其他 8 项逐项查。对 `AppSettingsTests` **全部 5 项**，在本任务就逐个复核构造引发的 `NSApp` 与全局 Theme 写入，先消除不需要真实 GUI 的初始化/测试副作用和多余恢复路径；若需小幅调整 `AppSettings.init` 的外观应用时机，必须跟踪 `BaileyApp` → `BaileyApplicationDelegate.applicationWillFinishLaunching` 既有 `AppSettings.shared.applyAppearance()` 路径，证明正常首次启动、切主题和恢复不变，不为 XCTest 加业务分支。配置、Theme 值和 Observation 的原断言保留非 UI；真正用户可见 Settings 改动于 P4-T5 验证，不能提前删掉唯一的有效保障。
 3. 在 `migration-inventory.md` 的额外混入部分登记实际归属和消费任务，不额外维护第二张长表，也不要求把所有带 `@MainActor` 的非 UI 测试迁移。
 
 **Verification:** 全部 28 个文件及运行发现集合核对；从旧类中识别的真 UI 操作都有关联 P2–P4 任务和删除条件，不能在 P1 清单调查后宣称最终纯净。非 UI 性能/错误/SSH/快照输入保留；有条件的真实 SSH tests 可以按环境明确跳过，**跳过不算对应真实远端通过**，不为让全量数字归零而删测试。
 
-**Cleanup/doc owner:** 只更正归属与计划证据，P4-T4 与其它实际负责的迁移任务当场清理对应宿主 UI 代码，并同步 `docs/testing.md` 的分类说明。
+**Cleanup/doc owner:** P1-T3 当场删除**已证实不再需要**的配置测试原生副作用/重复复位，不把简单根因清理推到 P4-T5；同时修正触及的 `Bailey/App/AppSettings.swift` 注释和 `docs/features/{settings,tunnels}.md` 将实际 `.config/bailey` 误写为 `.config/Bailey` 的旧路径，不引入双目录兼容。P4-T4 负责 `SessionStoreTests` 两项图形用例的替代删除，P4-T5 只负责剩余真正可见的 Settings 操作和最终核验。任何修改仍须保证共享 Theme 状态不污染其它测试，不得直接删除必要的恢复逻辑。同步 `docs/testing.md` 对应分类。
 
 ---
 

@@ -25,7 +25,7 @@
 **Files/anchors:** `Bailey/Editor/{SourceTextEditor,NativeCodeTextView,NativeTextLineIndex,EditorFind}.swift`、`Bailey/Editor/FileViewerView.swift`；目标 `BaileyUITests/Editor/EditorNavigationUITests.swift`／`EditorInputUITests.swift`（按实际职责最小拆分）；纯文本几何算法必要时使用 `BaileyTests/Unit/Editor/TextCoordinateIndexTests.swift` 或新增职责相同的逻辑单测。
 
 **Step 1 — 旧断言与输入夹具：**
-- 逐项保留 `docs/testing.md#性能与内存测量` 中既有编辑器回归：382／1,000／10,000／100,000 行、折行两态、首/中/末每处 30 次编辑、至少 17 次交错远跳；冷/热可见首帧、长无空格行与变高内容、删除最长行后横向范围、滚轮与最远端、选区/滚动位置及窗口/字号变化。不因跨进程难测就以一次 `typeText` 替代视口生命周期证据。
+- 逐项保留 `docs/testing.md#性能与内存测量` 中既有编辑器回归：382／1,000／10,000／100,000 行、折行两态、首/中/末每处 30 次编辑、至少 17 次交错远跳；冷/热可见首帧、长无空格行与变高内容、删除最长行后横向范围、滚轮与最远端、选区/滚动位置及窗口/字号变化。**精确坐标、次数/分位数与批量压力由原本的非 UI 算法/性能测量承担，GUI 自动化执行能发现真实布局/交互倒退的代表性及极端用户路径；不把每个 30 次组合重复编成 GUI 案例**。每个旧 UI 断言仍须有实际可见结果，不能以一次 `typeText` 替代视口生命周期证据。
 - 枚举 10 项原生输入：连续输入、选区替换、组合输入 mark/unmark/commit/cancel、隐式／显式 replacement range、中文／Unicode／组合字符、多光标、Undo/Redo、编辑器卸载与再挂载、输入几何跟随真实编辑器。注明原测试中对内部 `NSTextView` 的独占断言是否必须拆为纯逻辑或真实 GUI。
 - **在本 task 内**核实真实 TextKit 输入与像素/AX 的跨进程可观测性：`XCUIElement.typeText` 并不自动证明真实拼音输入法 composition；需用实际输入法/专用 GUI 条件补验的行为保持明确 Gate，不能把普通键入当作 composition 覆盖。
 

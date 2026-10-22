@@ -20,25 +20,25 @@
 
 ## P4-T1 共享树行、Dock 点击、命令面板、App 菜单
 
-**Own old tests:** `BaileyTests/NativeUI/Shared/TreeRowHitTestingTests.swift`（7）、`BaileyTests/NativeUI/App/AppMenuIsolationTests.swift`（2）、`BaileyTests/WorkspaceUI/Windows/DockFocusP2RegressionTests.swift`（3），合计 12。
+**Own old tests:** `BaileyTests/NativeUI/Shared/TreeRowHitTestingTests.swift`（7）、`BaileyTests/NativeUI/App/AppMenuIsolationTests.swift` 的 `testFileMenuProvidesOpenFileKeyboardShortcut`（1）、`BaileyTests/WorkspaceUI/Windows/DockFocusP2RegressionTests.swift`（3），合计 **11**。该菜单类另一方法 `testTestHostHasNoQuitKeyboardEquivalent`（1）移至 **P4-T5**，因为此时仍有 T2–T5 的原生宿主测试实际使用隔离宿主 ⌘Q 保护。
 
 **Files/anchors:** `Bailey/Shared/Tree/{TreeRowStyle,TreeDisplayModel}.swift`、`Bailey/Files/{FileTreePanel,FileTreeModel}.swift`、`Bailey/UI/{CommandPaletteView,WorkspaceDockView,ContentView}.swift`、`Bailey/App/BaileyApp.swift` 与 `BaileyUITests/{Files,Workspace}/*UITests.swift`。
 
 **Step 1 — 对照原始语义：**
 - 树行完整命中、短文件名不弹性横滚/超长名独立横滚、右键仅打开菜单而不触发单击、单击 Files 预览/双击或 Return 打开、点击小按钮不误打开、选中底色与实际键盘焦点轮廓不同。
-- Dock 空工具区点击与异组拖放不会错误激活，Palette → File Manager 跳转后用户真实键盘落入相应文件；菜单 `Open File` 快捷键及隔离 XCTest 宿主不得被普通 `⌘Q` 误退出。
-- **真实候选旧围栏**：`Bailey/App/BaileyApp.swift` 在 `BaileyInstanceMode.isIsolated` 时用 `CommandGroup(replacing: .appTermination) {}` 禁用 `⌘Q`，`AppMenuIsolationTests.testTestHostHasNoQuitKeyboardEquivalent` 专门守住它。迁移后低层 Target 已不再需要前台键盘，独立 UI Test 又在专用 CI GUI Runner；本任务沿实际快捷键/退出/保存路径证明此拦截是否仍有消费者。**如果只是保护已迁出的宿主原生测试，则同任务移除这条测试专用 App 菜单覆盖与旧断言；若独立 UI 仍确实需要防止误退出，则保留具体原因和运行证据**。不得连同负责快照/隧道隔离的整个 `BaileyInstanceMode` 一起删除。
+- Dock 空工具区点击与异组拖放不会错误激活，Palette → File Manager 跳转后用户真实键盘落入相应文件；菜单 `Open File` 的真实快捷键和目标窗口正确。
+- `AppMenuIsolationTests.testTestHostHasNoQuitKeyboardEquivalent` 是**仍在被消费的**原生宿主保护断言，不属于本任务删除范围：`BaileyApp.swift` 的 `if BaileyInstanceMode.isIsolated { CommandGroup(replacing: .appTermination) {} }` 必须保持原样，直到 P4-T5 清空最后宿主 GUI 测试。源码历史明确该保护是为共享桌面的 XCTest 长测试避免意外退出而加，不是可提前删的无用分支。
 
 **Step 2 — 实现/清理：**
-- 用独立 `XCUIApplication` 的文件树、Git Changes、Dock 真实按钮与菜单、鼠标/键盘（真实双击/上下/Space/Return/右键）逐步验证。短长 label、滚轮水平位置和焦点反馈用 AX 加相同条件截图证据。
+- 用独立 `XCUIApplication` 的文件树、Git Changes、Dock 真实按钮与菜单、鼠标/键盘（真实双击/上下/Space/Return/右键）逐步验证。Files 作为独立 Finder 接收区时，只需必要的真实复制入口证明写入目标目录、不打开 Tab、不移动源文件，复杂冲突/链接/拒绝由文件后端 Integration 承担；不复制 P4-T3 的全套跨窗投递矩阵。短长 label、滚轮水平位置和焦点反馈用 AX 加相同条件截图证据。
 - 稳定标识仅补真实控件需要的 AX；窗口路由以 PR #50 的 `WorkspaceWindowModel` 为准，不依赖原 `TerminalManager` 别名或 `NSWindow.sendEvent`。
-- 核销 12 项后删除三个旧源类及专用 host helpers；对应 `docs/features/files.md`、`docs/features/dock.md`、`docs/features/command-palette.md`、`docs/ui.md` 测试入口及时更新。
+- 核销 11 项后删除 `TreeRowHitTestingTests.swift`、`DockFocusP2RegressionTests.swift` 两个完整旧类及其专用 helper，只从 `AppMenuIsolationTests.swift` 删除已替代的 `testFileMenuProvidesOpenFileKeyboardShortcut`；**另一 ⌘Q 用例留在同一源文件直到 P4-T5**，不要先删后无测试地保留保护。对应 `docs/features/files.md`、`docs/features/dock.md`、`docs/features/command-palette.md`、`docs/ui.md` 测试入口及时更新。
 
 **Step 3 — 验证：**
-- 独立 GUI runner 的 Files/Git 行命中与两个方向键路径；按当前 Makefile 运行共享树行纯模型回归；菜单 `⌘Q` 隔离只在专用测试 App 上验证，确保用户现有正式 App 未受到任何操作。
+- 独立 GUI Runner 的 Files/Git 行命中与两个方向键路径；按当前 Makefile 运行共享树行纯模型回归；验证 `⌘O` 与正确窗口。`⌘Q` 拦截和最终删旧保护归 P4-T5，避免本阶段退出尚在测试中的宿主。
 - Coverage：文件夹/文件/空行、短/长名称、中英、Unicode、窄宽、浅深、多级菜单、单/双/右键、Space/Return/Escape、同组/异组、空工具区、拖动释放点、命令面板搜索/取消/切换、异常和极端点击位置。
 - Uncovered：无法由 XCUITest 精确再现的触控板滑动及原生 Hover 轨迹如有缺口，按 `idea.md` 报具体原因与独立补验，不能用 `NSWindow.sendEvent` 冒充。
-- **Commit boundary:** 12 项原方法逐项替代、删三旧套件和无用 mocks，同步当前功能文档。
+- **Commit boundary:** 11 项原方法逐项替代、删两个完整旧套件和菜单类中已完成的 1 个旧方法及无用 mocks；不提前删除仍有实际用途的 ⌘Q 方法/守卫，同步当前功能文档。
 
 <a id="p4-t2"></a>
 
@@ -72,18 +72,18 @@
 **Files/anchors:** `Bailey/App/{FinderService,WorkspaceApplication,BaileyApp}.swift`、`Bailey/Files/{FileTreePanel,FileTreeModel}.swift`、`Bailey/Workspace/{WorkspaceWindowModel,Project,LocalWorkspaceBackend}.swift`、`Bailey/UI/{ContentView,WorkspaceDockView}.swift`、`Bailey/UI/Panels/ProjectsPanelView.swift`；需要的实际拖放分别追到 `Bailey/Terminal/TerminalHostView.swift` 和 `Bailey/Browser/BrowserView.swift`。优先扩展已有 `BaileyUITests/Workspace` 的测试类，仅职责复杂时新增 `WorkspaceFinderUITests.swift`。
 
 **Step 1 — 用户入口与触发前提：**
-- **按生产事件消费方分流**，不能把所有 Finder 拖放叫作「打开文件」：①系统 Finder/Launch Services 文件事件与空工作区/普通编辑区/标签栏/空 Dock 组 → 已有项目中的本机 FileTab 打开或复用；② Projects 面板 → 文件打开、目录添加项目；③ **Files 文件树（目录行、文件行、根/留白）→ 复制源文件/目录到真实目标文件夹，不打开 Tab、不移动源文件**；④ Ghostty 终端正文 → 在本机 shell 输入转义路径而非提交 Return，SSH/前台 ssh 不接收 Mac fileURL；⑤ WKWebView 正文 → 交给 WebKit 处理网页上传，浏览器工具栏才走普通打开。分别从实际 `onDrop` 到最终副作用验证，不能只测 DropDelegate 返回 `true`。
-- 已开文件去重与原窗口优先、目标组跨窗、拖后项目/窗口变更、延迟 provider 返回/取消、50+/64+ 连续事件、同名本机/SSH 与恢复中的身份核对；对 Files 复制另外验证文件字节、同名不覆盖、软链接、只读/自复制拒绝、部分失败保留有效项和原目录不被移动。真实外部入口必须到达实际 Tab/目录/终端/网页，不把模型回调成功当作用户结果。
+- **按真实事件消费方分流，避免重复测试**。本任务的 17 个旧方法只覆盖 Finder／Launch Services 经 Workspace/空 Dock 组及 Projects 面板发生的文件打开、标签复用、目录添加、批次队列与原窗口归属；真正的入口还须走到磁盘/编辑器结果，不能只测试 `DropDelegate` 返回值。Files 文件树另执行复制到目标目录且保留原源文件，Ghostty 终端另执行本机路径插入／SSH 拒绝，WKWebView 另执行网页上传；这些独立接收方的代表性真实入口由 P4-T1 或 P4-T5 接手，不在本 Finder 任务重复整套组合。
+- 本任务按原 17 项核对已开文件去重、原窗口优先、目标组跨窗、拖后项目/窗口变更、延迟 provider 返回/取消、50+/64+ 队列、同名本机/SSH 与恢复中身份；大量事件时序由无原生 View 的 Integration 精确测试，GUI 只验证实际 Finder 接线与目标文件/Tab。Files 复制冲突、字节、符号链接、只读/自复制等归 P4-T1 的共享树入口与既有文件后端测试，不重复作为这 17 项的 GUI 组合。
 - 真正的 Finder 应用或 Launch Services 文件事件不是 `XCUIElement.typeText` 可以冒充的；在专用 GUI Runner 研究实际可用系统外部入口，要求检测有权的前台桌面与协议，否则安排具体人工 E2E，不能记作全部自动化。
 
 **Step 2 — 实现/清理：**
 - 用唯一临时目录、合法普通文件/符号链接/不存在路径/多文件与目录，向测试版 App 发起真实外部请求；守住唯一 Bundle ID 和前台 App 权限，不能把事件发送给用户正式 Bailey。
-- XCUITest 在有 GUI 权限的 Runner 覆盖可真实操作的正常 Finder/系统投递以及不同 Drop 接收区；复杂 provider 乱序、窗口消失、错误回调、64+ 事件队列优先保留为无视图依赖的非 UI 集成测试，另用有限真实 App 入口确认接线正确。不为了复制 64 次物理拖动另建驱动框架。
+- XCUITest 在有 GUI 权限的 Runner 覆盖正常 Finder/系统投递和本任务负责的 Workspace/Projects 目标；复杂 provider 乱序、窗口消失、错误回调、64+ 事件队列由无视图依赖的非 UI 集成测试精确覆盖，另用必要的真实 App 入口验证接线。不为复制 64 次物理拖动另建驱动框架，也不在本阶段复测 Files/Terminal/Browser 的全部接收组合。
 - 逐项核销负责的 17 条旧保障，再于**同一任务**删除对应旧方法和只用于原生 UI 宿主的 provider/helper；该类其他 25 项不动，直到 P4-T2/T4 各自迁完。同步 `docs/features/projects.md`、`files.md`、`dock.md`、`terminal.md`、`browser.md` 和 `docs/testing.md` 的现行测试入口（仅更新受影响的章节）。
 
 **Step 3 — 验证：**
 - 专用 GUI Runner 中真实 Finder/Launch Services 与 Dock/drop 证据（自动化可执行的全部场景）；目标窗口项目、Tabs identity、最终文件/内容和错误提示；非 UI 先后事件队列、身份和时序回归分别执行。
-- Coverage：0/1/多窗、项目存在/不存在、单/多文件/目录、Files 行/根/留白导入和 Workspace/Projects/Terminal/Browser 的不同动作、软链接/坏链接、二进制/Unicode/超长路径、同名冲突与原文件未移动、重复与 64+ 排队、迟到/取消、关闭/恢复交错、同名本机/SSH、双窗口同时文件投递、Finder「打开方式」与 Dock 真正拖放的可执行条件和组合。
+- Coverage：0/1/多窗、项目存在/不存在、单/多文件/目录、Workspace/Projects/Dock 真实接收、软链接/坏链接、二进制/Unicode/超长路径、同名复用、重复与 64+ 排队、迟到/取消、关闭/恢复交错、同名本机/SSH、双窗口文件投递，以及 Finder「打开方式」与 Dock 真拖放在可执行条件下的组合；Files/Terminal/Browser 独立接收者的适用安全边界另在 P4-T1/T5 验证，不遗漏但不重复遍历。
 - Uncovered：XCUITest/Runner 无法控制 Finder 或真实拖放时，逐项记录自动化权限限制/人工补验方式和阻塞项，不删掉未有等价验证的重要历史测试。
 - **Commit boundary:** 17 项方法对应证据、删除旧项/无用 fixtures、非 UI 事件逻辑保留及功能文档更新。
 
@@ -104,6 +104,7 @@
 - 在真实 App 完成打开多个文件和 Diff/Browser、停靠、关闭/取消/保存失败/再次编辑，再次启动同隔离 `BAILEY_UI_TEST_RUN_ID` 验证窗口/项目/标签/文件恢复和字节正确；覆盖无项目新窗口及多组组合。
 - UI E2E 断言最终窗口数量、用户视图内容与磁盘，对原生 pointer identity 无法跨进程直接观测的部分用实测内容、Undo、滚动、实际资源测量和纯归属算法不变量补证；不能声称“同样看起来”即同一对象。
 - 将 `SessionStoreTests` 中 2 项涉及原生 View 的断言拆为「E2E + 非 UI」两份，删除旧窗口依赖、保留其它 8 项；前述 15 项和这 2 项核销后删除 `WorkspaceWindowIsolationTests.swift`（已由 T2/T3 清空）与 `WorkspaceWindowCloseTests.swift`、`WorkspaceContentIdentityTests.swift`，不遗留旧 host helper。
+- **正常退出不等于强制终止**：此阶段还有 P4-T5 的宿主原生测试，`BaileyApp` 仍会在隔离模式拦截 `⌘Q`。先从真实窗口/项目关闭路径验证 `WorkspaceApplication.windowClosed` → `SessionStore.save`，复用**同一个** `XCUIApplication` 及原 `BAILEY_UI_TEST_RUN_ID` 验证恢复；`XCUIApplication.terminate()` 只计强制结束，不能冒充用户正常退出及 `applicationWillTerminate`。最后的正常 ⌘Q 退出→保存→重启归 P4-T5 移除旧拦截后验收，不加新测试专用保存捷径。
 - 同步 `docs/features/session-restore.md`、`dock.md`、`editor.md`、`docs/architecture.md` 和 `docs/testing.md` 的**验证归属变化**；不改变存储键/格式或原行为。
 
 **Step 3 — 验证：**
@@ -116,25 +117,26 @@
 
 ## P4-T5 Terminal、Browser、编辑器原生资源、设置页
 
-**Own old tests:** `BaileyTests/NativeUI/Workspace/PaneRetentionTests.swift`（20）。同时对 P1-T3 标记的 `AppSettingsTests.swift` 做结果核对，只有真正需要通过可见设置页验证的操作放 `BaileyUITests`，纯配置和 Observation 保留在 `BaileyTests/Integration/Settings`。
+**Own old tests:** `BaileyTests/NativeUI/Workspace/PaneRetentionTests.swift`（20），以及此前仍有消费者的 `BaileyTests/NativeUI/App/AppMenuIsolationTests.testTestHostHasNoQuitKeyboardEquivalent`（1），合计 **21**。P1-T3 已负责清理配置初始化的多余原生副作用；本任务只补 Settings 的真实可见 UI 结果，保留非 UI 配置/Observation 断言。
 
 **Files/anchors:** `Bailey/Terminal/{TerminalSession,TerminalHostView,TerminalFindBar,TerminalHistory}.swift`、`Bailey/Browser/BrowserView.swift`（`BrowserTab`、`BrowserWebView`、`BrowserView`）、`Bailey/UI/WorkspaceDockView.swift`、`Bailey/UI/Panes/TabSwitcherView.swift`、`Bailey/App/{SettingsView,AppSettings,AppIdentity}.swift`、`Bailey/Editor/{FileViewerView,SourceTextEditor}.swift`、`Bailey/Workspace/{PaneTab,WorkspaceWindowModel}.swift`；优先扩展已有 UI suite，确有职责需要时再新增 `BaileyUITests/Workspace/WorkspaceRetentionUITests.swift` 与设置 UI 测试。
 
 **Step 1 — 旧的真实资源保障：**
-- 20 项涵盖终端 surface 复用/parking/Find、Shell PID/历史，TabSwitcher 暂时选择与 Escape 取消不产生副作用、五编辑器同存与 10 万行释放、旧文档缓存/Undo/滚动、Pane 移动、Browser 导航/历史/Favicon/表单和 WebKit 弹窗、Native file/SSH 选择面板、关闭后资源释放。**无需把与这些测试无关的 Bark 实际远端推送、长期隧道创建或第三方服务成本纳入此次 UI 迁移**，它们由现有安全/集成测试负责。
-- Settings 当前 `⌘,` 只读入口已有独立 UI Test；真正修改偏好写入 `AppIdentity.configDirectory = homeDirectoryForCurrentUser/.config/bailey`，而非文档的 `.config/Bailey`。本机实测仅改 `HOME` 不改变 Foundation 用户主目录；**修改偏好的 App UI Test 只在隔离 CI 登录用户运行，先确认配置/UserDefaults/钥匙串归属**，不额外开发测试配置注入。`AppSettingsTests` 五个方法的纯配置/Observation 断言保留非 UI，但两项当前访问或修改共享 `NSApp.appearance` 的测试必须去掉非必要 GUI 副作用，实际主题可见变更由独立 App UI 验证；相关 tearDown 仍须恢复全局状态直至安全替代完成。
+- 20 项涵盖终端 surface 复用/parking/Find、Shell PID/历史，TabSwitcher 暂时选择与 Escape 取消不产生副作用、五编辑器同存与 10 万行释放、旧文档缓存/Undo/滚动、Pane 移动、Browser 导航/历史/Favicon/表单和 WebKit 弹窗、Native file/SSH 选择面板、关闭后资源释放。Ghostty／Browser 的文件拖放只覆盖本域真实入口与必要结果，**不重复 P4-T3 的全部 Finder 窗口路由组合**；无需把与这些测试无关的 Bark 实际远端推送、长期隧道创建或第三方服务成本纳入此次 UI 迁移，它们由现有安全/集成测试负责。
+- Settings 当前 `⌘,` 只读入口已有独立 UI Test；真正修改偏好写入 `AppIdentity.configDirectory = homeDirectoryForCurrentUser/.config/bailey`，而非文档的 `.config/Bailey`。本机实测仅改 `HOME` 不改变 Foundation 用户主目录；**修改偏好的 App UI Test 只在隔离 CI 登录用户运行，先确认配置/UserDefaults/钥匙串归属**，不额外开发测试配置注入。`AppSettingsTests` 五个方法构造时都曾写 `NSApp.appearance`（不是只有显式访问的两项）；其不必要的初始化/测试副作用已归 P1-T3 提前清理。本任务核验实际主题、字号、保存和重启结果，而不重复重构配置逻辑。
+- `AppMenuIsolationTests.testTestHostHasNoQuitKeyboardEquivalent` 原来保护 NativeUI 长时间占用共享桌面的 XCTest 免受 `⌘Q` 误退出；此时才能确认原生宿主 GUI 用例全部删除，再检查独立 CI UI Runner 是否需要屏蔽退出。若无消费者，**同任务同时删除这条原生测试和 `BaileyApp.swift` 仅为测试宿主存在的 `CommandGroup(replacing: .appTermination) {}`**，并在专用 UI Runner 验证正常 ⌘Q、`applicationWillTerminate` 的持久化、脏文件退出否决及同 `BAILEY_UI_TEST_RUN_ID` 重启后的数据恢复；这是 P4-T4 不能以强制终止冒充正常退出所缺的最后一段链路。保留整个 `BaileyInstanceMode` 的真实快照/历史/隧道隔离。
 - 原始对象引用/ARC 释放、Task/callback 到期逻辑不等于纯 UI 可观察结果；需要非 UI 注入测试守护异步资源不变量，真实 UI 再用实际 Shell/文件/浏览器操作与 Instruments/进程测量补证。
 
 **Step 2 — 新 UI 与非 UI：**
-- 专用 CI Runner 构造真实 Shell marker、可控网页、5 个编辑器和 10 万行内容，经 Dock 停车/重挂载/关闭/重开观察内容与资源释放；**完整保留 `docs/testing.md` 的五轮各五个编辑器、两轮销毁后弱引用归零、旧 `NSScrollView` 持有、`Close Files`/关闭项目等原边界**。内部引用不能用截图直接验证时，须先有可纯化的非 UI 生命周期断言及 Release heap/Allocations 真实释放证据，不能用空白视图冒充清理完成。
+- 专用 CI Runner 构造真实 Shell marker、可控网页、5 个编辑器和 10 万行内容，经 Dock 停车/重挂载/关闭/重开观察内容与资源释放；**保留 `docs/testing.md` 五轮各五个编辑器、两轮宿主销毁、旧 `NSScrollView` 持有、`Close Files`/关闭项目等真实压力和生命周期触发条件**。旧测试能直接检查原生视图/文件弱引用归零，XCUITest 却不能跨进程读取这些指针；改以可纯化的资源所有权断言与真实 App 的 Instruments Allocations/生命周期及 heap 证据联合证明，**不能把内存总量回落自动等同于原逐对象析构断言**。不能证实的具体弱引用/文档缓存不变量保留为 No-Go，不新增私有测试反射通道。
 - 关闭后旧 callback、窗口附着时序、Document 占用保护等可从数据不变量验证的部分留在非 UI 单元/集成；Settings 通过独立 CI 用户的真实 `XCUIApplication` 与 TOML 结果证明，若不能隔离偏好则只验证现有只读 Settings 打开，不修改真实用户配置。
-- 20 项逐方法核销后同任务移除 `PaneRetentionTests.swift` 与独占的 `NSHostingView`/Shell parking fixtures（仍被生产或非 UI 测试消费的逻辑不得删除）；保留无 UI 的 `AppSettingsTests`。修正 `Bailey/App/AppSettings.swift` 的过时路径注释，以及 `docs/features/settings.md`、`tunnels.md`、`docs/testing.md` 中 `.config/Bailey` 与真实 `.config/bailey`、HOME 隔离误述；同步 `terminal.md`、`browser.md`、`dock.md`、`editor.md`、`docs/development.md` 的活跃测试入口。**本任务清空最后旧 UI suite 时**，核对 `AGENTS.md`、`CONTRIBUTING.md`、`.github/PULL_REQUEST_TEMPLATE.md` 及所有活跃文档的最终两个 Target 命名，不能把这项旧路清理推到 P5。
+- 21 项逐方法核销后同任务移除 `PaneRetentionTests.swift`、此前留下的 `AppMenuIsolationTests.swift` 与它们独占的 `NSHostingView`/Shell parking fixtures（仍被生产或非 UI 测试消费的逻辑不得删除）；保留已纯化的 `AppSettingsTests`。P1-T3 已负责改正 `AppSettings.swift` 和 `docs/features/settings.md`／`tunnels.md` 的大小写旧路径；本任务只复核 `docs/testing.md` 的 HOME 隔离说明及真实测试结果，并同步 `terminal.md`、`browser.md`、`dock.md`、`editor.md`、`docs/development.md` 的活跃测试入口。**本任务清空最后旧 UI suite 时**，核对 `AGENTS.md`、`CONTRIBUTING.md`、`.github/PULL_REQUEST_TEMPLATE.md` 及所有活跃文档的最终两个 Target 命名，不能把这项旧路清理推到 P5。
 
 **Step 3 — 验证：**
 - 专用 GUI Runner 的文件/终端/Browser/Settings 用户路径；本旧 suite 实际验证原生对象释放，按已有 `docs/testing.md` 必须保留可比较的打开/峰值/关闭后稳定 heap 与 Instruments Allocations 等证据（无可用环境则列为 No-Go），并核对保留在非 UI 的原生生命周期不变量。普通无资源变更的 UI 用例不用机械跑 Instruments。
 - Coverage：终端/浏览器/编辑器同窗与跨窗、空/1/5 Tab 及五轮每轮五编辑器、100k 行/旧 5 MiB 限制边界、两轮销毁释放和旧 scroll view、窄/宽 Find、停车/重挂载、重复开关、多窗/浅深/中英、Unicode/大文件、多语法任务和内存回落、WebKit alert/confirm/导航历史、Shell PID/焦点/后台输出、设置失败/撤销/重启恢复、窗口断开及获准 SSH 机器归属。
 - Uncovered：设备输入／本地 WebKit 权限／SSH 实机／Instruments 观测权限若不满足，记录受阻条件、尝试、非 UI 替代证据、内存/行为影响及补验 Gate，不以轻量 smoke 测试覆盖资源释放。
-- **Commit boundary:** 20 条逐项核销、真正 E2E + 无窗口的逻辑测试、旧 suite 删除、所属功能文档同步与资源证据。
+- **Commit boundary:** 21 条逐项核销、真正 E2E + 无窗口的逻辑测试、最后两份旧 suite 与孤立 ⌘Q 守卫同步删除、所属功能文档与资源证据。
 
 ---
 

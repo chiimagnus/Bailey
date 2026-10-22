@@ -30,9 +30,10 @@
 
 **Step 2 — 真实命令与 CI 证明：**
 1. Xcode Scheme 实际包含现有 `BaileyTests`、`BaileyUITests`，`make test:FileTreeTests,GitStatusModelTests` 能按要求发现多个真实非 UI 类；`make build:ui SIGNING=adhoc` 只编译不启动；`make test SIGNING=adhoc` 的完整 TestAction **及 codesign 后置检查**退出为 0。不存在类名、错误 target 等不能被假成功吞掉。
-2. 专用 CI GUI Runner 执行 `make test:ui SIGNING=adhoc`，记录 xcodebuild/xcresult 中发现、运行、passed/failed/skipped、真实窗口状态、附件与退出码；另覆盖同步/draft→ready 等本次相关 CI 入口。草稿或 Markdown-only 合法 skipped 和已实际运行是不同事实；Go 必须具有明确成功的非 Draft UI Job 和必要宿主全量 Job。
-3. 在无共享用户副作用的环境核对 App UI 最终文件 bytes、Git index/HEAD/refs、主窗口/组归属、Palette 原生按键、Finder 分区接收、Git Graph 视觉/菜单、编辑器/终端/浏览器身份、保存否决及跨启动恢复。对需要内存/真实 IME/物理设备/远端测试的状态，用关联领域任务的原始证据判定，不新写空泛“做过”的报告。
-4. Debug/Release 构建与签名按照 `docs/testing.md` 的实际相关门槛执行；macOS 最低 15.6、当前系统、CI、浅深主题、中文英文、窗口尺寸/触控与长输入、失败重试、连接及窗口时序组合按 `idea.md` 的适用条件最大可行覆盖。确实无法安全执行的环境逐项记录缺口、尝试、替代证据、风险及是否阻塞完成；不能为了数字好看禁用 SSH 条件测试或删除保留价值的底层回归。
+2. 专用 CI GUI Runner 执行 `make test:ui SIGNING=adhoc`，记录 xcodebuild/xcresult 中发现、运行、passed/failed/skipped、真实窗口状态、附件与退出码；另覆盖同步/draft→ready 等本次相关 CI 入口。对每个 `-only-testing` 目标核对**真实发现且运行的类和方法**，无效/过时类名不得得到假成功。草稿或 Markdown-only 合法 skipped 和已实际运行是不同事实；Go 必须具有明确成功的非 Draft UI Job 和必要宿主全量 Job。
+3. 对比真实环境：当前 PR 的 `.github/workflows/ci.yml` 使用 `xcode-27`，发布 `.github/workflows/release.yml` 使用 `macos-26` + `Xcode_26.6.app`，本机为 Xcode 27.2；不能因 PR 下两个 Target 通过就认定 Tag 阶段的 App/宿主 TestAction 与 Release 构建可用。至少读取两条工作流对应 Head/Tag 的真实构建日志并核对版本兼容；若已有发布构建障碍，归 CI/发布所有者修根因，不顺便无依据更换 Runner/新增测试体系。
+4. 在无共享用户副作用的环境核对 App UI 最终文件 bytes、Git index/HEAD/refs、主窗口/组归属、Palette 原生按键、Finder 分区接收、Git Graph 视觉/菜单、编辑器/终端/浏览器身份、保存否决及跨启动恢复。对需要内存/真实 IME/物理设备/远端测试的状态，用关联领域任务的原始证据判定，不新写空泛“做过”的报告。
+5. Debug/Release 构建与签名按照 `docs/testing.md` 的实际相关门槛执行；macOS 最低 15.6、当前系统、CI、浅深主题、中文英文、窗口尺寸/触控与长输入、失败重试、连接及窗口时序组合按 `idea.md` 的适用条件最大可行覆盖。确实无法安全执行的环境逐项记录缺口、尝试、替代证据、风险及是否阻塞完成；不能为了数字好看禁用 SSH 条件测试或删除保留价值的底层回归。
 
 **Step 3 — Gate 与交付：**
 - **Go:** 329 全核销、两 Test Target 分层实证、所有当前适用且可安全执行的条件与重要组合真实验收、必要 CI 和构建退出成功、零未解释 UI/UX 退化、无过时测试入口与重叠旧代码。
