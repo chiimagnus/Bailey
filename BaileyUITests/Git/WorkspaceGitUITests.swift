@@ -17,12 +17,16 @@ final class WorkspaceGitUITests: XCTestCase {
         XCTAssertTrue(git.waitForExistence(timeout: 20))
         git.click()
 
-        let history = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS %@", "E2E fixture history")).firstMatch
-        XCTAssertTrue(history.waitForExistence(timeout: 25),
-                      "Git Graph must show a commit from the actual fixture repository")
+        let history = app.buttons.matching(
+            NSPredicate(format: "label == %@", "E2E fixture history")
+        ).firstMatch
+        guard history.waitForExistence(timeout: 20) else {
+            XCTFail("Git Graph did not expose the fixture commit. Accessibility tree:\n"
+                + String(app.debugDescription.prefix(16000)))
+            return
+        }
         history.click()
-        let path = WorkspaceUITestSupport.element("bailey.tree.file.\(committed.path)", in: app)
+        let path = WorkspaceUITestSupport.fileRow(committed, in: app)
         XCTAssertTrue(path.waitForExistence(timeout: 15),
                       "Opening a real Git Graph commit must reveal its changed file")
     }
@@ -43,7 +47,7 @@ final class WorkspaceGitUITests: XCTestCase {
         XCTAssertTrue(git.waitForExistence(timeout: 20))
         git.click()
 
-        let change = WorkspaceUITestSupport.element("bailey.tree.file.\(changed.path)", in: app)
+        let change = WorkspaceUITestSupport.fileRow(changed, in: app)
         XCTAssertTrue(change.waitForExistence(timeout: 25),
                       "Git Changes must expose the modified file in the selected repository")
         change.click()

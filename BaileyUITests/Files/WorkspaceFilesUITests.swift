@@ -17,18 +17,18 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertTrue(files.waitForExistence(timeout: 20))
         files.click()
 
-        let firstRow = WorkspaceUITestSupport.element("bailey.tree.file.\(first.path)", in: app)
-        let secondRow = WorkspaceUITestSupport.element("bailey.tree.file.\(second.path)", in: app)
+        let firstRow = WorkspaceUITestSupport.fileRow(first, in: app)
+        let secondRow = WorkspaceUITestSupport.fileRow(second, in: app)
         XCTAssertTrue(firstRow.waitForExistence(timeout: 20))
         XCTAssertTrue(secondRow.waitForExistence(timeout: 20))
         firstRow.doubleClick()
-        let tab = WorkspaceUITestSupport.element("bailey.tab.file.\(first.path)", in: app)
+        let tab = WorkspaceUITestSupport.fileTab(first, in: app)
         XCTAssertTrue(tab.waitForExistence(timeout: 15),
                       "Double-clicking a file in the real File Manager must open its editor tab")
 
         files.click()
         secondRow.click()
-        let preview = WorkspaceUITestSupport.element("bailey.tab.file.\(second.path)", in: app)
+        let preview = WorkspaceUITestSupport.fileTab(second, in: app)
         XCTAssertTrue(preview.waitForExistence(timeout: 15),
                       "Clicking another file should open a preview tab without dropping the File Manager")
     }
@@ -47,7 +47,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 20))
         files.click()
-        let firstRow = WorkspaceUITestSupport.element("bailey.tree.file.\(first.path)", in: app)
+        let firstRow = WorkspaceUITestSupport.fileRow(first, in: app)
         XCTAssertTrue(firstRow.waitForExistence(timeout: 20))
         firstRow.click()
 
@@ -61,7 +61,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
         app.typeKey(" ", modifierFlags: [])
         XCTAssertTrue(
-            WorkspaceUITestSupport.element("bailey.tab.file.\(second.path)", in: app)
+            WorkspaceUITestSupport.fileTab(second, in: app)
                 .waitForExistence(timeout: 15),
             "After closing the palette, Down+Space must act on the real Files selection"
         )
@@ -78,10 +78,10 @@ final class WorkspaceFilesUITests: XCTestCase {
 
         try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
-        let row = WorkspaceUITestSupport.element("bailey.tree.file.\(file.path)", in: app)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 20))
         row.doubleClick()
-        XCTAssertTrue(WorkspaceUITestSupport.element("bailey.tab.file.\(file.path)", in: app)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: app)
             .waitForExistence(timeout: 15))
         let editor = app.textViews.firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
@@ -110,15 +110,16 @@ final class WorkspaceFilesUITests: XCTestCase {
 
         try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
-        let row = WorkspaceUITestSupport.element("bailey.tree.file.\(file.path)", in: app)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 20))
         row.doubleClick()
-        let id = "bailey.tab.file.\(file.path)"
-        XCTAssertTrue(WorkspaceUITestSupport.element(id, in: app).waitForExistence(timeout: 15))
+        let tab = WorkspaceUITestSupport.fileTab(file, in: app)
+        XCTAssertTrue(tab.waitForExistence(timeout: 15))
 
         app.typeKey("o", modifierFlags: .command)
         try WorkspaceUITestSupport.choose(file, button: "Open", in: app)
-        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: id).count, 1,
+        XCTAssertEqual(app.buttons.matching(identifier: "bailey.tab.file")
+            .matching(NSPredicate(format: "label CONTAINS %@", file.lastPathComponent)).count, 1,
                        "Reopening an existing file through Open File must reuse its editor tab")
     }
 }

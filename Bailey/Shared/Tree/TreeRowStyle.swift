@@ -285,7 +285,7 @@ struct TreeFolderRow<Accessory: View>: View {
                     .accessibilityAction(.default) { toggle() }
                     .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel)
-                .accessibilityIdentifier("bailey.tree.folder.\(row.path)")
+                .accessibilityIdentifier("bailey.tree.folder")
                 .accessibilityAddTraits(focusRing ? .isSelected : [])
                 .accessibilityValue(row.isExpanded
                     ? String(localized: "Expanded", table: "Sidebar")
@@ -331,7 +331,7 @@ struct TreeFileRow<Accessory: View>: View {
                     .accessibilityAction(.default) { open() }
                     .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel + ", " + row.path)
-                .accessibilityIdentifier("bailey.tree.file.\(row.path)")
+                .accessibilityIdentifier("bailey.tree.file")
                 .accessibilityAddTraits(focusRing ? .isSelected : [])
                 .accessibilityHint(accessibilityHint)
                 accessory(hovering || focusRing)

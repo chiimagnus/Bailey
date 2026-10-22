@@ -43,6 +43,19 @@ enum WorkspaceUITestSupport {
     static func element(_ id: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
+
+    static func fileRow(_ url: URL, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.file")
+            .matching(NSPredicate(format: "label CONTAINS %@", url.lastPathComponent))
+            .firstMatch
+    }
+
+    static func fileTab(_ url: URL, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(identifier: "bailey.tab.file")
+            .matching(NSPredicate(format: "label CONTAINS %@", url.lastPathComponent))
+            .firstMatch
+    }
 }
 
 struct WorkspaceUITestFixture {
