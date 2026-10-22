@@ -84,7 +84,7 @@ make test  # 全量测试
 
 Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言，原生绘制、点击、菜单、主题与尺寸仍用窗口和像素检查；不依赖 Vision OCR 在 CI 中反向识别截图文字。
 
-测试断言应到达磁盘字节、Git index/HEAD、原生内容、窗口归属或实际焦点。只验证 mock 被调用、字段改变或事件送出，不足以守住最终结果。临时 Git 仓库若依赖固定分支名，应在 `git init -b` 时明确指定，不能依赖本机或 CI 的 `init.defaultBranch`。
+测试断言应到达磁盘字节、Git index/HEAD、原生内容、窗口归属或实际焦点。需要前台原生输入的用例由运行环境保证焦点，不以窗口是否为 Key Window 决定跳过或放宽断言。只验证 mock 被调用、字段改变或事件送出，不足以守住最终结果。临时 Git 仓库若依赖固定分支名，应在 `git init -b` 时明确指定，不能依赖本机或 CI 的 `init.defaultBranch`。
 
 `SessionStoreTests` 还在真实 `NSHostingView` 中挂载生产 `WindowRootView`，反复构造同一位置的 View，核对登记数量、恢复内容和原生编辑器身份不变。此测试覆盖根视图装配，不代替 `WindowGroup` 的系统恢复与独立 App 验收。
 

@@ -173,8 +173,7 @@ final class GitExternalRefreshTests: XCTestCase {
             print("Git refresh diagnostic: expected HEAD=\(newHead) actual HEAD=\(model.headOID ?? "nil") "
                 + "recent=\(model.recentCommits.first?.hash ?? "nil") "
                 + "refreshing=\(model.isRefreshing) repo=\(model.isRepo) "
-                + "scope=\(model.currentScope) statusError=\(model.statusError ?? "nil") "
-                + "NSApp.isActive=\(NSApp.isActive)")
+                + "scope=\(model.currentScope) statusError=\(model.statusError ?? "nil")")
             throw error
         }
         let historyLatency = Date().timeIntervalSince(historyStart)

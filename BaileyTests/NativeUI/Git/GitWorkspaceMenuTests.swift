@@ -737,16 +737,9 @@ final class GitWorkspaceMenuTests: XCTestCase {
         }
         let owners = treeKeyboards(in: host)
         let graph = try XCTUnwrap(owners.last)
-        if window.isKeyWindow && NSApp.isActive {
-            try await wait {
-                host.layoutSubtreeIfNeeded()
-                return window.firstResponder === graph
-            }
-        } else {
-            // Xcode's isolated XCTest host may never gain foreground activation.
-            // Exercise the real NSWindow responder and keyboard path without
-            // pretending this verified automatic key-window activation.
-            XCTAssertTrue(window.makeFirstResponder(graph))
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return window.firstResponder === graph
         }
         let key = try XCTUnwrap(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: [],

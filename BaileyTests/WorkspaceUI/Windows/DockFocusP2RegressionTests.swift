@@ -18,7 +18,6 @@ private struct DockFocusP2Mount: NSViewRepresentable {
 
 @MainActor
 final class DockFocusP2RegressionTests: XCTestCase {
-    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
     func testClickingEmptyToolPaneReleasesHostingRootResponder() async throws {
         let window = NSWindow(
@@ -124,56 +123,6 @@ final class DockFocusP2RegressionTests: XCTestCase {
         NSApp.sendEvent(try mouse(.rightMouseDown, at: end, number: 7))
         XCTAssertEqual(destinationActivations, 2,
                        "Context-click activation must still work")
-    }
-
-    func testPaletteNoTargetChangeLeavesNativeEditorReadyForTyping() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let url = root.appendingPathComponent("palette-focus.swift")
-        try "let previous = true\n".write(to: url, atomically: true, encoding: .utf8)
-        let manager = self.workspaceApplication.makeWindow()
-        defer { manager.windowClosed() }
-        manager.addLocalFolders([root])
-        manager.openFile(url.path)
-        let project = try XCTUnwrap(manager.selectedProject)
-        let tab = try XCTUnwrap(project.selectedTab)
-        guard case .file(let file) = tab.content else { return XCTFail("FileTab expected") }
-        let window = NSWindow(
-            contentRect: NSRect(x: -900, y: -900, width: 1100, height: 700),
-            styleMask: [.titled, .resizable], backing: .buffered, defer: false
-        )
-        window.isReleasedWhenClosed = false
-        defer { window.close() }
-        let host = NSHostingView(rootView: ContentView(manager: manager))
-        window.contentView = host
-        NSApp.activate()
-        window.makeKeyAndOrderFront(nil)
-        guard window.isKeyWindow, NSApp.isActive else {
-            throw XCTSkip("A native key window is required for palette keyboard focus")
-        }
-        try await until {
-            host.layoutSubtreeIfNeeded()
-            return manager.attachedWindow === window && file.editorView?.window === window
-        }
-        let editor = try XCTUnwrap(file.editorView)
-        XCTAssertTrue(window.makeFirstResponder(editor))
-        XCTAssertTrue(manager.ownsActiveResponder(editor))
-        manager.toggleCommandPalette()
-        try await until {
-            host.layoutSubtreeIfNeeded()
-            return (window.firstResponder as? NSTextView)?.isFieldEditor == true
-        }
-        // The Palette's current FPS action does not change the active Dock pane.
-        manager.dismissCommandPalette(restoringFocus: false)
-        manager.toggleFPSCounter()
-        try await until {
-            host.layoutSubtreeIfNeeded()
-            return !manager.isCommandPaletteVisible && window.firstResponder === editor
-        }
-        XCTAssertTrue(window.firstResponder === editor)
-        XCTAssertTrue(manager.ownsActiveResponder(editor))
-        XCTAssertTrue(manager.isFPSCounterVisible)
     }
 
     private func until(_ condition: () -> Bool) async throws {

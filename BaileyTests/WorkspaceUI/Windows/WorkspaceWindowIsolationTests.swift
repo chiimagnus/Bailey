@@ -29,14 +29,6 @@ private final class FocusRecordingWindow: NSWindow {
 final class WorkspaceWindowIsolationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
-    private func hasForegroundKeyWindow(_ window: NSWindow) async -> Bool {
-        for _ in 0..<100 {
-            if NSApp.isActive && window.isKeyWindow { return true }
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-        return false
-    }
-
     func testAsyncFilesTargetBecomingCurrentRestoresVisibleFileCursor() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -145,9 +137,6 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         window.contentView = host
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
-        guard await hasForegroundKeyWindow(window) else {
-            throw XCTSkip("Native Files focus requires a foreground XCTest key window")
-        }
         try await wait {
             host.layoutSubtreeIfNeeded()
             return manager.attachedWindow === window
@@ -286,9 +275,6 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             return manager.attachedWindow === window && self.editor(in: host) != nil
         }
-        guard await hasForegroundKeyWindow(window) else {
-            throw XCTSkip("Foreground key window is required to validate native palette focus")
-        }
         let oldEditor = try XCTUnwrap(editor(in: host))
         XCTAssertTrue(window.makeFirstResponder(oldEditor))
         XCTAssertTrue(manager.ownsActiveResponder(oldEditor))
@@ -358,9 +344,6 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
         try await wait { host.layoutSubtreeIfNeeded(); return manager.attachedWindow === window }
-        guard await hasForegroundKeyWindow(window) else {
-            throw XCTSkip("Native overlay focus requires a foreground XCTest key window; cannot seize the user's Bailey")
-        }
         try await wait {
             host.layoutSubtreeIfNeeded()
             return manager.activeTreeResponder(in: window) != nil
@@ -444,9 +427,6 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             window.contentView = host
             NSApp.activate()
             window.makeKeyAndOrderFront(nil)
-            guard await hasForegroundKeyWindow(window) else {
-                throw XCTSkip("Native Git focus requires a foreground XCTest key window")
-            }
             try await wait {
                 host.layoutSubtreeIfNeeded()
                 return manager.attachedWindow === window
@@ -529,9 +509,6 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         window.contentView = host
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
-        guard await hasForegroundKeyWindow(window) else {
-            throw XCTSkip("Native input requires a foreground key window")
-        }
         try await wait {
             host.layoutSubtreeIfNeeded()
             return window.firstResponder is TreeKeyboardView && tree.selectedItem != nil
@@ -726,8 +703,6 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         }
         let filesGroup = try XCTUnwrap(project.dock.group(containing: .files))
         let reader = try XCTUnwrap(scopes(in: host).first { $0.groupID == filesGroup.id })
-        // A separate active Bailey window can keep this test process non-key.
-        // Model the same positive activation predicates as a real key-window click.
         reader.isActive = true
         reader.focusesEmptySpace = true
         reader.canFocus = { true }
@@ -766,23 +741,20 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         try await wait {
             host.layoutSubtreeIfNeeded()
             return project.dock.activeGroup?.selected == .files
-                && (!(window.isKeyWindow && NSApp.isActive)
-                    || window.firstResponder !== gitReader)
+                && window.firstResponder !== gitReader
         }
         XCTAssertEqual(project.fileTree.selectedPath, second.path,
                        "Reentering Files must retain its existing file cursor")
-        if window.isKeyWindow && NSApp.isActive {
-            let up = try XCTUnwrap(NSEvent.keyEvent(
-                with: .keyDown, location: .zero, modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber, context: nil,
-                characters: "\u{F700}", charactersIgnoringModifiers: "\u{F700}",
-                isARepeat: false, keyCode: 126
-            ))
-            window.sendEvent(up)
-            try await wait { project.fileTree.selectedPath == first.path }
-            XCTAssertEqual(project.dock.activeGroup?.selected, .files)
-        }
+        let up = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            characters: "\u{F700}", charactersIgnoringModifiers: "\u{F700}",
+            isARepeat: false, keyCode: 126
+        ))
+        window.sendEvent(up)
+        try await wait { project.fileTree.selectedPath == first.path }
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
         XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "doNotEdit\n")
         XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "doNotEdit\n")
     }
@@ -823,21 +795,18 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         try await wait {
             host.layoutSubtreeIfNeeded()
             return project.fileTree.selectedPath == second.path
-                && (!(window.isKeyWindow && NSApp.isActive)
-                    || window.firstResponder !== editor)
+                && window.firstResponder !== editor
         }
         XCTAssertEqual(project.dock.activeGroup?.selected, .files)
-        if window.isKeyWindow && NSApp.isActive {
-            let up = try XCTUnwrap(NSEvent.keyEvent(
-                with: .keyDown, location: .zero, modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber, context: nil,
-                characters: "\u{F700}", charactersIgnoringModifiers: "\u{F700}",
-                isARepeat: false, keyCode: 126
-            ))
-            window.sendEvent(up)
-            try await wait { project.fileTree.selectedPath == first.path }
-        }
+        let up = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            characters: "\u{F700}", charactersIgnoringModifiers: "\u{F700}",
+            isARepeat: false, keyCode: 126
+        ))
+        window.sendEvent(up)
+        try await wait { project.fileTree.selectedPath == first.path }
         XCTAssertEqual(project.tabs.count, 1, "Activating File Manager must not create a new FileTab")
         XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "original\n")
     }
@@ -897,12 +866,7 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
                        "When the only Files panel is replaced, the visible editor must own the group")
         let editor = try XCTUnwrap(editor(in: host))
         XCTAssertFalse(editor.isHiddenOrHasHiddenAncestor)
-        if NSApp.isActive && window.isKeyWindow {
-            try await wait { window.firstResponder === editor }
-        } else {
-            XCTAssertTrue(window.makeFirstResponder(editor),
-                          "The visible editor must accept keyboard input in a non-key test window")
-        }
+        try await wait { window.firstResponder === editor }
         XCTAssertEqual(window.firstResponder as? NSView, editor)
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "let value = 1\n")
     }
@@ -1169,28 +1133,23 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             manager.showPanel(tool)
             try await wait {
                 host.layoutSubtreeIfNeeded()
-                let active = NSApp.isActive && window.isKeyWindow
                 let validResponder = window.firstResponder is DockGroupFocusView
                     || (tool == .files && window.firstResponder is TreeKeyboardView)
-                return (!active || validResponder) && !file.isDirty
+                return validResponder && !file.isDirty
             }
-            if NSApp.isActive && window.isKeyWindow {
-                if let scope = window.firstResponder as? DockGroupFocusView {
-                    XCTAssertEqual(scope.groupID, project.dock.group(containing: tool)?.id)
-                } else {
-                    XCTAssertEqual(tool, .files,
-                                   "Only Files has its own keyboard receiver in this fixture")
-                    XCTAssertTrue(window.firstResponder is TreeKeyboardView)
-                }
+            if let scope = window.firstResponder as? DockGroupFocusView {
+                XCTAssertEqual(scope.groupID, project.dock.group(containing: tool)?.id)
+            } else {
+                XCTAssertEqual(tool, .files,
+                               "Only Files has its own keyboard receiver in this fixture")
+                XCTAssertTrue(window.firstResponder is TreeKeyboardView)
             }
             XCTAssertNil(project.focusedContent)
             XCTAssertFalse(manager.ownsActiveResponder(editor))
             XCTAssertTrue(self.editor(in: host) === editor)
             XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), file.text)
             project.selectTab(tab.id)
-            if NSApp.isActive && window.isKeyWindow {
-                try await wait { window.firstResponder === editor }
-            }
+            try await wait { window.firstResponder === editor }
         }
         XCTAssertTrue(file.text.hasSuffix(original))
         let before = file.text
@@ -1804,10 +1763,6 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
             NSApp.orderedWindows.first(where: { $0 === windowA || $0 === windowB }) === windowB,
             "The real receiver should move in front of the other workspace"
         )
-        // An XCTest-hosted app may not hold macOS foreground activation; when
-        // AppKit grants it, also require real key-window focus.
-        if NSApp.isActive { try await wait { windowB.isKeyWindow } }
-
         // A genuinely new file is opened in the explicit receiving window.
         self.workspaceApplication.openExternalFiles([extra], preferred: a) { replies.append($0) }
         XCTAssertEqual(replies, [true, true])

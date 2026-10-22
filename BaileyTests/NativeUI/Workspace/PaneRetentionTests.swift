@@ -1095,9 +1095,7 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertEqual(project.dock.tabOrder, [pane.id])
         XCTAssertEqual(project.selectedTabID, pane.id)
         XCTAssertTrue(scroll.documentView === editor)
-        if NSApp.isActive && window.isKeyWindow {
-            try await settle { window.firstResponder === editor }
-        }
+        try await settle { window.firstResponder === editor }
         print("DOCK_TRACE afterMove actual=\(scroll.contentView.bounds.origin) editorFrame=\(editor.frame) selection=\(editor.selectedRange()) viewport=\(String(describing: editor.textLayoutManager?.textViewportLayoutController.viewportRange))")
         try await settle { scroll.contentView.bounds.origin == scrollBefore }
         XCTAssertEqual(scroll.contentView.bounds.origin, scrollBefore)
