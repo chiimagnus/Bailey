@@ -3,7 +3,7 @@ import XCTest
 @testable import Bailey
 
 @MainActor
-final class EditorTextInputTests: XCTestCase {
+final class NativeEditorCompositionTests: XCTestCase {
     private func beginComposition(_ editor: NativeCodeTextView) {
         editor.text = "before after"
         editor.setMarkedText("中文", selectedRange: NSRange(location: 2, length: 0),

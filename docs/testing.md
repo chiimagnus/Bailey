@@ -34,7 +34,7 @@
 
 ## 测试目录与入口
 
-`BaileyTests/` 保留 `Unit/`、`Integration/`、`NativeUI/`、`WorkspaceUI/` 四层宿主 XCTest（`Bailey` Scheme）；二级按 App、Settings、Files、Editor、Git、Remote、Workspace 等领域归档。`BaileyUITests/` 使用独立 UI Test Target（`Bailey-UI` Scheme），通过 `XCUIApplication` 操作完整 App，不导入产品模块。只有跨进程、从用户入口执行的操作放入这个目标。
+`BaileyTests/` 使用 `Unit/`、`Integration/`，并暂时保留尚未迁走的 `NativeUI/`、`WorkspaceUI/` 宿主用例（`Bailey` Scheme）。编辑器中需要直接测量 `NSTextView` 的行号像素、TextKit 2 视口和 IME 组合状态，放在 `Integration/Editor/NativeEditorLayoutTests`、`NativeEditorCompositionTests`；这属于 AppKit 组件集成而不是完整 App E2E，也不能简化为纯算法测试。`BaileyUITests/` 使用独立 UI Test Target（`Bailey-UI` Scheme），通过 `XCUIApplication` 操作完整 App，不导入产品模块。只有跨进程、从用户入口执行的操作放入这个目标。
 
 每个文件按主要职责归档，不因混合用例机械拆类，不创建空目录或空测试。移动文件时核对工程发现路径，不能让它退出真实测试集合。
 
@@ -64,7 +64,7 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 | --- | --- | --- |
 | 冷启动、命令面板搜索／Escape、从编辑器切换 Files 后真实方向键／空格焦点 | `WorkspaceSmokeUITests`、`WorkspaceFilesUITests` | `DockFocusP2RegressionTests`、`WorkspaceWindowIsolationTests` |
 | 系统 Add Folder、Files 预览／打开、焦点恢复、文件去重、编辑保存到磁盘 | `WorkspaceFilesUITests` | `FileTreeTests`、`TreeRowHitTestingTests`、`FileTabTests` |
-| 大文件远距导航、文本替换、键盘撤销／重做、真实保存 | `EditorNavigationUITests` | `EditorNavigationTests`、`EditorTextInputTests`、`FileTabTests` |
+| 大文件远距导航、文本替换、键盘撤销／重做、真实保存 | `EditorNavigationUITests` | `NativeEditorLayoutTests`、`NativeEditorCompositionTests`、`FileTabTests` |
 | Git Changes 状态、Git Graph 提交展开 | `WorkspaceGitUITests` | `GitStatusModelTests`、`RecentCommitsViewTests` |
 | 多窗口、设置、系统选择器取消 | `WorkspaceWindowsUITests` | `WorkspaceWindowCloseTests`、`WorkspaceWindowIsolationTests` |
 
@@ -88,8 +88,8 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 | 文件、Diff 和原生内容保留 | `FileTabTests`、`DiffTabTests`、`DiffEngineTests`、`PaneRetentionTests` |
 | 高亮坐标、渲染色与字体／撤销 | `TextCoordinateIndexTests`、`SyntaxHighlightingTests` |
 | 查询编译共享、固定资源失败与取消等待者 | `HighlightQueryCacheTests`、`SyntaxHighlightingTests` |
-| 原生组合输入、结束标记与最终替换 | `EditorTextInputTests` |
-| 原生远距离定位、文末与固定行高 | `EditorNavigationTests` |
+| 原生组合输入、结束标记与最终替换 | `NativeEditorCompositionTests` |
+| 原生远距离定位、文末与固定行高 | `NativeEditorLayoutTests` |
 | Files 与所有 Git 树的命中与交互 | `TreeRowHitTestingTests` |
 | 快照、历史与测试隔离 | `SessionStoreTests` |
 | 标签及窗口整合路径 | `WorkspaceContentIdentityTests`、`WorkspaceWindowCloseTests`、`WorkspaceWindowIsolationTests` |
@@ -166,8 +166,8 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 
 编辑器回归必须覆盖下列实际结果，不能只检查状态字段：
 
-- **性能与坐标**：`EditorNavigationTests`、`TextCoordinateIndexTests` 验证 382／1,000／10,000／100,000 行，折行两态、文首／中／末各 30 次编辑，以及至少 17 次交错远跳；检查滚动条、长行横滚、Unicode 命中及撤销后的真实字节。
-- **真实绘制**：`EditorNavigationTests`、`DiffTabTests`、`FileTabTests` 验证亮暗主题、行号与跨行选区、空行、查找栏展开、窗口缩放、Diff 及行号与首字形不互相遮挡；颜色和位置以窗口像素为准。
+- **性能与坐标**：`NativeEditorLayoutTests`、`TextCoordinateIndexTests` 验证 382／1,000／10,000／100,000 行，折行两态、文首／中／末各 30 次编辑，以及至少 17 次交错远跳；检查滚动条、长行横滚、Unicode 命中及撤销后的真实字节。
+- **真实绘制**：`NativeEditorLayoutTests`、`DiffTabTests`、`FileTabTests` 验证亮暗主题、行号与跨行选区、空行、查找栏展开、窗口缩放、Diff 及行号与首字形不互相遮挡；颜色和位置以窗口像素为准。
 - **颜色取样**：像素回归先声明目标位图色彩空间，再读取该空间的通道并与同空间主题值比较。不要把 `colorAt` 返回的旧式 calibrated RGB 数值再次当成显示器 profile 进行转换；当前行号背景测试在 sRGB 目标中按实际位深读取通道，保留原容差，不通过放宽阈值掩盖差异。
 - **十万行真实工作区闭环**：`PaneRetentionTests.testHundredThousandLineWorkspaceEditsSavesAndReleasesFile` 在真实 `WorkspaceDockView` 挂载超过旧 5 MiB 上限的十万行 Swift 文件，核对首／中／末位置、编辑、Undo／Redo、磁盘保存和关闭后所有权；它仍属于原生工作区测试，不得充当独立 Release 的键盘 E2E。`EditorNavigationUITests.testHundredThousandLineNavigationPreservesAllInterveningBytes` 则从完整 App 验证十万行首尾键盘导航、修改与实际写盘；两者均不替代 Release 资源测量。大文件压力测试另以隔离正式 App 按阶段记录首次可见时间、峰值与稳定物理内存、CPU 时间、真实滚动后的缓存波动及关闭后 heap 引用；`leaks` 只发现不可达内存，不等于关闭后所有可达 FileTab 已释放。
 - **窗口生命周期**：`PaneRetentionTests.testClosingNativeWindowReleasesItsProjectBeforeSwiftUIDisappears` 直接关闭已关联 manager 的真实 `NSWindow`，验证关闭通知会同步注销管理器、清除所属项目和文件，而不是等待 SwiftUI `.onDisappear`；重复清理不得覆盖最后窗口快照。运行相关 `SessionStoreTests`、`WorkspaceWindowIsolationTests` 和窗口关闭测试，避免只修内存而破坏窗口恢复。

@@ -14,7 +14,7 @@ private final class NativeParagraphCounter: NSObject, NSTextContentStorageDelega
 }
 
 @MainActor
-final class EditorNavigationTests: XCTestCase {
+final class NativeEditorLayoutTests: XCTestCase {
     private func mount(
         _ text: String, font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular),
         width: CGFloat = 900, wraps: Bool = false,
