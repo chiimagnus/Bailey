@@ -33,12 +33,31 @@ enum WorkspaceUITestSupport {
         XCTAssertTrue(sheet.waitForExistence(timeout: 15),
                       "The native file/folder picker should be attached to the current window")
         app.typeKey("g", modifierFlags: [.command, .shift])
-        app.typeText(url.path)
-        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let pathField = app.textFields["PathTextField"]
+        guard pathField.waitForExistence(timeout: 10) else {
+            throw NSError(domain: "BaileyUITestPicker", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "Go to Folder input not found"])
+        }
+        pathField.click()
+        pathField.typeKey("a", modifierFlags: .command)
+        pathField.typeText(url.path)
+        guard pathField.value as? String == url.path else {
+            throw NSError(domain: "BaileyUITestPicker", code: 4,
+                          userInfo: [NSLocalizedDescriptionKey: "Incomplete path in Go to Folder input"])
+        }
+        pathField.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
         let confirmation = sheet.buttons["OKButton"]
-        XCTAssertTrue(confirmation.waitForExistence(timeout: 15),
-                      "The native picker must expose its standard confirm action")
-        XCTAssertTrue(confirmation.isEnabled, "The selected path must be valid")
+        guard confirmation.waitForExistence(timeout: 15) else {
+            throw NSError(domain: "BaileyUITestPicker", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Native picker confirmation missing"])
+        }
+        let selected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == YES"), object: confirmation
+        )
+        guard XCTWaiter.wait(for: [selected], timeout: 12) == .completed else {
+            throw NSError(domain: "BaileyUITestPicker", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Native picker did not select fixture path"])
+        }
         confirmation.click()
     }
 
