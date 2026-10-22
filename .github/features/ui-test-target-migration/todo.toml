@@ -37,26 +37,26 @@ note = "旧导航28+IME10逐方法保留为 Integration/Editor NativeEditorLayou
 [[tasks]]
 id = "P2-T2"
 title = "文件标签、真实读写、保存冲突与断线恢复"
-status = "blocked"
+status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = ""
-note = "已原子提交5bc6fe2：49条旧方法逐字等价保留，33个保存/远程事务+16个原生AX像素回归，定点49/49通过；真实App同名跨目录保存E2E1/1及build:ui通过。需整套UI连续回归及真实SSH图形验收；目前正式/Applications/Bailey.app PID15297运行，AGENTS.md明确禁止终止/抢占，当前完整GUI gate暂不能执行。P4宿主焦点/资源失败已记录，不能以此判全量Green。"
+commit = "2c7b51bf9ac966c6a0dab29359fb5be5b40d9a67"
+note = "迁移主体5bc6fe2保留原文件49/49（FileTabPersistence33、NativeFileTab16）；2026-10-23 Apple Development签名宿主106/106、另编辑/核心53/53，完整Bailey Dev真实GUI20/20，文件读写/同名路径/中文长路径/焦点与真实磁盘写入全部通过；本次2c7b51b修复输入法前置ABC切换与本地化菜单测试。真实Windows SSH图形、物理中文候选及CI ad-hoc环境尚未验收，只完成本机任务主体。"
 
 [[tasks]]
 id = "P2-T3"
 title = "语法高亮、主题、组合字符与原生颜色"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t3"
-commit = ""
-note = ""
+commit = "2c7b51bf9ac966c6a0dab29359fb5be5b40d9a67"
+note = "主体7e27b61保留原22/22原生高亮回归；2026-10-23实际宿主22/22、全部P2定点106/106通过；完整Dev GUI20/20中Swift/纯文本截图色彩及字节测试通过，十万行导航/最终保存通过。2c7b51b更新长期文档与输入隔离；实体中文输入法候选、更多语言外观的实际GUI组合和CI仍属单独环境边界。"
 
 [[tasks]]
 id = "P2-T4"
 title = "Diff 原生绘制、编辑、展开及真实保存"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t4"
-commit = ""
-note = ""
+commit = "2c7b51bf9ac966c6a0dab29359fb5be5b40d9a67"
+note = "主体6b65c00保留35/35原生Diff方法；2c7b51b修正sRGB实测像素、隔离UserDefaults防止持久化Edit状态挡重载、真实AppKit RadioGroup查询与Git快捷键；宿主35/35及P2定点106/106通过，完整Dev GUI20/20通过，额外Review Split→Unified原生双面板→Edit→Undo/Redo→Cmd-S真实写盘定点1/1通过。CI ad-hoc、真实SSH、GUI全语言/主题极端矩阵另记边界。"
 
 [[tasks]]
 id = "P3-T1"

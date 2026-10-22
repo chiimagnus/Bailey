@@ -69,6 +69,8 @@
 
 ## P2-T3 语法高亮、主题、组合字符与原生颜色
 
+**实施证据（2026-10-23）：** 原22方法已保留到 `BaileyTests/Integration/Editor/NativeSyntaxHighlightingTests.swift`；同日签名宿主 `make test:FileTabPersistenceTests,NativeFileTabTests,NativeSyntaxHighlightingTests,NativeDiffTabTests DERIVED_DATA=build/DerivedData-P2-Acceptance` 共106/106通过（高亮22/22）。`EditorHighlightingUITests` 真实 Swift／纯文本截图差异及文件字节通过；完整 GUI 套件在 Apple Development 签名下 **20/20 全通过，exit 0**；CI、实际拼音候选、缺位平台仍须分别核销。逐项去向见迁移清单。
+
 **Own old tests:** `BaileyTests/NativeUI/Editor/SyntaxHighlightingTests.swift`（22）。
 
 **Files/anchors:** `Bailey/Editor/{SyntaxHighlighting,SyntaxHighlightConfiguration,NativeCodeTextView,SourceTextEditor}.swift`、`Bailey/App/Theme.swift`、现有 `BaileyTests/Unit/Editor/{HighlightQueryCacheTests,TextCoordinateIndexTests}.swift`；确有需要时补非 UI token parser 测试，UI 目标可为 `BaileyUITests/Editor/EditorHighlightingUITests.swift`。
@@ -92,6 +94,8 @@
 <a id="p2-t4"></a>
 
 ## P2-T4 Diff 原生绘制、编辑、展开及真实保存
+
+**实施证据（2026-10-23）：** 原35条方法及行为均保留于 `BaileyTests/Integration/Git/NativeDiffTabTests.swift`；三项红绿行及删除 ghost 像素验证改为实际 sRGB 位图通道读取、原容差不变；默认 Diff 偏好改用隔离 UserDefaults，消除用户持久化编辑模式对折叠重载测试的干扰。`NativeDiffTabTests` 35/35 宿主测试通过；从 Git Changes → Diff → 原生编辑／Undo／Redo／⌘S → 真实工作区字节的独立 Bailey Dev E2E 1/1 通过。`NSSegmentedControl` 的 AX 实际类型是 `RadioGroup`；完整本机 GUI **20/20 通过、exit 0**；增强 Review 下 Split→Unified 两原生面板、再切 Edit 的定点 E2E **1/1 通过**；CI 环境和真实 SSH 仍须分别核销。
 
 **Own old tests:** `BaileyTests/NativeUI/Git/DiffTabTests.swift`（35）。
 

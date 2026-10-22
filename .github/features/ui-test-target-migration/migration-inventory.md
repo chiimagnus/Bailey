@@ -62,7 +62,7 @@
 
 ### P2-T2 — 49 条
 
-**阶段性验收（2026-10-22）：** 49 条旧测试已按照下列方法名逐一核销；源码级逐函数对照 **49/49 方法体完全相同**（只将本地 `wait` 改调用共用的 `waitForFileTabState`），其余断言、测试夹具和真实磁盘/后端校验均未删除。`make test:FileTabPersistenceTests,NativeFileTabTests SIGNING=adhoc` 49/49 通过，0 skipped；完整 App 新增 `WorkspaceFilesUITests.testSameNamedFilesInSeparateFoldersSaveToTheirOwnPaths`，两个不同目录同名文件分别输入、保存并核对路径及磁盘内容，定向 1/1 通过。**完整 UI 套件尚未在该变更后连续执行**，当前正式 `/Applications/Bailey.app` 正在运行，仓库保护禁止抢占用户会话。模拟断线测试不等于真实 Windows SSH 图形验证。
+**本机验收（2026-10-23）：** 49 条旧方法逐项核销，所有保存／失败／竞态／原生断言保留；已运行 `make test:FileTabPersistenceTests,NativeFileTabTests,NativeSyntaxHighlightingTests,NativeDiffTabTests DERIVED_DATA=build/DerivedData-P2-Acceptance` 共106/106通过，其中本任务49/49。真实 Dev GUI 已验证不同目录同名文件独立保存、中文 Unicode 路径、编辑器文件写盘及文件树焦点；中英文命令面板重跑2/2通过。完整本机 `make test:ui DERIVED_DATA=build/DerivedData-P2-Acceptance` 在 Apple Development 签名下 **20/20 通过（0 skipped，exit 0）**；正式 Bailey 从未被替换或退出。模拟断线不等于真实 Windows SSH 图形验收。
 
 **旧 `NativeUI/Editor/FileTabTests.swift`（49 条） → [Integration/Files/FileTabPersistenceTests.swift](../../../BaileyTests/Integration/Files/FileTabPersistenceTests.swift)**：33 条 `FileTabPersistenceTests` 验证受控后端时序、保存事务与数据；16 条 `NativeFileTabTests` 保留挂载后的 AppKit/AX/像素断言。两个 XCTest 类共用该文件内原有 `private actor EditorWorkspaceFixture`，避免创建对生产代码不可见的测试专用接口。原始文件可由提交 `b094047` 查看。
 
@@ -118,72 +118,76 @@
 
 ### P2-T3 — 22 条
 
-**本轮源码复核修正：** 原始清单把 2 项误归为 `B`：`testEmbeddedRequestsStayWithinRequestedRangeAndMatchFreshCaptures` 和 `testParserReadsAcrossUTF16ChunkBoundariesAndEditShift` 实际均调用 `mountedPlugin()`，检查已经挂载的 TextKit 原生临时颜色。**真正无需挂载原生编辑器的仅 2 项**：`testThemeCapturesMatchBundledPaletteAcrossAppearances`（AppKit/资源颜色）和 `testProductionTransformerMatchesUTF16ParserPoints`（parser 坐标）；其余 **20/22** 为原生组件颜色、语法时序/生命周期验证。保留原像素/异步断言，迁移不能以 parser 绿色或 XCUITest 文本非空代替颜色；完整 GUI 需在无正式 Bailey 进程时单独执行。
+**2026-10-23 P2-T3 验收：** 原22个 `test*` 方法与原类方法体、私有夹具逐字等价，仅类名更换；位置为 `Integration/Editor`。已真实执行签名宿主22/22通过；`EditorHighlightingUITests` 通过独立 Bailey Dev 的 Swift／纯文本截图差异及最终字节检查。完整 Bailey Dev GUI 20/20 通过，高亮真实截图和字节 E2E 通过；其他真实 IME 候选、CI／其他 OS 与主题极端组合须分别核销。
 
-**[SyntaxHighlightingTests.swift](../../../BaileyTests/NativeUI/Editor/SyntaxHighlightingTests.swift)：22 条** — 高亮、解析失效、颜色与撤销。初判：UI+逻辑，执行前核对每项真实断言。
+**本轮源码复核修正：** 原始清单把 2 项误归为 `B`：`testEmbeddedRequestsStayWithinRequestedRangeAndMatchFreshCaptures` 和 `testParserReadsAcrossUTF16ChunkBoundariesAndEditShift` 实际均调用 `mountedPlugin()`，检查已经挂载的 TextKit 原生临时颜色。**真正无需挂载原生编辑器的仅 2 项**：`testThemeCapturesMatchBundledPaletteAcrossAppearances`（AppKit/资源颜色）和 `testProductionTransformerMatchesUTF16ParserPoints`（parser 坐标）；其余 **20/22** 为原生组件颜色、语法时序/生命周期验证。保留原像素/异步断言，迁移不能以 parser 绿色或 XCUITest 文本非空代替颜色；已授权使用共享桌面焦点的 Bailey Dev E2E 不触及正在运行的正式 Bailey。
 
-- `testEmbeddedRequestsStayWithinRequestedRangeAndMatchFreshCaptures`（旧 L25） · `C`
-- `testEmbeddedSameLengthEditLanguageRemovalAndUndoKeepCurrentColors`（旧 L77） · `C`
-- `testClosingEmbeddedEditorReleasesPendingHighlightRequests`（旧 L123） · `C`
-- `testClosingFirstEditorDoesNotPreventSecondEditorAndDiffColors`（旧 L140） · `C`
-- `testThemeCapturesMatchBundledPaletteAcrossAppearances`（旧 L164） · `B`
-- `testClosingEditorDuringQueuedParsingReleasesItsContent`（旧 L191） · `C`
-- `testQueuedSemanticEditAndEarlierInsertionRecolorCurrentViewport`（旧 L210） · `C`
-- `testParserReadsAcrossUTF16ChunkBoundariesAndEditShift`（旧 L278） · `C`
-- `testFourSizeRealFileTabHighlightedInputAndParserBudget`（旧 L321） · `C`
-- `testOldSuccessIsNotDeliveredWhenContentChangesDuringPredicateRead`（旧 L443） · `C`
-- `testCompositionFinalReplacementKeepsParserAndCurrentColors`（旧 L467） · `C`
-- `testOldFailureIsNotDeliveredAfterNewEdit`（旧 L495） · `C`
-- `testEmbeddedQueryReadyDropsInFlightEarlierTokens`（旧 L513） · `C`
-- `testInjectionReadCannotDeliverOldBaseAndCurrentViewportRecolors`（旧 L542） · `C`
-- `testRealPluginTailDeleteAllDeleteAndQueuedEditsMatchFreshParserAndColors`（旧 L581） · `C`
-- `testPluginColorsPreserveTextFontCleanStateAndUndo`（旧 L644） · `C`
-- `testSelectedCompositionFlowsIntoActualFileBytesAndUndo`（旧 L698） · `C`
-- `testRepeatedGrammarSwitchReleasesPriorCoordinators`（旧 L743） · `C`
-- `testRenamingMountedFileChangesGrammarWithoutDiscardingUndo`（旧 L772） · `C`
-- `testRapidNativeUnicodeReplacementsKeepParserAndBytesAligned`（旧 L824） · `C`
-- `testAtomicMultiCursorUnicodeEditAndUndoKeepParserAndNativeStorageAligned`（旧 L857） · `C`
-- `testProductionTransformerMatchesUTF16ParserPoints`（旧 L888） · `B`
+**原始 `BaileyTests/NativeUI/Editor/SyntaxHighlightingTests.swift` 的 22 条 → [NativeSyntaxHighlightingTests.swift](../../../BaileyTests/Integration/Editor/NativeSyntaxHighlightingTests.swift)**。新类保留全部原生挂载、渲染色、异步解析、Unicode 与 Undo 断言；`EditorHighlightingUITests` 新增 Swift 与纯文本同源像素对照，已在本机 GUI 通过。
+
+- `testEmbeddedRequestsStayWithinRequestedRangeAndMatchFreshCaptures`（旧 L25） · `C` → `NativeSyntaxHighlightingTests.testEmbeddedRequestsStayWithinRequestedRangeAndMatchFreshCaptures`
+- `testEmbeddedSameLengthEditLanguageRemovalAndUndoKeepCurrentColors`（旧 L77） · `C` → `NativeSyntaxHighlightingTests.testEmbeddedSameLengthEditLanguageRemovalAndUndoKeepCurrentColors`
+- `testClosingEmbeddedEditorReleasesPendingHighlightRequests`（旧 L123） · `C` → `NativeSyntaxHighlightingTests.testClosingEmbeddedEditorReleasesPendingHighlightRequests`
+- `testClosingFirstEditorDoesNotPreventSecondEditorAndDiffColors`（旧 L140） · `C` → `NativeSyntaxHighlightingTests.testClosingFirstEditorDoesNotPreventSecondEditorAndDiffColors`
+- `testThemeCapturesMatchBundledPaletteAcrossAppearances`（旧 L164） · `B` → `NativeSyntaxHighlightingTests.testThemeCapturesMatchBundledPaletteAcrossAppearances`
+- `testClosingEditorDuringQueuedParsingReleasesItsContent`（旧 L191） · `C` → `NativeSyntaxHighlightingTests.testClosingEditorDuringQueuedParsingReleasesItsContent`
+- `testQueuedSemanticEditAndEarlierInsertionRecolorCurrentViewport`（旧 L210） · `C` → `NativeSyntaxHighlightingTests.testQueuedSemanticEditAndEarlierInsertionRecolorCurrentViewport`
+- `testParserReadsAcrossUTF16ChunkBoundariesAndEditShift`（旧 L278） · `C` → `NativeSyntaxHighlightingTests.testParserReadsAcrossUTF16ChunkBoundariesAndEditShift`
+- `testFourSizeRealFileTabHighlightedInputAndParserBudget`（旧 L321） · `C` → `NativeSyntaxHighlightingTests.testFourSizeRealFileTabHighlightedInputAndParserBudget`
+- `testOldSuccessIsNotDeliveredWhenContentChangesDuringPredicateRead`（旧 L443） · `C` → `NativeSyntaxHighlightingTests.testOldSuccessIsNotDeliveredWhenContentChangesDuringPredicateRead`
+- `testCompositionFinalReplacementKeepsParserAndCurrentColors`（旧 L467） · `C` → `NativeSyntaxHighlightingTests.testCompositionFinalReplacementKeepsParserAndCurrentColors`
+- `testOldFailureIsNotDeliveredAfterNewEdit`（旧 L495） · `C` → `NativeSyntaxHighlightingTests.testOldFailureIsNotDeliveredAfterNewEdit`
+- `testEmbeddedQueryReadyDropsInFlightEarlierTokens`（旧 L513） · `C` → `NativeSyntaxHighlightingTests.testEmbeddedQueryReadyDropsInFlightEarlierTokens`
+- `testInjectionReadCannotDeliverOldBaseAndCurrentViewportRecolors`（旧 L542） · `C` → `NativeSyntaxHighlightingTests.testInjectionReadCannotDeliverOldBaseAndCurrentViewportRecolors`
+- `testRealPluginTailDeleteAllDeleteAndQueuedEditsMatchFreshParserAndColors`（旧 L581） · `C` → `NativeSyntaxHighlightingTests.testRealPluginTailDeleteAllDeleteAndQueuedEditsMatchFreshParserAndColors`
+- `testPluginColorsPreserveTextFontCleanStateAndUndo`（旧 L644） · `C` → `NativeSyntaxHighlightingTests.testPluginColorsPreserveTextFontCleanStateAndUndo`
+- `testSelectedCompositionFlowsIntoActualFileBytesAndUndo`（旧 L698） · `C` → `NativeSyntaxHighlightingTests.testSelectedCompositionFlowsIntoActualFileBytesAndUndo`
+- `testRepeatedGrammarSwitchReleasesPriorCoordinators`（旧 L743） · `C` → `NativeSyntaxHighlightingTests.testRepeatedGrammarSwitchReleasesPriorCoordinators`
+- `testRenamingMountedFileChangesGrammarWithoutDiscardingUndo`（旧 L772） · `C` → `NativeSyntaxHighlightingTests.testRenamingMountedFileChangesGrammarWithoutDiscardingUndo`
+- `testRapidNativeUnicodeReplacementsKeepParserAndBytesAligned`（旧 L824） · `C` → `NativeSyntaxHighlightingTests.testRapidNativeUnicodeReplacementsKeepParserAndBytesAligned`
+- `testAtomicMultiCursorUnicodeEditAndUndoKeepParserAndNativeStorageAligned`（旧 L857） · `C` → `NativeSyntaxHighlightingTests.testAtomicMultiCursorUnicodeEditAndUndoKeepParserAndNativeStorageAligned`
+- `testProductionTransformerMatchesUTF16ParserPoints`（旧 L888） · `B` → `NativeSyntaxHighlightingTests.testProductionTransformerMatchesUTF16ParserPoints`
 
 ### P2-T4 — 35 条
 
-**[DiffTabTests.swift](../../../BaileyTests/NativeUI/Git/DiffTabTests.swift)：35 条** — Diff 展示、编辑与内容一致性。初判：UI+逻辑，执行前核对每项真实断言。
+**2026-10-23 P2-T4 验收：** 35条旧测试方法及原有断言保留；像素样本按 sRGB 目标读取通道，未放宽原阈值；Diff 组件统一隔离 UserDefaults，验证折叠计算不会因先前 GUI 持久化编辑模式而超时。`NativeDiffTabTests` 35/35 宿主通过（含统一／分栏红绿背景、删除 ghost 浅深主题），`WorkspaceGitUITests.testWorktreeDiffEditsAndPersistsRealGitFile` 从真实 Git Changes 执行 Diff 编辑／Undo／Redo／⌘S 及字节核对 1/1 通过；两个原生 `NSSegmentedControl` 的实际 AX 类型是 `RadioGroup`，测试查询与平台一致。完整本机 GUI 20/20 通过；后续增强 Split→Unified 切换并核对两侧可见原生编辑区域的定点 E2E 1/1 再次通过；CI／真实 SSH 单独记边界。
 
-- `testNativeDiffRendersRowsThroughTransparentTextSurface`（旧 L126） · `C`
-- `testSplitAndUnifiedDiffRowTintsReachPixelsInBothThemes`（旧 L169） · `C`
-- `testNativeEditableDiffPaintsDeletedGhostRowsInBothThemes`（旧 L240） · `C`
-- `testLongCRLogicalRowDoesNotPutEOFGhostsAtViewportBoundary`（旧 L294） · `C`
-- `testUnicodeLineSeparatorsDecorateEveryNativeVisualSegment`（旧 L334） · `C`
-- `testDeletingEveryEditLineKeepsEOFRemovalGhostScrollAccessible`（旧 L375） · `C`
-- `testDeletedGhostSpacingStaysOnOneTextKitParagraphWithBareCR`（旧 L423） · `C`
-- `testEditGeometryUsesGitLFLinesAcrossNativeBareCRParagraphs`（旧 L491） · `C`
-- `testBareCRReviewUsesTextKitParagraphHeightInsteadOfLFOnlyHeight`（旧 L542） · `C`
-- `testStagedDeletionShowsDeletedLinesInsteadOfMissingRevision`（旧 L589） · `C`
-- `testStagedConflictWithoutStageZeroIsNotADeletion`（旧 L626） · `B`
-- `testAppearanceChangeAfterReadErrorKeepsLastSuccessfulDiff`（旧 L655） · `C`
-- `testIncompleteSelectedGitBlobFailsInsteadOfPublishingTruncatedContent`（旧 L709） · `B`
-- `testFoldingPreviousDisplayCannotOverrideNewLoadedDiff`（旧 L727） · `B`
-- `testIndexMutationDuringGitContentReadUsesSelectedImmutableBlob`（旧 L760） · `B`
-- `testCanonicalEquivalentEditDuringDiffWriteRemainsDirty`（旧 L778） · `B`
-- `testCanonicalEquivalentGitContentIsARealDiff`（旧 L799） · `B`
-- `testCanonicalEquivalentNativeDiffEditSaveModeSwitchAndReload`（旧 L830） · `C`
-- `testSwitchingLoadedDiffTabsKeepsEachNativeDocument`（旧 L928） · `C`
-- `testNativeDiffEditorFocusLossSavesThroughBackend`（旧 L969） · `C`
-- `testFocusTriggeredDiffSavePreservesNewestBufferAndFailure`（旧 L1002） · `B`
-- `testAnotherLiveChannelInvalidatesInFlightDiffSave`（旧 L1038） · `B`
-- `testWorktreeStagedHistoryBinarySizeAndSymlink`（旧 L1087） · `B`
-- `testSaveDuringEditFailureAndDisconnectKeepUnsavedContent`（旧 L1147） · `B`
-- `testNativeDiffRendersAndRetainsTextKitSurface`（旧 L1187） · `C`
-- `testBackgroundSyntaxCapturesReachNativeDiffColors`（旧 L1229） · `C`
-- `testCRLFNativeReviewRowsAndEditUndoSavePreserveBytes`（旧 L1255） · `C`
-- `testNativeDiffUnicodeAndSplitAlignmentWithFoldExpansion`（旧 L1321） · `B`
-- `testCollapsedDiffAccessibilityPressReachesNativeExpansion`（旧 L1350） · `C`
-- `testNativeDiffSplitLayoutPreservesPaneIdentity`（旧 L1391） · `C`
-- `testSplitDiffSynchronizesHorizontalAndVerticalScrolling`（旧 L1454） · `C`
-- `testReadInFlightCannotReplaceEditingOrDisconnectedContent`（旧 L1540） · `B`
-- `testGitReloadUpdatesCleanMountedEditSurfaceWithoutLosingDirtyText`（旧 L1578） · `C`
-- `testNativeDiffEditUndoScrollSaveAndReparent`（旧 L1612） · `C`
-- `testEnteringEditModeDiscardsInFlightReadAndKeepsSharedPreferenceIdentity`（旧 L1690） · `B`
+**原始 `BaileyTests/NativeUI/Git/DiffTabTests.swift` 的 35 条 → [NativeDiffTabTests.swift](../../../BaileyTests/Integration/Git/NativeDiffTabTests.swift)**：全部原生渲染、Git read/write、撤销与生命周期方法逐字保留；新的真实 App 路径在 `WorkspaceGitUITests.testWorktreeDiffEditsAndPersistsRealGitFile`。
+
+- `testNativeDiffRendersRowsThroughTransparentTextSurface`（旧 L126） · `C` → `NativeDiffTabTests.testNativeDiffRendersRowsThroughTransparentTextSurface`
+- `testSplitAndUnifiedDiffRowTintsReachPixelsInBothThemes`（旧 L169） · `C` → `NativeDiffTabTests.testSplitAndUnifiedDiffRowTintsReachPixelsInBothThemes`
+- `testNativeEditableDiffPaintsDeletedGhostRowsInBothThemes`（旧 L240） · `C` → `NativeDiffTabTests.testNativeEditableDiffPaintsDeletedGhostRowsInBothThemes`
+- `testLongCRLogicalRowDoesNotPutEOFGhostsAtViewportBoundary`（旧 L294） · `C` → `NativeDiffTabTests.testLongCRLogicalRowDoesNotPutEOFGhostsAtViewportBoundary`
+- `testUnicodeLineSeparatorsDecorateEveryNativeVisualSegment`（旧 L334） · `C` → `NativeDiffTabTests.testUnicodeLineSeparatorsDecorateEveryNativeVisualSegment`
+- `testDeletingEveryEditLineKeepsEOFRemovalGhostScrollAccessible`（旧 L375） · `C` → `NativeDiffTabTests.testDeletingEveryEditLineKeepsEOFRemovalGhostScrollAccessible`
+- `testDeletedGhostSpacingStaysOnOneTextKitParagraphWithBareCR`（旧 L423） · `C` → `NativeDiffTabTests.testDeletedGhostSpacingStaysOnOneTextKitParagraphWithBareCR`
+- `testEditGeometryUsesGitLFLinesAcrossNativeBareCRParagraphs`（旧 L491） · `C` → `NativeDiffTabTests.testEditGeometryUsesGitLFLinesAcrossNativeBareCRParagraphs`
+- `testBareCRReviewUsesTextKitParagraphHeightInsteadOfLFOnlyHeight`（旧 L542） · `C` → `NativeDiffTabTests.testBareCRReviewUsesTextKitParagraphHeightInsteadOfLFOnlyHeight`
+- `testStagedDeletionShowsDeletedLinesInsteadOfMissingRevision`（旧 L589） · `C` → `NativeDiffTabTests.testStagedDeletionShowsDeletedLinesInsteadOfMissingRevision`
+- `testStagedConflictWithoutStageZeroIsNotADeletion`（旧 L626） · `B` → `NativeDiffTabTests.testStagedConflictWithoutStageZeroIsNotADeletion`
+- `testAppearanceChangeAfterReadErrorKeepsLastSuccessfulDiff`（旧 L655） · `C` → `NativeDiffTabTests.testAppearanceChangeAfterReadErrorKeepsLastSuccessfulDiff`
+- `testIncompleteSelectedGitBlobFailsInsteadOfPublishingTruncatedContent`（旧 L709） · `B` → `NativeDiffTabTests.testIncompleteSelectedGitBlobFailsInsteadOfPublishingTruncatedContent`
+- `testFoldingPreviousDisplayCannotOverrideNewLoadedDiff`（旧 L727） · `B` → `NativeDiffTabTests.testFoldingPreviousDisplayCannotOverrideNewLoadedDiff`
+- `testIndexMutationDuringGitContentReadUsesSelectedImmutableBlob`（旧 L760） · `B` → `NativeDiffTabTests.testIndexMutationDuringGitContentReadUsesSelectedImmutableBlob`
+- `testCanonicalEquivalentEditDuringDiffWriteRemainsDirty`（旧 L778） · `B` → `NativeDiffTabTests.testCanonicalEquivalentEditDuringDiffWriteRemainsDirty`
+- `testCanonicalEquivalentGitContentIsARealDiff`（旧 L799） · `B` → `NativeDiffTabTests.testCanonicalEquivalentGitContentIsARealDiff`
+- `testCanonicalEquivalentNativeDiffEditSaveModeSwitchAndReload`（旧 L830） · `C` → `NativeDiffTabTests.testCanonicalEquivalentNativeDiffEditSaveModeSwitchAndReload`
+- `testSwitchingLoadedDiffTabsKeepsEachNativeDocument`（旧 L928） · `C` → `NativeDiffTabTests.testSwitchingLoadedDiffTabsKeepsEachNativeDocument`
+- `testNativeDiffEditorFocusLossSavesThroughBackend`（旧 L969） · `C` → `NativeDiffTabTests.testNativeDiffEditorFocusLossSavesThroughBackend`
+- `testFocusTriggeredDiffSavePreservesNewestBufferAndFailure`（旧 L1002） · `B` → `NativeDiffTabTests.testFocusTriggeredDiffSavePreservesNewestBufferAndFailure`
+- `testAnotherLiveChannelInvalidatesInFlightDiffSave`（旧 L1038） · `B` → `NativeDiffTabTests.testAnotherLiveChannelInvalidatesInFlightDiffSave`
+- `testWorktreeStagedHistoryBinarySizeAndSymlink`（旧 L1087） · `B` → `NativeDiffTabTests.testWorktreeStagedHistoryBinarySizeAndSymlink`
+- `testSaveDuringEditFailureAndDisconnectKeepUnsavedContent`（旧 L1147） · `B` → `NativeDiffTabTests.testSaveDuringEditFailureAndDisconnectKeepUnsavedContent`
+- `testNativeDiffRendersAndRetainsTextKitSurface`（旧 L1187） · `C` → `NativeDiffTabTests.testNativeDiffRendersAndRetainsTextKitSurface`
+- `testBackgroundSyntaxCapturesReachNativeDiffColors`（旧 L1229） · `C` → `NativeDiffTabTests.testBackgroundSyntaxCapturesReachNativeDiffColors`
+- `testCRLFNativeReviewRowsAndEditUndoSavePreserveBytes`（旧 L1255） · `C` → `NativeDiffTabTests.testCRLFNativeReviewRowsAndEditUndoSavePreserveBytes`
+- `testNativeDiffUnicodeAndSplitAlignmentWithFoldExpansion`（旧 L1321） · `B` → `NativeDiffTabTests.testNativeDiffUnicodeAndSplitAlignmentWithFoldExpansion`
+- `testCollapsedDiffAccessibilityPressReachesNativeExpansion`（旧 L1350） · `C` → `NativeDiffTabTests.testCollapsedDiffAccessibilityPressReachesNativeExpansion`
+- `testNativeDiffSplitLayoutPreservesPaneIdentity`（旧 L1391） · `C` → `NativeDiffTabTests.testNativeDiffSplitLayoutPreservesPaneIdentity`
+- `testSplitDiffSynchronizesHorizontalAndVerticalScrolling`（旧 L1454） · `C` → `NativeDiffTabTests.testSplitDiffSynchronizesHorizontalAndVerticalScrolling`
+- `testReadInFlightCannotReplaceEditingOrDisconnectedContent`（旧 L1540） · `B` → `NativeDiffTabTests.testReadInFlightCannotReplaceEditingOrDisconnectedContent`
+- `testGitReloadUpdatesCleanMountedEditSurfaceWithoutLosingDirtyText`（旧 L1578） · `C` → `NativeDiffTabTests.testGitReloadUpdatesCleanMountedEditSurfaceWithoutLosingDirtyText`
+- `testNativeDiffEditUndoScrollSaveAndReparent`（旧 L1612） · `C` → `NativeDiffTabTests.testNativeDiffEditUndoScrollSaveAndReparent`
+- `testEnteringEditModeDiscardsInFlightReadAndKeepsSharedPreferenceIdentity`（旧 L1690） · `B` → `NativeDiffTabTests.testEnteringEditModeDiscardsInFlightReadAndKeepsSharedPreferenceIdentity`
 
 ### P3-T1 — 21 条
 
