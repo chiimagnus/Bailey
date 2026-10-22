@@ -20,7 +20,7 @@
 
 ## P4-T1 共享树行、Dock 点击、命令面板、App 菜单
 
-**Own old tests:** `BaileyTests/NativeUI/Shared/TreeRowHitTestingTests.swift`（7）、`BaileyTests/NativeUI/App/AppMenuIsolationTests.swift` 的 `testFileMenuProvidesOpenFileKeyboardShortcut`（1）、`BaileyTests/WorkspaceUI/Windows/DockFocusP2RegressionTests.swift`（3），合计 **11**。该菜单类另一方法 `testTestHostHasNoQuitKeyboardEquivalent`（1）移至 **P4-T5**，因为此时仍有 T2–T5 的原生宿主测试实际使用隔离宿主 ⌘Q 保护。
+**Own old tests:** `BaileyTests/NativeUI/Shared/TreeRowHitTestingTests.swift`（7）、`BaileyTests/NativeUI/App/AppMenuIsolationTests.swift` 的 `testFileMenuProvidesOpenFileKeyboardShortcut`（1）、`BaileyTests/WorkspaceUI/Windows/DockFocusP2RegressionTests.swift`（3），合计 **11**。 **P1 已提前核销其中 1 条**：旧伪前台 Command Palette 焦点测试改为真实 E2E 并在 `9177817` 删除；本任务尚需核销 **10** 条，原 11 条历史基线保留。该菜单类另一方法 `testTestHostHasNoQuitKeyboardEquivalent`（1）移至 **P4-T5**，因为此时仍有 T2–T5 的原生宿主测试实际使用隔离宿主 ⌘Q 保护。
 
 **Files/anchors:** `Bailey/Shared/Tree/{TreeRowStyle,TreeDisplayModel}.swift`、`Bailey/Files/{FileTreePanel,FileTreeModel}.swift`、`Bailey/UI/{CommandPaletteView,WorkspaceDockView,ContentView}.swift`、`Bailey/App/BaileyApp.swift` 与 `BaileyUITests/{Files,Workspace}/*UITests.swift`。
 
@@ -32,7 +32,7 @@
 **Step 2 — 实现/清理：**
 - 用独立 `XCUIApplication` 的文件树、Git Changes、Dock 真实按钮与菜单、鼠标/键盘（真实双击/上下/Space/Return/右键）逐步验证。Files 作为独立 Finder 接收区时，只需必要的真实复制入口证明写入目标目录、不打开 Tab、不移动源文件，复杂冲突/链接/拒绝由文件后端 Integration 承担；不复制 P4-T3 的全套跨窗投递矩阵。短长 label、滚轮水平位置和焦点反馈用 AX 加相同条件截图证据。
 - 稳定标识仅补真实控件需要的 AX；窗口路由以 PR #50 的 `WorkspaceWindowModel` 为准，不依赖原 `TerminalManager` 别名或 `NSWindow.sendEvent`。
-- 核销 11 项后删除 `TreeRowHitTestingTests.swift`、`DockFocusP2RegressionTests.swift` 两个完整旧类及其专用 helper，只从 `AppMenuIsolationTests.swift` 删除已替代的 `testFileMenuProvidesOpenFileKeyboardShortcut`；**另一 ⌘Q 用例留在同一源文件直到 P4-T5**，不要先删后无测试地保留保护。对应 `docs/features/files.md`、`docs/features/dock.md`、`docs/features/command-palette.md`、`docs/ui.md` 测试入口及时更新。
+- 复核 P1 已核销的 1 项并核销剩余 10 项后删除 `TreeRowHitTestingTests.swift`、`DockFocusP2RegressionTests.swift` 两个完整旧类及其专用 helper，只从 `AppMenuIsolationTests.swift` 删除已替代的 `testFileMenuProvidesOpenFileKeyboardShortcut`；**另一 ⌘Q 用例留在同一源文件直到 P4-T5**，不要先删后无测试地保留保护。对应 `docs/features/files.md`、`docs/features/dock.md`、`docs/features/command-palette.md`、`docs/ui.md` 测试入口及时更新。
 
 **Step 3 — 验证：**
 - 独立 GUI Runner 的 Files/Git 行命中与两个方向键路径；按当前 Makefile 运行共享树行纯模型回归；验证 `⌘O` 与正确窗口。`⌘Q` 拦截和最终删旧保护归 P4-T5，避免本阶段退出尚在测试中的宿主。

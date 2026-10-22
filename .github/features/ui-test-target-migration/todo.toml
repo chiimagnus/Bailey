@@ -4,42 +4,43 @@ current_task_id = ""
 [[tasks]]
 id = "P1-T1"
 title = "按方法核对旧测试与行为归属"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = ""
+no_commit_reason = "仅修改本地 Feature 清单，按 Skill 默认不入库；探索任务无代码提交"
+note = "Xcode宿主发现635/635，旧329项A19/B87/C223分类；10项UI静态核对，真实GUI待独立Runner"
 
 [[tasks]]
 id = "P1-T2"
 title = "修复独立 Runner 和现有十条真实 UI 路径"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = ""
-note = ""
+commit = "a33641ed8ad782077a0f32b272dcdb2da16317d7"
+note = "P1相关原子提交70a103d/f712d52/9177817/a33641e；完整真实App UI13/13 passed,0 skipped，入口/中文/Unicode/Git/窗口/编辑器键盘已实测；剩余同屏多树、多窗专项归P3/P4。"
 
 [[tasks]]
 id = "P1-T3"
 title = "核对 Unit/Integration 中混入的原生 UI 用例"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t3"
-commit = ""
-note = ""
+commit = "a7e4834ef25786e2fcc69fe967f60faefe8ce359"
+note = "28份Unit/Integration 306原有方法+新增配置纯回归1项已审查；AppSettings/SessionStore定点16/16，首次宿主全量636中唯一失败为P4-T1伪前台测试且已替换；二轮635宿主只剩P4-T5原生生命周期偶发失败，8条Windows SSH条件跳过并保留，归P4处理。"
 
 [[tasks]]
 id = "P2-T1"
 title = "编辑导航、原生输入、IME 和撤销"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = ""
-note = ""
+commit = "b09404719c022dad8e5eb3c6ce83593ac5fc2e1f"
+note = "旧导航28+IME10逐方法保留为 Integration/Editor NativeEditorLayoutTests/NativeEditorCompositionTests，删旧NativeUI两文件；组件+坐标 47/47 通过、全App编辑器3/3、前轮全UI16/16、CI YAML解析通过；外观/输入法的真实物理组合待专用GUI复核。全宿主635项执行、8跳过、19断言失败（1项PaneRetention Dock重挂载、9项WorkspaceWindowIsolation前台焦点/环境文件删除），无P2T1新类失败；真实 No-Go 归 P4 处理，未隐瞒。"
 
 [[tasks]]
 id = "P2-T2"
 title = "文件标签、真实读写、保存冲突与断线恢复"
-status = "pending"
+status = "blocked"
 plan = "plan-p2.md#p2-t2"
 commit = ""
-note = ""
+note = "已原子提交5bc6fe2：49条旧方法逐字等价保留，33个保存/远程事务+16个原生AX像素回归，定点49/49通过；真实App同名跨目录保存E2E1/1及build:ui通过。需整套UI连续回归及真实SSH图形验收；目前正式/Applications/Bailey.app PID15297运行，AGENTS.md明确禁止终止/抢占，当前完整GUI gate暂不能执行。P4宿主焦点/资源失败已记录，不能以此判全量Green。"
 
 [[tasks]]
 id = "P2-T3"

@@ -1,6 +1,6 @@
 # Plan P2 — 编辑器、输入、高亮和 Diff
 
-**Goal:** 完整核销 Editor 与 Diff 的 **144 个旧测试方法**：`EditorNavigationTests` 28、`EditorTextInputTests` 10、`FileTabTests` 49、`SyntaxHighlightingTests` 22、`DiffTabTests` 35；让直接模拟原生窗口的 UI 验证迁往 `BaileyUITests`，把可纯化的文本与存储不变量保留在 `BaileyTests`。
+**Goal:** 完整核销 Editor 与 Diff 的 **144 个旧测试方法**：`EditorNavigationTests` 28、`EditorTextInputTests` 10、`FileTabTests` 49、`SyntaxHighlightingTests` 22、`DiffTabTests` 35；让完整 App 用户操作迁往 `BaileyUITests`、纯文本/存储验证留在 `BaileyTests/Unit` 或 `Integration`。**必须在原生控件上观测的像素、TextKit 2 视口与 IME `setMarkedText` 契约保留为明确命名的 `BaileyTests/Integration` AppKit 组件验证**；不能假称 XCUITest/纯逻辑等价、也不能丢断言。
 
 **Non-goals:** 不更换 TextKit 2/Neon，不重做编辑器布局、Diff UI 或快捷键，不顺手改字体、主题和保存机制。实际 Git 历史操作归 P3。
 
@@ -31,15 +31,15 @@
 
 **Step 2 — 实现与替代清理：**
 - 用真实 App 创建/打开文件，靠 UI 的导航快捷键、滚动条、滚动和选择交互核对实际可见行、AX 文本与最后选区；对重绘保持和 Undo 以真实输入后的文档及磁盘字节为最终证据。
-- 将纯坐标换算、UTF-16 与 grapheme、range 变换等和 UI 无关的约束保留/转移至 Unit；需要颜色、视口、光标位置或键盘归属的仍由 E2E 与原生/像素对照负责。
-- 新测试必须操作真正挂载的原生编辑器、证明输入/布局错误可检测。原 38 条全部核销后删两个旧文件及宿主 helper；**同任务修改 `.github/workflows/ci.yml` 的 `Bailey/Editor/*` 选择分支**，只引用仍存在且覆盖实际语义的非 UI 类。若被选类为空须使 CI 明确失败/退回全量，不接受 Xcode `-only-testing` 静默执行零项。
+- 将纯坐标换算、UTF-16 与 grapheme、range 变换等和 UI 无关的约束保留在已有 `TextCoordinateIndexTests`。原始 28 条几何/像素/性能与 10 条 IME 组合输入中，不能在独立 App 内访问的精确不变量迁入 **`BaileyTests/Integration/Editor/NativeEditorLayoutTests` 与 `NativeEditorCompositionTests`**，仍测真实 `NSTextView`，不冒充纯 Unit；真正键盘、屏幕、文件读写由 `EditorNavigationUITests` 核验，三层结果需交叉对应。
+- 新测试必须操作真正挂载的原生编辑器、证明输入/布局错误可检测。原 38 条逐方法对照到新组件套件或已有纯 Unit（同名方法对照和源行号留在迁移清单），且 App 真实路径通过后，删除两个 `NativeUI` 旧文件；**CI 现已改为每次执行完整 `make test SIGNING=adhoc`**，删除基于改动文件猜 XCTest 类名的选择分支：旧类迁移/删除不再可能静默选择零项，本机仍使用 `make test:类名1,类名2` 定点迭代。
 - 同任务更新 `docs/features/editor.md`、`docs/ui.md`、`docs/testing.md` 的实际测试入口；**首个旧原生 UI suite 真正删除时**，同步修改 `AGENTS.md` 对 `BaileyTests`/`BaileyUITests` 的长期目标及过渡事实，不能仍把“宿主原生测试必须保留”作为现行强制规范，也不能提前宣称目录已清空。
 
 **Step 3 — 验证：**
-- `make build:ui SIGNING=adhoc` 及专用 Runner 上 `make test:ui SIGNING=adhoc ONLY_TESTING="BaileyUITests/EditorNavigationUITests BaileyUITests/EditorInputUITests"`（类名以最后落地值为准）；同步按现行 Makefile 执行受影响的 `TextCoordinateIndexTests` 与已存在编辑器宿主测试直至清理完成。全部成功、0 个非理由跳过。
+- `make build:ui SIGNING=adhoc` 及专用 Runner 上执行 `make test:ui SIGNING=adhoc ONLY_TESTING='BaileyUITests/EditorNavigationUITests'`（含新增真实路径）；宿主同时运行 `make test:NativeEditorLayoutTests,NativeEditorCompositionTests,TextCoordinateIndexTests SIGNING=adhoc`，以 **28+10+9** 的真实执行计数验证迁移没有失掉断言。不要把重命名视为测试等价完成，仍要核对 App E2E 输入/磁盘证据。全部成功、0 个非理由跳过。
 - Coverage：382／1,000／10,000／100,000 行、折行两态、首/中/末各 30 次编辑与 17 次交错远跳；长行/删除最长行后的滚动范围、字号/视口/主题、中英与真实 IME 组合确认/取消/Undo、重挂载、Tab、多光标、Unicode/UTF-16 与编辑后文件字节。按 `docs/testing.md` 分开测裸 TextKit 与真实 Neon/TreeSitter 的热操作（≥30 次，median/p95/worst），不新造硬预算；删除旧类时同步更新 `docs/development.md` 和 `docs/testing.md` 中点名该类的调用指南。
 - Uncovered：真实物理 IME 及当前不存在的设备/OS 单独列明限制、替代证据与 Gate；无法得到的 UI 几何证据不得因算法 Unit 绿色被宣布通过。
-- **Commit boundary:** 导航和输入的 UI/纯逻辑覆盖 + 两套旧文件删除 + 相应文档，独立提交并关联实际验证。
+- **Commit boundary:** 导航与输入的真实 UI 覆盖 + 精确 AppKit 组件/纯逻辑契约 + 两套旧 `NativeUI` 源文件删除 + CI 测试选择与文档同步，独立提交并记录方法集合差分、真实测试执行数。
 
 <a id="p2-t2"></a>
 
@@ -47,7 +47,7 @@
 
 **Own old tests:** `BaileyTests/NativeUI/Editor/FileTabTests.swift`（49）。
 
-**Files/anchors:** `Bailey/Workspace/{PaneTab,Project,WorkspaceWindowModel,WorkspaceBackend}.swift`、`Bailey/Remote/{RemoteConnection,SSHWorkspaceBackend}.swift`、`Bailey/Editor/FileViewerView.swift`、`BaileyUITests/Files/WorkspaceFilesUITests.swift`；模型事务测试归 `BaileyTests/Integration/Files`／`Workspace`，不直接挂 `NSHostingView`。
+**Files/anchors:** `Bailey/Workspace/{PaneTab,Project,WorkspaceWindowModel,WorkspaceBackend}.swift`、`Bailey/Remote/{RemoteConnection,SSHWorkspaceBackend}.swift`、`Bailey/Editor/FileViewerView.swift`、`BaileyUITests/Files/WorkspaceFilesUITests.swift`；模型与受控后端事务归 `BaileyTests/Integration/Files`／`Workspace`；涉及文件编辑器的 AppKit 像素、AX、焦点组件测试同样归 `Integration/Files`，仍实际挂载 `NSHostingView`。
 
 **Step 1 — 拆 49 条验证链：**
 - 按真实入口区分首次惰性加载、文件改名/符号链接、无效 UTF-8、二进制、过大/只读、图片预览、用户保存/自动保存、失败重试、失活写盘、可编辑 AX 内容、脏态/撤销、窗口关闭否决、多文件异步交错、SSH 延迟和断线、远端与本机工作区的目标身份。
@@ -56,11 +56,11 @@
 
 **Step 2 — 替代与清理：**
 - 扩展现有 `WorkspaceFilesUITests`，经 File Manager / Open File 与真实文本编辑器完成打开、保存、关闭、再次打开、切窗口、重命名、拒绝保存、背景窗口已有脏文件等路径；只修改 UI AX 语义不足的地方。
-- 原 49 项中的暂停读/写、continuation 乱序、断连恢复及失败留存使用当前 `FileTab`/`WorkspaceBackend` 真实非 UI 状态测试或最小可测试逻辑，不为了 XCUI 用例制造 UI 专用故障注入后门；只把实际可由 App 触发的保存/读取失败作为 E2E。旧 49 项逐条替代后移除 `FileTabTests.swift` 与旧窗口 fixture；同任务移除 CI 中该类名及相应文档引用，不让增量测试空跑。
+- 原 49 项按行为拆分：33 条文件读写/保存竞争留在 `FileTabPersistenceTests`，16 条 AppKit 组件/AX/像素断言留在 `NativeFileTabTests`。两个测试类位于 `Integration/Files/FileTabPersistenceTests.swift` 并共用原有 `private actor EditorWorkspaceFixture`（Swift 6 隔离边界）；不因文件放在 Integration 而删除像素测试。乱序、断线及失败由受控后端验证，不为 E2E 创建测试后门。49 条按方法名和断言全数核销后移除旧 `NativeUI/Editor/FileTabTests.swift`，其必要窗口夹具由组件测试继续使用。CI 已固定全量执行；同任务更新文档和迁移清单。
 - 影响 `docs/features/editor.md`／`docs/features/projects.md`／`docs/features/ssh.md` 的验证入口当任务更新，不改保存、关闭或远程回退的现行产品契约。
 
 **Step 3 — 验证：**
-- P1 安全 Runner 上执行 `BaileyUITests/Files` 相关测试，非 UI 测试用 `make test:类名1,类名2` 人工点名同根因相关类；合格的结果须包括磁盘 bytes、失败后编辑内容未丢、文件无串窗/串机、恢复后 Undo 正确。
+- 安全 Runner 上执行 `BaileyUITests/WorkspaceFilesUITests` 全类及受影响完整 UI 回归；先按 `make test:FileTabPersistenceTests,NativeFileTabTests SIGNING=adhoc` 验证 33+16 项确实被发现与执行；合格的结果须包括磁盘 bytes、失败后编辑内容未丢、文件无串窗/串机、恢复后 Undo 正确。
 - Coverage：空/Unicode/过大/二进制/非法字节/只读/不存在、内部最大读取边界与前后一字节、改名/符号链接/重复打开、首次载入晚返回、刷新错误与恢复、保存中再次编辑与改名、关闭/退出时脏缓冲、同名本机/SSH、断连/重连/目标切换的时序组合。
 - Uncovered：Windows SSH 实机若无授权，保留非 UI 后端测试、单独记录真实远端 GUI 缺口及可能影响；非 UI 故障注入不能冒充真实网络时序。
 - **Commit boundary:** 49 条逐项核销、UI 与非 UI 对应测试、删除源套件、关联功能文档和实际验证。
@@ -74,13 +74,13 @@
 **Files/anchors:** `Bailey/Editor/{SyntaxHighlighting,SyntaxHighlightConfiguration,NativeCodeTextView,SourceTextEditor}.swift`、`Bailey/App/Theme.swift`、现有 `BaileyTests/Unit/Editor/{HighlightQueryCacheTests,TextCoordinateIndexTests}.swift`；确有需要时补非 UI token parser 测试，UI 目标可为 `BaileyUITests/Editor/EditorHighlightingUITests.swift`。
 
 **Step 1 — 明确两类不同事实：**
-- 非 UI：Neon/TreeSitter parser capture、UTF-16 chunk、嵌套语言、查询时序、失效 token 剔除、编辑变换范围、取消/过期返回、coordinator 生命周期的可纯化部分。
+- 逐方法源码复核后，旧 22 项中只有 `testThemeCapturesMatchBundledPaletteAcrossAppearances` 与 `testProductionTransformerMatchesUTF16ParserPoints` 不挂载编辑器；原标 `B` 的 `testEmbeddedRequestsStayWithinRequestedRangeAndMatchFreshCaptures`、`testParserReadsAcrossUTF16ChunkBoundariesAndEditShift` **实际调用 `mountedPlugin` 并核对原生颜色**，应为 `C`。另 18 项同样依赖原生视图，共 **20 项 AppKit 组件契约、2 项非挂载资源/parser 契约**，不能简单重命名为 Unit 而丢像素保障。保留 Neon/TreeSitter parser capture、UTF-16 chunk、嵌套语言、查询时序、失效 token 剔除、编辑变换范围、取消/过期返回、coordinator 生命周期等真实原断言。
 - 真 UI：Swift/Markdown/TSX/HTML/CSS 的可见语法颜色、选区与高亮不污染正文/字体/Undo、浅/深主题、语言随改名切换、删除所有内容/插入/撤销/多光标／Unicode 组合后当前视口实际色彩。
 - 无法通过 XCUITest 直接取 `NSTextStorage` token 时，优先把计算搬非 UI 测试，并在 App 截图/可访问内容上证明最终渲染，必要时用可重复截图的可观测差异；不在测试中引入私有 parser-to-UI 通道。
 
 **Step 2 — 实现与清理：**
 - 独立 Runner 以相同字体/外观/尺寸获取原生视觉与字节证据，覆盖嵌套高亮、多次异步编辑和关闭后旧请求不能重染。颜色取样遵守 `docs/testing.md` 已有的 sRGB 目标色彩空间、像素位深和原容差；不得通过改变颜色空间或放宽阈值制造通过。
-- 拆分原 22 项，真实 parser/token/旧请求废弃的逻辑仍由非 UI 测试精确断言，视觉输出在真实 App 验证。替代成功后同任务删除 `SyntaxHighlightingTests.swift` 及独占宿主 helpers，清掉 CI `Bailey/Editor/*` 中旧类名；不触动仍有调用方的生产 `SyntaxHighlighting`、`TextKit 2` 及安全失效校验。
+- 拆分原 22 项，真实 parser/token/旧请求废弃的逻辑仍由非 UI 测试精确断言，视觉输出在真实 App 验证。替代成功后同任务删除 `SyntaxHighlightingTests.swift` 及独占宿主 helpers，CI 已固定全量执行，不再存在 `Bailey/Editor/*` 类名映射；不触动仍有调用方的生产 `SyntaxHighlighting`、`TextKit 2` 及安全失效校验。
 - 当场更新 `docs/features/editor.md`、`docs/ui.md`、`docs/testing.md` 及 `docs/development.md` 中仍引用 `SyntaxHighlightingTests` 的上游升级/高亮回归入口，不能只删类不更新长期受测契约。
 
 **Step 3 — 验证：**
@@ -103,7 +103,7 @@
 
 **Step 2 — 替代与清理：**
 - 从真实 Git Changes、已暂存区、历史提交进入 Diff，操作视图模式切换、折叠、水平/垂直滚动、切到编辑、模拟失败、保存并重新打开；截图与 AX 断言确认红绿背景/删除 ghost 的存在和位置，而非把它写成数据模型测试。
-- 纯 Git revision 读取、Unicode 行切分、过期读取消/保存竞态由非 UI 直接校验；对应 E2E 证明渲染、编辑、保存、实际 index/工作区结果。原 35 项逐条完成后同 task 删除 `DiffTabTests.swift` 和独占 fixture；**同步更新 `.github/workflows/ci.yml` 中 `Bailey/Git/Diff*.swift` 的旧类名列表**以及当前 `docs/testing.md` 选择指引。
+- 纯 Git revision 读取、Unicode 行切分、过期读取消/保存竞态由非 UI 直接校验；对应 E2E 证明渲染、编辑、保存、实际 index/工作区结果。原 35 项逐条完成后同 task 删除 `DiffTabTests.swift` 和独占 fixture；CI 已固定执行完整宿主测试，无须维护旧类名动态映射；同步更新 `docs/testing.md` 中本地定点运行示例。
 - 同步 `docs/features/diff.md`、`docs/features/editor.md`、`docs/testing.md` 以及 `docs/development.md` 中仍引用 `DiffTabTests` 的升级/回归命令；同任务删 CI 旧类和无用宿主 helper。
 
 **Step 3 — 验证：**
