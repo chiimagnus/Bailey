@@ -115,6 +115,32 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertTrue(WorkspaceUITestSupport.fileTab(beta, in: app).exists)
     }
 
+    func testChinesePickerOpensFileWithLongUnicodePath() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let folderName = "中文目录-" + String(repeating: "深", count: 50)
+        let file = try fixture.file(folderName + "/文件-测试.swift", text: "let 中文 = true\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "zh-Hans")
+        let add = app.buttons["bailey.emptyState.addFolder"]
+        XCTAssertTrue(add.waitForExistence(timeout: 15))
+        XCTAssertEqual(add.label, "添加文件夹…", "The test must actually launch the Chinese UI")
+
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 20))
+        files.click()
+        let folder = app.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", folderName)).firstMatch
+        XCTAssertTrue(folder.waitForExistence(timeout: 20))
+        folder.click()
+        let row = WorkspaceUITestSupport.fileRow(file, in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 20),
+                      "Long Unicode paths must remain uniquely addressable in the AX tree")
+        row.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: app)
+            .waitForExistence(timeout: 15))
+    }
+
     func testOpeningTheSameFileFromMenuReusesItsExistingTab() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("deduplicate.swift", text: "let one = 1\n")
@@ -129,7 +155,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertTrue(tab.waitForExistence(timeout: 15))
 
         app.typeKey("o", modifierFlags: .command)
-        try WorkspaceUITestSupport.choose(file, button: "Open", in: app)
+        try WorkspaceUITestSupport.choose(file, in: app)
         XCTAssertEqual(app.buttons.matching(identifier: "bailey.tab.file")
             .matching(NSPredicate(format: "label CONTAINS %@", file.lastPathComponent)).count, 1,
                        "Reopening an existing file through Open File must reuse its editor tab")

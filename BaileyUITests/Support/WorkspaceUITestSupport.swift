@@ -3,12 +3,13 @@ import XCTest
 
 @MainActor
 enum WorkspaceUITestSupport {
-    static func launch(in test: XCTestCase) throws -> XCUIApplication {
+    static func launch(in test: XCTestCase, language: String? = nil) throws -> XCUIApplication {
         let app = XCUIApplication()
         guard app.state == .notRunning else {
             throw XCTSkip("UI automation must not terminate an existing Bailey instance")
         }
         app.launchArguments = ["--isolated-ui-test"]
+        if let language { app.launchArguments += ["-AppleLanguages", "(\(language))"] }
         app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
         test.addTeardownBlock { @MainActor in
             if app.state != .notRunning { app.terminate() }
@@ -22,20 +23,21 @@ enum WorkspaceUITestSupport {
         let entry = app.buttons["bailey.emptyState.addFolder"]
         XCTAssertTrue(entry.waitForExistence(timeout: 15))
         entry.click()
-        try choose(url, button: "Add", in: app)
+        try choose(url, in: app)
         XCTAssertFalse(entry.waitForExistence(timeout: 1),
                        "A folder selected through the native picker must create a project")
     }
 
-    static func choose(_ url: URL, button: String, in app: XCUIApplication) throws {
-        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 15),
-                      "The native file/folder picker should be attached to Bailey")
+    static func choose(_ url: URL, in app: XCUIApplication) throws {
+        let sheet = app.windows.firstMatch.sheets.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 15),
+                      "The native file/folder picker should be attached to the current window")
         app.typeKey("g", modifierFlags: [.command, .shift])
         app.typeText(url.path)
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
-        let confirmation = app.sheets.firstMatch.buttons[button].firstMatch
+        let confirmation = sheet.buttons["OKButton"]
         XCTAssertTrue(confirmation.waitForExistence(timeout: 15),
-                      "The native picker must expose its \(button) action")
+                      "The native picker must expose its standard confirm action")
         XCTAssertTrue(confirmation.isEnabled, "The selected path must be valid")
         confirmation.click()
     }
@@ -90,8 +92,13 @@ struct WorkspaceUITestFixture {
     }
 
     func git(_ args: [String]) throws {
-        let executable = FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/git")
-            ? "/opt/homebrew/bin/git" : "/usr/bin/git"
+        // /usr/bin/git is an xcrun shim and cannot run inside XCTest's App Sandbox.
+        let executable = "/Library/Developer/CommandLineTools/usr/bin/git"
+        guard FileManager.default.isExecutableFile(atPath: executable) else {
+            throw NSError(domain: "BaileyUITestGit", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "Xcode Command Line Tools Git is required for UI test fixtures"
+            ])
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",

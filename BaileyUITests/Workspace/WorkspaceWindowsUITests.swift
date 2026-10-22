@@ -36,7 +36,7 @@ final class WorkspaceWindowsUITests: XCTestCase {
 
         app.buttons["bailey.emptyState.addFolder"].click()
         XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 15))
-        app.sheets.firstMatch.buttons["Cancel"].firstMatch.click()
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertTrue(app.buttons["bailey.emptyState.addFolder"].waitForExistence(timeout: 10),
                       "Cancel must leave the original empty workspace unchanged")
     }
