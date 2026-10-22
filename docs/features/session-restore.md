@@ -38,7 +38,7 @@ Finder／Dock 的外部打开请求不是工作区快照。冷启动及末窗关
 
 `BaileyInstanceMode` 识别 `--isolated-ui-test` **或**有效 UUID 的 `BAILEY_UI_TEST_RUN_ID` 环境变量。隔离进程以专用 UserDefaults suite 保存窗口快照，并使用临时终端历史；不读取正式 Bailey 的窗口，也不启动已保存隧道。
 
-刻意测试跨进程恢复时，两次启动传入同一有效 UUID。使用 `open -a <测试 App> <文件>` 验证真实 Launch Services 文档事件时，先确认正式 Bailey 已退出，再以 `open -n -a` 配合 `--env BAILEY_UI_TEST_RUN_ID=<UUID>` 启动测试 App：不要同时使用 `--args`，以免系统文件事件丢失。它只隔离数据，不隔离 Bundle ID、鼠标、键盘或图形会话；完整测试边界见 [testing.md](../testing.md#隔离环境)。
+刻意测试跨进程恢复时，两次启动传入同一有效 UUID。Makefile 的 XCTest 和 `Bailey-UI` 测试已固定使用 `chiimagnus.bailey.dev`，并与正式 Bailey 分开配置、历史和 Bundle ID。测试 Launch Services 文档事件须显式指定 `build/DerivedData-Dev/Build/Products/Debug/Bailey.app`，并保持同一 `BAILEY_UI_TEST_RUN_ID`；使用 `open` 注入文档时不要混用 `--args`，避免丢失系统文件事件。**Bundle ID 只隔离应用和持久数据，不隔离鼠标、键盘或当前 macOS 图形会话。** 完整边界见 [testing.md](../testing.md#测试目录与入口)。
 
 ## 验证
 

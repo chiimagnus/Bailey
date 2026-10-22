@@ -8,7 +8,7 @@
 - **配置不是工作区备份。** `~/.config/bailey/config.toml` 保存偏好和布局初始值，不承载项目快照或未保存文本。
 - **写入不能破坏手工配置。** 保存偏好使用原子写入并保留手工调整的工作区字段；失败保留原文件。
 - **初始布局只影响新项目。** 已有项目按自己的停靠状态恢复，不因设置改变被重置。
-- **只有一个应用身份。** Debug 和 Release 共用 `chiimagnus.bailey`；测试模式不代表全局偏好也已隔离。
+- **正式版与开发版隔离。** 正式 Debug／Release 共用 `chiimagnus.bailey`；测试采用 `chiimagnus.bailey.dev`，不读取或覆盖正式配置、语言、历史和 Bark 钥匙串。
 
 ## 设置界面
 
@@ -30,7 +30,7 @@ Git 检出提交的“总是接受”写入 `git.always-accept-checkout`，默�
 
 ## 隔离与关联数据
 
-普通配置目录固定为 `~/.config/bailey/`。`--isolated-ui-test` 隔离窗口快照和终端历史并跳过保存的隧道，但**普通设置仍共享**；需要改设置的测试必须使用独立 Home，并核实实际读写位置，见 [testing.md](../testing.md#隔离环境)。
+正式版使用 `~/.config/bailey/`，Bailey Dev 使用 `~/.config/bailey-dev/`；语言按 Bundle ID 分域，终端历史与 Bark 钥匙串服务也独立。开发版运行 `--isolated-ui-test` 时还隔离每轮窗口快照与终端历史，并跳过保存的隧道。**不同测试仍共用 Dev 配置**，需要修改设置的测试必须使用独立临时配置，不能依赖测试顺序；详见 [testing.md](../testing.md#测试目录与入口)。
 
 隧道规则独立存储在 `tunnels.toml`，不并入普通配置；其生命周期见 [tunnels.md](tunnels.md)。
 

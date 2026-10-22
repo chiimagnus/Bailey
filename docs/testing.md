@@ -46,7 +46,7 @@ make build:ui        # 只编译独立 UI Test，不启动 App
 make test:ui         # 独立图形会话中运行完整 App UI Test
 ```
 
-本地迭代人工指定 `make test:类名1,类名2,...`（逗号分隔，不加空格）选择任意数量的宿主 XCTest 类；涉及共享组件时补测相关类。`make test:ui` 单独执行整个 UI Test Target，不混入本机日常宿主测试。`make test`／`make test:ui` 都在运行前拒绝与已启动的 Bailey 共用桌面，避免测试宿主抢占用户窗口。CI 为每次非 Draft PR 都运行完整宿主 XCTest 和独立 App UI Test，不再根据文件变更猜测测试类名，避免迁移类名后执行零项。`ci/full` 可触发一次新的完整检查，测试结果必须对应本次 Head SHA。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
+本地迭代人工指定 `make test:类名1,类名2,...`（逗号分隔，不加空格）选择任意数量的宿主 XCTest 类；涉及共享组件时补测相关类。`make test:ui` 单独执行整个 UI Test Target，不混入本机日常宿主测试。`make test`、`make test:ui` 和 `make build:ui` 自动使用独立的 `chiimagnus.bailey.dev` 与 `build/DerivedData-Dev`，即使正式 Bailey 在运行也不会终止或覆盖它。`WorkspaceUITestSupport` 通过显式 Dev Bundle ID 启动 App，拒绝终止已有开发版实例；但 AppKit/XCUITest 仍争用同一桌面键盘焦点，要获得完全无干扰的真实 GUI 自动化须使用独立图形会话。CI 为每次非 Draft PR 都运行完整宿主 XCTest 和独立 App UI Test，不再根据文件变更猜测测试类名，避免迁移类名后执行零项。`ci/full` 可触发一次新的完整检查，测试结果必须对应本次 Head SHA。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
 
 ## 测试层次
 
@@ -102,23 +102,23 @@ Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言
 
 ## 隔离环境
 
-宿主 `Bailey` Scheme 的 TestAction 向 Debug 宿主传入 `--isolated-ui-test`。独立 UI Test 使用 `XCUIApplication` 启动正式 Bundle ID 的隔离实例，并显式传入 `--isolated-ui-test` 和一次性 `BAILEY_UI_TEST_RUN_ID`；不通过 XCTest 私有变量在产品入口加入另一套行为。
+宿主 `Bailey` Scheme 的 TestAction 向 Debug 宿主传入 `--isolated-ui-test`。Makefile 的测试构建使用独立 Bundle ID `chiimagnus.bailey.dev`；独立 UI Test 显式通过 `XCUIApplication(bundleIdentifier:)` 启动 Bailey Dev，并传入 `--isolated-ui-test` 与一次性 `BAILEY_UI_TEST_RUN_ID`，不允许定位或终止正式 Bailey。
 
 需要单独检查原生界面时使用相同签名的 Debug 包：
 
 ```sh
-open -n -a "$PWD/build/DerivedData/Build/Products/Debug/Bailey.app" --args --isolated-ui-test
+open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey.app" --args --isolated-ui-test
 ```
 
-该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。**隔离的是工作区数据，不是 App 的 Bundle ID 或图形桌面**：XCUITest 的 `XCUIApplication.launch()` 可能终止同 Bundle ID 的正式 Bailey。因此 `make test:ui` 发现正在运行的 `bailey` 进程就拒绝执行；只在专用 GUI 会话／CI Runner 上运行，不能通过强制退出用户 App 绕过。安全编译用 `make build:ui`，不启动 App。隔离 XCTest 宿主会移除自身菜单中的 `⌘Q` 退出快捷键：Mac 的键盘和前台应用状态仍由各进程共享，普通 Bailey 的退出快捷键不能误结束长时间运行的测试宿主；正式 Bailey 的菜单及保存退出保护不变。该隔离不是独立的图形登录会话，执行原生 UI 回归时仍应避免与用户正在进行的前台快捷键／鼠标操作互相干扰。刻意测试重启恢复时，两次启动显式传入同一有效 UUID 环境变量 `BAILEY_UI_TEST_RUN_ID`。
+该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。**开发版与正式版拥有不同 Bundle ID、配置路径和 DerivedData**，XCUITest 仅定位 Bailey Dev；正式版运行时也可执行宿主测试，无须强制退出用户 App。`make build:ui` 只编译。完整 UI 测试仍依赖当前 macOS 图形会话的前台键盘焦点；如果用户同时在 Helium 或正式 Bailey 输入，XCUI 键盘事件可能失败或打断用户，不能将不同 Bundle ID 冒称独立桌面。隔离 XCTest 宿主会移除自身菜单中的 `⌘Q` 退出快捷键：Mac 的键盘和前台应用状态仍由各进程共享，普通 Bailey 的退出快捷键不能误结束长时间运行的测试宿主；正式 Bailey 的菜单及保存退出保护不变。该隔离不是独立的图形登录会话，执行原生 UI 回归时仍应避免与用户正在进行的前台快捷键／鼠标操作互相干扰。刻意测试重启恢复时，两次启动显式传入同一有效 UUID 环境变量 `BAILEY_UI_TEST_RUN_ID`。
 
-**普通设置仍然共享。** 隔离实例中不得直接改写用户设置；确需设置测试时使用独立 Home，并核实真正的配置、UserDefaults 与数据写入位置。临时文件、Git 仓库和受控后端不得指向正式项目。
+**正式设置不会被开发版共用。** Dev 使用 `~/.config/bailey-dev`，正式版仍使用 `~/.config/bailey`；两版的终端历史、窗口快照、语言及 Bark 凭据也分域。不同 Dev 测试之间仍可能共用开发配置，修改设置的用例须使用独立临时配置与 UserDefaults suite。临时文件、Git 仓库和受控后端不得指向正式项目。
 
 并行构建或测试同一项目时，为各任务指定独立的 `DERIVED_DATA`（如 `make test DERIVED_DATA=build/DerivedData-review`），避免共用产物被另一任务覆盖或重新签名；不得清理其他任务的构建目录。
 
 Finder 拖进运行中 Bailey 时，**先核对 Finder 与 Bailey 两个窗口的屏幕边界，目标点不能落在 Finder 自身窗口或侧栏内**，否则会被 Finder 执行移动／废纸篓等本机操作，不能归因于 Bailey。核对系统当前选中项与拖动的真实 provider 数量；双窗口、文件树精确行和网页上传必须检查最终编辑标签／Shell／网页内容，而不是只看鼠标事件已派发。
 
-Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 使用 Launch Services 的正式 Bundle ID 路由。测试工具不能只因有 `--isolated-ui-test` 就向工作目录中的 App 发文件：该参数会成为 `open --args` 的启动参数，但**不改变系统对 App 身份与文件事件的分发**。当用户确认正式 Bailey 已退出、核对系统进程后，可对独立构建包使用 `open -n -a "$TEST_APP" --env "BAILEY_UI_TEST_RUN_ID=$UUID" "$TEMP_FILE"`，其中有效 UUID 环境变量使进程隔离快照与后台隧道；不传 `--args`，否则可能丢掉系统文件事件。后续 `open -a "$TEST_APP" "$TEMP_FILE"` 时必须先核对系统实际送达的是所持有的测试 PID。通过隔离快照、真实窗口数、FileTab、文件正文或图片和源文件 SHA-256 共同验证。**此方式隔离工作区数据，不隔离 GUI 会话或 Bundle ID**，不能在用户正常 Bailey 运行时测试，也不能把 `open -a` 当成 Finder「打开方式」和物理 Dock 拖动已验收的证据。
+Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 仍指向正式 `chiimagnus.bailey`。对测试版发送文件时，必须显式使用 `open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey.app" --env "BAILEY_UI_TEST_RUN_ID=$UUID" "$TEMP_FILE"`；不能只传 `--isolated-ui-test` 或混用 `--args`（可能丢失系统文件事件）。随后核对接收 PID 的 Bundle ID 为 `chiimagnus.bailey.dev`，并检查窗口数、目标文件内容和原始 SHA-256。Dev 的 `LSHandlerRank=None` 不竞逐 Finder 默认文件处理程序；Bundle ID 分离不隔离 GUI 焦点，不能因此把物理 Dock 拖放视为已验收。
 
 真实 SSH 只使用专用且获准的测试 master；不借用用户连接或结束其后台任务。真实 Windows SSH 回归必须**明确指定获授权的测试主机**。`BAILEY_P4_TEST_SSH_HOST` 是已有的共用参数名，P4 与后续 Git 外部刷新测试都使用它；未提供时专用用例按条件跳过，不能视为真实 SSH 验收。
 
@@ -128,7 +128,7 @@ Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 使用 Launch S
 BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test
 ```
 
-必须核对原生 XCTest 的实际执行总数、0 failures、0 skipped 和 Windows SSH 用例的 passed 记录；不能以不带环境参数的绿色 `make test` 冒充实机验收。没有获准测试主机的 CI 不应擅自连接用户设备。XCUITest 启动同 Bundle ID 的应用可能影响正在使用的 Bailey，在安全的独立执行环境建立前，不能在用户活跃会话直接调用 `XCUIApplication.launch()`。
+必须核对原生 XCTest 的实际执行总数、0 failures、0 skipped 和 Windows SSH 用例的 passed 记录；不能以不带环境参数的绿色 `make test` 冒充实机验收。没有获准测试主机的 CI 不应擅自连接用户设备。XCUITest 只允许启动 Bailey Dev；它不会因 Bundle ID 与正式版冲突而结束正式应用，但键盘与鼠标仍属于共享图形会话，用户持续输入时必须在独立 GUI 登录会话验收。
 
 只清理本次创建且可确认归属的窗口、进程和数据，不按 App 名或宽泛目录清理。安装不包含重启，见 [development.md](development.md#本地安装)。
 

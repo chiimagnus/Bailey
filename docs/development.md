@@ -19,17 +19,19 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer make doctor
 根 [Makefile](../Makefile) 是本机和 CI 的统一入口，直接调用 `xcodebuild`：
 
 ```sh
-make test:FileTabPersistenceTests,NativeFileTabTests,GitStatusModelTests  # 本地指定多个测试类
-make build
-make test                         # 全量测试
-make build:release
+make test:FileTabPersistenceTests,NativeFileTabTests,GitStatusModelTests  # Dev 定点测试
+make build:dev SIGNING=adhoc       # 独立开发版，不安装正式 App
+make test SIGNING=adhoc            # Bailey Dev 宿主测试
+make test:ui SIGNING=adhoc         # Bailey Dev 图形测试
+make build                         # 正式版 Debug
+make build:release                 # 正式版 Release
 ```
 
-也可以打开 `Bailey.xcodeproj`，使用 `Bailey` scheme。App 与 `BaileyTests` 由工程和共享 scheme 关联；不创建额外 scheme、独立构建／测试 shell 脚本或启动时断言自检。
+也可以打开 `Bailey.xcodeproj`，使用现有 `Bailey`／`Bailey-UI` scheme。Makefile 通过构建参数选择正式版或开发版，不复制 App Target、scheme 或测试脚本。
 
-构建产物位于 `build/DerivedData/Build/Products/Debug/Bailey.app` 或 `Release/Bailey.app`，包下载位于 `build/SourcePackages/`。`make build` 同时执行严格验签。两种配置使用同一 Bundle ID，不是两套应用；不会天然隔离用户数据。
+正式版产物位于 `build/DerivedData/Build/Products/{Debug,Release}/Bailey.app`；测试版位于 `build/DerivedData-Dev/Build/Products/Debug/Bailey.app`，显示名称为 **Bailey Dev**（`chiimagnus.bailey.dev`）。两者使用独立 DerivedData 和 Bundle ID，测试不替换 `/Applications/Bailey.app`。正式 Debug／Release 继续共用 `chiimagnus.bailey`；包依赖仍在 `build/SourcePackages/`。开发版配置为 `~/.config/bailey-dev/`，历史与钥匙串服务也分开。
 
-测试筛选、目录和安全启动示例统一见 [testing.md](testing.md#测试目录与入口)。不要为了查看界面直接运行会触及用户配置或会话的另一实例。
+测试入口见 [testing.md](testing.md#测试目录与入口)。即使正式 Bailey 仍在运行，Makefile 测试只使用 Bailey Dev；两者仍共用桌面焦点，XCUI 操作会短暂激活开发版。若需完全不打断当前输入，请使用独立图形会话。
 
 资源通过 Xcode Copy Files 打包；`ssh → bailey` 符号链接由现有 Build Phase 创建。不另建一套资源拷贝或终端安装脚本。
 

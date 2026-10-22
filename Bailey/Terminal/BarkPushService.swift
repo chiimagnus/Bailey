@@ -59,7 +59,7 @@ nonisolated enum BarkPushService {
         var failed: Int { total - accepted }
     }
 
-    private static let service = "chiimagnus.bailey.bark"
+    private static let service = AppIdentity.bundleIdentifier + ".bark"
     private static let account = "destinations"
 
     private static var keychainQuery: [String: Any] {

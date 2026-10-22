@@ -4,9 +4,9 @@ import XCTest
 @MainActor
 enum WorkspaceUITestSupport {
     static func launch(in test: XCTestCase, language: String? = nil) throws -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = XCUIApplication(bundleIdentifier: "chiimagnus.bailey.dev")
         guard app.state == .notRunning else {
-            throw XCTSkip("UI automation must not terminate an existing Bailey instance")
+            throw XCTSkip("UI automation must not terminate an existing Bailey Dev instance")
         }
         app.launchArguments = ["--isolated-ui-test"]
         if let language { app.launchArguments += ["-AppleLanguages", "(\(language))"] }
@@ -16,6 +16,9 @@ enum WorkspaceUITestSupport {
         }
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
+        app.activate()
+        XCTAssertEqual(app.state, .runningForeground,
+                       "Only Bailey Dev may receive keyboard actions from UI tests")
         return app
     }
 

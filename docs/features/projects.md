@@ -26,7 +26,7 @@
 已打开的标签仍优先复用，避免权限变化时丢失原缓冲。
 原有自动保存仍由项目／标签失焦触发，外部打开不新增另一个写入路径。
 
-系统文件入口使用同一份 `Info.plist` 的 `CFBundleDocumentTypes` 将文本、图片和目录注册为 **Alternate**（备用程序）。`BaileyApplicationDelegate` 在 AppKit 启动阶段注册唯一的 `kAEOpenDocuments` 处理器，从系统 Apple Event 的文件列表还原**整个批次**，再交给 `WorkspaceApplication.openExternalFiles`。不能只依靠 SwiftUI `.onOpenURL`（只传第一个文件，且导致另建工作区窗口），也不保留不会被执行的 `application(_:openFiles:)` 回调。此入口不替换 Finder Service `openInBailey`，也不拦截任意非文件网页 URL。文件声明表示 Bailey 是候选打开程序，**不保证未知／二进制文件可编辑**。
+系统文件入口使用同一份 `Info.plist` 的 `CFBundleDocumentTypes` 将文本、图片和目录注册为 **Alternate**（备用程序）。`BaileyApplicationDelegate` 在 AppKit 启动阶段注册唯一的 `kAEOpenDocuments` 处理器，从系统 Apple Event 的文件列表还原**整个批次**，再交给 `WorkspaceApplication.openExternalFiles`。不能只依靠 SwiftUI `.onOpenURL`（只传第一个文件，且导致另建工作区窗口），也不保留不会被执行的 `application(_:openFiles:)` 回调。此入口不替换 Finder Service `openInBailey`，也不拦截任意非文件网页 URL。正式版文件声明表示 Bailey 是候选打开程序，**不保证未知／二进制文件可编辑**。Bailey Dev 的相同文档类型声明使用 `LSHandlerRank=None`，不参与默认文件打开程序竞争；开发版 Finder Service 名称另标记为 Bailey Dev。
 
 ## 切换、关闭与失败
 

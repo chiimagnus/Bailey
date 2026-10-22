@@ -17,8 +17,9 @@ final class AppIdentityTests: XCTestCase {
         XCTAssertEqual(declarations.count, 3, "Text, image, and folder each have a distinct role")
         var types = Set<String>()
         for entry in declarations {
-            XCTAssertEqual(entry["LSHandlerRank"] as? String, "Alternate",
-                           "Bailey must not change default applications")
+            XCTAssertEqual(entry["LSHandlerRank"] as? String,
+                           AppIdentity.isDevelopment ? "None" : "Alternate",
+                           "The test app must not become a Finder file handler")
             XCTAssertNotNil(entry["CFBundleTypeRole"] as? String)
             XCTAssertNil(entry["CFBundleTypeOSTypes"])
             XCTAssertNil(entry["CFBundleTypeExtensions"])
@@ -66,11 +67,15 @@ final class AppIdentityTests: XCTestCase {
         )
     }
 
-    func testSingleApplicationIdentity() {
-        XCTAssertEqual(AppIdentity.bundleIdentifier, "chiimagnus.bailey")
-        XCTAssertEqual(AppIdentity.displayName, "Bailey")
+    func testApplicationIdentityMatchesBuildVariant() {
+        let suffix = AppIdentity.isDevelopment ? ".dev" : ""
+        XCTAssertEqual(AppIdentity.bundleIdentifier, "chiimagnus.bailey" + suffix)
+        XCTAssertEqual(AppIdentity.displayName, AppIdentity.isDevelopment ? "Bailey Dev" : "Bailey")
         XCTAssertEqual(Bundle.main.bundleIdentifier, AppIdentity.bundleIdentifier)
-        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, "Bailey")
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String,
+                       AppIdentity.displayName)
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String,
+                       AppIdentity.displayName)
         XCTAssertTrue(BaileyInstanceMode.isIsolated)
     }
 
@@ -78,8 +83,15 @@ final class AppIdentityTests: XCTestCase {
         let home = FileManager.default.homeDirectoryForCurrentUser
         XCTAssertEqual(
             AppIdentity.configDirectory,
-            home.appendingPathComponent(".config/bailey", isDirectory: true)
+            home.appendingPathComponent(AppIdentity.isDevelopment
+                ? ".config/bailey-dev" : ".config/bailey", isDirectory: true)
         )
-        XCTAssertEqual(AppIdentity.historyDirectory.lastPathComponent, "bailey")
+        XCTAssertEqual(AppIdentity.historyDirectory.lastPathComponent,
+                       AppIdentity.isDevelopment ? "bailey-dev" : "bailey")
+        if AppIdentity.isDevelopment {
+            XCTAssertNotEqual(AppIdentity.configDirectory,
+                              home.appendingPathComponent(".config/bailey"))
+            XCTAssertNotEqual(AppIdentity.historyDirectory.lastPathComponent, "bailey")
+        }
     }
 }

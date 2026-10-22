@@ -6,7 +6,7 @@
 
 [CI workflow](../.github/workflows/ci.yml) 仅在面向 `main` 的 PR 上运行。纯 Markdown、`docs/`、`.github/features/`、`.github/ISSUE_TEMPLATE/` 或 `LICENSE` 的独立 PR 会跳过；如果历史 PR 差异包含代码，即使本次只改文档，事件仍可能触发 CI。普通 `main` 提交不触发；版本 Tag 发布不受此过滤影响。Draft PR 的创建、推送和打标签会跳过 CI Job，切换为 Ready for review 后自动运行；重新设为 Draft 会取消同一 PR 的在途检查。Runner 和 Xcode 版本以 CI workflow 为准。
 
-**日常增量检查**：`synchronize` 事件比较本次推送前后的 PR Head 提交，不重复把整份长期 PR 与 `main` 的所有历史差异当作新修改。仅改某个 XCTest 文件时运行该类；编辑器源码改动覆盖原生编辑器、Diff、输入法、文件标签、语法高亮、窗口保留等交叉测试；Diff 源码改动执行关联套件；不受支持的变更范围、缺失/改写的提交历史、工程或 CI 配置修改则运行全量。仅新增文档时检查差异，不运行无关 XCTest。宿主 XCTest 仍通过 `make test SIGNING=adhoc`，并对 App 与宿主测试 Bundle 做严格 ad hoc 验签；独立 `ui` Job 在另一台相同 Xcode 27 Runner 上通过 `make test:ui SIGNING=adhoc` 验证完整 App 的 UI 自动化，不与宿主测试争抢前台。两种测试均由现有 Xcode Target／Scheme 执行，不另写执行器。
+**常规 CI**：非 Draft PR 在独立 Runner 上运行完整宿主 XCTest 与独立 App UI 测试，两者均由 `make test SIGNING=adhoc`／`make test:ui SIGNING=adhoc` 构建并执行 `chiimagnus.bailey.dev`。`make build`／`make package` 始终使用正式 `chiimagnus.bailey`；UI 测试和发布包不会共用应用身份或构建目录。CI Runner 仍需独占可用的图形输入会话。
 
 **合并前的完整检查不可省略**：非 Draft PR 首次打开、重新打开、由草稿转为可审查状态会跑完整宿主 XCTest 与独立 UI Test；正式准备合并时，在最新提交上给 PR 添加 `ci/full` 标签（已有标签则移除后重新添加），以 `labeled` 事件重新触发全量测试，核对对应 Head SHA 的绿色运行记录。CI 当前每次运行完整宿主 XCTest 和独立 UI Test；其中任一失败都不得宣称整份 PR 已完整验收；Release workflow 继续在 Tag 阶段执行全量测试。若配置必需 CI 检查，应确保文档变更和显式跳过仍有预期状态，不制造永久 Pending。`AppIdentityTests` 继续负责验证宿主身份，CI 不等于完整 App 图形 E2E 或真实用户 SSH 验收；详见 [testing.md](testing.md#完成标准)。
 
