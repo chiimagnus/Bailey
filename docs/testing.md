@@ -138,7 +138,7 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 
 ## 性能与内存测量
 
-先测共享热点，再减少主线程工作、重复 IO、计算和无关进程。FPS、骨架出现或数据读完不代替真实显示和输入。
+先测共享热点，再减少主线程工作、重复 IO、计算和无关进程。骨架屏出现或数据读完不等于真实显示与输入可用。
 
 | 用户路径 | 分开记录 |
 | --- | --- |

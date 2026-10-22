@@ -50,9 +50,6 @@ final class WorkspaceWindowModel {
             requestSave()
         }
     }
-    /// Debug FPS badge in the Dock header. Deliberately not persisted:
-    /// every launch starts with it hidden.
-    var isFPSCounterVisible = false
     private(set) var isCommandPaletteVisible = false
 
     @ObservationIgnored private var projectCounter = 0
@@ -671,10 +668,6 @@ final class WorkspaceWindowModel {
     }
 
     // MARK: - Panels & appearance
-
-    func toggleFPSCounter() {
-        isFPSCounterVisible.toggle()
-    }
 
     func toggleCommandPalette() {
         if isCommandPaletteVisible {

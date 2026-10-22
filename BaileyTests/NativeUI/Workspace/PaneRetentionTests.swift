@@ -301,19 +301,6 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertTrue(project.tabs.contains { $0.id == project.selectedTabID })
     }
 
-    func testFPSCounterExposesOnlyPresentationAndStopsCleanly() async throws {
-        let counter = FPSCounter()
-        XCTAssertEqual(counter.fps, 0)
-        let changed = expectation(description: "FPS is directly observable")
-        withObservationTracking({ _ = counter.fps }) { changed.fulfill() }
-        try await Task.sleep(for: .milliseconds(1100))
-        counter.tick()
-        await fulfillment(of: [changed], timeout: 1)
-        XCTAssertGreaterThan(counter.fps, 0)
-        counter.stop()
-        XCTAssertEqual(counter.fps, 0)
-    }
-
     func testBrowserKVOUpdatesObservationHistoryFaviconAndRepeatedFocus() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

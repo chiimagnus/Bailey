@@ -119,7 +119,7 @@
 | [Bailey/Remote/Tunnels/TunnelSettingsView.swift](../../../Bailey/Remote/Tunnels/TunnelSettingsView.swift) | 边界 | 独立远端效果／状态呈现；不迁移其内部算法 |
 | [Bailey/Shared/Tree/TreeDisplayModel.swift](../../../Bailey/Shared/Tree/TreeDisplayModel.swift) | 边界 | 共享行数据与呈现 |
 | [Bailey/Shared/Tree/TreeRowStyle.swift](../../../Bailey/Shared/Tree/TreeRowStyle.swift) | 链路 | 沿本次入口／状态／焦点或生命周期执行链核对 |
-| [Bailey/Support/FPSCounter.swift](../../../Bailey/Support/FPSCounter.swift) | 边界 | 既有计时／主线程回调边界 |
+| `Bailey/Support/FPSCounter.swift`（仅历史基线 `097dac7`，现已删除） | 历史边界 | 旧计时／主线程回调已随 FPS 功能移除；可通过 `git show 097dac7:Bailey/Support/FPSCounter.swift` 查原版 |
 | [Bailey/Support/MainActorIsolation.swift](../../../Bailey/Support/MainActorIsolation.swift) | 边界 | 既有计时／主线程回调边界 |
 | [Bailey/Terminal/BaileyTerminalView+Ghostty.swift](../../../Bailey/Terminal/BaileyTerminalView+Ghostty.swift) | 链路 | 沿本次入口／状态／焦点或生命周期执行链核对 |
 | [Bailey/Terminal/BaileyTerminalView.swift](../../../Bailey/Terminal/BaileyTerminalView.swift) | 链路 | 沿本次入口／状态／焦点或生命周期执行链核对 |

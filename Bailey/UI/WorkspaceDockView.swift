@@ -361,11 +361,9 @@ private struct DockTabGroupView: View {
             HStack(spacing: 4) {
                 if isTopLeft { WindowDragArea().frame(width: 76) }
                 tabStrip(maxWidth: max(0, geometry.size.width
-                    - (isTopLeft ? 120 : 44)
-                    - (manager.isFPSCounterVisible ? 42 : 0)))
+                    - (isTopLeft ? 120 : 44)))
                 panelAddButton
                 WindowDragArea().frame(minWidth: 0, maxWidth: .infinity)
-                if manager.isFPSCounterVisible { FPSBadge() }
             }
             .padding(.trailing, 8)
             .frame(height: geometry.size.height)

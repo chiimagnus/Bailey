@@ -347,25 +347,3 @@ struct ChromeIconButton: View {
         .tooltip(tooltip, edge: tooltipEdge, alignment: tooltipAlignment)
     }
 }
-
-/// Live frames-per-second readout in the header strip, fed by `FPSCounter`.
-/// It exists only while the manager's toggle is on, so the counter starts
-/// when the badge appears and stops when it leaves the hierarchy.
-struct FPSBadge: View {
-    @State private var counter = FPSCounter()
-
-    var body: some View {
-        Text(String(localized: "\(counter.fps) fps", table: "Sidebar"))
-            .font(.system(size: 10, weight: .medium))
-            .monospacedDigit()
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.primary.opacity(0.07))
-            )
-            .onAppear { counter.start() }
-            .onDisappear { counter.stop() }
-    }
-}

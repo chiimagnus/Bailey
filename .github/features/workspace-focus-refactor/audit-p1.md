@@ -104,10 +104,10 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 - 严重级别：`Medium`
 - 状态：`Resolved`
 - 位置：`BaileyTests/WorkspaceUI/Windows/DockFocusP2RegressionTests.swift`
-- 摘要：`FPS 专项焦点用例冗余，前台条件跳过和错误的第一响应者断言掩盖真实结果`
+- 摘要：`⌘P 焦点回归错误依赖 FPS 命令，且窗口焦点恢复路径被命令执行主动关闭`
 - 根因：`原用例一并测试 FPS 开关、Palette 执行与编辑器焦点；先用 isKeyWindow/NSApp.isActive 不满足则跳过。取消跳过后发现用例把滚动容器 NSScrollView 当成原生文本输入视图，与真正的 FocusReportingTextView 第一响应者比较，因此即使 FPS 开关成功、Palette 关闭、输入焦点已恢复仍会错误失败。`
-- 修复：`删除该冗余 FPS 专项测试及其调试输出；撤回本轮添加的 PaletteCommand.preservesCurrentFocus 参数和相关生产逻辑，不改变 FPS 原有功能。Palette 真实焦点由 WorkspaceWindowIsolationTests 中打开、取消、换目标、Files/Git 键盘输入路径覆盖。所有 BaileyTests 的 isKeyWindow、NSApp.isActive 前台条件跳过与断言降级均被删除；正常异步等待及第一响应者断言保留。`
-- 验证：`DockFocusP2RegressionTests 两条 Dock 原生回归已通过；其它受影响原生类正在重新执行；前台输入需在运行器环境中取得，不在单个用例加前台条件跳过。`
+- 修复：`按用户最新决定，删除完整 FPS 功能（DisplayLink、Badge、Dock 状态和布局、命令项、专属测试、本地化文案）；将 ⌘P 测试改为执行实际 File Manager 命令，核对真实树行焦点与 ↑ 导航。CommandPaletteView.run() 恢复调用现有的 dismissCommandPalette()，使目标变化后现有焦点归属检查可交接给 TreeKeyboardView，仍禁止旧视图覆盖新的原生响应者。此前所有测试前台条件跳过均已删除，不重新引入。`
+- 验证：`⌘P→File Manager 旧代码 3 条断言失败（面板已切但第一响应者停在 DockGroupFocusView）；复用原有焦点恢复后定向 TEST SUCCEEDED，TreeKeyboardView 接收 ↑，最终文件字节不变。最新 DockFocusP2RegressionTests、SessionStoreTests、ProjectFileIndexTests 共 15 项/0 失败；另外 4 项 Files/Git/Palette 交接通过；Debug/Release 均 BUILD SUCCEEDED 且 codesign --verify --deep --strict 通过。FPS 活动源码引用和 3 个本地化键归零，audit 仅保留历史文字。`
 
 
 ## 发现 F-22
@@ -285,7 +285,7 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 
 - `6ee5fdf` 修复当前计划状态与历史源码导航；`a48593d` 修复 Finder 等待已注销窗口的队列滞留。
 - 独立复查删除 `BaileyTests` 中基于前台应用／Key Window 的跳过、断言降级与分支；不删除 AppKit 真实焦点断言，也不为单个用例引入重试状态机。
-- 删除以 FPS 开关冒充通用 Palette 焦点验收的冗余测试与专属等待器；撤回本轮试加的生产 `PaletteCommand.preservesCurrentFocus`，保留已有的 FPS 真正功能测试。
+- 依用户最新要求完整删除 FPS 采样器、Badge、UI 状态、菜单、本地化键和专属用例，⌘P 新测试使用真实 File Manager 动作。旧版 `PaletteCommand.preservesCurrentFocus` 试验不复活；当前命令执行使用已有的原生焦点恢复逻辑交给最新有效接收者。
 
 ## 验证日志
 

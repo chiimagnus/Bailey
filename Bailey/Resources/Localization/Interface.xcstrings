@@ -319,7 +319,6 @@
         }
       }
     },
-    "Hide FPS Counter" : {},
     "bailey" : {
       "shouldTranslate" : false
     },
@@ -553,7 +552,6 @@
         }
       }
     },
-    "Show FPS Counter" : {},
     "Some files or folders could not be opened in Bailey." : {
       "localizations" : {
         "zh-Hans" : {

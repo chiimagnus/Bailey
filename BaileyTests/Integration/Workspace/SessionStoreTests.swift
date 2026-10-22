@@ -383,13 +383,13 @@ final class SessionStoreTests: XCTestCase {
             XCTFail("Layout was not serialized")
         }
 
-        // Neither the performance badge nor another UI-only publication
-        // should write a new window snapshot.
+        // Opening and dismissing the temporary command input must not write a workspace snapshot.
         let defaults = try XCTUnwrap(UserDefaults(
             suiteName: BaileyInstanceMode.snapshotSuiteName
         ))
         let originalData = try XCTUnwrap(defaults.data(forKey: "workspaceSnapshot"))
-        first.toggleFPSCounter()
+        first.toggleCommandPalette()
+        first.dismissCommandPalette()
         try await Task.sleep(for: .milliseconds(650))
         XCTAssertEqual(defaults.data(forKey: "workspaceSnapshot"), originalData)
 

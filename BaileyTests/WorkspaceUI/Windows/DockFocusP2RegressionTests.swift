@@ -125,6 +125,88 @@ final class DockFocusP2RegressionTests: XCTestCase {
                        "Context-click activation must still work")
     }
 
+    func testPaletteFileManagerCommandTransfersKeyboardFocusToVisibleFileTree() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-palette-files-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("alpha.swift")
+        let second = directory.appendingPathComponent("beta.swift")
+        for path in [first, second] {
+            try "original\n".write(to: path, atomically: true, encoding: .utf8)
+        }
+
+        let manager = WorkspaceApplication().makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([directory])
+        manager.openFile(second.path)
+        let project = try XCTUnwrap(manager.selectedProject)
+        let tab = try XCTUnwrap(project.selectedTab)
+        guard case .file(let file) = tab.content else {
+            return XCTFail("Expected a native file tab")
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: -900, y: -900, width: 1100, height: 700),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ContentView(manager: manager))
+        window.contentView = host
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+        try await until {
+            host.layoutSubtreeIfNeeded()
+            return manager.attachedWindow === window
+                && (file.editorView as? NSScrollView)?.documentView is FocusReportingTextView
+        }
+        let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        let editor = try XCTUnwrap(scroll.documentView as? FocusReportingTextView)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        XCTAssertTrue(manager.ownsActiveResponder(editor))
+
+        manager.toggleCommandPalette()
+        try await until {
+            host.layoutSubtreeIfNeeded()
+            return manager.isCommandPaletteVisible
+                && (window.firstResponder as? NSTextView)?.isFieldEditor == true
+        }
+        let search = try XCTUnwrap(window.firstResponder as? NSTextView)
+        search.insertText(String(localized: "File Manager", table: "Sidebar"),
+                          replacementRange: NSRange(location: NSNotFound, length: 0))
+        let enter = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            characters: "\r", charactersIgnoringModifiers: "\r",
+            isARepeat: false, keyCode: 36
+        ))
+        window.sendEvent(enter)
+        try await until {
+            host.layoutSubtreeIfNeeded()
+            return !manager.isCommandPaletteVisible
+                && project.dock.activeGroup?.selected == .files
+                && project.fileTree.selectedPath == second.path
+                && window.firstResponder === manager.activeTreeResponder(in: window)
+        }
+        XCTAssertFalse(window.firstResponder === editor)
+        XCTAssertTrue(window.firstResponder is TreeKeyboardView)
+
+        let up = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            characters: "\u{F700}", charactersIgnoringModifiers: "\u{F700}",
+            isARepeat: false, keyCode: 126
+        ))
+        window.sendEvent(up)
+        try await until { project.fileTree.selectedPath == first.path }
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+        XCTAssertEqual(project.tabs.filter { $0.content.isFile }.count, 1)
+        XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "original\n")
+    }
+
     private func until(_ condition: () -> Bool) async throws {
         for _ in 0..<100 {
             if condition() { return }
