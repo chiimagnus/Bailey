@@ -1,0 +1,154 @@
+version = 1
+current_task_id = ""
+
+[[tasks]]
+id = "P1-T1"
+title = "核销源测试集合与全部断言归属"
+status = "pending"
+plan = "plan-p1.md#p1-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T2"
+title = "稳定独立 UI Runner 和现有十条真实路径"
+status = "pending"
+plan = "plan-p1.md#p1-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T3"
+title = "清理 Unit／Integration 的 UI 污染边界，保留逻辑价值"
+status = "pending"
+plan = "plan-p1.md#p1-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T4"
+title = "验证原生内部断言的跨进程等价证据可行性"
+status = "pending"
+plan = "plan-p1.md#p1-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T1"
+title = "编辑导航、原生输入、IME 和撤销"
+status = "pending"
+plan = "plan-p2.md#p2-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T2"
+title = "文件标签、真实读写、保存冲突与断线恢复"
+status = "pending"
+plan = "plan-p2.md#p2-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T3"
+title = "语法高亮、主题、组合字符与原生颜色"
+status = "pending"
+plan = "plan-p2.md#p2-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T4"
+title = "Diff 原生绘制、编辑、展开及真实保存"
+status = "pending"
+plan = "plan-p2.md#p2-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T1"
+title = "历史版本文件、Git revision 和安全重置"
+status = "pending"
+plan = "plan-p3.md#p3-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T2"
+title = "Git Changes 交互、外部刷新、菜单与工作树操作"
+status = "pending"
+plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T3"
+title = "Git 原生对话框、危险操作、交互 rebase"
+status = "pending"
+plan = "plan-p3.md#p3-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T4"
+title = "Git Graph 全图谱、颜色/标签、键盘与多级菜单"
+status = "pending"
+plan = "plan-p3.md#p3-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T1"
+title = "共享树行、Dock 点击、命令面板、App 菜单"
+status = "pending"
+plan = "plan-p4.md#p4-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T2"
+title = "多窗口的实际键盘响应与焦点恢复"
+status = "pending"
+plan = "plan-p4.md#p4-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T3"
+title = "Finder／Dock 外部文件打开和批量拖放的真实归属"
+status = "pending"
+plan = "plan-p4.md#p4-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T4"
+title = "窗口关闭、保存否决、状态恢复与原生对象身份"
+status = "pending"
+plan = "plan-p4.md#p4-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T5"
+title = "Terminal、Browser、编辑器原生资源、设置页"
+status = "pending"
+plan = "plan-p4.md#p4-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T1"
+title = "统一工程、命令、CI 和维护文档的分层契约"
+status = "pending"
+plan = "plan-p5.md#p5-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T2"
+title = "全 329 方法与全环境组合独立验收并给出 Go/No-Go"
+status = "pending"
+plan = "plan-p5.md#p5-t2"
+commit = ""
+note = ""
