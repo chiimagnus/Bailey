@@ -4,7 +4,6 @@ import XCTest
 final class WorkspaceWindowsUITests: XCTestCase {
     func testTwoEmptyWindowsHaveIndependentNativeLifecycle() throws {
         let app = try WorkspaceUITestSupport.launch(in: self)
-        defer { app.terminate() }
 
         XCTAssertTrue(app.buttons["bailey.emptyState.addFolder"].exists)
         app.typeKey("n", modifierFlags: [.command, .shift])
@@ -23,7 +22,6 @@ final class WorkspaceWindowsUITests: XCTestCase {
 
     func testSettingsOpensFromTheRealApplicationShortcut() throws {
         let app = try WorkspaceUITestSupport.launch(in: self)
-        defer { app.terminate() }
 
         app.typeKey(",", modifierFlags: .command)
         XCTAssertTrue(app.windows.element(boundBy: 1).waitForExistence(timeout: 15),
@@ -35,7 +33,6 @@ final class WorkspaceWindowsUITests: XCTestCase {
 
     func testCancelingFolderPickerDoesNotCreateAnEmptyProject() throws {
         let app = try WorkspaceUITestSupport.launch(in: self)
-        defer { app.terminate() }
 
         app.buttons["bailey.emptyState.addFolder"].click()
         XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 15))

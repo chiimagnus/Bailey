@@ -190,6 +190,7 @@ private struct FileTabLabel: View {
         )
         .help(file.path)
         .accessibilityIdentifier("bailey.tab.file")
+        .accessibilityValue(file.path)
     }
 }
 

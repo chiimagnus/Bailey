@@ -3,14 +3,10 @@ import XCTest
 @MainActor
 final class WorkspaceFilesUITests: XCTestCase {
     func testAddFolderAndOpenFileThroughRealFileTree() throws {
-        let fixture = try WorkspaceUITestFixture()
+        let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("a-first.swift", text: "let first = 1\n")
         let second = try fixture.file("b-second.swift", text: "let second = 2\n")
         let app = try WorkspaceUITestSupport.launch(in: self)
-        defer {
-            app.terminate()
-            fixture.remove()
-        }
 
         try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
@@ -34,14 +30,10 @@ final class WorkspaceFilesUITests: XCTestCase {
     }
 
     func testCommandPaletteRestoresFileTreeKeyboardAfterDismissal() throws {
-        let fixture = try WorkspaceUITestFixture()
+        let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("a-first.swift", text: "let first = 1\n")
         let second = try fixture.file("b-second.swift", text: "let second = 2\n")
         let app = try WorkspaceUITestSupport.launch(in: self)
-        defer {
-            app.terminate()
-            fixture.remove()
-        }
 
         try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
@@ -68,13 +60,9 @@ final class WorkspaceFilesUITests: XCTestCase {
     }
 
     func testNativeEditorSavesActualFileContentsToDisk() throws {
-        let fixture = try WorkspaceUITestFixture()
+        let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("editable.swift", text: "let original = 1\n")
         let app = try WorkspaceUITestSupport.launch(in: self)
-        defer {
-            app.terminate()
-            fixture.remove()
-        }
 
         try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
@@ -99,14 +87,38 @@ final class WorkspaceFilesUITests: XCTestCase {
                        "Command-S must persist real editor bytes, not only publish a model change")
     }
 
+    func testSameNamedFilesInDifferentFoldersHaveDistinctRowsAndTabs() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let alpha = try fixture.file("alpha/shared.swift", text: "let alpha = 1\n")
+        let beta = try fixture.file("beta/shared.swift", text: "let beta = 2\n")
+        let app = try WorkspaceUITestSupport.launch(in: self)
+
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 20))
+        let folders = app.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+        for (folderName, path) in [("alpha", alpha), ("beta", beta)] {
+            files.click()
+            let folder = folders.matching(NSPredicate(format: "label == %@", folderName)).firstMatch
+            XCTAssertTrue(folder.waitForExistence(timeout: 15))
+            folder.click()
+            let row = WorkspaceUITestSupport.fileRow(path, in: app)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.doubleClick()
+            XCTAssertTrue(WorkspaceUITestSupport.fileTab(path, in: app)
+                .waitForExistence(timeout: 15))
+        }
+        XCTAssertEqual(app.buttons.matching(identifier: "bailey.tab.file").count, 2,
+                       "Identical basenames from different directories must remain distinct")
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(alpha, in: app).exists)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(beta, in: app).exists)
+    }
+
     func testOpeningTheSameFileFromMenuReusesItsExistingTab() throws {
-        let fixture = try WorkspaceUITestFixture()
+        let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("deduplicate.swift", text: "let one = 1\n")
         let app = try WorkspaceUITestSupport.launch(in: self)
-        defer {
-            app.terminate()
-            fixture.remove()
-        }
 
         try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()

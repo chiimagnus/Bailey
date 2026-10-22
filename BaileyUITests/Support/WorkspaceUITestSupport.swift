@@ -44,16 +44,27 @@ enum WorkspaceUITestSupport {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
-    static func fileRow(_ url: URL, in app: XCUIApplication) -> XCUIElement {
-        app.descendants(matching: .any)
+    static func fileRow(
+        _ url: URL, in scope: XCUIElement, relativeTo repository: URL? = nil
+    ) -> XCUIElement {
+        let path: String
+        if let repository {
+            let prefix = repository.standardizedFileURL.path + "/"
+            let absolute = url.standardizedFileURL.path
+            precondition(absolute.hasPrefix(prefix), "Git fixture file must belong to its repository")
+            path = String(absolute.dropFirst(prefix.count))
+        } else {
+            path = url.standardizedFileURL.path
+        }
+        return scope.descendants(matching: .any)
             .matching(identifier: "bailey.tree.file")
-            .matching(NSPredicate(format: "label CONTAINS %@", url.lastPathComponent))
+            .matching(NSPredicate(format: "label ENDSWITH %@", ", " + path))
             .firstMatch
     }
 
-    static func fileTab(_ url: URL, in app: XCUIApplication) -> XCUIElement {
-        app.buttons.matching(identifier: "bailey.tab.file")
-            .matching(NSPredicate(format: "label CONTAINS %@", url.lastPathComponent))
+    static func fileTab(_ url: URL, in scope: XCUIElement) -> XCUIElement {
+        scope.buttons.matching(identifier: "bailey.tab.file")
+            .matching(NSPredicate(format: "value == %@", url.standardizedFileURL.path))
             .firstMatch
     }
 }
@@ -61,14 +72,19 @@ enum WorkspaceUITestSupport {
 struct WorkspaceUITestFixture {
     let root: URL
 
-    init() throws {
+    init(in test: XCTestCase) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-UITest-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        test.addTeardownBlock { [root] in
+            try? FileManager.default.removeItem(at: root)
+        }
     }
 
     func file(_ name: String, text: String) throws -> URL {
         let url = root.appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
         try text.write(to: url, atomically: true, encoding: .utf8)
         return url
     }
@@ -78,15 +94,22 @@ struct WorkspaceUITestFixture {
             ? "/opt/homebrew/bin/git" : "/usr/bin/git"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = ["-C", root.path] + args
-        let error = Pipe()
-        process.standardError = error
-        process.standardOutput = Pipe()
+        process.arguments = ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+                             "-C", root.path] + args
+        let diagnostics = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-UITest-Git-" + UUID().uuidString)
+        try Data().write(to: diagnostics)
+        let errorOutput = try FileHandle(forWritingTo: diagnostics)
+        defer {
+            try? errorOutput.close()
+            try? FileManager.default.removeItem(at: diagnostics)
+        }
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = errorOutput
         try process.run()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
-            let reason = String(decoding: error.fileHandleForReading.readDataToEndOfFile(),
-                                as: UTF8.self)
+            let reason = (try? String(contentsOf: diagnostics, encoding: .utf8)) ?? ""
             throw NSError(domain: "BaileyUITestGit", code: Int(process.terminationStatus),
                           userInfo: [NSLocalizedDescriptionKey: reason])
         }
@@ -99,7 +122,4 @@ struct WorkspaceUITestFixture {
                  "user.email=tests@example.invalid", "commit", "-qm", "E2E fixture history"])
     }
 
-    func remove() {
-        try? FileManager.default.removeItem(at: root)
-    }
 }
