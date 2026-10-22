@@ -1010,13 +1010,19 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertFalse(currentEditor === retiredEditor)
         XCTAssertEqual((currentEditor as? FocusReportingTextView)?.text, "changed on disk\n")
         XCTAssertFalse((currentEditor as? FocusReportingTextView)?.undoManager?.canUndo ?? true)
-        retiredScroll = nil
-        retiredEditor = nil
-        try await settle { releasedEditor == nil }
+        // A retired document must be unusable immediately (checked above),
+        // but AppKit may keep its views alive until the window is torn down.
         host?.removeFromSuperview()
         host = nil
+        file?.retireNativeEditor()
+        window.contentView = nil
+        window.close()
+        retiredScroll = nil
+        retiredEditor = nil
         file = nil
-        try await settle { releasedFile == nil && currentEditor == nil }
+        try await settle {
+            releasedEditor == nil && releasedFile == nil && currentEditor == nil
+        }
     }
 
     func testObservedDockMoveReparentsRealEditorAndPreservesUndoAndScroll() async throws {
