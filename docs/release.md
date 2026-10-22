@@ -8,7 +8,7 @@
 
 **日常增量检查**：`synchronize` 事件比较本次推送前后的 PR Head 提交，不重复把整份长期 PR 与 `main` 的所有历史差异当作新修改。仅改某个 XCTest 文件时运行该类；编辑器源码改动覆盖原生编辑器、Diff、输入法、文件标签、语法高亮、窗口保留等交叉测试；Diff 源码改动执行关联套件；不受支持的变更范围、缺失/改写的提交历史、工程或 CI 配置修改则运行全量。仅新增文档时检查差异，不运行无关 XCTest。宿主 XCTest 仍通过 `make test SIGNING=adhoc`，并对 App 与宿主测试 Bundle 做严格 ad hoc 验签；独立 `ui` Job 在另一台相同 Xcode 27 Runner 上通过 `make test:ui SIGNING=adhoc` 验证完整 App 的 UI 自动化，不与宿主测试争抢前台。两种测试均由现有 Xcode Target／Scheme 执行，不另写执行器。
 
-**合并前的完整检查不可省略**：非 Draft PR 首次打开、重新打开、由草稿转为可审查状态会跑完整宿主 XCTest 与独立 UI Test；正式准备合并时，在最新提交上给 PR 添加 `ci/full` 标签（已有标签则移除后重新添加），以 `labeled` 事件重新触发全量测试，核对对应 Head SHA 的绿色运行记录。只凭增量 CI 通过不得宣称整份 PR 已完整验收；Release workflow 继续在 Tag 阶段执行全量测试。若配置必需 CI 检查，应确保文档变更和显式跳过仍有预期状态，不制造永久 Pending。`AppIdentityTests` 继续负责验证宿主身份，CI 不等于完整 App 图形 E2E 或真实用户 SSH 验收；详见 [testing.md](testing.md#完成标准)。
+**合并前的完整检查不可省略**：非 Draft PR 首次打开、重新打开、由草稿转为可审查状态会跑完整宿主 XCTest 与独立 UI Test；正式准备合并时，在最新提交上给 PR 添加 `ci/full` 标签（已有标签则移除后重新添加），以 `labeled` 事件重新触发全量测试，核对对应 Head SHA 的绿色运行记录。CI 当前每次运行完整宿主 XCTest 和独立 UI Test；其中任一失败都不得宣称整份 PR 已完整验收；Release workflow 继续在 Tag 阶段执行全量测试。若配置必需 CI 检查，应确保文档变更和显式跳过仍有预期状态，不制造永久 Pending。`AppIdentityTests` 继续负责验证宿主身份，CI 不等于完整 App 图形 E2E 或真实用户 SSH 验收；详见 [testing.md](testing.md#完成标准)。
 
 PR 不再额外编译 Release，也不重复进行 YAML 中的验签；正式 Release 编译、版本和签名检查仍由标签触发的发布流程执行。**PR 通过不等于 Release 构建通过**：修改工程、依赖或发布路径时，提交前另运行 `make build:release`；无开发证书的隔离环境可用 `make build:release SIGNING=adhoc`。本地 `make test` 未指定 `SIGNING` 时使用工程自己的 Apple Development 配置；临时签名不代表正式发布身份，本地成功也不代表 GitHub Actions 已通过。
 

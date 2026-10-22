@@ -36,6 +36,6 @@
 
 ## 验证
 
-覆盖固定／自动目录、同仓库子目录／不同 worktree、重复添加、同名路径的机器与端口隔离、A→B→A 切换，以及在途结果晚到。使用 `WorkspaceIdentityTests`、`PanelContextTests` 和受影响的工作区 UI 回归；测试入口及真实 SSH 边界见 [testing.md](../testing.md)。
+覆盖固定／自动目录、同仓库子目录／不同 worktree、重复添加、同名路径的机器与端口隔离、A→B→A 切换，以及在途结果晚到。使用 `WorkspaceIdentityTests`、`PanelContextTests`、`FileTabPersistenceTests` 的关闭/保存竞争及受影响的工作区 UI 回归；测试入口及真实 SSH 边界见 [testing.md](../testing.md)。
 
 实现入口：[Project.swift](../../Bailey/Workspace/Project.swift)、[WorkspaceWindowModel.swift](../../Bailey/Workspace/WorkspaceWindowModel.swift)、[WorkspaceApplication.swift](../../Bailey/App/WorkspaceApplication.swift)。

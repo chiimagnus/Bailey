@@ -19,7 +19,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer make doctor
 根 [Makefile](../Makefile) 是本机和 CI 的统一入口，直接调用 `xcodebuild`：
 
 ```sh
-make test:FileTabTests,GitStatusModelTests  # 本地指定多个测试类
+make test:FileTabPersistenceTests,NativeFileTabTests,GitStatusModelTests  # 本地指定多个测试类
 make build
 make test                         # 全量测试
 make build:release

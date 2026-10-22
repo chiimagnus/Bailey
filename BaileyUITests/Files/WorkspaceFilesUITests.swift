@@ -122,6 +122,55 @@ final class WorkspaceFilesUITests: XCTestCase {
                        "Command-S must persist real editor bytes, not only publish a model change")
     }
 
+    func testSameNamedFilesInSeparateFoldersSaveToTheirOwnPaths() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let alpha = try fixture.file("alpha/shared.swift", text: "let value = 1\n")
+        let beta = try fixture.file("beta/shared.swift", text: "let value = 2\n")
+        let app = try WorkspaceUITestSupport.launch(in: self)
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let window = app.windows.firstMatch
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 15))
+
+        for (folderName, path, replacement) in [
+            ("alpha", alpha, "let value = 101\n"),
+            ("beta", beta, "let value = 202\n"),
+        ] {
+            files.click()
+            let folder = window.descendants(matching: .any)
+                .matching(identifier: "bailey.tree.folder")
+                .matching(NSPredicate(format: "label == %@", folderName)).firstMatch
+            XCTAssertTrue(folder.waitForExistence(timeout: 15))
+            folder.click()
+            let row = WorkspaceUITestSupport.fileRow(path, in: window)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.doubleClick()
+            XCTAssertTrue(WorkspaceUITestSupport.fileTab(path, in: window)
+                .waitForExistence(timeout: 15))
+            let editor = window.textViews.firstMatch
+            XCTAssertTrue(editor.waitForExistence(timeout: 15))
+            editor.click()
+            app.typeKey("a", modifierFlags: .command)
+            editor.typeText(replacement)
+            app.typeKey("s", modifierFlags: .command)
+            let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                (try? String(contentsOf: path, encoding: .utf8)) == replacement
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 15), .completed,
+                           "Editing one same-named tab must write only its own file")
+        }
+
+        let alphaTab = WorkspaceUITestSupport.fileTab(alpha, in: window)
+        let betaTab = WorkspaceUITestSupport.fileTab(beta, in: window)
+        XCTAssertTrue(alphaTab.exists && betaTab.exists)
+        alphaTab.click()
+        XCTAssertEqual(window.textViews.firstMatch.value as? String, "let value = 101\n")
+        betaTab.click()
+        XCTAssertEqual(window.textViews.firstMatch.value as? String, "let value = 202\n")
+        XCTAssertEqual(try String(contentsOf: alpha, encoding: .utf8), "let value = 101\n")
+        XCTAssertEqual(try String(contentsOf: beta, encoding: .utf8), "let value = 202\n")
+    }
+
     func testSameNamedFilesInDifferentFoldersHaveDistinctRowsAndTabs() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let alpha = try fixture.file("alpha/shared.swift", text: "let alpha = 1\n")
