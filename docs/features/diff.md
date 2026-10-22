@@ -21,7 +21,7 @@ Diff 使用 Apple 原生 NSTextView/TextKit 2 显示统一或分栏差异。本�
 
 文本尺寸、固定行高和只读替换时的滚动是实际依赖契约。
 原生布局片段的字符范围用于识别文末虚拟空行：不能用整段富文本长度判断。
-Diff 与文件编辑共享 NSTextStorage 的 Undo 通知和只读辅助功能写保护，
+Diff 与文件编辑共享 NSTextStorage 的 Undo 通知和只读辅助功能写保护；编辑态 Diff 还通过原生 `NSTextViewDelegate` 把自有 UndoManager 交给 AppKit。快捷键的真实跨进程验收仍归 Diff 迁移任务，不能以宿主直接调用 UndoManager 代替。
 核验入口见 [development.md](../development.md#依赖与本地补丁)。
 
 ## 保存与失败

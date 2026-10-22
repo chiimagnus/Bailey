@@ -335,6 +335,11 @@ struct SourceTextEditor: NSViewRepresentable {
             (textView as? FocusReportingTextView)?.updateSyntaxHighlighting(for: path)
         }
 
+        func undoManager(for view: NSTextView) -> UndoManager? {
+            guard view === textView else { return nil }
+            return textView?.undoManager
+        }
+
         func textView(_ view: NSTextView, shouldChangeTextIn range: NSRange,
                       replacementString: String?) -> Bool {
             guard view === textView, let file, file.editorCoordinator === self,
