@@ -4,7 +4,7 @@
 
 ## 原始实现（P1-T1）
 
-- 版本：`origin/main@097dac7a78b3308cde950d43446b635fcb1ff3d6` 上仅有计划／开发规范提交，无产品 Swift 变更；实施前 HEAD `8660233d3210537251ecd1fc2fca30beec8e3d12`。
+- 版本：`origin/main@097dac7a78b3308cde950d43446b635fcb1ff3d6` 上仅有计划／开发规范提交，无产品 Swift 变更；实施前实际测试 HEAD `8660233d3210537251ecd1fc2fca30beec8e3d12`（rebase 后等价实施位置 `855110472d682ee40321c45845d112e2e9093e53`）。
 - 机器：Apple Silicon，macOS 27.2 (26B5101f)，Xcode 27.2 (27B5038j)，最低部署目标 macOS 15.6；后者未作真实运行验证。
 - `make doctor`：退出 0。
 - `make test:SessionStoreTests,WorkspaceWindowIsolationTests,WorkspaceWindowCloseTests,DockFocusP2RegressionTests,PaneRetentionTests DERIVED_DATA=build/DerivedData-workspace-refactor`：退出 0，**76 executed，70 passed，6 skipped，0 failed**；`** TEST SUCCEEDED **`。isolated XCTest 宿主不等于正式 App GUI E2E。

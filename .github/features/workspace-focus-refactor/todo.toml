@@ -6,7 +6,7 @@ id = "P1-T1"
 title = "建立可重复的重构基线"
 status = "completed"
 plan = "plan-p1.md#p1-t1"
-commit = "6189946c8dd67c23d776657c78a73e005b5192eb"
+commit = "8d753fcf90fab95272c12128af9b40ad7eaf3fd2"
 note = "隔离原生基线 76 项、6 跳过；正式 App GUI/最低系统保留未验收限制"
 
 [[tasks]]
@@ -14,7 +14,7 @@ id = "P1-T2"
 title = "分离应用级所有者并修正窗口命名"
 status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = "433c80fa9a2033e2d594053ffbbc29f16440a939"
+commit = "4038569e01fb6327a5e6251d7adb8a288f217558"
 note = "应用/窗口归属已实施；前台原生62项无跳过/失败，20类领域229项仅授权SSH两项跳过；F14外部验收延期"
 
 [[tasks]]
@@ -22,7 +22,7 @@ id = "P1-T3"
 title = "收窄领域依赖与验证异步目标"
 status = "completed"
 plan = "plan-p1.md#p1-t3"
-commit = "0348d5f7dbed0bd2c1e47be2626b0421c7d7eef8"
+commit = "42217c40545d750692c5ab0642c42aa42e0806b6"
 note = "Debug 签名通过；148 项受影响测试 0 失败/6 跳过；新增异步目标校验 12 项通过"
 
 [[tasks]]

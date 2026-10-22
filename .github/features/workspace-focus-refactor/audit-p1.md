@@ -2,22 +2,22 @@
 
 ## 本轮独立复审（2026-10-22，并行审查）
 
-本节结论来自逐笔 diff、当前生产调用链与本轮运行，不使用原有 audit 的发现或 Gate 推导正确性。原有记录及并行审查者的修改保留；本轮发现使用 F-10 至 F-17。`todo.toml` 的原有未提交改动不由本轮覆盖。生产验证截止 `b78ef1c`；随后并行审查者的文档与新增 Finder 关闭回归/生产修复不归入本轮已验证提交，也未混入本轮代码提交。
+本节结论来自逐笔 diff、当前生产调用链与本轮运行，不使用原有 audit 的发现或 Gate 推导正确性。原有记录及并行审查者的修改保留；本轮发现使用 F-10 至 F-17。`todo.toml` 的原有未提交改动不由本轮覆盖。生产验证截止 `8e78318`；随后并行审查者的文档与新增 Finder 关闭回归/生产修复不归入本轮已验证提交，也未混入本轮代码提交。
 
 ### 逐任务／逐提交映射
 
 | 任务 | 核对提交 | 实际接入与最终结果 | 独立结论 |
 | --- | --- | --- | --- |
-| P1-T1 | `6189946c8dd67c23d776657c78a73e005b5192eb` | 仅写入原始测试证据和授权说明，无产品或测试实现；原始 76 项/6 skipped 是历史记录，不当作本轮复跑 | 基线没有完整 App 截图、逐帧输入和系统入口证据；原测试只构造模型，并未验证生产 SwiftUI 根视图，后由 F-12 补足宿主层证据，F-14 仍阻塞完整验收 |
-| P1-T2 | `433c80fa9a2033e2d594053ffbbc29f16440a939` | delegate.workspace → WindowRootView / Commands / Settings；Finder Apple Event/Service → 同一 owner；SSH socket → service → owner.session → TerminalSession.beginRemoteConnection；通知标题/点击 → owner；GitPanel 两处删除许可 → owner.isWorktreeInUse；原生关闭 → 单窗保存 → owner 快照 → 内容销毁 | 生产路径实际接入，不是孤立新类；F-10 恢复中保存丢数据、F-11 SSH fixture 装配断链、F-13 混合机器检查与 F-15 重复归属维护均已独立修复 |
-| P1-T3 | `0348d5f7dbed0bd2c1e47be2626b0421c7d7eef8` | ContentView.syncGit 与 GitPanel warning/failure 两处 Retry → WorkspaceWindowModel.syncGitStatus → GitStatusModel.syncSelectedProject；ToolPanelView.performSync → Project.syncFiles → FileTreeModel.sync/rebuild → 后端目录 → 可见树行 | 整窗形参已删除；Git 仍有 panelResolveGeneration/contextGeneration/PanelContext 身份核对，Files 保留根解析前后与 tree sync 后的目标判定；没有为删 guard 破坏机器/连接/保存边界 |
+| P1-T1 | `8d753fcf90fab95272c12128af9b40ad7eaf3fd2` | 仅写入原始测试证据和授权说明，无产品或测试实现；原始 76 项/6 skipped 是历史记录，不当作本轮复跑 | 基线没有完整 App 截图、逐帧输入和系统入口证据；原测试只构造模型，并未验证生产 SwiftUI 根视图，后由 F-12 补足宿主层证据，F-14 仍阻塞完整验收 |
+| P1-T2 | `4038569e01fb6327a5e6251d7adb8a288f217558` | delegate.workspace → WindowRootView / Commands / Settings；Finder Apple Event/Service → 同一 owner；SSH socket → service → owner.session → TerminalSession.beginRemoteConnection；通知标题/点击 → owner；GitPanel 两处删除许可 → owner.isWorktreeInUse；原生关闭 → 单窗保存 → owner 快照 → 内容销毁 | 生产路径实际接入，不是孤立新类；F-10 恢复中保存丢数据、F-11 SSH fixture 装配断链、F-13 混合机器检查与 F-15 重复归属维护均已独立修复 |
+| P1-T3 | `42217c40545d750692c5ab0642c42aa42e0806b6` | ContentView.syncGit 与 GitPanel warning/failure 两处 Retry → WorkspaceWindowModel.syncGitStatus → GitStatusModel.syncSelectedProject；ToolPanelView.performSync → Project.syncFiles → FileTreeModel.sync/rebuild → 后端目录 → 可见树行 | 整窗形参已删除；Git 仍有 panelResolveGeneration/contextGeneration/PanelContext 身份核对，Files 保留根解析前后与 tree sync 后的目标判定；没有为删 guard 破坏机器/连接/保存边界 |
 
 ### 删除核对
 
 - `TerminalManager` 旧类、旧文件、旧名 alias、`activeManagers`、应用级可变 static registry 与旧 `syncSelectedProject(in:)` / `syncFiles(in:)` 在生产 Swift 中均无现行入口。
 - 不删除仍有职责的 `SessionStore`、TerminalHistoryStore、SSH token/端口/PID 校验、窗口关闭幂等、退出防覆盖、保存中新编辑检查及晚到目标核对。
-- `49fdfaf` 删除按项目提前过滤全部内容的错误围栏；继续追到固定 SSH 终端后，以 F-16 收窄：目录与终端保留项目面板范围，File/Diff 按标签自身机器判断，不把别名、空身份与实际主机身份混为一谈。
-- `956e9b1` 删除工厂预绑定及移除/关闭后的重复解绑，只由 `projects.didSet` 维护所属窗口及保存回调。
+- `bedf82d` 删除按项目提前过滤全部内容的错误围栏；继续追到固定 SSH 终端后，以 F-16 收窄：目录与终端保留项目面板范围，File/Diff 按标签自身机器判断，不把别名、空身份与实际主机身份混为一谈。
+- `f8eca9e` 删除工厂预绑定及移除/关闭后的重复解绑，只由 `projects.didSet` 维护所属窗口及保存回调。
 - `Project.panelRoot` 仍供 CommandPalette 读取，不能当作 Files/Git 旧 API 顺手删除；`pinnedFile` 和缺失 `localFile` 键仍承载可达快照语义，本轮不擅自改变数据解释。
 
 ### 本轮验证日志
@@ -32,7 +32,7 @@
 | F-11 Red → Green、F-12 | `/tmp/bailey-p1-review-services-red.log`：单项、4 条断言失败、make=2；`-services-green.log`：SessionStoreTests/RemoteLifetimeTests/GitInteractiveRebaseTests 共 19 项、1 跳过/0 失败、make=0 |
 | F-15 | `/tmp/bailey-p1-review-bindings.log`：SessionStoreTests/WorkspaceWindowCloseTests/WorkspaceWindowIsolationTests 共 57 项、5 跳过/0 失败、make=0 |
 | 首轮全量 XCTest | `/tmp/bailey-p1-review-full.log`：634 项、14 跳过/0 失败，make=0；该轮编译早于 F-16，不冒充最终源码全量，最终复跑见收尾 |
-| F-16 Red → Green | `/tmp/bailey-p1-review-fixed-ssh-red.log`：单项、3 条断言失败、make=2；`-fixed-ssh-green.log`：GitStatusModelTests/GitWorkspaceMenuTests 共 60 项、0 跳过/失败、make=0；提交 `b78ef1c` |
+| F-16 Red → Green | `/tmp/bailey-p1-review-fixed-ssh-red.log`：单项、3 条断言失败、make=2；`-fixed-ssh-green.log`：GitStatusModelTests/GitWorkspaceMenuTests 共 60 项、0 跳过/失败、make=0；提交 `8e78318` |
 | 最终 Debug/Release | `make build` 与 `make build:release DERIVED_DATA=build/DerivedData-p1-review` 均在 F-16 后构建并执行 `codesign --verify --deep --strict`，完整退出均为 0；日志 `/tmp/bailey-p1-review-final-debug.log`、`-final-release.log`；未将 Release 编译当作 Release GUI 验收 |
 | 文档与旧入口 | 12 份受影响现行文档，100 个本地文件/标题链接通过；生产 Swift/现行 docs 无旧类型和整窗同步 API 引用；`git diff --check` 通过 |
 | 最终源码全量 XCTest | `make test DERIVED_DATA=build/DerivedData-p1-review-services`：635 项、12 跳过、2 failures（1 unexpected），`TEST FAILED`，完整 make=2；日志 `/tmp/bailey-p1-review-final-full.log`。不能用首轮绿色覆盖该结果 |
@@ -40,7 +40,7 @@
 
 快照覆盖 1/2/3 窗口 × 防抖/重启保存/退出/提前关闭的全部 12 组，并核对重复关闭/退出后的快照和 sidecar。最终文件机器保护覆盖 2 种项目机器 × 3 种内容机器 × File/Diff 的全部 12 组，另核对相邻目录和本机符号链接；固定 SSH 终端单独建立生产 `Project.newSession` 的固定远端前提，覆盖握手前空身份/连接后不同主机身份 × 正确别名/本机/其它主机/相邻路径。连接状态为受控构造，不冒充真实 SSH。SSH 校验覆盖实际 socket、错误 token、跨 owner、关闭后拒绝及合法连接落入原 Session。生产根视图重复构造核对原生编辑器对象而非仅观察计数。
 
-F-16 的证据校正：最初 18 组中的 6 组 Session 是不符合固定 SSH 生产构造的合成组合，初次 19 条 Red 不能全部归为有效产品缺陷。保留全部有效 File/Diff 断言，以真实固定远端构造替换错误 Session 假设，新增测试在 `49fdfaf` 上出现 3 条失败。此处记录审查纠错，不以修改预期隐藏真实失败，也不修改原项目已有测试断言。
+F-16 的证据校正：最初 18 组中的 6 组 Session 是不符合固定 SSH 生产构造的合成组合，初次 19 条 Red 不能全部归为有效产品缺陷。保留全部有效 File/Diff 断言，以真实固定远端构造替换错误 Session 假设，新增测试在 `bedf82d` 上出现 3 条失败。此处记录审查纠错，不以修改预期隐藏真实失败，也不修改原项目已有测试断言。
 
 首轮全量实际跳过的 14 项逐项列出如下；每项的原因、影响、替代证据和补验方法适用下表同名条件，不因分组而计作通过。最终复跑另核对是否变化：
 
@@ -86,13 +86,13 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 
 ## 任务到文件的映射
 
-- P1-T1（`6189946`）
+- P1-T1（`8d753fc`）
   - `idea.md`、`evidence-p1.md`：原始产品源码基线、隔离原生测试、六项前台焦点跳过及其它外部系统限制；无生产代码改动
-- P1-T2（`433c80f`）
+- P1-T2（`4038569`）
   - `Bailey/App/{WorkspaceApplication,BaileyApp,FinderService,SettingsView}.swift`、`Bailey/Workspace/{WorkspaceWindowModel,Project}.swift`：应用级与单窗注册、恢复、Finder、保存及项目呈现分界，删除旧 `TerminalManager.swift`
   - `Bailey/Remote/BaileySSHBridge.swift`、`Bailey/Terminal/TerminalNotificationService.swift`、`Bailey/UI/`：SSH/通知/菜单/拖放接入唯一应用所有者
   - `BaileyTests/` 中原有二十类与新窗口认领、跨 owner 隔离、实际私有 socket handoff 测试；`AGENTS.md`、`docs/architecture.md` 及相关功能文档
-- P1-T3（`0348d5f`）
+- P1-T3（`42217c4`）
   - `Bailey/Workspace/{Project,WorkspaceWindowModel}.swift`、`Bailey/Git/{GitStatusModel,GitPanel}.swift`、`Bailey/UI/{ContentView,Panels/ToolPanelView}.swift`：Files/Git 异步接口由调用方传入项目和可撤销目标许可，不再传整个窗口
   - `BaileyTests/Integration/Workspace/PanelContextTests.swift`、所有相关 Git 对话框／外部刷新测试，`docs/architecture.md`、`docs/features/{files,git,projects,ssh}.md`
 
@@ -146,7 +146,7 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 - 风险：`实际分支 feature/workspace-focus-refactor 已实施 P1，plan-p1 顶部仍称本轮不授权产品修改；review-preflight 中旧 TerminalManager.swift 链接指向已删除现行文件，读者无法分辨历史入口和现行入口。`
 - 预期修复：`只更新当前状态描述并明确旧文件入口是历史基线；历史提交证据保留，不重写原始审查和验收约束；移除指向不存在工作区路径的 Markdown 链接。`
 - 验证：`git status、git cat-file 验证原始源码归属、Feature 内 Markdown 相对路径核对、docs audit、git diff --check`
-- 解决证据：`6ee5fdf：固定实施基线与当前分支分离，旧TerminalManager历史路径取消失效链接；Feature 162 个本地Markdown链接无断链，todo validate与git diff --check通过。`
+- 解决证据：`d386ba7：固定实施基线与当前分支分离，旧TerminalManager历史路径取消失效链接；Feature 162 个本地Markdown链接无断链，todo validate与git diff --check通过。`
 
 
 ## 发现 F-20
@@ -159,7 +159,7 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 - 风险：`deliverPendingExternalFiles 将已开文件请求推回队列等待未附着 owner；windowClosed 只注销窗口和保存，不重试仍合法的其他窗口请求。该 owner 在附着前关闭时再无递送事件，系统打开文件请求既不完成也不在接收窗口创建文件标签。`
 - 预期修复：`在实际所有者从窗口集合移除后，重试仍有效的待处理文件请求；保留已关闭首选窗口请求取消、其他文件复用和项目身份判定，不添加定时轮询。`
 - 验证：`WorkspaceWindowIsolationTests：双窗口+未附着 owner 持有相同 Mac FileTab、优先接收者已附着、批量 Finder 请求被阻塞，owner 关闭后逐个完成且最终仅有一个正确 FileTab；另覆盖接收项目切换和多请求不重放；make test:WorkspaceWindowIsolationTests 及扩大回归、build`
-- 解决证据：`a48593d：已验证未附着旧文件窗口关闭后，67份原生Finder FileTab请求全部正确完成，3份接收项目切换请求全部按原目标拒绝；修复前定向XCTest 3断言失败/TEST FAILED，修复后定向TEST SUCCEEDED；WorkspaceWindowIsolationTests/WorkspaceWindowCloseTests/SessionStoreTests/PanelContextTests/RemoteLifetimeTests 76项/5 skipped/0 failures；Debug与Release BUILD SUCCEEDED且codesign --verify --deep --strict退出0。`
+- 解决证据：`9f096df：已验证未附着旧文件窗口关闭后，67份原生Finder FileTab请求全部正确完成，3份接收项目切换请求全部按原目标拒绝；修复前定向XCTest 3断言失败/TEST FAILED，修复后定向TEST SUCCEEDED；WorkspaceWindowIsolationTests/WorkspaceWindowCloseTests/SessionStoreTests/PanelContextTests/RemoteLifetimeTests 76项/5 skipped/0 failures；Debug与Release BUILD SUCCEEDED且codesign --verify --deep --strict退出0。`
 
 
 ## 发现 F-16
@@ -168,11 +168,11 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 - 严重级别：`High`
 - 状态：`Resolved`
 - 位置：`Bailey/App/WorkspaceApplication.swift:159`
-- 摘要：`本轮49fdfaf将终端改按裸workspaceIdentity比较，破坏固定SSH项目的别名归属`
+- 摘要：`本轮bedf82d将终端改按裸workspaceIdentity比较，破坏固定SSH项目的别名归属`
 - 风险：`固定SSH终端在握手前identity为空，独立握手后也可能是user@host而非项目ssh:alias，原远端工作树占用保护会漏检`
 - 预期修复：`将本轮修复收窄到File/Diff独立机器；目录与终端保留原项目scope语义，补固定SSH真实前提回归，修正不符合生产构造的合成session矩阵`
 - 验证：`make test:GitStatusModelTests DERIVED_DATA=build/DerivedData-p1-review`
-- 解决证据：`固定SSH真实构造的回归在49fdfaf上3条失败；收窄后GitStatusModelTests/GitWorkspaceMenuTests共60项、0跳过/失败，make退出0；保留目录/终端原项目scope，不推广不符合生产事实的合成Session假设`
+- 解决证据：`固定SSH真实构造的回归在bedf82d上3条失败；收窄后GitStatusModelTests/GitWorkspaceMenuTests共60项、0跳过/失败，make退出0；保留目录/终端原项目scope，不推广不符合生产事实的合成Session假设`
 
 
 ## 发现 F-02
@@ -185,7 +185,7 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 - 风险：`完整 make test 629项/14跳过/2条失败断言，同一轮第二周期 FileTab/TextKit 弱引用未在10秒内归零；单独跑该类21项全过，无法区分宿主缓存和实际泄漏，虚假日志误导定位`
 - 预期修复：`测试按现有 Project.close/terminateAll 的真正退出顺序显式调用 FileTab.retireNativeEditor，再释放宿主；核验实际弱引用数量，不增加等待或降低断言。未证明运行时资源泄漏前不改编辑器内核。`
 - 验证：`旧完整 make test 日志保留；make test:PaneRetentionTests,WorkspaceWindowIsolationTests 再次实际验证；最终完整 make test Debug/Release签名和异常/多轮测试`
-- 解决证据：`27edfb8: native close contract now retires TextKit before NSHostingView teardown; make test:PaneRetentionTests,WorkspaceWindowIsolationTests DERIVED_DATA=build/DerivedData-workspace-refactor -> exit 0, 62 executed/3 skipped/0 failed; all 5x5 editor and FileTab weak references released. Original make test failed 629/14 skipped/2 assertions; still requires final full rerun after concurrent P1 fixes.`
+- 解决证据：`8d68649: native close contract now retires TextKit before NSHostingView teardown; make test:PaneRetentionTests,WorkspaceWindowIsolationTests DERIVED_DATA=build/DerivedData-workspace-refactor -> exit 0, 62 executed/3 skipped/0 failed; all 5x5 editor and FileTab weak references released. Original make test failed 629/14 skipped/2 assertions; still requires final full rerun after concurrent P1 fixes.`
 
 
 ## 发现 F-15
@@ -198,7 +198,7 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 - 风险：`两处维护同一回调归属，工厂未入集合即绑定，移除/关闭重复清理`
 - 预期修复：`只保留项目集合成员关系这一处绑定/解绑真源`
 - 验证：`make test:WorkspaceWindowCloseTests,SessionStoreTests,WorkspaceWindowIsolationTests DERIVED_DATA=build/DerivedData-p1-review`
-- 解决证据：`956e9b1；删除5行重复绑定/解绑，集合didSet唯一维护；SessionStoreTests+WorkspaceWindowCloseTests+WorkspaceWindowIsolationTests共57项/5项前台焦点跳过/0失败，make退出0`
+- 解决证据：`f8eca9e；删除5行重复绑定/解绑，集合didSet唯一维护；SessionStoreTests+WorkspaceWindowCloseTests+WorkspaceWindowIsolationTests共57项/5项前台焦点跳过/0失败，make退出0`
 
 
 ## 发现 F-14
@@ -224,7 +224,7 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 - 风险：`已打开本机文件或 Diff 所属工作树仍可被删除；这是迁移保留的旧算法缺陷而非新增回归`
 - 预期修复：`独立修复为逐目录/会话/标签按各自机器校验，保留目录边界和 symlink 语义`
 - 验证：`make test:GitStatusModelTests,GitWorkspaceMenuTests DERIVED_DATA=build/DerivedData-p1-review`
-- 解决证据：`49fdfaf + b78ef1c；最终为12组File/Diff真实机器组合及固定SSH项目终端归属回归；GitStatusModelTests/GitWorkspaceMenuTests共60项、0跳过/失败，make退出0；初始合成Session夹具的证据校正见F-16`
+- 解决证据：`bedf82d + 8e78318；最终为12组File/Diff真实机器组合及固定SSH项目终端归属回归；GitStatusModelTests/GitWorkspaceMenuTests共60项、0跳过/失败，make退出0；初始合成Session夹具的证据校正见F-16`
 
 
 ## 发现 F-12
@@ -237,7 +237,7 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 - 风险：`只 new 模型不能验证 WindowRootView 的 State 重建、onAppear 与原生 attach 的组合；不满足 P1-T1 第4步`
 - 预期修复：`通过生产 WindowRootView 的真实 NSHostingView 验证同场景重复求值只登记/认领一次`
 - 验证：`make test:WorkspaceWindowIsolationTests DERIVED_DATA=build/DerivedData-p1-review`
-- 解决证据：`228e844；生产WindowRootView在NSHostingView中连续重新构造4次，仍是1个登记窗口、同一个NSTextView及1份恢复文件；SessionStoreTests 10项通过；此证据非WindowGroup系统恢复E2E`
+- 解决证据：`eb1378f；生产WindowRootView在NSHostingView中连续重新构造4次，仍是1个登记窗口、同一个NSTextView及1份恢复文件；SessionStoreTests 10项通过；此证据非WindowGroup系统恢复E2E`
 
 
 ## 发现 F-11
@@ -250,7 +250,7 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 - 风险：`新终端的有效 token 在宿主 owner 找不到对应 Session，真实握手被拒绝；现有跳过隐藏该回归`
 - 预期修复：`复用显式服务装配入口并恢复原绑定，补安全的真实 socket 握手回归`
 - 验证：`make test:RemoteLifetimeTests,GitInteractiveRebaseTests DERIVED_DATA=build/DerivedData-p1-review`
-- 解决证据：`228e844；真实socket握手旧实现4条断言失败，修复后SessionStoreTests+RemoteLifetimeTests+GitInteractiveRebaseTests共19项/1项授权SSH跳过/0失败，make退出0；GUI与fixture共用connectServices，恢复双服务原绑定`
+- 解决证据：`eb1378f；真实socket握手旧实现4条断言失败，修复后SessionStoreTests+RemoteLifetimeTests+GitInteractiveRebaseTests共19项/1项授权SSH跳过/0失败，make退出0；GUI与fixture共用connectServices，恢复双服务原绑定`
 
 
 ## 发现 F-10
@@ -263,7 +263,7 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 - 风险：`只恢复首窗后保存/退出，或首窗提前关闭，会丢掉其余窗口及历史`
 - 预期修复：`保存已登记窗口时合并未认领快照及历史，末窗保留同一队列，不增加第二份状态`
 - 验证：`make test:SessionStoreTests DERIVED_DATA=build/DerivedData-p1-review`
-- 解决证据：`b199082；SessionStoreTests旧实现40条断言失败，修复后9项/0失败，make退出0；1/2/3窗口×relaunch/terminate/close/debounce及重复关闭，核对保存快照与history sidecar`
+- 解决证据：`55e47ec；SessionStoreTests旧实现40条断言失败，修复后9项/0失败，make退出0；1/2/3窗口×relaunch/terminate/close/debounce及重复关闭，核对保存快照与history sidecar`
 
 
 ## 发现 F-01
@@ -276,20 +276,20 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 - 风险：`先按 project.panelContext.scope 过滤 SSH 项目，导致随后对 tab.content.file.workspaceIdentity 的本机路径检查永远不可达；Worktree 删除时可能忽略仍在该 SSH 项目中的本机文件缓冲`
 - 预期修复：`另案以跨机器 FileTab/ DiffTab 内容身份逐个判断占用；只有项目目录和会话适用项目层级 scope 过滤，不在 P1 纯职责迁移中暗改用户行为`
 - 验证：`添加 Mac FileTab 属于 SSH Project 的实境回归；确认本机 Worktree Remove 对含未保存文本的该文件拒删，SSH 查询无误报，并核对相邻路径、软链接、清洁/锁定 Worktree`
-- 解决证据：`Resolved by independent commit 49fdfaf (also tracked in F-13): removed project-scope early filter for File/Diff tabs; session checks use session workspaceIdentity; Red 19 assertions failed in 27 mixed scope/kind combinations, Green make test:GitStatusModelTests,GitWorkspaceMenuTests DERIVED_DATA=build/DerivedData-p1-review 59/0 failed/0 skipped, exit 0. A real local FileTab inside SSH Project through openExternalLocalItems passes WorkspaceWindowIsolationTests added scenario (62 tests/3 skipped/0 failed). Final full suite still pending.`
+- 解决证据：`Resolved by independent commit bedf82d (also tracked in F-13): removed project-scope early filter for File/Diff tabs; session checks use session workspaceIdentity; Red 19 assertions failed in 27 mixed scope/kind combinations, Green make test:GitStatusModelTests,GitWorkspaceMenuTests DERIVED_DATA=build/DerivedData-p1-review 59/0 failed/0 skipped, exit 0. A real local FileTab inside SSH Project through openExternalLocalItems passes WorkspaceWindowIsolationTests added scenario (62 tests/3 skipped/0 failed). Final full suite still pending.`
 
 
 <在此之下由 `finding add` 命令追加发现项，不要手工照抄模板>
 
 ## 修复日志
 
-- `6ee5fdf` 修复当前计划状态与历史源码导航；`a48593d` 修复 Finder 等待已注销窗口的队列滞留。
-- `4fd8006` 删除原生 XCTest 通过前台 Key Window 状态跳过或放宽断言的分支；保留真实 AppKit 焦点验证。复核 F-17／F-22 指向同一 Git Palette 取消用例，前台重跑成功；不能再当作两个未修产品 Bug。
+- `d386ba7` 修复当前计划状态与历史源码导航；`9f096df` 修复 Finder 等待已注销窗口的队列滞留。
+- `c11034d` 删除原生 XCTest 通过前台 Key Window 状态跳过或放宽断言的分支；保留真实 AppKit 焦点验证。复核 F-17／F-22 指向同一 Git Palette 取消用例，前台重跑成功；不能再当作两个未修产品 Bug。
 - 依用户最新要求完整删除 FPS 采样器、Badge、UI 状态、菜单、本地化键和专属用例，⌘P 新测试使用真实 File Manager 动作。旧版 `PaletteCommand.preservesCurrentFocus` 试验不复活；当前命令执行使用已有的原生焦点恢复逻辑交给最新有效接收者。
 
 ## 验证日志
 
-- **最新当前分支 `0619c49` 全量验证**：`make test DERIVED_DATA=build/DerivedData-p1-review-services` → **635 项、8 skipped、0 failures、完整退出码 0／`TEST SUCCEEDED`**（2026-10-22 macOS 27.2 / Apple Silicon，`/tmp/bailey-p1-audit-all-current-foreground.log`）。8 项 skipped 全部需要获授权的 Windows SSH：Git 外部刷新 1、交互式 Rebase 1、Git 工作树 2、Windows SSH 文件树 3、Git 故障恢复 1；**0 项原生焦点跳过**。Debug／Release `BUILD SUCCEEDED`、`codesign --verify --deep --strict` 通过。
+- **rebase 前原始 `0619c49` 的全量测试（历史验证，不代表新 main 已复测）**：`make test DERIVED_DATA=build/DerivedData-p1-review-services` → **635 项、8 skipped、0 failures、完整退出码 0／`TEST SUCCEEDED`**（2026-10-22 macOS 27.2 / Apple Silicon，`/tmp/bailey-p1-audit-all-current-foreground.log`）。8 项 skipped 全部需要获授权的 Windows SSH：Git 外部刷新 1、交互式 Rebase 1、Git 工作树 2、Windows SSH 文件树 3、Git 故障恢复 1；**0 项原生焦点跳过**。Debug／Release `BUILD SUCCEEDED`、`codesign --verify --deep --strict` 通过。
 - 清理测试绕行后 `make test:DockFocusP2RegressionTests,WorkspaceWindowIsolationTests,GitWorkspaceMenuTests,PaneRetentionTests,GitExternalRefreshTests DERIVED_DATA=build/DerivedData-p1-review-services`：**80 项、1 skipped、22 条断言失败（9 unexpected）、命令退出非零**。DockFocus、GitExternalRefresh、GitWorkspaceMenu 三类通过；PaneRetention 的五编辑器释放与 Dock 移动用例超时；WorkspaceWindowIsolation 的 Palette/Files 原生焦点用例部分超时，且观察到测试历史 JSON 删除时文件已不存在。该轮由共享桌面前台应用变化干扰，不足以断言全部是产品回归，也不能冒称验收通过。失败详情：`/tmp/bailey-p1-focus-no-guards-final.log`。
 - 受控前台 `make test:WorkspaceWindowIsolationTests,PaneRetentionTests DERIVED_DATA=build/DerivedData-p1-review-services`：**62 项、0 skipped、0 failures、退出 0**，含 Git clean/dirty 的 Palette 取消、Files/Git 输入以及每轮五个原生编辑器 × 5 轮释放和 Dock 重挂载。原来后台运行 80 项时的焦点超时与附带的清理异常不能证明生产回归。
 - P1 其余 20 个实际受影响测试类：**229 项、2 skipped、0 failures、退出 0**；仅两项需要真实获授权 SSH（外部 Git 刷新和交互式 Rebase），本机及受控 socket 均已通过。
@@ -320,9 +320,9 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 
 | 任务 | 原子提交与必要追补 | 真正生效的入口／最终副作用 |
 | --- | --- | --- |
-| P1-T1 | `6189946`；文档状态校正 `6ee5fdf` | 旧 `origin/main@097dac7` 的窗口与资源回归基线：76 项、6 skipped、0 failed，证据位于 `evidence-p1.md`。没有同条件完整原生视频／像素／前台输入对照，不以代码与绿色 XCTest 替代 |
-| P1-T2 | `433c80f`；保存补漏 `b199082`；真实五编辑器夹具 `27edfb8`；跨机器 Worktree `49fdfaf`；服务／根视图 `228e844`；SSH 项目本机文件 `1fb5fba`；重复绑定删除 `956e9b1`；固定 SSH machine scope `b78ef1c`；Finder 关闭队列 `a48593d` | `BaileyApp`/delegate 的单一 `WorkspaceApplication` 通过 `WindowRootView`、`BaileyCommands`、Settings、Finder Apple Event 与 Service、认证 `BaileySSHService`、通知点击和 Git Graph 删除权限接线；每窗 `WorkspaceWindowModel` 持有项目与原生内容。快照最终写入 `SessionStore`、历史写入 `TerminalHistoryStore`，Finder 最终复用或新建真实 `FileTab`，Worktree 删除经项目/文件机器校验 |
-| P1-T3 | `0348d5f` | `ContentView.syncGit` 和 GitPanel 两处 Retry → `WorkspaceWindowModel.syncGitStatus` → `GitStatusModel.syncSelectedProject(project:isCurrent:)` → 异步后核对 generation、`PanelContext.Identity` 和窗口当前选择；`ToolPanelView.performSync` → `Project.syncFiles(isCurrent:)` → `FileTreeModel.sync` → 实际树。原两个整窗形参全部调用方已迁移 |
+| P1-T1 | `8d753fc`；文档状态校正 `d386ba7` | 旧 `origin/main@097dac7` 的窗口与资源回归基线：76 项、6 skipped、0 failed，证据位于 `evidence-p1.md`。没有同条件完整原生视频／像素／前台输入对照，不以代码与绿色 XCTest 替代 |
+| P1-T2 | `4038569`；保存补漏 `55e47ec`；真实五编辑器夹具 `8d68649`；跨机器 Worktree `bedf82d`；服务／根视图 `eb1378f`；SSH 项目本机文件 `c4a0ab4`；重复绑定删除 `f8eca9e`；固定 SSH machine scope `8e78318`；Finder 关闭队列 `9f096df` | `BaileyApp`/delegate 的单一 `WorkspaceApplication` 通过 `WindowRootView`、`BaileyCommands`、Settings、Finder Apple Event 与 Service、认证 `BaileySSHService`、通知点击和 Git Graph 删除权限接线；每窗 `WorkspaceWindowModel` 持有项目与原生内容。快照最终写入 `SessionStore`、历史写入 `TerminalHistoryStore`，Finder 最终复用或新建真实 `FileTab`，Worktree 删除经项目/文件机器校验 |
+| P1-T3 | `42217c4` | `ContentView.syncGit` 和 GitPanel 两处 Retry → `WorkspaceWindowModel.syncGitStatus` → `GitStatusModel.syncSelectedProject(project:isCurrent:)` → 异步后核对 generation、`PanelContext.Identity` 和窗口当前选择；`ToolPanelView.performSync` → `Project.syncFiles(isCurrent:)` → `FileTreeModel.sync` → 实际树。原两个整窗形参全部调用方已迁移 |
 
 ### 已删除和必须保留的实现
 
@@ -334,11 +334,18 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 ### 本次新增 Red → Green 与环境验证
 
 - F-20：`WorkspaceApplication.windowClosed` 的真正文件所有者注销后没再次递送 Finder 请求。新测试覆盖**67 次未换项目**及**3 次接收项目切换**，检查所有请求完成恰好一次、同一磁盘文件的目标 `FileTab`、无误投和最终文件字节。旧版本对应三条断言失败（`/tmp/bailey-p1-independent-owner-close-red.log`；make Error 65）；仅在原有窗口注销后调用 `deliverPendingExternalFiles()`，定向绿（`/tmp/bailey-p1-independent-owner-close-green.log`）。扩大至 `make test:WorkspaceWindowIsolationTests,WorkspaceWindowCloseTests,SessionStoreTests,PanelContextTests,RemoteLifetimeTests DERIVED_DATA=build/DerivedData-p1-review-services`：**76 项、5 skipped、0 failed、退出 0**。
-- F-21：原 Feature 文档错称仍是游离 HEAD、未授权实施，且链接已删除的旧源文件。提交 `6ee5fdf`，Feature **162** 个本地 Markdown 路径全部可达，`todo validate` 与 `git diff --check` 通过。
+- F-21：原 Feature 文档错称仍是游离 HEAD、未授权实施，且链接已删除的旧源文件。提交 `d386ba7`，Feature **162** 个本地 Markdown 路径全部可达，`todo validate` 与 `git diff --check` 通过。
 - `make build DERIVED_DATA=build/DerivedData-p1-review-services` 与 `make build:release DERIVED_DATA=build/DerivedData-p1-review-services`：均退出 0、`BUILD SUCCEEDED` 且 `codesign --verify --deep --strict` 通过。只构建隔离 DerivedData，不重启／替换用户正式 Bailey、不改用户 SSH master。
 - 较早全量测试 `/tmp/bailey-p1-review-full.log`：**634 项／14 skipped／0 failures**；另一次 `/tmp/bailey-p1-review-final-full.log`：**635 项／12 skipped／同一 Git Palette 用例的两条失败报告**。不同源码和前台执行条件不能直接比较；F-22 与 F-17 已经合并复核，不再用这两条历史失败阻塞 P1 代码验收。
-- 历史 `a48593d` 完整测试 `/tmp/bailey-p1-independent-final-full.log`：**636 项、14 skipped、0 failures**，当时存在原生焦点条件跳过；最新 `0619c49` 受控前台完整 `make test`：**635 项、8 项授权 SSH 跳过、0 failures、退出 0**。已消除 native skips 的测试绕行，仍保持全部原生输入断言；新旧数量差 1 项源于用户明确删除 FPS 专项测试，不能跨源码快照比较测试总数。
+- 历史 `9f096df` 完整测试 `/tmp/bailey-p1-independent-final-full.log`：**636 项、14 skipped、0 failures**，当时存在原生焦点条件跳过；最新 `637e248` 受控前台完整 `make test`：**635 项、8 项授权 SSH 跳过、0 failures、退出 0**。已消除 native skips 的测试绕行，仍保持全部原生输入断言；新旧数量差 1 项源于用户明确删除 FPS 专项测试，不能跨源码快照比较测试总数。
 
 ### 全环境验收边界／Gate 原则
 
 当前本机仅能实测 macOS 27.2／Xcode 27.2 arm64；macOS 15.6 真机、不同 CI SDK、同条件原始 GUI 的逐帧与像素证据、真实前台键鼠与 IME、Finder/Dock Launch Services、完整重启/通知点击、独立授权 Windows SSH、不同显示器及长时内存仍未取得。重用现有测试宿主或 `minimum deployment target` 无法替代其最终副作用。当前机器上真正要求系统前台的原生 XCTest 已执行而非 skipped；仍缺失的真实 SSH、系统入口与外部机器不能靠模拟测试冒充。不能为关闭审计而解除保存、认证、机器身份围栏或延长测试超时。P2 焦点设计仍是独立阶段；P1 完整“零 UI/UX 变化”放行须等主路径系统入口与当前实际失败原因核销。
+
+## 2026-10-22 与最新 main 的冲突复核
+
+- 基线：PR #50 原 `bda4fde`（20 个线性提交）基于 `097dac7`；rebase 到 `origin/main@85e9cb1` 后，原 20 个提交顺序和主题均保留，新的回放顶点为 `67ac556`；逐提交关系由 `git range-diff 097dac7..bda4fde 85e9cb1..67ac556` 验证。
+- 唯一手工冲突：原 `4fd8006` 修改 `docs/testing.md` 的原生焦点断言原则，同时 main 的 `c279cfb` 加入 Git Graph 不再依赖 Vision OCR 的测试规范。保留两者：Git Worktree 标签从真实展示文本与数据测试，保留原生点击／像素验证；需前台输入的 XCTest 不可根据 `isKeyWindow` 降低断言或跳过。
+- main 的 CI 规则、macOS 27/Xcode Runner、Git Graph 原生实现及其测试、发布文档均与 origin/main 的文件字节一致；P1 的单一应用所有者、机器身份验证、⌘P 焦点恢复和 FPS 完整删除均保留。
+- 此次 rebase 因父节点及文档上下文重写提交 SHA；Feature 当前任务及审计证据中的旧提交引用已按逐提交映射更新，旧测试结果仍保持历史事实，不冒充重新执行。
