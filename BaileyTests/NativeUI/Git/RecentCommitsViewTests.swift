@@ -1671,7 +1671,7 @@ final class RecentCommitsViewTests: XCTestCase {
         let locations = try XCTUnwrap(rows.first { $0.hash == tip }?.checkedOutWorktrees)
         let primary = try XCTUnwrap(locations.first { $0.path == main.path }
             ?? locations.first { $0.branch == nil } ?? locations.first)
-        XCTAssertEqual(primary.path, detached.path)
+        XCTAssertEqual(primary.path, try git(["rev-parse", "--show-toplevel"], at: detached))
         let label = RecentCommitsView.worktreeDisplayLabel(
             primary, among: ["/fixture", main.path, detached.path, shared.path]
         )
