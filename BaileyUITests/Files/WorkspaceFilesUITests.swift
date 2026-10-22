@@ -60,10 +60,18 @@ final class WorkspaceFilesUITests: XCTestCase {
     }
 
     func testPaletteFileManagerCommandRestoresKeyboardFocusFromEditor() throws {
+        try verifyFileManagerPaletteFocus(language: "en", commandName: "File Manager")
+    }
+
+    func testPaletteFileManagerCommandRestoresKeyboardFocusFromEditorInChinese() throws {
+        try verifyFileManagerPaletteFocus(language: "zh-Hans", commandName: "文件管理器")
+    }
+
+    private func verifyFileManagerPaletteFocus(language: String, commandName: String) throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("alpha.swift", text: "original\n")
         let second = try fixture.file("beta.swift", text: "original\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: language)
 
         try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
@@ -79,7 +87,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         app.typeKey("p", modifierFlags: .command)
         let search = app.textFields["bailey.commandPalette.search"]
         XCTAssertTrue(search.waitForExistence(timeout: 10))
-        search.typeText("File Manager")
+        search.typeText(commandName)
+        XCTAssertEqual(search.value as? String, commandName)
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
         XCTAssertFalse(search.waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons.matching(identifier: "bailey.tab.file").count, 1,

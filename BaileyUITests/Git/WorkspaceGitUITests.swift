@@ -9,9 +9,10 @@ final class WorkspaceGitUITests: XCTestCase {
         let app = try WorkspaceUITestSupport.launch(in: self)
 
         try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        app.typeKey("g", modifierFlags: [.command, .shift])
         let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
         XCTAssertTrue(git.waitForExistence(timeout: 20))
-        git.click()
+        XCTAssertTrue(git.isHittable, "The native Git Manager shortcut must reveal a visible Git tab")
 
         let history = app.buttons.matching(
             NSPredicate(format: "label == %@", "E2E fixture history")
@@ -35,9 +36,10 @@ final class WorkspaceGitUITests: XCTestCase {
         let app = try WorkspaceUITestSupport.launch(in: self)
 
         try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        app.typeKey("g", modifierFlags: [.command, .shift])
         let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
         XCTAssertTrue(git.waitForExistence(timeout: 20))
-        git.click()
+        XCTAssertTrue(git.isHittable, "The native Git Manager shortcut must reveal a visible Git tab")
 
         let change = WorkspaceUITestSupport.fileRow(changed, in: app.windows.firstMatch, relativeTo: fixture.root)
         XCTAssertTrue(change.waitForExistence(timeout: 25),
@@ -61,17 +63,35 @@ final class WorkspaceGitUITests: XCTestCase {
         try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
 
         let window = app.windows.firstMatch
-        WorkspaceUITestSupport.element("bailey.dock.git", in: app).click()
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
+        XCTAssertTrue(git.waitForExistence(timeout: 20))
+        XCTAssertTrue(git.isHittable, "Git Manager must be on screen before selecting changes")
         let change = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
         XCTAssertTrue(change.waitForExistence(timeout: 25))
         change.click()
 
-        let mode = window.segmentedControls["bailey.diff.mode"]
-        let layout = window.segmentedControls["bailey.diff.layout"]
+        let mode = window.radioGroups["bailey.diff.mode"]
+        let layout = window.radioGroups["bailey.diff.layout"]
         XCTAssertTrue(mode.waitForExistence(timeout: 15))
         XCTAssertTrue(layout.waitForExistence(timeout: 15))
-        layout.buttons.element(boundBy: 0).click()
-        mode.buttons.element(boundBy: 1).click()
+        // The user's persisted mode may be Edit, which hides both review panes.
+        // Enter Review explicitly before asserting Split's visible native panes.
+        mode.radioButtons.element(boundBy: 0).click()
+        let split = layout.radioButtons.element(boundBy: 1)
+        split.click()
+        XCTAssertEqual(String(describing: split.value ?? ""), "1",
+                       "Split layout must actually be selected")
+        XCTAssertGreaterThanOrEqual(window.textViews.count, 2,
+                                    "Split mode must mount separate native text panes")
+        let unified = layout.radioButtons.element(boundBy: 0)
+        unified.click()
+        XCTAssertEqual(String(describing: unified.value ?? ""), "1",
+                       "Unified layout must actually be restored")
+        let edit = mode.radioButtons.element(boundBy: 1)
+        edit.click()
+        XCTAssertEqual(String(describing: edit.value ?? ""), "1",
+                       "Native worktree mode must switch to Edit")
 
         let editor = window.textViews.firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 15))

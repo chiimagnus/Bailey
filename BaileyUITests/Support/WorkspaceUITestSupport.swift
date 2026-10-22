@@ -1,3 +1,4 @@
+import Carbon
 import Foundation
 import XCTest
 
@@ -11,15 +12,44 @@ enum WorkspaceUITestSupport {
         app.launchArguments = ["--isolated-ui-test"]
         if let language { app.launchArguments += ["-AppleLanguages", "(\(language))"] }
         app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
+        let previousInput = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+        let unicodeHexWasEnabled = inputSource(id: "com.apple.keylayout.UnicodeHexInput") != nil
         test.addTeardownBlock { @MainActor in
             if app.state != .notRunning { app.terminate() }
+            XCTAssertEqual(TISSelectInputSource(previousInput), noErr,
+                           "Restore the user's original input method after UI testing")
+            if !unicodeHexWasEnabled,
+               let unicodeHex = inputSource(id: "com.apple.keylayout.UnicodeHexInput") {
+                XCTAssertEqual(TISDisableInputSource(unicodeHex), noErr,
+                               "UI typing must not leave Unicode Hex Input enabled")
+            }
         }
+        try selectASCIIInputSource()
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
         app.activate()
         XCTAssertEqual(app.state, .runningForeground,
                        "Only Bailey Dev may receive keyboard actions from UI tests")
         return app
+    }
+
+    private static func inputSource(id: String) -> TISInputSource? {
+        let inputs = TISCreateInputSourceList(nil, false).takeRetainedValue() as! [TISInputSource]
+        return inputs.first { input in
+            guard let value = TISGetInputSourceProperty(input, kTISPropertyInputSourceID) else {
+                return false
+            }
+            return (Unmanaged<CFString>.fromOpaque(value).takeUnretainedValue() as String) == id
+        }
+    }
+
+    private static func selectASCIIInputSource() throws {
+        guard let abc = inputSource(id: "com.apple.keylayout.ABC"),
+              TISSelectInputSource(abc) == noErr else {
+            throw NSError(domain: "BaileyUITestKeyboard", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "ABC keyboard layout is required for literal shortcuts and paths"
+            ])
+        }
     }
 
     static func addFolder(_ url: URL, to app: XCUIApplication) throws {

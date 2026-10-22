@@ -123,6 +123,24 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class NativeDiffTabTests: XCTestCase {
+    private func isolatedPreferences() throws -> DiffViewPreferences {
+        let domain = "bailey-native-diff-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        addTeardownBlock { defaults.removePersistentDomain(forName: domain) }
+        return DiffViewPreferences(defaults: defaults)
+    }
+
+    private func sRGBColumn(_ bitmap: NSBitmapImageRep, x: Int) -> [NSColor] {
+        let maximum = CGFloat((1 << bitmap.bitsPerSample) - 1)
+        return (0..<bitmap.pixelsHigh).map { y in
+            var pixel = [Int](repeating: 0, count: bitmap.samplesPerPixel)
+            bitmap.getPixel(&pixel, atX: x, y: y)
+            return NSColor(srgbRed: CGFloat(pixel[0]) / maximum,
+                           green: CGFloat(pixel[1]) / maximum,
+                           blue: CGFloat(pixel[2]) / maximum, alpha: 1)
+        }
+    }
+
     func testNativeDiffRendersRowsThroughTransparentTextSurface() throws {
         let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
         let window = NSWindow(
@@ -148,18 +166,17 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertFalse(pane.textView.drawsBackground,
                        "Native text must not paint over the diff's underlay tints and emphasis")
         window.displayIfNeeded()
-        let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds))
+        let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
+            .retagging(with: .sRGB))
         pane.cacheDisplay(in: pane.bounds, to: bitmap)
         let scheme = DiffColorScheme.current(dark: false)
-        func near(_ color: NSColor?, _ expected: NSColor) -> Bool {
-            guard let a = color?.usingColorSpace(.deviceRGB),
-                  let b = expected.usingColorSpace(.deviceRGB) else { return false }
-            return abs(a.redComponent - b.redComponent) < 0.06
-                && abs(a.greenComponent - b.greenComponent) < 0.06
-                && abs(a.blueComponent - b.blueComponent) < 0.06
+        func near(_ color: NSColor, _ expected: NSColor) -> Bool {
+            guard let b = expected.usingColorSpace(.sRGB) else { return false }
+            return abs(color.redComponent - b.redComponent) < 0.06
+                && abs(color.greenComponent - b.greenComponent) < 0.06
+                && abs(color.blueComponent - b.blueComponent) < 0.06
         }
-        let x = bitmap.pixelsWide - 50
-        let samples = (0..<bitmap.pixelsHigh).map { bitmap.colorAt(x: x, y: $0) }
+        let samples = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50)
         XCTAssertTrue(samples.contains { near($0, scheme.addedRow) },
                       "Added-row tint must actually reach rendered pixels")
         XCTAssertTrue(samples.contains { near($0, scheme.removedRow) },
@@ -198,25 +215,21 @@ final class NativeDiffTabTests: XCTestCase {
                 ]), decorations: .review(document))
                 pane.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
-                let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds))
+                let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
+                    .retagging(with: .sRGB))
                 pane.cacheDisplay(in: pane.bounds, to: bitmap)
-                let x = bitmap.pixelsWide - 50
-                let colors = (0..<bitmap.pixelsHigh).compactMap {
-                    bitmap.colorAt(x: x, y: $0)?.usingColorSpace(.deviceRGB)
-                }
+                let colors = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50)
                 let observedPalette = Array(Set(colors.map {
                     String(format: "%.3f,%.3f,%.3f",
                            $0.redComponent, $0.greenComponent, $0.blueComponent)
                 })).sorted()
-                // HDR rendering may scale colors nonlinearly. Check that the
-                // tint is visible and has the expected chromatic direction
-                // *relative to the actual theme background*, not identical
-                // device RGB deltas across different displays and macOS SDKs.
-                let background = try XCTUnwrap(scheme.background.usingColorSpace(.deviceRGB))
+                // Compare bitmap channels and theme colors in the same sRGB
+                // space. Do not reinterpret sampled channels as display RGB.
+                let background = try XCTUnwrap(scheme.background.usingColorSpace(.sRGB))
                 let backgroundGreen = background.greenComponent - background.redComponent
                 let backgroundBlue = background.blueComponent - background.redComponent
                 for tint in requiredTints {
-                    let expected = try XCTUnwrap(tint.usingColorSpace(.deviceRGB))
+                    let expected = try XCTUnwrap(tint.usingColorSpace(.sRGB))
                     let expectedGreen = expected.greenComponent - expected.redComponent - backgroundGreen
                     let expectedBlue = expected.blueComponent - expected.redComponent - backgroundBlue
                     let expectedMagnitude = hypot(expectedGreen, expectedBlue)
@@ -272,13 +285,11 @@ final class NativeDiffTabTests: XCTestCase {
             XCTAssertEqual(pane.decorations.ghostsByAnchor[1]?.lines.count, 1)
             pane.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
-            let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds))
+            let bitmap = try XCTUnwrap(pane.bitmapImageRepForCachingDisplay(in: pane.bounds)?
+                .retagging(with: .sRGB))
             pane.cacheDisplay(in: pane.bounds, to: bitmap)
-            let expected = try XCTUnwrap(scheme.removedRow.usingColorSpace(.deviceRGB))
-            let x = bitmap.pixelsWide - 50
-            let matching = (0..<bitmap.pixelsHigh).reduce(0) { total, y in
-                guard let sample = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
-                else { return total }
+            let expected = try XCTUnwrap(scheme.removedRow.usingColorSpace(.sRGB))
+            let matching = sRGBColumn(bitmap, x: bitmap.pixelsWide - 50).reduce(0) { total, sample in
                 let isRemoval = abs((sample.greenComponent - sample.redComponent)
                     - (expected.greenComponent - expected.redComponent)) < 0.03
                     && abs((sample.blueComponent - sample.redComponent)
@@ -599,7 +610,8 @@ final class NativeDiffTabTests: XCTestCase {
         let diff = DiffTab(
             repoRoot: root.path, path: "deleted.txt", source: .staged,
             untracked: false, origPath: nil,
-            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+            preferences: try isolatedPreferences()
         )
         try await wait { !diff.isLoading }
         XCTAssertNil(diff.error)
@@ -645,7 +657,8 @@ final class NativeDiffTabTests: XCTestCase {
         let diff = DiffTab(
             repoRoot: root.path, path: "conflict.txt", source: .staged,
             untracked: false, origPath: nil,
-            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+            preferences: try isolatedPreferences()
         )
         try await wait { !diff.isLoading }
         XCTAssertNotNil(diff.error)
@@ -735,10 +748,12 @@ final class NativeDiffTabTests: XCTestCase {
         }
         lines[1800] = "let value1800 = 111111\n"
         try Data(lines.joined().utf8).write(to: file)
+        let preferences = try isolatedPreferences()
+        XCTAssertFalse(preferences.prefersEditing)
         let tab = DiffTab(
             repoRoot: directory.path, path: "pending.swift", source: .worktree,
             untracked: false, origPath: nil, backend: LocalWorkspaceBackend.shared,
-            workspaceIdentity: nil
+            workspaceIdentity: nil, preferences: preferences
         )
         try await wait({ !tab.isLoading && tab.display != nil }, timeout: 15)
         let oldDisplay = try XCTUnwrap(tab.display)
@@ -1003,7 +1018,7 @@ final class NativeDiffTabTests: XCTestCase {
         let backend = DiffWorkspaceFixture()
         let diff = DiffTab(repoRoot: "/fixture", path: "editable.txt", source: .worktree,
                            untracked: true, origPath: nil, backend: backend,
-                           workspaceIdentity: "ssh:fixture")
+                           workspaceIdentity: "ssh:fixture", preferences: try isolatedPreferences())
         try await wait { !diff.isLoading && diff.isEditable }
         diff.updateEditedContent("first 中文😀")
         let writesBeforeFocusLoss = await backend.writes
@@ -1059,7 +1074,8 @@ final class NativeDiffTabTests: XCTestCase {
         let backend = DiffWorkspaceFixture()
         let diff = DiffTab(
             repoRoot: directory.path, path: "remote.txt", source: .worktree, untracked: true,
-            origPath: nil, backend: backend, workspaceIdentity: first.workspaceIdentity
+            origPath: nil, backend: backend, workspaceIdentity: first.workspaceIdentity,
+            preferences: try isolatedPreferences()
         )
         project.append(PaneTab(content: .diff(diff)))
         try await wait { !diff.isLoading }
@@ -1098,12 +1114,14 @@ final class NativeDiffTabTests: XCTestCase {
         try Data(stagedText.utf8).write(to: file)
         XCTAssertEqual(GitCommandExecution.run(["add", "tracked.txt"], in: directory.path).status, 0)
         try Data(worktreeText.utf8).write(to: file)
+        let preferences = try isolatedPreferences()
 
         func diff(_ path: String = "tracked.txt", staged: Bool = false, commit: String? = nil) -> DiffTab {
             DiffTab(repoRoot: directory.path, path: path,
                     source: commit.map { .commit(hash: $0, parent: nil, status: "A") }
                         ?? (staged ? .staged : .worktree), untracked: false,
-                    origPath: nil, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+                    origPath: nil, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil,
+                    preferences: preferences)
         }
         let worktree = diff()
         let index = diff(staged: true)
@@ -1147,7 +1165,8 @@ final class NativeDiffTabTests: XCTestCase {
     func testSaveDuringEditFailureAndDisconnectKeepUnsavedContent() async throws {
         let backend = DiffWorkspaceFixture()
         let diff = DiffTab(repoRoot: "/fixture", path: "remote.txt", source: .worktree,
-                           untracked: true, origPath: nil, backend: backend, workspaceIdentity: "ssh:fixture")
+                           untracked: true, origPath: nil, backend: backend,
+                           workspaceIdentity: "ssh:fixture", preferences: try isolatedPreferences())
         try await wait { !diff.isLoading }
         diff.updateEditedContent("first😀\r\n")
         let saving = Task { await diff.save() }

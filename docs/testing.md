@@ -46,7 +46,7 @@ make build:ui        # 只编译独立 UI Test，不启动 App
 make test:ui         # 独立图形会话中运行完整 App UI Test
 ```
 
-本地迭代人工指定 `make test:类名1,类名2,...`（逗号分隔，不加空格）选择任意数量的宿主 XCTest 类；涉及共享组件时补测相关类。`make test:ui` 单独执行整个 UI Test Target，不混入本机日常宿主测试。`make test`、`make test:ui` 和 `make build:ui` 自动使用独立的 `chiimagnus.bailey.dev` 与 `build/DerivedData-Dev`，即使正式 Bailey 在运行也不会终止或覆盖它。`WorkspaceUITestSupport` 通过显式 Dev Bundle ID 启动 App，拒绝终止已有开发版实例；但 AppKit/XCUITest 仍争用同一桌面键盘焦点，要获得完全无干扰的真实 GUI 自动化须使用独立图形会话。CI 为每次非 Draft PR 都运行完整宿主 XCTest 和独立 App UI Test，不再根据文件变更猜测测试类名，避免迁移类名后执行零项。`ci/full` 可触发一次新的完整检查，测试结果必须对应本次 Head SHA。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
+本地迭代人工指定 `make test:类名1,类名2,...`（逗号分隔，不加空格）选择任意数量的宿主 XCTest 类；涉及共享组件时补测相关类。`make test:ui` 单独执行整个 UI Test Target，不混入本机日常宿主测试。`make test`、`make test:ui` 和 `make build:ui` 自动使用独立的 `chiimagnus.bailey.dev` 与 `build/DerivedData-Dev`，即使正式 Bailey 在运行也不会终止或覆盖它。`WorkspaceUITestSupport` 通过显式 Dev Bundle ID 启动 App，拒绝终止已有开发版实例；本机 GUI Runner 必须使用 Apple Development 签名而非强制 ad-hoc，否则可能被系统拒绝操作辅助功能树。公共启动入口在启动 Bailey Dev **之前**暂选 ABC 输入字母和路径，测试清理时恢复之前的输入法，并撤销 XCTest 临时启用的 Unicode Hex Input（若该输入法原本未启用）；此举不替代真实中文 IME 组词／候选测试。AppKit/XCUITest 仍争用同一桌面键盘焦点，要获得完全无干扰的真实 GUI 自动化须使用独立图形会话。CI 为每次非 Draft PR 都运行完整宿主 XCTest 和独立 App UI Test，不再根据文件变更猜测测试类名，避免迁移类名后执行零项。`ci/full` 可触发一次新的完整检查，测试结果必须对应本次 Head SHA。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
 
 ## 测试层次
 
@@ -65,8 +65,8 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 | 冷启动、命令面板搜索／Escape、从编辑器切换 Files 后真实方向键／空格焦点 | `WorkspaceSmokeUITests`、`WorkspaceFilesUITests` | `DockFocusP2RegressionTests`、`WorkspaceWindowIsolationTests` |
 | 系统 Add Folder、Files 预览／打开、焦点恢复、文件去重、编辑保存到磁盘 | `WorkspaceFilesUITests` | `FileTreeTests`、`TreeRowHitTestingTests`、`FileTabPersistenceTests`、`NativeFileTabTests` |
 | 大文件远距导航、文本替换、键盘撤销／重做、真实保存 | `EditorNavigationUITests` | `NativeEditorLayoutTests`、`NativeEditorCompositionTests`、`FileTabPersistenceTests` |
-| Swift 与纯文本实际着色像素差异、原文未污染 | `EditorHighlightingUITests`（待独立 GUI 验收） | `NativeSyntaxHighlightingTests`、`HighlightQueryCacheTests` |
-| Git Changes 状态、Git Graph 提交展开及工作区 Diff 编辑／Undo／真实保存 | `WorkspaceGitUITests`（Diff 新路径待专用 GUI 验收） | `GitStatusModelTests`、`NativeDiffTabTests`、`RecentCommitsViewTests` |
+| Swift 与纯文本实际着色像素差异、原文未污染 | `EditorHighlightingUITests`（本机 Bailey Dev 已实测） | `NativeSyntaxHighlightingTests`、`HighlightQueryCacheTests` |
+| Git Changes 状态、Git Graph 提交展开及工作区 Diff 分栏／统一、编辑／Undo／真实保存 | `WorkspaceGitUITests`（Git Changes／Git Graph／Split→Unified→Edit→磁盘字节路径已实测） | `GitStatusModelTests`、`NativeDiffTabTests`、`RecentCommitsViewTests` |
 | 多窗口、设置、系统选择器取消 | `WorkspaceWindowsUITests` | `WorkspaceWindowCloseTests`、`WorkspaceWindowIsolationTests` |
 
 这些 UI 用例不取代原有 `NSWindow`／`NSHostingView` 回归。未覆盖的完整外部路径（Finder/Dock 拖放、真实 SSH、脏文件保存冲突和不同窗口混合停靠）仍必须独立验收，不能因为 UI Test Target 存在而宣称已全部迁移；宿主 XCTest 也不等于 E2E。
@@ -113,7 +113,7 @@ open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey.app" --args -
 
 该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。**开发版与正式版拥有不同 Bundle ID、配置路径和 DerivedData**，XCUITest 仅定位 Bailey Dev；正式版运行时也可执行宿主测试，无须强制退出用户 App。`make build:ui` 只编译。完整 UI 测试仍依赖当前 macOS 图形会话的前台键盘焦点；如果用户同时在 Helium 或正式 Bailey 输入，XCUI 键盘事件可能失败或打断用户，不能将不同 Bundle ID 冒称独立桌面。隔离 XCTest 宿主会移除自身菜单中的 `⌘Q` 退出快捷键：Mac 的键盘和前台应用状态仍由各进程共享，普通 Bailey 的退出快捷键不能误结束长时间运行的测试宿主；正式 Bailey 的菜单及保存退出保护不变。该隔离不是独立的图形登录会话，执行原生 UI 回归时仍应避免与用户正在进行的前台快捷键／鼠标操作互相干扰。刻意测试重启恢复时，两次启动显式传入同一有效 UUID 环境变量 `BAILEY_UI_TEST_RUN_ID`。
 
-**正式设置不会被开发版共用。** Dev 使用 `~/.config/bailey-dev`，正式版仍使用 `~/.config/bailey`；两版的终端历史、窗口快照、语言及 Bark 凭据也分域。不同 Dev 测试之间仍可能共用开发配置，修改设置的用例须使用独立临时配置与 UserDefaults suite。临时文件、Git 仓库和受控后端不得指向正式项目。
+**正式设置不会被开发版共用。** Dev 使用 `~/.config/bailey-dev`，正式版仍使用 `~/.config/bailey`；两版的终端历史、窗口快照、语言及 Bark 凭据也分域。不同 Dev 测试之间仍可能共用开发配置，修改设置的用例须使用独立临时配置与 UserDefaults suite；尤其 Diff 原生重载测试不得继承用户持久化的编辑模式，否则正常的编辑保护会让测试误判为刷新超时。临时文件、Git 仓库和受控后端不得指向正式项目。
 
 并行构建或测试同一项目时，为各任务指定独立的 `DERIVED_DATA`（如 `make test DERIVED_DATA=build/DerivedData-review`），避免共用产物被另一任务覆盖或重新签名；不得清理其他任务的构建目录。
 
