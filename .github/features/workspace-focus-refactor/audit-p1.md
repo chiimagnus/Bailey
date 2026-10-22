@@ -114,26 +114,26 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 
 - 任务：`P1-T1`
 - 严重级别：`Medium`
-- 状态：`Open`
+- 状态：`Resolved`
 - 位置：`BaileyTests/WorkspaceUI/Windows/WorkspaceWindowIsolationTests.swift:410-469`
 - 摘要：`全量原生窗口测试中Git树焦点用例曾真实失败，根因与前台输入证据不足`
 - 风险：`某次全量make test共635项出现Git树KeyboardNavigation用例NSHostingView渲染超时、测试清理历史文件时ENOENT两条失败断言，且另一次目标用例因不可取得前台key window而跳过；目前无法确定是AppKit生命周期故障、共享桌面焦点干扰还是P1功能回归，不能用其他绿灯掩盖。`
 - 预期修复：`先在可独占的安全GUI会话重现并记录原生firstResponder、窗口与宿主装配的真实先后次序，和历史产品基线配对；确定根因后按受影响所有者作最小修复，不降低断言、不任意延长超时。`
 - 验证：`重跑完整make test并明确区分skipped与passed；在受控GUI下执行该用例的正常/脏仓库两个分支，检查实际原生按键和可见树焦点、AppKit报错及历史临时文件生命周期。`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`合并解释为 F-17 同一 testCancelingCommandPaletteRestoresGitTreeKeyboardNavigation 的重复 finding，而非独立bug；62项原生整组在受控前台全部通过，Git clean/dirty 的NSWindow第一响应者和取消后可见树归属都通过，未再出现历史侧车文件 ENOENT。之前的635项中2条报告来自同一用例的渲染超时及后续清理异常，不能当两个产品故障统计；不改变取消路径产品代码。`
 
 
 ## 发现 F-17
 
 - 任务：`P1-T2`
 - 严重级别：`High`
-- 状态：`Open`
+- 状态：`Resolved`
 - 位置：`BaileyTests/WorkspaceUI/Windows/WorkspaceWindowIsolationTests.swift:450`
 - 摘要：`最终全量复跑中Git Palette取消恢复原生焦点用例失败`
 - 风险：`635项中该用例窗口/TreeKeyboardView未就绪，并报告history sidecar删除异常；不能将首轮绿色或本轮其它通过代替该主路径`
 - 预期修复：`先隔离重跑确认夹具、key window和所属窗口/目标，区分共享桌面干扰与生产缺陷；不放宽等待、不改断言或禁用测试，缺少受控前台条件时保留阻塞`
 - 验证：`make test ONLY_TESTING=BaileyTests/WorkspaceWindowIsolationTests/testCancelingCommandPaletteRestoresGitTreeKeyboardNavigation DERIVED_DATA=build/DerivedData-p1-review-services`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`复核结论：原记录是 XCTest 前台运行条件造成的失败，未证实 Git Palette 生产回归；同一源码在被隔离的真实前台 Bailey XCTest 中运行 make test:WorkspaceWindowIsolationTests,PaneRetentionTests DERIVED_DATA=build/DerivedData-p1-review-services，62 executed/0 skipped/0 failures、完整退出0（/tmp/bailey-p1-audit-native-classes.log）；clean/dirty Git 两分支都执行原生 TreeKeyboardView→Palette→取消→第一响应者回归。同次还核销原生文件树焦点和五轮五编辑器释放。之前无稳定前台的80项回归有大量窗口渲染超时，不能将其当作Git产品bug。`
 
 
 ## 发现 F-21
@@ -205,13 +205,13 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 
 - 任务：`P1-T1`
 - 严重级别：`High`
-- 状态：`Open`
+- 状态：`Deferred`
 - 位置：`.github/features/workspace-focus-refactor/evidence-p1.md:23`
 - 摘要：`缺少硬门槛要求的原始 GUI 对照和系统入口证据，不能确认 P1 完整验收`
 - 风险：`任务标 completed 不代表零 UIUX 和最低系统、真实远端等验收已经完成`
 - 预期修复：`独立核销可安全执行的条件；保留逐项缺口与 No-Go，不以本机 XCTest 代替独占 GUI/最低系统/授权 SSH`
 - 验证：`make test; make build; make build:release（均使用独立 DerivedData）；独占 GUI 与其它系统需外部条件`
-- 解决证据：`<commit diff note or test/build output>`
+- 解决证据：`复核定性：这是计划中的外部验收证据缺口，不是可由当前源码证实的产品bug。当前 macOS 27.2/arm64 可执行原生组合已用隔离前台 XCTest 实验，PaneRetention+WorkspaceWindowIsolation 共62项/0 skip/0 fail，P1其余20类229项/2项真实SSH条件跳过/0失败。静态对照 git diff 097dac7 HEAD -- Bailey/UI 仅涉及旧TerminalManager类型引用与真实依赖传递、用户后来明确删除FPS展示、⌘P命令真实焦点修复；无其它UI布局/样式常量改变。原计划列出的 macOS 15.6 真机、获授权真实 Windows SSH、正式Finder/Dock/通知点击与重启、同条件旧新版原始GUI逐帧、长时Instruments依赖尚不可安全复现的外部条件，应列为Deferred环境验收并保留形式化Gate限制，不再标为待修复代码错误或与F17/F22重复计算。最终全量 `make test DERIVED_DATA=build/DerivedData-p1-review-services` 已完成：635项、8项真实Windows SSH环境跳过、0失败、退出0（无原生焦点跳过），不改变正式Bundle ID的用户运行进程。`
 
 
 ## 发现 F-13
@@ -284,26 +284,27 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 ## 修复日志
 
 - `6ee5fdf` 修复当前计划状态与历史源码导航；`a48593d` 修复 Finder 等待已注销窗口的队列滞留。
-- 独立复查删除 `BaileyTests` 中基于前台应用／Key Window 的跳过、断言降级与分支；不删除 AppKit 真实焦点断言，也不为单个用例引入重试状态机。
+- `4fd8006` 删除原生 XCTest 通过前台 Key Window 状态跳过或放宽断言的分支；保留真实 AppKit 焦点验证。复核 F-17／F-22 指向同一 Git Palette 取消用例，前台重跑成功；不能再当作两个未修产品 Bug。
 - 依用户最新要求完整删除 FPS 采样器、Badge、UI 状态、菜单、本地化键和专属用例，⌘P 新测试使用真实 File Manager 动作。旧版 `PaletteCommand.preservesCurrentFocus` 试验不复活；当前命令执行使用已有的原生焦点恢复逻辑交给最新有效接收者。
 
 ## 验证日志
 
-- P1 当前最后一轮完整 `make test`（`a48593d` 基础、尚未移除前台守卫）：**636 项、14 skipped、0 failures、退出 0**；Debug／Release 严格验签通过。
+- **最新当前分支 `0619c49` 全量验证**：`make test DERIVED_DATA=build/DerivedData-p1-review-services` → **635 项、8 skipped、0 failures、完整退出码 0／`TEST SUCCEEDED`**（2026-10-22 macOS 27.2 / Apple Silicon，`/tmp/bailey-p1-audit-all-current-foreground.log`）。8 项 skipped 全部需要获授权的 Windows SSH：Git 外部刷新 1、交互式 Rebase 1、Git 工作树 2、Windows SSH 文件树 3、Git 故障恢复 1；**0 项原生焦点跳过**。Debug／Release `BUILD SUCCEEDED`、`codesign --verify --deep --strict` 通过。
 - 清理测试绕行后 `make test:DockFocusP2RegressionTests,WorkspaceWindowIsolationTests,GitWorkspaceMenuTests,PaneRetentionTests,GitExternalRefreshTests DERIVED_DATA=build/DerivedData-p1-review-services`：**80 项、1 skipped、22 条断言失败（9 unexpected）、命令退出非零**。DockFocus、GitExternalRefresh、GitWorkspaceMenu 三类通过；PaneRetention 的五编辑器释放与 Dock 移动用例超时；WorkspaceWindowIsolation 的 Palette/Files 原生焦点用例部分超时，且观察到测试历史 JSON 删除时文件已不存在。该轮由共享桌面前台应用变化干扰，不足以断言全部是产品回归，也不能冒称验收通过。失败详情：`/tmp/bailey-p1-focus-no-guards-final.log`。
-- 受控前台定向 `testCancelingCommandPaletteRestoresGitTreeKeyboardNavigation` 曾 1 passed/0 skipped；但不足以替代反复、多窗口组合与真实用户输入验收。
+- 受控前台 `make test:WorkspaceWindowIsolationTests,PaneRetentionTests DERIVED_DATA=build/DerivedData-p1-review-services`：**62 项、0 skipped、0 failures、退出 0**，含 Git clean/dirty 的 Palette 取消、Files/Git 输入以及每轮五个原生编辑器 × 5 轮释放和 Dock 重挂载。原来后台运行 80 项时的焦点超时与附带的清理异常不能证明生产回归。
+- P1 其余 20 个实际受影响测试类：**229 项、2 skipped、0 failures、退出 0**；仅两项需要真实获授权 SSH（外部 Git 刷新和交互式 Rebase），本机及受控 socket 均已通过。
 - Mac 当前可验证 macOS 27.2、Xcode 27.2、arm64；macOS 15.6、专用授权 Windows SSH、完整正式 Bundle Finder/Dock/通知和独立 GUI 前后同条件像素／键盘回归尚缺证据，属于 No-Go。
 - 现行参考：`docs/testing.md` 为统一测试要求、`docs/architecture.md` 为状态归属、`evidence-p1.md` 为任务测试证据；`todo.toml` 的 P1 三项已完成不等于最终 Gate 达标。
 
 ## Gate（是否允许进入下一阶段）
 
 - 结论：`No-Go`
-- 理由：现有原生焦点与五编辑器生命周期在移除条件绕过后的测试中仍出现失败，且独立 GUI／最低系统／授权远端的必要验收证据未收齐；不能用先前带跳过的绿色冒充当前通过。
+- 理由：F-17／F-22 为同一测试的环境失焦／历史失败，已受控复核并非已确认产品 Bug；五编辑器释放与 Dock 重挂载也通过。F-14 是计划要求但当前不可安全执行的正式 App GUI 前后对照、系统入口、最低系统、授权 SSH 与长时资源验收，已标 Deferred；**完整形式化 Gate** 不能因此宣称通过，也不应将缺证当作待修复代码缺陷。
 
 ## 最终状态与剩余风险
 
-- 当前状态：`Open`（P1-T1～T3 已实施，阶段独立审计未完成放行）
-- 剩余风险：F-14 正式 GUI／系统差异，F-17、F-22 的原生窗口焦点及测试历史清理偶发失败；五编辑器资源释放与窗口重挂载的极端时序需复现并排除实际持有者。
+- 当前状态：`Deferred`（P1-T1～T3 已实施，审计没有未关闭的产品 Bug；完整跨环境验收未获准入）
+- 剩余风险：仅 F-14 的正式 App Finder/Dock/通知和重启、同条件原始 GUI 逐帧／像素对照、macOS 最低系统、授权 Windows SSH、长时内存等外部验收限制。证据不足时不补造产品缺陷。
 
 ## 审计约束
 
@@ -325,7 +326,7 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 
 ### 已删除和必须保留的实现
 
-- 当前 `Bailey/`、`BaileyTests/` 没有 `TerminalManager`、`activeManagers`、`syncSelectedProject(in:)`、`syncFiles(in:)` 运行引用；没有新旧窗口注册双轨、旧类 alias 或额外 ServiceLocator。UI 相关生产变更是类型注入和调用替换，未修改可见样式常量。
+- 当前 `Bailey/`、`BaileyTests/` 没有 `TerminalManager`、`activeManagers`、`syncSelectedProject(in:)`、`syncFiles(in:)` 运行引用；没有新旧窗口注册双轨、旧类 alias 或额外 ServiceLocator。`git diff 097dac7 HEAD -- Bailey/UI` 显示 P1 UI 的其它改动是类型／调用替换；另有用户明确授权的 FPS 角标删除与 ⌘P 命令焦点修复，不能误称绝对零 UI 改动。
 - `projects.didSet` 是项目与所属窗口回调的唯一维护处；已移除提前绑定和显式重复解绑。领域异步结果仍用请求代次、项目许可、路径、主机/连接身份防止旧结果越界。
 - 不删除 `pinnedFile`、快照中可选 `localFile`、`SessionStore`、终端历史、认证 token／PID／socket 检查、文件保存否决、原生 willClose 通知、旧 Editor/Dock 原生对象保留路径：这些是目前可达且有数据或授权不变量支持的代码，不是多余兼容围栏。
 - 计划中的旧路径是历史审查对象，不应全量替换为当前文件名；旧版源码仍可由 `git show 097dac7:...` 逐笔查阅。
@@ -335,9 +336,9 @@ P2 焦点行为尚未授权实施，本轮不把其未来重构代码写入 P1�
 - F-20：`WorkspaceApplication.windowClosed` 的真正文件所有者注销后没再次递送 Finder 请求。新测试覆盖**67 次未换项目**及**3 次接收项目切换**，检查所有请求完成恰好一次、同一磁盘文件的目标 `FileTab`、无误投和最终文件字节。旧版本对应三条断言失败（`/tmp/bailey-p1-independent-owner-close-red.log`；make Error 65）；仅在原有窗口注销后调用 `deliverPendingExternalFiles()`，定向绿（`/tmp/bailey-p1-independent-owner-close-green.log`）。扩大至 `make test:WorkspaceWindowIsolationTests,WorkspaceWindowCloseTests,SessionStoreTests,PanelContextTests,RemoteLifetimeTests DERIVED_DATA=build/DerivedData-p1-review-services`：**76 项、5 skipped、0 failed、退出 0**。
 - F-21：原 Feature 文档错称仍是游离 HEAD、未授权实施，且链接已删除的旧源文件。提交 `6ee5fdf`，Feature **162** 个本地 Markdown 路径全部可达，`todo validate` 与 `git diff --check` 通过。
 - `make build DERIVED_DATA=build/DerivedData-p1-review-services` 与 `make build:release DERIVED_DATA=build/DerivedData-p1-review-services`：均退出 0、`BUILD SUCCEEDED` 且 `codesign --verify --deep --strict` 通过。只构建隔离 DerivedData，不重启／替换用户正式 Bailey、不改用户 SSH master。
-- 较早全量测试 `/tmp/bailey-p1-review-full.log`：**634 项，14 skipped，0 failed**；后一次 `/tmp/bailey-p1-review-final-full.log`：**635 项，12 skipped，2 条失败（同一 Git 树原生焦点用例的渲染超时与测试历史文件清理异常）**。两次命令属于不同源码快照，不能取其一代替当前 HEAD 完整结论。F-22 保留为具体未解的原生焦点验收问题，**不凭日志直接断言产品存在 Git 焦点回归**。
-- 最新 `a48593d` 全量重跑状态及退出码待命令完成后补入本节；上述定向绿灯不是此命令的完成证明。
+- 较早全量测试 `/tmp/bailey-p1-review-full.log`：**634 项／14 skipped／0 failures**；另一次 `/tmp/bailey-p1-review-final-full.log`：**635 项／12 skipped／同一 Git Palette 用例的两条失败报告**。不同源码和前台执行条件不能直接比较；F-22 与 F-17 已经合并复核，不再用这两条历史失败阻塞 P1 代码验收。
+- 历史 `a48593d` 完整测试 `/tmp/bailey-p1-independent-final-full.log`：**636 项、14 skipped、0 failures**，当时存在原生焦点条件跳过；最新 `0619c49` 受控前台完整 `make test`：**635 项、8 项授权 SSH 跳过、0 failures、退出 0**。已消除 native skips 的测试绕行，仍保持全部原生输入断言；新旧数量差 1 项源于用户明确删除 FPS 专项测试，不能跨源码快照比较测试总数。
 
 ### 全环境验收边界／Gate 原则
 
-当前本机仅能实测 macOS 27.2／Xcode 27.2 arm64；macOS 15.6 真机、不同 CI SDK、同条件原始 GUI 的逐帧与像素证据、真实前台键鼠与 IME、Finder/Dock Launch Services、完整重启/通知点击、独立授权 Windows SSH、不同显示器及长时内存仍未取得。重用现有测试宿主或 `minimum deployment target` 无法替代其最终副作用。前台 key-window 依赖的 skipped 均明确记为**未通过条件**；不能为关闭审计而解除保存、认证、机器身份围栏或延长测试超时。P2 焦点设计仍是独立阶段；P1 完整“零 UI/UX 变化”放行须等主路径系统入口与当前实际失败原因核销。
+当前本机仅能实测 macOS 27.2／Xcode 27.2 arm64；macOS 15.6 真机、不同 CI SDK、同条件原始 GUI 的逐帧与像素证据、真实前台键鼠与 IME、Finder/Dock Launch Services、完整重启/通知点击、独立授权 Windows SSH、不同显示器及长时内存仍未取得。重用现有测试宿主或 `minimum deployment target` 无法替代其最终副作用。当前机器上真正要求系统前台的原生 XCTest 已执行而非 skipped；仍缺失的真实 SSH、系统入口与外部机器不能靠模拟测试冒充。不能为关闭审计而解除保存、认证、机器身份围栏或延长测试超时。P2 焦点设计仍是独立阶段；P1 完整“零 UI/UX 变化”放行须等主路径系统入口与当前实际失败原因核销。

@@ -15,7 +15,7 @@ title = "分离应用级所有者并修正窗口命名"
 status = "completed"
 plan = "plan-p1.md#p1-t2"
 commit = "433c80fa9a2033e2d594053ffbbc29f16440a939"
-note = "Debug 签名通过；受影响 194+96+54 项测试 0 failure；原生前台与授权 SSH 测试仍跳过"
+note = "应用/窗口归属已实施；前台原生62项无跳过/失败，20类领域229项仅授权SSH两项跳过；F14外部验收延期"
 
 [[tasks]]
 id = "P1-T3"
