@@ -65,6 +65,7 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 | 冷启动、命令面板搜索／Escape、从编辑器切换 Files 后真实方向键／空格焦点 | `WorkspaceSmokeUITests`、`WorkspaceFilesUITests` | `DockFocusP2RegressionTests`、`WorkspaceWindowIsolationTests` |
 | 系统 Add Folder、Files 预览／打开、焦点恢复、文件去重、编辑保存到磁盘 | `WorkspaceFilesUITests` | `FileTreeTests`、`TreeRowHitTestingTests`、`FileTabPersistenceTests`、`NativeFileTabTests` |
 | 大文件远距导航、文本替换、键盘撤销／重做、真实保存 | `EditorNavigationUITests` | `NativeEditorLayoutTests`、`NativeEditorCompositionTests`、`FileTabPersistenceTests` |
+| Swift 与纯文本实际着色像素差异、原文未污染 | `EditorHighlightingUITests`（待独立 GUI 验收） | `NativeSyntaxHighlightingTests`、`HighlightQueryCacheTests` |
 | Git Changes 状态、Git Graph 提交展开 | `WorkspaceGitUITests` | `GitStatusModelTests`、`RecentCommitsViewTests` |
 | 多窗口、设置、系统选择器取消 | `WorkspaceWindowsUITests` | `WorkspaceWindowCloseTests`、`WorkspaceWindowIsolationTests` |
 
@@ -86,8 +87,8 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 | Git 图谱拓扑、引用标签、颜色、Worktree 菜单与窄侧栏 | `CommitGraphLayoutTests`、`RecentCommitsViewTests` |
 | SSH 命令、断线、重连和过期结果 | `RemoteCommandsTests`、`RemoteLifetimeTests` |
 | 文件、Diff 和原生内容保留 | `FileTabPersistenceTests`、`NativeFileTabTests`、`DiffTabTests`、`DiffEngineTests`、`PaneRetentionTests` |
-| 高亮坐标、渲染色与字体／撤销 | `TextCoordinateIndexTests`、`SyntaxHighlightingTests` |
-| 查询编译共享、固定资源失败与取消等待者 | `HighlightQueryCacheTests`、`SyntaxHighlightingTests` |
+| 高亮坐标、渲染色与字体／撤销 | `TextCoordinateIndexTests`、`NativeSyntaxHighlightingTests` |
+| 查询编译共享、固定资源失败与取消等待者 | `HighlightQueryCacheTests`、`NativeSyntaxHighlightingTests` |
 | 原生组合输入、结束标记与最终替换 | `NativeEditorCompositionTests` |
 | 原生远距离定位、文末与固定行高 | `NativeEditorLayoutTests` |
 | Files 与所有 Git 树的命中与交互 | `TreeRowHitTestingTests` |

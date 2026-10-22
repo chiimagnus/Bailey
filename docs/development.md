@@ -69,7 +69,7 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 
 [Vendor/Neon](../Vendor/Neon/README.md) 保留当前固定依赖的最小核心与原始许可证，以同一 package 身份替换远程 Neon，不引入第二份 parser 或队列。补丁让异步失效范围随尚未完成的编辑转换后再交付；只校验 token 版本不能补救旧坐标被当作有效的样式。
 
-不引入未使用的旧 NSTextView／UIKit 适配，旧系统 actor／队列兼容桥由当前平台原生能力替代；不删除真实主队列约束。升级时检查上游是否已修复，运行 `SyntaxHighlightingTests` 的连续语义编辑、前方插入与最终视口着色，以及 `NativeEditorCompositionTests`、`NativeEditorLayoutTests`、`TextCoordinateIndexTests`、`DiffTabTests`。同时验证完整 XCTest、Debug／Release 构建和签名；不能以当前 Tree 正确代替实际颜色更新。
+不引入未使用的旧 NSTextView／UIKit 适配，旧系统 actor／队列兼容桥由当前平台原生能力替代；不删除真实主队列约束。升级时检查上游是否已修复，运行 `NativeSyntaxHighlightingTests` 的连续语义编辑、前方插入与最终视口着色，以及 `NativeEditorCompositionTests`、`NativeEditorLayoutTests`、`TextCoordinateIndexTests`、`DiffTabTests`。同时验证完整 XCTest、Debug／Release 构建和签名；不能以当前 Tree 正确代替实际颜色更新。
 
 查询使用当前 SwiftTreeSitter 匹配序列，在后台取匹配、主线程读取谓词，读取前后都核对请求版本。正文编辑与嵌入语言查询首次就绪均推进同一个高亮交付代次，避免旧的根语言结果覆盖新片段颜色。未生效的可视范围前后配置已删除，实际请求长度由 `requestLengthLimit` 限制。未使用的同步查询模式、弃用游标及 noChange 样式叠加路径不保留；根解析仍使用原串行队列和现有同步阈值。
 

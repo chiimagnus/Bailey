@@ -21,7 +21,7 @@ private final class ReadInterceptingContentStorage: NSTextContentStorage {
 }
 
 @MainActor
-final class SyntaxHighlightingTests: XCTestCase {
+final class NativeSyntaxHighlightingTests: XCTestCase {
     func testEmbeddedRequestsStayWithinRequestedRangeAndMatchFreshCaptures() async throws {
         let cases = [
             ("fixture.md", "```swift\n", "// 中文 👋 e\u{301}\nlet value = 42\n", "```\n", "fixture.swift", "//"),
