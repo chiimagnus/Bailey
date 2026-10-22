@@ -36,6 +36,6 @@ Git 内容先通过原始 NUL 分隔的 index／tree metadata 匹配字面路径
 
 ## 验证
 
-`DiffEngineTests` 检查原文字节重建及 UTF-16 行内范围；`DiffTabTests` 与 `GitHistoryFileTests` 检查原生文本、不同历史来源、空文件、Git 读错误、重命名、二进制、超限、只读边界、刷新与重新挂载。覆盖统一／分栏、行内差异、编辑、撤销、保存、未跟踪、暂存、历史、字节与大小边界、两侧内容宽度不同、快速切换及在途读取。
+`DiffEngineTests` 检查原文字节重建及 UTF-16 行内范围；`NativeDiffTabTests` 与 `GitHistoryFileTests` 检查原生文本、不同历史来源、空文件、Git 读错误、重命名、二进制、超限、只读边界、刷新与重新挂载。覆盖统一／分栏、行内差异、编辑、撤销、保存、未跟踪、暂存、历史、字节与大小边界、两侧内容宽度不同、快速切换及在途读取。
 
-还需在完整工作区中验证文件→Diff→文件的内容身份和焦点。接口返回或桥接成功不代表用户可用；性能测量须包含 TextKit 首屏、滚动和编辑，而不是 WebKit 指标。入口见 [testing.md](../testing.md)。
+`WorkspaceGitUITests.testWorktreeDiffEditsAndPersistsRealGitFile` 新增从真实 Git Changes 打开 Diff、切换统一／编辑模式、Undo／Redo、⌘S 落盘字节的 E2E；目前仅编译，待专用 GUI 会话执行验收。还需在完整工作区中验证文件→Diff→文件的内容身份和焦点。接口返回或桥接成功不代表用户可用；性能测量须包含 TextKit 首屏、滚动和编辑，而不是 WebKit 指标。入口见 [testing.md](../testing.md)。

@@ -49,4 +49,49 @@ final class WorkspaceGitUITests: XCTestCase {
         XCTAssertTrue(diff.waitForExistence(timeout: 15),
                       "The real Git Changes row must open a diff tab")
     }
+
+    func testWorktreeDiffEditsAndPersistsRealGitFile() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("diff-edit.swift", text: "let value = 1\n")
+        try fixture.initializeGit()
+        let original = "let value = 2\n"
+        let updated = "let value = 3 // 中文 👋\n"
+        try original.write(to: file, atomically: true, encoding: .utf8)
+        let app = try WorkspaceUITestSupport.launch(in: self)
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+
+        let window = app.windows.firstMatch
+        WorkspaceUITestSupport.element("bailey.dock.git", in: app).click()
+        let change = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(change.waitForExistence(timeout: 25))
+        change.click()
+
+        let mode = window.segmentedControls["bailey.diff.mode"]
+        let layout = window.segmentedControls["bailey.diff.layout"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 15))
+        XCTAssertTrue(layout.waitForExistence(timeout: 15))
+        layout.buttons.element(boundBy: 0).click()
+        mode.buttons.element(boundBy: 1).click()
+
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        XCTAssertEqual(editor.value as? String, original,
+                       "Edit mode must expose the live worktree content, not the old Git revision")
+        editor.click()
+        app.typeKey("a", modifierFlags: .command)
+        editor.typeText(updated)
+        XCTAssertEqual(editor.value as? String, updated)
+        app.typeKey("z", modifierFlags: .command)
+        XCTAssertEqual(editor.value as? String, original,
+                       "Native Diff Undo must restore the worktree buffer")
+        app.typeKey("z", modifierFlags: [.command, .shift])
+        XCTAssertEqual(editor.value as? String, updated)
+        app.typeKey("s", modifierFlags: .command)
+
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? String(contentsOf: file, encoding: .utf8)) == updated
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 15), .completed,
+                       "Diff Command-S must persist exact native bytes in the selected Git worktree")
+    }
 }

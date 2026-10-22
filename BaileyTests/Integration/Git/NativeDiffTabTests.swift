@@ -122,7 +122,7 @@ private struct DiffSelectionFixtureView: View {
 }
 
 @MainActor
-final class DiffTabTests: XCTestCase {
+final class NativeDiffTabTests: XCTestCase {
     func testNativeDiffRendersRowsThroughTransparentTextSurface() throws {
         let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
         let window = NSWindow(
