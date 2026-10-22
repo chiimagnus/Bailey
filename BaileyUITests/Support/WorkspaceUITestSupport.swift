@@ -7,7 +7,9 @@ enum WorkspaceUITestSupport {
     static func launch(in test: XCTestCase, language: String? = nil) throws -> XCUIApplication {
         let app = XCUIApplication(bundleIdentifier: "chiimagnus.bailey.dev")
         guard app.state == .notRunning else {
-            throw XCTSkip("UI automation must not terminate an existing Bailey Dev instance")
+            throw NSError(domain: "BaileyUITestLaunch", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Bailey Dev is already running; refusing to terminate it or silently skip UI coverage"
+            ])
         }
         app.launchArguments = ["--isolated-ui-test"]
         if let language { app.launchArguments += ["-AppleLanguages", "(\(language))"] }
@@ -24,12 +26,12 @@ enum WorkspaceUITestSupport {
                                "UI typing must not leave Unicode Hex Input enabled")
             }
         }
-        try selectASCIIInputSource()
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
         app.activate()
         XCTAssertEqual(app.state, .runningForeground,
                        "Only Bailey Dev may receive keyboard actions from UI tests")
+        try selectASCIIInputSource()
         return app
     }
 
@@ -72,11 +74,25 @@ enum WorkspaceUITestSupport {
                           userInfo: [NSLocalizedDescriptionKey: "Go to Folder input not found"])
         }
         pathField.click()
+        // The system picker can restore a document-specific input method on focus.
+        try selectASCIIInputSource()
         pathField.typeKey("a", modifierFlags: .command)
         pathField.typeText(url.path)
-        guard pathField.value as? String == url.path else {
-            throw NSError(domain: "BaileyUITestPicker", code: 4,
-                          userInfo: [NSLocalizedDescriptionKey: "Incomplete path in Go to Folder input"])
+        // NSOpenPanel's Go to Folder field may still be resolving a path suggestion.
+        let enteredPath = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", url.path), object: pathField
+        )
+        _ = XCTWaiter.wait(for: [enteredPath], timeout: 4)
+        let entered = pathField.value as? String ?? "<non-text>"
+        guard entered == url.path else {
+            let source = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+            let idPointer = TISGetInputSourceProperty(source, kTISPropertyInputSourceID)
+            let inputID = idPointer.map {
+                Unmanaged<CFString>.fromOpaque($0).takeUnretainedValue() as String
+            } ?? "unknown"
+            throw NSError(domain: "BaileyUITestPicker", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "Go to Folder mismatch, input=\(inputID), expected=\(url.path.debugDescription), actual=\(entered.debugDescription)"
+            ])
         }
         pathField.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
         let confirmation = sheet.buttons["OKButton"]

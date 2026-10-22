@@ -16,10 +16,8 @@ final class WorkspaceSmokeUITests: XCTestCase {
 
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertTrue(search.exists)
-        let cleared = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value != %@", "z"), object: search
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 5), .completed)
+        XCTAssertEqual(search.value as? String, "",
+                       "First Escape must clear the native search field")
 
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         let dismissed = XCTNSPredicateExpectation(

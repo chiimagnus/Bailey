@@ -46,7 +46,7 @@ make build:ui        # 只编译独立 UI Test，不启动 App
 make test:ui         # 独立图形会话中运行完整 App UI Test
 ```
 
-本地迭代人工指定 `make test:类名1,类名2,...`（逗号分隔，不加空格）选择任意数量的宿主 XCTest 类；涉及共享组件时补测相关类。`make test:ui` 单独执行整个 UI Test Target，不混入本机日常宿主测试。`make test`、`make test:ui` 和 `make build:ui` 自动使用独立的 `chiimagnus.bailey.dev` 与 `build/DerivedData-Dev`，即使正式 Bailey 在运行也不会终止或覆盖它。`WorkspaceUITestSupport` 通过显式 Dev Bundle ID 启动 App，拒绝终止已有开发版实例；本机 GUI Runner 必须使用 Apple Development 签名而非强制 ad-hoc，否则可能被系统拒绝操作辅助功能树。公共启动入口在启动 Bailey Dev **之前**暂选 ABC 输入字母和路径，测试清理时恢复之前的输入法，并撤销 XCTest 临时启用的 Unicode Hex Input（若该输入法原本未启用）；此举不替代真实中文 IME 组词／候选测试。AppKit/XCUITest 仍争用同一桌面键盘焦点，要获得完全无干扰的真实 GUI 自动化须使用独立图形会话。CI 为每次非 Draft PR 都运行完整宿主 XCTest 和独立 App UI Test，不再根据文件变更猜测测试类名，避免迁移类名后执行零项。`ci/full` 可触发一次新的完整检查，测试结果必须对应本次 Head SHA。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
+本地迭代人工指定 `make test:类名1,类名2,...`（逗号分隔，不加空格）选择任意数量的宿主 XCTest 类；涉及共享组件时补测相关类。`make test:ui` 单独执行整个 UI Test Target，不混入本机日常宿主测试。`make test`、`make test:ui` 和 `make build:ui` 自动使用独立的 `chiimagnus.bailey.dev` 与 `build/DerivedData-Dev`，即使正式 Bailey 在运行也不会终止或覆盖它。`WorkspaceUITestSupport` 通过显式 Dev Bundle ID 启动 App；已有 Bailey Dev 实例时明确失败而不终止进程，也不允许整套 XCUITest 全部跳过却返回假绿色；本机 GUI Runner 必须使用 Apple Development 签名而非强制 ad-hoc，否则可能被系统拒绝操作辅助功能树。公共启动入口在 **Bailey Dev 激活后**暂选 ABC，系统选择器的路径输入框获得焦点后再次选 ABC；测试清理时恢复之前的输入法，并撤销 XCTest 临时启用的 Unicode Hex Input（若该输入法原本未启用）；此举不替代真实中文 IME 组词／候选测试。AppKit/XCUITest 仍争用同一桌面键盘焦点，要获得完全无干扰的真实 GUI 自动化须使用独立图形会话。CI 为每次非 Draft PR 都运行完整宿主 XCTest 和独立 App UI Test，不再根据文件变更猜测测试类名，避免迁移类名后执行零项。`ci/full` 可触发一次新的完整检查，测试结果必须对应本次 Head SHA。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
 
 ## 测试层次
 
@@ -65,7 +65,7 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 | 冷启动、命令面板搜索／Escape、从编辑器切换 Files 后真实方向键／空格焦点 | `WorkspaceSmokeUITests`、`WorkspaceFilesUITests` | `DockFocusP2RegressionTests`、`WorkspaceWindowIsolationTests` |
 | 系统 Add Folder、Files 预览／打开、焦点恢复、文件去重、编辑保存到磁盘 | `WorkspaceFilesUITests` | `FileTreeTests`、`TreeRowHitTestingTests`、`FileTabPersistenceTests`、`NativeFileTabTests` |
 | 大文件远距导航、文本替换、键盘撤销／重做、真实保存 | `EditorNavigationUITests` | `NativeEditorLayoutTests`、`NativeEditorCompositionTests`、`FileTabPersistenceTests` |
-| Swift 与纯文本实际着色像素差异、原文未污染 | `EditorHighlightingUITests`（本机 Bailey Dev 已实测） | `NativeSyntaxHighlightingTests`、`HighlightQueryCacheTests` |
+| Swift／Markdown／TSX／HTML／CSS 与纯文本实际着色像素差异、原文未污染 | `EditorHighlightingUITests`（本机 Bailey Dev 已实测） | `NativeSyntaxHighlightingTests`、`HighlightQueryCacheTests` |
 | Git Changes 状态、Git Graph 提交展开及工作区 Diff 分栏／统一、编辑／Undo／真实保存 | `WorkspaceGitUITests`（Git Changes／Git Graph／Split→Unified→Edit→磁盘字节路径已实测） | `GitStatusModelTests`、`NativeDiffTabTests`、`RecentCommitsViewTests` |
 | 多窗口、设置、系统选择器取消 | `WorkspaceWindowsUITests` | `WorkspaceWindowCloseTests`、`WorkspaceWindowIsolationTests` |
 

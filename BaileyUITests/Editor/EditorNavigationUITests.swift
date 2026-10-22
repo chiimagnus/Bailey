@@ -84,38 +84,38 @@ final class EditorNavigationUITests: XCTestCase {
         let editor = app.windows.firstMatch.textViews.firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         editor.click()
-        app.typeKey("a", modifierFlags: .command)
-        app.typeKey("x", modifierFlags: [])
+        editor.typeKey("a", modifierFlags: .command)
+        editor.typeKey("x", modifierFlags: [])
         XCTAssertEqual(editor.value as? String, "x")
-        app.typeKey("z", modifierFlags: .command)
+        editor.typeKey("z", modifierFlags: .command)
         XCTAssertEqual(editor.value as? String, original,
                        "Undo must restore the actual native text view before saving")
-        app.typeKey("s", modifierFlags: .command)
+        editor.typeKey("s", modifierFlags: .command)
         let undone = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             (try? String(contentsOf: file, encoding: .utf8)) == original
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [undone], timeout: 10), .completed,
                        "Undo must restore original Unicode bytes")
-        app.typeKey("z", modifierFlags: [.command, .shift])
+        editor.typeKey("z", modifierFlags: [.command, .shift])
         XCTAssertEqual(editor.value as? String, "x",
                        "Redo must update the native editor")
-        app.typeKey("s", modifierFlags: .command)
+        editor.typeKey("s", modifierFlags: .command)
         let redone = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             (try? String(contentsOf: file, encoding: .utf8)) == "x"
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [redone], timeout: 10), .completed,
                        "Redo must persist the exact replacement bytes")
 
-        app.typeKey("a", modifierFlags: .command)
+        editor.typeKey("a", modifierFlags: .command)
         editor.typeText("中文👋")
         XCTAssertEqual(editor.value as? String, "中文👋")
-        app.typeKey("z", modifierFlags: .command)
+        editor.typeKey("z", modifierFlags: .command)
         XCTAssertEqual(editor.value as? String, "x",
                        "Unicode insertion must participate in native Undo")
-        app.typeKey("z", modifierFlags: [.command, .shift])
+        editor.typeKey("z", modifierFlags: [.command, .shift])
         XCTAssertEqual(editor.value as? String, "中文👋",
                        "Redo must restore inserted Unicode text")
-        app.typeKey("s", modifierFlags: .command)
+        editor.typeKey("s", modifierFlags: .command)
         let unicodeSaved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             (try? String(contentsOf: file, encoding: .utf8)) == "中文👋"
         }, object: nil)
