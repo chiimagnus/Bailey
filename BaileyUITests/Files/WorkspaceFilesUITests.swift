@@ -59,6 +59,41 @@ final class WorkspaceFilesUITests: XCTestCase {
         )
     }
 
+    func testPaletteFileManagerCommandRestoresKeyboardFocusFromEditor() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("alpha.swift", text: "original\n")
+        let second = try fixture.file("beta.swift", text: "original\n")
+        let app = try WorkspaceUITestSupport.launch(in: self)
+
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let betaRow = WorkspaceUITestSupport.fileRow(second, in: app)
+        XCTAssertTrue(betaRow.waitForExistence(timeout: 20))
+        betaRow.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(second, in: app)
+            .waitForExistence(timeout: 15))
+        let editor = app.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        editor.click()
+
+        app.typeKey("p", modifierFlags: .command)
+        let search = app.textFields["bailey.commandPalette.search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        search.typeText("File Manager")
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        XCTAssertFalse(search.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: "bailey.tab.file").count, 1,
+                       "Switching tools through the palette must not create a file tab")
+
+        app.typeKey(XCUIKeyboardKey.upArrow, modifierFlags: [])
+        app.typeKey(" ", modifierFlags: [])
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(first, in: app)
+            .waitForExistence(timeout: 15),
+            "Palette File Manager must return keyboard focus to the selected file tree")
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(second, in: app).exists)
+        XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "original\n")
+    }
+
     func testNativeEditorSavesActualFileContentsToDisk() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("editable.swift", text: "let original = 1\n")
