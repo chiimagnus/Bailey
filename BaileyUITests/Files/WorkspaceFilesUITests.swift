@@ -13,18 +13,18 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertTrue(files.waitForExistence(timeout: 20))
         files.click()
 
-        let firstRow = WorkspaceUITestSupport.fileRow(first, in: app)
-        let secondRow = WorkspaceUITestSupport.fileRow(second, in: app)
+        let firstRow = WorkspaceUITestSupport.fileRow(first, in: app.windows.firstMatch)
+        let secondRow = WorkspaceUITestSupport.fileRow(second, in: app.windows.firstMatch)
         XCTAssertTrue(firstRow.waitForExistence(timeout: 20))
         XCTAssertTrue(secondRow.waitForExistence(timeout: 20))
         firstRow.doubleClick()
-        let tab = WorkspaceUITestSupport.fileTab(first, in: app)
+        let tab = WorkspaceUITestSupport.fileTab(first, in: app.windows.firstMatch)
         XCTAssertTrue(tab.waitForExistence(timeout: 15),
                       "Double-clicking a file in the real File Manager must open its editor tab")
 
         files.click()
         secondRow.click()
-        let preview = WorkspaceUITestSupport.fileTab(second, in: app)
+        let preview = WorkspaceUITestSupport.fileTab(second, in: app.windows.firstMatch)
         XCTAssertTrue(preview.waitForExistence(timeout: 15),
                       "Clicking another file should open a preview tab without dropping the File Manager")
     }
@@ -39,7 +39,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 20))
         files.click()
-        let firstRow = WorkspaceUITestSupport.fileRow(first, in: app)
+        let firstRow = WorkspaceUITestSupport.fileRow(first, in: app.windows.firstMatch)
         XCTAssertTrue(firstRow.waitForExistence(timeout: 20))
         firstRow.click()
 
@@ -53,7 +53,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
         app.typeKey(" ", modifierFlags: [])
         XCTAssertTrue(
-            WorkspaceUITestSupport.fileTab(second, in: app)
+            WorkspaceUITestSupport.fileTab(second, in: app.windows.firstMatch)
                 .waitForExistence(timeout: 15),
             "After closing the palette, Down+Space must act on the real Files selection"
         )
@@ -67,10 +67,10 @@ final class WorkspaceFilesUITests: XCTestCase {
 
         try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
-        let betaRow = WorkspaceUITestSupport.fileRow(second, in: app)
+        let betaRow = WorkspaceUITestSupport.fileRow(second, in: app.windows.firstMatch)
         XCTAssertTrue(betaRow.waitForExistence(timeout: 20))
         betaRow.doubleClick()
-        XCTAssertTrue(WorkspaceUITestSupport.fileTab(second, in: app)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(second, in: app.windows.firstMatch)
             .waitForExistence(timeout: 15))
         let editor = app.textViews.firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
@@ -87,10 +87,10 @@ final class WorkspaceFilesUITests: XCTestCase {
 
         app.typeKey(XCUIKeyboardKey.upArrow, modifierFlags: [])
         app.typeKey(" ", modifierFlags: [])
-        XCTAssertTrue(WorkspaceUITestSupport.fileTab(first, in: app)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(first, in: app.windows.firstMatch)
             .waitForExistence(timeout: 15),
             "Palette File Manager must return keyboard focus to the selected file tree")
-        XCTAssertTrue(WorkspaceUITestSupport.fileTab(second, in: app).exists)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(second, in: app.windows.firstMatch).exists)
         XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "original\n")
     }
 
@@ -101,10 +101,10 @@ final class WorkspaceFilesUITests: XCTestCase {
 
         try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
-        let row = WorkspaceUITestSupport.fileRow(file, in: app)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
         XCTAssertTrue(row.waitForExistence(timeout: 20))
         row.doubleClick()
-        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: app)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: app.windows.firstMatch)
             .waitForExistence(timeout: 15))
         let editor = app.textViews.firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
@@ -138,16 +138,16 @@ final class WorkspaceFilesUITests: XCTestCase {
             let folder = folders.matching(NSPredicate(format: "label == %@", folderName)).firstMatch
             XCTAssertTrue(folder.waitForExistence(timeout: 15))
             folder.click()
-            let row = WorkspaceUITestSupport.fileRow(path, in: app)
+            let row = WorkspaceUITestSupport.fileRow(path, in: app.windows.firstMatch)
             XCTAssertTrue(row.waitForExistence(timeout: 15))
             row.doubleClick()
-            XCTAssertTrue(WorkspaceUITestSupport.fileTab(path, in: app)
+            XCTAssertTrue(WorkspaceUITestSupport.fileTab(path, in: app.windows.firstMatch)
                 .waitForExistence(timeout: 15))
         }
         XCTAssertEqual(app.buttons.matching(identifier: "bailey.tab.file").count, 2,
                        "Identical basenames from different directories must remain distinct")
-        XCTAssertTrue(WorkspaceUITestSupport.fileTab(alpha, in: app).exists)
-        XCTAssertTrue(WorkspaceUITestSupport.fileTab(beta, in: app).exists)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(alpha, in: app.windows.firstMatch).exists)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(beta, in: app.windows.firstMatch).exists)
     }
 
     func testChinesePickerOpensFileWithLongUnicodePath() throws {
@@ -168,11 +168,11 @@ final class WorkspaceFilesUITests: XCTestCase {
             .matching(NSPredicate(format: "label == %@", folderName)).firstMatch
         XCTAssertTrue(folder.waitForExistence(timeout: 20))
         folder.click()
-        let row = WorkspaceUITestSupport.fileRow(file, in: app)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
         XCTAssertTrue(row.waitForExistence(timeout: 20),
                       "Long Unicode paths must remain uniquely addressable in the AX tree")
         row.doubleClick()
-        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: app)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: app.windows.firstMatch)
             .waitForExistence(timeout: 15))
     }
 
@@ -183,10 +183,10 @@ final class WorkspaceFilesUITests: XCTestCase {
 
         try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
-        let row = WorkspaceUITestSupport.fileRow(file, in: app)
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
         XCTAssertTrue(row.waitForExistence(timeout: 20))
         row.doubleClick()
-        let tab = WorkspaceUITestSupport.fileTab(file, in: app)
+        let tab = WorkspaceUITestSupport.fileTab(file, in: app.windows.firstMatch)
         XCTAssertTrue(tab.waitForExistence(timeout: 15))
 
         app.typeKey("o", modifierFlags: .command)

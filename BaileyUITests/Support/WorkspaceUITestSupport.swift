@@ -92,11 +92,14 @@ struct WorkspaceUITestFixture {
     }
 
     func git(_ args: [String]) throws {
-        // /usr/bin/git is an xcrun shim and cannot run inside XCTest's App Sandbox.
-        let executable = "/Library/Developer/CommandLineTools/usr/bin/git"
-        guard FileManager.default.isExecutableFile(atPath: executable) else {
+        // /usr/bin/git invokes xcrun, which cannot run inside XCTest's sandbox.
+        let developerGit = ProcessInfo.processInfo.environment["DEVELOPER_DIR"]
+            .map { URL(fileURLWithPath: $0).appendingPathComponent("usr/bin/git").path }
+        let candidates = [developerGit, "/Library/Developer/CommandLineTools/usr/bin/git"]
+            .compactMap { $0 }
+        guard let executable = candidates.first(where: FileManager.default.isExecutableFile(atPath:)) else {
             throw NSError(domain: "BaileyUITestGit", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: "Xcode Command Line Tools Git is required for UI test fixtures"
+                NSLocalizedDescriptionKey: "A real Xcode or Command Line Tools Git binary is required"
             ])
         }
         let process = Process()

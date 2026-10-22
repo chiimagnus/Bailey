@@ -46,7 +46,7 @@ make build:ui        # 只编译独立 UI Test，不启动 App
 make test:ui         # 独立图形会话中运行完整 App UI Test
 ```
 
-本地迭代人工指定 `make test:类名1,类名2,...`（逗号分隔，不加空格）选择任意数量的宿主 XCTest 类；涉及共享组件时补测相关类。`make test:ui` 单独执行整个 UI Test Target，不混入本机日常宿主测试。CI 依据本次推送修改的文件增量选择宿主测试类；非 Draft PR 同时在独立 Runner 上运行完整 App UI Test。首次打开、由草稿转为可审查及合并前 `ci/full` 标签会跑完整宿主 XCTest；增量绿色不代替最终完整回归。CI 的空白检查仅覆盖非 Markdown 文件，不因文档末尾空行阻断 XCTest。文件夹不进入 XCTest 类名选择参数。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
+本地迭代人工指定 `make test:类名1,类名2,...`（逗号分隔，不加空格）选择任意数量的宿主 XCTest 类；涉及共享组件时补测相关类。`make test:ui` 单独执行整个 UI Test Target，不混入本机日常宿主测试。`make test`／`make test:ui` 都在运行前拒绝与已启动的 Bailey 共用桌面，避免测试宿主抢占用户窗口。CI 依据本次推送修改的文件增量选择宿主测试类；非 Draft PR 同时在独立 Runner 上运行完整 App UI Test。首次打开、由草稿转为可审查及合并前 `ci/full` 标签会跑完整宿主 XCTest；增量绿色不代替最终完整回归。CI 的空白检查仅覆盖非 Markdown 文件，不因文档末尾空行阻断 XCTest。文件夹不进入 XCTest 类名选择参数。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
 
 ## 测试层次
 
@@ -58,7 +58,7 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 | WorkspaceUI | 真实 `ContentView`、项目、Dock、标签与多窗口的集成 | 独立进程的完整端到端 UI 自动化 |
 | E2E | 启动完整 App，从用户入口操作并核对最终结果 | 不能由上面的测试数量或绿色状态推断 |
 
-`BaileyUITests` 通过一次性本机临时文件／Git 仓库作为输入，并经真实 App 的系统文件选择器、Dock 和键盘操作核对结果。夹具创建时即登记 XCTest 清理，失败启动也不能留下文件；Git 子进程使用 Command Line Tools 的真实 Git 二进制，绕开 `/usr/bin/git` 在 XCTest 沙盒中的 `xcrun` 包装器；标准输出定向至空设备、错误输出写临时文件，避免管道反压。原生文件选择器用窗口内的 `OKButton` 标识确认、`Escape` 取消，不能硬编码英文 `Add`/`Open`/`Cancel` 文案。Files/Git 行用原绝对／仓库相对路径的 AX 标签后缀区分同名项，文件 Tab 以独立的 AX 路径值区分重名标题，标识符不携带长路径；多窗口查询还须限定实际窗口。中文界面与超长 Unicode 文件树路径均有独立 App 回归；系统「前往文件夹」直接输入超长中文路径仍须单独验证，不由普通路径测试推断。构建 UI Target 不等于执行 GUI 测试：
+`BaileyUITests` 通过一次性本机临时文件／Git 仓库作为输入，并经真实 App 的系统文件选择器、Dock 和键盘操作核对结果。夹具创建时即登记 XCTest 清理，失败启动也不能留下文件；Git 子进程使用当前 Xcode 或 Command Line Tools 的真实 Git 二进制，绕开 `/usr/bin/git` 在 XCTest 沙盒中的 `xcrun` 包装器；标准输出定向至空设备、错误输出写临时文件，避免管道反压。原生文件选择器用窗口内的 `OKButton` 标识确认、`Escape` 取消，不能硬编码英文 `Add`/`Open`/`Cancel` 文案。Files/Git 行用原绝对／仓库相对路径的 AX 标签后缀区分同名项，文件 Tab 以独立的 AX 路径值区分重名标题，标识符不携带长路径；多窗口查询还须限定实际窗口。中文界面与超长 Unicode 文件树路径均有独立 App 回归；系统「前往文件夹」直接输入超长中文路径仍须单独验证，不由普通路径测试推断。构建 UI Target 不等于执行 GUI 测试：
 
 | 完整用户路径 | 独立 UI 测试 | 仍保留的底层回归 |
 | --- | --- | --- |

@@ -22,7 +22,7 @@ final class WorkspaceGitUITests: XCTestCase {
             return
         }
         history.click()
-        let path = WorkspaceUITestSupport.fileRow(committed, in: app, relativeTo: fixture.root)
+        let path = WorkspaceUITestSupport.fileRow(committed, in: app.windows.firstMatch, relativeTo: fixture.root)
         XCTAssertTrue(path.waitForExistence(timeout: 15),
                       "Opening a real Git Graph commit must reveal its changed file")
     }
@@ -39,7 +39,7 @@ final class WorkspaceGitUITests: XCTestCase {
         XCTAssertTrue(git.waitForExistence(timeout: 20))
         git.click()
 
-        let change = WorkspaceUITestSupport.fileRow(changed, in: app, relativeTo: fixture.root)
+        let change = WorkspaceUITestSupport.fileRow(changed, in: app.windows.firstMatch, relativeTo: fixture.root)
         XCTAssertTrue(change.waitForExistence(timeout: 25),
                       "Git Changes must expose the modified file in the selected repository")
         change.click()

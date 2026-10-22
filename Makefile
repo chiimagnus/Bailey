@@ -74,6 +74,10 @@ test\:ui:
 	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(TEST_SELECTION) test
 
 test:
+	@if pgrep -x bailey >/dev/null; then \
+		printf '%s\n' '存在运行中的 Bailey；宿主 XCTest 可能影响同 Bundle ID 的 App，已拒绝执行。'; \
+		exit 2; \
+	fi
 	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(TEST_SELECTION) test
 ifeq ($(SIGNING),adhoc)
 	@set -eu; for bundle in '$(APP)' '$(APP)/Contents/PlugIns/BaileyTests.xctest'; do \
