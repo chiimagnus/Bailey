@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import Observation
 import XCTest
@@ -53,13 +52,8 @@ final class AppSettingsTests: XCTestCase {
 
     func testCheckoutConsentIsPersistedAndResetWithTemporaryConfig() throws {
         let domain = "bailey-checkout-consent-\(UUID().uuidString)"
-        let appearance = NSApp?.appearance
-        defer {
-            UserDefaults.standard.removePersistentDomain(forName: domain)
-            NSApp?.appearance = appearance
-            Theme.reloadSelection(light: AppSettings.shared.themeLight, dark: AppSettings.shared.themeDark)
-        }
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
         defaults.set(["en"], forKey: "AppleLanguages")
         let settings = AppSettings(configURL: configURL, languageDefaults: defaults, languageDomain: domain)
         XCTAssertEqual(settings.language, .english)
@@ -79,15 +73,7 @@ final class AppSettingsTests: XCTestCase {
     }
 
     func testObservationTracksAllNativeTerminalSettingsWithTemporaryConfig() {
-        let originalAppearance = NSApp?.appearance
         let configured = AppSettings(configURL: configURL)
-        defer {
-            NSApp?.appearance = originalAppearance
-            Theme.reloadSelection(
-                light: AppSettings.shared.themeLight,
-                dark: AppSettings.shared.themeDark
-            )
-        }
 
         let fields: [(name: String, read: () -> Any, change: () -> Void)] = [
             ("font family", { configured.fontFamily }, { configured.fontFamily = "Fixture Mono" }),
@@ -126,12 +112,9 @@ final class AppSettingsTests: XCTestCase {
 
     func testThemeRevisionInvalidatesObserversAndUpdatesNativePalette() {
         let settings = AppSettings(configURL: configURL)
-        defer {
-            Theme.reloadSelection(
-                light: AppSettings.shared.themeLight,
-                dark: AppSettings.shared.themeDark
-            )
-        }
+        let previousLight = Theme.terminal(dark: false).name
+        let previousDark = Theme.terminal(dark: true).name
+        defer { Theme.reloadSelection(light: previousLight, dark: previousDark) }
 
         let oldRevision = Theme.changes.revision
         let invalidated = expectation(description: "theme revision changed")
@@ -139,12 +122,36 @@ final class AppSettingsTests: XCTestCase {
             invalidated.fulfill()
         }
         settings.themeDark = "Ayu"
+        XCTAssertEqual(Theme.changes.revision, oldRevision,
+                       "Independent configuration changes must not alter the app palette")
+        Theme.reloadSelection(light: settings.themeLight, dark: settings.themeDark)
         wait(for: [invalidated], timeout: 1)
         XCTAssertEqual(Theme.changes.revision, oldRevision + 1)
         XCTAssertEqual(Theme.terminal(dark: true).name, "Ayu")
         settings.themeLight = "Apple System Colors Light"
+        XCTAssertEqual(Theme.changes.revision, oldRevision + 1,
+                       "Independent configuration changes must not alter the app palette")
+        Theme.reloadSelection(light: settings.themeLight, dark: settings.themeDark)
         XCTAssertEqual(Theme.changes.revision, oldRevision + 2)
         XCTAssertEqual(Theme.terminal(dark: false).name, "Apple System Colors Light")
+    }
+
+    func testIndependentAppearanceChangesNeverInvalidateApplicationTheme() throws {
+        let domain = "bailey-appearance-fixture-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let oldRevision = Theme.changes.revision
+        let oldLight = Theme.terminal(dark: false).name
+        let oldDark = Theme.terminal(dark: true).name
+        let settings = AppSettings(configURL: configURL,
+                                   languageDefaults: defaults, languageDomain: domain)
+        settings.theme = .dark
+        settings.themeDark = "Ayu"
+        settings.themeLight = "Apple System Colors Light"
+        settings.resetToDefaults()
+        XCTAssertEqual(Theme.changes.revision, oldRevision)
+        XCTAssertEqual(Theme.terminal(dark: false).name, oldLight)
+        XCTAssertEqual(Theme.terminal(dark: true).name, oldDark)
     }
 
     func testInvalidValuesFallBackAndFailedWritePreservesExistingFile() throws {

@@ -4,8 +4,8 @@
 
 ## Invariants
 
-- **`AppSettings` 是唯一偏好来源。** View 不另存一份全局设置，原生表面由所属窗口应用变更。
-- **配置不是工作区备份。** `~/.config/Bailey/config.toml` 保存偏好和布局初始值，不承载项目快照或未保存文本。
+- **`AppSettings.shared` 是唯一生效的应用偏好来源。** View 不另存一份全局设置，原生表面由所属窗口应用变更。
+- **配置不是工作区备份。** `~/.config/bailey/config.toml` 保存偏好和布局初始值，不承载项目快照或未保存文本。
 - **写入不能破坏手工配置。** 保存偏好使用原子写入并保留手工调整的工作区字段；失败保留原文件。
 - **初始布局只影响新项目。** 已有项目按自己的停靠状态恢复，不因设置改变被重置。
 - **只有一个应用身份。** Debug 和 Release 共用 `chiimagnus.bailey`；测试模式不代表全局偏好也已隔离。
@@ -22,7 +22,7 @@
 
 Git 检出提交的“总是接受”写入 `git.always-accept-checkout`，默认关闭，仅略过游离 HEAD 确认。Tag 推送前的“以后总是继续”写入 `git.always-proceed-push-tag`，默认关闭，仅略过远端分支包含关系的启发式警告，不绕过 Git 真实推送权限和错误。两项偏好独立，重置设置均恢复关闭。
 
-终端字体、配色、光标和 Option-as-Alt 变化即时作用于现有原生表面，不重建 Shell。主题与控件规范见 [ui.md](../ui.md)。
+终端字体、配色、光标和 Option-as-Alt 变化即时作用于现有原生表面，不重建 Shell。只有 `AppSettings.shared` 会将外观和配色同步到整个 App；独立的 `AppSettings(configURL:)` 可以解析/保存临时配置，却不会改动应用窗口和全局主题。语言偏好仍写入创建实例时指定的 `UserDefaults`，临时用例须显式使用独立 suite。主题与控件规范见 [ui.md](../ui.md)。
 
 现行字体加粗键为 `terminal.font-thicken`；不再读取旧字体 UserDefaults 或旧 `font-thicken` 键。语言及 Diff 偏好使用的现有 UserDefaults 不属于旧字体迁移，不能一起删除。
 
@@ -30,7 +30,7 @@ Git 检出提交的“总是接受”写入 `git.always-accept-checkout`，默�
 
 ## 隔离与关联数据
 
-普通配置目录固定为 `~/.config/Bailey/`。`--isolated-ui-test` 隔离窗口快照和终端历史并跳过保存的隧道，但**普通设置仍共享**；需要改设置的测试必须使用独立 Home，并核实实际读写位置，见 [testing.md](../testing.md#隔离环境)。
+普通配置目录固定为 `~/.config/bailey/`。`--isolated-ui-test` 隔离窗口快照和终端历史并跳过保存的隧道，但**普通设置仍共享**；需要改设置的测试必须使用独立 Home，并核实实际读写位置，见 [testing.md](../testing.md#隔离环境)。
 
 隧道规则独立存储在 `tunnels.toml`，不并入普通配置；其生命周期见 [tunnels.md](tunnels.md)。
 
