@@ -445,7 +445,7 @@
 - `testRealWindowRootRetainsItsRegistrationAndEditorAcrossViewConstruction`（`NSHostingView`／`NSWindow`／`NSTextView` 身份）：P4-T4 将用户可见保留行为归 UI，快照单一性逻辑归非 UI。
 - `testClosedWindowCannotBeUsedForLateFileOperationErrors`（真实 `NSWindow` 装配）：P4-T4 将窗口关后错误不可回送的最终行为归 UI，目标识别不变量可保留非 UI。
 
-**[`AppSettingsTests.swift`](../../../BaileyTests/Integration/Settings/AppSettingsTests.swift)**：5 方法，其中设置测试使用 `NSApp?.appearance` 恢复外观，但不因此自动构成用户 UI 测试。P1-T3 判断每项断言是否纯设置／Observation；P4-T5 另验证设置页的实际 UI／图像变化及测试配置完全隔离。
+**[`AppSettingsTests.swift`](../../../BaileyTests/Integration/Settings/AppSettingsTests.swift)**：5 方法；`testCheckoutConsentIsPersistedAndResetWithTemporaryConfig` 与 `testObservationTracksAllNativeTerminalSettingsWithTemporaryConfig` 的 teardown 直接恢复共享 `NSApp?.appearance`，后者设置 theme 时还可能直接改变 App 外观。它们的配置/Observation 核心断言可留在非 UI Target，但应在 P4-T5 将真实外观改变验证归独立 App UI，去除低层测试中**不必要的真实 GUI 副作用**，或证明不可避免的宿主行为和隔离；不能仅因为没有显式 `NSWindow` 就称已经完全纯化。
 
 ## 已存在的 BaileyUITests：必须重验的 10 条
 

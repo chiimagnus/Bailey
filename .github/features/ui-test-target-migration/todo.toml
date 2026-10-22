@@ -3,7 +3,7 @@ current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
-title = "核销源测试集合与全部断言归属"
+title = "按方法核对旧测试与行为归属"
 status = "pending"
 plan = "plan-p1.md#p1-t1"
 commit = ""
@@ -11,7 +11,7 @@ note = ""
 
 [[tasks]]
 id = "P1-T2"
-title = "稳定独立 UI Runner 和现有十条真实路径"
+title = "修复独立 Runner 和现有十条真实 UI 路径"
 status = "pending"
 plan = "plan-p1.md#p1-t2"
 commit = ""
@@ -19,17 +19,9 @@ note = ""
 
 [[tasks]]
 id = "P1-T3"
-title = "清理 Unit／Integration 的 UI 污染边界，保留逻辑价值"
+title = "核对 Unit/Integration 中混入的原生 UI 用例"
 status = "pending"
 plan = "plan-p1.md#p1-t3"
-commit = ""
-note = ""
-
-[[tasks]]
-id = "P1-T4"
-title = "验证原生内部断言的跨进程等价证据可行性"
-status = "pending"
-plan = "plan-p1.md#p1-t4"
 commit = ""
 note = ""
 
@@ -139,16 +131,8 @@ note = ""
 
 [[tasks]]
 id = "P5-T1"
-title = "统一工程、命令、CI 和维护文档的分层契约"
+title = "全方法、运行入口与最终 Go/No-Go 核销"
 status = "pending"
 plan = "plan-p5.md#p5-t1"
-commit = ""
-note = ""
-
-[[tasks]]
-id = "P5-T2"
-title = "全 329 方法与全环境组合独立验收并给出 Go/No-Go"
-status = "pending"
-plan = "plan-p5.md#p5-t2"
 commit = ""
 note = ""

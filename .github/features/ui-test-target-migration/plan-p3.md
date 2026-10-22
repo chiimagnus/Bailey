@@ -4,7 +4,7 @@
 
 **Non-goals:** 不改 Git 图谱视觉、拓扑、标签、菜单选项或仓库操作语义；不以迁移测试为由实现新的 Git 功能、重新引入 Vision OCR，或访问真实用户仓库/SSH 凭据。
 
-**Approach:** 复用独立 UI Runner、`WorkspaceUITestFixture.git`、Git 后端和现有 `BaileyUITests/Git/WorkspaceGitUITests.swift`。每个场景由真实 Git 命令建立并验证固定初态，通过 App GUI 操作后，用可观察的列表/Sheet/文件内容和实际 Git index/HEAD/refs/reflog（视操作而定）证明结果；布局算法、Git blob、过期目标保护等分别留在非 UI Unit/Integration。
+**Approach:** 复用现有 `WorkspaceUITestFixture.git(_:)`、独立 CI GUI Runner 和 `WorkspaceGitUITests`。每条旧测试在本任务中拆为用户操作或 Git/状态逻辑，验证真实临时仓库的前置状态与操作后的磁盘、index、HEAD、refs；完成后立即删除相关旧宿主测试、专用 helper、失效文档/CI 引用。不新建统一 Git fixture 框架。
 
 **Acceptance:**
 - 102 个旧方法逐项有可追溯替代断言及执行证据；四项任务分别移除负责的旧类，避免原生 View 测试和 App UI Test 长期重复。
@@ -27,7 +27,7 @@
 **Step 1 — 原有保障按可观察性拆分：**
 - UI: 点击不同历史提交、只读 revision、重命名关联、预览不切离 Git、显式激活编辑器、Diff 模式切换与恢复、历史二进制/超大文件提示、选中 revision 失效后的错误、重置文件的确认／取消/关闭、变更成功后的现有标签与脏文本如何处理。
 - 纯 Git/后端：revision → blob 的定位、stage 2 冲突与 stage 0 缺失、unborn/dangling HEAD、SHA-1/SHA-256、5 MiB 读取边界、特殊路径／原始内容、index mutation 期间的不可变对象、外部 repo/ref 变化、save-before-reset 与 stale-revision 拒绝。
-- 每个危险操作的临时仓库在 UI 操作前以 `git rev-parse`/`ls-files`/`status` 验证 precondition，确保没有误测普通成功路径。
+- 危险操作只针对 `WorkspaceUITestFixture` 在独立临时目录内创建的 Git 仓库，并用 `rev-parse`、`ls-files`、`status`/实际冲突阶段验证前置条件；无效 fixture 必须失败而不是跳过。已有用户 Git 工作树和 SSH 连接不参与测试。
 
 **Step 2 — 新真实 UI 与非 UI 保障：**
 - 在 `BaileyUITests/Git` 从 Git Graph 展开真实提交打开历史文件/Diff，确认只读区域不能修改历史 blob；从 GUI 执行有确认的文件恢复，核对磁盘 bytes、暂存 index 和 HEAD 不会修改未选择内容。
@@ -75,6 +75,7 @@
 **Step 1 — 原始 UI/后端结果：**
 - 表单字段、默认项、禁用态、用户改后切选项保留、关闭/取消后的无副作用；branch create/rename/delete/checkout/push、远端 Fetch/Pull、tag create/rename/delete/push、stash pop/apply/branch、Commit message/mainline/amend/未暂存的选项和同步。
 - 操作确认途中 HEAD/ref/index、选中 repository/project、窗口/Sheet 所属权变动后的过期目标拒绝，网络慢响应和错误提示；`git rebase -i` 原生终端／PTY 的实际编辑器输入与生命周期。危险默认项必须是用户可见且可取消，不只断言 model flag。
+- **已确认混合边界**：`GitInteractiveRebaseTests.testSSHHelperHandoffUsesTheRebaseFixturesApplication` 实际操作 `BaileySSHSocketServer.exchange`、`BAILEY_SSH_SOCKET`/token 与 `TerminalNotificationService` 服务所有权，并没有真正的 App UI 操作；它必须完整移入 `BaileyTests/Integration/Remote` 或对应非 UI 集成类，不可以因为旧路径叫 `NativeUI` 就删除。该类另外两条测试也要先拆分真实 PTY/SSH/命令结果与界面入口各自的验证，不强造只有 UI 可测的结论。
 - 外网 remote push/fetch/pull 用**受控本地 bare remote 或获准临时测试 remote**，绝不向用户 GitHub 仓库直接执行写入；SSH 重连/认证不借真实用户 master/凭据。
 
 **Step 2 — 实现与清理：**
@@ -102,9 +103,9 @@
 - 12+ lane 的拥挤图、字体缩放、窄侧栏/宽侧栏、浅/深、中文长文案、横滚按钮、菜单多级 hover/popup 与切窗行为，结合 `CommitGraphLayoutTests` 的完整父关系与数据。
 
 **Step 2 — 新 UI 和纯算法双链：**
-- 用真实临时 Git 仓库创建分支交叉合并、stash/worktree、detached、多 tag、多 remote 引用、深层子目录、100+ 历史提交，确认创建前置条件已成立；不能用渲染一组手写 `RecentCommit` 冒充完整 App 路径。
-- 用真实 UI 访问图谱、展开/选择、菜单分级、历史文件、滚动/焦点，AX+受控屏幕截图/录屏核对标签、颜色、几何、行数/点击范围。图谱拓扑算法和引用去重/颜色编号继续在非 UI `CommitGraphLayoutTests` 中做精确断言，不能替代实际渲染。
-- 48 项逐方法核销成功后移除 `RecentCommitsViewTests.swift`，保留已有源码 `RecentCommitsView` 的用户行为与布局；同步 `docs/features/git.md`、`docs/ui.md` 受影响验证路径。
+- 按 48 个旧测试实际需要的拓扑构造**必要的几组最小 Git fixture**：合并、多分支远端、stash、worktree、detached、长目录、密集 lanes 与多页历史；对每组都执行 Git 前置核验，不机械在每条 UI 测试里创建 100+ 提交。算法的 lane/颜色编号由现有 `CommitGraphLayoutTests` 做精确组合检验，UI 只要求真实用户路径呈现/命中正确。
+- 通过真实图谱展开/选择、菜单分级、历史文件、滚动与键盘操作验证。当前 `WorkspaceGitUITests` 以 `app.buttons` 的提交信息做整词匹配，不先核对 AX 真实角色与标签，曾出现「找不到提交」；先诊断真实输出再修查询，不能靠延长等待或 UI fixture 切回直接 mock View。颜色/几何由确定的算法 + 可对比实际绘制共同证明，截图不能自动替代精确原生断言。
+- 48 项逐方法核销后，**在 P3-T4 当场**移除 `RecentCommitsViewTests.swift` 和该类独占的 `NSHostingView`/鼠标注入/颜色取样 helper；维护其它单元/集成仍消费的 `CommitGraphLayout`、共享树行和安全约束。同步 `docs/features/git.md`、`docs/ui.md`、`docs/testing.md` 中现行回归入口和 CI 实际引用。
 
 **Step 3 — 验证：**
 - 专用 Runner XCUITest 的图谱键鼠、菜单和视觉验证 + `make test:CommitGraphLayoutTests,GitStatusModelTests`；输出 Git 仓库状态、实际可见提交和目标文件 Diff/菜单动作，比较明确受控的颜色/尺寸基线。

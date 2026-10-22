@@ -15,7 +15,8 @@
 - 源码静态盘点：`BaileyTests/NativeUI` 19 文件、275 个 `test*` 方法；`BaileyTests/WorkspaceUI` 4 文件、54 个方法；**329 个方法需要逐一映射与核销**。`BaileyUITests` 当前 4 个测试文件、10 个方法（另有一个 Support 文件），并非已替代 329 项。`BaileyTests/Unit` 8 文件、75 方法；`Integration` 20 文件、231 方法，亦需扫描隐藏的 UI 操作。
 - 额外混合源已确认：`BaileyTests/Integration/Workspace/SessionStoreTests.swift`（10 方法）含生产 `WindowRootView`、`NSWindow`／`NSHostingView` 装配；`BaileyTests/Integration/Settings/AppSettingsTests.swift`（5 方法）涉及 `NSApp` 外观状态但主要验证配置和 Observation，必须按断言行为判断而非见 `AppKit` 即移动。
 - [方法级迁移清单](migration-inventory.md)是固定快照：对上述 329 项一条不漏地登记旧入口、预定 task 与迁移去向；执行中逐项填充真实替代用例／非 UI 归属及执行证据，不能只根据新用例总数宣称覆盖。
-- 既有 10 条独立 UI 用例须重新在最新产品上实测；过往 CI 对选择器、超长 AX Identifier、Git Graph 历史与宿主焦点曾有失败，不能将先前编译成功等同于 UI 通过。
+- 既有 10 条独立 UI 用例须在最新产品上重新实测；此前 CI 的选择器、超长 AX Identifier 与 Git Graph 问题只能作为排查线索，不把编译成功等同于运行通过。
+- 预审源码覆盖全部 23 个旧 UI suite、另外 28 个 Unit/Integration suite、现有 5 份 UI Test 源文件，以及关联的 App、编辑器、Git、文件树、Dock、窗口、持久化、终端、浏览器与 CI/Makefile 调用路径。**静态阅读和方法索引不等于 329 项已证明等价**；逐方法真实断言及新结果仍在执行时核销。
 
 ## 必须保持的契约
 
@@ -23,16 +24,16 @@
 2. **逐方法可追踪**：每一旧 `test*` 必须标记为「真正 UI 路径 → 新 UI 断言」、「纯逻辑 → 单元／集成断言」或「原测试混合 → 两类拆分」。迁移任务必须写明原条件、实际效果、目标用例、替代证据；旧方法所保护的不变量缺证则不能删。
 3. **不要制造测试后门**：仅在现有控件缺少稳定 AX 语义时，经过真实 UI 语义核对后添加适度标识；不添加生产启动时跑测试、以 `--isolated-ui-test` 绕过业务逻辑、测试专用伪结果或额外隐藏控制页面。稳定 Identifier 不含沙盒绝对路径，不以长 sleep／无条件 retry／跳过用例制造绿色。
 4. **测试真实副作用**：XCUITest 核对保存后的文件字节、Git status/index/HEAD、界面可见数据、目标窗口与真实键盘结果，以及窗口关闭／重开后的内容；夹具证明初始分支、冲突状态、权限、符号链接、文件编码和失败触发条件确实成立。
-5. **安全隔离**：测试本机用户的正式 `/Applications/Bailey.app` 运行时，不调用 `XCUIApplication.launch()` 或结束同 Bundle ID 进程。自动 GUI 回归只在专用 CI GUI Runner／获准的独立会话执行；本机可安全用 `make build:ui` 编译。`--isolated-ui-test` 隔离快照和历史，**没有隔离常规设置、Bundle ID 或桌面**；涉及设置、持久化、跨进程恢复须先验证隔离路径与正确性。
-6. **旧套件逐组删除**：在相关任务中完成 E2E／纯逻辑的替代与 Red→Green（适用时）后，同任务删除原 `NativeUI`／`WorkspaceUI` 文件或已替代方法以及失效的测试夹具；不保留并行双轨，也不在覆盖未完成时提前删除。项目当前另有的 UI 夹杂须同样归正。
-7. **测试入口清晰**：`make test`／`make test:类名1,类名2` 只跑非 UI；`make test:ui` 跑 UI Test。按现有 `Makefile`、`Bailey.xcodeproj`、`Bailey`／`Bailey-UI` Scheme 与 `.github/workflows/ci.yml` 改动，不建立第三个 Test Target 或新的测试系统。CI 每次 PR 的 UI/非 UI 语义必须明确，保证完整 gate 不被增量选择或跳过掩盖。
+5. **安全隔离**：用户的正式 `/Applications/Bailey.app` 正在运行时，不启动同 Bundle ID 的 XCUITest，也不结束用户进程。GUI 回归只在专用 CI Runner／经确认不会影响用户进程的会话执行。`--isolated-ui-test` 仅隔离快照、终端历史并跳过保存的隧道，**不隔离普通设置、Bundle ID 或桌面**。当前配置由 `AppIdentity.configDirectory` 取 `FileManager.default.homeDirectoryForCurrentUser/.config/bailey`，实测仅覆盖 `HOME` 环境变量不会改变该路径；修改偏好的 UI 测试必须在独立用户/CI 环境运行并核对真实写入，不能以设置 `HOME` 冒充隔离。
+6. **同一任务当场替换并删除**：对应新 E2E 与非 UI 断言证实覆盖后，同任务删除原 `NativeUI`／`WorkspaceUI` 中已经被替代的方法、旧窗口 fixture 和其测试专属辅助代码；同步更新 CI 中硬编码的旧类名、使用该类名的文档与调用方。未证实可替代的原生对象内部断言不能先删或延到最后再说。
+7. **复用现有入口**：`make test`／`make test:类名1,类名2` 只跑非 UI；`make test:ui` 跑实际 App UI。保留现有两 Target、Makefile、Scheme 和 CI，不另建测试框架或专用 App。CI 当前 `Bailey/Editor/*` 与 `Bailey/Git/Diff*` 分支仍硬编码旧测试类，迁移这些类的 task 必须同步修改，不能拖到 P5。
 
 ## 非目标
 
-- 在**规划这一轮**执行测试迁移、产品构建、真实 UI 自动化、修改正式 App、提交／合并 PR；只产生本地 Feature 计划与任务状态。
+- 在**本次执行前审查**启动迁移、删除原有测试、改动产品业务逻辑、替换正式 App 或合并 PR；本轮只核对证据并改好计划，实际删除属于对应迁移 task。
 - 将所有 329 个方法机械地转成 329 个 XCUITest 方法；归属与断言强度比数量更重要，但**所有 329 个原始保障必须核销**。
 - 为追求两种目录名而去掉非 UI 集成测试、Git 命令失败回归、TextKit 文本坐标纯逻辑或安全输入校验。
-- 创造第二个 App Bundle ID、收费云设备、独立 Window/Focus mock 框架、永远不会触发的恢复状态；也不借测试迁移修改正常用户操作逻辑。
+- 新增第二个 Bundle ID、测试专用产品状态、通用 Window/Focus mock 框架或新的工具链；不因测试无法读取内部指针就改动正常 App 的可见行为。**本功能不是删除产品数据兼容或安全校验的授权**：`SessionStore.localFile` 对旧快照机器归属仍有意义，`BaileyInstanceMode`/保存失败/SSH 身份校验仍在可达路径上，不能直接删除。
 - 在未获授权的 Windows／SSH 主机上操作真实仓库，或强制终止／重新安装用户当前 Bailey。
 
 ## 验收门槛
@@ -41,7 +42,7 @@
 2. **目标隔离**：`BaileyTests/NativeUI` 和 `BaileyTests/WorkspaceUI` 已不存在，所有遗留非 UI 方法在 Unit/Integration；对整个 `BaileyTests` 审计，确认没有宿主窗口、SwiftUI 交互装配、鼠标键盘注入或 UI 像素断言。`BaileyUITests` 不直接导入被测 App 类型，Xcode `-only-testing` 可分别选择各目标，实际发现的数量与静态 inventory 可解释地对应。
 3. **全链路验收**：分别执行 `make test`、`make test:ui`，按项目签名／构建要求核对完整退出状态、失败／跳过、CI Job 与本地可安全执行的针对性用例。关键 E2E 覆盖真实 App 输入到持久化／Git 结果，不能靠单位测试绿色。
 4. **最大全适用覆盖**：实施前逐域检查下述所有可达条件及安全可执行组合；不能因为典型路径通过就主动忽略可行的边界测试。每个无法实测的环境或操作逐项记录原因、已取得的替代证据、影响、补验条件与是否阻塞完整验收。
-5. **零迁移残留**：测试类引用、文件路径、`@testable`、旧 Scheme／CI 选择、Makefile 帮助、`AGENTS.md`、`docs/testing.md`、`docs/release.md`、`docs/development.md`、`CONTRIBUTING.md` 相关入口保持一致；产品代码只允许证据充分的 AX/测试隔离修正；全部不相关产品行为不变。
+5. **零迁移残留**：每个迁移 task 当场清理失效测试方法、fixture、CI 测试类名及对应文档引用，最终 `NativeUI/WorkspaceUI` 不再存在，`AGENTS.md`／`docs/testing.md`／`docs/release.md`／`CONTRIBUTING.md` 与实际两个 Target 一致。现有业务代码、必要 AX 语义、配置与数据保护不变。
 
 ### 全条件核对范围（执行前逐项展开，非抽样上限）
 

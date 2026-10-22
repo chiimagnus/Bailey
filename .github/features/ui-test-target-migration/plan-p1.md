@@ -1,100 +1,77 @@
-# Plan P1 — 固定迁移证据与安全测试边界
+# Plan P1 — 分类核销与可靠的 UI Test 基础
 
-**Goal:** 把 329 条旧 UI 保障、306 条现存非 UI 保障和原有 10 条 XCUITest 纳入可核销基线；先验证真实 App 测试能安全、可重复地执行，再允许任何旧测试删除。
+**Goal:** 在不动产品功能和用户 Bailey 的前提下，确认当前 329 条旧 UI、306 条 Unit/Integration 和 10 条 XCUITest 的断言职责；修复现有 UI Runner 的实际失败点，为 P2–P4 的逐项迁移建立可信起点。
 
-**Non-goals:** 本阶段不为了“目录变干净”提前删 NativeUI／WorkspaceUI；不迁移具体编辑器、Git 或工作区功能，不改变正式 Bailey 用户行为。
+**Non-goals:** 不在本阶段删除尚未被替代的原生测试；不新增 UI 自动化框架、另一套 App 身份、生产测试后门或独立配置状态机。
 
-**Approach:** 以源码、`Bailey.xcodeproj`、两个 Scheme、`Makefile`、CI 和 `docs/testing.md` 为依据，逐方法核对测试当前证明了什么。只用现有 `XCUIApplication` 和隔离参数；对于不能跨进程观测的内部信息，先做小规模可行性试验并记录可验证边界，再把迁移责任交给 P2–P4。
+**Approach:** 逐方法读现有 XCTest 的输入、动作、断言与 fixture；按断言而非目录和 `import AppKit` 判定 UI／非 UI 归属。测试运行沿用现有 `BaileyUITests`、两个 Scheme、Makefile 和 CI。TextKit、Diff、Git Graph 等内部可观测性由负责迁移的 P2–P4 任务当场验证，不另设跨领域预研。
 
-**Acceptance:**
-- `migration-inventory.md` 逐方法覆盖 329 条（23 个旧 suite）、对另 306 条作目录内审查、列出既有 10 条 E2E；同名冲突与动态发现差异均核实。
-- 每条旧保障都被判为「UI」、「非 UI」或「两者拆分」，关联负责 task、最终可观察结果和拟保留的模型不变量；分类有旧断言事实，不以文件名猜测。
-- 独立 App 测试的启动、文件选择器、Git fixture、AX、teardown、安全检查可以由专属 GUI Runner 真实验证；失败留证，不用跳过或任意等待掩盖。
-- AppKit 专属输入、渲染、焦点、对象身份和跨进程恢复有已实证可行的验收方式或明确未解阻塞，不能宣称 XCUITest 天然一比一替代所有原生断言。
+**Acceptance:** 329 条方法 0 遗漏且已有任务归属；306 条非 UI 方法的 UI 混入边界明确；10 条现有 UI 用例有独立 Runner 的实际结果；所有新旧测试未因本阶段丢失断言。完成前须说明未实测场景，不拿编译冒充 E2E。
 
-**Rules:** 不终止／重启现用正式 App；CI 上运行 App 同 Bundle ID 只能在专用 Runner；每条迁移链的旧用例在对应新覆盖验证完成前必须保留。仅修改需要证明的测试基础设施，不引入新产品级测试后门。
+**Rules:** 运行中的正式 Bailey 不退出、不重启、不覆盖。保留必要的 `BaileyInstanceMode`、`SessionStore.localFile`、保存失败保护及 SSH 目标校验。新增生产 AX 语义只为现有真实控件负责，不用虚假测试控件。
 
 ---
 
 <a id="p1-t1"></a>
 
-## P1-T1 核销源测试集合与全部断言归属
+## P1-T1 按方法核对旧测试与行为归属
 
-**Files:** `BaileyTests/{Unit,Integration,NativeUI,WorkspaceUI}/**/*Tests.swift`、`BaileyUITests/**/*Tests.swift`；更新 `migration-inventory.md`（计划内证据）。以 `Bailey.xcodeproj/project.pbxproj` 的实际目标成员与 `Bailey.xcscheme`／`Bailey-UI.xcscheme` 的测试发现为准。
+**Files:** `BaileyTests/{NativeUI,WorkspaceUI}/**/*Tests.swift`，`BaileyUITests/**/*Tests.swift`；实施证据补入 `migration-inventory.md`，并核对 `Bailey.xcodeproj/project.pbxproj` 和两个 Scheme。
 
-**Step 1 — 枚举与源事实：**
-- 重新枚举所有目录、测试类、`func test*`，并检查测试 target 实际运行发现列表、重复命名、Swift Testing `@Test`、跳过／禁用标志，记录二者差异。当前静态参照为 NativeUI 275、WorkspaceUI 54、Unit 75、Integration 231、UITests 10；不可把静态数直接称作已执行数。
-- **逐方法**阅读 329 条原用例的真实 arrange／act／assert 和共用 fixture，登记「真实触发条件 → 旧断言 → 目标不变量 → 最终观察 → 目标 task」。核查相同语义由不同方法重复覆盖还是有不同异常维度；允许多个旧方法映射一个更强的 E2E，但要逐行注明被保留的边界。
-- 审查原有 10 条 UI 方法的断言强度与前置条件，不因它们位于 UI Target 就默认满足同名旧保障。
-- 在 `migration-inventory.md` 每个旧方法的执行证据位置注明最终分类与后续替代用例；方法删除前必须补齐方法级链接／验收证据，不能仅填目标目录。
+**Why:** 当前 329 条方法按名称和所在文件已在 [清单](migration-inventory.md) 中登记，但初次盘点并不等于已读取每条原断言；直接搬目录会丢掉原生组件、Git 后端及异步失败边界。
 
-**Step 2 — 路径与阶段核对：**
-- 按已知调用路径追查 `SourceTextEditor`／`NativeCodeTextView`、`FileViewerView`／`PaneTab`、`DiffViewerView`、`GitPanel`／`RecentCommitsView`、`TreeRowStyle`、`WorkspaceWindowModel`／`WorkspaceApplication` 与 Finder／Settings／SessionStore。确认 UI 局部内部状态属于被测产品，非 UI 字节、算法与后端可以直接由 `BaileyTests` 验证。
-- 查整个 `BaileyTests` 的隐藏 UI 装配（参见 P1-T3），新需求影响前述数量时同步更新清单与任务负责范围。
+**Steps:**
+1. 逐个读取 23 个源文件中的 329 个方法及它们实际调用的 helper；确认每个旧输入/触发、用户结果、内部不变量、错误/取消、生命周期与临时夹具。核对实际测试发现（不只统计 `func test*`）、动态跳过、同名方法及可能的新版本文件；并核对当前 10 个 `BaileyUITests` 的真实断言，而非仅名称。
+2. 逐项决定：A. 用户操作 → 跨进程真实 UI；B. 字节、数据、Git/解析/坐标/状态 → `Unit/Integration`；C. 两种都需要 → 拆分。允许几个旧方法映射一个更强的测试，但要逐条记录每个边界如何保留；不能因“未来会有 UI Test”提前删除原断言。
+3. 根据当前真正的入口确认负责人：Editor/NativeCodeTextView → P2、GitPanel/RecentCommitsView → P3、FileTreePanel/WorkspaceApplication/WorkspaceWindowModel → P4。其它隐藏 GUI 混入由 P1-T3 负责，避免 P1 同一测试重复登记。
 
-**Step 3 — 验证与门槛：**
-- 在本机仅执行只读源码清点／Xcode 测试枚举，不启动 XCUITest；必要时用脚本比较「旧完整类.方法集合」与本清单行集合，必须 0 缺失、0 重复、0 无 task；核查原有 10 条与 Xcode target 发现值。
-- Coverage：各业务模块中的正常／错误／取消／重复／晚到、长输入／空输入以及专用 fixture 是否确实触发；至少记录每一方法受测状态与可触达的后果。
-- Uncovered：静态审查不能证明真实界面，P1-T2 后获取 GUI 证据；最低 15.6 与硬件输入证据按 `idea.md` 的补验条件单独登记。
-- 本 task 是基线证据，不删产品／测试源码；对照结果与方法映射作为交付，不伪造 Red／Green 或产品构建。
+**Verification:** 当前源码静态枚举与 Xcode 实际测试发现的名称/数量交叉核对；清单中 329 个旧 `Class.method` 都有唯一的 P2/P3/P4 task，源与清单双向差集均为空。当前 CI/本机执行条件、不能实测的环境逐项说明。此任务只出分类证据，不强行制造 Red/Green、删除源代码或进行 UI 自动化。
+
+**Cleanup/doc owner:** 发现真正重复的计划条目立即合并，不另建实时任务表；产品/测试旧代码由相应 P2–P4 任务在替代测试通过的同一次提交删除。此次只更新 Feature 清单。
+
+---
 
 <a id="p1-t2"></a>
 
-## P1-T2 稳定独立 UI Runner 和现有十条真实路径
+## P1-T2 修复独立 Runner 和现有十条真实 UI 路径
 
-**Files:** `BaileyUITests/Support/WorkspaceUITestSupport.swift`、现有 `BaileyUITests/{Files,Git,Workspace}/*UITests.swift`、`Bailey/Workspace/SessionStore.swift`、`Bailey/App/BaileyApp.swift`；需要时仅调整 `Bailey.xcodeproj`、`Bailey-UI.xcscheme` 和 `Makefile` 的真实执行入口。测试规范触发时同步 `docs/testing.md`、CI 约束触发时同步 `docs/release.md`。
+**Files:** `BaileyUITests/Support/WorkspaceUITestSupport.swift`、现有 `BaileyUITests/{Files,Git,Workspace}/*UITests.swift`；必要时 `Bailey/Shared/Tree/TreeRowStyle.swift`、`Bailey/UI/Components/WorkspaceChrome.swift`、`Bailey/UI/ContentView.swift`、`Bailey.xcodeproj`、`Makefile`。验证方式改变即同步 `docs/testing.md`／`docs/release.md`。
 
-**Step 1 — 先复现实证问题：**
-- 在有专用 GUI 的隔离 CI Runner 上执行现有 10 条（逐条和全组），明确 `XCUIApplication.launch`、teardown、macOS 原生 Open/Add Panel、Go to Folder、Finder／AX 查询、Git fixture branch／history、焦点恢复、窗口数量、Cmd-S 磁盘字节、Cmd-O 同文件去重的实测结果。过往 “OpenPanel 按钮命中 Touch Bar”“AX 绝对路径超过 128”“Graph 未找到提交”是排查线索，不预判最新 `main` 已修好。
-- 阅读 `WorkspaceUITestSupport.choose/addFolder/fileRow/fileTab` 与生产 `WindowRootView`、`WorkspaceDockView`、`TreeRowStyle` 的真实可达链。定位失败是运行器前提、文件选择器、AX 可访问性、夹具仓库未激活还是产品问题；任何新失败须先复现并归责，不先加 `sleep`。
+**Why / verified risk:**
+- 现有 `fileRow(_:,in:)` 搜索全 App 中标识相同的 `bailey.tree.file`，只以 `lastPathComponent` 模糊匹配；Files/Git 并列、两个目录同名文件时可能拿到错误区域和对象。`fileTab` 同样只用 basename；不能以 `firstMatch` 存在证明来源正确。
+- 既有 Sheet 操作写死 `Add/Open/Cancel` 文案，系统语言或 Touch Bar 重名可能破坏测试选择。旧的 AX 全路径标识已遇到 128 字符限制；应按真正控件/窗口做可靠查询，不增加隐藏测试 UI。
+- `WorkspaceUITestSupport.launch` 已注册 App teardown，多数具体用例又在 `defer` 中 `app.terminate()`。核对正常/异常/断言失败的实际资源归属，只保留必需的一份关闭逻辑，不制造新的保护层。
+- `--isolated-ui-test` 仅隔离快照与终端历史并禁启保存的隧道；`AppIdentity.configDirectory` 实际为 `FileManager.default.homeDirectoryForCurrentUser/.config/bailey`。本机已核验：仅给 `HOME` 赋临时值不改变该 Foundation 路径。因此修改设置的 UI 测试只在真正独立的 CI 用户/系统账户运行并验证写入归属，用户本机不执行。
 
-**Step 2 — 最小改动与保持：**
-- 保留 `make test:ui` 的 `pgrep -x bailey` 防护，启动仅使用真实 App 与当前隔离标志；测试里的 `defer`／`addTeardownBlock` 负责关闭**本次测试持有**的 App 和临时文件，不允许误杀正式 Bailey。构建用 `make build:ui`，本机存在 Bailey 时不启动 UI 自动化。
-- 用已有 `XCUIElement`/稳定 AX ID、真实菜单／键盘／文件选择器；必要时修复产品控件的**真实无障碍语义**，不添加隐形测试按钮、模型直通通道或额外测试 Bundle ID。
-- 先验证 `--isolated-ui-test` 和 `BAILEY_UI_TEST_RUN_ID` 对快照、历史、隧道的隔离范围；测试会改变普通设置时在专用 HOME／账户、真实配置路径下先证明隔离生效，否则拒绝执行该测试，不得污染用户全局配置。
-- Git／文件／重启 fixture 均设唯一临时目录和可证明的状态，取消、异常、重新启动和 TestCase 失败必须清理属于自己的产物。错误抓取 App 层级、截图、最终磁盘/Git 状态而非把错误跳过。
+**Steps:**
+1. 保留现有 `make test:ui` 的 `pgrep -x bailey` 安全拒绝；专用 CI GUI Runner 从真实 `XCUIApplication.launch()` 开始依次执行原 10 项，核验原生文件选择器、项目载入、文件 Tab/真实保存、Palette 焦点、Git history/Changes、多窗和 Settings 只读入口。先用 fixture 建好仓库并检查分支、commit 和实际文件，失败要有精准诊断，不能通过加 `sleep` 或 `XCTSkip` 隐藏。
+2. 用实际面板/列表/窗口限定 AX 查询，验证不同目录同名、Files 与 Git 同时展示、两个 Tab 同名、超长/Unicode 路径及目标选择准确；需要时补充不含绝对路径的真实 AX 语义。系统文件选择器须在所附 Sheet 和当前语言中操作，不能命中其他窗口的同名按钮。
+3. 统一本次 UI 测试拥有的 App、fixture 和 git 子进程的 teardown；失败也清理本次对象，不结束同 Bundle ID 的用户进程。`BAILEY_UI_TEST_RUN_ID` 明确用于有意重启恢复，同一次测试内复用；独立用例之间不同 UUID。
+4. 本任务修掉的旧 helper、重复 teardown、无效测试查询或过时 fixture 在同一提交直接移除；不能留到 P5。保留产品当前有效的数据保护守卫。
 
-**Step 3 — 验证：**
-- Build（不会启动）：`make build:ui SIGNING=adhoc DERIVED_DATA=build/DerivedData-<独占任务名>`；GUI（专用 Runner）：`make test:ui SIGNING=adhoc`，单例隔离以及逐类 `-only-testing:BaileyUITests/<类名>` 的实际运行、失败与 0 skipped 均记录。两目标测试选择语义参照 Xcode 实际参数；避免重用其他任务 DerivedData。
-- Coverage：0／1／多窗、picker 选择／取消／错误路径／同名文件、空与真实历史 Git 仓库、长／特殊 Unicode 路径、重开文件、失败中途 cleanup、已运行同 Bundle ID 时明确拒绝；不会因追加重试将长路径失败隐藏。
-- Uncovered：共享桌面不可安全执行时该 GUI gate 阻塞本任务，提交只读诊断证据并明确要求独立 Runner，不将编译成功记作本任务的 GUI 通过。
-- 原有 10 个测试分别核销，缺陷先 Red→Green，修复测试基础设施时同步相关规范；验证后按仓库规则提交本任务生产/测试 diff（规划文档仍默认本地）。
+**Verification:** 本机只允许 `make build:ui SIGNING=adhoc`（Bailey 运行时不启动 UI Test）；专用 Runner 跑 `make test:ui SIGNING=adhoc` 和相应 `ONLY_TESTING=BaileyUITests/WorkspaceFilesUITests`／Git/Windows/Smoke 定点选择，核对完整命令退出状态、用例实际发现、0 意外 skipped。遍历本任务实际可达的空/非空项目、长/重名路径、文件选择器确认/取消、同名跨组、不同语言窗口、脏数据写盘、重复打开、失败清理与现有 Bailey 进程安全拒绝。无法安全自动操作的真 GUI/系统权限逐项说明原因、替代证据及 Gate，不把 `build-for-testing` 称为 E2E。
+
+---
 
 <a id="p1-t3"></a>
 
-## P1-T3 清理 Unit／Integration 的 UI 污染边界，保留逻辑价值
+## P1-T3 核对 Unit/Integration 中混入的原生 UI 用例
 
-**Files:** `BaileyTests/Unit` 8 个源文件、`BaileyTests/Integration` 20 个源文件，重点 `BaileyTests/Integration/Workspace/SessionStoreTests.swift` 与 `BaileyTests/Integration/Settings/AppSettingsTests.swift`；对应 `Bailey/Workspace/SessionStore.swift`、`Bailey/App/AppSettings.swift`；测试发现由 `Bailey.xcodeproj/project.pbxproj` 支持。
+**Files:** `BaileyTests/Unit`（8 文件、75 方法）、`BaileyTests/Integration`（20 文件、231 方法）；重点 `BaileyTests/Integration/Workspace/SessionStoreTests.swift` 与 `BaileyTests/Integration/Settings/AppSettingsTests.swift`，必要的源锚点 `Bailey/Workspace/SessionStore.swift`、`Bailey/App/AppSettings.swift`。
 
-**Step 1 — 真实职责审查：**
-- 对 306 个测试方法及共享助手按断言分层，而非按目录名：真实 `NSWindow/NSHostingView`、AppKit `firstResponder`、鼠标键盘、视图像素、UI Sheet 归 UI；JSON snapshot、Git 命令、file tree 数据、文本坐标、状态/Observation 属非 UI。仅 `import AppKit` 或读取颜色常量不自动意味着必须迁 UI。
-- `SessionStoreTests.testRealWindowRootRetainsItsRegistrationAndEditorAcrossViewConstruction` 与 `testClosedWindowCannotBeUsedForLateFileOperationErrors` 含真实原生装配，已交由 P4-T4 完整 E2E 验证；本 task 先证明它们混合了哪些纯恢复/归属不变量，P4-T4 负责实际搬离、删除旧 UI 路径。其余 SessionStore 十个方法和 `AppSettingsTests` 五个逐项核对是否仍直接依赖宿主窗口。
-- 若非 UI 断言被混在 UI 方法内，标注保留 `BaileyTests/Unit` 还是 `Integration` 的新类及实际源码路径；不为减少源码数量删掉断线、延迟、保存冲突等后端安全回归。
+**Why:** 迁移目标是两个纯职责 Target，而非只删除 `NativeUI`/`WorkspaceUI` 目录。`SessionStoreTests` 中有实际 `NSWindow`/`NSHostingView`。另经逐方法核对，`AppSettingsTests.testCheckoutConsentIsPersistedAndResetWithTemporaryConfig` 与 `testObservationTracksAllNativeTerminalSettingsWithTemporaryConfig` 的 teardown 访问/恢复共享 `NSApp.appearance`，后者还会经主题属性触发实际 App 外观副作用；即使没渲染测试窗口，也不能把它们当作纯粹无 UI 副作用测试。
 
-**Step 2 — 验证：**
-- 静态审查 28 个非 UI 类所有方法与导入/具体创建的对象，并核对运行时选择；验证目标定义为最终非 UI Target 没有 UI 事件／窗口渲染，不要求排斥 Foundation 之外的所有库。
-- GUI 依赖的拆除排在其负责的 P2–P4 task，**本 task 不能在证明替代前删原测试**；更新 `migration-inventory.md` 的 Integration 异常项和全部依赖。
-- Coverage：现有 Unit/Integration 成功／失败／混合异步/SSH 夹具、测试恢复导致的副作用、原生 AppSettings 测试的系统外观恢复；先确保独立模型逻辑覆盖仍可按类运行。Uncovered：P4-T4 前不能宣称整个 BaileyTests 已纯化，明确登记未完成项；不拿 P1 审查替代 P4 的真实删除。
+**Steps:**
+1. 核对全部 28 个 Unit/Integration 文件的 306 个方法及共享测试 helper，辨别窗口装配、原生输入、图形断言与纯 model/文件、Git/远端、配置/Observation。测试只引用 `NSColor` 或 Foundation 兼容类型，但不渲染/发事件时可保留在低层。
+2. 两条 `SessionStoreTests.testRealWindowRootRetainsItsRegistrationAndEditorAcrossViewConstruction`、`testClosedWindowCannotBeUsedForLateFileOperationErrors` 含原生窗口依赖：P4-T4 负责真实 App 替代与**同任务删除旧原生部分**，快照身份/退出队列逻辑留在非 UI Target。其他 8 项逐项查；`AppSettingsTests` 5 项中，保存/解析/Observation 断言保留非 UI，但 `NSApp.appearance` 的触发、全局修改与恢复要在 P4-T5 用隔离 CI 用户核对真实 Settings 应用效果，若纯配置测试可避免操作正式 GUI 状态，则从这两个低层方法中移除该不必要副作用，不能直接删除有意义的设置断言。
+3. 在 `migration-inventory.md` 的额外混入部分登记实际归属和消费任务，不额外维护第二张长表，也不要求把所有带 `@MainActor` 的非 UI 测试迁移。
 
-<a id="p1-t4"></a>
+**Verification:** 全部 28 个文件及运行发现集合核对；从旧类中识别的真 UI 操作都有关联 P2–P4 任务和删除条件，不能在 P1 清单调查后宣称最终纯净。非 UI 性能/错误/SSH/快照输入保留；有条件的真实 SSH tests 可以按环境明确跳过，**跳过不算对应真实远端通过**，不为让全量数字归零而删测试。
 
-## P1-T4 验证原生内部断言的跨进程等价证据可行性
-
-**Files:** 查 `BaileyTests/NativeUI/Editor/{EditorNavigationTests,EditorTextInputTests,SyntaxHighlightingTests}.swift`、`BaileyTests/NativeUI/Git/{DiffTabTests,RecentCommitsViewTests}.swift`、`BaileyTests/NativeUI/Workspace/PaneRetentionTests.swift`，产品锚点 `Bailey/Editor/{NativeCodeTextView,SourceTextEditor,SyntaxHighlighting}.swift`、`Bailey/Git/{RecentCommitsView,DiffNativeSurface}.swift`。
-
-**Step 1 — 明确要回答的问题：**
-- `XCUIApplication` 能否通过可见文本／可访问性、键盘、原生截图／录屏与外部磁盘／Git 结果直接证明 TextKit 2 的滚动/换行/焦点，IME 组合文本/Undo，Git Graph 颜色/图谱，Diff 删除行/分屏同步，以及关闭五编辑器后的资源释放？
-- 现存 XCTest 直接读 `NSTextView` 内部布局、颜色、对象指针、Parser captures、`WKWebView` 引用等，哪些可拆成**非 UI 算法和业务不变量**并由 Unit/Integration 保留，哪些必须由用户可见 E2E/人工输入取代？不得直接把 App 内私有指针泄露给 UI Test。
-- 对 AX／截图／图形像素的观测做最小演示：相同夹具同环境的前后对照、已知焦点错误或已知文字颜色差异能否被测试发现；测量是否稳定、是否会误把系统动画与光标闪烁作为回归。原生中文 IME、真实 Finder 拖放、macOS 15.6、物理触控板等未满足条件分别登记，不能用 `typeText` 伪装成系统输入法完整组合行为。
-
-**Step 2 — 实验验收与决策：**
-- 先保留原生守卫测试；用已存在的 10 条 E2E 和最小新增 UI 路径对照原子输出，证明方法可行后才给 P2–P4 拆迁。无需先开发新的生产 Framework／测试专用 Coordinator。
-- 为每项无法完整通过跨进程接口观测的旧保障，列出「现行原断言 → 可由纯逻辑守住的部分 → 可由真实 UI 守住的部分 → 不可验证的剩余差异、原因、补验方式与 Gate」。能力不明时不提前承诺已全自动化。
-- Coverage：浅/深主题、中文/英文、原生窗口尺寸极值、长行／Unicode／CRLF／组合输入／多窗／失败恢复、非运行状态资源回收与重启；具体受影响维度见 `idea.md`，有条件项逐一验证。没有硬件或授权的情况按项记录，而非静默跳过。
-- 本 task 的产物是经最小实验支撑的设计选择和证据，不能以 `make build:ui` 代替真实可行性结论；尚不启动 P2–P4 的迁移或删除。
+**Cleanup/doc owner:** 只更正归属与计划证据，P4-T4 与其它实际负责的迁移任务当场清理对应宿主 UI 代码，并同步 `docs/testing.md` 的分类说明。
 
 ---
 
 ## Phase Audit
 
-P1 各 task 完成后由 `executing-plans` 触发 `plan-task-auditor`，当时才生成 `audit-p1.md`。审核要求：329 方法对应 task 0 漏项、28 个非 UI 类审过，独立 Runner 与真实不可观测边界有可核验结果；任何前置安全缺陷仍未解决则 P2 不以 UI 全绿为基础。
+三项任务完成时才由执行工具生成阶段审查证据。核验 329 条源方法、306 条现有低层方法与 10 条现有 UI 用例的归属和实际 Runner 前置条件；明确哪个领域内部断言必须由 P2–P4 当场做等价性实验。阶段完成不等于 UI 迁移已完成。
