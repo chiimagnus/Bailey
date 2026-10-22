@@ -168,6 +168,8 @@ actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
 
 @MainActor
 final class GitStatusModelTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func wait(_ predicate: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(10)
         while !predicate() {
@@ -2183,6 +2185,77 @@ final class GitStatusModelTests: XCTestCase {
                        "Removing a Worktree must never remove its branch")
     }
 
+    func testWorktreeProtectionUsesEachContentsMachineInsteadOfItsProjectsMachine() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("bailey-混合-\(UUID())")
+        let tree = root.appendingPathComponent("checkout")
+        let alias = root.appendingPathComponent("alias")
+        try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: tree)
+        try Data("keep".utf8).write(to: tree.appendingPathComponent("file.txt"))
+        defer { try? FileManager.default.removeItem(at: root) }
+        for projectScope in ["local", "ssh:alpha"] {
+            for contentScope in ["local", "ssh:alpha", "ssh:beta"] {
+                for kind in ["file", "diff"] {
+                    let application = WorkspaceApplication()
+                    let window = application.makeWindow()
+                    defer { window.windowClosed() }
+                    let project = Project(fallbackName: "Mixed", workspaceConfiguration: .standard)
+                    project.customDirectory = root.appendingPathComponent("elsewhere").path
+                    project.sshHost = projectScope == "local" ? nil : "alpha"
+                    let identity = contentScope == "local" ? nil : contentScope
+                    let content: PaneContent
+                    switch kind {
+                    case "file":
+                        content = .file(FileTab(path: tree.appendingPathComponent("file.txt").path,
+                            backend: LocalWorkspaceBackend.shared, workspaceIdentity: identity))
+                    default:
+                        content = .diff(DiffTab(repoRoot: tree.path, path: "file.txt", source: .worktree,
+                            untracked: true, origPath: nil, backend: LocalWorkspaceBackend.shared,
+                            workspaceIdentity: identity))
+                    }
+                    project.tabs = [PaneTab(content: content)]
+                    window.projects = [project]
+                    for scope in ["local", "ssh:alpha", "ssh:beta"] {
+                        XCTAssertEqual(application.isWorktreeInUse(path: tree.path, scope: scope),
+                                       scope == contentScope, "\(projectScope), \(contentScope), \(kind), \(scope)")
+                    }
+                    XCTAssertFalse(application.isWorktreeInUse(path: tree.path + "-other", scope: contentScope))
+                    XCTAssertEqual(application.isWorktreeInUse(path: alias.path, scope: contentScope),
+                                   contentScope == "local")
+                }
+            }
+        }
+    }
+
+    func testFixedSSHTerminalWorktreeProtectionKeepsItsProjectsScope() throws {
+        let application = WorkspaceApplication()
+        let window = application.makeWindow()
+        defer { window.windowClosed() }
+        let project = Project(fallbackName: "Pinned SSH", workspaceConfiguration: .standard)
+        project.sshHost = "fixture-alias"
+        project.customDirectory = "/fixture/original"
+        window.projects = [project]
+        let session = project.newSession(launchCommand: "exec /bin/sh -i")
+        session.workingDirectory = "/fixture/other-worktree/subdirectory"
+        XCTAssertFalse(session.acceptsLocalFileDrop)
+        XCTAssertNil(session.workspaceIdentity)
+        XCTAssertEqual(project.panelContext?.scope, "ssh:fixture-alias")
+        for connected in [false, true] {
+            if connected {
+                let connection = RemoteConnection(user: "fixture", host: "fixture.invalid", port: 2222,
+                    controlSocket: URL(fileURLWithPath: "/tmp/bailey-unused-\(UUID())"), sshPID: 0)
+                connection.workingDirectory = session.workingDirectory
+                connection.markConnected()
+                session.location = .remote(connection)
+                XCTAssertNotEqual(session.workspaceIdentity, project.panelContext?.scope)
+            }
+            XCTAssertTrue(application.isWorktreeInUse(path: "/fixture/other-worktree", scope: "ssh:fixture-alias"))
+            XCTAssertFalse(application.isWorktreeInUse(path: "/fixture/other-worktree", scope: "local"))
+            XCTAssertFalse(application.isWorktreeInUse(path: "/fixture/other-worktree", scope: "ssh:other"))
+            XCTAssertFalse(application.isWorktreeInUse(path: "/fixture/other-worktree-copy", scope: "ssh:fixture-alias"))
+        }
+    }
+
     func testWorktreeInUseProtectsOpenProjectAndKeepsMachineAndSiblingPathsSeparate() throws {
         let fixture = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-worktree-in-use-" + UUID().uuidString)
@@ -2192,25 +2265,25 @@ final class GitStatusModelTests: XCTestCase {
         try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: fixture) }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([tree])
-        XCTAssertTrue(TerminalManager.isWorktreeInUse(path: tree.path, scope: "local"))
-        XCTAssertTrue(TerminalManager.isWorktreeInUse(
+        XCTAssertTrue(self.workspaceApplication.isWorktreeInUse(path: tree.path, scope: "local"))
+        XCTAssertTrue(self.workspaceApplication.isWorktreeInUse(
             path: tree.resolvingSymlinksInPath().path, scope: "local"
         ), "Equivalent /var and /private/var paths must identify the same checkout")
-        XCTAssertFalse(TerminalManager.isWorktreeInUse(path: sibling.path, scope: "local"))
-        XCTAssertFalse(TerminalManager.isWorktreeInUse(path: tree.path, scope: "ssh:windows"))
+        XCTAssertFalse(self.workspaceApplication.isWorktreeInUse(path: sibling.path, scope: "local"))
+        XCTAssertFalse(self.workspaceApplication.isWorktreeInUse(path: tree.path, scope: "ssh:windows"))
 
         manager.selectedProject?.sshHost = "windows"
         manager.selectedProject?.customDirectory = "/d/Github/bailey-test-worktree"
-        XCTAssertTrue(TerminalManager.isWorktreeInUse(
+        XCTAssertTrue(self.workspaceApplication.isWorktreeInUse(
             path: "/d/Github/bailey-test-worktree", scope: "ssh:windows"
         ))
-        XCTAssertFalse(TerminalManager.isWorktreeInUse(
+        XCTAssertFalse(self.workspaceApplication.isWorktreeInUse(
             path: "/d/Github/bailey-test-worktree", scope: "local"
         ))
-        XCTAssertFalse(TerminalManager.isWorktreeInUse(
+        XCTAssertFalse(self.workspaceApplication.isWorktreeInUse(
             path: "/d/Github/bailey-test-worktree-copy", scope: "ssh:windows"
         ))
     }
@@ -2273,7 +2346,7 @@ final class GitStatusModelTests: XCTestCase {
         _ = try git(["add", "tracked.txt"], in: other)
         try Data("other latest content\n".utf8).write(to: other.appendingPathComponent("tracked.txt"))
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([main])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -2377,7 +2450,7 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertNil(entry.diffOriginalPath(staged: false),
                      "The working tree must compare the renamed destination with its own index")
         let otherRoot = try git(["rev-parse", "--show-toplevel"], in: other)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([main])
         let project = try XCTUnwrap(manager.selectedProject)

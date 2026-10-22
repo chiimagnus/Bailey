@@ -28,9 +28,18 @@ enum FindAction {
 /// project's selected session.
 @MainActor
 @Observable
-final class TerminalManager {
+final class WorkspaceWindowModel {
     var projects: [Project] = [] {
-        didSet { requestSave() }
+        didSet {
+            for project in oldValue where !projects.contains(where: { $0 === project }) {
+                project.onSnapshotChange = nil
+                project.onPresentationWindow = nil
+            }
+            for project in projects where !oldValue.contains(where: { $0 === project }) {
+                bind(project)
+            }
+            requestSave()
+        }
     }
     var selectedProjectID: UUID? {
         didSet {
@@ -41,15 +50,10 @@ final class TerminalManager {
             requestSave()
         }
     }
-    /// Debug FPS badge in the Dock header. Deliberately not persisted:
-    /// every launch starts with it hidden.
-    var isFPSCounterVisible = false
     private(set) var isCommandPaletteVisible = false
 
     @ObservationIgnored private var projectCounter = 0
-    @ObservationIgnored private var pendingSave: Task<Void, Never>?
     @ObservationIgnored private var isInitialized = false
-    @ObservationIgnored private var terminationObservation: AnyCancellable?
     @ObservationIgnored private var windowCloseObservation: AnyCancellable?
     @ObservationIgnored private var didCloseWindow = false
     /// The stable terminal/editor responder displaced by the command palette's
@@ -63,18 +67,10 @@ final class TerminalManager {
     @ObservationIgnored private weak var window: NSWindow?
     var attachedWindow: NSWindow? { window }
 
-    /// Live managers in window-creation order; the persisted snapshot is
-    /// one entry per registered manager.
-    private static var registry: [TerminalManager] = []
-
     var hasUnsavedEditorsInWindow: Bool {
         projects.contains { project in
             project.tabs.contains { $0.content.isDirty }
         }
-    }
-
-    static var hasUnsavedEditors: Bool {
-        registry.contains { $0.hasUnsavedEditorsInWindow }
     }
 
     /// Both a single window close and full app termination must wait for the
@@ -90,127 +86,24 @@ final class TerminalManager {
         return !hasUnsavedEditorsInWindow
     }
 
-    static func saveBeforeTermination() async -> Bool {
-        for manager in registry {
-            guard await manager.saveBeforeWindowClose() else { return false }
-        }
-        // Recheck earlier windows after later windows finish their writes.
-        return !hasUnsavedEditors
-    }
-    /// Read-only access for the private, authenticated SSH handoff.
-    static var activeManagers: [TerminalManager] { registry }
+    let application: WorkspaceApplication
 
-    /// A worktree used by any live project, terminal, file or Diff tab is not
-    /// eligible for removal. Machine identity is part of every comparison.
-    static func isWorktreeInUse(path: String, scope: String) -> Bool {
-        func contains(_ candidate: String) -> Bool {
-            let root = scope == "local"
-                ? URL(fileURLWithPath: path).resolvingSymlinksInPath().path : path
-            let value = scope == "local"
-                ? URL(fileURLWithPath: candidate).resolvingSymlinksInPath().path : candidate
-            return LocalPathScope.contains(value, in: root)
-        }
-        return registry.contains { manager in
-            manager.projects.contains { project in
-                guard project.panelContext?.scope == scope else { return false }
-                if let directory = project.customDirectory,
-                   contains(directory) { return true }
-                if project.sessions.contains(where: { contains($0.panelDirectoryPath) }) {
-                    return true
-                }
-                return project.tabs.contains { tab in
-                    switch tab.content {
-                    case .file(let file):
-                        return (file.workspaceIdentity ?? "local") == scope
-                            && contains(file.path)
-                    case .diff(let diff):
-                        return (diff.workspaceIdentity ?? "local") == scope
-                            && contains(diff.repoRoot)
-                    case .session, .browser: return false
-                    }
-                }
-            }
-        }
+    /// Constructing a SwiftUI State value must not register or consume a saved window.
+    init(application: WorkspaceApplication) {
+        self.application = application
     }
 
-    /// Folder requests can arrive while macOS is still launching Bailey, before
-    /// a WindowGroup has produced a manager/window to receive them.
-    private static var pendingDirectories: [String] = []
-    /// System document events can precede SwiftUI windows and saved-window recovery.
-    /// Keep the request and its completion together until the actual receiving
-    /// window is ready; a queued event is not proof a file was opened.
-    private struct PendingExternalOpen {
-        let urls: [URL]
-        let preferred: TerminalManager?
-        let originalProjectID: UUID?
-        let destination: (projectID: UUID, groupID: UUID)?
-        let completion: (Bool) -> Void
-    }
-    private static var pendingExternalFiles: [PendingExternalOpen] = []
-    /// Captured from SwiftUI's openWindow environment so a Finder request can
-    /// reopen Bailey after the user has closed its last window.
-    private static var windowOpener: (() -> Void)?
-    /// Coalesces launch-time service requests while SwiftUI is still deciding
-    /// whether it will create the initial WindowGroup window itself.
-    private static var windowRequestScheduled = false
-    private static var isOpeningWindow = false
-    /// Window snapshots loaded from disk that no window has claimed yet.
-    /// Each new manager claims the next; extras beyond the saved count
-    /// start fresh.
-    private static var pendingRestores: [SessionSnapshot] = []
-    /// Terminal scrollback loaded from the sidecar store, keyed by the
-    /// `historyKey` each restoring session pane carries. Shared across windows
-    /// (keys are unique per pane), so restores read from it without consuming.
-    private static var pendingHistories: [String: String] = [:]
-    private static var hasLoadedStore = false
-    /// Set on app termination so window teardown can't re-save a partial
-    /// snapshot over the final full one.
-    private static var isQuitting = false
-    private static var didReopenWindows = false
+    var isClosed: Bool { didCloseWindow }
 
-    init() {
-        if !Self.hasLoadedStore {
-            Self.hasLoadedStore = true
-            Self.pendingRestores = SessionStore.load()
-            Self.pendingHistories = TerminalHistoryStore.load()
-        }
-        Self.registry.append(self)
-        if !Self.pendingRestores.isEmpty {
-            _ = restore(from: Self.pendingRestores.removeFirst())
-        }
-        // Only a window still claiming a snapshot reads the scrollback blobs,
-        // so once the last one is claimed they are dead weight — several
-        // hundred lines per restored session, held for the life of the process.
-        if Self.pendingRestores.isEmpty, !Self.pendingHistories.isEmpty {
-            Self.pendingHistories = [:]
-        }
-        let queuedDirectories = Self.takePendingDirectories()
-        addLocalFolders(queuedDirectories.map { URL(fileURLWithPath: $0, isDirectory: true) })
-        // The debounce can swallow changes made just before quitting;
-        // capture a final snapshot while the shells are still alive.
-        terminationObservation = NotificationCenter.default
-            .publisher(for: NSApplication.willTerminateNotification)
-            .sink { _ in
-                guard !TerminalManager.isQuitting else { return }
-                TerminalManager.isQuitting = true
-                TerminalManager.saveAll(captureTerminalHistory: true)
-            }
+    func finishRegistration(hasNewDirectories: Bool) {
         isInitialized = true
-        if !queuedDirectories.isEmpty { requestSave() }
+        if hasNewDirectories { requestSave() }
     }
 
-    /// Persist only changes to saved project/tab/layout content, not every UI redraw.
+    /// The application owns the coalesced timer and all registered windows.
     func requestSave() {
-        guard isInitialized, !Self.isQuitting else { return }
-        pendingSave?.cancel()
-        pendingSave = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(500)) }
-            catch { return }
-            guard let self, !Task.isCancelled,
-                  TerminalManager.registry.contains(where: { $0 === self }),
-                  !TerminalManager.isQuitting else { return }
-            TerminalManager.saveAll(captureTerminalHistory: false)
-        }
+        guard isInitialized else { return }
+        application.requestSave(from: self)
     }
 
     var selectedProject: Project? {
@@ -219,6 +112,15 @@ final class TerminalManager {
 
     var selectedSession: TerminalSession? {
         selectedProject?.selectedSession
+    }
+
+    /// The window supplies the current selection check without passing its
+    /// entire model into the Git domain or retaining it across async work.
+    func syncGitStatus(_ model: GitStatusModel) {
+        model.syncSelectedProject(project: selectedProject) { [weak self] project in
+            guard let self, !self.isClosed else { return false }
+            return self.selectedProject === project
+        }
     }
 
     // MARK: - Projects
@@ -347,7 +249,7 @@ final class TerminalManager {
             if let destination {
                 guard self.selectedProject?.dock.root.group(id: destination.groupID) != nil else { return }
             }
-            Self.openExternalFiles(urls, preferred: self, destination: destination)
+            application.openExternalFiles(urls, preferred: self, destination: destination)
         }
     }
 
@@ -448,203 +350,23 @@ final class TerminalManager {
         selectedProjectID = project.id
     }
 
-    /// Finder/Dock documents use the original file tab in any window, then the
-    /// receiving main window. Delay until all restored windows are registered
-    /// and attached so cold launch never creates a second writable buffer.
-    static func openExternalFiles(
-        _ urls: [URL], preferred: TerminalManager? = nil,
-        destination: (projectID: UUID, groupID: UUID)? = nil,
-        completion: @escaping (Bool) -> Void = { _ in }
-    ) {
-        guard !urls.isEmpty else { completion(false); return }
-        guard preferred == nil || preferred?.window != nil else {
-            completion(false)
-            return
-        }
-        pendingExternalFiles.append(.init(
-            urls: urls, preferred: preferred, originalProjectID: preferred?.selectedProjectID,
-            destination: destination, completion: completion
-        ))
-        deliverPendingExternalFiles()
-        requestWindowForPendingDirectories()
-    }
-
-    private static func deliverPendingExternalFiles() {
-        guard !pendingExternalFiles.isEmpty, pendingRestores.isEmpty,
-              registry.contains(where: { $0.window != nil })
-        else { return }
-
-        let requests = pendingExternalFiles
-        pendingExternalFiles = []
-        for request in requests {
-            if let preferred = request.preferred,
-               preferred.selectedProjectID != request.originalProjectID {
-                request.completion(false)
-                continue
-            }
-            // Not every manager in the process represents a window that will
-            // appear. Only defer for an unmounted owner of a requested file.
-            // Otherwise one unattached manager could block Finder permanently.
-            let requestedPaths = Set(request.urls.filter(\.isFileURL).map {
-                resolvedLocalPath($0.standardizedFileURL.path)
-            })
-            let awaitingOwner = registry.contains { manager in
-                manager.window == nil && manager.projects.contains { project in
-                    project.tabs.contains { tab in
-                        guard case .file(let file) = tab.content,
-                              file.workspaceIdentity == nil else { return false }
-                        return requestedPaths.contains(resolvedLocalPath(file.path))
-                    }
-                }
-            }
-            if awaitingOwner {
-                pendingExternalFiles.append(request)
-                continue
-            }
-            let defaultManager = request.preferred
-                ?? registry.first { $0.window != nil && $0.window === NSApp.keyWindow }
-                ?? registry.first { $0.window != nil && $0.window === NSApp.mainWindow }
-                ?? registry.last { $0.window != nil }
-            guard let defaultManager, defaultManager.window != nil else {
-                request.completion(false)
-                continue
-            }
-            // Group by the actual owning window, including interleaved existing files.
-            var groups: [(manager: TerminalManager, urls: [URL], lastIndex: Int)] = []
-            for (index, url) in request.urls.enumerated() {
-                let resolved = url.isFileURL
-                    ? resolvedLocalPath(url.standardizedFileURL.path) : nil
-                let alreadyOpen = resolved.flatMap { path in
-                    registry.first { manager in
-                        manager.projects.contains { project in
-                            project.tabs.contains { tab in
-                                guard case .file(let file) = tab.content,
-                                      file.workspaceIdentity == nil else { return false }
-                                return resolvedLocalPath(file.path) == path
-                            }
-                        }
-                    }
-                }
-                let target = alreadyOpen ?? defaultManager
-                if let position = groups.firstIndex(where: { $0.manager === target }) {
-                    groups[position].urls.append(url)
-                    groups[position].lastIndex = index
-                } else {
-                    groups.append((manager: target, urls: [url], lastIndex: index))
-                }
-            }
-            // The final input determines focus, including interleaved files
-            // that were already open in two other windows.
-            groups.sort { $0.lastIndex < $1.lastIndex }
-            var handled = false
-            var lastReceiver: TerminalManager?
-            for group in groups {
-                let groupDestination = group.manager === request.preferred ? request.destination : nil
-                let rejected = group.manager.openExternalLocalItems(
-                    group.urls, destination: groupDestination
-                )
-                handled = handled || rejected.count < group.urls.count
-                if let owner = group.manager.window, !rejected.isEmpty {
-                    let message = group.manager.selectedProject == nil
-                        ? String(localized: "Add a project folder before opening files.", table: "Interface")
-                        : String(localized: "Some files or folders could not be opened in Bailey.", table: "Interface")
-                    let details = rejected.map(\.lastPathComponent).joined(separator: "\n")
-                    let error = NSError(domain: "Bailey.Finder", code: 1, userInfo: [
-                        NSLocalizedDescriptionKey: message,
-                        NSLocalizedRecoverySuggestionErrorKey: details,
-                    ])
-                    WorkspaceNativeDialogs.showError(error, in: owner)
-                }
-                if rejected.count < group.urls.count { lastReceiver = group.manager }
-            }
-            if handled {
-                NSApp.activate()
-                lastReceiver?.window?.makeKeyAndOrderFront(nil)
-            }
-            request.completion(handled)
-        }
-    }
-
-    /// Routes folders from the Finder service into the active Bailey window.
-    /// If no window exists yet, the next WindowGroup manager claims them.
-    static func openDirectories(_ directories: [String]) {
-        guard !directories.isEmpty else { return }
-        let manager = registry.first { $0.window != nil && $0.window === NSApp.keyWindow }
-            ?? registry.first { $0.window != nil && $0.window === NSApp.mainWindow }
-            ?? registry.last { $0.window != nil }
-        guard let manager else {
-            pendingDirectories.append(contentsOf: directories)
-            requestWindowForPendingDirectories()
-            return
-        }
-
-        manager.addLocalFolders(
-            directories.map { URL(fileURLWithPath: $0, isDirectory: true) }
-        )
-        manager.window?.makeKeyAndOrderFront(nil)
-    }
-
     /// Called as soon as SwiftUI gives this manager an AppKit window. A
     /// launch-time Finder request may have been queued before that happened.
     func attach(to window: NSWindow) {
         guard !didCloseWindow else { return }
+        application.register(self)
         if self.window !== window {
             windowCloseObservation = NotificationCenter.default
                 .publisher(for: NSWindow.willCloseNotification, object: window)
                 .sink { [weak self] _ in self?.windowClosed() }
         }
         self.window = window
-        Self.isOpeningWindow = false
-        let directories = Self.takePendingDirectories()
-        addLocalFolders(directories.map { URL(fileURLWithPath: $0, isDirectory: true) })
-        if !directories.isEmpty {
-            window.makeKeyAndOrderFront(nil)
-        }
-        Self.deliverPendingExternalFiles()
+        application.didAttach(self)
     }
 
-    private static func takePendingDirectories() -> [String] {
-        let directories = pendingDirectories
-        pendingDirectories = []
-        return directories
-    }
-
-    /// Installs SwiftUI's WindowGroup opener before any window needs to appear.
-    /// Commands are constructed during app launch even when macOS starts Bailey
-    /// solely to handle a service request.
-    static func registerWindowOpener(_ open: @escaping () -> Void) {
-        windowOpener = open
-        deliverPendingExternalFiles()
-        requestWindowForPendingDirectories()
-    }
-
-    private static func requestWindowForPendingDirectories() {
-        guard (!pendingDirectories.isEmpty || !pendingExternalFiles.isEmpty),
-              !registry.contains(where: { $0.window != nil }),
-              !windowRequestScheduled,
-              !isOpeningWindow
-        else { return }
-
-        windowRequestScheduled = true
-        // Give SwiftUI's normal cold-launch window one turn to attach first.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            windowRequestScheduled = false
-            guard (!pendingDirectories.isEmpty || !pendingExternalFiles.isEmpty),
-                  !registry.contains(where: { $0.window != nil }),
-                  !isOpeningWindow
-            else { return }
-
-            isOpeningWindow = true
-            if let window = NSApp.windows.first(where: {
-                $0.identifier?.rawValue.hasPrefix("main") == true
-            }) {
-                window.makeKeyAndOrderFront(nil)
-            } else if let windowOpener {
-                windowOpener()
-            } else {
-                isOpeningWindow = false
-            }
-        }
+    private func bind(_ project: Project) {
+        project.onSnapshotChange = { [weak self] in self?.requestSave() }
+        project.onPresentationWindow = { [weak self] in self?.attachedWindow }
     }
 
     private func makeProject() -> Project {
@@ -653,7 +375,6 @@ final class TerminalManager {
             fallbackName: "Project \(projectCounter)",
             workspaceConfiguration: AppSettings.shared.workspaceConfiguration
         )
-        project.onSnapshotChange = { [weak self] in self?.requestSave() }
         return project
     }
 
@@ -697,7 +418,6 @@ final class TerminalManager {
     private func remove(_ project: Project) {
         guard let index = projects.firstIndex(where: { $0.id == project.id }) else { return }
         projects.remove(at: index)
-        project.onSnapshotChange = nil
         // A dismissed SwiftUI host may still cache this Project; its retired
         // editors must no longer be owned by the removed project's tab array.
         project.tabs.removeAll()
@@ -768,35 +488,6 @@ final class TerminalManager {
                 project.selectTab(tab.id)
                 return
             }
-        }
-    }
-
-    private static func location(forSession id: UUID) -> (manager: TerminalManager, project: Project, session: TerminalSession)? {
-        for manager in registry {
-            for project in manager.projects {
-                if let session = project.sessions.first(where: { $0.id == id }) {
-                    return (manager, project, session)
-                }
-            }
-        }
-        return nil
-    }
-
-    static func projectName(forSession id: UUID) -> String? {
-        location(forSession: id)?.project.name
-    }
-
-    /// Activates Bailey and reveals the session that emitted a desktop
-    /// notification. If the session has closed, still bring the app forward.
-    static func revealSession(id: UUID) {
-        NSApp.activate()
-        if let location = location(forSession: id) {
-            location.manager.revealSession(location.session)
-            location.manager.window?.makeKeyAndOrderFront(nil)
-            return
-        }
-        if let manager = registry.first(where: { $0.window != nil }) {
-            manager.window?.makeKeyAndOrderFront(nil)
         }
     }
 
@@ -978,10 +669,6 @@ final class TerminalManager {
 
     // MARK: - Panels & appearance
 
-    func toggleFPSCounter() {
-        isFPSCounterVisible.toggle()
-    }
-
     func toggleCommandPalette() {
         if isCommandPaletteVisible {
             dismissCommandPalette()
@@ -1122,27 +809,6 @@ final class TerminalManager {
         }
     }
 
-    /// Flushes the complete multi-window snapshot before Settings starts a
-    /// replacement app instance for a language change.
-    static func saveForRelaunch() {
-        saveAll(captureTerminalHistory: true)
-    }
-
-    /// After the first window appears, reopen one window per unclaimed
-    /// saved snapshot; each new window's manager claims the next one.
-    /// Deferred a runloop tick so windows the system itself restores can
-    /// claim theirs first.
-    static func openRestoredWindows(_ open: @escaping () -> Void) {
-        registerWindowOpener(open)
-        guard !didReopenWindows else { return }
-        didReopenWindows = true
-        DispatchQueue.main.async {
-            for _ in 0..<pendingRestores.count {
-                open()
-            }
-        }
-    }
-
     /// Called when this manager's window closes: drop it from the
     /// persisted set — except for the last window, whose snapshot is kept
     /// saved and queued so reopening (or relaunching) restores it — and
@@ -1151,28 +817,9 @@ final class TerminalManager {
         guard !didCloseWindow else { return }
         didCloseWindow = true
         windowCloseObservation = nil
-        // A pending async Files error must not bring back the closed window.
         window = nil
-        // A drop tied to a closing window must never reappear in another one.
-        let abandoned = Self.pendingExternalFiles.filter { $0.preferred === self }
-        Self.pendingExternalFiles.removeAll { $0.preferred === self }
-        for request in abandoned { request.completion(false) }
-        guard !Self.isQuitting else { return }
-        pendingSave?.cancel()
-        Self.registry.removeAll { $0 === self }
-        if Self.registry.isEmpty {
-            // These shells are about to be destroyed, so this is their final
-            // capture even though the macOS app may remain open with no window.
-            let window = makeWindowSnapshot(captureTerminalHistory: true)
-            // Last window: keep its snapshot and scrollback saved and queued so
-            // reopening (or relaunching) restores them.
-            SessionStore.save([window.snapshot])
-            TerminalHistoryStore.save(window.histories)
-            Self.pendingRestores = [window.snapshot]
-            Self.pendingHistories = window.histories
-        } else {
-            Self.saveAll(captureTerminalHistory: false)
-        }
+        application.windowClosed(self)
+        guard !application.isQuitting else { return }
         for project in projects {
             project.terminateAll()
         }
@@ -1182,26 +829,11 @@ final class TerminalManager {
 
     // MARK: - Persistence
 
-    private static func saveAll(captureTerminalHistory: Bool) {
-        guard !registry.isEmpty else { return }
-        var snapshots: [SessionSnapshot] = []
-        var histories: [String: String] = [:]
-        for manager in registry {
-            let window = manager.makeWindowSnapshot(
-                captureTerminalHistory: captureTerminalHistory
-            )
-            snapshots.append(window.snapshot)
-            histories.merge(window.histories) { _, new in new }
-        }
-        SessionStore.save(snapshots)
-        TerminalHistoryStore.save(histories)
-    }
-
     /// Builds this window's layout snapshot and, alongside it, the scrollback
     /// to persist for its sessions. Each captured session gets a fresh
     /// `historyKey` stored on both sides so restore can pair them; sessions
     /// with no history (feature off, empty, or unserializable) get no key.
-    private func makeWindowSnapshot(
+    func makeWindowSnapshot(
         captureTerminalHistory: Bool
     ) -> (snapshot: SessionSnapshot, histories: [String: String]) {
         typealias ProjectSnapshot = SessionSnapshot.ProjectSnapshot
@@ -1281,7 +913,7 @@ final class TerminalManager {
     }
 
     /// Rebuilds projects and tabs from the saved window snapshot.
-    private func restore(from snapshot: SessionSnapshot) -> Bool {
+    func restore(from snapshot: SessionSnapshot, histories: [String: String]) -> Bool {
         for saved in snapshot.projects {
             let project = makeProject()
             project.customName = Project.normalizedCustomName(saved.customName)
@@ -1290,7 +922,7 @@ final class TerminalManager {
             project.pinnedFile = saved.pinnedFile
             var restoredContexts: [(tab: PaneTab, sessionIndex: Int)] = []
             for savedTab in saved.tabs {
-                let tab = project.restoreTab(from: savedTab, histories: Self.pendingHistories)
+                let tab = project.restoreTab(from: savedTab, histories: histories)
                 if let sessionIndex = savedTab.contextSessionIndex {
                     restoredContexts.append((tab, sessionIndex))
                 }

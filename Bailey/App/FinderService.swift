@@ -5,20 +5,25 @@ import Carbon
 /// Info.plist; AppKit forwards matching service requests to this object.
 @MainActor
 final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
+    let workspace = WorkspaceApplication(loadSavedState: true)
     private var preparingToQuit = false
 
     /// Let AppKit finish quitting only after all edited files were written.
     /// A failed SSH or local save cancels termination and retains the editor.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard TerminalManager.hasUnsavedEditors else { return .terminateNow }
+        guard workspace.hasUnsavedEditors else { return .terminateNow }
         guard !preparingToQuit else { return .terminateLater }
         preparingToQuit = true
         Task { @MainActor in
-            let saved = await TerminalManager.saveBeforeTermination()
+            let saved = await workspace.saveBeforeTermination()
             preparingToQuit = false
             sender.reply(toApplicationShouldTerminate: saved)
         }
         return .terminateLater
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        workspace.willTerminate()
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -47,7 +52,7 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
         let urls = Self.documentURLs(
             from: event.paramDescriptor(forKeyword: keyDirectObject)
         )
-        TerminalManager.openExternalFiles(urls)
+        workspace.openExternalFiles(urls)
     }
 
     static func documentURLs(from fileList: NSAppleEventDescriptor?) -> [URL] {
@@ -71,7 +76,7 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
         }
 
         NSApp.activate()
-        TerminalManager.openDirectories(directories)
+        workspace.openDirectories(directories)
     }
 
     private static func directories(from pasteboard: NSPasteboard) -> [String] {

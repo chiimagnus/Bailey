@@ -5,6 +5,8 @@ import XCTest
 
 @MainActor
 final class GitExternalRefreshTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func wait(
         seconds: TimeInterval = 10, until condition: () -> Bool
     ) async throws {
@@ -27,11 +29,11 @@ final class GitExternalRefreshTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([directory])
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait { model.hasResolvedStatus && !model.isRefreshing && !model.isRepo }
 
         let window = NSWindow(
@@ -103,11 +105,11 @@ final class GitExternalRefreshTests: XCTestCase {
         git(["tag", "v0.1"])
         git(["update-ref", "refs/remotes/origin/main", "HEAD"])
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait { model.hasResolvedStatus && !model.isRefreshing && model.isRepo }
         let oldHead = try XCTUnwrap(model.recentCommits.first?.hash)
         XCTAssertEqual(model.recentCommits.first?.parentHashes.count, 2)
@@ -171,8 +173,7 @@ final class GitExternalRefreshTests: XCTestCase {
             print("Git refresh diagnostic: expected HEAD=\(newHead) actual HEAD=\(model.headOID ?? "nil") "
                 + "recent=\(model.recentCommits.first?.hash ?? "nil") "
                 + "refreshing=\(model.isRefreshing) repo=\(model.isRepo) "
-                + "scope=\(model.currentScope) statusError=\(model.statusError ?? "nil") "
-                + "NSApp.isActive=\(NSApp.isActive)")
+                + "scope=\(model.currentScope) statusError=\(model.statusError ?? "nil")")
             throw error
         }
         let historyLatency = Date().timeIntervalSince(historyStart)
@@ -226,7 +227,7 @@ final class GitExternalRefreshTests: XCTestCase {
         let secondHead = secondGit(["rev-parse", "HEAD"])
 
         manager.addLocalFolders([second])
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait {
             model.rootPath == second.path && model.hasResolvedStatus
                 && !model.isRefreshing && model.recentCommits.first?.hash == secondHead
@@ -270,7 +271,7 @@ final class GitExternalRefreshTests: XCTestCase {
         git(["add", "tracked.txt"])
         git(["commit", "-qm", "baseline"])
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([directory])
         let backend = DiscardRemoteWorkspaceFixture()
@@ -412,7 +413,7 @@ final class GitExternalRefreshTests: XCTestCase {
                 git commit -qm baseline
                 """, via: backend)
 
-            let manager = TerminalManager()
+            let manager = self.workspaceApplication.makeWindow()
             defer { manager.windowClosed() }
             let project = Project(
                 fallbackName: "External SSH Fixture", workspaceConfiguration: .standard
@@ -422,7 +423,7 @@ final class GitExternalRefreshTests: XCTestCase {
             manager.projects = [project]
             manager.selectedProjectID = project.id
             let model = GitStatusModel()
-            model.syncSelectedProject(in: manager)
+            manager.syncGitStatus(model)
             do {
                 try await wait(seconds: 35) {
                     model.hasResolvedStatus && !model.isRefreshing && model.isRepo

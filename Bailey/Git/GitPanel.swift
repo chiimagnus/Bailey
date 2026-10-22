@@ -28,7 +28,7 @@ struct GitPanel: View {
     }
 
     let model: GitStatusModel
-    let manager: TerminalManager
+    let manager: WorkspaceWindowModel
     let project: Project?
     let session: TerminalSession?
     let sshHost: String?
@@ -967,7 +967,7 @@ struct GitPanel: View {
             ])
         case .remove:
             guard !location.isMain, !location.isLocked, !location.isPrunable else { return }
-            guard !TerminalManager.isWorktreeInUse(path: location.path, scope: target.scope) else {
+            guard !manager.application.isWorktreeInUse(path: location.path, scope: target.scope) else {
                 let warning = NSAlert()
                 warning.messageText = String(localized: "Worktree is in use", table: "Git")
                 warning.informativeText = String(
@@ -991,7 +991,7 @@ struct GitPanel: View {
                 guard response == .alertFirstButtonReturn, isCurrent() else { return }
                 performOperation(.moreMenu) {
                     model.removeWorktree(location, target: target, isCurrentTarget: {
-                        isCurrent() && !TerminalManager.isWorktreeInUse(
+                        isCurrent() && !manager.application.isWorktreeInUse(
                             path: location.path, scope: target.scope
                         )
                     })
@@ -2572,7 +2572,7 @@ struct GitPanel: View {
                      : String(localized: "Git Status Unavailable", table: "Sidebar"))
                     .panelFont(size: 10.5, weight: .medium)
                 Spacer(minLength: 4)
-                Button(String(localized: "Retry", table: "Sidebar")) { model.syncSelectedProject(in: manager) }
+                Button(String(localized: "Retry", table: "Sidebar")) { manager.syncGitStatus(model) }
                     .buttonStyle(.borderless)
                     .controlSize(.small)
                     .disabled(model.isBusy || model.isRefreshing)
@@ -2603,7 +2603,7 @@ struct GitPanel: View {
                     .lineLimit(5)
                     .textSelection(.enabled)
             }
-            Button(String(localized: "Retry", table: "Sidebar")) { model.syncSelectedProject(in: manager) }
+            Button(String(localized: "Retry", table: "Sidebar")) { manager.syncGitStatus(model) }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(model.isBusy || model.isResolvingInitialStatus)

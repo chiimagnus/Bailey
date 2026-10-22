@@ -7,6 +7,7 @@ struct BaileyApp: App {
 
     init() {
         TerminalFont.registerBundledFonts()
+        applicationDelegate.workspace.connectServices()
         TerminalNotificationService.shared.configure()
         // Saved forwards are for other apps too (an RDP client, a browser),
         // so they open at launch rather than when Settings is first shown.
@@ -15,7 +16,7 @@ struct BaileyApp: App {
 
     var body: some Scene {
         WindowGroup(AppIdentity.displayName, id: "main") {
-            WindowRootView()
+            WindowRootView(application: applicationDelegate.workspace)
         }
         .windowStyle(.hiddenTitleBar)
         // Keep title-bar dragging away from interactive tabs. The empty
@@ -28,11 +29,11 @@ struct BaileyApp: App {
                 // while a long-running XCTest case is using an isolated repository.
                 CommandGroup(replacing: .appTermination) {}
             }
-            BaileyCommands()
+            BaileyCommands(application: applicationDelegate.workspace)
         }
 
         Settings {
-            SettingsView()
+            SettingsView(application: applicationDelegate.workspace)
         }
     }
 }
@@ -40,8 +41,14 @@ struct BaileyApp: App {
 /// Root of one terminal window. Each window owns its own manager, which
 /// claims the next unclaimed window snapshot; the first window to appear
 /// reopens windows for any snapshots left over.
-private struct WindowRootView: View {
-    @State private var manager = TerminalManager()
+struct WindowRootView: View {
+    let application: WorkspaceApplication
+    @State private var manager: WorkspaceWindowModel
+
+    init(application: WorkspaceApplication) {
+        self.application = application
+        _manager = State(initialValue: WorkspaceWindowModel(application: application))
+    }
     private let settings = AppSettings.shared
     @Environment(\.openWindow) private var openWindow
 
@@ -68,7 +75,8 @@ private struct WindowRootView: View {
                 manager.autoSaveEditedTabs()
             }
             .onAppear {
-                TerminalManager.openRestoredWindows {
+                application.register(manager)
+                application.openRestoredWindows {
                     openWindow(id: "main")
                 }
             }
@@ -79,13 +87,14 @@ private struct WindowRootView: View {
 }
 
 extension FocusedValues {
-    @Entry var baileyManager: TerminalManager?
+    @Entry var baileyManager: WorkspaceWindowModel?
 }
 
 /// Menu commands routed to the focused window's manager.
 private struct BaileyCommands: Commands {
-    @FocusedValue(\.baileyManager) private var focusedManager: TerminalManager?
-    private var manager: TerminalManager? {
+    let application: WorkspaceApplication
+    @FocusedValue(\.baileyManager) private var focusedManager: WorkspaceWindowModel?
+    private var manager: WorkspaceWindowModel? {
         guard let focusedManager, NSApp.isActive,
               focusedManager.attachedWindow === NSApp.keyWindow else { return nil }
         return focusedManager
@@ -93,7 +102,7 @@ private struct BaileyCommands: Commands {
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
-        let _ = TerminalManager.registerWindowOpener {
+        let _ = application.registerWindowOpener {
             openWindow(id: "main")
         }
 

@@ -59,6 +59,8 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
 
 @MainActor
 final class PanelContextTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func wait(_ predicate: () async -> Bool) async throws {
         let deadline = Date().addingTimeInterval(5)
         while !(await predicate()) {
@@ -124,35 +126,58 @@ final class PanelContextTests: XCTestCase {
         try Data("first".utf8).write(to: firstURL.appendingPathComponent("one.txt"))
         try Data("second".utf8).write(to: secondURL.appendingPathComponent("two.txt"))
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         let git = GitStatusModel()
         manager.addLocalFolders([firstURL])
         let firstProject = try XCTUnwrap(manager.selectedProject)
-        git.syncSelectedProject(in: manager)
+        manager.syncGitStatus(git)
         manager.addLocalFolders([secondURL])
         let secondProject = try XCTUnwrap(manager.selectedProject)
-        git.syncSelectedProject(in: manager)
+        manager.syncGitStatus(git)
         try await wait { git.rootPath == secondURL.path && git.hasResolvedStatus && !git.isRefreshing }
         XCTAssertEqual(git.rootPath, secondURL.path)
         XCTAssertEqual(git.currentScope, "local")
-        let inactiveResult = await firstProject.syncFiles(in: manager)
+        let inactiveResult = await firstProject.syncFiles(isCurrent: { manager.selectedProject === firstProject })
         XCTAssertNil(inactiveResult, "Inactive project must not issue a refresh")
 
-        let secondResult = await secondProject.syncFiles(in: manager)
+        let secondResult = await secondProject.syncFiles(isCurrent: { manager.selectedProject === secondProject })
         XCTAssertEqual(secondResult?.0, .pinned)
         XCTAssertEqual(secondProject.fileTree.rootPath, secondURL.path)
         XCTAssertTrue(secondProject.fileTree.items.contains { $0.path == secondURL.appendingPathComponent("two.txt").path })
         XCTAssertFalse(secondProject.fileTree.items.contains { $0.path == firstURL.appendingPathComponent("one.txt").path })
 
         manager.selectedProjectID = firstProject.id
-        git.syncSelectedProject(in: manager)
+        manager.syncGitStatus(git)
         try await wait { git.rootPath == firstURL.path && git.hasResolvedStatus && !git.isRefreshing }
-        let firstResult = await firstProject.syncFiles(in: manager)
+        let firstResult = await firstProject.syncFiles(isCurrent: { manager.selectedProject === firstProject })
         XCTAssertEqual(firstResult?.0, .pinned)
         XCTAssertEqual(firstProject.fileTree.rootPath, firstURL.path)
         XCTAssertTrue(firstProject.fileTree.items.contains { $0.path == firstURL.appendingPathComponent("one.txt").path })
         XCTAssertEqual(secondProject.fileTree.rootPath, secondURL.path)
+    }
+
+    func testGitSelectedTargetPredicateRejectsLateResultEvenWhenProjectStillExists() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-p1-stale-git-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let project = Project(fallbackName: "Pinned", workspaceConfiguration: .standard)
+        project.customDirectory = directory.path
+        let model = GitStatusModel()
+        var isSelected = true
+        let rejectedLateResult = expectation(description: "A stale target is rechecked after await")
+        model.syncSelectedProject(project: project) { candidate in
+            if !isSelected { rejectedLateResult.fulfill() }
+            return candidate === project && isSelected
+        }
+        // The queued async root resolution is still pending, but the calling
+        // window no longer authorizes publication to this Git panel.
+        isSelected = false
+        await fulfillment(of: [rejectedLateResult], timeout: 2)
+        XCTAssertNotEqual(model.rootPath, directory.path)
+        XCTAssertFalse(model.matchesPanelTarget(try XCTUnwrap(project.panelContext).identity))
     }
 
     func testFileTreeDoesNotPublishOldChannelAtSameRootAndScope() async throws {

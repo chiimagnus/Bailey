@@ -11,7 +11,7 @@
 | 行为回归 | 新增或调整受影响测试；可测试的新行为和缺陷先确认 Red，再修复为 Green，最后 Refactor |
 | 自动测试 | 本地只运行受影响的 XCTest，正式完整验收时运行 `make test`；测试必须实际被发现和执行 |
 | 构建与签名 | 功能代码通过 `make build`；Swift 6 全面迁移、依赖或发布路径变更还检查 `make build:release`，无未解释的新诊断 |
-| 架构与数据保护 | 核对状态所有者、依赖、取消、目标失效和真实副作用；旧实现的接入与清理在同一任务完成 |
+| 架构与数据保护 | 按 [模块边界](architecture.md#模块化与依赖) 核对旧／新所有者、减少的反向依赖与镜像状态、明确动作意图及取消／目标失效后的真实副作用；每个独立迁移任务立即删除自己替代的旧路径 |
 | 用户路径 | 按下文运行受影响的原生／工作区和人工回归；未执行的 E2E、真实网络与恢复明确列出 |
 | 文档与差异 | 受影响文档在同一提交更新，现行链接可达；通读 diff，`git diff --check` 通过 |
 
@@ -67,7 +67,7 @@ make test  # 全量测试
 | 改动 | 相关测试 |
 | --- | --- |
 | 应用身份、Finder 类型注册与原生 Apple Event 系统入口 | `AppIdentityTests`、`WorkspaceWindowIsolationTests`；真实 Finder/Dock 进程外投递需获授权的受控图形会话 |
-| Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests` |
+| Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests`；改变焦点许可或活动组时补 `DockFocusP2RegressionTests`、`WorkspaceWindowIsolationTests` 的原生输入与双窗路径 |
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
 | Git 环境、刷新、写操作与失败状态 | `GitExternalRefreshTests`、`GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitTagActionTests`、`GitWorkspaceActionTests`、`GitStashActionTests`、`GitBranchDialogTests`、`GitTagDialogTests`、`GitWorkspaceMenuTests`、`GitStashDialogTests` |
@@ -84,7 +84,9 @@ make test  # 全量测试
 
 Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言，原生绘制、点击、菜单、主题与尺寸仍用窗口和像素检查；不依赖 Vision OCR 在 CI 中反向识别截图文字。
 
-测试断言应到达磁盘字节、Git index/HEAD、原生内容、窗口归属或实际焦点。只验证 mock 被调用、字段改变或事件送出，不足以守住最终结果。临时 Git 仓库若依赖固定分支名，应在 `git init -b` 时明确指定，不能依赖本机或 CI 的 `init.defaultBranch`。
+测试断言应到达磁盘字节、Git index/HEAD、原生内容、窗口归属或实际焦点。需要前台原生输入的用例由运行环境保证焦点，不以窗口是否为 Key Window 决定跳过或放宽断言。只验证 mock 被调用、字段改变或事件送出，不足以守住最终结果。临时 Git 仓库若依赖固定分支名，应在 `git init -b` 时明确指定，不能依赖本机或 CI 的 `init.defaultBranch`。
+
+`SessionStoreTests` 还在真实 `NSHostingView` 中挂载生产 `WindowRootView`，反复构造同一位置的 View，核对登记数量、恢复内容和原生编辑器身份不变。此测试覆盖根视图装配，不代替 `WindowGroup` 的系统恢复与独立 App 验收。
 
 ## 隔离环境
 
@@ -122,13 +124,21 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 
 纯 Model 不引入 UI 或环境效果；其时钟、文件事实和外部输入按实际边界注入。按真实职责和调用关系检查分层，不以文件名、目录名或一次文本扫描代替验证。
 
+职责重构须逐任务记录**原所有者 → 新的唯一所有者 → 被删除的重复状态／反向依赖 → 用户最终结果**。新增 Manager／Coordinator／Protocol 本身不算模块化；未使用的协议、镜像状态或只转发的壳必须删除。应用／窗口拆分覆盖外部路由、双窗隔离、关闭保存与恢复；各项完成前没有第二套全局登记或保存路径。
+
+焦点和列表交互必须分别验证六种事实：**展开、选中、悬停、展示、激活、真实键盘焦点**。在同一动作可合法联动时，也要核对动作是否明确要求联动；目录展开不误打开文件，Files／Git 浏览可展示 Diff 但不抢另一组焦点，图谱提交展开不制造持续灰底，行边框只随实际键盘接收者变化。核对 `NSWindow.firstResponder`／原生 field editor、实际按键文本或 Shell marker、选区、当前展示内容与对应文件／Git 结果；`selected` 字段、视觉高亮、请求已排队或事件已发出都不能单独证明焦点成功。具体状态所有权见 [焦点协调边界](architecture.md#焦点协调边界)。
+
+跨组件焦点迁移按 Dock／Files、Git、原生 Terminal／Editor／Diff、Browser、Palette 等**已触及的真实调用链逐段交付**；每段在原始实现基线和上一验收点上验证静态画面、中间帧、交互步骤、输入及对象身份**零 UI/UX 变化**，不把旧实现清理和重要 E2E 留到全部迁移结束。新旧策略不能同时争夺焦点；尚未迁移的功能继续独立维持原行为。按全部可行条件／组合验证，并逐条记录无法执行的系统级路径、原因、影响及 Gate 限制。
+
+平台范围以 [architecture.md](architecture.md#平台范围) 为准：当前验收仍须尽可能覆盖受影响的 macOS 最低／当前系统、配置和原生路径，不为暂缓的 iOS、iPadOS 或 visionOS 建立测试目标或承诺兼容性。新规则的静态文档检查不等于架构迁移或产品验收通过。
+
 使用明确事件和有界等待控制异步测试，覆盖取消、目标切换和乱序回写。保存检查发起时身份、真实写入和编辑期间的新内容；原生集成检查观察、绑定、嵌套变化、窗口菜单和重挂载，不只检查类型注解。
 
 全项目 Swift 6 迁移收口必须在真实语言模式下构建、运行测试并严格验签。静态扫描、只改编译选项或屏蔽并发诊断不算通过。
 
 ## 性能与内存测量
 
-先测共享热点，再减少主线程工作、重复 IO、计算和无关进程。FPS、骨架出现或数据读完不代替真实显示和输入。
+先测共享热点，再减少主线程工作、重复 IO、计算和无关进程。骨架屏出现或数据读完不等于真实显示与输入可用。
 
 | 用户路径 | 分开记录 |
 | --- | --- |
@@ -152,7 +162,7 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 - **生命周期**：`PaneRetentionTests` 验证 Dock 重挂载不换编辑器、五轮各五个编辑器的输入与释放，以及真实 `WorkspaceDockView` 执行 `Close Files`／关闭整个项目（含焦点停在待关闭编辑器、旧 `NSScrollView` 仍被持有）。关闭时立即核对标签所有权已解除、滚动容器不再挂载原文档、原视图语法解析已停用；AppKit／SwiftUI 可能延迟释放旧 `NSView`，故另在宿主窗口销毁后核对两轮原生视图和文件弱引用全部归零，不以单次 10 秒窗口内析构代替清理语义。外部重载、旧窗口缓存、转为二进制也不得保留过期文档。独立 Release 须补充打开／关闭／重开后的 heap、Allocations 与实际 GUI 对照；XCTest 对象释放不等同于长期内存回落。
 - **保存**：`FileTabTests` 验证原生 AX 编辑后的脏状态和写盘，并用受控远端挂起写入构造「关闭项目／关闭文件／关闭窗口／退出应用时，另一个原本干净的文件突然变脏」的并发时序，逐项核对未保存正文、实际磁盘、关闭否决和重试成功；多窗口使用 `WorkspaceWindowIsolationTests` 核对各自目标。完整 App 的 ⌘S 另须核对前台焦点、真实磁盘字节与重启结果；后台事件派发不能直接算成功。
 
-`WorkspaceWindowIsolationTests.testTwoMountedWorkspaceManagersSaveTheirOwnNativeAXBuffers` 在两个真实 `ContentView`／`NSWindow` 中使用同名不同路径文件，通过原生 AX 修改两个缓冲区、经各自 `TerminalManager.saveSelectedFile()` 保存并核对独立磁盘字节、脏状态和原编辑器身份。隔离 XCTest 无法保证目标窗口实际成为系统 Key Window，因此这只证明工作区保存路由和最终写盘，不代替独立 App 的 ⌘S 菜单、窗口焦点 E2E。
+`WorkspaceWindowIsolationTests.testTwoMountedWorkspaceManagersSaveTheirOwnNativeAXBuffers` 在两个真实 `ContentView`／`NSWindow` 中使用同名不同路径文件，通过原生 AX 修改两个缓冲区、经各自 `WorkspaceWindowModel.saveSelectedFile()` 保存并核对独立磁盘字节、脏状态和原编辑器身份。隔离 XCTest 无法保证目标窗口实际成为系统 Key Window，因此这只证明工作区保存路由和最终写盘，不代替独立 App 的 ⌘S 菜单、窗口焦点 E2E。
 
 保留已有增量高亮、懒加载、刷新合并、视图复用及 SSH 批量操作。优化不能牺牲编辑内容、超时反馈、机器身份、Unicode 坐标、撤销和无障碍。测量日志可能包含用户数据，分享前脱敏，不默认入库。
 

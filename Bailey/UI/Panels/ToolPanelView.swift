@@ -74,7 +74,7 @@ private struct RemotePaneHeaderHost: NSViewRepresentable {
 /// Renders one tool within a dock tab. Files and Git retain their
 /// original models and actions regardless of where the tab is parked.
 struct ToolPanelView: View {
-    let manager: TerminalManager
+    let manager: WorkspaceWindowModel
     let git: GitStatusModel
     let panel: ToolPanel
     private let settings = AppSettings.shared
@@ -353,7 +353,9 @@ struct ToolPanelView: View {
 
     private func performSync() async {
         guard let project = manager.selectedProject,
-              let (source, target) = await project.syncFiles(in: manager),
+              let (source, target) = await project.syncFiles(isCurrent: {
+                  manager.selectedProject === project
+              }),
               manager.selectedProject === project else { return }
         if rootSource != source { rootSource = source }
         if filesTarget != target { filesTarget = target }

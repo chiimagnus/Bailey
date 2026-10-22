@@ -1,11 +1,141 @@
 import AppKit
 import Foundation
 import Observation
+import SwiftUI
 import XCTest
 @testable import Bailey
 
+private struct WindowRootConstructionProbe: View {
+    let application: WorkspaceApplication
+    let revision: Int
+    let didRender: () -> Void
+
+    var body: some View {
+        WindowRootView(application: application)
+            .onChange(of: revision, initial: true) { didRender() }
+    }
+}
+
 @MainActor
 final class SessionStoreTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
+    func testRealWindowRootRetainsItsRegistrationAndEditorAcrossViewConstruction() async throws {
+        XCTAssertTrue(BaileyInstanceMode.isIsolated)
+        let previousWindows = SessionStore.load()
+        let previousHistories = TerminalHistoryStore.load()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("retained.swift")
+        let text = "let retained = true\n"
+        try text.write(to: file, atomically: true, encoding: .utf8)
+        defer {
+            SessionStore.save(previousWindows)
+            TerminalHistoryStore.save(previousHistories)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        SessionStore.save([.init(projects: [.init(
+            customName: "Restored", customDirectory: directory.path, sshHost: nil, pinnedFile: nil,
+            tabs: [.init(content: .file(path: file.path, editorState: nil), historyKey: nil,
+                         customName: nil, contextSessionIndex: nil, localFile: true)],
+            selectedTabIndex: 0,
+            dock: .group(.init(id: UUID(), items: [.tab(0)], selected: .tab(0)))
+        )], selectedProjectIndex: 0)])
+        let application = WorkspaceApplication(loadSavedState: true)
+        let firstRender = expectation(description: "Production root mounted")
+        let host = NSHostingView(rootView: WindowRootConstructionProbe(
+            application: application, revision: 0, didRender: { firstRender.fulfill() }
+        ))
+        let window = NSWindow(contentRect: .init(x: -1200, y: -1200, width: 900, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderFront(nil)
+        await fulfillment(of: [firstRender], timeout: 5)
+        func editor(in view: NSView) -> NSTextView? {
+            if let editor = view as? NSTextView, editor.string == text { return editor }
+            return view.subviews.lazy.compactMap { editor(in: $0) }.first
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while editor(in: host) == nil, Date() < deadline {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let originalEditor = try XCTUnwrap(editor(in: host))
+        for revision in 1...4 {
+            let rendered = expectation(description: "Production root re-evaluated \(revision)")
+            host.rootView = WindowRootConstructionProbe(
+                application: application, revision: revision, didRender: { rendered.fulfill() }
+            )
+            host.layoutSubtreeIfNeeded()
+            await fulfillment(of: [rendered], timeout: 5)
+            XCTAssertEqual(application.windowCount, 1)
+            XCTAssertTrue(editor(in: host) === originalEditor)
+            application.saveForRelaunch()
+            XCTAssertEqual(SessionStore.load().count, 1)
+            XCTAssertEqual(SessionStore.load().first?.projects.first?.customName, "Restored")
+        }
+        window.close()
+        XCTAssertEqual(application.windowCount, 0)
+        XCTAssertEqual(SessionStore.load().first?.projects.first?.tabs.count, 1)
+    }
+
+    func testSavingDuringPartialRestorePreservesUnclaimedWindowsAndHistory() async throws {
+        XCTAssertTrue(BaileyInstanceMode.isIsolated)
+        let previousWindows = SessionStore.load()
+        let previousHistories = TerminalHistoryStore.load()
+        defer {
+            SessionStore.save(previousWindows)
+            TerminalHistoryStore.save(previousHistories)
+        }
+        for count in [1, 2, 3] {
+            for action in ["relaunch", "terminate", "close", "debounce"] {
+                let snapshots = (0..<count).map { index in
+                    SessionSnapshot(projects: [.init(
+                        customName: "window-\(index)", customDirectory: "/fixture/\(index)",
+                        sshHost: nil, pinnedFile: nil,
+                        tabs: index == 0 ? [] : [.init(
+                            content: .session(workingDirectory: "/fixture/\(index)"),
+                            historyKey: "history-\(index)", customName: nil, contextSessionIndex: nil
+                        )], selectedTabIndex: nil,
+                        dock: .group(.init(id: UUID(), items: [.files], selected: .files))
+                    )], selectedProjectIndex: 0)
+                }
+                let histories = Dictionary(uniqueKeysWithValues: (1..<count).map {
+                    ("history-\($0)", "output-\($0)")
+                })
+                SessionStore.save(snapshots)
+                TerminalHistoryStore.save(histories)
+                let application = WorkspaceApplication(loadSavedState: true)
+                let window = application.makeWindow()
+                window.selectedProject?.customName = "updated"
+                switch action {
+                case "relaunch": application.saveForRelaunch()
+                case "terminate": application.willTerminate()
+                case "close": window.windowClosed()
+                default:
+                    let deadline = Date().addingTimeInterval(5)
+                    while SessionStore.load().first?.projects.first?.customName != "updated",
+                          Date() < deadline {
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                }
+                let saved = SessionStore.load()
+                XCTAssertEqual(saved.count, count, "\(action), \(count) windows")
+                XCTAssertEqual(saved.first?.projects.first?.customName, "updated", action)
+                XCTAssertEqual(saved.dropFirst().compactMap { $0.projects.first?.customName },
+                               (1..<count).map { "window-\($0)" }, action)
+                XCTAssertEqual(TerminalHistoryStore.load(), histories, action)
+                window.windowClosed()
+                window.windowClosed()
+                application.willTerminate()
+                XCTAssertEqual(SessionStore.load().count, count, "Repeated close/quit: \(action)")
+                XCTAssertEqual(TerminalHistoryStore.load(), histories, action)
+            }
+        }
+    }
+
     func testIsolatedSnapshotsDoNotReadOrOverwritePreviousTestRuns() {
         XCTAssertTrue(BaileyInstanceMode.isIsolated)
         let oldSuite = UserDefaults(suiteName: AppIdentity.bundleIdentifier + ".isolated-ui-test")
@@ -31,7 +161,7 @@ final class SessionStoreTests: XCTestCase {
             TerminalHistoryStore.save(previousHistories)
         }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
             styleMask: [.titled], backing: .buffered, defer: false
@@ -144,7 +274,7 @@ final class SessionStoreTests: XCTestCase {
         let file = folder.appendingPathComponent("open-in-ssh.swift")
         try "disk bytes".write(to: file, atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         let ssh = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
         ssh.sshHost = "invalid-p4-autosave"
@@ -219,13 +349,13 @@ final class SessionStoreTests: XCTestCase {
         let page = directory.appendingPathComponent("page.html")
         try Data("<title>Fixture</title>".utf8).write(to: page)
 
-        let existingManagerCount = TerminalManager.activeManagers.count
+        let existingManagerCount = self.workspaceApplication.windowCount
         func savedProject(_ windows: [SessionSnapshot]) -> SessionSnapshot.ProjectSnapshot? {
             windows.flatMap(\.projects).first {
                 $0.customDirectory == directory.path && $0.customName == "Edited Project"
             }
         }
-        let first = TerminalManager()
+        let first = self.workspaceApplication.makeWindow()
         var firstClosed = false
         defer { if !firstClosed { first.windowClosed() } }
 
@@ -253,13 +383,13 @@ final class SessionStoreTests: XCTestCase {
             XCTFail("Layout was not serialized")
         }
 
-        // Neither the performance badge nor another UI-only publication
-        // should write a new window snapshot.
+        // Opening and dismissing the temporary command input must not write a workspace snapshot.
         let defaults = try XCTUnwrap(UserDefaults(
             suiteName: BaileyInstanceMode.snapshotSuiteName
         ))
         let originalData = try XCTUnwrap(defaults.data(forKey: "workspaceSnapshot"))
-        first.toggleFPSCounter()
+        first.toggleCommandPalette()
+        first.dismissCommandPalette()
         try await Task.sleep(for: .milliseconds(650))
         XCTAssertEqual(defaults.data(forKey: "workspaceSnapshot"), originalData)
 
@@ -344,7 +474,7 @@ final class SessionStoreTests: XCTestCase {
             } == true
         }
 
-        let second = TerminalManager()
+        let second = self.workspaceApplication.makeWindow()
         var secondClosed = false
         defer { if !secondClosed { second.windowClosed() } }
         second.addLocalFolders([directory])
@@ -362,7 +492,7 @@ final class SessionStoreTests: XCTestCase {
         if existingManagerCount == 0 {
             // The last window retains its snapshot for re-opening.
             XCTAssertEqual(SessionStore.load().first?.projects.first?.customDirectory, directory.path)
-            let restored = TerminalManager()
+            let restored = self.workspaceApplication.makeWindow()
             for project in restored.projects { restored.close(project) }
             restored.windowClosed()
         } else {

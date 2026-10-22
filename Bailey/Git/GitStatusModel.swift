@@ -711,11 +711,12 @@ final class GitStatusModel {
 
     /// Only the focused project's latest directory resolution may select a
     /// repository. Its backend can complete after the user switches projects.
-    func syncSelectedProject(in manager: TerminalManager) {
+    func syncSelectedProject(
+        project: Project?, isCurrent: @escaping @MainActor (Project) -> Bool
+    ) {
         panelResolveGeneration &+= 1
         let generation = panelResolveGeneration
-        guard let project = manager.selectedProject,
-              let context = project.panelContext else {
+        guard let project, isCurrent(project), let context = project.panelContext else {
             sync(root: "")
             return
         }
@@ -726,23 +727,21 @@ final class GitStatusModel {
             panelTargetIdentity = nil
             isResolvingPanelTarget = true
         }
-        Task { [weak self, weak manager, weak project] in
+        Task { [weak self, weak project] in
             let resolved: (root: String, source: PanelContext.RootSource)
             do {
                 resolved = try await context.resolvedRoot()
             } catch {
-                guard let self, let manager, let project,
+                guard let self, let project,
                       self.panelResolveGeneration == generation,
-                      manager.selectedProject === project,
-                      project.matchesPanelTarget(context.identity) else { return }
+                      isCurrent(project), project.matchesPanelTarget(context.identity) else { return }
                 self.apply(.failed(error.localizedDescription))
                 self.hasResolvedStatus = true
                 return
             }
-            guard let self, let manager, let project,
+            guard let self, let project,
                   self.panelResolveGeneration == generation,
-                  manager.selectedProject === project,
-                  project.matchesPanelTarget(context.identity) else { return }
+                  isCurrent(project), project.matchesPanelTarget(context.identity) else { return }
             self.sync(root: resolved.root, backend: context.backend, scope: context.scope)
             self.panelTargetIdentity = context.identity
         }

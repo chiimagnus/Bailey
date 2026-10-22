@@ -33,6 +33,7 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
 }
 
 struct SettingsView: View {
+    let application: WorkspaceApplication
     @Bindable private var settings = AppSettings.shared
     @State private var selectedPage: SettingsPage? = .general
     @State private var relaunchError = ""
@@ -416,7 +417,7 @@ struct SettingsView: View {
     }
 
     private func relaunch() {
-        TerminalManager.saveForRelaunch()
+        application.saveForRelaunch()
 
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
@@ -550,5 +551,5 @@ private final class FontThickenPreviewView: NSView {
 
 
 #Preview {
-    SettingsView()
+    SettingsView(application: WorkspaceApplication())
 }

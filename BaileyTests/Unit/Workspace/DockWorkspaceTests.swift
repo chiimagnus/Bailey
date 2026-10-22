@@ -5,6 +5,8 @@ import XCTest
 
 @MainActor
 final class DockWorkspaceTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     func testGitChangesPreviewDisplaysDiffWithoutActivatingEditorGroup() throws {
         let project = Project(fallbackName: "Git preview", workspaceConfiguration: .standard)
         let gitGroup = try XCTUnwrap(project.dock.group(containing: .git))
@@ -108,7 +110,7 @@ final class DockWorkspaceTests: XCTestCase {
                 weights: names.map { _ in 1 }, actionNames: ["session", "projects", "files", "git"],
                 edgeThreshold: 0.22
             ))
-            let manager = TerminalManager()
+            let manager = self.workspaceApplication.makeWindow()
             defer { manager.windowClosed() }
             let project = Project(fallbackName: "empty", workspaceConfiguration: configuration)
             manager.projects = [project]
@@ -222,7 +224,7 @@ final class DockWorkspaceTests: XCTestCase {
     }
 
     func testToolsAreNotTheMostRecentWorkContentAndCloseTheirOwnPanel() throws {
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         let project = Project(fallbackName: "focus", workspaceConfiguration: .standard)
         manager.projects = [project]

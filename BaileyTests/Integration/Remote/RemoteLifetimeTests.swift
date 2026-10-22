@@ -144,4 +144,67 @@ final class RemoteLifetimeTests: XCTestCase {
         liveness = nil
         XCTAssertNil(releasedConnection)
     }
+
+    @MainActor
+    func testPrivateSSHServiceHandoffOnlyResolvesSessionsInItsOwningApplication() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let firstOwner = WorkspaceApplication()
+        let otherOwner = WorkspaceApplication()
+        let first = firstOwner.makeWindow()
+        let second = otherOwner.makeWindow()
+        first.addLocalFolders([root])
+        second.addLocalFolders([root])
+        let session = try XCTUnwrap(second.selectedProject?.newSession(directory: root.path))
+
+        let service = BaileySSHService.shared
+        let previousOwner = service.application
+        let previousNotificationOwner = TerminalNotificationService.shared.application
+        defer {
+            first.windowClosed()
+            second.windowClosed()
+            service.application = previousOwner
+            TerminalNotificationService.shared.application = previousNotificationOwner
+        }
+        let environment = service.terminalEnvironment(for: session.id)
+        let socket = try XCTUnwrap(environment["BAILEY_SSH_SOCKET"])
+        let token = try XCTUnwrap(environment["BAILEY_SSH_TOKEN"])
+        let request = BaileySSHRequest(
+            token: token,
+            terminalID: session.id.uuidString,
+            user: "fixture", host: "fixture.invalid", port: 2222, pid: getpid()
+        )
+        func exchange(_ input: BaileySSHRequest) async throws -> BaileySSHResponse {
+            try await Task.detached {
+                try BaileySSHSocketServer.exchange(path: socket, request: input, timeout: 3)
+            }.value
+        }
+
+        // Even a genuine token must not find a session in another window owner.
+        firstOwner.connectServices()
+        let wrongOwnerResponse = try await exchange(request)
+        XCTAssertNil(wrongOwnerResponse.socket)
+        XCTAssertNil(session.location.remoteConnection)
+
+        otherOwner.connectServices()
+        let wrongToken = BaileySSHRequest(
+            token: "unrecognized", terminalID: request.terminalID,
+            user: request.user, host: request.host, port: request.port, pid: request.pid
+        )
+        let wrongTokenResponse = try await exchange(wrongToken)
+        XCTAssertNil(wrongTokenResponse.socket)
+        let accepted = try await exchange(request)
+        XCTAssertNotNil(accepted.socket)
+        XCTAssertEqual(session.location.remoteConnection?.controlSocket.path, accepted.socket)
+
+        // Closing a window revokes access to its terminal, even when the
+        // authenticated token is replayed before the service mapping expires.
+        second.windowClosed()
+        XCTAssertNil(otherOwner.session(id: session.id))
+        let closedWindowResponse = try await exchange(request)
+        XCTAssertNil(closedWindowResponse.socket)
+    }
+
 }

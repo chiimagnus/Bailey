@@ -5,6 +5,45 @@ import XCTest
 
 @MainActor
 final class GitInteractiveRebaseTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+    private var previousSSHApplication: WorkspaceApplication?
+    private var previousNotificationApplication: WorkspaceApplication?
+
+    override func setUp() async throws {
+        previousSSHApplication = BaileySSHService.shared.application
+        previousNotificationApplication = TerminalNotificationService.shared.application
+        workspaceApplication.connectServices()
+    }
+
+    override func tearDown() async throws {
+        BaileySSHService.shared.application = previousSSHApplication
+        TerminalNotificationService.shared.application = previousNotificationApplication
+    }
+
+    func testSSHHelperHandoffUsesTheRebaseFixturesApplication() async throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "SSH fixture", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        let session = project.newSession(directory: FileManager.default.temporaryDirectory.path)
+        XCTAssertTrue(BaileySSHService.shared.application === workspaceApplication)
+        XCTAssertTrue(TerminalNotificationService.shared.application === workspaceApplication)
+        let environment = BaileySSHService.shared.terminalEnvironment(for: session.id)
+        let socket = try XCTUnwrap(environment["BAILEY_SSH_SOCKET"])
+        let request = BaileySSHRequest(
+            token: try XCTUnwrap(environment["BAILEY_SSH_TOKEN"]), terminalID: session.id.uuidString,
+            user: "fixture", host: "fixture.invalid", port: 2222, pid: getpid()
+        )
+        let response = try await Task.detached {
+            try BaileySSHSocketServer.exchange(path: socket, request: request, timeout: 3)
+        }.value
+        XCTAssertNotNil(response.socket)
+        XCTAssertEqual(session.location.remoteConnection?.controlSocket.path, response.socket)
+        XCTAssertEqual(TerminalNotificationService.shared.application?.projectName(forSession: session.id),
+                       project.name)
+    }
+
     private func wait(_ condition: () async throws -> Bool) async throws {
         let deadline = Date().addingTimeInterval(30)
         while try await !condition() {
@@ -51,7 +90,7 @@ final class GitInteractiveRebaseTests: XCTestCase {
         try script.write(to: editorPath, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: editorPath.path)
         _ = try git(["config", "sequence.editor", RemoteCommands.quote(editorPath.path)])
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         let project = Project(fallbackName: "PTY Rebase", workspaceConfiguration: .standard)
         project.customDirectory = directory.path
@@ -167,7 +206,7 @@ final class GitInteractiveRebaseTests: XCTestCase {
                 let cleared = try await backend.run(argv: ["rm", "-f", "editor-ready"], cwd: root,
                                                     env: nil, stdin: nil, timeout: 25)
                 XCTAssertEqual(cleared.status, 0)
-                let manager = TerminalManager()
+                let manager = self.workspaceApplication.makeWindow()
                 defer { manager.windowClosed() }
                 let project = Project(fallbackName: "SSH PTY Rebase", workspaceConfiguration: .standard)
                 manager.projects = [project]

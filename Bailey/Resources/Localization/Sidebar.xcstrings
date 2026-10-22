@@ -93,7 +93,6 @@
     "%lld" : {
       "shouldTranslate" : false
     },
-    "%lld fps" : {},
     "%lld incoming commits" : {
       "localizations" : {
         "en" : {

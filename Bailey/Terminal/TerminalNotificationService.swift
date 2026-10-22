@@ -9,6 +9,7 @@ import UserNotifications
 /// emitting session's id so a click can reveal that tab.
 final class TerminalNotificationService: NSObject, UNUserNotificationCenterDelegate {
     static let shared = TerminalNotificationService()
+    @MainActor weak var application: WorkspaceApplication?
 
     /// `userInfo` key for the emitting `TerminalSession.id`.
     static let sessionIDKey = "sessionID"
@@ -37,7 +38,7 @@ final class TerminalNotificationService: NSObject, UNUserNotificationCenterDeleg
         guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         DispatchQueue.main.async { [weak self] in
             if forwardToBark, !BaileyInstanceMode.isIsolated {
-                let title = sessionID.flatMap { TerminalManager.projectName(forSession: $0) } ?? "Bailey"
+                let title = sessionID.flatMap { self?.application?.projectName(forSession: $0) } ?? "Bailey"
                 Task.detached(priority: .utility) {
                     let logger = Logger(
                         subsystem: AppIdentity.bundleIdentifier, category: "notifications"
@@ -137,7 +138,7 @@ final class TerminalNotificationService: NSObject, UNUserNotificationCenterDeleg
 
     private func deliver(_ message: String, sessionID: UUID?) {
         let content = UNMutableNotificationContent()
-        content.title = sessionID.flatMap { TerminalManager.projectName(forSession: $0) } ?? "Bailey"
+        content.title = sessionID.flatMap { application?.projectName(forSession: $0) } ?? "Bailey"
         content.body = message
         content.sound = .default
         if let sessionID {
@@ -174,7 +175,7 @@ final class TerminalNotificationService: NSObject, UNUserNotificationCenterDeleg
             .flatMap(UUID.init(uuidString:))
         DispatchQueue.main.async {
             if let sessionID {
-                TerminalManager.revealSession(id: sessionID)
+                self.application?.revealSession(id: sessionID)
             } else {
                 NSApp.activate()
             }

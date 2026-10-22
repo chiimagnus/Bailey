@@ -8,6 +8,8 @@ import XCTest
 /// editor in isolation. A single dock group changes content type and identity.
 @MainActor
 final class WorkspaceContentIdentityTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func find<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
         if let matching = view as? T { return matching }
         return view.subviews.lazy.compactMap { self.find(type, in: $0) }.first
@@ -51,7 +53,7 @@ final class WorkspaceContentIdentityTests: XCTestCase {
         let snapshots = SessionStore.load()
         let histories = TerminalHistoryStore.load()
         defer { SessionStore.save(snapshots); TerminalHistoryStore.save(histories) }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let file = root.appendingPathComponent("a.swift")
@@ -128,7 +130,7 @@ final class WorkspaceContentIdentityTests: XCTestCase {
         let snapshots = SessionStore.load()
         let histories = TerminalHistoryStore.load()
         defer { SessionStore.save(snapshots); TerminalHistoryStore.save(histories) }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -188,7 +190,7 @@ final class WorkspaceContentIdentityTests: XCTestCase {
         let snapshots = SessionStore.load()
         let histories = TerminalHistoryStore.load()
         defer { SessionStore.save(snapshots); TerminalHistoryStore.save(histories) }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)

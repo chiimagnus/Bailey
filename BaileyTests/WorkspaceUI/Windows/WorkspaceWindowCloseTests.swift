@@ -63,6 +63,8 @@ private final class WindowCloseDelegateWitness: NSObject, NSWindowDelegate {
 
 @MainActor
 final class WorkspaceWindowCloseTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func wait(
         _ check: () async -> Bool, file: StaticString = #filePath, line: UInt = #line
     ) async throws {
@@ -83,7 +85,7 @@ final class WorkspaceWindowCloseTests: XCTestCase {
             SessionStore.save(oldSnapshots)
             TerminalHistoryStore.save(oldHistories)
         }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         XCTAssertTrue(manager.projects.isEmpty)
         let host = NSHostingView(rootView: ContentView(manager: manager))
@@ -122,8 +124,8 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let first = TerminalManager()
-        let second = TerminalManager()
+        let first = self.workspaceApplication.makeWindow()
+        let second = self.workspaceApplication.makeWindow()
         defer {
             first.windowClosed()
             second.windowClosed()
@@ -181,8 +183,8 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         try FileManager.default.createDirectory(at: secondFolder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let first = TerminalManager()
-        let second = TerminalManager()
+        let first = self.workspaceApplication.makeWindow()
+        let second = self.workspaceApplication.makeWindow()
         defer { first.windowClosed(); second.windowClosed() }
         first.addLocalFolders([firstFolder])
         second.addLocalFolders([secondFolder])
@@ -297,7 +299,7 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -342,7 +344,7 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -370,7 +372,7 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)

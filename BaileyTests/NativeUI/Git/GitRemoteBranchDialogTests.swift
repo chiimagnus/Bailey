@@ -4,6 +4,8 @@ import XCTest
 
 @MainActor
 final class GitRemoteBranchDialogTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func wait(_ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(10)
         while !condition() {
@@ -42,7 +44,7 @@ final class GitRemoteBranchDialogTests: XCTestCase {
         _ = try git(["remote", "add", "origin", root.appendingPathComponent("origin.git").path])
         _ = try git(["push", "origin", server + ":refs/heads/side"])
         _ = try git(["fetch", "origin"])
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([repo])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -53,7 +55,7 @@ final class GitRemoteBranchDialogTests: XCTestCase {
         window.orderFront(nil)
         defer { window.close() }
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         let panel = GitPanel(settings: AppSettings(configURL: root.appendingPathComponent("settings.toml")),
             model: model, manager: manager, project: project, session: nil, sshHost: nil,

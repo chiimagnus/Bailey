@@ -5,6 +5,8 @@ import XCTest
 
 @MainActor
 final class GitWorkspaceMenuTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func wait(_ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(12)
         while !condition() {
@@ -36,7 +38,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let result = GitCommandExecution.run(["init", "-q"], in: root.path)
         XCTAssertEqual(result.status, 0, result.stderr)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -83,7 +85,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("bailey-ignore-external-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -111,7 +113,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("bailey-ignore-create-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -153,11 +155,11 @@ final class GitWorkspaceMenuTests: XCTestCase {
         try "new".write(to: root.appendingPathComponent("zz-untracked.txt"),
                         atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait {
             model.hasResolvedStatus && !model.isRefreshing && model.changedEntries.count == 3
         }
@@ -234,14 +236,14 @@ final class GitWorkspaceMenuTests: XCTestCase {
         let indexBefore = git(["rev-parse", ":alpha.swift"])
         let worktreeBefore = git(["hash-object", "alpha.swift"])
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
         project.dock.select(.git)
         let gitGroup = try XCTUnwrap(project.dock.group(containing: .git))
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         XCTAssertEqual(model.stagedEntries.map(\.path), ["alpha.swift"],
                        "Unexpected staged entries or status error: \(model.statusError ?? "none")")
@@ -473,7 +475,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         try "modified\n".write(to: firstRoot.appendingPathComponent("first.txt"),
                                atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([firstRoot, secondRoot])
         let firstIndex = try XCTUnwrap(manager.projects.firstIndex {
@@ -486,7 +488,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         let firstProject = try XCTUnwrap(manager.selectedProject)
         firstProject.dock.select(.git)
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait {
             model.hasResolvedStatus && !model.isRefreshing
                 && model.changedEntries.map(\.path) == ["first.txt"]
@@ -607,13 +609,13 @@ final class GitWorkspaceMenuTests: XCTestCase {
             try "new \(name)\n".write(to: folder.appendingPathComponent(name),
                                         atomically: true, encoding: .utf8)
         }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
         project.dock.select(.git)
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait {
             model.hasResolvedStatus && !model.isRefreshing && model.changedEntries.count == 2
         }
@@ -703,13 +705,13 @@ final class GitWorkspaceMenuTests: XCTestCase {
         git(["add", "note.txt"])
         git(["commit", "-qm", "history"])
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
         project.dock.select(.git)
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait {
             model.hasResolvedStatus && model.canUseCurrentStatus
                 && model.graphCommits.count == 1 && model.totalChangeCount == 0
@@ -735,16 +737,9 @@ final class GitWorkspaceMenuTests: XCTestCase {
         }
         let owners = treeKeyboards(in: host)
         let graph = try XCTUnwrap(owners.last)
-        if window.isKeyWindow && NSApp.isActive {
-            try await wait {
-                host.layoutSubtreeIfNeeded()
-                return window.firstResponder === graph
-            }
-        } else {
-            // Xcode's isolated XCTest host may never gain foreground activation.
-            // Exercise the real NSWindow responder and keyboard path without
-            // pretending this verified automatic key-window activation.
-            XCTAssertTrue(window.makeFirstResponder(graph))
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return window.firstResponder === graph
         }
         let key = try XCTUnwrap(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: [],
@@ -789,7 +784,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         _ = git(["commit", "--allow-empty", "-qm", "base"])
         let untracked = root.appendingPathComponent("keep.txt")
         try Data("keep".utf8).write(to: untracked)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -800,7 +795,7 @@ final class GitWorkspaceMenuTests: XCTestCase {
         window.orderFront(nil)
         defer { window.close() }
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         let panel = GitPanel(model: model, manager: manager, project: project, session: nil,
             sshHost: nil, openFile: { _ in }, openDiff: { _, _ in }, openCommitDiff: { _, _ in })
@@ -856,11 +851,11 @@ final class GitWorkspaceMenuTests: XCTestCase {
                                  atomically: true, encoding: .utf8)
         }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let model = GitStatusModel()
-        model.syncSelectedProject(in: manager)
+        manager.syncGitStatus(model)
         try await wait { model.hasResolvedStatus && !model.isRefreshing && model.changedEntries.count == 3 }
         let width: CGFloat = 440
         let height: CGFloat = 640

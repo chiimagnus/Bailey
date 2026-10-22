@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Movable project-list panel; its workspace tab is the normal dock tab.
 struct ProjectsPanelView: View {
-    let manager: TerminalManager
+    let manager: WorkspaceWindowModel
     let bottomBarHeight: CGFloat
     private let settings = AppSettings.shared
     private let themeChanges = Theme.changes

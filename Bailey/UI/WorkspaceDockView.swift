@@ -94,7 +94,7 @@ private struct DockTabFrames: PreferenceKey {
 
 struct WorkspaceDockView: View {
     private let themeChanges = Theme.changes
-    let manager: TerminalManager
+    let manager: WorkspaceWindowModel
     let git: GitStatusModel
     @State private var dragging = DockTabDragCoordinator()
 
@@ -173,7 +173,7 @@ private struct DockTreeView: View {
     private let themeChanges = Theme.changes
     let node: DockNode
     let project: Project
-    let manager: TerminalManager
+    let manager: WorkspaceWindowModel
     let git: GitStatusModel
     let dragging: DockTabDragCoordinator
 
@@ -265,7 +265,7 @@ private struct DockTabGroupView: View {
     private let themeChanges = Theme.changes
     let group: DockGroup
     let project: Project
-    let manager: TerminalManager
+    let manager: WorkspaceWindowModel
     let git: GitStatusModel
     let dragging: DockTabDragCoordinator
     private let settings = AppSettings.shared
@@ -361,11 +361,9 @@ private struct DockTabGroupView: View {
             HStack(spacing: 4) {
                 if isTopLeft { WindowDragArea().frame(width: 76) }
                 tabStrip(maxWidth: max(0, geometry.size.width
-                    - (isTopLeft ? 120 : 44)
-                    - (manager.isFPSCounterVisible ? 42 : 0)))
+                    - (isTopLeft ? 120 : 44)))
                 panelAddButton
                 WindowDragArea().frame(minWidth: 0, maxWidth: .infinity)
-                if manager.isFPSCounterVisible { FPSBadge() }
             }
             .padding(.trailing, 8)
             .frame(height: geometry.size.height)

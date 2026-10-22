@@ -7,6 +7,8 @@ import XCTest
 
 @MainActor
 final class PaneRetentionTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     func testParkingDropsObsoleteHostActionsBeforeDelayedDismantle() async throws {
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }
@@ -182,8 +184,8 @@ final class PaneRetentionTests: XCTestCase {
             SessionStore.save(previous)
             TerminalHistoryStore.save(histories)
         }
-        let firstManager = TerminalManager()
-        let secondManager = TerminalManager()
+        let firstManager = self.workspaceApplication.makeWindow()
+        let secondManager = self.workspaceApplication.makeWindow()
         defer { firstManager.windowClosed(); secondManager.windowClosed() }
         let first = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 650, height: 420),
                              styleMask: [.titled], backing: .buffered, defer: false)
@@ -236,7 +238,7 @@ final class PaneRetentionTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([directory])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -297,19 +299,6 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertNil(switcher.handle(release, manager: manager))
         XCTAssertNotEqual(project.selectedTabID, candidate)
         XCTAssertTrue(project.tabs.contains { $0.id == project.selectedTabID })
-    }
-
-    func testFPSCounterExposesOnlyPresentationAndStopsCleanly() async throws {
-        let counter = FPSCounter()
-        XCTAssertEqual(counter.fps, 0)
-        let changed = expectation(description: "FPS is directly observable")
-        withObservationTracking({ _ = counter.fps }) { changed.fulfill() }
-        try await Task.sleep(for: .milliseconds(1100))
-        counter.tick()
-        await fulfillment(of: [changed], timeout: 1)
-        XCTAssertGreaterThan(counter.fps, 0)
-        counter.stop()
-        XCTAssertEqual(counter.fps, 0)
     }
 
     func testBrowserKVOUpdatesObservationHistoryFaviconAndRepeatedFocus() async throws {
@@ -552,7 +541,7 @@ final class PaneRetentionTests: XCTestCase {
         var weakContents: [WeakNativeContent] = []
         var secondWeakContents: [WeakNativeContent] = []
         do {
-            let manager = TerminalManager()
+            let manager = self.workspaceApplication.makeWindow()
             defer { manager.windowClosed() }
             manager.addLocalFolders([folder])
             manager.openFile(paths[0].path)
@@ -670,7 +659,7 @@ final class PaneRetentionTests: XCTestCase {
         let path = folder.appendingPathComponent("sample.swift")
         try "let value = \"中文 👋\"\n".write(to: path, atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([folder])
         manager.openFile(path.path)
@@ -692,7 +681,7 @@ final class PaneRetentionTests: XCTestCase {
 
         XCTAssertNil(manager.attachedWindow,
                      "NSWindow close must release its manager before SwiftUI onDisappear")
-        XCTAssertFalse(TerminalManager.activeManagers.contains { $0 === manager })
+        XCTAssertFalse(self.workspaceApplication.containsWindow(manager))
         XCTAssertTrue(manager.projects.isEmpty,
                       "A retained WindowRootView must not keep projects from a closed window")
         XCTAssertNil(retiredFile, "Closing the window must release its owned FileTab")
@@ -719,7 +708,7 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertLessThan(original.count, 8 << 20)
         try original.write(to: path)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([folder])
         manager.openFile(path.path)
@@ -842,9 +831,11 @@ final class PaneRetentionTests: XCTestCase {
             }
             print("T5_NATIVE_LIFETIME cycle=\(cycle) simultaneous=\(weakEditors.count) allRetained=\(weakEditors.allSatisfy { $0.editor != nil })")
             XCTAssertTrue(weakEditors.allSatisfy { $0.editor != nil })
-            // Destroy real owners, not just the currently visible NSView. The
-            // editor's notification subscription and queued parser work must not
-            // retain retired documents after the last FileTab is gone.
+            // A real tab/window close retires its TextKit document before
+            // releasing the SwiftUI host (Project.close / terminateAll). This
+            // test must exercise that ownership contract, not rely on AppKit
+            // eventually discarding a cached NSHostingView by itself.
+            for file in files { file.retireNativeEditor() }
             for i in (0..<windows.count).reversed() {
                 hosts[i].removeFromSuperview()
                 windows[i].contentView = nil
@@ -857,9 +848,11 @@ final class PaneRetentionTests: XCTestCase {
                 weakEditors.allSatisfy { $0.editor == nil }
                     && weakFiles.allSatisfy { $0.file == nil }
             }
-            XCTAssertTrue(weakEditors.allSatisfy { $0.editor == nil })
-            XCTAssertTrue(weakFiles.allSatisfy { $0.file == nil })
-            print("T5_NATIVE_LIFETIME cycle=\(cycle) simultaneous=5 released=5 filesReleased=5")
+            let releasedEditors = weakEditors.filter { $0.editor == nil }.count
+            let releasedFiles = weakFiles.filter { $0.file == nil }.count
+            XCTAssertEqual(releasedEditors, 5, "cycle \(cycle): TextKit views still held")
+            XCTAssertEqual(releasedFiles, 5, "cycle \(cycle): FileTab owners still held")
+            print("T5_NATIVE_LIFETIME cycle=\(cycle) simultaneous=5 released=\(releasedEditors) filesReleased=\(releasedFiles)")
         }
     }
 
@@ -1017,13 +1010,19 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertFalse(currentEditor === retiredEditor)
         XCTAssertEqual((currentEditor as? FocusReportingTextView)?.text, "changed on disk\n")
         XCTAssertFalse((currentEditor as? FocusReportingTextView)?.undoManager?.canUndo ?? true)
-        retiredScroll = nil
-        retiredEditor = nil
-        try await settle { releasedEditor == nil }
+        // A retired document must be unusable immediately (checked above),
+        // but AppKit may keep its views alive until the window is torn down.
         host?.removeFromSuperview()
         host = nil
+        file?.retireNativeEditor()
+        window.contentView = nil
+        window.close()
+        retiredScroll = nil
+        retiredEditor = nil
         file = nil
-        try await settle { releasedFile == nil && currentEditor == nil }
+        try await settle {
+            releasedEditor == nil && releasedFile == nil && currentEditor == nil
+        }
     }
 
     func testObservedDockMoveReparentsRealEditorAndPreservesUndoAndScroll() async throws {
@@ -1039,7 +1038,7 @@ final class PaneRetentionTests: XCTestCase {
         let path = directory.appendingPathComponent("dock.txt")
         let original = (0..<400).map { "Line \($0) 中文😀\n" }.joined()
         try original.write(to: path, atomically: true, encoding: .utf8)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([directory])
         manager.openFile(path.path)
@@ -1089,9 +1088,7 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertEqual(project.dock.tabOrder, [pane.id])
         XCTAssertEqual(project.selectedTabID, pane.id)
         XCTAssertTrue(scroll.documentView === editor)
-        if NSApp.isActive && window.isKeyWindow {
-            try await settle { window.firstResponder === editor }
-        }
+        try await settle { window.firstResponder === editor }
         print("DOCK_TRACE afterMove actual=\(scroll.contentView.bounds.origin) editorFrame=\(editor.frame) selection=\(editor.selectedRange()) viewport=\(String(describing: editor.textLayoutManager?.textViewportLayoutController.viewportRange))")
         try await settle { scroll.contentView.bounds.origin == scrollBefore }
         XCTAssertEqual(scroll.contentView.bounds.origin, scrollBefore)

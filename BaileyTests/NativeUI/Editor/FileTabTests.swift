@@ -89,6 +89,8 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
 
 @MainActor
 final class FileTabTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     func testMountedNativeMultipleSelectionsPreserveBytesDirtyStateAndUndo() async throws {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".txt")
@@ -1349,7 +1351,7 @@ final class FileTabTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let firstProject = try XCTUnwrap(manager.selectedProject)
@@ -1384,8 +1386,8 @@ final class FileTabTests: XCTestCase {
         XCTAssertTrue(remote.isDirty)
         XCTAssertEqual(try String(contentsOf: remotePath, encoding: .utf8), "local sentinel")
 
-        XCTAssertTrue(TerminalManager.hasUnsavedEditors)
-        let exitAttempt = Task { await TerminalManager.saveBeforeTermination() }
+        XCTAssertTrue(self.workspaceApplication.hasUnsavedEditors)
+        let exitAttempt = Task { await self.workspaceApplication.saveBeforeTermination() }
         try await wait { await backend.writingPath == remotePath.path }
         await backend.finishWrite(failing: true)
         let shouldExit = await exitAttempt.value
@@ -1434,7 +1436,7 @@ final class FileTabTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -1481,7 +1483,7 @@ final class FileTabTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -1530,8 +1532,8 @@ final class FileTabTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let first = TerminalManager()
-        let second = TerminalManager()
+        let first = self.workspaceApplication.makeWindow()
+        let second = self.workspaceApplication.makeWindow()
         defer { first.windowClosed(); second.windowClosed() }
         first.addLocalFolders([root])
         second.addLocalFolders([root])
@@ -1552,7 +1554,7 @@ final class FileTabTests: XCTestCase {
         remote.text = "remote saved"
         remote.refreshDirtyState()
 
-        let terminating = Task { await TerminalManager.saveBeforeTermination() }
+        let terminating = Task { await self.workspaceApplication.saveBeforeTermination() }
         try await wait { await backend.writingPath == remotePath }
         local.text = "new draft in the already checked window"
         local.refreshDirtyState()
@@ -1566,7 +1568,7 @@ final class FileTabTests: XCTestCase {
         let persistedRemote = await backend.data(at: remotePath)
         XCTAssertEqual(persistedRemote, Data("remote saved".utf8))
 
-        let retryMayQuit = await TerminalManager.saveBeforeTermination()
+        let retryMayQuit = await self.workspaceApplication.saveBeforeTermination()
         XCTAssertTrue(retryMayQuit, "The next quit must save drafts in all windows")
         XCTAssertEqual(try String(contentsOf: localURL, encoding: .utf8),
                        "new draft in the already checked window")
@@ -1613,7 +1615,7 @@ final class FileTabTests: XCTestCase {
         try "let fileA = \"only A\"\n".write(to: aPath, atomically: true, encoding: .utf8)
         try "let fileB = \"only B\"\n".write(to: bPath, atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)

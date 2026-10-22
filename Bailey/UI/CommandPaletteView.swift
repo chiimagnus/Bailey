@@ -105,7 +105,7 @@ struct CommandPaletteView: View {
 
     private typealias ProjectFile = ProjectFileIndex.File
 
-    let manager: TerminalManager
+    let manager: WorkspaceWindowModel
     private let themeChanges = Theme.changes
     @Environment(\.openSettings) private var openSettings
 
@@ -201,15 +201,6 @@ struct CommandPaletteView: View {
             },
             PaletteCommand(id: "show-git", title: LocalizedStringResource("Git Manager", table: "Sidebar"), systemImage: "arrow.triangle.branch", shortcut: "⇧⌘G") {
                 manager.showPanel(.git)
-            },
-            PaletteCommand(
-                id: "toggle-fps-counter",
-                title: manager.isFPSCounterVisible
-                    ? LocalizedStringResource("Hide FPS Counter", table: "Interface")
-                    : LocalizedStringResource("Show FPS Counter", table: "Interface"),
-                systemImage: "gauge.with.needle"
-            ) {
-                manager.toggleFPSCounter()
             },
             PaletteCommand(id: "next-tab", title: LocalizedStringResource("Next Tab", table: "Interface"), systemImage: "arrow.right", shortcut: "⇧⌘]") {
                 manager.selectNextTab()
@@ -693,7 +684,7 @@ struct CommandPaletteView: View {
     }
 
     private func run(_ command: PaletteCommand) {
-        manager.dismissCommandPalette(restoringFocus: false)
+        manager.dismissCommandPalette()
         command.action()
     }
 

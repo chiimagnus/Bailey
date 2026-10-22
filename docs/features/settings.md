@@ -26,7 +26,7 @@ Git 检出提交的“总是接受”写入 `git.always-accept-checkout`，默�
 
 现行字体加粗键为 `terminal.font-thicken`；不再读取旧字体 UserDefaults 或旧 `font-thicken` 键。语言及 Diff 偏好使用的现有 UserDefaults 不属于旧字体迁移，不能一起删除。
 
-应用语言改变需要重启；重启前保存窗口快照，仍不能承诺保存未成功写盘的内容。界面中英文、系统语言跟随和回退规则见 [ui.md](../ui.md#本地化)。
+应用语言改变需要重启；重启前由同一个 `WorkspaceApplication` 保存所有窗口快照，仍不能承诺保存未成功写盘的内容。界面中英文、系统语言跟随和回退规则见 [ui.md](../ui.md#本地化)。
 
 ## 隔离与关联数据
 

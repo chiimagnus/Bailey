@@ -34,6 +34,8 @@ private actor FailingCreateRunnerFixture: RemoteCommandRunner {
 
 @MainActor
 final class WorkspaceIdentityTests: XCTestCase {
+    @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
     private func wait(_ predicate: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(10)
         while !predicate() {
@@ -225,7 +227,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         let sibling = folder.appendingPathComponent("sibling.txt")
         try "first".write(to: first, atomically: true, encoding: .utf8)
         try "sibling".write(to: sibling, atomically: true, encoding: .utf8)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
 
         // Real pre-P4 snapshots may still contain pinned-file projects.
@@ -265,7 +267,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         let second = folder.appendingPathComponent("b.swift")
         try "a".write(to: first, atomically: true, encoding: .utf8)
         try "b".write(to: second, atomically: true, encoding: .utf8)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([folder])
         XCTAssertTrue(manager.openExternalLocalItems([first, second]).isEmpty)
@@ -297,7 +299,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         let other = similar.appendingPathComponent("other.md")
         try "hello".write(to: actual, atomically: true, encoding: .utf8)
         try "other".write(to: other, atomically: true, encoding: .utf8)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([parent, inner])
         let selected = try XCTUnwrap(manager.selectedProject)
@@ -332,7 +334,7 @@ final class WorkspaceIdentityTests: XCTestCase {
             throw XCTSkip("Test host bypasses source-read protection")
         }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([projectRoot])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -367,7 +369,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path) }
         XCTAssertTrue(FileManager.default.isReadableFile(atPath: fileURL.path))
         XCTAssertFalse(FileManager.default.isWritableFile(atPath: fileURL.path))
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([projectRoot])
         XCTAssertTrue(manager.openExternalLocalItems([fileURL]).isEmpty)
@@ -394,7 +396,7 @@ final class WorkspaceIdentityTests: XCTestCase {
             throw XCTSkip("Test host bypasses directory-read protection")
         }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([denied])
         XCTAssertTrue(manager.projects.isEmpty, "Unreadable folders must not be added as projects")
@@ -411,7 +413,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         let fifo = root.appendingPathComponent("stream.fifo")
         XCTAssertEqual(mkfifo(fifo.path, mode_t(0o600)), 0)
         XCTAssertTrue(FileManager.default.fileExists(atPath: fifo.path))
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([projectRoot])
         XCTAssertEqual(manager.openExternalLocalItems([fifo]), [fifo])
@@ -431,7 +433,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         try FileManager.default.createSymbolicLink(
             at: broken, withDestinationURL: folder.appendingPathComponent("not-there")
         )
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([folder])
         manager.openFile(actual.path)
@@ -460,7 +462,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         let second = nested.appendingPathComponent("two.swift")
         try "one".write(to: first, atomically: true, encoding: .utf8)
         try "two".write(to: second, atomically: true, encoding: .utf8)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
 
         let rejected = manager.openExternalLocalItems([first, nested, second, first])
@@ -482,7 +484,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: folder) }
         let file = folder.appendingPathComponent("same.txt")
         try "mac".write(to: file, atomically: true, encoding: .utf8)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         let remote = Project(fallbackName: "remote", workspaceConfiguration: .standard)
         remote.sshHost = "invalid-finder-remote"
@@ -519,7 +521,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         try "outside".write(to: fromOutside, atomically: true, encoding: .utf8)
         try "A buffer".write(to: ownedByA, atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([aRoot, bRoot])
         let selected = try XCTUnwrap(manager.selectedProject)
@@ -557,7 +559,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("delayed.swift")
         try "should not open in B".write(to: file, atomically: true, encoding: .utf8)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([aRoot])
         let a = try XCTUnwrap(manager.selectedProject)
@@ -589,7 +591,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         let file = aRoot.appendingPathComponent("A-owned.swift")
         try "owned A".write(to: file, atomically: true, encoding: .utf8)
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([aRoot])
         let a = try XCTUnwrap(manager.selectedProject)
@@ -621,7 +623,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: urls[5])
         let missing = externalRoot.appendingPathComponent("missing.swift")
         let input = urls + Array(urls.reversed().prefix(9)) + [alias, missing]
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         manager.addLocalFolders([projectRoot])
         let project = try XCTUnwrap(manager.selectedProject)
@@ -639,7 +641,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("untitled.swift")
         try "hello".write(to: file, atomically: true, encoding: .utf8)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
 
         XCTAssertEqual(manager.openExternalLocalItems([file]), [file])
@@ -653,7 +655,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("same.swift")
         try "mac disk".write(to: file, atomically: true, encoding: .utf8)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         let remote = Project(fallbackName: "remote", workspaceConfiguration: .standard)
         remote.sshHost = "invalid-p4-fixture"
@@ -686,7 +688,7 @@ final class WorkspaceIdentityTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("do-not-pin.swift")
         try "content".write(to: file, atomically: true, encoding: .utf8)
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
 
         manager.addLocalFolders([file])
@@ -700,12 +702,12 @@ final class WorkspaceIdentityTests: XCTestCase {
         XCTAssertEqual(manager.projects.count, 1)
     }
 
-    func testTerminalManagerCreatesFileInSelectedLocalProject() async throws {
+    func testWorkspaceWindowModelCreatesFileInSelectedLocalProject() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let manager = TerminalManager()
+        let manager = self.workspaceApplication.makeWindow()
         manager.addLocalFolders([directory])
         let project = try XCTUnwrap(manager.selectedProject)
         await manager.newFile()
