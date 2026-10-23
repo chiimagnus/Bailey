@@ -30,7 +30,7 @@ Git 检出提交的“总是接受”写入 `git.always-accept-checkout`，默�
 
 ## 隔离与关联数据
 
-正式版使用 `~/.config/bailey/`，Bailey Dev 使用 `~/.config/bailey-dev/`；语言按 Bundle ID 分域，终端历史与 Bark 钥匙串服务也独立。开发版运行 `--isolated-ui-test` 时还隔离每轮窗口快照与终端历史，并跳过保存的隧道。**不同测试仍共用 Dev 配置**，需要修改设置的测试必须使用独立临时配置，不能依赖测试顺序；详见 [testing.md](../testing.md#测试目录与入口)。
+正式版使用 `~/.config/bailey/`，普通 Bailey Dev 使用 `~/.config/bailey-dev/`；语言按 Bundle ID 分域，终端历史与 Bark 钥匙串服务也独立。`--isolated-ui-test` 隔离每轮窗口快照与终端历史，并跳过保存的隧道；独立 UI 启动器另以临时主目录隔离 TOML。语言等 UserDefaults 和钥匙串不因临时主目录而自动隔离，完整边界见 [testing.md](../testing.md#隔离环境)。
 
 隧道规则独立存储在 `tunnels.toml`，不并入普通配置；其生命周期见 [tunnels.md](tunnels.md)。
 

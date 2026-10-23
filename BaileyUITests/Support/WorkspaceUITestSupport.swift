@@ -1,19 +1,28 @@
+import AppKit
 import Carbon
 import Foundation
 import XCTest
 
 @MainActor
 enum WorkspaceUITestSupport {
-    static func launch(in test: XCTestCase, language: String? = nil) throws -> XCUIApplication {
+    static func launch(
+        in test: XCTestCase, language: String? = nil, configurationHome: URL? = nil
+    ) throws -> XCUIApplication {
         let app = XCUIApplication(bundleIdentifier: "chiimagnus.bailey.dev")
         guard app.state == .notRunning else {
             throw NSError(domain: "BaileyUITestLaunch", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Bailey Dev is already running; refusing to terminate it or silently skip UI coverage"
             ])
         }
+        let home = try configurationHome ?? WorkspaceUITestFixture(in: test).root
+        precondition(home.standardizedFileURL.path.hasPrefix(
+            FileManager.default.temporaryDirectory.standardizedFileURL.path + "/Bailey-UITest-"
+        ), "UI configuration must belong to an isolated fixture")
         app.launchArguments = ["--isolated-ui-test"]
         if let language { app.launchArguments += ["-AppleLanguages", "(\(language))"] }
         app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
+        app.launchEnvironment["CFFIXED_USER_HOME"] = home.path
+        app.launchEnvironment["HOME"] = home.path
         let previousInput = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
         let unicodeHexWasEnabled = inputSource(id: "com.apple.keylayout.UnicodeHexInput") != nil
         test.addTeardownBlock { @MainActor in
@@ -40,6 +49,15 @@ enum WorkspaceUITestSupport {
             newWindow.click()
         }
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
+        let configuration = home.appendingPathComponent(".config/bailey-dev/config.toml")
+        let initialized = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: configuration.path)
+        }, object: nil)
+        guard XCTWaiter.wait(for: [initialized], timeout: 8) == .completed else {
+            throw NSError(domain: "BaileyUITestLaunch", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Bailey Dev did not initialize its temporary configuration"
+            ])
+        }
         try selectASCIIInputSource()
         return app
     }
@@ -85,8 +103,25 @@ enum WorkspaceUITestSupport {
         pathField.click()
         // The system picker can restore a document-specific input method on focus.
         try selectASCIIInputSource()
+        let pasteboard = NSPasteboard.general
+        let preserved = try clipboardItems()
+        pasteboard.clearContents()
+        guard pasteboard.setString(url.path, forType: .string) else {
+            pasteboard.clearContents()
+            if !preserved.isEmpty { XCTAssertTrue(pasteboard.writeObjects(preserved)) }
+            throw NSError(domain: "BaileyUITestPicker", code: 6, userInfo: [
+                NSLocalizedDescriptionKey: "Cannot prepare the native picker path paste"
+            ])
+        }
+        let changeCount = pasteboard.changeCount
+        defer {
+            if pasteboard.changeCount == changeCount {
+                pasteboard.clearContents()
+                if !preserved.isEmpty { XCTAssertTrue(pasteboard.writeObjects(preserved)) }
+            }
+        }
         pathField.typeKey("a", modifierFlags: .command)
-        pathField.typeText(url.path)
+        pathField.typeKey("v", modifierFlags: .command)
         // NSOpenPanel sometimes resolves an absolute path immediately, closes
         // Go to Folder, and selects its target in the parent directory.
         // Both native states must identify the exact test target before Add/Open.
@@ -103,8 +138,12 @@ enum WorkspaceUITestSupport {
                 }
             }
         }
+        let entered = app.textFields.matching(identifier: "PathTextField").matching(NSPredicate(
+            format: "value IN %@", [url.path, url.path + "/"]
+        )).firstMatch
         let resolved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            if pathField.exists { return pathField.value as? String == url.path }
+            if entered.exists { return true }
+            if pathField.exists { return false }
             return selectedExpectedTarget()
         }, object: nil)
         guard XCTWaiter.wait(for: [resolved], timeout: 8) == .completed else {
@@ -126,6 +165,20 @@ enum WorkspaceUITestSupport {
                           userInfo: [NSLocalizedDescriptionKey: "Native picker did not select fixture path"])
         }
         confirmation.click()
+    }
+
+    static func clipboardItems() throws -> [NSPasteboardItem] {
+        try (NSPasteboard.general.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                guard let data = item.data(forType: type), copy.setData(data, forType: type) else {
+                    throw NSError(domain: "BaileyUITestPicker", code: 5, userInfo: [
+                        NSLocalizedDescriptionKey: "Cannot preserve all clipboard items and types"
+                    ])
+                }
+            }
+            return copy
+        }
     }
 
     static func element(_ id: String, in app: XCUIApplication) -> XCUIElement {
@@ -191,6 +244,11 @@ struct WorkspaceUITestFixture {
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
+        var environment = ProcessInfo.processInfo.environment
+        environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
+        environment["GIT_CONFIG_NOSYSTEM"] = "1"
+        environment["GIT_TEMPLATE_DIR"] = nil
+        process.environment = environment
         process.arguments = ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
                              "-C", root.path] + args
         let diagnostics = FileManager.default.temporaryDirectory
@@ -220,9 +278,12 @@ struct WorkspaceUITestFixture {
 
     func initializeGit() throws {
         try git(["init", "-q", "-b", "main"])
+        try git(["config", "user.name", "BaileyUITest"])
+        try git(["config", "user.email", "tests@example.invalid"])
+        try git(["config", "commit.gpgsign", "false"])
+        try git(["config", "core.hooksPath", "/dev/null"])
         try git(["add", "."])
-        try git(["-c", "user.name=BaileyUITest", "-c",
-                 "user.email=tests@example.invalid", "commit", "-qm", "E2E fixture history"])
+        try git(["commit", "-qm", "E2E fixture history"])
     }
 
 }

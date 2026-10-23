@@ -1,7 +1,50 @@
+import AppKit
 import XCTest
 
 @MainActor
 final class WorkspaceFilesUITests: XCTestCase {
+    func testNativeFolderPickerRestoresMultipleClipboardItemsAndTypes() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let folderName = "剪贴板 空格 é 👋"
+        let file = try fixture.file(folderName + "/clipboard.txt", text: "correct native picker target\n")
+        let folder = fixture.root.appendingPathComponent(folderName, isDirectory: true)
+        let pasteboard = NSPasteboard.general
+        let original = try WorkspaceUITestSupport.clipboardItems()
+        defer {
+            pasteboard.clearContents()
+            if !original.isEmpty { XCTAssertTrue(pasteboard.writeObjects(original)) }
+        }
+        let first = NSPasteboardItem()
+        XCTAssertTrue(first.setString("original clipboard text", forType: .string))
+        XCTAssertTrue(first.setData(Data([0, 255, 10, 127]),
+            forType: NSPasteboard.PasteboardType("chiimagnus.bailey.uitest.clipboard-marker")))
+        let second = NSPasteboardItem()
+        XCTAssertTrue(second.setString("<b>second clipboard item</b>", forType: .html))
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([first, second]))
+        func contents() throws -> [[NSPasteboard.PasteboardType: Data]] {
+            try (pasteboard.pasteboardItems ?? []).map { item in
+                try Dictionary(uniqueKeysWithValues: item.types.map { type in
+                    (type, try XCTUnwrap(item.data(forType: type)))
+                })
+            }
+        }
+        let expected = try contents()
+        let app = try WorkspaceUITestSupport.launch(in: self)
+        try WorkspaceUITestSupport.addFolder(folder, to: app)
+        XCTAssertEqual(try contents(), expected,
+                       "Native path entry must restore every clipboard item and byte type")
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: app.windows.firstMatch)
+            .waitForExistence(timeout: 15))
+        XCTAssertEqual(app.windows.firstMatch.textViews.firstMatch.value as? String,
+                       "correct native picker target\n")
+        XCTAssertEqual(try Data(contentsOf: file), Data("correct native picker target\n".utf8))
+    }
+
     func testAddFolderAndOpenFileThroughRealFileTree() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("a-first.swift", text: "let first = 1\n")

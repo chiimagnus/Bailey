@@ -58,7 +58,7 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 | WorkspaceUI | 真实 `ContentView`、项目、Dock、标签与多窗口的集成 | 独立进程的完整端到端 UI 自动化 |
 | E2E | 启动完整 App，从用户入口操作并核对最终结果 | 不能由上面的测试数量或绿色状态推断 |
 
-`BaileyUITests` 通过一次性本机临时文件／Git 仓库作为输入，并经真实 App 的系统文件选择器、Dock 和键盘操作核对结果。夹具创建时即登记 XCTest 清理，失败启动也不能留下文件；Git 子进程使用当前 Xcode 或 Command Line Tools 的真实 Git 二进制，绕开 `/usr/bin/git` 在 XCTest 沙盒中的 `xcrun` 包装器；标准输出和错误输出分别写入一次性文件，避免管道反压，并用于核对真实 Git 结果。原生文件选择器用窗口内的 `OKButton` 标识确认、`Escape` 取消，不能硬编码英文 `Add`/`Open`/`Cancel` 文案。Files/Git 行用原绝对／仓库相对路径的 AX 标签后缀区分同名项，文件 Tab 以独立的 AX 路径值区分重名标题，标识符不携带长路径；多窗口查询还须限定实际窗口。中文界面与超长 Unicode 文件树路径均有独立 App 回归；系统「前往文件夹」直接输入超长中文路径仍须单独验证，不由普通路径测试推断。构建 UI Target 不等于执行 GUI 测试：
+`BaileyUITests` 通过一次性本机临时文件／Git 仓库作为输入，并经真实 App 的系统文件选择器、Dock 和键盘操作核对结果。夹具创建时即登记 XCTest 清理，失败启动也不能留下文件；Git 子进程使用当前 Xcode 或 Command Line Tools 的真实 Git 二进制，绕开 `/usr/bin/git` 在 XCTest 沙盒中的 `xcrun` 包装器；标准输出和错误输出分别写入一次性文件，避免管道反压，并用于核对真实 Git 结果。原生文件选择器在「前往文件夹」中粘贴完整路径并核对解析结果，保留剪贴板的全部项目和数据类型；用窗口内的 `OKButton` 标识确认、`Escape` 取消，不能硬编码英文 `Add`/`Open`/`Cancel` 文案。Files/Git 行用原绝对／仓库相对路径的 AX 标签后缀区分同名项，文件 Tab 以独立的 AX 路径值区分重名标题，标识符不携带长路径；多窗口查询还须限定实际窗口。中文界面与超长 Unicode 文件树路径均有独立 App 回归；系统「前往文件夹」的超长中文路径仍须单独验证，不由普通路径测试推断。构建 UI Target 不等于执行 GUI 测试：
 
 | 完整用户路径 | 独立 UI 测试 | 仍保留的底层回归 |
 | --- | --- | --- |
@@ -116,9 +116,11 @@ open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey.app" --args -
 
 该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。Xcode 27.2 的 XCUITest 有时只启动 Dev 进程而不显示初始 `WindowGroup`，共用启动辅助函数仅在窗口缺失时点击 App 自己的「新建窗口」菜单创建原生窗口；不得改为 `open -n` 后按 Bundle ID 附着（可能另起非隔离 Dev，污染普通会话快照）。**开发版与正式版拥有不同 Bundle ID、配置路径和 DerivedData**，XCUITest 仅定位 Bailey Dev；正式版运行时也可执行宿主测试，无须强制退出用户 App。`make build:ui` 只编译。完整 UI 测试仍依赖当前 macOS 图形会话的前台键盘焦点；如果用户同时在 Helium 或正式 Bailey 输入，XCUI 键盘事件可能失败或打断用户，不能将不同 Bundle ID 冒称独立桌面。隔离 XCTest 宿主会移除自身菜单中的 `⌘Q` 退出快捷键：Mac 的键盘和前台应用状态仍由各进程共享，普通 Bailey 的退出快捷键不能误结束长时间运行的测试宿主；正式 Bailey 的菜单及保存退出保护不变。该隔离不是独立的图形登录会话，执行原生 UI 回归时仍应避免与用户正在进行的前台快捷键／鼠标操作互相干扰。刻意测试重启恢复时，两次启动显式传入同一有效 UUID 环境变量 `BAILEY_UI_TEST_RUN_ID`。
 
-**正式设置不会被开发版共用。** Dev 使用 `~/.config/bailey-dev`，正式版仍使用 `~/.config/bailey`；两版的终端历史、窗口快照、语言及 Bark 凭据也分域。不同 Dev 测试之间仍可能共用开发配置，修改设置的用例须使用独立临时配置与 UserDefaults suite；尤其 Diff 原生重载测试不得继承用户持久化的编辑模式，否则正常的编辑保护会让测试误判为刷新超时。临时文件、Git 仓库和受控后端不得指向正式项目。
+**正式设置不会被开发版共用。** 普通 Dev 使用 `~/.config/bailey-dev`，正式版仍使用 `~/.config/bailey`；两版的终端历史、窗口快照、语言及 Bark 凭据也分域。独立 UI 启动器为每例提供临时 `HOME` 和 `CFFIXED_USER_HOME`，并核对 App 的 TOML 确实出现在临时目录；仅改 `HOME` 不会改变 Foundation 的主目录。外观、面板字号等 TOML 夹具可经真实 App 验证，不修改现有 Dev 配置。Git 夹具在自身仓库配置身份和不签名策略，不依赖用户的全局 Git 设置。
 
-并行构建或测试同一项目时，为各任务指定独立的 `DERIVED_DATA`（如 `make test DERIVED_DATA=build/DerivedData-review`），避免共用产物被另一任务覆盖或重新签名；不得清理其他任务的构建目录。
+临时主目录不等于 UserDefaults／钥匙串全部隔离。语言持久化等设置仍须独立登录账户或明确的按键恢复；进程内组件测试继续显式使用临时配置与 UserDefaults suite，尤其 Diff 重载测试不得继承用户持久化的编辑模式。临时文件、Git 仓库和受控后端不得指向正式项目。
+
+需要保留不同构建产物时可指定独立 `DERIVED_DATA`，不得清理其他任务的目录；Dev 四入口仍须持有同一锁，换目录不能隔离同 Bundle ID 的应用、Runner 或桌面。
 
 Finder 拖进运行中 Bailey 时，**先核对 Finder 与 Bailey 两个窗口的屏幕边界，目标点不能落在 Finder 自身窗口或侧栏内**，否则会被 Finder 执行移动／废纸篓等本机操作，不能归因于 Bailey。核对系统当前选中项与拖动的真实 provider 数量；双窗口、文件树精确行和网页上传必须检查最终编辑标签／Shell／网页内容，而不是只看鼠标事件已派发。
 
