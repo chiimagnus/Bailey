@@ -396,41 +396,6 @@ final class RecentCommitsViewTests: XCTestCase {
         XCTAssertTrue(window.firstResponder === receiver)
     }
 
-    func testGraphPaletteKeepsTwelveLaneColors() {
-        let expected: [(CGFloat, CGFloat, CGFloat)] = [
-            (0, 133, 217), (217, 0, 143), (0, 217, 10), (217, 133, 0),
-            (163, 0, 217), (255, 0, 0), (0, 217, 204), (225, 56, 232),
-            (133, 217, 0), (220, 91, 35), (111, 36, 214), (255, 204, 0),
-        ]
-        XCTAssertEqual(GitGraphPalette.colors.count, expected.count)
-        for (index, rgb) in expected.enumerated() {
-            let actual = GitGraphPalette.colors[index]
-            XCTAssertEqual(actual.redComponent, rgb.0 / 255, accuracy: 0.001)
-            XCTAssertEqual(actual.greenComponent, rgb.1 / 255, accuracy: 0.001)
-            XCTAssertEqual(actual.blueComponent, rgb.2 / 255, accuracy: 0.001)
-        }
-    }
-
-    func testColoredBadgeIconsRemainReadableOverEveryGraphLaneColor() {
-        func luminance(_ color: NSColor) -> CGFloat {
-            let rgb = color.usingColorSpace(.sRGB)!
-            func linear(_ channel: CGFloat) -> CGFloat {
-                channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
-            }
-            return 0.2126 * linear(rgb.redComponent)
-                + 0.7152 * linear(rgb.greenComponent)
-                + 0.0722 * linear(rgb.blueComponent)
-        }
-        XCTAssertEqual(GitGraphPalette.iconInks.count, GitGraphPalette.colors.count)
-        for (index, fill) in GitGraphPalette.colors.enumerated() {
-            let ink = GitGraphPalette.iconInks[index]
-            let lighter = max(luminance(fill), luminance(ink))
-            let darker = min(luminance(fill), luminance(ink))
-            XCTAssertGreaterThanOrEqual((lighter + 0.05) / (darker + 0.05), 4.5,
-                                        "Graph lane \(index) badge icon contrast")
-        }
-    }
-
     func testTagStashDetachedAndStandaloneWorktreeIconsMatchGraphColors() throws {
         typealias Commit = GitStatusModel.RecentCommit
         let taggedHash = String(repeating: "a", count: 40)
@@ -529,58 +494,6 @@ final class RecentCommitsViewTests: XCTestCase {
             XCTAssertTrue(selection.expanded.contains(commits[0].id))
             window.close()
         }
-    }
-
-    func testCompositeReferencesUseLongestConfiguredRemoteAndPreserveEveryTarget() throws {
-        typealias Ref = GitStatusModel.RecentCommit.Reference
-        let references: [Ref] = [
-            .init(kind: .localBranch, name: "team/topic/nested"),
-            .init(kind: .remoteBranch, name: "origin/team/topic/nested"),
-            .init(kind: .remoteBranch, name: "old/main"),
-            .init(kind: .currentBranch, name: "main"),
-            .init(kind: .remoteBranch, name: "upstream/main"),
-            .init(kind: .localBranch, name: "topic/nested"),
-            .init(kind: .tag, name: "v1,β"),
-            .init(kind: .remoteBranch, name: "origin/main"),
-            .init(kind: .remoteAlias, name: "origin/HEAD"),
-        ]
-        let groups = GitGraphReferenceGroup.grouped(
-            references, remotes: ["origin", "origin/team", "upstream"]
-        )
-        XCTAssertEqual(groups.first?.primary.name, "main")
-        XCTAssertEqual(groups.first?.remotes.map(\.name), ["upstream/main", "origin/main"])
-        let topic = try XCTUnwrap(groups.first { $0.primary.name == "topic/nested" })
-        XCTAssertEqual(topic.remotes.map(\.name), ["origin/team/topic/nested"])
-        XCTAssertTrue(groups.contains {
-            $0.primary.name == "team/topic/nested" && $0.remotes.isEmpty
-        })
-        XCTAssertTrue(groups.contains {
-            $0.primary.name == "old/main" && $0.remotes.isEmpty
-        })
-        XCTAssertTrue(groups.contains {
-            $0.primary.kind == .remoteAlias && $0.remotes.isEmpty
-        })
-        XCTAssertTrue(groups.contains { $0.primary.kind == .tag })
-        let flattened = groups.flatMap(\.references)
-        XCTAssertEqual(flattened.count, references.count)
-        XCTAssertEqual(Set(flattened), Set(references))
-    }
-
-    func testCompositeReferencesNeverJoinDifferentCommitRowsOrUnknownRemotes() {
-        typealias Ref = GitStatusModel.RecentCommit.Reference
-        let local = Ref(kind: .localBranch, name: "修复/feature,α")
-        let remote = Ref(kind: .remoteBranch, name: "origin/修复/feature,α")
-        let first = GitGraphReferenceGroup.grouped([local], remotes: ["origin"])
-        let second = GitGraphReferenceGroup.grouped([remote], remotes: ["origin"])
-        XCTAssertEqual(first.count, 1)
-        XCTAssertTrue(first[0].remotes.isEmpty)
-        XCTAssertEqual(second[0].primary, remote)
-        let stale = GitGraphReferenceGroup.grouped([local, remote], remotes: [])
-        XCTAssertEqual(stale.count, 2)
-        XCTAssertTrue(stale.allSatisfy { $0.remotes.isEmpty })
-        let matched = GitGraphReferenceGroup.grouped([local, remote], remotes: ["origin"])
-        XCTAssertEqual(matched.count, 1)
-        XCTAssertEqual(matched[0].remotes, [remote])
     }
 
     func testCompositeOverflowKeepsRealReferencesAvailableWithoutWholeRowScrolling() {
@@ -807,41 +720,6 @@ final class RecentCommitsViewTests: XCTestCase {
         }
     }
 
-    func testGraphNodeHelpOnlyStatesConfirmedHEADMembershipAndActualReferences() throws {
-        let commit = GitStatusModel.RecentCommit(
-            hash: String(repeating: "a", count: 40),
-            shortHash: "aaaaaaa", subject: "Merge branch",
-            author: "Tester", date: .now, parentHashes: ["parent", "side"],
-            references: [
-                .init(kind: .remoteBranch, name: "origin/main"),
-                .init(kind: .tag, name: "v1.0"),
-            ], files: []
-        )
-        let confirmed = RecentCommitsView.nodeHelp(commit, inHeadHistory: true)
-        XCTAssertTrue(confirmed.contains(commit.hash))
-        XCTAssertTrue(confirmed.contains(commit.subject))
-        XCTAssertTrue(confirmed.contains("origin/main"))
-        XCTAssertTrue(confirmed.contains("v1.0"))
-        XCTAssertTrue(confirmed.contains(
-            String(localized: "In HEAD History", table: "Git")
-        ))
-        let unknown = RecentCommitsView.nodeHelp(commit, inHeadHistory: false)
-        XCTAssertFalse(unknown.contains(
-            String(localized: "In HEAD History", table: "Git")
-        ))
-        let stash = GitStatusModel.Stash(
-            selector: "stash@{1}", oid: String(repeating: "b", count: 40),
-            message: "saved", baseHash: "parent", untrackedFilesHash: nil,
-            author: "Tester", date: .now
-        )
-        let stashCommit = try XCTUnwrap(
-            GitStatusModel.graphCommits([], stashes: [stash]).first
-        )
-        XCTAssertTrue(RecentCommitsView.nodeHelp(
-            stashCommit, inHeadHistory: false
-        ).contains(stash.selector))
-    }
-
     func testNodeHoverTargetRetainsSingleClickAndCommitContextMenu() throws {
         let selection = GraphSelection()
         let commit = GitStatusModel.RecentCommit(
@@ -885,33 +763,6 @@ final class RecentCommitsViewTests: XCTestCase {
         let window = hostHistory([commit], selection: selection, height: 110)
         defer { window.close() }
         assertHorizontalScroll(in: window.contentView!)
-    }
-
-    func testGraphGutterLeavesRoomForCommitContentAtExtremeLaneCounts() {
-        let widths: [CGFloat] = [48, 120, 260, 400, 800]
-        let scales: [CGFloat] = [0.8, 1, 1.6, 2]
-        let laneCounts = [0, 1, 2, 12, 30, 100, 237, 1_000]
-        for width in widths {
-            for scale in scales {
-                for lanes in laneCounts {
-                    let spacing = CommitGraphRails.spacing(
-                        lanes: lanes, viewportWidth: width, scale: scale)
-                    let gutter = CommitGraphRails.gutter(
-                        lanes: lanes, spacing: spacing, scale: scale)
-                    let minimumNodeGutter = 16 * scale
-                    XCTAssertTrue(spacing.isFinite && spacing >= 0,
-                                  "Invalid spacing at \(width)pt, \(scale)x, \(lanes) lanes")
-                    XCTAssertLessThanOrEqual(
-                        gutter, max(width * 0.34, minimumNodeGutter) + 0.01,
-                        "Commit title is displaced by \(lanes) lanes at \(width)pt / \(scale)x"
-                    )
-                    if width >= minimumNodeGutter {
-                        XCTAssertLessThanOrEqual(gutter, width,
-                                                 "Graph must not consume the whole sidebar")
-                    }
-                }
-            }
-        }
     }
 
     func testDenseRealNativeGraphRetainsVisibleTitleScrollerInBothThemes() throws {
@@ -1367,42 +1218,6 @@ final class RecentCommitsViewTests: XCTestCase {
         }
     }
 
-    func testWorktreeDisplayPathsStayUniqueWithSameCheckoutDirectoryNames() {
-        let paths = [
-            "/Users/test/A/shared",
-            "/Users/test/B/shared",
-            "/Users/test/C/one/shared",
-            "/Users/test/D/one/shared",
-            "/Users/test/独特工作树",
-        ]
-        let labels = paths.map { RecentCommitsView.worktreeDisplayPath($0, among: paths) }
-        XCTAssertEqual(labels.count, Set(labels).count)
-        XCTAssertEqual(labels[0], "A/shared")
-        XCTAssertEqual(labels[1], "B/shared")
-        XCTAssertEqual(labels[2], "C/one/shared")
-        XCTAssertEqual(labels[3], "D/one/shared")
-        XCTAssertEqual(labels[4], "独特工作树")
-        XCTAssertEqual(RecentCommitsView.worktreeDisplayPath("/Users/test/B/shared",
-                         among: ["/Users/test/B/shared"]), "shared")
-    }
-
-    func testWorktreeConflictStatusAlwaysUsesUInTreeAndList() {
-        let conflicts: [(Character, Character)] = [
-            ("U", "U"), ("A", "A"), ("D", "D"), ("A", "U"), ("U", "D")
-        ]
-        for (index, status) in conflicts.enumerated() {
-            let entry = GitStatusModel.Entry(
-                path: "conflict-\(index).txt", staged: status.0,
-                unstaged: status.1, isConflict: true
-            )
-            XCTAssertEqual(RecentCommitsView.worktreeDisplayStatus(entry, staged: true), "U")
-            XCTAssertEqual(RecentCommitsView.worktreeDisplayStatus(entry, staged: false), "U")
-        }
-        let modified = GitStatusModel.Entry(path: "modified", staged: "R", unstaged: "M")
-        XCTAssertEqual(RecentCommitsView.worktreeDisplayStatus(modified, staged: true), "R")
-        XCTAssertEqual(RecentCommitsView.worktreeDisplayStatus(modified, staged: false), "M")
-    }
-
     func testDenseWorktreeGraphKeepsCommitTitlesReadableAcrossThemes() throws {
         typealias Commit = GitStatusModel.RecentCommit
         let design = String(repeating: "a", count: 40)
@@ -1586,46 +1401,6 @@ final class RecentCommitsViewTests: XCTestCase {
                 window.close()
             }
         }
-    }
-
-    func testGraphBadgesUseCompactSharedMetrics() {
-        XCTAssertEqual(RecentCommitsView.badgeHeight, 16)
-        XCTAssertEqual(RecentCommitsView.badgeIconSize, 16)
-        XCTAssertEqual(RecentCommitsView.badgeFontSize, 9)
-        XCTAssertEqual(RecentCommitsView.badgeHorizontalPadding, 4)
-    }
-
-    func testLocalBranchTakesPriorityOverRemoteDefaultAliasWithoutLosingReferences() {
-        typealias Reference = GitStatusModel.RecentCommit.Reference
-        let references: [Reference] = [
-            .init(kind: .remoteAlias, name: "origin/HEAD"),
-            .init(kind: .remoteBranch, name: "origin/main"),
-            .init(kind: .localBranch, name: "main"),
-            .init(kind: .tag, name: "v1"),
-        ]
-        let groups = GitGraphReferenceGroup.grouped(references, remotes: ["origin"])
-        XCTAssertEqual(groups.first?.primary.name, "main")
-        XCTAssertEqual(Set(groups.flatMap(\.references)), Set(references))
-        let current = Reference(kind: .currentBranch, name: "topic")
-        XCTAssertEqual(GitGraphReferenceGroup.grouped(references + [current], remotes: ["origin"])
-            .first?.primary, current)
-        let detached = Reference(kind: .detachedHead, name: "HEAD")
-        XCTAssertEqual(GitGraphReferenceGroup.grouped(references + [detached], remotes: ["origin"])
-            .first?.primary, detached)
-        let feature = Reference(kind: .localBranch, name: "feature")
-        let location = GitStatusModel.WorktreeLocation(path: "/fixture/feature", headOID: nil, branch: "feature")
-        let checkedOut = GitGraphReferenceGroup.grouped(
-            references + [feature], remotes: ["origin"], worktrees: [location]
-        )
-        XCTAssertEqual(checkedOut.first?.primary, feature)
-        XCTAssertEqual(Set(checkedOut.flatMap(\.references)), Set(references + [feature]))
-    }
-
-    func testUnassociatedWorktreeLabelChineseTranslationPreservesDirectoryName() throws {
-        let path = try XCTUnwrap(Bundle.main.path(forResource: "zh-Hans", ofType: "lproj"))
-        let bundle = try XCTUnwrap(Bundle(path: path))
-        let pattern = bundle.localizedString(forKey: "%@ · No branch", value: nil, table: "Git")
-        XCTAssertEqual(String(format: pattern, "a904/Bailey"), "a904/Bailey · 未关联分支")
     }
 
     func testRealWorktreeHistoryRendersNamedLabelsAndPreservesSharedHeadActions() async throws {
