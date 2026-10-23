@@ -99,6 +99,8 @@ Branch、Remote Branch 与 Tag 的「创建归档」只生成 ZIP，macOS 原生
 
 「恢复文件到此版本」明确提示将同时覆盖此路径的 Git index 与工作区，经确认后执行 `git --literal-pathspecs checkout <SHA> -- <path>`。先核对确认打开时的文件状态，再完成未保存编辑的保存保护；自己的保存不算外部改写。首次 Git 覆写前再次核对准备后的文件状态和原 index；外部修改、保存失败或新编辑都会拒绝操作。成功后只重读干净的打开标签，HEAD 与其他历史引用不改变。保留现有文件树的原生命中、图谱线和独立横向滚动。
 
+历史文件的行为回归分为两层：`NativeGitHistoryFileTests` 在受控真实 Git 仓库中核对 revision、重命名、索引／工作区快照、SHA-256、5 MiB 上限和错误／竞态；`GitHistoryUITests` 经真实 Git Graph 的历史文件入口核对只读原文、取消／确认恢复及最终 Git 字节。`NativeDiffTabTests` 保留原生文本的辅助功能只读写保护组件契约。图谱历史文件具有独立 AX 行标识，防止同一路径的 Git Changes 行抢占历史菜单。
+
 ### 远端分支操作
 
 右键远端 Branch 或在 `+N` 菜单中选择相同操作，均绑定**实际 remote、完整分支路径与选定 Git Ref**；有多层路径或 remote 名称自身包含 `/` 时按配置识别最长匹配 remote。`origin/HEAD` 及其它符号远端引用按 Ref 快照的 `symref` 判定，只作为可查看、可复制名称的引用别名显示，不提供检出、Fetch、Merge、Pull、删除或归档操作；真正名为 `HEAD` 的非符号分支仍正常显示与操作。

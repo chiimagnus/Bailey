@@ -23,7 +23,10 @@ final class WorkspaceGitUITests: XCTestCase {
             return
         }
         history.click()
-        let path = WorkspaceUITestSupport.fileRow(committed, in: app.windows.firstMatch, relativeTo: fixture.root)
+        let path = app.windows.firstMatch.descendants(matching: .any)
+            .matching(identifier: "bailey.git.history.file")
+            .matching(NSPredicate(format: "label ENDSWITH %@", ", " + committed.lastPathComponent))
+            .firstMatch
         XCTAssertTrue(path.waitForExistence(timeout: 15),
                       "Opening a real Git Graph commit must reveal its changed file")
     }

@@ -36,6 +36,6 @@ Git 内容先通过原始 NUL 分隔的 index／tree metadata 匹配字面路径
 
 ## 验证
 
-`DiffEngineTests` 检查原文字节重建及 UTF-16 行内范围；`NativeDiffTabTests` 与 `GitHistoryFileTests` 检查原生文本、不同历史来源、空文件、Git 读错误、重命名、二进制、超限、只读边界、刷新与重新挂载。覆盖统一／分栏、行内差异、编辑、撤销、保存、未跟踪、暂存、历史、字节与大小边界、两侧内容宽度不同、快速切换及在途读取。
+`DiffEngineTests` 检查原文字节重建及 UTF-16 行内范围；`NativeDiffTabTests` 与 `NativeGitHistoryFileTests` 检查原生文本、不同历史来源、空文件、Git 读错误、重命名、二进制、超限、只读边界、刷新与重新挂载。覆盖统一／分栏、行内差异、编辑、撤销、保存、未跟踪、暂存、历史、字节与大小边界、两侧内容宽度不同、快速切换及在途读取。
 
 `WorkspaceGitUITests.testWorktreeDiffEditsAndPersistsRealGitFile` 已在本机独立 Bailey Dev 真实 GUI 中通过：从 Git Changes 打开 Diff、在 Review 模式下真实切换 Split／Unified 并确认分栏原生文本区域、进入 Edit、Undo／Redo、⌘S，并核对最终文件字节。AppKit 的 `NSSegmentedControl` 在 XCUI 辅助功能树中表现为 `RadioGroup`，测试按实际类型查询。宿主 Diff 像素测试将位图通道与主题色在 sRGB 空间比较，保持原阈值；折叠异步测试用独立 UserDefaults，避免被持久化编辑模式阻止正常重载。仍需在完整工作区中验证文件→Diff→文件的内容身份和焦点。接口返回或桥接成功不代表用户可用；性能测量须包含 TextKit 首屏、滚动和编辑，而不是 WebKit 指标。入口见 [testing.md](../testing.md)。

@@ -123,6 +123,23 @@ private struct DiffSelectionFixtureView: View {
 
 @MainActor
 final class NativeDiffTabTests: XCTestCase {
+    func testNativeDiffAccessibilityAllowsOnlyEditableTextChanges() {
+        // AppKit API-level contract: XCUIApplication exercises the full user
+        // interaction separately in GitHistoryUITests and WorkspaceGitUITests.
+        let editor = DiffTextView()
+        editor.frame = .init(x: 0, y: 0, width: 300, height: 150)
+        editor.text = "original"
+        for editable in [false, true, false] {
+            editor.isEditable = editable
+            XCTAssertEqual(editor.isAccessibilitySelectorAllowed(#selector(editor.setAccessibilityValue(_:))), editable)
+            let previous = editor.text
+            let replacement = editable ? "editable change" : "readonly change"
+            editor.setAccessibilityValue(replacement)
+            XCTAssertEqual(editor.text, editable ? replacement : previous)
+            XCTAssertTrue(editor.isSelectable)
+        }
+    }
+
     private func isolatedPreferences() throws -> DiffViewPreferences {
         let domain = "bailey-native-diff-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))

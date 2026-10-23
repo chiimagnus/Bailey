@@ -1341,6 +1341,7 @@ struct RecentCommitsView: View {
             focusRing: isFocusedRow(historicalFileRowID(commit, file: file)),
             leadingInset: inset,
             accessibilityHint: String(localized: "Opens changes", table: "Sidebar"),
+            accessibilityID: "bailey.git.history.file",
             open: {
                 selectRow(historicalFileRowID(commit, file: file))
                 openDiff(commit, file)

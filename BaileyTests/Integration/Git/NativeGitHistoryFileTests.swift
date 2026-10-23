@@ -1,10 +1,8 @@
-import AppKit
-import SwiftUI
 import XCTest
 @testable import Bailey
 
 @MainActor
-final class GitHistoryFileTests: XCTestCase {
+final class NativeGitHistoryFileTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
     private func repository() throws -> URL {
@@ -42,12 +40,7 @@ final class GitHistoryFileTests: XCTestCase {
         }
     }
 
-    private func nativeText(in view: NSView) -> DiffTextView? {
-        if let found = view as? DiffTextView { return found }
-        return view.subviews.lazy.compactMap { self.nativeText(in: $0) }.first
-    }
-
-    func testRevisionIsNativeReadonlyTextOfSelectedCommitEvenWithSharedEditPreference() async throws {
+    func testRevisionRemainsReadonlyWhenSharedPreferencesEnableEditing() async throws {
         let root = try repository()
         defer { try? FileManager.default.removeItem(at: root) }
         try Data("history one\n".utf8).write(to: root.appendingPathComponent("note.txt"))
@@ -74,40 +67,12 @@ final class GitHistoryFileTests: XCTestCase {
         XCTAssertFalse(revision.isEditing)
         XCTAssertNil(empty.error)
         XCTAssertEqual(empty.newContent, "")
-        let window = NSWindow(
-            contentRect: .init(x: -1300, y: -1300, width: 680, height: 470),
-            styleMask: [.titled], backing: .buffered, defer: false
-        )
-        window.isReleasedWhenClosed = false
-        defer { window.close() }
-        let host = NSHostingView(rootView: DiffViewerView(diff: revision))
-        window.contentView = host
-        window.orderFront(nil)
-        try await wait { self.nativeText(in: host) != nil }
-        let editor = try XCTUnwrap(nativeText(in: host))
-        XCTAssertEqual(editor.text, "history one\n")
-        XCTAssertFalse(editor.isEditable)
-        XCTAssertFalse(editor.isAccessibilitySelectorAllowed(#selector(editor.setAccessibilityValue(_:))))
-        editor.setAccessibilityValue("unexpected accessibility edit")
-        XCTAssertEqual(editor.text, "history one\n")
-        window.contentView = NSHostingView(rootView: DiffViewerView(diff: empty))
-        try await wait { empty.nativeSurface != nil && self.nativeText(in: window.contentView!) != nil }
-        XCTAssertFalse(try XCTUnwrap(nativeText(in: window.contentView!)).isEditable)
-    }
-
-    func testNativeDiffAccessibilityAllowsOnlyEditableTextChanges() {
-        let editor = DiffTextView()
-        editor.frame = .init(x: 0, y: 0, width: 300, height: 150)
-        editor.text = "original"
-        for editable in [false, true, false] {
-            editor.isEditable = editable
-            XCTAssertEqual(editor.isAccessibilitySelectorAllowed(#selector(editor.setAccessibilityValue(_:))), editable)
-            let previous = editor.text
-            let replacement = editable ? "editable change" : "readonly change"
-            editor.setAccessibilityValue(replacement)
-            XCTAssertEqual(editor.text, editable ? replacement : previous)
-            XCTAssertTrue(editor.isSelectable)
-        }
+        XCTAssertFalse(revision.isEditableNow)
+        XCTAssertFalse(empty.isEditableNow)
+        XCTAssertEqual(revision.newContent, "history one\n")
+        XCTAssertEqual(empty.newContent, "")
+        // The cross-process readonly text surface and keyboard/AX behavior
+        // belong to GitHistoryUITests, not a synthetic NSWindow in BaileyTests.
     }
 
     func testRevisionToWorktreeFollowsRenameAndRefreshesWithoutWritingHistoricalBlob() async throws {

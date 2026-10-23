@@ -78,23 +78,32 @@ enum WorkspaceUITestSupport {
         try selectASCIIInputSource()
         pathField.typeKey("a", modifierFlags: .command)
         pathField.typeText(url.path)
-        // NSOpenPanel's Go to Folder field may still be resolving a path suggestion.
-        let enteredPath = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == %@", url.path), object: pathField
-        )
-        _ = XCTWaiter.wait(for: [enteredPath], timeout: 4)
-        let entered = pathField.value as? String ?? "<non-text>"
-        guard entered == url.path else {
-            let source = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
-            let idPointer = TISGetInputSourceProperty(source, kTISPropertyInputSourceID)
-            let inputID = idPointer.map {
-                Unmanaged<CFString>.fromOpaque($0).takeUnretainedValue() as String
-            } ?? "unknown"
+        // NSOpenPanel sometimes resolves an absolute path immediately, closes
+        // Go to Folder, and selects its target in the parent directory.
+        // Both native states must identify the exact test target before Add/Open.
+        func selectedExpectedTarget() -> Bool {
+            let parent = url.deletingLastPathComponent().lastPathComponent
+            guard sheet.popUpButtons["where popup"].value as? String == parent else { return false }
+            return sheet.outlineRows.allElementsBoundByIndex.contains { row in
+                guard row.isSelected else { return false }
+                return row.textFields.allElementsBoundByIndex.contains { field in
+                    guard let displayed = field.value as? String else { return false }
+                    let visibleName = displayed.replacingOccurrences(of: "...", with: "")
+                        .replacingOccurrences(of: "…", with: "")
+                    return visibleName.count >= 8 && url.lastPathComponent.hasPrefix(visibleName)
+                }
+            }
+        }
+        let resolved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            if pathField.exists { return pathField.value as? String == url.path }
+            return selectedExpectedTarget()
+        }, object: nil)
+        guard XCTWaiter.wait(for: [resolved], timeout: 8) == .completed else {
             throw NSError(domain: "BaileyUITestPicker", code: 4, userInfo: [
-                NSLocalizedDescriptionKey: "Go to Folder mismatch, input=\(inputID), expected=\(url.path.debugDescription), actual=\(entered.debugDescription)"
+                NSLocalizedDescriptionKey: "Go to Folder did not resolve the intended fixture path: \(url.path)"
             ])
         }
-        pathField.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        if pathField.exists { pathField.typeKey(XCUIKeyboardKey.return, modifierFlags: []) }
         let confirmation = sheet.buttons["OKButton"]
         guard confirmation.waitForExistence(timeout: 15) else {
             throw NSError(domain: "BaileyUITestPicker", code: 2,
@@ -159,7 +168,8 @@ struct WorkspaceUITestFixture {
         return url
     }
 
-    func git(_ args: [String]) throws {
+    @discardableResult
+    func git(_ args: [String]) throws -> Data {
         // /usr/bin/git invokes xcrun, which cannot run inside XCTest's sandbox.
         let developerGit = ProcessInfo.processInfo.environment["DEVELOPER_DIR"]
             .map { URL(fileURLWithPath: $0).appendingPathComponent("usr/bin/git").path }
@@ -176,13 +186,18 @@ struct WorkspaceUITestFixture {
                              "-C", root.path] + args
         let diagnostics = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-UITest-Git-" + UUID().uuidString)
+        let output = diagnostics.appendingPathExtension("stdout")
         try Data().write(to: diagnostics)
+        try Data().write(to: output)
         let errorOutput = try FileHandle(forWritingTo: diagnostics)
+        let outputHandle = try FileHandle(forWritingTo: output)
         defer {
             try? errorOutput.close()
+            try? outputHandle.close()
             try? FileManager.default.removeItem(at: diagnostics)
+            try? FileManager.default.removeItem(at: output)
         }
-        process.standardOutput = FileHandle.nullDevice
+        process.standardOutput = outputHandle
         process.standardError = errorOutput
         try process.run()
         process.waitUntilExit()
@@ -191,6 +206,7 @@ struct WorkspaceUITestFixture {
             throw NSError(domain: "BaileyUITestGit", code: Int(process.terminationStatus),
                           userInfo: [NSLocalizedDescriptionKey: reason])
         }
+        return try Data(contentsOf: output)
     }
 
     func initializeGit() throws {

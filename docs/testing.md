@@ -58,7 +58,7 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 | WorkspaceUI | 真实 `ContentView`、项目、Dock、标签与多窗口的集成 | 独立进程的完整端到端 UI 自动化 |
 | E2E | 启动完整 App，从用户入口操作并核对最终结果 | 不能由上面的测试数量或绿色状态推断 |
 
-`BaileyUITests` 通过一次性本机临时文件／Git 仓库作为输入，并经真实 App 的系统文件选择器、Dock 和键盘操作核对结果。夹具创建时即登记 XCTest 清理，失败启动也不能留下文件；Git 子进程使用当前 Xcode 或 Command Line Tools 的真实 Git 二进制，绕开 `/usr/bin/git` 在 XCTest 沙盒中的 `xcrun` 包装器；标准输出定向至空设备、错误输出写临时文件，避免管道反压。原生文件选择器用窗口内的 `OKButton` 标识确认、`Escape` 取消，不能硬编码英文 `Add`/`Open`/`Cancel` 文案。Files/Git 行用原绝对／仓库相对路径的 AX 标签后缀区分同名项，文件 Tab 以独立的 AX 路径值区分重名标题，标识符不携带长路径；多窗口查询还须限定实际窗口。中文界面与超长 Unicode 文件树路径均有独立 App 回归；系统「前往文件夹」直接输入超长中文路径仍须单独验证，不由普通路径测试推断。构建 UI Target 不等于执行 GUI 测试：
+`BaileyUITests` 通过一次性本机临时文件／Git 仓库作为输入，并经真实 App 的系统文件选择器、Dock 和键盘操作核对结果。夹具创建时即登记 XCTest 清理，失败启动也不能留下文件；Git 子进程使用当前 Xcode 或 Command Line Tools 的真实 Git 二进制，绕开 `/usr/bin/git` 在 XCTest 沙盒中的 `xcrun` 包装器；标准输出和错误输出分别写入一次性文件，避免管道反压，并用于核对真实 Git 结果。原生文件选择器用窗口内的 `OKButton` 标识确认、`Escape` 取消，不能硬编码英文 `Add`/`Open`/`Cancel` 文案。Files/Git 行用原绝对／仓库相对路径的 AX 标签后缀区分同名项，文件 Tab 以独立的 AX 路径值区分重名标题，标识符不携带长路径；多窗口查询还须限定实际窗口。中文界面与超长 Unicode 文件树路径均有独立 App 回归；系统「前往文件夹」直接输入超长中文路径仍须单独验证，不由普通路径测试推断。构建 UI Target 不等于执行 GUI 测试：
 
 | 完整用户路径 | 独立 UI 测试 | 仍保留的底层回归 |
 | --- | --- | --- |
@@ -67,9 +67,10 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 | 大文件远距导航、文本替换、键盘撤销／重做、真实保存 | `EditorNavigationUITests` | `NativeEditorLayoutTests`、`NativeEditorCompositionTests`、`FileTabPersistenceTests` |
 | Swift／Markdown／TSX／HTML／CSS 与纯文本实际着色像素差异、原文未污染 | `EditorHighlightingUITests`（本机 Bailey Dev 已实测） | `NativeSyntaxHighlightingTests`、`HighlightQueryCacheTests` |
 | Git Changes 状态、Git Graph 提交展开及工作区 Diff 分栏／统一、编辑／Undo／真实保存 | `WorkspaceGitUITests`（Git Changes／Git Graph／Split→Unified→Edit→磁盘字节路径已实测） | `GitStatusModelTests`、`NativeDiffTabTests`、`RecentCommitsViewTests` |
+| Git 历史 revision 只读、历史文件菜单、危险重置的取消／确认与工作区／index／HEAD 字节 | `GitHistoryUITests`（真实 Git Graph；同路径 Changes/History 行按独立 AX 标识区分） | `NativeGitHistoryFileTests`、`NativeDiffTabTests`、`GitExecutionTests`、`GitStatusModelTests` |
 | 多窗口、设置、系统选择器取消 | `WorkspaceWindowsUITests` | `WorkspaceWindowCloseTests`、`WorkspaceWindowIsolationTests` |
 
-这些 UI 用例不取代原有 `NSWindow`／`NSHostingView` 回归。未覆盖的完整外部路径（Finder/Dock 拖放、真实 SSH、脏文件保存冲突和不同窗口混合停靠）仍必须独立验收，不能因为 UI Test Target 存在而宣称已全部迁移；宿主 XCTest 也不等于 E2E。
+必须访问 TextKit／AppKit 内部状态的原生组件测试仍保留在宿主 XCTest；模拟完整 App 操作的旧窗口夹具则在对应迁移任务中删除，不长期维护双轨。未覆盖的完整外部路径（Finder/Dock 拖放、真实 SSH、脏文件保存冲突和不同窗口混合停靠）仍必须独立验收，不能因为 UI Test Target 存在而宣称已全部迁移；宿主 XCTest 也不等于 E2E。
 
 按行为风险选择层次，不给每个功能机械配五套测试。纯计算优先单元测试；影响标签身份、焦点、保存、连接、停靠和窗口生命周期时，加入真实原生或工作区回归，并补足相应人工路径。
 
@@ -83,7 +84,7 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 | Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests`；改变焦点许可或活动组时补 `DockFocusP2RegressionTests`、`WorkspaceWindowIsolationTests` 的原生输入与双窗路径 |
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
-| Git 环境、刷新、写操作与失败状态 | `GitExternalRefreshTests`、`GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitTagActionTests`、`GitWorkspaceActionTests`、`GitStashActionTests`、`GitBranchDialogTests`、`GitTagDialogTests`、`GitWorkspaceMenuTests`、`GitStashDialogTests` |
+| Git 环境、刷新、写操作与失败状态 | `NativeGitHistoryFileTests`、`GitExternalRefreshTests`、`GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitTagActionTests`、`GitWorkspaceActionTests`、`GitStashActionTests`、`GitBranchDialogTests`、`GitTagDialogTests`、`GitWorkspaceMenuTests`、`GitStashDialogTests` |
 | Git 图谱拓扑、引用标签、颜色、Worktree 菜单与窄侧栏 | `CommitGraphLayoutTests`、`RecentCommitsViewTests` |
 | SSH 命令、断线、重连和过期结果 | `RemoteCommandsTests`、`RemoteLifetimeTests` |
 | 文件、Diff 和原生内容保留 | `FileTabPersistenceTests`、`NativeFileTabTests`、`NativeDiffTabTests`、`DiffEngineTests`、`PaneRetentionTests` |
