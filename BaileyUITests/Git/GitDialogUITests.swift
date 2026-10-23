@@ -682,7 +682,7 @@ final class GitDialogUITests: XCTestCase {
 
     func testDropCommitNativeConfirmationCancelsThenRewritesOnlySelectedHistory() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
-        try fixture.file("root.txt", text: "root\n")
+        _ = try fixture.file("root.txt", text: "root\n")
         try fixture.initializeGit()
         let base = try fixture.git(["rev-parse", "HEAD"])
         try fixture.git(["config", "user.name", "BaileyUITest"])
@@ -736,17 +736,17 @@ final class GitDialogUITests: XCTestCase {
 
     func testInteractiveRebaseFromGitGraphOpensRealPTYAndAcceptsEditorInput() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
-        try fixture.file("base.txt", text: "base\n")
+        _ = try fixture.file("base.txt", text: "base\n")
         try fixture.initializeGit()
         try fixture.git(["config", "user.name", "BaileyUITest"])
         try fixture.git(["config", "user.email", "tests@example.invalid"])
         try fixture.git(["switch", "-c", "side"])
-        try fixture.file("side.txt", text: "side\n")
+        _ = try fixture.file("side.txt", text: "side\n")
         try fixture.git(["add", "side.txt"])
         try fixture.git(["commit", "-qm", "side for interactive rebase"])
         let side = try fixture.git(["rev-parse", "HEAD"])
         try fixture.git(["switch", "main"])
-        try fixture.file("main.txt", text: "main\n")
+        _ = try fixture.file("main.txt", text: "main\n")
         try fixture.git(["add", "main.txt"])
         try fixture.git(["commit", "-qm", "main before interactive rebase"])
         let oldHead = try fixture.git(["rev-parse", "HEAD"])
@@ -863,21 +863,21 @@ final class GitDialogUITests: XCTestCase {
 
     func testHistoricalCommitNativeSheetsUseSafeDefaultsAndCheckoutRealHistory() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
-        try fixture.file("base.txt", text: "base\n")
+        _ = try fixture.file("base.txt", text: "base\n")
         try fixture.initializeGit()
         try fixture.git(["config", "user.name", "BaileyUITest"])
         try fixture.git(["config", "user.email", "tests@example.invalid"])
         try fixture.git(["switch", "-c", "side"])
-        try fixture.file("side.txt", text: "side\n")
+        _ = try fixture.file("side.txt", text: "side\n")
         try fixture.git(["add", "side.txt"])
         try fixture.git(["commit", "-qm", "side contribution"])
         try fixture.git(["switch", "main"])
-        try fixture.file("main.txt", text: "main\n")
+        _ = try fixture.file("main.txt", text: "main\n")
         try fixture.git(["add", "main.txt"])
         try fixture.git(["commit", "-qm", "main contribution"])
         try fixture.git(["merge", "--no-ff", "side", "-m", "merge target"])
         let merge = try fixture.git(["rev-parse", "HEAD"])
-        try fixture.file("after.txt", text: "after\n")
+        _ = try fixture.file("after.txt", text: "after\n")
         try fixture.git(["add", "after.txt"])
         try fixture.git(["commit", "-qm", "after merge"])
         let head = try fixture.git(["rev-parse", "HEAD"])
@@ -1556,11 +1556,10 @@ final class GitDialogUITests: XCTestCase {
     }
 
     private func openCommitMenu(_ subject: String, in app: XCUIApplication) {
-        let commit = app.buttons.matching(NSPredicate(format: "label == %@", subject)).firstMatch
-        XCTAssertTrue(commit.waitForExistence(timeout: 25))
-        XCTAssertTrue(commit.isHittable)
-        // Git Graph's context menu belongs to the entire commit row, not
-        // the subject Button. Right-click its metadata area inside that row.
-        commit.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 1.55)).rightClick()
+        let node = app.buttons.matching(NSPredicate(
+            format: "label ENDSWITH %@", ": " + subject)).firstMatch
+        XCTAssertTrue(node.waitForExistence(timeout: 25))
+        XCTAssertTrue(node.isHittable)
+        node.rightClick()
     }
 }

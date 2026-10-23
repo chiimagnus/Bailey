@@ -5,6 +5,19 @@ import XCTest
 @MainActor
 final class GitGraphUITests: XCTestCase {
     func testGraphBadgeTitleNodeAndMetadataToggleTheSameRealCommit() throws {
+        try verifyGraphInteractions(language: "en")
+    }
+
+    func testChineseGraphNodeAndReferenceMenusRetainTheirExactCopyTargets() throws {
+        try verifyGraphInteractions(language: "zh-Hans")
+    }
+
+    private func verifyGraphInteractions(language: String) throws {
+        let clipboard = try WorkspaceUITestSupport.clipboardItems()
+        addTeardownBlock { @MainActor in
+            NSPasteboard.general.clearContents()
+            if !clipboard.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard)) }
+        }
         let fixture = try WorkspaceUITestFixture(in: self)
         let tracked = try fixture.file("nested/history.txt", text: "committed history\n")
         try fixture.initializeGit()
@@ -12,7 +25,7 @@ final class GitGraphUITests: XCTestCase {
         let head = try fixture.git(["rev-parse", "HEAD"])
         let fullHash = String(decoding: head, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let app = try launchGraph(fixture)
+        let app = try launchGraph(fixture, language: language)
         let commit = app.buttons.matching(NSPredicate(
             format: "label == %@", "E2E fixture history")).firstMatch
         let badge = app.buttons.matching(NSPredicate(
@@ -38,6 +51,15 @@ final class GitGraphUITests: XCTestCase {
         node.click()
         XCTAssertTrue(file.waitForNonExistence(timeout: 12),
                       "Node hit testing must toggle exactly once per click")
+        node.hover()
+        node.rightClick()
+        let create = app.menuItems.matching(NSPredicate(
+            format: "title IN %@", ["Create Branch at Commit…", "在此创建分支…"])).firstMatch
+        XCTAssertTrue(create.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.menuItems.matching(NSPredicate(
+            format: "title IN %@", ["Delete Remote Branch…", "删除远端分支…"])).firstMatch.exists)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertFalse(file.exists, "Opening the node menu must not expand the commit")
 
         // Locate the metadata inside the real 38-point row rather than extending
         // a title Button's normalized coordinate beyond its own bounds.
@@ -58,7 +80,27 @@ final class GitGraphUITests: XCTestCase {
             format: "title IN %@", ["Copy Branch Name", "复制分支名称"])).firstMatch
         XCTAssertTrue(rename.waitForExistence(timeout: 8))
         XCTAssertTrue(copy.waitForExistence(timeout: 8))
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        copy.click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "main")
+        XCTAssertTrue(file.exists, "Copying the Branch must not toggle its commit")
+        badge.click()
+        XCTAssertTrue(file.waitForNonExistence(timeout: 12))
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "main",
+                       "Expanding or collapsing a Branch must not copy its name")
+        let overflow = app.menuButtons.matching(NSPredicate(
+            format: "title CONTAINS %@", "topic/history")).firstMatch
+        XCTAssertTrue(overflow.waitForExistence(timeout: 8))
+        overflow.click()
+        let topic = app.menuItems.matching(NSPredicate(format: "title == %@", "topic/history"))
+            .firstMatch
+        XCTAssertTrue(topic.waitForExistence(timeout: 8))
+        topic.hover()
+        let copyTopic = topic.descendants(matching: .menuItem).matching(NSPredicate(
+            format: "title IN %@", ["Copy Branch Name", "复制分支名称"])).firstMatch
+        XCTAssertTrue(copyTopic.waitForExistence(timeout: 8))
+        copyTopic.click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "topic/history")
+        XCTAssertFalse(file.exists, "Copying another Branch must not toggle the shared commit")
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
         XCTAssertEqual(try Data(contentsOf: tracked), Data("committed history\n".utf8))
@@ -215,20 +257,20 @@ final class GitGraphUITests: XCTestCase {
         _ = try fixture.file("linked-diff.txt", text: "committed in main\n")
         try fixture.initializeGit()
         let head = try fixture.git(["rev-parse", "HEAD"])
+        let branch = "topic/" + String(repeating: "极长的分支名称-long-", count: 6)
         let linked = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-UITest-Linked-" + UUID().uuidString)
         addTeardownBlock {
             _ = try? fixture.git(["worktree", "remove", "--force", linked.path])
             try? FileManager.default.removeItem(at: linked)
         }
-        try fixture.git(["worktree", "add", "-q", "-b", "topic/linked",
-                         linked.path, "HEAD"])
+        try fixture.git(["worktree", "add", "-q", "-b", branch, linked.path, "HEAD"])
         let linkedFile = linked.appendingPathComponent("linked-diff.txt")
         try "changed in linked worktree\n".write(to: linkedFile,
                                                       atomically: true, encoding: .utf8)
         XCTAssertEqual(try fixture.git(["worktree", "list", "--porcelain"])
             .contains(Data(linked.path.utf8)), true)
-        XCTAssertEqual(try fixture.git(["rev-parse", "refs/heads/topic/linked"]), head)
+        XCTAssertEqual(try fixture.git(["rev-parse", "refs/heads/" + branch]), head)
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data(),
                        "Changes in another worktree must not dirty the current repository")
 
@@ -239,6 +281,17 @@ final class GitGraphUITests: XCTestCase {
             XCTFail("The other dirty worktree must have its own native graph node")
             return
         }
+        let window = app.windows.firstMatch
+        let divider = window.descendants(matching: .any)
+            .matching(identifier: "bailey.dock.divider")
+            .allElementsBoundByIndex.filter { $0.frame.height > $0.frame.width }
+            .max { $0.frame.minX < $1.frame.minX }
+        guard let divider else { XCTFail("Missing real Dock divider"); return }
+        let origin = window.coordinate(withNormalizedOffset: .zero)
+        divider.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(
+                dx: window.frame.width - 150, dy: window.frame.height / 2)))
+        XCTAssertTrue(node.isHittable, "A dirty worktree with a very long Branch must remain accessible in a 150pt panel")
         node.rightClick()
         let copyPath = app.menuItems.matching(NSPredicate(
             format: "title IN %@", ["Copy Worktree Path", "复制工作树路径"])).firstMatch
@@ -248,6 +301,10 @@ final class GitGraphUITests: XCTestCase {
                       "The dirty node must have its own worktree path action")
         XCTAssertFalse(unsafe.exists,
                        "A dirty worktree state must not become a synthetic commit action")
+        XCTAssertFalse(app.menuItems.matching(NSPredicate(
+            format: "title IN %@", ["Rename Branch…", "重命名分支…",
+                                   "Copy Branch Name", "复制分支名称"])).firstMatch.exists,
+                       "A dirty worktree node must not repeat the checkout's Branch badge actions")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         node.click()
         let file = app.windows.firstMatch.descendants(matching: .any)
@@ -259,7 +316,7 @@ final class GitGraphUITests: XCTestCase {
         node.click()
         XCTAssertTrue(file.waitForNonExistence(timeout: 12))
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
-        XCTAssertEqual(try fixture.git(["rev-parse", "refs/heads/topic/linked"]), head)
+        XCTAssertEqual(try fixture.git(["rev-parse", "refs/heads/" + branch]), head)
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
         XCTAssertEqual(try Data(contentsOf: linkedFile),
                        Data("changed in linked worktree\n".utf8))
@@ -295,6 +352,26 @@ final class GitGraphUITests: XCTestCase {
     }
 
     func testDenseRealGraphKeepsHistoryAndNodeVisibleAcrossMoreThanTwelveLanes() throws {
+        try verifyDenseGraph(theme: "light", fontSize: 14)
+    }
+
+    func testLightDenseGraphAtMinimumPanelFontKeepsTitleAndRailsInsideThePanel() throws {
+        try verifyDenseGraph(theme: "light", fontSize: 9)
+    }
+
+    func testDarkDenseGraphAtMinimumPanelFontKeepsTitleAndRailsInsideThePanel() throws {
+        try verifyDenseGraph(theme: "dark", fontSize: 9)
+    }
+
+    func testLightDenseGraphAtMaximumPanelFontKeepsTitleAndRailsInsideThePanel() throws {
+        try verifyDenseGraph(theme: "light", fontSize: 18)
+    }
+
+    func testDarkDenseGraphAtMaximumPanelFontKeepsTitleAndRailsInsideThePanel() throws {
+        try verifyDenseGraph(theme: "dark", fontSize: 18)
+    }
+
+    private func verifyDenseGraph(theme: String, fontSize: Int) throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("base.txt", text: "shared base\n")
         try fixture.initializeGit()
@@ -313,7 +390,10 @@ final class GitGraphUITests: XCTestCase {
         }
         XCTAssertEqual(try fixture.git(["for-each-ref", "--format=%(refname)",
                                         "refs/heads"]).split(separator: 0x0A).count, 25)
-        let app = try launchGraph(fixture)
+        let home = try WorkspaceUITestFixture(in: self)
+        _ = try home.file(".config/bailey-dev/config.toml",
+                          text: "theme = \"\(theme)\"\npanel.font-size = \(fontSize)\n")
+        let app = try launchGraph(fixture, configurationHome: home.root)
         let commit = app.buttons.matching(NSPredicate(
             format: "label MATCHES %@", "graph-lane-[0-9]+"))
             .firstMatch
@@ -328,10 +408,26 @@ final class GitGraphUITests: XCTestCase {
             format: "label ENDSWITH %@", ": " + commit.label)).firstMatch
         XCTAssertTrue(node.waitForExistence(timeout: 12),
                       "The dense real graph must still expose its colored node")
-        let originalNodeX = node.frame.minX
-        commit.scroll(byDeltaX: -180, deltaY: 0)
-        XCTAssertEqual(node.frame.minX, originalNodeX, accuracy: 1,
-                       "Scrolling the commit title must never move the graph gutter")
+        XCTAssertEqual(node.frame.width / 14, CGFloat(fontSize) / 14, accuracy: 0.04)
+        for width: CGFloat in [420, 260, 150, 320] {
+            let divider = try XCTUnwrap(window.descendants(matching: .any)
+                .matching(identifier: "bailey.dock.divider").allElementsBoundByIndex
+                .filter { $0.frame.height > $0.frame.width }
+                .max { $0.frame.minX < $1.frame.minX })
+            let origin = window.coordinate(withNormalizedOffset: .zero)
+            divider.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .click(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(
+                    dx: window.frame.width - width, dy: window.frame.height / 2)))
+            XCTAssertTrue(commit.isHittable)
+            XCTAssertGreaterThan(commit.frame.width, 0)
+            XCTAssertGreaterThanOrEqual(commit.frame.minX, window.frame.maxX - width)
+            XCTAssertLessThanOrEqual(commit.frame.maxX, window.frame.maxX + 1,
+                "At requested \(width)pt: title=\(commit.frame), node=\(node.frame), window=\(window.frame), divider=\(divider.frame)")
+            let originalNodeX = node.frame.minX
+            commit.scroll(byDeltaX: -180, deltaY: 0)
+            XCTAssertEqual(node.frame.minX, originalNodeX, accuracy: 1,
+                           "Scrolling the commit title must never move the graph gutter")
+        }
         // A dense graph may reuse path colors, but must preserve the actual Git refs.
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), base)
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
@@ -341,6 +437,11 @@ final class GitGraphUITests: XCTestCase {
     }
 
     func testHistoricalTagBadgeTogglesItsCommitAndKeepsOnlyTagActions() throws {
+        let clipboard = try WorkspaceUITestSupport.clipboardItems()
+        addTeardownBlock { @MainActor in
+            NSPasteboard.general.clearContents()
+            if !clipboard.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard)) }
+        }
         let fixture = try WorkspaceUITestFixture(in: self)
         let tracked = try fixture.file("tagged-history.txt", text: "old tagged revision\n")
         try fixture.initializeGit()
@@ -379,7 +480,9 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(copy.waitForExistence(timeout: 8))
         XCTAssertTrue(delete.waitForExistence(timeout: 8))
         XCTAssertFalse(unsafe.exists, "Tag badge context menu must not expose commit actions")
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        copy.click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "v1.0.0-graph")
+        XCTAssertFalse(historical.exists, "Copying the Tag must not toggle its commit")
         XCTAssertEqual(try fixture.git(["rev-parse", "refs/tags/v1.0.0-graph"]), original)
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
@@ -432,20 +535,16 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(secondPath.waitForExistence(timeout: 8),
                       "Same-name detached worktrees must retain unique navigable paths")
         firstPath.click()
-        // The accessibility tree includes offscreen actions for all three
-        // paths. Match both the localized native title and a visible menu row.
-        let opened = app.menuItems.matching(NSPredicate(
+        let opened = firstPath.descendants(matching: .menuItem).matching(NSPredicate(
             format: "title IN %@",
-            ["Open Worktree", "在 Bailey 中打开工作树", "打开工作树"]))
-            .allElementsBoundByIndex.first { $0.frame.width > 0 }
-        let remover = app.menuItems.matching(NSPredicate(
-            format: "title IN %@", ["Remove Worktree…", "移除工作树…"]))
-            .allElementsBoundByIndex.first { $0.frame.width > 0 }
-        XCTAssertNotNil(opened,
-                        "The selected nested worktree must have a visible Open action")
-        XCTAssertNotNil(remover,
-                        "The selected nested worktree must have a visible Remove action")
-        XCTAssertTrue(remover?.isEnabled == true,
+            ["Open Worktree", "在 Bailey 中打开工作树", "打开工作树"])).firstMatch
+        let remover = firstPath.descendants(matching: .menuItem).matching(NSPredicate(
+            format: "title IN %@", ["Remove Worktree…", "移除工作树…"])).firstMatch
+        XCTAssertTrue(opened.waitForExistence(timeout: 8),
+                      "The selected nested worktree must have its own Open action")
+        XCTAssertTrue(remover.waitForExistence(timeout: 8),
+                      "The selected nested worktree must have its own Remove action")
+        XCTAssertTrue(remover.isEnabled,
                       "A clean detached linked worktree must remain removable")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
@@ -460,10 +559,10 @@ final class GitGraphUITests: XCTestCase {
         try fixture.initializeGit()
         let head = String(decoding: try fixture.git(["rev-parse", "HEAD"]), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let previous = NSPasteboard.general.string(forType: .string)
+        let previous = try WorkspaceUITestSupport.clipboardItems()
         addTeardownBlock { @MainActor in
             NSPasteboard.general.clearContents()
-            if let previous { NSPasteboard.general.setString(previous, forType: .string) }
+            if !previous.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(previous)) }
         }
         NSPasteboard.general.clearContents()
         let app = try launchGraph(fixture)
@@ -501,10 +600,10 @@ final class GitGraphUITests: XCTestCase {
         let head = try fixture.git(["rev-parse", "HEAD"])
         XCTAssertEqual(try fixture.git(["symbolic-ref", "refs/remotes/upstream/HEAD"]),
                        Data("refs/remotes/upstream/main\n".utf8))
-        let prior = NSPasteboard.general.string(forType: .string)
+        let prior = try WorkspaceUITestSupport.clipboardItems()
         addTeardownBlock { @MainActor in
             NSPasteboard.general.clearContents()
-            if let prior { NSPasteboard.general.setString(prior, forType: .string) }
+            if !prior.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(prior)) }
         }
         let app = try launchGraph(fixture)
         let overflow = app.menuButtons.matching(NSPredicate(
@@ -812,11 +911,21 @@ final class GitGraphUITests: XCTestCase {
     }
 
     func testHistoricalDiffRowRetainsSelectionFillAfterMovingFocusToEditor() throws {
+        try verifyHistoricalSelection(theme: "light")
+    }
+
+    func testDarkHistoricalDiffRowRetainsSelectionFillAfterMovingFocusToEditor() throws {
+        try verifyHistoricalSelection(theme: "dark")
+    }
+
+    private func verifyHistoricalSelection(theme: String) throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("selected-history.txt", text: "historical blob\n")
         try fixture.initializeGit()
         let head = try fixture.git(["rev-parse", "HEAD"])
-        let app = try launchGraph(fixture)
+        let home = try WorkspaceUITestFixture(in: self)
+        _ = try home.file(".config/bailey-dev/config.toml", text: "theme = \"\(theme)\"\n")
+        let app = try launchGraph(fixture, configurationHome: home.root)
         let commit = app.buttons.matching(NSPredicate(
             format: "label == %@", "E2E fixture history")).firstMatch
         XCTAssertTrue(commit.waitForExistence(timeout: 25))
@@ -972,12 +1081,15 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data("working version\n".utf8))
     }
 
-    private func launchGraph(_ fixture: WorkspaceUITestFixture) throws -> XCUIApplication {
+    private func launchGraph(
+        _ fixture: WorkspaceUITestFixture, configurationHome: URL? = nil, language: String? = nil
+    ) throws -> XCUIApplication {
         let root = fixture.root.standardizedFileURL.path
         let temporary = FileManager.default.temporaryDirectory.standardizedFileURL.path
         precondition(root.hasPrefix(temporary + "/Bailey-UITest-"),
                      "Git Graph tests may only access an isolated fixture")
-        let app = try WorkspaceUITestSupport.launch(in: self)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: language, configurationHome: configurationHome)
         try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
         app.typeKey("g", modifierFlags: [.command, .shift])
         XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.git", in: app)

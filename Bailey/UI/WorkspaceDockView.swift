@@ -258,6 +258,7 @@ private struct DockTreeView: View {
                         }
                     )
             }
+            .accessibilityIdentifier("bailey.dock.divider")
     }
 }
 
