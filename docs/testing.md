@@ -104,6 +104,8 @@ Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言
 
 ## 隔离环境
 
+同一仓库的宿主测试与 GUI 测试共用 Bailey Dev，不能并行启动，即使使用不同 DerivedData。Makefile 用 `build/.bailey-dev-test.lock` 原子互斥；已有测试时立即报错，不等待或终止其他进程。正常结束或命令失败后自动释放。若进程被强制终止留下锁，先确认本仓库的测试已经停止，再用 `rmdir build/.bailey-dev-test.lock` 清理。其他仓库或绕过 Makefile 启动的测试仍须人工协调同一桌面。
+
 宿主 `Bailey` Scheme 的 TestAction 向 Debug 宿主传入 `--isolated-ui-test`。Makefile 的测试构建使用独立 Bundle ID `chiimagnus.bailey.dev`；独立 UI Test 显式通过 `XCUIApplication(bundleIdentifier:)` 启动 Bailey Dev，并传入 `--isolated-ui-test` 与一次性 `BAILEY_UI_TEST_RUN_ID`，不允许定位或终止正式 Bailey。
 
 需要单独检查原生界面时使用相同签名的 Debug 包：

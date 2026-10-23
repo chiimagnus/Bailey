@@ -21,6 +21,11 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
 	-derivedDataPath $(DERIVED_DATA) -clonedSourcePackagesDirPath $(SOURCE_PACKAGES) \
 	-skipPackageUpdates -disableAutomaticPackageResolution
 TEST_SELECTION = $(foreach TEST,$(ONLY_TESTING),-only-testing:$(TEST))
+DEV_TEST_LOCK = set -eu; mkdir -p '$(CURDIR)/build'; \
+	lock='$(CURDIR)/build/.bailey-dev-test.lock'; \
+	mkdir "$$lock" 2>/dev/null || { \
+		echo '无法取得 Bailey Dev 测试锁；已有测试时请等待其结束，不要并行运行宿主或 GUI 测试。若上次测试被强制终止，先确认没有测试进程再移除 build/.bailey-dev-test.lock。' >&2; exit 2; \
+	}; trap 'rmdir "$$lock"' EXIT
 comma := ,
 VERSION_FLAGS = $(if $(strip $(VERSION)),MARKETING_VERSION=$(VERSION)) \
 	$(if $(strip $(BUILD_NUMBER)),CURRENT_PROJECT_VERSION=$(BUILD_NUMBER))
@@ -79,17 +84,19 @@ build\:ui:
 test\:ui: SCHEME = Bailey-UI
 test\:ui: DERIVED_DATA = $(DEV_DERIVED_DATA)
 test\:ui:
+	@$(DEV_TEST_LOCK); \
 	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) $(TEST_SELECTION) test
 
 test: DERIVED_DATA = $(DEV_DERIVED_DATA)
 test:
-	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) $(TEST_SELECTION) test
-ifeq ($(SIGNING),adhoc)
-	@set -eu; for bundle in '$(APP)' '$(APP)/Contents/PlugIns/BaileyTests.xctest'; do \
-		codesign --verify --deep --strict "$$bundle"; \
-		codesign -dvvv "$$bundle" 2>&1 | grep -Fx 'Signature=adhoc' >/dev/null; \
-	done
-endif
+	@$(DEV_TEST_LOCK); \
+	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) $(TEST_SELECTION) test; \
+	if [ '$(SIGNING)' = adhoc ]; then \
+		for bundle in '$(APP)' '$(APP)/Contents/PlugIns/BaileyTests.xctest'; do \
+			codesign --verify --deep --strict "$$bundle"; \
+			codesign -dvvv "$$bundle" 2>&1 | grep -Fx 'Signature=adhoc' >/dev/null; \
+		done; \
+	fi
 
 test\:%:
 	@test -n "$(strip $(subst $(comma), ,$*))" || { echo '请指定 XCTest 类名' >&2; exit 2; }
