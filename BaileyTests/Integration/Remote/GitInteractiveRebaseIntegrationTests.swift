@@ -1,5 +1,4 @@
 import AppKit
-import SwiftUI
 import XCTest
 @testable import Bailey
 
@@ -107,9 +106,7 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        window.contentView = NSHostingView(rootView: PanelContentView(
-            tab: tab, isFocused: true, onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in }
-        ))
+        window.contentView = terminal.surface
         window.orderFront(nil)
         window.contentView?.layoutSubtreeIfNeeded()
         try await wait {
@@ -235,7 +232,7 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
                 let terminal = try project.newInteractiveGitSession(repository: root,
                     arguments: ["rebase", "--interactive", side], context: context)
                 defer { terminal.terminate() }
-                let tab = try XCTUnwrap(project.selectedTab)
+                XCTAssertNotNil(project.selectedTab)
                 XCTAssertEqual(terminal.workspaceIdentity, context.scope)
                 XCTAssertFalse(terminal.workspaceBackend is LocalWorkspaceBackend)
                 XCTAssertEqual(terminal.panelDirectoryPath, root)
@@ -243,8 +240,7 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
                                       styleMask: [.titled], backing: .buffered, defer: false)
                 window.isReleasedWhenClosed = false
                 defer { window.close() }
-                window.contentView = NSHostingView(rootView: PanelContentView(tab: tab, isFocused: true,
-                    onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in }))
+                window.contentView = terminal.surface
                 window.orderFront(nil)
                 window.contentView?.layoutSubtreeIfNeeded()
                 do {

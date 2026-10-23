@@ -233,32 +233,15 @@ struct ToolPanelView: View {
         .onAppear { syncModels() }
         .task(id: "\(applicationIsActive):\(panel):\(git.currentScope)") {
             guard applicationIsActive else { return }
-            if panel == .git && git.currentScope == "local" { return }
-            let interval: Duration = panel == .git ? .seconds(5) : .seconds(2)
+            if panel == .git {
+                await git.runRemoteRefreshLoop()
+                return
+            }
             while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: interval)
-                } catch {
-                    return
-                }
-                guard applicationIsActive else { return }
-                if panel == .git {
-                    // The local repository is event-driven; only SSH needs this poll.
-                    guard git.currentScope != "local" else { return }
-                    guard !git.isBusy else { continue }
-                    // Keep the follow-up in this task so hiding the panel cancels it.
-                    while git.isRefreshing && !Task.isCancelled {
-                        do {
-                            try await Task.sleep(for: .milliseconds(250))
-                        } catch {
-                            return
-                        }
-                    }
-                    guard applicationIsActive, !Task.isCancelled else { return }
-                    if !git.isBusy { git.refresh() }
-                } else {
-                    syncModels()
-                }
+                do { try await Task.sleep(for: .seconds(2)) }
+                catch { return }
+                guard applicationIsActive, !Task.isCancelled else { return }
+                syncModels()
             }
         }
         .onReceive(NotificationCenter.default.publisher(

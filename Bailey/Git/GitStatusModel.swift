@@ -797,6 +797,24 @@ final class GitStatusModel {
         refresh()
     }
 
+    /// The owning Git panel task controls the lifetime; leaving the panel cancels the loop.
+    func runRemoteRefreshLoop() async {
+        let scope = currentScope
+        guard scope != "local" else { return }
+        while !Task.isCancelled {
+            do { try await Task.sleep(for: .seconds(5)) }
+            catch { return }
+            guard !Task.isCancelled, currentScope == scope else { return }
+            if isBusy { continue }
+            while isRefreshing {
+                do { try await Task.sleep(for: .milliseconds(250)) }
+                catch { return }
+                guard !Task.isCancelled, currentScope == scope else { return }
+            }
+            if !isBusy { refresh() }
+        }
+    }
+
     func setLocalFileEventsForeground(_ foreground: Bool) {
         guard localWatcherForeground != foreground else { return }
         localWatcherForeground = foreground

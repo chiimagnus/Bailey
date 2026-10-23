@@ -1,5 +1,4 @@
-import AppKit
-import SwiftUI
+import Foundation
 import XCTest
 @testable import Bailey
 
@@ -20,7 +19,7 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
         }
     }
 
-    func testVisibleGitPanelKeepsRefreshPendingWhileRemoteDetailsAreSlow() async throws {
+    func testRemotePollQueuesSlowDetailRefreshAndStopsOnCancellation() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-git-slow-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -39,30 +38,12 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
         git(["add", "tracked.txt"])
         git(["commit", "-qm", "baseline"])
 
-        let manager = self.workspaceApplication.makeWindow()
-        defer { manager.windowClosed() }
-        manager.addLocalFolders([directory])
         let backend = DiscardRemoteWorkspaceFixture()
         let model = GitStatusModel()
         model.sync(root: directory.path, backend: backend, scope: "ssh:slow-details")
         try await wait { model.hasResolvedStatus && !model.isRefreshing && model.isRepo }
-
-        let window = NSWindow(
-            contentRect: NSRect(x: -1200, y: -1200, width: 460, height: 740),
-            styleMask: [.titled], backing: .buffered, defer: false
-        )
-        window.isReleasedWhenClosed = false
-        var mounted = false
-        var unmounted = false
-        window.contentView = NSHostingView(rootView:
-            ToolPanelView(manager: manager, git: model, panel: .git)
-                .frame(width: 460, height: 740)
-                .onAppear { mounted = true }
-                .onDisappear { unmounted = true })
-        window.orderFront(nil)
-        defer { window.close() }
-        try await wait { mounted }
-        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+        let polling = Task { await model.runRemoteRefreshLoop() }
+        defer { polling.cancel() }
 
         await backend.suspendHistoryRequest()
         model.refresh()
@@ -76,8 +57,7 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
         git(["add", "tracked.txt"])
         XCTAssertTrue(model.stagedEntries.isEmpty)
 
-        // One foreground SSH polling tick must queue the new observation
-        // even if the older snapshot is still awaiting its optional details.
+        // The active SSH poll must queue the new observation despite an older detail read.
         try await Task.sleep(for: .seconds(6.2))
         await backend.releaseGitRequest()
         try await wait(seconds: 3) {
@@ -88,8 +68,7 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
         XCTAssertEqual(staged.status, 0)
         XCTAssertEqual(staged.stdout, "tracked.txt\n")
 
-        // Queued visible-panel work must not start another query after that
-        // panel disappears. The suspended core was read before the edit below.
+        // Cancelling the owning task must prevent a queued poll from starting.
         try await wait { !model.isRefreshing }
         await backend.suspendHistoryRequest()
         model.refresh()
@@ -104,8 +83,8 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
         }.count
         XCTAssertGreaterThan(coreReadsBeforeHide, 0)
         try await Task.sleep(for: .seconds(6.2))
-        window.contentView = NSHostingView(rootView: Text("Git panel hidden"))
-        try await wait { unmounted }
+        polling.cancel()
+        await polling.value
         try "modified after hiding\n".write(to: file, atomically: true, encoding: .utf8)
         await backend.releaseGitRequest()
         try await wait(seconds: 8) { !model.isRefreshing }
@@ -113,15 +92,15 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
             $0.contains("'--show-toplevel'")
         }.count
         XCTAssertEqual(coreReadsAfterHide, coreReadsBeforeHide,
-                       "A hidden panel must not start a previously queued poll")
+                       "Cancellation must not start the remote poll that was waiting on details")
         XCTAssertTrue(model.changedEntries.isEmpty,
-                      "A hidden Git panel must not read new external changes")
+                      "A cancelled remote polling task must not read new external changes")
         let truth = GitCommandExecution.run(["status", "--short"], in: directory.path)
         XCTAssertEqual(truth.status, 0)
         XCTAssertTrue(truth.stdout.hasPrefix("MM "), truth.stdout)
     }
 
-    func testVisibleSSHPanelRefreshesExternalGitChanges() async throws {
+    func testAuthorizedSSHRemotePollDetectsExternalChangesAndStopsWhenCancelled() async throws {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
             throw XCTSkip("Real SSH refresh requires an authorized test host")
         }
@@ -205,23 +184,8 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
             XCTAssertEqual(model.currentScope, "ssh:" + host)
             let originalHead = try XCTUnwrap(model.recentCommits.first?.hash)
 
-            let window = NSWindow(
-                contentRect: NSRect(x: -1200, y: -1200, width: 460, height: 740),
-                styleMask: [.titled], backing: .buffered, defer: false
-            )
-            window.isReleasedWhenClosed = false
-            var mounted = false
-            window.contentView = NSHostingView(rootView:
-                ToolPanelView(manager: manager, git: model, panel: .git)
-                    .frame(width: 460, height: 740)
-                    .onAppear { mounted = true })
-            window.orderFront(nil)
-            defer { window.close() }
-            try await wait { mounted }
-            XCTAssertTrue(window.isVisible)
-            NotificationCenter.default.post(
-                name: NSApplication.didBecomeActiveNotification, object: NSApp
-            )
+            var polling = Task { await model.runRemoteRefreshLoop() }
+            defer { polling.cancel() }
 
             // This SSH connection never reports a Bailey terminal command completion.
             try await remote("printf 'worktree\\n' >> tracked.txt", via: external)
@@ -257,17 +221,14 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
             try await wait(seconds: 30) { model.recentCommits.first?.hash == newHead }
             print("SSH external commit refresh: \(Date().timeIntervalSince(historyStart)) s")
 
-            NotificationCenter.default.post(
-                name: NSApplication.didResignActiveNotification, object: NSApp
-            )
+            polling.cancel()
+            await polling.value
             try await wait(seconds: 15) { !model.isRefreshing }
             try await remote("printf 'background\\n' >> tracked.txt", via: external)
             try await Task.sleep(for: .seconds(7))
-            XCTAssertTrue(model.changedEntries.isEmpty, "Background Git must not poll")
+            XCTAssertTrue(model.changedEntries.isEmpty, "A cancelled remote Git loop must not poll")
 
-            NotificationCenter.default.post(
-                name: NSApplication.didBecomeActiveNotification, object: NSApp
-            )
+            polling = Task { await model.runRemoteRefreshLoop() }
             try await wait(seconds: 30) {
                 model.changedEntries.contains { $0.path == "tracked.txt" }
             }
@@ -278,8 +239,8 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
                 !model.isRefreshing && model.recentCommits.first?.hash == newHead
             }
 
-            window.contentView = NSHostingView(rootView: Text("Git panel hidden"))
-            try await Task.sleep(for: .milliseconds(350))
+            polling.cancel()
+            await polling.value
             try await remote(
                 "git add tracked.txt && git commit -qm 'external while hidden'", via: external
             )
@@ -290,7 +251,7 @@ final class GitRemoteRefreshIntegrationTests: XCTestCase {
             let hiddenHead = hidden.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             try await Task.sleep(for: .seconds(7))
             XCTAssertNotEqual(model.recentCommits.first?.hash, hiddenHead,
-                              "Hidden Git panel must not keep polling")
+                              "Cancelled remote Git loop must not keep polling")
             model.refresh()
             try await wait(seconds: 35) {
                 !model.isRefreshing && model.recentCommits.first?.hash == hiddenHead
