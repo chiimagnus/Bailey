@@ -55,7 +55,7 @@
 
 **Step 2 — 实现与清理：**
 - 在真实应用中从加项目进入 Git 面板，经点击/键盘/菜单执行，观察变更数、选中行、Diff 和实际 index/磁盘；外部变更通过在 fixture 路径运行 Git 命令触发 watcher，不用直接调用 `model.refresh()` 冒充事件链。
-- 对纯 Git 行状态、失败、过期身份、缓存、目录过滤及网络慢返回归入非 UI 集成测试。维护 Git Graph 的本地和 SSH 差异，未经授权不借真实 SSH master。
+- 对纯 Git 行状态、失败、过期身份、缓存、目录过滤及网络慢返回归入集成测试。保留唯一必要的 `ToolPanelView` 原生挂载契约，验证 SSH 可见面板每 5 秒触发且排队请求不会在隐藏后执行：这项行为确实由 View 生命周期负责，不能用直接调用 `model.refresh()` 伪装周期事件。迁入 `GitRemoteRefreshIntegrationTests` 并去除无意义的本地窗口假 E2E。真实 SSH 场景也迁入该类、继续要求显式授权测试主机和独立临时远端目录，未经授权不借真实 SSH master。
 - 15 条逐方法覆核后删除两个旧测试文件与无用 NSWindow fixture，更新 `docs/features/git.md`、`docs/features/files.md` 里受影响的验证入口。
 
 **Step 3 — 验证：**

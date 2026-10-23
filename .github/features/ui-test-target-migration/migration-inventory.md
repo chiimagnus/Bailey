@@ -2,6 +2,8 @@
 
 > 2026-10-22，规划分支 `019765f`，仅为源码静态快照。这里登记**迁移责任**，不是已通过结果；完成／阻塞状态唯一归 `todo.toml`。迁移时每个 task 必须逐方法写下实际替代测试（或移入 Unit/Integration 的方法）、命令、输出与原因。方法可能合并成同一 E2E 路径，但不能丢失原断言。改动前后都要重新生成清单做集合差分。
 
+**2026-10-23 最新 P2 本机证据：** 完整独立 Bailey Dev `make test:ui DERIVED_DATA=build/DerivedData-P2-MultiLanguage` **21/21 Passed、0 failed、0 skipped、exit 0**，真机 Xcode `.xcresult` 已核对。含新 Markdown／TSX／HTML／CSS 着色与纯文本截图、实际文件字节；原生编辑器字符/Undo/Redo/保存；文件、Git Diff 和窗口。P2 原始144条方法逐一映射，旧 NativeUI 五套源码已删除。跨环境 CI、macOS15.6、真实 SSH/实体输入法不由本机结果代替。
+
 基线：`BaileyTests/NativeUI` 19 文件／275 个 test 方法；`WorkspaceUI` 4 文件／54 个；合计 **329 方法**。 现行 `WorkspaceUI` 已因 P1 提前核销原生焦点方法减少 1 条：**328 条尚待迁移**（其中 P4-T1 原 11 条已完成 1 条，余 10 条）；原始 329 行、旧行号与归属继续留存作追溯，不修改历史基线。清单编排顺序来自源码而非目标测试数量。`UI+逻辑` 表示需逐条鉴别，不能认为全部适合纯 XCUITest。
 
 **P1-T1 方法级归属（2026-10-22，源码初判）：** `A`（19）：实际原生控件、菜单、像素/交互 → App UI；`B`（87）：只验证数据、文件、Git、后端或无视图状态 → Unit/Integration；`C`（223）：原生 UI 和逻辑混合、或经 helper 间接装配 UI → 执行相应 P2–P4 任务时拆分两条证据。共 329，不代表已经迁移。旧用例的方法名、精确原始行号与原有断言仍可直接核对；P2–P4 必须填写真实替代方法、前置夹具和结果，发现隐藏视图依赖立即调整分类，不为凑目标数量删测试。
@@ -118,7 +120,7 @@
 
 ### P2-T3 — 22 条
 
-**2026-10-23 P2-T3 验收：** 原22个 `test*` 方法与原类方法体、私有夹具逐字等价，仅类名更换；位置为 `Integration/Editor`。已真实执行签名宿主22/22通过；`EditorHighlightingUITests` 通过独立 Bailey Dev 的 Swift／纯文本截图差异及最终字节检查。完整 Bailey Dev GUI 20/20 通过，高亮真实截图和字节 E2E 通过；其他真实 IME 候选、CI／其他 OS 与主题极端组合须分别核销。
+**2026-10-23 P2-T3 验收：** 原22个 `test*` 方法与原类方法体、私有夹具逐字等价，仅类名更换；位置为 `Integration/Editor`。已真实执行签名宿主22/22通过；`EditorHighlightingUITests` 在独立 Bailey Dev 中完成 Swift、Markdown/TSX/HTML/CSS 对照纯文本的真实截图差异及最终字节检查（新增多语言用例与原 Swift 用例 2/2 PASS）。完整 Bailey Dev GUI 20/20 通过，高亮真实截图和字节 E2E 通过；其他真实 IME 候选、CI／其他 OS 与主题极端组合须分别核销。
 
 **本轮源码复核修正：** 原始清单把 2 项误归为 `B`：`testEmbeddedRequestsStayWithinRequestedRangeAndMatchFreshCaptures` 和 `testParserReadsAcrossUTF16ChunkBoundariesAndEditShift` 实际均调用 `mountedPlugin()`，检查已经挂载的 TextKit 原生临时颜色。**真正无需挂载原生编辑器的仅 2 项**：`testThemeCapturesMatchBundledPaletteAcrossAppearances`（AppKit/资源颜色）和 `testProductionTransformerMatchesUTF16ParserPoints`（parser 坐标）；其余 **20/22** 为原生组件颜色、语法时序/生命周期验证。保留原像素/异步断言，迁移不能以 parser 绿色或 XCUITest 文本非空代替颜色；已授权使用共享桌面焦点的 Bailey Dev E2E 不触及正在运行的正式 Bailey。
 
@@ -191,52 +193,59 @@
 
 ### P3-T1 — 21 条
 
-**[GitHistoryFileTests.swift](../../../BaileyTests/NativeUI/Git/GitHistoryFileTests.swift)：21 条** — 历史快照、只读、恢复与文件重置。初判：UI+逻辑，执行前核对每项真实断言。
+**原 `BaileyTests/NativeUI/Git/GitHistoryFileTests.swift`：21 条** — 历史快照、只读、恢复与文件重置。现保留 20 项模型／后端断言于 [NativeGitHistoryFileTests.swift](../../../BaileyTests/Integration/Git/NativeGitHistoryFileTests.swift)，一项原生 `setAccessibilityValue` 安全契约归 [NativeDiffTabTests.swift](../../../BaileyTests/Integration/Git/NativeDiffTabTests.swift)；原生挂载交互由 [GitHistoryUITests.swift](../../../BaileyUITests/Git/GitHistoryUITests.swift) 从真实 App 验证。新 E2E 使用专属 `bailey.git.history.file` AX 标识，不与工作区 Changes 中同名路径混淆。
 
-- `testRevisionIsNativeReadonlyTextOfSelectedCommitEvenWithSharedEditPreference`（旧 L50） · `C`
-- `testNativeDiffAccessibilityAllowsOnlyEditableTextChanges`（旧 L98） · `C`
-- `testRevisionToWorktreeFollowsRenameAndRefreshesWithoutWritingHistoricalBlob`（旧 L113） · `B`
-- `testHistoricalDiffPreviewKeepsGitActiveAndExplicitActivationStillWorks`（旧 L138） · `C`
-- `testReopeningLoadedImmutableRevisionDoesNotRepeatGitRead`（旧 L189） · `C`
-- `testUnmergedWorktreeUsesStageTwoAndPreservesConflictStatus`（旧 L221） · `B`
-- `testUnbornIndexAndLiteralSpecialPathResolveCorrectBlobs`（旧 L248） · `B`
-- `testReadFailureDoesNotEraseAlreadyLoadedHistoricalText`（旧 L291） · `B`
-- `testSHA256RepositoryResolvesImmutableBlobsForHistoryIndexAndWorktree`（旧 L316） · `B`
-- `testGitBlobAtExactFiveMiBIsReadableWhileNextByteIsRejected`（旧 L364） · `B`
-- `testInvalidRevisionIsNotMisreportedAsAFileMissingFromValidCommit`（旧 L390） · `B`
-- `testDanglingHeadRefIsNotMistakenForUnbornStagedDiff`（旧 L407） · `B`
-- `testDeletedHistoricalDiffValidatesTheSelectedCommit`（旧 L430） · `B`
-- `testMissingSelectedRevisionReportsErrorButRootAndDeletedSidesMayBeEmpty`（旧 L460） · `B`
-- `testResetHistoricalBinaryFileUpdatesIndexAndWorktreeWithoutChangingHead`（旧 L490） · `B`
-- `testResetHistoricalFileRefusesStaleWorkingBytesAfterConfirmation`（旧 L528） · `B`
-- `testResetFileSavesDirtyTabThenOverwritesIndexDiskAndReloadsSameTab`（旧 L558） · `B`
-- `testResetFileRejectsIndexChangeDuringPreparation`（旧 L607） · `B`
-- `testProjectRestoresDistinctNativeTabsForHistoricalDiffModes`（旧 L634） · `C`
-- `testExpandingCommitLoadsBinaryMetadataOnceAndPreservesGitRenamePaths`（旧 L684） · `B`
-- `testSelectedBinaryAndLargeRevisionsExplainWhyTheyCannotRenderAsText`（旧 L711） · `B`
+- `testRevisionIsNativeReadonlyTextOfSelectedCommitEvenWithSharedEditPreference`（旧 L50） · `C` → `NativeGitHistoryFileTests.testRevisionRemainsReadonlyWhenSharedPreferencesEnableEditing` + `GitHistoryUITests.testRealCommitHistoryOpensImmutableRevisionWithoutChangingWorkingFile`
+- `testNativeDiffAccessibilityAllowsOnlyEditableTextChanges`（旧 L98） · `C` → `NativeDiffTabTests.testNativeDiffAccessibilityAllowsOnlyEditableTextChanges`（原生 AX 安全契约）+ `GitHistoryUITests.testRealCommitHistoryOpensImmutableRevisionWithoutChangingWorkingFile`（真实键入后仍只读）
+- `testRevisionToWorktreeFollowsRenameAndRefreshesWithoutWritingHistoricalBlob`（旧 L113） · `B` → `NativeGitHistoryFileTests.testRevisionToWorktreeFollowsRenameAndRefreshesWithoutWritingHistoricalBlob` + `GitHistoryUITests.testRenamedHistoricalFileComparesAndOpensActualWorkingFile`（真实 GUI 待验）
+- `testHistoricalDiffPreviewKeepsGitActiveAndExplicitActivationStillWorks`（旧 L138） · `C` → `NativeGitHistoryFileTests.testHistoricalDiffPreviewKeepsGitActiveAndExplicitActivationStillWorks` + `GitHistoryUITests.testRealCommitHistoryOpensImmutableRevisionWithoutChangingWorkingFile`
+- `testReopeningLoadedImmutableRevisionDoesNotRepeatGitRead`（旧 L189） · `C` → `NativeGitHistoryFileTests.testReopeningLoadedImmutableRevisionDoesNotRepeatGitRead`
+- `testUnmergedWorktreeUsesStageTwoAndPreservesConflictStatus`（旧 L221） · `B` → `NativeGitHistoryFileTests.testUnmergedWorktreeUsesStageTwoAndPreservesConflictStatus`
+- `testUnbornIndexAndLiteralSpecialPathResolveCorrectBlobs`（旧 L248） · `B` → `NativeGitHistoryFileTests.testUnbornIndexAndLiteralSpecialPathResolveCorrectBlobs`
+- `testReadFailureDoesNotEraseAlreadyLoadedHistoricalText`（旧 L291） · `B` → `NativeGitHistoryFileTests.testReadFailureDoesNotEraseAlreadyLoadedHistoricalText`
+- `testSHA256RepositoryResolvesImmutableBlobsForHistoryIndexAndWorktree`（旧 L316） · `B` → `NativeGitHistoryFileTests.testSHA256RepositoryResolvesImmutableBlobsForHistoryIndexAndWorktree`
+- `testGitBlobAtExactFiveMiBIsReadableWhileNextByteIsRejected`（旧 L364） · `B` → `NativeGitHistoryFileTests.testGitBlobAtExactFiveMiBIsReadableWhileNextByteIsRejected`
+- `testInvalidRevisionIsNotMisreportedAsAFileMissingFromValidCommit`（旧 L390） · `B` → `NativeGitHistoryFileTests.testInvalidRevisionIsNotMisreportedAsAFileMissingFromValidCommit`
+- `testDanglingHeadRefIsNotMistakenForUnbornStagedDiff`（旧 L407） · `B` → `NativeGitHistoryFileTests.testDanglingHeadRefIsNotMistakenForUnbornStagedDiff`
+- `testDeletedHistoricalDiffValidatesTheSelectedCommit`（旧 L430） · `B` → `NativeGitHistoryFileTests.testDeletedHistoricalDiffValidatesTheSelectedCommit`
+- `testMissingSelectedRevisionReportsErrorButRootAndDeletedSidesMayBeEmpty`（旧 L460） · `B` → `NativeGitHistoryFileTests.testMissingSelectedRevisionReportsErrorButRootAndDeletedSidesMayBeEmpty`
+- `testResetHistoricalBinaryFileUpdatesIndexAndWorktreeWithoutChangingHead`（旧 L490） · `B` → `NativeGitHistoryFileTests.testResetHistoricalBinaryFileUpdatesIndexAndWorktreeWithoutChangingHead` + `GitHistoryUITests.testHistoricalResetConfirmationCancellationAndActualGitBytes`
+- `testResetHistoricalFileRefusesStaleWorkingBytesAfterConfirmation`（旧 L528） · `B` → `NativeGitHistoryFileTests.testResetHistoricalFileRefusesStaleWorkingBytesAfterConfirmation` + `GitHistoryUITests.testHistoricalResetConfirmationCancellationAndActualGitBytes`
+- `testResetFileSavesDirtyTabThenOverwritesIndexDiskAndReloadsSameTab`（旧 L558） · `B` → `NativeGitHistoryFileTests.testResetFileSavesDirtyTabThenOverwritesIndexDiskAndReloadsSameTab` + `GitHistoryUITests.testHistoricalResetConfirmationCancellationAndActualGitBytes`
+- `testResetFileRejectsIndexChangeDuringPreparation`（旧 L607） · `B` → `NativeGitHistoryFileTests.testResetFileRejectsIndexChangeDuringPreparation` + `GitHistoryUITests.testHistoricalResetConfirmationCancellationAndActualGitBytes`
+- `testProjectRestoresDistinctNativeTabsForHistoricalDiffModes`（旧 L634） · `C` → `NativeGitHistoryFileTests.testProjectRestoresDistinctNativeTabsForHistoricalDiffModes` + `GitHistoryUITests.testRealCommitHistoryOpensImmutableRevisionWithoutChangingWorkingFile`
+- `testExpandingCommitLoadsBinaryMetadataOnceAndPreservesGitRenamePaths`（旧 L684） · `B` → `NativeGitHistoryFileTests.testExpandingCommitLoadsBinaryMetadataOnceAndPreservesGitRenamePaths`
+- `testSelectedBinaryAndLargeRevisionsExplainWhyTheyCannotRenderAsText`（旧 L711） · `B` → `NativeGitHistoryFileTests.testSelectedBinaryAndLargeRevisionsExplainWhyTheyCannotRenderAsText`
+
+
+**P3-T1 验证记录（2026-10-23）**：最终拆分后的 20 项 `NativeGitHistoryFileTests` 已 20/20 通过；AX setter 契约在 `NativeDiffTabTests`，其新增 setter 测试及其它原生 Diff 回归 36/36 通过；联动 `GitStatusModelTests`、`GitExecutionTests` 合计 89/89 通过。完整 Bailey Dev `GitHistoryUITests` 已 5/5 通过、0 跳过（`Test-Bailey-UI-2026.10.23_12-34-58-+0800.xcresult`）；逐项执行了只读 revision、重命名后真实工作区文件、二进制／超限提示、重置取消／确认、外部修改后拒绝覆写，均核对临时 Git 仓库的磁盘／index／HEAD。此前两个 GUI 中断分别来自测试远程命令的 120 秒超时和遗留的隔离 Dev 进程，不属于产品失败；已使用更长执行预算并只清理经过命令行确认的测试进程。正式 App 未操作；真实 SSH、macOS 15.6 及跨主题／显示设备组合无本轮实机证据。P3-T1 已于 `f0f8699fab6340bedfe203b73cc9ad5180bb80cb` 原子提交，Feature 计划证据按规则仅本地维护。
 
 ### P3-T2 — 15 条
 
-**[GitExternalRefreshTests.swift](../../../BaileyTests/NativeUI/Git/GitExternalRefreshTests.swift)：4 条** — Git 外部变更驱动的实际列表。初判：UI+逻辑，执行前核对每项真实断言。
+**原 `GitExternalRefreshTests.swift`：4 条，按实际事件源迁移**
 
-- `testVisibleLocalPanelDetectsExternalInitialization`（旧 L23） · `C`
-- `testVisibleGitPanelRefreshesTwoExternalMutationsWithoutActivation`（旧 L70） · `C`
-- `testVisibleGitPanelKeepsRefreshPendingWhileRemoteDetailsAreSlow`（旧 L255） · `C`
-- `testVisibleSSHPanelRefreshesExternalGitChanges`（旧 L356） · `C`
+- `testVisibleLocalPanelDetectsExternalInitialization`（旧 L23） · `C` → `GitChangesUITests.testExternalGitInitializationAppearsWithoutManualRefresh`（真实 App 已通过）。
+- `testVisibleGitPanelRefreshesTwoExternalMutationsWithoutActivation`（旧 L70） · `C` → `GitChangesUITests.testExternalWorktreeIndexAndCommitRefreshTheRealGitPanel`（已通过）+ `GitStatusModelTests.testLocalFileEventsPauseInBackgroundAndRestoreOnActivation`、`testLocalFileChangesRefreshWithoutPollingOrManualRefresh`、`testLocalWatcherStopsFollowingPreviousWorkspace`（宿主已通过）。
+- `testVisibleGitPanelKeepsRefreshPendingWhileRemoteDetailsAreSlow`（旧 L255） · `C` → `GitRemoteRefreshIntegrationTests.testVisibleGitPanelKeepsRefreshPendingWhileRemoteDetailsAreSlow`（受控慢响应及 SSH 周期触发 14.986 秒验证通过，保留唯一必要的 `ToolPanelView` 生命周期契约）。
+- `testVisibleSSHPanelRefreshesExternalGitChanges`（旧 L356） · `C` → `GitRemoteRefreshIntegrationTests.testVisibleSSHPanelRefreshesExternalGitChanges`（已获授权 `windows`，专用临时远端仓库真实 SSH 测试 69.034 秒通过，工作区刷新 2.84 秒、外部提交刷新 1.11 秒，含隐藏及后台暂停）。
 
-**[GitWorkspaceMenuTests.swift](../../../BaileyTests/NativeUI/Git/GitWorkspaceMenuTests.swift)：11 条** — Git Changes、工作树与菜单。初判：UI+逻辑，执行前核对每项真实断言。
+**原 `GitWorkspaceMenuTests.swift`：11 条，按真实用户操作归属迁移**
 
-- `testUncommittedDialogDefaultsAndPermanentCleanWarning`（旧 L18） · `A`
-- `testIgnoreAppendsNativeBufferSavesAndCanUndoWithoutRemounting`（旧 L35） · `C`
-- `testIgnoreReloadsCleanCachedFileBeforeAppendingWithoutMountedView`（旧 L84） · `B`
-- `testIgnoreCreatesOrdinaryFileTabAndRejectsStaleTarget`（旧 L112） · `B`
-- `testIgnoreContextMenuIsOnlyOfferedForUntrackedFiles`（旧 L134） · `C`
-- `testGitChangeRowPreviewKeepsNativeKeyboardAndUsesCorrectIndexSide`（旧 L213） · `C`
-- `testStaleGitChangeClickCannotOpenDiffInAnotherProject`（旧 L455） · `C`
-- `testGitChangesTreeKeyboardBrowsesNestedFilesWithoutWritingIndex`（旧 L585） · `C`
-- `testGitGraphIsKeyboardReadyWhenRepositoryHasNoChangedFiles`（旧 L690） · `C`
-- `testUncommittedSheetCancelAndConfirmReachRealStash`（旧 L771） · `C`
-- `testFolderInlineStageAndUnstageAffectOnlyThatDirectory`（旧 L826） · `C`
+- `testUncommittedDialogDefaultsAndPermanentCleanWarning`（旧 L18） · `A` → `GitUncommittedUITests` 的 Reset／Stash／Clean 原生 Sheet（真实 GUI 完整套件 3/3 通过，Clean Escape 取消、Reset Mixed/Hard、Stash 及 Git 字节均已验）。
+- `testIgnoreAppendsNativeBufferSavesAndCanUndoWithoutRemounting`（旧 L35） · `C` → `GitIgnoreEditorUITests.testIgnoreUpdatesOpenNativeEditorAndCommandZCanUndoTheInsertedPatterns`（完整 App 1/1 通过：复用文件标签、原生 Undo 和保存）+ `GitIgnoreIntegrationTests.testIgnoreEscapesSpecialFileNamesAndPreservesUnsavedCRLFBuffer`（3/3 集成通过：CRLF、转义与错误输入）。不保留重复的 NativeUI 挂载测试。
+- `testIgnoreReloadsCleanCachedFileBeforeAppendingWithoutMountedView`（旧 L84） · `B` → `GitIgnoreIntegrationTests.testIgnoreReloadsCleanCachedFileBeforeAppendingWithoutMountedView`（已通过）。
+- `testIgnoreCreatesOrdinaryFileTabAndRejectsStaleTarget`（旧 L112） · `B` → `GitIgnoreIntegrationTests.testIgnoreCreatesOrdinaryFileTabAndRejectsStaleTarget`（已通过）。
+- `testIgnoreContextMenuIsOnlyOfferedForUntrackedFiles`（旧 L134） · `C` → `GitChangesUITests.testIgnoreMenuRejectsTrackedChangesAndWritesLiteralUntrackedRule`（含 intent-to-add 必须不能忽略的边界定点 GUI 1/1 通过）。
+- `testGitChangeRowPreviewKeepsNativeKeyboardAndUsesCorrectIndexSide`（旧 L213） · `C` → `GitChangesUITests.testStagedAndUnstagedRowsPreviewTheirDistinctGitBaselines`（Staged 只读／Unstaged 可编辑的不同控件结构与 HEAD/index/worktree 字节纠正后定点 GUI 1/1 通过）+ `testGitChangeKeyboardDownAndSpacePreviewTheNextFileWithoutGitWrites`（已通过）；Graph 焦点转移详见 P3-T4。
+- `testStaleGitChangeClickCannotOpenDiffInAnotherProject`（旧 L455） · `C` → `GitChangesUITests.testChangingProjectsCannotDisplayOrWriteTheFormerGitRepository`（已通过）+ `GitStatusModelTests.testContextChangeDuringMutationPreflightDoesNotSwitchOldRepository`（已通过）。
+- `testGitChangesTreeKeyboardBrowsesNestedFilesWithoutWritingIndex`（旧 L585） · `C` → `GitChangesUITests.testNestedGitChangesTreeSupportsArrowSpaceReturnAndCollapseWithoutWritingIndex`（已通过）。
+- `testGitGraphIsKeyboardReadyWhenRepositoryHasNoChangedFiles`（旧 L690） · `C` → `GitChangesUITests.testGitGraphSpaceExpandsCommitWhenChangesListIsEmpty`（已通过）。
+- `testUncommittedSheetCancelAndConfirmReachRealStash`（旧 L771） · `C` → `GitUncommittedUITests.testStashCancelThenConfirmChangesOnlyTheIsolatedRepository`（已通过）。
+- `testFolderInlineStageAndUnstageAffectOnlyThatDirectory`（旧 L826） · `C` → `GitChangesUITests.testFolderStageAndUnstageTouchesOnlyNestedSelectedDirectory`（右键菜单已通过）+ `testFolderInlineStageAndUnstageAreScopedToThatDirectory`（真正的文件夹行尾按钮 GUI 定点 1/1 通过）。
+
+**P3-T2 实测证据（2026-10-23）**：旧 `GitWorkspaceMenuTests` 11 项和 `GitExternalRefreshTests` 4 项已逐方法映射；删除原有两份宿主 UI 测试文件。独立 Bailey Dev 的 `GitChangesUITests` 完整 11/11（`/tmp/bailey-p3-t2-gitchanges-final-full.log`），额外 merge-conflict 的「标记已解决」真实 index/工作区/HEAD 验证 1/1（`/tmp/bailey-p3-t2-merge-conflict-gui.log`），`GitUncommittedUITests` 3/3、`GitIgnoreEditorUITests` 1/1。受控慢 SSH/真实授权 `windows` 外部 Git 刷新、`.gitignore` 特殊路径、Clean／Reset／Stash 操作在定点宿主中已 10/10 通过；删除了与 E2E 重复、违反分层目标的新增 NativeUI TextKit 挂载夹具，改用真实 App Undo 与纯后端 CRLF 分层守护。最终复测 `BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test:GitRemoteRefreshIntegrationTests,GitIgnoreIntegrationTests,GitUncommittedActionTests,GitStatusModelTests DERIVED_DATA=build/DerivedData` → **58/58 通过、0 失败、0 跳过、exit 0**（`/tmp/bailey-p3-t2-split-fixture-host.log`），真实远端文件刷新 3.21 秒、提交刷新 1.28 秒。Swift 6.4.2 将原测试文件共享 actor 与新 SSH 测试编入同批时误报 actor 合成 `nonisolated init`；单独添加 `init()` 无效，故将现有 `DiscardRemoteWorkspaceFixture` 原样抽到独立 Integration/Git 文件，最终编译和测试恢复正常。
+
+**全量宿主限制**：`/tmp/bailey-p3-t2-host-full-windows.log` 发现 626 项、616 Pass／10 Fail／0 Skip。10 个失败中 9 项为 `WorkspaceWindowIsolationTests` 原生窗口焦点等待超时，1 项为 `PaneRetentionTests` Dock 重挂后 firstResponder 未恢复；单独跑这 62 项时也再次发生同样 10 项失败（`/tmp/bailey-p3-t2-focus-isolation.log`）。不归因于 P3-T2 Git 生产代码（本任务无 Git 生产改动），但同样不冒称全量宿主成功；其原生窗口焦点所有权需要在 P5 迁移和最终 Gate 中继续根因修复与完整 GUI 补验。
 
 ### P3-T3 — 18 条
 

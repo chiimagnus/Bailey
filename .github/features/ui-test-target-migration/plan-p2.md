@@ -1,5 +1,7 @@
 # Plan P2 — 编辑器、输入、高亮和 Diff
 
+**2026-10-23 后续验收：** 独立 Bailey Dev GUI 21/21（0 failed/0 skipped，exit 0），原144条 P2 旧方法全部迁至对应 Integration 契约；补足 Markdown／TSX／HTML／CSS 视觉 E2E、系统选择器 ABC 路径输入、命令面板首个 Escape 的真实 AX 值、键盘事件合成与全部跳过假绿问题。具体覆盖及跨环境未测见 `audit-p2.md`，不能据本机绿灯宣称全域验收通过。
+
 **Goal:** 完整核销 Editor 与 Diff 的 **144 个旧测试方法**：`EditorNavigationTests` 28、`EditorTextInputTests` 10、`FileTabTests` 49、`SyntaxHighlightingTests` 22、`DiffTabTests` 35；让完整 App 用户操作迁往 `BaileyUITests`、纯文本/存储验证留在 `BaileyTests/Unit` 或 `Integration`。**必须在原生控件上观测的像素、TextKit 2 视口与 IME `setMarkedText` 契约保留为明确命名的 `BaileyTests/Integration` AppKit 组件验证**；不能假称 XCUITest/纯逻辑等价、也不能丢断言。
 
 **Non-goals:** 不更换 TextKit 2/Neon，不重做编辑器布局、Diff UI 或快捷键，不顺手改字体、主题和保存机制。实际 Git 历史操作归 P3。
@@ -69,7 +71,7 @@
 
 ## P2-T3 语法高亮、主题、组合字符与原生颜色
 
-**实施证据（2026-10-23）：** 原22方法已保留到 `BaileyTests/Integration/Editor/NativeSyntaxHighlightingTests.swift`；同日签名宿主 `make test:FileTabPersistenceTests,NativeFileTabTests,NativeSyntaxHighlightingTests,NativeDiffTabTests DERIVED_DATA=build/DerivedData-P2-Acceptance` 共106/106通过（高亮22/22）。`EditorHighlightingUITests` 真实 Swift／纯文本截图差异及文件字节通过；完整 GUI 套件在 Apple Development 签名下 **20/20 全通过，exit 0**；CI、实际拼音候选、缺位平台仍须分别核销。逐项去向见迁移清单。
+**实施证据（2026-10-23）：** 原22方法已保留到 `BaileyTests/Integration/Editor/NativeSyntaxHighlightingTests.swift`；同日签名宿主 `make test:FileTabPersistenceTests,NativeFileTabTests,NativeSyntaxHighlightingTests,NativeDiffTabTests DERIVED_DATA=build/DerivedData-P2-Acceptance` 共106/106通过（高亮22/22）。`EditorHighlightingUITests` 已补真机 Swift／Markdown（围栏 Swift）／TSX／HTML（脚本与样式）／CSS 各自对照纯文本的截图差异及文件字节，单独新增用例 1/1、原 Swift 用例 1/1 通过；完整 GUI 套件在 Apple Development 签名下 **20/20 全通过，exit 0**；CI、实际拼音候选、缺位平台仍须分别核销。逐项去向见迁移清单。
 
 **Own old tests:** `BaileyTests/NativeUI/Editor/SyntaxHighlightingTests.swift`（22）。
 

@@ -1,5 +1,5 @@
 version = 1
-current_task_id = ""
+current_task_id = "P3-T3"
 
 [[tasks]]
 id = "P1-T1"
@@ -31,24 +31,24 @@ id = "P2-T1"
 title = "编辑导航、原生输入、IME 和撤销"
 status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = "b09404719c022dad8e5eb3c6ce83593ac5fc2e1f"
-note = "旧导航28+IME10逐方法保留为 Integration/Editor NativeEditorLayoutTests/NativeEditorCompositionTests，删旧NativeUI两文件；组件+坐标 47/47 通过、全App编辑器3/3、前轮全UI16/16、CI YAML解析通过；外观/输入法的真实物理组合待专用GUI复核。全宿主635项执行、8跳过、19断言失败（1项PaneRetention Dock重挂载、9项WorkspaceWindowIsolation前台焦点/环境文件删除），无P2T1新类失败；真实 No-Go 归 P4 处理，未隐瞒。"
+commit = "335ed7dcf92d7b6592d6c20cf517563c1c7dc897"
+note = "原38项方法/断言由b094047迁移保留，组件28+10与坐标9共47/47已有验证；335ed7d纠正真实CommandPalette首Escape的错误AX谓词，并向已聚焦编辑器发送Undo/Redo/Save快捷键（不修改产品UI），21/21独立Bailey Dev完整GUI 0失败/0跳过/exit0含10k/100k/Unicode磁盘字节。实体拼音候选、旧macOS和CI属明确环境边界。"
 
 [[tasks]]
 id = "P2-T2"
 title = "文件标签、真实读写、保存冲突与断线恢复"
 status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = "2c7b51bf9ac966c6a0dab29359fb5be5b40d9a67"
-note = "迁移主体5bc6fe2保留原文件49/49（FileTabPersistence33、NativeFileTab16）；2026-10-23 Apple Development签名宿主106/106、另编辑/核心53/53，完整Bailey Dev真实GUI20/20，文件读写/同名路径/中文长路径/焦点与真实磁盘写入全部通过；本次2c7b51b修复输入法前置ABC切换与本地化菜单测试。真实Windows SSH图形、物理中文候选及CI ad-hoc环境尚未验收，只完成本机任务主体。"
+commit = "335ed7dcf92d7b6592d6c20cf517563c1c7dc897"
+note = "旧49条由5bc6fe2迁移为FileTabPersistence33+NativeFileTab16；335ed7d将ABC切换放到Dev激活及原生PathTextField聚焦后、保留输入回读与拼音恢复；前存Dev导致全跳过的XCTSkip改成明确失败且反向验证成功；最终独立GUI21/21、Files9/9、0 skipped，真实Unicode文件路径及保存已验，远端SSH E2E缺位。"
 
 [[tasks]]
 id = "P2-T3"
 title = "语法高亮、主题、组合字符与原生颜色"
 status = "completed"
 plan = "plan-p2.md#p2-t3"
-commit = "2c7b51bf9ac966c6a0dab29359fb5be5b40d9a67"
-note = "主体7e27b61保留原22/22原生高亮回归；2026-10-23实际宿主22/22、全部P2定点106/106通过；完整Dev GUI20/20中Swift/纯文本截图色彩及字节测试通过，十万行导航/最终保存通过。2c7b51b更新长期文档与输入隔离；实体中文输入法候选、更多语言外观的实际GUI组合和CI仍属单独环境边界。"
+commit = "335ed7dcf92d7b6592d6c20cf517563c1c7dc897"
+note = "原22项由7e27b61迁入NativeSyntaxHighlightingTests仍完整保留；335ed7d新增Markdown/TSX/HTML(含script/style)/CSS与同内容纯文本的真实XCUITest截图对照及文件字节断言；Swift+新增高亮两项定点和完整GUI21/21、0 skipped，10张截图经人工检查；主题等环境矩阵单独保持未测。"
 
 [[tasks]]
 id = "P2-T4"
@@ -61,26 +61,26 @@ note = "主体6b65c00保留35/35原生Diff方法；2c7b51b修正sRGB实测像素
 [[tasks]]
 id = "P3-T1"
 title = "历史版本文件、Git revision 和安全重置"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t1"
-commit = ""
-note = ""
+commit = "f0f8699fab6340bedfe203b73cc9ad5180bb80cb"
+note = "原21项=Integration20+NativeDiff AX1；真实Bailey Dev GitHistoryUITests 5/5、宿主NativeGitHistory20/20及NativeDiff/GitStatus/GitExecution89/89、Debug构建和codesign通过；无真实SSH及macOS15.6证据，见inventory。"
 
 [[tasks]]
 id = "P3-T2"
 title = "Git Changes 交互、外部刷新、菜单与工作树操作"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t2"
-commit = ""
-note = ""
+commit = "76c417e5e5caab8cc52c3a403bc6087cbf075e46"
+note = "旧15方法分层迁移，完整Git Changes UI 11/11+merge冲突1/1、Uncommitted 3/3、Ignore GUI1/1、授权Windows SSH及Git状态模型宿主58/58、Debug构建验签通过；全量宿主626项中10项原生Focus/Dock失败且62项独立复现，见inventory/P5，未宣称全量通过。"
 
 [[tasks]]
 id = "P3-T3"
 title = "Git 原生对话框、危险操作、交互 rebase"
-status = "pending"
+status = "in_progress"
 plan = "plan-p3.md#p3-t3"
 commit = ""
-note = ""
+note = "逐项迁移七份旧Git原生表单和交互式Rebase的18条方法；先核对真实App菜单/Sheet/PTY、后台唯一职责，再按UI与真实Git集成分层、定点验证、删除旧类和提交。"
 
 [[tasks]]
 id = "P3-T4"
