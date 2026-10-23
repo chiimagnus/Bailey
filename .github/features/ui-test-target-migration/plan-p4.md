@@ -123,13 +123,13 @@
 
 **Step 1 — 旧的真实资源保障：**
 - 20 项涵盖终端 surface 复用/parking/Find、Shell PID/历史，TabSwitcher 暂时选择与 Escape 取消不产生副作用、五编辑器同存与 10 万行释放、旧文档缓存/Undo/滚动、Pane 移动、Browser 导航/历史/Favicon/表单和 WebKit 弹窗、Native file/SSH 选择面板、关闭后资源释放。Ghostty／Browser 的文件拖放只覆盖本域真实入口与必要结果，**不重复 P4-T3 的全部 Finder 窗口路由组合**；无需把与这些测试无关的 Bark 实际远端推送、长期隧道创建或第三方服务成本纳入此次 UI 迁移，它们由现有安全/集成测试负责。
-- Settings 当前 `⌘,` 只读入口已有独立 UI Test；真正修改偏好写入 `AppIdentity.configDirectory = homeDirectoryForCurrentUser/.config/bailey`，而非文档的 `.config/Bailey`。本机实测仅改 `HOME` 不改变 Foundation 用户主目录；**修改偏好的 App UI Test 只在隔离 CI 登录用户运行，先确认配置/UserDefaults/钥匙串归属**，不额外开发测试配置注入。`AppSettingsTests` 五个方法构造时都曾写 `NSApp.appearance`（不是只有显式访问的两项）；其不必要的初始化/测试副作用已归 P1-T3 提前清理。本任务核验实际主题、字号、保存和重启结果，而不重复重构配置逻辑。
+- Settings 当前 `⌘,` 只读入口已有独立 UI Test；仅改 `HOME` 不能隔离 Foundation 路径的结论仍成立。P1-T2 续执行已验证 Apple `CFFIXED_USER_HOME` + `HOME` 可让真实 Dev 的 TOML 落在临时主目录，并在启动器核对实际文件；主题、字号等 TOML 设置可使用该隔离方式，不新增产品配置注入。UserDefaults／钥匙串未由此隔离，语言持久化等仍限独立 CI 登录用户或明确恢复方案。`AppSettingsTests` 初始化的多余原生副作用已由 P1-T3 清理，本任务不重复重构配置逻辑。
 - `AppMenuIsolationTests.testTestHostHasNoQuitKeyboardEquivalent` 原来保护 NativeUI 长时间占用共享桌面的 XCTest 免受 `⌘Q` 误退出；此时才能确认原生宿主 GUI 用例全部删除，再检查独立 CI UI Runner 是否需要屏蔽退出。若无消费者，**同任务同时删除这条原生测试和 `BaileyApp.swift` 仅为测试宿主存在的 `CommandGroup(replacing: .appTermination) {}`**，并在专用 UI Runner 验证正常 ⌘Q、`applicationWillTerminate` 的持久化、脏文件退出否决及同 `BAILEY_UI_TEST_RUN_ID` 重启后的数据恢复；这是 P4-T4 不能以强制终止冒充正常退出所缺的最后一段链路。保留整个 `BaileyInstanceMode` 的真实快照/历史/隧道隔离。
 - 原始对象引用/ARC 释放、Task/callback 到期逻辑不等于纯 UI 可观察结果；需要非 UI 注入测试守护异步资源不变量，真实 UI 再用实际 Shell/文件/浏览器操作与 Instruments/进程测量补证。
 
 **Step 2 — 新 UI 与非 UI：**
 - 专用 CI Runner 构造真实 Shell marker、可控网页、5 个编辑器和 10 万行内容，经 Dock 停车/重挂载/关闭/重开观察内容与资源释放；**保留 `docs/testing.md` 五轮各五个编辑器、两轮宿主销毁、旧 `NSScrollView` 持有、`Close Files`/关闭项目等真实压力和生命周期触发条件**。旧测试能直接检查原生视图/文件弱引用归零，XCUITest 却不能跨进程读取这些指针；改以可纯化的资源所有权断言与真实 App 的 Instruments Allocations/生命周期及 heap 证据联合证明，**不能把内存总量回落自动等同于原逐对象析构断言**。不能证实的具体弱引用/文档缓存不变量保留为 No-Go，不新增私有测试反射通道。
-- 关闭后旧 callback、窗口附着时序、Document 占用保护等可从数据不变量验证的部分留在非 UI 单元/集成；Settings 通过独立 CI 用户的真实 `XCUIApplication` 与 TOML 结果证明，若不能隔离偏好则只验证现有只读 Settings 打开，不修改真实用户配置。
+- 关闭后旧 callback、窗口附着时序、Document 占用保护等可从数据不变量验证的部分留在非 UI 单元/集成；Settings 经真实 `XCUIApplication` 验证临时 TOML 的读写、显示和重启结果，先确认配置确实归属该例主目录；UserDefaults／钥匙串等未隔离的写入保留原有独立账户边界，不修改真实用户配置。
 - 21 项逐方法核销后同任务移除 `PaneRetentionTests.swift`、此前留下的 `AppMenuIsolationTests.swift` 与它们独占的 `NSHostingView`/Shell parking fixtures（仍被生产或非 UI 测试消费的逻辑不得删除）；保留已纯化的 `AppSettingsTests`。P1-T3 已负责改正 `AppSettings.swift` 和 `docs/features/settings.md`／`tunnels.md` 的大小写旧路径；本任务只复核 `docs/testing.md` 的 HOME 隔离说明及真实测试结果，并同步 `terminal.md`、`browser.md`、`dock.md`、`editor.md`、`docs/development.md` 的活跃测试入口。**本任务清空最后旧 UI suite 时**，核对 `AGENTS.md`、`CONTRIBUTING.md`、`.github/PULL_REQUEST_TEMPLATE.md` 及所有活跃文档的最终两个 Target 命名，不能把这项旧路清理推到 P5。
 
 **Step 3 — 验证：**

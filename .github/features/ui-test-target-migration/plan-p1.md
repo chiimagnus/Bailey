@@ -42,7 +42,7 @@
 - 既有 Sheet 操作写死 `Add/Open/Cancel` 文案，系统语言或 Touch Bar 重名可能破坏测试选择。旧的 AX 全路径标识已遇到 128 字符限制；应按真正控件/窗口做可靠查询，不增加隐藏测试 UI。
 - `WorkspaceUITestSupport.launch` 已注册 App teardown，多数具体用例又在 `defer` 中 `app.terminate()`。更重要的是，Files/Git 测试**先创建 fixture / 写文件 / 初始化 Git，再调用会抛错的 `launch()`，直到成功返回后才注册 `defer { fixture.remove() }`**；启动失败就漏清理临时目录。应用关闭应仅有统一 teardown，fixture 创建成功后应立即登记清理，测试内后续任意抛错都能清理。
 - `WorkspaceUITestFixture.git(_:)` 将 stdout 和 stderr 都设为 `Pipe`，却在 `process.waitUntilExit()` 前不读取它们；复杂 Git fixture 的输出塞满管道时会互相等待。使用无需输出的安全重定向或可靠排空，并核实退出码和错误信息；不要因此开发第三套命令执行器。`WorkspaceUITestFixture.file(_:)` 仅向 `root.appendingPathComponent(name)` 写文件，不创建中间目录；同名不同路径测试须先建立各自父目录，或仅扩展该现有 helper，不能以根目录里的同名标签假装覆盖。
-- `--isolated-ui-test` 仅隔离快照与终端历史并禁启保存的隧道；`AppIdentity.configDirectory` 实际为 `FileManager.default.homeDirectoryForCurrentUser/.config/bailey`。本机已核验：仅给 `HOME` 赋临时值不改变该 Foundation 路径。因此修改设置的 UI 测试只在真正独立的 CI 用户/系统账户运行并验证写入归属，用户本机不执行。
+- `--isolated-ui-test` 自身仅隔离快照／终端历史并禁启保存的隧道；仅给 `HOME` 赋临时值确实不改变 Foundation 配置路径。2026-10-23 续执行已用 Apple CoreFoundation 的 `CFFIXED_USER_HOME`、当前 SDK 探针和真实 Dev App 证明临时 Foundation 主目录可行：启动器同时设置两种主目录并核对临时 TOML，外观和字号可使用真实临时配置，不新增产品配置注入。此证据不隔离 UserDefaults／钥匙串，语言持久化仍需独立登录账户或明确恢复方案。Git 夹具须显式持久化自身身份与不签名策略，不依赖真实 HOME。
 - `BaileyTests` 虽被称为 Unit Target，Xcode 构建配置却明确 `TEST_HOST = $(BUILT_PRODUCTS_DIR)/Bailey.app/Contents/MacOS/bailey`，`make test` 没有 `make test:ui` 的在用 App 预检；先通过工程配置和安全环境的真实运行证实宿主不会占用/污染用户会话，决定是否只限独立 Runner 或在现有 Makefile 上做最小前置保护。**在未证明安全前，本机正式 Bailey 运行时也不要启动 `make test`**，不能因测试名为 Unit 就擅自启动第二个 App。
 
 **Steps:**

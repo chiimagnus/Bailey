@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P3-T3"
+current_task_id = "P3-T4"
 
 [[tasks]]
 id = "P1-T1"
@@ -15,8 +15,8 @@ id = "P1-T2"
 title = "修复独立 Runner 和现有十条真实 UI 路径"
 status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = "a33641ed8ad782077a0f32b272dcdb2da16317d7"
-note = "P1相关原子提交70a103d/f712d52/9177817/a33641e；完整真实App UI13/13 passed,0 skipped，入口/中文/Unicode/Git/窗口/编辑器键盘已实测；剩余同屏多树、多窗专项归P3/P4。"
+commit = "0ae7397"
+note = "P1基础13/13、配置与选择器真实GUI2/2、新几何20/20，构建验签；扩大后全量UI在57条通过后AX授权中断，新单例也无法初始化，属于最终P5独立阻塞，非P1的10条基线未实施。"
 
 [[tasks]]
 id = "P1-T3"
@@ -77,18 +77,18 @@ note = "旧15方法分层迁移，完整Git Changes UI 11/11+merge冲突1/1、Un
 [[tasks]]
 id = "P3-T3"
 title = "Git 原生对话框、危险操作、交互 rebase"
-status = "in_progress"
+status = "completed"
 plan = "plan-p3.md#p3-t3"
-commit = ""
-note = "逐项迁移七份旧Git原生表单和交互式Rebase的18条方法；先核对真实App菜单/Sheet/PTY、后台唯一职责，再按UI与真实Git集成分层、定点验证、删除旧类和提交。"
+commit = "5f7d512628b6830731c228ed333f04157f22079a"
+note = "18条旧方法分层核销、七旧类清理，真实GUI 21/21（exit 0）、受影响Branch/Tag定点21/21（exit 0）、其他Git后端先前61/61及授权SSH/PT​​Y3/3。未受影响的GUI不重复运行；外网provider、GUI非法命名提示等剩余边界见inventory。"
 
 [[tasks]]
 id = "P3-T4"
 title = "Git Graph 全图谱、颜色/标签、键盘与多级菜单"
-status = "pending"
+status = "in_progress"
 plan = "plan-p3.md#p3-t4"
 commit = ""
-note = ""
+note = "在 macOS 诊断中找到 testmanagerd LocalAuthentication 需要真实身份验证 Enable UI Automation（Apple Watch失败、Touch ID/密码面板已出现）；继续验证授权窗口及完成P3-T4。"
 
 [[tasks]]
 id = "P4-T1"

@@ -249,97 +249,114 @@
 
 ### P3-T3 — 18 条
 
-**[GitBranchDialogTests.swift](../../../BaileyTests/NativeUI/Git/GitBranchDialogTests.swift)：4 条** — Git Branch 表单、默认值与动作。初判：UI+逻辑，执行前核对每项真实断言。
+**2026-10-23 完成证据**：P3-T3 → Git `5f7d512`，旧 18 方法分层迁移并删除七份旧原生对话框测试。完整 Bailey Dev GUI `GitDialogUITests` **21/21**（`/tmp/bailey-p3-t3-gitdialog-full.log`，exit 0）；此前真实 Git 五组后端 **61/61**，末次仅重测受改动影响的 `GitBranchActionTests,GitTagActionTests` **21/21**（`/tmp/bailey-p3-t3-targeted-branch-tag-final.log`，exit 0）；独立 PTY／授权 Windows SSH **3/3**（`/tmp/bailey-p3-t3-rebase-integration.log`）。不重复跑未受影响的 GUI 和宿主测试。目标 App 仅 `chiimagnus.bailey.dev`，产品代码及正式 Bailey 未改。Xcode 27.2 偶发菜单栏无窗口，启动器仅在缺失窗口时调用原生「新建窗口」。本地 bare remote 未覆盖互联网网络故障或真实 provider；非法名称错误 UI 展示、真实用户交互时的跨窗口焦点抢占及 PTY EOF 组合未独立实测，不能据此宣称外部环境全部验证。
 
-- `testBranchCreateAndRenameUseNativeFieldsAndPreserveRetryInput`（旧 L7） · `A`
-- `testRemoteCheckoutFetchAndPullExposeNativeDefaults`（旧 L27） · `A`
-- `testPushWithoutConfiguredRemotesHasNoPossibleSubmit`（旧 L53） · `A`
-- `testDeleteAndPushHaveGitGraphDefaultsWithExplicitDangerousChoices`（旧 L63） · `A`
+**`GitBranchDialogTests.swift` 原 4 条均已由独立 Dev GUI 加 Git Action 集成测试核销，旧文件已删除**。涵盖从历史／当前 HEAD 创建、重命名、Remote Checkout/Fetch/Pull、Push 无 remote 禁用与多远端选择、Delete Force/Remote 默认关闭、Git refs/index/HEAD/工作区最终结果，详见下列逐项证据。
 
-**[GitCommitDialogTests.swift](../../../BaileyTests/NativeUI/Git/GitCommitDialogTests.swift)：3 条** — Commit Sheet 与仓库身份。初判：UI+逻辑，执行前核对每项真实断言。
+- `testBranchCreateAndRenameUseNativeFieldsAndPreserveRetryInput`（旧 L7） · `A` → `GitDialogUITests.testCurrentBranchNativeSheetDefaultsToCheckoutAndPreservesGitBytes` + `testBranchRenameAndNoRemotePushUseNativeRefMenuWithoutUnsafeChanges`（真实 Sheet 预填、禁用空名、Checkout 默认、重命名和 Git Ref／索引字节通过）。非法名称由 `GitBranchActionTests.testBranchRefValidationAndOtherWorktreeCheckoutGuard` 检查真实 `git check-ref-format` 拒绝及 HEAD／Ref 不变；原生错误展示不冒称 E2E 已测。
+- `testRemoteCheckoutFetchAndPullExposeNativeDefaults`（旧 L27） · `A` → `GitDialogUITests.testRemoteFetchAndPullNativeDefaultsPreserveOrAdvanceOnlyExpectedRefs` 真实 Fetch 非强制、Pull 非强制建提交/非 Squash、取消无副作用、确认后 branch、HEAD 和磁盘字节正确（1/1，`/tmp/bailey-p3-t3-remote-fetch-pull-overflow.log`）；`testRemoteCheckoutNativeSheetValidatesNameAndCreatesTrackingBranch` 已验证远端检出名称预填、空白禁止、取消不写入、创建跟踪分支后上游配置、HEAD 与文件字节（1/1，`/tmp/bailey-p3-t3-remote-checkout.log`）。Fetch 后同 OID 的远端 Ref 被合并至 `+N` 子菜单，测试已按 AX 结构修正入口。
+- `testPushWithoutConfiguredRemotesHasNoPossibleSubmit`（旧 L53） · `A` → `GitDialogUITests.testBranchRenameAndNoRemotePushUseNativeRefMenuWithoutUnsafeChanges`（真实 Git Graph 右键，无 Remote 的 Push Sheet 提交按钮禁用、实际 Git 无写入，1/1，`/tmp/bailey-p3-t3-branch-push-rename-gui.log`）。
+- `testDeleteAndPushHaveGitGraphDefaultsWithExplicitDangerousChoices`（旧 L63） · `A` → `GitDialogUITests.testBranchPushNativeSheetChoosesOnlySelectedBareRemote` 验证多远端优选、设置上游默认开启、全部取消时禁用提交与选定 bare remote 实际推送（1/1，`/tmp/bailey-p3-t3-branch-multiremote-push.log`）；`testBranchDeleteDefaultsPreserveRemoteAndCancelIsNoOp` 又验证 Force/Delete Remote 两项默认关闭、取消无副作用、确认后仅删本地已合并分支而保留远端 Ref（1/1，`/tmp/bailey-p3-t3-branch-delete-defaults.log`）。
 
-- `testNativeFieldsAndMainlineDefaults`（旧 L21） · `A`
-- `testSheetStaysInInitiatingWindowAndRejectsSameRepositoryProjectSwitch`（旧 L53） · `C`
-- `testProjectResolutionCannotAuthorizeOldRepositorySnapshot`（旧 L164） · `B`
+**`GitCommitDialogTests.swift` 原 3 条已核销，旧文件删除**；模型身份测试已先迁往 `GitCommitActionTests`，其余两个旧 UI 方法由如下真实 App 路径接替。
 
-**[GitInteractiveRebaseTests.swift](../../../BaileyTests/NativeUI/Git/GitInteractiveRebaseTests.swift)：3 条** — 原生 PTY／interactive rebase 与 SSH。初判：UI+逻辑，执行前核对每项真实断言。
+- `testNativeFieldsAndMainlineDefaults`（旧 L21） · `A` → `GitDialogUITests.testHistoricalCommitNativeSheetsUseSafeDefaultsAndCheckoutRealHistory`（双父提交、各项默认、取消、真实 Checkout）+ `testDropCommitNativeConfirmationCancelsThenRewritesOnlySelectedHistory`（原生 Drop 取消／确认后真实提交图与文件），均 1/1 通过；`/tmp/bailey-p3-t3-commit-dialogs-gui.log`、`/tmp/bailey-p3-t3-drop-real-gui.log`。
+- `testSheetStaysInInitiatingWindowAndRejectsSameRepositoryProjectSwitch`（旧 L53） · `C` → `GitDialogUITests.testCommitSheetBelongsToItsWindowWhenAnotherWorkspaceTakesFocus`：两真实窗口、原生 Sheet 属主、取消不写、确认正确 Checkout、另窗未变，1/1（`/tmp/bailey-p3-t3-commit-two-windows-final.log`）；同仓库项目切换与关闭窗口造成的过期 action 由 `GitCommitActionTests` 的目标身份拒绝链及生产 `GitPanel.presentCommitDialog` 的项目／窗口双重判定约束。原旧测试通过直接修改 manager／关闭挂着 Sheet 的窗口注入了不可通过 Sheet 模态交互直接触发的状态，不能把 GUI 覆盖冒称该注入情形也实测。
+- `testProjectResolutionCannotAuthorizeOldRepositorySnapshot`（旧 L164） · `B` → [GitCommitActionTests.swift](../../../BaileyTests/Integration/Git/GitCommitActionTests.swift) 原完整模型拒绝链，测试切走与返回的旧 target 均拒绝危险 Checkout；`make test:GitCommitActionTests DERIVED_DATA=build/DerivedData` 14/14（含本项，0 失败／0 跳过，2026-10-23）。原 NativeUI 类仅留两条真正需要表单／窗口的用例。
 
-- `testSSHHelperHandoffUsesTheRebaseFixturesApplication`（旧 L23） · `B`
-- `testInteractiveRebaseNewPTYUsesRepositoryAndWaitsForRealEditorInput`（旧 L55） · `C`
-- `testAuthorizedSSHInteractiveRebaseUsesIndependentHandshakeForPinnedAndAutomaticProjects`（旧 L130） · `C`
+**[GitInteractiveRebaseIntegrationTests.swift](../../../BaileyTests/Integration/Remote/GitInteractiveRebaseIntegrationTests.swift)：原 3 条完整迁入 Integration/Remote（2026-10-23）**。只测试测试实例的 SSH 服务归属、真实 PTY 组件挂载、远端终端与 Git 副作用；不是完整 App 菜单 E2E。
 
-**[GitRefReplacementTests.swift](../../../BaileyTests/NativeUI/Git/GitRefReplacementTests.swift)：1 条** — Ref 替换、重试与过期输入。初判：UI+逻辑，执行前核对每项真实断言。
+- `testSSHHelperHandoffUsesTheRebaseFixturesApplication`（旧 L23） · `B` → 原断言完整保留，验证专属 `BAILEY_SSH_SOCKET`／token 和通知服务归属（passed）。
+- `testInteractiveRebaseNewPTYUsesRepositoryAndWaitsForRealEditorInput`（旧 L55） · `C` → Integration/Remote 仍验证原生终端挂载、TTY、等待真实编辑器输入、提交重写和终端生命周期；另由 `GitDialogUITests.testInteractiveRebaseFromGitGraphOpensRealPTYAndAcceptsEditorInput` 从完整 App 图谱打开 Rebase Sheet、启动真正 PTY、键盘回车后确认 Git DAG／工作区（`/tmp/bailey-p3-t3-rebase-clean-production.log`，1/1，36.841 秒）。Runner 沙盒内的编辑器脚本不能被 Dev App `exec`（真实 Git 报 `Operation not permitted`），测试改用 Git 配置中的原生 `/bin/sh -c` 内联编辑器，无产品后门或额外权限。
+- `testAuthorizedSSHInteractiveRebaseUsesIndependentHandshakeForPinnedAndAutomaticProjects`（旧 L130） · `C` → Integration/Remote 保留真实授权 `windows` 临时仓库、固定与自动跟随 SSH 独立握手（两条路径 passed，已清理测试 master）。
 
-- `testBranchAndTagReplacementPreserveRetryInputAndRejectRefMovedDuringConfirmation`（旧 L21） · `C`
+验证：`BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test:GitInteractiveRebaseIntegrationTests DERIVED_DATA=build/DerivedData` → 3/3、0 失败、0 跳过，56.314 秒，`/tmp/bailey-p3-t3-rebase-integration.log`。
 
-**[GitRemoteBranchDialogTests.swift](../../../BaileyTests/NativeUI/Git/GitRemoteBranchDialogTests.swift)：1 条** — Remote Branch 操作确认。初判：UI+逻辑，执行前核对每项真实断言。
+**`GitRefReplacementTests.swift` 原 1 条已核销并删除旧文件**。
 
-- `testFetchBindsLocalDestinationAcrossExternalChangesAndStillAllowsFreshForceAndFastForward`（旧 L21） · `C`
+- `testBranchAndTagReplacementPreserveRetryInputAndRejectRefMovedDuringConfirmation`（旧 L21） · `C` → `GitDialogUITests.testHistoricalBranchReplacementRejectsMovedRefAndPreservesRetryName` 与 `testHistoricalTagReplacementRejectsMovedRefAndRetainsAnnotation` 各 1/1：Ref 同名时 Choose Another Name 保留输入／Tag 注释，确认已出现后外部 `git update-ref`，旧确认 CAS 拒绝且 2 秒反向监听无延迟写入，再重新确认才能指向旧 Commit。日志 `/tmp/bailey-p3-t3-branch-stale-inverted.log`、`/tmp/bailey-p3-t3-tag-stale-replace-gui.log`。新增 `GitDialogUITests.testLateBranchAndTagCollisionPreserveRetryInputsWithoutOverwritingRefs` 再覆盖创建 Sheet 打开后外部竞争的同名 Ref，重试前后的输入和实际 Ref／HEAD 未被误写（`/tmp/bailey-p3-t3-late-collision.log` 1/1）。
 
-**[GitStashDialogTests.swift](../../../BaileyTests/NativeUI/Git/GitStashDialogTests.swift)：2 条** — Stash 表单与确认。初判：UI+逻辑，执行前核对每项真实断言。
+**`GitRemoteBranchDialogTests.swift` 原 1 条已核销并删除旧文件**。
 
-- `testSpecificStashIdentityIndexDefaultsAndBranchInputValidation`（旧 L9） · `A`
-- `testNativePopCancellationAndConfirmationUseCapturedSecondStashAndIndexChoice`（旧 L41） · `C`
+- `testFetchBindsLocalDestinationAcrossExternalChangesAndStillAllowsFreshForceAndFastForward`（旧 L21） · `C` → `GitDialogUITests.testRemoteFetchRejectsMovedLocalDestinationThenAllowsFreshForceAndFastForward`（原生 Force Fetch 默认关闭，Sheet 期间外部移动本地 Ref 后旧确认拒绝；重新 Force／正常 fast-forward 均真实成功，HEAD／文件／index 未误改，`/tmp/bailey-p3-t3-remote-fetch-stale-recovery.log`，1/1）。
 
-**[GitTagDialogTests.swift](../../../BaileyTests/NativeUI/Git/GitTagDialogTests.swift)：4 条** — Tag 表单与危险选择。初判：UI+逻辑，执行前核对每项真实断言。
+**`GitStashDialogTests.swift` 原 2 条均已由 `GitDialogUITests` 与 `GitStashActionTests` 核销，旧文件已删除**。原生 Sheet selector/OID 用 `StaticText.value` 验证，Esc 取消、第二条 Stash 的 Pop／索引恢复与 Branch 创建均验证真实 Git 结果；补验证据 `/tmp/bailey-p3-t3-stash-oid-value-escape.log`。
 
-- `testPanelTagPushUsesConfiguredDefaultAndRejectsFailedContainmentQuery`（旧 L21） · `C`
-- `testCreationDefaultsAndEditedFieldsSurviveTypeChanges`（旧 L105） · `A`
-- `testDeleteRemoteChoicesAreExplicitAndInitiallyLocalOnly`（旧 L128） · `A`
-- `testPushSelectionAndNoRemoteSafety`（旧 L141） · `A`
+- `testSpecificStashIdentityIndexDefaultsAndBranchInputValidation`（旧 L9） · `A` → `GitDialogUITests.testStashNativeApplyDropAndBranchUseSelectedOlderEntry`：旧 Stash 的 Apply/Drop 取消无副作用，Pop 索引默认关闭，分支名空白禁止提交，Create Branch 实际仅消耗所选旧 selector 而保留最新 Stash，恢复 index/文件/HEAD（1/1，`/tmp/bailey-p3-t3-stash-branch-all-actions.log`）。
+- `testNativePopCancellationAndConfirmationUseCapturedSecondStashAndIndexChoice`（旧 L41） · `C` → `GitDialogUITests.testOlderStashNativePopCancelAndReinstateIndexUseCapturedOID`（原生 Sheet、旧 selector 身份、取消、勾选恢复 index 后真实 Git/Stash 列表/文件，`/tmp/bailey-p3-t3-gitdialogs-native-full.log` 整组 4/4）。
+
+**`GitTagDialogTests.swift` 原 4 条已核销并删除旧文件**；原生 Tag UI 的实际选择、取消、写入及后端失败分层验证。
+
+- `testPanelTagPushUsesConfiguredDefaultAndRejectsFailedContainmentQuery`（旧 L21） · `C` → `GitDialogUITests.testTagPushUsesTagDefaultRemoteNotBranchPushRemote` 验证真实多远端 Push 只写选定的 bare remote；`GitTagActionTests.testFailedTagContainmentQueryStopsBeforeAnyRemotePush` 模拟真实 `.git` 查询失败，断言错误且远端 Tag 未创建、恢复后查询正常（`/tmp/bailey-p3-t3-tag-containment-integration-v2.log`，全类 passed）。
+- `testCreationDefaultsAndEditedFieldsSurviveTypeChanges`（旧 L105） · `A` → `GitDialogUITests.testHistoricalTagSheetPreservesAnnotationAndCreatesAtChosenCommit`（类型切换前后的注释文本不丢、取消无 Ref、确认后旧 Commit 的 annotated Tag OID、注释和工作区），另由 `testHistoricalTagReplacementRejectsMovedRefAndRetainsAnnotation` 验证同名重试的预填字段（`/tmp/bailey-p3-t3-gitdialogs-native-full.log`、`/tmp/bailey-p3-t3-tag-stale-replace-gui.log`）。
+- `testDeleteRemoteChoicesAreExplicitAndInitiallyLocalOnly`（旧 L128） · `A` → `GitDialogUITests.testTagDeleteNativeSheetDefaultsLocalOnlyAndPreservesBareRemote`：两远端中默认“不删除远端”，可以显式选择 `backup` 再改回本地；取消保留全部 Ref，确认只删除本地 Tag，两个真实 bare remote 不变（`/tmp/bailey-p3-t3-tag-delete-two-remotes-fixed.log`，1/1）。
+- `testPushSelectionAndNoRemoteSafety`（旧 L141） · `A` → `GitDialogUITests.testTagPushUsesTagDefaultRemoteNotBranchPushRemote`（多远端偏好、全不选禁用、只推选定目标）+ `testTagPushWithoutRemoteCannotSubmitOrWriteRepository`（无 Remote 的真实 Sheet 禁止确认、取消后 Ref／HEAD／文件字节不变；`/tmp/bailey-p3-t3-tag-no-remote-fixed.log`，1/1）。
 
 ### P3-T4 — 48 条
 
+**2026-10-23 P3-T4 在做：11/48 旧方法已逐项迁入纯 Unit，另 37 条仍保留旧 NativeUI 宿主；19 个新的独立 Bailey Dev Git Graph E2E 合集已实际通过，暂不可核销全部 48 条。**
+
+续执行验证：`make test:CommitGraphLayoutTests,GitGraphPaletteTests,GitGraphReferenceGroupTests,GitGraphWorktreePresentationTests` 39/39、exit 0；`make test:ui ONLY_TESTING=BaileyUITests/GitGraphUITests` 19/19、0 skipped、exit 0，599.086 秒，xcresult `Test-Bailey-UI-2026.10.23_21-39-05-+0800.xcresult`，完整日志 `/tmp/bailey-migration-graph-exclusive-ui.log`。此前 21:30 的运行与另一轮同 Bundle ID GUI 重叠，3 passed / 2 failed / 1 cancelled，不能作产品回归依据；两项失败在独占复测中均通过。Makefile 四入口互斥的修复及验证见 P1 审计 F-06/F-07。新增几何用例的真实同名无引用工作树菜单打开、选定文件路径与正文已 1/1 通过（`/tmp/bailey-migration-graph-geometry-padded.log`），整行边角及真实分隔条缩放仍在校验；后者不混入已通过的 19 项。
+
+新增根因证据：`CFFIXED_USER_HOME` 的 Foundation 合约探针与真实 Dev App 都确认 `.config/bailey-dev/config.toml` 位于每例临时主目录，原 Dev 配置 SHA-256 始终为 `2d560d12a91d3863e0b5c564c59da50ee65226bc2401db13a524c918019e083d`。此能力不等于 UserDefaults/钥匙串全部隔离；CFPreferences 探针未在临时主目录生成 plist，因此语言持久化仍不得假定安全。公共启动器与剪贴板修复已提交 `0ae7397`。真实分隔条必须使用 `click(forDuration:thenDragTo:)` 鼠标 API，触摸 `press` 不会调整。Red：18pt + 150pt 面板时标题移到窗口外（`/tmp/bailey-migration-graph-geometry-isolated-matrix.log`）；只移除 64pt 下限仍失败（`/tmp/bailey-migration-graph-max-font-native-paste.log`）。真实根因是标签条固定理想宽度及高布局优先级与标题下限共同超出行宽；采用原生弹性分配后，短标签又被拉宽，因此同时以实际 NSFont 字形宽度约束标签的最大宽度，保留其原有窄窗截断。最终受影响宿主模型及全部 37 旧原生用例 125/125 通过，几何新类首批 **13/13、0 失败、exit 0**（`/tmp/bailey-migration-graph-geometry-complete.log`，1040.6 秒）：浅/深×9/18pt、5宽×6边角、共享 HEAD 2/12 个 Worktree、特殊标签四色、两实际菱形对齐及无选择底色、33 remote、多级 hover 菜单在外部 Ref 刷新后驻留10秒并真正打开正确 checkout、无引用同名工作树打开文件。正式 Debug `make build` 与严格验签 exit0。2026-10-24 扩展后的独立完整 UI Suite 前半段又有 20/20 条 `GitGraphGeometryUITests` 真实通过（新增长主分支双色×9/18pt、Tree/List 双色、12 工作树等）；`/tmp/bailey-migration-complete-ui-suite.log`。该 Suite 最终 **57 passed / 45 failed**，其中 `GitDialogUITests.testHistoricalBranchReplacementRejectsMovedRefAndPreservesRetryName` 的第二次提交右键在按钮外坐标未命中菜单、`GitGraphUITests.testCleanSharedHEADWorktreesKeepDistinctThreeLevelNativeMenus` 在全 App 范围选到非本工作树的同名 `Remove` 项；之后 `GitGraphUITests.testDarkDenseGraphAtMaximumPanelFontKeepsTitleAndRailsInsideThePanel` 丢失 App AX 连接，余下大部分方法遭 AX 拒绝，不得冒充执行过业务断言。现已将前者改为真实图谱节点右键，后者改为选中三级 Worktree 菜单的作用域查询，**仅 `make build:ui` 编译通过，仍欠实际 UI 复测**。重启专属 `testmanagerd`，并分别用 ad-hoc／Apple Development 签名进行单例初始化，均出现 `Timed out while enabling automation mode`，见 `/tmp/bailey-migration-ui-auth-recovered.log`、`/tmp/bailey-migration-ui-default-signing-fresh-service.log`；未改用户权限、未声称修复此 macOS/XCTest 初始化故障。
+
+2026-10-24 补充验证：受影响图谱布局/旧宿主 `make test:CommitGraphLayoutTests,GitGraphPaletteTests,GitGraphReferenceGroupTests,GitGraphWorktreePresentationTests,RecentCommitsViewTests SIGNING=adhoc` **76/76 exit 0**（`/tmp/bailey-migration-graph-model-targeted.log`）；`make test:GitStatusModelTests SIGNING=adhoc` **49/49 exit 0**（`/tmp/bailey-migration-graph-status-model.log`）。本轮修订后的 `make build:ui SIGNING=adhoc` 和 `make build:release SIGNING=adhoc` 均成功并严格验签（`/tmp/bailey-migration-p3-final-ui-compile.log`、`/tmp/bailey-migration-release-final.log`）。XCTest xcresult 导出诊断显示 `testmanagerd` 已回复 Runner 授权，但 `enabling automation mode` 60 秒未返回；原始记录 `/tmp/bailey-ui-test-automation-diagnostics`。额外完整宿主 `make test SIGNING=adhoc` 在 `_prepareTestConfigurationAndIDESession` 阶段超过三分钟没有启动任何用例，采样记录 `/tmp/bailey-migration-full-host-sample.txt`，已精确停止该测试及孤立 Dev 宿主、释放锁，**不计为完整宿主通过**。运行中的正式 Bailey 未被停止，Dev 配置 SHA-256 未变化；需要新的正常 XCTest 图形会话再做修正后的完整 UI E2E 与全量宿主验收。
+
+- 纯 Unit：`GitGraphPaletteTests`、`GitGraphReferenceGroupTests`、`GitGraphWorktreePresentationTests` 和现有 `CommitGraphLayoutTests`；色值、引用分组、路径、状态字母、节点提示、车道边距原断言迁移。定点 7/7（`/tmp/bailey-p3-t4-expanded-units.log`）、29/29（`/tmp/bailey-p3-t4-pure-gutter-unit.log`），此前分组／路径的 2/2、3/3 均 exit 0。
+- 真实 GUI：`BaileyUITests/Git/GitGraphUITests.swift` 原19条独占合集 exit0，见本节首条证据。包括仓库 0/1/35 commits、24 条并行分支、真实双父 Merge、Branch/Tag/Stash/Remote HEAD、脏／干净／主／脱离 Worktree、`+N`／三级菜单、点击和键盘、长中文标题及深路径横滚、颜色像素和历史 Diff 选中态、Index/Worktree 两种实际 Diff 基线。新增 5 条真实密集车道外观/字号及暗色历史 Diff 扩展因为 XCTest AX 初始化故障仍待独占 UI 复测；新增几何类 20/20 已通过，不能代替此 5 条。
+- 发现并排除的测试误判：XCUITest `MenuButton.title` 不等于 `label`；同名 Dev 项目在菜单栏存在隐藏零尺寸项，必须选择真正可见的 Worktree 子菜单；标题截图必须比较原始像素并控制 hover；文件名和总路径遵循 APFS 长度限制。以上未修改 Bailey 产品行为。
+- **尚待核销**：长 Branch 双色×9/18pt、历史/未提交 Header 的双色×Tree/List 已由新增 20 条真实 GUI 覆盖；密集车道的双色×9/18pt、历史 Diff 暗色选中态、工作树菜单作用域和历史提交第二次右键仍需新修正后的 GUI 复测，另需逐条核销所有旧断言和删除旧原生宿主。P3-T4 保持 `in_progress`，20 条的成功不能抵消该 Suite 最终失败。旧组件测试直接注入120pt、1.6/2倍字号；真实产品分隔条最低150pt、面板字号9–18pt，不制造用户不可达配置。237条合成车道对应极端纯布局160组；真实24路并行分支在双色/字号/宽窄中验证饱和后的实际可达布局，两种证据不混称。
+
 **[RecentCommitsViewTests.swift](../../../BaileyTests/NativeUI/Git/RecentCommitsViewTests.swift)：48 条** — Git Graph 拓扑、标签、键盘与绘制。初判：UI+逻辑，执行前核对每项真实断言。
 
-- `testDisplayedHistoricalDiffHasGreySelectionIndependentOfGraphFocus`（旧 L120） · `C`
-- `testExpandedHistoryAndUncommittedNodesHaveNoPersistentSelectionFill`（旧 L169） · `C`
-- `testGraphReferenceBadgeTakesKeyboardFocusFromAnotherTree`（旧 L236） · `C`
-- `testGraphClickRecordsFocusIntentBeforeMovingNativeResponder`（旧 L260） · `C`
-- `testGraphSpaceUsesTheSelectedCommitAndFileWithoutStealingKeyboard`（旧 L292） · `C`
-- `testGraphTreeKeyboardTraversesFoldersAndBothHistoricalFiles`（旧 L347） · `C`
-- `testGraphPaletteKeepsTwelveLaneColors`（旧 L399） · `B`
-- `testColoredBadgeIconsRemainReadableOverEveryGraphLaneColor`（旧 L414） · `B`
-- `testTagStashDetachedAndStandaloneWorktreeIconsMatchGraphColors`（旧 L434） · `C`
-- `testHeadAndStashGraphGutterRemainsClickableInBothAppearances`（旧 L503） · `C`
-- `testCompositeReferencesUseLongestConfiguredRemoteAndPreserveEveryTarget`（旧 L534） · `B`
-- `testCompositeReferencesNeverJoinDifferentCommitRowsOrUnknownRemotes`（旧 L569） · `B`
-- `testCompositeOverflowKeepsRealReferencesAvailableWithoutWholeRowScrolling`（旧 L586） · `C`
-- `testCurrentAndFeatureUncommittedDiamondsAlignAndToggleInNativeGraph`（旧 L609） · `C`
-- `testShortCommitHashCopiesWithoutExpandingDetails`（旧 L672） · `C`
-- `testCompactPrimaryBranchTogglesCommitAndKeepsContextMenu`（旧 L689） · `C`
-- `testShortPrimaryBranchBadgeKeepsIntrinsicWidth`（旧 L729） · `C`
-- `testPrimaryBranchContextMenuRemainsAvailableThroughWidthChanges`（旧 L772） · `C`
-- `testGraphNodeHelpOnlyStatesConfirmedHEADMembershipAndActualReferences`（旧 L810） · `C`
-- `testNodeHoverTargetRetainsSingleClickAndCommitContextMenu`（旧 L845） · `C`
-- `testLongCommitMessageCanScrollHorizontallyInNarrowSidebar`（旧 L877） · `C`
-- `testGraphGutterLeavesRoomForCommitContentAtExtremeLaneCounts`（旧 L890） · `C`
-- `testDenseRealNativeGraphRetainsVisibleTitleScrollerInBothThemes`（旧 L917） · `C`
-- `testManyParallelBranchesDoNotScrollWholeGraphSideways`（旧 L954） · `C`
-- `testShortCommitMessagesDoNotBounceHorizontally`（旧 L977） · `C`
-- `testExpandedHistoryKeepsLongFolderPathsScrollable`（旧 L999） · `C`
-- `testRecentCommitHistoryOnlyPagesAtBottom`（旧 L1017） · `C`
-- `testEntireCommitRowTogglesIncludingGraphMetadataAndBlankSpace`（旧 L1070） · `C`
-- `testMergedHistoryOpensItsRealFileAfterExpansion`（旧 L1102） · `C`
-- `testCommitTitleExpandsFilesInWideAndNarrowPanels`（旧 L1160） · `C`
-- `testNativeContextMenuAtDirectReferencesContainsOnlyTheSelectedObjectActions`（旧 L1216） · `C`
-- `testDetachedHeadBadgeExpandsCommitAndKeepsCopyHashInMenu`（旧 L1262） · `C`
-- `testSymbolicRemoteAliasOnlyCopiesFromMenuAndTogglesCommit`（旧 L1292） · `C`
-- `testDirtyWorktreeDoesNotRepeatLongBranchBadgeInNarrowSidebar`（旧 L1324） · `C`
-- `testWorktreeDisplayPathsStayUniqueWithSameCheckoutDirectoryNames`（旧 L1370） · `B`
-- `testWorktreeConflictStatusAlwaysUsesUInTreeAndList`（旧 L1389） · `B`
-- `testDenseWorktreeGraphKeepsCommitTitlesReadableAcrossThemes`（旧 L1406） · `C`
-- `testGraphBadgeRowsStayCompactAcrossAppearanceAndFontSizes`（旧 L1529） · `C`
-- `testGraphBadgesUseCompactSharedMetrics`（旧 L1591） · `B`
-- `testLocalBranchTakesPriorityOverRemoteDefaultAliasWithoutLosingReferences`（旧 L1598） · `B`
-- `testUnassociatedWorktreeLabelChineseTranslationPreservesDirectoryName`（旧 L1624） · `B`
-- `testRealWorktreeHistoryRendersNamedLabelsAndPreservesSharedHeadActions`（旧 L1631） · `C`
-- `testWorktreePrimaryLabelsReplaceAliasAndIconOnlyCombinations`（旧 L1701） · `C`
-- `testDetachedAndUnreferencedWorktreesRetainNativeActionsWithoutDuplicatePills`（旧 L1772） · `C`
-- `testCleanWorktreeBadgesAreSeparateFromUncommittedChangesInBothThemes`（旧 L1848） · `C`
-- `testUncommittedWorktreeNodeHasSafeMenuAndNativeStageAwareFileActions`（旧 L1950） · `C`
-- `testStashIsANodeInTheSameGraphWithOnlyStashActions`（旧 L2051） · `C`
-- `testTagBadgeTogglesSameCommitAsOtherReferences`（旧 L2088） · `C`
+- `testDisplayedHistoricalDiffHasGreySelectionIndependentOfGraphFocus`（旧 L120） · `C` → 真实历史 Diff 选中背景像素与焦点移交 `GitGraphUITests.testHistoricalDiffRowRetainsSelectionFillAfterMovingFocusToEditor`（RGB 差 0.323）；暗色外观仍待。
+- `testExpandedHistoryAndUncommittedNodesHaveNoPersistentSelectionFill`（旧 L169） · `C` → `GitGraphGeometryUITests.testDirtyWorktreeDiamondsAlignWithTheirOwnHeadsWithoutSelectingTheirHeaders` 及 Tree/List×明暗四组：对真实 Commit/Worktree 展开前后 9 个空白像素采样，确认不产生持久选中底色，20/20 几何 GUI 合集已验。
+- `testGraphReferenceBadgeTakesKeyboardFocusFromAnotherTree`（旧 L236） · `C` → `GitGraphUITests.testGraphTreeKeyboardMovesFromChangesFocusToBothHistoricalFiles`：从 Changes 文件行点击主 Branch 标签并以方向／Space／Return 操作真实 Git Graph（1/1）。
+- `testGraphClickRecordsFocusIntentBeforeMovingNativeResponder`（旧 L260） · `C` → 真实 Changes → Branch Badge → Git Graph Space/Return 文件导航已验证最终焦点；内部 callback 时序尚未从真实 App 直接证明。
+- `testGraphSpaceUsesTheSelectedCommitAndFileWithoutStealingKeyboard`（旧 L292） · `C` → 同一 `GitGraphUITests.testGraphTreeKeyboardMovesFromChangesFocusToBothHistoricalFiles`，真实 Tab、Git 与磁盘最终结果（1/1）。
+- `testGraphTreeKeyboardTraversesFoldersAndBothHistoricalFiles`（旧 L347） · `C` → 同一真实嵌套目录、两历史文件、Left 折叠验证（1/1）。
+- `testGraphPaletteKeepsTwelveLaneColors`（旧 L399） · `B` → `GitGraphPaletteTests`，12 色 RGB 逐项数值对照，2/2（同类包括图标对比度）。
+- `testColoredBadgeIconsRemainReadableOverEveryGraphLaneColor`（旧 L414） · `B` → `GitGraphPaletteTests`，全部车道前景与底色 WCAG 对比度下限 4.5，2/2。
+- `testTagStashDetachedAndStandaloneWorktreeIconsMatchGraphColors`（旧 L434） · `C` → `GitGraphGeometryUITests.testLightGraphPaintsTagStashDetachedAndUnreferencedWorktreeIconsLikeTheirNodes` 与 `testDarkGraphPaintsTagStashDetachedAndUnreferencedWorktreeIconsLikeTheirNodes`：真实 Tag、Stash、Detached HEAD、独立无引用 Worktree 对照各自 DAG 节点像素色相，并点击双方展开/折叠；明暗双测已通过。
+- `testHeadAndStashGraphGutterRemainsClickableInBothAppearances`（旧 L503） · `C` → `GitGraphGeometryUITests` 明暗特殊标签/节点测试验证 Head 与 Stash 各自节点及徽标切换，`GitGraphUITests.testDetachedHeadAndRealStashKeepSeparateNativeGraphActions` 验证真实专用菜单；明暗节点真实操作已通过。
+- `testCompositeReferencesUseLongestConfiguredRemoteAndPreserveEveryTarget`（旧 L534） · `B` → `GitGraphReferenceGroupTests`，最长远端名匹配、完整 Ref 保留，3/3。
+- `testCompositeReferencesNeverJoinDifferentCommitRowsOrUnknownRemotes`（旧 L569） · `B` → `GitGraphReferenceGroupTests`，跨行不误合并、未知远端不合并、Unicode 名称，3/3。
+- `testCompositeOverflowKeepsRealReferencesAvailableWithoutWholeRowScrolling`（旧 L586） · `C` → `GitGraphUITests.testOverflowReferencesExposeTagAndBranchWithoutLosingGitRefs`（Ref 不丢）＋`GitGraphGeometryUITests.testAllThirtyThreeRemoteReferencesRemainInTheNativeOverflowMenu`（33 个真实 Remote 菜单、最后一项复制准确）＋24-lane 整图不横滚，GUI 已验证。
+- `testCurrentAndFeatureUncommittedDiamondsAlignAndToggleInNativeGraph`（旧 L609） · `C` → `GitGraphGeometryUITests.testDirtyWorktreeDiamondsAlignWithTheirOwnHeadsWithoutSelectingTheirHeaders` 及明暗×Tree/List：两个不同 HEAD 的真实脏 Worktree 菱形 X 坐标与所属提交节点一致，点击展开/折叠、状态文件与 Git index 不变，GUI 已验证。
+- `testShortCommitHashCopiesWithoutExpandingDetails`（旧 L672） · `C` → `testShortHashCopiesActualOIDWithoutExpandingGitCommit`，剪贴板完整 OID、展开状态不变，1/1。
+- `testCompactPrimaryBranchTogglesCommitAndKeepsContextMenu`（旧 L689） · `C` → `GitGraphUITests.testGraphBadgeTitleNodeAndMetadataToggleTheSameRealCommit` ＋ `GitGraphGeometryUITests` 5 宽（420/260/150/320/150）×明暗/9–18pt 原生菜单、整行展开测试；最低 150pt 为产品实际分隔条限制，GUI 已验。
+- `testShortPrimaryBranchBadgeKeepsIntrinsicWidth`（旧 L729） · `C` → `GitGraphGeometryUITests` 真正拖动 Dock 分隔条，在 150–420pt、明暗、9/18pt 下对比 NSFont 字形宽度与 Branch AX 实际宽度上限，确认短徽标不会随着面板拉宽而伸长，GUI 已验。
+- `testPrimaryBranchContextMenuRemainsAvailableThroughWidthChanges`（旧 L772） · `C` → `GitGraphGeometryUITests` 真实分隔条拖动、窄→宽→窄反复恢复后右键有 Rename/Copy；明暗×9/18pt、长分支及 12 Worktree 组合已通过（120pt 是旧宿主合成的不可达宽度，产品最低 150pt）。
+- `testGraphNodeHelpOnlyStatesConfirmedHEADMembershipAndActualReferences`（旧 L810） · `B` → `GitGraphReferenceGroupTests`，真实 OID、引用、stash 与 HEAD 可证实历史提示的两种分支，定点 4/4。
+- `testNodeHoverTargetRetainsSingleClickAndCommitContextMenu`（旧 L845） · `C` → `GitGraphUITests.testGraphBadgeTitleNodeAndMetadataToggleTheSameRealCommit` 与 `testChineseGraphNodeAndReferenceMenusRetainTheirExactCopyTargets`：真实节点 hover/rightClick 可打开提交专属原生菜单，左右单击各自切换而不误触菜单；中文 E2E 当前 batch 已通过，英文此前 19/19 合集通过。
+- `testLongCommitMessageCanScrollHorizontallyInNarrowSidebar`（旧 L877） · `C` → `testLongChineseGraphTitleScrollsButShortTitleAndGraphRailsStayFixed`；长中文标题滚动但节点 X 不变。
+- `testGraphGutterLeavesRoomForCommitContentAtExtremeLaneCounts`（旧 L890） · `B` → `CommitGraphLayoutTests.testGraphGutterLeavesRoomForCommitContentAtExtremeLaneCounts`，5 宽×4 字号×8 车道=160 组全部原样迁移，29/29、exit 0。
+- `testDenseRealNativeGraphRetainsVisibleTitleScrollerInBothThemes`（旧 L917） · `C` → 24 真实并行 Lane 可见标题 `testDenseRealGraphKeepsHistoryAndNodeVisibleAcrossMoreThanTwelveLanes`；双主题/字号待。
+- `testManyParallelBranchesDoNotScrollWholeGraphSideways`（旧 L954） · `C` → `GitGraphUITests.testDenseRealGraphKeepsHistoryAndNodeVisibleAcrossMoreThanTwelveLanes` 构造 24 条真实独立提交，横向滚动后 Gutter 节点 X 不移位、25 个 Ref 未丢（1/1）；视觉布局极端范围另归 Unit 的宽度／车道验证。
+- `testShortCommitMessagesDoNotBounceHorizontally`（旧 L977） · `C` → `testLongChineseGraphTitleScrollsButShortTitleAndGraphRailsStayFixed`；短标题稳定原始像素。
+- `testExpandedHistoryKeepsLongFolderPathsScrollable`（旧 L999） · `C` → `testDeepChineseHistoricalFolderScrollsInsideRowWithoutMovingGraph`；六级合法长中文目录滚动且图谱不动。
+- `testRecentCommitHistoryOnlyPagesAtBottom`（旧 L1017） · `C` → `GitGraphUITests.testRealGraphHistoryLoadsNextPageOnlyAfterScrollingToBottom`：35 条真实提交首次 30 条、滚到底后显示第 35 条（1/1）；分页纯命令不重读无关数据由既有 `GitStatusModelTests.testIndexMutationAndPaginationAvoidUnrelatedGitQueries` 覆盖。
+- `testEntireCommitRowTogglesIncludingGraphMetadataAndBlankSpace`（旧 L1070） · `C` → `GitGraphUITests.testGraphBadgeTitleNodeAndMetadataToggleTheSameRealCommit` 核对标签／标题／节点／元信息；`GitGraphGeometryUITests` 实际 38pt 整行 6 个边角/留白坐标×5宽、明暗×9/18pt，每次点击准确展开/折叠、Git 未改，GUI 已验。
+- `testMergedHistoryOpensItsRealFileAfterExpansion`（旧 L1102） · `C` → `testRealMergeShowsBothParentHistoriesAndTheirOwnFileDiffs`；真实双父 Merge 及两父各自历史文件可打开。
+- `testCommitTitleExpandsFilesInWideAndNarrowPanels`（旧 L1160） · `C` → `GitGraphGeometryUITests` 窄宽及 9/18pt 真实窗口验证提交标题可见、整行点击/文件展开及宽度变化后仍可用；GUI 已验。
+- `testNativeContextMenuAtDirectReferencesContainsOnlyTheSelectedObjectActions`（旧 L1216） · `C` → `GitGraphUITests.testGraphBadgeTitleNodeAndMetadataToggleTheSameRealCommit`（Branch）、`testHistoricalTagBadgeTogglesItsCommitAndKeepsOnlyTagActions`（Tag）、`testSymbolicRemoteAliasCannotOfferDestructiveBranchActions`（Remote/符号 alias）；33 Remote 及其目标复制由 Geometry 真实验证，明暗 9/18pt×150–420pt 主分支右键亦全部通过；中文菜单定点当前 batch 通过。
+- `testDetachedHeadBadgeExpandsCommitAndKeepsCopyHashInMenu`（旧 L1262） · `C` → 真实 Detached HEAD/Stash 节点与引用见 `testDetachedHeadAndRealStashKeepSeparateNativeGraphActions`；Detached 直接菜单 Copy Hash 仍待。
+- `testSymbolicRemoteAliasOnlyCopiesFromMenuAndTogglesCommit`（旧 L1292） · `C` → `testSymbolicRemoteAliasCannotOfferDestructiveBranchActions`，真实符号引用复制且没有危险项，普通远端分支仍可操作。
+- `testDirtyWorktreeDoesNotRepeatLongBranchBadgeInNarrowSidebar`（旧 L1324） · `C` → 真实脏关联 Worktree 独立节点已验 `testDirtyLinkedWorktreeUsesItsOwnGraphNodeAndSafeNativeMenu`；超长 Branch＋窄宽组合待。
+- `testWorktreeDisplayPathsStayUniqueWithSameCheckoutDirectoryNames`（旧 L1370） · `B` → `GitGraphWorktreePresentationTests`，同名目录最短唯一后缀与 Unicode 名称，3/3。
+- `testWorktreeConflictStatusAlwaysUsesUInTreeAndList`（旧 L1389） · `B` → `GitGraphWorktreePresentationTests`，冲突恒为 U，正常暂存／未暂存各保留原状态字母，3/3。
+- `testDenseWorktreeGraphKeepsCommitTitlesReadableAcrossThemes`（旧 L1406） · `C` → `GitGraphGeometryUITests.testMaximumPanelFontWithTwelveSharedWorktreesRetainsMenusAndFullRowHitArea`（12 个真实 Worktree，最窄 150pt、18pt 标题可见）、明暗字号矩阵及 `GitGraphUITests.testCleanSharedHEADWorktreesKeepDistinctThreeLevelNativeMenus`（同 SHA 的精确三级菜单）；相关 Geometry GUI 20/20 已通过。
+- `testGraphBadgeRowsStayCompactAcrossAppearanceAndFontSizes`（旧 L1529） · `C` → `GitGraphGeometryUITests` 明暗×9/18pt、150–420pt、长 Branch＋12 Worktree；保持紧凑徽标宽度和标题可命中，无整图横滚，GUI 已验。
+- `testGraphBadgesUseCompactSharedMetrics`（旧 L1591） · `B` → `GitGraphPaletteTests` 静态尺寸 16/16/9/4；`GitGraphGeometryUITests` 明暗×9/18pt×150–420pt 测量原生实际徽标与标题，20/20 GUI 已通过。
+- `testLocalBranchTakesPriorityOverRemoteDefaultAliasWithoutLosingReferences`（旧 L1598） · `B` → `GitGraphReferenceGroupTests`，本地／远端别名排序、HEAD 及被检出 Worktree 优先且不丢 Ref，3/3。
+- `testUnassociatedWorktreeLabelChineseTranslationPreservesDirectoryName`（旧 L1624） · `B` → `GitGraphWorktreePresentationTests`，真实 zh-Hans 资源串保留 Worktree 路径，3/3。
+- `testRealWorktreeHistoryRendersNamedLabelsAndPreservesSharedHeadActions`（旧 L1631） · `C` → `testCleanSharedHEADWorktreesKeepDistinctThreeLevelNativeMenus`；同名两路径正确区分、三级菜单可达、未产生 Git 写入。
+- `testWorktreePrimaryLabelsReplaceAliasAndIconOnlyCombinations`（旧 L1701） · `C` → 路径显示纯 Unit＋`testCleanSharedHEADWorktreesKeepDistinctThreeLevelNativeMenus`；复杂 Alias/Icon 状态待。
+- `testDetachedAndUnreferencedWorktreesRetainNativeActionsWithoutDuplicatePills`（旧 L1772） · `C` → `GitGraphGeometryUITests.testUnreferencedSharedWorktreeMenuOpensTheSelectedCheckoutAndActualFile`：无 Ref 共享 HEAD 的两条同名 Worktree 可精准打开各自文件；`GitGraphUITests.testMainWorktreeThirdLevelMenuDisablesRemovalInNativeApp` 证明主 Worktree 不可删除，真实 GUI 已验。
+- `testCleanWorktreeBadgesAreSeparateFromUncommittedChangesInBothThemes`（旧 L1848） · `C` → `GitGraphUITests.testCleanSharedHEADWorktreesKeepDistinctThreeLevelNativeMenus`（两个干净标签）＋`GitGraphGeometryUITests` 明暗×Tree/List 实际脏节点、无持久底色与各自 HEAD 对齐；GUI 已验。
+- `testUncommittedWorktreeNodeHasSafeMenuAndNativeStageAwareFileActions`（旧 L1950） · `C` → `testOtherWorktreeStagedAndWorkingFilesPreserveDistinctDiffBaselines`：真实 MM 文件分别展现 HEAD→Index、Index→Worktree，工作区与 Index 不变。
+- `testStashIsANodeInTheSameGraphWithOnlyStashActions`（旧 L2051） · `C` → `GitGraphUITests.testDetachedHeadAndRealStashKeepSeparateNativeGraphActions` 真实 stash@{0}、专属菜单、文件展开、Git 状态不变（1/1）。
+- `testTagBadgeTogglesSameCommitAsOtherReferences`（旧 L2088） · `C` → `GitGraphUITests.testHistoricalTagBadgeTogglesItsCommitAndKeepsOnlyTagActions`，旧提交主 Tag 标签／标题共同切换、原生 Tag 专属菜单和实际引用（1/1）。
 
 ### P4-T1 — 11 条
 

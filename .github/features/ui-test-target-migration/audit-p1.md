@@ -21,6 +21,58 @@
 
 ## 发现项
 
+## 发现 F-09
+
+- 任务：`P1-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`BaileyUITests/Support/WorkspaceUITestSupport.swift:124`
+- 摘要：`原生Go to Folder逐键输入仍会留下截断路径，分步读取动态AX字段会在等待超时后失效`
+- 风险：`22:35真实截图只输入到fixture UUID前5位，预期完整路径未成立；旧exists后value读取在系统XPC字段变化时发生Interrupted by waiter，不能靠增加等待或重试放行`
+- 预期修复：`使用原生粘贴输入完整路径并保留全部剪贴板格式，使用值谓词查询完整路径以避免旧AX字段的分步解析，保留系统自动选择分支和最终目标校验`
+- 验证：`完整路径、Unicode/长路径、系统选择器自动解析与普通确认；新旧Git/Files/Editor完整GUI、剪贴板格式恢复、无条件重试/跳过均不引入`
+- 解决证据：`0ae7397; /tmp/bailey-migration-shared-worktree-and-clipboard.log: actual native picker+clipboard path 2/2 pass, exit0, Unicode path and original clipboard bytes checked.`
+
+
+## 发现 F-08
+
+- 任务：`P1-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`BaileyUITests/Support/WorkspaceUITestSupport.swift:7`
+- 摘要：`UI运行仍共享真实Dev TOML和Shell主目录，无法安全验证外观字号设置，Git夹具也未持久化自身身份`
+- 风险：`仅HOME不改变Foundation配置路径；UI设置测试会写真实Dev配置。原夹具只给首个commit传入临时身份，后续App动作仍采用用户配置或Git自动推断，前置条件不确定。隔离HOME的真实stash探针成功，未证明stash会因身份缺失失败，不将该假设当作产品故障。`
+- 预期修复：`使用Apple运行时CFFIXED_USER_HOME及HOME为每次UI启动创建真实临时配置目录，核对App创建文件；Git夹具将身份和无签名策略写入自身仓库，不修改用户设置或产品启动逻辑`
+- 验证：`Foundation及真实App临时配置证据，明暗×9/18pt×宽窄及边缘命中，真实Git动作，完整make test:ui和原Dev配置SHA256不变`
+- 解决证据：`0ae7397 CFFIXED_USER_HOME plus HOME; Foundation probe and actual Bailey Dev temp config verified; user config SHA256 2d560d12a91d3863e0b5c564c59da50ee65226bc2401db13a524c918019e083d unchanged; 2/2 picker/worktree and 20/20 added geometric GUI cases passed before later XCTest automation environment failure. Full expanded UI suite NOT passed; tracked separately.`
+
+
+## 发现 F-07
+
+- 任务：`P1-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Makefile:72`
+- 摘要：`Dev编译入口仍可在TestAction运行期间替换应用或Runner产物`
+- 风险：`build:ui实际可在图形测试运行时重新链接并重签名同一路径Runner，TestAction互斥尚未覆盖产物写入方`
+- 预期修复：`同一原子锁同时保护build:dev和build:ui及其签名/身份验证，不新增调度器`
+- 验证：`四入口16种并发组合，真实GUI持锁时build:ui拒绝且不构建，失败释放和真实Dev编译验签`
+- 解决证据：`四入口16种并发组合与四种exit17失败释放全部通过，ad-hoc签名后置失败释放通过；持有真实GUI锁时build:ui立即exit2不写产物；make build:dev含codesign及Bundle ID检查exit0。/tmp/bailey-dev-lock-four-entry-matrix.log、/tmp/bailey-migration-dev-build-locked.log。`
+
+
+## 发现 F-06
+
+- 任务：`P1-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Makefile:104`
+- 摘要：`独立make进程可同时启动同BundleID的宿主与UI测试`
+- 风险：`DerivedData隔离不能隔离同一Bailey Dev和桌面，实测并发GUI争用焦点导致选择器和可点击性失败`
+- 预期修复：`用原子目录锁在Makefile串行保护两种Dev TestAction，冲突立即报错，不终止其他进程`
+- 验证：`无GUI命令替身验证ui/ui、ui/host、host/ui、失败释放与不同DerivedData互斥；独占会话实际UI回归`
+- 解决证据：`54e8e72：Red并发两个make均成功；原子锁Green覆盖ui/ui、ui/host、host/ui、host/host及不同DerivedData；两种测试失败退出17均释放锁并允许下次运行，ad-hoc后置验签失败也释放锁。make build与codesign严格验证成功。受并发污染的GUI结果已单独保存为失败/取消，不当作产品缺陷。独占锁下完整图谱GUI另行运行。`
+
+
 ## 发现 F-05
 
 - 任务：`P1-T3`
