@@ -358,4 +358,63 @@ final class GitCommitActionTests: XCTestCase {
         XCTAssertNotNil(model.lastError)
         XCTAssertEqual(try git(["rev-parse", "HEAD"]), external)
     }
+
+    func testProjectResolutionCannotAuthorizeOldRepositorySnapshot() async throws {
+        func awaitState(_ condition: () -> Bool) async throws {
+            let deadline = Date().addingTimeInterval(10)
+            while !condition() {
+                guard Date() < deadline else { throw WorkspaceError.timedOut }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        let snapshots = SessionStore.load()
+        let histories = TerminalHistoryStore.load()
+        defer { SessionStore.save(snapshots); TerminalHistoryStore.save(histories) }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let firstRoot = root.appendingPathComponent("first")
+        let secondRoot = root.appendingPathComponent("second")
+        for directory in [firstRoot, secondRoot] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            for arguments in [["init", "-q", "-b", "main"], ["config", "user.name", "Projection"],
+                              ["config", "user.email", "projection@invalid"], ["config", "commit.gpgsign", "false"],
+                              ["commit", "--allow-empty", "-qm", directory.lastPathComponent + "-root"],
+                              ["commit", "--allow-empty", "-qm", directory.lastPathComponent + "-head"]] {
+                let result = GitCommandExecution.run(arguments, in: directory.path)
+                XCTAssertEqual(result.status, 0, result.stderr)
+            }
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceApplication = WorkspaceApplication()
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let first = Project(fallbackName: "First", workspaceConfiguration: .standard)
+        first.customDirectory = firstRoot.path
+        let second = Project(fallbackName: "Second", workspaceConfiguration: .standard)
+        second.customDirectory = secondRoot.path
+        manager.projects = [first, second]
+        manager.selectedProjectID = first.id
+        let model = GitStatusModel()
+        let firstIdentity = try XCTUnwrap(first.panelContext).identity
+        let secondIdentity = try XCTUnwrap(second.panelContext).identity
+        manager.syncGitStatus(model)
+        try await awaitState { model.matchesPanelTarget(firstIdentity) && model.hasResolvedStatus && !model.isRefreshing }
+        let old = try XCTUnwrap(model.recentCommits.last)
+        let oldTarget = model.actionTarget()
+        let originalHead = model.headOID
+        manager.selectedProjectID = second.id
+        manager.syncGitStatus(model)
+        XCTAssertFalse(model.matchesPanelTarget(firstIdentity))
+        XCTAssertFalse(model.isCurrent(oldTarget))
+        model.actOnCommit(old, action: .checkout, target: model.actionTarget())
+        XCTAssertFalse(model.isBusy, "An unresolved projection must not acquire a mutation")
+        try await awaitState { model.matchesPanelTarget(secondIdentity) && !model.isRefreshing }
+        XCTAssertEqual(GitCommandExecution.run(["rev-parse", "HEAD"], in: firstRoot.path)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines), originalHead)
+        XCTAssertEqual(GitCommandExecution.run(["branch", "--show-current"], in: secondRoot.path)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines), "main")
+        manager.selectedProjectID = first.id
+        manager.syncGitStatus(model)
+        try await awaitState { model.matchesPanelTarget(firstIdentity) && !model.isRefreshing }
+        XCTAssertFalse(model.isCurrent(oldTarget), "Switching away and back must not revive an old confirmation")
+    }
 }

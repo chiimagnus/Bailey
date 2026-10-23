@@ -329,10 +329,16 @@ final class GitBranchActionTests: XCTestCase {
 
     func testBranchRefValidationAndOtherWorktreeCheckoutGuard() async throws {
         try await refresh()
-        model.createBranch(named: "-unsafe", at: nil, checkout: false, replacing: nil,
-                           target: model.actionTarget())
-        try await settle()
-        XCTAssertNotNil(model.lastError, "Invalid leading-option names must never be interpreted as flags")
+        let head = try git(["rev-parse", "HEAD"])
+        for name in ["-unsafe", "invalid..ref", "invalid ref", "invalid~ref"] {
+            model.createBranch(named: name, at: nil, checkout: false, replacing: nil,
+                               target: model.actionTarget())
+            try await settle()
+            XCTAssertNotNil(model.lastError, "Invalid Git branch name must not be accepted: \(name)")
+            XCTAssertEqual(try git(["rev-parse", "HEAD"]), head)
+            XCTAssertEqual(try git(["for-each-ref", "--format=%(refname)", "refs/heads"]),
+                           "refs/heads/main", "Invalid input must not create any additional ref")
+        }
         model.createBranch(named: "topic/with.dots", at: nil, checkout: false, replacing: nil,
                            target: model.actionTarget())
         try await settle()

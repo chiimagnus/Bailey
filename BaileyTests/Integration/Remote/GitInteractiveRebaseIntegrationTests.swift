@@ -4,7 +4,7 @@ import XCTest
 @testable import Bailey
 
 @MainActor
-final class GitInteractiveRebaseTests: XCTestCase {
+final class GitInteractiveRebaseIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
     private var previousSSHApplication: WorkspaceApplication?
     private var previousNotificationApplication: WorkspaceApplication?

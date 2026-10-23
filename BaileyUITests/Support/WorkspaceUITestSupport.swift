@@ -27,10 +27,19 @@ enum WorkspaceUITestSupport {
             }
         }
         app.launch()
-        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
         app.activate()
         XCTAssertEqual(app.state, .runningForeground,
                        "Only Bailey Dev may receive keyboard actions from UI tests")
+        // XCUITest can start the macOS process without opening its WindowGroup
+        // scene. Use the real native New Window command; do not attach a fake NSWindow.
+        if !app.windows.firstMatch.waitForExistence(timeout: 4) {
+            let newWindow = app.menuItems.matching(NSPredicate(
+                format: "title IN %@", ["New Window", "新建窗口"])).firstMatch
+            XCTAssertTrue(newWindow.waitForExistence(timeout: 8),
+                          "Bailey Dev must expose the native New Window command")
+            newWindow.click()
+        }
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
         try selectASCIIInputSource()
         return app
     }
@@ -55,7 +64,7 @@ enum WorkspaceUITestSupport {
     }
 
     static func addFolder(_ url: URL, to app: XCUIApplication) throws {
-        let entry = app.buttons["bailey.emptyState.addFolder"]
+        let entry = app.windows.firstMatch.buttons["bailey.emptyState.addFolder"]
         XCTAssertTrue(entry.waitForExistence(timeout: 15))
         entry.click()
         try choose(url, in: app)
