@@ -153,4 +153,4 @@ Stash 直接作为带 `stash@{n}` 标签的节点嵌入 Git 图谱，而非单�
 
 `CommitGraphLayoutTests` 检查真实父关系与轨道颜色。`RecentCommitsViewTests` 在原生窗口验证标签与车道同色、黑白图标对比度、`+N`、多工作树菜单、明暗模式、窄侧栏、整行展开及历史文件命中；具名标签另从真实临时 Git 仓库加载历史，再核对画出的名称、未关联分支状态、鼠标展开及共享工作树菜单目标，并覆盖中英文、明暗、宽度及字号组合。`GitStashActionTests` 核对相同 OID 的多个储藏记录、基础提交连线与精确 Pop/Drop/Branch。
 
-`GitExternalRefreshTests` 验证前台外部修改自动刷新、后台暂停，以及 Git 面板隐藏后底部状态栏仍保持同步。`GitStatusModelTests` 覆盖监听初始化与释放、Worktree 共享引用、外部文件事件和相同快照不重复通知。真实 Windows SSH 使用获授权的专用 master 和临时仓库；`GitWorkspaceSSHTests` 核对 Worktree 创建、未提交修改拒删和移除后保留分支。模拟 SSH 结果不等于真机验收，完整测试入口和覆盖要求见 [testing.md](../testing.md)。
+`GitChangesUITests` 通过真实 Dev App 验证外部工作区、index、HEAD 变化、跨项目隔离、文件夹按钮、键盘导航，以及 Staged／Unstaged Diff 的不同基线。`GitUncommittedUITests` 验证 Stash、Reset、Clean 原生确认与实际 Git 结果；`GitIgnoreEditorUITests` 从真实 Bailey Dev 操作普通文件标签、执行 ⌘Z 和保存，核对原生编辑器撤销及磁盘字节；`GitIgnoreIntegrationTests` 覆盖 CRLF、特殊路径和过期目标。`GitStatusModelTests` 检查监听初始化／释放、后台暂停、Worktree 共享引用与去重；`GitRemoteRefreshIntegrationTests` 以受控慢响应和获准 Windows SSH 临时仓库验证远端周期刷新。真实 Windows SSH 使用获授权的专用 master 和临时仓库；`GitWorkspaceSSHTests` 核对 Worktree 创建、未提交修改拒删和移除后保留分支。模拟 SSH 结果不等于真机验收，完整测试入口和覆盖要求见 [testing.md](../testing.md)。
