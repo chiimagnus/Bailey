@@ -21,10 +21,10 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
 	-derivedDataPath $(DERIVED_DATA) -clonedSourcePackagesDirPath $(SOURCE_PACKAGES) \
 	-skipPackageUpdates -disableAutomaticPackageResolution
 TEST_SELECTION = $(foreach TEST,$(ONLY_TESTING),-only-testing:$(TEST))
-DEV_TEST_LOCK = set -eu; mkdir -p '$(CURDIR)/build'; \
+DEV_OPERATION_LOCK = set -eu; mkdir -p '$(CURDIR)/build'; \
 	lock='$(CURDIR)/build/.bailey-dev-test.lock'; \
 	mkdir "$$lock" 2>/dev/null || { \
-		echo '无法取得 Bailey Dev 测试锁；已有测试时请等待其结束，不要并行运行宿主或 GUI 测试。若上次测试被强制终止，先确认没有测试进程再移除 build/.bailey-dev-test.lock。' >&2; exit 2; \
+		echo '无法取得 Bailey Dev 构建／测试锁；请等待已有操作结束。若上次操作被强制终止，先确认没有相关进程再移除 build/.bailey-dev-test.lock。' >&2; exit 2; \
 	}; trap 'rmdir "$$lock"' EXIT
 comma := ,
 VERSION_FLAGS = $(if $(strip $(VERSION)),MARKETING_VERSION=$(VERSION)) \
@@ -69,9 +69,10 @@ build:
 
 build\:dev: DERIVED_DATA = $(DEV_DERIVED_DATA)
 build\:dev:
-	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) build
-	codesign --verify --deep --strict '$(APP)'
-	@test "$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' '$(APP)/Contents/Info.plist')" = chiimagnus.bailey.dev
+	@$(DEV_OPERATION_LOCK); \
+	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) build; \
+	codesign --verify --deep --strict '$(APP)'; \
+	test "$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' '$(APP)/Contents/Info.plist')" = chiimagnus.bailey.dev
 
 build\:release: CONFIGURATION = Release
 build\:release: build
@@ -79,17 +80,18 @@ build\:release: build
 build\:ui: SCHEME = Bailey-UI
 build\:ui: DERIVED_DATA = $(DEV_DERIVED_DATA)
 build\:ui:
+	@$(DEV_OPERATION_LOCK); \
 	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) build-for-testing
 
 test\:ui: SCHEME = Bailey-UI
 test\:ui: DERIVED_DATA = $(DEV_DERIVED_DATA)
 test\:ui:
-	@$(DEV_TEST_LOCK); \
+	@$(DEV_OPERATION_LOCK); \
 	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) $(TEST_SELECTION) test
 
 test: DERIVED_DATA = $(DEV_DERIVED_DATA)
 test:
-	@$(DEV_TEST_LOCK); \
+	@$(DEV_OPERATION_LOCK); \
 	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) $(TEST_SELECTION) test; \
 	if [ '$(SIGNING)' = adhoc ]; then \
 		for bundle in '$(APP)' '$(APP)/Contents/PlugIns/BaileyTests.xctest'; do \
