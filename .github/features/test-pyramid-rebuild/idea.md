@@ -15,7 +15,7 @@
 
 1. **统一宿主目录**：`BaileyTests/Unit/<领域>/` 与 `BaileyTests/Integration/<领域>/` 合并为 `BaileyTests/<领域>/`。保留所有测试断言、真实外部系统验证、fixture 和现有 Test Target。
 2. **统一开发文档**：`docs/testing.md` 是唯一详细规则；AGENTS、开发／贡献规范、PR 模板及现行 Feature 计划引用它。历史审计保留当时证据，不改写。
-3. **尽可能移交 UI E2E 给宿主**：当前源码基线为 Git Dialog 21、Graph／Geometry 45、其它 Git 26、Files／Editor 22、Workspace 19，合计 133 项 UI 方法。逐项拆解原断言、确认宿主覆盖缺口并实际补测；只有独有完整 App 接线必须继续在 UI 运行。对应系统行为已由另一条 UI 证明时，删除整条冗余 UI 用例及专用 helper，不仅缩减点击次数。
+3. **尽可能移交 UI E2E 给宿主**：当前源码基线为 Git Dialog 21、Graph／Geometry 45、其它 Git 24、Files／Editor／共享树 24、Workspace 19，合计 133 项 UI 方法。逐项拆解原断言、确认宿主覆盖缺口并实际补测；只有独有完整 App 接线必须继续在 UI 运行。对应系统行为已由另一条 UI 证明时，删除整条冗余 UI 用例及专用 helper，不仅缩减点击次数。
 
 ## 不做
 
