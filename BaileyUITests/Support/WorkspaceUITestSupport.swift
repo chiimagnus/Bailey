@@ -75,10 +75,16 @@ enum WorkspaceUITestSupport {
     }
 
     private static func selectASCIIInputSource() throws {
-        guard let abc = inputSource(id: "com.apple.keylayout.ABC"),
-              TISSelectInputSource(abc) == noErr else {
+        let current = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+        let abc = inputSource(id: "com.apple.keylayout.ABC")
+        let us = inputSource(id: "com.apple.keylayout.US")
+        let systemASCII = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue()
+        let available = [abc, us, systemASCII].compactMap { $0 }
+        guard let selected = available.first(where: { CFEqual($0, current) })
+                ?? available.first,
+              CFEqual(selected, current) || TISSelectInputSource(selected) == noErr else {
             throw NSError(domain: "BaileyUITestKeyboard", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "ABC keyboard layout is required for literal shortcuts and paths"
+                NSLocalizedDescriptionKey: "A selectable ASCII keyboard layout is required for literal shortcuts and paths"
             ])
         }
     }
@@ -252,10 +258,10 @@ struct WorkspaceUITestFixture {
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
-        var environment = ProcessInfo.processInfo.environment
+        // Inherited GIT_DIR/GIT_WORK_TREE override -C and can redirect fixture writes.
+        var environment = ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("GIT_") }
         environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
         environment["GIT_CONFIG_NOSYSTEM"] = "1"
-        environment["GIT_TEMPLATE_DIR"] = nil
         process.environment = environment
         process.arguments = ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
                              "-C", root.path] + args

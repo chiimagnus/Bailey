@@ -1122,7 +1122,8 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
         XCTAssertEqual(model.changedEntries, priorChanges)
         XCTAssertFalse(model.isCurrent(model.actionTarget()), "Stale SSH status must not authorize writes")
-        model.stage(priorChanges[0])
+        model.stage(try XCTUnwrap(priorChanges.first,
+                                  "A verified file change is required before testing stale writes"))
         let index = GitCommandExecution.run(["diff", "--cached", "--name-only"], in: directory.path)
         XCTAssertEqual(index.stdout, "", "A stale snapshot must never stage user files")
 

@@ -34,7 +34,30 @@ final class WorkspaceGitUITests: XCTestCase {
     func testGitChangesAreScopedToTheOpenedRepository() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let changed = try fixture.file("changed-file.swift", text: "let saved = 1\n")
-        try fixture.initializeGit()
+        let other = try WorkspaceUITestFixture(in: self)
+        _ = try other.file("outside.swift", text: "let outside = true\n")
+        try other.initializeGit()
+        let otherHead = try other.git(["rev-parse", "HEAD"])
+        let originalGitDir = ProcessInfo.processInfo.environment["GIT_DIR"]
+        let originalWorkTree = ProcessInfo.processInfo.environment["GIT_WORK_TREE"]
+        do {
+            defer {
+                if let originalGitDir { setenv("GIT_DIR", originalGitDir, 1) }
+                else { unsetenv("GIT_DIR") }
+                if let originalWorkTree { setenv("GIT_WORK_TREE", originalWorkTree, 1) }
+                else { unsetenv("GIT_WORK_TREE") }
+            }
+            setenv("GIT_DIR", other.root.appendingPathComponent(".git").path, 1)
+            setenv("GIT_WORK_TREE", other.root.path, 1)
+            try fixture.initializeGit()
+            let actualRoot = String(decoding: try fixture.git(["rev-parse", "--show-toplevel"]), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            XCTAssertEqual(URL(fileURLWithPath: actualRoot).resolvingSymlinksInPath(),
+                           fixture.root.resolvingSymlinksInPath(),
+                           "Inherited Git routing must never escape the UI fixture")
+        }
+        XCTAssertEqual(try other.git(["rev-parse", "HEAD"]), otherHead,
+                       "The unrelated repository must not be changed by fixture setup")
         try "let saved = 2\n".write(to: changed, atomically: true, encoding: .utf8)
         let app = try WorkspaceUITestSupport.launch(in: self)
 
