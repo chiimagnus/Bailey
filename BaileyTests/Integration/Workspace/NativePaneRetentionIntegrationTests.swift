@@ -5,8 +5,38 @@ import WebKit
 import XCTest
 @testable import Bailey
 
+/// Minimal component compositions for lifecycle assertions. No full Dock or
+/// ContentView is assembled inside the host Test Target.
+private struct NativeRetainedFiles: View {
+    let project: Project
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(project.tabs, id: \.id) { tab in
+                if case .file(let file) = tab.content {
+                    FileViewerView(file: file)
+                        .id(tab.id)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+        }
+    }
+}
+
+private struct NativeSelectedFile: View {
+    let project: Project
+
+    var body: some View {
+        Group {
+            if let tab = project.selectedTab, case .file(let file) = tab.content {
+                FileViewerView(file: file).id(tab.id)
+            }
+        }
+    }
+}
+
 @MainActor
-final class PaneRetentionTests: XCTestCase {
+final class NativePaneRetentionIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
     func testParkingDropsObsoleteHostActionsBeforeDelayedDismantle() async throws {
@@ -557,7 +587,7 @@ final class PaneRetentionTests: XCTestCase {
                                     first: partial, second: group)
             }
             project.dock.restore(layout, tabIDs: tabs)
-            let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: GitStatusModel()))
+            let host = NSHostingView(rootView: NativeRetainedFiles(project: project))
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1_700, height: 650),
                                   styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
@@ -683,7 +713,7 @@ final class PaneRetentionTests: XCTestCase {
                      "NSWindow close must release its manager before SwiftUI onDisappear")
         XCTAssertFalse(self.workspaceApplication.containsWindow(manager))
         XCTAssertTrue(manager.projects.isEmpty,
-                      "A retained WindowRootView must not keep projects from a closed window")
+                      "Closing the native window must release its project owner")
         XCTAssertNil(retiredFile, "Closing the window must release its owned FileTab")
     }
 
@@ -713,7 +743,7 @@ final class PaneRetentionTests: XCTestCase {
         manager.addLocalFolders([folder])
         manager.openFile(path.path)
         let project = try XCTUnwrap(manager.selectedProject)
-        let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: GitStatusModel()))
+        let host = NSHostingView(rootView: NativeSelectedFile(project: project))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1_200, height: 720),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -1045,12 +1075,14 @@ final class PaneRetentionTests: XCTestCase {
         let project = try XCTUnwrap(manager.selectedProject)
         let pane = try XCTUnwrap(project.selectedTab)
         guard case .file(let file) = pane.content else { return XCTFail("Expected a file") }
-        let git = GitStatusModel()
-        let host = NSHostingView(rootView: WorkspaceDockView(manager: manager, git: git))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+        let host = NSHostingView(rootView: NativeSelectedFile(project: project))
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        host.frame = root.bounds
+        root.addSubview(host)
+        let window = NSWindow(contentRect: root.bounds,
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = host
+        window.contentView = root
         manager.attach(to: window)
         window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
@@ -1071,32 +1103,37 @@ final class PaneRetentionTests: XCTestCase {
         let point = CGPoint(x: 20, y: scroll.contentView.bounds.minY + 30)
         let screenPoint = window.convertPoint(toScreen: editor.convert(point, to: nil))
         let offset = editor.characterIndex(for: screenPoint)
-        print("DOCK_TRACE beforeHit offset=\(offset) editorSize=\(editor.frame) scroll=\(scroll.contentView.bounds) selected=\(editor.selectedRange()) firstResponder=\(window.firstResponder === editor)")
         XCTAssertNotEqual(offset, NSNotFound)
         editor.textSelection = NSRange(location: offset, length: 0)
         scroll.contentView.setBoundsOrigin(NSPoint(x: 0, y: 900))
         scroll.reflectScrolledClipView(scroll.contentView)
         let scrollBefore = scroll.contentView.bounds.origin
         let heightBefore = scroll.bounds.height
-        print("DOCK_TRACE beforeMove desired=\(scrollBefore) editorFrame=\(editor.frame) selection=\(editor.selectedRange()) viewport=\(String(describing: editor.textLayoutManager?.textViewportLayoutController.viewportRange))")
         let target = try XCTUnwrap(project.dock.group(containing: .files))
         XCTAssertTrue(project.dock.move(.tab(pane.id), into: target.id, edge: .bottom))
+        // The Dock model moves the same tab. Reparent only its native component
+        // here; the real Dock drag, target group, and focus route are UI E2E.
+        let destination = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 260))
+        root.addSubview(destination)
+        host.removeFromSuperview()
+        host.frame = destination.bounds
+        destination.addSubview(host)
         try await settle {
-            file.editorView === scroll && scroll.window === window
+            host.layoutSubtreeIfNeeded()
+            return file.editorView === scroll && scroll.window === window
                 && scroll.bounds.height > 0 && scroll.bounds.height < heightBefore
         }
         XCTAssertEqual(project.dock.tabOrder, [pane.id])
         XCTAssertEqual(project.selectedTabID, pane.id)
         XCTAssertTrue(scroll.documentView === editor)
-        // A headless XCTest host cannot claim foreground keyboard ownership.
-        // Real key-window handoff is covered by WorkspaceWindowsUITests.
+        // Native surface identity is proved here; real key-window transfer
+        // is checked by the dedicated XCUIApplication Dock tests.
         if window.isKeyWindow && NSApp.isActive {
             try await settle { window.firstResponder === editor }
         } else {
             XCTAssertTrue(manager.ownsActiveResponder(editor))
             XCTAssertTrue(editor.window === window)
         }
-        print("DOCK_TRACE afterMove actual=\(scroll.contentView.bounds.origin) editorFrame=\(editor.frame) selection=\(editor.selectedRange()) viewport=\(String(describing: editor.textLayoutManager?.textViewportLayoutController.viewportRange))")
         try await settle { scroll.contentView.bounds.origin == scrollBefore }
         XCTAssertEqual(scroll.contentView.bounds.origin, scrollBefore)
         window.displayIfNeeded()

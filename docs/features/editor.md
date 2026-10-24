@@ -101,7 +101,7 @@ Git Ignore 在普通 `.gitignore` 标签持有的原生缓冲末尾插入规则�
 
 ## 验证
 
-原生编辑、输入法、Undo、查找、保存、重载及高亮由 `FileTabPersistenceTests`、`NativeFileTabTests`、`NativeEditorCompositionTests`、`NativeEditorLayoutTests`、`NativeSyntaxHighlightingTests` 、`NativeContentIdentityIntegrationTests` 与 `WindowCloseIntegrationTests` 共同验证；其中原生内容测试检查 File／Diff／Browser 切换后各自编辑器身份，关闭测试验证失败保留缓冲和重新保存。`EditorNavigationUITests` 进一步从真实 App 验证 10,000／100,000 行远距导航、键盘撤销／重做与最终磁盘字节；编辑器必须通过 `NSTextViewDelegate.undoManager(for:)` 向 AppKit 提供标签自己的撤销管理器，不能只依赖宿主直接调用 UndoManager 的测试。实体中文输入法候选仍须单独验收。`EditorHighlightingUITests` 已在独立 Bailey Dev 的真实 GUI 中比较 Swift、Markdown（含围栏 Swift）、TSX、HTML（含脚本与样式）、CSS 与各自同内容纯文本的像素差异，并检查原文件字节；嵌入语言 token 的精确有效范围由 `NativeSyntaxHighlightingTests` 检验。行号、Diff、滚动坐标与多标签释放也必须在真实 AppKit 窗口中检查；具体环境、极端组合及完成标准由 [测试文档](../testing.md) 统一规定。
+原生编辑、输入法、Undo、查找、保存、重载及高亮由 `FileTabPersistenceTests`、`NativeFileTabTests`、`NativeEditorCompositionTests`、`NativeEditorLayoutTests`、`NativeSyntaxHighlightingTests` 、`NativeContentIdentityIntegrationTests`、`NativePaneRetentionIntegrationTests` 与 `WindowCloseIntegrationTests` 共同验证；分别覆盖 File／Diff／Browser 身份、旧滚动视图缓存与弱引用释放，以及关闭失败后缓冲保留与重试保存。`EditorNavigationUITests` 进一步从真实 App 验证 10,000／100,000 行远距导航、键盘撤销／重做与最终磁盘字节；编辑器必须通过 `NSTextViewDelegate.undoManager(for:)` 向 AppKit 提供标签自己的撤销管理器，不能只依赖宿主直接调用 UndoManager 的测试。实体中文输入法候选仍须单独验收。`EditorHighlightingUITests` 已在独立 Bailey Dev 的真实 GUI 中比较 Swift、Markdown（含围栏 Swift）、TSX、HTML（含脚本与样式）、CSS 与各自同内容纯文本的像素差异，并检查原文件字节；嵌入语言 token 的精确有效范围由 `NativeSyntaxHighlightingTests` 检验。行号、Diff、滚动坐标与多标签释放也必须在真实 AppKit 窗口中检查；`WorkspaceRetentionUITests` 另以完整 App 连续五轮各五文件打开／关闭，核对标签与真实磁盘，而不能用进程 RSS 自动证明对象已释放。具体环境、极端组合及完成标准由 [测试文档](../testing.md) 统一规定。
 
 独立 App 验收必须实际输入、执行前台 ⌘S、核对磁盘字节，并在重启后再次读取。单纯派发快捷键、读取 AX 值或显示截图均不能代替最终保存结果。
 

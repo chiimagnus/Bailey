@@ -26,4 +26,4 @@
 
 使用可控本地页面，检查内容、未提交表单、滚动和前进后退历史；仅比较 WebView 对象身份不够。覆盖浏览器→文件→浏览器、跨项目和拖动。跨进程恢复另测网址，明确不恢复运行时状态。
 
-浏览器与工作区内容身份由原生组件集成和完整 App 回归分层验证；真实 Finder 文件向可控 `input[type=file]` 投放后，需同时检查网页确实选中该文件、Bailey **没有额外生成 FileTab／切换项目**、原文件字节未变。浏览器工具栏另验证普通文件打开与正文读取；仅看到网页上传成功不足以证明上层没有重复消费。实际导航和系统浏览器交接按 [testing.md](../testing.md#人工回归) 验收。
+`NativePaneRetentionIntegrationTests` 核对 WebKit 导航历史、Favicon、对话框和重挂载原生对象；`WorkspaceRetentionUITests` 在真实 WKWebView 中填写未提交表单、切换文件标签再返回，核对表单保留且文件字节不变。真实 Finder 文件向可控 `input[type=file]` 投放后，需同时检查网页确实选中该文件、Bailey **没有额外生成 FileTab／切换项目**、原文件字节未变。浏览器工具栏另验证普通文件打开与正文读取；仅看到网页上传成功不足以证明上层没有重复消费。实际导航和系统浏览器交接按 [testing.md](../testing.md#人工回归) 验收。

@@ -38,6 +38,6 @@ Git 检出提交的“总是接受”写入 `git.always-accept-checkout`，默�
 
 ## 验证
 
-`AppSettingsTests` 使用临时配置检查默认值、往返、无效类型、手工布局保留及写入失败。真实设置传播还应验证修改前后使用的是同一终端进程、原生显示确实变化、非目标设置没有被重写。
+`AppSettingsTests` 使用临时配置检查默认值、往返、无效类型、手工布局保留及写入失败。`WorkspaceRetentionUITests` 在隔离 Bailey Dev 中通过 ⌘, 切换外观，核对临时 TOML 写入与重启后界面选项；终端的主题传播仍须验证同一 Shell 进程与原生显示，不由配置文件变化推断。
 
 实现入口：[AppSettings.swift](../../Bailey/App/AppSettings.swift)。统一验收见 [testing.md](../testing.md)。
