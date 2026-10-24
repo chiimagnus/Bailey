@@ -293,4 +293,121 @@ final class WorkspaceRetentionUITests: XCTestCase {
         XCTAssertEqual(app.windows.count, 1, "Five rounds must not leak native work windows")
         for file in files { XCTAssertEqual(try Data(contentsOf: file), expected) }
     }
+
+    func testFinderNativeDropIntoWebKitUploadDoesNotOpenFileTab() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("upload/with space.txt", text: "native WebKit upload bytes\n")
+        let initialBytes = try Data(contentsOf: file)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(file.deletingLastPathComponent(), to: app)
+        let window = app.windows.firstMatch
+        let newBrowser = app.menuItems["New Browser Tab"]
+        XCTAssertTrue(newBrowser.waitForExistence(timeout: 10))
+        newBrowser.click()
+        let address = window.textFields.firstMatch
+        XCTAssertTrue(address.waitForExistence(timeout: 12))
+        let html = """
+            <html><head><title>Finder Native Upload</title></head>
+            <body><h1>Finder file drop target</h1>
+            <input id="upload" type="file" aria-label="P4T5 native file upload"
+                   style="display:block;width:480px;height:120px;border:2px solid black">
+            <p id="result">NO_FILE_SELECTED</p>
+            <script>
+              document.getElementById('upload').addEventListener('change', event => {
+                document.getElementById('result').textContent =
+                    'FINDER_UPLOAD_FILE: ' + (event.target.files[0]?.name || 'NONE');
+              });
+            </script></body></html>
+            """
+        address.click()
+        address.typeKey("a", modifierFlags: .command)
+        address.typeText("data:text/html;base64," + Data(html.utf8).base64EncodedString())
+        address.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let browser = window.webViews.firstMatch
+        XCTAssertTrue(browser.waitForExistence(timeout: 20))
+        XCTAssertTrue(browser.staticTexts["NO_FILE_SELECTED"].waitForExistence(timeout: 20))
+        let upload = browser.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@", "P4T5 native file upload")).firstMatch
+        XCTAssertTrue(upload.waitForExistence(timeout: 15),
+                      "WebKit file input must expose its native drag target: \(browser.debugDescription.prefix(2500))")
+
+        let finder = finderDragSource(for: file)
+        defer { closeFinderDragWindow(finder.window) }
+        let target = upload.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5))
+        XCTAssertLessThan(finder.window.frame.maxX, target.screenPoint.x - 20,
+                          "Finder must not obscure the real WKWebView file input")
+        finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.4, thenDragTo: target)
+        XCTAssertTrue(browser.staticTexts["FINDER_UPLOAD_FILE: \(file.lastPathComponent)"]
+            .waitForExistence(timeout: 20),
+                      "The native HTML input must receive the actual Finder file URL")
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 0,
+                       "WebKit must own file upload without Bailey creating a new editor")
+        XCTAssertEqual(try Data(contentsOf: file), initialBytes)
+    }
+
+    func testFinderNativeDropIntoGhosttyPastesButDoesNotExecute() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("drag-source/with space.txt", text: "temporary finder source\n")
+        let marker = fixture.root.appendingPathComponent("terminal-drop-marker.txt")
+        let originalBytes = try Data(contentsOf: file)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(file.deletingLastPathComponent(), to: app)
+        let window = app.windows.firstMatch
+        app.typeKey("t", modifierFlags: .command)
+        let terminal = window.coordinate(withNormalizedOffset: CGVector(dx: 0.57, dy: 0.64))
+        terminal.click()
+        app.typeText("read -r DROP_LINE; printf '%s' \"$DROP_LINE\" > '\(marker.path)'")
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+
+        // Finder supplies the genuine system file URL drag. Its window is
+        // moved into the left side so Bailey's receiving terminal remains
+        // visible: a hidden target cannot be validated by AX coordinates.
+        let finder = finderDragSource(for: file)
+        defer { closeFinderDragWindow(finder.window) }
+        XCTAssertLessThan(finder.window.frame.maxX, window.frame.midX + 70,
+                          "Finder must not cover the native terminal drop target")
+        finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.4, thenDragTo: terminal)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path),
+                       "A file drop must paste a Shell-escaped path without Return")
+        app.activate()
+        terminal.click()
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let inserted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: marker.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [inserted], timeout: 15), .completed,
+                       "Return must execute the waiting Shell read after Finder drop")
+        XCTAssertTrue(try String(contentsOf: marker, encoding: .utf8)
+            .contains(file.lastPathComponent))
+        XCTAssertEqual(try Data(contentsOf: file), originalBytes)
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 0,
+                       "The terminal drop must not create a FileTab")
+    }
+
+    private func finderDragSource(for file: URL) -> (window: XCUIElement, source: XCUIElement) {
+        NSWorkspace.shared.activateFileViewerSelecting([file])
+        let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
+        let window = finder.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 20))
+        if !window.outlines["ListView"].waitForExistence(timeout: 2) {
+            finder.activate()
+            finder.typeKey("2", modifierFlags: .command)
+        }
+        XCTAssertTrue(window.outlines["ListView"].waitForExistence(timeout: 12),
+                      "The selected Finder file must expose an actual draggable row")
+        let title = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
+        title.click(forDuration: 0.2,
+                    thenDragTo: title.withOffset(CGVector(dx: 40 - window.frame.minX, dy: 0)))
+        let source = window.outlines["ListView"].outlineRows.firstMatch
+            .textFields[file.lastPathComponent]
+        XCTAssertTrue(source.waitForExistence(timeout: 12),
+                      "The system drag must originate from the actual selected file")
+        return (window, source)
+    }
+
+    private func closeFinderDragWindow(_ window: XCUIElement) {
+        if window.exists { window.buttons["_XCUI:CloseWindow"].firstMatch.click() }
+    }
 }
