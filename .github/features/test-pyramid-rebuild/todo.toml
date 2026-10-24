@@ -11,7 +11,7 @@ note = "47 个源文件 100% rename；Xcode 实际枚举 549 项宿主测试；�
 
 [[tasks]]
 id = "P2-T1"
-title = "精简 Git Dialog 完整 App UI"
+title = "宿主承接 Git Dialog 原生表单与真实 Git"
 status = "pending"
 plan = "plan-p2.md#p2-t1"
 commit = ""
@@ -19,7 +19,7 @@ note = ""
 
 [[tasks]]
 id = "P2-T2"
-title = "精简 Git Graph 重复完整 App UI"
+title = "宿主承接 Git Graph 几何与原生绘制"
 status = "pending"
 plan = "plan-p2.md#p2-t2"
 commit = ""
@@ -27,8 +27,24 @@ note = ""
 
 [[tasks]]
 id = "P2-T3"
-title = "精简剩余 Git Files Editor Workspace UI"
+title = "宿主承接 Git Changes History 等重复 UI"
 status = "pending"
 plan = "plan-p2.md#p2-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T4"
+title = "宿主承接 Files Editor 原生组件与数据验证"
+status = "pending"
+plan = "plan-p2.md#p2-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T5"
+title = "宿主承接 Workspace 生命周期与系统边界"
+status = "pending"
+plan = "plan-p2.md#p2-t5"
 commit = ""
 note = ""
