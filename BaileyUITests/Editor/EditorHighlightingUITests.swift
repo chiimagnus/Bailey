@@ -47,54 +47,6 @@ final class EditorHighlightingUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: swift), Data(source.utf8))
     }
 
-    func testEmbeddedAndTSXColorsReachTheRealEditor() throws {
-        let examples: [(name: String, ext: String, text: String)] = [
-            ("markdown", "md", "# 中文标题 👋\n```swift\nfunc greeting() -> Int { return 42 }\n```\n"),
-            ("tsx", "tsx", "type Props = { title: string };\nexport function Card({ title }: Props) {\n    return <section className=\"card\">{title}</section>;\n}\n"),
-            ("html", "html", "<div class=\"card\">中文 👋</div>\n<script>\nconst count = 42;\n</script>\n<style>.card { color: red; }</style>\n"),
-            ("css", "css", "@media screen and (min-width: 400px) {\n    .card { color: #abcdef; font-size: 18px; }\n}\n")
-        ]
-        let fixture = try WorkspaceUITestFixture(in: self)
-        let files = try examples.map { example in
-            (example: example,
-             plain: try fixture.file("a-\(example.name).txt", text: example.text),
-             highlighted: try fixture.file("b-\(example.name).\(example.ext)", text: example.text))
-        }
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
-        let window = app.windows.firstMatch
-        let fileManager = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
-        XCTAssertTrue(fileManager.waitForExistence(timeout: 15))
-        let editor = window.textViews.firstMatch
-
-        for pair in files {
-            func screenshot(of url: URL) -> XCUIScreenshot {
-                fileManager.click()
-                let row = WorkspaceUITestSupport.fileRow(url, in: window)
-                XCTAssertTrue(row.waitForExistence(timeout: 15), "Missing fixture row: \(url.lastPathComponent)")
-                row.doubleClick()
-                XCTAssertTrue(WorkspaceUITestSupport.fileTab(url, in: window)
-                    .waitForExistence(timeout: 15))
-                XCTAssertTrue(editor.waitForExistence(timeout: 15))
-                XCTAssertEqual(editor.value as? String, pair.example.text)
-                return editor.screenshot()
-            }
-
-            let plain = screenshot(of: pair.plain)
-            let highlighted = screenshot(of: pair.highlighted)
-            for (kind, screenshot) in [("plain", plain), ("syntax", highlighted)] {
-                let attachment = XCTAttachment(screenshot: screenshot)
-                attachment.name = "\(pair.example.name)-\(kind)"
-                attachment.lifetime = .keepAlways
-                add(attachment)
-            }
-            XCTAssertGreaterThan(try changedTextSamples(plain, highlighted), 24,
-                                 "\(pair.example.ext) must highlight visible syntax, including embedded code")
-            XCTAssertEqual(try Data(contentsOf: pair.plain), Data(pair.example.text.utf8))
-            XCTAssertEqual(try Data(contentsOf: pair.highlighted), Data(pair.example.text.utf8))
-        }
-    }
-
     private func changedTextSamples(
         _ plain: XCUIScreenshot, _ highlighted: XCUIScreenshot
     ) throws -> Int {

@@ -206,34 +206,6 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "original\n")
     }
 
-    func testNativeEditorSavesActualFileContentsToDisk() throws {
-        let fixture = try WorkspaceUITestFixture(in: self)
-        let file = try fixture.file("editable.swift", text: "let original = 1\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
-
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
-        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
-        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
-        XCTAssertTrue(row.waitForExistence(timeout: 20))
-        row.doubleClick()
-        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: app.windows.firstMatch)
-            .waitForExistence(timeout: 15))
-        let editor = app.textViews.firstMatch
-        XCTAssertTrue(editor.waitForExistence(timeout: 15))
-        editor.click()
-        editor.typeText("bailey_native_editor_saved_marker")
-        app.typeKey("s", modifierFlags: .command)
-
-        let saved = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in
-                (try? String(contentsOf: file, encoding: .utf8))?
-                    .contains("bailey_native_editor_saved_marker") == true
-            }, object: nil
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 15), .completed,
-                       "Command-S must persist real editor bytes, not only publish a model change")
-    }
-
     func testSameNamedFilesInSeparateFoldersSaveToTheirOwnPaths() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let alpha = try fixture.file("alpha/shared.swift", text: "let value = 1\n")
@@ -281,34 +253,6 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(window.textViews.firstMatch.value as? String, "let value = 202\n")
         XCTAssertEqual(try String(contentsOf: alpha, encoding: .utf8), "let value = 101\n")
         XCTAssertEqual(try String(contentsOf: beta, encoding: .utf8), "let value = 202\n")
-    }
-
-    func testSameNamedFilesInDifferentFoldersHaveDistinctRowsAndTabs() throws {
-        let fixture = try WorkspaceUITestFixture(in: self)
-        let alpha = try fixture.file("alpha/shared.swift", text: "let alpha = 1\n")
-        let beta = try fixture.file("beta/shared.swift", text: "let beta = 2\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
-
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
-        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
-        XCTAssertTrue(files.waitForExistence(timeout: 20))
-        let folders = app.descendants(matching: .any)
-            .matching(identifier: "bailey.tree.folder")
-        for (folderName, path) in [("alpha", alpha), ("beta", beta)] {
-            files.click()
-            let folder = folders.matching(NSPredicate(format: "label == %@", folderName)).firstMatch
-            XCTAssertTrue(folder.waitForExistence(timeout: 15))
-            folder.click()
-            let row = WorkspaceUITestSupport.fileRow(path, in: app.windows.firstMatch)
-            XCTAssertTrue(row.waitForExistence(timeout: 15))
-            row.doubleClick()
-            XCTAssertTrue(WorkspaceUITestSupport.fileTab(path, in: app.windows.firstMatch)
-                .waitForExistence(timeout: 15))
-        }
-        XCTAssertEqual(app.buttons.matching(identifier: "bailey.tab.file").count, 2,
-                       "Identical basenames from different directories must remain distinct")
-        XCTAssertTrue(WorkspaceUITestSupport.fileTab(alpha, in: app.windows.firstMatch).exists)
-        XCTAssertTrue(WorkspaceUITestSupport.fileTab(beta, in: app.windows.firstMatch).exists)
     }
 
     func testChinesePickerOpensFileWithLongUnicodePath() throws {

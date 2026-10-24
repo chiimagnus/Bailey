@@ -64,7 +64,7 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 | 冷启动、命令面板搜索／Escape、从编辑器切换 Files 后真实方向键／空格焦点 | `WorkspaceSmokeUITests`、`WorkspaceFilesUITests`、`SharedTreeUITests`、`WorkspaceDockUITests` | `DockWorkspaceTests`、`PanelContextTests`（模型状态与归属） |
 | 系统 Add Folder、Files 预览／打开、焦点恢复、文件去重、编辑保存到磁盘 | `WorkspaceFilesUITests`、`SharedTreeUITests` | `FileTreeTests`、`FileTabPersistenceTests`、`NativeFileTabTests` |
 | 大文件远距导航、文本替换、键盘撤销／重做、真实保存 | `EditorNavigationUITests` | `NativeEditorLayoutTests`、`NativeEditorCompositionTests`、`FileTabPersistenceTests` |
-| Swift／Markdown／TSX／HTML／CSS 与纯文本实际着色像素差异、原文未污染 | `EditorHighlightingUITests`（本机 Bailey Dev 已实测） | `NativeSyntaxHighlightingTests`、`HighlightQueryCacheTests` |
+| Swift 与纯文本的真实 App 像素差异；Markdown／TSX／HTML／CSS 的原生着色与正文保持 | `EditorHighlightingUITests`（Swift 实际 GUI） | `NativeSyntaxHighlightingTests`（四语言真实 TextKit）、`HighlightQueryCacheTests` |
 | Git Changes、Git Graph、Diff、键盘、暂存／忽略、原生确认及真实保存 | `WorkspaceGitUITests`、`GitChangesUITests`、`GitIgnoreEditorUITests`、`GitUncommittedUITests`、`GitDialogUITests`、`GitGraphUITests`、`GitGraphGeometryUITests`（真实 Git／index／磁盘、原生图谱／菜单／Branch／Tag Sheet） | `GitStatusModelTests`、`GitNativeDialogTests`、`GitRemoteBranchActionTests`、`GitUncommittedActionTests`、`GitIgnoreIntegrationTests`、`NativeDiffTabTests` |
 | Git 历史 revision 只读、历史文件菜单、危险重置的取消／确认与工作区／index／HEAD 字节 | `GitHistoryUITests`（真实 Git Graph；同路径 Changes/History 行按独立 AX 标识区分） | `NativeGitHistoryFileTests`、`NativeDiffTabTests`、`GitExecutionTests`、`GitStatusModelTests` |
 | 系统文件投递、双窗归属、原生 Sheet、脏文件关闭和重启恢复 | `WorkspaceWindowsUITests` | `FinderDeliveryIntegrationTests`、`WindowCloseIntegrationTests`、`WindowOwnershipIntegrationTests`、`SessionStoreTests`、`WorkspaceIdentityTests`（队列、保存失败、状态快照与身份） |
@@ -182,7 +182,7 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 - **性能与坐标**：`NativeEditorLayoutTests`、`TextCoordinateIndexTests` 验证 382／1,000／10,000／100,000 行，折行两态、文首／中／末各 30 次编辑，以及至少 17 次交错远跳；检查滚动条、长行横滚、Unicode 命中及撤销后的真实字节。
 - **真实绘制**：`NativeEditorLayoutTests`、`NativeDiffTabTests`、`NativeFileTabTests` 验证亮暗主题、行号与跨行选区、空行、查找栏展开、窗口缩放、Diff 及行号与首字形不互相遮挡；颜色和位置以窗口像素为准。
 - **颜色取样**：像素回归先声明目标位图色彩空间，再读取该空间的通道并与同空间主题值比较。不要把 `colorAt` 返回的旧式 calibrated RGB 数值再次当成显示器 profile 进行转换；当前行号背景测试在 sRGB 目标中按实际位深读取通道，保留原容差，不通过放宽阈值掩盖差异。
-- **十万行真实工作区闭环**：原生工作区集成测试验证十万行 Swift 文件的首／中／末定位、编辑、Undo／Redo、磁盘保存和关闭后的对象所有权；`EditorNavigationUITests.testHundredThousandLineNavigationPreservesAllInterveningBytes` 从完整 App 验证真实键盘导航、修改与写盘。组件与 E2E 各自证明不同层次，均不替代 Release 资源测量。大文件压力测试另以隔离正式 App 记录首次可见时间、峰值与稳定物理内存、CPU 时间、真实滚动后的缓存波动及关闭后 heap 引用；`leaks` 只发现不可达内存，不等于关闭后所有可达 FileTab 已释放。
+- **十万行真实工作区闭环**：`NativePaneRetentionIntegrationTests` 在真实原生工作区验证十万行的首／中／末定位、编辑、Undo／Redo、保存和关闭后的对象释放；`EditorNavigationUITests` 保留完整 App 的远距键盘导航与 ⌘S 接线，不再重复创建十万行 GUI 夹具。Release 性能仍须独立测量首次可见时间、内存、CPU、滚动缓存与关闭后的 heap；`leaks` 不能证明仍可达的 FileTab 已释放。
 - **窗口生命周期**：直接关闭已关联工作区的原生 `NSWindow`，验证关闭通知同步注销窗口与项目、清理文件所有权，而不依赖 SwiftUI `.onDisappear`；重复清理不得覆盖最后窗口快照。保存／恢复回归还须覆盖窗口关闭和重新打开，避免只修内存而破坏快照语义。
 - **原生资源生命周期**：验证 Dock 重挂载复用编辑器；关闭文件或项目后，标签所有权解除、滚动容器不再持有旧文档、旧语法解析停止，窗口销毁后原生视图和文件可释放。覆盖旧 `NSScrollView` 仍被外部持有、外部重载、内容转为二进制和反复关闭等条件。AppKit／SwiftUI 可能延迟释放 `NSView`，不能用单次短时间内未析构判定泄漏，也不能用 XCTest 对象释放代替长期内存回落。独立 Release 仍须提供打开／关闭／重开后的 heap、Allocations 与真实 GUI 证据。
 - **保存**：`FileTabPersistenceTests` 和 `NativeFileTabTests` 验证原生编辑后的脏状态和写盘；受控远端挂起写入覆盖关闭项目／文件／窗口／退出时，另一个原本干净的文件突然变脏的并发时序，核对未保存正文、实际磁盘、关闭否决和重试成功。多窗口保存还须用不同路径的同名文件证明各自目标正确；完整 App 的 ⌘S 应核对前台焦点、真实磁盘字节与重启结果，后台事件派发不能直接算成功。
