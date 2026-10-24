@@ -75,7 +75,7 @@
 **Step 1 — 原始 UI/后端结果：**
 - 表单字段、默认项、禁用态、用户改后切选项保留、关闭/取消后的无副作用；branch create/rename/delete/checkout/push、远端 Fetch/Pull、tag create/rename/delete/push、stash pop/apply/branch、Commit message/mainline/amend/未暂存的选项和同步。
 - 操作确认途中 HEAD/ref/index、选中 repository/project、窗口/Sheet 所属权变动后的过期目标拒绝，网络慢响应和错误提示；`git rebase -i` 原生终端／PTY 的实际编辑器输入与生命周期。危险默认项必须是用户可见且可取消，不只断言 model flag。
-- **已确认混合边界**：`GitInteractiveRebaseTests.testSSHHelperHandoffUsesTheRebaseFixturesApplication` 实际操作 `BaileySSHSocketServer.exchange`、`BAILEY_SSH_SOCKET`/token 与 `TerminalNotificationService` 服务所有权，并没有真正的 App UI 操作；它必须完整移入 `BaileyTests/Integration/Remote` 或对应非 UI 集成类，不可以因为旧路径叫 `NativeUI` 就删除。该类另外两条测试也要先拆分真实 PTY/SSH/命令结果与界面入口各自的验证，不强造只有 UI 可测的结论。
+- **已确认混合边界**：`GitInteractiveRebaseTests.testSSHHelperHandoffUsesTheRebaseFixturesApplication` 实际操作 `BaileySSHSocketServer.exchange`、`BAILEY_SSH_SOCKET`/token 与 `TerminalNotificationService` 服务所有权，并没有真正的 App UI 操作；它必须完整移入 `BaileyTests/Integration/Remote` 或对应非 UI 集成类，不可以因为旧路径叫 `NativeUI` 就删除。该类另外两条测试也要先拆分真实 PTY/SSH/命令结果与界面入口各自的验证，不强造只有 UI 可测的结论。经本机源码与真实测试进一步确认：Ghostty 仅在终端 `NSView` 附着 `NSWindow` 后创建 PTY，因此这两条后端集成测试仅保留最小 AppKit 表面附着，不再挂载 `PanelContentView`／SwiftUI 页面或模仿 UI 事件；真正的原生 Sheet、用户输入和 Git 结果继续由 `GitDialogUITests` 证明。
 - **另一个已确认的误分类陷阱**：`GitBranchDialogTests` 的 4 项没有创建 `NSWindow`，却直接构造 `GitBranchDialog` 的 `NSAlert`、读写 `NSButton`／`NSControl` 并调用 `performClick`；`GitTagDialogTests` 中另有直接驱动 AppKit 表单的项。**不能因为没有窗口装配就当成纯 Git 逻辑**。新 UI Test 测实际表单、取消和默认选项；底层新测试只留下不依赖 AppKit 控件的 remote/ref 选择规则。
 - 外网 remote push/fetch/pull 用**受控本地 bare remote 或获准临时测试 remote**，绝不向用户 GitHub 仓库直接执行写入；SSH 重连/认证不借真实用户 master/凭据。
 

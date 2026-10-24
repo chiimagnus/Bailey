@@ -22,7 +22,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer make doctor
 make test:FileTabPersistenceTests,NativeFileTabTests,GitStatusModelTests  # Dev 定点测试
 make build:dev SIGNING=adhoc       # 独立开发版，不安装正式 App
 make test SIGNING=adhoc            # Bailey Dev 宿主测试
-make test:ui                       # Bailey Dev 图形测试，本机使用 Apple Development 签名
+make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本机定点 UI 测试
 make build                         # 正式版 Debug
 make build:release                 # 正式版 Release
 ```
@@ -31,7 +31,7 @@ make build:release                 # 正式版 Release
 
 正式版产物位于 `build/DerivedData/Build/Products/{Debug,Release}/Bailey.app`；测试版位于 `build/DerivedData-Dev/Build/Products/Debug/Bailey.app`，显示名称为 **Bailey Dev**（`chiimagnus.bailey.dev`）。两者使用独立 DerivedData 和 Bundle ID，测试不替换 `/Applications/Bailey.app`。正式 Debug／Release 继续共用 `chiimagnus.bailey`；包依赖仍在 `build/SourcePackages/`。开发版配置为 `~/.config/bailey-dev/`，历史与钥匙串服务也分开。
 
-测试入口见 [testing.md](testing.md#测试目录与入口)。本机完整 GUI 测试应使用已安装的 **Apple Development 签名**，不要强制 `SIGNING=adhoc`：本机实测 ad-hoc Runner 被 macOS 拒绝辅助功能自动化，开发签名的同一 Runner 则能够正常操作。CI 的 ad-hoc 环境单独验收，不得拿本机结果冒充 CI。即使正式 Bailey 仍在运行，Makefile 测试也只使用 Bailey Dev；两者仍共用桌面焦点，XCUI 操作会短暂激活开发版。若需完全不打断当前输入，请使用独立图形会话。
+测试入口与测试金字塔见 [testing.md](testing.md#测试层次)。日常按受影响类定点执行；`make test:ui` 不指定 `ONLY_TESTING` 时会运行整个 UI Target，留给阶段验收及 CI。本机完整 GUI 测试应使用已安装的 **Apple Development 签名**，不要强制 `SIGNING=adhoc`：本机实测 ad-hoc Runner 被 macOS 拒绝辅助功能自动化，开发签名的同一 Runner 则能够正常操作。CI 的 ad-hoc 环境单独验收，不得拿本机结果冒充 CI。即使正式 Bailey 仍在运行，Makefile 测试也只使用 Bailey Dev；两者仍共用桌面焦点，XCUI 操作会短暂激活开发版。若需完全不打断当前输入，请使用独立图形会话。
 
 资源通过 Xcode Copy Files 打包；`ssh → bailey` 符号链接由现有 Build Phase 创建。不另建一套资源拷贝或终端安装脚本。
 

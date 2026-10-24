@@ -6,6 +6,8 @@
 
 **Approach:** 保持 `BaileyUITests/Workspace/WorkspaceWindowsUITests.swift` 与 `Files/WorkspaceFilesUITests.swift` 的真实 App 调用方式，按来源拆成 Files/共享行、焦点、Finder、窗口保存恢复和内容身份五项任务。`WorkspaceWindowIsolationTests.swift` 原 42 项按 [方法清单](migration-inventory.md)明确三组：焦点 19（P4-T2）、Finder 17（P4-T3）、窗口/身份/快照 6（P4-T4）；各 task 替代验证完成即移走负责方法，最后一组负责删空旧文件。
 
+**测试分层（适用于后续 P4-T2～T5）**：逐项核销旧保障不等于逐项新建 XCUITest。先复用已有真实 App 测试；纯状态、错误、时序和组合由快速 Unit／Integration 精确验证，原生组件内部身份、TextKit 或 PTY 契约可用最小 AppKit 宿主验证；只有底层无法证明的真实系统输入、焦点、菜单、窗口路由与最终用户结果才补独立 App E2E。保留必要的界面边界场景，但不让每种配置重复启动和点击完整流程；已经完成的 P1–P4-T1 不在本阶段提前重构，待 P5 收尾后另行精简。
+
 **Acceptance:**
 - 83 个旧方法 + `SessionStoreTests` 2 项图形装配都有不弱于原断言的 UI/逻辑双链证据；本阶段需要删除 7 个混合 UI suite 及被替代的集成 UI 方法。
 - 真正用户交互证明展开/选中/悬停/展示/激活/焦点分离，文件浏览/保存或 Git 操作不会串组/串项目/串窗口；同时证明真实 Finder 事件与窗口关闭恢复的最终数据归属。
@@ -46,7 +48,7 @@
 
 **Own old tests:** `BaileyTests/WorkspaceUI/Windows/WorkspaceWindowIsolationTests.swift` 的**前 19 项**（清单 P4-T2）；仅删除已被本 task 证明替代的这些方法，保留其余部分给 P4-T3/T4。
 
-**Files/anchors:** `Bailey/App/{WorkspaceApplication,BaileyApp}.swift`、`Bailey/Workspace/{WorkspaceWindowModel,Project,DockWorkspaceModel}.swift`、`Bailey/UI/{ContentView,CommandPaletteView,WorkspaceDockView}.swift`、`Bailey/UI/Panels/ToolPanelView.swift`；新增/扩展 `BaileyUITests/Workspace/WorkspaceFocusUITests.swift`。
+**Files/anchors:** `Bailey/App/{WorkspaceApplication,BaileyApp}.swift`、`Bailey/Workspace/{WorkspaceWindowModel,Project,DockWorkspaceModel}.swift`、`Bailey/UI/{ContentView,CommandPaletteView,WorkspaceDockView}.swift`、`Bailey/UI/Panels/ToolPanelView.swift`；优先扩展现有 `WorkspaceFilesUITests`、`WorkspaceDockUITests`、`WorkspaceWindowsUITests`，仅独立流程确有需要时新增 `WorkspaceFocusUITests.swift`。
 
 **Step 1 — 原测试定位：**
 - Files/Git 列表异步出现后的第一个选中行及真正焦点、切回 File Manager 时选中实际打开文件、不同 Dock 组焦点交接、Palette 早于 search field 焦点就绪时 Files/Git 不抢键盘；取消恢复原有效区域，执行命令转交目标区域。
@@ -102,7 +104,7 @@
 
 **Step 2 — 实现/清理：**
 - 在真实 App 完成打开多个文件和 Diff/Browser、停靠、关闭/取消/保存失败/再次编辑，再次启动同隔离 `BAILEY_UI_TEST_RUN_ID` 验证窗口/项目/标签/文件恢复和字节正确；覆盖无项目新窗口及多组组合。
-- UI E2E 断言最终窗口数量、用户视图内容与磁盘，对原生 pointer identity 无法跨进程直接观测的部分用实测内容、Undo、滚动、实际资源测量和纯归属算法不变量补证；不能声称“同样看起来”即同一对象。
+- UI E2E 断言最终窗口数量、用户视图内容与磁盘；原生对象身份优先用能直接观测该组件的最小 AppKit Integration 与归属模型验证，再结合真实 App 的 Undo、滚动、资源测量补证。不得为读取 pointer 而搭建完整 SwiftUI 工作区宿主，也不能声称“同样看起来”即同一对象。
 - 将 `SessionStoreTests` 中 2 项涉及原生 View 的断言拆为「E2E + 非 UI」两份，删除旧窗口依赖、保留其它 8 项；前述 15 项和这 2 项核销后删除 `WorkspaceWindowIsolationTests.swift`（已由 T2/T3 清空）与 `WorkspaceWindowCloseTests.swift`、`WorkspaceContentIdentityTests.swift`，不遗留旧 host helper。
 - **正常退出不等于强制终止**：此阶段还有 P4-T5 的宿主原生测试，`BaileyApp` 仍会在隔离模式拦截 `⌘Q`。先从真实窗口/项目关闭路径验证 `WorkspaceApplication.windowClosed` → `SessionStore.save`，复用**同一个** `XCUIApplication` 及原 `BAILEY_UI_TEST_RUN_ID` 验证恢复；`XCUIApplication.terminate()` 只计强制结束，不能冒充用户正常退出及 `applicationWillTerminate`。最后的正常 ⌘Q 退出→保存→重启归 P4-T5 移除旧拦截后验收，不加新测试专用保存捷径。
 - 同步 `docs/features/session-restore.md`、`dock.md`、`editor.md`、`docs/architecture.md` 和 `docs/testing.md` 的**验证归属变化**；不改变存储键/格式或原行为。
@@ -136,7 +138,7 @@
 - 专用 GUI Runner 的文件/终端/Browser/Settings 用户路径；本旧 suite 实际验证原生对象释放，按已有 `docs/testing.md` 必须保留可比较的打开/峰值/关闭后稳定 heap 与 Instruments Allocations 等证据（无可用环境则列为 No-Go），并核对保留在非 UI 的原生生命周期不变量。普通无资源变更的 UI 用例不用机械跑 Instruments。
 - Coverage：终端/浏览器/编辑器同窗与跨窗、空/1/5 Tab 及五轮每轮五编辑器、100k 行/旧 5 MiB 限制边界、两轮销毁释放和旧 scroll view、窄/宽 Find、停车/重挂载、重复开关、多窗/浅深/中英、Unicode/大文件、多语法任务和内存回落、WebKit alert/confirm/导航历史、Shell PID/焦点/后台输出、设置失败/撤销/重启恢复、窗口断开及获准 SSH 机器归属。
 - Uncovered：设备输入／本地 WebKit 权限／SSH 实机／Instruments 观测权限若不满足，记录受阻条件、尝试、非 UI 替代证据、内存/行为影响及补验 Gate，不以轻量 smoke 测试覆盖资源释放。
-- **Commit boundary:** 21 条逐项核销、真正 E2E + 无窗口的逻辑测试、最后两份旧 suite 与孤立 ⌘Q 守卫同步删除、所属功能文档与资源证据。
+- **Commit boundary:** 21 条逐项核销、必要的真实 E2E + Unit／Integration（原生组件或 PTY 需要时允许最小窗口）、最后两份旧 suite 与孤立 ⌘Q 守卫同步删除、所属功能文档与资源证据。
 
 ---
 

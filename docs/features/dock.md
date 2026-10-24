@@ -44,6 +44,6 @@ Finder 的 `fileURL` 拖放按接收区域分流：空工作区、普通编辑�
 
 ## 验证
 
-`DockWorkspaceTests` 验证布局规则；`WorkspaceDockUITests` 从真实 Dev App 检查窄 Projects 标签、跨组拖动释放、工具点击与 ⌘W 所属组、空白点击释放旧编辑器键盘；`PaneRetentionTests` 和其余工作区 UI 测试验证原生身份、关闭保存与跨窗口隔离。模型测试不代替真实拖动、键盘和输入验收。覆盖上下／左右组合、跨区域拖动、A→B→A、双窗口切换、关闭失败与恢复。
+`DockWorkspaceTests` 验证布局规则；`WorkspaceDockUITests` 从真实 Dev App 检查窄 Projects 标签、跨组拖动释放、工具点击与 ⌘W 所属组、空白点击释放旧编辑器键盘。原生对象身份、关闭保存与跨窗口隔离由组件集成和完整 App 回归分层验证。模型测试不代替真实拖动、键盘和输入验收。覆盖上下／左右组合、跨区域拖动、A→B→A、双窗口切换、关闭失败与恢复。
 
 视觉不变量见 [ui.md](../ui.md)，运行入口见 [testing.md](../testing.md)。实现入口：[WorkspaceDockView.swift](../../Bailey/UI/WorkspaceDockView.swift)。

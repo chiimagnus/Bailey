@@ -2,9 +2,9 @@
 
 **Goal:** 不再次搬代码，而是验证 P1–P4 已完成的行为迁移、旧测试清理、CI/Makefile 运行分层以及完整产品验收。**发现缺口应回到首次拥有该行为的 task 修复，不在最后补一批兼容测试或清理旧文件。**
 
-**Non-goals:** 不增加第三个 Test Target、另建 CI 选择脚本/Runner、重构生产模块、强行删除仍承担安全或旧快照语义的代码。Docs/CI 变更均已要求在对应 P2–P4 task 当场同步，P5 不建立第二份维护机制。
+**Non-goals:** 不增加第三个 Test Target、另建 CI 选择脚本/Runner、重构生产模块、强行删除仍承担安全或旧快照语义的代码。Docs/CI 变更均已要求在对应 P2–P4 task 当场同步，P5 不建立第二份维护机制。已新增 XCUITest 的整体精简不在本阶段重做；先完成迁移与验收，再单独处理冗余和耗时。
 
-**Approach:** 以 `migration-inventory.md` 的每条旧保障 → 当前 UI/非 UI 断言 → 实际执行证据为审查链；以 `Bailey.xcodeproj`、两份 Scheme、`Makefile`、`.github/workflows/ci.yml` 的真实执行结果为机械事实。XCUITest 必须由专用 GUI Runner 启动 App，`BaileyTests` 只能保留逻辑/集成，不再以原生窗口模拟用户交互。
+**Approach:** 以 `migration-inventory.md` 的每条旧保障 → 当前 UI/非 UI 断言 → 实际执行证据为审查链；以 `Bailey.xcodeproj`、两份 Scheme、`Makefile`、`.github/workflows/ci.yml` 的真实执行结果为机械事实。XCUITest 必须由专用 GUI Runner 启动 App；`BaileyTests` 只运行 Unit/Integration，直接验证原生组件内部几何／像素／IME 或真实 PTY 时可使用最小 AppKit 窗口，但不得模拟完整 App 用户操作。
 
 **Acceptance:**
 - 原有 329 条逐项核销，另 306 条 Unit/Integration（含 `SessionStoreTests` 2 条 UI 混入）重新核对；原 10 条 UI Test 与新增用例均有实际执行/失败证据。Xcode 真正发现的测试方法集合无非预期空项或禁用。
@@ -24,9 +24,9 @@
 
 **Step 1 — 源码及方法双向核销：**
 1. 对照 plan 起点 `019765f` 的 329 条 `Class.testMethod`，确认每条在 `migration-inventory.md` 有原断言、目标 UI/非 UI 新方法、前置数据、实际最终结果、真实执行状态，以及当场删除原方法的变更证据。不能以新方法总数等于 329 作为通过，也不能多个方法对应同一空断言就算覆盖。每项差异先回原 task 补齐。
-2. 重新清点 `BaileyTests/Unit` 的原 75 与 `Integration` 原 231 条测试（后续重命名/分拆要与当前 Xcode 发现匹配）；重点核对 `SessionStoreTests` 真实窗口两项已被替代，其他应用快照/SSH 本机路径仍保持数据兼容与安全。任何仍创建原生 View/Window、发真实鼠标键盘或断言像素的原低层测试必须返还 P1-T3/P2–P4 清理，而不能在这里偷删。
+2. 重新清点 `BaileyTests/Unit` 的原 75 与 `Integration` 原 231 条测试（后续重命名/分拆要与当前 Xcode 发现匹配）；重点核对 `SessionStoreTests` 整套工作区窗口装配的两项已被替代，其他应用快照/SSH 本机路径仍保持数据兼容与安全。对仍模拟完整 App 的 SwiftUI 窗口、鼠标键盘用户流程或全工作区视觉断言，退回 P1-T3/P2–P4 清理；TextKit／IME 的最小原生组件窗口、内部像素与几何断言及 Ghostty PTY 附着是允许的 Integration，不能误删或强制搬成 E2E。
 3. 检查 `BaileyUITests` 仍执行启动/命令面板、Files/保存、Git、Settings/多窗既有 10 条，新增控件查询能区分两目录同名和 Files/Git 共享 ID；确认未引入隐藏测试控件、第二个 App Bundle ID、旧方法的残留 UI 宿主/后门、`XCTSkip` 掩盖核心故障。
-4. 对比迁移开始与当前源文件清单、Xcode Target members、build products、方法列表及活跃引用；查 `ci.yml` 中 `Bailey/Editor/*`、`Bailey/Git/Diff*` 的已删除类名，`Makefile` 帮助、`docs/testing.md`／功能文档／PR 模板中的失效层次。真正需要更新时回相关 task 同步，不设全仓额外配置/脚本。
+4. 对比迁移开始与当前源文件清单、Xcode Target members、build products、方法列表及活跃引用；确认 CI 已不再使用基于 `Bailey/Editor/*`、`Bailey/Git/Diff*` 的旧类名选择器，检查 `Makefile` 帮助、`docs/testing.md`／功能文档／PR 模板中的失效层次。真正需要更新时回相关 task 同步，不设全仓额外配置/脚本。
 
 **Step 2 — 真实命令与 CI 证明：**
 1. Xcode Scheme 实际包含现有 `BaileyTests`、`BaileyUITests`，`make test:FileTreeTests,GitStatusModelTests` 能按要求发现多个真实非 UI 类；`make build:ui SIGNING=adhoc` 只编译不启动；`make test SIGNING=adhoc` 的完整 TestAction **及 codesign 后置检查**退出为 0。不存在类名、错误 target 等不能被假成功吞掉。
@@ -38,6 +38,7 @@
 **Step 3 — Gate 与交付：**
 - **Go:** 329 全核销、两 Test Target 分层实证、所有当前适用且可安全执行的条件与重要组合真实验收、必要 CI 和构建退出成功、零未解释 UI/UX 退化、无过时测试入口与重叠旧代码。
 - **No-Go:** 方法原断言没有替代、核心 GUI 根本没运行、选择错文件/仓库、真实数据保护/机器身份没有证明、缺少必要的前台/IME/本机或 SSH 证据、CI 只报告 skipped、配置隔离可能影响用户。说明未达条件与补验路径；**不因审查临近结束而改变接受标准。**
+- **验收后单独精简（不计入本次 Go/No-Go）**：保留全部 P1–P5 的覆盖映射与实测证据，再按耗时和重复程度审查 Git Graph 几何、主题／字号矩阵、Git 对话框及大文件导航的 XCUITest；只有底层回归与少数真实用户流程共同守住原断言后才删减，前后比较实际运行时间和失败信号。不在 P5 为追求固定比例删用例，也不把未来精简冒称本次已完成。
 - 本轮计划/状态改动仍遵守 Feature 默认本地管理规则；实施代码按 Git 规则逐 task 原子提交。没有授权不推动合并 PR 或安装正式 App。
 
 ---

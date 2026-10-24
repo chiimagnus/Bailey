@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P3-T4"
+current_task_id = "P4-T2"
 
 [[tasks]]
 id = "P1-T1"
@@ -85,26 +85,26 @@ note = "18条旧方法分层核销、七旧类清理，真实GUI 21/21（exit 0�
 [[tasks]]
 id = "P3-T4"
 title = "Git Graph 全图谱、颜色/标签、键盘与多级菜单"
-status = "in_progress"
+status = "completed"
 plan = "plan-p3.md#p3-t4"
-commit = ""
-note = "在 macOS 诊断中找到 testmanagerd LocalAuthentication 需要真实身份验证 Enable UI Automation（Apple Watch失败、Touch ID/密码面板已出现）；继续验证授权窗口及完成P3-T4。"
+commit = "6853d3424a7dd4867337b498851ecefbcaddd5ba"
+note = "48条旧保障逐项映射：11项纯Unit+37项真实Dev GUI，原宿主文件已删；Git Graph/Geometry首次45项42过3项24-lane窄宽失败，根因修复后单独失败场景转绿、定点10/10、33 remote最低150pt 1/1；五底层类88/88，Dev+正式Debug build/codesign成功；本机未复跑修复后45项全量。"
 
 [[tasks]]
 id = "P4-T1"
 title = "共享树行、Dock 点击、命令面板、App 菜单"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t1"
-commit = ""
-note = ""
+commit = "87292c1"
+note = "共享树/Dock独立App真实GUI11/11、宿主相关42/42通过，原10条旧保障核销；保留本机之外系统/触控板/显示器及外部Finder拖放补验证据，未宣称全环境。"
 
 [[tasks]]
 id = "P4-T2"
 title = "多窗口的实际键盘响应与焦点恢复"
-status = "pending"
+status = "in_progress"
 plan = "plan-p4.md#p4-t2"
 commit = ""
-note = ""
+note = "已核对原19条跨窗口焦点宿主方法与现有Files/Git/Dock E2E入口；将优先复用已有真实路径，纯状态/乱序留在低层，不按19条机械新增UI用例。尚未修改P4-T2测试或执行其GUI验收。"
 
 [[tasks]]
 id = "P4-T3"

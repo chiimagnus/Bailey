@@ -4,10 +4,12 @@
 
 将 Bailey 的测试分为且只分为两种 Xcode Test Target：
 
-- `BaileyTests`（Unit Testing Bundle）：非界面单元和集成测试。允许 `@testable import Bailey` 验证模型、解析、Git／文件／SSH 后端、快照格式及独立的计算规则；**不得创建原生窗口／视图模拟用户交互、读取 UI 层级、发送鼠标键盘事件，或把 UI 表现断言当成单元测试**。
+- `BaileyTests`（Unit Testing Bundle）：大量 Unit 测试负责模型、解析和状态规则；必要的 Integration 测试负责真实文件／Git／SSH 后端，以及必须直接读取 TextKit 2 布局、IME 组合状态等内部信息的 AppKit 组件契约。允许为这些组件提供最小 `NSWindow` 运行条件，**不得挂载整套 SwiftUI 工作区、模拟 App 用户交互或把组件结果冒充 E2E**；Ghostty 的真实 PTY 也只允许挂载实际需要的最小原生终端表面。完整用户入口由 `BaileyUITests` 验证。
 - `BaileyUITests`（UI Testing Bundle）：通过 `XCUIApplication` 启动真实 Bailey，从用户入口验证 Files、Editor、Diff、Git、Dock、Terminal、Browser、Settings、菜单、弹窗、窗口、焦点、外部文件事件、真实数据结果和可达的视觉／性能行为；不得 `@testable import Bailey` 或直接读取被测 App 的进程内模型。
 
-**迁移行为覆盖，而非机械搬移 Swift 文件。** NativeUI／WorkspaceUI 中纯解析、字节／状态、图布局等断言迁到 `BaileyTests/Unit` 或 `BaileyTests/Integration`；用户可见部分由 `BaileyUITests` 重建。从前需 `NSWindow`／`NSHostingView`／`NSTextView` 直接证明的内部属性，优先用真实输入、AX、截图／录屏、磁盘／Git 结果与进程生命周期证明相应用户不变量，必要时把可纯化的算法另做单元回归。不能不加说明地删除无法直接跨进程读取的保障。
+**迁移行为覆盖，而非机械搬移 Swift 文件。** NativeUI／WorkspaceUI 中纯解析、字节／状态和图布局等断言归 Unit／Integration；TextKit 2 几何、IME 等必须读取原生组件内部状态的契约继续留在 Integration。只有实际系统菜单、键盘焦点、Finder／Dock 入口、跨窗口路由等必须启动完整 App 才能证明的行为才放入 `BaileyUITests`，并核对真实文件／Git／窗口结果。原有保障逐项核销，不能因跨进程难以读取内部状态就直接删掉断言。
+
+**后续顺序（2026-10-24 决定）**：继续完成现行 P4／P5 与最终验收，不回撤 P1–P3，也不提前重构已完成的 UI 用例；待迁移收尾后再单独精简重复且昂贵的 XCUITest。此后新增用例即遵守 [测试金字塔](../../../docs/testing.md#测试层次)：先在 Unit／Integration 覆盖数据与条件组合，UI 只验证不可替代的真实用户流程。原 329 条保障仍须逐项核销，不能以精简为由遗漏。
 
 ## 范围与起点
 
@@ -25,8 +27,8 @@
 3. **不要制造测试后门**：仅在现有控件缺少稳定 AX 语义时，经过真实 UI 语义核对后添加适度标识；不添加生产启动时跑测试、以 `--isolated-ui-test` 绕过业务逻辑、测试专用伪结果或额外隐藏控制页面。稳定 Identifier 不含沙盒绝对路径，不以长 sleep／无条件 retry／跳过用例制造绿色。
 4. **测试真实副作用**：XCUITest 核对保存后的文件字节、Git status/index/HEAD、界面可见数据、目标窗口与真实键盘结果，以及窗口关闭／重开后的内容；夹具证明初始分支、冲突状态、权限、符号链接、文件编码和失败触发条件确实成立。
 5. **安全隔离**：用户的正式 `/Applications/Bailey.app` 正在运行时，不启动同 Bundle ID 的 XCUITest，也不结束用户进程。宿主与独立 GUI 测试均使用 `chiimagnus.bailey.dev`；Dev 的两种测试及两种编译入口共用原子锁，独立 DerivedData 不能代替同 Bundle ID／桌面的互斥。GUI 回归仍须专用 CI Runner 或获准占用焦点的会话。`--isolated-ui-test` 仅隔离快照、终端历史并跳过保存的隧道，不隔离桌面。UI 启动器另外设置每例临时 `HOME`／`CFFIXED_USER_HOME`，核对真实 `.config/bailey-dev/config.toml`；单设 `HOME` 不足以隔离 Foundation 主目录。TOML 外观／字号可用真实临时配置验证，UserDefaults／钥匙串仍不视作全部隔离，语言持久化等测试须独立账户或明确恢复证据。
-6. **同一任务当场替换并删除**：对应新 E2E 与非 UI 断言证实覆盖后，同任务删除原 `NativeUI`／`WorkspaceUI` 中已经被替代的方法、旧窗口 fixture 和其测试专属辅助代码；同步更新 CI 中硬编码的旧类名、使用该类名的文档与调用方。未证实可替代的原生对象内部断言不能先删或延到最后再说。
-7. **复用现有入口**：`make test`／`make test:类名1,类名2` 只跑非 UI；`make test:ui` 跑实际 App UI。保留现有两 Target、Makefile、Scheme 和 CI，不另建测试框架或专用 App。CI 当前 `Bailey/Editor/*` 与 `Bailey/Git/Diff*` 分支仍硬编码旧测试类，迁移这些类的 task 必须同步修改，不能拖到 P5。定点 `-only-testing` 必须对照 xcresult 核验真实执行项，不能只看退出码。
+6. **同一任务当场替换并删除**：对应新 E2E 与非 UI 断言证实覆盖后，同任务删除原 `NativeUI`／`WorkspaceUI` 中已经被替代的方法、旧窗口 fixture 和其测试专属辅助代码；同步更新受影响文档、调用方与实际存在的 CI 引用。未证实可替代的原生对象内部断言不能先删或延到最后再说。
+7. **复用现有入口**：`make test`／`make test:类名1,类名2` 只跑非 UI；`make test:ui` 跑实际 App UI，本地可用 `ONLY_TESTING` 选择受影响的类或方法。保留现有两 Target、Makefile、Scheme 和 CI，不另建测试框架或专用 App。CI 已取消基于文件差异的旧类名自动筛选，完整运行仍须核对 Xcode 实际发现的测试；定点 `-only-testing` 也不能只看退出码。
 8. **有消费才保留守卫**：隔离宿主的 `⌘Q` 屏蔽目前仍保护未迁出的原生窗口测试，归最后一项宿主 UI 迁移 P4-T5 与原断言一起裁撤；P4-T1 不得提前删除。与其不同的 `BaileyInstanceMode` 快照、历史和隧道隔离仍承担真实职责。
 
 ## 非目标
@@ -40,7 +42,7 @@
 ## 验收门槛
 
 1. **方法级完整性**：方法盘点在迁移开始与结束各重新生成一遍（包括方法增删、重命名、测试发现）；清单全部拥有实际去向、替代断言、已验证结果。特别检查 `NativeUI` 275 + `WorkspaceUI` 54、`SessionStoreTests` 等藏于 Integration 的原生 GUI 测试，以及 `BaileyUITests` 原有 10 项；原始 329 条不能无理由消失。
-2. **目标隔离**：`BaileyTests/NativeUI` 和 `BaileyTests/WorkspaceUI` 已不存在，所有遗留非 UI 方法在 Unit/Integration；对整个 `BaileyTests` 审计，确认没有宿主窗口、SwiftUI 交互装配、鼠标键盘注入或 UI 像素断言。`BaileyUITests` 不直接导入被测 App 类型，Xcode `-only-testing` 可分别选择各目标，实际发现的数量与静态 inventory 可解释地对应。
+2. **目标隔离**：`BaileyTests/NativeUI` 和 `BaileyTests/WorkspaceUI` 已不存在，遗留非 E2E 方法归 Unit/Integration；不得在宿主中装配完整 SwiftUI 工作区、模拟 App 用户鼠标键盘操作或把其结果冒充 E2E。TextKit／IME／原生着色与布局的组件契约，以及 Ghostty PTY 启动所需附着，允许保留最小 AppKit 窗口和内部像素／几何断言。`BaileyUITests` 不直接导入被测 App 类型，Xcode `-only-testing` 可分别选择各目标，实际发现的数量与静态 inventory 可解释地对应。
 3. **全链路验收**：分别执行 `make test`、`make test:ui`，按项目签名／构建要求核对完整退出状态、失败／跳过、CI Job 与本地可安全执行的针对性用例。关键 E2E 覆盖真实 App 输入到持久化／Git 结果，不能靠单位测试绿色。
 4. **最大全适用覆盖**：实施前逐域检查下述所有可达条件及安全可执行组合；不能因为典型路径通过就主动忽略可行的边界测试。每个无法实测的环境或操作逐项记录原因、已取得的替代证据、影响、补验条件与是否阻塞完整验收。
 5. **零迁移残留**：每个迁移 task 当场清理失效测试方法、fixture、CI 测试类名及对应文档引用，最终 `NativeUI/WorkspaceUI` 不再存在，`AGENTS.md`／`docs/testing.md`／`docs/release.md`／`CONTRIBUTING.md` 与实际两个 Target 一致。现有业务代码、必要 AX 语义、配置与数据保护不变。

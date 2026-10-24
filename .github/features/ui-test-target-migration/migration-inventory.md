@@ -226,8 +226,8 @@
 
 - `testVisibleLocalPanelDetectsExternalInitialization`（旧 L23） · `C` → `GitChangesUITests.testExternalGitInitializationAppearsWithoutManualRefresh`（真实 App 已通过）。
 - `testVisibleGitPanelRefreshesTwoExternalMutationsWithoutActivation`（旧 L70） · `C` → `GitChangesUITests.testExternalWorktreeIndexAndCommitRefreshTheRealGitPanel`（已通过）+ `GitStatusModelTests.testLocalFileEventsPauseInBackgroundAndRestoreOnActivation`、`testLocalFileChangesRefreshWithoutPollingOrManualRefresh`、`testLocalWatcherStopsFollowingPreviousWorkspace`（宿主已通过）。
-- `testVisibleGitPanelKeepsRefreshPendingWhileRemoteDetailsAreSlow`（旧 L255） · `C` → `GitRemoteRefreshIntegrationTests.testVisibleGitPanelKeepsRefreshPendingWhileRemoteDetailsAreSlow`（受控慢响应及 SSH 周期触发 14.986 秒验证通过，保留唯一必要的 `ToolPanelView` 生命周期契约）。
-- `testVisibleSSHPanelRefreshesExternalGitChanges`（旧 L356） · `C` → `GitRemoteRefreshIntegrationTests.testVisibleSSHPanelRefreshesExternalGitChanges`（已获授权 `windows`，专用临时远端仓库真实 SSH 测试 69.034 秒通过，工作区刷新 2.84 秒、外部提交刷新 1.11 秒，含隐藏及后台暂停）。
+- `testVisibleGitPanelKeepsRefreshPendingWhileRemoteDetailsAreSlow`（旧 L255） · `C` → `GitRemoteRefreshIntegrationTests.testRemotePollQueuesSlowDetailRefreshAndStopsOnCancellation`（受控慢响应、模型定时触发与任务取消；审计后 15.127 秒测试通过，不再挂载 SwiftUI 面板）。
+- `testVisibleSSHPanelRefreshesExternalGitChanges`（旧 L356） · `C` → `GitRemoteRefreshIntegrationTests.testAuthorizedSSHRemotePollDetectsExternalChangesAndStopsWhenCancelled`（获准 `windows` 的专用 SSH 临时仓库，审计后真实刷新、暂停／恢复及取消通过，56.108 秒）。
 
 **原 `GitWorkspaceMenuTests.swift`：11 条，按真实用户操作归属迁移**
 
@@ -302,14 +302,14 @@
 
 2026-10-24 补充验证：受影响图谱布局/旧宿主 `make test:CommitGraphLayoutTests,GitGraphPaletteTests,GitGraphReferenceGroupTests,GitGraphWorktreePresentationTests,RecentCommitsViewTests SIGNING=adhoc` **76/76 exit 0**（`/tmp/bailey-migration-graph-model-targeted.log`）；`make test:GitStatusModelTests SIGNING=adhoc` **49/49 exit 0**（`/tmp/bailey-migration-graph-status-model.log`）。本轮修订后的 `make build:ui SIGNING=adhoc` 和 `make build:release SIGNING=adhoc` 均成功并严格验签（`/tmp/bailey-migration-p3-final-ui-compile.log`、`/tmp/bailey-migration-release-final.log`）。XCTest xcresult 导出诊断显示 `testmanagerd` 已回复 Runner 授权，但 `enabling automation mode` 60 秒未返回；原始记录 `/tmp/bailey-ui-test-automation-diagnostics`。额外完整宿主 `make test SIGNING=adhoc` 在 `_prepareTestConfigurationAndIDESession` 阶段超过三分钟没有启动任何用例，采样记录 `/tmp/bailey-migration-full-host-sample.txt`，已精确停止该测试及孤立 Dev 宿主、释放锁，**不计为完整宿主通过**。运行中的正式 Bailey 未被停止，Dev 配置 SHA-256 未变化；需要新的正常 XCTest 图形会话再做修正后的完整 UI E2E 与全量宿主验收。
 
-- 纯 Unit：`GitGraphPaletteTests`、`GitGraphReferenceGroupTests`、`GitGraphWorktreePresentationTests` 和现有 `CommitGraphLayoutTests`；色值、引用分组、路径、状态字母、节点提示、车道边距原断言迁移。定点 7/7（`/tmp/bailey-p3-t4-expanded-units.log`）、29/29（`/tmp/bailey-p3-t4-pure-gutter-unit.log`），此前分组／路径的 2/2、3/3 均 exit 0。
-- 真实 GUI：`BaileyUITests/Git/GitGraphUITests.swift` 原19条独占合集 exit0，见本节首条证据。包括仓库 0/1/35 commits、24 条并行分支、真实双父 Merge、Branch/Tag/Stash/Remote HEAD、脏／干净／主／脱离 Worktree、`+N`／三级菜单、点击和键盘、长中文标题及深路径横滚、颜色像素和历史 Diff 选中态、Index/Worktree 两种实际 Diff 基线。新增 5 条真实密集车道外观/字号及暗色历史 Diff 扩展因为 XCTest AX 初始化故障仍待独占 UI 复测；新增几何类 20/20 已通过，不能代替此 5 条。
+- 纯 Unit：`GitGraphPaletteTests`、`GitGraphReferenceGroupTests`、`GitGraphWorktreePresentationTests` 和现有 `CommitGraphLayoutTests`；色值、引用分组、路径、状态字母、节点提示、车道边距原断言迁移。删旧类后运行 `make test:CommitGraphLayoutTests,GitStatusModelTests,GitGraphPaletteTests,GitGraphReferenceGroupTests,GitGraphWorktreePresentationTests`，**88/88、0 失败、exit 0**（`/tmp/bailey-p3t4-unit-after-old-delete.log`），其中 `GitStatusModelTests` 49/49、`CommitGraphLayoutTests` 29/29，另三类共 10/10。
+- 真实 GUI：原 `GitGraphUITests` 19/19 exit 0；2026-10-24 扩展后的 `GitGraphGeometryUITests` 20/20 通过（`/tmp/bailey-p3t4-graph-two-classes-complete.log`），含复杂菜单、阴影、字体、颜色和窄宽实拖。与 `GitGraphUITests` 合计 45 项首次 42 通过/3 失败：24 并行 Lane 的 150pt 面板标题溢出。沿 `GitPanel.changeList → RecentCommitsView.commitRow → TreeRowSurface` 定位到 VStack 的固有宽度未受可视视口约束，改为 GeometryReader 读取真实行宽并约束内部内容；原三项分别在 `/tmp/bailey-p3t4-dense-single-geometry.log` 和 `/tmp/bailey-p3t4-targeted-regression-final.log` 真实 App 转绿。最终受影响十项定点 **10/10、0 跳过、exit 0**（含两个原失败案例、明暗、9/18pt、键盘、长标题、十二 Worktree、特殊图标与原始 Git 字节）；另 `/tmp/bailey-p3t4-33ref-150pt.log` 验证真实最窄面板下 33 个 Remote 全部原生菜单可达，**1/1、exit 0**。原 45 项没有在最终宽度修复后机械全量重复运行，未受影响项目采用修复前绿色 E2E 证据。
 - 发现并排除的测试误判：XCUITest `MenuButton.title` 不等于 `label`；同名 Dev 项目在菜单栏存在隐藏零尺寸项，必须选择真正可见的 Worktree 子菜单；标题截图必须比较原始像素并控制 hover；文件名和总路径遵循 APFS 长度限制。以上未修改 Bailey 产品行为。
-- **尚待核销**：长 Branch 双色×9/18pt、历史/未提交 Header 的双色×Tree/List 已由新增 20 条真实 GUI 覆盖；密集车道的双色×9/18pt、历史 Diff 暗色选中态、工作树菜单作用域和历史提交第二次右键仍需新修正后的 GUI 复测，另需逐条核销所有旧断言和删除旧原生宿主。P3-T4 保持 `in_progress`，20 条的成功不能抵消该 Suite 最终失败。旧组件测试直接注入120pt、1.6/2倍字号；真实产品分隔条最低150pt、面板字号9–18pt，不制造用户不可达配置。237条合成车道对应极端纯布局160组；真实24路并行分支在双色/字号/宽窄中验证饱和后的实际可达布局，两种证据不混称。
+- **方法级核销**：原 48 条按下列清单逐项保留断言归属，先前 11 条迁入纯 Unit；本次删掉原文件中剩余的 37 条 `NSWindow/NSHostingView` 宿主 GUI 测试及其私有辅助代码。已通过的真实 App 覆盖长 Branch、双色×9/18pt、Tree/List、24 Lane 密集图、历史 Diff 选中、原生菜单及复杂 Worktree/Remote 状态。原宿主直接注入不可达的 120pt、1.6/2 倍字号；实际产品分隔条最低 150pt、字号 9–18pt，算法极端 160 组由纯单元测试维护；未冒称旧内部 callback 发生先后能跨进程直接观察。剩余 macOS 15.6 实机、物理触控板及额外显示设备须在各自具备条件时补验，不影响已验证本机目标。
 
-**[RecentCommitsViewTests.swift](../../../BaileyTests/NativeUI/Git/RecentCommitsViewTests.swift)：48 条** — Git Graph 拓扑、标签、键盘与绘制。初判：UI+逻辑，执行前核对每项真实断言。
+**原 `BaileyTests/NativeUI/Git/RecentCommitsViewTests.swift`：48 条（现已删除）** — 图谱拓扑、标签、键盘与绘制，原来属于 UI+逻辑混合。11 条转纯 Unit，37 条由独立 Bailey Dev 图形回归替代。
 
-- `testDisplayedHistoricalDiffHasGreySelectionIndependentOfGraphFocus`（旧 L120） · `C` → 真实历史 Diff 选中背景像素与焦点移交 `GitGraphUITests.testHistoricalDiffRowRetainsSelectionFillAfterMovingFocusToEditor`（RGB 差 0.323）；暗色外观仍待。
+- `testDisplayedHistoricalDiffHasGreySelectionIndependentOfGraphFocus`（旧 L120） · `C` → `GitGraphUITests.testHistoricalDiffRowRetainsSelectionFillAfterMovingFocusToEditor` 与 `testDarkHistoricalDiffRowRetainsSelectionFillAfterMovingFocusToEditor`：真实历史 Diff 选中背景像素、移交焦点后的选中持续，浅色差 0.323；明暗两项均通过。
 - `testExpandedHistoryAndUncommittedNodesHaveNoPersistentSelectionFill`（旧 L169） · `C` → `GitGraphGeometryUITests.testDirtyWorktreeDiamondsAlignWithTheirOwnHeadsWithoutSelectingTheirHeaders` 及 Tree/List×明暗四组：对真实 Commit/Worktree 展开前后 9 个空白像素采样，确认不产生持久选中底色，20/20 几何 GUI 合集已验。
 - `testGraphReferenceBadgeTakesKeyboardFocusFromAnotherTree`（旧 L236） · `C` → `GitGraphUITests.testGraphTreeKeyboardMovesFromChangesFocusToBothHistoricalFiles`：从 Changes 文件行点击主 Branch 标签并以方向／Space／Return 操作真实 Git Graph（1/1）。
 - `testGraphClickRecordsFocusIntentBeforeMovingNativeResponder`（旧 L260） · `C` → 真实 Changes → Branch Badge → Git Graph Space/Return 文件导航已验证最终焦点；内部 callback 时序尚未从真实 App 直接证明。
@@ -331,7 +331,7 @@
 - `testNodeHoverTargetRetainsSingleClickAndCommitContextMenu`（旧 L845） · `C` → `GitGraphUITests.testGraphBadgeTitleNodeAndMetadataToggleTheSameRealCommit` 与 `testChineseGraphNodeAndReferenceMenusRetainTheirExactCopyTargets`：真实节点 hover/rightClick 可打开提交专属原生菜单，左右单击各自切换而不误触菜单；中文 E2E 当前 batch 已通过，英文此前 19/19 合集通过。
 - `testLongCommitMessageCanScrollHorizontallyInNarrowSidebar`（旧 L877） · `C` → `testLongChineseGraphTitleScrollsButShortTitleAndGraphRailsStayFixed`；长中文标题滚动但节点 X 不变。
 - `testGraphGutterLeavesRoomForCommitContentAtExtremeLaneCounts`（旧 L890） · `B` → `CommitGraphLayoutTests.testGraphGutterLeavesRoomForCommitContentAtExtremeLaneCounts`，5 宽×4 字号×8 车道=160 组全部原样迁移，29/29、exit 0。
-- `testDenseRealNativeGraphRetainsVisibleTitleScrollerInBothThemes`（旧 L917） · `C` → 24 真实并行 Lane 可见标题 `testDenseRealGraphKeepsHistoryAndNodeVisibleAcrossMoreThanTwelveLanes`；双主题/字号待。
+- `testDenseRealNativeGraphRetainsVisibleTitleScrollerInBothThemes`（旧 L917） · `C` → `GitGraphUITests` 24 真实并行 Lane＋明暗×9/18pt 窄宽组合全部实测，初次发现 150pt 下标题越界，现用真实行宽约束修复；原失败 3 项重新定点验证通过（深色18pt独立及浅色18pt/普通字号在10项合集），明暗9pt也在10项合集通过。
 - `testManyParallelBranchesDoNotScrollWholeGraphSideways`（旧 L954） · `C` → `GitGraphUITests.testDenseRealGraphKeepsHistoryAndNodeVisibleAcrossMoreThanTwelveLanes` 构造 24 条真实独立提交，横向滚动后 Gutter 节点 X 不移位、25 个 Ref 未丢（1/1）；视觉布局极端范围另归 Unit 的宽度／车道验证。
 - `testShortCommitMessagesDoNotBounceHorizontally`（旧 L977） · `C` → `testLongChineseGraphTitleScrollsButShortTitleAndGraphRailsStayFixed`；短标题稳定原始像素。
 - `testExpandedHistoryKeepsLongFolderPathsScrollable`（旧 L999） · `C` → `testDeepChineseHistoricalFolderScrollsInsideRowWithoutMovingGraph`；六级合法长中文目录滚动且图谱不动。
@@ -340,9 +340,9 @@
 - `testMergedHistoryOpensItsRealFileAfterExpansion`（旧 L1102） · `C` → `testRealMergeShowsBothParentHistoriesAndTheirOwnFileDiffs`；真实双父 Merge 及两父各自历史文件可打开。
 - `testCommitTitleExpandsFilesInWideAndNarrowPanels`（旧 L1160） · `C` → `GitGraphGeometryUITests` 窄宽及 9/18pt 真实窗口验证提交标题可见、整行点击/文件展开及宽度变化后仍可用；GUI 已验。
 - `testNativeContextMenuAtDirectReferencesContainsOnlyTheSelectedObjectActions`（旧 L1216） · `C` → `GitGraphUITests.testGraphBadgeTitleNodeAndMetadataToggleTheSameRealCommit`（Branch）、`testHistoricalTagBadgeTogglesItsCommitAndKeepsOnlyTagActions`（Tag）、`testSymbolicRemoteAliasCannotOfferDestructiveBranchActions`（Remote/符号 alias）；33 Remote 及其目标复制由 Geometry 真实验证，明暗 9/18pt×150–420pt 主分支右键亦全部通过；中文菜单定点当前 batch 通过。
-- `testDetachedHeadBadgeExpandsCommitAndKeepsCopyHashInMenu`（旧 L1262） · `C` → 真实 Detached HEAD/Stash 节点与引用见 `testDetachedHeadAndRealStashKeepSeparateNativeGraphActions`；Detached 直接菜单 Copy Hash 仍待。
+- `testDetachedHeadBadgeExpandsCommitAndKeepsCopyHashInMenu`（旧 L1262） · `C` → `GitGraphGeometryUITests` 明暗双色特殊节点测试真实点击 Detached HEAD 展开/折叠、原生菜单复制完整 OID，`testDetachedHeadAndRealStashKeepSeparateNativeGraphActions` 验证不显示危险提交动作；新增复制断言定点 2/2 通过。
 - `testSymbolicRemoteAliasOnlyCopiesFromMenuAndTogglesCommit`（旧 L1292） · `C` → `testSymbolicRemoteAliasCannotOfferDestructiveBranchActions`，真实符号引用复制且没有危险项，普通远端分支仍可操作。
-- `testDirtyWorktreeDoesNotRepeatLongBranchBadgeInNarrowSidebar`（旧 L1324） · `C` → 真实脏关联 Worktree 独立节点已验 `testDirtyLinkedWorktreeUsesItsOwnGraphNodeAndSafeNativeMenu`；超长 Branch＋窄宽组合待。
+- `testDirtyWorktreeDoesNotRepeatLongBranchBadgeInNarrowSidebar`（旧 L1324） · `C` → `GitGraphUITests.testDirtyLinkedWorktreeUsesItsOwnGraphNodeAndSafeNativeMenu` 实际构造超长 Unicode Branch、脏关联 Worktree，拉至真实 150pt，验证节点可见/右键专属操作且不重复 Branch 动作，最终文件字节和 HEAD 不变；修复后的10项合集验证通过。
 - `testWorktreeDisplayPathsStayUniqueWithSameCheckoutDirectoryNames`（旧 L1370） · `B` → `GitGraphWorktreePresentationTests`，同名目录最短唯一后缀与 Unicode 名称，3/3。
 - `testWorktreeConflictStatusAlwaysUsesUInTreeAndList`（旧 L1389） · `B` → `GitGraphWorktreePresentationTests`，冲突恒为 U，正常暂存／未暂存各保留原状态字母，3/3。
 - `testDenseWorktreeGraphKeepsCommitTitlesReadableAcrossThemes`（旧 L1406） · `C` → `GitGraphGeometryUITests.testMaximumPanelFontWithTwelveSharedWorktreesRetainsMenusAndFullRowHitArea`（12 个真实 Worktree，最窄 150pt、18pt 标题可见）、明暗字号矩阵及 `GitGraphUITests.testCleanSharedHEADWorktreesKeepDistinctThreeLevelNativeMenus`（同 SHA 的精确三级菜单）；相关 Geometry GUI 20/20 已通过。
@@ -351,7 +351,7 @@
 - `testLocalBranchTakesPriorityOverRemoteDefaultAliasWithoutLosingReferences`（旧 L1598） · `B` → `GitGraphReferenceGroupTests`，本地／远端别名排序、HEAD 及被检出 Worktree 优先且不丢 Ref，3/3。
 - `testUnassociatedWorktreeLabelChineseTranslationPreservesDirectoryName`（旧 L1624） · `B` → `GitGraphWorktreePresentationTests`，真实 zh-Hans 资源串保留 Worktree 路径，3/3。
 - `testRealWorktreeHistoryRendersNamedLabelsAndPreservesSharedHeadActions`（旧 L1631） · `C` → `testCleanSharedHEADWorktreesKeepDistinctThreeLevelNativeMenus`；同名两路径正确区分、三级菜单可达、未产生 Git 写入。
-- `testWorktreePrimaryLabelsReplaceAliasAndIconOnlyCombinations`（旧 L1701） · `C` → 路径显示纯 Unit＋`testCleanSharedHEADWorktreesKeepDistinctThreeLevelNativeMenus`；复杂 Alias/Icon 状态待。
+- `testWorktreePrimaryLabelsReplaceAliasAndIconOnlyCombinations`（旧 L1701） · `C` → `GitGraphWorktreePresentationTests` 路径/唯一显示纯计算 + `GitGraphGeometryUITests` 明暗构造真实 `origin/HEAD` 符号引用、Detached 主 Worktree、无 Ref Worktree 和 Tag/Stash，多项主标签分别命中真实 HEAD；`GitGraphUITests.testCleanSharedHEADWorktreesKeepDistinctThreeLevelNativeMenus` 验证同 SHA 关联标签无重复，UI 已通过。
 - `testDetachedAndUnreferencedWorktreesRetainNativeActionsWithoutDuplicatePills`（旧 L1772） · `C` → `GitGraphGeometryUITests.testUnreferencedSharedWorktreeMenuOpensTheSelectedCheckoutAndActualFile`：无 Ref 共享 HEAD 的两条同名 Worktree 可精准打开各自文件；`GitGraphUITests.testMainWorktreeThirdLevelMenuDisablesRemovalInNativeApp` 证明主 Worktree 不可删除，真实 GUI 已验。
 - `testCleanWorktreeBadgesAreSeparateFromUncommittedChangesInBothThemes`（旧 L1848） · `C` → `GitGraphUITests.testCleanSharedHEADWorktreesKeepDistinctThreeLevelNativeMenus`（两个干净标签）＋`GitGraphGeometryUITests` 明暗×Tree/List 实际脏节点、无持久底色与各自 HEAD 对齐；GUI 已验。
 - `testUncommittedWorktreeNodeHasSafeMenuAndNativeStageAwareFileActions`（旧 L1950） · `C` → `testOtherWorktreeStagedAndWorkingFilesPreserveDistinctDiffBaselines`：真实 MM 文件分别展现 HEAD→Index、Index→Worktree，工作区与 Index 不变。
@@ -360,24 +360,26 @@
 
 ### P4-T1 — 11 条
 
-**[AppMenuIsolationTests.swift](../../../BaileyTests/NativeUI/App/AppMenuIsolationTests.swift)：1 条** — 真正用户可见的 Open File 菜单。原有隔离宿主 ⌘Q 断言仍有后续 NativeUI 消费者，归 P4-T5。
+**2026-10-24 迁移核销：** 原 11 方法中 P1 已提前迁出 1 项，P4-T1 剩余 10 项逐行映射如下。本次删除旧 `TreeRowHitTestingTests`（7）、`DockFocusP2RegressionTests`（2）完整宿主类，以及 `AppMenuIsolationTests` 的 Open File 1 项；仍在消费的宿主 ⌘Q 保护方法保留到 P4-T5。新用户路径见 `SharedTreeUITests`（8）及 `WorkspaceDockUITests`（3），另复用旧 `WorkspaceFilesUITests` 与 `GitChangesUITests` 的真实 E2E。问题根因为默认 900pt 窗口左侧约 108pt Projects Dock 组中固定 76pt 标题拖动留白挤得项目标签 0pt：真实 ⌘W 发出时活动组为空，误关闭整个项目。拖动留白改为优先保证 80pt 标签区域、窄时自身收缩；修复后无拖动和跨组拖动的两项真实 ⌘W 路由 E2E 2/2 通过。宿主受影响 `DockWorkspaceTests,FileTreeTests,AppMenuIsolationTests` 42/42、0 skip、exit 0（`/tmp/bailey-p4t1-post-delete-model-menu.log`）。新 11 条完整合并回归进行中；本机外的 macOS 15.6／实体触控板／其它显示器不冒称已验。
 
-- `testFileMenuProvidesOpenFileKeyboardShortcut`（旧 L7） · `A`
+**[AppMenuIsolationTests.swift](../../../BaileyTests/NativeUI/App/AppMenuIsolationTests.swift)：原 2 条中的 Open File 1 条已迁移** — 真正用户可见的菜单入口已归独立 App E2E；⌘Q 隔离宿主断言保留到 P4-T5。
 
-**[TreeRowHitTestingTests.swift](../../../BaileyTests/NativeUI/Shared/TreeRowHitTestingTests.swift)：7 条** — 共享 Files／Git 行命中与滚动。初判：UI，执行前核对每项真实断言。
+- `testFileMenuProvidesOpenFileKeyboardShortcut`（旧 L7） · `A` → `SharedTreeUITests.testRealOpenFileMenuHasSingleItemAndCommandOUsesNativePicker`：真实 Bailey Dev File 菜单恰有一个 Open File… 项；⌘O 打开系统选择器并将实际文件读入标签、磁盘原字节不变；单项 E2E 1/1 通过。旧宿主方法已删，保留其 ⌘Q 安全断言。
 
-- `testSelectionFillAndKeyboardOutlineRenderIndependently`（旧 L24） · `A`
-- `testTreeFileAndFolderNamesOpenNativeContextMenuWithoutPrimaryAction`（旧 L74） · `A`
-- `testShortNamesDoNotBounceInFilesFoldersAndGitChanges`（旧 L234） · `A`
-- `testLongNamesScrollWithoutMovingGitActions`（旧 L255） · `A`
-- `testSharedLabelStopsBouncingAfterPanelWidens`（旧 L286） · `A`
-- `testSharedFileRowSeparatesImmediateBrowseFromDoubleClickActivation`（旧 L322） · `A`
-- `testFilesAndGitRowsOwnTheirFullHitArea`（旧 L349） · `A`
+**原 `BaileyTests/NativeUI/Shared/TreeRowHitTestingTests.swift`：7 条（已删除）** — 共享 Files／Git 行命中、颜色与滚动；由 `SharedTreeUITests` 的真实 Dev App 操作替代。
 
-**[DockFocusP2RegressionTests.swift](../../../BaileyTests/WorkspaceUI/Windows/DockFocusP2RegressionTests.swift)：3 条** — Dock 点击／拖放、命令面板交接。初判：UI，执行前核对每项真实断言。
+- `testSelectionFillAndKeyboardOutlineRenderIndependently`（旧 L24） · `A` → `SharedTreeUITests.testLightFileSelectionFillRemainsAfterCommandPaletteTakesFocus` 与 `testDarkFileSelectionFillRemainsAfterCommandPaletteTakesFocus`：浅／深同态选中和未选中背景像素差异、键盘 AX `.isSelected` 在 Palette 接管时撤销、取消后 ↓ 和 Space 正确打开目标且原文件字节不变；2/2、exit 0（`/tmp/bailey-p4t1-ax-focus-trait.log`）。
+- `testTreeFileAndFolderNamesOpenNativeContextMenuWithoutPrimaryAction`（旧 L74） · `A` → `SharedTreeUITests.testFileAndFolderContextMenusDoNotBrowseOrOpen`：真实 Files 目录／文件右键打开系统菜单，退出菜单前后没有折叠、预览或误写 index/HEAD，0 新标签；1/1、exit 0。
+- `testShortNamesDoNotBounceInFilesFoldersAndGitChanges`（旧 L234） · `A` → `SharedTreeUITests.testSharedTreeLongLabelsScrollButShortLabelsRemainStableAcrossRealDockResize`（短 Files 文件）与 `testGitFolderShortNameDoesNotBounceAndInlineStageKeepsTheExactDirectory`（Git Changes 短目录、18pt、右侧独立 Stage、实际 index 局部变化）及原 `GitChangesUITests` 的短文件和目录行验证；真实滚轮输入下截图像素不回弹，1/1+1/1、exit 0。
+- `testLongNamesScrollWithoutMovingGitActions`（旧 L255） · `A` → `SharedTreeUITests.testLongGitChangeScrollDoesNotMoveItsRealStageButton`：真实 18pt 超长 Git Changes 文件名横滚但行和 Stage X 坐标不移动，点击 Stage 仅改变选定文件的 index、未错误打开 Tab；1/1、exit 0；Files 长标题见下项。
+- `testSharedLabelStopsBouncingAfterPanelWidens`（旧 L286） · `A` → `SharedTreeUITests.testSharedTreeLongLabelsScrollButShortLabelsRemainStableAcrossRealDockResize`：真实 Files 面板先窄后拖动原生分隔条至 560pt，长标题不再横滚，短标题始终无横滚且没有重复标签；1/1、exit 0。
+- `testSharedFileRowSeparatesImmediateBrowseFromDoubleClickActivation`（旧 L322） · `A` → `SharedTreeUITests.testSharedTreeHitAreasOpenExactFileWithoutDuplicateTabs`：完整 App 三个水平行内位置单击浏览，同一路径双击确切打开原文且只保留一份文件标签；1/1、exit 0。
+- `testFilesAndGitRowsOwnTheirFullHitArea`（旧 L349） · `A` → `SharedTreeUITests` 文件／目录行三种真实坐标、18pt Git 文件／目录及右侧 Stage 操作（分别通过）+ `GitChangesUITests.testFolderInlineStageAndUnstageAreScopedToThatDirectory` 的原生行尾操作，仅影响所选文件和目录的 Git index；不再用合成 NSWindow.sendEvent 冒充 E2E。
 
-- `testClickingEmptyToolPaneReleasesHostingRootResponder`（旧 L22） · `C`
-- `testDragReleasedOverAnotherDockGroupDoesNotActivateIt`（旧 L78） · `C`
+**原 `BaileyTests/WorkspaceUI/Windows/DockFocusP2RegressionTests.swift`：3 条（其中 1 条此前 P1 已迁移，本任务删剩余 2 条后删除文件）** — Dock 点击、拖放、命令面板交接均归真实 App。
+
+- `testClickingEmptyToolPaneReleasesHostingRootResponder`（旧 L22） · `C` → `WorkspaceDockUITests.testClickingEmptyFilesPaneReleasesOldNativeEditorKeyboard`：真实编辑器先获键盘，点击 Files 工具空白，再输入字符不修改旧编辑器内容及磁盘字节；单项 1/1 通过。
+- `testDragReleasedOverAnotherDockGroupDoesNotActivateIt`（旧 L78） · `C` → `WorkspaceDockUITests.testCrossGroupDragReleaseCannotSelectDestinationButRealClickCan` 与 `testClosingExplicitlyActivatedProjectsKeepsFilesWithoutDragging`：真实拖动、⌘W 只关闭原 Projects，明确单击 Files 后 ⌘W 才关闭目标；发现并从根因修复 900pt 窗口下仅约 108pt 左栏的 76pt 拖动留白压垮项目标签 AX 命中，改为按实际宽度弹性留白，修复后 2/2、exit 0（`/tmp/bailey-p4t1-dock-responsive-header-fixed.log`）。
 - `testPaletteFileManagerCommandTransfersKeyboardFocusToVisibleFileTree`（旧 L128） · `C` · **已核销**：根因为伪前台 NSWindow；以 `WorkspaceFilesUITests.testPaletteFileManagerCommandRestoresKeyboardFocusFromEditor` 的真实 E2E 操作、磁盘原文与标签数验证（`9177817`），旧宿主方法同提交删除。
 
 ### P4-T2 — 19 条
