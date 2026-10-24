@@ -70,6 +70,9 @@ final class GitBranchDialog {
             }
             alert.addButton(withTitle: String(localized: "Yes, Delete", table: "Git"))
         case .push(let remotes, let preferred):
+            if remotes.isEmpty {
+                alert.informativeText = String(localized: "No Git remote is configured", table: "Git")
+            }
             setUpstream.state = .on
             stack.addArrangedSubview(setUpstream)
             stack.addArrangedSubview(NSTextField(labelWithString: String(localized: "Push Mode", table: "Git")))

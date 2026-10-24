@@ -134,6 +134,9 @@ final class GitTagDialog: NSObject {
             alert.addButton(withTitle: String(localized: "Yes, Delete", table: "Git"))
 
         case .push(let remotes, let preferred):
+            if remotes.isEmpty {
+                alert.informativeText = String(localized: "No Git remote is configured", table: "Git")
+            }
             pushRemotes = remotes
             if remotes.count > 1 {
                 stack.addArrangedSubview(NSTextField(labelWithString:

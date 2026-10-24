@@ -65,7 +65,7 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 | 系统 Add Folder、Files 预览／打开、焦点恢复、文件去重、编辑保存到磁盘 | `WorkspaceFilesUITests`、`SharedTreeUITests` | `FileTreeTests`、`FileTabPersistenceTests`、`NativeFileTabTests` |
 | 大文件远距导航、文本替换、键盘撤销／重做、真实保存 | `EditorNavigationUITests` | `NativeEditorLayoutTests`、`NativeEditorCompositionTests`、`FileTabPersistenceTests` |
 | Swift／Markdown／TSX／HTML／CSS 与纯文本实际着色像素差异、原文未污染 | `EditorHighlightingUITests`（本机 Bailey Dev 已实测） | `NativeSyntaxHighlightingTests`、`HighlightQueryCacheTests` |
-| Git Changes、Git Graph、Diff、键盘、暂存／忽略、原生确认及真实保存 | `WorkspaceGitUITests`、`GitChangesUITests`、`GitIgnoreEditorUITests`、`GitUncommittedUITests`、`GitDialogUITests`、`GitGraphUITests`、`GitGraphGeometryUITests`（真实 Git／index／磁盘、原生图谱／菜单／Branch／Tag Sheet） | `GitStatusModelTests`、`GitUncommittedActionTests`、`GitIgnoreIntegrationTests`、`NativeDiffTabTests` |
+| Git Changes、Git Graph、Diff、键盘、暂存／忽略、原生确认及真实保存 | `WorkspaceGitUITests`、`GitChangesUITests`、`GitIgnoreEditorUITests`、`GitUncommittedUITests`、`GitDialogUITests`、`GitGraphUITests`、`GitGraphGeometryUITests`（真实 Git／index／磁盘、原生图谱／菜单／Branch／Tag Sheet） | `GitStatusModelTests`、`GitNativeDialogTests`、`GitRemoteBranchActionTests`、`GitUncommittedActionTests`、`GitIgnoreIntegrationTests`、`NativeDiffTabTests` |
 | Git 历史 revision 只读、历史文件菜单、危险重置的取消／确认与工作区／index／HEAD 字节 | `GitHistoryUITests`（真实 Git Graph；同路径 Changes/History 行按独立 AX 标识区分） | `NativeGitHistoryFileTests`、`NativeDiffTabTests`、`GitExecutionTests`、`GitStatusModelTests` |
 | 系统文件投递、双窗归属、原生 Sheet、脏文件关闭和重启恢复 | `WorkspaceWindowsUITests` | `FinderDeliveryIntegrationTests`、`WindowCloseIntegrationTests`、`WindowOwnershipIntegrationTests`、`SessionStoreTests`、`WorkspaceIdentityTests`（队列、保存失败、状态快照与身份） |
 | 终端 Shell、浏览器表单、Finder→Ghostty/WebKit 原生文件拖放、设置重启、正常退出与编辑器反复关闭 | `WorkspaceRetentionUITests` | `NativePaneRetentionIntegrationTests`、`AppSettingsTests`（原生身份、对象释放、异常与配置边界） |
@@ -132,7 +132,7 @@ Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 仍指向正式
 
 真实 SSH 只使用专用且获准的测试 master；不借用用户连接或结束其后台任务。真实 Windows SSH 回归必须**明确指定获授权的测试主机**。`BAILEY_P4_TEST_SSH_HOST` 是已有的共用参数名，P4 与后续 Git 外部刷新测试都使用它；未提供时专用用例按条件跳过，不能视为真实 SSH 验收。
 
-`GitDialogUITests` 从完整 Bailey Dev 的 Git Graph 验证原生 Sheet、取消／确认、跨窗归属、过期 Ref 与受控 bare remote 的最终结果。
+`GitNativeDialogTests` 直接检查生产 NSAlert 及选项联动；`GitRemoteBranchActionTests` 在真实 Git 仓库检验旧 Fetch Ref 的拒写和重新确认。`GitDialogUITests` 只保留完整 Bailey Dev 的 Git Graph→菜单→原生 Sheet→真实操作、跨窗归属和交互式 Rebase 等不可替代的用户行为。
 交互式 Rebase 用系统 `/bin/sh -c` 内联编辑器验证真实 PTY 与提交重写，避免跨进程执行 UI Runner 沙盒内的脚本。
 
 `GitInteractiveRebaseIntegrationTests` 检查应用服务归属、本地真实 PTY，以及固定与自动跟随 SSH 项目的独立握手和真实 Rebase；其窗口只用于满足 Ghostty 启动条件，真正 Git Graph→Sheet→终端输入另由 `GitDialogUITests` 检查。`GitWorkspaceSSHTests` 检查专属远端临时仓库的 Push/Delete、ZIP 二进制内容、历史文件 index/工作区复位、Stash、Clean 和普通 FileTab Ignore；`GitRemoteRefreshIntegrationTests` 用受控慢详情和获准 Windows SSH 仓库验证 `GitStatusModel` 的五秒轮询、取消后不补查及外部 Git 结果。面板挂载与用户入口由独立 Dev App 的 `GitChangesUITests`、`GitGraphGeometryUITests` 验证；真实 SSH 的完整 GUI 隐藏／恢复组合未在此组 E2E 中执行，不以模型测试替代。`SSHGitRecoveryLiveTests` 验证专属 Windows 临时仓库在测试后端失联期间保留 Git 快照、拒绝写操作并于恢复后重新允许写操作。这些集成测试不冒充完整独立 App 的菜单 E2E。当前已获授权的 `windows` 主机完整执行命令是：

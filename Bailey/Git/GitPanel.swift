@@ -906,10 +906,8 @@ struct GitPanel: View {
             Task { @MainActor in
                 let preferred = await model.preferredPushRemote(for: name)
                 guard isCurrent() else { return }
-                let detail = model.remotes.isEmpty
-                    ? String(localized: "No Git remote is configured", table: "Git") : name
                 let dialog = GitBranchDialog(kind: .push(remotes: model.remotes, preferred: preferred),
-                    title: String(localized: "Push Branch…", table: "Git"), detail: detail)
+                    title: String(localized: "Push Branch…", table: "Git"), detail: name)
                 dialog.alert.beginSheetModal(for: window) { response in
                     guard response == .alertFirstButtonReturn, isCurrent() else { return }
                     performOperation(.branchMenu) {
@@ -1215,10 +1213,8 @@ struct GitPanel: View {
             Task { @MainActor in
                 let preferred = await model.preferredPushRemote(for: nil)
                 guard isCurrent() else { return }
-                let detail = model.remotes.isEmpty
-                    ? String(localized: "No Git remote is configured", table: "Git") : name
                 let dialog = GitTagDialog(kind: .push(remotes: model.remotes, preferred: preferred),
-                    title: String(localized: "Push Tag…", table: "Git"), detail: detail)
+                    title: String(localized: "Push Tag…", table: "Git"), detail: name)
                 dialog.alert.beginSheetModal(for: window) { answer in
                     guard answer == .alertFirstButtonReturn, isCurrent() else { return }
                     presentTagPushWarning(name: name, commitOID: commit.hash, oid: oid,
