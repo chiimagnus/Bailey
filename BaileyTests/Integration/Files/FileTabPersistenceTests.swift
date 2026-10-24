@@ -1867,19 +1867,24 @@ final class NativeFileTabTests: XCTestCase {
         defer { manager.windowClosed() }
         manager.addLocalFolders([root])
         let project = try XCTUnwrap(manager.selectedProject)
+        func panel(for tab: PaneTab) -> some View {
+            PanelContentView(tab: tab, isFocused: false,
+                             onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in })
+                .id(tab.id)
+        }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1080, height: 700),
             styleMask: [.titled], backing: .buffered, defer: false
         )
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        let host = NSHostingView(rootView: ContentView(manager: manager))
+        // The App's file selection model stays real; the host only mounts the
+        // native pane under test, not an entire user-facing workspace.
+        manager.openFile(aPath.path)
+        let host = NSHostingView(rootView: panel(for: try XCTUnwrap(project.selectedTab)))
         window.contentView = host
         window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
-
-        // Same entry point used by a file row in the real Files panel.
-        manager.openFile(aPath.path)
         let a = try XCTUnwrap(project.tabs.compactMap {
             if case .file(let file) = $0.content, file.path == aPath.path { return file }
             return nil
@@ -1893,6 +1898,7 @@ final class NativeFileTabTests: XCTestCase {
         XCTAssertEqual(aEditor.text, "let fileA = \"only A\"\n")
 
         manager.openFile(bPath.path)
+        host.rootView = panel(for: try XCTUnwrap(project.selectedTab))
         let b = try XCTUnwrap(project.tabs.compactMap {
             if case .file(let file) = $0.content, file.path == bPath.path { return file }
             return nil
@@ -1907,6 +1913,7 @@ final class NativeFileTabTests: XCTestCase {
         XCTAssertEqual(bEditor.text, "let fileB = \"only B\"\n")
 
         manager.openFile(aPath.path)
+        host.rootView = panel(for: try XCTUnwrap(project.selectedTab))
         try await waitForFileTabState {
             host.layoutSubtreeIfNeeded()
             return self.mountedEditor(in: host) === aEditor
@@ -1920,6 +1927,7 @@ final class NativeFileTabTests: XCTestCase {
         try await waitForFileTabState { a.isDirty }
         XCTAssertEqual(b.text, "let fileB = \"only B\"\n")
         manager.openFile(bPath.path)
+        host.rootView = panel(for: try XCTUnwrap(project.selectedTab))
         try await waitForFileTabState {
             host.layoutSubtreeIfNeeded()
             return self.mountedEditor(in: host) === bEditor && !a.isDirty
@@ -1932,6 +1940,7 @@ final class NativeFileTabTests: XCTestCase {
         bEditor.insertText("// edited B\n", replacementRange: NSRange(location: 0, length: 0))
         try await waitForFileTabState { b.isDirty }
         manager.openFile(aPath.path)
+        host.rootView = panel(for: try XCTUnwrap(project.selectedTab))
         try await waitForFileTabState {
             host.layoutSubtreeIfNeeded()
             return self.mountedEditor(in: host) === aEditor && !b.isDirty
