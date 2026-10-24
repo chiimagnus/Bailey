@@ -25,6 +25,19 @@
 
 ## 发现项
 
+## 发现 F-06
+
+- 任务：`P4-T5`
+- 严重级别：`High`
+- 状态：`Open`
+- 位置：`BaileyTests/Integration/Workspace/NativePaneRetentionIntegrationTests.swift:877-885`
+- 摘要：`全量宿主549项中五编辑器资源释放用例连续五轮弱引用残留（每轮3/5）`
+- 风险：`仅局部20/20不能证明复杂真实负载后旧原生文本视图和文档零持有；P4阶段Gate原先Go存在漏验`
+- 预期修复：`核对旧视图的实际保留者和文档／SyntaxCoordinator释放路径，在真实所有权点消除泄漏或证明纯系统暂存后修正不成立的测试前提，不通过延迟或弱化断言掩盖`
+- 验证：`make test:NativePaneRetentionIntegrationTests; make test SIGNING=adhoc; representative combination; release allocations`
+- 后续复核：`/tmp/bailey-p5-host-adhoc-retain-diag.log` 与 `/tmp/bailey-p5-host-adhoc-repeat3.log` 均为完整宿主 549 项、8 跳过、0 失败、退出码 0；后者五轮均释放 5/5。一次失败仍未解释，不能仅凭重复通过关闭此项。
+- 解决证据：尚未查明失效根因，待最终确认后回填。
+
 ## 发现 F-05
 
 - 任务：`P4-T5`
@@ -108,13 +121,13 @@
 
 ## Gate（是否允许进入下一阶段）
 
-- 结论：`Go`（**仅 P4 迁移分层及当前可执行环境**，并非全部平台／最终发布 Go）
-- 理由：85 条旧保障已建立当前有效目标，原生最小宿主、两种真实 Finder 拖放、退出、资源及窗口验证已落地，五项有证据的发现均已解决；剩余实机与 CI 约束明确交由 P5 最终验收。
+- 结论：`No-Go`（P5 全量回归发现新阻塞，撤销此前局部 Go）
+- 理由：85 条旧保障与 7/7 GUI 已通过，但完整宿主回归曾在五编辑器释放用例发生 10 条断言失败；后续两轮 549 项均通过，仍未证明失败源于 AppKit 临时持有、测试对象生存期还是产品泄漏，F-06 保持 Open。
 
 ## 最终状态与剩余风险
 
-- 当前状态：`Resolved`
-- 剩余风险：最低系统真机、物理输入、远程 SSH、跨窗混合长时压力和 PR Head CI 尚未全证实；不得以当前局部 Go 代替 P5 的严格 Go/No-Go。
+- 当前状态：`Open`（F-06 调查中）
+- 剩余风险：宿主资源释放偶发失败根因未明；此外最低系统真机、物理输入、远程 SSH、跨窗混合长时压力和 PR Head CI 尚未全证实；不得给出 P4／P5 Go。
 
 ## 审计约束
 

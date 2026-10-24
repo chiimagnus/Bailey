@@ -380,7 +380,7 @@
 
 - `testClickingEmptyToolPaneReleasesHostingRootResponder`（旧 L22） · `C` → `WorkspaceDockUITests.testDockFocusHandoffNeverSendsKeysToHiddenEditor`：真实编辑器先获键盘，点击 Files 工具空白，再输入字符不修改旧编辑器内容及磁盘字节；单项 1/1 通过。
 - `testDragReleasedOverAnotherDockGroupDoesNotActivateIt`（旧 L78） · `C` → `WorkspaceDockUITests.testCrossGroupDragReleaseCannotSelectDestinationButRealClickCan` 与 `testClosingExplicitlyActivatedProjectsKeepsFilesWithoutDragging`：真实拖动、⌘W 只关闭原 Projects，明确单击 Files 后 ⌘W 才关闭目标；发现并从根因修复 900pt 窗口下仅约 108pt 左栏的 76pt 拖动留白压垮项目标签 AX 命中，改为按实际宽度弹性留白，修复后 2/2、exit 0（`/tmp/bailey-p4t1-dock-responsive-header-fixed.log`）。
-- `testPaletteFileManagerCommandTransfersKeyboardFocusToVisibleFileTree`（旧 L128） · `C` · **已核销**：根因为伪前台 NSWindow；以 `WorkspaceFilesUITests.testPaletteFileManagerCommandRestoresKeyboardFocusFromEditor` 的真实 E2E 操作、磁盘原文与标签数验证（`9177817`），旧宿主方法同提交删除。
+- `testPaletteFileManagerCommandTransfersKeyboardFocusToVisibleFileTree`（旧 L128） · `C` → `WorkspaceFilesUITests.testPaletteFileManagerCommandRestoresKeyboardFocusFromEditor`：根因为伪前台 NSWindow；真实 E2E 核对操作、磁盘原文与标签数（`9177817`），旧宿主方法同提交删除。
 
 ### P4-T2 — 19 条
 
