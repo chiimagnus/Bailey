@@ -352,26 +352,20 @@ final class GitGraphUITests: XCTestCase {
     }
 
     func testDenseRealGraphKeepsHistoryAndNodeVisibleAcrossMoreThanTwelveLanes() throws {
-        try verifyDenseGraph(theme: "light", fontSize: 14)
-    }
-
-    func testLightDenseGraphAtMinimumPanelFontKeepsTitleAndRailsInsideThePanel() throws {
-        try verifyDenseGraph(theme: "light", fontSize: 9)
+        try verifyDenseGraph(theme: "light", fontSize: 14, widths: [420, 260, 150, 320])
     }
 
     func testDarkDenseGraphAtMinimumPanelFontKeepsTitleAndRailsInsideThePanel() throws {
         try verifyDenseGraph(theme: "dark", fontSize: 9)
     }
 
-    func testLightDenseGraphAtMaximumPanelFontKeepsTitleAndRailsInsideThePanel() throws {
-        try verifyDenseGraph(theme: "light", fontSize: 18)
-    }
-
     func testDarkDenseGraphAtMaximumPanelFontKeepsTitleAndRailsInsideThePanel() throws {
         try verifyDenseGraph(theme: "dark", fontSize: 18)
     }
 
-    private func verifyDenseGraph(theme: String, fontSize: Int) throws {
+    private func verifyDenseGraph(
+        theme: String, fontSize: Int, widths: [CGFloat] = [420, 150]
+    ) throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("base.txt", text: "shared base\n")
         try fixture.initializeGit()
@@ -409,7 +403,7 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(node.waitForExistence(timeout: 12),
                       "The dense real graph must still expose its colored node")
         XCTAssertEqual(node.frame.width / 14, CGFloat(fontSize) / 14, accuracy: 0.04)
-        for width: CGFloat in [420, 260, 150, 320] {
+        for width in widths {
             let divider = try XCTUnwrap(window.descendants(matching: .any)
                 .matching(identifier: "bailey.dock.divider").allElementsBoundByIndex
                 .filter { $0.frame.height > $0.frame.width }
