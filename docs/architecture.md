@@ -115,7 +115,8 @@ SwiftUI 负责外层布局，Ghostty 负责终端，WebKit 只负责浏览器，
 | `Bailey/UI/` | 窗口布局、面板外壳和共享交互组件 |
 | `Bailey/Shared/` | 跨功能共享表达，包括 Files/Git 共用树 |
 | `Bailey/Resources/` | 本地化、字体、图标与应用资源 |
-| `BaileyTests/` | 测试层次 → 业务功能；仍为一个 XCTest 目标 |
+| `BaileyTests/` | 按领域组织的宿主 XCTest：逻辑、真实 IO 与原生组件 |
+| `BaileyUITests/` | 独立完整 App UI Test：真实菜单、键鼠、跨窗与用户结果 |
 | `scripts/`、`shell-integration/` | 资源生成和 Shell 集成 |
 | `Vendor/` | 确实需要随仓库维护的第三方源码 |
 

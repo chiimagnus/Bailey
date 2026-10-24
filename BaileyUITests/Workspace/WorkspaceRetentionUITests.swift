@@ -44,6 +44,14 @@ final class WorkspaceRetentionUITests: XCTestCase {
                        "Restart must restore the selected theme in native Settings")
         XCTAssertTrue(try String(contentsOf: config, encoding: .utf8)
             .contains("theme = \"dark\""))
+        app.typeKey("w", modifierFlags: .command)
+        let closedSettings = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "count == 1"), object: app.windows
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [closedSettings], timeout: 10), .completed,
+                       "Command-W must close only the native Settings window")
+        XCTAssertTrue(app.buttons["bailey.emptyState.addFolder"].exists,
+                      "Closing Settings must preserve the original workspace window")
     }
 
     func testNormalQuitVetoesFailedSaveThenWritesAndRestoresSession() throws {
@@ -225,73 +233,6 @@ final class WorkspaceRetentionUITests: XCTestCase {
         app.typeKey("]", modifierFlags: [.command, .shift])
         XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: window).exists)
         XCTAssertEqual(try Data(contentsOf: file), Data("let terminalUntouched = true\n".utf8))
-    }
-
-    func testFiveRoundsOfFiveRealFileTabsRetireWithoutChangingDisk() throws {
-        let fixture = try WorkspaceUITestFixture(in: self)
-        let body = String(repeating: "let item = \"Chinese text\" // stable source\n", count: 10_000)
-        let files = try (0..<5).map { index in
-            try fixture.file("pressure/file-\(index).swift", text: body)
-        }
-        let expected = Data(body.utf8)
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(files[0].deletingLastPathComponent(), to: app)
-        // Close the narrow Projects tool group through the real user command,
-        // so the remaining Files/Git work area can expand after the initially
-        // empty center group is removed. The original layout deliberately
-        // clips offscreen tabs; testing AX clicks outside that viewport is invalid.
-        let projectsTool = WorkspaceUITestSupport.element("bailey.dock.projects", in: app)
-        XCTAssertTrue(projectsTool.waitForExistence(timeout: 12))
-        projectsTool.click()
-        app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(projectsTool.waitForNonExistence(timeout: 12),
-                      "The pressure test must use an actual wide work area")
-        XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.files", in: app).exists)
-        let window = app.windows.firstMatch
-        let windowID = window.identifier
-        XCTAssertFalse(windowID.isEmpty)
-        let owner = app.windows.matching(identifier: windowID).firstMatch
-        let runningDev = try XCTUnwrap(NSRunningApplication.runningApplications(
-            withBundleIdentifier: "chiimagnus.bailey.dev").first)
-        let bundle = try XCTUnwrap(runningDev.bundleURL)
-        XCTAssertTrue(bundle.path.contains("DerivedData-Dev/Build/Products/"),
-                      "The pressure test must target the isolated Dev build, not the installed App")
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = true
-        print("T5_APP_FILE_LIFETIME stage=baseline expectedTabs=0")
-        for round in 0..<5 {
-            NSWorkspace.shared.open(files, withApplicationAt: bundle, configuration: config) {
-                _, error in XCTAssertNil(error, "The real App must accept the five-file batch")
-            }
-            let loaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                owner.buttons.matching(identifier: "bailey.tab.file").count == files.count
-            }, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [loaded], timeout: 25), .completed,
-                           "Every round must own exactly five distinct native file tabs")
-            for file in files {
-                XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: owner).exists)
-                XCTAssertEqual(try Data(contentsOf: file), expected)
-            }
-            print("T5_APP_FILE_LIFETIME round=\(round) stage=open tabs=5")
-            for file in files.reversed() {
-                let tab = WorkspaceUITestSupport.fileTab(file, in: owner)
-                XCTAssertTrue(tab.waitForExistence(timeout: 12))
-                XCTAssertTrue(tab.isHittable, "The file tab must be visible inside its actual scroll viewport")
-                tab.click()
-                app.typeKey("w", modifierFlags: .command)
-                XCTAssertTrue(tab.waitForNonExistence(timeout: 12),
-                              "Command-W must close this exact file tab before the next close")
-            }
-            let closed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                owner.buttons.matching(identifier: "bailey.tab.file").count == 0
-            }, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 15), .completed,
-                           "Closing all file tabs must retire the native documents")
-            print("T5_APP_FILE_LIFETIME round=\(round) stage=closed tabs=0")
-        }
-        XCTAssertEqual(owner.buttons.matching(identifier: "bailey.tab.file").count, 0)
-        XCTAssertEqual(app.windows.count, 1, "Five rounds must not leak native work windows")
-        for file in files { XCTAssertEqual(try Data(contentsOf: file), expected) }
     }
 
     func testFinderNativeDropIntoWebKitUploadDoesNotOpenFileTab() throws {

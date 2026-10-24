@@ -21,17 +21,6 @@ final class WorkspaceWindowsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["bailey.emptyState.addFolder"].exists)
     }
 
-    func testSettingsOpensFromTheRealApplicationShortcut() throws {
-        let app = try WorkspaceUITestSupport.launch(in: self)
-
-        app.typeKey(",", modifierFlags: .command)
-        XCTAssertTrue(app.windows.element(boundBy: 1).waitForExistence(timeout: 15),
-                      "Command-comma must open the real Settings window")
-        app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["bailey.emptyState.addFolder"].exists)
-    }
-
     func testCancelingFolderPickerDoesNotCreateAnEmptyProject() throws {
         let app = try WorkspaceUITestSupport.launch(in: self)
 

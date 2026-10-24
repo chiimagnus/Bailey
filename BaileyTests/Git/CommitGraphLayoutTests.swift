@@ -687,9 +687,9 @@ final class CommitGraphLayoutTests: XCTestCase {
     }
 
     func testGraphGutterLeavesRoomForCommitContentAtExtremeLaneCounts() {
-        let widths: [CGFloat] = [48, 120, 260, 400, 800]
-        let scales: [CGFloat] = [0.8, 1, 1.6, 2]
-        let laneCounts = [0, 1, 2, 12, 30, 100, 237, 1_000]
+        let widths: [CGFloat] = [48, 120, 150, 260, 320, 400, 420, 800]
+        let scales: [CGFloat] = [9.0 / 14, 0.8, 1, 18.0 / 14, 1.6, 2]
+        let laneCounts = [0, 1, 2, 12, 24, 30, 33, 100, 237, 1_000]
         for width in widths {
             for scale in scales {
                 for lanes in laneCounts {

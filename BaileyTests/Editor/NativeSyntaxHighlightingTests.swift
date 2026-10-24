@@ -22,6 +22,37 @@ private final class ReadInterceptingContentStorage: NSTextContentStorage {
 
 @MainActor
 final class NativeSyntaxHighlightingTests: XCTestCase {
+    func testStandaloneMarkdownTSXHTMLAndCSSPaintRealTextKitSyntaxColors() async throws {
+        let examples: [(path: String, source: String)] = [
+            ("fixture.md", "# 中文标题 👋\n```swift\nfunc greeting() -> Int { return 42 }\n```\n"),
+            ("fixture.tsx", "type Props = { title: string };\nexport function Card({ title }: Props) {\n    return <section className=\"card\">{title}</section>;\n}\n"),
+            ("fixture.html", "<div class=\"card\">中文 👋</div>\n<script>\nconst count = 42;\n</script>\n<style>.card { color: red; }</style>\n"),
+            ("fixture.css", "@media screen and (min-width: 400px) {\n    .card { color: #abcdef; font-size: 18px; }\n}\n"),
+        ]
+        XCTAssertNil(SyntaxHighlighting.configuration(for: "fixture.txt"),
+                     "Plain text must not acquire a syntax parser")
+        for example in examples {
+            let mounted = try mountedPlugin(path: example.path, source: example.source)
+            defer { mounted.window.close() }
+            try await wait {
+                mounted.editor.layoutSubtreeIfNeeded()
+                var colors: Set<NSColor> = []
+                mounted.editor.nativeLayoutManager.enumerateRenderingAttributes(
+                    from: mounted.editor.nativeContentManager.documentRange.location,
+                    reverse: false
+                ) { _, attributes, _ in
+                    if let color = attributes[.foregroundColor] as? NSColor {
+                        colors.insert(color.usingColorSpace(.sRGB) ?? color)
+                    }
+                    return true
+                }
+                return colors.count >= 2
+            }
+            XCTAssertEqual(mounted.editor.text, example.source,
+                           "Native syntax rendering must never modify original text: \(example.path)")
+        }
+    }
+
     func testEmbeddedRequestsStayWithinRequestedRangeAndMatchFreshCaptures() async throws {
         let cases = [
             ("fixture.md", "```swift\n", "// 中文 👋 e\u{301}\nlet value = 42\n", "```\n", "fixture.swift", "//"),

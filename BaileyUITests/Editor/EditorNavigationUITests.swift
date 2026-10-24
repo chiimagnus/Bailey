@@ -37,38 +37,6 @@ final class EditorNavigationUITests: XCTestCase {
                        "A large document must preserve both far-away edits and all intervening bytes")
     }
 
-    func testHundredThousandLineNavigationPreservesAllInterveningBytes() throws {
-        let fixture = try WorkspaceUITestFixture(in: self)
-        let original = "first\n" + String(repeating: "let value = 12345\n", count: 100_000)
-            + "last\n"
-        let file = try fixture.file("large.swift", text: original)
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
-        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
-        XCTAssertTrue(files.waitForExistence(timeout: 15))
-        files.click()
-        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
-        XCTAssertTrue(row.waitForExistence(timeout: 30))
-        row.doubleClick()
-        let editor = app.windows.firstMatch.textViews.firstMatch
-        XCTAssertTrue(editor.waitForExistence(timeout: 30))
-        editor.click()
-        for step in 0..<17 {
-            app.typeKey(step.isMultiple(of: 2) ? .downArrow : .upArrow,
-                        modifierFlags: .command)
-        }
-        editor.typeText("TAIL_")
-        app.typeKey(.upArrow, modifierFlags: .command)
-        editor.typeText("HEAD_")
-        app.typeKey("s", modifierFlags: .command)
-        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            (try? String(contentsOf: file, encoding: .utf8))
-                == "HEAD_" + original + "TAIL_"
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 30), .completed,
-                       "Navigating 100,000 lines must not discard distant edits or middle bytes")
-    }
-
     func testUnicodeReplacementUndoRedoAndRealSave() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let original = "before 👩🏽‍💻 after\n"

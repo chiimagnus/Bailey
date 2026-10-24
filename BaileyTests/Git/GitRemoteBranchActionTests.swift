@@ -180,6 +180,77 @@ final class GitRemoteBranchActionTests: XCTestCase {
             "Stale confirmation must not delete a remote branch")
     }
 
+    func testFetchConfirmationRejectsMovedDestinationEvenWithForceThenAcceptsFreshDecision() async throws {
+        let origin = try makeBareRemote("origin")
+        let backup = try makeBareRemote("backup")
+        let original = try git(["rev-parse", "HEAD"])
+        _ = try git(["branch", "topic"])
+        _ = try git(["push", "backup", "main:refs/heads/topic"])
+        _ = try git(["commit", "--allow-empty", "-qm", "server revision"])
+        let server = try git(["rev-parse", "HEAD"])
+        _ = try git(["push", "origin", "main:refs/heads/topic"])
+        _ = try git(["reset", "--hard", original])
+        _ = try git(["fetch", "-q", "origin"])
+        try await refresh()
+        let selected = try XCTUnwrap(model.remoteBranch(named: "origin/topic"))
+        let capturedTarget = model.actionTarget()
+
+        let file = directory.appendingPathComponent("local-changes.txt")
+        let expectedBytes = Data("local changes survive fetch\n".utf8)
+        try expectedBytes.write(to: file)
+        _ = try git(["add", "local-changes.txt"])
+        _ = try git(["commit", "-qm", "external current revision"])
+        let currentHead = try git(["rev-parse", "HEAD"])
+        let index = try git(["ls-files", "--stage"])
+        _ = try git(["update-ref", "refs/heads/topic", currentHead])
+
+        model.fetchIntoLocalBranch(
+            selected, force: true, destinationOID: original, target: capturedTarget
+        )
+        try await settle()
+        XCTAssertNotNil(model.lastError, "Stale confirmation cannot overwrite a moved local Ref")
+        XCTAssertEqual(try git(["rev-parse", "refs/heads/topic"]), currentHead)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), currentHead)
+        XCTAssertEqual(try git(["ls-files", "--stage"]), index)
+        XCTAssertEqual(try Data(contentsOf: file), expectedBytes)
+        XCTAssertEqual(try git(["rev-parse", "refs/remotes/origin/topic"]), server)
+        let untouchedBackup = GitCommandExecution.run(
+            ["--git-dir", backup.path, "rev-parse", "refs/heads/topic"],
+            in: directory.path
+        )
+        XCTAssertEqual(untouchedBackup.status, 0, untouchedBackup.stderr)
+        XCTAssertEqual(untouchedBackup.stdout.trimmingCharacters(in: .whitespacesAndNewlines), original)
+
+        try await refresh()
+        let refreshed = try XCTUnwrap(model.remoteBranch(named: "origin/topic"))
+        model.fetchIntoLocalBranch(
+            refreshed, force: true, destinationOID: currentHead, target: model.actionTarget()
+        )
+        try await settle()
+        XCTAssertNil(model.lastError, model.lastError ?? "")
+        XCTAssertEqual(try git(["rev-parse", "refs/heads/topic"]), server)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), currentHead)
+        XCTAssertEqual(try git(["ls-files", "--stage"]), index)
+        XCTAssertEqual(try Data(contentsOf: file), expectedBytes)
+
+        _ = try git(["update-ref", "refs/heads/topic", original])
+        try await refresh()
+        let fastForward = try XCTUnwrap(model.remoteBranch(named: "origin/topic"))
+        model.fetchIntoLocalBranch(
+            fastForward, force: false, destinationOID: original, target: model.actionTarget()
+        )
+        try await settle()
+        XCTAssertNil(model.lastError, model.lastError ?? "")
+        XCTAssertEqual(try git(["rev-parse", "refs/heads/topic"]), server)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), currentHead)
+        XCTAssertEqual(try git(["ls-files", "--stage"]), index)
+        XCTAssertEqual(try Data(contentsOf: file), expectedBytes)
+        XCTAssertEqual(GitCommandExecution.run(
+            ["--git-dir", origin.path, "rev-parse", "refs/heads/topic"],
+            in: directory.path
+        ).stdout.trimmingCharacters(in: .whitespacesAndNewlines), server)
+    }
+
     func testFetchRemoteIntoNoncurrentLocalBranchWithoutAndWithForce() async throws {
         _ = try makeBareRemote("origin")
         let original = try git(["rev-parse", "HEAD"])

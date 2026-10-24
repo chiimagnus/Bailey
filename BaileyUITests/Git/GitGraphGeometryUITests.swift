@@ -5,27 +5,11 @@ import XCTest
 @MainActor
 final class GitGraphGeometryUITests: XCTestCase {
     func testRealDividerResizePreservesCompactBranchMenuAndWholeCommitHitArea() throws {
-        try verifyDivider()
-    }
-
-    func testLightGraphAtMinimumPanelFontRetainsMenusAndFullRowHitArea() throws {
-        try verifyDivider(theme: "light", fontSize: 9)
+        try verifyDivider(widths: [420, 260, 150, 320, 150])
     }
 
     func testDarkGraphAtMinimumPanelFontRetainsMenusAndFullRowHitArea() throws {
         try verifyDivider(theme: "dark", fontSize: 9)
-    }
-
-    func testLightGraphAtMaximumPanelFontRetainsMenusAndFullRowHitArea() throws {
-        try verifyDivider(theme: "light", fontSize: 18)
-    }
-
-    func testDarkGraphAtMaximumPanelFontRetainsMenusAndFullRowHitArea() throws {
-        try verifyDivider(theme: "dark", fontSize: 18)
-    }
-
-    func testMaximumPanelFontWithSharedHeadWorktreesRetainsMenusAndFullRowHitArea() throws {
-        try verifyDivider(theme: "dark", fontSize: 18, additionalWorktrees: 1)
     }
 
     func testMaximumPanelFontWithTwelveSharedWorktreesRetainsMenusAndFullRowHitArea() throws {
@@ -36,21 +20,14 @@ final class GitGraphGeometryUITests: XCTestCase {
         try verifyDivider(theme: "light", fontSize: 9, longBranch: true)
     }
 
-    func testDarkLongPrimaryBranchAtMinimumPanelFontRetainsItsMenuAndCommitTitle() throws {
-        try verifyDivider(theme: "dark", fontSize: 9, longBranch: true)
-    }
-
-    func testLightLongPrimaryBranchAtMaximumPanelFontRetainsItsMenuAndCommitTitle() throws {
-        try verifyDivider(theme: "light", fontSize: 18, longBranch: true)
-    }
-
     func testDarkLongPrimaryBranchAtMaximumPanelFontRetainsItsMenuAndCommitTitle() throws {
         try verifyDivider(theme: "dark", fontSize: 18, longBranch: true, language: "zh-Hans")
     }
 
     private func verifyDivider(
         theme: String? = nil, fontSize: CGFloat = 14, additionalWorktrees: Int = 0,
-        longBranch: Bool = false, language: String? = nil
+        longBranch: Bool = false, language: String? = nil,
+        widths: [CGFloat] = [420, 150]
     ) throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("hit-area.txt", text: "unchanged history\n")
@@ -126,7 +103,7 @@ final class GitGraphGeometryUITests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
         }
-        for requestedWidth: CGFloat in [420, 260, 150, 320, 150] {
+        for requestedWidth in widths {
             let dividers = window.descendants(matching: .any)
                 .matching(identifier: "bailey.dock.divider")
             guard let divider = dividers.allElementsBoundByIndex

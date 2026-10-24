@@ -27,7 +27,7 @@
 <a id="p4-t2"></a>
 ## P4-T2 全用户入口与极端组合联动验收
 
-**源码锚点：** `Bailey/Files/{FileTreeModel,FileTreePanel}.swift`、`Bailey/Shared/Tree/{TreeDisplayModel,TreeRowStyle}.swift`、`Bailey/UI/{CommandPaletteView,Panels/ToolPanelView}.swift`、`Bailey/Workspace/{Project,TerminalManager,ProjectFileIndex,WorkspaceBackend}.swift`、`Bailey/Editor/FileViewerView.swift`、`Bailey/App/{BaileyApp,AppSettings}.swift`、`Bailey/Remote/SSHWorkspaceBackend.swift` 以及相应 `BaileyTests/Integration`、`NativeUI`、`WorkspaceUI`。
+**源码锚点：** `Bailey/Files/{FileTreeModel,FileTreePanel}.swift`、`Bailey/Shared/Tree/{TreeDisplayModel,TreeRowStyle}.swift`、`Bailey/UI/{CommandPaletteView,Panels/ToolPanelView}.swift`、`Bailey/Workspace/{Project,TerminalManager,ProjectFileIndex,WorkspaceBackend}.swift`、`Bailey/Editor/FileViewerView.swift`、`Bailey/App/{BaileyApp,AppSettings}.swift`、`Bailey/Remote/SSHWorkspaceBackend.swift` 以及相应 `BaileyTests/Files/`、`BaileyTests/Workspace/`、`BaileyUITests/Files/`、`BaileyUITests/Workspace/`。
 
 1. **复核任务证据而非补拖欠功能：** 对 P1–P3 每个任务（P2 只有包含 Finder 回归的一个任务）的实现、原子提交、Red→Green、旧代码清理、功能文档和原生测试进行交叉审查；当发现某前置任务没有完成其自身所需验收时，**回到对应任务修复**，不能把剩余代码和文档堆到 P4。不要参考已有 `audit*.md` 的结论，直接从当前源码、Git diff、测试与真实界面核实。
 2. **完整受控 App 用户流：** 本机和获授权 Windows SSH 临时仓库执行：先按 #13 P1～P3 验收窗口 key/Dock 活动组/原生 first responder、Files 单击展示后保留列表焦点及行描边，再按 #5 P1 验收 Files 多选/聚焦键盘语义，再做文件／目录多选、复制剪切粘贴／副本、删除及保存中移动、内部拖放和 Finder 外拖、#44 的 Settings → File Manager 中 Exclude 规则编辑与临时 Show Excluded、Reveal、SSH `⌘P`、外部 Git／CLI 改动。逐项覆盖 `idea.md` 的全部适用环境与正常/异常/极端输入，实际确认源／目标字节、原生缓冲/Undo、真实菜单焦点、Git Graph、Files 行和错误 Sheet；不让模拟测试替代完整 GUI。
@@ -54,7 +54,7 @@
 | TOML 缺省/`[]`/有效/非法/重复/只读配置，中文/英文/浅暗主题/窄宽/字号边界 | Exclude 只影响 Files 可见层，不改变 Git/Palette/watcher；已读缓存只重投影，首次显现子目录按需读；应用失败不修改旧生效值和用户 config 字节，Settings Reset 按钮对任意单项变化可用 |
 | CLI/Finder/Git 外部新建、删除、原子替换、大批量/高频修改；Files 显示/隐藏及窗口前后台 | #40 事件或已有触发执行**真实**数据查询；选中项丢失/保留、当前文件高亮、Reveal、已打开 Palette 索引与磁盘一致，检查无重复 watcher/扫描、请求次数、资源和失败恢复 |
 
-**核销方式：** 每个相关任务先覆盖其全部适用单项，再执行此表的复合场景；可承受的有限组合穷举，数量大时逐值覆盖并系统叠加两两及同根因多因素组合，不以“典型用例”省掉可测边界。Unit/Integration/NativeUI/WorkspaceUI 对应真实断言，**完整签名 App 的真实鼠标键盘用户流程另行验收**；使用独立构建/配置/文件与授权 SSH 临时测试 master，不操作用户正在运行的 Bailey。对 IO/渲染性能按 `docs/testing.md` 相同条件冷/热分开采样，热测至少 30 次给出中位数/p95/最差值。最后分别核对 `make test` 的 XCTest 和后置检查退出状态、`make build`、签名及真实 GUI；缺失 macOS 15.6、特定卷格式、受授权 Linux/Windows SSH 或物理外设时逐项列缺口，不能标“全通过”。
+**核销方式：** 每个相关任务先覆盖其全部适用单项，再执行此表的复合场景；可承受的有限组合穷举，数量大时逐值覆盖并系统叠加两两及同根因多因素组合，不以“典型用例”省掉可测边界。宿主／完整 App UI 测试各自验证职责内的真实断言，**完整签名 App 的真实鼠标键盘用户流程另行验收**；使用独立构建/配置/文件与授权 SSH 临时测试 master，不操作用户正在运行的 Bailey。对 IO/渲染性能按 `docs/testing.md` 相同条件冷/热分开采样，热测至少 30 次给出中位数/p95/最差值。最后分别核对 `make test` 的 XCTest 和后置检查退出状态、`make build`、签名及真实 GUI；缺失 macOS 15.6、特定卷格式、受授权 Linux/Windows SSH 或物理外设时逐项列缺口，不能标“全通过”。
 
 ---
 

@@ -33,7 +33,7 @@
 
 **前置：** P2-T1 的 SSH Files 部分为 Go，且无需任何 Server／安装。No-Go 时由计划工具更新 `todo.toml` 并写明证据，不实施生产代码，保留现行 2 秒刷新。
 
-**涉及文件：** `Bailey/Remote/{RemoteConnection,SSHHostWorkspaces,SSHWorkspaceBackend}.swift` 中已验证的命令/连接生命周期所有者；`Bailey/Workspace/Project.swift`、`Bailey/Files/FileTreeModel.swift`、`Bailey/UI/Panels/ToolPanelView.swift`、`BaileyTests/Integration/Files/SSHFileTreeLiveTests.swift`、`BaileyTests/Integration/Workspace/PanelContextTests.swift`。只能有**会话内临时进程**，不能引入 Server、远端程序安装或第二份目录树。
+**涉及文件：** `Bailey/Remote/{RemoteConnection,SSHHostWorkspaces,SSHWorkspaceBackend}.swift` 中已验证的命令/连接生命周期所有者；`Bailey/Workspace/Project.swift`、`Bailey/Files/FileTreeModel.swift`、`Bailey/UI/Panels/ToolPanelView.swift`、`BaileyTests/Files/SSHFileTreeLiveTests.swift`、`BaileyTests/Workspace/PanelContextTests.swift`。只能有**会话内临时进程**，不能引入 Server、远端程序安装或第二份目录树。
 
 1. **Red→Green：** 由独立远端 CLI 修改临时目录，没有 Bailey 终端命令完成事件；先证明旧版仅 2 秒查询发现，再证明受控临时订阅的通知经现有 `Project.syncFiles → backend.list(directories:) → FileTreeModel` **确实更新 UI 与磁盘一致**。通知只表示“需要重读”，禁止将远端发送的未经验证路径/字节直接修改本机缓存。
 2. **所有权和退路：** 当前项目／机器／连接身份拥有其临时通知命令，同一目标 Files/Git **共享一个受管理的通知通道**，多项目/多主机不可串流。只有命令确认已订阅并完成初始真实读取，才暂停该目标前台 2 秒查询；EOF、事件源不支持、溢出、失联及重新连接时立即回到原轮询并校验全部已缓存目录。普通通知合并后先沿原有 `backend.list(directories:)` 批量重读；如果仅传“脏”信号导致高频整树 IO 超过旧轮询成本，必须有真实测量支持更小范围的可信通知与目录失效，否则判该方案 No-Go，不用第二个远程 Worktree 模型补洞。

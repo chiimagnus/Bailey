@@ -266,7 +266,7 @@ final class GitDialogUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data("committed\n".utf8))
     }
 
-    func testBranchRenameAndNoRemotePushUseNativeRefMenuWithoutUnsafeChanges() throws {
+    func testBranchRenameFromNativeRefMenuPreservesGitBytes() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("rename.txt", text: "original\n")
         try fixture.initializeGit()
@@ -276,25 +276,6 @@ final class GitDialogUITests: XCTestCase {
             format: "label IN %@", ["main, Worktree", "main, 工作树"])).firstMatch
         XCTAssertTrue(badge.waitForExistence(timeout: 25),
                       "Git Graph must show a context menu for the checked-out branch")
-        badge.rightClick()
-        let push = app.menuItems.matching(NSPredicate(
-            format: "title IN %@", ["Push Branch…", "推送分支…"])).firstMatch
-        XCTAssertTrue(push.waitForExistence(timeout: 8))
-        push.click()
-        let pushSheet = app.windows.firstMatch.sheets.firstMatch
-        XCTAssertTrue(pushSheet.waitForExistence(timeout: 15))
-        let submit = pushSheet.buttons.matching(NSPredicate(
-            format: "title IN %@", ["Yes, Push", "确认推送"])).firstMatch
-        XCTAssertTrue(submit.waitForExistence(timeout: 8))
-        XCTAssertFalse(submit.isEnabled, "No configured Git remote means no possible push")
-        let cancelPush = pushSheet.buttons.matching(NSPredicate(
-            format: "title IN %@", ["Cancel", "取消"])).firstMatch
-        XCTAssertTrue(cancelPush.waitForExistence(timeout: 8))
-        cancelPush.click()
-        XCTAssertTrue(pushSheet.waitForNonExistence(timeout: 10))
-        XCTAssertEqual(try fixture.git(["remote"]), Data())
-        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
-
         badge.rightClick()
         let rename = app.menuItems.matching(NSPredicate(
             format: "title IN %@", ["Rename Branch…", "重命名分支…"])).firstMatch
@@ -323,86 +304,6 @@ final class GitDialogUITests: XCTestCase {
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
         XCTAssertEqual(try Data(contentsOf: file), Data("original\n".utf8))
         XCTAssertEqual(try fixture.git(["remote"]), Data())
-    }
-
-    func testRemoteFetchRejectsMovedLocalDestinationThenAllowsFreshForceAndFastForward() throws {
-        let fixture = try WorkspaceUITestFixture(in: self)
-        let remote = try WorkspaceUITestFixture(in: self)
-        let file = try fixture.file("fetch-race.txt", text: "base\n")
-        try fixture.initializeGit()
-        let base = try fixture.git(["rev-parse", "HEAD"])
-        try fixture.git(["branch", "side"])
-        try "server\n".write(to: file, atomically: true, encoding: .utf8)
-        try fixture.git(["-c", "user.name=BaileyUITest", "-c", "user.email=tests@example.invalid",
-                         "commit", "-qam", "server revision"])
-        let server = try fixture.git(["rev-parse", "HEAD"])
-        try "external\n".write(to: file, atomically: true, encoding: .utf8)
-        try fixture.git(["-c", "user.name=BaileyUITest", "-c", "user.email=tests@example.invalid",
-                         "commit", "-qam", "external current head"])
-        let head = try fixture.git(["rev-parse", "HEAD"])
-        try fixture.git(["init", "--bare", "-q", remote.root.path])
-        try fixture.git(["remote", "add", "origin", remote.root.path])
-        try fixture.git(["push", "origin", String(decoding: server, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines) + ":refs/heads/side"])
-        try fixture.git(["fetch", "origin"])
-        let app = try launchGit(fixture)
-        func fetchDialog() -> XCUIElement {
-            let badge = app.buttons.matching(NSPredicate(format: "label == %@", "origin/side")).firstMatch
-            XCTAssertTrue(badge.waitForExistence(timeout: 25))
-            badge.rightClick()
-            let item = app.menuItems.matching(NSPredicate(format: "title IN %@",
-                ["Fetch into Local Branch…", "获取到本地分支…"])).firstMatch
-            XCTAssertTrue(item.waitForExistence(timeout: 8))
-            item.click()
-            let sheet = app.windows.firstMatch.sheets.firstMatch
-            XCTAssertTrue(sheet.waitForExistence(timeout: 15))
-            return sheet
-        }
-        func confirmFetch(_ sheet: XCUIElement, force: Bool) {
-            let checkbox = sheet.checkBoxes.matching(NSPredicate(format: "title IN %@",
-                ["Force Fetch", "强制获取"])).firstMatch
-            XCTAssertTrue(checkbox.waitForExistence(timeout: 8))
-            XCTAssertEqual(String(describing: checkbox.value ?? ""), "0")
-            if force { checkbox.click() }
-            let button = sheet.buttons.matching(NSPredicate(format: "title IN %@",
-                ["Yes, Fetch", "是，获取"])).firstMatch
-            XCTAssertTrue(button.waitForExistence(timeout: 8))
-            button.click()
-        }
-        let stale = fetchDialog()
-        try fixture.git(["update-ref", "refs/heads/side", String(decoding: head, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)])
-        confirmFetch(stale, force: true)
-        XCTAssertTrue(stale.waitForNonExistence(timeout: 15))
-        let noMutation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            (try? fixture.git(["rev-parse", "refs/heads/side"])) != head
-        }, object: nil)
-        noMutation.isInverted = true
-        XCTAssertEqual(XCTWaiter.wait(for: [noMutation], timeout: 2), .completed,
-                       "An opened Fetch Sheet must never force-overwrite an externally changed local destination")
-        XCTAssertEqual(try fixture.git(["rev-parse", "refs/heads/side"]), head)
-        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
-        XCTAssertEqual(try Data(contentsOf: file), Data("external\n".utf8))
-
-        let fresh = fetchDialog()
-        confirmFetch(fresh, force: true)
-        let forced = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            (try? fixture.git(["rev-parse", "refs/heads/side"])) == server
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [forced], timeout: 25), .completed)
-        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
-        try fixture.git(["update-ref", "refs/heads/side", String(decoding: base, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)])
-        let fastForward = fetchDialog()
-        confirmFetch(fastForward, force: false)
-        let advanced = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            (try? fixture.git(["rev-parse", "refs/heads/side"])) == server
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [advanced], timeout: 25), .completed)
-        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
-        XCTAssertEqual(try fixture.git(["branch", "--show-current"]), Data("main\n".utf8))
-        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
-        XCTAssertEqual(try Data(contentsOf: file), Data("external\n".utf8))
     }
 
     func testLateBranchAndTagCollisionPreserveRetryInputsWithoutOverwritingRefs() throws {
@@ -1274,43 +1175,6 @@ final class GitDialogUITests: XCTestCase {
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
         XCTAssertEqual(try Data(contentsOf: file), Data("tracked\n".utf8))
-    }
-
-    func testTagPushWithoutRemoteCannotSubmitOrWriteRepository() throws {
-        let fixture = try WorkspaceUITestFixture(in: self)
-        let file = try fixture.file("tag-no-remote.txt", text: "base\n")
-        try fixture.initializeGit()
-        try fixture.git(["tag", "offline-tag"])
-        let head = try fixture.git(["rev-parse", "HEAD"])
-        let tag = try fixture.git(["rev-parse", "refs/tags/offline-tag"])
-        let app = try launchGit(fixture)
-        let badge = app.menuButtons.matching(NSPredicate(format: "title == %@", "offline-tag")).firstMatch
-        XCTAssertTrue(badge.waitForExistence(timeout: 25))
-        badge.click()
-        let option = app.menuItems.matching(NSPredicate(
-            format: "title IN %@", ["Push Tag…", "推送标签…"])).firstMatch
-        XCTAssertTrue(option.waitForExistence(timeout: 8))
-        option.click()
-        let sheet = app.windows.firstMatch.sheets.firstMatch
-        XCTAssertTrue(sheet.waitForExistence(timeout: 15))
-        let confirm = sheet.buttons.matching(NSPredicate(
-            format: "title IN %@", ["Yes, Push", "确认推送"])).firstMatch
-        XCTAssertTrue(confirm.waitForExistence(timeout: 8))
-        XCTAssertFalse(confirm.isEnabled, "Tag push must not be possible without a configured remote")
-        let noRemote = sheet.staticTexts.matching(NSPredicate(
-            format: "value CONTAINS %@ OR label CONTAINS %@",
-            "尚未配置 Git 远程仓库", "No Git remote is configured")).firstMatch
-        XCTAssertTrue(noRemote.waitForExistence(timeout: 8))
-        let cancel = sheet.buttons.matching(NSPredicate(
-            format: "title IN %@", ["Cancel", "取消"])).firstMatch
-        XCTAssertTrue(cancel.waitForExistence(timeout: 8))
-        cancel.click()
-        XCTAssertTrue(sheet.waitForNonExistence(timeout: 10))
-        XCTAssertEqual(try fixture.git(["remote"]), Data())
-        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
-        XCTAssertEqual(try fixture.git(["rev-parse", "refs/tags/offline-tag"]), tag)
-        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
-        XCTAssertEqual(try Data(contentsOf: file), Data("base\n".utf8))
     }
 
     func testTagPushUsesTagDefaultRemoteNotBranchPushRemote() throws {
