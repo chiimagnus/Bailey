@@ -33,7 +33,7 @@ DEV_OPERATION_LOCK = set -eu; mkdir -p '$(CURDIR)/build'; \
 	lock='$(CURDIR)/build/.bailey-dev-test.lock'; \
 	mkdir "$$lock" 2>/dev/null || { \
 		echo '无法取得 Bailey Dev 构建／测试锁；请等待已有操作结束。若上次操作被强制终止，先确认没有相关进程再移除 build/.bailey-dev-test.lock。' >&2; exit 2; \
-	}; trap 'rmdir "$$lock"' EXIT
+	}; trap 'rmdir "$$lock"' EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
 comma := ,
 VERSION_FLAGS = $(if $(strip $(VERSION)),MARKETING_VERSION=$(VERSION)) \
 	$(if $(strip $(BUILD_NUMBER)),CURRENT_PROJECT_VERSION=$(BUILD_NUMBER))
