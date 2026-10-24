@@ -386,25 +386,27 @@
 
 **[WorkspaceWindowIsolationTests.swift](../../../BaileyTests/WorkspaceUI/Windows/WorkspaceWindowIsolationTests.swift)：19 条** — 跨窗焦点／Finder／恢复。初判：UI+逻辑，执行前核对每项真实断言。
 
-- `testAsyncFilesTargetBecomingCurrentRestoresVisibleFileCursor`（旧 L32） · `C`
-- `testFilesCursorDoesNotActivateBehindPaletteBeforeSearchFieldFocus`（旧 L71） · `C`
-- `testCancelingCommandPaletteRestoresFilesRowKeyboardNavigation`（旧 L116） · `C`
-- `testCurrentToolTreeResponderFollowsDockGroupAfterPanelSwitch`（旧 L197） · `C`
-- `testEditorPaletteSwitchToFilesRestoresNewToolKeyboardFocus`（旧 L251） · `C`
-- `testSwitchingToFilesBehindCommandPaletteDoesNotStealItsSearchField`（旧 L315） · `C`
-- `testCancelingCommandPaletteRestoresGitTreeKeyboardNavigation`（旧 L393） · `C`
-- `testFilesActivationBeforeDirectoryListingFocusesFirstVisibleRowWhenLoaded`（旧 L452） · `C`
-- `testFilesInlineRenameAndDraftExitRestoreNativeTreeKeyboardFocus`（旧 L489） · `C`
-- `testFilesTreeClickTransfersNativeKeyboardAndArrowsMoveTheVisibleCursor`（旧 L548） · `C`
-- `testDockIntegratedFilesRowsKeepNativeFocusWhenOpeningAnotherPane`（旧 L645） · `C`
-- `testSwitchingToFileManagerSelectsVisibleCurrentFileAndTakesNativeKeyboard`（旧 L762） · `C`
-- `testFilesOpenedInItsOwnDockGroupDoNotRetainHiddenKeyboardFocus`（旧 L814） · `C`
-- `testDockGroupClickDoesNotPreemptNativeFieldFocus`（旧 L874） · `C`
-- `testNarrowTerminalFindFieldEditorBelongsOnlyToItsActualDockGroup`（旧 L911） · `C`
-- `testRestoredGroupIDsReplaceOnlyTheFocusScopesNotTheEditor`（旧 L956） · `C`
-- `testFocusAcrossAppearancesAndSizesKeepsTheNativeDocument`（旧 L994） · `C`
-- `testResponderOwnershipRejectsInactiveProjectsHiddenTabsAndParking`（旧 L1040） · `C`
-- `testDockToolsTakeNativeFocusWithoutReplacingVisibleEditors`（旧 L1100） · `C`
+- `testAsyncFilesTargetBecomingCurrentRestoresVisibleFileCursor`（旧 L32） · `C` → `FileTreeTests.testFilesPanelWaitsForCurrentTargetBeforeSelectingCurrentFile`
+- `testFilesCursorDoesNotActivateBehindPaletteBeforeSearchFieldFocus`（旧 L71） · `C` → `WorkspaceFilesUITests.testCommandPaletteRestoresFileTreeKeyboardAfterDismissal`、`FileTreeTests.testFilesPanelWaitsForCurrentTargetBeforeSelectingCurrentFile`
+- `testCancelingCommandPaletteRestoresFilesRowKeyboardNavigation`（旧 L116） · `C` → `WorkspaceFilesUITests.testCommandPaletteRestoresFileTreeKeyboardAfterDismissal`
+- `testCurrentToolTreeResponderFollowsDockGroupAfterPanelSwitch`（旧 L197） · `C` → `WorkspaceDockUITests.testDockFocusHandoffNeverSendsKeysToHiddenEditor`
+- `testEditorPaletteSwitchToFilesRestoresNewToolKeyboardFocus`（旧 L251） · `C` → `WorkspaceFilesUITests.testPaletteFileManagerCommandRestoresKeyboardFocusFromEditor（中英文）`
+- `testSwitchingToFilesBehindCommandPaletteDoesNotStealItsSearchField`（旧 L315） · `C` → `WorkspaceFilesUITests.testPaletteFileManagerCommandRestoresKeyboardFocusFromEditor`、`WorkspaceWindowsUITests.testKeyboardFocusAndPaletteRestorationStayWithTheOwningWindow`
+- `testCancelingCommandPaletteRestoresGitTreeKeyboardNavigation`（旧 L393） · `C` → `GitChangesUITests.testCommandPaletteCancellationRestoresGitChangesKeyboardNavigation`
+- `testFilesActivationBeforeDirectoryListingFocusesFirstVisibleRowWhenLoaded`（旧 L452） · `C` → `FileTreeTests.testFilesPanelSelectsFirstVisibleRowAfterAsyncListingWithoutOpeningIt`
+- `testFilesInlineRenameAndDraftExitRestoreNativeTreeKeyboardFocus`（旧 L489） · `C` → `WorkspaceFilesUITests.testFileTreeRenameAndDraftCancellationRestoreKeyboardNavigation`
+- `testFilesTreeClickTransfersNativeKeyboardAndArrowsMoveTheVisibleCursor`（旧 L548） · `C` → `WorkspaceFilesUITests.testCommandPaletteRestoresFileTreeKeyboardAfterDismissal`、`FileTreeTests.testFocusedRowNavigationTracksVisibleItemsAndResetsOnRootChange`
+- `testDockIntegratedFilesRowsKeepNativeFocusWhenOpeningAnotherPane`（旧 L645） · `C` → `WorkspaceDockUITests.testDockFocusHandoffNeverSendsKeysToHiddenEditor`
+- `testSwitchingToFileManagerSelectsVisibleCurrentFileAndTakesNativeKeyboard`（旧 L762） · `C` → `WorkspaceFilesUITests.testPaletteFileManagerCommandRestoresKeyboardFocusFromEditor`
+- `testFilesOpenedInItsOwnDockGroupDoNotRetainHiddenKeyboardFocus`（旧 L814） · `C` → `DockWorkspaceTests.testBrowsingSameGroupMustNotKeepFocusOnHiddenFilesPanel`、`WorkspaceDockUITests.testDockFocusHandoffNeverSendsKeysToHiddenEditor`
+- `testDockGroupClickDoesNotPreemptNativeFieldFocus`（旧 L874） · `C` → `DockFocusIntegrationTests.testNativeFieldEditorWinsUntilDockFocusIsRequestedForEmptySpace`
+- `testNarrowTerminalFindFieldEditorBelongsOnlyToItsActualDockGroup`（旧 L911） · `C` → `DockFocusIntegrationTests.testTerminalFindFieldEditorBelongsOnlyToItsDockGroup`
+- `testRestoredGroupIDsReplaceOnlyTheFocusScopesNotTheEditor`（旧 L956） · `C` → `DockWorkspaceTests.testMoveReorderSnapshotAndRestore`、`PaneRetentionTests.testObservedDockMoveReparentsRealEditorAndPreservesUndoAndScroll`
+- `testFocusAcrossAppearancesAndSizesKeepsTheNativeDocument`（旧 L994） · `C` → `NativeEditorLayoutTests.testSourceRestoresScrollSelectionAndResizesWithoutRecreatingDocument`、`WorkspaceWindowsUITests.testKeyboardFocusAndPaletteRestorationStayWithTheOwningWindow`
+- `testResponderOwnershipRejectsInactiveProjectsHiddenTabsAndParking`（旧 L1040） · `C` → `DockFocusIntegrationTests.testOnlyActiveMountedEditorOwnsNativeResponder`、`PaneRetentionTests.testParkingDropsObsoleteHostActionsBeforeDelayedDismantle`
+- `testDockToolsTakeNativeFocusWithoutReplacingVisibleEditors`（旧 L1100） · `C` → `WorkspaceDockUITests.testDockFocusHandoffNeverSendsKeysToHiddenEditor`、`PaneRetentionTests.testObservedDockMoveReparentsRealEditorAndPreservesUndoAndScroll`
+
+P4-T2 核销：旧 19 项及其专用 `FilesPanelReadiness`／`FocusRecordingWindow` 已移除；原文件的 23 项 P4-T3/T4 测试保留。验证：`make test:WorkspaceWindowIsolationTests,DockFocusIntegrationTests,FileTreeTests` 53/53；`make test:DockFocusIntegrationTests,DockWorkspaceTests,PanelContextTests` 31/31；定点 `make test:ui` 7/7，macOS 27.2、英文与简体中文。额外 `PaneRetentionTests` 20/20、`NativeEditorLayoutTests` 28/28、`NativeFileTabTests` 16/16（后两组先前测试无失败）。宿主迁移中的焦点假失败复现时窗口 `isKeyWindow=false` 且 `NSApp.isActive=false`；修正旧测试以实际前台边界断言，完整前台键盘路径由独立 UI 回归确认。GUI 与真实输入法/触控板、最低 macOS 15.6 的环境差异不冒充已实测。
 
 ### P4-T3 — 17 条
 

@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P4-T2"
+current_task_id = "P4-T3"
 
 [[tasks]]
 id = "P1-T1"
@@ -101,15 +101,15 @@ note = "共享树/Dock独立App真实GUI11/11、宿主相关42/42通过，原10�
 [[tasks]]
 id = "P4-T2"
 title = "多窗口的实际键盘响应与焦点恢复"
-status = "in_progress"
+status = "completed"
 plan = "plan-p4.md#p4-t2"
-commit = ""
-note = "已核对原19条跨窗口焦点宿主方法与现有Files/Git/Dock E2E入口；将优先复用已有真实路径，纯状态/乱序留在低层，不按19条机械新增UI用例。尚未修改P4-T2测试或执行其GUI验收。"
+commit = "be40be8e8241d9018da112be395ddaa056000703"
+note = "旧19项已替代删除；GUI 7/7、宿主53/53、PaneRetention20/20、构建成功；前台窗口条件在真实App验证"
 
 [[tasks]]
 id = "P4-T3"
 title = "Finder／Dock 外部文件打开和批量拖放的真实归属"
-status = "pending"
+status = "in_progress"
 plan = "plan-p4.md#p4-t3"
 commit = ""
 note = ""
