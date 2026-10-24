@@ -262,7 +262,7 @@ private struct DockTreeView: View {
     }
 }
 
-private struct DockTabGroupView: View {
+struct DockTabGroupView: View {
     private let themeChanges = Theme.changes
     let group: DockGroup
     let project: Project

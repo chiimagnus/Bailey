@@ -73,6 +73,9 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         let destinationGroup = try XCTUnwrap(project.dock.group(containing: .files))
         XCTAssertTrue(project.dock.move(.files, into: sourceGroup.id))
         XCTAssertTrue(project.dock.move(.tab(pane.id), into: destinationGroup.id))
+        let tabGroup = try XCTUnwrap(project.dock.group(containing: .tab(pane.id)))
+        XCTAssertTrue(tabGroup.items.contains(.git))
+        XCTAssertTrue(tabGroup.items.contains(.tab(pane.id)))
 
         let window = NSWindow(
             contentRect: NSRect(x: -2000, y: -2000, width: 1700, height: 440),
@@ -80,9 +83,12 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         )
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        let host = NSHostingView(rootView: WorkspaceDockView(
-            manager: manager, git: GitStatusModel()
-        ))
+        // Mount the actual production group/tab strip, not the entire Dock
+        // tree or a separate test implementation of scroll behavior.
+        let host = NSHostingView(rootView: DockTabGroupView(
+            group: tabGroup, project: project, manager: manager,
+            git: GitStatusModel(), dragging: DockTabDragCoordinator()
+        ).coordinateSpace(name: "workspaceDock"))
         window.contentView = host
         window.orderFront(nil)
 
@@ -109,7 +115,7 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         XCTAssertEqual(wide.horizontalScrollElasticity, .none,
                        "Short tab strips must not bounce horizontally")
 
-        window.setContentSize(NSSize(width: 640, height: 440))
+        window.setContentSize(NSSize(width: 180, height: 440))
         try await wait {
             host.layoutSubtreeIfNeeded()
             guard let scroll = tabStrip() else { return false }
