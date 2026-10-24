@@ -131,7 +131,7 @@ final class GitChangesUITests: XCTestCase {
                        Data(" M nested/alpha.txt\n M nested/beta.txt\n".utf8))
     }
 
-    func testGitChangeKeyboardDownAndSpacePreviewTheNextFileWithoutGitWrites() throws {
+    func testCommandPaletteCancellationRestoresGitChangesKeyboardNavigation() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("alpha.txt", text: "alpha old\n")
         let second = try fixture.file("beta.txt", text: "beta old\n")
@@ -149,6 +149,12 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertTrue(firstRow.waitForExistence(timeout: 25))
         firstRow.click()
         XCTAssertTrue(window.radioGroups["bailey.diff.mode"].waitForExistence(timeout: 15))
+        app.typeKey("p", modifierFlags: .command)
+        let search = window.textFields["bailey.commandPalette.search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(search.waitForNonExistence(timeout: 5),
+                      "Escape must dismiss an empty palette before Git keyboard navigation resumes")
         app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
         app.typeKey(" ", modifierFlags: [])
         let mode = window.radioGroups["bailey.diff.mode"]

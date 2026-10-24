@@ -54,11 +54,13 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertTrue(app.windows.firstMatch.exists)
     }
 
-    func testClickingEmptyFilesPaneReleasesOldNativeEditorKeyboard() throws {
+    func testDockFocusHandoffNeverSendsKeysToHiddenEditor() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
-        let file = try fixture.file("focused.swift", text: "do not change this file\n")
+        let first = try fixture.file("project/a-first.swift", text: "first file\n")
+        let file = try fixture.file("project/b-focused.swift", text: "do not change this file\n")
+        let projectRoot = fixture.root.appendingPathComponent("project", isDirectory: true)
         let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        try WorkspaceUITestSupport.addFolder(projectRoot, to: app)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let row = WorkspaceUITestSupport.fileRow(file, in: window)
@@ -75,6 +77,15 @@ final class WorkspaceDockUITests: XCTestCase {
         app.typeKey("z", modifierFlags: [])
         XCTAssertEqual(editor.value as? String, "do not change this file\n",
                        "After clicking an empty tool pane, typing must not reach the old editor")
+
+        WorkspaceUITestSupport.element("bailey.dock.git", in: app).click()
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        app.typeKey(XCUIKeyboardKey.upArrow, modifierFlags: [])
+        app.typeKey(" ", modifierFlags: [])
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(first, in: window)
+            .waitForExistence(timeout: 15),
+            "Returning from Git to Files must restore the visible tree's keyboard navigation")
         XCTAssertEqual(try Data(contentsOf: file), Data("do not change this file\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: first), Data("first file\n".utf8))
     }
 }

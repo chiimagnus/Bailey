@@ -102,6 +102,66 @@ final class WorkspaceFilesUITests: XCTestCase {
         )
     }
 
+    func testFileTreeRenameAndDraftCancellationRestoreKeyboardNavigation() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("project/a-first.swift", text: "first original\n")
+        let second = try fixture.file("project/b-second.swift", text: "second original\n")
+        let projectRoot = fixture.root.appendingPathComponent("project", isDirectory: true)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let projectFolder = app.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", "project")).firstMatch
+        XCTAssertTrue(projectFolder.waitForExistence(timeout: 15))
+        projectFolder.click()
+        let firstRow = WorkspaceUITestSupport.fileRow(first, in: window)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 20))
+        firstRow.click()
+        firstRow.rightClick()
+        let rename = app.menuItems.matching(NSPredicate(format: "title IN %@", ["Rename", "重命名"]))
+            .firstMatch
+        XCTAssertTrue(rename.waitForExistence(timeout: 8))
+        rename.click()
+        let renameField = window.textFields["Name"]
+        XCTAssertTrue(renameField.waitForExistence(timeout: 8))
+        renameField.typeKey("a", modifierFlags: .command)
+        renameField.typeText("renamed.swift")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(renameField.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: projectRoot.appendingPathComponent("renamed.swift").path))
+
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        app.typeKey(" ", modifierFlags: [])
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(second, in: window)
+            .waitForExistence(timeout: 15),
+            "Canceling rename must return keyboard navigation to the real Files tree")
+        projectFolder.rightClick()
+        let newFile = app.menuItems.matching(NSPredicate(
+            format: "title IN %@", ["New File…", "New File...", "新建文件…"]
+        )).firstMatch
+        XCTAssertTrue(newFile.waitForExistence(timeout: 8))
+        newFile.click()
+        let draftField = window.textFields["File name"]
+        XCTAssertTrue(draftField.waitForExistence(timeout: 10),
+                      "The folder context menu must create the native inline file draft")
+        draftField.typeText("discard-me.swift")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(draftField.waitForNonExistence(timeout: 5))
+        app.typeKey(XCUIKeyboardKey.upArrow, modifierFlags: [])
+        app.typeKey(" ", modifierFlags: [])
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(first, in: window)
+            .waitForExistence(timeout: 15),
+            "Canceling a new-file draft must return keyboard navigation to the Files tree")
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: projectRoot.path)),
+                       Set(["a-first.swift", "b-second.swift"]))
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "first original\n")
+        XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "second original\n")
+    }
+
     func testPaletteFileManagerCommandRestoresKeyboardFocusFromEditor() throws {
         try verifyFileManagerPaletteFocus(language: "en", commandName: "File Manager")
     }

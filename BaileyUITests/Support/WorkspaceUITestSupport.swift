@@ -81,17 +81,23 @@ enum WorkspaceUITestSupport {
         }
     }
 
-    static func addFolder(_ url: URL, to app: XCUIApplication) throws {
-        let entry = app.windows.firstMatch.buttons["bailey.emptyState.addFolder"]
+    static func addFolder(
+        _ url: URL, to app: XCUIApplication, in window: XCUIElement? = nil
+    ) throws {
+        let owner = window ?? app.windows.firstMatch
+        let entry = owner.buttons["bailey.emptyState.addFolder"]
         XCTAssertTrue(entry.waitForExistence(timeout: 15))
         entry.click()
-        try choose(url, in: app)
+        try choose(url, in: app, window: owner)
         XCTAssertFalse(entry.waitForExistence(timeout: 1),
                        "A folder selected through the native picker must create a project")
     }
 
-    static func choose(_ url: URL, in app: XCUIApplication) throws {
-        let sheet = app.windows.firstMatch.sheets.firstMatch
+    static func choose(
+        _ url: URL, in app: XCUIApplication, window: XCUIElement? = nil
+    ) throws {
+        let owner = window ?? app.windows.firstMatch
+        let sheet = owner.sheets.firstMatch
         XCTAssertTrue(sheet.waitForExistence(timeout: 15),
                       "The native file/folder picker should be attached to the current window")
         app.typeKey("g", modifierFlags: [.command, .shift])

@@ -1088,7 +1088,14 @@ final class PaneRetentionTests: XCTestCase {
         XCTAssertEqual(project.dock.tabOrder, [pane.id])
         XCTAssertEqual(project.selectedTabID, pane.id)
         XCTAssertTrue(scroll.documentView === editor)
-        try await settle { window.firstResponder === editor }
+        // A headless XCTest host cannot claim foreground keyboard ownership.
+        // Real key-window handoff is covered by WorkspaceWindowsUITests.
+        if window.isKeyWindow && NSApp.isActive {
+            try await settle { window.firstResponder === editor }
+        } else {
+            XCTAssertTrue(manager.ownsActiveResponder(editor))
+            XCTAssertTrue(editor.window === window)
+        }
         print("DOCK_TRACE afterMove actual=\(scroll.contentView.bounds.origin) editorFrame=\(editor.frame) selection=\(editor.selectedRange()) viewport=\(String(describing: editor.textLayoutManager?.textViewportLayoutController.viewportRange))")
         try await settle { scroll.contentView.bounds.origin == scrollBefore }
         XCTAssertEqual(scroll.contentView.bounds.origin, scrollBefore)
