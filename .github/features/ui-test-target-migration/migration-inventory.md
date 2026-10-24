@@ -378,7 +378,7 @@
 
 **原 `BaileyTests/WorkspaceUI/Windows/DockFocusP2RegressionTests.swift`：3 条（其中 1 条此前 P1 已迁移，本任务删剩余 2 条后删除文件）** — Dock 点击、拖放、命令面板交接均归真实 App。
 
-- `testClickingEmptyToolPaneReleasesHostingRootResponder`（旧 L22） · `C` → `WorkspaceDockUITests.testClickingEmptyFilesPaneReleasesOldNativeEditorKeyboard`：真实编辑器先获键盘，点击 Files 工具空白，再输入字符不修改旧编辑器内容及磁盘字节；单项 1/1 通过。
+- `testClickingEmptyToolPaneReleasesHostingRootResponder`（旧 L22） · `C` → `WorkspaceDockUITests.testDockFocusHandoffNeverSendsKeysToHiddenEditor`：真实编辑器先获键盘，点击 Files 工具空白，再输入字符不修改旧编辑器内容及磁盘字节；单项 1/1 通过。
 - `testDragReleasedOverAnotherDockGroupDoesNotActivateIt`（旧 L78） · `C` → `WorkspaceDockUITests.testCrossGroupDragReleaseCannotSelectDestinationButRealClickCan` 与 `testClosingExplicitlyActivatedProjectsKeepsFilesWithoutDragging`：真实拖动、⌘W 只关闭原 Projects，明确单击 Files 后 ⌘W 才关闭目标；发现并从根因修复 900pt 窗口下仅约 108pt 左栏的 76pt 拖动留白压垮项目标签 AX 命中，改为按实际宽度弹性留白，修复后 2/2、exit 0（`/tmp/bailey-p4t1-dock-responsive-header-fixed.log`）。
 - `testPaletteFileManagerCommandTransfersKeyboardFocusToVisibleFileTree`（旧 L128） · `C` · **已核销**：根因为伪前台 NSWindow；以 `WorkspaceFilesUITests.testPaletteFileManagerCommandRestoresKeyboardFocusFromEditor` 的真实 E2E 操作、磁盘原文与标签数验证（`9177817`），旧宿主方法同提交删除。
 
@@ -401,10 +401,10 @@
 - `testFilesOpenedInItsOwnDockGroupDoNotRetainHiddenKeyboardFocus`（旧 L814） · `C` → `DockWorkspaceTests.testBrowsingSameGroupMustNotKeepFocusOnHiddenFilesPanel`、`WorkspaceDockUITests.testDockFocusHandoffNeverSendsKeysToHiddenEditor`
 - `testDockGroupClickDoesNotPreemptNativeFieldFocus`（旧 L874） · `C` → `DockFocusIntegrationTests.testNativeFieldEditorWinsUntilDockFocusIsRequestedForEmptySpace`
 - `testNarrowTerminalFindFieldEditorBelongsOnlyToItsActualDockGroup`（旧 L911） · `C` → `DockFocusIntegrationTests.testTerminalFindFieldEditorBelongsOnlyToItsDockGroup`
-- `testRestoredGroupIDsReplaceOnlyTheFocusScopesNotTheEditor`（旧 L956） · `C` → `DockWorkspaceTests.testMoveReorderSnapshotAndRestore`、`PaneRetentionTests.testObservedDockMoveReparentsRealEditorAndPreservesUndoAndScroll`
+- `testRestoredGroupIDsReplaceOnlyTheFocusScopesNotTheEditor`（旧 L956） · `C` → `DockWorkspaceTests.testMoveReorderSnapshotAndRestore`、`NativePaneRetentionIntegrationTests.testObservedDockMoveReparentsRealEditorAndPreservesUndoAndScroll`
 - `testFocusAcrossAppearancesAndSizesKeepsTheNativeDocument`（旧 L994） · `C` → `NativeEditorLayoutTests.testSourceRestoresScrollSelectionAndResizesWithoutRecreatingDocument`、`WorkspaceWindowsUITests.testKeyboardFocusAndPaletteRestorationStayWithTheOwningWindow`
-- `testResponderOwnershipRejectsInactiveProjectsHiddenTabsAndParking`（旧 L1040） · `C` → `DockFocusIntegrationTests.testOnlyActiveMountedEditorOwnsNativeResponder`、`PaneRetentionTests.testParkingDropsObsoleteHostActionsBeforeDelayedDismantle`
-- `testDockToolsTakeNativeFocusWithoutReplacingVisibleEditors`（旧 L1100） · `C` → `WorkspaceDockUITests.testDockFocusHandoffNeverSendsKeysToHiddenEditor`、`PaneRetentionTests.testObservedDockMoveReparentsRealEditorAndPreservesUndoAndScroll`
+- `testResponderOwnershipRejectsInactiveProjectsHiddenTabsAndParking`（旧 L1040） · `C` → `DockFocusIntegrationTests.testOnlyActiveMountedEditorOwnsNativeResponder`、`NativePaneRetentionIntegrationTests.testParkingDropsObsoleteHostActionsBeforeDelayedDismantle`
+- `testDockToolsTakeNativeFocusWithoutReplacingVisibleEditors`（旧 L1100） · `C` → `WorkspaceDockUITests.testDockFocusHandoffNeverSendsKeysToHiddenEditor`、`NativePaneRetentionIntegrationTests.testObservedDockMoveReparentsRealEditorAndPreservesUndoAndScroll`
 
 P4-T2 核销：旧 19 项及其专用 `FilesPanelReadiness`／`FocusRecordingWindow` 已移除；原文件的 23 项 P4-T3/T4 测试保留。验证：`make test:WorkspaceWindowIsolationTests,DockFocusIntegrationTests,FileTreeTests` 53/53；`make test:DockFocusIntegrationTests,DockWorkspaceTests,PanelContextTests` 31/31；定点 `make test:ui` 7/7，macOS 27.2、英文与简体中文。额外 `PaneRetentionTests` 20/20、`NativeEditorLayoutTests` 28/28、`NativeFileTabTests` 16/16（后两组先前测试无失败）。宿主迁移中的焦点假失败复现时窗口 `isKeyWindow=false` 且 `NSApp.isActive=false`；修正旧测试以实际前台边界断言，完整前台键盘路径由独立 UI 回归确认。GUI 与真实输入法/触控板、最低 macOS 15.6 的环境差异不冒充已实测。
 
@@ -412,79 +412,94 @@ P4-T2 核销：旧 19 项及其专用 `FilesPanelReadiness`／`FocusRecordingWin
 
 **[WorkspaceWindowIsolationTests.swift](../../../BaileyTests/WorkspaceUI/Windows/WorkspaceWindowIsolationTests.swift)：17 条** — 跨窗焦点／Finder／恢复。初判：UI+逻辑，执行前核对每项真实断言。
 
-- `testFinderWindowDropLoadsURLProvidersIntoItsOriginalWindow`（旧 L1293） · `C`
-- `testProjectsDropFilesOpenTabsAndFoldersAddProjects`（旧 L1334） · `C`
-- `testFinderDropIntoAnotherTabStripKeepsNewTabsInTheActualTargetGroup`（旧 L1377） · `C`
-- `testFinderDropIntoEmptyTabGroupKeepsGroupAndDoesNotMoveFilesAcrossProjects`（旧 L1431） · `C`
-- `testQueuedFinderBatchRejectsChangedReceivingProjectBeforeRestoredOwnerAttaches`（旧 L1480） · `C`
-- `testFinderProjectsDropDoesNotSwitchTargetDuringProviderLoading`（旧 L1532） · `C`
-- `testFinderEmptyStateDropCannotOpenIntoFolderAddedWhileProviderLoads`（旧 L1568） · `C`
-- `testFinderDropDoesNotRouteLateProvidersIntoAnotherOrClosedWindow`（旧 L1597） · `C`
-- `testExternalBatchRoutesToActualMountedFileBuffers`（旧 L1629） · `C`
-- `testExternalOpenFindsExistingFileInOtherWindowBeforeCreatingAnEditor`（旧 L1709） · `C`
-- `testFinderReusesMacFileInsideRemoteProjectInAnotherWindow`（旧 L1774） · `C`
-- `testExternalOpenDefersUntilAllCreatedWindowsHaveAttached`（旧 L1819） · `C`
-- `testExternalOpenKeepsOneDirectoryProjectAcrossInterleavedWindowBatch`（旧 L1863） · `C`
-- `testExternalOpenCancelledWhenOwningWindowClosesBeforeRestoreCompletes`（旧 L1906） · `C`
-- `testClosingAnUnattachedFileOwnerDrainsAllWaitingFinderEventsWithoutRetargeting`（旧 L1940） · `C`
-- `testAnUnattachedUnrelatedManagerCannotHoldFinderRequestsForever`（旧 L1990） · `C`
-- `testPendingFinderDocumentsSurviveMoreThan64EventsBeforeOwnerWindowAttaches`（旧 L2014） · `C`
+- `testFinderWindowDropLoadsURLProvidersIntoItsOriginalWindow`（旧 L1293） · `C` → `FinderDeliveryIntegrationTests.testFinderWindowDropLoadsURLProvidersIntoItsOriginalWindow`
+- `testProjectsDropFilesOpenTabsAndFoldersAddProjects`（旧 L1334） · `C` → `FinderDeliveryIntegrationTests.testProjectsDropFilesOpenTabsAndFoldersAddProjects`
+- `testFinderDropIntoAnotherTabStripKeepsNewTabsInTheActualTargetGroup`（旧 L1377） · `C` → `FinderDeliveryIntegrationTests.testFinderDropIntoAnotherTabStripKeepsNewTabsInTheActualTargetGroup`
+- `testFinderDropIntoEmptyTabGroupKeepsGroupAndDoesNotMoveFilesAcrossProjects`（旧 L1431） · `C` → `FinderDeliveryIntegrationTests.testFinderDropIntoEmptyTabGroupKeepsGroupAndDoesNotMoveFilesAcrossProjects`
+- `testQueuedFinderBatchRejectsChangedReceivingProjectBeforeRestoredOwnerAttaches`（旧 L1480） · `C` → `FinderDeliveryIntegrationTests.testQueuedFinderBatchRejectsChangedReceivingProjectBeforeRestoredOwnerAttaches`
+- `testFinderProjectsDropDoesNotSwitchTargetDuringProviderLoading`（旧 L1532） · `C` → `FinderDeliveryIntegrationTests.testFinderProjectsDropDoesNotSwitchTargetDuringProviderLoading`
+- `testFinderEmptyStateDropCannotOpenIntoFolderAddedWhileProviderLoads`（旧 L1568） · `C` → `FinderDeliveryIntegrationTests.testFinderEmptyStateDropCannotOpenIntoFolderAddedWhileProviderLoads`
+- `testFinderDropDoesNotRouteLateProvidersIntoAnotherOrClosedWindow`（旧 L1597） · `C` → `FinderDeliveryIntegrationTests.testFinderDropDoesNotRouteLateProvidersIntoAnotherOrClosedWindow`
+- `testExternalBatchRoutesToActualMountedFileBuffers`（旧 L1629） · `C` → `FinderDeliveryIntegrationTests.testExternalBatchRoutesToFileBuffersWithoutDuplication`
+- `testExternalOpenFindsExistingFileInOtherWindowBeforeCreatingAnEditor`（旧 L1709） · `C` → `FinderDeliveryIntegrationTests.testExternalOpenFindsExistingFileBufferInOtherWindow`
+- `testFinderReusesMacFileInsideRemoteProjectInAnotherWindow`（旧 L1774） · `C` → `FinderDeliveryIntegrationTests.testFinderReusesMacFileInsideRemoteProjectInAnotherWindow`
+- `testExternalOpenDefersUntilAllCreatedWindowsHaveAttached`（旧 L1819） · `C` → `FinderDeliveryIntegrationTests.testExternalOpenDefersUntilAllCreatedWindowsHaveAttached`
+- `testExternalOpenKeepsOneDirectoryProjectAcrossInterleavedWindowBatch`（旧 L1863） · `C` → `FinderDeliveryIntegrationTests.testExternalOpenKeepsOneDirectoryProjectAcrossInterleavedWindowBatch`
+- `testExternalOpenCancelledWhenOwningWindowClosesBeforeRestoreCompletes`（旧 L1906） · `C` → `FinderDeliveryIntegrationTests.testExternalOpenCancelledWhenOwningWindowClosesBeforeRestoreCompletes`
+- `testClosingAnUnattachedFileOwnerDrainsAllWaitingFinderEventsWithoutRetargeting`（旧 L1940） · `C` → `FinderDeliveryIntegrationTests.testClosingAnUnattachedFileOwnerDrainsAllWaitingFinderEventsWithoutRetargeting`
+- `testAnUnattachedUnrelatedManagerCannotHoldFinderRequestsForever`（旧 L1990） · `C` → `FinderDeliveryIntegrationTests.testAnUnattachedUnrelatedManagerCannotHoldFinderRequestsForever`
+- `testPendingFinderDocumentsSurviveMoreThan64EventsBeforeOwnerWindowAttaches`（旧 L2014） · `C` → `FinderDeliveryIntegrationTests.testPendingFinderDocumentsSurviveMoreThan64EventsBeforeOwnerWindowAttaches`
+
+P4-T3 的 17 项从旧 `WorkspaceWindowIsolationTests` 移至独立的 `FinderDeliveryIntegrationTests`，移除其中两处挂载完整 `ContentView` 的宿主 UI 操作；既有窗口测试保留 6 项供 P4-T4。验证：宿主 47/47（Finder 17、窗口 6、身份 24）；独立 Dev `WorkspaceWindowsUITests` 的真实 Launch Services 单窗重复／3 文件批次、双窗原所有者复用均通过，P4-T2 双窗焦点回归修正 AX 窗口索引后单项通过。真实 Finder 拖入空编辑区、Projects 面板文件与文件夹三次成功，核对文件标签／新增项目、原始文件 SHA-256 不变、未误写入目标目录；通过 Peekaboo 4.6.0 仅对隔离 Dev 作真实鼠标事件。macOS 15.6、物理触控板、所有显示器及 Finder 其它落点组合未覆盖，仍需阶段门禁按实际缺口判定。
 
 ### P4-T4 — 15 条
 
-**[WorkspaceContentIdentityTests.swift](../../../BaileyTests/WorkspaceUI/Tabs/WorkspaceContentIdentityTests.swift)：3 条** — 标签和编辑器／Diff／Browser 身份。初判：UI，执行前核对每项真实断言。
+**`WorkspaceContentIdentityTests.swift`**：3 条 — 标签和编辑器／Diff／Browser 身份。初判：UI，执行前核对每项真实断言。
 
-- `testDockTabStripOnlyBouncesWhenTabsOverflowAfterResizing`（旧 L48） · `C`
-- `testFileDiffFileReturnsToSameEditorAndDiffDocument`（旧 L127） · `C`
-- `testBrowserTabBetweenTwoFilesDoesNotStealTheirNativeEditors`（旧 L185） · `C`
+- `testDockTabStripOnlyBouncesWhenTabsOverflowAfterResizing`（旧 L48） · `C` → `NativeContentIdentityIntegrationTests.testDockTabStripOnlyBouncesWhenTabsOverflowAfterResizing`
+- `testFileDiffFileReturnsToSameEditorAndDiffDocument`（旧 L127） · `C` → `NativeContentIdentityIntegrationTests.testFileDiffFileReturnsToSameEditorAndDiffDocument`
+- `testBrowserTabBetweenTwoFilesDoesNotStealTheirNativeEditors`（旧 L185） · `C` → `NativeContentIdentityIntegrationTests.testBrowserTabBetweenTwoFilesDoesNotStealTheirNativeEditors`
 
-**[WorkspaceWindowCloseTests.swift](../../../BaileyTests/WorkspaceUI/Windows/WorkspaceWindowCloseTests.swift)：6 条** — 多窗关闭、保存否决与 Sheet 归属。初判：UI，执行前核对每项真实断言。
+**`WorkspaceWindowCloseTests.swift`**：6 条 — 多窗关闭、保存否决与 Sheet 归属。初判：UI，执行前核对每项真实断言。
 
-- `testEmptyWorkspaceAttachesToWindowWhenHostingViewWasRenderedOffscreen`（旧 L81） · `C`
-- `testTwoNativeWorkspacesAttachOwnWindowsAndKeepFolderPickerIsolated`（旧 L117） · `C`
-- `testBackgroundProjectDirtyCloseSheetStaysInItsOwningWindow`（旧 L178） · `C`
-- `testRepeatedCloseAllKeepsCleanTabsUntilDirtyConfirmationResolves`（旧 L297） · `C`
-- `testProjectCloseCannotBypassAnActiveTabClose`（旧 L343） · `B`
-- `testNativeCloseDoesNotDiscardFailedSaveThenClosesAfterRetry`（旧 L367） · `C`
+- `testEmptyWorkspaceAttachesToWindowWhenHostingViewWasRenderedOffscreen`（旧 L81） · `C` → `WindowCloseIntegrationTests.testNativeChromeAttachesAfterPreviouslyDetachedViewMount`
+- `testTwoNativeWorkspacesAttachOwnWindowsAndKeepFolderPickerIsolated`（旧 L117） · `C` → `WindowCloseIntegrationTests.testNativeChromeAttachesToTwoDistinctWindowsAndPickers`
+- `testBackgroundProjectDirtyCloseSheetStaysInItsOwningWindow`（旧 L178） · `C` → `WindowCloseIntegrationTests.testBackgroundProjectDirtyCloseSheetStaysInItsOwningWindow`
+- `testRepeatedCloseAllKeepsCleanTabsUntilDirtyConfirmationResolves`（旧 L297） · `C` → `WindowCloseIntegrationTests.testRepeatedCloseAllKeepsCleanTabsUntilDirtyConfirmationResolves`
+- `testProjectCloseCannotBypassAnActiveTabClose`（旧 L343） · `B` → `WindowCloseIntegrationTests.testProjectCloseCannotBypassAnActiveTabClose`
+- `testNativeCloseDoesNotDiscardFailedSaveThenClosesAfterRetry`（旧 L367） · `C` → `WindowCloseIntegrationTests.testNativeChromeCloseVetoesFailedWriteAndRetriesAfterRemount`
 
-**[WorkspaceWindowIsolationTests.swift](../../../BaileyTests/WorkspaceUI/Windows/WorkspaceWindowIsolationTests.swift)：6 条** — 跨窗焦点／Finder／恢复。初判：UI+逻辑，执行前核对每项真实断言。
+**`WorkspaceWindowIsolationTests.swift`**：6 条 — 跨窗焦点／Finder／恢复。初判：UI+逻辑，执行前核对每项真实断言。
 
-- `testWindowFocusLossSavesAllDirtyBuffersNotOnlyTheMostRecentTab`（旧 L1161） · `C`
-- `testTwoMountedWorkspaceManagersSaveTheirOwnNativeAXBuffers`（旧 L1208） · `C`
-- `testClosingOneWorkspaceWindowKeepsOtherManagerEditorAndSnapshot`（旧 L2057） · `C`
-- `testSpeculativeSceneConstructionDoesNotRegisterOrConsumeRestoredWindows`（旧 L2124） · `B`
-- `testLocalWorktreeUseProtectsMacFileInsideAnSSHProject`（旧 L2172） · `B`
-- `testTwoApplicationOwnersNeverShareWorkspaceRegistryOrWorktreeProtection`（旧 L2205） · `B`
+- `testWindowFocusLossSavesAllDirtyBuffersNotOnlyTheMostRecentTab`（旧 L1161） · `C` → `WindowOwnershipIntegrationTests.testWindowFocusLossSavesAllDirtyBuffersNotOnlyTheMostRecentTab`
+- `testTwoMountedWorkspaceManagersSaveTheirOwnNativeAXBuffers`（旧 L1208） · `C` → `WindowOwnershipIntegrationTests.testTwoMountedWorkspaceManagersSaveTheirOwnNativeAXBuffers`
+- `testClosingOneWorkspaceWindowKeepsOtherManagerEditorAndSnapshot`（旧 L2057） · `C` → `WindowOwnershipIntegrationTests.testClosingOneWorkspaceWindowKeepsOtherManagerEditorAndSnapshot`
+- `testSpeculativeSceneConstructionDoesNotRegisterOrConsumeRestoredWindows`（旧 L2124） · `B` → `WindowOwnershipIntegrationTests.testSpeculativeSceneConstructionDoesNotRegisterOrConsumeRestoredWindows`
+- `testLocalWorktreeUseProtectsMacFileInsideAnSSHProject`（旧 L2172） · `B` → `WindowOwnershipIntegrationTests.testLocalWorktreeUseProtectsMacFileInsideAnSSHProject`
+- `testTwoApplicationOwnersNeverShareWorkspaceRegistryOrWorktreeProtection`（旧 L2205） · `B` → `WindowOwnershipIntegrationTests.testTwoApplicationOwnersNeverShareWorkspaceRegistryOrWorktreeProtection`
+
+**额外两条 SessionStore 混入测试：**
+- `testRealWindowRootRetainsItsRegistrationAndEditorAcrossViewConstruction` → `WindowOwnershipIntegrationTests.testSpeculativeSceneConstructionDoesNotRegisterOrConsumeRestoredWindows`（重复登记和恢复认领）、`NativeContentIdentityIntegrationTests.testFileDiffFileReturnsToSameEditorAndDiffDocument`（原生对象身份）、`WorkspaceWindowsUITests.testNativeWindowCloseAndRelaunchRestoreTheSameFileAndBytes`（真实窗口、磁盘和重启）。旧完整 View 宿主已删除。
+- `testClosedWindowCannotBeUsedForLateFileOperationErrors` → `SessionStoreTests.testClosedOwnerCannotReRegisterOrReceiveNewWindowIdentity`（注销后不得重复登记）、`WindowOwnershipIntegrationTests.testClosingOneWorkspaceWindowKeepsOtherManagerEditorAndSnapshot`（另一窗口和快照仍有效）、真实窗口关闭 E2E。旧 NSWindow 宿主已删除。
+
+**验证：** 新组件 15 项逐项通过；加 `SessionStoreTests`、`WorkspaceIdentityTests`、`DockWorkspaceTests`、`FileTabPersistenceTests`、`NativeDiffTabTests` 联合回归 133/133。`WorkspaceWindowsUITests` 的双窗 Sheet、空窗生命周期、跨窗焦点及脏文件关闭→磁盘保存→相同 UUID 重启恢复已单项通过。禁用的仅是隔离 UI Runner 的 AppKit 系统旧窗口恢复，Bailey `SessionStore` 仍接受真实重启验收。正常 ⌘Q、终端/WebKit 资源压力与释放属 P4-T5；最低系统、实体触控板等留阶段 Gate 核销。
 
 ### P4-T5 — 21 条
 
-**[PaneRetentionTests.swift](../../../BaileyTests/NativeUI/Workspace/PaneRetentionTests.swift)：20 条** — Terminal／Browser／Editor 原生资源生命周期。初判：UI+逻辑，执行前核对每项真实断言。
+**旧源 `PaneRetentionTests.swift`：20 条 → [NativePaneRetentionIntegrationTests.swift](../../../BaileyTests/Integration/Workspace/NativePaneRetentionIntegrationTests.swift)** — Terminal／Browser／Editor 原生资源生命周期。初判：UI+逻辑，执行前核对每项真实断言。
 
-- `testParkingDropsObsoleteHostActionsBeforeDelayedDismantle`（旧 L12） · `C`
-- `testTerminalFindFieldStaysInsideNarrowAndWidePanes`（旧 L47） · `C`
-- `testProjectAndPaneTabObservationsReplacePublisherRelays`（旧 L94） · `B`
-- `testNativeUnsavedConfirmationPreservesSheetAndButtonSemantics`（旧 L124） · `C`
-- `testNativeFileAndSSHChoosersStayOnOwningWindow`（旧 L157） · `C`
-- `testTabSwitcherKeepsProvisionalSelectionAndCancelsWithoutSideEffects`（旧 L232） · `C`
-- `testBrowserKVOUpdatesObservationHistoryFaviconAndRepeatedFocus`（旧 L304） · `C`
-- `testWebKitJavaScriptDialogsInvokeNativeDelegateSheets`（旧 L373） · `C`
-- `testBrowserAndEditorStateSurviveViewRemount`（旧 L419） · `C`
-- `testClosingMountedFiveFileTabsReleasesTheirNativeDocuments`（旧 L515） · `C`
-- `testClosingNativeWindowReleasesItsProjectBeforeSwiftUIDisappears`（旧 L647） · `C`
-- `testHundredThousandLineWorkspaceEditsSavesAndReleasesFile`（旧 L690） · `C`
-- `testFiveConcurrentNativeEditorsReleaseDocumentAndParsingTasks`（旧 L777） · `C`
-- `testExternalReloadReleasesObsoleteDocumentEvenWhenOldScrollViewIsCached`（旧 L859） · `C`
-- `testEditorRetainsScrollAndReleasesRetiredNativeResources`（旧 L942） · `C`
-- `testObservedDockMoveReparentsRealEditorAndPreservesUndoAndScroll`（旧 L1028） · `C`
-- `testTerminalAndFindObservationPreserveNativeSurfaceIdentity`（旧 L1124） · `B`
-- `testUnmanagedForegroundSSHRejectsLocalFinderPathsBeforeAnyRemoteHandoff`（旧 L1177） · `B`
-- `testUnmanagedExecSSHRejectsLocalFinderPathsEvenWhenForegroundPIDIsShellPID`（旧 L1181） · `B`
-- `testTerminalKeepsSameShellAcrossParkingAndRemount`（旧 L1236） · `C`
+- `testParkingDropsObsoleteHostActionsBeforeDelayedDismantle`（旧 L12） · `C` → `NativePaneRetentionIntegrationTests.testParkingDropsObsoleteHostActionsBeforeDelayedDismantle`
+- `testTerminalFindFieldStaysInsideNarrowAndWidePanes`（旧 L47） · `C` → `NativePaneRetentionIntegrationTests.testTerminalFindFieldStaysInsideNarrowAndWidePanes`
+- `testProjectAndPaneTabObservationsReplacePublisherRelays`（旧 L94） · `B` → `NativePaneRetentionIntegrationTests.testProjectAndPaneTabObservationsReplacePublisherRelays`
+- `testNativeUnsavedConfirmationPreservesSheetAndButtonSemantics`（旧 L124） · `C` → `NativePaneRetentionIntegrationTests.testNativeUnsavedConfirmationPreservesSheetAndButtonSemantics`
+- `testNativeFileAndSSHChoosersStayOnOwningWindow`（旧 L157） · `C` → `NativePaneRetentionIntegrationTests.testNativeFileAndSSHChoosersStayOnOwningWindow`
+- `testTabSwitcherKeepsProvisionalSelectionAndCancelsWithoutSideEffects`（旧 L232） · `C` → `NativePaneRetentionIntegrationTests.testTabSwitcherKeepsProvisionalSelectionAndCancelsWithoutSideEffects`
+- `testBrowserKVOUpdatesObservationHistoryFaviconAndRepeatedFocus`（旧 L304） · `C` → `NativePaneRetentionIntegrationTests.testBrowserKVOUpdatesObservationHistoryFaviconAndRepeatedFocus`
+- `testWebKitJavaScriptDialogsInvokeNativeDelegateSheets`（旧 L373） · `C` → `NativePaneRetentionIntegrationTests.testWebKitJavaScriptDialogsInvokeNativeDelegateSheets`
+- `testBrowserAndEditorStateSurviveViewRemount`（旧 L419） · `C` → `NativePaneRetentionIntegrationTests.testBrowserAndEditorStateSurviveViewRemount`
+- `testClosingMountedFiveFileTabsReleasesTheirNativeDocuments`（旧 L515） · `C` → `NativePaneRetentionIntegrationTests.testClosingMountedFiveFileTabsReleasesTheirNativeDocuments`
+- `testClosingNativeWindowReleasesItsProjectBeforeSwiftUIDisappears`（旧 L647） · `C` → `NativePaneRetentionIntegrationTests.testClosingNativeWindowReleasesItsProjectBeforeSwiftUIDisappears`
+- `testHundredThousandLineWorkspaceEditsSavesAndReleasesFile`（旧 L690） · `C` → `NativePaneRetentionIntegrationTests.testHundredThousandLineWorkspaceEditsSavesAndReleasesFile`
+- `testFiveConcurrentNativeEditorsReleaseDocumentAndParsingTasks`（旧 L777） · `C` → `NativePaneRetentionIntegrationTests.testFiveConcurrentNativeEditorsReleaseDocumentAndParsingTasks`
+- `testExternalReloadReleasesObsoleteDocumentEvenWhenOldScrollViewIsCached`（旧 L859） · `C` → `NativePaneRetentionIntegrationTests.testExternalReloadReleasesObsoleteDocumentEvenWhenOldScrollViewIsCached`
+- `testEditorRetainsScrollAndReleasesRetiredNativeResources`（旧 L942） · `C` → `NativePaneRetentionIntegrationTests.testEditorRetainsScrollAndReleasesRetiredNativeResources`
+- `testObservedDockMoveReparentsRealEditorAndPreservesUndoAndScroll`（旧 L1028） · `C` → `NativePaneRetentionIntegrationTests.testObservedDockMoveReparentsRealEditorAndPreservesUndoAndScroll`
+- `testTerminalAndFindObservationPreserveNativeSurfaceIdentity`（旧 L1124） · `B` → `NativePaneRetentionIntegrationTests.testTerminalAndFindObservationPreserveNativeSurfaceIdentity`
+- `testUnmanagedForegroundSSHRejectsLocalFinderPathsBeforeAnyRemoteHandoff`（旧 L1177） · `B` → `NativePaneRetentionIntegrationTests.testUnmanagedForegroundSSHRejectsLocalFinderPathsBeforeAnyRemoteHandoff`
+- `testUnmanagedExecSSHRejectsLocalFinderPathsEvenWhenForegroundPIDIsShellPID`（旧 L1181） · `B` → `NativePaneRetentionIntegrationTests.testUnmanagedExecSSHRejectsLocalFinderPathsEvenWhenForegroundPIDIsShellPID`
+- `testTerminalKeepsSameShellAcrossParkingAndRemount`（旧 L1236） · `C` → `NativePaneRetentionIntegrationTests.testTerminalKeepsSameShellAcrossParkingAndRemount`
 
-**[AppMenuIsolationTests.swift](../../../BaileyTests/NativeUI/App/AppMenuIsolationTests.swift)：1 条** — 前期 NativeUI 宿主仍需防止 ⌘Q 意外结束测试；直到最后一条原生宿主测试迁走才一起删除覆盖与产品中的测试专属拦截。
+**已删除旧源 `AppMenuIsolationTests.swift`：1 条** — 前期 NativeUI 宿主仍需防止 ⌘Q 意外结束测试；直到最后一条原生宿主测试迁走才一起删除覆盖与产品中的测试专属拦截。
 
-- `testTestHostHasNoQuitKeyboardEquivalent`（旧 L23） · `A`
+- `testTestHostHasNoQuitKeyboardEquivalent`（旧 L23） · `A` → 已删除测试专属 `CommandGroup(replacing: .appTermination)`；由 `WorkspaceRetentionUITests.testNormalQuitVetoesFailedSaveThenWritesAndRestoresSession` 的真实 ⌘Q、写入失败否决、重试与重启取代。
 
+
+**迁移核销（已执行）：**
+- 原 20 条的旧对象身份、5×5 编辑器、十万行、两轮窗口销毁、旧 `NSScrollView` 强引用、Undo/滚动、WebKit 与 Shell PID 均保留为最小原生组件 Integration，旧完整 `WorkspaceDockView` 宿主 3 处已删除。迁移前 20/20、迁移后 20/20；受影响的原生资源、设置、窗口关闭和身份联合回归 35/35。
+- `WorkspaceRetentionUITests` 新增完整 Bailey Dev：真实 Settings 主题的隔离 TOML 写入和重启选中、Shell PID 跨文件标签和 Find、WebKit 未提交表单跨标签保留、正常 ⌘Q 保存失败否决与重试及重启、五轮每轮 5 个 10k 行文件的真实打开/关闭与字节核对。五项分别已定点通过（Debug）；不得把观察到的标签数或进程 RSS 回落等同于进程内对象 ARC 释放。
+- 独立 Release Bailey Dev 完整 GUI 压力 5/5 轮、25 次文件开关两次通过（每文件 10,000 行、每轮关闭后标签 0、磁盘逐文件原字节）。首次不附着 Instruments 的 RSS 56 点：峰值 259.2 MiB、末值 253.1 MiB。复测附着 **Release Allocations** 105.8 秒，录制约 1.3 GiB Trace，XML TOC 验证含 Statistics/Allocations List/Regions Map；同进程 RSS 124 点峰值 296.0 MiB、末值 252.0 MiB（含 Instruments 观测开销，不与未附着数值直接比较）。关闭全部五文件后 3 次 `heap -q -H`：50.3、50.9、50.1 MiB，各有 1 个 `RestorableScrollView` 与 `SyntaxHighlightCoordinator` 可达对象，没有逐轮累加；实测有缓存不宣称零残留或泄漏不存在。原生弱引用释放仍由 20 项 Integration 断言核对。Release Dev 与 Debug 构建和验签均通过。
+- 补充 Finder 原生拖放：`fe8acb3` 在真实 Finder → Ghostty 核对转义路径粘贴、无自动执行、无新 FileTab、原文件字节不变；Finder → WKWebView 的真实 `input[type=file]` 收到准确文件名，亦无新 FileTab／字节改动。首次强制切换 Finder 视图的整组回归失败，改为仅缺失列表视图时切换后，完整 `WorkspaceRetentionUITests` **7/7、0 失败、0 跳过**（`/tmp/bailey-p4-audit-all-retention-fixed.log`）。
+- 未在本轮实测：macOS 15.6 真机、实体触控板／其它显示设备、终端和 WebKit 跨窗混合长时间压力、授权 Windows SSH 实机的完整拖放。已用本机真实 GUI、原生对象释放 Integration、身份/路由/SSH 模型回归替代部分契约；这些环境差异不能宣称已通过，保留最终 P5 Gate 核对。
 
 ## 非 UI Target 的混入检查
 
@@ -492,8 +507,8 @@ P4-T2 核销：旧 19 项及其专用 `FilesPanelReadiness`／`FocusRecordingWin
 
 **额外重点：[`SessionStoreTests.swift`](../../../BaileyTests/Integration/Workspace/SessionStoreTests.swift)**：原有 10 方法，其中下列两项具有明确原生窗口/视图依赖，归 `P4-T4` 完整替代；其余方法亦须逐项检查：
 
-- `testRealWindowRootRetainsItsRegistrationAndEditorAcrossViewConstruction`（`NSHostingView`／`NSWindow`／`NSTextView` 身份）：P4-T4 将用户可见保留行为归 UI，快照单一性逻辑归非 UI。
-- `testClosedWindowCannotBeUsedForLateFileOperationErrors`（真实 `NSWindow` 装配）：P4-T4 将窗口关后错误不可回送的最终行为归 UI，目标识别不变量可保留非 UI。
+- `testRealWindowRootRetainsItsRegistrationAndEditorAcrossViewConstruction`（`NSHostingView`／`NSWindow`／`NSTextView` 身份）：P4-T4 已由原生组件身份和真实 App 重启验证取代；重复登记与快照由非 UI 测试保留。
+- `testClosedWindowCannotBeUsedForLateFileOperationErrors`（真实 `NSWindow` 装配）：P4-T4 已由已关闭所有者去注册的非 UI 测试和真实窗口关闭 E2E 取代。
 
 **[`AppSettingsTests.swift`](../../../BaileyTests/Integration/Settings/AppSettingsTests.swift)**：5 方法，**全部都需审查隐藏的全局 UI 副作用**。源码 `AppSettings.init(configURL:)` 最后无条件执行 `applyAppearance()`（写 `NSApp?.appearance`）和 `reloadThemeSelection()`（写 `Theme` 全局选择），即使某条测试只验证 TOML 解析也会触发；其中两项还显式在 teardown 恢复 `NSApp?.appearance`，一项设置 `.theme = .dark` 再次写入。P1-T3 先查明并清理可安全去掉的非 UI 初始化/测试副作用，证明共享 `AppSettings.shared` 启动外观不变；P4-T5 再验真实 Settings GUI。保留具有实质断言的配置/Observation/Theme 回归，不能以“仅两条触及 NSApp”漏掉其余三条。
 

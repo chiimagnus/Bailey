@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P4-T3"
+current_task_id = "P5-T1"
 
 [[tasks]]
 id = "P1-T1"
@@ -109,31 +109,31 @@ note = "旧19项已替代删除；GUI 7/7、宿主53/53、PaneRetention20/20、�
 [[tasks]]
 id = "P4-T3"
 title = "Finder／Dock 外部文件打开和批量拖放的真实归属"
-status = "in_progress"
+status = "completed"
 plan = "plan-p4.md#p4-t3"
-commit = ""
-note = ""
+commit = "c88f218d69c1449bacbf1bd87d5d112edfb09338"
+note = "17项原有Finder路由迁移为最小Integration；宿主47/47、真实LS/跨窗GUI3/3、Finder物理拖放Workspace/Projects文件/目录3路径，两个build通过；最低macOS/触控板留Gate边界"
 
 [[tasks]]
 id = "P4-T4"
 title = "窗口关闭、保存否决、状态恢复与原生对象身份"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t4"
-commit = ""
-note = ""
+commit = "f4f6f81f6ace8a7344660f6825c29b54f8692849"
+note = "旧15项按原断言分为最小原生组件Integration；SessionStore原2项拆分为纯状态+独立App；宿主133/133、完整窗口UI8/8、独立Session9/9，make build/build:ui均通过；正常⌘Q及资源压力属P4-T5"
 
 [[tasks]]
 id = "P4-T5"
 title = "Terminal、Browser、编辑器原生资源、设置页"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t5"
-commit = ""
-note = ""
+commit = "658eebe7a7a95d3a53e909bb3898ada953cfe931"
+note = "旧21项逐条核销：原生资源20/20保留Integration及弱引用断言，旧测试专属Cmd-Q守卫删除并由真实退出回归替代；宿主35/35、完整Dev GUI5/5、优化Release五轮25次开关通过，make build/build:ui、codesign、docs audit均通过；RSS/vmmap/heap取证，跨窗混合资源、SSH实机、最低macOS和实体触控板留Gate核对。"
 
 [[tasks]]
 id = "P5-T1"
 title = "全方法、运行入口与最终 Go/No-Go 核销"
-status = "pending"
+status = "in_progress"
 plan = "plan-p5.md#p5-t1"
 commit = ""
 note = ""
