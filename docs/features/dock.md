@@ -28,7 +28,7 @@
 
 共享 field editor 按实际输入控件判断归属；可见范围须与控件自身边界相交，不能把 SwiftUI 未裁剪的整窗可见范围当成输入框位置。整窗 `NSHostingView` 覆盖所有停靠组，不属于任何单独区域；工具空白获得焦点时不能把它按几何中心误认作当前组的输入控件。
 
-标签重命名属于显示名称：Return 或失焦提交，Escape 取消，空名称返回自动标题。各区域标签栏仅在标签总宽度超过可用空间时水平滚动；标签全部放得下时不回弹，窗口或分屏调整大小后自动重新判断。状态变更、恢复和持久化边界见 [session-restore.md](session-restore.md)。
+标签重命名属于显示名称：Return 或失焦提交，Escape 取消，空名称返回自动标题。左上角标题栏的拖动留白在窄组内先收缩，不能挤掉 Projects 等可点击标签。各区域标签栏仅在标签总宽度超过可用空间时水平滚动；标签全部放得下时不回弹，窗口或分屏调整大小后自动重新判断。状态变更、恢复和持久化边界见 [session-restore.md](session-restore.md)。
 
 ## 窗口与菜单
 
@@ -44,6 +44,6 @@ Finder 的 `fileURL` 拖放按接收区域分流：空工作区、普通编辑�
 
 ## 验证
 
-`DockWorkspaceTests` 验证布局规则；`PaneRetentionTests` 和工作区 UI 测试验证原生身份、焦点、关闭保存与跨窗口隔离。模型测试不代替真实拖动、键盘和输入验收。覆盖上下／左右组合、跨区域拖动、A→B→A、双窗口切换、关闭失败与恢复。
+`DockWorkspaceTests` 验证布局规则；`WorkspaceDockUITests` 从真实 Dev App 检查窄 Projects 标签、跨组拖动释放、工具点击与 ⌘W 所属组、空白点击释放旧编辑器键盘；`PaneRetentionTests` 和其余工作区 UI 测试验证原生身份、关闭保存与跨窗口隔离。模型测试不代替真实拖动、键盘和输入验收。覆盖上下／左右组合、跨区域拖动、A→B→A、双窗口切换、关闭失败与恢复。
 
 视觉不变量见 [ui.md](../ui.md)，运行入口见 [testing.md](../testing.md)。实现入口：[WorkspaceDockView.swift](../../Bailey/UI/WorkspaceDockView.swift)。

@@ -43,11 +43,14 @@ make test:FileTabPersistenceTests,NativeFileTabTests
 make test            # 完整宿主 XCTest
 make build:ui        # 只编译独立 UI Test，不启动 App
 make test:ui         # 独立图形会话中运行完整 App UI Test
+make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指定 UI 类
 ```
 
 本地迭代人工指定 `make test:类名1,类名2,...`（逗号分隔，不加空格）选择任意数量的宿主 XCTest 类；涉及共享组件时补测相关类。`make test:ui` 单独执行整个 UI Test Target，不混入本机日常宿主测试。`make test`、`make test:ui` 和 `make build:ui` 自动使用独立的 `chiimagnus.bailey.dev` 与 `build/DerivedData-Dev`，即使正式 Bailey 在运行也不会终止或覆盖它。`WorkspaceUITestSupport` 通过显式 Dev Bundle ID 启动 App；已有 Bailey Dev 实例时明确失败而不终止进程，也不允许整套 XCUITest 全部跳过却返回假绿色；本机 GUI Runner 必须使用 Apple Development 签名而非强制 ad-hoc，否则可能被系统拒绝操作辅助功能树。公共启动入口在 **Bailey Dev 激活后**暂选 ABC，系统选择器的路径输入框获得焦点后再次选 ABC；测试清理时恢复之前的输入法，并撤销 XCTest 临时启用的 Unicode Hex Input（若该输入法原本未启用）；此举不替代真实中文 IME 组词／候选测试。AppKit/XCUITest 仍争用同一桌面键盘焦点，要获得完全无干扰的真实 GUI 自动化须使用独立图形会话。CI 为每次非 Draft PR 都运行完整宿主 XCTest 和独立 App UI Test，不再根据文件变更猜测测试类名，避免迁移类名后执行零项。`ci/full` 可触发一次新的完整检查，测试结果必须对应本次 Head SHA。运行器由 [Makefile](../Makefile) 与 [共享 scheme](../Bailey.xcodeproj/xcshareddata/xcschemes/Bailey.xcscheme) 决定；不另建不参与 XCTest 的检查脚本，也不在产品启动时执行断言式自检。
 
 ## 测试层次
+
+**遵守测试金字塔，先选能证明目标行为的最低成本层。** 纯计算、模型状态与边界优先放在大量快速 Unit 测试；真实文件／Git／SSH 协作、TextKit 或 AppKit 组件内部契约放在必要的 Integration 测试；只有系统菜单、实际键盘焦点、跨窗口操作等必须启动完整 App 才能证明的用户流程，才加入少量独立 UI E2E。Xcode 的 Unit Test Target 可以同时容纳 Unit 和 Integration；组件测试不因涉及原生 View 就成为 E2E。
 
 | 层次 | 证明什么 | 不证明什么 |
 | --- | --- | --- |
@@ -61,8 +64,8 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 
 | 完整用户路径 | 独立 UI 测试 | 仍保留的底层回归 |
 | --- | --- | --- |
-| 冷启动、命令面板搜索／Escape、从编辑器切换 Files 后真实方向键／空格焦点 | `WorkspaceSmokeUITests`、`WorkspaceFilesUITests` | `DockFocusP2RegressionTests`、`WorkspaceWindowIsolationTests` |
-| 系统 Add Folder、Files 预览／打开、焦点恢复、文件去重、编辑保存到磁盘 | `WorkspaceFilesUITests` | `FileTreeTests`、`TreeRowHitTestingTests`、`FileTabPersistenceTests`、`NativeFileTabTests` |
+| 冷启动、命令面板搜索／Escape、从编辑器切换 Files 后真实方向键／空格焦点 | `WorkspaceSmokeUITests`、`WorkspaceFilesUITests`、`SharedTreeUITests`、`WorkspaceDockUITests` | `WorkspaceWindowIsolationTests` |
+| 系统 Add Folder、Files 预览／打开、焦点恢复、文件去重、编辑保存到磁盘 | `WorkspaceFilesUITests`、`SharedTreeUITests` | `FileTreeTests`、`FileTabPersistenceTests`、`NativeFileTabTests` |
 | 大文件远距导航、文本替换、键盘撤销／重做、真实保存 | `EditorNavigationUITests` | `NativeEditorLayoutTests`、`NativeEditorCompositionTests`、`FileTabPersistenceTests` |
 | Swift／Markdown／TSX／HTML／CSS 与纯文本实际着色像素差异、原文未污染 | `EditorHighlightingUITests`（本机 Bailey Dev 已实测） | `NativeSyntaxHighlightingTests`、`HighlightQueryCacheTests` |
 | Git Changes、Git Graph、Diff、键盘、暂存／忽略、原生确认及真实保存 | `WorkspaceGitUITests`、`GitChangesUITests`、`GitIgnoreEditorUITests`、`GitUncommittedUITests`、`GitDialogUITests`、`GitGraphUITests`、`GitGraphGeometryUITests`（真实 Git／index／磁盘、原生图谱／菜单／Branch／Tag Sheet） | `GitStatusModelTests`、`GitUncommittedActionTests`、`GitIgnoreIntegrationTests`、`NativeDiffTabTests` |
@@ -71,7 +74,9 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 
 必须访问 TextKit／AppKit 内部状态的原生组件测试仍保留在宿主 XCTest；Ghostty 的真实 PTY 还必须让原生终端表面附着最小 `NSWindow` 才会启动，相关集成测试不得挂载 SwiftUI 页面或模拟用户交互。模拟完整 App 操作的旧窗口夹具在对应迁移任务中删除，不长期维护双轨。未覆盖的完整外部路径（Finder/Dock 拖放、真实 SSH、脏文件保存冲突和不同窗口混合停靠）仍必须独立验收，不能因为 UI Test Target 存在而宣称已全部迁移；宿主 XCTest 也不等于 E2E。
 
-按行为风险选择层次，不给每个功能机械配五套测试。纯计算优先单元测试；影响标签身份、焦点、保存、连接、停靠和窗口生命周期时，加入真实原生或工作区回归，并补足相应人工路径。
+**完整覆盖不等于在 GUI 重复穷举。** 所有适用条件、极值、异常与关键组合仍须有证据；确定性算法、状态矩阵、故障注入和时序优先由 Unit／Integration 承担。UI Test 只补低层无法证明的真实 App 接线、控件命中、原生焦点和最终副作用；主题、字号或宽度确实影响原生交互时保留相应边界验证，但不要在每个配置下重复整套菜单、点击和启动流程。先复用或扩展已有测试，不将每条旧测试机械换成一条新 XCUITest，也不为追求固定数量而删除必要保障。
+
+**本地迭代先定点验证。** 按修改范围运行受影响的 `make test:类名1,类名2`；确实涉及完整用户入口时再用上面的 `ONLY_TESTING` 定点运行 UI 类或方法。完成阶段验收及 CI 仍执行要求的全量测试，不在每次小改动后重复跑完整 UI Target。
 
 ## 改什么，测什么
 
@@ -80,7 +85,7 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 | 改动 | 相关测试 |
 | --- | --- |
 | 应用身份、Finder 类型注册与原生 Apple Event 系统入口 | `AppIdentityTests`、`WorkspaceWindowIsolationTests`；真实 Finder/Dock 进程外投递需获授权的受控图形会话 |
-| Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests`；改变焦点许可或活动组时补 `DockFocusP2RegressionTests`、`WorkspaceWindowIsolationTests` 的原生输入与双窗路径 |
+| Dock 模型、项目与上下文身份 | `DockWorkspaceTests`、`WorkspaceIdentityTests`、`PanelContextTests`；改变焦点许可或活动组时补 `WorkspaceDockUITests`、`WorkspaceFilesUITests` 的真实输入和 `WorkspaceWindowIsolationTests` 的双窗路径 |
 | 偏好、隧道配置和异常输入 | `AppSettingsTests`、`TunnelStoreTests` |
 | 文件树、创建和项目文件索引 | `FileTreeTests`、`ProjectFileIndexTests` |
 | Git 环境、刷新、写操作与失败状态 | `NativeGitHistoryFileTests`、`GitRemoteRefreshIntegrationTests`、`GitIgnoreIntegrationTests`、`GitUncommittedActionTests`、`GitExecutionTests`、`GitStatusModelTests`、`GitBranchActionTests`、`GitRemoteBranchActionTests`、`GitTagActionTests`、`GitWorkspaceActionTests`、`GitStashActionTests` |
@@ -91,7 +96,7 @@ make test:ui         # 独立图形会话中运行完整 App UI Test
 | 查询编译共享、固定资源失败与取消等待者 | `HighlightQueryCacheTests`、`NativeSyntaxHighlightingTests` |
 | 原生组合输入、结束标记与最终替换 | `NativeEditorCompositionTests` |
 | 原生远距离定位、文末与固定行高 | `NativeEditorLayoutTests` |
-| Files 与所有 Git 树的命中与交互 | `TreeRowHitTestingTests` |
+| Files 与所有 Git 树的命中与交互 | `SharedTreeUITests`、`GitChangesUITests`、`GitGraphUITests`、`GitGraphGeometryUITests` |
 | 快照、历史与测试隔离 | `SessionStoreTests` |
 | 标签及窗口整合路径 | `WorkspaceContentIdentityTests`、`WorkspaceWindowCloseTests`、`WorkspaceWindowIsolationTests` |
 

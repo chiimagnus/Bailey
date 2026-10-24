@@ -359,10 +359,10 @@ private struct DockTabGroupView: View {
         GeometryReader { geometry in
             let origin = geometry.frame(in: .named("workspaceDock")).origin
             let isTopLeft = origin.x < 1 && origin.y < 1
+            let dragWidth = isTopLeft ? min(76, max(0, geometry.size.width - 124)) : 0
             HStack(spacing: 4) {
-                if isTopLeft { WindowDragArea().frame(width: 76) }
-                tabStrip(maxWidth: max(0, geometry.size.width
-                    - (isTopLeft ? 120 : 44)))
+                if dragWidth > 0 { WindowDragArea().frame(width: dragWidth) }
+                tabStrip(maxWidth: max(0, geometry.size.width - dragWidth - 44))
                 panelAddButton
                 WindowDragArea().frame(minWidth: 0, maxWidth: .infinity)
             }
