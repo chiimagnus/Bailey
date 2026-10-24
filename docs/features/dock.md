@@ -44,6 +44,6 @@ Finder 的 `fileURL` 拖放按接收区域分流：空工作区、普通编辑�
 
 ## 验证
 
-`DockWorkspaceTests` 验证布局规则；`WorkspaceDockUITests` 从真实 Dev App 检查窄 Projects 标签、跨组拖动释放、工具点击与 ⌘W 所属组、空白点击及 Files/Git 交接时旧编辑器不再接收键盘；`WorkspaceWindowsUITests` 验证真实 Launch Services 文件打开／重复与批量投递、两个窗口的文件归属、实际文本、方向键／Space 与保存；`FinderDeliveryIntegrationTests` 验证 Dock 落点、过期回调及大批次队列；`DockFocusIntegrationTests` 检查原生 field editor、组归属和隐藏编辑器拒绝输入。原生对象身份、关闭保存由组件集成与完整 App 回归分层验证。模型测试不代替真实拖动、键盘和输入验收。覆盖上下／左右组合、跨区域拖动、A→B→A、双窗口切换、关闭失败与恢复。
+`DockWorkspaceTests` 验证布局规则；`WorkspaceDockUITests` 从真实 Dev App 检查窄 Projects 标签、跨组拖动释放、工具点击与 ⌘W 所属组、空白点击及 Files/Git 交接时旧编辑器不再接收键盘；`WorkspaceWindowsUITests` 验证真实 Launch Services 文件打开／重复与批量投递、两个窗口的文件归属、实际文本、方向键／Space 与保存；`FinderDeliveryIntegrationTests` 验证 Dock 落点、过期回调及大批次队列；`DockFocusIntegrationTests` 检查原生 field editor、组归属和隐藏编辑器拒绝输入。`NativeContentIdentityIntegrationTests` 检查标签栏窄宽滚动及 File／Diff／Browser 原生对象复用；`WindowCloseIntegrationTests` 以最小原生窗口组件验证保存失败否决、Sheet 归属和重试，`WindowOwnershipIntegrationTests` 验证双窗隔离与快照登记；真实窗口关闭和重启由 `WorkspaceWindowsUITests` 检查最终磁盘及恢复状态。模型测试不代替真实拖动、键盘和输入验收。覆盖上下／左右组合、跨区域拖动、A→B→A、双窗口切换、关闭失败与恢复。
 
 视觉不变量见 [ui.md](../ui.md)，运行入口见 [testing.md](../testing.md)。实现入口：[WorkspaceDockView.swift](../../Bailey/UI/WorkspaceDockView.swift)。

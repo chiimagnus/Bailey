@@ -62,8 +62,17 @@ private final class WindowCloseDelegateWitness: NSObject, NSWindowDelegate {
 }
 
 @MainActor
-final class WorkspaceWindowCloseTests: XCTestCase {
+final class WindowCloseIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
+    // Mount only native window attachment/close coordination.
+    private func chromeSurface(for manager: WorkspaceWindowModel) -> some View {
+        Color.clear.background(WindowChromeAccessor(
+            onAttach: { manager.attach(to: $0) },
+            hasUnsavedEdits: { manager.hasUnsavedEditorsInWindow },
+            saveBeforeClose: { await manager.saveBeforeWindowClose() }
+        ))
+    }
 
     private func wait(
         _ check: () async -> Bool, file: StaticString = #filePath, line: UInt = #line
@@ -78,7 +87,7 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         }
     }
 
-    func testEmptyWorkspaceAttachesToWindowWhenHostingViewWasRenderedOffscreen() async throws {
+    func testNativeChromeAttachesAfterPreviouslyDetachedViewMount() async throws {
         let oldSnapshots = SessionStore.load()
         let oldHistories = TerminalHistoryStore.load()
         defer {
@@ -88,7 +97,7 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
         XCTAssertTrue(manager.projects.isEmpty)
-        let host = NSHostingView(rootView: ContentView(manager: manager))
+        let host = NSHostingView(rootView: chromeSurface(for: manager))
         host.frame = NSRect(x: 0, y: 0, width: 620, height: 410)
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(120))
@@ -114,7 +123,7 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         XCTAssertTrue(manager.projects.isEmpty)
     }
 
-    func testTwoNativeWorkspacesAttachOwnWindowsAndKeepFolderPickerIsolated() async throws {
+    func testNativeChromeAttachesToTwoDistinctWindowsAndPickers() async throws {
         let snapshots = SessionStore.load()
         let histories = TerminalHistoryStore.load()
         defer {
@@ -144,8 +153,8 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         firstWindow.isReleasedWhenClosed = false
         secondWindow.isReleasedWhenClosed = false
         defer { firstWindow.close(); secondWindow.close() }
-        let firstView = NSHostingView(rootView: ContentView(manager: first))
-        let secondView = NSHostingView(rootView: ContentView(manager: second))
+        let firstView = NSHostingView(rootView: chromeSurface(for: first))
+        let secondView = NSHostingView(rootView: chromeSurface(for: second))
         firstWindow.contentView = firstView
         secondView.frame = NSRect(x: 0, y: 0, width: 570, height: 400)
         secondView.layoutSubtreeIfNeeded()
@@ -364,7 +373,7 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         XCTAssertFalse(manager.projects.contains { $0 === project })
     }
 
-    func testNativeCloseDoesNotDiscardFailedSaveThenClosesAfterRetry() async throws {
+    func testNativeChromeCloseVetoesFailedWriteAndRetriesAfterRemount() async throws {
         let oldWindows = SessionStore.load()
         let oldHistories = TerminalHistoryStore.load()
         defer { SessionStore.save(oldWindows); TerminalHistoryStore.save(oldHistories) }
@@ -390,7 +399,7 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         let witness = WindowCloseDelegateWitness()
         window.delegate = witness
         defer { window.close() }
-        var host: NSHostingView<ContentView>? = NSHostingView(rootView: ContentView(manager: manager))
+        var host = Optional(NSHostingView(rootView: chromeSurface(for: manager)))
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
         try await wait {
@@ -413,7 +422,7 @@ final class WorkspaceWindowCloseTests: XCTestCase {
         // Replacing the SwiftUI host must install a live coordinator without
         // losing the original window delegate. SwiftUI owns when the retired
         // host is released; deallocation is not a prerequisite for close.
-        let replacement = NSHostingView(rootView: ContentView(manager: manager))
+        let replacement = NSHostingView(rootView: chromeSurface(for: manager))
         window.contentView = replacement
         host = nil
         try await wait {

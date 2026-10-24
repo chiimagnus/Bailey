@@ -42,6 +42,6 @@ Finder／Dock 的外部打开请求不是工作区快照。冷启动及末窗关
 
 ## 验证
 
-`SessionStoreTests` 检查当前快照和隔离标识，工作区 UI 测试检查标签、窗口及保存归属。真实重启另外核对布局、选中内容和位置；分别报告可以恢复的显示状态与不会恢复的工作。
+`SessionStoreTests` 检查快照、历史、隔离标识与已关闭所有者的去注册；`WindowOwnershipIntegrationTests` 检查重复登记、恢复认领和双窗口身份。`WorkspaceWindowsUITests` 从独立 Bailey Dev 真实关闭脏文件窗口，核对磁盘字节，并复用同一测试 ID 重启检查原文件标签和正文。当前重启测试不代表终端进程或浏览器表单可以恢复；完整正常退出（⌘Q）由独立 App 退出测试验证。
 
 实现入口：[SessionStore.swift](../../Bailey/Workspace/SessionStore.swift)、[TerminalHistory.swift](../../Bailey/Terminal/TerminalHistory.swift)。

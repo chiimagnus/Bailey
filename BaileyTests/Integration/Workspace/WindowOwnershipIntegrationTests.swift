@@ -3,10 +3,10 @@ import SwiftUI
 import XCTest
 @testable import Bailey
 
-/// Two full workspaces in separate native windows. The current key window is
+/// Isolated workspace owners and minimal native file components in separate windows. The current key window is
 /// not a valid substitute for the manager that owns a file or its save target.
 @MainActor
-final class WorkspaceWindowIsolationTests: XCTestCase {
+final class WindowOwnershipIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
     func testWindowFocusLossSavesAllDirtyBuffersNotOnlyTheMostRecentTab() async throws {
@@ -99,10 +99,12 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         aWindow.isReleasedWhenClosed = false
         bWindow.isReleasedWhenClosed = false
         defer { aWindow.close(); bWindow.close() }
-        let aHost = NSHostingView(rootView: ContentView(manager: first))
-        let bHost = NSHostingView(rootView: ContentView(manager: second))
+        let aHost = NSHostingView(rootView: FileViewerView(file: aFile))
+        let bHost = NSHostingView(rootView: FileViewerView(file: bFile))
         aWindow.contentView = aHost
         bWindow.contentView = bHost
+        first.attach(to: aWindow)
+        second.attach(to: bWindow)
         aWindow.orderFront(nil)
         bWindow.makeKeyAndOrderFront(nil)
         try await wait {
@@ -177,10 +179,16 @@ final class WorkspaceWindowIsolationTests: XCTestCase {
         firstWindow.isReleasedWhenClosed = false
         secondWindow.isReleasedWhenClosed = false
         defer { firstWindow.close(); secondWindow.close() }
-        let firstHost = NSHostingView(rootView: ContentView(manager: first))
-        let secondHost = NSHostingView(rootView: ContentView(manager: second))
+        guard case .file(let aFile)? = first.selectedProject?.focusedContent,
+              case .file(let bFile)? = second.selectedProject?.focusedContent else {
+            return XCTFail("Both owning file tabs must exist")
+        }
+        let firstHost = NSHostingView(rootView: FileViewerView(file: aFile))
+        let secondHost = NSHostingView(rootView: FileViewerView(file: bFile))
         firstWindow.contentView = firstHost
         secondWindow.contentView = secondHost
+        first.attach(to: firstWindow)
+        second.attach(to: secondWindow)
         firstWindow.orderFront(nil)
         secondWindow.makeKeyAndOrderFront(nil)
         try await wait {

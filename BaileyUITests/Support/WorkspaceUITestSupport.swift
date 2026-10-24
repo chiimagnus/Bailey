@@ -18,7 +18,9 @@ enum WorkspaceUITestSupport {
         precondition(home.standardizedFileURL.path.hasPrefix(
             FileManager.default.temporaryDirectory.standardizedFileURL.path + "/Bailey-UITest-"
         ), "UI configuration must belong to an isolated fixture")
-        app.launchArguments = ["--isolated-ui-test"]
+        // Disable AppKit's separate saved-window state; Bailey's own isolated
+        // SessionStore snapshots remain available for deliberate restart tests.
+        app.launchArguments = ["--isolated-ui-test", "-ApplePersistenceIgnoreState", "YES"]
         if let language { app.launchArguments += ["-AppleLanguages", "(\(language))"] }
         app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
         app.launchEnvironment["CFFIXED_USER_HOME"] = home.path

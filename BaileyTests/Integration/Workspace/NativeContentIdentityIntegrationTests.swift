@@ -4,11 +4,17 @@ import WebKit
 import XCTest
 @testable import Bailey
 
-/// Exercises the actual workspace content branch, rather than rendering each
-/// editor in isolation. A single dock group changes content type and identity.
+/// Retained native File/Diff/Browser surfaces across the real pane component.
 @MainActor
-final class WorkspaceContentIdentityTests: XCTestCase {
+final class NativeContentIdentityIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
+
+    // Host only the actual pane component, never a complete ContentView or Dock.
+    private func panel(for tab: PaneTab) -> some View {
+        PanelContentView(tab: tab, isFocused: false,
+                         onFocused: {}, onNewBrowserTab: { _ in }, onNewFileTab: { _ in })
+            .id(tab.id)
+    }
 
     private func find<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
         if let matching = view as? T { return matching }
@@ -45,6 +51,8 @@ final class WorkspaceContentIdentityTests: XCTestCase {
         return (root, file)
     }
 
+    // Native scroll elasticity requires observing the actual Dock component,
+    // not a hand-built replacement or a full ContentView host.
     func testDockTabStripOnlyBouncesWhenTabsOverflowAfterResizing() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("bailey-tab-bounce-" + UUID().uuidString)
@@ -138,14 +146,13 @@ final class WorkspaceContentIdentityTests: XCTestCase {
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        let host = NSHostingView(rootView: ContentView(manager: manager))
-        window.contentView = host
-        window.orderFront(nil)
-
         // Create a worktree change before mounting a clean file editor. An
         // external edit afterward would rightly reload the clean document.
         try "let identity = \"worktree A\"\n".write(to: fileURL, atomically: true, encoding: .utf8)
         manager.openFile(fileURL.path)
+        let host = NSHostingView(rootView: panel(for: try XCTUnwrap(project.selectedTab)))
+        window.contentView = host
+        window.orderFront(nil)
         try await wait {
             host.layoutSubtreeIfNeeded()
             return self.find(FocusReportingTextView.self, in: host) != nil
@@ -154,6 +161,7 @@ final class WorkspaceContentIdentityTests: XCTestCase {
         XCTAssertEqual(editor.text, "let identity = \"worktree A\"\n")
         manager.openDiff(repoRoot: root.path, path: fileURL.lastPathComponent,
                          staged: false, untracked: false, origPath: nil)
+        host.rootView = panel(for: try XCTUnwrap(project.selectedTab))
         let diff = try XCTUnwrap(project.tabs.compactMap {
             if case .diff(let candidate) = $0.content { return candidate }
             return nil
@@ -167,6 +175,7 @@ final class WorkspaceContentIdentityTests: XCTestCase {
         XCTAssertNil(find(FocusReportingTextView.self, in: host))
 
         manager.openFile(fileURL.path)
+        host.rootView = panel(for: try XCTUnwrap(project.selectedTab))
         try await wait {
             host.layoutSubtreeIfNeeded()
             return self.find(FocusReportingTextView.self, in: host) === editor
@@ -176,6 +185,7 @@ final class WorkspaceContentIdentityTests: XCTestCase {
 
         manager.openDiff(repoRoot: root.path, path: fileURL.lastPathComponent,
                          staged: false, untracked: false, origPath: nil)
+        host.rootView = panel(for: try XCTUnwrap(project.selectedTab))
         try await wait {
             host.layoutSubtreeIfNeeded()
             return self.find(DiffNativeSurface.self, in: host) === originalDiffSurface
@@ -198,20 +208,21 @@ final class WorkspaceContentIdentityTests: XCTestCase {
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        let host = NSHostingView(rootView: ContentView(manager: manager))
+        manager.openFile(aURL.path)
+        let host = NSHostingView(rootView: panel(for: try XCTUnwrap(project.selectedTab)))
         window.contentView = host
         window.orderFront(nil)
-
-        manager.openFile(aURL.path)
         try await wait { host.layoutSubtreeIfNeeded(); return self.find(FocusReportingTextView.self, in: host) != nil }
         let a = try XCTUnwrap(find(FocusReportingTextView.self, in: host))
         let browser = project.newBrowserTab(initialURL: "about:blank", initialFocus: .none)
+        host.rootView = panel(for: try XCTUnwrap(project.selectedTab))
         try await wait {
             host.layoutSubtreeIfNeeded()
             return self.find(WKWebView.self, in: host) === browser.webView
         }
         XCTAssertNil(find(FocusReportingTextView.self, in: host))
         manager.openFile(bURL.path)
+        host.rootView = panel(for: try XCTUnwrap(project.selectedTab))
         try await wait {
             host.layoutSubtreeIfNeeded()
             return self.find(FocusReportingTextView.self, in: host)?.text == "let second = \"B\"\n"
@@ -219,6 +230,7 @@ final class WorkspaceContentIdentityTests: XCTestCase {
         let b = try XCTUnwrap(find(FocusReportingTextView.self, in: host))
         XCTAssertFalse(a === b)
         manager.openFile(aURL.path)
+        host.rootView = panel(for: try XCTUnwrap(project.selectedTab))
         try await wait { host.layoutSubtreeIfNeeded(); return self.find(FocusReportingTextView.self, in: host) === a }
         XCTAssertEqual(a.text, "let identity = \"original A\"\n")
         XCTAssertEqual(b.text, "let second = \"B\"\n")

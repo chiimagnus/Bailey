@@ -159,6 +159,89 @@ final class WorkspaceWindowsUITests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: b, encoding: .utf8), "file B\n")
     }
 
+    func testNativeFolderPickersStayInsideTheirOwningWindows() throws {
+        let app = try WorkspaceUITestSupport.launch(in: self)
+        let firstID = app.windows.firstMatch.identifier
+        let first = app.windows.matching(identifier: firstID).firstMatch
+
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        XCTAssertEqual(app.windows.count, 2)
+        let newID = try XCTUnwrap(app.windows.allElementsBoundByIndex
+            .first(where: { $0.identifier != firstID })?.identifier)
+        let second = app.windows.matching(identifier: newID).firstMatch
+        XCTAssertNotEqual(first.identifier, second.identifier)
+
+        for (owner, other) in [(second, first), (first, second)] {
+            activate(owner, in: app)
+            let add = owner.buttons["bailey.emptyState.addFolder"]
+            XCTAssertTrue(add.waitForExistence(timeout: 15))
+            add.click()
+            XCTAssertTrue(owner.sheets.firstMatch.waitForExistence(timeout: 15))
+            XCTAssertFalse(other.sheets.firstMatch.exists,
+                           "Native folder picker must never attach to another workspace window")
+            app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+            XCTAssertTrue(owner.sheets.firstMatch.waitForNonExistence(timeout: 10))
+            XCTAssertTrue(add.exists, "Cancel must not add a project")
+        }
+        XCTAssertEqual(app.windows.count, 2)
+    }
+
+    func testNativeWindowCloseAndRelaunchRestoreTheSameFileAndBytes() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("restored/sample.swift", text: "let restored = true\n")
+        let folder = fixture.root.appendingPathComponent("restored", isDirectory: true)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root
+        )
+        try WorkspaceUITestSupport.addFolder(folder, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let owner = app.windows.firstMatch
+        let row = WorkspaceUITestSupport.fileRow(file, in: owner)
+        XCTAssertTrue(row.waitForExistence(timeout: 20))
+        row.doubleClick()
+        let editor = owner.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        let originalBytes = try Data(contentsOf: file)
+        editor.click()
+        editor.typeText("RESTORED_MARKER")
+        XCTAssertTrue((editor.value as? String)?.contains("RESTORED_MARKER") == true)
+        XCTAssertEqual(try Data(contentsOf: file), originalBytes,
+                       "The native edit must still be unsaved before window closure")
+
+        // A native close must save pending edits and the Bailey session snapshot;
+        // terminate() alone is not a normal Quit.
+        let close = owner.buttons["_XCUI:CloseWindow"]
+        XCTAssertTrue(close.waitForExistence(timeout: 10))
+        close.click()
+        XCTAssertTrue(owner.waitForNonExistence(timeout: 12))
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? String(contentsOf: file, encoding: .utf8))?.contains("RESTORED_MARKER") == true
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 15), .completed,
+                       "Closing a dirty native window must persist the new disk bytes")
+        let savedBytes = try Data(contentsOf: file)
+        app.terminate()
+        app.launch()
+        app.activate()
+        if !app.windows.firstMatch.waitForExistence(timeout: 4) {
+            // With AppKit state restoration intentionally disabled, obtain a
+            // real WindowGroup scene through the existing system menu command.
+            let newWindow = app.menuItems.matching(NSPredicate(
+                format: "title IN %@", ["New Window", "新建窗口"])).firstMatch
+            XCTAssertTrue(newWindow.waitForExistence(timeout: 10))
+            newWindow.click()
+        }
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15),
+                      "The native New Window command must open the restored workspace")
+        let restoredWindow = app.windows.firstMatch
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: restoredWindow)
+            .waitForExistence(timeout: 20), "The restored session must retain its file tab")
+        XCTAssertTrue(restoredWindow.textViews.firstMatch.waitForExistence(timeout: 15))
+        XCTAssertTrue((restoredWindow.textViews.firstMatch.value as? String)?
+            .contains("RESTORED_MARKER") == true)
+        XCTAssertEqual(try Data(contentsOf: file), savedBytes)
+    }
+
     func testKeyboardFocusAndPaletteRestorationStayWithTheOwningWindow() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let firstA = try fixture.file("window-a/a-first.swift", text: "first A\n")
