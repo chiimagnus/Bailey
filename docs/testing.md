@@ -1,6 +1,6 @@
 # 测试与验收
 
-本页是 Bailey 完成标准的唯一归属，负责测试层次、执行入口、隔离、性能测量和人工回归。测试结构、覆盖范围或验收要求改变时同步更新；贡献指南与 PR 只引用本页，不维护第二份清单。
+本页是 Bailey 完成标准的唯一归属，负责宿主／UI 测试边界、执行入口、隔离、性能测量和人工回归。测试结构、覆盖范围或验收要求改变时同步更新；贡献指南与 PR 只引用本页，不维护第二份清单。
 
 ## 完成标准
 
@@ -34,7 +34,7 @@
 
 ## 测试目录与入口
 
-`BaileyTests/` 通过 `Unit/`、`Integration/` 组织宿主 XCTest。需要直接测量 `NSTextView` 的行号像素、TextKit 2 视口或 IME 组合状态时，使用最小 AppKit 组件集成测试；这不等于完整 App E2E。`BaileyUITests/` 使用独立 UI Test Target（`Bailey-UI` Scheme），通过 `XCUIApplication` 操作完整 App，不导入产品模块。只有底层测试无法证明的真实用户入口、系统交互与跨窗口操作才放入这个目标。
+`BaileyTests/` 是**唯一的宿主 XCTest Target**，测试直接按领域放在 `App/`、`Editor/`、`Files/`、`Git/`、`Remote/`、`Settings/`、`Terminal/`、`Workspace/`，不再按 Unit／Integration 额外分目录。宿主测试既可检查纯算法和模型，也可使用真实临时 Git／文件、最小 AppKit 组件验证 `NSTextView` 行号像素、TextKit 2 视口、IME 或 PTY；它们都不属于完整 App E2E。`BaileyUITests/` 使用独立 UI Test Target（`Bailey-UI` Scheme），通过 `XCUIApplication` 操作完整 App，不导入产品模块。只有底层测试无法证明的真实用户入口、系统交互与跨窗口操作才放入这个目标。
 
 每个文件按主要职责归档，不因混合用例机械拆类，不创建空目录或空测试。移动文件时核对工程发现路径，不能让它退出真实测试集合。
 
@@ -50,13 +50,12 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 
 ## 测试层次
 
-**遵守测试金字塔，先选能证明目标行为的最低成本层。** 纯计算、模型状态与边界优先放在大量快速 Unit 测试；真实文件／Git／SSH 协作、TextKit 或 AppKit 组件内部契约放在必要的 Integration 测试；只有系统菜单、实际键盘焦点、跨窗口操作等必须启动完整 App 才能证明的用户流程，才加入少量独立 UI E2E。Xcode 的 Unit Test Target 可以同时容纳 Unit 和 Integration；组件测试不因涉及原生 View 就成为 E2E。
+**按是否启动完整 App 划分测试，而非按 Unit／Integration 划分层级或数量。** 优先在 `BaileyTests` 中以最低成本验证逻辑、内存状态、真实 Git／文件操作及最小原生组件；只有系统菜单、实际键盘焦点、跨窗口等必须通过完整 Bailey App 才能证明的用户流程，才放入 `BaileyUITests`。Unit、Integration 可描述测试性质，但不要求单独目录或固定比例；宿主中的原生组件测试不等于 UI E2E。
 
 | 层次 | 证明什么 | 不证明什么 |
 | --- | --- | --- |
-| Unit | 纯算法、模型、解析、状态转换及异常／容量边界 | 真实原生焦点、文件／网络协作或完整 App 入口 |
-| Integration | 临时文件、真实 Git／受控 SSH、持久化，以及最小 AppKit 窗口内的 TextKit 布局／IME／像素／Undo 等组件契约 | 完整 App 菜单、真实跨窗口键盘路由；模拟 SSH 不等于实际远端 |
-| UI E2E | 由 `XCUIApplication` 启动 Bailey Dev，从真实用户入口操作并核对文件、Git 或窗口最终结果 | 不能替代底层全部异常组合，也不能由组件测试的绿色结果推断 |
+| 宿主测试（`BaileyTests`） | 纯计算、模型／状态、解析、异常／容量矩阵；真实临时文件、Git／受控 SSH、持久化及最小 AppKit/TextKit／IME／Undo 组件契约 | 不证明完整 App 的菜单、前台键盘交接或真实跨窗口路由；模拟 SSH 不等于实际远端 |
+| UI E2E（`BaileyUITests`） | 通过 `XCUIApplication` 启动 Bailey Dev，操作真实菜单、Sheet、焦点和跨窗，并核对最终文件、Git 或窗口结果 | 不能替代宿主测试中全部异常、容量和组件组合；组件绿色不等于 UI E2E 通过 |
 
 `BaileyUITests` 通过一次性本机临时文件／Git 仓库作为输入，并经真实 App 的系统文件选择器、Dock 和键盘操作核对结果。夹具创建时即登记 XCTest 清理，失败启动也不能留下文件；Git 子进程使用当前 Xcode 或 Command Line Tools 的真实 Git 二进制，绕开 `/usr/bin/git` 在 XCTest 沙盒中的 `xcrun` 包装器；标准输出和错误输出分别写入一次性文件，避免管道反压，并用于核对真实 Git 结果。原生文件选择器在「前往文件夹」中粘贴完整路径并核对解析结果，保留剪贴板的全部项目和数据类型；用窗口内的 `OKButton` 标识确认、`Escape` 取消，不能硬编码英文 `Add`/`Open`/`Cancel` 文案。Files/Git 行用原绝对／仓库相对路径的 AX 标签后缀区分同名项，文件 Tab 以独立的 AX 路径值区分重名标题，标识符不携带长路径；多窗口查询必须固定目标窗口的 AX `identifier`；窗口列表的索引会因激活及系统文件投递变化，不能将 `allElementsBoundByIndex` 的窗口引用跨事件复用。中文界面与超长 Unicode 文件树路径均有独立 App 回归；系统「前往文件夹」的超长中文路径仍须单独验证，不由普通路径测试推断。构建 UI Target 不等于执行 GUI 测试：
 
@@ -73,7 +72,7 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 
 必须访问 TextKit／AppKit 内部状态的原生组件测试保留在宿主 XCTest；Ghostty 的真实 PTY 只有原生终端表面附着最小 `NSWindow` 才会启动，相关集成测试不得挂载完整 SwiftUI 工作区或模拟用户交互。完整外部路径（Finder／Dock 拖放、真实 SSH、脏文件保存冲突和不同窗口混合停靠）仍需独立验收；组件测试与宿主 XCTest 都不能冒充完整 App E2E。
 
-**完整覆盖不等于在 GUI 重复穷举。** 所有适用条件、极值、异常与关键组合仍须有证据；确定性算法、状态矩阵、故障注入和时序优先由 Unit／Integration 承担。UI Test 只补低层无法证明的真实 App 接线、控件命中、原生焦点和最终副作用；主题、字号或宽度确实影响原生交互时保留相应边界验证，但不要在每个配置下重复整套菜单、点击和启动流程。先复用或扩展已有测试，不将每条旧测试机械换成一条新 XCUITest，也不为追求固定数量而删除必要保障。
+**完整覆盖不等于在 GUI 重复穷举。** 所有适用条件、极值、异常与关键组合仍须有证据；确定性算法、状态矩阵、故障注入、真实组件协作和时序优先由宿主测试承担。UI Test 只补低层无法证明的真实 App 接线、控件命中、原生焦点和最终副作用；主题、字号或宽度确实影响原生交互时保留相应边界验证，但不要在每个配置下重复整套菜单、点击和启动流程。先复用或扩展已有测试，不将每条旧测试机械换成一条新 XCUITest，也不为追求固定数量而删除必要保障。
 
 **本地迭代先定点验证。** 按修改范围运行受影响的 `make test:类名1,类名2`；确实涉及完整用户入口时再用上面的 `ONLY_TESTING` 定点运行 UI 类或方法。完成阶段验收及 CI 仍执行要求的全量测试，不在每次小改动后重复跑完整 UI Target。
 

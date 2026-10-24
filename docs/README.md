@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | [architecture.md](architecture.md) | macOS 范围、单一状态所有者、依赖方向、动作意图与窗口焦点边界 | 平台范围、状态真源、交接意图、模块职责或依赖方向改变 |
 | [standards.md](standards.md) | Swift、命名、并发、注释、简化与性能原则 | 开发约定或平台基线改变 |
-| [testing.md](testing.md) | 唯一完成标准、测试层次、回归选择、性能测量与人工验收 | 测试入口、覆盖范围或验收要求改变 |
+| [testing.md](testing.md) | 唯一完成标准、宿主／UI 测试边界、回归选择、性能测量与人工验收 | 测试入口、覆盖范围或验收要求改变 |
 | [development.md](development.md) | 环境、本地构建与安装、依赖和生成资源 | 工具链、构建入口、依赖或生成方式改变 |
 | [release.md](release.md) | CI、版本、打包和发布流程 | workflow、版本规则或分发方式改变 |
 | [signing.md](signing.md) | 签名身份、证书、权限与验证 | 签名配置、证书或打包验证改变 |
