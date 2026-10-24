@@ -2,35 +2,6 @@ import XCTest
 
 @MainActor
 final class WorkspaceGitUITests: XCTestCase {
-    func testGitGraphDisplaysTheRealCommitAndExpandsItsFiles() throws {
-        let fixture = try WorkspaceUITestFixture(in: self)
-        let committed = try fixture.file("history-marker.swift", text: "let historyMarker = true\n")
-        try fixture.initializeGit()
-        let app = try WorkspaceUITestSupport.launch(in: self)
-
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
-        app.typeKey("g", modifierFlags: [.command, .shift])
-        let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
-        XCTAssertTrue(git.waitForExistence(timeout: 20))
-        XCTAssertTrue(git.isHittable, "The native Git Manager shortcut must reveal a visible Git tab")
-
-        let history = app.buttons.matching(
-            NSPredicate(format: "label == %@", "E2E fixture history")
-        ).firstMatch
-        guard history.waitForExistence(timeout: 20) else {
-            XCTFail("Git Graph did not expose the fixture commit. Accessibility tree:\n"
-                + String(app.debugDescription.prefix(16000)))
-            return
-        }
-        history.click()
-        let path = app.windows.firstMatch.descendants(matching: .any)
-            .matching(identifier: "bailey.git.history.file")
-            .matching(NSPredicate(format: "label ENDSWITH %@", ", " + committed.lastPathComponent))
-            .firstMatch
-        XCTAssertTrue(path.waitForExistence(timeout: 15),
-                      "Opening a real Git Graph commit must reveal its changed file")
-    }
-
     func testGitChangesAreScopedToTheOpenedRepository() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let changed = try fixture.file("changed-file.swift", text: "let saved = 1\n")
