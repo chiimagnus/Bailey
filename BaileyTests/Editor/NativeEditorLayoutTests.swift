@@ -84,7 +84,7 @@ final class NativeEditorLayoutTests: XCTestCase {
     func testCurrentSourceFileKeepsCorrectViewportAndHitTesting() async throws {
         let sourceFile = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
             .appendingPathComponent("Bailey/Files/FileTreeModel.swift")
         let source = try String(contentsOf: sourceFile, encoding: .utf8)
         let (window, scroll, editor) = mount(source)
