@@ -1,12 +1,12 @@
 # P2 · Integration 只负责真实协作，不当第二个 Unit
 
-**Goal:** 463 项 Integration 中逐方法区分必要真实边界和重复规则矩阵。**有真实 Git/文件/系统/Native 状态才保留 Integration；无 IO 的状态矩阵回 Unit，同一边界的重复完整 fixture 删除或合并**。避免先把 133 项 GUI 全移入 Integration，反而让中层继续膨胀。
+**Goal:** **让 463 项 Integration 实际减少到远少于 Unit 的规模**，而不是只整理几个重型 fixture。P1 先把能直接内存运行的 Model/ViewModel 放回 Unit；本阶段继续沿领域的真实 Git/文件/原生入口**拆开业务决策与 IO**，将异常、配置和时序矩阵交给大量 Unit。每个剩余 Integration 必须回答“它实际验证了哪一条无法在内存中证明的外部合同”。
 
-**证据：** GitStatusModelTests 49、GitBranch/Commit/RemoteBranch/Stash/TagActionTests 分别 13/14/15/12/8；FileTabPersistenceTests.swift 内有 FileTabPersistenceTests 和 NativeFileTabTests，合计 49；NativeDiffTabTests 36、NativeEditorLayoutTests 28、NativeSyntaxHighlightingTests 22、FileTreeTests 27；NativePaneRetentionIntegrationTests 20、FinderDeliveryIntegrationTests 17、WorkspaceIdentityTests 24、RemoteCommandsTests 19。这些方法大量涉及真实 OS 或最小 NSWindow，**不能按名称或目录一锅端**。已核对部分使用 PanelContentView 的原生宿主，不把它误判成整个 App E2E。
+**Source-backed baseline:** GitStatusModelTests 49 项、GitBranch/Commit/RemoteBranch/Stash/TagActionTests 13/14/15/12/8、FileTabPersistenceTests.swift 两个类合计 49、NativeDiffTabTests 36、NativeEditorLayoutTests 28、NativeSyntaxHighlightingTests 22、FileTreeTests 27、NativePaneRetentionIntegrationTests 20、FinderDeliveryIntegrationTests 17、WorkspaceIdentityTests 24 和 RemoteCommandsTests 19。**很多确实直接运行 Git、文件/窗口**；不能为了满足金字塔把这些硬归 Unit。也有一些测试虽不直接调用系统 API，却经共享 helper 挂载原生 View——必须追间接依赖，不凭关键词误判。
 
-**Non-goals:** 不为减少 Integration 数量假造解析器、假 Git 结果或变更业务 API；不以循环中更多 XCTAssert 代替真实 Git 原子性；不增加“性能采样框架”、第三个 Target、自动选择脚本。
+**方法：** 每个领域选一条可达源码调用链：用户/Model 动作 → 决策（身份、策略、边界、错误恢复）→ WorkspaceBackend 或系统 API → 真实 Ref/index/文件/Window/PTY 结果。没有真实副作用的内存状态归 Unit；真实边界由尽量少的 Integration 证明；**相同状态矩阵不重复为每种配置初始化 Git/NSWindow**。只有生产决策确实与 IO 耦合才原位抽最小纯规则并移除旧分支，绝不新增通用 Manager/协议/假 Git 或共享可变测试仓库。
 
-**共同验收：** 每个被删/降层的 Integration 方法都要有**相同触发前提、最终副作用和异常恢复**的现存或新实测替代。统计原方法数、真实 Git 子进程/文件创建/NSWindow attach/等待调用及同条件 XCTest 耗时；方法移进另一个文件、只删冗余断言却仍多次开原生宿主均不能算降低成本。所有必要 TextKit/IME、WebKit/Ghostty/PTY 弱引用和实体 Git 仍在中层验证。
+**验收:** P2 后必须给出可比较的 **Unit / Integration 方法数、比例、真实 Git init/命令、文件创建、NSWindow/PTY 挂载和耗时**；目标是 Unit 显著超过 Integration。若 Integration 仍约 400+、只移动几十个方法，**P2 判 No-Go**，不准把“原生组件确实要测”当作全部 463 项无需优化的理由。反过来也不允许为降低数字删掉不同外部安全合同、异常恢复或内存释放验证。执行采用现有 Makefile 按受影响类定点验证，不做全量重测。
 
 ---
 
@@ -17,7 +17,7 @@
 **Files:** BaileyTests/Integration/Git/GitStatusModelTests.swift、GitBranchActionTests.swift、GitRemoteBranchActionTests.swift、GitTagActionTests.swift、GitCommitActionTests.swift、GitStashActionTests.swift、GitWorkspaceActionTests.swift、NativeGitHistoryFileTests.swift、GitExecutionTests.swift；Unit/Git 的 P1 归属。
 
 **Step:**
-1. 逐方法比较“领域规则已在 Unit 测过”和“真实临时 Git 执行”两类断言：例如 GitCommitActionTests 已有丢弃资格纯拓扑，真正 Drop 仍必须对 HEAD/ref/index; GitStatusModelTests 的解析从 P1 离开后，保留 Git 状态刷新、真实工作树与 OID/Ref 漂移。比较状态类和 Action 类是否在同一临时仓库重复对同一 API 做完全相同的正常/失败路径；保留能证明最终副作用的唯一 owner，并删除重复的完整初始化、轮询与相同数据穷举。
+1. 从 GitStatusModel 的目标身份/旧 OID/Ref 保护、Commit/Branch/Tag/Stash 的决策规则与 GitCommandExecution 的真实执行边界切开检查：纯拓扑和策略归 Unit，后端/Ref/index/HEAD 真写入归 Integration。GitCommitActionTests 的纯 Drop 资格和 GitStatusModelTests 的 parser 已在 P1 下沉；同时继续查找**被 git init 包裹、其实只验证策略分支**的其它方法。重复的状态模型和 ActionTests 同一真实入口只保留必要的最终副作用 owner，立即删掉重复初始化、轮询、相同数据穷举和不再被用的 fixture；不删不同安全结果。
 2. 确认 Branch/Tag 旧 Ref 替换、Fetch/Pull fast-forward/force/lease、Stash 旧 OID、Merge/Cherry-pick/Drop、冲突中断/恢复、SHA-1/256、Unicode/特殊路径和多个 bare remote 各自的**真实 Git**断言。仅存在具体空白时，在当前 ActionTest 中补一个真实边界测试；不把 E2E 的一长串后台 Git 命令原封复制进 Integration。
 3. 有实际冗余时就地删除其测试/fixture helper，不把清理留给 P4。对需长期保持的 per-test 独立临时仓库不能改成共享可变仓库来换取速度。只在不降低隔离的前提下缩小初始化和无效轮询，禁止任意 sleep。
 
@@ -32,7 +32,7 @@
 **Files:** BaileyTests/Integration/Files/FileTabPersistenceTests.swift、FileTreeTests.swift；BaileyTests/Integration/Editor/NativeEditorLayoutTests.swift、NativeEditorCompositionTests.swift、NativeSyntaxHighlightingTests.swift；BaileyTests/Integration/Git/NativeDiffTabTests.swift；Unit/Editor/ 的相关几何和高亮纯算法。
 
 **Step:**
-1. 逐方法分开“纯 UTF-16 偏移/line index、解析/高亮范围、目录筛选、Diff token/行数”与“真实 NSTextView/TextKit2 几何、IME markedText、Undo、Diff 像素、FileTab 保存/异常”。复用 TextCoordinateIndexTests、HighlightQueryCacheTests、DiffEngineTests、P1 Unit 不在中层再建同义大矩阵。
+1. 逐方法追踪 FileTab/NativeFileTab/TextKit2/Diff 的**间接**依赖，分离 UTF-16 偏移、line index、颜色范围、目录筛选、Diff token/行数以及由内存后端触发的保存决策/乱序状态机（全部归 Unit），和真实 NSTextView/IME markedText/Undo、Diff 像素、文件系统保存（保留必要 Integration）。复用 TextCoordinateIndexTests、HighlightQueryCacheTests、DiffEngineTests、P1 内存 Unit；不得把无直接 NSWindow 字符串、却通过 helper mount 的 Native 测试当 Unit。
 2. 同一个输入矩阵由纯 Unit 覆盖多个字体/行数/Unicode/CRLF 组合；**一个最小原生 NSWindow/NSHostingView 合同**验证真正的 TextKit 视口、输入候选、颜色/行号、Find/Undo/重挂载；真实 disk write、冲突、断线/重读和 index/working diff 仍由文件/真实 Git Integration 覆盖。只有实际被证实完全重复的重型宿主初始化和等待才删，不能把 10k Unicode 和 100k ASCII 互认为同一验收。
 3. 核对 FileTabPersistenceTests 与 NativeFileTabTests 同文件的真实类归属及是否反复挂载 PanelContentView；已有只挂**内容面板**而未挂完整 ContentView 的测试不是缺陷，不为缩短代码拆新组件。每次减法同任务删原测试及失效 helper，只有源代码证明原生对象释放/内存回落的测试才宣称资源生命周期通过。
 
@@ -47,7 +47,7 @@
 **Files:** BaileyTests/Integration/Workspace/WorkspaceIdentityTests.swift、PanelContextTests.swift、SessionStoreTests.swift、FinderDeliveryIntegrationTests.swift、NativePaneRetentionIntegrationTests.swift、WindowCloseIntegrationTests.swift、WindowOwnershipIntegrationTests.swift；Integration/Remote/RemoteCommandsTests.swift、RemoteLifetimeTests.swift、GitInteractiveRebaseIntegrationTests.swift 及确实有交叉的 Unit/Workspace。
 
 **Step:**
-1. 身份判断、Dock 选择、快照纯值在 Unit；真实文件转交、窗口保存否决、SessionStore 写盘、终端 PTY、WebKit DOM、TextKit/原生弱引用保留 Integration。按方法对照同一窗口/项目身份是否被多个 AppKit 宿主**重复构造**、仅因重挂载而执行相同操作；只删除已经有同样系统效果证明的重复场景。
+1. PanelContext、WorkspaceIdentity、Window/Project 的身份判断与异步目标更替、Dock 选择、SessionStore 快照纯值在**内存 Unit** 充分测试；真实文件投递、窗口保存否决、SessionStore 写盘、PTY/WebKit DOM、TextKit 和 Native 弱引用归 Integration。审查多套测试是否为同一个 ViewModel 时序在不同最小 NSWindow 宿主反复执行，先用 Unit 承接矩阵，再在留存的组件用例里验证一次真实系统效果，立即删除冗余窗口构造/等待。
 2. 核实原生测试确实使用最小 PanelContentView/NSWindow、实际 TerminalSession 或 WKWebView；**不把 PanelContentView 子串误当 ContentView 整个工作区**。确认窗口/Tab 原生对象身份必须实测同一引用、弱引用释放或进程归属；不能用 UI 标签消失代替内存释放。SessionStore 回放的真实文件及失败撤销必须保留。
 3. RemoteCommandsTests 的纯解析已在 P1 迁走，真实 pipe/超时/进程退出/Socket、SSH 断线恢复仍在 Integration。可控失败先使用已有 WorkspaceBackend fixture 验证顺序与目标，**需要真实 SSH 的条件只有授权 Live 测试才能声称完成**；不用本地 fake 冒充 SSH。
 
@@ -57,4 +57,4 @@
 
 ## Phase Audit
 
-在 audit-p2.md 对 463 原有方法逐一分层核销，与 P1 移走的纯方法对账。列出真正减少的**真实 Git/文件/原生组件操作及可比耗时**，明示无法缩减而必须保留的 Integration 合同。如果只是目录数变化或追加新的同义测试，不批准 P3 的 UI 删除。
+audit-p2.md 对原 463 项 Integration **逐项给出内存 Unit / 真外部 Integration / 完整 App E2E 的归属及替代验证**，与 P1 已下沉的方法核对且不能重复计数。按实际 Xcode 发现和系统操作记录：少了多少真实 Git 仓库、文件 IO、NSWindow、PTY/Socket，保留了哪些不可由 Unit 替代的系统合同，真实异常/恢复是否仍能触发。**只是从 463 搬走几十个纯方法、继续让 Integration 主导整套测试，或只是把 E2E 塞到 Integration，P2 一律 No-Go**。如果独有外部合同确实无法再精简，列出方法与源码证据，不为配比牺牲安全。P3 只能在这些门禁真实有证据后开始删除顶层覆盖。

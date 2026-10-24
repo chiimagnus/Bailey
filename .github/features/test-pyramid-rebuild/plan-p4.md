@@ -58,4 +58,4 @@
 
 ## Phase Audit
 
-在 audit-p4.md 核销 26+22+19=67 项，并汇总原 **Unit 86 / Integration 463 / UI 133** 的最终实际 Xcode 发现、测试结果、完整 App 启动数与可比时间。目标约 30–50 条 UI，但不能因硬预算删安全合同；若没有实现真正的自下而上分层和 E2E 减法，即使某个点测通过也不能称整体重建完成。
+在 audit-p4.md 核销 26+22+19=67 项，并汇总原 **Unit 86 / Integration 463 / UI 133** 的每个方法去向、最终 Xcode 实际发现数、**Unit / Integration / UI 占比**、测试执行结果、真实 Git/Window/进程及完整 App 启动次数与可比耗时。**最终必须呈现大量 Unit、明显较少 Integration、极少 E2E 的形状**；约 70/20/10 仅为计划检视方向，不是为达标增加空 Unit 或删独有系统合同的许可。若只是 UI 减至 30–50 而 Integration 仍约 400+，明确 **No-Go**，不能把某个 GUI 通过冒充整体金字塔完成。

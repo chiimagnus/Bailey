@@ -1,10 +1,10 @@
 # P1 · 先把 Unit 底座做实
 
-**Goal:** 当前 Unit 86、Integration 463。把明确**不需要真实 IO/原生视图**的逻辑从 Integration 下沉，并把混在 Unit 的真实资源/文件操作纠正归属。重点不是数字，而是纯规则不再被昂贵的 Git、磁盘或 App setup 拖慢。
+**Goal:** 从当前 Unit 86 / Integration 463 的倒置分层出发，让**孤立模型和业务决策**而非真实 IO 承担绝大多数状态、容量、错误、乱序/取消测试。Unit 不限于纯静态函数：通过已有**内存 WorkspaceBackend** 只测试一个 Model/ViewModel 的 Observation、actor/协作时序也属于 Unit。把所有模型测试误算作 Integration 是此前计划的根本错误。
 
-**Non-goals:** 不增加生产协议/Mock Git/新的 Target，不复制既有断言凑 Unit 数量；真实 TextKit、IME 和 Git 不能假扮纯 Unit。只测/改 P1 影响的代码，不提前调整 UI E2E。
+**Non-goals:** 不创建新 Test Target、通用测试宿主、Mock Git、Manager/Coordinator/Protocol；不复制生产规则进测试。真正的 Git/文件/Bundle、TextKit/IME/NSWindow/PTY 是必要 Integration，不以目录调包。唯一允许的生产代码调整，是源码证实业务判断被 IO 包住时在**原领域类型**抽出最小确定性规则/状态转移，保证行为零变。
 
-**原则与门槛：** 必须审查 11 个现有 Unit 文件的 86 项及 35 个 Integration 文件内 463 项的真实依赖（包含同文件的多测试类，例如 FileTabPersistenceTests.swift 中的 NativeFileTabTests），不能只据文件夹或无 async/throws 推测是否纯。每项迁移有明确的计算入口；迁出后不能依赖旧类的 setUp/tearDown、NSWindow、真正文件或 Git。属于真实协作的 Integration 原样保留。
+**分类与执行门槛：** 现有 11 个 Unit 文件约 86 项、35 个 Integration 文件约 463 项（同文件可含多个 XCTest 类）。逐方法检查**间接**调用：A = 无 IO 的纯规则/值；B = 内存 backend 模型/actor 状态机（含可控失败）；C = 真 Git/磁盘/进程/网络；D = Native AppKit/TextKit/IME；E = 真完整 App 用户路径（不应留宿主）。**A+B 进入大量 Unit**；C/D 保留尽量少的 Integration，E 由 P3/P4 E2E 处理。不能仅凭方法名、async/throws、有无直接 FileManager 判断归属。记录测试发现数和 setup/真实 IO 成本，P1 不再以搬走几十个纯 parser 就宣称建成底座。
 
 ---
 
@@ -44,21 +44,25 @@
 
 <a id="p1-t3"></a>
 
-## P1-T3 让纯内存异步模型测试成为 Unit 主力
+## P1-T3 模型时序状态成为 Unit，并解开真实 IO 对策略测试的绑架
 
-**Files:** BaileyTests/Integration/Files/FileTabPersistenceTests.swift（其中 FileTabPersistenceTests 与 NativeFileTabTests 两个类）、Integration/Workspace/PanelContextTests.swift、Integration/Remote/RemoteLifetimeTests.swift；Unit/Files、Unit/Workspace 的真实模型测试 owner。生产 FileTab、PanelContext、FileTreeModel、WorkspaceBackend 实现只读审查。
+**Source-backed entry points:** BaileyTests/Integration/Files/FileTabPersistenceTests.swift 的 FileTabPersistenceTests/NativeFileTabTests、Workspace/PanelContextTests.swift、Workspace/WorkspaceIdentityTests.swift、Git/GitStatusModelTests.swift、Remote/RemoteLifetimeTests.swift、Settings/AppSettingsTests.swift、Workspace/SessionStoreTests.swift；生产 FileTab、PanelContext、FileTreeModel、GitStatusModel、WorkspaceBackend。P1-T1/T2 已确认的 parser、图谱拓扑与远端安全字符串不重复增加测试。
 
-**Source-backed candidates:**
-- FileTabPersistenceTests.swift 49 项中有 **22 项没有直接的重型 IO 调用**；其中大量用 EditorWorkspaceFixture 这一现有**内存 actor backend**验证异步 read/write、断线、旧请求、保存失败、Undo/重连；例如 testQueuedRefreshCannotResurrectAfterDirtyEdit、testFailedRefreshBlocksStaleWritesUntilSuccessfulRetry、testDisconnectDuringSavePreservesBufferAndBaseline、testFocusTriggeredSaveSerializesConcurrentEditsAndKeepsFailures。
-- PanelContextTests 12 项中有 **10 项没有直接重型 IO 调用**，大多使用 DelayedWorkspaceFixture 模拟异步目标变化；例如 testPanelSyncQueueRapidThreeTargetSwitchesPublishOnlyNewestTree、testBackendSwitchDuringFileCreationAndRenameRejectsOldOperations、testOldTraversalCannotPublishAfterSwitchingRootOnSameBackend。
-- 这些数字只是**静态候选数，不是已判定可搬数**：NativeFileTabTests.testNativeReadOnlyRejectsAXValueAndSelectionReplacement 虽无明显文件 IO，仍依赖真实原生 View，**必须留 Integration**；若某项间接调用 UserDefaults、NSWindow、Shell 或实际文件，也留在 Integration。RemoteLifetimeTests 同样逐方法核对其看似内存的 actor/connection 状态是否需要真实进程，不能只凭没有 throws 判定。
+**已确认候选不是已证实可迁数量：**
+- FileTabPersistenceTests 的 49 项中 **22 项没有显式重型 IO**，很多用现有 EditorWorkspaceFixture 内存 actor 验证延迟 read/write、断线重连、旧刷新、保存失败和撤销；PanelContextTests 12 项中 **10 项**通过 DelayedWorkspaceFixture 验证后台目标切换和乱序发布。
+- WorkspaceIdentityTests 中的 Terminal 文件拖入转义、控制 socket 命令构造；RemoteLifetimeTests 中的内存连接/观察状态；GitStatusModelTests 中的 Worktree 解析、Rename/Copy 路径；AppSettingsTests/SessionStoreTests 中的纯设置/快照规则也都要按实际依赖检查，不仅挑 22+10。
+- NativeEditorLayoutTests 的多数方法虽然没有显式 NSWindow 调用，却可能通过 helper 实际构造 NSTextView/NSWindow；NativeFileTabTests.testNativeReadOnlyRejectsAXValueAndSelectionReplacement 即使没有显式文件 IO，也访问真实原生 View，**必须留 Integration**。这类误判必须通过追溯 helper 排除。
 
-**Step:** 沿上述每项实际 FileTab/PanelContext→WorkspaceBackend/Project→最终状态，确认全程只用内存 fixture、无磁盘/窗口/网络副作用后，将模型状态与时间顺序测试放到最小 Unit 类，保留原 assert 和并发异常组合。已有 EditorWorkspaceFixture/DelayedWorkspaceFixture **只能有一个实际定义**：若 Unit 与 Integration 两边都用，则在同一 XCTest Target 中复用一次 test-only helper，不复制一套 Backend 或给产品新增接口。移出旧类的方法当场删除；仍需真实 AppKit/磁盘的 NativeFileTabTests 和文件保存保持 Integration。
+**Steps:**
+1. 在不生成第二份冗长 TODO 的前提下，对 35 个 Integration 文件**每个 test 方法**核对调用方、shared setUp/tearDown、helper 和最终资源：把 A/B/C/D/E 标记到当前任务审计证据；证明某项无真实 OS 边界后，才作为 Unit 承接。
+2. 逐项将 FileTab/PanelContext 等真正**只通过内存 Backend**的异步 Model/ViewModel 测试迁入 Unit；保留原每个异常、并发、取消/重试、Unicode/目标身份的 XCTAssert。复用唯一 EditorWorkspaceFixture / DelayedWorkspaceFixture 定义，避免为每层复制一套测试 Backend；不引入虚假 Git。
+3. 对那些必须先 git init 或写磁盘、但实际只想验证 Git ref 合法性、FileTab 保存决策、目标身份/错误状态等**独立策略**的测试，沿现有 Model/Backend 边界定位原因；若当前已存在纯入口，直接调用它；否则在**原类型**抽出最小确定性判断，先补 Red Unit 再核对旧 Integration 行为和真实副作用。真正 IO（Ref 写入、文件字节、原生提交）仍由 Integration 测一次，不移入 Unit，也不为纯化引入另一套产品状态。
+4. 新层次接入后**同一 task 删除旧 Integration 方法和失消费者 helper**，不保留两个目录各跑一份的重复测试；真正 Native/文件/网络测试原样保留。不能靠大量相同输入改名字增加 Unit 方法数。
 
-**Verify:** 定点 make test:FileTabPersistenceTests,NativeFileTabTests,PanelContextTests、实际新增 Unit 类，以及与之共用 fixture 的受影响类；Xcode 必须发现全部原方法和真实异常分支。针对读/写同时进行、旧请求回来、重新连接、失败保留未保存文本、同路径不同机器、初始/重试和 N 次快速目标切换执行内存矩阵；检查 new Unit 不创建 NSWindow/真实 Git 仓库或网络。如果只是移动而没有改变耗时，记为“正确归属/快选”，不能报告为提速。
+**Verify:** 每个拆分批次先运行相关 Unit 类（如新 FileTabModel/PanelContextModel/WorkspaceIdentity/GitPolicy 类），再定点运行 FileTabPersistenceTests、NativeFileTabTests、PanelContextTests、GitStatusModelTests、RemoteLifetimeTests 等**真的受影响**的 Integration；Xcode 原方法的独有断言和错误路径均可发现并执行。验证内存后端：同时读/写、旧结果回写、断线/恢复、取消、初始加载、失败保存保留字节、Project/机器隔离；真实 IO 仍分别有临时文件/Git/原生窗口合同。记录可比较的**仓库初始化、磁盘、NSWindow、命令和测试耗时**；只迁路径没有减少成本则如实计为归属纠正。
 
-**Commit:** 一条原子提交；本任务补充到 P1 下层，优先处理确实可独立跑的模型测试，不为倒金字塔凑数字。
+**Commit:** 一个原子提交。若 35 个文件跨域过多，应按已有 P1-T1/P1-T2 的 owner 收拢，不做新的空抽象；文档只更新稳定的测试职责。
 
 ## Phase Audit
 
-使用 audit-p1.md 核对 86+463 方法的真实归属，并明确 P1 减少了哪些 Git init、目录创建和进程/窗口前置操作。特别报告 **22+10 项内存候选的实际去向**，区分真的 Unit 与必须留在 Native Integration 的方法。所有应迁移的已证实模型逻辑与原本真实 Integration 都必须被 Xcode 发现；不能以“Unit 数增加”为唯一 Go 证据。
+audit-p1.md 先核销原 86+463 个方法的真实调用依赖与分类，不以静态关键词扫描替代完整调用链。必须说明 **22+10 项内存模型候选的实际去向**、其它模型的新增 Unit、从 IO 中抽出的原有判断、以及哪些原生/文件/Git Integration 不可下沉。**P1 的 Go 只表示已将确认的纯/内存模型测试归到 Unit，并明确了 P2 需要进一步拆开的真实 IO/策略耦合，不能把它宣称为最终金字塔达标。** 若仅搬了几个 parser、没有核对其余状态模型和 P2 的具体耦合入口则 No-Go；最终 Unit 多于 Integration 的结构 Gate 在 P2/P4 核验，避免依赖后续阶段才能完成的 P1 死锁。
