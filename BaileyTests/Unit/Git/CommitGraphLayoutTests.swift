@@ -685,4 +685,31 @@ final class CommitGraphLayoutTests: XCTestCase {
         XCTAssertEqual(short.rows.map(\.node), Array(longer.rows.prefix(2)).map(\.node))
         XCTAssertTrue(longer.rows[0].links.contains(.outgoing(.init(lane: 0, color: 0))))
     }
+
+    func testGraphGutterLeavesRoomForCommitContentAtExtremeLaneCounts() {
+        let widths: [CGFloat] = [48, 120, 260, 400, 800]
+        let scales: [CGFloat] = [0.8, 1, 1.6, 2]
+        let laneCounts = [0, 1, 2, 12, 30, 100, 237, 1_000]
+        for width in widths {
+            for scale in scales {
+                for lanes in laneCounts {
+                    let spacing = CommitGraphRails.spacing(
+                        lanes: lanes, viewportWidth: width, scale: scale)
+                    let gutter = CommitGraphRails.gutter(
+                        lanes: lanes, spacing: spacing, scale: scale)
+                    let minimumNodeGutter = 16 * scale
+                    XCTAssertTrue(spacing.isFinite && spacing >= 0,
+                                  "Invalid spacing at \(width)pt, \(scale)x, \(lanes) lanes")
+                    XCTAssertLessThanOrEqual(
+                        gutter, max(width * 0.34, minimumNodeGutter) + 0.01,
+                        "Commit title is displaced by \(lanes) lanes at \(width)pt / \(scale)x"
+                    )
+                    if width >= minimumNodeGutter {
+                        XCTAssertLessThanOrEqual(gutter, width,
+                                                 "Graph must not consume the whole sidebar")
+                    }
+                }
+            }
+        }
+    }
 }

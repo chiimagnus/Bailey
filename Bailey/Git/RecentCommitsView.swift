@@ -569,103 +569,104 @@ struct RecentCommitsView: View {
             showsGuides: false,
             height: max(36, ceil(38 * fontScale))
         ) { hovering, layout in
-            VStack(alignment: .leading, spacing: 2 * fontScale) {
-                HStack(spacing: 4 * fontScale) {
-                    if let stash = commit.stash {
-                        stashBadge(stash, in: commit, colorIndex: graph.node.color)
-                            .layoutPriority(1)
-                    } else if commit.worktree == nil {
-                        if !commit.references.isEmpty || !commit.checkedOutWorktrees.isEmpty {
-                            referenceStrip(commit.references, commit: commit,
-                                           colorIndex: graph.node.color)
-                                .layoutPriority(1)
+            GeometryReader { bounds in
+                VStack(alignment: .leading, spacing: 2 * fontScale) {
+                    HStack(spacing: 4 * fontScale) {
+                        if let stash = commit.stash {
+                            stashBadge(stash, in: commit, colorIndex: graph.node.color)
+                        } else if commit.worktree == nil {
+                            if !commit.references.isEmpty || !commit.checkedOutWorktrees.isEmpty {
+                                referenceStrip(commit.references, commit: commit,
+                                               colorIndex: graph.node.color)
+                            }
                         }
+                        Button { toggle(commit) } label: {
+                            if commit.worktree != nil {
+                                Text(verbatim: commit.subject)
+                                    .font(.system(size: 12 * fontScale))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
+                                ScrollView(.horizontal) {
+                                    Text(verbatim: commit.subject)
+                                        .font(.system(size: 12.5 * fontScale))
+                                        .foregroundStyle(
+                                            commit.stash == nil && commit.parentHashes.count > 1
+                                                && !hovering
+                                                ? Color.primary.opacity(0.55) : Color.primary
+                                        )
+                                        .fixedSize(horizontal: true, vertical: false)
+                                }
+                                .scrollIndicators(.hidden)
+                                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                                .frame(minWidth: 0,
+                                       maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .layoutPriority(1)
+                        .help(commit.subject)
+                        .accessibilityLabel(commit.subject)
+                        .accessibilityValue(expanded
+                            ? String(localized: "Expanded", table: "Git")
+                            : String(localized: "Collapsed", table: "Git"))
+                        Spacer(minLength: 0)
                     }
-                    Button { toggle(commit) } label: {
-                        if commit.worktree != nil {
-                            Text(verbatim: commit.subject)
-                                .font(.system(size: 12 * fontScale))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    HStack(alignment: .firstTextBaseline, spacing: 6 * fontScale) {
+                        if let worktree = commit.worktree {
+                            Text(verbatim: Self.worktreeDisplayPath(
+                                worktree.path, among: worktreePaths
+                            ))
+                                .font(.system(size: 10 * fontScale, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
-                                .truncationMode(.tail)
-                                .frame(minWidth: 64 * fontScale,
-                                       maxWidth: .infinity, alignment: .leading)
+                                .truncationMode(.middle)
+                                .help(worktree.path)
+                                .accessibilityLabel(worktree.path)
                         } else {
-                            ScrollView(.horizontal) {
-                                Text(verbatim: commit.subject)
-                                    .font(.system(size: 12.5 * fontScale))
-                                    .foregroundStyle(
-                                        commit.stash == nil && commit.parentHashes.count > 1
-                                            && !hovering
-                                            ? Color.primary.opacity(0.55) : Color.primary
-                                    )
-                                    .fixedSize(horizontal: true, vertical: false)
-                            }
-                            .scrollIndicators(.hidden)
-                            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-                            .frame(minWidth: 64 * fontScale,
-                                   maxWidth: .infinity, alignment: .leading)
+                        Button { copy(commit.hash) } label: {
+                            Text(verbatim: commit.shortHash)
+                                .font(.system(size: 10.5 * fontScale, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                         }
-                    }
-                    .buttonStyle(.plain)
-                    .layoutPriority(0)
-                    .help(commit.subject)
-                    .accessibilityLabel(commit.subject)
-                    .accessibilityValue(expanded
-                        ? String(localized: "Expanded", table: "Git")
-                        : String(localized: "Collapsed", table: "Git"))
-                    Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                        .buttonStyle(.plain)
+                        .help(commit.hash)
+                        .accessibilityLabel(String(localized: "Copy Commit Hash", table: "Git"))
 
-                HStack(alignment: .firstTextBaseline, spacing: 6 * fontScale) {
-                    if let worktree = commit.worktree {
-                        Text(verbatim: Self.worktreeDisplayPath(
-                            worktree.path, among: worktreePaths
-                        ))
-                            .font(.system(size: 10 * fontScale, design: .monospaced))
+                        Text(verbatim: commit.author)
+                            .font(.system(size: 11 * fontScale))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                            .truncationMode(.middle)
-                            .help(worktree.path)
-                            .accessibilityLabel(worktree.path)
-                    } else {
-                    Button { copy(commit.hash) } label: {
-                        Text(verbatim: commit.shortHash)
-                            .font(.system(size: 10.5 * fontScale, design: .monospaced))
+                            .truncationMode(.tail)
+                            .layoutPriority(-1)
+
+                        Spacer(minLength: 3)
+
+                        Text(verbatim: commit.relativeDate)
+                            .font(.system(size: 10.5 * fontScale))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
-                    }
-                    .buttonStyle(.plain)
-                    .help(commit.hash)
-                    .accessibilityLabel(String(localized: "Copy Commit Hash", table: "Git"))
-
-                    Text(verbatim: commit.author)
-                        .font(.system(size: 11 * fontScale))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .layoutPriority(-1)
-
-                    Spacer(minLength: 3)
-
-                    Text(verbatim: commit.relativeDate)
-                        .font(.system(size: 10.5 * fontScale))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
+                        }
                     }
                 }
+                .frame(width: max(0, bounds.size.width - gutter - TreeRowStyle.contentInset))
+                .modifier(layout)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.09))
+                        .frame(height: 0.5)
+                        .padding(.leading, gutter)
+                        .allowsHitTesting(false)
+                }
             }
-            .modifier(layout)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(Color.primary.opacity(0.09))
-                    .frame(height: 0.5)
-                    .padding(.leading, gutter)
-                    .allowsHitTesting(false)
-            }
+            .frame(height: max(36, ceil(38 * fontScale)))
         }
         .background {
             CommitGraphRails(
@@ -778,6 +779,9 @@ struct RecentCommitsView: View {
         let location = locations.first { $0.path == repoRoot }
             ?? locations.first { $0.branch == nil } ?? locations[0]
         let label = Self.worktreeDisplayLabel(location, among: worktreePaths)
+        let labelWidth = ceil((label as NSString).size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: Self.badgeFontSize * fontScale, weight: .medium)
+        ]).width)
         let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
         return Button { toggle(commit) } label: {
             HStack(spacing: 0) {
@@ -792,7 +796,8 @@ struct RecentCommitsView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .frame(maxWidth: min(128, max(52, viewportWidth * 0.32)) * fontScale)
+                    .frame(maxWidth: min(labelWidth,
+                        min(128, max(52, viewportWidth * 0.32)) * fontScale))
                     .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
                 if locations.count > 1 {
                     Text("\(locations.count)")
@@ -925,7 +930,6 @@ struct RecentCommitsView: View {
                 .accessibilityLabel(hidden.map(\.name).joined(separator: ", "))
             }
         }
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func referenceBadge(
@@ -933,6 +937,10 @@ struct RecentCommitsView: View {
     ) -> some View {
         let current = reference.kind == .currentBranch
         let matched = worktrees(for: reference, in: commit)
+        let labelWidth = ceil((reference.name as NSString).size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: Self.badgeFontSize * fontScale,
+                                    weight: current ? .semibold : .medium)
+        ]).width)
         let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
         return Button { toggle(commit) } label: {
             HStack(spacing: 0) {
@@ -950,7 +958,8 @@ struct RecentCommitsView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .frame(maxWidth: min(88, max(42, viewportWidth * 0.22)) * fontScale)
+                    .frame(maxWidth: min(labelWidth,
+                        min(88, max(42, viewportWidth * 0.22)) * fontScale))
                     .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
                 if !matched.isEmpty {
                     Image(systemName: "square.stack")
@@ -1341,6 +1350,7 @@ struct RecentCommitsView: View {
             focusRing: isFocusedRow(historicalFileRowID(commit, file: file)),
             leadingInset: inset,
             accessibilityHint: String(localized: "Opens changes", table: "Sidebar"),
+            accessibilityID: "bailey.git.history.file",
             open: {
                 selectRow(historicalFileRowID(commit, file: file))
                 openDiff(commit, file)

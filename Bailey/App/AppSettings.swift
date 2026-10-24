@@ -85,18 +85,19 @@ enum GitViewMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// User-configurable settings, persisted to `$HOME/.config/Bailey/config.toml`.
+/// User-configurable settings, persisted to `~/.config/bailey/config.toml`.
 /// Views observe this directly; `WorkspaceWindowModel` re-themes live sessions on
 /// any change.
 @MainActor
 @Observable
 final class AppSettings {
-    static let shared = AppSettings()
+    static let shared = AppSettings(controlsApplicationAppearance: true)
 
     nonisolated static let configURL = AppIdentity.configDirectory
         .appendingPathComponent("config.toml")
     private let settingsURL: URL
     private let languageDefaults: UserDefaults
+    private let controlsApplicationAppearance: Bool
 
     static let defaultFontSize: Double = 13
     static let fontSizeRange: ClosedRange<Double> = 8...32
@@ -123,7 +124,7 @@ final class AppSettings {
     /// Light/dark appearance override; `system` follows macOS.
     var theme: AppTheme {
         didSet {
-            applyAppearance()
+            if controlsApplicationAppearance { applyAppearance() }
             save()
         }
     }
@@ -133,14 +134,14 @@ final class AppSettings {
     /// definitions (bailey built-ins plus the ghostty catalog).
     var themeDark: String {
         didSet {
-            reloadThemeSelection()
+            if controlsApplicationAppearance { reloadThemeSelection() }
             save()
         }
     }
 
     var themeLight: String {
         didSet {
-            reloadThemeSelection()
+            if controlsApplicationAppearance { reloadThemeSelection() }
             save()
         }
     }
@@ -217,9 +218,11 @@ final class AppSettings {
 
     init(configURL: URL = AppSettings.configURL,
          languageDefaults: UserDefaults = .standard,
-         languageDomain: String = AppIdentity.bundleIdentifier) {
+         languageDomain: String = AppIdentity.bundleIdentifier,
+         controlsApplicationAppearance: Bool = false) {
         settingsURL = configURL
         self.languageDefaults = languageDefaults
+        self.controlsApplicationAppearance = controlsApplicationAppearance
         let savedLanguage = AppLanguage.saved(in: languageDefaults, domainName: languageDomain)
         activeLanguage = savedLanguage
         language = savedLanguage
@@ -260,8 +263,10 @@ final class AppSettings {
         macosOptionAsAlt = toml["terminal.macos-option-as-alt"]?.bool ?? false
         wrapLines = toml["editor.wrap-lines"]?.bool ?? false
         restoreTerminalHistory = toml["terminal.restore-history"]?.bool ?? false
-        applyAppearance()
-        reloadThemeSelection()
+        if controlsApplicationAppearance {
+            applyAppearance()
+            reloadThemeSelection()
+        }
         if existing == nil { save() }
     }
 
@@ -296,8 +301,8 @@ final class AppSettings {
         return config
     }
 
-    /// Pushes the current names into `Theme`, which resolves and caches the
-    /// definitions. Called from `init` because `didSet` doesn't run there.
+    /// Pushes the active application's names into the shared Theme palette.
+    /// Loading an independent configuration does not alter running windows.
     private func reloadThemeSelection() {
         Theme.reloadSelection(light: themeLight, dark: themeDark)
     }
@@ -314,9 +319,8 @@ final class AppSettings {
         return name
     }
 
-    /// Overrides the app-wide appearance so every window — and the terminal
-    /// theme, which reads `NSApp.effectiveAppearance` — follows the choice.
-    /// Called from `init` because `didSet` doesn't run during initialization.
+    /// Overrides the active app's appearance; initial startup also reapplies
+    /// this from the application delegate once NSApp is available.
     func applyAppearance() {
         NSApp?.appearance = theme.nsAppearance
     }

@@ -1,0 +1,139 @@
+version = 1
+current_task_id = "P5-T1"
+
+[[tasks]]
+id = "P1-T1"
+title = "按方法核对旧测试与行为归属"
+status = "completed"
+plan = "plan-p1.md#p1-t1"
+commit = ""
+no_commit_reason = "仅修改本地 Feature 清单，按 Skill 默认不入库；探索任务无代码提交"
+note = "Xcode宿主发现635/635，旧329项A19/B87/C223分类；10项UI静态核对，真实GUI待独立Runner"
+
+[[tasks]]
+id = "P1-T2"
+title = "修复独立 Runner 和现有十条真实 UI 路径"
+status = "completed"
+plan = "plan-p1.md#p1-t2"
+commit = "0ae7397"
+note = "P1基础13/13、配置与选择器真实GUI2/2、新几何20/20，构建验签；扩大后全量UI在57条通过后AX授权中断，新单例也无法初始化，属于最终P5独立阻塞，非P1的10条基线未实施。"
+
+[[tasks]]
+id = "P1-T3"
+title = "核对 Unit/Integration 中混入的原生 UI 用例"
+status = "completed"
+plan = "plan-p1.md#p1-t3"
+commit = "a7e4834ef25786e2fcc69fe967f60faefe8ce359"
+note = "28份Unit/Integration 306原有方法+新增配置纯回归1项已审查；AppSettings/SessionStore定点16/16，首次宿主全量636中唯一失败为P4-T1伪前台测试且已替换；二轮635宿主只剩P4-T5原生生命周期偶发失败，8条Windows SSH条件跳过并保留，归P4处理。"
+
+[[tasks]]
+id = "P2-T1"
+title = "编辑导航、原生输入、IME 和撤销"
+status = "completed"
+plan = "plan-p2.md#p2-t1"
+commit = "335ed7dcf92d7b6592d6c20cf517563c1c7dc897"
+note = "原38项方法/断言由b094047迁移保留，组件28+10与坐标9共47/47已有验证；335ed7d纠正真实CommandPalette首Escape的错误AX谓词，并向已聚焦编辑器发送Undo/Redo/Save快捷键（不修改产品UI），21/21独立Bailey Dev完整GUI 0失败/0跳过/exit0含10k/100k/Unicode磁盘字节。实体拼音候选、旧macOS和CI属明确环境边界。"
+
+[[tasks]]
+id = "P2-T2"
+title = "文件标签、真实读写、保存冲突与断线恢复"
+status = "completed"
+plan = "plan-p2.md#p2-t2"
+commit = "335ed7dcf92d7b6592d6c20cf517563c1c7dc897"
+note = "旧49条由5bc6fe2迁移为FileTabPersistence33+NativeFileTab16；335ed7d将ABC切换放到Dev激活及原生PathTextField聚焦后、保留输入回读与拼音恢复；前存Dev导致全跳过的XCTSkip改成明确失败且反向验证成功；最终独立GUI21/21、Files9/9、0 skipped，真实Unicode文件路径及保存已验，远端SSH E2E缺位。"
+
+[[tasks]]
+id = "P2-T3"
+title = "语法高亮、主题、组合字符与原生颜色"
+status = "completed"
+plan = "plan-p2.md#p2-t3"
+commit = "335ed7dcf92d7b6592d6c20cf517563c1c7dc897"
+note = "原22项由7e27b61迁入NativeSyntaxHighlightingTests仍完整保留；335ed7d新增Markdown/TSX/HTML(含script/style)/CSS与同内容纯文本的真实XCUITest截图对照及文件字节断言；Swift+新增高亮两项定点和完整GUI21/21、0 skipped，10张截图经人工检查；主题等环境矩阵单独保持未测。"
+
+[[tasks]]
+id = "P2-T4"
+title = "Diff 原生绘制、编辑、展开及真实保存"
+status = "completed"
+plan = "plan-p2.md#p2-t4"
+commit = "2c7b51bf9ac966c6a0dab29359fb5be5b40d9a67"
+note = "主体6b65c00保留35/35原生Diff方法；2c7b51b修正sRGB实测像素、隔离UserDefaults防止持久化Edit状态挡重载、真实AppKit RadioGroup查询与Git快捷键；宿主35/35及P2定点106/106通过，完整Dev GUI20/20通过，额外Review Split→Unified原生双面板→Edit→Undo/Redo→Cmd-S真实写盘定点1/1通过。CI ad-hoc、真实SSH、GUI全语言/主题极端矩阵另记边界。"
+
+[[tasks]]
+id = "P3-T1"
+title = "历史版本文件、Git revision 和安全重置"
+status = "completed"
+plan = "plan-p3.md#p3-t1"
+commit = "f0f8699fab6340bedfe203b73cc9ad5180bb80cb"
+note = "原21项=Integration20+NativeDiff AX1；真实Bailey Dev GitHistoryUITests 5/5、宿主NativeGitHistory20/20及NativeDiff/GitStatus/GitExecution89/89、Debug构建和codesign通过；无真实SSH及macOS15.6证据，见inventory。"
+
+[[tasks]]
+id = "P3-T2"
+title = "Git Changes 交互、外部刷新、菜单与工作树操作"
+status = "completed"
+plan = "plan-p3.md#p3-t2"
+commit = "76c417e5e5caab8cc52c3a403bc6087cbf075e46"
+note = "旧15方法分层迁移，完整Git Changes UI 11/11+merge冲突1/1、Uncommitted 3/3、Ignore GUI1/1、授权Windows SSH及Git状态模型宿主58/58、Debug构建验签通过；全量宿主626项中10项原生Focus/Dock失败且62项独立复现，见inventory/P5，未宣称全量通过。"
+
+[[tasks]]
+id = "P3-T3"
+title = "Git 原生对话框、危险操作、交互 rebase"
+status = "completed"
+plan = "plan-p3.md#p3-t3"
+commit = "5f7d512628b6830731c228ed333f04157f22079a"
+note = "18条旧方法分层核销、七旧类清理，真实GUI 21/21（exit 0）、受影响Branch/Tag定点21/21（exit 0）、其他Git后端先前61/61及授权SSH/PT​​Y3/3。未受影响的GUI不重复运行；外网provider、GUI非法命名提示等剩余边界见inventory。"
+
+[[tasks]]
+id = "P3-T4"
+title = "Git Graph 全图谱、颜色/标签、键盘与多级菜单"
+status = "completed"
+plan = "plan-p3.md#p3-t4"
+commit = "6853d3424a7dd4867337b498851ecefbcaddd5ba"
+note = "48条旧保障逐项映射：11项纯Unit+37项真实Dev GUI，原宿主文件已删；Git Graph/Geometry首次45项42过3项24-lane窄宽失败，根因修复后单独失败场景转绿、定点10/10、33 remote最低150pt 1/1；五底层类88/88，Dev+正式Debug build/codesign成功；本机未复跑修复后45项全量。"
+
+[[tasks]]
+id = "P4-T1"
+title = "共享树行、Dock 点击、命令面板、App 菜单"
+status = "completed"
+plan = "plan-p4.md#p4-t1"
+commit = "87292c1"
+note = "共享树/Dock独立App真实GUI11/11、宿主相关42/42通过，原10条旧保障核销；保留本机之外系统/触控板/显示器及外部Finder拖放补验证据，未宣称全环境。"
+
+[[tasks]]
+id = "P4-T2"
+title = "多窗口的实际键盘响应与焦点恢复"
+status = "completed"
+plan = "plan-p4.md#p4-t2"
+commit = "be40be8e8241d9018da112be395ddaa056000703"
+note = "旧19项已替代删除；GUI 7/7、宿主53/53、PaneRetention20/20、构建成功；前台窗口条件在真实App验证"
+
+[[tasks]]
+id = "P4-T3"
+title = "Finder／Dock 外部文件打开和批量拖放的真实归属"
+status = "completed"
+plan = "plan-p4.md#p4-t3"
+commit = "c88f218d69c1449bacbf1bd87d5d112edfb09338"
+note = "17项原有Finder路由迁移为最小Integration；宿主47/47、真实LS/跨窗GUI3/3、Finder物理拖放Workspace/Projects文件/目录3路径，两个build通过；最低macOS/触控板留Gate边界"
+
+[[tasks]]
+id = "P4-T4"
+title = "窗口关闭、保存否决、状态恢复与原生对象身份"
+status = "completed"
+plan = "plan-p4.md#p4-t4"
+commit = "f4f6f81f6ace8a7344660f6825c29b54f8692849"
+note = "旧15项按原断言分为最小原生组件Integration；SessionStore原2项拆分为纯状态+独立App；宿主133/133、完整窗口UI8/8、独立Session9/9，make build/build:ui均通过；正常⌘Q及资源压力属P4-T5"
+
+[[tasks]]
+id = "P4-T5"
+title = "Terminal、Browser、编辑器原生资源、设置页"
+status = "completed"
+plan = "plan-p4.md#p4-t5"
+commit = "658eebe7a7a95d3a53e909bb3898ada953cfe931"
+note = "旧21项逐条核销：原生资源20/20保留Integration及弱引用断言，旧测试专属Cmd-Q守卫删除并由真实退出回归替代；宿主35/35、完整Dev GUI5/5、优化Release五轮25次开关通过，make build/build:ui、codesign、docs audit均通过；RSS/vmmap/heap取证，跨窗混合资源、SSH实机、最低macOS和实体触控板留Gate核对。"
+
+[[tasks]]
+id = "P5-T1"
+title = "全方法、运行入口与最终 Go/No-Go 核销"
+status = "in_progress"
+plan = "plan-p5.md#p5-t1"
+commit = ""
+note = "独立审查旧329条类/方法映射全匹配；宿主549项8个SSH条件跳过、0失败，定点76/76；UI双仓库隔离及文件选择/保存定点2/2；Release adhoc构建验签成功。PR#54已非Draft：CI build受Xcode27/27.1冲突失败，UI 120项均受旧ABC唯一输入源条件阻塞且Job取消。已修复夹具继承GIT_*、XCTUnwrap防崩溃、ASCII输入源以及CI xcode-select一致性，但新提交未重跑CI；133项完整GUI/专用SSH/最低macOS仍未核销。Gate No-Go；证据见audit-p5.md。"

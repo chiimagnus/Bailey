@@ -4,11 +4,11 @@
 
 ## Invariants
 
-- **`AppSettings` 是唯一偏好来源。** View 不另存一份全局设置，原生表面由所属窗口应用变更。
-- **配置不是工作区备份。** `~/.config/Bailey/config.toml` 保存偏好和布局初始值，不承载项目快照或未保存文本。
+- **`AppSettings.shared` 是唯一生效的应用偏好来源。** View 不另存一份全局设置，原生表面由所属窗口应用变更。
+- **配置不是工作区备份。** `~/.config/bailey/config.toml` 保存偏好和布局初始值，不承载项目快照或未保存文本。
 - **写入不能破坏手工配置。** 保存偏好使用原子写入并保留手工调整的工作区字段；失败保留原文件。
 - **初始布局只影响新项目。** 已有项目按自己的停靠状态恢复，不因设置改变被重置。
-- **只有一个应用身份。** Debug 和 Release 共用 `chiimagnus.bailey`；测试模式不代表全局偏好也已隔离。
+- **正式版与开发版隔离。** 正式 Debug／Release 共用 `chiimagnus.bailey`；测试采用 `chiimagnus.bailey.dev`，不读取或覆盖正式配置、语言、历史和 Bark 钥匙串。
 
 ## 设置界面
 
@@ -22,7 +22,7 @@
 
 Git 检出提交的“总是接受”写入 `git.always-accept-checkout`，默认关闭，仅略过游离 HEAD 确认。Tag 推送前的“以后总是继续”写入 `git.always-proceed-push-tag`，默认关闭，仅略过远端分支包含关系的启发式警告，不绕过 Git 真实推送权限和错误。两项偏好独立，重置设置均恢复关闭。
 
-终端字体、配色、光标和 Option-as-Alt 变化即时作用于现有原生表面，不重建 Shell。主题与控件规范见 [ui.md](../ui.md)。
+终端字体、配色、光标和 Option-as-Alt 变化即时作用于现有原生表面，不重建 Shell。只有 `AppSettings.shared` 会将外观和配色同步到整个 App；独立的 `AppSettings(configURL:)` 可以解析/保存临时配置，却不会改动应用窗口和全局主题。语言偏好仍写入创建实例时指定的 `UserDefaults`，临时用例须显式使用独立 suite。主题与控件规范见 [ui.md](../ui.md)。
 
 现行字体加粗键为 `terminal.font-thicken`；不再读取旧字体 UserDefaults 或旧 `font-thicken` 键。语言及 Diff 偏好使用的现有 UserDefaults 不属于旧字体迁移，不能一起删除。
 
@@ -30,7 +30,7 @@ Git 检出提交的“总是接受”写入 `git.always-accept-checkout`，默�
 
 ## 隔离与关联数据
 
-普通配置目录固定为 `~/.config/Bailey/`。`--isolated-ui-test` 隔离窗口快照和终端历史并跳过保存的隧道，但**普通设置仍共享**；需要改设置的测试必须使用独立 Home，并核实实际读写位置，见 [testing.md](../testing.md#隔离环境)。
+正式版使用 `~/.config/bailey/`，普通 Bailey Dev 使用 `~/.config/bailey-dev/`；语言按 Bundle ID 分域，终端历史与 Bark 钥匙串服务也独立。`--isolated-ui-test` 隔离每轮窗口快照与终端历史，并跳过保存的隧道；独立 UI 启动器另以临时主目录隔离 TOML。语言等 UserDefaults 和钥匙串不因临时主目录而自动隔离，完整边界见 [testing.md](../testing.md#隔离环境)。
 
 隧道规则独立存储在 `tunnels.toml`，不并入普通配置；其生命周期见 [tunnels.md](tunnels.md)。
 
@@ -38,6 +38,6 @@ Git 检出提交的“总是接受”写入 `git.always-accept-checkout`，默�
 
 ## 验证
 
-`AppSettingsTests` 使用临时配置检查默认值、往返、无效类型、手工布局保留及写入失败。真实设置传播还应验证修改前后使用的是同一终端进程、原生显示确实变化、非目标设置没有被重写。
+`AppSettingsTests` 使用临时配置检查默认值、往返、无效类型、手工布局保留及写入失败。`WorkspaceRetentionUITests` 在隔离 Bailey Dev 中通过 ⌘, 切换外观，核对临时 TOML 写入与重启后界面选项；终端的主题传播仍须验证同一 Shell 进程与原生显示，不由配置文件变化推断。
 
 实现入口：[AppSettings.swift](../../Bailey/App/AppSettings.swift)。统一验收见 [testing.md](../testing.md)。

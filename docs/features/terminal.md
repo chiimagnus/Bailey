@@ -40,6 +40,6 @@ Codex CLI 在 `~/.codex/config.toml` 的 `[tui]` 下配置 `notifications = true
 
 检查多项目、多标签、双窗口、拖动、关闭、重挂载和主题改变后的输入与 Shell 身份；macOS 通知必须走到原会话。`BarkPushServiceTests` 验证地址规范化、跨服务器分发、HTTPS JSON 负载和单地址失败隔离；「发送测试通知」报告 Bark 服务端接受请求的数量，iPhone 实际显示须另行确认，不能把 HTTP 成功当作设备已收到。`WorkspaceIdentityTests` 覆盖本机／固定 SSH 握手前后、断线和动态 SSH 返回本机的文件 URL 接收资格，并核对 Shell 特殊字符与控制字符拒绝；真实 Finder→Ghostty E2E 核对终端输入和源文件字节，不能仅凭返回 `.copy` 当作已成功插入或已执行命令。
 
-`PaneRetentionTests` 与工作区 UI 回归覆盖可自动化部分；真实 CLI 通知、快捷键及重启恢复按 [testing.md](../testing.md#人工回归) 单独记录。
+`NativePaneRetentionIntegrationTests` 在最小原生宿主中验证终端停车、重挂载、查找、Shell PID 和回调释放；`WorkspaceRetentionUITests` 在完整 Bailey Dev 中核对跨标签 Shell PID，以及真实 Finder 文件拖入 Ghostty 后仅插入转义路径、不自动回车、不额外创建文件标签。`GitInteractiveRebaseIntegrationTests` 直接附着原生终端表面验证真实 PTY 与独立 SSH 会话，Git Graph 的实际用户操作由 `GitDialogUITests` 验证。真实 CLI 通知、快捷键及重启恢复按 [testing.md](../testing.md#人工回归) 单独记录。
 
 实现入口：[TerminalSession.swift](../../Bailey/Terminal/TerminalSession.swift)。升级 Ghostty 还需执行 [development.md](../development.md#依赖与本地补丁) 的回归。

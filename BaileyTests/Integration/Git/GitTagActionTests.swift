@@ -264,6 +264,43 @@ final class GitTagActionTests: XCTestCase {
         XCTAssertNotEqual(try git(["rev-parse", "HEAD"]), first)
     }
 
+    func testFailedTagContainmentQueryStopsBeforeAnyRemotePush() async throws {
+        let bare = try remote("origin")
+        let head = try git(["rev-parse", "HEAD"])
+        try git(["tag", "blocked", head])
+        try await refresh()
+        XCTAssertTrue(model.remotes.contains("origin"))
+        let target = model.actionTarget()
+        let gitDirectory = directory.appendingPathComponent(".git")
+        let paused = remotesDirectory.appendingPathComponent("paused-local-git")
+        try FileManager.default.moveItem(at: gitDirectory, to: paused)
+        defer {
+            if FileManager.default.fileExists(atPath: paused.path) {
+                try? FileManager.default.moveItem(at: paused, to: gitDirectory)
+            }
+        }
+        let failed = GitCommandExecution.run([
+            "for-each-ref", "--contains=" + head, "--format=%(refname)", "refs/remotes"
+        ], in: directory.path)
+        XCTAssertNotEqual(failed.status, 0, "The fixture must cause a real Git containment failure")
+        let result = await model.tagRemotesWithoutCommit(head, selected: ["origin"], target: target)
+        XCTAssertNil(result)
+        let message = String(localized:
+            "Unable to check whether the tag commit is on the selected remotes.", table: "Git")
+        XCTAssertTrue(model.lastError?.contains(message) == true,
+                      "The actual Git failure must be surfaced, not interpreted as permission to push")
+        try FileManager.default.moveItem(at: paused, to: gitDirectory)
+        XCTAssertNotEqual(GitCommandExecution.run([
+            "--git-dir", bare.path, "show-ref", "--verify", "refs/tags/blocked"
+        ], in: directory.path).status, 0)
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try git(["rev-parse", "refs/tags/blocked"]), head)
+        try await refresh()
+        let selection = await model.tagRemotesWithoutCommit(head, selected: ["origin"],
+                                                            target: model.actionTarget())
+        XCTAssertEqual(selection, ["origin"], "Restoring the repository must restore the valid query")
+    }
+
     func testPushTagStopsAfterFirstRemoteRefusalAndWarnsForUnknownReachability() async throws {
         let first = try git(["rev-parse", "HEAD"])
         let rejecting = try remote("rejecting")

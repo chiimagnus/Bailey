@@ -440,6 +440,7 @@ struct CommandPaletteView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
                 TextField(String(localized: "Search commands, files, and sessions…", table: "Interface"), text: $query)
+                    .accessibilityIdentifier("bailey.commandPalette.search")
                     .textFieldStyle(.plain)
                     .font(.system(size: 15))
                     .focused($searchFocused)

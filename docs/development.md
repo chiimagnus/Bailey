@@ -19,17 +19,19 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer make doctor
 根 [Makefile](../Makefile) 是本机和 CI 的统一入口，直接调用 `xcodebuild`：
 
 ```sh
-make test:FileTabTests,GitStatusModelTests  # 本地指定多个测试类
-make build
-make test                         # 全量测试
-make build:release
+make test:FileTabPersistenceTests,NativeFileTabTests,GitStatusModelTests  # Dev 定点测试
+make build:dev SIGNING=adhoc       # 独立开发版，不安装正式 App
+make test SIGNING=adhoc            # Bailey Dev 宿主测试
+make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本机定点 UI 测试
+make build                         # 正式版 Debug
+make build:release                 # 正式版 Release
 ```
 
-也可以打开 `Bailey.xcodeproj`，使用 `Bailey` scheme。App 与 `BaileyTests` 由工程和共享 scheme 关联；不创建额外 scheme、独立构建／测试 shell 脚本或启动时断言自检。
+也可以打开 `Bailey.xcodeproj`，使用现有 `Bailey`／`Bailey-UI` scheme。Makefile 通过构建参数选择正式版或开发版，不复制 App Target、scheme 或测试脚本。
 
-构建产物位于 `build/DerivedData/Build/Products/Debug/Bailey.app` 或 `Release/Bailey.app`，包下载位于 `build/SourcePackages/`。`make build` 同时执行严格验签。两种配置使用同一 Bundle ID，不是两套应用；不会天然隔离用户数据。
+正式版产物位于 `build/DerivedData/Build/Products/{Debug,Release}/Bailey.app`；测试版位于 `build/DerivedData-Dev/Build/Products/Debug/Bailey.app`，显示名称为 **Bailey Dev**（`chiimagnus.bailey.dev`）。两者使用独立 DerivedData 和 Bundle ID，测试不替换 `/Applications/Bailey.app`。正式 Debug／Release 继续共用 `chiimagnus.bailey`；包依赖仍在 `build/SourcePackages/`。开发版配置为 `~/.config/bailey-dev/`，历史与钥匙串服务也分开。
 
-测试筛选、目录和安全启动示例统一见 [testing.md](testing.md#测试目录与入口)。不要为了查看界面直接运行会触及用户配置或会话的另一实例。
+测试入口与测试金字塔见 [testing.md](testing.md#测试层次)。日常按受影响类定点执行；`make test:ui` 不指定 `ONLY_TESTING` 时会运行整个 UI Target，留给阶段验收及 CI。本机完整 GUI 测试应使用已安装的 **Apple Development 签名**，不要强制 `SIGNING=adhoc`：本机实测 ad-hoc Runner 被 macOS 拒绝辅助功能自动化，开发签名的同一 Runner 则能够正常操作。CI 的 ad-hoc 环境单独验收，不得拿本机结果冒充 CI。即使正式 Bailey 仍在运行，Makefile 测试也只使用 Bailey Dev；两者仍共用桌面焦点，XCUI 操作会短暂激活开发版。若需完全不打断当前输入，请使用独立图形会话。
 
 资源通过 Xcode Copy Files 打包；`ssh → bailey` 符号链接由现有 Build Phase 创建。不另建一套资源拷贝或终端安装脚本。
 
@@ -67,7 +69,7 @@ Xcode Package Dependencies 固定使用 `egoist-labs/libghostty-spm` 1.3.6；Swi
 
 [Vendor/Neon](../Vendor/Neon/README.md) 保留当前固定依赖的最小核心与原始许可证，以同一 package 身份替换远程 Neon，不引入第二份 parser 或队列。补丁让异步失效范围随尚未完成的编辑转换后再交付；只校验 token 版本不能补救旧坐标被当作有效的样式。
 
-不引入未使用的旧 NSTextView／UIKit 适配，旧系统 actor／队列兼容桥由当前平台原生能力替代；不删除真实主队列约束。升级时检查上游是否已修复，运行 `SyntaxHighlightingTests` 的连续语义编辑、前方插入与最终视口着色，以及 `EditorTextInputTests`、`TextCoordinateIndexTests`、`DiffTabTests`。同时验证完整 XCTest、Debug／Release 构建和签名；不能以当前 Tree 正确代替实际颜色更新。
+不引入未使用的旧 NSTextView／UIKit 适配，旧系统 actor／队列兼容桥由当前平台原生能力替代；不删除真实主队列约束。升级时检查上游是否已修复，运行 `NativeSyntaxHighlightingTests` 的连续语义编辑、前方插入与最终视口着色，以及 `NativeEditorCompositionTests`、`NativeEditorLayoutTests`、`TextCoordinateIndexTests`、`NativeDiffTabTests`。同时验证完整 XCTest、Debug／Release 构建和签名；不能以当前 Tree 正确代替实际颜色更新。
 
 查询使用当前 SwiftTreeSitter 匹配序列，在后台取匹配、主线程读取谓词，读取前后都核对请求版本。正文编辑与嵌入语言查询首次就绪均推进同一个高亮交付代次，避免旧的根语言结果覆盖新片段颜色。未生效的可视范围前后配置已删除，实际请求长度由 `requestLengthLimit` 限制。未使用的同步查询模式、弃用游标及 noChange 样式叠加路径不保留；根解析仍使用原串行队列和现有同步阈值。
 

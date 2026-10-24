@@ -142,6 +142,7 @@ struct ContentView: View {
             Text(verbatim: title)
                 .foregroundStyle(.secondary)
             Button(action: action) { Text(verbatim: buttonTitle) }
+                .accessibilityIdentifier("bailey.emptyState.addFolder")
         }
     }
 }

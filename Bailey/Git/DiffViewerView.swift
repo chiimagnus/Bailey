@@ -1197,9 +1197,11 @@ private final class DiffControlsNSView: NSView {
         modeControl.target = self
         modeControl.action = #selector(modeChanged)
         modeControl.setAccessibilityLabel(String(localized: "Diff Mode", table: "Git"))
+        modeControl.setAccessibilityIdentifier("bailey.diff.mode")
         layoutControl.target = self
         layoutControl.action = #selector(layoutChanged)
         layoutControl.setAccessibilityLabel(String(localized: "Diff Layout", table: "Git"))
+        layoutControl.setAccessibilityIdentifier("bailey.diff.layout")
 
         divider.wantsLayer = true
         divider.translatesAutoresizingMaskIntoConstraints = false

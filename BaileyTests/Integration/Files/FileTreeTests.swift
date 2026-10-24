@@ -1,6 +1,8 @@
+import AppKit
 import Darwin
 import Foundation
 import Observation
+import SwiftUI
 import XCTest
 @testable import Bailey
 
@@ -57,7 +59,104 @@ private actor CountingFileBackend: WorkspaceBackend {
 }
 
 @MainActor
+@Observable
+private final class FileTreeTargetGate {
+    var ready = false
+}
+
+@MainActor
 final class FileTreeTests: XCTestCase {
+    private func waitForCondition(
+        _ description: String,
+        condition: @MainActor () -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail(description)
+    }
+
+    func testFilesPanelSelectsFirstVisibleRowAfterAsyncListingWithoutOpeningIt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("alpha.swift")
+        let second = root.appendingPathComponent("beta.swift")
+        for file in [first, second] {
+            try "original\n".write(to: file, atomically: true, encoding: .utf8)
+        }
+
+        let tree = FileTreeModel()
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 380, height: 240),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        var opened = 0
+        let host = NSHostingView(rootView: FileTreePanel(
+            model: tree, git: GitStatusModel(), session: nil, sshHost: nil,
+            rootBadge: nil, currentFilePath: nil,
+            openFile: { _, _ in opened += 1 },
+            onRename: { _, _ in }, refreshGitStatus: {}, isCurrentTarget: { true },
+            canImportFromFinder: false, importFromFinder: { _, _ in false }
+        ))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertNil(tree.selectedPath)
+
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        try await waitForCondition("The first visible row should become selected after listing") {
+            host.layoutSubtreeIfNeeded()
+            return tree.selectedPath == first.path
+        }
+        XCTAssertEqual(opened, 0, "Focusing Files must not open a file automatically")
+        XCTAssertEqual(tree.items.count, 2)
+    }
+
+    func testFilesPanelWaitsForCurrentTargetBeforeSelectingCurrentFile() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("alpha.swift")
+        let second = root.appendingPathComponent("beta.swift")
+        for file in [first, second] {
+            try "unchanged\n".write(to: file, atomically: true, encoding: .utf8)
+        }
+
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let gate = FileTreeTargetGate()
+        let window = NSWindow(
+            contentRect: NSRect(x: -1000, y: -1000, width: 440, height: 250),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        var opened = 0
+        let host = NSHostingView(rootView: FileTreePanel(
+            model: tree, git: GitStatusModel(), session: nil, sshHost: nil,
+            rootBadge: nil, currentFilePath: second.path,
+            openFile: { _, _ in opened += 1 },
+            onRename: { _, _ in }, refreshGitStatus: {},
+            isCurrentTarget: { gate.ready },
+            canImportFromFinder: false, importFromFinder: { _, _ in false }
+        ))
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertNil(tree.selectedPath, "A stale Files target must not select a row")
+
+        gate.ready = true
+        try await waitForCondition("The current file should be selected after target readiness") {
+            host.layoutSubtreeIfNeeded()
+            return tree.selectedPath == second.path
+        }
+        XCTAssertEqual(opened, 0, "Target readiness must not open a FileTab")
+    }
     func testLargeDirectoryCursorClampsToVisibleBoundsAndPreservesUnicodeIdentity() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

@@ -189,6 +189,8 @@ private struct FileTabLabel: View {
             close: close
         )
         .help(file.path)
+        .accessibilityIdentifier("bailey.tab.file")
+        .accessibilityValue(file.path)
     }
 }
 

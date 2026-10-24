@@ -24,11 +24,6 @@ struct BaileyApp: App {
         .windowBackgroundDragBehavior(.disabled)
         .defaultSize(width: 900, height: 600)
         .commands {
-            if BaileyInstanceMode.isIsolated {
-                // A test host shares the desktop but must not accept Quit (Command-Q)
-                // while a long-running XCTest case is using an isolated repository.
-                CommandGroup(replacing: .appTermination) {}
-            }
             BaileyCommands(application: applicationDelegate.workspace)
         }
 

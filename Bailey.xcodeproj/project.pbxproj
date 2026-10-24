@@ -20,6 +20,7 @@
 		AA40000000000000000000B6 /* .zshenv */ = {isa = PBXFileReference; lastKnownFileType = text; path = shell-integration/zsh/.zshenv; sourceTree = "<group>"; };
 		FF3FDD73300B6A7400112486 /* Bailey.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Bailey.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA8000000000000000000002 /* BaileyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = BaileyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA9000000000000000000002 /* BaileyUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = BaileyUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -46,6 +47,11 @@
 			path = BaileyTests;
 			sourceTree = "<group>";
 		};
+		AA9000000000000000000003 /* BaileyUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BaileyUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -61,6 +67,7 @@
 			);
 		};
 		AA8000000000000000000005 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; files = (); };
+		AA9000000000000000000005 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; files = (); };
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -76,10 +83,12 @@
 
 /* Begin PBXContainerItemProxy section */
 		AA8000000000000000000008 = {isa = PBXContainerItemProxy; containerPortal = FF3FDD6B300B6A7400112486; proxyType = 1; remoteGlobalIDString = FF3FDD72300B6A7400112486; remoteInfo = bailey; };
+		AA9000000000000000000008 = {isa = PBXContainerItemProxy; containerPortal = FF3FDD6B300B6A7400112486; proxyType = 1; remoteGlobalIDString = FF3FDD72300B6A7400112486; remoteInfo = bailey; };
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXTargetDependency section */
 		AA8000000000000000000007 = {isa = PBXTargetDependency; target = FF3FDD72300B6A7400112486; targetProxy = AA8000000000000000000008; };
+		AA9000000000000000000007 = {isa = PBXTargetDependency; target = FF3FDD72300B6A7400112486; targetProxy = AA9000000000000000000008; };
 /* End PBXTargetDependency section */
 
 /* Begin PBXGroup section */
@@ -89,6 +98,7 @@
 				FF3FDD75300B6A7400112486 /* Bailey */,
 				AA40000000000000000000B6 /* .zshenv */,
 				AA8000000000000000000003 /* BaileyTests */,
+				AA9000000000000000000003 /* BaileyUITests */,
 				FF3FDD74300B6A7400112486 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -98,6 +108,7 @@
 			children = (
 				FF3FDD73300B6A7400112486 /* Bailey.app */,
 				AA8000000000000000000002 /* BaileyTests.xctest */,
+				AA9000000000000000000002 /* BaileyUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -145,6 +156,18 @@
 			productReference = AA8000000000000000000002;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		AA9000000000000000000001 /* BaileyUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA9000000000000000000009;
+			buildPhases = (AA9000000000000000000004, AA9000000000000000000005, AA9000000000000000000006);
+			buildRules = ();
+			dependencies = (AA9000000000000000000007);
+			fileSystemSynchronizedGroups = (AA9000000000000000000003);
+			name = BaileyUITests;
+			productName = BaileyUITests;
+			productReference = AA9000000000000000000002;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -157,6 +180,10 @@
 				TargetAttributes = {
 					FF3FDD72300B6A7400112486 = {
 						CreatedOnToolsVersion = 27.0;
+					};
+					AA9000000000000000000001 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = FF3FDD72300B6A7400112486;
 					};
 				};
 			};
@@ -184,6 +211,7 @@
 			targets = (
 				FF3FDD72300B6A7400112486 /* Bailey */,
 				AA8000000000000000000001 /* BaileyTests */,
+				AA9000000000000000000001 /* BaileyUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -195,6 +223,7 @@
 			);
 		};
 		AA8000000000000000000006 /* Resources */ = {isa = PBXResourcesBuildPhase; files = (); };
+		AA9000000000000000000006 /* Resources */ = {isa = PBXResourcesBuildPhase; files = (); };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
@@ -215,6 +244,7 @@
 			);
 		};
 		AA8000000000000000000004 /* Sources */ = {isa = PBXSourcesBuildPhase; files = (); };
+		AA9000000000000000000004 /* Sources */ = {isa = PBXSourcesBuildPhase; files = (); };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
@@ -303,7 +333,10 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 0.3.0;
-				PRODUCT_BUNDLE_IDENTIFIER = chiimagnus.bailey;
+				PRODUCT_BUNDLE_IDENTIFIER = "chiimagnus.bailey$(BAILEY_BUNDLE_SUFFIX)";
+				BAILEY_APP_NAME = Bailey;
+				BAILEY_DOCUMENT_HANDLER_RANK = Alternate;
+				BAILEY_FINDER_SERVICE_NAME = "Add Folder to Bailey";
 				PRODUCT_NAME = Bailey;
 				EXECUTABLE_NAME = bailey;
 				REGISTER_APP_GROUPS = YES;
@@ -355,7 +388,10 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 0.3.0;
-				PRODUCT_BUNDLE_IDENTIFIER = chiimagnus.bailey;
+				PRODUCT_BUNDLE_IDENTIFIER = "chiimagnus.bailey$(BAILEY_BUNDLE_SUFFIX)";
+				BAILEY_APP_NAME = Bailey;
+				BAILEY_DOCUMENT_HANDLER_RANK = Alternate;
+				BAILEY_FINDER_SERVICE_NAME = "Add Folder to Bailey";
 				PRODUCT_NAME = Bailey;
 				EXECUTABLE_NAME = bailey;
 				REGISTER_APP_GROUPS = YES;
@@ -403,6 +439,36 @@
 			};
 			name = Release;
 		};
+		AA900000000000000000000A /* Debug BaileyUITests */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				DEVELOPMENT_TEAM = RDQHYSDFFG;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				PRODUCT_BUNDLE_IDENTIFIER = chiimagnus.bailey.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = Bailey;
+			};
+			name = Debug;
+		};
+		AA900000000000000000000B /* Release BaileyUITests */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				DEVELOPMENT_TEAM = RDQHYSDFFG;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				PRODUCT_BUNDLE_IDENTIFIER = chiimagnus.bailey.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = Bailey;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -423,6 +489,7 @@
 			defaultConfigurationName = Debug;
 		};
 		AA8000000000000000000009 = {isa = XCConfigurationList; buildConfigurations = (AA800000000000000000000A, AA800000000000000000000B); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+		AA9000000000000000000009 = {isa = XCConfigurationList; buildConfigurations = (AA900000000000000000000A, AA900000000000000000000B); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */

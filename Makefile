@@ -7,6 +7,9 @@ SCHEME := Bailey
 CONFIGURATION ?= Debug
 DESTINATION := platform=macOS,arch=arm64
 DERIVED_DATA := build/DerivedData
+DEV_DERIVED_DATA := build/DerivedData-Dev
+DEV_FLAGS := BAILEY_BUNDLE_SUFFIX=.dev 'BAILEY_APP_NAME=Bailey Dev' \
+	BAILEY_DOCUMENT_HANDLER_RANK=None 'BAILEY_FINDER_SERVICE_NAME=Add Folder to Bailey Dev'
 SOURCE_PACKAGES := build/SourcePackages
 APP = $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/Bailey.app
 RELEASE_APP := $(DERIVED_DATA)/Build/Products/Release/Bailey.app
@@ -18,6 +21,19 @@ XCODEBUILD = xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
 	-derivedDataPath $(DERIVED_DATA) -clonedSourcePackagesDirPath $(SOURCE_PACKAGES) \
 	-skipPackageUpdates -disableAutomaticPackageResolution
 TEST_SELECTION = $(foreach TEST,$(ONLY_TESTING),-only-testing:$(TEST))
+SELECTED_TESTS_PREFLIGHT = if [ -n '$(strip $(ONLY_TESTING))' ]; then \
+	enumeration="$$lock/selected-tests.json"; \
+	trap 'rm -f "$$enumeration"; rmdir "$$lock"' EXIT; \
+	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) $(TEST_SELECTION) \
+		-enumerate-tests -test-enumeration-format json -test-enumeration-output-path "$$enumeration" test > /dev/null; \
+	python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); full=[g["name"]+"/"+c["name"]+"/"+t["name"].removesuffix("()") for p in j["values"] for g in p["children"] for c in g["children"] for t in c["children"] if t["kind"]=="test" and not t.get("disabled",False)]; missing=[s for s in sys.argv[2].split() if not any(p==s or p.startswith(s+"/") for p in full)]; print("Selected XCTest methods:",len(full)); sys.exit("Unmatched XCTest selector: "+", ".join(missing) if missing else 0)' "$$enumeration" '$(strip $(ONLY_TESTING))'; \
+	rm -f "$$enumeration"; \
+fi
+DEV_OPERATION_LOCK = set -eu; mkdir -p '$(CURDIR)/build'; \
+	lock='$(CURDIR)/build/.bailey-dev-test.lock'; \
+	mkdir "$$lock" 2>/dev/null || { \
+		echo '无法取得 Bailey Dev 构建／测试锁；请等待已有操作结束。若上次操作被强制终止，先确认没有相关进程再移除 build/.bailey-dev-test.lock。' >&2; exit 2; \
+	}; trap 'rmdir "$$lock"' EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
 comma := ,
 VERSION_FLAGS = $(if $(strip $(VERSION)),MARKETING_VERSION=$(VERSION)) \
 	$(if $(strip $(BUILD_NUMBER)),CURRENT_PROJECT_VERSION=$(BUILD_NUMBER))
@@ -31,14 +47,17 @@ else
 SIGNING_FLAGS =
 endif
 
-.PHONY: help doctor build build\:release test package clean
+.PHONY: help doctor build build\:dev build\:release build\:ui test test\:ui package clean
 
 help:
 	@printf '%s\n' \
 		'Bailey · Xcode 原生构建与测试' \
-		'  make build                              Debug 构建并验签' \
-		'  make test                               运行完整 XCTest' \
-		'  make test:类名1,类名2,...              运行一个或多个 XCTest 类' \
+		'  make build                              正式 Bailey Debug 构建并验签' \
+		'  make build:dev                          独立 Bailey Dev 构建并验签' \
+		'  make test                               使用 Bailey Dev 运行完整宿主 XCTest' \
+		'  make test:类名1,类名2,...              运行一个或多个宿主 XCTest 类' \
+		'  make build:ui                           只编译独立 UI Test（不启动 App）' \
+		'  make test:ui                            使用 Bailey Dev 执行完整 App UI Test' \
 		'  make test SIGNING=adhoc                 临时签名运行 XCTest（CI）' \
 		'  make build:release                      Release 构建并验签' \
 		'  make build:release SIGNING=adhoc        无开发证书时验证 Release 构建' \
@@ -56,17 +75,40 @@ build:
 	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) build
 	codesign --verify --deep --strict '$(APP)'
 
+build\:dev: DERIVED_DATA = $(DEV_DERIVED_DATA)
+build\:dev:
+	@$(DEV_OPERATION_LOCK); \
+	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) build; \
+	codesign --verify --deep --strict '$(APP)'; \
+	test "$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' '$(APP)/Contents/Info.plist')" = chiimagnus.bailey.dev
+
 build\:release: CONFIGURATION = Release
 build\:release: build
 
+build\:ui: SCHEME = Bailey-UI
+build\:ui: DERIVED_DATA = $(DEV_DERIVED_DATA)
+build\:ui:
+	@$(DEV_OPERATION_LOCK); \
+	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) build-for-testing
+
+test\:ui: SCHEME = Bailey-UI
+test\:ui: DERIVED_DATA = $(DEV_DERIVED_DATA)
+test\:ui:
+	@$(DEV_OPERATION_LOCK); \
+	$(SELECTED_TESTS_PREFLIGHT); \
+	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) $(TEST_SELECTION) test
+
+test: DERIVED_DATA = $(DEV_DERIVED_DATA)
 test:
-	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(TEST_SELECTION) test
-ifeq ($(SIGNING),adhoc)
-	@set -eu; for bundle in '$(APP)' '$(APP)/Contents/PlugIns/BaileyTests.xctest'; do \
-		codesign --verify --deep --strict "$$bundle"; \
-		codesign -dvvv "$$bundle" 2>&1 | grep -Fx 'Signature=adhoc' >/dev/null; \
-	done
-endif
+	@$(DEV_OPERATION_LOCK); \
+	$(SELECTED_TESTS_PREFLIGHT); \
+	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) $(TEST_SELECTION) test; \
+	if [ '$(SIGNING)' = adhoc ]; then \
+		for bundle in '$(APP)' '$(APP)/Contents/PlugIns/BaileyTests.xctest'; do \
+			codesign --verify --deep --strict "$$bundle"; \
+			codesign -dvvv "$$bundle" 2>&1 | grep -Fx 'Signature=adhoc' >/dev/null; \
+		done; \
+	fi
 
 test\:%:
 	@test -n "$(strip $(subst $(comma), ,$*))" || { echo '请指定 XCTest 类名' >&2; exit 2; }

@@ -285,6 +285,7 @@ struct TreeFolderRow<Accessory: View>: View {
                     .accessibilityAction(.default) { toggle() }
                     .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel)
+                .accessibilityIdentifier("bailey.tree.folder")
                 .accessibilityAddTraits(focusRing ? .isSelected : [])
                 .accessibilityValue(row.isExpanded
                     ? String(localized: "Expanded", table: "Sidebar")
@@ -314,6 +315,7 @@ struct TreeFileRow<Accessory: View>: View {
     var focusRing = false
     var leadingInset = TreeRowStyle.contentInset
     var accessibilityHint = ""
+    var accessibilityID = "bailey.tree.file"
     let open: () -> Void
     var activate: (() -> Void)? = nil
     @ViewBuilder var accessory: (Bool) -> Accessory
@@ -330,6 +332,7 @@ struct TreeFileRow<Accessory: View>: View {
                     .accessibilityAction(.default) { open() }
                     .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel + ", " + row.path)
+                .accessibilityIdentifier(accessibilityID)
                 .accessibilityAddTraits(focusRing ? .isSelected : [])
                 .accessibilityHint(accessibilityHint)
                 accessory(hovering || focusRing)

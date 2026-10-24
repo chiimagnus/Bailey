@@ -4,7 +4,7 @@ import SwiftUI
 /// One retained TextKit surface for a diff tab. Layout and gestures never
 /// create a second editor document when SwiftUI moves the enclosing pane.
 @MainActor
-final class DiffNativeSurface: NSView {
+final class DiffNativeSurface: NSView, NSTextViewDelegate {
     weak var diff: DiffTab?
     var canFocus: () -> Bool = { false }
     private var pendingFocus = false
@@ -203,12 +203,18 @@ final class DiffNativeSurface: NSView {
 
     private func makeEditPane() -> DiffCodePaneView {
         let pane = makePane(mode: .edit, gutter: .single)
+        pane.textView.delegate = self
         pane.textView.onCharacterEdit = { [weak self] in self?.editTextDidChange() }
         pane.textView.onResignFirstResponder = { [weak self] in
             self?.diff?.autoSaveOnFocusLoss()
         }
         editPane = pane
         return pane
+    }
+
+    func undoManager(for view: NSTextView) -> UndoManager? {
+        guard view === editPane?.textView else { return nil }
+        return editPane?.textView.undoManager
     }
 
     private func makeUnifiedPane() -> DiffCodePaneView {

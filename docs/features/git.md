@@ -99,6 +99,8 @@ Branch、Remote Branch 与 Tag 的「创建归档」只生成 ZIP，macOS 原生
 
 「恢复文件到此版本」明确提示将同时覆盖此路径的 Git index 与工作区，经确认后执行 `git --literal-pathspecs checkout <SHA> -- <path>`。先核对确认打开时的文件状态，再完成未保存编辑的保存保护；自己的保存不算外部改写。首次 Git 覆写前再次核对准备后的文件状态和原 index；外部修改、保存失败或新编辑都会拒绝操作。成功后只重读干净的打开标签，HEAD 与其他历史引用不改变。保留现有文件树的原生命中、图谱线和独立横向滚动。
 
+历史文件的行为回归分为两层：`NativeGitHistoryFileTests` 在受控真实 Git 仓库中核对 revision、重命名、索引／工作区快照、SHA-256、5 MiB 上限和错误／竞态；`GitHistoryUITests` 经真实 Git Graph 的历史文件入口核对只读原文、取消／确认恢复及最终 Git 字节。`NativeDiffTabTests` 保留原生文本的辅助功能只读写保护组件契约。图谱历史文件具有独立 AX 行标识，防止同一路径的 Git Changes 行抢占历史菜单。
+
 ### 远端分支操作
 
 右键远端 Branch 或在 `+N` 菜单中选择相同操作，均绑定**实际 remote、完整分支路径与选定 Git Ref**；有多层路径或 remote 名称自身包含 `/` 时按配置识别最长匹配 remote。`origin/HEAD` 及其它符号远端引用按 Ref 快照的 `symref` 判定，只作为可查看、可复制名称的引用别名显示，不提供检出、Fetch、Merge、Pull、删除或归档操作；真正名为 `HEAD` 的非符号分支仍正常显示与操作。
@@ -149,6 +151,6 @@ Stash 直接作为带 `stash@{n}` 标签的节点嵌入 Git 图谱，而非单�
 
 `GitStatusModelTests` 与各 Git 操作集成测试使用临时仓库，核对工作区、index、HEAD、Ref、提交、Stash 和错误恢复，包括 Worktree 的创建、删除、锁定、未提交文件、外部变更及特殊路径。Worktree 历史回归覆盖没有分支引用的独立提交、干净与有改动、共享 HEAD、SHA-1／SHA-256、本机与受控远端后端、跨页加载、外部提交、工作树移除及查询失败恢复；受控后端不代替真实 SSH 验收。`GitExecutionTests` 另检查精简 GUI PATH、shell 启动噪声、Hook、超时与失败；Push 通过临时接收仓库核对真实提交，涉及 LFS 时还检查接收端对象。
 
-`CommitGraphLayoutTests` 检查真实父关系与轨道颜色。`RecentCommitsViewTests` 在原生窗口验证标签与车道同色、黑白图标对比度、`+N`、多工作树菜单、明暗模式、窄侧栏、整行展开及历史文件命中；具名标签另从真实临时 Git 仓库加载历史，再核对画出的名称、未关联分支状态、鼠标展开及共享工作树菜单目标，并覆盖中英文、明暗、宽度及字号组合。`GitStashActionTests` 核对相同 OID 的多个储藏记录、基础提交连线与精确 Pop/Drop/Branch。
+`CommitGraphLayoutTests` 负责完整父关系、车道颜色和极端车道边距；`GitGraphPaletteTests`、`GitGraphReferenceGroupTests`、`GitGraphWorktreePresentationTests` 分别验证颜色与对比度、引用分组、Worktree 路径及状态。独立 Bailey Dev 的 `GitGraphUITests` 和 `GitGraphGeometryUITests` 使用真实隔离仓库，从图谱点击、键盘、历史文件、分页和原生多级菜单执行 E2E，并检查实际像素及最终 Git 状态。真实图谱验收与底层拓扑测试分别承担界面和算法责任。`GitStashActionTests` 检查 Stash 身份及 Pop/Drop/Branch。
 
-`GitExternalRefreshTests` 验证前台外部修改自动刷新、后台暂停，以及 Git 面板隐藏后底部状态栏仍保持同步。`GitStatusModelTests` 覆盖监听初始化与释放、Worktree 共享引用、外部文件事件和相同快照不重复通知。真实 Windows SSH 使用获授权的专用 master 和临时仓库；`GitWorkspaceSSHTests` 核对 Worktree 创建、未提交修改拒删和移除后保留分支。模拟 SSH 结果不等于真机验收，完整测试入口和覆盖要求见 [testing.md](../testing.md)。
+`GitChangesUITests` 通过真实 Dev App 验证外部工作区、index、HEAD 变化、跨项目隔离、文件夹按钮、命令面板取消后真实方向键／Space 导航，以及 Staged／Unstaged Diff 的不同基线。`GitUncommittedUITests` 验证 Stash、Reset、Clean 原生确认与实际 Git 结果；`GitDialogUITests` 验证历史 Commit 的 Checkout、Cherry-pick、Revert、Merge、Rebase、Reset 原生默认值与取消／实际检出，Branch/Tag 同名替换的旧确认防误写和重试输入保留，以及历史／当前分支创建、原生重命名、无 Remote 禁用推送、多远端 Branch/Tag Push 仅写所选仓库、分支删除默认不强制且不删除远端、远端 Checkout 跟踪分支及 Fetch/Pull 默认值和实际 Ref、历史注释标签、本地 Tag 删除默认保留远端，以及旧 Stash 的 Apply/Drop 取消、分支创建以及恢复 index、指定 OID Pop，均核对原生表单和真实 Git 结果；`GitIgnoreEditorUITests` 从真实 Bailey Dev 操作普通文件标签、执行 ⌘Z 和保存，核对原生编辑器撤销及磁盘字节；`GitIgnoreIntegrationTests` 覆盖 CRLF、特殊路径和过期目标。`GitStatusModelTests` 检查监听初始化／释放、后台暂停、Worktree 共享引用与去重；`GitRemoteRefreshIntegrationTests` 以受控慢响应和获准 Windows SSH 临时仓库验证远端周期刷新。真实 Windows SSH 使用获授权的专用 master 和临时仓库；`GitWorkspaceSSHTests` 核对 Worktree 创建、未提交修改拒删和移除后保留分支。模拟 SSH 结果不等于真机验收，完整测试入口和覆盖要求见 [testing.md](../testing.md)。
