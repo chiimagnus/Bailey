@@ -1,21 +1,21 @@
 version = 1
-current_task_id = ""
+current_task_id = "P2-T1"
 
 [[tasks]]
 id = "P1-T1"
 title = "本机 Files 改为 FSEvents 目录刷新"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
-commit = ""
-note = ""
+commit = "204e74a"
+note = "本机 FSEvents、目录/压缩符号链接、MustScanSubDirs 和 Cmd+P 已完成；全量宿主 616 项通过(8 SSH 跳过)，最终 FileTree/Index 67 项及额外定点通过，正式/Dev/UI 只构建并验签。完整 GUI、macOS 15.6 与其他卷类型依用户授权延期，不能冒充实机验收。"
 
 [[tasks]]
 id = "P2-T1"
 title = "真实验证 SSH 持续事件通道并确定 Go／No-Go"
-status = "pending"
+status = "in_progress"
 plan = "plan-p2.md#p2-t1"
 commit = ""
-note = ""
+note = "2026-10-25 ssh windows 实机：MSYS2/PowerShell FileSystemWatcher，C/D 卷、含中文路径、持续 Created/Changed/Deleted/Renamed、Worktree/Refs/Stash/Tag 均有真实事件；550 次修改由 2s 合并为 5 个脏信号并核对最终磁盘；PTY 取消运行中的 watcher 后远端进程退出且测试目录清理。非 PTY 取消会遗留子进程（已按测试标识清理）；Git 只读状态查询触发 .git/index.lock 创建/删除和 .git 目录 Changed（8 轮 29 个事件），Git 去噪不得漏真实 Ref，尚未通过 Git Go；半开网络/丢事件与长期资源上限待验。仅使用 ssh windows，保持 SSH Files 2s/Git 5s 轮询不变。"
 
 [[tasks]]
 id = "P2-T2"

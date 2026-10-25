@@ -6,7 +6,7 @@
 
 Git Graph 与底部状态栏曾因每 2 秒重复查询而闪烁。本机 Git 已在 `fix/git-event-refresh` 改为 FSEvents 事件触发，然而源码仍有其它持续查询：
 
-- `ToolPanelView.periodicRefreshID` 在前台显示 **Files** 时，本机与 SSH 均每 **2 秒**调用 `syncModels → Project.syncFiles → FileTreeModel.sync → rebuild(refresh: true) → backend.list(directories:)`；即使没有文件变化，也会读取根目录和可见的已缓存目录。
+- `ToolPanelView` 的 `.task(id:)` 在前台显示 **Files** 时，本机与 SSH 均每 **2 秒**调用 `syncModels → Project.syncFiles → FileTreeModel.sync → rebuild(refresh: true) → backend.list(directories:)`；即使没有文件变化，也会读取根目录和可见的已缓存目录。
 - SSH **Git** 面板在前台可见时每 **5 秒**调用 `GitStatusModel.refresh()`。本机 Git 已在相同入口提前返回，不再定时查询。
 - `TerminalSession.watchRemoteConnection` 每秒检查本地 SSH 进程／control socket，健康时约每 2 秒发送一次**真正抵达远端**的状态探测。它负责发现静默断线，不能把“SSH 进程尚存在”视为远端在线。
 - `GitFileEventWatcher` 已使用系统原生 FSEvents 监听本机仓库、Git 元数据和 Worktree，可复用原生机制；`SSHWorkspaceBackend` 的 `RemoteCommandRunner.run` 目前只能一次请求、一次完整返回，没有可靠的持续事件流。
@@ -62,4 +62,4 @@ SSH 临时通知命令(变化／失效) → 复用 Files／Git 现有查询
 - 环境与输入：已打开／隐藏／重新出现的 Files；前台／后台；初次空目录、普通目录、Git 仓库、关联 Worktree、包含中文／空格／换行的路径、大小写更名、符号链接、不可读取目录、很深或很大的目录，以及大量短时间连续变更。逐项验证实际适用条件并尽可能组合。
 - 同时发生目录变更、Git 刷新、项目切换、窗口关闭与后台切换：旧事件不跨项目发布，列表无丢失／误清空、无长期后台 watcher／无空闲重复 I/O。使用原生 UI 和磁盘最终内容核对，不只断言收到通知。
 - SSH 可行性实验：只允许会话内临时原生命令；至少核查真实 Windows SSH 目标的事件来源、连续有界输出、失同步重扫、取消、重连与子进程清理；其它远端按已有命令可用性明确支持或 No-Go。分别记录 Files、Git 与 SSH 连接／工作目录探测的保留／替换决定，不能将 SSH 轮询停止误报为“事件驱动完成”。
-- 验证 `FileTreeTests`、`SSHFileTreeLiveTests`、`PanelContextTests`、`GitExternalRefreshTests`、`GitStatusModelTests`、共享树原生交互、完整 `make test`、`make build` 与严格签名。受条件限制未测的远端设备、权限、系统版本、断线场景须逐项记录原因、替代证据、潜在影响和补验条件，不宣称全部通过。
+- 验证 `FileTreeTests`、`SSHFileTreeLiveTests`、`PanelContextTests`、`GitRemoteRefreshIntegrationTests`、`GitStatusModelTests`、共享树原生交互、完整 `make test`、`make build` 与严格签名。受条件限制未测的远端设备、权限、系统版本、断线场景须逐项记录原因、替代证据、潜在影响和补验条件，不宣称全部通过。
