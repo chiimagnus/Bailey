@@ -208,17 +208,22 @@ private struct FileTreeScrollView: View {
 
     private func handleKey(_ event: NSEvent) -> Bool {
         guard keyboardOwner.view?.window?.firstResponder === keyboardOwner.view,
-              isActive, canFocusKeyboard(), isCurrentTarget(),
-              event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+              isActive, canFocusKeyboard(), isCurrentTarget()
         else { return false }
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if modifiers == [.command], event.keyCode == 0 {
+            model.selectAllVisible()
+            return true
+        }
+        guard modifiers.isEmpty || modifiers == [.shift] else { return false }
         switch event.keyCode {
-        case 125: model.moveSelection(by: 1) // Down
-        case 126: model.moveSelection(by: -1) // Up
-        case 124: // Right
+        case 125: model.moveSelection(by: 1, extending: modifiers.contains(.shift)) // Down
+        case 126: model.moveSelection(by: -1, extending: modifiers.contains(.shift)) // Up
+        case 124 where modifiers.isEmpty: // Right
             guard let row = model.selectedItem, row.isDirectory else { return false }
             if !model.isExpanded(row) { Task { await model.toggle(row) } }
             else if let child = model.nextVisibleChild(of: row) { model.select(child) }
-        case 123: // Left
+        case 123 where modifiers.isEmpty: // Left
             guard let row = model.selectedItem else { return false }
             if row.isDirectory, model.isExpanded(row) {
                 Task { await model.toggle(row) }
@@ -227,15 +232,15 @@ private struct FileTreeScrollView: View {
                 .max(by: { $0.path.count < $1.path.count }) {
                 model.select(parent)
             }
-        case 36, 76: // Return and keypad Enter
+        case 36, 76 where modifiers.isEmpty: // Return and keypad Enter
             guard let row = model.selectedItem else { return false }
             if row.isDirectory { Task { await model.toggle(row) } }
             else { openFile(row.path, true) }
-        case 49: // Space previews without moving keyboard focus
+        case 49 where modifiers.isEmpty: // Space previews without moving keyboard focus
             guard let row = model.selectedItem else { return false }
             if row.isDirectory { Task { await model.toggle(row) } }
             else { openFile(row.path, false) }
-        case 53: model.clearSelection() // Escape
+        case 53 where modifiers.isEmpty: model.clearSelection() // Escape
         default: return false
         }
         return true
@@ -264,6 +269,17 @@ private struct FileTreeRow: View {
     private var isRenaming: Bool { model.renamingPath == item.path }
     private var hasKeyboardCursor: Bool {
         model.selectedPath == item.path && listFocused
+    }
+
+    private var isMultiSelected: Bool { model.selectedPaths.contains(item.path) }
+
+    private func selectForClick() -> Bool {
+        let modifiers = NSApp.currentEvent?.modifierFlags ?? []
+        let extending = modifiers.contains(.shift)
+        let toggling = modifiers.contains(.command) && !extending
+        model.select(item, extending: extending, toggling: toggling)
+        focusKeyboard()
+        return extending || toggling
     }
 
     /// The file open in the active tab, so it reads as selected in the tree.
@@ -437,10 +453,10 @@ private struct FileTreeRow: View {
     private var semanticRow: some View {
         if item.isDirectory {
             TreeFolderRow(row: displayRow, scale: fontScale,
-                          focusRing: hasKeyboardCursor) {
+                          focusRing: hasKeyboardCursor, multiSelected: isMultiSelected,
+                          multiSelectionEnabled: true) {
                 guard isCurrentTarget() else { return }
-                model.select(item)
-                focusKeyboard()
+                if selectForClick() { return }
                 Task {
                     guard isCurrentTarget() else { return }
                     await model.toggle(item)
@@ -449,15 +465,16 @@ private struct FileTreeRow: View {
         } else {
             TreeFileRow(
                 row: displayRow, scale: fontScale, selected: isCurrent,
+                multiSelected: isMultiSelected, multiSelectionEnabled: true,
                 focusRing: hasKeyboardCursor,
                 open: {
                     guard isCurrentTarget() else { return }
-                    model.select(item)
-                    openFile(item.path, false)
-                    focusKeyboard()
+                    if !selectForClick() { openFile(item.path, false) }
                 },
                 activate: {
-                    guard isCurrentTarget() else { return }
+                    let modifiers = NSApp.currentEvent?.modifierFlags ?? []
+                    guard isCurrentTarget(), !modifiers.contains(.command),
+                          !modifiers.contains(.shift) else { return }
                     openFile(item.path, true)
                 }
             ) { _ in EmptyView() }

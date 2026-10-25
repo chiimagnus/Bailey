@@ -18,6 +18,8 @@ final class FileTreeModel {
     private(set) var items: [Item] = []
     /// Files' current keyboard selection, independent of the most recent FileTab.
     private(set) var selectedPath: String?
+    private(set) var selectedPaths: Set<String> = []
+    @ObservationIgnored private var selectionAnchorPath: String?
     /// Path of the row currently being renamed inline, if any.
     private(set) var renamingPath: String?
     /// The pending new-file/folder input row, if any.
@@ -58,24 +60,73 @@ final class FileTreeModel {
         items.first { !$0.isDraft && $0.path == selectedPath }
     }
 
-    func select(_ item: Item) {
+    func select(_ item: Item, extending: Bool = false, toggling: Bool = false) {
         guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path })
         else { return }
+        if extending {
+            selectRange(to: item.path)
+        } else if toggling {
+            if !selectedPaths.insert(item.path).inserted {
+                selectedPaths.remove(item.path)
+            }
+            selectionAnchorPath = item.path
+        } else {
+            selectedPaths = [item.path]
+            selectionAnchorPath = item.path
+        }
         selectedPath = item.path
     }
 
     @discardableResult
-    func moveSelection(by delta: Int) -> Item? {
+    func moveSelection(by delta: Int, extending: Bool = false) -> Item? {
         let visible = items.filter { !$0.isDraft }
-        guard !visible.isEmpty else { selectedPath = nil; return nil }
+        guard !visible.isEmpty else { clearSelection(); return nil }
         let current = selectedPath.flatMap { path in visible.firstIndex { $0.path == path } }
         let start = current ?? (delta >= 0 ? -1 : visible.count)
         let next = max(0, min(visible.count - 1, start + delta))
+        if extending {
+            selectRange(to: visible[next].path)
+        } else {
+            selectedPaths = [visible[next].path]
+            selectionAnchorPath = visible[next].path
+        }
         selectedPath = visible[next].path
         return visible[next]
     }
 
-    func clearSelection() { selectedPath = nil }
+    private func selectRange(to path: String) {
+        let visible = items.filter { !$0.isDraft }.map(\.path)
+        guard let end = visible.firstIndex(of: path) else { return }
+        let anchor = selectionAnchorPath ?? selectedPath ?? path
+        let start = visible.firstIndex(of: anchor) ?? end
+        selectedPaths = Set(visible[min(start, end)...max(start, end)])
+        selectionAnchorPath = visible[start]
+    }
+
+    func selectAllVisible() {
+        let visible = items.filter { !$0.isDraft }.map(\.path)
+        selectedPaths = Set(visible)
+        if let selectedPath {
+            if !selectedPaths.contains(selectedPath) { self.selectedPath = visible.first }
+        } else {
+            selectedPath = visible.first
+        }
+        selectionAnchorPath = selectedPath
+    }
+
+    func contextSelection(for item: Item) -> [String] {
+        guard !item.isDraft else { return [] }
+        if selectedPaths.contains(item.path) {
+            return items.filter { !$0.isDraft && selectedPaths.contains($0.path) }.map(\.path)
+        }
+        return [item.path]
+    }
+
+    func clearSelection() {
+        selectedPath = nil
+        selectedPaths.removeAll()
+        selectionAnchorPath = nil
+    }
 
     func nextVisibleChild(of item: Item) -> Item? {
         guard item.isDirectory, let index = items.firstIndex(where: { $0.path == item.path }),
@@ -109,7 +160,7 @@ final class FileTreeModel {
         }
         if scopeChanged || channelChanged {
             items = []
-            selectedPath = nil
+            clearSelection()
             // Inline editing and old rows cannot cross backend identity.
             renamingPath = nil
             draft = nil
@@ -285,10 +336,13 @@ final class FileTreeModel {
         }
         guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return nil }
         remapExpanded(from: item.path, to: dest)
-        if let selectedPath,
-           selectedPath == item.path || selectedPath.hasPrefix(item.path + "/") {
-            self.selectedPath = dest + String(selectedPath.dropFirst(item.path.count))
+        func moved(_ path: String) -> String {
+            guard path == item.path || path.hasPrefix(item.path + "/") else { return path }
+            return dest + String(path.dropFirst(item.path.count))
         }
+        if let selectedPath { self.selectedPath = moved(selectedPath) }
+        selectedPaths = Set(selectedPaths.map(moved))
+        selectionAnchorPath = selectionAnchorPath.map(moved)
         invalidateDirectory(containing: item.path)
         let currentEpoch = treeEpoch
         await rebuild()
@@ -473,11 +527,18 @@ final class FileTreeModel {
             if !rebuildPending, traversal.rootReadable,
                generation == rebuildGeneration, epoch == treeEpoch,
                path == rootPath, scope == workspaceScope {
-                if let selectedPath, !traversal.rows.contains(where: { $0.path == selectedPath }) {
-                    // A collapsed or deleted descendant cannot hold an invisible cursor.
+                let visiblePaths = Set(traversal.rows.filter { !$0.isDraft }.map(\.path))
+                if let selectedPath, !visiblePaths.contains(selectedPath) {
                     self.selectedPath = traversal.rows
                         .filter { $0.isDirectory && selectedPath.hasPrefix($0.path + "/") }
                         .max(by: { $0.path.count < $1.path.count })?.path
+                }
+                selectedPaths.formIntersection(visiblePaths)
+                if selectedPaths.isEmpty, let selectedPath = self.selectedPath {
+                    selectedPaths.insert(selectedPath)
+                }
+                if let anchor = selectionAnchorPath, !visiblePaths.contains(anchor) {
+                    selectionAnchorPath = self.selectedPath
                 }
                 if traversal.rows != items { items = traversal.rows }
                 cachedDirectories = cachedDirectories.filter { visited.contains($0.key) }

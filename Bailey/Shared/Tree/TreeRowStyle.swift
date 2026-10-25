@@ -110,6 +110,7 @@ struct TreeRowSurface<Content: View>: View {
     let depth: Int
     let scale: CGFloat
     var selected = false
+    var multiSelected = false
     var focusRing = false
     var hoverEnabled = true
     var leadingInset = TreeRowStyle.contentInset
@@ -125,6 +126,7 @@ struct TreeRowSurface<Content: View>: View {
         depth: Int,
         scale: CGFloat,
         selected: Bool = false,
+        multiSelected: Bool = false,
         focusRing: Bool = false,
         hoverEnabled: Bool = true,
         leadingInset: CGFloat = TreeRowStyle.contentInset,
@@ -137,6 +139,7 @@ struct TreeRowSurface<Content: View>: View {
         self.depth = depth
         self.scale = scale
         self.selected = selected
+        self.multiSelected = multiSelected
         self.focusRing = focusRing
         self.hoverEnabled = hoverEnabled
         self.leadingInset = leadingInset
@@ -157,8 +160,9 @@ struct TreeRowSurface<Content: View>: View {
             .contentShape(RoundedRectangle(cornerRadius: 4))
             .background(
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(selected ? Color.primary.opacity(0.09)
-                                   : (isHovering ? Color.primary.opacity(0.05) : .clear))
+                    .fill(multiSelected ? Color(nsColor: Theme.accent).opacity(0.14)
+                           : selected ? Color.primary.opacity(0.09)
+                           : (isHovering ? Color.primary.opacity(0.05) : .clear))
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 4)
@@ -272,12 +276,15 @@ struct TreeFolderRow<Accessory: View>: View {
     let scale: CGFloat
     var leadingInset = TreeRowStyle.contentInset
     var focusRing = false
+    var multiSelected = false
+    var multiSelectionEnabled = false
     let toggle: () -> Void
     @ViewBuilder var accessory: (Bool) -> Accessory
 
     var body: some View {
         TreeRowSurface(depth: row.depth, scale: scale,
-                       focusRing: focusRing, leadingInset: leadingInset) { hovering, layout in
+                       multiSelected: multiSelected, focusRing: focusRing,
+                       leadingInset: leadingInset) { hovering, layout in
             HStack(spacing: 0) {
                 TreeRowLabel(row: row, iconPath: row.path, scale: scale)
                     .modifier(layout)
@@ -286,7 +293,7 @@ struct TreeFolderRow<Accessory: View>: View {
                     .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel)
                 .accessibilityIdentifier("bailey.tree.folder")
-                .accessibilityAddTraits(focusRing ? .isSelected : [])
+                .accessibilityAddTraits((multiSelectionEnabled ? multiSelected : focusRing) ? .isSelected : [])
                 .accessibilityValue(row.isExpanded
                     ? String(localized: "Expanded", table: "Sidebar")
                     : String(localized: "Collapsed", table: "Sidebar"))
@@ -299,10 +306,12 @@ struct TreeFolderRow<Accessory: View>: View {
 extension TreeFolderRow where Accessory == EmptyView {
     init(row: TreeDisplayModel.Row, scale: CGFloat,
          leadingInset: CGFloat = TreeRowStyle.contentInset,
-         focusRing: Bool = false,
-         toggle: @escaping () -> Void) {
+         focusRing: Bool = false, multiSelected: Bool = false,
+         multiSelectionEnabled: Bool = false, toggle: @escaping () -> Void) {
         self.init(row: row, scale: scale, leadingInset: leadingInset,
-                  focusRing: focusRing, toggle: toggle) { _ in EmptyView() }
+                  focusRing: focusRing, multiSelected: multiSelected,
+                  multiSelectionEnabled: multiSelectionEnabled,
+                  toggle: toggle) { _ in EmptyView() }
     }
 }
 
@@ -312,6 +321,8 @@ struct TreeFileRow<Accessory: View>: View {
     var iconPath: String? = nil
     var directory: String? = nil
     var selected = false
+    var multiSelected = false
+    var multiSelectionEnabled = false
     var focusRing = false
     var leadingInset = TreeRowStyle.contentInset
     var accessibilityHint = ""
@@ -322,7 +333,7 @@ struct TreeFileRow<Accessory: View>: View {
 
     var body: some View {
         TreeRowSurface(depth: row.depth, scale: scale, selected: selected,
-                       focusRing: focusRing, leadingInset: leadingInset) { hovering, layout in
+                       multiSelected: multiSelected, focusRing: focusRing, leadingInset: leadingInset) { hovering, layout in
             HStack(spacing: 0) {
                 TreeRowLabel(row: row, iconPath: iconPath ?? row.path, scale: scale,
                              directory: directory)
@@ -333,7 +344,7 @@ struct TreeFileRow<Accessory: View>: View {
                     .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel + ", " + row.path)
                 .accessibilityIdentifier(accessibilityID)
-                .accessibilityAddTraits(focusRing ? .isSelected : [])
+                .accessibilityAddTraits((multiSelectionEnabled ? multiSelected : focusRing) ? .isSelected : [])
                 .accessibilityHint(accessibilityHint)
                 accessory(hovering || focusRing)
             }

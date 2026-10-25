@@ -72,6 +72,44 @@ final class WorkspaceFilesUITests: XCTestCase {
                       "Clicking another file should open a preview tab without dropping the File Manager")
     }
 
+    func testModifierMultiSelectionDoesNotOpenOrCollapseFiles() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let alpha = try fixture.file("a.swift", text: "a\n")
+        let beta = try fixture.file("b.swift", text: "b\n")
+        let gamma = try fixture.file("c.swift", text: "c\n")
+        let app = try WorkspaceUITestSupport.launch(in: self)
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let a = WorkspaceUITestSupport.fileRow(alpha, in: window)
+        let b = WorkspaceUITestSupport.fileRow(beta, in: window)
+        let c = WorkspaceUITestSupport.fileRow(gamma, in: window)
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        XCTAssertTrue(c.waitForExistence(timeout: 15))
+
+        a.click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(alpha, in: window)
+            .waitForExistence(timeout: 15))
+        let baselineTabs = window.buttons.matching(identifier: "bailey.tab.file").count
+        XCUIElement.perform(withKeyModifiers: .shift) { c.click() }
+        XCTAssertTrue(a.isSelected && b.isSelected && c.isSelected,
+                      "Shift-click must select the range between visible rows")
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, baselineTabs,
+                       "Shift selection must not preview or activate another file")
+        XCUIElement.perform(withKeyModifiers: .command) { b.click() }
+        XCTAssertTrue(a.isSelected && !b.isSelected && c.isSelected,
+                      "Command-click selection: a=\(a.isSelected), b=\(b.isSelected), c=\(c.isSelected)")
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, baselineTabs)
+        app.typeKey("a", modifierFlags: .command)
+        XCTAssertTrue(a.isSelected && b.isSelected && c.isSelected,
+                      "Command+A in focused Files must select every visible row")
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: .shift)
+        XCTAssertTrue(c.isSelected, "Shift+Down must keep the visible selection")
+        XCTAssertEqual(try String(contentsOf: beta, encoding: .utf8), "b\n")
+        XCTAssertEqual(try String(contentsOf: gamma, encoding: .utf8), "c\n")
+    }
+
     func testCommandPaletteRestoresFileTreeKeyboardAfterDismissal() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("a-first.swift", text: "let first = 1\n")

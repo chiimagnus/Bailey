@@ -236,6 +236,78 @@ final class FileTreeTests: XCTestCase {
         XCTAssertNil(tree.selectedPath, "A new root must never inherit the old selection")
     }
 
+    func testFileTreeMultiSelectionRespectsVisibleOrderAndKeepsSingleCursor() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["alpha", "beta", "gamma", "delta"] {
+            try Data().write(to: root.appendingPathComponent(name))
+        }
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let rows = tree.items
+        XCTAssertEqual(rows.count, 4)
+
+        tree.select(rows[0])
+        XCTAssertEqual(tree.selectedPaths, [rows[0].path])
+        tree.select(rows[2], extending: true)
+        XCTAssertEqual(tree.selectedPaths, Set(rows[0...2].map(\.path)))
+        XCTAssertEqual(tree.selectedPath, rows[2].path)
+        tree.select(rows[1], toggling: true)
+        XCTAssertEqual(tree.selectedPaths, [rows[0].path, rows[2].path])
+        XCTAssertEqual(tree.selectedPath, rows[1].path)
+        XCTAssertEqual(tree.contextSelection(for: rows[2]), [rows[0].path, rows[2].path])
+        XCTAssertEqual(tree.contextSelection(for: rows[3]), [rows[3].path])
+
+        tree.select(rows[1])
+        _ = tree.moveSelection(by: 2, extending: true)
+        XCTAssertEqual(tree.selectedPaths, Set(rows[1...3].map(\.path)))
+        _ = tree.moveSelection(by: -1, extending: true)
+        XCTAssertEqual(tree.selectedPaths, Set(rows[1...2].map(\.path)))
+        tree.selectAllVisible()
+        XCTAssertEqual(tree.selectedPaths, Set(rows.map(\.path)))
+        tree.clearSelection()
+        XCTAssertNil(tree.selectedPath)
+        XCTAssertTrue(tree.selectedPaths.isEmpty)
+        _ = tree.moveSelection(by: 1)
+        XCTAssertEqual(tree.selectedPaths, [rows[0].path])
+    }
+
+    func testFileTreeMultiSelectionTracksCollapseRenameAndWorkspaceSwitch() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("folder")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let child = folder.appendingPathComponent("child.swift")
+        try Data().write(to: child)
+        let sibling = root.appendingPathComponent("z.swift")
+        try Data().write(to: sibling)
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let dir = try XCTUnwrap(tree.items.first { $0.path == folder.path })
+        await tree.toggle(dir)
+        let childRow = try XCTUnwrap(tree.items.first { $0.path == child.path })
+        let siblingRow = try XCTUnwrap(tree.items.first { $0.path == sibling.path })
+        tree.select(childRow)
+        tree.select(siblingRow, toggling: true)
+        XCTAssertEqual(tree.selectedPaths.count, 2)
+
+        let newFolder = root.appendingPathComponent("renamed")
+        let moved = await tree.rename(dir, to: newFolder.lastPathComponent)
+        XCTAssertEqual(moved, newFolder.path)
+        XCTAssertTrue(tree.selectedPaths.contains(newFolder.appendingPathComponent("child.swift").path))
+        XCTAssertTrue(tree.selectedPaths.contains(sibling.path))
+        let renamedDir = try XCTUnwrap(tree.items.first { $0.path == newFolder.path })
+        await tree.toggle(renamedDir)
+        XCTAssertFalse(tree.selectedPaths.contains(newFolder.appendingPathComponent("child.swift").path))
+        XCTAssertTrue(tree.selectedPaths.contains(sibling.path))
+
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared, scope: "ssh:another-machine")
+        XCTAssertTrue(tree.selectedPaths.isEmpty)
+        XCTAssertNil(tree.selectedPath)
+    }
+
     func testRenameKeepsFilesCursorOnRenamedFileAndDirectoryDescendant() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
