@@ -329,7 +329,7 @@ final class SessionStoreTests: XCTestCase {
         let fileTab = try XCTUnwrap(project.selectedTab)
         fileTab.customName = "Renamed File Tab"
         try FileManager.default.moveItem(at: oldFile, to: newFile)
-        first.fileRenamed(from: oldFile.path, to: newFile.path, workspace: nil)
+        workspaceApplication.fileRenamed(from: oldFile.path, to: newFile.path, workspace: nil)
         try await waitForSnapshot { snapshots in
             guard let tabs = savedProject(snapshots)?.tabs else { return false }
             return tabs.contains {

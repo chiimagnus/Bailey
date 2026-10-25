@@ -726,21 +726,6 @@ final class WorkspaceWindowModel {
         }
     }
 
-    func deleteFile(
-        _ item: FileTreeModel.Item, in project: Project, target: PanelContext.Identity
-    ) async -> Bool {
-        let outcome = await performFileOperation(
-            .delete, paths: [item.path], into: nil, in: project, target: target
-        )
-        return outcome.succeeded.contains { $0.source == item.path }
-    }
-
-    /// Keep tabs and pinned sidebar entries in sync on the affected machine,
-    /// not in unrelated Mac/SSH projects with the same path.
-    func fileRenamed(from oldPath: String, to newPath: String, workspace: String?) {
-        application.fileRenamed(from: oldPath, to: newPath, workspace: workspace)
-    }
-
     private func clipboardRevision(for target: PanelContext.Identity) -> UInt64? {
         guard let workspace = target.workspace, workspace.hasPrefix("ssh:") else { return nil }
         return SSHHostWorkspaces.connectionRevision(for: String(workspace.dropFirst(4)))
