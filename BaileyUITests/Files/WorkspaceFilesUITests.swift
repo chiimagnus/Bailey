@@ -228,6 +228,47 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [revealedSelection], timeout: 12), .completed,
                        "Remote reveal must select its own machine's row")
 
+        if ProcessInfo.processInfo.environment["BAILEY_P3_EXTERNAL_DISCONNECT"] == "1" {
+            // XCTest cannot access another App process's SSH socket (EPERM).
+            // The authorized Mac-side test invocation closes only this Dev PID's master.
+            let devApplications = NSRunningApplication.runningApplications(
+                withBundleIdentifier: "chiimagnus.bailey.dev"
+            )
+            XCTAssertEqual(devApplications.count, 1)
+            let devPID = try XCTUnwrap(devApplications.first?.processIdentifier)
+            let ready = fixture.root.appendingPathComponent("p3-disconnect.ready")
+            let completed = fixture.root.appendingPathComponent("p3-disconnect.done")
+            try "\(devPID)\n".write(to: ready, atomically: true, encoding: .utf8)
+            NSLog("P3_DISCONNECT_READY_PATH=%@", ready.path)
+            let disconnected = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in
+                    FileManager.default.fileExists(atPath: completed.path)
+                }, object: nil
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [disconnected], timeout: 60), .completed,
+                           "The Mac-side controller must close only this test Dev SSH master")
+            XCTAssertEqual(try String(contentsOf: completed, encoding: .utf8), "master-closed\n")
+            _ = try runSSH(host: host, command:
+                "printf 'WINDOWS_AFTER_RECONNECT\\n' > '\(gitRoot)/p3-new.swift'")
+            let localOther = try fixture.file(
+                "p3-new.swift", text: "MAC_UNTRACKED_DIFFERENT_BYTES\n"
+            )
+            quickOpen("p3-new", at: gitRoot + "/p3-new.swift",
+                      content: "WINDOWS_AFTER_RECONNECT\n")
+            XCTAssertTrue(gitTab.exists, "Reconnecting must keep the original Windows file tab")
+            gitTab.click()
+            let originalEditor = app.textViews.firstMatch
+            let originalContent = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value == %@", "WINDOWS_GIT_UNIQUE_BYTES\n"),
+                object: originalEditor
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [originalContent], timeout: 20), .completed)
+            XCTAssertEqual(try String(contentsOf: localOther, encoding: .utf8),
+                           "MAC_UNTRACKED_DIFFERENT_BYTES\n")
+            XCTAssertEqual(try String(contentsOf: localTwin, encoding: .utf8),
+                           "MAC_WRONG_MACHINE_BYTES\n")
+        }
+
         addSSH(plainRoot)
         files.click()
         XCTAssertTrue(WorkspaceUITestSupport.fileRow(
