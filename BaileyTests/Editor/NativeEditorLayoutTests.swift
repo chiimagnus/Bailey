@@ -35,7 +35,7 @@ final class NativeEditorLayoutTests: XCTestCase {
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         if let appearance { window.appearance = NSAppearance(named: appearance) }
-        window.contentView = scroll
+        window.contentView = SourceEditorContainer(scrollView: scroll)
         window.orderFront(nil)
         scroll.layoutSubtreeIfNeeded()
         editor.layoutSubtreeIfNeeded()
@@ -363,29 +363,119 @@ final class NativeEditorLayoutTests: XCTestCase {
                 let source = String(repeating: "q\n", count: rowCount - 1) + "last"
                 editor.text = source
                 editor.configureWrapping(wraps, viewportWidth: 340)
+                window.contentView?.layoutSubtreeIfNeeded()
                 scroll.layoutSubtreeIfNeeded()
                 let expectedWidth = max(35, ceil(CGFloat(String(rowCount).count) * digitWidth + 10))
                 XCTAssertEqual(ruler.ruleThickness, expectedWidth, accuracy: 1,
                     "Gutter width must follow live row count: \(rowCount)")
-                XCTAssertEqual(editor.textContainerInset.width, expectedWidth, accuracy: 1,
-                    "Text origin must follow the actual gutter, including after narrowing")
+                XCTAssertEqual(editor.textContainerInset.width, 0, accuracy: 0.5)
+                XCTAssertEqual(scroll.frame.minX, expectedWidth, accuracy: 1,
+                    "The fixed gutter must own the width even when the number of digits changes")
+                XCTAssertEqual(ruler.frame.maxX, scroll.frame.minX, accuracy: 0.5)
                 let fragment = try XCTUnwrap(editor.nativeLayoutManager.textLayoutFragment(
                     for: editor.nativeLayoutManager.documentRange.location
                 ))
                 let leading = editor.convert(NSPoint(
-                    x: fragment.layoutFragmentFrame.minX + editor.textContainerInset.width,
+                    x: fragment.layoutFragmentFrame.minX + editor.textContainerOrigin.x,
                     y: fragment.layoutFragmentFrame.minY
                 ), to: ruler).x
                 XCTAssertGreaterThanOrEqual(leading, ruler.bounds.maxX - 1,
                     "First glyph overlaps gutter after crossing \(rowCount) lines")
+                XCTAssertLessThan(leading - ruler.bounds.maxX, 12,
+                    "Fixed gutter must not create another column of text padding")
             }
             editor.showsLineNumbers = false
+            window.contentView?.layoutSubtreeIfNeeded()
             XCTAssertNil(editor.gutterView)
-            XCTAssertEqual(editor.textContainerInset.width, 0, accuracy: 0.5)
+            XCTAssertEqual(scroll.frame.minX, 0, accuracy: 0.5)
             editor.showsLineNumbers = true
-            XCTAssertEqual(editor.textContainerInset.width,
+            window.contentView?.layoutSubtreeIfNeeded()
+            XCTAssertEqual(editor.textContainerInset.width, 0, accuracy: 0.5)
+            XCTAssertEqual(scroll.frame.minX,
                            try XCTUnwrap(editor.gutterView).ruleThickness, accuracy: 1)
         }
+    }
+
+    func testSourceGutterRemainsOutsideHorizontallyScrollableText() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".txt")
+        let source = String(repeating:
+            String(repeating: "0123456789 abcdefghijklmnopqrstuvwxyz ", count: 50) + "\n",
+            count: 50)
+        try Data(source.utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = FileTab(path: url.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        let host = NSHostingView(rootView: SourceTextEditor(
+            file: file, font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+            palette: .theme(dark: false), wrapLines: false, isFocused: false
+        ))
+        let window = NSWindow(contentRect: NSRect(x: -900, y: -900, width: 460, height: 320),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+
+        let scroll = try XCTUnwrap(file.editorView as? NSScrollView)
+        let editor = try XCTUnwrap(scroll.documentView as? NativeCodeTextView)
+        let gutter = try XCTUnwrap(editor.gutterView)
+        XCTAssertEqual(editor.textContainerInset.width, 0, accuracy: 0.5,
+                       "The scrollable text must not carry the fixed gutter as its own padding")
+        XCTAssertTrue(gutter.superview === scroll.superview,
+                      "The gutter must be a sibling of the scrolling document")
+        XCTAssertEqual(scroll.frame.minX, gutter.frame.maxX, accuracy: 0.5)
+        let fixedGutterFrame = gutter.frame
+        let clip = scroll.contentView
+        let glyphOrigin = NSPoint(x: editor.textContainerOrigin.x
+            + (editor.textContainer?.lineFragmentPadding ?? 0), y: 0)
+        let beforeX = editor.convert(glyphOrigin, to: scroll).x
+        for x in [25.0, 80.0, 0.0] {
+            clip.scroll(to: NSPoint(x: x, y: clip.bounds.minY))
+            scroll.reflectScrolledClipView(clip)
+            XCTAssertEqual(gutter.frame, fixedGutterFrame,
+                           "Horizontal scrolling must not move the fixed gutter")
+            XCTAssertEqual(clip.bounds.minX, x, accuracy: 0.5)
+            let currentX = editor.convert(glyphOrigin, to: scroll).x
+            XCTAssertEqual(currentX, beforeX - x, accuracy: 1,
+                           "Only text should move, with no hidden gutter-width scroll offset")
+        }
+        let negative = clip.constrainBoundsRect(NSRect(
+            origin: NSPoint(x: -35, y: 0), size: clip.bounds.size
+        ))
+        XCTAssertEqual(negative.minX, 0, accuracy: 0.5,
+                       "The horizontal scroll range must not reveal space before the document")
+        clip.scroll(to: NSPoint(x: 25, y: 0))
+        scroll.reflectScrolledClipView(clip)
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
+        let x0 = Int((gutter.ruleThickness + 2) * scale)
+        let x1 = min(bitmap.pixelsWide, Int((gutter.ruleThickness + 35) * scale))
+        let background = try XCTUnwrap(EditorPalette.theme(dark: false)
+            .background.usingColorSpace(.deviceRGB))
+        let visible = (0..<bitmap.pixelsHigh).reduce(0) { total, y in
+            total + (x0..<x1).filter { x in
+                guard let pixel = bitmap.colorAt(x: x, y: y)?
+                    .usingColorSpace(.deviceRGB) else { return false }
+                return max(abs(pixel.redComponent - background.redComponent),
+                           abs(pixel.greenComponent - background.greenComponent),
+                           abs(pixel.blueComponent - background.blueComponent)) > 0.3
+            }.count
+        }
+        XCTAssertGreaterThan(visible, 80,
+                             "A real horizontal scroll must paint text beside the fixed gutter")
+        clip.scroll(to: NSPoint(x: 25, y: 180))
+        scroll.reflectScrolledClipView(clip)
+        XCTAssertEqual(file.editorState.scrollY ?? -1, clip.bounds.minY, accuracy: 0.5,
+                       "Vertical scrolling must reach the coordinator that refreshes the gutter")
+        XCTAssertEqual(gutter.frame, fixedGutterFrame,
+                       "Vertical scrolling must not move or resize the gutter")
+        XCTAssertEqual(editor.textContainerInset.width, 0, accuracy: 0.5)
+        XCTAssertEqual(editor.text, source)
     }
 
     func testWrappingAndUnwrappedLongUnicodeLinesKeepRealCharacterHitTargets() async throws {

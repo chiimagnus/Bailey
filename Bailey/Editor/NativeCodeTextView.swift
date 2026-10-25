@@ -457,24 +457,12 @@ class NativeCodeTextView: NSTextView {
             ruler.reservedThicknessForMarkers = 0
             ruler.backgroundColor = backgroundColor
             ruler.selectedLineHighlightColor = selectedLineHighlightColor
-            scroll.verticalRulerView = ruler
-            scroll.hasVerticalRuler = true
-            scroll.rulersVisible = true
             gutterView = ruler
-            applyGutterTextInset(ruler.ruleThickness)
         } else {
-            scroll.hasVerticalRuler = false
-            scroll.rulersVisible = false
+            gutterView?.removeFromSuperview()
             gutterView = nil
-            applyGutterTextInset(0)
         }
-    }
-
-    private func applyGutterTextInset(_ width: CGFloat) {
-        guard abs(textContainerInset.width - width) > 0.5 else { return }
-        var insets = textContainerInset
-        insets.width = width
-        textContainerInset = insets
+        scroll.superview?.needsLayout = true
     }
 
     var gutterNumberFont: NSFont {
@@ -498,8 +486,8 @@ class NativeCodeTextView: NSTextView {
         let thickness = gutterThickness
         if abs(gutterView.ruleThickness - thickness) > 0.5 {
             gutterView.ruleThickness = thickness
+            enclosingScrollView?.superview?.needsLayout = true
         }
-        applyGutterTextInset(thickness)
         gutterView.needsDisplay = true
     }
 
@@ -609,10 +597,8 @@ final class NativeLineNumberRuler: NSRulerView {
     var selectedLineHighlightColor: NSColor = .clear { didSet { needsDisplay = true } }
 
     override func draw(_ dirtyRect: NSRect) {
-        // Ruler rendering is hosted as an NSScrollView floating subview.
-        // AppKit can supply its parent's dirty region here; without explicit
-        // clipping, the opaque gutter background covers the TextKit 2 glyphs
-        // across the entire editor even though this ruler is only ~35pt wide.
+        // AppKit may supply a parent's dirty region, so the fixed gutter
+        // must never paint beyond its own bounds into the adjacent editor.
         let visible = dirtyRect.intersection(bounds)
         guard !visible.isNull else { return }
         NSGraphicsContext.saveGraphicsState()

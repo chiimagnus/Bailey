@@ -180,7 +180,7 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 编辑器回归必须覆盖下列实际结果，不能只检查状态字段：
 
 - **性能与坐标**：`NativeEditorLayoutTests`、`TextCoordinateIndexTests` 验证 382／1,000／10,000／100,000 行，折行两态、文首／中／末各 30 次编辑，以及至少 17 次交错远跳；检查滚动条、长行横滚、Unicode 命中及撤销后的真实字节。
-- **真实绘制**：`NativeEditorLayoutTests`、`NativeDiffTabTests`、`NativeFileTabTests` 验证亮暗主题、行号与跨行选区、空行、查找栏展开、窗口缩放、Diff 及行号与首字形不互相遮挡；颜色和位置以窗口像素为准。
+- **真实绘制**：`NativeEditorLayoutTests`、`NativeDiffTabTests`、`NativeFileTabTests` 验证亮暗主题、行号与跨行选区、空行、查找栏展开、窗口缩放、Diff，以及横滚前后固定行号区与正文没有重复留白；颜色和位置以窗口像素为准。
 - **颜色取样**：像素回归先声明目标位图色彩空间，再读取该空间的通道并与同空间主题值比较。不要把 `colorAt` 返回的旧式 calibrated RGB 数值再次当成显示器 profile 进行转换；当前行号背景测试在 sRGB 目标中按实际位深读取通道，保留原容差，不通过放宽阈值掩盖差异。
 - **十万行真实工作区闭环**：`NativePaneRetentionIntegrationTests` 在真实原生工作区验证十万行的首／中／末定位、编辑、Undo／Redo、保存和关闭后的对象释放；`EditorNavigationUITests` 保留完整 App 的远距键盘导航与 ⌘S 接线，不再重复创建十万行 GUI 夹具。Release 性能仍须独立测量首次可见时间、内存、CPU、滚动缓存与关闭后的 heap；`leaks` 不能证明仍可达的 FileTab 已释放。
 - **窗口生命周期**：直接关闭已关联工作区的原生 `NSWindow`，验证关闭通知同步注销窗口与项目、清理文件所有权，而不依赖 SwiftUI `.onDisappear`；重复清理不得覆盖最后窗口快照。保存／恢复回归还须覆盖窗口关闭和重新打开，避免只修内存而破坏快照语义。
