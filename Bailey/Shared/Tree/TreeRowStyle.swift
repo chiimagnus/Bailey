@@ -1,4 +1,5 @@
 import AppKit
+import GhosttyTheme
 import SwiftUI
 
 /// Per-tree native keyboard focus. Does not intercept mouse input or own row selection.
@@ -114,6 +115,8 @@ struct TreeRowLayout: ViewModifier {
 /// The one row surface shared by Files, working-tree Git and committed Git.
 /// Callers apply the supplied layout to interactive rows so hover and hit areas agree.
 struct TreeRowSurface<Content: View>: View {
+    private let themeChanges = Theme.changes
+    @Environment(\.colorScheme) private var colorScheme
     let depth: Int
     let scale: CGFloat
     var selected = false
@@ -158,6 +161,10 @@ struct TreeRowSurface<Content: View>: View {
     }
 
     var body: some View {
+        let _ = themeChanges.revision
+        let theme = Theme.terminal(dark: colorScheme == .dark)
+        let accent = Color(nsColor: theme.accentNSColor)
+        let foreground = Color(nsColor: theme.foregroundNSColor)
         content(isHovering, TreeRowLayout(
             leadingInset: leadingInset + CGFloat(depth) * TreeRowStyle.indent,
             trailingInset: trailingInset,
@@ -167,13 +174,13 @@ struct TreeRowSurface<Content: View>: View {
             .contentShape(RoundedRectangle(cornerRadius: 4))
             .background(
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(multiSelected ? Color(nsColor: Theme.accent).opacity(0.14)
-                           : selected ? Color.primary.opacity(0.09)
-                           : (isHovering ? Color.primary.opacity(0.05) : .clear))
+                    .fill(multiSelected ? accent.opacity(0.14)
+                           : selected ? foreground.opacity(0.09)
+                           : (isHovering ? foreground.opacity(0.05) : .clear))
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(focusRing ? Color(nsColor: Theme.accent).opacity(0.65) : .clear,
+                    .strokeBorder(focusRing ? accent.opacity(0.65) : .clear,
                                   lineWidth: 1)
                     .allowsHitTesting(false)
             }
@@ -190,6 +197,7 @@ struct TreeRowSurface<Content: View>: View {
 /// Identical SwiftUI folder glyph in Files and both Git trees.
 struct TreeFolderIcon: View {
     private let themeChanges = Theme.changes
+    @Environment(\.colorScheme) private var colorScheme
     let expanded: Bool
     let scale: CGFloat
 
@@ -197,7 +205,7 @@ struct TreeFolderIcon: View {
         let _ = themeChanges.revision
         Image(systemName: TreeRowStyle.folderSymbol(expanded: expanded))
             .font(.system(size: 11 * scale))
-            .foregroundStyle(Color(nsColor: Theme.accent).opacity(0.8))
+            .foregroundStyle(Color(nsColor: Theme.terminal(dark: colorScheme == .dark).accentNSColor).opacity(0.8))
             .frame(width: TreeRowStyle.iconSize, height: TreeRowStyle.iconSize)
             .accessibilityHidden(true)
     }
@@ -206,17 +214,21 @@ struct TreeFolderIcon: View {
 /// Draw across the entire SwiftUI row, including scaled typography and inline editing.
 /// A zero-spacing LazyVStack makes the full-height rectangles touch exactly.
 struct TreeGuideBackground: View {
+    private let themeChanges = Theme.changes
+    @Environment(\.colorScheme) private var colorScheme
     let depth: Int
     var leadingInset = TreeRowStyle.leadingInset
 
     var body: some View {
+        let _ = themeChanges.revision
+        let guideColor = Color(nsColor: Theme.terminal(dark: colorScheme == .dark).foregroundNSColor)
         Canvas { context, size in
             guard depth > 0 else { return }
             for level in 0..<depth {
                 let x = leadingInset + TreeRowStyle.iconSize / 2
                     + CGFloat(level) * TreeRowStyle.indent
                 let line = Path(CGRect(x: x - 0.5, y: 0, width: 1, height: size.height))
-                context.fill(line, with: .color(.primary.opacity(0.18)))
+                context.fill(line, with: .color(guideColor.opacity(0.18)))
             }
         }
         .allowsHitTesting(false)
@@ -225,20 +237,23 @@ struct TreeGuideBackground: View {
 }
 
 extension TreeDisplayModel.Status {
-    var color: Color {
-        switch self {
-        case .modified: Color(red: 0.82, green: 0.60, blue: 0.13)
-        case .added, .untracked: Color(red: 0.25, green: 0.73, blue: 0.31)
-        case .deleted: Color(red: 1.0, green: 0.48, blue: 0.45)
-        case .renamed, .copied: Color(red: 0.35, green: 0.65, blue: 1.0)
-        case .conflict: Color(red: 0.74, green: 0.55, blue: 1.0)
-        case .ignored: Color.secondary.opacity(0.55)
-        case .changed: .secondary
+    func color(theme: GhosttyThemeDefinition) -> Color {
+        let foreground = Color(nsColor: theme.foregroundNSColor)
+        return switch self {
+        case .modified: Color(nsColor: theme.paletteNSColor(3) ?? theme.accentNSColor)
+        case .added, .untracked: Color(nsColor: theme.paletteNSColor(2) ?? theme.accentNSColor)
+        case .deleted: Color(nsColor: theme.paletteNSColor(1) ?? theme.accentNSColor)
+        case .renamed, .copied: Color(nsColor: theme.paletteNSColor(4) ?? theme.accentNSColor)
+        case .conflict: Color(nsColor: theme.paletteNSColor(5) ?? theme.accentNSColor)
+        case .ignored: foreground.opacity(0.35)
+        case .changed: foreground.opacity(0.65)
         }
     }
 }
 
 private struct TreeRowLabel: View {
+    private let themeChanges = Theme.changes
+    @Environment(\.colorScheme) private var colorScheme
     let row: TreeDisplayModel.Row
     let iconPath: String
     let scale: CGFloat
@@ -246,6 +261,9 @@ private struct TreeRowLabel: View {
     var compactSegment: ((TreeDisplayModel.Row.CompactComponent) -> AnyView)? = nil
 
     var body: some View {
+        let _ = themeChanges.revision
+        let theme = Theme.terminal(dark: colorScheme == .dark)
+        let text = Color(nsColor: theme.foregroundNSColor)
         HStack(spacing: TreeRowStyle.iconSpacing) {
             if row.isDirectory {
                 TreeFolderIcon(expanded: row.isExpanded, scale: scale)
@@ -269,14 +287,14 @@ private struct TreeRowLabel: View {
                         }
                     }
                     .font(.system(size: TreeRowStyle.fontSize * scale))
-                    .foregroundStyle(row.status?.color
-                        ?? (row.name.hasPrefix(".") ? Color.secondary.opacity(0.55) : .secondary))
+                    .foregroundStyle(row.status?.color(theme: theme)
+                        ?? text.opacity(row.name.hasPrefix(".") ? 0.35 : 0.65))
                     .strikethrough(!row.isDirectory && row.status == .deleted)
                     .fixedSize(horizontal: true, vertical: false)
                     if let directory, !directory.isEmpty {
                         Text(directory)
                             .font(.system(size: 10 * scale))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(text.opacity(0.45))
                             .fixedSize(horizontal: true, vertical: false)
                     }
                 }
