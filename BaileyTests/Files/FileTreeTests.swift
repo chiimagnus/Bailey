@@ -122,6 +122,57 @@ final class FileTreeTests: XCTestCase {
         XCTAssertFalse(tree.items.contains { $0.path == first.path })
     }
 
+    func testPinnedSSHReconnectKeepsTrustedRowsIfNewChannelCannotListRoot() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let oldFile = root.appendingPathComponent("old.swift")
+        let newFile = root.appendingPathComponent("new.swift")
+        try Data("original".utf8).write(to: oldFile)
+
+        let backend = CountingFileBackend()
+        let identity = PanelContext.Identity.pinned(
+            project: UUID(), workspace: "ssh:fixture", directory: root.path
+        )
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend,
+                        scope: "ssh:fixture", panelIdentity: identity, connectionRevision: 1)
+        let row = try XCTUnwrap(tree.items.first { $0.path == oldFile.path })
+        tree.select(row)
+        await backend.setUnavailable(true)
+        await tree.sync(root: root.path, backend: backend,
+                        scope: "ssh:fixture", panelIdentity: identity, connectionRevision: 2)
+        XCTAssertEqual(tree.items.map(\.path), [oldFile.path],
+                       "An unreadable new SSH channel must preserve the last trustworthy tree")
+        XCTAssertEqual(tree.selectedPath, oldFile.path,
+                       "Reconnection alone must not discard the current cursor")
+        let destination = root.appendingPathComponent("moved")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let denied = await tree.performFileOperation(
+            .move, paths: [oldFile.path], into: destination.path
+        )
+        XCTAssertTrue(denied.succeeded.isEmpty)
+        XCTAssertFalse(denied.failures.isEmpty,
+                       "Old rows must remain visible but not editable on an unverified connection")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: oldFile.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: destination.appendingPathComponent("old.swift").path))
+        let deniedRename = await tree.rename(row, to: "unsafe.swift")
+        XCTAssertNil(deniedRename)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: oldFile.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("unsafe.swift").path))
+
+        await backend.setUnavailable(false)
+        try FileManager.default.removeItem(at: oldFile)
+        try Data("replacement".utf8).write(to: newFile)
+        await tree.sync(root: root.path, backend: backend,
+                        scope: "ssh:fixture", panelIdentity: identity, connectionRevision: 2)
+        XCTAssertEqual(tree.items.map(\.path), [destination.path, newFile.path],
+                       "Only a successful new listing may replace preserved rows")
+        XCTAssertFalse(tree.selectedPaths.contains(oldFile.path))
+    }
+
     func testSamePinnedSSHIdentityNewConnectionRefreshDoesNotWaitForOldBackend() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

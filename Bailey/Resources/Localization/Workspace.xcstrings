@@ -426,6 +426,16 @@
           }
         }
       }
+    },
+    "Remote file list has not been verified after reconnecting." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH 重连后尚未确认当前文件列表。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
