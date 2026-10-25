@@ -856,6 +856,42 @@ final class FileTreeTests: XCTestCase {
         XCTAssertNil(tree.selectedPath)
     }
 
+    func testRevealLocalFileSymlinkSelectsItsOwnRowAndRejectsInvalidTargets() async throws {
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = fixture.appendingPathComponent("project")
+        let folder = root.appendingPathComponent("nested")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+
+        let target = folder.appendingPathComponent("actual.swift")
+        try Data("let value = 1".utf8).write(to: target)
+        let link = folder.appendingPathComponent("alias.swift")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let broken = folder.appendingPathComponent("missing.swift")
+        try FileManager.default.createSymbolicLink(
+            at: broken, withDestinationURL: folder.appendingPathComponent("absent.swift")
+        )
+        let folderLink = root.appendingPathComponent("directory-link")
+        try FileManager.default.createSymbolicLink(at: folderLink, withDestinationURL: folder)
+        let outside = fixture.appendingPathComponent("outside.swift")
+        try Data("outside".utf8).write(to: outside)
+        let escaping = folder.appendingPathComponent("external.swift")
+        try FileManager.default.createSymbolicLink(at: escaping, withDestinationURL: outside)
+
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let selected = await tree.revealFile(link.path)
+        XCTAssertTrue(selected, "An open local symlink to a file should reveal the link's own row")
+        XCTAssertEqual(tree.selectedPath, link.path)
+        XCTAssertTrue(tree.items.contains { $0.path == link.path })
+        let missing = await tree.revealFile(broken.path)
+        let directory = await tree.revealFile(folderLink.path)
+        let outsideTarget = await tree.revealFile(escaping.path)
+        XCTAssertFalse(missing)
+        XCTAssertFalse(directory)
+        XCTAssertFalse(outsideTarget, "File symlinks may not escape the current workspace")
+    }
+
     func testRevealWaitsForExistingRefreshAndSelectsTheRightFile() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let folder = root.appendingPathComponent("folder")

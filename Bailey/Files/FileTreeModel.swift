@@ -121,8 +121,16 @@ final class FileTreeModel {
                 (path as NSString).deletingLastPathComponent, backend: backend, scope: scope
             )
             guard LocalPathScope.contains(physicalParent, in: physicalRoot),
-                  let stat = try await backend.stat(path: path), stat.isRegular
-            else { return false }
+                  let stat = try await backend.stat(path: path) else { return false }
+            if !stat.isRegular {
+                // Local stat describes a symlink itself. Its resolved file is
+                // still a valid Files row when it stays inside this root.
+                guard scope == "local", stat.isSymlink, !stat.isDirectory else { return false }
+                let resolvedPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+                guard LocalPathScope.contains(resolvedPath, in: physicalRoot),
+                      let target = try await backend.stat(path: resolvedPath), target.isRegular
+                else { return false }
+            }
         } catch { return false }
         guard epoch == treeEpoch, root == rootPath, scope == workspaceScope,
               isCurrentTarget() else { return false }
