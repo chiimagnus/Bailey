@@ -164,6 +164,16 @@ final class FileTreeModel {
     }
 
     private(set) var rootPath = ""
+    /// Windows native watchers do not follow directory symlinks into another tree.
+    var hasVisibleDirectorySymlinks: Bool {
+        cachedDirectories.contains { parent, entries in
+            entries.contains { entry in
+                guard entry.isSymlink && entry.isDirectory else { return false }
+                let path = (parent as NSString).appendingPathComponent(entry.name)
+                return items.contains { $0.path == path || $0.path.hasPrefix(path + "/") }
+            }
+        }
+    }
     private(set) var items: [Item] = []
     private(set) var contentRevision: UInt64 = 0
     /// Files' current keyboard selection, independent of the most recent FileTab.

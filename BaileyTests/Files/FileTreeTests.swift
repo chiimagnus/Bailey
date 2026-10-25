@@ -182,6 +182,8 @@ final class FileTreeTests: XCTestCase {
         let compacted = try XCTUnwrap(tree.items.first)
         XCTAssertEqual(compacted.path, alias.appendingPathComponent("child").path)
         XCTAssertEqual(compacted.displayName, "linked / child")
+        XCTAssertTrue(tree.hasVisibleDirectorySymlinks,
+                      "Compacted symlink paths must preserve Windows fallback polling")
         try await Task.sleep(for: .milliseconds(800))
 
         try Data().write(to: outside.appendingPathComponent("new.txt"))
@@ -1861,6 +1863,8 @@ final class FileTreeTests: XCTestCase {
         await tree.sync(root: root.path, backend: backend)
         let alias = try XCTUnwrap(tree.items.first { $0.path == root.appendingPathComponent("alias").path })
         XCTAssertTrue(alias.isDirectory)
+        XCTAssertTrue(tree.hasVisibleDirectorySymlinks,
+                      "Windows event streams do not follow external symlink targets")
         let broken = try XCTUnwrap(tree.items.first { $0.path == root.appendingPathComponent("broken").path })
         XCTAssertFalse(broken.isDirectory)
         await tree.toggle(alias)

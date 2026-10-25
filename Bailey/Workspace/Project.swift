@@ -36,6 +36,7 @@ final class Project: nonisolated Identifiable {
     }
     /// File browser state belongs to the project, not a transient tool tab.
     let fileTree = FileTreeModel()
+    @ObservationIgnored let remoteFileEvents = SSHWorkspaceFileEvents()
     let dock: DockWorkspaceModel
     var tabs: [PaneTab] = [] {
         didSet {

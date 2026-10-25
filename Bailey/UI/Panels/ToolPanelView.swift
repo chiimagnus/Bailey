@@ -94,6 +94,8 @@ struct ToolPanelView: View {
     @State private var filesTarget: PanelContext.Identity?
     @State private var syncQueue = PanelSyncQueue()
     @State private var watchedFileTree: FileTreeModel?
+    @State private var watchedRemoteProject: Project?
+    @State private var remoteWatcherMemberID = UUID()
 
     private struct RefreshTaskKey: Hashable {
         let active: Bool
@@ -275,9 +277,13 @@ struct ToolPanelView: View {
         .background(Color(nsColor: Theme.sidebar))
         .onAppear {
             updateLocalFileWatcher()
+            updateRemoteFileWatcher()
             syncModels()
         }
-        .onDisappear { stopLocalFileWatcher() }
+        .onDisappear {
+            stopLocalFileWatcher()
+            stopRemoteFileWatcher()
+        }
         .task(id: refreshTaskKey) {
             guard applicationIsActive else { return }
             if panel == .git {
@@ -289,7 +295,10 @@ struct ToolPanelView: View {
                 do { try await Task.sleep(for: .seconds(2)) }
                 catch { return }
                 guard applicationIsActive, !Task.isCancelled else { return }
-                syncModels()
+                if manager.selectedProject?.remoteFileEvents.healthy != true
+                    || manager.selectedProject?.fileTree.hasVisibleDirectorySymlinks == true {
+                    syncModels()
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(
@@ -297,6 +306,7 @@ struct ToolPanelView: View {
         )) { _ in
             applicationIsActive = true
             updateLocalFileWatcher()
+            updateRemoteFileWatcher()
             syncModels()
         }
         .onReceive(NotificationCenter.default.publisher(
@@ -304,19 +314,28 @@ struct ToolPanelView: View {
         )) { _ in
             applicationIsActive = false
             updateLocalFileWatcher()
+            updateRemoteFileWatcher()
         }
         .onChange(of: commandCompletionSequences) {
             syncModels()
         }
         .onChange(of: manager.selectedProject?.panelContext?.identity) {
             updateLocalFileWatcher()
+            updateRemoteFileWatcher()
             syncModels()
         }
-        .onChange(of: panel) { updateLocalFileWatcher() }
+        .onChange(of: manager.selectedProject?.fileTree.rootPath) {
+            updateRemoteFileWatcher()
+        }
+        .onChange(of: panel) {
+            updateLocalFileWatcher()
+            updateRemoteFileWatcher()
+        }
         // A connection appearing, connecting, dying or being replaced changes
         // what the heading says; repaint it without waiting for the next tick.
         .onChange(of: remoteConnectionToken) {
             updateLocalFileWatcher()
+            updateRemoteFileWatcher()
             syncModels()
         }
         .onChange(of: manager.selectedProject?.selectedSession?.panelDirectoryPath) {
@@ -327,6 +346,7 @@ struct ToolPanelView: View {
         )) { notification in
             guard let host = notification.object as? String,
                   manager.selectedProject?.panelContext?.identity.workspace == "ssh:" + host else { return }
+            updateRemoteFileWatcher()
             syncModels()
         }
         .environment(\.panelFontScale, panelFontScale)
@@ -349,6 +369,29 @@ struct ToolPanelView: View {
             watchedFileTree = nextTree
         }
         nextTree?.setLocalFileEventsEnabled(true)
+    }
+
+    private func stopRemoteFileWatcher() {
+        watchedRemoteProject?.remoteFileEvents.unsubscribe(id: remoteWatcherMemberID)
+        watchedRemoteProject = nil
+    }
+
+    private func updateRemoteFileWatcher() {
+        let project = manager.selectedProject
+        let context = project?.panelContext
+        let remoteProject: Project? = panel == .files && applicationIsActive
+            && context?.isRemote == true && project?.sshHost != nil
+            ? project : nil
+        if watchedRemoteProject !== remoteProject {
+            watchedRemoteProject?.remoteFileEvents.unsubscribe(id: remoteWatcherMemberID)
+            watchedRemoteProject = remoteProject
+        }
+        guard let remoteProject, let context,
+              let host = remoteProject.sshHost, !remoteProject.fileTree.rootPath.isEmpty else { return }
+        remoteProject.remoteFileEvents.subscribe(
+            id: remoteWatcherMemberID, project: remoteProject,
+            host: host, root: remoteProject.fileTree.rootPath, context: context
+        )
     }
 
     private func syncModels() {
