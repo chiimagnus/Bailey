@@ -166,6 +166,7 @@ private struct SidebarProjectRow: View {
                     rowContent
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("bailey.project.row")
                 .highPriorityGesture(
                     DragGesture(minimumDistance: 4, coordinateSpace: .global)
                         .onChanged { onDrag($0.location) }

@@ -5,30 +5,79 @@ import XCTest
 
 @MainActor
 enum WorkspaceUITestSupport {
+    private struct Session {
+        let app: XCUIApplication
+        let home: URL
+        let language: String?
+        let usesFixtureHome: Bool
+    }
+
+    private static var session: Session?
+    private static let observer = UITestSessionObserver()
+    private static var observing = false
+
     static func launch(
         in test: XCTestCase, language: String? = nil, configurationHome: URL? = nil
     ) throws -> XCUIApplication {
-        let app = XCUIApplication(bundleIdentifier: "chiimagnus.bailey.dev")
-        guard app.state == .notRunning else {
-            throw NSError(domain: "BaileyUITestLaunch", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Bailey Dev is already running; refusing to terminate it or silently skip UI coverage"
-            ])
+        if !observing {
+            XCTestObservationCenter.shared.addTestObserver(observer)
+            observing = true
         }
-        let home = try configurationHome ?? WorkspaceUITestFixture(in: test).root
-        precondition(home.standardizedFileURL.path.hasPrefix(
-            FileManager.default.temporaryDirectory.standardizedFileURL.path + "/Bailey-UITest-"
-        ), "UI configuration must belong to an isolated fixture")
-        // Disable AppKit's separate saved-window state; Bailey's own isolated
-        // SessionStore snapshots remain available for deliberate restart tests.
-        app.launchArguments = ["--isolated-ui-test", "-ApplePersistenceIgnoreState", "YES"]
-        if let language { app.launchArguments += ["-AppleLanguages", "(\(language))"] }
-        app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
-        app.launchEnvironment["CFFIXED_USER_HOME"] = home.path
-        app.launchEnvironment["HOME"] = home.path
+
+        let app: XCUIApplication
+        let needsLaunch: Bool
+        if let current = session,
+           configurationHome == nil, !current.usesFixtureHome, current.language == language,
+           current.app.state != .notRunning, resetWorkspace(current.app) {
+            app = current.app
+            needsLaunch = false
+        } else {
+            finishSession()
+            app = XCUIApplication(bundleIdentifier: "chiimagnus.bailey.dev")
+            guard app.state == .notRunning else {
+                throw NSError(domain: "BaileyUITestLaunch", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "An unowned Bailey Dev is already running; tests cannot attach to it"
+                ])
+            }
+            let home: URL
+            if let configurationHome {
+                home = configurationHome
+            } else {
+                home = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("Bailey-UITest-Shared-" + UUID().uuidString)
+                try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+            }
+            precondition(home.standardizedFileURL.path.hasPrefix(
+                FileManager.default.temporaryDirectory.standardizedFileURL.path + "/Bailey-UITest-"
+            ), "UI configuration must belong to an isolated fixture")
+            // Keep one test-only HOME across ordinary methods; custom configurations
+            // and language changes still need a distinct process.
+            app.launchArguments = ["--isolated-ui-test", "-ApplePersistenceIgnoreState", "YES"]
+            if let language { app.launchArguments += ["-AppleLanguages", "(\(language))"] }
+            app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
+            app.launchEnvironment["CFFIXED_USER_HOME"] = home.path
+            app.launchEnvironment["HOME"] = home.path
+            session = Session(app: app, home: home, language: language,
+                              usesFixtureHome: configurationHome != nil)
+            needsLaunch = true
+        }
+
         let previousInput = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
         let unicodeHexWasEnabled = inputSource(id: "com.apple.keylayout.UnicodeHexInput") != nil
+        let originalClipboard = try clipboardItems()
         test.addTeardownBlock { @MainActor in
-            if app.state != .notRunning { app.terminate() }
+            if let active = session, active.app === app, !active.usesFixtureHome,
+               app.state != .notRunning {
+                if !resetWorkspace(app) { finishSession() }
+            } else {
+                finishSession()
+            }
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            if !originalClipboard.isEmpty {
+                XCTAssertTrue(pasteboard.writeObjects(originalClipboard))
+            }
             XCTAssertEqual(TISSelectInputSource(previousInput), noErr,
                            "Restore the user's original input method after UI testing")
             if !unicodeHexWasEnabled,
@@ -37,12 +86,11 @@ enum WorkspaceUITestSupport {
                                "UI typing must not leave Unicode Hex Input enabled")
             }
         }
-        app.launch()
+        if needsLaunch { app.launch() }
         app.activate()
         XCTAssertEqual(app.state, .runningForeground,
                        "Only Bailey Dev may receive keyboard actions from UI tests")
-        // XCUITest can start the macOS process without opening its WindowGroup
-        // scene. Use the real native New Window command; do not attach a fake NSWindow.
+        // XCUITest can launch macOS without a WindowGroup scene.
         if !app.windows.firstMatch.waitForExistence(timeout: 4) {
             let newWindow = app.menuItems.matching(NSPredicate(
                 format: "title IN %@", ["New Window", "新建窗口"])).firstMatch
@@ -51,6 +99,7 @@ enum WorkspaceUITestSupport {
             newWindow.click()
         }
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
+        let home = try XCTUnwrap(session?.home)
         let configuration = home.appendingPathComponent(".config/bailey-dev/config.toml")
         let initialized = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             FileManager.default.fileExists(atPath: configuration.path)
@@ -62,6 +111,41 @@ enum WorkspaceUITestSupport {
         }
         try selectASCIIInputSource()
         return app
+    }
+
+    private static func resetWorkspace(_ app: XCUIApplication) -> Bool {
+        app.activate()
+        guard app.windows.count == 1, !app.sheets.firstMatch.exists else { return false }
+        if app.buttons["bailey.emptyState.addFolder"].exists { return true }
+        let projects = app.buttons["bailey.dock.projects"]
+        guard projects.exists else { return false }
+        projects.click()
+        let rows = app.buttons.matching(identifier: "bailey.project.row")
+        for _ in 0..<40 {
+            let count = rows.count
+            if count == 0 {
+                return app.buttons["bailey.emptyState.addFolder"].waitForExistence(timeout: 3)
+            }
+            rows.firstMatch.rightClick()
+            let close = app.menuItems.matching(NSPredicate(
+                format: "title IN %@", ["Close Project", "关闭项目"])).firstMatch
+            guard close.waitForExistence(timeout: 3) else { return false }
+            close.click()
+            let removed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                rows.count < count
+            }, object: nil)
+            guard XCTWaiter.wait(for: [removed], timeout: 5) == .completed else { return false }
+        }
+        return false
+    }
+
+    static func finishSession() {
+        guard let current = session else { return }
+        session = nil
+        if current.app.state != .notRunning { current.app.terminate() }
+        if !current.usesFixtureHome {
+            try? FileManager.default.removeItem(at: current.home)
+        }
     }
 
     private static func inputSource(id: String) -> TISInputSource? {
@@ -221,6 +305,18 @@ enum WorkspaceUITestSupport {
         scope.buttons.matching(identifier: "bailey.tab.file")
             .matching(NSPredicate(format: "value == %@", url.standardizedFileURL.path))
             .firstMatch
+    }
+}
+
+private final class UITestSessionObserver: NSObject, XCTestObservation {
+    func testBundleDidFinish(_ testBundle: Bundle) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { WorkspaceUITestSupport.finishSession() }
+        } else {
+            DispatchQueue.main.sync {
+                MainActor.assumeIsolated { WorkspaceUITestSupport.finishSession() }
+            }
+        }
     }
 }
 
