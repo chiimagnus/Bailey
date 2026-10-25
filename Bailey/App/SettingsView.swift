@@ -86,7 +86,7 @@ struct SettingsView: View {
                             Text(page.title)
                         } icon: {
                             Image(systemName: page.icon)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Color(nsColor: Theme.accent))
                         }
                         .tag(page)
                     }
@@ -98,7 +98,7 @@ struct SettingsView: View {
                                 Text(page.title)
                             } icon: {
                                 Image(systemName: page.icon)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(Color(nsColor: Theme.accent))
                             }
                             .tag(page)
                         }
