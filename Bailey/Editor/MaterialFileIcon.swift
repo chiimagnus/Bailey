@@ -6,8 +6,6 @@ import SwiftUI
 
 @MainActor
 enum MaterialFileIcon {
-    static let curatedIconCount = 300
-
     private static let resourcePrefix = "material-file-icon-"
     private static let cache = NSCache<NSString, NSImage>()
     private static let lightIconNames: Set<String> = [

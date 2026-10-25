@@ -189,7 +189,6 @@ private struct FileTreeScrollView: View {
     let importFromFinder: ([NSItemProvider], String) -> Bool
     let makeDragProvider: (FileTreeModel.Item) -> NSItemProvider
     let receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool
-    @Environment(\.panelFontScale) private var fontScale
     @Environment(\.controlActiveState) private var controlActiveState
     @State private var keyboardOwner = TreeKeyboardOwner()
     @State private var keyboardFocused = false
