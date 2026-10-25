@@ -7,7 +7,7 @@ title = "Files 多选、焦点与键盘导航"
 status = "completed"
 plan = "plan-p1.md#p1-t1"
 commit = "96ad979"
-note = "29 host + 3 native focus + 1 signed GUI passed; 15.6 and physical trackpad unavailable"
+note = "2026-10-26 signed GUI verifies modifier multi-select, Files context-menu targeting, and shared-tree focus; affected host 235/235. macOS 15.6 and physical trackpad unavailable."
 
 [[tasks]]
 id = "P1-T2"
@@ -15,7 +15,7 @@ title = "本机／SSH 安全文件复制移动与批处理"
 status = "completed"
 plan = "plan-p1.md#p1-t2"
 commit = "235d2d5"
-note = "50 host tests passed, including local real FS and remote POSIX shell simulation; authorized Windows SSH host not configured"
+note = "50 implementation host tests passed; authorized Windows SSH live file operations 4/4 passed on 2026-10-25; 2026-10-26 real remote bulk-delete UI passed. Windows remote symlink creation unavailable."
 
 [[tasks]]
 id = "P1-T3"
@@ -23,7 +23,7 @@ title = "统一操作模型与编辑标签路径保护"
 status = "completed"
 plan = "plan-p1.md#p1-t3"
 commit = "ad9cc81"
-note = "92 host file/ownership tests, 56 Diff/remote tests, signed FileTree rename GUI and make build/codesign passed; real Windows SSH/macOS15.6 unavailable"
+note = "2026-10-26 signed GUI rename/focus and same-named files saving to separate real paths passed; 235/235 affected host tests passed. macOS 15.6 unavailable."
 
 [[tasks]]
 id = "P1-T4"
@@ -31,7 +31,7 @@ title = "右键、快捷键与批量确认入口"
 status = "completed"
 plan = "plan-p1.md#p1-t4"
 commit = "c50c048"
-note = "Implementation and 90 affected host tests passed; Dev/UI builds pass; GUI clipboard, multi-select, remote Sheet E2E explicitly deferred by user on 2026-10-25 (no biometric authorization). Deferred audit F-01 is not a passed test."
+note = "2026-10-26 signed Bailey Dev: 10/10 selected GUI E2E, 235/235 host passed; covers real clipboard, multi-select, editor isolation, local Trash, SSH confirm/cancel and current menus. F-01 Resolved; macOS 15.6/physical trackpad/cross-volume unverified."
 
 [[tasks]]
 id = "P2-T1"

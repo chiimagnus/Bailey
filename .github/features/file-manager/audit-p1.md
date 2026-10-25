@@ -67,13 +67,13 @@
 
 - 任务：`P1-T4`
 - 严重级别：`High`
-- 状态：`Deferred`
+- 状态：`Resolved`
 - 位置：`BaileyUITests/Files/WorkspaceFilesUITests.swift:testFileManagerClipboardCopyCutPasteAndTrashAgainstRealDisk`
 - 摘要：`批量菜单完整 GUI 与新增边界用例尚未通过实际执行验收`
 - 风险：`跨窗口别名及软链接 IO 竞态已经在宿主测试中通过，但真实 GUI 的文件剪贴板快捷键、多选批量磁盘结果和远端确认仍缺完整 E2E，不能以编译或菜单点击替代验收`
-- 预期修复：`XCTest 宿主已恢复；用户在专用开发环境通过 macOS 官方 automationmodetool 配置一次性授权，再执行隔离 Bailey Dev 的剪贴板及多选完整 GUI 测试，核对实际文件副作用；不绕过系统授权`
+- 预期修复：`直接重新执行隔离 Bailey Dev 的 XCUITest 触发系统授权，验证剪贴板、多选和远端确认后的真实磁盘结果；无需修改系统免认证策略`
 - 验证：`make test:FileTreeTests,PanelContextTests,WindowOwnershipIntegrationTests,RemoteCommandsTests; make test:ui ONLY_TESTING=BaileyUITests/WorkspaceFilesUITests/testFileManagerClipboardCopyCutPasteAndTrashAgainstRealDisk`
-- 解决证据：`2026-10-25 user explicitly postponed password/fingerprint-gated UI E2E while away; c50c048 implementation, 90 host tests, signed Dev/UI build and isolated manual single-item GUI verified; full keyboard/multi-select GUI and remote Sheet still unverified and must be revisited before final P4 gate.`
+- 解决证据：`2026-10-26 macOS 27.2 signed Bailey Dev: make test:ui ONLY_TESTING=5 selected WorkspaceFilesUITests with BAILEY_P4_TEST_SSH_HOST=windows; actual 5/5 passed, 0 failed, 0 skipped, exit 0, TEST SUCCEEDED (/tmp/bailey-file-p1-final-ui-20261026.log). Covers local real-disk copy/cut/paste/trash, editor clipboard isolation, context-menu bulk trash, keyboard multi-select copy/cut/move and Windows SSH cancel/confirm native Sheet with remote-disk assertions.`
 
 
 ## 修复日志
@@ -109,15 +109,22 @@
 
 **未核销**：真实 GUI 的多选键鼠、⌘C/X/V/D 焦点分发、远端批删 Sheet；macOS 15.6、物理触控板、特殊卷／跨卷和真实掉线的端到端组合。已有宿主测试不能代替这些平台测试；完整 P1 用户验收仍受 F-01 阻塞。
 
+## 2026-10-26 复验与核销
+
+- **P1 原有四项 finding 均已解决。** 在独立签名 Bailey Dev 上运行剪贴板复制／剪切／粘贴及废纸篓、输入焦点隔离、右键多选批删、快捷键多选复制／移动、真实 Windows SSH 远端批删原生 Sheet（取消保留与确认删除），共 5 项、0 失败、0 跳过；真实临时磁盘与 SSH 目标字节均由断言检查。日志：`/tmp/bailey-file-p1-final-ui-20261026.log`，`make test:ui ONLY_TESTING=...` 退出码 0。
+- **补充真实 UI**：`SharedTreeUITests` 和 `WorkspaceFilesUITests` 另选 5 项、0 失败、0 跳过，确认共享树右键不误打开、现行 VS Code 菜单、改名及新建取消后的焦点、修饰键多选不误操作、不同目录同名文件的保存归属；`make test:ui ONLY_TESTING=...` 退出码 0，日志 `/tmp/bailey-file-p1-additional-ui-20261026.log`。**本轮合计 10/10 项 UI E2E 通过。**
+- **P1 宿主回归**：10 个相关测试类共 235 项、0 失败、0 跳过；`make test:FileTreeTests,PanelContextTests,WindowOwnershipIntegrationTests,RemoteCommandsTests,DockFocusIntegrationTests,FileTabPersistenceTests,WorkspaceIdentityTests,NativeDiffTabTests,SessionStoreTests,WindowCloseIntegrationTests` 退出码 0，日志 `/tmp/bailey-file-p1-final-host-20261026.log`。此前真实 Windows SSH `SSHFileTreeLiveTests` 4/4 通过，当前 GUI 再独立确认远端删除。
+- **现行入口核对**：Files 使用复制／剪切／粘贴；同目录粘贴生成 `name copy`、`name copy 2`，已移除独立的「制作副本」和「移动到…」菜单，远端删除仍用窗口级原生 Sheet。`plan-p1.md` 已同步当前行为，旧审计中 2026-10-25 的 Deferred／授权说明仅为历史状态。macOS 结束 GUI 测试后显示 Automation Mode 关闭并不阻止下一次 `make test:ui` 触发系统授权。
+
 ## Gate（是否允许进入下一阶段）
 
-- **结论：继续后续阶段为 Go；P1 完整验收为 No-Go（F-01 Deferred）。**
-- **理由**：P1-T4 的代码、90 项宿主回归及签名构建已通过；用户在 2026-10-25 明确要求因无法进行生物识别授权，延期 UI E2E 并继续 P2～P4。F-01 标记 Deferred，实际 GUI 剪贴板／多选等尚未通过，不得在 P4 最终验收时抹除。
+- **结论：P1 当前 macOS 27.2 与授权 Windows SSH 的功能、审查和可用 E2E 为 Go；跨全部目标环境的完整验收仍为 No-Go。**
+- **理由**：F-01～F-04 均 Resolved，已识别的剪贴板、多选、焦点、批删与远端确认真实入口通过；但未获得 macOS 15.6 实机、物理触控板、独立跨卷设备及 Windows 符号链接权限，不能用当前机型、宿主模拟或既往证据冒充这些环境的完整 E2E。
 
 ## 最终状态与剩余风险
 
-- **当前状态：Deferred；只豁免推进顺序，不豁免最终用户验收。**
-- **剩余风险**：真实文件剪贴板快捷键、多选操作及远端确认的完整 App 行为尚需原生 GUI 验收；本机跨路径窗口和软链接已有宿主回归，Windows SSH 已完成实机文件操作验证，但其软链接权限场景受限；macOS 15.6、触控板和跨卷环境仍缺。Automation Mode 仍需用户认证，不绕过授权，不将宿主测试计作完整 GUI。
+- **当前状态**：本机和获授权 SSH 的 P1 核心功能验收完成；4 项 finding 均已关闭。全环境 Gate 暂保持 No-Go，仅受未具备的实机条件限制。
+- **待补实机条件**：macOS 15.6（原生输入和 AX 兼容性）、物理触控板（修饰键与鼠标拖点组合）、真实跨卷及特殊卷（文件操作失败／防覆盖）、Windows 获得符号链接创建权限后的链接操作，以及真实网络失联与恢复期间的文件批处理。可用宿主测试已覆盖本机软链接、故障注入与连接代次，但不能替代这些最终路径；具备环境后分别复用 `FileTreeTests`、`SSHFileTreeLiveTests` 及 `WorkspaceFilesUITests` 回归。
 
 ## 审计约束
 
