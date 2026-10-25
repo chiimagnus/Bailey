@@ -29,9 +29,6 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         didSet { if workingDirectory != oldValue { onSnapshotChange?() } }
     }
     @ObservationIgnored var onSnapshotChange: (() -> Void)?
-    /// Real SSH state, remote cwd, or connection identity changed: the
-    /// project must rebind remote file and diff backends, not just redraw.
-    @ObservationIgnored var onRemoteContextChange: (() -> Void)?
     var hasExited = false
     private(set) var commandLifecycle = TerminalCommandLifecycle()
     /// Where this session's workspace tools look. Set by Bailey's `ssh` helper
@@ -46,13 +43,8 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     /// foreground ssh is remote input too, even without Bailey's handoff.
     var acceptsLocalFileDrop: Bool {
         !isRemoteLaunch && location.remoteConnection == nil
-            && unmanagedSSH == nil && !hasExited
+            && !hasUnmanagedSSH && !hasExited
     }
-    /// The connection this session most recently left. Open editor tabs use it
-    /// to recognise their own remote after `exit` has returned the pane to the
-    /// local machine.
-    private(set) var lastRemoteConnection: RemoteConnection?
-
     let surface: any TerminalBackendSurface
     let overlayScrollbar = OverlayScrollbarView()
     /// Find-in-terminal state for this session's pane (⌘F).
@@ -66,15 +58,6 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     private let launchDirectoryURL: URL?
     private let shellPidFileURL: URL?
     @ObservationIgnored private var cachedShellPid: pid_t?
-    /// True when this session's shell was started with Bailey's zsh
-    /// integration. A session that had it and still ends up running a stock
-    /// ssh directly means the integration did not take, which the pane says
-    /// out loud rather than leaving the user to wonder.
-    private let zshIntegrationActive: Bool
-    /// When the current foreground ssh was first seen. A remote command like
-    /// `ssh host uptime` is a foreground ssh too, and it finishes in well under
-    /// a second; announcing it would flash the pane for no reason.
-    @ObservationIgnored private var unmanagedSSHFirstSeen: (pid: pid_t, at: Date)?
     @ObservationIgnored private var remoteMonitor: Task<Void, Never>?
     @ObservationIgnored private var lastHistorySnapshot: String?
     @ObservationIgnored private var isTerminating = false
@@ -106,7 +89,6 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         )
 
         id = sessionID
-        zshIntegrationActive = environment["ZDOTDIR"] != nil
         self.shellPath = shellPath
         self.initialWorkspace = initialWorkspace
         isRemoteLaunch = fixedSSHLaunch || initialWorkspace != nil
@@ -233,12 +215,6 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         if let initialWorkspace { connection.workingDirectory = initialWorkspace.cwd }
         initialWorkspace = nil
         location = .remote(connection)
-        connection.onWorkspaceChange = { [weak self, weak connection] in
-            guard let self, let connection,
-                  self.location.remoteConnection === connection else { return }
-            self.onRemoteContextChange?()
-        }
-        onRemoteContextChange?()
         remoteMonitor = Task { [weak self] in
             await self?.watchRemoteConnection(connection)
         }
@@ -250,8 +226,6 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         remoteMonitor = nil
         guard let connection = location.remoteConnection else { return }
         connection.markDisconnected(reason: reason)
-        connection.onWorkspaceChange = nil
-        lastRemoteConnection = connection
     }
 
     /// The pane returns to the local machine only when the ssh process itself
@@ -260,14 +234,7 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
     /// back to local paths under a remote heading is the one outcome to avoid.
     private func finishRemoteProcess(_ connection: RemoteConnection, reason: String) {
         connection.markDisconnected(reason: reason)
-        connection.onWorkspaceChange = nil
-        lastRemoteConnection = connection
-        if isRemoteLaunch {
-            onRemoteContextChange?()
-            return
-        }
-        location = .local
-        onRemoteContextChange?()
+        if !isRemoteLaunch { location = .local }
     }
 
     /// One check a second. While connecting, only the ssh process going away
@@ -454,22 +421,8 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         return value
     }
 
-    /// The workspace the right pane, editor and diff viewer operate on for
-    /// this session. Always the Mac's own disk today; a session ssh'd into a
-    /// remote machine will answer with a backend that runs over that channel.
-    var workspaceBackend: WorkspaceBackend {
-        if let initialWorkspace { return initialWorkspace.backend }
-        guard let connection = connectedRemote else { return LocalWorkspaceBackend.shared }
-        return connection.workspaceBackend
-    }
-
-    /// The directory the right pane, editor and diff viewer work in. The same
-    /// as ``currentDirectoryPath`` locally, and the remote shell's directory
-    /// once this session is connected to another machine.
-    ///
-    /// Deliberately separate from ``currentDirectoryPath``, which seeds new
-    /// local terminals and the saved session snapshot and must stay a path on
-    /// this Mac.
+    /// The terminal's own working directory on its current machine.
+    /// Project Files and Git instead use the project's fixed root.
     var panelDirectoryPath: String {
         if let initialWorkspace { return initialWorkspace.cwd }
         guard let directory = connectedRemote?.workingDirectory else {
@@ -478,65 +431,18 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         return directory
     }
 
-    /// What the right pane's heading should say for this session.
-    ///
-    /// The `unmanaged` case is the one Bailey cannot serve: an ssh is running in
-    /// the foreground but it did not come through Bailey's helper, so there is no
-    /// channel to work over. Saying so is better than showing this Mac's files
-    /// under the remote's name.
-    var remoteHeaderState: RemotePaneHeaderState {
-        if let initialWorkspace { return .connecting(destination: initialWorkspace.scope) }
-        // A connection of Bailey's own always describes itself, whatever is in
-        // the foreground.
-        if location.remoteConnection != nil {
-            unmanagedSSHFirstSeen = nil
-            return RemotePaneHeaderView.headerState(for: location)
-        }
-        guard let foreground = unmanagedSSH?.pid else {
-            unmanagedSSHFirstSeen = nil
-            return .local
-        }
-        // Only speak up once this ssh has held the foreground across two
-        // refreshes. Anything shorter is a command, not a session.
-        if let seen = unmanagedSSHFirstSeen, seen.pid == foreground {
-            guard Date().timeIntervalSince(seen.at) >= Self.unmanagedSSHGrace else {
-                return .local
-            }
-        } else {
-            unmanagedSSHFirstSeen = (foreground, Date())
-            return .local
-        }
-        // Two opposite situations: the user deliberately ran their own ssh
-        // client, or Bailey's integration was active and silently did not take.
-        return sshHelperWasBypassed ? .helperBypassed : .unmanaged
-    }
-
-    /// Two panel refreshes at the existing 2 s cadence.
-    private static let unmanagedSSHGrace: TimeInterval = 2
-
-    /// True when the foreground job is an ssh client Bailey is not in front of.
-    /// The kernel-reported image is used rather than the tab title, which is
-    /// terminal output the remote can write.
-    /// A foreground ssh that did not come through Bailey, with its executable.
-    /// `exec ssh` replaces the root shell without changing its PID; Ghostty
-    /// does not always report that root as a separate foreground child.
-    private var unmanagedSSH: (pid: pid_t, path: String)? {
-        guard !isRemoteLaunch else { return nil }
+    /// A manually launched ssh cannot accept Finder's local file paths.
+    /// Also detect `exec ssh`, which may retain the shell PID.
+    private var hasUnmanagedSSH: Bool {
+        guard !isRemoteLaunch else { return false }
         for candidate in [surface.foregroundPid, shellPid] {
             guard let pid = candidate, pid > 0,
                   let path = processExecutablePath(pid: pid),
                   (path as NSString).lastPathComponent == "ssh"
             else { continue }
-            return (pid, path)
+            return true
         }
-        return nil
-    }
-
-    /// True when this session had Bailey's zsh integration and a stock ssh ran
-    /// anyway. The integration is meant to make that impossible, so saying so
-    /// turns a silent failure into a visible one.
-    var sshHelperWasBypassed: Bool {
-        zshIntegrationActive && unmanagedSSH?.path == "/usr/bin/ssh"
+        return false
     }
 
     /// The remote this session is working on. Both the backend and the panel

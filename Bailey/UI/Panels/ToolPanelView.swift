@@ -120,12 +120,12 @@ struct ToolPanelView: View {
     /// back the row's height when the session is local.
     @State private var remoteHeaderState = RemotePaneHeaderState.local
 
-    /// A pinned local path must not inherit a different machine just because
-    /// its terminal happens to be inside an interactive SSH session.
-    private var fileActionSession: TerminalSession? {
+    /// Git's terminal action can only target the selected project's machine.
+    private var gitActionSession: TerminalSession? {
         guard let project = manager.selectedProject else { return nil }
-        if project.sshHost == nil, project.customDirectory != nil,
-           project.selectedSession?.workspaceIdentity != nil { return nil }
+        if project.sshHost == nil, project.selectedSession?.workspaceIdentity != nil {
+            return nil
+        }
         return project.selectedSession
     }
 
@@ -172,7 +172,6 @@ struct ToolPanelView: View {
                     FileTreePanel(
                         model: project.fileTree,
                         git: git,
-                        session: fileActionSession,
                         sshHost: project.sshHost,
                         currentFilePath: openFilePath,
                         openFile: { manager.openFile($0, activating: $1) },
@@ -239,7 +238,7 @@ struct ToolPanelView: View {
                     model: git,
                     manager: manager,
                     project: manager.selectedProject,
-                    session: fileActionSession,
+                    session: gitActionSession,
                     sshHost: manager.selectedProject?.sshHost,
                     openFile: { manager.openFile($0) },
                     openDiff: { entry, staged in
@@ -324,9 +323,6 @@ struct ToolPanelView: View {
         .onChange(of: panel) {
             updateLocalFileWatcher()
             updateRemoteFileWatcher()
-        }
-        .onChange(of: manager.selectedProject?.selectedSession?.panelDirectoryPath) {
-            applyRemoteHeading()
         }
         .onReceive(NotificationCenter.default.publisher(
             for: SSHHostWorkspaces.connectionChanged

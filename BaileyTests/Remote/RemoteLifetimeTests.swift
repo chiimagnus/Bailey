@@ -102,17 +102,14 @@ final class RemoteLifetimeTests: XCTestCase {
         await fulfillment(of: [directoryChanged], timeout: 1)
         XCTAssertEqual(connection.workingDirectory, "/repo")
 
-        var contextChanges = 0
-        connection.onWorkspaceChange = { contextChanges += 1 }
         connection.markDisconnected(reason: "fixture")
         connection.workingDirectory = "/repo/project"
         XCTAssertEqual(connection.state, .disconnected)
-        XCTAssertEqual(contextChanges, 2)
         XCTAssertEqual(connection.workspaceIdentity, "fixture@invalid:2222")
     }
 
     @MainActor
-    func testBackendsRetainConnectionAndDisconnectedState() {
+    func testLivenessBackendRetainsConnectionAndDisconnectedState() {
         var connection: RemoteConnection? = RemoteConnection(
             user: "fixture", host: "invalid", port: 22,
             controlSocket: URL(fileURLWithPath: "/tmp/bailey-no-such-control-socket"), sshPID: 0
@@ -133,13 +130,8 @@ final class RemoteLifetimeTests: XCTestCase {
         XCTAssertEqual(connection?.state, .connected)
 
         weak let releasedConnection = connection
-        var backend: SSHWorkspaceBackend? = connection!.workspaceBackend
-        XCTAssertTrue(backend === connection?.workspaceBackend)
-        XCTAssertFalse(backend === second.workspaceBackend)
         var liveness: SSHWorkspaceBackend? = connection!.livenessBackend
         connection = nil
-        XCTAssertNotNil(releasedConnection)
-        backend = nil
         XCTAssertNotNil(releasedConnection)
         liveness = nil
         XCTAssertNil(releasedConnection)

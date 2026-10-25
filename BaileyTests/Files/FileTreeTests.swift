@@ -1227,7 +1227,7 @@ final class FileTreeTests: XCTestCase {
         defer { window.close() }
         var opened = 0
         let host = NSHostingView(rootView: FileTreePanel(
-            model: tree, git: GitStatusModel(), session: nil, sshHost: nil,
+            model: tree, git: GitStatusModel(), sshHost: nil,
             currentFilePath: nil,
             openFile: { _, _ in opened += 1 },
             renameFile: { item, name in await tree.rename(item, to: name) },
@@ -1270,7 +1270,7 @@ final class FileTreeTests: XCTestCase {
         defer { window.close() }
         var opened = 0
         let host = NSHostingView(rootView: FileTreePanel(
-            model: tree, git: GitStatusModel(), session: nil, sshHost: nil,
+            model: tree, git: GitStatusModel(), sshHost: nil,
             currentFilePath: second.path,
             openFile: { _, _ in opened += 1 },
             renameFile: { item, name in await tree.rename(item, to: name) },

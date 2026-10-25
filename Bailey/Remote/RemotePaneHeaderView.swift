@@ -1,29 +1,11 @@
 import AppKit
 
-/// What the tool header says about where the panels are pointing.
-///
-/// Declared as its own type rather than taken from `WorkspaceLocation` so the
-/// view has a case for a connection Bailey is not managing, which is a fact
-/// about the terminal rather than about any connection.
+/// The state of the explicitly selected SSH project.
 enum RemotePaneHeaderState: Equatable {
     case local
     case connecting(destination: String)
     case connected(destination: String)
     case disconnected(destination: String)
-    /// An ssh process is in the foreground but Bailey is not in front of it, so
-    /// the remote tools cannot be offered. Showing local paths under a remote
-    /// heading would be worse than saying nothing works.
-    ///
-    /// Deliberately a case of its own rather than a flag on ``unmanaged``: the
-    /// two read the same to a user but mean opposite things to us. This one is
-    /// the user's own choice - a raw `/usr/bin/ssh`, or an ssh from inside a
-    /// remote shell - and nothing is wrong.
-    case unmanaged
-    /// The session started with Bailey's shell integration and a stock ssh ran
-    /// anyway, so the integration silently did not take. Worth distinguishing
-    /// from ``unmanaged`` because this one is a fault on our side, and the
-    /// heading is the only place it becomes visible.
-    case helperBypassed
 }
 
 /// The tool's remote heading: `user@host` with a lamp while connected,
@@ -151,23 +133,6 @@ final class RemotePaneHeaderView: NSView {
         applyWorkingDirectory()
     }
 
-    /// The state a `WorkspaceLocation` implies. `unmanaged` never comes from
-    /// here: it is the caller's reading of the terminal, not of a connection.
-    @MainActor
-    static func headerState(for location: WorkspaceLocation) -> RemotePaneHeaderState {
-        guard let connection = location.remoteConnection else { return .local }
-        switch connection.state {
-        case .connecting: return .connecting(destination: connection.displayName)
-        case .connected: return .connected(destination: connection.displayName)
-        case .disconnected: return .disconnected(destination: connection.displayName)
-        }
-    }
-
-    @MainActor
-    func apply(location: WorkspaceLocation) {
-        apply(state: Self.headerState(for: location))
-    }
-
     // MARK: - Wording
 
     private static func title(for state: RemotePaneHeaderState) -> String {
@@ -192,24 +157,14 @@ final class RemotePaneHeaderView: NSView {
                 ),
                 destination
             )
-        case .unmanaged:
-            return String(
-                localized: "Remote tools unavailable - connection not managed by Bailey", table: "Workspace",
-                comment: "Right pane header when an ssh session was started in a way Bailey cannot follow."
-            )
-        case .helperBypassed:
-            return String(
-                localized: "Remote tools unavailable - Bailey's ssh helper was not used", table: "Workspace",
-                comment: "Right pane header when Bailey's shell integration is active but a stock ssh ran anyway, so the integration did not take effect."
-            )
         }
     }
 
     /// The full destination, which the heading itself may have truncated.
     private static func tooltip(for state: RemotePaneHeaderState) -> String? {
         switch state {
-        case .local, .unmanaged, .helperBypassed:
-            return title(for: state).isEmpty ? nil : title(for: state)
+        case .local:
+            return nil
         case .connected(let destination),
             .connecting(let destination),
             .disconnected(let destination):

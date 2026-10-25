@@ -12,6 +12,8 @@ SSH 后端让文件和 Git 面板直接操作远端项目，不要求挂载文�
 
 ## 连接与后端
 
+终端中的手动 SSH 仍由终端自身检测连接和归属，但不会把本机项目的 Files、Git 根目录变成该终端的远端工作目录。远端文件和 Diff 只由明确创建的 SSH 项目主机驱动重连后的读写状态。
+
 GUI 与使用私有握手的隔离测试都显式调用 `WorkspaceApplication.connectServices()`，让 SSH 和通知查询同一个应用所有者；测试结束恢复原绑定。构造 owner 本身不重绑共享服务。
 
 复用既有 OpenSSH 配置、密钥和工作区 master。GUI 启动时将应用级 `WorkspaceApplication` 显式提供给已存在的 `BaileySSHService`；私有 handoff 经 token、终端 ID、端口和 PID 校验后，仅查找该所有者内仍存活的 Session，不能遍历窗口单例或误交给测试宿主的其它所有者。交互会话与文件／Git 操作不是同一条生命期路径：终端仍能输入，不足以证明后端连接正常。

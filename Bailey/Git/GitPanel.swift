@@ -2355,10 +2355,8 @@ struct GitPanel: View {
             source: .revision(hash: hash), origPath: nil)
     }
 
-    /// The machine a discard would act on, or nil while local.
-    private var remoteName: String? {
-        sshHost ?? session?.location.remoteConnection?.displayName
-    }
+    /// The project determines the machine, never the selected terminal.
+    private var remoteName: String? { sshHost }
 
     private func discardTitle(for entry: GitStatusModel.Entry?) -> String {
         guard let entry else { return "" }

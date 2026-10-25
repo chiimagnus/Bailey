@@ -189,6 +189,21 @@ final class PanelContextTests: XCTestCase {
                        "A late success must not publish into the new tree")
     }
 
+    func testLocalProjectCannotBorrowTerminalSSHForInteractiveGitRebase() {
+        let project = Project(fallbackName: "Local", workspaceConfiguration: .standard)
+        project.customDirectory = "/tmp/fixed-root"
+        let remote = PanelContext(
+            identity: .init(project: project.id, workspace: "ssh:some-host", directory: "/remote"),
+            backend: DelayedWorkspaceFixture("remote")
+        )
+        XCTAssertThrowsError(try project.newInteractiveGitSession(
+            repository: "/remote", arguments: ["rebase", "--interactive", "HEAD~1"],
+            context: remote
+        ))
+        XCTAssertTrue(project.tabs.isEmpty,
+                      "A local project must not start a remote Git task from a terminal's SSH state")
+    }
+
     func testIdentityIncludesFixedDirectoryWorkspaceAndProject() {
         let backend = DelayedWorkspaceFixture("first")
         func fixed(_ directory: String, workspace: String? = nil, project: UUID) -> PanelContext {

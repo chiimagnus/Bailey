@@ -52,10 +52,7 @@ enum FileTreeDrag {
 struct FileTreePanel: View {
     let model: FileTreeModel
     let git: GitStatusModel
-    let session: TerminalSession?
     let sshHost: String?
-    /// Set while the tree follows the terminal's foreground job into another
-    /// checkout, so the header says why the root moved.
     let currentFilePath: String?
     let openFile: (String, Bool) -> Void
     var isActive = true
@@ -75,7 +72,7 @@ struct FileTreePanel: View {
                 PanelHeader(title: model.rootName, subtitle: model.rootPath)
                 // Finder can only reach the local disk; while remote this
                 // path names a directory on another machine.
-                if sshHost == nil && session?.location.remoteConnection == nil {
+                if sshHost == nil {
                     Button {
                         NSWorkspace.shared.activateFileViewerSelecting(
                             [URL(fileURLWithPath: model.rootPath)]
@@ -110,7 +107,7 @@ struct FileTreePanel: View {
             .padding(.bottom, 8)
 
             FileTreeScrollView(
-                model: model, git: git, session: session,
+                model: model, git: git,
                 sshHost: sshHost, currentFilePath: currentFilePath,
                 openFile: openFile, isActive: isActive,
                 canFocusKeyboard: canFocusKeyboard, renameFile: renameFile,
@@ -179,7 +176,6 @@ private struct FileTreeImportDrop: DropDelegate {
 private struct FileTreeScrollView: View {
     let model: FileTreeModel
     let git: GitStatusModel
-    let session: TerminalSession?
     let sshHost: String?
     let currentFilePath: String?
     let openFile: (String, Bool) -> Void
@@ -206,7 +202,7 @@ private struct FileTreeScrollView: View {
                     ForEach(model.items) { item in
                         FileTreeRow(
                             model: model, git: git, item: item,
-                            session: session, sshHost: sshHost,
+                            sshHost: sshHost,
                             currentFilePath: currentFilePath,
                             openFile: openFile,
                             listFocused: keyboardFocused && isActive && controlActiveState == .key,
@@ -354,7 +350,6 @@ private struct FileTreeRow: View {
     let model: FileTreeModel
     let git: GitStatusModel
     let item: FileTreeModel.Item
-    let session: TerminalSession?
     let sshHost: String?
     let currentFilePath: String?
     let openFile: (String, Bool) -> Void
@@ -404,12 +399,8 @@ private struct FileTreeRow: View {
         return row
     }
 
-    /// Whether this row names a file on another machine. A connection that has
-    /// dropped still counts: the path is remote either way, and handing it to
-    /// Finder would open whatever sits at the same path locally.
-    private var isRemote: Bool {
-        sshHost != nil || session?.location.remoteConnection != nil
-    }
+    /// Remote project paths must never be interpreted as Mac file URLs.
+    private var isRemote: Bool { sshHost != nil }
 
     var body: some View {
         let _ = themeChanges.revision

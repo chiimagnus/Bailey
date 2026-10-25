@@ -157,6 +157,8 @@ final class WorkspaceIdentityTests: XCTestCase {
         defer { project.terminateAll() }
         let first = connection()
         session.location = .remote(first)
+        XCTAssertNil(project.connectedWorkspace(for: first.workspaceIdentity),
+                     "An SSH session in a local project cannot turn it into a remote file workspace")
 
         project.openFile(path)
         guard case .file(let localFile) = try XCTUnwrap(project.selectedTab).content else {
@@ -188,52 +190,6 @@ final class WorkspaceIdentityTests: XCTestCase {
         let writeCount = await remoteBackend.writes
         XCTAssertEqual(writeCount, 0)
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), Data("local save\n".utf8))
-    }
-
-    func testSSHStateChangeRebindsRemoteFileWithoutPublisherRelay() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let path = directory.appendingPathComponent("remote-owned.txt")
-        try Data("local sentinel".utf8).write(to: path)
-
-        let project = Project(fallbackName: "remote observer", workspaceConfiguration: .standard)
-        let session = project.newSession()
-        defer { project.terminateAll() }
-        let connection = RemoteConnection(
-            user: "fixture", host: "invalid", port: 2222,
-            controlSocket: URL(fileURLWithPath: "/tmp/bailey-observation-rebind-no-socket"),
-            sshPID: 0
-        )
-        connection.workingDirectory = directory.path
-        connection.markConnected()
-        XCTAssertTrue(session.beginRemoteConnection(connection))
-
-        let file = FileTab(
-            path: path.path, backend: LocalWorkspaceBackend.shared,
-            workspaceIdentity: connection.workspaceIdentity
-        )
-        try await file.waitForText()
-        project.append(PaneTab(content: .file(file)))
-        XCTAssertEqual(file.text, "local sentinel")
-        file.text = "unsaved on remote"
-        file.refreshDirtyState()
-        XCTAssertTrue(file.isDirty)
-        XCTAssertNil(file.readOnlyReason)
-
-        // The only trigger is RemoteConnection.state's semantic event: no
-        // manual rebindRemoteTabs() or extra publisher notification.
-        connection.markDisconnected(reason: "controlled remote outage")
-        try await wait { file.readOnlyReason != nil }
-        XCTAssertTrue(file.isDirty)
-        XCTAssertEqual(file.text, "unsaved on remote")
-        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "local sentinel")
-
-        connection.markConnected()
-        try await wait { file.readOnlyReason == nil }
-        XCTAssertTrue(file.isDirty)
-        XCTAssertEqual(file.text, "unsaved on remote")
-        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "local sentinel")
     }
 
     func testRemoteCreateFailureNeverFallsBackToLocalDisk() async throws {

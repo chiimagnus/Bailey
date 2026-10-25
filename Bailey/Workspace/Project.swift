@@ -49,7 +49,6 @@ final class Project: nonisolated Identifiable {
     /// because every way of reaching a tab — strip click, menu selection,
     /// opening a file — counts as a use.
     @ObservationIgnored private var recentTabIDs: [UUID] = []
-    @ObservationIgnored private var isRemoteTabRebindPending = false
     @ObservationIgnored private var hostConnectionObservation: AnyCancellable?
 
     @ObservationIgnored var onSnapshotChange: (() -> Void)?
@@ -275,11 +274,6 @@ final class Project: nonisolated Identifiable {
             // Already dead — just drop its pane, no second terminate.
             self?.closeContent(.session(session), terminate: false)
         }
-        session.onRemoteContextChange = { [weak self] in
-            // Changing the real SSH target changes whether previously opened
-            // remote files/diffs are writable; SwiftUI redraw alone is insufficient.
-            self?.scheduleRemoteTabRebind()
-        }
         return session
     }
 
@@ -290,18 +284,13 @@ final class Project: nonisolated Identifiable {
         let command = "cd " + Self.shellQuoted(repository) + " && git "
             + arguments.map(Self.shellQuoted).joined(separator: " ")
         if context.isRemote {
-            let connection = selectedSession?.location.remoteConnection
-            guard let host = sshHost ?? connection?.destination,
-                  let executable = Bundle.main.executableURL else { throw RemoteConnectionError.notConnected }
-            if sshHost == nil {
-                guard let connection, connection.state == .connected,
-                      connection.workspaceIdentity == context.scope else { throw RemoteConnectionError.notConnected }
-            }
-            let port = connection?.port ?? 22
+            guard let host = sshHost, context.scope == "ssh:" + host,
+                  let executable = Bundle.main.executableURL
+            else { throw RemoteConnectionError.notConnected }
             let helper = executable.deletingLastPathComponent().appendingPathComponent("ssh").path
             let launch = Self.shellQuoted(helper)
                 + " -tt -o BatchMode=yes -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
-                + (sshHost == nil ? " -p \(port)" : "") + " -- " + Self.shellQuoted(host)
+                + " -- " + Self.shellQuoted(host)
                 + "; exitStatus=$?; printf '\\nSSH session ended (status %s). Press Enter to close this terminal.\\n' \"$exitStatus\"; read -r answer; exit \"$exitStatus\""
             let initial = PanelContext(
                 identity: .init(project: id, workspace: context.identity.workspace, directory: repository),
@@ -338,39 +327,11 @@ final class Project: nonisolated Identifiable {
 
     // MARK: - Remote tabs
 
-    /// A live workspace for `identity`, from whichever session in this project
-    /// holds it. A file belongs to a machine, not to the terminal it happened
-    /// to be opened from: reconnecting in a second terminal of the same
-    /// project makes those tabs writable again.
+    /// Only an explicitly added SSH project's host can rebind its files.
     func connectedWorkspace(for identity: String) -> WorkspaceBackend? {
-        if let sshHost, identity == "ssh:" + sshHost {
-            guard SSHHostWorkspaces.connectionState(for: sshHost) != false else { return nil }
-            return SSHHostWorkspaces.backend(for: sshHost)
-        }
-        for session in sessions {
-            guard let connection = session.location.remoteConnection,
-                  connection.workspaceIdentity == identity,
-                  connection.state == .connected
-            else { continue }
-            let backend = session.workspaceBackend
-            // The session reports a remote workspace only once the connection
-            // is connected and its directory is known; until then it is still
-            // answering with the local disk, which is not this file's machine.
-            if !(backend is LocalWorkspaceBackend) { return backend }
-        }
-        return nil
-    }
-
-    /// Re-checks every remote file and diff against the project's connections.
-    /// Real SSH state/directory callbacks happen after mutation; coalesce
-    /// them one hop later instead of rechecking on every terminal UI update.
-    private func scheduleRemoteTabRebind() {
-        guard !isRemoteTabRebindPending else { return }
-        isRemoteTabRebindPending = true
-        Task { @MainActor in
-            isRemoteTabRebindPending = false
-            rebindRemoteTabs()
-        }
+        guard let sshHost, identity == "ssh:" + sshHost,
+              SSHHostWorkspaces.connectionState(for: sshHost) != false else { return nil }
+        return SSHHostWorkspaces.backend(for: sshHost)
     }
 
     func rebindRemoteTabs() {
@@ -888,7 +849,6 @@ final class Project: nonisolated Identifiable {
         switch tab.content {
         case .session(let session):
             session.onSnapshotChange = nil
-            session.onRemoteContextChange = nil
         case .browser(let browser): browser.onSnapshotChange = nil
         case .file(let file):
             file.onSnapshotChange = nil
@@ -897,7 +857,6 @@ final class Project: nonisolated Identifiable {
         }
         recentTabIDs.removeAll { $0 == tabID }
         tabs.remove(at: index)
-        if case .session = tab.content { scheduleRemoteTabRebind() }
         if selectedTabID == tabID {
             let neighbor = min(index, tabs.count - 1)
             selectedTabID = neighbor >= 0 ? tabs[neighbor].id : nil
