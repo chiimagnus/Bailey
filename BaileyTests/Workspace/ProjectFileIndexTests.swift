@@ -3,7 +3,7 @@ import XCTest
 @testable import Bailey
 
 private actor IndexFailureRunner: RemoteCommandRunner {
-    enum Scenario: Sendable { case permissionDenied, disconnected, oversized }
+    enum Scenario: Sendable { case permissionDenied, disconnected, oversized, oversizedDirectory }
     let scenario: Scenario
     private(set) var commands: [String] = []
 
@@ -15,18 +15,64 @@ private actor IndexFailureRunner: RemoteCommandRunner {
         let command = argv.joined(separator: " ")
         commands.append(command)
         if command.contains("printf") && command.contains("HOME") {
-            return (0, Data("/remote/home".utf8), Data())
+            return (0, Data("/remote/project\0/remote/home\0".utf8), Data())
         }
         if case .disconnected = scenario { throw WorkspaceError.timedOut }
         if case .oversized = scenario {
+            return (0, Data(repeating: 0x41, count: 4 * 1024 * 1024 + 128), Data())
+        }
+        if case .oversizedDirectory = scenario, command.contains("find -H") {
             return (0, Data(repeating: 0x41, count: 4 * 1024 * 1024 + 128), Data())
         }
         guard let tagStart = command.range(of: "bailey-index-")?.lowerBound else {
             return (1, Data(), Data("Unexpected command".utf8))
         }
         let tag = String(command[tagStart...].prefix(49))
-        return (0, Data(("\n" + tag + "128\n").utf8),
-                Data("fatal: permission denied".utf8))
+        let error = if case .oversizedDirectory = scenario {
+            "fatal: not a git repository"
+        } else {
+            "fatal: permission denied"
+        }
+        return (0, Data(("\n" + tag + "128\n").utf8), Data(error.utf8))
+    }
+}
+
+private actor IndexAliasRunner: RemoteCommandRunner {
+    let physicalDirectory: String
+    let physicalHome: String
+    private(set) var commands: [String] = []
+
+    init(physicalDirectory: String, physicalHome: String) {
+        self.physicalDirectory = physicalDirectory
+        self.physicalHome = physicalHome
+    }
+
+    func run(
+        _ argv: [String], stdin: Data?, timeout: TimeInterval
+    ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
+        let command = argv.joined(separator: " ")
+        commands.append(command)
+        if command.contains("HOME") {
+            return (0, Data("\(physicalDirectory)\0\(physicalHome)\0".utf8), Data())
+        }
+        guard let markerStart = command.range(of: "bailey-index-")?.lowerBound else {
+            return (1, Data(), Data("Unexpected indexing command".utf8))
+        }
+        let marker = String(command[markerStart...].prefix(49))
+        if command.contains("rev-parse") {
+            return (0, Data(("\n" + marker + "128\n").utf8),
+                    Data("fatal: not a git repository".utf8))
+        }
+        if command.contains("find -H"),
+           let tagRange = command.range(
+               of: #"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"#,
+               options: .regularExpression
+           ) {
+            let tag = String(command[tagRange])
+            let output = "f\tf\t中文😀.swift\0l\tf\talias.swift\0\n\(tag) 0 0\n\n\(marker)0\n"
+            return (0, Data(output.utf8), Data())
+        }
+        return (1, Data(), Data("Unexpected indexing command".utf8))
     }
 }
 
@@ -145,6 +191,45 @@ final class ProjectFileIndexTests: XCTestCase {
         }
     }
 
+    func testRemoteNongitBoundedDirectoryListingReturnsActualFiles() async throws {
+        let runner = IndexAliasRunner(
+            physicalDirectory: "/remote/project", physicalHome: "/remote/home"
+        )
+        let result = try await ProjectFileIndex.loadRemote(
+            in: "/remote/project", backend: SSHWorkspaceBackend(runner: runner)
+        )
+        XCTAssertFalse(result.limited)
+        XCTAssertEqual(result.files.map(\.relativePath), ["中文😀.swift"])
+        XCTAssertEqual(result.files.first?.absolutePath, "/remote/project/中文😀.swift")
+        let commands = await runner.commands
+        XCTAssertEqual(commands.count, 3)
+        XCTAssertTrue(commands.last?.contains("head -c") == true)
+    }
+
+    func testRemotePhysicalRootRejectsHomeAndFilesystemAliasesBeforeIndexing() async throws {
+        let aliases = [
+            (root: "/remote/home/.", physical: "/remote/home"),
+            (root: "/remote/home-alias", physical: "/remote/home"),
+            (root: "//", physical: "//"),
+        ]
+        for alias in aliases {
+            let runner = IndexAliasRunner(
+                physicalDirectory: alias.physical, physicalHome: "/remote/home"
+            )
+            do {
+                _ = try await ProjectFileIndex.loadRemote(
+                    in: alias.root, backend: SSHWorkspaceBackend(runner: runner)
+                )
+                XCTFail("Root alias should not be indexed: \(alias.root)")
+            } catch ProjectFileIndex.RemoteIndexError.restrictedRoot {
+                let commands = await runner.commands
+                XCTAssertEqual(commands.count, 1, "Do not run Git or enumeration on a restricted root")
+            } catch {
+                XCTFail("Wrong error for restricted alias \(alias.root): \(error)")
+            }
+        }
+    }
+
     func testRemoteGitPermissionAndDisconnectionNeverFallbackToLocal() async throws {
         for scenario: IndexFailureRunner.Scenario in [.permissionDenied, .disconnected] {
             let runner = IndexFailureRunner(scenario)
@@ -175,6 +260,21 @@ final class ProjectFileIndexTests: XCTestCase {
         } catch ProjectFileIndex.RemoteIndexError.tooLarge {
             let commands = await runner.commands
             XCTAssertEqual(commands.count, 2)
+        }
+    }
+
+    func testRemoteNongitDirectoryListingIsBoundedBeforeTransport() async throws {
+        let runner = IndexFailureRunner(.oversizedDirectory)
+        let backend = SSHWorkspaceBackend(runner: runner)
+        do {
+            _ = try await ProjectFileIndex.loadRemote(in: "/remote/project", backend: backend)
+            XCTFail("An oversized single directory must not be accepted")
+        } catch ProjectFileIndex.RemoteIndexError.tooLarge {
+            let commands = await runner.commands
+            XCTAssertEqual(commands.count, 3)
+            XCTAssertTrue(commands.last?.contains("find -H") == true)
+            XCTAssertTrue(commands.last?.contains("head -c") == true,
+                          "The byte cap must run before the SSH transport reads the listing")
         }
     }
 

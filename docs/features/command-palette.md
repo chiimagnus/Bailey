@@ -19,6 +19,6 @@
 
 ## 验证
 
-`ProjectFileIndexTests` 验证本机与受控远端文件索引、Git 异常、输出截断及遍历限额；`WorkspaceFilesUITests` 从真实中英文 App 搜索并执行「File Manager」，核对文件树方向键／Space 的实际结果；`GitChangesUITests` 验证取消后 Git 键盘导航，`WorkspaceWindowsUITests` 验证焦点恢复不跨窗口；`SharedTreeUITests` 另以明暗主题验证 Palette 接管时的原生选中与底色分离。实际面板验收还覆盖空结果、鼠标、切项目、文件打开和会话定位。不能仅断言“动作已派发”；要检查实际打开内容与最终焦点。SSH 搜索限制要包含本机同名路径的反例。
+`ProjectFileIndexTests` 验证本机与受控远端文件索引、Git 异常、远端目录输出上限、HOME／根目录物理路径别名及遍历限额；`WorkspaceFilesUITests` 从真实中英文 App 搜索并执行「File Manager」，核对文件树方向键／Space 的实际结果；`GitChangesUITests` 验证取消后 Git 键盘导航，`WorkspaceWindowsUITests` 验证焦点恢复不跨窗口；`SharedTreeUITests` 另以明暗主题验证 Palette 接管时的原生选中与底色分离。实际面板验收还覆盖空结果、鼠标、切项目、文件打开和会话定位。不能仅断言“动作已派发”；要检查实际打开内容与最终焦点。SSH 搜索限制要包含本机同名路径的反例。
 
 实现入口：[CommandPaletteView.swift](../../Bailey/UI/CommandPaletteView.swift)、[ProjectFileIndex.swift](../../Bailey/Workspace/ProjectFileIndex.swift)。统一验证方式见 [testing.md](../testing.md)。

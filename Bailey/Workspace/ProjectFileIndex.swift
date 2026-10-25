@@ -46,15 +46,24 @@ nonisolated enum ProjectFileIndex {
     static func loadRemote(in root: String, backend: WorkspaceBackend) async throws -> RemoteResult {
         guard !Task.isCancelled else { throw CancellationError() }
         guard root.hasPrefix("/"), root != "/" else { throw RemoteIndexError.restrictedRoot }
-        let home = try await backend.run(
-            argv: ["/bin/sh", "-c", "printf '%s' \"$HOME\""], cwd: nil,
-            env: nil, stdin: nil, timeout: 10
+        // Compare remote physical directories, not user-entered spellings:
+        // HOME/, HOME/. and symlink aliases must not trigger account-wide scans.
+        let directories = try await backend.run(
+            argv: ["/bin/sh", "-c",
+                   "printf '%s\\0%s\\0' \"$(pwd -P)\" \"$(cd \"$HOME\" && pwd -P)\""],
+            cwd: root, env: nil, stdin: nil, timeout: 10
         )
-        guard home.status == 0, let remoteHome = String(data: home.stdout, encoding: .utf8) else {
+        let physical = directories.stdout.split(separator: 0)
+        guard directories.status == 0, directories.stdout.last == 0,
+              physical.count == 2,
+              let physicalRoot = String(data: Data(physical[0]), encoding: .utf8),
+              let physicalHome = String(data: Data(physical[1]), encoding: .utf8),
+              physicalRoot.hasPrefix("/"), physicalHome.hasPrefix("/") else {
             throw RemoteIndexError.unavailable(String(localized: "Cannot determine the remote home directory.", table: "Interface"))
         }
-        guard root != remoteHome, !Task.isCancelled else {
-            if Task.isCancelled { throw CancellationError() }
+        guard !Task.isCancelled else { throw CancellationError() }
+        guard physicalRoot.contains(where: { $0 != "/" }),
+              physicalRoot != physicalHome else {
             throw RemoteIndexError.restrictedRoot
         }
 
@@ -112,14 +121,23 @@ nonisolated enum ProjectFileIndex {
         }
     }
 
-    /// Limit remote bytes before SSH transport, including on MSYS2 Git Bash.
-    /// The unique footer preserves Git's real exit status despite the head pipe.
     private static func remoteGit(
         _ args: [String], in root: String, backend: WorkspaceBackend
     ) async throws -> (status: Int32, stdout: Data, stderr: String) {
+        try await boundedRemoteCommand(
+            "git " + args.map(RemoteCommands.quote).joined(separator: " "),
+            in: root, backend: backend
+        )
+    }
+
+    /// The cap runs on the remote machine; a local post-read truncation would
+    /// already have transferred and retained the entire oversized output.
+    /// The unique footer preserves the real exit status despite the head pipe.
+    private static func boundedRemoteCommand(
+        _ command: String, in root: String, backend: WorkspaceBackend
+    ) async throws -> (status: Int32, stdout: Data, stderr: String) {
         guard !Task.isCancelled else { throw CancellationError() }
         let marker = "bailey-index-" + UUID().uuidString
-        let command = "git " + args.map(RemoteCommands.quote).joined(separator: " ")
         let script = "{ \(command); status=$?; printf '\\n\(marker)%s\\n' \"$status\"; }"
             + " | head -c \(maxGitBytes + 128)"
         let result = try await backend.run(
@@ -145,6 +163,33 @@ nonisolated enum ProjectFileIndex {
                 String(decoding: result.stderr, as: UTF8.self))
     }
 
+    /// The live SSH directory batch uses the same bounded remote execution as
+    /// Git. LocalWorkspaceBackend remains the host fixture's native listing.
+    private static func boundedRemoteDirectories(
+        _ directories: [String], in root: String, backend: WorkspaceBackend
+    ) async throws -> [String: [WorkspaceEntry]] {
+        let tag = UUID().uuidString
+        let commands = directories.enumerated().map { index, directory in
+            let quoted = RemoteCommands.quote(directory)
+            return (
+                name: String(index),
+                command: "[ -d \(quoted) ] && "
+                    + RemoteCommands.listDirectoryCommand(path: directory) + " 2>/dev/null"
+            )
+        }
+        let batch = try await boundedRemoteCommand(
+            RemoteCommands.batchCommand(commands, tag: tag), in: root, backend: backend
+        )
+        guard batch.status == 0 else { throw RemoteIndexError.unavailable(batch.stderr) }
+        let parsed = RemoteCommands.parseBatch(batch.stdout, tag: tag)
+        var result: [String: [WorkspaceEntry]] = [:]
+        for (index, directory) in directories.enumerated() {
+            guard let entry = parsed[String(index)], entry.status == 0 else { continue }
+            result[directory] = RemoteCommands.parseDirectoryListing(entry.stdout)
+        }
+        return result
+    }
+
     private static func enumerateRemote(
         in root: String, backend: WorkspaceBackend
     ) async throws -> RemoteResult {
@@ -159,7 +204,13 @@ nonisolated enum ProjectFileIndex {
             let directories = Array(queue.prefix(count))
             queue.removeFirst(count)
             scanned += count
-            let listed = await backend.list(directories: directories)
+            // Only actual SSH transport needs a pre-transfer cap. The local
+            // backend is also used here by host tests for real filesystem IO.
+            let listed = if backend is SSHWorkspaceBackend {
+                try await boundedRemoteDirectories(directories, in: root, backend: backend)
+            } else {
+                await backend.list(directories: directories)
+            }
             for directory in directories {
                 guard let entries = listed[directory] else {
                     throw RemoteIndexError.unavailable(String(localized: "Could not list remote directory: \(directory)", table: "Interface"))
