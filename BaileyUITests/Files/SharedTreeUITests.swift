@@ -378,8 +378,8 @@ final class SharedTreeUITests: XCTestCase {
         app.typeKey("p", modifierFlags: .command)
         let search = app.textFields["bailey.commandPalette.search"]
         XCTAssertTrue(search.waitForExistence(timeout: 10))
-        XCTAssertFalse(first.isSelected,
-                       "Command Palette focus must remove the tree's keyboard-focus trait")
+        XCTAssertTrue(first.isSelected,
+                      "Command Palette must not clear the file's selection when keyboard focus moves")
         let focusChanged = try backgroundPixel(in: first)
         let neutralWhileSearching = try backgroundPixel(in: second)
         XCTAssertGreaterThan(rgbDifference(focusChanged, neutralWhileSearching), 0.045,

@@ -47,7 +47,7 @@ title = "Files 隐藏规则及设置持久化"
 status = "completed"
 plan = "plan-p3.md#p3-t1"
 commit = "c8d9f70"
-note = "files.exclude and temporary Files reveal shipped, 62 targeted host XCTest pass; make build:dev codesign and make build:ui build pass. Real macOS GUI/VoiceOver and Windows SSH E2E explicitly deferred until user can authenticate."
+note = "62 targeted host tests plus 2026-10-26 isolated Bailey Dev native Settings/Exclude/Restore/hidden-row reveal E2E passed; Dev UI signed build passed. VoiceOver, macOS 15.6 and physical touchpad remain unverified."
 
 [[tasks]]
 id = "P3-T2"
@@ -55,7 +55,7 @@ title = "扩展 Cmd+P SSH 文件快速打开"
 status = "completed"
 plan = "plan-p3.md#p3-t2"
 commit = "59ae5ac"
-note = "42 affected host tests passed, signed Dev build passed. Remote SSH query bounded, connection/root identity checked; live Windows SSH and actual Cmd+P GUI E2E deferred by user until macOS authorization available."
+note = "42 host tests passed; 2026-10-26 real Windows/MSYS2 SSH index Git/nongit/Unicode/HOME/reconnect 1/1, Bailey Dev remote Cmd+P Git/nongit exact editor bytes E2E passed (6176600). Same GUI disconnect-then-reconnect sequence remains F-02 Deferred."
 
 [[tasks]]
 id = "P3-T3"
@@ -63,7 +63,7 @@ title = "定位当前文件并保护机器身份"
 status = "completed"
 plan = "plan-p3.md#p3-t3"
 commit = "1ab3053"
-note = "115 affected host tests passed plus 43 FileTree race tests; signed Dev and UI build-only passed. Native menu, scroll and remote Windows actual GUI deferred until macOS authorization available."
+note = "115 host plus 43 FileTree race tests passed; 2026-10-26 real Bailey Dev local hidden ancestor reveal and Windows SSH reveal selected actual file row, local Finder menu allowed/remote disabled. Signed GUI test passed; Finder window side effect and macOS 15.6 unverified."
 
 [[tasks]]
 id = "P4-T1"
