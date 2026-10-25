@@ -191,6 +191,103 @@ final class ProjectFileIndexTests: XCTestCase {
         }
     }
 
+    func testAuthorizedWindowsSSHProjectIndexGitAndPlainRealFiles() async throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P3_TEST_SSH_HOST"],
+              !host.isEmpty else {
+            throw XCTSkip("Set BAILEY_P3_TEST_SSH_HOST to the approved isolated Windows SSH target")
+        }
+        let socket = "/tmp/bailey-p3-index-\(UUID().uuidString.prefix(8)).sock"
+        let backend = SSHWorkspaceBackend(
+            runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 25
+        )
+        let temporary = try await backend.run(
+            argv: ["mktemp", "-d", "/tmp/bailey-p3-index-XXXXXX"],
+            cwd: nil, env: nil, stdin: nil, timeout: 25
+        )
+        XCTAssertEqual(temporary.status, 0, String(decoding: temporary.stderr, as: UTF8.self))
+        let root = String(decoding: temporary.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (root as NSString).deletingLastPathComponent == "/tmp",
+              (root as NSString).lastPathComponent.hasPrefix("bailey-p3-index-") else {
+            throw WorkspaceError.notFound
+        }
+        func run(_ argv: [String], in directory: String? = nil) async throws {
+            let result = try await backend.run(
+                argv: argv, cwd: directory, env: nil, stdin: nil, timeout: 25
+            )
+            XCTAssertEqual(result.status, 0, String(decoding: result.stderr, as: UTF8.self))
+        }
+        do {
+            let gitRoot = root + "/git-repository"
+            let plainRoot = root + "/plain-folder"
+            try await backend.createDirectory(path: gitRoot)
+            try await backend.createDirectory(path: plainRoot)
+            try await backend.createDirectory(path: gitRoot + "/nested")
+            try await backend.createDirectory(path: plainRoot + "/child")
+            try await run(["git", "init", "-q", "-b", "main"], in: gitRoot)
+            let special = "nested/中文 😀 file.swift"
+            try await backend.write(path: gitRoot + "/" + special, data: Data("remote tracked\n".utf8))
+            try await backend.write(path: gitRoot + "/new.swift", data: Data("remote untracked\n".utf8))
+            try await backend.write(path: gitRoot + "/ignored.log", data: Data("ignored\n".utf8))
+            try await backend.write(path: gitRoot + "/.gitignore", data: Data("*.log\n".utf8))
+            try await run(["git", "add", "--", special, ".gitignore"], in: gitRoot)
+            try await backend.write(path: plainRoot + "/child/远端目录.txt", data: Data("plain remote\n".utf8))
+
+            let gitIndex = try await ProjectFileIndex.loadRemote(in: gitRoot, backend: backend)
+            XCTAssertFalse(gitIndex.limited)
+            XCTAssertEqual(Set(gitIndex.files.map(\.relativePath)),
+                           Set([special, ".gitignore", "new.swift"]))
+            XCTAssertEqual(gitIndex.files.first(where: { $0.relativePath == special })?.absolutePath,
+                           gitRoot + "/" + special)
+            let plainIndex = try await ProjectFileIndex.loadRemote(in: plainRoot, backend: backend)
+            XCTAssertFalse(plainIndex.limited)
+            XCTAssertEqual(plainIndex.files.map(\.relativePath), ["child/远端目录.txt"])
+            // Recreate only this test's multiplexed SSH master; user sessions
+            // and the Windows SSH service remain untouched.
+            let closedForReconnect = try await Task.detached {
+                try ProcessRemoteCommandRunner.launch(
+                    sshPath: "/usr/bin/ssh", arguments: ["-S", socket, "-O", "exit", host],
+                    stdin: nil, timeout: 10
+                )
+            }.value
+            XCTAssertEqual(closedForReconnect.status, 0)
+            let reconnected = try await ProjectFileIndex.loadRemote(in: plainRoot, backend: backend)
+            XCTAssertEqual(reconnected.files.map(\.relativePath), ["child/远端目录.txt"],
+                           "A fresh SSH connection must provide the same remote files")
+            let actualBytes = try await backend.read(path: gitRoot + "/" + special, maxBytes: 256)
+            XCTAssertEqual(actualBytes, Data("remote tracked\n".utf8))
+            try await backend.delete(paths: [gitRoot + "/" + special])
+            let afterDelete = try await ProjectFileIndex.loadRemote(in: gitRoot, backend: backend)
+            XCTAssertFalse(afterDelete.files.contains { $0.relativePath == special })
+            let home = try await backend.run(
+                argv: ["/bin/sh", "-c", "printf '%s' \"$HOME\""],
+                cwd: nil, env: nil, stdin: nil, timeout: 25
+            )
+            XCTAssertEqual(home.status, 0)
+            let homePath = String(decoding: home.stdout, as: UTF8.self)
+            do {
+                _ = try await ProjectFileIndex.loadRemote(in: homePath + "/.", backend: backend)
+                XCTFail("A normalized spelling of remote HOME must not be indexed")
+            } catch ProjectFileIndex.RemoteIndexError.restrictedRoot {
+                // Expected, without traversing the user's actual HOME.
+            }
+        } catch {
+            try? await backend.delete(paths: [root])
+            throw error
+        }
+        try await backend.delete(paths: [root])
+        let deleted = try await backend.stat(path: root)
+        XCTAssertNil(deleted, "Only the owned remote fixture may be removed")
+        let disconnected = try await Task.detached {
+            try ProcessRemoteCommandRunner.launch(
+                sshPath: "/usr/bin/ssh", arguments: ["-S", socket, "-O", "exit", host],
+                stdin: nil, timeout: 10
+            )
+        }.value
+        XCTAssertEqual(disconnected.status, 0,
+                       "Close only this test's private SSH master, not any user connection")
+    }
+
     func testRemoteNongitBoundedDirectoryListingReturnsActualFiles() async throws {
         let runner = IndexAliasRunner(
             physicalDirectory: "/remote/project", physicalHome: "/remote/home"

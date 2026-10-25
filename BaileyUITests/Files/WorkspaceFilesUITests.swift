@@ -3,6 +3,241 @@ import XCTest
 
 @MainActor
 final class WorkspaceFilesUITests: XCTestCase {
+    func testRealSettingsExcludeAndFileTabRevealHiddenRow() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let hidden = try fixture.file("workspace/node_modules/hidden.swift", text: "real hidden editor bytes\n")
+        _ = try fixture.file("workspace/visible.swift", text: "visible\n")
+        let workspace = fixture.root.appendingPathComponent("workspace", isDirectory: true)
+        let config = fixture.root.appendingPathComponent(".config/bailey-dev/config.toml")
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root
+        )
+        try WorkspaceUITestSupport.addFolder(workspace, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let folder = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", "node_modules")).firstMatch
+        XCTAssertTrue(folder.waitForExistence(timeout: 20))
+        folder.click()
+        let hiddenRow = WorkspaceUITestSupport.fileRow(hidden, in: window)
+        XCTAssertTrue(hiddenRow.waitForExistence(timeout: 15))
+        hiddenRow.doubleClick()
+        let tab = WorkspaceUITestSupport.fileTab(hidden, in: window)
+        XCTAssertTrue(tab.waitForExistence(timeout: 15))
+
+        app.typeKey(",", modifierFlags: .command)
+        let settingsWindow = app.windows["com_apple_SwiftUI_Settings_window"]
+        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 12))
+        let fileManagerPage = settingsWindow.staticTexts.matching(
+            NSPredicate(format: "value == %@", "File Manager")
+        ).firstMatch
+        XCTAssertTrue(fileManagerPage.waitForExistence(timeout: 12))
+        fileManagerPage.click()
+        let excluded = settingsWindow.textViews["Excluded file patterns"].firstMatch
+        XCTAssertTrue(excluded.waitForExistence(timeout: 12),
+                      "The native File Manager Settings page must expose a real pattern editor")
+        excluded.click()
+        excluded.typeKey("a", modifierFlags: .command)
+        excluded.typeText("**/.git\n**/node_modules")
+        settingsWindow.buttons["Apply"].click()
+        let persisted = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                (try? String(contentsOf: config, encoding: .utf8))?
+                    .contains("**/node_modules") == true
+            }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [persisted], timeout: 10), .completed,
+                       "Applying the native Exclude editor must write real isolated TOML")
+
+        excluded.click()
+        excluded.typeKey("a", modifierFlags: .command)
+        excluded.typeText("../invalid")
+        settingsWindow.buttons["Apply"].click()
+        XCTAssertTrue(try String(contentsOf: config, encoding: .utf8).contains("**/node_modules"),
+                      "Invalid patterns must preserve the last valid saved configuration")
+
+        app.typeKey("w", modifierFlags: .command)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let removed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: folder
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: 12), .completed,
+                       "Files must apply the settings to the existing visible tree")
+
+        tab.rightClick()
+        let reveal = app.menuItems["Reveal in File Manager"]
+        XCTAssertTrue(reveal.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.menuItems["Reveal in Finder"].exists,
+                      "The same local file must retain its native Finder action")
+        reveal.click()
+        XCTAssertTrue(hiddenRow.waitForExistence(timeout: 15),
+                      "Reveal must expand the excluded ancestor and scroll to the real row")
+        XCTAssertTrue(hiddenRow.isSelected, "Reveal must select the actual hidden file row")
+        XCTAssertEqual(try String(contentsOf: hidden, encoding: .utf8),
+                       "real hidden editor bytes\n")
+
+        let menu = WorkspaceUITestSupport.element("bailey.files.showExcludedMenu", in: app)
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        menu.click()
+        let showExcluded = app.menuItems["Show Excluded Files"]
+        XCTAssertTrue(showExcluded.waitForExistence(timeout: 8))
+        showExcluded.click()
+        let hiddenAgain = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: folder
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [hiddenAgain], timeout: 10), .completed,
+                       "Turning off temporary visibility must restore saved Exclude rules")
+        XCTAssertTrue(try String(contentsOf: config, encoding: .utf8).contains("**/node_modules"),
+                      "Temporary visibility must not write configuration")
+
+        app.typeKey(",", modifierFlags: .command)
+        let restoredSettings = app.windows["com_apple_SwiftUI_Settings_window"]
+        let restoredFileManager = restoredSettings.staticTexts.matching(
+            NSPredicate(format: "value == %@", "File Manager")
+        ).firstMatch
+        XCTAssertTrue(restoredFileManager.waitForExistence(timeout: 10))
+        restoredFileManager.click()
+        restoredSettings.buttons["Restore Default Exclusions"].click()
+        let restored = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                guard let text = try? String(contentsOf: config, encoding: .utf8) else { return false }
+                return !text.contains("files.exclude")
+            }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 12), .completed,
+                       "Restoring the default must omit files.exclude so the default .git rule applies")
+        app.typeKey("w", modifierFlags: .command)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        XCTAssertTrue(folder.waitForExistence(timeout: 12))
+        XCTAssertEqual(try String(contentsOf: hidden, encoding: .utf8),
+                       "real hidden editor bytes\n")
+    }
+
+    func testAuthorizedWindowsSSHCommandPaletteOpensRealRemoteFiles() throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P3_TEST_SSH_HOST"],
+              !host.isEmpty else {
+            throw XCTSkip("Set BAILEY_P3_TEST_SSH_HOST for the isolated Windows SSH E2E")
+        }
+        let remoteRoot = try runSSH(
+            host: host, command: "mktemp -d /tmp/bailey-p3-ui-XXXXXX"
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (remoteRoot as NSString).deletingLastPathComponent == "/tmp",
+              (remoteRoot as NSString).lastPathComponent.hasPrefix("bailey-p3-ui-") else {
+            throw NSError(domain: "BaileyP3E2E", code: 1)
+        }
+        addTeardownBlock { @MainActor in
+            XCTAssertEqual(try self.runSSH(host: host,
+                command: "rm -r -- '\(remoteRoot)' && test ! -e '\(remoteRoot)' && printf cleaned"),
+                "cleaned", "Only the dedicated remote test directory may be deleted")
+        }
+
+        let gitRoot = remoteRoot + "/git"
+        let plainRoot = remoteRoot + "/plain"
+        let gitFile = gitRoot + "/p3-git-中文.swift"
+        let plainFile = plainRoot + "/p3-plain-中文.swift"
+        _ = try runSSH(host: host, command:
+            "mkdir -p -- '\(gitRoot)' '\(plainRoot)' && "
+            + "git -C '\(gitRoot)' init -q -b main && "
+            + "printf 'WINDOWS_GIT_UNIQUE_BYTES\\n' > '\(gitFile)' && "
+            + "printf 'WINDOWS_UNTRACKED\\n' > '\(gitRoot)/p3-new.swift' && "
+            + "printf '*.log\\n' > '\(gitRoot)/.gitignore' && "
+            + "printf 'WINDOWS_IGNORED\\n' > '\(gitRoot)/p3-ignored.log' && "
+            + "git -C '\(gitRoot)' add -- 'p3-git-中文.swift' '.gitignore' && "
+            + "printf 'WINDOWS_PLAIN_UNIQUE_BYTES\\n' > '\(plainFile)'")
+        XCTAssertEqual(try runSSH(host: host, command: "cat '\(gitFile)'"),
+                       "WINDOWS_GIT_UNIQUE_BYTES\n")
+        XCTAssertEqual(try runSSH(host: host, command: "cat '\(plainFile)'"),
+                       "WINDOWS_PLAIN_UNIQUE_BYTES\n")
+
+        // A same-named local file must remain untouched by remote lookup.
+        // UI tests may only write inside their sandboxed temporary fixture.
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let localTwin = try fixture.file("p3-git-中文.swift", text: "MAC_WRONG_MACHINE_BYTES\n")
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root
+        )
+        func addSSH(_ remoteFolder: String) {
+            app.menuBarItems["File"].click()
+            let add = app.menuItems["Add SSH Files or Folders…"]
+            XCTAssertTrue(add.waitForExistence(timeout: 10))
+            add.click()
+            let sheet = app.windows.firstMatch.sheets.firstMatch
+            XCTAssertTrue(sheet.waitForExistence(timeout: 10))
+            let hostField = sheet.comboBoxes.firstMatch
+            let paths = sheet.textViews.firstMatch
+            XCTAssertTrue(hostField.waitForExistence(timeout: 10))
+            XCTAssertTrue(paths.waitForExistence(timeout: 10))
+            hostField.click()
+            hostField.typeKey("a", modifierFlags: .command)
+            hostField.typeText(host)
+            paths.click()
+            paths.typeText(remoteFolder)
+            sheet.buttons["Add"].click()
+        }
+        func quickOpen(_ name: String, at path: String, content: String) {
+            app.typeKey("p", modifierFlags: .command)
+            let search = app.textFields["bailey.commandPalette.search"]
+            XCTAssertTrue(search.waitForExistence(timeout: 10))
+            search.typeText(name)
+            let result = app.buttons.matching(NSPredicate(
+                format: "label CONTAINS[c] %@", name
+            )).firstMatch
+            XCTAssertTrue(result.waitForExistence(timeout: 30),
+                          "The real Windows SSH index must produce a selectable result")
+            app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+            let tab = WorkspaceUITestSupport.fileTab(
+                URL(fileURLWithPath: path), in: app.windows.firstMatch
+            )
+            XCTAssertTrue(tab.waitForExistence(timeout: 25),
+                          "Return must open the remote FileTab with its exact path")
+            let editor = app.textViews.firstMatch
+            let loaded = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value == %@", content), object: editor
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [loaded], timeout: 20), .completed,
+                           "The opened editor must contain real Windows bytes")
+        }
+
+        addSSH(gitRoot)
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 25))
+        files.click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileRow(
+            URL(fileURLWithPath: gitFile), in: app.windows.firstMatch
+        ).waitForExistence(timeout: 25))
+        quickOpen("p3-git", at: gitFile, content: "WINDOWS_GIT_UNIQUE_BYTES\n")
+        XCTAssertEqual(try String(contentsOf: localTwin, encoding: .utf8),
+                       "MAC_WRONG_MACHINE_BYTES\n")
+        let gitTab = WorkspaceUITestSupport.fileTab(
+            URL(fileURLWithPath: gitFile), in: app.windows.firstMatch
+        )
+        gitTab.rightClick()
+        let reveal = app.menuItems["Reveal in File Manager"]
+        XCTAssertTrue(reveal.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.menuItems["Reveal in Finder"].exists,
+                       "Remote file tabs may not ask Finder to reveal the same Mac path")
+        reveal.click()
+        let gitRow = WorkspaceUITestSupport.fileRow(
+            URL(fileURLWithPath: gitFile), in: app.windows.firstMatch
+        )
+        XCTAssertTrue(gitRow.waitForExistence(timeout: 20))
+        let revealedSelection = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "selected == YES"), object: gitRow
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [revealedSelection], timeout: 12), .completed,
+                       "Remote reveal must select its own machine's row")
+
+        addSSH(plainRoot)
+        files.click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileRow(
+            URL(fileURLWithPath: plainFile), in: app.windows.firstMatch
+        ).waitForExistence(timeout: 25), "Switching projects must show the new remote root")
+        quickOpen("p3-plain", at: plainFile, content: "WINDOWS_PLAIN_UNIQUE_BYTES\n")
+        XCTAssertEqual(try String(contentsOf: localTwin, encoding: .utf8),
+                       "MAC_WRONG_MACHINE_BYTES\n")
+    }
+
     func testNativeFolderPickerRestoresMultipleClipboardItemsAndTypes() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let folderName = "剪贴板 空格 é 👋"

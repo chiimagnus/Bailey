@@ -115,6 +115,7 @@ struct FileTreePanel: View {
                         .foregroundStyle(.secondary)
                 }
                 .menuStyle(.borderlessButton)
+                .accessibilityIdentifier("bailey.files.showExcludedMenu")
                 .fixedSize()
             }
             .padding(.horizontal, 12)
