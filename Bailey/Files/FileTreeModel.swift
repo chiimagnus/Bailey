@@ -197,8 +197,8 @@ final class FileTreeModel {
     private(set) var draft: Draft?
     private var expanded: Set<String> = []
     @ObservationIgnored private var workspaceScope = "local"
-    @ObservationIgnored private var panelIdentity: PanelContext.Identity?
-    @ObservationIgnored private var connectionRevision: UInt64 = 0
+    private var panelIdentity: PanelContext.Identity?
+    private var connectionRevision: UInt64 = 0
     /// A project can follow different checkouts; each retains its own outline.
     private struct Root: Hashable {
         let scope: String
@@ -622,11 +622,17 @@ final class FileTreeModel {
         return false
     }
 
+    func syncedTarget(for context: PanelContext) -> PanelContext.Identity? {
+        guard !rootPath.isEmpty, workspaceScope == context.scope,
+              panelIdentity == context.identity,
+              connectionRevision == context.connectionRevision,
+              (backend as AnyObject) === (context.backend as AnyObject)
+        else { return nil }
+        return context.identity
+    }
+
     func matchesIndexTarget(root: String, context: PanelContext) -> Bool {
-        rootPath == root && workspaceScope == context.scope
-            && panelIdentity == context.identity
-            && connectionRevision == context.connectionRevision
-            && (backend as AnyObject) === (context.backend as AnyObject)
+        rootPath == root && syncedTarget(for: context) != nil
     }
 
     /// Switches the visible root without discarding expansion state from the

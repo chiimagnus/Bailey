@@ -421,6 +421,43 @@ final class WorkspaceFilesUITests: XCTestCase {
                       "Clicking another file should open a preview tab without dropping the File Manager")
     }
 
+    func testRapidCommandWCloseAllThenFilesCanOpenAnotherFile() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let files = try (0..<6).map { index in
+            try fixture.file("rapid-\(index).swift", text: "let rapid = \(index)\n")
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let filesTab = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(filesTab.waitForExistence(timeout: 20))
+
+        for path in files {
+            filesTab.click()
+            let row = WorkspaceUITestSupport.fileRow(path, in: app.windows.firstMatch)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.doubleClick()
+            XCTAssertTrue(WorkspaceUITestSupport.fileTab(path, in: app.windows.firstMatch)
+                .waitForExistence(timeout: 15))
+        }
+
+        for _ in files { app.typeKey("w", modifierFlags: .command) }
+        XCTAssertTrue(files.allSatisfy {
+            !WorkspaceUITestSupport.fileTab($0, in: app.windows.firstMatch).exists
+        }, "Command-W must close all work tabs before the Files click")
+
+        let currentFilesTab = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(currentFilesTab.waitForExistence(timeout: 15))
+        currentFilesTab.click()
+        let first = try XCTUnwrap(files.first)
+        let firstRow = WorkspaceUITestSupport.fileRow(first, in: app.windows.firstMatch)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 15))
+        firstRow.click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(first, in: app.windows.firstMatch)
+            .waitForExistence(timeout: 15),
+            "Files must actually open a new tab after the last work tab is closed")
+        XCTAssertEqual(app.windows.firstMatch.textViews.firstMatch.value as? String, "let rapid = 0\n")
+    }
+
     func testFileManagerClipboardCopyCutPasteAndTrashAgainstRealDisk() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let alpha = try fixture.file("alpha.txt", text: "alpha original\n")

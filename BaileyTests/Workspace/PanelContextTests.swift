@@ -94,6 +94,86 @@ final class PanelContextTests: XCTestCase {
         }
     }
 
+    func testNewFileKeepsCurrentFileTreeIdentityAfterSync() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-files-target-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([folder])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let context = try XCTUnwrap(project.panelContext)
+        _ = await project.syncFiles(isCurrent: { true })
+        XCTAssertTrue(project.fileTree.matchesIndexTarget(root: folder.path, context: context))
+        await manager.newFile()
+        XCTAssertTrue(project.fileTree.matchesIndexTarget(root: folder.path, context: context),
+                      "Opening the new-file draft must not invalidate the existing Files target")
+        XCTAssertNotNil(project.fileTree.draft)
+    }
+
+    func testRemountedFilesReusesTrustedTargetDuringPendingRefresh() async throws {
+        let backend = DelayedWorkspaceFixture("same-channel")
+        let identity = PanelContext.Identity.pinned(
+            project: UUID(), workspace: "ssh:fixture", directory: "/root"
+        )
+        let context = PanelContext(identity: identity, backend: backend)
+        let tree = FileTreeModel()
+        await tree.sync(
+            root: "/root", backend: backend, scope: context.scope,
+            panelIdentity: identity, connectionRevision: context.connectionRevision
+        )
+        XCTAssertEqual(tree.syncedTarget(for: context), identity)
+        XCTAssertEqual(tree.items.count, 1)
+
+        await backend.suspendNextList()
+        let refreshing = Task {
+            await tree.sync(
+                root: "/root", backend: backend, scope: context.scope,
+                panelIdentity: identity, connectionRevision: context.connectionRevision
+            )
+        }
+        try await wait { await backend.awaitingList }
+        XCTAssertEqual(tree.syncedTarget(for: context), identity,
+                       "A remounted Files panel must accept a trusted tree while IO is pending")
+        XCTAssertEqual(tree.items.count, 1)
+
+        let otherRoot = PanelContext(
+            identity: .pinned(project: UUID(), workspace: "ssh:fixture", directory: "/other"),
+            backend: backend
+        )
+        XCTAssertNil(tree.syncedTarget(for: otherRoot),
+                     "An older tree must not operate under a different workspace")
+        let otherBackend = PanelContext(identity: identity, backend: DelayedWorkspaceFixture("other"))
+        XCTAssertNil(tree.syncedTarget(for: otherBackend),
+                     "A reconnected backend cannot use a previous channel's tree")
+        await backend.releaseList()
+        await refreshing.value
+    }
+
+    func testClosingAllTabsDoesNotInvalidatePinnedFilesTarget() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-rapid-close-target-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([folder])
+        let project = try XCTUnwrap(manager.selectedProject)
+        _ = await project.syncFiles(isCurrent: { true })
+        let context = try XCTUnwrap(project.panelContext)
+        XCTAssertEqual(project.fileTree.syncedTarget(for: context), context.identity)
+        for index in 0..<30 {
+            project.openFile(folder.appendingPathComponent("file-\(index).swift").path)
+        }
+        for tab in project.tabs.reversed() { project.close(tab) }
+        XCTAssertTrue(project.tabs.isEmpty)
+        XCTAssertEqual(project.fileTree.syncedTarget(for: context), context.identity,
+                       "Closing the last editor tab must not disable an unchanged Files tree")
+    }
+
     func testCompletedRenameReportsTrueDiskResultAfterFileTreeTargetSwitch() async throws {
         let backend = DelayedWorkspaceFixture("old")
         let tree = FileTreeModel()

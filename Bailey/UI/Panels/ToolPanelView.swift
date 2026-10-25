@@ -91,7 +91,11 @@ struct ToolPanelView: View {
     @State private var applicationIsActive = NSApp.isActive
     /// Which rule produced the current panel root; drives the Files badge.
     @State private var rootSource = PanelContext.RootSource.shell
-    @State private var filesTarget: PanelContext.Identity?
+    private var filesTarget: PanelContext.Identity? {
+        guard let project = manager.selectedProject,
+              let context = project.panelContext else { return nil }
+        return project.fileTree.syncedTarget(for: context)
+    }
     @State private var syncQueue = PanelSyncQueue()
     @State private var watchedFileTree: FileTreeModel?
     @State private var watchedRemoteProject: Project?
@@ -455,12 +459,11 @@ struct ToolPanelView: View {
 
     private func performSync() async {
         guard let project = manager.selectedProject,
-              let (source, target) = await project.syncFiles(isCurrent: {
+              let (source, _) = await project.syncFiles(isCurrent: {
                   manager.selectedProject === project
               }),
               manager.selectedProject === project else { return }
         if rootSource != source { rootSource = source }
-        if filesTarget != target { filesTarget = target }
     }
 
     /// Text badge for the Files header while the panels follow the foreground

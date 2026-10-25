@@ -603,10 +603,15 @@ final class WorkspaceWindowModel {
             WorkspaceNativeDialogs.showError(error, in: window)
             return
         }
+        let revision = context.connectionRevision
         guard selectedProjectID == project.id, project.matchesPanelTarget(context.identity) else { return }
         showPanel(.files)
-        await project.fileTree.sync(root: root, backend: context.backend, scope: context.scope)
-        guard selectedProjectID == project.id, project.matchesPanelTarget(context.identity) else { return }
+        guard await project.fileTree.sync(
+            root: root, backend: context.backend, scope: context.scope,
+            panelIdentity: context.identity, connectionRevision: revision
+        ), context.connectionRevision == revision,
+            selectedProjectID == project.id, project.matchesPanelTarget(context.identity)
+        else { return }
         if isDirectory {
             await project.fileTree.beginNewFolder(in: root)
         } else {
