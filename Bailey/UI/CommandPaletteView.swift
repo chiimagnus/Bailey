@@ -124,6 +124,9 @@ struct CommandPaletteView: View {
     @State private var indexIssue: String?
     @State private var indexLimited = false
     @State private var connectionChangeEvent = 0
+    @State private var applicationIsActive = NSApp.isActive
+    @State private var watchedIndexTree: FileTreeModel?
+    @State private var indexWatcherMemberID = UUID()
     @State private var pointerSelectionController = PalettePointerSelectionController()
     @FocusState private var searchFocused: Bool
 
@@ -150,7 +153,22 @@ struct CommandPaletteView: View {
             PalettePointerEventMonitor(controller: pointerSelectionController)
         )
         .onExitCommand { handleEscapeFromKeyboard() }
-        .onDisappear { manager.restoreFocusAfterCommandPalette() }
+        .onDisappear {
+            stopLocalIndexWatcher()
+            manager.restoreFocusAfterCommandPalette()
+        }
+        .onChange(of: manager.selectedProject?.panelContext?.identity) {
+            updateLocalIndexWatcher()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            applicationIsActive = false
+            updateLocalIndexWatcher()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            applicationIsActive = true
+            updateLocalIndexWatcher()
+            if fileIndexContext != nil { connectionChangeEvent &+= 1 }
+        }
         .onReceive(NotificationCenter.default.publisher(for: SSHHostWorkspaces.connectionChanged)) { note in
             guard let host = note.object as? String,
                   fileIndexContext?.identity.workspace == "ssh:" + host else { return }
@@ -183,6 +201,30 @@ struct CommandPaletteView: View {
                     let standardizedRoot = URL(fileURLWithPath: root).standardizedFileURL
                     guard standardizedRoot != FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
                     else { return }
+                    let tree = project.fileTree
+                    if !tree.matchesIndexTarget(root: root, context: context) {
+                        _ = await tree.sync(
+                            root: root, backend: context.backend, scope: context.scope,
+                            panelIdentity: context.identity, connectionRevision: context.connectionRevision
+                        )
+                    }
+                    guard !Task.isCancelled, fileIndexKey == key,
+                          manager.selectedProjectID == project.id,
+                          project.matchesPanelTarget(context.identity) else { return }
+                    // The existing Files stream also watches linked-worktree Git metadata
+                    // while a file search is open; there is no second background watcher.
+                    let gitDirectoryTask = Task.detached(priority: .userInitiated) {
+                        ProjectFileIndex.gitDirectory(in: root)
+                    }
+                    let gitDirectory = await withTaskCancellationHandler {
+                        await gitDirectoryTask.value
+                    } onCancel: {
+                        gitDirectoryTask.cancel()
+                    }
+                    guard !Task.isCancelled, fileIndexKey == key,
+                          manager.selectedProjectID == project.id,
+                          project.matchesPanelTarget(context.identity) else { return }
+                    tree.setLocalFileIndexGitDirectory(gitDirectory)
                     let indexingTask = Task.detached(priority: .userInitiated) {
                         ProjectFileIndex.load(in: root)
                     }
@@ -339,6 +381,21 @@ struct CommandPaletteView: View {
               let context = manager.selectedProject?.panelContext
         else { return nil }
         return context
+    }
+
+    private func stopLocalIndexWatcher() {
+        watchedIndexTree?.setLocalFileEventsEnabled(false, member: indexWatcherMemberID)
+        watchedIndexTree?.setLocalFileIndexGitDirectory(nil)
+        watchedIndexTree = nil
+    }
+
+    private func updateLocalIndexWatcher() {
+        let nextTree: FileTreeModel? = applicationIsActive && fileIndexContext?.isRemote == false
+            ? manager.selectedProject?.fileTree : nil
+        guard watchedIndexTree !== nextTree else { return }
+        stopLocalIndexWatcher()
+        watchedIndexTree = nextTree
+        nextTree?.setLocalFileEventsEnabled(true, member: indexWatcherMemberID)
     }
 
     private var fileIndexKey: FileIndexKey? {
@@ -571,6 +628,7 @@ struct CommandPaletteView: View {
             }
         }
         .onChange(of: query) {
+            updateLocalIndexWatcher()
             selection = 0
             // Filtering can rebuild a row under a stationary cursor and emit
             // mouseEntered even though the user never moved the pointer.
@@ -673,6 +731,8 @@ struct CommandPaletteView: View {
             .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("bailey.commandPalette.result")
+        .accessibilityValue(command.id)
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(isSelected ? Color.primary.opacity(0.09) : .clear)

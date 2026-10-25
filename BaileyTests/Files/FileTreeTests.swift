@@ -526,6 +526,173 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(afterReads, reads, "The invisible folder must not be listed only for Cmd+P")
     }
 
+    func testPaletteRootMatchingRejectsSamePathFromAnotherMachine() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = UUID()
+        let local = PanelContext(
+            identity: .pinned(project: id, workspace: nil, directory: root.path),
+            backend: LocalWorkspaceBackend.shared
+        )
+        let remote = PanelContext(
+            identity: .pinned(project: id, workspace: "ssh:fixture", directory: root.path),
+            backend: CountingFileBackend()
+        )
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: local.backend, scope: local.scope,
+                        panelIdentity: local.identity, connectionRevision: local.connectionRevision)
+        XCTAssertTrue(tree.matchesIndexTarget(root: root.path, context: local))
+        XCTAssertFalse(tree.matchesIndexTarget(root: root.path, context: remote),
+                       "Equal path strings on different machines are never the same file-index root")
+        await tree.sync(root: root.path, backend: remote.backend, scope: remote.scope,
+                        panelIdentity: remote.identity, connectionRevision: remote.connectionRevision)
+        XCTAssertTrue(tree.matchesIndexTarget(root: root.path, context: remote))
+        XCTAssertFalse(tree.matchesIndexTarget(root: root.path, context: local))
+    }
+
+    func testSeparateFileEventsConsumersKeepOneWatcherAliveUntilLastUnsubscribes() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let tree = FileTreeModel()
+        let filesPanel = UUID()
+        let palette = UUID()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        tree.setLocalFileEventsEnabled(true, member: filesPanel)
+        tree.setLocalFileEventsEnabled(true, member: palette)
+        defer {
+            tree.setLocalFileEventsEnabled(false, member: filesPanel)
+            tree.setLocalFileEventsEnabled(false, member: palette)
+        }
+
+        tree.setLocalFileEventsEnabled(false, member: filesPanel)
+        let created = root.appendingPathComponent("palette-only.swift")
+        try Data("changed".utf8).write(to: created)
+        try await waitForCondition("Palette must retain file notifications after Files closes") {
+            tree.items.contains { $0.path == created.path }
+        }
+        XCTAssertTrue(ProjectFileIndex.load(in: root.path).contains { $0.absolutePath == created.path })
+
+        tree.setLocalFileEventsEnabled(false, member: palette)
+        let invisible = root.appendingPathComponent("after-palette-closes.swift")
+        try Data("new".utf8).write(to: invisible)
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertFalse(tree.items.contains { $0.path == invisible.path },
+                       "A hidden Files tree without a palette must not keep polling or watching")
+    }
+
+    func testRootMustScanSubDirsInvalidatesUnloadedProjectFileIndex() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let deep = root.appendingPathComponent("unexpanded/deep")
+        try FileManager.default.createDirectory(at: deep, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        let initialRevision = tree.contentRevision
+        let oldRows = tree.items
+        let oldDeepReads = await backend.requests[deep.path, default: 0]
+
+        let created = deep.appendingPathComponent("from-external-process.swift")
+        try Data("real file".utf8).write(to: created)
+        await tree.refreshForLocalEvents([
+            .init(path: root.path, flags: UInt32(kFSEventStreamEventFlagMustScanSubDirs))
+        ])
+        XCTAssertGreaterThan(tree.contentRevision, initialRevision,
+                             "Coalesced root events must invalidate Cmd+P beyond the cached frontier")
+        XCTAssertEqual(tree.items, oldRows, "A root event must not expand an unopened folder")
+        let deepReads = await backend.requests[deep.path, default: 0]
+        XCTAssertEqual(deepReads, oldDeepReads, "Do not enumerate deep Files folders for Cmd+P")
+        XCTAssertTrue(ProjectFileIndex.load(in: root.path).contains { $0.absolutePath == created.path })
+    }
+
+    func testNativeLinkedWorktreeGitIndexOutsideProjectInvalidatesQuickOpen() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let repository = base.appendingPathComponent("repository")
+        let linked = base.appendingPathComponent("linked")
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        XCTAssertEqual(GitCommandExecution.run(["init", "-q", "-b", "main"], in: repository.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["config", "user.name", "BaileyTest"], in: repository.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["config", "user.email", "test@example.invalid"], in: repository.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["config", "commit.gpgsign", "false"], in: repository.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["config", "core.hooksPath", "/dev/null"], in: repository.path).status, 0)
+        try Data("seed".utf8).write(to: repository.appendingPathComponent("seed.txt"))
+        XCTAssertEqual(GitCommandExecution.run(["add", "seed.txt"], in: repository.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(["commit", "-qm", "fixture"], in: repository.path).status, 0)
+        XCTAssertEqual(GitCommandExecution.run(
+            ["worktree", "add", "-q", "-b", "feature", linked.path], in: repository.path
+        ).status, 0)
+        let ignored = linked.appendingPathComponent("untracked.tmp")
+        try Data("*.tmp\n".utf8).write(to: linked.appendingPathComponent(".gitignore"))
+        try Data("linked bytes".utf8).write(to: ignored)
+        let tree = FileTreeModel()
+        await tree.sync(root: linked.path, backend: LocalWorkspaceBackend.shared)
+        XCTAssertFalse(ProjectFileIndex.load(in: linked.path).contains { $0.absolutePath == ignored.path })
+        let gitDirectory = try XCTUnwrap(ProjectFileIndex.gitDirectory(in: linked.path))
+        XCTAssertFalse(LocalPathScope.contains(gitDirectory, in: linked.path),
+                       "A linked worktree stores its index outside the visible project")
+        let owner = UUID()
+        tree.setLocalFileEventsEnabled(true, member: owner)
+        tree.setLocalFileIndexGitDirectory(gitDirectory)
+        defer {
+            tree.setLocalFileIndexGitDirectory(nil)
+            tree.setLocalFileEventsEnabled(false, member: owner)
+        }
+        let revision = tree.contentRevision
+        XCTAssertEqual(GitCommandExecution.run(["add", "-f", "untracked.tmp"], in: linked.path).status, 0)
+        try await waitForCondition("Real worktree index changes must reach the single Files watcher") {
+            tree.contentRevision > revision
+        }
+        XCTAssertTrue(ProjectFileIndex.load(in: linked.path).contains { $0.absolutePath == ignored.path },
+                      "An ignored file staged in a linked worktree must appear in ⌘P")
+    }
+
+    func testGitIgnoreAndIndexMetadataChangesInvalidateQuickOpenWithoutTreeChanges() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let initialized = GitCommandExecution.run(["init", "-q", "-b", "main"], in: root.path)
+        XCTAssertEqual(initialized.status, 0)
+        let ignored = root.appendingPathComponent("ignored.tmp")
+        let rules = root.appendingPathComponent(".gitignore")
+        try Data().write(to: rules)
+        try Data("real bytes".utf8).write(to: ignored)
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        XCTAssertTrue(ProjectFileIndex.load(in: root.path).contains { $0.absolutePath == ignored.path })
+        let initialRevision = tree.contentRevision
+        let displayed = tree.items
+
+        try Data("*.tmp\n".utf8).write(to: rules)
+        await tree.refreshForLocalEvents([
+            .init(path: rules.path, flags: UInt32(kFSEventStreamEventFlagItemModified))
+        ])
+        XCTAssertGreaterThan(tree.contentRevision, initialRevision)
+        XCTAssertEqual(tree.items, displayed, "Editing .gitignore content does not add/remove Files rows")
+        XCTAssertFalse(ProjectFileIndex.load(in: root.path).contains { $0.absolutePath == ignored.path })
+
+        let ignoredRevision = tree.contentRevision
+        XCTAssertEqual(GitCommandExecution.run(["add", "-f", "--", "ignored.tmp"], in: root.path).status, 0)
+        let indexPath = root.appendingPathComponent(".git/index").path
+        await tree.refreshForLocalEvents([
+            .init(path: indexPath, flags: UInt32(kFSEventStreamEventFlagItemModified))
+        ])
+        XCTAssertGreaterThan(tree.contentRevision, ignoredRevision)
+        XCTAssertTrue(ProjectFileIndex.load(in: root.path).contains { $0.absolutePath == ignored.path },
+                      "A file staged by -f must become searchable without a directory change")
+
+        let afterIndex = tree.contentRevision
+        await tree.refreshForLocalEvents([
+            .init(path: ignored.path, flags: UInt32(kFSEventStreamEventFlagItemModified)),
+            .init(path: root.appendingPathComponent(".git/index.lock").path,
+                  flags: UInt32(kFSEventStreamEventFlagItemCreated))
+        ])
+        XCTAssertEqual(tree.contentRevision, afterIndex,
+                       "File bytes and temporary Git lock files are not filename-index changes")
+    }
+
     func testUnloadedSubtreeStructuralEventInvalidatesQuickOpenWithoutTreeScan() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let src = root.appendingPathComponent("src")

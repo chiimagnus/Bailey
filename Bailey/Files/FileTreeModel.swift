@@ -219,10 +219,15 @@ final class FileTreeModel {
     @ObservationIgnored private var refreshPending = false
     @ObservationIgnored private var rebuildWaiters: [CheckedContinuation<Void, Never>] = []
     @ObservationIgnored private var changedDirectoriesPending: Set<String> = []
-    @ObservationIgnored private var localFileEventsEnabled = false
+    @ObservationIgnored private var localFileEventMembers: Set<UUID> = []
+    private static let defaultLocalFileEventMember = UUID()
+    private var localFileEventsEnabled: Bool { !localFileEventMembers.isEmpty }
+    @ObservationIgnored private var localIndexGitDirectory: String?
     @ObservationIgnored private var localFileWatcher: GitFileEventWatcher?
     @ObservationIgnored private var localWatcherRoot = ""
     @ObservationIgnored private var localWatchMappings: [String: String] = [:]
+    @ObservationIgnored private var localWatcherGitDirectory: String?
+    @ObservationIgnored private var localWatcherGitDirectories: [String] = []
     @ObservationIgnored private var localWatcherToken: UInt64 = 0
     @ObservationIgnored private var pendingLocalEvents: [GitFileEventWatcher.Event] = []
     @ObservationIgnored private var localEventRefreshTask: Task<Void, Never>?
@@ -365,12 +370,21 @@ final class FileTreeModel {
         return !next.isDraft && next.path.hasPrefix(item.path + "/") ? next : nil
     }
 
-    /// The visible Files panel owns this subscription; other project trees stay idle.
-    func setLocalFileEventsEnabled(_ enabled: Bool) {
-        guard localFileEventsEnabled != enabled else { return }
-        localFileEventsEnabled = enabled
-        if enabled { configureLocalFileWatcher() }
+    /// Visible Files and an open Cmd+P share one on-demand FSEvents stream.
+    func setLocalFileEventsEnabled(_ enabled: Bool, member: UUID? = nil) {
+        let member = member ?? Self.defaultLocalFileEventMember
+        let wasEnabled = localFileEventsEnabled
+        if enabled { localFileEventMembers.insert(member) }
+        else { localFileEventMembers.remove(member) }
+        guard wasEnabled != localFileEventsEnabled else { return }
+        if localFileEventsEnabled { configureLocalFileWatcher() }
         else { stopLocalFileWatcher() }
+    }
+
+    func setLocalFileIndexGitDirectory(_ directory: String?) {
+        guard localIndexGitDirectory != directory else { return }
+        localIndexGitDirectory = directory
+        configureLocalFileWatcher()
     }
 
     private func stopLocalFileWatcher() {
@@ -381,6 +395,8 @@ final class FileTreeModel {
         localFileWatcher = nil
         localWatcherRoot = ""
         localWatchMappings.removeAll()
+        localWatcherGitDirectory = nil
+        localWatcherGitDirectories.removeAll()
     }
 
     private func configureLocalFileWatcher() {
@@ -403,13 +419,13 @@ final class FileTreeModel {
                 }
             }
         }
-        guard localFileWatcher == nil || localWatcherRoot != root || localWatchMappings != mappings else {
-            return
-        }
+        let gitDirectory = localIndexGitDirectory
+        guard localFileWatcher == nil || localWatcherRoot != root || localWatchMappings != mappings
+                || localWatcherGitDirectory != gitDirectory else { return }
         let replacedWatcher = localFileWatcher != nil
         stopLocalFileWatcher()
         let watchPaths = GitFileEventWatcher.paths(
-            root: physicalRoot, gitDirectory: nil, worktrees: Array(mappings.values)
+            root: physicalRoot, gitDirectory: gitDirectory, worktrees: Array(mappings.values)
         )
         let token = localWatcherToken
         localFileWatcher = GitFileEventWatcher(paths: watchPaths, onEvents: { [weak self] events in
@@ -423,6 +439,8 @@ final class FileTreeModel {
         if localFileWatcher != nil {
             localWatcherRoot = root
             localWatchMappings = mappings
+            localWatcherGitDirectory = gitDirectory
+            localWatcherGitDirectories = gitDirectory.map(GitFileEventWatcher.gitMetadataDirectories) ?? []
             if replacedWatcher {
                 // FSEvents uses SinceNow: the old and new streams cannot
                 // cover the short resubscription gap without a fresh read.
@@ -478,7 +496,15 @@ final class FileTreeModel {
         let epoch = treeEpoch
         let revision = contentRevision
         var directories: Set<String> = []
-        var unseenStructuralChange = false
+        // MustScanSubDirs may stand for unseen descendants, even when all
+        // already-loaded directory listings are unchanged.
+        var unseenStructuralChange = events.contains {
+            $0.flags & FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs) != 0
+        } || events.contains { event in
+            localWatcherGitDirectories.contains { directory in
+                Self.affectsFileIndex(event.path, root: rootPath, gitDirectories: [directory])
+            }
+        }
         let structuralFlags = FSEventStreamEventFlags(
             kFSEventStreamEventFlagItemCreated |
             kFSEventStreamEventFlagItemRemoved |
@@ -503,6 +529,17 @@ final class FileTreeModel {
                 aliases = [reported]
             }
             for path in aliases {
+                if Self.affectsFileIndex(path, root: rootPath, gitDirectories: localWatcherGitDirectories) {
+                    unseenStructuralChange = true
+                }
+                // Git internal lock/object churn is not a change to the
+                // visible or searchable file set when .git is excluded.
+                let metadataRoots = [rootPath + "/.git"] + localWatcherGitDirectories
+                if !showExcluded && !Self.isVisible(
+                    path, in: rootPath, excluding: settings.filesExclude
+                ) && metadataRoots.contains(where: { LocalPathScope.contains(path, in: $0) }) {
+                    continue
+                }
                 if path == rootPath {
                     directories.formUnion(loaded)
                     directories.insert(rootPath)
@@ -535,6 +572,30 @@ final class FileTreeModel {
         }
     }
 
+    private static func affectsFileIndex(
+        _ path: String, root: String, gitDirectories: [String]
+    ) -> Bool {
+        if path == root + "/.git" || (path.hasSuffix("/.gitignore") && LocalPathScope.contains(path, in: root)) {
+            return true
+        }
+        let directories = gitDirectories.isEmpty ? [root + "/.git"] : gitDirectories
+        for directory in directories where path != directory && LocalPathScope.contains(path, in: directory) {
+            let relative = String(path.dropFirst(directory.count + 1))
+            if ["index", "HEAD", "packed-refs", "config", "commondir", "info/exclude"].contains(relative)
+                || relative.hasPrefix("refs/") && !relative.hasSuffix(".lock") {
+                return true
+            }
+        }
+        return false
+    }
+
+    func matchesIndexTarget(root: String, context: PanelContext) -> Bool {
+        rootPath == root && workspaceScope == context.scope
+            && panelIdentity == context.identity
+            && connectionRevision == context.connectionRevision
+            && (backend as AnyObject) === (context.backend as AnyObject)
+    }
+
     /// Switches the visible root without discarding expansion state from the
     /// previously visited directory. Data is still reread on every refresh.
     @discardableResult
@@ -554,6 +615,7 @@ final class FileTreeModel {
             && revisionChanged && panelIdentity != nil && scope.hasPrefix("ssh:")
         if scopeChanged || channelChanged {
             stopLocalFileWatcher()
+            if scopeChanged { localIndexGitDirectory = nil }
             changedDirectoriesPending.removeAll()
             treeEpoch &+= 1
             rebuildGeneration &+= 1

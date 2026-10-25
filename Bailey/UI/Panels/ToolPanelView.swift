@@ -356,7 +356,7 @@ struct ToolPanelView: View {
     }
 
     private func stopLocalFileWatcher() {
-        watchedFileTree?.setLocalFileEventsEnabled(false)
+        watchedFileTree?.setLocalFileEventsEnabled(false, member: remoteWatcherMemberID)
         watchedFileTree = nil
     }
 
@@ -365,10 +365,10 @@ struct ToolPanelView: View {
             && manager.selectedProject?.panelContext?.isRemote == false
             ? manager.selectedProject?.fileTree : nil
         if watchedFileTree !== nextTree {
-            watchedFileTree?.setLocalFileEventsEnabled(false)
+            watchedFileTree?.setLocalFileEventsEnabled(false, member: remoteWatcherMemberID)
             watchedFileTree = nextTree
         }
-        nextTree?.setLocalFileEventsEnabled(true)
+        nextTree?.setLocalFileEventsEnabled(true, member: remoteWatcherMemberID)
     }
 
     private func stopRemoteFileWatcher() {

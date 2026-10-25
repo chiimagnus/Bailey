@@ -82,19 +82,7 @@ nonisolated final class GitFileEventWatcher {
         root: String, gitDirectory: String?, worktrees: [String] = []
     ) -> [String] {
         var candidates = [root] + worktrees
-        if let gitDirectory {
-            candidates.append(gitDirectory)
-            let commonDirFile = URL(fileURLWithPath: gitDirectory, isDirectory: true)
-                .appendingPathComponent("commondir")
-            if let relative = try? String(contentsOf: commonDirFile, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-               !relative.isEmpty {
-                candidates.append(
-                    URL(fileURLWithPath: relative, relativeTo: commonDirFile.deletingLastPathComponent())
-                        .standardizedFileURL.path
-                )
-            }
-        }
+        if let gitDirectory { candidates += gitMetadataDirectories(gitDirectory) }
         let filesystem = FileManager.default
         var paths: [String] = []
         for path in candidates.map({ ($0 as NSString).standardizingPath })
@@ -105,6 +93,19 @@ nonisolated final class GitFileEventWatcher {
                   !paths.contains(where: { path == $0 || path.hasPrefix($0 + "/") })
             else { continue }
             paths.append(path)
+        }
+        return paths
+    }
+
+    static func gitMetadataDirectories(_ gitDirectory: String) -> [String] {
+        var paths = [gitDirectory]
+        let commonDirFile = URL(fileURLWithPath: gitDirectory, isDirectory: true)
+            .appendingPathComponent("commondir")
+        if let relative = try? String(contentsOf: commonDirFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines), !relative.isEmpty {
+            paths.append(URL(fileURLWithPath: relative,
+                             relativeTo: commonDirFile.deletingLastPathComponent())
+                .standardizedFileURL.path)
         }
         return paths
     }

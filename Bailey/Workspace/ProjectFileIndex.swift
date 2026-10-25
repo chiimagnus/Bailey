@@ -244,6 +244,13 @@ nonisolated enum ProjectFileIndex {
         )
     }
 
+    static func gitDirectory(in root: String) -> String? {
+        let result = GitCommandExecution.run(["rev-parse", "--absolute-git-dir"], in: root)
+        guard result.status == 0 else { return nil }
+        let path = result.stdout.hasSuffix("\n") ? String(result.stdout.dropLast()) : result.stdout
+        return path.hasPrefix("/") ? path : nil
+    }
+
     static func load(in root: String) -> [File] {
         if let paths = gitProjectFilePaths(in: root) {
             return projectFiles(for: paths, in: root)

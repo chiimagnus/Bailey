@@ -61,7 +61,7 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 
 | 完整用户路径 | 独立 UI 测试 | 仍保留的底层回归 |
 | --- | --- | --- |
-| 冷启动、命令面板搜索／Escape、从编辑器切换 Files 后真实方向键／空格焦点 | `WorkspaceSmokeUITests`、`WorkspaceFilesUITests`、`SharedTreeUITests`、`WorkspaceDockUITests` | `DockWorkspaceTests`、`PanelContextTests`（模型状态与归属） |
+| 冷启动、命令面板搜索／Escape、非 Files 标签中的外部文件与 Git 索引变更、从编辑器切换 Files 后真实方向键／空格焦点 | `WorkspaceSmokeUITests`、`WorkspaceFileIndexRefreshUITests`、`WorkspaceFilesUITests`、`SharedTreeUITests`、`WorkspaceDockUITests` | `FileTreeTests`（事件及共享订阅）、`ProjectFileIndexTests`、`DockWorkspaceTests`、`PanelContextTests`（模型状态与归属） |
 | 系统 Add Folder、Files 预览／打开、焦点恢复、文件去重、编辑保存到磁盘 | `WorkspaceFilesUITests`、`SharedTreeUITests` | `FileTreeTests`、`FileTabPersistenceTests`、`NativeFileTabTests` |
 | 大文件远距导航、文本替换、键盘撤销／重做、真实保存 | `EditorNavigationUITests` | `NativeEditorLayoutTests`、`NativeEditorCompositionTests`、`FileTabPersistenceTests` |
 | Swift 与纯文本的真实 App 像素差异；Markdown／TSX／HTML／CSS 的原生着色与正文保持 | `EditorHighlightingUITests`（Swift 实际 GUI） | `NativeSyntaxHighlightingTests`（四语言真实 TextKit）、`HighlightQueryCacheTests` |
