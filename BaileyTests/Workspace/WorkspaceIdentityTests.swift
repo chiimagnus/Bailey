@@ -14,6 +14,7 @@ private actor IdentityWorkspaceFixture: WorkspaceBackend {
     func write(path: String, data: Data) async throws { writes += 1 }
     func createFile(path: String) async throws {}
     func createDirectory(path: String) async throws {}
+    func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func rename(from: String, to: String) async throws {}
     func delete(paths: [String]) async throws {}
     func gitRoot(containing path: String) async throws -> String? { nil }

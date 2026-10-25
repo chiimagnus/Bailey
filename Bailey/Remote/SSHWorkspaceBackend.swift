@@ -150,6 +150,37 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         try await shell("mkdir -- \(RemoteCommands.quote(path))")
     }
 
+    /// Copy through a private sibling, then reuse the no-clobber rename path.
+    func copy(from: String, to: String) async throws {
+        let source = RemoteCommands.quote(from)
+        let destination = RemoteCommands.quote(to)
+        let parent = (to as NSString).deletingLastPathComponent
+        let stage = (parent as NSString).appendingPathComponent(".bailey-copy-" + UUID().uuidString)
+        let stagedItem = (stage as NSString).appendingPathComponent("item")
+        try await shell("""
+            if [ ! -e \(source) ] && [ ! -L \(source) ]; then exit \(ExitCode.missing); fi
+            if [ -e \(destination) ] || [ -L \(destination) ]; then exit \(ExitCode.exists); fi
+            if [ ! -f \(source) ] && [ ! -d \(source) ] && [ ! -L \(source) ]; then exit 1; fi
+            if [ -d \(source) ] && [ ! -L \(source) ]; then
+                sourceReal=$(cd \(source) && pwd -P) || exit 1
+                parentReal=$(cd \(RemoteCommands.quote(parent)) && pwd -P) || exit 1
+                case "$parentReal/" in "$sourceReal/"*) exit 1 ;; esac
+            fi
+            stage=\(RemoteCommands.quote(stage))
+            mkdir -- "$stage" || exit 1
+            trap 'rm -rf -- "$stage"' EXIT
+            cp -a -- \(source) "$stage/item" || exit 1
+            trap - EXIT
+            """)
+        do {
+            try await rename(from: stagedItem, to: to)
+        } catch {
+            try? await shell("rm -rf -- \(RemoteCommands.quote(stage))")
+            throw error
+        }
+        try await shell("rmdir -- \(RemoteCommands.quote(stage))")
+    }
+
     /// Never overwrite a competing name, including a dangling symlink.
     /// Case-only renames on case-insensitive volumes need a temporary sibling:
     /// equal inodes alone cannot distinguish an alias from two hard links.

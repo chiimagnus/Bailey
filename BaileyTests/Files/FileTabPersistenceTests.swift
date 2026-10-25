@@ -70,6 +70,7 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
     func readSymlinkDestination(path: String) async throws -> String? { nil }
     func createFile(path: String) async throws { throw WorkspaceError.notFound }
     func createDirectory(path: String) async throws { throw WorkspaceError.notFound }
+    func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func rename(from: String, to: String) async throws {
         guard let data = files.removeValue(forKey: from) else { throw WorkspaceError.notFound }
         files[to] = data

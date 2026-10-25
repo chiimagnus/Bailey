@@ -46,6 +46,7 @@ private actor CountingFileBackend: WorkspaceBackend {
     func write(path: String, data: Data) async throws { try await base.write(path: path, data: data) }
     func createFile(path: String) async throws { try await base.createFile(path: path) }
     func createDirectory(path: String) async throws { try await base.createDirectory(path: path) }
+    func copy(from: String, to: String) async throws { try await base.copy(from: from, to: to) }
     func rename(from: String, to: String) async throws { try await base.rename(from: from, to: to) }
     func delete(paths: [String]) async throws { try await base.delete(paths: paths) }
     func gitRoot(containing path: String) async throws -> String? { try await base.gitRoot(containing: path) }
@@ -352,6 +353,59 @@ final class FileTreeTests: XCTestCase {
 
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: fixture)
+    }
+
+    func testLocalWorkspaceCopyPreservesFilesDirectoriesAndLinksWithoutOverwriting() async throws {
+        let source = fixture.appendingPathComponent("source '中文")
+        let destination = fixture.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let file = source.appendingPathComponent("hello.txt")
+        let bytes = Data([0, 255, 10, 0, 128])
+        try bytes.write(to: file)
+        let linked = source.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(atPath: linked.path, withDestinationPath: "missing")
+        let folder = source.appendingPathComponent("nested")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try bytes.write(to: folder.appendingPathComponent("child.txt"))
+
+        let backend = LocalWorkspaceBackend.shared
+        try await backend.copy(from: file.path, to: destination.appendingPathComponent("file-copy.txt").path)
+        try await backend.copy(from: linked.path, to: destination.appendingPathComponent("link-copy").path)
+        try await backend.copy(from: folder.path, to: destination.appendingPathComponent("folder-copy").path)
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("file-copy.txt")), bytes)
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("folder-copy/child.txt")), bytes)
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(
+            atPath: destination.appendingPathComponent("link-copy").path
+        ), "missing")
+        XCTAssertEqual(try Data(contentsOf: file), bytes)
+        let occupied = destination.appendingPathComponent("file-copy.txt")
+        do {
+            try await backend.copy(from: folder.path, to: occupied.path)
+            XCTFail("Copy must not overwrite a competing file")
+        } catch {}
+        XCTAssertEqual(try Data(contentsOf: occupied), bytes)
+        do {
+            try await backend.copy(from: folder.path, to: folder.appendingPathComponent("subfolder").path)
+            XCTFail("Cannot publish a recursive self-copy")
+        } catch {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("subfolder").path))
+        let alternate = source.appendingPathComponent("alternate.bin")
+        try Data("other".utf8).write(to: alternate)
+        let racing = destination.appendingPathComponent("winner.bin")
+        let won = await withTaskGroup(of: Bool.self) { group in
+            for path in [file.path, alternate.path] {
+                group.addTask {
+                    do { try await backend.copy(from: path, to: racing.path); return true }
+                    catch { return false }
+                }
+            }
+            var results: [Bool] = []
+            for await value in group { results.append(value) }
+            return results
+        }
+        XCTAssertEqual(won.filter { $0 }.count, 1)
+        XCTAssertTrue([bytes, Data("other".utf8)].contains(try Data(contentsOf: racing)))
     }
 
     func testFinderImportDirectoryBoundaryIncludesRootButNotSiblingNames() {

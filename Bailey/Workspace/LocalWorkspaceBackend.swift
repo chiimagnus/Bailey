@@ -206,8 +206,8 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             let destination = target.appendingPathComponent(
                 original.lastPathComponent, isDirectory: isRealDirectory
             )
-            let sourceReal = original.resolvingSymlinksInPath().path
-            if isRealDirectory, LocalPathScope.contains(targetReal, in: sourceReal) {
+            if isRealDirectory,
+               LocalPathScope.contains(targetReal, in: original.resolvingSymlinksInPath().path) {
                 failures.append(String(
                     localized: "Cannot copy \(original.lastPathComponent) into itself or a subfolder.",
                     table: "Workspace"
@@ -222,26 +222,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                 continue
             }
             do {
-                // Copy to a system replacement directory on the destination
-                // volume. A recursive copy failure must never publish a
-                // partial folder inside the user's actual workspace.
-                let stagingDirectory = try fm.url(
-                    for: .itemReplacementDirectory, in: .userDomainMask,
-                    appropriateFor: target, create: true
-                )
-                defer { try? fm.removeItem(at: stagingDirectory) }
-                let staged = stagingDirectory.appendingPathComponent(original.lastPathComponent)
-                try fm.copyItem(at: original, to: staged)
-                // A source can finish copying after another process created
-                // the destination. RENAME_EXCL makes no-overwrite atomic.
-                let status = staged.path.withCString { from in
-                    destination.path.withCString { to in
-                        renamex_np(from, to, UInt32(RENAME_EXCL))
-                    }
-                }
-                guard status == 0 else {
-                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-                }
+                try Self.copyExclusive(from: original, to: destination)
                 copied.append(destination.path)
             } catch {
                 failures.append(String(
@@ -251,6 +232,49 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             }
         }
         return LocalFileImportResult(copied: copied, failures: failures)
+    }
+
+    @concurrent func copy(from: String, to: String) async throws {
+        try Self.copyExclusive(
+            from: URL(fileURLWithPath: from).standardizedFileURL,
+            to: URL(fileURLWithPath: to).standardizedFileURL
+        )
+    }
+
+    private static func copyExclusive(from source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        var sourceInfo = Darwin.stat()
+        guard lstat(source.path, &sourceInfo) == 0 else { throw WorkspaceError.notFound }
+        let type = sourceInfo.st_mode & S_IFMT
+        guard type == S_IFREG || type == S_IFDIR || type == S_IFLNK else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTSUP))
+        }
+        let parent = destination.deletingLastPathComponent()
+        let parentReal = parent.resolvingSymlinksInPath().path
+        if type == S_IFDIR,
+           LocalPathScope.contains(parentReal, in: source.resolvingSymlinksInPath().path) {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
+        }
+        var occupied = Darwin.stat()
+        if lstat(destination.path, &occupied) == 0 {
+            throw CocoaError(.fileWriteFileExists)
+        }
+        // Copy privately on the destination volume, then atomically publish without clobbering.
+        let stagingDirectory = try fm.url(
+            for: .itemReplacementDirectory, in: .userDomainMask,
+            appropriateFor: parent, create: true
+        )
+        defer { try? fm.removeItem(at: stagingDirectory) }
+        let staged = stagingDirectory.appendingPathComponent(source.lastPathComponent)
+        try fm.copyItem(at: source, to: staged)
+        let status = staged.path.withCString { from in
+            destination.path.withCString { to in
+                renamex_np(from, to, UInt32(RENAME_EXCL))
+            }
+        }
+        guard status == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
     }
 
     @concurrent func createFile(path: String) async throws {

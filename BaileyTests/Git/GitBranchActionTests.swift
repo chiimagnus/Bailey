@@ -55,6 +55,7 @@ private actor ArchiveFixtureBackend: WorkspaceBackend {
     func write(path: String, data: Data) async throws { throw WorkspaceError.notFound }
     func createFile(path: String) async throws { throw WorkspaceError.notFound }
     func createDirectory(path: String) async throws { throw WorkspaceError.notFound }
+    func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func rename(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func gitRoot(containing path: String) async throws -> String? {
         try await LocalWorkspaceBackend.shared.gitRoot(containing: path)

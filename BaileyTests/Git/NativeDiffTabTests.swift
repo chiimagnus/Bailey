@@ -100,6 +100,7 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
     func list(directory: String) async throws -> [WorkspaceEntry] { [] }
     func createFile(path: String) async throws { throw WorkspaceError.notFound }
     func createDirectory(path: String) async throws { throw WorkspaceError.notFound }
+    func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func rename(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func delete(paths: [String]) async throws { throw WorkspaceError.notFound }
     func gitRoot(containing path: String) async throws -> String? { nil }

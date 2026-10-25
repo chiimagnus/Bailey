@@ -43,6 +43,7 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
     func write(path: String, data: Data) async throws {}
     func createFile(path: String) async throws { created.append(path); try await Task.sleep(for: .milliseconds(100)) }
     func createDirectory(path: String) async throws {}
+    func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func rename(from: String, to: String) async throws { renamed.append((from, to)) }
     func delete(paths: [String]) async throws {}
     func gitRoot(containing path: String) async throws -> String? {

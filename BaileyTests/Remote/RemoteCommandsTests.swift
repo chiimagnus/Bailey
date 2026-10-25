@@ -225,6 +225,59 @@ final class RemoteCommandsTests: XCTestCase {
         }
     }
 
+    func testRemoteWorkspaceCopyStagesAndRejectsOccupiedTargets() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source '中文")
+        let target = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let file = source.appendingPathComponent("a.txt")
+        let payload = Data([0, 255, 10, 64, 128])
+        try payload.write(to: file)
+        let nested = source.appendingPathComponent("folder")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try payload.write(to: nested.appendingPathComponent("child"))
+        let link = source.appendingPathComponent("broken-link")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "missing")
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture())
+
+        try await backend.copy(from: file.path, to: target.appendingPathComponent("copy.txt").path)
+        try await backend.copy(from: nested.path, to: target.appendingPathComponent("copied-folder").path)
+        try await backend.copy(from: link.path, to: target.appendingPathComponent("copied-link").path)
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("copy.txt")), payload)
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("copied-folder/child")), payload)
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(
+            atPath: target.appendingPathComponent("copied-link").path
+        ), "missing")
+        let occupied = target.appendingPathComponent("copy.txt")
+        do {
+            try await backend.copy(from: file.path, to: occupied.path)
+            XCTFail("Remote copy must never silently skip or replace an occupied destination")
+        } catch {}
+        XCTAssertEqual(try Data(contentsOf: occupied), payload)
+        do {
+            try await backend.copy(from: root.appendingPathComponent("absent").path,
+                                   to: target.appendingPathComponent("absent").path)
+            XCTFail("A missing remote source must not silently create a copy")
+        } catch WorkspaceError.notFound {}
+        let dangling = target.appendingPathComponent("dangling")
+        try FileManager.default.createSymbolicLink(atPath: dangling.path, withDestinationPath: "absent")
+        do {
+            try await backend.copy(from: file.path, to: dangling.path)
+            XCTFail("A dangling destination symlink is still an occupied name")
+        } catch {}
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: dangling.path), "absent")
+        do {
+            try await backend.copy(from: nested.path, to: nested.appendingPathComponent("child-copy").path)
+            XCTFail("Remote recursive self-copy must be rejected")
+        } catch {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: nested.appendingPathComponent("child-copy").path))
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: target.path)),
+                       Set(["copy.txt", "copied-folder", "copied-link", "dangling"]))
+    }
+
     func testRemoteGitRootDistinguishesNonRepositoryAndSSHOrGitFailure() async throws {
         let runner = GitRootRunnerFixture()
         let backend = SSHWorkspaceBackend(runner: runner)

@@ -156,6 +156,7 @@ actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     func write(path: String, data: Data) async throws { throw WorkspaceError.notFound }
     func createFile(path: String) async throws { throw WorkspaceError.notFound }
     func createDirectory(path: String) async throws { throw WorkspaceError.notFound }
+    func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func rename(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot {
         .init(descendants: [], namesByPid: [:])

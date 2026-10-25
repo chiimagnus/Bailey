@@ -80,6 +80,8 @@ nonisolated protocol WorkspaceBackend: Sendable {
     func write(path: String, data: Data) async throws
     func createFile(path: String) async throws
     func createDirectory(path: String) async throws
+    /// Copy one file system entry without replacing an existing destination.
+    func copy(from: String, to: String) async throws
     func rename(from: String, to: String) async throws
     /// Locally this moves to the Trash.
     func delete(paths: [String]) async throws
