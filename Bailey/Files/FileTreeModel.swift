@@ -650,7 +650,8 @@ final class FileTreeModel {
             )
             return nil
         }
-        let result = await LocalWorkspaceBackend.shared.copyFromFinder(sources, into: requested)
+        // Copy through the validated physical directory, not a symlink that can be retargeted.
+        let result = await LocalWorkspaceBackend.shared.copyFromFinder(sources, into: resolvedTarget)
         if epoch == treeEpoch, scope == workspaceScope, root == rootPath, isCurrentTarget() {
             await rebuild(refresh: true)
             if !result.failures.isEmpty {

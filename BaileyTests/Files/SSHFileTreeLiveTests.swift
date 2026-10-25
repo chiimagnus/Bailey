@@ -193,6 +193,82 @@ final class SSHFileTreeLiveTests: XCTestCase {
         await cleanup()
     }
 
+    func testAuthorizedWindowsSSHCopyMoveAndDeletePreserveRealDiskContents() async throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
+            throw XCTSkip("Requires an explicitly authorized SSH test host")
+        }
+        let socket = "/tmp/bailey-p1-\(UUID().uuidString.prefix(8)).sock"
+        let backend = SSHWorkspaceBackend(
+            runner: SSHHostCommandRunner(host: host, socket: socket), timeout: 25
+        )
+        let created = try await backend.run(
+            argv: ["mktemp", "-d", "/tmp/bailey-p1-XXXXXX"],
+            cwd: nil, env: nil, stdin: nil, timeout: 25
+        )
+        XCTAssertEqual(created.status, 0, String(decoding: created.stderr, as: UTF8.self))
+        let root = String(decoding: created.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (root as NSString).deletingLastPathComponent == "/tmp",
+              (root as NSString).lastPathComponent.hasPrefix("bailey-p1-") else {
+            throw WorkspaceError.notFound
+        }
+        func cleanup() async {
+            do { try await backend.delete(paths: [root]) }
+            catch { XCTFail("Could not remove test-owned SSH folder: \(error)") }
+            do {
+                let closed = try await Task.detached {
+                    try ProcessRemoteCommandRunner.launch(
+                        sshPath: "/usr/bin/ssh", arguments: ["-S", socket, "-O", "exit", host],
+                        stdin: nil, timeout: 10
+                    )
+                }.value
+                XCTAssertEqual(closed.status, 0)
+            } catch { XCTFail("Could not close test-owned SSH channel: \(error)") }
+        }
+        do {
+            let source = root + "/源' 文件.bin"
+            let destinationDir = root + "/destination"
+            let copy = destinationDir + "/copy.bin"
+            let moved = destinationDir + "/源' 文件.bin"
+            let bytes = Data([0, 255, 10, 0, 128, 39])
+            try await backend.createDirectory(path: destinationDir)
+            try await backend.write(path: source, data: bytes)
+            try await backend.copy(from: source, to: copy)
+            let copiedBytes = try await backend.read(path: copy, maxBytes: 64)
+            let sourceBytes = try await backend.read(path: source, maxBytes: 64)
+            XCTAssertEqual(copiedBytes, bytes)
+            XCTAssertEqual(sourceBytes, bytes)
+            do {
+                try await backend.copy(from: source, to: copy)
+                XCTFail("An occupied SSH target must not be overwritten")
+            } catch {}
+            let preservedBytes = try await backend.read(path: copy, maxBytes: 64)
+            XCTAssertEqual(preservedBytes, bytes)
+
+            let tree = FileTreeModel()
+            let listed = await tree.sync(root: root, backend: backend, scope: "ssh:windows-live")
+            XCTAssertTrue(listed)
+            let move = await tree.performFileOperation(.move, paths: [source], into: destinationDir)
+            XCTAssertTrue(move.failures.isEmpty, move.failures.joined(separator: "\n"))
+            XCTAssertEqual(move.succeeded.first?.destination, moved)
+            let oldStat = try await backend.stat(path: source)
+            let movedBytes = try await backend.read(path: moved, maxBytes: 64)
+            XCTAssertNil(oldStat)
+            XCTAssertEqual(movedBytes, bytes)
+            let deletion = await tree.performFileOperation(.delete, paths: [moved], into: nil)
+            XCTAssertTrue(deletion.failures.isEmpty, deletion.failures.joined(separator: "\n"))
+            XCTAssertEqual(deletion.succeeded.map(\.source), [moved])
+            let deletedStat = try await backend.stat(path: moved)
+            let remainingBytes = try await backend.read(path: copy, maxBytes: 64)
+            XCTAssertNil(deletedStat)
+            XCTAssertEqual(remainingBytes, bytes)
+        } catch {
+            await cleanup()
+            throw error
+        }
+        await cleanup()
+    }
+
     func testAuthorizedWindowsSSHRenamePreservesActualDirectoryEntries() async throws {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
             throw XCTSkip("Requires an explicitly authorized Windows SSH host")

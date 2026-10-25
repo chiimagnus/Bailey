@@ -1654,6 +1654,34 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: source), Data("safe".utf8))
     }
 
+    func testFinderImportUsesValidatedPhysicalDestinationForInRootDirectoryAlias() async throws {
+        let workspace = fixture.appendingPathComponent("workspace")
+        let sourceDir = fixture.appendingPathComponent("origin")
+        let realDestination = workspace.appendingPathComponent("real")
+        let outside = fixture.appendingPathComponent("outside")
+        for directory in [sourceDir, realDestination, outside] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        let source = sourceDir.appendingPathComponent("safe.txt")
+        let bytes = Data([0, 255, 10, 128])
+        try bytes.write(to: source)
+        let alias = workspace.appendingPathComponent("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: realDestination)
+        let tree = FileTreeModel()
+        await tree.sync(root: workspace.path, backend: backend)
+
+        let result = await tree.importFromFinder([source], into: alias.path, isCurrentTarget: { true })
+        XCTAssertEqual(result?.failures, [])
+        XCTAssertEqual(result?.copied, [realDestination.appendingPathComponent("safe.txt").path],
+                       "Import must pin the physical directory validated before asynchronous I/O")
+        XCTAssertEqual(try Data(contentsOf: realDestination.appendingPathComponent("safe.txt")), bytes)
+        try FileManager.default.removeItem(at: alias)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: outside)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("safe.txt").path))
+        XCTAssertEqual(try Data(contentsOf: realDestination.appendingPathComponent("safe.txt")), bytes)
+        XCTAssertEqual(try Data(contentsOf: source), bytes)
+    }
+
     func testFinderCopyPreservesSymlinksInsteadOfDereferencingOrRejectingThem() async throws {
         let fm = FileManager.default
         let origin = fixture.appendingPathComponent("origin")
