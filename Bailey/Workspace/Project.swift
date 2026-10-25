@@ -267,10 +267,10 @@ final class Project: nonisolated Identifiable {
         guard let (root, source) = try? await context.resolvedRoot() else { return nil }
         guard isCurrent(), matchesPanelTarget(context.identity),
               context.connectionRevision == revision else { return nil }
-        await fileTree.sync(
+        guard await fileTree.sync(
             root: root, backend: context.backend, scope: context.scope,
             panelIdentity: context.identity, connectionRevision: revision
-        )
+        ) else { return nil }
         guard isCurrent(), matchesPanelTarget(context.identity),
               context.connectionRevision == revision else { return nil }
         return (source, context.identity)

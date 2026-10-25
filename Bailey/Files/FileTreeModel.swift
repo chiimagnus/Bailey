@@ -499,10 +499,11 @@ final class FileTreeModel {
 
     /// Switches the visible root without discarding expansion state from the
     /// previously visited directory. Data is still reread on every refresh.
+    @discardableResult
     func sync(
         root: String, backend: WorkspaceBackend, scope: String = "local",
         panelIdentity: PanelContext.Identity? = nil, connectionRevision: UInt64 = 0
-    ) async {
+    ) async -> Bool {
         let scopeChanged = root != rootPath || workspaceScope != scope
         let backendChanged = (self.backend as AnyObject) !== (backend as AnyObject)
         let identityChanged = self.panelIdentity != panelIdentity
@@ -549,7 +550,7 @@ final class FileTreeModel {
             draft = nil
         }
         configureLocalFileWatcher() // Subscribe before reading the new root.
-        await rebuild(refresh: true)
+        return await rebuild(refresh: true)
     }
 
     func toggle(_ item: Item) async {
@@ -1097,16 +1098,18 @@ final class FileTreeModel {
         await withCheckedContinuation { rebuildWaiters.append($0) }
     }
 
-    private func rebuild(refresh: Bool = false, changed: Set<String> = []) async {
-        guard !rootPath.isEmpty else { return }
+    @discardableResult
+    private func rebuild(refresh: Bool = false, changed: Set<String> = []) async -> Bool {
+        guard !rootPath.isEmpty else { return false }
         if refresh { refreshPending = true }
         changedDirectoriesPending.formUnion(changed)
         if isRebuilding {
             rebuildPending = true
-            return
+            return false
         }
         isRebuilding = true
         let generation = rebuildGeneration
+        var readFailed = false
         repeat {
             rebuildPending = false
             let needsRefresh = refreshPending
@@ -1130,7 +1133,8 @@ final class FileTreeModel {
                 }.sorted()
                 refreshedDirectories = Set(directories)
                 let fresh = await backend.list(directories: directories)
-                guard generation == rebuildGeneration else { return }
+                guard generation == rebuildGeneration else { return false }
+                if fresh.count != directories.count { readFailed = true }
                 if epoch == treeEpoch, path == rootPath, scope == workspaceScope {
                     if fresh.contains(where: { cachedDirectories[$0.key] != $0.value }) {
                         contentRevision &+= 1
@@ -1155,7 +1159,8 @@ final class FileTreeModel {
                     }
                     queriedDirectories.formUnion(missing)
                     let fresh = await backend.list(directories: missing)
-                    guard generation == rebuildGeneration else { return }
+                    guard generation == rebuildGeneration else { return false }
+                    if fresh.count != missing.count { readFailed = true }
                     if epoch != treeEpoch || path != rootPath || scope != workspaceScope {
                         rebuildPending = true
                         break
@@ -1198,6 +1203,7 @@ final class FileTreeModel {
             rebuildWaiters.removeAll()
             for waiter in waiters { waiter.resume() }
         }
+        return generation == rebuildGeneration && !readFailed
     }
 
     private static func isVisible(

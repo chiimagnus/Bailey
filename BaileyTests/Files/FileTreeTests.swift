@@ -89,6 +89,33 @@ final class FileTreeTests: XCTestCase {
         XCTFail(description)
     }
 
+    func testFailedDirectoryRefreshReportsFailureWithoutDiscardingTrustedRows() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = root.appendingPathComponent("original.txt")
+        let added = root.appendingPathComponent("added.txt")
+        try Data("old".utf8).write(to: original)
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+
+        let initial = await tree.sync(root: root.path, backend: backend)
+        XCTAssertTrue(initial)
+        XCTAssertTrue(tree.items.contains { $0.path == original.path })
+
+        try Data("new".utf8).write(to: added)
+        await backend.setUnavailable(true)
+        let failed = await tree.sync(root: root.path, backend: backend)
+        XCTAssertFalse(failed, "A missing remote batch response must restore watcher fallback polling")
+        XCTAssertTrue(tree.items.contains { $0.path == original.path })
+        XCTAssertFalse(tree.items.contains { $0.path == added.path })
+
+        await backend.setUnavailable(false)
+        let recovered = await tree.sync(root: root.path, backend: backend)
+        XCTAssertTrue(recovered)
+        XCTAssertTrue(tree.items.contains { $0.path == added.path })
+    }
+
     func testLocalFileEventsRefreshRealDiskChangesWithoutIdleListing() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
