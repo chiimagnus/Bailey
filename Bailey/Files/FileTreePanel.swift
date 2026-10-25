@@ -229,7 +229,10 @@ private struct FileTreeScrollView: View {
                             },
                             renameFile: renameFile, onCommand: onCommand,
                             refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget,
-                            makeDragProvider: makeDragProvider
+                            makeDragProvider: makeDragProvider,
+                            canImportFromFinder: canImportFromFinder,
+                            importFromFinder: importFromFinder,
+                            receiveInternalDrop: receiveInternalDrop
                         )
                         .id(item.path)
                         .onDrop(of: [FileTreeDrag.type, UTType.fileURL.identifier], delegate: FileTreeImportDrop(
@@ -312,17 +315,12 @@ private struct FileTreeScrollView: View {
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
         if modifiers == [.command] {
             if event.keyCode == 0 { model.selectAllVisible(); return true }
-            let paths = model.items.filter {
-                !$0.isDraft && model.selectedPaths.contains($0.path)
-            }.map(\.path)
+            let paths = model.selectedOperationPaths
             switch event.keyCode {
             case 8: onCommand(.copy(paths, cut: false)); return true // C
             case 7: onCommand(.copy(paths, cut: true)); return true // X
             case 9: // V
-                let row = model.selectedItem
-                let parent = row.map { $0.isDirectory ? $0.path
-                    : ($0.path as NSString).deletingLastPathComponent }
-                onCommand(.paste(into: parent ?? model.rootPath))
+                onCommand(.paste(into: model.selectedDirectoryPath ?? model.rootPath))
                 return true
             case 2: onCommand(.duplicate(paths)); return true // D
             case 51, 117: onCommand(.delete(paths)); return true // Delete
@@ -330,9 +328,7 @@ private struct FileTreeScrollView: View {
             }
         }
         if modifiers.isEmpty, event.keyCode == 51 || event.keyCode == 117 {
-            let paths = model.items.filter {
-                !$0.isDraft && model.selectedPaths.contains($0.path)
-            }.map(\.path)
+            let paths = model.selectedOperationPaths
             onCommand(.delete(paths))
             return true
         }
@@ -384,8 +380,12 @@ private struct FileTreeRow: View {
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
     let makeDragProvider: (FileTreeModel.Item) -> NSItemProvider
+    let canImportFromFinder: Bool
+    let importFromFinder: ([NSItemProvider], String) -> Bool
+    let receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool
 
     @State private var editingName = ""
+    @State private var hoveredCompactPath: String?
     @FocusState private var fieldFocused: Bool
     @Environment(\.panelFontScale) private var fontScale
 
@@ -396,11 +396,11 @@ private struct FileTreeRow: View {
 
     private var isMultiSelected: Bool { model.selectedPaths.contains(item.path) }
 
-    private func selectForClick() -> Bool {
+    private func selectForClick(componentPath: String? = nil) -> Bool {
         let modifiers = NSApp.currentEvent?.modifierFlags ?? []
         let extending = modifiers.contains(.shift)
         let toggling = modifiers.contains(.command) && !extending
-        model.select(item, extending: extending, toggling: toggling)
+        model.select(item, extending: extending, toggling: toggling, componentPath: componentPath)
         focusKeyboard()
         return extending || toggling
     }
@@ -443,30 +443,39 @@ private struct FileTreeRow: View {
                 renameRow
                     .modifier(layout)
             }
-            .contextMenu { rowMenu }
+            .contextMenu { rowMenu(for: item) }
         } else {
             // Local drags retain public fileURL for Finder; SSH drags publish only
             // the process-private Files type, never a Mac path for a remote file.
             semanticRow
-                .contextMenu { rowMenu }
+                .contextMenu { rowMenu(for: activeMenuTarget) }
                 .onDrag { makeDragProvider(item) }
         }
     }
 
+    private var activeMenuTarget: FileTreeModel.Item {
+        guard model.selectedPath == item.path,
+              let path = model.selectedCompactPath,
+              let component = item.compactComponents.first(where: { $0.path == path })
+        else { return item }
+        return item.item(for: component)
+    }
+
     @ViewBuilder
-    private var rowMenu: some View {
-        let selection = model.contextSelection(for: item)
-        if !item.isDirectory {
+    private func rowMenu(for target: FileTreeModel.Item) -> some View {
+        let selection = target.path == item.path
+            ? model.contextSelection(for: item) : [target.path]
+        if !target.isDirectory {
             Button(String(localized: "Open", table: "Sidebar")) {
-                if isCurrentTarget() { openFile(item.path, true) }
+                if isCurrentTarget() { openFile(target.path, true) }
             }
         }
         if !isRemote {
             Button(String(localized: "Open in Default App", table: "Sidebar")) {
-                NSWorkspace.shared.open(URL(fileURLWithPath: item.path))
+                NSWorkspace.shared.open(URL(fileURLWithPath: target.path))
             }
             Button(String(localized: "Reveal in Finder", table: "Sidebar")) {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: target.path)])
             }
         }
         Divider()
@@ -478,8 +487,8 @@ private struct FileTreeRow: View {
         }
         Button(String(localized: "Paste", table: "Sidebar")) {
             guard isCurrentTarget() else { return }
-            let folder = item.isDirectory ? item.path
-                : (item.path as NSString).deletingLastPathComponent
+            let folder = target.isDirectory ? target.path
+                : (target.path as NSString).deletingLastPathComponent
             onCommand(.paste(into: folder))
         }
         Button(String(localized: "Duplicate", table: "Sidebar")) {
@@ -490,31 +499,42 @@ private struct FileTreeRow: View {
         }
         Button(String(localized: "Copy Path", table: "Sidebar")) {
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(item.path, forType: .string)
+            NSPasteboard.general.setString(target.path, forType: .string)
         }
-        if item.isDirectory {
+        if target.isDirectory {
             Button(String(localized: "cd Here", table: "Sidebar")) {
                 guard isCurrentTarget() else { return }
-                session?.sendCommand("cd " + shellQuote(item.path) + "\n")
+                session?.sendCommand("cd " + shellQuote(target.path) + "\n")
             }
             Divider()
             Button(String(localized: "New File…", table: "Sidebar")) {
                 Task {
                     guard isCurrentTarget() else { return }
-                    await model.beginNewFile(in: item.path)
+                    await model.beginNewFile(in: target.path)
                 }
             }
             Button(String(localized: "New Folder…", table: "Sidebar")) {
                 Task {
                     guard isCurrentTarget() else { return }
-                    await model.beginNewFolder(in: item.path)
+                    await model.beginNewFolder(in: target.path)
                 }
+            }
+        }
+        if target.isDirectory, !item.compactPrefix.isEmpty {
+            Button("Unfold Directory") {
+                guard isCurrentTarget() else { return }
+                Task { await model.unfoldCompactFolder(item) }
+            }
+        } else if target.isDirectory, model.isUnfolded(target) {
+            Button("Fold Directory") {
+                guard isCurrentTarget() else { return }
+                Task { await model.foldDirectory(target) }
             }
         }
         Divider()
         Button(String(localized: "Rename", table: "Sidebar")) {
             guard isCurrentTarget() else { return }
-            model.beginRename(item)
+            model.beginRename(target)
         }
         Button(isRemote ? String(localized: "Delete…", table: "Sidebar")
                         : String(localized: "Move to Trash", table: "Sidebar"),
@@ -550,12 +570,56 @@ private struct FileTreeRow: View {
         }
     }
 
+    private func compactSegmentView(_ component: TreeDisplayModel.Row.CompactComponent) -> AnyView {
+        let target = item.item(for: component)
+        return AnyView(
+            Text(component.name)
+                .underline(model.selectedPath == item.path
+                    && (model.selectedCompactPath ?? item.path) == component.path)
+                .padding(.horizontal, 2)
+                .contentShape(Rectangle())
+                .background(
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(hoveredCompactPath == component.path
+                            ? Color.primary.opacity(0.09) : .clear)
+                )
+                .onHover { hovered in
+                    hoveredCompactPath = hovered ? component.path : nil
+                }
+                .highPriorityGesture(TapGesture().onEnded {
+                    guard isCurrentTarget() else { return }
+                    if selectForClick(componentPath: component.path) { return }
+                    Task {
+                        guard isCurrentTarget() else { return }
+                        await model.toggle(item)
+                    }
+                })
+                .contextMenu { rowMenu(for: target) }
+                .onDrag { makeDragProvider(target) }
+                .onDrop(
+                    of: [FileTreeDrag.type, UTType.fileURL.identifier],
+                    delegate: FileTreeImportDrop(
+                        directory: component.path,
+                        enabled: canImportFromFinder && isCurrentTarget(),
+                        canAcceptInternal: isCurrentTarget(),
+                        importFromFinder: importFromFinder,
+                        receiveInternalDrop: receiveInternalDrop
+                    )
+                )
+                .accessibilityLabel(component.name)
+                .accessibilityIdentifier(
+                    "bailey.tree.folder.component.\(item.compactComponents.firstIndex(of: component) ?? 0)"
+                )
+        )
+    }
+
     @ViewBuilder
     private var semanticRow: some View {
         if item.isDirectory {
             TreeFolderRow(row: displayRow, scale: fontScale,
                           focusRing: hasKeyboardCursor, multiSelected: isMultiSelected,
-                          multiSelectionEnabled: true) {
+                          multiSelectionEnabled: true,
+                          compactSegment: { component in compactSegmentView(component) }) {
                 guard isCurrentTarget() else { return }
                 if selectForClick() { return }
                 Task {

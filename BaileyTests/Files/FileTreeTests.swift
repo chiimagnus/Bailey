@@ -2048,6 +2048,85 @@ final class FileTreeTests: XCTestCase {
         XCTAssertNil(afterC[sibling.path])
     }
 
+    func testCompactedRowTargetsEachRealDirectoryAndCreatesAtSelectedLevel() async throws {
+        let root = fixture.appendingPathComponent("compact-actions")
+        let a = root.appendingPathComponent("a1")
+        let b = a.appendingPathComponent("b1")
+        let c = b.appendingPathComponent("c1")
+        try FileManager.default.createDirectory(at: c, withIntermediateDirectories: true)
+        try Data().write(to: c.appendingPathComponent("existing.swift"))
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        for path in [a.path, b.path, c.path] {
+            let row = try XCTUnwrap(tree.items.first { $0.path == path })
+            await tree.toggle(row)
+        }
+        let compact = try XCTUnwrap(tree.items.first { $0.path == c.path })
+        XCTAssertEqual(compact.displayName, "a1 / b1 / c1")
+        XCTAssertEqual(compact.compactComponents.map(\.path), [a.path, b.path, c.path])
+
+        tree.select(compact, componentPath: a.path)
+        XCTAssertEqual(tree.selectedDirectoryPath, a.path)
+        XCTAssertEqual(tree.selectedOperationPaths, [a.path])
+        tree.select(compact, componentPath: b.path)
+        XCTAssertEqual(tree.selectedDirectoryPath, b.path)
+        XCTAssertEqual(tree.selectedOperationPaths, [b.path])
+        tree.select(compact, componentPath: c.path)
+        XCTAssertEqual(tree.selectedDirectoryPath, c.path)
+
+        for (dir, name) in [(c.path, "in-c.swift"), (b.path, "in-b.swift"), (a.path, "in-a.swift")] {
+            await tree.beginNewFile(in: dir)
+            let result = await tree.commitDraft(name: name)
+            XCTAssertEqual(result, (dir as NSString).appendingPathComponent(name))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: result!))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: c.appendingPathComponent("in-a.swift").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: c.appendingPathComponent("in-b.swift").path))
+    }
+
+    func testCompactFolderUnfoldRenameAndDragTargetAncestors() async throws {
+        let root = fixture.appendingPathComponent("compact-edit")
+        let a = root.appendingPathComponent("a1")
+        let b = a.appendingPathComponent("b1")
+        let c = b.appendingPathComponent("c1")
+        try FileManager.default.createDirectory(at: c, withIntermediateDirectories: true)
+        try Data().write(to: c.appendingPathComponent("leaf.swift"))
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        for path in [a.path, b.path, c.path] {
+            await tree.toggle(try XCTUnwrap(tree.items.first { $0.path == path }))
+        }
+        let compact = try XCTUnwrap(tree.items.first { $0.path == c.path })
+        let ancestor = compact.item(for: compact.compactComponents[0])
+        let drag = try XCTUnwrap(tree.beginDrag(for: ancestor))
+        XCTAssertEqual(drag.paths, [a.path])
+        XCTAssertTrue(tree.consumeDrag(nonce: drag.nonce, paths: drag.paths))
+
+        await tree.unfoldCompactFolder(compact)
+        XCTAssertEqual(tree.items.filter(\.isDirectory).map(\.displayName),
+                       ["a1", "b1", "c1"])
+        XCTAssertTrue(tree.isUnfolded(try XCTUnwrap(tree.items.first { $0.path == a.path })))
+
+        let other = fixture.appendingPathComponent("compact-other-root")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        await tree.sync(root: other.path, backend: backend)
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertEqual(tree.items.filter(\.isDirectory).map(\.displayName),
+                       ["a1", "b1", "c1"], "Unfold must survive switching back to the same project")
+        await tree.foldDirectory(try XCTUnwrap(tree.items.first { $0.path == a.path }))
+        XCTAssertEqual(tree.items.first(where: { $0.path == c.path })?.displayName, "a1 / b1 / c1")
+
+        tree.beginRename(ancestor)
+        try await waitForCondition("Renaming an intermediate folder must reveal the real row") {
+            tree.items.contains { $0.path == a.path }
+        }
+        let renamed = await tree.rename(ancestor, to: "renamed-a1")
+        let destination = root.appendingPathComponent("renamed-a1")
+        XCTAssertEqual(renamed, destination.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.appendingPathComponent("b1/c1/leaf.swift").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: a.path))
+    }
+
     func testFirstLoadDoesNotReadCollapsedSiblingFolders() async throws {
         let root = fixture.appendingPathComponent("siblings")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

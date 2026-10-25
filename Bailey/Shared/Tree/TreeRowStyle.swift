@@ -243,6 +243,7 @@ private struct TreeRowLabel: View {
     let iconPath: String
     let scale: CGFloat
     var directory: String? = nil
+    var compactSegment: ((TreeDisplayModel.Row.CompactComponent) -> AnyView)? = nil
 
     var body: some View {
         HStack(spacing: TreeRowStyle.iconSpacing) {
@@ -255,12 +256,23 @@ private struct TreeRowLabel: View {
             }
             ScrollView(.horizontal) {
                 HStack(spacing: 6) {
-                    Text(row.displayName)
-                        .font(.system(size: TreeRowStyle.fontSize * scale))
-                        .foregroundStyle(row.status?.color
-                            ?? (row.name.hasPrefix(".") ? Color.secondary.opacity(0.55) : .secondary))
-                        .strikethrough(!row.isDirectory && row.status == .deleted)
-                        .fixedSize(horizontal: true, vertical: false)
+                    Group {
+                        if let compactSegment, !row.compactPrefix.isEmpty {
+                            HStack(spacing: 0) {
+                                ForEach(Array(row.compactComponents.enumerated()), id: \.element.path) { entry in
+                                    if entry.offset > 0 { Text(" / ") }
+                                    compactSegment(entry.element)
+                                }
+                            }
+                        } else {
+                            Text(row.displayName)
+                        }
+                    }
+                    .font(.system(size: TreeRowStyle.fontSize * scale))
+                    .foregroundStyle(row.status?.color
+                        ?? (row.name.hasPrefix(".") ? Color.secondary.opacity(0.55) : .secondary))
+                    .strikethrough(!row.isDirectory && row.status == .deleted)
+                    .fixedSize(horizontal: true, vertical: false)
                     if let directory, !directory.isEmpty {
                         Text(directory)
                             .font(.system(size: 10 * scale))
@@ -285,6 +297,7 @@ struct TreeFolderRow<Accessory: View>: View {
     var focusRing = false
     var multiSelected = false
     var multiSelectionEnabled = false
+    var compactSegment: ((TreeDisplayModel.Row.CompactComponent) -> AnyView)? = nil
     let toggle: () -> Void
     @ViewBuilder var accessory: (Bool) -> Accessory
 
@@ -293,7 +306,8 @@ struct TreeFolderRow<Accessory: View>: View {
                        multiSelected: multiSelected, focusRing: focusRing,
                        leadingInset: leadingInset) { hovering, layout in
             HStack(spacing: 0) {
-                TreeRowLabel(row: row, iconPath: row.path, scale: scale)
+                TreeRowLabel(row: row, iconPath: row.path, scale: scale,
+                             compactSegment: compactSegment)
                     .modifier(layout)
                     .onTapGesture(perform: toggle)
                     .accessibilityAction(.default) { toggle() }
@@ -314,10 +328,13 @@ extension TreeFolderRow where Accessory == EmptyView {
     init(row: TreeDisplayModel.Row, scale: CGFloat,
          leadingInset: CGFloat = TreeRowStyle.contentInset,
          focusRing: Bool = false, multiSelected: Bool = false,
-         multiSelectionEnabled: Bool = false, toggle: @escaping () -> Void) {
+         multiSelectionEnabled: Bool = false,
+         compactSegment: ((TreeDisplayModel.Row.CompactComponent) -> AnyView)? = nil,
+         toggle: @escaping () -> Void) {
         self.init(row: row, scale: scale, leadingInset: leadingInset,
                   focusRing: focusRing, multiSelected: multiSelected,
                   multiSelectionEnabled: multiSelectionEnabled,
+                  compactSegment: compactSegment,
                   toggle: toggle) { _ in EmptyView() }
     }
 }

@@ -59,6 +59,12 @@ enum TreeDisplayModel {
     }
 
     struct Row: Identifiable, Equatable {
+        struct CompactComponent: Identifiable, Equatable {
+            let name: String
+            let path: String
+            var id: String { path }
+        }
+
         var id: String { namespace + path }
         let name: String
         let path: String
@@ -71,6 +77,20 @@ enum TreeDisplayModel {
         var namespace = ""
 
         var displayName: String { (compactPrefix + [name]).joined(separator: " / ") }
+        var compactComponents: [CompactComponent] {
+            var currentPath = path
+            var result: [CompactComponent] = []
+            for name in (compactPrefix + [name]).reversed() {
+                result.append(CompactComponent(name: name, path: currentPath))
+                currentPath = (currentPath as NSString).deletingLastPathComponent
+            }
+            return result.reversed()
+        }
+
+        func item(for component: CompactComponent) -> Row {
+            Row(name: component.name, path: component.path, isDirectory: true, depth: depth)
+        }
+
         var accessibilityLabel: String {
             status.map { displayName + ", " + $0.accessibilityName } ?? displayName
         }
@@ -88,6 +108,7 @@ enum TreeDisplayModel {
         private var reading: Step?
         private let expanded: (String) -> Bool
         private let inspectDirectory: (String) -> Bool
+        private let foldDirectory: (String) -> Bool
         private let directoryDepthLimit: Int?
         private(set) var rows: [Row] = []
         private(set) var rootReadable = true
@@ -105,11 +126,13 @@ enum TreeDisplayModel {
         init(
             root: String, directoryDepthLimit: Int? = nil,
             inspectDirectory: @escaping (String) -> Bool = { _ in true },
+            foldDirectory: @escaping (String) -> Bool = { _ in true },
             expanded: @escaping (String) -> Bool
         ) {
             pending = [.root(root)]
             self.directoryDepthLimit = directoryDepthLimit
             self.inspectDirectory = inspectDirectory
+            self.foldDirectory = foldDirectory
             self.expanded = expanded
         }
 
@@ -139,7 +162,8 @@ enum TreeDisplayModel {
                 rootReadable = children != nil
                 enqueue(children ?? [], depth: 0)
             case .row(var row, let compactDepth):
-                if directoryDepthLimit.map({ compactDepth < $0 }) ?? true,
+                if (directoryDepthLimit.map({ compactDepth < $0 }) ?? true),
+                   foldDirectory(row.path),
                    let children, children.count == 1, var child = children.first,
                    child.isDirectory, !child.isDraft, inspectDirectory(child.path) {
                     child.depth = row.depth

@@ -178,6 +178,7 @@ final class FileTreeModel {
     private(set) var contentRevision: UInt64 = 0
     /// Files' current keyboard selection, independent of the most recent FileTab.
     private(set) var selectedPath: String?
+    private(set) var selectedCompactPath: String?
     private(set) var selectedPaths: Set<String> = []
     @ObservationIgnored private var selectionAnchorPath: String?
     @ObservationIgnored private var activeDrag: (nonce: UUID, paths: [String])?
@@ -196,6 +197,8 @@ final class FileTreeModel {
         let path: String
     }
     @ObservationIgnored private var expandedByRoot: [Root: Set<String>] = [:]
+    @ObservationIgnored private var unfoldedByRoot: [Root: Set<String>] = [:]
+    private var unfoldedDirectories: Set<String> = []
 
     /// The workspace this tree reads. Replaced on every `sync`, so the tree
     /// follows its session between the local disk and a remote machine.
@@ -229,13 +232,51 @@ final class FileTreeModel {
         expanded.contains(item.path)
     }
 
+    func isUnfolded(_ item: Item) -> Bool {
+        unfoldedDirectories.contains(item.path)
+    }
+
+    func unfoldCompactFolder(_ item: Item) async {
+        guard item.isDirectory, !item.compactPrefix.isEmpty,
+              items.contains(where: { $0.path == item.path }) else { return }
+        unfoldedDirectories.formUnion(item.compactComponents.dropLast().map(\.path))
+        await rebuild()
+    }
+
+    func foldDirectory(_ item: Item) async {
+        guard item.isDirectory, unfoldedDirectories.contains(item.path) else { return }
+        unfoldedDirectories = unfoldedDirectories.filter {
+            $0 != item.path && !$0.hasPrefix(item.path + "/")
+        }
+        await rebuild()
+    }
+
     var selectedItem: Item? {
         items.first { !$0.isDraft && $0.path == selectedPath }
     }
 
-    func select(_ item: Item, extending: Bool = false, toggling: Bool = false) {
-        guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path })
+    var selectedDirectoryPath: String? {
+        guard let item = selectedItem else { return nil }
+        return item.isDirectory ? (selectedCompactPath ?? item.path)
+            : (item.path as NSString).deletingLastPathComponent
+    }
+
+    var selectedOperationPaths: [String] {
+        let paths = items.filter { !$0.isDraft && selectedPaths.contains($0.path) }.map(\.path)
+        if paths.count == 1, paths.first == selectedPath, let selectedCompactPath {
+            return [selectedCompactPath]
+        }
+        return paths
+    }
+
+    func select(
+        _ item: Item, extending: Bool = false, toggling: Bool = false,
+        componentPath: String? = nil
+    ) {
+        guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path }),
+              componentPath == nil || item.compactComponents.contains(where: { $0.path == componentPath })
         else { return }
+        selectedCompactPath = extending || toggling ? nil : componentPath
         if extending {
             selectRange(to: item.path)
         } else if toggling {
@@ -265,6 +306,7 @@ final class FileTreeModel {
             selectionAnchorPath = visible[next].path
         }
         selectedPath = visible[next].path
+        selectedCompactPath = nil
         activeDrag = nil
         return visible[next]
     }
@@ -287,6 +329,7 @@ final class FileTreeModel {
             selectedPath = visible.first
         }
         selectionAnchorPath = selectedPath
+        selectedCompactPath = nil
         activeDrag = nil
     }
 
@@ -299,15 +342,22 @@ final class FileTreeModel {
     }
 
     func beginDrag(for item: Item) -> (nonce: UUID, paths: [String])? {
-        guard items.contains(where: { !$0.isDraft && $0.path == item.path }) else { return nil }
-        let record = (nonce: UUID(), paths: contextSelection(for: item))
+        guard let displayed = items.first(where: {
+            !$0.isDraft && ($0.path == item.path
+                || ($0.isDirectory && $0.compactComponents.contains { $0.path == item.path }))
+        }) else { return nil }
+        let paths = displayed.path == item.path ? contextSelection(for: displayed) : [item.path]
+        let record = (nonce: UUID(), paths: paths)
         activeDrag = record
         return record
     }
 
     func consumeDrag(nonce: UUID, paths: [String]) -> Bool {
         guard let activeDrag, activeDrag.nonce == nonce, activeDrag.paths == paths,
-              paths.allSatisfy({ path in items.contains { !$0.isDraft && $0.path == path } })
+              paths.allSatisfy({ path in items.contains {
+                  !$0.isDraft && ($0.path == path
+                      || ($0.isDirectory && $0.compactComponents.contains { $0.path == path }))
+              } })
         else { return false }
         self.activeDrag = nil
         return true
@@ -315,6 +365,7 @@ final class FileTreeModel {
 
     func clearSelection() {
         selectedPath = nil
+        selectedCompactPath = nil
         selectedPaths.removeAll()
         selectionAnchorPath = nil
         activeDrag = nil
@@ -533,9 +584,13 @@ final class FileTreeModel {
         self.connectionRevision = connectionRevision
         if scopeChanged {
             if !rootPath.isEmpty {
-                expandedByRoot[Root(scope: workspaceScope, path: rootPath)] = expanded
+                let previous = Root(scope: workspaceScope, path: rootPath)
+                expandedByRoot[previous] = expanded
+                unfoldedByRoot[previous] = unfoldedDirectories
             }
-            expanded = expandedByRoot[Root(scope: scope, path: root)] ?? []
+            let current = Root(scope: scope, path: root)
+            expanded = expandedByRoot[current] ?? []
+            unfoldedDirectories = unfoldedByRoot[current] ?? []
             workspaceScope = scope
             rootPath = root
         }
@@ -784,6 +839,7 @@ final class FileTreeModel {
                         return destination + String(path.dropFirst(entry.source.count))
                     }
                     if let selectedPath { self.selectedPath = moved(selectedPath) }
+                    if let selectedCompactPath { self.selectedCompactPath = moved(selectedCompactPath) }
                     selectedPaths = Set(selectedPaths.map(moved))
                     selectionAnchorPath = selectionAnchorPath.map(moved)
                 } else if action == .delete {
@@ -847,10 +903,14 @@ final class FileTreeModel {
 
     func beginRename(_ item: Item) {
         renamingPath = item.path
+        if !items.contains(where: { $0.path == item.path }) {
+            Task { await rebuild() }
+        }
     }
 
     func cancelRename() {
         renamingPath = nil
+        Task { await rebuild() }
     }
 
     /// Renames `item` in place. No-ops on an empty or unchanged name; shows an
@@ -945,6 +1005,7 @@ final class FileTreeModel {
             return dest + String(path.dropFirst(item.path.count))
         }
         if let selectedPath { self.selectedPath = moved(selectedPath) }
+        if let selectedCompactPath { self.selectedCompactPath = moved(selectedCompactPath) }
         selectedPaths = Set(selectedPaths.map(moved))
         selectionAnchorPath = selectionAnchorPath.map(moved)
         invalidateDirectory(containing: item.path)
@@ -955,15 +1016,17 @@ final class FileTreeModel {
     /// Keeps expansion state after a directory rename by rewriting the old
     /// path prefix (for the folder itself and any expanded descendants).
     private func remapExpanded(from oldPath: String, to newPath: String) {
-        guard expanded.contains(where: { $0 == oldPath || $0.hasPrefix(oldPath + "/") })
-        else { return }
-        expanded = Set(expanded.map { path in
-            if path == oldPath { return newPath }
-            if path.hasPrefix(oldPath + "/") {
-                return newPath + String(path.dropFirst(oldPath.count))
-            }
-            return path
-        })
+        func remap(_ paths: Set<String>) -> Set<String> {
+            Set(paths.map { path in
+                if path == oldPath { return newPath }
+                if path.hasPrefix(oldPath + "/") {
+                    return newPath + String(path.dropFirst(oldPath.count))
+                }
+                return path
+            })
+        }
+        expanded = remap(expanded)
+        unfoldedDirectories = remap(unfoldedDirectories)
     }
 
     // MARK: - Create (inline draft)
@@ -1147,9 +1210,12 @@ final class FileTreeModel {
             }
 
             let knownDirectories = Set(cachedDirectories.keys)
+            let renaming = renamingPath
+            let unfolded = unfoldedDirectories
             var traversal = TreeDisplayModel.Traversal(
                 root: path, directoryDepthLimit: 32,
-                inspectDirectory: { expanded.contains($0) || knownDirectories.contains($0) }
+                inspectDirectory: { expanded.contains($0) || knownDirectories.contains($0) },
+                foldDirectory: { $0 != renaming && !unfolded.contains($0) }
             ) {
                 expanded.contains($0)
             }
@@ -1194,6 +1260,13 @@ final class FileTreeModel {
                     self.selectedPath = (visibleAncestor ?? compactedChild)?.path
                 }
                 selectedPaths.formIntersection(visiblePaths)
+                if let selectedCompactPath,
+                   !traversal.rows.contains(where: {
+                       $0.path == selectedPath
+                           && $0.compactComponents.contains { $0.path == selectedCompactPath }
+                   }) {
+                    self.selectedCompactPath = nil
+                }
                 if selectedPaths.isEmpty, let selectedPath = self.selectedPath {
                     selectedPaths.insert(selectedPath)
                 }
