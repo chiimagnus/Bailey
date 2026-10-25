@@ -29,3 +29,15 @@
 4. 完整 Bailey GUI 与 macOS 15.6 真机尚无授权／设备，不以宿主或命令行实验冒充验收。
 
 测试脚本只存放于 Mac `/tmp/` 并在运行后删除。Windows 的 `/tmp/bailey-p2-*` 及 D 盘 `.bailey-p2-*` 已核对无残留；测试专属 ControlMaster socket 已主动关闭。**真实 SSH 集成测试**：`BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test:SSHFileTreeLiveTests,GitWorkspaceSSHTests,SSHGitRecoveryLiveTests,GitRemoteRefreshIntegrationTests,RemoteLifetimeTests`，**14 项通过、0 失败、0 跳过**，包括真实远端文件树、Git Worktree、Stash、二进制归档、远端断线恢复和生命周期；日志 `/tmp/bailey-event-p2-windows-live-20261025.log`。这些测试验证现有远端后端与回退基础，不等同于尚未接入的通知驱动 GUI。
+
+## P2-T2 实现与验收（`2f5fac7`）
+
+- **生产入口**：`SSHWindowsFileEvents.swift` 独立 `ssh -tt -o ControlMaster=no -S none`、PowerShell 内联脚本、每次 60 秒租期、READY/DIRTY/LOST/END 专属随机标识、2 秒事件节流、bounded stdout/同时排空 stderr、取消后关闭 PTY；没有部署远程程序或服务。`SSHWorkspaceFileEvents.swift` 每 Project 管理订阅集合和目标代次；第一次确认 watcher READY 且成功核验真实根目录后才标记健康，事件调用既有 `Project.syncFiles`。轮询仍由 `ToolPanelView` 的原 2 秒链在不健康时负责，Git 5 秒链独立保留。
+- **异常和边界**：窗口隐藏、App 后台、切根、切连接或最后订阅释放时取消；旧代次异步结果不能把新目标标记健康。实测 Windows `FileSystemWatcher` 不跟随项目中的外部目录符号链接，故可见链接（含压缩链）、符号链接根保留 2 秒核验；根消失主动 LOST。网络／可移动卷等非 Fixed Drive 不宣布事件健康态；自动 SSH 和无系统通知能力的远端继续使用旧轮询。两个 Files 面板共享同一项目订阅；**不同窗口分别持有 Project 时仍可能产生独立 PowerShell 进程**，未验证多窗口长时资源上限。
+- **Red→Green**：缺少事件桥接时编译失败（`/tmp/bailey-p2-t2-red.log`），接入后实际 `ssh windows` 创建文件能更新 `Project.fileTree`，无测试主动轮询；双订阅取消一个仍健康、取消最后一个回退、切根后拒绝旧行、根移动 LOST、符号链接根保留轮询、帧标识解析均通过。最终 `BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test:SSHWindowsFileEventsTests,FileTreeTests,PanelContextTests,RemoteLifetimeTests,ProjectFileIndexTests`：**94 项、0 跳过、0 失败**，日志 `/tmp/bailey-p2-t2-final-windows-20261025.log`。
+- **仓库回归与签名**：`make test` 全量 **626 项、12 项因无显式真实 SSH 环境跳过、0 失败**（`/tmp/bailey-p2-t2-full-host-20261025.log`；最后少量生产代码改动之后又跑了上述 94 项定向）；`make build:dev`、`make build:ui`、`make build` 全部退出 0，正式 Debug codesign `--verify --deep --strict` 成功（`/tmp/bailey-p2-t2-build-{dev,ui,formal}-20261025.log`）。UI 仅编译，**真实 GUI/指纹授权、macOS 15.6、Windows 网络/权限/溢出故障注入、跨窗口长时 CPU/内存尚未实测**。
+- **隔离与清理**：Windows 测试仅用 `ssh windows`，真实临时目录和专属 SSH master 已清理；末次只读检查 `/tmp/bailey-p2-*` 与 D 盘 `.bailey-p2-*` 无残留。没有安装、替换或重启正式 Bailey App，也没有推送。
+
+## P2-T3 条件门槛
+
+Git 仍是 **No-Go**：目前未证明过滤 `git status` 自身的 `.git/index.lock` 与目录事件后不会漏掉 Ref、HEAD、Stash、Merge/Rebase 和关联 Worktree 的真变化。按照 [plan-p2.md](plan-p2.md#p2-t3) 的条件执行分支，本轮不接入 SSH Git 通知、不删除其健康态 5 秒轮询。终端 SSH 活性／远程 cwd 继续独立探测。

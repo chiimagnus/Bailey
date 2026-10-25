@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P2-T2"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
@@ -21,15 +21,16 @@ note = "仅 ssh windows：Files 独立非复用 PTY 事件通道技术 Go，Git 
 [[tasks]]
 id = "P2-T2"
 title = "可行时接入 SSH Files 通知与轮询回退"
-status = "in_progress"
+status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = ""
-note = "P2-T1 Windows Files 技术 Go；仅 ssh windows。实现独立 ControlMaster=no -S none -tt PTY 事件流、有限租期、bounded frames、失败保留 2s poll；当前无生产代码变更。"
+commit = "2f5fac7"
+note = "仅 ssh windows，独立 ControlMaster=no -S none -tt FileSystemWatcher：READY+初次真实读取后事件驱动，异常/根丢失/软链接/非 Windows/自动 SSH 回 2s 轮询。同一项目多 Files 面板共用订阅，跨窗口各自独立。审计修复 cf3ec1d/84833c3 后全仓 627(12 SSH 跳过/0 失败)，真实 Windows 定向 95(0 跳过/0 失败)，Dev/UI build-only/普通 Debug 严格 codesign 通过，GUI 与 macOS 15.6/网络卷实机延期。"
 
 [[tasks]]
 id = "P2-T3"
 title = "可行时接入 SSH Git 并验收连接探测"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t3"
 commit = ""
-note = ""
+no_commit_reason = "P2-T1 Git Go Gate 未通过，按 plan-p2.md 条件分支记录 No-Go，不允许实现 Git 通知或删除 5 秒轮询；无生产代码可提交"
+note = "Windows ssh windows 实测只读 git status/log 8 轮产生约 29 条 .git/index.lock/.git 根目录事件；尚不能证明安全去噪不遗漏 HEAD/Ref/Stash/Merge/Rebase。Git 事件路径为 No-Go，保留 SSH Git 5s 定时刷新、Git Graph/底栏及终端健康/cwd 探测。待有可重复的过滤与连通性证据才重新评估。"
