@@ -35,7 +35,7 @@ private actor BatchDirectoryRunnerFixture: RemoteCommandRunner {
     }
 }
 
-private actor GitRootRunnerFixture: RemoteCommandRunner {
+private actor ScriptedCommandRunnerFixture: RemoteCommandRunner {
     private(set) var result: (status: Int32, stdout: Data, stderr: Data) = (128, Data(), Data())
     func set(_ status: Int32, output: String, error: String) {
         result = (status, Data(output.utf8), Data(error.utf8))
@@ -214,7 +214,7 @@ final class RemoteCommandsTests: XCTestCase {
             XCTFail("Expected remote not-found failure")
         } catch WorkspaceError.notFound {}
 
-        let failing = GitRootRunnerFixture()
+        let failing = ScriptedCommandRunnerFixture()
         let disconnected = SSHWorkspaceBackend(runner: failing)
         await failing.set(255, output: "", error: "Disconnected")
         do {
@@ -300,32 +300,6 @@ final class RemoteCommandsTests: XCTestCase {
             XCTFail("rm should reject a missing path instead of silently succeeding")
         } catch {}
     }
-
-    func testRemoteGitRootDistinguishesNonRepositoryAndSSHOrGitFailure() async throws {
-        let runner = GitRootRunnerFixture()
-        let backend = SSHWorkspaceBackend(runner: runner)
-        await runner.set(128, output: "", error: "fatal: not a git repository")
-        let missing = try await backend.gitRoot(containing: "/remote/plain")
-        XCTAssertNil(missing)
-        await runner.set(128, output: "", error: "fatal: detected dubious ownership")
-        do {
-            _ = try await backend.gitRoot(containing: "/remote/repo")
-            XCTFail("Git ownership failure cannot masquerade as a plain directory")
-        } catch let error as RemoteCommandFailure {
-            XCTAssertEqual(error.status, 128)
-        }
-        await runner.set(255, output: "", error: "Connection closed")
-        do {
-            _ = try await backend.gitRoot(containing: "/remote/repo")
-            XCTFail("SSH connection failure must propagate")
-        } catch let error as RemoteCommandFailure {
-            XCTAssertEqual(error.status, 255)
-        }
-        await runner.set(0, output: "/remote/repo\n", error: "")
-        let resolved = try await backend.gitRoot(containing: "/remote/repo")
-        XCTAssertEqual(resolved, "/remote/repo")
-    }
-
 
     func testSSHStartupDestinationSeparatorKeepsRemoteCommandsUnfollowable() {
         XCTAssertEqual(BaileySSHPassthrough.classify(["-tt", "--", "windows"]), .interactiveSession)
@@ -495,21 +469,9 @@ final class RemoteCommandsTests: XCTestCase {
         XCTAssertEqual(stat?.stat.isRegular, true)
         XCTAssertEqual(stat?.stat.isSymlink, false)
 
-        let ps = """
-              313852  313851  0.0   6144 sshd: ubuntu@pts/0
-              313855  313852  0.1   5632 -bash
-              314000  313855  12.5 104448 /usr/bin/node /home/ubuntu/app/server.js
-              314001  314000  0.0   2048 [kworker]
-            """
-        let rows = RemoteCommands.parseProcessList(ps)
-        XCTAssertEqual(rows.count, 4)
-        XCTAssertEqual(rows[2].process.pid, 314000)
-        XCTAssertEqual(rows[2].process.name, "node")
-        let snapshot = RemoteCommands.snapshot(rows: rows, descendantsOf: 313855)
-        XCTAssertEqual(snapshot.descendants.map(\.pid), [314000, 314001])
     }
 
-    func testGitBatchAndPortParsers() {
+    func testGitBatchParsers() {
         let input = RemoteCommands.untrackedLineCountsInput(paths: ["/a b", "/c"])
         XCTAssertEqual(input, Data("/a b\u{0}/c\u{0}".utf8))
         let counts = RemoteCommands.parseUntrackedLineCounts("3\t27\t1\n1\t0\t1\n",
@@ -526,13 +488,6 @@ final class RemoteCommandsTests: XCTestCase {
         XCTAssertEqual(parsed["root"]?.status, 0)
         XCTAssertEqual(parsed["st"]?.stdout, Data([0x61, 0x00, 0x62]))
 
-        let ports = RemoteCommands.parseListeningPorts("""
-            LISTEN 0 4096 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1234,fd=3))
-            LISTEN 0 511 127.0.0.1:8000 0.0.0.0:* users:(("python3",pid=314000,fd=3))
-            """)
-        XCTAssertEqual(ports.count, 2)
-        XCTAssertTrue(ports.contains(WorkspacePort(port: 22, pid: 1234)))
-        XCTAssertTrue(ports.contains(WorkspacePort(port: 8000, pid: 314000)))
     }
 
     func testUntrackedCountsRejectForgedFilenameRecordsAndNegativeCounts() {

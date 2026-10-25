@@ -23,7 +23,7 @@ nonisolated struct RemoteCommandFailure: LocalizedError {
     }
 }
 
-/// Files, Git and Linux process queries reached through an SSH command runner.
+/// Files and Git operations reached through an SSH command runner.
 ///
 /// Every method is a single round trip: build the command with
 /// `RemoteCommands`, run it, parse the output.
@@ -260,37 +260,7 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         try await shell("rm -r -- \(quoted)")
     }
 
-    // MARK: - Git geography
-
-    /// Read-only, and needed before any panel can pick its root.
-    @concurrent func gitRoot(containing path: String) async throws -> String? {
-        let command = "env LC_ALL=C git -C \(RemoteCommands.quote(path)) rev-parse --show-toplevel"
-        let result = try await runner.run([command], stdin: nil, timeout: timeout)
-        if result.status == 0 {
-            let root = text(result.stdout).trimmingCharacters(in: .newlines)
-            guard !root.isEmpty else {
-                throw RemoteCommandFailure(command: command, status: 0, message: "Git returned an empty repository path.")
-            }
-            return root
-        }
-        let message = text(result.stderr)
-        if result.status == 128 && message.localizedCaseInsensitiveContains("not a git repository") {
-            return nil
-        }
-        throw failure(command: command, result: result)
-    }
-
-    /// A linked worktree has `.git` as a file pointing into the main
-    /// repository, not as a directory.
-    func isLinkedWorktree(_ root: String) async throws -> Bool {
-        let marker = RemoteCommands.quote((root as NSString).appendingPathComponent(".git"))
-        let output = try await shell(
-            "[ -f \(marker) ] && grep -c '/worktrees/' \(marker) 2>/dev/null; :"
-        )
-        return (Int(text(output).trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) > 0
-    }
-
-    // MARK: - Processes
+    // MARK: - Commands
 
     func run(
         argv: [String], cwd: String?, env: [String: String]?,
@@ -313,23 +283,6 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         return WorkspaceRunResult(
             status: result.status, stdout: result.stdout, stderr: result.stderr
         )
-    }
-
-    func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot {
-        let output = try await shell(RemoteCommands.processListCommand())
-        let rows = RemoteCommands.parseProcessList(text(output))
-        return RemoteCommands.snapshot(rows: rows, descendantsOf: pid)
-    }
-
-    func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] {
-        let output = try await shell(RemoteCommands.listeningPortsCommand())
-        let wanted = Set(pids)
-        return RemoteCommands.parseListeningPorts(text(output))
-            .filter { wanted.contains($0.pid) }
-    }
-
-    func kill(pid: pid_t, force: Bool) async throws {
-        try await shell("kill -\(force ? "KILL" : "TERM") \(pid)")
     }
 
     // MARK: - Where the session is

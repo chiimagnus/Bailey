@@ -60,11 +60,6 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
         }
     }
     func delete(paths: [String]) async throws {}
-    func gitRoot(containing path: String) async throws -> String? {
-        try await Task.sleep(for: .milliseconds(path == "/old" ? 100 : 5))
-        return path + "-repo"
-    }
-    func isLinkedWorktree(_ root: String) async throws -> Bool { true }
     func run(
         argv: [String], cwd: String?, env: [String: String]?,
         stdin: Data?, timeout: TimeInterval?
@@ -74,9 +69,6 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
         }
         return .init(status: 0, stdout: Data(), stderr: Data())
     }
-    func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot { .init(descendants: [], namesByPid: [:]) }
-    func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] { [] }
-    func kill(pid: pid_t, force: Bool) async throws {}
 }
 
 @MainActor

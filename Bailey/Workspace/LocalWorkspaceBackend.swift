@@ -314,16 +314,6 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         }
     }
 
-    // MARK: - Git geography
-
-    @concurrent func gitRoot(containing path: String) async throws -> String? {
-        Self.gitRootSync(containing: path)
-    }
-
-    @concurrent func isLinkedWorktree(_ root: String) async throws -> Bool {
-        Self.isLinkedWorktreeSync(root)
-    }
-
     /// The synchronous file metadata path used by local workspace operations.
     static func statSync(_ path: String) -> WorkspaceStat? {
         let fm = FileManager.default
@@ -345,36 +335,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         )
     }
 
-    /// Walks up from `path` looking for a `.git` entry — a directory in normal
-    /// checkouts, a file in worktrees and submodules.
-    static func gitRootSync(containing path: String) -> String? {
-        var dir = (path as NSString).standardizingPath
-        guard dir.hasPrefix("/") else { return nil }
-        let fm = FileManager.default
-        while true {
-            if fm.fileExists(atPath: (dir as NSString).appendingPathComponent(".git")) {
-                return dir
-            }
-            let parent = (dir as NSString).deletingLastPathComponent
-            if parent == dir { return nil }
-            dir = parent
-        }
-    }
-
-    /// A linked worktree's `.git` is a file pointing into the main
-    /// repository's `worktrees` directory (a submodule's points into
-    /// `modules` instead).
-    static func isLinkedWorktreeSync(_ root: String) -> Bool {
-        let gitPath = (root as NSString).appendingPathComponent(".git")
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: gitPath, isDirectory: &isDirectory),
-              !isDirectory.boolValue,
-              let contents = try? String(contentsOfFile: gitPath, encoding: .utf8)
-        else { return false }
-        return contents.contains("/worktrees/")
-    }
-
-    // MARK: - Processes
+    // MARK: - Commands
 
     static let loginShell: String = {
         if let pw = getpwuid(getuid()), let shell = pw.pointee.pw_shell {
@@ -494,98 +455,4 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         )
     }
 
-    @concurrent func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot {
-        // `comm` is the executable path with no arguments, so the only
-        // free-form field is the last one and column parsing stays safe.
-        let psOut = try await text(
-            argv: ["/bin/ps", "-axo", "pid=,ppid=,stat=,pcpu=,rss=,comm="]
-        )
-        var itemsByPid: [pid_t: WorkspaceProcess] = [:]
-        var names: [pid_t: String] = [:]
-        var childPids: [pid_t: [pid_t]] = [:]
-        for line in psOut.split(separator: "\n") {
-            let fields = line.split(separator: " ", maxSplits: 5, omittingEmptySubsequences: true)
-            guard fields.count == 6,
-                  let pid = pid_t(fields[0]),
-                  let ppid = pid_t(fields[1]) else { continue }
-            // Recorded before the zombie check so the descendant walk below
-            // still traverses the tree through anything we skip.
-            childPids[ppid, default: []].append(pid)
-            // Zombies are children that already exited and are waiting to be
-            // reaped: `ps` names them "<defunct>", they hold no CPU or memory,
-            // and no signal can touch them. Nothing to show or act on.
-            guard !fields[2].hasPrefix("Z") else { continue }
-            let executable = String(fields[5])
-            let name = (executable as NSString).lastPathComponent
-            names[pid] = name
-            itemsByPid[pid] = WorkspaceProcess(
-                pid: pid,
-                name: name,
-                executable: executable,
-                cpu: Double(fields[3]) ?? 0,
-                memoryKB: Int(fields[4]) ?? 0
-            )
-        }
-
-        // Descendants breadth-first: the commands the user ran come before
-        // the workers they spawned.
-        var descendants: [WorkspaceProcess] = []
-        var queue = childPids[pid] ?? []
-        while !queue.isEmpty {
-            let next = queue.removeFirst()
-            if let item = itemsByPid[next] {
-                descendants.append(item)
-            }
-            queue.append(contentsOf: childPids[next] ?? [])
-        }
-        return WorkspaceProcessSnapshot(descendants: descendants, namesByPid: names)
-    }
-
-    @concurrent func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] {
-        guard !pids.isEmpty else { return [] }
-        let list = pids.map(String.init).joined(separator: ",")
-        // -a ANDs the selectors, so this only inspects the session's own
-        // processes instead of walking every fd on the machine.
-        let out = try await text(
-            argv: [
-                "/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", list, "-Fpn",
-            ]
-        )
-
-        var ports: [WorkspacePort] = []
-        var seen = Set<String>()
-        var currentPid: pid_t = 0
-        for line in out.split(separator: "\n") {
-            guard let field = line.first else { continue }
-            let value = line.dropFirst()
-            switch field {
-            case "p":
-                currentPid = pid_t(value) ?? 0
-            case "n":
-                // Addresses look like "*:3000", "127.0.0.1:3000", "[::1]:3000".
-                guard let colon = value.lastIndex(of: ":"),
-                      let port = Int(value[value.index(after: colon)...]) else { continue }
-                // The same socket shows once for IPv4 and once for IPv6.
-                if seen.insert("\(currentPid):\(port)").inserted {
-                    ports.append(WorkspacePort(port: port, pid: currentPid))
-                }
-            default:
-                break
-            }
-        }
-        return ports.sorted { $0.port < $1.port }
-    }
-
-    func kill(pid: pid_t, force: Bool) async throws {
-        Darwin.kill(pid, force ? SIGKILL : SIGTERM)
-    }
-
-    /// Decoded stdout, empty when the tool could not be launched — the
-    /// tolerance `ps` and `lsof` parsing has always had.
-    private func text(argv: [String]) async throws -> String {
-        guard let result = try? await run(
-            argv: argv, cwd: nil, env: nil, stdin: nil, timeout: nil
-        ) else { return "" }
-        return String(data: result.stdout, encoding: .utf8) ?? ""
-    }
 }

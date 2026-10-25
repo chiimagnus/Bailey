@@ -29,11 +29,6 @@ private actor GitBackendFixture: WorkspaceBackend {
     func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func rename(from: String, to: String) async throws {}
     func delete(paths: [String]) async throws {}
-    func gitRoot(containing path: String) async throws -> String? { nil }
-    func isLinkedWorktree(_ root: String) async throws -> Bool { false }
-    func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot { .init(descendants: [], namesByPid: [:]) }
-    func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] { [] }
-    func kill(pid: pid_t, force: Bool) async throws {}
 }
 
 final class GitExecutionTests: XCTestCase {

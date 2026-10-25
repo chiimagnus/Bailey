@@ -17,12 +17,7 @@ private actor IdentityWorkspaceFixture: WorkspaceBackend {
     func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func rename(from: String, to: String) async throws {}
     func delete(paths: [String]) async throws {}
-    func gitRoot(containing path: String) async throws -> String? { nil }
-    func isLinkedWorktree(_ root: String) async throws -> Bool { false }
     func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult { .init(status: 0, stdout: Data(), stderr: Data()) }
-    func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot { .init(descendants: [], namesByPid: [:]) }
-    func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] { [] }
-    func kill(pid: pid_t, force: Bool) async throws {}
 }
 
 private actor FailingCreateRunnerFixture: RemoteCommandRunner {

@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 /// One directory entry, as the file tree needs it.
@@ -19,32 +18,6 @@ nonisolated struct WorkspaceStat: Sendable, Equatable {
     let mtime: Date
 }
 
-/// One process under the session's shell.
-nonisolated struct WorkspaceProcess: Sendable, Equatable {
-    let pid: pid_t
-    /// Executable name, e.g. "node".
-    let name: String
-    /// Full executable path.
-    let executable: String
-    let cpu: Double
-    let memoryKB: Int
-}
-
-/// Descendants of one process, plus the names of every process on the machine.
-/// The names come along because a listening socket can belong to the shell
-/// itself, which is not one of its own descendants.
-nonisolated struct WorkspaceProcessSnapshot: Sendable {
-    /// Breadth-first, so commands the user ran come before their workers.
-    let descendants: [WorkspaceProcess]
-    let namesByPid: [pid_t: String]
-}
-
-/// One TCP port a process is listening on.
-nonisolated struct WorkspacePort: Sendable, Equatable {
-    let port: Int
-    let pid: pid_t
-}
-
 nonisolated struct WorkspaceRunResult: Sendable {
     let status: Int32
     let stdout: Data
@@ -60,8 +33,8 @@ nonisolated enum WorkspaceError: Error {
     case timedOut
 }
 
-/// The workspace a project's panels, editor and diff viewer operate on: the
-/// Mac's own disk and process table, or a machine reached over SSH.
+/// The workspace a project's panels, editor and diff viewer operate on:
+/// the Mac's disk or a machine reached over SSH.
 ///
 /// Every method is `async throws` because the remote implementation costs a
 /// round trip per call and must never run on the main actor — the shape has to
@@ -86,20 +59,11 @@ nonisolated protocol WorkspaceBackend: Sendable {
     /// Locally this moves to the Trash.
     func delete(paths: [String]) async throws
 
-    // MARK: Git geography
-    /// Directory of the nearest enclosing git repository, walking up.
-    func gitRoot(containing path: String) async throws -> String?
-    /// Whether `root` is a linked worktree rather than a normal checkout.
-    func isLinkedWorktree(_ root: String) async throws -> Bool
-
-    // MARK: Processes
+    // MARK: Commands
     func run(
         argv: [String], cwd: String?, env: [String: String]?,
         stdin: Data?, timeout: TimeInterval?
     ) async throws -> WorkspaceRunResult
-    func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot
-    func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort]
-    func kill(pid: pid_t, force: Bool) async throws
 }
 
 extension WorkspaceBackend {

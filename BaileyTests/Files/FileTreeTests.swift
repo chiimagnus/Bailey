@@ -59,14 +59,9 @@ private actor CountingFileBackend: WorkspaceBackend {
     }
     func rename(from: String, to: String) async throws { try await base.rename(from: from, to: to) }
     func delete(paths: [String]) async throws { try await base.delete(paths: paths) }
-    func gitRoot(containing path: String) async throws -> String? { try await base.gitRoot(containing: path) }
-    func isLinkedWorktree(_ root: String) async throws -> Bool { try await base.isLinkedWorktree(root) }
     func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
         try await base.run(argv: argv, cwd: cwd, env: env, stdin: stdin, timeout: timeout)
     }
-    func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot { try await base.processes(descendantsOf: pid) }
-    func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] { try await base.listeningPorts(pids: pids) }
-    func kill(pid: pid_t, force: Bool) async throws { try await base.kill(pid: pid, force: force) }
 }
 
 @MainActor
