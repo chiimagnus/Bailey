@@ -222,56 +222,186 @@ final class FileTreeModel {
         return result
     }
 
-    /// Moves `item` to the Trash, then rebuilds so it drops out of the tree.
-    func moveToTrash(_ item: Item) async {
-        let backend = self.backend
-        let scope = workspaceScope
-        let root = rootPath
-        let epoch = treeEpoch
-        do {
-            try await backend.delete(paths: [item.path])
-            if scope == workspaceScope, root == rootPath, epoch == treeEpoch {
-                expanded.remove(item.path)
-                invalidateDirectory(containing: item.path)
-                await rebuild()
-            }
-        } catch {
-            guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return }
-            presentError(
-                String(
-                    localized: "Couldn’t move “\(item.name)” to the Trash.", table: "Workspace",
-                    comment: "File operation error. The placeholder is a file or folder name."
-                ),
-                error.localizedDescription
-            )
-        }
+    enum FileOperation {
+        case copy, move, delete
     }
 
-    /// Deletes `item` outright, then rebuilds so it drops out of the tree.
-    /// Used where the workspace has no Trash to move it to — a remote
-    /// machine — so the caller confirms with the user first.
-    func delete(_ item: Item) async {
-        let backend = self.backend
-        let scope = workspaceScope
+    struct FileBatchResult {
+        var succeeded: [(source: String, destination: String?)] = []
+        var failures: [String] = []
+    }
+
+    /// One source entry per operation; parent selections absorb descendants.
+    func performFileOperation(
+        _ action: FileOperation, paths: [String], into directory: String?,
+        isCurrentTarget: () -> Bool = { true }
+    ) async -> FileBatchResult {
         let root = rootPath
+        let scope = workspaceScope
         let epoch = treeEpoch
-        do {
-            try await backend.delete(paths: [item.path])
-            if scope == workspaceScope, root == rootPath, epoch == treeEpoch {
-                expanded.remove(item.path)
-                invalidateDirectory(containing: item.path)
-                await rebuild()
-            }
-        } catch {
-            guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return }
-            presentError(
-                String(
-                    localized: "Couldn’t delete “\(item.name)”.", table: "Workspace",
-                    comment: "File operation error. The placeholder is a file or folder name."
-                ),
-                error.localizedDescription
-            )
+        let backend = self.backend
+        guard !root.isEmpty, isCurrentTarget() else { return FileBatchResult() }
+        let sourcePaths = Array(Set(paths)).sorted {
+            $0.count == $1.count ? $0 < $1 : $0.count < $1.count
+        }.reduce(into: [String]()) { accepted, path in
+            guard !accepted.contains(where: { LocalPathScope.contains(path, in: $0) }) else { return }
+            accepted.append(path)
         }
+
+        var result = FileBatchResult()
+        let rootPath = (root as NSString).standardizingPath
+        let targetPath = directory.map { ($0 as NSString).standardizingPath }
+        let physicalRoot: String
+        do {
+            physicalRoot = try await Self.physicalDirectory(
+                root, backend: backend, scope: scope
+            )
+        } catch {
+            result.failures = sourcePaths.map { "\($0): \(error.localizedDescription)" }
+            return result
+        }
+        var resolvedParents: [String: String] = [:]
+        var physicalTarget: String?
+        if action != .delete {
+            guard let targetPath, LocalPathScope.contains(targetPath, in: rootPath) else {
+                result.failures = sourcePaths.map {
+                    String(localized: "Destination is outside the current project: \($0)", table: "Workspace")
+                }
+                if root == self.rootPath, scope == workspaceScope, epoch == treeEpoch,
+                   isCurrentTarget() {
+                    presentError(String(localized: "Couldn’t complete file operation.", table: "Workspace"),
+                                 result.failures.joined(separator: "\n"))
+                }
+                return result
+            }
+            do {
+                let resolvedTarget = try await Self.physicalDirectory(
+                    targetPath, backend: backend, scope: scope
+                )
+                guard LocalPathScope.contains(resolvedTarget, in: physicalRoot) else {
+                    throw NSError(
+                        domain: "Bailey.Files", code: 3,
+                        userInfo: [NSLocalizedDescriptionKey:
+                            String(localized: "Destination folder is outside this project.", table: "Workspace")]
+                    )
+                }
+                physicalTarget = resolvedTarget
+            } catch {
+                result.failures = sourcePaths.map { "\($0): \(error.localizedDescription)" }
+                if root == self.rootPath && scope == workspaceScope, epoch == treeEpoch,
+                   isCurrentTarget() {
+                    presentError(String(localized: "Couldn’t complete file operation.", table: "Workspace"),
+                                 result.failures.joined(separator: "\n"))
+                }
+                return result
+            }
+        }
+
+        for source in sourcePaths {
+            guard isCurrentTarget(), root == self.rootPath, scope == workspaceScope,
+                  epoch == treeEpoch else { break }
+            let normalized = (source as NSString).standardizingPath
+            guard normalized == source,
+                  source != rootPath, LocalPathScope.contains(source, in: rootPath) else {
+                result.failures.append(
+                    String(localized: "Source is outside the current project: \(source)", table: "Workspace")
+                )
+                continue
+            }
+            let sourceParent = (source as NSString).deletingLastPathComponent
+            do {
+                let resolvedParent: String
+                if let cached = resolvedParents[sourceParent] {
+                    resolvedParent = cached
+                } else {
+                    resolvedParent = try await Self.physicalDirectory(
+                        sourceParent, backend: backend, scope: scope
+                    )
+                    resolvedParents[sourceParent] = resolvedParent
+                }
+                guard LocalPathScope.contains(resolvedParent, in: physicalRoot) else {
+                    throw NSError(
+                        domain: "Bailey.Files", code: 4,
+                        userInfo: [NSLocalizedDescriptionKey:
+                            String(localized: "Source folder is outside this project.", table: "Workspace")]
+                    )
+                }
+            } catch {
+                result.failures.append("\(source): \(error.localizedDescription)")
+                continue
+            }
+            guard isCurrentTarget(), root == self.rootPath, scope == workspaceScope,
+                  epoch == treeEpoch else { break }
+            let destination = targetPath.map {
+                ($0 as NSString).appendingPathComponent((source as NSString).lastPathComponent)
+            }
+            let physicalDestination = physicalTarget.map {
+                ($0 as NSString).appendingPathComponent((source as NSString).lastPathComponent)
+            }
+            do {
+                switch action {
+                case .copy:
+                    guard let physicalDestination else { continue }
+                    try await backend.copy(from: source, to: physicalDestination)
+                case .move:
+                    guard let physicalDestination, physicalDestination != source else { continue }
+                    try await backend.rename(from: source, to: physicalDestination)
+                case .delete:
+                    try await backend.delete(paths: [source])
+                }
+                result.succeeded.append((
+                    source: source, destination: action == .delete ? nil : destination
+                ))
+            } catch {
+                result.failures.append("\(source): \(error.localizedDescription)")
+            }
+        }
+
+        if root == self.rootPath, scope == workspaceScope, epoch == treeEpoch,
+           isCurrentTarget() {
+            for entry in result.succeeded {
+                if action == .move, let destination = entry.destination {
+                    remapExpanded(from: entry.source, to: destination)
+                    func moved(_ path: String) -> String {
+                        guard LocalPathScope.contains(path, in: entry.source) else { return path }
+                        return destination + String(path.dropFirst(entry.source.count))
+                    }
+                    if let selectedPath { self.selectedPath = moved(selectedPath) }
+                    selectedPaths = Set(selectedPaths.map(moved))
+                    selectionAnchorPath = selectionAnchorPath.map(moved)
+                } else if action == .delete {
+                    expanded = expanded.filter {
+                        !LocalPathScope.contains($0, in: entry.source)
+                    }
+                }
+                invalidateDirectory(containing: entry.source)
+                if let destination = entry.destination { invalidateDirectory(containing: destination) }
+            }
+            if !result.succeeded.isEmpty { await rebuild(refresh: true) }
+            if !result.failures.isEmpty {
+                presentError(String(localized: "Couldn’t complete file operation.", table: "Workspace"),
+                             result.failures.joined(separator: "\n"))
+            }
+        }
+        return result
+    }
+
+    private static func physicalDirectory(
+        _ path: String, backend: WorkspaceBackend, scope: String
+    ) async throws -> String {
+        if scope == "local" {
+            return URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        }
+        let result = try await backend.run(
+            argv: ["pwd", "-P"], cwd: path, env: nil, stdin: nil, timeout: 25
+        )
+        guard result.status == 0, result.stdout.count <= 16_384,
+              result.stdout.last == 10,
+              let resolved = String(data: result.stdout.dropLast(), encoding: .utf8),
+              resolved.hasPrefix("/") else {
+            throw WorkspaceError.notFound
+        }
+        return resolved
     }
 
     // MARK: - Rename
@@ -295,34 +425,34 @@ final class FileTreeModel {
         let root = rootPath
         let epoch = treeEpoch
         renamingPath = nil
-        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != item.name else { return nil }
-        guard !trimmed.contains("/"), trimmed != ".", trimmed != ".." else {
+        guard !newName.isEmpty, newName != item.name else { return nil }
+        guard !newName.contains("/"), !newName.contains("\0"),
+              newName != ".", newName != ".." else {
             presentError(
-                String(localized: "Couldn’t rename to “\(trimmed)”.", table: "Workspace"),
+                String(localized: "Couldn’t rename to “\(newName)”.", table: "Workspace"),
                 String(localized: "A name can’t contain “/” or be “.” or “..”.", table: "Workspace")
             )
             return nil
         }
         let dir = (item.path as NSString).deletingLastPathComponent
-        let dest = (dir as NSString).appendingPathComponent(trimmed)
+        let dest = (dir as NSString).appendingPathComponent(newName)
         // A case-only rename ("foo"→"Foo") maps to the same file on a
         // case-insensitive volume, so don't treat that as a collision.
-        let caseOnlyChange = trimmed.lowercased() == item.name.lowercased()
+        let caseOnlyChange = newName.lowercased() == item.name.lowercased()
         let exists: WorkspaceStat?
         do {
             exists = try await backend.stat(path: dest)
         } catch {
             if scope == workspaceScope, root == rootPath, epoch == treeEpoch {
-                presentError(String(localized: "Couldn’t rename to “\(trimmed)”.", table: "Workspace"), error.localizedDescription)
+                presentError(String(localized: "Couldn’t rename to “\(newName)”.", table: "Workspace"), error.localizedDescription)
             }
             return nil
         }
         guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return nil }
         guard caseOnlyChange || exists == nil else {
             presentError(
-                String(localized: "Couldn’t rename to “\(trimmed)”.", table: "Workspace"),
-                String(localized: "An item named “\(trimmed)” already exists here.", table: "Workspace")
+                String(localized: "Couldn’t rename to “\(newName)”.", table: "Workspace"),
+                String(localized: "An item named “\(newName)” already exists here.", table: "Workspace")
             )
             return nil
         }
@@ -330,11 +460,12 @@ final class FileTreeModel {
             try await backend.rename(from: item.path, to: dest)
         } catch {
             if scope == workspaceScope, root == rootPath, epoch == treeEpoch {
-                presentError(String(localized: "Couldn’t rename to “\(trimmed)”.", table: "Workspace"), error.localizedDescription)
+                presentError(String(localized: "Couldn’t rename to “\(newName)”.", table: "Workspace"), error.localizedDescription)
             }
             return nil
         }
-        guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return nil }
+        // The disk mutation succeeded; only the old tree's visual state is stale.
+        guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return dest }
         remapExpanded(from: item.path, to: dest)
         func moved(_ path: String) -> String {
             guard path == item.path || path.hasPrefix(item.path + "/") else { return path }
@@ -344,9 +475,8 @@ final class FileTreeModel {
         selectedPaths = Set(selectedPaths.map(moved))
         selectionAnchorPath = selectionAnchorPath.map(moved)
         invalidateDirectory(containing: item.path)
-        let currentEpoch = treeEpoch
         await rebuild()
-        return scope == workspaceScope && root == rootPath && currentEpoch == treeEpoch ? dest : nil
+        return dest
     }
 
     /// Keeps expansion state after a directory rename by rewriting the old
@@ -400,23 +530,23 @@ final class FileTreeModel {
         let root = rootPath
         let epoch = treeEpoch
         self.draft = nil
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { await rebuild(); return nil }
-        guard !trimmed.contains("/"), trimmed != ".", trimmed != ".." else {
+        guard !name.isEmpty else { await rebuild(); return nil }
+        guard !name.contains("/"), !name.contains("\0"),
+              name != ".", name != ".." else {
             presentError(
-                String(localized: "Couldn’t create “\(trimmed)”.", table: "Workspace"),
+                String(localized: "Couldn’t create “\(name)”.", table: "Workspace"),
                 String(localized: "A name can’t contain “/” or be “.” or “..”.", table: "Workspace")
             )
             await rebuild()
             return nil
         }
-        let dest = (draft.parentDir as NSString).appendingPathComponent(trimmed)
+        let dest = (draft.parentDir as NSString).appendingPathComponent(name)
         let exists: WorkspaceStat?
         do {
             exists = try await backend.stat(path: dest)
         } catch {
             guard isCurrentTarget(), scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return nil }
-            presentError(String(localized: "Couldn’t create “\(trimmed)”.", table: "Workspace"), error.localizedDescription)
+            presentError(String(localized: "Couldn’t create “\(name)”.", table: "Workspace"), error.localizedDescription)
             await rebuild()
             return nil
         }
@@ -424,8 +554,8 @@ final class FileTreeModel {
               epoch == treeEpoch else { return nil }
         guard exists == nil else {
             presentError(
-                String(localized: "Couldn’t create “\(trimmed)”.", table: "Workspace"),
-                String(localized: "An item named “\(trimmed)” already exists here.", table: "Workspace")
+                String(localized: "Couldn’t create “\(name)”.", table: "Workspace"),
+                String(localized: "An item named “\(name)” already exists here.", table: "Workspace")
             )
             await rebuild()
             return nil

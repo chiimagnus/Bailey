@@ -14,7 +14,8 @@ struct FileTreePanel: View {
     let openFile: (String, Bool) -> Void
     var isActive = true
     var canFocusKeyboard: () -> Bool = { true }
-    let onRename: (_ oldPath: String, _ newPath: String) -> Void
+    let renameFile: (FileTreeModel.Item, String) async -> String?
+    let deleteFile: (FileTreeModel.Item) async -> Bool
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
     let canImportFromFinder: Bool
@@ -60,8 +61,9 @@ struct FileTreePanel: View {
                 model: model, git: git, session: session,
                 sshHost: sshHost, currentFilePath: currentFilePath,
                 openFile: openFile, isActive: isActive,
-                canFocusKeyboard: canFocusKeyboard, onRename: onRename,
-                refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget,
+                canFocusKeyboard: canFocusKeyboard, renameFile: renameFile,
+                deleteFile: deleteFile, refreshGitStatus: refreshGitStatus,
+                isCurrentTarget: isCurrentTarget,
                 canImportFromFinder: canImportFromFinder,
                 importFromFinder: importFromFinder
             )
@@ -106,7 +108,8 @@ private struct FileTreeScrollView: View {
     let openFile: (String, Bool) -> Void
     let isActive: Bool
     let canFocusKeyboard: () -> Bool
-    let onRename: (String, String) -> Void
+    let renameFile: (FileTreeModel.Item, String) async -> String?
+    let deleteFile: (FileTreeModel.Item) async -> Bool
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
     let canImportFromFinder: Bool
@@ -131,8 +134,8 @@ private struct FileTreeScrollView: View {
                             focusKeyboard: {
                                 if canFocusKeyboard() { keyboardOwner.focus() }
                             },
-                            onRename: onRename, refreshGitStatus: refreshGitStatus,
-                            isCurrentTarget: isCurrentTarget
+                            renameFile: renameFile, deleteFile: deleteFile,
+                            refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget
                         )
                         .id(item.path)
                         .onDrop(of: [UTType.fileURL.identifier], delegate: FileTreeImportDrop(
@@ -258,7 +261,8 @@ private struct FileTreeRow: View {
     let openFile: (String, Bool) -> Void
     let listFocused: Bool
     let focusKeyboard: () -> Void
-    let onRename: (_ oldPath: String, _ newPath: String) -> Void
+    let renameFile: (FileTreeModel.Item, String) async -> String?
+    let deleteFile: (FileTreeModel.Item) async -> Bool
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
 
@@ -386,16 +390,14 @@ private struct FileTreeRow: View {
                 guard isCurrentTarget(), confirmRemoteDelete(), isCurrentTarget() else { return }
                 Task {
                     guard isCurrentTarget() else { return }
-                    await model.delete(item)
-                    refreshGitStatus()
+                    if await deleteFile(item) { refreshGitStatus() }
                 }
             }
         } else {
             Button(String(localized: "Move to Trash", table: "Sidebar"), role: .destructive) {
                 Task {
                     guard isCurrentTarget() else { return }
-                    await model.moveToTrash(item)
-                    refreshGitStatus()
+                    if await deleteFile(item) { refreshGitStatus() }
                 }
             }
         }
@@ -424,14 +426,10 @@ private struct FileTreeRow: View {
     private func commitRename() {
         guard isCurrentTarget() else { return }
         guard isRenaming else { return }
-        let oldPath = item.path
         let newName = editingName
         Task {
             guard isCurrentTarget() else { return }
-            if let newPath = await model.rename(item, to: newName) {
-                onRename(oldPath, newPath)
-                refreshGitStatus()
-            }
+            if await renameFile(item, newName) != nil { refreshGitStatus() }
         }
     }
 

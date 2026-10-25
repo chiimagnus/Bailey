@@ -142,6 +142,9 @@ final class DiffTab: nonisolated Identifiable {
     @ObservationIgnored private var editTask: Task<Void, Never>?
     @ObservationIgnored private var reloadGeneration: UInt = 0
     @ObservationIgnored private var lastSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var fileMutationHeld = false
+    @ObservationIgnored private var saveDeferredUntilMutation = false
+    @ObservationIgnored private var originalFileMovedOrDeleted = false
     var isSaving: Bool { lastSaveTask != nil }
     @ObservationIgnored private var saveRequestGeneration: UInt = 0
     @ObservationIgnored var autoSaveSuspendedForClose = false
@@ -190,7 +193,7 @@ final class DiffTab: nonisolated Identifiable {
     /// user who reconnects in another terminal of the same project is
     /// reconnecting to the same machine.
     func reevaluateWorkspace(in project: Project) {
-        guard let workspaceIdentity else { return }
+        guard !originalFileMovedOrDeleted, let workspaceIdentity else { return }
         guard let live = project.connectedWorkspace(for: workspaceIdentity) else {
             setReadOnly(true, destination: workspaceIdentity)
             return
@@ -629,8 +632,43 @@ final class DiffTab: nonisolated Identifiable {
         Task { await save() }
     }
 
+    func beginFileMutation() async -> Bool {
+        guard !fileMutationHeld, !autoSaveSuspendedForClose else { return false }
+        fileMutationHeld = true
+        await lastSaveTask?.value
+        if isDirty { await writeCurrentText() }
+        guard !isDirty else {
+            endFileMutation()
+            return false
+        }
+        return true
+    }
+
+    func endFileMutation() {
+        guard fileMutationHeld else { return }
+        fileMutationHeld = false
+        let shouldSave = saveDeferredUntilMutation
+        saveDeferredUntilMutation = false
+        if shouldSave { Task { await save() } }
+    }
+
+    /// Worktree changes are now bound to another name (or the file was removed).
+    func invalidateMovedFile() {
+        guard source == .worktree else { return }
+        originalFileMovedOrDeleted = true
+        targetGeneration &+= 1
+        invalidateReload()
+        readOnlyReason = String(
+            localized: "The file was moved or deleted. Reopen its new location to edit.", table: "Git"
+        )
+    }
+
     /// Keep worktree writes in edit order across manual and automatic saves.
     func save() async {
+        if fileMutationHeld {
+            saveDeferredUntilMutation = true
+            return
+        }
         saveRequestGeneration &+= 1
         let generation = saveRequestGeneration
         let preceding = lastSaveTask

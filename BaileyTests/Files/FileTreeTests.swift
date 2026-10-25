@@ -101,7 +101,12 @@ final class FileTreeTests: XCTestCase {
             model: tree, git: GitStatusModel(), session: nil, sshHost: nil,
             rootBadge: nil, currentFilePath: nil,
             openFile: { _, _ in opened += 1 },
-            onRename: { _, _ in }, refreshGitStatus: {}, isCurrentTarget: { true },
+            renameFile: { item, name in await tree.rename(item, to: name) },
+            deleteFile: { item in
+                let result = await tree.performFileOperation(.delete, paths: [item.path], into: nil)
+                return !result.succeeded.isEmpty
+            },
+            refreshGitStatus: {}, isCurrentTarget: { true },
             canImportFromFinder: false, importFromFinder: { _, _ in false }
         ))
         window.contentView = host
@@ -142,8 +147,12 @@ final class FileTreeTests: XCTestCase {
             model: tree, git: GitStatusModel(), session: nil, sshHost: nil,
             rootBadge: nil, currentFilePath: second.path,
             openFile: { _, _ in opened += 1 },
-            onRename: { _, _ in }, refreshGitStatus: {},
-            isCurrentTarget: { gate.ready },
+            renameFile: { item, name in await tree.rename(item, to: name) },
+            deleteFile: { item in
+                let result = await tree.performFileOperation(.delete, paths: [item.path], into: nil)
+                return !result.succeeded.isEmpty
+            },
+            refreshGitStatus: {}, isCurrentTarget: { gate.ready },
             canImportFromFinder: false, importFromFinder: { _, _ in false }
         ))
         window.contentView = host
@@ -406,6 +415,108 @@ final class FileTreeTests: XCTestCase {
         }
         XCTAssertEqual(won.filter { $0 }.count, 1)
         XCTAssertTrue([bytes, Data("other".utf8)].contains(try Data(contentsOf: racing)))
+    }
+
+    func testFileTreeBatchCopyMoveAndDeleteReportRealPartialResults() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let target = root.appendingPathComponent("target")
+        let folder = root.appendingPathComponent("folder")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let a = root.appendingPathComponent("a.txt")
+        let b = root.appendingPathComponent("b.txt")
+        try Data("a".utf8).write(to: a)
+        try Data("b".utf8).write(to: b)
+        try Data("occupied".utf8).write(to: target.appendingPathComponent("b.txt"))
+        try Data("nested".utf8).write(to: folder.appendingPathComponent("child.txt"))
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+
+        let copy = await tree.performFileOperation(.copy, paths: [a.path, b.path], into: target.path)
+        XCTAssertEqual(copy.succeeded.map(\.source), [a.path])
+        XCTAssertEqual(copy.failures.count, 1)
+        XCTAssertEqual(try String(contentsOf: target.appendingPathComponent("a.txt"), encoding: .utf8), "a")
+        XCTAssertEqual(try String(contentsOf: target.appendingPathComponent("b.txt"), encoding: .utf8), "occupied")
+        XCTAssertEqual(try String(contentsOf: a, encoding: .utf8), "a")
+        XCTAssertEqual(try String(contentsOf: b, encoding: .utf8), "b")
+
+        let move = await tree.performFileOperation(
+            .move, paths: [folder.appendingPathComponent("child.txt").path, folder.path],
+            into: target.path
+        )
+        XCTAssertEqual(move.succeeded.count, 1, "Parent/child selection must move once")
+        XCTAssertEqual(move.succeeded.first?.source, folder.path)
+        XCTAssertEqual(try String(contentsOf: target.appendingPathComponent("folder/child.txt"),
+                                  encoding: .utf8), "nested")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
+
+        let deleted = await tree.performFileOperation(.delete, paths: [a.path], into: nil)
+        XCTAssertEqual(deleted.succeeded.map(\.source), [a.path])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: a.path))
+        XCTAssertEqual(try String(contentsOf: target.appendingPathComponent("a.txt"), encoding: .utf8), "a")
+    }
+
+    func testFileTreeBatchCannotWriteThroughOutsideRootSymlinkOrDeleteRoot() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("root")
+        let outside = base.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let source = root.appendingPathComponent("source.txt")
+        try Data("safe".utf8).write(to: source)
+        let symlink = root.appendingPathComponent("escape")
+        try FileManager.default.createSymbolicLink(atPath: symlink.path, withDestinationPath: outside.path)
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+
+        let blocked = await tree.performFileOperation(.copy, paths: [source.path], into: symlink.path)
+        XCTAssertTrue(blocked.succeeded.isEmpty)
+        XCTAssertEqual(blocked.failures.count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("source.txt").path))
+
+        let outsideFile = outside.appendingPathComponent("untouched.txt")
+        try Data("outside content".utf8).write(to: outsideFile)
+        let deleteOutside = await tree.performFileOperation(
+            .delete, paths: [symlink.appendingPathComponent("untouched.txt").path], into: nil
+        )
+        XCTAssertTrue(deleteOutside.succeeded.isEmpty)
+        XCTAssertEqual(deleteOutside.failures.count, 1)
+        XCTAssertEqual(try String(contentsOf: outsideFile, encoding: .utf8), "outside content")
+        let moveOutside = await tree.performFileOperation(
+            .move, paths: [symlink.appendingPathComponent("untouched.txt").path], into: root.path
+        )
+        XCTAssertTrue(moveOutside.succeeded.isEmpty)
+        XCTAssertEqual(try String(contentsOf: outsideFile, encoding: .utf8), "outside content")
+
+        let rootDelete = await tree.performFileOperation(.delete, paths: [root.path], into: nil)
+        XCTAssertTrue(rootDelete.succeeded.isEmpty)
+        XCTAssertEqual(rootDelete.failures.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+    }
+
+    func testFilenameWhitespaceIsPreservedForRenameAndDraftCreation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent(" original ")
+        try Data("kept".utf8).write(to: source)
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let item = try XCTUnwrap(tree.items.first { $0.path == source.path })
+        let renamed = await tree.rename(item, to: " renamed ")
+        XCTAssertEqual(renamed, root.appendingPathComponent(" renamed ").path)
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent(" renamed "), encoding: .utf8), "kept")
+        await tree.beginNewFile(in: root.path)
+        _ = await tree.commitDraft(name: " new file ")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(" new file ").path))
+        await tree.beginNewFolder(in: root.path)
+        _ = await tree.commitDraft(name: " dir ")
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent(" dir ").path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
     }
 
     func testFinderImportDirectoryBoundaryIncludesRootButNotSiblingNames() {

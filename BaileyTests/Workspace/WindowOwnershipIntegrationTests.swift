@@ -9,6 +9,154 @@ import XCTest
 final class WindowOwnershipIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
+    func testMovingFolderThroughManagerKeepsDirtyTabsAndSiblingWindowPaths() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("project")
+        let folder = root.appendingPathComponent("source")
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let oldPath = folder.appendingPathComponent("a.swift")
+        let newPath = destination.appendingPathComponent("source/a.swift")
+        try "before".write(to: oldPath, atomically: true, encoding: .utf8)
+        let first = workspaceApplication.makeWindow()
+        let second = workspaceApplication.makeWindow()
+        defer { first.windowClosed(); second.windowClosed() }
+        first.addLocalFolders([root])
+        second.addLocalFolders([root])
+        first.openFile(oldPath.path)
+        second.openFile(oldPath.path)
+        guard let project = first.selectedProject,
+              case .file(let file)? = first.selectedProject?.selectedTab?.content,
+              case .file(let other)? = second.selectedProject?.selectedTab?.content,
+              let identity = project.panelContext?.identity else {
+            return XCTFail("The two projects and their file targets must exist")
+        }
+        try await file.waitForText()
+        try await other.waitForText()
+        file.text = "after"; file.refreshDirtyState()
+        await project.fileTree.sync(
+            root: root.path, backend: LocalWorkspaceBackend.shared
+        )
+        let result = await first.performFileOperation(
+            .move, paths: [folder.path], into: destination.path,
+            in: project, target: identity
+        )
+        XCTAssertEqual(result.failures, [])
+        XCTAssertEqual(result.succeeded.count, 1)
+        XCTAssertEqual(file.path, newPath.path)
+        XCTAssertEqual(other.path, newPath.path)
+        XCTAssertEqual(try String(contentsOf: newPath, encoding: .utf8), "after")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldPath.path))
+        XCTAssertFalse(file.isDirty)
+    }
+
+    func testFileRenameAcrossTwoWindowsSavesFirstAndUpdatesOnlyMatchingMachine() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source.txt")
+        let target = root.appendingPathComponent("moved.txt")
+        try "old".write(to: source, atomically: true, encoding: .utf8)
+        let first = workspaceApplication.makeWindow()
+        let second = workspaceApplication.makeWindow()
+        defer { first.windowClosed(); second.windowClosed() }
+        first.addLocalFolders([root])
+        second.addLocalFolders([root])
+        first.openFile(source.path)
+        second.openFile(source.path)
+        guard case .file(let a)? = first.selectedProject?.selectedTab?.content,
+              case .file(let b)? = second.selectedProject?.selectedTab?.content,
+              let project = second.selectedProject else {
+            return XCTFail("Both windows must own the file")
+        }
+        try await a.waitForText()
+        try await b.waitForText()
+        let remote = FileTab(
+            path: source.path,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: "ssh:other"
+        )
+        project.append(PaneTab(content: .file(remote)))
+        a.text = "new content"; a.refreshDirtyState()
+        try await workspaceApplication.withProtectedFiles(paths: [source.path], workspace: nil) {
+            try await LocalWorkspaceBackend.shared.rename(from: source.path, to: target.path)
+            workspaceApplication.fileRenamed(from: source.path, to: target.path, workspace: nil)
+        }
+        XCTAssertEqual(a.path, target.path)
+        XCTAssertEqual(b.path, target.path)
+        XCTAssertEqual(remote.path, source.path, "A tab on another machine cannot follow a Mac rename")
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "new content")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertFalse(a.isDirty)
+        XCTAssertTrue(first.selectedProject?.tabs.contains { $0.content.id == a.id } == true)
+        XCTAssertTrue(second.selectedProject?.tabs.contains { $0.content.id == b.id } == true)
+    }
+
+    func testDeletionAfterFlushingClosesOnlyAffectedOpenTabs() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("delete.txt")
+        try "old".write(to: source, atomically: true, encoding: .utf8)
+        let first = workspaceApplication.makeWindow()
+        let second = workspaceApplication.makeWindow()
+        defer { first.windowClosed(); second.windowClosed() }
+        first.addLocalFolders([root])
+        second.addLocalFolders([root])
+        first.openFile(source.path)
+        second.openFile(source.path)
+        guard case .file(let a)? = first.selectedProject?.selectedTab?.content,
+              case .file(let b)? = second.selectedProject?.selectedTab?.content else {
+            return XCTFail("Both windows must own the original path")
+        }
+        try await a.waitForText()
+        try await b.waitForText()
+        a.text = "saved before delete"; a.refreshDirtyState()
+        try await workspaceApplication.withProtectedFiles(paths: [source.path], workspace: nil) {
+            XCTAssertFalse(a.isDirty)
+            XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "saved before delete")
+            try FileManager.default.removeItem(at: source)
+            workspaceApplication.filesDeleted(paths: [source.path], workspace: nil)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertFalse(first.projects.flatMap(\.tabs).contains { $0.content.id == a.id })
+        XCTAssertFalse(second.projects.flatMap(\.tabs).contains { $0.content.id == b.id })
+    }
+
+    func testTwoDirtyWindowsCannotOverwriteEachOtherDuringRename() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("conflict.txt")
+        try "original".write(to: source, atomically: true, encoding: .utf8)
+        let first = workspaceApplication.makeWindow()
+        let second = workspaceApplication.makeWindow()
+        defer { first.windowClosed(); second.windowClosed() }
+        first.addLocalFolders([root])
+        second.addLocalFolders([root])
+        first.openFile(source.path)
+        second.openFile(source.path)
+        guard case .file(let a)? = first.selectedProject?.selectedTab?.content,
+              case .file(let b)? = second.selectedProject?.selectedTab?.content else {
+            return XCTFail("Both editors must exist")
+        }
+        try await a.waitForText()
+        try await b.waitForText()
+        a.text = "draft A"; a.refreshDirtyState()
+        b.text = "draft B"; b.refreshDirtyState()
+        do {
+            try await workspaceApplication.withProtectedFiles(paths: [source.path], workspace: nil) {
+                XCTFail("Concurrent unsaved buffers for the same physical file must block mutation")
+            }
+            XCTFail("Mutation should be refused when both buffers would be overwritten")
+        } catch {}
+        XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "original")
+        XCTAssertEqual(a.text, "draft A")
+        XCTAssertEqual(b.text, "draft B")
+        XCTAssertTrue(a.isDirty && b.isDirty)
+    }
+
     func testWindowFocusLossSavesAllDirtyBuffersNotOnlyTheMostRecentTab() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

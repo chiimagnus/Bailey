@@ -161,10 +161,15 @@ struct ToolPanelView: View {
                                   let files = project.dock.group(containing: .files) else { return false }
                             return project.dock.activeGroupID == files.id && files.selected == .files
                         },
-                        onRename: { [workspace = project.workspaceIdentity] oldPath, newPath in
-                            manager.fileRenamed(
-                                from: oldPath, to: newPath, workspace: workspace
+                        renameFile: { [target = filesTarget] item, newName in
+                            guard let target else { return nil }
+                            return await manager.renameFile(
+                                item, to: newName, in: project, target: target
                             )
+                        },
+                        deleteFile: { [target = filesTarget] item in
+                            guard let target else { return false }
+                            return await manager.deleteFile(item, in: project, target: target)
                         },
                         refreshGitStatus: { git.refresh() },
                         isCurrentTarget: { [target = filesTarget] in

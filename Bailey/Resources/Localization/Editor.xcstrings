@@ -40,6 +40,16 @@
           }
         }
       }
+    },
+    "This file was deleted. Copy your edits before closing." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此文件已删除。请在关闭前复制未保存的内容。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

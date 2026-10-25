@@ -3056,6 +3056,16 @@
           }
         }
       }
+    },
+    "The file was moved or deleted. Reopen its new location to edit." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件已移动或删除。请重新打开新位置后再编辑。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

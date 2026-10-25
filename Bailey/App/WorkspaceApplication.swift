@@ -146,6 +146,124 @@ final class WorkspaceApplication {
         TerminalHistoryStore.save(histories)
     }
 
+    private func fileLocation(_ content: PaneContent) -> (path: String, workspace: String?)? {
+        switch content {
+        case .file(let file): return (file.path, file.workspaceIdentity)
+        case .diff(let diff) where diff.source == .worktree:
+            return ((diff.repoRoot as NSString).appendingPathComponent(diff.path), diff.workspaceIdentity)
+        case .session, .browser, .diff: return nil
+        }
+    }
+
+    private func matchesFile(_ candidate: String, inside source: String, workspace: String?) -> Bool {
+        if workspace == nil {
+            let resolvedSource = URL(fileURLWithPath: source).resolvingSymlinksInPath().path
+            let resolvedCandidate = URL(fileURLWithPath: candidate).resolvingSymlinksInPath().path
+            return LocalPathScope.contains(candidate, in: source)
+                || LocalPathScope.contains(resolvedCandidate, in: resolvedSource)
+        }
+        return LocalPathScope.contains(candidate, in: source)
+    }
+
+    /// Coordinate file and editable worktree diff tabs across registered windows.
+    func withProtectedFiles<Result>(
+        paths: [String], workspace: String?,
+        operation: @MainActor () async throws -> Result
+    ) async throws -> Result {
+        var seen: Set<UUID> = []
+        let affected = windows.flatMap(\.projects).flatMap(\.tabs).compactMap { tab -> PaneContent? in
+            let content = tab.content
+            guard let location = fileLocation(content), location.workspace == workspace,
+                  paths.contains(where: { matchesFile(location.path, inside: $0, workspace: workspace) }),
+                  seen.insert(content.id).inserted else { return nil }
+            return content
+        }.sorted { $0.id.uuidString < $1.id.uuidString }
+
+        // Two independent dirty editors for the same file cannot both be flushed
+        // without silently replacing one draft with another.
+        var dirtyPaths = Set<String>()
+        for content in affected where content.isDirty {
+            guard let location = fileLocation(content) else { continue }
+            let path = workspace == nil
+                ? URL(fileURLWithPath: location.path).resolvingSymlinksInPath().path
+                : location.path
+            guard dirtyPaths.insert(path).inserted else {
+                throw NSError(
+                    domain: "Bailey.Files", code: 2,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        String(localized: "Two open editors have unsaved changes to the same file.", table: "Workspace")]
+                )
+            }
+        }
+
+        var held: [PaneContent] = []
+        for content in affected {
+            let ready: Bool
+            switch content {
+            case .file(let file): ready = await file.beginFileMutation()
+            case .diff(let diff): ready = await diff.beginFileMutation()
+            case .session, .browser: continue
+            }
+            guard ready else {
+                held.forEach { releaseFileMutation($0) }
+                throw NSError(
+                    domain: "Bailey.Files", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        String(localized: "Could not save the open file before changing it.", table: "Workspace")]
+                )
+            }
+            held.append(content)
+        }
+        defer { held.forEach { releaseFileMutation($0) } }
+        return try await operation()
+    }
+
+    private func releaseFileMutation(_ content: PaneContent) {
+        switch content {
+        case .file(let file): file.endFileMutation()
+        case .diff(let diff): diff.endFileMutation()
+        case .session, .browser: break
+        }
+    }
+
+    /// Use the existing registered window owners, not a second path registry.
+    func fileRenamed(from oldPath: String, to newPath: String, workspace: String?) {
+        for window in windows {
+            for project in window.projects {
+                for tab in project.tabs {
+                    guard case .diff(let diff) = tab.content,
+                          diff.workspaceIdentity == workspace,
+                          let location = fileLocation(tab.content),
+                          matchesFile(location.path, inside: oldPath, workspace: workspace)
+                    else { continue }
+                    diff.invalidateMovedFile()
+                }
+                project.updateFilePaths(from: oldPath, to: newPath, workspace: workspace)
+            }
+        }
+    }
+
+    /// Clean tabs close; an edit made during deletion remains visible but read-only.
+    func filesDeleted(paths: [String], workspace: String?) {
+        for window in windows {
+            for project in window.projects {
+                let targets = project.tabs.filter { tab in
+                    guard let location = fileLocation(tab.content), location.workspace == workspace
+                    else { return false }
+                    return paths.contains { matchesFile(location.path, inside: $0, workspace: workspace) }
+                }
+                for tab in targets {
+                    switch tab.content {
+                    case .file(let file): file.invalidateDeletedFile()
+                    case .diff(let diff): diff.invalidateMovedFile()
+                    case .session, .browser: continue
+                    }
+                    if !tab.content.isDirty { project.close(tab) }
+                }
+            }
+        }
+    }
+
     /// A worktree is protected by any live project or content on its machine.
     func isWorktreeInUse(path: String, scope: String) -> Bool {
         func contains(_ candidate: String) -> Bool {

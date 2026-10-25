@@ -10,6 +10,9 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
     private var pauseNextList = false
     private var pausedList: CheckedContinuation<Void, Never>?
     private(set) var awaitingList = false
+    private var pauseNextRename = false
+    private var pausedRename: CheckedContinuation<Void, Never>?
+    private(set) var awaitingRename = false
     private var gitProbeUnavailable = false
     func setGitProbeUnavailable(_ value: Bool) { gitProbeUnavailable = value }
     init(_ name: String) { self.name = name }
@@ -19,6 +22,12 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
         pausedList?.resume()
         pausedList = nil
         awaitingList = false
+    }
+    func suspendNextRename() { pauseNextRename = true }
+    func releaseRename() {
+        pausedRename?.resume()
+        pausedRename = nil
+        awaitingRename = false
     }
     func list(directory: String) async throws -> [WorkspaceEntry] {
         if pauseNextList {
@@ -35,7 +44,7 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
             try await Task.sleep(for: .milliseconds(100))
             return nil
         }
-        if path.hasSuffix("created.txt") { return nil }
+        if path.hasSuffix("created.txt") || path.hasSuffix("moved.txt") { return nil }
         return WorkspaceStat(isRegular: !path.hasSuffix("/root"), isDirectory: path.hasSuffix("/root"), isSymlink: false, size: 0, mtime: .distantPast)
     }
     func readSymlinkDestination(path: String) async throws -> String? { nil }
@@ -44,7 +53,14 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
     func createFile(path: String) async throws { created.append(path); try await Task.sleep(for: .milliseconds(100)) }
     func createDirectory(path: String) async throws {}
     func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
-    func rename(from: String, to: String) async throws { renamed.append((from, to)) }
+    func rename(from: String, to: String) async throws {
+        renamed.append((from, to))
+        if pauseNextRename {
+            pauseNextRename = false
+            awaitingRename = true
+            await withCheckedContinuation { pausedRename = $0 }
+        }
+    }
     func delete(paths: [String]) async throws {}
     func gitRoot(containing path: String) async throws -> String? {
         if gitProbeUnavailable { throw WorkspaceError.timedOut }
@@ -68,6 +84,24 @@ final class PanelContextTests: XCTestCase {
             guard Date() < deadline else { return XCTFail("Fixture did not settle") }
             try await Task.sleep(for: .milliseconds(5))
         }
+    }
+
+    func testCompletedRenameReportsTrueDiskResultAfterFileTreeTargetSwitch() async throws {
+        let backend = DelayedWorkspaceFixture("old")
+        let tree = FileTreeModel()
+        await tree.sync(root: "/project/root", backend: backend, scope: "ssh:old")
+        let item = try XCTUnwrap(tree.items.first { !$0.isDirectory && !$0.isDraft })
+        await backend.suspendNextRename()
+        let operation = Task { await tree.rename(item, to: "moved.txt") }
+        try await wait { await backend.awaitingRename }
+        await tree.sync(root: "/different/root", backend: backend, scope: "ssh:new")
+        await backend.releaseRename()
+        let result = await operation.value
+        XCTAssertEqual(result, "/project/root/moved.txt",
+                       "A completed backend mutation must be reported even if the old tree was replaced")
+        XCTAssertEqual(tree.rootPath, "/different/root")
+        XCTAssertFalse(tree.items.contains { $0.path == result },
+                       "A late success must not publish into the new tree")
     }
 
     func testIdentityIncludesDirectoryForegroundWorkspaceConnectionAndState() async {

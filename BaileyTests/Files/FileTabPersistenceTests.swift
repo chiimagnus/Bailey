@@ -993,6 +993,80 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: path), Data("local sentinel".utf8))
     }
 
+    func testFileMutationWaitsForInFlightSaveAndDefersNewWritesUntilMoved() async throws {
+        let oldPath = "/fixture/\(UUID().uuidString)-source.txt"
+        let newPath = oldPath.replacingOccurrences(of: "-source", with: "-moved")
+        let backend = EditorWorkspaceFixture(path: oldPath, contents: Data("original".utf8))
+        let file = FileTab(path: oldPath, backend: backend, workspaceIdentity: "ssh:test")
+        try await file.waitForText()
+        file.text = "before move"; file.refreshDirtyState()
+        let prior = Task { await file.save() }
+        try await waitForFileTabState { await backend.writingPath == oldPath }
+
+        let lock = Task { await file.beginFileMutation() }
+        // The mutation must not claim the old write completed before the backend does.
+        await backend.finishWrite()
+        await prior.value
+        let accepted = await lock.value
+        XCTAssertTrue(accepted)
+        file.text = "editing during move"; file.refreshDirtyState()
+        file.autoSaveOnFocusLoss()
+        await Task.yield()
+        let writingDuringMove = await backend.writingPath
+        XCTAssertNil(writingDuringMove, "A save triggered during a move cannot write the old path")
+        try await backend.rename(from: oldPath, to: newPath)
+        file.updatePath(newPath)
+        file.endFileMutation()
+        try await waitForFileTabState { await backend.writingPath == newPath }
+        await backend.finishWrite()
+        try await waitForFileTabState { !file.isDirty }
+        let oldStored = await backend.data(at: oldPath)
+        XCTAssertNil(oldStored, "Pending saves must not recreate the original path")
+        let newStored = await backend.data(at: newPath)
+        XCTAssertEqual(newStored, Data("editing during move".utf8))
+        XCTAssertEqual(file.path, newPath)
+    }
+
+    func testDeletedFileKeepsNewDraftWithoutResurrectingRemovedTarget() async throws {
+        let path = "/fixture/\(UUID().uuidString)-removed.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:test")
+        try await file.waitForText()
+        let protected = await file.beginFileMutation()
+        XCTAssertTrue(protected)
+        file.text = "edit during deletion"; file.refreshDirtyState()
+        file.autoSaveOnFocusLoss()
+        await Task.yield()
+        file.invalidateDeletedFile()
+        file.endFileMutation()
+        try await Task.sleep(for: .milliseconds(70))
+        let pending = await backend.writingPath
+        XCTAssertNil(pending, "Delayed auto save must not start an IO write on a deleted path")
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(file.text, "edit during deletion")
+        XCTAssertNotNil(file.readOnlyReason)
+        file.rebindWorkspace(to: backend)
+        XCTAssertNotNil(file.readOnlyReason, "Reconnect must not make a deleted file writable")
+    }
+
+    func testFailedFileSaveRefusesMutationWithoutLosingDirtyText() async throws {
+        let path = "/fixture/\(UUID().uuidString)-unsaved.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("baseline".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:test")
+        try await file.waitForText()
+        file.text = "unsaved buffer"; file.refreshDirtyState()
+        let mutation = Task { await file.beginFileMutation() }
+        try await waitForFileTabState { await backend.writingPath == path }
+        await backend.finishWrite(failing: true)
+        let accepted = await mutation.value
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(file.text, "unsaved buffer")
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        let stored = await backend.data(at: path)
+        XCTAssertEqual(stored, Data("baseline".utf8))
+    }
+
     func testDirtyUndoSaveDuringEditRenameFailureAndStaleReload() async throws {
         let first = "/fixture/\(UUID().uuidString)-original.txt"
         let renamed = first.replacingOccurrences(of: "-original", with: "-renamed")

@@ -659,12 +659,86 @@ final class WorkspaceWindowModel {
         Task { await content.save() }
     }
 
+    /// Protect every open editor on this machine before mutating a directory entry.
+    func renameFile(
+        _ item: FileTreeModel.Item, to newName: String,
+        in project: Project, target: PanelContext.Identity
+    ) async -> String? {
+        guard selectedProjectID == project.id, project.matchesPanelTarget(target) else { return nil }
+        do {
+            return try await application.withProtectedFiles(
+                paths: [item.path], workspace: target.workspace
+            ) {
+                guard self.selectedProjectID == project.id, project.matchesPanelTarget(target) else {
+                    throw CancellationError()
+                }
+                let newPath = await project.fileTree.rename(item, to: newName)
+                if let newPath {
+                    self.application.fileRenamed(
+                        from: item.path, to: newPath, workspace: target.workspace
+                    )
+                }
+                return newPath
+            }
+        } catch {
+            if !(error is CancellationError) { WorkspaceNativeDialogs.showError(error, in: window) }
+            return nil
+        }
+    }
+
+    func performFileOperation(
+        _ operation: FileTreeModel.FileOperation, paths: [String], into directory: String?,
+        in project: Project, target: PanelContext.Identity
+    ) async -> FileTreeModel.FileBatchResult {
+        guard selectedProjectID == project.id, project.matchesPanelTarget(target) else {
+            return FileTreeModel.FileBatchResult()
+        }
+        do {
+            return try await application.withProtectedFiles(paths: paths, workspace: target.workspace) {
+                guard self.selectedProjectID == project.id,
+                      project.matchesPanelTarget(target) else { throw CancellationError() }
+                let outcome = await project.fileTree.performFileOperation(
+                    operation, paths: paths, into: directory,
+                    isCurrentTarget: {
+                        self.selectedProjectID == project.id && project.matchesPanelTarget(target)
+                    }
+                )
+                for entry in outcome.succeeded {
+                    switch operation {
+                    case .move:
+                        if let destination = entry.destination {
+                            self.application.fileRenamed(
+                                from: entry.source, to: destination, workspace: target.workspace
+                            )
+                        }
+                    case .delete:
+                        self.application.filesDeleted(
+                            paths: [entry.source], workspace: target.workspace
+                        )
+                    case .copy: break
+                    }
+                }
+                return outcome
+            }
+        } catch {
+            if !(error is CancellationError) { WorkspaceNativeDialogs.showError(error, in: window) }
+            return FileTreeModel.FileBatchResult()
+        }
+    }
+
+    func deleteFile(
+        _ item: FileTreeModel.Item, in project: Project, target: PanelContext.Identity
+    ) async -> Bool {
+        let outcome = await performFileOperation(
+            .delete, paths: [item.path], into: nil, in: project, target: target
+        )
+        return outcome.succeeded.contains { $0.source == item.path }
+    }
+
     /// Keep tabs and pinned sidebar entries in sync on the affected machine,
     /// not in unrelated Mac/SSH projects with the same path.
     func fileRenamed(from oldPath: String, to newPath: String, workspace: String?) {
-        for project in projects {
-            project.updateFilePaths(from: oldPath, to: newPath, workspace: workspace)
-        }
+        application.fileRenamed(from: oldPath, to: newPath, workspace: workspace)
     }
 
     // MARK: - Panels & appearance
