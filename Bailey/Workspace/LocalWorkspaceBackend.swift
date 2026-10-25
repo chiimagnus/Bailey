@@ -324,8 +324,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         Self.isLinkedWorktreeSync(root)
     }
 
-    /// Shared with `Project.panelRoot`, which still has a synchronous form for
-    /// callers that cannot await (the command palette and the Git panel).
+    /// The synchronous file metadata path used by local workspace operations.
     static func statSync(_ path: String) -> WorkspaceStat? {
         let fm = FileManager.default
         var isDirectory: ObjCBool = false

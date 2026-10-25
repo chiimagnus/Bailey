@@ -22,7 +22,7 @@ final class Project: nonisolated Identifiable {
     /// project row). When set, the file tree and git panels always anchor
     /// here. Nil means automatic: the closest git repository containing the
     /// selected session's working directory, re-derived as the session
-    /// moves (see `panelRoot(followingSessionAt:)`).
+    /// moves (resolved by `PanelContext.resolvedRoot()`).
     var customDirectory: String? {
         didSet { if customDirectory != oldValue { onSnapshotChange?() } }
     }
@@ -267,35 +267,6 @@ final class Project: nonisolated Identifiable {
         await fileTree.sync(root: root, backend: context.backend, scope: context.scope)
         guard isCurrent(), matchesPanelTarget(context.identity) else { return nil }
         return (source, context.identity)
-    }
-
-    /// Root for the file tree and git panels: the pinned directory when the
-    /// user set one (and it still exists on disk), else the repository the
-    /// terminal's foreground job moved to (an agent's worktree), else the
-    /// closest git repository containing `cwd`, else `cwd` itself — the
-    /// follow-the-terminal behavior used before projects had a directory.
-    /// Everything but the pin is re-derived on every call, so the panels
-    /// track the session in and out of repositories without sticking.
-    func panelRoot(
-        followingSessionAt cwd: String, foregroundAt foregroundCwd: String? = nil
-    ) -> (root: String, source: PanelContext.RootSource) {
-        if let pinned = customDirectory {
-            return (pinned, .pinned)
-        }
-        let shellRoot = LocalWorkspaceBackend.gitRootSync(containing: cwd) ?? cwd
-        // Only a *different repository* re-roots the panels. A foreground job
-        // running in a subdirectory of the shell's own checkout resolves to
-        // the same root and is ignored, which keeps the file tree from
-        // collapsing its expanded rows every time a command runs.
-        if let foregroundCwd,
-           let foregroundRoot = LocalWorkspaceBackend.gitRootSync(containing: foregroundCwd),
-           foregroundRoot != shellRoot {
-            return (
-                foregroundRoot,
-                .foreground(isWorktree: LocalWorkspaceBackend.isLinkedWorktreeSync(foregroundRoot))
-            )
-        }
-        return (shellRoot, .shell)
     }
 
 

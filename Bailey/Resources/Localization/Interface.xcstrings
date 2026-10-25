@@ -701,6 +701,76 @@
           }
         }
       }
+    },
+    "Cannot determine the remote home directory." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取远端用户主目录。"
+          }
+        }
+      }
+    },
+    "Could not list remote directory: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法列出远端目录：%@"
+          }
+        }
+      }
+    },
+    "File index is incomplete; narrow the project to see more results." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件索引不完整，请缩小项目范围查看更多结果。"
+          }
+        }
+      }
+    },
+    "Remote host is disconnected." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端主机连接已断开。"
+          }
+        }
+      }
+    },
+    "The remote Git command returned an incomplete file listing." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端 Git 返回了不完整的文件列表。"
+          }
+        }
+      }
+    },
+    "The remote file index exceeds its size limit." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端文件索引超过大小限制。"
+          }
+        }
+      }
+    },
+    "The remote home directory or filesystem root cannot be indexed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不允许对远端主目录或整个文件系统建立文件索引。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

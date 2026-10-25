@@ -98,6 +98,12 @@ private final class PalettePointerSelectionController {
 /// move the selection, Return runs it, and Escape clears a query before
 /// dismissing an already-empty palette.
 struct CommandPaletteView: View {
+    private struct FileIndexKey: Hashable {
+        let identity: PanelContext.Identity
+        let revision: UInt64
+        let changeEvent: Int
+    }
+
     private struct ScoredProjectFile {
         let file: ProjectFile
         let score: Double
@@ -112,7 +118,11 @@ struct CommandPaletteView: View {
     @State private var query = ""
     @State private var selection = 0
     @State private var projectFiles: [ProjectFile] = []
-    @State private var indexedTarget: PanelContext.Identity?
+    @State private var indexedTarget: FileIndexKey?
+    @State private var indexedRoot: String?
+    @State private var indexIssue: String?
+    @State private var indexLimited = false
+    @State private var connectionChangeEvent = 0
     @State private var pointerSelectionController = PalettePointerSelectionController()
     @FocusState private var searchFocused: Bool
 
@@ -140,28 +150,60 @@ struct CommandPaletteView: View {
         )
         .onExitCommand { handleEscapeFromKeyboard() }
         .onDisappear { manager.restoreFocusAfterCommandPalette() }
-        .task(id: fileIndexContext?.identity) {
+        .onReceive(NotificationCenter.default.publisher(for: SSHHostWorkspaces.connectionChanged)) { note in
+            guard let host = note.object as? String,
+                  fileIndexContext?.identity.workspace == "ssh:" + host else { return }
+            connectionChangeEvent &+= 1
+        }
+        .task(id: fileIndexKey) {
             projectFiles = []
             indexedTarget = nil
+            indexedRoot = nil
+            indexIssue = nil
+            indexLimited = false
             guard let context = fileIndexContext,
+                  let key = fileIndexKey,
                   let project = manager.selectedProject else { return }
-            let root = project.panelRoot(
-                followingSessionAt: context.cwd, foregroundAt: context.foreground
-            ).root
-            let standardizedRoot = URL(fileURLWithPath: root).standardizedFileURL
-            guard standardizedRoot != FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL else { return }
-            let indexingTask = Task.detached(priority: .userInitiated) {
-                ProjectFileIndex.load(in: root)
+            do {
+                let (root, _) = try await context.resolvedRoot()
+                let files: [ProjectFile]
+                let limited: Bool
+                if context.isRemote {
+                    if let scope = context.identity.workspace, scope.hasPrefix("ssh:"),
+                       SSHHostWorkspaces.connectionState(for: String(scope.dropFirst(4))) == false {
+                        throw ProjectFileIndex.RemoteIndexError.unavailable(String(localized: "Remote host is disconnected.", table: "Interface"))
+                    }
+                    let remote = try await ProjectFileIndex.loadRemote(
+                        in: root, backend: context.backend
+                    )
+                    files = remote.files
+                    limited = remote.limited
+                } else {
+                    let standardizedRoot = URL(fileURLWithPath: root).standardizedFileURL
+                    guard standardizedRoot != FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+                    else { return }
+                    let indexingTask = Task.detached(priority: .userInitiated) {
+                        ProjectFileIndex.load(in: root)
+                    }
+                    files = await withTaskCancellationHandler {
+                        await indexingTask.value
+                    } onCancel: {
+                        indexingTask.cancel()
+                    }
+                    limited = false
+                }
+                guard !Task.isCancelled, fileIndexKey == key,
+                      manager.selectedProjectID == project.id,
+                      project.matchesPanelTarget(context.identity) else { return }
+                indexedTarget = key
+                indexedRoot = root
+                projectFiles = files
+                indexLimited = limited
+            } catch {
+                guard !(error is CancellationError), !Task.isCancelled,
+                      fileIndexKey == key else { return }
+                indexIssue = error.localizedDescription
             }
-            let files = await withTaskCancellationHandler {
-                await indexingTask.value
-            } onCancel: {
-                indexingTask.cancel()
-            }
-            guard !Task.isCancelled, manager.selectedProjectID == project.id,
-                  project.matchesPanelTarget(context.identity) else { return }
-            indexedTarget = context.identity
-            projectFiles = files
         }
     }
 
@@ -293,9 +335,21 @@ struct CommandPaletteView: View {
     /// Home is excluded because it is an account boundary, not a project root.
     private var fileIndexContext: PanelContext? {
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty,
-              let context = manager.selectedProject?.panelContext, !context.isRemote
+              let context = manager.selectedProject?.panelContext
         else { return nil }
         return context
+    }
+
+    private var fileIndexKey: FileIndexKey? {
+        guard let context = fileIndexContext else { return nil }
+        let revision: UInt64
+        if let workspace = context.identity.workspace, workspace.hasPrefix("ssh:") {
+            revision = SSHHostWorkspaces.connectionRevision(for: String(workspace.dropFirst(4)))
+        } else {
+            revision = 0
+        }
+        return FileIndexKey(identity: context.identity, revision: revision,
+                            changeEvent: connectionChangeEvent)
     }
 
     private var filtered: [PaletteCommand] {
@@ -339,7 +393,7 @@ struct CommandPaletteView: View {
         _ query: FuzzyQuery,
         buffer: inout ScoringBuffer
     ) -> [PaletteCommand] {
-        guard let indexedTarget, fileIndexContext?.identity == indexedTarget else { return [] }
+        guard let indexedTarget, let indexedRoot, fileIndexKey == indexedTarget else { return [] }
         var best: [ScoredProjectFile] = []
         best.reserveCapacity(Self.maxFileResults)
         for file in projectFiles {
@@ -370,8 +424,31 @@ struct CommandPaletteView: View {
                 searchText: file.relativePath
             ) {
                 guard let project = manager.selectedProject,
-                      project.matchesPanelTarget(indexedTarget) else { return }
-                project.openFile(file.absolutePath)
+                      let context = project.panelContext,
+                      project.matchesPanelTarget(indexedTarget.identity),
+                      fileIndexKey == indexedTarget else { return }
+                if context.isRemote {
+                    guard let scope = indexedTarget.identity.workspace,
+                          scope.hasPrefix("ssh:") else { return }
+                    let host = String(scope.dropFirst(4))
+                    Task { @MainActor in
+                        guard let resolved = try? await context.resolvedRoot(),
+                              resolved.root == indexedRoot,
+                              !manager.isClosed,
+                              manager.selectedProjectID == project.id,
+                              project.matchesPanelTarget(indexedTarget.identity),
+                              let stat = try? await context.backend.stat(path: file.absolutePath),
+                              stat.isRegular,
+                              !manager.isClosed,
+                              manager.selectedProjectID == project.id,
+                              project.matchesPanelTarget(indexedTarget.identity),
+                              SSHHostWorkspaces.connectionRevision(for: host) == indexedTarget.revision
+                        else { return }
+                        project.openFile(file.absolutePath)
+                    }
+                } else {
+                    project.openFile(file.absolutePath)
+                }
             }
         }
     }
@@ -459,6 +536,17 @@ struct CommandPaletteView: View {
             Divider()
                 .opacity(0.5)
 
+            if let indexIssue {
+                Text(verbatim: indexIssue)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+            } else if indexLimited {
+                Text(String(localized: "File index is incomplete; narrow the project to see more results.", table: "Interface"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+            }
             results
                 .pointerStyle(.default)
         }
