@@ -327,14 +327,6 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         return true
     }
 
-    /// Short label for the sidebar: the tail of the current directory, if known.
-    var directoryLabel: String? {
-        guard let dir = workingDirectory else { return nil }
-        let path = URL(string: dir)?.path ?? dir
-        let tail = (path as NSString).lastPathComponent
-        return tail.isEmpty ? nil : tail
-    }
-
     /// Best-effort live shell directory: OSC 7 first, kernel process metadata
     /// second, then the directory used to launch this session.
     var currentDirectoryPath: String {
@@ -401,10 +393,6 @@ final class TerminalSession: NSObject, nonisolated Identifiable {
         case .failed:
             return lastHistorySnapshot
         }
-    }
-
-    var shellName: String {
-        (shellPath as NSString).lastPathComponent
     }
 
     /// PID of the root terminal process. The launch shim records its own PID

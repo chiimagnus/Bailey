@@ -211,10 +211,6 @@ final class RemoteConnection: Identifiable, RemoteCommandRunner {
     }
 
 
-    static func text(_ data: Data) -> String {
-        String(data: data, encoding: .utf8) ?? ""
-    }
-
     // MARK: - Process
 
     /// Runs `/usr/bin/ssh` off the main actor. Bailey always uses the system

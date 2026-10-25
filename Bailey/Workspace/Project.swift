@@ -123,14 +123,6 @@ final class Project: nonisolated Identifiable {
         return tabs.first { $0.id == id }?.content
     }
 
-    var hasFiles: Bool {
-        tabs.contains { $0.content.isFile }
-    }
-
-    var hasDiffs: Bool {
-        tabs.contains { $0.content.isDiff }
-    }
-
     /// Non-terminal tabs retain the session whose directory they were opened from.
     var selectedSession: TerminalSession? {
         if case .session(let session)? = selectedTab?.content {

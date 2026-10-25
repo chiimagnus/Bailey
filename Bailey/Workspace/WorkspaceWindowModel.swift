@@ -110,10 +110,6 @@ final class WorkspaceWindowModel {
         projects.first { $0.id == selectedProjectID }
     }
 
-    var selectedSession: TerminalSession? {
-        selectedProject?.selectedSession
-    }
-
     /// The window supplies the current selection check without passing its
     /// entire model into the Git domain or retaining it across async work.
     func syncGitStatus(_ model: GitStatusModel) {

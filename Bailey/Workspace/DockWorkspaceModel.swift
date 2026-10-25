@@ -534,7 +534,4 @@ final class DockWorkspaceModel {
         }
     }
 
-    var visibleItems: Set<DockItem> {
-        Set(root.groups.flatMap(\.items))
-    }
 }

@@ -60,14 +60,6 @@ enum PaneContent: nonisolated Identifiable {
         }
     }
 
-    @MainActor var saveError: String? {
-        switch self {
-        case .file(let file): file.saveError
-        case .diff(let diff): diff.saveError
-        case .session, .browser: nil
-        }
-    }
-
     @MainActor func save() async {
         switch self {
         case .file(let file): await file.save()
