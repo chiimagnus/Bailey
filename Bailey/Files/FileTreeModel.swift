@@ -226,6 +226,7 @@ final class FileTreeModel {
     @ObservationIgnored private var localFileWatcher: GitFileEventWatcher?
     @ObservationIgnored private var localWatcherRoot = ""
     @ObservationIgnored private var localWatchMappings: [String: String] = [:]
+    @ObservationIgnored private var localWatchedRootSymlinkPath: String?
     @ObservationIgnored private var localWatcherGitDirectory: String?
     @ObservationIgnored private var localWatcherGitDirectories: [String] = []
     @ObservationIgnored private var localWatcherToken: UInt64 = 0
@@ -387,6 +388,17 @@ final class FileTreeModel {
         configureLocalFileWatcher()
     }
 
+    static func watchedRootSymlinkPath(_ root: String) -> String? {
+        guard (try? FileManager.default.destinationOfSymbolicLink(atPath: root)) != nil else {
+            return nil
+        }
+        let parent = physicalRootPath((root as NSString).deletingLastPathComponent)
+        // FSEvents is recursive: monitoring '/' for /tmp or /var would subscribe
+        // to the entire filesystem. Those top-level aliases reconcile on activation.
+        guard parent != "/" else { return nil }
+        return (parent as NSString).appendingPathComponent((root as NSString).lastPathComponent)
+    }
+
     private func stopLocalFileWatcher() {
         localWatcherToken &+= 1
         localEventRefreshTask?.cancel()
@@ -395,6 +407,7 @@ final class FileTreeModel {
         localFileWatcher = nil
         localWatcherRoot = ""
         localWatchMappings.removeAll()
+        localWatchedRootSymlinkPath = nil
         localWatcherGitDirectory = nil
         localWatcherGitDirectories.removeAll()
     }
@@ -420,12 +433,18 @@ final class FileTreeModel {
             }
         }
         let gitDirectory = localIndexGitDirectory
+        let linkPath = Self.watchedRootSymlinkPath(root)
         guard localFileWatcher == nil || localWatcherRoot != root || localWatchMappings != mappings
-                || localWatcherGitDirectory != gitDirectory else { return }
+                || localWatcherGitDirectory != gitDirectory
+                || localWatchedRootSymlinkPath != linkPath else { return }
         let replacedWatcher = localFileWatcher != nil
         stopLocalFileWatcher()
+        var extraPaths = Array(mappings.values)
+        if let linkPath {
+            extraPaths.append((linkPath as NSString).deletingLastPathComponent)
+        }
         let watchPaths = GitFileEventWatcher.paths(
-            root: physicalRoot, gitDirectory: gitDirectory, worktrees: Array(mappings.values)
+            root: physicalRoot, gitDirectory: gitDirectory, worktrees: extraPaths
         )
         let token = localWatcherToken
         localFileWatcher = GitFileEventWatcher(paths: watchPaths, onEvents: { [weak self] events in
@@ -439,6 +458,7 @@ final class FileTreeModel {
         if localFileWatcher != nil {
             localWatcherRoot = root
             localWatchMappings = mappings
+            localWatchedRootSymlinkPath = linkPath
             localWatcherGitDirectory = gitDirectory
             localWatcherGitDirectories = gitDirectory.map(GitFileEventWatcher.gitMetadataDirectories) ?? []
             if replacedWatcher {
@@ -485,7 +505,14 @@ final class FileTreeModel {
             kFSEventStreamEventFlagEventIdsWrapped |
             kFSEventStreamEventFlagMount |
             kFSEventStreamEventFlagUnmount
-        if events.contains(where: { $0.flags & FSEventStreamEventFlags(rescanAll) != 0 }) {
+        let rootLinkChanged = events.contains { event in
+            guard let link = localWatchedRootSymlinkPath else { return false }
+            return event.path == link || (
+                event.path == (link as NSString).deletingLastPathComponent
+                    && event.flags & FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs) != 0
+            )
+        }
+        if rootLinkChanged || events.contains(where: { $0.flags & FSEventStreamEventFlags(rescanAll) != 0 }) {
             let epoch = treeEpoch
             let revision = contentRevision
             await rebuild(refresh: true)
@@ -511,6 +538,9 @@ final class FileTreeModel {
             kFSEventStreamEventFlagItemRenamed |
             kFSEventStreamEventFlagMustScanSubDirs
         )
+        let directoryEntryFlags = structuralFlags |
+            FSEventStreamEventFlags(kFSEventStreamEventFlagItemIsDir) |
+            FSEventStreamEventFlags(kFSEventStreamEventFlagItemIsSymlink)
         let loaded = Set(cachedDirectories.keys)
         // FSEvents reports physical paths; expanded directory symlinks can
         // expose the same directory under several visible tree paths.
@@ -540,6 +570,9 @@ final class FileTreeModel {
                 ) && metadataRoots.contains(where: { LocalPathScope.contains(path, in: $0) }) {
                     continue
                 }
+                // Pure file-content updates cannot change directory entries.
+                // Git index/ignore changes already invalidate Cmd+P above.
+                guard event.flags & directoryEntryFlags != 0 else { continue }
                 if path == rootPath {
                     directories.formUnion(loaded)
                     directories.insert(rootPath)

@@ -144,6 +144,126 @@ final class FileTreeTests: XCTestCase {
         XCTAssertGreaterThan(tree.contentRevision, createdRevision)
     }
 
+    func testNativeLocalWatcherObservesAtomicRetargetOfSymlinkedProjectRoot() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let first = base.appendingPathComponent("first")
+        let second = base.appendingPathComponent("second")
+        let linkParent = base.appendingPathComponent("links")
+        let alias = linkParent.appendingPathComponent("project-link")
+        let staged = linkParent.appendingPathComponent("staged-link")
+        try FileManager.default.createDirectory(at: linkParent, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        try Data("old".utf8).write(to: first.appendingPathComponent("old.swift"))
+        try Data("new".utf8).write(to: second.appendingPathComponent("new.swift"))
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: first)
+        let tree = FileTreeModel()
+        let backend = CountingFileBackend()
+        tree.setLocalFileEventsEnabled(true)
+        defer { tree.setLocalFileEventsEnabled(false) }
+        await tree.sync(root: alias.path, backend: backend)
+        XCTAssertTrue(tree.items.contains { $0.path == alias.appendingPathComponent("old.swift").path })
+        try await Task.sleep(for: .seconds(1.2)) // Quiesce initial registration/scan events.
+        XCTAssertFalse(tree.items.contains { $0.path == alias.appendingPathComponent("new.swift").path })
+
+        // Changing only the link's inode cannot generate an event inside its
+        // previously resolved target. The watcher must also observe that link.
+        try FileManager.default.createSymbolicLink(at: staged, withDestinationURL: second)
+        let renamed = staged.path.withCString { source in
+            alias.path.withCString { destination in Darwin.rename(source, destination) }
+        }
+        XCTAssertEqual(renamed, 0)
+        try await waitForCondition("Replacing a symlinked root must refresh to the new physical target") {
+            tree.items.contains { $0.path == alias.appendingPathComponent("new.swift").path }
+                && !tree.items.contains { $0.path == alias.appendingPathComponent("old.swift").path }
+        }
+        XCTAssertEqual(try String(contentsOf: alias.appendingPathComponent("new.swift"), encoding: .utf8),
+                       "new")
+        try Data().write(to: second.appendingPathComponent("after-rebinding.swift"))
+        try await waitForCondition("After retargeting, the watcher must follow the new physical root") {
+            tree.items.contains { $0.path == alias.appendingPathComponent("after-rebinding.swift").path }
+        }
+        try await Task.sleep(for: .milliseconds(700))
+        let beforeUnrelatedEvent = await backend.requests[alias.path, default: 0]
+        try Data().write(to: base.appendingPathComponent("unrelated-sibling.txt"))
+        try await Task.sleep(for: .milliseconds(900))
+        let afterUnrelatedEvent = await backend.requests[alias.path, default: 0]
+        XCTAssertEqual(afterUnrelatedEvent, beforeUnrelatedEvent,
+                       "Watching the link parent must not rescan Files for unrelated siblings")
+        tree.setLocalFileEventsEnabled(false)
+        try Data().write(to: second.appendingPathComponent("while-hidden.swift"))
+        try await Task.sleep(for: .milliseconds(850))
+        XCTAssertFalse(tree.items.contains { $0.path == alias.appendingPathComponent("while-hidden.swift").path },
+                       "A hidden symlinked root must release its parent watcher")
+    }
+
+    func testTopLevelRootSymlinksNeverWatchFilesystemRootRecursively() throws {
+        for path in ["/tmp", "/var", "/etc"] {
+            XCTAssertNil(FileTreeModel.watchedRootSymlinkPath(path),
+                         "Top-level aliases cannot expand FSEvents to the entire filesystem")
+        }
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let actual = base.appendingPathComponent("real")
+        let links = base.appendingPathComponent("links")
+        try FileManager.default.createDirectory(at: actual, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: links, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let alias = links.appendingPathComponent("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: actual)
+        let watchPath = try XCTUnwrap(FileTreeModel.watchedRootSymlinkPath(alias.path))
+        XCTAssertTrue(watchPath.hasSuffix("/links/alias"))
+        XCTAssertNotEqual((watchPath as NSString).deletingLastPathComponent, "/")
+    }
+
+    func testContentOnlyLocalFileEventDoesNotEnumerateUnchangedParent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("content.swift")
+        try Data("initial".utf8).write(to: file)
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        let oldRows = tree.items
+        let oldRevision = tree.contentRevision
+        let before = await backend.requests[root.path, default: 0]
+        try Data("edited".utf8).write(to: file)
+        await tree.refreshForLocalEvents([
+            .init(path: file.path, flags: UInt32(
+                kFSEventStreamEventFlagItemModified | kFSEventStreamEventFlagItemIsFile
+            ))
+        ])
+        let after = await backend.requests[root.path, default: 0]
+        XCTAssertEqual(after, before, "File bytes changed, but its parent's filename listing did not")
+        XCTAssertEqual(tree.items, oldRows)
+        XCTAssertEqual(tree.contentRevision, oldRevision)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "edited")
+    }
+
+    func testNativeAtomicReplacementOfFileByDirectorySymlinkUpdatesItsRow() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let target = root.appendingPathComponent("target")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replaced = root.appendingPathComponent("replaced")
+        let staged = root.appendingPathComponent("staged-link")
+        try Data("original file".utf8).write(to: replaced)
+        let tree = FileTreeModel()
+        tree.setLocalFileEventsEnabled(true)
+        defer { tree.setLocalFileEventsEnabled(false) }
+        await tree.sync(root: root.path, backend: CountingFileBackend())
+        XCTAssertFalse(try XCTUnwrap(tree.items.first { $0.path == replaced.path }).isDirectory)
+        try FileManager.default.createSymbolicLink(at: staged, withDestinationURL: target)
+        let status = staged.path.withCString { source in
+            replaced.path.withCString { destination in Darwin.rename(source, destination) }
+        }
+        XCTAssertEqual(status, 0)
+        try await waitForCondition("Atomic replacement of a file by a directory symlink must change the row") {
+            tree.items.contains { $0.path == replaced.path && $0.isDirectory }
+        }
+    }
+
     func testNativeLocalEventsFollowSymlinkedProjectRoot() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let physical = base.appendingPathComponent("actual")
