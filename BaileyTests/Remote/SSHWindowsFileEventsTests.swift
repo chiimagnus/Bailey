@@ -14,6 +14,102 @@ final class SSHWindowsFileEventsTests: XCTestCase {
         XCTAssertNil(SSHWindowsFileEvents.parse("unrelated PowerShell output", token: token))
     }
 
+    func testAuthorizedWindowsCancellationReapsOnlyItsOwnWatcher() async throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
+            throw XCTSkip("Requires an authorized isolated Windows SSH host")
+        }
+        let socket = "/tmp/bailey-p2-reap-\(UUID().uuidString.prefix(8)).sock"
+        let backend = SSHWorkspaceBackend(runner: SSHHostCommandRunner(host: host, socket: socket))
+        let created = try await backend.run(
+            argv: ["mktemp", "-d", "/tmp/bailey-p2-reap-XXXXXX"],
+            cwd: nil, env: nil, stdin: nil, timeout: 25
+        )
+        XCTAssertEqual(created.status, 0)
+        let root = String(decoding: created.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .newlines)
+        guard (root as NSString).deletingLastPathComponent == "/tmp",
+              (root as NSString).lastPathComponent.hasPrefix("bailey-p2-reap-") else {
+            throw WorkspaceError.notFound
+        }
+        func cleanUp() async {
+            do { try await backend.delete(paths: [root]) }
+            catch { XCTFail("Cannot remove only test-owned watcher directory: \(error)") }
+            let exit = ProcessRemoteCommandRunner.run(
+                sshPath: "/usr/bin/ssh",
+                arguments: ["-S", socket, "-O", "exit", host],
+                stdin: nil, timeout: 10
+            )
+            XCTAssertEqual(exit.status, 0)
+        }
+        do {
+            let native = try await backend.run(
+                argv: ["cygpath", "-w", root], cwd: nil, env: nil,
+                stdin: nil, timeout: 15
+            )
+            XCTAssertEqual(native.status, 0)
+            let windowsRoot = String(decoding: native.stdout, as: UTF8.self)
+                .trimmingCharacters(in: .newlines)
+            let needle = Data(windowsRoot.utf16.flatMap {
+                [UInt8(truncatingIfNeeded: $0), UInt8(truncatingIfNeeded: $0 >> 8)]
+            }).base64EncodedString()
+            func countOwnedPowerShellWatchers() async throws -> Int {
+                let ps = """
+                $needle='\(needle)'
+                $signature='[IO.FileSystem'+'Watcher]'
+                $matches=@(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object {
+                  $match=[regex]::Match($_.CommandLine,'(?i)-EncodedCommand\\s+([A-Za-z0-9+/=]+)')
+                  if(!$match.Success) { return $false }
+                  try {
+                    $body=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($match.Groups[1].Value))
+                    return $body.Contains($needle) -and $body.Contains($signature)
+                  } catch { return $false }
+                })
+                [Console]::WriteLine($matches.Count)
+                """
+                let encoded = Data(ps.utf16.flatMap {
+                    [UInt8(truncatingIfNeeded: $0), UInt8(truncatingIfNeeded: $0 >> 8)]
+                }).base64EncodedString()
+                let response = try await backend.run(
+                    argv: ["powershell.exe", "-NoProfile", "-NonInteractive",
+                           "-EncodedCommand", encoded],
+                    cwd: nil, env: nil, stdin: nil, timeout: 20
+                )
+                XCTAssertEqual(response.status, 0)
+                return Int(String(decoding: response.stdout, as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)) ?? -1
+            }
+            let subscription = SSHWindowsFileEvents.subscribe(
+                host: host, windowsRoot: windowsRoot, leaseSeconds: 30
+            )
+            defer { subscription.cancel() }
+            let ready = expectation(description: "Windows watcher READY")
+            let consumer = Task {
+                for await event in subscription.events {
+                    if event == .ready { ready.fulfill() }
+                }
+            }
+            await fulfillment(of: [ready], timeout: 18)
+            let active = try await countOwnedPowerShellWatchers()
+            XCTAssertEqual(active, 1,
+                           "Exactly one live PowerShell watcher must own this isolated test root")
+            subscription.cancel()
+            consumer.cancel()
+            let deadline = Date().addingTimeInterval(12)
+            var count = -1
+            repeat {
+                count = try await countOwnedPowerShellWatchers()
+                if count == 0 { break }
+                try await Task.sleep(for: .milliseconds(350))
+            } while Date() < deadline
+            XCTAssertEqual(count, 0,
+                           "Cancelling the PTY stream must reap the remote PowerShell before its lease")
+        } catch {
+            await cleanUp()
+            throw error
+        }
+        await cleanUp()
+    }
+
     func testAuthorizedWindowsWatcherReportsLostWhenRootMoves() async throws {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"] else {
             throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST=windows for an authorized SSH test")
@@ -53,9 +149,11 @@ final class SSHWindowsFileEventsTests: XCTestCase {
             XCTAssertEqual(closed.status, 0)
         }
         do {
-            let stream = SSHWindowsFileEvents.events(
+            let subscription = SSHWindowsFileEvents.subscribe(
                 host: host, windowsRoot: native, leaseSeconds: 25
             )
+            defer { subscription.cancel() }
+            let stream = subscription.events
             let consumer = Task {
                 for await event in stream {
                     switch event {
@@ -200,6 +298,47 @@ final class SSHWindowsFileEventsTests: XCTestCase {
             XCTAssertTrue(project.fileTree.items.contains { $0.path == path },
                           "Events must drive Project.syncFiles without any explicit test poll")
 
+            let burst = """
+            i=0
+            while [ "$i" -lt 400 ]; do
+              : > \(RemoteCommands.quote(root))/"burst-$i.txt"
+              i=$((i+1))
+            done
+            i=0
+            while [ "$i" -lt 150 ]; do
+              rm -- \(RemoteCommands.quote(root))/"burst-$i.txt"
+              i=$((i+1))
+            done
+            """
+            let batch = try await remote.run(
+                argv: ["sh", "-c", burst], cwd: nil, env: nil, stdin: nil, timeout: 40
+            )
+            XCTAssertEqual(batch.status, 0, String(decoding: batch.stderr, as: UTF8.self))
+            let expected = Set((150..<400).map { "burst-\($0).txt" })
+            let burstDeadline = Date().addingTimeInterval(15)
+            var observed: Set<String> = []
+            repeat {
+                observed = Set(project.fileTree.items.map(\.name).filter {
+                    $0.hasPrefix("burst-")
+                })
+                if observed == expected || !project.remoteFileEvents.healthy { break }
+                try await Task.sleep(for: .milliseconds(200))
+            } while Date() < burstDeadline
+            let recoveredByEvents = observed == expected
+            if !recoveredByEvents && !project.remoteFileEvents.healthy {
+                // A lost/failed stream must restore the same 2-second Files
+                // refresh path used by ToolPanelView, not leave a stale tree.
+                try await Task.sleep(for: .seconds(2))
+                let fallback = await project.syncFiles(isCurrent: { true })
+                XCTAssertNotNil(fallback, "Polling fallback must read the actual remote disk")
+                observed = Set(project.fileTree.items.map(\.name).filter {
+                    $0.hasPrefix("burst-")
+                })
+            }
+            XCTAssertEqual(observed, expected,
+                           "550 operations must converge, via events or the mandatory polling fallback")
+            print("BAILEY_P2_STORM operations=550 remaining=250 eventConverged=\(recoveredByEvents)")
+
             let nextRoot = root + "/next"
             try await remote.createDirectory(path: nextRoot)
             project.customDirectory = nextRoot
@@ -261,25 +400,31 @@ final class SSHWindowsFileEventsTests: XCTestCase {
             XCTAssertEqual(result.status, 0, "Could not close the test-owned SSH master")
         }
         do {
+            let watchedRoot = root + "/事件 中文 space"
+            try await backend.createDirectory(path: watchedRoot)
             let windowsPath = try await backend.run(
-                argv: ["cygpath", "-w", root], cwd: nil, env: nil, stdin: nil, timeout: 25
+                argv: ["cygpath", "-w", watchedRoot], cwd: nil, env: nil, stdin: nil, timeout: 25
             )
             XCTAssertEqual(windowsPath.status, 0)
             let native = String(decoding: windowsPath.stdout, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let tree = FileTreeModel()
-            await tree.sync(root: root, backend: backend, scope: "ssh:windows-live")
-            let target = root + "/new from outside.txt"
+            await tree.sync(root: watchedRoot, backend: backend, scope: "ssh:windows-live")
+            let target = watchedRoot + "/外部 new from outside.txt"
             XCTAssertFalse(tree.items.contains { $0.path == target })
 
-            let stream = SSHWindowsFileEvents.events(host: host, windowsRoot: native, leaseSeconds: 22)
+            let subscription = SSHWindowsFileEvents.subscribe(
+                host: host, windowsRoot: native, leaseSeconds: 22
+            )
+            defer { subscription.cancel() }
+            let stream = subscription.events
             let consumer = Task {
                 for await event in stream {
                     switch event {
                     case .ready:
                         try await backend.createFile(path: target)
                     case .dirty:
-                        await tree.sync(root: root, backend: backend, scope: "ssh:windows-live")
+                        await tree.sync(root: watchedRoot, backend: backend, scope: "ssh:windows-live")
                         if tree.items.contains(where: { $0.path == target }) { return true }
                     case .lost, .ended:
                         return false

@@ -29,12 +29,6 @@ nonisolated enum SSHWindowsFileEvents {
         let cancel: @Sendable () -> Void
     }
 
-    static func events(
-        host: String, windowsRoot: String, leaseSeconds: Int = 60
-    ) -> AsyncStream<Event> {
-        subscribe(host: host, windowsRoot: windowsRoot, leaseSeconds: leaseSeconds).events
-    }
-
     static func subscribe(
         host: String, windowsRoot: String, leaseSeconds: Int = 60
     ) -> Subscription {
@@ -174,7 +168,9 @@ nonisolated enum SSHWindowsFileEvents {
         let started = Date()
         var openDescriptors: Set<Int32> = [outFD, errFD]
         var buffer = [UInt8](repeating: 0, count: 4_096)
-        while !Task<Never, Never>.isCancelled && !openDescriptors.isEmpty && !sawEnd {
+        // stdout carries the only trusted event frames. Its EOF invalidates
+        // the stream even if a remote child still holds stderr open.
+        while !Task<Never, Never>.isCancelled && openDescriptors.contains(outFD) && !sawEnd {
             if Date().timeIntervalSince(started) > Double(leaseSeconds + 20)
                 || (!sawReady && Date().timeIntervalSince(started) > 15) { break }
             var fds = openDescriptors.sorted().map {

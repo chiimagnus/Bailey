@@ -114,6 +114,79 @@ final class WorkspaceFilesUITests: XCTestCase {
                        "real hidden editor bytes\n")
     }
 
+    func testAuthorizedWindowsSSHExternalFilesRefreshInRealApp() throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"],
+              !host.isEmpty, !host.hasPrefix("-"),
+              !host.contains(where: { $0.isWhitespace || $0.isNewline }) else {
+            throw XCTSkip("Requires an explicitly authorized isolated Windows SSH host")
+        }
+        let remoteRoot = try runSSH(
+            host: host, command: "mktemp -d /tmp/bailey-p2-ui-XXXXXX"
+        ).trimmingCharacters(in: .newlines)
+        guard (remoteRoot as NSString).deletingLastPathComponent == "/tmp",
+              (remoteRoot as NSString).lastPathComponent.hasPrefix("bailey-p2-ui-") else {
+            throw NSError(domain: "BaileyP2UI", code: 1)
+        }
+        addTeardownBlock { @MainActor in
+            XCTAssertEqual(try self.runSSH(host: host,
+                command: "rm -r -- '\(remoteRoot)' && test ! -e '\(remoteRoot)' && printf cleaned"),
+                "cleaned", "Only this SSH GUI test directory may be deleted")
+        }
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root
+        )
+        app.menuBarItems["File"].click()
+        let add = app.menuItems["Add SSH Files or Folders…"]
+        XCTAssertTrue(add.waitForExistence(timeout: 12))
+        add.click()
+        let window = app.windows.firstMatch
+        let sheet = window.sheets.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 12))
+        let hostField = sheet.comboBoxes.firstMatch
+        let paths = sheet.textViews.firstMatch
+        XCTAssertTrue(hostField.waitForExistence(timeout: 12))
+        XCTAssertTrue(paths.waitForExistence(timeout: 12))
+        hostField.click()
+        hostField.typeKey("a", modifierFlags: .command)
+        hostField.typeText(host)
+        paths.click()
+        paths.typeText(remoteRoot)
+        sheet.buttons["Add"].click()
+
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 25))
+        files.click()
+        let created = remoteRoot + "/external-中文.txt"
+        let renamed = remoteRoot + "/renamed-中文.txt"
+        XCTAssertEqual(try runSSH(host: host,
+            command: "printf 'REMOTE_P2_CONTENT\\n' > '\(created)' && printf made"), "made")
+        let createdRow = WorkspaceUITestSupport.fileRow(URL(fileURLWithPath: created), in: window)
+        XCTAssertTrue(createdRow.waitForExistence(timeout: 25),
+                      "Remote independent CLI create must appear without UI Refresh")
+        XCTAssertEqual(try runSSH(host: host,
+            command: "mv -- '\(created)' '\(renamed)' && printf moved"), "moved")
+        let renamedRow = WorkspaceUITestSupport.fileRow(URL(fileURLWithPath: renamed), in: window)
+        XCTAssertTrue(renamedRow.waitForExistence(timeout: 25))
+        XCTAssertTrue(createdRow.waitForNonExistence(timeout: 15))
+        XCTAssertEqual(try runSSH(host: host,
+            command: "rm -- '\(renamed)' && printf removed"), "removed")
+        XCTAssertTrue(renamedRow.waitForNonExistence(timeout: 20))
+
+        let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
+        XCTAssertTrue(git.waitForExistence(timeout: 15))
+        git.click()
+        let hidden = remoteRoot + "/while-hidden.txt"
+        XCTAssertEqual(try runSSH(host: host,
+            command: "printf 'HIDDEN_REMOTE_BYTES\\n' > '\(hidden)' && printf made"), "made")
+        files.click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileRow(
+            URL(fileURLWithPath: hidden), in: window
+        ).waitForExistence(timeout: 25), "Reopening Files must reconcile missed remote changes")
+        XCTAssertEqual(try runSSH(host: host, command: "cat '\(hidden)'"),
+                       "HIDDEN_REMOTE_BYTES\n")
+    }
+
     func testAuthorizedWindowsSSHCommandPaletteOpensRealRemoteFiles() throws {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P3_TEST_SSH_HOST"],
               !host.isEmpty else {
