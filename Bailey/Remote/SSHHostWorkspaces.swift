@@ -61,12 +61,15 @@ enum SSHHostWorkspaces {
     static let connectionChanged = Notification.Name("Bailey.SSHHostConnectionChanged")
     private static var workspaces: [String: SSHWorkspaceBackend] = [:]
     private static var connected: [String: Bool] = [:]
+    private static var connectionRevisions: [String: UInt64] = [:]
 
     static func connectionState(for host: String) -> Bool? { connected[host] }
+    static func connectionRevision(for host: String) -> UInt64 { connectionRevisions[host] ?? 0 }
 
     static func setConnected(_ value: Bool, for host: String) {
         guard connected[host] != value else { return }
         connected[host] = value
+        connectionRevisions[host, default: 0] &+= 1
         NotificationCenter.default.post(name: connectionChanged, object: host)
     }
 

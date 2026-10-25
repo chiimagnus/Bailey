@@ -6,6 +6,8 @@ import Foundation
 @MainActor
 final class WorkspaceApplication {
     private var windows: [WorkspaceWindowModel] = []
+    /// A process-local capability for Files clipboard and internal drag payloads.
+    let fileTransferToken = UUID()
     private var pendingDirectories: [String] = []
     private struct PendingExternalOpen {
         let urls: [URL]
@@ -157,8 +159,8 @@ final class WorkspaceApplication {
 
     private func matchesFile(_ candidate: String, inside source: String, workspace: String?) -> Bool {
         if workspace == nil {
-            let resolvedSource = URL(fileURLWithPath: source).resolvingSymlinksInPath().path
-            let resolvedCandidate = URL(fileURLWithPath: candidate).resolvingSymlinksInPath().path
+            let resolvedSource = LocalPathScope.resolvedPath(source)
+            let resolvedCandidate = LocalPathScope.resolvedPath(candidate)
             return LocalPathScope.contains(candidate, in: source)
                 || LocalPathScope.contains(resolvedCandidate, in: resolvedSource)
         }
@@ -185,7 +187,7 @@ final class WorkspaceApplication {
         for content in affected where content.isDirty {
             guard let location = fileLocation(content) else { continue }
             let path = workspace == nil
-                ? URL(fileURLWithPath: location.path).resolvingSymlinksInPath().path
+                ? LocalPathScope.resolvedPath(location.path)
                 : location.path
             guard dirtyPaths.insert(path).inserted else {
                 throw NSError(

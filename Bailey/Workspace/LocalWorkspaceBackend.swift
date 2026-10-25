@@ -71,6 +71,21 @@ nonisolated enum LocalPathScope {
         guard !directory.isEmpty else { return false }
         return path == directory || path.hasPrefix(directory.hasSuffix("/") ? directory : directory + "/")
     }
+
+    /// After a move, resolve surviving ancestors rather than the now-missing old leaf.
+    static func resolvedPath(_ path: String) -> String {
+        var url = URL(fileURLWithPath: path)
+        var missing: [String] = []
+        while !FileManager.default.fileExists(atPath: url.path) {
+            let parent = url.deletingLastPathComponent()
+            guard parent != url else { break }
+            missing.append(url.lastPathComponent)
+            url = parent
+        }
+        return missing.reversed().reduce(url.resolvingSymlinksInPath()) {
+            $0.appendingPathComponent($1)
+        }.path
+    }
 }
 
 

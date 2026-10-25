@@ -68,7 +68,15 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
         return path + "-repo"
     }
     func isLinkedWorktree(_ root: String) async throws -> Bool { true }
-    func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult { .init(status: 0, stdout: Data(), stderr: Data()) }
+    func run(
+        argv: [String], cwd: String?, env: [String: String]?,
+        stdin: Data?, timeout: TimeInterval?
+    ) async throws -> WorkspaceRunResult {
+        if argv == ["pwd", "-P"], let cwd {
+            return .init(status: 0, stdout: Data((cwd + "\n").utf8), stderr: Data())
+        }
+        return .init(status: 0, stdout: Data(), stderr: Data())
+    }
     func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot { .init(descendants: [], namesByPid: [:]) }
     func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] { [] }
     func kill(pid: pid_t, force: Bool) async throws {}

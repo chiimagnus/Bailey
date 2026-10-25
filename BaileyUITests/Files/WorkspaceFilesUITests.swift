@@ -72,6 +72,84 @@ final class WorkspaceFilesUITests: XCTestCase {
                       "Clicking another file should open a preview tab without dropping the File Manager")
     }
 
+    func testFileManagerClipboardCopyCutPasteAndTrashAgainstRealDisk() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let alpha = try fixture.file("alpha.txt", text: "alpha original\n")
+        let beta = try fixture.file("beta.txt", text: "beta original\n")
+        let placeholder = try fixture.file("target/.keep", text: "")
+        let target = placeholder.deletingLastPathComponent()
+        let copiedAlpha = target.appendingPathComponent(alpha.lastPathComponent)
+        let movedBeta = target.appendingPathComponent(beta.lastPathComponent)
+        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
+        defer {
+            let clipboard = NSPasteboard.general
+            clipboard.clearContents()
+            if !originalClipboard.isEmpty { XCTAssertTrue(clipboard.writeObjects(originalClipboard)) }
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let alphaRow = WorkspaceUITestSupport.fileRow(alpha, in: window)
+        let betaRow = WorkspaceUITestSupport.fileRow(beta, in: window)
+        let targetRow = app.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", "target")).firstMatch
+        XCTAssertTrue(alphaRow.waitForExistence(timeout: 20))
+        XCTAssertTrue(betaRow.waitForExistence(timeout: 20))
+        XCTAssertTrue(targetRow.waitForExistence(timeout: 20))
+
+        alphaRow.click()
+        alphaRow.rightClick()
+        let copy = app.menuItems.matching(NSPredicate(format: "title == %@", "Copy")).firstMatch
+        XCTAssertTrue(copy.waitForExistence(timeout: 8))
+        copy.click()
+        let privateTransfer = NSPasteboard.PasteboardType("com.chiimagnus.bailey.files.transfer")
+        XCTAssertNotNil(NSPasteboard.general.data(forType: privateTransfer),
+                        "The Copy menu must publish a Bailey Files clipboard record")
+        targetRow.click()
+        XCTAssertNotNil(NSPasteboard.general.data(forType: privateTransfer),
+                        "Selecting a destination must not erase clipboard data")
+        app.typeKey("v", modifierFlags: .command)
+        XCTAssertEqual(app.sheets.count, 0, "Copy+Paste should not show an error sheet")
+        let copied = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in FileManager.default.fileExists(atPath: copiedAlpha.path) },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [copied], timeout: 20), .completed,
+                       "Copy+Paste from Files should create bytes in the chosen folder")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: alpha.path), "Copy cannot remove source")
+        XCTAssertEqual(try Data(contentsOf: copiedAlpha), Data("alpha original\n".utf8))
+
+        betaRow.click()
+        app.typeKey("x", modifierFlags: .command)
+        XCTAssertNotNil(NSPasteboard.general.data(forType: privateTransfer),
+                        "Command+X must write a Files clipboard record")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: beta.path), "Cut must be deferred")
+        targetRow.click()
+        app.typeKey("v", modifierFlags: .command)
+        let moved = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in FileManager.default.fileExists(atPath: movedBeta.path) },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [moved], timeout: 20), .completed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: beta.path),
+                       "Cut+Paste must move rather than create another copy")
+        XCTAssertEqual(try Data(contentsOf: movedBeta), Data("beta original\n".utf8))
+
+        alphaRow.rightClick()
+        let trash = app.menuItems.matching(NSPredicate(format: "title == %@", "Move to Trash"))
+            .firstMatch
+        XCTAssertTrue(trash.waitForExistence(timeout: 8))
+        trash.click()
+        let deleted = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in !FileManager.default.fileExists(atPath: alpha.path) },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [deleted], timeout: 20), .completed)
+        XCTAssertEqual(try Data(contentsOf: copiedAlpha), Data("alpha original\n".utf8))
+    }
+
     func testModifierMultiSelectionDoesNotOpenOrCollapseFiles() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let alpha = try fixture.file("a.swift", text: "a\n")

@@ -223,7 +223,7 @@ final class FileTreeModel {
     }
 
     enum FileOperation {
-        case copy, move, delete
+        case copy, move, delete, duplicate
     }
 
     struct FileBatchResult {
@@ -258,11 +258,16 @@ final class FileTreeModel {
             )
         } catch {
             result.failures = sourcePaths.map { "\($0): \(error.localizedDescription)" }
+            if root == self.rootPath, scope == workspaceScope, epoch == treeEpoch,
+               isCurrentTarget() {
+                presentError(String(localized: "Couldn’t complete file operation.", table: "Workspace"),
+                             result.failures.joined(separator: "\n"))
+            }
             return result
         }
         var resolvedParents: [String: String] = [:]
         var physicalTarget: String?
-        if action != .delete {
+        if action == .copy || action == .move {
             guard let targetPath, LocalPathScope.contains(targetPath, in: rootPath) else {
                 result.failures = sourcePaths.map {
                     String(localized: "Destination is outside the current project: \($0)", table: "Workspace")
@@ -309,8 +314,8 @@ final class FileTreeModel {
                 continue
             }
             let sourceParent = (source as NSString).deletingLastPathComponent
+            let resolvedParent: String
             do {
-                let resolvedParent: String
                 if let cached = resolvedParents[sourceParent] {
                     resolvedParent = cached
                 } else {
@@ -332,6 +337,10 @@ final class FileTreeModel {
             }
             guard isCurrentTarget(), root == self.rootPath, scope == workspaceScope,
                   epoch == treeEpoch else { break }
+            // Pin IO to the verified physical parent. A directory symlink may
+            // change targets while a backend call is awaiting execution.
+            let physicalSource = (resolvedParent as NSString)
+                .appendingPathComponent((source as NSString).lastPathComponent)
             let destination = targetPath.map {
                 ($0 as NSString).appendingPathComponent((source as NSString).lastPathComponent)
             }
@@ -339,18 +348,24 @@ final class FileTreeModel {
                 ($0 as NSString).appendingPathComponent((source as NSString).lastPathComponent)
             }
             do {
+                var completedDestination = destination
                 switch action {
                 case .copy:
                     guard let physicalDestination else { continue }
-                    try await backend.copy(from: source, to: physicalDestination)
+                    try await backend.copy(from: physicalSource, to: physicalDestination)
                 case .move:
                     guard let physicalDestination, physicalDestination != source else { continue }
-                    try await backend.rename(from: source, to: physicalDestination)
+                    try await backend.rename(from: physicalSource, to: physicalDestination)
                 case .delete:
-                    try await backend.delete(paths: [source])
+                    try await backend.delete(paths: [physicalSource])
+                case .duplicate:
+                    let name = try await Self.duplicate(
+                        source: physicalSource, into: resolvedParent, backend: backend
+                    )
+                    completedDestination = (sourceParent as NSString).appendingPathComponent(name)
                 }
                 result.succeeded.append((
-                    source: source, destination: action == .delete ? nil : destination
+                    source: source, destination: action == .delete ? nil : completedDestination
                 ))
             } catch {
                 result.failures.append("\(source): \(error.localizedDescription)")
@@ -384,6 +399,28 @@ final class FileTreeModel {
             }
         }
         return result
+    }
+
+    private static func duplicate(
+        source: String, into parent: String, backend: WorkspaceBackend
+    ) async throws -> String {
+        let original = (source as NSString).lastPathComponent
+        let fileExtension = (original as NSString).pathExtension
+        let stem = fileExtension.isEmpty ? original : String(original.dropLast(fileExtension.count + 1))
+        for number in 1...100 {
+            let suffix = number == 1 ? " copy" : " copy \(number)"
+            let name = stem + suffix + (fileExtension.isEmpty ? "" : "." + fileExtension)
+            let candidate = (parent as NSString).appendingPathComponent(name)
+            do {
+                try await backend.copy(from: source, to: candidate)
+                return name
+            } catch {
+                let existing = try? await backend.stat(path: candidate)
+                let link = try? await backend.readSymlinkDestination(path: candidate)
+                if existing == nil && link == nil { throw error }
+            }
+        }
+        throw CocoaError(.fileWriteFileExists)
     }
 
     private static func physicalDirectory(
@@ -436,12 +473,38 @@ final class FileTreeModel {
         }
         let dir = (item.path as NSString).deletingLastPathComponent
         let dest = (dir as NSString).appendingPathComponent(newName)
+        let physicalParent: String
+        do {
+            let physicalRoot = try await Self.physicalDirectory(root, backend: backend, scope: scope)
+            physicalParent = try await Self.physicalDirectory(dir, backend: backend, scope: scope)
+            guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else {
+                return nil
+            }
+            guard LocalPathScope.contains(physicalParent, in: physicalRoot) else {
+                presentError(
+                    String(localized: "Couldn’t rename to “\(newName)”.", table: "Workspace"),
+                    String(localized: "Source folder is outside this project.", table: "Workspace")
+                )
+                return nil
+            }
+        } catch {
+            if scope == workspaceScope, root == rootPath, epoch == treeEpoch {
+                presentError(
+                    String(localized: "Couldn’t rename to “\(newName)”.", table: "Workspace"),
+                    error.localizedDescription
+                )
+            }
+            return nil
+        }
+        guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return nil }
+        let physicalSource = (physicalParent as NSString).appendingPathComponent(item.name)
+        let physicalDest = (physicalParent as NSString).appendingPathComponent(newName)
         // A case-only rename ("foo"→"Foo") maps to the same file on a
         // case-insensitive volume, so don't treat that as a collision.
         let caseOnlyChange = newName.lowercased() == item.name.lowercased()
         let exists: WorkspaceStat?
         do {
-            exists = try await backend.stat(path: dest)
+            exists = try await backend.stat(path: physicalDest)
         } catch {
             if scope == workspaceScope, root == rootPath, epoch == treeEpoch {
                 presentError(String(localized: "Couldn’t rename to “\(newName)”.", table: "Workspace"), error.localizedDescription)
@@ -457,7 +520,7 @@ final class FileTreeModel {
             return nil
         }
         do {
-            try await backend.rename(from: item.path, to: dest)
+            try await backend.rename(from: physicalSource, to: physicalDest)
         } catch {
             if scope == workspaceScope, root == rootPath, epoch == treeEpoch {
                 presentError(String(localized: "Couldn’t rename to “\(newName)”.", table: "Workspace"), error.localizedDescription)
@@ -541,9 +604,34 @@ final class FileTreeModel {
             return nil
         }
         let dest = (draft.parentDir as NSString).appendingPathComponent(name)
+        let physicalDest: String
+        do {
+            let physicalRoot = try await Self.physicalDirectory(root, backend: backend, scope: scope)
+            let physicalParent = try await Self.physicalDirectory(
+                draft.parentDir, backend: backend, scope: scope
+            )
+            guard isCurrentTarget(), scope == workspaceScope,
+                  root == rootPath, epoch == treeEpoch else { return nil }
+            guard LocalPathScope.contains(physicalParent, in: physicalRoot) else {
+                presentError(
+                    String(localized: "Couldn’t create “\(name)”.", table: "Workspace"),
+                    String(localized: "Target folder is outside this project.", table: "Workspace")
+                )
+                await rebuild()
+                return nil
+            }
+            physicalDest = (physicalParent as NSString).appendingPathComponent(name)
+        } catch {
+            guard isCurrentTarget(), scope == workspaceScope,
+                  root == rootPath, epoch == treeEpoch else { return nil }
+            presentError(String(localized: "Couldn’t create “\(name)”.", table: "Workspace"),
+                         error.localizedDescription)
+            await rebuild()
+            return nil
+        }
         let exists: WorkspaceStat?
         do {
-            exists = try await backend.stat(path: dest)
+            exists = try await backend.stat(path: physicalDest)
         } catch {
             guard isCurrentTarget(), scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return nil }
             presentError(String(localized: "Couldn’t create “\(name)”.", table: "Workspace"), error.localizedDescription)
@@ -563,14 +651,14 @@ final class FileTreeModel {
         var createdFile: String?
         if draft.isDirectory {
             do {
-                try await backend.createDirectory(path: dest)
+                try await backend.createDirectory(path: physicalDest)
             } catch {
                 guard isCurrentTarget(), scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return nil }
                 presentError(String(localized: "Couldn’t create the folder.", table: "Workspace"), error.localizedDescription)
             }
         } else {
             do {
-                try await backend.createFile(path: dest)
+                try await backend.createFile(path: physicalDest)
                 createdFile = dest
             } catch {
                 guard isCurrentTarget(), scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return nil }

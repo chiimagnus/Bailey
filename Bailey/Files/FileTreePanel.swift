@@ -2,6 +2,43 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum FileTreeCommand {
+    case copy([String], cut: Bool)
+    case paste(into: String)
+    case duplicate([String])
+    case move([String])
+    case delete([String])
+}
+
+@MainActor
+enum FileTreeClipboard {
+    struct Record: Codable, Equatable {
+        let token: UUID
+        let project: UUID
+        let identity: String
+        let root: String
+        let connectionRevision: UInt64?
+        let paths: [String]
+        let cut: Bool
+    }
+
+    static let type = NSPasteboard.PasteboardType("com.chiimagnus.bailey.files.transfer")
+
+    @discardableResult
+    static func write(_ record: Record, to pasteboard: NSPasteboard = .general) -> Bool {
+        guard let data = try? JSONEncoder().encode(record) else { return false }
+        pasteboard.declareTypes([type, .string], owner: nil)
+        guard pasteboard.setData(data, forType: type) else { return false }
+        pasteboard.setString(record.paths.joined(separator: "\n"), forType: .string)
+        return true
+    }
+
+    static func read(from pasteboard: NSPasteboard = .general) -> Record? {
+        guard let data = pasteboard.data(forType: type) else { return nil }
+        return try? JSONDecoder().decode(Record.self, from: data)
+    }
+}
+
 struct FileTreePanel: View {
     let model: FileTreeModel
     let git: GitStatusModel
@@ -15,7 +52,7 @@ struct FileTreePanel: View {
     var isActive = true
     var canFocusKeyboard: () -> Bool = { true }
     let renameFile: (FileTreeModel.Item, String) async -> String?
-    let deleteFile: (FileTreeModel.Item) async -> Bool
+    let onCommand: (FileTreeCommand) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
     let canImportFromFinder: Bool
@@ -62,7 +99,7 @@ struct FileTreePanel: View {
                 sshHost: sshHost, currentFilePath: currentFilePath,
                 openFile: openFile, isActive: isActive,
                 canFocusKeyboard: canFocusKeyboard, renameFile: renameFile,
-                deleteFile: deleteFile, refreshGitStatus: refreshGitStatus,
+                onCommand: onCommand, refreshGitStatus: refreshGitStatus,
                 isCurrentTarget: isCurrentTarget,
                 canImportFromFinder: canImportFromFinder,
                 importFromFinder: importFromFinder
@@ -109,7 +146,7 @@ private struct FileTreeScrollView: View {
     let isActive: Bool
     let canFocusKeyboard: () -> Bool
     let renameFile: (FileTreeModel.Item, String) async -> String?
-    let deleteFile: (FileTreeModel.Item) async -> Bool
+    let onCommand: (FileTreeCommand) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
     let canImportFromFinder: Bool
@@ -134,7 +171,7 @@ private struct FileTreeScrollView: View {
                             focusKeyboard: {
                                 if canFocusKeyboard() { keyboardOwner.focus() }
                             },
-                            renameFile: renameFile, deleteFile: deleteFile,
+                            renameFile: renameFile, onCommand: onCommand,
                             refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget
                         )
                         .id(item.path)
@@ -214,8 +251,30 @@ private struct FileTreeScrollView: View {
               isActive, canFocusKeyboard(), isCurrentTarget()
         else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        if modifiers == [.command], event.keyCode == 0 {
-            model.selectAllVisible()
+        if modifiers == [.command] {
+            if event.keyCode == 0 { model.selectAllVisible(); return true }
+            let paths = model.items.filter {
+                !$0.isDraft && model.selectedPaths.contains($0.path)
+            }.map(\.path)
+            switch event.keyCode {
+            case 8: onCommand(.copy(paths, cut: false)); return true // C
+            case 7: onCommand(.copy(paths, cut: true)); return true // X
+            case 9: // V
+                let row = model.selectedItem
+                let parent = row.map { $0.isDirectory ? $0.path
+                    : ($0.path as NSString).deletingLastPathComponent }
+                onCommand(.paste(into: parent ?? model.rootPath))
+                return true
+            case 2: onCommand(.duplicate(paths)); return true // D
+            case 51, 117: onCommand(.delete(paths)); return true // Delete
+            default: break
+            }
+        }
+        if modifiers.isEmpty, event.keyCode == 51 || event.keyCode == 117 {
+            let paths = model.items.filter {
+                !$0.isDraft && model.selectedPaths.contains($0.path)
+            }.map(\.path)
+            onCommand(.delete(paths))
             return true
         }
         guard modifiers.isEmpty || modifiers == [.shift] else { return false }
@@ -235,7 +294,7 @@ private struct FileTreeScrollView: View {
                 .max(by: { $0.path.count < $1.path.count }) {
                 model.select(parent)
             }
-        case 36, 76 where modifiers.isEmpty: // Return and keypad Enter
+        case 36 where modifiers.isEmpty, 76 where modifiers.isEmpty: // Return and keypad Enter
             guard let row = model.selectedItem else { return false }
             if row.isDirectory { Task { await model.toggle(row) } }
             else { openFile(row.path, true) }
@@ -262,7 +321,7 @@ private struct FileTreeRow: View {
     let listFocused: Bool
     let focusKeyboard: () -> Void
     let renameFile: (FileTreeModel.Item, String) async -> String?
-    let deleteFile: (FileTreeModel.Item) async -> Bool
+    let onCommand: (FileTreeCommand) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
 
@@ -340,12 +399,12 @@ private struct FileTreeRow: View {
 
     @ViewBuilder
     private var rowMenu: some View {
+        let selection = model.contextSelection(for: item)
         if !item.isDirectory {
             Button(String(localized: "Open", table: "Sidebar")) {
                 if isCurrentTarget() { openFile(item.path, true) }
             }
         }
-        // Finder and the default app can only reach the local disk.
         if !isRemote {
             Button(String(localized: "Open in Default App", table: "Sidebar")) {
                 NSWorkspace.shared.open(URL(fileURLWithPath: item.path))
@@ -353,6 +412,25 @@ private struct FileTreeRow: View {
             Button(String(localized: "Reveal in Finder", table: "Sidebar")) {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
             }
+        }
+        Divider()
+        Button(String(localized: "Copy", table: "Sidebar")) {
+            if isCurrentTarget() { onCommand(.copy(selection, cut: false)) }
+        }
+        Button(String(localized: "Cut", table: "Sidebar")) {
+            if isCurrentTarget() { onCommand(.copy(selection, cut: true)) }
+        }
+        Button(String(localized: "Paste", table: "Sidebar")) {
+            guard isCurrentTarget() else { return }
+            let folder = item.isDirectory ? item.path
+                : (item.path as NSString).deletingLastPathComponent
+            onCommand(.paste(into: folder))
+        }
+        Button(String(localized: "Duplicate", table: "Sidebar")) {
+            if isCurrentTarget() { onCommand(.duplicate(selection)) }
+        }
+        Button(String(localized: "Move To…", table: "Sidebar")) {
+            if isCurrentTarget() { onCommand(.move(selection)) }
         }
         Button(String(localized: "Copy Path", table: "Sidebar")) {
             NSPasteboard.general.clearContents()
@@ -382,42 +460,11 @@ private struct FileTreeRow: View {
             guard isCurrentTarget() else { return }
             model.beginRename(item)
         }
-        if isRemote {
-            // No Trash on the remote: Freedesktop semantics vary between
-            // distributions and a silently misplaced file is worse than an
-            // explicit delete the user confirmed.
-            Button(String(localized: "Delete…", table: "Sidebar"), role: .destructive) {
-                guard isCurrentTarget(), confirmRemoteDelete(), isCurrentTarget() else { return }
-                Task {
-                    guard isCurrentTarget() else { return }
-                    if await deleteFile(item) { refreshGitStatus() }
-                }
-            }
-        } else {
-            Button(String(localized: "Move to Trash", table: "Sidebar"), role: .destructive) {
-                Task {
-                    guard isCurrentTarget() else { return }
-                    if await deleteFile(item) { refreshGitStatus() }
-                }
-            }
+        Button(isRemote ? String(localized: "Delete…", table: "Sidebar")
+                        : String(localized: "Move to Trash", table: "Sidebar"),
+               role: .destructive) {
+            if isCurrentTarget() { onCommand(.delete(selection)) }
         }
-    }
-
-    /// Names the full remote path, because there is nothing to undo it with.
-    private func confirmRemoteDelete() -> Bool {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = String(
-            localized: "Delete “\(item.name)” on \(sshHost ?? session?.location.remoteConnection?.displayName ?? "the remote machine")?", table: "Sidebar",
-            comment: "Remote delete confirmation. The placeholders are a file name and a remote machine as user@host."
-        )
-        alert.informativeText = String(
-            localized: "\(item.path) will be deleted. This cannot be undone — a remote file does not go to the Trash.", table: "Sidebar",
-            comment: "Remote delete confirmation detail. The placeholder is a full path."
-        )
-        alert.addButton(withTitle: String(localized: "Delete", table: "Sidebar"))
-        alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
-        return alert.runModal() == .alertFirstButtonReturn
     }
 
     /// Commits an inline rename and, when the file actually moved, tells the

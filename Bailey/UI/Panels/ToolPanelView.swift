@@ -167,9 +167,11 @@ struct ToolPanelView: View {
                                 item, to: newName, in: project, target: target
                             )
                         },
-                        deleteFile: { [target = filesTarget] item in
-                            guard let target else { return false }
-                            return await manager.deleteFile(item, in: project, target: target)
+                        onCommand: { [target = filesTarget] command in
+                            guard let target else { return }
+                            manager.performFileTreeCommand(
+                                command, in: project, target: target, onChange: { git.refresh() }
+                            )
                         },
                         refreshGitStatus: { git.refresh() },
                         isCurrentTarget: { [target = filesTarget] in

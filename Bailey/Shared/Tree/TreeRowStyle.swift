@@ -37,6 +37,13 @@ final class TreeKeyboardView: NSView {
         return resigned
     }
 
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // The system Edit menu handles Cmd+C/X/V before keyDown reaches a tree.
+        guard window?.firstResponder === self, event.modifierFlags.contains(.command)
+        else { return super.performKeyEquivalent(with: event) }
+        return onKeyDown(event) || super.performKeyEquivalent(with: event)
+    }
+
     override func keyDown(with event: NSEvent) {
         if !onKeyDown(event) { super.keyDown(with: event) }
     }

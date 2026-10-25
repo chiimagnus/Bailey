@@ -715,7 +715,7 @@ final class WorkspaceWindowModel {
                         self.application.filesDeleted(
                             paths: [entry.source], workspace: target.workspace
                         )
-                    case .copy: break
+                    case .copy, .duplicate: break
                     }
                 }
                 return outcome
@@ -739,6 +739,131 @@ final class WorkspaceWindowModel {
     /// not in unrelated Mac/SSH projects with the same path.
     func fileRenamed(from oldPath: String, to newPath: String, workspace: String?) {
         application.fileRenamed(from: oldPath, to: newPath, workspace: workspace)
+    }
+
+    private func clipboardRevision(for target: PanelContext.Identity) -> UInt64? {
+        guard let workspace = target.workspace, workspace.hasPrefix("ssh:") else { return nil }
+        return SSHHostWorkspaces.connectionRevision(for: String(workspace.dropFirst(4)))
+    }
+
+    func performFileTreeCommand(
+        _ command: FileTreeCommand, in project: Project, target: PanelContext.Identity,
+        pasteboard: NSPasteboard = .general, onChange: @escaping () -> Void = {}
+    ) {
+        guard selectedProjectID == project.id, project.matchesPanelTarget(target) else { return }
+        let root = project.fileTree.rootPath
+        func run(
+            _ operation: FileTreeModel.FileOperation, paths: [String], directory: String?,
+            onFinished: @escaping (FileTreeModel.FileBatchResult) -> Void = { _ in }
+        ) {
+            guard !paths.isEmpty else { return }
+            Task {
+                let result = await performFileOperation(
+                    operation, paths: paths, into: directory, in: project, target: target
+                )
+                if !result.succeeded.isEmpty { onChange() }
+                onFinished(result)
+            }
+        }
+        switch command {
+        case .copy(let paths, let cut):
+            guard !paths.isEmpty else { return }
+            let record = FileTreeClipboard.Record(
+                token: application.fileTransferToken, project: project.id,
+                identity: String(reflecting: target), root: root,
+                connectionRevision: clipboardRevision(for: target), paths: paths, cut: cut
+            )
+            guard FileTreeClipboard.write(record, to: pasteboard) else {
+                fileCommandError(String(localized: "Could not copy files to the clipboard.", table: "Sidebar"))
+                return
+            }
+
+        case .paste(let directory):
+            guard let record = FileTreeClipboard.read(from: pasteboard) else {
+                fileCommandError(String(localized: "Clipboard does not contain files copied from Bailey.", table: "Sidebar"))
+                return
+            }
+            guard record.token == application.fileTransferToken,
+                  record.project == project.id, record.identity == String(reflecting: target),
+                  record.root == root,
+                  record.connectionRevision == clipboardRevision(for: target)
+            else {
+                fileCommandError(String(localized: "The copied files belong to a different project or connection.", table: "Sidebar"))
+                return
+            }
+            let pasteboardVersion = pasteboard.changeCount
+            run(record.cut ? .move : .copy, paths: record.paths, directory: directory) { result in
+                guard record.cut, !result.succeeded.isEmpty,
+                      pasteboard.changeCount == pasteboardVersion,
+                      FileTreeClipboard.read(from: pasteboard) == record else { return }
+                let remaining = record.paths.filter { path in
+                    !result.succeeded.contains {
+                        LocalPathScope.contains(path, in: $0.source)
+                    }
+                }
+                if remaining.isEmpty {
+                    pasteboard.declareTypes([.string], owner: nil)
+                    pasteboard.setString(record.paths.joined(separator: "\n"), forType: .string)
+                } else {
+                    let pending = FileTreeClipboard.Record(
+                        token: record.token, project: record.project,
+                        identity: record.identity, root: record.root,
+                        connectionRevision: record.connectionRevision,
+                        paths: remaining, cut: true
+                    )
+                    FileTreeClipboard.write(pending, to: pasteboard)
+                }
+            }
+
+        case .duplicate(let paths):
+            run(.duplicate, paths: paths, directory: nil)
+
+        case .move(let paths):
+            guard !paths.isEmpty, let window else { return }
+            let alert = NSAlert()
+            alert.messageText = String(localized: "Move selected files", table: "Sidebar")
+            alert.informativeText = String(localized: "Enter a folder inside the current project.", table: "Sidebar")
+            let destination = NSTextField(string: root)
+            destination.frame = NSRect(x: 0, y: 0, width: 350, height: 24)
+            alert.accessoryView = destination
+            alert.addButton(withTitle: String(localized: "Move", table: "Sidebar"))
+            alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+            alert.beginSheetModal(for: window) { response in
+                guard response == .alertFirstButtonReturn else { return }
+                let path = destination.stringValue
+                run(.move, paths: paths, directory: path)
+            }
+
+        case .delete(let paths):
+            guard !paths.isEmpty else { return }
+            guard let workspace = target.workspace else {
+                run(.delete, paths: paths, directory: nil)
+                return
+            }
+            guard let window else { return }
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = String(
+                localized: "Delete \(paths.count) files on \(workspace)?", table: "Sidebar",
+                comment: "Permanent remote deletion. Count and SSH host."
+            )
+            alert.informativeText = paths.joined(separator: "\n")
+                + "\n" + String(localized: "Remote deletion cannot be undone.", table: "Sidebar")
+            alert.addButton(withTitle: String(localized: "Delete", table: "Sidebar"))
+            alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+            alert.beginSheetModal(for: window) { response in
+                guard response == .alertFirstButtonReturn else { return }
+                run(.delete, paths: paths, directory: nil)
+            }
+        }
+    }
+
+    private func fileCommandError(_ message: String) {
+        WorkspaceNativeDialogs.showError(
+            NSError(domain: "Bailey.Files", code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: message]),
+            in: window
+        )
     }
 
     // MARK: - Panels & appearance

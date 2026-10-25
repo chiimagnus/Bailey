@@ -175,7 +175,7 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
         do {
             try await rename(from: stagedItem, to: to)
         } catch {
-            try? await shell("rm -rf -- \(RemoteCommands.quote(stage))")
+            _ = try? await shell("rm -rf -- \(RemoteCommands.quote(stage))")
             throw error
         }
         try await shell("rmdir -- \(RemoteCommands.quote(stage))")
@@ -256,7 +256,8 @@ nonisolated final class SSHWorkspaceBackend: WorkspaceBackend {
     func delete(paths: [String]) async throws {
         guard !paths.isEmpty else { return }
         let quoted = paths.map(RemoteCommands.quote).joined(separator: " ")
-        try await shell("rm -rf -- \(quoted)")
+        // Without -f, a path removed by another process is an error, not a false success.
+        try await shell("rm -r -- \(quoted)")
     }
 
     // MARK: - Git geography

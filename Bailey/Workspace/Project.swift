@@ -583,29 +583,37 @@ final class Project: nonisolated Identifiable {
 
     // MARK: - File paths
 
-    /// Only rename tabs from the machine where the change happened.
-    /// A local and remote file with identical paths must remain independent.
+    /// Update only paths belonging to the affected machine. A second local
+    /// window may have opened the same file through a different root symlink.
     func updateFilePaths(from oldPath: String, to newPath: String, workspace: String?) {
+        let realOld = workspace == nil ? LocalPathScope.resolvedPath(oldPath) : nil
+        let realNew = workspace == nil ? LocalPathScope.resolvedPath(newPath) : nil
+
+        func moved(_ path: String) -> String? {
+            if LocalPathScope.contains(path, in: oldPath) {
+                return newPath + String(path.dropFirst(oldPath.count))
+            }
+            guard let realOld, let realNew else { return nil }
+            let realPath = LocalPathScope.resolvedPath(path)
+            guard LocalPathScope.contains(realPath, in: realOld) else { return nil }
+            return realNew + String(realPath.dropFirst(realOld.count))
+        }
+
         for tab in tabs {
             guard case .file(let file) = tab.content,
-                  file.workspaceIdentity == workspace else { continue }
-            if file.path == oldPath {
-                file.updatePath(newPath)
-            } else if file.path.hasPrefix(oldPath + "/") {
-                file.updatePath(newPath + String(file.path.dropFirst(oldPath.count)))
-            }
+                  file.workspaceIdentity == workspace,
+                  let destination = moved(file.path) else { continue }
+            file.updatePath(destination)
         }
         guard workspaceIdentity == workspace else { return }
-        if let pinnedFile, pinnedFile == oldPath || pinnedFile.hasPrefix(oldPath + "/") {
-            let updated = newPath + String(pinnedFile.dropFirst(oldPath.count))
+        if let pinnedFile, let updated = moved(pinnedFile) {
             if customName == (pinnedFile as NSString).lastPathComponent {
                 customName = (updated as NSString).lastPathComponent
             }
             self.pinnedFile = updated
         }
-        if let customDirectory,
-           customDirectory == oldPath || customDirectory.hasPrefix(oldPath + "/") {
-            self.customDirectory = newPath + String(customDirectory.dropFirst(oldPath.count))
+        if let customDirectory, let updated = moved(customDirectory) {
+            self.customDirectory = updated
         }
     }
 

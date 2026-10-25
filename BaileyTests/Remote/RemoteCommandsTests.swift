@@ -278,6 +278,29 @@ final class RemoteCommandsTests: XCTestCase {
                        Set(["copy.txt", "copied-folder", "copied-link", "dangling"]))
     }
 
+    func testRemoteDeleteReportsMissingPathsAndUnlinksOnlySymlinkEntry() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("target.txt")
+        let link = root.appendingPathComponent("link.txt")
+        try Data("safe".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(atPath: link.path,
+                                                   withDestinationPath: target.path)
+        let backend = SSHWorkspaceBackend(runner: LocalShellRunnerFixture())
+        try await backend.delete(paths: [link.path])
+        XCTAssertEqual(try Data(contentsOf: target), Data("safe".utf8))
+        XCTAssertNil(try? FileManager.default.destinationOfSymbolicLink(atPath: link.path))
+        do {
+            try await backend.delete(paths: [link.path])
+            XCTFail("Deleting a vanished remote entry must not be reported as success")
+        } catch {}
+        do {
+            try await backend.delete(paths: [root.appendingPathComponent("absent").path])
+            XCTFail("rm should reject a missing path instead of silently succeeding")
+        } catch {}
+    }
+
     func testRemoteGitRootDistinguishesNonRepositoryAndSSHOrGitFailure() async throws {
         let runner = GitRootRunnerFixture()
         let backend = SSHWorkspaceBackend(runner: runner)

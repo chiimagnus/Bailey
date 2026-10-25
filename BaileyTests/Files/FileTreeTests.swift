@@ -14,6 +14,9 @@ private actor CountingFileBackend: WorkspaceBackend {
     private var gate: CheckedContinuation<Void, Never>?
     private(set) var awaitingDirectory = false
     private let base = LocalWorkspaceBackend.shared
+    private var beforeCopy: (@Sendable () throws -> Void)?
+
+    func onNextCopy(_ action: @escaping @Sendable () throws -> Void) { beforeCopy = action }
 
     func setUnavailable(_ value: Bool) { unavailable = value }
     func delay(_ path: String) { delayedPath = path }
@@ -46,7 +49,13 @@ private actor CountingFileBackend: WorkspaceBackend {
     func write(path: String, data: Data) async throws { try await base.write(path: path, data: data) }
     func createFile(path: String) async throws { try await base.createFile(path: path) }
     func createDirectory(path: String) async throws { try await base.createDirectory(path: path) }
-    func copy(from: String, to: String) async throws { try await base.copy(from: from, to: to) }
+    func copy(from: String, to: String) async throws {
+        if let hook = beforeCopy {
+            beforeCopy = nil
+            try hook()
+        }
+        try await base.copy(from: from, to: to)
+    }
     func rename(from: String, to: String) async throws { try await base.rename(from: from, to: to) }
     func delete(paths: [String]) async throws { try await base.delete(paths: paths) }
     func gitRoot(containing path: String) async throws -> String? { try await base.gitRoot(containing: path) }
@@ -102,10 +111,7 @@ final class FileTreeTests: XCTestCase {
             rootBadge: nil, currentFilePath: nil,
             openFile: { _, _ in opened += 1 },
             renameFile: { item, name in await tree.rename(item, to: name) },
-            deleteFile: { item in
-                let result = await tree.performFileOperation(.delete, paths: [item.path], into: nil)
-                return !result.succeeded.isEmpty
-            },
+            onCommand: { _ in },
             refreshGitStatus: {}, isCurrentTarget: { true },
             canImportFromFinder: false, importFromFinder: { _, _ in false }
         ))
@@ -148,10 +154,7 @@ final class FileTreeTests: XCTestCase {
             rootBadge: nil, currentFilePath: second.path,
             openFile: { _, _ in opened += 1 },
             renameFile: { item, name in await tree.rename(item, to: name) },
-            deleteFile: { item in
-                let result = await tree.performFileOperation(.delete, paths: [item.path], into: nil)
-                return !result.succeeded.isEmpty
-            },
+            onCommand: { _ in },
             refreshGitStatus: {}, isCurrentTarget: { gate.ready },
             canImportFromFinder: false, importFromFinder: { _, _ in false }
         ))
@@ -417,6 +420,26 @@ final class FileTreeTests: XCTestCase {
         XCTAssertTrue([bytes, Data("other".utf8)].contains(try Data(contentsOf: racing)))
     }
 
+    func testDuplicateCreatesNumberedCopiesWithoutChangingSourceOrExistingSiblings() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("hello.txt")
+        try Data("original".utf8).write(to: source)
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let first = await tree.performFileOperation(.duplicate, paths: [source.path], into: nil)
+        XCTAssertTrue(first.failures.isEmpty)
+        XCTAssertEqual(first.succeeded.first?.destination, root.appendingPathComponent("hello copy.txt").path)
+        let second = await tree.performFileOperation(.duplicate, paths: [source.path], into: nil)
+        XCTAssertTrue(second.failures.isEmpty)
+        XCTAssertEqual(second.succeeded.first?.destination, root.appendingPathComponent("hello copy 2.txt").path)
+        for name in ["hello.txt", "hello copy.txt", "hello copy 2.txt"] {
+            XCTAssertEqual(try String(contentsOf: root.appendingPathComponent(name), encoding: .utf8),
+                           "original")
+        }
+    }
+
     func testFileTreeBatchCopyMoveAndDeleteReportRealPartialResults() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let target = root.appendingPathComponent("target")
@@ -455,6 +478,103 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(deleted.succeeded.map(\.source), [a.path])
         XCTAssertFalse(FileManager.default.fileExists(atPath: a.path))
         XCTAssertEqual(try String(contentsOf: target.appendingPathComponent("a.txt"), encoding: .utf8), "a")
+    }
+
+    func testTreeKeyEquivalentIsScopedToItsRealFirstResponder() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let tree = TreeKeyboardView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        window.contentView = tree
+        var handled = 0
+        tree.onKeyDown = { event in
+            guard event.keyCode == 9 else { return false }
+            handled += 1
+            return true
+        }
+        let commandV = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .command,
+            timestamp: 0, windowNumber: window.windowNumber, context: nil,
+            characters: "v", charactersIgnoringModifiers: "v",
+            isARepeat: false, keyCode: 9
+        ))
+        XCTAssertTrue(window.makeFirstResponder(tree))
+        XCTAssertTrue(tree.performKeyEquivalent(with: commandV))
+        XCTAssertEqual(handled, 1)
+        XCTAssertTrue(window.makeFirstResponder(nil))
+        XCTAssertFalse(tree.performKeyEquivalent(with: commandV))
+        XCTAssertEqual(handled, 1, "An unfocused Files/Git tree must never steal a command")
+    }
+
+    func testRenameAndCreateCannotEscapeProjectThroughDirectorySymlink() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("project")
+        let outside = base.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let source = outside.appendingPathComponent("external.txt")
+        try Data("untouched".utf8).write(to: source)
+        let alias = root.appendingPathComponent("linked")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: outside)
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let directory = try XCTUnwrap(tree.items.first { $0.path == alias.path })
+        await tree.toggle(directory)
+        let externalRow = try XCTUnwrap(tree.items.first {
+            $0.path == alias.appendingPathComponent("external.txt").path
+        })
+        let renamed = await tree.rename(externalRow, to: "renamed.txt")
+        XCTAssertNil(renamed)
+        XCTAssertEqual(try Data(contentsOf: source), Data("untouched".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: outside.appendingPathComponent("renamed.txt").path
+        ))
+        await tree.beginNewFile(in: alias.path)
+        let created = await tree.commitDraft(name: "unauthorized.txt")
+        XCTAssertNil(created)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: outside.appendingPathComponent("unauthorized.txt").path
+        ))
+        await tree.beginNewFolder(in: alias.path)
+        _ = await tree.commitDraft(name: "unauthorized-folder")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: outside.appendingPathComponent("unauthorized-folder").path
+        ))
+    }
+
+    func testFileTreeCopyUsesResolvedParentWhenDirectorySymlinkChangesDuringIO() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("project")
+        let inside = root.appendingPathComponent("inside")
+        let outside = base.appendingPathComponent("outside")
+        let target = root.appendingPathComponent("target")
+        for folder in [inside, outside, target] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: base) }
+        let alias = root.appendingPathComponent("alias")
+        let source = alias.appendingPathComponent("a.txt")
+        try Data("inside".utf8).write(to: inside.appendingPathComponent("a.txt"))
+        try Data("outside".utf8).write(to: outside.appendingPathComponent("a.txt"))
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: inside)
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        await backend.onNextCopy {
+            try FileManager.default.removeItem(at: alias)
+            try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: outside)
+        }
+        let result = await tree.performFileOperation(
+            .copy, paths: [source.path], into: target.path
+        )
+        XCTAssertTrue(result.failures.isEmpty, result.failures.joined(separator: "\n"))
+        XCTAssertEqual(result.succeeded.count, 1)
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("a.txt")), Data("inside".utf8))
+        XCTAssertEqual(try Data(contentsOf: outside.appendingPathComponent("a.txt")), Data("outside".utf8))
     }
 
     func testFileTreeBatchCannotWriteThroughOutsideRootSymlinkOrDeleteRoot() async throws {
