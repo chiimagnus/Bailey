@@ -574,10 +574,12 @@ struct RecentCommitsView: View {
                     HStack(spacing: 4 * fontScale) {
                         if let stash = commit.stash {
                             stashBadge(stash, in: commit, colorIndex: graph.node.color)
+                                .layoutPriority(1)
                         } else if commit.worktree == nil {
                             if !commit.references.isEmpty || !commit.checkedOutWorktrees.isEmpty {
                                 referenceStrip(commit.references, commit: commit,
                                                colorIndex: graph.node.color)
+                                    .layoutPriority(1)
                             }
                         }
                         Button { toggle(commit) } label: {
@@ -779,9 +781,6 @@ struct RecentCommitsView: View {
         let location = locations.first { $0.path == repoRoot }
             ?? locations.first { $0.branch == nil } ?? locations[0]
         let label = Self.worktreeDisplayLabel(location, among: worktreePaths)
-        let labelWidth = ceil((label as NSString).size(withAttributes: [
-            .font: NSFont.systemFont(ofSize: Self.badgeFontSize * fontScale, weight: .medium)
-        ]).width)
         let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
         return Button { toggle(commit) } label: {
             HStack(spacing: 0) {
@@ -796,8 +795,7 @@ struct RecentCommitsView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .frame(maxWidth: min(labelWidth,
-                        min(128, max(52, viewportWidth * 0.32)) * fontScale))
+                    .frame(maxWidth: min(128, max(52, viewportWidth * 0.32)) * fontScale)
                     .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
                 if locations.count > 1 {
                     Text("\(locations.count)")
@@ -930,6 +928,7 @@ struct RecentCommitsView: View {
                 .accessibilityLabel(hidden.map(\.name).joined(separator: ", "))
             }
         }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func referenceBadge(
@@ -937,10 +936,6 @@ struct RecentCommitsView: View {
     ) -> some View {
         let current = reference.kind == .currentBranch
         let matched = worktrees(for: reference, in: commit)
-        let labelWidth = ceil((reference.name as NSString).size(withAttributes: [
-            .font: NSFont.systemFont(ofSize: Self.badgeFontSize * fontScale,
-                                    weight: current ? .semibold : .medium)
-        ]).width)
         let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
         return Button { toggle(commit) } label: {
             HStack(spacing: 0) {
@@ -958,8 +953,7 @@ struct RecentCommitsView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .frame(maxWidth: min(labelWidth,
-                        min(88, max(42, viewportWidth * 0.22)) * fontScale))
+                    .frame(maxWidth: min(88, max(42, viewportWidth * 0.22)) * fontScale)
                     .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
                 if !matched.isEmpty {
                     Image(systemName: "square.stack")
