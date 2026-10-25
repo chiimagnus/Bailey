@@ -322,6 +322,29 @@ final class FileTreeTests: XCTestCase {
         XCTAssertLessThan(reads, 30, "One burst must not read the directory per FSEvent")
     }
 
+    func testMustScanSubDirsWithoutRenameFlagDetectsMovedDirectoryFromParent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let old = root.appendingPathComponent("old")
+        let renamed = root.appendingPathComponent("renamed")
+        let other = root.appendingPathComponent("other")
+        try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try Data().write(to: old.appendingPathComponent("inside.swift"))
+        defer { try? FileManager.default.removeItem(at: root) }
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertTrue(tree.items.contains { $0.path == old.path })
+
+        try FileManager.default.moveItem(at: old, to: renamed)
+        await tree.refreshForLocalEvents([
+            .init(path: old.path, flags: UInt32(kFSEventStreamEventFlagMustScanSubDirs))
+        ])
+        XCTAssertTrue(tree.items.contains { $0.path == renamed.path },
+                      "A missing event batch must re-read the moved directory's parent")
+        XCTAssertFalse(tree.items.contains { $0.path == old.path })
+    }
+
     func testMustScanSubDirsRescansLoadedSubtreeWithoutQueryingSiblings() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let branch = root.appendingPathComponent("branch")
@@ -350,7 +373,8 @@ final class FileTreeTests: XCTestCase {
         XCTAssertGreaterThan(after[nested.path, default: 0], loaded[nested.path, default: 0])
         XCTAssertEqual(after[other.path], loaded[other.path],
                        "MustScanSubDirs must not requery an unaffected sibling")
-        XCTAssertEqual(after[root.path], loaded[root.path])
+        XCTAssertGreaterThan(after[root.path, default: 0], loaded[root.path, default: 0],
+                             "A lost event may also hide the moved directory's old name")
     }
 
     func testLocalFileEventsRefreshOnlyAffectedCachedDirectoryAndRecoverDroppedEvents() async throws {

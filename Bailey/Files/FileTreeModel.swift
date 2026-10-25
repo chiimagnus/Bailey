@@ -461,19 +461,12 @@ final class FileTreeModel {
                     continue
                 }
                 let parent = (path as NSString).deletingLastPathComponent
-                let mustScan = event.flags & FSEventStreamEventFlags(
-                    kFSEventStreamEventFlagMustScanSubDirs
-                ) != 0
-                let entryChanged = event.flags & FSEventStreamEventFlags(
-                    kFSEventStreamEventFlagItemCreated |
-                    kFSEventStreamEventFlagItemRemoved |
-                    kFSEventStreamEventFlagItemRenamed
-                ) != 0
-                if loaded.contains(parent), !mustScan || entryChanged {
-                    directories.insert(parent)
-                }
+                // MustScanSubDirs does not promise per-item rename flags. The
+                // directory itself may have moved, so its parent must also be
+                // re-read even when only a subtree-rescan event was delivered.
+                if loaded.contains(parent) { directories.insert(parent) }
                 if loaded.contains(path) { directories.insert(path) }
-                if mustScan {
+                if event.flags & FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs) != 0 {
                     directories.formUnion(loaded.filter { LocalPathScope.contains($0, in: path) })
                 }
                 // The Files tree doesn't scan collapsed descendants. Cmd+P
