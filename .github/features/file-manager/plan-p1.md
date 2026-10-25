@@ -4,7 +4,7 @@
 
 **Non-goals：** 本阶段不加拖放（P2）、隐藏及 ⌘P SSH 支持（P3）、事件监听（#40）、排序选项；不重做文件树、编辑器或 Finder 已有导入。
 
-**Approach：** **先以 [#13 Focus P3](../focus-navigation/plan-p3.md) 的文件浏览不抢输入、单行游标及行焦点反馈作为 P1-T1 前置门槛**；P1/P2 的窗口、活动 Dock 组和 first responder 契约继续生效，不在 Files 新建全局焦点。待 Focus P3 实施后，`FileTreeModel` 才会有单行游标；本任务在此基础上扩展多选集合/锚点，并继续管理展开和刷新；文件操作在其现有目标后端执行，`Project`／`TerminalManager` 负责已打开内容的保存及路径更新；`FileTreePanel` 只转发交互。复用 `WorkspaceBackend.rename/delete` 和已经安全的 `LocalWorkspaceBackend.copyFromFinder` 底层复制能力，**仅在现有协议不能表达真实复制时**添加最小接口，不为批处理、移动和剪贴板分别造框架。分清 Files 的选择与 FileTab 当前文件高亮。
+**Approach：** 当前 `FileTreeModel.selectedPath`、`FileTreeScrollView.handleKey`、`TreeKeyboardHost`、`TreeRowSurface(focusRing:)` 和单击浏览/双击激活**已经实现**；直接增量扩展多选，不依赖已删除的 Focus 计划，不复制焦点控制。Files 继续使用 `Project.fileTree` 与 `WorkspaceBackend`；路径变化统一由真实窗口/应用所有者协调，文件操作前复用 `FileTab.save` 队列保护内容。只为本机／SSH 均缺失的复制新增必要后端方法；保留 Finder 导入的 `RENAME_EXCL`。
 
 **Acceptance：** 真实本机和获授权 SSH 后端的源／目标字节、目录、废纸篓行为与用户意图一致；中途失败不丢编辑或误改另一台机器；菜单与焦点正确。
 
@@ -17,9 +17,9 @@
 
 **源码锚点：** `Bailey/Files/FileTreeModel.swift`（`items/expanded/sync`）、`Bailey/Files/FileTreePanel.swift`（`FileTreeScrollView/FileTreeRow.semanticRow`）、`Bailey/Shared/Tree/{TreeDisplayModel,TreeRowStyle}.swift`、`Bailey/UI/Panels/ToolPanelView.swift`（`openFilePath`）。
 
-1. **前置焦点检查 + Red：** 核对 #13 的 P3 单击打开仍留 Files 键盘焦点、双击转编辑器、当前行仅在列表聚焦时描边，以及与 P4 的共享树行兼容；未完成则回到 #13 修复，**不能在 #5 重做第二套单击/焦点方案**。以 `DockWorkspaceTests`、`WorkspaceWindowIsolationTests` 的原生结果证明窗口及工具面板 Focus；再在 `FileTreeTests`、`TreeRowHitTestingTests` 和原生宿主验证：普通点击仍执行 P3 的选中/展示或目录展开，Files 保持可见时键盘继续属于 Files；双击/显式打开遵守 P3 的编辑器焦点语义；⌘ 点击只增减离散选择、⇧ 点击只按当前可见行顺序扩展选择，二者**不打开或折叠**行；右键已选中项对整个集合，右键未选中行仅对该项且不打开。键盘 ↑↓ 移动焦点、⇧+↑↓ 扩展范围、→/← 展开／收起目录、Return 打开聚焦文件、Esc 清除选择；Files 真正聚焦时 ⌘A 选中当前可见项。明确选中集合和「当前编辑文件」是两种状态，原始双击、按钮及无障碍行为不能倒退。
-2. **Green：** 复用 Focus P3 完成后在 `FileTreeModel` 中提供的**单行游标**，只增加多选路径集合与范围锚点；行键盘输入归 Files 真正接收输入的原生视图，Dock 活动组仍归 #13。Focus P3 已将共享 `TreeFolderRow/TreeFileRow` 规划为**非 Button 可聚焦行**；本 task 复用其稳定单行游标和 `TreeRowSurface(focused:)` 的细描边，#5 只增加多选背景，不为同一行造第二个当前焦点或重新设计 Git 外观。Cmd/Shift 的点击语义必须在 Files 专属入口统一分发，不叠加第二套会重复触发的手势；独立操作 Button 仍须只响应自己；普通点击显示文件仍留 Files 焦点，双击激活编辑器，修饰键只改选择不意外打开或折叠。选中项消失时清理，折叠后锚点/键盘聚焦转到仍可见的行；**目录压缩只影响展示，选择/操作使用 `TreeDisplayModel.Row.path` 的真实末端路径而非 `compactPrefix` 拼接出的名称**；换根、机器、连接时按已有 `sync` 身份重置，不以相同路径跨通道继承。
-3. **覆盖：** 空、单项、混合目录／文件、Cmd+A、范围反选、连续 Shift、键盘展开/收起、压缩链、折叠/展开、重建、重名异路径、失去焦点、改名输入焦点、菜单开启；键盘焦点环在浅暗和多选下可辨认，折叠/过滤后不会停在不可见行；**Files 单击显示文件后继续使用 ↑↓/Return/⌘A，双击转入编辑器后继续输入与 Undo；前台/后台、不同 Dock 组工具面板之间与终端、TextKit 编辑器、WebKit 浏览器、Diff 来回切焦点后，⌘A/C/X/V、Return、方向键真正送到谁；不能由 `Project.selectedTabID` 的旧值误判**；A→B→A、SSH 失联／换通道、多窗口、浅暗／中英／窄面板／缩放及键盘与辅助功能。验证命中后的真实选择集合、焦点与屏幕状态，而非只检查事件回调。
+1. **基线与 Red：** 先用 `FileTreeTests`、`DockFocusIntegrationTests` 和 `WorkspaceFilesUITests` 证明现有单行游标、Space 浏览且保留 Files 焦点、Return/双击显式打开、共享 Git 树外观与焦点归属。新行为先 Red：普通点击沿用现有浏览/展开；⌘点击只切换选中、⇧点击选择可见区间，不额外打开/折叠；右键已选中项作用集合、右键未选中行只作用该行。原生箭头、⇧+箭头、⌘A 与 Escape 的行为明确，以真实 `firstResponder` 而不是旧工作标签推断命令目标。
+2. **Green：** `FileTreeModel` 继续拥有**唯一游标** `selectedPath`，在当前根／后端身份内增添多选路径集合和范围锚点；现有 `TreeKeyboardHost` 处理修饰键，Files 私有行输入区分单击与修饰键、双击（避免 `onTapGesture` + `simultaneousGesture` 重复触发）。共享 `TreeRowSurface(selected:focusRing:)` 分别画集合背景与真实键盘焦点，Git 仅回归不另改模型。压缩目录选中使用真实 `Row.path`。折叠/刷新时剔除不可见集合并重定位游标，根／通道切换清理选择；文本重命名输入框和 Command Palette 不被拦截。
+3. **覆盖：** 空、单项、混合文件夹/文件、连续 Shift、Cmd 增减、选择全部、键盘折叠和压缩链、选择项被删除或外部移动、重名路径和跨根切换；必须验收真实浏览/激活后的焦点与菜单目标、终端/TextKit/WebKit/Git 输入不被 Files 快捷键劫持，兼顾中英、明暗、窄栏、多窗口和 SSH 换通道。基于受影响的宿主测试补齐逻辑，只保留不可替代的真实键鼠 E2E。
 4. **闭环：** `docs/features/files.md`、必要的 `docs/features/dock.md` 和 `docs/ui.md` 在本任务同步 **Cmd/Shift 多选** 契约，不重复叙述/重新实现 #13 P3 的单行游标与预览焦点；保证 Git 树复用焦点外观，仍保留原 22pt 命中。按 `docs/testing.md` 运行相关真实 XCTest／原生验收，删除本任务确已替换的局部选择处理（若有），独立中文提交源码与对应文档。
 
 ---
@@ -39,24 +39,24 @@
 <a id="p1-t3"></a>
 ## P1-T3 文件操作闭环与已打开编辑的保存顺序
 
-**源码锚点：** `Bailey/Files/FileTreeModel.swift`（`rename/moveToTrash/delete/invalidateDirectory/rebuild`）、`Bailey/Workspace/Project.swift`（`updateFilePaths`、`openLocalFile`）、`Bailey/Workspace/TerminalManager.swift`（`fileRenamed` 和已有窗口 `registry`）、`Bailey/Editor/FileViewerView.swift`（`FileTab.save/writeCurrentText/updatePath`）及 `PanelContext.Identity`。
+**源码锚点：** `Bailey/Files/FileTreeModel.swift`（`rename/commitDraft/moveToTrash/delete/rebuild`）、`Bailey/Workspace/Project.swift`（`updateFilePaths`）、`Bailey/Workspace/WorkspaceWindowModel.swift`（`fileRenamed`）、`Bailey/App/WorkspaceApplication.swift`（现有窗口登记）、`Bailey/Editor/FileViewerView.swift`（`FileTab.save/writeCurrentText/updatePath`）、`Bailey/Workspace/PanelContext.swift`（目标身份）。
 
 1. **Red：** 当前 `FileTab.writeCurrentText` 会**在 await 后只校验结果代次**，不能阻止已经写出的旧路径；同时 `fileRenamed` 只同步发起窗口内的 `projects`。`FileTreeModel.moveToTrash/delete` 具有重复目录缓存/错误编排，`LocalWorkspaceBackend.delete` 按顺序移动到废纸篓而失败可能已有部分完成，远端 `SSHWorkspaceBackend.delete` 使用 `rm -rf` 对不存在的文件仍可能返回成功。**更隐蔽的是 `FileTreeModel.rename` 在 `await backend.rename` 成功后仍会因树目标变化返回 nil，导致 `FileTreeRow.commitRename` 跳过 `onRename`，实际已改名文件的原 FileTab 继续指向旧路径。**针对同机多个窗口、同路径异远端、本机文件标签位于 SSH 项目、脏编辑／在途保存、打开子目录文件与刚完成移动后再次保存做可控并发测试，核对旧路径不被重新写出、缓冲与 Undo 未损坏。测试现有复制／单项删除是否在目标切换时产生错报或遗留。
-2. **Green：** 所有移动／重命名／删除**先处理受影响的正在编辑文件**，复用已有保存等待和取消／失败提示；具体采用已有 `FileTab.save` 队列实现操作顺序：待写完成、重新检查脏状态、确认操作对象，再执行磁盘动作，然后更新路径，不能靠再加一个 `generation` 挡住事后写入。必要时在当前拥有者提供最小串行入口，禁止移动期间启动新的旧路径保存。删除打开文件若用户不愿丢弃缓冲则取消，不能直接调用关闭并无条件删除。**成功删除后不得留下能自动向旧路径写入的可写 FileTab；同时处理本机同路径跨窗口、目录下的子文件及未保存 Diff，失败则保留内容和标签。** 单次文件操作只依据真实成功项更新路径、展开和缓存，批量按独立结果逐项处理：本机中途失败不能误报全部未删除，远端 `rm -rf` 的成功退出不能证明每项原本存在，必要时按源逐项进行有确切前提的删除；**已成功完成磁盘更名但在 await 后切项目时，不能沿用当前 `FileTreeModel.rename -> String?` 的「换根就返回 nil」路径吞掉真实成功**；让真实执行结果通知发起操作的原文件/窗口拥有者以同步路径，只有树 UI 的缓存重建可以因目标已过期而被跳过。现有 `PanelContextTests.testBackendSwitchDuringFileCreationAndRenameRejectsOldOperations` 只覆盖 `stat` 尚未完成的旧操作；**SSH 作用域现在按 `ssh:hostAlias` 比对，缓存后端也以 alias 为键，OpenSSH 实际连接则可因临时 SSH 配置把同 alias 解析到另一 HostName/User/Port**。只用受控本地 `ssh -G -F <测试配置>`/可控后端模拟两端做身份变化实验；若实际可导致旧复制/移动请求写向另一目标，必须在已有 SSH 目标验证入口阻止过期写入，而不是新增独立全局身份管理器。**另需暂停后端已发生的真实 `rename`/写入结果回传，再切项目/SSH 通道，核对旧拥有者获得成功结果、新树不受污染**。旧文件操作不应在新项目生效；不复制第二套批处理/事件管理器。失败保持旧标签；本机 Mac 文件必须按 `file.workspaceIdentity=nil` 区分。跨窗口共用现有 `TerminalManager.registry` 的拥有者能力**先证明必要且可安全调用**，不得建全局文件事件服务。现有 `Project.updateFilePaths` 对目录孩子和固定项目路径的映射可复用；额外确认实际受影响的打开 Diff 与其他路径消费者，不擅自修改历史只读内容。**审查可达的冗余往返：** `FileTreeModel.rename/commitDraft` 现先 `backend.stat` 后 `rename/create`，既增加 SSH 往返又不能替代后端原子拒绝重名；在测试证实后端错误信息可正确映射到原生提示时，**此任务删掉重复的存在性预查**，仅保留合法名称、目标身份及已证实有必要的大小写仅更名处理。避免为了减一次读取而让本机/SSH 覆盖已有文件。**现行 `rename/commitDraft` 的 `trimmingCharacters(in:)` 会悄悄删除 POSIX 合法的首尾空格**；本机受控文件夹已验证首尾空格、Tab、换行及组合重音名称能存在。新操作必须保留用户输入的合法原名，只拒绝真正非法的空名、`/`、NUL、`.`、`..`，并验证大小写仅更名与 Unicode 规范化，不为 TextField 无法输入的换行编造 UI 入口。
+2. **Green：** 先在**真正拥有 FileTab 的项目／窗口**排空 `FileTab.save()` 队列、处理脏编辑/保存失败，再执行磁盘操作；操作期间不得启动新的旧路径写入，成功后才 `FileTab.updatePath`。现有 `WorkspaceWindowModel.fileRenamed` 只遍历单窗口，利用 `WorkspaceApplication` 已登记窗口完成同机多窗口路径传播，不创建全局文件事件管理器；保留 `workspaceIdentity` 校验和目录子项映射。**必须修复** `FileTreeModel.rename`：后端已成功但树切换时仍须报告真实完成结果给原拥有者，仅取消过期树 UI 更新。文件删除逐项返回真实成功/失败，避免本机 Trash 部分成功和 SSH `rm -rf` 误报；删除打开文件先保护缓冲，不留下可自动写回已删除路径的编辑器。未保存 Diff 的受影响范围先按现有模型能力核验，不篡改只读历史 Diff。`rename/commitDraft` 先 `stat` 的竞态预查若被后端安全防覆盖涵盖就删除；但后端必须准确识别**悬空链接已占用**。不修剪合法文件名前后空格，只拒绝空名、`.`、`..`、`/`、NUL 等真正非法输入。**SSH alias 临时重指向风险**先用受控 SSH 配置测试证明是否存在，仅在有实证时修现有目标身份校验，不预建全局身份层。
 3. **覆盖：** 文件／目录移动、重命名、批量删除、制作副本、剪切（只在目标真正成功后才移除源）、父子重叠选择、部分成功、已打开子文件、未加载的 FileTab、自动保存已开始与尚未开始、编辑期间再次输入、不同 Dock 组／窗口、本机文件在 SSH 项目、旧连接迟到／断线恢复、目标被占用、文件系统操作成功后项目切换、同机旧/新标签路径唯一性、Git Diff 目标和 Trash 结果。断言**磁盘内容、标签 path、Undo、isDirty、错误提示和当前机器**，不是单测回调。
-4. **闭环：** `FileTabTests`、`FileTreeTests`、`WorkspaceIdentityTests`、`WorkspaceWindowIsolationTests`、`PanelContextTests` 及原生保存 E2E；`docs/features/files.md`、`editor.md`、`projects.md` 当次同步。若已被统一执行路径替代，**本任务直接删除 `FileTreeModel` 的重复单项操作编排**；保留真实远端／本机不同删除语义。独立中文提交。
+4. **闭环：** `FileTabPersistenceTests`（其中含 `NativeFileTabTests`）、`FileTreeTests`、`WorkspaceIdentityTests`、`WindowOwnershipIntegrationTests`、`PanelContextTests`；再按受影响入口执行 `WorkspaceFilesUITests` / `WorkspaceWindowsUITests`。同步 `docs/features/files.md`、`editor.md`、`projects.md`。确认所有入口已接到唯一编排后，在**本任务**删除 `FileTreeModel` 内重复的单项副作用/错误转发，不等最终 P4；保留本机 Trash 与 SSH 删除差异。
 
 ---
 
 <a id="p1-t4"></a>
 ## P1-T4 菜单、剪贴板与快捷键接入实际聚焦 Files
 
-**源码锚点：** `Bailey/Files/FileTreePanel.swift`（`rowMenu/confirmRemoteDelete` 目前调用**全局阻塞的 `NSAlert.runModal()`**）、`Bailey/UI/Panels/ToolPanelView.swift`、`Bailey/App/BaileyApp.swift`（`BaileyCommands`、`FocusedValues`）、`Bailey/Workspace/TerminalManager.swift`、`Bailey/Resources/Localization`。
+**源码锚点：** `Bailey/Files/FileTreePanel.swift`（`rowMenu/confirmRemoteDelete`，当前使用阻塞的 `NSAlert.runModal()`）、`Bailey/UI/Panels/ToolPanelView.swift`、`Bailey/App/BaileyApp.swift`（命令入口）、`Bailey/Workspace/WorkspaceWindowModel.swift`、`Bailey/Resources/Localization`。
 
 1. **Red：** 原生 GUI 验证已选中／未选中行右键、复制与「复制路径」不同语义、⌘C／⌘X／⌘V、制作副本、删除确认、输入框、终端和编辑器焦点。剪切只记录来源，粘贴成功才执行移动；跨机器粘贴明确拒绝。
 2. **Green：** Files 有实际键盘焦点时才路由文件快捷键到 **P1-T3 同一操作**；不覆盖 macOS 标准文本输入及 Ghostty 粘贴。使用系统 `NSPasteboard` 和必要的私有文件来源标识，不增加并行的应用级剪贴板状态缓存／后台 coordinator；目标路径从当前树根／所选目录或文件父目录取得，操作前复核所属机、根、连接与选中。右键仅组织命令，保留独立「复制路径」与 Finder 打开。远端批删保留明确永久删除确认，但将现有 `confirmRemoteDelete().runModal()` 改为**发起窗口绑定的原生 Sheet**，确认回调中再次核对原目标而不是阻塞整个应用；本机按真实废纸篓行为。统一重复的菜单操作回调和报错，不造第二套弹窗框架。
 3. **覆盖：** Cmd 键组合与输入法、活动／非活动 Files、改名文本框和 Command Palette、空集合、单项/多项、右键选中集合、复制后换项目与源消失、目标文件／目录／根、源目标同名、部分成功、远端离线/重连及多窗口交错、浅暗／中英/小尺寸、系统剪贴板与文字复制。验证终端和编辑器命令仍作用在正确控件，Git 树菜单不受影响；实际删除后检查 Trash/SSH 目录。
-4. **闭环：** `FileTreeTests`、`TreeRowHitTestingTests`、`WorkspaceWindowIsolationTests` 和完整 GUI 菜单 E2E；`docs/features/files.md` 与 `docs/ui.md` 更新操作和焦点语义，`Sidebar/Interface` 字符串表实际增加并验证。此任务清理被统一路由取代的旧菜单事件路径，不搬动其它区域菜单，原子提交。
+4. **闭环：** `FileTreeTests`、`DockFocusIntegrationTests`、`WindowOwnershipIntegrationTests`，共享树真实命中由 `SharedTreeUITests`、菜单/键盘由 `WorkspaceFilesUITests` 定点覆盖。同步 `docs/features/files.md`、`docs/ui.md` 和真实新增的字符串表；**当次**删除旧 `runModal` 删除入口及重复菜单处理，不搬动 Git 菜单。
 
 ---
 

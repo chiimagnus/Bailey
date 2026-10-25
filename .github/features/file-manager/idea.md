@@ -1,16 +1,16 @@
 # File Manager：多选、操作、拖放、隐藏规则与定位
 
-需求归属：[Issue #5](https://github.com/chiimagnus/Bailey/issues/5)。执行多选前先由 [Issue #13](https://github.com/chiimagnus/Bailey/issues/13) 的 [Focus P3](../focus-navigation/plan-p3.md) 完成「点击文件展示内容但键盘留在 Files」、单行游标及列表聚焦描边，并结合 [Focus P4](../focus-navigation/plan-p4.md) 验证共享树行的 Git 使用方；Settings 功能分类由 [Issue #44](https://github.com/chiimagnus/Bailey/issues/44) 的 [独立计划](../settings-by-feature/idea.md)负责。外部刷新机制归 [Issue #40](https://github.com/chiimagnus/Bailey/issues/40) 与 [独立计划](../event-driven-workspace-refresh/idea.md)；本计划只做 File Manager 本身及已落地机制的接入。
+需求归属：[Issue #5](https://github.com/chiimagnus/Bailey/issues/5)。Files 单行游标、键盘焦点、单击浏览／双击激活和共享树行已在当前源码实现；本计划**复用并回归验证**，不依赖已移除的 `focus-navigation` 计划目录，不重做焦点方案。Settings 功能分类由 [#44](../settings-by-feature/idea.md) 负责（当前代码尚未有 File Manager 设置页）；文件外部事件由 [#40](../event-driven-workspace-refresh/idea.md) 负责（当前任务仍未完成）。
 
 ## 背景与已确认事实
 
-Bailey 的 Files 已有共享树行、目录压缩／懒加载、新建、重命名、单项删除、复制绝对路径，以及 Finder → 本机 Files 的多项**复制导入**。现有导入已具备目标文件夹判定、符号链接处理、原子防覆盖及部分失败反馈；不得当成全新功能重写。`FileTreeModel` 尚无独立多选状态；`FileTreePanel` 用当前 FileTab 的**路径字符串**高亮、单击打开／折叠，本机拖动只提供 Finder 文件 URL，SSH 不会提供本机 URL；该公开 URL 与内部拖动若混用，会被现有 `FileTreeImportDrop` 当 Finder 导入而**复制**。`WorkspaceBackend` 已有 `rename/delete`，没有复制；本机 Finder 导入的同卷暂存和 `RENAME_EXCL` 已保障原子不覆盖。`⌘P` 的 `ProjectFileIndex` 仅索引**本机文件**，Git 仓库使用 tracked + nonignored untracked 文件集；其搜索范围与 Files 隐藏规则独立。旧实现将 Git 查询失败与非 Git 目录混同，直接回退全目录扫描；远端扩展必须区分两者。固定 SSH 项目的 identity/后端实例在断开重连后不一定改变，须以真实连接变化使旧 `⌘P` 数据失效。`FileTreeModel.children` 写死过滤 `.git`，`TreeDisplayModel.Traversal` 统一维护原有目录优先与名称自然排序。
+当前基线（`main`，`f3b965f`）：`FileTreeModel.selectedPath`、`TreeKeyboardHost`、单/双击与共享 `TreeRowSurface` 已实现；尚缺 Cmd/Shift 多选。Files 已有压缩目录、懒加载、新建／重命名、单项删除、复制路径、Finder→Files 本机批量复制。`LocalWorkspaceBackend.copyFromFinder` 已用暂存和 `RENAME_EXCL` 防覆盖，不得重写。现有本机 Files 外拖只发布公开 `fileURL`，内部拖放会被 Finder 接收入口误判为复制；SSH 不发布 Mac URL。`WorkspaceBackend` 无通用复制；`ProjectFileIndex` 仅索引本机，Git 失败会误回退全目录扫描。Files 的 `.git` 隐藏在 `FileTreeModel.children` 硬编码；自然排序和目录压缩属于 `TreeDisplayModel`，不重写。
 
-现行 Files 前台每 2 秒检查本机／SSH 目录，SSH Git 前台每 5 秒检查；本机 Git 已有 FSEvents。刷新机制由 #40 改造，#5 不复制监听器、轮询或额外事件总线。另有三个实际集成边界：`FileTab.writeCurrentText()` 在异步写前捕获旧路径，重命名后只检查结果代次**挡不住已发生的旧路径写入**；`TerminalManager.fileRenamed()` 目前只遍历发起窗口项目；在 SSH 项目里通过 Finder 打开的本机 FileTab 与远端同名路径不能仅凭字符串判定当前行。**工作文件标签的右键 `Reveal in Finder` 目前不检查文件后端，连 SSH 路径也传给本机 Finder；必须在文件身份归属处修正，同机路径不能跨机器解释。**
+当前 Files 可见且 App 在前台时每 2 秒同步本机／SSH 目录，SSH Git 另有 5 秒刷新；#40 负责事件化，本计划不建第二套刷新。**已确认的缺口**：`FileTab.writeCurrentText` 在 await 前捕获路径，`targetGeneration` 只能阻止旧结果回写，不能阻止已发生的旧路径写入；`WorkspaceWindowModel.fileRenamed` 仅遍历当前窗口的 `projects`；工作标签右键 `Reveal in Finder` 不区分 SSH／本机。**已具备而无需重做**：`ToolPanelView.openFilePath` 已通过 `file.workspaceIdentity == filesTarget.workspace` 校验当前文件高亮，且使用 `Project.selectedTab`，不是旧的 `focusedContent`。
 
 ## 需求与边界
 
-1. **F1 多选与文件操作。** 复用 #13 P1/P2 已有的窗口、活动 Dock 组和原生键盘焦点，**并在 #13 P3-T2 实际完成后复用其 Files 单行游标与行焦点边框**；本计划只扩展 Cmd/Shift 多选集合和键盘选择锚点，不另造第二个当前行状态，也不重复实现单击后保持 Files 焦点。⌘ 逐项、⇧ 连续区间、键盘导航／选择、右键与键盘操作；复制、剪切、粘贴、制作副本、移动、批量删除。文件树选中项独立于正在编辑的 FileTab；右键未选中行与右键已选中集合应符合正常多选语义。所有入口复用相同操作、重名与失败处理。复制／移动保留目录结构及符号链接本身，不静默覆盖，不在失败／取消时丢失源文件；本机删除进废纸篓，SSH 删除先告知不可通过本机废纸篓恢复。剪切**不是立即删除**，只在目标真正完成时移走源。
+1. **F1 多选与操作。** 在现有 Files 单行游标与原生焦点上增加 Cmd/Shift 多选、范围锚点、键盘选择、右键／快捷键和统一的复制、剪切、粘贴、副本、移动、批删入口。不新建第二个焦点状态。复制／移动保留文件、目录和链接语义，不覆盖；失败不得丢源或脏编辑。本机删除进废纸篓，远端永久删除必须确认；剪切仅在目标成功后移动。同一 Files 树内操作，跨机器／窗口／项目传输不在本轮范围。
 2. **F2 真正的拖放。** 当前**同一个活动 Files 树内**拖动单项／多选项至目录；拖动源来自 F1 已选择的集合，悬停或预览不改变 #13 的真实活动组，成功落地后恢复焦点；默认移动、按 Option 明确复制。必须以**最小私有拖动标识**区别树内文件操作和已有公开 Mac `fileURL`（它在 Finder→Files 中始终是复制），否则本机内部移动会被误识别为 Finder 复制。支持目录行、文件行的父目录、压缩目录链、面板根与空白区，拒绝目标不存在、自身／子目录循环及目标身份失效。Finder→本机 Files 保留已验证的独立导入入口，只在实际共用底层原子复制时复用，不再安排单独的重复整合阶段。**SSH POSIX 路径不得冒充本机 file URL**。不跨项目／窗口、Mac ↔ SSH 或不同远端传文件。
 3. **F3 快速打开与文件定位。** 不新增 Files 面板内搜索框、文件名／相对路径过滤或未展开目录递归搜索。保留现有 `⌘P` 专用文件快速打开及 Git tracked/nonignored 规则，仅扩展 SSH 当前项目的文件结果，异步操作须绑定正确项目、机器、根和连接，远端 IO／输出有界，旧结果不能误打开其它机器文件。「在文件管理器中显示当前文件」沿真实路径逐级展开、滚动并高亮；遇到排除规则时临时揭示目标及祖先，不修改持久设置，也不新建文件索引。
 4. **F4 文件隐藏与可扩展 Exclude 约定。** 本次实现类似 VS Code `files.exclude` 的**Files 可见性**规则：支持项目根相对的路径／目录 Glob（`*`、`**`、`?`），目录匹配时隐藏整个子树；使用现有全局 `config.toml` 的字符串模式列表，在 #44 负责建立的 **Settings → File Manager** 原生页面提供编辑入口，并可临时显示被排除的项目。默认等价于现行隐藏 `.git`，不默认隐藏其它点文件或 `node_modules`；现有用户升级后显示内容不意外减少。隐藏不删除文件、不改 `.gitignore`／Git Graph／Git 状态，也不隐式改变 `⌘P` 搜索范围。无效规则明确反馈；文件定位可以临时越过规则。**不增加文件排序设置，也不修改共享树原有自然排序。** **为后续其它 Exclude 保留边界，而非现在实现它们**：`search.exclude` 归未来跨文件搜索；`files.watcherExclude` 归 #40 的实际监听范围／可靠性评估。它们可以沿用本任务验证过的纯 Glob 匹配语义，但必须有独立键、独立默认值和独立业务调用，不能使 `files.exclude` 自动改变 `⌘P`、Git 或监听，也不先创建通用 Exclude Manager。暂不支持 VS Code `when` 对象表达式、项目级 `.vscode/settings.json` 或不存在的搜索设置 UI。
@@ -18,7 +18,7 @@ Bailey 的 Files 已有共享树行、目录压缩／懒加载、新建、重命
 
 ## 默认行为、身份与数据保护
 
-- **焦点前置**：#13 P1/P2 提供窗口 key、活动 Dock 组和原生 first responder；**#13 P3 已安排 Files 单/双击的打开意图、当前行游标和真正列表聚焦的边框**，#5 在此基础上增加多选集合/锚点和批量操作。前台高亮、文件选中与当前打开 FileTab 高亮不得混成一个布尔值。只有 Files 自身真正接收输入时才拦截 ⌘A/C/X/V，不能夺取终端、编辑器或浏览器的原生命令。#13 未满足对应焦点验收时，不得认定 P1-T1 完成。
+- **焦点基线**：当前 `FileTreeModel.selectedPath`、`FileTreeScrollView.handleKey`、`TreeKeyboardHost` 与共享树行焦点描边已落地；P1-T1 在它们之上增加多选与修饰键，不新增焦点框架。回归单击、双击、Space、Return、键盘焦点及 Git 树共享行为；若发现基线缺陷，先修最小所有者。只有 Files 真正持有 first responder 才消费 ⌘A/C/X/V。
 - 本机／SSH 采用共享 `FileTreeModel`、`TreeDisplayModel`、`WorkspaceBackend`，耗时文件 IO 不阻塞主 actor。当前的目录压缩、Git 装饰、行命中、滚动、主题、本地化及无障碍不得倒退。
 - 选中集合与当前文件定位属于当前 Files 项目／根／连接，切项目、机器或通道后不得跨目标复用旧操作。复制／剪切保存来源描述，粘贴时重新确认源与目标属本次允许的**同一 Files 树和机器**，不可仅凭字符串路径判断身份。`PanelContext.Identity.pinned` 不携带连接 ID，因此仍须复核现有后端通道／树代次；操作后的过期回写不能污染新工作区。
 - 移动／重命名前必须与受影响 FileTab 的**在途写入和失焦自动保存**完成正确排序；单纯更改 `FileTab.path`、写入完成后检查 generation 不能阻止已经写入旧路径。先保护未保存正文、Undo 和保存目标，再进行磁盘移动，只有成功项重定向打开的文件／目录孩子和项目固定路径。跨窗口同步优先复用现有窗口注册表，先用真实测试证明作用范围；不能造第二套全局协调器。
@@ -38,6 +38,6 @@ Files 面板内搜索／名称路径过滤／全量目录索引；可配置排�
 - **性能与清理**：Files 保持已有懒加载，不为名称搜索扫描未展开目录或增加 SSH 查询；仅 `⌘P` SSH 快速打开按其自身任务控制 IO、输出和过期结果，无变化不重复发布，监视内存／CPU／SSH 请求。每个实现任务同步删除本任务取代的旧代码和冗余路径，原子防覆盖、远端真实回滚以及操作身份核对不得因「清理围栏」而削弱；watcher 生命周期仍归 #40。测冷／热目录与 `⌘P`、请求次数、响应中位数和 p95，并核对真实内容。
 - **环境缺口**：未实际拥有的 macOS 最低版本机器、授权之外的 SSH 主机、真实网络故障条件及物理外设不能假装通过；执行时对每项写明具体阻塞、替代测试、风险、后续补验和是否阻塞验收。不能用少数示例代替已可安全执行的适用情形。
 
-跨计划依赖：#13 Focus 的 [P3-T1/T2](../focus-navigation/plan-p3.md) 先完成打开意图、单行游标与真实键盘焦点的验收，且共享树行更改须与 [P4 Git](../focus-navigation/plan-p4.md) 核对；#44 Settings 先提供 File Manager 页面，#5 再实现 Exclude 控件；#40 按自身计划实施事件刷新。**Files 取得焦点时，旧的 `Project.focusedContent` 将不再指向工作标签；当前编辑文件的显示高亮必须改由仍可用的最近工作文件标签及真实机器身份获取，不能随着 Files 自己聚焦而消失。** 本计划仅消费这些已证实成立的接口，**不复制 Focus/Settings/Watcher 的实现**。
+跨计划依赖：现有 Focus 行为已落地，**不再依赖被移除的旧计划路径**；[#44 Settings](../settings-by-feature/plan-p1.md) 完成 File Manager 页面后，P3-T1 在该页接入 Exclude；[#40 刷新](../event-driven-workspace-refresh/idea.md) 由独立任务完成，P4 只消费真实存在的通知。当前文件高亮继续复用 `ToolPanelView.openFilePath` 的标签与机器校验；P3-T3 只增加 Reveal 与修复工作标签的远端 Finder 菜单，不重复改写已正确的高亮逻辑。
 
 测试与证据归属：[docs/testing.md](../../../docs/testing.md)；功能文档分别由 `docs/features/files.md`、`command-palette.md`、`editor.md`、`settings.md`、`ssh.md`、`projects.md` 和 `docs/ui.md` 维护。仅在实现涉及行为的 task 中同步更新，不提前将计划写成已实现事实。
