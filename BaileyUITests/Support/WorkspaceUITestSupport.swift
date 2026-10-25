@@ -10,6 +10,7 @@ enum WorkspaceUITestSupport {
         let home: URL
         let language: String?
         let usesFixtureHome: Bool
+        var isReadyForReuse = false
     }
 
     private static var session: Session?
@@ -28,7 +29,8 @@ enum WorkspaceUITestSupport {
         let needsLaunch: Bool
         if let current = session,
            configurationHome == nil, !current.usesFixtureHome, current.language == language,
-           current.app.state != .notRunning, resetWorkspace(current.app) {
+           current.app.state != .notRunning,
+           (current.isReadyForReuse || resetWorkspace(current.app)) {
             app = current.app
             needsLaunch = false
         } else {
@@ -63,15 +65,18 @@ enum WorkspaceUITestSupport {
             needsLaunch = true
         }
 
+        session?.isReadyForReuse = false
         let previousInput = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
         let unicodeHexWasEnabled = inputSource(id: "com.apple.keylayout.UnicodeHexInput") != nil
         let originalClipboard = try clipboardItems()
         test.addTeardownBlock { @MainActor in
-            if let active = session, active.app === app, !active.usesFixtureHome,
-               app.state != .notRunning {
-                if !resetWorkspace(app) { finishSession() }
-            } else {
-                finishSession()
+            if let active = session, active.app === app {
+                if active.usesFixtureHome || app.state == .notRunning {
+                    finishSession()
+                } else if !active.isReadyForReuse {
+                    if resetWorkspace(app) { session?.isReadyForReuse = true }
+                    else { finishSession() }
+                }
             }
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
