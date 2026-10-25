@@ -10,11 +10,6 @@ struct NativeTextLineIndex {
 
     var lineCount: Int { lineLengths.count }
 
-    struct EditedRows {
-        let replaced: Range<Int>
-        let inserted: Range<Int>
-    }
-
     init(_ text: NSString) {
         length = text.length
         let positions = Self.starts(in: text, from: 0, to: text.length)
@@ -29,7 +24,7 @@ struct NativeTextLineIndex {
 
     @discardableResult
     mutating func replace(in range: NSRange, replacementLength: Int,
-                          text: NSString) -> EditedRows {
+                          text: NSString) -> (replaced: Range<Int>, inserted: Range<Int>) {
         precondition(range.location >= 0 && range.length >= 0 && NSMaxRange(range) <= length)
         let originalCount = lineCount
         let first = max(0, row(at: range.location) - 1)
@@ -54,8 +49,7 @@ struct NativeTextLineIndex {
             lengths = PrefixSums(lineLengths)
         }
         length = text.length
-        return EditedRows(replaced: first..<last,
-                          inserted: first..<(first + newLengths.count))
+        return (first..<last, first..<(first + newLengths.count))
     }
 
     private struct PrefixSums {

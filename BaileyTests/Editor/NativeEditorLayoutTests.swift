@@ -908,6 +908,15 @@ final class NativeEditorLayoutTests: XCTestCase {
         scroll.layoutSubtreeIfNeeded()
         XCTAssertGreaterThan(editor.frame.width, original * 1.5,
                              "Changing the font must invalidate the measured line widths")
+
+        editor.configureWrapping(true, viewportWidth: 420)
+        editor.insertText("", replacementRange: NSRange(location: 0, length: wide.utf16.count))
+        editor.configureWrapping(false, viewportWidth: 420)
+        XCTAssertEqual(editor.frame.width, 420, accuracy: 1,
+                       "Edits while wrapped must not reuse stale measured line widths")
+        editor.undoManager?.undo()
+        editor.configureWrapping(false, viewportWidth: 420)
+        XCTAssertGreaterThan(editor.frame.width, original * 1.5)
     }
 
     func testUnwrappedVariableWidthFontDoesNotReserveFixedPitchEstimate() {
@@ -922,12 +931,16 @@ final class NativeEditorLayoutTests: XCTestCase {
     func testDeletingLongestUnwrappedLineRestoresHorizontalExtent() async throws {
         let long = "let veryLong = \"" + String(repeating: "a", count: 2_000) + "\"\n"
         let short = "let value = \"中文 👋\"\n"
-        let (window, scroll, editor) = mount(long + short, width: 500)
+        let (window, scroll, editor) = mount(long + long + short, width: 500)
         defer { window.close() }
         editor.allowsUndo = true
         let originalWidth = editor.frame.width
         XCTAssertGreaterThan(originalWidth, 5_000)
 
+        editor.insertText("", replacementRange: NSRange(location: 0, length: long.utf16.count))
+        scroll.layoutSubtreeIfNeeded()
+        XCTAssertEqual(editor.frame.width, originalWidth, accuracy: 1,
+                       "Removing one of two widest lines must keep the remaining width")
         editor.insertText("", replacementRange: NSRange(location: 0, length: long.utf16.count))
         scroll.layoutSubtreeIfNeeded()
         XCTAssertEqual(editor.string, short)
@@ -938,8 +951,8 @@ final class NativeEditorLayoutTests: XCTestCase {
 
         editor.undoManager?.undo()
         scroll.layoutSubtreeIfNeeded()
-        XCTAssertEqual(editor.string, long + short)
-        XCTAssertGreaterThan(editor.frame.width, originalWidth - 1)
+        XCTAssertEqual(editor.string, long + long + short)
+        XCTAssertEqual(editor.frame.width, originalWidth, accuracy: 1)
         XCTAssertEqual(editor.frame.width, editor.textContainer?.size.width ?? -1, accuracy: 1)
     }
 

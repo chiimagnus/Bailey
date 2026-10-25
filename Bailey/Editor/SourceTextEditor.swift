@@ -273,21 +273,19 @@ struct SourceTextEditor: NSViewRepresentable {
                 MainActor.assumeIsolated {
                     guard let self, let file = self.file,
                           file.editorCoordinator === self,
-                          let clipView = scrollView?.contentView else { return }
-                    guard scrollView?.window != nil else { return }
-                    (scrollView?.documentView as? NativeCodeTextView)?
-                        .gutterView?.needsDisplay = true
+                          let scrollView, scrollView.window != nil else { return }
+                    let clipView = scrollView.contentView
+                    let editor = scrollView.documentView as? NativeCodeTextView
+                    editor?.gutterView?.needsDisplay = true
                     // Ignore early AppKit clip updates until the saved
                     // position is applied to a sized document view.
                     if (scrollView as? RestorableScrollView)?.restoreOnFirstLayout != nil { return }
                     file.editorState.scrollX = clipView.bounds.origin.x
                     file.editorState.scrollY = (scrollView as? RestorableScrollView)?
                         .sessionScrollY ?? clipView.bounds.origin.y
-                    (scrollView?.documentView as? NativeCodeTextView)?
-                        .syntaxCoordinator?.updateViewportRange(
-                            (scrollView?.documentView as? NativeCodeTextView)?
-                                .textLayoutManager?.textViewportLayoutController.viewportRange
-                        )
+                    editor?.syntaxCoordinator?.updateViewportRange(
+                        editor?.textLayoutManager?.textViewportLayoutController.viewportRange
+                    )
                 }
             }
         }

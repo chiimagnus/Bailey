@@ -461,17 +461,16 @@ class NativeCodeTextView: NSTextView {
         if showsLineNumbers {
             let ruler = gutterView ?? NativeLineNumberRuler(scrollView: scroll, orientation: .verticalRuler)
             ruler.editor = self
-            ruler.clientView = self
             ruler.ruleThickness = gutterThickness
-            ruler.reservedThicknessForMarkers = 0
             ruler.backgroundColor = backgroundColor
             ruler.selectedLineHighlightColor = selectedLineHighlightColor
             gutterView = ruler
-        } else {
-            gutterView?.removeFromSuperview()
+            scroll.superview?.needsLayout = true
+        } else if let ruler = gutterView {
+            ruler.removeFromSuperview()
             gutterView = nil
+            scroll.superview?.needsLayout = true
         }
-        scroll.superview?.needsLayout = true
     }
 
     var gutterNumberFont: NSFont {
@@ -517,6 +516,7 @@ class NativeCodeTextView: NSTextView {
         guard viewportWidth > 0 else { return }
         let codeWidth: CGFloat
         if wraps {
+            measuredLineWidths = nil
             codeWidth = viewportWidth
         } else if let index = lineIndex {
             let currentFont = font ?? .monospacedSystemFont(ofSize: 13, weight: .regular)
@@ -547,15 +547,15 @@ class NativeCodeTextView: NSTextView {
         }
         let previousRange = NSRange(location: edited.location, length: priorLength)
         let replacement = storage.attributedSubstring(from: edited).string
+        let currentText = storage.string as NSString
         syntaxCoordinator?.willChangeContent(in: previousRange)
         if lineIndex?.length == storage.length - storage.changeInLength,
            let changed = lineIndex?.replace(
                in: previousRange, replacementLength: replacement.utf16.count,
-               text: storage.string as NSString
+               text: currentText
            ), let index = lineIndex {
-            if var measured = measuredLineWidths, measured.font.isEqual(font) {
-                measured.replace(changed, index: index, text: storage.string as NSString)
-                measuredLineWidths = measured
+            if let measured = measuredLineWidths, measured.font.isEqual(font) {
+                measured.replace(changed, index: index, text: currentText)
             } else {
                 measuredLineWidths = nil
             }
@@ -578,13 +578,12 @@ class NativeCodeTextView: NSTextView {
 }
 
 /// Cached natural line widths, updated only for the rows affected by an edit.
-/// Measuring every paragraph again on each keystroke is too expensive for large files.
 @MainActor
-private struct NativeMeasuredLineWidths {
+private final class NativeMeasuredLineWidths {
     let font: NSFont
     private var widths: [CGFloat]
+    private(set) var maximum: CGFloat = 0
     var count: Int { widths.count }
-    var maximum: CGFloat { widths.max() ?? 0 }
 
     init(index: NativeTextLineIndex, text: NSString, font: NSFont) {
         self.font = font
@@ -595,16 +594,25 @@ private struct NativeMeasuredLineWidths {
             widths.append(Self.measure(row: row, index: index, text: text,
                                        font: font, cache: &cache))
         }
+        maximum = widths.max() ?? 0
     }
 
-    mutating func replace(
-        _ changed: NativeTextLineIndex.EditedRows, index: NativeTextLineIndex, text: NSString
+    func replace(
+        _ changed: (replaced: Range<Int>, inserted: Range<Int>),
+        index: NativeTextLineIndex, text: NSString
     ) {
         var cache: [String: CGFloat] = [:]
         let updated = changed.inserted.map {
             Self.measure(row: $0, index: index, text: text, font: font, cache: &cache)
         }
+        let replacedMaximum = widths[changed.replaced].contains(maximum)
         widths.replaceSubrange(changed.replaced, with: updated)
+        let newMaximum = updated.max() ?? 0
+        if newMaximum >= maximum {
+            maximum = newMaximum
+        } else if replacedMaximum {
+            maximum = widths.max() ?? 0
+        }
     }
 
     private static func measure(
@@ -691,10 +699,18 @@ extension NSTextContentManager {
 @MainActor
 final class NativeLineNumberRuler: NSRulerView {
     weak var editor: NativeCodeTextView?
-    var backgroundColor: NSColor = .textBackgroundColor { didSet { needsDisplay = true } }
-    var textColor: NSColor = .secondaryLabelColor { didSet { needsDisplay = true } }
-    var selectedLineTextColor: NSColor = .labelColor { didSet { needsDisplay = true } }
-    var selectedLineHighlightColor: NSColor = .clear { didSet { needsDisplay = true } }
+    var backgroundColor: NSColor = .textBackgroundColor {
+        didSet { if backgroundColor != oldValue { needsDisplay = true } }
+    }
+    var textColor: NSColor = .secondaryLabelColor {
+        didSet { if textColor != oldValue { needsDisplay = true } }
+    }
+    var selectedLineTextColor: NSColor = .labelColor {
+        didSet { if selectedLineTextColor != oldValue { needsDisplay = true } }
+    }
+    var selectedLineHighlightColor: NSColor = .clear {
+        didSet { if selectedLineHighlightColor != oldValue { needsDisplay = true } }
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         // AppKit may supply a parent's dirty region, so the fixed gutter
@@ -732,9 +748,10 @@ final class NativeLineNumberRuler: NSRulerView {
                 .foregroundColor: selected && editor.highlightSelectedLine
                     ? selectedLineTextColor : textColor
             ])
-            let y = centerY - label.size().height / 2
-            if y + label.size().height >= rect.minY, y <= rect.maxY {
-                label.draw(at: NSPoint(x: bounds.maxX - label.size().width - 6, y: y))
+            let size = label.size()
+            let y = centerY - size.height / 2
+            if y + size.height >= rect.minY, y <= rect.maxY {
+                label.draw(at: NSPoint(x: bounds.maxX - size.width - 6, y: y))
             }
         }
         if content.documentRange.isEmpty {
