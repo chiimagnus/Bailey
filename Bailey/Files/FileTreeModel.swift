@@ -1259,6 +1259,7 @@ final class FileTreeModel {
                     }
                     self.selectedPath = (visibleAncestor ?? compactedChild)?.path
                 }
+                let hadSelection = !selectedPaths.isEmpty
                 selectedPaths.formIntersection(visiblePaths)
                 if let selectedCompactPath,
                    !traversal.rows.contains(where: {
@@ -1267,7 +1268,7 @@ final class FileTreeModel {
                    }) {
                     self.selectedCompactPath = nil
                 }
-                if selectedPaths.isEmpty, let selectedPath = self.selectedPath {
+                if hadSelection, selectedPaths.isEmpty, let selectedPath = self.selectedPath {
                     selectedPaths.insert(selectedPath)
                 }
                 if let anchor = selectionAnchorPath, !visiblePaths.contains(anchor) {

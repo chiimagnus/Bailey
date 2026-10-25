@@ -1083,6 +1083,26 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(tree.selectedPaths, [rows[0].path])
     }
 
+    func testCommandDeselectionStaysEmptyAfterDirectoryRefresh() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("selected.txt")
+        try Data("unchanged".utf8).write(to: file)
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let row = try XCTUnwrap(tree.items.first { $0.path == file.path })
+        tree.select(row)
+        tree.select(row, toggling: true)
+        XCTAssertEqual(tree.selectedPath, file.path, "Keyboard cursor must remain independent")
+        XCTAssertTrue(tree.selectedPaths.isEmpty)
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        XCTAssertEqual(tree.selectedPath, file.path)
+        XCTAssertTrue(tree.selectedPaths.isEmpty,
+                      "Refresh must not reselect an explicitly deselected row")
+        XCTAssertTrue(tree.selectedOperationPaths.isEmpty)
+    }
+
     func testFileTreeMultiSelectionTracksCollapseRenameAndWorkspaceSwitch() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
