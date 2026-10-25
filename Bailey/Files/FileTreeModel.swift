@@ -1,11 +1,99 @@
 import Foundation
 import Observation
 
+/// Files-only visibility patterns; Git and command-palette indexing do not consume these.
+nonisolated enum FilesExcludeGlob {
+    static func validate(_ patterns: [String]) throws {
+        for pattern in patterns {
+            let segments = pattern.split(separator: "/", omittingEmptySubsequences: false)
+            guard !pattern.isEmpty, !pattern.hasPrefix("/"),
+                  !segments.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }),
+                  !pattern.contains(where: { "\\[]{}".contains($0) }),
+                  !segments.contains(where: { $0.contains("**") && $0 != "**" })
+            else {
+                throw NSError(domain: "Bailey.FilesExclude", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: String(
+                        localized: "Invalid file exclusion pattern: \(pattern)", table: "Settings"
+                    )
+                ])
+            }
+        }
+    }
+
+    static func excludes(_ relativePath: String, patterns: [String]) -> Bool {
+        let path = relativePath.split(separator: "/").map(String.init)
+        guard !path.isEmpty else { return false }
+        return patterns.contains { pattern in
+            let tokens = pattern.split(separator: "/").map(String.init)
+            guard pattern.contains("/") else {
+                return matchesSegment(pattern, name: path[path.count - 1])
+            }
+            var matched = Array(repeating: false, count: path.count + 1)
+            matched[0] = true
+            for token in tokens {
+                var next = Array(repeating: false, count: path.count + 1)
+                if token == "**" {
+                    next[0] = matched[0]
+                    for index in 1...path.count {
+                        next[index] = matched[index] || next[index - 1]
+                    }
+                } else {
+                    for index in 1...path.count where matched[index - 1] {
+                        next[index] = matchesSegment(token, name: path[index - 1])
+                    }
+                }
+                matched = next
+            }
+            return matched[path.count]
+        }
+    }
+
+    private static func matchesSegment(_ pattern: String, name: String) -> Bool {
+        let letters = Array(name)
+        var matched = Array(repeating: false, count: letters.count + 1)
+        matched[0] = true
+        for token in pattern {
+            var next = Array(repeating: false, count: letters.count + 1)
+            if token == "*" {
+                next[0] = matched[0]
+                if !letters.isEmpty {
+                    for index in 1...letters.count {
+                        next[index] = matched[index] || next[index - 1]
+                    }
+                }
+            } else if !letters.isEmpty {
+                for index in 1...letters.count where matched[index - 1] {
+                    next[index] = token == "?" || token == letters[index - 1]
+                }
+            }
+            matched = next
+        }
+        return matched[letters.count]
+    }
+}
+
 /// Flattened, lazily-expanded view of a directory tree.
 @MainActor
 @Observable
 final class FileTreeModel {
     typealias Item = TreeDisplayModel.Row
+
+    let settings: AppSettings
+    private(set) var showExcluded = false
+
+    init(settings: AppSettings = .shared) {
+        self.settings = settings
+    }
+
+    func setShowExcluded(_ visible: Bool) async {
+        guard visible != showExcluded else { return }
+        showExcluded = visible
+        await rebuild()
+    }
+
+    func refreshVisibility() async {
+        await rebuild()
+    }
 
     /// A pending inline "new file/folder": an input row shown inside
     /// `parentDir` until the user names it (Enter) or cancels (Escape/blur).
@@ -181,6 +269,7 @@ final class FileTreeModel {
         }
         if scopeChanged || channelChanged {
             items = []
+            showExcluded = false
             clearSelection()
             // Inline editing and old rows cannot cross backend identity.
             renamingPath = nil
@@ -723,9 +812,13 @@ final class FileTreeModel {
             let backend = self.backend
             let expanded = self.expanded
             let draft = self.draft
+            let exclude = settings.filesExclude
+            let revealAll = showExcluded
             var refreshedDirectories: Set<String> = []
             if needsRefresh {
-                let directories = Array(Set(cachedDirectories.keys).union([path])).sorted()
+                let directories = Array(Set(cachedDirectories.keys).union([path])).filter {
+                    revealAll || Self.isVisible($0, in: path, excluding: exclude)
+                }.sorted()
                 refreshedDirectories = Set(directories)
                 let fresh = await backend.list(directories: directories)
                 guard generation == rebuildGeneration else { return }
@@ -740,10 +833,8 @@ final class FileTreeModel {
             var traversal = TreeDisplayModel.Traversal(root: path, directoryDepthLimit: 32) {
                 expanded.contains($0)
             }
-            var visited: Set<String> = []
             var queriedDirectories = refreshedDirectories
             while let directory = traversal.nextDirectory() {
-                visited.insert(directory)
                 if cachedDirectories[directory] == nil && !queriedDirectories.contains(directory) {
                     // Directory compaction probes collapsed siblings too. Fetch
                     // the current frontier together instead of N SSH round trips.
@@ -760,8 +851,12 @@ final class FileTreeModel {
                     cachedDirectories.merge(fresh, uniquingKeysWith: { _, new in new })
                 }
                 traversal.receive(Self.children(
-                    of: directory, entries: cachedDirectories[directory], draft: draft
+                    of: directory, entries: cachedDirectories[directory], draft: draft,
+                    root: path, excluding: exclude, revealAll: revealAll
                 ))
+            }
+            if exclude != settings.filesExclude || revealAll != showExcluded {
+                rebuildPending = true
             }
             if !rebuildPending, traversal.rootReadable,
                generation == rebuildGeneration, epoch == treeEpoch,
@@ -780,7 +875,6 @@ final class FileTreeModel {
                     selectionAnchorPath = self.selectedPath
                 }
                 if traversal.rows != items { items = traversal.rows }
-                cachedDirectories = cachedDirectories.filter { visited.contains($0.key) }
             } else if epoch != treeEpoch || path != rootPath || scope != workspaceScope {
                 rebuildPending = true
             }
@@ -788,8 +882,24 @@ final class FileTreeModel {
         if generation == rebuildGeneration { isRebuilding = false }
     }
 
+    private static func isVisible(
+        _ path: String, in root: String, excluding patterns: [String]
+    ) -> Bool {
+        guard path == root || LocalPathScope.contains(path, in: root) else { return false }
+        guard path != root else { return true }
+        let relative = String(path.dropFirst(root.hasSuffix("/") ? root.count : root.count + 1))
+        let parts = relative.split(separator: "/")
+        var prefix = ""
+        for part in parts {
+            prefix = prefix.isEmpty ? String(part) : prefix + "/" + part
+            if FilesExcludeGlob.excludes(prefix, patterns: patterns) { return false }
+        }
+        return true
+    }
+
     private static func children(
-        of dir: String, entries: [WorkspaceEntry]?, draft: Draft?
+        of dir: String, entries: [WorkspaceEntry]?, draft: Draft?,
+        root: String, excluding patterns: [String], revealAll: Bool
     ) -> [Item]? {
         guard let entries else { return nil }
         var out: [Item] = []
@@ -800,7 +910,12 @@ final class FileTreeModel {
             ))
         }
         out += entries
-            .filter { $0.name != ".git" }
+            .filter { entry in
+                revealAll || isVisible(
+                    (dir as NSString).appendingPathComponent(entry.name),
+                    in: root, excluding: patterns
+                )
+            }
             .map { entry in
                 Item(
                     name: entry.name,

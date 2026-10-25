@@ -103,6 +103,21 @@ struct FileTreePanel: View {
                     .buttonStyle(.plain)
                     .help(String(localized: "Reveal in Finder", table: "Sidebar"))
                 }
+                Menu {
+                    Toggle(String(localized: "Show Excluded Files", table: "Sidebar"),
+                           isOn: Binding(
+                            get: { model.showExcluded },
+                            set: { visible in
+                                if isCurrentTarget() { Task { await model.setShowExcluded(visible) } }
+                            }
+                           ))
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .panelFont(size: 11)
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
             }
             .padding(.horizontal, 12)
             .padding(.top, 8)
@@ -120,6 +135,9 @@ struct FileTreePanel: View {
                 makeDragProvider: makeDragProvider,
                 receiveInternalDrop: receiveInternalDrop
             )
+        }
+        .onChange(of: model.settings.filesExclude) { _, _ in
+            Task { await model.refreshVisibility() }
         }
         .onDrop(of: [FileTreeDrag.type, UTType.fileURL.identifier], delegate: FileTreeImportDrop(
             directory: model.rootPath,

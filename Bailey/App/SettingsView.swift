@@ -55,6 +55,8 @@ struct SettingsView: View {
     @State private var barkBusy = true
     @State private var barkLoaded = false
     @State private var barkStatus: String?
+    @State private var excludeDraft = ""
+    @State private var excludeError: String?
 
     init(application: WorkspaceApplication, settings: AppSettings = .shared) {
         self.application = application
@@ -216,6 +218,7 @@ struct SettingsView: View {
             || settings.gitViewMode != .tree
             || settings.gitAlwaysAcceptCheckout
             || settings.gitAlwaysProceedPushTag
+            || settings.filesExclude != AppSettings.defaultFilesExclude
             || settings.wrapLines
             || settings.restoreTerminalHistory
     }
@@ -318,9 +321,45 @@ struct SettingsView: View {
     }
 
     private var fileManagerSettings: some View {
-        Section {
-            Text(String(localized: "File visibility settings will appear here.", table: "Settings"))
+        Section(String(localized: "Excluded files", table: "Settings")) {
+            Text(String(localized: "One glob per line. Hidden files remain on disk and searchable in Command Palette.", table: "Settings"))
+                .font(.callout)
                 .foregroundStyle(.secondary)
+            TextEditor(text: $excludeDraft)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 120)
+                .accessibilityLabel(String(localized: "Excluded file patterns", table: "Settings"))
+            if let excludeError {
+                Text(verbatim: excludeError)
+                    .foregroundStyle(.red)
+            }
+            HStack {
+                Button(String(localized: "Restore Default Exclusions", table: "Settings")) {
+                    applyExclusions(AppSettings.defaultFilesExclude)
+                }
+                Spacer()
+                Button(String(localized: "Apply", table: "Settings")) {
+                    let patterns = excludeDraft.isEmpty ? [] : excludeDraft
+                        .split(separator: "\n", omittingEmptySubsequences: false)
+                        .map(String.init)
+                    applyExclusions(excludeDraft.hasSuffix("\n")
+                        ? Array(patterns.dropLast()) : patterns)
+                }
+            }
+        }
+        .onAppear {
+            excludeDraft = settings.filesExclude.joined(separator: "\n")
+            excludeError = nil
+        }
+    }
+
+    private func applyExclusions(_ patterns: [String]) {
+        do {
+            try settings.applyFilesExclude(patterns)
+            excludeDraft = patterns.joined(separator: "\n")
+            excludeError = nil
+        } catch {
+            excludeError = error.localizedDescription
         }
     }
 

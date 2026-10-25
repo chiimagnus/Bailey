@@ -1796,6 +1796,16 @@
           }
         }
       }
+    },
+    "Show Excluded Files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示被排除的文件"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

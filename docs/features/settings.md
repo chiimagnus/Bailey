@@ -12,7 +12,11 @@
 
 ## 设置界面
 
-`⌘,` 打开原生 SwiftUI `Settings` 场景。两栏导航按业务分为 Common、Text Editor、Terminal、Browser、File Manager、Git Manager、Projects，以及连接下的端口转发与手机通知；右侧仍使用系统 `Form`。全局外观、明暗主题和面板字号在 Common；编辑器折行在 Text Editor；终端字体、光标、Option 和历史在 Terminal；Git 布局与工具栏在 Git Manager。Browser、Projects 和尚未接入隐藏规则的 File Manager 暂无可配置项，不添加虚构开关。现有配置键和实际生效对象不变，「恢复默认」也覆盖两项 Git 确认偏好。隔离测试模式不展示手机通知，Bark 钥匙串与隧道管理仍走原有实现。
+`⌘,` 打开原生 SwiftUI `Settings` 场景。两栏导航按业务分为 Common、Text Editor、Terminal、Browser、File Manager、Git Manager、Projects，以及连接下的端口转发与手机通知；右侧仍使用系统 `Form`。全局外观、明暗主题和面板字号在 Common；编辑器折行在 Text Editor；终端字体、光标、Option 和历史在 Terminal；Git 布局与工具栏在 Git Manager。Browser 和 Projects 暂无可配置项；File Manager 提供仅影响 Files 树的 `files.exclude` 排除规则编辑，不增加搜索或监视开关。现有配置键和实际生效对象不变，「恢复默认」也覆盖两项 Git 确认偏好。隔离测试模式不展示手机通知，Bark 钥匙串与隧道管理仍走原有实现。
+
+## 文件管理器排除规则
+
+Settings → File Manager 每行输入一个 Glob（`*`、`?`、`**`），点击「应用」后才进行验证与原子写盘；失败时保留原有有效规则并显示错误。「恢复默认排除规则」恢复 `**/.git`。`config.toml` 中使用 `files.exclude = ["**/.git", "**/node_modules"]` 形式；缺少该键默认仅隐藏 `.git`，显式 `files.exclude = []` 则不隐藏任何条目。设置由 `AppSettings.shared` 唯一持有，变化即时更新 Files 树，绝不影响 Git、命令面板或以后独立的搜索／监听规则。详情见 [文件可见性](files.md#文件可见性)。
 
 ## 布局配置
 

@@ -88,6 +88,115 @@ final class FileTreeTests: XCTestCase {
         XCTFail(description)
     }
 
+    func testFilesExcludeGlobAnchoringUnicodeAndInvalidRules() throws {
+        let patterns = ["**/.git", "**/node_modules", "src/**/build?.log"]
+        XCTAssertTrue(FilesExcludeGlob.excludes(".git", patterns: patterns))
+        XCTAssertTrue(FilesExcludeGlob.excludes("src/inner/.git", patterns: patterns))
+        XCTAssertTrue(FilesExcludeGlob.excludes("node_modules", patterns: patterns))
+        XCTAssertTrue(FilesExcludeGlob.excludes("src/x/node_modules", patterns: patterns))
+        XCTAssertTrue(FilesExcludeGlob.excludes("src/build1.log", patterns: patterns))
+        XCTAssertTrue(FilesExcludeGlob.excludes("src/a/b/buildZ.log", patterns: patterns))
+        XCTAssertFalse(FilesExcludeGlob.excludes("build1.log", patterns: patterns))
+        XCTAssertFalse(FilesExcludeGlob.excludes("src/build11.log", patterns: patterns))
+        XCTAssertFalse(FilesExcludeGlob.excludes(".gitignore", patterns: patterns))
+        XCTAssertTrue(FilesExcludeGlob.excludes("notes/rapport.log", patterns: ["*.log"]))
+        XCTAssertTrue(FilesExcludeGlob.excludes("notes/café.txt", patterns: ["cafe\u{301}.txt"]))
+        XCTAssertTrue(FilesExcludeGlob.excludes("folder/a b.swift", patterns: ["a b.swift"]))
+        XCTAssertFalse(FilesExcludeGlob.excludes("folder/a b.swift", patterns: [" a b.swift"]))
+        XCTAssertFalse(FilesExcludeGlob.excludes("folder/readme.md", patterns: []))
+        for invalid in ["", "/tmp", "../a", "foo/../bar", "foo//bar",
+                        "folder/", "./foo", "bar[0-9]", "{foo,bar}", "a\\b", "ab**cd"] {
+            XCTAssertThrowsError(try FilesExcludeGlob.validate([invalid]), "Accepted: \(invalid)")
+        }
+        XCTAssertNoThrow(try FilesExcludeGlob.validate(["**/.git", "src/**/foo?.log", " a "]))
+    }
+
+    func testFilesExcludeVisibilityTogglePreservesCachedDirectoryListings() async throws {
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let config = fixture.appendingPathComponent("settings/config.toml")
+        let root = fixture.appendingPathComponent("tree")
+        for dir in [".git", ".visible", "node_modules", "folder", "folder/nested"] {
+            try FileManager.default.createDirectory(
+                at: root.appendingPathComponent(dir), withIntermediateDirectories: true
+            )
+        }
+        for file in ["folder/readme.md", "folder/nested/check.log"] {
+            try Data("content".utf8).write(to: root.appendingPathComponent(file))
+        }
+        defer { try? FileManager.default.removeItem(at: fixture) }
+
+        let settings = AppSettings(configURL: config)
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel(settings: settings)
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertFalse(tree.items.contains { $0.name == ".git" })
+        XCTAssertTrue(tree.items.contains { $0.name == ".visible" })
+        XCTAssertTrue(tree.items.contains { $0.name == "node_modules" })
+        let folder = try XCTUnwrap(tree.items.first { $0.path == root.appendingPathComponent("folder").path })
+        await tree.toggle(folder)
+        XCTAssertTrue(tree.items.contains { $0.path == root.appendingPathComponent("folder/readme.md").path })
+        let initialRequests = await backend.requests
+
+        try settings.applyFilesExclude(["**/.git", "folder", "node_modules"])
+        await tree.refreshVisibility()
+        XCTAssertFalse(tree.items.contains { $0.path == folder.path })
+        XCTAssertFalse(tree.items.contains { $0.name == "node_modules" })
+        let hiddenRequests = await backend.requests
+        XCTAssertEqual(hiddenRequests, initialRequests,
+                       "Visibility changes must reproject raw cached directory entries")
+
+        try settings.applyFilesExclude(["**/.git"])
+        await tree.refreshVisibility()
+        XCTAssertTrue(tree.items.contains { $0.path == folder.path })
+        XCTAssertTrue(tree.items.contains { $0.path == root.appendingPathComponent("folder/readme.md").path })
+        XCTAssertTrue(tree.items.contains { $0.name == "node_modules" })
+        let unhiddenRequests = await backend.requests
+        XCTAssertEqual(unhiddenRequests, initialRequests,
+                       "Unhiding an expanded directory must not list it again")
+
+        await tree.setShowExcluded(true)
+        XCTAssertTrue(tree.items.contains { $0.name == ".git" })
+        XCTAssertEqual(settings.filesExclude, ["**/.git"])
+        await tree.setShowExcluded(false)
+        XCTAssertFalse(tree.items.contains { $0.name == ".git" })
+        var expectedRequests = initialRequests
+        expectedRequests[root.appendingPathComponent(".git").path] = 1
+        let finalRequests = await backend.requests
+        XCTAssertEqual(finalRequests, expectedRequests,
+                       "A newly revealed directory may be listed once; cached ones must not re-list")
+    }
+
+    func testFilesExcludeChangedWhileDirectoryReadIsPendingUsesLatestProjection() async throws {
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = fixture.appendingPathComponent("project")
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".git"), withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("logs"), withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let settings = AppSettings(configURL: fixture.appendingPathComponent("settings.toml"))
+        let backend = CountingFileBackend()
+        await backend.delay(root.path)
+        let tree = FileTreeModel(settings: settings)
+        let read = Task { await tree.sync(root: root.path, backend: backend) }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if await backend.awaitingDirectory { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let awaiting = await backend.awaitingDirectory
+        XCTAssertTrue(awaiting, "The original tree query must still be in flight")
+        try settings.applyFilesExclude([])
+        await tree.refreshVisibility()
+        await backend.release()
+        await read.value
+        XCTAssertTrue(tree.items.contains { $0.name == ".git" },
+                      "An old query must not overwrite the newer visibility rules")
+        XCTAssertTrue(tree.items.contains { $0.name == "logs" })
+    }
+
     func testFilesPanelSelectsFirstVisibleRowAfterAsyncListingWithoutOpeningIt() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

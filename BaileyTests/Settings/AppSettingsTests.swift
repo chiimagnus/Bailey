@@ -50,6 +50,48 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings(configURL: configURL).fontSize, 19)
     }
 
+    func testFilesExcludeDefaultsExplicitEmptyAndPersistence() throws {
+        let settings = AppSettings(configURL: configURL)
+        XCTAssertEqual(settings.filesExclude, ["**/.git"])
+        XCTAssertNil(TOML.parse(at: configURL)?["files.exclude"])
+
+        try settings.applyFilesExclude([])
+        XCTAssertEqual(settings.filesExclude, [])
+        XCTAssertEqual(TOML.parse(at: configURL)?["files.exclude"]?.strings, [])
+        settings.fontSize = 17
+        XCTAssertEqual(AppSettings(configURL: configURL).filesExclude, [],
+                       "Other settings must preserve an explicit empty rule list")
+
+        try settings.applyFilesExclude(["**/.git", "**/node_modules", "**/*.log"])
+        let before = try Data(contentsOf: configURL)
+        for invalid in ["../outside", "a/[bc]", "/tmp", "folder//other"] {
+            XCTAssertThrowsError(try settings.applyFilesExclude([invalid]))
+            XCTAssertEqual(settings.filesExclude, ["**/.git", "**/node_modules", "**/*.log"])
+            XCTAssertEqual(try Data(contentsOf: configURL), before)
+        }
+        settings.resetToDefaults()
+        XCTAssertEqual(settings.filesExclude, ["**/.git"])
+        XCTAssertEqual(AppSettings(configURL: configURL).filesExclude, ["**/.git"])
+        XCTAssertNil(TOML.parse(at: configURL)?["files.exclude"])
+    }
+
+    func testFilesExcludeInvalidDiskAndFailedApplyLeaveEffectiveValuesUnchanged() throws {
+        try "files.exclude = [true]\n".write(to: configURL, atomically: true, encoding: .utf8)
+        XCTAssertEqual(AppSettings(configURL: configURL).filesExclude, ["**/.git"])
+        try "files.exclude = [\"../outside\"]\n".write(
+            to: configURL, atomically: true, encoding: .utf8
+        )
+        XCTAssertEqual(AppSettings(configURL: configURL).filesExclude, ["**/.git"])
+
+        let blocked = directory.appendingPathComponent("blocked-config")
+        try Data("unmodified".utf8).write(to: blocked)
+        let settings = AppSettings(configURL: blocked.appendingPathComponent("config.toml"))
+        XCTAssertEqual(settings.filesExclude, ["**/.git"])
+        XCTAssertThrowsError(try settings.applyFilesExclude([]))
+        XCTAssertEqual(settings.filesExclude, ["**/.git"])
+        XCTAssertEqual(try Data(contentsOf: blocked), Data("unmodified".utf8))
+    }
+
     func testCheckoutConsentIsPersistedAndResetWithTemporaryConfig() throws {
         let domain = "bailey-checkout-consent-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
@@ -89,6 +131,13 @@ final class AppSettingsTests: XCTestCase {
         settings.resetToDefaults()
         XCTAssertFalse(view.hasCustomizedPreferences)
         XCTAssertFalse(AppSettings(configURL: configURL).gitAlwaysProceedPushTag)
+        try settings.applyFilesExclude([])
+        XCTAssertTrue(view.hasCustomizedPreferences,
+                      "Explicitly showing excluded Files must enable Reset to Defaults")
+        settings.resetToDefaults()
+        XCTAssertFalse(view.hasCustomizedPreferences)
+        XCTAssertEqual(AppSettings(configURL: configURL).filesExclude,
+                       AppSettings.defaultFilesExclude)
     }
 
     func testObservationTracksAllNativeTerminalSettingsWithTemporaryConfig() {

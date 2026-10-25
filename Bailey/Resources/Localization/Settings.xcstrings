@@ -61,6 +61,16 @@
         }
       }
     },
+    "Apply" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用"
+          }
+        }
+      }
+    },
     "Auto" : {
       "localizations" : {
         "zh-Hans" : {
@@ -222,6 +232,26 @@
         }
       }
     },
+    "Excluded file patterns" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件排除规则"
+          }
+        }
+      }
+    },
+    "Excluded files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "排除的文件"
+          }
+        }
+      }
+    },
     "Family" : {
       "localizations" : {
         "zh-Hans" : {
@@ -248,16 +278,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "文件布局"
-          }
-        }
-      }
-    },
-    "File visibility settings will appear here." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "文件可见性设置将显示在这里。"
           }
         }
       }
@@ -318,6 +338,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "隐藏"
+          }
+        }
+      }
+    },
+    "Invalid file exclusion pattern: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件排除规则无效：%@"
           }
         }
       }
@@ -389,6 +419,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "好"
+          }
+        }
+      }
+    },
+    "One glob per line. Hidden files remain on disk and searchable in Command Palette." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每行一条 Glob 规则。隐藏文件仍保留在磁盘上，也可通过命令面板搜索。"
           }
         }
       }
@@ -529,6 +569,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "恢复默认设置"
+          }
+        }
+      }
+    },
+    "Restore Default Exclusions" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复默认排除规则"
           }
         }
       }
