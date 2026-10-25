@@ -199,6 +199,17 @@ struct ToolPanelView: View {
                                     if result?.copied.isEmpty == false { git.refresh() }
                                 }
                             }
+                        },
+                        makeDragProvider: { [target = filesTarget] item in
+                            guard let target else { return NSItemProvider() }
+                            return manager.makeFileTreeDragProvider(for: item, in: project, target: target)
+                        },
+                        receiveInternalDrop: { [target = filesTarget] provider, directory, copy in
+                            guard let target else { return false }
+                            return manager.receiveFileTreeDrop(
+                                provider, into: directory, copy: copy,
+                                in: project, target: target, onChange: { git.refresh() }
+                            )
                         }
                     )
                 }

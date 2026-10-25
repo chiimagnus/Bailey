@@ -132,6 +132,117 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: actualNew), Data("changed".utf8))
     }
 
+
+    func testInternalFileDragCopiesAndMovesSelectedFilesOnlyWithinSourceWindow() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("first.txt")
+        let second = root.appendingPathComponent("second.txt")
+        try Data("one".utf8).write(to: first)
+        try Data("two".utf8).write(to: second)
+        let owner = workspaceApplication.makeWindow()
+        let other = workspaceApplication.makeWindow()
+        defer { owner.windowClosed(); other.windowClosed() }
+        owner.addLocalFolders([root])
+        other.addLocalFolders([root])
+        guard let project = owner.selectedProject,
+              let identity = project.panelContext?.identity,
+              let otherProject = other.selectedProject,
+              let otherIdentity = otherProject.panelContext?.identity else {
+            return XCTFail("Both windows need a Files tree")
+        }
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        await otherProject.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let firstRow = try XCTUnwrap(project.fileTree.items.first { $0.path == first.path })
+        let secondRow = try XCTUnwrap(project.fileTree.items.first { $0.path == second.path })
+        project.fileTree.select(firstRow)
+        project.fileTree.select(secondRow, toggling: true)
+        let provider = owner.makeFileTreeDragProvider(for: firstRow, in: project, target: identity)
+        XCTAssertTrue(provider.hasItemConformingToTypeIdentifier(FileTreeDrag.type))
+        XCTAssertTrue(provider.canLoadObject(ofClass: NSURL.self),
+                      "Local Files drags must remain compatible with Finder")
+        XCTAssertFalse(other.receiveFileTreeDrop(
+            provider, into: destination.path, copy: false,
+            in: otherProject, target: otherIdentity
+        ), "The same local folder in another window must not accept the private drag")
+        XCTAssertTrue(owner.receiveFileTreeDrop(
+            provider, into: destination.path, copy: true,
+            in: project, target: identity
+        ))
+        try await wait {
+            FileManager.default.fileExists(atPath: destination.appendingPathComponent("first.txt").path)
+                && FileManager.default.fileExists(atPath: destination.appendingPathComponent("second.txt").path)
+        }
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("first.txt")),
+                       Data("one".utf8))
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("second.txt")),
+                       Data("two".utf8))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.path))
+        XCTAssertFalse(project.fileTree.hasActiveDrag)
+
+        let afterCopy = try XCTUnwrap(project.fileTree.items.first { $0.path == first.path })
+        let secondDestination = root.appendingPathComponent("moved")
+        try FileManager.default.createDirectory(at: secondDestination, withIntermediateDirectories: true)
+        let secondProvider = owner.makeFileTreeDragProvider(
+            for: afterCopy, in: project, target: identity
+        )
+        XCTAssertTrue(owner.receiveFileTreeDrop(
+            secondProvider, into: secondDestination.path, copy: false,
+            in: project, target: identity
+        ))
+        try await wait {
+            FileManager.default.fileExists(atPath: secondDestination.appendingPathComponent("first.txt").path)
+                && FileManager.default.fileExists(atPath: secondDestination.appendingPathComponent("second.txt").path)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
+        XCTAssertEqual(try Data(contentsOf: secondDestination.appendingPathComponent("first.txt")),
+                       Data("one".utf8))
+        XCTAssertEqual(try Data(contentsOf: secondDestination.appendingPathComponent("second.txt")),
+                       Data("two".utf8))
+        XCTAssertFalse(project.fileTree.hasActiveDrag)
+    }
+
+    func testInternalDragRejectsSelectionChangesAndExternalFileURLProviders() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("first.txt")
+        let second = root.appendingPathComponent("second.txt")
+        try Data("one".utf8).write(to: first)
+        try Data("two".utf8).write(to: second)
+        let owner = workspaceApplication.makeWindow()
+        defer { owner.windowClosed() }
+        owner.addLocalFolders([root])
+        guard let project = owner.selectedProject,
+              let identity = project.panelContext?.identity else {
+            return XCTFail("Missing Files project")
+        }
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let firstRow = try XCTUnwrap(project.fileTree.items.first { $0.path == first.path })
+        let secondRow = try XCTUnwrap(project.fileTree.items.first { $0.path == second.path })
+        project.fileTree.select(firstRow)
+        let previous = owner.makeFileTreeDragProvider(for: firstRow, in: project, target: identity)
+        project.fileTree.select(secondRow)
+        XCTAssertFalse(owner.receiveFileTreeDrop(
+            previous, into: destination.path, copy: false,
+            in: project, target: identity
+        ), "Changed selection invalidates a previous drag")
+        let finderProvider = NSItemProvider(object: first as NSURL)
+        XCTAssertFalse(owner.receiveFileTreeDrop(
+            finderProvider, into: destination.path, copy: false,
+            in: project, target: identity
+        ), "Finder fileURLs are not internal move requests")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: destination.appendingPathComponent("first.txt").path
+        ))
+    }
+
     func testMovingFolderAcrossSymlinkRootsUpdatesEveryWindowPath() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let physical = base.appendingPathComponent("physical")

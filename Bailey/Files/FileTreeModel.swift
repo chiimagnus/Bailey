@@ -20,6 +20,8 @@ final class FileTreeModel {
     private(set) var selectedPath: String?
     private(set) var selectedPaths: Set<String> = []
     @ObservationIgnored private var selectionAnchorPath: String?
+    @ObservationIgnored private var activeDrag: (nonce: UUID, paths: [String])?
+    var hasActiveDrag: Bool { activeDrag != nil }
     /// Path of the row currently being renamed inline, if any.
     private(set) var renamingPath: String?
     /// The pending new-file/folder input row, if any.
@@ -75,6 +77,7 @@ final class FileTreeModel {
             selectionAnchorPath = item.path
         }
         selectedPath = item.path
+        activeDrag = nil
     }
 
     @discardableResult
@@ -91,6 +94,7 @@ final class FileTreeModel {
             selectionAnchorPath = visible[next].path
         }
         selectedPath = visible[next].path
+        activeDrag = nil
         return visible[next]
     }
 
@@ -112,6 +116,7 @@ final class FileTreeModel {
             selectedPath = visible.first
         }
         selectionAnchorPath = selectedPath
+        activeDrag = nil
     }
 
     func contextSelection(for item: Item) -> [String] {
@@ -122,10 +127,26 @@ final class FileTreeModel {
         return [item.path]
     }
 
+    func beginDrag(for item: Item) -> (nonce: UUID, paths: [String])? {
+        guard items.contains(where: { !$0.isDraft && $0.path == item.path }) else { return nil }
+        let record = (nonce: UUID(), paths: contextSelection(for: item))
+        activeDrag = record
+        return record
+    }
+
+    func consumeDrag(nonce: UUID, paths: [String]) -> Bool {
+        guard let activeDrag, activeDrag.nonce == nonce, activeDrag.paths == paths,
+              paths.allSatisfy({ path in items.contains { !$0.isDraft && $0.path == path } })
+        else { return false }
+        self.activeDrag = nil
+        return true
+    }
+
     func clearSelection() {
         selectedPath = nil
         selectedPaths.removeAll()
         selectionAnchorPath = nil
+        activeDrag = nil
     }
 
     func nextVisibleChild(of item: Item) -> Item? {

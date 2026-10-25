@@ -8,6 +8,7 @@ enum FileTreeCommand {
     case duplicate([String])
     case move([String])
     case delete([String])
+    case drop([String], into: String, copy: Bool)
 }
 
 @MainActor
@@ -39,6 +40,17 @@ enum FileTreeClipboard {
     }
 }
 
+@MainActor
+enum FileTreeDrag {
+    static let type = "com.chiimagnus.bailey.files.internal-drag"
+
+    struct Record: Codable {
+        let source: FileTreeClipboard.Record
+        let window: String
+        let nonce: UUID
+    }
+}
+
 struct FileTreePanel: View {
     let model: FileTreeModel
     let git: GitStatusModel
@@ -57,6 +69,8 @@ struct FileTreePanel: View {
     let isCurrentTarget: () -> Bool
     let canImportFromFinder: Bool
     let importFromFinder: ([NSItemProvider], String) -> Bool
+    var makeDragProvider: (FileTreeModel.Item) -> NSItemProvider = { _ in NSItemProvider() }
+    var receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool = { _, _, _ in false }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -102,13 +116,17 @@ struct FileTreePanel: View {
                 onCommand: onCommand, refreshGitStatus: refreshGitStatus,
                 isCurrentTarget: isCurrentTarget,
                 canImportFromFinder: canImportFromFinder,
-                importFromFinder: importFromFinder
+                importFromFinder: importFromFinder,
+                makeDragProvider: makeDragProvider,
+                receiveInternalDrop: receiveInternalDrop
             )
         }
-        .onDrop(of: [UTType.fileURL.identifier], delegate: FileTreeImportDrop(
+        .onDrop(of: [FileTreeDrag.type, UTType.fileURL.identifier], delegate: FileTreeImportDrop(
             directory: model.rootPath,
             enabled: canImportFromFinder && isCurrentTarget(),
-            importFromFinder: importFromFinder
+            canAcceptInternal: isCurrentTarget(),
+            importFromFinder: importFromFinder,
+            receiveInternalDrop: receiveInternalDrop
         ))
     }
 }
@@ -118,18 +136,36 @@ struct FileTreePanel: View {
 private struct FileTreeImportDrop: DropDelegate {
     let directory: String
     let enabled: Bool
+    let canAcceptInternal: Bool
     let importFromFinder: ([NSItemProvider], String) -> Bool
+    let receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool
 
     func validateDrop(info: DropInfo) -> Bool {
-        enabled && !directory.isEmpty && info.hasItemsConforming(to: [UTType.fileURL.identifier])
+        guard !directory.isEmpty else { return false }
+        if info.hasItemsConforming(to: [FileTreeDrag.type]) { return true }
+        return enabled && info.hasItemsConforming(to: [UTType.fileURL.identifier])
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: validateDrop(info: info) ? .copy : .forbidden)
+        guard validateDrop(info: info) else { return DropProposal(operation: .forbidden) }
+        if info.hasItemsConforming(to: [FileTreeDrag.type]) {
+            return DropProposal(operation: canAcceptInternal
+                ? (NSEvent.modifierFlags.contains(.option) ? .copy : .move) : .forbidden)
+        }
+        return DropProposal(operation: .copy)
     }
 
     func performDrop(info: DropInfo) -> Bool {
         guard validateDrop(info: info) else { return false }
+        if info.hasItemsConforming(to: [FileTreeDrag.type]) {
+            // Consume even a foreign private drag so its public fileURL never
+            // falls through to Finder import in this Files panel.
+            if canAcceptInternal,
+               let provider = info.itemProviders(for: [FileTreeDrag.type]).first {
+                _ = receiveInternalDrop(provider, directory, NSEvent.modifierFlags.contains(.option))
+            }
+            return true
+        }
         return importFromFinder(info.itemProviders(for: [UTType.fileURL.identifier]), directory)
     }
 }
@@ -151,6 +187,8 @@ private struct FileTreeScrollView: View {
     let isCurrentTarget: () -> Bool
     let canImportFromFinder: Bool
     let importFromFinder: ([NSItemProvider], String) -> Bool
+    let makeDragProvider: (FileTreeModel.Item) -> NSItemProvider
+    let receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool
     @Environment(\.panelFontScale) private var fontScale
     @Environment(\.controlActiveState) private var controlActiveState
     @State private var keyboardOwner = TreeKeyboardOwner()
@@ -172,14 +210,17 @@ private struct FileTreeScrollView: View {
                                 if canFocusKeyboard() { keyboardOwner.focus() }
                             },
                             renameFile: renameFile, onCommand: onCommand,
-                            refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget
+                            refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget,
+                            makeDragProvider: makeDragProvider
                         )
                         .id(item.path)
-                        .onDrop(of: [UTType.fileURL.identifier], delegate: FileTreeImportDrop(
+                        .onDrop(of: [FileTreeDrag.type, UTType.fileURL.identifier], delegate: FileTreeImportDrop(
                             directory: item.isDirectory ? item.path
                                 : (item.path as NSString).deletingLastPathComponent,
                             enabled: canImportFromFinder && !item.isDraft && isCurrentTarget(),
-                            importFromFinder: importFromFinder
+                            canAcceptInternal: !item.isDraft && isCurrentTarget(),
+                            importFromFinder: importFromFinder,
+                            receiveInternalDrop: receiveInternalDrop
                         ))
                     }
                 }
@@ -324,6 +365,7 @@ private struct FileTreeRow: View {
     let onCommand: (FileTreeCommand) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
+    let makeDragProvider: (FileTreeModel.Item) -> NSItemProvider
 
     @State private var editingName = ""
     @FocusState private var fieldFocused: Bool
@@ -384,16 +426,12 @@ private struct FileTreeRow: View {
                     .modifier(layout)
             }
             .contextMenu { rowMenu }
-        } else if isRemote {
-            // A remote POSIX path is not a Mac file URL, even when the same
-            // spelling happens to exist on disk here. Keep Copy Path only.
-            semanticRow.contextMenu { rowMenu }
         } else {
+            // Local drags retain public fileURL for Finder; SSH drags publish only
+            // the process-private Files type, never a Mac path for a remote file.
             semanticRow
                 .contextMenu { rowMenu }
-                .onDrag {
-                    NSItemProvider(object: URL(fileURLWithPath: item.path) as NSURL)
-                }
+                .onDrag { makeDragProvider(item) }
         }
     }
 
