@@ -715,7 +715,7 @@ final class WorkspaceWindowModel {
                         self.application.filesDeleted(
                             paths: [entry.source], workspace: target.workspace
                         )
-                    case .copy, .duplicate: break
+                    case .copy: break
                     }
                 }
                 return outcome
@@ -858,27 +858,8 @@ final class WorkspaceWindowModel {
                 }
             }
 
-        case .duplicate(let paths):
-            run(.duplicate, paths: paths, directory: nil)
-
         case .drop(let paths, let directory, let copy):
             run(copy ? .copy : .move, paths: paths, directory: directory)
-
-        case .move(let paths):
-            guard !paths.isEmpty, let window else { return }
-            let alert = NSAlert()
-            alert.messageText = String(localized: "Move selected files", table: "Sidebar")
-            alert.informativeText = String(localized: "Enter a folder inside the current project.", table: "Sidebar")
-            let destination = NSTextField(string: root)
-            destination.frame = NSRect(x: 0, y: 0, width: 350, height: 24)
-            alert.accessoryView = destination
-            alert.addButton(withTitle: String(localized: "Move", table: "Sidebar"))
-            alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
-            alert.beginSheetModal(for: window) { response in
-                guard response == .alertFirstButtonReturn else { return }
-                let path = destination.stringValue
-                run(.move, paths: paths, directory: path)
-            }
 
         case .delete(let paths):
             guard !paths.isEmpty else { return }

@@ -5,8 +5,6 @@ import UniformTypeIdentifiers
 enum FileTreeCommand {
     case copy([String], cut: Bool)
     case paste(into: String)
-    case duplicate([String])
-    case move([String])
     case delete([String])
     case drop([String], into: String, copy: Bool)
 }
@@ -322,7 +320,6 @@ private struct FileTreeScrollView: View {
             case 9: // V
                 onCommand(.paste(into: model.selectedDirectoryPath ?? model.rootPath))
                 return true
-            case 2: onCommand(.duplicate(paths)); return true // D
             case 51, 117: onCommand(.delete(paths)); return true // Delete
             default: break
             }
@@ -465,7 +462,20 @@ private struct FileTreeRow: View {
     private func rowMenu(for target: FileTreeModel.Item) -> some View {
         let selection = target.path == item.path
             ? model.contextSelection(for: item) : [target.path]
-        if !target.isDirectory {
+        if target.isDirectory {
+            Button(String(localized: "New File…", table: "Sidebar")) {
+                Task {
+                    guard isCurrentTarget() else { return }
+                    await model.beginNewFile(in: target.path)
+                }
+            }
+            Button(String(localized: "New Folder…", table: "Sidebar")) {
+                Task {
+                    guard isCurrentTarget() else { return }
+                    await model.beginNewFolder(in: target.path)
+                }
+            }
+        } else {
             Button(String(localized: "Open", table: "Sidebar")) {
                 if isCurrentTarget() { openFile(target.path, true) }
             }
@@ -479,57 +489,30 @@ private struct FileTreeRow: View {
             }
         }
         Divider()
-        Button(String(localized: "Copy", table: "Sidebar")) {
-            if isCurrentTarget() { onCommand(.copy(selection, cut: false)) }
-        }
         Button(String(localized: "Cut", table: "Sidebar")) {
             if isCurrentTarget() { onCommand(.copy(selection, cut: true)) }
         }
-        Button(String(localized: "Paste", table: "Sidebar")) {
-            guard isCurrentTarget() else { return }
-            let folder = target.isDirectory ? target.path
-                : (target.path as NSString).deletingLastPathComponent
-            onCommand(.paste(into: folder))
-        }
-        Button(String(localized: "Duplicate", table: "Sidebar")) {
-            if isCurrentTarget() { onCommand(.duplicate(selection)) }
-        }
-        Button(String(localized: "Move To…", table: "Sidebar")) {
-            if isCurrentTarget() { onCommand(.move(selection)) }
-        }
-        Button(String(localized: "Copy Path", table: "Sidebar")) {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(target.path, forType: .string)
+        Button(String(localized: "Copy", table: "Sidebar")) {
+            if isCurrentTarget() { onCommand(.copy(selection, cut: false)) }
         }
         if target.isDirectory {
-            Button(String(localized: "cd Here", table: "Sidebar")) {
-                guard isCurrentTarget() else { return }
-                session?.sendCommand("cd " + shellQuote(target.path) + "\n")
-            }
-            Divider()
-            Button(String(localized: "New File…", table: "Sidebar")) {
-                Task {
-                    guard isCurrentTarget() else { return }
-                    await model.beginNewFile(in: target.path)
-                }
-            }
-            Button(String(localized: "New Folder…", table: "Sidebar")) {
-                Task {
-                    guard isCurrentTarget() else { return }
-                    await model.beginNewFolder(in: target.path)
-                }
+            Button(String(localized: "Paste", table: "Sidebar")) {
+                if isCurrentTarget() { onCommand(.paste(into: target.path)) }
             }
         }
-        if target.isDirectory, !item.compactPrefix.isEmpty {
-            Button("Unfold Directory") {
-                guard isCurrentTarget() else { return }
-                Task { await model.unfoldCompactFolder(item) }
-            }
-        } else if target.isDirectory, model.isUnfolded(target) {
-            Button("Fold Directory") {
-                guard isCurrentTarget() else { return }
-                Task { await model.foldDirectory(target) }
-            }
+        Divider()
+        Button(String(localized: "Copy Path", table: "Sidebar")) {
+            guard isCurrentTarget() else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(selection.joined(separator: "\n"), forType: .string)
+        }
+        Button(String(localized: "Copy Relative Path", table: "Sidebar")) {
+            guard isCurrentTarget() else { return }
+            let root = model.rootPath == "/" ? "/" : model.rootPath + "/"
+            let paths = selection.filter { $0.hasPrefix(root) }
+                .map { String($0.dropFirst(root.count)) }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(paths.joined(separator: "\n"), forType: .string)
         }
         Divider()
         Button(String(localized: "Rename", table: "Sidebar")) {
@@ -726,8 +709,4 @@ private struct FileTreeRow: View {
             }
         }
     }
-}
-
-private func shellQuote(_ path: String) -> String {
-    "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }

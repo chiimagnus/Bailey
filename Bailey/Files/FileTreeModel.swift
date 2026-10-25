@@ -197,8 +197,6 @@ final class FileTreeModel {
         let path: String
     }
     @ObservationIgnored private var expandedByRoot: [Root: Set<String>] = [:]
-    @ObservationIgnored private var unfoldedByRoot: [Root: Set<String>] = [:]
-    private var unfoldedDirectories: Set<String> = []
 
     /// The workspace this tree reads. Replaced on every `sync`, so the tree
     /// follows its session between the local disk and a remote machine.
@@ -230,25 +228,6 @@ final class FileTreeModel {
 
     func isExpanded(_ item: Item) -> Bool {
         expanded.contains(item.path)
-    }
-
-    func isUnfolded(_ item: Item) -> Bool {
-        unfoldedDirectories.contains(item.path)
-    }
-
-    func unfoldCompactFolder(_ item: Item) async {
-        guard item.isDirectory, !item.compactPrefix.isEmpty,
-              items.contains(where: { $0.path == item.path }) else { return }
-        unfoldedDirectories.formUnion(item.compactComponents.dropLast().map(\.path))
-        await rebuild()
-    }
-
-    func foldDirectory(_ item: Item) async {
-        guard item.isDirectory, unfoldedDirectories.contains(item.path) else { return }
-        unfoldedDirectories = unfoldedDirectories.filter {
-            $0 != item.path && !$0.hasPrefix(item.path + "/")
-        }
-        await rebuild()
     }
 
     var selectedItem: Item? {
@@ -586,11 +565,9 @@ final class FileTreeModel {
             if !rootPath.isEmpty {
                 let previous = Root(scope: workspaceScope, path: rootPath)
                 expandedByRoot[previous] = expanded
-                unfoldedByRoot[previous] = unfoldedDirectories
             }
             let current = Root(scope: scope, path: root)
             expanded = expandedByRoot[current] ?? []
-            unfoldedDirectories = unfoldedByRoot[current] ?? []
             workspaceScope = scope
             rootPath = root
         }
@@ -665,7 +642,7 @@ final class FileTreeModel {
     }
 
     enum FileOperation {
-        case copy, move, delete, duplicate
+        case copy, move, delete
     }
 
     struct FileBatchResult {
@@ -697,7 +674,7 @@ final class FileTreeModel {
                 )
                 return FileBatchResult(failures: [reason])
             }
-        case .copy, .duplicate: break
+        case .copy: break
         }
         let sourcePaths = Array(Set(paths)).sorted {
             $0.count == $1.count ? $0 < $1 : $0.count < $1.count
@@ -810,17 +787,19 @@ final class FileTreeModel {
                 switch action {
                 case .copy:
                     guard let physicalDestination else { continue }
-                    try await backend.copy(from: physicalSource, to: physicalDestination)
+                    if physicalSource == physicalDestination || source == targetPath {
+                        let name = try await Self.copyWithUniqueName(
+                            source: physicalSource, into: resolvedParent, backend: backend
+                        )
+                        completedDestination = (sourceParent as NSString).appendingPathComponent(name)
+                    } else {
+                        try await backend.copy(from: physicalSource, to: physicalDestination)
+                    }
                 case .move:
                     guard let physicalDestination, physicalDestination != source else { continue }
                     try await backend.rename(from: physicalSource, to: physicalDestination)
                 case .delete:
                     try await backend.delete(paths: [physicalSource])
-                case .duplicate:
-                    let name = try await Self.duplicate(
-                        source: physicalSource, into: resolvedParent, backend: backend
-                    )
-                    completedDestination = (sourceParent as NSString).appendingPathComponent(name)
                 }
                 result.succeeded.append((
                     source: source, destination: action == .delete ? nil : completedDestination
@@ -860,7 +839,7 @@ final class FileTreeModel {
         return result
     }
 
-    private static func duplicate(
+    private static func copyWithUniqueName(
         source: String, into parent: String, backend: WorkspaceBackend
     ) async throws -> String {
         let original = (source as NSString).lastPathComponent
@@ -1027,7 +1006,6 @@ final class FileTreeModel {
             })
         }
         expanded = remap(expanded)
-        unfoldedDirectories = remap(unfoldedDirectories)
     }
 
     // MARK: - Create (inline draft)
@@ -1212,11 +1190,10 @@ final class FileTreeModel {
 
             let knownDirectories = Set(cachedDirectories.keys)
             let renaming = renamingPath
-            let unfolded = unfoldedDirectories
             var traversal = TreeDisplayModel.Traversal(
                 root: path, directoryDepthLimit: 32,
                 inspectDirectory: { expanded.contains($0) || knownDirectories.contains($0) },
-                foldDirectory: { $0 != renaming && !unfolded.contains($0) }
+                foldDirectory: { $0 != renaming }
             ) {
                 expanded.contains($0)
             }

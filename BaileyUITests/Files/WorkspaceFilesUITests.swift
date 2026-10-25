@@ -100,9 +100,9 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertTrue(targetRow.waitForExistence(timeout: 20))
 
         alphaRow.click()
-        alphaRow.rightClick()
-        let copy = app.menuItems.matching(NSPredicate(format: "title == %@", "Copy")).firstMatch
-        XCTAssertTrue(copy.waitForExistence(timeout: 8))
+        let copyMenu = try fileContextMenu(for: alphaRow, in: app)
+        let copy = copyMenu.menuItems["Copy"]
+        XCTAssertTrue(copy.exists)
         copy.click()
         let privateTransfer = NSPasteboard.PasteboardType("com.chiimagnus.bailey.files.transfer")
         XCTAssertNotNil(NSPasteboard.general.data(forType: privateTransfer),
@@ -137,10 +137,9 @@ final class WorkspaceFilesUITests: XCTestCase {
                        "Cut+Paste must move rather than create another copy")
         XCTAssertEqual(try Data(contentsOf: movedBeta), Data("beta original\n".utf8))
 
-        alphaRow.rightClick()
-        let trash = app.menuItems.matching(NSPredicate(format: "title == %@", "Move to Trash"))
-            .firstMatch
-        XCTAssertTrue(trash.waitForExistence(timeout: 8))
+        let trashMenu = try fileContextMenu(for: alphaRow, in: app)
+        let trash = trashMenu.menuItems["Move to Trash"]
+        XCTAssertTrue(trash.exists)
         trash.click()
         let deleted = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in !FileManager.default.fileExists(atPath: alpha.path) },
@@ -148,6 +147,327 @@ final class WorkspaceFilesUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [deleted], timeout: 20), .completed)
         XCTAssertEqual(try Data(contentsOf: copiedAlpha), Data("alpha original\n".utf8))
+    }
+
+    func testFocusedFilesKeyboardCopyPasteAndEditorCopyIsolation() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = try fixture.file("alpha.txt", text: "editor copy must stay text\n")
+        let duplicate = fixture.root.appendingPathComponent("alpha copy.txt")
+        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
+        defer {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            if !originalClipboard.isEmpty { XCTAssertTrue(pasteboard.writeObjects(originalClipboard)) }
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let sourceRow = WorkspaceUITestSupport.fileRow(source, in: window)
+        XCTAssertTrue(sourceRow.waitForExistence(timeout: 15))
+        sourceRow.click()
+        app.typeKey("c", modifierFlags: .command)
+        let privateTransfer = NSPasteboard.PasteboardType("com.chiimagnus.bailey.files.transfer")
+        XCTAssertNotNil(NSPasteboard.general.data(forType: privateTransfer),
+                        "Command+C with actual Files focus must copy files, not editor text")
+
+        app.typeKey("v", modifierFlags: .command)
+        let created = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: duplicate.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [created], timeout: 15), .completed)
+        XCTAssertEqual(try Data(contentsOf: source), Data("editor copy must stay text\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: duplicate), Data("editor copy must stay text\n".utf8))
+        app.typeKey("v", modifierFlags: .command)
+        let secondCopy = fixture.root.appendingPathComponent("alpha copy 2.txt")
+        let repeated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: secondCopy.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [repeated], timeout: 15), .completed)
+        XCTAssertEqual(try Data(contentsOf: secondCopy), Data("editor copy must stay text\n".utf8))
+
+        sourceRow.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(source, in: window)
+            .waitForExistence(timeout: 15))
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        editor.click()
+        app.typeKey("a", modifierFlags: .command)
+        app.typeKey("c", modifierFlags: .command)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "editor copy must stay text\n",
+                       "Editor Command+C must copy selected text")
+        XCTAssertNil(NSPasteboard.general.data(forType: privateTransfer),
+                     "Editor Command+C must replace the Files clipboard record")
+    }
+
+    func testMultiSelectContextTargetsAndBulkTrashAgainstRealDisk() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let alpha = try fixture.file("a.txt", text: "a bytes\n")
+        let beta = try fixture.file("b.txt", text: "b bytes\n")
+        let gamma = try fixture.file("c.txt", text: "c bytes\n")
+        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
+        defer {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            if !originalClipboard.isEmpty { XCTAssertTrue(pasteboard.writeObjects(originalClipboard)) }
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let a = WorkspaceUITestSupport.fileRow(alpha, in: window)
+        let b = WorkspaceUITestSupport.fileRow(beta, in: window)
+        let c = WorkspaceUITestSupport.fileRow(gamma, in: window)
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        XCTAssertTrue(c.waitForExistence(timeout: 15))
+        a.click()
+        XCUIElement.perform(withKeyModifiers: .shift) { b.click() }
+        XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected)
+
+        let otherMenu = try fileContextMenu(for: c, in: app)
+        otherMenu.menuItems["Copy Path"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), gamma.path,
+                       "Context-clicking an unselected row must act on that row only")
+
+        let selectedMenu = try fileContextMenu(for: a, in: app)
+        selectedMenu.menuItems["Copy Relative Path"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "a.txt\nb.txt",
+                       "Context-clicking a selected row must copy the selected relative paths")
+        let deleteMenu = try fileContextMenu(for: a, in: app)
+        deleteMenu.menuItems["Move to Trash"].click()
+        let deleted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            !FileManager.default.fileExists(atPath: alpha.path)
+                && !FileManager.default.fileExists(atPath: beta.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [deleted], timeout: 15), .completed,
+                       "Bulk Trash must remove both selected originals")
+        XCTAssertEqual(try Data(contentsOf: gamma), Data("c bytes\n".utf8))
+    }
+
+    func testMultiSelectKeyboardCopyCutPasteWithoutMoveDialog() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let alpha = try fixture.file("a.txt", text: "a original\n")
+        let beta = try fixture.file("b.txt", text: "b original\n")
+        let target = try fixture.file("target/.keep", text: "")
+        let moved = try fixture.file("moved/.keep", text: "")
+        let copyFolder = target.deletingLastPathComponent()
+        let moveFolder = moved.deletingLastPathComponent()
+        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
+        defer {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            if !originalClipboard.isEmpty { XCTAssertTrue(pasteboard.writeObjects(originalClipboard)) }
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let a = WorkspaceUITestSupport.fileRow(alpha, in: window)
+        let b = WorkspaceUITestSupport.fileRow(beta, in: window)
+        let targetRow = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", "target")).firstMatch
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        XCTAssertTrue(targetRow.waitForExistence(timeout: 15))
+        a.click()
+        XCUIElement.perform(withKeyModifiers: .shift) { b.click() }
+        XCTAssertTrue(a.isSelected && b.isSelected)
+        app.typeKey("c", modifierFlags: .command)
+        XCTAssertNotNil(NSPasteboard.general.data(forType:
+            NSPasteboard.PasteboardType("com.chiimagnus.bailey.files.transfer")))
+        targetRow.click()
+        app.typeKey("v", modifierFlags: .command)
+        let copied = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: copyFolder.appendingPathComponent("a.txt").path)
+                && FileManager.default.fileExists(atPath: copyFolder.appendingPathComponent("b.txt").path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [copied], timeout: 20), .completed)
+        XCTAssertEqual(try Data(contentsOf: copyFolder.appendingPathComponent("a.txt")),
+                       Data("a original\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: copyFolder.appendingPathComponent("b.txt")),
+                       Data("b original\n".utf8))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: alpha.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: beta.path))
+
+        a.click()
+        XCUIElement.perform(withKeyModifiers: .shift) { b.click() }
+        app.typeKey("x", modifierFlags: .command)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: alpha.path),
+                      "Cut must not delete the source before a successful paste")
+        let moveRow = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", "moved")).firstMatch
+        XCTAssertTrue(moveRow.waitForExistence(timeout: 15))
+        moveRow.click()
+        app.typeKey("v", modifierFlags: .command)
+        let movedFiles = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            !FileManager.default.fileExists(atPath: alpha.path)
+                && !FileManager.default.fileExists(atPath: beta.path)
+                && FileManager.default.fileExists(atPath: moveFolder.appendingPathComponent("a.txt").path)
+                && FileManager.default.fileExists(atPath: moveFolder.appendingPathComponent("b.txt").path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [movedFiles], timeout: 20), .completed)
+        XCTAssertEqual(try Data(contentsOf: moveFolder.appendingPathComponent("a.txt")),
+                       Data("a original\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: moveFolder.appendingPathComponent("b.txt")),
+                       Data("b original\n".utf8))
+    }
+
+    func testAuthorizedSSHRemoteBulkDeleteRequiresNativeConfirmation() throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"],
+              !host.isEmpty, !host.hasPrefix("-"),
+              !host.contains(where: { $0.isWhitespace || $0.isNewline }) else {
+            throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST to an explicitly authorized SSH test host")
+        }
+        let remoteRoot = "/tmp/bailey-p1-ui-" + UUID().uuidString.lowercased()
+        let firstPath = remoteRoot + "/alpha.txt"
+        let secondPath = remoteRoot + "/beta.txt"
+        addTeardownBlock { @MainActor in
+            _ = try? self.runSSH(host: host, command: "rm -rf -- '\(remoteRoot)'")
+        }
+        _ = try runSSH(host: host, command:
+            "mkdir -p -- '\(remoteRoot)' && "
+            + "printf 'alpha remote\\n' > '\(firstPath)' && "
+            + "printf 'beta remote\\n' > '\(secondPath)'")
+        XCTAssertEqual(try runSSH(host: host, command: "cat '\(firstPath)'"), "alpha remote\n")
+
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        app.menuBarItems["File"].click()
+        let addSSH = app.menuItems["Add SSH Files or Folders…"]
+        XCTAssertTrue(addSSH.waitForExistence(timeout: 10))
+        addSSH.click()
+        let window = app.windows.firstMatch
+        let addSheet = window.sheets.firstMatch
+        XCTAssertTrue(addSheet.waitForExistence(timeout: 10))
+        let hostField = addSheet.comboBoxes.firstMatch
+        let paths = addSheet.textViews.firstMatch
+        XCTAssertTrue(hostField.waitForExistence(timeout: 10))
+        XCTAssertTrue(paths.waitForExistence(timeout: 10))
+        hostField.click()
+        hostField.typeKey("a", modifierFlags: .command)
+        hostField.typeText(host)
+        paths.click()
+        paths.typeText(remoteRoot)
+        addSheet.buttons["Add"].click()
+
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 25))
+        files.click()
+        let alpha = WorkspaceUITestSupport.fileRow(URL(fileURLWithPath: firstPath), in: window)
+        let beta = WorkspaceUITestSupport.fileRow(URL(fileURLWithPath: secondPath), in: window)
+        XCTAssertTrue(alpha.waitForExistence(timeout: 25), "Real SSH Files tree must show alpha")
+        XCTAssertTrue(beta.waitForExistence(timeout: 25), "Real SSH Files tree must show beta")
+        alpha.click()
+        XCUIElement.perform(withKeyModifiers: .shift) { beta.click() }
+        XCTAssertTrue(alpha.isSelected && beta.isSelected)
+
+        app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [])
+        let warning = window.sheets.firstMatch
+        XCTAssertTrue(warning.waitForExistence(timeout: 10),
+                      "Remote Delete must show a window-owned native confirmation")
+        XCTAssertTrue(warning.buttons["Cancel"].exists)
+        XCTAssertTrue(warning.buttons["Delete"].exists,
+                      "Remote deletion must require an explicit destructive confirmation")
+        warning.buttons["Cancel"].click()
+        XCTAssertEqual(try runSSH(host: host, command:
+            "test -f '\(firstPath)' && test -f '\(secondPath)' && printf preserved"),
+            "preserved", "Cancel must not remove any remote bytes")
+
+        app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [])
+        let confirmed = window.sheets.firstMatch
+        XCTAssertTrue(confirmed.waitForExistence(timeout: 10))
+        confirmed.buttons["Delete"].click()
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"),
+                                             object: alpha)
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 25), .completed)
+        XCTAssertEqual(try runSSH(host: host, command:
+            "test ! -e '\(firstPath)' && test ! -e '\(secondPath)' && printf deleted"),
+            "deleted", "Confirm must permanently remove only the remote fixture files")
+    }
+
+    private func runSSH(host: String, command: String) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = ["-o", "BatchMode=yes", "-o", "ControlMaster=no",
+                             "-o", "ControlPath=none", "-o", "StrictHostKeyChecking=yes",
+                             "-o", "ConnectTimeout=8", "-T", "--", host, command]
+        let output = Pipe()
+        let error = Pipe()
+        process.standardOutput = output
+        process.standardError = error
+        try process.run()
+        process.waitUntilExit()
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let reason = String(decoding: error.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        guard process.terminationStatus == 0 else {
+            throw NSError(domain: "BaileyRemoteUITest", code: Int(process.terminationStatus),
+                          userInfo: [NSLocalizedDescriptionKey: reason])
+        }
+        return text
+    }
+
+    private func fileContextMenu(for row: XCUIElement, in app: XCUIApplication) throws -> XCUIElement {
+        row.rightClick()
+        return try XCTUnwrap(app.menus.allElementsBoundByIndex.first { menu in
+            menu.frame.width > 50 && menu.menuItems["Copy Relative Path"].exists
+        }, "Files context menu must be selected instead of the global Edit menu")
+    }
+
+    func testExplorerMenuUsesVSCodeFileAndDirectoryActions() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let nested = try fixture.file("folder/leaf.txt", text: "menu bytes\n")
+        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
+        defer {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            if !originalClipboard.isEmpty { XCTAssertTrue(pasteboard.writeObjects(originalClipboard)) }
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let folder = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", "folder")).firstMatch
+        XCTAssertTrue(folder.waitForExistence(timeout: 15))
+        let folderMenu = try fileContextMenu(for: folder, in: app)
+        for title in ["New File…", "New Folder…", "Cut", "Copy", "Paste",
+                      "Copy Path", "Copy Relative Path", "Rename", "Move to Trash"] {
+            XCTAssertTrue(folderMenu.menuItems[title].exists, "Missing VS Code folder action: \(title)")
+        }
+        for title in ["Move To…", "Duplicate", "cd Here", "Open in Integrated Terminal",
+                      "Open to the Side", "Unfold Directory", "Fold Directory"] {
+            XCTAssertFalse(folderMenu.menuItems[title].exists, "Removed action: \(title)")
+        }
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        folder.click()
+        app.typeKey("c", modifierFlags: .command)
+        app.typeKey("v", modifierFlags: .command)
+        let folderCopy = fixture.root.appendingPathComponent("folder copy/leaf.txt")
+        let copied = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: folderCopy.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [copied], timeout: 15), .completed,
+                       "Copy+Paste on the selected folder must create a sibling, not recurse")
+        XCTAssertEqual(try Data(contentsOf: folderCopy), Data("menu bytes\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: nested), Data("menu bytes\n".utf8))
+
+        let row = WorkspaceUITestSupport.fileRow(nested, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        let fileMenu = try fileContextMenu(for: row, in: app)
+        for title in ["Open", "Cut", "Copy", "Copy Path",
+                      "Copy Relative Path", "Rename", "Move to Trash"] {
+            XCTAssertTrue(fileMenu.menuItems[title].exists, "Missing VS Code file action: \(title)")
+        }
+        for title in ["Move To…", "Duplicate", "New File…", "New Folder…", "Paste",
+                      "Open to the Side", "cd Here", "Unfold Directory", "Fold Directory"] {
+            XCTAssertFalse(fileMenu.menuItems[title].exists, "Unrelated file action: \(title)")
+        }
+        fileMenu.menuItems["Copy Relative Path"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "folder/leaf.txt")
+        XCTAssertEqual(try Data(contentsOf: nested), Data("menu bytes\n".utf8))
     }
 
     func testModifierMultiSelectionDoesNotOpenOrCollapseFiles() throws {

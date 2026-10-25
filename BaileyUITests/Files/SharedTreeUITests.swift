@@ -101,7 +101,13 @@ final class SharedTreeUITests: XCTestCase {
             atPath: fixture.root.appendingPathComponent("a1/b1/c1/parent.swift").path))
     }
 
-    func testCompactFoldersCanUnfoldAndRefoldTheRealDirectoryChain() throws {
+    func testCompactFoldersStayCompactedWithAccessibleComponentActions() throws {
+        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
+        defer {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            if !originalClipboard.isEmpty { XCTAssertTrue(pasteboard.writeObjects(originalClipboard)) }
+        }
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("a1/b1/c1/leaf.swift", text: "leaf\n")
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
@@ -139,25 +145,14 @@ final class SharedTreeUITests: XCTestCase {
         let popup = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
             $0.frame.width > 50 && $0.frame.height > 50
         })
-        let unfold = popup.menuItems.matching(NSPredicate(
-            format: "title == %@", "Unfold Directory"
-        )).firstMatch
-        XCTAssertTrue(unfold.waitForExistence(timeout: 8))
-        unfold.click()
-        for name in ["a1", "b1", "c1"] {
-            XCTAssertTrue(folder(name).waitForExistence(timeout: 12),
-                          "Unfold must restore the independent directory row: \(name)")
-        }
-        folder("a1").rightClick()
-        let foldMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
-            $0.frame.width > 50 && $0.frame.height > 50
-        })
-        let fold = foldMenu.menuItems.matching(NSPredicate(
-            format: "title == %@", "Fold Directory"
-        )).firstMatch
-        XCTAssertTrue(fold.waitForExistence(timeout: 8))
-        fold.click()
+        XCTAssertFalse(popup.menuItems["Unfold Directory"].exists)
+        XCTAssertFalse(popup.menuItems["Fold Directory"].exists)
+        let relative = popup.menuItems["Copy Relative Path"]
+        XCTAssertTrue(relative.waitForExistence(timeout: 8))
+        relative.click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "a1")
         XCTAssertTrue(folder("a1 / b1 / c1").waitForExistence(timeout: 12))
+        XCTAssertTrue(leaf.exists)
     }
 
     func testSharedTreeHitAreasOpenExactFileWithoutDuplicateTabs() throws {
