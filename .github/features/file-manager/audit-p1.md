@@ -24,6 +24,45 @@
 
 ## 发现项
 
+## 发现 F-04
+
+- 任务：`P1-T1`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/Files/FileTreeModel.swift:1268`
+- 摘要：`Command 点击取消最后一个选中项后，目录刷新会偷偷重新选中该项`
+- 风险：`多选集合与真实用户取消意图不一致，后续快捷键可能操作已取消的文件`
+- 预期修复：`只有刷新前确实存在选中集合、且集合因路径不可见而清空时，才继承可见祖先；保留显式取消全选`
+- 验证：`make test:FileTreeTests; make test:DockFocusIntegrationTests; make build:dev`
+- 解决证据：`c7df6ab：目录刷新不会恢复主动取消的最后一项；真实目录刷新新用例通过；最终 10 类宿主 234/234、make build:dev 与 make build:ui 均通过。`
+
+
+## 发现 F-03
+
+- 任务：`P1-T3`
+- 严重级别：`Low`
+- 状态：`Resolved`
+- 位置：`Bailey/Workspace/WorkspaceWindowModel.swift:729`
+- 摘要：`旧的单项删除方法与只转发改名方法不再被生产入口调用`
+- 风险：`与 P1-T3 唯一操作路径并存，增加误用及维护成本`
+- 预期修复：`删除未使用的单项删除入口，改写测试调用到实际应用所有者并删除转发方法`
+- 验证：`make test:SessionStoreTests,WindowOwnershipIntegrationTests,FileTreeTests; make build:dev`
+- 解决证据：`3140f9e：删除旧 deleteFile 和 fileRenamed 转发，SessionStoreTests 改为应用所有者调用；234/234 宿主通过，Dev 签名与 UI 编译成功。`
+
+
+## 发现 F-02
+
+- 任务：`P1-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/Files/FileTreeModel.swift:654`
+- 摘要：`Finder 导入仅预先验证真实目标，异步复制仍使用可重指向的符号链接路径`
+- 风险：`校验后若目录链接指向项目外，复制可能发布到未授权位置`
+- 预期修复：`将已经解析并确认属于项目的物理目录交给复制后端，避免重复解引用原逻辑链接`
+- 验证：`make test:FileTreeTests,RemoteCommandsTests; make build:dev`
+- 解决证据：`1d9a584：Finder 复制使用校验后的物理目录，别名回归检查字节/源/目标；真实 windows SSH 4/4 通过含二进制复制移动删除，受影响 234/234 通过，Dev/UI 构建成功。`
+
+
 ## 发现 F-01
 
 - 任务：`P1-T4`
@@ -54,18 +93,31 @@
 - **当前 UI 授权门槛**：macOS 27.2 上 `/usr/bin/automationmodetool` 实测显示「This device requires user authentication to enable Automation Mode」；当前执行环境无免密 sudo 权限，用户希望 UI Test 不弹授权窗口，尚未启用系统级免交互授权。此前 UI XCTest 的启动失败不等同于代码测试通过；单项原生 GUI 的手工受控验证详见上文。
 - **覆盖过的触发条件**：本机多选、父子重叠、源/目标文件字节、部分成功、覆盖冲突、目录与失效软链接、保存等待、两个窗口同路径脏稿冲突、改名后的路径与旧路径缺失；远端 Shell 夹具验证删除/复制命令。
 - **尚需完整 GUI 的条件**：真实 Cmd+C/X/V/D 键盘事件在 Files 与输入框、Git、编辑器之间的分发，以及多选批量操作的完整 App 最终磁盘结果；真实远端确认 Sheet。宿主已执行软链接等待期间换目标、跨别名重命名与移动、原生等效键焦点范围测试；单项右键副本、移动、废纸篓已按上文实际 GUI 验证。
-- **设备/环境缺口**：缺少获授权的临时 Windows SSH 测试主机（只能用受控本机 Shell 夹具证明命令语义，不能证明 Windows/MSYS2 真传输）；缺少 macOS 15.6 真机（最低部署版本 GUI/文件系统差异仍未实测）；物理触控板、特殊卷/跨卷与真实掉线组合未获实机证据。各项在相应环境安全可用后补测，并在 P4 最终 Gate 重新核销。
+- **设备/环境缺口（首次审计时）**：当时缺少获授权的临时 Windows SSH 测试主机，只能用本机 Shell 夹具验证；本轮已补做 `windows` 实机测试，见下文。macOS 15.6 真机、物理触控板、特殊卷／跨卷与真实掉线组合仍无完整实机证据。
 - **文档核对**：`docs/features/files.md` 描述当前 Files 操作、剪贴板和数据保护；`docs/features/ssh.md` 区分远端永久删除与 Finder，本机界面规则位于 `docs/ui.md`。阶段验收缺口保留于本地计划及本审计，未把未测行为写作已验收。
+
+## 本轮独立复核（2026-10-25 晚间）
+
+先独立读取 `todo.toml`、四个任务提交、当前调用链和测试，再对照历史记录；任务状态与实际验收分开判断。
+
+- **P1-T1 / `96ad979`**：`FileTreePanel` → `FileTreeModel.select/moveSelection` → 真实选择集合及键盘焦点。复核了 Cmd/Shift、可见顺序、折叠、跨根和输入控件；新增 F-04，修复显式取消最后一项后被刷新重新选中的问题。
+- **P1-T2 / `235d2d5`**：`FileTreeModel` → `WorkspaceBackend.copy` → 本机 `RENAME_EXCL` 或 SSH 暂存发布。复核二进制、空文件/目录、软链接、同名冲突、并发占用、父子自复制和实际字节；新增 F-02，Finder 校验后改用物理目录，消除重新解引用可换向链接的路径。Windows 实机验证复制、防覆盖、移动和删除。
+- **P1-T3 / `ad9cc81`**：`WorkspaceWindowModel.performFileOperation` → `WorkspaceApplication.withProtectedFiles` → FileTab/Diff 保存排空、磁盘操作、跨窗口标签更新。复核两份脏稿冲突、原路径失效、SSH 身份和删后缓冲。新增 F-03，删除无生产调用的单项删除／改名转发，测试改走真正的应用所有者。
+- **P1-T4 / `c50c048`**：真实 Files 行／快捷键进入同一 `performFileTreeCommand`，剪贴板携带项目/机器/连接身份，远端删除采用发起窗口的 Sheet；原生 `firstResponder` 控制快捷键分发。宿主验证剪切仅在粘贴成功后移动、部分失败保留来源、跨窗口隔离，F-01 的原生完整 GUI 仍为 Deferred。
+
+**本轮验证**：修复前基线 157 项、0 失败；首次修复后的受影响组合 131 项、0 失败；最终 10 个受影响宿主类 234 项、0 失败（日志 `/tmp/bailey-file-p1-audit-final-tests-20261025.log`）。真实 Windows SSH：`BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test:SSHFileTreeLiveTests`，4 项、0 失败、0 跳过（日志 `/tmp/bailey-file-p1-audit-live-ssh-verified-20261025.log`），含真实临时目录中的二进制复制／移动／删除和 8 MiB 读写；各测试使用自己创建的目录及 SSH socket 并执行清理。Windows 该账户不能创建部分符号链接，日志为 `P4_LIVE_SYMLINK_UNAVAILABLE status=1`，对应远端链接权限场景仍未实测，本机链接与受控 Shell 夹具另有测试。
+
+**未核销**：真实 GUI 的多选键鼠、⌘C/X/V/D 焦点分发、远端批删 Sheet；macOS 15.6、物理触控板、特殊卷／跨卷和真实掉线的端到端组合。已有宿主测试不能代替这些平台测试；完整 P1 用户验收仍受 F-01 阻塞。
 
 ## Gate（是否允许进入下一阶段）
 
-- **结论：Go（仅允许继续后续实现；不是完整 E2E 验收通过）。**
+- **结论：继续后续阶段为 Go；P1 完整验收为 No-Go（F-01 Deferred）。**
 - **理由**：P1-T4 的代码、90 项宿主回归及签名构建已通过；用户在 2026-10-25 明确要求因无法进行生物识别授权，延期 UI E2E 并继续 P2～P4。F-01 标记 Deferred，实际 GUI 剪贴板／多选等尚未通过，不得在 P4 最终验收时抹除。
 
 ## 最终状态与剩余风险
 
 - **当前状态：Deferred；只豁免推进顺序，不豁免最终用户验收。**
-- **剩余风险**：真实文件剪贴板快捷键、多选操作及远端确认的完整 App 行为需自动化验收；本机跨路径窗口与软链接竞态已完成宿主回归，Windows SSH/macOS 15.6/物理输入设备环境仍缺。XCTest 宿主会话已恢复，但系统 Automation Mode 仍要求用户认证。根据用户指令继续 P2～P4 的可执行工作；未授权的 GUI E2E 留待用户可解锁时补验。
+- **剩余风险**：真实文件剪贴板快捷键、多选操作及远端确认的完整 App 行为尚需原生 GUI 验收；本机跨路径窗口和软链接已有宿主回归，Windows SSH 已完成实机文件操作验证，但其软链接权限场景受限；macOS 15.6、触控板和跨卷环境仍缺。Automation Mode 仍需用户认证，不绕过授权，不将宿主测试计作完整 GUI。
 
 ## 审计约束
 
