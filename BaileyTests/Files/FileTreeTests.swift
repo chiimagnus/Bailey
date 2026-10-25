@@ -652,11 +652,11 @@ final class FileTreeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let id = UUID()
         let local = PanelContext(
-            identity: .pinned(project: id, workspace: nil, directory: root.path),
+            identity: .init(project: id, workspace: nil, directory: root.path),
             backend: LocalWorkspaceBackend.shared
         )
         let remote = PanelContext(
-            identity: .pinned(project: id, workspace: "ssh:fixture", directory: root.path),
+            identity: .init(project: id, workspace: "ssh:fixture", directory: root.path),
             backend: CountingFileBackend()
         )
         let tree = FileTreeModel()
@@ -893,7 +893,7 @@ final class FileTreeTests: XCTestCase {
         try Data("original".utf8).write(to: oldFile)
 
         let backend = CountingFileBackend()
-        let identity = PanelContext.Identity.pinned(
+        let identity = PanelContext.Identity(
             project: UUID(), workspace: "ssh:fixture", directory: root.path
         )
         let tree = FileTreeModel()
@@ -943,7 +943,7 @@ final class FileTreeTests: XCTestCase {
         let newFile = root.appendingPathComponent("new.swift")
         try Data("old".utf8).write(to: oldFile)
         let backend = CountingFileBackend()
-        let identity = PanelContext.Identity.pinned(
+        let identity = PanelContext.Identity(
             project: UUID(), workspace: "ssh:fixture", directory: root.path
         )
         let tree = FileTreeModel()
@@ -1228,7 +1228,7 @@ final class FileTreeTests: XCTestCase {
         var opened = 0
         let host = NSHostingView(rootView: FileTreePanel(
             model: tree, git: GitStatusModel(), session: nil, sshHost: nil,
-            rootBadge: nil, currentFilePath: nil,
+            currentFilePath: nil,
             openFile: { _, _ in opened += 1 },
             renameFile: { item, name in await tree.rename(item, to: name) },
             onCommand: { _ in },
@@ -1271,7 +1271,7 @@ final class FileTreeTests: XCTestCase {
         var opened = 0
         let host = NSHostingView(rootView: FileTreePanel(
             model: tree, git: GitStatusModel(), session: nil, sshHost: nil,
-            rootBadge: nil, currentFilePath: second.path,
+            currentFilePath: second.path,
             openFile: { _, _ in opened += 1 },
             renameFile: { item, name in await tree.rename(item, to: name) },
             onCommand: { _ in },

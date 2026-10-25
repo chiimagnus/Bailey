@@ -89,8 +89,6 @@ struct ToolPanelView: View {
     private let settings = AppSettings.shared
     private let themeChanges = Theme.changes
     @State private var applicationIsActive = NSApp.isActive
-    /// Which rule produced the current panel root; drives the Files badge.
-    @State private var rootSource = PanelContext.RootSource.shell
     private var filesTarget: PanelContext.Identity? {
         guard let project = manager.selectedProject,
               let context = project.panelContext else { return nil }
@@ -121,13 +119,6 @@ struct ToolPanelView: View {
     /// Mirrors the heading's own state, because the layout above has to give
     /// back the row's height when the session is local.
     @State private var remoteHeaderState = RemotePaneHeaderState.local
-
-    /// Changes whenever the selected session's connection appears, changes
-    /// state, or is replaced.
-    private var remoteConnectionToken: String {
-        guard let session = manager.selectedSession else { return "none" }
-        return workspaceEpoch(of: session)
-    }
 
     /// A pinned local path must not inherit a different machine just because
     /// its terminal happens to be inside an interactive SSH session.
@@ -183,7 +174,6 @@ struct ToolPanelView: View {
                         git: git,
                         session: fileActionSession,
                         sshHost: project.sshHost,
-                        rootBadge: rootBadge,
                         currentFilePath: openFilePath,
                         openFile: { manager.openFile($0, activating: $1) },
                         isActive: project.dock.activeGroup?.selected == .files,
@@ -335,13 +325,6 @@ struct ToolPanelView: View {
             updateLocalFileWatcher()
             updateRemoteFileWatcher()
         }
-        // A connection appearing, connecting, dying or being replaced changes
-        // what the heading says; repaint it without waiting for the next tick.
-        .onChange(of: remoteConnectionToken) {
-            updateLocalFileWatcher()
-            updateRemoteFileWatcher()
-            syncModels()
-        }
         .onChange(of: manager.selectedProject?.selectedSession?.panelDirectoryPath) {
             applyRemoteHeading()
         }
@@ -426,18 +409,7 @@ struct ToolPanelView: View {
             updateRemoteHeading(state, directory: project.customDirectory)
             return
         }
-        if project.customDirectory != nil {
-            updateRemoteHeading(.local, directory: nil)
-            return
-        }
-        guard let session = project.selectedSession else {
-            updateRemoteHeading(.local, directory: nil)
-            return
-        }
-        // An automatically scoped project may still follow its terminal's
-        // connection. A pinned project never does.
-        let state = session.remoteHeaderState
-        updateRemoteHeading(state, directory: state == .local ? nil : session.panelDirectoryPath)
+        updateRemoteHeading(.local, directory: nil)
     }
 
     private func updateRemoteHeading(_ state: RemotePaneHeaderState, directory: String?) {
@@ -448,46 +420,8 @@ struct ToolPanelView: View {
         remoteHeader.workingDirectory = directory
     }
 
-    /// Which workspace a refresh belongs to. A connection changing state, or
-    /// being replaced, makes results that were already in flight stale.
-    private func workspaceEpoch(of session: TerminalSession) -> String {
-        if let host = manager.selectedProject?.sshHost { return "ssh:" + host }
-        if manager.selectedProject?.customDirectory != nil { return "local" }
-        guard let connection = session.location.remoteConnection else { return "local" }
-        return "\(connection.id) \(connection.state)"
-    }
-
     private func performSync() async {
-        guard let project = manager.selectedProject,
-              let (source, _) = await project.syncFiles(isCurrent: {
-                  manager.selectedProject === project
-              }),
-              manager.selectedProject === project else { return }
-        if rootSource != source { rootSource = source }
-    }
-
-    /// Text badge for the Files header while the panels follow the foreground
-    /// job instead of the shell — the agent's worktree in the common case, a
-    /// plain "job" when it moved somewhere that isn't a linked worktree.
-    /// The label and its spoken description travel together so neither is
-    /// assembled from translated fragments.
-    private var rootBadge: (text: String, description: String)? {
-        guard case .foreground(let isWorktree) = rootSource else { return nil }
-        if isWorktree {
-            return (
-                String(
-                    localized: "worktree", table: "Sidebar",
-                    comment: "Files header badge: the panels follow a Git worktree the terminal’s foreground job moved to."
-                ),
-                String(localized: "Following the terminal job’s worktree", table: "Sidebar")
-            )
-        }
-        return (
-            String(
-                localized: "job", table: "Sidebar",
-                comment: "Files header badge: the panels follow a directory the terminal’s foreground job moved to, outside any worktree of the shell’s repository."
-            ),
-            String(localized: "Following the terminal job’s directory", table: "Sidebar")
-        )
+        guard let project = manager.selectedProject else { return }
+        _ = await project.syncFiles(isCurrent: { manager.selectedProject === project })
     }
 }

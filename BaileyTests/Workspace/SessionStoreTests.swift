@@ -19,7 +19,7 @@ final class SessionStoreTests: XCTestCase {
             for action in ["relaunch", "terminate", "close", "debounce"] {
                 let snapshots = (0..<count).map { index in
                     SessionSnapshot(projects: [.init(
-                        customName: "window-\(index)", customDirectory: "/fixture/\(index)",
+                        customDirectory: "/fixture/\(index)",
                         sshHost: nil, pinnedFile: nil,
                         tabs: index == 0 ? [] : [.init(
                             content: .session(workingDirectory: "/fixture/\(index)"),
@@ -35,23 +35,23 @@ final class SessionStoreTests: XCTestCase {
                 TerminalHistoryStore.save(histories)
                 let application = WorkspaceApplication(loadSavedState: true)
                 let window = application.makeWindow()
-                window.selectedProject?.customName = "updated"
+                window.selectedProject?.customDirectory = "/fixture/updated"
                 switch action {
                 case "relaunch": application.saveForRelaunch()
                 case "terminate": application.willTerminate()
                 case "close": window.windowClosed()
                 default:
                     let deadline = Date().addingTimeInterval(5)
-                    while SessionStore.load().first?.projects.first?.customName != "updated",
+                    while SessionStore.load().first?.projects.first?.customDirectory != "/fixture/updated",
                           Date() < deadline {
                         try await Task.sleep(for: .milliseconds(10))
                     }
                 }
                 let saved = SessionStore.load()
                 XCTAssertEqual(saved.count, count, "\(action), \(count) windows")
-                XCTAssertEqual(saved.first?.projects.first?.customName, "updated", action)
-                XCTAssertEqual(saved.dropFirst().compactMap { $0.projects.first?.customName },
-                               (1..<count).map { "window-\($0)" }, action)
+                XCTAssertEqual(saved.first?.projects.first?.customDirectory, "/fixture/updated", action)
+                XCTAssertEqual(saved.dropFirst().compactMap { $0.projects.first?.customDirectory },
+                               (1..<count).map { "/fixture/\($0)" }, action)
                 XCTAssertEqual(TerminalHistoryStore.load(), histories, action)
                 window.windowClosed()
                 window.windowClosed()
@@ -60,6 +60,36 @@ final class SessionStoreTests: XCTestCase {
                 XCTAssertEqual(TerminalHistoryStore.load(), histories, action)
             }
         }
+    }
+
+    func testRestoreSkipsObsoleteProjectsWithoutChangingValidSelection() {
+        func saved(_ directory: String?, sshHost: String? = nil,
+                   file: String? = nil) -> SessionSnapshot.ProjectSnapshot {
+            .init(
+                customDirectory: directory, sshHost: sshHost, pinnedFile: file,
+                tabs: [], selectedTabIndex: nil,
+                dock: .group(.init(id: UUID(), items: [.projects, .files], selected: .files))
+            )
+        }
+
+        let snapshot = SessionSnapshot(projects: [
+            saved(nil),
+            saved("/tmp/fixed-one"),
+            saved("/tmp/old-local", file: "/tmp/old-local/legacy.txt"),
+            saved("/d/remote", sshHost: "fixture-ssh", file: "/d/remote/source.swift"),
+            saved("/tmp/fixed-two"),
+        ], selectedProjectIndex: 4)
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        XCTAssertTrue(manager.restore(from: snapshot, histories: [:]))
+        XCTAssertEqual(manager.projects.compactMap(\.customDirectory),
+                       ["/tmp/fixed-one", "/d/remote", "/tmp/fixed-two"])
+        XCTAssertEqual(manager.selectedProject?.name, "fixed-two",
+                       "Removing obsolete snapshots cannot shift selection to a different project")
+        XCTAssertEqual(manager.projects[1].name, "source.swift")
+        XCTAssertTrue(manager.projects[1].tabs.contains { $0.content.isFile },
+                      "The current SSH single-file project must remain restorable")
+        XCTAssertFalse(manager.projects.contains { $0.pinnedFile != nil && $0.sshHost == nil })
     }
 
     func testIsolatedSnapshotsDoNotReadOrOverwritePreviousTestRuns() {
@@ -128,7 +158,7 @@ final class SessionStoreTests: XCTestCase {
             second: .group(DockSavedGroup(id: UUID(), items: [.tab(0), .tab(999)], selected: .tab(999)))
         )
         let project = Project(
-            customName: nil, customDirectory: "/fixture", sshHost: nil, pinnedFile: nil,
+            customDirectory: "/fixture", sshHost: nil, pinnedFile: nil,
             tabs: tabs, selectedTabIndex: 0, dock: dock
         )
         let snapshot = AppSnapshot(windows: [
@@ -235,7 +265,7 @@ final class SessionStoreTests: XCTestCase {
         let key = UUID().uuidString
         let output = "terminal fixture output"
         let project = SessionSnapshot.ProjectSnapshot(
-            customName: "fixture", customDirectory: "/fixture",
+            customDirectory: "/fixture",
             sshHost: nil, pinnedFile: nil,
             tabs: [.init(
                 content: .session(workingDirectory: "/fixture"),
@@ -281,7 +311,7 @@ final class SessionStoreTests: XCTestCase {
         let existingManagerCount = self.workspaceApplication.windowCount
         func savedProject(_ windows: [SessionSnapshot]) -> SessionSnapshot.ProjectSnapshot? {
             windows.flatMap(\.projects).first {
-                $0.customDirectory == directory.path && $0.customName == "Edited Project"
+                $0.customDirectory == directory.path
             }
         }
         let first = self.workspaceApplication.makeWindow()
@@ -293,7 +323,6 @@ final class SessionStoreTests: XCTestCase {
         first.addLocalFolders([directory])
         await fulfillment(of: [projectAdded], timeout: 1)
         let project = try XCTUnwrap(first.selectedProject)
-        project.customName = "Edited Project"
         guard case .split(let split) = project.dock.root else {
             return XCTFail("Expected the configured split layout")
         }
@@ -470,10 +499,12 @@ final class SessionStoreTests: XCTestCase {
         let secondTab = Project.TabSnapshot(content: .browser(url: "https://example.invalid"), customName: "Second")
         let secondGroupID = UUID()
         let oldProject = Project(
-            customName: "Legacy", tabs: [firstTab], selectedTabIndex: 0, dock: legacy
+            customDirectory: "/fixture/legacy", sshHost: nil, pinnedFile: nil,
+            tabs: [firstTab], selectedTabIndex: 0, dock: legacy
         )
         let currentProject = Project(
-            customName: "Current", tabs: [secondTab], selectedTabIndex: 0,
+            customDirectory: "/fixture/current", sshHost: nil, pinnedFile: nil,
+            tabs: [secondTab], selectedTabIndex: 0,
             dock: .group(DockSavedGroup(id: secondGroupID, items: [.projects, .tab(0)], selected: .tab(0)))
         )
         let app = AppSnapshot(windows: [
@@ -486,8 +517,8 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(windows.map(\.selectedProjectIndex), [0, 0])
         let loadedOld = try XCTUnwrap(windows.first?.projects.first)
         let loadedCurrent = try XCTUnwrap(windows.last?.projects.first)
-        XCTAssertEqual(loadedOld.customName, "Legacy")
-        XCTAssertEqual(loadedCurrent.customName, "Current")
+        XCTAssertEqual(loadedOld.customDirectory, "/fixture/legacy")
+        XCTAssertEqual(loadedCurrent.customDirectory, "/fixture/current")
         XCTAssertEqual(loadedOld.tabs.first?.customName, "First")
         XCTAssertEqual(loadedCurrent.tabs.first?.customName, "Second")
         guard case .file(let restoredPath, _) = loadedOld.tabs.first?.content,

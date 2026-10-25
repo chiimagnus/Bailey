@@ -55,6 +55,43 @@ final class WorkspaceIdentityTests: XCTestCase {
         return connection
     }
 
+    func testProjectNameAndRootStayFixedAcrossTerminalChanges() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey 固定项目 " + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let initial = try XCTUnwrap(project.panelContext)
+        XCTAssertEqual(project.name, root.lastPathComponent)
+        XCTAssertEqual(initial.cwd, root.path)
+        XCTAssertNil(initial.identity.workspace)
+
+        let terminal = project.newSession(directory: "/tmp/a-different-directory")
+        XCTAssertEqual(project.name, root.lastPathComponent,
+                       "Project names cannot follow a terminal title or working directory")
+        XCTAssertEqual(project.panelContext?.identity, initial.identity)
+        project.close(try XCTUnwrap(project.tabs.first { $0.content.id == terminal.id }))
+        XCTAssertTrue(project.tabs.isEmpty)
+        XCTAssertEqual(project.panelContext?.identity, initial.identity,
+                       "Closing the final terminal cannot detach a fixed Files or Git root")
+
+        let ssh = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
+        ssh.sshHost = "fixture-remote"
+        ssh.customDirectory = "/d/projects"
+        ssh.pinnedFile = "/d/projects/source.swift"
+        XCTAssertEqual(ssh.name, "source.swift",
+                       "An explicitly added SSH file keeps its file-based project title")
+
+        let rootless = Project(fallbackName: "Unsupported", workspaceConfiguration: .standard)
+        rootless.newSession(directory: "/tmp/old-terminal-scope")
+        XCTAssertNil(rootless.panelContext,
+                     "A terminal cannot implicitly create or redirect a project root")
+    }
+
     func testFinderTerminalDropDoesNotInjectControlCharactersOrExecute() {
         let simple = URL(fileURLWithPath: "/tmp/simple.txt")
         let quoted = URL(fileURLWithPath: "/tmp/it's a $cost; 🚀.md")
@@ -218,46 +255,6 @@ final class WorkspaceIdentityTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: sentinel), Data("local sentinel".utf8))
         let commandCount = await runner.commands.count
         XCTAssertEqual(commandCount, 1)
-    }
-
-    func testFinderOpenReusesExistingTabAndKeepsSiblingInsideLegacyPinnedProject() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let first = folder.appendingPathComponent("first.txt")
-        let sibling = folder.appendingPathComponent("sibling.txt")
-        try "first".write(to: first, atomically: true, encoding: .utf8)
-        try "sibling".write(to: sibling, atomically: true, encoding: .utf8)
-        let manager = self.workspaceApplication.makeWindow()
-        defer { manager.windowClosed() }
-
-        // Real pre-P4 snapshots may still contain pinned-file projects.
-        let pinned = Project(fallbackName: "legacy", workspaceConfiguration: .standard)
-        pinned.customName = "first.txt"
-        pinned.customDirectory = folder.path
-        pinned.pinnedFile = first.path
-        pinned.openFile(first.path)
-        manager.projects.append(pinned)
-        manager.selectedProjectID = pinned.id
-        guard case .file(let originalFile) = try XCTUnwrap(pinned.selectedTab).content else {
-            return XCTFail("Manual file should already be open")
-        }
-        XCTAssertEqual(pinned.pinnedFile, first.path)
-        XCTAssertEqual(pinned.customName, "first.txt")
-        XCTAssertTrue(manager.openExternalLocalItems([first]).isEmpty)
-        XCTAssertTrue(manager.selectedProject === pinned)
-        guard case .file(let reused) = try XCTUnwrap(pinned.selectedTab).content else {
-            return XCTFail("Finder should return to original file")
-        }
-        XCTAssertTrue(reused === originalFile)
-
-        XCTAssertTrue(manager.openExternalLocalItems([sibling]).isEmpty)
-        XCTAssertTrue(manager.selectedProject === pinned)
-        XCTAssertEqual(pinned.pinnedFile, first.path)
-        XCTAssertEqual(pinned.customName, "first.txt")
-        XCTAssertEqual(pinned.tabs.filter { $0.content.isFile }.count, 2)
-        XCTAssertEqual(pinned.selectedTab?.content.title, "sibling.txt")
-        XCTAssertEqual(manager.projects.count, 1)
     }
 
     func testFinderBatchOpensSameDirectoryIntoOneProjectAndKeepsLocalScope() async throws {

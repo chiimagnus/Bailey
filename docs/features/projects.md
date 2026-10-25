@@ -13,13 +13,11 @@
 
 **当前实现**由窗口管理者持有项目，`Project` 持有标签、文件树和停靠状态；各面板通过项目的 `PanelContext` 取得后端和身份。项目选择、Dock 组激活、当前展示标签与真实键盘焦点是不同事实；窗口不复制一份项目可写状态。项目的 Files 同步只使用调用方提供的当前目标许可，始终核对所属机器与 `PanelContext.Identity`，不反向读取整个窗口模型；见 [architecture.md](../architecture.md#唯一所有者)。
 
-手动固定目录优先于终端工作目录。自动范围采用会话所在仓库；前台命令进入其他仓库或 worktree 时可跟随，同一仓库的子目录不切换根。
-
-项目名称可以由用户指定；未指定时沿用项目自身的名称解析。不能将临时窗口标题当成项目身份。
+项目目录在添加本机文件夹或 SSH 文件／目录时确定，Files、Git 和命令面板始终使用该根路径，不随终端工作目录或前台任务改变。项目名称来自所添加的目录名或 SSH 文件名；不支持项目重命名或后续更改项目根目录。
 
 ### 本机资源打开与手动添加
 
-「添加文件夹」（⇧⌘A）是明确创建／选中本机目录项目的动作；本机文件不再作为新项目添加，历史快照中的 `pinnedFile` 单文件项目仍保持名称、图标、恢复及读写行为。Finder 投放在 **Projects 面板**时，文件打开为已有当前项目中的 FileTab，目录才执行 `WorkspaceWindowModel.addLocalFolders` 添加项目；不复制到现有文件树。重复添加同一目录优先复用原项目，不启动 Shell。「文件 → 打开文件…」（⌘O）和各 Dock 组「＋ → 打开文件…」使用原生多选文件面板；菜单默认在聚焦窗口的当前项目／活动组打开，组「＋」在所属分屏打开。外部文件打开（Finder「打开方式」、Dock、顶部工作标签栏和普通编辑区域）是另一种意图：已在任一 Bailey 窗口打开的 Mac 文件先定位**原项目／原窗口／原标签**，无论该文件是否属于项目目录；否则直接在接收窗口的**当前项目**增加文件标签，即使路径在项目根之外，也不新建或切换到其它项目。当前没有项目时新文件不会自动创建项目，Finder 接收窗口提示用户先添加项目文件夹；显式投递目录仍能添加项目。外部文件多选、同目录或不同目录的文件不根据其父目录自动建项目。
+「添加文件夹」（⇧⌘A）是明确创建／选中本机目录项目的动作；本机文件不再作为新项目添加，SSH 单文件仍可以作为带初始文件标签的远端项目。Finder 投放在 **Projects 面板**时，文件打开为已有当前项目中的 FileTab，目录才执行 `WorkspaceWindowModel.addLocalFolders` 添加项目；不复制到现有文件树。重复添加同一目录优先复用原项目，不启动 Shell。「文件 → 打开文件…」（⌘O）和各 Dock 组「＋ → 打开文件…」使用原生多选文件面板；菜单默认在聚焦窗口的当前项目／活动组打开，组「＋」在所属分屏打开。外部文件打开（Finder「打开方式」、Dock、顶部工作标签栏和普通编辑区域）是另一种意图：已在任一 Bailey 窗口打开的 Mac 文件先定位**原项目／原窗口／原标签**，无论该文件是否属于项目目录；否则直接在接收窗口的**当前项目**增加文件标签，即使路径在项目根之外，也不新建或切换到其它项目。当前没有项目时新文件不会自动创建项目，Finder 接收窗口提示用户先添加项目文件夹；显式投递目录仍能添加项目。外部文件多选、同目录或不同目录的文件不根据其父目录自动建项目。
 
 本机资源只交给本机后端。新文件须是可读的普通文件，添加的目录须可读取、可遍历；
 不可读资源、命名管道等特殊文件、失效链接、包目录及非本机 URL 不会创建新标签或项目。
@@ -36,6 +34,6 @@
 
 ## 验证
 
-覆盖固定／自动目录、同仓库子目录／不同 worktree、重复添加、同名路径的机器与端口隔离、A→B→A 切换，以及在途结果晚到。使用 `WorkspaceIdentityTests`、`FinderDeliveryIntegrationTests` 核对文件去重、跨窗口路由、晚到事件和 80 次排队；`PanelContextTests`、`FileTabPersistenceTests` 守住范围与保存竞争，`WorkspaceWindowsUITests` 从真实系统文件投递验证窗口、标签和磁盘字节；测试入口及真实 SSH 边界见 [testing.md](../testing.md)。
+覆盖固定目录、终端切换／关闭不改变项目根、重复添加、同名路径的机器与端口隔离、A→B→A 切换，以及在途结果晚到。使用 `WorkspaceIdentityTests`、`FinderDeliveryIntegrationTests` 核对文件去重、跨窗口路由、晚到事件和 80 次排队；`PanelContextTests`、`FileTabPersistenceTests` 守住范围与保存竞争，`WorkspaceWindowsUITests` 从真实系统文件投递验证窗口、标签和磁盘字节；测试入口及真实 SSH 边界见 [testing.md](../testing.md)。
 
 实现入口：[Project.swift](../../Bailey/Workspace/Project.swift)、[WorkspaceWindowModel.swift](../../Bailey/Workspace/WorkspaceWindowModel.swift)、[WorkspaceApplication.swift](../../Bailey/App/WorkspaceApplication.swift)。

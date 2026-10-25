@@ -13,16 +13,7 @@ import Observation
 final class Project: nonisolated Identifiable {
     nonisolated let id = UUID()
 
-    /// User-assigned name; when nil the project title follows the
-    /// selected session's terminal title.
-    var customName: String? {
-        didSet { if customName != oldValue { onSnapshotChange?() } }
-    }
-    /// User-pinned project directory ("Set Project Directory…" on the
-    /// project row). When set, the file tree and git panels always anchor
-    /// here. Nil means automatic: the closest git repository containing the
-    /// selected session's working directory, re-derived as the session
-    /// moves (resolved by `PanelContext.resolvedRoot()`).
+    /// The directory selected when adding a project. Never follows a terminal.
     var customDirectory: String? {
         didSet { if customDirectory != oldValue { onSnapshotChange?() } }
     }
@@ -30,7 +21,7 @@ final class Project: nonisolated Identifiable {
     var sshHost: String? {
         didSet { if sshHost != oldValue { onSnapshotChange?() } }
     }
-    /// An individually added file is anchored to its parent directory.
+    /// An explicitly added SSH file is anchored to its parent directory.
     var pinnedFile: String? {
         didSet { if pinnedFile != oldValue { onSnapshotChange?() } }
     }
@@ -82,23 +73,9 @@ final class Project: nonisolated Identifiable {
     }
 
     var name: String {
-        if let customName = Self.normalizedCustomName(customName) {
-            return customName
-        }
-        guard let title = selectedSession?.title,
-              !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            return fallbackName
-        }
-        return title
-    }
-
-    /// Manual project names are user-authored labels, not terminal protocol
-    /// payloads. Normalize only surrounding whitespace.
-    static func normalizedCustomName(_ name: String?) -> String? {
-        guard let name else { return nil }
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        guard let path = pinnedFile ?? customDirectory else { return fallbackName }
+        let name = (path as NSString).lastPathComponent
+        return name.isEmpty ? path : name
     }
 
     /// Every terminal session across the project's independent tabs.
@@ -165,36 +142,17 @@ final class Project: nonisolated Identifiable {
 
     // MARK: - Project directory
 
-    var workspaceIdentity: String? {
-        if let sshHost { return "ssh:" + sshHost }
-        if customDirectory != nil { return nil }
-        return selectedSession?.workspaceIdentity
-    }
+    var workspaceIdentity: String? { sshHost.map { "ssh:" + $0 } }
 
     var workspaceBackend: WorkspaceBackend {
-        if let sshHost { return SSHHostWorkspaces.backend(for: sshHost) }
-        if customDirectory != nil { return LocalWorkspaceBackend.shared }
-        return selectedSession?.workspaceBackend ?? LocalWorkspaceBackend.shared
+        guard let sshHost else { return LocalWorkspaceBackend.shared }
+        return SSHHostWorkspaces.backend(for: sshHost)
     }
 
-    /// A pinned project is a workspace even without any shell. Automatic
-    /// projects still follow their selected terminal when one exists.
     var panelContext: PanelContext? {
-        if let directory = customDirectory {
-            return PanelContext(
-                identity: .pinned(project: id, workspace: workspaceIdentity, directory: directory),
-                backend: workspaceBackend
-            )
-        }
-        guard let session = selectedSession else { return nil }
-        let connection = session.location.remoteConnection
-        guard connection == nil || connection?.workingDirectory != nil else { return nil }
+        guard let directory = customDirectory else { return nil }
         return PanelContext(
-            identity: .automatic(
-                project: id, workspace: workspaceIdentity, directory: session.panelDirectoryPath,
-                foreground: session.foregroundDirectoryPath, session: session.id,
-                connection: connection?.id, state: connection?.state
-            ),
+            identity: .init(project: id, workspace: workspaceIdentity, directory: directory),
             backend: workspaceBackend
         )
     }
@@ -256,24 +214,17 @@ final class Project: nonisolated Identifiable {
         }
     }
 
-    /// Synchronize the project's Files tree; only the latest active workspace
-    /// may publish its root, and a disconnected shell retains the last tree.
-    func syncFiles(isCurrent: () -> Bool) async -> (PanelContext.RootSource, PanelContext.Identity)? {
+    /// Synchronize only the selected project's fixed Files root.
+    func syncFiles(isCurrent: () -> Bool) async -> PanelContext.Identity? {
         guard isCurrent(), let context = panelContext else { return nil }
         let revision = context.connectionRevision
-        if sshHost == nil, customDirectory == nil,
-           selectedSession?.location.remoteConnection?.state == .disconnected { return nil }
-        // An SSH probe failure is not evidence that cwd changed or became local.
-        guard let (root, source) = try? await context.resolvedRoot() else { return nil }
-        guard isCurrent(), matchesPanelTarget(context.identity),
-              context.connectionRevision == revision else { return nil }
         guard await fileTree.sync(
-            root: root, backend: context.backend, scope: context.scope,
+            root: context.cwd, backend: context.backend, scope: context.scope,
             panelIdentity: context.identity, connectionRevision: revision
         ) else { return nil }
         guard isCurrent(), matchesPanelTarget(context.identity),
               context.connectionRevision == revision else { return nil }
-        return (source, context.identity)
+        return context.identity
     }
 
 
@@ -353,7 +304,7 @@ final class Project: nonisolated Identifiable {
                 + (sshHost == nil ? " -p \(port)" : "") + " -- " + Self.shellQuoted(host)
                 + "; exitStatus=$?; printf '\\nSSH session ended (status %s). Press Enter to close this terminal.\\n' \"$exitStatus\"; read -r answer; exit \"$exitStatus\""
             let initial = PanelContext(
-                identity: .pinned(project: id, workspace: context.identity.workspace, directory: repository),
+                identity: .init(project: id, workspace: context.identity.workspace, directory: repository),
                 backend: context.backend
             )
             let pathBytes = (repository + "/.").utf8.map {
@@ -585,9 +536,6 @@ final class Project: nonisolated Identifiable {
         }
         guard workspaceIdentity == workspace else { return }
         if let pinnedFile, let updated = moved(pinnedFile) {
-            if customName == (pinnedFile as NSString).lastPathComponent {
-                customName = (updated as NSString).lastPathComponent
-            }
             self.pinnedFile = updated
         }
         if let customDirectory, let updated = moved(customDirectory) {

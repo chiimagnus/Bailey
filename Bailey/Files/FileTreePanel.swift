@@ -56,7 +56,6 @@ struct FileTreePanel: View {
     let sshHost: String?
     /// Set while the tree follows the terminal's foreground job into another
     /// checkout, so the header says why the root moved.
-    let rootBadge: (text: String, description: String)?
     let currentFilePath: String?
     let openFile: (String, Bool) -> Void
     var isActive = true
@@ -74,18 +73,6 @@ struct FileTreePanel: View {
         VStack(spacing: 0) {
             HStack {
                 PanelHeader(title: model.rootName, subtitle: model.rootPath)
-                if let rootBadge {
-                    Text(verbatim: rootBadge.text)
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.primary.opacity(0.09))
-                        )
-                        .accessibilityLabel(rootBadge.description)
-                }
                 // Finder can only reach the local disk; while remote this
                 // path names a directory on another machine.
                 if sshHost == nil && session?.location.remoteConnection == nil {

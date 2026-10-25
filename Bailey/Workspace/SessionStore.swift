@@ -27,9 +27,7 @@ struct SessionSnapshot: Codable {
             var localFile: Bool? = nil
         }
 
-        var customName: String?
-        /// User-pinned project directory; nil when the directory is
-        /// automatic (the closest git repository, never persisted).
+        /// Root chosen when the project was added.
         var customDirectory: String?
         var sshHost: String?
         var pinnedFile: String?

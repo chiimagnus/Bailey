@@ -558,7 +558,7 @@ final class GitStatusModel {
     /// the current core status verifies the active repository and HEAD.
     private(set) var needsCoreVerification = false
     var canUseCurrentStatus: Bool {
-        hasResolvedPanelTarget && !needsCoreVerification && statusError == nil
+        !needsCoreVerification && statusError == nil
     }
     /// Optional history, stash, ignored paths or line-count metadata failed.
     /// The independently verified core status remains usable.
@@ -700,22 +700,17 @@ final class GitStatusModel {
 
     /// The workspace selected by the project's current panel context.
     private var backend: WorkspaceBackend = LocalWorkspaceBackend.shared
-    @ObservationIgnored private var panelResolveGeneration: UInt64 = 0
     private var panelTargetIdentity: PanelContext.Identity?
-    private var isResolvingPanelTarget = false
-    private var hasResolvedPanelTarget: Bool { !isResolvingPanelTarget }
 
     func matchesPanelTarget(_ identity: PanelContext.Identity) -> Bool {
         panelTargetIdentity == identity
     }
 
-    /// Only the focused project's latest directory resolution may select a
-    /// repository. Its backend can complete after the user switches projects.
+    /// The selected project owns a fixed directory; only its identity can
+    /// authorize a Git result or operation.
     func syncSelectedProject(
-        project: Project?, isCurrent: @escaping @MainActor (Project) -> Bool
+        project: Project?, isCurrent: @MainActor (Project) -> Bool
     ) {
-        panelResolveGeneration &+= 1
-        let generation = panelResolveGeneration
         guard let project, isCurrent(project), let context = project.panelContext else {
             sync(root: "")
             return
@@ -724,34 +719,15 @@ final class GitStatusModel {
             contextGeneration &+= 1
             stashFilesByOID = [:]
             invalidateStatusRefresh()
-            panelTargetIdentity = nil
-            isResolvingPanelTarget = true
         }
-        Task { [weak self, weak project] in
-            let resolved: (root: String, source: PanelContext.RootSource)
-            do {
-                resolved = try await context.resolvedRoot()
-            } catch {
-                guard let self, let project,
-                      self.panelResolveGeneration == generation,
-                      isCurrent(project), project.matchesPanelTarget(context.identity) else { return }
-                self.apply(.failed(error.localizedDescription))
-                self.hasResolvedStatus = true
-                return
-            }
-            guard let self, let project,
-                  self.panelResolveGeneration == generation,
-                  isCurrent(project), project.matchesPanelTarget(context.identity) else { return }
-            self.sync(root: resolved.root, backend: context.backend, scope: context.scope)
-            self.panelTargetIdentity = context.identity
-        }
+        sync(root: context.cwd, backend: context.backend, scope: context.scope)
+        panelTargetIdentity = context.identity
     }
 
     /// Omitting the backend selects the Mac; scope keeps cached state and
     /// drafts distinct when the same path exists on another machine.
     func sync(root: String, backend: WorkspaceBackend? = nil, scope: String = "local") {
         panelTargetIdentity = nil
-        isResolvingPanelTarget = false
         let targetBackend = backend ?? LocalWorkspaceBackend.shared
         let channelChanged = (self.backend as AnyObject) !== (targetBackend as AnyObject)
         let targetChanged = root != rootPath || workspaceScope != scope || channelChanged

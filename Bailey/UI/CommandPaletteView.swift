@@ -184,7 +184,7 @@ struct CommandPaletteView: View {
                   let key = fileIndexKey,
                   let project = manager.selectedProject else { return }
             do {
-                let (root, _) = try await context.resolvedRoot()
+                let root = context.cwd
                 let files: [ProjectFile]
                 let limited: Bool
                 if context.isRemote {
@@ -488,8 +488,7 @@ struct CommandPaletteView: View {
                           scope.hasPrefix("ssh:") else { return }
                     let host = String(scope.dropFirst(4))
                     Task { @MainActor in
-                        guard let resolved = try? await context.resolvedRoot(),
-                              resolved.root == indexedRoot,
+                        guard context.cwd == indexedRoot,
                               !manager.isClosed,
                               manager.selectedProjectID == project.id,
                               project.matchesPanelTarget(indexedTarget.identity),

@@ -710,7 +710,6 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
 
         func snapshot(named name: String) -> SessionSnapshot {
             let project = SessionSnapshot.ProjectSnapshot(
-                customName: name,
                 customDirectory: "/fixture/" + name,
                 sshHost: nil,
                 pinnedFile: nil,
@@ -735,14 +734,14 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
             second.windowClosed()
         }
         XCTAssertEqual(application.windowCount, 2)
-        XCTAssertEqual(first.selectedProject?.customName, "one")
-        XCTAssertEqual(second.selectedProject?.customName, "two")
+        XCTAssertEqual(first.selectedProject?.name, "one")
+        XCTAssertEqual(second.selectedProject?.name, "two")
         application.register(first)
         application.register(second)
         XCTAssertEqual(application.windowCount, 2,
                        "Repeated SwiftUI appear or native attachment cannot claim another snapshot")
-        XCTAssertEqual(first.selectedProject?.customName, "one")
-        XCTAssertEqual(second.selectedProject?.customName, "two")
+        XCTAssertEqual(first.selectedProject?.name, "one")
+        XCTAssertEqual(second.selectedProject?.name, "two")
         XCTAssertTrue(SessionStore.load().count == 2)
         withExtendedLifetime([discarded, redundant]) {}
     }

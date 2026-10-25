@@ -213,7 +213,7 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
                 if pinned {
                     project.sshHost = host
                     project.customDirectory = root
-                    context = PanelContext(identity: .pinned(project: project.id, workspace: "ssh:" + host, directory: root), backend: backend)
+                    context = PanelContext(identity: .init(project: project.id, workspace: "ssh:" + host, directory: root), backend: backend)
                 } else {
                     let session = TerminalSession(launchCommand: "exec /bin/sh -i")
                     source = session

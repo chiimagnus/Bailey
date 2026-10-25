@@ -137,13 +137,12 @@ final class WorkspaceWindowModel {
                   FileManager.default.isExecutableFile(atPath: root),
                   !NSWorkspace.shared.isFilePackage(atPath: root) else { continue }
             if let existing = projects.first(where: {
-                $0.sshHost == nil && $0.customDirectory == root && $0.pinnedFile == nil
+                $0.sshHost == nil && $0.customDirectory == root
             }) {
                 selectedProjectID = existing.id
                 continue
             }
             let project = makeProject()
-            project.customName = url.lastPathComponent
             project.customDirectory = root
             insert(project)
         }
@@ -289,7 +288,6 @@ final class WorkspaceWindowModel {
             project.sshHost = host
             project.customDirectory = root
             project.pinnedFile = file
-            project.customName = (item.path as NSString).lastPathComponent
             if let file { project.openFile(file) }
             insert(project)
         }
@@ -596,13 +594,7 @@ final class WorkspaceWindowModel {
 
     private func newItem(isDirectory: Bool) async {
         guard let project = selectedProject, let context = project.panelContext else { return }
-        let root: String
-        do {
-            root = try await context.resolvedRoot().root
-        } catch {
-            WorkspaceNativeDialogs.showError(error, in: window)
-            return
-        }
+        let root = context.cwd
         let revision = context.connectionRevision
         guard selectedProjectID == project.id, project.matchesPanelTarget(context.identity) else { return }
         showPanel(.files)
@@ -1045,8 +1037,8 @@ final class WorkspaceWindowModel {
         }
         let revision = context.connectionRevision
         Task {
-            guard let (root, _) = try? await context.resolvedRoot(),
-                  context.connectionRevision == revision,
+            let root = context.cwd
+            guard context.connectionRevision == revision,
                   !isClosed, selectedProjectID == project.id,
                   project.matchesPanelTarget(context.identity),
                   project.tabs.contains(where: { $0.id == tabID }),
@@ -1149,7 +1141,6 @@ final class WorkspaceWindowModel {
                 }
                 let tabs = savedTabs.map(\.1)
                 return ProjectSnapshot(
-                    customName: project.customName,
                     customDirectory: project.customDirectory,
                     sshHost: project.sshHost,
                     pinnedFile: project.pinnedFile,
@@ -1194,10 +1185,12 @@ final class WorkspaceWindowModel {
 
     /// Rebuilds projects and tabs from the saved window snapshot.
     func restore(from snapshot: SessionSnapshot, histories: [String: String]) -> Bool {
-        for saved in snapshot.projects {
+        var restoredSelection: UUID?
+        for (index, saved) in snapshot.projects.enumerated() {
+            guard let directory = saved.customDirectory,
+                  saved.sshHost != nil || saved.pinnedFile == nil else { continue }
             let project = makeProject()
-            project.customName = Project.normalizedCustomName(saved.customName)
-            project.customDirectory = saved.customDirectory
+            project.customDirectory = directory
             project.sshHost = saved.sshHost
             project.pinnedFile = saved.pinnedFile
             var restoredContexts: [(tab: PaneTab, sessionIndex: Int)] = []
@@ -1228,13 +1221,10 @@ final class WorkspaceWindowModel {
                 project.openFile(pinnedFile)
             }
             projects.append(project)
+            if index == snapshot.selectedProjectIndex { restoredSelection = project.id }
         }
         guard !projects.isEmpty else { return false }
-        if let index = snapshot.selectedProjectIndex, projects.indices.contains(index) {
-            selectedProjectID = projects[index].id
-        } else {
-            selectedProjectID = projects.first?.id
-        }
+        selectedProjectID = restoredSelection ?? projects.first?.id
         return true
     }
 }

@@ -34,6 +34,30 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data("original bytes\n".utf8))
     }
 
+    func testProjectContextMenuExposesOnlyCloseAndUsesFolderName() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("folder-first.txt", text: "project contents\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let projects = WorkspaceUITestSupport.element("bailey.dock.projects", in: app)
+        XCTAssertTrue(projects.waitForExistence(timeout: 15))
+        projects.click()
+
+        let row = app.descendants(matching: .any)
+            .matching(identifier: "bailey.project.row").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        XCTAssertTrue(row.label.contains(fixture.root.lastPathComponent),
+                      "The project name must be derived from its directory")
+        row.rightClick()
+        XCTAssertTrue(app.menuItems["Close Project"].waitForExistence(timeout: 10))
+        for removed in ["Rename…", "Use Automatic Title", "Set Project Directory…",
+                        "Use Automatic Directory"] {
+            XCTAssertFalse(app.menuItems[removed].exists,
+                           "Project menu must not expose removed action \(removed)")
+        }
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+    }
+
     func testClosingExplicitlyActivatedProjectsKeepsFilesWithoutDragging() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("unchanged.swift", text: "original bytes\n")
