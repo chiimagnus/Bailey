@@ -1146,14 +1146,18 @@ final class FileTreeModel {
                 }
             }
 
-            var traversal = TreeDisplayModel.Traversal(root: path, directoryDepthLimit: 32) {
+            let knownDirectories = Set(cachedDirectories.keys)
+            var traversal = TreeDisplayModel.Traversal(
+                root: path, directoryDepthLimit: 32,
+                inspectDirectory: { expanded.contains($0) || knownDirectories.contains($0) }
+            ) {
                 expanded.contains($0)
             }
             var queriedDirectories = refreshedDirectories
             while let directory = traversal.nextDirectory() {
                 if cachedDirectories[directory] == nil && !queriedDirectories.contains(directory) {
-                    // Directory compaction probes collapsed siblings too. Fetch
-                    // the current frontier together instead of N SSH round trips.
+                    // Only explicitly opened or cached directories may join
+                    // this batch; compact folders must not prefetch descendants.
                     let missing = ([directory] + traversal.pendingDirectories).filter {
                         cachedDirectories[$0] == nil && !queriedDirectories.contains($0)
                     }
@@ -1180,9 +1184,14 @@ final class FileTreeModel {
                path == rootPath, scope == workspaceScope {
                 let visiblePaths = Set(traversal.rows.filter { !$0.isDraft }.map(\.path))
                 if let selectedPath, !visiblePaths.contains(selectedPath) {
-                    self.selectedPath = traversal.rows
+                    let visibleAncestor = traversal.rows
                         .filter { $0.isDirectory && selectedPath.hasPrefix($0.path + "/") }
-                        .max(by: { $0.path.count < $1.path.count })?.path
+                        .max(by: { $0.path.count < $1.path.count })
+                    let compactedChild = traversal.rows.first {
+                        $0.isDirectory && !$0.compactPrefix.isEmpty
+                            && $0.path.hasPrefix(selectedPath + "/")
+                    }
+                    self.selectedPath = (visibleAncestor ?? compactedChild)?.path
                 }
                 selectedPaths.formIntersection(visiblePaths)
                 if selectedPaths.isEmpty, let selectedPath = self.selectedPath {

@@ -16,7 +16,7 @@ GUI 与使用私有握手的隔离测试都显式调用 `WorkspaceApplication.co
 
 复用既有 OpenSSH 配置、密钥和工作区 master。GUI 启动时将应用级 `WorkspaceApplication` 显式提供给已存在的 `BaileySSHService`；私有 handoff 经 token、终端 ID、端口和 PID 校验后，仅查找该所有者内仍存活的 Session，不能遍历窗口单例或误交给测试宿主的其它所有者。交互会话与文件／Git 操作不是同一条生命期路径：终端仍能输入，不足以证明后端连接正常。
 
-固定 SSH 主机的新终端与 Files/Git 使用相同的 OpenSSH `ControlMaster=auto`、`ControlPersist=180` 以及按有效主机、用户、端口与跳板隔离的 `%C` socket；标签关闭不主动关闭共享连接。固定主机的文件／Git 后台命令在新建 SSH 连接时启用标准压缩，已存在的 master 不重新协商。后台命令使用 `BatchMode=yes`，不弹出交互式认证，也不跨机器回退到本机。首次加载与刷新按同层目录批量读取；网络读取由后端异步执行，已读取目录优先使用缓存，失联保留原内容与绑定。
+固定 SSH 主机的新终端与 Files/Git 使用相同的 OpenSSH `ControlMaster=auto`、`ControlPersist=180` 以及按有效主机、用户、端口与跳板隔离的 `%C` socket；标签关闭不主动关闭共享连接。固定主机的文件／Git 后台命令在新建 SSH 连接时启用标准压缩，已存在的 master 不重新协商。后台命令使用 `BatchMode=yes`，不弹出交互式认证，也不跨机器回退到本机。Files 全折叠时首次只读取根目录，恢复已展开层级或点击子目录时按需读取，目录压缩不会触发额外的深层扫描；刷新已缓存目录时批量读取。网络读取由后端异步执行，已读取目录优先使用缓存，失联保留原内容与绑定。
 
 自动跟随终端的远程工作区沿用该终端已认证的 master，失联时不会另建连接；它的本机 master 存活检查计入命令总超时。固定 SSH 主机使用 `ControlMaster=auto`，旧连接失效时可能通过现有 OpenSSH 密钥新建**无需交互认证**的连接；仍不绕过主机密钥校验。用户在 Shell 中手动建立的 SSH 会话不被接管。真实 SSH 验收必须使用测试专属 socket，不借用或关闭用户 master。
 

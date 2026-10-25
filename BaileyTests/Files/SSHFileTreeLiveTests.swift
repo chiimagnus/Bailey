@@ -67,29 +67,60 @@ final class SSHFileTreeLiveTests: XCTestCase {
             XCTAssertEqual(batch[two]?.map(\.name), ["b.txt"])
             XCTAssertNil(batch[missing], "A missing directory must not erase adjacent results")
 
-            // Cold tree traversal must batch the root and its entire sibling
-            // lookahead; expanding a cached folder must not contact SSH.
+            // A cold tree must not inspect unopened siblings or compact chains.
             let siblings = (1...12).map { root + "/sibling-\($0)" }
             for directory in siblings { try await backend.createDirectory(path: directory) }
+            let deep = root + "/deep"
+            let step1 = deep + "/step1"
+            let step2 = step1 + "/step2"
+            for path in [deep, step1, step2] {
+                try await backend.createDirectory(path: path)
+            }
+            try await backend.createFile(path: step2 + "/leaf.txt")
             let tree = FileTreeModel()
             let beforeCold = await runner.calls
             await tree.sync(root: root, backend: backend, scope: "ssh:windows-live")
             let coldRequests = await runner.calls - beforeCold
-            XCTAssertEqual(coldRequests, 2,
-                           "Cold tree must use one root read and one sibling batch")
+            XCTAssertEqual(coldRequests, 1, "Cold tree must only read the root directory")
+            XCTAssertNotNil(tree.items.first { $0.path == deep })
+            XCTAssertNil(tree.items.first { $0.path == step1 })
             let folder = try XCTUnwrap(tree.items.first { $0.path == one })
             let beforeToggle = await runner.calls
             await tree.toggle(folder)
             XCTAssertTrue(tree.items.contains { $0.path == one + "/a file.txt" })
             await tree.toggle(folder)
             let toggleRequests = await runner.calls
-            XCTAssertEqual(toggleRequests, beforeToggle,
-                           "Warm folder expansion and collapse must make zero SSH requests")
+            XCTAssertEqual(toggleRequests, beforeToggle + 1,
+                           "First expansion reads exactly one folder; collapse is cached")
+
+            let beforeDeep = await runner.calls
+            let first = try XCTUnwrap(tree.items.first { $0.path == deep })
+            await tree.toggle(first)
+            XCTAssertEqual(tree.items.first { $0.path == deep }?.isExpanded, true)
+            XCTAssertEqual(tree.items.first { $0.path == step1 }?.displayName, "step1")
+            let afterFirst = await runner.calls
+            XCTAssertEqual(afterFirst, beforeDeep + 1)
+            let second = try XCTUnwrap(tree.items.first { $0.path == step1 })
+            await tree.toggle(second)
+            XCTAssertEqual(tree.items.first { $0.path == step1 }?.displayName, "deep / step1")
+            XCTAssertEqual(tree.items.first { $0.path == step2 }?.displayName, "step2")
+            let afterSecond = await runner.calls
+            XCTAssertEqual(afterSecond, afterFirst + 1)
+            XCTAssertNil(tree.items.first { $0.path == step2 + "/leaf.txt" })
+            let third = try XCTUnwrap(tree.items.first { $0.path == step2 })
+            await tree.toggle(third)
+            XCTAssertEqual(tree.items.first { $0.path == step2 }?.displayName,
+                           "deep / step1 / step2")
+            XCTAssertNotNil(tree.items.first { $0.path == step2 + "/leaf.txt" })
+            let afterThird = await runner.calls
+            XCTAssertEqual(afterThird, afterSecond + 1,
+                           "Only the clicked compact path should trigger a new SSH query")
+
             let beforeRefresh = await runner.calls
             await tree.sync(root: root, backend: backend, scope: "ssh:windows-live")
             let refreshRequests = await runner.calls - beforeRefresh
             XCTAssertEqual(refreshRequests, 1,
-                           "Refreshing the visible tree must batch every cached directory")
+                           "Refreshing already visited directories must remain batched")
 
             // Run only when explicitly requested: 30 hot samples per method,
             // identical folders and test-owned SSH master. This measures the

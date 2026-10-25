@@ -206,8 +206,16 @@ final class FileTreeTests: XCTestCase {
         tree.setLocalFileEventsEnabled(true)
         defer { tree.setLocalFileEventsEnabled(false) }
         await tree.sync(root: root.path, backend: CountingFileBackend())
+        let collapsed = try XCTUnwrap(tree.items.first { $0.path == alias.path })
+        XCTAssertEqual(collapsed.displayName, "linked")
+        await tree.toggle(collapsed)
+        let child = try XCTUnwrap(tree.items.first {
+            $0.path == alias.appendingPathComponent("child").path
+        })
+        XCTAssertEqual(child.displayName, "child")
+        await tree.toggle(child)
         let compacted = try XCTUnwrap(tree.items.first)
-        XCTAssertEqual(compacted.path, alias.appendingPathComponent("child").path)
+        XCTAssertEqual(compacted.path, child.path)
         XCTAssertEqual(compacted.displayName, "linked / child")
         XCTAssertTrue(tree.hasVisibleDirectorySymlinks,
                       "Compacted symlink paths must preserve Windows fallback polling")
@@ -387,6 +395,12 @@ final class FileTreeTests: XCTestCase {
         let backend = CountingFileBackend()
         let tree = FileTreeModel()
         await tree.sync(root: root.path, backend: backend)
+        let branchRow = try XCTUnwrap(tree.items.first { $0.path == branch.path })
+        await tree.toggle(branchRow)
+        let nestedRow = try XCTUnwrap(tree.items.first { $0.path == nested.path })
+        await tree.toggle(nestedRow)
+        let siblingRow = try XCTUnwrap(tree.items.first { $0.path == other.path })
+        await tree.toggle(siblingRow)
         let loaded = await backend.requests
         XCTAssertNotNil(loaded[nested.path])
         XCTAssertNotNil(loaded[other.path])
@@ -742,7 +756,10 @@ final class FileTreeTests: XCTestCase {
                        "Unhiding an expanded directory must not list it again")
 
         await tree.setShowExcluded(true)
-        XCTAssertTrue(tree.items.contains { $0.name == ".git" })
+        let gitFolder = try XCTUnwrap(tree.items.first { $0.name == ".git" })
+        let beforeOpening = await backend.requests
+        XCTAssertNil(beforeOpening[gitFolder.path], "Revealing a collapsed folder must not read it")
+        await tree.toggle(gitFolder)
         XCTAssertEqual(settings.filesExclude, ["**/.git"])
         await tree.setShowExcluded(false)
         XCTAssertFalse(tree.items.contains { $0.name == ".git" })
@@ -1745,9 +1762,13 @@ final class FileTreeTests: XCTestCase {
 
         let tree = FileTreeModel()
         await tree.sync(root: root.path, backend: backend)
+        let dir = try XCTUnwrap(tree.items.first { $0.path == root.appendingPathComponent("dir").path })
+        await tree.toggle(dir)
+        let inner = try XCTUnwrap(tree.items.first { $0.path == nested.path })
+        XCTAssertEqual(inner.displayName, "inner")
+        await tree.toggle(inner)
         let compact = try XCTUnwrap(tree.items.first { $0.path == nested.path })
         XCTAssertEqual(compact.displayName, "dir / inner")
-        await tree.toggle(compact)
         XCTAssertTrue(tree.items.contains { $0.path == original.path })
 
         await tree.beginNewFile(in: nested.path)
@@ -1774,6 +1795,8 @@ final class FileTreeTests: XCTestCase {
 
         let tree = FileTreeModel()
         await tree.sync(root: firstRoot.path, backend: backend)
+        let dir = try XCTUnwrap(tree.items.first { $0.path == firstRoot.appendingPathComponent("dir").path })
+        await tree.toggle(dir)
         let compact = try XCTUnwrap(tree.items.first { $0.path == firstNested.path })
         await tree.toggle(compact)
         XCTAssertTrue(tree.isExpanded(compact))
@@ -1913,10 +1936,11 @@ final class FileTreeTests: XCTestCase {
         await tree.sync(root: root.path, backend: counting)
         let folder = try XCTUnwrap(tree.items.first { $0.path == sub.path })
         let readsAfterInitial = await counting.requests
+        XCTAssertNil(readsAfterInitial[sub.path], "Cold tree must not read a collapsed directory")
         await tree.toggle(folder)
         XCTAssertTrue(tree.items.contains { $0.path == sub.appendingPathComponent("child.txt").path })
         let readsAfterExpansion = await counting.requests
-        XCTAssertEqual(readsAfterExpansion, readsAfterInitial, "Expansion reuses the compaction lookahead")
+        XCTAssertEqual(readsAfterExpansion[sub.path], 1, "Only the clicked folder should be fetched")
         await tree.toggle(folder)
         await tree.toggle(folder)
         let readsAfterRepeat = await counting.requests
@@ -1941,7 +1965,7 @@ final class FileTreeTests: XCTestCase {
         await tree.sync(root: root.path, backend: counting)
         let folder = try XCTUnwrap(tree.items.first { $0.path == parent.path })
         XCTAssertFalse(folder.isExpanded)
-        await counting.delay(first.path)
+        await counting.delay(parent.path)
         defer { Task { await counting.release() } }
         let opening = Task { await tree.toggle(folder) }
         let deadline = Date().addingTimeInterval(5)
@@ -1971,7 +1995,60 @@ final class FileTreeTests: XCTestCase {
         XCTAssertTrue(tree.items.isEmpty, "A different SSH target cannot inherit the old tree")
     }
 
-    func testFirstLoadBatchesSiblingFolderLookahead() async throws {
+    func testCompactFoldersReadOnlyTheClickedLevel() async throws {
+        let root = fixture.appendingPathComponent("lazy-compact")
+        let a = root.appendingPathComponent("A")
+        let b = a.appendingPathComponent("B")
+        let c = b.appendingPathComponent("C")
+        let sibling = root.appendingPathComponent("unopened")
+        try FileManager.default.createDirectory(at: c, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+        try Data().write(to: c.appendingPathComponent("leaf.swift"))
+
+        let counting = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: counting, scope: "ssh:lazy-test")
+        XCTAssertEqual(Set(tree.items.map(\.path)), [a.path, sibling.path])
+        let initialReads = await counting.requests
+        XCTAssertEqual(initialReads, [root.path: 1],
+                       "An unopened folder must not be queried to compute compact names")
+
+        let first = try XCTUnwrap(tree.items.first { $0.path == a.path })
+        tree.select(first)
+        await tree.toggle(first)
+        XCTAssertEqual(tree.selectedPath, a.path)
+        XCTAssertEqual(tree.items.first(where: { $0.path == a.path })?.isExpanded, true,
+                       "Clicking a folder must visibly expand it, not only rename its row")
+        XCTAssertEqual(tree.items.first(where: { $0.path == b.path })?.displayName, "B")
+        let afterA = await counting.requests
+        XCTAssertEqual(afterA[a.path], 1)
+        XCTAssertNil(afterA[b.path], "Compaction may use A's entry metadata but must not read B")
+        XCTAssertNil(afterA[c.path])
+        XCTAssertNil(afterA[sibling.path])
+
+        let second = try XCTUnwrap(tree.items.first { $0.path == b.path })
+        tree.select(second)
+        await tree.toggle(second)
+        XCTAssertEqual(tree.selectedPath, b.path)
+        XCTAssertEqual(tree.items.first(where: { $0.path == b.path })?.displayName, "A / B")
+        XCTAssertEqual(tree.items.first(where: { $0.path == b.path })?.isExpanded, true)
+        XCTAssertEqual(tree.items.first(where: { $0.path == c.path })?.displayName, "C")
+        let afterB = await counting.requests
+        XCTAssertEqual(afterB[b.path], 1)
+        XCTAssertNil(afterB[c.path], "Do not inspect C until its row is opened")
+
+        let third = try XCTUnwrap(tree.items.first { $0.path == c.path })
+        tree.select(third)
+        await tree.toggle(third)
+        XCTAssertEqual(tree.selectedPath, c.path)
+        XCTAssertEqual(tree.items.first(where: { $0.path == c.path })?.displayName, "A / B / C")
+        XCTAssertTrue(tree.items.contains { $0.path == c.appendingPathComponent("leaf.swift").path })
+        let afterC = await counting.requests
+        XCTAssertEqual(afterC[c.path], 1)
+        XCTAssertNil(afterC[sibling.path])
+    }
+
+    func testFirstLoadDoesNotReadCollapsedSiblingFolders() async throws {
         let root = fixture.appendingPathComponent("siblings")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let folders = (0..<12).map { root.appendingPathComponent("dir\($0)") }
@@ -1984,8 +2061,15 @@ final class FileTreeTests: XCTestCase {
         await tree.sync(root: root.path, backend: counting)
         XCTAssertEqual(tree.items.filter(\.isDirectory).count, folders.count)
         let batch = await counting.lastBatch
-        XCTAssertEqual(Set(batch ?? []), Set(folders.map(\.path)),
-                       "Initial directory compression must not perform one SSH request per sibling")
+        XCTAssertEqual(batch, [root.path], "Cold tree must query only the root")
+        let initialReads = await counting.requests
+        XCTAssertEqual(initialReads, [root.path: 1])
+        let first = try XCTUnwrap(tree.items.first { $0.path == folders[0].path })
+        await tree.toggle(first)
+        let afterClick = await counting.requests
+        XCTAssertEqual(afterClick[folders[0].path], 1)
+        XCTAssertTrue(folders.dropFirst().allSatisfy { afterClick[$0.path] == nil },
+                      "Siblings remain unloaded until clicked")
     }
 
     func testSharedTreeStatusAndCompaction() {

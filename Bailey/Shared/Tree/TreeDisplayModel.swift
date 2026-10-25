@@ -87,22 +87,29 @@ enum TreeDisplayModel {
         private var pending: [Step]
         private var reading: Step?
         private let expanded: (String) -> Bool
+        private let inspectDirectory: (String) -> Bool
         private let directoryDepthLimit: Int?
         private(set) var rows: [Row] = []
         private(set) var rootReadable = true
 
-        /// The current traversal frontier, including collapsed folders whose
-        /// children must be checked to preserve directory compaction.
+        /// Only directories whose entries are already known or explicitly
+        /// expanded may enter the next read batch.
         var pendingDirectories: [String] {
             pending.compactMap { step in
-                guard case .row(let row, _) = step, row.isDirectory, !row.isDraft else { return nil }
+                guard case .row(let row, _) = step, row.isDirectory, !row.isDraft,
+                      inspectDirectory(row.path) else { return nil }
                 return row.path
             }
         }
 
-        init(root: String, directoryDepthLimit: Int? = nil, expanded: @escaping (String) -> Bool) {
+        init(
+            root: String, directoryDepthLimit: Int? = nil,
+            inspectDirectory: @escaping (String) -> Bool = { _ in true },
+            expanded: @escaping (String) -> Bool
+        ) {
             pending = [.root(root)]
             self.directoryDepthLimit = directoryDepthLimit
+            self.inspectDirectory = inspectDirectory
             self.expanded = expanded
         }
 
@@ -113,7 +120,7 @@ enum TreeDisplayModel {
                     reading = step
                     return path
                 case .row(var row, _):
-                    if row.isDirectory && !row.isDraft {
+                    if row.isDirectory && !row.isDraft && inspectDirectory(row.path) {
                         reading = step
                         return row.path
                     }
@@ -134,7 +141,7 @@ enum TreeDisplayModel {
             case .row(var row, let compactDepth):
                 if directoryDepthLimit.map({ compactDepth < $0 }) ?? true,
                    let children, children.count == 1, var child = children.first,
-                   child.isDirectory, !child.isDraft {
+                   child.isDirectory, !child.isDraft, inspectDirectory(child.path) {
                     child.depth = row.depth
                     child.compactPrefix = row.compactPrefix + [row.name]
                     pending.append(.row(child, compactDepth: compactDepth + 1))
