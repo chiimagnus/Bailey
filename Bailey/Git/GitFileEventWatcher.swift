@@ -2,11 +2,17 @@ import CoreServices
 import Foundation
 
 /// Native recursive change notifications for a local checkout and its Git metadata.
+/// Files also needs paths and loss flags; Git keeps its existing change-only callback.
 nonisolated final class GitFileEventWatcher {
-    private nonisolated final class Listener: Sendable {
-        let notify: @Sendable () -> Void
+    struct Event: Sendable {
+        let path: String
+        let flags: FSEventStreamEventFlags
+    }
 
-        init(_ notify: @escaping @Sendable () -> Void) {
+    private nonisolated final class Listener: Sendable {
+        let notify: @Sendable ([Event]) -> Void
+
+        init(_ notify: @escaping @Sendable ([Event]) -> Void) {
             self.notify = notify
         }
     }
@@ -15,18 +21,41 @@ nonisolated final class GitFileEventWatcher {
     private let queue = DispatchQueue(label: "chiimagnus.bailey.git.file-events", qos: .utility)
     private let stream: FSEventStreamRef
 
-    init?(paths: [String], onChange: @escaping @Sendable () -> Void) {
+    convenience init?(paths: [String], onChange: @escaping @Sendable () -> Void) {
+        self.init(paths: paths, fileEvents: false, onEvents: { _ in onChange() })
+    }
+
+    convenience init?(paths: [String], onEvents: @escaping @Sendable ([Event]) -> Void) {
+        self.init(paths: paths, fileEvents: true, onEvents: onEvents)
+    }
+
+    private init?(
+        paths: [String], fileEvents: Bool, onEvents: @escaping @Sendable ([Event]) -> Void
+    ) {
         guard !paths.isEmpty else { return nil }
-        let listener = Listener(onChange)
+        let listener = Listener(onEvents)
         var context = FSEventStreamContext(
             version: 0, info: Unmanaged.passUnretained(listener).toOpaque(),
             retain: nil, release: nil, copyDescription: nil
         )
-        let callback: FSEventStreamCallback = { _, info, count, _, _, _ in
+        let callback: FSEventStreamCallback = { _, info, count, rawPaths, rawFlags, _ in
             guard count > 0, let info else { return }
-            Unmanaged<Listener>.fromOpaque(info).takeUnretainedValue().notify()
+            let paths = Unmanaged<CFArray>.fromOpaque(rawPaths).takeUnretainedValue()
+            var events: [Event] = []
+            events.reserveCapacity(count)
+            for index in 0..<min(count, CFArrayGetCount(paths)) {
+                let path = unsafeBitCast(CFArrayGetValueAtIndex(paths, index), to: CFString.self)
+                events.append(Event(path: path as String, flags: rawFlags[index]))
+            }
+            if !events.isEmpty {
+                Unmanaged<Listener>.fromOpaque(info).takeUnretainedValue().notify(events)
+            }
         }
-        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagWatchRoot)
+        let flags = FSEventStreamCreateFlags(
+            kFSEventStreamCreateFlagWatchRoot |
+            kFSEventStreamCreateFlagUseCFTypes |
+            (fileEvents ? kFSEventStreamCreateFlagFileEvents : 0)
+        )
         guard let stream = FSEventStreamCreate(
             nil, callback, &context, paths as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.3, flags

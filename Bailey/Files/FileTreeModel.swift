@@ -1,3 +1,5 @@
+import CoreServices
+import Darwin
 import Foundation
 import Observation
 
@@ -197,6 +199,14 @@ final class FileTreeModel {
     @ObservationIgnored private var rebuildPending = false
     @ObservationIgnored private var refreshPending = false
     @ObservationIgnored private var rebuildWaiters: [CheckedContinuation<Void, Never>] = []
+    @ObservationIgnored private var changedDirectoriesPending: Set<String> = []
+    @ObservationIgnored private var localFileEventsEnabled = false
+    @ObservationIgnored private var localFileWatcher: GitFileEventWatcher?
+    @ObservationIgnored private var localWatcherRoot = ""
+    @ObservationIgnored private var localWatchMappings: [String: String] = [:]
+    @ObservationIgnored private var localWatcherToken: UInt64 = 0
+    @ObservationIgnored private var pendingLocalEvents: [GitFileEventWatcher.Event] = []
+    @ObservationIgnored private var localEventRefreshTask: Task<Void, Never>?
 
     /// The hosting window presents native operation errors even when Files is hidden.
     @ObservationIgnored var onError: ((_ title: String, _ detail: String) -> Void)?
@@ -307,6 +317,183 @@ final class FileTreeModel {
         return !next.isDraft && next.path.hasPrefix(item.path + "/") ? next : nil
     }
 
+    /// The visible Files panel owns this subscription; other project trees stay idle.
+    func setLocalFileEventsEnabled(_ enabled: Bool) {
+        guard localFileEventsEnabled != enabled else { return }
+        localFileEventsEnabled = enabled
+        if enabled { configureLocalFileWatcher() }
+        else { stopLocalFileWatcher() }
+    }
+
+    private func stopLocalFileWatcher() {
+        localWatcherToken &+= 1
+        localEventRefreshTask?.cancel()
+        localEventRefreshTask = nil
+        pendingLocalEvents.removeAll()
+        localFileWatcher = nil
+        localWatcherRoot = ""
+        localWatchMappings.removeAll()
+    }
+
+    private func configureLocalFileWatcher() {
+        guard localFileEventsEnabled, workspaceScope == "local", !rootPath.isEmpty else {
+            if localFileWatcher != nil { stopLocalFileWatcher() }
+            return
+        }
+        let root = rootPath
+        let physicalRoot = Self.physicalRootPath(root)
+        var mappings = [root: physicalRoot]
+        for (parent, entries) in cachedDirectories {
+            for entry in entries where entry.isSymlink && entry.isDirectory {
+                let path = (parent as NSString).appendingPathComponent(entry.name)
+                // A displayed directory can be collapsed into a single row
+                // ("link / child") without the link path in `items` or `expanded`.
+                // It still needs events: changing the link's target can split
+                // that compact row into multiple visible entries.
+                if items.contains(where: { $0.path == path || $0.path.hasPrefix(path + "/") }) {
+                    mappings[path] = Self.physicalRootPath(path)
+                }
+            }
+        }
+        guard localFileWatcher == nil || localWatcherRoot != root || localWatchMappings != mappings else {
+            return
+        }
+        let replacedWatcher = localFileWatcher != nil
+        stopLocalFileWatcher()
+        let watchPaths = GitFileEventWatcher.paths(
+            root: physicalRoot, gitDirectory: nil, worktrees: Array(mappings.values)
+        )
+        let token = localWatcherToken
+        localFileWatcher = GitFileEventWatcher(paths: watchPaths, onEvents: { [weak self] events in
+            Task { @MainActor [weak self] in
+                guard let self, self.localWatcherToken == token,
+                      self.localFileEventsEnabled, self.rootPath == root,
+                      self.workspaceScope == "local" else { return }
+                self.queueLocalFileEvents(events)
+            }
+        })
+        if localFileWatcher != nil {
+            localWatcherRoot = root
+            localWatchMappings = mappings
+            if replacedWatcher {
+                // FSEvents uses SinceNow: the old and new streams cannot
+                // cover the short resubscription gap without a fresh read.
+                Task { @MainActor [weak self] in
+                    guard let self, self.localWatcherToken == token,
+                          self.localFileEventsEnabled, self.rootPath == root else { return }
+                    await self.rebuild(refresh: true)
+                }
+            }
+        }
+    }
+
+    private func queueLocalFileEvents(_ events: [GitFileEventWatcher.Event]) {
+        pendingLocalEvents.append(contentsOf: events)
+        guard localEventRefreshTask == nil else { return }
+        let token = localWatcherToken
+        localEventRefreshTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(100)) }
+            catch { return }
+            guard let self, self.localWatcherToken == token else { return }
+            let events = self.pendingLocalEvents
+            self.pendingLocalEvents.removeAll()
+            self.localEventRefreshTask = nil
+            await self.refreshForLocalEvents(events)
+        }
+    }
+
+    private static func physicalRootPath(_ root: String) -> String {
+        root.withCString { source in
+            guard let resolved = Darwin.realpath(source, nil) else { return root }
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
+    }
+
+    /// Recheck disk state, never apply event paths as file-tree entries.
+    func refreshForLocalEvents(_ events: [GitFileEventWatcher.Event]) async {
+        guard workspaceScope == "local", !rootPath.isEmpty, !events.isEmpty else { return }
+        let rescanAll = kFSEventStreamEventFlagKernelDropped |
+            kFSEventStreamEventFlagUserDropped |
+            kFSEventStreamEventFlagRootChanged |
+            kFSEventStreamEventFlagEventIdsWrapped |
+            kFSEventStreamEventFlagMount |
+            kFSEventStreamEventFlagUnmount
+        if events.contains(where: { $0.flags & FSEventStreamEventFlags(rescanAll) != 0 }) {
+            let epoch = treeEpoch
+            let revision = contentRevision
+            await rebuild(refresh: true)
+            if treeEpoch == epoch, contentRevision == revision { contentRevision &+= 1 }
+            return
+        }
+
+        let epoch = treeEpoch
+        let revision = contentRevision
+        var directories: Set<String> = []
+        var unseenStructuralChange = false
+        let structuralFlags = FSEventStreamEventFlags(
+            kFSEventStreamEventFlagItemCreated |
+            kFSEventStreamEventFlagItemRemoved |
+            kFSEventStreamEventFlagItemRenamed |
+            kFSEventStreamEventFlagMustScanSubDirs
+        )
+        let loaded = Set(cachedDirectories.keys)
+        // FSEvents reports physical paths; expanded directory symlinks can
+        // expose the same directory under several visible tree paths.
+        let mappings = localWatchMappings.isEmpty
+            ? [rootPath: Self.physicalRootPath(rootPath)] : localWatchMappings
+        for event in events {
+            // Never standardize a missing event path: NSString changes /private/var
+            // to /var for existing entries but not reliably for deleted ones.
+            let reported = event.path
+            var aliases = mappings.compactMap { logical, physical -> String? in
+                guard LocalPathScope.contains(reported, in: physical) else { return nil }
+                let relative = String(reported.dropFirst(physical.count))
+                return logical == "/" ? reported : logical + relative
+            }
+            if aliases.isEmpty, LocalPathScope.contains(reported, in: rootPath) {
+                aliases = [reported]
+            }
+            for path in aliases {
+                if path == rootPath {
+                    directories.formUnion(loaded)
+                    directories.insert(rootPath)
+                    continue
+                }
+                let parent = (path as NSString).deletingLastPathComponent
+                let mustScan = event.flags & FSEventStreamEventFlags(
+                    kFSEventStreamEventFlagMustScanSubDirs
+                ) != 0
+                let entryChanged = event.flags & FSEventStreamEventFlags(
+                    kFSEventStreamEventFlagItemCreated |
+                    kFSEventStreamEventFlagItemRemoved |
+                    kFSEventStreamEventFlagItemRenamed
+                ) != 0
+                if loaded.contains(parent), !mustScan || entryChanged {
+                    directories.insert(parent)
+                }
+                if loaded.contains(path) { directories.insert(path) }
+                if mustScan {
+                    directories.formUnion(loaded.filter { LocalPathScope.contains($0, in: path) })
+                }
+                // The Files tree doesn't scan collapsed descendants. Cmd+P
+                // still indexes those filenames, so structural events beyond
+                // the loaded frontier must invalidate its on-demand index.
+                let unread = !loaded.contains(parent) && !loaded.contains(path)
+                let hidden = !showExcluded && !Self.isVisible(
+                    parent, in: rootPath, excluding: settings.filesExclude
+                )
+                if (unread || hidden), event.flags & structuralFlags != 0 {
+                    unseenStructuralChange = true
+                }
+            }
+        }
+        if !directories.isEmpty { await rebuild(changed: directories) }
+        if unseenStructuralChange, treeEpoch == epoch, contentRevision == revision {
+            contentRevision &+= 1
+        }
+    }
+
     /// Switches the visible root without discarding expansion state from the
     /// previously visited directory. Data is still reread on every refresh.
     func sync(
@@ -324,6 +511,8 @@ final class FileTreeModel {
         let sameRemoteRootReconnected = !scopeChanged && !backendChanged && !identityChanged
             && revisionChanged && panelIdentity != nil && scope.hasPrefix("ssh:")
         if scopeChanged || channelChanged {
+            stopLocalFileWatcher()
+            changedDirectoriesPending.removeAll()
             treeEpoch &+= 1
             rebuildGeneration &+= 1
             cachedDirectories.removeAll()
@@ -356,6 +545,7 @@ final class FileTreeModel {
             renamingPath = nil
             draft = nil
         }
+        configureLocalFileWatcher() // Subscribe before reading the new root.
         await rebuild(refresh: true)
     }
 
@@ -371,6 +561,7 @@ final class FileTreeModel {
             row.isExpanded = expanded.contains(row.path)
             return row
         }
+        configureLocalFileWatcher()
         await rebuild()
     }
 
@@ -903,9 +1094,10 @@ final class FileTreeModel {
         await withCheckedContinuation { rebuildWaiters.append($0) }
     }
 
-    private func rebuild(refresh: Bool = false) async {
+    private func rebuild(refresh: Bool = false, changed: Set<String> = []) async {
         guard !rootPath.isEmpty else { return }
         if refresh { refreshPending = true }
+        changedDirectoriesPending.formUnion(changed)
         if isRebuilding {
             rebuildPending = true
             return
@@ -916,6 +1108,8 @@ final class FileTreeModel {
             rebuildPending = false
             let needsRefresh = refreshPending
             refreshPending = false
+            let changedDirectories = changedDirectoriesPending
+            changedDirectoriesPending.removeAll()
             let path = rootPath
             let scope = workspaceScope
             let epoch = treeEpoch
@@ -925,8 +1119,10 @@ final class FileTreeModel {
             let exclude = settings.filesExclude
             let revealAll = showExcluded
             var refreshedDirectories: Set<String> = []
-            if needsRefresh {
-                let directories = Array(Set(cachedDirectories.keys).union([path])).filter {
+            if needsRefresh || !changedDirectories.isEmpty {
+                let candidates = needsRefresh
+                    ? Set(cachedDirectories.keys).union([path]) : changedDirectories
+                let directories = candidates.filter {
                     revealAll || Self.isVisible($0, in: path, excluding: exclude)
                 }.sorted()
                 refreshedDirectories = Set(directories)
@@ -994,6 +1190,7 @@ final class FileTreeModel {
         } while rebuildPending && generation == rebuildGeneration
         if generation == rebuildGeneration {
             isRebuilding = false
+            configureLocalFileWatcher()
             let waiters = rebuildWaiters
             rebuildWaiters.removeAll()
             for waiter in waiters { waiter.resume() }

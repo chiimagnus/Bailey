@@ -93,6 +93,22 @@ struct ToolPanelView: View {
     @State private var rootSource = PanelContext.RootSource.shell
     @State private var filesTarget: PanelContext.Identity?
     @State private var syncQueue = PanelSyncQueue()
+    @State private var watchedFileTree: FileTreeModel?
+
+    private struct RefreshTaskKey: Hashable {
+        let active: Bool
+        let gitPanel: Bool
+        let gitScope: String
+        let fileTarget: PanelContext.Identity?
+    }
+
+    private var refreshTaskKey: RefreshTaskKey {
+        RefreshTaskKey(
+            active: applicationIsActive, gitPanel: panel == .git,
+            gitScope: git.currentScope,
+            fileTarget: manager.selectedProject?.panelContext?.identity
+        )
+    }
     /// The remote heading. Held here rather than rebuilt, so its state and
     /// its lamp survive every panel switch and poll.
     @State private var remoteHeader = RemotePaneHeaderView(frame: .zero)
@@ -257,13 +273,18 @@ struct ToolPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: Theme.sidebar))
-        .onAppear { syncModels() }
-        .task(id: "\(applicationIsActive):\(panel):\(git.currentScope)") {
+        .onAppear {
+            updateLocalFileWatcher()
+            syncModels()
+        }
+        .onDisappear { stopLocalFileWatcher() }
+        .task(id: refreshTaskKey) {
             guard applicationIsActive else { return }
             if panel == .git {
                 await git.runRemoteRefreshLoop()
                 return
             }
+            guard manager.selectedProject?.panelContext?.isRemote == true else { return }
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(2)) }
                 catch { return }
@@ -275,20 +296,29 @@ struct ToolPanelView: View {
             for: NSApplication.didBecomeActiveNotification
         )) { _ in
             applicationIsActive = true
+            updateLocalFileWatcher()
             syncModels()
         }
         .onReceive(NotificationCenter.default.publisher(
             for: NSApplication.didResignActiveNotification
         )) { _ in
             applicationIsActive = false
+            updateLocalFileWatcher()
         }
         .onChange(of: commandCompletionSequences) {
             syncModels()
         }
-        .onChange(of: manager.selectedProject?.panelContext?.identity) { syncModels() }
+        .onChange(of: manager.selectedProject?.panelContext?.identity) {
+            updateLocalFileWatcher()
+            syncModels()
+        }
+        .onChange(of: panel) { updateLocalFileWatcher() }
         // A connection appearing, connecting, dying or being replaced changes
         // what the heading says; repaint it without waiting for the next tick.
-        .onChange(of: remoteConnectionToken) { syncModels() }
+        .onChange(of: remoteConnectionToken) {
+            updateLocalFileWatcher()
+            syncModels()
+        }
         .onChange(of: manager.selectedProject?.selectedSession?.panelDirectoryPath) {
             applyRemoteHeading()
         }
@@ -303,6 +333,22 @@ struct ToolPanelView: View {
         // Native button and control labels without a designed hierarchy use
         // the configured base size directly.
         .environment(\.font, .system(size: CGFloat(settings.panelFontSize)))
+    }
+
+    private func stopLocalFileWatcher() {
+        watchedFileTree?.setLocalFileEventsEnabled(false)
+        watchedFileTree = nil
+    }
+
+    private func updateLocalFileWatcher() {
+        let nextTree: FileTreeModel? = panel == .files && applicationIsActive
+            && manager.selectedProject?.panelContext?.isRemote == false
+            ? manager.selectedProject?.fileTree : nil
+        if watchedFileTree !== nextTree {
+            watchedFileTree?.setLocalFileEventsEnabled(false)
+            watchedFileTree = nextTree
+        }
+        nextTree?.setLocalFileEventsEnabled(true)
     }
 
     private func syncModels() {

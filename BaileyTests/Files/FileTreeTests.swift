@@ -1,4 +1,5 @@
 import AppKit
+import CoreServices
 import Darwin
 import Foundation
 import Observation
@@ -86,6 +87,413 @@ final class FileTreeTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTFail(description)
+    }
+
+    func testLocalFileEventsRefreshRealDiskChangesWithoutIdleListing() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        tree.setLocalFileEventsEnabled(true)
+        defer { tree.setLocalFileEventsEnabled(false) }
+        await tree.sync(root: root.path, backend: backend)
+
+        let file = root.appendingPathComponent("外部 文件.swift")
+        try Data("hello".utf8).write(to: file)
+        try await waitForCondition("External create must update the tree without a polling call") {
+            tree.items.contains { $0.path == file.path }
+        }
+        let createdRevision = tree.contentRevision
+        let createdReadCount = await backend.requests[root.path, default: 0]
+        try await Task.sleep(for: .seconds(10.2))
+        let idleReadCount = await backend.requests[root.path, default: 0]
+        XCTAssertEqual(idleReadCount, createdReadCount, "Idle local Files must not query directories")
+
+        try FileManager.default.removeItem(at: file)
+        try await waitForCondition("External delete must remove the real disk entry") {
+            !tree.items.contains { $0.path == file.path }
+        }
+        XCTAssertGreaterThan(tree.contentRevision, createdRevision)
+    }
+
+    func testNativeLocalEventsFollowSymlinkedProjectRoot() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let physical = base.appendingPathComponent("actual")
+        let alias = base.appendingPathComponent("project-link")
+        try FileManager.default.createDirectory(at: physical, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: physical)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let tree = FileTreeModel()
+        tree.setLocalFileEventsEnabled(true)
+        defer { tree.setLocalFileEventsEnabled(false) }
+        await tree.sync(root: alias.path, backend: CountingFileBackend())
+
+        let physicalFile = physical.appendingPathComponent("external.swift")
+        try Data("test".utf8).write(to: physicalFile)
+        let logicalFile = alias.appendingPathComponent("external.swift")
+        try await waitForCondition("A symlinked project root must see its physical target") {
+            tree.items.contains { $0.path == logicalFile.path }
+        }
+    }
+
+    func testNativeLocalEventsRefreshExpandedExternalDirectorySymlink() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let physical = base.appendingPathComponent("outside")
+        let root = base.appendingPathComponent("project")
+        let alias = root.appendingPathComponent("linked")
+        try FileManager.default.createDirectory(at: physical, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: physical)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let tree = FileTreeModel()
+        tree.setLocalFileEventsEnabled(true)
+        defer { tree.setLocalFileEventsEnabled(false) }
+        await tree.sync(root: root.path, backend: CountingFileBackend())
+        let row = try XCTUnwrap(tree.items.first { $0.path == alias.path })
+        await tree.toggle(row)
+        try await Task.sleep(for: .milliseconds(800)) // Allow initial symlink setup events to drain.
+        XCTAssertFalse(tree.items.contains { $0.path == alias.appendingPathComponent("external.swift").path })
+
+        try Data().write(to: physical.appendingPathComponent("external.swift"))
+        let logicalFile = alias.appendingPathComponent("external.swift")
+        try await waitForCondition("An expanded link should follow changes in the viewed directory") {
+            tree.items.contains { $0.path == logicalFile.path }
+        }
+    }
+
+    func testNativeLocalEventsRefreshCompressedExternalDirectorySymlink() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("project")
+        let outside = base.appendingPathComponent("outside")
+        let nested = outside.appendingPathComponent("child")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try Data().write(to: nested.appendingPathComponent("a.swift"))
+        try Data().write(to: nested.appendingPathComponent("b.swift"))
+        let alias = root.appendingPathComponent("linked")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: outside)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let tree = FileTreeModel()
+        tree.setLocalFileEventsEnabled(true)
+        defer { tree.setLocalFileEventsEnabled(false) }
+        await tree.sync(root: root.path, backend: CountingFileBackend())
+        let compacted = try XCTUnwrap(tree.items.first)
+        XCTAssertEqual(compacted.path, alias.appendingPathComponent("child").path)
+        XCTAssertEqual(compacted.displayName, "linked / child")
+        try await Task.sleep(for: .milliseconds(800))
+
+        try Data().write(to: outside.appendingPathComponent("new.txt"))
+        try await waitForCondition("A collapsed external symlink must refresh its compacted row") {
+            tree.items.contains { $0.path == alias.path && $0.displayName == "linked" }
+        }
+    }
+
+    func testNativeLocalEventsSupportUnicodeAndNewlineFileNames() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString + "-中文 café"
+        )
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let tree = FileTreeModel()
+        tree.setLocalFileEventsEnabled(true)
+        defer { tree.setLocalFileEventsEnabled(false) }
+        await tree.sync(root: root.path, backend: CountingFileBackend())
+
+        for name in ["e\u{301} filename.swift", "line\nwrapped.swift"] {
+            let file = root.appendingPathComponent(name)
+            try Data().write(to: file)
+            try await waitForCondition("FSEvents must refresh a path with canonical Unicode or newlines") {
+                tree.items.contains { $0.path == file.path }
+            }
+            try FileManager.default.removeItem(at: file)
+            try await waitForCondition("Deleting unusual names must remove their displayed rows") {
+                !tree.items.contains { $0.path == file.path }
+            }
+        }
+    }
+
+    func testNativeLocalWatcherRecoversAfterRootMoveWhenReopened() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("working")
+        let moved = base.appendingPathComponent("moved")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let original = root.appendingPathComponent("original.swift")
+        try Data().write(to: original)
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        tree.setLocalFileEventsEnabled(true)
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertTrue(tree.items.contains { $0.path == original.path })
+        try FileManager.default.moveItem(at: root, to: moved)
+        try await Task.sleep(for: .milliseconds(650))
+        XCTAssertTrue(tree.items.contains { $0.path == original.path },
+                      "A vanished root must not erase the previous verified snapshot")
+
+        tree.setLocalFileEventsEnabled(false)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let replacement = root.appendingPathComponent("replacement.swift")
+        try Data().write(to: replacement)
+        tree.setLocalFileEventsEnabled(true)
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertTrue(tree.items.contains { $0.path == replacement.path },
+                      "Reopening Files must reconcile the recreated root")
+        XCTAssertFalse(tree.items.contains { $0.path == original.path },
+                       "The moved-away root cannot override the replacement")
+        tree.setLocalFileEventsEnabled(false)
+    }
+
+    func testNativeLocalEventsTrackMoveAcrossExpandedDirectories() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let left = root.appendingPathComponent("left")
+        let right = root.appendingPathComponent("right")
+        try FileManager.default.createDirectory(at: left, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: right, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let old = left.appendingPathComponent("before.swift")
+        let moved = right.appendingPathComponent("after.swift")
+        try Data("moved".utf8).write(to: old)
+        let tree = FileTreeModel()
+        tree.setLocalFileEventsEnabled(true)
+        defer { tree.setLocalFileEventsEnabled(false) }
+        await tree.sync(root: root.path, backend: CountingFileBackend())
+        for directory in [left.path, right.path] {
+            await tree.toggle(try XCTUnwrap(tree.items.first { $0.path == directory }))
+        }
+        try FileManager.default.moveItem(at: old, to: moved)
+        try await waitForCondition("External move must refresh source and destination") {
+            tree.items.contains { $0.path == moved.path }
+                && !tree.items.contains { $0.path == old.path }
+        }
+    }
+
+    func testNativeLocalWatcherReleasesOnDisableAndRootSwitch() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let first = base.appendingPathComponent("first")
+        let second = base.appendingPathComponent("second")
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        tree.setLocalFileEventsEnabled(true)
+        await tree.sync(root: first.path, backend: backend)
+        await tree.sync(root: second.path, backend: backend)
+
+        let old = first.appendingPathComponent("old.swift")
+        let current = second.appendingPathComponent("current.swift")
+        try Data().write(to: old)
+        try Data().write(to: current)
+        try await waitForCondition("Only the new root must follow external changes") {
+            tree.items.contains { $0.path == current.path }
+        }
+        XCTAssertFalse(tree.items.contains { $0.path == old.path })
+        tree.setLocalFileEventsEnabled(false)
+        let stopped = second.appendingPathComponent("stopped.swift")
+        try Data().write(to: stopped)
+        try await Task.sleep(for: .milliseconds(850))
+        XCTAssertFalse(tree.items.contains { $0.path == stopped.path },
+                       "A hidden Files panel must release its watcher")
+        tree.setLocalFileEventsEnabled(true)
+        await tree.sync(root: second.path, backend: backend)
+        XCTAssertTrue(tree.items.contains { $0.path == stopped.path },
+                      "Reactivation must reconcile changes missed while hidden")
+        tree.setLocalFileEventsEnabled(false)
+    }
+
+    func testNativeLocalEventsCoalesceBurstAndConvergeToDisk() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let tree = FileTreeModel()
+        let backend = CountingFileBackend()
+        tree.setLocalFileEventsEnabled(true)
+        defer { tree.setLocalFileEventsEnabled(false) }
+        await tree.sync(root: root.path, backend: backend)
+        for index in 0..<160 {
+            try Data().write(to: root.appendingPathComponent("burst-\(index).txt"))
+        }
+        try await waitForCondition("A burst must converge to the real directory contents") {
+            tree.items.filter { $0.name.hasPrefix("burst-") }.count == 160
+        }
+        let reads = await backend.requests[root.path, default: 0]
+        XCTAssertLessThan(reads, 30, "One burst must not read the directory per FSEvent")
+    }
+
+    func testMustScanSubDirsRescansLoadedSubtreeWithoutQueryingSiblings() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let branch = root.appendingPathComponent("branch")
+        let nested = branch.appendingPathComponent("nested")
+        let other = root.appendingPathComponent("other")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try Data().write(to: nested.appendingPathComponent("one.swift"))
+        try Data().write(to: nested.appendingPathComponent("two.swift"))
+        defer { try? FileManager.default.removeItem(at: root) }
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        let loaded = await backend.requests
+        XCTAssertNotNil(loaded[nested.path])
+        XCTAssertNotNil(loaded[other.path])
+
+        try Data().write(to: branch.appendingPathComponent("new.swift"))
+        await tree.refreshForLocalEvents([
+            .init(path: branch.path, flags: UInt32(kFSEventStreamEventFlagMustScanSubDirs))
+        ])
+        XCTAssertTrue(tree.items.contains { $0.path == branch.path },
+                      "Subtree rescan must reproject a formerly compressed directory")
+        let after = await backend.requests
+        XCTAssertGreaterThan(after[branch.path, default: 0], loaded[branch.path, default: 0])
+        XCTAssertGreaterThan(after[nested.path, default: 0], loaded[nested.path, default: 0])
+        XCTAssertEqual(after[other.path], loaded[other.path],
+                       "MustScanSubDirs must not requery an unaffected sibling")
+        XCTAssertEqual(after[root.path], loaded[root.path])
+    }
+
+    func testLocalFileEventsRefreshOnlyAffectedCachedDirectoryAndRecoverDroppedEvents() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let first = root.appendingPathComponent("first")
+        let second = root.appendingPathComponent("second")
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        for directory in [first.path, second.path] {
+            let item = try XCTUnwrap(tree.items.first { $0.path == directory })
+            await tree.toggle(item)
+        }
+        let firstReads = await backend.requests[first.path, default: 0]
+        let secondReads = await backend.requests[second.path, default: 0]
+        let rootReads = await backend.requests[root.path, default: 0]
+        let newFile = first.appendingPathComponent("new.swift")
+        try Data().write(to: newFile)
+        await tree.refreshForLocalEvents([
+            .init(path: newFile.path, flags: UInt32(kFSEventStreamEventFlagItemCreated))
+        ])
+        XCTAssertTrue(tree.items.contains { $0.path == newFile.path })
+        let refreshedFirst = await backend.requests[first.path, default: 0]
+        let untouchedSecond = await backend.requests[second.path, default: 0]
+        let untouchedRoot = await backend.requests[root.path, default: 0]
+        XCTAssertGreaterThan(refreshedFirst, firstReads)
+        XCTAssertEqual(untouchedSecond, secondReads)
+        XCTAssertEqual(untouchedRoot, rootReads)
+        let revision = tree.contentRevision
+        await tree.refreshForLocalEvents([
+            .init(path: newFile.path, flags: UInt32(kFSEventStreamEventFlagItemCreated))
+        ])
+        XCTAssertEqual(tree.contentRevision, revision, "The same disk snapshot must not republish")
+
+        let missedFile = second.appendingPathComponent("missed.swift")
+        try Data().write(to: missedFile)
+        await tree.refreshForLocalEvents([
+            .init(path: first.path, flags: UInt32(kFSEventStreamEventFlagKernelDropped))
+        ])
+        XCTAssertTrue(tree.items.contains { $0.path == missedFile.path },
+                      "A dropped event must recheck every loaded directory")
+        let recoveredReads = await backend.requests[second.path, default: 0]
+        XCTAssertGreaterThan(recoveredReads, untouchedSecond)
+    }
+
+    func testLocalFileEventsRejectOldRootAndPreserveTrustworthyRowsWhenRootDisappears() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let first = base.appendingPathComponent("first")
+        let second = base.appendingPathComponent("second")
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let oldFile = first.appendingPathComponent("old.swift")
+        let currentFile = second.appendingPathComponent("current.swift")
+        try Data().write(to: oldFile)
+        try Data().write(to: currentFile)
+        let tree = FileTreeModel()
+        let backend = CountingFileBackend()
+        await tree.sync(root: first.path, backend: backend)
+        await tree.sync(root: second.path, backend: backend)
+        await tree.refreshForLocalEvents([
+            .init(path: oldFile.path, flags: UInt32(kFSEventStreamEventFlagItemRemoved))
+        ])
+        XCTAssertTrue(tree.items.contains { $0.path == currentFile.path })
+        XCTAssertFalse(tree.items.contains { $0.path == oldFile.path })
+
+        try FileManager.default.removeItem(at: second)
+        await tree.refreshForLocalEvents([
+            .init(path: second.path, flags: UInt32(kFSEventStreamEventFlagRootChanged))
+        ])
+        XCTAssertTrue(tree.items.contains { $0.path == currentFile.path },
+                      "A missing root is not proof that a previous verified list was deleted")
+    }
+
+    func testExcludedButCachedSubtreeStructuralEventInvalidatesQuickOpen() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("project")
+        let hidden = root.appendingPathComponent("hidden")
+        try FileManager.default.createDirectory(at: hidden, withIntermediateDirectories: true)
+        try Data().write(to: hidden.appendingPathComponent("before.swift"))
+        defer { try? FileManager.default.removeItem(at: base) }
+        let settings = AppSettings(configURL: base.appendingPathComponent("settings.toml"))
+        try settings.applyFilesExclude([])
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel(settings: settings)
+        await tree.sync(root: root.path, backend: backend)
+        await tree.toggle(try XCTUnwrap(tree.items.first { $0.path == hidden.path }))
+        try settings.applyFilesExclude(["hidden"])
+        await tree.refreshVisibility()
+        XCTAssertFalse(tree.items.contains { $0.path == hidden.path })
+        let revision = tree.contentRevision
+        let reads = await backend.requests[hidden.path, default: 0]
+
+        let addition = hidden.appendingPathComponent("after.swift")
+        try Data().write(to: addition)
+        await tree.refreshForLocalEvents([
+            .init(path: addition.path, flags: UInt32(kFSEventStreamEventFlagItemCreated))
+        ])
+        XCTAssertGreaterThan(tree.contentRevision, revision,
+                             "Files exclude cannot hide file changes from Cmd+P")
+        XCTAssertFalse(tree.items.contains { $0.path == hidden.path })
+        let afterReads = await backend.requests[hidden.path, default: 0]
+        XCTAssertEqual(afterReads, reads, "The invisible folder must not be listed only for Cmd+P")
+    }
+
+    func testUnloadedSubtreeStructuralEventInvalidatesQuickOpenWithoutTreeScan() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let src = root.appendingPathComponent("src")
+        let deep = src.appendingPathComponent("nested")
+        try FileManager.default.createDirectory(at: deep, withIntermediateDirectories: true)
+        try Data().write(to: src.appendingPathComponent("sibling.txt"))
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("other"), withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        let initial = tree.contentRevision
+        let displayed = tree.items
+        let beforeReads = await backend.requests[deep.path, default: 0]
+        XCTAssertEqual(beforeReads, 0, "Unexpanded deep directories should remain unloaded")
+
+        let newFile = deep.appendingPathComponent("outside.swift")
+        try Data().write(to: newFile)
+        await tree.refreshForLocalEvents([
+            .init(path: newFile.path, flags: UInt32(kFSEventStreamEventFlagItemCreated))
+        ])
+        XCTAssertEqual(tree.items, displayed, "Unexpanded directory events must not scan the whole tree")
+        let afterReads = await backend.requests[deep.path, default: 0]
+        XCTAssertEqual(afterReads, beforeReads)
+        XCTAssertGreaterThan(tree.contentRevision, initial,
+                             "An open Cmd+P index must be invalidated for deep file additions")
+
+        let afterCreate = tree.contentRevision
+        await tree.refreshForLocalEvents([
+            .init(path: newFile.path, flags: UInt32(kFSEventStreamEventFlagItemModified))
+        ])
+        XCTAssertEqual(tree.contentRevision, afterCreate,
+                       "A content-only event must not rebuild the filename index")
     }
 
     func testExternalRefreshOnlyChangesFileIndexRevisionOnNewDiskContent() async throws {
