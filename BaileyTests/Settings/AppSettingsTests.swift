@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import Observation
+import SwiftUI
 import XCTest
 @testable import Bailey
 
@@ -202,6 +204,67 @@ final class AppSettingsTests: XCTestCase {
         Theme.reloadSelection(light: settings.themeLight, dark: settings.themeDark)
         XCTAssertEqual(Theme.changes.revision, oldRevision + 2)
         XCTAssertEqual(Theme.terminal(dark: false).name, "Apple System Colors Light")
+    }
+
+    func testMountedSettingsSidebarActuallyRepaintsGhosttyAccent() throws {
+        let originalLight = Theme.terminal(dark: false).name
+        let originalDark = Theme.terminal(dark: true).name
+        defer { Theme.reloadSelection(light: originalLight, dark: originalDark) }
+
+        for (dark, first, second) in [
+            (true, "Catppuccin Macchiato", "Dracula"),
+            (false, "Rose Pine Dawn", "Ayu Light"),
+        ] {
+            Theme.reloadSelection(
+                light: dark ? "Default Light" : first,
+                dark: dark ? first : "Default Dark"
+            )
+            let host = NSHostingView(rootView: SettingsView(
+                application: WorkspaceApplication(), settings: AppSettings(configURL: configURL)
+            ))
+            let window = NSWindow(
+                contentRect: NSRect(x: -950, y: -950, width: 840, height: 560),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            window.contentView = host
+            window.orderFront(nil)
+            defer { window.close() }
+
+            func capture() throws -> NSBitmapImageRep {
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                return bitmap
+            }
+            let before = try capture()
+            Theme.reloadSelection(
+                light: dark ? "Default Light" : second,
+                dark: dark ? second : "Default Dark"
+            )
+            var changed = 0
+            let repainted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard let after = try? capture() else { return false }
+                let scale = CGFloat(after.pixelsWide) / host.bounds.width
+                changed = 0
+                for y in Int(55 * scale)..<Int(375 * scale) {
+                    for x in Int(15 * scale)..<Int(50 * scale) {
+                        guard let old = before.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                              let new = after.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                        else { continue }
+                        let delta = abs(old.redComponent - new.redComponent)
+                            + abs(old.greenComponent - new.greenComponent)
+                            + abs(old.blueComponent - new.blueComponent)
+                        if delta > 0.16 { changed += 1 }
+                    }
+                }
+                return changed > 30
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [repainted], timeout: 3), .completed,
+                "Mounted sidebar icon pixels must repaint for \(first) → \(second); changed=\(changed)")
+        }
     }
 
     func testIndependentAppearanceChangesNeverInvalidateApplicationTheme() throws {

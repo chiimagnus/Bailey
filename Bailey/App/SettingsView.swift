@@ -47,6 +47,7 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     let application: WorkspaceApplication
     @Bindable private var settings: AppSettings
+    @Environment(\.colorScheme) private var colorScheme
     @State private var selectedPage: SettingsPage? = .common
     @State private var relaunchError = ""
     @State private var isShowingRelaunchError = false
@@ -77,6 +78,8 @@ struct SettingsView: View {
     }
 
     var body: some View {
+        let _ = Theme.changes.revision
+        let accent = Color(nsColor: Theme.terminal(dark: colorScheme == .dark).accentNSColor)
         NavigationSplitView {
             List(selection: $selectedPage) {
                 Section(String(localized: "Preferences", table: "Settings")) {
@@ -86,7 +89,7 @@ struct SettingsView: View {
                             Text(page.title)
                         } icon: {
                             Image(systemName: page.icon)
-                                .foregroundStyle(Color(nsColor: Theme.accent))
+                                .foregroundStyle(accent)
                         }
                         .tag(page)
                     }
@@ -98,7 +101,7 @@ struct SettingsView: View {
                                 Text(page.title)
                             } icon: {
                                 Image(systemName: page.icon)
-                                    .foregroundStyle(Color(nsColor: Theme.accent))
+                                    .foregroundStyle(accent)
                             }
                             .tag(page)
                         }
