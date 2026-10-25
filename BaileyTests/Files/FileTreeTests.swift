@@ -197,6 +197,90 @@ final class FileTreeTests: XCTestCase {
         XCTAssertTrue(tree.items.contains { $0.name == "logs" })
     }
 
+    func testRevealFileExpandsHiddenAncestorsWithoutPersistingShowExcluded() async throws {
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = fixture.appendingPathComponent("project")
+        let nested = root.appendingPathComponent("hidden/a/b")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let target = nested.appendingPathComponent("code.swift")
+        try Data("let x = 1".utf8).write(to: target)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let settings = AppSettings(configURL: fixture.appendingPathComponent("settings.toml"))
+        try settings.applyFilesExclude(["hidden"])
+        let tree = FileTreeModel(settings: settings)
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        XCTAssertFalse(tree.items.contains { $0.path == target.path })
+        XCTAssertFalse(tree.showExcluded)
+
+        let revealed = await tree.revealFile(target.path)
+        XCTAssertTrue(revealed)
+        XCTAssertEqual(tree.selectedPath, target.path)
+        XCTAssertTrue(tree.items.contains { $0.path == target.path })
+        XCTAssertTrue(tree.showExcluded)
+        XCTAssertEqual(settings.filesExclude, ["hidden"])
+        XCTAssertTrue(tree.items.contains { $0.path == nested.path })
+
+        await tree.setShowExcluded(false)
+        XCTAssertFalse(tree.items.contains { $0.path == target.path })
+        XCTAssertEqual(settings.filesExclude, ["hidden"], "Reveal must never change persisted rules")
+    }
+
+    func testRevealFileRejectsMissingOutsideAndEscapingDirectorySymlinks() async throws {
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = fixture.appendingPathComponent("project")
+        let outside = fixture.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try Data("outside".utf8).write(to: outside.appendingPathComponent("secret.swift"))
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("link"), withDestinationURL: outside
+        )
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let outsideResult = await tree.revealFile(outside.appendingPathComponent("secret.swift").path)
+        let missingResult = await tree.revealFile(root.appendingPathComponent("missing.swift").path)
+        let rootResult = await tree.revealFile(root.path)
+        let escapingLinkResult = await tree.revealFile(
+            root.appendingPathComponent("link/secret.swift").path
+        )
+        XCTAssertFalse(outsideResult)
+        XCTAssertFalse(missingResult)
+        XCTAssertFalse(rootResult)
+        XCTAssertFalse(escapingLinkResult,
+                       "A directory symlink must not reveal a file outside the workspace")
+        XCTAssertNil(tree.selectedPath)
+    }
+
+    func testRevealWaitsForExistingRefreshAndSelectsTheRightFile() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let folder = root.appendingPathComponent("folder")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("target.swift")
+        try Data("target".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        await backend.delay(root.path)
+        let refresh = Task { await tree.sync(root: root.path, backend: backend) }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if await backend.awaitingDirectory { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let wasAwaiting = await backend.awaitingDirectory
+        XCTAssertTrue(wasAwaiting)
+        let reveal = Task { await tree.revealFile(file.path) }
+        try await Task.sleep(for: .milliseconds(20))
+        await backend.release()
+        await refresh.value
+        let succeeded = await reveal.value
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(tree.selectedPath, file.path)
+    }
+
     func testFilesPanelSelectsFirstVisibleRowAfterAsyncListingWithoutOpeningIt() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

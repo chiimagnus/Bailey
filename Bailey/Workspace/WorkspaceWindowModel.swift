@@ -1060,6 +1060,53 @@ final class WorkspaceWindowModel {
         }
     }
 
+    func revealFileInFileManager(tabID: UUID, in project: Project) {
+        guard !isClosed, selectedProjectID == project.id,
+              let tab = project.tabs.first(where: { $0.id == tabID }),
+              case .file(let file) = tab.content else { return }
+        let path = file.path
+        let workspace = file.workspaceIdentity
+        guard let context = project.panelContext, context.identity.workspace == workspace else {
+            fileCommandError(String(localized:
+                "This file belongs to a different machine than the current File Manager.",
+                table: "Interface"))
+            return
+        }
+        Task {
+            guard let (root, _) = try? await context.resolvedRoot(),
+                  !isClosed, selectedProjectID == project.id,
+                  project.matchesPanelTarget(context.identity),
+                  project.tabs.contains(where: { $0.id == tabID }),
+                  file.path == path, file.workspaceIdentity == workspace else {
+                fileCommandError(String(localized:
+                    "Could not locate this file in the current File Manager.",
+                    table: "Interface"))
+                return
+            }
+            if project.fileTree.rootPath != root {
+                await project.fileTree.sync(
+                    root: root, backend: context.backend, scope: context.scope
+                )
+            }
+            let revealed = await project.fileTree.revealFile(path) {
+                !isClosed && selectedProjectID == project.id
+                    && project.matchesPanelTarget(context.identity)
+                    && project.tabs.contains(where: { $0.id == tabID })
+                    && file.path == path && file.workspaceIdentity == workspace
+            }
+            guard revealed else {
+                if !isClosed && selectedProjectID == project.id
+                    && project.matchesPanelTarget(context.identity) {
+                    fileCommandError(String(localized:
+                        "Could not locate this file in the current File Manager.",
+                        table: "Interface"))
+                }
+                return
+            }
+            showPanel(.files)
+        }
+    }
+
     /// Re-themes every session after a light/dark appearance change.
     func refreshAppearance() {
         for project in projects {

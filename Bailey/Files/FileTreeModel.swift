@@ -95,6 +95,65 @@ final class FileTreeModel {
         await rebuild()
     }
 
+    /// Expand the current tree to an existing file without touching its editor.
+    /// A hidden ancestor is revealed only in this Files tree, not in Settings.
+    func revealFile(
+        _ path: String, isCurrentTarget: () -> Bool = { true }
+    ) async -> Bool {
+        let root = rootPath
+        let scope = workspaceScope
+        let epoch = treeEpoch
+        let backend = self.backend
+        let normalized = (path as NSString).standardizingPath
+        guard !root.isEmpty, path == normalized, path != root,
+              LocalPathScope.contains(path, in: root), isCurrentTarget()
+        else { return false }
+        let relative = String(path.dropFirst(root.count + (root.hasSuffix("/") ? 0 : 1)))
+        let parts = relative.split(separator: "/")
+        guard !parts.isEmpty, parts.count <= 32 else { return false }
+        do {
+            let physicalRoot = try await Self.physicalDirectory(
+                root, backend: backend, scope: scope
+            )
+            let physicalParent = try await Self.physicalDirectory(
+                (path as NSString).deletingLastPathComponent, backend: backend, scope: scope
+            )
+            guard LocalPathScope.contains(physicalParent, in: physicalRoot),
+                  let stat = try await backend.stat(path: path), stat.isRegular
+            else { return false }
+        } catch { return false }
+        guard epoch == treeEpoch, root == rootPath, scope == workspaceScope,
+              isCurrentTarget() else { return false }
+
+        var ancestor = root
+        for segment in parts.dropLast() {
+            ancestor = (ancestor as NSString).appendingPathComponent(String(segment))
+            expanded.insert(ancestor)
+        }
+        if !Self.isVisible(path, in: root, excluding: settings.filesExclude) {
+            showExcluded = true
+        }
+        await rebuild()
+        await awaitPendingRebuild()
+        guard epoch == treeEpoch, root == rootPath, scope == workspaceScope,
+              isCurrentTarget() else { return false }
+        if !items.contains(where: { !$0.isDraft && $0.path == path }) {
+            // The last displayed parent may have been cached before this file
+            // was created by another process. Refresh only that directory.
+            cachedDirectories.removeValue(
+                forKey: (path as NSString).deletingLastPathComponent
+            )
+            await rebuild()
+            await awaitPendingRebuild()
+        }
+        guard epoch == treeEpoch, root == rootPath, scope == workspaceScope,
+              isCurrentTarget(),
+              let item = items.first(where: { !$0.isDraft && $0.path == path })
+        else { return false }
+        select(item)
+        return true
+    }
+
     /// A pending inline "new file/folder": an input row shown inside
     /// `parentDir` until the user names it (Enter) or cancels (Escape/blur).
     struct Draft: Equatable {
@@ -134,6 +193,7 @@ final class FileTreeModel {
     @ObservationIgnored private var isRebuilding = false
     @ObservationIgnored private var rebuildPending = false
     @ObservationIgnored private var refreshPending = false
+    @ObservationIgnored private var rebuildWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// The hosting window presents native operation errors even when Files is hidden.
     @ObservationIgnored var onError: ((_ title: String, _ detail: String) -> Void)?
@@ -257,6 +317,9 @@ final class FileTreeModel {
             isRebuilding = false
             rebuildPending = false
             refreshPending = false
+            let waiters = rebuildWaiters
+            rebuildWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
         }
         self.backend = backend
         if scopeChanged {
@@ -793,6 +856,11 @@ final class FileTreeModel {
         cachedDirectories.removeValue(forKey: (path as NSString).deletingLastPathComponent)
     }
 
+    private func awaitPendingRebuild() async {
+        guard isRebuilding else { return }
+        await withCheckedContinuation { rebuildWaiters.append($0) }
+    }
+
     private func rebuild(refresh: Bool = false) async {
         guard !rootPath.isEmpty else { return }
         if refresh { refreshPending = true }
@@ -879,7 +947,12 @@ final class FileTreeModel {
                 rebuildPending = true
             }
         } while rebuildPending && generation == rebuildGeneration
-        if generation == rebuildGeneration { isRebuilding = false }
+        if generation == rebuildGeneration {
+            isRebuilding = false
+            let waiters = rebuildWaiters
+            rebuildWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
     }
 
     private static func isVisible(

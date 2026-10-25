@@ -771,6 +771,36 @@
           }
         }
       }
+    },
+    "Reveal in File Manager" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在文件管理器中显示"
+          }
+        }
+      }
+    },
+    "This file belongs to a different machine than the current File Manager." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该文件不属于当前文件管理器连接的机器。"
+          }
+        }
+      }
+    },
+    "Could not locate this file in the current File Manager." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法在当前文件管理器中定位此文件。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
