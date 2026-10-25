@@ -108,7 +108,7 @@ Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言
 
 ## 隔离环境
 
-同一仓库的 Dev 构建、宿主测试与 GUI 测试不能并行，即使使用不同 DerivedData：测试共用 Bailey Dev，编译也可能替换正在运行的 App／Runner。四个 Makefile 入口用 `build/.bailey-dev-test.lock` 原子互斥；已有操作时立即报错，不等待或终止其他进程。正常结束或命令失败后自动释放。若进程被强制终止留下锁，先确认本仓库的相关操作已经停止，再用 `rmdir build/.bailey-dev-test.lock` 清理。其他仓库或绕过 Makefile 启动的操作仍须人工协调同一桌面。
+同一仓库的 Dev 构建、宿主测试与 GUI 测试不能并行，即使使用不同 DerivedData：测试共用 Bailey Dev，编译也可能替换正在运行的 App／Runner。四个 Makefile 入口用 `build/.bailey-dev-test.lock` 原子互斥；已有操作时立即报错，不等待或终止其他进程。正常结束或命令失败后自动释放。若进程被强制终止留下锁，先确认本仓库的相关操作已经停止，再用 `rmdir build/.bailey-dev-test.lock` 清理。其他仓库或绕过 Makefile 启动的操作仍须人工协调同一桌面。`automationmodetool` 在 GUI 测试结束后可能显示 Automation Mode 已关闭；**不要仅凭状态就判定无法测试**，先直接运行受影响的 `make test:ui ONLY_TESTING=...` 重新发起系统授权，再根据实际运行结果判断。管理员免认证策略不是开启 Automation Mode 的命令，不应为一次普通验收擅自修改。
 
 宿主 `Bailey` Scheme 的 TestAction 向 Debug 宿主传入 `--isolated-ui-test`。Makefile 的测试构建使用独立 Bundle ID `chiimagnus.bailey.dev`；独立 UI Test 显式通过 `XCUIApplication(bundleIdentifier:)` 启动 Bailey Dev，并传入 `--isolated-ui-test`、`-ApplePersistenceIgnoreState YES` 与一次性 `BAILEY_UI_TEST_RUN_ID`，不允许定位或终止正式 Bailey。AppKit 自带的窗口状态恢复与 Bailey 的 `SessionStore` 彼此独立：UI Runner 禁用前者，避免旧系统窗口污染测试；验证 Bailey 快照重启时保持相同的测试 UUID，并通过系统「新建窗口」建立真实场景。
 
