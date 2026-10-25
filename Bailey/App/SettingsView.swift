@@ -79,36 +79,28 @@ struct SettingsView: View {
 
     var body: some View {
         let _ = Theme.changes.revision
-        let accent = Color(nsColor: Theme.terminal(dark: colorScheme == .dark).accentNSColor)
+        let theme = Theme.terminal(dark: colorScheme == .dark)
+        let accent = Color(nsColor: theme.accentNSColor)
         NavigationSplitView {
             List(selection: $selectedPage) {
                 Section(String(localized: "Preferences", table: "Settings")) {
                     ForEach([SettingsPage.common, .textEditor, .terminal, .browser,
                              .fileManager, .gitManager, .projects]) { page in
-                        Label {
-                            Text(page.title)
-                        } icon: {
-                            Image(systemName: page.icon)
-                                .foregroundStyle(accent)
-                        }
-                        .tag(page)
+                        sidebarRow(page, accent: accent)
                     }
                 }
                 Section(String(localized: "Connections", table: "Settings")) {
                     ForEach([SettingsPage.portForwarding, .notifications]) { page in
                         if !BaileyInstanceMode.isIsolated || page != .notifications {
-                            Label {
-                                Text(page.title)
-                            } icon: {
-                                Image(systemName: page.icon)
-                                    .foregroundStyle(accent)
-                            }
-                            .tag(page)
+                            sidebarRow(page, accent: accent)
                         }
                     }
                 }
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(theme.isBaileyDefault ? Color.clear : Color(nsColor: theme.sidebarNSColor))
+            .foregroundStyle(Color(nsColor: theme.foregroundNSColor))
             .toolbar(removing: .sidebarToggle)
             .navigationSplitViewColumnWidth(min: 180, ideal: 195, max: 215)
         } detail: {
@@ -126,9 +118,13 @@ struct SettingsView: View {
                 }
             }
             .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .background(theme.isBaileyDefault ? Color.clear : Color(nsColor: theme.backgroundNSColor))
+            .foregroundStyle(Color(nsColor: theme.foregroundNSColor))
             .navigationTitle((selectedPage ?? .common).title)
         }
         .frame(width: 840, height: 560)
+        .tint(accent)
         .alert(
             String(localized: "Couldn’t Relaunch Bailey", table: "Settings"),
             isPresented: $isShowingRelaunchError
@@ -137,6 +133,21 @@ struct SettingsView: View {
         } message: {
             Text(verbatim: relaunchError)
         }
+    }
+
+    private func sidebarRow(_ page: SettingsPage, accent: Color) -> some View {
+        Label {
+            Text(page.title)
+        } icon: {
+            Image(systemName: page.icon)
+                .foregroundStyle(selectedPage == page ? Color.primary : accent)
+        }
+        .tag(page)
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(selectedPage == page ? accent : Color.clear)
+                .padding(.horizontal, 8)
+        )
     }
 
     @ViewBuilder

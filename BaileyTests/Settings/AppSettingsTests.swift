@@ -245,6 +245,8 @@ final class AppSettingsTests: XCTestCase {
                 dark: dark ? second : "Default Dark"
             )
             var changed = 0
+            var selectionPixels = 0
+            let accent = Theme.terminal(dark: dark).accentNSColor.usingColorSpace(.deviceRGB)!
             let repainted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
                 guard let after = try? capture() else { return false }
                 let scale = CGFloat(after.pixelsWide) / host.bounds.width
@@ -260,10 +262,23 @@ final class AppSettingsTests: XCTestCase {
                         if delta > 0.16 { changed += 1 }
                     }
                 }
-                return changed > 30
+                func matchesAccent(_ x: Int, _ y: Int) -> Bool {
+                    guard let sample = after.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                    else { return false }
+                    return max(abs(sample.redComponent - accent.redComponent),
+                               abs(sample.greenComponent - accent.greenComponent),
+                               abs(sample.blueComponent - accent.blueComponent)) < 0.25
+                }
+                selectionPixels = 0
+                for y in Int(20 * scale)..<Int(100 * scale) {
+                    for x in Int(64 * scale)..<Int(175 * scale) where matchesAccent(x, y) {
+                        selectionPixels += 1
+                    }
+                }
+                return changed > 30 && selectionPixels > 100
             }, object: nil)
             XCTAssertEqual(XCTWaiter.wait(for: [repainted], timeout: 3), .completed,
-                "Mounted sidebar icon pixels must repaint for \(first) → \(second); changed=\(changed)")
+                "Settings icons and selected row must repaint for \(first) → \(second): changed=\(changed), selected=\(selectionPixels)")
         }
     }
 

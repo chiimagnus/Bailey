@@ -52,7 +52,7 @@ Finder 文件投放按目标区处理：Projects 的文件打开／复用当前�
 
 ## 对话框、设置与原生桥接
 
-设置窗口使用系统 SwiftUI `Settings` 场景与 `NavigationSplitView`。左侧分类图标从当前明暗 Ghostty 主题解析实际颜色，主题变化时立即换色；不能将仅随系统外观解析的 AppKit 动态色直接当作 SwiftUI 的实时配色。右侧为原生分组表单；较长内容滚动，暂无搜索或历史按钮。普通偏好、Git 文件布局和光标控件使用 SwiftUI；旧有端口转发面板与终端加粗预览暂按原后端保留，后续独立演进。
+设置窗口使用系统 SwiftUI `Settings` 场景与 `NavigationSplitView`。侧栏背景、文字、图标和选中行，表单背景与控件强调色均随当前明暗 Ghostty 主题即时更新；内置 Default 主题保留原生背景材质，选中分类图标使用 `Color.primary`。SwiftUI 使用主题已解析的颜色而非 AppKit 动态色；侧栏选中行自行呈现主题强调色，避免系统选中背景固定为 macOS 强调色。右侧保留原生分组表单；较长内容滚动，暂无搜索或历史按钮。普通偏好、Git 文件布局和光标控件使用 SwiftUI；旧有端口转发面板与终端加粗预览暂按原后端保留，后续独立演进。
 
 SwiftUI 是主要界面，AppKit、TextKit、Ghostty 与 WebKit 分别承担已有能力。确认、错误和文件选择沿用所属窗口的原生呈现路径，不另建一套弹窗或反馈实现。
 
