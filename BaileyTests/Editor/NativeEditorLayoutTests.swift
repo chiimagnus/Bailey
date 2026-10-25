@@ -824,6 +824,101 @@ final class NativeEditorLayoutTests: XCTestCase {
         }
     }
 
+    func testUnwrappedDocumentWidthFitsActualTextWithoutPhantomHorizontalScroll() throws {
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let candidates = [
+            "short file\n",
+            String(repeating: "ASCII only ", count: 6) + "\n",
+            String(repeating: "中文 👋 ", count: 7) + "\n",
+            "\tstart\nsecond line\r\n",
+            "end\n\n",
+            ""
+        ]
+        for text in candidates {
+            let (window, scroll, editor) = mount(text, font: font, width: 720)
+            defer { window.close() }
+            scroll.layoutSubtreeIfNeeded()
+            let visible = scroll.contentView.bounds
+            XCTAssertEqual(editor.frame.width, visible.width, accuracy: 1,
+                "No phantom horizontal range for content fitting in 720 pt: \(text.prefix(30))")
+            let constrained = scroll.contentView.constrainBoundsRect(NSRect(
+                x: 500, y: visible.minY, width: visible.width, height: visible.height
+            ))
+            XCTAssertEqual(constrained.minX, 0, accuracy: 1,
+                "The viewport must not scroll horizontally beyond visible short text")
+        }
+    }
+
+    func testUnwrappedDocumentWidthPreservesRealLongUnicodeAndTabContent() throws {
+        let samples = [
+            String(repeating: "a", count: 400),
+            String(repeating: "中文 👋", count: 100),
+            String(repeating: "\tX", count: 120)
+        ]
+        for text in samples {
+            let (window, scroll, editor) = mount(text, width: 420)
+            defer { window.close() }
+            scroll.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(editor.frame.width, scroll.contentView.bounds.width + 100,
+                "Real oversized text must remain horizontally scrollable")
+            XCTAssertEqual(editor.textContainer?.size.width ?? -1, editor.frame.width, accuracy: 1)
+            editor.nativeLayoutManager.ensureLayout(for: editor.nativeLayoutManager.documentRange)
+            let fragment = editor.nativeLayoutManager.textLayoutFragment(
+                for: editor.nativeLayoutManager.documentRange.location
+            )
+            XCTAssertEqual(fragment?.textLineFragments.count, 1,
+                "Unwrapped line must not wrap: source=\(text.prefix(20)), width=\(editor.frame.width), "
+                + "nativeUsed=\(editor.nativeLayoutManager.usageBoundsForTextContainer)")
+        }
+    }
+
+    func testUnwrappedWidthReactsToResizeFontAndUnicodeEdits() throws {
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let wide = String(repeating: "中文👋", count: 14) + "\n"
+        let short = "short\n"
+        let (window, scroll, editor) = mount(wide + short, font: font, width: 420)
+        defer { window.close() }
+        scroll.layoutSubtreeIfNeeded()
+        let original = editor.frame.width
+        XCTAssertGreaterThan(original, 420)
+
+        editor.insertText("", replacementRange: NSRange(location: 0, length: wide.utf16.count))
+        scroll.layoutSubtreeIfNeeded()
+        XCTAssertEqual(editor.frame.width, scroll.contentView.bounds.width, accuracy: 1,
+                       "Deleting the actual widest Unicode line must remove all horizontal scroll")
+
+        editor.undoManager?.undo()
+        scroll.layoutSubtreeIfNeeded()
+        XCTAssertEqual(editor.string, wide + short)
+        XCTAssertEqual(editor.frame.width, original, accuracy: 1)
+
+        scroll.frame.size.width = 1_500
+        editor.configureWrapping(false, viewportWidth: scroll.contentView.bounds.width)
+        scroll.layoutSubtreeIfNeeded()
+        XCTAssertEqual(editor.frame.width, scroll.contentView.bounds.width, accuracy: 1,
+                       "Widening the viewport past the rendered line width must remove scrolling")
+
+        scroll.frame.size.width = 420
+        editor.configureWrapping(false, viewportWidth: 420)
+        scroll.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(editor.frame.width, scroll.contentView.bounds.width)
+
+        editor.font = .monospacedSystemFont(ofSize: 24, weight: .regular)
+        editor.configureWrapping(false, viewportWidth: 420)
+        scroll.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(editor.frame.width, original * 1.5,
+                             "Changing the font must invalidate the measured line widths")
+    }
+
+    func testUnwrappedVariableWidthFontDoesNotReserveFixedPitchEstimate() {
+        let font = NSFont.systemFont(ofSize: 13)
+        let text = String(repeating: "illl ", count: 22) + "\n"
+        let (window, scroll, editor) = mount(text, font: font, width: 720)
+        defer { window.close() }
+        XCTAssertEqual(editor.frame.width, scroll.contentView.bounds.width, accuracy: 1)
+        XCTAssertEqual(editor.textContainer?.size.width ?? -1, editor.frame.width, accuracy: 1)
+    }
+
     func testDeletingLongestUnwrappedLineRestoresHorizontalExtent() async throws {
         let long = "let veryLong = \"" + String(repeating: "a", count: 2_000) + "\"\n"
         let short = "let value = \"中文 👋\"\n"

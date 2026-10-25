@@ -154,6 +154,43 @@ final class NativeDiffTabTests: XCTestCase {
         }
     }
 
+    func testDiffShortDocumentsDoNotExposePhantomHorizontalScroll() {
+        for mode in [DiffCodePaneView.Mode.review, .edit] {
+            let pane = DiffCodePaneView(mode: mode, gutterLayout: .single)
+            let window = NSWindow(
+                contentRect: NSRect(x: -900, y: -900, width: 720, height: 300),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.contentView = pane
+            defer { window.close() }
+            window.orderFront(nil)
+            let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+            pane.applyTypography(
+                font: font, paragraphStyle: DiffTypography.paragraphStyle(for: font),
+                textColor: .textColor
+            )
+            let shortContent = String(repeating: "ASCII only ", count: 6) + "\n中文 👋\n"
+            if mode == .review {
+                pane.setReviewDocument(NSAttributedString(string: shortContent),
+                                       decorations: .empty)
+            } else {
+                pane.setEditBufferText(shortContent)
+            }
+            pane.layoutSubtreeIfNeeded()
+            let scroll = pane.scrollView
+            let visible = scroll.contentView.bounds
+            XCTAssertEqual(pane.textView.frame.width, visible.width, accuracy: 1,
+                           "Both review and edit modes must not invent horizontal content width")
+            XCTAssertEqual(
+                scroll.contentView.constrainBoundsRect(NSRect(
+                    x: 500, y: 0, width: visible.width, height: visible.height
+                )).minX,
+                0, accuracy: 1
+            )
+        }
+    }
+
     func testNativeDiffRendersRowsThroughTransparentTextSurface() throws {
         let pane = DiffCodePaneView(mode: .review, gutterLayout: .single)
         let window = NSWindow(

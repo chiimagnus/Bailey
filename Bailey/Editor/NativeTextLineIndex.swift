@@ -6,11 +6,14 @@ import Foundation
 struct NativeTextLineIndex {
     private var lineLengths: [Int]
     private var lengths: PrefixSums
-    private var maximums: LineMaximums
     private(set) var length: Int
 
     var lineCount: Int { lineLengths.count }
-    var maximumLineUnits: Int { maximums.value }
+
+    struct EditedRows {
+        let replaced: Range<Int>
+        let inserted: Range<Int>
+    }
 
     init(_ text: NSString) {
         length = text.length
@@ -19,13 +22,14 @@ struct NativeTextLineIndex {
             (index + 1 < positions.count ? positions[index + 1] : text.length) - start
         }
         lengths = PrefixSums(lineLengths)
-        maximums = LineMaximums(lineLengths)
     }
 
     func offset(atLine row: Int) -> Int { lengths.sum(before: row) }
     func row(at offset: Int) -> Int { min(lengths.containing(offset), lineCount - 1) }
 
-    mutating func replace(in range: NSRange, replacementLength: Int, text: NSString) {
+    @discardableResult
+    mutating func replace(in range: NSRange, replacementLength: Int,
+                          text: NSString) -> EditedRows {
         precondition(range.location >= 0 && range.length >= 0 && NSMaxRange(range) <= length)
         let originalCount = lineCount
         let first = max(0, row(at: range.location) - 1)
@@ -45,36 +49,13 @@ struct NativeTextLineIndex {
                 lineLengths[row] = value
                 lengths.add(shift, at: row)
             }
-            maximums.refresh(lineLengths, from: first, to: last)
         } else {
             lineLengths.replaceSubrange(first..<last, with: newLengths)
             lengths = PrefixSums(lineLengths)
-            maximums = LineMaximums(lineLengths)
         }
         length = text.length
-    }
-
-    /// Fixed-size blocks keep maxima exact while avoiding a second full tree.
-    private struct LineMaximums {
-        private static let blockSize = 256
-        private var blocks: [Int] = []
-
-        init(_ values: [Int]) {
-            blocks.reserveCapacity((values.count + Self.blockSize - 1) / Self.blockSize)
-            for start in stride(from: 0, to: values.count, by: Self.blockSize) {
-                blocks.append(values[start..<min(start + Self.blockSize, values.count)].max() ?? 0)
-            }
-        }
-
-        var value: Int { blocks.max() ?? 0 }
-
-        mutating func refresh(_ values: [Int], from first: Int, to last: Int) {
-            guard first < last else { return }
-            for block in (first / Self.blockSize)...((last - 1) / Self.blockSize) {
-                let start = block * Self.blockSize
-                blocks[block] = values[start..<min(start + Self.blockSize, values.count)].max() ?? 0
-            }
-        }
+        return EditedRows(replaced: first..<last,
+                          inserted: first..<(first + newLengths.count))
     }
 
     private struct PrefixSums {
