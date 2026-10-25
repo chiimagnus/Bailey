@@ -52,18 +52,21 @@ final class SSHWorkspaceFileEvents {
         defer {
             if generation == token { healthy = false; worker = nil }
         }
-        while !Task.isCancelled && generation == token && current == target {
+        while !Task.isCancelled && generation == token && current == target,
+              owner != nil, !members.isEmpty {
             do {
                 // FileSystemWatcher does not follow a symlinked root.
                 // Keep polling instead of claiming this scope is covered.
                 guard let rootStat = try await backend.stat(path: target.root),
                       generation == token, !Task.isCancelled,
+                      owner != nil, !members.isEmpty,
                       rootStat.isDirectory, !rootStat.isSymlink else { return }
                 let result = try await backend.run(
                     argv: ["cygpath", "-w", target.root], cwd: nil,
                     env: nil, stdin: nil, timeout: 10
                 )
                 guard generation == token, !Task.isCancelled,
+                      owner != nil, !members.isEmpty,
                       result.status == 0 else { return } // Unsupported: keep polling.
                 let windowsRoot = String(decoding: result.stdout, as: UTF8.self)
                     .trimmingCharacters(in: .newlines)
