@@ -64,13 +64,13 @@
 
 - 任务：`P3-T2`
 - 严重级别：`High`
-- 状态：`Deferred`
+- 状态：`Resolved`
 - 位置：`Bailey/Workspace/ProjectFileIndex.swift:loadRemote;Bailey/UI/CommandPaletteView.swift`
 - 摘要：`Windows MSYS2 real SSH index and reconnect require authorized temporary host`
 - 风险：`Mac POSIX real files and mocked SSH runner tests do not verify Windows MSYS2 remote HOME, UTF-8 NUL Git, latency, disconnect and actual FileTab destination`
 - 预期修复：`Use approved Windows SSH test connection and temp repo under isolated user to verify bounded Git index, nongit fallback, errors, disconnect, reconnect and opened tab identity; never borrow active user master`
 - 验证：`make test:SSHFileTreeLiveTests`
-- 解决证据：`2026-10-26：真实 Windows/MSYS2 经 Mac SSH 直连完成 testAuthorizedWindowsSSHProjectIndexGitAndPlainRealFiles 1/1 通过（43.161s），验证 Git tracked/untracked/ignore、中文/Emoji、非 Git 文件、HOME 限制、测试专属 master 断开后重连、读删及清理；同机 Bailey Dev testAuthorizedWindowsSSHCommandPaletteOpensRealRemoteFiles 独立完整通过（108.004s；联合复跑 99.177s），验证 Git/非 Git 项目的 Cmd+P 文件标签、Windows 实际字节、Finder 远端禁用、Reveal 选中及本机同名文件不改动，提交 6176600。待补：完整 Bailey Dev 在真实 SSH 控制链路断开、重连后的同一文件标签恢复 UI 联合路径；原生 XCTest 沙盒内关闭 Dev master 返回 255，不能把宿主 reconnect 与正常 UI 组合等同该场景。证据 build/p3-live-host-execution-retry.log 与 build/p3-ui-final-test.log。`
+- 解决证据：`2026-10-26：真实 Windows/MSYS2 + 隔离签名 Bailey Dev，XCTest 与 Mac 侧控制命令同步：只对 Dev PID 81611 及其专属 SSH master PID 81781 发送 ssh -O exit，控制命令返回成功且确认旧 PID 退出；同一 GUI 会话在 Windows 修改 p3-new.swift 后用 ⌘P 重新打开、编辑器读到 WINDOWS_AFTER_RECONNECT，原 Git 文件标签仍可切回并显示 Windows 原字节，两个 Mac 同名文件字节未变化；再切换非 Git Windows 项目并打开正确文件。testAuthorizedWindowsSSHCommandPaletteOpensRealRemoteFiles 1/1 通过、0 fail（120.053s），日志 build/p3-f02-coord-run.log、构建 build/p3-f02-coord-build.log，提交 d6b4d7a。XCTest 沙盒自身无法连接 Dev SSH socket（EPERM），外部控制经精确 PID 验证且不影响正式 App 或用户 SSH。此项验证为 SSH master 终止与新连接；未模拟 Windows sshd 服务长期不可达。`
 
 
 ## 发现 F-01
@@ -97,6 +97,7 @@
 - `1d5c738`（本轮 P3-T2）：SSH 非 Git 目录列表在远端限流；在同一次远端命令中比较项目与 HOME 的物理路径，拒绝路径别名绕过。
 - `dff9512` 属后续 P4-T1：外部变化使已打开 ⌘P 索引失效，固定 SSH 重连废弃旧结果。
 - `6176600`（本轮 P3）：增加真实 Windows SSH 索引及隔离 Bailey Dev 的 Settings／⌘P／文件定位 E2E；仅 Files 临时显示菜单新增无障碍标识。
+- `d6b4d7a`（本轮 F-02）：在同一 Bailey Dev GUI 用真实 SSH master 退出、重连并打开新远端内容，核验旧文件标签和本机同名文件不被误用。
 
 ## 验证日志
 
@@ -106,18 +107,19 @@
 - **本轮独立验证（2026-10-26）**：新增 P3-T3 文件链接回归先 Red（3 条断言失败），再执行 `make test:FileTreeTests`，68 项通过；P3-T2 超大非 Git 目录先 Red（旧实现错误分类），远端 HOME／根目录别名先 Red（3 次），修复后执行 `make test:ProjectFileIndexTests,RemoteCommandsTests,AppSettingsTests,PanelContextTests,FileTreeTests`，123 项通过，零失败。包含正向 SSH 目录 NUL／Unicode 列表、SSH Git、权限及断连、Settings 写盘及缓存、文件树竞争；验证产物见 `build/DerivedData-Dev/Logs/Test/`（当地时间 00:31 与 00:41）。
 - **真实 Windows SSH（2026-10-26）**：使用独立 SSH master 和专属 `/tmp/bailey-p3-*` 目录；`testAuthorizedWindowsSSHProjectIndexGitAndPlainRealFiles` 通过（1/1，43.161 秒），覆盖 Git／非 Git、Unicode、忽略规则、HOME 限制及 master 关闭后重连。测试产生的 Windows 临时目录已核实清理。
 - **隔离 Bailey Dev（2026-10-26）**：Settings 修改／恢复排除规则与隐藏文件定位 E2E 通过；真实 Windows Git／非 Git 文件从 ⌘P 打开、核对远端实际字节、远端禁用 Finder 及 Reveal 选中对应行 E2E 通过；中文界面焦点恢复通过。首次联合 4 项有 3 项通过，暗色共享树测试把“行选中”误认为“键盘焦点”；修正与源码不变量冲突的旧断言后，暗色／亮色两个共享树原生回归分别通过（2/2，`build/p3-final-shared-tree-test.log`），没有将此前联合失败误报为全组通过。
-- **剩余验证**：同一 Bailey Dev GUI 在真实 SSH master 断开→重连之后恢复文件标签的完整组合未验证（原生 UI 测试进程不能关闭另一 App 的 master）；Finder 实际唤起窗口、macOS 15.6、物理触控板与 VoiceOver 未实际覆盖。F-01 已核销，F-02 保持 Deferred；以上不冒充全条件通过。
+- **SSH 断连→重连的完整 GUI（2026-10-26）**：在同一签名 Bailey Dev 会话中打开 Windows Git 文件并定位，再从 Mac 控制进程仅关闭该 Dev 的 SSH master（PID 81781，确认退出），Windows 改写此前未打开的远端文件后经 ⌘P 重新读取 `WINDOWS_AFTER_RECONNECT`；原标签仍可切回并显示正确远端字节，两个同名 Mac 文件未改，非 Git Windows 项目仍能打开。`testAuthorizedWindowsSSHCommandPaletteOpensRealRemoteFiles` 1/1、0 失败（120.053 秒），`build/p3-f02-coord-build.log`、`build/p3-f02-coord-run.log`，提交 `d6b4d7a`。XCTest Runner 无权访问 Dev socket（EPERM）；专项运行通过 `BAILEY_P3_EXTERNAL_DISCONNECT=1` 触发测试临时目录标记，由 Mac 控制进程核对 Dev PID 后发送 `ssh -O exit`，验证旧 master 退出才回写标记。测试结束已清理 Windows 临时目录；未动正式 App 和用户 SSH master。
+- **剩余环境边界**：未模拟 Windows `sshd` 长期不可达或整机断网（失败/超时由宿主测试覆盖），也未在 macOS 15.6、物理触控板、VoiceOver 上实测；Finder 实际唤起窗口不属于本次 SSH 重连场景，仍缺直接验收。这些不影响当前环境下 F-02 完整 GUI 控制连接关闭→重新打开的核销，也不冒充全环境通过。
 - 文档按实际业务归属更新：`docs/features/{files,settings,command-palette,ssh,editor}.md`。
 
 ## Gate（是否允许进入下一阶段）
 
-- **结论：Go（允许继续 P4）；完整环境与 SSH 断连→重连 GUI 联合验收仍为 No-Go。**
-- **理由**：三个 P3 task 已核对真实生产调用链；F-03 至 F-05 原有根因修复回归通过，F-01 已经真实 Settings／Files UI E2E 核销。Windows/MSYS2 SSH 索引、重连及实际 GUI 文件打开分别通过；F-02 所要求的同一 GUI 断连恢复组合尚未核销，不能将独立两层结果当作完整验收。
+- **结论：Go（当前可用环境下 P3 完整 GUI/SSH 主路径已通过；不代表所有平台环境已验证）。**
+- **理由**：P3-T1/T2/T3 的生产调用链与既有宿主回归通过；F-01 至 F-05 已逐项 Resolved。真实 Windows/MSYS2 索引与同一 Bailey Dev GUI 的 SSH master 关闭、重新连接、正确读取新远端文件字节及原标签身份均通过。未测平台与长期网络故障边界明确保留，不作为本轮虚假完成证据。
 
 ## 最终状态与剩余风险
 
-- **当前状态：P3 正常路径已通过真实 GUI 与 Windows SSH；F-02 仍 Deferred。**
-- **剩余风险**：同一个 Bailey Dev 窗口的 SSH 断开／恢复完整交互、macOS 15.6、真实 Finder 副作用、触控板与 VoiceOver 尚缺直接证据；必须按场景单独核销，不能泛称全量通过。
+- **当前状态：P3 审计五项 F-01—F-05 均已 Resolved；真实 Windows SSH 控制连接关闭→GUI 重新打开通过。**
+- **剩余限制**：长期网络中断和 Windows `sshd` 停服未在真实服务器上破坏性验证，使用宿主失败模拟替代；macOS 15.6、Finder 实际窗口、实体触控板、VoiceOver 仍未实测，后续验收须单独列明，不宣称全环境通过。
 
 ## 审计约束
 

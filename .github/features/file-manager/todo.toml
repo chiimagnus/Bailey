@@ -55,7 +55,7 @@ title = "扩展 Cmd+P SSH 文件快速打开"
 status = "completed"
 plan = "plan-p3.md#p3-t2"
 commit = "59ae5ac"
-note = "42 host tests passed; 2026-10-26 real Windows/MSYS2 SSH index Git/nongit/Unicode/HOME/reconnect 1/1, Bailey Dev remote Cmd+P Git/nongit exact editor bytes E2E passed (6176600). Same GUI disconnect-then-reconnect sequence remains F-02 Deferred."
+note = "42 host tests passed. 2026-10-26 real Windows/MSYS2 SSH index 1/1 and Bailey Dev Git/nongit Cmd+P E2E passed (6176600); test-only SSH master closed and its PID exited, same Dev GUI reconnected and opened new Windows bytes while preserving original tab and local files (d6b4d7a, 1/1). F-02 Resolved. Mac 15.6 and prolonged Windows sshd outage not live tested."
 
 [[tasks]]
 id = "P3-T3"
