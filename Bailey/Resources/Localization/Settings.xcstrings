@@ -101,6 +101,16 @@
         }
       }
     },
+    "Browser" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "浏览器"
+          }
+        }
+      }
+    },
     "Codex and other terminal notifications are sent to every Bark destination. Messages may contain sensitive output." : {
       "localizations" : {
         "zh-Hans" : {
@@ -117,6 +127,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "颜色"
+          }
+        }
+      }
+    },
+    "Common" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通用"
           }
         }
       }
@@ -212,12 +232,32 @@
         }
       }
     },
+    "File Manager" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件管理器"
+          }
+        }
+      }
+    },
     "File layout" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "文件布局"
+          }
+        }
+      }
+    },
+    "File visibility settings will appear here." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件可见性设置将显示在这里。"
           }
         }
       }
@@ -258,6 +298,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Git"
+          }
+        }
+      }
+    },
+    "Git Manager" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 管理器"
           }
         }
       }
@@ -319,6 +369,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "列表"
+          }
+        }
+      }
+    },
+    "No settings are available yet." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无设置。"
           }
         }
       }
@@ -389,6 +449,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "预览"
+          }
+        }
+      }
+    },
+    "Projects" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "项目"
           }
         }
       }
@@ -581,6 +651,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "文本编辑"
+          }
+        }
+      }
+    },
+    "Text Editor" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文本编辑器"
           }
         }
       }

@@ -12,7 +12,7 @@
 
 ## 设置界面
 
-`⌘,` 打开原生 SwiftUI `Settings` 场景。窗口采用简单的 `NavigationSplitView` 两栏：左侧按「偏好设置」（通用、终端、工作区）和「连接」（端口转发、手机通知）分组，右侧使用独立滚动的系统 `Form`。隔离测试模式不展示手机通知。现有偏好直接绑定 `AppSettings`，Bark 钥匙串与隧道管理保留原有实现；不新增搜索、历史导航、窗口缩放或新的设置功能。
+`⌘,` 打开原生 SwiftUI `Settings` 场景。两栏导航按业务分为 Common、Text Editor、Terminal、Browser、File Manager、Git Manager、Projects，以及连接下的端口转发与手机通知；右侧仍使用系统 `Form`。全局外观、明暗主题和面板字号在 Common；编辑器折行在 Text Editor；终端字体、光标、Option 和历史在 Terminal；Git 布局与工具栏在 Git Manager。Browser、Projects 和尚未接入隐藏规则的 File Manager 暂无可配置项，不添加虚构开关。现有配置键和实际生效对象不变，「恢复默认」也覆盖两项 Git 确认偏好。隔离测试模式不展示手机通知，Bark 钥匙串与隧道管理仍走原有实现。
 
 ## 布局配置
 

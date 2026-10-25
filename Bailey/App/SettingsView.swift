@@ -3,9 +3,13 @@ import GhosttyTheme
 import SwiftUI
 
 private enum SettingsPage: String, CaseIterable, Identifiable {
-    case general
+    case common
+    case textEditor
     case terminal
-    case workspace
+    case browser
+    case fileManager
+    case gitManager
+    case projects
     case notifications
     case portForwarding
 
@@ -13,9 +17,13 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .general: String(localized: "General", table: "Settings")
+        case .common: String(localized: "Common", table: "Settings")
+        case .textEditor: String(localized: "Text Editor", table: "Settings")
         case .terminal: String(localized: "Terminal", table: "Settings")
-        case .workspace: String(localized: "Workspace", table: "Settings")
+        case .browser: String(localized: "Browser", table: "Settings")
+        case .fileManager: String(localized: "File Manager", table: "Settings")
+        case .gitManager: String(localized: "Git Manager", table: "Settings")
+        case .projects: String(localized: "Projects", table: "Settings")
         case .notifications: String(localized: "Phone Notifications", table: "Settings")
         case .portForwarding: String(localized: "Port Forwarding", table: "Settings")
         }
@@ -23,9 +31,13 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .general: "gearshape"
+        case .common: "gearshape"
+        case .textEditor: "curlybraces"
         case .terminal: "terminal"
-        case .workspace: "square.split.2x2"
+        case .browser: "globe"
+        case .fileManager: "folder"
+        case .gitManager: "point.3.connected.trianglepath.dotted"
+        case .projects: "square.split.2x2"
         case .notifications: "bell"
         case .portForwarding: "network"
         }
@@ -34,8 +46,8 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     let application: WorkspaceApplication
-    @Bindable private var settings = AppSettings.shared
-    @State private var selectedPage: SettingsPage? = .general
+    @Bindable private var settings: AppSettings
+    @State private var selectedPage: SettingsPage? = .common
     @State private var relaunchError = ""
     @State private var isShowingRelaunchError = false
     @State private var barkURLInput = ""
@@ -43,6 +55,11 @@ struct SettingsView: View {
     @State private var barkBusy = true
     @State private var barkLoaded = false
     @State private var barkStatus: String?
+
+    init(application: WorkspaceApplication, settings: AppSettings = .shared) {
+        self.application = application
+        self.settings = settings
+    }
 
     private let families = TerminalFont.selectableFamilies()
 
@@ -61,7 +78,8 @@ struct SettingsView: View {
         NavigationSplitView {
             List(selection: $selectedPage) {
                 Section(String(localized: "Preferences", table: "Settings")) {
-                    ForEach([SettingsPage.general, .terminal, .workspace]) { page in
+                    ForEach([SettingsPage.common, .textEditor, .terminal, .browser,
+                             .fileManager, .gitManager, .projects]) { page in
                         Label {
                             Text(page.title)
                         } icon: {
@@ -90,16 +108,20 @@ struct SettingsView: View {
             .navigationSplitViewColumnWidth(min: 180, ideal: 195, max: 215)
         } detail: {
             Form {
-                switch selectedPage ?? .general {
-                case .general: generalSettings
+                switch selectedPage ?? .common {
+                case .common: commonSettings
+                case .textEditor: textEditorSettings
                 case .terminal: terminalSettings
-                case .workspace: workspaceSettings
+                case .browser: placeholderSettings
+                case .fileManager: fileManagerSettings
+                case .gitManager: gitManagerSettings
+                case .projects: placeholderSettings
                 case .notifications: notificationSettings
                 case .portForwarding: portForwardingSettings
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle((selectedPage ?? .general).title)
+            .navigationTitle((selectedPage ?? .common).title)
         }
         .frame(width: 840, height: 560)
         .alert(
@@ -113,7 +135,7 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private var generalSettings: some View {
+    private var commonSettings: some View {
         Section(String(localized: "Appearance", table: "Settings")) {
             Picker(String(localized: "Theme", table: "Settings"), selection: $settings.theme) {
                 ForEach(AppTheme.allCases) { theme in
@@ -128,18 +150,6 @@ struct SettingsView: View {
                 }
             }
 
-            DescribedSettingsRow(
-                String(localized: "Toolbar", table: "Settings"),
-                description: toolbarVisibilityDescription
-            ) {
-                Picker(String(localized: "Toolbar", table: "Settings"), selection: $settings.toolbarVisibility) {
-                    Text(String(localized: "Auto", table: "Settings")).tag(ToolbarVisibility.auto)
-                    Text(String(localized: "Always Show", table: "Settings")).tag(ToolbarVisibility.always)
-                    Text(String(localized: "Hide", table: "Settings")).tag(ToolbarVisibility.hide)
-                }
-                .labelsHidden()
-            }
-
             if settings.languageRequiresRelaunch {
                 HStack {
                     Text(String(localized: "Relaunch Bailey to apply the language change.", table: "Settings"))
@@ -148,6 +158,34 @@ struct SettingsView: View {
                     Spacer()
                     Button(String(localized: "Relaunch Bailey", table: "Settings")) { relaunch() }
                 }
+            }
+        }
+
+        Section(String(localized: "Colors", table: "Settings")) {
+            Picker(String(localized: "Dark theme", table: "Settings"), selection: $settings.themeDark) {
+                ForEach(Self.darkThemeNames, id: \.self) { name in
+                    Text(name).tag(name)
+                }
+            }
+            Picker(String(localized: "Light theme", table: "Settings"), selection: $settings.themeLight) {
+                ForEach(Self.lightThemeNames, id: \.self) { name in
+                    Text(name).tag(name)
+                }
+            }
+        }
+
+        Section(String(localized: "Panels", table: "Settings")) {
+            HStack {
+                Text(String(localized: "Font size", table: "Settings"))
+                Slider(value: $settings.panelFontSize, in: AppSettings.panelFontSizeRange, step: 1)
+                    .accessibilityLabel(String(localized: "Panel font size", table: "Settings"))
+                Text(String(localized: "\(Int(settings.panelFontSize)) pt", table: "Settings"))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(width: 42, alignment: .trailing)
+                Stepper("", value: $settings.panelFontSize, in: AppSettings.panelFontSizeRange, step: 1)
+                    .labelsHidden()
+                    .accessibilityLabel(String(localized: "Panel font size", table: "Settings"))
             }
         }
 
@@ -162,7 +200,7 @@ struct SettingsView: View {
         }
     }
 
-    private var hasCustomizedPreferences: Bool {
+    var hasCustomizedPreferences: Bool {
         !settings.fontFamily.isEmpty
             || settings.fontSize != AppSettings.defaultFontSize
             || settings.panelFontSize != AppSettings.defaultPanelFontSize
@@ -176,25 +214,14 @@ struct SettingsView: View {
             || settings.themeLight != Theme.defaultLightThemeName
             || settings.toolbarVisibility != AppSettings.defaultToolbarVisibility
             || settings.gitViewMode != .tree
+            || settings.gitAlwaysAcceptCheckout
+            || settings.gitAlwaysProceedPushTag
             || settings.wrapLines
             || settings.restoreTerminalHistory
     }
 
     @ViewBuilder
     private var terminalSettings: some View {
-        Section(String(localized: "Colors", table: "Settings")) {
-            Picker(String(localized: "Dark theme", table: "Settings"), selection: $settings.themeDark) {
-                ForEach(Self.darkThemeNames, id: \.self) { name in
-                    Text(name).tag(name)
-                }
-            }
-            Picker(String(localized: "Light theme", table: "Settings"), selection: $settings.themeLight) {
-                ForEach(Self.lightThemeNames, id: \.self) { name in
-                    Text(name).tag(name)
-                }
-            }
-        }
-
         Section(String(localized: "Font", table: "Settings")) {
             Picker(String(localized: "Family", table: "Settings"), selection: $settings.fontFamily) {
                 Text(String(localized: "\(TerminalFont.bundledFamily) (Bundled)", table: "Settings")).tag("")
@@ -264,32 +291,43 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private var workspaceSettings: some View {
-        Section(String(localized: "Panels", table: "Settings")) {
-            HStack {
-                Text(String(localized: "Font size", table: "Settings"))
-                Slider(value: $settings.panelFontSize, in: AppSettings.panelFontSizeRange, step: 1)
-                    .accessibilityLabel(String(localized: "Panel font size", table: "Settings"))
-                Text(String(localized: "\(Int(settings.panelFontSize)) pt", table: "Settings"))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(width: 42, alignment: .trailing)
-                Stepper("", value: $settings.panelFontSize, in: AppSettings.panelFontSizeRange, step: 1)
-                    .labelsHidden()
-                    .accessibilityLabel(String(localized: "Panel font size", table: "Settings"))
-            }
+    private var textEditorSettings: some View {
+        Section(String(localized: "Text Editing", table: "Settings")) {
+            Toggle(String(localized: "Wrap lines to editor width", table: "Settings"), isOn: $settings.wrapLines)
         }
+    }
 
+    private var gitManagerSettings: some View {
         Section(String(localized: "Git", table: "Settings")) {
             Picker(String(localized: "File layout", table: "Settings"), selection: $settings.gitViewMode) {
                 Text(String(localized: "Tree", table: "Settings")).tag(GitViewMode.tree)
                 Text(String(localized: "List", table: "Settings")).tag(GitViewMode.list)
             }
+            DescribedSettingsRow(
+                String(localized: "Toolbar", table: "Settings"),
+                description: toolbarVisibilityDescription
+            ) {
+                Picker(String(localized: "Toolbar", table: "Settings"), selection: $settings.toolbarVisibility) {
+                    Text(String(localized: "Auto", table: "Settings")).tag(ToolbarVisibility.auto)
+                    Text(String(localized: "Always Show", table: "Settings")).tag(ToolbarVisibility.always)
+                    Text(String(localized: "Hide", table: "Settings")).tag(ToolbarVisibility.hide)
+                }
+                .labelsHidden()
+            }
         }
+    }
 
-        Section(String(localized: "Text Editing", table: "Settings")) {
-            Toggle(String(localized: "Wrap lines to editor width", table: "Settings"), isOn: $settings.wrapLines)
+    private var fileManagerSettings: some View {
+        Section {
+            Text(String(localized: "File visibility settings will appear here.", table: "Settings"))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var placeholderSettings: some View {
+        Section {
+            Text(String(localized: "No settings are available yet.", table: "Settings"))
+                .foregroundStyle(.secondary)
         }
     }
 

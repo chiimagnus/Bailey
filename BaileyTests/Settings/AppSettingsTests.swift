@@ -72,6 +72,25 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertFalse(reset.gitAlwaysProceedPushTag)
     }
 
+    func testNativeSettingsResetAvailabilityTracksGitConsentFlags() throws {
+        let domain = "bailey-native-settings-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let settings = AppSettings(configURL: configURL,
+                                   languageDefaults: defaults, languageDomain: domain)
+        let view = SettingsView(application: WorkspaceApplication(), settings: settings)
+        XCTAssertFalse(view.hasCustomizedPreferences)
+        settings.gitAlwaysAcceptCheckout = true
+        XCTAssertTrue(view.hasCustomizedPreferences)
+        settings.gitAlwaysAcceptCheckout = false
+        XCTAssertFalse(view.hasCustomizedPreferences)
+        settings.gitAlwaysProceedPushTag = true
+        XCTAssertTrue(view.hasCustomizedPreferences)
+        settings.resetToDefaults()
+        XCTAssertFalse(view.hasCustomizedPreferences)
+        XCTAssertFalse(AppSettings(configURL: configURL).gitAlwaysProceedPushTag)
+    }
+
     func testObservationTracksAllNativeTerminalSettingsWithTemporaryConfig() {
         let configured = AppSettings(configURL: configURL)
 
