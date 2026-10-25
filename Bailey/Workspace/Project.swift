@@ -259,13 +259,19 @@ final class Project: nonisolated Identifiable {
     /// may publish its root, and a disconnected shell retains the last tree.
     func syncFiles(isCurrent: () -> Bool) async -> (PanelContext.RootSource, PanelContext.Identity)? {
         guard isCurrent(), let context = panelContext else { return nil }
+        let revision = context.connectionRevision
         if sshHost == nil, customDirectory == nil,
            selectedSession?.location.remoteConnection?.state == .disconnected { return nil }
         // An SSH probe failure is not evidence that cwd changed or became local.
         guard let (root, source) = try? await context.resolvedRoot() else { return nil }
-        guard isCurrent(), matchesPanelTarget(context.identity) else { return nil }
-        await fileTree.sync(root: root, backend: context.backend, scope: context.scope)
-        guard isCurrent(), matchesPanelTarget(context.identity) else { return nil }
+        guard isCurrent(), matchesPanelTarget(context.identity),
+              context.connectionRevision == revision else { return nil }
+        await fileTree.sync(
+            root: root, backend: context.backend, scope: context.scope,
+            panelIdentity: context.identity, connectionRevision: revision
+        )
+        guard isCurrent(), matchesPanelTarget(context.identity),
+              context.connectionRevision == revision else { return nil }
         return (source, context.identity)
     }
 

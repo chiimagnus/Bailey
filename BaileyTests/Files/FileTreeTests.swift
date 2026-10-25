@@ -88,6 +88,81 @@ final class FileTreeTests: XCTestCase {
         XCTFail(description)
     }
 
+    func testExternalRefreshOnlyChangesFileIndexRevisionOnNewDiskContent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("first.swift")
+        let second = root.appendingPathComponent("second.swift")
+        try Data("first".utf8).write(to: first)
+        let backend = CountingFileBackend()
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend)
+        let initial = tree.contentRevision
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertEqual(tree.contentRevision, initial,
+                       "Unchanged refresh must not reindex an open Command Palette")
+
+        try Data("second".utf8).write(to: second)
+        await backend.setUnavailable(true)
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertEqual(tree.contentRevision, initial,
+                       "A missing remote listing is not a directory deletion")
+        XCTAssertFalse(tree.items.contains { $0.path == second.path })
+        await backend.setUnavailable(false)
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertGreaterThan(tree.contentRevision, initial)
+        XCTAssertTrue(tree.items.contains { $0.path == second.path })
+        let afterCreation = tree.contentRevision
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertEqual(tree.contentRevision, afterCreation)
+        try FileManager.default.removeItem(at: first)
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertGreaterThan(tree.contentRevision, afterCreation)
+        XCTAssertFalse(tree.items.contains { $0.path == first.path })
+    }
+
+    func testSamePinnedSSHIdentityNewConnectionRefreshDoesNotWaitForOldBackend() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let oldFile = root.appendingPathComponent("old.swift")
+        let newFile = root.appendingPathComponent("new.swift")
+        try Data("old".utf8).write(to: oldFile)
+        let backend = CountingFileBackend()
+        let identity = PanelContext.Identity.pinned(
+            project: UUID(), workspace: "ssh:fixture", directory: root.path
+        )
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: backend,
+                        scope: "ssh:fixture", panelIdentity: identity, connectionRevision: 1)
+        await backend.delay(root.path)
+        let oldRefresh = Task {
+            await tree.sync(root: root.path, backend: backend,
+                            scope: "ssh:fixture", panelIdentity: identity, connectionRevision: 1)
+        }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if await backend.awaitingDirectory { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let blocked = await backend.awaitingDirectory
+        XCTAssertTrue(blocked)
+        try FileManager.default.removeItem(at: oldFile)
+        try Data("new".utf8).write(to: newFile)
+
+        await tree.sync(root: root.path, backend: backend,
+                        scope: "ssh:fixture", panelIdentity: identity, connectionRevision: 2)
+        XCTAssertTrue(tree.items.contains { $0.path == newFile.path },
+                      "Fresh connection must not wait for previous SSH request to time out")
+        XCTAssertFalse(tree.items.contains { $0.path == oldFile.path })
+        await backend.release()
+        await oldRefresh.value
+        XCTAssertTrue(tree.items.contains { $0.path == newFile.path },
+                      "Late data from the old channel must not replace new results")
+        XCTAssertFalse(tree.items.contains { $0.path == oldFile.path })
+    }
+
     func testFilesExcludeGlobAnchoringUnicodeAndInvalidRules() throws {
         let patterns = ["**/.git", "**/node_modules", "src/**/build?.log"]
         XCTAssertTrue(FilesExcludeGlob.excludes(".git", patterns: patterns))

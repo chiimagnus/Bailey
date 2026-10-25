@@ -1072,8 +1072,10 @@ final class WorkspaceWindowModel {
                 table: "Interface"))
             return
         }
+        let revision = context.connectionRevision
         Task {
             guard let (root, _) = try? await context.resolvedRoot(),
+                  context.connectionRevision == revision,
                   !isClosed, selectedProjectID == project.id,
                   project.matchesPanelTarget(context.identity),
                   project.tabs.contains(where: { $0.id == tabID }),
@@ -1083,13 +1085,13 @@ final class WorkspaceWindowModel {
                     table: "Interface"))
                 return
             }
-            if project.fileTree.rootPath != root {
-                await project.fileTree.sync(
-                    root: root, backend: context.backend, scope: context.scope
-                )
-            }
+            await project.fileTree.sync(
+                root: root, backend: context.backend, scope: context.scope,
+                panelIdentity: context.identity, connectionRevision: revision
+            )
             let revealed = await project.fileTree.revealFile(path) {
-                !isClosed && selectedProjectID == project.id
+                context.connectionRevision == revision
+                    && !isClosed && selectedProjectID == project.id
                     && project.matchesPanelTarget(context.identity)
                     && project.tabs.contains(where: { $0.id == tabID })
                     && file.path == path && file.workspaceIdentity == workspace

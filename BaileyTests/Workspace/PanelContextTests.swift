@@ -244,6 +244,31 @@ final class PanelContextTests: XCTestCase {
                        "A late old channel must not overwrite the replacement")
     }
 
+    func testPinnedSSHReconnectStartsNewPanelSyncBeforeOldRequestCompletes() async throws {
+        let oldBackend = DelayedWorkspaceFixture("old-channel")
+        let freshBackend = DelayedWorkspaceFixture("new-channel")
+        await oldBackend.suspendNextList()
+        let tree = FileTreeModel()
+        let queue = PanelSyncQueue()
+        let identity = PanelContext.Identity.pinned(
+            project: UUID(), workspace: "ssh:fixture", directory: "/root"
+        )
+        queue.run(for: identity, connectionRevision: 1) {
+            await tree.sync(root: "/root", backend: oldBackend,
+                            scope: "ssh:fixture", panelIdentity: identity, connectionRevision: 1)
+        }
+        try await wait { await oldBackend.awaitingList }
+        queue.run(for: identity, connectionRevision: 2) {
+            await tree.sync(root: "/root", backend: freshBackend,
+                            scope: "ssh:fixture", panelIdentity: identity, connectionRevision: 2)
+        }
+        try await wait { tree.items.map(\.path) == ["/root/new.txt"] }
+        await oldBackend.releaseList()
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(tree.items.map(\.path), ["/root/new.txt"],
+                       "An old pinned SSH request must not overwrite the reconnected tree")
+    }
+
     func testPanelSyncQueueSwitchesTargetBeforeOldDirectoryCompletes() async throws {
         let oldBackend = DelayedWorkspaceFixture("old-channel")
         let freshBackend = DelayedWorkspaceFixture("new-channel")

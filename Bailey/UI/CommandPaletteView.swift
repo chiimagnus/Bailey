@@ -101,6 +101,7 @@ struct CommandPaletteView: View {
     private struct FileIndexKey: Hashable {
         let identity: PanelContext.Identity
         let revision: UInt64
+        let filesRevision: UInt64
         let changeEvent: Int
     }
 
@@ -342,14 +343,12 @@ struct CommandPaletteView: View {
 
     private var fileIndexKey: FileIndexKey? {
         guard let context = fileIndexContext else { return nil }
-        let revision: UInt64
-        if let workspace = context.identity.workspace, workspace.hasPrefix("ssh:") {
-            revision = SSHHostWorkspaces.connectionRevision(for: String(workspace.dropFirst(4)))
-        } else {
-            revision = 0
-        }
-        return FileIndexKey(identity: context.identity, revision: revision,
-                            changeEvent: connectionChangeEvent)
+        return FileIndexKey(
+            identity: context.identity,
+            revision: context.connectionRevision,
+            filesRevision: manager.selectedProject?.fileTree.contentRevision ?? 0,
+            changeEvent: connectionChangeEvent
+        )
     }
 
     private var filtered: [PaletteCommand] {

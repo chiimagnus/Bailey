@@ -6,13 +6,22 @@ import SwiftUI
 /// for an older SSH request to finish.
 @MainActor
 final class PanelSyncQueue {
+    private struct Target: Equatable {
+        let identity: PanelContext.Identity?
+        let connectionRevision: UInt64
+    }
+
     private var isRunning = false
-    private var target: PanelContext.Identity?
+    private var target: Target?
     private var generation: UInt = 0
     private var pendingBody: (() async -> Void)?
     private var activeTask: Task<Void, Never>?
 
-    func run(for target: PanelContext.Identity?, _ body: @escaping () async -> Void) {
+    func run(
+        for identity: PanelContext.Identity?, connectionRevision: UInt64 = 0,
+        _ body: @escaping () async -> Void
+    ) {
+        let target = Target(identity: identity, connectionRevision: connectionRevision)
         if isRunning && self.target == target {
             pendingBody = body
             return
@@ -286,8 +295,9 @@ struct ToolPanelView: View {
         .onReceive(NotificationCenter.default.publisher(
             for: SSHHostWorkspaces.connectionChanged
         )) { notification in
-            guard notification.object as? String == manager.selectedProject?.sshHost else { return }
-            applyRemoteHeading()
+            guard let host = notification.object as? String,
+                  manager.selectedProject?.panelContext?.identity.workspace == "ssh:" + host else { return }
+            syncModels()
         }
         .environment(\.panelFontScale, panelFontScale)
         // Native button and control labels without a designed hierarchy use
@@ -298,7 +308,9 @@ struct ToolPanelView: View {
     private func syncModels() {
         applyRemoteHeading()
         guard panel == .files else { return }
-        syncQueue.run(for: manager.selectedProject?.panelContext?.identity) {
+        let context = manager.selectedProject?.panelContext
+        syncQueue.run(for: context?.identity,
+                      connectionRevision: context?.connectionRevision ?? 0) {
             await performSync()
         }
     }

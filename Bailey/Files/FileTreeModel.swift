@@ -163,6 +163,7 @@ final class FileTreeModel {
 
     private(set) var rootPath = ""
     private(set) var items: [Item] = []
+    private(set) var contentRevision: UInt64 = 0
     /// Files' current keyboard selection, independent of the most recent FileTab.
     private(set) var selectedPath: String?
     private(set) var selectedPaths: Set<String> = []
@@ -175,6 +176,8 @@ final class FileTreeModel {
     private(set) var draft: Draft?
     private var expanded: Set<String> = []
     @ObservationIgnored private var workspaceScope = "local"
+    @ObservationIgnored private var panelIdentity: PanelContext.Identity?
+    @ObservationIgnored private var connectionRevision: UInt64 = 0
     /// A project can follow different checkouts; each retains its own outline.
     private struct Root: Hashable {
         let scope: String
@@ -306,9 +309,13 @@ final class FileTreeModel {
 
     /// Switches the visible root without discarding expansion state from the
     /// previously visited directory. Data is still reread on every refresh.
-    func sync(root: String, backend: WorkspaceBackend, scope: String = "local") async {
+    func sync(
+        root: String, backend: WorkspaceBackend, scope: String = "local",
+        panelIdentity: PanelContext.Identity? = nil, connectionRevision: UInt64 = 0
+    ) async {
         let scopeChanged = root != rootPath || workspaceScope != scope
         let channelChanged = (self.backend as AnyObject) !== (backend as AnyObject)
+            || self.panelIdentity != panelIdentity || self.connectionRevision != connectionRevision
         if scopeChanged || channelChanged {
             treeEpoch &+= 1
             rebuildGeneration &+= 1
@@ -322,6 +329,8 @@ final class FileTreeModel {
             for waiter in waiters { waiter.resume() }
         }
         self.backend = backend
+        self.panelIdentity = panelIdentity
+        self.connectionRevision = connectionRevision
         if scopeChanged {
             if !rootPath.isEmpty {
                 expandedByRoot[Root(scope: workspaceScope, path: rootPath)] = expanded
@@ -891,6 +900,9 @@ final class FileTreeModel {
                 let fresh = await backend.list(directories: directories)
                 guard generation == rebuildGeneration else { return }
                 if epoch == treeEpoch, path == rootPath, scope == workspaceScope {
+                    if fresh.contains(where: { cachedDirectories[$0.key] != $0.value }) {
+                        contentRevision &+= 1
+                    }
                     cachedDirectories.merge(fresh, uniquingKeysWith: { _, new in new })
                 } else {
                     rebuildPending = true

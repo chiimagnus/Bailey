@@ -40,6 +40,11 @@ nonisolated struct PanelContext {
     var scope: String { identity.workspace ?? "local" }
     var isRemote: Bool { identity.workspace != nil }
 
+    @MainActor var connectionRevision: UInt64 {
+        guard let workspace = identity.workspace, workspace.hasPrefix("ssh:") else { return 0 }
+        return SSHHostWorkspaces.connectionRevision(for: String(workspace.dropFirst(4)))
+    }
+
     func resolvedRoot() async throws -> (root: String, source: RootSource) {
         if case .pinned = identity { return (cwd, .pinned) }
         let shellRoot = try await backend.gitRoot(containing: cwd) ?? cwd
