@@ -273,6 +273,36 @@ private struct BaileyCommands: Commands {
             .keyboardShortcut("g", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
 
+            Divider()
+
+            if manager?.selectedProject?.tabs.isEmpty != false {
+                Button(String(localized: "Tabs", table: "Interface")) {}
+                    .disabled(true)
+            } else {
+                Menu(String(localized: "Tabs", table: "Interface")) {
+                    Button(String(localized: "Next Tab", table: "Interface")) {
+                        manager?.selectNextTab()
+                    }
+                    .keyboardShortcut("]", modifiers: [.command, .shift])
+                    .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
+
+                    Button(String(localized: "Previous Tab", table: "Interface")) {
+                        manager?.selectPreviousTab()
+                    }
+                    .keyboardShortcut("[", modifiers: [.command, .shift])
+                    .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
+
+                    Divider()
+
+                    ForEach(Array((manager?.selectedProject?.tabs ?? []).prefix(9).enumerated()).map {
+                        WindowMenuItem(id: $0.element.id, index: $0.offset, title: $0.element.displayTitle)
+                    }) { item in
+                        Button(item.title) {
+                            manager?.selectTab(index: item.index)
+                        }
+                    }
+                }
+            }
         }
 
         CommandMenu(String(localized: "Terminal", table: "Terminal")) {
@@ -338,35 +368,6 @@ private struct BaileyCommands: Commands {
             }
             .keyboardShortcut("f", modifiers: [.command, .control])
             .disabled(NSApp.keyWindow == nil)
-
-            if manager?.selectedProject?.tabs.isEmpty != false {
-                Button(String(localized: "Tabs", table: "Interface")) {}
-                    .disabled(true)
-            } else {
-                Menu(String(localized: "Tabs", table: "Interface")) {
-                    Button(String(localized: "Next Tab", table: "Interface")) {
-                        manager?.selectNextTab()
-                    }
-                    .keyboardShortcut("]", modifiers: [.command, .shift])
-                    .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
-
-                    Button(String(localized: "Previous Tab", table: "Interface")) {
-                        manager?.selectPreviousTab()
-                    }
-                    .keyboardShortcut("[", modifiers: [.command, .shift])
-                    .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
-
-                    Divider()
-
-                    ForEach(Array((manager?.selectedProject?.tabs ?? []).prefix(9).enumerated()).map {
-                        WindowMenuItem(id: $0.element.id, index: $0.offset, title: $0.element.displayTitle)
-                    }) { item in
-                        Button(item.title) {
-                            manager?.selectTab(index: item.index)
-                        }
-                    }
-                }
-            }
         }
     }
 }
