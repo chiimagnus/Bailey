@@ -275,7 +275,7 @@ struct CommandPaletteView: View {
             PaletteCommand(id: "add-ssh-items", title: LocalizedStringResource("Add SSH Files or Projects", table: "Interface"), systemImage: "network", shortcut: nil) {
                 manager.chooseSSHItems()
             },
-            PaletteCommand(id: "close-tab", title: LocalizedStringResource("Close Tab", table: "Interface"), systemImage: "xmark.square", shortcut: "⌘W") {
+            PaletteCommand(id: "close-panel", title: LocalizedStringResource("Close Panel", table: "Interface"), systemImage: "xmark.square", shortcut: "⌘W") {
                 manager.closeSelectedTab()
             },
             PaletteCommand(id: "save-file", title: LocalizedStringResource("Save File", table: "Interface"), systemImage: "square.and.arrow.down", shortcut: "⌘S") {
