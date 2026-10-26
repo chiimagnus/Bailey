@@ -534,10 +534,8 @@ final class DockWorkspaceModel {
         syncTabs(tabIDs, near: nil)
     }
 
-    var panelOrder: [DockItem] { root.groups.flatMap(\.items) }
-
     var tabOrder: [UUID] {
-        panelOrder.compactMap { item in
+        root.groups.flatMap(\.items).compactMap { item in
             if case .tab(let id) = item { return id }
             return nil
         }

@@ -90,40 +90,54 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertEqual(snapshots, 0)
     }
 
-    func testPanelNavigationIncludesToolsAndWorkPanels() throws {
+    func testPanelNavigationSkipsToolPanels() throws {
         let project = Project(fallbackName: "Panels", workspaceConfiguration: .standard)
         let emptyGroup = try XCTUnwrap(project.dock.root.groups.first { $0.items.isEmpty })
         project.dock.activate(emptyGroup.id)
         project.selectNextPanel()
-        XCTAssertEqual(project.dock.activeGroup?.selected, .projects)
+        project.selectPreviousPanel()
+        XCTAssertEqual(project.dock.activeGroupID, emptyGroup.id)
+        XCTAssertNil(project.dock.activeGroup?.selected)
+        project.dock.select(.git)
+        project.selectNextPanel()
         project.selectPreviousPanel()
         XCTAssertEqual(project.dock.activeGroup?.selected, .git)
 
         project.newBrowserTab(initialFocus: .none)
-        project.newBrowserTab(initialFocus: .none)
-        let order = project.dock.panelOrder
-        XCTAssertEqual(order.count, 5)
-        XCTAssertTrue(order.contains(.projects))
-        XCTAssertTrue(order.contains(.files))
-        XCTAssertTrue(order.contains(.git))
+        let onlyTab = try XCTUnwrap(project.selectedTabID)
+        project.dock.select(.files)
+        project.selectNextPanel()
+        XCTAssertEqual(project.dock.activeGroup?.selected, .tab(onlyTab))
+        project.dock.select(.git)
+        project.selectPreviousPanel()
+        XCTAssertEqual(project.dock.activeGroup?.selected, .tab(onlyTab))
 
-        for (index, item) in order.enumerated() {
-            project.selectPanel(item)
-            XCTAssertEqual(project.dock.activeGroup?.selected, item)
+        project.newBrowserTab(initialFocus: .none)
+        let order = project.dock.tabOrder
+        XCTAssertEqual(order.count, 2)
+
+        for (index, id) in order.enumerated() {
+            project.selectPanel(.tab(id))
             project.selectNextPanel()
-            let next = order[(index + 1) % order.count]
-            XCTAssertEqual(project.dock.activeGroup?.selected, next)
-            if case .tab(let id) = next { XCTAssertEqual(project.selectedTabID, id) }
+            XCTAssertEqual(project.dock.activeGroup?.selected, .tab(order[(index + 1) % order.count]))
             project.selectPreviousPanel()
-            XCTAssertEqual(project.dock.activeGroup?.selected, item)
+            XCTAssertEqual(project.dock.activeGroup?.selected, .tab(id))
+        }
+
+        for tool in [DockItem.projects, .files, .git] {
+            project.selectPanel(tool)
+            XCTAssertEqual(project.dock.activeGroup?.selected, tool)
+            project.selectNextPanel()
+            XCTAssertEqual(project.dock.activeGroup?.selected, .tab(order[0]))
+            project.selectPanel(tool)
+            project.selectPreviousPanel()
+            XCTAssertEqual(project.dock.activeGroup?.selected, .tab(order[1]))
         }
 
         project.dock.removeTool(.files)
-        XCTAssertFalse(project.dock.panelOrder.contains(.files))
-        for _ in 0..<project.dock.panelOrder.count {
-            project.selectNextPanel()
-            XCTAssertNotEqual(project.dock.activeGroup?.selected, .files)
-        }
+        XCTAssertEqual(project.dock.tabOrder, order)
+        project.selectNextPanel()
+        XCTAssertEqual(project.dock.activeGroup?.selected, .tab(order[0]))
     }
 
     func testAddPanelOnlyOffersMissingToolsAcrossAllGroups() throws {

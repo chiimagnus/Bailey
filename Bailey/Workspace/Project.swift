@@ -736,14 +736,14 @@ final class Project: nonisolated Identifiable {
     func selectPreviousPanel() { shiftPanel(by: -1) }
 
     private func shiftPanel(by offset: Int) {
-        let items = dock.panelOrder
-        guard !items.isEmpty else { return }
-        guard let selected = dock.activeGroup?.selected,
-              let current = items.firstIndex(of: selected) else {
-            selectPanel(offset > 0 ? items[0] : items[items.count - 1])
+        let ids = dock.tabOrder
+        guard !ids.isEmpty else { return }
+        guard case .tab(let selectedID)? = dock.activeGroup?.selected,
+              let current = ids.firstIndex(of: selectedID) else {
+            selectTab(offset > 0 ? ids[0] : ids[ids.count - 1])
             return
         }
-        selectPanel(items[(current + offset + items.count) % items.count])
+        selectTab(ids[(current + offset + ids.count) % ids.count])
     }
 
     // MARK: - Layout mutation plumbing

@@ -185,13 +185,13 @@ private struct BaileyCommands: Commands {
                 manager?.selectNextPanel()
             }
             .keyboardShortcut("]", modifiers: [.command, .shift])
-            .disabled((manager?.selectedProject?.dock.panelOrder.count ?? 0) < 2)
+            .disabled((manager?.selectedProject?.dock.tabOrder.count ?? 0) < 2)
 
             Button(String(localized: "Previous Panel", table: "Interface")) {
                 manager?.selectPreviousPanel()
             }
             .keyboardShortcut("[", modifiers: [.command, .shift])
-            .disabled((manager?.selectedProject?.dock.panelOrder.count ?? 0) < 2)
+            .disabled((manager?.selectedProject?.dock.tabOrder.count ?? 0) < 2)
 
             Button(String(localized: "Close Panel", table: "Interface")) {
                 if let manager, let project = manager.selectedProject,
@@ -203,11 +203,13 @@ private struct BaileyCommands: Commands {
             }
             .keyboardShortcut("w", modifiers: .command)
 
-            if let project = manager?.selectedProject, !project.dock.panelOrder.isEmpty {
+            if let project = manager?.selectedProject, !project.dock.tabOrder.isEmpty {
                 Divider()
 
-                ForEach(Array(project.dock.panelOrder.prefix(9).enumerated()).map {
-                    PanelMenuEntry(item: $0.element, project: project, index: $0.offset)
+                ForEach(Array(project.dock.tabOrder.compactMap { id in
+                    project.tabs.first { $0.id == id }
+                }.prefix(9).enumerated()).map {
+                    PanelMenuEntry(tab: $0.element, index: $0.offset)
                 }) { item in
                     Button {
                         manager?.selectPanel(item.id)
@@ -384,26 +386,17 @@ private struct PanelMenuEntry: Identifiable {
     let title: String
     let icon: NSImage
 
-    init(item: DockItem, project: Project, index: Int) {
-        id = item
+    init(tab: PaneTab, index: Int) {
+        id = .tab(tab.id)
         self.index = index
-        title = item.label(project: project)
-        switch item {
-        case .projects, .files, .git:
-            icon = NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil) ?? NSImage()
-        case .tab(let id):
-            guard let tab = project.tabs.first(where: { $0.id == id }) else {
-                icon = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil) ?? NSImage()
-                return
-            }
-            if let path = tab.content.fileIconPath {
-                let fileIconPath = path.lowercased().hasSuffix(".md") ? "file.md" : path
-                icon = MaterialFileIcon.image(forPath: fileIconPath)
-            } else if case .browser(let browser) = tab.content, let favicon = browser.favicon {
-                icon = favicon
-            } else {
-                icon = NSImage(systemSymbolName: tab.content.systemImage, accessibilityDescription: nil) ?? NSImage()
-            }
+        title = tab.displayTitle
+        if let path = tab.content.fileIconPath {
+            let fileIconPath = path.lowercased().hasSuffix(".md") ? "file.md" : path
+            icon = MaterialFileIcon.image(forPath: fileIconPath)
+        } else if case .browser(let browser) = tab.content, let favicon = browser.favicon {
+            icon = favicon
+        } else {
+            icon = NSImage(systemSymbolName: tab.content.systemImage, accessibilityDescription: nil) ?? NSImage()
         }
     }
 }
