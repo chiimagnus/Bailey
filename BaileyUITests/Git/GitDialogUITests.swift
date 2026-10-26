@@ -1411,8 +1411,7 @@ final class GitDialogUITests: XCTestCase {
         let temporary = FileManager.default.temporaryDirectory.standardizedFileURL.path
         precondition(root.hasPrefix(temporary + "/Bailey-UITest-"),
                      "Dialog UI tests must never execute Git against a real workspace")
-        let app = try WorkspaceUITestSupport.launch(in: self, language: language)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: language, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.git", in: app)
             .waitForExistence(timeout: 20))

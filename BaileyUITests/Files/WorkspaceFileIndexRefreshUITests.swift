@@ -9,8 +9,7 @@ final class WorkspaceFileIndexRefreshUITests: XCTestCase {
         let ignored = try fixture.file("p4ignored.tmp", text: "tracked only when explicitly staged\n")
         let rules = try fixture.file(".gitignore", text: "# initially unignored\n")
         try fixture.git(["init", "-q", "-b", "main"])
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
 
         let gitPanel = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
         XCTAssertTrue(gitPanel.waitForExistence(timeout: 15))

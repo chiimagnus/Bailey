@@ -10,9 +10,9 @@ final class WorkspaceFilesUITests: XCTestCase {
         let workspace = fixture.root.appendingPathComponent("workspace", isDirectory: true)
         let config = fixture.root.appendingPathComponent(".config/bailey-dev/config.toml")
         let app = try WorkspaceUITestSupport.launch(
-            in: self, language: "en", configurationHome: fixture.root
+            in: self, language: "en", configurationHome: fixture.root,
+            project: workspace
         )
-        try WorkspaceUITestSupport.addFolder(workspace, to: app)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let folder = window.descendants(matching: .any)
@@ -399,7 +399,6 @@ final class WorkspaceFilesUITests: XCTestCase {
         let first = try fixture.file("a-first.swift", text: "let first = 1\n")
         let second = try fixture.file("b-second.swift", text: "let second = 2\n")
         let app = try WorkspaceUITestSupport.launch(in: self)
-
         try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 20))
@@ -426,8 +425,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         let files = try (0..<6).map { index in
             try fixture.file("rapid-\(index).swift", text: "let rapid = \(index)\n")
         }
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let filesTab = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(filesTab.waitForExistence(timeout: 20))
 
@@ -472,8 +470,7 @@ final class WorkspaceFilesUITests: XCTestCase {
             clipboard.clearContents()
             if !originalClipboard.isEmpty { XCTAssertTrue(clipboard.writeObjects(originalClipboard)) }
         }
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let alphaRow = WorkspaceUITestSupport.fileRow(alpha, in: window)
@@ -545,8 +542,7 @@ final class WorkspaceFilesUITests: XCTestCase {
             pasteboard.clearContents()
             if !originalClipboard.isEmpty { XCTAssertTrue(pasteboard.writeObjects(originalClipboard)) }
         }
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let sourceRow = WorkspaceUITestSupport.fileRow(source, in: window)
@@ -596,8 +592,7 @@ final class WorkspaceFilesUITests: XCTestCase {
             clipboard.clearContents()
             if !originalClipboard.isEmpty { XCTAssertTrue(clipboard.writeObjects(originalClipboard)) }
         }
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let sourceRow = WorkspaceUITestSupport.fileRow(source, in: window)
@@ -637,8 +632,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         let doomed = try fixture.file("delete-with-backspace.txt", text: "remove me")
         let survivor = try fixture.file("keep-with-backspace.txt", text: "keep me")
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let row = WorkspaceUITestSupport.fileRow(doomed, in: app.windows.firstMatch)
         XCTAssertTrue(row.waitForExistence(timeout: 15))
@@ -663,8 +657,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         let selectedFile = try fixture.file("a-selected.txt", text: "selected\n")
         let contextFile = try fixture.file("b-context.txt", text: "context\n")
         let marker = fixture.root.appendingPathComponent("terminal-input.txt")
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         let a = WorkspaceUITestSupport.fileRow(selectedFile, in: window)
         let b = WorkspaceUITestSupport.fileRow(contextFile, in: window)
@@ -703,8 +696,7 @@ final class WorkspaceFilesUITests: XCTestCase {
             pasteboard.clearContents()
             if !originalClipboard.isEmpty { XCTAssertTrue(pasteboard.writeObjects(originalClipboard)) }
         }
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let a = WorkspaceUITestSupport.fileRow(alpha, in: window)
@@ -758,8 +750,7 @@ final class WorkspaceFilesUITests: XCTestCase {
             pasteboard.clearContents()
             if !originalClipboard.isEmpty { XCTAssertTrue(pasteboard.writeObjects(originalClipboard)) }
         }
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let a = WorkspaceUITestSupport.fileRow(alpha, in: window)
@@ -920,8 +911,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         let newFile = fixture.root.appendingPathComponent("inside/from-shortcut.txt")
         let newFolder = fixture.root.appendingPathComponent("inside/from-shortcut-folder")
 
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let folder = window.descendants(matching: .any)
@@ -976,8 +966,7 @@ final class WorkspaceFilesUITests: XCTestCase {
             pasteboard.clearContents()
             if !originalClipboard.isEmpty { XCTAssertTrue(pasteboard.writeObjects(originalClipboard)) }
         }
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let folder = window.descendants(matching: .any)
@@ -1027,8 +1016,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         let alpha = try fixture.file("a.swift", text: "a\n")
         let beta = try fixture.file("b.swift", text: "b\n")
         let gamma = try fixture.file("c.swift", text: "c\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let a = WorkspaceUITestSupport.fileRow(alpha, in: window)
@@ -1064,9 +1052,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("a-first.swift", text: "let first = 1\n")
         let second = try fixture.file("b-second.swift", text: "let second = 2\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
-
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 20))
         files.click()
@@ -1095,8 +1081,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         let first = try fixture.file("project/a-first.swift", text: "first original\n")
         let second = try fixture.file("project/b-second.swift", text: "second original\n")
         let projectRoot = fixture.root.appendingPathComponent("project", isDirectory: true)
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let projectFolder = app.descendants(matching: .any)
@@ -1162,9 +1147,9 @@ final class WorkspaceFilesUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("alpha.swift", text: "original\n")
         let second = try fixture.file("beta.swift", text: "original\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, language: language)
-
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: language, project: fixture.root
+        )
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let betaRow = WorkspaceUITestSupport.fileRow(second, in: app.windows.firstMatch)
         XCTAssertTrue(betaRow.waitForExistence(timeout: 20))
@@ -1198,8 +1183,7 @@ final class WorkspaceFilesUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         let alpha = try fixture.file("alpha/shared.swift", text: "let value = 1\n")
         let beta = try fixture.file("beta/shared.swift", text: "let value = 2\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         let window = app.windows.firstMatch
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 15))
@@ -1272,9 +1256,7 @@ final class WorkspaceFilesUITests: XCTestCase {
     func testOpeningTheSameFileFromMenuReusesItsExistingTab() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("deduplicate.swift", text: "let one = 1\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
-
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
         XCTAssertTrue(row.waitForExistence(timeout: 20))

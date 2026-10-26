@@ -36,8 +36,7 @@ final class WorkspaceWindowsUITests: XCTestCase {
         let file = try fixture.file("incoming.swift", text: "let external = true\n")
         let unicode = try fixture.file("中文 🧪.swift", text: "let 测试 = 1\n")
         let nested = try fixture.file("nested/deep.md", text: "# hello\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.git", in: app).click()
         let originalWindowCount = app.windows.count
         let bundle = try XCTUnwrap(
@@ -93,9 +92,7 @@ final class WorkspaceWindowsUITests: XCTestCase {
         let b = try fixture.file("owner-b/other.swift", text: "file B\n")
         let folderA = fixture.root.appendingPathComponent("owner-a", isDirectory: true)
         let folderB = fixture.root.appendingPathComponent("owner-b", isDirectory: true)
-        let app = try WorkspaceUITestSupport.launch(in: self)
-
-        try WorkspaceUITestSupport.addFolder(folderA, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: folderA)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let ownerWindow = try XCTUnwrap(window(containing: a, in: app))
         let rowA = WorkspaceUITestSupport.fileRow(a, in: ownerWindow)
@@ -180,9 +177,9 @@ final class WorkspaceWindowsUITests: XCTestCase {
         let file = try fixture.file("restored/sample.swift", text: "let restored = true\n")
         let folder = fixture.root.appendingPathComponent("restored", isDirectory: true)
         let app = try WorkspaceUITestSupport.launch(
-            in: self, language: "en", configurationHome: fixture.root
+            in: self, language: "en", configurationHome: fixture.root,
+            project: folder
         )
-        try WorkspaceUITestSupport.addFolder(folder, to: app)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let owner = app.windows.firstMatch
         let row = WorkspaceUITestSupport.fileRow(file, in: owner)

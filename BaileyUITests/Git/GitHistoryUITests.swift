@@ -17,7 +17,7 @@ final class GitHistoryUITests: XCTestCase {
         XCTAssertNotEqual(rootHash, headHash)
         XCTAssertEqual(try fixture.git(["show", ":history.txt"]), Data(current.utf8))
 
-        let app = try WorkspaceUITestSupport.launch(in: self)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(file, commit: "E2E fixture history", fixture: fixture, app: app)
         let historicalRow = historicalFileRow(file, fixture: fixture, window: window)
@@ -71,7 +71,7 @@ final class GitHistoryUITests: XCTestCase {
         XCTAssertNotEqual(rootHash, headHash)
         XCTAssertFalse(FileManager.default.fileExists(atPath: old.path))
 
-        let app = try WorkspaceUITestSupport.launch(in: self)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(old, commit: "E2E fixture history", fixture: fixture, app: app)
         openHistoricalMenu(old, fixture: fixture, window: window)
@@ -118,7 +118,7 @@ final class GitHistoryUITests: XCTestCase {
         XCTAssertEqual(try fixture.git(["cat-file", "-s", "HEAD:large.txt"]),
                        Data("\(largeBytes.count)\n".utf8))
 
-        let app = try WorkspaceUITestSupport.launch(in: self)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(binary, commit: "E2E fixture history", fixture: fixture, app: app)
         openHistoricalMenu(binary, fixture: fixture, window: window)
@@ -159,7 +159,7 @@ final class GitHistoryUITests: XCTestCase {
                          "commit", "-qam", "Second revision"])
         let headHash = try revision(in: fixture)
 
-        let app = try WorkspaceUITestSupport.launch(in: self)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(file, commit: "E2E fixture history", fixture: fixture, app: app)
         openHistoricalMenu(file, fixture: fixture, window: window)
@@ -221,7 +221,7 @@ final class GitHistoryUITests: XCTestCase {
         try local.write(to: file, atomically: true, encoding: .utf8)
         XCTAssertEqual(try fixture.git(["show", ":history.txt"]), Data(current.utf8))
 
-        let app = try WorkspaceUITestSupport.launch(in: self)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         let window = app.windows.firstMatch
         try showHistoricalFile(file, commit: "E2E fixture history", fixture: fixture, app: app)
         // The same path is also shown above in Git Changes. Collapse that
@@ -286,7 +286,6 @@ final class GitHistoryUITests: XCTestCase {
         XCTAssertTrue(fixture.root.lastPathComponent.hasPrefix("Bailey-UITest-"))
         XCTAssertTrue(fixture.root.standardizedFileURL.path.hasPrefix(
             FileManager.default.temporaryDirectory.standardizedFileURL.path))
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
         XCTAssertTrue(git.waitForExistence(timeout: 20))

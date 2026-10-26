@@ -6,8 +6,7 @@ final class WorkspaceDockUITests: XCTestCase {
     func testCrossGroupDragReleaseCannotSelectDestinationButRealClickCan() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("unchanged.swift", text: "original bytes\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         let window = app.windows.firstMatch
         let projects = WorkspaceUITestSupport.element("bailey.dock.projects", in: app)
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
@@ -39,8 +38,7 @@ final class WorkspaceDockUITests: XCTestCase {
         let first = try fixture.file("first.txt", text: "file A\n")
         let second = try fixture.file("second.txt", text: "file B\n")
         let third = try fixture.file("third.txt", text: "file C\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
         let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
             withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
@@ -104,8 +102,7 @@ final class WorkspaceDockUITests: XCTestCase {
     func testCommandPaletteClosePanelUsesTheActiveTool() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("persist.txt", text: "not edited\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 15))
@@ -126,8 +123,7 @@ final class WorkspaceDockUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("first-tab.txt", text: "first\n")
         let second = try fixture.file("second-tab.txt", text: "second\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let firstRow = WorkspaceUITestSupport.fileRow(first, in: window)
@@ -161,8 +157,7 @@ final class WorkspaceDockUITests: XCTestCase {
     func testProjectContextMenuExposesOnlyCloseAndUsesFolderName() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("folder-first.txt", text: "project contents\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let projects = WorkspaceUITestSupport.element("bailey.dock.projects", in: app)
         XCTAssertTrue(projects.waitForExistence(timeout: 15))
         projects.click()
@@ -207,8 +202,7 @@ final class WorkspaceDockUITests: XCTestCase {
     func testClosingExplicitlyActivatedProjectsKeepsFilesWithoutDragging() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("unchanged.swift", text: "original bytes\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         let projects = WorkspaceUITestSupport.element("bailey.dock.projects", in: app)
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(projects.waitForExistence(timeout: 15))
@@ -229,8 +223,7 @@ final class WorkspaceDockUITests: XCTestCase {
         let first = try fixture.file("project/a-first.swift", text: "first file\n")
         let file = try fixture.file("project/b-focused.swift", text: "do not change this file\n")
         let projectRoot = fixture.root.appendingPathComponent("project", isDirectory: true)
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(projectRoot, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: projectRoot)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let row = WorkspaceUITestSupport.fileRow(file, in: window)

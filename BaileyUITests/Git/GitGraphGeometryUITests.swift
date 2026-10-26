@@ -59,8 +59,7 @@ final class GitGraphGeometryUITests: XCTestCase {
             home = configuration.root
         }
         let app = try WorkspaceUITestSupport.launch(
-            in: self, language: language, configurationHome: home)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+            in: self, language: language, configurationHome: home, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let window = app.windows.firstMatch
         let node = app.buttons.matching(NSPredicate(format: "value == %@", oid)).firstMatch
@@ -216,8 +215,7 @@ final class GitGraphGeometryUITests: XCTestCase {
         XCTAssertThrowsError(try fixture.git(["symbolic-ref", "-q", "HEAD"]))
         let home = try WorkspaceUITestFixture(in: self)
         _ = try home.file(".config/bailey-dev/config.toml", text: "theme = \"\(theme)\"\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, configurationHome: home.root)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, configurationHome: home.root, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let current = app.buttons.matching(NSPredicate(
             format: "label BEGINSWITH %@", fixture.root.lastPathComponent + " · ")).firstMatch
@@ -339,8 +337,7 @@ final class GitGraphGeometryUITests: XCTestCase {
         let home = try WorkspaceUITestFixture(in: self)
         _ = try home.file(".config/bailey-dev/config.toml",
                           text: "theme = \"\(theme)\"\ngit.view-mode = \"\(mode)\"\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, configurationHome: home.root)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, configurationHome: home.root, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let window = app.windows.firstMatch
         func headerColors(_ node: XCUIElement) throws -> [NSColor] {
@@ -438,8 +435,7 @@ final class GitGraphGeometryUITests: XCTestCase {
         let locations = try fixture.git(["worktree", "list", "--porcelain"])
         XCTAssertEqual(String(decoding: locations, as: UTF8.self)
             .components(separatedBy: "branch refs/heads/topic/menu").count - 1, 2)
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let window = app.windows.firstMatch
         let overflow = app.menuButtons.matching(NSPredicate(
@@ -520,8 +516,7 @@ final class GitGraphGeometryUITests: XCTestCase {
         }
         let references = try fixture.git(["for-each-ref", "--format=%(refname)"])
         XCTAssertEqual(references.split(separator: 0x0A).count, 34)
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let overflow = app.menuButtons.matching(NSPredicate(
             format: "title CONTAINS %@ AND title CONTAINS %@", "remote-0/main", "remote-32/main"))
@@ -588,8 +583,7 @@ final class GitGraphGeometryUITests: XCTestCase {
         try fixture.git(["worktree", "add", "-q", "--detach", second.path, tip])
         XCTAssertTrue(try fixture.git(["for-each-ref", "--contains", tip]).isEmpty)
         let before = try fixture.git(["worktree", "list", "--porcelain"])
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let window = app.windows.firstMatch
         let badge = app.buttons.matching(NSPredicate(

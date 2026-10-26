@@ -1110,8 +1110,7 @@ final class GitGraphUITests: XCTestCase {
         precondition(root.hasPrefix(temporary + "/Bailey-UITest-"),
                      "Git Graph tests may only access an isolated fixture")
         let app = try WorkspaceUITestSupport.launch(
-            in: self, language: language, configurationHome: configurationHome)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+            in: self, language: language, configurationHome: configurationHome, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.git", in: app)
             .waitForExistence(timeout: 20))

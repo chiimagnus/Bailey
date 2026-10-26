@@ -10,8 +10,7 @@ final class GitChangesUITests: XCTestCase {
         try fixture.initializeGit()
         try "first new\n".write(to: first, atomically: true, encoding: .utf8)
         try "second new\n".write(to: second, atomically: true, encoding: .utf8)
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let window = app.windows.firstMatch
         let firstRow = WorkspaceUITestSupport.fileRow(first, in: window, relativeTo: fixture.root)
@@ -41,8 +40,7 @@ final class GitChangesUITests: XCTestCase {
         try fixture.git(["add", "--", "index-side.txt"])
         try "WORKTREE contents\n".write(to: file, atomically: true, encoding: .utf8)
 
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let window = app.windows.firstMatch
         let rows = window.descendants(matching: .any)
@@ -92,8 +90,7 @@ final class GitChangesUITests: XCTestCase {
         let file = try fixture.file("only-committed.txt", text: "committed\n")
         try fixture.initializeGit()
         let head = try fixture.git(["rev-parse", "HEAD"])
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.git", in: app)
             .waitForExistence(timeout: 20))
@@ -121,8 +118,7 @@ final class GitChangesUITests: XCTestCase {
         let head = try fixture.git(["rev-parse", "HEAD"])
         try "alpha new\n".write(to: alpha, atomically: true, encoding: .utf8)
         try "beta new\n".write(to: beta, atomically: true, encoding: .utf8)
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let window = app.windows.firstMatch
         let folder = window.descendants(matching: .any)
@@ -168,8 +164,7 @@ final class GitChangesUITests: XCTestCase {
         let head = try fixture.git(["rev-parse", "HEAD"])
         try "alpha new\n".write(to: first, atomically: true, encoding: .utf8)
         try "beta new\n".write(to: second, atomically: true, encoding: .utf8)
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.git", in: app)
             .waitForExistence(timeout: 20))
@@ -210,8 +205,7 @@ final class GitChangesUITests: XCTestCase {
         let headA = try firstFixture.git(["rev-parse", "HEAD"])
         let headB = try secondFixture.git(["rev-parse", "HEAD"])
 
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(firstFixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: firstFixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let window = app.windows.firstMatch
         let firstRow = WorkspaceUITestSupport.fileRow(first, in: window,
@@ -243,8 +237,7 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath:
             fixture.root.appendingPathComponent(".git").path))
 
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.git", in: app)
             .waitForExistence(timeout: 20))
@@ -267,8 +260,7 @@ final class GitChangesUITests: XCTestCase {
         try fixture.initializeGit()
         let headBefore = try fixture.git(["rev-parse", "HEAD"])
 
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.git", in: app)
             .waitForExistence(timeout: 20))
@@ -306,8 +298,7 @@ final class GitChangesUITests: XCTestCase {
         let intent = try fixture.file("intent-added.txt", text: "index intent\n")
         try fixture.git(["add", "-N", "--", "intent-added.txt"])
 
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.git", in: app)
             .waitForExistence(timeout: 20))
@@ -379,8 +370,7 @@ final class GitChangesUITests: XCTestCase {
         let conflictBytes = try Data(contentsOf: file)
         XCTAssertTrue(String(decoding: conflictBytes, as: UTF8.self).contains("<<<<<<<"))
 
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let window = app.windows.firstMatch
         let row = WorkspaceUITestSupport.fileRow(file, in: window, relativeTo: fixture.root)
@@ -421,8 +411,7 @@ final class GitChangesUITests: XCTestCase {
         try "B new\n".write(to: insideB, atomically: true, encoding: .utf8)
         try "C new\n".write(to: outside, atomically: true, encoding: .utf8)
 
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let window = app.windows.firstMatch
         let folder = window.descendants(matching: .any)
@@ -477,8 +466,7 @@ final class GitChangesUITests: XCTestCase {
         try "B changed\n".write(to: second, atomically: true, encoding: .utf8)
         try "C changed\n".write(to: sibling, atomically: true, encoding: .utf8)
 
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.git", in: app)
             .waitForExistence(timeout: 20))
@@ -531,8 +519,7 @@ final class GitChangesUITests: XCTestCase {
         let headBefore = try fixture.git(["rev-parse", "HEAD"])
         try "new worktree version\n".write(to: file, atomically: true, encoding: .utf8)
 
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.git", in: app)
             .waitForExistence(timeout: 20))

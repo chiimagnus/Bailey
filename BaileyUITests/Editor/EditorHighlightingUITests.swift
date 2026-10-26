@@ -8,9 +8,7 @@ final class EditorHighlightingUITests: XCTestCase {
         let source = "func greeting() -> Int {\n    let count = 42 // 中文 👋\n    return count\n}\n"
         let plain = try fixture.file("a-plain.txt", text: source)
         let swift = try fixture.file("b-highlight.swift", text: source)
-        let app = try WorkspaceUITestSupport.launch(in: self)
-
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         let window = app.windows.firstMatch
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 15))

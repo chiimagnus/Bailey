@@ -9,8 +9,7 @@ final class SharedTreeUITests: XCTestCase {
         let another = try fixture.file("root-file.swift", text: "untouched\n")
         try fixture.initializeGit()
         let head = try fixture.git(["rev-parse", "HEAD"])
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let folder = window.descendants(matching: .any)
@@ -57,8 +56,9 @@ final class SharedTreeUITests: XCTestCase {
             }
         }
 
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root
+        )
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let first = WorkspaceUITestSupport.fileRow(original, in: window)
@@ -83,8 +83,7 @@ final class SharedTreeUITests: XCTestCase {
     func testCompactFoldersContextMenuCreatesInEachClickedPathComponent() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let nested = try fixture.file("a1/b1/c1/existing.swift", text: "existing\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
 
@@ -145,8 +144,7 @@ final class SharedTreeUITests: XCTestCase {
         }
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("a1/b1/c1/leaf.swift", text: "leaf\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         func folder(_ label: String) -> XCUIElement {
@@ -194,8 +192,7 @@ final class SharedTreeUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         let nested = try fixture.file("folder/target.swift", text: "correct file\n")
         let unrelated = try fixture.file("unrelated.swift", text: "never opened\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let folder = window.descendants(matching: .any)
@@ -235,8 +232,7 @@ final class SharedTreeUITests: XCTestCase {
         let longName = String(repeating: "wide-", count: 12) + "target.swift"
         let longFile = try fixture.file(longName, text: "long name contents\n")
         let shortFile = try fixture.file("tiny.swift", text: "short name contents\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let longRow = WorkspaceUITestSupport.fileRow(longFile, in: window)
@@ -294,8 +290,7 @@ final class SharedTreeUITests: XCTestCase {
         let home = try WorkspaceUITestFixture(in: self)
         _ = try home.file(".config/bailey-dev/config.toml",
             text: "theme = \"dark\"\npanel.font-size = 18\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, configurationHome: home.root)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, configurationHome: home.root, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let window = app.windows.firstMatch
         let row = WorkspaceUITestSupport.fileRow(modified, in: window, relativeTo: fixture.root)
@@ -345,8 +340,7 @@ final class SharedTreeUITests: XCTestCase {
         let home = try WorkspaceUITestFixture(in: self)
         _ = try home.file(".config/bailey-dev/config.toml",
             text: "theme = \"dark\"\npanel.font-size = 18\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, configurationHome: home.root)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, configurationHome: home.root, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let window = app.windows.firstMatch
         let folder = window.descendants(matching: .any)
@@ -395,8 +389,7 @@ final class SharedTreeUITests: XCTestCase {
         let home = try WorkspaceUITestFixture(in: self)
         _ = try home.file(".config/bailey-dev/config.toml",
             text: "theme = \"\(appearance)\"\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, configurationHome: home.root)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, configurationHome: home.root, project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let first = WorkspaceUITestSupport.fileRow(alpha, in: window)
@@ -443,8 +436,7 @@ final class SharedTreeUITests: XCTestCase {
     func testRealOpenFileMenuHasSingleItemAndCommandOUsesNativePicker() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("menu-target.swift", text: "menu target bytes\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         let fileMenu = app.menuBars.menuBarItems.matching(NSPredicate(
             format: "title IN %@", ["File", "文件"])).firstMatch
         XCTAssertTrue(fileMenu.waitForExistence(timeout: 10))

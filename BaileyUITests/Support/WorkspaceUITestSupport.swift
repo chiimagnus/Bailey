@@ -10,7 +10,8 @@ enum WorkspaceUITestSupport {
         let home: URL
         let language: String?
         let usesFixtureHome: Bool
-        var isReadyForReuse = false
+        let owner: ObjectIdentifier
+        let project: URL?
     }
 
     private static var session: Session?
@@ -18,66 +19,62 @@ enum WorkspaceUITestSupport {
     private static var observing = false
 
     static func launch(
-        in test: XCTestCase, language: String? = nil, configurationHome: URL? = nil
+        in test: XCTestCase, language: String? = nil,
+        configurationHome: URL? = nil, project: URL? = nil
     ) throws -> XCUIApplication {
         if !observing {
             XCTestObservationCenter.shared.addTestObserver(observer)
             observing = true
         }
 
-        let app: XCUIApplication
-        let needsLaunch: Bool
-        if let current = session,
-           configurationHome == nil, !current.usesFixtureHome, current.language == language,
-           current.app.state != .notRunning,
-           (current.isReadyForReuse || resetWorkspace(current.app)) {
-            app = current.app
-            needsLaunch = false
-        } else {
-            finishSession()
-            app = XCUIApplication(bundleIdentifier: "chiimagnus.bailey.dev")
-            guard app.state == .notRunning else {
-                throw NSError(domain: "BaileyUITestLaunch", code: 1, userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "An unowned Bailey Dev is already running; tests cannot attach to it"
-                ])
-            }
-            let home: URL
-            if let configurationHome {
-                home = configurationHome
-            } else {
-                home = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("Bailey-UITest-Shared-" + UUID().uuidString)
-                try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-            }
-            precondition(home.standardizedFileURL.path.hasPrefix(
-                FileManager.default.temporaryDirectory.standardizedFileURL.path + "/Bailey-UITest-"
-            ), "UI configuration must belong to an isolated fixture")
-            // Keep one test-only HOME across ordinary methods; custom configurations
-            // and language changes still need a distinct process.
-            app.launchArguments = ["--isolated-ui-test"]
-            if let language { app.launchArguments += ["-AppleLanguages", "(\(language))"] }
-            app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
-            app.launchEnvironment["CFFIXED_USER_HOME"] = home.path
-            app.launchEnvironment["HOME"] = home.path
-            session = Session(app: app, home: home, language: language,
-                              usesFixtureHome: configurationHome != nil)
-            needsLaunch = true
+        let owner = ObjectIdentifier(test)
+        let project = project?.standardizedFileURL
+        if let current = session, current.owner == owner,
+           current.language == language, current.project == project,
+           current.usesFixtureHome == (configurationHome != nil),
+           (configurationHome == nil || current.home == configurationHome),
+           current.app.state != .notRunning {
+            return current.app
         }
 
-        session?.isReadyForReuse = false
+        finishSession()
+        let app = XCUIApplication(bundleIdentifier: "chiimagnus.bailey.dev")
+        guard app.state == .notRunning else {
+            throw NSError(domain: "BaileyUITestLaunch", code: 1, userInfo: [
+                NSLocalizedDescriptionKey:
+                    "An unowned Bailey Dev is already running; tests cannot attach to it"
+            ])
+        }
+        let home: URL
+        if let configurationHome {
+            home = configurationHome
+        } else {
+            home = FileManager.default.temporaryDirectory
+                .appendingPathComponent("Bailey-UITest-Shared-" + UUID().uuidString)
+            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        }
+        precondition(home.standardizedFileURL.path.hasPrefix(
+            FileManager.default.temporaryDirectory.standardizedFileURL.path + "/Bailey-UITest-"
+        ), "UI configuration must belong to an isolated fixture")
+        app.launchArguments = ["--isolated-ui-test"]
+        if let language { app.launchArguments += ["-AppleLanguages", "(\(language))"] }
+        app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
+        if let project {
+            precondition(project.path.hasPrefix(
+                FileManager.default.temporaryDirectory.standardizedFileURL.path
+                    + "/Bailey-UITest-"), "Only a test-owned directory may be preloaded")
+            app.launchEnvironment["BAILEY_UI_TEST_PROJECT"] = project.path
+        }
+        app.launchEnvironment["CFFIXED_USER_HOME"] = home.path
+        app.launchEnvironment["HOME"] = home.path
+        session = Session(app: app, home: home, language: language,
+                          usesFixtureHome: configurationHome != nil,
+                          owner: owner, project: project)
         let previousInput = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
         let unicodeHexWasEnabled = inputSource(id: "com.apple.keylayout.UnicodeHexInput") != nil
         let originalClipboard = try clipboardItems()
         test.addTeardownBlock { @MainActor in
-            if let active = session, active.app === app {
-                if active.usesFixtureHome || app.state == .notRunning {
-                    finishSession()
-                } else if !active.isReadyForReuse {
-                    if resetWorkspace(app) { session?.isReadyForReuse = true }
-                    else { finishSession() }
-                }
-            }
+            if let active = session, active.app === app { finishSession() }
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             if !originalClipboard.isEmpty {
@@ -91,20 +88,23 @@ enum WorkspaceUITestSupport {
                                "UI typing must not leave Unicode Hex Input enabled")
             }
         }
-        if needsLaunch { app.launch() }
+        app.launch()
         app.activate()
         XCTAssertEqual(app.state, .runningForeground,
                        "Only Bailey Dev may receive keyboard actions from UI tests")
-        // XCUITest can launch macOS without a WindowGroup scene.
-        if !app.windows.firstMatch.waitForExistence(timeout: 4) {
-            let newWindow = app.menuItems.matching(NSPredicate(
-                format: "title IN %@", ["New Window", "新建窗口"])).firstMatch
-            XCTAssertTrue(newWindow.waitForExistence(timeout: 8),
-                          "Bailey Dev must expose the native New Window command")
-            newWindow.click()
+        // Some Xcode sessions do not create the initial WindowGroup scene.
+        if !app.windows.firstMatch.waitForExistence(timeout: 1) {
+            app.typeKey("n", modifierFlags: [.command, .shift])
         }
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
-        let home = try XCTUnwrap(session?.home)
+        if project != nil {
+            let files = element("bailey.dock.files", in: app)
+            guard files.waitForExistence(timeout: 15) else {
+                throw NSError(domain: "BaileyUITestLaunch", code: 3, userInfo: [
+                    NSLocalizedDescriptionKey: "The isolated fixture project did not appear"
+                ])
+            }
+        }
         let configuration = home.appendingPathComponent(".config/bailey-dev/config.toml")
         let initialized = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             FileManager.default.fileExists(atPath: configuration.path)
@@ -116,32 +116,6 @@ enum WorkspaceUITestSupport {
         }
         try selectASCIIInputSource()
         return app
-    }
-
-    private static func resetWorkspace(_ app: XCUIApplication) -> Bool {
-        app.activate()
-        guard app.windows.count == 1, !app.sheets.firstMatch.exists else { return false }
-        if app.buttons["bailey.emptyState.addFolder"].exists { return true }
-        let projects = app.buttons["bailey.dock.projects"]
-        guard projects.exists else { return false }
-        projects.click()
-        let rows = app.buttons.matching(identifier: "bailey.project.row")
-        for _ in 0..<40 {
-            let count = rows.count
-            if count == 0 {
-                return app.buttons["bailey.emptyState.addFolder"].waitForExistence(timeout: 3)
-            }
-            rows.firstMatch.rightClick()
-            let close = app.menuItems.matching(NSPredicate(
-                format: "title IN %@", ["Close Project", "关闭项目"])).firstMatch
-            guard close.waitForExistence(timeout: 3) else { return false }
-            close.click()
-            let removed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                rows.count < count
-            }, object: nil)
-            guard XCTWaiter.wait(for: [removed], timeout: 5) == .completed else { return false }
-        }
-        return false
     }
 
     static func finishSession() {

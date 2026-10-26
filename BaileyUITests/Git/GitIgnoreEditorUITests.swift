@@ -10,8 +10,7 @@ final class GitIgnoreEditorUITests: XCTestCase {
         let newFile = try fixture.file("literal*.txt", text: "untracked\n")
         let beforeEdit = "existing-rule\nunsaved-rule"
         let originalHead = try fixture.git(["rev-parse", "HEAD"])
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         let window = app.windows.firstMatch
 
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()

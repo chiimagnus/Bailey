@@ -31,6 +31,13 @@ final class WorkspaceApplication {
     init(loadSavedState: Bool = false) {
         pendingRestores = loadSavedState ? SessionStore.load() : []
         pendingHistories = loadSavedState ? TerminalHistoryStore.load() : [:]
+        if BaileyInstanceMode.isIsolated,
+           let path = ProcessInfo.processInfo.environment["BAILEY_UI_TEST_PROJECT"],
+           URL(fileURLWithPath: path).standardizedFileURL.pathComponents.contains(
+               where: { $0.hasPrefix("Bailey-UITest-") }
+           ) {
+            pendingDirectories = [path]
+        }
     }
 
     func connectServices() {

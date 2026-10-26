@@ -6,8 +6,7 @@ final class WorkspaceLocalFileEventsUITests: XCTestCase {
     func testRealLocalFilesRefreshAndCatchUpWhenPanelIsHidden() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("first.swift", text: "original content\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 15))
         files.click()

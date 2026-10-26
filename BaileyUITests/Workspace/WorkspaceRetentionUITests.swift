@@ -60,9 +60,9 @@ final class WorkspaceRetentionUITests: XCTestCase {
         let folder = file.deletingLastPathComponent()
         let original = try Data(contentsOf: file)
         let app = try WorkspaceUITestSupport.launch(
-            in: self, language: "en", configurationHome: fixture.root
+            in: self, language: "en", configurationHome: fixture.root,
+            project: folder
         )
-        try WorkspaceUITestSupport.addFolder(folder, to: app)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let owner = app.windows.firstMatch
         let row = WorkspaceUITestSupport.fileRow(file, in: owner)
@@ -137,8 +137,7 @@ final class WorkspaceRetentionUITests: XCTestCase {
     func testRealBrowserKeepsWebContentAcrossFileTabSwitches() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("project/neighbor.swift", text: "let untouched = true\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(file.deletingLastPathComponent(), to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: file.deletingLastPathComponent())
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let row = WorkspaceUITestSupport.fileRow(file, in: window)
@@ -192,8 +191,7 @@ final class WorkspaceRetentionUITests: XCTestCase {
         let file = try fixture.file("workspace/neighbor.swift", text: "let terminalUntouched = true\n")
         let beforePID = fixture.root.appendingPathComponent("terminal-before.pid")
         let afterPID = fixture.root.appendingPathComponent("terminal-after.pid")
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(file.deletingLastPathComponent(), to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: file.deletingLastPathComponent())
         let window = app.windows.firstMatch
 
         app.typeKey("t", modifierFlags: .command)
@@ -239,8 +237,7 @@ final class WorkspaceRetentionUITests: XCTestCase {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("upload/with space.txt", text: "native WebKit upload bytes\n")
         let initialBytes = try Data(contentsOf: file)
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(file.deletingLastPathComponent(), to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: file.deletingLastPathComponent())
         let window = app.windows.firstMatch
         let newBrowser = app.menuItems["New Browser Tab"]
         XCTAssertTrue(newBrowser.waitForExistence(timeout: 10))
@@ -292,8 +289,7 @@ final class WorkspaceRetentionUITests: XCTestCase {
         let file = try fixture.file("drag-source/with space.txt", text: "temporary finder source\n")
         let marker = fixture.root.appendingPathComponent("terminal-drop-marker.txt")
         let originalBytes = try Data(contentsOf: file)
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(file.deletingLastPathComponent(), to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: file.deletingLastPathComponent())
         let window = app.windows.firstMatch
         app.typeKey("t", modifierFlags: .command)
         let terminal = window.coordinate(withNormalizedOffset: CGVector(dx: 0.57, dy: 0.64))

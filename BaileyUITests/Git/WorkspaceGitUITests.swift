@@ -30,9 +30,7 @@ final class WorkspaceGitUITests: XCTestCase {
         XCTAssertEqual(try other.git(["rev-parse", "HEAD"]), otherHead,
                        "The unrelated repository must not be changed by fixture setup")
         try "let saved = 2\n".write(to: changed, atomically: true, encoding: .utf8)
-        let app = try WorkspaceUITestSupport.launch(in: self)
-
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
         XCTAssertTrue(git.waitForExistence(timeout: 20))
@@ -56,8 +54,7 @@ final class WorkspaceGitUITests: XCTestCase {
         let original = "let value = 2\n"
         let updated = "let value = 3 // 中文 👋\n"
         try original.write(to: file, atomically: true, encoding: .utf8)
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
 
         let window = app.windows.firstMatch
         app.typeKey("g", modifierFlags: [.command, .shift])

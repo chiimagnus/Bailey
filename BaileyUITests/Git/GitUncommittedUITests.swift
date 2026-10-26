@@ -13,8 +13,8 @@ final class GitUncommittedUITests: XCTestCase {
         try fixture.git(["add", "--", "tracked.txt"])
         try "worktree bytes\n".write(to: tracked, atomically: true, encoding: .utf8)
         let untracked = try fixture.file("kept-untracked.txt", text: "keep this file\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try showGit(fixture, in: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        showGit(in: app)
 
         func resetDialog() throws -> XCUIElement {
             try presentDialog(named: ["Reset…", "复位…"], app: app)
@@ -75,8 +75,8 @@ final class GitUncommittedUITests: XCTestCase {
         let originalHead = try fixture.git(["rev-parse", "HEAD"])
         try "edited\n".write(to: tracked, atomically: true, encoding: .utf8)
         let untracked = try fixture.file("new.txt", text: "untracked\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try showGit(fixture, in: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        showGit(in: app)
 
         let first = try presentDialog(named: ["Stash…", "储藏…"], app: app)
         let cancel = first.buttons.matching(NSPredicate(
@@ -123,8 +123,8 @@ final class GitUncommittedUITests: XCTestCase {
         let untracked = try fixture.file("untracked.txt", text: "remove only on approval\n")
         let nested = try fixture.file("untracked-dir/nested.txt", text: "remove this directory\n")
         let ignored = try fixture.file("retained.ignore", text: "must never delete\n")
-        let app = try WorkspaceUITestSupport.launch(in: self)
-        try showGit(fixture, in: app)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        showGit(in: app)
 
         let first = try presentDialog(named: ["Clean…", "清理…"], app: app)
         XCTAssertTrue(first.staticTexts.matching(NSPredicate(
@@ -177,8 +177,7 @@ final class GitUncommittedUITests: XCTestCase {
         }
     }
 
-    private func showGit(_ fixture: WorkspaceUITestFixture, in app: XCUIApplication) throws {
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+    private func showGit(in app: XCUIApplication) {
         app.typeKey("g", modifierFlags: [.command, .shift])
         XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.git", in: app)
             .waitForExistence(timeout: 20))
