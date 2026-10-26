@@ -101,8 +101,7 @@ private struct BaileyCommands: Commands {
             return String(localized: "Close Window", table: "Interface")
         }
         switch project.dock.activeGroup?.selected {
-        case .tab?: return String(localized: "Close Tab", table: "Interface")
-        case .projects?, .files?, .git?:
+        case .tab?, .projects?, .files?, .git?:
             return String(localized: "Close Panel", table: "Interface")
         case nil:
             return project.tabs.isEmpty
@@ -116,48 +115,8 @@ private struct BaileyCommands: Commands {
             openWindow(id: "main")
         }
 
-        CommandGroup(replacing: .newItem) {
-            Button(String(localized: "New File…", table: "Sidebar")) {
-                Task { await manager?.newFile() }
-            }
-            .keyboardShortcut("n", modifiers: .command)
-            .disabled(manager?.selectedProject?.panelContext == nil)
-
-            Button(String(localized: "New Folder…", table: "Sidebar")) {
-                Task { await manager?.newFolder() }
-            }
-            .keyboardShortcut("n", modifiers: [.command, .option])
-            .disabled(manager?.selectedProject?.panelContext == nil)
-
-            Divider()
-
-            Button(String(localized: "Open File…", table: "Interface")) {
-                manager?.chooseFiles()
-            }
-            .keyboardShortcut("o", modifiers: .command)
-            .disabled(manager?.selectedProject == nil)
-
-        }
-
-        CommandGroup(replacing: .saveItem) {
-            Button(String(localized: "Save", table: "Interface")) {
-                manager?.saveSelectedFile()
-            }
-            .keyboardShortcut("s", modifiers: .command)
-            .disabled(manager?.canSaveSelectedFile != true)
-
-            Divider()
-
-            Button(closeMenuTitle) {
-                if let manager, let project = manager.selectedProject,
-                   project.dock.activeGroup?.selected != nil || project.tabs.isEmpty {
-                    manager.closeSelectedTab()
-                } else {
-                    NSApp.keyWindow?.performClose(nil)
-                }
-            }
-            .keyboardShortcut("w", modifiers: .command)
-        }
+        CommandGroup(replacing: .newItem) {}
+        CommandGroup(replacing: .saveItem) {}
 
         CommandGroup(after: .pasteboard) {
             // Find follows the active dock content, not the find bar's first responder.
@@ -208,20 +167,6 @@ private struct BaileyCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Next Panel", table: "Interface")) {
-                manager?.selectNextPanel()
-            }
-            .keyboardShortcut("]", modifiers: [.command, .shift])
-            .disabled((manager?.selectedProject?.dock.panelOrder.count ?? 0) < 2)
-
-            Button(String(localized: "Previous Panel", table: "Interface")) {
-                manager?.selectPreviousPanel()
-            }
-            .keyboardShortcut("[", modifiers: [.command, .shift])
-            .disabled((manager?.selectedProject?.dock.panelOrder.count ?? 0) < 2)
-
-            Divider()
-
             Button(String(localized: "Projects", table: "Interface")) {
                 manager?.showPanel(.projects)
             }
@@ -238,6 +183,30 @@ private struct BaileyCommands: Commands {
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
+
+            Divider()
+
+            Button(String(localized: "Next Panel", table: "Interface")) {
+                manager?.selectNextPanel()
+            }
+            .keyboardShortcut("]", modifiers: [.command, .shift])
+            .disabled((manager?.selectedProject?.dock.panelOrder.count ?? 0) < 2)
+
+            Button(String(localized: "Previous Panel", table: "Interface")) {
+                manager?.selectPreviousPanel()
+            }
+            .keyboardShortcut("[", modifiers: [.command, .shift])
+            .disabled((manager?.selectedProject?.dock.panelOrder.count ?? 0) < 2)
+
+            Button(closeMenuTitle) {
+                if let manager, let project = manager.selectedProject,
+                   project.dock.activeGroup?.selected != nil || project.tabs.isEmpty {
+                    manager.closeSelectedTab()
+                } else {
+                    NSApp.keyWindow?.performClose(nil)
+                }
+            }
+            .keyboardShortcut("w", modifiers: .command)
 
             if manager?.selectedProject?.tabs.isEmpty == false {
                 Divider()
@@ -297,6 +266,36 @@ private struct BaileyCommands: Commands {
                     .keyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .command)
                 }
             }
+        }
+
+        CommandMenu(String(localized: "File", table: "Interface")) {
+            Button(String(localized: "New File…", table: "Sidebar")) {
+                Task { await manager?.newFile() }
+            }
+            .keyboardShortcut("n", modifiers: .command)
+            .disabled(manager?.selectedProject?.panelContext == nil)
+
+            Button(String(localized: "New Folder…", table: "Sidebar")) {
+                Task { await manager?.newFolder() }
+            }
+            .keyboardShortcut("n", modifiers: [.command, .option])
+            .disabled(manager?.selectedProject?.panelContext == nil)
+
+            Divider()
+
+            Button(String(localized: "Open File…", table: "Interface")) {
+                manager?.chooseFiles()
+            }
+            .keyboardShortcut("o", modifiers: .command)
+            .disabled(manager?.selectedProject == nil)
+
+            Divider()
+
+            Button(String(localized: "Save", table: "Interface")) {
+                manager?.saveSelectedFile()
+            }
+            .keyboardShortcut("s", modifiers: .command)
+            .disabled(manager?.canSaveSelectedFile != true)
         }
 
         CommandMenu(String(localized: "Terminal", table: "Terminal")) {

@@ -289,6 +289,16 @@
         }
       }
     },
+    "File" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件"
+          }
+        }
+      }
+    },
     "Find" : {
       "localizations" : {
         "zh-Hans" : {
