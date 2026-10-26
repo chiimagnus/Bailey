@@ -13,19 +13,12 @@ class NativeCodeTextView: NSTextView {
     override var undoManager: UndoManager? { documentUndoManager }
     var text: String? {
         get { string }
-        set {
-            let content = newValue ?? ""
-            string = content
-            resetDocumentIndex(content)
-        }
+        set { string = newValue ?? "" }
     }
 
     var attributedText: NSAttributedString {
         get { textStorage ?? NSAttributedString(string: string) }
-        set {
-            textStorage?.setAttributedString(newValue)
-            resetDocumentIndex(newValue.string)
-        }
+        set { textStorage?.setAttributedString(newValue) }
     }
 
     var textSelection: NSRange {
