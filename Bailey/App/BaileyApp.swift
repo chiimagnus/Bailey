@@ -204,6 +204,18 @@ private struct BaileyCommands: Commands {
             .keyboardShortcut("[", modifiers: [.command, .shift])
             .disabled((manager?.selectedProject?.dock.tabOrder.count ?? 0) < 2)
 
+            Button(String(localized: "Switch Recent Panel", table: "Interface")) {
+                if let manager { manager.tabSwitcher.cycle(in: manager, reverse: false) }
+            }
+            .keyboardShortcut(.tab, modifiers: .control)
+            .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
+
+            Button(String(localized: "Switch Recent Panel Backward", table: "Interface")) {
+                if let manager { manager.tabSwitcher.cycle(in: manager, reverse: true) }
+            }
+            .keyboardShortcut(.tab, modifiers: [.control, .shift])
+            .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
+
             Button(String(localized: "Close Panel", table: "Interface")) {
                 if let manager, let project = manager.selectedProject,
                    project.dock.activeGroup?.selected != nil || project.tabs.isEmpty {

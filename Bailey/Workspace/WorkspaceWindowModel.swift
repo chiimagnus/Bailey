@@ -51,6 +51,7 @@ final class WorkspaceWindowModel {
         }
     }
     private(set) var isCommandPaletteVisible = false
+    let tabSwitcher = TabSwitcherController()
 
     @ObservationIgnored private var projectCounter = 0
     @ObservationIgnored private var isInitialized = false
@@ -1093,6 +1094,7 @@ final class WorkspaceWindowModel {
     func windowClosed() {
         guard !didCloseWindow else { return }
         didCloseWindow = true
+        tabSwitcher.cancel()
         windowCloseObservation = nil
         window = nil
         application.windowClosed(self)

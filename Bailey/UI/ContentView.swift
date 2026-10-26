@@ -7,7 +7,7 @@ struct ContentView: View {
     private let themeChanges = Theme.changes
     let manager: WorkspaceWindowModel
     @Environment(\.colorScheme) private var colorScheme
-    @State private var tabSwitcher = TabSwitcherController()
+    private var tabSwitcher: TabSwitcherController { manager.tabSwitcher }
     @State private var git = GitStatusModel()
 
     /// Every terminal in the selected project can change the same repository.
@@ -56,7 +56,7 @@ struct ContentView: View {
             }
         }
         .background {
-            TabSwitcherEventMonitor(manager: manager, controller: tabSwitcher)
+            TabSwitcherEventMonitor(controller: tabSwitcher)
                 .frame(width: 0, height: 0)
         }
         .background(WindowChromeAccessor(

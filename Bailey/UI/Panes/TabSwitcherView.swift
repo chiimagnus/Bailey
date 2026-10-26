@@ -2,8 +2,8 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// Owns the press-and-hold Ctrl-Tab interaction for one window. Repeated Tab
-/// presses move only the highlighted card; the project's real selection stays
+/// Owns the press-and-hold Ctrl-Tab preview for one window. Panel menu
+/// commands move only the highlighted card; the project's real selection stays
 /// untouched until Control is released. Escape cancels the provisional choice.
 @MainActor
 @Observable
@@ -23,7 +23,7 @@ final class TabSwitcherController {
     @ObservationIgnored private var acceptsPointerHighlight = false
 
     /// Returns nil for an event consumed by the switcher.
-    func handle(_ event: NSEvent, manager: WorkspaceWindowModel) -> NSEvent? {
+    func handle(_ event: NSEvent) -> NSEvent? {
         switch event.type {
         case .mouseMoved:
             // AppKit sends mouseEntered when a tracking area is created under
@@ -56,23 +56,7 @@ final class TabSwitcherController {
                 cancel()
                 return nil
             }
-
-            guard event.keyCode == 48 else { return event }
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            guard flags.contains(.control),
-                  flags.isDisjoint(with: [.command, .option])
-            else {
-                // Do not let a missed key-up from an interrupted switcher
-                // consume a later ordinary Tab press.
-                isConsumingTabKey = false
-                return event
-            }
-
-            guard cycle(in: manager, reverse: flags.contains(.shift)) else {
-                return event
-            }
-            isConsumingTabKey = true
-            return nil
+            return event
 
         default:
             return event
@@ -132,11 +116,14 @@ final class TabSwitcherController {
         return ordered.isEmpty ? project.tabs : ordered
     }
 
-    private func cycle(in manager: WorkspaceWindowModel, reverse: Bool) -> Bool {
-        guard let project = manager.selectedProject,
+    @discardableResult
+    func cycle(in manager: WorkspaceWindowModel, reverse: Bool) -> Bool {
+        guard !manager.isClosed,
+              let project = manager.selectedProject,
               project.tabs.count > 1,
               let selectedID = project.selectedTabID
         else { return false }
+        isConsumingTabKey = true
 
         if !isPresented || activeProject !== project {
             previewTask?.cancel()
@@ -198,22 +185,18 @@ final class TabSwitcherController {
     }
 }
 
-/// Installs a window-scoped local event monitor. A regular SwiftUI
-/// `keyboardShortcut` cannot observe the Control key being released, which is
-/// the gesture that commits a Cmd-Tab-style switch.
+/// Only observes modifier release and dismissal for the window's menu-driven
+/// Control-Tab switcher. Native menus own the shortcut's key-down event.
 struct TabSwitcherEventMonitor: NSViewRepresentable {
-    let manager: WorkspaceWindowModel
     let controller: TabSwitcherController
 
     func makeNSView(context: Context) -> TabSwitcherMonitorView {
         let view = TabSwitcherMonitorView()
-        view.manager = manager
         view.controller = controller
         return view
     }
 
     func updateNSView(_ view: TabSwitcherMonitorView, context: Context) {
-        view.manager = manager
         view.controller = controller
     }
 
@@ -226,7 +209,6 @@ struct TabSwitcherEventMonitor: NSViewRepresentable {
 
 @MainActor
 final class TabSwitcherMonitorView: NSView {
-    weak var manager: WorkspaceWindowModel?
     weak var controller: TabSwitcherController?
 
     private var eventMonitor: Any?
@@ -248,12 +230,11 @@ final class TabSwitcherMonitorView: NSView {
                 guard let self,
                       let window,
                       window.isKeyWindow,
-                      let manager = self.manager,
                       let controller = self.controller,
                       let event = input.value
                 else { return input }
                 return MainThreadEvent(
-                    controller.handle(event, manager: manager)
+                    controller.handle(event)
                 )
             }
             return output.value

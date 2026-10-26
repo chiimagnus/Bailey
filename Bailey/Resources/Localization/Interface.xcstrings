@@ -642,6 +642,26 @@
         }
       }
     },
+    "Switch Recent Panel" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换最近面板"
+          }
+        }
+      }
+    },
+    "Switch Recent Panel Backward" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "反向切换最近面板"
+          }
+        }
+      }
+    },
     "Switch to Project: %@" : {
       "localizations" : {
         "zh-Hans" : {

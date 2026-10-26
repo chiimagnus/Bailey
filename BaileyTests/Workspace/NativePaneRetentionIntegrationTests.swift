@@ -279,7 +279,7 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         let tabs = (0..<3).map { _ in PaneTab(content: .browser(BrowserTab(initialFocus: .none))) }
         tabs.forEach(project.append)
         XCTAssertEqual(project.selectedTabID, tabs[2].id)
-        let switcher = TabSwitcherController()
+        let switcher = manager.tabSwitcher
 
         func key(_ type: NSEvent.EventType, _ keyCode: UInt16, _ flags: NSEvent.ModifierFlags) throws -> NSEvent {
             try XCTUnwrap(NSEvent.keyEvent(
@@ -295,7 +295,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
             previewStarted.fulfill()
         }
         let controlTab = try key(.keyDown, 48, [.control])
-        XCTAssertNil(switcher.handle(controlTab, manager: manager))
+        XCTAssertNotNil(switcher.handle(controlTab), "The Panel menu owns the Control-Tab binding")
+        XCTAssertTrue(switcher.cycle(in: manager, reverse: false))
         await fulfillment(of: [previewStarted], timeout: 1)
         XCTAssertTrue(switcher.isPresented)
         XCTAssertEqual(switcher.orderedTabIDs, [tabs[2].id, tabs[1].id, tabs[0].id])
@@ -305,32 +306,32 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         // A stationary pointer must not replace the keyboard highlight.
         switcher.highlight(tabs[0].id, in: project)
         XCTAssertEqual(switcher.highlightedTabID, tabs[1].id)
-        XCTAssertNil(switcher.handle(controlTab, manager: manager))
+        XCTAssertTrue(switcher.cycle(in: manager, reverse: false))
         XCTAssertEqual(switcher.highlightedTabID, tabs[0].id)
         XCTAssertEqual(project.selectedTabID, tabs[2].id)
 
         let release = try key(.flagsChanged, 59, [])
-        XCTAssertNil(switcher.handle(release, manager: manager))
+        XCTAssertNil(switcher.handle(release))
         XCTAssertFalse(switcher.isPresented)
         XCTAssertEqual(project.selectedTabID, tabs[0].id)
         XCTAssertEqual(switcher.highlightedTabID, nil)
 
         // A reverse cycle can be canceled by Escape without committing.
         let original = project.selectedTabID
-        XCTAssertNil(switcher.handle(try key(.keyDown, 48, [.control, .shift]), manager: manager))
+        XCTAssertTrue(switcher.cycle(in: manager, reverse: true))
         XCTAssertTrue(switcher.isPresented)
         XCTAssertEqual(project.selectedTabID, original)
-        XCTAssertNil(switcher.handle(try key(.keyDown, 53, [.control]), manager: manager))
+        XCTAssertNil(switcher.handle(try key(.keyDown, 53, [.control])))
         XCTAssertFalse(switcher.isPresented)
         XCTAssertEqual(project.selectedTabID, original)
-        XCTAssertNotNil(switcher.handle(release, manager: manager))
+        XCTAssertNotNil(switcher.handle(release))
 
         // Closing a candidate during preview cannot select a removed tab.
-        XCTAssertNil(switcher.handle(controlTab, manager: manager))
+        XCTAssertTrue(switcher.cycle(in: manager, reverse: false))
         let candidate = try XCTUnwrap(switcher.highlightedTabID)
         let closing = try XCTUnwrap(project.tabs.first { $0.id == candidate })
         project.close(closing)
-        XCTAssertNil(switcher.handle(release, manager: manager))
+        XCTAssertNil(switcher.handle(release))
         XCTAssertNotEqual(project.selectedTabID, candidate)
         XCTAssertTrue(project.tabs.contains { $0.id == project.selectedTabID })
     }
