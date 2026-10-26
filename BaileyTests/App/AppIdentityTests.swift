@@ -102,6 +102,10 @@ final class AppIdentityTests: XCTestCase {
         let menu = NSHostingMenu(rootView: VStack {
             Button(action: {}) { Text(verbatim: "Copy\t⌘C") }
             Button(action: {}) { Text(verbatim: "Paste\t⌘V") }
+            Button(action: {}) { Text(verbatim: "Close Panel\t⌘W") }
+                .accessibilityLabel("Close Panel")
+            Button(action: {}) { Text(verbatim: "Close\t⌘W") }
+                .accessibilityLabel("Close")
             Button("Other action", action: {})
         })
         menu.update()
@@ -111,6 +115,14 @@ final class AppIdentityTests: XCTestCase {
         XCTAssertEqual(copy.attributedTitle?.string, "Copy\t⌘C",
                        "The menu observer must format shortcuts before the popup opens")
         XCTAssertEqual(paste.attributedTitle?.string, "Paste\t⌘V")
+        let closePanel = try XCTUnwrap(menu.items.dropFirst(2).first)
+        let closeTab = try XCTUnwrap(menu.items.dropFirst(3).first)
+        for (item, name) in [(closePanel, "Close Panel"), (closeTab, "Close")] {
+            XCTAssertEqual(item.attributedTitle?.string, name + "\t⌘W")
+            XCTAssertEqual(item.accessibilityLabel(), name)
+            XCTAssertTrue(item.keyEquivalent.isEmpty,
+                          "A context-menu shortcut hint must not register a second shortcut")
+        }
         XCTAssertEqual(copy.accessibilityLabel(), "Copy")
         XCTAssertEqual(paste.accessibilityLabel(), "Paste")
         let style = try XCTUnwrap(copy.attributedTitle?

@@ -555,11 +555,7 @@ struct DockTabGroupView: View {
                 Button {
                     closeTool(item)
                 } label: {
-                    if isFocused, active == item {
-                        Text(verbatim: closeTitle + "\t⌘W")
-                    } else {
-                        Text(closeTitle)
-                    }
+                    Text(verbatim: closeTitle + "\t⌘W")
                 }
                 .accessibilityLabel(closeTitle)
             }
@@ -692,11 +688,7 @@ struct DockTabGroupView: View {
         Button {
             manager.closePanel(.tab(tabID), in: project)
         } label: {
-            if isFocused, active == .tab(tabID) {
-                Text(verbatim: closeTitle + "\t⌘W")
-            } else {
-                Text(closeTitle)
-            }
+            Text(verbatim: closeTitle + "\t⌘W")
         }
         .accessibilityLabel(closeTitle)
         Button(String(localized: "Close Others", table: "Interface")) {
