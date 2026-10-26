@@ -390,11 +390,6 @@ final class SourceEditorContainer: NSView {
         window.makeFirstResponder(editor)
     }
 
-    override func setFrameSize(_ newSize: NSSize) {
-        super.setFrameSize(newSize)
-        needsLayout = true
-    }
-
     override func layout() {
         super.layout()
         guard scrollView.superview === self, bounds.width > 0, bounds.height > 0 else { return }
