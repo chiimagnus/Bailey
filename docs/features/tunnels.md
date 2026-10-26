@@ -1,6 +1,7 @@
 # 长期 SSH 隧道
 
-长期隧道供浏览器、远程桌面等本机客户端访问远端服务，独立于交互终端。配置、认证、监听及生命周期改变时更新本页。
+长期隧道供浏览器、远程桌面等本机客户端访问远端服务，独立于交互终端。
+配置、认证、监听及生命周期改变时更新本页。
 
 ## Invariants
 
@@ -12,14 +13,19 @@
 
 ## 生命周期与监听
 
-`TunnelManager` 管理启用规则与运行状态，应用启动时启动相应转发，设置提供明确的启停入口。原生列表仍通过必要的 Combine 发布事件更新，不因替换 SwiftUI 观察方式而删除这条桥接。
+`TunnelManager` 管理启用规则与运行状态，应用启动时启动相应转发，设置提供明确的启停入口。
+原生列表仍通过必要的 Combine 发布事件更新，不因替换 SwiftUI 观察方式而删除这条桥接。
 
-向 SSH 请求仅监听回环地址；服务端 `GatewayPorts` 可能改变最终监听范围，因此必须检查实际结果，不能把客户端请求当作服务端保证。
+向 SSH 请求仅监听回环地址；服务端 `GatewayPorts` 可能改变最终监听范围，因此必须检查实际结果，
+不能把客户端请求当作服务端保证。
 
 浏览器只消费配置的本机地址，不拥有隧道。交互式 SSH 文件后端的重连语义另见 [ssh.md](ssh.md)。
 
 ## 验证
 
-`TunnelStoreTests` 验证配置解析、有效规则和异常端口；`RemoteCommandsTests` 检查相关命令与端口边界。真实转发要用专用连接、空闲端口和受控服务检查启停、认证失败、实际监听及连接结果，不能仅以命令构建成功判定隧道正常。
+`TunnelStoreTests` 验证配置解析、有效规则和异常端口；`RemoteCommandsTests` 检查相关命令与端口边界。
+真实转发要用专用连接、空闲端口和受控服务检查启停、认证失败、实际监听及连接结果，
+不能仅以命令构建成功判定隧道正常。
 
-实现入口：[TunnelManager.swift](../../Bailey/Remote/Tunnels/TunnelManager.swift)。安全要求见 [SECURITY.md](../../SECURITY.md)，执行方式见 [testing.md](../testing.md)。
+实现入口：[TunnelManager.swift](../../Bailey/Remote/Tunnels/TunnelManager.swift)。
+安全要求见 [SECURITY.md](../../SECURITY.md)，执行方式见 [testing.md](../testing.md)。
