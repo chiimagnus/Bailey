@@ -96,6 +96,21 @@ private struct BaileyCommands: Commands {
     }
     @Environment(\.openWindow) private var openWindow
 
+    private var closeMenuTitle: String {
+        guard let project = manager?.selectedProject else {
+            return String(localized: "Close Window", table: "Interface")
+        }
+        switch project.dock.activeGroup?.selected {
+        case .tab?: return String(localized: "Close Tab", table: "Interface")
+        case .projects?, .files?, .git?:
+            return String(localized: "Close Panel", table: "Interface")
+        case nil:
+            return project.tabs.isEmpty
+                ? String(localized: "Close Project", table: "Sidebar")
+                : String(localized: "Close Window", table: "Interface")
+        }
+    }
+
     var body: some Commands {
         let _ = application.registerWindowOpener {
             openWindow(id: "main")
@@ -114,22 +129,6 @@ private struct BaileyCommands: Commands {
             .keyboardShortcut("n", modifiers: [.command, .option])
             .disabled(manager?.selectedProject?.panelContext == nil)
 
-            Button(String(localized: "New Terminal", table: "Interface")) {
-                manager?.newSession()
-            }
-            .keyboardShortcut("t", modifiers: .command)
-            .disabled(manager?.selectedProject == nil)
-
-            Button(String(localized: "New Browser Tab", table: "Interface")) {
-                manager?.newBrowserTab()
-            }
-            .disabled(manager?.selectedProject == nil)
-
-            Button(String(localized: "New Window", table: "Interface")) {
-                openWindow(id: "main")
-            }
-            .keyboardShortcut("n", modifiers: [.command, .shift])
-
             Divider()
 
             Button(String(localized: "Open File…", table: "Interface")) {
@@ -137,17 +136,6 @@ private struct BaileyCommands: Commands {
             }
             .keyboardShortcut("o", modifiers: .command)
             .disabled(manager?.selectedProject == nil)
-
-            Button(String(localized: "Add Folder…", table: "Interface")) {
-                manager?.chooseFolders()
-            }
-            .keyboardShortcut("a", modifiers: [.command, .shift])
-            .disabled(manager == nil)
-
-            Button(String(localized: "Add SSH Files or Folders…", table: "Interface")) {
-                manager?.chooseSSHItems()
-            }
-            .disabled(manager == nil)
 
         }
 
@@ -160,12 +148,9 @@ private struct BaileyCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Close Tab", table: "Interface")) {
-                // Cmd-W is app-wide: close a tab only when a main window with
-                // an open project is key. Otherwise close the key window
-                // itself — a non-main window (e.g. Settings), or a main window
-                // showing the empty "No open projects" state with no tab left.
-                if let manager, manager.selectedProject != nil {
+            Button(closeMenuTitle) {
+                if let manager, let project = manager.selectedProject,
+                   project.dock.activeGroup?.selected != nil || project.tabs.isEmpty {
                     manager.closeSelectedTab()
                 } else {
                     NSApp.keyWindow?.performClose(nil)
@@ -175,56 +160,94 @@ private struct BaileyCommands: Commands {
         }
 
         CommandGroup(after: .pasteboard) {
-            // SwiftUI's Edit menu ships no Find submenu, so Bailey owns these
-            // outright. They act on the focused pane — Ghostty's search in a
-            // terminal, NSTextView's find bar in a file editor — rather than on
-            // the first responder, which keeps them live while the find bar's
-            // text field has keyboard focus. ⇧⌘G is already Toggle Git Panel,
-            // so Find Previous is reachable by ⇧↩ in the bar instead.
-            Menu(String(localized: "Find", table: "Interface")) {
-                Button(String(localized: "Find…", table: "Interface")) {
-                    manager?.performFindAction(.show)
-                }
-                .keyboardShortcut("f", modifiers: .command)
-                .disabled(manager?.canFind != true)
+            // Find follows the active dock content, not the find bar's first responder.
+            if manager?.canFind == true {
+                Menu(String(localized: "Find", table: "Interface")) {
+                    Button(String(localized: "Find…", table: "Interface")) {
+                        manager?.performFindAction(.show)
+                    }
+                    .keyboardShortcut("f", modifiers: .command)
 
-                Button(String(localized: "Find and Replace…", table: "Interface")) {
-                    manager?.performFindAction(.replace)
-                }
-                .keyboardShortcut("f", modifiers: [.command, .option])
-                .disabled(manager?.canReplace != true)
+                    Button(String(localized: "Find and Replace…", table: "Interface")) {
+                        manager?.performFindAction(.replace)
+                    }
+                    .keyboardShortcut("f", modifiers: [.command, .option])
+                    .disabled(manager?.canReplace != true)
 
-                Button(String(localized: "Find Next", table: "Interface")) {
-                    manager?.performFindAction(.next)
-                }
-                .keyboardShortcut("g", modifiers: .command)
-                .disabled(manager?.canFind != true)
+                    Button(String(localized: "Find Next", table: "Interface")) {
+                        manager?.performFindAction(.next)
+                    }
+                    .keyboardShortcut("g", modifiers: .command)
 
-                Button(String(localized: "Find Previous", table: "Interface")) {
-                    manager?.performFindAction(.previous)
-                }
-                .disabled(manager?.canFind != true)
+                    Button(String(localized: "Find Previous", table: "Interface")) {
+                        manager?.performFindAction(.previous)
+                    }
 
-                Button(String(localized: "Use Selection for Find", table: "Interface")) {
-                    manager?.performFindAction(.useSelection)
+                    Button(String(localized: "Use Selection for Find", table: "Interface")) {
+                        manager?.performFindAction(.useSelection)
+                    }
+                    .keyboardShortcut("e", modifiers: .command)
                 }
-                .keyboardShortcut("e", modifiers: .command)
-                .disabled(manager?.canFind != true)
+            } else {
+                Button(String(localized: "Find", table: "Interface")) {}
+                    .disabled(true)
             }
-
-            Divider()
-
-            Button(String(localized: "Clear Terminal", table: "Interface")) {
-                manager?.clearActiveTerminal()
-            }
-            .keyboardShortcut("k", modifiers: .command)
-            .disabled(manager?.canClearActiveTerminal != true)
         }
 
         // Frees ⌘P from the default Print item for the command palette.
         CommandGroup(replacing: .printItem) {}
 
-        CommandGroup(after: .sidebar) {
+        CommandGroup(replacing: .sidebar) {}
+
+        CommandMenu(String(localized: "Project", table: "Interface")) {
+            Button(String(localized: "Add Folder…", table: "Interface")) {
+                manager?.chooseFolders()
+            }
+            .keyboardShortcut("a", modifiers: [.command, .shift])
+            .disabled(manager == nil)
+
+            Button(String(localized: "Add SSH Files or Folders…", table: "Interface")) {
+                manager?.chooseSSHItems()
+            }
+            .disabled(manager == nil)
+
+            Divider()
+
+            Button(String(localized: "Close Project", table: "Sidebar")) {
+                if let project = manager?.selectedProject { manager?.close(project) }
+            }
+            .disabled(manager?.selectedProject == nil)
+
+            if (manager?.projects.count ?? 0) < 2 {
+                Button(String(localized: "Switch Project", table: "Interface")) {}
+                    .disabled(true)
+            } else {
+                Menu(String(localized: "Switch Project", table: "Interface")) {
+                    Button(String(localized: "Next Project", table: "Interface")) {
+                        manager?.selectNextProject()
+                    }
+                    .keyboardShortcut("]", modifiers: [.command, .option])
+
+                    Button(String(localized: "Previous Project", table: "Interface")) {
+                        manager?.selectPreviousProject()
+                    }
+                    .keyboardShortcut("[", modifiers: [.command, .option])
+
+                    Divider()
+
+                    ForEach(Array((manager?.projects ?? []).prefix(9).enumerated()).map {
+                        WindowMenuItem(id: $0.element.id, index: $0.offset, title: $0.element.name)
+                    }) { item in
+                        Button(item.title) {
+                            manager?.selectProject(index: item.index)
+                        }
+                        .keyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .command)
+                    }
+                }
+            }
+        }
+
+        CommandMenu(String(localized: "Panel", table: "Interface")) {
             Button(String(localized: "Command Palette…", table: "Interface")) {
                 manager?.toggleCommandPalette()
             }
@@ -252,35 +275,30 @@ private struct BaileyCommands: Commands {
 
         }
 
-        CommandGroup(after: .toolbar) {
-            Menu(String(localized: "Switch Project", table: "Interface")) {
-                Button(String(localized: "Next Project", table: "Interface")) {
-                    manager?.selectNextProject()
-                }
-                .keyboardShortcut("]", modifiers: [.command, .option])
-                .disabled((manager?.projects.count ?? 0) < 2)
-
-                Button(String(localized: "Previous Project", table: "Interface")) {
-                    manager?.selectPreviousProject()
-                }
-                .keyboardShortcut("[", modifiers: [.command, .option])
-                .disabled((manager?.projects.count ?? 0) < 2)
-
-                Divider()
-
-                ForEach(Array((manager?.projects ?? []).prefix(9).enumerated()).map {
-                    WindowMenuItem(id: $0.element.id, index: $0.offset, title: $0.element.name)
-                }) { item in
-                    Button(item.title) {
-                        manager?.selectProject(index: item.index)
-                    }
-                    .keyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .command)
-                }
+        CommandMenu(String(localized: "Terminal", table: "Terminal")) {
+            Button(String(localized: "New Terminal", table: "Interface")) {
+                manager?.newSession()
             }
-            .disabled(manager?.projects.isEmpty != false)
+            .keyboardShortcut("t", modifiers: .command)
+            .disabled(manager?.selectedProject == nil)
+
+            Divider()
+
+            Button(String(localized: "Clear Terminal", table: "Interface")) {
+                manager?.clearActiveTerminal()
+            }
+            .keyboardShortcut("k", modifiers: .command)
+            .disabled(manager?.canClearActiveTerminal != true)
         }
 
         CommandMenu(String(localized: "Browser", table: "Browser")) {
+            Button(String(localized: "New Browser Tab", table: "Interface")) {
+                manager?.newBrowserTab()
+            }
+            .disabled(manager?.selectedProject == nil)
+
+            Divider()
+
             Button(String(localized: "Focus Address Bar", table: "Interface")) {
                 manager?.focusBrowserAddressBar()
             }
@@ -306,31 +324,49 @@ private struct BaileyCommands: Commands {
             .disabled(manager?.hasSelectedBrowser != true)
         }
 
-        CommandGroup(after: .toolbar) {
-            Menu(String(localized: "Tabs", table: "Interface")) {
-                Button(String(localized: "Next Tab", table: "Interface")) {
-                    manager?.selectNextTab()
-                }
-                .keyboardShortcut("]", modifiers: [.command, .shift])
-                .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
+        CommandGroup(before: .windowArrangement) {
+            Button(String(localized: "New Window", table: "Interface")) {
+                openWindow(id: "main")
+            }
+            .keyboardShortcut("n", modifiers: [.command, .shift])
 
-                Button(String(localized: "Previous Tab", table: "Interface")) {
-                    manager?.selectPreviousTab()
-                }
-                .keyboardShortcut("[", modifiers: [.command, .shift])
-                .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
+            Button(
+                String(localized: NSApp.keyWindow?.styleMask.contains(.fullScreen) == true
+                    ? "Exit Full Screen" : "Enter Full Screen", table: "Interface")
+            ) {
+                NSApp.keyWindow?.toggleFullScreen(nil)
+            }
+            .keyboardShortcut("f", modifiers: [.command, .control])
+            .disabled(NSApp.keyWindow == nil)
 
-                Divider()
+            if manager?.selectedProject?.tabs.isEmpty != false {
+                Button(String(localized: "Tabs", table: "Interface")) {}
+                    .disabled(true)
+            } else {
+                Menu(String(localized: "Tabs", table: "Interface")) {
+                    Button(String(localized: "Next Tab", table: "Interface")) {
+                        manager?.selectNextTab()
+                    }
+                    .keyboardShortcut("]", modifiers: [.command, .shift])
+                    .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
 
-                ForEach(Array((manager?.selectedProject?.tabs ?? []).prefix(9).enumerated()).map {
-                    WindowMenuItem(id: $0.element.id, index: $0.offset, title: $0.element.displayTitle)
-                }) { item in
-                    Button(item.title) {
-                        manager?.selectTab(index: item.index)
+                    Button(String(localized: "Previous Tab", table: "Interface")) {
+                        manager?.selectPreviousTab()
+                    }
+                    .keyboardShortcut("[", modifiers: [.command, .shift])
+                    .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
+
+                    Divider()
+
+                    ForEach(Array((manager?.selectedProject?.tabs ?? []).prefix(9).enumerated()).map {
+                        WindowMenuItem(id: $0.element.id, index: $0.offset, title: $0.element.displayTitle)
+                    }) { item in
+                        Button(item.title) {
+                            manager?.selectTab(index: item.index)
+                        }
                     }
                 }
             }
-            .disabled(manager?.selectedProject?.tabs.isEmpty != false)
         }
     }
 }

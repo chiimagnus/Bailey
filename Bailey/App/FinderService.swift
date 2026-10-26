@@ -27,6 +27,7 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
         NSAppleEventManager.shared().setEventHandler(
             self,
             andSelector: #selector(handleOpenDocuments(_:withReplyEvent:)),
@@ -41,6 +42,36 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.servicesProvider = self
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(mainMenuItemAdded(_:)),
+            name: NSMenu.didAddItemNotification, object: nil
+        )
+        removeUnusedViewMenu()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        removeUnusedViewMenu()
+    }
+
+    @objc private func mainMenuItemAdded(_ notification: Notification) {
+        guard let menu = notification.object as? NSMenu, menu === NSApp.mainMenu else { return }
+        removeUnusedViewMenu()
+    }
+
+    private func removeUnusedViewMenu() {
+        guard let menu = NSApp.mainMenu,
+              let projectIndex = menu.items.firstIndex(where: {
+                  $0.title == String(localized: "Project", table: "Interface")
+              }), projectIndex > 0,
+              let viewItem = menu.item(at: projectIndex - 1),
+              let viewMenu = viewItem.submenu,
+              viewMenu.items.allSatisfy({
+                  $0.isSeparatorItem || $0.action == #selector(NSWindow.toggleFullScreen(_:))
+                      || $0.title == String(localized: "Enter Full Screen", table: "Interface")
+                      || $0.title == String(localized: "Exit Full Screen", table: "Interface")
+              }) else { return }
+        // SwiftUI inserts a View menu before Project even though Bailey owns Panel and Window.
+        menu.removeItem(viewItem)
     }
 
     /// Receive the entire Finder Apple Event before SwiftUI WindowGroup can
