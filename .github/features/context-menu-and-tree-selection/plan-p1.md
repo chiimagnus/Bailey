@@ -1,23 +1,28 @@
 # P1：菜单跟踪中的快捷键与执行反馈
 
-**Goal：** 菜单展开时，键盘和鼠标执行同一项动作、同一目标；
-Dock 的 ⌘W 正确关闭并有可观察的原生菜单反馈。
+**Goal：** 菜单展开时按键与鼠标执行同一动作、同一有效目标；
+Terminal／Editor 保留真正的输入焦点，菜单撤销后恢复它们的命令语义。
+Dock ⌘W 的现有正确关闭行为不得倒退，并验证原生菜单反馈。
 
 **Non-goals：** 不重构完整焦点架构；不提前修改 Files 的持久选中语义。
 P2 负责游标／选中分离，届时复用本阶段的命令入口。
 
-**Approach：** 从真实 App 复现出发，
-沿 `NSMenu` → 原生响应者／系统主菜单 → Files／Dock 命令
-追到剪贴板和窗口最终结果；优先现有 AppKit 与 SwiftUI 能力。
-决策依赖真实菜单跟踪实验，不预先规定新 `keyEquivalent` 或事件拦截。
+**Approach：** 命令目标不能由 Dock 活动状态或树行 Focus 反向推导。
+原生第一响应者继续负责普通编辑输入；菜单生效时，窗口的明确菜单上下文
+优先指定本次文件操作目标。复用 `WorkspaceWindowModel.performFileTreeCommand`
+的项目／SSH 身份保护，而非再造复制实现。
+先在真实 AppKit 菜单跟踪中证明事件所有者，再选单一原生命令入口；
+禁用覆盖 SwiftUI 自有菜单 delegate、定时轮询和新的全局键盘监听。
 
 **Acceptance：** 菜单展开时按键准确执行一次；鼠标与键盘同目标；
 失效／跨窗不可误操作；Dock 原生执行反馈得到实证。
 
-**Rules：** 严格遵守 `AGENTS.md` 中应用命令仅在主菜单注册、
-右键菜单不额外注册／拦截快捷键、原生第一响应者、测试隔离、
-未保存数据保护。若平台证据证明这些约束与需求不能同时满足，
-记录具体冲突并保持本任务阻塞；不得通过改写规范为双轨开绿灯。
+**Rules：** 优先遵守 `AGENTS.md` 中主菜单唯一快捷键、原生第一响应者、
+窗口有效身份、测试隔离及未保存保护。用户已明确授权架构重构；
+若原生平台证实必须由菜单跟踪范围参与键等价处理，
+只允许共享同一命令动作、同一目标解析与启用条件的最小改动，
+并在所属任务同步修订冲突规范、删除旧显示-only 断言；
+严禁主菜单与菜单跟踪时同时执行两次。
 
 ---
 
@@ -51,24 +56,29 @@ P2 负责游标／选中分离，届时复用本阶段的命令入口。
 
 **步骤与可观察结果：**
 1. 使用现有 `WorkspaceUITestFixture` 和隔离 Bailey Dev：
-   A 处于活动状态，右键 B，确认菜单仍展开；按 ⌘C；
-   对照鼠标 Copy、Escape 后 ⌘C，分别核对
-   `FileTreeClipboard.Record.paths`、系统剪贴板文本和打开的文件标签。
-2. 用既有 `AppIdentityTests` 的 `NSHostingMenu` 宿主条件
-   核对 `NSMenuItem` 的 action、`keyEquivalent` 和菜单委托行为；
-   真实 App 中核对菜单跟踪开始／结束、窗口和第一响应者归属，
-   以及 `TreeContextClickView` 回调是否可靠。
-   只有宿主不足以回答的问题才加最小临时原生实验。
+   Files 活动时右键 B、Terminal／Editor 活动时右键**仍可见**的 Files B，
+   分别确认菜单仍展开并按 ⌘C；对照鼠标 Copy、Esc 取消后再按 ⌘C。
+   检查菜单仍开时写入 `FileTreeClipboard.Record.paths` 与真实剪贴板；
+   Esc 后 Terminal／Editor 仍按自己的原生 Copy 处理，Files 真实聚焦时
+   仍复制其游标目标。测试必须核对点击目标和前台实际第一响应者。
+2. 用既有 `AppIdentityTests` 的 `NSHostingMenu` 核对 action、
+   `keyEquivalent`、SwiftUI 菜单 delegate 及跟踪生命周期；
+   在真实 App 区分：`⌘C` 是否被菜单吞掉、是否到达 Edit 命令、
+   是否找到 `TreeKeyboardView` 却被 `firstResponder` 检查拒绝。
+   对照 `⌘W` 走主菜单关闭动作但不依赖第一响应者的完整调用链。
+   只做诊断用的事件记录，验证完立即清理，不覆写 SwiftUI delegate。
 3. 同样观察 Dock 右键 B → 菜单仍展开 → ⌘W，
    区分“实际关闭正确目标”与“菜单项真的显示被激活的反馈”。
    对照 Apple `NSMenu.performKeyEquivalent(with:)` 和
    菜单键等价处理契约，不能靠文字提示推断可执行。
-4. 在本 plan 的下一 task 决策说明中明确：
-   唯一命令拥有者、菜单有效期、键盘和鼠标共用的动作入口、
-   目标失效时如何拒绝，以及何时清理无效右键回调。
-   原生方案必须满足当前 `AGENTS.md`，不能用“临时重复注册”
-   或局部事件拦截伪装为唯一命令入口；
-   无法满足时注明阻塞原因，未解决不得进入 P1-T2。
+4. 明确已验证的单一命令解析顺序：有效菜单上下文 → 本次菜单动作；
+   菜单不在跟踪时 → 系统第一响应者。明确菜单结束／取消、
+   切窗／切项目、断连、菜单目标被删除时的失效与回退。
+   不把 FileTree 选中集合作为菜单上下文的替代品；
+   不让 Terminal／Editor 被强制切焦点。
+   先确定是否可以仅由系统主菜单派发；若不能，实验原生菜单
+   `.keyboardShortcut` 的范围及其与主菜单动作的互斥，
+   必须证明不重复执行，再在 P1-T2 以唯一动作实现。
 
 **验证：** 真实菜单打开且真实 ⌘C 发生后，
 检查正确剪贴板路径和完整命令退出状态；
@@ -93,38 +103,44 @@ P2 负责游标／选中分离，届时复用本阶段的命令入口。
   `BaileyApp.swift`、`FinderService.swift`
 
 **要修的链：**
-鼠标菜单在 `rowMenu` 决定文件集合，
-系统 Edit 从 `TreeKeyboardView` 读取当前操作集合；
-最后均通过 `WorkspaceWindowModel.performFileTreeCommand`
-写入剪贴板或真实文件操作。
-必须在拥有目标的现有组件汇聚，不能新建一条绕过
-项目／连接校验的菜单命令链。
+鼠标菜单目前在 `rowMenu` 取右键集合，系统 Edit 从
+`TreeKeyboardView` 读取 `selectedOperationPaths`，两者只有选中状态间接相连。
+修复后，菜单有效时鼠标与快捷键以同一个快照目标执行；
+无菜单时 Edit 保持原生第一响应者语义。
+跨组件仅由所属 `WorkspaceWindowModel` 协调菜单命令范围；
+项目和连接保护继续复用现有 `performFileTreeCommand`，不能另写复制后端。
 
 **Red → Green → Refactor：**
-1. 新增真正“右键 B、菜单保持打开、⌘C”的 E2E Red，
-   同时验证鼠标菜单和 Escape 后 ⌘C 的 B 路径，
-   以及原本正常的编辑器 Copy 不受干扰。
-2. 按 T1 证实的原生菜单方案，仅在需要的
-   `NSMenu`／`TreeKeyboardView` 层实现同一目标解析和命令投递，
-   让显示的快捷键与实际菜单启用条件一致。
-   不在 `onKeyDown` 为每个 Command 键写一组手工分支。
-3. 保留现有 `FileTreeClipboard`、目标 token、
-   SSH connectionRevision、实际文件操作和远端删除 Sheet。
-   对 Cut、Paste、Delete、New File／Folder 检查已有系统主菜单
-   是否确有快捷键；没有的不虚构提示或键绑定。
-4. **本任务立即删除**被替代的旧菜单显示／命中路径、
-   无效匹配检查及对应过时测试断言。
+1. 真正“Terminal／Editor 活动，右键可见 Files B，菜单保持展开，⌘C”
+   的 E2E Red 必须先触发；补 Files 聚焦时菜单打开的 Red。
+   对照鼠标 Copy、Esc 后 Terminal／Editor ⌘C 仍保留原生目标、
+   Esc 后 Files 聚焦 Copy B 的既有回归，验证剪贴板真实私有类型。
+2. 在 `WorkspaceWindowModel` 的现有窗口归属边界协调有效菜单目标，
+   Files 仍保留行选择与紧凑段细节。右键仅提供本次菜单目标和命令，
+   **不通过 `focusKeyboard()` 抢走 Terminal／Editor**。
+   使用 T1 已证实的原生菜单派发方式，主菜单／菜单按钮调用同一命令动作；
+   菜单结束后立即不再覆盖第一响应者。
+   不在 `onKeyDown` 逐个拦截 Command 组合，不引入全局 FocusManager。
+3. 保留 `FileTreeClipboard` token、项目和 SSH connectionRevision、
+   真实文件操作与远端删除 Sheet。Cut／Copy／Paste／Delete、
+   新建文件／文件夹与复制路径各自使用同一窗口菜单上下文。
+   保留编辑器、Terminal、Git 输入框、Sheet 的原生 Edit 命令；
+   跨窗口菜单目标和过期身份不能覆盖当前真实键盘输入。
+4. **本任务立即删除**以 `listFocused` 和选中集合等价为由
+   隐藏可执行 `⌘C` 的旧提示条件、替代的焦点抢占逻辑与过时测试断言。
    `TreeContextClickTarget` 若仍为 Git／Projects 使用，
    先核对对应事件链，不为清理 Files 而盲删整个共享类型。
 5. 在同一任务更新 `docs/ui.md` 与 `docs/features/files.md`
-   的真实菜单／焦点契约；保持 `AGENTS.md` 现有唯一快捷键规则。
-   若平台无法在此规则下完成用户需求，应按 P1-T1 的阻塞结论收敛，
-   不擅自放宽长期规范或保留互相冲突的两套规则。
+   的菜单优先级、焦点和目标生命周期契约。若 T1 实验确证原生菜单
+   必须配备独立键等价入口，立即把 `AGENTS.md` 的绝对禁令
+   收敛为“唯一命令动作，作用域内单次派发”，并更新对应宿主测试；
+   不留显示-only 旧规范与真实产品行为相矛盾。
 
 **验证：**
 - 宿主：`make test:FileTreeTests,AppIdentityTests,WindowOwnershipIntegrationTests`，
   证明菜单 action、可用性、命令目标及剪贴板／文件身份。
-- UI：定点运行 `WorkspaceFilesUITests` 的
+- UI：新增 Terminal／Editor 活动且可见 Files 时菜单展开 ⌘C、
+  Esc 后输入焦点回归；定点运行 `WorkspaceFilesUITests` 的
   `testFocusedFilesKeyboardCopyPasteAndEditorCopyIsolation`、
   `testSystemEditMenuCopyPasteFollowsFileManagerFocus`；
   以及 `SharedTreeUITests` 的右键目标用例和本 task 新增
@@ -157,8 +173,9 @@ P2 负责游标／选中分离，届时复用本阶段的命令入口。
    不改动已经通过的右键命中／焦点切换和保护机制。
    若原生菜单无法提供预期按压反馈，先留下可重复证据，
    不用虚假的鼠标模拟或异步动画绕过要求。
-3. **同任务**清理替代的重复按钮动作／快捷键提示路径
-   （存在且有实证时），更新 `docs/features/dock.md`；
+3. **同任务**清理确证冗余的按钮动作／快捷键提示路径，
+   不把 Dock 正常的关闭行为认定为重复执行。
+   更新 `docs/features/dock.md`；
    不把此清理放到 P2 最后。
 4. 验证工具 Files／Git／Projects、文件标签 A/B/C、
    后台标签、空组、跨窗口、连续 ⌘W、菜单 Esc、
