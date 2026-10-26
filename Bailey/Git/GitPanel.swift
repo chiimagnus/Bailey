@@ -1475,11 +1475,7 @@ struct GitPanel: View {
                     RoundedRectangle(cornerRadius: 6)
                         .fill(Color.primary.opacity(0.05))
                 )
-                .onKeyPress(keys: [.return]) { press in
-                    guard press.modifiers.contains(.command) else { return .ignored }
-                    performPrimaryAction()
-                    return .handled
-                }
+                .focusedValue(\.baileyGitCommit, focusedCommitAction)
 
             if !showSyncButton || canCommit(includeAll: false) {
                 HStack(spacing: 4) {
@@ -1646,6 +1642,14 @@ struct GitPanel: View {
             && model.mergeEntries.isEmpty
             && model.canUseCurrentStatus
             && !model.isBusy
+    }
+
+    private var focusedCommitAction: (() -> Void)? {
+        guard isGitActive, hasCurrentPanelTarget, canCommit(includeAll: false) else { return nil }
+        return {
+            guard isGitActive, hasCurrentPanelTarget else { return }
+            performPrimaryAction()
+        }
     }
 
     private func performPrimaryAction() {

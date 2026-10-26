@@ -83,12 +83,14 @@ struct WindowRootView: View {
 
 extension FocusedValues {
     @Entry var baileyManager: WorkspaceWindowModel?
+    @Entry var baileyGitCommit: (() -> Void)?
 }
 
 /// Menu commands routed to the focused window's manager.
 private struct BaileyCommands: Commands {
     let application: WorkspaceApplication
     @FocusedValue(\.baileyManager) private var focusedManager: WorkspaceWindowModel?
+    @FocusedValue(\.baileyGitCommit) private var focusedGitCommit: (() -> Void)?
     private var manager: WorkspaceWindowModel? {
         guard let focusedManager, NSApp.isActive,
               focusedManager.attachedWindow === NSApp.keyWindow else { return nil }
@@ -283,6 +285,15 @@ private struct BaileyCommands: Commands {
                 if let project = manager?.selectedProject { manager?.close(project) }
             }
             .disabled(manager?.selectedProject == nil)
+
+            if manager?.selectedProject?.dock.activeGroup?.selected == .git {
+                Divider()
+                Button(String(localized: "Commit Staged", table: "Sidebar")) {
+                    focusedGitCommit?()
+                }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(focusedGitCommit == nil)
+            }
 
             if manager?.projects.isEmpty == false {
                 Divider()
