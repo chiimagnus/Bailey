@@ -434,14 +434,16 @@ private struct FileTreeRow: View {
             }
             .overlay {
                 TreeContextClickTarget(onContextClick: { selectForContextMenu(item) },
-                                       onMenuClosed: { contextMenuPath = nil })
+                                       onMenuClosed: { contextMenuPath = nil },
+                                       onMenuKeyDown: handleMenuKeyDown)
                     .contextMenu { rowMenu(for: item) }
             }
         } else if item.isDirectory && !item.compactComponents.isEmpty {
             semanticRow
                 .background {
                     TreeContextClickTarget(onContextClick: { selectForContextMenu(item) },
-                                           onMenuClosed: { contextMenuPath = nil })
+                                           onMenuClosed: { contextMenuPath = nil },
+                                           onMenuKeyDown: handleMenuKeyDown)
                 }
                 .contextMenu { rowMenu(for: item) }
                 .onDrag { makeDragProvider(item) }
@@ -451,7 +453,8 @@ private struct FileTreeRow: View {
             semanticRow
                 .overlay {
                     TreeContextClickTarget(onContextClick: { selectForContextMenu(item) },
-                                           onMenuClosed: { contextMenuPath = nil })
+                                           onMenuClosed: { contextMenuPath = nil },
+                                           onMenuKeyDown: handleMenuKeyDown)
                         .contextMenu { rowMenu(for: item) }
                 }
                 .onDrag { makeDragProvider(item) }
@@ -464,15 +467,41 @@ private struct FileTreeRow: View {
         contextMenuPath = target.path
     }
 
+    private func handleMenuKeyDown(_ menu: NSMenu, _ event: NSEvent) -> Bool {
+        guard isCurrentTarget(), !item.isDraft,
+              model.items.contains(where: { $0.path == item.path }),
+              menu.items.contains(where: {
+                  $0.accessibilityLabel() == String(localized: "Copy Relative Path", table: "Sidebar")
+              }) else { return false }
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        let title: String
+        switch (key, modifiers) {
+        case (_, []) where event.keyCode == 51 || event.keyCode == 117:
+            title = sshHost == nil
+                ? String(localized: "Move to Trash", table: "Sidebar")
+                : String(localized: "Delete…", table: "Sidebar")
+        case ("c", [.command]): title = String(localized: "Copy", table: "Sidebar")
+        case ("x", [.command]): title = String(localized: "Cut", table: "Sidebar")
+        case ("v", [.command]): title = String(localized: "Paste", table: "Sidebar")
+        case ("n", [.command]): title = String(localized: "New File…", table: "Sidebar")
+        case ("n", [.option, .command]):
+            title = String(localized: "New Folder…", table: "Sidebar")
+        default: return false
+        }
+        guard let index = menu.items.firstIndex(where: {
+            $0.isEnabled && $0.accessibilityLabel() == title
+        }) else { return false }
+        menu.performActionForItem(at: index)
+        menu.cancelTracking()
+        return true
+    }
+
     @ViewBuilder
     private func rowMenu(for target: FileTreeModel.Item) -> some View {
         let selection = target.path == item.path
             ? model.contextSelection(for: item) : [target.path]
-        let matchesKeyboardSelection = listFocused
-            && Set(selection) == Set(model.selectedOperationPaths)
         if target.isDirectory {
-            let matchesNewItemTarget = listFocused
-                && model.selectedDirectoryPath == target.path
             let newFileTitle = String(localized: "New File…", table: "Sidebar")
             Button {
                 Task {
@@ -480,11 +509,7 @@ private struct FileTreeRow: View {
                     await model.beginNewFile(in: target.path)
                 }
             } label: {
-                if matchesNewItemTarget {
-                    Text(verbatim: newFileTitle + "\t⌘N")
-                } else {
-                    Text(newFileTitle)
-                }
+                Text(verbatim: newFileTitle + "\t⌘N")
             }
             .accessibilityLabel(newFileTitle)
 
@@ -495,11 +520,7 @@ private struct FileTreeRow: View {
                     await model.beginNewFolder(in: target.path)
                 }
             } label: {
-                if matchesNewItemTarget {
-                    Text(verbatim: newFolderTitle + "\t⌥⌘N")
-                } else {
-                    Text(newFolderTitle)
-                }
+                Text(verbatim: newFolderTitle + "\t⌥⌘N")
             }
             .accessibilityLabel(newFolderTitle)
         } else {
@@ -520,7 +541,7 @@ private struct FileTreeRow: View {
         Button {
             if isCurrentTarget() { onCommand(.copy(selection, cut: true)) }
         } label: {
-            Text(verbatim: cutTitle + (matchesKeyboardSelection ? "\t⌘X" : ""))
+            Text(verbatim: cutTitle + "\t⌘X")
         }
         .accessibilityLabel(cutTitle)
 
@@ -528,7 +549,7 @@ private struct FileTreeRow: View {
         Button {
             if isCurrentTarget() { onCommand(.copy(selection, cut: false)) }
         } label: {
-            Text(verbatim: copyTitle + (matchesKeyboardSelection ? "\t⌘C" : ""))
+            Text(verbatim: copyTitle + "\t⌘C")
         }
         .accessibilityLabel(copyTitle)
 
@@ -537,9 +558,7 @@ private struct FileTreeRow: View {
             Button {
                 if isCurrentTarget() { onCommand(.paste(into: target.path)) }
             } label: {
-                Text(verbatim: pasteTitle + (listFocused
-                    && (model.selectedDirectoryPath ?? model.rootPath) == target.path
-                        ? "\t⌘V" : ""))
+                Text(verbatim: pasteTitle + "\t⌘V")
             }
             .accessibilityLabel(pasteTitle)
         }
@@ -567,7 +586,7 @@ private struct FileTreeRow: View {
         Button(role: .destructive) {
             if isCurrentTarget() { onCommand(.delete(selection)) }
         } label: {
-            Text(verbatim: deleteTitle + (matchesKeyboardSelection ? "\t⌫" : ""))
+            Text(verbatim: deleteTitle + "\t⌫")
         }
         .accessibilityLabel(deleteTitle)
     }
@@ -626,7 +645,8 @@ private struct FileTreeRow: View {
                 })
                 .overlay {
                     TreeContextClickTarget(onContextClick: { selectForContextMenu(target) },
-                                           onMenuClosed: { contextMenuPath = nil })
+                                           onMenuClosed: { contextMenuPath = nil },
+                                           onMenuKeyDown: handleMenuKeyDown)
                         .contextMenu { rowMenu(for: target) }
                 }
                 .onDrag { makeDragProvider(target) }

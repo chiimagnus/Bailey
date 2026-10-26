@@ -80,6 +80,71 @@ final class SharedTreeUITests: XCTestCase {
                        "Right click must not open another editor tab")
     }
 
+    func testContextMenuCommandCCopiesRightClickedFileWhileFilesOwnsFocus() throws {
+        guard (try? WorkspaceUITestSupport.clipboardItems()) != nil else {
+            throw XCTSkip("The current clipboard cannot be backed up without losing data")
+        }
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let selected = try fixture.file("a-selected.txt", text: "alpha\n")
+        let target = try fixture.file("b-context.txt", text: "beta\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let a = WorkspaceUITestSupport.fileRow(selected, in: window)
+        let b = WorkspaceUITestSupport.fileRow(target, in: window)
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        a.click()
+        b.rightClick()
+        XCTAssertTrue(a.isSelected && !b.isSelected)
+        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
+            $0.menuItems["Copy Relative Path"].exists
+        }, "Right-click menu must remain open when Cmd-C is sent")
+        app.typeKey("c", modifierFlags: .command)
+
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), target.path)
+        XCTAssertNotNil(NSPasteboard.general.data(forType:
+            NSPasteboard.PasteboardType("com.chiimagnus.bailey.files.transfer")))
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "beta\n")
+        XCTAssertEqual(try String(contentsOf: selected, encoding: .utf8), "alpha\n")
+    }
+
+    func testContextMenuCommandCCopiesFileWithoutStealingTerminalFocus() throws {
+        guard (try? WorkspaceUITestSupport.clipboardItems()) != nil else {
+            throw XCTSkip("The current clipboard cannot be backed up without losing data")
+        }
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let target = try fixture.file("a-context.txt", text: "context\n")
+        let selected = try fixture.file("b-selected.txt", text: "selected\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        let a = WorkspaceUITestSupport.fileRow(selected, in: window)
+        let b = WorkspaceUITestSupport.fileRow(target, in: window)
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        a.click()
+        app.typeKey("t", modifierFlags: .command)
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0.60)).click()
+        b.rightClick()
+        XCTAssertTrue(a.isSelected && !b.isSelected)
+        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
+            $0.menuItems["Copy Relative Path"].exists
+        })
+        app.typeKey("c", modifierFlags: .command)
+
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), target.path)
+        XCTAssertNotNil(NSPasteboard.general.data(forType:
+            NSPasteboard.PasteboardType("com.chiimagnus.bailey.files.transfer")))
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        let marker = fixture.root.appendingPathComponent("terminal-owns-focus.txt")
+        app.typeText("printf terminal > '\(marker.path)'")
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let received = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: marker.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [received], timeout: 12), .completed)
+    }
+
     func testCompactFoldersContextMenuCreatesInEachClickedPathComponent() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let nested = try fixture.file("a1/b1/c1/existing.swift", text: "existing\n")

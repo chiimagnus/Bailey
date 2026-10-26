@@ -135,12 +135,12 @@ final class AppIdentityTests: XCTestCase {
     }
 
     @MainActor
-    func testTreeContextClickEndsTemporaryMenuTargetAfterTracking() async throws {
+    func testTreeContextClickTracksOnlyItsMenuAndClearsOnEnd() throws {
         let view = TreeContextClickView(frame: CGRect(x: 0, y: 0, width: 120, height: 24))
         var contextClicks = 0
-        let closed = expectation(description: "Context menu ended")
+        var closed = 0
         view.onContextClick = { contextClicks += 1 }
-        view.onMenuClosed = { closed.fulfill() }
+        view.onMenuClosed = { closed += 1 }
 
         let event = try XCTUnwrap(NSEvent.mouseEvent(
             with: .rightMouseDown, location: .zero, modifierFlags: [],
@@ -149,9 +149,14 @@ final class AppIdentityTests: XCTestCase {
         ))
         _ = view.menu(for: event)
         XCTAssertEqual(contextClicks, 1)
-        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification,
-                                        object: NSMenu())
-        await fulfillment(of: [closed], timeout: 2)
+        let menu = NSMenu(title: "Files")
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: menu)
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: NSMenu())
+        XCTAssertEqual(closed, 0, "Unrelated menus cannot dismiss the Files context target")
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: menu)
+        XCTAssertEqual(closed, 1)
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: menu)
+        XCTAssertEqual(closed, 1, "A menu can only close the same context once")
         view.stopObservingMenu()
     }
 
