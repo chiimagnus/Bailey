@@ -532,12 +532,20 @@ struct DockTabGroupView: View {
                 renamingTabID: $renamingTabID
             )
             .overlay {
-                contextTabOutline(for: item)
-            }
-            .contextMenu {
-                if let current = project.tabs.first(where: { $0.id == id }) {
-                    projectTabMenu(current)
+                ContextMenuClickTarget(
+                    onContextClick: { project.dock.selectForContextMenu(item) },
+                    onMenuKeyDown: { menu, event in
+                        handleMenuKeyDown(menu, event, for: item)
+                    }
+                )
+                .contextMenu {
+                    if let current = project.tabs.first(where: { $0.id == id }) {
+                        projectTabMenu(current)
+                    }
                 }
+            }
+            .overlay {
+                contextTabOutline(for: item)
             }
         } else {
             TabItemChrome(
@@ -548,18 +556,42 @@ struct DockTabGroupView: View {
             )
             .accessibilityIdentifier("bailey.dock.\(item.configurationName ?? "unknown")")
             .overlay {
+                ContextMenuClickTarget(
+                    onContextClick: { project.dock.selectForContextMenu(item) },
+                    onMenuKeyDown: { menu, event in
+                        handleMenuKeyDown(menu, event, for: item)
+                    }
+                )
+                .contextMenu {
+                    let closeTitle = String(localized: "Close Panel", table: "Interface")
+                    Button {
+                        closeTool(item)
+                    } label: {
+                        Text(verbatim: closeTitle + "\t⌘W")
+                    }
+                    .accessibilityLabel(closeTitle)
+                }
+            }
+            .overlay {
                 contextTabOutline(for: item)
             }
-            .contextMenu {
-                let closeTitle = String(localized: "Close Panel", table: "Interface")
-                Button {
-                    closeTool(item)
-                } label: {
-                    Text(verbatim: closeTitle + "\t⌘W")
-                }
-                .accessibilityLabel(closeTitle)
-            }
         }
+    }
+
+    private func handleMenuKeyDown(_ menu: NSMenu, _ event: NSEvent, for item: DockItem) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard modifiers == [.command], event.charactersIgnoringModifiers?.lowercased() == "w",
+              project.dock.contextTarget == item, project.dock.group(containing: item) != nil
+        else { return false }
+        let title = item.tabID == nil
+            ? String(localized: "Close Panel", table: "Interface")
+            : String(localized: "Close", table: "Interface")
+        guard let index = menu.items.firstIndex(where: {
+            $0.isEnabled && $0.accessibilityLabel() == title
+        }) else { return false }
+        menu.performActionForItem(at: index)
+        menu.cancelTracking()
+        return true
     }
 
     private func contextTabOutline(for item: DockItem) -> some View {

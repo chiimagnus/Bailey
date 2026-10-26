@@ -108,7 +108,7 @@ struct TreeKeyboardHost: NSViewRepresentable {
 }
 
 /// Receive a secondary click without taking primary clicks or drags from a SwiftUI row.
-struct TreeContextClickTarget: NSViewRepresentable {
+struct ContextMenuClickTarget: NSViewRepresentable {
     let onContextClick: () -> Void
     var onMenuClosed: (() -> Void)?
     var onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)?
@@ -120,17 +120,17 @@ struct TreeContextClickTarget: NSViewRepresentable {
         self.onMenuKeyDown = onMenuKeyDown
     }
 
-    func makeNSView(context: Context) -> TreeContextClickView {
-        TreeContextClickView()
+    func makeNSView(context: Context) -> ContextMenuClickView {
+        ContextMenuClickView()
     }
 
-    func updateNSView(_ view: TreeContextClickView, context: Context) {
+    func updateNSView(_ view: ContextMenuClickView, context: Context) {
         view.onContextClick = onContextClick
         view.onMenuClosed = onMenuClosed
         view.onMenuKeyDown = onMenuKeyDown
     }
 
-    static func dismantleNSView(_ view: TreeContextClickView, coordinator: ()) {
+    static func dismantleNSView(_ view: ContextMenuClickView, coordinator: ()) {
         view.stopObservingMenu()
         view.onContextClick = nil
         view.onMenuClosed = nil
@@ -138,7 +138,7 @@ struct TreeContextClickTarget: NSViewRepresentable {
     }
 }
 
-final class TreeContextClickView: NSView {
+final class ContextMenuClickView: NSView {
     var onContextClick: (() -> Void)?
     var onMenuClosed: (() -> Void)?
     var onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)?

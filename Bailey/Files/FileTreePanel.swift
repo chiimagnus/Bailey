@@ -433,7 +433,7 @@ private struct FileTreeRow: View {
                     .modifier(layout)
             }
             .overlay {
-                TreeContextClickTarget(onContextClick: { selectForContextMenu(item) },
+                ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
                                        onMenuClosed: { contextMenuPath = nil },
                                        onMenuKeyDown: handleMenuKeyDown)
                     .contextMenu { rowMenu(for: item) }
@@ -441,7 +441,7 @@ private struct FileTreeRow: View {
         } else if item.isDirectory && !item.compactComponents.isEmpty {
             semanticRow
                 .background {
-                    TreeContextClickTarget(onContextClick: { selectForContextMenu(item) },
+                    ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
                                            onMenuClosed: { contextMenuPath = nil },
                                            onMenuKeyDown: handleMenuKeyDown)
                 }
@@ -452,7 +452,7 @@ private struct FileTreeRow: View {
             // the process-private Files type, never a Mac path for a remote file.
             semanticRow
                 .overlay {
-                    TreeContextClickTarget(onContextClick: { selectForContextMenu(item) },
+                    ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
                                            onMenuClosed: { contextMenuPath = nil },
                                            onMenuKeyDown: handleMenuKeyDown)
                         .contextMenu { rowMenu(for: item) }
@@ -644,7 +644,7 @@ private struct FileTreeRow: View {
                     }
                 })
                 .overlay {
-                    TreeContextClickTarget(onContextClick: { selectForContextMenu(target) },
+                    ContextMenuClickTarget(onContextClick: { selectForContextMenu(target) },
                                            onMenuClosed: { contextMenuPath = nil },
                                            onMenuKeyDown: handleMenuKeyDown)
                         .contextMenu { rowMenu(for: target) }

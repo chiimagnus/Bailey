@@ -136,7 +136,7 @@ final class AppIdentityTests: XCTestCase {
 
     @MainActor
     func testTreeContextClickTracksOnlyItsMenuAndClearsOnEnd() throws {
-        let view = TreeContextClickView(frame: CGRect(x: 0, y: 0, width: 120, height: 24))
+        let view = ContextMenuClickView(frame: CGRect(x: 0, y: 0, width: 120, height: 24))
         var contextClicks = 0
         var closed = 0
         view.onContextClick = { contextClicks += 1 }

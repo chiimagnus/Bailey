@@ -33,6 +33,70 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data("original bytes\n".utf8))
     }
 
+    func testOpenToolContextMenuCommandWClosesOnlyRightClickedPanel() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("do-not-close-git.txt", text: "keep original\n")
+        let app = launchIsolatedDockProject(fixture)
+
+        let window = app.windows.firstMatch
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 15))
+        XCTAssertTrue(git.waitForExistence(timeout: 15))
+        git.click()
+        files.rightClick()
+        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
+            $0.menuItems["Close Panel"].exists
+        }, "The native right-click menu must still be open")
+        app.typeKey("w", modifierFlags: .command)
+
+        XCTAssertTrue(files.waitForNonExistence(timeout: 12),
+                      "Cmd-W in the context menu must close Files only")
+        XCTAssertTrue(git.exists && window.exists,
+                      "The active Git group must remain after closing the inactive Files panel")
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(git.waitForNonExistence(timeout: 12),
+                      "After the menu closes, Cmd-W must return to the active Dock group")
+        XCTAssertTrue(window.exists)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "keep original\n")
+    }
+
+    func testOpenFileTabContextMenuCommandWClosesOnlyRightClickedTab() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("left.txt", text: "first\n")
+        let second = try fixture.file("right.txt", text: "second\n")
+        let app = launchIsolatedDockProject(fixture)
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        XCTAssertTrue(bundle.path.contains("DerivedData-Dev/Build/Products/Debug/"))
+        let opened = expectation(description: "Open two fixture files")
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.open([first, second], withApplicationAt: bundle,
+                                configuration: configuration) { _, error in
+            XCTAssertNil(error)
+            opened.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 15), .completed)
+
+        let window = app.windows.firstMatch
+        let a = WorkspaceUITestSupport.fileTab(first, in: window)
+        let b = WorkspaceUITestSupport.fileTab(second, in: window)
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        b.click()
+        a.rightClick()
+        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
+            $0.menuItems["Close"].exists && $0.menuItems["Close Others"].exists
+        }, "The native tab menu must be open before Cmd-W")
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(a.waitForNonExistence(timeout: 12))
+        XCTAssertTrue(b.exists && window.exists,
+                      "Only the right-clicked inactive file tab may close")
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), "first\n")
+        XCTAssertEqual(try String(contentsOf: second, encoding: .utf8), "second\n")
+    }
+
     func testRightClickFileTabAndCommandWCloseTheSameFile() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("first.txt", text: "file A\n")
@@ -179,6 +243,24 @@ final class WorkspaceDockUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertNotEqual(try contextOutlinePixels(of: row), before,
                           "Right-clicked project must draw its own context outline")
+    }
+
+    private func launchIsolatedDockProject(_ fixture: WorkspaceUITestFixture) -> XCUIApplication {
+        let app = XCUIApplication(bundleIdentifier: "chiimagnus.bailey.dev")
+        app.launchArguments = ["--isolated-ui-test", "-AppleLanguages", "(en)"]
+        app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
+        app.launchEnvironment["BAILEY_UI_TEST_PROJECT"] = fixture.root.path
+        app.launchEnvironment["HOME"] = fixture.root.path
+        app.launchEnvironment["CFFIXED_USER_HOME"] = fixture.root.path
+        app.launch()
+        addTeardownBlock { @MainActor in
+            if app.state != .notRunning { app.terminate() }
+        }
+        app.activate()
+        if !app.windows.firstMatch.waitForExistence(timeout: 1) {
+            app.typeKey("n", modifierFlags: [.command, .shift])
+        }
+        return app
     }
 
     private func contextOutlinePixels(of element: XCUIElement) throws -> Data {

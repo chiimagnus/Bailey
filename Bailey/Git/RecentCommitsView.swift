@@ -623,7 +623,7 @@ struct RecentCommitsView: View {
                         .layoutPriority(1)
                         .help(commit.subject)
                         .overlay {
-                            TreeContextClickTarget { selectRow(commitRowID(commit)) }
+                            ContextMenuClickTarget { selectRow(commitRowID(commit)) }
                                 .contextMenu { commitContextMenu(commit) }
                                 .accessibilityHidden(true)
                         }
@@ -717,7 +717,7 @@ struct RecentCommitsView: View {
         .contentShape(Rectangle())
         .onTapGesture { toggle(commit) }
         .background {
-            TreeContextClickTarget { selectRow(commitRowID(commit)) }
+            ContextMenuClickTarget { selectRow(commitRowID(commit)) }
         }
         .contextMenu { commitContextMenu(commit) }
     }
@@ -838,7 +838,7 @@ struct RecentCommitsView: View {
         .accessibilityLabel(label + ", " + String(localized: "Worktree", table: "Git")
                             + ": " + paths.joined(separator: ", "))
         .background {
-            TreeContextClickTarget { selectRow(commitRowID(commit)) }
+            ContextMenuClickTarget { selectRow(commitRowID(commit)) }
         }
         .contextMenu {
             if let head = commit.references.first(where: { $0.kind == .detachedHead }) {
@@ -906,7 +906,7 @@ struct RecentCommitsView: View {
         .buttonStyle(.plain)
         .help(stash.selector + ": " + stash.message)
         .background {
-            TreeContextClickTarget { selectRow(commitRowID(commit)) }
+            ContextMenuClickTarget { selectRow(commitRowID(commit)) }
         }
         .contextMenu { stashActions(stash) }
     }
@@ -1014,7 +1014,7 @@ struct RecentCommitsView: View {
         .accessibilityLabel(reference.name + (matched.isEmpty ? ""
             : ", " + String(localized: "Worktree", table: "Git")))
         .background {
-            TreeContextClickTarget { selectRow(commitRowID(commit)) }
+            ContextMenuClickTarget { selectRow(commitRowID(commit)) }
         }
         .contextMenu { referenceActions(reference, commit: commit) }
     }
@@ -1233,7 +1233,7 @@ struct RecentCommitsView: View {
                         section: section, path: node.path))
                     .background { fileRails(rails, spacing: spacing) }
                     .background {
-                        TreeContextClickTarget {
+                        ContextMenuClickTarget {
                             selectRow(folderRowID(commit, section: section, path: node.path))
                         }
                     }
@@ -1285,7 +1285,7 @@ struct RecentCommitsView: View {
         ) { _ in EmptyView() }
         .id(id)
         .background {
-            TreeContextClickTarget { selectRow(id) }
+            ContextMenuClickTarget { selectRow(id) }
         }
         .contextMenu {
             Button(staged
@@ -1352,7 +1352,7 @@ struct RecentCommitsView: View {
                     .id(folderRowID(commit, section: section, path: node.path))
                     .background { fileRails(rails, spacing: spacing) }
                     .background {
-                        TreeContextClickTarget {
+                        ContextMenuClickTarget {
                             selectRow(folderRowID(commit, section: section, path: node.path))
                         }
                     }
@@ -1398,7 +1398,7 @@ struct RecentCommitsView: View {
         ) { _ in EmptyView() }
         .id(historicalFileRowID(commit, file: file))
         .background {
-            TreeContextClickTarget { selectRow(historicalFileRowID(commit, file: file)) }
+            ContextMenuClickTarget { selectRow(historicalFileRowID(commit, file: file)) }
         }
         .contextMenu {
             Button(String(localized: "Open Historical Diff", table: "Git")) {

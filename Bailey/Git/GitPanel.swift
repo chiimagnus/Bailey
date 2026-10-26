@@ -2129,7 +2129,7 @@ struct GitPanel: View {
             )
         }
         .overlay {
-            TreeContextClickTarget { focusContextChange(key) }
+            ContextMenuClickTarget { focusContextChange(key) }
                 .contextMenu {
                     directoryMenu(path: item.path, selected: selected, kind: kind,
                                   stageTrigger: stageTrigger, unstageTrigger: unstageTrigger)
@@ -2734,7 +2734,7 @@ private struct GitEntryRow: View {
             )
         }
         .overlay {
-            TreeContextClickTarget { onContextClick() }
+            ContextMenuClickTarget { onContextClick() }
                 .contextMenu { menu }
         }
     }

@@ -193,7 +193,7 @@ private struct SidebarProjectRow: View {
                 .allowsHitTesting(false)
         }
         .background {
-            TreeContextClickTarget(onContextClick: onContextClick)
+            ContextMenuClickTarget(onContextClick: onContextClick)
         }
         .contextMenu {
             Button(String(localized: "Close Project", table: "Sidebar")) {
