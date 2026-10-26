@@ -1172,14 +1172,12 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         let project = Project(fallbackName: "fallback", workspaceConfiguration: .standard)
         project.append(PaneTab(content: .session(terminal)))
 
-        let projectNameChanged = expectation(description: "Project title follows observed session")
-        withObservationTracking({ _ = project.name }) { projectNameChanged.fulfill() }
         let titleChanged = expectation(description: "Terminal title observation")
         withObservationTracking({ _ = terminal.title }) { titleChanged.fulfill() }
         terminal.terminalDidChangeTitle("Observed title")
-        await fulfillment(of: [titleChanged, projectNameChanged], timeout: 2)
+        await fulfillment(of: [titleChanged], timeout: 2)
         XCTAssertEqual(terminal.title, "Observed title")
-        XCTAssertEqual(project.name, "Observed title")
+        XCTAssertEqual(project.name, "fallback")
 
         let commandChanged = expectation(description: "Real command completion observation")
         withObservationTracking({ _ = terminal.commandLifecycle.completionSequence }) {

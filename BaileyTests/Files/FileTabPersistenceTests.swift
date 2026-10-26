@@ -1264,21 +1264,21 @@ final class NativeFileTabTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         let editor = try XCTUnwrap(mountedEditor(in: host))
         let scroll = try XCTUnwrap(editor.enclosingScrollView)
-        let ruler = try XCTUnwrap(editor.gutterView)
+        let gutter = try XCTUnwrap(editor.gutterView)
         let highlight = NSColor(srgbRed: 0.9, green: 0.12, blue: 0.15, alpha: 1)
         editor.backgroundColor = .black
         scroll.backgroundColor = .black
-        ruler.backgroundColor = .black
+        gutter.backgroundColor = .black
         editor.highlightSelectedLine = true
         editor.selectedLineHighlightColor = highlight
-        ruler.selectedLineHighlightColor = highlight
+        gutter.selectedLineHighlightColor = highlight
         editor.textSelection = NSRange(location: 0, length: 0)
 
         func verify(_ stage: String) throws {
             host.layoutSubtreeIfNeeded()
             scroll.layoutSubtreeIfNeeded()
             editor.needsDisplay = true
-            ruler.needsDisplay = true
+            gutter.needsDisplay = true
             window.displayIfNeeded()
             let image = try XCTUnwrap(scroll.bitmapImageRepForCachingDisplay(in: scroll.bounds))
             scroll.cacheDisplay(in: scroll.bounds, to: image)
@@ -1423,12 +1423,12 @@ final class NativeFileTabTests: XCTestCase {
         XCTAssertTrue((scroll as NSTextFinderBarContainer).isFindBarVisible)
         // Remounting reapplies the user's theme, which replaces the synthetic
         // bright-red diagnostic palette used by this test before detachment.
-        XCTAssertEqual(editor.backgroundColor, ruler.backgroundColor)
-        XCTAssertEqual(editor.selectedLineHighlightColor, ruler.selectedLineHighlightColor)
+        XCTAssertEqual(editor.backgroundColor, gutter.backgroundColor)
+        XCTAssertEqual(editor.selectedLineHighlightColor, gutter.selectedLineHighlightColor)
         editor.backgroundColor = .black
-        ruler.backgroundColor = .black
+        gutter.backgroundColor = .black
         editor.selectedLineHighlightColor = highlight
-        ruler.selectedLineHighlightColor = highlight
+        gutter.selectedLineHighlightColor = highlight
         try verify("find after dock reattachment")
         file.performFindAction(.hide)
         try await waitForFileTabState {

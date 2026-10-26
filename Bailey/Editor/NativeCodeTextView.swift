@@ -13,19 +13,12 @@ class NativeCodeTextView: NSTextView {
     override var undoManager: UndoManager? { documentUndoManager }
     var text: String? {
         get { string }
-        set {
-            let content = newValue ?? ""
-            string = content
-            resetDocumentIndex(content)
-        }
+        set { string = newValue ?? "" }
     }
 
     var attributedText: NSAttributedString {
         get { textStorage ?? NSAttributedString(string: string) }
-        set {
-            textStorage?.setAttributedString(newValue)
-            resetDocumentIndex(newValue.string)
-        }
+        set { textStorage?.setAttributedString(newValue) }
     }
 
     var textSelection: NSRange {
@@ -112,11 +105,11 @@ class NativeCodeTextView: NSTextView {
         )
     }
     var showsLineNumbers = false {
-        didSet { if showsLineNumbers != oldValue { configureRuler() } }
+        didSet { if showsLineNumbers != oldValue { configureGutter() } }
     }
     var selectedLineHighlightColor: NSColor = .clear
     var highlightSelectedLine = false
-    private(set) var gutterView: NativeLineNumberRuler?
+    private(set) var gutterView: NativeLineNumberGutter?
     private var lineIndex: NativeTextLineIndex?
     private var measuredLineWidths: NativeMeasuredLineWidths?
     private var isWrappingLines = false
@@ -453,21 +446,21 @@ class NativeCodeTextView: NSTextView {
 
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
-        configureRuler()
+        configureGutter()
     }
 
-    private func configureRuler() {
+    private func configureGutter() {
         guard let scroll = enclosingScrollView else { return }
         if showsLineNumbers {
-            let ruler = gutterView ?? NativeLineNumberRuler(scrollView: scroll, orientation: .verticalRuler)
-            ruler.editor = self
-            ruler.ruleThickness = gutterThickness
-            ruler.backgroundColor = backgroundColor
-            ruler.selectedLineHighlightColor = selectedLineHighlightColor
-            gutterView = ruler
+            let gutter = gutterView ?? NativeLineNumberGutter(frame: .zero)
+            gutter.editor = self
+            gutter.preferredWidth = gutterWidth
+            gutter.backgroundColor = backgroundColor
+            gutter.selectedLineHighlightColor = selectedLineHighlightColor
+            gutterView = gutter
             scroll.superview?.needsLayout = true
-        } else if let ruler = gutterView {
-            ruler.removeFromSuperview()
+        } else if let gutter = gutterView {
+            gutter.removeFromSuperview()
             gutterView = nil
             scroll.superview?.needsLayout = true
         }
@@ -477,7 +470,7 @@ class NativeCodeTextView: NSTextView {
         font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     }
 
-    private var gutterThickness: CGFloat {
+    private var gutterWidth: CGFloat {
         let digitWidth = ("8" as NSString).size(withAttributes: [
             .font: gutterNumberFont
         ]).width
@@ -487,14 +480,13 @@ class NativeCodeTextView: NSTextView {
     private func resetDocumentIndex(_ document: String) {
         lineIndex = NativeTextLineIndex(document as NSString)
         measuredLineWidths = nil
-        updateGutter()
     }
 
     func updateGutter() {
         guard let gutterView else { return }
-        let thickness = gutterThickness
-        if abs(gutterView.ruleThickness - thickness) > 0.5 {
-            gutterView.ruleThickness = thickness
+        let width = gutterWidth
+        if abs(gutterView.preferredWidth - width) > 0.5 {
+            gutterView.preferredWidth = width
             enclosingScrollView?.superview?.needsLayout = true
         }
         gutterView.needsDisplay = true
@@ -543,6 +535,7 @@ class NativeCodeTextView: NSTextView {
         guard edited.location != NSNotFound, edited.location >= 0,
               priorLength >= 0, NSMaxRange(edited) <= storage.length else {
             resetDocumentIndex(storage.string)
+            updateGutter()
             return
         }
         let previousRange = NSRange(location: edited.location, length: priorLength)
@@ -697,8 +690,9 @@ extension NSTextContentManager {
 
 
 @MainActor
-final class NativeLineNumberRuler: NSRulerView {
+final class NativeLineNumberGutter: NSView {
     weak var editor: NativeCodeTextView?
+    var preferredWidth: CGFloat = 35
     var backgroundColor: NSColor = .textBackgroundColor {
         didSet { if backgroundColor != oldValue { needsDisplay = true } }
     }
@@ -722,13 +716,13 @@ final class NativeLineNumberRuler: NSRulerView {
         NSBezierPath(rect: bounds).addClip()
         backgroundColor.setFill()
         visible.fill()
-        drawHashMarksAndLabels(in: visible)
+        drawLineNumbers(in: visible)
         NSColor.separatorColor.withAlphaComponent(0.1).setStroke()
         NSBezierPath.strokeLine(from: NSPoint(x: bounds.maxX - 0.5, y: visible.minY),
                                 to: NSPoint(x: bounds.maxX - 0.5, y: visible.maxY))
     }
 
-    override func drawHashMarksAndLabels(in rect: NSRect) {
+    private func drawLineNumbers(in rect: NSRect) {
         guard let editor, let content = editor.textContentStorage,
               let layout = editor.textLayoutManager else { return }
         let font = editor.gutterNumberFont
@@ -757,7 +751,7 @@ final class NativeLineNumberRuler: NSRulerView {
         if content.documentRange.isEmpty {
             // TextKit 2 has no paragraph to enumerate for an empty document.
             let height = ceil(NSLayoutManager().defaultLineHeight(for: editor.font ?? font))
-            let centerY = isFlipped ? bounds.minY + height / 2 : bounds.maxY - height / 2
+            let centerY = bounds.maxY - height / 2
             drawLine(1, at: centerY, height: height)
             return
         }
