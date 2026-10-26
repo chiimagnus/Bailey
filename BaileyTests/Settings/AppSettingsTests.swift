@@ -282,6 +282,45 @@ final class AppSettingsTests: XCTestCase {
         }
     }
 
+    func testSettingsSelectedSidebarTitleUsesLightForeground() throws {
+        let savedLight = Theme.terminal(dark: false).name
+        let savedDark = Theme.terminal(dark: true).name
+        defer { Theme.reloadSelection(light: savedLight, dark: savedDark) }
+
+        Theme.reloadSelection(light: "Ayu Light", dark: "GitHub Dark")
+        for dark in [false, true] {
+            let host = NSHostingView(rootView: SettingsView(
+                application: WorkspaceApplication(), settings: AppSettings(configURL: configURL)
+            ))
+            let window = NSWindow(
+                contentRect: NSRect(x: -980, y: -980, width: 840, height: 560),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            window.contentView = host
+            window.orderFront(nil)
+            defer { window.close() }
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
+            var selectedTitlePixels = 0
+            for y in Int(37 * scale)..<Int(60 * scale) {
+                for x in Int(45 * scale)..<Int(92 * scale) {
+                    guard let rgb = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+                    else { continue }
+                    if min(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) > 0.85 {
+                        selectedTitlePixels += 1
+                    }
+                }
+            }
+            XCTAssertGreaterThan(selectedTitlePixels, 35,
+                "Selected sidebar title must be light in \(dark ? "dark" : "light") appearance; found \(selectedTitlePixels) pixels")
+        }
+    }
+
     func testIndependentAppearanceChangesNeverInvalidateApplicationTheme() throws {
         let domain = "bailey-appearance-fixture-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))

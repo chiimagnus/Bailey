@@ -66,6 +66,10 @@ struct SettingsView: View {
 
     private let families = TerminalFont.selectableFamilies()
 
+    private var themeAccent: Color {
+        Color(nsColor: Theme.terminal(dark: colorScheme == .dark).accentNSColor)
+    }
+
     private var toolbarVisibilityDescription: String {
         switch settings.toolbarVisibility {
         case .auto:
@@ -121,10 +125,10 @@ struct SettingsView: View {
             .scrollContentBackground(.hidden)
             .background(theme.isBaileyDefault ? Color.clear : Color(nsColor: theme.backgroundNSColor))
             .foregroundStyle(Color(nsColor: theme.foregroundNSColor))
+            .tint(Color(nsColor: theme.foregroundNSColor))
             .navigationTitle((selectedPage ?? .common).title)
         }
         .frame(width: 840, height: 560)
-        .tint(accent)
         .alert(
             String(localized: "Couldn’t Relaunch Bailey", table: "Settings"),
             isPresented: $isShowingRelaunchError
@@ -136,16 +140,18 @@ struct SettingsView: View {
     }
 
     private func sidebarRow(_ page: SettingsPage, accent: Color) -> some View {
-        Label {
+        let selected = selectedPage == page
+        return Label {
             Text(page.title)
+                .foregroundStyle(selected ? Color.white : Color.primary)
         } icon: {
             Image(systemName: page.icon)
-                .foregroundStyle(selectedPage == page ? Color.primary : accent)
+                .foregroundStyle(selected ? Color.primary : accent)
         }
         .tag(page)
         .listRowBackground(
             RoundedRectangle(cornerRadius: 8)
-                .fill(selectedPage == page ? accent : Color.clear)
+                .fill(selected ? accent : Color.clear)
                 .padding(.horizontal, 8)
         )
     }
@@ -159,6 +165,7 @@ struct SettingsView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .tint(themeAccent)
 
             Picker(String(localized: "Language", table: "Settings"), selection: $settings.language) {
                 ForEach(AppLanguage.allCases) { language in
@@ -194,6 +201,7 @@ struct SettingsView: View {
             HStack {
                 Text(String(localized: "Font size", table: "Settings"))
                 Slider(value: $settings.panelFontSize, in: AppSettings.panelFontSizeRange, step: 1)
+                    .tint(themeAccent)
                     .accessibilityLabel(String(localized: "Panel font size", table: "Settings"))
                 Text(String(localized: "\(Int(settings.panelFontSize)) pt", table: "Settings"))
                     .monospacedDigit()
@@ -251,6 +259,7 @@ struct SettingsView: View {
             HStack {
                 Text(String(localized: "Size", table: "Settings"))
                 Slider(value: $settings.fontSize, in: AppSettings.fontSizeRange, step: 1)
+                    .tint(themeAccent)
                     .accessibilityLabel(String(localized: "Size", table: "Settings"))
                 Text(String(localized: "\(Int(settings.fontSize)) pt", table: "Settings"))
                     .monospacedDigit()
@@ -281,6 +290,7 @@ struct SettingsView: View {
                 }
             }
             Toggle(String(localized: "Blink cursor", table: "Terminal"), isOn: $settings.cursorBlinking)
+                .tint(themeAccent)
 
             DescribedSettingsRow(
                 String(localized: "Thicken font strokes", table: "Settings"),
@@ -288,6 +298,7 @@ struct SettingsView: View {
             ) {
                 Toggle(String(localized: "Thicken font strokes", table: "Settings"), isOn: $settings.fontThicken)
                     .labelsHidden()
+                    .tint(themeAccent)
             }
 
             DescribedSettingsRow(
@@ -296,6 +307,7 @@ struct SettingsView: View {
             ) {
                 Toggle(String(localized: "Use Option as Alt/Meta", table: "Settings"), isOn: $settings.macosOptionAsAlt)
                     .labelsHidden()
+                    .tint(themeAccent)
             }
 
             DescribedSettingsRow(
@@ -304,6 +316,7 @@ struct SettingsView: View {
             ) {
                 Toggle(String(localized: "Restore session history on relaunch", table: "Settings"), isOn: $settings.restoreTerminalHistory)
                     .labelsHidden()
+                    .tint(themeAccent)
             }
         }
     }
@@ -311,6 +324,7 @@ struct SettingsView: View {
     private var textEditorSettings: some View {
         Section(String(localized: "Text Editing", table: "Settings")) {
             Toggle(String(localized: "Wrap lines to editor width", table: "Settings"), isOn: $settings.wrapLines)
+                .tint(themeAccent)
         }
     }
 
