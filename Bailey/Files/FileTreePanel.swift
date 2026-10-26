@@ -452,19 +452,40 @@ private struct FileTreeRow: View {
     private func rowMenu(for target: FileTreeModel.Item) -> some View {
         let selection = target.path == item.path
             ? model.contextSelection(for: item) : [target.path]
+        let matchesKeyboardSelection = listFocused
+            && Set(selection) == Set(model.selectedOperationPaths)
         if target.isDirectory {
-            Button(String(localized: "New File…", table: "Sidebar")) {
+            let matchesNewItemTarget = listFocused
+                && model.selectedDirectoryPath == target.path
+            let newFileTitle = String(localized: "New File…", table: "Sidebar")
+            Button {
                 Task {
                     guard isCurrentTarget() else { return }
                     await model.beginNewFile(in: target.path)
                 }
+            } label: {
+                if matchesNewItemTarget {
+                    Text(verbatim: newFileTitle + "\t⌘N")
+                } else {
+                    Text(newFileTitle)
+                }
             }
-            Button(String(localized: "New Folder…", table: "Sidebar")) {
+            .accessibilityLabel(newFileTitle)
+
+            let newFolderTitle = String(localized: "New Folder…", table: "Sidebar")
+            Button {
                 Task {
                     guard isCurrentTarget() else { return }
                     await model.beginNewFolder(in: target.path)
                 }
+            } label: {
+                if matchesNewItemTarget {
+                    Text(verbatim: newFolderTitle + "\t⌥⌘N")
+                } else {
+                    Text(newFolderTitle)
+                }
             }
+            .accessibilityLabel(newFolderTitle)
         } else {
             Button(String(localized: "Open", table: "Sidebar")) {
                 if isCurrentTarget() { openFile(target.path, true) }
@@ -479,16 +500,32 @@ private struct FileTreeRow: View {
             }
         }
         Divider()
-        Button(String(localized: "Cut", table: "Sidebar")) {
+        let cutTitle = String(localized: "Cut", table: "Sidebar")
+        Button {
             if isCurrentTarget() { onCommand(.copy(selection, cut: true)) }
+        } label: {
+            Text(verbatim: cutTitle + (matchesKeyboardSelection ? "\t⌘X" : ""))
         }
-        Button(String(localized: "Copy", table: "Sidebar")) {
+        .accessibilityLabel(cutTitle)
+
+        let copyTitle = String(localized: "Copy", table: "Sidebar")
+        Button {
             if isCurrentTarget() { onCommand(.copy(selection, cut: false)) }
+        } label: {
+            Text(verbatim: copyTitle + (matchesKeyboardSelection ? "\t⌘C" : ""))
         }
+        .accessibilityLabel(copyTitle)
+
         if target.isDirectory {
-            Button(String(localized: "Paste", table: "Sidebar")) {
+            let pasteTitle = String(localized: "Paste", table: "Sidebar")
+            Button {
                 if isCurrentTarget() { onCommand(.paste(into: target.path)) }
+            } label: {
+                Text(verbatim: pasteTitle + (listFocused
+                    && (model.selectedDirectoryPath ?? model.rootPath) == target.path
+                        ? "\t⌘V" : ""))
             }
+            .accessibilityLabel(pasteTitle)
         }
         Divider()
         Button(String(localized: "Copy Path", table: "Sidebar")) {
@@ -509,11 +546,14 @@ private struct FileTreeRow: View {
             guard isCurrentTarget() else { return }
             model.beginRename(target)
         }
-        Button(isRemote ? String(localized: "Delete…", table: "Sidebar")
-                        : String(localized: "Move to Trash", table: "Sidebar"),
-               role: .destructive) {
+        let deleteTitle = isRemote ? String(localized: "Delete…", table: "Sidebar")
+            : String(localized: "Move to Trash", table: "Sidebar")
+        Button(role: .destructive) {
             if isCurrentTarget() { onCommand(.delete(selection)) }
+        } label: {
+            Text(verbatim: deleteTitle + (matchesKeyboardSelection ? "\t⌫" : ""))
         }
+        .accessibilityLabel(deleteTitle)
     }
 
     /// Commits an inline rename and, when the file actually moved, tells the

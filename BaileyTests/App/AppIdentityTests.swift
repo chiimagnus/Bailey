@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import XCTest
 @testable import Bailey
 
@@ -94,6 +95,31 @@ final class AppIdentityTests: XCTestCase {
         let delete = try XCTUnwrap(matches.first)
         XCTAssertEqual(delete.keyEquivalent, String(UnicodeScalar(NSBackspaceCharacter)!))
         XCTAssertTrue(delete.keyEquivalentModifierMask.isEmpty)
+    }
+
+    @MainActor
+    func testContextMenuShortcutHintsAreDisplayOnly() throws {
+        let menu = NSHostingMenu(rootView: VStack {
+            Button(action: {}) { Text(verbatim: "Copy\t⌘C") }
+            Button(action: {}) { Text(verbatim: "Paste\t⌘V") }
+            Button("Other action", action: {})
+        })
+        menu.update()
+
+        let copy = try XCTUnwrap(menu.items.first)
+        let paste = try XCTUnwrap(menu.items.dropFirst().first)
+        XCTAssertEqual(copy.attributedTitle?.string, "Copy\t⌘C",
+                       "The menu observer must format shortcuts before the popup opens")
+        XCTAssertEqual(paste.attributedTitle?.string, "Paste\t⌘V")
+        XCTAssertEqual(copy.accessibilityLabel(), "Copy")
+        XCTAssertEqual(paste.accessibilityLabel(), "Paste")
+        let style = try XCTUnwrap(copy.attributedTitle?
+            .attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
+        XCTAssertEqual(style.tabStops.first?.alignment, .right)
+        XCTAssertTrue(copy.keyEquivalent.isEmpty)
+        XCTAssertTrue(paste.keyEquivalent.isEmpty)
+        XCTAssertGreaterThanOrEqual(menu.minimumWidth, 275)
+        XCTAssertNil(menu.items.last?.attributedTitle)
     }
 
     func testStableStorageLocations() {

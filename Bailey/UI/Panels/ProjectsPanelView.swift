@@ -50,10 +50,18 @@ struct ProjectsPanelView: View {
                 ) { showingProjectPicker.toggle() }
                 .popover(isPresented: $showingProjectPicker, arrowEdge: .top) {
                     VStack(spacing: 2) {
-                        Button(String(localized: "Add Projects…", table: "Sidebar")) {
+                        let addTitle = String(localized: "Add Projects…", table: "Sidebar")
+                        Button {
                             showingProjectPicker = false
                             manager.chooseFolders()
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text(addTitle)
+                                Spacer(minLength: 0)
+                                Text(verbatim: "⇧⌘A").foregroundStyle(.secondary)
+                            }
                         }
+                        .accessibilityLabel(addTitle)
                         Button(String(localized: "Add SSH Files or Projects…", table: "Sidebar")) {
                             showingProjectPicker = false
                             manager.chooseSSHItems()

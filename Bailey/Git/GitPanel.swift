@@ -53,6 +53,7 @@ struct GitPanel: View {
     private var commitMessageBinding: Binding<String> {
         Binding(get: { model.commitMessage }, set: { model.commitMessage = $0 })
     }
+    @FocusState private var isCommitFieldFocused: Bool
     @State private var pendingDiscard: GitStatusModel.PendingDiscard?
     @State private var pendingDiscardAll: [GitStatusModel.PendingDiscard] = []
     @State private var pendingDiscardAllTrigger: OperationTrigger = .discardAll
@@ -1475,6 +1476,7 @@ struct GitPanel: View {
                     RoundedRectangle(cornerRadius: 6)
                         .fill(Color.primary.opacity(0.05))
                 )
+                .focused($isCommitFieldFocused)
                 .focusedValue(\.baileyGitCommit, focusedCommitAction)
 
             if !showSyncButton || canCommit(includeAll: false) {
@@ -1510,9 +1512,13 @@ struct GitPanel: View {
 
     private var commitMenu: some View {
         Menu {
-            Button(String(localized: "Commit Staged", table: "Sidebar")) {
+            let stagedTitle = String(localized: "Commit Staged", table: "Sidebar")
+            Button {
                 performCommit(includeAll: false, trigger: .commitMenu)
+            } label: {
+                Text(verbatim: stagedTitle + (isCommitFieldFocused ? "\t⌘↩" : ""))
             }
+                .accessibilityLabel(stagedTitle)
                 .disabled(!canCommit(includeAll: false))
             Button(String(localized: "Stage All & Commit", table: "Sidebar")) {
                 performCommit(includeAll: true, trigger: .commitMenu)

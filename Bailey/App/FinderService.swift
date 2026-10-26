@@ -57,10 +57,45 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func mainMenuItemAdded(_ notification: Notification) {
         guard let menu = notification.object as? NSMenu else { return }
+        if menu.items.last?.title.contains("\t") == true {
+            Self.formatShortcutHints(in: menu)
+        }
         if menu === NSApp.mainMenu { removeUnusedViewMenu() }
         if menu === NSApp.mainMenu
             || NSApp.mainMenu?.items.contains(where: { $0.submenu === menu }) == true {
             configureDeleteShortcut()
+        }
+    }
+
+    /// A context menu may display a shortcut, but only the main menu owns its key equivalent.
+    static func formatShortcutHints(in menu: NSMenu) {
+        let hinted = menu.items.filter { $0.keyEquivalent.isEmpty && $0.title.contains("\t") }
+        guard !hinted.isEmpty else { return }
+
+        let font = NSFont.menuFont(ofSize: 0)
+        let widest = menu.items.map {
+            let label = $0.title.components(separatedBy: "\t").first ?? $0.title
+            return (label as NSString).size(withAttributes: [.font: font]).width
+        }.max() ?? 0
+        let tabStop = max(250, widest + 90)
+        menu.minimumWidth = max(menu.minimumWidth, tabStop + 25)
+
+        for item in hinted {
+            let style = NSMutableParagraphStyle()
+            style.tabStops = [NSTextTab(textAlignment: .right, location: tabStop)]
+            let label = NSMutableAttributedString(
+                string: item.title, attributes: [.font: font, .paragraphStyle: style]
+            )
+            let tab = (item.title as NSString).range(of: "\t")
+            if tab.location != NSNotFound {
+                let suffix = NSRange(location: tab.location + 1,
+                                     length: (item.title as NSString).length - tab.location - 1)
+                label.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: suffix)
+            }
+            item.attributedTitle = label
+            if let tabIndex = item.title.firstIndex(of: "\t") {
+                item.setAccessibilityLabel(String(item.title[..<tabIndex]))
+            }
         }
     }
 

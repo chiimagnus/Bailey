@@ -394,11 +394,17 @@ struct DockTabGroupView: View {
                         showingPanelPicker = false
                         if let item = action.item { add(item) } else { addSession() }
                     } label: {
-                        Label(
-                            action.item?.label(project: project)
-                                ?? String(localized: "New Terminal", table: "Interface"),
-                            systemImage: action.item?.symbol ?? "terminal"
-                        )
+                        HStack {
+                            Label(
+                                action.item?.label(project: project)
+                                    ?? String(localized: "New Terminal", table: "Interface"),
+                                systemImage: action.item?.symbol ?? "terminal"
+                            )
+                            Spacer(minLength: 0)
+                            if action.item == nil, isFocused {
+                                Text(verbatim: "⌘T").foregroundStyle(.secondary)
+                            }
+                        }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(7)
                         .contentShape(Rectangle())
@@ -416,10 +422,14 @@ struct DockTabGroupView: View {
             showingPanelPicker = false
             manager.chooseFiles(inGroup: (projectID: project.id, groupID: group.id))
         } label: {
-            Label(String(localized: "Open File…", table: "Interface"), systemImage: "doc")
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(7)
-                .contentShape(Rectangle())
+            HStack {
+                Label(String(localized: "Open File…", table: "Interface"), systemImage: "doc")
+                Spacer(minLength: 0)
+                if isFocused { Text(verbatim: "⌘O").foregroundStyle(.secondary) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(7)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -433,11 +443,18 @@ struct DockTabGroupView: View {
                 else { await manager.newFile() }
             }
         } label: {
-            Label(
-                isDirectory ? String(localized: "New Folder…", table: "Sidebar")
-                    : String(localized: "New File…", table: "Sidebar"),
-                systemImage: isDirectory ? "folder.badge.plus" : "doc.badge.plus"
-            )
+            HStack {
+                Label(
+                    isDirectory ? String(localized: "New Folder…", table: "Sidebar")
+                        : String(localized: "New File…", table: "Sidebar"),
+                    systemImage: isDirectory ? "folder.badge.plus" : "doc.badge.plus"
+                )
+                Spacer(minLength: 0)
+                if isFocused {
+                    Text(verbatim: isDirectory ? "⌥⌘N" : "⌘N")
+                        .foregroundStyle(.secondary)
+                }
+            }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(7)
             .contentShape(Rectangle())
@@ -520,7 +537,17 @@ struct DockTabGroupView: View {
             )
             .accessibilityIdentifier("bailey.dock.\(item.configurationName ?? "unknown")")
             .contextMenu {
-                Button(String(localized: "Close Panel", table: "Interface")) { closeTool(item) }
+                let closeTitle = String(localized: "Close Panel", table: "Interface")
+                Button {
+                    closeTool(item)
+                } label: {
+                    if isFocused, active == item {
+                        Text(verbatim: closeTitle + "\t⌘W")
+                    } else {
+                        Text(closeTitle)
+                    }
+                }
+                .accessibilityLabel(closeTitle)
             }
         }
     }
@@ -639,9 +666,17 @@ struct DockTabGroupView: View {
             }
             Divider()
         }
-        Button(String(localized: "Close", table: "Interface")) {
+        let closeTitle = String(localized: "Close", table: "Interface")
+        Button {
             if let current = project.tabs.first(where: { $0.id == tabID }) { project.close(current) }
+        } label: {
+            if isFocused, active == .tab(tabID) {
+                Text(verbatim: closeTitle + "\t⌘W")
+            } else {
+                Text(closeTitle)
+            }
         }
+        .accessibilityLabel(closeTitle)
         Button(String(localized: "Close Others", table: "Interface")) {
             if let current = project.tabs.first(where: { $0.id == tabID }) { project.closeOthers(current) }
         }
