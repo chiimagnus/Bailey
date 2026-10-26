@@ -1,10 +1,10 @@
 version = 1
-current_task_id = ""
+current_task_id = "P1-T1"
 
 [[tasks]]
 id = "P1-T1"
 title = "复现并确认原生菜单事件链"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
 note = ""
