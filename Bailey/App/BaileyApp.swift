@@ -96,20 +96,6 @@ private struct BaileyCommands: Commands {
     }
     @Environment(\.openWindow) private var openWindow
 
-    private var closeMenuTitle: String {
-        guard let project = manager?.selectedProject else {
-            return String(localized: "Close Window", table: "Interface")
-        }
-        switch project.dock.activeGroup?.selected {
-        case .tab?, .projects?, .files?, .git?:
-            return String(localized: "Close Panel", table: "Interface")
-        case nil:
-            return project.tabs.isEmpty
-                ? String(localized: "Close Project", table: "Sidebar")
-                : String(localized: "Close Window", table: "Interface")
-        }
-    }
-
     var body: some Commands {
         let _ = application.registerWindowOpener {
             openWindow(id: "main")
@@ -198,7 +184,7 @@ private struct BaileyCommands: Commands {
             .keyboardShortcut("[", modifiers: [.command, .shift])
             .disabled((manager?.selectedProject?.dock.panelOrder.count ?? 0) < 2)
 
-            Button(closeMenuTitle) {
+            Button(String(localized: "Close Panel", table: "Interface")) {
                 if let manager, let project = manager.selectedProject,
                    project.dock.activeGroup?.selected != nil || project.tabs.isEmpty {
                     manager.closeSelectedTab()
