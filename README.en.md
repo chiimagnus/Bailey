@@ -4,7 +4,9 @@
 
 **A flexible, native AI IDE for Mac.**
 
-Work with source files, Git, a browser, and AI command-line tools around your terminal in one customizable window. Requires an Apple Silicon Mac running macOS 15.6 or later.
+Work with source files, Git, a browser,
+and AI command-line tools around your terminal in one customizable window. Requires an Apple
+Silicon Mac running macOS 15.6 or later.
 
 ## Screenshots
 
@@ -25,6 +27,8 @@ xattr -dr com.apple.quarantine "/Applications/Bailey.app"
 ## More
 
 - [Features and developer docs](docs/README.md) · [Build from source](docs/development.md)
-- [Contributing](CONTRIBUTING.md) · [Report a bug](https://github.com/chiimagnus/Bailey/issues) · [Security](SECURITY.md)
+- [Contributing](CONTRIBUTING.md) · [Report a bug](https://github.com/chiimagnus/Bailey/issues) ·
+  [Security](SECURITY.md)
 
-Bailey is licensed under [GPLv3](LICENSE). See [NOTICE.md](NOTICE.md) for project origins and third-party attributions.
+Bailey is licensed under [GPLv3](LICENSE). See [NOTICE.md](NOTICE.md) for project origins and
+third-party attributions.
