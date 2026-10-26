@@ -156,16 +156,22 @@ struct SettingsView: View {
         )
     }
 
+    private var appearancePicker: some View {
+        Picker(String(localized: "Theme", table: "Settings"), selection: $settings.theme) {
+            ForEach(AppTheme.allCases) { theme in
+                Text(theme.title).tag(theme)
+            }
+        }
+    }
+
     @ViewBuilder
     private var commonSettings: some View {
         Section(String(localized: "Appearance", table: "Settings")) {
-            Picker(String(localized: "Theme", table: "Settings"), selection: $settings.theme) {
-                ForEach(AppTheme.allCases) { theme in
-                    Text(theme.title).tag(theme)
-                }
+            if #available(macOS 27.0, *) {
+                appearancePicker.pickerStyle(.tabs)
+            } else {
+                appearancePicker.pickerStyle(.segmented).tint(themeAccent)
             }
-            .pickerStyle(.segmented)
-            .tint(themeAccent)
 
             Picker(String(localized: "Language", table: "Settings"), selection: $settings.language) {
                 ForEach(AppLanguage.allCases) { language in
