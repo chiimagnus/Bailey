@@ -218,6 +218,7 @@ private struct BaileyCommands: Commands {
                                 .frame(width: 16, height: 16)
                         }
                     }
+                    .keyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .control)
                 }
             }
         }
