@@ -153,19 +153,25 @@ private struct BaileyCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Projects", table: "Interface")) {
+            Button {
                 manager?.showPanel(.projects)
+            } label: {
+                Label(String(localized: "Projects", table: "Interface"), systemImage: DockItem.projects.symbol)
             }
             .disabled(manager?.selectedProject == nil)
 
-            Button(String(localized: "File Manager", table: "Sidebar")) {
+            Button {
                 manager?.showPanel(.files)
+            } label: {
+                Label(String(localized: "File Manager", table: "Sidebar"), systemImage: DockItem.files.symbol)
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
 
-            Button(String(localized: "Git Manager", table: "Sidebar")) {
+            Button {
                 manager?.showPanel(.git)
+            } label: {
+                Label(String(localized: "Git Manager", table: "Sidebar"), systemImage: DockItem.git.symbol)
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
@@ -198,10 +204,19 @@ private struct BaileyCommands: Commands {
                 Divider()
 
                 ForEach(Array((manager?.selectedProject?.tabs ?? []).prefix(9).enumerated()).map {
-                    WindowMenuItem(id: $0.element.id, index: $0.offset, title: $0.element.displayTitle)
+                    MenuEntry(tab: $0.element, index: $0.offset)
                 }) { item in
-                    Button(item.title) {
+                    Button {
                         manager?.selectPanel(.tab(item.id))
+                    } label: {
+                        Label {
+                            Text(verbatim: item.title)
+                        } icon: {
+                            Image(nsImage: item.icon)
+                                .resizable()
+                                .interpolation(.high)
+                                .frame(width: 16, height: 16)
+                        }
                     }
                 }
             }
@@ -244,10 +259,16 @@ private struct BaileyCommands: Commands {
                 Divider()
 
                 ForEach(Array((manager?.projects ?? []).prefix(9).enumerated()).map {
-                    WindowMenuItem(id: $0.element.id, index: $0.offset, title: $0.element.name)
+                    MenuEntry(project: $0.element, index: $0.offset)
                 }) { item in
-                    Button(item.title) {
+                    Button {
                         manager?.selectProject(index: item.index)
+                    } label: {
+                        Label {
+                            Text(verbatim: item.title)
+                        } icon: {
+                            Image(nsImage: item.icon)
+                        }
                     }
                     .keyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .command)
                 }
@@ -351,8 +372,32 @@ private struct BaileyCommands: Commands {
     }
 }
 
-private struct WindowMenuItem: Identifiable {
+private struct MenuEntry: Identifiable {
     let id: UUID
     let index: Int
     let title: String
+    let icon: NSImage
+
+    init(tab: PaneTab, index: Int) {
+        id = tab.id
+        self.index = index
+        title = tab.displayTitle
+        if let path = tab.content.fileIconPath {
+            icon = MaterialFileIcon.image(forPath: path)
+        } else if case .browser(let browser) = tab.content, let favicon = browser.favicon {
+            icon = favicon
+        } else {
+            icon = NSImage(systemSymbolName: tab.content.systemImage, accessibilityDescription: nil) ?? NSImage()
+        }
+    }
+
+    init(project: Project, index: Int) {
+        id = project.id
+        self.index = index
+        title = project.name
+        icon = NSImage(
+            systemSymbolName: project.sshHost == nil ? "folder" : "network",
+            accessibilityDescription: nil
+        ) ?? NSImage()
+    }
 }
