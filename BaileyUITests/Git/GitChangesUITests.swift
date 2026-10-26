@@ -3,6 +3,35 @@ import XCTest
 
 @MainActor
 final class GitChangesUITests: XCTestCase {
+    func testRightClickAnotherGitChangeMovesKeyboardCursorWithoutOpeningDiff() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("alpha.txt", text: "first old\n")
+        let second = try fixture.file("beta.txt", text: "second old\n")
+        try fixture.initializeGit()
+        try "first new\n".write(to: first, atomically: true, encoding: .utf8)
+        try "second new\n".write(to: second, atomically: true, encoding: .utf8)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let window = app.windows.firstMatch
+        let firstRow = WorkspaceUITestSupport.fileRow(first, in: window, relativeTo: fixture.root)
+        let secondRow = WorkspaceUITestSupport.fileRow(second, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 25))
+        XCTAssertTrue(secondRow.waitForExistence(timeout: 25))
+        firstRow.click()
+        secondRow.rightClick()
+        XCTAssertTrue(app.menuItems["Copy Path"].waitForExistence(timeout: 8))
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let tab = window.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@", "beta.txt"
+        )).firstMatch
+        XCTAssertTrue(tab.waitForExistence(timeout: 15),
+                      "Return after context-click must browse the clicked Git change")
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]),
+                       Data(" M alpha.txt\n M beta.txt\n".utf8))
+    }
+
     func testStagedAndUnstagedRowsPreviewTheirDistinctGitBaselines() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("index-side.txt", text: "HEAD contents\n")

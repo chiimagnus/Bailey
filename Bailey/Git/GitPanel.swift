@@ -2014,6 +2014,13 @@ struct GitPanel: View {
         }
     }
 
+    private func focusContextChange(_ key: ChangeSelection) {
+        guard isGitActive, hasCurrentPanelTarget, model.canUseCurrentStatus else { return }
+        selectedChange = key
+        lastKeyboardRegion = .changes
+        keyboardOwner.focus()
+    }
+
     private func browseGitChange(_ change: VisibleChange) {
         guard let entry = change.entry, hasCurrentPanelTarget,
               model.canUseCurrentStatus, model.isCurrent(entry) else { return }
@@ -2121,9 +2128,12 @@ struct GitPanel: View {
                 discard: { requestDiscard(selected, trigger: discardTrigger) }
             )
         }
-        .contextMenu {
-            directoryMenu(path: item.path, selected: selected, kind: kind,
-                          stageTrigger: stageTrigger, unstageTrigger: unstageTrigger)
+        .overlay {
+            TreeContextClickTarget { focusContextChange(key) }
+                .contextMenu {
+                    directoryMenu(path: item.path, selected: selected, kind: kind,
+                                  stageTrigger: stageTrigger, unstageTrigger: unstageTrigger)
+                }
         }
     }
 
@@ -2186,6 +2196,7 @@ struct GitPanel: View {
             selected: isDisplayedChange(entry, kind: kind),
             focusRing: selectedChange == key && keyboardFocused && isGitActive
                 && controlActiveState == .key,
+            onContextClick: { focusContextChange(key) },
             isRemote: remoteName != nil,
             disabled: model.isBusy || !model.canUseCurrentStatus,
             isStageLoading: operationIsLoading(stageTrigger),
@@ -2683,6 +2694,7 @@ private struct GitEntryRow: View {
     let showDirectory: Bool
     let selected: Bool
     let focusRing: Bool
+    let onContextClick: () -> Void
     /// Whether this repository is on another machine, where discarding an
     /// untracked or copied file deletes it rather than moving it to the Trash.
     let isRemote: Bool
@@ -2721,7 +2733,10 @@ private struct GitEntryRow: View {
                 stage: stage, unstage: unstage, discard: discard
             )
         }
-        .contextMenu { menu }
+        .overlay {
+            TreeContextClickTarget { onContextClick() }
+                .contextMenu { menu }
+        }
     }
 
     @ViewBuilder

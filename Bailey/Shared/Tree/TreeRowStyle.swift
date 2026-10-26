@@ -107,6 +107,48 @@ struct TreeKeyboardHost: NSViewRepresentable {
     }
 }
 
+/// Receive a secondary click without taking primary clicks or drags from a SwiftUI row.
+struct TreeContextClickTarget: NSViewRepresentable {
+    let onContextClick: () -> Void
+
+    func makeNSView(context: Context) -> TreeContextClickView {
+        TreeContextClickView()
+    }
+
+    func updateNSView(_ view: TreeContextClickView, context: Context) {
+        view.onContextClick = onContextClick
+    }
+
+    static func dismantleNSView(_ view: TreeContextClickView, coordinator: ()) {
+        view.onContextClick = nil
+    }
+}
+
+final class TreeContextClickView: NSView {
+    var onContextClick: (() -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setAccessibilityElement(false)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let event = NSApp.currentEvent,
+              event.type == .rightMouseDown
+                  || (event.type == .leftMouseDown && event.modifierFlags.contains(.control))
+        else { return nil }
+        return super.hitTest(point)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        onContextClick?()
+        return super.menu(for: event)
+    }
+}
+
 /// One file-tree layout for Files, working-tree changes and commit history.
 enum TreeRowStyle {
     static let indent: CGFloat = 18
