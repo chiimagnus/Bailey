@@ -722,27 +722,28 @@ final class Project: nonisolated Identifiable {
         }
     }
 
-    // MARK: - Tab selection
+    // MARK: - Panel selection
 
-    func select(index: Int) {
-        let ids = dock.tabOrder
-        guard ids.indices.contains(index) else { return }
-        selectTab(ids[index])
+    func selectPanel(_ item: DockItem) {
+        switch item {
+        case .tab(let id): selectTab(id)
+        case .projects, .files, .git: dock.select(item)
+        }
     }
 
-    func selectNext() {
-        shiftSelection(by: 1)
-    }
+    func selectNextPanel() { shiftPanel(by: 1) }
 
-    func selectPrevious() {
-        shiftSelection(by: -1)
-    }
+    func selectPreviousPanel() { shiftPanel(by: -1) }
 
-    private func shiftSelection(by offset: Int) {
-        let ids = dock.tabOrder
-        guard !ids.isEmpty, let current = ids.firstIndex(where: { $0 == selectedTabID })
-        else { return }
-        selectTab(ids[(current + offset + ids.count) % ids.count])
+    private func shiftPanel(by offset: Int) {
+        let items = dock.panelOrder
+        guard !items.isEmpty else { return }
+        guard let selected = dock.activeGroup?.selected,
+              let current = items.firstIndex(of: selected) else {
+            selectPanel(offset > 0 ? items[0] : items[items.count - 1])
+            return
+        }
+        selectPanel(items[(current + offset + items.count) % items.count])
     }
 
     // MARK: - Layout mutation plumbing

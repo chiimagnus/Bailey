@@ -199,60 +199,26 @@ private struct BaileyCommands: Commands {
 
         CommandGroup(replacing: .sidebar) {}
 
-        CommandMenu(String(localized: "Project", table: "Interface")) {
-            Button(String(localized: "Add Folder…", table: "Interface")) {
-                manager?.chooseFolders()
-            }
-            .keyboardShortcut("a", modifiers: [.command, .shift])
-            .disabled(manager == nil)
-
-            Button(String(localized: "Add SSH Files or Folders…", table: "Interface")) {
-                manager?.chooseSSHItems()
-            }
-            .disabled(manager == nil)
-
-            Divider()
-
-            Button(String(localized: "Close Project", table: "Sidebar")) {
-                if let project = manager?.selectedProject { manager?.close(project) }
-            }
-            .disabled(manager?.selectedProject == nil)
-
-            if (manager?.projects.count ?? 0) < 2 {
-                Button(String(localized: "Switch Project", table: "Interface")) {}
-                    .disabled(true)
-            } else {
-                Menu(String(localized: "Switch Project", table: "Interface")) {
-                    Button(String(localized: "Next Project", table: "Interface")) {
-                        manager?.selectNextProject()
-                    }
-                    .keyboardShortcut("]", modifiers: [.command, .option])
-
-                    Button(String(localized: "Previous Project", table: "Interface")) {
-                        manager?.selectPreviousProject()
-                    }
-                    .keyboardShortcut("[", modifiers: [.command, .option])
-
-                    Divider()
-
-                    ForEach(Array((manager?.projects ?? []).prefix(9).enumerated()).map {
-                        WindowMenuItem(id: $0.element.id, index: $0.offset, title: $0.element.name)
-                    }) { item in
-                        Button(item.title) {
-                            manager?.selectProject(index: item.index)
-                        }
-                        .keyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .command)
-                    }
-                }
-            }
-        }
-
         CommandMenu(String(localized: "Panel", table: "Interface")) {
             Button(String(localized: "Command Palette…", table: "Interface")) {
                 manager?.toggleCommandPalette()
             }
             .keyboardShortcut("p", modifiers: .command)
             .disabled(manager == nil)
+
+            Divider()
+
+            Button(String(localized: "Next Panel", table: "Interface")) {
+                manager?.selectNextPanel()
+            }
+            .keyboardShortcut("]", modifiers: [.command, .shift])
+            .disabled((manager?.selectedProject?.dock.panelOrder.count ?? 0) < 2)
+
+            Button(String(localized: "Previous Panel", table: "Interface")) {
+                manager?.selectPreviousPanel()
+            }
+            .keyboardShortcut("[", modifiers: [.command, .shift])
+            .disabled((manager?.selectedProject?.dock.panelOrder.count ?? 0) < 2)
 
             Divider()
 
@@ -273,34 +239,62 @@ private struct BaileyCommands: Commands {
             .keyboardShortcut("g", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
 
+            if manager?.selectedProject?.tabs.isEmpty == false {
+                Divider()
+
+                ForEach(Array((manager?.selectedProject?.tabs ?? []).prefix(9).enumerated()).map {
+                    WindowMenuItem(id: $0.element.id, index: $0.offset, title: $0.element.displayTitle)
+                }) { item in
+                    Button(item.title) {
+                        manager?.selectPanel(.tab(item.id))
+                    }
+                }
+            }
+        }
+
+        CommandMenu(String(localized: "Project", table: "Interface")) {
+            Button(String(localized: "Add Folder…", table: "Interface")) {
+                manager?.chooseFolders()
+            }
+            .keyboardShortcut("a", modifiers: [.command, .shift])
+            .disabled(manager == nil)
+
+            Button(String(localized: "Add SSH Files or Folders…", table: "Interface")) {
+                manager?.chooseSSHItems()
+            }
+            .disabled(manager == nil)
+
             Divider()
 
-            if manager?.selectedProject?.tabs.isEmpty != false {
-                Button(String(localized: "Tabs", table: "Interface")) {}
-                    .disabled(true)
-            } else {
-                Menu(String(localized: "Tabs", table: "Interface")) {
-                    Button(String(localized: "Next Tab", table: "Interface")) {
-                        manager?.selectNextTab()
-                    }
-                    .keyboardShortcut("]", modifiers: [.command, .shift])
-                    .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
+            Button(String(localized: "Close Project", table: "Sidebar")) {
+                if let project = manager?.selectedProject { manager?.close(project) }
+            }
+            .disabled(manager?.selectedProject == nil)
 
-                    Button(String(localized: "Previous Tab", table: "Interface")) {
-                        manager?.selectPreviousTab()
-                    }
-                    .keyboardShortcut("[", modifiers: [.command, .shift])
-                    .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
+            Divider()
 
-                    Divider()
+            Button(String(localized: "Next Project", table: "Interface")) {
+                manager?.selectNextProject()
+            }
+            .keyboardShortcut("]", modifiers: [.command, .option])
+            .disabled((manager?.projects.count ?? 0) < 2)
 
-                    ForEach(Array((manager?.selectedProject?.tabs ?? []).prefix(9).enumerated()).map {
-                        WindowMenuItem(id: $0.element.id, index: $0.offset, title: $0.element.displayTitle)
-                    }) { item in
-                        Button(item.title) {
-                            manager?.selectTab(index: item.index)
-                        }
+            Button(String(localized: "Previous Project", table: "Interface")) {
+                manager?.selectPreviousProject()
+            }
+            .keyboardShortcut("[", modifiers: [.command, .option])
+            .disabled((manager?.projects.count ?? 0) < 2)
+
+            if manager?.projects.isEmpty == false {
+                Divider()
+
+                ForEach(Array((manager?.projects ?? []).prefix(9).enumerated()).map {
+                    WindowMenuItem(id: $0.element.id, index: $0.offset, title: $0.element.name)
+                }) { item in
+                    Button(item.title) {
+                        manager?.selectProject(index: item.index)
                     }
+                    .keyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .command)
                 }
             }
         }

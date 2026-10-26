@@ -402,12 +402,12 @@
         }
       }
     },
-    "Next Tab" : {
+    "Next Panel" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下一个标签页"
+            "value" : "下一个面板"
           }
         }
       }
@@ -492,12 +492,12 @@
         }
       }
     },
-    "Previous Tab" : {
+    "Previous Panel" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "上一个标签页"
+            "value" : "上一个面板"
           }
         }
       }
@@ -648,26 +648,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "标签页切换器"
-          }
-        }
-      }
-    },
-    "Switch Project" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "切换项目"
-          }
-        }
-      }
-    },
-    "Tabs" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "标签页"
           }
         }
       }

@@ -161,7 +161,7 @@ Git 操作的选项与目标检查由 [git.md](git.md#历史提交操作) 维护
 保存该窗口的会话快照后从 `WorkspaceApplication` 注销 `WorkspaceWindowModel`，终止并释放其项目、
 文件和编辑器所有权；不能仅依赖 SwiftUI `.onDisappear`，因为窗口已经关闭时该回调可能仍未执行。
 两种关闭通知最多清理一次，不能让重复回调覆写已保存的会话快照。
-另外，WindowGroup 的「Tabs」和「Switch Project」系统菜单只能持有轻量标题／ID／序号，
+另外，WindowGroup 的「面板」和「项目」系统菜单中的动态列表只能持有轻量标题／ID／序号，
 不直接持有 `PaneTab` 或 `Project` 数组；
 否则 SwiftUI 长期菜单缓存仍可能在窗口关闭后留下完整文件内容。
 

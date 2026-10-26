@@ -287,11 +287,11 @@ struct CommandPaletteView: View {
             PaletteCommand(id: "show-git", title: LocalizedStringResource("Git Manager", table: "Sidebar"), systemImage: "arrow.triangle.branch", shortcut: "⇧⌘G") {
                 manager.showPanel(.git)
             },
-            PaletteCommand(id: "next-tab", title: LocalizedStringResource("Next Tab", table: "Interface"), systemImage: "arrow.right", shortcut: "⇧⌘]") {
-                manager.selectNextTab()
+            PaletteCommand(id: "next-panel", title: LocalizedStringResource("Next Panel", table: "Interface"), systemImage: "arrow.right", shortcut: "⇧⌘]") {
+                manager.selectNextPanel()
             },
-            PaletteCommand(id: "prev-tab", title: LocalizedStringResource("Previous Tab", table: "Interface"), systemImage: "arrow.left", shortcut: "⇧⌘[") {
-                manager.selectPreviousTab()
+            PaletteCommand(id: "prev-panel", title: LocalizedStringResource("Previous Panel", table: "Interface"), systemImage: "arrow.left", shortcut: "⇧⌘[") {
+                manager.selectPreviousPanel()
             },
             PaletteCommand(id: "next-project", title: LocalizedStringResource("Next Project", table: "Interface"), systemImage: "arrow.right.square", shortcut: "⌥⌘]") {
                 manager.selectNextProject()

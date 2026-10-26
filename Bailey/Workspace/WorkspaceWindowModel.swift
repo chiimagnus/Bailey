@@ -537,16 +537,16 @@ final class WorkspaceWindowModel {
         }
     }
 
-    func selectNextTab() {
-        selectedProject?.selectNext()
+    func selectNextPanel() {
+        selectedProject?.selectNextPanel()
     }
 
-    func selectPreviousTab() {
-        selectedProject?.selectPrevious()
+    func selectPreviousPanel() {
+        selectedProject?.selectPreviousPanel()
     }
 
-    func selectTab(index: Int) {
-        selectedProject?.select(index: index)
+    func selectPanel(_ item: DockItem) {
+        selectedProject?.selectPanel(item)
     }
 
     // MARK: - Browser

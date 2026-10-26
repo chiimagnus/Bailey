@@ -90,6 +90,42 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertEqual(snapshots, 0)
     }
 
+    func testPanelNavigationIncludesToolsAndWorkPanels() throws {
+        let project = Project(fallbackName: "Panels", workspaceConfiguration: .standard)
+        let emptyGroup = try XCTUnwrap(project.dock.root.groups.first { $0.items.isEmpty })
+        project.dock.activate(emptyGroup.id)
+        project.selectNextPanel()
+        XCTAssertEqual(project.dock.activeGroup?.selected, .projects)
+        project.selectPreviousPanel()
+        XCTAssertEqual(project.dock.activeGroup?.selected, .git)
+
+        project.newBrowserTab(initialFocus: .none)
+        project.newBrowserTab(initialFocus: .none)
+        let order = project.dock.panelOrder
+        XCTAssertEqual(order.count, 5)
+        XCTAssertTrue(order.contains(.projects))
+        XCTAssertTrue(order.contains(.files))
+        XCTAssertTrue(order.contains(.git))
+
+        for (index, item) in order.enumerated() {
+            project.selectPanel(item)
+            XCTAssertEqual(project.dock.activeGroup?.selected, item)
+            project.selectNextPanel()
+            let next = order[(index + 1) % order.count]
+            XCTAssertEqual(project.dock.activeGroup?.selected, next)
+            if case .tab(let id) = next { XCTAssertEqual(project.selectedTabID, id) }
+            project.selectPreviousPanel()
+            XCTAssertEqual(project.dock.activeGroup?.selected, item)
+        }
+
+        project.dock.removeTool(.files)
+        XCTAssertFalse(project.dock.panelOrder.contains(.files))
+        for _ in 0..<project.dock.panelOrder.count {
+            project.selectNextPanel()
+            XCTAssertNotEqual(project.dock.activeGroup?.selected, .files)
+        }
+    }
+
     func testAddPanelOnlyOffersMissingToolsAcrossAllGroups() throws {
         let dock = DockWorkspaceModel()
         let emptyGroup = try XCTUnwrap(dock.root.groups.first { $0.items.isEmpty })

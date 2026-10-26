@@ -60,17 +60,17 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
 
     private func removeUnusedViewMenu() {
         guard let menu = NSApp.mainMenu,
-              let projectIndex = menu.items.firstIndex(where: {
-                  $0.title == String(localized: "Project", table: "Interface")
-              }), projectIndex > 0,
-              let viewItem = menu.item(at: projectIndex - 1),
+              let panelIndex = menu.items.firstIndex(where: {
+                  $0.title == String(localized: "Panel", table: "Interface")
+              }), panelIndex > 0,
+              let viewItem = menu.item(at: panelIndex - 1),
               let viewMenu = viewItem.submenu,
               viewMenu.items.allSatisfy({
                   $0.isSeparatorItem || $0.action == #selector(NSWindow.toggleFullScreen(_:))
                       || $0.title == String(localized: "Enter Full Screen", table: "Interface")
                       || $0.title == String(localized: "Exit Full Screen", table: "Interface")
               }) else { return }
-        // SwiftUI inserts a View menu before Project even though Bailey owns Panel and Window.
+        // SwiftUI inserts its unused View menu immediately before Bailey's Panel menu.
         menu.removeItem(viewItem)
     }
 
