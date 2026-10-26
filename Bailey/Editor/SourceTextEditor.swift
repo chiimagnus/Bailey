@@ -401,10 +401,10 @@ final class SourceEditorContainer: NSView {
         let gutter = (scrollView.documentView as? NativeCodeTextView)?.gutterView
         if let gutter {
             if gutter.superview !== self { addSubview(gutter) }
-            let frame = NSRect(x: 0, y: 0, width: gutter.ruleThickness, height: bounds.height)
+            let frame = NSRect(x: 0, y: 0, width: gutter.preferredWidth, height: bounds.height)
             if gutter.frame != frame { gutter.frame = frame }
         }
-        let leading = gutter?.ruleThickness ?? 0
+        let leading = gutter?.preferredWidth ?? 0
         let frame = NSRect(x: leading, y: 0,
                            width: max(0, bounds.width - leading), height: bounds.height)
         if scrollView.frame != frame { scrollView.frame = frame }
@@ -558,7 +558,7 @@ private final class RestorableScrollView: NSScrollView {
             // mid-document with text running past it.
             self.tile()
 
-            // Reparenting can shift the horizontal origin by the ruler width.
+            // Reparenting can change the available scroll viewport width.
             // Restore the same clamped position after layout, without a second
             // caret-follow scrollRangeToVisible that later overrides it.
             let desiredBounds = NSRect(

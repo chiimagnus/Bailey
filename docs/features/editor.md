@@ -46,7 +46,7 @@ AppKit 组件测试 `NativeEditorLayoutTests` 在 10 万行和深度跳转后实
 Tree-sitter 的 LF 行列索引独立于 TextKit 的自然段落。
 行号栏与正文使用相同主题背景、选中行颜色和用户设置的代码字体；行数增长时按实际字体自动拓宽。
 空文件的第 1 行及以 LF／CRLF 结束的末尾空行必须显示行号；光标位于这些位置时正文与行号栏同步高亮。跨行文字选区保留每个实际被选中行号的强调文字颜色，但不绘制光标专属的行背景；选区在下一行行首结束时，不误强调尚未选中的下一行。
-普通文件的原生 `NSRulerView` 与 `NSScrollView` 在同一容器内并列：行号栏固定在左侧，正文独立横向滚动，`textContainerInset.width` 保持为零。行号栏宽度随字体和行数变化，不进入可滚动文档；纵向滚动时行号与正文同步刷新。`NSRulerView` 必须裁剪绘制到自身 `bounds`，避免背景覆盖正文。验收同时检查首字形位置、真实像素和往返横滚后的固定边界，不能仅检查文本数据。
+普通文件的行号栏是独立的原生 `NSView`，与正文 `NSScrollView` 并列：行号固定在左侧，正文横向滚动，`textContainerInset.width` 为零。行号栏按字体和行数调整宽度，纵向滚动同步重绘；绘制裁剪到自身边界，不能覆盖正文。验收检查文字像素、行号位置与往返横滚后的固定边界。
 从 `NSTextStorage.didProcessEditing` 得到真实编辑范围，避免系统 Undo/Redo
 绕过 `NSTextViewDelegate.textDidChange` 导致脏状态和语法解析不同步。
 组合输入保持一条 Undo 事务；离屏追加也必须拥有独立可撤销操作。

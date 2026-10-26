@@ -128,14 +128,14 @@ final class NativeEditorLayoutTests: XCTestCase {
             editor.backgroundColor = palette.background
             scroll.backgroundColor = palette.background
             editor.showsLineNumbers = true
-            let ruler = try XCTUnwrap(editor.gutterView)
-            ruler.textColor = palette.gutterText
-            ruler.selectedLineTextColor = palette.text
+            let gutter = try XCTUnwrap(editor.gutterView)
+            gutter.textColor = palette.gutterText
+            gutter.selectedLineTextColor = palette.text
             scroll.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
-            let bitmap = try XCTUnwrap(ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds)?
+            let bitmap = try XCTUnwrap(gutter.bitmapImageRepForCachingDisplay(in: gutter.bounds)?
                 .retagging(with: .sRGB))
-            ruler.cacheDisplay(in: ruler.bounds, to: bitmap)
+            gutter.cacheDisplay(in: gutter.bounds, to: bitmap)
             var pixel = [Int](repeating: 0, count: bitmap.samplesPerPixel)
             bitmap.getPixel(&pixel, atX: 2, y: bitmap.pixelsHigh / 2)
             let maximum = CGFloat((1 << bitmap.bitsPerSample) - 1)
@@ -152,15 +152,15 @@ final class NativeEditorLayoutTests: XCTestCase {
         defer { window.close() }
         editor.showsLineNumbers = true
         editor.highlightSelectedLine = true
-        let ruler = try XCTUnwrap(editor.gutterView)
+        let gutter = try XCTUnwrap(editor.gutterView)
         let activeRow = NSColor(calibratedRed: 0.73, green: 0.15, blue: 0.28, alpha: 1)
-        ruler.selectedLineHighlightColor = activeRow
+        gutter.selectedLineHighlightColor = activeRow
         editor.textSelection = NSRange(location: 0, length: 0)
         scroll.layoutSubtreeIfNeeded()
-        ruler.needsDisplay = true
+        gutter.needsDisplay = true
         window.displayIfNeeded()
-        let bitmap = try XCTUnwrap(ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds))
-        ruler.cacheDisplay(in: ruler.bounds, to: bitmap)
+        let bitmap = try XCTUnwrap(gutter.bitmapImageRepForCachingDisplay(in: gutter.bounds))
+        gutter.cacheDisplay(in: gutter.bounds, to: bitmap)
         let found = (0..<bitmap.pixelsHigh).contains { y in
             guard let color = bitmap.colorAt(x: 2, y: y)?.usingColorSpace(.deviceRGB) else {
                 return false
@@ -169,9 +169,9 @@ final class NativeEditorLayoutTests: XCTestCase {
                 && color.redComponent - color.blueComponent > 0.25
         }
         XCTAssertTrue(found, "The selected line must retain its gutter background highlight")
-        XCTAssertEqual(ruler.ruleThickness, 35, accuracy: 1)
+        XCTAssertEqual(gutter.preferredWidth, 35, accuracy: 1)
         editor.text = String(repeating: "x\n", count: 100_000)
-        XCTAssertGreaterThan(ruler.ruleThickness, 35,
+        XCTAssertGreaterThan(gutter.preferredWidth, 35,
                              "Six-digit line numbers must not be clipped by a fixed gutter width")
     }
 
@@ -182,20 +182,20 @@ final class NativeEditorLayoutTests: XCTestCase {
             defer { window.close() }
             editor.showsLineNumbers = true
             editor.highlightSelectedLine = true
-            let ruler = try XCTUnwrap(editor.gutterView)
-            ruler.backgroundColor = .black
-            ruler.textColor = .white
-            ruler.selectedLineTextColor = .red
-            ruler.selectedLineHighlightColor = .black
-            // The legacy gutter tints every line containing selected text,
-            // even though only an insertion caret gets a row background.
+            let gutter = try XCTUnwrap(editor.gutterView)
+            gutter.backgroundColor = .black
+            gutter.textColor = .white
+            gutter.selectedLineTextColor = .red
+            gutter.selectedLineHighlightColor = .black
+            // Selected text tints its line numbers; only the insertion caret
+            // receives a row background.
             editor.textSelection = NSRange(location: 2, length: 7)
             scroll.layoutSubtreeIfNeeded()
-            ruler.needsDisplay = true
+            gutter.needsDisplay = true
             window.displayIfNeeded()
-            let bitmap = try XCTUnwrap(ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds))
-            ruler.cacheDisplay(in: ruler.bounds, to: bitmap)
-            let scale = CGFloat(bitmap.pixelsHigh) / ruler.bounds.height
+            let bitmap = try XCTUnwrap(gutter.bitmapImageRepForCachingDisplay(in: gutter.bounds))
+            gutter.cacheDisplay(in: gutter.bounds, to: bitmap)
+            let scale = CGFloat(bitmap.pixelsHigh) / gutter.bounds.height
             let lineHeight = ceil(NSLayoutManager().defaultLineHeight(
                 for: try XCTUnwrap(editor.font))) * scale
             func coloredPixels(in image: NSBitmapImageRep, on row: Int) -> Int {
@@ -220,10 +220,10 @@ final class NativeEditorLayoutTests: XCTestCase {
             // Selection ending exactly at the next line's first offset must
             // not tint that untouched line or add the caret-only row fill.
             editor.textSelection = NSRange(location: 0, length: 6)
-            ruler.needsDisplay = true
+            gutter.needsDisplay = true
             window.displayIfNeeded()
-            let edge = try XCTUnwrap(ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds))
-            ruler.cacheDisplay(in: ruler.bounds, to: edge)
+            let edge = try XCTUnwrap(gutter.bitmapImageRepForCachingDisplay(in: gutter.bounds))
+            gutter.cacheDisplay(in: gutter.bounds, to: edge)
             XCTAssertGreaterThan(coloredPixels(in: edge, on: 0), 3)
             XCTAssertEqual(coloredPixels(in: edge, on: 1), 0,
                 "A selection must not highlight the row at its exclusive end")
@@ -234,15 +234,15 @@ final class NativeEditorLayoutTests: XCTestCase {
         let (window, scroll, editor) = mount("", width: 450)
         defer { window.close() }
         editor.showsLineNumbers = true
-        let ruler = try XCTUnwrap(editor.gutterView)
-        ruler.backgroundColor = .black
-        ruler.textColor = .white
-        ruler.selectedLineTextColor = .white
-        ruler.selectedLineHighlightColor = .black
+        let gutter = try XCTUnwrap(editor.gutterView)
+        gutter.backgroundColor = .black
+        gutter.textColor = .white
+        gutter.selectedLineTextColor = .white
+        gutter.selectedLineHighlightColor = .black
         scroll.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
-        let bitmap = try XCTUnwrap(ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds))
-        ruler.cacheDisplay(in: ruler.bounds, to: bitmap)
+        let bitmap = try XCTUnwrap(gutter.bitmapImageRepForCachingDisplay(in: gutter.bounds))
+        gutter.cacheDisplay(in: gutter.bounds, to: bitmap)
         let brightPixels = (0..<min(80, bitmap.pixelsHigh)).reduce(0) { count, y in
             count + (max(0, bitmap.pixelsWide - 40)..<max(1, bitmap.pixelsWide - 8)).filter { x in
                 guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
@@ -251,7 +251,7 @@ final class NativeEditorLayoutTests: XCTestCase {
             }.count
         }
         XCTAssertGreaterThan(brightPixels, 4,
-                             "An empty source file must display line number 1 like the old gutter")
+                             "An empty source file must display line number 1")
     }
 
     func testFinalBlankLineRetainsVisibleGutterNumber() throws {
@@ -259,18 +259,18 @@ final class NativeEditorLayoutTests: XCTestCase {
             let (window, scroll, editor) = mount(source, width: 450)
             defer { window.close() }
             editor.showsLineNumbers = true
-            let ruler = try XCTUnwrap(editor.gutterView)
-            ruler.backgroundColor = .black
-            ruler.textColor = .white
-            ruler.selectedLineTextColor = .white
-            ruler.selectedLineHighlightColor = .black
+            let gutter = try XCTUnwrap(editor.gutterView)
+            gutter.backgroundColor = .black
+            gutter.textColor = .white
+            gutter.selectedLineTextColor = .white
+            gutter.selectedLineHighlightColor = .black
             editor.textSelection = NSRange(location: source.utf16.count, length: 0)
             scroll.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
-            let bitmap = try XCTUnwrap(ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds))
-            ruler.cacheDisplay(in: ruler.bounds, to: bitmap)
+            let bitmap = try XCTUnwrap(gutter.bitmapImageRepForCachingDisplay(in: gutter.bounds))
+            gutter.cacheDisplay(in: gutter.bounds, to: bitmap)
             let lineHeight = ceil(NSLayoutManager().defaultLineHeight(for: try XCTUnwrap(editor.font)))
-            let scale = CGFloat(bitmap.pixelsHigh) / ruler.bounds.height
+            let scale = CGFloat(bitmap.pixelsHigh) / gutter.bounds.height
             let start = min(bitmap.pixelsHigh - 1, Int(lineHeight * scale))
             let end = min(bitmap.pixelsHigh, Int(lineHeight * scale * 3))
             let bright = (start..<end).reduce(0) { count, y in
@@ -347,7 +347,7 @@ final class NativeEditorLayoutTests: XCTestCase {
         let gutter = try XCTUnwrap(editor.gutterView)
         let digitWidth = ("8" as NSString).size(withAttributes: [.font: font]).width
         let expected = max(35, ceil(digitWidth * 5 + 10))
-        XCTAssertEqual(gutter.ruleThickness, expected, accuracy: 1,
+        XCTAssertEqual(gutter.preferredWidth, expected, accuracy: 1,
                        "Line numbers must use the editor font, not smaller system mono")
     }
 
@@ -356,7 +356,7 @@ final class NativeEditorLayoutTests: XCTestCase {
             let (window, scroll, editor) = mount("initial", width: 340, wraps: wraps)
             defer { window.close() }
             editor.showsLineNumbers = true
-            let ruler = try XCTUnwrap(editor.gutterView)
+            let gutter = try XCTUnwrap(editor.gutterView)
             let font = try XCTUnwrap(editor.font)
             let digitWidth = ("8" as NSString).size(withAttributes: [.font: font]).width
             for rowCount in [1, 9, 10, 99, 100, 999, 1_000, 9_999, 10_000, 1] {
@@ -366,22 +366,22 @@ final class NativeEditorLayoutTests: XCTestCase {
                 window.contentView?.layoutSubtreeIfNeeded()
                 scroll.layoutSubtreeIfNeeded()
                 let expectedWidth = max(35, ceil(CGFloat(String(rowCount).count) * digitWidth + 10))
-                XCTAssertEqual(ruler.ruleThickness, expectedWidth, accuracy: 1,
+                XCTAssertEqual(gutter.preferredWidth, expectedWidth, accuracy: 1,
                     "Gutter width must follow live row count: \(rowCount)")
                 XCTAssertEqual(editor.textContainerInset.width, 0, accuracy: 0.5)
                 XCTAssertEqual(scroll.frame.minX, expectedWidth, accuracy: 1,
                     "The fixed gutter must own the width even when the number of digits changes")
-                XCTAssertEqual(ruler.frame.maxX, scroll.frame.minX, accuracy: 0.5)
+                XCTAssertEqual(gutter.frame.maxX, scroll.frame.minX, accuracy: 0.5)
                 let fragment = try XCTUnwrap(editor.nativeLayoutManager.textLayoutFragment(
                     for: editor.nativeLayoutManager.documentRange.location
                 ))
                 let leading = editor.convert(NSPoint(
                     x: fragment.layoutFragmentFrame.minX + editor.textContainerOrigin.x,
                     y: fragment.layoutFragmentFrame.minY
-                ), to: ruler).x
-                XCTAssertGreaterThanOrEqual(leading, ruler.bounds.maxX - 1,
+                ), to: gutter).x
+                XCTAssertGreaterThanOrEqual(leading, gutter.bounds.maxX - 1,
                     "First glyph overlaps gutter after crossing \(rowCount) lines")
-                XCTAssertLessThan(leading - ruler.bounds.maxX, 12,
+                XCTAssertLessThan(leading - gutter.bounds.maxX, 12,
                     "Fixed gutter must not create another column of text padding")
             }
             editor.showsLineNumbers = false
@@ -392,7 +392,7 @@ final class NativeEditorLayoutTests: XCTestCase {
             window.contentView?.layoutSubtreeIfNeeded()
             XCTAssertEqual(editor.textContainerInset.width, 0, accuracy: 0.5)
             XCTAssertEqual(scroll.frame.minX,
-                           try XCTUnwrap(editor.gutterView).ruleThickness, accuracy: 1)
+                           try XCTUnwrap(editor.gutterView).preferredWidth, accuracy: 1)
         }
     }
 
@@ -453,8 +453,8 @@ final class NativeEditorLayoutTests: XCTestCase {
         let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: bitmap)
         let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
-        let x0 = Int((gutter.ruleThickness + 2) * scale)
-        let x1 = min(bitmap.pixelsWide, Int((gutter.ruleThickness + 35) * scale))
+        let x0 = Int((gutter.preferredWidth + 2) * scale)
+        let x1 = min(bitmap.pixelsWide, Int((gutter.preferredWidth + 35) * scale))
         let background = try XCTUnwrap(EditorPalette.theme(dark: false)
             .background.usingColorSpace(.deviceRGB))
         let visible = (0..<bitmap.pixelsHigh).reduce(0) { total, y in
@@ -580,15 +580,15 @@ final class NativeEditorLayoutTests: XCTestCase {
                 let editor = try XCTUnwrap((file.editorView as? NSScrollView)?.documentView
                                            as? NativeCodeTextView)
                 XCTAssertEqual(editor.text, source)
-                let ruler = try XCTUnwrap(editor.gutterView)
+                let gutter = try XCTUnwrap(editor.gutterView)
                 let firstFragment = try XCTUnwrap(editor.nativeLayoutManager.textLayoutFragment(
                     for: editor.nativeLayoutManager.documentRange.location
                 ))
                 let firstGlyph = editor.convert(NSPoint(
                     x: firstFragment.layoutFragmentFrame.minX + editor.textContainerInset.width,
                     y: firstFragment.layoutFragmentFrame.minY
-                ), to: ruler)
-                XCTAssertGreaterThanOrEqual(firstGlyph.x, ruler.bounds.maxX - 1,
+                ), to: gutter)
+                XCTAssertGreaterThanOrEqual(firstGlyph.x, gutter.bounds.maxX - 1,
                     "Source \(ext), \(count) lines, dark=\(dark): gutter must never cover initial glyph")
                 window.displayIfNeeded()
                 let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
