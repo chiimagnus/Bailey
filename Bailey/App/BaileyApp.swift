@@ -243,13 +243,6 @@ private struct BaileyCommands: Commands {
 
             Divider()
 
-            Button(String(localized: "Close Project", table: "Sidebar")) {
-                if let project = manager?.selectedProject { manager?.close(project) }
-            }
-            .disabled(manager?.selectedProject == nil)
-
-            Divider()
-
             Button(String(localized: "Next Project", table: "Interface")) {
                 manager?.selectNextProject()
             }
@@ -261,6 +254,11 @@ private struct BaileyCommands: Commands {
             }
             .keyboardShortcut("[", modifiers: [.command, .option])
             .disabled((manager?.projects.count ?? 0) < 2)
+
+            Button(String(localized: "Close Project", table: "Sidebar")) {
+                if let project = manager?.selectedProject { manager?.close(project) }
+            }
+            .disabled(manager?.selectedProject == nil)
 
             if manager?.projects.isEmpty == false {
                 Divider()
