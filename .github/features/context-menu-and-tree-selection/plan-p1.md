@@ -4,8 +4,9 @@
 Terminal／Editor 保留真正的输入焦点，菜单撤销后恢复它们的命令语义。
 Dock ⌘W 的现有正确关闭行为不得倒退，并验证原生菜单反馈。
 
-**Non-goals：** 不重构完整焦点架构；不提前修改 Files 的持久选中语义。
-P2 负责游标／选中分离，届时复用本阶段的命令入口。
+**Non-goals：** 不重构整个焦点架构；不改 Git 图谱及全局 Dock 布局。
+右键菜单不得修改 Files 的显式选中集合或抢走 Terminal 原生焦点，
+这是 P1 菜单目标正确性必需的前置条件；其它方向键／Shift 选择语义仍由 P2 完成。
 
 **Approach：** 命令目标不能由 Dock 活动状态或树行 Focus 反向推导。
 原生第一响应者继续负责普通编辑输入；菜单生效时，窗口的明确菜单上下文
@@ -44,6 +45,8 @@ P2 负责游标／选中分离，届时复用本阶段的命令入口。
   `testRightClickUnselectedFileBecomesKeyboardTargetWithoutOpeningIt`
 
 **已知事实：**
+Git Graph 在本 Feature 前就通过 `TreeRowSurface.focusRing` 独立显示蓝色边框，
+只是它的 `selectRow()` 仍会主动聚焦 Git 树；Files 不可复制这种右键抢焦点动作。
 右键菜单的 `Text("Copy\t⌘C")` 仅展示提示，
 现有测试要求 `NSMenuItem.keyEquivalent` 为空。
 文件树经 `TreeKeyboardView` 作为第一响应者处理系统 Edit，
@@ -76,9 +79,14 @@ P2 负责游标／选中分离，届时复用本阶段的命令入口。
    切窗／切项目、断连、菜单目标被删除时的失效与回退。
    不把 FileTree 选中集合作为菜单上下文的替代品；
    不让 Terminal／Editor 被强制切焦点。
-   先确定是否可以仅由系统主菜单派发；若不能，实验原生菜单
-   `.keyboardShortcut` 的范围及其与主菜单动作的互斥，
-   必须证明不重复执行，再在 P1-T2 以唯一动作实现。
+   已试过把 SwiftUI 右键菜单换成 `NSHostingMenu`，
+   并给 `Button` 增加 `.keyboardShortcut`：真实菜单项虽有
+   `keyEquivalent = c`，GUI 中按 ⌘C 仍没有复制右键目标。
+   此方案已经撤销，不应重试或当作已完成。
+   失败的三项 P1 GUI Red 已保存至本地
+   `evidence-p1-menu-shortcut-red.patch`，在明确修复事件派发前不提交失败测试。
+   继续调查系统 Edit 命令的实际派发及当前窗口临时菜单目标，
+   坚持单一动作入口，不覆盖 SwiftUI 菜单委托、不复制全局快捷键。
 
 **验证：** 真实菜单打开且真实 ⌘C 发生后，
 检查正确剪贴板路径和完整命令退出状态；
@@ -117,7 +125,14 @@ P2 负责游标／选中分离，届时复用本阶段的命令入口。
    Esc 后 Files 聚焦 Copy B 的既有回归，验证剪贴板真实私有类型。
 2. 在 `WorkspaceWindowModel` 的现有窗口归属边界协调有效菜单目标，
    Files 仍保留行选择与紧凑段细节。右键仅提供本次菜单目标和命令，
-   **不通过 `focusKeyboard()` 抢走 Terminal／Editor**。
+   **不调用 `focusKeyboard()` 抢走 Terminal／Editor**，不通过
+   `FileTreeModel.select()` 重新写 `selectedPaths`。
+   菜单本次路径和显式选中集合的关系由 `contextSelection(for:)` 计算；
+   右键目标应在菜单跟踪时显示独立的细边框，关闭后撤销。
+   描边直接复用 Git Graph 已有的 `TreeRowSurface` 同一条 stroke；
+   P1 的 `contextRing` 只是独立的菜单状态输入，不是新的边框绘制器。
+   中性 B 不能因为 Hover 或右键出现选中蓝底，既有显式选择 A 保留。
+   必须同步改掉旧宿主／AX 测试里“右键 B 应清除 A 选中”的断言。
    使用 T1 已证实的原生菜单派发方式，主菜单／菜单按钮调用同一命令动作；
    菜单结束后立即不再覆盖第一响应者。
    不在 `onKeyDown` 逐个拦截 Command 组合，不引入全局 FocusManager。
@@ -145,12 +160,19 @@ P2 负责游标／选中分离，届时复用本阶段的命令入口。
   `testSystemEditMenuCopyPasteFollowsFileManagerFocus`；
   以及 `SharedTreeUITests` 的右键目标用例和本 task 新增
   “菜单仍开 → ⌘C／⌘X／⌘V”用例。
+- 视觉与焦点：Terminal／Editor 为第一响应者时，右键未选 B 只有菜单上下文细边框，
+  B 不获得选中蓝底、AX `.isSelected` 或独立 Hover 灰底；A 旧蓝底保持。
+  菜单 Esc／点击后上下文边框消失，Terminal／Editor 焦点仍有效；
+  明暗、紧凑段和 Git 共享行不倒退。
 - 真实副作用：鼠标／键盘路径的私有剪贴板记录相同；
   Copy 不覆盖原件，Cut 延迟移动，Paste 保留原有重名／拒写规则；
   Editor／输入框／Palette／后台窗口不发生错误复制；
   菜单取消、禁用、过期对象／项目切换不能重放命令。
-- 本任务的视觉暂按现行选中规则；P2 改变操作目标模型后，
-  须重测这里的命令入口，**不再建立第二套投递实现**。
+- `6fe42c8` 已为本任务提前落地必要的 P2 子集：保留显式选择、
+  游标与右键菜单描边分离、Terminal 焦点回归；不代表 P1 菜单按键已完成。
+  P2 继续接管普通方向键、选中范围、蓝／灰背景组合与完整视觉／AX 验收。
+- P2 改变操作目标模型后，须重测这里的命令入口，
+  **不再建立第二套投递实现**。
 
 ## P1-T3 验证并修复 Dock ⌘W 的菜单反馈
 

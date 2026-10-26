@@ -7,15 +7,15 @@ title = "复现并确认原生菜单事件链"
 status = "in_progress"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = ""
+note = "实际 GUI 证实菜单打开时 Cmd-C 未作用于右键目标；NSHostingMenu/.keyboardShortcut 失败路径已撤销。三项尚红的菜单 GUI 测试保存为本地 evidence-p1-menu-shortcut-red.patch，须继续取证事件链。"
 
 [[tasks]]
 id = "P1-T2"
 title = "统一 Files 菜单点击与快捷键执行"
-status = "pending"
+status = "in_progress"
 plan = "plan-p1.md#p1-t2"
 commit = ""
-note = ""
+note = "已提交 6fe42c8：右键仅移动游标与临时菜单边框、保留显式选择与 Terminal 焦点；宿主/2项独立 GUI 通过，完整多选 GUI 被原生选择器 AX 阻断；菜单打开时 Cmd-C 仍 Red，未完成。"
 
 [[tasks]]
 id = "P1-T3"
@@ -31,7 +31,7 @@ title = "分离 Files 显式选择、游标和右键目标"
 status = "pending"
 plan = "plan-p2.md#p2-t1"
 commit = ""
-note = ""
+note = "6fe42c8 已随 P1 完成右键不改写 selectedPaths、选中集合外游标的命令目标；方向键、范围锚点、初始化/刷新/SSH 等未开始 P2 专项验收。"
 
 [[tasks]]
 id = "P2-T2"
@@ -39,7 +39,7 @@ title = "共享 TreeRowSurface 分层绘制与无障碍"
 status = "pending"
 plan = "plan-p2.md#p2-t2"
 commit = ""
-note = ""
+note = "Git Graph 原本已有独立蓝框：TreeRowSurface.focusRing；6fe42c8 仅在同一 stroke 上增加菜单期 contextRing，完整蓝/灰/hover/AX/像素矩阵尚未执行。"
 
 [[tasks]]
 id = "P2-T3"

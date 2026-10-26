@@ -13,6 +13,12 @@
 共享视觉只改 `TreeRowSurface` 和必要调用参数，
 不依赖后台窗口的焦点标志决定数据状态。
 
+**现有基线：** Git Graph 在本 Feature 之前已将蓝色细描边与灰色 Diff 背景分开：
+`RecentCommitsView.isFocusedRow()` 传 `TreeRowSurface.focusRing`，
+文件 Diff 是否显示另由 `selected` 决定；它并非缺少“仅蓝框”的组件。
+但其 `selectRow()` 会在活动时 `keyboardOwner.focus()`，
+因此不能直接把 Git Graph 的右键聚焦策略复制给 Terminal 活动时的 Files。
+
 **Acceptance：** A 选中蓝底、B 游标蓝框、C 展示灰底、D Hover 灰底
 可分别呈现；菜单有效期内右键 B 的 Copy 操作 B；
 Esc 后如果 Files 真实聚焦则继续按 Files 游标操作 B，
@@ -38,18 +44,20 @@ Esc 后如果 Files 真实聚焦则继续按 Files 游标操作 B，
 - `Bailey/Files/FileTreePanel.swift`：
   `focusSelectedRow()`、`handleKey(_:)`、
   `FileTreeRow.selectForClick(componentPath:)`、
-  `selectForContextMenu(_:)`、`activeMenuTarget`、
+  `selectForContextMenu(_:)`、`contextMenuPath`、
   `rowMenu(for:)` 的 `matchesKeyboardSelection`／`matchesNewItemTarget`
 - `BaileyTests/Files/FileTreeTests.swift`、
   `BaileyUITests/Files/WorkspaceFilesUITests.swift`
 
 **代码事实：**
-`moveSelection(by:extending: false)` 同时重写游标和
-`selectedPaths`；未选中行的 `selectForContextMenu` 调用
-`select()`，会覆盖显式选择。
-`focusSelectedRow()` 还会在没有游标时自动调用 `select()`，
-隐式制造选中；`selectedOperationPaths` 当前只读
-`selectedPaths`。这些是同一个状态耦合问题。
+`6fe42c8` 已在 P1 的必要前置工作中调整 `selectForContextMenu`：
+右键仅移动游标／紧凑段，**不再覆盖 `selectedPaths` 或抢原生焦点**；
+`selectedOperationPaths` 对游标落在现有选择集合外的情况已可返回当前游标。
+这些都是 P2-T1 的**部分成果**，不得重复实现或冒充整项验收。
+仍未完成：`moveSelection(by:extending: false)` 会重写 `selectedPaths`；
+`focusSelectedRow()` 无游标时仍调用 `select()` 隐式制造选中；
+方向键、范围锚点、刷新／切根后的真实操作集合需要系统性核对。
+P2-T1 必须维护已有的右键隔离，不再引回原始耦合。
 
 **Red → Green → Refactor：**
 1. 在宿主先断言四条不同语义：
@@ -131,6 +139,10 @@ Esc 后如果 Files 真实聚焦则继续按 Files 游标操作 B，
 **当前显示的文件或 Diff**，而非显式选择。
 现有 `multiSelected → selected → hovering` 三选一背景
 使某些同时成立的事实被遮住。
+`6fe42c8` 在 P1 中只给既有 stroke 增加菜单期 `contextRing` 输入，
+并抑制未选中菜单目标的 Hover 灰底；**没有新增蓝框绘制组件**。
+完整 P2-T2 仍要核对四态 A/B/C/D、普通导航、明暗主题、无障碍与像素，
+不能将本次部分 UI 改动视为阶段完成。
 `TreeFileRow` 和 `TreeFolderRow` 的 AX `isSelected`
 按 `multiSelectionEnabled` 使用不同判断，
 不能一刀切改成“焦点永不算选中”。
@@ -148,7 +160,10 @@ Esc 后如果 Files 真实聚焦则继续按 Files 游标操作 B，
    当前展示灰底这一事实仍保留；该行取消选中后重新显示灰底。
    Hover 仅在不会遮盖更明确的背景时变灰；描边独立叠加，
    必须检查文本与 Git 状态颜色在所有重叠组合下可辨认。
-   优先复用现有 `Theme.terminal(dark:)` 颜色和行几何；
+   直接复用 Git Graph 已在用的 `TreeRowSurface.focusRing` 对应
+   stroke 与 `Theme.terminal(dark:)` 颜色、行几何；
+   `contextRing` 只表达菜单上下文且使用同一笔画，不建立第二套描边。
+   若后续能进一步简化传参，必须保留“菜单上下文不等于原生焦点”的语义；
    不新增通用 `VisualState` 类型、配置项或多层背景宿主。
 3. Files 使用显式选中集合驱动蓝底和 AX；
    Git Changes／Graph 保留既有单游标、Diff 灰底与
@@ -198,8 +213,9 @@ Esc 后如果 Files 真实聚焦则继续按 Files 游标操作 B，
 在修改其唯一所属调用链时同步删除，不能留给后续补丁。
 
 **步骤：**
-1. 检查共享树行样式对 Git Changes／Graph／历史文件的调用，
-   核对提交展开、Diff 显示灰底、Stash／Worktree 标签、
+1. 以 Git Graph 已有的“单独蓝框”作为基线，
+   检查共享树行对 Git Changes／Graph／历史文件的调用，
+   核对提交展开、Diff 显示灰底、Stash／Worktree 标签，
    右键菜单及输入焦点；只修确实失效的 Git 局部链，
    不复制 Files 的多选集合或修改 Git 图谱拓扑。
 2. 真实菜单和系统键盘验证 Git 行与 Files、
