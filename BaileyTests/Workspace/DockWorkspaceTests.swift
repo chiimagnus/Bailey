@@ -211,7 +211,7 @@ final class DockWorkspaceTests: XCTestCase {
             for tool in [DockItem.files, .git, .projects] {
                 manager.showPanel(tool)
                 XCTAssertNil(project.focusedContent)
-                manager.closeSelectedTab()
+                manager.closeActivePanelOrWindow()
                 XCTAssertNil(project.dock.group(containing: tool))
                 XCTAssertTrue(manager.selectedProject === project)
                 XCTAssertNotNil(project.dock.activeGroup)
@@ -315,6 +315,49 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertNil(dock.activeGroup?.selected)
     }
 
+    func testClosePanelInEmptyDockGroupDoesNotCloseProject() throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "empty dock", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        let empty = try XCTUnwrap(project.dock.root.groups.first { $0.items.isEmpty })
+        project.dock.activate(empty.id)
+
+        manager.closeActivePanelOrWindow()
+
+        XCTAssertTrue(manager.selectedProject === project,
+                      "An empty Dock group is not a request to delete its project")
+        XCTAssertEqual(project.dock.activeGroupID, empty.id)
+        XCTAssertNotNil(project.dock.group(containing: .files))
+    }
+
+    func testExplicitPanelCloseKeepsActiveTargetAndRejectsAnotherProject() throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "active", workspaceConfiguration: .standard)
+        let other = Project(fallbackName: "other", workspaceConfiguration: .standard)
+        manager.projects = [project, other]
+        manager.selectedProjectID = project.id
+        manager.showPanel(.files)
+        let activeGroupID = project.dock.activeGroupID
+
+        manager.closePanel(.git, in: project)
+        XCTAssertNil(project.dock.group(containing: .git))
+        XCTAssertEqual(project.dock.activeGroupID, activeGroupID)
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+        XCTAssertNotNil(project.dock.group(containing: .files))
+
+        manager.closePanel(.projects, in: other)
+        XCTAssertNotNil(other.dock.group(containing: .projects),
+                        "An outdated context menu cannot close another project's panel")
+
+        manager.closeActivePanelOrWindow()
+        XCTAssertNil(project.dock.group(containing: .files))
+        XCTAssertNotNil(project.dock.group(containing: .projects))
+        XCTAssertTrue(manager.selectedProject === project)
+    }
+
     func testToolsAreNotTheMostRecentWorkContentAndCloseTheirOwnPanel() throws {
         let manager = self.workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
@@ -332,7 +375,7 @@ final class DockWorkspaceTests: XCTestCase {
             XCTAssertFalse(manager.canReplace)
             XCTAssertFalse(manager.canClearActiveTerminal)
             XCTAssertFalse(manager.canSaveSelectedFile)
-            manager.closeSelectedTab()
+            manager.closeActivePanelOrWindow()
             XCTAssertNil(project.dock.group(containing: tool))
             XCTAssertEqual(project.tabs.count, 1)
             XCTAssertEqual(project.tabs.first?.content.id, browser.id)

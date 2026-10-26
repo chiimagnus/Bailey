@@ -34,6 +34,62 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data("original bytes\n".utf8))
     }
 
+    func testClosePanelSeparatesContextTargetFromCommandShortcut() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("keep.txt", text: "preserve me\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let window = app.windows.firstMatch
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 15))
+        XCTAssertTrue(git.waitForExistence(timeout: 15))
+
+        files.click()
+        git.rightClick()
+        let menu = app.menus["bailey.dock.git"].menuItems["Close Panel"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        menu.click()
+        XCTAssertTrue(git.waitForNonExistence(timeout: 12),
+                      "Context Close Panel must remove only the right-clicked Git panel")
+        XCTAssertTrue(files.exists, "Closing an inactive panel must preserve active Files")
+
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        XCTAssertTrue(git.waitForExistence(timeout: 12))
+        files.click()
+        git.rightClick()
+        XCTAssertTrue(app.menus["bailey.dock.git"].menuItems["Close Panel"]
+            .waitForExistence(timeout: 10))
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(files.waitForNonExistence(timeout: 12),
+                      "Cmd-W must close the active Files panel, not the prior right-click target")
+        XCTAssertTrue(git.exists)
+        XCTAssertTrue(window.exists)
+        XCTAssertEqual(try Data(contentsOf: file), Data("preserve me\n".utf8))
+    }
+
+    func testCommandPaletteClosePanelUsesTheActiveTool() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("persist.txt", text: "not edited\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 15))
+        XCTAssertTrue(git.waitForExistence(timeout: 15))
+        files.click()
+        app.typeKey("p", modifierFlags: .command)
+        let search = app.textFields["bailey.commandPalette.search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        search.typeText("Close Panel")
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        XCTAssertTrue(files.waitForNonExistence(timeout: 12))
+        XCTAssertTrue(git.exists)
+        XCTAssertTrue(app.windows.firstMatch.exists)
+        XCTAssertEqual(try Data(contentsOf: file), Data("not edited\n".utf8))
+    }
+
     func testRightClickInactiveFileTabClosesOnlyThatTab() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("first-tab.txt", text: "first\n")

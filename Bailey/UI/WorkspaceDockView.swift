@@ -522,11 +522,7 @@ struct DockTabGroupView: View {
             PaneTabItem(
                 tab: paneTab, isSelected: active == item, isPaneFocused: isFocused,
                 select: { select(item) },
-                close: {
-                    if let current = project.tabs.first(where: { $0.id == id }) {
-                        project.close(current)
-                    }
-                },
+                close: { manager.closePanel(item, in: project) },
                 renamingTabID: $renamingTabID
             )
             .overlay {
@@ -572,7 +568,7 @@ struct DockTabGroupView: View {
 
     private func contextTabOutline(for item: DockItem) -> some View {
         RoundedRectangle(cornerRadius: 6)
-            .strokeBorder(contextTab == item && isFocused ? Color(nsColor: Theme.accent) : .clear,
+            .strokeBorder(contextTab == item ? Color(nsColor: Theme.accent) : .clear,
                           lineWidth: 1)
             .allowsHitTesting(false)
     }
@@ -583,7 +579,7 @@ struct DockTabGroupView: View {
         if case .tab(let id) = item { project.selectTab(id) }
     }
 
-    private func closeTool(_ item: DockItem) { project.dock.removeTool(item) }
+    private func closeTool(_ item: DockItem) { manager.closePanel(item, in: project) }
 
     @ViewBuilder
     private var content: some View {
@@ -694,7 +690,7 @@ struct DockTabGroupView: View {
         }
         let closeTitle = String(localized: "Close", table: "Interface")
         Button {
-            if let current = project.tabs.first(where: { $0.id == tabID }) { project.close(current) }
+            manager.closePanel(.tab(tabID), in: project)
         } label: {
             if isFocused, active == .tab(tabID) {
                 Text(verbatim: closeTitle + "\t⌘W")

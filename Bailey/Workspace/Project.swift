@@ -608,11 +608,6 @@ final class Project: nonisolated Identifiable {
         }
     }
 
-    func closeSelected() {
-        guard let content = focusedContent else { return }
-        closeContent(content)
-    }
-
     func close(_ tab: PaneTab) {
         closeContent(tab.content)
     }

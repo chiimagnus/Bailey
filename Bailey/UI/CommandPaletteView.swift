@@ -276,7 +276,7 @@ struct CommandPaletteView: View {
                 manager.chooseSSHItems()
             },
             PaletteCommand(id: "close-panel", title: LocalizedStringResource("Close Panel", table: "Interface"), systemImage: "xmark.square", shortcut: "⌘W") {
-                manager.closeSelectedTab()
+                manager.closeActivePanelOrWindow()
             },
             PaletteCommand(id: "save-file", title: LocalizedStringResource("Save File", table: "Interface"), systemImage: "square.and.arrow.down", shortcut: "⌘S") {
                 manager.saveSelectedFile()

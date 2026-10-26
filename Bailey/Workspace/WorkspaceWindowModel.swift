@@ -527,14 +527,22 @@ final class WorkspaceWindowModel {
         return false
     }
 
-    func closeSelectedTab() {
-        guard let project = selectedProject else { return }
-        switch project.dock.activeGroup?.selected {
-        case .tab: project.closeSelected()
-        case .files?, .git?, .projects?:
-            if let item = project.dock.activeGroup?.selected { project.dock.removeTool(item) }
-        case nil:
-            if project.tabs.isEmpty { close(project) }
+    func closeActivePanelOrWindow() {
+        guard let project = selectedProject,
+              let item = project.dock.activeGroup?.selected else {
+            attachedWindow?.performClose(nil)
+            return
+        }
+        closePanel(item, in: project)
+    }
+
+    func closePanel(_ item: DockItem, in project: Project) {
+        guard selectedProject === project, project.dock.group(containing: item) != nil else { return }
+        switch item {
+        case .tab(let id):
+            if let tab = project.tabs.first(where: { $0.id == id }) { project.close(tab) }
+        case .files, .git, .projects:
+            project.dock.removeTool(item)
         }
     }
 
