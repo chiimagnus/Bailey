@@ -110,6 +110,12 @@ struct TreeKeyboardHost: NSViewRepresentable {
 /// Receive a secondary click without taking primary clicks or drags from a SwiftUI row.
 struct TreeContextClickTarget: NSViewRepresentable {
     let onContextClick: () -> Void
+    var onMenuClosed: (() -> Void)?
+
+    init(onContextClick: @escaping () -> Void, onMenuClosed: (() -> Void)? = nil) {
+        self.onContextClick = onContextClick
+        self.onMenuClosed = onMenuClosed
+    }
 
     func makeNSView(context: Context) -> TreeContextClickView {
         TreeContextClickView()
@@ -117,15 +123,20 @@ struct TreeContextClickTarget: NSViewRepresentable {
 
     func updateNSView(_ view: TreeContextClickView, context: Context) {
         view.onContextClick = onContextClick
+        view.onMenuClosed = onMenuClosed
     }
 
     static func dismantleNSView(_ view: TreeContextClickView, coordinator: ()) {
+        view.stopObservingMenu()
         view.onContextClick = nil
+        view.onMenuClosed = nil
     }
 }
 
 final class TreeContextClickView: NSView {
     var onContextClick: (() -> Void)?
+    var onMenuClosed: (() -> Void)?
+    private var menuEndObserver: NSObjectProtocol?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -145,7 +156,24 @@ final class TreeContextClickView: NSView {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         onContextClick?()
-        return super.menu(for: event)
+        stopObservingMenu()
+        let menu = super.menu(for: event)
+        if onMenuClosed != nil {
+            menuEndObserver = NotificationCenter.default.addObserver(
+                forName: NSMenu.didEndTrackingNotification, object: menu, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.onMenuClosed?()
+                    self?.stopObservingMenu()
+                }
+            }
+        }
+        return menu
+    }
+
+    func stopObservingMenu() {
+        if let menuEndObserver { NotificationCenter.default.removeObserver(menuEndObserver) }
+        menuEndObserver = nil
     }
 }
 
@@ -194,6 +222,7 @@ struct TreeRowSurface<Content: View>: View {
     var selected = false
     var multiSelected = false
     var focusRing = false
+    var contextRing = false
     var hoverEnabled = true
     var leadingInset = TreeRowStyle.contentInset
     var trailingInset = TreeRowStyle.contentInset
@@ -210,6 +239,7 @@ struct TreeRowSurface<Content: View>: View {
         selected: Bool = false,
         multiSelected: Bool = false,
         focusRing: Bool = false,
+        contextRing: Bool = false,
         hoverEnabled: Bool = true,
         leadingInset: CGFloat = TreeRowStyle.contentInset,
         trailingInset: CGFloat = TreeRowStyle.contentInset,
@@ -223,6 +253,7 @@ struct TreeRowSurface<Content: View>: View {
         self.selected = selected
         self.multiSelected = multiSelected
         self.focusRing = focusRing
+        self.contextRing = contextRing
         self.hoverEnabled = hoverEnabled
         self.leadingInset = leadingInset
         self.trailingInset = trailingInset
@@ -248,11 +279,11 @@ struct TreeRowSurface<Content: View>: View {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(multiSelected ? accent.opacity(0.14)
                            : selected ? foreground.opacity(0.09)
-                           : (isHovering ? foreground.opacity(0.05) : .clear))
+                           : (isHovering && !contextRing ? foreground.opacity(0.05) : .clear))
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(focusRing ? accent.opacity(0.65) : .clear,
+                    .strokeBorder(focusRing || contextRing ? accent.opacity(0.65) : .clear,
                                   lineWidth: 1)
                     .allowsHitTesting(false)
             }
@@ -385,6 +416,7 @@ struct TreeFolderRow<Accessory: View>: View {
     let scale: CGFloat
     var leadingInset = TreeRowStyle.contentInset
     var focusRing = false
+    var contextRing = false
     var multiSelected = false
     var multiSelectionEnabled = false
     var compactSegment: ((TreeDisplayModel.Row.CompactComponent) -> AnyView)? = nil
@@ -394,7 +426,7 @@ struct TreeFolderRow<Accessory: View>: View {
     var body: some View {
         TreeRowSurface(depth: row.depth, scale: scale,
                        multiSelected: multiSelected, focusRing: focusRing,
-                       leadingInset: leadingInset) { hovering, layout in
+                       contextRing: contextRing, leadingInset: leadingInset) { hovering, layout in
             HStack(spacing: 0) {
                 TreeRowLabel(row: row, iconPath: row.path, scale: scale,
                              compactSegment: compactSegment)
@@ -417,13 +449,13 @@ struct TreeFolderRow<Accessory: View>: View {
 extension TreeFolderRow where Accessory == EmptyView {
     init(row: TreeDisplayModel.Row, scale: CGFloat,
          leadingInset: CGFloat = TreeRowStyle.contentInset,
-         focusRing: Bool = false, multiSelected: Bool = false,
-         multiSelectionEnabled: Bool = false,
+         focusRing: Bool = false, contextRing: Bool = false,
+         multiSelected: Bool = false, multiSelectionEnabled: Bool = false,
          compactSegment: ((TreeDisplayModel.Row.CompactComponent) -> AnyView)? = nil,
          toggle: @escaping () -> Void) {
         self.init(row: row, scale: scale, leadingInset: leadingInset,
-                  focusRing: focusRing, multiSelected: multiSelected,
-                  multiSelectionEnabled: multiSelectionEnabled,
+                  focusRing: focusRing, contextRing: contextRing,
+                  multiSelected: multiSelected, multiSelectionEnabled: multiSelectionEnabled,
                   compactSegment: compactSegment,
                   toggle: toggle) { _ in EmptyView() }
     }
@@ -438,6 +470,7 @@ struct TreeFileRow<Accessory: View>: View {
     var multiSelected = false
     var multiSelectionEnabled = false
     var focusRing = false
+    var contextRing = false
     var leadingInset = TreeRowStyle.contentInset
     var accessibilityHint = ""
     var accessibilityID = "bailey.tree.file"
@@ -447,7 +480,8 @@ struct TreeFileRow<Accessory: View>: View {
 
     var body: some View {
         TreeRowSurface(depth: row.depth, scale: scale, selected: selected,
-                       multiSelected: multiSelected, focusRing: focusRing, leadingInset: leadingInset) { hovering, layout in
+                       multiSelected: multiSelected, focusRing: focusRing,
+                       contextRing: contextRing, leadingInset: leadingInset) { hovering, layout in
             HStack(spacing: 0) {
                 TreeRowLabel(row: row, iconPath: iconPath ?? row.path, scale: scale,
                              directory: directory)

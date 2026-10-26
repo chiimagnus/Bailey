@@ -134,6 +134,27 @@ final class AppIdentityTests: XCTestCase {
         XCTAssertNil(menu.items.last?.attributedTitle)
     }
 
+    @MainActor
+    func testTreeContextClickEndsTemporaryMenuTargetAfterTracking() async throws {
+        let view = TreeContextClickView(frame: CGRect(x: 0, y: 0, width: 120, height: 24))
+        var contextClicks = 0
+        let closed = expectation(description: "Context menu ended")
+        view.onContextClick = { contextClicks += 1 }
+        view.onMenuClosed = { closed.fulfill() }
+
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .rightMouseDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: 0, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1
+        ))
+        _ = view.menu(for: event)
+        XCTAssertEqual(contextClicks, 1)
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification,
+                                        object: NSMenu())
+        await fulfillment(of: [closed], timeout: 2)
+        view.stopObservingMenu()
+    }
+
     func testStableStorageLocations() {
         let home = FileManager.default.homeDirectoryForCurrentUser
         XCTAssertEqual(

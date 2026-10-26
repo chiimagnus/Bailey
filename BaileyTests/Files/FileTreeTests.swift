@@ -1422,8 +1422,12 @@ final class FileTreeTests: XCTestCase {
 
         tree.selectForContextMenu(rows[1])
         XCTAssertEqual(tree.selectedPath, rows[1].path)
+        XCTAssertEqual(tree.selectedPaths, [rows[0].path, rows[2].path],
+                       "Context-click must not turn an unselected row into an explicit selection")
+        XCTAssertEqual(tree.contextSelection(for: rows[1]), [rows[1].path],
+                       "The context menu should operate its own target without changing selection")
         XCTAssertEqual(tree.selectedOperationPaths, [rows[1].path],
-                       "Context-clicking an unselected row moves the keyboard target")
+                       "When Files owns keyboard focus, a cursor outside selection acts on the cursor")
     }
 
     func testCommandDeselectionStaysEmptyAfterDirectoryRefresh() async throws {

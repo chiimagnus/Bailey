@@ -256,6 +256,11 @@ final class FileTreeModel {
 
     var selectedOperationPaths: [String] {
         let paths = items.filter { !$0.isDraft && selectedPaths.contains($0.path) }.map(\.path)
+        guard !paths.isEmpty else { return [] }
+        if let selectedPath, !selectedPaths.contains(selectedPath),
+           items.contains(where: { !$0.isDraft && $0.path == selectedPath }) {
+            return [selectedCompactPath ?? selectedPath]
+        }
         if paths.count == 1, paths.first == selectedPath, let selectedCompactPath {
             return [selectedCompactPath]
         }
@@ -286,11 +291,12 @@ final class FileTreeModel {
     }
 
     func selectForContextMenu(_ item: Item, componentPath: String? = nil) {
-        if selectedPaths.contains(item.path), componentPath == nil {
-            selectedPath = item.path
-        } else {
-            select(item, componentPath: componentPath)
-        }
+        guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path }),
+              componentPath == nil || item.compactComponents.contains(where: { $0.path == componentPath })
+        else { return }
+        selectedPath = item.path
+        selectedCompactPath = componentPath
+        activeDrag = nil
     }
 
     @discardableResult

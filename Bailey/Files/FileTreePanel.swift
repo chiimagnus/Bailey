@@ -377,6 +377,7 @@ private struct FileTreeRow: View {
 
     @State private var editingName = ""
     @State private var hoveredCompactPath: String?
+    @State private var contextMenuPath: String?
     @FocusState private var fieldFocused: Bool
     @Environment(\.panelFontScale) private var fontScale
 
@@ -425,26 +426,33 @@ private struct FileTreeRow: View {
             }
         } else if isRenaming {
             TreeRowSurface(
-                depth: item.depth, scale: fontScale, selected: isCurrent
+                depth: item.depth, scale: fontScale, selected: isCurrent,
+                contextRing: contextMenuPath != nil
             ) { _, layout in
                 renameRow
                     .modifier(layout)
             }
             .overlay {
-                TreeContextClickTarget { selectForContextMenu(item) }
+                TreeContextClickTarget(onContextClick: { selectForContextMenu(item) },
+                                       onMenuClosed: { contextMenuPath = nil })
                     .contextMenu { rowMenu(for: item) }
             }
         } else if item.isDirectory && !item.compactComponents.isEmpty {
             semanticRow
-                .contextMenu { rowMenu(for: activeMenuTarget) }
+                .background {
+                    TreeContextClickTarget(onContextClick: { selectForContextMenu(item) },
+                                           onMenuClosed: { contextMenuPath = nil })
+                }
+                .contextMenu { rowMenu(for: item) }
                 .onDrag { makeDragProvider(item) }
         } else {
             // Local drags retain public fileURL for Finder; SSH drags publish only
             // the process-private Files type, never a Mac path for a remote file.
             semanticRow
                 .overlay {
-                    TreeContextClickTarget { selectForContextMenu(activeMenuTarget) }
-                        .contextMenu { rowMenu(for: activeMenuTarget) }
+                    TreeContextClickTarget(onContextClick: { selectForContextMenu(item) },
+                                           onMenuClosed: { contextMenuPath = nil })
+                        .contextMenu { rowMenu(for: item) }
                 }
                 .onDrag { makeDragProvider(item) }
         }
@@ -453,15 +461,7 @@ private struct FileTreeRow: View {
     private func selectForContextMenu(_ target: FileTreeModel.Item) {
         guard isCurrentTarget() else { return }
         model.selectForContextMenu(item, componentPath: target.path == item.path ? nil : target.path)
-        focusKeyboard()
-    }
-
-    private var activeMenuTarget: FileTreeModel.Item {
-        guard model.selectedPath == item.path,
-              let path = model.selectedCompactPath,
-              let component = item.compactComponents.first(where: { $0.path == path })
-        else { return item }
-        return item.item(for: component)
+        contextMenuPath = target.path
     }
 
     @ViewBuilder
@@ -603,13 +603,14 @@ private struct FileTreeRow: View {
         let target = item.item(for: component)
         return AnyView(
             Text(component.name)
-                .underline(model.selectedPath == item.path
+                .underline(hasKeyboardCursor
                     && (model.selectedCompactPath ?? item.path) == component.path)
                 .padding(.horizontal, 2)
                 .contentShape(Rectangle())
                 .background(
                     RoundedRectangle(cornerRadius: 3)
                         .fill(hoveredCompactPath == component.path
+                            && contextMenuPath != component.path
                             ? Color.primary.opacity(0.09) : .clear)
                 )
                 .onHover { hovered in
@@ -624,7 +625,8 @@ private struct FileTreeRow: View {
                     }
                 })
                 .overlay {
-                    TreeContextClickTarget { selectForContextMenu(target) }
+                    TreeContextClickTarget(onContextClick: { selectForContextMenu(target) },
+                                           onMenuClosed: { contextMenuPath = nil })
                         .contextMenu { rowMenu(for: target) }
                 }
                 .onDrag { makeDragProvider(target) }
@@ -649,8 +651,8 @@ private struct FileTreeRow: View {
     private var semanticRow: some View {
         if item.isDirectory {
             TreeFolderRow(row: displayRow, scale: fontScale,
-                          focusRing: hasKeyboardCursor, multiSelected: isMultiSelected,
-                          multiSelectionEnabled: true,
+                          focusRing: hasKeyboardCursor, contextRing: contextMenuPath != nil,
+                          multiSelected: isMultiSelected, multiSelectionEnabled: true,
                           compactSegment: { component in compactSegmentView(component) }) {
                 guard isCurrentTarget() else { return }
                 if selectForClick() { return }
@@ -663,7 +665,7 @@ private struct FileTreeRow: View {
             TreeFileRow(
                 row: displayRow, scale: fontScale, selected: isCurrent,
                 multiSelected: isMultiSelected, multiSelectionEnabled: true,
-                focusRing: hasKeyboardCursor,
+                focusRing: hasKeyboardCursor, contextRing: contextMenuPath != nil,
                 open: {
                     guard isCurrentTarget() else { return }
                     if !selectForClick() { openFile(item.path, false) }

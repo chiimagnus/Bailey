@@ -658,6 +658,40 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: survivor), Data("keep me".utf8))
     }
 
+    func testTerminalFocusedRightClickPreservesFilesSelectionAndInput() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let selectedFile = try fixture.file("a-selected.txt", text: "selected\n")
+        let contextFile = try fixture.file("b-context.txt", text: "context\n")
+        let marker = fixture.root.appendingPathComponent("terminal-input.txt")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let window = app.windows.firstMatch
+        let a = WorkspaceUITestSupport.fileRow(selectedFile, in: window)
+        let b = WorkspaceUITestSupport.fileRow(contextFile, in: window)
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        a.click()
+
+        app.typeKey("t", modifierFlags: .command)
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0.6)).click()
+        b.rightClick()
+        XCTAssertTrue(a.isSelected && !b.isSelected,
+                      "Context click must not transfer persistent selection from A to B")
+        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
+            $0.menuItems["Copy Relative Path"].exists
+        }, "Files should display its context menu while Terminal owns input")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+        app.typeText("printf terminal > '\(marker.path)'")
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let written = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: marker.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [written], timeout: 12), .completed,
+                       "Closing the Files menu must preserve Terminal keyboard input")
+        XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "terminal")
+    }
+
     func testMultiSelectContextTargetsAndBulkTrashAgainstRealDisk() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let alpha = try fixture.file("a.txt", text: "a bytes\n")
@@ -687,8 +721,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         otherMenu.menuItems["Copy Path"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), gamma.path,
                        "Context-clicking an unselected row must act on that row only")
-        XCTAssertTrue(c.isSelected && !a.isSelected && !b.isSelected,
-                      "A context click outside the selection moves the keyboard target")
+        XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected,
+                      "A context click outside the selection must not rewrite persistent selection")
         a.click()
         XCUIElement.perform(withKeyModifiers: .shift) { b.click() }
         XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected)
