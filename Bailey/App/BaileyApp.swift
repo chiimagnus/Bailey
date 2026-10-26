@@ -206,9 +206,8 @@ private struct BaileyCommands: Commands {
             if let project = manager?.selectedProject, !project.dock.tabOrder.isEmpty {
                 Divider()
 
-                ForEach(Array(project.dock.tabOrder.compactMap { id in
-                    project.tabs.first { $0.id == id }
-                }.prefix(9).enumerated()).map {
+                let tabsByID = Dictionary(uniqueKeysWithValues: project.tabs.map { ($0.id, $0) })
+                ForEach(Array(project.dock.tabOrder.compactMap { tabsByID[$0] }.enumerated()).map {
                     PanelMenuEntry(tab: $0.element, index: $0.offset)
                 }) { item in
                     Button {
@@ -224,7 +223,9 @@ private struct BaileyCommands: Commands {
                         }
                         .labelStyle(.titleAndIcon)
                     }
-                    .keyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .control)
+                    .keyboardShortcut(item.index < 9
+                        ? KeyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .control)
+                        : nil)
                 }
             }
         }
@@ -263,7 +264,7 @@ private struct BaileyCommands: Commands {
             if manager?.projects.isEmpty == false {
                 Divider()
 
-                ForEach(Array((manager?.projects ?? []).prefix(9).enumerated()).map {
+                ForEach(Array((manager?.projects ?? []).enumerated()).map {
                     ProjectMenuEntry(project: $0.element, index: $0.offset)
                 }) { item in
                     Button {
@@ -276,7 +277,9 @@ private struct BaileyCommands: Commands {
                         }
                         .labelStyle(.titleAndIcon)
                     }
-                    .keyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .command)
+                    .keyboardShortcut(item.index < 9
+                        ? KeyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .command)
+                        : nil)
                 }
             }
         }

@@ -140,6 +140,26 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertEqual(project.dock.activeGroup?.selected, .tab(order[0]))
     }
 
+    func testPanelAndProjectSelectionBeyondNineItems() throws {
+        let project = Project(fallbackName: "Many panels", workspaceConfiguration: .standard)
+        for _ in 0..<12 {
+            project.newBrowserTab(initialFocus: .none)
+        }
+        let ids = project.dock.tabOrder
+        XCTAssertEqual(ids.count, 12)
+        project.selectPanel(.tab(ids[11]))
+        XCTAssertEqual(project.selectedTabID, ids[11])
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.projects = (0..<12).map {
+            Project(fallbackName: "Project \($0 + 1)", workspaceConfiguration: .standard)
+        }
+        XCTAssertEqual(manager.projects.count, 12)
+        manager.selectProject(index: 11)
+        XCTAssertEqual(manager.selectedProjectID, manager.projects[11].id)
+    }
+
     func testAddPanelOnlyOffersMissingToolsAcrossAllGroups() throws {
         let dock = DockWorkspaceModel()
         let emptyGroup = try XCTUnwrap(dock.root.groups.first { $0.items.isEmpty })
