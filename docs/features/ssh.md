@@ -52,7 +52,7 @@ SSH 项目的 ⌘P 直接使用当前远端 Git/文件后端索引，只展示�
 
 ## 验证
 
-`RemoteCommandsTests`、`RemoteLifetimeTests`、`WorkspaceIdentityTests` 和工作区身份回归检查 SSH 批量目录读取、复用参数、绑定、取消、失败与过期结果。`FileTabPersistenceTests` 的受控后端还检验文件断线、重连、目标变更、保存失败和过期读取不会丢稿或错写；`NativeFileTabTests` 验证原生编辑器保留与 Undo。受控后端只能证明这些逻辑，不能证明真实传输；`SSHFileTreeLiveTests` 使用专用、获准的 Windows SSH master 检查特殊目录名、批量读取、单目录失败隔离和文件树冷加载／缓存展开／批量刷新各自的 SSH 请求次数；显式 `BAILEY_SSH_BENCHMARK=1` 时再测冷加载与 30 次热路径的中位数/p95。`SSHGitRecoveryLiveTests` 使用另一个专用 master 和 Windows 临时仓库，模拟仅该测试传输失联，验证 Git Graph 保留、写操作拒绝、恢复后重新允许暂存；显式开启 `BAILEY_SSH_BENCHMARK=1` 时测首次 Git 核心/详情耗时和 30 次热刷新。不会切断用户或系统网络连接。测量不代替完整 App 视觉响应或原生网络异常的 UI 验收。
+`RemoteCommandsTests`、`RemoteLifetimeTests`、`WorkspaceIdentityTests` 和工作区身份回归检查 SSH 批量目录读取、复用参数、绑定、取消、失败与过期结果。`FileTabPersistenceTests` 的受控后端还检验文件断线、重连、目标变更、保存失败和过期读取不会丢稿或错写；`NativeFileTabTests` 通过固定主机的 `SSHHostWorkspaces` 状态验证原生编辑器的只读、缓冲与 Undo，不用终端 `RemoteConnection` 模拟 Files 断线。受控后端只能证明这些逻辑，不能证明真实传输；`SSHFileTreeLiveTests` 使用专用、获准的 Windows SSH master 检查特殊目录名、批量读取、单目录失败隔离和文件树冷加载／缓存展开／批量刷新各自的 SSH 请求次数；显式 `BAILEY_SSH_BENCHMARK=1` 时再测冷加载与 30 次热路径的中位数/p95。`SSHGitRecoveryLiveTests` 使用另一个专用 master 和 Windows 临时仓库，模拟仅该测试传输失联，验证 Git Graph 保留、写操作拒绝、恢复后重新允许暂存；显式开启 `BAILEY_SSH_BENCHMARK=1` 时测首次 Git 核心/详情耗时和 30 次热刷新。不会切断用户或系统网络连接。测量不代替完整 App 视觉响应或原生网络异常的 UI 验收。
 
 归档的验证分层：模拟 SSH 后端覆盖传输上限与远端清理失败；`GitWorkspaceSSHTests` 在真实 Windows SSH 中核对选定 Ref 的 ZIP 原始字节，远端分支经原生保存面板归档仍需单独验收完整 App 操作。这些成功路径不代表断线时完整 App 的清理与恢复已完成验收。
 
