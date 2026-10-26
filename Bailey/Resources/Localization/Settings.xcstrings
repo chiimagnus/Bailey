@@ -61,6 +61,16 @@
         }
       }
     },
+    "Apply" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用"
+          }
+        }
+      }
+    },
     "Auto" : {
       "localizations" : {
         "zh-Hans" : {
@@ -101,6 +111,16 @@
         }
       }
     },
+    "Browser" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "浏览器"
+          }
+        }
+      }
+    },
     "Codex and other terminal notifications are sent to every Bark destination. Messages may contain sensitive output." : {
       "localizations" : {
         "zh-Hans" : {
@@ -117,6 +137,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "颜色"
+          }
+        }
+      }
+    },
+    "Common" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通用"
           }
         }
       }
@@ -202,12 +232,42 @@
         }
       }
     },
+    "Excluded file patterns" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件排除规则"
+          }
+        }
+      }
+    },
+    "Excluded files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "排除的文件"
+          }
+        }
+      }
+    },
     "Family" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "字体"
+          }
+        }
+      }
+    },
+    "File Manager" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件管理器"
           }
         }
       }
@@ -262,12 +322,32 @@
         }
       }
     },
+    "Git Manager" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 管理器"
+          }
+        }
+      }
+    },
     "Hide" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "隐藏"
+          }
+        }
+      }
+    },
+    "Invalid file exclusion pattern: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件排除规则无效：%@"
           }
         }
       }
@@ -323,12 +403,32 @@
         }
       }
     },
+    "No settings are available yet." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无设置。"
+          }
+        }
+      }
+    },
     "OK" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "好"
+          }
+        }
+      }
+    },
+    "One glob per line. Hidden files remain on disk and searchable in Command Palette." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每行一条 Glob 规则。隐藏文件仍保留在磁盘上，也可通过命令面板搜索。"
           }
         }
       }
@@ -389,6 +489,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "预览"
+          }
+        }
+      }
+    },
+    "Projects" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "项目"
           }
         }
       }
@@ -459,6 +569,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "恢复默认设置"
+          }
+        }
+      }
+    },
+    "Restore Default Exclusions" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复默认排除规则"
           }
         }
       }
@@ -581,6 +701,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "文本编辑"
+          }
+        }
+      }
+    },
+    "Text Editor" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文本编辑器"
           }
         }
       }

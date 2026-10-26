@@ -61,7 +61,7 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 
 | 完整用户路径 | 独立 UI 测试 | 仍保留的底层回归 |
 | --- | --- | --- |
-| 冷启动、命令面板搜索／Escape、从编辑器切换 Files 后真实方向键／空格焦点 | `WorkspaceSmokeUITests`、`WorkspaceFilesUITests`、`SharedTreeUITests`、`WorkspaceDockUITests` | `DockWorkspaceTests`、`PanelContextTests`（模型状态与归属） |
+| 冷启动、命令面板搜索／Escape、非 Files 标签中的外部文件与 Git 索引变更、从编辑器切换 Files 后真实方向键／空格焦点 | `WorkspaceSmokeUITests`、`WorkspaceFileIndexRefreshUITests`、`WorkspaceLocalFileEventsUITests`、`WorkspaceFilesUITests`、`SharedTreeUITests`、`WorkspaceDockUITests` | `FileTreeTests`（事件及共享订阅）、`ProjectFileIndexTests`、`DockWorkspaceTests`、`PanelContextTests`（模型状态与归属） |
 | 系统 Add Folder、Files 预览／打开、焦点恢复、文件去重、编辑保存到磁盘 | `WorkspaceFilesUITests`、`SharedTreeUITests` | `FileTreeTests`、`FileTabPersistenceTests`、`NativeFileTabTests` |
 | 大文件远距导航、文本替换、键盘撤销／重做、真实保存 | `EditorNavigationUITests` | `NativeEditorLayoutTests`、`NativeEditorCompositionTests`、`FileTabPersistenceTests` |
 | Swift 与纯文本的真实 App 像素差异；Markdown／TSX／HTML／CSS 的原生着色与正文保持 | `EditorHighlightingUITests`（Swift 实际 GUI） | `NativeSyntaxHighlightingTests`（四语言真实 TextKit）、`HighlightQueryCacheTests` |
@@ -108,7 +108,7 @@ Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言
 
 ## 隔离环境
 
-同一仓库的 Dev 构建、宿主测试与 GUI 测试不能并行，即使使用不同 DerivedData：测试共用 Bailey Dev，编译也可能替换正在运行的 App／Runner。四个 Makefile 入口用 `build/.bailey-dev-test.lock` 原子互斥；已有操作时立即报错，不等待或终止其他进程。正常结束或命令失败后自动释放。若进程被强制终止留下锁，先确认本仓库的相关操作已经停止，再用 `rmdir build/.bailey-dev-test.lock` 清理。其他仓库或绕过 Makefile 启动的操作仍须人工协调同一桌面。
+同一仓库的 Dev 构建、宿主测试与 GUI 测试不能并行，即使使用不同 DerivedData：测试共用 Bailey Dev，编译也可能替换正在运行的 App／Runner。四个 Makefile 入口用 `build/.bailey-dev-test.lock` 原子互斥；已有操作时立即报错，不等待或终止其他进程。正常结束或命令失败后自动释放。若进程被强制终止留下锁，先确认本仓库的相关操作已经停止，再用 `rmdir build/.bailey-dev-test.lock` 清理。其他仓库或绕过 Makefile 启动的操作仍须人工协调同一桌面。`automationmodetool` 在 GUI 测试结束后可能显示 Automation Mode 已关闭；**不要仅凭状态就判定无法测试**，先直接运行受影响的 `make test:ui ONLY_TESTING=...` 重新发起系统授权，再根据实际运行结果判断。管理员免认证策略不是开启 Automation Mode 的命令，不应为一次普通验收擅自修改。
 
 宿主 `Bailey` Scheme 的 TestAction 向 Debug 宿主传入 `--isolated-ui-test`。Makefile 的测试构建使用独立 Bundle ID `chiimagnus.bailey.dev`；独立 UI Test 显式通过 `XCUIApplication(bundleIdentifier:)` 启动 Bailey Dev，并传入 `--isolated-ui-test`、`-ApplePersistenceIgnoreState YES` 与一次性 `BAILEY_UI_TEST_RUN_ID`，不允许定位或终止正式 Bailey。AppKit 自带的窗口状态恢复与 Bailey 的 `SessionStore` 彼此独立：UI Runner 禁用前者，避免旧系统窗口污染测试；验证 Bailey 快照重启时保持相同的测试 UUID，并通过系统「新建窗口」建立真实场景。
 
@@ -120,7 +120,7 @@ open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey.app" --args -
 
 该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。Xcode 27.2 的 XCUITest 有时只启动 Dev 进程而不显示初始 `WindowGroup`，共用启动辅助函数仅在窗口缺失时点击 App 自己的「新建窗口」菜单创建原生窗口；不得改为 `open -n` 后按 Bundle ID 附着（可能另起非隔离 Dev，污染普通会话快照）。**开发版与正式版拥有不同 Bundle ID、配置路径和 DerivedData**，XCUITest 仅定位 Bailey Dev；正式版运行时也可执行宿主测试，无须强制退出用户 App。`make build:ui` 只编译。完整 UI 测试仍依赖当前 macOS 图形会话的前台键盘焦点；如果用户同时在 Helium 或正式 Bailey 输入，XCUI 键盘事件可能失败或打断用户，不能将不同 Bundle ID 冒称独立桌面。隔离 Bailey Dev 不再拦截 `⌘Q`：完整 App 测试实际验证保存失败否决退出、修复后正常退出以及原会话重启恢复；宿主测试不以跨进程快捷键模拟真实退出。该隔离不是独立的图形登录会话，执行原生 UI 回归时仍应避免与用户正在进行的前台快捷键／鼠标操作互相干扰。刻意测试重启恢复时，两次启动显式传入同一有效 UUID 环境变量 `BAILEY_UI_TEST_RUN_ID`。
 
-**正式设置不会被开发版共用。** 普通 Dev 使用 `~/.config/bailey-dev`，正式版仍使用 `~/.config/bailey`；两版的终端历史、窗口快照、语言及 Bark 凭据也分域。独立 UI 启动器为每例提供临时 `HOME` 和 `CFFIXED_USER_HOME`，并核对 App 的 TOML 确实出现在临时目录；仅改 `HOME` 不会改变 Foundation 的主目录。外观、面板字号等 TOML 夹具可经真实 App 验证，不修改现有 Dev 配置。Git 夹具在自身仓库配置身份和不签名策略，不依赖用户的全局 Git 设置。
+**正式设置不会被开发版共用。** 普通 Dev 使用 `~/.config/bailey-dev`，正式版仍使用 `~/.config/bailey`；两版的终端历史、窗口快照、语言及 Bark 凭据也分域。独立 UI 启动器使用临时 `HOME` 和 `CFFIXED_USER_HOME`，并核对 App 的 TOML 确实位于临时目录；仅改 `HOME` 不会改变 Foundation 的主目录。**同一 XCTest Runner 内的普通 UI 方法复用 Bailey Dev 进程与窗口**。每例结束时清理项目并确认空状态，下例直接复用已清理的会话，不再重复操作 Projects；同例内再次请求启动则先清理现有项目。每例仍拥有独立临时文件与失败报告；清理失败、应用已退出、语言变化或使用独立配置时重新启动，测试会话结束后清理进程与临时主目录。主动验证重启／退出的用例继续实际重启，不能靠进程复用冒充。外观、面板字号等 TOML 夹具可经真实 App 验证，不修改现有 Dev 配置。Git 夹具在自身仓库配置身份和不签名策略，不依赖用户的全局 Git 设置。
 
 临时主目录不等于 UserDefaults／钥匙串全部隔离。语言持久化等设置仍须独立登录账户或明确的按键恢复；进程内组件测试继续显式使用临时配置与 UserDefaults suite，尤其 Diff 重载测试不得继承用户持久化的编辑模式。临时文件、Git 仓库和受控后端不得指向正式项目。
 
@@ -135,7 +135,7 @@ Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 仍指向正式
 `GitNativeDialogTests` 直接检查生产 NSAlert 及选项联动；`GitRemoteBranchActionTests` 在真实 Git 仓库检验旧 Fetch Ref 的拒写和重新确认。`GitDialogUITests` 只保留完整 Bailey Dev 的 Git Graph→菜单→原生 Sheet→真实操作、跨窗归属和交互式 Rebase 等不可替代的用户行为。
 交互式 Rebase 用系统 `/bin/sh -c` 内联编辑器验证真实 PTY 与提交重写，避免跨进程执行 UI Runner 沙盒内的脚本。
 
-`GitInteractiveRebaseIntegrationTests` 检查应用服务归属、本地真实 PTY，以及固定与自动跟随 SSH 项目的独立握手和真实 Rebase；其窗口只用于满足 Ghostty 启动条件，真正 Git Graph→Sheet→终端输入另由 `GitDialogUITests` 检查。`GitWorkspaceSSHTests` 检查专属远端临时仓库的 Push/Delete、ZIP 二进制内容、历史文件 index/工作区复位、Stash、Clean 和普通 FileTab Ignore；`GitRemoteRefreshIntegrationTests` 用受控慢详情和获准 Windows SSH 仓库验证 `GitStatusModel` 的五秒轮询、取消后不补查及外部 Git 结果。面板挂载与用户入口由独立 Dev App 的 `GitChangesUITests`、`GitGraphGeometryUITests` 验证；真实 SSH 的完整 GUI 隐藏／恢复组合未在此组 E2E 中执行，不以模型测试替代。`SSHGitRecoveryLiveTests` 验证专属 Windows 临时仓库在测试后端失联期间保留 Git 快照、拒绝写操作并于恢复后重新允许写操作。这些集成测试不冒充完整独立 App 的菜单 E2E。当前已获授权的 `windows` 主机完整执行命令是：
+`GitInteractiveRebaseIntegrationTests` 检查应用服务归属、本地真实 PTY，以及固定 SSH 项目的独立握手和真实 Rebase；其窗口只用于满足 Ghostty 启动条件，真正 Git Graph→Sheet→终端输入另由 `GitDialogUITests` 检查。`GitWorkspaceSSHTests` 检查专属远端临时仓库的 Push/Delete、ZIP 二进制内容、历史文件 index/工作区复位、Stash、Clean 和普通 FileTab Ignore；`GitRemoteRefreshIntegrationTests` 用受控慢详情和获准 Windows SSH 仓库验证 `GitStatusModel` 的五秒轮询、取消后不补查及外部 Git 结果。面板挂载与用户入口由独立 Dev App 的 `GitChangesUITests`、`GitGraphGeometryUITests` 验证；真实 SSH 的完整 GUI 隐藏／恢复组合未在此组 E2E 中执行，不以模型测试替代。`SSHGitRecoveryLiveTests` 验证专属 Windows 临时仓库在测试后端失联期间保留 Git 快照、拒绝写操作并于恢复后重新允许写操作。这些集成测试不冒充完整独立 App 的菜单 E2E。当前已获授权的 `windows` 主机完整执行命令是：
 
 ```sh
 BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test
@@ -202,13 +202,13 @@ BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make
 | 项目与 SSH | 本机／远端同名路径隔离，切换、断线、重连和失败不串目标 |
 | 停靠与窗口 | 上下／左右组合、跨区移动、关闭、双窗口菜单和焦点，后台 Shell 不重启 |
 | 文件与编辑 | 创建／重命名、中文输入、查找、撤销、滚动、保存失败和关闭保护 |
-| Files 外部刷新 | 外部程序在根目录及已展开目录新建、覆盖、重命名、移动、删除文件；核对真实磁盘与文件树一致。检查面板隐藏／重新打开、App 前后台、切项目／SSH 连接、失败保留旧列表，以及空闲目录查询次数；未来改为事件驱动时还须证明无周期读取 |
+| Files 外部刷新 | 本机 FSEvents：独立 CLI／Finder 在根及已展开目录新建、覆盖、原子替换、移动、删除，核对磁盘与最终行；验证符号链接项目根、展开／压缩目录中的外部链接、根移动重开、Unicode／换行路径、丢事件重扫、突发写入、旧根隔离、首次扫描竞态和空闲 10 秒以上无周期读取。检查隐藏／重开、App 前后台和窗口／项目切换后的订阅释放及补验；Windows 固定 SSH 正常目录由独立 PTY 的文件事件驱动，非 Windows、不可用/断线、链接根和可见目录符号链接必须恢复 2 秒轮询。使用 `SSHWindowsFileEventsTests` 的获授权 `ssh windows` 临时目录验证：READY 后初读、外部写入及 550 次突发操作经事件或失效后 2 秒轮询回退的真实 FileTree、两个 Files 面板共享监听、取消后回退及专属 PowerShell 进程退出、失效超时；隔离 Bailey Dev 的 `WorkspaceFilesUITests` 核对远端文件新建／改名／删除和隐藏后补验，不操作用户 SSH master。宿主 `FileTreeTests` 不代替完整 App GUI。 |
 | Git 与 Diff | 工作区／索引／历史、首次提交、特殊路径、失败草稿、两侧滚动及真实写入 |
 | Git 外部刷新 | 独立 CLI 修改本机后由文件事件更新，空闲时不周期查询；SSH 前台 5 秒兜底；Git 面板隐藏但 App 在前台时底栏仍更新，App 后台暂停，恢复前台重新读取，失败后可手动重试 |
-| Git Graph 多级菜单 | 多 Ref、多 Worktree 下用真实鼠标和键盘依次展开 `+N → Branch → Worktree → 目录 → 操作`。菜单保持打开时分别触发无数据变化的手动刷新、外部文件修改及分支／Worktree 变更，调整侧栏宽度并核对菜单宿主没有被替换，录屏确认同一菜单不因纯查询进度或布局切换而关闭，真实目标变化后操作仍经过校验；检查超过 10 秒的悬停、首次加载、明暗与窄宽面板；短 Branch（含 Worktree 数量标记）不可被拉宽，`+N` 与提交标题必须仍可见。`GitStatusModelTests` 还须验证观察依赖不因无变化刷新失效；静态 XCTest 菜单结构不能冒充真实悬停 |
+| Git Graph 多级菜单 | 多 Ref、多 Worktree 下用真实鼠标和键盘依次展开 `+N → Branch → Worktree → 目录 → 操作`。菜单保持打开时分别触发无数据变化的手动刷新、外部文件修改及分支／Worktree 变更，调整侧栏宽度并核对菜单宿主没有被替换，录屏确认同一菜单不因纯查询进度或布局切换而关闭，真实目标变化后操作仍经过校验；检查超过 10 秒的悬停、首次加载、明暗与窄宽面板；短 Branch（含 Worktree 数量标记）不可被拉宽，Branch／Tag／Stash／Worktree 名称须在真实 GUI 中可见，不能只检查无障碍名称和图标；`+N` 与提交标题也必须仍可见。`GitStatusModelTests` 还须验证观察依赖不因无变化刷新失效；静态 XCTest 菜单结构不能冒充真实悬停 |
 | 共享树 | Files、工作区、暂存和历史一致；窄面板、放大字体、长名称和动作命中 |
 | 浏览器 | 表单、滚动、前进后退和重挂载；默认浏览器交接与开发服务 |
-| Finder 与原生文件拖放 | Finder 右键／Dock／空态（无项目时新文件拒绝）、编辑区、顶部标签栏新增与复用 FileTab，分屏非选中组／空组／普通编辑与 Git 面板落点及已打开文件不搬组；系统「文件 → 打开文件…」⌘O、每组「＋」原生文件多选与窗口焦点、添加本机目录 ⇧⌘A 仅选目录；Projects 文件打开标签、文件夹添加目录项目，重复项目不增加，旧 `pinnedFile` 仅作历史恢复；Files 目录行/文件行/根标题/留白复制到指定本机目录，核对原文件 SHA-256、新副本、可见树刷新、部分成功、同名冲突 Sheet 和失败复制无部分目录；Ghostty 纯路径无 Return、SSH 拒绝 Mac 路径、WebKit 网页上传但不另开标签。单／双窗口原始目标、取消／晚到（包括发起后切项目、指定 Dock 组消失而拒绝错误落点）、本机／SSH 相同路径与 50+ 混合重复文件，以及内部标签／Projects 重排互不干扰 |
+| Finder 与原生文件拖放 | Finder 右键／Dock／空态（无项目时新文件拒绝）、编辑区、顶部标签栏新增与复用 FileTab，分屏非选中组／空组／普通编辑与 Git 面板落点及已打开文件不搬组；系统「文件 → 打开文件…」⌘O、每组「＋」原生文件多选与窗口焦点、添加本机目录 ⇧⌘A 仅选目录；Projects 文件打开标签、文件夹添加目录项目，重复项目不增加，SSH 单文件项目仍可使用；Files 目录行/文件行/根标题/留白复制到指定本机目录，核对原文件 SHA-256、新副本、可见树刷新、部分成功、同名冲突 Sheet 和失败复制无部分目录；Ghostty 纯路径无 Return、SSH 拒绝 Mac 路径、WebKit 网页上传但不另开标签。单／双窗口原始目标、取消／晚到（包括发起后切项目、指定 Dock 组消失而拒绝错误落点）、本机／SSH 相同路径与 50+ 混合重复文件，以及内部标签／Projects 重排互不干扰 |
 | 设置与恢复 | 隔离配置的即时传播、快照和真实重启，区分显示恢复与任务恢复 |
 | 通知与命令面板 | 定位原会话、键盘选择和文件实际打开，而非仅收到事件 |
 | 视觉、键盘与基础无障碍 | 两种外观、长文案、键盘焦点与动作目标、原生按钮辅助功能名称、不同字体；纯架构改动前后无变化 |

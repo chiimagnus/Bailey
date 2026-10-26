@@ -45,6 +45,116 @@ final class SharedTreeUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: another), Data("untouched\n".utf8))
     }
 
+    func testCompactFoldersContextMenuCreatesInEachClickedPathComponent() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let nested = try fixture.file("a1/b1/c1/existing.swift", text: "existing\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+
+        for (name, path) in [
+            ("a1", "a1"), ("b1", "a1/b1"), ("c1", "a1/b1/c1")
+        ] {
+            let row = window.descendants(matching: .any)
+                .matching(identifier: "bailey.tree.folder")
+                .matching(NSPredicate(format: "label == %@", name)).firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 15), "Missing folder \(path)")
+            row.click()
+        }
+        XCTAssertTrue(WorkspaceUITestSupport.fileRow(nested, in: window)
+            .waitForExistence(timeout: 12))
+        for (index, directory, name) in [
+            (2, "a1/b1/c1", "child.swift"),
+            (1, "a1/b1", "middle.swift"),
+            (0, "a1", "parent.swift")
+        ] {
+            let compact = window.descendants(matching: .any)
+                .matching(identifier: "bailey.tree.folder")
+                .matching(NSPredicate(format: "label CONTAINS %@", "a1 / b1")).firstMatch
+            XCTAssertTrue(compact.waitForExistence(timeout: 15))
+            let component = compact.descendants(matching: .any)
+                .matching(identifier: "bailey.tree.folder.component.\(index)").firstMatch
+            XCTAssertTrue(component.waitForExistence(timeout: 10),
+                          "Compact component \(index) must be independently accessible")
+            component.rightClick()
+            let contextMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+                $0.frame.width > 50 && $0.frame.height > 50
+            }, "The clicked compact segment must open its own visible context menu")
+            let create = contextMenu.menuItems.matching(NSPredicate(
+                format: "title IN %@", ["New File…", "New File..."]
+            )).firstMatch
+            XCTAssertTrue(create.waitForExistence(timeout: 8))
+            create.click()
+            let field = window.textFields["File name"]
+            XCTAssertTrue(field.waitForExistence(timeout: 10))
+            field.typeText(name)
+            field.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+            let target = fixture.root.appendingPathComponent("\(directory)/\(name)")
+            let written = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                FileManager.default.fileExists(atPath: target.path)
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [written], timeout: 12), .completed,
+                           "\(name) must be created directly within \(directory)")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.root.appendingPathComponent("a1/b1/c1/parent.swift").path))
+    }
+
+    func testCompactFoldersStayCompactedWithAccessibleComponentActions() throws {
+        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
+        defer {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            if !originalClipboard.isEmpty { XCTAssertTrue(pasteboard.writeObjects(originalClipboard)) }
+        }
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("a1/b1/c1/leaf.swift", text: "leaf\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        func folder(_ label: String) -> XCUIElement {
+            window.descendants(matching: .any)
+                .matching(identifier: "bailey.tree.folder")
+                .matching(NSPredicate(format: "label == %@", label)).firstMatch
+        }
+        for name in ["a1", "b1", "c1"] {
+            let row = folder(name)
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.click()
+        }
+        let compact = folder("a1 / b1 / c1")
+        XCTAssertTrue(compact.waitForExistence(timeout: 12))
+        let leaf = WorkspaceUITestSupport.fileRow(
+            fixture.root.appendingPathComponent("a1/b1/c1/leaf.swift"), in: window
+        )
+        XCTAssertTrue(leaf.waitForExistence(timeout: 12))
+        let middle = compact.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder.component.1").firstMatch
+        XCTAssertTrue(middle.waitForExistence(timeout: 8))
+        middle.click()
+        XCTAssertTrue(leaf.waitForNonExistence(timeout: 12),
+                      "Clicking the middle segment must toggle the compact folder")
+        middle.click()
+        XCTAssertTrue(leaf.waitForExistence(timeout: 12))
+        let component = compact.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder.component.0").firstMatch
+        XCTAssertTrue(component.waitForExistence(timeout: 10))
+        component.rightClick()
+        let popup = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.frame.width > 50 && $0.frame.height > 50
+        })
+        XCTAssertFalse(popup.menuItems["Unfold Directory"].exists)
+        XCTAssertFalse(popup.menuItems["Fold Directory"].exists)
+        let relative = popup.menuItems["Copy Relative Path"]
+        XCTAssertTrue(relative.waitForExistence(timeout: 8))
+        relative.click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "a1")
+        XCTAssertTrue(folder("a1 / b1 / c1").waitForExistence(timeout: 12))
+        XCTAssertTrue(leaf.exists)
+    }
+
     func testSharedTreeHitAreasOpenExactFileWithoutDuplicateTabs() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let nested = try fixture.file("folder/target.swift", text: "correct file\n")
@@ -268,8 +378,8 @@ final class SharedTreeUITests: XCTestCase {
         app.typeKey("p", modifierFlags: .command)
         let search = app.textFields["bailey.commandPalette.search"]
         XCTAssertTrue(search.waitForExistence(timeout: 10))
-        XCTAssertFalse(first.isSelected,
-                       "Command Palette focus must remove the tree's keyboard-focus trait")
+        XCTAssertTrue(first.isSelected,
+                      "Command Palette must not clear the file's selection when keyboard focus moves")
         let focusChanged = try backgroundPixel(in: first)
         let neutralWhileSearching = try backgroundPixel(in: second)
         XCTAssertGreaterThan(rgbDifference(focusChanged, neutralWhileSearching), 0.045,

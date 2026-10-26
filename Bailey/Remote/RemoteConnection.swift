@@ -60,29 +60,14 @@ final class RemoteConnection: Identifiable, RemoteCommandRunner {
     /// process, so the pid it reports stays valid for the session's life.
     nonisolated let sshPID: pid_t
 
-    private(set) var state: State = .connecting {
-        didSet { if state != oldValue { onWorkspaceChange?() } }
-    }
-    @ObservationIgnored private weak var cachedWorkspaceBackend: SSHWorkspaceBackend?
-    var workspaceBackend: SSHWorkspaceBackend {
-        if let cachedWorkspaceBackend { return cachedWorkspaceBackend }
-        let backend = SSHWorkspaceBackend(runner: self)
-        cachedWorkspaceBackend = backend
-        return backend
-    }
-    /// The same channel with a short deadline, used only for the liveness
-    /// probe. Panel work can afford to wait; a probe that waits is a drop
-    /// this session has not noticed yet.
+    private(set) var state: State = .connecting
+    /// The monitor's short-deadline SSH probe, independent of the project's
+    /// file and Git backends.
     var livenessBackend: SSHWorkspaceBackend {
         SSHWorkspaceBackend(runner: self, timeout: 3)
     }
     /// Remote working directory, filled in by the cwd probe.
-    var workingDirectory: String? {
-        didSet { if workingDirectory != oldValue { onWorkspaceChange?() } }
-    }
-    /// One owner (the terminal session) relays connection changes to its
-    /// project's existing remote-tab rebind operation.
-    @ObservationIgnored var onWorkspaceChange: (() -> Void)?
+    var workingDirectory: String?
     /// Unix socket paths are capped at 104 bytes by `sockaddr_un`, which rules
     /// out Application Support. Same `/tmp` convention as the automation
     /// socket, one directory per app process at 0700.
@@ -90,10 +75,6 @@ final class RemoteConnection: Identifiable, RemoteCommandRunner {
 
     nonisolated var destination: String {
         user.isEmpty ? host : "\(user)@\(host)"
-    }
-
-    nonisolated var displayName: String {
-        destination
     }
 
     init(user: String, host: String, port: Int, controlSocket: URL, sshPID: pid_t) {
@@ -229,10 +210,6 @@ final class RemoteConnection: Identifiable, RemoteCommandRunner {
         ]
     }
 
-
-    static func text(_ data: Data) -> String {
-        String(data: data, encoding: .utf8) ?? ""
-    }
 
     // MARK: - Process
 

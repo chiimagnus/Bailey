@@ -9,6 +9,489 @@ import XCTest
 final class WindowOwnershipIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
+    func testFilesCutClipboardDoesNotMoveUntilPasteAndUsesOriginTree() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let into = root.appendingPathComponent("target")
+        try FileManager.default.createDirectory(at: into, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("original.txt")
+        let dest = into.appendingPathComponent("original.txt")
+        try "exact bytes".write(to: source, atomically: true, encoding: .utf8)
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        guard let project = manager.selectedProject,
+              let target = project.panelContext?.identity else {
+            return XCTFail("Expected a pinned Files project")
+        }
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+
+        manager.performFileTreeCommand(
+            .copy([source.path], cut: true), in: project, target: target,
+            pasteboard: pasteboard
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path),
+                      "Cut must not delete or move the source before paste")
+        XCTAssertTrue(FileTreeClipboard.read(from: pasteboard)?.cut == true)
+        manager.performFileTreeCommand(
+            .paste(into: into.path), in: project, target: target,
+            pasteboard: pasteboard
+        )
+        try await wait { FileManager.default.fileExists(atPath: dest.path) }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), "exact bytes")
+        try await wait { FileTreeClipboard.read(from: pasteboard) == nil }
+        XCTAssertEqual(pasteboard.string(forType: .string), source.path,
+                       "Completed cut must preserve plain-text paths but remove stale transfer metadata")
+    }
+
+    func testCutPartialSuccessRetainsOnlyUnmovedPathsForRetry() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let destination = root.appendingPathComponent("into")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("a.txt")
+        let second = root.appendingPathComponent("b.txt")
+        try Data("a".utf8).write(to: first)
+        try Data("b".utf8).write(to: second)
+        try Data("occupied".utf8).write(to: destination.appendingPathComponent("b.txt"))
+        let owner = workspaceApplication.makeWindow()
+        defer { owner.windowClosed() }
+        owner.addLocalFolders([root])
+        guard let project = owner.selectedProject, let identity = project.panelContext?.identity
+        else { return XCTFail("Expected local project") }
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        owner.performFileTreeCommand(.copy([first.path, second.path], cut: true),
+                                     in: project, target: identity, pasteboard: pasteboard)
+        owner.performFileTreeCommand(.paste(into: destination.path),
+                                     in: project, target: identity, pasteboard: pasteboard)
+        try await wait {
+            FileManager.default.fileExists(atPath: destination.appendingPathComponent("a.txt").path)
+        }
+        try await wait {
+            FileTreeClipboard.read(from: pasteboard)?.paths == [second.path]
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
+        XCTAssertEqual(try Data(contentsOf: second), Data("b".utf8))
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("b.txt")),
+                       Data("occupied".utf8))
+    }
+
+    func testFileTreeClipboardRecordRoundTripsUnicodeWithoutGlobalPasteboard() {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        let record = FileTreeClipboard.Record(
+            token: UUID(), project: UUID(), identity: "ssh:remote",
+            root: "/d/中文 工程", connectionRevision: 7,
+            paths: ["/d/中文 工程/a\nb.swift", "/d/中文 工程/📄.txt"], cut: true
+        )
+        XCTAssertTrue(FileTreeClipboard.write(record, to: pasteboard))
+        XCTAssertEqual(FileTreeClipboard.read(from: pasteboard), record)
+        pasteboard.declareTypes([.string], owner: nil)
+        pasteboard.setString("not a file transfer", forType: .string)
+        XCTAssertNil(FileTreeClipboard.read(from: pasteboard))
+    }
+
+    func testRenamingViaProjectRootSymlinkUpdatesCanonicalPathInAnotherWindow() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let actual = base.appendingPathComponent("actual")
+        let alias = base.appendingPathComponent("alias")
+        try FileManager.default.createDirectory(at: actual, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: actual)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let actualOld = actual.appendingPathComponent("old.txt")
+        let actualNew = actual.appendingPathComponent("renamed.txt")
+        let logicalOld = alias.appendingPathComponent("old.txt")
+        let logicalNew = alias.appendingPathComponent("renamed.txt")
+        try Data("original".utf8).write(to: actualOld)
+        let first = workspaceApplication.makeWindow()
+        let second = workspaceApplication.makeWindow()
+        defer { first.windowClosed(); second.windowClosed() }
+        first.addLocalFolders([alias])
+        second.addLocalFolders([actual])
+        first.openFile(logicalOld.path)
+        second.openFile(actualOld.path)
+        guard let project = first.selectedProject,
+              case .file(let firstFile)? = project.selectedTab?.content,
+              case .file(let secondFile)? = second.selectedProject?.selectedTab?.content,
+              let target = project.panelContext?.identity else {
+            return XCTFail("Both windows must open the physical file from distinct paths")
+        }
+        try await firstFile.waitForText()
+        try await secondFile.waitForText()
+        firstFile.text = "changed"; firstFile.refreshDirtyState()
+        await project.fileTree.sync(root: alias.path, backend: LocalWorkspaceBackend.shared)
+        let row = try XCTUnwrap(project.fileTree.items.first { $0.path == logicalOld.path })
+        let changed = await first.renameFile(row, to: "renamed.txt", in: project, target: target)
+        XCTAssertEqual(changed, logicalNew.path)
+        XCTAssertEqual(firstFile.path, logicalNew.path)
+        XCTAssertEqual(secondFile.path, actualNew.path,
+                       "The canonical path must not become a stale new file on the next save")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: actualOld.path))
+        XCTAssertEqual(try Data(contentsOf: actualNew), Data("changed".utf8))
+    }
+
+
+    func testInternalFileDragCopiesAndMovesSelectedFilesOnlyWithinSourceWindow() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("first.txt")
+        let second = root.appendingPathComponent("second.txt")
+        try Data("one".utf8).write(to: first)
+        try Data("two".utf8).write(to: second)
+        let owner = workspaceApplication.makeWindow()
+        let other = workspaceApplication.makeWindow()
+        defer { owner.windowClosed(); other.windowClosed() }
+        owner.addLocalFolders([root])
+        other.addLocalFolders([root])
+        guard let project = owner.selectedProject,
+              let identity = project.panelContext?.identity,
+              let otherProject = other.selectedProject,
+              let otherIdentity = otherProject.panelContext?.identity else {
+            return XCTFail("Both windows need a Files tree")
+        }
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        await otherProject.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let firstRow = try XCTUnwrap(project.fileTree.items.first { $0.path == first.path })
+        let secondRow = try XCTUnwrap(project.fileTree.items.first { $0.path == second.path })
+        project.fileTree.select(firstRow)
+        project.fileTree.select(secondRow, toggling: true)
+        let provider = owner.makeFileTreeDragProvider(for: firstRow, in: project, target: identity)
+        XCTAssertTrue(provider.hasItemConformingToTypeIdentifier(FileTreeDrag.type))
+        XCTAssertTrue(provider.canLoadObject(ofClass: NSURL.self),
+                      "Local Files drags must remain compatible with Finder")
+        XCTAssertFalse(other.receiveFileTreeDrop(
+            provider, into: destination.path, copy: false,
+            in: otherProject, target: otherIdentity
+        ), "The same local folder in another window must not accept the private drag")
+        XCTAssertTrue(owner.receiveFileTreeDrop(
+            provider, into: destination.path, copy: true,
+            in: project, target: identity
+        ))
+        try await wait {
+            FileManager.default.fileExists(atPath: destination.appendingPathComponent("first.txt").path)
+                && FileManager.default.fileExists(atPath: destination.appendingPathComponent("second.txt").path)
+        }
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("first.txt")),
+                       Data("one".utf8))
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("second.txt")),
+                       Data("two".utf8))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.path))
+        XCTAssertFalse(project.fileTree.hasActiveDrag)
+
+        let afterCopy = try XCTUnwrap(project.fileTree.items.first { $0.path == first.path })
+        let secondDestination = root.appendingPathComponent("moved")
+        try FileManager.default.createDirectory(at: secondDestination, withIntermediateDirectories: true)
+        let secondProvider = owner.makeFileTreeDragProvider(
+            for: afterCopy, in: project, target: identity
+        )
+        XCTAssertTrue(owner.receiveFileTreeDrop(
+            secondProvider, into: secondDestination.path, copy: false,
+            in: project, target: identity
+        ))
+        try await wait {
+            FileManager.default.fileExists(atPath: secondDestination.appendingPathComponent("first.txt").path)
+                && FileManager.default.fileExists(atPath: secondDestination.appendingPathComponent("second.txt").path)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
+        XCTAssertEqual(try Data(contentsOf: secondDestination.appendingPathComponent("first.txt")),
+                       Data("one".utf8))
+        XCTAssertEqual(try Data(contentsOf: secondDestination.appendingPathComponent("second.txt")),
+                       Data("two".utf8))
+        XCTAssertFalse(project.fileTree.hasActiveDrag)
+    }
+
+    func testInternalDragRejectsSelectionChangesAndExternalFileURLProviders() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("first.txt")
+        let second = root.appendingPathComponent("second.txt")
+        try Data("one".utf8).write(to: first)
+        try Data("two".utf8).write(to: second)
+        let owner = workspaceApplication.makeWindow()
+        defer { owner.windowClosed() }
+        owner.addLocalFolders([root])
+        guard let project = owner.selectedProject,
+              let identity = project.panelContext?.identity else {
+            return XCTFail("Missing Files project")
+        }
+        await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let firstRow = try XCTUnwrap(project.fileTree.items.first { $0.path == first.path })
+        let secondRow = try XCTUnwrap(project.fileTree.items.first { $0.path == second.path })
+        project.fileTree.select(firstRow)
+        let previous = owner.makeFileTreeDragProvider(for: firstRow, in: project, target: identity)
+        project.fileTree.select(secondRow)
+        XCTAssertFalse(owner.receiveFileTreeDrop(
+            previous, into: destination.path, copy: false,
+            in: project, target: identity
+        ), "Changed selection invalidates a previous drag")
+        let finderProvider = NSItemProvider(object: first as NSURL)
+        XCTAssertFalse(owner.receiveFileTreeDrop(
+            finderProvider, into: destination.path, copy: false,
+            in: project, target: identity
+        ), "Finder fileURLs are not internal move requests")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: destination.appendingPathComponent("first.txt").path
+        ))
+    }
+
+    func testMovingFolderAcrossSymlinkRootsUpdatesEveryWindowPath() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let physical = base.appendingPathComponent("physical")
+        let firstAlias = base.appendingPathComponent("first-alias")
+        let secondAlias = base.appendingPathComponent("second-alias")
+        try FileManager.default.createDirectory(
+            at: physical.appendingPathComponent("source"), withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: physical.appendingPathComponent("target"), withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(at: firstAlias, withDestinationURL: physical)
+        try FileManager.default.createSymbolicLink(at: secondAlias, withDestinationURL: physical)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let oldName = "source/a.swift"
+        let newName = "target/source/a.swift"
+        try Data("before".utf8).write(to: physical.appendingPathComponent(oldName))
+        let first = workspaceApplication.makeWindow()
+        let second = workspaceApplication.makeWindow()
+        let third = workspaceApplication.makeWindow()
+        defer { first.windowClosed(); second.windowClosed(); third.windowClosed() }
+        first.addLocalFolders([firstAlias])
+        second.addLocalFolders([secondAlias])
+        third.addLocalFolders([physical])
+        first.openFile(firstAlias.appendingPathComponent(oldName).path)
+        second.openFile(secondAlias.appendingPathComponent(oldName).path)
+        third.openFile(physical.appendingPathComponent(oldName).path)
+        guard let project = first.selectedProject,
+              case .file(let a)? = project.selectedTab?.content,
+              case .file(let b)? = second.selectedProject?.selectedTab?.content,
+              case .file(let c)? = third.selectedProject?.selectedTab?.content,
+              let identity = project.panelContext?.identity else {
+            return XCTFail("All three windows must open the same physical file")
+        }
+        try await a.waitForText()
+        try await b.waitForText()
+        try await c.waitForText()
+        a.text = "after"; a.refreshDirtyState()
+        await project.fileTree.sync(root: firstAlias.path, backend: LocalWorkspaceBackend.shared)
+        let result = await first.performFileOperation(
+            .move, paths: [firstAlias.appendingPathComponent("source").path],
+            into: firstAlias.appendingPathComponent("target").path,
+            in: project, target: identity
+        )
+        XCTAssertEqual(result.failures, [])
+        XCTAssertEqual(result.succeeded.count, 1)
+        XCTAssertEqual(a.path, firstAlias.appendingPathComponent(newName).path)
+        XCTAssertEqual(b.path, physical.appendingPathComponent(newName).path)
+        XCTAssertEqual(c.path, physical.appendingPathComponent(newName).path)
+        XCTAssertEqual(try Data(contentsOf: physical.appendingPathComponent(newName)),
+                       Data("after".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: physical.appendingPathComponent(oldName).path
+        ))
+    }
+
+    func testDeletionThroughSymlinkInvalidatesOtherAliasAndCanonicalTabs() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let physical = base.appendingPathComponent("physical")
+        let firstAlias = base.appendingPathComponent("first-alias")
+        let secondAlias = base.appendingPathComponent("second-alias")
+        try FileManager.default.createDirectory(at: physical, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: firstAlias, withDestinationURL: physical)
+        try FileManager.default.createSymbolicLink(at: secondAlias, withDestinationURL: physical)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let fileName = "deleted.txt"
+        let physicalFile = physical.appendingPathComponent(fileName)
+        try Data("original".utf8).write(to: physicalFile)
+        let first = workspaceApplication.makeWindow()
+        let second = workspaceApplication.makeWindow()
+        let third = workspaceApplication.makeWindow()
+        defer { first.windowClosed(); second.windowClosed(); third.windowClosed() }
+        first.addLocalFolders([firstAlias])
+        second.addLocalFolders([secondAlias])
+        third.addLocalFolders([physical])
+        first.openFile(firstAlias.appendingPathComponent(fileName).path)
+        second.openFile(secondAlias.appendingPathComponent(fileName).path)
+        third.openFile(physicalFile.path)
+        guard case .file(let a)? = first.selectedProject?.selectedTab?.content,
+              case .file(let b)? = second.selectedProject?.selectedTab?.content,
+              case .file(let c)? = third.selectedProject?.selectedTab?.content else {
+            return XCTFail("All three files must be open")
+        }
+        try await a.waitForText()
+        try await b.waitForText()
+        try await c.waitForText()
+        b.text = "unsaved"; b.refreshDirtyState()
+        try FileManager.default.removeItem(at: physicalFile)
+        workspaceApplication.filesDeleted(
+            paths: [firstAlias.appendingPathComponent(fileName).path], workspace: nil
+        )
+        XCTAssertFalse(first.selectedProject?.tabs.contains { $0.content.id == a.id } ?? true)
+        XCTAssertFalse(third.selectedProject?.tabs.contains { $0.content.id == c.id } ?? true)
+        XCTAssertTrue(second.selectedProject?.tabs.contains { $0.content.id == b.id } == true,
+                      "A deleted file with unsaved changes must remain recoverable")
+        XCTAssertTrue(b.isDirty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: physicalFile.path))
+    }
+
+    func testMovingFolderThroughManagerKeepsDirtyTabsAndSiblingWindowPaths() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("project")
+        let folder = root.appendingPathComponent("source")
+        let destination = root.appendingPathComponent("destination")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let oldPath = folder.appendingPathComponent("a.swift")
+        let newPath = destination.appendingPathComponent("source/a.swift")
+        try "before".write(to: oldPath, atomically: true, encoding: .utf8)
+        let first = workspaceApplication.makeWindow()
+        let second = workspaceApplication.makeWindow()
+        defer { first.windowClosed(); second.windowClosed() }
+        first.addLocalFolders([root])
+        second.addLocalFolders([root])
+        first.openFile(oldPath.path)
+        second.openFile(oldPath.path)
+        guard let project = first.selectedProject,
+              case .file(let file)? = first.selectedProject?.selectedTab?.content,
+              case .file(let other)? = second.selectedProject?.selectedTab?.content,
+              let identity = project.panelContext?.identity else {
+            return XCTFail("The two projects and their file targets must exist")
+        }
+        try await file.waitForText()
+        try await other.waitForText()
+        file.text = "after"; file.refreshDirtyState()
+        await project.fileTree.sync(
+            root: root.path, backend: LocalWorkspaceBackend.shared
+        )
+        let result = await first.performFileOperation(
+            .move, paths: [folder.path], into: destination.path,
+            in: project, target: identity
+        )
+        XCTAssertEqual(result.failures, [])
+        XCTAssertEqual(result.succeeded.count, 1)
+        XCTAssertEqual(file.path, newPath.path)
+        XCTAssertEqual(other.path, newPath.path)
+        XCTAssertEqual(try String(contentsOf: newPath, encoding: .utf8), "after")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldPath.path))
+        XCTAssertFalse(file.isDirty)
+    }
+
+    func testFileRenameAcrossTwoWindowsSavesFirstAndUpdatesOnlyMatchingMachine() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source.txt")
+        let target = root.appendingPathComponent("moved.txt")
+        try "old".write(to: source, atomically: true, encoding: .utf8)
+        let first = workspaceApplication.makeWindow()
+        let second = workspaceApplication.makeWindow()
+        defer { first.windowClosed(); second.windowClosed() }
+        first.addLocalFolders([root])
+        second.addLocalFolders([root])
+        first.openFile(source.path)
+        second.openFile(source.path)
+        guard case .file(let a)? = first.selectedProject?.selectedTab?.content,
+              case .file(let b)? = second.selectedProject?.selectedTab?.content,
+              let project = second.selectedProject else {
+            return XCTFail("Both windows must own the file")
+        }
+        try await a.waitForText()
+        try await b.waitForText()
+        let remote = FileTab(
+            path: source.path,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: "ssh:other"
+        )
+        project.append(PaneTab(content: .file(remote)))
+        a.text = "new content"; a.refreshDirtyState()
+        try await workspaceApplication.withProtectedFiles(paths: [source.path], workspace: nil) {
+            try await LocalWorkspaceBackend.shared.rename(from: source.path, to: target.path)
+            workspaceApplication.fileRenamed(from: source.path, to: target.path, workspace: nil)
+        }
+        XCTAssertEqual(a.path, target.path)
+        XCTAssertEqual(b.path, target.path)
+        XCTAssertEqual(remote.path, source.path, "A tab on another machine cannot follow a Mac rename")
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "new content")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertFalse(a.isDirty)
+        XCTAssertTrue(first.selectedProject?.tabs.contains { $0.content.id == a.id } == true)
+        XCTAssertTrue(second.selectedProject?.tabs.contains { $0.content.id == b.id } == true)
+    }
+
+    func testDeletionAfterFlushingClosesOnlyAffectedOpenTabs() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("delete.txt")
+        try "old".write(to: source, atomically: true, encoding: .utf8)
+        let first = workspaceApplication.makeWindow()
+        let second = workspaceApplication.makeWindow()
+        defer { first.windowClosed(); second.windowClosed() }
+        first.addLocalFolders([root])
+        second.addLocalFolders([root])
+        first.openFile(source.path)
+        second.openFile(source.path)
+        guard case .file(let a)? = first.selectedProject?.selectedTab?.content,
+              case .file(let b)? = second.selectedProject?.selectedTab?.content else {
+            return XCTFail("Both windows must own the original path")
+        }
+        try await a.waitForText()
+        try await b.waitForText()
+        a.text = "saved before delete"; a.refreshDirtyState()
+        try await workspaceApplication.withProtectedFiles(paths: [source.path], workspace: nil) {
+            XCTAssertFalse(a.isDirty)
+            XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "saved before delete")
+            try FileManager.default.removeItem(at: source)
+            workspaceApplication.filesDeleted(paths: [source.path], workspace: nil)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertFalse(first.projects.flatMap(\.tabs).contains { $0.content.id == a.id })
+        XCTAssertFalse(second.projects.flatMap(\.tabs).contains { $0.content.id == b.id })
+    }
+
+    func testTwoDirtyWindowsCannotOverwriteEachOtherDuringRename() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("conflict.txt")
+        try "original".write(to: source, atomically: true, encoding: .utf8)
+        let first = workspaceApplication.makeWindow()
+        let second = workspaceApplication.makeWindow()
+        defer { first.windowClosed(); second.windowClosed() }
+        first.addLocalFolders([root])
+        second.addLocalFolders([root])
+        first.openFile(source.path)
+        second.openFile(source.path)
+        guard case .file(let a)? = first.selectedProject?.selectedTab?.content,
+              case .file(let b)? = second.selectedProject?.selectedTab?.content else {
+            return XCTFail("Both editors must exist")
+        }
+        try await a.waitForText()
+        try await b.waitForText()
+        a.text = "draft A"; a.refreshDirtyState()
+        b.text = "draft B"; b.refreshDirtyState()
+        do {
+            try await workspaceApplication.withProtectedFiles(paths: [source.path], workspace: nil) {
+                XCTFail("Concurrent unsaved buffers for the same physical file must block mutation")
+            }
+            XCTFail("Mutation should be refused when both buffers would be overwritten")
+        } catch {}
+        XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "original")
+        XCTAssertEqual(a.text, "draft A")
+        XCTAssertEqual(b.text, "draft B")
+        XCTAssertTrue(a.isDirty && b.isDirty)
+    }
+
     func testWindowFocusLossSavesAllDirtyBuffersNotOnlyTheMostRecentTab() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -227,7 +710,6 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
 
         func snapshot(named name: String) -> SessionSnapshot {
             let project = SessionSnapshot.ProjectSnapshot(
-                customName: name,
                 customDirectory: "/fixture/" + name,
                 sshHost: nil,
                 pinnedFile: nil,
@@ -252,14 +734,14 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
             second.windowClosed()
         }
         XCTAssertEqual(application.windowCount, 2)
-        XCTAssertEqual(first.selectedProject?.customName, "one")
-        XCTAssertEqual(second.selectedProject?.customName, "two")
+        XCTAssertEqual(first.selectedProject?.name, "one")
+        XCTAssertEqual(second.selectedProject?.name, "two")
         application.register(first)
         application.register(second)
         XCTAssertEqual(application.windowCount, 2,
                        "Repeated SwiftUI appear or native attachment cannot claim another snapshot")
-        XCTAssertEqual(first.selectedProject?.customName, "one")
-        XCTAssertEqual(second.selectedProject?.customName, "two")
+        XCTAssertEqual(first.selectedProject?.name, "one")
+        XCTAssertEqual(second.selectedProject?.name, "two")
         XCTAssertTrue(SessionStore.load().count == 2)
         withExtendedLifetime([discarded, redundant]) {}
     }

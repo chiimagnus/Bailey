@@ -257,7 +257,7 @@ final class DockWorkspaceTests: XCTestCase {
         let source = try XCTUnwrap(dock.group(containing: .tab(pane.id)))
         let destination = try XCTUnwrap(dock.group(containing: .files))
         let rootChanged = expectation(description: "Nested Dock root is observed without Project relay")
-        withObservationTracking({ _ = project.dock.visibleItems }) { rootChanged.fulfill() }
+        withObservationTracking({ _ = project.dock.root.groups.flatMap(\.items) }) { rootChanged.fulfill() }
         var snapshotChanges = 0
         project.onSnapshotChange = { snapshotChanges += 1 }
         XCTAssertTrue(dock.move(.tab(pane.id), into: destination.id, edge: .bottom))
@@ -283,7 +283,7 @@ final class DockWorkspaceTests: XCTestCase {
         dragging.cancel()
         XCTAssertEqual(dock.activeGroupID, activityBeforePreview)
         XCTAssertNil(dragging.position)
-        XCTAssertTrue(dock.visibleItems.contains(.files))
+        XCTAssertTrue(dock.root.groups.contains { $0.items.contains(.files) })
         dragging.update(.files, at: CGPoint(x: 160, y: 118), dock: dock)
         XCTAssertEqual(dragging.position?.index, 1)
         XCTAssertEqual(dragging.insertionX(in: moved), 220)

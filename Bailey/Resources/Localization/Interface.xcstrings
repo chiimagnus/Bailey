@@ -701,6 +701,106 @@
           }
         }
       }
+    },
+    "Cannot determine the remote home directory." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取远端用户主目录。"
+          }
+        }
+      }
+    },
+    "Could not list remote directory: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法列出远端目录：%@"
+          }
+        }
+      }
+    },
+    "File index is incomplete; narrow the project to see more results." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件索引不完整，请缩小项目范围查看更多结果。"
+          }
+        }
+      }
+    },
+    "Remote host is disconnected." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端主机连接已断开。"
+          }
+        }
+      }
+    },
+    "The remote Git command returned an incomplete file listing." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端 Git 返回了不完整的文件列表。"
+          }
+        }
+      }
+    },
+    "The remote file index exceeds its size limit." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端文件索引超过大小限制。"
+          }
+        }
+      }
+    },
+    "The remote home directory or filesystem root cannot be indexed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不允许对远端主目录或整个文件系统建立文件索引。"
+          }
+        }
+      }
+    },
+    "Reveal in File Manager" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在文件管理器中显示"
+          }
+        }
+      }
+    },
+    "This file belongs to a different machine than the current File Manager." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该文件不属于当前文件管理器连接的机器。"
+          }
+        }
+      }
+    },
+    "Could not locate this file in the current File Manager." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法在当前文件管理器中定位此文件。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

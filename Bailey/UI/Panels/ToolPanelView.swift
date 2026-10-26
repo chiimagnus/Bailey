@@ -6,13 +6,22 @@ import SwiftUI
 /// for an older SSH request to finish.
 @MainActor
 final class PanelSyncQueue {
+    private struct Target: Equatable {
+        let identity: PanelContext.Identity?
+        let connectionRevision: UInt64
+    }
+
     private var isRunning = false
-    private var target: PanelContext.Identity?
+    private var target: Target?
     private var generation: UInt = 0
     private var pendingBody: (() async -> Void)?
     private var activeTask: Task<Void, Never>?
 
-    func run(for target: PanelContext.Identity?, _ body: @escaping () async -> Void) {
+    func run(
+        for identity: PanelContext.Identity?, connectionRevision: UInt64 = 0,
+        _ body: @escaping () async -> Void
+    ) {
+        let target = Target(identity: identity, connectionRevision: connectionRevision)
         if isRunning && self.target == target {
             pendingBody = body
             return
@@ -80,10 +89,30 @@ struct ToolPanelView: View {
     private let settings = AppSettings.shared
     private let themeChanges = Theme.changes
     @State private var applicationIsActive = NSApp.isActive
-    /// Which rule produced the current panel root; drives the Files badge.
-    @State private var rootSource = PanelContext.RootSource.shell
-    @State private var filesTarget: PanelContext.Identity?
+    private var filesTarget: PanelContext.Identity? {
+        guard let project = manager.selectedProject,
+              let context = project.panelContext else { return nil }
+        return project.fileTree.syncedTarget(for: context)
+    }
     @State private var syncQueue = PanelSyncQueue()
+    @State private var watchedFileTree: FileTreeModel?
+    @State private var watchedRemoteProject: Project?
+    @State private var remoteWatcherMemberID = UUID()
+
+    private struct RefreshTaskKey: Hashable {
+        let active: Bool
+        let gitPanel: Bool
+        let gitScope: String
+        let fileTarget: PanelContext.Identity?
+    }
+
+    private var refreshTaskKey: RefreshTaskKey {
+        RefreshTaskKey(
+            active: applicationIsActive, gitPanel: panel == .git,
+            gitScope: git.currentScope,
+            fileTarget: manager.selectedProject?.panelContext?.identity
+        )
+    }
     /// The remote heading. Held here rather than rebuilt, so its state and
     /// its lamp survive every panel switch and poll.
     @State private var remoteHeader = RemotePaneHeaderView(frame: .zero)
@@ -91,19 +120,12 @@ struct ToolPanelView: View {
     /// back the row's height when the session is local.
     @State private var remoteHeaderState = RemotePaneHeaderState.local
 
-    /// Changes whenever the selected session's connection appears, changes
-    /// state, or is replaced.
-    private var remoteConnectionToken: String {
-        guard let session = manager.selectedSession else { return "none" }
-        return workspaceEpoch(of: session)
-    }
-
-    /// A pinned local path must not inherit a different machine just because
-    /// its terminal happens to be inside an interactive SSH session.
-    private var fileActionSession: TerminalSession? {
+    /// Git's terminal action can only target the selected project's machine.
+    private var gitActionSession: TerminalSession? {
         guard let project = manager.selectedProject else { return nil }
-        if project.sshHost == nil, project.customDirectory != nil,
-           project.selectedSession?.workspaceIdentity != nil { return nil }
+        if project.sshHost == nil, project.selectedSession?.workspaceIdentity != nil {
+            return nil
+        }
         return project.selectedSession
     }
 
@@ -150,9 +172,7 @@ struct ToolPanelView: View {
                     FileTreePanel(
                         model: project.fileTree,
                         git: git,
-                        session: fileActionSession,
                         sshHost: project.sshHost,
-                        rootBadge: rootBadge,
                         currentFilePath: openFilePath,
                         openFile: { manager.openFile($0, activating: $1) },
                         isActive: project.dock.activeGroup?.selected == .files,
@@ -161,9 +181,16 @@ struct ToolPanelView: View {
                                   let files = project.dock.group(containing: .files) else { return false }
                             return project.dock.activeGroupID == files.id && files.selected == .files
                         },
-                        onRename: { [workspace = project.workspaceIdentity] oldPath, newPath in
-                            manager.fileRenamed(
-                                from: oldPath, to: newPath, workspace: workspace
+                        renameFile: { [target = filesTarget] item, newName in
+                            guard let target else { return nil }
+                            return await manager.renameFile(
+                                item, to: newName, in: project, target: target
+                            )
+                        },
+                        onCommand: { [target = filesTarget] command in
+                            guard let target else { return }
+                            manager.performFileTreeCommand(
+                                command, in: project, target: target, onChange: { git.refresh() }
                             )
                         },
                         refreshGitStatus: { git.refresh() },
@@ -192,6 +219,17 @@ struct ToolPanelView: View {
                                     if result?.copied.isEmpty == false { git.refresh() }
                                 }
                             }
+                        },
+                        makeDragProvider: { [target = filesTarget] item in
+                            guard let target else { return NSItemProvider() }
+                            return manager.makeFileTreeDragProvider(for: item, in: project, target: target)
+                        },
+                        receiveInternalDrop: { [target = filesTarget] provider, directory, copy in
+                            guard let target else { return false }
+                            return manager.receiveFileTreeDrop(
+                                provider, into: directory, copy: copy,
+                                in: project, target: target, onChange: { git.refresh() }
+                            )
                         }
                     )
                 }
@@ -200,7 +238,7 @@ struct ToolPanelView: View {
                     model: git,
                     manager: manager,
                     project: manager.selectedProject,
-                    session: fileActionSession,
+                    session: gitActionSession,
                     sshHost: manager.selectedProject?.sshHost,
                     openFile: { manager.openFile($0) },
                     openDiff: { entry, staged in
@@ -230,46 +268,69 @@ struct ToolPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: Theme.sidebar))
-        .onAppear { syncModels() }
-        .task(id: "\(applicationIsActive):\(panel):\(git.currentScope)") {
+        .onAppear {
+            updateLocalFileWatcher()
+            updateRemoteFileWatcher()
+            syncModels()
+        }
+        .onDisappear {
+            stopLocalFileWatcher()
+            stopRemoteFileWatcher()
+        }
+        .task(id: refreshTaskKey) {
             guard applicationIsActive else { return }
             if panel == .git {
                 await git.runRemoteRefreshLoop()
                 return
             }
+            guard manager.selectedProject?.panelContext?.isRemote == true else { return }
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(2)) }
                 catch { return }
                 guard applicationIsActive, !Task.isCancelled else { return }
-                syncModels()
+                if manager.selectedProject?.remoteFileEvents.healthy != true
+                    || manager.selectedProject?.fileTree.hasVisibleDirectorySymlinks == true {
+                    syncModels()
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(
             for: NSApplication.didBecomeActiveNotification
         )) { _ in
             applicationIsActive = true
+            updateLocalFileWatcher()
+            updateRemoteFileWatcher()
             syncModels()
         }
         .onReceive(NotificationCenter.default.publisher(
             for: NSApplication.didResignActiveNotification
         )) { _ in
             applicationIsActive = false
+            updateLocalFileWatcher()
+            updateRemoteFileWatcher()
         }
         .onChange(of: commandCompletionSequences) {
             syncModels()
         }
-        .onChange(of: manager.selectedProject?.panelContext?.identity) { syncModels() }
-        // A connection appearing, connecting, dying or being replaced changes
-        // what the heading says; repaint it without waiting for the next tick.
-        .onChange(of: remoteConnectionToken) { syncModels() }
-        .onChange(of: manager.selectedProject?.selectedSession?.panelDirectoryPath) {
-            applyRemoteHeading()
+        .onChange(of: manager.selectedProject?.panelContext?.identity) {
+            updateLocalFileWatcher()
+            updateRemoteFileWatcher()
+            syncModels()
+        }
+        .onChange(of: manager.selectedProject?.fileTree.rootPath) {
+            updateRemoteFileWatcher()
+        }
+        .onChange(of: panel) {
+            updateLocalFileWatcher()
+            updateRemoteFileWatcher()
         }
         .onReceive(NotificationCenter.default.publisher(
             for: SSHHostWorkspaces.connectionChanged
         )) { notification in
-            guard notification.object as? String == manager.selectedProject?.sshHost else { return }
-            applyRemoteHeading()
+            guard let host = notification.object as? String,
+                  manager.selectedProject?.panelContext?.identity.workspace == "ssh:" + host else { return }
+            updateRemoteFileWatcher()
+            syncModels()
         }
         .environment(\.panelFontScale, panelFontScale)
         // Native button and control labels without a designed hierarchy use
@@ -277,10 +338,51 @@ struct ToolPanelView: View {
         .environment(\.font, .system(size: CGFloat(settings.panelFontSize)))
     }
 
+    private func stopLocalFileWatcher() {
+        watchedFileTree?.setLocalFileEventsEnabled(false, member: remoteWatcherMemberID)
+        watchedFileTree = nil
+    }
+
+    private func updateLocalFileWatcher() {
+        let nextTree: FileTreeModel? = panel == .files && applicationIsActive
+            && manager.selectedProject?.panelContext?.isRemote == false
+            ? manager.selectedProject?.fileTree : nil
+        if watchedFileTree !== nextTree {
+            watchedFileTree?.setLocalFileEventsEnabled(false, member: remoteWatcherMemberID)
+            watchedFileTree = nextTree
+        }
+        nextTree?.setLocalFileEventsEnabled(true, member: remoteWatcherMemberID)
+    }
+
+    private func stopRemoteFileWatcher() {
+        watchedRemoteProject?.remoteFileEvents.unsubscribe(id: remoteWatcherMemberID)
+        watchedRemoteProject = nil
+    }
+
+    private func updateRemoteFileWatcher() {
+        let project = manager.selectedProject
+        let context = project?.panelContext
+        let remoteProject: Project? = panel == .files && applicationIsActive
+            && context?.isRemote == true && project?.sshHost != nil
+            ? project : nil
+        if watchedRemoteProject !== remoteProject {
+            watchedRemoteProject?.remoteFileEvents.unsubscribe(id: remoteWatcherMemberID)
+            watchedRemoteProject = remoteProject
+        }
+        guard let remoteProject, let context,
+              let host = remoteProject.sshHost, !remoteProject.fileTree.rootPath.isEmpty else { return }
+        remoteProject.remoteFileEvents.subscribe(
+            id: remoteWatcherMemberID, project: remoteProject,
+            host: host, root: remoteProject.fileTree.rootPath, context: context
+        )
+    }
+
     private func syncModels() {
         applyRemoteHeading()
         guard panel == .files else { return }
-        syncQueue.run(for: manager.selectedProject?.panelContext?.identity) {
+        let context = manager.selectedProject?.panelContext
+        syncQueue.run(for: context?.identity,
+                      connectionRevision: context?.connectionRevision ?? 0) {
             await performSync()
         }
     }
@@ -303,18 +405,7 @@ struct ToolPanelView: View {
             updateRemoteHeading(state, directory: project.customDirectory)
             return
         }
-        if project.customDirectory != nil {
-            updateRemoteHeading(.local, directory: nil)
-            return
-        }
-        guard let session = project.selectedSession else {
-            updateRemoteHeading(.local, directory: nil)
-            return
-        }
-        // An automatically scoped project may still follow its terminal's
-        // connection. A pinned project never does.
-        let state = session.remoteHeaderState
-        updateRemoteHeading(state, directory: state == .local ? nil : session.panelDirectoryPath)
+        updateRemoteHeading(.local, directory: nil)
     }
 
     private func updateRemoteHeading(_ state: RemotePaneHeaderState, directory: String?) {
@@ -325,47 +416,8 @@ struct ToolPanelView: View {
         remoteHeader.workingDirectory = directory
     }
 
-    /// Which workspace a refresh belongs to. A connection changing state, or
-    /// being replaced, makes results that were already in flight stale.
-    private func workspaceEpoch(of session: TerminalSession) -> String {
-        if let host = manager.selectedProject?.sshHost { return "ssh:" + host }
-        if manager.selectedProject?.customDirectory != nil { return "local" }
-        guard let connection = session.location.remoteConnection else { return "local" }
-        return "\(connection.id) \(connection.state)"
-    }
-
     private func performSync() async {
-        guard let project = manager.selectedProject,
-              let (source, target) = await project.syncFiles(isCurrent: {
-                  manager.selectedProject === project
-              }),
-              manager.selectedProject === project else { return }
-        if rootSource != source { rootSource = source }
-        if filesTarget != target { filesTarget = target }
-    }
-
-    /// Text badge for the Files header while the panels follow the foreground
-    /// job instead of the shell — the agent's worktree in the common case, a
-    /// plain "job" when it moved somewhere that isn't a linked worktree.
-    /// The label and its spoken description travel together so neither is
-    /// assembled from translated fragments.
-    private var rootBadge: (text: String, description: String)? {
-        guard case .foreground(let isWorktree) = rootSource else { return nil }
-        if isWorktree {
-            return (
-                String(
-                    localized: "worktree", table: "Sidebar",
-                    comment: "Files header badge: the panels follow a Git worktree the terminal’s foreground job moved to."
-                ),
-                String(localized: "Following the terminal job’s worktree", table: "Sidebar")
-            )
-        }
-        return (
-            String(
-                localized: "job", table: "Sidebar",
-                comment: "Files header badge: the panels follow a directory the terminal’s foreground job moved to, outside any worktree of the shell’s repository."
-            ),
-            String(localized: "Following the terminal job’s directory", table: "Sidebar")
-        )
+        guard let project = manager.selectedProject else { return }
+        _ = await project.syncFiles(isCurrent: { manager.selectedProject === project })
     }
 }

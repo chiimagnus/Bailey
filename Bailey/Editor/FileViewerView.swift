@@ -98,6 +98,9 @@ final class FileTab: nonisolated Identifiable {
     /// An in-flight write must not claim to have saved a different target.
     @ObservationIgnored private var targetGeneration: UInt = 0
     @ObservationIgnored private var lastSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var fileMutationHeld = false
+    @ObservationIgnored private var saveDeferredUntilMutation = false
+    @ObservationIgnored private var deletedFromWorkspace = false
     var isSaving: Bool { lastSaveTask != nil }
     @ObservationIgnored private var saveRequestGeneration: UInt = 0
     @ObservationIgnored var autoSaveSuspendedForClose = false
@@ -200,7 +203,7 @@ final class FileTab: nonisolated Identifiable {
     }
 
     func rebindWorkspace(to live: WorkspaceBackend?) {
-        guard let workspaceIdentity else { return }
+        guard !deletedFromWorkspace, let workspaceIdentity else { return }
         guard let live else {
             setReadOnly(true, destination: workspaceIdentity)
             return
@@ -329,9 +332,42 @@ final class FileTab: nonisolated Identifiable {
         Task { await save() }
     }
 
+    /// Hold the original save target stable until all queued writes have completed.
+    func beginFileMutation() async -> Bool {
+        guard !fileMutationHeld, !autoSaveSuspendedForClose else { return false }
+        fileMutationHeld = true
+        await lastSaveTask?.value
+        if isDirty { await writeCurrentText() }
+        guard !isDirty else {
+            endFileMutation()
+            return false
+        }
+        return true
+    }
+
+    func endFileMutation() {
+        guard fileMutationHeld else { return }
+        fileMutationHeld = false
+        let needsSave = saveDeferredUntilMutation
+        saveDeferredUntilMutation = false
+        if needsSave { Task { await save() } }
+    }
+
+    /// Preserve an in-flight edit without allowing late saves to recreate the deleted path.
+    func invalidateDeletedFile() {
+        deletedFromWorkspace = true
+        targetGeneration &+= 1
+        invalidateReload()
+        readOnlyReason = String(localized: "This file was deleted. Copy your edits before closing.", table: "Editor")
+    }
+
     /// Serialize manual and focus-triggered writes. A later edit can never
     /// land on disk before an older in-flight write completes.
     func save() async {
+        if fileMutationHeld {
+            saveDeferredUntilMutation = true
+            return
+        }
         saveRequestGeneration &+= 1
         let generation = saveRequestGeneration
         let preceding = lastSaveTask

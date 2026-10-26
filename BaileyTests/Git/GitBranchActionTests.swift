@@ -55,16 +55,8 @@ private actor ArchiveFixtureBackend: WorkspaceBackend {
     func write(path: String, data: Data) async throws { throw WorkspaceError.notFound }
     func createFile(path: String) async throws { throw WorkspaceError.notFound }
     func createDirectory(path: String) async throws { throw WorkspaceError.notFound }
+    func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func rename(from: String, to: String) async throws { throw WorkspaceError.notFound }
-    func gitRoot(containing path: String) async throws -> String? {
-        try await LocalWorkspaceBackend.shared.gitRoot(containing: path)
-    }
-    func isLinkedWorktree(_ root: String) async throws -> Bool { false }
-    func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot {
-        .init(descendants: [], namesByPid: [:])
-    }
-    func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] { [] }
-    func kill(pid: pid_t, force: Bool) async throws { throw WorkspaceError.notFound }
 }
 
 @MainActor

@@ -100,13 +100,9 @@ private actor DiffWorkspaceFixture: WorkspaceBackend {
     func list(directory: String) async throws -> [WorkspaceEntry] { [] }
     func createFile(path: String) async throws { throw WorkspaceError.notFound }
     func createDirectory(path: String) async throws { throw WorkspaceError.notFound }
+    func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func rename(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func delete(paths: [String]) async throws { throw WorkspaceError.notFound }
-    func gitRoot(containing path: String) async throws -> String? { nil }
-    func isLinkedWorktree(_ root: String) async throws -> Bool { false }
-    func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot { .init(descendants: [], namesByPid: [:]) }
-    func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] { [] }
-    func kill(pid: pid_t, force: Bool) async throws { throw WorkspaceError.notFound }
 }
 
 @MainActor
@@ -1065,56 +1061,6 @@ final class NativeDiffTabTests: XCTestCase {
         XCTAssertEqual(diff.editedNewContent, "unsaved during outage")
         let retained = await backend.stored()
         XCTAssertEqual(retained, Data("second 中文🪨".utf8))
-    }
-
-    func testAnotherLiveChannelInvalidatesInFlightDiffSave() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let path = directory.appendingPathComponent("remote.txt")
-        try Data("local sentinel".utf8).write(to: path)
-        let project = Project(fallbackName: "diff channel handoff", workspaceConfiguration: .standard)
-        defer { project.terminateAll() }
-        func connect(_ session: TerminalSession) -> RemoteConnection {
-            let connection = RemoteConnection(
-                user: "fixture", host: "invalid", port: 2222,
-                controlSocket: directory.appendingPathComponent(UUID().uuidString), sshPID: 0
-            )
-            connection.workingDirectory = directory.path
-            connection.markConnected()
-            XCTAssertTrue(session.beginRemoteConnection(connection))
-            return connection
-        }
-        let first = connect(project.newSession())
-        let second = connect(project.newSession())
-        try await Task.sleep(for: .milliseconds(50))
-        let backend = DiffWorkspaceFixture()
-        let diff = DiffTab(
-            repoRoot: directory.path, path: "remote.txt", source: .worktree, untracked: true,
-            origPath: nil, backend: backend, workspaceIdentity: first.workspaceIdentity,
-            preferences: try isolatedPreferences()
-        )
-        project.append(PaneTab(content: .diff(diff)))
-        try await wait { !diff.isLoading }
-        XCTAssertTrue(diff.isEditableNow)
-        diff.updateEditedContent("old channel draft")
-        let save = Task { await diff.save() }
-        try await wait { await backend.writing }
-        first.markDisconnected(reason: "first channel ended")
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertNil(diff.readOnlyReason)
-        XCTAssertEqual(second.state, .connected)
-        await backend.finishWrite()
-        await save.value
-        XCTAssertTrue(diff.isDirty, "Old-channel write cannot establish the new target's baseline")
-        guard diff.isDirty else { return }
-        diff.updateEditedContent("new channel draft")
-        await diff.save()
-        XCTAssertTrue(diff.isDirty)
-        XCTAssertTrue(diff.saveError != nil || diff.readOnlyReason != nil)
-        let oldContents = await backend.stored()
-        XCTAssertEqual(oldContents, Data("old channel draft".utf8))
-        XCTAssertEqual(try Data(contentsOf: path), Data("local sentinel".utf8))
     }
 
     func testWorktreeStagedHistoryBinarySizeAndSymlink() async throws {

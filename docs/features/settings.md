@@ -12,7 +12,15 @@
 
 ## 设置界面
 
-`⌘,` 打开原生 SwiftUI `Settings` 场景。窗口采用简单的 `NavigationSplitView` 两栏：左侧按「偏好设置」（通用、终端、工作区）和「连接」（端口转发、手机通知）分组，右侧使用独立滚动的系统 `Form`。隔离测试模式不展示手机通知。现有偏好直接绑定 `AppSettings`，Bark 钥匙串与隧道管理保留原有实现；不新增搜索、历史导航、窗口缩放或新的设置功能。
+`⌘,` 打开原生 SwiftUI 设置窗口。左侧按功能分为 Common、Text Editor、Terminal、Browser、File Manager、Git Manager、Projects，以及连接设置（端口转发、手机通知）；右侧使用系统 `Form`。
+
+Common 设置 System／Light／Dark 外观、明暗 Ghostty 主题和面板字号。Text Editor 设置折行，Terminal 设置字体、光标、Option 和历史，Git Manager 设置布局与工具栏。File Manager 只配置 Files 树排除规则；Browser 和 Projects 暂无选项。
+
+配置键及生效范围不变；「恢复默认」也重置两项 Git 确认偏好。隔离测试不展示手机通知，也不访问真实 Bark 凭据或启动保存的隧道。
+
+## 文件管理器排除规则
+
+Settings → File Manager 每行输入一个 Glob（`*`、`?`、`**`），点击「应用」后才进行验证与原子写盘；失败时保留原有有效规则并显示错误。「恢复默认排除规则」恢复 `**/.git`。`config.toml` 中使用 `files.exclude = ["**/.git", "**/node_modules"]` 形式；缺少该键默认仅隐藏 `.git`，显式 `files.exclude = []` 则不隐藏任何条目。设置由 `AppSettings.shared` 唯一持有，变化即时更新 Files 树，绝不影响 Git、命令面板或以后独立的搜索／监听规则。详情见 [文件可见性](files.md#文件可见性)。
 
 ## 布局配置
 

@@ -26,7 +26,7 @@ SELECTED_TESTS_PREFLIGHT = if [ -n '$(strip $(ONLY_TESTING))' ]; then \
 	trap 'rm -f "$$enumeration"; rmdir "$$lock"' EXIT; \
 	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) $(TEST_SELECTION) \
 		-enumerate-tests -test-enumeration-format json -test-enumeration-output-path "$$enumeration" test > /dev/null; \
-	python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); full=[g["name"]+"/"+c["name"]+"/"+t["name"].removesuffix("()") for p in j["values"] for g in p["children"] for c in g["children"] for t in c["children"] if t["kind"]=="test" and not t.get("disabled",False)]; missing=[s for s in sys.argv[2].split() if not any(p==s or p.startswith(s+"/") for p in full)]; print("Selected XCTest methods:",len(full)); sys.exit("Unmatched XCTest selector: "+", ".join(missing) if missing else 0)' "$$enumeration" '$(strip $(ONLY_TESTING))'; \
+	python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); full=[g["name"]+"/"+c["name"]+"/"+t["name"].removesuffix("()") for p in j["values"] for g in p.get("children",[]) for c in g.get("children",[]) for t in c.get("children",[]) if t["kind"]=="test" and not t.get("disabled",False)]; missing=[s for s in sys.argv[2].split() if not any(p==s or p.startswith(s+"/") for p in full)]; print("Selected XCTest methods:",len(full)); sys.exit("Unmatched XCTest selector: "+", ".join(missing) if missing else 0)' "$$enumeration" '$(strip $(ONLY_TESTING))'; \
 	rm -f "$$enumeration"; \
 fi
 DEV_OPERATION_LOCK = set -eu; mkdir -p '$(CURDIR)/build'; \

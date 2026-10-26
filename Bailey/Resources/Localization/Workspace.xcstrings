@@ -356,6 +356,86 @@
           }
         }
       }
+    },
+    "Could not save the open file before changing it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法在修改文件前保存已打开的文件。"
+          }
+        }
+      }
+    },
+    "Two open editors have unsaved changes to the same file." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "两个已打开的编辑器都对同一文件有未保存的修改。"
+          }
+        }
+      }
+    },
+    "Couldn’t complete file operation." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法完成文件操作。"
+          }
+        }
+      }
+    },
+    "Source folder is outside this project." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "源文件的父文件夹不在当前项目内。"
+          }
+        }
+      }
+    },
+    "Destination folder is outside this project." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目标文件夹不在当前项目内。"
+          }
+        }
+      }
+    },
+    "Destination is outside the current project: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目标不在当前项目内：%@"
+          }
+        }
+      }
+    },
+    "Source is outside the current project: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "源路径不在当前项目内：%@"
+          }
+        }
+      }
+    },
+    "Remote file list has not been verified after reconnecting." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH 重连后尚未确认当前文件列表。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

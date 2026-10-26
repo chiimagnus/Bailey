@@ -110,10 +110,6 @@ final class WorkspaceWindowModel {
         projects.first { $0.id == selectedProjectID }
     }
 
-    var selectedSession: TerminalSession? {
-        selectedProject?.selectedSession
-    }
-
     /// The window supplies the current selection check without passing its
     /// entire model into the Git domain or retaining it across async work.
     func syncGitStatus(_ model: GitStatusModel) {
@@ -137,13 +133,12 @@ final class WorkspaceWindowModel {
                   FileManager.default.isExecutableFile(atPath: root),
                   !NSWorkspace.shared.isFilePackage(atPath: root) else { continue }
             if let existing = projects.first(where: {
-                $0.sshHost == nil && $0.customDirectory == root && $0.pinnedFile == nil
+                $0.sshHost == nil && $0.customDirectory == root
             }) {
                 selectedProjectID = existing.id
                 continue
             }
             let project = makeProject()
-            project.customName = url.lastPathComponent
             project.customDirectory = root
             insert(project)
         }
@@ -289,7 +284,6 @@ final class WorkspaceWindowModel {
             project.sshHost = host
             project.customDirectory = root
             project.pinnedFile = file
-            project.customName = (item.path as NSString).lastPathComponent
             if let file { project.openFile(file) }
             insert(project)
         }
@@ -596,17 +590,16 @@ final class WorkspaceWindowModel {
 
     private func newItem(isDirectory: Bool) async {
         guard let project = selectedProject, let context = project.panelContext else { return }
-        let root: String
-        do {
-            root = try await context.resolvedRoot().root
-        } catch {
-            WorkspaceNativeDialogs.showError(error, in: window)
-            return
-        }
+        let root = context.cwd
+        let revision = context.connectionRevision
         guard selectedProjectID == project.id, project.matchesPanelTarget(context.identity) else { return }
         showPanel(.files)
-        await project.fileTree.sync(root: root, backend: context.backend, scope: context.scope)
-        guard selectedProjectID == project.id, project.matchesPanelTarget(context.identity) else { return }
+        guard await project.fileTree.sync(
+            root: root, backend: context.backend, scope: context.scope,
+            panelIdentity: context.identity, connectionRevision: revision
+        ), context.connectionRevision == revision,
+            selectedProjectID == project.id, project.matchesPanelTarget(context.identity)
+        else { return }
         if isDirectory {
             await project.fileTree.beginNewFolder(in: root)
         } else {
@@ -659,12 +652,238 @@ final class WorkspaceWindowModel {
         Task { await content.save() }
     }
 
-    /// Keep tabs and pinned sidebar entries in sync on the affected machine,
-    /// not in unrelated Mac/SSH projects with the same path.
-    func fileRenamed(from oldPath: String, to newPath: String, workspace: String?) {
-        for project in projects {
-            project.updateFilePaths(from: oldPath, to: newPath, workspace: workspace)
+    /// Protect every open editor on this machine before mutating a directory entry.
+    func renameFile(
+        _ item: FileTreeModel.Item, to newName: String,
+        in project: Project, target: PanelContext.Identity
+    ) async -> String? {
+        guard selectedProjectID == project.id, project.matchesPanelTarget(target) else { return nil }
+        do {
+            return try await application.withProtectedFiles(
+                paths: [item.path], workspace: target.workspace
+            ) {
+                guard self.selectedProjectID == project.id, project.matchesPanelTarget(target) else {
+                    throw CancellationError()
+                }
+                let newPath = await project.fileTree.rename(item, to: newName)
+                if let newPath {
+                    self.application.fileRenamed(
+                        from: item.path, to: newPath, workspace: target.workspace
+                    )
+                }
+                return newPath
+            }
+        } catch {
+            if !(error is CancellationError) { WorkspaceNativeDialogs.showError(error, in: window) }
+            return nil
         }
+    }
+
+    func performFileOperation(
+        _ operation: FileTreeModel.FileOperation, paths: [String], into directory: String?,
+        in project: Project, target: PanelContext.Identity
+    ) async -> FileTreeModel.FileBatchResult {
+        guard selectedProjectID == project.id, project.matchesPanelTarget(target) else {
+            return FileTreeModel.FileBatchResult()
+        }
+        do {
+            return try await application.withProtectedFiles(paths: paths, workspace: target.workspace) {
+                guard self.selectedProjectID == project.id,
+                      project.matchesPanelTarget(target) else { throw CancellationError() }
+                let outcome = await project.fileTree.performFileOperation(
+                    operation, paths: paths, into: directory,
+                    isCurrentTarget: {
+                        self.selectedProjectID == project.id && project.matchesPanelTarget(target)
+                    }
+                )
+                for entry in outcome.succeeded {
+                    switch operation {
+                    case .move:
+                        if let destination = entry.destination {
+                            self.application.fileRenamed(
+                                from: entry.source, to: destination, workspace: target.workspace
+                            )
+                        }
+                    case .delete:
+                        self.application.filesDeleted(
+                            paths: [entry.source], workspace: target.workspace
+                        )
+                    case .copy: break
+                    }
+                }
+                return outcome
+            }
+        } catch {
+            if !(error is CancellationError) { WorkspaceNativeDialogs.showError(error, in: window) }
+            return FileTreeModel.FileBatchResult()
+        }
+    }
+
+    private func clipboardRevision(for target: PanelContext.Identity) -> UInt64? {
+        guard let workspace = target.workspace, workspace.hasPrefix("ssh:") else { return nil }
+        return SSHHostWorkspaces.connectionRevision(for: String(workspace.dropFirst(4)))
+    }
+
+    func makeFileTreeDragProvider(
+        for item: FileTreeModel.Item, in project: Project, target: PanelContext.Identity
+    ) -> NSItemProvider {
+        guard selectedProjectID == project.id, project.matchesPanelTarget(target),
+              let drag = project.fileTree.beginDrag(for: item) else { return NSItemProvider() }
+        let source = FileTreeClipboard.Record(
+            token: application.fileTransferToken, project: project.id,
+            identity: String(reflecting: target), root: project.fileTree.rootPath,
+            connectionRevision: clipboardRevision(for: target), paths: drag.paths, cut: false
+        )
+        let record = FileTreeDrag.Record(
+            source: source, window: String(reflecting: ObjectIdentifier(self)), nonce: drag.nonce
+        )
+        guard let data = try? JSONEncoder().encode(record) else { return NSItemProvider() }
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(forTypeIdentifier: FileTreeDrag.type, visibility: .ownProcess) {
+            completion in
+            completion(data, nil)
+            return nil
+        }
+        if target.workspace == nil {
+            provider.registerObject(URL(fileURLWithPath: item.path) as NSURL, visibility: .all)
+        }
+        return provider
+    }
+
+    func receiveFileTreeDrop(
+        _ provider: NSItemProvider, into directory: String, copy: Bool,
+        in project: Project, target: PanelContext.Identity,
+        onChange: @escaping () -> Void = {}
+    ) -> Bool {
+        guard selectedProjectID == project.id, project.matchesPanelTarget(target),
+              project.fileTree.hasActiveDrag,
+              provider.hasItemConformingToTypeIdentifier(FileTreeDrag.type) else { return false }
+        Task { @MainActor in
+            let data: Data? = await withCheckedContinuation { continuation in
+                _ = provider.loadDataRepresentation(forTypeIdentifier: FileTreeDrag.type) { data, _ in
+                    continuation.resume(returning: data)
+                }
+            }
+            guard let data, let drag = try? JSONDecoder().decode(FileTreeDrag.Record.self, from: data),
+                  selectedProjectID == project.id, project.matchesPanelTarget(target),
+                  drag.source.token == application.fileTransferToken,
+                  drag.window == String(reflecting: ObjectIdentifier(self)),
+                  drag.source.project == project.id,
+                  drag.source.identity == String(reflecting: target),
+                  drag.source.root == project.fileTree.rootPath,
+                  drag.source.connectionRevision == clipboardRevision(for: target),
+                  project.fileTree.consumeDrag(nonce: drag.nonce, paths: drag.source.paths)
+            else { return }
+            performFileTreeCommand(
+                .drop(drag.source.paths, into: directory, copy: copy),
+                in: project, target: target, onChange: onChange
+            )
+        }
+        return true
+    }
+
+    func performFileTreeCommand(
+        _ command: FileTreeCommand, in project: Project, target: PanelContext.Identity,
+        pasteboard: NSPasteboard = .general, onChange: @escaping () -> Void = {}
+    ) {
+        guard selectedProjectID == project.id, project.matchesPanelTarget(target) else { return }
+        let root = project.fileTree.rootPath
+        func run(
+            _ operation: FileTreeModel.FileOperation, paths: [String], directory: String?,
+            onFinished: @escaping (FileTreeModel.FileBatchResult) -> Void = { _ in }
+        ) {
+            guard !paths.isEmpty else { return }
+            Task {
+                let result = await performFileOperation(
+                    operation, paths: paths, into: directory, in: project, target: target
+                )
+                if !result.succeeded.isEmpty { onChange() }
+                onFinished(result)
+            }
+        }
+        switch command {
+        case .copy(let paths, let cut):
+            guard !paths.isEmpty else { return }
+            let record = FileTreeClipboard.Record(
+                token: application.fileTransferToken, project: project.id,
+                identity: String(reflecting: target), root: root,
+                connectionRevision: clipboardRevision(for: target), paths: paths, cut: cut
+            )
+            guard FileTreeClipboard.write(record, to: pasteboard) else {
+                fileCommandError(String(localized: "Could not copy files to the clipboard.", table: "Sidebar"))
+                return
+            }
+
+        case .paste(let directory):
+            guard let record = FileTreeClipboard.read(from: pasteboard) else {
+                fileCommandError(String(localized: "Clipboard does not contain files copied from Bailey.", table: "Sidebar"))
+                return
+            }
+            guard record.token == application.fileTransferToken,
+                  record.project == project.id, record.identity == String(reflecting: target),
+                  record.root == root,
+                  record.connectionRevision == clipboardRevision(for: target)
+            else {
+                fileCommandError(String(localized: "The copied files belong to a different project or connection.", table: "Sidebar"))
+                return
+            }
+            let pasteboardVersion = pasteboard.changeCount
+            run(record.cut ? .move : .copy, paths: record.paths, directory: directory) { result in
+                guard record.cut, !result.succeeded.isEmpty,
+                      pasteboard.changeCount == pasteboardVersion,
+                      FileTreeClipboard.read(from: pasteboard) == record else { return }
+                let remaining = record.paths.filter { path in
+                    !result.succeeded.contains {
+                        LocalPathScope.contains(path, in: $0.source)
+                    }
+                }
+                if remaining.isEmpty {
+                    pasteboard.declareTypes([.string], owner: nil)
+                    pasteboard.setString(record.paths.joined(separator: "\n"), forType: .string)
+                } else {
+                    let pending = FileTreeClipboard.Record(
+                        token: record.token, project: record.project,
+                        identity: record.identity, root: record.root,
+                        connectionRevision: record.connectionRevision,
+                        paths: remaining, cut: true
+                    )
+                    FileTreeClipboard.write(pending, to: pasteboard)
+                }
+            }
+
+        case .drop(let paths, let directory, let copy):
+            run(copy ? .copy : .move, paths: paths, directory: directory)
+
+        case .delete(let paths):
+            guard !paths.isEmpty else { return }
+            guard let workspace = target.workspace else {
+                run(.delete, paths: paths, directory: nil)
+                return
+            }
+            guard let window else { return }
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = String(
+                localized: "Delete \(paths.count) files on \(workspace)?", table: "Sidebar",
+                comment: "Permanent remote deletion. Count and SSH host."
+            )
+            alert.informativeText = paths.joined(separator: "\n")
+                + "\n" + String(localized: "Remote deletion cannot be undone.", table: "Sidebar")
+            alert.addButton(withTitle: String(localized: "Delete", table: "Sidebar"))
+            alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
+            alert.beginSheetModal(for: window) { response in
+                guard response == .alertFirstButtonReturn else { return }
+                run(.delete, paths: paths, directory: nil)
+            }
+        }
+    }
+
+    private func fileCommandError(_ message: String) {
+        WorkspaceNativeDialogs.showError(
+            NSError(domain: "Bailey.Files", code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: message]),
+            in: window
+        )
     }
 
     // MARK: - Panels & appearance
@@ -800,6 +1019,55 @@ final class WorkspaceWindowModel {
         }
     }
 
+    func revealFileInFileManager(tabID: UUID, in project: Project) {
+        guard !isClosed, selectedProjectID == project.id,
+              let tab = project.tabs.first(where: { $0.id == tabID }),
+              case .file(let file) = tab.content else { return }
+        let path = file.path
+        let workspace = file.workspaceIdentity
+        guard let context = project.panelContext, context.identity.workspace == workspace else {
+            fileCommandError(String(localized:
+                "This file belongs to a different machine than the current File Manager.",
+                table: "Interface"))
+            return
+        }
+        let revision = context.connectionRevision
+        Task {
+            let root = context.cwd
+            guard context.connectionRevision == revision,
+                  !isClosed, selectedProjectID == project.id,
+                  project.matchesPanelTarget(context.identity),
+                  project.tabs.contains(where: { $0.id == tabID }),
+                  file.path == path, file.workspaceIdentity == workspace else {
+                fileCommandError(String(localized:
+                    "Could not locate this file in the current File Manager.",
+                    table: "Interface"))
+                return
+            }
+            await project.fileTree.sync(
+                root: root, backend: context.backend, scope: context.scope,
+                panelIdentity: context.identity, connectionRevision: revision
+            )
+            let revealed = await project.fileTree.revealFile(path) {
+                context.connectionRevision == revision
+                    && !isClosed && selectedProjectID == project.id
+                    && project.matchesPanelTarget(context.identity)
+                    && project.tabs.contains(where: { $0.id == tabID })
+                    && file.path == path && file.workspaceIdentity == workspace
+            }
+            guard revealed else {
+                if !isClosed && selectedProjectID == project.id
+                    && project.matchesPanelTarget(context.identity) {
+                    fileCommandError(String(localized:
+                        "Could not locate this file in the current File Manager.",
+                        table: "Interface"))
+                }
+                return
+            }
+            showPanel(.files)
+        }
+    }
+
     /// Re-themes every session after a light/dark appearance change.
     func refreshAppearance() {
         for project in projects {
@@ -869,7 +1137,6 @@ final class WorkspaceWindowModel {
                 }
                 let tabs = savedTabs.map(\.1)
                 return ProjectSnapshot(
-                    customName: project.customName,
                     customDirectory: project.customDirectory,
                     sshHost: project.sshHost,
                     pinnedFile: project.pinnedFile,
@@ -914,10 +1181,12 @@ final class WorkspaceWindowModel {
 
     /// Rebuilds projects and tabs from the saved window snapshot.
     func restore(from snapshot: SessionSnapshot, histories: [String: String]) -> Bool {
-        for saved in snapshot.projects {
+        var restoredSelection: UUID?
+        for (index, saved) in snapshot.projects.enumerated() {
+            guard let directory = saved.customDirectory,
+                  saved.sshHost != nil || saved.pinnedFile == nil else { continue }
             let project = makeProject()
-            project.customName = Project.normalizedCustomName(saved.customName)
-            project.customDirectory = saved.customDirectory
+            project.customDirectory = directory
             project.sshHost = saved.sshHost
             project.pinnedFile = saved.pinnedFile
             var restoredContexts: [(tab: PaneTab, sessionIndex: Int)] = []
@@ -948,13 +1217,10 @@ final class WorkspaceWindowModel {
                 project.openFile(pinnedFile)
             }
             projects.append(project)
+            if index == snapshot.selectedProjectIndex { restoredSelection = project.id }
         }
         guard !projects.isEmpty else { return false }
-        if let index = snapshot.selectedProjectIndex, projects.indices.contains(index) {
-            selectedProjectID = projects[index].id
-        } else {
-            selectedProjectID = projects.first?.id
-        }
+        selectedProjectID = restoredSelection ?? projects.first?.id
         return true
     }
 }

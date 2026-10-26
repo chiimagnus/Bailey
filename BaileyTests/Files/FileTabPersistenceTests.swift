@@ -70,21 +70,15 @@ private actor EditorWorkspaceFixture: WorkspaceBackend {
     func readSymlinkDestination(path: String) async throws -> String? { nil }
     func createFile(path: String) async throws { throw WorkspaceError.notFound }
     func createDirectory(path: String) async throws { throw WorkspaceError.notFound }
+    func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func rename(from: String, to: String) async throws {
         guard let data = files.removeValue(forKey: from) else { throw WorkspaceError.notFound }
         files[to] = data
     }
     func delete(paths: [String]) async throws { throw WorkspaceError.notFound }
-    func gitRoot(containing path: String) async throws -> String? { nil }
-    func isLinkedWorktree(_ root: String) async throws -> Bool { false }
     func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
         throw WorkspaceError.notFound
     }
-    func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot {
-        .init(descendants: [], namesByPid: [:])
-    }
-    func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] { [] }
-    func kill(pid: pid_t, force: Bool) async throws { throw WorkspaceError.notFound }
 }
 
 @MainActor
@@ -942,54 +936,78 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(retained, Data("second🪨".utf8))
     }
 
-    func testAnotherLiveChannelTakesOverWithoutTransientReadOnlyState() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let path = directory.appendingPathComponent("remote.txt")
-        try Data("local sentinel".utf8).write(to: path)
-        let project = Project(fallbackName: "channel handoff", workspaceConfiguration: .standard)
-        defer { project.terminateAll() }
-        func connect(_ session: TerminalSession) -> RemoteConnection {
-            let connection = RemoteConnection(
-                user: "fixture", host: "invalid", port: 2222,
-                controlSocket: directory.appendingPathComponent(UUID().uuidString), sshPID: 0
-            )
-            connection.workingDirectory = directory.path
-            connection.markConnected()
-            XCTAssertTrue(session.beginRemoteConnection(connection))
-            return connection
-        }
-        let first = connect(project.newSession())
-        let second = connect(project.newSession())
-        try await Task.sleep(for: .milliseconds(50))
-        let backend = EditorWorkspaceFixture(path: path.path, contents: Data("baseline\n".utf8))
-        let file = FileTab(path: path.path, backend: backend, workspaceIdentity: first.workspaceIdentity)
+    func testFileMutationWaitsForInFlightSaveAndDefersNewWritesUntilMoved() async throws {
+        let oldPath = "/fixture/\(UUID().uuidString)-source.txt"
+        let newPath = oldPath.replacingOccurrences(of: "-source", with: "-moved")
+        let backend = EditorWorkspaceFixture(path: oldPath, contents: Data("original".utf8))
+        let file = FileTab(path: oldPath, backend: backend, workspaceIdentity: "ssh:test")
         try await file.waitForText()
-        project.append(PaneTab(content: .file(file)))
-        try await waitForFileTabState { if case .text = file.content { return true }; return false }
-        file.text = "old channel draft"
-        file.refreshDirtyState()
-        let save = Task { await file.save() }
-        try await waitForFileTabState { await backend.writingPath != nil }
-        first.markDisconnected(reason: "first channel ended")
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertNil(file.readOnlyReason)
-        XCTAssertEqual(second.state, .connected)
+        file.text = "before move"; file.refreshDirtyState()
+        let prior = Task { await file.save() }
+        try await waitForFileTabState { await backend.writingPath == oldPath }
+
+        let lock = Task { await file.beginFileMutation() }
+        // The mutation must not claim the old write completed before the backend does.
         await backend.finishWrite()
-        await save.value
-        XCTAssertTrue(file.isDirty, "Old-channel write cannot establish the new target's baseline")
-        XCTAssertEqual(file.text, "old channel draft")
-        guard file.isDirty else { return }
-        file.text = "new channel draft"
-        file.refreshDirtyState()
-        await file.save()
+        await prior.value
+        let accepted = await lock.value
+        XCTAssertTrue(accepted)
+        file.text = "editing during move"; file.refreshDirtyState()
+        file.autoSaveOnFocusLoss()
+        await Task.yield()
+        let writingDuringMove = await backend.writingPath
+        XCTAssertNil(writingDuringMove, "A save triggered during a move cannot write the old path")
+        try await backend.rename(from: oldPath, to: newPath)
+        file.updatePath(newPath)
+        file.endFileMutation()
+        try await waitForFileTabState { await backend.writingPath == newPath }
+        await backend.finishWrite()
+        try await waitForFileTabState { !file.isDirty }
+        let oldStored = await backend.data(at: oldPath)
+        XCTAssertNil(oldStored, "Pending saves must not recreate the original path")
+        let newStored = await backend.data(at: newPath)
+        XCTAssertEqual(newStored, Data("editing during move".utf8))
+        XCTAssertEqual(file.path, newPath)
+    }
+
+    func testDeletedFileKeepsNewDraftWithoutResurrectingRemovedTarget() async throws {
+        let path = "/fixture/\(UUID().uuidString)-removed.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("original".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:test")
+        try await file.waitForText()
+        let protected = await file.beginFileMutation()
+        XCTAssertTrue(protected)
+        file.text = "edit during deletion"; file.refreshDirtyState()
+        file.autoSaveOnFocusLoss()
+        await Task.yield()
+        file.invalidateDeletedFile()
+        file.endFileMutation()
+        try await Task.sleep(for: .milliseconds(70))
+        let pending = await backend.writingPath
+        XCTAssertNil(pending, "Delayed auto save must not start an IO write on a deleted path")
         XCTAssertTrue(file.isDirty)
-        XCTAssertTrue(file.saveError != nil || file.readOnlyReason != nil,
-                      "The new channel has no socket and must fail, not fall back")
-        let oldContents = await backend.data(at: path.path)
-        XCTAssertEqual(oldContents, Data("old channel draft".utf8))
-        XCTAssertEqual(try Data(contentsOf: path), Data("local sentinel".utf8))
+        XCTAssertEqual(file.text, "edit during deletion")
+        XCTAssertNotNil(file.readOnlyReason)
+        file.rebindWorkspace(to: backend)
+        XCTAssertNotNil(file.readOnlyReason, "Reconnect must not make a deleted file writable")
+    }
+
+    func testFailedFileSaveRefusesMutationWithoutLosingDirtyText() async throws {
+        let path = "/fixture/\(UUID().uuidString)-unsaved.txt"
+        let backend = EditorWorkspaceFixture(path: path, contents: Data("baseline".utf8))
+        let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:test")
+        try await file.waitForText()
+        file.text = "unsaved buffer"; file.refreshDirtyState()
+        let mutation = Task { await file.beginFileMutation() }
+        try await waitForFileTabState { await backend.writingPath == path }
+        await backend.finishWrite(failing: true)
+        let accepted = await mutation.value
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(file.text, "unsaved buffer")
+        XCTAssertTrue(file.isDirty)
+        XCTAssertNotNil(file.saveError)
+        let stored = await backend.data(at: path)
+        XCTAssertEqual(stored, Data("baseline".utf8))
     }
 
     func testDirtyUndoSaveDuringEditRenameFailureAndStaleReload() async throws {

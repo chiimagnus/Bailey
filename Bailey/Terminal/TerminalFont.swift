@@ -5,7 +5,6 @@ import CoreText
 /// with the app so the default looks identical on every machine, and let
 /// the OS cascade cover glyphs the primary font lacks (CJK, symbols).
 enum TerminalFont {
-    static let defaultSize: CGFloat = 13
     static let bundledFamily = "JetBrains Mono"
     private static let symbolsFontName = "SymbolsNFM"
 

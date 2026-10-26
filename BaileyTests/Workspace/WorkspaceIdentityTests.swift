@@ -14,14 +14,10 @@ private actor IdentityWorkspaceFixture: WorkspaceBackend {
     func write(path: String, data: Data) async throws { writes += 1 }
     func createFile(path: String) async throws {}
     func createDirectory(path: String) async throws {}
+    func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
     func rename(from: String, to: String) async throws {}
     func delete(paths: [String]) async throws {}
-    func gitRoot(containing path: String) async throws -> String? { nil }
-    func isLinkedWorktree(_ root: String) async throws -> Bool { false }
     func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult { .init(status: 0, stdout: Data(), stderr: Data()) }
-    func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot { .init(descendants: [], namesByPid: [:]) }
-    func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] { [] }
-    func kill(pid: pid_t, force: Bool) async throws {}
 }
 
 private actor FailingCreateRunnerFixture: RemoteCommandRunner {
@@ -52,6 +48,43 @@ final class WorkspaceIdentityTests: XCTestCase {
         connection.workingDirectory = "/fixture"
         connection.markConnected()
         return connection
+    }
+
+    func testProjectNameAndRootStayFixedAcrossTerminalChanges() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey 固定项目 " + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let initial = try XCTUnwrap(project.panelContext)
+        XCTAssertEqual(project.name, root.lastPathComponent)
+        XCTAssertEqual(initial.cwd, root.path)
+        XCTAssertNil(initial.identity.workspace)
+
+        let terminal = project.newSession(directory: "/tmp/a-different-directory")
+        XCTAssertEqual(project.name, root.lastPathComponent,
+                       "Project names cannot follow a terminal title or working directory")
+        XCTAssertEqual(project.panelContext?.identity, initial.identity)
+        project.close(try XCTUnwrap(project.tabs.first { $0.content.id == terminal.id }))
+        XCTAssertTrue(project.tabs.isEmpty)
+        XCTAssertEqual(project.panelContext?.identity, initial.identity,
+                       "Closing the final terminal cannot detach a fixed Files or Git root")
+
+        let ssh = Project(fallbackName: "SSH", workspaceConfiguration: .standard)
+        ssh.sshHost = "fixture-remote"
+        ssh.customDirectory = "/d/projects"
+        ssh.pinnedFile = "/d/projects/source.swift"
+        XCTAssertEqual(ssh.name, "source.swift",
+                       "An explicitly added SSH file keeps its file-based project title")
+
+        let rootless = Project(fallbackName: "Unsupported", workspaceConfiguration: .standard)
+        rootless.newSession(directory: "/tmp/old-terminal-scope")
+        XCTAssertNil(rootless.panelContext,
+                     "A terminal cannot implicitly create or redirect a project root")
     }
 
     func testFinderTerminalDropDoesNotInjectControlCharactersOrExecute() {
@@ -119,6 +152,8 @@ final class WorkspaceIdentityTests: XCTestCase {
         defer { project.terminateAll() }
         let first = connection()
         session.location = .remote(first)
+        XCTAssertNil(project.connectedWorkspace(for: first.workspaceIdentity),
+                     "An SSH session in a local project cannot turn it into a remote file workspace")
 
         project.openFile(path)
         guard case .file(let localFile) = try XCTUnwrap(project.selectedTab).content else {
@@ -152,52 +187,6 @@ final class WorkspaceIdentityTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), Data("local save\n".utf8))
     }
 
-    func testSSHStateChangeRebindsRemoteFileWithoutPublisherRelay() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let path = directory.appendingPathComponent("remote-owned.txt")
-        try Data("local sentinel".utf8).write(to: path)
-
-        let project = Project(fallbackName: "remote observer", workspaceConfiguration: .standard)
-        let session = project.newSession()
-        defer { project.terminateAll() }
-        let connection = RemoteConnection(
-            user: "fixture", host: "invalid", port: 2222,
-            controlSocket: URL(fileURLWithPath: "/tmp/bailey-observation-rebind-no-socket"),
-            sshPID: 0
-        )
-        connection.workingDirectory = directory.path
-        connection.markConnected()
-        XCTAssertTrue(session.beginRemoteConnection(connection))
-
-        let file = FileTab(
-            path: path.path, backend: LocalWorkspaceBackend.shared,
-            workspaceIdentity: connection.workspaceIdentity
-        )
-        try await file.waitForText()
-        project.append(PaneTab(content: .file(file)))
-        XCTAssertEqual(file.text, "local sentinel")
-        file.text = "unsaved on remote"
-        file.refreshDirtyState()
-        XCTAssertTrue(file.isDirty)
-        XCTAssertNil(file.readOnlyReason)
-
-        // The only trigger is RemoteConnection.state's semantic event: no
-        // manual rebindRemoteTabs() or extra publisher notification.
-        connection.markDisconnected(reason: "controlled remote outage")
-        try await wait { file.readOnlyReason != nil }
-        XCTAssertTrue(file.isDirty)
-        XCTAssertEqual(file.text, "unsaved on remote")
-        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "local sentinel")
-
-        connection.markConnected()
-        try await wait { file.readOnlyReason == nil }
-        XCTAssertTrue(file.isDirty)
-        XCTAssertEqual(file.text, "unsaved on remote")
-        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "local sentinel")
-    }
-
     func testRemoteCreateFailureNeverFallsBackToLocalDisk() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -217,46 +206,6 @@ final class WorkspaceIdentityTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: sentinel), Data("local sentinel".utf8))
         let commandCount = await runner.commands.count
         XCTAssertEqual(commandCount, 1)
-    }
-
-    func testFinderOpenReusesExistingTabAndKeepsSiblingInsideLegacyPinnedProject() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let first = folder.appendingPathComponent("first.txt")
-        let sibling = folder.appendingPathComponent("sibling.txt")
-        try "first".write(to: first, atomically: true, encoding: .utf8)
-        try "sibling".write(to: sibling, atomically: true, encoding: .utf8)
-        let manager = self.workspaceApplication.makeWindow()
-        defer { manager.windowClosed() }
-
-        // Real pre-P4 snapshots may still contain pinned-file projects.
-        let pinned = Project(fallbackName: "legacy", workspaceConfiguration: .standard)
-        pinned.customName = "first.txt"
-        pinned.customDirectory = folder.path
-        pinned.pinnedFile = first.path
-        pinned.openFile(first.path)
-        manager.projects.append(pinned)
-        manager.selectedProjectID = pinned.id
-        guard case .file(let originalFile) = try XCTUnwrap(pinned.selectedTab).content else {
-            return XCTFail("Manual file should already be open")
-        }
-        XCTAssertEqual(pinned.pinnedFile, first.path)
-        XCTAssertEqual(pinned.customName, "first.txt")
-        XCTAssertTrue(manager.openExternalLocalItems([first]).isEmpty)
-        XCTAssertTrue(manager.selectedProject === pinned)
-        guard case .file(let reused) = try XCTUnwrap(pinned.selectedTab).content else {
-            return XCTFail("Finder should return to original file")
-        }
-        XCTAssertTrue(reused === originalFile)
-
-        XCTAssertTrue(manager.openExternalLocalItems([sibling]).isEmpty)
-        XCTAssertTrue(manager.selectedProject === pinned)
-        XCTAssertEqual(pinned.pinnedFile, first.path)
-        XCTAssertEqual(pinned.customName, "first.txt")
-        XCTAssertEqual(pinned.tabs.filter { $0.content.isFile }.count, 2)
-        XCTAssertEqual(pinned.selectedTab?.content.title, "sibling.txt")
-        XCTAssertEqual(manager.projects.count, 1)
     }
 
     func testFinderBatchOpensSameDirectoryIntoOneProjectAndKeepsLocalScope() async throws {

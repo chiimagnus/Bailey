@@ -1,6 +1,76 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Cut" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剪切"
+          }
+        }
+      }
+    },
+    "Paste" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粘贴"
+          }
+        }
+      }
+    },
+    "Could not copy files to the clipboard." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法将文件复制到剪贴板。"
+          }
+        }
+      }
+    },
+    "Clipboard does not contain files copied from Bailey." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剪贴板中没有来自 Bailey 的文件。"
+          }
+        }
+      }
+    },
+    "The copied files belong to a different project or connection." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制的文件属于另一项目或连接。"
+          }
+        }
+      }
+    },
+    "Delete %lld files on %@?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要永久删除 %lld 项（%@）吗？"
+          }
+        }
+      }
+    },
+    "Remote deletion cannot be undone." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端删除无法撤销。"
+          }
+        }
+      }
+    },
     "Close" : {
       "localizations" : {
         "zh-Hans" : {
@@ -149,34 +219,6 @@
         }
       }
     },
-    "%lld sessions" : {
-      "localizations" : {
-        "en" : {
-          "variations" : {
-            "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld session"
-                }
-              },
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld sessions"
-                }
-              }
-            }
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld 个会话"
-          }
-        }
-      }
-    },
     "+%lld, −%lld" : {
       "localizations" : {
         "en" : {
@@ -278,16 +320,6 @@
         }
       }
     },
-    "cd Here" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "cd 到此目录"
-          }
-        }
-      }
-    },
     "Changed" : {
       "localizations" : {
         "zh-Hans" : {
@@ -304,28 +336,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "更改"
-          }
-        }
-      }
-    },
-    "Choose" : {
-      "comment" : "Button in the project directory picker.",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "选择"
-          }
-        }
-      }
-    },
-    "Choose the directory for “%@”." : {
-      "comment" : "Message in the project directory picker. The placeholder is a project name.",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "请选择“%@”的目录。"
           }
         }
       }
@@ -832,26 +842,6 @@
         }
       }
     },
-    "Following the terminal job’s directory" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在跟随终端作业的目录"
-          }
-        }
-      }
-    },
-    "Following the terminal job’s worktree" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在跟随终端作业的工作树"
-          }
-        }
-      }
-    },
     "Git Manager" : {
       "localizations" : {
         "zh-Hans" : {
@@ -959,17 +949,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在终端中插入绝对路径"
-          }
-        }
-      }
-    },
-    "job" : {
-      "comment" : "Files header badge: the panels follow a directory the terminal’s foreground job moved to, outside any worktree of the shell’s repository.",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "作业"
           }
         }
       }
@@ -1336,16 +1315,6 @@
         }
       }
     },
-    "Rename…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重命名…"
-          }
-        }
-      }
-    },
     "Resolve and stage %lld conflicted files" : {
       "comment" : "Git merge guidance. The placeholder is the number of conflicted files.",
       "localizations" : {
@@ -1421,16 +1390,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "发送反馈"
-          }
-        }
-      }
-    },
-    "Set Project Directory…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "设置项目目录…"
           }
         }
       }
@@ -1616,26 +1575,6 @@
         }
       }
     },
-    "Use Automatic Directory" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "使用自动目录"
-          }
-        }
-      }
-    },
-    "Use Automatic Title" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "使用自动标题"
-          }
-        }
-      }
-    },
     "Verifying remote files" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1666,13 +1605,12 @@
         }
       }
     },
-    "worktree" : {
-      "comment" : "Files header badge: the panels follow a Git worktree the terminal’s foreground job moved to.",
+    "Show Excluded Files" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "工作树"
+            "value" : "显示被排除的文件"
           }
         }
       }

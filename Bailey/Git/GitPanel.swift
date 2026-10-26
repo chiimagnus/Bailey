@@ -7,6 +7,16 @@ import UniformTypeIdentifiers
 struct GitPanel: View {
     var settings: AppSettings = .shared
     private let themeChanges = Theme.changes
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var themeAccent: Color {
+        Color(nsColor: Theme.terminal(dark: colorScheme == .dark).accentNSColor)
+    }
+
+    private func statusColor(_ slot: Int) -> Color {
+        let theme = Theme.terminal(dark: colorScheme == .dark)
+        return Color(nsColor: theme.paletteNSColor(slot) ?? theme.foregroundNSColor)
+    }
 
     private enum EntryOperation: Equatable {
         case stage
@@ -248,6 +258,7 @@ struct GitPanel: View {
         .onChange(of: model.isBusy) {
             if !model.isBusy { operationTrigger = nil }
         }
+        .tint(themeAccent)
     }
 
     // MARK: Header
@@ -259,7 +270,7 @@ struct GitPanel: View {
             } else {
                 Image(systemName: "arrow.triangle.branch")
                     .panelFont(size: 11, weight: .medium)
-                    .foregroundStyle(Color(nsColor: Theme.accent))
+                    .foregroundStyle(themeAccent)
                 PanelHeader(title: String(localized: "Git Manager", table: "Sidebar"), subtitle: model.rootPath)
             }
             // User operations surface progress in their initiating control.
@@ -326,7 +337,7 @@ struct GitPanel: View {
                 ZStack {
                     Image(systemName: "arrow.triangle.branch")
                         .panelFont(size: 11, weight: .medium)
-                        .foregroundStyle(Color(nsColor: Theme.accent))
+                        .foregroundStyle(themeAccent)
                         .opacity(operationIsLoading(.branchMenu) ? 0 : 1)
                     if operationIsLoading(.branchMenu) {
                         operationProgressView()
@@ -495,12 +506,12 @@ struct GitPanel: View {
                 }
                 Spacer(minLength: 0)
             }
-            .foregroundStyle(Color(red: 0.74, green: 0.55, blue: 1.0))
+            .foregroundStyle(statusColor(5))
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(red: 0.74, green: 0.55, blue: 1.0).opacity(0.08))
+                    .fill(statusColor(5).opacity(0.08))
             )
             .padding(.horizontal, 10)
             .padding(.bottom, 7)
@@ -568,12 +579,12 @@ struct GitPanel: View {
                     .accessibilityLabel(String(localized: "Git Output", table: "Sidebar"))
                 }
             }
-            .foregroundStyle(Color(red: 0.88, green: 0.42, blue: 0.36))
+            .foregroundStyle(statusColor(1))
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(red: 0.88, green: 0.42, blue: 0.36).opacity(0.08))
+                    .fill(statusColor(1).opacity(0.08))
             )
             .padding(.horizontal, 10)
             .padding(.bottom, 7)
@@ -1564,7 +1575,7 @@ struct GitPanel: View {
             .padding(.vertical, 5)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(nsColor: Theme.accent).opacity(enabled || isLoading ? 0.85 : 0.3))
+                    .fill(themeAccent.opacity(enabled || isLoading ? 0.85 : 0.3))
             )
             .foregroundStyle(.white)
             .contentShape(RoundedRectangle(cornerRadius: 6))
@@ -2355,10 +2366,8 @@ struct GitPanel: View {
             source: .revision(hash: hash), origPath: nil)
     }
 
-    /// The machine a discard would act on, or nil while local.
-    private var remoteName: String? {
-        sshHost ?? session?.location.remoteConnection?.displayName
-    }
+    /// The project determines the machine, never the selected terminal.
+    private var remoteName: String? { sshHost }
 
     private func discardTitle(for entry: GitStatusModel.Entry?) -> String {
         guard let entry else { return "" }
@@ -2551,7 +2560,7 @@ struct GitPanel: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
-            .tint(Color(nsColor: Theme.accent))
+            .tint(themeAccent)
             .disabled(model.rootPath.isEmpty || model.isBusy)
             Spacer()
         }
@@ -2588,7 +2597,7 @@ struct GitPanel: View {
             Spacer()
             Image(systemName: "exclamationmark.triangle")
                 .panelFont(size: 24, weight: .light)
-                .foregroundStyle(Color(red: 0.88, green: 0.42, blue: 0.36))
+                .foregroundStyle(statusColor(1))
             VStack(spacing: 3) {
                 Text(String(localized: "Git Status Unavailable", table: "Sidebar"))
                     .panelFont(size: 11.5, weight: .medium)

@@ -10,8 +10,9 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
     private var pauseNextList = false
     private var pausedList: CheckedContinuation<Void, Never>?
     private(set) var awaitingList = false
-    private var gitProbeUnavailable = false
-    func setGitProbeUnavailable(_ value: Bool) { gitProbeUnavailable = value }
+    private var pauseNextRename = false
+    private var pausedRename: CheckedContinuation<Void, Never>?
+    private(set) var awaitingRename = false
     init(_ name: String) { self.name = name }
 
     func suspendNextList() { pauseNextList = true }
@@ -19,6 +20,12 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
         pausedList?.resume()
         pausedList = nil
         awaitingList = false
+    }
+    func suspendNextRename() { pauseNextRename = true }
+    func releaseRename() {
+        pausedRename?.resume()
+        pausedRename = nil
+        awaitingRename = false
     }
     func list(directory: String) async throws -> [WorkspaceEntry] {
         if pauseNextList {
@@ -35,7 +42,7 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
             try await Task.sleep(for: .milliseconds(100))
             return nil
         }
-        if path.hasSuffix("created.txt") { return nil }
+        if path.hasSuffix("created.txt") || path.hasSuffix("moved.txt") { return nil }
         return WorkspaceStat(isRegular: !path.hasSuffix("/root"), isDirectory: path.hasSuffix("/root"), isSymlink: false, size: 0, mtime: .distantPast)
     }
     func readSymlinkDestination(path: String) async throws -> String? { nil }
@@ -43,18 +50,25 @@ private actor DelayedWorkspaceFixture: WorkspaceBackend {
     func write(path: String, data: Data) async throws {}
     func createFile(path: String) async throws { created.append(path); try await Task.sleep(for: .milliseconds(100)) }
     func createDirectory(path: String) async throws {}
-    func rename(from: String, to: String) async throws { renamed.append((from, to)) }
-    func delete(paths: [String]) async throws {}
-    func gitRoot(containing path: String) async throws -> String? {
-        if gitProbeUnavailable { throw WorkspaceError.timedOut }
-        try await Task.sleep(for: .milliseconds(path == "/old" ? 100 : 5))
-        return path + "-repo"
+    func copy(from: String, to: String) async throws { throw WorkspaceError.notFound }
+    func rename(from: String, to: String) async throws {
+        renamed.append((from, to))
+        if pauseNextRename {
+            pauseNextRename = false
+            awaitingRename = true
+            await withCheckedContinuation { pausedRename = $0 }
+        }
     }
-    func isLinkedWorktree(_ root: String) async throws -> Bool { true }
-    func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult { .init(status: 0, stdout: Data(), stderr: Data()) }
-    func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot { .init(descendants: [], namesByPid: [:]) }
-    func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] { [] }
-    func kill(pid: pid_t, force: Bool) async throws {}
+    func delete(paths: [String]) async throws {}
+    func run(
+        argv: [String], cwd: String?, env: [String: String]?,
+        stdin: Data?, timeout: TimeInterval?
+    ) async throws -> WorkspaceRunResult {
+        if argv == ["pwd", "-P"], let cwd {
+            return .init(status: 0, stdout: Data((cwd + "\n").utf8), stderr: Data())
+        }
+        return .init(status: 0, stdout: Data(), stderr: Data())
+    }
 }
 
 @MainActor
@@ -69,46 +83,136 @@ final class PanelContextTests: XCTestCase {
         }
     }
 
-    func testIdentityIncludesDirectoryForegroundWorkspaceConnectionAndState() async {
-        let project = UUID(), session = UUID(), firstConnection = UUID(), secondConnection = UUID()
-        let backend = DelayedWorkspaceFixture("first")
-        func automatic(_ cwd: String, foreground: String? = nil, workspace: String? = nil, connection: UUID? = nil) -> PanelContext {
-            PanelContext(identity: .automatic(
-                project: project, workspace: workspace, directory: cwd, foreground: foreground,
-                session: session, connection: connection, state: connection == nil ? nil : .connected
-            ), backend: backend)
-        }
-        XCTAssertNotEqual(automatic("/old").identity, automatic("/new").identity)
-        XCTAssertNotEqual(automatic("/new").identity, automatic("/new", foreground: "/worktree").identity)
-        XCTAssertNotEqual(
-            automatic("/new", workspace: "remote", connection: firstConnection).identity,
-            automatic("/new", workspace: "remote", connection: secondConnection).identity
-        )
+    func testNewFileKeepsCurrentFileTreeIdentityAfterSync() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-files-target-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
 
-        let foreground = try? await automatic("/new", foreground: "/worktree").resolvedRoot()
-        XCTAssertEqual(foreground?.root, "/worktree-repo")
-        XCTAssertEqual(foreground?.source, .foreground(isWorktree: true))
-
-        let pinned = PanelContext(identity: .pinned(project: project, workspace: nil, directory: "/pinned"), backend: backend)
-        let pinnedResult = try? await pinned.resolvedRoot()
-        XCTAssertEqual(pinnedResult?.root, "/pinned")
-        XCTAssertEqual(pinnedResult?.source, .pinned)
-        XCTAssertFalse(pinned.isRemote)
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([folder])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let context = try XCTUnwrap(project.panelContext)
+        _ = await project.syncFiles(isCurrent: { true })
+        XCTAssertTrue(project.fileTree.matchesIndexTarget(root: folder.path, context: context))
+        await manager.newFile()
+        XCTAssertTrue(project.fileTree.matchesIndexTarget(root: folder.path, context: context),
+                      "Opening the new-file draft must not invalidate the existing Files target")
+        XCTAssertNotNil(project.fileTree.draft)
     }
 
-    func testFailedSSHRepositoryProbeNeverLooksLikeAValidLocalDirectory() async throws {
-        let backend = DelayedWorkspaceFixture("disconnected")
-        await backend.setGitProbeUnavailable(true)
-        let context = PanelContext(identity: .automatic(
-            project: UUID(), workspace: "ssh:remote", directory: "/remote/work",
-            foreground: "/remote/another", session: UUID(), connection: UUID(), state: .disconnected
-        ), backend: backend)
-        do {
-            _ = try await context.resolvedRoot()
-            XCTFail("SSH failure must not silently resolve /remote/work as a repository")
-        } catch WorkspaceError.timedOut {
-            // Only confirmed non-repositories are allowed to fall back to cwd.
+    func testRemountedFilesReusesTrustedTargetDuringPendingRefresh() async throws {
+        let backend = DelayedWorkspaceFixture("same-channel")
+        let identity = PanelContext.Identity(
+            project: UUID(), workspace: "ssh:fixture", directory: "/root"
+        )
+        let context = PanelContext(identity: identity, backend: backend)
+        let tree = FileTreeModel()
+        await tree.sync(
+            root: "/root", backend: backend, scope: context.scope,
+            panelIdentity: identity, connectionRevision: context.connectionRevision
+        )
+        XCTAssertEqual(tree.syncedTarget(for: context), identity)
+        XCTAssertEqual(tree.items.count, 1)
+
+        await backend.suspendNextList()
+        let refreshing = Task {
+            await tree.sync(
+                root: "/root", backend: backend, scope: context.scope,
+                panelIdentity: identity, connectionRevision: context.connectionRevision
+            )
         }
+        try await wait { await backend.awaitingList }
+        XCTAssertEqual(tree.syncedTarget(for: context), identity,
+                       "A remounted Files panel must accept a trusted tree while IO is pending")
+        XCTAssertEqual(tree.items.count, 1)
+
+        let otherRoot = PanelContext(
+            identity: .init(project: UUID(), workspace: "ssh:fixture", directory: "/other"),
+            backend: backend
+        )
+        XCTAssertNil(tree.syncedTarget(for: otherRoot),
+                     "An older tree must not operate under a different workspace")
+        let otherBackend = PanelContext(identity: identity, backend: DelayedWorkspaceFixture("other"))
+        XCTAssertNil(tree.syncedTarget(for: otherBackend),
+                     "A reconnected backend cannot use a previous channel's tree")
+        await backend.releaseList()
+        await refreshing.value
+    }
+
+    func testClosingAllTabsDoesNotInvalidatePinnedFilesTarget() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-rapid-close-target-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([folder])
+        let project = try XCTUnwrap(manager.selectedProject)
+        _ = await project.syncFiles(isCurrent: { true })
+        let context = try XCTUnwrap(project.panelContext)
+        XCTAssertEqual(project.fileTree.syncedTarget(for: context), context.identity)
+        for index in 0..<30 {
+            project.openFile(folder.appendingPathComponent("file-\(index).swift").path)
+        }
+        for tab in project.tabs.reversed() { project.close(tab) }
+        XCTAssertTrue(project.tabs.isEmpty)
+        XCTAssertEqual(project.fileTree.syncedTarget(for: context), context.identity,
+                       "Closing the last editor tab must not disable an unchanged Files tree")
+    }
+
+    func testCompletedRenameReportsTrueDiskResultAfterFileTreeTargetSwitch() async throws {
+        let backend = DelayedWorkspaceFixture("old")
+        let tree = FileTreeModel()
+        await tree.sync(root: "/project/root", backend: backend, scope: "ssh:old")
+        let item = try XCTUnwrap(tree.items.first { !$0.isDirectory && !$0.isDraft })
+        await backend.suspendNextRename()
+        let operation = Task { await tree.rename(item, to: "moved.txt") }
+        try await wait { await backend.awaitingRename }
+        await tree.sync(root: "/different/root", backend: backend, scope: "ssh:new")
+        await backend.releaseRename()
+        let result = await operation.value
+        XCTAssertEqual(result, "/project/root/moved.txt",
+                       "A completed backend mutation must be reported even if the old tree was replaced")
+        XCTAssertEqual(tree.rootPath, "/different/root")
+        XCTAssertFalse(tree.items.contains { $0.path == result },
+                       "A late success must not publish into the new tree")
+    }
+
+    func testLocalProjectCannotBorrowTerminalSSHForInteractiveGitRebase() {
+        let project = Project(fallbackName: "Local", workspaceConfiguration: .standard)
+        project.customDirectory = "/tmp/fixed-root"
+        let remote = PanelContext(
+            identity: .init(project: project.id, workspace: "ssh:some-host", directory: "/remote"),
+            backend: DelayedWorkspaceFixture("remote")
+        )
+        XCTAssertThrowsError(try project.newInteractiveGitSession(
+            repository: "/remote", arguments: ["rebase", "--interactive", "HEAD~1"],
+            context: remote
+        ))
+        XCTAssertTrue(project.tabs.isEmpty,
+                      "A local project must not start a remote Git task from a terminal's SSH state")
+    }
+
+    func testIdentityIncludesFixedDirectoryWorkspaceAndProject() {
+        let backend = DelayedWorkspaceFixture("first")
+        func fixed(_ directory: String, workspace: String? = nil, project: UUID) -> PanelContext {
+            PanelContext(identity: .init(
+                project: project, workspace: workspace, directory: directory
+            ), backend: backend)
+        }
+        let project = UUID()
+        XCTAssertNotEqual(fixed("/old", project: project).identity,
+                          fixed("/new", project: project).identity)
+        XCTAssertNotEqual(fixed("/new", project: project).identity,
+                          fixed("/new", workspace: "ssh:remote", project: project).identity)
+        XCTAssertNotEqual(fixed("/new", project: project).identity,
+                          fixed("/new", project: UUID()).identity)
+        XCTAssertEqual(fixed("/new", project: project).cwd, "/new")
+        XCTAssertFalse(fixed("/new", project: project).isRemote)
+        XCTAssertTrue(fixed("/new", workspace: "ssh:remote", project: project).isRemote)
     }
 
     func testSelectedProjectOwnsGitAndFilesRefreshAcrossRapidSwitches() async throws {
@@ -142,7 +246,7 @@ final class PanelContextTests: XCTestCase {
         XCTAssertNil(inactiveResult, "Inactive project must not issue a refresh")
 
         let secondResult = await secondProject.syncFiles(isCurrent: { manager.selectedProject === secondProject })
-        XCTAssertEqual(secondResult?.0, .pinned)
+        XCTAssertEqual(secondResult, secondProject.panelContext?.identity)
         XCTAssertEqual(secondProject.fileTree.rootPath, secondURL.path)
         XCTAssertTrue(secondProject.fileTree.items.contains { $0.path == secondURL.appendingPathComponent("two.txt").path })
         XCTAssertFalse(secondProject.fileTree.items.contains { $0.path == firstURL.appendingPathComponent("one.txt").path })
@@ -151,32 +255,27 @@ final class PanelContextTests: XCTestCase {
         manager.syncGitStatus(git)
         try await wait { git.rootPath == firstURL.path && git.hasResolvedStatus && !git.isRefreshing }
         let firstResult = await firstProject.syncFiles(isCurrent: { manager.selectedProject === firstProject })
-        XCTAssertEqual(firstResult?.0, .pinned)
+        XCTAssertEqual(firstResult, firstProject.panelContext?.identity)
         XCTAssertEqual(firstProject.fileTree.rootPath, firstURL.path)
         XCTAssertTrue(firstProject.fileTree.items.contains { $0.path == firstURL.appendingPathComponent("one.txt").path })
         XCTAssertEqual(secondProject.fileTree.rootPath, secondURL.path)
     }
 
-    func testGitSelectedTargetPredicateRejectsLateResultEvenWhenProjectStillExists() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("bailey-p1-stale-git-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let project = Project(fallbackName: "Pinned", workspaceConfiguration: .standard)
-        project.customDirectory = directory.path
+    func testGitFixedTargetFollowsOnlyAuthorizedProject() throws {
+        let project = Project(fallbackName: "Fixed", workspaceConfiguration: .standard)
+        project.customDirectory = "/tmp/bailey-git-fixed"
         let model = GitStatusModel()
-        var isSelected = true
-        let rejectedLateResult = expectation(description: "A stale target is rechecked after await")
-        model.syncSelectedProject(project: project) { candidate in
-            if !isSelected { rejectedLateResult.fulfill() }
-            return candidate === project && isSelected
-        }
-        // The queued async root resolution is still pending, but the calling
-        // window no longer authorizes publication to this Git panel.
-        isSelected = false
-        await fulfillment(of: [rejectedLateResult], timeout: 2)
-        XCTAssertNotEqual(model.rootPath, directory.path)
+        model.syncSelectedProject(project: project) { $0 === project }
+        XCTAssertEqual(model.rootPath, "/tmp/bailey-git-fixed")
+        XCTAssertTrue(model.matchesPanelTarget(try XCTUnwrap(project.panelContext).identity))
+
+        project.customDirectory = "/tmp/bailey-git-renamed"
+        model.syncSelectedProject(project: project) { $0 === project }
+        XCTAssertEqual(model.rootPath, "/tmp/bailey-git-renamed")
+        XCTAssertTrue(model.matchesPanelTarget(try XCTUnwrap(project.panelContext).identity))
+
+        model.syncSelectedProject(project: project) { _ in false }
+        XCTAssertTrue(model.rootPath.isEmpty)
         XCTAssertFalse(model.matchesPanelTarget(try XCTUnwrap(project.panelContext).identity))
     }
 
@@ -201,6 +300,31 @@ final class PanelContextTests: XCTestCase {
                        "A late old channel must not overwrite the replacement")
     }
 
+    func testPinnedSSHReconnectStartsNewPanelSyncBeforeOldRequestCompletes() async throws {
+        let oldBackend = DelayedWorkspaceFixture("old-channel")
+        let freshBackend = DelayedWorkspaceFixture("new-channel")
+        await oldBackend.suspendNextList()
+        let tree = FileTreeModel()
+        let queue = PanelSyncQueue()
+        let identity = PanelContext.Identity(
+            project: UUID(), workspace: "ssh:fixture", directory: "/root"
+        )
+        queue.run(for: identity, connectionRevision: 1) {
+            await tree.sync(root: "/root", backend: oldBackend,
+                            scope: "ssh:fixture", panelIdentity: identity, connectionRevision: 1)
+        }
+        try await wait { await oldBackend.awaitingList }
+        queue.run(for: identity, connectionRevision: 2) {
+            await tree.sync(root: "/root", backend: freshBackend,
+                            scope: "ssh:fixture", panelIdentity: identity, connectionRevision: 2)
+        }
+        try await wait { tree.items.map(\.path) == ["/root/new.txt"] }
+        await oldBackend.releaseList()
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(tree.items.map(\.path), ["/root/new.txt"],
+                       "An old pinned SSH request must not overwrite the reconnected tree")
+    }
+
     func testPanelSyncQueueSwitchesTargetBeforeOldDirectoryCompletes() async throws {
         let oldBackend = DelayedWorkspaceFixture("old-channel")
         let freshBackend = DelayedWorkspaceFixture("new-channel")
@@ -208,10 +332,10 @@ final class PanelContextTests: XCTestCase {
         let tree = FileTreeModel()
         let queue = PanelSyncQueue()
         let project = UUID()
-        let oldTarget = PanelContext.Identity.pinned(
+        let oldTarget = PanelContext.Identity(
             project: project, workspace: "ssh:fixture", directory: "/root/old"
         )
-        let freshTarget = PanelContext.Identity.pinned(
+        let freshTarget = PanelContext.Identity(
             project: project, workspace: "ssh:fixture", directory: "/root/new"
         )
         queue.run(for: oldTarget) {
@@ -240,13 +364,13 @@ final class PanelContextTests: XCTestCase {
         let tree = FileTreeModel()
         let queue = PanelSyncQueue()
         let project = UUID()
-        let oldTarget = PanelContext.Identity.pinned(
+        let oldTarget = PanelContext.Identity(
             project: project, workspace: "ssh:fixture", directory: "/root/old"
         )
-        let middleTarget = PanelContext.Identity.pinned(
+        let middleTarget = PanelContext.Identity(
             project: project, workspace: "ssh:fixture", directory: "/root/middle"
         )
-        let newestTarget = PanelContext.Identity.pinned(
+        let newestTarget = PanelContext.Identity(
             project: project, workspace: "ssh:fixture", directory: "/root/new"
         )
         queue.run(for: oldTarget) {
@@ -315,7 +439,7 @@ final class PanelContextTests: XCTestCase {
         let backend = DelayedWorkspaceFixture("old-channel")
         await backend.suspendNextList()
         let queue = PanelSyncQueue()
-        let target = PanelContext.Identity.pinned(
+        let target = PanelContext.Identity(
             project: UUID(), workspace: "ssh:fixture", directory: "/root"
         )
         var completed: [String] = []

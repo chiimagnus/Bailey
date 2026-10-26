@@ -2,43 +2,77 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum FileTreeCommand {
+    case copy([String], cut: Bool)
+    case paste(into: String)
+    case delete([String])
+    case drop([String], into: String, copy: Bool)
+}
+
+@MainActor
+enum FileTreeClipboard {
+    struct Record: Codable, Equatable {
+        let token: UUID
+        let project: UUID
+        let identity: String
+        let root: String
+        let connectionRevision: UInt64?
+        let paths: [String]
+        let cut: Bool
+    }
+
+    static let type = NSPasteboard.PasteboardType("com.chiimagnus.bailey.files.transfer")
+
+    @discardableResult
+    static func write(_ record: Record, to pasteboard: NSPasteboard = .general) -> Bool {
+        guard let data = try? JSONEncoder().encode(record) else { return false }
+        pasteboard.declareTypes([type, .string], owner: nil)
+        guard pasteboard.setData(data, forType: type) else { return false }
+        pasteboard.setString(record.paths.joined(separator: "\n"), forType: .string)
+        return true
+    }
+
+    static func read(from pasteboard: NSPasteboard = .general) -> Record? {
+        guard let data = pasteboard.data(forType: type) else { return nil }
+        return try? JSONDecoder().decode(Record.self, from: data)
+    }
+}
+
+@MainActor
+enum FileTreeDrag {
+    static let type = "com.chiimagnus.bailey.files.internal-drag"
+
+    struct Record: Codable {
+        let source: FileTreeClipboard.Record
+        let window: String
+        let nonce: UUID
+    }
+}
+
 struct FileTreePanel: View {
     let model: FileTreeModel
     let git: GitStatusModel
-    let session: TerminalSession?
     let sshHost: String?
-    /// Set while the tree follows the terminal's foreground job into another
-    /// checkout, so the header says why the root moved.
-    let rootBadge: (text: String, description: String)?
     let currentFilePath: String?
     let openFile: (String, Bool) -> Void
     var isActive = true
     var canFocusKeyboard: () -> Bool = { true }
-    let onRename: (_ oldPath: String, _ newPath: String) -> Void
+    let renameFile: (FileTreeModel.Item, String) async -> String?
+    let onCommand: (FileTreeCommand) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
     let canImportFromFinder: Bool
     let importFromFinder: ([NSItemProvider], String) -> Bool
+    var makeDragProvider: (FileTreeModel.Item) -> NSItemProvider = { _ in NSItemProvider() }
+    var receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool = { _, _, _ in false }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 PanelHeader(title: model.rootName, subtitle: model.rootPath)
-                if let rootBadge {
-                    Text(verbatim: rootBadge.text)
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.primary.opacity(0.09))
-                        )
-                        .accessibilityLabel(rootBadge.description)
-                }
                 // Finder can only reach the local disk; while remote this
                 // path names a directory on another machine.
-                if sshHost == nil && session?.location.remoteConnection == nil {
+                if sshHost == nil {
                     Button {
                         NSWorkspace.shared.activateFileViewerSelecting(
                             [URL(fileURLWithPath: model.rootPath)]
@@ -51,25 +85,49 @@ struct FileTreePanel: View {
                     .buttonStyle(.plain)
                     .help(String(localized: "Reveal in Finder", table: "Sidebar"))
                 }
+                Menu {
+                    Toggle(String(localized: "Show Excluded Files", table: "Sidebar"),
+                           isOn: Binding(
+                            get: { model.showExcluded },
+                            set: { visible in
+                                if isCurrentTarget() { Task { await model.setShowExcluded(visible) } }
+                            }
+                           ))
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .panelFont(size: 11)
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .accessibilityIdentifier("bailey.files.showExcludedMenu")
+                .fixedSize()
             }
             .padding(.horizontal, 12)
             .padding(.top, 8)
             .padding(.bottom, 8)
 
             FileTreeScrollView(
-                model: model, git: git, session: session,
+                model: model, git: git,
                 sshHost: sshHost, currentFilePath: currentFilePath,
                 openFile: openFile, isActive: isActive,
-                canFocusKeyboard: canFocusKeyboard, onRename: onRename,
-                refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget,
+                canFocusKeyboard: canFocusKeyboard, renameFile: renameFile,
+                onCommand: onCommand, refreshGitStatus: refreshGitStatus,
+                isCurrentTarget: isCurrentTarget,
                 canImportFromFinder: canImportFromFinder,
-                importFromFinder: importFromFinder
+                importFromFinder: importFromFinder,
+                makeDragProvider: makeDragProvider,
+                receiveInternalDrop: receiveInternalDrop
             )
         }
-        .onDrop(of: [UTType.fileURL.identifier], delegate: FileTreeImportDrop(
+        .onChange(of: model.settings.filesExclude) { _, _ in
+            Task { await model.refreshVisibility() }
+        }
+        .onDrop(of: [FileTreeDrag.type, UTType.fileURL.identifier], delegate: FileTreeImportDrop(
             directory: model.rootPath,
             enabled: canImportFromFinder && isCurrentTarget(),
-            importFromFinder: importFromFinder
+            canAcceptInternal: isCurrentTarget(),
+            importFromFinder: importFromFinder,
+            receiveInternalDrop: receiveInternalDrop
         ))
     }
 }
@@ -79,18 +137,36 @@ struct FileTreePanel: View {
 private struct FileTreeImportDrop: DropDelegate {
     let directory: String
     let enabled: Bool
+    let canAcceptInternal: Bool
     let importFromFinder: ([NSItemProvider], String) -> Bool
+    let receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool
 
     func validateDrop(info: DropInfo) -> Bool {
-        enabled && !directory.isEmpty && info.hasItemsConforming(to: [UTType.fileURL.identifier])
+        guard !directory.isEmpty else { return false }
+        if info.hasItemsConforming(to: [FileTreeDrag.type]) { return true }
+        return enabled && info.hasItemsConforming(to: [UTType.fileURL.identifier])
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: validateDrop(info: info) ? .copy : .forbidden)
+        guard validateDrop(info: info) else { return DropProposal(operation: .forbidden) }
+        if info.hasItemsConforming(to: [FileTreeDrag.type]) {
+            return DropProposal(operation: canAcceptInternal
+                ? (NSEvent.modifierFlags.contains(.option) ? .copy : .move) : .forbidden)
+        }
+        return DropProposal(operation: .copy)
     }
 
     func performDrop(info: DropInfo) -> Bool {
         guard validateDrop(info: info) else { return false }
+        if info.hasItemsConforming(to: [FileTreeDrag.type]) {
+            // Consume even a foreign private drag so its public fileURL never
+            // falls through to Finder import in this Files panel.
+            if canAcceptInternal,
+               let provider = info.itemProviders(for: [FileTreeDrag.type]).first {
+                _ = receiveInternalDrop(provider, directory, NSEvent.modifierFlags.contains(.option))
+            }
+            return true
+        }
         return importFromFinder(info.itemProviders(for: [UTType.fileURL.identifier]), directory)
     }
 }
@@ -100,18 +176,19 @@ private struct FileTreeImportDrop: DropDelegate {
 private struct FileTreeScrollView: View {
     let model: FileTreeModel
     let git: GitStatusModel
-    let session: TerminalSession?
     let sshHost: String?
     let currentFilePath: String?
     let openFile: (String, Bool) -> Void
     let isActive: Bool
     let canFocusKeyboard: () -> Bool
-    let onRename: (String, String) -> Void
+    let renameFile: (FileTreeModel.Item, String) async -> String?
+    let onCommand: (FileTreeCommand) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
     let canImportFromFinder: Bool
     let importFromFinder: ([NSItemProvider], String) -> Bool
-    @Environment(\.panelFontScale) private var fontScale
+    let makeDragProvider: (FileTreeModel.Item) -> NSItemProvider
+    let receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool
     @Environment(\.controlActiveState) private var controlActiveState
     @State private var keyboardOwner = TreeKeyboardOwner()
     @State private var keyboardFocused = false
@@ -124,22 +201,28 @@ private struct FileTreeScrollView: View {
                     ForEach(model.items) { item in
                         FileTreeRow(
                             model: model, git: git, item: item,
-                            session: session, sshHost: sshHost,
+                            sshHost: sshHost,
                             currentFilePath: currentFilePath,
                             openFile: openFile,
                             listFocused: keyboardFocused && isActive && controlActiveState == .key,
                             focusKeyboard: {
                                 if canFocusKeyboard() { keyboardOwner.focus() }
                             },
-                            onRename: onRename, refreshGitStatus: refreshGitStatus,
-                            isCurrentTarget: isCurrentTarget
+                            renameFile: renameFile, onCommand: onCommand,
+                            refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget,
+                            makeDragProvider: makeDragProvider,
+                            canImportFromFinder: canImportFromFinder,
+                            importFromFinder: importFromFinder,
+                            receiveInternalDrop: receiveInternalDrop
                         )
                         .id(item.path)
-                        .onDrop(of: [UTType.fileURL.identifier], delegate: FileTreeImportDrop(
+                        .onDrop(of: [FileTreeDrag.type, UTType.fileURL.identifier], delegate: FileTreeImportDrop(
                             directory: item.isDirectory ? item.path
                                 : (item.path as NSString).deletingLastPathComponent,
                             enabled: canImportFromFinder && !item.isDraft && isCurrentTarget(),
-                            importFromFinder: importFromFinder
+                            canAcceptInternal: !item.isDraft && isCurrentTarget(),
+                            importFromFinder: importFromFinder,
+                            receiveInternalDrop: receiveInternalDrop
                         ))
                     }
                 }
@@ -208,17 +291,36 @@ private struct FileTreeScrollView: View {
 
     private func handleKey(_ event: NSEvent) -> Bool {
         guard keyboardOwner.view?.window?.firstResponder === keyboardOwner.view,
-              isActive, canFocusKeyboard(), isCurrentTarget(),
-              event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+              isActive, canFocusKeyboard(), isCurrentTarget()
         else { return false }
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if modifiers == [.command] {
+            if event.keyCode == 0 { model.selectAllVisible(); return true }
+            let paths = model.selectedOperationPaths
+            switch event.keyCode {
+            case 8: onCommand(.copy(paths, cut: false)); return true // C
+            case 7: onCommand(.copy(paths, cut: true)); return true // X
+            case 9: // V
+                onCommand(.paste(into: model.selectedDirectoryPath ?? model.rootPath))
+                return true
+            case 51, 117: onCommand(.delete(paths)); return true // Delete
+            default: break
+            }
+        }
+        if modifiers.isEmpty, event.keyCode == 51 || event.keyCode == 117 {
+            let paths = model.selectedOperationPaths
+            onCommand(.delete(paths))
+            return true
+        }
+        guard modifiers.isEmpty || modifiers == [.shift] else { return false }
         switch event.keyCode {
-        case 125: model.moveSelection(by: 1) // Down
-        case 126: model.moveSelection(by: -1) // Up
-        case 124: // Right
+        case 125: model.moveSelection(by: 1, extending: modifiers.contains(.shift)) // Down
+        case 126: model.moveSelection(by: -1, extending: modifiers.contains(.shift)) // Up
+        case 124 where modifiers.isEmpty: // Right
             guard let row = model.selectedItem, row.isDirectory else { return false }
             if !model.isExpanded(row) { Task { await model.toggle(row) } }
             else if let child = model.nextVisibleChild(of: row) { model.select(child) }
-        case 123: // Left
+        case 123 where modifiers.isEmpty: // Left
             guard let row = model.selectedItem else { return false }
             if row.isDirectory, model.isExpanded(row) {
                 Task { await model.toggle(row) }
@@ -227,15 +329,15 @@ private struct FileTreeScrollView: View {
                 .max(by: { $0.path.count < $1.path.count }) {
                 model.select(parent)
             }
-        case 36, 76: // Return and keypad Enter
+        case 36 where modifiers.isEmpty, 76 where modifiers.isEmpty: // Return and keypad Enter
             guard let row = model.selectedItem else { return false }
             if row.isDirectory { Task { await model.toggle(row) } }
             else { openFile(row.path, true) }
-        case 49: // Space previews without moving keyboard focus
+        case 49 where modifiers.isEmpty: // Space previews without moving keyboard focus
             guard let row = model.selectedItem else { return false }
             if row.isDirectory { Task { await model.toggle(row) } }
             else { openFile(row.path, false) }
-        case 53: model.clearSelection() // Escape
+        case 53 where modifiers.isEmpty: model.clearSelection() // Escape
         default: return false
         }
         return true
@@ -247,23 +349,39 @@ private struct FileTreeRow: View {
     let model: FileTreeModel
     let git: GitStatusModel
     let item: FileTreeModel.Item
-    let session: TerminalSession?
     let sshHost: String?
     let currentFilePath: String?
     let openFile: (String, Bool) -> Void
     let listFocused: Bool
     let focusKeyboard: () -> Void
-    let onRename: (_ oldPath: String, _ newPath: String) -> Void
+    let renameFile: (FileTreeModel.Item, String) async -> String?
+    let onCommand: (FileTreeCommand) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
+    let makeDragProvider: (FileTreeModel.Item) -> NSItemProvider
+    let canImportFromFinder: Bool
+    let importFromFinder: ([NSItemProvider], String) -> Bool
+    let receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool
 
     @State private var editingName = ""
+    @State private var hoveredCompactPath: String?
     @FocusState private var fieldFocused: Bool
     @Environment(\.panelFontScale) private var fontScale
 
     private var isRenaming: Bool { model.renamingPath == item.path }
     private var hasKeyboardCursor: Bool {
         model.selectedPath == item.path && listFocused
+    }
+
+    private var isMultiSelected: Bool { model.selectedPaths.contains(item.path) }
+
+    private func selectForClick(componentPath: String? = nil) -> Bool {
+        let modifiers = NSApp.currentEvent?.modifierFlags ?? []
+        let extending = modifiers.contains(.shift)
+        let toggling = modifiers.contains(.command) && !extending
+        model.select(item, extending: extending, toggling: toggling, componentPath: componentPath)
+        focusKeyboard()
+        return extending || toggling
     }
 
     /// The file open in the active tab, so it reads as selected in the tree.
@@ -280,12 +398,8 @@ private struct FileTreeRow: View {
         return row
     }
 
-    /// Whether this row names a file on another machine. A connection that has
-    /// dropped still counts: the path is remote either way, and handing it to
-    /// Finder would open whatever sits at the same path locally.
-    private var isRemote: Bool {
-        sshHost != nil || session?.location.remoteConnection != nil
-    }
+    /// Remote project paths must never be interpreted as Mac file URLs.
+    private var isRemote: Bool { sshHost != nil }
 
     var body: some View {
         let _ = themeChanges.revision
@@ -304,102 +418,90 @@ private struct FileTreeRow: View {
                 renameRow
                     .modifier(layout)
             }
-            .contextMenu { rowMenu }
-        } else if isRemote {
-            // A remote POSIX path is not a Mac file URL, even when the same
-            // spelling happens to exist on disk here. Keep Copy Path only.
-            semanticRow.contextMenu { rowMenu }
+            .contextMenu { rowMenu(for: item) }
         } else {
+            // Local drags retain public fileURL for Finder; SSH drags publish only
+            // the process-private Files type, never a Mac path for a remote file.
             semanticRow
-                .contextMenu { rowMenu }
-                .onDrag {
-                    NSItemProvider(object: URL(fileURLWithPath: item.path) as NSURL)
-                }
+                .contextMenu { rowMenu(for: activeMenuTarget) }
+                .onDrag { makeDragProvider(item) }
         }
     }
 
+    private var activeMenuTarget: FileTreeModel.Item {
+        guard model.selectedPath == item.path,
+              let path = model.selectedCompactPath,
+              let component = item.compactComponents.first(where: { $0.path == path })
+        else { return item }
+        return item.item(for: component)
+    }
+
     @ViewBuilder
-    private var rowMenu: some View {
-        if !item.isDirectory {
-            Button(String(localized: "Open", table: "Sidebar")) {
-                if isCurrentTarget() { openFile(item.path, true) }
-            }
-        }
-        // Finder and the default app can only reach the local disk.
-        if !isRemote {
-            Button(String(localized: "Open in Default App", table: "Sidebar")) {
-                NSWorkspace.shared.open(URL(fileURLWithPath: item.path))
-            }
-            Button(String(localized: "Reveal in Finder", table: "Sidebar")) {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
-            }
-        }
-        Button(String(localized: "Copy Path", table: "Sidebar")) {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(item.path, forType: .string)
-        }
-        if item.isDirectory {
-            Button(String(localized: "cd Here", table: "Sidebar")) {
-                guard isCurrentTarget() else { return }
-                session?.sendCommand("cd " + shellQuote(item.path) + "\n")
-            }
-            Divider()
+    private func rowMenu(for target: FileTreeModel.Item) -> some View {
+        let selection = target.path == item.path
+            ? model.contextSelection(for: item) : [target.path]
+        if target.isDirectory {
             Button(String(localized: "New File…", table: "Sidebar")) {
                 Task {
                     guard isCurrentTarget() else { return }
-                    await model.beginNewFile(in: item.path)
+                    await model.beginNewFile(in: target.path)
                 }
             }
             Button(String(localized: "New Folder…", table: "Sidebar")) {
                 Task {
                     guard isCurrentTarget() else { return }
-                    await model.beginNewFolder(in: item.path)
+                    await model.beginNewFolder(in: target.path)
                 }
             }
+        } else {
+            Button(String(localized: "Open", table: "Sidebar")) {
+                if isCurrentTarget() { openFile(target.path, true) }
+            }
+        }
+        if !isRemote {
+            Button(String(localized: "Open in Default App", table: "Sidebar")) {
+                NSWorkspace.shared.open(URL(fileURLWithPath: target.path))
+            }
+            Button(String(localized: "Reveal in Finder", table: "Sidebar")) {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: target.path)])
+            }
+        }
+        Divider()
+        Button(String(localized: "Cut", table: "Sidebar")) {
+            if isCurrentTarget() { onCommand(.copy(selection, cut: true)) }
+        }
+        Button(String(localized: "Copy", table: "Sidebar")) {
+            if isCurrentTarget() { onCommand(.copy(selection, cut: false)) }
+        }
+        if target.isDirectory {
+            Button(String(localized: "Paste", table: "Sidebar")) {
+                if isCurrentTarget() { onCommand(.paste(into: target.path)) }
+            }
+        }
+        Divider()
+        Button(String(localized: "Copy Path", table: "Sidebar")) {
+            guard isCurrentTarget() else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(selection.joined(separator: "\n"), forType: .string)
+        }
+        Button(String(localized: "Copy Relative Path", table: "Sidebar")) {
+            guard isCurrentTarget() else { return }
+            let root = model.rootPath == "/" ? "/" : model.rootPath + "/"
+            let paths = selection.filter { $0.hasPrefix(root) }
+                .map { String($0.dropFirst(root.count)) }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(paths.joined(separator: "\n"), forType: .string)
         }
         Divider()
         Button(String(localized: "Rename", table: "Sidebar")) {
             guard isCurrentTarget() else { return }
-            model.beginRename(item)
+            model.beginRename(target)
         }
-        if isRemote {
-            // No Trash on the remote: Freedesktop semantics vary between
-            // distributions and a silently misplaced file is worse than an
-            // explicit delete the user confirmed.
-            Button(String(localized: "Delete…", table: "Sidebar"), role: .destructive) {
-                guard isCurrentTarget(), confirmRemoteDelete(), isCurrentTarget() else { return }
-                Task {
-                    guard isCurrentTarget() else { return }
-                    await model.delete(item)
-                    refreshGitStatus()
-                }
-            }
-        } else {
-            Button(String(localized: "Move to Trash", table: "Sidebar"), role: .destructive) {
-                Task {
-                    guard isCurrentTarget() else { return }
-                    await model.moveToTrash(item)
-                    refreshGitStatus()
-                }
-            }
+        Button(isRemote ? String(localized: "Delete…", table: "Sidebar")
+                        : String(localized: "Move to Trash", table: "Sidebar"),
+               role: .destructive) {
+            if isCurrentTarget() { onCommand(.delete(selection)) }
         }
-    }
-
-    /// Names the full remote path, because there is nothing to undo it with.
-    private func confirmRemoteDelete() -> Bool {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = String(
-            localized: "Delete “\(item.name)” on \(sshHost ?? session?.location.remoteConnection?.displayName ?? "the remote machine")?", table: "Sidebar",
-            comment: "Remote delete confirmation. The placeholders are a file name and a remote machine as user@host."
-        )
-        alert.informativeText = String(
-            localized: "\(item.path) will be deleted. This cannot be undone — a remote file does not go to the Trash.", table: "Sidebar",
-            comment: "Remote delete confirmation detail. The placeholder is a full path."
-        )
-        alert.addButton(withTitle: String(localized: "Delete", table: "Sidebar"))
-        alert.addButton(withTitle: String(localized: "Cancel", table: "Sidebar"))
-        return alert.runModal() == .alertFirstButtonReturn
     }
 
     /// Commits an inline rename and, when the file actually moved, tells the
@@ -408,14 +510,10 @@ private struct FileTreeRow: View {
     private func commitRename() {
         guard isCurrentTarget() else { return }
         guard isRenaming else { return }
-        let oldPath = item.path
         let newName = editingName
         Task {
             guard isCurrentTarget() else { return }
-            if let newPath = await model.rename(item, to: newName) {
-                onRename(oldPath, newPath)
-                refreshGitStatus()
-            }
+            if await renameFile(item, newName) != nil { refreshGitStatus() }
         }
     }
 
@@ -433,14 +531,58 @@ private struct FileTreeRow: View {
         }
     }
 
+    private func compactSegmentView(_ component: TreeDisplayModel.Row.CompactComponent) -> AnyView {
+        let target = item.item(for: component)
+        return AnyView(
+            Text(component.name)
+                .underline(model.selectedPath == item.path
+                    && (model.selectedCompactPath ?? item.path) == component.path)
+                .padding(.horizontal, 2)
+                .contentShape(Rectangle())
+                .background(
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(hoveredCompactPath == component.path
+                            ? Color.primary.opacity(0.09) : .clear)
+                )
+                .onHover { hovered in
+                    hoveredCompactPath = hovered ? component.path : nil
+                }
+                .highPriorityGesture(TapGesture().onEnded {
+                    guard isCurrentTarget() else { return }
+                    if selectForClick(componentPath: component.path) { return }
+                    Task {
+                        guard isCurrentTarget() else { return }
+                        await model.toggle(item)
+                    }
+                })
+                .contextMenu { rowMenu(for: target) }
+                .onDrag { makeDragProvider(target) }
+                .onDrop(
+                    of: [FileTreeDrag.type, UTType.fileURL.identifier],
+                    delegate: FileTreeImportDrop(
+                        directory: component.path,
+                        enabled: canImportFromFinder && isCurrentTarget(),
+                        canAcceptInternal: isCurrentTarget(),
+                        importFromFinder: importFromFinder,
+                        receiveInternalDrop: receiveInternalDrop
+                    )
+                )
+                .accessibilityLabel(component.name)
+                .accessibilityIdentifier(
+                    "bailey.tree.folder.component.\(item.compactComponents.firstIndex(of: component) ?? 0)"
+                )
+        )
+    }
+
     @ViewBuilder
     private var semanticRow: some View {
         if item.isDirectory {
             TreeFolderRow(row: displayRow, scale: fontScale,
-                          focusRing: hasKeyboardCursor) {
+                          focusRing: hasKeyboardCursor, multiSelected: isMultiSelected,
+                          multiSelectionEnabled: true,
+                          compactSegment: { component in compactSegmentView(component) }) {
                 guard isCurrentTarget() else { return }
-                model.select(item)
-                focusKeyboard()
+                if selectForClick() { return }
                 Task {
                     guard isCurrentTarget() else { return }
                     await model.toggle(item)
@@ -449,15 +591,16 @@ private struct FileTreeRow: View {
         } else {
             TreeFileRow(
                 row: displayRow, scale: fontScale, selected: isCurrent,
+                multiSelected: isMultiSelected, multiSelectionEnabled: true,
                 focusRing: hasKeyboardCursor,
                 open: {
                     guard isCurrentTarget() else { return }
-                    model.select(item)
-                    openFile(item.path, false)
-                    focusKeyboard()
+                    if !selectForClick() { openFile(item.path, false) }
                 },
                 activate: {
-                    guard isCurrentTarget() else { return }
+                    let modifiers = NSApp.currentEvent?.modifierFlags ?? []
+                    guard isCurrentTarget(), !modifiers.contains(.command),
+                          !modifiers.contains(.shift) else { return }
                     openFile(item.path, true)
                 }
             ) { _ in EmptyView() }
@@ -544,8 +687,4 @@ private struct FileTreeRow: View {
             }
         }
     }
-}
-
-private func shellQuote(_ path: String) -> String {
-    "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }

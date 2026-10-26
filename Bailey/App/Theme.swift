@@ -177,12 +177,6 @@ enum Theme {
         selection.withLock { dark ? $0.dark : $0.light }
     }
 
-    /// Whether the selected theme for one appearance is a bailey built-in
-    /// Default theme, which keeps the sidebar's translucent material.
-    nonisolated static func isDefault(dark: Bool) -> Bool {
-        terminal(dark: dark).isBaileyDefault
-    }
-
     /// A copy of a catalog theme under a bailey-owned name.
     private nonisolated static func baileyDefault(
         named name: String, from catalogName: String, dark: Bool
@@ -215,13 +209,6 @@ enum Theme {
                 ? NSColor.labelColor.withAlphaComponent(0.06)
                 : theme.surfaceNSColor(elevation: 0.08)
         }
-    }
-
-    /// Sidebar fill resolved for one appearance. The Settings theme previews
-    /// draw light and dark side by side, so they can't use the dynamic
-    /// `sidebar` — it would resolve both halves to the ambient appearance.
-    static func sidebarFill(dark: Bool) -> NSColor {
-        terminal(dark: dark).sidebarNSColor
     }
 
     /// A fresh dynamic color per access: cached instances keep resolving the

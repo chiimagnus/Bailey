@@ -613,8 +613,13 @@ struct DockTabGroupView: View {
         Divider()
         if case .file(let file) = tab.content {
             let path = file.path
-            Button(String(localized: "Reveal in Finder", table: "Interface")) {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+            Button(String(localized: "Reveal in File Manager", table: "Interface")) {
+                manager.revealFileInFileManager(tabID: tabID, in: project)
+            }
+            if file.workspaceIdentity == nil {
+                Button(String(localized: "Reveal in Finder", table: "Interface")) {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                }
             }
             Button(String(localized: "Copy Absolute Path", table: "Interface")) {
                 NSPasteboard.general.clearContents()

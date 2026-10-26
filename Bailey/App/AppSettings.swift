@@ -104,6 +104,7 @@ final class AppSettings {
     static let defaultPanelFontSize: Double = 14
     static let panelFontSizeRange: ClosedRange<Double> = 9...18
     static let defaultToolbarVisibility: ToolbarVisibility = .hide
+    static let defaultFilesExclude = ["**/.git"]
 
     /// Loaded once at launch; changing the initial template never rearranges
     /// a project's already saved dock tree.
@@ -216,6 +217,15 @@ final class AppSettings {
         didSet { save() }
     }
 
+    private(set) var filesExclude: [String]
+
+    /// Apply one validated Files rule set only after its configuration is on disk.
+    func applyFilesExclude(_ patterns: [String]) throws {
+        try FilesExcludeGlob.validate(patterns)
+        try persist(exclude: patterns)
+        filesExclude = patterns
+    }
+
     init(configURL: URL = AppSettings.configURL,
          languageDefaults: UserDefaults = .standard,
          languageDomain: String = AppIdentity.bundleIdentifier,
@@ -263,6 +273,12 @@ final class AppSettings {
         macosOptionAsAlt = toml["terminal.macos-option-as-alt"]?.bool ?? false
         wrapLines = toml["editor.wrap-lines"]?.bool ?? false
         restoreTerminalHistory = toml["terminal.restore-history"]?.bool ?? false
+        if let patterns = toml["files.exclude"]?.strings,
+           (try? FilesExcludeGlob.validate(patterns)) != nil {
+            filesExclude = patterns
+        } else {
+            filesExclude = Self.defaultFilesExclude
+        }
         if controlsApplicationAppearance {
             applyAppearance()
             reloadThemeSelection()
@@ -347,9 +363,16 @@ final class AppSettings {
         macosOptionAsAlt = false
         wrapLines = false
         restoreTerminalHistory = false
+        do { try applyFilesExclude(Self.defaultFilesExclude) }
+        catch { NSLog("bailey: failed to reset Files exclusions: \(error)") }
     }
 
     private func save() {
+        do { try persist(exclude: filesExclude) }
+        catch { NSLog("bailey: failed to write \(settingsURL.path): \(error)") }
+    }
+
+    private func persist(exclude: [String]) throws {
         var lines: [String] = []
         if theme != .system {
             lines.append("theme = \(TOML.quote(theme.rawValue))")
@@ -399,6 +422,9 @@ final class AppSettings {
         if restoreTerminalHistory {
             lines.append("terminal.restore-history = true")
         }
+        if exclude != Self.defaultFilesExclude {
+            lines.append("files.exclude = \(TOML.list(exclude))")
+        }
         let standard = DockWorkspaceConfiguration.standard
         let configured = TOML.parse(at: settingsURL).flatMap(Self.workspace)
             ?? workspaceConfiguration
@@ -418,14 +444,10 @@ final class AppSettings {
             lines.append("workspace.edge-threshold = \(TOML.number(configured.edgeThreshold))")
         }
         let dir = settingsURL.deletingLastPathComponent()
-        do {
-            try FileManager.default.createDirectory(
-                at: dir, withIntermediateDirectories: true)
-            try (lines.joined(separator: "\n") + "\n")
-                .write(to: settingsURL, atomically: true, encoding: .utf8)
-        } catch {
-            NSLog("bailey: failed to write \(settingsURL.path): \(error)")
-        }
+        try FileManager.default.createDirectory(
+            at: dir, withIntermediateDirectories: true)
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: settingsURL, atomically: true, encoding: .utf8)
     }
 
 }

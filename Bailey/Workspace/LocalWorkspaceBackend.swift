@@ -71,6 +71,21 @@ nonisolated enum LocalPathScope {
         guard !directory.isEmpty else { return false }
         return path == directory || path.hasPrefix(directory.hasSuffix("/") ? directory : directory + "/")
     }
+
+    /// After a move, resolve surviving ancestors rather than the now-missing old leaf.
+    static func resolvedPath(_ path: String) -> String {
+        var url = URL(fileURLWithPath: path)
+        var missing: [String] = []
+        while !FileManager.default.fileExists(atPath: url.path) {
+            let parent = url.deletingLastPathComponent()
+            guard parent != url else { break }
+            missing.append(url.lastPathComponent)
+            url = parent
+        }
+        return missing.reversed().reduce(url.resolvingSymlinksInPath()) {
+            $0.appendingPathComponent($1)
+        }.path
+    }
 }
 
 
@@ -206,8 +221,8 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             let destination = target.appendingPathComponent(
                 original.lastPathComponent, isDirectory: isRealDirectory
             )
-            let sourceReal = original.resolvingSymlinksInPath().path
-            if isRealDirectory, LocalPathScope.contains(targetReal, in: sourceReal) {
+            if isRealDirectory,
+               LocalPathScope.contains(targetReal, in: original.resolvingSymlinksInPath().path) {
                 failures.append(String(
                     localized: "Cannot copy \(original.lastPathComponent) into itself or a subfolder.",
                     table: "Workspace"
@@ -222,26 +237,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
                 continue
             }
             do {
-                // Copy to a system replacement directory on the destination
-                // volume. A recursive copy failure must never publish a
-                // partial folder inside the user's actual workspace.
-                let stagingDirectory = try fm.url(
-                    for: .itemReplacementDirectory, in: .userDomainMask,
-                    appropriateFor: target, create: true
-                )
-                defer { try? fm.removeItem(at: stagingDirectory) }
-                let staged = stagingDirectory.appendingPathComponent(original.lastPathComponent)
-                try fm.copyItem(at: original, to: staged)
-                // A source can finish copying after another process created
-                // the destination. RENAME_EXCL makes no-overwrite atomic.
-                let status = staged.path.withCString { from in
-                    destination.path.withCString { to in
-                        renamex_np(from, to, UInt32(RENAME_EXCL))
-                    }
-                }
-                guard status == 0 else {
-                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-                }
+                try Self.copyExclusive(from: original, to: destination)
                 copied.append(destination.path)
             } catch {
                 failures.append(String(
@@ -251,6 +247,49 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
             }
         }
         return LocalFileImportResult(copied: copied, failures: failures)
+    }
+
+    @concurrent func copy(from: String, to: String) async throws {
+        try Self.copyExclusive(
+            from: URL(fileURLWithPath: from).standardizedFileURL,
+            to: URL(fileURLWithPath: to).standardizedFileURL
+        )
+    }
+
+    private static func copyExclusive(from source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        var sourceInfo = Darwin.stat()
+        guard lstat(source.path, &sourceInfo) == 0 else { throw WorkspaceError.notFound }
+        let type = sourceInfo.st_mode & S_IFMT
+        guard type == S_IFREG || type == S_IFDIR || type == S_IFLNK else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTSUP))
+        }
+        let parent = destination.deletingLastPathComponent()
+        let parentReal = parent.resolvingSymlinksInPath().path
+        if type == S_IFDIR,
+           LocalPathScope.contains(parentReal, in: source.resolvingSymlinksInPath().path) {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
+        }
+        var occupied = Darwin.stat()
+        if lstat(destination.path, &occupied) == 0 {
+            throw CocoaError(.fileWriteFileExists)
+        }
+        // Copy privately on the destination volume, then atomically publish without clobbering.
+        let stagingDirectory = try fm.url(
+            for: .itemReplacementDirectory, in: .userDomainMask,
+            appropriateFor: parent, create: true
+        )
+        defer { try? fm.removeItem(at: stagingDirectory) }
+        let staged = stagingDirectory.appendingPathComponent(source.lastPathComponent)
+        try fm.copyItem(at: source, to: staged)
+        let status = staged.path.withCString { from in
+            destination.path.withCString { to in
+                renamex_np(from, to, UInt32(RENAME_EXCL))
+            }
+        }
+        guard status == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
     }
 
     @concurrent func createFile(path: String) async throws {
@@ -275,18 +314,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         }
     }
 
-    // MARK: - Git geography
-
-    @concurrent func gitRoot(containing path: String) async throws -> String? {
-        Self.gitRootSync(containing: path)
-    }
-
-    @concurrent func isLinkedWorktree(_ root: String) async throws -> Bool {
-        Self.isLinkedWorktreeSync(root)
-    }
-
-    /// Shared with `Project.panelRoot`, which still has a synchronous form for
-    /// callers that cannot await (the command palette and the Git panel).
+    /// The synchronous file metadata path used by local workspace operations.
     static func statSync(_ path: String) -> WorkspaceStat? {
         let fm = FileManager.default
         var isDirectory: ObjCBool = false
@@ -307,36 +335,7 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         )
     }
 
-    /// Walks up from `path` looking for a `.git` entry — a directory in normal
-    /// checkouts, a file in worktrees and submodules.
-    static func gitRootSync(containing path: String) -> String? {
-        var dir = (path as NSString).standardizingPath
-        guard dir.hasPrefix("/") else { return nil }
-        let fm = FileManager.default
-        while true {
-            if fm.fileExists(atPath: (dir as NSString).appendingPathComponent(".git")) {
-                return dir
-            }
-            let parent = (dir as NSString).deletingLastPathComponent
-            if parent == dir { return nil }
-            dir = parent
-        }
-    }
-
-    /// A linked worktree's `.git` is a file pointing into the main
-    /// repository's `worktrees` directory (a submodule's points into
-    /// `modules` instead).
-    static func isLinkedWorktreeSync(_ root: String) -> Bool {
-        let gitPath = (root as NSString).appendingPathComponent(".git")
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: gitPath, isDirectory: &isDirectory),
-              !isDirectory.boolValue,
-              let contents = try? String(contentsOfFile: gitPath, encoding: .utf8)
-        else { return false }
-        return contents.contains("/worktrees/")
-    }
-
-    // MARK: - Processes
+    // MARK: - Commands
 
     static let loginShell: String = {
         if let pw = getpwuid(getuid()), let shell = pw.pointee.pw_shell {
@@ -456,98 +455,4 @@ nonisolated final class LocalWorkspaceBackend: WorkspaceBackend {
         )
     }
 
-    @concurrent func processes(descendantsOf pid: pid_t) async throws -> WorkspaceProcessSnapshot {
-        // `comm` is the executable path with no arguments, so the only
-        // free-form field is the last one and column parsing stays safe.
-        let psOut = try await text(
-            argv: ["/bin/ps", "-axo", "pid=,ppid=,stat=,pcpu=,rss=,comm="]
-        )
-        var itemsByPid: [pid_t: WorkspaceProcess] = [:]
-        var names: [pid_t: String] = [:]
-        var childPids: [pid_t: [pid_t]] = [:]
-        for line in psOut.split(separator: "\n") {
-            let fields = line.split(separator: " ", maxSplits: 5, omittingEmptySubsequences: true)
-            guard fields.count == 6,
-                  let pid = pid_t(fields[0]),
-                  let ppid = pid_t(fields[1]) else { continue }
-            // Recorded before the zombie check so the descendant walk below
-            // still traverses the tree through anything we skip.
-            childPids[ppid, default: []].append(pid)
-            // Zombies are children that already exited and are waiting to be
-            // reaped: `ps` names them "<defunct>", they hold no CPU or memory,
-            // and no signal can touch them. Nothing to show or act on.
-            guard !fields[2].hasPrefix("Z") else { continue }
-            let executable = String(fields[5])
-            let name = (executable as NSString).lastPathComponent
-            names[pid] = name
-            itemsByPid[pid] = WorkspaceProcess(
-                pid: pid,
-                name: name,
-                executable: executable,
-                cpu: Double(fields[3]) ?? 0,
-                memoryKB: Int(fields[4]) ?? 0
-            )
-        }
-
-        // Descendants breadth-first: the commands the user ran come before
-        // the workers they spawned.
-        var descendants: [WorkspaceProcess] = []
-        var queue = childPids[pid] ?? []
-        while !queue.isEmpty {
-            let next = queue.removeFirst()
-            if let item = itemsByPid[next] {
-                descendants.append(item)
-            }
-            queue.append(contentsOf: childPids[next] ?? [])
-        }
-        return WorkspaceProcessSnapshot(descendants: descendants, namesByPid: names)
-    }
-
-    @concurrent func listeningPorts(pids: [pid_t]) async throws -> [WorkspacePort] {
-        guard !pids.isEmpty else { return [] }
-        let list = pids.map(String.init).joined(separator: ",")
-        // -a ANDs the selectors, so this only inspects the session's own
-        // processes instead of walking every fd on the machine.
-        let out = try await text(
-            argv: [
-                "/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", list, "-Fpn",
-            ]
-        )
-
-        var ports: [WorkspacePort] = []
-        var seen = Set<String>()
-        var currentPid: pid_t = 0
-        for line in out.split(separator: "\n") {
-            guard let field = line.first else { continue }
-            let value = line.dropFirst()
-            switch field {
-            case "p":
-                currentPid = pid_t(value) ?? 0
-            case "n":
-                // Addresses look like "*:3000", "127.0.0.1:3000", "[::1]:3000".
-                guard let colon = value.lastIndex(of: ":"),
-                      let port = Int(value[value.index(after: colon)...]) else { continue }
-                // The same socket shows once for IPv4 and once for IPv6.
-                if seen.insert("\(currentPid):\(port)").inserted {
-                    ports.append(WorkspacePort(port: port, pid: currentPid))
-                }
-            default:
-                break
-            }
-        }
-        return ports.sorted { $0.port < $1.port }
-    }
-
-    func kill(pid: pid_t, force: Bool) async throws {
-        Darwin.kill(pid, force ? SIGKILL : SIGTERM)
-    }
-
-    /// Decoded stdout, empty when the tool could not be launched — the
-    /// tolerance `ps` and `lsof` parsing has always had.
-    private func text(argv: [String]) async throws -> String {
-        guard let result = try? await run(
-            argv: argv, cwd: nil, env: nil, stdin: nil, timeout: nil
-        ) else { return "" }
-        return String(data: result.stdout, encoding: .utf8) ?? ""
-    }
 }

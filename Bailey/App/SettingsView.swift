@@ -3,9 +3,13 @@ import GhosttyTheme
 import SwiftUI
 
 private enum SettingsPage: String, CaseIterable, Identifiable {
-    case general
+    case common
+    case textEditor
     case terminal
-    case workspace
+    case browser
+    case fileManager
+    case gitManager
+    case projects
     case notifications
     case portForwarding
 
@@ -13,9 +17,13 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .general: String(localized: "General", table: "Settings")
+        case .common: String(localized: "Common", table: "Settings")
+        case .textEditor: String(localized: "Text Editor", table: "Settings")
         case .terminal: String(localized: "Terminal", table: "Settings")
-        case .workspace: String(localized: "Workspace", table: "Settings")
+        case .browser: String(localized: "Browser", table: "Settings")
+        case .fileManager: String(localized: "File Manager", table: "Settings")
+        case .gitManager: String(localized: "Git Manager", table: "Settings")
+        case .projects: String(localized: "Projects", table: "Settings")
         case .notifications: String(localized: "Phone Notifications", table: "Settings")
         case .portForwarding: String(localized: "Port Forwarding", table: "Settings")
         }
@@ -23,9 +31,13 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .general: "gearshape"
+        case .common: "gearshape"
+        case .textEditor: "curlybraces"
         case .terminal: "terminal"
-        case .workspace: "square.split.2x2"
+        case .browser: "globe"
+        case .fileManager: "folder"
+        case .gitManager: "point.3.connected.trianglepath.dotted"
+        case .projects: "square.split.2x2"
         case .notifications: "bell"
         case .portForwarding: "network"
         }
@@ -34,8 +46,9 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     let application: WorkspaceApplication
-    @Bindable private var settings = AppSettings.shared
-    @State private var selectedPage: SettingsPage? = .general
+    @Bindable private var settings: AppSettings
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var selectedPage: SettingsPage? = .common
     @State private var relaunchError = ""
     @State private var isShowingRelaunchError = false
     @State private var barkURLInput = ""
@@ -43,8 +56,19 @@ struct SettingsView: View {
     @State private var barkBusy = true
     @State private var barkLoaded = false
     @State private var barkStatus: String?
+    @State private var excludeDraft = ""
+    @State private var excludeError: String?
+
+    init(application: WorkspaceApplication, settings: AppSettings = .shared) {
+        self.application = application
+        self.settings = settings
+    }
 
     private let families = TerminalFont.selectableFamilies()
+
+    private var themeAccent: Color {
+        Color(nsColor: Theme.terminal(dark: colorScheme == .dark).accentNSColor)
+    }
 
     private var toolbarVisibilityDescription: String {
         switch settings.toolbarVisibility {
@@ -58,48 +82,51 @@ struct SettingsView: View {
     }
 
     var body: some View {
+        let _ = Theme.changes.revision
+        let theme = Theme.terminal(dark: colorScheme == .dark)
+        let accent = Color(nsColor: theme.accentNSColor)
         NavigationSplitView {
             List(selection: $selectedPage) {
                 Section(String(localized: "Preferences", table: "Settings")) {
-                    ForEach([SettingsPage.general, .terminal, .workspace]) { page in
-                        Label {
-                            Text(page.title)
-                        } icon: {
-                            Image(systemName: page.icon)
-                                .foregroundStyle(.secondary)
-                        }
-                        .tag(page)
+                    ForEach([SettingsPage.common, .textEditor, .terminal, .browser,
+                             .fileManager, .gitManager, .projects]) { page in
+                        sidebarRow(page, accent: accent)
                     }
                 }
                 Section(String(localized: "Connections", table: "Settings")) {
                     ForEach([SettingsPage.portForwarding, .notifications]) { page in
                         if !BaileyInstanceMode.isIsolated || page != .notifications {
-                            Label {
-                                Text(page.title)
-                            } icon: {
-                                Image(systemName: page.icon)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .tag(page)
+                            sidebarRow(page, accent: accent)
                         }
                     }
                 }
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(theme.isBaileyDefault ? Color.clear : Color(nsColor: theme.sidebarNSColor))
+            .foregroundStyle(Color(nsColor: theme.foregroundNSColor))
             .toolbar(removing: .sidebarToggle)
             .navigationSplitViewColumnWidth(min: 180, ideal: 195, max: 215)
         } detail: {
             Form {
-                switch selectedPage ?? .general {
-                case .general: generalSettings
+                switch selectedPage ?? .common {
+                case .common: commonSettings
+                case .textEditor: textEditorSettings
                 case .terminal: terminalSettings
-                case .workspace: workspaceSettings
+                case .browser: placeholderSettings
+                case .fileManager: fileManagerSettings
+                case .gitManager: gitManagerSettings
+                case .projects: placeholderSettings
                 case .notifications: notificationSettings
                 case .portForwarding: portForwardingSettings
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle((selectedPage ?? .general).title)
+            .scrollContentBackground(.hidden)
+            .background(theme.isBaileyDefault ? Color.clear : Color(nsColor: theme.backgroundNSColor))
+            .foregroundStyle(Color(nsColor: theme.foregroundNSColor))
+            .tint(Color(nsColor: theme.foregroundNSColor))
+            .navigationTitle((selectedPage ?? .common).title)
         }
         .frame(width: 840, height: 560)
         .alert(
@@ -112,32 +139,44 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private var generalSettings: some View {
-        Section(String(localized: "Appearance", table: "Settings")) {
-            Picker(String(localized: "Theme", table: "Settings"), selection: $settings.theme) {
-                ForEach(AppTheme.allCases) { theme in
-                    Text(theme.title).tag(theme)
-                }
+    private func sidebarRow(_ page: SettingsPage, accent: Color) -> some View {
+        let selected = selectedPage == page
+        return Label {
+            Text(page.title)
+                .foregroundStyle(selected ? Color.white : Color.primary)
+        } icon: {
+            Image(systemName: page.icon)
+                .foregroundStyle(selected ? Color.primary : accent)
+        }
+        .tag(page)
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(selected ? accent : Color.clear)
+                .padding(.horizontal, 8)
+        )
+    }
+
+    private var appearancePicker: some View {
+        Picker(String(localized: "Theme", table: "Settings"), selection: $settings.theme) {
+            ForEach(AppTheme.allCases) { theme in
+                Text(theme.title).tag(theme)
             }
-            .pickerStyle(.segmented)
+        }
+    }
+
+    @ViewBuilder
+    private var commonSettings: some View {
+        Section(String(localized: "Appearance", table: "Settings")) {
+            if #available(macOS 27.0, *) {
+                appearancePicker.pickerStyle(.tabs)
+            } else {
+                appearancePicker.pickerStyle(.segmented).tint(themeAccent)
+            }
 
             Picker(String(localized: "Language", table: "Settings"), selection: $settings.language) {
                 ForEach(AppLanguage.allCases) { language in
                     Text(verbatim: language.title).tag(language)
                 }
-            }
-
-            DescribedSettingsRow(
-                String(localized: "Toolbar", table: "Settings"),
-                description: toolbarVisibilityDescription
-            ) {
-                Picker(String(localized: "Toolbar", table: "Settings"), selection: $settings.toolbarVisibility) {
-                    Text(String(localized: "Auto", table: "Settings")).tag(ToolbarVisibility.auto)
-                    Text(String(localized: "Always Show", table: "Settings")).tag(ToolbarVisibility.always)
-                    Text(String(localized: "Hide", table: "Settings")).tag(ToolbarVisibility.hide)
-                }
-                .labelsHidden()
             }
 
             if settings.languageRequiresRelaunch {
@@ -148,6 +187,35 @@ struct SettingsView: View {
                     Spacer()
                     Button(String(localized: "Relaunch Bailey", table: "Settings")) { relaunch() }
                 }
+            }
+        }
+
+        Section(String(localized: "Colors", table: "Settings")) {
+            Picker(String(localized: "Dark theme", table: "Settings"), selection: $settings.themeDark) {
+                ForEach(Self.darkThemeNames, id: \.self) { name in
+                    Text(name).tag(name)
+                }
+            }
+            Picker(String(localized: "Light theme", table: "Settings"), selection: $settings.themeLight) {
+                ForEach(Self.lightThemeNames, id: \.self) { name in
+                    Text(name).tag(name)
+                }
+            }
+        }
+
+        Section(String(localized: "Panels", table: "Settings")) {
+            HStack {
+                Text(String(localized: "Font size", table: "Settings"))
+                Slider(value: $settings.panelFontSize, in: AppSettings.panelFontSizeRange, step: 1)
+                    .tint(themeAccent)
+                    .accessibilityLabel(String(localized: "Panel font size", table: "Settings"))
+                Text(String(localized: "\(Int(settings.panelFontSize)) pt", table: "Settings"))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(width: 42, alignment: .trailing)
+                Stepper("", value: $settings.panelFontSize, in: AppSettings.panelFontSizeRange, step: 1)
+                    .labelsHidden()
+                    .accessibilityLabel(String(localized: "Panel font size", table: "Settings"))
             }
         }
 
@@ -162,7 +230,7 @@ struct SettingsView: View {
         }
     }
 
-    private var hasCustomizedPreferences: Bool {
+    var hasCustomizedPreferences: Bool {
         !settings.fontFamily.isEmpty
             || settings.fontSize != AppSettings.defaultFontSize
             || settings.panelFontSize != AppSettings.defaultPanelFontSize
@@ -176,25 +244,15 @@ struct SettingsView: View {
             || settings.themeLight != Theme.defaultLightThemeName
             || settings.toolbarVisibility != AppSettings.defaultToolbarVisibility
             || settings.gitViewMode != .tree
+            || settings.gitAlwaysAcceptCheckout
+            || settings.gitAlwaysProceedPushTag
+            || settings.filesExclude != AppSettings.defaultFilesExclude
             || settings.wrapLines
             || settings.restoreTerminalHistory
     }
 
     @ViewBuilder
     private var terminalSettings: some View {
-        Section(String(localized: "Colors", table: "Settings")) {
-            Picker(String(localized: "Dark theme", table: "Settings"), selection: $settings.themeDark) {
-                ForEach(Self.darkThemeNames, id: \.self) { name in
-                    Text(name).tag(name)
-                }
-            }
-            Picker(String(localized: "Light theme", table: "Settings"), selection: $settings.themeLight) {
-                ForEach(Self.lightThemeNames, id: \.self) { name in
-                    Text(name).tag(name)
-                }
-            }
-        }
-
         Section(String(localized: "Font", table: "Settings")) {
             Picker(String(localized: "Family", table: "Settings"), selection: $settings.fontFamily) {
                 Text(String(localized: "\(TerminalFont.bundledFamily) (Bundled)", table: "Settings")).tag("")
@@ -207,6 +265,7 @@ struct SettingsView: View {
             HStack {
                 Text(String(localized: "Size", table: "Settings"))
                 Slider(value: $settings.fontSize, in: AppSettings.fontSizeRange, step: 1)
+                    .tint(themeAccent)
                     .accessibilityLabel(String(localized: "Size", table: "Settings"))
                 Text(String(localized: "\(Int(settings.fontSize)) pt", table: "Settings"))
                     .monospacedDigit()
@@ -237,6 +296,7 @@ struct SettingsView: View {
                 }
             }
             Toggle(String(localized: "Blink cursor", table: "Terminal"), isOn: $settings.cursorBlinking)
+                .tint(themeAccent)
 
             DescribedSettingsRow(
                 String(localized: "Thicken font strokes", table: "Settings"),
@@ -244,6 +304,7 @@ struct SettingsView: View {
             ) {
                 Toggle(String(localized: "Thicken font strokes", table: "Settings"), isOn: $settings.fontThicken)
                     .labelsHidden()
+                    .tint(themeAccent)
             }
 
             DescribedSettingsRow(
@@ -252,6 +313,7 @@ struct SettingsView: View {
             ) {
                 Toggle(String(localized: "Use Option as Alt/Meta", table: "Settings"), isOn: $settings.macosOptionAsAlt)
                     .labelsHidden()
+                    .tint(themeAccent)
             }
 
             DescribedSettingsRow(
@@ -260,36 +322,85 @@ struct SettingsView: View {
             ) {
                 Toggle(String(localized: "Restore session history on relaunch", table: "Settings"), isOn: $settings.restoreTerminalHistory)
                     .labelsHidden()
+                    .tint(themeAccent)
             }
         }
     }
 
-    @ViewBuilder
-    private var workspaceSettings: some View {
-        Section(String(localized: "Panels", table: "Settings")) {
-            HStack {
-                Text(String(localized: "Font size", table: "Settings"))
-                Slider(value: $settings.panelFontSize, in: AppSettings.panelFontSizeRange, step: 1)
-                    .accessibilityLabel(String(localized: "Panel font size", table: "Settings"))
-                Text(String(localized: "\(Int(settings.panelFontSize)) pt", table: "Settings"))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(width: 42, alignment: .trailing)
-                Stepper("", value: $settings.panelFontSize, in: AppSettings.panelFontSizeRange, step: 1)
-                    .labelsHidden()
-                    .accessibilityLabel(String(localized: "Panel font size", table: "Settings"))
-            }
+    private var textEditorSettings: some View {
+        Section(String(localized: "Text Editing", table: "Settings")) {
+            Toggle(String(localized: "Wrap lines to editor width", table: "Settings"), isOn: $settings.wrapLines)
+                .tint(themeAccent)
         }
+    }
 
+    private var gitManagerSettings: some View {
         Section(String(localized: "Git", table: "Settings")) {
             Picker(String(localized: "File layout", table: "Settings"), selection: $settings.gitViewMode) {
                 Text(String(localized: "Tree", table: "Settings")).tag(GitViewMode.tree)
                 Text(String(localized: "List", table: "Settings")).tag(GitViewMode.list)
             }
+            DescribedSettingsRow(
+                String(localized: "Toolbar", table: "Settings"),
+                description: toolbarVisibilityDescription
+            ) {
+                Picker(String(localized: "Toolbar", table: "Settings"), selection: $settings.toolbarVisibility) {
+                    Text(String(localized: "Auto", table: "Settings")).tag(ToolbarVisibility.auto)
+                    Text(String(localized: "Always Show", table: "Settings")).tag(ToolbarVisibility.always)
+                    Text(String(localized: "Hide", table: "Settings")).tag(ToolbarVisibility.hide)
+                }
+                .labelsHidden()
+            }
         }
+    }
 
-        Section(String(localized: "Text Editing", table: "Settings")) {
-            Toggle(String(localized: "Wrap lines to editor width", table: "Settings"), isOn: $settings.wrapLines)
+    private var fileManagerSettings: some View {
+        Section(String(localized: "Excluded files", table: "Settings")) {
+            Text(String(localized: "One glob per line. Hidden files remain on disk and searchable in Command Palette.", table: "Settings"))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            TextEditor(text: $excludeDraft)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 120)
+                .accessibilityLabel(String(localized: "Excluded file patterns", table: "Settings"))
+            if let excludeError {
+                Text(verbatim: excludeError)
+                    .foregroundStyle(.red)
+            }
+            HStack {
+                Button(String(localized: "Restore Default Exclusions", table: "Settings")) {
+                    applyExclusions(AppSettings.defaultFilesExclude)
+                }
+                Spacer()
+                Button(String(localized: "Apply", table: "Settings")) {
+                    let patterns = excludeDraft.isEmpty ? [] : excludeDraft
+                        .split(separator: "\n", omittingEmptySubsequences: false)
+                        .map(String.init)
+                    applyExclusions(excludeDraft.hasSuffix("\n")
+                        ? Array(patterns.dropLast()) : patterns)
+                }
+            }
+        }
+        .onAppear {
+            excludeDraft = settings.filesExclude.joined(separator: "\n")
+            excludeError = nil
+        }
+    }
+
+    private func applyExclusions(_ patterns: [String]) {
+        do {
+            try settings.applyFilesExclude(patterns)
+            excludeDraft = patterns.joined(separator: "\n")
+            excludeError = nil
+        } catch {
+            excludeError = error.localizedDescription
+        }
+    }
+
+    private var placeholderSettings: some View {
+        Section {
+            Text(String(localized: "No settings are available yet.", table: "Settings"))
+                .foregroundStyle(.secondary)
         }
     }
 

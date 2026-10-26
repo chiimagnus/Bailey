@@ -13,16 +13,7 @@ import Observation
 final class Project: nonisolated Identifiable {
     nonisolated let id = UUID()
 
-    /// User-assigned name; when nil the project title follows the
-    /// selected session's terminal title.
-    var customName: String? {
-        didSet { if customName != oldValue { onSnapshotChange?() } }
-    }
-    /// User-pinned project directory ("Set Project Directory…" on the
-    /// project row). When set, the file tree and git panels always anchor
-    /// here. Nil means automatic: the closest git repository containing the
-    /// selected session's working directory, re-derived as the session
-    /// moves (see `panelRoot(followingSessionAt:)`).
+    /// The directory selected when adding a project. Never follows a terminal.
     var customDirectory: String? {
         didSet { if customDirectory != oldValue { onSnapshotChange?() } }
     }
@@ -30,12 +21,13 @@ final class Project: nonisolated Identifiable {
     var sshHost: String? {
         didSet { if sshHost != oldValue { onSnapshotChange?() } }
     }
-    /// An individually added file is anchored to its parent directory.
+    /// An explicitly added SSH file is anchored to its parent directory.
     var pinnedFile: String? {
         didSet { if pinnedFile != oldValue { onSnapshotChange?() } }
     }
     /// File browser state belongs to the project, not a transient tool tab.
     let fileTree = FileTreeModel()
+    @ObservationIgnored let remoteFileEvents = SSHWorkspaceFileEvents()
     let dock: DockWorkspaceModel
     var tabs: [PaneTab] = [] {
         didSet {
@@ -57,7 +49,6 @@ final class Project: nonisolated Identifiable {
     /// because every way of reaching a tab — strip click, menu selection,
     /// opening a file — counts as a use.
     @ObservationIgnored private var recentTabIDs: [UUID] = []
-    @ObservationIgnored private var isRemoteTabRebindPending = false
     @ObservationIgnored private var hostConnectionObservation: AnyCancellable?
 
     @ObservationIgnored var onSnapshotChange: (() -> Void)?
@@ -81,23 +72,9 @@ final class Project: nonisolated Identifiable {
     }
 
     var name: String {
-        if let customName = Self.normalizedCustomName(customName) {
-            return customName
-        }
-        guard let title = selectedSession?.title,
-              !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            return fallbackName
-        }
-        return title
-    }
-
-    /// Manual project names are user-authored labels, not terminal protocol
-    /// payloads. Normalize only surrounding whitespace.
-    static func normalizedCustomName(_ name: String?) -> String? {
-        guard let name else { return nil }
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        guard let path = pinnedFile ?? customDirectory else { return fallbackName }
+        let name = (path as NSString).lastPathComponent
+        return name.isEmpty ? path : name
     }
 
     /// Every terminal session across the project's independent tabs.
@@ -146,14 +123,6 @@ final class Project: nonisolated Identifiable {
         return tabs.first { $0.id == id }?.content
     }
 
-    var hasFiles: Bool {
-        tabs.contains { $0.content.isFile }
-    }
-
-    var hasDiffs: Bool {
-        tabs.contains { $0.content.isDiff }
-    }
-
     /// Non-terminal tabs retain the session whose directory they were opened from.
     var selectedSession: TerminalSession? {
         if case .session(let session)? = selectedTab?.content {
@@ -164,36 +133,17 @@ final class Project: nonisolated Identifiable {
 
     // MARK: - Project directory
 
-    var workspaceIdentity: String? {
-        if let sshHost { return "ssh:" + sshHost }
-        if customDirectory != nil { return nil }
-        return selectedSession?.workspaceIdentity
-    }
+    var workspaceIdentity: String? { sshHost.map { "ssh:" + $0 } }
 
     var workspaceBackend: WorkspaceBackend {
-        if let sshHost { return SSHHostWorkspaces.backend(for: sshHost) }
-        if customDirectory != nil { return LocalWorkspaceBackend.shared }
-        return selectedSession?.workspaceBackend ?? LocalWorkspaceBackend.shared
+        guard let sshHost else { return LocalWorkspaceBackend.shared }
+        return SSHHostWorkspaces.backend(for: sshHost)
     }
 
-    /// A pinned project is a workspace even without any shell. Automatic
-    /// projects still follow their selected terminal when one exists.
     var panelContext: PanelContext? {
-        if let directory = customDirectory {
-            return PanelContext(
-                identity: .pinned(project: id, workspace: workspaceIdentity, directory: directory),
-                backend: workspaceBackend
-            )
-        }
-        guard let session = selectedSession else { return nil }
-        let connection = session.location.remoteConnection
-        guard connection == nil || connection?.workingDirectory != nil else { return nil }
+        guard let directory = customDirectory else { return nil }
         return PanelContext(
-            identity: .automatic(
-                project: id, workspace: workspaceIdentity, directory: session.panelDirectoryPath,
-                foreground: session.foregroundDirectoryPath, session: session.id,
-                connection: connection?.id, state: connection?.state
-            ),
+            identity: .init(project: id, workspace: workspaceIdentity, directory: directory),
             backend: workspaceBackend
         )
     }
@@ -255,47 +205,17 @@ final class Project: nonisolated Identifiable {
         }
     }
 
-    /// Synchronize the project's Files tree; only the latest active workspace
-    /// may publish its root, and a disconnected shell retains the last tree.
-    func syncFiles(isCurrent: () -> Bool) async -> (PanelContext.RootSource, PanelContext.Identity)? {
+    /// Synchronize only the selected project's fixed Files root.
+    func syncFiles(isCurrent: () -> Bool) async -> PanelContext.Identity? {
         guard isCurrent(), let context = panelContext else { return nil }
-        if sshHost == nil, customDirectory == nil,
-           selectedSession?.location.remoteConnection?.state == .disconnected { return nil }
-        // An SSH probe failure is not evidence that cwd changed or became local.
-        guard let (root, source) = try? await context.resolvedRoot() else { return nil }
-        guard isCurrent(), matchesPanelTarget(context.identity) else { return nil }
-        await fileTree.sync(root: root, backend: context.backend, scope: context.scope)
-        guard isCurrent(), matchesPanelTarget(context.identity) else { return nil }
-        return (source, context.identity)
-    }
-
-    /// Root for the file tree and git panels: the pinned directory when the
-    /// user set one (and it still exists on disk), else the repository the
-    /// terminal's foreground job moved to (an agent's worktree), else the
-    /// closest git repository containing `cwd`, else `cwd` itself — the
-    /// follow-the-terminal behavior used before projects had a directory.
-    /// Everything but the pin is re-derived on every call, so the panels
-    /// track the session in and out of repositories without sticking.
-    func panelRoot(
-        followingSessionAt cwd: String, foregroundAt foregroundCwd: String? = nil
-    ) -> (root: String, source: PanelContext.RootSource) {
-        if let pinned = customDirectory {
-            return (pinned, .pinned)
-        }
-        let shellRoot = LocalWorkspaceBackend.gitRootSync(containing: cwd) ?? cwd
-        // Only a *different repository* re-roots the panels. A foreground job
-        // running in a subdirectory of the shell's own checkout resolves to
-        // the same root and is ignored, which keeps the file tree from
-        // collapsing its expanded rows every time a command runs.
-        if let foregroundCwd,
-           let foregroundRoot = LocalWorkspaceBackend.gitRootSync(containing: foregroundCwd),
-           foregroundRoot != shellRoot {
-            return (
-                foregroundRoot,
-                .foreground(isWorktree: LocalWorkspaceBackend.isLinkedWorktreeSync(foregroundRoot))
-            )
-        }
-        return (shellRoot, .shell)
+        let revision = context.connectionRevision
+        guard await fileTree.sync(
+            root: context.cwd, backend: context.backend, scope: context.scope,
+            panelIdentity: context.identity, connectionRevision: revision
+        ) else { return nil }
+        guard isCurrent(), matchesPanelTarget(context.identity),
+              context.connectionRevision == revision else { return nil }
+        return context.identity
     }
 
 
@@ -346,11 +266,6 @@ final class Project: nonisolated Identifiable {
             // Already dead — just drop its pane, no second terminate.
             self?.closeContent(.session(session), terminate: false)
         }
-        session.onRemoteContextChange = { [weak self] in
-            // Changing the real SSH target changes whether previously opened
-            // remote files/diffs are writable; SwiftUI redraw alone is insufficient.
-            self?.scheduleRemoteTabRebind()
-        }
         return session
     }
 
@@ -361,21 +276,16 @@ final class Project: nonisolated Identifiable {
         let command = "cd " + Self.shellQuoted(repository) + " && git "
             + arguments.map(Self.shellQuoted).joined(separator: " ")
         if context.isRemote {
-            let connection = selectedSession?.location.remoteConnection
-            guard let host = sshHost ?? connection?.destination,
-                  let executable = Bundle.main.executableURL else { throw RemoteConnectionError.notConnected }
-            if sshHost == nil {
-                guard let connection, connection.state == .connected,
-                      connection.workspaceIdentity == context.scope else { throw RemoteConnectionError.notConnected }
-            }
-            let port = connection?.port ?? 22
+            guard let host = sshHost, context.scope == "ssh:" + host,
+                  let executable = Bundle.main.executableURL
+            else { throw RemoteConnectionError.notConnected }
             let helper = executable.deletingLastPathComponent().appendingPathComponent("ssh").path
             let launch = Self.shellQuoted(helper)
                 + " -tt -o BatchMode=yes -o StrictHostKeyChecking=yes -o ControlMaster=no -o ControlPath=none"
-                + (sshHost == nil ? " -p \(port)" : "") + " -- " + Self.shellQuoted(host)
+                + " -- " + Self.shellQuoted(host)
                 + "; exitStatus=$?; printf '\\nSSH session ended (status %s). Press Enter to close this terminal.\\n' \"$exitStatus\"; read -r answer; exit \"$exitStatus\""
             let initial = PanelContext(
-                identity: .pinned(project: id, workspace: context.identity.workspace, directory: repository),
+                identity: .init(project: id, workspace: context.identity.workspace, directory: repository),
                 backend: context.backend
             )
             let pathBytes = (repository + "/.").utf8.map {
@@ -409,39 +319,11 @@ final class Project: nonisolated Identifiable {
 
     // MARK: - Remote tabs
 
-    /// A live workspace for `identity`, from whichever session in this project
-    /// holds it. A file belongs to a machine, not to the terminal it happened
-    /// to be opened from: reconnecting in a second terminal of the same
-    /// project makes those tabs writable again.
+    /// Only an explicitly added SSH project's host can rebind its files.
     func connectedWorkspace(for identity: String) -> WorkspaceBackend? {
-        if let sshHost, identity == "ssh:" + sshHost {
-            guard SSHHostWorkspaces.connectionState(for: sshHost) != false else { return nil }
-            return SSHHostWorkspaces.backend(for: sshHost)
-        }
-        for session in sessions {
-            guard let connection = session.location.remoteConnection,
-                  connection.workspaceIdentity == identity,
-                  connection.state == .connected
-            else { continue }
-            let backend = session.workspaceBackend
-            // The session reports a remote workspace only once the connection
-            // is connected and its directory is known; until then it is still
-            // answering with the local disk, which is not this file's machine.
-            if !(backend is LocalWorkspaceBackend) { return backend }
-        }
-        return nil
-    }
-
-    /// Re-checks every remote file and diff against the project's connections.
-    /// Real SSH state/directory callbacks happen after mutation; coalesce
-    /// them one hop later instead of rechecking on every terminal UI update.
-    private func scheduleRemoteTabRebind() {
-        guard !isRemoteTabRebindPending else { return }
-        isRemoteTabRebindPending = true
-        Task { @MainActor in
-            isRemoteTabRebindPending = false
-            rebindRemoteTabs()
-        }
+        guard let sshHost, identity == "ssh:" + sshHost,
+              SSHHostWorkspaces.connectionState(for: sshHost) != false else { return nil }
+        return SSHHostWorkspaces.backend(for: sshHost)
     }
 
     func rebindRemoteTabs() {
@@ -583,29 +465,34 @@ final class Project: nonisolated Identifiable {
 
     // MARK: - File paths
 
-    /// Only rename tabs from the machine where the change happened.
-    /// A local and remote file with identical paths must remain independent.
+    /// Update only paths belonging to the affected machine. A second local
+    /// window may have opened the same file through a different root symlink.
     func updateFilePaths(from oldPath: String, to newPath: String, workspace: String?) {
+        let realOld = workspace == nil ? LocalPathScope.resolvedPath(oldPath) : nil
+        let realNew = workspace == nil ? LocalPathScope.resolvedPath(newPath) : nil
+
+        func moved(_ path: String) -> String? {
+            if LocalPathScope.contains(path, in: oldPath) {
+                return newPath + String(path.dropFirst(oldPath.count))
+            }
+            guard let realOld, let realNew else { return nil }
+            let realPath = LocalPathScope.resolvedPath(path)
+            guard LocalPathScope.contains(realPath, in: realOld) else { return nil }
+            return realNew + String(realPath.dropFirst(realOld.count))
+        }
+
         for tab in tabs {
             guard case .file(let file) = tab.content,
-                  file.workspaceIdentity == workspace else { continue }
-            if file.path == oldPath {
-                file.updatePath(newPath)
-            } else if file.path.hasPrefix(oldPath + "/") {
-                file.updatePath(newPath + String(file.path.dropFirst(oldPath.count)))
-            }
+                  file.workspaceIdentity == workspace,
+                  let destination = moved(file.path) else { continue }
+            file.updatePath(destination)
         }
         guard workspaceIdentity == workspace else { return }
-        if let pinnedFile, pinnedFile == oldPath || pinnedFile.hasPrefix(oldPath + "/") {
-            let updated = newPath + String(pinnedFile.dropFirst(oldPath.count))
-            if customName == (pinnedFile as NSString).lastPathComponent {
-                customName = (updated as NSString).lastPathComponent
-            }
+        if let pinnedFile, let updated = moved(pinnedFile) {
             self.pinnedFile = updated
         }
-        if let customDirectory,
-           customDirectory == oldPath || customDirectory.hasPrefix(oldPath + "/") {
-            self.customDirectory = newPath + String(customDirectory.dropFirst(oldPath.count))
+        if let customDirectory, let updated = moved(customDirectory) {
+            self.customDirectory = updated
         }
     }
 
@@ -954,7 +841,6 @@ final class Project: nonisolated Identifiable {
         switch tab.content {
         case .session(let session):
             session.onSnapshotChange = nil
-            session.onRemoteContextChange = nil
         case .browser(let browser): browser.onSnapshotChange = nil
         case .file(let file):
             file.onSnapshotChange = nil
@@ -963,7 +849,6 @@ final class Project: nonisolated Identifiable {
         }
         recentTabIDs.removeAll { $0 == tabID }
         tabs.remove(at: index)
-        if case .session = tab.content { scheduleRemoteTabRebind() }
         if selectedTabID == tabID {
             let neighbor = min(index, tabs.count - 1)
             selectedTabID = neighbor >= 0 ? tabs[neighbor].id : nil

@@ -195,83 +195,62 @@ final class GitInteractiveRebaseIntegrationTests: XCTestCase {
             }
             let side = try await git(["rev-parse", "refs/heads/side"])
             let original = try await git(["rev-parse", "HEAD"])
-            let configuration = try XCTUnwrap(BaileySSHPassthrough.resolvedConfiguration(arguments: [host], realSSH: "/usr/bin/ssh"))
-            for pinned in [true, false] {
-                print("P4 SSH test: pinned=\(pinned), temporary repository=\(root)")
-                _ = try await git(["switch", "main"])
-                _ = try await git(["reset", "--hard", original])
-                let cleared = try await backend.run(argv: ["rm", "-f", "editor-ready"], cwd: root,
-                                                    env: nil, stdin: nil, timeout: 25)
-                XCTAssertEqual(cleared.status, 0)
-                let manager = self.workspaceApplication.makeWindow()
-                defer { manager.windowClosed() }
-                let project = Project(fallbackName: "SSH PTY Rebase", workspaceConfiguration: .standard)
-                manager.projects = [project]
-                manager.selectedProjectID = project.id
-                let context: PanelContext
-                var source: TerminalSession?
-                if pinned {
-                    project.sshHost = host
-                    project.customDirectory = root
-                    context = PanelContext(identity: .pinned(project: project.id, workspace: "ssh:" + host, directory: root), backend: backend)
-                } else {
-                    let session = TerminalSession(launchCommand: "exec /bin/sh -i")
-                    source = session
-                    let connection = RemoteConnection(user: configuration["user"] ?? "",
-                        host: try XCTUnwrap(configuration["hostname"]), port: Int(configuration["port"] ?? "22") ?? 22,
-                        controlSocket: URL(fileURLWithPath: socket), sshPID: getpid())
-                    connection.workingDirectory = root
-                    connection.markConnected()
-                    session.location = .remote(connection)
-                    let tab = PaneTab(content: .session(session))
-                    project.append(tab)
-                    project.selectTab(tab.id)
-                    context = try XCTUnwrap(project.panelContext)
+            print("P4 SSH test: fixed project, temporary repository=\(root)")
+            _ = try await git(["switch", "main"])
+            _ = try await git(["reset", "--hard", original])
+            let cleared = try await backend.run(argv: ["rm", "-f", "editor-ready"], cwd: root,
+                                                env: nil, stdin: nil, timeout: 25)
+            XCTAssertEqual(cleared.status, 0)
+            let manager = self.workspaceApplication.makeWindow()
+            defer { manager.windowClosed() }
+            let project = Project(fallbackName: "SSH PTY Rebase", workspaceConfiguration: .standard)
+            manager.projects = [project]
+            manager.selectedProjectID = project.id
+            project.sshHost = host
+            project.customDirectory = root
+            let context = PanelContext(
+                identity: .init(project: project.id, workspace: "ssh:" + host, directory: root),
+                backend: backend
+            )
+            let terminal = try project.newInteractiveGitSession(repository: root,
+                arguments: ["rebase", "--interactive", side], context: context)
+            defer { terminal.terminate() }
+            XCTAssertNotNil(project.selectedTab)
+            XCTAssertEqual(terminal.workspaceIdentity, context.scope)
+            XCTAssertEqual(terminal.panelDirectoryPath, root)
+            let window = NSWindow(contentRect: .init(x: -1200, y: -1200, width: 700, height: 400),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.contentView = terminal.surface
+            window.orderFront(nil)
+            window.contentView?.layoutSubtreeIfNeeded()
+            do {
+                try await wait {
+                    do { return try await backend.read(path: root + "/editor-ready", maxBytes: 4096).contains(Data("PTY\n".utf8)) }
+                    catch WorkspaceError.notFound { return false }
                 }
-                defer { source?.terminate() }
-                let terminal = try project.newInteractiveGitSession(repository: root,
-                    arguments: ["rebase", "--interactive", side], context: context)
-                defer { terminal.terminate() }
-                XCTAssertNotNil(project.selectedTab)
-                XCTAssertEqual(terminal.workspaceIdentity, context.scope)
-                XCTAssertFalse(terminal.workspaceBackend is LocalWorkspaceBackend)
-                XCTAssertEqual(terminal.panelDirectoryPath, root)
-                let window = NSWindow(contentRect: .init(x: -1200, y: -1200, width: 700, height: 400),
-                                      styleMask: [.titled], backing: .buffered, defer: false)
-                window.isReleasedWhenClosed = false
-                defer { window.close() }
-                window.contentView = terminal.surface
-                window.orderFront(nil)
-                window.contentView?.layoutSubtreeIfNeeded()
-                do {
-                    try await wait {
-                        do { return try await backend.read(path: root + "/editor-ready", maxBytes: 4096).contains(Data("PTY\n".utf8)) }
-                        catch WorkspaceError.notFound { return false }
-                    }
-                } catch {
-                    let screen = TerminalHistorySerializer.previewText(from: terminal.surface, maxLines: 60, maxColumns: 160)
-                    XCTFail("SSH sequence editor did not become ready: \(String(reflecting: error)); terminal: \(screen ?? "no screen export")")
-                    throw error
-                }
-                let editorCwd = try await backend.read(path: root + "/editor-ready", maxBytes: 4096)
-                XCTAssertEqual(String(decoding: editorCwd, as: UTF8.self), root + "\nPTY\n")
-                terminal.applyTheme()
-                let waitingHead = try await git(["rev-parse", "HEAD"])
-                XCTAssertEqual(waitingHead, original)
-                try await wait { terminal.location.remoteConnection != nil }
-                XCTAssertNotEqual(terminal.location.remoteConnection?.controlSocket.path, socket)
-                XCTAssertFalse(terminal.workspaceBackend is LocalWorkspaceBackend)
-                terminal.sendCommand("\r")
-                try await wait { try await git(["rev-parse", "HEAD^"]) == side }
-                let mainBytes = try await git(["show", "HEAD:main.txt"])
-                let sideBytes = try await git(["show", "HEAD:side.txt"])
-                XCTAssertEqual(mainBytes, "main")
-                XCTAssertEqual(sideBytes, "side")
-                XCTAssertFalse(terminal.hasExited)
-                terminal.terminate()
-                try await wait { terminal.hasExited }
-                source?.terminate()
+            } catch {
+                let screen = TerminalHistorySerializer.previewText(from: terminal.surface, maxLines: 60, maxColumns: 160)
+                XCTFail("SSH sequence editor did not become ready: \(String(reflecting: error)); terminal: \(screen ?? "no screen export")")
+                throw error
             }
+            let editorCwd = try await backend.read(path: root + "/editor-ready", maxBytes: 4096)
+            XCTAssertEqual(String(decoding: editorCwd, as: UTF8.self), root + "\nPTY\n")
+            terminal.applyTheme()
+            let waitingHead = try await git(["rev-parse", "HEAD"])
+            XCTAssertEqual(waitingHead, original)
+            try await wait { terminal.location.remoteConnection != nil }
+            XCTAssertNotEqual(terminal.location.remoteConnection?.controlSocket.path, socket)
+            terminal.sendCommand("\r")
+            try await wait { try await git(["rev-parse", "HEAD^"]) == side }
+            let mainBytes = try await git(["show", "HEAD:main.txt"])
+            let sideBytes = try await git(["show", "HEAD:side.txt"])
+            XCTAssertEqual(mainBytes, "main")
+            XCTAssertEqual(sideBytes, "side")
+            XCTAssertFalse(terminal.hasExited)
+            terminal.terminate()
+            try await wait { terminal.hasExited }
             await cleanup()
         } catch {
             await cleanup()

@@ -1,4 +1,5 @@
 import AppKit
+import GhosttyTheme
 import SwiftUI
 
 struct GitGraphReferenceGroup {
@@ -66,6 +67,7 @@ struct RecentCommitsView: View {
     static let badgeHorizontalPadding: CGFloat = 4
 
     private let themeChanges = Theme.changes
+    @Environment(\.colorScheme) private var colorScheme
     @Binding private var expandedCommitIDs: Set<String>
     @Binding private var collapsedFolders: Set<String>
     @State private var requestedLastCommit: String?
@@ -84,6 +86,15 @@ struct RecentCommitsView: View {
     private var keyboardOwner: TreeKeyboardOwner {
         providedKeyboardOwner ?? localKeyboardOwner
     }
+
+    private var currentTheme: GhosttyThemeDefinition {
+        Theme.terminal(dark: colorScheme == .dark)
+    }
+
+    private var graphPalette: GitGraphPalette { GitGraphPalette(theme: currentTheme) }
+    private var graphTextColor: Color { Color(nsColor: currentTheme.foregroundNSColor) }
+    private var graphSecondaryText: Color { graphTextColor.opacity(0.65) }
+    private var graphTertiaryText: Color { graphTextColor.opacity(0.45) }
 
     let commits: [Commit]
     let remotes: [String]
@@ -292,6 +303,7 @@ struct RecentCommitsView: View {
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) {
             viewportWidth = $0
         }
+        .tint(Color(nsColor: currentTheme.accentNSColor))
     }
 
     private enum NavigationAction {
@@ -574,17 +586,19 @@ struct RecentCommitsView: View {
                     HStack(spacing: 4 * fontScale) {
                         if let stash = commit.stash {
                             stashBadge(stash, in: commit, colorIndex: graph.node.color)
+                                .layoutPriority(1)
                         } else if commit.worktree == nil {
                             if !commit.references.isEmpty || !commit.checkedOutWorktrees.isEmpty {
                                 referenceStrip(commit.references, commit: commit,
                                                colorIndex: graph.node.color)
+                                    .layoutPriority(1)
                             }
                         }
                         Button { toggle(commit) } label: {
                             if commit.worktree != nil {
                                 Text(verbatim: commit.subject)
                                     .font(.system(size: 12 * fontScale))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(graphSecondaryText)
                                     .lineLimit(1)
                                     .truncationMode(.tail)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -595,7 +609,7 @@ struct RecentCommitsView: View {
                                         .foregroundStyle(
                                             commit.stash == nil && commit.parentHashes.count > 1
                                                 && !hovering
-                                                ? Color.primary.opacity(0.55) : Color.primary
+                                                ? graphTextColor.opacity(0.55) : graphTextColor
                                         )
                                         .fixedSize(horizontal: true, vertical: false)
                                 }
@@ -622,7 +636,7 @@ struct RecentCommitsView: View {
                                 worktree.path, among: worktreePaths
                             ))
                                 .font(.system(size: 10 * fontScale, design: .monospaced))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(graphSecondaryText)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .help(worktree.path)
@@ -631,7 +645,7 @@ struct RecentCommitsView: View {
                         Button { copy(commit.hash) } label: {
                             Text(verbatim: commit.shortHash)
                                 .font(.system(size: 10.5 * fontScale, design: .monospaced))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(graphSecondaryText)
                                 .lineLimit(1)
                                 .fixedSize(horizontal: true, vertical: false)
                         }
@@ -641,7 +655,7 @@ struct RecentCommitsView: View {
 
                         Text(verbatim: commit.author)
                             .font(.system(size: 11 * fontScale))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(graphSecondaryText)
                             .lineLimit(1)
                             .truncationMode(.tail)
                             .layoutPriority(-1)
@@ -650,7 +664,7 @@ struct RecentCommitsView: View {
 
                         Text(verbatim: commit.relativeDate)
                             .font(.system(size: 10.5 * fontScale))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(graphSecondaryText)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                         }
@@ -660,7 +674,7 @@ struct RecentCommitsView: View {
                 .modifier(layout)
                 .overlay(alignment: .bottom) {
                     Rectangle()
-                        .fill(Color.primary.opacity(0.09))
+                        .fill(graphTextColor.opacity(0.09))
                         .frame(height: 0.5)
                         .padding(.leading, gutter)
                         .allowsHitTesting(false)
@@ -779,25 +793,22 @@ struct RecentCommitsView: View {
         let location = locations.first { $0.path == repoRoot }
             ?? locations.first { $0.branch == nil } ?? locations[0]
         let label = Self.worktreeDisplayLabel(location, among: worktreePaths)
-        let labelWidth = ceil((label as NSString).size(withAttributes: [
-            .font: NSFont.systemFont(ofSize: Self.badgeFontSize * fontScale, weight: .medium)
-        ]).width)
         let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
+        let palette = graphPalette
         return Button { toggle(commit) } label: {
             HStack(spacing: 0) {
                 Image(systemName: "square.stack")
                     .font(.system(size: Self.badgeFontSize * fontScale))
-                    .foregroundStyle(GitGraphPalette.iconColor(colorIndex))
+                    .foregroundStyle(palette.iconColor(colorIndex))
                     .frame(width: Self.badgeIconSize * fontScale,
                            height: Self.badgeHeight * fontScale)
-                    .background(GitGraphPalette.color(colorIndex))
+                    .background(palette.color(colorIndex))
                 Text(verbatim: label)
                     .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(graphTextColor)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .frame(maxWidth: min(labelWidth,
-                        min(128, max(52, viewportWidth * 0.32)) * fontScale))
+                    .frame(maxWidth: min(128, max(52, viewportWidth * 0.32)) * fontScale)
                     .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
                 if locations.count > 1 {
                     Text("\(locations.count)")
@@ -805,11 +816,11 @@ struct RecentCommitsView: View {
                         .padding(.trailing, Self.badgeHorizontalPadding * fontScale)
                 }
             }
-            .foregroundStyle(.secondary)
+            .foregroundStyle(graphSecondaryText)
             .frame(height: Self.badgeHeight * fontScale)
-            .background(Color.primary.opacity(0.04))
+            .background(graphTextColor.opacity(0.04))
             .clipShape(outline)
-            .overlay(outline.stroke(Color.primary.opacity(0.35), lineWidth: 1 * fontScale))
+            .overlay(outline.stroke(graphTextColor.opacity(0.35), lineWidth: 1 * fontScale))
         }
         .buttonStyle(.plain)
         .help(label + "\n" + paths.joined(separator: "\n"))
@@ -857,24 +868,25 @@ struct RecentCommitsView: View {
         _ stash: GitStatusModel.Stash, in commit: Commit, colorIndex: Int
     ) -> some View {
         let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
+        let palette = graphPalette
         return Button { toggle(commit) } label: {
             HStack(spacing: 0) {
                 Image(systemName: "archivebox")
                     .font(.system(size: Self.badgeFontSize * fontScale))
-                    .foregroundStyle(GitGraphPalette.iconColor(colorIndex))
+                    .foregroundStyle(palette.iconColor(colorIndex))
                     .frame(width: Self.badgeIconSize * fontScale,
                            height: Self.badgeHeight * fontScale)
-                    .background(GitGraphPalette.color(colorIndex))
+                    .background(palette.color(colorIndex))
                 Text(verbatim: stash.selector)
                     .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(graphTextColor)
                     .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
                     .fixedSize(horizontal: true, vertical: false)
             }
             .frame(height: Self.badgeHeight * fontScale)
-            .background(Color.primary.opacity(0.06))
+            .background(graphTextColor.opacity(0.06))
             .clipShape(outline)
-            .overlay(outline.stroke(Color.primary.opacity(0.35),
+            .overlay(outline.stroke(graphTextColor.opacity(0.35),
                                     lineWidth: 1 * fontScale))
         }
         .buttonStyle(.plain)
@@ -922,7 +934,7 @@ struct RecentCommitsView: View {
                 } label: {
                     Text("+\(hidden.count)")
                         .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(graphSecondaryText)
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
@@ -930,6 +942,7 @@ struct RecentCommitsView: View {
                 .accessibilityLabel(hidden.map(\.name).joined(separator: ", "))
             }
         }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func referenceBadge(
@@ -937,38 +950,34 @@ struct RecentCommitsView: View {
     ) -> some View {
         let current = reference.kind == .currentBranch
         let matched = worktrees(for: reference, in: commit)
-        let labelWidth = ceil((reference.name as NSString).size(withAttributes: [
-            .font: NSFont.systemFont(ofSize: Self.badgeFontSize * fontScale,
-                                    weight: current ? .semibold : .medium)
-        ]).width)
         let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
+        let palette = graphPalette
         return Button { toggle(commit) } label: {
             HStack(spacing: 0) {
                 Image(systemName: reference.kind == .tag ? "tag.fill"
                       : reference.kind == .detachedHead ? "circle"
                       : "arrow.triangle.branch")
                     .font(.system(size: Self.badgeFontSize * fontScale))
-                    .foregroundStyle(GitGraphPalette.iconColor(colorIndex))
+                    .foregroundStyle(palette.iconColor(colorIndex))
                     .frame(width: Self.badgeIconSize * fontScale,
                            height: Self.badgeHeight * fontScale)
-                    .background(GitGraphPalette.color(colorIndex))
+                    .background(palette.color(colorIndex))
                 Text(verbatim: reference.name)
                     .font(.system(size: Self.badgeFontSize * fontScale,
                                   weight: current ? .semibold : .medium))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(graphTextColor)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .frame(maxWidth: min(labelWidth,
-                        min(88, max(42, viewportWidth * 0.22)) * fontScale))
+                    .frame(maxWidth: min(88, max(42, viewportWidth * 0.22)) * fontScale)
                     .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
                 if !matched.isEmpty {
                     Image(systemName: "square.stack")
                         .font(.system(size: 8 * fontScale))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(graphSecondaryText)
                     if commit.checkedOutWorktrees.count > 1 {
                         Text("\(commit.checkedOutWorktrees.count)")
                             .font(.system(size: Self.badgeFontSize * fontScale))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(graphSecondaryText)
                     }
                     Spacer(minLength: Self.badgeHorizontalPadding * fontScale)
                         .frame(width: Self.badgeHorizontalPadding * fontScale)
@@ -978,10 +987,10 @@ struct RecentCommitsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(Color.primary.opacity(0.04))
+        .background(graphTextColor.opacity(0.04))
         .clipShape(outline)
-        .overlay(outline.stroke(current ? GitGraphPalette.color(colorIndex)
-                                        : Color.primary.opacity(0.35),
+        .overlay(outline.stroke(current ? palette.color(colorIndex)
+                                        : graphTextColor.opacity(0.35),
                                 lineWidth: 1 * fontScale))
         .help(reference.name + (matched.isEmpty ? ""
               : "\n" + matched.map(\.path).joined(separator: "\n")))
@@ -1166,11 +1175,11 @@ struct RecentCommitsView: View {
             HStack {
                 Text(verbatim: label)
                     .font(.system(size: 9 * fontScale, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(graphSecondaryText)
                 Spacer()
                 Text(entries.count, format: .number)
                     .font(.system(size: 9 * fontScale))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(graphTertiaryText)
             }
             .modifier(layout)
         }
@@ -1277,7 +1286,7 @@ struct RecentCommitsView: View {
         ) { _, layout in
             Text(verbatim: message)
                 .font(.system(size: 9.5 * fontScale))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(graphSecondaryText)
                 .modifier(layout)
         }
         .background { fileRails(rails, spacing: spacing) }
@@ -1295,7 +1304,7 @@ struct RecentCommitsView: View {
             ) { _, layout in
                 Text(String(localized: "No changed files", table: "Git"))
                     .font(.system(size: 9.5 * fontScale))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(graphTertiaryText)
                     .modifier(layout)
             }
             .background { fileRails(rails, spacing: spacing) }
@@ -1402,41 +1411,102 @@ struct RecentCommitsView: View {
     }
 }
 
-enum GitGraphPalette {
-    static let colors: [NSColor] = [
-        rgb(0, 133, 217), rgb(217, 0, 143), rgb(0, 217, 10), rgb(217, 133, 0),
-        rgb(163, 0, 217), rgb(255, 0, 0), rgb(0, 217, 204), rgb(225, 56, 232),
-        rgb(133, 217, 0), rgb(220, 91, 35), rgb(111, 36, 214), rgb(255, 204, 0),
-    ]
+struct GitGraphPalette {
+    // Twelve stable lane identities, using Ghostty's normal and bright ANSI hues.
+    private static let slots = [4, 5, 2, 3, 6, 1, 12, 13, 10, 11, 14, 9]
 
-    static let iconInks: [NSColor] = colors.map { color in
-        func linear(_ channel: CGFloat) -> CGFloat {
-            channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+    let colors: [NSColor]
+    let iconInks: [NSColor]
+    private let disconnected: NSColor
+
+    init(theme: GhosttyThemeDefinition) {
+        let background = theme.sidebarNSColor.usingColorSpace(.sRGB) ?? theme.sidebarNSColor
+        let foreground = theme.foregroundNSColor.usingColorSpace(.sRGB) ?? theme.foregroundNSColor
+        let fallback = Self.contrast(foreground, background) >= 2.5
+            ? foreground : (Self.luminance(background) >= 0.18 ? NSColor.black : .white)
+        func visible(_ color: NSColor) -> NSColor {
+            if Self.contrast(color, background) >= 2.5 { return color }
+            for step in 1...10 {
+                let mixed = color.blended(withFraction: CGFloat(step) / 10, of: fallback) ?? fallback
+                if Self.contrast(mixed, background) >= 2.5 { return mixed }
+            }
+            return fallback
         }
-        let luminance = 0.2126 * linear(color.redComponent)
-            + 0.7152 * linear(color.greenComponent)
-            + 0.0722 * linear(color.blueComponent)
-        return luminance >= 0.18 ? .black : .white
+        var lanes: [NSColor] = []
+        for slot in Self.slots {
+            let base = (theme.paletteNSColor(slot) ?? theme.accentNSColor)
+                .usingColorSpace(.sRGB) ?? theme.accentNSColor
+            var candidate = visible(base)
+            if lanes.contains(where: { Self.distance(candidate, $0) < 0.12 }) {
+                var hue: CGFloat = 0
+                var saturation: CGFloat = 0
+                var brightness: CGFloat = 0
+                var alpha: CGFloat = 0
+                base.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+                let lightBackdrop = Self.luminance(background) >= 0.18
+                search: for shade in 0...4 {
+                    let delta = CGFloat(shade) * 0.15
+                    let value = lightBackdrop ? max(0.2, brightness - delta)
+                                              : min(1, brightness + delta)
+                    for step in 1...24 {
+                        let shift = CGFloat((step + 1) / 2) * (step.isMultiple(of: 2) ? -0.06 : 0.06)
+                        let hueValue = (hue + shift + 2).truncatingRemainder(dividingBy: 1)
+                        let variant = NSColor(calibratedHue: hueValue,
+                            saturation: max(saturation, 0.55), brightness: value, alpha: 1)
+                        let adjusted = visible(variant.usingColorSpace(.sRGB) ?? variant)
+                        if lanes.allSatisfy({ Self.distance(adjusted, $0) >= 0.12 }) {
+                            candidate = adjusted
+                            break search
+                        }
+                    }
+                }
+            }
+            lanes.append(candidate)
+        }
+        colors = lanes
+        iconInks = colors.map { Self.luminance($0) >= 0.18 ? .black : .white }
+        disconnected = foreground.withAlphaComponent(0.55)
     }
 
-    private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> NSColor {
-        NSColor(srgbRed: red / 255, green: green / 255, blue: blue / 255, alpha: 1)
-    }
-
-    static func color(_ index: Int) -> Color {
+    func color(_ index: Int) -> Color {
         if index == CommitGraphLayout.unconnectedWorktreeColor {
-            return Color(nsColor: .secondaryLabelColor)
+            return Color(nsColor: disconnected)
         }
         return Color(nsColor: colors[index % colors.count])
     }
 
-    static func iconColor(_ index: Int) -> Color {
+    func iconColor(_ index: Int) -> Color {
         Color(nsColor: iconInks[index % iconInks.count])
+    }
+
+    private static func luminance(_ color: NSColor) -> CGFloat {
+        let rgb = color.usingColorSpace(.sRGB) ?? color
+        func linear(_ channel: CGFloat) -> CGFloat {
+            channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear(rgb.redComponent)
+            + 0.7152 * linear(rgb.greenComponent)
+            + 0.0722 * linear(rgb.blueComponent)
+    }
+
+    private static func contrast(_ left: NSColor, _ right: NSColor) -> CGFloat {
+        let a = luminance(left)
+        let b = luminance(right)
+        return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+    }
+
+    private static func distance(_ left: NSColor, _ right: NSColor) -> CGFloat {
+        let a = left.usingColorSpace(.sRGB) ?? left
+        let b = right.usingColorSpace(.sRGB) ?? right
+        return max(abs(a.redComponent - b.redComponent),
+                   abs(a.greenComponent - b.greenComponent),
+                   abs(a.blueComponent - b.blueComponent))
     }
 }
 
 struct CommitGraphRails: View {
     private let themeChanges = Theme.changes
+    @Environment(\.colorScheme) private var colorScheme
     private static let firstLaneX: CGFloat = 8
 
     static func spacing(lanes: Int, viewportWidth: CGFloat, scale: CGFloat) -> CGFloat {
@@ -1463,9 +1533,11 @@ struct CommitGraphRails: View {
 
     var body: some View {
         let _ = themeChanges.revision
+        let theme = Theme.terminal(dark: colorScheme == .dark)
+        let palette = GitGraphPalette(theme: theme)
         Canvas { context, size in
             let middle = size.height / 2
-            let backdrop = Color(nsColor: Theme.sidebar)
+            let backdrop = Color(nsColor: theme.sidebarNSColor)
             let separation = StrokeStyle(
                 lineWidth: min(4, max(2, laneSpacing - 0.6)) * fontScale,
                 lineCap: .round, lineJoin: .round
@@ -1512,7 +1584,7 @@ struct CommitGraphRails: View {
                         linkColor = color
                     }
                     context.stroke(path, with: .color(backdrop), style: separation)
-                    context.stroke(path, with: .color(GitGraphPalette.color(linkColor)),
+                    context.stroke(path, with: .color(palette.color(linkColor)),
                                    style: stroke)
                 }
                 let radius = 4 * fontScale
@@ -1520,7 +1592,7 @@ struct CommitGraphRails: View {
                 let node = Path(ellipseIn: CGRect(
                     x: x - radius, y: middle - radius, width: 2 * radius, height: 2 * radius
                 ))
-                let nodeColor = GitGraphPalette.color(row.node.color)
+                let nodeColor = palette.color(row.node.color)
                 if isWorktree {
                     var diamond = Path()
                     diamond.move(to: CGPoint(x: x, y: middle - radius - 1.5 * fontScale))
@@ -1550,7 +1622,7 @@ struct CommitGraphRails: View {
                     path.move(to: CGPoint(x: laneX(rail.lane), y: 0))
                     path.addLine(to: CGPoint(x: laneX(rail.lane), y: size.height))
                     context.stroke(path, with: .color(backdrop), style: separation)
-                    context.stroke(path, with: .color(GitGraphPalette.color(rail.color)),
+                    context.stroke(path, with: .color(palette.color(rail.color)),
                                    style: stroke)
                 }
             }
