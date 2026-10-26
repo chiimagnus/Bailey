@@ -353,6 +353,10 @@ struct DockTabGroupView: View {
                 )
             }
         }
+        .onChange(of: isFocused) { _, focused in
+            if !focused { contextTab = nil }
+        }
+        .onChange(of: active) { _, _ in contextTab = nil }
     }
 
     private var header: some View {
@@ -467,6 +471,8 @@ struct DockTabGroupView: View {
         project.dock.availableAddActions()
     }
 
+    @State private var contextTab: DockItem?
+
     private func tabStrip(maxWidth: CGFloat? = nil) -> some View {
         ScrollViewReader { scrollProxy in
             ScrollView(.horizontal, showsIndicators: false) {
@@ -523,6 +529,12 @@ struct DockTabGroupView: View {
                 },
                 renamingTabID: $renamingTabID
             )
+            .overlay {
+                contextTabOutline(for: item)
+            }
+            .background {
+                TreeContextClickTarget { contextTab = item }
+            }
             .contextMenu {
                 if let current = project.tabs.first(where: { $0.id == id }) {
                     projectTabMenu(current)
@@ -536,6 +548,12 @@ struct DockTabGroupView: View {
                 close: { closeTool(item) }
             )
             .accessibilityIdentifier("bailey.dock.\(item.configurationName ?? "unknown")")
+            .overlay {
+                contextTabOutline(for: item)
+            }
+            .background {
+                TreeContextClickTarget { contextTab = item }
+            }
             .contextMenu {
                 let closeTitle = String(localized: "Close Panel", table: "Interface")
                 Button {
@@ -552,7 +570,15 @@ struct DockTabGroupView: View {
         }
     }
 
+    private func contextTabOutline(for item: DockItem) -> some View {
+        RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(contextTab == item && isFocused ? Color(nsColor: Theme.accent) : .clear,
+                          lineWidth: 1)
+            .allowsHitTesting(false)
+    }
+
     private func select(_ item: DockItem) {
+        contextTab = nil
         project.dock.select(item)
         if case .tab(let id) = item { project.selectTab(id) }
     }

@@ -34,6 +34,42 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data("original bytes\n".utf8))
     }
 
+    func testRightClickInactiveFileTabClosesOnlyThatTab() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("first-tab.txt", text: "first\n")
+        let second = try fixture.file("second-tab.txt", text: "second\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let firstRow = WorkspaceUITestSupport.fileRow(first, in: window)
+        let secondRow = WorkspaceUITestSupport.fileRow(second, in: window)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 15))
+        firstRow.doubleClick()
+        XCTAssertTrue(secondRow.waitForExistence(timeout: 15))
+        secondRow.doubleClick()
+        let firstTab = WorkspaceUITestSupport.fileTab(first, in: window)
+        let secondTab = WorkspaceUITestSupport.fileTab(second, in: window)
+        XCTAssertTrue(firstTab.waitForExistence(timeout: 12))
+        XCTAssertTrue(secondTab.waitForExistence(timeout: 12))
+
+        firstTab.hover()
+        let before = try contextOutlinePixels(of: firstTab)
+        firstTab.rightClick()
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertNotEqual(try contextOutlinePixels(of: firstTab), before,
+                          "The inactive tab must show an independent context target outline")
+        firstTab.rightClick()
+        let contextMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["Close Others"].exists && $0.menuItems["Close"].exists
+        }, "Only the tab context menu can close this inactive tab")
+        contextMenu.menuItems["Close"].click()
+        XCTAssertTrue(firstTab.waitForNonExistence(timeout: 12))
+        XCTAssertTrue(secondTab.exists, "Right-clicking an inactive tab must not replace the active one")
+        XCTAssertEqual(try Data(contentsOf: first), Data("first\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("second\n".utf8))
+    }
+
     func testProjectContextMenuExposesOnlyCloseAndUsesFolderName() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("folder-first.txt", text: "project contents\n")
@@ -48,6 +84,8 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         XCTAssertTrue(row.label.contains(fixture.root.lastPathComponent),
                       "The project name must be derived from its directory")
+        row.hover()
+        let before = try contextOutlinePixels(of: row)
         row.rightClick()
         XCTAssertTrue(app.menuItems["Close Project"].waitForExistence(timeout: 10))
         for removed in ["Rename…", "Use Automatic Title", "Set Project Directory…",
@@ -56,6 +94,26 @@ final class WorkspaceDockUITests: XCTestCase {
                            "Project menu must not expose removed action \(removed)")
         }
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertNotEqual(try contextOutlinePixels(of: row), before,
+                          "Right-clicked project must draw its own context outline")
+    }
+
+    private func contextOutlinePixels(of element: XCUIElement) throws -> Data {
+        let tiff = try XCTUnwrap(element.screenshot().image.tiffRepresentation)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: tiff))
+        let height = bitmap.pixelsHigh
+        let width = bitmap.pixelsWide
+        var rgb: [UInt8] = []
+        for y in (height / 3)..<(2 * height / 3) {
+            for x in [1, 2, 3, max(0, width - 4), max(0, width - 3), max(0, width - 2)] {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                else { continue }
+                rgb += [color.redComponent, color.greenComponent, color.blueComponent].map {
+                    UInt8(max(0, min(255, Int($0 * 255))))
+                }
+            }
+        }
+        return Data(rgb)
     }
 
     func testClosingExplicitlyActivatedProjectsKeepsFilesWithoutDragging() throws {

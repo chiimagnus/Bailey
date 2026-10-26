@@ -10,6 +10,7 @@ struct ProjectsPanelView: View {
     @Environment(\.openSettings) private var openSettings
     @State private var showingProjectPicker = false
     @State private var draggedProjectID: UUID?
+    @State private var contextProjectID: UUID?
     @State private var projectFrames: [UUID: CGRect] = [:]
 
     var body: some View {
@@ -22,7 +23,12 @@ struct ProjectsPanelView: View {
                             project: project,
                             index: index,
                             isSelected: project.id == manager.selectedProjectID,
-                            select: { manager.selectedProjectID = project.id },
+                            isContextTarget: contextProjectID == project.id,
+                            onContextClick: { contextProjectID = project.id },
+                            select: {
+                                contextProjectID = nil
+                                manager.selectedProjectID = project.id
+                            },
                             close: { manager.close(project) },
                             isDragging: draggedProjectID == project.id,
                             onDrag: { updateProjectDrag(source: project.id, location: $0) },
@@ -99,6 +105,7 @@ struct ProjectsPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: Theme.background))
         .onPreferenceChange(ProjectFramePreferenceKey.self) { projectFrames = $0 }
+        .onChange(of: manager.selectedProjectID) { _, _ in contextProjectID = nil }
     }
 
     private func updateProjectDrag(source: UUID, location: CGPoint) {
@@ -150,6 +157,8 @@ private struct SidebarProjectRow: View {
     let project: Project
     let index: Int
     let isSelected: Bool
+    let isContextTarget: Bool
+    let onContextClick: () -> Void
     let select: () -> Void
     let close: () -> Void
     let isDragging: Bool
@@ -177,6 +186,15 @@ private struct SidebarProjectRow: View {
                 .fill(isSelected ? Color.primary.opacity(0.09) : (isHovering ? Color.primary.opacity(0.04) : .clear))
         )
         .onHover { isHovering = $0 }
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(isContextTarget ? Color(nsColor: Theme.accent) : .clear,
+                              lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .background {
+            TreeContextClickTarget(onContextClick: onContextClick)
+        }
         .contextMenu {
             Button(String(localized: "Close Project", table: "Sidebar")) {
                 close()
