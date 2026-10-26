@@ -46,15 +46,15 @@ struct ProjectsPanelView: View {
             HStack(spacing: 2) {
                 ChromeIconButton(
                     systemImage: "plus",
-                    tooltip: String(localized: "Add folders or SSH paths", table: "Sidebar")
+                    tooltip: String(localized: "Add projects or SSH files", table: "Sidebar")
                 ) { showingProjectPicker.toggle() }
                 .popover(isPresented: $showingProjectPicker, arrowEdge: .top) {
                     VStack(spacing: 2) {
-                        Button(String(localized: "Add Folder…", table: "Sidebar")) {
+                        Button(String(localized: "Add Projects…", table: "Sidebar")) {
                             showingProjectPicker = false
                             manager.chooseFolders()
                         }
-                        Button(String(localized: "Add SSH Files or Folders…", table: "Sidebar")) {
+                        Button(String(localized: "Add SSH Files or Projects…", table: "Sidebar")) {
                             showingProjectPicker = false
                             manager.chooseSSHItems()
                         }

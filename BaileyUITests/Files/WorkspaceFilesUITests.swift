@@ -136,8 +136,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         let app = try WorkspaceUITestSupport.launch(
             in: self, language: "en", configurationHome: fixture.root
         )
-        app.menuBarItems["File"].click()
-        let add = app.menuItems["Add SSH Files or Folders…"]
+        app.menuBarItems["Project"].click()
+        let add = app.menuItems["Add SSH Files or Projects…"]
         XCTAssertTrue(add.waitForExistence(timeout: 12))
         add.click()
         let window = app.windows.firstMatch
@@ -231,8 +231,8 @@ final class WorkspaceFilesUITests: XCTestCase {
             in: self, language: "en", configurationHome: fixture.root
         )
         func addSSH(_ remoteFolder: String) {
-            app.menuBarItems["File"].click()
-            let add = app.menuItems["Add SSH Files or Folders…"]
+            app.menuBarItems["Project"].click()
+            let add = app.menuItems["Add SSH Files or Projects…"]
             XCTAssertTrue(add.waitForExistence(timeout: 10))
             add.click()
             let sheet = app.windows.firstMatch.sheets.firstMatch
@@ -720,8 +720,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try runSSH(host: host, command: "cat '\(firstPath)'"), "alpha remote\n")
 
         let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        app.menuBarItems["File"].click()
-        let addSSH = app.menuItems["Add SSH Files or Folders…"]
+        app.menuBarItems["Project"].click()
+        let addSSH = app.menuItems["Add SSH Files or Projects…"]
         XCTAssertTrue(addSSH.waitForExistence(timeout: 10))
         addSSH.click()
         let window = app.windows.firstMatch

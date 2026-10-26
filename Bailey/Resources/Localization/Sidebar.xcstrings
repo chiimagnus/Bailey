@@ -239,32 +239,32 @@
         }
       }
     },
-    "Add Folder…" : {
+    "Add Projects…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加文件夹…"
+            "value" : "添加项目…"
           }
         }
       }
     },
-    "Add folders or SSH paths" : {
+    "Add projects or SSH files" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加文件夹或 SSH 路径"
+            "value" : "添加项目或 SSH 文件"
           }
         }
       }
     },
-    "Add SSH Files or Folders…" : {
+    "Add SSH Files or Projects…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加 SSH 文件或文件夹…"
+            "value" : "添加 SSH 文件或项目…"
           }
         }
       }

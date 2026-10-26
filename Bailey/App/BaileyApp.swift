@@ -231,13 +231,13 @@ private struct BaileyCommands: Commands {
         }
 
         CommandMenu(String(localized: "Project", table: "Interface")) {
-            Button(String(localized: "Add Folder…", table: "Interface")) {
+            Button(String(localized: "Add Projects…", table: "Interface")) {
                 manager?.chooseFolders()
             }
             .keyboardShortcut("a", modifiers: [.command, .shift])
             .disabled(manager == nil)
 
-            Button(String(localized: "Add SSH Files or Folders…", table: "Interface")) {
+            Button(String(localized: "Add SSH Files or Projects…", table: "Interface")) {
                 manager?.chooseSSHItems()
             }
             .disabled(manager == nil)

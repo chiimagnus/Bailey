@@ -7,12 +7,12 @@
     "%lld" : {
       "shouldTranslate" : false
     },
-    "Add Folder" : {
+    "Add Projects" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加文件夹"
+            "value" : "添加项目"
           }
         }
       }
@@ -27,12 +27,12 @@
         }
       }
     },
-    "Add Folder…" : {
+    "Add Projects…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加文件夹…"
+            "value" : "添加项目…"
           }
         }
       }
@@ -47,22 +47,22 @@
         }
       }
     },
-    "Add SSH Files or Folders" : {
+    "Add SSH Files or Projects" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加 SSH 文件或文件夹"
+            "value" : "添加 SSH 文件或项目"
           }
         }
       }
     },
-    "Add SSH Files or Folders…" : {
+    "Add SSH Files or Projects…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "添加 SSH 文件或文件夹…"
+            "value" : "添加 SSH 文件或项目…"
           }
         }
       }

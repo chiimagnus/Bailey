@@ -269,10 +269,10 @@ struct CommandPaletteView: View {
             PaletteCommand(id: "clear-terminal", title: LocalizedStringResource("Clear Terminal", table: "Interface"), systemImage: "eraser", shortcut: "⌘K") {
                 manager.clearActiveTerminal()
             },
-            PaletteCommand(id: "add-folder", title: LocalizedStringResource("Add Folder", table: "Interface"), systemImage: "folder.badge.plus", shortcut: "⇧⌘A") {
+            PaletteCommand(id: "add-folder", title: LocalizedStringResource("Add Projects", table: "Interface"), systemImage: "folder.badge.plus", shortcut: "⇧⌘A") {
                 manager.chooseFolders()
             },
-            PaletteCommand(id: "add-ssh-items", title: LocalizedStringResource("Add SSH Files or Folders", table: "Interface"), systemImage: "network", shortcut: nil) {
+            PaletteCommand(id: "add-ssh-items", title: LocalizedStringResource("Add SSH Files or Projects", table: "Interface"), systemImage: "network", shortcut: nil) {
                 manager.chooseSSHItems()
             },
             PaletteCommand(id: "close-tab", title: LocalizedStringResource("Close Tab", table: "Interface"), systemImage: "xmark.square", shortcut: "⌘W") {

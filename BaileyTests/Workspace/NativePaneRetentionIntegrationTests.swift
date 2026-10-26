@@ -186,11 +186,11 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
 
     func testNativeFileAndSSHChoosersStayOnOwningWindow() async throws {
         let local = WorkspaceNativeDialogs.folderPanel()
-        XCTAssertFalse(local.canChooseFiles, "Add Folder must not offer to create pinned-file projects")
+        XCTAssertFalse(local.canChooseFiles, "Add Projects must select directories only")
         XCTAssertTrue(local.canChooseDirectories)
         XCTAssertTrue(local.allowsMultipleSelection)
         XCTAssertEqual(local.prompt, String(localized: "Add", table: "Terminal"))
-        XCTAssertEqual(local.message, String(localized: "Add folders to Bailey", table: "Terminal"))
+        XCTAssertEqual(local.message, String(localized: "Add projects to Bailey", table: "Terminal"))
         let files = WorkspaceNativeDialogs.filePanel()
         XCTAssertTrue(files.canChooseFiles)
         XCTAssertFalse(files.canChooseDirectories)
@@ -198,6 +198,10 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertEqual(files.prompt, String(localized: "Open", table: "Sidebar"))
         XCTAssertEqual(files.message, String(localized: "Open files in Bailey", table: "Terminal"))
         let ssh = WorkspaceNativeDialogs.sshForm(aliases: ["fixture-one", "fixture-two"])
+        XCTAssertEqual(
+            ssh.alert.messageText,
+            String(localized: "Add SSH Files or Projects", table: "Terminal")
+        )
         XCTAssertEqual(ssh.alert.buttons.map(\.title), [
             String(localized: "Add", table: "Terminal"),
             String(localized: "Cancel", table: "Terminal"),

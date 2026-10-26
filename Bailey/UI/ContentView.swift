@@ -125,7 +125,7 @@ struct ContentView: View {
     private var emptyState: some View {
         emptyStatePrompt(
             title: String(localized: "No open projects", table: "Interface"),
-            buttonTitle: String(localized: "Add Folder…", table: "Interface"),
+            buttonTitle: String(localized: "Add Projects…", table: "Interface"),
             action: { manager.chooseFolders() }
         )
     }
@@ -248,7 +248,7 @@ enum WorkspaceNativeDialogs {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
         panel.prompt = String(localized: "Add", table: "Terminal")
-        panel.message = String(localized: "Add folders to Bailey", table: "Terminal")
+        panel.message = String(localized: "Add projects to Bailey", table: "Terminal")
         return panel
     }
 
@@ -284,7 +284,7 @@ enum WorkspaceNativeDialogs {
         alert: NSAlert, hosts: NSComboBox, paths: NSTextView
     ) {
         let alert = NSAlert()
-        alert.messageText = String(localized: "Add SSH Files or Folders", table: "Terminal")
+        alert.messageText = String(localized: "Add SSH Files or Projects", table: "Terminal")
         alert.informativeText = String(localized:
             "Use an SSH host from ~/.ssh/config and one remote path per line. Windows paths such as D:\\GitHub\\project are accepted.", table: "Terminal")
         alert.addButton(withTitle: String(localized: "Add", table: "Terminal"))
