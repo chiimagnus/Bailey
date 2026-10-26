@@ -102,6 +102,55 @@ final class PanelContextTests: XCTestCase {
         XCTAssertNotNil(project.fileTree.draft)
     }
 
+    func testNewFileAndFolderUseFocusedFilesDirectory() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-focused-create-" + UUID().uuidString)
+        let nested = root.appendingPathComponent("nested", isDirectory: true)
+        let existing = nested.appendingPathComponent("existing.txt")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try "existing".write(to: existing, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        _ = await project.syncFiles(isCurrent: { true })
+        manager.showPanel(.files)
+
+        let directory = try XCTUnwrap(project.fileTree.items.first { $0.path == nested.path })
+        project.fileTree.select(directory)
+        await project.fileTree.toggle(directory)
+        await manager.newFile()
+        XCTAssertEqual(project.fileTree.draft?.parentDir, nested.path,
+                       "Creating inside a focused directory must not revert to the root")
+
+        let selectedFile = try XCTUnwrap(project.fileTree.items.first { $0.path == existing.path })
+        project.fileTree.select(selectedFile)
+        await manager.newFolder()
+        XCTAssertEqual(project.fileTree.draft?.parentDir, nested.path,
+                       "Creating beside a focused file uses its parent folder")
+
+        manager.showPanel(.git)
+        await manager.newFile()
+        XCTAssertEqual(project.fileTree.draft?.parentDir, root.path,
+                       "An inactive Files selection cannot override another pane")
+
+        manager.openFile(existing.path)
+        await manager.newFolder()
+        XCTAssertEqual(project.fileTree.draft?.parentDir, nested.path,
+                       "Creating from an active editor uses its file's containing directory")
+
+        let external = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-outside-" + UUID().uuidString + ".txt")
+        try "outside".write(to: external, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: external) }
+        manager.openFile(external.path)
+        await manager.newFile()
+        XCTAssertEqual(project.fileTree.draft?.parentDir, root.path,
+                       "An editor file outside the project cannot create outside its root")
+    }
+
     func testRemountedFilesReusesTrustedTargetDuringPendingRefresh() async throws {
         let backend = DelayedWorkspaceFixture("same-channel")
         let identity = PanelContext.Identity(

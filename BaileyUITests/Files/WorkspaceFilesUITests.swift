@@ -873,6 +873,59 @@ final class WorkspaceFilesUITests: XCTestCase {
         }, "Files context menu must be selected instead of the global Edit menu")
     }
 
+    func testSystemNewItemShortcutsUseFocusedFileManagerFolder() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let existing = try fixture.file("inside/existing.txt", text: "existing")
+        let newFile = fixture.root.appendingPathComponent("inside/from-shortcut.txt")
+        let newFolder = fixture.root.appendingPathComponent("inside/from-shortcut-folder")
+
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let folder = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", "inside")).firstMatch
+        XCTAssertTrue(folder.waitForExistence(timeout: 15))
+        folder.click()
+        app.typeKey("n", modifierFlags: .command)
+
+        let fileName = window.textFields.matching(
+            NSPredicate(format: "placeholderValue == %@", "File name")
+        ).firstMatch
+        XCTAssertTrue(fileName.waitForExistence(timeout: 15))
+        fileName.typeText("from-shortcut.txt\n")
+        let createdFile = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in FileManager.default.fileExists(atPath: newFile.path) },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [createdFile], timeout: 15), .completed)
+
+        let existingRow = WorkspaceUITestSupport.fileRow(existing, in: window)
+        XCTAssertTrue(existingRow.waitForExistence(timeout: 15))
+        existingRow.click()
+        app.typeKey("n", modifierFlags: [.command, .option])
+
+        let folderName = window.textFields.matching(
+            NSPredicate(format: "placeholderValue == %@", "Folder name")
+        ).firstMatch
+        XCTAssertTrue(folderName.waitForExistence(timeout: 15))
+        folderName.typeText("from-shortcut-folder\n")
+        let createdFolder = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                var isDirectory = ObjCBool(false)
+                return FileManager.default.fileExists(
+                    atPath: newFolder.path, isDirectory: &isDirectory
+                ) && isDirectory.boolValue
+            }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [createdFolder], timeout: 15), .completed)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.root.appendingPathComponent("from-shortcut.txt").path
+        ))
+        XCTAssertEqual(try Data(contentsOf: existing), Data("existing".utf8))
+    }
+
     func testExplorerMenuUsesVSCodeFileAndDirectoryActions() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let nested = try fixture.file("folder/leaf.txt", text: "menu bytes\n")

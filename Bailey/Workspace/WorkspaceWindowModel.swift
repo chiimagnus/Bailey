@@ -594,6 +594,17 @@ final class WorkspaceWindowModel {
         let root = context.cwd
         let revision = context.connectionRevision
         guard selectedProjectID == project.id, project.matchesPanelTarget(context.identity) else { return }
+        let directory: String
+        if project.dock.activeGroup?.selected == .files,
+           project.fileTree.matchesIndexTarget(root: root, context: context) {
+            directory = project.fileTree.selectedDirectoryPath ?? root
+        } else if case .file(let file)? = project.focusedContent,
+                  file.workspaceIdentity == context.identity.workspace {
+            let parent = (file.path as NSString).deletingLastPathComponent
+            directory = LocalPathScope.contains(parent, in: root) ? parent : root
+        } else {
+            directory = root
+        }
         showPanel(.files)
         guard await project.fileTree.sync(
             root: root, backend: context.backend, scope: context.scope,
@@ -602,9 +613,9 @@ final class WorkspaceWindowModel {
             selectedProjectID == project.id, project.matchesPanelTarget(context.identity)
         else { return }
         if isDirectory {
-            await project.fileTree.beginNewFolder(in: root)
+            await project.fileTree.beginNewFolder(in: directory)
         } else {
-            await project.fileTree.beginNewFile(in: root)
+            await project.fileTree.beginNewFile(in: directory)
         }
     }
 
