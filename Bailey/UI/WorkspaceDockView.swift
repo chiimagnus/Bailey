@@ -447,10 +447,7 @@ struct DockTabGroupView: View {
     }
 
     private var availableActions: [DockAddAction] {
-        project.dock.configuration.addActions.filter { action in
-            guard let item = action.item else { return true }
-            return !group.items.contains(item)
-        }
+        project.dock.availableAddActions()
     }
 
     private func tabStrip(maxWidth: CGFloat? = nil) -> some View {

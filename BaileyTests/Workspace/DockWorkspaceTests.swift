@@ -90,6 +90,28 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertEqual(snapshots, 0)
     }
 
+    func testAddPanelOnlyOffersMissingToolsAcrossAllGroups() throws {
+        let dock = DockWorkspaceModel()
+        let emptyGroup = try XCTUnwrap(dock.root.groups.first { $0.items.isEmpty })
+        XCTAssertEqual(dock.availableAddActions(), [.session])
+
+        XCTAssertTrue(dock.move(.files, into: emptyGroup.id))
+        let otherGroup = try XCTUnwrap(dock.group(containing: .projects))
+        XCTAssertEqual(dock.availableAddActions(), [.session],
+                       "A tool moved into another group must not appear as addable")
+
+        dock.removeTool(.files)
+        XCTAssertEqual(dock.availableAddActions(), [.session, .files])
+        XCTAssertTrue(dock.place(.files, in: otherGroup.id))
+        XCTAssertEqual(dock.availableAddActions(), [.session])
+
+        dock.removeTool(.git)
+        dock.removeTool(.projects)
+        XCTAssertEqual(dock.availableAddActions(), [.session, .projects, .git])
+        XCTAssertEqual(DockWorkspaceModel().availableAddActions(), [.session],
+                       "Other projects retain their own available tool list")
+    }
+
     func testToolsCanMoveIntoEmptyGroupsAtTheCenterAndEveryEdge() throws {
         for item in [DockItem.projects, .files, .git] {
             for edge in [nil, DockEdge.left, .right, .top, .bottom] {

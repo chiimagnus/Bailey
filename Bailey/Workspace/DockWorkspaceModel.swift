@@ -406,6 +406,13 @@ final class DockWorkspaceModel {
 
     func group(containing item: DockItem) -> DockGroup? { root.group(containing: item) }
 
+    func availableAddActions() -> [DockAddAction] {
+        configuration.addActions.filter { action in
+            guard let item = action.item else { return true }
+            return group(containing: item) == nil
+        }
+    }
+
     func select(_ item: DockItem, activating: Bool = true) {
         guard let owner = group(containing: item) else { return }
         if owner.selected != item {
