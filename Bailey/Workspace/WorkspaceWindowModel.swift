@@ -45,8 +45,11 @@ final class WorkspaceWindowModel {
         didSet {
             guard selectedProjectID != oldValue else { return }
             if let oldValue {
-                projects.first { $0.id == oldValue }?.tabs.forEach { $0.content.autoSaveOnFocusLoss() }
+                let previous = projects.first { $0.id == oldValue }
+                previous?.dock.clearContextTarget()
+                previous?.tabs.forEach { $0.content.autoSaveOnFocusLoss() }
             }
+            selectedProject?.dock.clearContextTarget()
             requestSave()
         }
     }
@@ -529,7 +532,7 @@ final class WorkspaceWindowModel {
 
     func closeActivePanelOrWindow() {
         guard let project = selectedProject,
-              let item = project.dock.activeGroup?.selected else {
+              let item = project.dock.closeTarget else {
             attachedWindow?.performClose(nil)
             return
         }

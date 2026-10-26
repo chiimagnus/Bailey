@@ -208,8 +208,11 @@ private struct BaileyCommands: Commands {
             .disabled((manager?.selectedProject?.tabs.count ?? 0) < 2)
 
             Button(String(localized: "Close Panel", table: "Interface")) {
-                if let manager { manager.closeActivePanelOrWindow() }
-                else { NSApp.keyWindow?.performClose(nil) }
+                if let owner = manager ?? NSApp.keyWindow.flatMap({ application.owner(of: $0) }) {
+                    owner.closeActivePanelOrWindow()
+                } else {
+                    NSApp.keyWindow?.performClose(nil)
+                }
             }
             .keyboardShortcut("w", modifiers: .command)
 

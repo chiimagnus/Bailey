@@ -68,6 +68,10 @@ final class WorkspaceApplication {
         windows.contains { $0 === window }
     }
 
+    func owner(of window: NSWindow) -> WorkspaceWindowModel? {
+        windows.first { !$0.isClosed && $0.attachedWindow === window }
+    }
+
     func didAttach(_ manager: WorkspaceWindowModel) {
         guard containsWindow(manager) else { return }
         isOpeningWindow = false

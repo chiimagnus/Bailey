@@ -378,6 +378,7 @@ final class DockWorkspaceModel {
         didSet { onSnapshotChange?() }
     }
     private(set) var activeGroupID: UUID?
+    private(set) var contextTarget: DockItem?
     @ObservationIgnored var onSnapshotChange: (() -> Void)?
     @ObservationIgnored var onDeactivate: ((DockItem) -> Void)?
 
@@ -388,9 +389,21 @@ final class DockWorkspaceModel {
     }
 
     var activeGroup: DockGroup? { activeGroupID.flatMap { root.group(id: $0) } }
+    var closeTarget: DockItem? { contextTarget ?? activeGroup?.selected }
+
+    func selectForContextMenu(_ item: DockItem) {
+        guard group(containing: item) != nil else { return }
+        contextTarget = item
+    }
+
+    func clearContextTarget() { contextTarget = nil }
 
     private func updateLayout(_ updated: DockNode, activating groupID: UUID? = nil) {
         let previous = activeGroup?.selected
+        if contextTarget.map({ updated.group(containing: $0) == nil }) == true {
+            contextTarget = nil
+        }
+        if groupID != nil { contextTarget = nil }
         activeGroupID = (groupID ?? activeGroupID).flatMap { updated.group(id: $0)?.id }
             ?? updated.groups.first?.id
         root = updated
@@ -399,6 +412,7 @@ final class DockWorkspaceModel {
 
     func activate(_ groupID: UUID) {
         guard root.group(id: groupID) != nil, activeGroupID != groupID else { return }
+        contextTarget = nil
         let previous = activeGroup?.selected
         activeGroupID = groupID
         if let previous { onDeactivate?(previous) }
@@ -415,6 +429,7 @@ final class DockWorkspaceModel {
 
     func select(_ item: DockItem, activating: Bool = true) {
         guard let owner = group(containing: item) else { return }
+        if activating { contextTarget = nil }
         if owner.selected != item {
             updateLayout(root.editingGroup(owner.id) { $0.selected = item },
                          activating: activating ? owner.id : nil)

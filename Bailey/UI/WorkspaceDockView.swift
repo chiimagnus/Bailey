@@ -343,7 +343,8 @@ struct DockTabGroupView: View {
             isActive: isFocused,
             focusesEmptySpace: active?.tabID == nil,
             canFocus: { canFocusGroup() && dragging.position == nil },
-            onFocused: { if dragging.position == nil { focusGroup() } }
+            onFocused: { if dragging.position == nil { focusGroup() } },
+            onPrimaryClick: { project.dock.clearContextTarget() }
         ).id(group.id))
         .background {
             GeometryReader { geometry in
@@ -353,10 +354,6 @@ struct DockTabGroupView: View {
                 )
             }
         }
-        .onChange(of: isFocused) { _, focused in
-            if !focused { contextTab = nil }
-        }
-        .onChange(of: active) { _, _ in contextTab = nil }
     }
 
     private var header: some View {
@@ -471,8 +468,6 @@ struct DockTabGroupView: View {
         project.dock.availableAddActions()
     }
 
-    @State private var contextTab: DockItem?
-
     private func tabStrip(maxWidth: CGFloat? = nil) -> some View {
         ScrollViewReader { scrollProxy in
             ScrollView(.horizontal, showsIndicators: false) {
@@ -529,7 +524,7 @@ struct DockTabGroupView: View {
                 contextTabOutline(for: item)
             }
             .background {
-                TreeContextClickTarget { contextTab = item }
+                TreeContextClickTarget { project.dock.selectForContextMenu(item) }
             }
             .contextMenu {
                 if let current = project.tabs.first(where: { $0.id == id }) {
@@ -548,7 +543,7 @@ struct DockTabGroupView: View {
                 contextTabOutline(for: item)
             }
             .background {
-                TreeContextClickTarget { contextTab = item }
+                TreeContextClickTarget { project.dock.selectForContextMenu(item) }
             }
             .contextMenu {
                 let closeTitle = String(localized: "Close Panel", table: "Interface")
@@ -564,13 +559,12 @@ struct DockTabGroupView: View {
 
     private func contextTabOutline(for item: DockItem) -> some View {
         RoundedRectangle(cornerRadius: 6)
-            .strokeBorder(contextTab == item ? Color(nsColor: Theme.accent) : .clear,
+            .strokeBorder(project.dock.contextTarget == item ? Color(nsColor: Theme.accent) : .clear,
                           lineWidth: 1)
             .allowsHitTesting(false)
     }
 
     private func select(_ item: DockItem) {
-        contextTab = nil
         project.dock.select(item)
         if case .tab(let id) = item { project.selectTab(id) }
     }
@@ -737,6 +731,7 @@ private struct DockGroupFocusReader: NSViewRepresentable {
     let focusesEmptySpace: Bool
     let canFocus: () -> Bool
     let onFocused: () -> Void
+    let onPrimaryClick: () -> Void
 
     func makeNSView(context: Context) -> DockGroupFocusView {
         DockGroupFocusView(groupID: groupID)
@@ -745,6 +740,7 @@ private struct DockGroupFocusReader: NSViewRepresentable {
     func updateNSView(_ view: DockGroupFocusView, context: Context) {
         view.canFocus = canFocus
         view.onFocused = onFocused
+        view.onPrimaryClick = onPrimaryClick
         let becameActive = isActive && !view.isActive
         view.isActive = isActive
         view.focusesEmptySpace = focusesEmptySpace
@@ -754,6 +750,7 @@ private struct DockGroupFocusReader: NSViewRepresentable {
     static func dismantleNSView(_ view: DockGroupFocusView, coordinator: ()) {
         view.stopMonitoring()
         view.onFocused = nil
+        view.onPrimaryClick = nil
         view.canFocus = nil
     }
 }
@@ -764,6 +761,7 @@ final class DockGroupFocusView: NSView {
     var focusesEmptySpace = true
     var canFocus: (() -> Bool)?
     var onFocused: (() -> Void)?
+    var onPrimaryClick: (() -> Void)?
     private var monitor: Any?
     private var leftMousePressedHere = false
 
@@ -790,15 +788,16 @@ final class DockGroupFocusView: NSView {
         stopMonitoring()
         guard window != nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown, .keyDown]
+            matching: [.leftMouseDown, .leftMouseUp, .keyDown]
         ) { [weak self] event in
             guard let self, let window = self.window, event.window === window,
                   !self.isHiddenOrHasHiddenAncestor else { return event }
             if event.type == .leftMouseDown {
-                self.leftMousePressedHere = self.bounds.contains(
-                    self.convert(event.locationInWindow, from: nil))
+                self.leftMousePressedHere = !event.modifierFlags.contains(.control)
+                    && self.bounds.contains(self.convert(event.locationInWindow, from: nil))
             } else if event.type == .keyDown {
-                if self.containsResponder(window.firstResponder) { self.onFocused?() }
+                if event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+                   self.containsResponder(window.firstResponder) { self.onFocused?() }
             } else {
                 if event.type == .leftMouseUp {
                     let pressedHere = self.leftMousePressedHere
@@ -806,6 +805,7 @@ final class DockGroupFocusView: NSView {
                     guard pressedHere else { return event }
                 }
                 if self.bounds.contains(self.convert(event.locationInWindow, from: nil)) {
+                    self.onPrimaryClick?()
                     self.onFocused?()
                     if self.focusesEmptySpace { self.requestFocusAfterClick() }
                 }

@@ -18,7 +18,8 @@ enum WorkspaceUITestSupport {
     private static var observing = false
 
     static func launch(
-        in test: XCTestCase, language: String? = nil, configurationHome: URL? = nil
+        in test: XCTestCase, language: String? = nil, configurationHome: URL? = nil,
+        initialProject: URL? = nil
     ) throws -> XCUIApplication {
         if !observing {
             XCTestObservationCenter.shared.addTestObserver(observer)
@@ -28,7 +29,8 @@ enum WorkspaceUITestSupport {
         let app: XCUIApplication
         let needsLaunch: Bool
         if let current = session,
-           configurationHome == nil, !current.usesFixtureHome, current.language == language,
+           configurationHome == nil, initialProject == nil,
+           !current.usesFixtureHome, current.language == language,
            current.app.state != .notRunning,
            (current.isReadyForReuse || resetWorkspace(current.app)) {
             app = current.app
@@ -57,7 +59,27 @@ enum WorkspaceUITestSupport {
             // and language changes still need a distinct process.
             app.launchArguments = ["--isolated-ui-test", "-ApplePersistenceIgnoreState", "YES"]
             if let language { app.launchArguments += ["-AppleLanguages", "(\(language))"] }
-            app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
+            let runID = UUID().uuidString
+            app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = runID
+            if let initialProject {
+                let suiteName = "chiimagnus.bailey.dev.isolated-ui-test." + runID
+                let files = ["files": [String: String]()]
+                let dock = ["group": ["_0": [
+                    "id": UUID().uuidString,
+                    "items": [files], "selected": files
+                ]]] as [String: Any]
+                let snapshot: [String: Any] = ["windows": [[
+                    "projects": [["customDirectory": initialProject.path,
+                                  "tabs": [], "dock": dock]],
+                    "selectedProjectIndex": 0
+                ]]]
+                let data = try JSONSerialization.data(withJSONObject: snapshot)
+                let defaults = UserDefaults(suiteName: suiteName)
+                defaults?.set(data, forKey: "workspaceSnapshot")
+                test.addTeardownBlock {
+                    defaults?.removePersistentDomain(forName: suiteName)
+                }
+            }
             app.launchEnvironment["CFFIXED_USER_HOME"] = home.path
             app.launchEnvironment["HOME"] = home.path
             session = Session(app: app, home: home, language: language,

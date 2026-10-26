@@ -34,39 +34,69 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data("original bytes\n".utf8))
     }
 
-    func testClosePanelSeparatesContextTargetFromCommandShortcut() throws {
+    func testRightClickFileTabAndCommandWCloseTheSameFile() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
-        let file = try fixture.file("keep.txt", text: "preserve me\n")
-        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        let first = try fixture.file("first.txt", text: "file A\n")
+        let second = try fixture.file("second.txt", text: "file B\n")
+        let third = try fixture.file("third.txt", text: "file C\n")
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", initialProject: fixture.root)
         let window = app.windows.firstMatch
-        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
-        let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
-        XCTAssertTrue(files.waitForExistence(timeout: 15))
-        XCTAssertTrue(git.waitForExistence(timeout: 15))
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        XCTAssertTrue(bundle.path.contains("DerivedData-Dev/Build/Products/Debug/"))
 
-        files.click()
-        git.rightClick()
-        let menu = app.menus["bailey.dock.git"].menuItems["Close Panel"]
-        XCTAssertTrue(menu.waitForExistence(timeout: 10))
-        menu.click()
-        XCTAssertTrue(git.waitForNonExistence(timeout: 12),
-                      "Context Close Panel must remove only the right-clicked Git panel")
-        XCTAssertTrue(files.exists, "Closing an inactive panel must preserve active Files")
+        func open(_ urls: [URL]) throws {
+            let delivered = expectation(description: "File-open event delivered to Bailey Dev")
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            NSWorkspace.shared.open(urls, withApplicationAt: bundle, configuration: config) {
+                _, error in
+                XCTAssertNil(error)
+                delivered.fulfill()
+            }
+            XCTAssertEqual(XCTWaiter.wait(for: [delivered], timeout: 15), .completed)
+        }
 
-        app.typeKey("g", modifierFlags: [.command, .shift])
-        XCTAssertTrue(git.waitForExistence(timeout: 12))
-        files.click()
-        git.rightClick()
-        XCTAssertTrue(app.menus["bailey.dock.git"].menuItems["Close Panel"]
-            .waitForExistence(timeout: 10))
+        try open([first, second, third])
+        let a = WorkspaceUITestSupport.fileTab(first, in: window)
+        let b = WorkspaceUITestSupport.fileTab(second, in: window)
+        let c = WorkspaceUITestSupport.fileTab(third, in: window)
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        XCTAssertTrue(c.waitForExistence(timeout: 15))
+        c.click()
+        b.rightClick()
+        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
+            $0.menuItems["Close Others"].exists && $0.menuItems["Close"].exists
+        }, "Right-click must open the file tab menu")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(files.waitForNonExistence(timeout: 12),
-                      "Cmd-W must close the active Files panel, not the prior right-click target")
-        XCTAssertTrue(git.exists)
-        XCTAssertTrue(window.exists)
-        XCTAssertEqual(try Data(contentsOf: file), Data("preserve me\n".utf8))
+        XCTAssertTrue(b.waitForNonExistence(timeout: 12),
+                      "Cmd-W must close right-clicked B, not the active C")
+        XCTAssertTrue(a.exists && c.exists && window.exists)
+
+        try open([second])
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        c.click()
+        b.rightClick()
+        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["Close Others"].exists && $0.menuItems["Close"].exists
+        })
+        menu.menuItems["Close"].click()
+        XCTAssertTrue(b.waitForNonExistence(timeout: 12))
+        XCTAssertTrue(a.exists && c.exists)
+
+        c.rightClick()
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        a.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(a.waitForNonExistence(timeout: 12),
+                      "A later primary click must replace the right-click target")
+        XCTAssertTrue(c.exists && window.exists)
+        XCTAssertEqual(try Data(contentsOf: first), Data("file A\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("file B\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: third), Data("file C\n".utf8))
     }
 
     func testCommandPaletteClosePanelUsesTheActiveTool() throws {
