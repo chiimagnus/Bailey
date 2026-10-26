@@ -480,7 +480,6 @@ class NativeCodeTextView: NSTextView {
     private func resetDocumentIndex(_ document: String) {
         lineIndex = NativeTextLineIndex(document as NSString)
         measuredLineWidths = nil
-        updateGutter()
     }
 
     func updateGutter() {
@@ -536,6 +535,7 @@ class NativeCodeTextView: NSTextView {
         guard edited.location != NSNotFound, edited.location >= 0,
               priorLength >= 0, NSMaxRange(edited) <= storage.length else {
             resetDocumentIndex(storage.string)
+            updateGutter()
             return
         }
         let previousRange = NSRange(location: edited.location, length: priorLength)
