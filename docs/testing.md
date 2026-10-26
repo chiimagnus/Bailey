@@ -135,7 +135,7 @@ Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 仍指向正式
 `GitNativeDialogTests` 直接检查生产 NSAlert 及选项联动；`GitRemoteBranchActionTests` 在真实 Git 仓库检验旧 Fetch Ref 的拒写和重新确认。`GitDialogUITests` 只保留完整 Bailey Dev 的 Git Graph→菜单→原生 Sheet→真实操作、跨窗归属和交互式 Rebase 等不可替代的用户行为。
 交互式 Rebase 用系统 `/bin/sh -c` 内联编辑器验证真实 PTY 与提交重写，避免跨进程执行 UI Runner 沙盒内的脚本。
 
-`GitInteractiveRebaseIntegrationTests` 检查应用服务归属、本地真实 PTY，以及固定与自动跟随 SSH 项目的独立握手和真实 Rebase；其窗口只用于满足 Ghostty 启动条件，真正 Git Graph→Sheet→终端输入另由 `GitDialogUITests` 检查。`GitWorkspaceSSHTests` 检查专属远端临时仓库的 Push/Delete、ZIP 二进制内容、历史文件 index/工作区复位、Stash、Clean 和普通 FileTab Ignore；`GitRemoteRefreshIntegrationTests` 用受控慢详情和获准 Windows SSH 仓库验证 `GitStatusModel` 的五秒轮询、取消后不补查及外部 Git 结果。面板挂载与用户入口由独立 Dev App 的 `GitChangesUITests`、`GitGraphGeometryUITests` 验证；真实 SSH 的完整 GUI 隐藏／恢复组合未在此组 E2E 中执行，不以模型测试替代。`SSHGitRecoveryLiveTests` 验证专属 Windows 临时仓库在测试后端失联期间保留 Git 快照、拒绝写操作并于恢复后重新允许写操作。这些集成测试不冒充完整独立 App 的菜单 E2E。当前已获授权的 `windows` 主机完整执行命令是：
+`GitInteractiveRebaseIntegrationTests` 检查应用服务归属、本地真实 PTY，以及固定 SSH 项目的独立握手和真实 Rebase；其窗口只用于满足 Ghostty 启动条件，真正 Git Graph→Sheet→终端输入另由 `GitDialogUITests` 检查。`GitWorkspaceSSHTests` 检查专属远端临时仓库的 Push/Delete、ZIP 二进制内容、历史文件 index/工作区复位、Stash、Clean 和普通 FileTab Ignore；`GitRemoteRefreshIntegrationTests` 用受控慢详情和获准 Windows SSH 仓库验证 `GitStatusModel` 的五秒轮询、取消后不补查及外部 Git 结果。面板挂载与用户入口由独立 Dev App 的 `GitChangesUITests`、`GitGraphGeometryUITests` 验证；真实 SSH 的完整 GUI 隐藏／恢复组合未在此组 E2E 中执行，不以模型测试替代。`SSHGitRecoveryLiveTests` 验证专属 Windows 临时仓库在测试后端失联期间保留 Git 快照、拒绝写操作并于恢复后重新允许写操作。这些集成测试不冒充完整独立 App 的菜单 E2E。当前已获授权的 `windows` 主机完整执行命令是：
 
 ```sh
 BAILEY_P4_TEST_SSH_HOST=windows TEST_RUNNER_BAILEY_P4_TEST_SSH_HOST=windows make test

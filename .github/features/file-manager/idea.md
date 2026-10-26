@@ -1,12 +1,12 @@
 # File Manager：多选、操作、拖放、隐藏规则与定位
 
-需求归属：[Issue #5](https://github.com/chiimagnus/Bailey/issues/5)。Files 单行游标、键盘焦点、单击浏览／双击激活和共享树行已在当前源码实现；本计划**复用并回归验证**，不依赖已移除的 `focus-navigation` 计划目录，不重做焦点方案。Settings 功能分类由 [#44](../settings-by-feature/idea.md) 负责（当前代码尚未有 File Manager 设置页）；文件外部事件由 [#40](../event-driven-workspace-refresh/idea.md) 负责（当前任务仍未完成）。
+需求归属：[Issue #5](https://github.com/chiimagnus/Bailey/issues/5)。本文保留立项需求与当时的实现基线；任务进度以 [todo.toml](todo.toml) 为准，当前行为见 [Files](../../../docs/features/files.md) 与 [设置](../../../docs/features/settings.md)。Files 的原生焦点基线已复用，不重做旧 `focus-navigation` 方案；[#40 文件事件](../event-driven-workspace-refresh/idea.md) 已落地本机和受支持的 Windows SSH Files 刷新，P4 联动 GUI 验收仍未完成。
 
-## 背景与已确认事实
+## 立项背景（历史基线）
 
-当前基线（`main`，`f3b965f`）：`FileTreeModel.selectedPath`、`TreeKeyboardHost`、单/双击与共享 `TreeRowSurface` 已实现；尚缺 Cmd/Shift 多选。Files 已有压缩目录、懒加载、新建／重命名、单项删除、复制路径、Finder→Files 本机批量复制。`LocalWorkspaceBackend.copyFromFinder` 已用暂存和 `RENAME_EXCL` 防覆盖，不得重写。现有本机 Files 外拖只发布公开 `fileURL`，内部拖放会被 Finder 接收入口误判为复制；SSH 不发布 Mac URL。`WorkspaceBackend` 无通用复制；`ProjectFileIndex` 仅索引本机，Git 失败会误回退全目录扫描。Files 的 `.git` 隐藏在 `FileTreeModel.children` 硬编码；自然排序和目录压缩属于 `TreeDisplayModel`，不重写。
+立项基线（`main`，`f3b965f`）：`FileTreeModel.selectedPath`、`TreeKeyboardHost`、单/双击与共享 `TreeRowSurface` 已实现；尚缺 Cmd/Shift 多选。Files 已有压缩目录、懒加载、新建／重命名、单项删除、复制路径、Finder→Files 本机批量复制。`LocalWorkspaceBackend.copyFromFinder` 已用暂存和 `RENAME_EXCL` 防覆盖，不得重写。现有本机 Files 外拖只发布公开 `fileURL`，内部拖放会被 Finder 接收入口误判为复制；SSH 不发布 Mac URL。`WorkspaceBackend` 无通用复制；`ProjectFileIndex` 仅索引本机，Git 失败会误回退全目录扫描。Files 的 `.git` 隐藏在 `FileTreeModel.children` 硬编码；自然排序和目录压缩属于 `TreeDisplayModel`，不重写。
 
-当前 Files 可见且 App 在前台时每 2 秒同步本机／SSH 目录，SSH Git 另有 5 秒刷新；#40 负责事件化，本计划不建第二套刷新。**已确认的缺口**：`FileTab.writeCurrentText` 在 await 前捕获路径，`targetGeneration` 只能阻止旧结果回写，不能阻止已发生的旧路径写入；`WorkspaceWindowModel.fileRenamed` 仅遍历当前窗口的 `projects`；工作标签右键 `Reveal in Finder` 不区分 SSH／本机。**已具备而无需重做**：`ToolPanelView.openFilePath` 已通过 `file.workspaceIdentity == filesTarget.workspace` 校验当前文件高亮，且使用 `Project.selectedTab`，不是旧的 `focusedContent`。
+立项时 Files 在前台每 2 秒同步本机／SSH 目录，SSH Git 另有 5 秒刷新；#40 独立负责事件化，本计划不建第二套刷新。**已确认的缺口**：`FileTab.writeCurrentText` 在 await 前捕获路径，`targetGeneration` 只能阻止旧结果回写，不能阻止已发生的旧路径写入；`WorkspaceWindowModel.fileRenamed` 仅遍历当前窗口的 `projects`；工作标签右键 `Reveal in Finder` 不区分 SSH／本机。**已具备而无需重做**：`ToolPanelView.openFilePath` 已通过 `file.workspaceIdentity == filesTarget.workspace` 校验当前文件高亮，且使用 `Project.selectedTab`，不是旧的 `focusedContent`。
 
 ## 需求与边界
 
@@ -20,7 +20,7 @@
 
 - **焦点基线**：当前 `FileTreeModel.selectedPath`、`FileTreeScrollView.handleKey`、`TreeKeyboardHost` 与共享树行焦点描边已落地；P1-T1 在它们之上增加多选与修饰键，不新增焦点框架。回归单击、双击、Space、Return、键盘焦点及 Git 树共享行为；若发现基线缺陷，先修最小所有者。只有 Files 真正持有 first responder 才消费 ⌘A/C/X/V。
 - 本机／SSH 采用共享 `FileTreeModel`、`TreeDisplayModel`、`WorkspaceBackend`，耗时文件 IO 不阻塞主 actor。当前的目录压缩、Git 装饰、行命中、滚动、主题、本地化及无障碍不得倒退。
-- 选中集合与当前文件定位属于当前 Files 项目／根／连接，切项目、机器或通道后不得跨目标复用旧操作。复制／剪切保存来源描述，粘贴时重新确认源与目标属本次允许的**同一 Files 树和机器**，不可仅凭字符串路径判断身份。`PanelContext.Identity.pinned` 不携带连接 ID，因此仍须复核现有后端通道／树代次；操作后的过期回写不能污染新工作区。
+- 选中集合与当前文件定位属于当前 Files 项目／根／连接，切项目、机器或通道后不得跨目标复用旧操作。复制／剪切保存来源描述，粘贴时重新确认源与目标属本次允许的**同一 Files 树和机器**，不可仅凭字符串路径判断身份。`PanelContext.Identity` 不携带连接 ID，因此仍须复核后端通道／树代次；操作后的过期回写不能污染新工作区。
 - 移动／重命名前必须与受影响 FileTab 的**在途写入和失焦自动保存**完成正确排序；单纯更改 `FileTab.path`、写入完成后检查 generation 不能阻止已经写入旧路径。先保护未保存正文、Undo 和保存目标，再进行磁盘移动，只有成功项重定向打开的文件／目录孩子和项目固定路径。跨窗口同步优先复用现有窗口注册表，先用真实测试证明作用范围；不能造第二套全局协调器。
 - 文件夹多选时先归一化父子重叠路径，批处理可部分成功但每项结果必须可见；失败和取消不删除尚未成功移动的源。对重名、权限、符号链接、不可读目录、连接异常，使用现有原生错误与确认机制。
 - 全局隐藏配置优先使用 `AppSettings` 已有 TOML 读写、重置和测试约束，设置输入只位于 Settings → File Manager；`cachedDirectories` 保留后端原始列表，**改变规则时只对已缓存层级重新投影；新增可见且需要展开的未读子目录仍按原懒加载补读，不对整树 SSH 重列**；现有 `rebuild` 末尾会剔除未访问目录缓存，Exclude 隐藏后再显现时须明确修正缓存保留策略，不能一边声明零重列、一边逐次丢弃目录内容；临时「显示被排除的项目」只影响 Files 可见层，不更新存储或真实文件系统；`.git` 的默认排除可通过显式规则修改，不能把 Git 隐藏和 Git 忽略混为一谈。
@@ -38,6 +38,6 @@ Files 面板内搜索／名称路径过滤／全量目录索引；可配置排�
 - **性能与清理**：Files 保持已有懒加载，不为名称搜索扫描未展开目录或增加 SSH 查询；仅 `⌘P` SSH 快速打开按其自身任务控制 IO、输出和过期结果，无变化不重复发布，监视内存／CPU／SSH 请求。每个实现任务同步删除本任务取代的旧代码和冗余路径，原子防覆盖、远端真实回滚以及操作身份核对不得因「清理围栏」而削弱；watcher 生命周期仍归 #40。测冷／热目录与 `⌘P`、请求次数、响应中位数和 p95，并核对真实内容。
 - **环境缺口**：未实际拥有的 macOS 最低版本机器、授权之外的 SSH 主机、真实网络故障条件及物理外设不能假装通过；执行时对每项写明具体阻塞、替代测试、风险、后续补验和是否阻塞验收。不能用少数示例代替已可安全执行的适用情形。
 
-跨计划依赖：现有 Focus 行为已落地，**不再依赖被移除的旧计划路径**；[#44 Settings](../settings-by-feature/plan-p1.md) 完成 File Manager 页面后，P3-T1 在该页接入 Exclude；[#40 刷新](../event-driven-workspace-refresh/idea.md) 由独立任务完成，P4 只消费真实存在的通知。当前文件高亮继续复用 `ToolPanelView.openFilePath` 的标签与机器校验；P3-T3 只增加 Reveal 与修复工作标签的远端 Finder 菜单，不重复改写已正确的高亮逻辑。
+跨计划归属：原有 Focus 行为已落地，**不再依赖被移除的旧计划**。File Manager 设置页与 Exclude 已完成，现行约束见 [设置](../../../docs/features/settings.md)；[#40 刷新](../event-driven-workspace-refresh/idea.md) 由独立任务实现，P4 只验收其真实通知与 Files／⌘P 的联动。文件高亮继续复用 `ToolPanelView.openFilePath` 的机器与标签校验，不重写已有行为。
 
 测试与证据归属：[docs/testing.md](../../../docs/testing.md)；功能文档分别由 `docs/features/files.md`、`command-palette.md`、`editor.md`、`settings.md`、`ssh.md`、`projects.md` 和 `docs/ui.md` 维护。仅在实现涉及行为的 task 中同步更新，不提前将计划写成已实现事实。

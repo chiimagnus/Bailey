@@ -12,7 +12,11 @@
 
 ## 设置界面
 
-`⌘,` 打开原生 SwiftUI `Settings` 场景。两栏导航按业务分为 Common、Text Editor、Terminal、Browser、File Manager、Git Manager、Projects，以及连接下的端口转发与手机通知；右侧仍使用系统 `Form`。全局外观（System／Light／Dark）、明暗主题和面板字号在 Common；macOS 27 起使用原生标签式切换，旧系统保留分段选择器。编辑器折行在 Text Editor；终端字体、光标、Option 和历史在 Terminal；Git 布局与工具栏在 Git Manager。Browser 和 Projects 暂无可配置项；File Manager 提供仅影响 Files 树的 `files.exclude` 排除规则编辑，不增加搜索或监视开关。现有配置键和实际生效对象不变，「恢复默认」也覆盖两项 Git 确认偏好。隔离测试模式不展示手机通知，Bark 钥匙串与隧道管理仍走原有实现。
+`⌘,` 打开原生 SwiftUI 设置窗口。左侧按功能分为 Common、Text Editor、Terminal、Browser、File Manager、Git Manager、Projects，以及连接设置（端口转发、手机通知）；右侧使用系统 `Form`。
+
+Common 设置 System／Light／Dark 外观、明暗 Ghostty 主题和面板字号。Text Editor 设置折行，Terminal 设置字体、光标、Option 和历史，Git Manager 设置布局与工具栏。File Manager 只配置 Files 树排除规则；Browser 和 Projects 暂无选项。
+
+配置键及生效范围不变；「恢复默认」也重置两项 Git 确认偏好。隔离测试不展示手机通知，也不访问真实 Bark 凭据或启动保存的隧道。
 
 ## 文件管理器排除规则
 

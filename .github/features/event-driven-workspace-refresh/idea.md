@@ -1,10 +1,10 @@
 # 工作区刷新：消除不必要的轮询
 
-需求归属：[Issue #40](https://github.com/chiimagnus/Bailey/issues/40)。现有本机 Git 改造：[PR #41](https://github.com/chiimagnus/Bailey/pull/41)。本计划只安排后续 Files 与 SSH 刷新工作。
+需求归属：[Issue #40](https://github.com/chiimagnus/Bailey/issues/40)。本机 Git 起点见 [PR #41](https://github.com/chiimagnus/Bailey/pull/41)。本文记录立项方案；完成情况以 [todo.toml](todo.toml) 为准，现行刷新规则见 [Files](../../../docs/features/files.md#自动刷新) 和 [Git](../../../docs/features/git.md#刷新与显示)。
 
-## 背景
+## 立项背景（历史基线）
 
-Git Graph 与底部状态栏曾因每 2 秒重复查询而闪烁。本机 Git 已在 `fix/git-event-refresh` 改为 FSEvents 事件触发，然而源码仍有其它持续查询：
+Git Graph 与底部状态栏曾因每 2 秒重复查询而闪烁。本机 Git 已改为 FSEvents 事件触发，但立项时仍有以下持续查询：
 
 - `ToolPanelView` 的 `.task(id:)` 在前台显示 **Files** 时，本机与 SSH 均每 **2 秒**调用 `syncModels → Project.syncFiles → FileTreeModel.sync → rebuild(refresh: true) → backend.list(directories:)`；即使没有文件变化，也会读取根目录和可见的已缓存目录。
 - SSH **Git** 面板在前台可见时每 **5 秒**调用 `GitStatusModel.refresh()`。本机 Git 已在相同入口提前返回，不再定时查询。

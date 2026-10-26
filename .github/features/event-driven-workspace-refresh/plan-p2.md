@@ -51,7 +51,7 @@
 
 1. **Git 通知覆盖范围：** 用 P2-T2 同一临时通道覆盖当前仓库文件与真正 Git 元数据：`.git` 若是 gitfile，须解析所属 `gitdir` 和共享 `commondir`，其中可能位于 Files 根外；包含 `HEAD`、index、Refs/packed-refs、Stash、reftable 和关联 Worktree 的共享目录。保持 **Git Graph、Worktree、底栏和当前仓库的数据链只走 `GitStatusModel.refresh()`**，不把文件树事件本身当 Git 状态。只在真实外部 Git 变更和仓库身份更新可捕获时停止前台 5 秒轮询；失联／未订阅／溢出时恢复原轮询并重新验证核心状态，直到成功前缓存只读。
 2. **Red→Green Git 数据与去噪：** 用真实远端 CLI 改 index、HEAD、Branch、Tag、Stash、rebase/merge、主／关联 Worktree、Detached HEAD、冲突、push/fetch/pull、外部提交，核查 Graph、状态栏、未提交节点和实际 Git 数据一致。对照 Zed 的 `.git/index.lock` 等噪声事件，测量 Bailey 读取 Git 自身是否引发二次通知／无限重查；若过滤，**必须同时证明不会错过 Stash／Refs／Merge/Rebase 或只有目录事件的真实变更**，不能照搬 Zed 忽略清单。高频通知不应清空已确认的行数、重建相同历史；换仓库／SSH 通道和超时的旧结果不能重新授权写操作。
-3. **不得混淆 SSH 心跳和终端工作目录：** `TerminalSession.watchRemoteConnection` 的 1 秒本机进程检查／健康时约 2 秒真正远端请求还会读取**远程 Shell 或前台作业所在目录**，负责项目自动跟随。按 Zed 独立心跳的原则，只有实测能同时保留静默断网／鉴权失败／master socket 失效／远端退出检测及远程 cwd 更新，才评估去掉重复请求；否则完整保留。文件无通知不等于连接存活，更不等于当前远程工作目录没变。
+3. **不得混淆 SSH 心跳和终端工作目录：** `TerminalSession.watchRemoteConnection` 的 1 秒本机进程检查／健康时约 2 秒远端请求还会读取**远程 Shell 或前台作业所在目录**。终端工作目录不再自动改变项目的 Files／Git 根。只有实测能同时保留静默断网／鉴权失败／master socket 失效／远端退出检测及终端 cwd 更新，才评估去掉重复请求；否则完整保留。文件通知不能代表连接存活或终端目录未变。
 4. **环境／异常／收尾：** 实测可用 SSH 远端的长空闲、0／海量文件、低／高延迟、丢包／超时／半开连接与恢复、多个共享 Git 目录的 Worktree、乱序及溢出、后台/隐藏、多窗口和快速切换。逐项核对远端真实 Git 状态、Graph 菜单与底栏、数据权限、CPU/网络/内存以及临时远端进程完全退出。同步 `docs/features/git.md`、`docs/features/ssh.md`、`docs/testing.md`；复用 `GitStatusModelTests`、`GitRemoteRefreshIntegrationTests`、`SSHGitRecoveryLiveTests`、`GitWorkspaceSSHTests`，完整 `make test`、`make build`、codesign 和真实 GUI 验收；任务内删除已替代的健康态查询，保留明确的轮询退路，中文原子提交。
 
 ---
@@ -59,4 +59,4 @@
 ## Phase Audit
 
 - 仅在各任务真实开始审计时创建 `audit-p2.md`。审核平台 Go／No-Go 证据、旧计时路径与失败回退、远端子进程及句柄完整释放、目标身份隔离、不可访问环境与补验。**审查整个 PR 不得新增任何远端 Server／安装/守护进程／监听端口。**
-- No-Go 也是完整的技术决策，不是“事件驱动已完成”；必须记录 SSH Files/Git 仍按 2/5 秒检查的限制，继续保留完整用户行为。不得为了减少轮询而牺牲 SSH 断线判断或终端目录自动跟随。
+- No-Go 也是完整的技术决策，不是“事件驱动已完成”；受支持的 Windows SSH Files 已使用通知并在失效时回退 2 秒轮询，SSH Git 仍保持 5 秒轮询。不得为减少轮询而牺牲 SSH 断线判断或终端工作目录追踪。
