@@ -200,14 +200,14 @@ private struct BaileyCommands: Commands {
             }
             .keyboardShortcut("w", modifiers: .command)
 
-            if manager?.selectedProject?.tabs.isEmpty == false {
+            if let project = manager?.selectedProject, !project.dock.panelOrder.isEmpty {
                 Divider()
 
-                ForEach(Array((manager?.selectedProject?.tabs ?? []).prefix(9).enumerated()).map {
-                    MenuEntry(tab: $0.element, index: $0.offset)
+                ForEach(Array(project.dock.panelOrder.prefix(9).enumerated()).map {
+                    PanelMenuEntry(item: $0.element, project: project, index: $0.offset)
                 }) { item in
                     Button {
-                        manager?.selectPanel(.tab(item.id))
+                        manager?.selectPanel(item.id)
                     } label: {
                         Label {
                             Text(verbatim: item.title)
@@ -260,7 +260,7 @@ private struct BaileyCommands: Commands {
                 Divider()
 
                 ForEach(Array((manager?.projects ?? []).prefix(9).enumerated()).map {
-                    MenuEntry(project: $0.element, index: $0.offset)
+                    ProjectMenuEntry(project: $0.element, index: $0.offset)
                 }) { item in
                     Button {
                         manager?.selectProject(index: item.index)
@@ -373,24 +373,41 @@ private struct BaileyCommands: Commands {
     }
 }
 
-private struct MenuEntry: Identifiable {
-    let id: UUID
+private struct PanelMenuEntry: Identifiable {
+    let id: DockItem
     let index: Int
     let title: String
     let icon: NSImage
 
-    init(tab: PaneTab, index: Int) {
-        id = tab.id
+    init(item: DockItem, project: Project, index: Int) {
+        id = item
         self.index = index
-        title = tab.displayTitle
-        if let path = tab.content.fileIconPath {
-            icon = MaterialFileIcon.image(forPath: path)
-        } else if case .browser(let browser) = tab.content, let favicon = browser.favicon {
-            icon = favicon
-        } else {
-            icon = NSImage(systemSymbolName: tab.content.systemImage, accessibilityDescription: nil) ?? NSImage()
+        title = item.label(project: project)
+        switch item {
+        case .projects, .files, .git:
+            icon = NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil) ?? NSImage()
+        case .tab(let id):
+            guard let tab = project.tabs.first(where: { $0.id == id }) else {
+                icon = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil) ?? NSImage()
+                return
+            }
+            if let path = tab.content.fileIconPath {
+                let fileIconPath = path.lowercased().hasSuffix(".md") ? "file.md" : path
+                icon = MaterialFileIcon.image(forPath: fileIconPath)
+            } else if case .browser(let browser) = tab.content, let favicon = browser.favicon {
+                icon = favicon
+            } else {
+                icon = NSImage(systemSymbolName: tab.content.systemImage, accessibilityDescription: nil) ?? NSImage()
+            }
         }
     }
+}
+
+private struct ProjectMenuEntry: Identifiable {
+    let id: UUID
+    let index: Int
+    let title: String
+    let icon: NSImage
 
     init(project: Project, index: Int) {
         id = project.id
