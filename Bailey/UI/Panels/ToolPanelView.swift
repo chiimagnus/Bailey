@@ -199,6 +199,10 @@ struct ToolPanelView: View {
                             return manager.selectedProjectID == project.id
                                 && project.matchesPanelTarget(target)
                         },
+                        canPasteFiles: { [target = filesTarget] in
+                            guard let target else { return false }
+                            return manager.canPasteFileTree(in: project, target: target)
+                        },
                         canImportFromFinder: filesTarget?.workspace == nil
                             && project.workspaceBackend is LocalWorkspaceBackend,
                         importFromFinder: { [target = filesTarget] providers, directory in

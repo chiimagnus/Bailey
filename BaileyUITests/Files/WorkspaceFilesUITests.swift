@@ -586,6 +586,53 @@ final class WorkspaceFilesUITests: XCTestCase {
                      "Editor Command+C must replace the Files clipboard record")
     }
 
+    func testSystemEditMenuCopyPasteFollowsFileManagerFocus() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = try fixture.file("alpha.txt", text: "menu copy bytes\n")
+        let duplicate = fixture.root.appendingPathComponent("alpha copy.txt")
+        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
+        defer {
+            let clipboard = NSPasteboard.general
+            clipboard.clearContents()
+            if !originalClipboard.isEmpty { XCTAssertTrue(clipboard.writeObjects(originalClipboard)) }
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let sourceRow = WorkspaceUITestSupport.fileRow(source, in: window)
+        XCTAssertTrue(sourceRow.waitForExistence(timeout: 15))
+        sourceRow.click()
+
+        app.menuBarItems["Edit"].click()
+        let copy = app.menuItems["Copy"]
+        XCTAssertTrue(copy.isEnabled)
+        copy.click()
+        let fileClipboard = NSPasteboard.PasteboardType("com.chiimagnus.bailey.files.transfer")
+        XCTAssertNotNil(NSPasteboard.general.data(forType: fileClipboard))
+
+        app.menuBarItems["Edit"].click()
+        let paste = app.menuItems["Paste"]
+        XCTAssertTrue(paste.isEnabled)
+        paste.click()
+        let copied = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in FileManager.default.fileExists(atPath: duplicate.path) },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [copied], timeout: 15), .completed)
+        XCTAssertEqual(try Data(contentsOf: duplicate), Data("menu copy bytes\n".utf8))
+
+        sourceRow.doubleClick()
+        let editor = window.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        editor.click()
+        app.typeKey("a", modifierFlags: .command)
+        app.menuBarItems["Edit"].click()
+        app.menuItems["Copy"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "menu copy bytes\n")
+        XCTAssertNil(NSPasteboard.general.data(forType: fileClipboard))
+    }
+
     func testMultiSelectContextTargetsAndBulkTrashAgainstRealDisk() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let alpha = try fixture.file("a.txt", text: "a bytes\n")

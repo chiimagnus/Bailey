@@ -26,6 +26,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         }
         await project.fileTree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        XCTAssertFalse(manager.canPasteFileTree(in: project, target: target, pasteboard: pasteboard))
 
         manager.performFileTreeCommand(
             .copy([source.path], cut: true), in: project, target: target,
@@ -34,6 +35,16 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: source.path),
                       "Cut must not delete or move the source before paste")
         XCTAssertTrue(FileTreeClipboard.read(from: pasteboard)?.cut == true)
+        XCTAssertTrue(manager.canPasteFileTree(in: project, target: target, pasteboard: pasteboard))
+        let anotherWindow = workspaceApplication.makeWindow()
+        defer { anotherWindow.windowClosed() }
+        anotherWindow.addLocalFolders([root])
+        let otherProject = try XCTUnwrap(anotherWindow.selectedProject)
+        let otherTarget = try XCTUnwrap(otherProject.panelContext?.identity)
+        XCTAssertFalse(
+            anotherWindow.canPasteFileTree(in: otherProject, target: otherTarget, pasteboard: pasteboard),
+            "A system Paste menu must not offer files from another project"
+        )
         manager.performFileTreeCommand(
             .paste(into: into.path), in: project, target: target,
             pasteboard: pasteboard
@@ -42,6 +53,7 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
         XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), "exact bytes")
         try await wait { FileTreeClipboard.read(from: pasteboard) == nil }
+        XCTAssertFalse(manager.canPasteFileTree(in: project, target: target, pasteboard: pasteboard))
         XCTAssertEqual(pasteboard.string(forType: .string), source.path,
                        "Completed cut must preserve plain-text paths but remove stale transfer metadata")
     }

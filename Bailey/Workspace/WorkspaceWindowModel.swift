@@ -782,6 +782,19 @@ final class WorkspaceWindowModel {
         return true
     }
 
+    func canPasteFileTree(
+        in project: Project, target: PanelContext.Identity,
+        pasteboard: NSPasteboard = .general
+    ) -> Bool {
+        guard selectedProjectID == project.id, project.matchesPanelTarget(target),
+              let record = FileTreeClipboard.read(from: pasteboard) else { return false }
+        return record.token == application.fileTransferToken
+            && record.project == project.id
+            && record.identity == String(reflecting: target)
+            && record.root == project.fileTree.rootPath
+            && record.connectionRevision == clipboardRevision(for: target)
+    }
+
     func performFileTreeCommand(
         _ command: FileTreeCommand, in project: Project, target: PanelContext.Identity,
         pasteboard: NSPasteboard = .general, onChange: @escaping () -> Void = {}
@@ -819,11 +832,7 @@ final class WorkspaceWindowModel {
                 fileCommandError(String(localized: "Clipboard does not contain files copied from Bailey.", table: "Sidebar"))
                 return
             }
-            guard record.token == application.fileTransferToken,
-                  record.project == project.id, record.identity == String(reflecting: target),
-                  record.root == root,
-                  record.connectionRevision == clipboardRevision(for: target)
-            else {
+            guard canPasteFileTree(in: project, target: target, pasteboard: pasteboard) else {
                 fileCommandError(String(localized: "The copied files belong to a different project or connection.", table: "Sidebar"))
                 return
             }

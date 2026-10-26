@@ -61,6 +61,7 @@ struct FileTreePanel: View {
     let onCommand: (FileTreeCommand) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
+    let canPasteFiles: () -> Bool
     let canImportFromFinder: Bool
     let importFromFinder: ([NSItemProvider], String) -> Bool
     var makeDragProvider: (FileTreeModel.Item) -> NSItemProvider = { _ in NSItemProvider() }
@@ -113,6 +114,7 @@ struct FileTreePanel: View {
                 canFocusKeyboard: canFocusKeyboard, renameFile: renameFile,
                 onCommand: onCommand, refreshGitStatus: refreshGitStatus,
                 isCurrentTarget: isCurrentTarget,
+                canPasteFiles: canPasteFiles,
                 canImportFromFinder: canImportFromFinder,
                 importFromFinder: importFromFinder,
                 makeDragProvider: makeDragProvider,
@@ -185,6 +187,7 @@ private struct FileTreeScrollView: View {
     let onCommand: (FileTreeCommand) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
+    let canPasteFiles: () -> Bool
     let canImportFromFinder: Bool
     let importFromFinder: ([NSItemProvider], String) -> Bool
     let makeDragProvider: (FileTreeModel.Item) -> NSItemProvider
@@ -231,8 +234,10 @@ private struct FileTreeScrollView: View {
             }
             .background {
                 TreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleKey,
-                                     onFocusChanged: { keyboardFocused = $0 },
-                                     onAttachedToWindow: focusSelectedRow)
+                                 onFocusChanged: { keyboardFocused = $0 },
+                                 onAttachedToWindow: focusSelectedRow,
+                                 onEditCommand: performEdit,
+                                 canEditCommand: canPerformEdit)
             }
             .onAppear { if isActive { focusSelectedRow() } }
             .onChange(of: isActive) { _, active in
@@ -289,27 +294,34 @@ private struct FileTreeScrollView: View {
         keyboardOwner.focus()
     }
 
+    private func canPerformEdit(_ action: TreeEditAction) -> Bool {
+        guard isActive, canFocusKeyboard(), isCurrentTarget(),
+              model.renamingPath == nil, model.draft == nil else { return false }
+        switch action {
+        case .cut, .copy, .delete: return !model.selectedOperationPaths.isEmpty
+        case .paste: return canPasteFiles()
+        case .selectAll: return model.items.contains { !$0.isDraft }
+        }
+    }
+
+    private func performEdit(_ action: TreeEditAction) {
+        guard canPerformEdit(action) else { return }
+        switch action {
+        case .cut: onCommand(.copy(model.selectedOperationPaths, cut: true))
+        case .copy: onCommand(.copy(model.selectedOperationPaths, cut: false))
+        case .paste: onCommand(.paste(into: model.selectedDirectoryPath ?? model.rootPath))
+        case .delete: onCommand(.delete(model.selectedOperationPaths))
+        case .selectAll: model.selectAllVisible()
+        }
+    }
+
     private func handleKey(_ event: NSEvent) -> Bool {
         guard keyboardOwner.view?.window?.firstResponder === keyboardOwner.view,
               isActive, canFocusKeyboard(), isCurrentTarget()
         else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        if modifiers == [.command] {
-            if event.keyCode == 0 { model.selectAllVisible(); return true }
-            let paths = model.selectedOperationPaths
-            switch event.keyCode {
-            case 8: onCommand(.copy(paths, cut: false)); return true // C
-            case 7: onCommand(.copy(paths, cut: true)); return true // X
-            case 9: // V
-                onCommand(.paste(into: model.selectedDirectoryPath ?? model.rootPath))
-                return true
-            case 51, 117: onCommand(.delete(paths)); return true // Delete
-            default: break
-            }
-        }
         if modifiers.isEmpty, event.keyCode == 51 || event.keyCode == 117 {
-            let paths = model.selectedOperationPaths
-            onCommand(.delete(paths))
+            performEdit(.delete)
             return true
         }
         guard modifiers.isEmpty || modifiers == [.shift] else { return false }

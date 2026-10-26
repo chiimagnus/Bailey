@@ -1228,7 +1228,7 @@ final class FileTreeTests: XCTestCase {
             renameFile: { item, name in await tree.rename(item, to: name) },
             onCommand: { _ in },
             refreshGitStatus: {}, isCurrentTarget: { true },
-            canImportFromFinder: false, importFromFinder: { _, _ in false }
+            canPasteFiles: { false }, canImportFromFinder: false, importFromFinder: { _, _ in false }
         ))
         window.contentView = host
         window.orderFront(nil)
@@ -1271,7 +1271,7 @@ final class FileTreeTests: XCTestCase {
             renameFile: { item, name in await tree.rename(item, to: name) },
             onCommand: { _ in },
             refreshGitStatus: {}, isCurrentTarget: { gate.ready },
-            canImportFromFinder: false, importFromFinder: { _, _ in false }
+            canPasteFiles: { false }, canImportFromFinder: false, importFromFinder: { _, _ in false }
         ))
         window.contentView = host
         window.orderFront(nil)
@@ -1632,7 +1632,7 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: target.appendingPathComponent("a.txt"), encoding: .utf8), "a")
     }
 
-    func testTreeKeyEquivalentIsScopedToItsRealFirstResponder() throws {
+    func testTreeEditKeyEquivalentIsOwnedBySystemMenu() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
             styleMask: [.titled], backing: .buffered, defer: false
@@ -1654,11 +1654,60 @@ final class FileTreeTests: XCTestCase {
             isARepeat: false, keyCode: 9
         ))
         XCTAssertTrue(window.makeFirstResponder(tree))
-        XCTAssertTrue(tree.performKeyEquivalent(with: commandV))
-        XCTAssertEqual(handled, 1)
+        XCTAssertFalse(tree.performKeyEquivalent(with: commandV))
+        XCTAssertEqual(handled, 0, "The native Edit menu, not the tree, owns Command+V")
         XCTAssertTrue(window.makeFirstResponder(nil))
         XCTAssertFalse(tree.performKeyEquivalent(with: commandV))
-        XCTAssertEqual(handled, 1, "An unfocused Files/Git tree must never steal a command")
+        XCTAssertEqual(handled, 0, "An unfocused Files/Git tree must never steal a command")
+    }
+
+    func testTreeStandardEditMenuRoutesOnlyToFocusedFiles() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let container = NSView(frame: window.contentView!.bounds)
+        let tree = TreeKeyboardView(frame: container.bounds)
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 100, height: 20))
+        container.addSubview(tree)
+        container.addSubview(field)
+        window.contentView = container
+
+        var received: [TreeEditAction] = []
+        tree.canEditCommand = { $0 != .paste }
+        tree.onEditCommand = { received.append($0) }
+        XCTAssertTrue(window.makeFirstResponder(tree))
+
+        for (selector, action) in [
+            (#selector(TreeKeyboardView.copy(_:)), TreeEditAction.copy),
+            (#selector(TreeKeyboardView.cut(_:)), .cut),
+            (#selector(TreeKeyboardView.delete(_:)), .delete),
+            (#selector(TreeKeyboardView.selectAll(_:)), .selectAll),
+        ] {
+            let item = NSMenuItem(title: "Edit", action: selector, keyEquivalent: "")
+            XCTAssertTrue(tree.validateMenuItem(item))
+            XCTAssertTrue(tree.responds(to: selector))
+            _ = tree.perform(selector, with: nil)
+            XCTAssertEqual(received.last, action)
+        }
+
+        let paste = NSMenuItem(
+            title: "Paste", action: #selector(TreeKeyboardView.paste(_:)), keyEquivalent: "v"
+        )
+        XCTAssertFalse(tree.validateMenuItem(paste))
+        tree.paste(nil)
+        XCTAssertEqual(received.count, 4, "Unavailable commands must not run")
+        tree.canEditCommand = { _ in true }
+        XCTAssertTrue(tree.validateMenuItem(paste))
+        tree.paste(nil)
+        XCTAssertEqual(received.last, .paste)
+
+        XCTAssertTrue(window.makeFirstResponder(field))
+        XCTAssertFalse(tree.validateMenuItem(paste))
+        tree.copy(nil)
+        XCTAssertEqual(received.count, 5, "A text field must not copy Files")
     }
 
     func testRenameAndCreateCannotEscapeProjectThroughDirectorySymlink() async throws {

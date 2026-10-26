@@ -2,6 +2,10 @@ import AppKit
 import GhosttyTheme
 import SwiftUI
 
+enum TreeEditAction {
+    case cut, copy, paste, delete, selectAll
+}
+
 /// Per-tree native keyboard focus. Does not intercept mouse input or own row selection.
 @MainActor
 final class TreeKeyboardOwner {
@@ -13,8 +17,10 @@ final class TreeKeyboardOwner {
     }
 }
 
-final class TreeKeyboardView: NSView {
+final class TreeKeyboardView: NSView, NSMenuItemValidation {
     var onKeyDown: (NSEvent) -> Bool = { _ in false }
+    var onEditCommand: ((TreeEditAction) -> Void)?
+    var canEditCommand: ((TreeEditAction) -> Bool)?
     var onFocusChanged: (Bool) -> Void = { _ in }
     var onAttachedToWindow: () -> Void = {}
 
@@ -38,11 +44,29 @@ final class TreeKeyboardView: NSView {
         return resigned
     }
 
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        // The system Edit menu handles Cmd+C/X/V before keyDown reaches a tree.
-        guard window?.firstResponder === self, event.modifierFlags.contains(.command)
-        else { return super.performKeyEquivalent(with: event) }
-        return onKeyDown(event) || super.performKeyEquivalent(with: event)
+    @IBAction func cut(_ sender: Any?) { performEdit(.cut) }
+    @IBAction func copy(_ sender: Any?) { performEdit(.copy) }
+    @IBAction func paste(_ sender: Any?) { performEdit(.paste) }
+    @IBAction func delete(_ sender: Any?) { performEdit(.delete) }
+    @IBAction override func selectAll(_ sender: Any?) { performEdit(.selectAll) }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let action: TreeEditAction?
+        switch menuItem.action {
+        case #selector(cut(_:)): action = .cut
+        case #selector(copy(_:)): action = .copy
+        case #selector(paste(_:)): action = .paste
+        case #selector(delete(_:)): action = .delete
+        case #selector(selectAll(_:)): action = .selectAll
+        default: return true
+        }
+        guard let action else { return false }
+        return window?.firstResponder === self && canEditCommand?(action) == true
+    }
+
+    private func performEdit(_ action: TreeEditAction) {
+        guard window?.firstResponder === self, canEditCommand?(action) == true else { return }
+        onEditCommand?(action)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -55,6 +79,8 @@ struct TreeKeyboardHost: NSViewRepresentable {
     let onKeyDown: (NSEvent) -> Bool
     let onFocusChanged: (Bool) -> Void
     let onAttachedToWindow: () -> Void
+    var onEditCommand: ((TreeEditAction) -> Void)? = nil
+    var canEditCommand: ((TreeEditAction) -> Bool)? = nil
 
     func makeNSView(context: Context) -> TreeKeyboardView {
         let view = TreeKeyboardView()
@@ -66,12 +92,16 @@ struct TreeKeyboardHost: NSViewRepresentable {
     func updateNSView(_ view: TreeKeyboardView, context: Context) {
         owner.view = view
         view.onKeyDown = onKeyDown
+        view.onEditCommand = onEditCommand
+        view.canEditCommand = canEditCommand
         view.onFocusChanged = onFocusChanged
         view.onAttachedToWindow = onAttachedToWindow
     }
 
     static func dismantleNSView(_ view: TreeKeyboardView, coordinator: ()) {
         view.onKeyDown = { _ in false }
+        view.onEditCommand = nil
+        view.canEditCommand = nil
         view.onFocusChanged = { _ in }
         view.onAttachedToWindow = {}
     }

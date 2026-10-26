@@ -105,6 +105,17 @@ private struct BaileyCommands: Commands {
         CommandGroup(replacing: .saveItem) {}
 
         CommandGroup(after: .pasteboard) {
+            if case .files? = manager?.selectedProject?.dock.activeGroup?.selected {
+                Button(manager?.selectedProject?.sshHost == nil
+                    ? String(localized: "Move to Trash", table: "Sidebar")
+                    : String(localized: "Delete…", table: "Sidebar")) {
+                    NSApp.sendAction(#selector(TreeKeyboardView.delete(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut(.delete, modifiers: .command)
+                .disabled((NSApp.keyWindow?.firstResponder as? TreeKeyboardView)?
+                    .canEditCommand?(.delete) != true)
+            }
+
             // Find follows the active dock content, not the find bar's first responder.
             if manager?.canFind == true {
                 Menu(String(localized: "Find", table: "Interface")) {
