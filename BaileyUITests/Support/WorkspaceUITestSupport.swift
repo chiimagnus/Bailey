@@ -18,8 +18,7 @@ enum WorkspaceUITestSupport {
     private static var observing = false
 
     static func launch(
-        in test: XCTestCase, language: String? = nil, configurationHome: URL? = nil,
-        initialProject: URL? = nil
+        in test: XCTestCase, language: String? = nil, configurationHome: URL? = nil
     ) throws -> XCUIApplication {
         if !observing {
             XCTestObservationCenter.shared.addTestObserver(observer)
@@ -29,8 +28,7 @@ enum WorkspaceUITestSupport {
         let app: XCUIApplication
         let needsLaunch: Bool
         if let current = session,
-           configurationHome == nil, initialProject == nil,
-           !current.usesFixtureHome, current.language == language,
+           configurationHome == nil, !current.usesFixtureHome, current.language == language,
            current.app.state != .notRunning,
            (current.isReadyForReuse || resetWorkspace(current.app)) {
             app = current.app
@@ -57,29 +55,9 @@ enum WorkspaceUITestSupport {
             ), "UI configuration must belong to an isolated fixture")
             // Keep one test-only HOME across ordinary methods; custom configurations
             // and language changes still need a distinct process.
-            app.launchArguments = ["--isolated-ui-test", "-ApplePersistenceIgnoreState", "YES"]
+            app.launchArguments = ["--isolated-ui-test"]
             if let language { app.launchArguments += ["-AppleLanguages", "(\(language))"] }
-            let runID = UUID().uuidString
-            app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = runID
-            if let initialProject {
-                let suiteName = "chiimagnus.bailey.dev.isolated-ui-test." + runID
-                let files = ["files": [String: String]()]
-                let dock = ["group": ["_0": [
-                    "id": UUID().uuidString,
-                    "items": [files], "selected": files
-                ]]] as [String: Any]
-                let snapshot: [String: Any] = ["windows": [[
-                    "projects": [["customDirectory": initialProject.path,
-                                  "tabs": [], "dock": dock]],
-                    "selectedProjectIndex": 0
-                ]]]
-                let data = try JSONSerialization.data(withJSONObject: snapshot)
-                let defaults = UserDefaults(suiteName: suiteName)
-                defaults?.set(data, forKey: "workspaceSnapshot")
-                test.addTeardownBlock {
-                    defaults?.removePersistentDomain(forName: suiteName)
-                }
-            }
+            app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
             app.launchEnvironment["CFFIXED_USER_HOME"] = home.path
             app.launchEnvironment["HOME"] = home.path
             session = Session(app: app, home: home, language: language,

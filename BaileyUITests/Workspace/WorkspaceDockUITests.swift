@@ -39,8 +39,8 @@ final class WorkspaceDockUITests: XCTestCase {
         let first = try fixture.file("first.txt", text: "file A\n")
         let second = try fixture.file("second.txt", text: "file B\n")
         let third = try fixture.file("third.txt", text: "file C\n")
-        let app = try WorkspaceUITestSupport.launch(
-            in: self, language: "en", initialProject: fixture.root)
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
         let window = app.windows.firstMatch
         let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
             withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
@@ -72,8 +72,10 @@ final class WorkspaceDockUITests: XCTestCase {
         }, "Right-click must open the file tab menu")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(b.waitForNonExistence(timeout: 12),
-                      "Cmd-W must close right-clicked B, not the active C")
+        guard b.waitForNonExistence(timeout: 7) else {
+            XCTFail("Cmd-W must close right-clicked B, not the active C")
+            return
+        }
         XCTAssertTrue(a.exists && c.exists && window.exists)
 
         try open([second])

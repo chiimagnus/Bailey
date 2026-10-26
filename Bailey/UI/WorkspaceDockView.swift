@@ -30,6 +30,12 @@ final class DockTabDragCoordinator {
     func setFrames(groups: [UUID: CGRect]) { self.groups = groups }
     func setFrames(tabs: [DockItem: CGRect]) { self.tabs = tabs }
 
+    func tab(at location: CGPoint, in group: DockGroup) -> DockItem? {
+        guard let frame = groups[group.id] else { return nil }
+        let point = CGPoint(x: frame.minX + location.x, y: frame.minY + location.y)
+        return group.items.first { tabs[$0]?.contains(point) == true }
+    }
+
     func insertionX(in group: DockGroup) -> CGFloat? {
         guard let position, position.destination == group.id, position.edge == nil,
               let frame = groups[group.id],
@@ -344,7 +350,12 @@ struct DockTabGroupView: View {
             focusesEmptySpace: active?.tabID == nil,
             canFocus: { canFocusGroup() && dragging.position == nil },
             onFocused: { if dragging.position == nil { focusGroup() } },
-            onPrimaryClick: { project.dock.clearContextTarget() }
+            onPrimaryClick: { project.dock.clearContextTarget() },
+            onContextClick: { point in
+                if let target = dragging.tab(at: point, in: group) {
+                    project.dock.selectForContextMenu(target)
+                }
+            }
         ).id(group.id))
         .background {
             GeometryReader { geometry in
@@ -523,9 +534,6 @@ struct DockTabGroupView: View {
             .overlay {
                 contextTabOutline(for: item)
             }
-            .background {
-                TreeContextClickTarget { project.dock.selectForContextMenu(item) }
-            }
             .contextMenu {
                 if let current = project.tabs.first(where: { $0.id == id }) {
                     projectTabMenu(current)
@@ -541,9 +549,6 @@ struct DockTabGroupView: View {
             .accessibilityIdentifier("bailey.dock.\(item.configurationName ?? "unknown")")
             .overlay {
                 contextTabOutline(for: item)
-            }
-            .background {
-                TreeContextClickTarget { project.dock.selectForContextMenu(item) }
             }
             .contextMenu {
                 let closeTitle = String(localized: "Close Panel", table: "Interface")
@@ -732,6 +737,7 @@ private struct DockGroupFocusReader: NSViewRepresentable {
     let canFocus: () -> Bool
     let onFocused: () -> Void
     let onPrimaryClick: () -> Void
+    let onContextClick: (CGPoint) -> Void
 
     func makeNSView(context: Context) -> DockGroupFocusView {
         DockGroupFocusView(groupID: groupID)
@@ -741,6 +747,7 @@ private struct DockGroupFocusReader: NSViewRepresentable {
         view.canFocus = canFocus
         view.onFocused = onFocused
         view.onPrimaryClick = onPrimaryClick
+        view.onContextClick = onContextClick
         let becameActive = isActive && !view.isActive
         view.isActive = isActive
         view.focusesEmptySpace = focusesEmptySpace
@@ -751,6 +758,7 @@ private struct DockGroupFocusReader: NSViewRepresentable {
         view.stopMonitoring()
         view.onFocused = nil
         view.onPrimaryClick = nil
+        view.onContextClick = nil
         view.canFocus = nil
     }
 }
@@ -762,6 +770,7 @@ final class DockGroupFocusView: NSView {
     var canFocus: (() -> Bool)?
     var onFocused: (() -> Void)?
     var onPrimaryClick: (() -> Void)?
+    var onContextClick: ((CGPoint) -> Void)?
     private var monitor: Any?
     private var leftMousePressedHere = false
 
@@ -788,13 +797,20 @@ final class DockGroupFocusView: NSView {
         stopMonitoring()
         guard window != nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseDown, .leftMouseUp, .keyDown]
+            matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown, .keyDown]
         ) { [weak self] event in
             guard let self, let window = self.window, event.window === window,
                   !self.isHiddenOrHasHiddenAncestor else { return event }
-            if event.type == .leftMouseDown {
-                self.leftMousePressedHere = !event.modifierFlags.contains(.control)
-                    && self.bounds.contains(self.convert(event.locationInWindow, from: nil))
+            if event.type == .rightMouseDown ||
+               (event.type == .leftMouseDown && event.modifierFlags.contains(.control)) {
+                self.leftMousePressedHere = false
+                let location = self.convert(event.locationInWindow, from: nil)
+                if self.bounds.contains(location) {
+                    self.onContextClick?(CGPoint(x: location.x, y: self.bounds.height - location.y))
+                }
+            } else if event.type == .leftMouseDown {
+                self.leftMousePressedHere = self.bounds.contains(
+                    self.convert(event.locationInWindow, from: nil))
             } else if event.type == .keyDown {
                 if event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
                    self.containsResponder(window.firstResponder) { self.onFocused?() }
