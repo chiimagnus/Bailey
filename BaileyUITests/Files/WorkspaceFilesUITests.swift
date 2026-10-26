@@ -687,8 +687,15 @@ final class WorkspaceFilesUITests: XCTestCase {
         otherMenu.menuItems["Copy Path"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), gamma.path,
                        "Context-clicking an unselected row must act on that row only")
+        XCTAssertTrue(c.isSelected && !a.isSelected && !b.isSelected,
+                      "A context click outside the selection moves the keyboard target")
+        a.click()
+        XCUIElement.perform(withKeyModifiers: .shift) { b.click() }
+        XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected)
 
         let selectedMenu = try fileContextMenu(for: a, in: app)
+        XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected,
+                      "Context-clicking inside the selection must preserve all selected rows")
         selectedMenu.menuItems["Copy Relative Path"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), "a.txt\nb.txt",
                        "Context-clicking a selected row must copy the selected relative paths")

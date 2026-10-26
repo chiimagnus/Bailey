@@ -285,6 +285,14 @@ final class FileTreeModel {
         activeDrag = nil
     }
 
+    func selectForContextMenu(_ item: Item, componentPath: String? = nil) {
+        if selectedPaths.contains(item.path), componentPath == nil {
+            selectedPath = item.path
+        } else {
+            select(item, componentPath: componentPath)
+        }
+    }
+
     @discardableResult
     func moveSelection(by delta: Int, extending: Bool = false) -> Item? {
         let visible = items.filter { !$0.isDraft }

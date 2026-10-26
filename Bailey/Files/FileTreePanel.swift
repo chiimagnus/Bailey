@@ -430,14 +430,30 @@ private struct FileTreeRow: View {
                 renameRow
                     .modifier(layout)
             }
-            .contextMenu { rowMenu(for: item) }
+            .overlay {
+                TreeContextClickTarget { selectForContextMenu(item) }
+                    .contextMenu { rowMenu(for: item) }
+            }
+        } else if item.isDirectory && !item.compactComponents.isEmpty {
+            semanticRow
+                .contextMenu { rowMenu(for: activeMenuTarget) }
+                .onDrag { makeDragProvider(item) }
         } else {
             // Local drags retain public fileURL for Finder; SSH drags publish only
             // the process-private Files type, never a Mac path for a remote file.
             semanticRow
-                .contextMenu { rowMenu(for: activeMenuTarget) }
+                .overlay {
+                    TreeContextClickTarget { selectForContextMenu(activeMenuTarget) }
+                        .contextMenu { rowMenu(for: activeMenuTarget) }
+                }
                 .onDrag { makeDragProvider(item) }
         }
+    }
+
+    private func selectForContextMenu(_ target: FileTreeModel.Item) {
+        guard isCurrentTarget() else { return }
+        model.selectForContextMenu(item, componentPath: target.path == item.path ? nil : target.path)
+        focusKeyboard()
     }
 
     private var activeMenuTarget: FileTreeModel.Item {
@@ -607,7 +623,10 @@ private struct FileTreeRow: View {
                         await model.toggle(item)
                     }
                 })
-                .contextMenu { rowMenu(for: target) }
+                .overlay {
+                    TreeContextClickTarget { selectForContextMenu(target) }
+                        .contextMenu { rowMenu(for: target) }
+                }
                 .onDrag { makeDragProvider(target) }
                 .onDrop(
                     of: [FileTreeDrag.type, UTType.fileURL.identifier],

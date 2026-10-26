@@ -1401,6 +1401,31 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(tree.selectedPaths, [rows[0].path])
     }
 
+    func testContextSelectionMovesKeyboardCursorWithoutDestroyingMultiSelection() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["alpha", "beta", "gamma"] {
+            try Data().write(to: root.appendingPathComponent(name))
+        }
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let rows = tree.items
+        XCTAssertEqual(rows.count, 3)
+
+        tree.select(rows[0])
+        tree.select(rows[2], toggling: true)
+        tree.selectForContextMenu(rows[0])
+        XCTAssertEqual(tree.selectedPath, rows[0].path)
+        XCTAssertEqual(tree.selectedOperationPaths, [rows[0].path, rows[2].path],
+                       "Context-clicking one of the selected rows keeps the selected set")
+
+        tree.selectForContextMenu(rows[1])
+        XCTAssertEqual(tree.selectedPath, rows[1].path)
+        XCTAssertEqual(tree.selectedOperationPaths, [rows[1].path],
+                       "Context-clicking an unselected row moves the keyboard target")
+    }
+
     func testCommandDeselectionStaysEmptyAfterDirectoryRefresh() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

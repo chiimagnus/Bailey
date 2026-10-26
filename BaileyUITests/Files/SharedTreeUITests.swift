@@ -45,6 +45,41 @@ final class SharedTreeUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: another), Data("untouched\n".utf8))
     }
 
+    func testRightClickUnselectedFileBecomesKeyboardTargetWithoutOpeningIt() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let original = try fixture.file("a-active.txt", text: "active\n")
+        let clicked = try fixture.file("b-context.txt", text: "context\n")
+        let previousClipboard = try WorkspaceUITestSupport.clipboardItems()
+        defer {
+            NSPasteboard.general.clearContents()
+            if !previousClipboard.isEmpty {
+                XCTAssertTrue(NSPasteboard.general.writeObjects(previousClipboard))
+            }
+        }
+
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let first = WorkspaceUITestSupport.fileRow(original, in: window)
+        let target = WorkspaceUITestSupport.fileRow(clicked, in: window)
+        XCTAssertTrue(first.waitForExistence(timeout: 15))
+        XCTAssertTrue(target.waitForExistence(timeout: 15))
+        first.click()
+        target.rightClick()
+        let menu = app.menus.allElementsBoundByIndex.first {
+            $0.frame.width > 50 && $0.menuItems["Copy Relative Path"].exists
+        }
+        XCTAssertNotNil(menu, "Context target must expose its own menu")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        app.activate()
+        app.typeKey("c", modifierFlags: .command)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), clicked.path,
+                       "Cmd-C after context click must copy the right-clicked file")
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 1,
+                       "Right click must not open another editor tab")
+    }
+
     func testCompactFoldersContextMenuCreatesInEachClickedPathComponent() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let nested = try fixture.file("a1/b1/c1/existing.swift", text: "existing\n")
