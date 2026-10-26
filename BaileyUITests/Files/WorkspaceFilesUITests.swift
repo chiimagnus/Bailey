@@ -633,6 +633,31 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertNil(NSPasteboard.general.data(forType: fileClipboard))
     }
 
+    func testEditDeleteBackspaceShortcutUsesFocusedFileTree() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let doomed = try fixture.file("delete-with-backspace.txt", text: "remove me")
+        let survivor = try fixture.file("keep-with-backspace.txt", text: "keep me")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en")
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let row = WorkspaceUITestSupport.fileRow(doomed, in: app.windows.firstMatch)
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.click()
+
+        app.menuBarItems["Edit"].click()
+        XCTAssertTrue(app.menuItems["Delete"].isEnabled)
+        row.click()
+        app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [])
+
+        let deleted = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                !FileManager.default.fileExists(atPath: doomed.path)
+            }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [deleted], timeout: 15), .completed)
+        XCTAssertEqual(try Data(contentsOf: survivor), Data("keep me".utf8))
+    }
+
     func testMultiSelectContextTargetsAndBulkTrashAgainstRealDisk() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let alpha = try fixture.file("a.txt", text: "a bytes\n")

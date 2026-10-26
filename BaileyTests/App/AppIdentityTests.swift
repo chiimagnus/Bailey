@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 @testable import Bailey
@@ -77,6 +78,22 @@ final class AppIdentityTests: XCTestCase {
         XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String,
                        AppIdentity.displayName)
         XCTAssertTrue(BaileyInstanceMode.isIsolated)
+    }
+
+    @MainActor
+    func testEditDeleteUsesNativeMenuShortcut() throws {
+        let menu = try XCTUnwrap(NSApp.mainMenu)
+        let editMenu = try XCTUnwrap(menu.items.compactMap(\.submenu).first(where: { submenu in
+            submenu.items.contains { $0.action == #selector(TreeKeyboardView.copy(_:)) }
+                && submenu.items.contains { $0.action == #selector(TreeKeyboardView.paste(_:)) }
+        }))
+        let matches = editMenu.items.filter {
+            $0.action == #selector(TreeKeyboardView.delete(_:))
+        }
+        XCTAssertEqual(matches.count, 1)
+        let delete = try XCTUnwrap(matches.first)
+        XCTAssertEqual(delete.keyEquivalent, String(UnicodeScalar(NSBackspaceCharacter)!))
+        XCTAssertTrue(delete.keyEquivalentModifierMask.isEmpty)
     }
 
     func testStableStorageLocations() {

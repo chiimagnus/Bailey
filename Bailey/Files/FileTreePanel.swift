@@ -320,7 +320,7 @@ private struct FileTreeScrollView: View {
               isActive, canFocusKeyboard(), isCurrentTarget()
         else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        if modifiers.isEmpty, event.keyCode == 51 || event.keyCode == 117 {
+        if modifiers.isEmpty, event.keyCode == 117 {
             performEdit(.delete)
             return true
         }

@@ -47,15 +47,32 @@ final class BaileyApplicationDelegate: NSObject, NSApplicationDelegate {
             name: NSMenu.didAddItemNotification, object: nil
         )
         removeUnusedViewMenu()
+        configureDeleteShortcut()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
         removeUnusedViewMenu()
+        configureDeleteShortcut()
     }
 
     @objc private func mainMenuItemAdded(_ notification: Notification) {
-        guard let menu = notification.object as? NSMenu, menu === NSApp.mainMenu else { return }
-        removeUnusedViewMenu()
+        guard let menu = notification.object as? NSMenu else { return }
+        if menu === NSApp.mainMenu { removeUnusedViewMenu() }
+        if menu === NSApp.mainMenu
+            || NSApp.mainMenu?.items.contains(where: { $0.submenu === menu }) == true {
+            configureDeleteShortcut()
+        }
+    }
+
+    private func configureDeleteShortcut() {
+        guard let edit = NSApp.mainMenu?.items.compactMap(\.submenu).first(where: { menu in
+            menu.items.contains { $0.action == #selector(TreeKeyboardView.copy(_:)) }
+                && menu.items.contains { $0.action == #selector(TreeKeyboardView.paste(_:)) }
+        }), let delete = edit.items.first(where: {
+            $0.action == #selector(TreeKeyboardView.delete(_:))
+        }) else { return }
+        delete.keyEquivalent = String(UnicodeScalar(NSBackspaceCharacter)!)
+        delete.keyEquivalentModifierMask = []
     }
 
     private func removeUnusedViewMenu() {
