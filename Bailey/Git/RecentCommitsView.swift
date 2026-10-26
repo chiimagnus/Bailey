@@ -622,6 +622,11 @@ struct RecentCommitsView: View {
                         .buttonStyle(.plain)
                         .layoutPriority(1)
                         .help(commit.subject)
+                        .overlay {
+                            TreeContextClickTarget { selectRow(commitRowID(commit)) }
+                                .contextMenu { commitContextMenu(commit) }
+                                .accessibilityHidden(true)
+                        }
                         .accessibilityLabel(commit.subject)
                         .accessibilityValue(expanded
                             ? String(localized: "Expanded", table: "Git")
@@ -711,32 +716,38 @@ struct RecentCommitsView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { toggle(commit) }
-        .contextMenu {
-            if let worktree = commit.worktree {
-                Button(String(localized: "Copy Worktree Path", table: "Git")) {
-                    copy(worktree.path)
-                }
-            } else if let stash = commit.stash {
-                stashActions(stash)
-            } else {
-                Button(String(localized: "Create Branch at Commit…", table: "Git")) {
-                    createBranch(commit)
-                }
-                .disabled(!canSwitchBranch)
-                Button(String(localized: "Create Tag at Commit…", table: "Git")) {
-                    addTag(commit)
-                }
-                .disabled(!canSwitchBranch)
-                Divider()
-                ForEach(GitStatusModel.CommitAction.allCases, id: \.self) { action in
-                    Button(action.title) { commitAction(commit, action) }
-                        .disabled(!canActOnCommit || (action == .drop && !canDropCommit(commit)))
-                }
-                Divider()
-                Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
-                Button(String(localized: "Copy Commit Subject", table: "Git")) {
-                    copy(commit.subject)
-                }
+        .background {
+            TreeContextClickTarget { selectRow(commitRowID(commit)) }
+        }
+        .contextMenu { commitContextMenu(commit) }
+    }
+
+    @ViewBuilder
+    private func commitContextMenu(_ commit: Commit) -> some View {
+        if let worktree = commit.worktree {
+            Button(String(localized: "Copy Worktree Path", table: "Git")) {
+                copy(worktree.path)
+            }
+        } else if let stash = commit.stash {
+            stashActions(stash)
+        } else {
+            Button(String(localized: "Create Branch at Commit…", table: "Git")) {
+                createBranch(commit)
+            }
+            .disabled(!canSwitchBranch)
+            Button(String(localized: "Create Tag at Commit…", table: "Git")) {
+                addTag(commit)
+            }
+            .disabled(!canSwitchBranch)
+            Divider()
+            ForEach(GitStatusModel.CommitAction.allCases, id: \.self) { action in
+                Button(action.title) { commitAction(commit, action) }
+                    .disabled(!canActOnCommit || (action == .drop && !canDropCommit(commit)))
+            }
+            Divider()
+            Button(String(localized: "Copy Commit Hash", table: "Git")) { copy(commit.hash) }
+            Button(String(localized: "Copy Commit Subject", table: "Git")) {
+                copy(commit.subject)
             }
         }
     }
@@ -826,6 +837,9 @@ struct RecentCommitsView: View {
         .help(label + "\n" + paths.joined(separator: "\n"))
         .accessibilityLabel(label + ", " + String(localized: "Worktree", table: "Git")
                             + ": " + paths.joined(separator: ", "))
+        .background {
+            TreeContextClickTarget { selectRow(commitRowID(commit)) }
+        }
         .contextMenu {
             if let head = commit.references.first(where: { $0.kind == .detachedHead }) {
                 referenceActions(head, commit: commit)
@@ -891,6 +905,9 @@ struct RecentCommitsView: View {
         }
         .buttonStyle(.plain)
         .help(stash.selector + ": " + stash.message)
+        .background {
+            TreeContextClickTarget { selectRow(commitRowID(commit)) }
+        }
         .contextMenu { stashActions(stash) }
     }
 
@@ -996,9 +1013,10 @@ struct RecentCommitsView: View {
               : "\n" + matched.map(\.path).joined(separator: "\n")))
         .accessibilityLabel(reference.name + (matched.isEmpty ? ""
             : ", " + String(localized: "Worktree", table: "Git")))
-        .contextMenu {
-            referenceActions(reference, commit: commit)
+        .background {
+            TreeContextClickTarget { selectRow(commitRowID(commit)) }
         }
+        .contextMenu { referenceActions(reference, commit: commit) }
     }
 
     @ViewBuilder
@@ -1214,6 +1232,11 @@ struct RecentCommitsView: View {
                     .id(folderRowID(commit,
                         section: section, path: node.path))
                     .background { fileRails(rails, spacing: spacing) }
+                    .background {
+                        TreeContextClickTarget {
+                            selectRow(folderRowID(commit, section: section, path: node.path))
+                        }
+                    }
                     .contextMenu {
                         Button(String(localized: "Copy Absolute Path", table: "Git")) {
                             copy((worktree.path as NSString).appendingPathComponent(node.path))
@@ -1261,6 +1284,9 @@ struct RecentCommitsView: View {
             }
         ) { _ in EmptyView() }
         .id(id)
+        .background {
+            TreeContextClickTarget { selectRow(id) }
+        }
         .contextMenu {
             Button(staged
                    ? String(localized: "Open Staged Diff", table: "Git")
@@ -1325,6 +1351,11 @@ struct RecentCommitsView: View {
                     }
                     .id(folderRowID(commit, section: section, path: node.path))
                     .background { fileRails(rails, spacing: spacing) }
+                    .background {
+                        TreeContextClickTarget {
+                            selectRow(folderRowID(commit, section: section, path: node.path))
+                        }
+                    }
                     .contextMenu {
                         Button(String(localized: "Copy Absolute Path", table: "Git")) {
                             copy((repoRoot as NSString).appendingPathComponent(node.path))
@@ -1366,6 +1397,9 @@ struct RecentCommitsView: View {
             }
         ) { _ in EmptyView() }
         .id(historicalFileRowID(commit, file: file))
+        .background {
+            TreeContextClickTarget { selectRow(historicalFileRowID(commit, file: file)) }
+        }
         .contextMenu {
             Button(String(localized: "Open Historical Diff", table: "Git")) {
                 openDiff(commit, file)
@@ -1392,7 +1426,9 @@ struct RecentCommitsView: View {
             Button(String(localized: "Copy Absolute Path", table: "Git")) {
                 copy((repoRoot as NSString).appendingPathComponent(file.path))
             }
-            Button(String(localized: "Copy Relative Path", table: "Git")) { copy(file.path) }
+            Button(String(localized: "Copy Relative Path", table: "Git")) {
+                copy(file.path)
+            }
         }
     }
 

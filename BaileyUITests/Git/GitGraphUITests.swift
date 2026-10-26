@@ -4,6 +4,33 @@ import XCTest
 
 @MainActor
 final class GitGraphUITests: XCTestCase {
+    func testRightClickDifferentCommitMovesGraphKeyboardCursorWithoutOpeningHistory() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("first-commit.txt", text: "first\n")
+        try fixture.initializeGit()
+        _ = try fixture.file("second-commit.txt", text: "second\n")
+        try fixture.git(["add", "--", "second-commit.txt"])
+        try fixture.git(["commit", "-m", "second context commit"])
+
+        let app = try launchGraph(fixture, language: "en")
+        let firstCommit = app.buttons["E2E fixture history"]
+        let secondCommit = app.buttons["second context commit"]
+        XCTAssertTrue(firstCommit.waitForExistence(timeout: 25))
+        XCTAssertTrue(secondCommit.waitForExistence(timeout: 25))
+        secondCommit.click()
+        secondCommit.click()
+
+        firstCommit.rightClick()
+        XCTAssertTrue(app.menuItems["Create Branch at Commit…"].waitForExistence(timeout: 10))
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        let earlierFile = historicalFile("first-commit.txt", in: app)
+        XCTAssertFalse(earlierFile.exists, "Context click must not expand a commit")
+        app.typeKey(" ", modifierFlags: [])
+        XCTAssertTrue(earlierFile.waitForExistence(timeout: 12),
+                      "Space must act on the right-clicked commit, not the prior keyboard row")
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
     func testGraphBadgeTitleNodeAndMetadataToggleTheSameRealCommit() throws {
         try verifyGraphInteractions(language: "en")
     }
