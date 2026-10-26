@@ -1668,15 +1668,14 @@ final class NativeFileTabTests: XCTestCase {
     }
 
     func testMountedEditorDisconnectReconnectKeepsNativeBufferAndUndo() async throws {
+        let sshHost = "editor-" + UUID().uuidString
         let project = Project(fallbackName: "native read-only", workspaceConfiguration: .standard)
+        project.sshHost = sshHost
         defer { project.terminateAll() }
-        let connection = RemoteConnection(user: "fixture", host: "invalid", port: 2222,
-            controlSocket: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString), sshPID: 0)
-        connection.workingDirectory = "/fixture"
-        connection.markConnected()
-        XCTAssertTrue(project.newSession().beginRemoteConnection(connection))
+        SSHHostWorkspaces.setConnected(true, for: sshHost)
         let backend = EditorWorkspaceFixture(path: "/fixture/file.txt", contents: Data("original".utf8))
-        let file = FileTab(path: "/fixture/file.txt", backend: backend, workspaceIdentity: connection.workspaceIdentity)
+        let file = FileTab(path: "/fixture/file.txt", backend: backend,
+                           workspaceIdentity: "ssh:" + sshHost)
         try await file.waitForText()
         file.autoSaveSuspendedForClose = true
         file.text = "unsaved"
@@ -1692,7 +1691,14 @@ final class NativeFileTabTests: XCTestCase {
         try await waitForFileTabState { host.layoutSubtreeIfNeeded(); return self.mountedEditor(in: host) != nil }
         let editor = try XCTUnwrap(mountedEditor(in: host))
         XCTAssertTrue(editor.isEditable)
-        connection.markDisconnected(reason: "controlled outage")
+
+        SSHHostWorkspaces.setConnected(false, for: "another-" + UUID().uuidString)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertNil(file.readOnlyReason)
+        XCTAssertTrue(editor.isEditable)
+
+        SSHHostWorkspaces.setConnected(false, for: sshHost)
+        XCTAssertNotNil(file.readOnlyReason)
         try await waitForFileTabState { host.layoutSubtreeIfNeeded(); return !editor.isEditable }
         editor.setAccessibilityValue("must not replace")
         let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
@@ -1700,7 +1706,11 @@ final class NativeFileTabTests: XCTestCase {
             characters: "x", charactersIgnoringModifiers: "x", isARepeat: false, keyCode: 7))
         editor.keyDown(with: event)
         XCTAssertEqual(editor.text, "unsaved")
-        connection.markConnected()
+        XCTAssertEqual(file.text, "unsaved")
+        XCTAssertTrue(file.isDirty)
+
+        SSHHostWorkspaces.setConnected(true, for: sshHost)
+        XCTAssertNil(file.readOnlyReason)
         try await waitForFileTabState { host.layoutSubtreeIfNeeded(); return editor.isEditable }
         XCTAssertTrue(mountedEditor(in: host) === editor)
         editor.insertText("new ", replacementRange: NSRange(location: 0, length: 0))

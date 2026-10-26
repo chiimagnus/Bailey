@@ -4,6 +4,11 @@ import AppKit
 /// The text storage is owned by the view retained by its tab, not by SwiftUI.
 @MainActor
 class NativeCodeTextView: NSTextView {
+    static let tabInterval: CGFloat = {
+        let stops = NSParagraphStyle.default.tabStops
+        return stops.count > 1 ? stops[1].location - stops[0].location : 28
+    }()
+
     private let documentUndoManager = UndoManager()
     override var undoManager: UndoManager? { documentUndoManager }
     var text: String? {
@@ -113,6 +118,7 @@ class NativeCodeTextView: NSTextView {
     var highlightSelectedLine = false
     private(set) var gutterView: NativeLineNumberRuler?
     private var lineIndex: NativeTextLineIndex?
+    private var measuredLineWidths: NativeMeasuredLineWidths?
     private var isWrappingLines = false
     var wrapsLines: Bool { isWrappingLines }
 
@@ -265,6 +271,9 @@ class NativeCodeTextView: NSTextView {
         isHorizontallyResizable = false
         textContainer?.widthTracksTextView = true
         textContainerInset = .zero
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.defaultTabInterval = Self.tabInterval
+        defaultParagraphStyle = paragraph
         minSize = NSSize(width: 1000, height: 0)
         maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         usesFindBar = true
@@ -452,29 +461,16 @@ class NativeCodeTextView: NSTextView {
         if showsLineNumbers {
             let ruler = gutterView ?? NativeLineNumberRuler(scrollView: scroll, orientation: .verticalRuler)
             ruler.editor = self
-            ruler.clientView = self
             ruler.ruleThickness = gutterThickness
-            ruler.reservedThicknessForMarkers = 0
             ruler.backgroundColor = backgroundColor
             ruler.selectedLineHighlightColor = selectedLineHighlightColor
-            scroll.verticalRulerView = ruler
-            scroll.hasVerticalRuler = true
-            scroll.rulersVisible = true
             gutterView = ruler
-            applyGutterTextInset(ruler.ruleThickness)
-        } else {
-            scroll.hasVerticalRuler = false
-            scroll.rulersVisible = false
+            scroll.superview?.needsLayout = true
+        } else if let ruler = gutterView {
+            ruler.removeFromSuperview()
             gutterView = nil
-            applyGutterTextInset(0)
+            scroll.superview?.needsLayout = true
         }
-    }
-
-    private func applyGutterTextInset(_ width: CGFloat) {
-        guard abs(textContainerInset.width - width) > 0.5 else { return }
-        var insets = textContainerInset
-        insets.width = width
-        textContainerInset = insets
     }
 
     var gutterNumberFont: NSFont {
@@ -490,6 +486,7 @@ class NativeCodeTextView: NSTextView {
 
     private func resetDocumentIndex(_ document: String) {
         lineIndex = NativeTextLineIndex(document as NSString)
+        measuredLineWidths = nil
         updateGutter()
     }
 
@@ -498,8 +495,8 @@ class NativeCodeTextView: NSTextView {
         let thickness = gutterThickness
         if abs(gutterView.ruleThickness - thickness) > 0.5 {
             gutterView.ruleThickness = thickness
+            enclosingScrollView?.superview?.needsLayout = true
         }
-        applyGutterTextInset(thickness)
         gutterView.needsDisplay = true
     }
 
@@ -517,11 +514,25 @@ class NativeCodeTextView: NSTextView {
     func configureWrapping(_ wraps: Bool, viewportWidth: CGFloat) {
         isWrappingLines = wraps
         guard viewportWidth > 0 else { return }
-        let characterWidth = max(1, font?.maximumAdvancement.width ?? 8)
-        // Grow the actual document *and* container, rather than handing TextKit 2
-        // a container wider than its owning view (which materializes all rows).
-        let codeWidth = wraps ? viewportWidth :
-            max(viewportWidth, ceil(CGFloat(lineIndex?.maximumLineUnits ?? 0) * characterWidth * 2 + 24))
+        let codeWidth: CGFloat
+        if wraps {
+            measuredLineWidths = nil
+            codeWidth = viewportWidth
+        } else if let index = lineIndex {
+            let currentFont = font ?? .monospacedSystemFont(ofSize: 13, weight: .regular)
+            if measuredLineWidths?.font.isEqual(currentFont) != true
+                || measuredLineWidths?.count != index.lineCount {
+                measuredLineWidths = NativeMeasuredLineWidths(
+                    index: index, text: string as NSString, font: currentFont
+                )
+            }
+            let padding = (textContainer?.lineFragmentPadding ?? 5) * 2
+            codeWidth = max(viewportWidth, ceil((measuredLineWidths?.maximum ?? 0) + padding))
+        } else {
+            codeWidth = viewportWidth
+        }
+        // Keep the native document and TextKit 2 container at the same finite
+        // width so far-distance navigation does not eagerly lay out every row.
         setCodeWidth(codeWidth)
     }
 
@@ -536,10 +547,18 @@ class NativeCodeTextView: NSTextView {
         }
         let previousRange = NSRange(location: edited.location, length: priorLength)
         let replacement = storage.attributedSubstring(from: edited).string
+        let currentText = storage.string as NSString
         syntaxCoordinator?.willChangeContent(in: previousRange)
-        if lineIndex?.length == storage.length - storage.changeInLength {
-            lineIndex?.replace(in: previousRange, replacementLength: replacement.utf16.count,
-                               text: storage.string as NSString)
+        if lineIndex?.length == storage.length - storage.changeInLength,
+           let changed = lineIndex?.replace(
+               in: previousRange, replacementLength: replacement.utf16.count,
+               text: currentText
+           ), let index = lineIndex {
+            if let measured = measuredLineWidths, measured.font.isEqual(font) {
+                measured.replace(changed, index: index, text: currentText)
+            } else {
+                measuredLineWidths = nil
+            }
         } else {
             resetDocumentIndex(storage.string)
         }
@@ -556,6 +575,83 @@ class NativeCodeTextView: NSTextView {
     /// Subclasses can invalidate presentation caches on every storage change,
     /// including Undo/Redo which bypass NSTextView.didChangeText.
     func storageCharactersDidChange() {}
+}
+
+/// Cached natural line widths, updated only for the rows affected by an edit.
+@MainActor
+private final class NativeMeasuredLineWidths {
+    let font: NSFont
+    private var widths: [CGFloat]
+    private(set) var maximum: CGFloat = 0
+    var count: Int { widths.count }
+
+    init(index: NativeTextLineIndex, text: NSString, font: NSFont) {
+        self.font = font
+        widths = []
+        widths.reserveCapacity(index.lineCount)
+        var cache: [String: CGFloat] = [:]
+        for row in 0..<index.lineCount {
+            widths.append(Self.measure(row: row, index: index, text: text,
+                                       font: font, cache: &cache))
+        }
+        maximum = widths.max() ?? 0
+    }
+
+    func replace(
+        _ changed: (replaced: Range<Int>, inserted: Range<Int>),
+        index: NativeTextLineIndex, text: NSString
+    ) {
+        var cache: [String: CGFloat] = [:]
+        let updated = changed.inserted.map {
+            Self.measure(row: $0, index: index, text: text, font: font, cache: &cache)
+        }
+        let replacedMaximum = widths[changed.replaced].contains(maximum)
+        widths.replaceSubrange(changed.replaced, with: updated)
+        let newMaximum = updated.max() ?? 0
+        if newMaximum >= maximum {
+            maximum = newMaximum
+        } else if replacedMaximum {
+            maximum = widths.max() ?? 0
+        }
+    }
+
+    private static func measure(
+        row: Int, index: NativeTextLineIndex, text: NSString, font: NSFont,
+        cache: inout [String: CGFloat]
+    ) -> CGFloat {
+        let start = index.offset(atLine: row)
+        guard start < text.length else { return 0 }
+        var contentEnd = start
+        text.getLineStart(nil, end: nil, contentsEnd: &contentEnd,
+                          for: NSRange(location: start, length: 0))
+        let length = max(0, contentEnd - start)
+        guard length > 0 else { return 0 }
+
+        // All printable ASCII glyphs occupy one cell in a fixed-pitch font.
+        // This avoids shaping 100,000 near-identical code rows individually.
+        if font.isFixedPitch {
+            var ascii = true
+            for offset in start..<contentEnd {
+                if !(32...126).contains(Int(text.character(at: offset))) {
+                    ascii = false
+                    break
+                }
+            }
+            if ascii { return CGFloat(length) * font.maximumAdvancement.width }
+        }
+
+        let line = text.substring(with: NSRange(location: start, length: length))
+        if let cached = cache[line] { return cached }
+        var attributes: [NSAttributedString.Key: Any] = [.font: font]
+        if line.contains("\t") {
+            let style = (NSParagraphStyle.default.mutableCopy() as! NSMutableParagraphStyle)
+            style.defaultTabInterval = NativeCodeTextView.tabInterval
+            attributes[.paragraphStyle] = style
+        }
+        let width = (line as NSString).size(withAttributes: attributes).width
+        cache[line] = width
+        return width
+    }
 }
 
 /// UTF-16 range conversion onto the actual TextKit 2 document.
@@ -603,16 +699,22 @@ extension NSTextContentManager {
 @MainActor
 final class NativeLineNumberRuler: NSRulerView {
     weak var editor: NativeCodeTextView?
-    var backgroundColor: NSColor = .textBackgroundColor { didSet { needsDisplay = true } }
-    var textColor: NSColor = .secondaryLabelColor { didSet { needsDisplay = true } }
-    var selectedLineTextColor: NSColor = .labelColor { didSet { needsDisplay = true } }
-    var selectedLineHighlightColor: NSColor = .clear { didSet { needsDisplay = true } }
+    var backgroundColor: NSColor = .textBackgroundColor {
+        didSet { if backgroundColor != oldValue { needsDisplay = true } }
+    }
+    var textColor: NSColor = .secondaryLabelColor {
+        didSet { if textColor != oldValue { needsDisplay = true } }
+    }
+    var selectedLineTextColor: NSColor = .labelColor {
+        didSet { if selectedLineTextColor != oldValue { needsDisplay = true } }
+    }
+    var selectedLineHighlightColor: NSColor = .clear {
+        didSet { if selectedLineHighlightColor != oldValue { needsDisplay = true } }
+    }
 
     override func draw(_ dirtyRect: NSRect) {
-        // Ruler rendering is hosted as an NSScrollView floating subview.
-        // AppKit can supply its parent's dirty region here; without explicit
-        // clipping, the opaque gutter background covers the TextKit 2 glyphs
-        // across the entire editor even though this ruler is only ~35pt wide.
+        // AppKit may supply a parent's dirty region, so the fixed gutter
+        // must never paint beyond its own bounds into the adjacent editor.
         let visible = dirtyRect.intersection(bounds)
         guard !visible.isNull else { return }
         NSGraphicsContext.saveGraphicsState()
@@ -646,9 +748,10 @@ final class NativeLineNumberRuler: NSRulerView {
                 .foregroundColor: selected && editor.highlightSelectedLine
                     ? selectedLineTextColor : textColor
             ])
-            let y = centerY - label.size().height / 2
-            if y + label.size().height >= rect.minY, y <= rect.maxY {
-                label.draw(at: NSPoint(x: bounds.maxX - label.size().width - 6, y: y))
+            let size = label.size()
+            let y = centerY - size.height / 2
+            if y + size.height >= rect.minY, y <= rect.maxY {
+                label.draw(at: NSPoint(x: bounds.maxX - size.width - 6, y: y))
             }
         }
         if content.documentRange.isEmpty {

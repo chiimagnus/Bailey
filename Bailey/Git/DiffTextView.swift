@@ -24,6 +24,7 @@ enum DiffTypography {
         let height = lineHeight(for: font)
         style.minimumLineHeight = height
         style.maximumLineHeight = height
+        style.defaultTabInterval = NativeCodeTextView.tabInterval
         return style
     }
 }

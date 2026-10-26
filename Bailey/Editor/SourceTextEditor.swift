@@ -91,10 +91,7 @@ struct SourceTextEditor: NSViewRepresentable {
         // numbers against the text by one line.
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets()
-        // The gutter is a document-height floating subview that scrolls
-        // vertically with the text; since macOS 14 NSViews no longer clip
-        // subviews by default, so without this the scrolled-away line
-        // numbers draw outside the scroll view, over the header above it.
+        // Keep the scrolling text inside its pane, beside the fixed gutter.
         scrollView.clipsToBounds = true
 
         // Configure typography before setting the text: the font/color
@@ -276,19 +273,19 @@ struct SourceTextEditor: NSViewRepresentable {
                 MainActor.assumeIsolated {
                     guard let self, let file = self.file,
                           file.editorCoordinator === self,
-                          let clipView = scrollView?.contentView else { return }
-                    guard scrollView?.window != nil else { return }
+                          let scrollView, scrollView.window != nil else { return }
+                    let clipView = scrollView.contentView
+                    let editor = scrollView.documentView as? NativeCodeTextView
+                    editor?.gutterView?.needsDisplay = true
                     // Ignore early AppKit clip updates until the saved
                     // position is applied to a sized document view.
                     if (scrollView as? RestorableScrollView)?.restoreOnFirstLayout != nil { return }
                     file.editorState.scrollX = clipView.bounds.origin.x
                     file.editorState.scrollY = (scrollView as? RestorableScrollView)?
                         .sessionScrollY ?? clipView.bounds.origin.y
-                    (scrollView?.documentView as? NativeCodeTextView)?
-                        .syntaxCoordinator?.updateViewportRange(
-                            (scrollView?.documentView as? NativeCodeTextView)?
-                                .textLayoutManager?.textViewportLayoutController.viewportRange
-                        )
+                    editor?.syntaxCoordinator?.updateViewportRange(
+                        editor?.textLayoutManager?.textViewportLayoutController.viewportRange
+                    )
                 }
             }
         }
@@ -372,7 +369,7 @@ struct SourceTextEditor: NSViewRepresentable {
     }
 }
 
-private final class SourceEditorContainer: NSView {
+final class SourceEditorContainer: NSView {
     let scrollView: NSScrollView
     var focusOnAttach = false
     var canFocus: () -> Bool = { true }
@@ -401,7 +398,16 @@ private final class SourceEditorContainer: NSView {
     override func layout() {
         super.layout()
         guard scrollView.superview === self, bounds.width > 0, bounds.height > 0 else { return }
-        if scrollView.frame != bounds { scrollView.frame = bounds }
+        let gutter = (scrollView.documentView as? NativeCodeTextView)?.gutterView
+        if let gutter {
+            if gutter.superview !== self { addSubview(gutter) }
+            let frame = NSRect(x: 0, y: 0, width: gutter.ruleThickness, height: bounds.height)
+            if gutter.frame != frame { gutter.frame = frame }
+        }
+        let leading = gutter?.ruleThickness ?? 0
+        let frame = NSRect(x: leading, y: 0,
+                           width: max(0, bounds.width - leading), height: bounds.height)
+        if scrollView.frame != frame { scrollView.frame = frame }
     }
 }
 

@@ -32,10 +32,6 @@ final class TextCoordinateIndexTests: XCTestCase {
             for _ in 0..<300 {
                 let starts = expectedStarts(text)
                 XCTAssertEqual((0..<index.lineCount).map { index.offset(atLine: $0) }, starts)
-                let maximum = starts.enumerated().map { row, start in
-                    (row + 1 < starts.count ? starts[row + 1] : text.utf16.count) - start
-                }.max() ?? 0
-                XCTAssertEqual(index.maximumLineUnits, maximum)
                 var boundaries = [0]
                 for scalar in text.unicodeScalars { boundaries.append(boundaries.last! + scalar.utf16.count) }
                 let first = next(boundaries.count)
@@ -43,7 +39,13 @@ final class TextCoordinateIndexTests: XCTestCase {
                 let range = NSRange(location: boundaries[first], length: boundaries[last] - boundaries[first])
                 let replacement = ["", "\r", "\n", "\r\n", "👋", "\u{2028}", "\u{2029}", "abc"][next(8)]
                 text = (text as NSString).replacingCharacters(in: range, with: replacement)
-                index.replace(in: range, replacementLength: replacement.utf16.count, text: text as NSString)
+                let previousRows = index.lineCount
+                let changed = index.replace(
+                    in: range, replacementLength: replacement.utf16.count, text: text as NSString
+                )
+                XCTAssertEqual(changed.replaced.lowerBound, changed.inserted.lowerBound)
+                XCTAssertEqual(index.lineCount,
+                               previousRows - changed.replaced.count + changed.inserted.count)
                 XCTAssertEqual(index.length, text.utf16.count)
                 for (row, start) in expectedStarts(text).enumerated() { XCTAssertEqual(index.row(at: start), row) }
             }
@@ -109,7 +111,6 @@ final class TextCoordinateIndexTests: XCTestCase {
             index.replace(in: range, replacementLength: replacement.utf16.count, text: source)
             let fresh = NativeTextLineIndex(source)
             XCTAssertEqual(index.length, source.length)
-            XCTAssertEqual(index.maximumLineUnits, fresh.maximumLineUnits)
             XCTAssertEqual((0..<index.lineCount).map { index.offset(atLine: $0) },
                            (0..<fresh.lineCount).map { fresh.offset(atLine: $0) },
                            "iteration=\(iteration)")
