@@ -157,6 +157,7 @@ private struct BaileyCommands: Commands {
                 manager?.showPanel(.projects)
             } label: {
                 Label(String(localized: "Projects", table: "Interface"), systemImage: DockItem.projects.symbol)
+                    .labelStyle(.titleAndIcon)
             }
             .disabled(manager?.selectedProject == nil)
 
@@ -164,6 +165,7 @@ private struct BaileyCommands: Commands {
                 manager?.showPanel(.files)
             } label: {
                 Label(String(localized: "File Manager", table: "Sidebar"), systemImage: DockItem.files.symbol)
+                    .labelStyle(.titleAndIcon)
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
@@ -172,6 +174,7 @@ private struct BaileyCommands: Commands {
                 manager?.showPanel(.git)
             } label: {
                 Label(String(localized: "Git Manager", table: "Sidebar"), systemImage: DockItem.git.symbol)
+                    .labelStyle(.titleAndIcon)
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
             .disabled(manager?.selectedProject == nil)
@@ -217,6 +220,7 @@ private struct BaileyCommands: Commands {
                                 .interpolation(.high)
                                 .frame(width: 16, height: 16)
                         }
+                        .labelStyle(.titleAndIcon)
                     }
                     .keyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .control)
                 }
@@ -270,6 +274,7 @@ private struct BaileyCommands: Commands {
                         } icon: {
                             Image(nsImage: item.icon)
                         }
+                        .labelStyle(.titleAndIcon)
                     }
                     .keyboardShortcut(KeyEquivalent(Character("\(item.index + 1)")), modifiers: .command)
                 }
