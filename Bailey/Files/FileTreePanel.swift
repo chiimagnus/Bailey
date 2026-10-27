@@ -394,7 +394,7 @@ private struct FileTreeRow: View {
         model.contextMenuTargetPath == nil && model.selectedPath == item.path && listFocused
     }
 
-    private var isMultiSelected: Bool { model.selectedPaths.contains(item.path) }
+    private var isSelected: Bool { model.selectedPaths.contains(item.path) }
 
     private func selectForClick(componentPath: String? = nil) -> Bool {
         let modifiers = NSApp.currentEvent?.modifierFlags ?? []
@@ -435,7 +435,7 @@ private struct FileTreeRow: View {
         } else if isRenaming {
             TreeRowSurface(
                 depth: item.depth, scale: fontScale, displayed: isCurrent,
-                isSelected: isMultiSelected, listActive: listFocused,
+                isSelected: isSelected, listActive: listFocused,
                 contextRing: hasContextRing
             ) { _, layout in
                 renameRow
@@ -680,7 +680,7 @@ private struct FileTreeRow: View {
         if item.isDirectory {
             TreeFolderRow(row: displayRow, scale: fontScale,
                           focusRing: hasKeyboardCursor, contextRing: hasContextRing,
-                          isSelected: isMultiSelected, selectionEnabled: true,
+                          isSelected: isSelected, selectionEnabled: true,
                           listActive: listFocused,
                           compactSegment: { component in compactSegmentView(component) }) {
                 guard isCurrentTarget() else { return }
@@ -693,7 +693,7 @@ private struct FileTreeRow: View {
         } else {
             TreeFileRow(
                 row: displayRow, scale: fontScale, displayed: isCurrent,
-                isSelected: isMultiSelected, selectionEnabled: true,
+                isSelected: isSelected, selectionEnabled: true,
                 listActive: listFocused,
                 focusRing: hasKeyboardCursor, contextRing: hasContextRing,
                 open: {

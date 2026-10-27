@@ -2193,7 +2193,7 @@ struct GitPanel: View {
             displayRow: presentation,
             kind: kind,
             showDirectory: showDirectory,
-            selected: isDisplayedChange(entry, kind: kind),
+            displayed: isDisplayedChange(entry, kind: kind),
             focusRing: selectedChange == key && keyboardFocused && isGitActive
                 && controlActiveState == .key,
             onContextClick: { focusContextChange(key) },
@@ -2692,7 +2692,7 @@ private struct GitEntryRow: View {
     let displayRow: TreeDisplayModel.Row
     let kind: Kind
     let showDirectory: Bool
-    let selected: Bool
+    let displayed: Bool
     let focusRing: Bool
     let onContextClick: () -> Void
     /// Whether this repository is on another machine, where discarding an
@@ -2720,7 +2720,7 @@ private struct GitEntryRow: View {
             row: displayRow,
             scale: fontScale, iconPath: absolutePath,
             directory: showDirectory ? entry.directory : nil,
-            displayed: selected, focusRing: focusRing,
+            displayed: displayed, focusRing: focusRing,
             accessibilityHint: kind == .merge
                 ? String(localized: "Opens conflict changes", table: "Sidebar")
                 : String(localized: "Opens changes", table: "Sidebar"),

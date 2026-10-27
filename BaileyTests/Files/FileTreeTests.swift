@@ -2697,10 +2697,14 @@ final class FileTreeTests: XCTestCase {
     }
 
     func testTreeRowActiveInactiveSelectionAndKeyboardFocusRenderIndependently() throws {
-        func bitmap(isSelected: Bool, listActive: Bool, focusRing: Bool) throws -> NSBitmapImageRep {
-            let row = TreeRowSurface(depth: 0, scale: 1,
+        func bitmap(
+            isSelected: Bool, listActive: Bool, focusRing: Bool,
+            displayed: Bool = false, contextRing: Bool = false
+        ) throws -> NSBitmapImageRep {
+            let row = TreeRowSurface(depth: 0, scale: 1, displayed: displayed,
                                      isSelected: isSelected, listActive: listActive,
-                                     focusRing: focusRing, outerInset: 0, showsGuides: false) { _, layout in
+                                     focusRing: focusRing, contextRing: contextRing,
+                                     outerInset: 0, showsGuides: false) { _, layout in
                 Color.clear.frame(height: layout.height)
             }
             let window = NSWindow(
@@ -2731,6 +2735,16 @@ final class FileTreeTests: XCTestCase {
         let activeImage = try bitmap(isSelected: true, listActive: true, focusRing: false)
         let inactiveImage = try bitmap(isSelected: true, listActive: false, focusRing: false)
         let focusImage = try bitmap(isSelected: false, listActive: true, focusRing: true)
+        let selectedAndFocused = try bitmap(isSelected: true, listActive: true, focusRing: true)
+        let displayedImage = try bitmap(
+            isSelected: false, listActive: true, focusRing: false, displayed: true
+        )
+        let selectedAndDisplayed = try bitmap(
+            isSelected: true, listActive: true, focusRing: false, displayed: true
+        )
+        let menuAndSelected = try bitmap(
+            isSelected: true, listActive: true, focusRing: false, contextRing: true
+        )
         let centerX = normalImage.pixelsWide / 2
         let centerY = normalImage.pixelsHigh / 2
         let neutral = try color(normalImage, x: centerX, y: centerY)
@@ -2743,17 +2757,32 @@ final class FileTreeTests: XCTestCase {
         XCTAssertGreaterThan(delta(neutral, inactive), 0.04)
         XCTAssertLessThan(delta(neutral, focus), 0.03,
                           "Moving the keyboard focus cannot manufacture Selection background")
-        var outlinedPixels = 0
-        for y in 0..<normalImage.pixelsHigh {
-            for x in 0..<normalImage.pixelsWide {
-                if try delta(color(normalImage, x: x, y: y),
-                             color(focusImage, x: x, y: y)) > 0.07 {
-                    outlinedPixels += 1
+        let displayed = try color(displayedImage, x: centerX, y: centerY)
+        XCTAssertGreaterThan(delta(neutral, displayed), 0.04,
+                             "The currently displayed file retains its own subtle fill")
+        for image in [selectedAndFocused, selectedAndDisplayed, menuAndSelected] {
+            let center = try color(image, x: centerX, y: centerY)
+            XCTAssertLessThan(delta(active, center), 0.03,
+                              "Focus, context menu and display cannot override the Selection fill")
+        }
+        func changedPixels(_ base: NSBitmapImageRep, _ outlined: NSBitmapImageRep) throws -> Int {
+            var count = 0
+            for y in 0..<base.pixelsHigh {
+                for x in 0..<base.pixelsWide {
+                    if try delta(color(base, x: x, y: y),
+                                 color(outlined, x: x, y: y)) > 0.07 {
+                        count += 1
+                    }
                 }
             }
+            return count
         }
-        XCTAssertGreaterThan(outlinedPixels, 8,
-                             "Focus outline must render without a Selection background")
+        XCTAssertGreaterThan(try changedPixels(normalImage, focusImage), 8,
+                             "Focus outline must render without Selection")
+        XCTAssertGreaterThan(try changedPixels(activeImage, selectedAndFocused), 8,
+                             "Focus outline must remain visible together with Selection")
+        XCTAssertGreaterThan(try changedPixels(activeImage, menuAndSelected), 8,
+                             "The menu target must have its outline without losing Selection")
     }
 
     func testSharedTreeStatusAndCompaction() {
