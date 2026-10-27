@@ -56,6 +56,7 @@ struct FileTreePanel: View {
     let openFile: (String, Bool) -> Void
     var isActive = true
     var canFocusKeyboard: () -> Bool = { true }
+    var onKeyboardAttached: (TreeKeyboardView) -> Void = { _ in }
     let renameFile: (FileTreeModel.Item, String) async -> String?
     let onCommand: (FileTreeCommand) -> Void
     let refreshGitStatus: () -> Void
@@ -111,7 +112,8 @@ struct FileTreePanel: View {
                 model: model, git: git,
                 sshHost: sshHost, currentFilePath: currentFilePath,
                 openFile: openFile, isActive: isActive,
-                canFocusKeyboard: canFocusKeyboard, renameFile: renameFile,
+                canFocusKeyboard: canFocusKeyboard,
+                onKeyboardAttached: onKeyboardAttached, renameFile: renameFile,
                 onCommand: onCommand, refreshGitStatus: refreshGitStatus,
                 isCurrentTarget: isCurrentTarget,
                 canPasteFiles: canPasteFiles,
@@ -144,6 +146,7 @@ private struct FileTreeScrollView: View {
     let openFile: (String, Bool) -> Void
     let isActive: Bool
     let canFocusKeyboard: () -> Bool
+    let onKeyboardAttached: (TreeKeyboardView) -> Void
     let renameFile: (FileTreeModel.Item, String) async -> String?
     let onCommand: (FileTreeCommand) -> Void
     let refreshGitStatus: () -> Void
@@ -235,6 +238,7 @@ private struct FileTreeScrollView: View {
     }
 
     private func focusSelectedRow() {
+        if let tree = keyboardOwner.view { onKeyboardAttached(tree) }
         guard isActive, canFocusKeyboard(), isCurrentTarget(),
               model.renamingPath == nil, model.draft == nil else { return }
         if model.selectedItem == nil {

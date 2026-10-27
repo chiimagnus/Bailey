@@ -51,6 +51,8 @@ final class WorkspaceWindowModel {
                 previous?.tabs.forEach { $0.content.autoSaveOnFocusLoss() }
             }
             selectedProject?.dock.clearContextTarget()
+            filesTreeResponder = nil
+            gitTreeResponder = nil
             requestSave()
         }
     }
@@ -67,6 +69,8 @@ final class WorkspaceWindowModel {
     @ObservationIgnored private weak var commandPalettePreviousResponder: NSResponder?
     @ObservationIgnored private weak var commandPaletteWindow: NSWindow?
     @ObservationIgnored private var commandPaletteContentID: UUID?
+    @ObservationIgnored private weak var filesTreeResponder: TreeKeyboardView?
+    @ObservationIgnored private weak var gitTreeResponder: TreeKeyboardView?
     /// Window hosting this manager, once SwiftUI has attached its content.
     /// Finder service requests use it to target the active Bailey window.
     @ObservationIgnored private weak var window: NSWindow?
@@ -999,7 +1003,7 @@ final class WorkspaceWindowModel {
             if let responder, self.selectedProject?.focusedContent?.id == contentID,
                self.ownsActiveResponder(responder) {
                 window.makeFirstResponder(responder)
-            } else if let activeTree = self.activeTreeResponder(in: window) {
+            } else if let activeTree = self.registeredToolResponder(in: window) {
                 // A palette switch can move from an editor, terminal, or old
                 // tree into Files/Git. Restore the tool that is now visible.
                 window.makeFirstResponder(activeTree)
@@ -1007,15 +1011,30 @@ final class WorkspaceWindowModel {
         }
     }
 
-    func activeTreeResponder(in window: NSWindow) -> TreeKeyboardView? {
-        guard let root = window.contentView,
-              let selected = selectedProject?.dock.activeGroup?.selected,
-              selected == .files || selected == .git else { return nil }
-        func findTree(_ view: NSView) -> TreeKeyboardView? {
-            if let tree = view as? TreeKeyboardView, ownsActiveResponder(tree) { return tree }
-            return view.subviews.lazy.compactMap(findTree).first
+    /// Native tree ownership is supplied by its mounted panel, not inferred from
+    /// another view's coordinates or from arbitrary window descendants.
+    func registerTreeResponder(_ view: TreeKeyboardView, for panel: ToolPanel, in project: Project) {
+        guard selectedProject === project, view.window === window else { return }
+        switch panel {
+        case .files: filesTreeResponder = view
+        case .git: gitTreeResponder = view
+        default: break
         }
-        return findTree(root)
+    }
+
+    func registeredToolResponder(in window: NSWindow) -> TreeKeyboardView? {
+        guard let project = selectedProject,
+              let active = project.dock.activeGroup?.selected else { return nil }
+        let candidate: TreeKeyboardView?
+        switch active {
+        case .files: candidate = filesTreeResponder
+        case .git: candidate = gitTreeResponder
+        default: return nil
+        }
+        guard let candidate, candidate.window === window,
+              !candidate.isHiddenOrHasHiddenAncestor,
+              !candidate.visibleRect.isEmpty else { return nil }
+        return candidate
     }
 
     /// Terminal and editor responders are public host views. WebKit instead
@@ -1024,9 +1043,10 @@ final class WorkspaceWindowModel {
     /// the page's keyboard focus.
     private func isStableWorkspaceResponder(_ responder: NSResponder) -> Bool {
         if responder is any TerminalBackendSurface || responder is FocusReportingTextView
-            || responder is DiffTextView || responder is TreeKeyboardView {
+            || responder is DiffTextView {
             return true
         }
+        if let window, registeredToolResponder(in: window) === responder { return true }
         var view = responder as? NSView
         while let current = view {
             if current is WKWebView { return true }
@@ -1038,18 +1058,8 @@ final class WorkspaceWindowModel {
     func ownsActiveResponder(_ responder: NSResponder) -> Bool {
         guard let window, let view = responder as? NSView, view.window === window,
               !view.isHiddenOrHasHiddenAncestor else { return false }
-        if view is TreeKeyboardView,
-           let activeGroup = selectedProject?.dock.activeGroup,
-           activeGroup.selected == .files || activeGroup.selected == .git,
-           let windowContent = window.contentView {
-            func belongsToActiveGroup(_ current: NSView) -> Bool {
-                if let group = current as? DockGroupFocusView,
-                   group.groupID == activeGroup.id {
-                    return group.containsResponder(responder)
-                }
-                return current.subviews.contains(where: belongsToActiveGroup)
-            }
-            return belongsToActiveGroup(windowContent)
+        if view is TreeKeyboardView {
+            return registeredToolResponder(in: window) === responder
         }
         guard let content = selectedProject?.focusedContent else { return false }
         let root: NSView?

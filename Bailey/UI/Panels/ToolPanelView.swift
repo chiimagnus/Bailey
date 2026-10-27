@@ -181,6 +181,9 @@ struct ToolPanelView: View {
                                   let files = project.dock.group(containing: .files) else { return false }
                             return project.dock.activeGroupID == files.id && files.selected == .files
                         },
+                        onKeyboardAttached: {
+                            manager.registerTreeResponder($0, for: .files, in: project)
+                        },
                         renameFile: { [target = filesTarget] item, newName in
                             guard let target else { return nil }
                             return await manager.renameFile(

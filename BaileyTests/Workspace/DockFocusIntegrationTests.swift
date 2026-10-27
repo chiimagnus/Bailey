@@ -108,6 +108,48 @@ final class DockFocusIntegrationTests: XCTestCase {
         XCTAssertTrue(window.firstResponder === group)
     }
 
+    func testPaletteCannotRestoreAnUnregisteredTreeFromAnotherDockGroup() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manager = WorkspaceApplication().makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        project.dock.select(.files)
+        let filesGroup = try XCTUnwrap(project.dock.group(containing: .files))
+
+        let bounds = NSRect(x: 0, y: 0, width: 640, height: 420)
+        let window = NSWindow(contentRect: bounds, styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let content = NSView(frame: bounds)
+        let otherGroup = DockGroupFocusView(groupID: UUID())
+        otherGroup.frame = bounds
+        let unrelatedTree = TreeKeyboardView(frame: .init(x: 20, y: 20, width: 50, height: 50))
+        otherGroup.addSubview(unrelatedTree)
+        content.addSubview(otherGroup)
+        let activeGroup = DockGroupFocusView(groupID: filesGroup.id)
+        activeGroup.frame = bounds
+        content.addSubview(activeGroup)
+        window.contentView = content
+        manager.attach(to: window)
+        window.orderFront(nil)
+        XCTAssertNil(manager.registeredToolResponder(in: window),
+                     "A tree belonging to a different Dock group must never be restored by geometry")
+        XCTAssertFalse(manager.ownsActiveResponder(unrelatedTree))
+        let filesTree = TreeKeyboardView(frame: .init(x: 90, y: 60, width: 40, height: 40))
+        activeGroup.addSubview(filesTree)
+        manager.registerTreeResponder(filesTree, for: .files, in: project)
+        XCTAssertTrue(manager.registeredToolResponder(in: window) === filesTree)
+        XCTAssertTrue(manager.ownsActiveResponder(filesTree))
+        XCTAssertFalse(manager.ownsActiveResponder(unrelatedTree))
+        manager.selectedProjectID = nil
+        XCTAssertNil(manager.registeredToolResponder(in: window))
+        XCTAssertFalse(manager.ownsActiveResponder(filesTree))
+    }
+
     func testTerminalFindFieldEditorBelongsOnlyToItsDockGroup() async throws {
         let terminal = TerminalSession(launchCommand: "exec /bin/sh -i")
         defer { terminal.terminate() }
