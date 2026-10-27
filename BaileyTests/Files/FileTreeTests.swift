@@ -1487,6 +1487,27 @@ final class FileTreeTests: XCTestCase {
                      "Changing the underlying machine must not retain a context outline")
     }
 
+    func testEscapeClearsSelectionAndInvalidatesPendingFileDrag() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("source.txt")
+        try Data("keep".utf8).write(to: file)
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let row = try XCTUnwrap(tree.items.first { $0.path == file.path })
+        tree.select(row)
+        let oldDrag = try XCTUnwrap(tree.beginDrag(for: row))
+        XCTAssertTrue(tree.hasActiveDrag)
+        tree.clearExplicitSelection()
+        XCTAssertTrue(tree.selectedPaths.isEmpty)
+        XCTAssertEqual(tree.selectedPath, file.path, "Escape must retain keyboard focus")
+        XCTAssertFalse(tree.hasActiveDrag, "Escape must invalidate the earlier drag payload")
+        XCTAssertFalse(tree.consumeDrag(nonce: oldDrag.nonce, paths: oldDrag.paths),
+                       "Late drop cannot act on files whose Selection was cancelled")
+        XCTAssertEqual(try Data(contentsOf: file), Data("keep".utf8))
+    }
+
     func testCommandDeselectionStaysEmptyAfterDirectoryRefresh() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -2574,6 +2595,8 @@ final class FileTreeTests: XCTestCase {
         let c = b.appendingPathComponent("c1")
         try FileManager.default.createDirectory(at: c, withIntermediateDirectories: true)
         try Data().write(to: c.appendingPathComponent("existing.swift"))
+        let other = root.appendingPathComponent("other.swift")
+        try Data().write(to: other)
         let tree = FileTreeModel()
         await tree.sync(root: root.path, backend: backend)
         for path in [a.path, b.path, c.path] {
@@ -2583,6 +2606,16 @@ final class FileTreeTests: XCTestCase {
         let compact = try XCTUnwrap(tree.items.first { $0.path == c.path })
         XCTAssertEqual(compact.displayName, "a1 / b1 / c1")
         XCTAssertEqual(compact.compactComponents.map(\.path), [a.path, b.path, c.path])
+
+        tree.select(compact)
+        tree.select(try XCTUnwrap(tree.items.first { $0.path == other.path }), toggling: true)
+        XCTAssertEqual(tree.selectedPaths, [compact.path, other.path])
+        tree.selectForContextMenu(compact, componentPath: a.path)
+        XCTAssertEqual(tree.selectedPaths, [compact.path],
+                       "Right-clicking a different compact directory must replace the old multi-selection")
+        XCTAssertEqual(tree.selectedOperationPaths, [a.path],
+                       "File commands must target the clicked compact component")
+        XCTAssertEqual(tree.contextMenuTargetPath, a.path)
 
         tree.select(compact, componentPath: a.path)
         XCTAssertEqual(tree.selectedDirectoryPath, a.path)

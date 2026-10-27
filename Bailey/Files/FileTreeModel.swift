@@ -184,7 +184,7 @@ final class FileTreeModel {
     }
     private(set) var items: [Item] = []
     private(set) var contentRevision: UInt64 = 0
-    /// Files' current keyboard selection, independent of the most recent FileTab.
+    /// Files' keyboard focus row, independent of Selection and the displayed FileTab.
     private(set) var selectedPath: String?
     private(set) var selectedCompactPath: String?
     private(set) var selectedPaths: Set<String> = []
@@ -307,7 +307,8 @@ final class FileTreeModel {
         guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path }),
               componentPath == nil || item.compactComponents.contains(where: { $0.path == componentPath })
         else { return }
-        if !selectedPaths.contains(item.path) {
+        if !selectedPaths.contains(item.path)
+            || (componentPath != nil && componentPath != item.path) {
             selectedPaths = [item.path]
             selectionAnchorPath = item.path
         }
@@ -353,6 +354,7 @@ final class FileTreeModel {
         selectedPaths.removeAll()
         selectionAnchorPath = nil
         contextMenuTargetPath = nil
+        activeDrag = nil
     }
 
     func selectAllVisible() {
