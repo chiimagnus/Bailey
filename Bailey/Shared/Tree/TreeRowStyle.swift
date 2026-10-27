@@ -142,6 +142,7 @@ final class ContextMenuClickView: NSView {
     var onContextClick: (() -> Void)?
     var onMenuClosed: (() -> Void)?
     var onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)?
+    private weak var contextMouseEvent: NSEvent?
     private var menuBeginObserver: NSObjectProtocol?
     private var menuEndObserver: NSObjectProtocol?
     private var menuKeyMonitor: Any?
@@ -160,11 +161,19 @@ final class ContextMenuClickView: NSView {
               event.type == .rightMouseDown
                   || (event.type == .leftMouseDown && event.modifierFlags.contains(.control))
         else { return nil }
-        return super.hitTest(point)
+        let hit = super.hitTest(point)
+        if hit != nil { prepareContextClick(event) }
+        return hit
+    }
+
+    private func prepareContextClick(_ event: NSEvent) {
+        guard contextMouseEvent !== event else { return }
+        contextMouseEvent = event
+        onContextClick?()
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
-        onContextClick?()
+        prepareContextClick(event)
         stopObservingMenu()
         guard onMenuClosed != nil || onMenuKeyDown != nil else { return super.menu(for: event) }
         menuBeginObserver = NotificationCenter.default.addObserver(

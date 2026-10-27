@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import XCTest
 
 @MainActor
@@ -143,6 +144,97 @@ final class SharedTreeUITests: XCTestCase {
             FileManager.default.fileExists(atPath: marker.path)
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [received], timeout: 12), .completed)
+    }
+
+    func testContextMenuNewItemShortcutsCreateOnlyInsideRightClickedFolder() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let home = try WorkspaceUITestFixture(in: self)
+        let original = try fixture.file("inside/original.txt", text: "unchanged\n")
+        let unrelated = try fixture.file("a-unrelated/keep.txt", text: "other\n")
+        let newFile = fixture.root.appendingPathComponent("inside/context-created.txt")
+        let newFolder = fixture.root.appendingPathComponent("inside/context-folder")
+
+        let previousInput = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+        defer { XCTAssertEqual(TISSelectInputSource(previousInput), noErr) }
+        if let ascii = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue() {
+            XCTAssertEqual(TISSelectInputSource(ascii), noErr)
+        }
+
+        let app = XCUIApplication(bundleIdentifier: "chiimagnus.bailey.dev")
+        app.launchArguments = ["--isolated-ui-test", "-AppleLanguages", "(en)"]
+        app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
+        app.launchEnvironment["BAILEY_UI_TEST_PROJECT"] = fixture.root.path
+        app.launchEnvironment["HOME"] = home.root.path
+        app.launchEnvironment["CFFIXED_USER_HOME"] = home.root.path
+        app.launch()
+        defer { if app.state != .notRunning { app.terminate() } }
+        app.activate()
+        if !app.windows.firstMatch.waitForExistence(timeout: 1) {
+            app.typeKey("n", modifierFlags: [.command, .shift])
+        }
+        let window = app.windows.firstMatch
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 15))
+        files.click()
+
+        let folder = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", "inside")).firstMatch
+        XCTAssertTrue(folder.waitForExistence(timeout: 15))
+        let rowText = window.staticTexts["inside"]
+        XCTAssertTrue(rowText.waitForExistence(timeout: 5), "The row must expose its exact text")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelated.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath:
+            fixture.root.appendingPathComponent(".config").path))
+        let clipboardVersion = NSPasteboard.general.changeCount
+
+        rowText.rightClick()
+        let firstMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["New File…"].exists && $0.menuItems["Copy Relative Path"].exists
+        })
+        firstMenu.typeKey("n", modifierFlags: .command)
+        let fileName = window.textFields.matching(
+            NSPredicate(format: "placeholderValue == %@", "File name")
+        ).firstMatch
+        XCTAssertTrue(fileName.waitForExistence(timeout: 15))
+        fileName.click()
+        fileName.typeText("context-created.txt")
+        XCTAssertEqual(fileName.value as? String, "context-created.txt")
+        fileName.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let createdFile = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: newFile.path)
+        }, object: nil)
+        guard XCTWaiter.wait(for: [createdFile], timeout: 8) == .completed else {
+            XCTFail("The new file must exist after the menu's Cmd-N action")
+            return
+        }
+
+        rowText.rightClick()
+        let secondMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["New Folder…"].exists && $0.menuItems["Copy Relative Path"].exists
+        })
+        secondMenu.typeKey("n", modifierFlags: [.option, .command])
+        let folderName = window.textFields.matching(
+            NSPredicate(format: "placeholderValue == %@", "Folder name")
+        ).firstMatch
+        XCTAssertTrue(folderName.waitForExistence(timeout: 15))
+        folderName.click()
+        folderName.typeText("context-folder")
+        XCTAssertEqual(folderName.value as? String, "context-folder")
+        folderName.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let createdFolder = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            var directory = ObjCBool(false)
+            return FileManager.default.fileExists(atPath: newFolder.path,
+                                                  isDirectory: &directory) && directory.boolValue
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [createdFolder], timeout: 15), .completed)
+
+        XCTAssertEqual(NSPasteboard.general.changeCount, clipboardVersion,
+                       "New-item shortcuts must not modify the user's clipboard")
+        XCTAssertEqual(try String(contentsOf: original, encoding: .utf8), "unchanged\n")
+        XCTAssertEqual(try String(contentsOf: unrelated, encoding: .utf8), "other\n")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fixture.root.appendingPathComponent("context-created.txt").path))
     }
 
     func testCompactFoldersContextMenuCreatesInEachClickedPathComponent() throws {
