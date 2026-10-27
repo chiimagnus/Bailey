@@ -715,6 +715,46 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: second), Data("second bytes\n".utf8))
     }
 
+    func testNativeDragCompressedFolderSegmentMovesItsRealAncestor() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let leaf = try fixture.file("a1/b1/c1/leaf.swift", text: "original leaf bytes\n")
+        let marker = try fixture.file("target/.keep", text: "keep target\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        let folder = { (name: String) in
+            window.descendants(matching: .any)
+                .matching(identifier: "bailey.tree.folder")
+                .matching(NSPredicate(format: "label == %@", name)).firstMatch
+        }
+        if !folder("a1").isHittable {
+            WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        }
+        for name in ["a1", "b1", "c1"] {
+            let row = folder(name)
+            XCTAssertTrue(row.waitForExistence(timeout: 15), "Folder \(name) must be revealed")
+            row.click()
+        }
+        let compact = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label CONTAINS %@", "a1 / b1")).firstMatch
+        XCTAssertTrue(compact.waitForExistence(timeout: 15))
+        let ancestor = compact.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder.component.0").firstMatch
+        let destination = folder("target")
+        XCTAssertTrue(ancestor.waitForExistence(timeout: 15))
+        XCTAssertTrue(destination.waitForExistence(timeout: 15))
+        ancestor.click(forDuration: 0.2, thenDragTo: destination)
+        let moved = fixture.root.appendingPathComponent("target/a1/b1/c1/leaf.swift")
+        let finished = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: moved.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 15), .completed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: leaf.path),
+                       "Dragging compact ancestor a1 must move the whole a1 tree, not only c1")
+        XCTAssertEqual(try Data(contentsOf: moved), Data("original leaf bytes\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: marker), Data("keep target\n".utf8))
+    }
+
     func testNativeDragOptionCopiesSelectionAndUnselectedRowMovesOnlyItself() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let alpha = try fixture.file("a.txt", text: "alpha original\n")
