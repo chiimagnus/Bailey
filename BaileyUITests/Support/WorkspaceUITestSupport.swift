@@ -302,8 +302,8 @@ private final class UITestSessionObserver: NSObject, XCTestObservation {
 struct WorkspaceUITestFixture {
     let root: URL
 
-    init(in test: XCTestCase) throws {
-        root = FileManager.default.temporaryDirectory
+    init(in test: XCTestCase, baseDirectory: URL? = nil) throws {
+        root = (baseDirectory ?? FileManager.default.temporaryDirectory)
             .appendingPathComponent("Bailey-UITest-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         test.addTeardownBlock { [root] in

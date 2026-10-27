@@ -457,7 +457,9 @@ final class WorkspaceFilesUITests: XCTestCase {
     }
 
     func testFileManagerClipboardCopyCutPasteAndTrashAgainstRealDisk() throws {
-        let fixture = try WorkspaceUITestFixture(in: self)
+        let volume = ProcessInfo.processInfo.environment["BAILEY_P2_TEST_TRASH_VOLUME"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+        let fixture = try WorkspaceUITestFixture(in: self, baseDirectory: volume)
         let alpha = try fixture.file("alpha.txt", text: "alpha original\n")
         let beta = try fixture.file("beta.txt", text: "beta original\n")
         let placeholder = try fixture.file("target/.keep", text: "")
@@ -686,7 +688,9 @@ final class WorkspaceFilesUITests: XCTestCase {
     }
 
     func testMultiSelectContextTargetsAndBulkTrashAgainstRealDisk() throws {
-        let fixture = try WorkspaceUITestFixture(in: self)
+        let volume = ProcessInfo.processInfo.environment["BAILEY_P2_TEST_TRASH_VOLUME"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+        let fixture = try WorkspaceUITestFixture(in: self, baseDirectory: volume)
         let alpha = try fixture.file("a.txt", text: "a bytes\n")
         let beta = try fixture.file("b.txt", text: "b bytes\n")
         let gamma = try fixture.file("c.txt", text: "c bytes\n")
@@ -875,6 +879,122 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try runSSH(host: host, command:
             "test ! -e '\(firstPath)' && test ! -e '\(secondPath)' && printf deleted"),
             "deleted", "Confirm must permanently remove only the remote fixture files")
+    }
+
+    func testAuthorizedWindowsSSHTwoWindowsKeepTargetsAfterIsolatedMasterExit() throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"],
+              !host.isEmpty, !host.hasPrefix("-"),
+              !host.contains(where: { $0.isWhitespace || $0.isNewline }),
+              ProcessInfo.processInfo.environment["BAILEY_P2_EXTERNAL_DISCONNECT"] == "1"
+        else { throw XCTSkip("Requires a test-only Windows SSH host and Dev-master controller") }
+        let remoteRoot = try runSSH(
+            host: host, command: "mktemp -d /tmp/bailey-p2-ui-XXXXXX"
+        ).trimmingCharacters(in: .newlines)
+        guard (remoteRoot as NSString).deletingLastPathComponent == "/tmp",
+              (remoteRoot as NSString).lastPathComponent.hasPrefix("bailey-p2-ui-")
+        else { throw NSError(domain: "BaileyP2UI", code: 2) }
+        addTeardownBlock { @MainActor in
+            XCTAssertEqual(try self.runSSH(host: host,
+                command: "rm -r -- '\(remoteRoot)' && test ! -e '\(remoteRoot)' && printf cleaned"),
+                "cleaned", "Clean only this isolated Windows SSH test directory")
+        }
+        let remoteA = remoteRoot + "/a-remote.txt"
+        let remoteB = remoteRoot + "/b-remote.txt"
+        let remoteNew = remoteRoot + "/after-reconnect.txt"
+        _ = try runSSH(host: host, command:
+            "printf 'REMOTE_A\\n' > '\(remoteA)' && "
+            + "printf 'REMOTE_B\\n' > '\(remoteB)' && "
+            + "git -C '\(remoteRoot)' init -q -b main")
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let localTwin = try fixture.file("local-window/a-remote.txt", text: "LOCAL_ONLY\n")
+        let localFolder = localTwin.deletingLastPathComponent()
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root
+        )
+        app.menuBarItems["Project"].click()
+        app.menuItems["Add SSH Files or Projects…"].click()
+        let remoteWindowID = app.windows.firstMatch.identifier
+        let remoteWindow = app.windows.matching(identifier: remoteWindowID).firstMatch
+        let sheet = remoteWindow.sheets.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 12))
+        let hostField = sheet.comboBoxes.firstMatch
+        hostField.click()
+        hostField.typeKey("a", modifierFlags: .command)
+        hostField.typeText(host)
+        let paths = sheet.textViews.firstMatch
+        paths.click()
+        paths.typeText(remoteRoot)
+        sheet.buttons["Add"].click()
+        let filesA = remoteWindow.descendants(matching: .any)
+            .matching(identifier: "bailey.dock.files").firstMatch
+        XCTAssertTrue(filesA.waitForExistence(timeout: 25))
+        filesA.click()
+        let a = WorkspaceUITestSupport.fileRow(URL(fileURLWithPath: remoteA), in: remoteWindow)
+        let b = WorkspaceUITestSupport.fileRow(URL(fileURLWithPath: remoteB), in: remoteWindow)
+        XCTAssertTrue(a.waitForExistence(timeout: 25))
+        XCTAssertTrue(b.waitForExistence(timeout: 25))
+        a.click()
+        XCUIElement.perform(withKeyModifiers: .shift) { b.click() }
+        XCTAssertTrue(a.isSelected && b.isSelected)
+        try fileContextMenu(for: a, in: app).menuItems["Copy Relative Path"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "a-remote.txt\nb-remote.txt")
+
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        XCTAssertTrue(app.windows.element(boundBy: 1).waitForExistence(timeout: 15))
+        let emptyWindow = try XCTUnwrap(app.windows.allElementsBoundByIndex.first {
+            $0.buttons["bailey.emptyState.addFolder"].exists
+        })
+        let newWindow = app.windows.matching(identifier: emptyWindow.identifier).firstMatch
+        try WorkspaceUITestSupport.addFolder(localFolder, to: app, in: newWindow)
+        let filesB = newWindow.descendants(matching: .any)
+            .matching(identifier: "bailey.dock.files").firstMatch
+        XCTAssertTrue(filesB.waitForExistence(timeout: 15))
+        filesB.click()
+        let localRow = WorkspaceUITestSupport.fileRow(localTwin, in: newWindow)
+        XCTAssertTrue(localRow.waitForExistence(timeout: 20))
+        localRow.click()
+        try fileContextMenu(for: localRow, in: app).menuItems["Copy Path"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), localTwin.path)
+        XCTAssertTrue(a.isSelected && b.isSelected,
+                      "The background Windows Files selection belongs to its own window")
+
+        for _ in 0..<app.windows.count {
+            if app.windows.firstMatch.identifier == remoteWindowID { break }
+            app.typeKey("`", modifierFlags: .command)
+        }
+        XCTAssertEqual(app.windows.firstMatch.identifier, remoteWindowID)
+        let dev = NSRunningApplication.runningApplications(withBundleIdentifier: "chiimagnus.bailey.dev")
+        XCTAssertEqual(dev.count, 1)
+        let devPID = try XCTUnwrap(dev.first?.processIdentifier)
+        let ready = fixture.root.appendingPathComponent("p2-disconnect.ready")
+        let done = fixture.root.appendingPathComponent("p2-disconnect.done")
+        try "\(devPID)\n".write(to: ready, atomically: true, encoding: .utf8)
+        NSLog("P2_DISCONNECT_READY_PATH=%@", ready.path)
+        let disconnected = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: done.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [disconnected], timeout: 65), .completed,
+                       "Controller must close only this isolated Bailey Dev SSH master")
+        XCTAssertEqual(try String(contentsOf: done, encoding: .utf8), "master-closed\n")
+
+        XCTAssertEqual(try runSSH(host: host, command:
+            "printf 'AFTER_RECONNECT\\n' > '\(remoteNew)' && printf created"), "created")
+        XCTAssertTrue(WorkspaceUITestSupport.fileRow(
+            URL(fileURLWithPath: remoteNew), in: remoteWindow
+        ).waitForExistence(timeout: 30), "Remote Files must recover the fresh Windows listing")
+        XCTAssertTrue(a.isSelected && b.isSelected,
+                      "Reconnect must not silently retarget the old remote selection")
+        try fileContextMenu(for: a, in: app).menuItems["Copy Relative Path"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "a-remote.txt\nb-remote.txt")
+        XCTAssertEqual(try runSSH(host: host, command: "cat '\(remoteA)'"), "REMOTE_A\n")
+        XCTAssertEqual(try runSSH(host: host, command: "cat '\(remoteB)'"), "REMOTE_B\n")
+        XCTAssertEqual(try runSSH(host: host, command: "cat '\(remoteNew)'"), "AFTER_RECONNECT\n")
+        XCTAssertTrue(try runSSH(host: host, command:
+            "git -C '\(remoteRoot)' status --porcelain=v1").contains("after-reconnect.txt"))
+        XCTAssertEqual(try Data(contentsOf: localTwin), Data("LOCAL_ONLY\n".utf8))
+        XCTAssertFalse(WorkspaceUITestSupport.fileRow(
+            URL(fileURLWithPath: remoteNew), in: newWindow
+        ).exists, "The local window must not display an unrelated Windows file")
     }
 
     private func runSSH(host: String, command: String) throws -> String {
