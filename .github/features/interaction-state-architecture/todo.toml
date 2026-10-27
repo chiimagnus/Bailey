@@ -44,42 +44,42 @@ note = "137 宿主 + 8 GUI 通过；视口分页、IME、双窗和重挂载；De
 [[tasks]]
 id = "P2-T1"
 title = "收敛 Files 浏览与打开事件链"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = ""
-note = ""
+commit = "4dd9ad833eb7975a22df56f0a7df3d54d3c5de59"
+note = "182 项宿主与 1 项真实 App GUI 通过，Dev/UI 构建验签通过；隐藏 Files 返回 Red→Green；同组及跨组自动定位。"
 
 [[tasks]]
 id = "P2-T2"
 title = "收敛 Files 系统 Edit 与右键操作目标"
-status = "pending"
+status = "blocked"
 plan = "plan-p2.md#p2-t2"
 commit = ""
-note = ""
+note = "实现已提交 8fe95df5057b70e26fe52b2788e6ec5814e87106；140 宿主+Dev/UI 构建通过，真实 GUI 尚未核销：既有两个隔离 Bailey Dev 进程 PID 22129/23805 处于 T 状态，按测试规范不擅自终止，测试用例命中也需复核。"
 
 [[tasks]]
 id = "P2-T3"
 title = "核验原生菜单生命周期并清理旧路径"
-status = "pending"
+status = "blocked"
 plan = "plan-p2.md#p2-t3"
 commit = ""
-note = ""
+note = "共享菜单相关实现已提交 3b9c60ddb3a454b91d55741d2fe2b90575038015；34 宿主及 Dev build 通过；真实菜单 Cmd-W/蜂鸣/关闭反馈 GUI 因旧隔离 Dev 测试进程占用未核销。"
 
 [[tasks]]
 id = "P2-T4"
 title = "统一文件选择与 Finder 内外拖放目标"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t4"
-commit = ""
-note = ""
+commit = "f73f3f0e9df936d1b2d35286068b3e7f5bbd35bf"
+note = "141 项宿主、真实多选 Move 与 Option Copy+未选中 B Move 各 1 项 GUI、Dev 构建签名通过；同场批测曾遇到独立 App 窗口未显示，单项验证正常。"
 
 [[tasks]]
 id = "P2-T5"
 title = "统一文件浏览与原生焦点恢复"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t5"
-commit = ""
-note = ""
+commit = "b9d1b2fe9b90ae1cc8312b07f5483e46eae612df"
+note = "Red 到 Green；104 项宿主；三种真实焦点 GUI 均已验证，批测首行未挂载失败后单项重测通过；Dev 构建验签通过。"
 
 [[tasks]]
 id = "P3-T1"
