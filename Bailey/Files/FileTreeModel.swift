@@ -832,17 +832,13 @@ final class FileTreeModel {
         let epoch = treeEpoch
         let backend = self.backend
         guard !root.isEmpty, isCurrentTarget() else { return FileBatchResult() }
-        switch action {
-        case .move, .delete:
-            guard canMutateCurrentFiles else {
-                let reason = String(localized:
-                    "Remote file list has not been verified after reconnecting.", table: "Workspace")
-                presentError(
-                    String(localized: "Couldn’t complete file operation.", table: "Workspace"), reason
-                )
-                return FileBatchResult(failures: [reason])
-            }
-        case .copy: break
+        guard canMutateCurrentFiles else {
+            let reason = String(localized:
+                "Remote file list has not been verified after reconnecting.", table: "Workspace")
+            presentError(
+                String(localized: "Couldn’t complete file operation.", table: "Workspace"), reason
+            )
+            return FileBatchResult(failures: [reason])
         }
         let sourcePaths = Array(Set(paths)).sorted {
             $0.count == $1.count ? $0 < $1 : $0.count < $1.count
@@ -1189,6 +1185,13 @@ final class FileTreeModel {
     @discardableResult
     func commitDraft(name: String, isCurrentTarget: () -> Bool = { true }) async -> String? {
         guard isCurrentTarget(), let draft else { return nil }
+        guard canMutateCurrentFiles else {
+            presentError(
+                String(localized: "Couldn’t complete file operation.", table: "Workspace"),
+                String(localized: "Remote file list has not been verified after reconnecting.", table: "Workspace")
+            )
+            return nil
+        }
         let backend = self.backend
         let scope = workspaceScope
         let root = rootPath

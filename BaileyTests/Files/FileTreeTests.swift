@@ -60,7 +60,8 @@ private actor CountingFileBackend: WorkspaceBackend {
     func rename(from: String, to: String) async throws { try await base.rename(from: from, to: to) }
     func delete(paths: [String]) async throws { try await base.delete(paths: paths) }
     func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
-        try await base.run(argv: argv, cwd: cwd, env: env, stdin: stdin, timeout: timeout)
+        let command = argv.first == "pwd" ? ["/bin/pwd"] + argv.dropFirst() : argv
+        return try await base.run(argv: command, cwd: cwd, env: env, stdin: stdin, timeout: timeout)
     }
 }
 
@@ -926,6 +927,25 @@ final class FileTreeTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: oldFile.path))
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: root.appendingPathComponent("unsafe.swift").path))
+        let deniedCopy = await tree.performFileOperation(
+            .copy, paths: [oldFile.path], into: destination.path
+        )
+        XCTAssertTrue(deniedCopy.succeeded.isEmpty,
+                      "Stale SSH rows must not start a copy into an unverified destination")
+        XCTAssertFalse(deniedCopy.failures.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: destination.appendingPathComponent("old.swift").path))
+        await tree.beginNewFile(in: root.path)
+        let deniedCreate = await tree.commitDraft(name: "stale-file.swift")
+        XCTAssertNil(deniedCreate)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("stale-file.swift").path))
+        await tree.cancelDraft()
+        await tree.beginNewFolder(in: root.path)
+        _ = await tree.commitDraft(name: "stale-folder")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("stale-folder").path))
+        await tree.cancelDraft()
 
         await backend.setUnavailable(false)
         try FileManager.default.removeItem(at: oldFile)
@@ -935,6 +955,22 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(tree.items.map(\.path), [destination.path, newFile.path],
                        "Only a successful new listing may replace preserved rows")
         XCTAssertFalse(tree.selectedPaths.contains(oldFile.path))
+        let verifiedCopy = await tree.performFileOperation(
+            .copy, paths: [newFile.path], into: destination.path
+        )
+        XCTAssertTrue(verifiedCopy.failures.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("new.swift")),
+                       Data("replacement".utf8))
+        await tree.beginNewFile(in: root.path)
+        let verifiedCreate = await tree.commitDraft(name: "verified.swift")
+        XCTAssertEqual(verifiedCreate, root.appendingPathComponent("verified.swift").path)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("verified.swift")), Data())
+        await tree.beginNewFolder(in: root.path)
+        _ = await tree.commitDraft(name: "verified-folder")
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("verified-folder").path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
     }
 
     func testSamePinnedSSHIdentityNewConnectionRefreshDoesNotWaitForOldBackend() async throws {
@@ -1385,8 +1421,18 @@ final class FileTreeTests: XCTestCase {
                 let selected = tree.selectedPaths
                 XCTAssertTrue(try key(115))
                 XCTAssertEqual(tree.selectedPath, rows[0].path)
+                let startOffset = scroll.contentView.bounds.origin.y
                 XCTAssertTrue(try key(121))
                 XCTAssertEqual(tree.selectedPath, rows[page].path, "font=\(fontSize), height=\(height)")
+                XCTAssertTrue(try key(121))
+                XCTAssertEqual(tree.selectedPath, rows[min(page * 2, 79)].path)
+                try await waitForCondition("Two Page Down keys must move the actual native viewport") {
+                    host.layoutSubtreeIfNeeded()
+                    return abs(scroll.contentView.bounds.origin.y - startOffset)
+                        >= TreeRowStyle.rowHeight(scale)
+                }
+                XCTAssertTrue(try key(116))
+                XCTAssertEqual(tree.selectedPath, rows[page].path)
                 XCTAssertTrue(try key(116))
                 XCTAssertEqual(tree.selectedPath, rows[0].path)
                 XCTAssertTrue(try key(119))

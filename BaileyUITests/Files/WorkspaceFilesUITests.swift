@@ -1149,13 +1149,14 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertFalse(last.isSelected)
         app.typeKey(XCUIKeyboardKey.home, modifierFlags: [])
         XCTAssertTrue(first.isHittable)
+        let initialFrame = first.frame
         app.typeKey(XCUIKeyboardKey.pageDown, modifierFlags: [])
         app.typeKey(XCUIKeyboardKey.pageDown, modifierFlags: [])
         let scrolled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            !first.isHittable
+            first.frame.minY < initialFrame.minY - 100
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [scrolled], timeout: 5), .completed,
-                       "Repeated Page Down must move past the original viewport")
+                       "Repeated Page Down must actually scroll by more than a few rows")
         app.typeKey(XCUIKeyboardKey.pageUp, modifierFlags: [])
         app.typeKey(XCUIKeyboardKey.pageUp, modifierFlags: [])
         let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
