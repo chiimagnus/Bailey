@@ -1,0 +1,74 @@
+version = 1
+current_task_id = "P1-T1"
+
+[[tasks]]
+id = "P1-T1"
+title = "修正不连续选择的锚点范围扩选"
+status = "in_progress"
+plan = "plan-p1.md#p1-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T1"
+title = "收敛 Files 浏览与打开事件链"
+status = "pending"
+plan = "plan-p2.md#p2-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T2"
+title = "收敛 Files 系统 Edit 与右键操作目标"
+status = "pending"
+plan = "plan-p2.md#p2-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T3"
+title = "核验原生菜单生命周期并清理旧路径"
+status = "pending"
+plan = "plan-p2.md#p2-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T1"
+title = "统一 Git Changes 状态与 Diff 打开路径"
+status = "pending"
+plan = "plan-p3.md#p3-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T2"
+title = "统一 Git Graph 展开浏览和菜单目标"
+status = "pending"
+plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T1"
+title = "整理 Projects 游标和活动项目"
+status = "pending"
+plan = "plan-p4.md#p4-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T2"
+title = "整理 Dock 标签展示激活和关闭"
+status = "pending"
+plan = "plan-p4.md#p4-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T3"
+title = "整理临时选择并联合验收"
+status = "pending"
+plan = "plan-p4.md#p4-t3"
+commit = ""
+note = ""
