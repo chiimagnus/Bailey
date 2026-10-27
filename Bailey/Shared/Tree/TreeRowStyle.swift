@@ -435,6 +435,38 @@ extension TreeDisplayModel.Status {
     }
 }
 
+struct TreeCompactSegment<MenuContent: View>: View {
+    let component: TreeDisplayModel.Row.CompactComponent
+    let index: Int
+    var highlighted = false
+    var isContextTarget = false
+    let onClick: () -> Void
+    let onContextClick: () -> Void
+    let onMenuClosed: () -> Void
+    var onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)? = nil
+    @ViewBuilder var menuContent: () -> MenuContent
+    @State private var hovering = false
+
+    var body: some View {
+        Text(component.name)
+            .underline(highlighted)
+            .padding(.horizontal, 2)
+            .contentShape(Rectangle())
+            .background(RoundedRectangle(cornerRadius: 3)
+                .fill(hovering && !isContextTarget ? Color.primary.opacity(0.05) : .clear))
+            .onHover { hovering = $0 }
+            .highPriorityGesture(TapGesture().onEnded { onClick() })
+            .overlay {
+                ContextMenuClickTarget(onContextClick: onContextClick,
+                                      onMenuClosed: onMenuClosed, onMenuKeyDown: onMenuKeyDown)
+                    .contextMenu(menuItems: menuContent)
+            }
+            .accessibilityLabel(component.name)
+            .accessibilityValue(component.path)
+            .accessibilityIdentifier("bailey.tree.folder.component.\(index)")
+    }
+}
+
 private struct TreeRowLabel: View {
     private let themeChanges = Theme.changes
     @Environment(\.colorScheme) private var colorScheme
@@ -442,7 +474,7 @@ private struct TreeRowLabel: View {
     let iconPath: String
     let scale: CGFloat
     var directory: String? = nil
-    var compactSegment: ((TreeDisplayModel.Row.CompactComponent) -> AnyView)? = nil
+    var compactSegment: ((TreeDisplayModel.Row.CompactComponent, Int) -> AnyView)? = nil
 
     var body: some View {
         let _ = themeChanges.revision
@@ -463,7 +495,7 @@ private struct TreeRowLabel: View {
                             HStack(spacing: 0) {
                                 ForEach(Array(row.compactComponents.enumerated()), id: \.element.path) { entry in
                                     if entry.offset > 0 { Text(" / ") }
-                                    compactSegment(entry.element)
+                                    compactSegment(entry.element, entry.offset)
                                 }
                             }
                         } else {
@@ -501,7 +533,7 @@ struct TreeFolderRow<Accessory: View>: View {
     var isSelected = false
     var selectionEnabled = false
     var listActive = false
-    var compactSegment: ((TreeDisplayModel.Row.CompactComponent) -> AnyView)? = nil
+    var compactSegment: ((TreeDisplayModel.Row.CompactComponent, Int) -> AnyView)? = nil
     let toggle: () -> Void
     @ViewBuilder var accessory: (Bool) -> Accessory
 
@@ -534,7 +566,7 @@ extension TreeFolderRow where Accessory == EmptyView {
          focusRing: Bool = false, contextRing: Bool = false,
          isSelected: Bool = false, selectionEnabled: Bool = false,
          listActive: Bool = false,
-         compactSegment: ((TreeDisplayModel.Row.CompactComponent) -> AnyView)? = nil,
+         compactSegment: ((TreeDisplayModel.Row.CompactComponent, Int) -> AnyView)? = nil,
          toggle: @escaping () -> Void) {
         self.init(row: row, scale: scale, leadingInset: leadingInset,
                   focusRing: focusRing, contextRing: contextRing,

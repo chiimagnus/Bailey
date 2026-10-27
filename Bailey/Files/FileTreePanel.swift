@@ -379,7 +379,6 @@ private struct FileTreeRow: View {
     let receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool
 
     @State private var editingName = ""
-    @State private var hoveredCompactPath: String?
     @FocusState private var fieldFocused: Bool
     @Environment(\.panelFontScale) private var fontScale
 
@@ -626,37 +625,24 @@ private struct FileTreeRow: View {
         }
     }
 
-    private func compactSegmentView(_ component: TreeDisplayModel.Row.CompactComponent) -> AnyView {
+    private func compactSegmentView(_ component: TreeDisplayModel.Row.CompactComponent, index: Int) -> AnyView {
         let target = item.item(for: component)
         return AnyView(
-            Text(component.name)
-                .underline(hasKeyboardCursor
-                    && (model.selectedCompactPath ?? item.path) == component.path)
-                .padding(.horizontal, 2)
-                .contentShape(Rectangle())
-                .background(
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(hoveredCompactPath == component.path
-                            && contextMenuPath != component.path
-                            ? Color.primary.opacity(0.05) : .clear)
-                )
-                .onHover { hovered in
-                    hoveredCompactPath = hovered ? component.path : nil
-                }
-                .highPriorityGesture(TapGesture().onEnded {
+            TreeCompactSegment(component: component, index: index,
+                highlighted: hasKeyboardCursor && (model.selectedCompactPath ?? item.path) == component.path,
+                isContextTarget: contextMenuPath == component.path,
+                onClick: {
                     guard isCurrentTarget() else { return }
                     if selectForClick(componentPath: component.path) { return }
                     Task {
                         guard isCurrentTarget() else { return }
                         await model.toggle(item)
                     }
-                })
-                .overlay {
-                    ContextMenuClickTarget(onContextClick: { selectForContextMenu(target) },
-                                           onMenuClosed: { model.dismissContextMenu(target: target.path) },
-                                           onMenuKeyDown: handleMenuKeyDown)
-                        .contextMenu { rowMenu(for: target) }
-                }
+                },
+                onContextClick: { selectForContextMenu(target) },
+                onMenuClosed: { model.dismissContextMenu(target: target.path) },
+                onMenuKeyDown: handleMenuKeyDown,
+                menuContent: { rowMenu(for: target) })
                 .onDrag { makeDragProvider(target) }
                 .onDrop(
                     of: [FileTreeDrag.type, UTType.fileURL.identifier],
@@ -668,10 +654,6 @@ private struct FileTreeRow: View {
                         receiveInternalDrop: receiveInternalDrop
                     )
                 )
-                .accessibilityLabel(component.name)
-                .accessibilityIdentifier(
-                    "bailey.tree.folder.component.\(item.compactComponents.firstIndex(of: component) ?? 0)"
-                )
         )
     }
 
@@ -682,7 +664,7 @@ private struct FileTreeRow: View {
                           focusRing: hasKeyboardCursor, contextRing: hasContextRing,
                           isSelected: isSelected, selectionEnabled: true,
                           listActive: listFocused,
-                          compactSegment: { component in compactSegmentView(component) }) {
+                          compactSegment: { component, index in compactSegmentView(component, index: index) }) {
                 guard isCurrentTarget() else { return }
                 if selectForClick() { return }
                 Task {
