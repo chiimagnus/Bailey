@@ -903,6 +903,8 @@ final class FileTreeTests: XCTestCase {
                        "An unreadable new SSH channel must preserve the last trustworthy tree")
         XCTAssertEqual(tree.selectedPath, oldFile.path,
                        "Reconnection alone must not discard the current cursor")
+        XCTAssertEqual(tree.selectedPaths, [oldFile.path],
+                       "An unreadable new channel retains the last trustworthy Selection")
         let destination = root.appendingPathComponent("moved")
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         let denied = await tree.performFileOperation(
