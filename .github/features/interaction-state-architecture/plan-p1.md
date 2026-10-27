@@ -21,7 +21,8 @@
 **当前证据：** `selectRange(to:)` 当前直接将 `selectedPaths` 覆盖为 Anchor→目标区间；
 鼠标 Shift 与键盘 Shift 共用它。上游鼠标走 `MouseController.changeSelection`，
 工作台 Shift+方向键却走 `listCommands.ts:expandMultiSelection`，不能合并成同一个算法。
-本轮只读源码，未运行缺陷测试；不沿用以前的 Red 数字作为本轮证据。
+以上为执行前源码证据；后续 Red／Green、真实 GUI 和构建结果见 `evidence-p1.md`，
+不沿用旧审计中的测试数字。
 
 **验收门禁：** 所有可选行及实际命令目标必须与 Focus/Selection/Anchor 一致；
 折叠/刷新/重排时稳定 identity；右键不制造打开动作；

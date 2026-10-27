@@ -4,42 +4,42 @@ current_task_id = ""
 [[tasks]]
 id = "P1-T1"
 title = "修正不连续选择的锚点范围扩选"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t1"
-commit = ""
-note = "2026-10-27 独立执行前源码复核；仅修订计划，未实现/运行 Red。当前依据 source-review.md，不沿用既有 audit。"
+commit = "2d23de912fdc67dcf95f43c566a9b600feb9a3c2"
+note = "Red→Green；84 项 Files 宿主、真实 App 修饰键／菜单回归、Dev build 与验签通过；完整覆盖见 evidence-p1.md。"
 
 [[tasks]]
 id = "P1-T2"
 title = "树刷新与折叠保持稳定身份"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t2"
-commit = ""
-note = ""
+commit = "209ce031d4463fc0eda0b71e8a7f4ab9b30f52f6"
+note = "103 项宿主、3 项 windows 专用临时 master 实测、真实 App Exclude／Reveal、Dev build 验签通过；Windows 原生符号链接不可用，详见 evidence-p1.md。"
 
 [[tasks]]
 id = "P1-T3"
 title = "统一紧凑目录分段与命中区域"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t3"
-commit = ""
-note = ""
+commit = "7fc68f08d63c5f4e245dff7ce2e0214ddd9fcb35"
+note = "Git 分段缺口真实 GUI Red；90 项宿主、4 项 Files／Changes／History／Worktree GUI、Dev build 验签通过；已删 Files 旧分段实现。"
 
 [[tasks]]
 id = "P1-T4"
 title = "对齐共享树行视觉与无障碍状态"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t4"
-commit = ""
-note = ""
+commit = "eed33ff7fde604c4cecb45279451c31484ac4faa"
+note = "真实 Graph AX 四断言 Red→Green；115 项宿主含 256 组视觉、7 项明暗树／列表 GUI及真实 Diff 强断言复测通过；删除 selectionEnabled 与 Focus fallback。"
 
 [[tasks]]
 id = "P1-T5"
 title = "统一树键盘焦点与原生输入交接"
-status = "pending"
+status = "completed"
 plan = "plan-p1.md#p1-t5"
-commit = ""
-note = ""
+commit = "2af17ba37c2ebaf65357e1288d842ac121767678"
+note = "137 宿主 + 8 GUI 通过；视口分页、IME、双窗和重挂载；Dev 构建验签通过"
 
 [[tasks]]
 id = "P2-T1"
