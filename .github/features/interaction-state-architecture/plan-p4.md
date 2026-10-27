@@ -96,7 +96,9 @@ Projects 是 Bailey 固有列表，按相同列表行为验证，但不变成文
 **源码：**
 `editorGroupView.ts:activeEditor/setSelection/setActive`；
 `editorPart.ts:doSetGroupActive`；
-`editorTabsControl.ts:onTabContextMenu`。
+`editorTabsControl.ts:onTabContextMenu`，并对照
+`explorerView.ts:selectActiveFile`、`scmViewPane.ts:onDidActiveEditorChange`：
+编辑器变化通知属于可观察的跨组件同步触发，不是单纯的绘制事件。
 上游 `activeEditor`、`selectedEditors`、`groupActive` 语义分开，前两者有成员与顺序约束，
 右键未显示 tab 不必先打开。
 
@@ -116,12 +118,17 @@ Projects 是 Bailey 固有列表，按相同列表行为验证，但不变成文
    一次 tab 单击不应同步覆盖其它组 displayed；
    右键 B 不应把 B 改成 active/current display；
    上游多选 `selectedEditors` 后续归 P4-T4。
+   Dock A→B、Palette、Switcher、关闭当前项后激活后继标签应使 P2/P3 已接入的
+   Explorer/SCM Auto Reveal 有且只有一次有效的编辑器变化；
+   仅菜单目标/悬停/重排或普通 View 重绘不应触发。
 2. Red：两组各有不同 File/Terminal/Tool，
    点击后台标签、空标签区/按钮、右键另组文件/工具、
    ⌘W、点击其它组后关闭原标签；
    关闭保存失败不挪动 current group，不丢 undo/terminal input。
 3. 在 DockWorkspaceModel 唯一布局 owner 维护活动/展示/菜单目标；
    Project 的 MRU/selectedTabID 不能替代某组 `selected`，
+   但已有明确标签选择事件必须正确交给 P2/P3 的资源同步逻辑；
+   不能让 Dock 和 Files/Git 各自观察 View 重绘而重复发起 Auto Reveal，
    View 只转发明确 click/context/drop；
    删除旧的激活推断或多余视觉本地状态，
    保留 group-scoped autofocus 与用户既有无“蓝色整组外框”决定。
@@ -145,6 +152,9 @@ Projects 是 Bailey 固有列表，按相同列表行为验证，但不变成文
 `make test:DockWorkspaceTests,FileTabPersistenceTests,NativePaneRetentionIntegrationTests,AppSettingsTests,SessionStoreTests`；
 `WorkspaceDockUITests`、`WorkspaceRetentionUITests`；
 同组/两组三组、空组、活动工具组、关闭背景/前台、脏文件保存失败、
+特别核对 A→B→A 与两组各展示文件、Diff/普通文件交错、
+后台窗口/隐藏树重挂载及同名其它项目路径时树选择与实际活动编辑器一致，
+且不额外抢 keyboard firstResponder；
 双窗、窗口最小化/重新激活、宽度极小与 30+ tabs、
 主题/字号/AX；`make build:dev`。文档 `docs/features/dock.md`、`docs/features/settings.md`（配置旧名）、
 `docs/architecture.md`（只在职责真源变化时）、`docs/ui.md`；一个提交。

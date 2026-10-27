@@ -26,10 +26,13 @@ Window/Dock/Tab identity；`XCTAssertTrue(button.exists)` 不能代表执行成�
    右键其中一个选中/集合外 B → Copy/Cut/Paste；
    同时 Editor 保持未保存缓冲和原生输入；
    检查真实文件字节与错误路径未写入。
-2. Files 单击浏览 → 另一组显示文件 → Git Changes 打开该文件 Diff →
+2. Files 单击浏览 → 另一组显示文件 → Dock 文件 A→B→A →
+   Git Changes 打开对应 Diff A/B、再从 Dock 切换 Diff →
    Graph 打开历史文件/展开 commit/比较两次提交 →
    返回 Files 导航，只移动游标而不重新打开编辑器；
-   检查各时刻 Displayed/Focus/Selection/ActiveGroup 的真源。
+   检查活动编辑器变化时 Explorer/SCM 匹配项同步为唯一 Selection/Focus，
+   旧项目不留第二条 Displayed 灰底，原生 firstResponder 不被夺走；
+   无匹配 SCM 项、不在项目根目录和隐藏树恢复不伪造选择。
 3. Git Changes 在 Staged/Unstaged/Merge 多选 → 批量 Stage/Unstage →
    Graph 显示 Uncommitted、Stash/Worktree，右键一个 ref 时切到另一窗口；
    菜单不允许落到另一仓库，HEAD/index/refs 和相同路径都验证。
@@ -96,10 +99,13 @@ Git Graph 扩展 `web/styles/main.css` 与 `web/graph.ts`
 
 **状态组合：**
 - 无/单/多岛 Selection；Focus 位于集合内/外；
-  Anchor 先被取消；Context 先选中/未选中；Displayed 文件仍有旧底色；
+  Anchor 先被取消；Context 先选中/未选中；Dock 文件切换后旧 Selection 不留常驻灰底；
+  Files/Changes 不单独为 Displayed 绘制第二条背景，只有实际 Selection/Focus/Hover 的适用高亮；
   Expanded 目录/commit；hover/拖动/焦点失去后；两组与两窗口分别处于 active/inactive。
   树鼠标 Shift、树键盘 Shift、Tabs Shift 三套独立预期，以及
   Explorer 右键改 Selection、SCM/Dock 右键保留 Selection 的差异必须显式交叉覆盖。
+  Dock A/B 快速切换、双窗口/同名项目和 SSH 身份变化的 Auto Reveal
+  不得将旧异步资源再选为当前；真正未匹配的文件不能制造假选中。
 - Files/Git Changes/History/Graph/Projects/Dock 标签的每一类行；
   图谱 branch/ref/Tag/Stash/Uncommitted/Worktree、merge/多父、
   历史文件与 Diff；快捷菜单和 AX 选中/展开/帮助/路径。

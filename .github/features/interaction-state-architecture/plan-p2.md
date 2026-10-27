@@ -39,6 +39,9 @@ Files、Editor、Terminal 与 Git 的原生文本输入不得互相夺焦。
   只产生显式 `onDidOpen`，并传递保留 Focus/固定打开等意图。
 - `explorerView.ts:onDidOpen` 只处理真实文件，
   折叠目录/Shift 区间/编辑新文件中禁止误打开。
+- `explorerView.ts:selectActiveFile` 订阅 `onDidActiveEditorChange`，
+  `explorerService.select → selectResource` 展开父目录并同时更新树 Focus/Selection，
+  不调用 `domFocus`；`explorer.autoReveal` 默认 true，排除匹配项和不可见树有边界。
 
 **Bailey 锚点：**
 - `Bailey/Files/FileTreePanel.swift` 的 `FileTreeScrollView.handleKey`、
@@ -47,8 +50,10 @@ Files、Editor、Terminal 与 Git 的原生文本输入不得互相夺焦。
 - `Bailey/UI/Panels/ToolPanelView.swift` 打开闭包；
 - `Bailey/Workspace/Project.swift:openFile`、`selectTab`；
 - `Bailey/Workspace/WorkspaceWindowModel.swift:openFile`；
+- `ToolPanelView.openFilePath`（当前只派生 Displayed）、`FileTreeModel.revealFile`（已有定位+选择）、
+  `FileTreeRow.isCurrent` → `TreeFileRow(displayed:)`（额外常驻灰底）；
 - `Bailey/UI/WorkspaceDockView.swift:DockTabGroupView.select`、
-  `DockWorkspaceModel.activate`。
+  `DockWorkspaceModel.activate`；
 
 **对齐前先实测与明确取舍：**
 1. 表列出“左键文件/双击/Space/Return/⌘点击/Shift点击/右键/目录 twistie、
@@ -58,6 +63,11 @@ Files、Editor、Terminal 与 Git 的原生文本输入不得互相夺焦。
    在另一个可见组浏览、双击切入编辑器且**不自动替换临时 preview 标签**，
    属现有产品契约。把用户意图层对齐，不因复刻资源导航器就暗加 preview 生命周期。
    若 UI 对照认为必须改 preview，先在 `idea.md` 单列决定与安全验收，而不是顺手塞进本 task。
+3. **必须修正的实测缺口：** Files 中先选 A、再从 Dock 切换到已打开的 B，
+   当前 A 保留 Selection 灰底、B 另绘 Displayed 灰底。上游默认 Auto Reveal 会定位/选择 B；
+   不能把这个状态联动缺失归类为 Bailey 的保留差异。先测单组/多组、
+   标签点击/⌃Tab/命令打开、浏览不激活、文件在折叠目录、外部路径/排除文件、
+   旧多选/菜单上下文/输入框、快速 A→B→A 与后台窗口。
 
 **步骤：**
 - Red：在真实临时目录准备未打开和已打开两个文件，
@@ -67,13 +77,22 @@ Files、Editor、Terminal 与 Git 的原生文本输入不得互相夺焦。
   合并重复点击判断；显式 Browse 只展示，Open 明确激活，
   目录展开不推导文件打开，修饰键不发 Open；
   保持文件标签 UUID、未保存缓冲和本机/SSH 身份。
-- Refactor：删除刚被取代的重复激活/打开转发、过时注释和测试，
+  **对活动编辑器变化显式执行 Auto Reveal**：通过现有 `Project`/窗口选择事件交给
+  `FileTreeModel` 更新 Focus 与唯一 Selection，必要时展开父目录；
+  树不可见时恢复可见再定位，外部/排除/过期路径不错误改选，
+  持有旧异步请求的路径与标签必须重新核验；不夺走 Editor/Terminal/TextField 的 firstResponder。
+  Files 行不再因 `Displayed` 单独绘制第二层常驻灰底；
+  只在 Explorer 同源 Selection/Focus 上呈现主题底色/游标描边。
+- Refactor：删除 Files `Displayed` 多余渲染入口及刚被取代的重复激活/打开转发、过时注释和测试，
   不额外建立 OpenActionManager 或全局回调队列。
 
 **验证：** `make test:FileTreeTests,FileTabPersistenceTests,DockWorkspaceTests,NativeFileTabTests`；
 隔离 `WorkspaceFilesUITests`、`SharedTreeUITests`、
 `WorkspaceDockUITests` 断言实际内容、文件原始字节、当前组与 firstResponder；
 多窗口/跨项目/同名本机和 Windows SSH 文件、重复打开、慢响应/晚到恢复。
+特别断言 Dock A→B 后旧 A 不再保留假当前灰底，B 是唯一真实 Selection/AX 项、
+Focus 游标随 B 但 Editor 仍持有键盘；显式树多选与右键只按相应事件改变，
+非项目文件/未匹配路径不伪选，隐藏树恢复、快速切换晚到不反选 A。
 `make build:dev`。同提交更新 `docs/features/files.md` 和 `docs/features/dock.md`，
 一个提交。
 

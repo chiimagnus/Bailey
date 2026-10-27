@@ -45,8 +45,11 @@ Graph 游标/详情展开/菜单；`CommitGraphLayout` 与
   ResourceFolder/Resource 类型区分键盘和打开动作，
   `open` 只对可打开资源执行真实 Diff；
   输入框有自己的输入焦点；这不等于必须销毁保留的树游标，失焦描边应消失。
-- `onDidActiveEditorChange` 的 autoReveal 是有条件的显式同步，
-  不是任意 `displayed` 值变化就抢焦点。
+- `scm.contribution.ts` 的 `scm.autoReveal` 默认 true；
+  `scmViewPane.ts:onDidActiveEditorChange` 订阅活动编辑器变化，
+  查找可见仓库中匹配路径的 SCM resource，找到后 `expandTo/reveal/setSelection/setFocus`；
+  没有匹配资源时不硬造 Selection，也不夺走原生 firstResponder。
+  不能把 Auto Reveal 当成可保留的 Bailey 差异，或误解为任意 `displayed` 重绘抢键盘。
 
 **Bailey 锚点：**
 `GitPanel.swift` 的 `ChangeSelection`、
@@ -55,7 +58,9 @@ Graph 游标/详情展开/菜单；`CommitGraphLayout` 与
 `browseGitChange`、`handleGitChangeKey`、
 `navigableChanges`、`changedFileRows`、`directoryRow`、
 `isDisplayedChange`；`GitEntryRow`、`GitStatusModel.Entry`；
-`Project.openDiff` 与 DockGroup。
+`Project.openDiff`、`Project.selectTab` 与 DockGroup。
+当前旧 `explicitlySelectedChange=A` 与新 `displayedDiff=B` 会分别给 Changes 两条灰底，
+必须在此任务修正，而非等 P5 只调颜色。
 
 **既有能力边界：** `selectedChange` 当前是游标，`explicitlySelectedChange` 才是单项明确选择；
 `displayedDiff` 已从项目内容读取，不另存一份。不能因变量名不同就判定状态混合，
@@ -71,17 +76,29 @@ Graph 游标/详情展开/菜单；`CommitGraphLayout` 与
    文件按钮、右键、输入框、Palette 取消。
    Focus 移动不得浏览 Diff 或修改 index；
    目录展开不得假装选择同路径的文件。
-3. 只在确认存在重复或错误联动时，在 GitPanel 唯一所有者收敛该判定；
-   已正确分开的导航和打开路径原样保留。
-   让 Browse/Expand/Context 与 keyboard focus 分开；
-   `TreeKeyboardHost` 只承担原生输入，不能逆向决定仓库。
+   另测从 Dock 切换 Diff A→B 或回到普通修改文件 B、
+   同路径 staged/unstaged、没有 Git 更改的文件、其它仓库/SSH 同名文件、
+   SCM 隐藏/再次显示、快速切换与旧 Git 刷新晚到：
+   匹配资源时替换旧 A 选区并定位 B，未匹配时保留合法旧选择而不伪造 B。
+3. 在 GitPanel 当前所有者接通活动编辑器变化的 Auto Reveal（兼顾树/列表模式），
+   只在真实仓库与变更资源匹配时更新 `selectedChange` 和明确 Selection，
+   优先级按上游资源组搜索核对，不把 staged/unstaged 同名项混为一个对象；
+   没有匹配项时不清掉合法选区。删除 Changes 的独立 `displayed` 常驻灰底入口，
+   仍保留 Focus/Selection/Context 及其他 Git History 的独立语义。
+   Browse/Expand/Context 与原生 keyboard focus 继续分开，
+   `TreeKeyboardHost` 只承担输入，不能逆向决定仓库。
    删除实际重复的 `@State` 镜像或二次焦点路径，但不要删除 P3-T3 所需 Selection。
+   与 P2 共用真实活动编辑器/标签变化来源，不额外增加全局 FocusManager/SelectionStore；
+   当 P3-T3 升级多选后，Auto Reveal 的 Selection 替换行为也须经其回归确认。
 4. 验证 SSH 项目切换、仓库刷新、结果晚到、Git TextField/原生输入焦点、
    隐藏 Git 组重挂载和在另一可见组展示 Diff；失败时保留有效旧显示而不启用错误写操作。
 
 **验证：** `make test:GitStatusModelTests,NativeDiffTabTests,DockWorkspaceTests`，
 隔离 `GitChangesUITests`、`WorkspaceGitUITests`，
 检查真实 Diff 路径/内容、index 不变、可见焦点/AX；
+断言 A→B 后 B 唯一选中灰底，旧 A 不被 Displayed 叠画，
+普通文件与 Staged/Unstaged Diff 切换的正确资源、无匹配/跨仓库时不误选，
+异步更新不覆盖最后一次选择且不劫持输入；
 明暗/中文英文/树与列表模式、空仓库与 1/1000+ 变更，
 `make build:dev`。同提交更新 `docs/features/git.md`、
 确实改变公共视觉才更新 `docs/ui.md`；一个提交。

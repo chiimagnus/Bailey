@@ -1,7 +1,7 @@
 # 执行前独立源码复核
 
 本页供实施者核对行为、取舍、删旧边界和验证条件，不是已经实现的功能报告。
-审查日期：2026-10-27。所有实现任务仍为 pending。
+基线审查日期：2026-10-27。实时任务状态以 `todo.toml` 为准。
 
 ## 依据与阅读边界
 
@@ -35,10 +35,11 @@
 | `src/vs/base/browser/ui/tree/abstractTree.ts` | Trait.onDidModelSplice、TreeNodeList.splice/setFocus/setSelection/setAnchor、TreeNodeListMouseController；模型 Trait 与渲染列表不同 | P1-T2/T3 |
 | `src/vs/base/browser/ui/list/listView.ts` | onDragStart 调用 getDragElements 后发布集合，不由当前展示文件推断 | P2-T4 |
 | `src/vs/platform/list/browser/listService.ts` | ResourceNavigator 的 keyboard/pointer/double-click/_open、WorkbenchListSelectionNavigation 与树上下文；preserveFocus 是显式意图 | P1-T5、P2-T1/T5 |
-| `src/vs/workbench/contrib/files/browser/views/explorerView.ts` | getContext、onDidOpen、onContextMenu；Explorer 右键先改选区，但不转发为 Open | P1-T3、P2-T1/T2/T3 |
+| `src/vs/workbench/contrib/files/browser/views/explorerView.ts` | getContext、onDidOpen、onContextMenu；`onDidActiveEditorChange → selectActiveFile → explorerService.select`，选中活动文件但不夺 DOM 键盘焦点 | P1-T3、P2-T1/T2/T3、P4-T2 |
 | `src/vs/workbench/contrib/files/browser/views/explorerViewer.ts` | CompressedNavigationController、ExplorerCompressionDelegate、FileDragAndDrop 的真实段/drag/drop；压缩显示不是目录身份 | P1-T3、P2-T4 |
+| `src/vs/workbench/contrib/files/browser/explorerService.ts`、`files.contribution.ts` | `selectResource` 展开父目录后 `setFocus([item]); setSelection([item])`；`explorer.autoReveal` 默认 true，存在 Exclude/不可见边界 | P2-T1、P4-T2 |
 | `src/vs/workbench/contrib/files/browser/fileActions.ts` | copy/cut/delete/paste/getFilesToPaste/openFilePreserveFocus；动作接收资源集合，文件效果经既有 bulk edit 服务 | P2-T2/T4 |
-| `src/vs/workbench/contrib/scm/browser/scmViewPane.ts` | createTree/open、RepositoryPaneActionRunner、onListContextMenu/getSelectedResources；目录汇集资源，SCM 右键不照搬 Explorer 改选 | P3-T1/T3 |
+| `src/vs/workbench/contrib/scm/browser/scmViewPane.ts`、`scm.contribution.ts` | createTree/open、RepositoryPaneActionRunner、onListContextMenu/getSelectedResources；`onDidActiveEditorChange` 在匹配资源时执行 `setSelection/setFocus`，`scm.autoReveal` 默认 true；SCM 右键不照搬 Explorer 改选 | P3-T1/T3、P4-T2 |
 | `extensions/git/src/commands.ts` | stage/unstage/clean 对资源分组过滤及冲突处理；“集合里有资源”不等于每个动作对每项都合法 | P3-T3/T6 |
 | `src/vs/workbench/contrib/scm/browser/scmHistoryViewPane.ts` | SCMHistoryTreeIdentityProvider、_createTree/_onDidOpen/_onContextMenu；History 多选关闭，历史变化的两侧 URI 与 LoadMore 分开 | P3-T2/T4/T7 |
 | `src/vs/workbench/contrib/scm/browser/scmHistory.ts` | swimlane 输入/输出、renderSCMHistoryItemGraph、颜色注册；上游固定五个图谱色位不等于 Bailey 十二色槽 | P3-T5 |
@@ -70,10 +71,10 @@
 | 链路 | 追踪到的所有者和最终结果 | 同任务维护的文档 |
 | --- | --- | --- |
 | Files 输入/树 | `FileTreePanel` 的 FileTreeScrollView.handleKey、FileTreeRow.selectForClick/compactSegmentView/rowMenu → `FileTreeModel.select/focus/moveSelection/selectRange/contextSelection/rebuild/sync` → `TreeDisplayModel` / `TreeRowStyle` / AX | `docs/features/files.md`、共享视觉确有变化时 `docs/ui.md` |
-| Files 打开 | `ToolPanelView` 注入闭包 → `WorkspaceWindowModel.openFile` → `Project.openFile/findFileTab/selectTab` → Dock 组与 `FileTab` / SourceTextEditor；已打开缓冲必须复用 | files、dock、必要 editor |
+| Files 打开/自动定位 | `ToolPanelView.openFilePath` 读取 `Project.selectedTab` → `FileTreeRow` 的 `isCurrent` 单独绘制 Displayed 灰底；`WorkspaceWindowModel.openFile` → `Project.openFile/findFileTab/selectTab` → Dock 组与 `FileTab`，当前没有把后续 Dock 切换同步至 `FileTreeModel` 选区；已有 `FileTreeModel.revealFile` 可复用，不能抢原生键盘 | files、dock、必要 editor |
 | 文件修改/剪贴板/拖动 | FileTreeClipboard/FileTreeDrag → WindowModel.makeFileTreeDragProvider/receiveFileTreeDrop/performFileTreeCommand/performFileOperation → `WorkspaceApplication.withProtectedFiles` → `FileTreeModel.performFileOperation/rename/commitDraft` → LocalWorkspaceBackend.copyExclusive/rename/delete 或 SSHWorkspaceBackend.copy/rename/delete → 跨窗路径更新/实际字节 | files、必要 projects/ssh |
 | Finder 投递 | `ContentView` 中 FinderWindowDrop.receive → WorkspaceApplication 的外部请求队列 → WindowModel.openExternalLocalItems → Project.openLocalFile；Files 接收改为 importFromFinder，Ghostty/WebKit 正文不挂通用 Drop | projects、files、dock |
-| Git Changes | `ToolPanelView` → `GitPanel.ChangeSelection/navigableChanges/browseGitChange/handleGitChangeKey/directoryMenu` → GitStatusModel.stageEntries/unstageEntries/PendingDiscard/perform → GitCommandExecution → 本机/SSH 的 Git index/工作树 | `docs/features/git.md`、必要 ui/ssh |
+| Git Changes | `GitPanel` 的 `explicitlySelectedChange` 与 `isDisplayedChange` 分别渲染选中底色/Displayed 灰底；`Project.selectTab` 不同步 `GitPanel` 局部选区；GitStatusModel.stageEntries/unstageEntries/PendingDiscard/perform → GitCommandExecution → 本机/SSH 的 Git index/工作树 | `docs/features/git.md`、必要 ui/ssh |
 | Graph/历史 Diff | GitPanel → RecentCommitsView 的 keyboardRows/toggle/selectContextRow/referenceStrip/commitFiles/worktreeFiles → GitStatusModel 的真实 refs/stash/worktree/history → Project.openHistoricalDiff → `DiffViewerView.swift` 内 DiffTab.Source/reload → immutable blob/原生 DiffNativeSurface | git、diff、dock、来源说明变化时 session-restore |
 | Dock/关闭 | WorkspaceDockView/DockTabGroupView/WorkspaceChrome → DockWorkspaceModel.select/activate/move/updateLayout/syncTabs → Project.selectTab/closeContent/closeBatch/saveBeforeClosing → 文件保存、Sheet 和受控资源释放 | dock、ui、必要 architecture/settings |
 | Projects | ProjectsPanelView.cursorProjectID/contextProjectID/handleProjectKey → WindowModel.selectedProjectID/close/moveProject → 当前项目与其会话 | projects、dock |
@@ -200,6 +201,19 @@
     P4 保留 Displayed 与 Selection 的约束，P5 不以“八字段齐全”验收。
     新增多选只落在 Changes/Dock，不扩成 Projects/Graph 的通用集合；菜单期清底色保持现行约定。
 
+19. **High：漏掉活动编辑器变化触发 Explorer/SCM Auto Reveal。**
+    上游固定提交 `explorerView.ts:381-384,486-499` 订阅 `onDidActiveEditorChange`，
+    `selectResource:909-969` 在父目录展开后同时更新 Focus/Selection；
+    `files.contribution.ts:444-453` 的 `explorer.autoReveal` 默认 true。
+    `scmViewPane.ts:1754-1799` 仅在找到对应资源时更新 Selection/Focus，
+    `scm.contribution.ts:289-293` 的 `scm.autoReveal` 也默认 true。
+    Bailey `Project.selectTab` 只切换 Dock，旧 Files/Changes Selection 保留，
+    `ToolPanelView.openFilePath`、`GitPanel.isDisplayedChange` 又把新 Displayed 作为第二条灰底。
+    P2-T1 接通 Files 同步并去掉其独立 Displayed 底色，P3-T1 对 Changes 做同样处理；
+    P4-T2 检查 Dock 所有标签选择入口，P5 覆盖跨区域/窗口/连接与快速切换。
+    同步只改模型游标与选择，不借其获取 NSWindow.firstResponder；
+    外部路径/不可见资源/SCM 无匹配不得伪造选区，异步不得把旧标签写回。
+
 ## 每个替换任务必须当场删除什么
 
 删除以新入口真实接通、回归通过为前提；不先删掉有职责的路径再用 fallback 顶上。
@@ -247,6 +261,7 @@
 | Focus / Selection / Anchor / Context / Hover 独立 | 采用；不建全局可写 SelectionStore |
 | 三种范围选择算法 | 各自采用，不为代码复用强行同义 |
 | Explorer / SCM / Tabs 右键 | 分别采用对应规则，Context 结束只撤销临时目标 |
+| Dock 活动编辑器变化 → Explorer/SCM | 采用上游默认 Auto Reveal：匹配资源时替换相应树的 Selection/Focus，树不抢原生键盘；Files/Changes 不额外以 Displayed 常驻第二条灰底 |
 | Explorer 隐藏 Selection、压缩多选展开所有段 | 保留 Bailey 可见求交及明确段/末级契约，记录非同义，不暗加模型树 |
 | 单击 preserveFocus / 双击显式进入 | 保留 Bailey Browse/Open，无自动替换 preview-tab 生命周期 |
 | Explorer 文件剪贴板与其它配置 | 保留现有私有剪贴板+字符串及项目/连接范围；富类型测试指无损保护系统剪贴板，不冒称已支持 Finder 文件 Paste；不新增多选修饰键设置、Tree type-ahead 或工作区文件操作 Undo 服务 |
