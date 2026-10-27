@@ -58,6 +58,73 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
                        "Completed cut must preserve plain-text paths but remove stale transfer metadata")
     }
 
+    func testFilesMultiSelectionCommandTargetsReachClipboardAndDiskWhenFocusMovesOutside() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let copied = root.appendingPathComponent("copied")
+        let moved = root.appendingPathComponent("moved")
+        for directory in [copied, moved] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("alpha.txt")
+        let focused = root.appendingPathComponent("beta.txt")
+        let last = root.appendingPathComponent("gamma.txt")
+        let firstBytes = Data([0, 255, 10, 13, 42])
+        let lastBytes = Data("中文内容\n".utf8)
+        try firstBytes.write(to: first)
+        try Data("focus only".utf8).write(to: focused)
+        try lastBytes.write(to: last)
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([root])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let target = try XCTUnwrap(project.panelContext?.identity)
+        let tree = project.fileTree
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let firstRow = try XCTUnwrap(tree.items.first { $0.path == first.path })
+        let lastRow = try XCTUnwrap(tree.items.first { $0.path == last.path })
+        let focusRow = try XCTUnwrap(tree.items.first { $0.path == focused.path })
+        tree.select(firstRow)
+        tree.select(lastRow, toggling: true)
+        tree.focus(focusRow)
+        XCTAssertEqual(tree.selectedPaths, [first.path, last.path])
+        XCTAssertEqual(tree.selectedPath, focused.path)
+        let paths = tree.selectedOperationPaths
+        XCTAssertEqual(paths, [first.path, last.path])
+
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        manager.performFileTreeCommand(.copy(paths, cut: false),
+                                       in: project, target: target, pasteboard: pasteboard)
+        XCTAssertEqual(FileTreeClipboard.read(from: pasteboard)?.paths, paths)
+        manager.performFileTreeCommand(.paste(into: copied.path),
+                                       in: project, target: target, pasteboard: pasteboard)
+        try await wait {
+            FileManager.default.fileExists(atPath: copied.appendingPathComponent("alpha.txt").path)
+                && FileManager.default.fileExists(atPath: copied.appendingPathComponent("gamma.txt").path)
+        }
+        XCTAssertEqual(try Data(contentsOf: copied.appendingPathComponent("alpha.txt")), firstBytes)
+        XCTAssertEqual(try Data(contentsOf: copied.appendingPathComponent("gamma.txt")), lastBytes)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copied.appendingPathComponent("beta.txt").path))
+        XCTAssertEqual(try Data(contentsOf: focused), Data("focus only".utf8))
+
+        manager.performFileTreeCommand(.copy(paths, cut: true),
+                                       in: project, target: target, pasteboard: pasteboard)
+        manager.performFileTreeCommand(.paste(into: moved.path),
+                                       in: project, target: target, pasteboard: pasteboard)
+        try await wait {
+            FileManager.default.fileExists(atPath: moved.appendingPathComponent("alpha.txt").path)
+                && FileManager.default.fileExists(atPath: moved.appendingPathComponent("gamma.txt").path)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: last.path))
+        XCTAssertEqual(try Data(contentsOf: moved.appendingPathComponent("alpha.txt")), firstBytes)
+        XCTAssertEqual(try Data(contentsOf: moved.appendingPathComponent("gamma.txt")), lastBytes)
+        XCTAssertEqual(try Data(contentsOf: focused), Data("focus only".utf8))
+        try await wait { FileTreeClipboard.read(from: pasteboard) == nil }
+        XCTAssertEqual(pasteboard.string(forType: .string), paths.joined(separator: "\n"))
+    }
+
     func testCutPartialSuccessRetainsOnlyUnmovedPathsForRetry() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let destination = root.appendingPathComponent("into")
