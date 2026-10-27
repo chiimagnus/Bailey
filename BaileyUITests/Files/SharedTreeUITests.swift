@@ -237,6 +237,58 @@ final class SharedTreeUITests: XCTestCase {
             atPath: fixture.root.appendingPathComponent("context-created.txt").path))
     }
 
+    func testContextClickMovesBetweenRowsWithoutChangingPersistentSelection() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let home = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("a-selected.txt", text: "a\n")
+        let second = try fixture.file("b-context.txt", text: "b\n")
+        let third = try fixture.file("c-context.txt", text: "c\n")
+        let previousInput = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+        defer { XCTAssertEqual(TISSelectInputSource(previousInput), noErr) }
+        if let ascii = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue() {
+            XCTAssertEqual(TISSelectInputSource(ascii), noErr)
+        }
+        let app = XCUIApplication(bundleIdentifier: "chiimagnus.bailey.dev")
+        app.launchArguments = ["--isolated-ui-test", "-AppleLanguages", "(en)"]
+        app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
+        app.launchEnvironment["BAILEY_UI_TEST_PROJECT"] = fixture.root.path
+        app.launchEnvironment["HOME"] = home.root.path
+        app.launchEnvironment["CFFIXED_USER_HOME"] = home.root.path
+        app.launch()
+        defer { if app.state != .notRunning { app.terminate() } }
+        app.activate()
+        if !app.windows.firstMatch.waitForExistence(timeout: 1) {
+            app.typeKey("n", modifierFlags: [.command, .shift])
+        }
+        let window = app.windows.firstMatch
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 15))
+        app.activate()
+        XCTAssertEqual(app.state, .runningForeground)
+        files.click()
+        let a = WorkspaceUITestSupport.fileRow(first, in: window)
+        let b = WorkspaceUITestSupport.fileRow(second, in: window)
+        let c = WorkspaceUITestSupport.fileRow(third, in: window)
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        XCTAssertTrue(c.waitForExistence(timeout: 15))
+        a.click()
+        b.rightClick()
+        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
+            $0.menuItems["Copy Relative Path"].exists
+        })
+        XCTAssertTrue(a.isSelected && !b.isSelected && !c.isSelected)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+        c.rightClick()
+        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
+            $0.menuItems["Copy Relative Path"].exists
+        })
+        XCTAssertTrue(a.isSelected && !b.isSelected && !c.isSelected)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(a.isSelected && !b.isSelected && !c.isSelected)
+    }
+
     func testCompactFoldersContextMenuCreatesInEachClickedPathComponent() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let nested = try fixture.file("a1/b1/c1/existing.swift", text: "existing\n")

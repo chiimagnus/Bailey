@@ -188,6 +188,7 @@ final class FileTreeModel {
     private(set) var selectedPath: String?
     private(set) var selectedCompactPath: String?
     private(set) var selectedPaths: Set<String> = []
+    private(set) var contextMenuTargetPath: String?
     @ObservationIgnored private var selectionAnchorPath: String?
     @ObservationIgnored private var activeDrag: (nonce: UUID, paths: [String])?
     var hasActiveDrag: Bool { activeDrag != nil }
@@ -287,6 +288,7 @@ final class FileTreeModel {
             selectionAnchorPath = item.path
         }
         selectedPath = item.path
+        contextMenuTargetPath = nil
         activeDrag = nil
     }
 
@@ -296,7 +298,12 @@ final class FileTreeModel {
         else { return }
         selectedPath = item.path
         selectedCompactPath = componentPath
+        contextMenuTargetPath = componentPath ?? item.path
         activeDrag = nil
+    }
+
+    func dismissContextMenu(target: String) {
+        if contextMenuTargetPath == target { contextMenuTargetPath = nil }
     }
 
     @discardableResult
@@ -314,6 +321,7 @@ final class FileTreeModel {
         }
         selectedPath = visible[next].path
         selectedCompactPath = nil
+        contextMenuTargetPath = nil
         activeDrag = nil
         return visible[next]
     }
@@ -337,6 +345,7 @@ final class FileTreeModel {
         }
         selectionAnchorPath = selectedPath
         selectedCompactPath = nil
+        contextMenuTargetPath = nil
         activeDrag = nil
     }
 
@@ -374,6 +383,7 @@ final class FileTreeModel {
         selectedPath = nil
         selectedCompactPath = nil
         selectedPaths.removeAll()
+        contextMenuTargetPath = nil
         selectionAnchorPath = nil
         activeDrag = nil
     }
@@ -695,6 +705,7 @@ final class FileTreeModel {
             rootPath = root
         }
         if scopeChanged || channelChanged {
+            contextMenuTargetPath = nil
             if !sameRemoteRootReconnected {
                 items = []
                 showExcluded = false
@@ -1350,6 +1361,13 @@ final class FileTreeModel {
                generation == rebuildGeneration, epoch == treeEpoch,
                path == rootPath, scope == workspaceScope {
                 let visiblePaths = Set(traversal.rows.filter { !$0.isDraft }.map(\.path))
+                if let contextMenuTargetPath,
+                   !traversal.rows.contains(where: {
+                       $0.path == contextMenuTargetPath
+                           || $0.compactComponents.contains { $0.path == contextMenuTargetPath }
+                   }) {
+                    self.contextMenuTargetPath = nil
+                }
                 if let selectedPath, !visiblePaths.contains(selectedPath) {
                     let visibleAncestor = traversal.rows
                         .filter { $0.isDirectory && selectedPath.hasPrefix($0.path + "/") }

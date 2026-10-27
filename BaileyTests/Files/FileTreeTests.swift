@@ -1430,6 +1430,42 @@ final class FileTreeTests: XCTestCase {
                        "When Files owns keyboard focus, a cursor outside selection acts on the cursor")
     }
 
+    func testContextMenuRingHasOneOwnerAndDismissalDoesNotClearNewerTarget() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["alpha", "beta", "gamma"] {
+            try Data().write(to: root.appendingPathComponent(name))
+        }
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let rows = tree.items
+        tree.select(rows[0])
+        XCTAssertNil(tree.contextMenuTargetPath)
+
+        tree.selectForContextMenu(rows[1])
+        XCTAssertEqual(tree.contextMenuTargetPath, rows[1].path)
+        XCTAssertEqual(tree.selectedPaths, [rows[0].path])
+        tree.selectForContextMenu(rows[2])
+        XCTAssertEqual(tree.contextMenuTargetPath, rows[2].path,
+                       "The next context click must replace the previous outline")
+        tree.dismissContextMenu(target: rows[1].path)
+        XCTAssertEqual(tree.contextMenuTargetPath, rows[2].path,
+                       "A delayed menu-close callback must not clear the newer target")
+        tree.dismissContextMenu(target: rows[2].path)
+        XCTAssertNil(tree.contextMenuTargetPath,
+                     "The context outline must end with its menu")
+        tree.selectForContextMenu(rows[1])
+        tree.select(rows[0])
+        XCTAssertNil(tree.contextMenuTargetPath,
+                     "A left click must leave no old context outline")
+        tree.selectForContextMenu(rows[1])
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared,
+                        scope: "different-machine-with-same-root-path")
+        XCTAssertNil(tree.contextMenuTargetPath,
+                     "Changing the underlying machine must not retain a context outline")
+    }
+
     func testCommandDeselectionStaysEmptyAfterDirectoryRefresh() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

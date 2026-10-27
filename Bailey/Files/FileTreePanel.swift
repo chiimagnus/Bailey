@@ -377,13 +377,18 @@ private struct FileTreeRow: View {
 
     @State private var editingName = ""
     @State private var hoveredCompactPath: String?
-    @State private var contextMenuPath: String?
     @FocusState private var fieldFocused: Bool
     @Environment(\.panelFontScale) private var fontScale
 
     private var isRenaming: Bool { model.renamingPath == item.path }
+    private var contextMenuPath: String? { model.contextMenuTargetPath }
+    private var hasContextRing: Bool {
+        guard let contextMenuPath else { return false }
+        return contextMenuPath == item.path
+            || item.compactComponents.contains { $0.path == contextMenuPath }
+    }
     private var hasKeyboardCursor: Bool {
-        model.selectedPath == item.path && listFocused
+        model.contextMenuTargetPath == nil && model.selectedPath == item.path && listFocused
     }
 
     private var isMultiSelected: Bool { model.selectedPaths.contains(item.path) }
@@ -427,14 +432,14 @@ private struct FileTreeRow: View {
         } else if isRenaming {
             TreeRowSurface(
                 depth: item.depth, scale: fontScale, selected: isCurrent,
-                contextRing: contextMenuPath != nil
+                contextRing: hasContextRing
             ) { _, layout in
                 renameRow
                     .modifier(layout)
             }
             .overlay {
                 ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
-                                       onMenuClosed: { contextMenuPath = nil },
+                                       onMenuClosed: { model.dismissContextMenu(target: item.path) },
                                        onMenuKeyDown: handleMenuKeyDown)
                     .contextMenu { rowMenu(for: item) }
             }
@@ -442,7 +447,7 @@ private struct FileTreeRow: View {
             semanticRow
                 .background {
                     ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
-                                           onMenuClosed: { contextMenuPath = nil },
+                                           onMenuClosed: { model.dismissContextMenu(target: item.path) },
                                            onMenuKeyDown: handleMenuKeyDown)
                 }
                 .contextMenu { rowMenu(for: item) }
@@ -453,7 +458,7 @@ private struct FileTreeRow: View {
             semanticRow
                 .overlay {
                     ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
-                                           onMenuClosed: { contextMenuPath = nil },
+                                           onMenuClosed: { model.dismissContextMenu(target: item.path) },
                                            onMenuKeyDown: handleMenuKeyDown)
                         .contextMenu { rowMenu(for: item) }
                 }
@@ -464,7 +469,6 @@ private struct FileTreeRow: View {
     private func selectForContextMenu(_ target: FileTreeModel.Item) {
         guard isCurrentTarget() else { return }
         model.selectForContextMenu(item, componentPath: target.path == item.path ? nil : target.path)
-        contextMenuPath = target.path
     }
 
     private func handleMenuKeyDown(_ menu: NSMenu, _ event: NSEvent) -> Bool {
@@ -645,7 +649,7 @@ private struct FileTreeRow: View {
                 })
                 .overlay {
                     ContextMenuClickTarget(onContextClick: { selectForContextMenu(target) },
-                                           onMenuClosed: { contextMenuPath = nil },
+                                           onMenuClosed: { model.dismissContextMenu(target: target.path) },
                                            onMenuKeyDown: handleMenuKeyDown)
                         .contextMenu { rowMenu(for: target) }
                 }
@@ -671,7 +675,7 @@ private struct FileTreeRow: View {
     private var semanticRow: some View {
         if item.isDirectory {
             TreeFolderRow(row: displayRow, scale: fontScale,
-                          focusRing: hasKeyboardCursor, contextRing: contextMenuPath != nil,
+                          focusRing: hasKeyboardCursor, contextRing: hasContextRing,
                           multiSelected: isMultiSelected, multiSelectionEnabled: true,
                           compactSegment: { component in compactSegmentView(component) }) {
                 guard isCurrentTarget() else { return }
@@ -685,7 +689,7 @@ private struct FileTreeRow: View {
             TreeFileRow(
                 row: displayRow, scale: fontScale, selected: isCurrent,
                 multiSelected: isMultiSelected, multiSelectionEnabled: true,
-                focusRing: hasKeyboardCursor, contextRing: contextMenuPath != nil,
+                focusRing: hasKeyboardCursor, contextRing: hasContextRing,
                 open: {
                     guard isCurrentTarget() else { return }
                     if !selectForClick() { openFile(item.path, false) }
