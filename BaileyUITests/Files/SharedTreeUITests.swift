@@ -241,36 +241,19 @@ final class SharedTreeUITests: XCTestCase {
 
     func testContextClickMovesSelectionToUnselectedRowsLikeVSCode() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
-        let home = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("a-selected.txt", text: "a\n")
         let second = try fixture.file("b-context.txt", text: "b\n")
         let third = try fixture.file("c-context.txt", text: "c\n")
-        let previousInput = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
-        defer { XCTAssertEqual(TISSelectInputSource(previousInput), noErr) }
-        if let ascii = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue() {
-            XCTAssertEqual(TISSelectInputSource(ascii), noErr)
-        }
-        let app = XCUIApplication(bundleIdentifier: "chiimagnus.bailey.dev")
-        app.launchArguments = ["--isolated-ui-test", "-AppleLanguages", "(en)"]
-        app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
-        app.launchEnvironment["BAILEY_UI_TEST_PROJECT"] = fixture.root.path
-        app.launchEnvironment["HOME"] = home.root.path
-        app.launchEnvironment["CFFIXED_USER_HOME"] = home.root.path
-        app.launch()
-        defer { if app.state != .notRunning { app.terminate() } }
-        app.activate()
-        if !app.windows.firstMatch.waitForExistence(timeout: 1) {
-            app.typeKey("n", modifierFlags: [.command, .shift])
-        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
         let window = app.windows.firstMatch
-        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
-        XCTAssertTrue(files.waitForExistence(timeout: 15))
-        app.activate()
-        XCTAssertEqual(app.state, .runningForeground)
-        files.click()
         let a = WorkspaceUITestSupport.fileRow(first, in: window)
         let b = WorkspaceUITestSupport.fileRow(second, in: window)
         let c = WorkspaceUITestSupport.fileRow(third, in: window)
+        if !a.isHittable {
+            let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+            XCTAssertTrue(files.waitForExistence(timeout: 15))
+            files.click()
+        }
         XCTAssertTrue(a.waitForExistence(timeout: 15))
         XCTAssertTrue(b.waitForExistence(timeout: 15))
         XCTAssertTrue(c.waitForExistence(timeout: 15))
