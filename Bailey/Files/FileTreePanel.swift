@@ -193,9 +193,11 @@ private struct FileTreeScrollView: View {
     let makeDragProvider: (FileTreeModel.Item) -> NSItemProvider
     let receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool
     @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.panelFontScale) private var fontScale
     @State private var keyboardOwner = TreeKeyboardOwner()
     @State private var keyboardFocused = false
     @State private var waitingForFirstRow = false
+    @State private var viewportHeight: CGFloat = 0
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -231,6 +233,9 @@ private struct FileTreeScrollView: View {
                 }
                 .padding(.bottom, 7)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .onScrollGeometryChange(for: CGFloat.self, of: { $0.containerSize.height }) { _, height in
+                viewportHeight = height
             }
             .background {
                 TreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleKey,
@@ -320,7 +325,8 @@ private struct FileTreeScrollView: View {
 
     private func handleKey(_ event: NSEvent) -> Bool {
         guard keyboardOwner.view?.window?.firstResponder === keyboardOwner.view,
-              isActive, canFocusKeyboard(), isCurrentTarget()
+              isActive, canFocusKeyboard(), isCurrentTarget(),
+              model.renamingPath == nil, model.draft == nil
         else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
         if modifiers.isEmpty, event.keyCode == 117 {
@@ -328,9 +334,14 @@ private struct FileTreeScrollView: View {
             return true
         }
         guard modifiers.isEmpty || modifiers == [.shift] else { return false }
+        let page = max(1, Int(viewportHeight / TreeRowStyle.rowHeight(fontScale)))
         switch event.keyCode {
         case 125: model.moveSelection(by: 1, extending: modifiers.contains(.shift)) // Down
         case 126: model.moveSelection(by: -1, extending: modifiers.contains(.shift)) // Up
+        case 115 where modifiers.isEmpty: model.moveSelection(by: -model.items.count)
+        case 119 where modifiers.isEmpty: model.moveSelection(by: model.items.count)
+        case 116 where modifiers.isEmpty: model.moveSelection(by: -page)
+        case 121 where modifiers.isEmpty: model.moveSelection(by: page)
         case 124 where modifiers.isEmpty: // Right
             guard let row = model.selectedItem, row.isDirectory else { return false }
             if !model.isExpanded(row) { Task { await model.toggle(row) } }

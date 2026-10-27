@@ -1131,6 +1131,48 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: nested), Data("menu bytes\n".utf8))
     }
 
+    func testHomeEndAndPageKeysScrollFocusedFilesWithoutOpeningOrSelectingThem() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        var files: [URL] = []
+        for index in 0..<80 {
+            files.append(try fixture.file(String(format: "%03d.txt", index), text: "real page row \(index)\n"))
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "zh-Hans", project: fixture.root)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let first = WorkspaceUITestSupport.fileRow(files[0], in: window)
+        let last = WorkspaceUITestSupport.fileRow(files[79], in: window)
+        XCTAssertTrue(first.waitForExistence(timeout: 15))
+        app.typeKey(XCUIKeyboardKey.end, modifierFlags: [])
+        XCTAssertTrue(last.waitForExistence(timeout: 15))
+        XCTAssertTrue(last.isHittable)
+        XCTAssertFalse(last.isSelected)
+        app.typeKey(XCUIKeyboardKey.home, modifierFlags: [])
+        XCTAssertTrue(first.isHittable)
+        app.typeKey(XCUIKeyboardKey.pageDown, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.pageDown, modifierFlags: [])
+        let scrolled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            !first.isHittable
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [scrolled], timeout: 5), .completed,
+                       "Repeated Page Down must move past the original viewport")
+        app.typeKey(XCUIKeyboardKey.pageUp, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.pageUp, modifierFlags: [])
+        let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            first.isHittable
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 5), .completed)
+        XCTAssertFalse(first.isSelected)
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 0)
+        app.typeKey(" ", modifierFlags: [])
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(files[0], in: window).waitForExistence(timeout: 15))
+        let content = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.textViews.allElementsBoundByIndex.contains { ($0.value as? String) == "real page row 0\n" }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [content], timeout: 15), .completed)
+        XCTAssertEqual(try Data(contentsOf: files[0]), Data("real page row 0\n".utf8))
+    }
+
     func testModifierMultiSelectionDoesNotOpenOrCollapseFiles() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let alpha = try fixture.file("a.swift", text: "a\n")

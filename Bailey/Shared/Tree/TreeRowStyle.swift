@@ -90,7 +90,7 @@ struct TreeKeyboardHost: NSViewRepresentable {
     }
 
     func updateNSView(_ view: TreeKeyboardView, context: Context) {
-        owner.view = view
+        // 旧宿主可能晚于新宿主收到更新；只有 makeNSView 可以登记键盘所有权。
         view.onKeyDown = onKeyDown
         view.onEditCommand = onEditCommand
         view.canEditCommand = canEditCommand

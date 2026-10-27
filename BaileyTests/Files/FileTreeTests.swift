@@ -1323,6 +1323,146 @@ final class FileTreeTests: XCTestCase {
         XCTAssertNil(tree.selectedPath)
     }
 
+    func testNativeTreeHomeEndAndViewportPagingPreserveSelectionAndRejectOtherInputOwners() async throws {
+        let root = fixture.appendingPathComponent("paging")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        for index in 0..<80 {
+            try Data("row \(index)".utf8).write(to: root.appendingPathComponent(String(format: "%03d.txt", index)))
+        }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        for fontSize in [AppSettings.panelFontSizeRange.lowerBound, AppSettings.defaultPanelFontSize,
+                         AppSettings.panelFontSizeRange.upperBound] {
+            let scale = CGFloat(fontSize / AppSettings.defaultPanelFontSize)
+            for height in [220.0, 440.0] {
+                let tree = FileTreeModel()
+                await tree.sync(root: root.path, backend: backend)
+                let rows = tree.items
+                XCTAssertEqual(rows.count, 80)
+                let gate = FileTreeTargetGate()
+                gate.ready = true
+                var opened: [String] = []
+                let window = NSWindow(contentRect: NSRect(x: -1000, y: -1000, width: 380, height: height),
+                                      styleMask: [.titled], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                defer { window.close() }
+                let host = NSHostingView(rootView: FileTreePanel(
+                    model: tree, git: GitStatusModel(), sshHost: nil, currentFilePath: nil,
+                    openFile: { path, _ in opened.append(path) },
+                    renameFile: { item, name in await tree.rename(item, to: name) }, onCommand: { _ in },
+                    refreshGitStatus: {}, isCurrentTarget: { gate.ready }, canPasteFiles: { false },
+                    canImportFromFinder: false, importFromFinder: { _, _ in false })
+                    .environment(\.panelFontScale, scale))
+                let content = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+                host.translatesAutoresizingMaskIntoConstraints = false
+                content.addSubview(host)
+                NSLayoutConstraint.activate([
+                    host.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                    host.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+                    host.topAnchor.constraint(equalTo: content.topAnchor),
+                    host.bottomAnchor.constraint(equalTo: content.bottomAnchor)
+                ])
+                window.contentView = content
+                window.orderFront(nil)
+                try await waitForCondition("The native tree keyboard and viewport must attach") {
+                    host.layoutSubtreeIfNeeded()
+                    return descendants(host).contains { $0 is TreeKeyboardView }
+                        && descendants(host).contains { $0 is NSScrollView && $0.bounds.height > 80 }
+                }
+                var keyboard = try XCTUnwrap(descendants(host).compactMap { $0 as? TreeKeyboardView }.first)
+                let scroll = try XCTUnwrap(descendants(host).compactMap { $0 as? NSScrollView }
+                    .max { $0.contentSize.height < $1.contentSize.height })
+                let page = max(1, Int(scroll.contentSize.height / TreeRowStyle.rowHeight(scale)))
+                XCTAssertGreaterThan(page, 1)
+                XCTAssertTrue(window.makeFirstResponder(keyboard))
+                func key(_ code: UInt16, modifiers: NSEvent.ModifierFlags = []) throws -> Bool {
+                    let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                        modifierFlags: modifiers, timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                        characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: code))
+                    return keyboard.onKeyDown(event)
+                }
+                tree.select(rows[1])
+                tree.select(rows[3], toggling: true)
+                let selected = tree.selectedPaths
+                XCTAssertTrue(try key(115))
+                XCTAssertEqual(tree.selectedPath, rows[0].path)
+                XCTAssertTrue(try key(121))
+                XCTAssertEqual(tree.selectedPath, rows[page].path, "font=\(fontSize), height=\(height)")
+                XCTAssertTrue(try key(116))
+                XCTAssertEqual(tree.selectedPath, rows[0].path)
+                XCTAssertTrue(try key(119))
+                XCTAssertEqual(tree.selectedPath, rows.last?.path)
+                XCTAssertTrue(try key(121))
+                XCTAssertEqual(tree.selectedPath, rows.last?.path)
+                XCTAssertTrue(try key(115))
+                XCTAssertTrue(try key(116))
+                XCTAssertEqual(tree.selectedPath, rows[0].path)
+                XCTAssertEqual(tree.selectedPaths, selected)
+                XCTAssertTrue(opened.isEmpty)
+                for modifiers: NSEvent.ModifierFlags in [[.shift], [.command], [.control], [.option]] {
+                    for code: UInt16 in [115, 116, 119, 121] { XCTAssertFalse(try key(code, modifiers: modifiers)) }
+                }
+                gate.ready = false
+                XCTAssertFalse(try key(119))
+                gate.ready = true
+                tree.beginRename(rows[0])
+                XCTAssertTrue(window.firstResponder === keyboard)
+                XCTAssertFalse(try key(125), "Pending rename already owns input before its field editor mounts")
+                tree.cancelRename()
+                await tree.beginNewFile(in: root.path)
+                XCTAssertNotNil(tree.draft)
+                XCTAssertTrue(window.makeFirstResponder(keyboard))
+                XCTAssertFalse(try key(125), "Pending draft input cannot route navigation to its tree")
+                await tree.cancelDraft()
+
+                let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
+                content.addSubview(input)
+                input.selectText(nil)
+                let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
+                XCTAssertTrue(editor.isFieldEditor)
+                for markedText in ["拼音", "にほんご"] {
+                    editor.setMarkedText(markedText,
+                        selectedRange: NSRange(location: (markedText as NSString).length, length: 0),
+                        replacementRange: NSRange(location: NSNotFound, length: 0))
+                    let marked = editor.markedRange()
+                    XCTAssertFalse(try key(115))
+                    XCTAssertEqual(editor.markedRange(), marked)
+                    XCTAssertTrue(editor.hasMarkedText())
+                    editor.unmarkText()
+                }
+                input.removeFromSuperview()
+
+                let empty = fixture.appendingPathComponent(UUID().uuidString)
+                try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+                let previousKeyboard = keyboard
+                await tree.sync(root: empty.path, backend: backend)
+                try await waitForCondition("The new root must mount a replacement keyboard host") {
+                    host.layoutSubtreeIfNeeded()
+                    return descendants(host).contains {
+                        guard let view = $0 as? TreeKeyboardView else { return false }
+                        return view !== previousKeyboard && view.window === window
+                    }
+                }
+                keyboard = try XCTUnwrap(descendants(host).compactMap { $0 as? TreeKeyboardView }
+                    .first { $0 !== previousKeyboard && $0.window === window })
+                XCTAssertTrue(window.makeFirstResponder(keyboard))
+                for code: UInt16 in [115, 116, 119, 121] {
+                    XCTAssertTrue(try key(code))
+                    XCTAssertNil(tree.selectedPath)
+                    XCTAssertTrue(tree.selectedPaths.isEmpty)
+                }
+                let only = empty.appendingPathComponent("only.txt")
+                try Data("only".utf8).write(to: only)
+                await tree.sync(root: empty.path, backend: backend)
+                for code: UInt16 in [115, 116, 119, 121] {
+                    XCTAssertTrue(try key(code))
+                    XCTAssertEqual(tree.selectedPath, only.path)
+                    XCTAssertTrue(tree.selectedPaths.isEmpty)
+                }
+                XCTAssertTrue(opened.isEmpty)
+            }
+        }
+    }
+
     func testFocusedRowNavigationTracksVisibleItemsAndResetsOnRootChange() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let otherRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
