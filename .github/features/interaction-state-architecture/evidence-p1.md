@@ -145,3 +145,18 @@
   上游算法以固定源码核对，实际 GUI 结果只归属本轮 Bailey Dev。
 
 以上不是对后续任务的预先跳过；阶段结束逐项补充安全可执行条件及剩余门禁。
+
+## P1 审计补记（2026-10-28）
+
+- **源码路径：** `WorkspaceUITestSupport.launch(in:project:)` 只有收到 `project` 才设置
+  `BAILEY_UI_TEST_PROJECT`；`WorkspaceApplication.init` 只暂存到 `pendingDirectories`；
+  `WindowRootView.onAppear → WorkspaceApplication.register` 才将路径添加为项目。
+  因此预载文件夹省去了手动 Add Folder，但无法替代 SwiftUI 首窗创建。
+  不传 `project` 的真实 Add Folder 测试保留其原本入口。
+- **F-03：** 专项窗口修复 `db470062`、`fe77590b` 已由 `2cbcc6d0` 撤回，
+  相关产品代码及专项测试恢复到修复前；`make build:ui` 已通过。
+  F-03 按用户决定排除出 P1 门禁，不将它视为已修复。
+- **运行条件：** Xcode GUI XCTest 从 `Background` 会话运行曾报
+  `childPID > 0`，从 `Aqua` 会话可进入测试；但取消旧补窗逻辑的版本
+  仍在 `WorkspaceUITestSupport` 的初始窗口断言失败。
+  本次仅核对源码和历史日志，不重复运行测试；F-02 的 GUI 联合验收仍未核销。

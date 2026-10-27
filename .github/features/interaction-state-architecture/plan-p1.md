@@ -259,3 +259,11 @@ rename/new file TextField/IME 接管时不得吞键；
    `plan-task-auditor` 独立审查 `audit-p1.md`；Go 才进入 P2。
 5. 未能实测的 macOS 15.6/触控板/GUI 争用/Windows SSH/大容量组合
    在审计逐项列出原因、影响、补测方式与是否阻塞，不将 Deferred 算成功。
+
+**测试启动边界（审计后核对）：** `WorkspaceUITestSupport.launch(in:project:)` 仅在
+传入 `project` 时通过 `BAILEY_UI_TEST_PROJECT` 预置临时目录；
+`WorkspaceApplication.init` 只是将其放入待加载队列，直到首个
+`WindowRootView` 出现并注册窗口，才真正添加项目。预置路径不负责创建窗口。
+未传 `project` 的用例仍需覆盖真实 Add Folder 入口，不能全部改成直接预载。
+F-03 的窗口专项修复已撤回并从 P1 门禁排除；不得将“预载目录”解释为
+“初始窗口一定存在”，也不为 F-03 重新增加独立修复任务。

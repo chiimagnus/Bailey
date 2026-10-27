@@ -38,18 +38,12 @@
 
 ## 发现项
 
-## 发现 F-03
+## F-03（撤回，不纳入 P1 门禁）
 
 - 任务：`P1-T5`
-- 严重级别：`Medium`
-- 状态：`Deferred`
-- 位置：`Bailey/App/WorkspaceApplication.swift:486`、`Bailey/App/BaileyApp.swift:17`、`BaileyUITests/Support/WorkspaceUITestSupport.swift:91`
-- 摘要：`初始 WindowGroup、系统场景恢复、应用快照恢复与测试补窗存在重复开窗路径`
-- 风险：`独立 GUI 记录实际包含 29 个窗口，仅 1 个加载预载项目；同一隔离运行对应的 SessionStore 并无 29 个待恢复窗口。测试等待首窗仅 1 秒后发出 ⌘⇧N 也可能与系统首窗竞争。`
-- 预期修复：`复用已有 didReopenWindows 与窗口登记，在首个 scene 出现前不抢建窗口；已登记而未附着时不误判无窗口；保留用户主动新窗与正常重启恢复`
-- 验证：`WindowOwnershipIntegrationTests/testPendingFolderDoesNotOpenSecondWindowWhileFirstSceneIsRegisteredButUnattached；WorkspaceSmokeUITests/testPreloadedProjectLaunchCreatesOneMainWindow；WorkspaceWindowsUITests 双窗；Xcode 27.2 启动器目前发生 childPID 内部错误`
-- 解决证据：`提交 db470062 已避免首 Scene 未登记时抢建窗口；提交 fe77590b 在系统 Scene 边界明确默认呈现首窗并关闭 SwiftUI 自动 Scene 恢复，仅由 WorkspaceApplication/SessionStore 恢复其它窗口，同时删除 UI Runner 的 1 秒后快捷键补窗和重启补窗旧路径。make build:ui、make build（深度验签）、git diff --check 通过。隔离 Bailey Dev 真实 GUI 通过预载项目单窗（AX 包含 startup.txt）、明确新建双窗、关闭其中一窗、全部关闭后重新打开并恢复原项目/文件；/tmp/bailey-p1-f03-reopened-tree.json。Xcode 27.2 在 UI 测试枚举、跳过枚举直接 test、宿主 WindowOwnershipIntegrationTests 均于测试开始前报 IDELaunchServicesLauncher childPID > 0，日志 /tmp/bailey-p1-f03-ui-test.log、/tmp/bailey-p1-f03-ui-no-enumeration.log、/tmp/bailey-p1-f03-host-final.log；独立 GUI 证据不能替代 XCTest，Gate 仍 No-Go。`
-
+- 状态：`排除（用户决定不继续修复）`
+- 背景：隔离 GUI 曾记录 29 个窗口，但尚未证实正常用户路径存在稳定可复现的缺陷。Xcode 的 `childPID > 0` 崩溃与从 `Background` 会话运行 GUI XCTest 有关；改从 `Aqua` 启动后，取消旧补窗逻辑的版本仍无法自动显示初始窗口。测试预载的 `BAILEY_UI_TEST_PROJECT` 仅在 `WorkspaceApplication` 中排队，必须等 `WindowRootView` 登记后才能加载为项目，并不负责创建首窗；而且 `launch(project:)` 是可选入口，Add Folder 专项测试仍从空项目启动。
+- 处理：`db470062` 与 `fe77590b` 的 F-03 专项改动已由 `2cbcc6d0` 撤回，保留事实正确的测试参数说明。`make build:ui` 通过。此发现不再作为 P1 门禁；**撤回不等于证明原异常已修复**。
 
 ## 发现 F-02
 
@@ -203,24 +197,24 @@
   （单项连接隔离／宿主、双本机窗口 GUI 均已测；未破坏用户 SSH master）：
   在跨窗连线切换时可能存在额外时序风险。
   补验：隔离 SSH master 与专属 Windows 沙盒中同时运行真实双窗断线恢复。
-- **本轮基础设施／GUI 记录**：新出现初始窗口缺失、AX 匹配错误、
-  Xcode `childPID > 0` 内部断言以及分页合并运行不稳定。
-  前三项有明确运行器证据，不等同于生产缺陷；分页场景仍需区分。
+- **本轮基础设施／GUI 记录**：从 `Background` 会话启动 GUI XCTest 会触发 Xcode
+  `childPID > 0` 内部断言；改用 `Aqua` 后测试能执行。窗口专项修复已撤回，
+  不再作为门禁；AX 匹配与联合分页结果仍须独立核实。
 - **Gate 影响**：即使忽略没有设备的 15.6／触控板等条件，
   当前仍有 F-02 和可执行 GUI／SSH 补验未核销，不能按旧日志给出 Go。
 
 ## Gate（是否允许进入下一阶段）
 
 - 结论：**No-Go（本轮独立审计未完成全部门禁）**
-- 理由：P1-T2 的实际写入缺陷已修复并验签安装，但 P1-T5 的联合 GUI 滚动验收 F-02
-  仍未确定根因；XCTest 启动／AX 故障阻断补验，真实 Windows SSH 测试在 Xcode 内部崩溃时未开始。
-  不因已有阶段已标记完成或旧审计为 Go 而放行下一阶段。
+- 理由：F-03 已按决定排除。P1-T2 的写入缺陷已修复；P1-T5 的联合 GUI 滚动验收 F-02
+  仍未核销，Windows SSH 补验也未执行。`Aqua` 会话可运行 XCTest，但不能用这一点替代后续断言。
+  不因旧审计为 Go 而直接放行下一阶段。
 
 ## 最终状态与剩余风险
 
-- 当前状态：**Open（F-01 已解决；F-02 未核销）**
-- 剩余风险：连续分页的整组 GUI 结果尚待确认，Xcode 27.2 的 App/UI 启动不稳定、
-  修复后的 Windows SSH 实机测试未执行；macOS 15.6、真实中日系统 IME、
+- 当前状态：**Open（F-01 已解决；F-03 已排除；F-02 未核销）**。P2 的并行执行不代表 P1 审计 Gate 已通过。
+- 剩余风险：连续分页的整组 GUI 结果尚待确认，修复后的 Windows SSH 实机测试未执行；
+  macOS 15.6、真实中日系统 IME、
   实体触控板／VoiceOver、远端软链接及 SSH 断网×双窗联合 GUI 仍待专用环境补验。
 
 ## 审计约束
