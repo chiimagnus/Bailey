@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P2-T1"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
@@ -29,23 +29,23 @@ note = "已提交 e31c9a8；Dock 文件标签和工具菜单内 Cmd-W E2E 本轮
 [[tasks]]
 id = "P2-T1"
 title = "分离 Files 显式选择、游标和右键目标"
-status = "in_progress"
+status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = ""
-note = "P1 按用户要求暂停；以 VS Code microsoft/vscode c5f99e8 的 listWidget.ts、explorerView.ts 为 P2 基线，键盘仅移动 Focus；右键集合外单选，集合内保留多选；修订计划和模型后按 P2-T1 验收。"
+commit = "a59cbe3"
+note = "原提交 a59cbe3；本轮独立 plan-task-auditor 发现并以 26a2648 修复压缩目录父组件右键错误多选、Esc 旧 drag nonce 未失效；Red 已复现，FileTree 82/82、真实压缩目录/右键 GUI 2/2、make build+签名 PASS。"
 
 [[tasks]]
 id = "P2-T2"
 title = "共享 TreeRowSurface 分层绘制与无障碍"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = ""
-note = "Git Graph 原本已有独立蓝框：TreeRowSurface.focusRing；6fe42c8 仅在同一 stroke 上增加菜单期 contextRing，完整蓝/灰/hover/AX/像素矩阵尚未执行。"
+commit = "405f5f7"
+note = "原提交 405f5f7；本轮审计 bcbe14e 移除 Files isMultiSelected、Git Entry selected 的误导命名；扩展 NSHostingView Focus/Selection/Displayed/Context 重叠像素。宿主 87/87、明暗 Files+GitChanges GUI 3/3、make build+签名 PASS。"
 
 [[tasks]]
 id = "P2-T3"
 title = "核销 Git、Dock 和窗口交叉行为并清理旧路径"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t3"
-commit = ""
-note = ""
+commit = "1dcdd23"
+note = "原提交 1dcdd23；审计 f43c0b5 补 FileTreeModel→WorkspaceWindowModel→独立剪贴板/真磁盘 Copy/Cut/Paste、ae672d1 校正 SSH 同根连接重连文档/选择断言。宿主 148/148、SSH FileTree 82/82、make build+签名 PASS；GitGraph/Projects/Dock 最终 GUI 有首轮前台争用，独立重测 GitGraph 通过。外部 Windows SSH 与真实系统剪贴板/Trash 属审核环境 Deferred，详见 audit-p2.md。"

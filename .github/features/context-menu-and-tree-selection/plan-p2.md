@@ -1,7 +1,7 @@
 # P2：Files 选择语义与共享树行视觉
 
-**Goal：** 游标移动不夺走已选中的背景或正在显示文件的灰底，
-同时保持右键／键盘命令目标准确，复用现有共享树行。
+**Goal：** 以 VS Code Explorer 的 Focus、Selection、Hover、活动／非活动视觉规则为准，
+分离 Files 的键盘游标、选中集合和菜单操作目标；保留 Bailey 现有浏览、打开与原生焦点边界。
 
 **Non-goals：** 不给 Git Graph 添加 Files 式多选；
 不更改 Git 操作、图谱拓扑、文件单击／双击和拖放后端。
@@ -13,20 +13,36 @@
 共享视觉只改 `TreeRowSurface` 和必要调用参数，
 不依赖后台窗口的焦点标志决定数据状态。
 
-**现有基线：** Git Graph 在本 Feature 之前已将蓝色细描边与灰色 Diff 背景分开：
+**实施前基线：** Git Graph 早已将蓝色细描边与灰色 Diff 背景分开：
 `RecentCommitsView.isFocusedRow()` 传 `TreeRowSurface.focusRing`，
-文件 Diff 是否显示另由 `selected` 决定；它并非缺少“仅蓝框”的组件。
+文件 Diff 的展示状态原由 `selected` 决定，P2-T2 已改名 `displayed`；
+它并非缺少“仅蓝框”的组件。
 但其 `selectRow()` 会在活动时 `keyboardOwner.focus()`，
 因此不能直接把 Git Graph 的右键聚焦策略复制给 Terminal 活动时的 Files。
 
-**Acceptance：** A 选中蓝底、B 游标蓝框、C 展示灰底、D Hover 灰底
-可分别呈现；菜单有效期内右键 B 的 Copy 操作 B；
-Esc 后如果 Files 真实聚焦则继续按 Files 游标操作 B，
-若 Terminal／Editor 仍聚焦则恢复其原生 Copy。
-多选批量操作准确；Git 和 Dock 原有行为不倒退。
+**VS Code 源码基线（microsoft/vscode `c5f99e8`）：**
+- `src/vs/base/browser/ui/list/listWidget.ts`：`KeyboardController.onUpArrow/onDownArrow`
+  只移动 Focus 和 Anchor；`onEnter` 才显式把 Focus 变为 Selection，`onEscape`
+  清除 Selection 而不清除 Focus；`MouseController.onContextMenu` 移动 Focus，
+  普通左键更新 Selection，macOS ⌘ 点击切换单项、Shift 点击扩展范围。
+- `src/vs/workbench/contrib/files/browser/views/explorerView.ts`：Explorer 右键未选中项
+  调用 `setSelection([stat])`，已在 Selection 内则保留整组。`getContext(true)`
+  在 Selection 超过一项时无条件采用整个 Selection，即使 Focus 指向集合外；
+  无多选时使用 Focus 决定操作目标。已打开编辑器的自动定位可同时设置
+  Focus 与 Selection，但它们不是同一状态。
+- `listWidget.ts` 的 `DefaultStyleController` 与
+  `src/vs/platform/theme/browser/defaultStyles.ts`：独立绘制 Focus、Selection、
+  Focus+Selection、Hover、失焦 Selection，以及菜单期间最后聚焦行的边框。
+  不把正在展示的编辑器文件、AX Selection 和键盘 Focus 混作一份数据。
 
-**前置：** P1 的原生菜单路由已经验证，P2 复用其命令入口；
-不得为了改变视觉重新加第二套键盘处理。
+**Acceptance：** 选中 A → 普通 ↓ 聚焦 B，A 的 Selection 保留，B 仅移动 Focus；
+右键多选 A/C 内部保留 A/C，右键外部 B 改为仅选 B；
+Esc 在 Files 焦点下清空 Selection 而保留焦点游标。活动／失焦背景、
+单独焦点轮廓、Hover 及菜单期右键轮廓与 VS Code 列表语义对齐；
+菜单命令准确操作右键集合，Git 和 Dock 的原有业务功能不倒退。
+
+**前置：** 复用 P1 已实现的菜单目标与动作派发，不为 P2 视觉状态再造键盘入口。
+P1 菜单 ⌘C 蜂鸣与瞬时高亮按用户要求暂停，不冒充已核销，也不阻断 P2 独立审查。
 
 ---
 
@@ -51,32 +67,32 @@ Esc 后如果 Files 真实聚焦则继续按 Files 游标操作 B，
 
 **代码事实：**
 `6fe42c8` 已在 P1 的必要前置工作中调整 `selectForContextMenu`：
-右键仅移动游标／紧凑段，**不再覆盖 `selectedPaths` 或抢原生焦点**；
-`selectedOperationPaths` 对游标落在现有选择集合外的情况已可返回当前游标。
-这些都是 P2-T1 的**部分成果**，不得重复实现或冒充整项验收。
-仍未完成：`moveSelection(by:extending: false)` 会重写 `selectedPaths`；
-`focusSelectedRow()` 无游标时仍调用 `select()` 隐式制造选中；
-方向键、范围锚点、刷新／切根后的真实操作集合需要系统性核对。
+P1 已实现独立的键盘焦点、右键上下文与原生焦点边界；本阶段继续
+对齐 VS Code 的持久 Selection：右键集合外会改为单选，方向键则不改选中集合。
+`selectedOperationPaths` 对多选集合优先、单选时 Focus 优先的取舍来自
+上游 `getContext(true)`，不能仅依据“游标不在集合内”判断目标。
 P2-T1 必须维护已有的右键隔离，不再引回原始耦合。
 
 **Red → Green → Refactor：**
 1. 在宿主先断言四条不同语义：
    - 左键选 A → ↓ 到 B：A 保留于 `selectedPaths`，
      `selectedPath == B`。
-   - A 仍选中时右键 B：A 保留，B 获得游标；菜单有效时 Copy B。
-     Esc 后 Files 确实持有焦点则 Copy B；Terminal／Editor 持有焦点时
-     Copy 恢复其原生内容，不能让保存的蓝框决定快捷键所有者。
-   - 选中集合 A/C、游标 A 或 C：Copy/Cut/Trash
-     用 A/C；游标 B（集合外）则作用于 B，
-     不因视觉上 A/C 为蓝色就误操作它们。
-   - Shift+↑/↓ 依原范围锚点扩选，⌘点击精确增删；
-     Escape 按实际事件层次取消菜单／清空选择。
-   - AX `isSelected` 继续表示实际持久选中集合：
-     A 蓝底且 AX 已选中，B 仅有游标边框时不能被误报为已选中。
+   - A/C 仍选中时右键 A：保留 A/C；右键集合外 B：Selection 变为 B，
+     Focus 指向 B，菜单有效时 Copy B；菜单 Esc 不撤销已确定的 Selection。
+     Terminal／Editor 持有焦点时菜单关闭后恢复其原生输入，
+     不能让保存的蓝框决定快捷键所有者。
+   - 选中集合 A/C 时即使 Focus 在集合外 B，Copy/Cut/Trash 仍用 A/C；
+     单选 A 且 Focus B（集合外）才改用 B；无 Selection、仅 Focus B 时
+     以 B 为命令目标，但不虚构 B 的选中背景／AX 标记。
+   - Shift+↑/↓ 按 Anchor 扩选，⌘点击精确增删；
+     Escape 关闭菜单后在 Files 焦点下清空 Selection，但保留 Focus。
+   - AX `isSelected` 只对应实际 Selection：A 选中且 AX 已选中，
+     B 仅为 Focus 时不能被误报为已选中；右键集合外 B 后则相反。
 2. 只在现有模型区分“游标移动”和“显式改选”。
-   将系统 Edit 命令的操作集合由**当前有效游标与已有选择**
-   推导出来；菜单中的右键路径仍通过 `contextSelection(for:)`
-   精确取目标，不维持第二份独立命令路由。
+   将系统 Edit 命令的操作集合由当前有效 Focus 与 Selection 推导；
+   即使 Selection 为空也应允许有效 Focus 的命令，且不隐式恢复背景。
+   右键菜单仍通过 `contextSelection(for:)` 精确取目标；
+   右键集合外按 VS Code 改选，不能维护第二份可写菜单选择。
    紧凑段使用已有 `selectedCompactPath`，不能把父文件夹误作目标。
    维持 P1 已修正的菜单目标与快捷键提示，不以“持久选中集合相等”
    决定菜单是否可以复制 B。菜单关闭时不能将菜单对象残留成
@@ -92,11 +108,11 @@ P2-T1 必须维护已有的右键隔离，不再引回原始耦合。
    **本任务立即删除**无效的选择重置／重复 fallback；
    修改而非盲删依赖旧语义的 `FileTreeTests`：
    `testFileTreeMultiSelectionRespectsVisibleOrderAndKeepsSingleCursor`、
-   `testContextSelectionMovesKeyboardCursorWithoutDestroyingMultiSelection`。
-   同步修订 `WorkspaceFilesUITests.testMultiSelectContextTargetsAndBulkTrashAgainstRealDisk`
-   中“右键集合外 C 应取消 A/B AX 已选中”的旧断言；
-   新断言应为 A/B 保留蓝底与 AX 选中，C 成为命令目标，
-   菜单 Copy Path 仅复制 C，Esc 后 Copy 也指向 C。
+   `testContextSelectionPreservesSelectedGroupButReplacesOutsideSelectionLikeVSCode`。
+   同步修订现有 Files／SharedTree GUI 中
+   “右键集合外 C 必须保留 A/B AX 已选中”的旧断言：
+   右键 C 后只选中 C；再次主动多选 A/B 后右键 A 保留整组；
+   菜单 Copy Path 和 Esc 后的命令目标均对应真实 Selection。
    保留显式取消后不自动重新选中的现有回归。
    若一个状态不必持久化，就不要新增可观察存储。
 5. 同时更新 `docs/features/files.md` 中键盘、
@@ -105,6 +121,8 @@ P2-T1 必须维护已有的右键隔离，不再引回原始耦合。
 
 **验证：**
 - `make test:FileTreeTests,PanelContextTests`。
+- P2-T1 审计补查：压缩目录真实组件右键改选与 Esc 取消拖动 token 的两项 Red→Green
+  由 `26a2648` 修复；不得把“同一压缩行”误当“同一实际目录”。
 - 定点 GUI：`WorkspaceFilesUITests` 的
   `testModifierMultiSelectionDoesNotOpenOrCollapseFiles`、
   `testMultiSelectContextTargetsAndBulkTrashAgainstRealDisk`（旧 AX 断言须更新）、
@@ -133,10 +151,12 @@ P2-T1 必须维护已有的右键隔离，不再引回原始耦合。
 - `BaileyUITests/Files/SharedTreeUITests.swift`、
   `BaileyUITests/Git/GitGraphUITests.swift`
 
-**代码事实：**
-共享行已经用 `multiSelected ? accent.opacity(0.14)`
-画出浅强调色背景；`selected` 在 Files／Git 中主要表达
-**当前显示的文件或 Diff**，而非显式选择。
+**实施前的代码事实：**
+共享行原来用 `multiSelected ? accent.opacity(0.14)`
+画出浅强调色背景；参数 `selected` 在 Files／Git 中主要表达
+**当前显示的文件或 Diff**，命名与 VS Code 的 Selection 不同。
+P2-T2 应重命名误导的参数并对照上面的 `listWidget.ts` 样式优先级，
+不强行把当前展示的内容染成选中背景。
 现有 `multiSelected → selected → hovering` 三选一背景
 使某些同时成立的事实被遮住。
 `6fe42c8` 在 P1 中只给既有 stroke 增加菜单期 `contextRing` 输入，
@@ -154,8 +174,10 @@ P2-T1 必须维护已有的右键隔离，不再引回原始耦合。
    以及同一行选中＋游标、选中＋展示、菜单展开／取消。
    不要因当前蓝底透明度较低就宣称它不存在。
 2. 在 `TreeRowSurface` 明确名称与覆盖优先级：
-   主题蓝底属于显式选中、灰底属于显示内容或 Hover，
-   细边框只标记焦点游标／有效右键上下文。
+   选中底色由 Selection 决定，活动／失焦有区分；Hover 只作用于
+   未选中且未聚焦的普通行；Focus（包含菜单期间）有单独轮廓，
+   Focus+Selection 取 VS Code 的组合样式。Bailey 当前显示文件的提示
+   可保留为弱提示，但不得取代 Selection 或与 Hover 混淆。
    **同一行不能同时显示两个互斥的纯色底**：显式选中蓝底优先，
    当前展示灰底这一事实仍保留；该行取消选中后重新显示灰底。
    Hover 仅在不会遮盖更明确的背景时变灰；描边独立叠加，
@@ -180,6 +202,9 @@ P2-T1 必须维护已有的右键隔离，不再引回原始耦合。
    Files／Git 的功能页只描述各自的动作语义，不重复颜色表。
 
 **验证：**
+- P2-T2 审计由 `bcbe14e` 完整清理 Files `isMultiSelected` 与 Git Entry
+  `selected` 的错误命名，现有像素测试核对 Focus+Selection、Displayed+Selection
+  与菜单上下文轮廓重叠，无生产旧参数兼容分支。
 - 宿主：共享行实际颜色／AX 组件断言，
   加 `make test:FileTreeTests,AppIdentityTests`。
 - E2E：`SharedTreeUITests.testLightFileSelectionFillRemainsAfterCommandPaletteTakesFocus`
@@ -237,6 +262,8 @@ P2-T1 必须维护已有的右键隔离，不再引回原始耦合。
    删除确实过时的描述；不迁移不相关文档。
 
 **验证：**
+- P2-T3 审计由 `f43c0b5` 补充真实临时文件与命名剪贴板的多选
+  Copy/Cut/Paste 完成结果；`ae672d1` 同步 SSH 同根重连时保留可信选择的文档与回归。
 - 相关宿主：`make test:FileTreeTests,DockWorkspaceTests,DockFocusIntegrationTests,AppIdentityTests`，
   加实际受影响的 Git 类。
 - 定点 UI：`SharedTreeUITests` 对应右键／视觉用例、
@@ -258,8 +285,10 @@ P2-T1 必须维护已有的右键隔离，不再引回原始耦合。
 
 本功能全部已识别且可安全执行的条件和重要组合已核销；
 模型游标、选中、菜单操作目标与最终副作用一致；
-真实 GUI 的菜单打开期间快捷键、背景／边框、
-Dock 原生反馈与未保存保护均已明确验收。
+真实 GUI 中受 P2 影响的 Selection 背景、Focus／右键轮廓、
+Git／Dock／Projects 操作目标及未保存保护均按适用范围验收。
+P1 菜单蜂鸣和瞬时按压高亮按用户要求暂停，不混入 P2 完成判定；
+但 P2 不能以此跳过自己修改过的菜单和焦点回归。
 
 任一任务中被替代的旧代码、重复快捷键入口、
 无效状态恢复分支和过时测试均在**所属任务内**清理；
