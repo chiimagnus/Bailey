@@ -257,6 +257,7 @@ final class FileTreeModel {
 
     var selectedOperationPaths: [String] {
         let paths = items.filter { !$0.isDraft && selectedPaths.contains($0.path) }.map(\.path)
+        if paths.count > 1 { return paths }
         if let selectedPath, !selectedPaths.contains(selectedPath),
            items.contains(where: { !$0.isDraft && $0.path == selectedPath }) {
             return [selectedCompactPath ?? selectedPath]

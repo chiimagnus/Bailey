@@ -1431,6 +1431,10 @@ final class FileTreeTests: XCTestCase {
 
         tree.select(rows[0])
         tree.select(rows[2], toggling: true)
+        tree.focus(rows[1])
+        XCTAssertEqual(tree.selectedPaths, [rows[0].path, rows[2].path])
+        XCTAssertEqual(tree.selectedOperationPaths, [rows[0].path, rows[2].path],
+                       "VS Code Explorer getContext(true) uses multi-Selection even if Focus is outside")
         tree.selectForContextMenu(rows[0])
         XCTAssertEqual(tree.selectedPath, rows[0].path)
         XCTAssertEqual(tree.selectedOperationPaths, [rows[0].path, rows[2].path],
