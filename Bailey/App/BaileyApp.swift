@@ -19,6 +19,9 @@ struct BaileyApp: App {
             WindowRootView(application: applicationDelegate.workspace)
         }
         .windowStyle(.hiddenTitleBar)
+        // Start exactly one scene; WorkspaceApplication owns additional saved windows.
+        .defaultLaunchBehavior(.presented)
+        .restorationBehavior(.disabled)
         // Keep title-bar dragging away from interactive tabs. The empty
         // header surfaces opt in explicitly through WindowDragArea.
         .windowBackgroundDragBehavior(.disabled)

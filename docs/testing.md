@@ -82,6 +82,7 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 `build/DerivedData-Dev`，即使正式 Bailey 在运行也不会终止或覆盖它。
 `WorkspaceUITestSupport` 通过显式 Dev Bundle ID 启动 App；
 不使用 `-ApplePersistenceIgnoreState YES`，该参数会阻止当前系统创建初始 WindowGroup 窗口。
+UI 测试必须等待 App 自己创建初始 `WindowGroup`；超时就报告启动失败，不得用 `⌘⇧N` 或菜单补建窗口，否则会掩盖场景创建问题并与窗口恢复竞争。
 已有 Bailey Dev 实例时明确失败而不终止进程，也不允许整套 XCUITest 全部跳过却返回假绿色；
 本机 GUI Runner 必须使用 Apple Development 签名而非强制 ad-hoc，否则可能被系统拒绝操作辅助功能树。
 公共启动入口在 **Bailey Dev 激活后**暂选 ABC，系统选择器的路径输入框获得焦点后再次选 ABC；

@@ -87,6 +87,8 @@ P2 的各组件焦点策略仍未迁移，不把 P1 当成整个 Feature 已完�
 ## 入口与数据流
 
 `BaileyApp` 声明主 `WindowGroup` 和设置场景；App delegate 提前持有应用所有者。
+主 `WindowGroup` 启动时创建一个窗口、关闭系统自动场景恢复；其余窗口快照只由
+`WorkspaceApplication`／`SessionStore` 恢复，避免系统旧窗口与应用快照重复。用户主动新建窗口仍通过 `openWindow`。
 `WindowRootView` 用 `@State` 持有单窗模型，在实际进入场景或附着原生窗口时向应用登记；
 `ContentView` 接收该模型，
 菜单仍通过 `.focusedSceneValue(\.baileyManager, manager)`／`@FocusedValue` 定位前台窗口。

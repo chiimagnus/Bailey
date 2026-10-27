@@ -209,16 +209,11 @@ final class WorkspaceWindowsUITests: XCTestCase {
         app.terminate()
         app.launch()
         app.activate()
-        if !app.windows.firstMatch.waitForExistence(timeout: 4) {
-            // With AppKit state restoration intentionally disabled, obtain a
-            // real WindowGroup scene through the existing system menu command.
-            let newWindow = app.menuItems.matching(NSPredicate(
-                format: "title IN %@", ["New Window", "新建窗口"])).firstMatch
-            XCTAssertTrue(newWindow.waitForExistence(timeout: 10))
-            newWindow.click()
+        guard app.windows.firstMatch.waitForExistence(timeout: 15) else {
+            throw NSError(domain: "BaileyUITestLaunch", code: 5, userInfo: [
+                NSLocalizedDescriptionKey: "Relaunch must create its initial WindowGroup scene without a test-synthesized window"
+            ])
         }
-        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15),
-                      "The native New Window command must open the restored workspace")
         let restoredWindow = app.windows.firstMatch
         XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: restoredWindow)
             .waitForExistence(timeout: 20), "The restored session must retain its file tab")
