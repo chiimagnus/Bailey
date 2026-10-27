@@ -59,8 +59,13 @@ final class FileTreeNativeDragView: NSView, NSDraggingSource {
     required init?(coder: NSCoder) { nil }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        if NSApp.currentEvent?.type == .rightMouseDown { return nil }
-        if onClick == nil && NSApp.currentEvent?.type == .leftMouseDown { return nil }
+        if let event = NSApp.currentEvent {
+            if event.type == .rightMouseDown ||
+               (event.type == .leftMouseDown && event.modifierFlags.contains(.control)) {
+                return nil
+            }
+            if onClick == nil && event.type == .leftMouseDown { return nil }
+        }
         return super.hitTest(point)
     }
 

@@ -687,6 +687,34 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "terminal")
     }
 
+    func testControlClickKeepsNativeFilesContextMenuAndSingleTarget() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("first.txt", text: "first bytes\n")
+        let second = try fixture.file("second.txt", text: "second bytes\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        let a = WorkspaceUITestSupport.fileRow(first, in: window)
+        let b = WorkspaceUITestSupport.fileRow(second, in: window)
+        if !a.isHittable {
+            let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+            XCTAssertTrue(files.waitForExistence(timeout: 15))
+            files.click()
+        }
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        a.click()
+        XCUIElement.perform(withKeyModifiers: .control) { b.click() }
+        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["Copy Relative Path"].exists
+        }, "Control-click must open the clicked Files row's native context menu")
+        XCTAssertFalse(a.isSelected)
+        XCTAssertTrue(b.isSelected)
+        menu.menuItems["Copy Path"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), second.path)
+        XCTAssertEqual(try Data(contentsOf: first), Data("first bytes\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("second bytes\n".utf8))
+    }
+
     func testNativeDragOptionCopiesSelectionAndUnselectedRowMovesOnlyItself() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let alpha = try fixture.file("a.txt", text: "alpha original\n")
