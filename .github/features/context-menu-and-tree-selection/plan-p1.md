@@ -83,10 +83,14 @@ Git Graph 在本 Feature 前就通过 `TreeRowSurface.focusRing` 独立显示蓝
    并给 `Button` 增加 `.keyboardShortcut`：真实菜单项虽有
    `keyEquivalent = c`，GUI 中按 ⌘C 仍没有复制右键目标。
    此方案已经撤销，不应重试或当作已完成。
-   失败的三项 P1 GUI Red 已保存至本地
-   `evidence-p1-menu-shortcut-red.patch`，在明确修复事件派发前不提交失败测试。
-   继续调查系统 Edit 命令的实际派发及当前窗口临时菜单目标，
-   坚持单一动作入口，不覆盖 SwiftUI 菜单委托、不复制全局快捷键。
+   早期三项 GUI Red 证据保存在本地 `evidence-p1-menu-shortcut-red.patch`；
+   后续已确证 `NSMenu.performKeyEquivalent(with:)` 返回 false，
+   `performActionForItem(at:)` 能执行原有 SwiftUI Copy 菜单动作，
+   再以 `cancelTracking()` 结束菜单跟踪。
+   修复已提交 `8742a09`，英文／中文隔离 Bailey Dev 菜单键盘 E2E
+   各通过，原文件操作后端收到右键 B；全部临时监听诊断／后端旁路已删除。
+   真实系统剪贴板测试因当前剪贴板存在无法无损备份的富类型而跳过，
+   不能将该跳过算作最终真实 Copy 验收。
 
 **验证：** 真实菜单打开且真实 ⌘C 发生后，
 检查正确剪贴板路径和完整命令退出状态；
@@ -143,8 +147,8 @@ Git Graph 在本 Feature 前就通过 `TreeRowSurface.focusRing` 独立显示蓝
    跨窗口菜单目标和过期身份不能覆盖当前真实键盘输入。
 4. **本任务立即删除**以 `listFocused` 和选中集合等价为由
    隐藏可执行 `⌘C` 的旧提示条件、替代的焦点抢占逻辑与过时测试断言。
-   `TreeContextClickTarget` 若仍为 Git／Projects 使用，
-   先核对对应事件链，不为清理 Files 而盲删整个共享类型。
+   既有桥接也被 Git／Projects 使用；P1-T3 在核对后统一更名为
+   `ContextMenuClickTarget`，未删除它们的右键命中路径。
 5. 在同一任务更新 `docs/ui.md` 与 `docs/features/files.md`
    的菜单优先级、焦点和目标生命周期契约。若 T1 实验确证原生菜单
    必须配备独立键等价入口，立即把 `AGENTS.md` 的绝对禁令
@@ -162,7 +166,9 @@ Git Graph 在本 Feature 前就通过 `TreeRowSurface.focusRing` 独立显示蓝
   “菜单仍开 → ⌘C／⌘X／⌘V”用例。
 - 视觉与焦点：Terminal／Editor 为第一响应者时，右键未选 B 只有菜单上下文细边框，
   B 不获得选中蓝底、AX `.isSelected` 或独立 Hover 灰底；A 旧蓝底保持。
-  菜单 Esc／点击后上下文边框消失，Terminal／Editor 焦点仍有效；
+  整棵 Files 树只允许一个当前右键蓝框，切换目标立即替换旧蓝框，
+  菜单期间隐藏原键盘游标蓝框；菜单 Esc／点击后上下文边框消失，
+  Terminal／Editor 焦点仍有效；
   明暗、紧凑段和 Git 共享行不倒退。
 - 真实副作用：鼠标／键盘路径的私有剪贴板记录相同；
   Copy 不覆盖原件，Cut 延迟移动，Paste 保留原有重名／拒写规则；
@@ -173,6 +179,24 @@ Git Graph 在本 Feature 前就通过 `TreeRowSurface.focusRing` 独立显示蓝
   P2 继续接管普通方向键、选中范围、蓝／灰背景组合与完整视觉／AX 验收。
 - P2 改变操作目标模型后，须重测这里的命令入口，
   **不再建立第二套投递实现**。
+
+**2026-10-27 补验：** `a6ee864` 补齐右键命中时机与菜单内新建测试；
+`19547bc` 将 Files 的右键描边收敛为树模型唯一目标，并防止旧菜单关闭误清新目标。
+宿主 Files／AppIdentity／WindowOwnership 106/106 通过，追加跨机器重置断言后
+Files 80/80 通过；连续右键、菜单内新建文件／文件夹、Dock 两种 ⌘W 的
+隔离 Bailey Dev GUI 联合 4/4 通过，`make build` 与签名验证通过。
+仍未核销的条件：系统富类型剪贴板的真实 Copy/Cut/Paste、
+Delete 废纸篓副作用、双窗口与真实 SSH 失效组合；不能因此宣称 P1-T2 完成。
+
+**菜单提示音补查：** 隔离 Bailey Dev 的 `NSBeep` 调用栈确认：Files 菜单内
+`⌘C` 的 Copy 已执行，但系统 `NSMenuTrackingSession` 仍将按键识别为无效并响提示音。
+`0dd22f2` 用 AppKit selector 替换了 Sendable 闭包通知，消除了共享桥接的 17 条 Swift
+并发警告；宿主 88/88、隔离菜单内新建与 Dock 关闭 E2E 2/2、`make build` 均通过。
+改变 `cancelTracking` 时机、临时注册原生按键等价项的实验已撤销，
+未能形成无蜂鸣且焦点/单次执行均通过的证据。
+终端输入 E2E 曾出现 XCUITest 丢首字符、旧 AX 菜单对象误报存在等问题，
+必须独立厘清，不能把测试误判当作菜单本身的失败或成功。
+系统蜂鸣仍为 P1-T2 的未解决缺陷，详见 `audit-p1.md` F-05。
 
 ## P1-T3 验证并修复 Dock ⌘W 的菜单反馈
 
@@ -203,12 +227,20 @@ Git Graph 在本 Feature 前就通过 `TreeRowSurface.focusRing` 独立显示蓝
    后台标签、空组、跨窗口、连续 ⌘W、菜单 Esc、
    保存失败和终端未关闭；每次关闭恰有一个合法目标。
 
+**已执行：** `e31c9a8` 让菜单展开期间的 ⌘W 调用本次已启用的
+Close／Close Panel 原生菜单动作，然后结束菜单跟踪；不向右键菜单重复注册快捷键。
+工具面板和非活动文件标签的两条真实 GUI E2E 复跑均通过（2/2），
+宿主 Dock／窗口／AppIdentity 50/50 通过，UI Test Target 构建通过。
+用户已手动确认菜单中 ⌘W 可关闭目标，但没有显示原生瞬时按压高亮。
+这是实际未达到的视觉要求，不再记成单纯缺少截图证据；
+不通过模拟鼠标或额外动画掩盖。
+
 **验证：**
 - 宿主：`make test:DockWorkspaceTests,WindowCloseIntegrationTests,AppIdentityTests`
 - UI：`make test:ui ONLY_TESTING='BaileyUITests/WorkspaceDockUITests/testRightClickFileTabAndCommandWCloseTheSameFile BaileyUITests/WorkspaceDockUITests/testRightClickInactiveFileTabClosesOnlyThatTab BaileyUITests/WorkspaceDockUITests/testCommandPaletteClosePanelUsesTheActiveTool'`
   并补菜单展开期间的真实键盘及原生反馈检查。
-  瞬时高亮若 XCUI 无法稳定截取，须在独立图形会话进行
-  可复验的原生／人工观察；不能仅由最终关闭成功推断高亮已发生。
+  用户已在真实 GUI 中确认未出现瞬时高亮；如果修改原生反馈实现，
+  须在独立图形会话重新观察，并证明一次按键只执行一次关闭动作。
 
 ---
 
