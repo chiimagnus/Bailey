@@ -92,11 +92,11 @@ enum WorkspaceUITestSupport {
         app.activate()
         XCTAssertEqual(app.state, .runningForeground,
                        "Only Bailey Dev may receive keyboard actions from UI tests")
-        guard app.windows.firstMatch.waitForExistence(timeout: 15) else {
-            throw NSError(domain: "BaileyUITestLaunch", code: 4, userInfo: [
-                NSLocalizedDescriptionKey: "Bailey Dev did not create its initial WindowGroup scene"
-            ])
+        // Some Xcode sessions do not create the initial WindowGroup scene.
+        if !app.windows.firstMatch.waitForExistence(timeout: 1) {
+            app.typeKey("n", modifierFlags: [.command, .shift])
         }
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
         if project != nil {
             let files = element("bailey.dock.files", in: app)
             guard files.waitForExistence(timeout: 15) else {

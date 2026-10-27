@@ -481,12 +481,11 @@ final class WorkspaceApplication {
         requestWindowForPendingDirectories()
     }
 
-    /// The initial WindowGroup scene opens itself. Only request a window
-    /// after that scene has appeared and all registered windows have closed.
+    /// Wait one turn for WindowGroup to create its own initial window before
+    /// explicitly requesting another.
     private func requestWindowForPendingDirectories() {
-        guard didReopenWindows,
-              (!pendingDirectories.isEmpty || !pendingExternalFiles.isEmpty),
-              windows.isEmpty,
+        guard (!pendingDirectories.isEmpty || !pendingExternalFiles.isEmpty),
+              !windows.contains(where: { $0.attachedWindow != nil }),
               !windowRequestScheduled, !isOpeningWindow
         else { return }
         windowRequestScheduled = true
@@ -494,11 +493,19 @@ final class WorkspaceApplication {
             guard let self else { return }
             self.windowRequestScheduled = false
             guard (!self.pendingDirectories.isEmpty || !self.pendingExternalFiles.isEmpty),
-                  self.windows.isEmpty, !self.isOpeningWindow
+                  !self.windows.contains(where: { $0.attachedWindow != nil }),
+                  !self.isOpeningWindow
             else { return }
-            guard let windowOpener = self.windowOpener else { return }
             self.isOpeningWindow = true
-            windowOpener()
+            if let window = NSApp.windows.first(where: {
+                $0.identifier?.rawValue.hasPrefix("main") == true
+            }) {
+                window.makeKeyAndOrderFront(nil)
+            } else if let windowOpener = self.windowOpener {
+                windowOpener()
+            } else {
+                self.isOpeningWindow = false
+            }
         }
     }
 
