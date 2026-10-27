@@ -141,10 +141,9 @@ Files 使用同一套文件操作；菜单没有展开时，只有 Files 树真�
 设置窗口采用 SwiftUI `Settings` 场景和 `NavigationSplitView`：左侧分类，右侧原生 `Form`，
 内容过长时滚动。具体设置见 [settings.md](features/settings.md)。
 
-设置侧栏与工作区共享选中底色：前台使用 Ghostty 主题强调色浅底，失焦使用中性底色，
-文字与已选图标保持正文色；未选中图标和两栏背景随主题变化。
-强调色同时用于滑块与开关，不向整个窗口应用 `.tint`。
-SwiftUI 直接使用解析后的主题颜色，切换主题时不得保留旧色；
+侧栏选中行使用 Ghostty 主题强调色，标题为白色、图标使用 `Color.primary`；
+未选中图标及两栏背景也随主题变化。普通文字、下拉菜单和按钮保持正文色，强调色只用于选中行、
+滑块与开关，不向整个窗口应用 `.tint`。SwiftUI 直接使用解析后的主题颜色，切换主题时不得保留旧色；
 内置 Default 主题保留原生材质。System／Light／Dark 在 macOS 27 起使用 `.tabs`，
 旧系统使用 `.segmented`。
 

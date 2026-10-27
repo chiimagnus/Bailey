@@ -48,7 +48,6 @@ struct SettingsView: View {
     let application: WorkspaceApplication
     @Bindable private var settings: AppSettings
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.controlActiveState) private var controlActiveState
     @State private var selectedPage: SettingsPage? = .common
     @State private var relaunchError = ""
     @State private var isShowingRelaunchError = false
@@ -144,18 +143,15 @@ struct SettingsView: View {
         let selected = selectedPage == page
         return Label {
             Text(page.title)
-                .foregroundStyle(Color.primary)
+                .foregroundStyle(selected ? Color.white : Color.primary)
         } icon: {
             Image(systemName: page.icon)
                 .foregroundStyle(selected ? Color.primary : accent)
         }
         .tag(page)
         .listRowBackground(
-            Color.clear
-                .modifier(RowHighlightStyle(
-                    isSelected: selected, listActive: controlActiveState == .key,
-                    cornerRadius: 8
-                ))
+            RoundedRectangle(cornerRadius: 8)
+                .fill(selected ? accent : Color.clear)
                 .padding(.horizontal, 8)
         )
     }
