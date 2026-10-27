@@ -540,7 +540,8 @@ struct DockTabGroupView: View {
                     },
                     onMenuKeyDown: { menu, event in
                         handleMenuKeyDown(menu, event, for: item)
-                    }
+                    },
+                    isExpectedMenu: { isMenuForTab($0, item: item) }
                 )
                 .contextMenu {
                     if let current = project.tabs.first(where: { $0.id == id }) {
@@ -565,7 +566,8 @@ struct DockTabGroupView: View {
                     },
                     onMenuKeyDown: { menu, event in
                         handleMenuKeyDown(menu, event, for: item)
-                    }
+                    },
+                    isExpectedMenu: { isMenuForTab($0, item: item) }
                 )
                 .contextMenu {
                     let closeTitle = String(localized: "Close Panel", table: "Interface")
@@ -580,11 +582,20 @@ struct DockTabGroupView: View {
         }
     }
 
+    private func isMenuForTab(_ menu: NSMenu, item: DockItem) -> Bool {
+        guard manager.selectedProject === project,
+              project.dock.contextTarget == item,
+              project.dock.group(containing: item) != nil else { return false }
+        let title = item.tabID == nil
+            ? String(localized: "Close Panel", table: "Interface")
+            : String(localized: "Close", table: "Interface")
+        return menu.items.contains { $0.accessibilityLabel() == title }
+    }
+
     private func handleMenuKeyDown(_ menu: NSMenu, _ event: NSEvent, for item: DockItem) -> Bool {
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         guard modifiers == [.command], event.charactersIgnoringModifiers?.lowercased() == "w",
-              project.dock.contextTarget == item, project.dock.group(containing: item) != nil
-        else { return false }
+              isMenuForTab(menu, item: item) else { return false }
         let title = item.tabID == nil
             ? String(localized: "Close Panel", table: "Interface")
             : String(localized: "Close", table: "Interface")
