@@ -1,11 +1,43 @@
 version = 1
-current_task_id = "P1-T1"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
 title = "修正不连续选择的锚点范围扩选"
-status = "in_progress"
+status = "pending"
 plan = "plan-p1.md#p1-t1"
+commit = ""
+note = "用户要求先全面审查 VS Code 源码，仅更新计划；本阶段停止实现。"
+
+[[tasks]]
+id = "P1-T2"
+title = "树刷新与折叠保持稳定身份"
+status = "pending"
+plan = "plan-p1.md#p1-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T3"
+title = "统一紧凑目录分段与命中区域"
+status = "pending"
+plan = "plan-p1.md#p1-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T4"
+title = "对齐共享树行视觉与无障碍状态"
+status = "pending"
+plan = "plan-p1.md#p1-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P1-T5"
+title = "统一树键盘焦点与原生输入交接"
+status = "pending"
+plan = "plan-p1.md#p1-t5"
 commit = ""
 note = ""
 
@@ -34,6 +66,22 @@ commit = ""
 note = ""
 
 [[tasks]]
+id = "P2-T4"
+title = "统一文件选择与 Finder 内外拖放目标"
+status = "pending"
+plan = "plan-p2.md#p2-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T5"
+title = "统一文件浏览与原生焦点恢复"
+status = "pending"
+plan = "plan-p2.md#p2-t5"
+commit = ""
+note = ""
+
+[[tasks]]
 id = "P3-T1"
 title = "统一 Git Changes 状态与 Diff 打开路径"
 status = "pending"
@@ -46,6 +94,46 @@ id = "P3-T2"
 title = "统一 Git Graph 展开浏览和菜单目标"
 status = "pending"
 plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T3"
+title = "实现 Git Changes 资源多选与批量动作"
+status = "pending"
+plan = "plan-p3.md#p3-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T4"
+title = "对齐 Git Graph 提交详情比较与键盘导航"
+status = "pending"
+plan = "plan-p3.md#p3-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T5"
+title = "对齐 Git Graph 轨道颜色与视觉状态"
+status = "pending"
+plan = "plan-p3.md#p3-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T6"
+title = "复核 Git Graph 引用菜单与危险操作"
+status = "pending"
+plan = "plan-p3.md#p3-t6"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T7"
+title = "统一 Git Graph/Changes 分页刷新与身份恢复"
+status = "pending"
+plan = "plan-p3.md#p3-t7"
 commit = ""
 note = ""
 
@@ -67,8 +155,56 @@ note = ""
 
 [[tasks]]
 id = "P4-T3"
-title = "整理临时选择并联合验收"
+title = "整理命令面板与 Ctrl+Tab 临时选择"
 status = "pending"
 plan = "plan-p4.md#p4-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T4"
+title = "实现 Dock 标签多选与范围锚点"
+status = "pending"
+plan = "plan-p4.md#p4-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T5"
+title = "实现多标签批量拖动与合法复制移动"
+status = "pending"
+plan = "plan-p4.md#p4-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T6"
+title = "统一 Dock 标签右键关闭与专属视觉"
+status = "pending"
+plan = "plan-p4.md#p4-t6"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T7"
+title = "统一多窗口多组原生焦点交接"
+status = "pending"
+plan = "plan-p4.md#p4-t7"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T1"
+title = "跨领域实际事件链与文件 Git 结果验收"
+status = "pending"
+plan = "plan-p5.md#p5-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T2"
+title = "多主题无障碍极端容量与性能验收"
+status = "pending"
+plan = "plan-p5.md#p5-t2"
 commit = ""
 note = ""
