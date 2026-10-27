@@ -100,7 +100,8 @@ final class FileTreeModel {
     /// Expand the current tree to an existing file without touching its editor.
     /// A hidden ancestor is revealed only in this Files tree, not in Settings.
     func revealFile(
-        _ path: String, isCurrentTarget: () -> Bool = { true }
+        _ path: String, automatically: Bool = false,
+        isCurrentTarget: () -> Bool = { true }
     ) async -> Bool {
         let root = rootPath
         let scope = workspaceScope
@@ -112,7 +113,9 @@ final class FileTreeModel {
         else { return false }
         let relative = String(path.dropFirst(root.count + (root.hasSuffix("/") ? 0 : 1)))
         let parts = relative.split(separator: "/")
-        guard !parts.isEmpty, parts.count <= 32 else { return false }
+        guard !parts.isEmpty, parts.count <= 32,
+              !automatically || showExcluded || Self.isVisible(path, in: root, excluding: settings.filesExclude)
+        else { return false }
         do {
             let physicalRoot = try await Self.physicalDirectory(
                 root, backend: backend, scope: scope

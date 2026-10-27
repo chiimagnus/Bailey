@@ -3,6 +3,40 @@ import XCTest
 
 @MainActor
 final class WorkspaceDockUITests: XCTestCase {
+    func testDockFileTabSwitchRevealsOneSelectedExplorerRow() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("one.swift", text: "let one = 1\n")
+        let second = try fixture.file("two.swift", text: "let two = 2\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let window = app.windows.firstMatch
+        let firstRow = WorkspaceUITestSupport.fileRow(first, in: window)
+        let secondRow = WorkspaceUITestSupport.fileRow(second, in: window)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 15))
+        XCTAssertTrue(secondRow.waitForExistence(timeout: 15))
+
+        firstRow.click()
+        secondRow.click()
+        let firstTab = WorkspaceUITestSupport.fileTab(first, in: window)
+        let secondTab = WorkspaceUITestSupport.fileTab(second, in: window)
+        XCTAssertTrue(firstTab.waitForExistence(timeout: 10))
+        XCTAssertTrue(secondTab.waitForExistence(timeout: 10))
+
+        for (tab, selected, other) in [
+            (firstTab, firstRow, secondRow),
+            (secondTab, secondRow, firstRow),
+            (firstTab, firstRow, secondRow)
+        ] {
+            tab.click()
+            let expected = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "selected == true"), object: selected
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [expected], timeout: 8), .completed)
+            XCTAssertFalse(other.isSelected, "The previous Explorer row must not remain selected")
+        }
+        XCTAssertEqual(try Data(contentsOf: first), Data("let one = 1\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("let two = 2\n".utf8))
+    }
+
     func testCrossGroupDragReleaseCannotSelectDestinationButRealClickCan() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("unchanged.swift", text: "original bytes\n")

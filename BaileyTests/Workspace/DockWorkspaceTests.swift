@@ -54,6 +54,80 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertEqual(project.focusedContent?.id, tab.content.id)
     }
 
+    func testDockSwitchesRevealOnlyTheActiveFileInFiles() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("a.swift")
+        let second = directory.appendingPathComponent("b.swift")
+        try "let a = 1\n".write(to: first, atomically: true, encoding: .utf8)
+        try "let b = 2\n".write(to: second, atomically: true, encoding: .utf8)
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([directory])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let files = try XCTUnwrap(project.dock.group(containing: .files))
+        project.dock.activate(files.id)
+        let synced = await project.syncFiles(isCurrent: { manager.selectedProject === project })
+        XCTAssertNotNil(synced)
+
+        project.openFile(first.path, activating: false)
+        let firstID = try XCTUnwrap(project.selectedTabID)
+        project.openFile(second.path, activating: false)
+        let secondID = try XCTUnwrap(project.selectedTabID)
+        XCTAssertEqual(project.dock.activeGroupID, files.id)
+        project.selectTab(firstID)
+        for _ in 0..<100 where project.fileTree.selectedPath != first.path {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(project.fileTree.selectedPaths, [first.path])
+        XCTAssertEqual(project.fileTree.selectedPath, first.path)
+
+        project.selectTab(secondID)
+        for _ in 0..<100 where project.fileTree.selectedPath != second.path {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(project.fileTree.selectedPaths, [second.path])
+        XCTAssertEqual(project.fileTree.selectedPath, second.path)
+        XCTAssertEqual(project.dock.activeGroup?.selected, .tab(secondID))
+    }
+
+    func testShowingFilesAfterHiddenFileTabRevealsItsLastActiveDocument() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("first.swift")
+        let second = directory.appendingPathComponent("second.swift")
+        try "first\n".write(to: first, atomically: true, encoding: .utf8)
+        try "second\n".write(to: second, atomically: true, encoding: .utf8)
+        let configuration = try XCTUnwrap(DockWorkspaceConfiguration(
+            groupNames: ["projects,files,git"], selectedNames: ["files"],
+            weights: [1], actionNames: ["session", "projects", "files", "git"],
+            edgeThreshold: 0.22
+        ))
+        let project = Project(fallbackName: "same group", workspaceConfiguration: configuration)
+        project.customDirectory = directory.path
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        let synced = await project.syncFiles(isCurrent: { manager.selectedProject === project })
+        XCTAssertNotNil(synced)
+        project.openFile(first.path)
+        project.openFile(second.path)
+        let oldSelected = try XCTUnwrap(project.fileTree.items.first { $0.path == first.path })
+        project.fileTree.select(oldSelected)
+        XCTAssertEqual(project.fileTree.selectedPaths, [first.path])
+        project.dock.select(.files)
+        for _ in 0..<100 where project.fileTree.selectedPath != second.path {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(project.fileTree.selectedPaths, [second.path])
+        XCTAssertEqual(project.fileTree.selectedPath, second.path)
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+    }
+
     func testBrowsingSameGroupMustNotKeepFocusOnHiddenFilesPanel() throws {
         let configuration = try XCTUnwrap(DockWorkspaceConfiguration(
             groupNames: ["projects,files,git"], selectedNames: ["files"],

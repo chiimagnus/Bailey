@@ -34,6 +34,7 @@ final class WorkspaceWindowModel {
             for project in oldValue where !projects.contains(where: { $0 === project }) {
                 project.onSnapshotChange = nil
                 project.onPresentationWindow = nil
+                project.dock.onActiveItemChange = nil
             }
             for project in projects where !oldValue.contains(where: { $0 === project }) {
                 bind(project)
@@ -365,6 +366,52 @@ final class WorkspaceWindowModel {
     private func bind(_ project: Project) {
         project.onSnapshotChange = { [weak self] in self?.requestSave() }
         project.onPresentationWindow = { [weak self] in self?.attachedWindow }
+        project.dock.onActiveItemChange = { [weak self, weak project] previous, _ in
+            guard let self, let project else { return }
+            self.autoRevealActiveFile(in: project, previous: previous)
+        }
+    }
+
+    /// A changed active editor selects its matching Files row without changing input focus.
+    func autoRevealActiveFile(in project: Project, previous: DockItem? = nil) {
+        guard !isClosed, selectedProject === project,
+              let files = project.dock.group(containing: .files), files.selected == .files,
+              let context = project.panelContext,
+              project.fileTree.syncedTarget(for: context) != nil,
+              project.fileTree.renamingPath == nil, project.fileTree.draft == nil
+        else { return }
+        let file: FileTab
+        let returningToFiles: UUID?
+        if case .file(let active)? = project.focusedContent {
+            file = active
+            returningToFiles = nil
+        } else if project.dock.activeGroup?.selected == .files,
+                  case .tab(let id)? = previous,
+                  case .file(let active)? = project.tabs.first(where: { $0.id == id })?.content {
+            file = active
+            returningToFiles = id
+        } else { return }
+        guard file.workspaceIdentity == context.identity.workspace else { return }
+        let path = file.path
+        let revision = context.connectionRevision
+        Task { [weak self, weak project] in
+            guard let self, let project else { return }
+            _ = await project.fileTree.revealFile(path, automatically: true) {
+                guard !self.isClosed, self.selectedProject === project,
+                      let current = project.panelContext,
+                      current.identity == context.identity,
+                      current.connectionRevision == revision,
+                      project.fileTree.syncedTarget(for: current) != nil,
+                      project.fileTree.renamingPath == nil, project.fileTree.draft == nil
+                else { return false }
+                if let returningToFiles {
+                    return project.dock.activeGroup?.selected == .files
+                        && project.selectedTabID == returningToFiles
+                }
+                guard case .file(let active)? = project.focusedContent else { return false }
+                return active === file
+            }
+        }
     }
 
     private func makeProject() -> Project {

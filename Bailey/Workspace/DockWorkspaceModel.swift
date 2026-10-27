@@ -381,6 +381,7 @@ final class DockWorkspaceModel {
     private(set) var contextTarget: DockItem?
     @ObservationIgnored var onSnapshotChange: (() -> Void)?
     @ObservationIgnored var onDeactivate: ((DockItem) -> Void)?
+    @ObservationIgnored var onActiveItemChange: ((DockItem?, DockItem?) -> Void)?
 
     init(configuration: DockWorkspaceConfiguration = .standard) {
         self.configuration = configuration
@@ -407,7 +408,11 @@ final class DockWorkspaceModel {
         activeGroupID = (groupID ?? activeGroupID).flatMap { updated.group(id: $0)?.id }
             ?? updated.groups.first?.id
         root = updated
-        if previous != activeGroup?.selected, let previous { onDeactivate?(previous) }
+        let current = activeGroup?.selected
+        if previous != current {
+            if let previous { onDeactivate?(previous) }
+            onActiveItemChange?(previous, current)
+        }
     }
 
     func activate(_ groupID: UUID) {
@@ -416,6 +421,9 @@ final class DockWorkspaceModel {
         let previous = activeGroup?.selected
         activeGroupID = groupID
         if let previous { onDeactivate?(previous) }
+        if previous != activeGroup?.selected {
+            onActiveItemChange?(previous, activeGroup?.selected)
+        }
     }
 
     func group(containing item: DockItem) -> DockGroup? { root.group(containing: item) }

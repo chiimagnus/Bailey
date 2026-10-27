@@ -1141,6 +1141,12 @@ final class FileTreeTests: XCTestCase {
         XCTAssertFalse(tree.items.contains { $0.path == target.path })
         XCTAssertFalse(tree.showExcluded)
 
+        let automatic = await tree.revealFile(target.path, automatically: true)
+        XCTAssertFalse(automatic, "Auto Reveal must respect the configured exclusions")
+        XCTAssertNil(tree.selectedPath)
+        XCTAssertTrue(tree.selectedPaths.isEmpty)
+        XCTAssertFalse(tree.showExcluded)
+
         let revealed = await tree.revealFile(target.path)
         XCTAssertTrue(revealed)
         XCTAssertEqual(tree.selectedPath, target.path)

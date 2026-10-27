@@ -422,6 +422,8 @@ struct ToolPanelView: View {
 
     private func performSync() async {
         guard let project = manager.selectedProject else { return }
-        _ = await project.syncFiles(isCurrent: { manager.selectedProject === project })
+        let wasSynced = project.panelContext.flatMap { project.fileTree.syncedTarget(for: $0) } != nil
+        let synced = await project.syncFiles(isCurrent: { manager.selectedProject === project })
+        if !wasSynced, synced != nil { manager.autoRevealActiveFile(in: project) }
     }
 }

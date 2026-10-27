@@ -207,7 +207,6 @@ private struct FileTreeScrollView: View {
                         FileTreeRow(
                             model: model, git: git, item: item,
                             sshHost: sshHost,
-                            currentFilePath: currentFilePath,
                             openFile: openFile,
                             listFocused: keyboardFocused && isActive && controlActiveState == .key,
                             focusKeyboard: {
@@ -376,7 +375,6 @@ private struct FileTreeRow: View {
     let git: GitStatusModel
     let item: FileTreeModel.Item
     let sshHost: String?
-    let currentFilePath: String?
     let openFile: (String, Bool) -> Void
     let listFocused: Bool
     let focusKeyboard: () -> Void
@@ -415,9 +413,6 @@ private struct FileTreeRow: View {
         return extending || toggling
     }
 
-    /// Current file display does not imply tree selection or keyboard focus.
-    private var isCurrent: Bool { !item.isDirectory && item.path == currentFilePath }
-
     private var gitDecoration: GitStatusModel.FileDecoration? {
         git.fileDecoration(for: item.path, isDirectory: item.isDirectory)
     }
@@ -444,7 +439,7 @@ private struct FileTreeRow: View {
             }
         } else if isRenaming {
             TreeRowSurface(
-                depth: item.depth, scale: fontScale, displayed: isCurrent,
+                depth: item.depth, scale: fontScale,
                 isSelected: isSelected, listActive: listFocused,
                 contextRing: hasContextRing
             ) { _, layout in
@@ -685,7 +680,7 @@ private struct FileTreeRow: View {
             }
         } else {
             TreeFileRow(
-                row: displayRow, scale: fontScale, displayed: isCurrent,
+                row: displayRow, scale: fontScale,
                 isSelected: isSelected,
                 listActive: listFocused,
                 focusRing: hasKeyboardCursor, contextRing: hasContextRing,
