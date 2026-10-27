@@ -12,6 +12,8 @@
 `explorerViewer.ts` 的真实压缩段以及 `fileActions.ts` 的文件操作。
 使用 VS Code 语义，不移植 DOM 事件系统、Preview 标签生命周期或 ContextKey 服务。
 菜单在 Bailey 必须使用 NSMenu/SwiftUI 原生机制。
+本轮独立依据、明确保留的差异和逐任务删除清单见 [source-review.md](source-review.md)，
+不继承既有 audit 的判断或运行结果。
 
 **Bailey 现有入口与副作用：**
 `FileTreePanel` → `ToolPanelView` 的 onOpenFile/onCommand
@@ -27,6 +29,8 @@
 Files、Editor、Terminal 与 Git 的原生文本输入不得互相夺焦。
 
 ---
+
+<a id="p2-t1"></a>
 
 ## P2-T1 收敛 Files 浏览与打开事件链
 
@@ -75,6 +79,8 @@ Files、Editor、Terminal 与 Git 的原生文本输入不得互相夺焦。
 
 ---
 
+<a id="p2-t2"></a>
+
 ## P2-T2 收敛 Files 系统 Edit 与右键操作目标
 
 **上游：**
@@ -100,7 +106,7 @@ Files、Editor、Terminal 与 Git 的原生文本输入不得互相夺焦。
    否则有效 Focus/压缩目录段；编辑器/终端持焦点则继续原生 Copy/Paste。
 2. Red：A/C 多选，右键 A 保持整组、右键集合外 B 仅 B；
    Focus 在集合外但 Selection >1，Edit 仍作用多选；
-   单选 A/Fous B，则作用 B；菜单打开与取消前后，
+   单选 A/Focus B，则作用 B；菜单打开与取消前后，
    Copy/Cut/Paste/Delete/SelectAll、⌘C/⌘X/⌘V/⌘W，
    启用/禁用项都验证唯一真正可执行目标。
 3. Green：只在已有 owner 收敛目标解析，避免
@@ -108,6 +114,13 @@ Files、Editor、Terminal 与 Git 的原生文本输入不得互相夺焦。
    修改行为前追踪 `WorkspaceWindowModel` 到后端实际数据修改、取消与错误。
 4. 保持工作区、真实 Git 状态、SSH 机器路径、远端权限和剪贴板的最终效果；
    删除被替代的平行 target/fallback，不取消真正防写错的校验。
+
+**同任务完成菜单边界：** 当前 `ContextMenuClickView.menuDidBeginTracking` 接收任意菜单通知，
+具体 Files/Dock 的 `handleMenuKeyDown` 再检查菜单项与动作。迁移必须把“本次菜单”绑定与
+结束/卸载撤销一起验证；不能先引入新的目标解析，再等 P2-T3 来使它安全。
+P2-T3 只补真实系统事件、蜂鸣/瞬时反馈和相邻使用方回归，不新建第二套监听。
+菜单内 action 与普通 Edit target 不是同一种解析，不为了函数合并删掉这条区别。
+菜单关闭只清 Context；右键集合外造成的新 Selection 保留，不恢复右键前的旧 Selection。
 
 **验证：** `make test:FileTreeTests,DockWorkspaceTests,PanelContextTests`、
 最小原生 NSMenu/NSHostingView 测试和隔离 `SharedTreeUITests`／
@@ -119,6 +132,8 @@ Files、Editor、Terminal 与 Git 的原生文本输入不得互相夺焦。
 `make build:dev`；同提交更新 `docs/features/files.md`、`docs/ui.md`，一个提交。
 
 ---
+
+<a id="p2-t3"></a>
 
 ## P2-T3 原生菜单跟踪生命周期、快捷键、焦点回交与旧路径清理
 
@@ -144,7 +159,9 @@ Files、Editor、Terminal 与 Git 的原生文本输入不得互相夺焦。
 3. 对出现的根因，在 `ContextMenuClickView` 或
    `TreeKeyboardView` **唯一必要的原生边界**修正；
    菜单外不截获键盘、菜单内只有已启用项可以执行，
-   作用域按 NSWindow 与项目身份，禁止全局监听跨窗口。
+   作用域按 NSWindow 与项目身份；保留唯一必要的 `NSEvent.addLocalMonitorForEvents`，
+   它是进程内监听，必须按事件窗口过滤，并非可改成不存在的“窗口级 monitor API”。
+   禁止系统级全局监听及同一按键的平行命令实现。
 4. 执行/取消/窗口失焦/切项目/SSH 断线/节点已删除/刷新重绑后，
    再次点击/按键不能沿旧菜单执行；与 Dock/context scope 的复用
    必须同源，不为每个 Panel 再造一个 MenuManager。
@@ -161,6 +178,8 @@ Control-click、Shift+F10（支持的原生控件时）、同组/跨组、
 
 ---
 
+<a id="p2-t4"></a>
+
 ## P2-T4 文件拖放/复制/移动与 Selection 目标一致
 
 **上游：** VS Code `explorerViewer.ts` 的 Drag/Drop、
@@ -170,9 +189,9 @@ Tree item / 外部 URI 来源隔离。文件树拖动对象是被真实选中的
 
 **Bailey 锚点：**
 `FileTreeModel.beginDrag/consumeDrag`、`activeDrag`；
-`FileTreePanel.makeDragProvider/receiveInternalDrop/importFromFinder`、
+`FileTreePanel` 的 `makeDragProvider/receiveInternalDrop/importFromFinder` 注入闭包、
 `FileTreeRow` 的 `.onDrag/.onDrop`、
-`WorkspaceWindowModel.performFileTreeCommand`、
+`WorkspaceWindowModel.makeFileTreeDragProvider/receiveFileTreeDrop/performFileTreeCommand`、
 `FinderWindowDrop` 和后端受控 Copy/Move；工具栏独立 Drop。
 
 **任务：**
@@ -185,6 +204,20 @@ Tree item / 外部 URI 来源隔离。文件树拖动对象是被真实选中的
 3. 仅在模型实际 Drag 记录与目标的唯一验证入口收敛路径/集合；
    完成前不提前改变 Selection、Dock activeGroup 或删除源文件；
    Drop 失败/取消/拒绝时撤销临时 drag nonce、保留源数据。
+   现有公开 fileURL 仅注册被拖行的单一 URL，不能据此宣称多选外拖到 Finder 已等价；
+   本任务补齐本机多选的逐项公开 URL 表示，SSH 仍只发布私有类型。
+   采用最低系统已支持的 `NSView.beginDraggingSession(with:event:source:)` +
+   多个 `NSDraggingItem`；本机每个合法源一项公开 URL，私有记录仍只解释一次。
+   在现有树行原生边界接入并替代 `.onDrag` 的单 provider 路径，不并行发起两场拖动；
+   不使用 SDK 中仅 macOS 27 支持的 gesture overload，不提高 15.6 部署目标。
+   只替换拖动呈现/事件边界，内部移动仍复用 `receiveFileTreeDrop` 与文件保护动作。
+   不能把 `.ownProcess` 的完整私有 JSON 原样放进 AppKit 的公开 pasteboard：
+   本机对外只提供合法文件 URL，内部身份由本次本地 drag source 持有，
+   接收原生 `NSDraggingInfo.draggingSource` 后交给同一窗口命令入口验证；SSH 不导出公开 Mac URL。
+   需要迁移内部收包适配时与源端一起替换，不留下 SwiftUI/AppKit 两条内部 Drop 动作。
+   取消/结束/异步 provider 完成分别测试；不能在有效 Drop 解码之前先清掉其 nonce，
+   也不能将拖动操作返回成功当成磁盘操作成功。本机向外导出不删除源。
+   不新增跨窗/跨项目/跨机器内部移动：当前 coordinator/token 的范围明确只支持同一树。
 4. 检查同树、跨窗口/跨项目/跨机器、目标自身或子目录、同名/符号链接、
    外部 Finder/编辑器/WebKit/Ghostty 接收者；
    不用测试机制篡改用户 Finder/剪贴板或远端 master。
@@ -199,6 +232,8 @@ Tree item / 外部 URI 来源隔离。文件树拖动对象是被真实选中的
 
 ---
 
+<a id="p2-t5"></a>
+
 ## P2-T5 浏览文件后原生焦点交接、恢复和编辑器存活
 
 **上游：** VS Code `ResourceNavigator._open` 的 `preserveFocus`；
@@ -208,7 +243,7 @@ Tree item / 外部 URI 来源隔离。文件树拖动对象是被真实选中的
 
 **Bailey 锚点：** `FileTreePanel.focusSelectedRow`、
 `TreeKeyboardView`、`DockGroupFocusReader`、
-`WorkspaceDockModel.activeGroupID`、
+`DockWorkspaceModel.activeGroupID`、
 `WorkspaceWindowModel` 的 focused scene/input handoff；
 `Project.openFile`、`FileTab.autoSaveOnFocusLoss`、
 `ContentView`、各原生编辑器和 Ghostty host 的焦点报告。
@@ -221,11 +256,28 @@ Tree item / 外部 URI 来源隔离。文件树拖动对象是被真实选中的
    双击/Return 进入编辑器；回 Files 切换时 firstResponder 回到当前游标；
    查找栏、rename/new TextField、中文 IME、Ctrl+Tab/Palette/Sheet、
    后台窗口和已移走的 Dock 组不会把焦点归给隐藏内容。
-3. Green：从触发事件而不是 SwiftUI 视图重渲染交接输入；
+3. Green：在既有 `WorkspaceWindowModel` 内收敛此链的跨组件许可/恢复；
+   `ToolPanelView`/`DockTabGroupView` 装配所属 project/group/item 与
+   实际挂载的聚焦、归属判断闭包，仍用 `TreeKeyboardOwner` 执行原生动作。
+   Git 内 Changes/Graph 的 `lastKeyboardRegion` 留在 Git；Browser 的地址/网页留在 Browser。
+   不新建 FocusManager/协议层，不复制可写 activeGroup/firstResponder。
+   从触发事件而不是 SwiftUI 视图重渲染交接输入；
    延迟请求要核对当前窗口/可见组，不能用重复 async DispatchQueue 补丁。
    浏览文件失败、保存失败、窗口关闭或远程断线保留有效原始内容。
-4. 同 task 删除重复、不再可达的备用 FocusState/后挂载重试路径；
+4. 同 task 删除 `activeTreeResponder` 的全窗口子视图搜索，
+   及 `ownsActiveResponder/isStableWorkspaceResponder` 对本链控件类型、
+   `DockGroupFocusView` 几何中心和停车容器的业务识别；归属由所属适配报告。
+   Files `focusSelectedRow` 的局部选游标/等待首行保留，
+   其中窗口/Palette 自动聚焦许可不再和窗口重复判定。
+   `restoreFocusAfterCommandPalette` 复用当前有效目标，不保留遍历式备用恢复路径。
+   同 task 删除重复、不再可达的备用 FocusState/后挂载重试路径；
    不创建新的 App-wide FocusManager 或对所有 NSView 的遍历规则。
+
+**不可删错的原生时序：** `SourceTextEditor` 的挂载回调、Diff 的 layout pendingFocus、
+终端停车后布局激活和 Palette 搜索框移除事务确有不同原生生命周期。
+只删除已被新接入替代的重试，不以“禁用 DispatchQueue”为验收。
+挂载未就绪时保留一个当前请求，挂载/布局回调重试，成功或目标失效即结束；
+不为每层再叠 generation、超时或轮询。P4-T7 承接其它内容的迁移，不重新设计本链。
 
 **验证：** `FileTabPersistenceTests`、`NativePaneRetentionIntegrationTests`、
 `DockWorkspaceTests`、`WorkspaceRetentionUITests`、
@@ -242,13 +294,13 @@ Tree item / 外部 URI 来源隔离。文件树拖动对象是被真实选中的
 
 - 在每 task 完成后定点执行相应类并逐步扩大到 Files 与窗口相关宿主全集；
   执行 `make build:dev`，实际签名检查；共用菜单改动补 Git/Dock 菜单宿主和 UI。
-- 实机核对 `vscode-source-audit.md` 中 Files 的单击/双击/多选/目录压缩/
+- 实机核对 `source-review.md` 中 Files 的单击/双击/多选/目录压缩/
   右键菜单/键盘/拖动/复制/保存与用户最终结果；
   后台刷新/断线与两个窗口没有错误命令。
 - 不因以前的测试曾通过而跳过当前真实 E2E；
   不因无法无损备份系统富类型剪贴板就破坏用户内容；
   不可实测项用明确 Deferred 证据保留在任务/审计。
-- 验证所有 task 的 Git 原子提交和最新 docs；运行
+- 验证各 task 的 Git 原子提交或已验收无变更证据和最新 docs；运行
   `feature_tool.py phase-complete ... --phase p2`，
   立即调用 `plan-task-auditor` 审核 `audit-p2.md`；
   Go 才进入 P3。

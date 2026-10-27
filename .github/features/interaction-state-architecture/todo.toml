@@ -7,7 +7,7 @@ title = "修正不连续选择的锚点范围扩选"
 status = "pending"
 plan = "plan-p1.md#p1-t1"
 commit = ""
-note = "用户要求先全面审查 VS Code 源码，仅更新计划；本阶段停止实现。"
+note = "2026-10-27 独立执行前源码复核；仅修订计划，未实现/运行 Red。当前依据 source-review.md，不沿用既有 audit。"
 
 [[tasks]]
 id = "P1-T2"
@@ -171,7 +171,7 @@ note = ""
 
 [[tasks]]
 id = "P4-T5"
-title = "实现多标签批量拖动与合法复制移动"
+title = "核销多标签批量拖动与 Move 边界"
 status = "pending"
 plan = "plan-p4.md#p4-t5"
 commit = ""

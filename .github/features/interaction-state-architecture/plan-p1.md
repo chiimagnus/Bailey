@@ -8,7 +8,7 @@
 `listWidget.ts` 的 `Trait/SelectionTrait/KeyboardController/MouseController/changeSelection/DefaultStyleController`，
 `abstractTree.ts` 的 Tree Trait/稳定 ID，`explorerViewer.ts` 的 compressed navigation，
 `explorerView.ts` 的 `getContext/onContextMenu`。
-逐文件/符号/许可证及 Bailey 映射见 [源码证据](vscode-source-audit.md)。
+逐文件/符号/许可证及 Bailey 映射见 [本轮独立源码复核](source-review.md)。
 
 **本地链：** `Bailey/Files/FileTreeModel.swift` 的 `selectedPath`（Focus）、
 `selectedPaths`（Selection）、`selectionAnchorPath`、`selectedCompactPath`、
@@ -18,8 +18,9 @@
 不要增加平行状态模型。Settings 的 SwiftUI 原生 List 不参与本阶段。
 
 **当前证据：** `selectRange(to:)` 当前直接将 `selectedPaths` 覆盖为 Anchor→目标区间；
-前一轮临时 Red 用例在独立临时文件上触发 7 条断言失败，**测试与实现修改均已回撤**，
-不能称为已修复；本阶段重新建立正式测试基线。
+鼠标 Shift 与键盘 Shift 共用它。上游鼠标走 `MouseController.changeSelection`，
+工作台 Shift+方向键却走 `listCommands.ts:expandMultiSelection`，不能合并成同一个算法。
+本轮只读源码，未运行缺陷测试；不沿用以前的 Red 数字作为本轮证据。
 
 **验收门禁：** 所有可选行及实际命令目标必须与 Focus/Selection/Anchor 一致；
 折叠/刷新/重排时稳定 identity；右键不制造打开动作；
@@ -27,6 +28,8 @@ Hover/Selected/Focused/Context 的背景与描边不出现两个错误的来源�
 AX 选择只代表真实 Selection。完成 P1 后才允许 P2 以这些事实派发文件操作。
 
 ---
+
+<a id="p1-t1"></a>
 
 ## P1-T1 修正不连续选择的锚点范围扩选
 
@@ -36,21 +39,30 @@ AX 选择只代表真实 Selection。完成 P1 后才允许 P2 以这些事实�
   不消掉其它相隔的已选行。
 - Bailey `FileTreeModel.select(_:extending:toggling:componentPath:)`、
   `moveSelection(by:extending:)` 最终都调用 `selectRange(to:)`，
-  后者直接覆盖整个 `selectedPaths`；修复拥有不变量的此处，而非让 View 补记选择集合。
+  后者直接覆盖整个 `selectedPaths`；在 FileTreeModel 内分开两种动作，
+  而非让 View 补记选择集合，也不是让所有入口套同一个鼠标算法。
   `FileTreeRow.selectForClick` 只翻译修饰键、传递意图。
 - 单选、不连续选择、反向区间、普通方向键和 Escape 的当前测试
   在 `BaileyTests/Files/FileTreeTests.swift`。
 
 **实现顺序：**
-1. 先读上游 `changeSelection` 的合并/相对补集逻辑并以 VSCodium
-   空/单/不连续选区确认真实表现；记录源版本和菜单状态是否受影响。
+1. 同时读 `changeSelection`、`listCommands.ts:expandMultiSelection` 及其注册调用，
+   以同版本 VS Code/VSCodium 复核；没有对应二进制时，源码推演与真实 UI 验收分开记录。
 2. Red：建立 6+ 个真实文件，按顺序选 A、⌘选 C、Shift 选 E
    期望 A/C/D/E；Shift 回缩到 D 期望 A/C/D，移到 B 期望 A/B/C；
    Anchor 被 ⌘ 取消后仍存在其它选择岛的情况；不制造虚构 Anchor。
    正/反方向、从列表空白聚焦、选中集合外 Focus、
-   Shift+↑/↓、普通↑/↓、⌘A、Esc、目录和压缩行分别断言。
-3. Green：在 `selectRange(to:)` 只移除旧锚点连通区间并并入新范围；
-   维持当前可见行顺序、已有路径身份及 fallback。
+   普通↑/↓、⌘A、Esc、目录和压缩行分别断言。
+   **键盘另表：** Selection={A,C}、Focus=C 时 Shift+↓得到 {A,C,D}，
+   再 Shift+↑得到 {A,C}；Focus 已在首尾、Selection 为空、Focus 不在集合时分别验证。
+   上游按“新 Focus 是否已选”移除旧 Focus 或加入新 Focus，不从 Anchor 重建范围。
+   当前测试中 `moveSelection(by:2,extending:true)` 不是一次真实按键；
+   当前生产键盘调用只有 ±1，测试用两次真实步进，不保留为了旧测试的兼容算法。
+3. Green：鼠标在 `selectRange(to:)` 只移除旧锚点连通区间并并入新范围；
+   键盘在 `moveSelection` 按 previous/new Focus 调整集合。
+   Anchor 在普通导航/⌘点击时更新，Esc 与全选后按明确规则清理；
+   上游 ⌘A 清 Anchor，不继续沿用 Bailey 当前全选后写 Focus 的隐式锚点。
+   保留可见行顺序与路径身份；不增加新 fallback。
    不额外保存“上次选择范围”或添加业务 Coordinator。
 4. Refactor：检查 View/模型是否另有重复 Range 判定，移除本 task 真正被取代的重复逻辑；
    保留源行为所需的命令集合 `contextSelection/selectedOperationPaths`，不可顺手改写文件操作。
@@ -69,6 +81,8 @@ AX 选择只代表真实 Selection。完成 P1 后才允许 P2 以这些事实�
 
 ---
 
+<a id="p1-t2"></a>
+
 ## P1-T2 将刷新、折叠和移动后的 Focus/Selection/Anchor 约束于稳定身份
 
 **源码与根因：**
@@ -80,6 +94,13 @@ AX 选择只代表真实 Selection。完成 P1 后才允许 P2 以这些事实�
   SSH `panelIdentity/connectionRevision` 必须分别核对。
   无须把 `FileTreeModel` 重写成 VS Code 的 JS Tree。
 
+**明确保留的差异：** 上游 `TreeNodeList.splice` 与 Explorer 的
+`replaces a selection hidden in a collapsed folder` 测试证明：折叠后模型仍保留隐藏 Selection。
+Bailey 当前 `rebuild` 对可见路径求交，`testFileTreeMultiSelectionTracksCollapseRenameAndWorkspaceSwitch`
+明确要求折叠清掉子项 Selection。本 Feature 保留这条已文档化产品契约，
+不能把它写成“完全复刻了 VS Code identity”；折叠、过滤、删除分别测试，
+不为模拟隐藏节点另建第二棵树或无用持久状态。
+
 **实现顺序：**
 1. 阅读 `FileTreeModel` 的 root/scope 同步、刷新、目录折叠、filter/exclude、
    创建/重命名/删除和旧连接恢复路径；沿 `ToolPanelView` 到当前机器绑定核实每个入口。
@@ -88,7 +109,8 @@ AX 选择只代表真实 Selection。完成 P1 后才允许 P2 以这些事实�
    同 SSH 机器同根断线重连与换远端身份；
    保持与撤销的条件分别写断言。检查 Anchor 指向消失项时不会随机扩选。
 3. 在唯一 FileTreeModel owner 收敛身份过滤和路径重映射：
-   同一有效实体保留；不可见/删除/换 root/机器清理；
+   同一有效路径保留；不可见/删除/换 root/机器按上述 Bailey 规则清理；
+   文件 identity 是作用域内路径，不添加 inode/全局 UUID 来区分同路径重建。
    SSH 连代改变但尚未验证新列表时保留可信显示、阻止写操作，
    成功读取后再剔除失效行，不能提前清空视觉。
    不以 `hasCurrentTarget` 临时 View 判断推断选择逻辑。
@@ -104,6 +126,8 @@ AX 选择只代表真实 Selection。完成 P1 后才允许 P2 以这些事实�
 必要时 `docs/features/ssh.md`；一个原子提交。
 
 ---
+
+<a id="p1-t3"></a>
 
 ## P1-T3 对齐紧凑目录各段、按钮、留白和拖动的命中语义
 
@@ -127,12 +151,20 @@ AX 选择只代表真实 Selection。完成 P1 后才允许 P2 以这些事实�
 4. 检查 Finder/内部 DnD 是否也走同一个有效目录身份；
    不改变其安全 Copy/Move 语义，本任务只处理命中，实际传输由 P2-T4。
 
+**不能遗漏的压缩语义：** 上游 `getContext` 在多选压缩行时会展开 controller.items，
+并非简单返回末级路径。Bailey 保留“明确段优先，整行末级”的既有规则，
+父子重复目标由现有 `performFileOperation` 归并；测试压缩段与其它行多选的组合。
+Git Changes/历史树目前只传普通 `TreeFolderRow`，并未接入 Files 的 `compactSegment`；
+同任务补齐可观察的分段命中与身份，不把“共用 TreeRow”当作已经支持。
+
 **验证：** `FileTreeTests` 的紧凑目录模型/AX/像素以及
 `SharedTreeUITests` 的每段原生右键、首尾长行、水平滚动、缩放与多语言；
 `make build:dev`；保持 Git Changes/History 同一共享树行不破坏原命中。
 **文档/提交：** `docs/features/files.md` 和真正变更时的 `docs/ui.md`；单一提交。
 
 ---
+
+<a id="p1-t4"></a>
 
 ## P1-T4 统一树行视觉状态优先级和 AX，保留独立领域显示意图
 
@@ -152,7 +184,8 @@ AX 选择只代表真实 Selection。完成 P1 后才允许 P2 以这些事实�
    Focus+Selection、Displayed+Selection、Hover+Context、菜单取消之后
    获取可观察状态（可用 AX、最小像素采样/用户允许时截图）。
    将“用户先前反对的错焦点外框”与“正常 Focus+Selected”分开；
-   若仍有会改变 UX 的冲突，只完成可安全验证的共享事实并记录未定视觉决策。
+   本轮目标保持 `docs/ui.md` 已规定的菜单期仅描边：这是 Bailey 与上游的明确差异，
+   不是待执行者自行选择的悬案。没有新的用户决定，不改成上游保留底色的视觉。
 2. 将经过确认的底色/描边规则只在
    `TreeRowStyle.RowHighlightStyle/TreeRowSurface` 和当前 Theme owner 编码；
    Files/Changes/Graph 只传语义，不复制 `.background` 与 `.overlay` 决策。
@@ -172,6 +205,8 @@ AX 选择只代表真实 Selection。完成 P1 后才允许 P2 以这些事实�
 
 ---
 
+<a id="p1-t5"></a>
+
 ## P1-T5 原生树键盘所有权、可见滚动与特殊输入回归
 
 **源码：** VS Code `KeyboardController`、`TreeNodeListMouseController`、
@@ -181,12 +216,16 @@ Bailey `TreeKeyboardView/TreeKeyboardHost`、
 `WindowRootView` 与 `DockGroupFocusReader` 是真实交接路径。
 
 **实现：** 区分树行 cursor 与 NSWindow.firstResponder；
-Files 实际前台时 ↑↓/←→/Home/End（若产品行为有覆盖）、
+Files 实际前台时 ↑↓/←→ 仍按既有契约；补齐上游已有的 Home/End 和 PageUp/PageDown，
+Home/End 聚焦首尾可见非 draft 行，分页按实际视口可见行数移动并钳制边界，
+均只改 Focus/Anchor、不打开文件或改 Selection；
 Space 浏览、Return 激活、Escape 清 Selection；
 rename/new file TextField/IME 接管时不得吞键；
 切工具/分屏后不以旧键盘宿主作为仍有效焦点；
 回到 Files 恢复有效 cursor 而非打开文件。
-先以既有行为作为事实核对，真正缺失的按键再依据上游和 UI 对照补齐；
+只在树实际 firstResponder 的原生输入入口处理，不给系统主菜单重复注册按键；
+视口信息在现有滚动宿主取得，不逐行读取屏幕几何。P2-T5 再迁移本链窗口许可，
+本 task 不预建第二套协调器；
 重挂载焦点交接不要追加 `DispatchQueue.main.async` 补丁链。
 
 **验收：** `FileTreeTests` + `DockWorkspaceTests`、
@@ -206,9 +245,9 @@ rename/new file TextField/IME 接管时不得吞键；
 1. `make test:FileTreeTests,DockWorkspaceTests,PanelContextTests`，
    再运行具体影响的 Git 共享树行宿主类和对应隔离 GUI；
    `make build:dev`、完整签名后置步骤、`git diff --check`。
-2. 对照 `vscode-source-audit.md` 的 Files 状态/视觉/AX/身份/容量/异常表逐项核销；
+2. 对照 `source-review.md` 的 Files 状态/视觉/AX/身份/容量/异常表逐项核销；
    不是只验某个 Shift 单元测试通过。
-3. 检查全部 task 已提交、提交与 `todo.toml` 对应、文档 owner 已更新且无遗留双轨。
+3. 检查各 task 的提交或已验收无变更证据与 `todo.toml` 对应，文档 owner 已更新且无遗留双轨。
 4. 运行 `feature_tool.py phase-complete ... --phase p1`，使用
    `plan-task-auditor` 独立审查 `audit-p1.md`；Go 才进入 P2。
 5. 未能实测的 macOS 15.6/触控板/GUI 争用/Windows SSH/大容量组合

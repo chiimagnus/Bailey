@@ -15,7 +15,9 @@
 - Git Graph 扩展 `web/main.ts:observeTableEvents/observeKeyboardEvents/loadCommitDetails`、
   `web/graph.ts:Graph.loadCommits/render`、`web/contextMenu.ts:show/close/refresh`、
   `web/styles/main.css` 的行状态；
-  `src/gitGraphView.ts` 的事件→Git 操作/差异消息路由。
+  `src/gitGraphView.ts` 的事件→Git 操作/差异消息路由，
+  `src/dataSource.ts:getCommitComparison/execDiff` 的两端数据；
+  VS Code `extensions/git/src/commands.ts:stage/unstage/clean` 的合法资源过滤。
   **扩展许可证禁止分发衍生源代码：只吸收需求/行为，独立实现 native Swift。**
 
 **Bailey 真源：** `GitStatusModel` 负责仓库/Worktree/SSH Git 数据、
@@ -23,6 +25,8 @@
 Graph 游标/详情展开/菜单；`CommitGraphLayout` 与
 `GitGraphPalette` 维护图谱的真实拓扑和颜色，DiffTab/Project 负责已展示内容。
 本阶段不创建统一 Files+Git SelectionStore，也不重新实现 Git backend。
+“不重写 backend”不等于禁止为新增比较补充真实 Git 查询。
+独立复核与任务删除清单见 [source-review.md](source-review.md)。
 
 **状态不变量：** 同一仓库相对路径在 `staged/unstaged/merge` 属不同 Git 对象；
 `repoRoot/selectionScope` 及真实机器/连接必须参与身份。
@@ -32,13 +36,15 @@ Graph 游标/详情展开/菜单；`CommitGraphLayout` 与
 
 ---
 
+<a id="p3-t1"></a>
+
 ## P3-T1 Git Changes 游标、明确选择、Diff 浏览和输入框隔离
 
 **源码证据：**
 - `scmViewPane.ts:createTree` 以 SCMInput/SCMActionButton/Repo/ResourceGroup/
   ResourceFolder/Resource 类型区分键盘和打开动作，
   `open` 只对可打开资源执行真实 Diff；
-  输入框会取得原生焦点并清除树游标。
+  输入框有自己的输入焦点；这不等于必须销毁保留的树游标，失焦描边应消失。
 - `onDidActiveEditorChange` 的 autoReveal 是有条件的显式同步，
   不是任意 `displayed` 值变化就抢焦点。
 
@@ -76,6 +82,8 @@ Graph 游标/详情展开/菜单；`CommitGraphLayout` 与
 确实改变公共视觉才更新 `docs/ui.md`；一个提交。
 
 ---
+
+<a id="p3-t2"></a>
 
 ## P3-T2 Graph 提交/历史文件/展开与菜单上下文目标
 
@@ -123,6 +131,8 @@ Graph 游标/详情展开/菜单；`CommitGraphLayout` 与
 
 ---
 
+<a id="p3-t3"></a>
+
 ## P3-T3 Git Changes 资源多选、范围锚点和批量动作
 
 **这是上游源码明确揭示的独立缺口：**
@@ -143,18 +153,36 @@ UI 的 stage/unstage/discard 按钮与独立冲突处理。
 **步骤：**
 1. 对照上游 Tree List 的多选/Anchor、SCM group-specific action runner，
    确定 Bailey 的最小 ChangeSelection 集合（按 repo+stageSection+path 唯一标识）；
-   Git TextField、目录和历史 Graph 节点不进入可文件批量操作的同一集合。
+   Git TextField、标题按钮和历史 Graph 节点不进入资源集合；
+   **目录节点可参与选择**，执行时展开为当前过滤/分组下的后代资源并去重，
+   不是把目录 path 直接传给 Git 递归处理。与上游 `ResourceTree.collect` 一致，
+   也守住 Bailey 只操作当前匹配文件的契约。
    允许 list/tree 当前可见行上的 ⌘ 切换与 Shift 范围选择，保持一个键盘游标。
 2. Red：在真实 Git 仓库建立 5+ staged/unstaged/conflict/untracked 条目，
    选 A/C→Shift E→缩到 D、跨分组/同名路径/目录；
-   方向键只移动 Focus、右键选区内保留组选/选区外单选、
+   方向键只移动 Focus；鼠标 Shift 与键盘 Shift 按 P1-T1 的两个算法分别验证。
+   **SCM 右键不同于 Explorer：** 上游 `onListContextMenu` 不改 Selection，
+   ActionRunner 在命中 Selection 内时操作集合，在外时仅操作 context；取消后旧集合仍在。
+   不再要求右键集合外强行单选。
    菜单动作作用合法目标集合。AX 的 selected 条件不得把所有 displayed Diff 都标记已选。
 3. 让唯一 GitPanel owner 管理本地集合/Anchor 与有效仓库 identity，
    将菜单/快捷键/行 hover 按该集合计算；
-   **批量 Stage/Unstage** 只提交当前允许的部分并验证结果，
+   **批量 Stage/Unstage** 先按动作解析合法资源：Stage 接受 CHANGES，
+   MERGE 沿现有明确的“标记已解决”动作进入，不新增自动扫描冲突标记的防护框架；
+   Unstage 只接受 STAGED，Discard 只接受现有允许的非冲突 CHANGES；
+   点击组内已选资源的按钮/菜单时使用同一合法集合，未选资源只操作自己。
+   其余项保留 Selection，不因过滤动作目标被静默清除；没有合法项禁用动作。
+   同一路径横跨 Section、父目录与子文件重复选中只提交一次实际 pathspec，
+   Rename 的旧路径沿 `stageEntries/unstageEntries` 现有逻辑处理。
    **Discard** 的确认和取消不能丢失前一集合或错误操作其它 Section。
-   若跨组批量动作没有业务定义，明确菜单禁用/分组，而非勉强对所有类型执行同一命令。
-4. 删除旧单项 Selection 状态或迁移全部调用方，不留下单双选双轨；
+   跨组按上述规则过滤合法子集，而非对所有类型执行同一命令。
+4. 复用现有 `stageEntries/unstageEntries` 一次批量 Git 调用，
+   不循环调用 `stage/unstage`（第一项后 isBusy 会阻止其余项）。
+   必须在操作 runner 返回实际完成结果并刷新后再核对/协调剩余 Selection，
+   不以同步方法返回 void 或开始 loading 代表全部成功。
+   Discard 使用既有 `PendingDiscard` 指纹审核和逐项结果，
+   文件失败/部分成功不能伪装事务回滚；确认取消不修改任何文件。
+   删除旧单项 `explicitlySelectedChange` 并迁移全部调用方，不留下单双选双轨；
    不复制 FileTreeModel 进 Git，也不引入 `SelectionManager`。
 5. 检查已打开 Diff、仓库切换/SSH 断线、刷新/排序过滤/折叠时的选择锚和
    动作安全；失败后 index/HEAD/文件字节与剩余选择保持可解释。
@@ -170,6 +198,8 @@ UI 的 stage/unstage/discard 按钮与独立冲突处理。
 
 ---
 
+<a id="p3-t4"></a>
+
 ## P3-T4 Git Graph 提交详情、比较、标签与键盘导航
 
 **三套不同语义必须先区分：**
@@ -180,6 +210,12 @@ UI 的 stage/unstage/discard 按钮与独立冲突处理。
 - Bailey 当前 `expandedCommitIDs` 是**多展开集合**，
   既有用户明确要求单击任意 ref/commit 标签统一展开详情，
   并否决“单击复制/直接打开 Worktree”等危险或不统一交互。
+
+**本轮确定的取舍：** 保留 Bailey 多展开、普通↑↓只移动游标、ref 单击展开，
+不引入扩展的单详情覆盖/普通方向键自动重开详情或 ref 双击 Checkout。
+新增 ⌘点击普通提交作双端比较、⌘↑↓父子导航和 ⌘⇧↑↓替代路径；
+比较不是多选集合，Worktree/Stash 也不假装普通 immutable commit。
+同一 SHA 不同 Stash selector、多个 Worktree 的身份继续沿现有模型。
 
 **锚点：** `RecentCommitsView.toggle`、
 `handleGraphKey`、`keyboardRows`、`referenceStrip`、
@@ -194,8 +230,7 @@ UI 的 stage/unstage/discard 按钮与独立冲突处理。
    ⌘ 点第二个提交、方向键/⌘+方向键、连续展开多个详情、
    右键引用、Stash 和 Worktree；
    标出 VS Code 本身存在的两种 Graph 行为，不假设它们完全相同。
-2. 对“单详情 vs 多展开”、“Git Graph compare two commits”、
-   “badge double-click checkout vs 用户明确禁用”分别记录采用哪套语义与理由；
+2. 按上述已确定取舍实施，不把这些决定留给执行者任选；
    **危险 Checkout/Reset/Rebase 不得未经明确菜单+确认绑定成双击副作用**。
    提交比较属于用户明确要求的 VS Code 交互吸收，应有清晰可见的两端身份，
    不能用 Files/Git Changes multi-select 模型硬凑。
@@ -204,22 +239,48 @@ UI 的 stage/unstage/discard 按钮与独立冲突处理。
    快速按键时不打开错误历史；
    菜单/详情中输入框应保留自身焦点。
 4. 独立 Swift 状态只保留实际需要的 Compare pair/expanded state，
-   在 `RecentCommitsView` 或原有 Git 模型 owner 形成明确事件动作，
+   `RecentCommitsView` 拥有临时 Compare pair/展开意图，GitStatusModel 拥有只读请求与数据，
+   不在两处复制可写 pair；通过明确动作交接，
    避免“点击提交时先写选中，再由 onChange 推断打开比较”；
    删除被新显式动作替代的旧分支。
 5. 若上游部分功能（如比较 UI、分支导航）需要新增布局，
    先依赖现有 Detail/Diff 容器及真实 Git 数据，
    不复制扩展 Webview，保证任意 NSWindow/SSH 安全。
 
+**比较必须闭合到字节（本 task，不留给 P3-T7）：**
+- 从最近一次明确激活的普通 commit 作为第一目标，⌘点另一普通 commit 开/关比较；
+  UI 明示两端 SHA 与方向；初始没有第一目标时按普通展开处理。
+  与扩展 `getCommitOrder` 一样以当前图谱顺序确定旧端→新端，捕获完整 SHA 后不随刷新反转。
+  普通展开集合保留，比较显示在第一目标现有详情容器内，取消只撤销比较。
+- `GitStatusModel` 增加按当前目标执行的只读双端查询，复用 `GitCommandExecution.runData`：
+  `diff --name-status -z --find-renames --no-ext-diff <from> <to> --`，
+  不拼两个 commit 各自的 files，也不误用 `<from>...<to>` 的 merge-base 比较。
+  复用 `parseStashFileChanges` 已有 NUL/rename 解析能力，通用化命名时同任务迁移 Stash 调用，
+  不保留旧名 alias。空结果与失败/截断/解码失败分别表达；输出沿现有容量与超时契约。
+- 当前 `DiffTab.Source.commit(hash:parent:status:)` 已能读取任意两端 immutable blob，
+  优先通过 `Project.openHistoricalDiff` 复用，不再造 Diff 引擎或可写历史编辑器。
+  两端 SHA、rename old/new path、status 参与既有来源/标签复用语义；
+  更新“首父”说明，使普通提交仍默认首父，比较显式传另一端。
+  非文本/大文件、A/D/R/C/T、根提交、SHA-256、非祖先两端与仓库失效均验证最终两侧内容。
+- 新比较请求只需本 owner 一个取消/取代标识，复用现有仓库/连接 identity，
+  不在 View、Project、DiffTab 各追加一套 comparison generation。
+  DiffTab 独立存在的加载代次仍是其原生内容保护，不是比较可替代的状态。
+- 父导航使用 `parentHashes`；子导航用当前已加载 DAG 的反向关系，优先同 lane，
+  替代路径选择第二父/不同 lane 子项，边界无节点不动、不凭空创建父提交。
+  ⌘导航明确激活/展开目标；普通方向键仍仅移动游标，菜单/输入框不被截获。
+
 **验证：** `GitStatusModelTests`、`NativeGitHistoryFileTests`、
 `CommitGraphLayoutTests`、`GitGraphUITests`、`GitHistoryUITests`；
 两提交与多父/单父/初始提交/快速连续点击/分页/新删除 ref、
 本机和 SSH 项目、两窗口；
 真 Diff 内容和比较范围/HEAD/index 不变，带未保存编辑时操作受保护；
-`make build:dev`。Docs `docs/features/git.md` 和确有更改的 `docs/ui.md`；
+`make build:dev`。Docs `docs/features/git.md`、`docs/features/diff.md`、
+`docs/features/session-restore.md`（两端来源说明）和确有更改的 `docs/ui.md`；
 一个提交。
 
 ---
+
+<a id="p3-t5"></a>
 
 ## P3-T5 Git Graph DAG 轨道、ref 徽章与行状态视觉
 
@@ -238,7 +299,7 @@ UI 的 stage/unstage/discard 按钮与独立冲突处理。
 `GitGraphPalette`，`TreeRowSurface` 的
 `displayed/focusRing/contextRing`；
 `GitStatusModel.RecentCommit` 的 refs/parents/worktree；
-Git Graph 现有分页加载和水平滚动。
+Git Graph 现有分页加载与长文本独立横滚。
 
 **实现门禁与步骤：**
 1. 在 VSCodium/VS Code 内置 Graph、Git Graph 扩展和 Bailey Dev
@@ -250,11 +311,12 @@ Git Graph 现有分页加载和水平滚动。
    `displayed file` 的独立视觉；
    **上游 Git Graph 扩展在详情展开时有灰底，
    Bailey 当前 docs 声称“展开不产生持久灰底”**。
-   先按前述用户决定与可视基线明确是否调整，
+   按 `docs/ui.md` 保留 Bailey 的“展开无持续灰底”，
    不用把“全部都只有蓝色描边”误作 VS Code 同义。
 3. Red：真实 Git 拓扑测试逐个确认 parents 和 rails，
    refs 同色跟随真实分支，合并后保持分支颜色；
-   横向滚动不挪动固定按钮、长标题/中文/emoji 不溢出，
+   图谱本身不水平滚动，只有长标题/路径独立横滚且不挪动固定按钮；
+   长标题/中文/emoji 不溢出，
    1000+ commit 分页不丢颜色/详情/右键对象。
 4. Green：仅在 `CommitGraphLayout/GitGraphPalette` 与
    Graph 行自身的视觉 modifier 内解决几何/颜色/背景不变量，
@@ -274,11 +336,13 @@ Docs `docs/features/git.md`、`docs/ui.md`；一个提交。
 
 ---
 
+<a id="p3-t6"></a>
+
 ## P3-T6 Git Graph 引用/Stash/Worktree/危险操作与目标失效
 
 **上游：** Git Graph 扩展 `web/main.ts` 以 Ref/Commit/Stash/
 Uncommitted 类别选择菜单动作，`web/contextMenu.ts:refresh/close`
-在刷新后以完整 hash+ref 寻找真实目标，否则关闭菜单；
+在原 index 的完整 hash+ref 仍匹配时重绑，否则关闭菜单，不做全表恢复搜索；
 内置 `scmHistoryViewPane.ts:_onContextMenu` 按 provider/refs 区分可用动作。
 
 **Bailey 锚点：**
@@ -288,6 +352,9 @@ Uncommitted 类别选择菜单动作，`web/contextMenu.ts:refresh/close`
 `GitStatusModel` 的 `canActOnCommit`、当前 ref/stash/worktree 有效性、
 本机/SSH 仓库执行和 `GitBranchDialog`、`GitTagDialog`、
 `GitStashDialog`、`GitUncommittedDialog` 等原生确认。
+
+**来源边界：** 固定版本 Git Graph 扩展的 `web/`、`src/` 没有 Worktree 交互实现；
+Worktree 是 Bailey 自有能力，依据当前源码/测试及 Git 契约保留，不冒称扩展复刻。
 
 **步骤：**
 1. 按 Branch、Remote、Tag、Stash、Commit、Uncommitted Changes、
@@ -319,11 +386,13 @@ Detached、linked worktree、stash、取消/确认、权限失败、SSH 断连�
 
 ---
 
+<a id="p3-t7"></a>
+
 ## P3-T7 Graph/Changes 列表身份、刷新分页及跨组显示恢复
 
 **源码：** VS Code List/Tree `TraitSpliceable`、
 `scmHistoryViewPane.ts:SCMHistoryTreeIdentityProvider`、
-Git Graph 扩展 `ContextMenu.refresh` 在重绘时按完整 hash/ref 寻找目标，
+Git Graph 扩展 `ContextMenu.refresh` 在重绘时验证原 index 的完整 hash/ref，失配即关闭，
 History Graph 分页/LoadMore 不能改变已展示的 Diff 身份。
 
 **Bailey 锚点：**
@@ -365,7 +434,7 @@ Docs `docs/features/git.md`，只改本任务直接影响路径；一个提交�
    `GitHistoryUITests`、`GitDialogUITests` 的隔离 Dev E2E，
    不能仅通过 UI 显示替代 Git index/HEAD/ref/文件字节的实际断言。
    阶段 `make build:dev` 与签名验证。
-3. 用 `vscode-source-audit.md` 的 SCM/History/Git Graph 行为矩阵逐项勾销；
+3. 用 `source-review.md` 的 SCM/History/Git Graph 行为矩阵逐项勾销；
    保留“两个上游 Graph 不同”和“扩展代码禁止直接复用”的证据，
    不把 Graph 的禁用多选误改为 Changes 的多选。
 4. 每 task 实现与测试/文档同 commit、旧实现同 task 删除、

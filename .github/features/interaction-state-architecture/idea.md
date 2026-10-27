@@ -14,8 +14,10 @@ Dock 一组只保留一个展示项、一个菜单上下文，不支持 VS Code 
 这些不是单纯颜色差异，必须按原生输入事件、模型状态、命令目标和可见效果一起治理。
 
 本 Feature 在**完全审查上游真实代码后**实现对齐，不先写补丁；
-源代码、许可证、映射、差异和组合验证记录在
-[`vscode-source-audit.md`](vscode-source-audit.md)。
+本轮不读取或继承已有 audit 结论；重新下载固定提交的源码，独立核对。
+源代码、许可证、映射、差异、删旧边界和组合验证记录在
+[`source-review.md`](source-review.md)。旧 `vscode-source-audit.md` 只保留历史，
+不再作为执行依据或当前验证矩阵。
 各 phase/task 必须按该表先核对相应 upstream 入口，再审 Bailey 的真实调用链。
 
 ## 目标
@@ -25,7 +27,7 @@ Dock 一组只保留一个展示项、一个菜单上下文，不支持 VS Code 
    SCM Changes 的资源多选、分组、Diff、Stage/Unstage；内置 SCM History Graph 的提交/文件节点；
    编辑器标签的 active/selected、多选、组/窗口、拖放、菜单及快捷键。
 2. **Git Graph 双源对齐**：分析 VS Code 内置 History Graph 和 mhutchie Git Graph 扩展的
-   提交展开、比较、ref 标签、Stash/Worktree、图谱几何、行状态和菜单；
+   提交展开、比较、ref 标签、Stash、图谱几何、行状态和菜单；Worktree 是 Bailey 自有能力，
    在 Bailey 原生 SwiftUI/AppKit/现有 Git 后端上独立实现可观察等价行为。
 3. **状态语义稳定**：Focus 游标、明确 Selection、多选 Anchor、Displayed 文件/Diff、
    Expanded 目录/提交、Hover、菜单 Context Target、活动 Dock Group 和真实 NSWindow
@@ -52,16 +54,22 @@ Dock 一组只保留一个展示项、一个菜单上下文，不支持 VS Code 
 - **Included（新能力）：** VS Code 式 Git Changes 资源多选与批量操作、
   Dock 内同组文件/工具标签的多选、范围锚点和批量拖动。
   真实操作能力不足时应依据业务合法目标分组拒绝/禁用，不能假装一组 Git 操作都能批量执行。
+  Files 本机多选外拖必须逐项向 Finder 提供 URL，不能只导出被拖行一个文件。
+  Dock 内部拖动限同项目同窗口 Move；Option 仍 Move，不新增内容克隆或跨窗口转移后端。
 - **Included（Graph 目标）：** 扩展式 Commit Details、与另一提交的比较意图、
   分支/远端/标签/Stash/Worktree 独立菜单、父子链键盘导航、
   视觉/图谱身份和刷新恢复的全面行为对照。
   Git Graph 扩展的危险 ref 双击动作与 Bailey 此前“标签单击统一展开”冲突；
-  **不得把 checkout/rebase/reset 直接绑到标签双击**，必须先完成交互差异核定。
+  **不得把 checkout/rebase/reset 直接绑到标签双击**。
+  保留多展开与普通方向键仅移动游标；新增普通提交双端比较及修饰键父子导航，
+  不引入扩展单详情覆盖或其 ref 双击 Checkout。
 - **Preserved：** Bailey 现有固定标签（无自动替换的 preview-tab 生命周期）、
   本机/SSH 工作空间模型、SwiftUI + AppKit + TextKit 2、任意 Dock 工具可停靠、
   原有 Git 数据安全与原生系统菜单。
   如果全面源码对照表明某项 VS Code 行为必须新增生命周期或改变用户明示规则，
   在对应 task 先记录影响和可接受方案；不得在“重构”中偷偷改变。
+  Files 折叠后清不可见 Selection、压缩行按明确段/整行末级操作、
+  菜单期仅描边、Graph 展开无持续底色是现有契约，作为明确差异保留，不能宣称逐项相同。
 - **Excluded：** Settings 窗口；VS Code DOM、Electron、Webview 存储和 CSS 代码；
   重写文件/SSH/Git 服务、Git Graph 整套后端或引入 Git Graph 源代码。
   扩展许可证禁止向 Bailey 分发其衍生源代码/资源，只有可观察语义独立复现。
@@ -83,11 +91,13 @@ Dock 一组只保留一个展示项、一个菜单上下文，不支持 VS Code 
 - **输入与命令目标**：编辑器 NSTextView、Ghostty、浏览器、TextField、Sheet/Palette
   在拥有 firstResponder 时不被后台 Files/Git/Dock 改写键盘输入。
   菜单有效时显式目标优先，菜单关闭即撤销，主菜单快捷键仍只有一个动作实现。
+  Files 集合外右键改 Selection；SCM/Dock 集合外右键仅建立 Context，
+  不统一成同一种“右键选中”。树鼠标 Shift、树键盘 Shift、Tab Shift 分别有自己的规则。
 - **数据保护**：未保存文件保存失败禁止关闭/覆盖，Git index/HEAD/refs 修改按原有确认和
   重新验证执行；SSH 断线或切机器拒绝对过期目标执行且绝不回退本机。
   任何多选/批量操作必须逐项明确目标及失败/部分成功语义。
 - **刷新恢复**：只有项目+机器+连接+仓库身份一致，且节点仍存在，才延续游标、
-  选择/锚点和临时上下文；菜单/拖放请求不是可持久化恢复状态。
+  选择/锚点；临时菜单/拖放只在本次动作有效时继续，目标变化立即取消，不在刷新后复活。
   图谱渲染和树结构更新不得重建编辑器/WebView/终端或丢失当前滚动。
 - **最小可见差异**：UI 变化只能来自明确列入对齐的行为差异，其他图标/布局/文案/颜色/
   动效/快捷键/语音辅助和跨系统行为都按现状守住。
@@ -96,14 +106,14 @@ Dock 一组只保留一个展示项、一个菜单上下文，不支持 VS Code 
 
 ## 来源与决策基线
 
-参考 [完整源码映射与差距表](vscode-source-audit.md)，固定：
+参考 [本轮独立源码映射与差距表](source-review.md)，固定：
 
 - VS Code 主仓库 `microsoft/vscode@4bda7217fc83e8e838b1edd9ebaf21bb9b498c7e`：
   List/Tree/Explorer，SCM Changes/History Graph，EditorGroup/Tabs/Drag & Drop、Palette/Views。
 - Git Graph 扩展 `mhutchie/vscode-git-graph@d7f43f429a9e024e896bac9fc65fdc530935c812`：
   Commit Details、ContextMenu/Graph/Ref 行为与标签外观；**源代码不得复制分发**。
-- Bailey 当前基线在 `35e45134`、设置回撤 `9c84d355` 之后；
-  后续并行提交需以实施时 `origin/main` 和当前工作区实际差异重新核验，不覆盖别人的改动。
+- Bailey 本轮基线 `e0e29d2c323aa0f60c76ed1051543fcdc7ee8149`；
+  实施前以当前 HEAD 和工作区差异重新核验，不假设 `origin/main` 最新，也不为此擅自 fetch/push。
 
 ## 交付和验收
 
@@ -117,6 +127,9 @@ Dock 一组只保留一个展示项、一个菜单上下文，不支持 VS Code 
 - **逐 task**：对照 upstream 入口 → 查 Bailey 领域 owner 和最终副作用 → 验证 Red（有缺陷时）
   → 最小迁移与删旧路径 → 宿主/隔离 GUI/主题/语言/设备/容量/SSH 可行组合核验
   → 更新 `docs/features/*.md` 与 `docs/ui.md` → 单一原子 Git 提交 → todo 回写。
+- **无必要改动**：若现有实现已经满足该 task，记录实际源码与运行证据，
+  不为凑提交制造重构；用任务工具的 `--no-commit-reason` 说明无变更原因，
+  仍须满足该任务的验收。
 - **每阶段**：必须通过 `phase-complete` 和独立 `plan-task-auditor` Gate 再前进；
   新发现会更改需求的真实差异更新 `idea.md` 和对应 task，不为已知问题留空白验收。
 
@@ -130,7 +143,7 @@ Commit/Refs/Stash/Worktree、工具/文件/Diff/终端/浏览器标签；
 本机与合法 Windows SSH、失联/重连/切换身份；滚动/刷新/重排/拖动/关闭；
 真实磁盘、Git index/HEAD/refs、原生剪贴板与未保存保护。
 
-完整取值和组合矩阵见 `vscode-source-audit.md`。测试不能只证明某个 View 被点或
+完整取值和组合矩阵见 `source-review.md`。测试不能只证明某个 View 被点或
 某个回调收到数据，必须验证正确文件/标签/命令结果。
 当前环境若不可获得 macOS 15.6 真机、实体触控板、中键、真实 Windows SSH 断线、
 系统富类型剪贴板等，在 task 中按具体阻碍、影响、补测条件逐项保留，
@@ -138,3 +151,8 @@ Commit/Refs/Stash/Worktree、工具/文件/Diff/终端/浏览器标签；
 
 **本轮边界：只做完整源码审查、Feature Plan 与机械校验；不运行产品构建、
 不提交功能代码、不替换或重启正式 Bailey。**
+
+本轮仅修订计划，所有任务继续 pending；计划修订不能当作实现、Red→Green 或阶段 Go。
+运行态旧路径在对应替换任务立即删除；不新增旧名 alias、Feature Flag 双轨、
+复制/跨窗传输框架或无证据的多层请求代次。已有快照的最小解码、连接身份、
+保存否决、不可覆盖文件操作和 Discard 审核有真实用途，不归类为“多余安全围栏”。

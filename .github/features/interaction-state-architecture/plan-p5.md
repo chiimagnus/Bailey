@@ -9,12 +9,14 @@
 新发现的某个组件缺陷在其真正 owner 修复，并作为本 task 的独立原子变更，
 必要时更新对应 P1～P4 的验收证据与现行 plan，不伪装其他 task 已全绿。
 
-**总证据来源：** [`vscode-source-audit.md`](vscode-source-audit.md) 的每条行为差距、
+**总证据来源：** [`source-review.md`](source-review.md) 的每条行为差距、
 VS Code pinned refs 和 Git Graph 扩展的合法独立复现边界。
 验证结果必须包含真实可见 UI/AX、真实 firstResponder 与磁盘、Git index/HEAD/refs、
 Window/Dock/Tab identity；`XCTAssertTrue(button.exists)` 不能代表执行成功。
 
 ---
+
+<a id="p5-t1"></a>
 
 ## P5-T1 跨 Files/Changes/Graph/Dock/Projects 的完整事件串回归
 
@@ -34,7 +36,8 @@ Window/Dock/Tab identity；`XCTAssertTrue(button.exists)` 不能代表执行成�
 4. Dock 同一组 File+Diff+Terminal+Browser+工具 Tabs 的 ⌘/Shift 多选 →
    批量 Drag/移组/关闭部分标签 → 取消/成功/失败分支；
    Shell/WebKit/Native Editor 未重建；
-   关闭脏 FileTab 保存失败时原缓冲和剩余标签全部保留。
+   关闭脏 FileTab 保存失败时失败项和未处理标签保留，已确认关闭项不回滚；
+   不得在保存保护完成前结束选中的 PTY/工具。
 5. Projects A/B 切换、两个 NSWindow+多个 Dock Group：
    当前窗口本地项目 Files，另一窗口 Windows SSH Git/Files；
    断线/重新连接、快速刷新、异步 Git Diff 晚到、
@@ -51,7 +54,7 @@ Window/Dock/Tab identity；`XCTAssertTrue(button.exists)` 不能代表执行成�
 输入检查 `TreeKeyboardView/ContextMenuClickView/DockGroupFocusReader`。
 
 **执行：**
-- 用现有 `WorkspaceUITestFixture` 的临时目录和真实 Git 仓库，
+- 用现有各测试类的临时目录/真实 Git 夹具及 `WorkspaceUITestSupport.launch(in:project:)`，
   扩展已有 `SharedTreeUITests`、`GitChangesUITests`、
   `GitGraphUITests`、`WorkspaceDockUITests`、
   `WorkspaceWindowsUITests`，只把必须用原生系统键鼠证明的串联放进 UI E2E。
@@ -66,18 +69,21 @@ Window/Dock/Tab identity；`XCTAssertTrue(button.exists)` 不能代表执行成�
   `make test:ui`（在独占/隔离的图形会话，仅 Dev bundle）；
   `make build:dev` 和签名、`git diff --check`；
   对已有 CI Head SHA 必须核对结果归属。
-  正式 Bailey 不退出、不替换、不借用户 SSH master。
+  测试期间正式 Bailey 不退出、不替换，不借用户 SSH master。
 - 文档：仅发现与当前事实不符才修改所属 `docs/features/*.md`、
   `docs/ui.md`、`docs/architecture.md`，
   新增/修订串联测试与必要生产修复分别按独立职责原子提交；
   不提交临时截图/开发日志或虚构计划状态。
 
-**验收：** 每条完整串联至少一条真实 GUI E2E 与实际副作用证据；
+**验收：** 系统菜单/真实键鼠/跨窗等只有完整 App 才能证明的串联必须有 GUI E2E；
+可由宿主证明的数据/异常组合全部留在宿主，不机械给每条数据链复制完整 GUI。
 菜单/焦点/数据隔离及关闭后保留未保存编辑必须有反例断言。
 macOS 15.6 真机、真实 Windows SSH 失联和连接恢复、
 富类型系统剪贴板在无法安全完成时逐项列明无法核销的风险和后续操作。
 
 ---
+
+<a id="p5-t2"></a>
 
 ## P5-T2 视觉/AX、多主题、多语言、极端容量与性能矩阵
 
@@ -92,6 +98,8 @@ Git Graph 扩展 `web/styles/main.css` 与 `web/graph.ts`
 - 无/单/多岛 Selection；Focus 位于集合内/外；
   Anchor 先被取消；Context 先选中/未选中；Displayed 文件仍有旧底色；
   Expanded 目录/commit；hover/拖动/焦点失去后；两组与两窗口分别处于 active/inactive。
+  树鼠标 Shift、树键盘 Shift、Tabs Shift 三套独立预期，以及
+  Explorer 右键改 Selection、SCM/Dock 右键保留 Selection 的差异必须显式交叉覆盖。
 - Files/Git Changes/History/Graph/Projects/Dock 标签的每一类行；
   图谱 branch/ref/Tag/Stash/Uncommitted/Worktree、merge/多父、
   历史文件与 Diff；快捷菜单和 AX 选中/展开/帮助/路径。
@@ -156,5 +164,7 @@ Git Graph 扩展 `web/styles/main.css` 与 `web/graph.ts`
    **仅在实际完成的范围内**宣称验收通过。
 4. 如果设备/环境不可达影响必要验收，结论明确给出未完成与补验条件；
    即使其它测试绿色，不编造全部环境通过。
-5. 本计划完成不等于正式 Bailey 已发布、安装或重启。
-   按项目安装规范及届时用户授权另行核对，绝不在本轮计划编写时操作正式 App。
+5. 本轮计划修订不构建、安装或重启正式 App。
+   后续功能实现完成且通过验证后，按 AGENTS 与 development.md 默认完成
+   `make build`、验签和整包安装（用户明确跳过时除外），不启动/重启既有正式进程；
+   测试、构建、安装、重启、发布分别报告，不以 Dev 构建代替正式包交付。
