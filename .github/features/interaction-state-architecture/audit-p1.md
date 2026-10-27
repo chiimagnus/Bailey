@@ -49,13 +49,13 @@
 
 - 任务：`P1-T5`
 - 严重级别：`Medium`
-- 状态：`Open`
+- 状态：`Resolved`
 - 位置：`BaileyUITests/Files/WorkspaceFilesUITests.swift:1152`
-- 摘要：`连续 Page Down 在整组 GUI 运行中未满足实际滚动验收，单项通过但组内不稳定`
-- 风险：`组内至少一次连续分页后首行仍被判定可点击；修正为可见几何断言后重测被 GUI 启动／辅助功能匹配故障阻断，无法排除产品交互或运行器时序问题`
+- 摘要：`连续 Page Down 曾在联合 GUI 中触发不可靠的首行可点击断言`
+- 历史风险：`初始断言以 AX isHittable 判断滚动；改为首行真实坐标变化后，需重新验证整组 GUI 运行和文件最终结果`
 - 预期修复：`在可用的隔离 GUI 会话中记录两次按键后的焦点行与视口坐标，区分真实滚动失效和 AX 快照失效；只修复有证据的根因，不增加延迟补丁`
 - 验证：`make test:ui ONLY_TESTING=BaileyUITests/WorkspaceFilesUITests/testHomeEndAndPageKeysScrollFocusedFilesWithoutOpeningOrSelectingThem，及与其他 UI 用例的联合运行`
-- 解决证据：`原生 NSScrollView 连续分页的真实视口位移已有 1/0（/tmp/bailey-p1-independent-audit-t5-native-scroll.log）；正式单项 GUI 曾 1/0（/tmp/bailey-p1-t5-ui-navigation-3.log），联合 GUI 中的首行 isHittable 断言失败（/tmp/bailey-p1-independent-audit-ui.log）。已改为行几何位移断言，但后续 GUI 仍因窗口/AX 问题未运行到断言。检查 FileTreeModel.moveSelection → FileTreeScrollView.onChange(scrollTo) 与原生 TreeKeyboardHost 后，尚无证据证明生产 PageDown 错误；不要仅凭 AX 失败调整滚动行为。Xcode 27.2 启动器继续阻断补验。另用隔离 Bailey Dev 加载 80 个真实文件时，AX 能读取列表及行坐标，但当前共享桌面焦点被其它 App 抢占，Peekaboo 前台聚焦返回 native/AX accepted 而最终并非前台，后台键盘输入因未持有目标焦点被正确拒绝；不将这种测试前提失效冒充 PageDown 产品 Red。保留 Open，待独立 GUI 会话内核对真实焦点、两次 PageDown 的焦点路径和首行视口坐标后决定是否需要生产修复。`
+- 解决证据：`2026-10-28 固定 P1 提交 e14093af，在 Aqua 图形会话运行：单项 GUI 1/0（/tmp/bailey-p1-isolated-f02-single.log）、联合 GUI 4/0（/tmp/bailey-p1-isolated-f02-combined.log）、原先失败的完整 12 项 GUI 12/0（/tmp/bailey-p1-isolated-f02-full12.log）。真实首行几何位移、两次 PageDown／PageUp、Selection 不变及文件最终字节均通过。旧 isHittable 判据已由 4274b5cb 改为几何断言；当前未复现产品分页缺陷，无须新增生产补丁。`
 
 
 ## 发现 F-01
@@ -68,10 +68,10 @@
 - 风险：`同一远端重新连接后根目录列举失败但 stat/copy/create 可用时，旧快照行仍可能向变更过的远端路径写入新文件，违背 P1-T2 的未核验只读边界`
 - 预期修复：`复用现有 canMutateCurrentFiles，在所有文件修改入口统一阻断未核验通道，不引入新连接状态或 fallback`
 - 验证：`FileTreeTests/testPinnedSSHReconnectKeepsTrustedRowsIfNewChannelCannotListRoot 的 Red/Green 与真实文件字节、随后恢复可写；相关 host/GUI 回归`
-- 解决证据：`修正 mock pwd -P 后旧代码 Red 7 failures：/tmp/bailey-p1-independent-audit-f01-red2.log；统一 guard 后 Green 1/0：/tmp/bailey-p1-independent-audit-f01-green.log，真实复制/文件/目录字节和重连恢复写入；原生 Files 87/0；GitWorkspace 5/0，GitUncommitted 4/0；Dev/正式 Debug 编译验签通过；commit 4274b5cb99a7038b263a9f5746f9899842840f60。Windows live 验证因 Xcode launcher internal error 未启动，另列环境缺口。`
+- 解决证据：`修正 mock pwd -P 后旧代码 Red 7 failures：/tmp/bailey-p1-independent-audit-f01-red2.log；统一 guard 后 Green 1/0：/tmp/bailey-p1-independent-audit-f01-green.log，真实复制/文件/目录字节和重连恢复写入；原生 Files 87/0；GitWorkspace 5/0，GitUncommitted 4/0；Dev/正式 Debug 编译验签通过；commit 4274b5cb99a7038b263a9f5746f9899842840f60。2026-10-28 Windows SSH 真机复验：独立 master／远端临时目录，目录批量读取、复制／移动／删除、重命名与原始字节保存共 4/0（/tmp/bailey-p1-isolated-ssh-live-scheme.log）；隔离 Bailey Dev 经真实 SSH 文件树多选，取消删除保留字节、确认删除清理目标，GUI 1/0（/tmp/bailey-p1-isolated-ssh-gui.log）。专门模拟新通道无法列出目录的 Red→Green 宿主回归保留；未将正常 SSH 操作冒充真实断线联合场景。`
 
 
-- 本轮仅将真实写入 Red 与未核销的实际 GUI 验收列为发现项，不将猜测记为缺陷。
+- 发现项来自此前可复现的远端写入缺陷与未通过的 GUI 验收；均以本次真实回归核销，不把未证实的猜测记为新缺陷。
 
 ## 本轮独立逐提交复核（不采用旧审计结论）
 
@@ -83,7 +83,7 @@
 | P1-T2 | `209ce031` | `Project.syncFiles → FileTreeModel.sync/rebuild/remapPaths`；旧展开路径重复映射已删除；重连旧快照保留但旧拖放失效 | 发现 F-01：复制／新建曾绕开未核验写入门禁；`4274b5c` 已修复 |
 | P1-T3 | `7fc68f08` | `TreeCompactSegment` 被 Files、Git Changes、History／Worktree 实际使用，分段 `path` 传至菜单、复制和 Git index 操作；Files 重复悬停段和 index=0 fallback 已删除 | 已接入；真实 Git 文件／index 结果已验 |
 | P1-T4 | `eed33ff7` | `TreeFileRow/TreeFolderRow` 的 AX selected 仅来自 Selection，不再用焦点冒充；`RowHighlightStyle` 的 Hover/Displayed/Context 各自作用 | 已接入；明暗主题、AX 和组内失焦核对；图谱像素宿主测试出现时序不稳定 |
-| P1-T5 | `2af17ba3` | `FileTreeScrollView.handleKey → moveSelection`；SwiftUI 视口更新和原生 `TreeKeyboardHost`；旧宿主 `updateNSView` 不再抢键盘所有权 | 已接入；原生连续分页及实际滚动位置通过，GUI 整组分页回归仍有 F-02 |
+| P1-T5 | `2af17ba3` | `FileTreeScrollView.handleKey → moveSelection`；SwiftUI 视口更新和原生 `TreeKeyboardHost`；旧宿主 `updateNSView` 不再抢键盘所有权 | 已接入；真实 GUI 单项、4 项组合及原失败 12 项组合复验均通过；F-02 已核销 |
 
 没有以“代码有 guard”为由删掉本机/SSH 边界、文件字节保护、
 未保存编辑器、field editor／IME 和正在使用的原生菜单生命周期。
@@ -197,28 +197,33 @@
   （单项连接隔离／宿主、双本机窗口 GUI 均已测；未破坏用户 SSH master）：
   在跨窗连线切换时可能存在额外时序风险。
   补验：隔离 SSH master 与专属 Windows 沙盒中同时运行真实双窗断线恢复。
-- **本轮基础设施／GUI 记录**：从 `Background` 会话启动 GUI XCTest 会触发 Xcode
-  `childPID > 0` 内部断言；改用 `Aqua` 后测试能执行。窗口专项修复已撤回，
-  不再作为门禁；AX 匹配与联合分页结果仍须独立核实。
-- **Gate 影响**：即使忽略没有设备的 15.6／触控板等条件，
-  当前仍有 F-02 和可执行 GUI／SSH 补验未核销，不能按旧日志给出 Go。
+- **本轮基础设施／GUI 复验**：从 `Background` 启动 XCTest 曾触发 Xcode
+  `childPID > 0` 内部断言；在 `Aqua` 正常运行。使用独立 worktree 固定
+  `e14093af`，避免正在执行的 P2 改动污染测试：`make build:ui` 通过，
+  相关宿主 137/0，分页单项 GUI 1/0、4 项组合 4/0、原失败的 12 项组合 12/0；
+  Windows SSH 宿主 4/0（零跳过），真实远端删除 GUI 1/0。完整命令及结果见
+  `evidence-p1.md#p1-审计复验2026-10-28`。F-03 按用户决定撤回、不作为门禁。
+- **Gate 影响**：已核销当前可执行的 P1 关键路径；最低系统、实体手势与朗读、
+  系统输入法、Windows 特殊权限和双窗真实断线组合保留上述明确边界，
+  不将替代测试视为它们已通过。
 
 ## Gate（是否允许进入下一阶段）
 
-- 结论：**No-Go（本轮独立审计未完成全部门禁）**
-- 理由：F-03 已按决定排除。P1-T2 的写入缺陷已修复；P1-T5 的联合 GUI 滚动验收 F-02
-  仍未核销，Windows SSH 补验也未执行。`Aqua` 会话可运行 XCTest，但不能用这一点替代后续断言。
-  不因旧审计为 Go 而直接放行下一阶段。
+- 结论：**Go（仅限 P1 交互状态阶段）**
+- 理由：F-01 已完成根因修复、宿主 Red→Green 和 Windows SSH 实机验证；
+  F-02 经同原失败组合的完整 12 项 GUI 复验通过，无须增加分页生产代码；
+  F-03 已按用户决定撤回，不作为 P1 阻塞项。
+  缺少对应设备或环境的组合按上文列示，不冒称全部平台／硬件／SSH 断线 E2E 通过。
 
 ## 最终状态与剩余风险
 
-- 当前状态：**Open（F-01 已解决；F-03 已排除；F-02 未核销）**。P2 的并行执行不代表 P1 审计 Gate 已通过。
-- 剩余风险：连续分页的整组 GUI 结果尚待确认，修复后的 Windows SSH 实机测试未执行；
-  macOS 15.6、真实中日系统 IME、
-  实体触控板／VoiceOver、远端软链接及 SSH 断网×双窗联合 GUI 仍待专用环境补验。
+- 当前状态：**P1 审计已核销（F-01／F-02 Resolved；F-03 用户排除）**。
+  与并行执行的 P2 隔离验证，不代表 P2 的工作已经验收。
+- 剩余边界：macOS 15.6 真机、中日系统 IME、实体触控板与 VoiceOver、
+  Windows 符号链接特权分支及双窗真实 SSH 断连恢复。后者属于后续跨窗／SSH
+  联合验收，不能用本次正常远端文件操作替代。
 
 ## 审计约束
 
 - 本文件对应一个 phase，不对应单个 task
 - 如果由 `executing-plans` 自动进入审计，也沿用同一模板
-

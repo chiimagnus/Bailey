@@ -156,7 +156,40 @@
 - **F-03：** 专项窗口修复 `db470062`、`fe77590b` 已由 `2cbcc6d0` 撤回，
   相关产品代码及专项测试恢复到修复前；`make build:ui` 已通过。
   F-03 按用户决定排除出 P1 门禁，不将它视为已修复。
-- **运行条件：** Xcode GUI XCTest 从 `Background` 会话运行曾报
+- **当时的运行条件：** Xcode GUI XCTest 从 `Background` 会话运行曾报
   `childPID > 0`，从 `Aqua` 会话可进入测试；但取消旧补窗逻辑的版本
   仍在 `WorkspaceUITestSupport` 的初始窗口断言失败。
-  本次仅核对源码和历史日志，不重复运行测试；F-02 的 GUI 联合验收仍未核销。
+  当时 F-02 尚未核销；后续验证见下节。
+
+## P1 审计复验（2026-10-28）
+
+**基线与隔离：** 在独立 worktree 固定 `e14093af`，使用单独 DerivedData
+和 Bailey Dev，在 `Aqua` 图形会话启动真实 XCTest；不编译、暂存或覆盖
+同一仓库中另一 AI 的 P2 工作区。`make build:ui` 成功，
+日志 `/tmp/bailey-p1-isolated-build-ui-20261028.log`。
+
+- **F-02 分页与焦点：** 原生真实文件夹 80 行，Home/End、连续 PageDown/PageUp、
+  首行几何位移、Selection 不变以及 Space 打开文件后磁盘字节均验证。
+  单项 GUI **1/0**：`/tmp/bailey-p1-isolated-f02-single.log`；
+  联合 GUI **4/0**：`/tmp/bailey-p1-isolated-f02-combined.log`；
+  与原失败完全相同的十二项组合 **12/0**：
+  `/tmp/bailey-p1-isolated-f02-full12.log`。三次均 `TEST SUCCEEDED`；
+  曾失败的紧凑目录菜单项也在组合内通过。原 AX `isHittable` 判据
+  已于 `4274b5cb` 换为实际坐标断言，本轮未修改分页生产代码。
+- **F-01 Windows SSH：** 使用授权 `windows` 主机及测试专属 SSH master、
+  远端 `/tmp` 临时目录，批量列表、错误隔离、文件复制／移动／删除、重命名及
+  FileTab 保存后字节一致性 **4/0，零跳过**：
+  `/tmp/bailey-p1-isolated-ssh-live-scheme.log`。隔离 Bailey Dev 真实
+  SSH 文件树多选、删除取消保留字节和确认删除目标 **1/0**：
+  `/tmp/bailey-p1-isolated-ssh-gui.log`。
+  初次仅以 Shell 环境变量传入主机时 Xcode 未转发，四项均跳过，
+  不计为通过；随后仅在独立检出的测试 Scheme 中注入主机名再复验通过，
+  未将临时测试配置提交到正式项目。
+- **P1 宿主回归：** `make test:FileTreeTests,DockWorkspaceTests,PanelContextTests,DockFocusIntegrationTests,GitGraphPaletteTests`
+  **137/0**，`/tmp/bailey-p1-isolated-host-regression.log`；
+  包含 F-01 的新旧连接目录未核验写入防护和 P1-T5 的原生视口测试。
+
+**未冒充已测的范围：** 缺少 macOS 15.6 真机、实体触控板／VoiceOver、
+系统中文／日文输入法及 Windows 特殊符号链接权限；
+Windows SSH 断线 × 两窗口 GUI 联合场景需专属断线控制器单独验收，
+不能由正常 SSH 文件操作推出通过。F-03 专项窗口修复按决定撤回并排除。
