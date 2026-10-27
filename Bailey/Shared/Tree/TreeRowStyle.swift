@@ -112,12 +112,15 @@ struct ContextMenuClickTarget: NSViewRepresentable {
     let onContextClick: () -> Void
     var onMenuClosed: (() -> Void)?
     var onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)?
+    var isExpectedMenu: ((NSMenu) -> Bool)?
 
     init(onContextClick: @escaping () -> Void, onMenuClosed: (() -> Void)? = nil,
-         onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)? = nil) {
+         onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)? = nil,
+         isExpectedMenu: ((NSMenu) -> Bool)? = nil) {
         self.onContextClick = onContextClick
         self.onMenuClosed = onMenuClosed
         self.onMenuKeyDown = onMenuKeyDown
+        self.isExpectedMenu = isExpectedMenu
     }
 
     func makeNSView(context: Context) -> ContextMenuClickView {
@@ -128,6 +131,7 @@ struct ContextMenuClickTarget: NSViewRepresentable {
         view.onContextClick = onContextClick
         view.onMenuClosed = onMenuClosed
         view.onMenuKeyDown = onMenuKeyDown
+        view.isExpectedMenu = isExpectedMenu
     }
 
     static func dismantleNSView(_ view: ContextMenuClickView, coordinator: ()) {
@@ -135,6 +139,7 @@ struct ContextMenuClickTarget: NSViewRepresentable {
         view.onContextClick = nil
         view.onMenuClosed = nil
         view.onMenuKeyDown = nil
+        view.isExpectedMenu = nil
     }
 }
 
@@ -142,6 +147,7 @@ final class ContextMenuClickView: NSView {
     var onContextClick: (() -> Void)?
     var onMenuClosed: (() -> Void)?
     var onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)?
+    var isExpectedMenu: ((NSMenu) -> Bool)?
     private weak var contextMouseEvent: NSEvent?
     private var menuKeyMonitor: Any?
     private var trackingMenu: NSMenu?
@@ -187,7 +193,9 @@ final class ContextMenuClickView: NSView {
     }
 
     @objc private func menuDidBeginTracking(_ notification: Notification) {
-        guard trackingMenu == nil, let menu = notification.object as? NSMenu else { return }
+        guard trackingMenu == nil, let menu = notification.object as? NSMenu,
+              isExpectedMenu?(menu) ?? true else { return }
+        if let window, let key = NSApp.keyWindow, window !== key { return }
         trackingMenu = menu
         guard onMenuKeyDown != nil else { return }
         menuKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
@@ -444,6 +452,7 @@ struct TreeCompactSegment<MenuContent: View>: View {
     let onContextClick: () -> Void
     let onMenuClosed: () -> Void
     var onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)? = nil
+    var isExpectedMenu: ((NSMenu) -> Bool)? = nil
     @ViewBuilder var menuContent: () -> MenuContent
     @State private var hovering = false
 
@@ -458,7 +467,8 @@ struct TreeCompactSegment<MenuContent: View>: View {
             .highPriorityGesture(TapGesture().onEnded { onClick() })
             .overlay {
                 ContextMenuClickTarget(onContextClick: onContextClick,
-                                      onMenuClosed: onMenuClosed, onMenuKeyDown: onMenuKeyDown)
+                                      onMenuClosed: onMenuClosed, onMenuKeyDown: onMenuKeyDown,
+                                      isExpectedMenu: isExpectedMenu)
                     .contextMenu(menuItems: menuContent)
             }
             .accessibilityLabel(component.name)

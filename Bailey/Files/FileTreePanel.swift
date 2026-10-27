@@ -449,7 +449,8 @@ private struct FileTreeRow: View {
             .overlay {
                 ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
                                        onMenuClosed: { model.dismissContextMenu(target: item.path) },
-                                       onMenuKeyDown: handleMenuKeyDown)
+                                       onMenuKeyDown: handleMenuKeyDown,
+                                       isExpectedMenu: isMenuForCurrentRow)
                     .contextMenu { rowMenu(for: item) }
             }
         } else if item.isDirectory && !item.compactComponents.isEmpty {
@@ -457,7 +458,8 @@ private struct FileTreeRow: View {
                 .background {
                     ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
                                            onMenuClosed: { model.dismissContextMenu(target: item.path) },
-                                           onMenuKeyDown: handleMenuKeyDown)
+                                           onMenuKeyDown: handleMenuKeyDown,
+                                           isExpectedMenu: isMenuForCurrentRow)
                 }
                 .contextMenu { rowMenu(for: item) }
                 .onDrag { makeDragProvider(item) }
@@ -468,7 +470,8 @@ private struct FileTreeRow: View {
                 .overlay {
                     ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
                                            onMenuClosed: { model.dismissContextMenu(target: item.path) },
-                                           onMenuKeyDown: handleMenuKeyDown)
+                                           onMenuKeyDown: handleMenuKeyDown,
+                                           isExpectedMenu: isMenuForCurrentRow)
                         .contextMenu { rowMenu(for: item) }
                 }
                 .onDrag { makeDragProvider(item) }
@@ -480,12 +483,19 @@ private struct FileTreeRow: View {
         model.selectForContextMenu(item, componentPath: target.path == item.path ? nil : target.path)
     }
 
-    private func handleMenuKeyDown(_ menu: NSMenu, _ event: NSEvent) -> Bool {
+    private func isMenuForCurrentRow(_ menu: NSMenu) -> Bool {
         guard isCurrentTarget(), !item.isDraft,
               model.items.contains(where: { $0.path == item.path }),
-              menu.items.contains(where: {
-                  $0.accessibilityLabel() == String(localized: "Copy Relative Path", table: "Sidebar")
-              }) else { return false }
+              let target = model.contextMenuTargetPath,
+              target == item.path || item.compactComponents.contains(where: { $0.path == target })
+        else { return false }
+        return menu.items.contains {
+            $0.accessibilityLabel() == String(localized: "Copy Relative Path", table: "Sidebar")
+        }
+    }
+
+    private func handleMenuKeyDown(_ menu: NSMenu, _ event: NSEvent) -> Bool {
+        guard isMenuForCurrentRow(menu) else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         let key = event.charactersIgnoringModifiers?.lowercased()
         let title: String
@@ -648,6 +658,7 @@ private struct FileTreeRow: View {
                 onContextClick: { selectForContextMenu(target) },
                 onMenuClosed: { model.dismissContextMenu(target: target.path) },
                 onMenuKeyDown: handleMenuKeyDown,
+                isExpectedMenu: isMenuForCurrentRow,
                 menuContent: { rowMenu(for: target) })
                 .onDrag { makeDragProvider(target) }
                 .onDrop(
