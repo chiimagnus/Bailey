@@ -61,7 +61,7 @@
 - 风险：`组内至少一次连续分页后首行仍被判定可点击；修正为可见几何断言后重测被 GUI 启动／辅助功能匹配故障阻断，无法排除产品交互或运行器时序问题`
 - 预期修复：`在可用的隔离 GUI 会话中记录两次按键后的焦点行与视口坐标，区分真实滚动失效和 AX 快照失效；只修复有证据的根因，不增加延迟补丁`
 - 验证：`make test:ui ONLY_TESTING=BaileyUITests/WorkspaceFilesUITests/testHomeEndAndPageKeysScrollFocusedFilesWithoutOpeningOrSelectingThem，及与其他 UI 用例的联合运行`
-- 解决证据：`原生 NSScrollView 连续分页的真实视口位移已有 1/0（/tmp/bailey-p1-independent-audit-t5-native-scroll.log）；正式单项 GUI 曾 1/0（/tmp/bailey-p1-t5-ui-navigation-3.log），联合 GUI 中的首行 isHittable 断言失败（/tmp/bailey-p1-independent-audit-ui.log）。已改为行几何位移断言，但后续 GUI 仍因窗口/AX 问题未运行到断言。检查 FileTreeModel.moveSelection → FileTreeScrollView.onChange(scrollTo) 与原生 TreeKeyboardHost 后，尚无证据证明生产 PageDown 错误；不要仅凭 AX 失败调整滚动行为。Xcode 27.2 启动器继续阻断补验，保留 Open，待同一独立 GUI 会话内核对真实焦点、两次 PageDown 的焦点路径和首行视口坐标后决定是否需要生产修复。`
+- 解决证据：`原生 NSScrollView 连续分页的真实视口位移已有 1/0（/tmp/bailey-p1-independent-audit-t5-native-scroll.log）；正式单项 GUI 曾 1/0（/tmp/bailey-p1-t5-ui-navigation-3.log），联合 GUI 中的首行 isHittable 断言失败（/tmp/bailey-p1-independent-audit-ui.log）。已改为行几何位移断言，但后续 GUI 仍因窗口/AX 问题未运行到断言。检查 FileTreeModel.moveSelection → FileTreeScrollView.onChange(scrollTo) 与原生 TreeKeyboardHost 后，尚无证据证明生产 PageDown 错误；不要仅凭 AX 失败调整滚动行为。Xcode 27.2 启动器继续阻断补验。另用隔离 Bailey Dev 加载 80 个真实文件时，AX 能读取列表及行坐标，但当前共享桌面焦点被其它 App 抢占，Peekaboo 前台聚焦返回 native/AX accepted 而最终并非前台，后台键盘输入因未持有目标焦点被正确拒绝；不将这种测试前提失效冒充 PageDown 产品 Red。保留 Open，待独立 GUI 会话内核对真实焦点、两次 PageDown 的焦点路径和首行视口坐标后决定是否需要生产修复。`
 
 
 ## 发现 F-01
