@@ -18,6 +18,20 @@ final class WorkspaceSmokeUITests: XCTestCase {
                       "Repeated access in one test must not reset the project")
     }
 
+    func testPreloadedProjectLaunchCreatesOneMainWindow() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("startup.txt", text: "isolated window\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        XCTAssertTrue(WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+            .waitForExistence(timeout: 15))
+        let duplicate = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "count > 1"), object: app.windows
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [duplicate], timeout: 2), .timedOut,
+                       "Preloading a project must not open a second startup window")
+        XCTAssertEqual(app.windows.count, 1)
+    }
+
     func testIsolatedLaunchAndPaletteKeyboardFocus() throws {
         let app = try WorkspaceUITestSupport.launch(in: self)
 

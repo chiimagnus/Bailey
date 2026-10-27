@@ -778,6 +778,29 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: bURL, encoding: .utf8), "window B")
     }
 
+    func testPendingFolderDoesNotOpenSecondWindowWhileFirstSceneIsRegisteredButUnattached() async throws {
+        let app = WorkspaceApplication()
+        let initialScene = app.makeWindow()
+        defer { initialScene.windowClosed() }
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-UITest-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        // SwiftUI has registered the first scene; its NSWindow may attach later.
+        var opened = 0
+        app.openRestoredWindows { opened += 1 }
+        app.openDirectories([folder.path])
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(opened, 0, "A pending NSWindow attachment must not open another scene")
+        XCTAssertEqual(app.windowCount, 1)
+
+        initialScene.windowClosed()
+        app.openDirectories([folder.path])
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(opened, 1, "A later Finder request must open one replacement window")
+    }
+
     func testSpeculativeSceneConstructionDoesNotRegisterOrConsumeRestoredWindows() throws {
         XCTAssertTrue(BaileyInstanceMode.isIsolated)
         let saved = SessionStore.load()

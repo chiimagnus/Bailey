@@ -207,10 +207,10 @@ Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言
 宿主 `Bailey` Scheme 的 TestAction 向 Debug 宿主传入 `--isolated-ui-test`。
 Makefile 的测试构建使用独立 Bundle ID `chiimagnus.bailey.dev`；
 独立 UI Test 显式通过 `XCUIApplication(bundleIdentifier:)` 启动 Bailey Dev，
-并传入 `--isolated-ui-test`、`-ApplePersistenceIgnoreState YES` 与一次性 `BAILEY_UI_TEST_RUN_ID`，
-不允许定位或终止正式 Bailey。AppKit 自带的窗口状态恢复与 Bailey 的 `SessionStore` 彼此独立：
-UI Runner 禁用前者，避免旧系统窗口污染测试；验证 Bailey 快照重启时保持相同的测试 UUID，
-并通过系统「新建窗口」建立真实场景。
+并传入 `--isolated-ui-test` 与一次性 `BAILEY_UI_TEST_RUN_ID`，
+不允许定位或终止正式 Bailey。不要传 `-ApplePersistenceIgnoreState YES`，
+否则当前系统可能不会创建初始 `WindowGroup` 窗口。隔离快照按测试 UUID 分开；
+验证重启恢复时保留同一 UUID，并通过系统「新建窗口」建立真实双窗场景。
 
 需要单独检查原生界面时使用相同签名的 Debug 包：
 
