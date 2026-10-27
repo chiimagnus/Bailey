@@ -794,61 +794,42 @@ final class WorkspaceWindowModel {
         return SSHHostWorkspaces.connectionRevision(for: String(workspace.dropFirst(4)))
     }
 
-    func makeFileTreeDragProvider(
+    func beginFileTreeDrag(
         for item: FileTreeModel.Item, in project: Project, target: PanelContext.Identity
-    ) -> NSItemProvider {
+    ) -> FileTreeDrag.Record? {
         guard selectedProjectID == project.id, project.matchesPanelTarget(target),
-              let drag = project.fileTree.beginDrag(for: item) else { return NSItemProvider() }
+              let drag = project.fileTree.beginDrag(for: item),
+              drag.paths.allSatisfy({ target.workspace != nil
+                  || LocalPathScope.contains($0, in: project.fileTree.rootPath) })
+        else { return nil }
         let source = FileTreeClipboard.Record(
             token: application.fileTransferToken, project: project.id,
             identity: String(reflecting: target), root: project.fileTree.rootPath,
             connectionRevision: clipboardRevision(for: target), paths: drag.paths, cut: false
         )
-        let record = FileTreeDrag.Record(
+        return FileTreeDrag.Record(
             source: source, window: String(reflecting: ObjectIdentifier(self)), nonce: drag.nonce
         )
-        guard let data = try? JSONEncoder().encode(record) else { return NSItemProvider() }
-        let provider = NSItemProvider()
-        provider.registerDataRepresentation(forTypeIdentifier: FileTreeDrag.type, visibility: .ownProcess) {
-            completion in
-            completion(data, nil)
-            return nil
-        }
-        if target.workspace == nil {
-            provider.registerObject(URL(fileURLWithPath: item.path) as NSURL, visibility: .all)
-        }
-        return provider
     }
 
     func receiveFileTreeDrop(
-        _ provider: NSItemProvider, into directory: String, copy: Bool,
+        _ drag: FileTreeDrag.Record, into directory: String, copy: Bool,
         in project: Project, target: PanelContext.Identity,
         onChange: @escaping () -> Void = {}
     ) -> Bool {
         guard selectedProjectID == project.id, project.matchesPanelTarget(target),
-              project.fileTree.hasActiveDrag,
-              provider.hasItemConformingToTypeIdentifier(FileTreeDrag.type) else { return false }
-        Task { @MainActor in
-            let data: Data? = await withCheckedContinuation { continuation in
-                _ = provider.loadDataRepresentation(forTypeIdentifier: FileTreeDrag.type) { data, _ in
-                    continuation.resume(returning: data)
-                }
-            }
-            guard let data, let drag = try? JSONDecoder().decode(FileTreeDrag.Record.self, from: data),
-                  selectedProjectID == project.id, project.matchesPanelTarget(target),
-                  drag.source.token == application.fileTransferToken,
-                  drag.window == String(reflecting: ObjectIdentifier(self)),
-                  drag.source.project == project.id,
-                  drag.source.identity == String(reflecting: target),
-                  drag.source.root == project.fileTree.rootPath,
-                  drag.source.connectionRevision == clipboardRevision(for: target),
-                  project.fileTree.consumeDrag(nonce: drag.nonce, paths: drag.source.paths)
-            else { return }
-            performFileTreeCommand(
-                .drop(drag.source.paths, into: directory, copy: copy),
-                in: project, target: target, onChange: onChange
-            )
-        }
+              drag.source.token == application.fileTransferToken,
+              drag.window == String(reflecting: ObjectIdentifier(self)),
+              drag.source.project == project.id,
+              drag.source.identity == String(reflecting: target),
+              drag.source.root == project.fileTree.rootPath,
+              drag.source.connectionRevision == clipboardRevision(for: target),
+              project.fileTree.consumeDrag(nonce: drag.nonce, paths: drag.source.paths)
+        else { return false }
+        performFileTreeCommand(
+            .drop(drag.source.paths, into: directory, copy: copy),
+            in: project, target: target, onChange: onChange
+        )
         return true
     }
 

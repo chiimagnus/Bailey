@@ -687,6 +687,99 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "terminal")
     }
 
+    func testNativeDragOptionCopiesSelectionAndUnselectedRowMovesOnlyItself() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let alpha = try fixture.file("a.txt", text: "alpha original\n")
+        let beta = try fixture.file("b.txt", text: "beta original\n")
+        let gamma = try fixture.file("c.txt", text: "gamma original\n")
+        let copyFolder = try fixture.file("target/.keep", text: "").deletingLastPathComponent()
+        let moveFolder = try fixture.file("moved/.keep", text: "").deletingLastPathComponent()
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let a = WorkspaceUITestSupport.fileRow(alpha, in: window)
+        let b = WorkspaceUITestSupport.fileRow(beta, in: window)
+        let c = WorkspaceUITestSupport.fileRow(gamma, in: window)
+        let target = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", "target")).firstMatch
+        let moved = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", "moved")).firstMatch
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        XCTAssertTrue(c.waitForExistence(timeout: 15))
+        XCTAssertTrue(target.waitForExistence(timeout: 15))
+        XCTAssertTrue(moved.waitForExistence(timeout: 15))
+        a.click()
+        XCUIElement.perform(withKeyModifiers: .command) { c.click() }
+        XCTAssertTrue(a.isSelected && c.isSelected && !b.isSelected)
+        XCUIElement.perform(withKeyModifiers: .option) {
+            a.click(forDuration: 0.2, thenDragTo: target)
+        }
+        let copiedA = copyFolder.appendingPathComponent("a.txt")
+        let copiedC = copyFolder.appendingPathComponent("c.txt")
+        let copied = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: copiedA.path)
+                && FileManager.default.fileExists(atPath: copiedC.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [copied], timeout: 15), .completed)
+        XCTAssertEqual(try Data(contentsOf: copiedA), Data("alpha original\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: copiedC), Data("gamma original\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: alpha), Data("alpha original\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: gamma), Data("gamma original\n".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copyFolder.appendingPathComponent("b.txt").path))
+
+        b.click(forDuration: 0.2, thenDragTo: moved)
+        let movedB = moveFolder.appendingPathComponent("b.txt")
+        let movedOnlyB = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: movedB.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [movedOnlyB], timeout: 15), .completed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: beta.path))
+        XCTAssertEqual(try Data(contentsOf: movedB), Data("beta original\n".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: moveFolder.appendingPathComponent("a.txt").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: moveFolder.appendingPathComponent("c.txt").path))
+    }
+
+    func testNativeMultiFileDragMovesOnlySelectedFilesAndPreservesBytes() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let alpha = try fixture.file("a.txt", text: "alpha original\n")
+        let beta = try fixture.file("b.txt", text: "beta original\n")
+        let gamma = try fixture.file("c.txt", text: "gamma original\n")
+        let destination = try fixture.file("target/.keep", text: "")
+            .deletingLastPathComponent()
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let a = WorkspaceUITestSupport.fileRow(alpha, in: window)
+        let b = WorkspaceUITestSupport.fileRow(beta, in: window)
+        let c = WorkspaceUITestSupport.fileRow(gamma, in: window)
+        let target = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", "target")).firstMatch
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        XCTAssertTrue(c.waitForExistence(timeout: 15))
+        XCTAssertTrue(target.waitForExistence(timeout: 15))
+        a.click()
+        XCUIElement.perform(withKeyModifiers: .command) { c.click() }
+        XCTAssertTrue(a.isSelected && c.isSelected && !b.isSelected)
+        a.click(forDuration: 0.2, thenDragTo: target)
+        let movedA = destination.appendingPathComponent("a.txt")
+        let movedC = destination.appendingPathComponent("c.txt")
+        let completed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: movedA.path)
+                && FileManager.default.fileExists(atPath: movedC.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [completed], timeout: 15), .completed)
+        XCTAssertEqual(try Data(contentsOf: movedA), Data("alpha original\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: movedC), Data("gamma original\n".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: alpha.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: gamma.path))
+        XCTAssertEqual(try Data(contentsOf: beta), Data("beta original\n".utf8))
+    }
+
     func testMultiSelectContextTargetsAndBulkTrashAgainstRealDisk() throws {
         let volume = ProcessInfo.processInfo.environment["BAILEY_P2_TEST_TRASH_VOLUME"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }

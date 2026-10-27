@@ -224,14 +224,15 @@ struct ToolPanelView: View {
                                 }
                             }
                         },
-                        makeDragProvider: { [target = filesTarget] item in
-                            guard let target else { return NSItemProvider() }
-                            return manager.makeFileTreeDragProvider(for: item, in: project, target: target)
+                        beginDrag: { [target = filesTarget] item in
+                            guard let target else { return nil }
+                            return manager.beginFileTreeDrag(for: item, in: project, target: target)
                         },
-                        receiveInternalDrop: { [target = filesTarget] provider, directory, copy in
+                        endDrag: { project.fileTree.cancelDrag(nonce: $0) },
+                        receiveInternalDrop: { [target = filesTarget] record, directory, copy in
                             guard let target else { return false }
                             return manager.receiveFileTreeDrop(
-                                provider, into: directory, copy: copy,
+                                record, into: directory, copy: copy,
                                 in: project, target: target, onChange: { git.refresh() }
                             )
                         }

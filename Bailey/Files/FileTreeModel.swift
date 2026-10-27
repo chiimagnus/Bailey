@@ -404,6 +404,10 @@ final class FileTreeModel {
         return record
     }
 
+    func cancelDrag(nonce: UUID) {
+        if activeDrag?.nonce == nonce { activeDrag = nil }
+    }
+
     func consumeDrag(nonce: UUID, paths: [String]) -> Bool {
         guard let activeDrag, activeDrag.nonce == nonce, activeDrag.paths == paths,
               paths.allSatisfy({ path in items.contains {
