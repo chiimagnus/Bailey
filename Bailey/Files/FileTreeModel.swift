@@ -739,6 +739,7 @@ final class FileTreeModel {
         }
         if scopeChanged || channelChanged {
             contextMenuTargetPath = nil
+            activeDrag = nil
             if !sameRemoteRootReconnected {
                 items = []
                 showExcluded = false
@@ -980,15 +981,7 @@ final class FileTreeModel {
            isCurrentTarget() {
             for entry in result.succeeded {
                 if action == .move, let destination = entry.destination {
-                    remapExpanded(from: entry.source, to: destination)
-                    func moved(_ path: String) -> String {
-                        guard LocalPathScope.contains(path, in: entry.source) else { return path }
-                        return destination + String(path.dropFirst(entry.source.count))
-                    }
-                    if let selectedPath { self.selectedPath = moved(selectedPath) }
-                    if let selectedCompactPath { self.selectedCompactPath = moved(selectedCompactPath) }
-                    selectedPaths = Set(selectedPaths.map(moved))
-                    selectionAnchorPath = selectionAnchorPath.map(moved)
+                    remapPaths(from: entry.source, to: destination)
                 } else if action == .delete {
                     expanded = expanded.filter {
                         !LocalPathScope.contains($0, in: entry.source)
@@ -1146,33 +1139,22 @@ final class FileTreeModel {
         }
         // The disk mutation succeeded; only the old tree's visual state is stale.
         guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return dest }
-        remapExpanded(from: item.path, to: dest)
-        func moved(_ path: String) -> String {
-            guard path == item.path || path.hasPrefix(item.path + "/") else { return path }
-            return dest + String(path.dropFirst(item.path.count))
-        }
-        if let selectedPath { self.selectedPath = moved(selectedPath) }
-        if let selectedCompactPath { self.selectedCompactPath = moved(selectedCompactPath) }
-        selectedPaths = Set(selectedPaths.map(moved))
-        selectionAnchorPath = selectionAnchorPath.map(moved)
+        remapPaths(from: item.path, to: dest)
         invalidateDirectory(containing: item.path)
         await rebuild()
         return dest
     }
 
-    /// Keeps expansion state after a directory rename by rewriting the old
-    /// path prefix (for the folder itself and any expanded descendants).
-    private func remapExpanded(from oldPath: String, to newPath: String) {
-        func remap(_ paths: Set<String>) -> Set<String> {
-            Set(paths.map { path in
-                if path == oldPath { return newPath }
-                if path.hasPrefix(oldPath + "/") {
-                    return newPath + String(path.dropFirst(oldPath.count))
-                }
-                return path
-            })
+    private func remapPaths(from oldPath: String, to newPath: String) {
+        func moved(_ path: String) -> String {
+            guard LocalPathScope.contains(path, in: oldPath) else { return path }
+            return newPath + String(path.dropFirst(oldPath.count))
         }
-        expanded = remap(expanded)
+        expanded = Set(expanded.map(moved))
+        selectedPath = selectedPath.map(moved)
+        selectedCompactPath = selectedCompactPath.map(moved)
+        selectedPaths = Set(selectedPaths.map(moved))
+        selectionAnchorPath = selectionAnchorPath.map(moved)
     }
 
     // MARK: - Create (inline draft)

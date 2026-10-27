@@ -896,6 +896,8 @@ final class FileTreeTests: XCTestCase {
                         scope: "ssh:fixture", panelIdentity: identity, connectionRevision: 1)
         let row = try XCTUnwrap(tree.items.first { $0.path == oldFile.path })
         tree.select(row)
+        tree.selectForContextMenu(row)
+        let drag = try XCTUnwrap(tree.beginDrag(for: row))
         await backend.setUnavailable(true)
         await tree.sync(root: root.path, backend: backend,
                         scope: "ssh:fixture", panelIdentity: identity, connectionRevision: 2)
@@ -905,6 +907,9 @@ final class FileTreeTests: XCTestCase {
                        "Reconnection alone must not discard the current cursor")
         XCTAssertEqual(tree.selectedPaths, [oldFile.path],
                        "An unreadable new channel retains the last trustworthy Selection")
+        XCTAssertNil(tree.contextMenuTargetPath)
+        XCTAssertFalse(tree.hasActiveDrag, "A drag cannot survive replacement of its SSH channel")
+        XCTAssertFalse(tree.consumeDrag(nonce: drag.nonce, paths: drag.paths))
         let destination = root.appendingPathComponent("moved")
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         let denied = await tree.performFileOperation(
@@ -1674,6 +1679,57 @@ final class FileTreeTests: XCTestCase {
         await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared, scope: "ssh:another-machine")
         XCTAssertTrue(tree.selectedPaths.isEmpty)
         XCTAssertNil(tree.selectedPath)
+    }
+
+    func testSelectionAnchorFollowsRenameMoveDeletionAndVisibilityWithoutRevivingOldPaths() async throws {
+        let root = fixture.appendingPathComponent("projection")
+        let destination = root.appendingPathComponent("folder")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let settings = AppSettings(configURL: fixture.appendingPathComponent("config.toml"))
+        let tree = FileTreeModel(settings: settings)
+        for name in ["a", "b", "c", "d", "e", "f"] {
+            try Data(name.utf8).write(to: root.appendingPathComponent(name))
+        }
+        await tree.sync(root: root.path, backend: backend)
+        func row(_ name: String) throws -> FileTreeModel.Item {
+            try XCTUnwrap(tree.items.first { $0.path == root.appendingPathComponent(name).path })
+        }
+        func paths(_ names: [String]) -> Set<String> {
+            Set(names.map { root.appendingPathComponent($0).path })
+        }
+        tree.select(try row("a"))
+        tree.select(try row("c"), toggling: true)
+        let renamed = await tree.rename(try row("c"), to: "cc")
+        XCTAssertEqual(renamed, root.appendingPathComponent("cc").path)
+        tree.select(try row("e"), extending: true)
+        XCTAssertEqual(tree.selectedPaths, paths(["a", "cc", "d", "e"]))
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("cc")), Data("c".utf8))
+
+        await tree.toggle(try row("folder"))
+        let moved = await tree.performFileOperation(.move, paths: [try row("cc").path], into: destination.path)
+        XCTAssertTrue(moved.failures.isEmpty)
+        XCTAssertEqual(tree.selectedPaths, paths(["a", "folder/cc", "d", "e"]))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("cc").path))
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("cc")), Data("c".utf8))
+        tree.select(try row("a"), extending: true)
+        XCTAssertEqual(tree.selectedPaths, paths(["folder/cc", "a", "d", "e"]))
+
+        try FileManager.default.removeItem(at: destination.appendingPathComponent("cc"))
+        await tree.sync(root: root.path, backend: backend)
+        tree.select(try row("f"), extending: true)
+        XCTAssertEqual(tree.selectedPaths, paths(["a", "b", "d", "e", "f"]))
+        XCTAssertEqual(tree.selectedPath, root.appendingPathComponent("f").path)
+        try settings.applyFilesExclude(["b", "e"])
+        await tree.refreshVisibility()
+        XCTAssertEqual(tree.selectedPaths, paths(["a", "d", "f"]))
+        try settings.applyFilesExclude([])
+        await tree.refreshVisibility()
+        XCTAssertEqual(tree.selectedPaths, paths(["a", "d", "f"]), "Unhiding cannot revive Selection")
+        try FileManager.default.removeItem(at: root.appendingPathComponent("a"))
+        try Data("replacement".utf8).write(to: root.appendingPathComponent("a"))
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertEqual(tree.selectedPaths, paths(["a", "d", "f"]), "Identity is the scoped path, not an inode")
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("a")), Data("replacement".utf8))
     }
 
     func testRenameKeepsFilesCursorOnRenamedFileAndDirectoryDescendant() async throws {
