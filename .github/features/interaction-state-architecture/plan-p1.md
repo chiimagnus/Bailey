@@ -1,8 +1,9 @@
 # P1：树/列表状态语义与 Files 交互基础
 
-**目标：** 以 VS Code List/Tree/Explorer 的真实行为为规范，
-统一 Focus、Selection、Anchor、Expand、Hover、Displayed、Context、稳定 identity 与 AX；
+**目标：** 对照 VS Code List/Tree/Explorer 的真实行为，
+明确 Focus、Selection、Anchor、Expand、Hover、Displayed、Context、稳定 identity 与 AX 的含义；
 在 Files 领域 owner 上修复已证实缺陷，避免先画颜色、再用 View 猜状态。
+这些是按组件适用的分析概念，不是一套要求所有行实现的统一状态结构。
 
 **上游主线：** VS Code 固定提交中
 `listWidget.ts` 的 `Trait/SelectionTrait/KeyboardController/MouseController/changeSelection/DefaultStyleController`，
@@ -190,14 +191,19 @@ Git Changes/历史树目前只传普通 `TreeFolderRow`，并未接入 Files 的
    `TreeRowStyle.RowHighlightStyle/TreeRowSurface` 和当前 Theme owner 编码；
    Files/Changes/Graph 只传语义，不复制 `.background` 与 `.overlay` 决策。
    Dock 标签/Settings 不盲目复用相同高亮。
-3. 为每个状态组合及互斥先后绘制最小 `NSHostingView` 真实像素断言；
-   AX `isSelected` 只跟显式 Selection，键盘焦点另走原生语义，
+   现有共享组件若已表达目标规则，保留实现，只修确认错误的调用参数或重复绘制；
+   不为了“统一八种状态”增加状态对象、重命名包装或重写优先级。
+3. 为各组件实际适用的状态组合及互斥先后绘制最小 `NSHostingView` 真实像素断言；
+   文件／资源树的 AX `isSelected` 只跟显式 Selection，键盘焦点另走原生语义，
    `displayed` 不添加虚假 AX Selected。
+   Projects 的当前项目、Palette 的高亮结果和 Ctrl+Tab 的预览候选按各自契约验证，
+   不把共享视觉参数误认成共享的业务选择模型。
 4. 删除真实重复的本地视觉实现，除非它表达 Tabs 和 Graph 特有的视觉意义；
    避免因换主题触发终端、编辑器重建。
 
-**验证：** `FileTreeTests` 已有 bitmap 断言扩展至 Graph/Changes/Projects 不适用的
-独立状态；`GitGraphPaletteTests`；真实 `SharedTreeUITests/GitGraphGeometryUITests`
+**验证：** 扩展 `FileTreeTests` 已有 bitmap 断言，分别覆盖 Changes/Graph 适用组合；
+检查 Projects、Palette、Ctrl+Tab 与标签外壳等共享 `RowHighlightStyle` 使用方未被连带改变，
+不为不适用的状态补字段或制造组合；`GitGraphPaletteTests`；真实 `SharedTreeUITests/GitGraphGeometryUITests`
 做主题、活动组与失焦/菜单，字号/窄宽/长 Unicode 和辅助功能树；
 `make build:dev` 和 `git diff --check`。
 **文档/提交：** `docs/ui.md` 作为唯一共享外观规则 owner，

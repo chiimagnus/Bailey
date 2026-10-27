@@ -4,7 +4,7 @@
 
 Bailey 的文件树、Git Changes、Git Graph、Projects、Dock 标签以及命令面板，
 曾各自管理蓝色描边、主题选中底色、灰色浏览底、悬停、键盘输入、右键菜单及文件打开。
-前次仅共享高亮组件并未统一**状态所有权与事件因果关系**；
+前次仅共享高亮组件，尚未充分核对各领域的**状态含义、所有权与事件因果关系**；
 还曾误将原生 Settings 侧栏纳入共享样式，后以 `9c84d355` 回撤。
 
 当前已能从源码确认：Files 以 `selectedPath` 代表 Focus、`selectedPaths` 代表 Selection，
@@ -20,6 +20,26 @@ Dock 一组只保留一个展示项、一个菜单上下文，不支持 VS Code 
 不再作为执行依据或当前验证矩阵。
 各 phase/task 必须按该表先核对相应 upstream 入口，再审 Bailey 的真实调用链。
 
+## 术语与改造边界
+
+Focus、Selection、Anchor、Expanded、Active、Hover、Displayed、Context Target
+是本 Feature 用来分析交互的八类概念，**不是 VS Code 官方统一的“8 状态模型”**，
+也不是要求每个组件补齐八个字段。Bailey 已有其中大多数状态，本次沿现有所有者修正具体差异，
+不推倒重建，也不以字段同名、数量齐全或集中存储作为验收。
+
+- **Focus 分两层：** 列表保留的行游标不等于实际输入焦点；
+  `selectedPath/selectedChange/selectedRowID/cursorProjectID` 的名字不能代替行为判断。
+  原生输入仍由当前窗口的 firstResponder 及控件实际反馈确认，失焦无需销毁有效游标。
+- **语义分开不等于独立存储：** 合法的只读派生、成员约束和明确动作联动继续保留。
+  例如 VS Code 的 `activeEditor` 由组内 Selection 首项取得；
+  Bailey 的 `DockGroup.selected` 表示展示项，不是未来新增的标签多选集合。
+  Displayed 可由现有内容推导，Context Target 可通过本次菜单事件传递，不另建全局字段。
+- **只增加确有需求的状态：** Git Changes 和 Dock 补资源／标签多选与 Anchor；
+  Graph 的展开、比较两端不变成通用多提交 Selection，Projects 不增加文件式多选。
+  Palette／Ctrl+Tab 保留暂态机制，Settings 保持原生 List，Hover 留在局部视图。
+- **差异不是自动成立的缺陷：** 先核对已授权行为和真实组合，再决定是否修改。
+  右键清除背景并绘制临时描边是 Bailey 的现行视觉约定，不因不同于 VS Code 就取消。
+
 ## 目标
 
 1. **逐层吸收 VS Code**：基础 List/Tree 的 Focus、Selection、Anchor、Context、Hover、
@@ -31,7 +51,8 @@ Dock 一组只保留一个展示项、一个菜单上下文，不支持 VS Code 
    在 Bailey 原生 SwiftUI/AppKit/现有 Git 后端上独立实现可观察等价行为。
 3. **状态语义稳定**：Focus 游标、明确 Selection、多选 Anchor、Displayed 文件/Diff、
    Expanded 目录/提交、Hover、菜单 Context Target、活动 Dock Group 和真实 NSWindow
-   firstResponder 不再互相推导、互相覆盖。
+   firstResponder 不再被误当成彼此；不能仅凭某个状态变化擅自触发另一个动作。
+   一次明确动作可更新多个状态，合法派生不复制成另一份可写真源。
 4. **一个事件只有一个明确意图**：左键、修饰键、右键、双击、Space/Return/方向键、
    文件打开、Git Diff、项目切换、标签选择/拖放/关闭和命令路由都由唯一入口决定，
    不能在 View/Model/Window 三处重复“猜测”行为。

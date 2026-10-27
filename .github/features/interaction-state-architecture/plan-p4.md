@@ -8,7 +8,8 @@
 
 **上游已核对：**
 - `editorGroupView.ts:setSelection/openEditor/doShowEditor/setActive`：
-  ActiveEditor、SelectedEditors、PreviewEditor 与组 Active 独立；
+  ActiveEditor、SelectedEditors、PreviewEditor 与组 Active 含义不同，不能混用；
+  不要求各自独立存储：`editorGroupModel.ts` 的 active getter 直接取 Selection 首项；
 - `multiEditorTabsControl.ts:registerTabListeners/selectEditor/`
   `selectEditorsBetween/unselectEditor/onDragStart`：
   Mac ⌘切换单个标签、Shift 范围选择、Anchor、批量拖动/右键；
@@ -96,7 +97,7 @@ Projects 是 Bailey 固有列表，按相同列表行为验证，但不变成文
 `editorGroupView.ts:activeEditor/setSelection/setActive`；
 `editorPart.ts:doSetGroupActive`；
 `editorTabsControl.ts:onTabContextMenu`。
-上游 `activeEditor`、`selectedEditors`、`groupActive` 独立，
+上游 `activeEditor`、`selectedEditors`、`groupActive` 语义分开，前两者有成员与顺序约束，
 右键未显示 tab 不必先打开。
 
 **锚点：**
@@ -240,6 +241,7 @@ Projects 是 Bailey 固有列表，按相同列表行为验证，但不变成文
    Diff、Projects/Files/Git singleton 工具）的合法性与行为边界。
 2. 在 **DockWorkspaceModel** 持有按 groupID 索引的非持久 Selection + Anchor，
    `DockGroup.selected` 继续是唯一 Displayed；
+   不为对齐八类术语再增加 displayed/activeEditor 的可写镜像。
    用 UUID/DockItem identity 对齐列表与变更；绝不把 global selectedTabID
    或真实显示的 `DockGroup.selected` 替换成“多选集合”，也不创建全 App Manager。
    组删/Tab 关/项目换/拖动到别组时更新或清空对应 Anchor 和集合；

@@ -154,6 +154,8 @@ Git Graph 扩展 `web/styles/main.css` 与 `web/graph.ts`
    完成 `audit-p5.md`，报告 Go/No-Go 和逐项 Deferred 条件。
 2. 审计不仅核对“是否全部 task 有提交”，还需检查：
    VS Code 上游源码映射没有未解释的交互缺项；
+   八类交互概念没有被实现成全局模型，未要求每个组件齐备字段或同名；
+   合法派生与明确动作联动仍在，既有正确路径和已确认产品差异没有为“统一”而重写；
    Git Graph 扩展许可证约束始终遵守；
    Git Changes、Dock 的新增多选并非仅视觉；
    所有输入、文件、Git、Tab 的目标真实有效；

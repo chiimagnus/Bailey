@@ -1,7 +1,7 @@
 # P3：Git Changes、内置 History Graph 与 Git Graph 扩展对齐
 
-**目标：** 不再把 Git Changes 的“当前显示 Diff”、资源选择和键盘 Focus 混合，
-让 Stage/Unstage/Discard 的实际集合与菜单完全准确；
+**目标：** 保留 Git Changes 已分开的“当前显示 Diff”、单项明确选择和键盘游标，
+核对它们的事件规则与视觉组合，补齐资源多选，让 Stage/Unstage/Discard 的实际集合与菜单完全准确；
 同时独立复现 Git Graph 的提交、引用标签、详情、比较、工作树与原生菜单的交互，
 确保色轨/节点、异步身份和危险动作正确。
 
@@ -57,17 +57,22 @@ Graph 游标/详情展开/菜单；`CommitGraphLayout` 与
 `isDisplayedChange`；`GitEntryRow`、`GitStatusModel.Entry`；
 `Project.openDiff` 与 DockGroup。
 
+**既有能力边界：** `selectedChange` 当前是游标，`explicitlySelectedChange` 才是单项明确选择；
+`displayedDiff` 已从项目内容读取，不另存一份。不能因变量名不同就判定状态混合，
+也不为术语整齐增加别名／镜像或纯改名任务。真正集合升级及旧单项字段删除在 P3-T3 同时完成。
+
 **步骤：**
 1. 将 ChangeSelection 的 scoped identity（仓库/状态区/路径）与
    当前显示 Diff、临时菜单上下文的等价判断逐行对照源码；
    确认 staged/unstaged 同名条目不会因共享 `path` 错选。
-2. Red（缺陷）：在一个真实临时 Git 仓库建立 modified/untracked/
+2. 对新增行为／已证实缺陷建立 Red，其余保留回归：在一个真实临时 Git 仓库建立 modified/untracked/
    staged+unstaged/merge-conflict 和目录节点，
    分别操作列表/树视图；左键、↑↓、←→、Space/Return、Esc、
    文件按钮、右键、输入框、Palette 取消。
    Focus 移动不得浏览 Diff 或修改 index；
    目录展开不得假装选择同路径的文件。
-3. 在 GitPanel 唯一所有者合并重复的“选择游标时顺便打开 Diff”判定，
+3. 只在确认存在重复或错误联动时，在 GitPanel 唯一所有者收敛该判定；
+   已正确分开的导航和打开路径原样保留。
    让 Browse/Expand/Context 与 keyboard focus 分开；
    `TreeKeyboardHost` 只承担原生输入，不能逆向决定仓库。
    删除实际重复的 `@State` 镜像或二次焦点路径，但不要删除 P3-T3 所需 Selection。

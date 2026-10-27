@@ -188,6 +188,18 @@
     只跑 todo validate 不会发现这种浏览导航缺陷。现为全部任务增加显式 ID，
     并单独校验 task、文件、短锚点和唯一标题的一一对应。
 
+18. **Medium：将语义分开误写成禁止派生，或暗示 Bailey 尚未区分状态。**
+    八类概念是分析词汇，不是 VS Code 官方统一状态模型；List 的三个 Trait、Tree 的展开、
+    编辑器组状态和菜单上下文分别有自己的实现。固定版本 `editorGroupModel.ts` 的
+    `active` getter 直接返回 `selection[0]`，`doSetSelection` 同时维护 active 与 selected；
+    因而“独立语义”不能要求独立可写字段或禁止一切派生。
+    Bailey 的 GitPanel 已分别持有 selectedChange 游标、explicitlySelectedChange 单项选择、
+    contextChange，并从当前内容取得 displayedDiff；TreeRowSurface 已把 Hover 留在视图，
+    RowHighlightStyle 也已接收六个独立视觉标志。不能因旧名字或上游颜色不同就推导出 Bug。
+    idea 已明确术语边界，P1-T4 按适用组合核对现有共享样式及调用参数，P3-T1 保留正确路径，
+    P4 保留 Displayed 与 Selection 的约束，P5 不以“八字段齐全”验收。
+    新增多选只落在 Changes/Dock，不扩成 Projects/Graph 的通用集合；菜单期清底色保持现行约定。
+
 ## 每个替换任务必须当场删除什么
 
 删除以新入口真实接通、回归通过为前提；不先删掉有职责的路径再用 fallback 顶上。
