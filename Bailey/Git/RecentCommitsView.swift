@@ -1250,9 +1250,13 @@ struct RecentCommitsView: View {
                         focusRing: isFocusedRow(folderRowID(
                             commit, section: section, path: node.path
                         )),
-                        contextRing: contextRowID == folderRowID(
-                            commit, section: section, path: node.path
-                        )
+                        contextRing: node.compactComponents.contains {
+                            contextRowID == folderRowID(commit, section: section, path: $0.path)
+                        },
+                        compactSegment: { component, index in
+                            folderSegment(component, index: index, row: node, commit: commit,
+                                          section: section, root: worktree.path, collapseKey: key + ":" + node.path)
+                        }
                     ) {
                         let folder = key + ":" + node.path
                         selectRow(folderRowID(commit,
@@ -1268,9 +1272,7 @@ struct RecentCommitsView: View {
                         ))
                     }
                     .contextMenu {
-                        Button(String(localized: "Copy Absolute Path", table: "Git")) {
-                            copy((worktree.path as NSString).appendingPathComponent(node.path))
-                        }
+                        folderMenu(path: node.path, root: worktree.path)
                     }
                 } else if let entry = byPath[node.path] {
                     worktreeFile(entry, row: node, staged: staged, section: section,
@@ -1377,8 +1379,13 @@ struct RecentCommitsView: View {
                     TreeFolderRow(row: node, scale: fontScale, leadingInset: filesInset,
                         focusRing: isFocusedRow(folderRowID(commit,
                             section: section, path: node.path)),
-                        contextRing: contextRowID == folderRowID(commit,
-                            section: section, path: node.path)) {
+                        contextRing: node.compactComponents.contains {
+                            contextRowID == folderRowID(commit, section: section, path: $0.path)
+                        },
+                        compactSegment: { component, index in
+                            folderSegment(component, index: index, row: node, commit: commit,
+                                          section: section, root: repoRoot, collapseKey: section + ":" + node.path)
+                        }) {
                         selectRow(folderRowID(commit, section: section, path: node.path))
                         toggleFolder(section + ":" + node.path)
                     }
@@ -1390,12 +1397,7 @@ struct RecentCommitsView: View {
                         ))
                     }
                     .contextMenu {
-                        Button(String(localized: "Copy Absolute Path", table: "Git")) {
-                            copy((repoRoot as NSString).appendingPathComponent(node.path))
-                        }
-                        Button(String(localized: "Copy Relative Path", table: "Git")) {
-                            copy(node.path)
-                        }
+                        folderMenu(path: node.path, root: repoRoot)
                     }
                 } else if let file = byPath[node.path] {
                     changedFile(file, row: node, in: commit, showDirectory: false,
@@ -1410,6 +1412,35 @@ struct RecentCommitsView: View {
                     .background { fileRails(rails, spacing: spacing) }
             }
         }
+    }
+
+    private func folderSegment(
+        _ component: TreeDisplayModel.Row.CompactComponent, index: Int, row: TreeDisplayModel.Row,
+        commit: Commit, section: String, root: String, collapseKey: String
+    ) -> AnyView {
+        let cursor = folderRowID(commit, section: section, path: row.path)
+        let context = folderRowID(commit, section: section, path: component.path)
+        return AnyView(TreeCompactSegment(component: component, index: index,
+            isContextTarget: contextRowID == context,
+            onClick: {
+                selectRow(cursor)
+                toggleFolder(collapseKey)
+            },
+            onContextClick: {
+                selectedRowID = cursor
+                contextRowID = context
+            },
+            onMenuClosed: { dismissContextRow(context) }) {
+                folderMenu(path: component.path, root: root)
+            })
+    }
+
+    @ViewBuilder
+    private func folderMenu(path: String, root: String) -> some View {
+        Button(String(localized: "Copy Absolute Path", table: "Git")) {
+            copy((root as NSString).appendingPathComponent(path))
+        }
+        Button(String(localized: "Copy Relative Path", table: "Git")) { copy(path) }
     }
 
     private func changedFile(

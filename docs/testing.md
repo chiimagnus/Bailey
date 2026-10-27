@@ -207,9 +207,8 @@ Git Graph 的引用和 Worktree 标签用数据模型及实际展示文案断言
 宿主 `Bailey` Scheme 的 TestAction 向 Debug 宿主传入 `--isolated-ui-test`。
 Makefile 的测试构建使用独立 Bundle ID `chiimagnus.bailey.dev`；
 独立 UI Test 显式通过 `XCUIApplication(bundleIdentifier:)` 启动 Bailey Dev，
-并传入 `--isolated-ui-test`、`-ApplePersistenceIgnoreState YES` 与一次性 `BAILEY_UI_TEST_RUN_ID`，
-不允许定位或终止正式 Bailey。AppKit 自带的窗口状态恢复与 Bailey 的 `SessionStore` 彼此独立：
-UI Runner 禁用前者，避免旧系统窗口污染测试；验证 Bailey 快照重启时保持相同的测试 UUID，
+并传入 `--isolated-ui-test` 与一次性 `BAILEY_UI_TEST_RUN_ID`；
+不允许定位或终止正式 Bailey。验证 Bailey 快照重启时保留同一测试 UUID，
 并通过系统「新建窗口」建立真实场景。
 
 需要单独检查原生界面时使用相同签名的 Debug 包：
@@ -220,7 +219,7 @@ open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey.app" --args -
 
 该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。
 Xcode 27.2 的 XCUITest 有时只启动 Dev 进程而不显示初始 `WindowGroup`，
-共用启动辅助函数仅在窗口缺失时点击 App 自己的「新建窗口」菜单创建原生窗口；
+共用启动辅助函数在窗口缺失时使用已有的 `⌘⇧N` 命令创建窗口；
 不得改为 `open -n` 后按 Bundle ID 附着（可能另起非隔离 Dev，污染普通会话快照）。
 **开发版与正式版拥有不同 Bundle ID、配置路径和 DerivedData**，XCUITest 仅定位 Bailey Dev；
 正式版运行时也可执行宿主测试，无须强制退出用户 App。`make build:ui` 只编译。

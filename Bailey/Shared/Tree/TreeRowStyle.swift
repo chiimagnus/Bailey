@@ -90,7 +90,7 @@ struct TreeKeyboardHost: NSViewRepresentable {
     }
 
     func updateNSView(_ view: TreeKeyboardView, context: Context) {
-        owner.view = view
+        // 旧宿主可能晚于新宿主收到更新；只有 makeNSView 可以登记键盘所有权。
         view.onKeyDown = onKeyDown
         view.onEditCommand = onEditCommand
         view.canEditCommand = canEditCommand
@@ -435,6 +435,38 @@ extension TreeDisplayModel.Status {
     }
 }
 
+struct TreeCompactSegment<MenuContent: View>: View {
+    let component: TreeDisplayModel.Row.CompactComponent
+    let index: Int
+    var highlighted = false
+    var isContextTarget = false
+    let onClick: () -> Void
+    let onContextClick: () -> Void
+    let onMenuClosed: () -> Void
+    var onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)? = nil
+    @ViewBuilder var menuContent: () -> MenuContent
+    @State private var hovering = false
+
+    var body: some View {
+        Text(component.name)
+            .underline(highlighted)
+            .padding(.horizontal, 2)
+            .contentShape(Rectangle())
+            .background(RoundedRectangle(cornerRadius: 3)
+                .fill(hovering && !isContextTarget ? Color.primary.opacity(0.05) : .clear))
+            .onHover { hovering = $0 }
+            .highPriorityGesture(TapGesture().onEnded { onClick() })
+            .overlay {
+                ContextMenuClickTarget(onContextClick: onContextClick,
+                                      onMenuClosed: onMenuClosed, onMenuKeyDown: onMenuKeyDown)
+                    .contextMenu(menuItems: menuContent)
+            }
+            .accessibilityLabel(component.name)
+            .accessibilityValue(component.path)
+            .accessibilityIdentifier("bailey.tree.folder.component.\(index)")
+    }
+}
+
 private struct TreeRowLabel: View {
     private let themeChanges = Theme.changes
     @Environment(\.colorScheme) private var colorScheme
@@ -442,7 +474,7 @@ private struct TreeRowLabel: View {
     let iconPath: String
     let scale: CGFloat
     var directory: String? = nil
-    var compactSegment: ((TreeDisplayModel.Row.CompactComponent) -> AnyView)? = nil
+    var compactSegment: ((TreeDisplayModel.Row.CompactComponent, Int) -> AnyView)? = nil
 
     var body: some View {
         let _ = themeChanges.revision
@@ -463,7 +495,7 @@ private struct TreeRowLabel: View {
                             HStack(spacing: 0) {
                                 ForEach(Array(row.compactComponents.enumerated()), id: \.element.path) { entry in
                                     if entry.offset > 0 { Text(" / ") }
-                                    compactSegment(entry.element)
+                                    compactSegment(entry.element, entry.offset)
                                 }
                             }
                         } else {
@@ -499,9 +531,8 @@ struct TreeFolderRow<Accessory: View>: View {
     var focusRing = false
     var contextRing = false
     var isSelected = false
-    var selectionEnabled = false
     var listActive = false
-    var compactSegment: ((TreeDisplayModel.Row.CompactComponent) -> AnyView)? = nil
+    var compactSegment: ((TreeDisplayModel.Row.CompactComponent, Int) -> AnyView)? = nil
     let toggle: () -> Void
     @ViewBuilder var accessory: (Bool) -> Accessory
 
@@ -518,7 +549,7 @@ struct TreeFolderRow<Accessory: View>: View {
                     .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel)
                 .accessibilityIdentifier("bailey.tree.folder")
-                .accessibilityAddTraits((selectionEnabled ? isSelected : focusRing) ? .isSelected : [])
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
                 .accessibilityValue(row.isExpanded
                     ? String(localized: "Expanded", table: "Sidebar")
                     : String(localized: "Collapsed", table: "Sidebar"))
@@ -532,13 +563,13 @@ extension TreeFolderRow where Accessory == EmptyView {
     init(row: TreeDisplayModel.Row, scale: CGFloat,
          leadingInset: CGFloat = TreeRowStyle.contentInset,
          focusRing: Bool = false, contextRing: Bool = false,
-         isSelected: Bool = false, selectionEnabled: Bool = false,
+         isSelected: Bool = false,
          listActive: Bool = false,
-         compactSegment: ((TreeDisplayModel.Row.CompactComponent) -> AnyView)? = nil,
+         compactSegment: ((TreeDisplayModel.Row.CompactComponent, Int) -> AnyView)? = nil,
          toggle: @escaping () -> Void) {
         self.init(row: row, scale: scale, leadingInset: leadingInset,
                   focusRing: focusRing, contextRing: contextRing,
-                  isSelected: isSelected, selectionEnabled: selectionEnabled,
+                  isSelected: isSelected,
                   listActive: listActive, compactSegment: compactSegment,
                   toggle: toggle) { _ in EmptyView() }
     }
@@ -551,7 +582,6 @@ struct TreeFileRow<Accessory: View>: View {
     var directory: String? = nil
     var displayed = false
     var isSelected = false
-    var selectionEnabled = false
     var listActive = false
     var focusRing = false
     var contextRing = false
@@ -576,7 +606,7 @@ struct TreeFileRow<Accessory: View>: View {
                     .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel + ", " + row.path)
                 .accessibilityIdentifier(accessibilityID)
-                .accessibilityAddTraits((selectionEnabled ? isSelected : focusRing) ? .isSelected : [])
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
                 .accessibilityHint(accessibilityHint)
                 accessory(hovering || focusRing)
             }

@@ -399,6 +399,83 @@ final class SharedTreeUITests: XCTestCase {
         XCTAssertTrue(leaf.exists)
     }
 
+    func testGitCompactSegmentsUseTheirRealChangesHistoryAndWorktreePaths() throws {
+        let clipboard = try WorkspaceUITestSupport.clipboardItems()
+        defer {
+            NSPasteboard.general.clearContents()
+            if !clipboard.isEmpty { XCTAssertTrue(NSPasteboard.general.writeObjects(clipboard)) }
+        }
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let tracked = try fixture.file("a1/b1/c1/base.txt", text: "committed\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        _ = try fixture.file("a1/b1/c1/untracked.txt", text: "untracked\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let window = app.windows.firstMatch
+        func compact() -> XCUIElement {
+            window.descendants(matching: .any).matching(identifier: "bailey.tree.folder")
+                .matching(NSPredicate(format: "label BEGINSWITH %@", "a1 / b1 / c1")).firstMatch
+        }
+        XCTAssertTrue(compact().waitForExistence(timeout: 20))
+        let middle = compact().descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder.component.1").firstMatch
+        guard middle.waitForExistence(timeout: 8) else {
+            XCTFail("Git Changes must expose each real directory in a compressed row")
+            return
+        }
+        XCTAssertEqual(middle.value as? String, "a1/b1")
+        middle.rightClick()
+        let ignore = app.menuItems["Add to .gitignore"]
+        XCTAssertTrue(ignore.waitForExistence(timeout: 8))
+        ignore.click()
+        let ignored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? String(contentsOf: fixture.root.appendingPathComponent(".gitignore"), encoding: .utf8))?
+                .contains("/a1/b1/") == true
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [ignored], timeout: 15), .completed)
+        XCTAssertFalse(try String(contentsOf: fixture.root.appendingPathComponent(".gitignore"),
+                                  encoding: .utf8).contains("/a1/b1/c1/"))
+
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let changesHeader = window.buttons["CHANGES"].firstMatch
+        XCTAssertTrue(changesHeader.waitForExistence(timeout: 10))
+        changesHeader.click()
+        let commit = window.buttons["E2E fixture history"].firstMatch
+        XCTAssertTrue(commit.waitForExistence(timeout: 20))
+        commit.click()
+        func verifySegments() {
+            XCTAssertTrue(compact().waitForExistence(timeout: 15))
+            for (index, path) in ["a1", "a1/b1", "a1/b1/c1"].enumerated() {
+                let segment = compact().descendants(matching: .any)
+                    .matching(identifier: "bailey.tree.folder.component.\(index)").firstMatch
+                XCTAssertTrue(segment.waitForExistence(timeout: 8))
+                XCTAssertEqual(segment.value as? String, path)
+                segment.rightClick()
+                let copy = app.menuItems["Copy Relative Path"]
+                XCTAssertTrue(copy.waitForExistence(timeout: 8))
+                copy.click()
+                XCTAssertEqual(NSPasteboard.general.string(forType: .string), path)
+                segment.rightClick()
+                let absolute = app.menuItems["Copy Absolute Path"]
+                XCTAssertTrue(absolute.waitForExistence(timeout: 8))
+                absolute.click()
+                XCTAssertEqual(NSPasteboard.general.string(forType: .string),
+                               fixture.root.appendingPathComponent(path).path)
+            }
+        }
+        verifySegments()
+        commit.click()
+        try "modified\n".write(to: tracked, atomically: true, encoding: .utf8)
+        let working = window.buttons["Uncommitted Changes"].firstMatch
+        XCTAssertTrue(working.waitForExistence(timeout: 15))
+        working.click()
+        verifySegments()
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["show", ":a1/b1/c1/base.txt"]), Data("committed\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: tracked), Data("modified\n".utf8))
+    }
+
     func testSharedTreeHitAreasOpenExactFileWithoutDuplicateTabs() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let nested = try fixture.file("folder/target.swift", text: "correct file\n")

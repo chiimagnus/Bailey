@@ -193,9 +193,11 @@ private struct FileTreeScrollView: View {
     let makeDragProvider: (FileTreeModel.Item) -> NSItemProvider
     let receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool
     @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.panelFontScale) private var fontScale
     @State private var keyboardOwner = TreeKeyboardOwner()
     @State private var keyboardFocused = false
     @State private var waitingForFirstRow = false
+    @State private var viewportHeight: CGFloat = 0
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -231,6 +233,9 @@ private struct FileTreeScrollView: View {
                 }
                 .padding(.bottom, 7)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .onScrollGeometryChange(for: CGFloat.self, of: { $0.containerSize.height }) { _, height in
+                viewportHeight = height
             }
             .background {
                 TreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleKey,
@@ -320,7 +325,8 @@ private struct FileTreeScrollView: View {
 
     private func handleKey(_ event: NSEvent) -> Bool {
         guard keyboardOwner.view?.window?.firstResponder === keyboardOwner.view,
-              isActive, canFocusKeyboard(), isCurrentTarget()
+              isActive, canFocusKeyboard(), isCurrentTarget(),
+              model.renamingPath == nil, model.draft == nil
         else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
         if modifiers.isEmpty, event.keyCode == 117 {
@@ -328,9 +334,14 @@ private struct FileTreeScrollView: View {
             return true
         }
         guard modifiers.isEmpty || modifiers == [.shift] else { return false }
+        let page = max(1, Int(viewportHeight / TreeRowStyle.rowHeight(fontScale)))
         switch event.keyCode {
         case 125: model.moveSelection(by: 1, extending: modifiers.contains(.shift)) // Down
         case 126: model.moveSelection(by: -1, extending: modifiers.contains(.shift)) // Up
+        case 115 where modifiers.isEmpty: model.moveSelection(by: -model.items.count)
+        case 119 where modifiers.isEmpty: model.moveSelection(by: model.items.count)
+        case 116 where modifiers.isEmpty: model.moveSelection(by: -page)
+        case 121 where modifiers.isEmpty: model.moveSelection(by: page)
         case 124 where modifiers.isEmpty: // Right
             guard let row = model.selectedItem, row.isDirectory else { return false }
             if !model.isExpanded(row) { Task { await model.toggle(row) } }
@@ -379,7 +390,6 @@ private struct FileTreeRow: View {
     let receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool
 
     @State private var editingName = ""
-    @State private var hoveredCompactPath: String?
     @FocusState private var fieldFocused: Bool
     @Environment(\.panelFontScale) private var fontScale
 
@@ -626,37 +636,24 @@ private struct FileTreeRow: View {
         }
     }
 
-    private func compactSegmentView(_ component: TreeDisplayModel.Row.CompactComponent) -> AnyView {
+    private func compactSegmentView(_ component: TreeDisplayModel.Row.CompactComponent, index: Int) -> AnyView {
         let target = item.item(for: component)
         return AnyView(
-            Text(component.name)
-                .underline(hasKeyboardCursor
-                    && (model.selectedCompactPath ?? item.path) == component.path)
-                .padding(.horizontal, 2)
-                .contentShape(Rectangle())
-                .background(
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(hoveredCompactPath == component.path
-                            && contextMenuPath != component.path
-                            ? Color.primary.opacity(0.05) : .clear)
-                )
-                .onHover { hovered in
-                    hoveredCompactPath = hovered ? component.path : nil
-                }
-                .highPriorityGesture(TapGesture().onEnded {
+            TreeCompactSegment(component: component, index: index,
+                highlighted: hasKeyboardCursor && (model.selectedCompactPath ?? item.path) == component.path,
+                isContextTarget: contextMenuPath == component.path,
+                onClick: {
                     guard isCurrentTarget() else { return }
                     if selectForClick(componentPath: component.path) { return }
                     Task {
                         guard isCurrentTarget() else { return }
                         await model.toggle(item)
                     }
-                })
-                .overlay {
-                    ContextMenuClickTarget(onContextClick: { selectForContextMenu(target) },
-                                           onMenuClosed: { model.dismissContextMenu(target: target.path) },
-                                           onMenuKeyDown: handleMenuKeyDown)
-                        .contextMenu { rowMenu(for: target) }
-                }
+                },
+                onContextClick: { selectForContextMenu(target) },
+                onMenuClosed: { model.dismissContextMenu(target: target.path) },
+                onMenuKeyDown: handleMenuKeyDown,
+                menuContent: { rowMenu(for: target) })
                 .onDrag { makeDragProvider(target) }
                 .onDrop(
                     of: [FileTreeDrag.type, UTType.fileURL.identifier],
@@ -668,10 +665,6 @@ private struct FileTreeRow: View {
                         receiveInternalDrop: receiveInternalDrop
                     )
                 )
-                .accessibilityLabel(component.name)
-                .accessibilityIdentifier(
-                    "bailey.tree.folder.component.\(item.compactComponents.firstIndex(of: component) ?? 0)"
-                )
         )
     }
 
@@ -680,9 +673,9 @@ private struct FileTreeRow: View {
         if item.isDirectory {
             TreeFolderRow(row: displayRow, scale: fontScale,
                           focusRing: hasKeyboardCursor, contextRing: hasContextRing,
-                          isSelected: isSelected, selectionEnabled: true,
+                          isSelected: isSelected,
                           listActive: listFocused,
-                          compactSegment: { component in compactSegmentView(component) }) {
+                          compactSegment: { component, index in compactSegmentView(component, index: index) }) {
                 guard isCurrentTarget() else { return }
                 if selectForClick() { return }
                 Task {
@@ -693,7 +686,7 @@ private struct FileTreeRow: View {
         } else {
             TreeFileRow(
                 row: displayRow, scale: fontScale, displayed: isCurrent,
-                isSelected: isSelected, selectionEnabled: true,
+                isSelected: isSelected,
                 listActive: listFocused,
                 focusRing: hasKeyboardCursor, contextRing: hasContextRing,
                 open: {

@@ -2129,9 +2129,15 @@ struct GitPanel: View {
             && controlActiveState == .key
         return TreeFolderRow(
             row: item, scale: panelFontScale,
-            focusRing: focused, contextRing: contextChange == key,
-            isSelected: explicitlySelectedChange == key, selectionEnabled: true,
+            focusRing: focused, contextRing: item.compactComponents.contains {
+                contextChange == ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
+                                               section: kind, path: $0.path)
+            },
+            isSelected: explicitlySelectedChange == key,
             listActive: keyboardFocused && isGitActive && controlActiveState == .key,
+            compactSegment: { component, index in
+                directorySegment(component, index: index, row: item, entries: entries, kind: kind)
+            },
             toggle: {
                 guard hasCurrentPanelTarget, model.canUseCurrentStatus else { return }
                 selectedChange = key
@@ -2151,16 +2157,46 @@ struct GitPanel: View {
                 discard: { requestDiscard(selected, trigger: discardTrigger) }
             )
         }
-        .overlay {
+        .background {
             ContextMenuClickTarget(
                 onContextClick: { focusContextChange(key) },
                 onMenuClosed: { dismissContextChange(key) }
             )
-                .contextMenu {
-                    directoryMenu(path: item.path, selected: selected, kind: kind,
-                                  stageTrigger: stageTrigger, unstageTrigger: unstageTrigger)
-                }
         }
+        .contextMenu {
+            directoryMenu(path: item.path, selected: selected, kind: kind,
+                          stageTrigger: stageTrigger, unstageTrigger: unstageTrigger)
+        }
+    }
+
+    private func directorySegment(
+        _ component: TreeDisplayModel.Row.CompactComponent, index: Int,
+        row: TreeDisplayModel.Row, entries: [GitStatusModel.Entry], kind: GitEntryRow.Kind
+    ) -> AnyView {
+        let cursor = ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
+                                     section: kind, path: row.path)
+        let context = ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
+                                      section: kind, path: component.path)
+        return AnyView(TreeCompactSegment(component: component, index: index,
+            isContextTarget: contextChange == context,
+            onClick: {
+                guard hasCurrentPanelTarget, model.canUseCurrentStatus else { return }
+                selectedChange = cursor
+                explicitlySelectedChange = cursor
+                model.toggleCollapsedFolder(kind.rawValue + ":" + row.path)
+                if isGitActive { keyboardOwner.focus() }
+            },
+            onContextClick: {
+                guard hasCurrentPanelTarget, model.canUseCurrentStatus else { return }
+                selectedChange = cursor
+                contextChange = context
+            },
+            onMenuClosed: { dismissContextChange(context) }) {
+                directoryMenu(path: component.path,
+                    selected: entries.filter { $0.path.hasPrefix(component.path + "/") }, kind: kind,
+                    stageTrigger: .entry(path: component.path, operation: .stage),
+                    unstageTrigger: .entry(path: component.path, operation: .unstage))
+            })
     }
 
     private func entryStatus(_ entry: GitStatusModel.Entry, kind: GitEntryRow.Kind) -> Character {
@@ -2755,7 +2791,7 @@ private struct GitEntryRow: View {
             scale: fontScale, iconPath: absolutePath,
             directory: showDirectory ? entry.directory : nil,
             displayed: displayed, isSelected: isSelected,
-            selectionEnabled: true, listActive: listActive,
+            listActive: listActive,
             focusRing: focusRing, contextRing: contextRing,
             accessibilityHint: kind == .merge
                 ? String(localized: "Opens conflict changes", table: "Sidebar")

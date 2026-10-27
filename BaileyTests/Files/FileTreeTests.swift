@@ -60,7 +60,8 @@ private actor CountingFileBackend: WorkspaceBackend {
     func rename(from: String, to: String) async throws { try await base.rename(from: from, to: to) }
     func delete(paths: [String]) async throws { try await base.delete(paths: paths) }
     func run(argv: [String], cwd: String?, env: [String: String]?, stdin: Data?, timeout: TimeInterval?) async throws -> WorkspaceRunResult {
-        try await base.run(argv: argv, cwd: cwd, env: env, stdin: stdin, timeout: timeout)
+        let command = argv.first == "pwd" ? ["/bin/pwd"] + argv.dropFirst() : argv
+        return try await base.run(argv: command, cwd: cwd, env: env, stdin: stdin, timeout: timeout)
     }
 }
 
@@ -896,6 +897,8 @@ final class FileTreeTests: XCTestCase {
                         scope: "ssh:fixture", panelIdentity: identity, connectionRevision: 1)
         let row = try XCTUnwrap(tree.items.first { $0.path == oldFile.path })
         tree.select(row)
+        tree.selectForContextMenu(row)
+        let drag = try XCTUnwrap(tree.beginDrag(for: row))
         await backend.setUnavailable(true)
         await tree.sync(root: root.path, backend: backend,
                         scope: "ssh:fixture", panelIdentity: identity, connectionRevision: 2)
@@ -905,6 +908,9 @@ final class FileTreeTests: XCTestCase {
                        "Reconnection alone must not discard the current cursor")
         XCTAssertEqual(tree.selectedPaths, [oldFile.path],
                        "An unreadable new channel retains the last trustworthy Selection")
+        XCTAssertNil(tree.contextMenuTargetPath)
+        XCTAssertFalse(tree.hasActiveDrag, "A drag cannot survive replacement of its SSH channel")
+        XCTAssertFalse(tree.consumeDrag(nonce: drag.nonce, paths: drag.paths))
         let destination = root.appendingPathComponent("moved")
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         let denied = await tree.performFileOperation(
@@ -921,6 +927,25 @@ final class FileTreeTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: oldFile.path))
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: root.appendingPathComponent("unsafe.swift").path))
+        let deniedCopy = await tree.performFileOperation(
+            .copy, paths: [oldFile.path], into: destination.path
+        )
+        XCTAssertTrue(deniedCopy.succeeded.isEmpty,
+                      "Stale SSH rows must not start a copy into an unverified destination")
+        XCTAssertFalse(deniedCopy.failures.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: destination.appendingPathComponent("old.swift").path))
+        await tree.beginNewFile(in: root.path)
+        let deniedCreate = await tree.commitDraft(name: "stale-file.swift")
+        XCTAssertNil(deniedCreate)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("stale-file.swift").path))
+        await tree.cancelDraft()
+        await tree.beginNewFolder(in: root.path)
+        _ = await tree.commitDraft(name: "stale-folder")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("stale-folder").path))
+        await tree.cancelDraft()
 
         await backend.setUnavailable(false)
         try FileManager.default.removeItem(at: oldFile)
@@ -930,6 +955,22 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(tree.items.map(\.path), [destination.path, newFile.path],
                        "Only a successful new listing may replace preserved rows")
         XCTAssertFalse(tree.selectedPaths.contains(oldFile.path))
+        let verifiedCopy = await tree.performFileOperation(
+            .copy, paths: [newFile.path], into: destination.path
+        )
+        XCTAssertTrue(verifiedCopy.failures.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("new.swift")),
+                       Data("replacement".utf8))
+        await tree.beginNewFile(in: root.path)
+        let verifiedCreate = await tree.commitDraft(name: "verified.swift")
+        XCTAssertEqual(verifiedCreate, root.appendingPathComponent("verified.swift").path)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("verified.swift")), Data())
+        await tree.beginNewFolder(in: root.path)
+        _ = await tree.commitDraft(name: "verified-folder")
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("verified-folder").path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
     }
 
     func testSamePinnedSSHIdentityNewConnectionRefreshDoesNotWaitForOldBackend() async throws {
@@ -1318,6 +1359,156 @@ final class FileTreeTests: XCTestCase {
         XCTAssertNil(tree.selectedPath)
     }
 
+    func testNativeTreeHomeEndAndViewportPagingPreserveSelectionAndRejectOtherInputOwners() async throws {
+        let root = fixture.appendingPathComponent("paging")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        for index in 0..<80 {
+            try Data("row \(index)".utf8).write(to: root.appendingPathComponent(String(format: "%03d.txt", index)))
+        }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        for fontSize in [AppSettings.panelFontSizeRange.lowerBound, AppSettings.defaultPanelFontSize,
+                         AppSettings.panelFontSizeRange.upperBound] {
+            let scale = CGFloat(fontSize / AppSettings.defaultPanelFontSize)
+            for height in [220.0, 440.0] {
+                let tree = FileTreeModel()
+                await tree.sync(root: root.path, backend: backend)
+                let rows = tree.items
+                XCTAssertEqual(rows.count, 80)
+                let gate = FileTreeTargetGate()
+                gate.ready = true
+                var opened: [String] = []
+                let window = NSWindow(contentRect: NSRect(x: -1000, y: -1000, width: 380, height: height),
+                                      styleMask: [.titled], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                defer { window.close() }
+                let host = NSHostingView(rootView: FileTreePanel(
+                    model: tree, git: GitStatusModel(), sshHost: nil, currentFilePath: nil,
+                    openFile: { path, _ in opened.append(path) },
+                    renameFile: { item, name in await tree.rename(item, to: name) }, onCommand: { _ in },
+                    refreshGitStatus: {}, isCurrentTarget: { gate.ready }, canPasteFiles: { false },
+                    canImportFromFinder: false, importFromFinder: { _, _ in false })
+                    .environment(\.panelFontScale, scale))
+                let content = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+                host.translatesAutoresizingMaskIntoConstraints = false
+                content.addSubview(host)
+                NSLayoutConstraint.activate([
+                    host.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                    host.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+                    host.topAnchor.constraint(equalTo: content.topAnchor),
+                    host.bottomAnchor.constraint(equalTo: content.bottomAnchor)
+                ])
+                window.contentView = content
+                window.orderFront(nil)
+                try await waitForCondition("The native tree keyboard and viewport must attach") {
+                    host.layoutSubtreeIfNeeded()
+                    return descendants(host).contains { $0 is TreeKeyboardView }
+                        && descendants(host).contains { $0 is NSScrollView && $0.bounds.height > 80 }
+                }
+                var keyboard = try XCTUnwrap(descendants(host).compactMap { $0 as? TreeKeyboardView }.first)
+                let scroll = try XCTUnwrap(descendants(host).compactMap { $0 as? NSScrollView }
+                    .max { $0.contentSize.height < $1.contentSize.height })
+                let page = max(1, Int(scroll.contentSize.height / TreeRowStyle.rowHeight(scale)))
+                XCTAssertGreaterThan(page, 1)
+                XCTAssertTrue(window.makeFirstResponder(keyboard))
+                func key(_ code: UInt16, modifiers: NSEvent.ModifierFlags = []) throws -> Bool {
+                    let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                        modifierFlags: modifiers, timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                        characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: code))
+                    return keyboard.onKeyDown(event)
+                }
+                tree.select(rows[1])
+                tree.select(rows[3], toggling: true)
+                let selected = tree.selectedPaths
+                XCTAssertTrue(try key(115))
+                XCTAssertEqual(tree.selectedPath, rows[0].path)
+                let startOffset = scroll.contentView.bounds.origin.y
+                XCTAssertTrue(try key(121))
+                XCTAssertEqual(tree.selectedPath, rows[page].path, "font=\(fontSize), height=\(height)")
+                XCTAssertTrue(try key(121))
+                XCTAssertEqual(tree.selectedPath, rows[min(page * 2, 79)].path)
+                try await waitForCondition("Two Page Down keys must move the actual native viewport") {
+                    host.layoutSubtreeIfNeeded()
+                    return abs(scroll.contentView.bounds.origin.y - startOffset)
+                        >= TreeRowStyle.rowHeight(scale)
+                }
+                XCTAssertTrue(try key(116))
+                XCTAssertEqual(tree.selectedPath, rows[page].path)
+                XCTAssertTrue(try key(116))
+                XCTAssertEqual(tree.selectedPath, rows[0].path)
+                XCTAssertTrue(try key(119))
+                XCTAssertEqual(tree.selectedPath, rows.last?.path)
+                XCTAssertTrue(try key(121))
+                XCTAssertEqual(tree.selectedPath, rows.last?.path)
+                XCTAssertTrue(try key(115))
+                XCTAssertTrue(try key(116))
+                XCTAssertEqual(tree.selectedPath, rows[0].path)
+                XCTAssertEqual(tree.selectedPaths, selected)
+                XCTAssertTrue(opened.isEmpty)
+                for modifiers: NSEvent.ModifierFlags in [[.shift], [.command], [.control], [.option]] {
+                    for code: UInt16 in [115, 116, 119, 121] { XCTAssertFalse(try key(code, modifiers: modifiers)) }
+                }
+                gate.ready = false
+                XCTAssertFalse(try key(119))
+                gate.ready = true
+                tree.beginRename(rows[0])
+                XCTAssertTrue(window.firstResponder === keyboard)
+                XCTAssertFalse(try key(125), "Pending rename already owns input before its field editor mounts")
+                tree.cancelRename()
+                await tree.beginNewFile(in: root.path)
+                XCTAssertNotNil(tree.draft)
+                XCTAssertTrue(window.makeFirstResponder(keyboard))
+                XCTAssertFalse(try key(125), "Pending draft input cannot route navigation to its tree")
+                await tree.cancelDraft()
+
+                let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
+                content.addSubview(input)
+                input.selectText(nil)
+                let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
+                XCTAssertTrue(editor.isFieldEditor)
+                for markedText in ["拼音", "にほんご"] {
+                    editor.setMarkedText(markedText,
+                        selectedRange: NSRange(location: (markedText as NSString).length, length: 0),
+                        replacementRange: NSRange(location: NSNotFound, length: 0))
+                    let marked = editor.markedRange()
+                    XCTAssertFalse(try key(115))
+                    XCTAssertEqual(editor.markedRange(), marked)
+                    XCTAssertTrue(editor.hasMarkedText())
+                    editor.unmarkText()
+                }
+                input.removeFromSuperview()
+
+                let empty = fixture.appendingPathComponent(UUID().uuidString)
+                try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+                let previousKeyboard = keyboard
+                await tree.sync(root: empty.path, backend: backend)
+                try await waitForCondition("The new root must mount a replacement keyboard host") {
+                    host.layoutSubtreeIfNeeded()
+                    return descendants(host).contains {
+                        guard let view = $0 as? TreeKeyboardView else { return false }
+                        return view !== previousKeyboard && view.window === window
+                    }
+                }
+                keyboard = try XCTUnwrap(descendants(host).compactMap { $0 as? TreeKeyboardView }
+                    .first { $0 !== previousKeyboard && $0.window === window })
+                XCTAssertTrue(window.makeFirstResponder(keyboard))
+                for code: UInt16 in [115, 116, 119, 121] {
+                    XCTAssertTrue(try key(code))
+                    XCTAssertNil(tree.selectedPath)
+                    XCTAssertTrue(tree.selectedPaths.isEmpty)
+                }
+                let only = empty.appendingPathComponent("only.txt")
+                try Data("only".utf8).write(to: only)
+                await tree.sync(root: empty.path, backend: backend)
+                for code: UInt16 in [115, 116, 119, 121] {
+                    XCTAssertTrue(try key(code))
+                    XCTAssertEqual(tree.selectedPath, only.path)
+                    XCTAssertTrue(tree.selectedPaths.isEmpty)
+                }
+                XCTAssertTrue(opened.isEmpty)
+            }
+        }
+    }
+
     func testFocusedRowNavigationTracksVisibleItemsAndResetsOnRootChange() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let otherRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -1394,7 +1585,8 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(tree.contextSelection(for: rows[3]), [rows[3].path])
 
         tree.select(rows[1])
-        _ = tree.moveSelection(by: 2, extending: true)
+        _ = tree.moveSelection(by: 1, extending: true)
+        _ = tree.moveSelection(by: 1, extending: true)
         XCTAssertEqual(tree.selectedPaths, Set(rows[1...3].map(\.path)))
         _ = tree.moveSelection(by: -1, extending: true)
         XCTAssertEqual(tree.selectedPaths, Set(rows[1...2].map(\.path)))
@@ -1417,6 +1609,115 @@ final class FileTreeTests: XCTestCase {
         XCTAssertTrue(tree.selectedPaths.isEmpty,
                       "Focusing a row must not silently create a Selection")
         XCTAssertEqual(tree.selectedPath, rows[1].path)
+    }
+
+    func testMouseRangeSelectionPreservesOtherIslandsAndCopiesOnlyItsTargets() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["a", "b", "c", "d", "e", "文件🙂"] {
+            try Data(name.utf8).write(to: root.appendingPathComponent(name))
+        }
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let rows = tree.items
+        XCTAssertEqual(rows.count, 6)
+
+        tree.select(rows[0])
+        tree.select(rows[2], toggling: true)
+        tree.select(rows[4], extending: true)
+        XCTAssertEqual(tree.selectedPaths, Set([0, 2, 3, 4].map { rows[$0].path }))
+        tree.select(rows[3], extending: true)
+        XCTAssertEqual(tree.selectedPaths, Set([0, 2, 3].map { rows[$0].path }))
+        tree.select(rows[1], extending: true)
+        XCTAssertEqual(tree.selectedPaths, Set([0, 1, 2].map { rows[$0].path }))
+
+        for mask in 0..<(1 << rows.count) {
+            let selected = Set(rows.indices.filter { mask & (1 << $0) != 0 })
+            for anchor in rows.indices {
+                for target in rows.indices {
+                    tree.clearSelection()
+                    for index in selected.sorted() { tree.select(rows[index], toggling: true) }
+                    tree.focus(rows[anchor])
+                    let connected = selected.union([anchor])
+                    var lower = anchor
+                    var upper = anchor
+                    while lower > 0 && connected.contains(lower - 1) { lower -= 1 }
+                    while upper + 1 < rows.count && connected.contains(upper + 1) { upper += 1 }
+                    let expected = selected.subtracting(lower...upper)
+                        .union(min(anchor, target)...max(anchor, target))
+                    tree.select(rows[target], extending: true)
+                    XCTAssertEqual(tree.selectedPaths, Set(expected.map { rows[$0].path }),
+                                   "mask=\(mask), anchor=\(anchor), target=\(target)")
+                    XCTAssertEqual(tree.selectedPath, rows[target].path)
+                    XCTAssertEqual(tree.selectedOperationPaths, expected.sorted().map { rows[$0].path })
+                }
+            }
+        }
+
+        tree.select(rows[0])
+        tree.select(rows[2], toggling: true)
+        tree.select(rows[4], extending: true)
+        let targets = tree.selectedOperationPaths
+        let destination = root.appendingPathComponent("output")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let result = await tree.performFileOperation(.copy, paths: targets, into: destination.path)
+        XCTAssertTrue(result.failures.isEmpty)
+        XCTAssertEqual(Set(result.succeeded.map(\.source)), Set(targets))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path).sorted(),
+                       targets.map { ($0 as NSString).lastPathComponent }.sorted())
+        for path in targets {
+            XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent((path as NSString).lastPathComponent)),
+                           try Data(contentsOf: URL(fileURLWithPath: path)))
+        }
+    }
+
+    func testKeyboardRangeSelectionUsesFocusMembershipAndDoesNotMutateAtEdges() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["a", "b", "c", "d", "e", "文件🙂"] {
+            try Data(name.utf8).write(to: root.appendingPathComponent(name))
+        }
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let rows = tree.items
+        XCTAssertEqual(rows.count, 6)
+        for mask in 0..<(1 << rows.count) {
+            let selected = Set(rows.indices.filter { mask & (1 << $0) != 0 })
+            for cursor in rows.indices {
+                for direction in [-1, 1] {
+                    tree.clearSelection()
+                    for index in selected.sorted() { tree.select(rows[index], toggling: true) }
+                    tree.focus(rows[cursor])
+                    let next = max(0, min(rows.count - 1, cursor + direction))
+                    var expected = selected
+                    if next != cursor {
+                        if selected.contains(next) { expected.remove(cursor) }
+                        else { expected.insert(next) }
+                    }
+                    XCTAssertEqual(tree.moveSelection(by: direction, extending: true)?.path, rows[next].path)
+                    XCTAssertEqual(tree.selectedPaths, Set(expected.map { rows[$0].path }),
+                                   "mask=\(mask), cursor=\(cursor), direction=\(direction)")
+                }
+            }
+        }
+        tree.clearSelection()
+        XCTAssertEqual(tree.moveSelection(by: 1, extending: true)?.path, rows[0].path)
+        XCTAssertEqual(tree.selectedPaths, [rows[0].path])
+        tree.clearSelection()
+        XCTAssertEqual(tree.moveSelection(by: -1, extending: true)?.path, rows.last?.path)
+        XCTAssertEqual(tree.selectedPaths, [try XCTUnwrap(rows.last).path])
+
+        tree.focus(rows[2])
+        tree.selectAllVisible()
+        _ = tree.moveSelection(by: 1, extending: true)
+        tree.select(rows[5], extending: true)
+        XCTAssertEqual(tree.selectedPaths, Set([0, 1, 3, 4, 5].map { rows[$0].path }),
+                       "Select All clears Anchor; subsequent mouse Shift starts at the current Focus")
+        tree.clearExplicitSelection()
+        tree.select(rows[3], extending: true)
+        XCTAssertEqual(tree.selectedPaths, Set(rows[3...5].map(\.path)))
     }
 
     func testContextSelectionPreservesSelectedGroupButReplacesOutsideSelectionLikeVSCode() async throws {
@@ -1564,6 +1865,57 @@ final class FileTreeTests: XCTestCase {
         await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared, scope: "ssh:another-machine")
         XCTAssertTrue(tree.selectedPaths.isEmpty)
         XCTAssertNil(tree.selectedPath)
+    }
+
+    func testSelectionAnchorFollowsRenameMoveDeletionAndVisibilityWithoutRevivingOldPaths() async throws {
+        let root = fixture.appendingPathComponent("projection")
+        let destination = root.appendingPathComponent("folder")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let settings = AppSettings(configURL: fixture.appendingPathComponent("config.toml"))
+        let tree = FileTreeModel(settings: settings)
+        for name in ["a", "b", "c", "d", "e", "f"] {
+            try Data(name.utf8).write(to: root.appendingPathComponent(name))
+        }
+        await tree.sync(root: root.path, backend: backend)
+        func row(_ name: String) throws -> FileTreeModel.Item {
+            try XCTUnwrap(tree.items.first { $0.path == root.appendingPathComponent(name).path })
+        }
+        func paths(_ names: [String]) -> Set<String> {
+            Set(names.map { root.appendingPathComponent($0).path })
+        }
+        tree.select(try row("a"))
+        tree.select(try row("c"), toggling: true)
+        let renamed = await tree.rename(try row("c"), to: "cc")
+        XCTAssertEqual(renamed, root.appendingPathComponent("cc").path)
+        tree.select(try row("e"), extending: true)
+        XCTAssertEqual(tree.selectedPaths, paths(["a", "cc", "d", "e"]))
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("cc")), Data("c".utf8))
+
+        await tree.toggle(try row("folder"))
+        let moved = await tree.performFileOperation(.move, paths: [try row("cc").path], into: destination.path)
+        XCTAssertTrue(moved.failures.isEmpty)
+        XCTAssertEqual(tree.selectedPaths, paths(["a", "folder/cc", "d", "e"]))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("cc").path))
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("cc")), Data("c".utf8))
+        tree.select(try row("a"), extending: true)
+        XCTAssertEqual(tree.selectedPaths, paths(["folder/cc", "a", "d", "e"]))
+
+        try FileManager.default.removeItem(at: destination.appendingPathComponent("cc"))
+        await tree.sync(root: root.path, backend: backend)
+        tree.select(try row("f"), extending: true)
+        XCTAssertEqual(tree.selectedPaths, paths(["a", "b", "d", "e", "f"]))
+        XCTAssertEqual(tree.selectedPath, root.appendingPathComponent("f").path)
+        try settings.applyFilesExclude(["b", "e"])
+        await tree.refreshVisibility()
+        XCTAssertEqual(tree.selectedPaths, paths(["a", "d", "f"]))
+        try settings.applyFilesExclude([])
+        await tree.refreshVisibility()
+        XCTAssertEqual(tree.selectedPaths, paths(["a", "d", "f"]), "Unhiding cannot revive Selection")
+        try FileManager.default.removeItem(at: root.appendingPathComponent("a"))
+        try Data("replacement".utf8).write(to: root.appendingPathComponent("a"))
+        await tree.sync(root: root.path, backend: backend)
+        XCTAssertEqual(tree.selectedPaths, paths(["a", "d", "f"]), "Identity is the scoped path, not an inode")
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("a")), Data("replacement".utf8))
     }
 
     func testRenameKeepsFilesCursorOnRenamedFileAndDirectoryDescendant() async throws {
@@ -2715,7 +3067,7 @@ final class FileTreeTests: XCTestCase {
             )
             window.isReleasedWhenClosed = false
             defer { window.close() }
-            let host = NSHostingView(rootView: row.background(Color.white))
+            let host = NSHostingView(rootView: row.background(Color.white).environment(\.colorScheme, .light))
             host.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 180, height: 24)
             window.contentView = host
             window.orderFront(nil)
@@ -2787,6 +3139,64 @@ final class FileTreeTests: XCTestCase {
                              "Focus outline must remain visible together with Selection")
         XCTAssertGreaterThan(try changedPixels(normalImage, menuAndSelected), 8,
                              "The menu target must have an outline without a Selection fill")
+    }
+
+    func testSharedRowVisualPriorityCoversEveryFlagCombinationAcrossAppearancesAndThemes() throws {
+        let previousLight = Theme.terminal(dark: false).name
+        let previousDark = Theme.terminal(dark: true).name
+        defer { Theme.reloadSelection(light: previousLight, dark: previousDark) }
+        func render(_ mask: Int, appearance: ColorScheme) throws -> (center: NSColor, border: NSColor) {
+            let window = NSWindow(contentRect: NSRect(x: -1200, y: -1200, width: 180, height: 24),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let host = NSHostingView(rootView: Color.clear
+                .modifier(RowHighlightStyle(isSelected: mask & 1 != 0, listActive: mask & 2 != 0,
+                    displayed: mask & 4 != 0, focusRing: mask & 8 != 0,
+                    contextRing: mask & 16 != 0, hovering: mask & 32 != 0))
+                .background(appearance == .dark ? Color.black : Color.white)
+                .environment(\.colorScheme, appearance))
+            host.frame = NSRect(x: 0, y: 0, width: 180, height: 24)
+            window.contentView = host
+            window.orderFront(nil)
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let image = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: image)
+            return (
+                try XCTUnwrap(image.colorAt(x: image.pixelsWide / 2, y: image.pixelsHigh / 2)?.usingColorSpace(.sRGB)),
+                try XCTUnwrap(image.colorAt(x: 1, y: image.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+            )
+        }
+        func distance(_ first: NSColor, _ second: NSColor) -> CGFloat {
+            abs(first.redComponent - second.redComponent) + abs(first.greenComponent - second.greenComponent)
+                + abs(first.blueComponent - second.blueComponent)
+        }
+        for (light, dark) in [(Theme.defaultLightThemeName, Theme.defaultDarkThemeName), ("Ayu Light", "Dracula")] {
+            Theme.reloadSelection(light: light, dark: dark)
+            for appearance in [ColorScheme.light, .dark] {
+                var reference: [Int: (center: NSColor, border: NSColor)] = [:]
+                for mask in [0, 1, 3, 4, 32, 8, 9, 11, 12] {
+                    reference[mask] = try render(mask, appearance: appearance)
+                }
+                for mask in 0..<64 {
+                    let selected = mask & 1 != 0
+                    let focused = mask & 8 != 0
+                    let context = mask & 16 != 0
+                    let fill: Int = if context { 0 }
+                        else if selected { mask & 2 != 0 ? 3 : 1 }
+                        else if mask & 4 != 0 { 4 }
+                        else if mask & 32 != 0 && !focused { 32 }
+                        else { 0 }
+                    let expected = try XCTUnwrap(reference[fill | (focused || context ? 8 : 0)])
+                    let actual = try render(mask, appearance: appearance)
+                    XCTAssertLessThan(distance(actual.center, expected.center), 0.015,
+                                      "\(light)/\(dark), \(appearance), mask=\(mask), fill")
+                    XCTAssertLessThan(distance(actual.border, expected.border), 0.015,
+                                      "\(light)/\(dark), \(appearance), mask=\(mask), border")
+                }
+            }
+        }
     }
 
     func testSharedTreeStatusAndCompaction() {

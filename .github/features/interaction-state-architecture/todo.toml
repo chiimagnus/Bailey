@@ -1,0 +1,210 @@
+version = 1
+current_task_id = ""
+
+[[tasks]]
+id = "P1-T1"
+title = "修正不连续选择的锚点范围扩选"
+status = "completed"
+plan = "plan-p1.md#p1-t1"
+commit = "2d23de912fdc67dcf95f43c566a9b600feb9a3c2"
+note = "Red→Green；84 项 Files 宿主、真实 App 修饰键／菜单回归、Dev build 与验签通过；完整覆盖见 evidence-p1.md。"
+
+[[tasks]]
+id = "P1-T2"
+title = "树刷新与折叠保持稳定身份"
+status = "completed"
+plan = "plan-p1.md#p1-t2"
+commit = "209ce031d4463fc0eda0b71e8a7f4ab9b30f52f6"
+note = "103 项宿主、3 项 windows 专用临时 master 实测、真实 App Exclude／Reveal、Dev build 验签通过；Windows 原生符号链接不可用，详见 evidence-p1.md。"
+
+[[tasks]]
+id = "P1-T3"
+title = "统一紧凑目录分段与命中区域"
+status = "completed"
+plan = "plan-p1.md#p1-t3"
+commit = "7fc68f08d63c5f4e245dff7ce2e0214ddd9fcb35"
+note = "Git 分段缺口真实 GUI Red；90 项宿主、4 项 Files／Changes／History／Worktree GUI、Dev build 验签通过；已删 Files 旧分段实现。"
+
+[[tasks]]
+id = "P1-T4"
+title = "对齐共享树行视觉与无障碍状态"
+status = "completed"
+plan = "plan-p1.md#p1-t4"
+commit = "eed33ff7fde604c4cecb45279451c31484ac4faa"
+note = "真实 Graph AX 四断言 Red→Green；115 项宿主含 256 组视觉、7 项明暗树／列表 GUI及真实 Diff 强断言复测通过；删除 selectionEnabled 与 Focus fallback。"
+
+[[tasks]]
+id = "P1-T5"
+title = "统一树键盘焦点与原生输入交接"
+status = "completed"
+plan = "plan-p1.md#p1-t5"
+commit = "2af17ba37c2ebaf65357e1288d842ac121767678"
+note = "137 宿主 + 8 GUI 通过；视口分页、IME、双窗和重挂载；Dev 构建验签通过"
+
+[[tasks]]
+id = "P2-T1"
+title = "收敛 Files 浏览与打开事件链"
+status = "pending"
+plan = "plan-p2.md#p2-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T2"
+title = "收敛 Files 系统 Edit 与右键操作目标"
+status = "pending"
+plan = "plan-p2.md#p2-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T3"
+title = "核验原生菜单生命周期并清理旧路径"
+status = "pending"
+plan = "plan-p2.md#p2-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T4"
+title = "统一文件选择与 Finder 内外拖放目标"
+status = "pending"
+plan = "plan-p2.md#p2-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P2-T5"
+title = "统一文件浏览与原生焦点恢复"
+status = "pending"
+plan = "plan-p2.md#p2-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T1"
+title = "统一 Git Changes 状态与 Diff 打开路径"
+status = "pending"
+plan = "plan-p3.md#p3-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T2"
+title = "统一 Git Graph 展开浏览和菜单目标"
+status = "pending"
+plan = "plan-p3.md#p3-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T3"
+title = "实现 Git Changes 资源多选与批量动作"
+status = "pending"
+plan = "plan-p3.md#p3-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T4"
+title = "对齐 Git Graph 提交详情比较与键盘导航"
+status = "pending"
+plan = "plan-p3.md#p3-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T5"
+title = "对齐 Git Graph 轨道颜色与视觉状态"
+status = "pending"
+plan = "plan-p3.md#p3-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T6"
+title = "复核 Git Graph 引用菜单与危险操作"
+status = "pending"
+plan = "plan-p3.md#p3-t6"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P3-T7"
+title = "统一 Git Graph/Changes 分页刷新与身份恢复"
+status = "pending"
+plan = "plan-p3.md#p3-t7"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T1"
+title = "整理 Projects 游标和活动项目"
+status = "pending"
+plan = "plan-p4.md#p4-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T2"
+title = "整理 Dock 标签展示激活和关闭"
+status = "pending"
+plan = "plan-p4.md#p4-t2"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T3"
+title = "整理命令面板与 Ctrl+Tab 临时选择"
+status = "pending"
+plan = "plan-p4.md#p4-t3"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T4"
+title = "实现 Dock 标签多选与范围锚点"
+status = "pending"
+plan = "plan-p4.md#p4-t4"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T5"
+title = "核销多标签批量拖动与 Move 边界"
+status = "pending"
+plan = "plan-p4.md#p4-t5"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T6"
+title = "统一 Dock 标签右键关闭与专属视觉"
+status = "pending"
+plan = "plan-p4.md#p4-t6"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P4-T7"
+title = "统一多窗口多组原生焦点交接"
+status = "pending"
+plan = "plan-p4.md#p4-t7"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T1"
+title = "跨领域实际事件链与文件 Git 结果验收"
+status = "pending"
+plan = "plan-p5.md#p5-t1"
+commit = ""
+note = ""
+
+[[tasks]]
+id = "P5-T2"
+title = "多主题无障碍极端容量与性能验收"
+status = "pending"
+plan = "plan-p5.md#p5-t2"
+commit = ""
+note = ""

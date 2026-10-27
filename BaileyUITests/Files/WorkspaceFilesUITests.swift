@@ -1131,17 +1131,66 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: nested), Data("menu bytes\n".utf8))
     }
 
+    func testHomeEndAndPageKeysScrollFocusedFilesWithoutOpeningOrSelectingThem() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        var files: [URL] = []
+        for index in 0..<80 {
+            files.append(try fixture.file(String(format: "%03d.txt", index), text: "real page row \(index)\n"))
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "zh-Hans", project: fixture.root)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let first = WorkspaceUITestSupport.fileRow(files[0], in: window)
+        let last = WorkspaceUITestSupport.fileRow(files[79], in: window)
+        XCTAssertTrue(first.waitForExistence(timeout: 15))
+        app.typeKey(XCUIKeyboardKey.end, modifierFlags: [])
+        XCTAssertTrue(last.waitForExistence(timeout: 15))
+        XCTAssertTrue(last.isHittable)
+        XCTAssertFalse(last.isSelected)
+        app.typeKey(XCUIKeyboardKey.home, modifierFlags: [])
+        XCTAssertTrue(first.isHittable)
+        let initialFrame = first.frame
+        app.typeKey(XCUIKeyboardKey.pageDown, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.pageDown, modifierFlags: [])
+        let scrolled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            first.frame.minY < initialFrame.minY - 100
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [scrolled], timeout: 5), .completed,
+                       "Repeated Page Down must actually scroll by more than a few rows")
+        app.typeKey(XCUIKeyboardKey.pageUp, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.pageUp, modifierFlags: [])
+        let returned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            first.isHittable
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 5), .completed)
+        XCTAssertFalse(first.isSelected)
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 0)
+        app.typeKey(" ", modifierFlags: [])
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(files[0], in: window).waitForExistence(timeout: 15))
+        let content = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.textViews.allElementsBoundByIndex.contains { ($0.value as? String) == "real page row 0\n" }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [content], timeout: 15), .completed)
+        XCTAssertEqual(try Data(contentsOf: files[0]), Data("real page row 0\n".utf8))
+    }
+
     func testModifierMultiSelectionDoesNotOpenOrCollapseFiles() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let alpha = try fixture.file("a.swift", text: "a\n")
         let beta = try fixture.file("b.swift", text: "b\n")
         let gamma = try fixture.file("c.swift", text: "c\n")
+        let delta = try fixture.file("d.swift", text: "d\n")
+        let epsilon = try fixture.file("e.swift", text: "e\n")
+        let last = try fixture.file("f.swift", text: "f\n")
         let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let a = WorkspaceUITestSupport.fileRow(alpha, in: window)
         let b = WorkspaceUITestSupport.fileRow(beta, in: window)
         let c = WorkspaceUITestSupport.fileRow(gamma, in: window)
+        let deltaRow = WorkspaceUITestSupport.fileRow(delta, in: window)
+        let epsilonRow = WorkspaceUITestSupport.fileRow(epsilon, in: window)
+        let lastRow = WorkspaceUITestSupport.fileRow(last, in: window)
         XCTAssertTrue(a.waitForExistence(timeout: 15))
         XCTAssertTrue(b.waitForExistence(timeout: 15))
         XCTAssertTrue(c.waitForExistence(timeout: 15))
@@ -1159,11 +1208,34 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertTrue(a.isSelected && !b.isSelected && c.isSelected,
                       "Command-click selection: a=\(a.isSelected), b=\(b.isSelected), c=\(c.isSelected)")
         XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, baselineTabs)
+        a.click()
+        XCUIElement.perform(withKeyModifiers: .command) { c.click() }
+        XCUIElement.perform(withKeyModifiers: .shift) { epsilonRow.click() }
+        XCTAssertTrue(a.isSelected && !b.isSelected && c.isSelected
+                      && deltaRow.isSelected && epsilonRow.isSelected && !lastRow.isSelected)
+        XCUIElement.perform(withKeyModifiers: .shift) { deltaRow.click() }
+        XCTAssertTrue(a.isSelected && !b.isSelected && c.isSelected
+                      && deltaRow.isSelected && !epsilonRow.isSelected)
+        XCUIElement.perform(withKeyModifiers: .shift) { b.click() }
+        XCTAssertTrue(a.isSelected && b.isSelected && c.isSelected && !deltaRow.isSelected)
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: .shift)
+        XCTAssertTrue(a.isSelected && !b.isSelected && c.isSelected && !deltaRow.isSelected)
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: .shift)
+        XCTAssertTrue(a.isSelected && !b.isSelected && c.isSelected && deltaRow.isSelected)
+        app.typeKey(XCUIKeyboardKey.upArrow, modifierFlags: .shift)
+        XCTAssertTrue(a.isSelected && !b.isSelected && c.isSelected && !deltaRow.isSelected)
+        c.rightClick()
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(a.isSelected && !b.isSelected && c.isSelected)
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, baselineTabs,
+                       "Modifier selection and context menus must not open more files")
         app.typeKey("a", modifierFlags: .command)
         XCTAssertTrue(a.isSelected && b.isSelected && c.isSelected,
                       "Command+A in focused Files must select every visible row")
         app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: .shift)
-        XCTAssertTrue(c.isSelected, "Shift+Down must keep the visible selection")
+        XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected
+                      && deltaRow.isSelected && epsilonRow.isSelected && lastRow.isSelected,
+                      "Shift+Down onto a selected row removes the previous Focus, not the other islands")
         XCTAssertEqual(try String(contentsOf: beta, encoding: .utf8), "b\n")
         XCTAssertEqual(try String(contentsOf: gamma, encoding: .utf8), "c\n")
     }

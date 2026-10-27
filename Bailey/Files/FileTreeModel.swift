@@ -330,7 +330,13 @@ final class FileTreeModel {
         let start = current ?? (delta >= 0 ? -1 : visible.count)
         let next = max(0, min(visible.count - 1, start + delta))
         if extending {
-            selectRange(to: visible[next].path)
+            if current != next {
+                if selectedPaths.contains(visible[next].path) {
+                    if let current { selectedPaths.remove(visible[current].path) }
+                } else {
+                    selectedPaths.insert(visible[next].path)
+                }
+            }
         } else {
             selectionAnchorPath = visible[next].path
         }
@@ -346,7 +352,12 @@ final class FileTreeModel {
         guard let end = visible.firstIndex(of: path) else { return }
         let anchor = selectionAnchorPath ?? selectedPath ?? path
         let start = visible.firstIndex(of: anchor) ?? end
-        selectedPaths = Set(visible[min(start, end)...max(start, end)])
+        var lower = start
+        var upper = start
+        while lower > 0 && selectedPaths.contains(visible[lower - 1]) { lower -= 1 }
+        while upper + 1 < visible.count && selectedPaths.contains(visible[upper + 1]) { upper += 1 }
+        selectedPaths.subtract(visible[lower...upper])
+        selectedPaths.formUnion(visible[min(start, end)...max(start, end)])
         selectionAnchorPath = visible[start]
     }
 
@@ -365,7 +376,7 @@ final class FileTreeModel {
         } else {
             selectedPath = visible.first
         }
-        selectionAnchorPath = selectedPath
+        selectionAnchorPath = nil
         selectedCompactPath = nil
         contextMenuTargetPath = nil
         activeDrag = nil
@@ -728,6 +739,7 @@ final class FileTreeModel {
         }
         if scopeChanged || channelChanged {
             contextMenuTargetPath = nil
+            activeDrag = nil
             if !sameRemoteRootReconnected {
                 items = []
                 showExcluded = false
@@ -820,17 +832,13 @@ final class FileTreeModel {
         let epoch = treeEpoch
         let backend = self.backend
         guard !root.isEmpty, isCurrentTarget() else { return FileBatchResult() }
-        switch action {
-        case .move, .delete:
-            guard canMutateCurrentFiles else {
-                let reason = String(localized:
-                    "Remote file list has not been verified after reconnecting.", table: "Workspace")
-                presentError(
-                    String(localized: "Couldn’t complete file operation.", table: "Workspace"), reason
-                )
-                return FileBatchResult(failures: [reason])
-            }
-        case .copy: break
+        guard canMutateCurrentFiles else {
+            let reason = String(localized:
+                "Remote file list has not been verified after reconnecting.", table: "Workspace")
+            presentError(
+                String(localized: "Couldn’t complete file operation.", table: "Workspace"), reason
+            )
+            return FileBatchResult(failures: [reason])
         }
         let sourcePaths = Array(Set(paths)).sorted {
             $0.count == $1.count ? $0 < $1 : $0.count < $1.count
@@ -969,15 +977,7 @@ final class FileTreeModel {
            isCurrentTarget() {
             for entry in result.succeeded {
                 if action == .move, let destination = entry.destination {
-                    remapExpanded(from: entry.source, to: destination)
-                    func moved(_ path: String) -> String {
-                        guard LocalPathScope.contains(path, in: entry.source) else { return path }
-                        return destination + String(path.dropFirst(entry.source.count))
-                    }
-                    if let selectedPath { self.selectedPath = moved(selectedPath) }
-                    if let selectedCompactPath { self.selectedCompactPath = moved(selectedCompactPath) }
-                    selectedPaths = Set(selectedPaths.map(moved))
-                    selectionAnchorPath = selectionAnchorPath.map(moved)
+                    remapPaths(from: entry.source, to: destination)
                 } else if action == .delete {
                     expanded = expanded.filter {
                         !LocalPathScope.contains($0, in: entry.source)
@@ -1135,33 +1135,22 @@ final class FileTreeModel {
         }
         // The disk mutation succeeded; only the old tree's visual state is stale.
         guard scope == workspaceScope, root == rootPath, epoch == treeEpoch else { return dest }
-        remapExpanded(from: item.path, to: dest)
-        func moved(_ path: String) -> String {
-            guard path == item.path || path.hasPrefix(item.path + "/") else { return path }
-            return dest + String(path.dropFirst(item.path.count))
-        }
-        if let selectedPath { self.selectedPath = moved(selectedPath) }
-        if let selectedCompactPath { self.selectedCompactPath = moved(selectedCompactPath) }
-        selectedPaths = Set(selectedPaths.map(moved))
-        selectionAnchorPath = selectionAnchorPath.map(moved)
+        remapPaths(from: item.path, to: dest)
         invalidateDirectory(containing: item.path)
         await rebuild()
         return dest
     }
 
-    /// Keeps expansion state after a directory rename by rewriting the old
-    /// path prefix (for the folder itself and any expanded descendants).
-    private func remapExpanded(from oldPath: String, to newPath: String) {
-        func remap(_ paths: Set<String>) -> Set<String> {
-            Set(paths.map { path in
-                if path == oldPath { return newPath }
-                if path.hasPrefix(oldPath + "/") {
-                    return newPath + String(path.dropFirst(oldPath.count))
-                }
-                return path
-            })
+    private func remapPaths(from oldPath: String, to newPath: String) {
+        func moved(_ path: String) -> String {
+            guard LocalPathScope.contains(path, in: oldPath) else { return path }
+            return newPath + String(path.dropFirst(oldPath.count))
         }
-        expanded = remap(expanded)
+        expanded = Set(expanded.map(moved))
+        selectedPath = selectedPath.map(moved)
+        selectedCompactPath = selectedCompactPath.map(moved)
+        selectedPaths = Set(selectedPaths.map(moved))
+        selectionAnchorPath = selectionAnchorPath.map(moved)
     }
 
     // MARK: - Create (inline draft)
@@ -1196,6 +1185,13 @@ final class FileTreeModel {
     @discardableResult
     func commitDraft(name: String, isCurrentTarget: () -> Bool = { true }) async -> String? {
         guard isCurrentTarget(), let draft else { return nil }
+        guard canMutateCurrentFiles else {
+            presentError(
+                String(localized: "Couldn’t complete file operation.", table: "Workspace"),
+                String(localized: "Remote file list has not been verified after reconnecting.", table: "Workspace")
+            )
+            return nil
+        }
         let backend = self.backend
         let scope = workspaceScope
         let root = rootPath
