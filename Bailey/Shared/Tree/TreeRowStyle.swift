@@ -143,8 +143,6 @@ final class ContextMenuClickView: NSView {
     var onMenuClosed: (() -> Void)?
     var onMenuKeyDown: ((NSMenu, NSEvent) -> Bool)?
     private weak var contextMouseEvent: NSEvent?
-    private var menuBeginObserver: NSObjectProtocol?
-    private var menuEndObserver: NSObjectProtocol?
     private var menuKeyMonitor: Any?
     private var trackingMenu: NSMenu?
 
@@ -176,44 +174,55 @@ final class ContextMenuClickView: NSView {
         prepareContextClick(event)
         stopObservingMenu()
         guard onMenuClosed != nil || onMenuKeyDown != nil else { return super.menu(for: event) }
-        menuBeginObserver = NotificationCenter.default.addObserver(
-            forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main
-        ) { [weak self] notification in
-            guard let self, self.trackingMenu == nil,
-                  let menu = notification.object as? NSMenu else { return }
-            self.trackingMenu = menu
-            guard self.onMenuKeyDown != nil else { return }
-            self.menuKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
-                [weak self] event in
-                guard let self, let menu = self.trackingMenu,
-                      self.window?.isKeyWindow == true,
-                      NSApp.keyWindow === self.window else { return event }
-                guard self.onMenuKeyDown?(menu, event) == true else { return event }
-                if self.trackingMenu === menu {
-                    self.onMenuClosed?()
-                    self.stopObservingMenu()
-                }
-                return nil
-            }
-        }
-        menuEndObserver = NotificationCenter.default.addObserver(
-            forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main
-        ) { [weak self] notification in
-            guard let self, self.trackingMenu === notification.object as? NSMenu else { return }
-            self.onMenuClosed?()
-            self.stopObservingMenu()
-        }
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(menuDidBeginTracking(_:)),
+            name: NSMenu.didBeginTrackingNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(menuDidEndTracking(_:)),
+            name: NSMenu.didEndTrackingNotification, object: nil
+        )
         let menu = super.menu(for: event)
         if let menu, trackingMenu == nil { trackingMenu = menu }
         return menu
     }
 
+    @objc private func menuDidBeginTracking(_ notification: Notification) {
+        guard trackingMenu == nil, let menu = notification.object as? NSMenu else { return }
+        trackingMenu = menu
+        guard onMenuKeyDown != nil else { return }
+        menuKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
+            [weak self] event in
+            let handled = assumeMainActor { self?.handleMenuKeyDown(event) == true }
+            return handled ? nil : event
+        }
+    }
+
+    @objc private func menuDidEndTracking(_ notification: Notification) {
+        guard trackingMenu === notification.object as? NSMenu else { return }
+        onMenuClosed?()
+        stopObservingMenu()
+    }
+
+    private func handleMenuKeyDown(_ event: NSEvent) -> Bool {
+        guard let menu = trackingMenu,
+              window?.isKeyWindow == true, NSApp.keyWindow === window,
+              onMenuKeyDown?(menu, event) == true else { return false }
+        if trackingMenu === menu {
+            onMenuClosed?()
+            stopObservingMenu()
+        }
+        return true
+    }
+
     func stopObservingMenu() {
-        if let menuBeginObserver { NotificationCenter.default.removeObserver(menuBeginObserver) }
-        if let menuEndObserver { NotificationCenter.default.removeObserver(menuEndObserver) }
+        NotificationCenter.default.removeObserver(
+            self, name: NSMenu.didBeginTrackingNotification, object: nil
+        )
+        NotificationCenter.default.removeObserver(
+            self, name: NSMenu.didEndTrackingNotification, object: nil
+        )
         if let menuKeyMonitor { NSEvent.removeMonitor(menuKeyMonitor) }
-        menuBeginObserver = nil
-        menuEndObserver = nil
         menuKeyMonitor = nil
         trackingMenu = nil
     }
