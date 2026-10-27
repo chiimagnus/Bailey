@@ -531,7 +531,6 @@ struct TreeFolderRow<Accessory: View>: View {
     var focusRing = false
     var contextRing = false
     var isSelected = false
-    var selectionEnabled = false
     var listActive = false
     var compactSegment: ((TreeDisplayModel.Row.CompactComponent, Int) -> AnyView)? = nil
     let toggle: () -> Void
@@ -550,7 +549,7 @@ struct TreeFolderRow<Accessory: View>: View {
                     .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel)
                 .accessibilityIdentifier("bailey.tree.folder")
-                .accessibilityAddTraits((selectionEnabled ? isSelected : focusRing) ? .isSelected : [])
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
                 .accessibilityValue(row.isExpanded
                     ? String(localized: "Expanded", table: "Sidebar")
                     : String(localized: "Collapsed", table: "Sidebar"))
@@ -564,13 +563,13 @@ extension TreeFolderRow where Accessory == EmptyView {
     init(row: TreeDisplayModel.Row, scale: CGFloat,
          leadingInset: CGFloat = TreeRowStyle.contentInset,
          focusRing: Bool = false, contextRing: Bool = false,
-         isSelected: Bool = false, selectionEnabled: Bool = false,
+         isSelected: Bool = false,
          listActive: Bool = false,
          compactSegment: ((TreeDisplayModel.Row.CompactComponent, Int) -> AnyView)? = nil,
          toggle: @escaping () -> Void) {
         self.init(row: row, scale: scale, leadingInset: leadingInset,
                   focusRing: focusRing, contextRing: contextRing,
-                  isSelected: isSelected, selectionEnabled: selectionEnabled,
+                  isSelected: isSelected,
                   listActive: listActive, compactSegment: compactSegment,
                   toggle: toggle) { _ in EmptyView() }
     }
@@ -583,7 +582,6 @@ struct TreeFileRow<Accessory: View>: View {
     var directory: String? = nil
     var displayed = false
     var isSelected = false
-    var selectionEnabled = false
     var listActive = false
     var focusRing = false
     var contextRing = false
@@ -608,7 +606,7 @@ struct TreeFileRow<Accessory: View>: View {
                     .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel + ", " + row.path)
                 .accessibilityIdentifier(accessibilityID)
-                .accessibilityAddTraits((selectionEnabled ? isSelected : focusRing) ? .isSelected : [])
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
                 .accessibilityHint(accessibilityHint)
                 accessory(hovering || focusRing)
             }

@@ -2133,7 +2133,7 @@ struct GitPanel: View {
                 contextChange == ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
                                                section: kind, path: $0.path)
             },
-            isSelected: explicitlySelectedChange == key, selectionEnabled: true,
+            isSelected: explicitlySelectedChange == key,
             listActive: keyboardFocused && isGitActive && controlActiveState == .key,
             compactSegment: { component, index in
                 directorySegment(component, index: index, row: item, entries: entries, kind: kind)
@@ -2791,7 +2791,7 @@ private struct GitEntryRow: View {
             scale: fontScale, iconPath: absolutePath,
             directory: showDirectory ? entry.directory : nil,
             displayed: displayed, isSelected: isSelected,
-            selectionEnabled: true, listActive: listActive,
+            listActive: listActive,
             focusRing: focusRing, contextRing: contextRing,
             accessibilityHint: kind == .merge
                 ? String(localized: "Opens conflict changes", table: "Sidebar")

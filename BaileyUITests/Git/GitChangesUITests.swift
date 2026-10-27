@@ -88,6 +88,7 @@ final class GitChangesUITests: XCTestCase {
     func testGitGraphSpaceExpandsCommitWhenChangesListIsEmpty() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("only-committed.txt", text: "committed\n")
+        _ = try fixture.file("nested/history.txt", text: "nested committed\n")
         try fixture.initializeGit()
         let head = try fixture.git(["rev-parse", "HEAD"])
         let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
@@ -106,6 +107,32 @@ final class GitChangesUITests: XCTestCase {
         app.typeKey(" ", modifierFlags: [])
         XCTAssertTrue(historicalFile.waitForExistence(timeout: 15),
                       "With no Changes rows, Space must activate the focused Git Graph commit")
+        let folder = app.windows.firstMatch.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "nested")).firstMatch
+        guard folder.waitForExistence(timeout: 10) else {
+            return XCTFail("The historical directory must be rendered before checking its Focus")
+        }
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        XCTAssertFalse(folder.isSelected, "Graph directory Focus must not manufacture AX Selection")
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        let nested = app.windows.firstMatch.descendants(matching: .any)
+            .matching(identifier: "bailey.git.history.file")
+            .matching(NSPredicate(format: "label ENDSWITH %@", ", nested/history.txt")).firstMatch
+        XCTAssertTrue(nested.waitForExistence(timeout: 10))
+        XCTAssertFalse(nested.isSelected, "A focused historical file is not a selected resource")
+        app.typeKey(" ", modifierFlags: [])
+        let displayed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            app.windows.firstMatch.textViews.allElementsBoundByIndex.contains {
+                ($0.value as? String)?.contains("nested committed") == true
+            }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [displayed], timeout: 15), .completed,
+                       "Space must reach the focused file's real historical Diff before checking its AX state")
+        XCTAssertFalse(nested.isSelected, "Displaying a historical Diff cannot create Selection")
+        nested.rightClick()
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertFalse(nested.isSelected, "Context cancellation cannot leave a false AX Selection")
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }

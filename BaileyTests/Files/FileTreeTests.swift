@@ -2881,7 +2881,7 @@ final class FileTreeTests: XCTestCase {
             )
             window.isReleasedWhenClosed = false
             defer { window.close() }
-            let host = NSHostingView(rootView: row.background(Color.white))
+            let host = NSHostingView(rootView: row.background(Color.white).environment(\.colorScheme, .light))
             host.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 180, height: 24)
             window.contentView = host
             window.orderFront(nil)
@@ -2953,6 +2953,64 @@ final class FileTreeTests: XCTestCase {
                              "Focus outline must remain visible together with Selection")
         XCTAssertGreaterThan(try changedPixels(normalImage, menuAndSelected), 8,
                              "The menu target must have an outline without a Selection fill")
+    }
+
+    func testSharedRowVisualPriorityCoversEveryFlagCombinationAcrossAppearancesAndThemes() throws {
+        let previousLight = Theme.terminal(dark: false).name
+        let previousDark = Theme.terminal(dark: true).name
+        defer { Theme.reloadSelection(light: previousLight, dark: previousDark) }
+        func render(_ mask: Int, appearance: ColorScheme) throws -> (center: NSColor, border: NSColor) {
+            let window = NSWindow(contentRect: NSRect(x: -1200, y: -1200, width: 180, height: 24),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let host = NSHostingView(rootView: Color.clear
+                .modifier(RowHighlightStyle(isSelected: mask & 1 != 0, listActive: mask & 2 != 0,
+                    displayed: mask & 4 != 0, focusRing: mask & 8 != 0,
+                    contextRing: mask & 16 != 0, hovering: mask & 32 != 0))
+                .background(appearance == .dark ? Color.black : Color.white)
+                .environment(\.colorScheme, appearance))
+            host.frame = NSRect(x: 0, y: 0, width: 180, height: 24)
+            window.contentView = host
+            window.orderFront(nil)
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let image = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: image)
+            return (
+                try XCTUnwrap(image.colorAt(x: image.pixelsWide / 2, y: image.pixelsHigh / 2)?.usingColorSpace(.sRGB)),
+                try XCTUnwrap(image.colorAt(x: 1, y: image.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+            )
+        }
+        func distance(_ first: NSColor, _ second: NSColor) -> CGFloat {
+            abs(first.redComponent - second.redComponent) + abs(first.greenComponent - second.greenComponent)
+                + abs(first.blueComponent - second.blueComponent)
+        }
+        for (light, dark) in [(Theme.defaultLightThemeName, Theme.defaultDarkThemeName), ("Ayu Light", "Dracula")] {
+            Theme.reloadSelection(light: light, dark: dark)
+            for appearance in [ColorScheme.light, .dark] {
+                var reference: [Int: (center: NSColor, border: NSColor)] = [:]
+                for mask in [0, 1, 3, 4, 32, 8, 9, 11, 12] {
+                    reference[mask] = try render(mask, appearance: appearance)
+                }
+                for mask in 0..<64 {
+                    let selected = mask & 1 != 0
+                    let focused = mask & 8 != 0
+                    let context = mask & 16 != 0
+                    let fill: Int = if context { 0 }
+                        else if selected { mask & 2 != 0 ? 3 : 1 }
+                        else if mask & 4 != 0 { 4 }
+                        else if mask & 32 != 0 && !focused { 32 }
+                        else { 0 }
+                    let expected = try XCTUnwrap(reference[fill | (focused || context ? 8 : 0)])
+                    let actual = try render(mask, appearance: appearance)
+                    XCTAssertLessThan(distance(actual.center, expected.center), 0.015,
+                                      "\(light)/\(dark), \(appearance), mask=\(mask), fill")
+                    XCTAssertLessThan(distance(actual.border, expected.border), 0.015,
+                                      "\(light)/\(dark), \(appearance), mask=\(mask), border")
+                }
+            }
+        }
     }
 
     func testSharedTreeStatusAndCompaction() {

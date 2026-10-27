@@ -662,7 +662,7 @@ private struct FileTreeRow: View {
         if item.isDirectory {
             TreeFolderRow(row: displayRow, scale: fontScale,
                           focusRing: hasKeyboardCursor, contextRing: hasContextRing,
-                          isSelected: isSelected, selectionEnabled: true,
+                          isSelected: isSelected,
                           listActive: listFocused,
                           compactSegment: { component, index in compactSegmentView(component, index: index) }) {
                 guard isCurrentTarget() else { return }
@@ -675,7 +675,7 @@ private struct FileTreeRow: View {
         } else {
             TreeFileRow(
                 row: displayRow, scale: fontScale, displayed: isCurrent,
-                isSelected: isSelected, selectionEnabled: true,
+                isSelected: isSelected,
                 listActive: listFocused,
                 focusRing: hasKeyboardCursor, contextRing: hasContextRing,
                 open: {
