@@ -1394,7 +1394,8 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(tree.contextSelection(for: rows[3]), [rows[3].path])
 
         tree.select(rows[1])
-        _ = tree.moveSelection(by: 2, extending: true)
+        _ = tree.moveSelection(by: 1, extending: true)
+        _ = tree.moveSelection(by: 1, extending: true)
         XCTAssertEqual(tree.selectedPaths, Set(rows[1...3].map(\.path)))
         _ = tree.moveSelection(by: -1, extending: true)
         XCTAssertEqual(tree.selectedPaths, Set(rows[1...2].map(\.path)))
@@ -1417,6 +1418,115 @@ final class FileTreeTests: XCTestCase {
         XCTAssertTrue(tree.selectedPaths.isEmpty,
                       "Focusing a row must not silently create a Selection")
         XCTAssertEqual(tree.selectedPath, rows[1].path)
+    }
+
+    func testMouseRangeSelectionPreservesOtherIslandsAndCopiesOnlyItsTargets() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["a", "b", "c", "d", "e", "文件🙂"] {
+            try Data(name.utf8).write(to: root.appendingPathComponent(name))
+        }
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let rows = tree.items
+        XCTAssertEqual(rows.count, 6)
+
+        tree.select(rows[0])
+        tree.select(rows[2], toggling: true)
+        tree.select(rows[4], extending: true)
+        XCTAssertEqual(tree.selectedPaths, Set([0, 2, 3, 4].map { rows[$0].path }))
+        tree.select(rows[3], extending: true)
+        XCTAssertEqual(tree.selectedPaths, Set([0, 2, 3].map { rows[$0].path }))
+        tree.select(rows[1], extending: true)
+        XCTAssertEqual(tree.selectedPaths, Set([0, 1, 2].map { rows[$0].path }))
+
+        for mask in 0..<(1 << rows.count) {
+            let selected = Set(rows.indices.filter { mask & (1 << $0) != 0 })
+            for anchor in rows.indices {
+                for target in rows.indices {
+                    tree.clearSelection()
+                    for index in selected.sorted() { tree.select(rows[index], toggling: true) }
+                    tree.focus(rows[anchor])
+                    let connected = selected.union([anchor])
+                    var lower = anchor
+                    var upper = anchor
+                    while lower > 0 && connected.contains(lower - 1) { lower -= 1 }
+                    while upper + 1 < rows.count && connected.contains(upper + 1) { upper += 1 }
+                    let expected = selected.subtracting(lower...upper)
+                        .union(min(anchor, target)...max(anchor, target))
+                    tree.select(rows[target], extending: true)
+                    XCTAssertEqual(tree.selectedPaths, Set(expected.map { rows[$0].path }),
+                                   "mask=\(mask), anchor=\(anchor), target=\(target)")
+                    XCTAssertEqual(tree.selectedPath, rows[target].path)
+                    XCTAssertEqual(tree.selectedOperationPaths, expected.sorted().map { rows[$0].path })
+                }
+            }
+        }
+
+        tree.select(rows[0])
+        tree.select(rows[2], toggling: true)
+        tree.select(rows[4], extending: true)
+        let targets = tree.selectedOperationPaths
+        let destination = root.appendingPathComponent("output")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let result = await tree.performFileOperation(.copy, paths: targets, into: destination.path)
+        XCTAssertTrue(result.failures.isEmpty)
+        XCTAssertEqual(Set(result.succeeded.map(\.source)), Set(targets))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: destination.path).sorted(),
+                       targets.map { ($0 as NSString).lastPathComponent }.sorted())
+        for path in targets {
+            XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent((path as NSString).lastPathComponent)),
+                           try Data(contentsOf: URL(fileURLWithPath: path)))
+        }
+    }
+
+    func testKeyboardRangeSelectionUsesFocusMembershipAndDoesNotMutateAtEdges() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["a", "b", "c", "d", "e", "文件🙂"] {
+            try Data(name.utf8).write(to: root.appendingPathComponent(name))
+        }
+        let tree = FileTreeModel()
+        await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+        let rows = tree.items
+        XCTAssertEqual(rows.count, 6)
+        for mask in 0..<(1 << rows.count) {
+            let selected = Set(rows.indices.filter { mask & (1 << $0) != 0 })
+            for cursor in rows.indices {
+                for direction in [-1, 1] {
+                    tree.clearSelection()
+                    for index in selected.sorted() { tree.select(rows[index], toggling: true) }
+                    tree.focus(rows[cursor])
+                    let next = max(0, min(rows.count - 1, cursor + direction))
+                    var expected = selected
+                    if next != cursor {
+                        if selected.contains(next) { expected.remove(cursor) }
+                        else { expected.insert(next) }
+                    }
+                    XCTAssertEqual(tree.moveSelection(by: direction, extending: true)?.path, rows[next].path)
+                    XCTAssertEqual(tree.selectedPaths, Set(expected.map { rows[$0].path }),
+                                   "mask=\(mask), cursor=\(cursor), direction=\(direction)")
+                }
+            }
+        }
+        tree.clearSelection()
+        XCTAssertEqual(tree.moveSelection(by: 1, extending: true)?.path, rows[0].path)
+        XCTAssertEqual(tree.selectedPaths, [rows[0].path])
+        tree.clearSelection()
+        XCTAssertEqual(tree.moveSelection(by: -1, extending: true)?.path, rows.last?.path)
+        XCTAssertEqual(tree.selectedPaths, [try XCTUnwrap(rows.last).path])
+
+        tree.focus(rows[2])
+        tree.selectAllVisible()
+        _ = tree.moveSelection(by: 1, extending: true)
+        tree.select(rows[5], extending: true)
+        XCTAssertEqual(tree.selectedPaths, Set([0, 1, 3, 4, 5].map { rows[$0].path }),
+                       "Select All clears Anchor; subsequent mouse Shift starts at the current Focus")
+        tree.clearExplicitSelection()
+        tree.select(rows[3], extending: true)
+        XCTAssertEqual(tree.selectedPaths, Set(rows[3...5].map(\.path)))
     }
 
     func testContextSelectionPreservesSelectedGroupButReplacesOutsideSelectionLikeVSCode() async throws {

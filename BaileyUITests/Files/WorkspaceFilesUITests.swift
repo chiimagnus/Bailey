@@ -1136,12 +1136,18 @@ final class WorkspaceFilesUITests: XCTestCase {
         let alpha = try fixture.file("a.swift", text: "a\n")
         let beta = try fixture.file("b.swift", text: "b\n")
         let gamma = try fixture.file("c.swift", text: "c\n")
+        let delta = try fixture.file("d.swift", text: "d\n")
+        let epsilon = try fixture.file("e.swift", text: "e\n")
+        let last = try fixture.file("f.swift", text: "f\n")
         let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
         let window = app.windows.firstMatch
         let a = WorkspaceUITestSupport.fileRow(alpha, in: window)
         let b = WorkspaceUITestSupport.fileRow(beta, in: window)
         let c = WorkspaceUITestSupport.fileRow(gamma, in: window)
+        let deltaRow = WorkspaceUITestSupport.fileRow(delta, in: window)
+        let epsilonRow = WorkspaceUITestSupport.fileRow(epsilon, in: window)
+        let lastRow = WorkspaceUITestSupport.fileRow(last, in: window)
         XCTAssertTrue(a.waitForExistence(timeout: 15))
         XCTAssertTrue(b.waitForExistence(timeout: 15))
         XCTAssertTrue(c.waitForExistence(timeout: 15))
@@ -1159,11 +1165,34 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertTrue(a.isSelected && !b.isSelected && c.isSelected,
                       "Command-click selection: a=\(a.isSelected), b=\(b.isSelected), c=\(c.isSelected)")
         XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, baselineTabs)
+        a.click()
+        XCUIElement.perform(withKeyModifiers: .command) { c.click() }
+        XCUIElement.perform(withKeyModifiers: .shift) { epsilonRow.click() }
+        XCTAssertTrue(a.isSelected && !b.isSelected && c.isSelected
+                      && deltaRow.isSelected && epsilonRow.isSelected && !lastRow.isSelected)
+        XCUIElement.perform(withKeyModifiers: .shift) { deltaRow.click() }
+        XCTAssertTrue(a.isSelected && !b.isSelected && c.isSelected
+                      && deltaRow.isSelected && !epsilonRow.isSelected)
+        XCUIElement.perform(withKeyModifiers: .shift) { b.click() }
+        XCTAssertTrue(a.isSelected && b.isSelected && c.isSelected && !deltaRow.isSelected)
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: .shift)
+        XCTAssertTrue(a.isSelected && !b.isSelected && c.isSelected && !deltaRow.isSelected)
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: .shift)
+        XCTAssertTrue(a.isSelected && !b.isSelected && c.isSelected && deltaRow.isSelected)
+        app.typeKey(XCUIKeyboardKey.upArrow, modifierFlags: .shift)
+        XCTAssertTrue(a.isSelected && !b.isSelected && c.isSelected && !deltaRow.isSelected)
+        c.rightClick()
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(a.isSelected && !b.isSelected && c.isSelected)
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, baselineTabs,
+                       "Modifier selection and context menus must not open more files")
         app.typeKey("a", modifierFlags: .command)
         XCTAssertTrue(a.isSelected && b.isSelected && c.isSelected,
                       "Command+A in focused Files must select every visible row")
         app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: .shift)
-        XCTAssertTrue(c.isSelected, "Shift+Down must keep the visible selection")
+        XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected
+                      && deltaRow.isSelected && epsilonRow.isSelected && lastRow.isSelected,
+                      "Shift+Down onto a selected row removes the previous Focus, not the other islands")
         XCTAssertEqual(try String(contentsOf: beta, encoding: .utf8), "b\n")
         XCTAssertEqual(try String(contentsOf: gamma, encoding: .utf8), "c\n")
     }

@@ -330,7 +330,13 @@ final class FileTreeModel {
         let start = current ?? (delta >= 0 ? -1 : visible.count)
         let next = max(0, min(visible.count - 1, start + delta))
         if extending {
-            selectRange(to: visible[next].path)
+            if current != next {
+                if selectedPaths.contains(visible[next].path) {
+                    if let current { selectedPaths.remove(visible[current].path) }
+                } else {
+                    selectedPaths.insert(visible[next].path)
+                }
+            }
         } else {
             selectionAnchorPath = visible[next].path
         }
@@ -346,7 +352,12 @@ final class FileTreeModel {
         guard let end = visible.firstIndex(of: path) else { return }
         let anchor = selectionAnchorPath ?? selectedPath ?? path
         let start = visible.firstIndex(of: anchor) ?? end
-        selectedPaths = Set(visible[min(start, end)...max(start, end)])
+        var lower = start
+        var upper = start
+        while lower > 0 && selectedPaths.contains(visible[lower - 1]) { lower -= 1 }
+        while upper + 1 < visible.count && selectedPaths.contains(visible[upper + 1]) { upper += 1 }
+        selectedPaths.subtract(visible[lower...upper])
+        selectedPaths.formUnion(visible[min(start, end)...max(start, end)])
         selectionAnchorPath = visible[start]
     }
 
@@ -365,7 +376,7 @@ final class FileTreeModel {
         } else {
             selectedPath = visible.first
         }
-        selectionAnchorPath = selectedPath
+        selectionAnchorPath = nil
         selectedCompactPath = nil
         contextMenuTargetPath = nil
         activeDrag = nil
