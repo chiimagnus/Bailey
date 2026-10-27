@@ -167,24 +167,23 @@ final class ContextMenuClickView: NSView {
     private func prepareContextClick(_ event: NSEvent) {
         guard contextMouseEvent !== event else { return }
         contextMouseEvent = event
+        stopObservingMenu()
+        if onMenuClosed != nil || onMenuKeyDown != nil {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(menuDidBeginTracking(_:)),
+                name: NSMenu.didBeginTrackingNotification, object: nil
+            )
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(menuDidEndTracking(_:)),
+                name: NSMenu.didEndTrackingNotification, object: nil
+            )
+        }
         onContextClick?()
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         prepareContextClick(event)
-        stopObservingMenu()
-        guard onMenuClosed != nil || onMenuKeyDown != nil else { return super.menu(for: event) }
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(menuDidBeginTracking(_:)),
-            name: NSMenu.didBeginTrackingNotification, object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(menuDidEndTracking(_:)),
-            name: NSMenu.didEndTrackingNotification, object: nil
-        )
-        let menu = super.menu(for: event)
-        if let menu, trackingMenu == nil { trackingMenu = menu }
-        return menu
+        return super.menu(for: event)
     }
 
     @objc private func menuDidBeginTracking(_ notification: Notification) {
@@ -228,6 +227,47 @@ final class ContextMenuClickView: NSView {
     }
 }
 
+/// One visual rule for selection, displayed content, keyboard cursor and menu target.
+struct RowHighlightStyle: ViewModifier {
+    private let themeChanges = Theme.changes
+    @Environment(\.colorScheme) private var colorScheme
+    var isSelected = false
+    var listActive = false
+    var displayed = false
+    var focusRing = false
+    var contextRing = false
+    var hovering = false
+    var cornerRadius: CGFloat = 4
+
+    func body(content: Content) -> some View {
+        let _ = themeChanges.revision
+        let theme = Theme.terminal(dark: colorScheme == .dark)
+        let accent = Color(nsColor: theme.accentNSColor)
+        let foreground = Color(nsColor: theme.foregroundNSColor)
+        let fill: Color = if contextRing {
+            .clear
+        } else if isSelected {
+            listActive
+                ? accent.opacity(colorScheme == .dark ? 0.36 : 0.42)
+                : foreground.opacity(0.14)
+        } else if displayed {
+            foreground.opacity(0.09)
+        } else if hovering && !focusRing {
+            foreground.opacity(0.05)
+        } else {
+            .clear
+        }
+        return content
+            .background(RoundedRectangle(cornerRadius: cornerRadius).fill(fill))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .strokeBorder(focusRing || contextRing ? accent.opacity(0.65) : .clear,
+                                  lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+    }
+}
+
 /// One file-tree layout for Files, working-tree changes and commit history.
 enum TreeRowStyle {
     static let indent: CGFloat = 18
@@ -266,8 +306,6 @@ struct TreeRowLayout: ViewModifier {
 /// The one row surface shared by Files, working-tree Git and committed Git.
 /// Callers apply the supplied layout to interactive rows so hover and hit areas agree.
 struct TreeRowSurface<Content: View>: View {
-    private let themeChanges = Theme.changes
-    @Environment(\.colorScheme) private var colorScheme
     let depth: Int
     let scale: CGFloat
     var displayed = false
@@ -318,10 +356,6 @@ struct TreeRowSurface<Content: View>: View {
     }
 
     var body: some View {
-        let _ = themeChanges.revision
-        let theme = Theme.terminal(dark: colorScheme == .dark)
-        let accent = Color(nsColor: theme.accentNSColor)
-        let foreground = Color(nsColor: theme.foregroundNSColor)
         content(isHovering, TreeRowLayout(
             leadingInset: leadingInset + CGFloat(depth) * TreeRowStyle.indent,
             trailingInset: trailingInset,
@@ -329,21 +363,11 @@ struct TreeRowSurface<Content: View>: View {
         ))
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(RoundedRectangle(cornerRadius: 4))
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(isSelected
-                           ? (listActive ? accent.opacity(colorScheme == .dark ? 0.36 : 0.42)
-                              : foreground.opacity(0.14))
-                           : displayed ? foreground.opacity(0.09)
-                           : (isHovering && !focusRing && !contextRing
-                              ? foreground.opacity(0.05) : .clear))
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(focusRing || contextRing ? accent.opacity(0.65) : .clear,
-                                  lineWidth: 1)
-                    .allowsHitTesting(false)
-            }
+            .modifier(RowHighlightStyle(
+                isSelected: isSelected, listActive: listActive, displayed: displayed,
+                focusRing: focusRing, contextRing: contextRing,
+                hovering: hoverEnabled && isHovering
+            ))
             .onHover { if hoverEnabled { isHovering = $0 } }
             .padding(.horizontal, outerInset)
             .background {

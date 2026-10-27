@@ -638,7 +638,7 @@ private struct FileTreeRow: View {
                     RoundedRectangle(cornerRadius: 3)
                         .fill(hoveredCompactPath == component.path
                             && contextMenuPath != component.path
-                            ? Color.primary.opacity(0.09) : .clear)
+                            ? Color.primary.opacity(0.05) : .clear)
                 )
                 .onHover { hovered in
                     hoveredCompactPath = hovered ? component.path : nil

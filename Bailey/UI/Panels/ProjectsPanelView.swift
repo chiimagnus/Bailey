@@ -12,6 +12,19 @@ struct ProjectsPanelView: View {
     @State private var draggedProjectID: UUID?
     @State private var contextProjectID: UUID?
     @State private var projectFrames: [UUID: CGRect] = [:]
+    @State private var keyboardOwner = TreeKeyboardOwner()
+    @State private var keyboardFocused = false
+    @State private var cursorProjectID: UUID?
+    @Environment(\.controlActiveState) private var controlActiveState
+
+    private var isListActive: Bool {
+        guard let project = manager.selectedProject,
+              let group = project.dock.group(containing: .projects) else { return false }
+        return project.dock.activeGroupID == group.id && group.selected == .projects
+            && manager.attachedWindow?.isKeyWindow == true && NSApp.isActive
+            && controlActiveState == .key && !manager.isCommandPaletteVisible
+            && manager.attachedWindow?.attachedSheet == nil
+    }
 
     var body: some View {
         let _ = themeChanges.revision
@@ -23,11 +36,19 @@ struct ProjectsPanelView: View {
                             project: project,
                             index: index,
                             isSelected: project.id == manager.selectedProjectID,
+                            listActive: isListActive,
+                            focusRing: keyboardFocused && isListActive
+                                && cursorProjectID == project.id,
                             isContextTarget: contextProjectID == project.id,
                             onContextClick: { contextProjectID = project.id },
+                            onMenuClosed: {
+                                if contextProjectID == project.id { contextProjectID = nil }
+                            },
                             select: {
                                 contextProjectID = nil
+                                cursorProjectID = project.id
                                 manager.selectedProjectID = project.id
+                                keyboardOwner.focus()
                             },
                             close: { manager.close(project) },
                             isDragging: draggedProjectID == project.id,
@@ -47,6 +68,17 @@ struct ProjectsPanelView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.top, 8)
+            }
+            .background {
+                TreeKeyboardHost(
+                    owner: keyboardOwner, onKeyDown: handleProjectKey,
+                    onFocusChanged: { keyboardFocused = $0 },
+                    onAttachedToWindow: focusProjectList
+                )
+            }
+            .onAppear { focusProjectList() }
+            .onChange(of: isListActive) { _, active in
+                if active { focusProjectList() }
             }
 
             HStack(spacing: 2) {
@@ -105,7 +137,36 @@ struct ProjectsPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: Theme.background))
         .onPreferenceChange(ProjectFramePreferenceKey.self) { projectFrames = $0 }
-        .onChange(of: manager.selectedProjectID) { _, _ in contextProjectID = nil }
+        .onChange(of: manager.selectedProjectID) { _, id in
+            contextProjectID = nil
+            if keyboardFocused { cursorProjectID = id }
+        }
+    }
+
+    private func focusProjectList() {
+        guard isListActive else { return }
+        if cursorProjectID == nil { cursorProjectID = manager.selectedProjectID }
+        keyboardOwner.focus()
+    }
+
+    private func handleProjectKey(_ event: NSEvent) -> Bool {
+        guard keyboardOwner.view?.window?.firstResponder === keyboardOwner.view,
+              isListActive, !manager.projects.isEmpty,
+              event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+        else { return false }
+        let projects = manager.projects
+        let index = cursorProjectID.flatMap { id in projects.firstIndex { $0.id == id } }
+            ?? projects.firstIndex { $0.id == manager.selectedProjectID } ?? 0
+        switch event.keyCode {
+        case 125, 126: // Down / Up
+            let offset = event.keyCode == 125 ? 1 : -1
+            cursorProjectID = projects[max(0, min(projects.count - 1, index + offset))].id
+        case 36, 49, 76: // Return / Space
+            manager.selectedProjectID = cursorProjectID ?? projects[index].id
+        case 53: break // Escape leaves the keyboard cursor in place
+        default: return false
+        }
+        return true
     }
 
     private func updateProjectDrag(source: UUID, location: CGPoint) {
@@ -153,12 +214,14 @@ private struct ProjectFramePreferenceKey: PreferenceKey {
 }
 
 private struct SidebarProjectRow: View {
-    private let themeChanges = Theme.changes
     let project: Project
     let index: Int
     let isSelected: Bool
+    let listActive: Bool
+    let focusRing: Bool
     let isContextTarget: Bool
     let onContextClick: () -> Void
+    let onMenuClosed: () -> Void
     let select: () -> Void
     let close: () -> Void
     let isDragging: Bool
@@ -169,31 +232,29 @@ private struct SidebarProjectRow: View {
     @State private var isHovering = false
 
     var body: some View {
-        let _ = themeChanges.revision
         Button(action: select) {
             rowContent
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("bailey.project.row")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .highPriorityGesture(
             DragGesture(minimumDistance: 4, coordinateSpace: .global)
                 .onChanged { onDrag($0.location) }
                 .onEnded { _ in onDragEnded() }
         )
         .opacity(isDragging ? 0.65 : 1)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? Color.primary.opacity(0.09) : (isHovering ? Color.primary.opacity(0.04) : .clear))
-        )
+        .modifier(RowHighlightStyle(
+            isSelected: isSelected, listActive: listActive,
+            focusRing: focusRing, contextRing: isContextTarget,
+            hovering: isHovering, cornerRadius: 6
+        ))
         .onHover { isHovering = $0 }
-        .overlay {
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(isContextTarget ? Color(nsColor: Theme.accent) : .clear,
-                              lineWidth: 1)
-                .allowsHitTesting(false)
-        }
         .background {
-            ContextMenuClickTarget(onContextClick: onContextClick)
+            ContextMenuClickTarget(
+                onContextClick: onContextClick,
+                onMenuClosed: onMenuClosed
+            )
         }
         .contextMenu {
             Button(String(localized: "Close Project", table: "Sidebar")) {

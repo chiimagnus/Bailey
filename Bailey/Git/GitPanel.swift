@@ -78,6 +78,8 @@ struct GitPanel: View {
     @State private var lastKeyboardRegion: KeyboardRegion = .changes
     @State private var keyboardFocused = false
     @State private var selectedChange: ChangeSelection?
+    @State private var explicitlySelectedChange: ChangeSelection?
+    @State private var contextChange: ChangeSelection?
     @State private var waitingForChanges = false
     @Environment(\.controlActiveState) private var controlActiveState
     @State private var operationExpanded = false
@@ -1925,10 +1927,14 @@ struct GitPanel: View {
             }
             .onChange(of: model.repositoryIdentity) { _, _ in
                 selectedChange = nil
+                explicitlySelectedChange = nil
+                contextChange = nil
                 if isGitActive { focusGitChanges() }
             }
             .onChange(of: model.currentScope) { _, _ in
                 selectedChange = nil
+                explicitlySelectedChange = nil
+                contextChange = nil
                 lastKeyboardRegion = .changes
                 if isGitActive { focusGitChanges() }
             }
@@ -1945,6 +1951,12 @@ struct GitPanel: View {
                 if waitingForChanges { focusGitChanges() }
                 else if let selectedChange, !choices.contains(selectedChange) {
                     self.selectedChange = choices.first
+                }
+                if let explicitlySelectedChange, !choices.contains(explicitlySelectedChange) {
+                    self.explicitlySelectedChange = nil
+                }
+                if let contextChange, !choices.contains(contextChange) {
+                    self.contextChange = nil
                 }
             }
             .onChange(of: selectedChange) { _, key in
@@ -2015,16 +2027,20 @@ struct GitPanel: View {
     }
 
     private func focusContextChange(_ key: ChangeSelection) {
-        guard isGitActive, hasCurrentPanelTarget, model.canUseCurrentStatus else { return }
+        guard hasCurrentPanelTarget, model.canUseCurrentStatus else { return }
         selectedChange = key
-        lastKeyboardRegion = .changes
-        keyboardOwner.focus()
+        contextChange = key
+    }
+
+    private func dismissContextChange(_ key: ChangeSelection) {
+        if contextChange == key { contextChange = nil }
     }
 
     private func browseGitChange(_ change: VisibleChange) {
         guard let entry = change.entry, hasCurrentPanelTarget,
               model.canUseCurrentStatus, model.isCurrent(entry) else { return }
         selectedChange = selection(for: change)
+        explicitlySelectedChange = selectedChange
         var diffEntry = entry
         diffEntry.origPath = entry.diffOriginalPath(staged: change.kind == .staged)
         openDiff(diffEntry, change.kind == .staged)
@@ -2077,7 +2093,7 @@ struct GitPanel: View {
             } else {
                 browseGitChange(rows[current])
             }
-        case 53: selectedChange = nil // Escape
+        case 53: explicitlySelectedChange = nil // Escape clears selection, not focus
         default: return false
         }
         return true
@@ -2111,12 +2127,19 @@ struct GitPanel: View {
                                   section: kind, path: item.path)
         let focused = selectedChange == key && keyboardFocused && isGitActive
             && controlActiveState == .key
-        return TreeFolderRow(row: item, scale: panelFontScale, focusRing: focused, toggle: {
-            guard hasCurrentPanelTarget, model.canUseCurrentStatus else { return }
-            selectedChange = key
-            model.toggleCollapsedFolder(kind.rawValue + ":" + item.path)
-            if isGitActive { keyboardOwner.focus() }
-        }) { active in
+        return TreeFolderRow(
+            row: item, scale: panelFontScale,
+            focusRing: focused, contextRing: contextChange == key,
+            isSelected: explicitlySelectedChange == key, selectionEnabled: true,
+            listActive: keyboardFocused && isGitActive && controlActiveState == .key,
+            toggle: {
+                guard hasCurrentPanelTarget, model.canUseCurrentStatus else { return }
+                selectedChange = key
+                explicitlySelectedChange = key
+                model.toggleCollapsedFolder(kind.rawValue + ":" + item.path)
+                if isGitActive { keyboardOwner.focus() }
+            }
+        ) { active in
             GitChangeRowActions(
                 kind: kind, active: active,
                 disabled: model.isBusy || !model.canUseCurrentStatus,
@@ -2129,7 +2152,10 @@ struct GitPanel: View {
             )
         }
         .overlay {
-            ContextMenuClickTarget { focusContextChange(key) }
+            ContextMenuClickTarget(
+                onContextClick: { focusContextChange(key) },
+                onMenuClosed: { dismissContextChange(key) }
+            )
                 .contextMenu {
                     directoryMenu(path: item.path, selected: selected, kind: kind,
                                   stageTrigger: stageTrigger, unstageTrigger: unstageTrigger)
@@ -2194,9 +2220,13 @@ struct GitPanel: View {
             kind: kind,
             showDirectory: showDirectory,
             displayed: isDisplayedChange(entry, kind: kind),
+            isSelected: explicitlySelectedChange == key,
+            listActive: keyboardFocused && isGitActive && controlActiveState == .key,
             focusRing: selectedChange == key && keyboardFocused && isGitActive
                 && controlActiveState == .key,
+            contextRing: contextChange == key,
             onContextClick: { focusContextChange(key) },
+            onMenuClosed: { dismissContextChange(key) },
             isRemote: remoteName != nil,
             disabled: model.isBusy || !model.canUseCurrentStatus,
             isStageLoading: operationIsLoading(stageTrigger),
@@ -2693,8 +2723,12 @@ private struct GitEntryRow: View {
     let kind: Kind
     let showDirectory: Bool
     let displayed: Bool
+    let isSelected: Bool
+    let listActive: Bool
     let focusRing: Bool
+    let contextRing: Bool
     let onContextClick: () -> Void
+    let onMenuClosed: () -> Void
     /// Whether this repository is on another machine, where discarding an
     /// untracked or copied file deletes it rather than moving it to the Trash.
     let isRemote: Bool
@@ -2720,7 +2754,9 @@ private struct GitEntryRow: View {
             row: displayRow,
             scale: fontScale, iconPath: absolutePath,
             directory: showDirectory ? entry.directory : nil,
-            displayed: displayed, focusRing: focusRing,
+            displayed: displayed, isSelected: isSelected,
+            selectionEnabled: true, listActive: listActive,
+            focusRing: focusRing, contextRing: contextRing,
             accessibilityHint: kind == .merge
                 ? String(localized: "Opens conflict changes", table: "Sidebar")
                 : String(localized: "Opens changes", table: "Sidebar"),
@@ -2734,7 +2770,9 @@ private struct GitEntryRow: View {
             )
         }
         .overlay {
-            ContextMenuClickTarget { onContextClick() }
+            ContextMenuClickTarget(
+                onContextClick: onContextClick, onMenuClosed: onMenuClosed
+            )
                 .contextMenu { menu }
         }
     }

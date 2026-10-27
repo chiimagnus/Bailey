@@ -2762,11 +2762,13 @@ final class FileTreeTests: XCTestCase {
         let displayed = try color(displayedImage, x: centerX, y: centerY)
         XCTAssertGreaterThan(delta(neutral, displayed), 0.04,
                              "The currently displayed file retains its own subtle fill")
-        for image in [selectedAndFocused, selectedAndDisplayed, menuAndSelected] {
+        for image in [selectedAndFocused, selectedAndDisplayed] {
             let center = try color(image, x: centerX, y: centerY)
             XCTAssertLessThan(delta(active, center), 0.03,
-                              "Focus, context menu and display cannot override the Selection fill")
+                              "Keyboard focus and display cannot override Selection")
         }
+        XCTAssertLessThan(delta(neutral, try color(menuAndSelected, x: centerX, y: centerY)),
+                          0.03, "A menu target displays only its outline, even when selected")
         func changedPixels(_ base: NSBitmapImageRep, _ outlined: NSBitmapImageRep) throws -> Int {
             var count = 0
             for y in 0..<base.pixelsHigh {
@@ -2783,8 +2785,8 @@ final class FileTreeTests: XCTestCase {
                              "Focus outline must render without Selection")
         XCTAssertGreaterThan(try changedPixels(activeImage, selectedAndFocused), 8,
                              "Focus outline must remain visible together with Selection")
-        XCTAssertGreaterThan(try changedPixels(activeImage, menuAndSelected), 8,
-                             "The menu target must have its outline without losing Selection")
+        XCTAssertGreaterThan(try changedPixels(normalImage, menuAndSelected), 8,
+                             "The menu target must have an outline without a Selection fill")
     }
 
     func testSharedTreeStatusAndCompaction() {

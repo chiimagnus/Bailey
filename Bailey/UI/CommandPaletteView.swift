@@ -732,10 +732,9 @@ struct CommandPaletteView: View {
         .buttonStyle(.plain)
         .accessibilityIdentifier("bailey.commandPalette.result")
         .accessibilityValue(command.id)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? Color.primary.opacity(0.09) : .clear)
-        )
+        .modifier(RowHighlightStyle(
+            isSelected: isSelected, listActive: searchFocused, cornerRadius: 6
+        ))
         .background(
             PaletteRowPointerView(
                 onEntered: {

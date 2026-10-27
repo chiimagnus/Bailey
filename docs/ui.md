@@ -32,7 +32,7 @@ Bailey 是自由组装的 AI IDE，以原生终端工作区支持开发者使用
 | --- | --- |
 | [Theme.swift](../Bailey/App/Theme.swift) | 应用外观、终端主题解析、窗口背景、强调色和分隔线 |
 | [PanelTypography.swift](../Bailey/UI/Panels/PanelTypography.swift) | 面板文字的共享缩放 |
-| [TreeRowStyle.swift](../Bailey/Shared/Tree/TreeRowStyle.swift) | 文件／Git 树的缩进、尺寸、状态颜色、选择和悬停 |
+| [TreeRowStyle.swift](../Bailey/Shared/Tree/TreeRowStyle.swift) | 文件／Git 树的尺寸与共享行、Projects／Dock／命令面板的状态视觉 |
 | [WorkspaceChrome.swift](../Bailey/UI/Components/WorkspaceChrome.swift) | 标签、工具按钮及其共享外壳 |
 | [WindowChrome.swift](../Bailey/UI/Components/WindowChrome.swift) | 原生窗口接入与窗口外壳 |
 
@@ -60,15 +60,17 @@ Git Graph 历史文件行与 Git Changes 同名文件行使用不同的无障碍
 Focus 与 Selection 在同一行时两层同时生效。**Hover** 只强调未选中且未聚焦行。
 当前打开的文件／Diff 可保留弱灰底作为浏览线索，但不应覆盖 Selection，
 也不代表 Focus；Git Graph 提交展开不产生持续灰底。
-**右键菜单目标**在菜单跟踪期间
-独占这一层细边框，暂时隐藏 Files 游标原来的描边，不表示 Files 已取得第一响应者。
-右键切换到其它行时必须替换旧目标，菜单结束后只恢复真实焦点所对应的描边。
+**右键菜单目标**优先于其它视觉状态：菜单期间该行仅绘制主题色细边框，
+不叠加选中底色或 Hover 灰底，也不表示列表已取得第一响应者。
+实际 Selection 仍保留；菜单关闭后撤销临时边框，恢复原本应显示的选中底色与真实键盘描边。
+右键切换到其它行时必须替换旧目标。
 Files 按 VS Code Explorer 的特殊规则：右键已选中的行保留整组 Selection；
 右键未选中的 B 则改为仅选 B，同时移动 Focus，不触发浏览或展开。
-菜单期间 B 的 Focus 轮廓不叠加 Hover 底色，真实 Selection 持续显示。
-菜单结束时仅撤销上下文边框，Terminal／Editor 继续拥有其原生输入焦点。
+菜单期间 B 仅显示上下文描边，Selection 的内容和命令目标仍由各自状态管理。
+菜单结束不抢 Terminal／Editor 的原生输入焦点。
 ↑／↓ 只移动 Focus，不改变 Selection 与当前展示文件；
-Esc 清除 Selection、保留 Focus。边框和背景允许叠加，但各由所属状态驱动。
+Esc 清除 Selection、保留 Focus。普通键盘 Focus 可以叠加 Selection；
+右键目标独占描边，并在菜单期间暂时压过该行的其它背景。
 右键不触发左键的打开或展开；菜单对既有选中集合内部操作整组，
 对集合外目标只操作该目标。菜单项的快捷键提示必须与真实可执行命令一致，
 不能仅凭右键命中的路径假装普通输入焦点已经切换。
@@ -95,13 +97,16 @@ Git 树保留原有焦点呈现，共享树行不复制 Files 的多选模型，
 策略与原生组件的职责见 [焦点协调边界](architecture.md#焦点协调边界)，不在 View 中复制平行状态。
 
 Bailey 的活动 Dock 组不绘制强调色外框，也不整体降低非活动分屏的透明度。
-每组仍保留自己的 selected 标签背景；
-只有前台真正聚焦的组，其 selected 标签的图标和文字使用较强的对比度，
-其余组的选中标签保持低调但可辨认。命令面板或 Sheet 接管输入时不制造假聚焦。
-Hover、拖放预览和选中标签不等于原生第一响应者；Files／Git 的树行外观不受影响。
-Projects 与标签页右键标记上下文目标的细边框，不把非活动内容切为活动内容；
-Dock 标签的右键目标也是 ⌘W 的关闭目标，左键操作后恢复对应目标。
-活动底色、悬停和上下文描边可以同时存在，右键不能触发行打开、重排或拖动。
+每组仍保留自己的 selected 标签背景：前台活动组使用主题色，
+后台组保留中性底色；前台 selected 标签的文字和图标对比度更强。
+命令面板或 Sheet 接管输入时不制造假聚焦。
+Projects 当前项目同样使用活动／非活动的选中底色，独立键盘游标仅有描边。
+Hover 与拖放预览不等于原生第一响应者；文件／Git 树行规则一致。
+Projects 和 Dock 标签的右键目标仅显示临时细边框，不能同时叠加蓝色底色，
+不切换非活动内容；菜单取消后立即撤销描边及临时关闭目标。
+Dock 标签的右键目标仅在菜单期间优先作为 ⌘W 的关闭目标。
+命令面板当前结果使用选中底色，⌃Tab 的预览候选使用键盘游标描边；
+右键不触发行打开、重排或拖动。
 
 Finder 文件投放按目标区处理：Projects 的文件打开／复用当前项目标签，文件夹添加目录项目；
 Files 按明确目录复制；顶部工作标签栏和编辑区打开／复用标签。
@@ -136,9 +141,10 @@ Files 使用同一套文件操作；菜单没有展开时，只有 Files 树真�
 设置窗口采用 SwiftUI `Settings` 场景和 `NavigationSplitView`：左侧分类，右侧原生 `Form`，
 内容过长时滚动。具体设置见 [settings.md](features/settings.md)。
 
-侧栏选中行使用 Ghostty 主题强调色，标题为白色、图标使用 `Color.primary`；
-未选中图标及两栏背景也随主题变化。普通文字、下拉菜单和按钮保持正文色，强调色只用于选中行、
-滑块与开关，不向整个窗口应用 `.tint`。SwiftUI 直接使用解析后的主题颜色，切换主题时不得保留旧色；
+设置侧栏与工作区共享选中底色：前台使用 Ghostty 主题强调色浅底，失焦使用中性底色，
+文字与已选图标保持正文色；未选中图标和两栏背景随主题变化。
+强调色同时用于滑块与开关，不向整个窗口应用 `.tint`。
+SwiftUI 直接使用解析后的主题颜色，切换主题时不得保留旧色；
 内置 Default 主题保留原生材质。System／Light／Dark 在 macOS 27 起使用 `.tabs`，
 旧系统使用 `.segmented`。
 
@@ -191,7 +197,8 @@ Stash 始终保留完整的 `stash@{n}` 序号。
 Git Graph 的键盘焦点与详情展开是不同状态：点击提交仍展开／收起，
 Space／Return 在当前图谱行执行同一操作，方向键可选中可见历史文件或其它工作树文件；
 展开历史提交、Stash 或 Uncommitted Changes 只改变子内容，不改变提交行背景；
-实际键盘焦点所在行显示单层主题描边，输入框获得焦点即撤销描边。历史 Diff 浏览不强抢图谱焦点。
+实际键盘焦点所在行显示主题描边，右键菜单使用独立的临时描边，
+输入框获得焦点即撤销键盘描边。右键与历史 Diff 浏览都不强抢图谱焦点。
 复制名称、工作树路径及 Git 操作通过右键菜单完成，短 SHA 仍可单击复制。
 提交行依次展示图谱、必要标签与标题，下一行显示 SHA、作者和时间；
 Merge 标题通常保持较弱对比度，悬停时恢复正常对比度；展开本身不改变标题样式。

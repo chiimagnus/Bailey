@@ -44,6 +44,14 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertTrue(files.waitForExistence(timeout: 15))
         XCTAssertTrue(git.waitForExistence(timeout: 15))
         git.click()
+        if !files.isHittable {
+            let strip = window.scrollViews.containing(
+                .button, identifier: "bailey.dock.git"
+            ).firstMatch
+            XCTAssertTrue(strip.waitForExistence(timeout: 5))
+            strip.swipeRight()
+        }
+        XCTAssertTrue(files.isHittable, "The Files tab must be reachable by horizontal scrolling")
         files.rightClick()
         XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
             $0.menuItems["Close Panel"].exists
@@ -204,9 +212,13 @@ final class WorkspaceDockUITests: XCTestCase {
         firstTab.hover()
         let before = try contextOutlinePixels(of: firstTab)
         firstTab.rightClick()
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(app.menuItems["Close"].waitForExistence(timeout: 8))
         XCTAssertNotEqual(try contextOutlinePixels(of: firstTab), before,
-                          "The inactive tab must show an independent context target outline")
+                          "The inactive tab must show a context outline while its menu is open")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        firstTab.hover()
+        XCTAssertEqual(try contextOutlinePixels(of: firstTab), before,
+                       "Dismissal must remove the temporary context outline")
         firstTab.rightClick()
         let contextMenu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
             $0.menuItems["Close Others"].exists && $0.menuItems["Close"].exists
@@ -240,9 +252,12 @@ final class WorkspaceDockUITests: XCTestCase {
             XCTAssertFalse(app.menuItems[removed].exists,
                            "Project menu must not expose removed action \(removed)")
         }
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertNotEqual(try contextOutlinePixels(of: row), before,
-                          "Right-clicked project must draw its own context outline")
+                          "The project context outline must be visible only during menu tracking")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        row.hover()
+        XCTAssertEqual(try contextOutlinePixels(of: row), before,
+                       "Dismissal must remove the project context outline")
     }
 
     private func launchIsolatedDockProject(_ fixture: WorkspaceUITestFixture) -> XCUIApplication {

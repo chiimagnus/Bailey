@@ -75,6 +75,7 @@ struct RecentCommitsView: View {
     @State private var localKeyboardOwner = TreeKeyboardOwner()
     @State private var keyboardFocused = false
     @State private var selectedRowID: String?
+    @State private var contextRowID: String?
     @Environment(\.controlActiveState) private var controlActiveState
 
     private let providedKeyboardOwner: TreeKeyboardOwner?
@@ -285,9 +286,18 @@ struct RecentCommitsView: View {
         .onChange(of: commits.last(where: { $0.stash == nil })?.id) {
             requestedLastCommit = nil
         }
-        .onChange(of: repoRoot) { _, _ in selectedRowID = nil }
-        .onChange(of: selectionScope) { _, _ in selectedRowID = nil }
+        .onChange(of: repoRoot) { _, _ in
+            selectedRowID = nil
+            contextRowID = nil
+        }
+        .onChange(of: selectionScope) { _, _ in
+            selectedRowID = nil
+            contextRowID = nil
+        }
         .onChange(of: keyboardRows.map(\.id)) { _, ids in
+            if let contextRowID, !ids.contains(contextRowID) {
+                self.contextRowID = nil
+            }
             if let selectedRowID, !ids.contains(selectedRowID) {
                 self.selectedRowID = ids.first
             } else if selectedRowID == nil && keyboardFocused {
@@ -481,6 +491,22 @@ struct RecentCommitsView: View {
         }
     }
 
+    private func selectContextRow(_ id: String) {
+        selectedRowID = id
+        contextRowID = id
+    }
+
+    private func dismissContextRow(_ id: String) {
+        if contextRowID == id { contextRowID = nil }
+    }
+
+    private func contextTarget(for id: String) -> ContextMenuClickTarget {
+        ContextMenuClickTarget(
+            onContextClick: { selectContextRow(id) },
+            onMenuClosed: { dismissContextRow(id) }
+        )
+    }
+
     private func toggleFolder(_ key: String) {
         if !collapsedFolders.insert(key).inserted {
             collapsedFolders.remove(key)
@@ -531,7 +557,7 @@ struct RecentCommitsView: View {
             } else if let parent = row.parent {
                 selectedRowID = parent
             } else { return false }
-        case 53: selectedRowID = nil // Escape
+        case 53: break // Escape leaves the keyboard cursor in place
         default: return false
         }
         return true
@@ -577,6 +603,7 @@ struct RecentCommitsView: View {
         TreeRowSurface(
             depth: 0, scale: fontScale,
             focusRing: isFocusedRow(commitRowID(commit)),
+            contextRing: contextRowID == commitRowID(commit),
             leadingInset: gutter, trailingInset: TreeRowStyle.contentInset,
             showsGuides: false,
             height: max(36, ceil(38 * fontScale))
@@ -623,7 +650,7 @@ struct RecentCommitsView: View {
                         .layoutPriority(1)
                         .help(commit.subject)
                         .overlay {
-                            ContextMenuClickTarget { selectRow(commitRowID(commit)) }
+                            contextTarget(for: commitRowID(commit))
                                 .contextMenu { commitContextMenu(commit) }
                                 .accessibilityHidden(true)
                         }
@@ -717,7 +744,7 @@ struct RecentCommitsView: View {
         .contentShape(Rectangle())
         .onTapGesture { toggle(commit) }
         .background {
-            ContextMenuClickTarget { selectRow(commitRowID(commit)) }
+            contextTarget(for: commitRowID(commit))
         }
         .contextMenu { commitContextMenu(commit) }
     }
@@ -838,7 +865,7 @@ struct RecentCommitsView: View {
         .accessibilityLabel(label + ", " + String(localized: "Worktree", table: "Git")
                             + ": " + paths.joined(separator: ", "))
         .background {
-            ContextMenuClickTarget { selectRow(commitRowID(commit)) }
+            contextTarget(for: commitRowID(commit))
         }
         .contextMenu {
             if let head = commit.references.first(where: { $0.kind == .detachedHead }) {
@@ -906,7 +933,7 @@ struct RecentCommitsView: View {
         .buttonStyle(.plain)
         .help(stash.selector + ": " + stash.message)
         .background {
-            ContextMenuClickTarget { selectRow(commitRowID(commit)) }
+            contextTarget(for: commitRowID(commit))
         }
         .contextMenu { stashActions(stash) }
     }
@@ -1014,7 +1041,7 @@ struct RecentCommitsView: View {
         .accessibilityLabel(reference.name + (matched.isEmpty ? ""
             : ", " + String(localized: "Worktree", table: "Git")))
         .background {
-            ContextMenuClickTarget { selectRow(commitRowID(commit)) }
+            contextTarget(for: commitRowID(commit))
         }
         .contextMenu { referenceActions(reference, commit: commit) }
     }
@@ -1222,7 +1249,10 @@ struct RecentCommitsView: View {
                         row: node, scale: fontScale, leadingInset: inset,
                         focusRing: isFocusedRow(folderRowID(
                             commit, section: section, path: node.path
-                        ))
+                        )),
+                        contextRing: contextRowID == folderRowID(
+                            commit, section: section, path: node.path
+                        )
                     ) {
                         let folder = key + ":" + node.path
                         selectRow(folderRowID(commit,
@@ -1233,9 +1263,9 @@ struct RecentCommitsView: View {
                         section: section, path: node.path))
                     .background { fileRails(rails, spacing: spacing) }
                     .background {
-                        ContextMenuClickTarget {
-                            selectRow(folderRowID(commit, section: section, path: node.path))
-                        }
+                        contextTarget(for: folderRowID(
+                            commit, section: section, path: node.path
+                        ))
                     }
                     .contextMenu {
                         Button(String(localized: "Copy Absolute Path", table: "Git")) {
@@ -1274,7 +1304,8 @@ struct RecentCommitsView: View {
             row: row, scale: fontScale,
             directory: showDirectory ? entry.directory : nil,
             displayed: isDisplayedWorktreeFile(entry, staged: staged, in: worktree),
-            focusRing: isFocusedRow(id), leadingInset: inset,
+            focusRing: isFocusedRow(id), contextRing: contextRowID == id,
+            leadingInset: inset,
             accessibilityHint: staged
                 ? String(localized: "Open Staged Diff", table: "Git")
                 : String(localized: "Open Working Changes", table: "Git"),
@@ -1285,7 +1316,7 @@ struct RecentCommitsView: View {
         ) { _ in EmptyView() }
         .id(id)
         .background {
-            ContextMenuClickTarget { selectRow(id) }
+            contextTarget(for: id)
         }
         .contextMenu {
             Button(staged
@@ -1345,16 +1376,18 @@ struct RecentCommitsView: View {
                 if node.isDirectory {
                     TreeFolderRow(row: node, scale: fontScale, leadingInset: filesInset,
                         focusRing: isFocusedRow(folderRowID(commit,
-                            section: section, path: node.path))) {
+                            section: section, path: node.path)),
+                        contextRing: contextRowID == folderRowID(commit,
+                            section: section, path: node.path)) {
                         selectRow(folderRowID(commit, section: section, path: node.path))
                         toggleFolder(section + ":" + node.path)
                     }
                     .id(folderRowID(commit, section: section, path: node.path))
                     .background { fileRails(rails, spacing: spacing) }
                     .background {
-                        ContextMenuClickTarget {
-                            selectRow(folderRowID(commit, section: section, path: node.path))
-                        }
+                        contextTarget(for: folderRowID(
+                            commit, section: section, path: node.path
+                        ))
                     }
                     .contextMenu {
                         Button(String(localized: "Copy Absolute Path", table: "Git")) {
@@ -1388,6 +1421,7 @@ struct RecentCommitsView: View {
             directory: showDirectory ? file.directory : nil,
             displayed: isDisplayedHistoryFile(file, in: commit),
             focusRing: isFocusedRow(historicalFileRowID(commit, file: file)),
+            contextRing: contextRowID == historicalFileRowID(commit, file: file),
             leadingInset: inset,
             accessibilityHint: String(localized: "Opens changes", table: "Sidebar"),
             accessibilityID: "bailey.git.history.file",
@@ -1398,7 +1432,7 @@ struct RecentCommitsView: View {
         ) { _ in EmptyView() }
         .id(historicalFileRowID(commit, file: file))
         .background {
-            ContextMenuClickTarget { selectRow(historicalFileRowID(commit, file: file)) }
+            contextTarget(for: historicalFileRowID(commit, file: file))
         }
         .contextMenu {
             Button(String(localized: "Open Historical Diff", table: "Git")) {

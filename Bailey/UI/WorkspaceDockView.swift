@@ -527,6 +527,7 @@ struct DockTabGroupView: View {
            let paneTab = project.tabs.first(where: { $0.id == id }) {
             PaneTabItem(
                 tab: paneTab, isSelected: active == item, isPaneFocused: isFocused,
+                isContextTarget: project.dock.contextTarget == item,
                 select: { select(item) },
                 close: { manager.closePanel(item, in: project) },
                 renamingTabID: $renamingTabID
@@ -534,6 +535,9 @@ struct DockTabGroupView: View {
             .overlay {
                 ContextMenuClickTarget(
                     onContextClick: { project.dock.selectForContextMenu(item) },
+                    onMenuClosed: {
+                        if project.dock.contextTarget == item { project.dock.clearContextTarget() }
+                    },
                     onMenuKeyDown: { menu, event in
                         handleMenuKeyDown(menu, event, for: item)
                     }
@@ -544,13 +548,11 @@ struct DockTabGroupView: View {
                     }
                 }
             }
-            .overlay {
-                contextTabOutline(for: item)
-            }
         } else {
             TabItemChrome(
                 systemImage: item.symbol, title: item.label(project: project),
                 isSelected: active == item, isPaneFocused: isFocused,
+                isContextTarget: project.dock.contextTarget == item,
                 select: { select(item) },
                 close: { closeTool(item) }
             )
@@ -558,6 +560,9 @@ struct DockTabGroupView: View {
             .overlay {
                 ContextMenuClickTarget(
                     onContextClick: { project.dock.selectForContextMenu(item) },
+                    onMenuClosed: {
+                        if project.dock.contextTarget == item { project.dock.clearContextTarget() }
+                    },
                     onMenuKeyDown: { menu, event in
                         handleMenuKeyDown(menu, event, for: item)
                     }
@@ -571,9 +576,6 @@ struct DockTabGroupView: View {
                     }
                     .accessibilityLabel(closeTitle)
                 }
-            }
-            .overlay {
-                contextTabOutline(for: item)
             }
         }
     }
@@ -592,13 +594,6 @@ struct DockTabGroupView: View {
         menu.performActionForItem(at: index)
         menu.cancelTracking()
         return true
-    }
-
-    private func contextTabOutline(for item: DockItem) -> some View {
-        RoundedRectangle(cornerRadius: 6)
-            .strokeBorder(project.dock.contextTarget == item ? Color(nsColor: Theme.accent) : .clear,
-                          lineWidth: 1)
-            .allowsHitTesting(false)
     }
 
     private func select(_ item: DockItem) {

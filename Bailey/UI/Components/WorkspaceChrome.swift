@@ -8,6 +8,7 @@ struct PaneTabItem: View {
     let tab: PaneTab
     let isSelected: Bool
     let isPaneFocused: Bool
+    let isContextTarget: Bool
     let select: () -> Void
     let close: () -> Void
     @Binding var renamingTabID: UUID?
@@ -31,18 +32,21 @@ struct PaneTabItem: View {
                 SessionTabLabel(
                     session: session, customTitle: tab.customName,
                     isSelected: isSelected, isPaneFocused: isPaneFocused,
+                    isContextTarget: isContextTarget,
                     select: select, close: close
                 )
             case .file(let file):
                 FileTabLabel(
                     file: file, customTitle: tab.customName,
                     isSelected: isSelected, isPaneFocused: isPaneFocused,
+                    isContextTarget: isContextTarget,
                     select: select, close: close
                 )
             case .browser(let browser):
                 BrowserTabLabel(
                     browser: browser, customTitle: tab.customName,
                     isSelected: isSelected, isPaneFocused: isPaneFocused,
+                    isContextTarget: isContextTarget,
                     select: select, close: close
                 )
             case .diff(let diff):
@@ -51,6 +55,7 @@ struct PaneTabItem: View {
                     customTitle: tab.customName,
                     isSelected: isSelected,
                     isPaneFocused: isPaneFocused,
+                    isContextTarget: isContextTarget,
                     select: select,
                     close: close
                 )
@@ -153,6 +158,7 @@ private struct SessionTabLabel: View {
     var customTitle: String?
     let isSelected: Bool
     let isPaneFocused: Bool
+    let isContextTarget: Bool
     let select: () -> Void
     let close: () -> Void
 
@@ -162,6 +168,7 @@ private struct SessionTabLabel: View {
             title: customTitle ?? session.title,
             isSelected: isSelected,
             isPaneFocused: isPaneFocused,
+            isContextTarget: isContextTarget,
             select: select,
             close: close
         )
@@ -174,6 +181,7 @@ private struct FileTabLabel: View {
     var customTitle: String?
     let isSelected: Bool
     let isPaneFocused: Bool
+    let isContextTarget: Bool
     let select: () -> Void
     let close: () -> Void
 
@@ -184,6 +192,7 @@ private struct FileTabLabel: View {
             title: customTitle ?? file.name,
             isSelected: isSelected,
             isPaneFocused: isPaneFocused,
+            isContextTarget: isContextTarget,
             isDirty: file.isDirty,
             select: select,
             close: close
@@ -200,6 +209,7 @@ private struct BrowserTabLabel: View {
     var customTitle: String?
     let isSelected: Bool
     let isPaneFocused: Bool
+    let isContextTarget: Bool
     let select: () -> Void
     let close: () -> Void
 
@@ -210,6 +220,7 @@ private struct BrowserTabLabel: View {
             title: customTitle ?? browser.title,
             isSelected: isSelected,
             isPaneFocused: isPaneFocused,
+            isContextTarget: isContextTarget,
             select: select,
             close: close
         )
@@ -222,6 +233,7 @@ private struct DiffTabLabel: View {
     var customTitle: String?
     let isSelected: Bool
     let isPaneFocused: Bool
+    let isContextTarget: Bool
     let select: () -> Void
     let close: () -> Void
 
@@ -232,6 +244,7 @@ private struct DiffTabLabel: View {
             title: customTitle ?? diff.title,
             isSelected: isSelected,
             isPaneFocused: isPaneFocused,
+            isContextTarget: isContextTarget,
             isDirty: diff.isDirty,
             select: select,
             close: close
@@ -248,6 +261,7 @@ struct TabItemChrome: View {
     let title: String
     let isSelected: Bool
     let isPaneFocused: Bool
+    let isContextTarget: Bool
     var isDirty = false
     let select: () -> Void
     let close: () -> Void
@@ -312,10 +326,10 @@ struct TabItemChrome: View {
         // Cap tab width so a long title truncates instead of stretching the
         // tab; short titles still shrink to fit (maxWidth is an upper bound).
         .frame(maxWidth: 220)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? Color.primary.opacity(0.09) : (isHovering ? Color.primary.opacity(0.04) : .clear))
-        )
+        .modifier(RowHighlightStyle(
+            isSelected: isSelected, listActive: isPaneFocused,
+            contextRing: isContextTarget, hovering: isHovering, cornerRadius: 6
+        ))
         .onHover { isHovering = $0 }
     }
 }

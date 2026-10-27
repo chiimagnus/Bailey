@@ -512,15 +512,9 @@ private struct TabSwitcherCard: View {
             height: TabSwitcherLayout.cardHeight,
             alignment: .topLeading
         )
-        .background {
-            if isHighlighted {
-                RoundedRectangle(
-                    cornerRadius: TabSwitcherLayout.cardCornerRadius,
-                    style: .continuous
-                )
-                .fill(highlightedBackground)
-            }
-        }
+        .modifier(RowHighlightStyle(
+            focusRing: isHighlighted, cornerRadius: TabSwitcherLayout.cardCornerRadius
+        ))
         .animation(.easeInOut(duration: 0.12), value: isHighlighted)
         .overlay {
             TabSwitcherInteractionView(
@@ -553,11 +547,6 @@ private struct TabSwitcherCard: View {
         }
     }
 
-    private var highlightedBackground: Color {
-        colorScheme == .light
-            ? Color(red: 0.838, green: 0.835, blue: 0.841)
-            : Color.primary.opacity(0.20)
-    }
 }
 
 private struct TabSwitcherInteractionView: NSViewRepresentable {
