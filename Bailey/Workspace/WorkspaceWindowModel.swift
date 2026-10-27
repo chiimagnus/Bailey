@@ -587,6 +587,7 @@ final class WorkspaceWindowModel {
             attachedWindow?.performClose(nil)
             return
         }
+        project.dock.clearContextTarget()
         closePanel(item, in: project)
     }
 
