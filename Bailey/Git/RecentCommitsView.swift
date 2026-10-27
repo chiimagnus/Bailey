@@ -1273,7 +1273,7 @@ struct RecentCommitsView: View {
         return TreeFileRow(
             row: row, scale: fontScale,
             directory: showDirectory ? entry.directory : nil,
-            selected: isDisplayedWorktreeFile(entry, staged: staged, in: worktree),
+            displayed: isDisplayedWorktreeFile(entry, staged: staged, in: worktree),
             focusRing: isFocusedRow(id), leadingInset: inset,
             accessibilityHint: staged
                 ? String(localized: "Open Staged Diff", table: "Git")
@@ -1386,7 +1386,7 @@ struct RecentCommitsView: View {
         TreeFileRow(
             row: row, scale: fontScale,
             directory: showDirectory ? file.directory : nil,
-            selected: isDisplayedHistoryFile(file, in: commit),
+            displayed: isDisplayedHistoryFile(file, in: commit),
             focusRing: isFocusedRow(historicalFileRowID(commit, file: file)),
             leadingInset: inset,
             accessibilityHint: String(localized: "Opens changes", table: "Sidebar"),

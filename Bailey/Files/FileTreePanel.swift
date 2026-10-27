@@ -405,7 +405,7 @@ private struct FileTreeRow: View {
         return extending || toggling
     }
 
-    /// The file open in the active tab, so it reads as selected in the tree.
+    /// Current file display does not imply tree selection or keyboard focus.
     private var isCurrent: Bool { !item.isDirectory && item.path == currentFilePath }
 
     private var gitDecoration: GitStatusModel.FileDecoration? {
@@ -434,7 +434,8 @@ private struct FileTreeRow: View {
             }
         } else if isRenaming {
             TreeRowSurface(
-                depth: item.depth, scale: fontScale, selected: isCurrent,
+                depth: item.depth, scale: fontScale, displayed: isCurrent,
+                isSelected: isMultiSelected, listActive: listFocused,
                 contextRing: hasContextRing
             ) { _, layout in
                 renameRow
@@ -679,7 +680,8 @@ private struct FileTreeRow: View {
         if item.isDirectory {
             TreeFolderRow(row: displayRow, scale: fontScale,
                           focusRing: hasKeyboardCursor, contextRing: hasContextRing,
-                          multiSelected: isMultiSelected, multiSelectionEnabled: true,
+                          isSelected: isMultiSelected, selectionEnabled: true,
+                          listActive: listFocused,
                           compactSegment: { component in compactSegmentView(component) }) {
                 guard isCurrentTarget() else { return }
                 if selectForClick() { return }
@@ -690,8 +692,9 @@ private struct FileTreeRow: View {
             }
         } else {
             TreeFileRow(
-                row: displayRow, scale: fontScale, selected: isCurrent,
-                multiSelected: isMultiSelected, multiSelectionEnabled: true,
+                row: displayRow, scale: fontScale, displayed: isCurrent,
+                isSelected: isMultiSelected, selectionEnabled: true,
+                listActive: listFocused,
                 focusRing: hasKeyboardCursor, contextRing: hasContextRing,
                 open: {
                     guard isCurrentTarget() else { return }

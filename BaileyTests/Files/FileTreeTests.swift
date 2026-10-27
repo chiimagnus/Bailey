@@ -2659,6 +2659,66 @@ final class FileTreeTests: XCTestCase {
                       "Siblings remain unloaded until clicked")
     }
 
+    func testTreeRowActiveInactiveSelectionAndKeyboardFocusRenderIndependently() throws {
+        func bitmap(isSelected: Bool, listActive: Bool, focusRing: Bool) throws -> NSBitmapImageRep {
+            let row = TreeRowSurface(depth: 0, scale: 1,
+                                     isSelected: isSelected, listActive: listActive,
+                                     focusRing: focusRing, outerInset: 0, showsGuides: false) { _, layout in
+                Color.clear.frame(height: layout.height)
+            }
+            let window = NSWindow(
+                contentRect: NSRect(x: -1200, y: -1200, width: 180, height: 24),
+                styleMask: [.borderless], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let host = NSHostingView(rootView: row.background(Color.white))
+            host.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 180, height: 24)
+            window.contentView = host
+            window.orderFront(nil)
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            return bitmap
+        }
+        func delta(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            abs(a.redComponent - b.redComponent)
+                + abs(a.greenComponent - b.greenComponent)
+                + abs(a.blueComponent - b.blueComponent)
+        }
+        func color(_ bitmap: NSBitmapImageRep, x: Int, y: Int) throws -> NSColor {
+            try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+        }
+        let normalImage = try bitmap(isSelected: false, listActive: true, focusRing: false)
+        let activeImage = try bitmap(isSelected: true, listActive: true, focusRing: false)
+        let inactiveImage = try bitmap(isSelected: true, listActive: false, focusRing: false)
+        let focusImage = try bitmap(isSelected: false, listActive: true, focusRing: true)
+        let centerX = normalImage.pixelsWide / 2
+        let centerY = normalImage.pixelsHigh / 2
+        let neutral = try color(normalImage, x: centerX, y: centerY)
+        let active = try color(activeImage, x: centerX, y: centerY)
+        let inactive = try color(inactiveImage, x: centerX, y: centerY)
+        let focus = try color(focusImage, x: centerX, y: centerY)
+        XCTAssertGreaterThan(delta(neutral, active), 0.08)
+        XCTAssertGreaterThan(delta(active, inactive), 0.08,
+                             "VS Code uses distinct active and inactive Selection fills")
+        XCTAssertGreaterThan(delta(neutral, inactive), 0.04)
+        XCTAssertLessThan(delta(neutral, focus), 0.03,
+                          "Moving the keyboard focus cannot manufacture Selection background")
+        var outlinedPixels = 0
+        for y in 0..<normalImage.pixelsHigh {
+            for x in 0..<normalImage.pixelsWide {
+                if try delta(color(normalImage, x: x, y: y),
+                             color(focusImage, x: x, y: y)) > 0.07 {
+                    outlinedPixels += 1
+                }
+            }
+        }
+        XCTAssertGreaterThan(outlinedPixels, 8,
+                             "Focus outline must render without a Selection background")
+    }
+
     func testSharedTreeStatusAndCompaction() {
         let statuses: [(Character, TreeDisplayModel.Status)] = [
             ("M", .modified), ("A", .added), ("?", .untracked), ("D", .deleted),
