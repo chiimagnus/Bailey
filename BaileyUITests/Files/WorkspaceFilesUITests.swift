@@ -668,8 +668,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         app.typeKey("t", modifierFlags: .command)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0.6)).click()
         b.rightClick()
-        XCTAssertTrue(a.isSelected && !b.isSelected,
-                      "Context click must not transfer persistent selection from A to B")
+        XCTAssertTrue(!a.isSelected && b.isSelected,
+                      "Explorer right-click outside Selection must select B without opening it")
         XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
             $0.menuItems["Copy Relative Path"].exists
         }, "Files should display its context menu while Terminal owns input")
@@ -713,8 +713,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         otherMenu.menuItems["Copy Path"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), gamma.path,
                        "Context-clicking an unselected row must act on that row only")
-        XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected,
-                      "A context click outside the selection must not rewrite persistent selection")
+        XCTAssertTrue(!a.isSelected && !b.isSelected && c.isSelected,
+                      "Explorer right-click outside Selection replaces A/B with C")
         a.click()
         XCUIElement.perform(withKeyModifiers: .shift) { b.click() }
         XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected)

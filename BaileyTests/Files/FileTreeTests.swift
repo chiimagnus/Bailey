@@ -1340,6 +1340,10 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(tree.selectedPath, first.path)
         let next = try XCTUnwrap(tree.moveSelection(by: 1))
         XCTAssertEqual(tree.selectedPath, next.path)
+        XCTAssertEqual(tree.selectedPaths, [first.path],
+                       "VS Code keeps Selection while arrow keys move only Focus")
+        XCTAssertEqual(tree.selectedOperationPaths, [next.path],
+                       "An Edit action follows Focus when it is outside Selection")
         XCTAssertEqual(tree.moveSelection(by: -1)?.path, first.path)
         XCTAssertEqual(tree.selectedPath, first.path)
 
@@ -1398,10 +1402,22 @@ final class FileTreeTests: XCTestCase {
         XCTAssertNil(tree.selectedPath)
         XCTAssertTrue(tree.selectedPaths.isEmpty)
         _ = tree.moveSelection(by: 1)
-        XCTAssertEqual(tree.selectedPaths, [rows[0].path])
+        XCTAssertTrue(tree.selectedPaths.isEmpty, "Focus navigation never creates Selection")
+        XCTAssertEqual(tree.selectedPath, rows[0].path)
+        XCTAssertEqual(tree.selectedOperationPaths, [rows[0].path])
+        tree.select(rows[2])
+        tree.clearExplicitSelection()
+        XCTAssertTrue(tree.selectedPaths.isEmpty)
+        XCTAssertEqual(tree.selectedPath, rows[2].path,
+                       "Escape clears Selection without discarding the keyboard Focus")
+        XCTAssertEqual(tree.selectedOperationPaths, [rows[2].path])
+        tree.focus(rows[1])
+        XCTAssertTrue(tree.selectedPaths.isEmpty,
+                      "Focusing a row must not silently create a Selection")
+        XCTAssertEqual(tree.selectedPath, rows[1].path)
     }
 
-    func testContextSelectionMovesKeyboardCursorWithoutDestroyingMultiSelection() async throws {
+    func testContextSelectionPreservesSelectedGroupButReplacesOutsideSelectionLikeVSCode() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1422,10 +1438,10 @@ final class FileTreeTests: XCTestCase {
 
         tree.selectForContextMenu(rows[1])
         XCTAssertEqual(tree.selectedPath, rows[1].path)
-        XCTAssertEqual(tree.selectedPaths, [rows[0].path, rows[2].path],
-                       "Context-click must not turn an unselected row into an explicit selection")
+        XCTAssertEqual(tree.selectedPaths, [rows[1].path],
+                       "VS Code Explorer replaces Selection when right-clicking outside it")
         XCTAssertEqual(tree.contextSelection(for: rows[1]), [rows[1].path],
-                       "The context menu should operate its own target without changing selection")
+                       "The context menu should operate the selected right-click target")
         XCTAssertEqual(tree.selectedOperationPaths, [rows[1].path],
                        "When Files owns keyboard focus, a cursor outside selection acts on the cursor")
     }
@@ -1445,8 +1461,9 @@ final class FileTreeTests: XCTestCase {
 
         tree.selectForContextMenu(rows[1])
         XCTAssertEqual(tree.contextMenuTargetPath, rows[1].path)
-        XCTAssertEqual(tree.selectedPaths, [rows[0].path])
+        XCTAssertEqual(tree.selectedPaths, [rows[1].path])
         tree.selectForContextMenu(rows[2])
+        XCTAssertEqual(tree.selectedPaths, [rows[2].path])
         XCTAssertEqual(tree.contextMenuTargetPath, rows[2].path,
                        "The next context click must replace the previous outline")
         tree.dismissContextMenu(target: rows[1].path)
@@ -1483,7 +1500,8 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(tree.selectedPath, file.path)
         XCTAssertTrue(tree.selectedPaths.isEmpty,
                       "Refresh must not reselect an explicitly deselected row")
-        XCTAssertTrue(tree.selectedOperationPaths.isEmpty)
+        XCTAssertEqual(tree.selectedOperationPaths, [file.path],
+                       "With no Selection the VS Code command context uses Focus")
     }
 
     func testFileTreeMultiSelectionTracksCollapseRenameAndWorkspaceSwitch() async throws {

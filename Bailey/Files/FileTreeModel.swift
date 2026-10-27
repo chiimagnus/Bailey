@@ -257,11 +257,11 @@ final class FileTreeModel {
 
     var selectedOperationPaths: [String] {
         let paths = items.filter { !$0.isDraft && selectedPaths.contains($0.path) }.map(\.path)
-        guard !paths.isEmpty else { return [] }
         if let selectedPath, !selectedPaths.contains(selectedPath),
            items.contains(where: { !$0.isDraft && $0.path == selectedPath }) {
             return [selectedCompactPath ?? selectedPath]
         }
+        guard !paths.isEmpty else { return [] }
         if paths.count == 1, paths.first == selectedPath, let selectedCompactPath {
             return [selectedCompactPath]
         }
@@ -292,10 +292,24 @@ final class FileTreeModel {
         activeDrag = nil
     }
 
+    func focus(_ item: Item) {
+        guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path })
+        else { return }
+        selectedPath = item.path
+        selectedCompactPath = nil
+        selectionAnchorPath = item.path
+        contextMenuTargetPath = nil
+        activeDrag = nil
+    }
+
     func selectForContextMenu(_ item: Item, componentPath: String? = nil) {
         guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path }),
               componentPath == nil || item.compactComponents.contains(where: { $0.path == componentPath })
         else { return }
+        if !selectedPaths.contains(item.path) {
+            selectedPaths = [item.path]
+            selectionAnchorPath = item.path
+        }
         selectedPath = item.path
         selectedCompactPath = componentPath
         contextMenuTargetPath = componentPath ?? item.path
@@ -316,7 +330,6 @@ final class FileTreeModel {
         if extending {
             selectRange(to: visible[next].path)
         } else {
-            selectedPaths = [visible[next].path]
             selectionAnchorPath = visible[next].path
         }
         selectedPath = visible[next].path
@@ -333,6 +346,12 @@ final class FileTreeModel {
         let start = visible.firstIndex(of: anchor) ?? end
         selectedPaths = Set(visible[min(start, end)...max(start, end)])
         selectionAnchorPath = visible[start]
+    }
+
+    func clearExplicitSelection() {
+        selectedPaths.removeAll()
+        selectionAnchorPath = nil
+        contextMenuTargetPath = nil
     }
 
     func selectAllVisible() {
@@ -1378,7 +1397,6 @@ final class FileTreeModel {
                     }
                     self.selectedPath = (visibleAncestor ?? compactedChild)?.path
                 }
-                let hadSelection = !selectedPaths.isEmpty
                 selectedPaths.formIntersection(visiblePaths)
                 if let selectedCompactPath,
                    !traversal.rows.contains(where: {
@@ -1386,9 +1404,6 @@ final class FileTreeModel {
                            && $0.compactComponents.contains { $0.path == selectedCompactPath }
                    }) {
                     self.selectedCompactPath = nil
-                }
-                if hadSelection, selectedPaths.isEmpty, let selectedPath = self.selectedPath {
-                    selectedPaths.insert(selectedPath)
                 }
                 if let anchor = selectionAnchorPath, !visiblePaths.contains(anchor) {
                     selectionAnchorPath = self.selectedPath

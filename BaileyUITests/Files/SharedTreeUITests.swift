@@ -97,7 +97,8 @@ final class SharedTreeUITests: XCTestCase {
         XCTAssertTrue(b.waitForExistence(timeout: 15))
         a.click()
         b.rightClick()
-        XCTAssertTrue(a.isSelected && !b.isSelected)
+        XCTAssertTrue(!a.isSelected && b.isSelected,
+                      "Explorer right-click outside Selection selects its target")
         XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
             $0.menuItems["Copy Relative Path"].exists
         }, "Right-click menu must remain open when Cmd-C is sent")
@@ -127,7 +128,8 @@ final class SharedTreeUITests: XCTestCase {
         app.typeKey("t", modifierFlags: .command)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0.60)).click()
         b.rightClick()
-        XCTAssertTrue(a.isSelected && !b.isSelected)
+        XCTAssertTrue(!a.isSelected && b.isSelected,
+                      "Explorer right-click outside Selection selects its target")
         XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
             $0.menuItems["Copy Relative Path"].exists
         })
@@ -237,7 +239,7 @@ final class SharedTreeUITests: XCTestCase {
             atPath: fixture.root.appendingPathComponent("context-created.txt").path))
     }
 
-    func testContextClickMovesBetweenRowsWithoutChangingPersistentSelection() throws {
+    func testContextClickMovesSelectionToUnselectedRowsLikeVSCode() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let home = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("a-selected.txt", text: "a\n")
@@ -277,16 +279,16 @@ final class SharedTreeUITests: XCTestCase {
         XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
             $0.menuItems["Copy Relative Path"].exists
         })
-        XCTAssertTrue(a.isSelected && !b.isSelected && !c.isSelected)
+        XCTAssertTrue(!a.isSelected && b.isSelected && !c.isSelected)
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
         c.rightClick()
         XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
             $0.menuItems["Copy Relative Path"].exists
         })
-        XCTAssertTrue(a.isSelected && !b.isSelected && !c.isSelected)
+        XCTAssertTrue(!a.isSelected && !b.isSelected && c.isSelected)
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-        XCTAssertTrue(a.isSelected && !b.isSelected && !c.isSelected)
+        XCTAssertTrue(!a.isSelected && !b.isSelected && c.isSelected)
     }
 
     func testCompactFoldersContextMenuCreatesInEachClickedPathComponent() throws {

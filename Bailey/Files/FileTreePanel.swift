@@ -280,9 +280,12 @@ private struct FileTreeScrollView: View {
         guard isActive, canFocusKeyboard(), isCurrentTarget(),
               model.renamingPath == nil, model.draft == nil else { return }
         if model.selectedItem == nil {
-            let item = model.items.first { !$0.isDraft && $0.path == currentFilePath }
-                ?? model.items.first { !$0.isDraft }
-            if let item { model.select(item) }
+            let current = model.items.first { !$0.isDraft && $0.path == currentFilePath }
+            let item = current ?? model.items.first { !$0.isDraft }
+            if let item {
+                if current != nil { model.select(item) }
+                else { model.focus(item) }
+            }
             waitingForFirstRow = item == nil
         } else {
             waitingForFirstRow = false
@@ -331,7 +334,7 @@ private struct FileTreeScrollView: View {
         case 124 where modifiers.isEmpty: // Right
             guard let row = model.selectedItem, row.isDirectory else { return false }
             if !model.isExpanded(row) { Task { await model.toggle(row) } }
-            else if let child = model.nextVisibleChild(of: row) { model.select(child) }
+            else if let child = model.nextVisibleChild(of: row) { model.focus(child) }
         case 123 where modifiers.isEmpty: // Left
             guard let row = model.selectedItem else { return false }
             if row.isDirectory, model.isExpanded(row) {
@@ -339,7 +342,7 @@ private struct FileTreeScrollView: View {
             } else if let parent = model.items
                 .filter({ $0.isDirectory && row.path.hasPrefix($0.path + "/") })
                 .max(by: { $0.path.count < $1.path.count }) {
-                model.select(parent)
+                model.focus(parent)
             }
         case 36 where modifiers.isEmpty, 76 where modifiers.isEmpty: // Return and keypad Enter
             guard let row = model.selectedItem else { return false }
@@ -349,7 +352,7 @@ private struct FileTreeScrollView: View {
             guard let row = model.selectedItem else { return false }
             if row.isDirectory { Task { await model.toggle(row) } }
             else { openFile(row.path, false) }
-        case 53 where modifiers.isEmpty: model.clearSelection() // Escape
+        case 53 where modifiers.isEmpty: model.clearExplicitSelection() // Escape
         default: return false
         }
         return true
