@@ -316,10 +316,13 @@ private struct FileTreeScrollView: View {
             guard let row = model.selectedItem else { return false }
             if row.isDirectory { Task { await model.toggle(row) } }
             else { openFile(row.path, true) }
-        case 49 where modifiers.isEmpty: // Space previews without moving keyboard focus
+        case 49 where modifiers.isEmpty: // Space explicitly browses the focused file
             guard let row = model.selectedItem else { return false }
             if row.isDirectory { Task { await model.toggle(row) } }
-            else { openFile(row.path, false) }
+            else {
+                model.select(row)
+                openFile(row.path, false)
+            }
         case 53 where modifiers.isEmpty: model.clearExplicitSelection() // Escape
         default: return false
         }

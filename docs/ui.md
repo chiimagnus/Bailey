@@ -72,7 +72,8 @@ Files 右键只建立临时 Context Target，不改变当前 Focus 或 Selection
 菜单期间目标仅显示细边框；Escape 取消后旧选区与游标保持不变。
 菜单结束不抢 Terminal／Editor 的原生输入焦点。
 ↑／↓ 只移动 Focus，不改变 Selection 与当前展示文件；
-Esc 清除 Selection、保留 Focus。普通键盘 Focus 可以叠加 Selection；
+Space 明确浏览文件时同步选择游标文件，不夺走 Files 键盘焦点；
+Esc 在普通文件树中清除 Selection、保留 Focus。普通键盘 Focus 可以叠加 Selection；
 右键目标独占描边，并在菜单期间暂时压过该行的其它背景。
 右键不触发左键的打开或展开；菜单对既有选中集合内部操作整组，
 对集合外目标只操作该目标。菜单项的快捷键提示必须与真实可执行命令一致，

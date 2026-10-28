@@ -1412,6 +1412,42 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: nested), Data("menu bytes\n".utf8))
     }
 
+    func testSpacePreviewSelectsFocusedFileWithoutSelectionDuringNavigation() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let aURL = try fixture.file("a-space.txt", text: "first body\n")
+        let bURL = try fixture.file("b-space.txt", text: "second body\n")
+        let cURL = try fixture.file("c-space.txt", text: "third body\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let a = WorkspaceUITestSupport.fileRow(aURL, in: window)
+        let b = WorkspaceUITestSupport.fileRow(bURL, in: window)
+        let c = WorkspaceUITestSupport.fileRow(cURL, in: window)
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        XCTAssertTrue(c.waitForExistence(timeout: 15))
+
+        a.click()
+        XCTAssertTrue(a.isSelected)
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        XCTAssertTrue(a.isSelected && !b.isSelected && !c.isSelected,
+                      "Normal arrow navigation only moves the focus outline")
+        app.typeKey(" ", modifierFlags: [])
+        XCTAssertTrue(!a.isSelected && b.isSelected && !c.isSelected,
+                      "Space must select the same file that becomes visible in the editor")
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(bURL, in: window).waitForExistence(timeout: 15))
+
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        XCTAssertTrue(b.isSelected && !c.isSelected,
+                      "The next arrow key must not implicitly change Selection")
+        app.typeKey(" ", modifierFlags: [])
+        XCTAssertTrue(!b.isSelected && c.isSelected)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(cURL, in: window).waitForExistence(timeout: 15))
+        XCTAssertEqual(try Data(contentsOf: aURL), Data("first body\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: bURL), Data("second body\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: cURL), Data("third body\n".utf8))
+    }
+
     func testHomeEndAndPageKeysScrollFocusedFilesWithoutOpeningOrSelectingThem() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         var files: [URL] = []
@@ -1448,6 +1484,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 0)
         app.typeKey(" ", modifierFlags: [])
         XCTAssertTrue(WorkspaceUITestSupport.fileTab(files[0], in: window).waitForExistence(timeout: 15))
+        XCTAssertTrue(first.isSelected,
+                      "Space must select the focused row when it explicitly previews that file")
         let content = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             window.textViews.allElementsBoundByIndex.contains { ($0.value as? String) == "real page row 0\n" }
         }, object: nil)
