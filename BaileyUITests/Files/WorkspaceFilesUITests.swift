@@ -784,8 +784,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         app.typeKey("t", modifierFlags: .command)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0.6)).click()
         b.rightClick()
-        XCTAssertTrue(!a.isSelected && b.isSelected,
-                      "Explorer right-click outside Selection must select B without opening it")
+        XCTAssertTrue(a.isSelected && !b.isSelected,
+                      "Context-click B must not mutate the existing A selection")
         XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
             $0.menuItems["Copy Relative Path"].exists
         }, "Files should display its context menu while Terminal owns input")
@@ -821,8 +821,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
             $0.menuItems["Copy Relative Path"].exists
         }, "Control-click must open the clicked Files row's native context menu")
-        XCTAssertFalse(a.isSelected)
-        XCTAssertTrue(b.isSelected)
+        XCTAssertTrue(a.isSelected)
+        XCTAssertFalse(b.isSelected)
         menu.menuItems["Copy Path"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), second.path)
         XCTAssertEqual(try Data(contentsOf: first), Data("first bytes\n".utf8))
@@ -992,8 +992,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         otherMenu.menuItems["Copy Path"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), gamma.path,
                        "Context-clicking an unselected row must act on that row only")
-        XCTAssertTrue(!a.isSelected && !b.isSelected && c.isSelected,
-                      "Explorer right-click outside Selection replaces A/B with C")
+        XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected,
+                      "Context click outside Selection targets C without changing A/B")
         a.click()
         XCUIElement.perform(withKeyModifiers: .shift) { b.click() }
         XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected)

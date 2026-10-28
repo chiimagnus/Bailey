@@ -310,13 +310,6 @@ final class FileTreeModel {
         guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path }),
               componentPath == nil || item.compactComponents.contains(where: { $0.path == componentPath })
         else { return }
-        if !selectedPaths.contains(item.path)
-            || (componentPath != nil && componentPath != item.path) {
-            selectedPaths = [item.path]
-            selectionAnchorPath = item.path
-        }
-        selectedPath = item.path
-        selectedCompactPath = componentPath
         contextMenuTargetPath = componentPath ?? item.path
         activeDrag = nil
     }

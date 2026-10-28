@@ -1726,7 +1726,7 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(tree.selectedPaths, Set(rows[3...5].map(\.path)))
     }
 
-    func testContextSelectionPreservesSelectedGroupButReplacesOutsideSelectionLikeVSCode() async throws {
+    func testContextSelectionPreservesExplicitSelectionWhileTargetingClickedRow() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1745,18 +1745,20 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(tree.selectedOperationPaths, [rows[0].path, rows[2].path],
                        "VS Code Explorer getContext(true) uses multi-Selection even if Focus is outside")
         tree.selectForContextMenu(rows[0])
-        XCTAssertEqual(tree.selectedPath, rows[0].path)
+        XCTAssertEqual(tree.selectedPath, rows[1].path,
+                       "Right click cannot replace the current keyboard cursor")
         XCTAssertEqual(tree.selectedOperationPaths, [rows[0].path, rows[2].path],
                        "Context-clicking one of the selected rows keeps the selected set")
 
         tree.selectForContextMenu(rows[1])
         XCTAssertEqual(tree.selectedPath, rows[1].path)
-        XCTAssertEqual(tree.selectedPaths, [rows[1].path],
-                       "VS Code Explorer replaces Selection when right-clicking outside it")
+        XCTAssertEqual(tree.selectedPaths, [rows[0].path, rows[2].path],
+                       "A context click only changes the temporary menu target")
         XCTAssertEqual(tree.contextSelection(for: rows[1]), [rows[1].path],
-                       "The context menu should operate the selected right-click target")
-        XCTAssertEqual(tree.selectedOperationPaths, [rows[1].path],
-                       "When Files owns keyboard focus, a cursor outside selection acts on the cursor")
+                       "An unselected context target is still acted on alone")
+        tree.dismissContextMenu(target: rows[1].path)
+        XCTAssertEqual(tree.selectedOperationPaths, [rows[0].path, rows[2].path],
+                       "Esc must leave the original explicit selection and Edit target intact")
     }
 
     func testContextMenuRingHasOneOwnerAndDismissalDoesNotClearNewerTarget() async throws {
@@ -1774,9 +1776,9 @@ final class FileTreeTests: XCTestCase {
 
         tree.selectForContextMenu(rows[1])
         XCTAssertEqual(tree.contextMenuTargetPath, rows[1].path)
-        XCTAssertEqual(tree.selectedPaths, [rows[1].path])
+        XCTAssertEqual(tree.selectedPaths, [rows[0].path])
         tree.selectForContextMenu(rows[2])
-        XCTAssertEqual(tree.selectedPaths, [rows[2].path])
+        XCTAssertEqual(tree.selectedPaths, [rows[0].path])
         XCTAssertEqual(tree.contextMenuTargetPath, rows[2].path,
                        "The next context click must replace the previous outline")
         tree.dismissContextMenu(target: rows[1].path)
@@ -2971,11 +2973,12 @@ final class FileTreeTests: XCTestCase {
         tree.select(try XCTUnwrap(tree.items.first { $0.path == other.path }), toggling: true)
         XCTAssertEqual(tree.selectedPaths, [compact.path, other.path])
         tree.selectForContextMenu(compact, componentPath: a.path)
-        XCTAssertEqual(tree.selectedPaths, [compact.path],
-                       "Right-clicking a different compact directory must replace the old multi-selection")
-        XCTAssertEqual(tree.selectedOperationPaths, [a.path],
-                       "File commands must target the clicked compact component")
-        XCTAssertEqual(tree.contextMenuTargetPath, a.path)
+        XCTAssertEqual(tree.selectedPaths, [compact.path, other.path],
+                       "Right-clicking a compact segment must not mutate the prior multi-selection")
+        XCTAssertEqual(tree.selectedOperationPaths, [compact.path, other.path],
+                       "The ordinary Edit target must remain the explicit selection")
+        XCTAssertEqual(tree.contextMenuTargetPath, a.path,
+                       "The context menu must separately identify the compact component")
 
         tree.select(compact, componentPath: a.path)
         XCTAssertEqual(tree.selectedDirectoryPath, a.path)

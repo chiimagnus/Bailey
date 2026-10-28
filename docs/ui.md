@@ -67,9 +67,9 @@ Git Changes 的当前 Diff 浏览线索另由其 P3 任务处理；Git Graph 提
 不叠加选中底色或 Hover 灰底，也不表示列表已取得第一响应者。
 实际 Selection 仍保留；菜单关闭后撤销临时边框，恢复原本应显示的选中底色与真实键盘描边。
 右键切换到其它行时必须替换旧目标。
-Files 按 VS Code Explorer 的特殊规则：右键已选中的行保留整组 Selection；
-右键未选中的 B 则改为仅选 B，同时移动 Focus，不触发浏览或展开。
-菜单期间 B 仅显示上下文描边，Selection 的内容和命令目标仍由各自状态管理。
+Files 右键只建立临时 Context Target，不改变当前 Focus 或 Selection：
+目标在已选集合内则菜单操作整组，在集合外则只操作本次右键目标。
+菜单期间目标仅显示细边框；Escape 取消后旧选区与游标保持不变。
 菜单结束不抢 Terminal／Editor 的原生输入焦点。
 ↑／↓ 只移动 Focus，不改变 Selection 与当前展示文件；
 Esc 清除 Selection、保留 Focus。普通键盘 Focus 可以叠加 Selection；
