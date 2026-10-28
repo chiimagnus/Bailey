@@ -86,10 +86,6 @@ struct GitPanel: View {
         get { model.changeCursor }
         nonmutating set { model.changeCursor = newValue }
     }
-    private var explicitlySelectedChange: ChangeSelection? {
-        get { model.changeSelection }
-        nonmutating set { model.changeSelection = newValue }
-    }
     @State private var contextChange: ChangeSelection?
     @State private var waitingForChanges = false
     @Environment(\.controlActiveState) private var controlActiveState
@@ -1925,7 +1921,19 @@ struct GitPanel: View {
                                          }
                                      }
                                  },
-                                 onAttachedToWindow: focusGitChanges)
+                                 onAttachedToWindow: focusGitChanges,
+                                 onEditCommand: { action in
+                                     if case .selectAll = action {
+                                         model.selectAllChanges(visible: navigableChanges.map(selection))
+                                     }
+                                 },
+                                 canEditCommand: { action in
+                                     if case .selectAll = action {
+                                         return isGitActive && hasCurrentPanelTarget
+                                             && model.canUseCurrentStatus && !navigableChanges.isEmpty
+                                     }
+                                     return false
+                                 })
             }
             .onAppear {
                 focusGitChanges()
@@ -1950,13 +1958,13 @@ struct GitPanel: View {
             }
             .onChange(of: model.repositoryIdentity) { _, _ in
                 selectedChange = nil
-                explicitlySelectedChange = nil
+                model.clearChangeSelection()
                 contextChange = nil
                 if isGitActive { focusGitChanges() }
             }
             .onChange(of: model.currentScope) { _, _ in
                 selectedChange = nil
-                explicitlySelectedChange = nil
+                model.clearChangeSelection()
                 contextChange = nil
                 lastKeyboardRegion = .changes
                 if isGitActive { focusGitChanges() }
@@ -1972,12 +1980,7 @@ struct GitPanel: View {
             }
             .onChange(of: navigableChanges.map { selection(for: $0) }) { _, choices in
                 if waitingForChanges { focusGitChanges() }
-                else if let selectedChange, !choices.contains(selectedChange) {
-                    self.selectedChange = choices.first
-                }
-                if let explicitlySelectedChange, !choices.contains(explicitlySelectedChange) {
-                    self.explicitlySelectedChange = nil
-                }
+                model.reconcileChangeSelection(visible: choices)
                 if let contextChange, !choices.contains(contextChange) {
                     self.contextChange = nil
                 }
@@ -2092,8 +2095,45 @@ struct GitPanel: View {
         }
         guard let change, let entry = change.entry, model.isCurrent(entry) else { return }
         let key = selection(for: change)
-        if selectedChange != key { selectedChange = key }
-        if explicitlySelectedChange != key { explicitlySelectedChange = key }
+        if !model.selectedChanges.contains(key) || model.selectedChanges.count != 1 {
+            model.selectChange(key, visible: navigableChanges.map(selection))
+        } else if selectedChange != key {
+            selectedChange = key
+        }
+    }
+
+    /// Modifier click changes only Selection; browsing and folder expansion stay explicit.
+    @discardableResult
+    private func selectGitChangeForPointer(_ key: ChangeSelection) -> Bool {
+        let flags = NSApp.currentEvent?.modifierFlags ?? []
+        let extending = flags.contains(.shift)
+        let toggling = flags.contains(.command) && !extending
+        model.selectChange(key, visible: navigableChanges.map(selection),
+                           extending: extending, toggling: toggling)
+        if isGitActive { keyboardOwner.focus() }
+        return extending || toggling
+    }
+
+    /// Rows and compact directories resolve to current visible entries at action time.
+    /// A menu outside the selected set acts only on its own target.
+    private func selectedEntries(for target: ChangeSelection, kind: GitEntryRow.Kind) -> [GitStatusModel.Entry] {
+        guard hasCurrentPanelTarget, model.canUseCurrentStatus,
+              target.scope == model.currentScope, target.repository == model.repoRoot
+        else { return [] }
+        let keys = model.selectedChanges.contains(target)
+            ? model.selectedChanges.filter { $0.section == kind.rawValue }
+            : [target]
+        guard !keys.isEmpty else { return [] }
+        let entries: [GitStatusModel.Entry] = switch kind {
+        case .merge: model.mergeEntries
+        case .staged: model.stagedEntries
+        case .unstaged: model.changedEntries
+        }
+        return entries.filter { entry in
+            matchesFilter(entry) && keys.contains {
+                entry.path == $0.path || entry.path.hasPrefix($0.path + "/")
+            }
+        }
     }
 
     private func focusContextChange(_ key: ChangeSelection) {
@@ -2109,8 +2149,7 @@ struct GitPanel: View {
     private func browseGitChange(_ change: VisibleChange) {
         guard let entry = change.entry, hasCurrentPanelTarget,
               model.canUseCurrentStatus, model.isCurrent(entry) else { return }
-        selectedChange = selection(for: change)
-        explicitlySelectedChange = selectedChange
+        if selectGitChangeForPointer(selection(for: change)) { return }
         var diffEntry = entry
         diffEntry.origPath = entry.diffOriginalPath(staged: change.kind == .staged)
         openDiff(diffEntry, change.kind == .staged)
@@ -2123,19 +2162,20 @@ struct GitPanel: View {
     private func handleGitChangeKey(_ event: NSEvent) -> Bool {
         guard keyboardOwner.view?.window?.firstResponder === keyboardOwner.view,
               isGitActive, hasCurrentPanelTarget, model.canUseCurrentStatus,
-              event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+              event.modifierFlags.intersection([.command, .control, .option]).isEmpty
         else { return false }
         let rows = navigableChanges
         guard !rows.isEmpty else { return false }
         let current = selectedChange.flatMap { key in
             rows.firstIndex { selection(for: $0) == key }
         }
+        let extending = event.modifierFlags.contains(.shift)
         switch event.keyCode {
-        case 125, 126: // Down / Up
-            let start = current ?? (event.keyCode == 125 ? -1 : rows.count)
-            let index = max(0, min(rows.count - 1, start + (event.keyCode == 125 ? 1 : -1)))
-            selectedChange = selection(for: rows[index])
+        case 125, 126: // Down / Up: Shift expands or contracts without browsing Diff
+            model.moveChangeCursor(visible: rows.map(selection),
+                                   by: event.keyCode == 125 ? 1 : -1, extending: extending)
         case 124: // Right opens the directory; a second press selects its first child.
+            guard !extending else { return false }
             guard let current, rows[current].row.isDirectory else { return false }
             let row = rows[current]
             if !row.row.isExpanded {
@@ -2145,7 +2185,7 @@ struct GitPanel: View {
                 selectedChange = selection(for: rows[current + 1])
             }
         case 123: // Left collapses the directory or moves to its parent.
-            guard let current else { return false }
+            guard !extending, let current else { return false }
             let row = rows[current]
             if row.row.isDirectory && row.row.isExpanded {
                 model.toggleCollapsedFolder(row.kind.rawValue + ":" + row.row.path)
@@ -2156,14 +2196,16 @@ struct GitPanel: View {
                 selectedChange = selection(for: parent)
             } else { return false }
         case 36, 49, 76: // Return / Space / Enter browse the selected change.
-            guard let current else { return false }
+            guard !extending, let current else { return false }
             if rows[current].row.isDirectory {
                 let row = rows[current]
                 model.toggleCollapsedFolder(row.kind.rawValue + ":" + row.row.path)
             } else {
                 browseGitChange(rows[current])
             }
-        case 53: explicitlySelectedChange = nil // Escape clears selection, not focus
+        case 53: // Escape clears selection, not focus
+            guard !extending else { return false }
+            model.clearChangeSelection()
         default: return false
         }
         return true
@@ -2175,7 +2217,7 @@ struct GitPanel: View {
     ) -> some View {
         ForEach(visibleRows(entries, kind: kind), id: \.row.id) { change in
             if change.row.isDirectory {
-                directoryRow(change.row, entries: entries, kind: kind)
+                directoryRow(change.row, kind: kind)
                     .id(selection(for: change))
             } else if let entry = change.entry {
                 row(entry, kind: kind,
@@ -2186,10 +2228,8 @@ struct GitPanel: View {
     }
 
     private func directoryRow(
-        _ item: TreeDisplayModel.Row,
-        entries: [GitStatusModel.Entry], kind: GitEntryRow.Kind
+        _ item: TreeDisplayModel.Row, kind: GitEntryRow.Kind
     ) -> some View {
-        let selected = entries.filter { $0.path.hasPrefix(item.path + "/") }
         let stageTrigger = OperationTrigger.entry(path: item.path, operation: .stage)
         let unstageTrigger = OperationTrigger.entry(path: item.path, operation: .unstage)
         let discardTrigger = OperationTrigger.entry(path: item.path, operation: .discard)
@@ -2203,15 +2243,14 @@ struct GitPanel: View {
                 contextChange == ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
                                                section: kind.rawValue, path: $0.path)
             },
-            isSelected: explicitlySelectedChange == key,
+            isSelected: model.selectedChanges.contains(key),
             listActive: keyboardFocused && isGitActive && controlActiveState == .key,
             compactSegment: { component, index in
-                directorySegment(component, index: index, row: item, entries: entries, kind: kind)
+                directorySegment(component, index: index, row: item, kind: kind)
             },
             toggle: {
                 guard hasCurrentPanelTarget, model.canUseCurrentStatus else { return }
-                selectedChange = key
-                explicitlySelectedChange = key
+                if selectGitChangeForPointer(key) { return }
                 model.toggleCollapsedFolder(kind.rawValue + ":" + item.path)
                 if isGitActive { keyboardOwner.focus() }
             }
@@ -2222,9 +2261,19 @@ struct GitPanel: View {
                 isStageLoading: operationIsLoading(stageTrigger),
                 isUnstageLoading: operationIsLoading(unstageTrigger),
                 isDiscardLoading: operationIsLoading(discardTrigger),
-                stage: { performOperation(stageTrigger) { model.stageEntries(selected) } },
-                unstage: { performOperation(unstageTrigger) { model.unstageEntries(selected) } },
-                discard: { requestDiscard(selected, trigger: discardTrigger) }
+                stage: {
+                    performOperation(stageTrigger) {
+                        model.stageEntries(selectedEntries(for: key, kind: kind))
+                    }
+                },
+                unstage: {
+                    performOperation(unstageTrigger) {
+                        model.unstageEntries(selectedEntries(for: key, kind: kind))
+                    }
+                },
+                discard: {
+                    requestDiscard(selectedEntries(for: key, kind: kind), trigger: discardTrigger)
+                }
             )
         }
         .background {
@@ -2234,14 +2283,14 @@ struct GitPanel: View {
             )
         }
         .contextMenu {
-            directoryMenu(path: item.path, selected: selected, kind: kind,
+            directoryMenu(path: item.path, target: key, kind: kind,
                           stageTrigger: stageTrigger, unstageTrigger: unstageTrigger)
         }
     }
 
     private func directorySegment(
         _ component: TreeDisplayModel.Row.CompactComponent, index: Int,
-        row: TreeDisplayModel.Row, entries: [GitStatusModel.Entry], kind: GitEntryRow.Kind
+        row: TreeDisplayModel.Row, kind: GitEntryRow.Kind
     ) -> AnyView {
         let cursor = ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
                                      section: kind.rawValue, path: row.path)
@@ -2251,8 +2300,7 @@ struct GitPanel: View {
             isContextTarget: contextChange == context,
             onClick: {
                 guard hasCurrentPanelTarget, model.canUseCurrentStatus else { return }
-                selectedChange = cursor
-                explicitlySelectedChange = cursor
+                if selectGitChangeForPointer(cursor) { return }
                 model.toggleCollapsedFolder(kind.rawValue + ":" + row.path)
                 if isGitActive { keyboardOwner.focus() }
             },
@@ -2262,8 +2310,7 @@ struct GitPanel: View {
                 contextChange = context
             },
             onMenuClosed: { dismissContextChange(context) }) {
-                directoryMenu(path: component.path,
-                    selected: entries.filter { $0.path.hasPrefix(component.path + "/") }, kind: kind,
+                directoryMenu(path: component.path, target: context, kind: kind,
                     stageTrigger: .entry(path: component.path, operation: .stage),
                     unstageTrigger: .entry(path: component.path, operation: .unstage))
             })
@@ -2325,7 +2372,7 @@ struct GitPanel: View {
             displayRow: presentation,
             kind: kind,
             showDirectory: showDirectory,
-            isSelected: explicitlySelectedChange == key,
+            isSelected: model.selectedChanges.contains(key),
             listActive: keyboardFocused && isGitActive && controlActiveState == .key,
             focusRing: selectedChange == key && keyboardFocused && isGitActive
                 && controlActiveState == .key,
@@ -2346,14 +2393,26 @@ struct GitPanel: View {
             } : nil,
             ignore: kind == .unstaged && entry.staged == "?"
                 ? { ignorePaths([entry.path], isDirectory: false) } : nil,
-            stage: { performOperation(stageTrigger) { model.stage(entry) } },
-            unstage: { performOperation(unstageTrigger) { model.unstage(entry) } },
+            stage: {
+                performOperation(stageTrigger) {
+                    model.stageEntries(selectedEntries(for: key, kind: kind))
+                }
+            },
+            unstage: {
+                performOperation(unstageTrigger) {
+                    model.unstageEntries(selectedEntries(for: key, kind: kind))
+                }
+            },
             discard: {
                 guard hasCurrentPanelTarget else { return }
-                if remoteName == nil {
-                    pendingDiscard = model.prepareLocalDiscard([entry]).first
+                let entries = selectedEntries(for: key, kind: kind)
+                guard !entries.isEmpty else { return }
+                if entries.count > 1 {
+                    requestDiscard(entries, trigger: discardTrigger)
+                } else if remoteName == nil {
+                    pendingDiscard = model.prepareLocalDiscard(entries).first
                 } else {
-                    prepareRemoteDiscard([entry], all: false)
+                    prepareRemoteDiscard(entries, all: false)
                 }
             },
             absolutePath: model.absolutePath(for: entry),
@@ -2455,23 +2514,29 @@ struct GitPanel: View {
 
     @ViewBuilder
     private func directoryMenu(
-        path: String, selected: [GitStatusModel.Entry], kind: GitEntryRow.Kind,
+        path: String, target: ChangeSelection, kind: GitEntryRow.Kind,
         stageTrigger: OperationTrigger, unstageTrigger: OperationTrigger
     ) -> some View {
+        let available = !selectedEntries(for: target, kind: kind).isEmpty
         if kind == .staged {
             Button(String(localized: "Unstage Changes", table: "Sidebar")) {
-                performOperation(unstageTrigger) { model.unstageEntries(selected) }
-            }.disabled(model.isBusy || !model.canUseCurrentStatus)
+                performOperation(unstageTrigger) {
+                    model.unstageEntries(selectedEntries(for: target, kind: kind))
+                }
+            }.disabled(model.isBusy || !model.canUseCurrentStatus || !available)
         } else {
             Button(kind == .merge ? String(localized: "Mark Resolved (Stage)", table: "Sidebar")
                    : String(localized: "Stage Changes", table: "Sidebar")) {
-                performOperation(stageTrigger) { model.stageEntries(selected) }
-            }.disabled(model.isBusy || !model.canUseCurrentStatus)
+                performOperation(stageTrigger) {
+                    model.stageEntries(selectedEntries(for: target, kind: kind))
+                }
+            }.disabled(model.isBusy || !model.canUseCurrentStatus || !available)
             if kind == .unstaged {
                 Button(String(localized: "Discard Changes…", table: "Sidebar")) {
-                    requestDiscard(selected, trigger: .entry(path: path, operation: .discard))
-                }.disabled(model.isBusy || !model.canUseCurrentStatus)
-                if selected.contains(where: { $0.staged == "?" }) {
+                    requestDiscard(selectedEntries(for: target, kind: kind),
+                                   trigger: .entry(path: path, operation: .discard))
+                }.disabled(model.isBusy || !model.canUseCurrentStatus || !available)
+                if selectedEntries(for: target, kind: kind).contains(where: { $0.staged == "?" }) {
                     Button(String(localized: "Add to .gitignore", table: "Git")) {
                         ignorePaths([path], isDirectory: true)
                     }.disabled(model.isBusy)
@@ -2483,13 +2548,18 @@ struct GitPanel: View {
     private func requestDiscard(
         _ entries: [GitStatusModel.Entry], trigger: OperationTrigger
     ) {
-        guard hasCurrentPanelTarget else { return }
+        guard hasCurrentPanelTarget, !entries.isEmpty else { return }
         if remoteName != nil {
             prepareRemoteDiscard(entries, all: true, trigger: trigger)
         } else {
-            pendingDiscardAll = model.prepareLocalDiscard(entries)
+            let reviews = model.prepareLocalDiscard(entries)
+            guard reviews.count == entries.count else {
+                model.cancelStaleDiscard()
+                return
+            }
+            pendingDiscardAll = reviews
             pendingDiscardAllTrigger = trigger
-            confirmDiscardAll = !pendingDiscardAll.isEmpty
+            confirmDiscardAll = true
         }
     }
 

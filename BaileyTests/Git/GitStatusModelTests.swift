@@ -36,29 +36,114 @@ final class GitStatusModelTests: XCTestCase {
         )
         let commit = String(repeating: "a", count: 40)
         git.changeCursor = selection
-        git.changeSelection = selection
+        git.selectChange(selection, visible: [selection])
         git.expandedCommitIDs = [commit]
 
         git.syncSelectedProject(project: first, isCurrent: { _ in true })
         XCTAssertEqual(git.changeCursor, selection)
-        XCTAssertEqual(git.changeSelection, selection)
+        XCTAssertEqual(git.selectedChanges, [selection])
         XCTAssertEqual(git.expandedCommitIDs, [commit],
                        "Rebinding the same panel target must preserve valid disclosure")
 
         git.syncSelectedProject(project: second, isCurrent: { _ in true })
         XCTAssertNil(git.changeCursor,
                      "Two different projects sharing the same Git root must not share the cursor")
-        XCTAssertNil(git.changeSelection)
+        XCTAssertTrue(git.selectedChanges.isEmpty)
         XCTAssertTrue(git.expandedCommitIDs.isEmpty,
                       "The previous project's Graph must not appear in the new project")
 
         git.changeCursor = selection
-        git.changeSelection = selection
+        git.selectChange(selection, visible: [selection])
         git.expandedCommitIDs = [commit]
         git.sync(root: directory.appendingPathComponent("other").path)
         XCTAssertNil(git.changeCursor)
-        XCTAssertNil(git.changeSelection)
+        XCTAssertTrue(git.selectedChanges.isEmpty)
         XCTAssertTrue(git.expandedCommitIDs.isEmpty)
+    }
+
+    func testGitResourceSelectionPreservesIslandsAndSeparatesIndexSections() {
+        let model = GitStatusModel()
+        func row(_ path: String, section: String = "unstaged") -> GitStatusModel.ChangeSelection {
+            .init(scope: "local", repository: "/fixture", section: section, path: path)
+        }
+        let visible = ["a", "b", "c", "d", "e"].map { row($0) }
+        model.selectChange(visible[0], visible: visible)
+        model.selectChange(visible[2], visible: visible, toggling: true)
+        XCTAssertEqual(model.selectedChanges, [visible[0], visible[2]])
+        model.selectChange(visible[4], visible: visible, extending: true)
+        XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3], visible[4]])
+        model.selectChange(visible[3], visible: visible, extending: true)
+        XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3]],
+                       "Mouse Shift retracts the anchor's contiguous range but preserves islands")
+
+        model.moveChangeCursor(visible: visible, by: 1, extending: true)
+        XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3], visible[4]])
+        model.moveChangeCursor(visible: visible, by: -1, extending: true)
+        XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3]],
+                       "Keyboard Shift incrementally retracts without replaying mouse range")
+
+        let staged = row("c", section: "staged")
+        model.selectChange(staged, visible: visible + [staged], toggling: true)
+        XCTAssertTrue(model.selectedChanges.contains(staged))
+        XCTAssertTrue(model.selectedChanges.contains(visible[2]),
+                      "Staged and unstaged paths are different resources")
+        model.reconcileChangeSelection(visible: [visible[0], visible[1], staged])
+        XCTAssertEqual(model.selectedChanges, [visible[0], staged])
+        XCTAssertEqual(model.changeCursor, staged)
+
+        model.selectAllChanges(visible: visible + [staged])
+        XCTAssertEqual(model.selectedChanges.count, visible.count + 1)
+        model.clearChangeSelection()
+        XCTAssertTrue(model.selectedChanges.isEmpty)
+        XCTAssertNil(model.changeAnchor)
+        XCTAssertEqual(model.changeCursor, staged,
+                       "Escape clears Selection without clearing the keyboard cursor")
+    }
+
+    func testStaleGitEntriesCannotStageOrUnstageWrongSectionAfterRefresh() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Git-Stale-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let root = directory.path
+        func git(_ args: [String]) -> String {
+            let result = GitCommandExecution.run(args, in: root)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout
+        }
+        _ = git(["init", "-q", "-b", "main"])
+        _ = git(["config", "user.name", "SCM Selection"])
+        _ = git(["config", "user.email", "scm@invalid"])
+        _ = git(["config", "commit.gpgsign", "false"])
+        let file = directory.appendingPathComponent("tracked.txt")
+        try Data("before\n".utf8).write(to: file)
+        _ = git(["add", "tracked.txt"])
+        _ = git(["commit", "-qm", "original"])
+        try Data("after\n".utf8).write(to: file)
+        let model = GitStatusModel()
+        model.sync(root: root)
+        try await wait { model.changedEntries.contains(where: { $0.path == "tracked.txt" }) }
+        let unstaged = try XCTUnwrap(model.changedEntries.first { $0.path == "tracked.txt" })
+        _ = git(["add", "tracked.txt"])
+        model.refresh()
+        try await wait {
+            model.changedEntries.isEmpty
+                && model.stagedEntries.contains(where: { $0.path == "tracked.txt" })
+        }
+        let staged = try XCTUnwrap(model.stagedEntries.first { $0.path == "tracked.txt" })
+        model.stageEntries([unstaged])
+        XCTAssertFalse(model.isBusy, "Old Changes entry must not mutate the new STAGED Section")
+        XCTAssertEqual(git(["show", ":tracked.txt"]), "after\n")
+        _ = git(["restore", "--staged", "--", "tracked.txt"])
+        model.refresh()
+        try await wait {
+            model.stagedEntries.isEmpty
+                && model.changedEntries.contains(where: { $0.path == "tracked.txt" })
+        }
+        model.unstageEntries([staged])
+        XCTAssertFalse(model.isBusy, "Old STAGED entry must not operate on the changed index")
+        XCTAssertEqual(git(["show", ":tracked.txt"]), "before\n")
+        XCTAssertEqual(try Data(contentsOf: file), Data("after\n".utf8))
     }
 
     func testBackgroundRefreshPreservesUnchangedToolbarAndGraphData() async throws {

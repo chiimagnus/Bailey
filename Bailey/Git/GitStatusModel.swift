@@ -76,12 +76,87 @@ final class GitStatusModel {
     }
 
     var changeCursor: ChangeSelection?
-    var changeSelection: ChangeSelection?
+    private(set) var selectedChanges: Set<ChangeSelection> = []
+    private(set) var changeAnchor: ChangeSelection?
     var expandedCommitIDs: Set<String> = []
+
+    /// Git resource selection is independent of the keyboard cursor and Graph disclosure.
+    /// Mouse Shift replaces only the anchor's current contiguous range; other islands survive.
+    func selectChange(
+        _ key: ChangeSelection, visible: [ChangeSelection],
+        extending: Bool = false, toggling: Bool = false
+    ) {
+        guard let end = visible.firstIndex(of: key) else { return }
+        if extending {
+            let anchor = changeAnchor ?? changeCursor ?? key
+            let start = visible.firstIndex(of: anchor) ?? end
+            var lower = start
+            var upper = start
+            while lower > 0 && selectedChanges.contains(visible[lower - 1]) { lower -= 1 }
+            while upper + 1 < visible.count && selectedChanges.contains(visible[upper + 1]) { upper += 1 }
+            selectedChanges.subtract(visible[lower...upper])
+            selectedChanges.formUnion(visible[min(start, end)...max(start, end)])
+            changeAnchor = visible[start]
+        } else if toggling {
+            if !selectedChanges.insert(key).inserted { selectedChanges.remove(key) }
+            changeAnchor = key
+        } else {
+            selectedChanges = [key]
+            changeAnchor = key
+        }
+        changeCursor = key
+    }
+
+    /// Workbench keyboard Shift incrementally expands and contracts; it is not mouse range select.
+    func moveChangeCursor(visible: [ChangeSelection], by delta: Int, extending: Bool = false) {
+        guard !visible.isEmpty else {
+            changeCursor = nil
+            selectedChanges.removeAll()
+            changeAnchor = nil
+            return
+        }
+        let current = changeCursor.flatMap { visible.firstIndex(of: $0) }
+        let start = current ?? (delta >= 0 ? -1 : visible.count)
+        let next = max(0, min(visible.count - 1, start + delta))
+        if extending {
+            if current != next {
+                if selectedChanges.contains(visible[next]) {
+                    if let current { selectedChanges.remove(visible[current]) }
+                } else {
+                    selectedChanges.insert(visible[next])
+                }
+            }
+        } else {
+            changeAnchor = visible[next]
+        }
+        changeCursor = visible[next]
+    }
+
+    func selectAllChanges(visible: [ChangeSelection]) {
+        selectedChanges = Set(visible)
+        changeCursor = visible.first(where: { $0 == changeCursor }) ?? visible.first
+        changeAnchor = nil
+    }
+
+    func clearChangeSelection() {
+        selectedChanges.removeAll()
+        changeAnchor = nil
+    }
+
+    func reconcileChangeSelection(visible: [ChangeSelection]) {
+        let choices = Set(visible)
+        selectedChanges.formIntersection(choices)
+        if let changeAnchor, !choices.contains(changeAnchor) {
+            self.changeAnchor = changeCursor.flatMap { choices.contains($0) ? $0 : nil }
+        }
+        if let changeCursor, !choices.contains(changeCursor) {
+            self.changeCursor = visible.first
+        }
+    }
 
     private func clearPanelNavigation() {
         changeCursor = nil
-        changeSelection = nil
+        clearChangeSelection()
         expandedCommitIDs.removeAll()
     }
 
@@ -1254,7 +1329,12 @@ final class GitStatusModel {
     }
 
     func stageEntries(_ entries: [Entry]) {
-        guard !entries.isEmpty, entries.allSatisfy(validate) else { return }
+        let valid: @MainActor () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return entries.allSatisfy { self.isCurrent($0)
+                && (self.changedEntries.contains($0) || self.mergeEntries.contains($0)) }
+        }
+        guard !entries.isEmpty, entries.allSatisfy(validate), valid() else { return }
         let paths = entries.flatMap { entry in
             [entry.path] + (entry.unstaged == "R" ? entry.origPath.map { [$0] } ?? [] : [])
         }
@@ -1262,8 +1342,8 @@ final class GitStatusModel {
             label: entries.count == 1
                 ? String(localized: "Stage \(entries[0].fileName)", table: "Git")
                 : String(localized: "Stage Changes", table: "Sidebar"),
-            commands: [["--literal-pathspecs", "add", "--"] + paths],
-            requiredStatus: .core, refreshKind: .indexOnly
+            commands: [["--literal-pathspecs", "add", "--"] + Set(paths).sorted()],
+            requiredStatus: .core, refreshKind: .indexOnly, isCurrentTarget: valid
         )
     }
 
@@ -1272,17 +1352,22 @@ final class GitStatusModel {
     }
 
     func unstageEntries(_ entries: [Entry]) {
-        guard !entries.isEmpty, entries.allSatisfy(validate) else { return }
+        let valid: @MainActor () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return entries.allSatisfy { self.isCurrent($0) && self.stagedEntries.contains($0) }
+        }
+        guard !entries.isEmpty, entries.allSatisfy(validate), valid() else { return }
         let paths = entries.flatMap { entry in
             [entry.path] + (entry.staged == "R" ? entry.origPath.map { [$0] } ?? [] : [])
         }
+        let uniquePaths = Set(paths).sorted()
         let args = hasHead
-            ? ["--literal-pathspecs", "restore", "--staged", "--"] + paths
-            : ["--literal-pathspecs", "rm", "--cached", "-f", "--"] + paths
+            ? ["--literal-pathspecs", "restore", "--staged", "--"] + uniquePaths
+            : ["--literal-pathspecs", "rm", "--cached", "-f", "--"] + uniquePaths
         perform(label: entries.count == 1
                 ? String(localized: "Unstage \(entries[0].fileName)", table: "Git")
                 : String(localized: "Unstage Changes", table: "Sidebar"), commands: [args],
-                requiredStatus: .core, refreshKind: .indexOnly)
+                requiredStatus: .core, refreshKind: .indexOnly, isCurrentTarget: valid)
     }
 
     func stageAll() {
