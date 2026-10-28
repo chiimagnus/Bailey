@@ -141,6 +141,7 @@ final class AppIdentityTests: XCTestCase {
         var closed = 0
         view.onContextClick = { contextClicks += 1 }
         view.onMenuClosed = { closed += 1 }
+        view.isExpectedMenu = { $0.title == "Files" }
 
         let event = try XCTUnwrap(NSEvent.mouseEvent(
             with: .rightMouseDown, location: .zero, modifierFlags: [],
@@ -149,6 +150,10 @@ final class AppIdentityTests: XCTestCase {
         ))
         _ = view.menu(for: event)
         XCTAssertEqual(contextClicks, 1)
+        let other = NSMenu(title: "Unrelated")
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: other)
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: other)
+        XCTAssertEqual(closed, 0, "An unrelated tracking menu must not consume the Files context")
         let menu = NSMenu(title: "Files")
         NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: menu)
         NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: NSMenu())

@@ -44,42 +44,42 @@ note = "137 宿主 + 8 GUI 通过；视口分页、IME、双窗和重挂载；De
 [[tasks]]
 id = "P2-T1"
 title = "收敛 Files 浏览与打开事件链"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = ""
-note = ""
+commit = "f4feb729883ac71d9790438779a9ead8e46a2ce6"
+note = "182 项宿主与 1 项真实 App GUI 通过，Dev/UI 构建验签通过；隐藏 Files 返回 Red→Green；同组及跨组自动定位。"
 
 [[tasks]]
 id = "P2-T2"
 title = "收敛 Files 系统 Edit 与右键操作目标"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = ""
-note = ""
+commit = "88ccd4d159c2ba76f6b19ce643f6b2fb93cabbba"
+note = "实现：8fe95df、dd79095f；补充测试提交 88ccd4d。213 项受影响宿主 0 失败；Files 右键 B/C、Control-click、Cmd-C 在 Files/Terminal 焦点下、菜单不误打开文件等 GUI 单项通过，Dev 构建和数据字节断言通过。"
 
 [[tasks]]
 id = "P2-T3"
 title = "核验原生菜单生命周期并清理旧路径"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t3"
-commit = ""
-note = ""
+commit = "0823fdf23c13a3a0d31645ef2af11cb94fd3636c"
+note = "实现 3b9c60d、d832f485；根因修复 0823fdf。原生菜单后系统 Cmd-W 错关活动文件 Red→Green；菜单 Escape 取消后关闭活动项、工具菜单 Cmd-W 共 3 条 GUI 通过；213 宿主与 Dev 构建签名通过。"
 
 [[tasks]]
 id = "P2-T4"
 title = "统一文件选择与 Finder 内外拖放目标"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t4"
-commit = ""
-note = ""
+commit = "f73f3f0e9df936d1b2d35286068b3e7f5bbd35bf"
+note = "主实现 f73f3f0；补充右键回归 8cef05ff、压缩祖先段真实拖放 0a1bcc1。141 宿主、真实 A/C 多选 Move、Option Copy+单行 Move、Control-click 和压缩 a1 目录树 Move GUI 均通过；实际源目标字节核验、Dev 构建签名通过。"
 
 [[tasks]]
 id = "P2-T5"
 title = "统一文件浏览与原生焦点恢复"
-status = "pending"
+status = "completed"
 plan = "plan-p2.md#p2-t5"
-commit = ""
-note = ""
+commit = "b9d1b2fe9b90ae1cc8312b07f5483e46eae612df"
+note = "Red 到 Green；104 项宿主；三种真实焦点 GUI 均已验证，批测首行未挂载失败后单项重测通过；Dev 构建验签通过。"
 
 [[tasks]]
 id = "P3-T1"

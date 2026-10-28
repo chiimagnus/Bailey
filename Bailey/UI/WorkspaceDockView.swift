@@ -513,8 +513,8 @@ struct DockTabGroupView: View {
                 .padding(.trailing, 2)
             }
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-            .frame(maxWidth: maxWidth, alignment: .leading)
-            .fixedSize(horizontal: maxWidth != nil, vertical: false)
+            .frame(width: maxWidth, alignment: .leading)
+            .clipped()
             .onChange(of: group.selected) { _, selected in
                 if let selected { scrollProxy.scrollTo(selected) }
             }
@@ -535,12 +535,11 @@ struct DockTabGroupView: View {
             .overlay {
                 ContextMenuClickTarget(
                     onContextClick: { project.dock.selectForContextMenu(item) },
-                    onMenuClosed: {
-                        if project.dock.contextTarget == item { project.dock.clearContextTarget() }
-                    },
+                    onMenuClosed: { finishTabContextMenu(for: item) },
                     onMenuKeyDown: { menu, event in
                         handleMenuKeyDown(menu, event, for: item)
-                    }
+                    },
+                    isExpectedMenu: { isMenuForTab($0, item: item) }
                 )
                 .contextMenu {
                     if let current = project.tabs.first(where: { $0.id == id }) {
@@ -560,12 +559,11 @@ struct DockTabGroupView: View {
             .overlay {
                 ContextMenuClickTarget(
                     onContextClick: { project.dock.selectForContextMenu(item) },
-                    onMenuClosed: {
-                        if project.dock.contextTarget == item { project.dock.clearContextTarget() }
-                    },
+                    onMenuClosed: { finishTabContextMenu(for: item) },
                     onMenuKeyDown: { menu, event in
                         handleMenuKeyDown(menu, event, for: item)
-                    }
+                    },
+                    isExpectedMenu: { isMenuForTab($0, item: item) }
                 )
                 .contextMenu {
                     let closeTitle = String(localized: "Close Panel", table: "Interface")
@@ -580,11 +578,33 @@ struct DockTabGroupView: View {
         }
     }
 
+    private func finishTabContextMenu(for item: DockItem) {
+        guard project.dock.contextTarget == item else { return }
+        // AppKit 可能先结束右键菜单跟踪，再让系统主菜单处理 ⌘W。
+        // 保留本次右键目标，直到 Close 消费它。
+        if let event = NSApp.currentEvent,
+           event.type == .keyDown,
+           event.modifierFlags.intersection([.command, .control, .option, .shift]) == [.command],
+           event.charactersIgnoringModifiers?.lowercased() == "w" {
+            return
+        }
+        project.dock.clearContextTarget()
+    }
+
+    private func isMenuForTab(_ menu: NSMenu, item: DockItem) -> Bool {
+        guard manager.selectedProject === project,
+              project.dock.contextTarget == item,
+              project.dock.group(containing: item) != nil else { return false }
+        let title = item.tabID == nil
+            ? String(localized: "Close Panel", table: "Interface")
+            : String(localized: "Close", table: "Interface")
+        return menu.items.contains { $0.accessibilityLabel() == title }
+    }
+
     private func handleMenuKeyDown(_ menu: NSMenu, _ event: NSEvent, for item: DockItem) -> Bool {
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         guard modifiers == [.command], event.charactersIgnoringModifiers?.lowercased() == "w",
-              project.dock.contextTarget == item, project.dock.group(containing: item) != nil
-        else { return false }
+              isMenuForTab(menu, item: item) else { return false }
         let title = item.tabID == nil
             ? String(localized: "Close Panel", table: "Interface")
             : String(localized: "Close", table: "Interface")

@@ -12,6 +12,7 @@ enum WorkspaceUITestSupport {
         let usesFixtureHome: Bool
         let owner: ObjectIdentifier
         let project: URL?
+        let clipboardIsReadOnly: Bool
     }
 
     private static var session: Session?
@@ -20,7 +21,8 @@ enum WorkspaceUITestSupport {
 
     static func launch(
         in test: XCTestCase, language: String? = nil,
-        configurationHome: URL? = nil, project: URL? = nil
+        configurationHome: URL? = nil, project: URL? = nil,
+        clipboardIsReadOnly: Bool = false
     ) throws -> XCUIApplication {
         if !observing {
             XCTestObservationCenter.shared.addTestObserver(observer)
@@ -31,6 +33,7 @@ enum WorkspaceUITestSupport {
         let project = project?.standardizedFileURL
         if let current = session, current.owner == owner,
            current.language == language, current.project == project,
+           current.clipboardIsReadOnly == clipboardIsReadOnly,
            current.usesFixtureHome == (configurationHome != nil),
            (configurationHome == nil || current.home == configurationHome),
            current.app.state != .notRunning {
@@ -67,18 +70,26 @@ enum WorkspaceUITestSupport {
         }
         app.launchEnvironment["CFFIXED_USER_HOME"] = home.path
         app.launchEnvironment["HOME"] = home.path
+        app.launchEnvironment["ZDOTDIR"] = home.path
         session = Session(app: app, home: home, language: language,
                           usesFixtureHome: configurationHome != nil,
-                          owner: owner, project: project)
+                          owner: owner, project: project,
+                          clipboardIsReadOnly: clipboardIsReadOnly)
         let previousInput = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
         let unicodeHexWasEnabled = inputSource(id: "com.apple.keylayout.UnicodeHexInput") != nil
-        let originalClipboard = try clipboardItems()
+        let clipboardVersion = NSPasteboard.general.changeCount
+        let originalClipboard = clipboardIsReadOnly ? nil : try clipboardItems()
         test.addTeardownBlock { @MainActor in
             if let active = session, active.app === app { finishSession() }
             let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            if !originalClipboard.isEmpty {
-                XCTAssertTrue(pasteboard.writeObjects(originalClipboard))
+            if let originalClipboard, pasteboard.changeCount != clipboardVersion {
+                pasteboard.clearContents()
+                if !originalClipboard.isEmpty {
+                    XCTAssertTrue(pasteboard.writeObjects(originalClipboard))
+                }
+            } else if clipboardIsReadOnly {
+                XCTAssertEqual(pasteboard.changeCount, clipboardVersion,
+                               "This GUI test must not modify the user's clipboard")
             }
             XCTAssertEqual(TISSelectInputSource(previousInput), noErr,
                            "Restore the user's original input method after UI testing")
@@ -96,14 +107,15 @@ enum WorkspaceUITestSupport {
         if !app.windows.firstMatch.waitForExistence(timeout: 1) {
             app.typeKey("n", modifierFlags: [.command, .shift])
         }
-        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
         if project != nil {
             let files = element("bailey.dock.files", in: app)
-            guard files.waitForExistence(timeout: 15) else {
+            guard files.waitForExistence(timeout: 30) else {
                 throw NSError(domain: "BaileyUITestLaunch", code: 3, userInfo: [
                     NSLocalizedDescriptionKey: "The isolated fixture project did not appear"
                 ])
             }
+        } else {
+            XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
         }
         let configuration = home.appendingPathComponent(".config/bailey-dev/config.toml")
         let initialized = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -284,6 +296,31 @@ enum WorkspaceUITestSupport {
         scope.buttons.matching(identifier: "bailey.tab.file")
             .matching(NSPredicate(format: "value == %@", url.standardizedFileURL.path))
             .firstMatch
+    }
+
+    static func finderDragSource(for file: URL) -> (window: XCUIElement, source: XCUIElement) {
+        NSWorkspace.shared.activateFileViewerSelecting([file])
+        let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
+        let window = finder.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 20))
+        if !window.outlines["ListView"].waitForExistence(timeout: 2) {
+            finder.activate()
+            finder.typeKey("2", modifierFlags: .command)
+        }
+        XCTAssertTrue(window.outlines["ListView"].waitForExistence(timeout: 12),
+                      "The selected Finder file must expose an actual draggable row")
+        let title = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
+        title.click(forDuration: 0.2,
+                    thenDragTo: title.withOffset(CGVector(dx: 40 - window.frame.minX, dy: 0)))
+        let source = window.outlines["ListView"].outlineRows.firstMatch
+            .textFields[file.lastPathComponent]
+        XCTAssertTrue(source.waitForExistence(timeout: 12),
+                      "The system drag must originate from the actual selected file")
+        return (window, source)
+    }
+
+    static func closeFinderDragWindow(_ window: XCUIElement) {
+        if window.exists { window.buttons["_XCUI:CloseWindow"].firstMatch.click() }
     }
 }
 

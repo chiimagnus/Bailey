@@ -100,7 +100,8 @@ final class FileTreeModel {
     /// Expand the current tree to an existing file without touching its editor.
     /// A hidden ancestor is revealed only in this Files tree, not in Settings.
     func revealFile(
-        _ path: String, isCurrentTarget: () -> Bool = { true }
+        _ path: String, automatically: Bool = false,
+        isCurrentTarget: () -> Bool = { true }
     ) async -> Bool {
         let root = rootPath
         let scope = workspaceScope
@@ -112,7 +113,9 @@ final class FileTreeModel {
         else { return false }
         let relative = String(path.dropFirst(root.count + (root.hasSuffix("/") ? 0 : 1)))
         let parts = relative.split(separator: "/")
-        guard !parts.isEmpty, parts.count <= 32 else { return false }
+        guard !parts.isEmpty, parts.count <= 32,
+              !automatically || showExcluded || Self.isVisible(path, in: root, excluding: settings.filesExclude)
+        else { return false }
         do {
             let physicalRoot = try await Self.physicalDirectory(
                 root, backend: backend, scope: scope
@@ -307,19 +310,21 @@ final class FileTreeModel {
         guard !item.isDraft, items.contains(where: { !$0.isDraft && $0.path == item.path }),
               componentPath == nil || item.compactComponents.contains(where: { $0.path == componentPath })
         else { return }
-        if !selectedPaths.contains(item.path)
-            || (componentPath != nil && componentPath != item.path) {
-            selectedPaths = [item.path]
-            selectionAnchorPath = item.path
-        }
-        selectedPath = item.path
-        selectedCompactPath = componentPath
         contextMenuTargetPath = componentPath ?? item.path
         activeDrag = nil
     }
 
     func dismissContextMenu(target: String) {
         if contextMenuTargetPath == target { contextMenuTargetPath = nil }
+    }
+
+    var contextDirectoryPath: String? {
+        guard let target = contextMenuTargetPath,
+              let row = items.first(where: {
+                  !$0.isDraft && ($0.path == target
+                      || ($0.isDirectory && $0.compactComponents.contains { $0.path == target }))
+              }) else { return nil }
+        return row.isDirectory ? target : (target as NSString).deletingLastPathComponent
     }
 
     @discardableResult
@@ -399,6 +404,10 @@ final class FileTreeModel {
         let record = (nonce: UUID(), paths: paths)
         activeDrag = record
         return record
+    }
+
+    func cancelDrag(nonce: UUID) {
+        if activeDrag?.nonce == nonce { activeDrag = nil }
     }
 
     func consumeDrag(nonce: UUID, paths: [String]) -> Bool {

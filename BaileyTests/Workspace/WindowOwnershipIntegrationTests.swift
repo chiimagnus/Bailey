@@ -238,16 +238,24 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         let secondRow = try XCTUnwrap(project.fileTree.items.first { $0.path == second.path })
         project.fileTree.select(firstRow)
         project.fileTree.select(secondRow, toggling: true)
-        let provider = owner.makeFileTreeDragProvider(for: firstRow, in: project, target: identity)
-        XCTAssertTrue(provider.hasItemConformingToTypeIdentifier(FileTreeDrag.type))
-        XCTAssertTrue(provider.canLoadObject(ofClass: NSURL.self),
-                      "Local Files drags must remain compatible with Finder")
+        let record = try XCTUnwrap(owner.beginFileTreeDrag(for: firstRow, in: project, target: identity))
+        let items = FileTreeNativeDragView.dragItems(record: record, local: true)
+        XCTAssertEqual(items.count, 2, "Finder needs one real pasteboard item per selected file")
+        XCTAssertEqual(items.compactMap { ($0.item as? NSURL)?.path },
+                       [first.path, second.path])
+        let remoteItems = FileTreeNativeDragView.dragItems(record: record, local: false)
+        XCTAssertEqual(remoteItems.count, 2)
+        XCTAssertTrue(remoteItems.allSatisfy {
+            guard let item = $0.item as? NSPasteboardItem else { return false }
+            return item.string(forType: .fileURL) == nil
+                && item.string(forType: NSPasteboard.PasteboardType(FileTreeDrag.type)) != nil
+        }, "SSH Files must not publish local file URLs")
         XCTAssertFalse(other.receiveFileTreeDrop(
-            provider, into: destination.path, copy: false,
+            record, into: destination.path, copy: false,
             in: otherProject, target: otherIdentity
         ), "The same local folder in another window must not accept the private drag")
         XCTAssertTrue(owner.receiveFileTreeDrop(
-            provider, into: destination.path, copy: true,
+            record, into: destination.path, copy: true,
             in: project, target: identity
         ))
         try await wait {
@@ -265,11 +273,11 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         let afterCopy = try XCTUnwrap(project.fileTree.items.first { $0.path == first.path })
         let secondDestination = root.appendingPathComponent("moved")
         try FileManager.default.createDirectory(at: secondDestination, withIntermediateDirectories: true)
-        let secondProvider = owner.makeFileTreeDragProvider(
+        let secondRecord = try XCTUnwrap(owner.beginFileTreeDrag(
             for: afterCopy, in: project, target: identity
-        )
+        ))
         XCTAssertTrue(owner.receiveFileTreeDrop(
-            secondProvider, into: secondDestination.path, copy: false,
+            secondRecord, into: secondDestination.path, copy: false,
             in: project, target: identity
         ))
         try await wait {
@@ -305,17 +313,19 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         let firstRow = try XCTUnwrap(project.fileTree.items.first { $0.path == first.path })
         let secondRow = try XCTUnwrap(project.fileTree.items.first { $0.path == second.path })
         project.fileTree.select(firstRow)
-        let previous = owner.makeFileTreeDragProvider(for: firstRow, in: project, target: identity)
+        let previous = try XCTUnwrap(owner.beginFileTreeDrag(for: firstRow, in: project, target: identity))
         project.fileTree.select(secondRow)
         XCTAssertFalse(owner.receiveFileTreeDrop(
             previous, into: destination.path, copy: false,
             in: project, target: identity
         ), "Changed selection invalidates a previous drag")
-        let finderProvider = NSItemProvider(object: first as NSURL)
+        let forged = FileTreeDrag.Record(
+            source: previous.source, window: previous.window, nonce: UUID()
+        )
         XCTAssertFalse(owner.receiveFileTreeDrop(
-            finderProvider, into: destination.path, copy: false,
+            forged, into: destination.path, copy: false,
             in: project, target: identity
-        ), "Finder fileURLs are not internal move requests")
+        ), "An unregistered or external drag cannot become an internal move")
         XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: destination.appendingPathComponent("first.txt").path

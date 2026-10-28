@@ -34,6 +34,7 @@ final class WorkspaceWindowModel {
             for project in oldValue where !projects.contains(where: { $0 === project }) {
                 project.onSnapshotChange = nil
                 project.onPresentationWindow = nil
+                project.dock.onActiveItemChange = nil
             }
             for project in projects where !oldValue.contains(where: { $0 === project }) {
                 bind(project)
@@ -50,6 +51,8 @@ final class WorkspaceWindowModel {
                 previous?.tabs.forEach { $0.content.autoSaveOnFocusLoss() }
             }
             selectedProject?.dock.clearContextTarget()
+            filesTreeResponder = nil
+            gitTreeResponder = nil
             requestSave()
         }
     }
@@ -66,6 +69,8 @@ final class WorkspaceWindowModel {
     @ObservationIgnored private weak var commandPalettePreviousResponder: NSResponder?
     @ObservationIgnored private weak var commandPaletteWindow: NSWindow?
     @ObservationIgnored private var commandPaletteContentID: UUID?
+    @ObservationIgnored private weak var filesTreeResponder: TreeKeyboardView?
+    @ObservationIgnored private weak var gitTreeResponder: TreeKeyboardView?
     /// Window hosting this manager, once SwiftUI has attached its content.
     /// Finder service requests use it to target the active Bailey window.
     @ObservationIgnored private weak var window: NSWindow?
@@ -365,6 +370,52 @@ final class WorkspaceWindowModel {
     private func bind(_ project: Project) {
         project.onSnapshotChange = { [weak self] in self?.requestSave() }
         project.onPresentationWindow = { [weak self] in self?.attachedWindow }
+        project.dock.onActiveItemChange = { [weak self, weak project] previous, _ in
+            guard let self, let project else { return }
+            self.autoRevealActiveFile(in: project, previous: previous)
+        }
+    }
+
+    /// A changed active editor selects its matching Files row without changing input focus.
+    func autoRevealActiveFile(in project: Project, previous: DockItem? = nil) {
+        guard !isClosed, selectedProject === project,
+              let files = project.dock.group(containing: .files), files.selected == .files,
+              let context = project.panelContext,
+              project.fileTree.syncedTarget(for: context) != nil,
+              project.fileTree.renamingPath == nil, project.fileTree.draft == nil
+        else { return }
+        let file: FileTab
+        let returningToFiles: UUID?
+        if case .file(let active)? = project.focusedContent {
+            file = active
+            returningToFiles = nil
+        } else if project.dock.activeGroup?.selected == .files,
+                  case .tab(let id)? = previous,
+                  case .file(let active)? = project.tabs.first(where: { $0.id == id })?.content {
+            file = active
+            returningToFiles = id
+        } else { return }
+        guard file.workspaceIdentity == context.identity.workspace else { return }
+        let path = file.path
+        let revision = context.connectionRevision
+        Task { [weak self, weak project] in
+            guard let self, let project else { return }
+            _ = await project.fileTree.revealFile(path, automatically: true) {
+                guard !self.isClosed, self.selectedProject === project,
+                      let current = project.panelContext,
+                      current.identity == context.identity,
+                      current.connectionRevision == revision,
+                      project.fileTree.syncedTarget(for: current) != nil,
+                      project.fileTree.renamingPath == nil, project.fileTree.draft == nil
+                else { return false }
+                if let returningToFiles {
+                    return project.dock.activeGroup?.selected == .files
+                        && project.selectedTabID == returningToFiles
+                }
+                guard case .file(let active)? = project.focusedContent else { return false }
+                return active === file
+            }
+        }
     }
 
     private func makeProject() -> Project {
@@ -541,6 +592,7 @@ final class WorkspaceWindowModel {
 
     func closePanel(_ item: DockItem, in project: Project) {
         guard selectedProject === project, project.dock.group(containing: item) != nil else { return }
+        project.dock.clearContextTarget()
         switch item {
         case .tab(let id):
             if let tab = project.tabs.first(where: { $0.id == id }) { project.close(tab) }
@@ -606,8 +658,11 @@ final class WorkspaceWindowModel {
         let revision = context.connectionRevision
         guard selectedProjectID == project.id, project.matchesPanelTarget(context.identity) else { return }
         let directory: String
-        if project.dock.activeGroup?.selected == .files,
-           project.fileTree.matchesIndexTarget(root: root, context: context) {
+        if project.fileTree.matchesIndexTarget(root: root, context: context),
+           let contextDirectory = project.fileTree.contextDirectoryPath {
+            directory = contextDirectory
+        } else if project.dock.activeGroup?.selected == .files,
+                  project.fileTree.matchesIndexTarget(root: root, context: context) {
             directory = project.fileTree.selectedDirectoryPath ?? root
         } else if case .file(let file)? = project.focusedContent,
                   file.workspaceIdentity == context.identity.workspace {
@@ -615,6 +670,9 @@ final class WorkspaceWindowModel {
             directory = LocalPathScope.contains(parent, in: root) ? parent : root
         } else {
             directory = root
+        }
+        if let menuTarget = project.fileTree.contextMenuTargetPath {
+            project.fileTree.dismissContextMenu(target: menuTarget)
         }
         showPanel(.files)
         guard await project.fileTree.sync(
@@ -747,61 +805,42 @@ final class WorkspaceWindowModel {
         return SSHHostWorkspaces.connectionRevision(for: String(workspace.dropFirst(4)))
     }
 
-    func makeFileTreeDragProvider(
+    func beginFileTreeDrag(
         for item: FileTreeModel.Item, in project: Project, target: PanelContext.Identity
-    ) -> NSItemProvider {
+    ) -> FileTreeDrag.Record? {
         guard selectedProjectID == project.id, project.matchesPanelTarget(target),
-              let drag = project.fileTree.beginDrag(for: item) else { return NSItemProvider() }
+              let drag = project.fileTree.beginDrag(for: item),
+              drag.paths.allSatisfy({ target.workspace != nil
+                  || LocalPathScope.contains($0, in: project.fileTree.rootPath) })
+        else { return nil }
         let source = FileTreeClipboard.Record(
             token: application.fileTransferToken, project: project.id,
             identity: String(reflecting: target), root: project.fileTree.rootPath,
             connectionRevision: clipboardRevision(for: target), paths: drag.paths, cut: false
         )
-        let record = FileTreeDrag.Record(
+        return FileTreeDrag.Record(
             source: source, window: String(reflecting: ObjectIdentifier(self)), nonce: drag.nonce
         )
-        guard let data = try? JSONEncoder().encode(record) else { return NSItemProvider() }
-        let provider = NSItemProvider()
-        provider.registerDataRepresentation(forTypeIdentifier: FileTreeDrag.type, visibility: .ownProcess) {
-            completion in
-            completion(data, nil)
-            return nil
-        }
-        if target.workspace == nil {
-            provider.registerObject(URL(fileURLWithPath: item.path) as NSURL, visibility: .all)
-        }
-        return provider
     }
 
     func receiveFileTreeDrop(
-        _ provider: NSItemProvider, into directory: String, copy: Bool,
+        _ drag: FileTreeDrag.Record, into directory: String, copy: Bool,
         in project: Project, target: PanelContext.Identity,
         onChange: @escaping () -> Void = {}
     ) -> Bool {
         guard selectedProjectID == project.id, project.matchesPanelTarget(target),
-              project.fileTree.hasActiveDrag,
-              provider.hasItemConformingToTypeIdentifier(FileTreeDrag.type) else { return false }
-        Task { @MainActor in
-            let data: Data? = await withCheckedContinuation { continuation in
-                _ = provider.loadDataRepresentation(forTypeIdentifier: FileTreeDrag.type) { data, _ in
-                    continuation.resume(returning: data)
-                }
-            }
-            guard let data, let drag = try? JSONDecoder().decode(FileTreeDrag.Record.self, from: data),
-                  selectedProjectID == project.id, project.matchesPanelTarget(target),
-                  drag.source.token == application.fileTransferToken,
-                  drag.window == String(reflecting: ObjectIdentifier(self)),
-                  drag.source.project == project.id,
-                  drag.source.identity == String(reflecting: target),
-                  drag.source.root == project.fileTree.rootPath,
-                  drag.source.connectionRevision == clipboardRevision(for: target),
-                  project.fileTree.consumeDrag(nonce: drag.nonce, paths: drag.source.paths)
-            else { return }
-            performFileTreeCommand(
-                .drop(drag.source.paths, into: directory, copy: copy),
-                in: project, target: target, onChange: onChange
-            )
-        }
+              drag.source.token == application.fileTransferToken,
+              drag.window == String(reflecting: ObjectIdentifier(self)),
+              drag.source.project == project.id,
+              drag.source.identity == String(reflecting: target),
+              drag.source.root == project.fileTree.rootPath,
+              drag.source.connectionRevision == clipboardRevision(for: target),
+              project.fileTree.consumeDrag(nonce: drag.nonce, paths: drag.source.paths)
+        else { return false }
+        performFileTreeCommand(
+            .drop(drag.source.paths, into: directory, copy: copy),
+            in: project, target: target, onChange: onChange
+        )
         return true
     }
 
@@ -971,7 +1010,7 @@ final class WorkspaceWindowModel {
             if let responder, self.selectedProject?.focusedContent?.id == contentID,
                self.ownsActiveResponder(responder) {
                 window.makeFirstResponder(responder)
-            } else if let activeTree = self.activeTreeResponder(in: window) {
+            } else if let activeTree = self.registeredToolResponder(in: window) {
                 // A palette switch can move from an editor, terminal, or old
                 // tree into Files/Git. Restore the tool that is now visible.
                 window.makeFirstResponder(activeTree)
@@ -979,15 +1018,30 @@ final class WorkspaceWindowModel {
         }
     }
 
-    func activeTreeResponder(in window: NSWindow) -> TreeKeyboardView? {
-        guard let root = window.contentView,
-              let selected = selectedProject?.dock.activeGroup?.selected,
-              selected == .files || selected == .git else { return nil }
-        func findTree(_ view: NSView) -> TreeKeyboardView? {
-            if let tree = view as? TreeKeyboardView, ownsActiveResponder(tree) { return tree }
-            return view.subviews.lazy.compactMap(findTree).first
+    /// Native tree ownership is supplied by its mounted panel, not inferred from
+    /// another view's coordinates or from arbitrary window descendants.
+    func registerTreeResponder(_ view: TreeKeyboardView, for panel: ToolPanel, in project: Project) {
+        guard selectedProject === project, view.window === window else { return }
+        switch panel {
+        case .files: filesTreeResponder = view
+        case .git: gitTreeResponder = view
+        default: break
         }
-        return findTree(root)
+    }
+
+    func registeredToolResponder(in window: NSWindow) -> TreeKeyboardView? {
+        guard let project = selectedProject,
+              let active = project.dock.activeGroup?.selected else { return nil }
+        let candidate: TreeKeyboardView?
+        switch active {
+        case .files: candidate = filesTreeResponder
+        case .git: candidate = gitTreeResponder
+        default: return nil
+        }
+        guard let candidate, candidate.window === window,
+              !candidate.isHiddenOrHasHiddenAncestor,
+              !candidate.visibleRect.isEmpty else { return nil }
+        return candidate
     }
 
     /// Terminal and editor responders are public host views. WebKit instead
@@ -996,9 +1050,10 @@ final class WorkspaceWindowModel {
     /// the page's keyboard focus.
     private func isStableWorkspaceResponder(_ responder: NSResponder) -> Bool {
         if responder is any TerminalBackendSurface || responder is FocusReportingTextView
-            || responder is DiffTextView || responder is TreeKeyboardView {
+            || responder is DiffTextView {
             return true
         }
+        if let window, registeredToolResponder(in: window) === responder { return true }
         var view = responder as? NSView
         while let current = view {
             if current is WKWebView { return true }
@@ -1010,18 +1065,8 @@ final class WorkspaceWindowModel {
     func ownsActiveResponder(_ responder: NSResponder) -> Bool {
         guard let window, let view = responder as? NSView, view.window === window,
               !view.isHiddenOrHasHiddenAncestor else { return false }
-        if view is TreeKeyboardView,
-           let activeGroup = selectedProject?.dock.activeGroup,
-           activeGroup.selected == .files || activeGroup.selected == .git,
-           let windowContent = window.contentView {
-            func belongsToActiveGroup(_ current: NSView) -> Bool {
-                if let group = current as? DockGroupFocusView,
-                   group.groupID == activeGroup.id {
-                    return group.containsResponder(responder)
-                }
-                return current.subviews.contains(where: belongsToActiveGroup)
-            }
-            return belongsToActiveGroup(windowContent)
+        if view is TreeKeyboardView {
+            return registeredToolResponder(in: window) === responder
         }
         guard let content = selectedProject?.focusedContent else { return false }
         let root: NSView?

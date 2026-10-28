@@ -1141,6 +1141,12 @@ final class FileTreeTests: XCTestCase {
         XCTAssertFalse(tree.items.contains { $0.path == target.path })
         XCTAssertFalse(tree.showExcluded)
 
+        let automatic = await tree.revealFile(target.path, automatically: true)
+        XCTAssertFalse(automatic, "Auto Reveal must respect the configured exclusions")
+        XCTAssertNil(tree.selectedPath)
+        XCTAssertTrue(tree.selectedPaths.isEmpty)
+        XCTAssertFalse(tree.showExcluded)
+
         let revealed = await tree.revealFile(target.path)
         XCTAssertTrue(revealed)
         XCTAssertEqual(tree.selectedPath, target.path)
@@ -1720,7 +1726,7 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(tree.selectedPaths, Set(rows[3...5].map(\.path)))
     }
 
-    func testContextSelectionPreservesSelectedGroupButReplacesOutsideSelectionLikeVSCode() async throws {
+    func testContextSelectionPreservesExplicitSelectionWhileTargetingClickedRow() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1739,18 +1745,24 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(tree.selectedOperationPaths, [rows[0].path, rows[2].path],
                        "VS Code Explorer getContext(true) uses multi-Selection even if Focus is outside")
         tree.selectForContextMenu(rows[0])
-        XCTAssertEqual(tree.selectedPath, rows[0].path)
+        XCTAssertEqual(tree.selectedPath, rows[1].path,
+                       "Right click cannot replace the current keyboard cursor")
         XCTAssertEqual(tree.selectedOperationPaths, [rows[0].path, rows[2].path],
                        "Context-clicking one of the selected rows keeps the selected set")
 
         tree.selectForContextMenu(rows[1])
+        XCTAssertEqual(tree.contextDirectoryPath, root.path,
+                       "Main File commands must use the parent of a right-clicked file")
         XCTAssertEqual(tree.selectedPath, rows[1].path)
-        XCTAssertEqual(tree.selectedPaths, [rows[1].path],
-                       "VS Code Explorer replaces Selection when right-clicking outside it")
+        XCTAssertEqual(tree.selectedPaths, [rows[0].path, rows[2].path],
+                       "A context click only changes the temporary menu target")
         XCTAssertEqual(tree.contextSelection(for: rows[1]), [rows[1].path],
-                       "The context menu should operate the selected right-click target")
-        XCTAssertEqual(tree.selectedOperationPaths, [rows[1].path],
-                       "When Files owns keyboard focus, a cursor outside selection acts on the cursor")
+                       "An unselected context target is still acted on alone")
+        tree.dismissContextMenu(target: rows[1].path)
+        XCTAssertNil(tree.contextDirectoryPath,
+                     "Canceling the menu must restore ordinary File commands")
+        XCTAssertEqual(tree.selectedOperationPaths, [rows[0].path, rows[2].path],
+                       "Esc must leave the original explicit selection and Edit target intact")
     }
 
     func testContextMenuRingHasOneOwnerAndDismissalDoesNotClearNewerTarget() async throws {
@@ -1768,9 +1780,9 @@ final class FileTreeTests: XCTestCase {
 
         tree.selectForContextMenu(rows[1])
         XCTAssertEqual(tree.contextMenuTargetPath, rows[1].path)
-        XCTAssertEqual(tree.selectedPaths, [rows[1].path])
+        XCTAssertEqual(tree.selectedPaths, [rows[0].path])
         tree.selectForContextMenu(rows[2])
-        XCTAssertEqual(tree.selectedPaths, [rows[2].path])
+        XCTAssertEqual(tree.selectedPaths, [rows[0].path])
         XCTAssertEqual(tree.contextMenuTargetPath, rows[2].path,
                        "The next context click must replace the previous outline")
         tree.dismissContextMenu(target: rows[1].path)
@@ -2965,11 +2977,12 @@ final class FileTreeTests: XCTestCase {
         tree.select(try XCTUnwrap(tree.items.first { $0.path == other.path }), toggling: true)
         XCTAssertEqual(tree.selectedPaths, [compact.path, other.path])
         tree.selectForContextMenu(compact, componentPath: a.path)
-        XCTAssertEqual(tree.selectedPaths, [compact.path],
-                       "Right-clicking a different compact directory must replace the old multi-selection")
-        XCTAssertEqual(tree.selectedOperationPaths, [a.path],
-                       "File commands must target the clicked compact component")
-        XCTAssertEqual(tree.contextMenuTargetPath, a.path)
+        XCTAssertEqual(tree.selectedPaths, [compact.path, other.path],
+                       "Right-clicking a compact segment must not mutate the prior multi-selection")
+        XCTAssertEqual(tree.selectedOperationPaths, [compact.path, other.path],
+                       "The ordinary Edit target must remain the explicit selection")
+        XCTAssertEqual(tree.contextMenuTargetPath, a.path,
+                       "The context menu must separately identify the compact component")
 
         tree.select(compact, componentPath: a.path)
         XCTAssertEqual(tree.selectedDirectoryPath, a.path)
@@ -3050,14 +3063,29 @@ final class FileTreeTests: XCTestCase {
                       "Siblings remain unloaded until clicked")
     }
 
+    func testNativeDragRespectsModifierFilteredAppKitOperationMask() {
+        XCTAssertEqual(FileTreeNativeDragView.preferredInternalOperation(from: [.move, .copy]), .move,
+                       "Normal Files drag moves by default")
+        XCTAssertEqual(FileTreeNativeDragView.preferredInternalOperation(from: .copy), .copy,
+                       "The system filters Option drags to Copy")
+        XCTAssertEqual(FileTreeNativeDragView.preferredInternalOperation(from: .move), .move,
+                       "An explicit Move mask must move")
+        XCTAssertEqual(FileTreeNativeDragView.preferredInternalOperation(from: []), [],
+                       "An invalid drag must be rejected")
+        XCTAssertEqual(FileTreeNativeDragView.preferredInternalOperation(from: .link), [],
+                       "An unsupported Option-Command Link must not modify files")
+    }
+
     func testTreeRowActiveInactiveSelectionAndKeyboardFocusRenderIndependently() throws {
         func bitmap(
             isSelected: Bool, listActive: Bool, focusRing: Bool,
-            displayed: Bool = false, contextRing: Bool = false
+            displayed: Bool = false, contextRing: Bool = false,
+            isDropTarget: Bool = false
         ) throws -> NSBitmapImageRep {
             let row = TreeRowSurface(depth: 0, scale: 1, displayed: displayed,
                                      isSelected: isSelected, listActive: listActive,
                                      focusRing: focusRing, contextRing: contextRing,
+                                     isDropTarget: isDropTarget,
                                      outerInset: 0, showsGuides: false) { _, layout in
                 Color.clear.frame(height: layout.height)
             }
@@ -3099,6 +3127,12 @@ final class FileTreeTests: XCTestCase {
         let menuAndSelected = try bitmap(
             isSelected: true, listActive: true, focusRing: false, contextRing: true
         )
+        let moveTarget = try bitmap(
+            isSelected: false, listActive: true, focusRing: false, isDropTarget: true
+        )
+        let copyTarget = try bitmap(
+            isSelected: true, listActive: true, focusRing: false, isDropTarget: true
+        )
         let centerX = normalImage.pixelsWide / 2
         let centerY = normalImage.pixelsHigh / 2
         let neutral = try color(normalImage, x: centerX, y: centerY)
@@ -3121,6 +3155,10 @@ final class FileTreeTests: XCTestCase {
         }
         XCTAssertLessThan(delta(neutral, try color(menuAndSelected, x: centerX, y: centerY)),
                           0.03, "A menu target displays only its outline, even when selected")
+        for highlighted in [moveTarget, copyTarget] {
+            XCTAssertGreaterThan(delta(neutral, try color(highlighted, x: centerX, y: centerY)),
+                                 0.07, "A valid drag destination must be visibly filled")
+        }
         func changedPixels(_ base: NSBitmapImageRep, _ outlined: NSBitmapImageRep) throws -> Int {
             var count = 0
             for y in 0..<base.pixelsHigh {
@@ -3139,6 +3177,10 @@ final class FileTreeTests: XCTestCase {
                              "Focus outline must remain visible together with Selection")
         XCTAssertGreaterThan(try changedPixels(normalImage, menuAndSelected), 8,
                              "The menu target must have an outline without a Selection fill")
+        XCTAssertGreaterThan(try changedPixels(normalImage, moveTarget), 25,
+                             "Move destination must have a distinct row highlight and border")
+        XCTAssertGreaterThan(try changedPixels(activeImage, copyTarget), 25,
+                             "Copy destination must be visible even above an existing selection")
     }
 
     func testSharedRowVisualPriorityCoversEveryFlagCombinationAcrossAppearancesAndThemes() throws {

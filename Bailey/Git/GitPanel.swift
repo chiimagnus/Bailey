@@ -1897,7 +1897,12 @@ struct GitPanel: View {
                             },
                             keyboardOwner: graphKeyboardOwner,
                             isKeyboardActive: isGitActive && hasCurrentPanelTarget,
-                            onKeyboardFocused: { lastKeyboardRegion = .graph },
+                            onKeyboardFocused: {
+                                lastKeyboardRegion = .graph
+                                if let tree = graphKeyboardOwner.view, let project {
+                                    manager.registerTreeResponder(tree, for: .git, in: project)
+                                }
+                            },
                             onKeyboardAttached: focusGitChanges,
                             scrollToKeyboardRow: { proxy.scrollTo($0) }
                         )
@@ -1913,7 +1918,12 @@ struct GitPanel: View {
                 TreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleGitChangeKey,
                                  onFocusChanged: { focused in
                                      keyboardFocused = focused
-                                     if focused { lastKeyboardRegion = .changes }
+                                     if focused {
+                                         lastKeyboardRegion = .changes
+                                         if let tree = keyboardOwner.view, let project {
+                                             manager.registerTreeResponder(tree, for: .git, in: project)
+                                         }
+                                     }
                                  },
                                  onAttachedToWindow: focusGitChanges)
             }
@@ -2014,6 +2024,11 @@ struct GitPanel: View {
             selectedChange = selection(for: rows[0])
         }
         waitingForChanges = rows.isEmpty
+        let tree = (lastKeyboardRegion == .graph || rows.isEmpty)
+            ? graphKeyboardOwner.view : keyboardOwner.view
+        if let tree, let project {
+            manager.registerTreeResponder(tree, for: .git, in: project)
+        }
         guard let window = keyboardOwner.view?.window ?? graphKeyboardOwner.view?.window,
               window.isKeyWindow, NSApp.isActive else { return }
         // An active native input always owns its field editor.

@@ -54,6 +54,80 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertEqual(project.focusedContent?.id, tab.content.id)
     }
 
+    func testDockSwitchesRevealOnlyTheActiveFileInFiles() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("a.swift")
+        let second = directory.appendingPathComponent("b.swift")
+        try "let a = 1\n".write(to: first, atomically: true, encoding: .utf8)
+        try "let b = 2\n".write(to: second, atomically: true, encoding: .utf8)
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([directory])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let files = try XCTUnwrap(project.dock.group(containing: .files))
+        project.dock.activate(files.id)
+        let synced = await project.syncFiles(isCurrent: { manager.selectedProject === project })
+        XCTAssertNotNil(synced)
+
+        project.openFile(first.path, activating: false)
+        let firstID = try XCTUnwrap(project.selectedTabID)
+        project.openFile(second.path, activating: false)
+        let secondID = try XCTUnwrap(project.selectedTabID)
+        XCTAssertEqual(project.dock.activeGroupID, files.id)
+        project.selectTab(firstID)
+        for _ in 0..<100 where project.fileTree.selectedPath != first.path {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(project.fileTree.selectedPaths, [first.path])
+        XCTAssertEqual(project.fileTree.selectedPath, first.path)
+
+        project.selectTab(secondID)
+        for _ in 0..<100 where project.fileTree.selectedPath != second.path {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(project.fileTree.selectedPaths, [second.path])
+        XCTAssertEqual(project.fileTree.selectedPath, second.path)
+        XCTAssertEqual(project.dock.activeGroup?.selected, .tab(secondID))
+    }
+
+    func testShowingFilesAfterHiddenFileTabRevealsItsLastActiveDocument() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("first.swift")
+        let second = directory.appendingPathComponent("second.swift")
+        try "first\n".write(to: first, atomically: true, encoding: .utf8)
+        try "second\n".write(to: second, atomically: true, encoding: .utf8)
+        let configuration = try XCTUnwrap(DockWorkspaceConfiguration(
+            groupNames: ["projects,files,git"], selectedNames: ["files"],
+            weights: [1], actionNames: ["session", "projects", "files", "git"],
+            edgeThreshold: 0.22
+        ))
+        let project = Project(fallbackName: "same group", workspaceConfiguration: configuration)
+        project.customDirectory = directory.path
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        let synced = await project.syncFiles(isCurrent: { manager.selectedProject === project })
+        XCTAssertNotNil(synced)
+        project.openFile(first.path)
+        project.openFile(second.path)
+        let oldSelected = try XCTUnwrap(project.fileTree.items.first { $0.path == first.path })
+        project.fileTree.select(oldSelected)
+        XCTAssertEqual(project.fileTree.selectedPaths, [first.path])
+        project.dock.select(.files)
+        for _ in 0..<100 where project.fileTree.selectedPath != second.path {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(project.fileTree.selectedPaths, [second.path])
+        XCTAssertEqual(project.fileTree.selectedPath, second.path)
+        XCTAssertEqual(project.dock.activeGroup?.selected, .files)
+    }
+
     func testBrowsingSameGroupMustNotKeepFocusOnHiddenFilesPanel() throws {
         let configuration = try XCTUnwrap(DockWorkspaceConfiguration(
             groupNames: ["projects,files,git"], selectedNames: ["files"],
@@ -395,6 +469,45 @@ final class DockWorkspaceTests: XCTestCase {
         for file in files {
             XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "original bytes\n")
         }
+    }
+
+    func testDirectTabCloseClearsMenuTargetWhenAnEarlierCloseIsStillPending() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-pending-close-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("first.txt")
+        let second = directory.appendingPathComponent("second.txt")
+        try "first bytes\n".write(to: first, atomically: true, encoding: .utf8)
+        try "second bytes\n".write(to: second, atomically: true, encoding: .utf8)
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([directory])
+        let project = try XCTUnwrap(manager.selectedProject)
+        project.openFile(first.path)
+        project.openFile(second.path)
+        let tabs = project.tabs
+        XCTAssertEqual(tabs.count, 2)
+        XCTAssertEqual(project.dock.activeGroup?.selected, .tab(tabs[1].id))
+
+        // A right-clicked inactive tab can already be awaiting a save or a
+        // native Cancel decision. A repeated Close must not leave its menu
+        // target armed for a later system Cmd-W.
+        tabs[0].content.suspendAutoSaveForClose(true)
+        defer { tabs[0].content.suspendAutoSaveForClose(false) }
+        project.dock.selectForContextMenu(.tab(tabs[0].id))
+        manager.closePanel(.tab(tabs[0].id), in: project)
+
+        XCTAssertNil(project.dock.contextTarget)
+        XCTAssertEqual(project.tabs.map(\.id), tabs.map(\.id))
+        XCTAssertEqual(project.dock.activeGroup?.selected, .tab(tabs[1].id))
+
+        manager.closeActivePanelOrWindow()
+        XCTAssertEqual(project.tabs.map(\.id), [tabs[0].id],
+                       "A later Cmd-W must close active B, never retry the blocked A")
+        XCTAssertEqual(try Data(contentsOf: first), Data("first bytes\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("second bytes\n".utf8))
     }
 
     func testRightClickToolTargetIsIndependentOfActiveGroupAndProject() throws {

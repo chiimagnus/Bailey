@@ -187,6 +187,125 @@ final class WorkspaceFilesUITests: XCTestCase {
                        "HIDDEN_REMOTE_BYTES\n")
     }
 
+    func testAuthorizedWindowsSSHRejectsRealFinderDropWithoutAffectingLocalCopy() throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"],
+              !host.isEmpty, !host.hasPrefix("-"),
+              !host.contains(where: { $0.isWhitespace || $0.isNewline })
+        else { throw XCTSkip("Requires an explicitly authorized Windows SSH host") }
+
+        let remoteRoot = try runSSH(
+            host: host, command: "mktemp -d /tmp/bailey-p2-ui-XXXXXX"
+        ).trimmingCharacters(in: .newlines)
+        guard (remoteRoot as NSString).deletingLastPathComponent == "/tmp",
+              (remoteRoot as NSString).lastPathComponent.hasPrefix("bailey-p2-ui-")
+        else { throw NSError(domain: "BaileyP2UI", code: 3) }
+        addTeardownBlock { @MainActor in
+            XCTAssertEqual(try self.runSSH(host: host,
+                command: "rm -r -- '\(remoteRoot)' && test ! -e '\(remoteRoot)' && printf cleaned"),
+                "cleaned", "Only the isolated remote test directory may be deleted")
+        }
+        XCTAssertEqual(try runSSH(host: host, command:
+            "mkdir -p -- '\(remoteRoot)/drop-zone' && "
+            + "printf 'REMOTE_UNCHANGED\n' > '\(remoteRoot)/drop-zone/protected.txt' && printf ready"),
+            "ready")
+
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = try fixture.file(
+            "finder-source/local-only.txt", text: "MAC_FINDER_SOURCE_UNIQUE_BYTES\n"
+        )
+        let localAnchor = try fixture.file(
+            "local-workspace/drop-zone/existing.txt", text: "LOCAL_DESTINATION_ANCHOR\n"
+        )
+        let localWorkspace = fixture.root.appendingPathComponent("local-workspace")
+        let copied = localWorkspace.appendingPathComponent("drop-zone/local-only.txt")
+        let sourceBytes = try Data(contentsOf: source)
+
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root,
+            project: localWorkspace, clipboardIsReadOnly: true
+        )
+        app.menuBarItems["Project"].click()
+        let addSSH = app.menuItems["Add SSH Files or Projects…"]
+        XCTAssertTrue(addSSH.waitForExistence(timeout: 12))
+        addSSH.click()
+        let remoteWindow = app.windows.firstMatch
+        let sheet = remoteWindow.sheets.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 12))
+        let hostField = sheet.comboBoxes.firstMatch
+        hostField.click()
+        hostField.typeKey("a", modifierFlags: .command)
+        hostField.typeText(host)
+        let paths = sheet.textViews.firstMatch
+        paths.click()
+        paths.typeText(remoteRoot)
+        sheet.buttons["Add"].click()
+
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 25))
+        files.click()
+        let remoteFolder = remoteWindow.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label CONTAINS %@", "drop-zone"))
+            .firstMatch
+        XCTAssertTrue(remoteFolder.waitForExistence(timeout: 25))
+        remoteFolder.click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileRow(
+            URL(fileURLWithPath: remoteRoot + "/drop-zone/protected.txt"), in: remoteWindow
+        ).waitForExistence(timeout: 25), "The drag target must belong to Windows SSH")
+        let finder = WorkspaceUITestSupport.finderDragSource(for: source)
+        defer { WorkspaceUITestSupport.closeFinderDragWindow(finder.window) }
+        let remotePoint = remoteFolder.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        )
+        XCTAssertLessThan(finder.window.frame.maxX, remotePoint.screenPoint.x - 20,
+                          "Finder must not obscure the real SSH Files destination")
+        finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.4, thenDragTo: remotePoint)
+
+        XCTAssertEqual(try runSSH(host: host, command:
+            "test ! -e '\(remoteRoot)/drop-zone/local-only.txt' && "
+            + "cat '\(remoteRoot)/drop-zone/protected.txt'"),
+            "REMOTE_UNCHANGED\n", "Finder must not upload a Mac file into Windows Files")
+        XCTAssertEqual(try Data(contentsOf: source), sourceBytes)
+        // The same genuine Finder fileURL must be accepted by local Files;
+        // otherwise a missed drag could falsely make the SSH rejection pass.
+        // The local fixture is preloaded; switching projects avoids changing
+        // an unsnapshotable Universal Clipboard through the native picker.
+        app.activate()
+        app.typeKey("1", modifierFlags: .command)
+        let localFiles = remoteWindow.descendants(matching: .any)
+            .matching(identifier: "bailey.dock.files").firstMatch
+        XCTAssertTrue(localFiles.waitForExistence(timeout: 15))
+        localFiles.click()
+        let localFolder = remoteWindow.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label CONTAINS %@", "drop-zone"))
+            .firstMatch
+        XCTAssertTrue(localFolder.waitForExistence(timeout: 20))
+        localFolder.click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileRow(localAnchor, in: remoteWindow)
+            .waitForExistence(timeout: 20), "The positive control must use the Mac project")
+        let localPoint = localFolder.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        )
+        XCTAssertLessThan(finder.window.frame.maxX, localPoint.screenPoint.x - 20)
+        finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.4, thenDragTo: localPoint)
+
+        let arrived = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: copied.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [arrived], timeout: 20), .completed,
+                       "The same Finder drag must actually copy into local Files")
+        XCTAssertEqual(try Data(contentsOf: copied), sourceBytes)
+        XCTAssertEqual(try Data(contentsOf: source), sourceBytes)
+        XCTAssertEqual(try String(contentsOf: localAnchor, encoding: .utf8),
+                       "LOCAL_DESTINATION_ANCHOR\n")
+        XCTAssertEqual(try runSSH(host: host, command:
+            "test ! -e '\(remoteRoot)/drop-zone/local-only.txt' && "
+            + "cat '\(remoteRoot)/drop-zone/protected.txt'"), "REMOTE_UNCHANGED\n")
+    }
+
     func testAuthorizedWindowsSSHCommandPaletteOpensRealRemoteFiles() throws {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P3_TEST_SSH_HOST"],
               !host.isEmpty else {
@@ -670,8 +789,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         app.typeKey("t", modifierFlags: .command)
         window.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0.6)).click()
         b.rightClick()
-        XCTAssertTrue(!a.isSelected && b.isSelected,
-                      "Explorer right-click outside Selection must select B without opening it")
+        XCTAssertTrue(a.isSelected && !b.isSelected,
+                      "Context-click B must not mutate the existing A selection")
         XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
             $0.menuItems["Copy Relative Path"].exists
         }, "Files should display its context menu while Terminal owns input")
@@ -685,6 +804,167 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [written], timeout: 12), .completed,
                        "Closing the Files menu must preserve Terminal keyboard input")
         XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "terminal")
+    }
+
+    func testControlClickKeepsNativeFilesContextMenuAndSingleTarget() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("first.txt", text: "first bytes\n")
+        let second = try fixture.file("second.txt", text: "second bytes\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        let a = WorkspaceUITestSupport.fileRow(first, in: window)
+        let b = WorkspaceUITestSupport.fileRow(second, in: window)
+        if !a.isHittable {
+            let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+            XCTAssertTrue(files.waitForExistence(timeout: 15))
+            files.click()
+        }
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        a.click()
+        XCUIElement.perform(withKeyModifiers: .control) { b.click() }
+        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["Copy Relative Path"].exists
+        }, "Control-click must open the clicked Files row's native context menu")
+        XCTAssertTrue(a.isSelected)
+        XCTAssertFalse(b.isSelected)
+        menu.menuItems["Copy Path"].click()
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), second.path)
+        XCTAssertEqual(try Data(contentsOf: first), Data("first bytes\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("second bytes\n".utf8))
+    }
+
+    func testNativeDragCompressedFolderSegmentMovesItsRealAncestor() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let leaf = try fixture.file("a1/b1/c1/leaf.swift", text: "original leaf bytes\n")
+        let marker = try fixture.file("target/.keep", text: "keep target\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        let folder = { (name: String) in
+            window.descendants(matching: .any)
+                .matching(identifier: "bailey.tree.folder")
+                .matching(NSPredicate(format: "label == %@", name)).firstMatch
+        }
+        if !folder("a1").isHittable {
+            WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        }
+        for name in ["a1", "b1", "c1"] {
+            let row = folder(name)
+            XCTAssertTrue(row.waitForExistence(timeout: 15), "Folder \(name) must be revealed")
+            row.click()
+        }
+        let compact = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label CONTAINS %@", "a1 / b1")).firstMatch
+        XCTAssertTrue(compact.waitForExistence(timeout: 15))
+        let ancestor = compact.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder.component.0").firstMatch
+        let destination = folder("target")
+        XCTAssertTrue(ancestor.waitForExistence(timeout: 15))
+        XCTAssertTrue(destination.waitForExistence(timeout: 15))
+        ancestor.click(forDuration: 0.2, thenDragTo: destination)
+        let moved = fixture.root.appendingPathComponent("target/a1/b1/c1/leaf.swift")
+        let finished = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: moved.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 15), .completed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: leaf.path),
+                       "Dragging compact ancestor a1 must move the whole a1 tree, not only c1")
+        XCTAssertEqual(try Data(contentsOf: moved), Data("original leaf bytes\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: marker), Data("keep target\n".utf8))
+    }
+
+    func testNativeDragOptionCopiesSelectionAndUnselectedRowMovesOnlyItself() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let alpha = try fixture.file("a.txt", text: "alpha original\n")
+        let beta = try fixture.file("b.txt", text: "beta original\n")
+        let gamma = try fixture.file("c.txt", text: "gamma original\n")
+        let copyFolder = try fixture.file("target/.keep", text: "").deletingLastPathComponent()
+        let moveFolder = try fixture.file("moved/.keep", text: "").deletingLastPathComponent()
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let a = WorkspaceUITestSupport.fileRow(alpha, in: window)
+        let b = WorkspaceUITestSupport.fileRow(beta, in: window)
+        let c = WorkspaceUITestSupport.fileRow(gamma, in: window)
+        let target = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", "target")).firstMatch
+        let moved = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", "moved")).firstMatch
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        XCTAssertTrue(c.waitForExistence(timeout: 15))
+        XCTAssertTrue(target.waitForExistence(timeout: 15))
+        XCTAssertTrue(moved.waitForExistence(timeout: 15))
+        a.click()
+        XCUIElement.perform(withKeyModifiers: .command) { c.click() }
+        XCTAssertTrue(a.isSelected && c.isSelected && !b.isSelected)
+        XCUIElement.perform(withKeyModifiers: .option) {
+            a.click(forDuration: 0.2, thenDragTo: target)
+        }
+        let copiedA = copyFolder.appendingPathComponent("a.txt")
+        let copiedC = copyFolder.appendingPathComponent("c.txt")
+        let copied = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: copiedA.path)
+                && FileManager.default.fileExists(atPath: copiedC.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [copied], timeout: 15), .completed)
+        XCTAssertEqual(try Data(contentsOf: copiedA), Data("alpha original\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: copiedC), Data("gamma original\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: alpha), Data("alpha original\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: gamma), Data("gamma original\n".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copyFolder.appendingPathComponent("b.txt").path))
+
+        b.click(forDuration: 0.2, thenDragTo: moved)
+        let movedB = moveFolder.appendingPathComponent("b.txt")
+        let movedOnlyB = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: movedB.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [movedOnlyB], timeout: 15), .completed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: beta.path))
+        XCTAssertEqual(try Data(contentsOf: movedB), Data("beta original\n".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: moveFolder.appendingPathComponent("a.txt").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: moveFolder.appendingPathComponent("c.txt").path))
+    }
+
+    func testNativeMultiFileDragMovesOnlySelectedFilesAndPreservesBytes() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let alpha = try fixture.file("a.txt", text: "alpha original\n")
+        let beta = try fixture.file("b.txt", text: "beta original\n")
+        let gamma = try fixture.file("c.txt", text: "gamma original\n")
+        let destination = try fixture.file("target/.keep", text: "")
+            .deletingLastPathComponent()
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let window = app.windows.firstMatch
+        let a = WorkspaceUITestSupport.fileRow(alpha, in: window)
+        let b = WorkspaceUITestSupport.fileRow(beta, in: window)
+        let c = WorkspaceUITestSupport.fileRow(gamma, in: window)
+        let target = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label == %@", "target")).firstMatch
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        XCTAssertTrue(c.waitForExistence(timeout: 15))
+        XCTAssertTrue(target.waitForExistence(timeout: 15))
+        a.click()
+        XCUIElement.perform(withKeyModifiers: .command) { c.click() }
+        XCTAssertTrue(a.isSelected && c.isSelected && !b.isSelected)
+        a.click(forDuration: 0.2, thenDragTo: target)
+        let movedA = destination.appendingPathComponent("a.txt")
+        let movedC = destination.appendingPathComponent("c.txt")
+        let completed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: movedA.path)
+                && FileManager.default.fileExists(atPath: movedC.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [completed], timeout: 15), .completed)
+        XCTAssertEqual(try Data(contentsOf: movedA), Data("alpha original\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: movedC), Data("gamma original\n".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: alpha.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: gamma.path))
+        XCTAssertEqual(try Data(contentsOf: beta), Data("beta original\n".utf8))
     }
 
     func testMultiSelectContextTargetsAndBulkTrashAgainstRealDisk() throws {
@@ -717,8 +997,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         otherMenu.menuItems["Copy Path"].click()
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), gamma.path,
                        "Context-clicking an unselected row must act on that row only")
-        XCTAssertTrue(!a.isSelected && !b.isSelected && c.isSelected,
-                      "Explorer right-click outside Selection replaces A/B with C")
+        XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected,
+                      "Context click outside Selection targets C without changing A/B")
         a.click()
         XCUIElement.perform(withKeyModifiers: .shift) { b.click() }
         XCTAssertTrue(a.isSelected && b.isSelected && !c.isSelected)
@@ -887,6 +1167,12 @@ final class WorkspaceFilesUITests: XCTestCase {
               !host.contains(where: { $0.isWhitespace || $0.isNewline }),
               ProcessInfo.processInfo.environment["BAILEY_P2_EXTERNAL_DISCONNECT"] == "1"
         else { throw XCTSkip("Requires a test-only Windows SSH host and Dev-master controller") }
+        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
+        defer {
+            let clipboard = NSPasteboard.general
+            clipboard.clearContents()
+            if !originalClipboard.isEmpty { XCTAssertTrue(clipboard.writeObjects(originalClipboard)) }
+        }
         let remoteRoot = try runSSH(
             host: host, command: "mktemp -d /tmp/bailey-p2-ui-XXXXXX"
         ).trimmingCharacters(in: .newlines)
@@ -1131,6 +1417,42 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: nested), Data("menu bytes\n".utf8))
     }
 
+    func testSpacePreviewSelectsFocusedFileWithoutSelectionDuringNavigation() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let aURL = try fixture.file("a-space.txt", text: "first body\n")
+        let bURL = try fixture.file("b-space.txt", text: "second body\n")
+        let cURL = try fixture.file("c-space.txt", text: "third body\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        WorkspaceUITestSupport.element("bailey.dock.files", in: app).click()
+        let a = WorkspaceUITestSupport.fileRow(aURL, in: window)
+        let b = WorkspaceUITestSupport.fileRow(bURL, in: window)
+        let c = WorkspaceUITestSupport.fileRow(cURL, in: window)
+        XCTAssertTrue(a.waitForExistence(timeout: 15))
+        XCTAssertTrue(b.waitForExistence(timeout: 15))
+        XCTAssertTrue(c.waitForExistence(timeout: 15))
+
+        a.click()
+        XCTAssertTrue(a.isSelected)
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        XCTAssertTrue(a.isSelected && !b.isSelected && !c.isSelected,
+                      "Normal arrow navigation only moves the focus outline")
+        app.typeKey(" ", modifierFlags: [])
+        XCTAssertTrue(!a.isSelected && b.isSelected && !c.isSelected,
+                      "Space must select the same file that becomes visible in the editor")
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(bURL, in: window).waitForExistence(timeout: 15))
+
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        XCTAssertTrue(b.isSelected && !c.isSelected,
+                      "The next arrow key must not implicitly change Selection")
+        app.typeKey(" ", modifierFlags: [])
+        XCTAssertTrue(!b.isSelected && c.isSelected)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(cURL, in: window).waitForExistence(timeout: 15))
+        XCTAssertEqual(try Data(contentsOf: aURL), Data("first body\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: bURL), Data("second body\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: cURL), Data("third body\n".utf8))
+    }
+
     func testHomeEndAndPageKeysScrollFocusedFilesWithoutOpeningOrSelectingThem() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         var files: [URL] = []
@@ -1167,6 +1489,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 0)
         app.typeKey(" ", modifierFlags: [])
         XCTAssertTrue(WorkspaceUITestSupport.fileTab(files[0], in: window).waitForExistence(timeout: 15))
+        XCTAssertTrue(first.isSelected,
+                      "Space must select the focused row when it explicitly previews that file")
         let content = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             window.textViews.allElementsBoundByIndex.contains { ($0.value as? String) == "real page row 0\n" }
         }, object: nil)
@@ -1424,24 +1748,26 @@ final class WorkspaceFilesUITests: XCTestCase {
         let folderName = "中文目录-" + String(repeating: "深", count: 50)
         let file = try fixture.file(folderName + "/文件-测试.swift", text: "let 中文 = true\n")
         let app = try WorkspaceUITestSupport.launch(in: self, language: "zh-Hans")
-        let add = app.buttons["bailey.emptyState.addFolder"]
+        let window = app.windows.firstMatch
+        let add = window.buttons["bailey.emptyState.addFolder"]
         XCTAssertTrue(add.waitForExistence(timeout: 15))
-        XCTAssertEqual(add.label, "添加文件夹…", "The test must actually launch the Chinese UI")
+        XCTAssertEqual(add.label, "添加项目…", "The test must actually launch the Chinese UI")
 
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
-        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app, in: window)
+        let files = window.descendants(matching: .any)
+            .matching(identifier: "bailey.dock.files").firstMatch
         XCTAssertTrue(files.waitForExistence(timeout: 20))
         files.click()
-        let folder = app.descendants(matching: .any)
+        let folder = window.descendants(matching: .any)
             .matching(identifier: "bailey.tree.folder")
             .matching(NSPredicate(format: "label == %@", folderName)).firstMatch
         XCTAssertTrue(folder.waitForExistence(timeout: 20))
         folder.click()
-        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
         XCTAssertTrue(row.waitForExistence(timeout: 20),
                       "Long Unicode paths must remain uniquely addressable in the AX tree")
         row.doubleClick()
-        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: app.windows.firstMatch)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: window)
             .waitForExistence(timeout: 15))
     }
 

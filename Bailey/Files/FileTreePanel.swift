@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 enum FileTreeCommand {
     case copy([String], cut: Bool)
@@ -42,7 +41,7 @@ enum FileTreeClipboard {
 enum FileTreeDrag {
     static let type = "com.chiimagnus.bailey.files.internal-drag"
 
-    struct Record: Codable {
+    struct Record {
         let source: FileTreeClipboard.Record
         let window: String
         let nonce: UUID
@@ -57,6 +56,7 @@ struct FileTreePanel: View {
     let openFile: (String, Bool) -> Void
     var isActive = true
     var canFocusKeyboard: () -> Bool = { true }
+    var onKeyboardAttached: (TreeKeyboardView) -> Void = { _ in }
     let renameFile: (FileTreeModel.Item, String) async -> String?
     let onCommand: (FileTreeCommand) -> Void
     let refreshGitStatus: () -> Void
@@ -64,8 +64,10 @@ struct FileTreePanel: View {
     let canPasteFiles: () -> Bool
     let canImportFromFinder: Bool
     let importFromFinder: ([NSItemProvider], String) -> Bool
-    var makeDragProvider: (FileTreeModel.Item) -> NSItemProvider = { _ in NSItemProvider() }
-    var receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool = { _, _, _ in false }
+    var beginDrag: (FileTreeModel.Item) -> FileTreeDrag.Record? = { _ in nil }
+    var endDrag: (UUID) -> Void = { _ in }
+    var receiveInternalDrop: (FileTreeDrag.Record, String, Bool) -> Bool = { _, _, _ in false }
+    @State private var dropTargetDirectory: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -106,70 +108,46 @@ struct FileTreePanel: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
             .padding(.bottom, 8)
+            .background {
+                if dropTargetDirectory == model.rootPath {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.accentColor.opacity(0.24))
+                }
+            }
 
             FileTreeScrollView(
-                model: model, git: git,
+                model: model, git: git, dropTargetDirectory: $dropTargetDirectory,
                 sshHost: sshHost, currentFilePath: currentFilePath,
                 openFile: openFile, isActive: isActive,
-                canFocusKeyboard: canFocusKeyboard, renameFile: renameFile,
+                canFocusKeyboard: canFocusKeyboard,
+                onKeyboardAttached: onKeyboardAttached, renameFile: renameFile,
                 onCommand: onCommand, refreshGitStatus: refreshGitStatus,
                 isCurrentTarget: isCurrentTarget,
                 canPasteFiles: canPasteFiles,
                 canImportFromFinder: canImportFromFinder,
                 importFromFinder: importFromFinder,
-                makeDragProvider: makeDragProvider,
+                beginDrag: beginDrag, endDrag: endDrag,
                 receiveInternalDrop: receiveInternalDrop
             )
         }
         .onChange(of: model.settings.filesExclude) { _, _ in
             Task { await model.refreshVisibility() }
         }
-        .onDrop(of: [FileTreeDrag.type, UTType.fileURL.identifier], delegate: FileTreeImportDrop(
-            directory: model.rootPath,
-            enabled: canImportFromFinder && isCurrentTarget(),
-            canAcceptInternal: isCurrentTarget(),
-            importFromFinder: importFromFinder,
-            receiveInternalDrop: receiveInternalDrop
-        ))
-    }
-}
-
-/// File Manager has a different drop action from the surrounding workspace:
-/// copy into its actual directory, never open an editor or move the source.
-private struct FileTreeImportDrop: DropDelegate {
-    let directory: String
-    let enabled: Bool
-    let canAcceptInternal: Bool
-    let importFromFinder: ([NSItemProvider], String) -> Bool
-    let receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool
-
-    func validateDrop(info: DropInfo) -> Bool {
-        guard !directory.isEmpty else { return false }
-        if info.hasItemsConforming(to: [FileTreeDrag.type]) { return true }
-        return enabled && info.hasItemsConforming(to: [UTType.fileURL.identifier])
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        guard validateDrop(info: info) else { return DropProposal(operation: .forbidden) }
-        if info.hasItemsConforming(to: [FileTreeDrag.type]) {
-            return DropProposal(operation: canAcceptInternal
-                ? (NSEvent.modifierFlags.contains(.option) ? .copy : .move) : .forbidden)
+        .onChange(of: model.rootPath) { _, _ in dropTargetDirectory = nil }
+        .onChange(of: isCurrentTarget()) { _, current in
+            if !current { dropTargetDirectory = nil }
         }
-        return DropProposal(operation: .copy)
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        guard validateDrop(info: info) else { return false }
-        if info.hasItemsConforming(to: [FileTreeDrag.type]) {
-            // Consume even a foreign private drag so its public fileURL never
-            // falls through to Finder import in this Files panel.
-            if canAcceptInternal,
-               let provider = info.itemProviders(for: [FileTreeDrag.type]).first {
-                _ = receiveInternalDrop(provider, directory, NSEvent.modifierFlags.contains(.option))
-            }
-            return true
+        .background {
+            FileTreeNativeDragSurface(
+                directory: model.rootPath, isCurrent: isCurrentTarget,
+                allowsFinder: canImportFromFinder,
+                receiveInternal: receiveInternalDrop, importFinder: importFromFinder,
+                onDragOperationChanged: { operation in
+                    if operation != [] { dropTargetDirectory = model.rootPath }
+                    else if dropTargetDirectory == model.rootPath { dropTargetDirectory = nil }
+                }
+            )
         }
-        return importFromFinder(info.itemProviders(for: [UTType.fileURL.identifier]), directory)
     }
 }
 
@@ -178,11 +156,13 @@ private struct FileTreeImportDrop: DropDelegate {
 private struct FileTreeScrollView: View {
     let model: FileTreeModel
     let git: GitStatusModel
+    @Binding var dropTargetDirectory: String?
     let sshHost: String?
     let currentFilePath: String?
     let openFile: (String, Bool) -> Void
     let isActive: Bool
     let canFocusKeyboard: () -> Bool
+    let onKeyboardAttached: (TreeKeyboardView) -> Void
     let renameFile: (FileTreeModel.Item, String) async -> String?
     let onCommand: (FileTreeCommand) -> Void
     let refreshGitStatus: () -> Void
@@ -190,8 +170,9 @@ private struct FileTreeScrollView: View {
     let canPasteFiles: () -> Bool
     let canImportFromFinder: Bool
     let importFromFinder: ([NSItemProvider], String) -> Bool
-    let makeDragProvider: (FileTreeModel.Item) -> NSItemProvider
-    let receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool
+    let beginDrag: (FileTreeModel.Item) -> FileTreeDrag.Record?
+    let endDrag: (UUID) -> Void
+    let receiveInternalDrop: (FileTreeDrag.Record, String, Bool) -> Bool
     @Environment(\.controlActiveState) private var controlActiveState
     @Environment(\.panelFontScale) private var fontScale
     @State private var keyboardOwner = TreeKeyboardOwner()
@@ -206,8 +187,8 @@ private struct FileTreeScrollView: View {
                     ForEach(model.items) { item in
                         FileTreeRow(
                             model: model, git: git, item: item,
+                            dropTargetDirectory: $dropTargetDirectory,
                             sshHost: sshHost,
-                            currentFilePath: currentFilePath,
                             openFile: openFile,
                             listFocused: keyboardFocused && isActive && controlActiveState == .key,
                             focusKeyboard: {
@@ -215,20 +196,12 @@ private struct FileTreeScrollView: View {
                             },
                             renameFile: renameFile, onCommand: onCommand,
                             refreshGitStatus: refreshGitStatus, isCurrentTarget: isCurrentTarget,
-                            makeDragProvider: makeDragProvider,
+                            beginDrag: beginDrag, endDrag: endDrag,
                             canImportFromFinder: canImportFromFinder,
                             importFromFinder: importFromFinder,
                             receiveInternalDrop: receiveInternalDrop
                         )
                         .id(item.path)
-                        .onDrop(of: [FileTreeDrag.type, UTType.fileURL.identifier], delegate: FileTreeImportDrop(
-                            directory: item.isDirectory ? item.path
-                                : (item.path as NSString).deletingLastPathComponent,
-                            enabled: canImportFromFinder && !item.isDraft && isCurrentTarget(),
-                            canAcceptInternal: !item.isDraft && isCurrentTarget(),
-                            importFromFinder: importFromFinder,
-                            receiveInternalDrop: receiveInternalDrop
-                        ))
                     }
                 }
                 .padding(.bottom, 7)
@@ -282,6 +255,7 @@ private struct FileTreeScrollView: View {
     }
 
     private func focusSelectedRow() {
+        if let tree = keyboardOwner.view { onKeyboardAttached(tree) }
         guard isActive, canFocusKeyboard(), isCurrentTarget(),
               model.renamingPath == nil, model.draft == nil else { return }
         if model.selectedItem == nil {
@@ -359,10 +333,13 @@ private struct FileTreeScrollView: View {
             guard let row = model.selectedItem else { return false }
             if row.isDirectory { Task { await model.toggle(row) } }
             else { openFile(row.path, true) }
-        case 49 where modifiers.isEmpty: // Space previews without moving keyboard focus
+        case 49 where modifiers.isEmpty: // Space explicitly browses the focused file
             guard let row = model.selectedItem else { return false }
             if row.isDirectory { Task { await model.toggle(row) } }
-            else { openFile(row.path, false) }
+            else {
+                model.select(row)
+                openFile(row.path, false)
+            }
         case 53 where modifiers.isEmpty: model.clearExplicitSelection() // Escape
         default: return false
         }
@@ -375,8 +352,8 @@ private struct FileTreeRow: View {
     let model: FileTreeModel
     let git: GitStatusModel
     let item: FileTreeModel.Item
+    @Binding var dropTargetDirectory: String?
     let sshHost: String?
-    let currentFilePath: String?
     let openFile: (String, Bool) -> Void
     let listFocused: Bool
     let focusKeyboard: () -> Void
@@ -384,10 +361,11 @@ private struct FileTreeRow: View {
     let onCommand: (FileTreeCommand) -> Void
     let refreshGitStatus: () -> Void
     let isCurrentTarget: () -> Bool
-    let makeDragProvider: (FileTreeModel.Item) -> NSItemProvider
+    let beginDrag: (FileTreeModel.Item) -> FileTreeDrag.Record?
+    let endDrag: (UUID) -> Void
     let canImportFromFinder: Bool
     let importFromFinder: ([NSItemProvider], String) -> Bool
-    let receiveInternalDrop: (NSItemProvider, String, Bool) -> Bool
+    let receiveInternalDrop: (FileTreeDrag.Record, String, Bool) -> Bool
 
     @State private var editingName = ""
     @FocusState private var fieldFocused: Bool
@@ -406,6 +384,10 @@ private struct FileTreeRow: View {
 
     private var isSelected: Bool { model.selectedPaths.contains(item.path) }
 
+    private func isDropTarget(_ path: String) -> Bool {
+        dropTargetDirectory == path
+    }
+
     private func selectForClick(componentPath: String? = nil) -> Bool {
         let modifiers = NSApp.currentEvent?.modifierFlags ?? []
         let extending = modifiers.contains(.shift)
@@ -414,9 +396,6 @@ private struct FileTreeRow: View {
         focusKeyboard()
         return extending || toggling
     }
-
-    /// Current file display does not imply tree selection or keyboard focus.
-    private var isCurrent: Bool { !item.isDirectory && item.path == currentFilePath }
 
     private var gitDecoration: GitStatusModel.FileDecoration? {
         git.fileDecoration(for: item.path, isDirectory: item.isDirectory)
@@ -444,7 +423,7 @@ private struct FileTreeRow: View {
             }
         } else if isRenaming {
             TreeRowSurface(
-                depth: item.depth, scale: fontScale, displayed: isCurrent,
+                depth: item.depth, scale: fontScale,
                 isSelected: isSelected, listActive: listFocused,
                 contextRing: hasContextRing
             ) { _, layout in
@@ -453,31 +432,69 @@ private struct FileTreeRow: View {
             }
             .overlay {
                 ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
-                                       onMenuClosed: { model.dismissContextMenu(target: item.path) },
-                                       onMenuKeyDown: handleMenuKeyDown)
+                                       onMenuClosed: { dismissContextMenu(for: item.path) },
+                                       onMenuKeyDown: handleMenuKeyDown,
+                                       isExpectedMenu: isMenuForCurrentRow)
                     .contextMenu { rowMenu(for: item) }
             }
-        } else if item.isDirectory && !item.compactComponents.isEmpty {
+        } else if item.isDirectory && !item.compactPrefix.isEmpty {
             semanticRow
                 .background {
                     ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
-                                           onMenuClosed: { model.dismissContextMenu(target: item.path) },
-                                           onMenuKeyDown: handleMenuKeyDown)
+                                           onMenuClosed: { dismissContextMenu(for: item.path) },
+                                           onMenuKeyDown: handleMenuKeyDown,
+                                           isExpectedMenu: isMenuForCurrentRow)
                 }
                 .contextMenu { rowMenu(for: item) }
-                .onDrag { makeDragProvider(item) }
         } else {
             // Local drags retain public fileURL for Finder; SSH drags publish only
             // the process-private Files type, never a Mac path for a remote file.
             semanticRow
                 .overlay {
                     ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
-                                           onMenuClosed: { model.dismissContextMenu(target: item.path) },
-                                           onMenuKeyDown: handleMenuKeyDown)
+                                           onMenuClosed: { dismissContextMenu(for: item.path) },
+                                           onMenuKeyDown: handleMenuKeyDown,
+                                           isExpectedMenu: isMenuForCurrentRow)
                         .contextMenu { rowMenu(for: item) }
                 }
-                .onDrag { makeDragProvider(item) }
+                .overlay {
+                    nativeDragSurface(for: item, into: item.isDirectory
+                        ? item.path : (item.path as NSString).deletingLastPathComponent) { event in
+                        guard isCurrentTarget() else { return }
+                        if item.isDirectory {
+                            if selectForClick() { return }
+                            Task { await model.toggle(item) }
+                        } else {
+                            if !selectForClick() { openFile(item.path, false) }
+                            if event.clickCount == 2,
+                               !event.modifierFlags.contains(.command),
+                               !event.modifierFlags.contains(.shift) {
+                                openFile(item.path, true)
+                            }
+                        }
+                    }
+                }
         }
+    }
+
+    private func nativeDragSurface(
+        for target: FileTreeModel.Item, into directory: String,
+        onClick: @escaping (NSEvent) -> Void
+    ) -> some View {
+        FileTreeNativeDragSurface(
+            onClick: onClick,
+            beginDrag: { isCurrentTarget() ? beginDrag(target) : nil },
+            endDrag: endDrag, directory: directory,
+            isCurrent: isCurrentTarget, allowsFinder: canImportFromFinder,
+            receiveInternal: receiveInternalDrop, importFinder: importFromFinder,
+            onDragOperationChanged: { operation in
+                if operation != [] {
+                    dropTargetDirectory = directory
+                } else if dropTargetDirectory == directory {
+                    dropTargetDirectory = nil
+                }
+            }
+        )
     }
 
     private func selectForContextMenu(_ target: FileTreeModel.Item) {
@@ -485,12 +502,30 @@ private struct FileTreeRow: View {
         model.selectForContextMenu(item, componentPath: target.path == item.path ? nil : target.path)
     }
 
-    private func handleMenuKeyDown(_ menu: NSMenu, _ event: NSEvent) -> Bool {
+    private func dismissContextMenu(for target: String) {
+        // AppKit closes this menu before the system File menu handles Cmd-N.
+        // Preserve its target for that same command, but not for Escape/cancel.
+        if let event = NSApp.currentEvent, event.type == .keyDown,
+           event.charactersIgnoringModifiers?.lowercased() == "n" {
+            let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            if modifiers == .command || modifiers == [.command, .option] { return }
+        }
+        model.dismissContextMenu(target: target)
+    }
+
+    private func isMenuForCurrentRow(_ menu: NSMenu) -> Bool {
         guard isCurrentTarget(), !item.isDraft,
               model.items.contains(where: { $0.path == item.path }),
-              menu.items.contains(where: {
-                  $0.accessibilityLabel() == String(localized: "Copy Relative Path", table: "Sidebar")
-              }) else { return false }
+              let target = model.contextMenuTargetPath,
+              target == item.path || item.compactComponents.contains(where: { $0.path == target })
+        else { return false }
+        return menu.items.contains {
+            $0.accessibilityLabel() == String(localized: "Copy Relative Path", table: "Sidebar")
+        }
+    }
+
+    private func handleMenuKeyDown(_ menu: NSMenu, _ event: NSEvent) -> Bool {
+        guard isMenuForCurrentRow(menu) else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         let key = event.charactersIgnoringModifiers?.lowercased()
         let title: String
@@ -511,6 +546,9 @@ private struct FileTreeRow: View {
             $0.isEnabled && $0.accessibilityLabel() == title
         }) else { return false }
         menu.performActionForItem(at: index)
+        if let target = model.contextMenuTargetPath {
+            model.dismissContextMenu(target: target)
+        }
         menu.cancelTracking()
         return true
     }
@@ -642,6 +680,7 @@ private struct FileTreeRow: View {
             TreeCompactSegment(component: component, index: index,
                 highlighted: hasKeyboardCursor && (model.selectedCompactPath ?? item.path) == component.path,
                 isContextTarget: contextMenuPath == component.path,
+                isDropTarget: isDropTarget(component.path), nativeClickOwner: true,
                 onClick: {
                     guard isCurrentTarget() else { return }
                     if selectForClick(componentPath: component.path) { return }
@@ -651,28 +690,27 @@ private struct FileTreeRow: View {
                     }
                 },
                 onContextClick: { selectForContextMenu(target) },
-                onMenuClosed: { model.dismissContextMenu(target: target.path) },
+                onMenuClosed: { dismissContextMenu(for: target.path) },
                 onMenuKeyDown: handleMenuKeyDown,
+                isExpectedMenu: isMenuForCurrentRow,
                 menuContent: { rowMenu(for: target) })
-                .onDrag { makeDragProvider(target) }
-                .onDrop(
-                    of: [FileTreeDrag.type, UTType.fileURL.identifier],
-                    delegate: FileTreeImportDrop(
-                        directory: component.path,
-                        enabled: canImportFromFinder && isCurrentTarget(),
-                        canAcceptInternal: isCurrentTarget(),
-                        importFromFinder: importFromFinder,
-                        receiveInternalDrop: receiveInternalDrop
-                    )
-                )
+                .overlay {
+                    nativeDragSurface(for: target, into: component.path) { _ in
+                        guard isCurrentTarget() else { return }
+                        if selectForClick(componentPath: component.path) { return }
+                        Task { await model.toggle(item) }
+                    }
+                }
+
         )
     }
 
     @ViewBuilder
     private var semanticRow: some View {
         if item.isDirectory {
-            TreeFolderRow(row: displayRow, scale: fontScale,
+            TreeFolderRow(row: displayRow, scale: fontScale, nativeClickOwner: true,
                           focusRing: hasKeyboardCursor, contextRing: hasContextRing,
+                          isDropTarget: item.compactPrefix.isEmpty && isDropTarget(item.path),
                           isSelected: isSelected,
                           listActive: listFocused,
                           compactSegment: { component, index in compactSegmentView(component, index: index) }) {
@@ -685,10 +723,11 @@ private struct FileTreeRow: View {
             }
         } else {
             TreeFileRow(
-                row: displayRow, scale: fontScale, displayed: isCurrent,
+                row: displayRow, scale: fontScale, nativeClickOwner: true,
                 isSelected: isSelected,
                 listActive: listFocused,
                 focusRing: hasKeyboardCursor, contextRing: hasContextRing,
+                isDropTarget: isDropTarget(item.path),
                 open: {
                     guard isCurrentTarget() else { return }
                     if !selectForClick() { openFile(item.path, false) }

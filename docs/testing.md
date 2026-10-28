@@ -84,7 +84,9 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 不使用 `-ApplePersistenceIgnoreState YES`，该参数会阻止当前系统创建初始 WindowGroup 窗口。
 已有 Bailey Dev 实例时明确失败而不终止进程，也不允许整套 XCUITest 全部跳过却返回假绿色；
 本机 GUI Runner 必须使用 Apple Development 签名而非强制 ad-hoc，否则可能被系统拒绝操作辅助功能树。
-公共启动入口在 **Bailey Dev 激活后**暂选 ABC，系统选择器的路径输入框获得焦点后再次选 ABC；
+公共启动入口把 `HOME`、`CFFIXED_USER_HOME` 和 Zsh 的 `ZDOTDIR` 都指向测试专属目录，
+避免真实终端测试加载用户的交互插件、历史命令或污染个人 Shell 配置。
+在 **Bailey Dev 激活后**暂选 ABC，系统选择器的路径输入框获得焦点后再次选 ABC；
 测试清理时恢复之前的输入法，并撤销 XCTest 临时启用的 Unicode Hex Input（若该输入法原本未启用）；
 此举不替代真实中文 IME 组词／候选测试。AppKit/XCUITest 仍争用同一桌面键盘焦点，
 要获得完全无干扰的真实 GUI 自动化须使用独立图形会话。
@@ -113,7 +115,10 @@ Dock 和键盘操作核对结果。夹具创建时即登记 XCTest 清理，失�
 Git 子进程使用当前 Xcode 或 Command Line Tools 的真实 Git 二进制，
 绕开 `/usr/bin/git` 在 XCTest 沙盒中的 `xcrun` 包装器；标准输出和错误输出分别写入一次性文件，
 避免管道反压，并用于核对真实 Git 结果。原生文件选择器在「前往文件夹」中粘贴完整路径并核对解析结果，
-保留剪贴板的全部项目和数据类型；用窗口内的 `OKButton` 标识确认、`Escape` 取消，
+需要写入剪贴板的测试须完整保留并恢复其全部项目和数据类型；
+不使用剪贴板的 Finder／SSH 拖放测试可声明 `clipboardIsReadOnly`，只核对版本号不变，
+避免读取或改写系统无法序列化的延迟剪贴板类型。
+用窗口内的 `OKButton` 标识确认、`Escape` 取消，
 不能硬编码英文 `Add`/`Open`/`Cancel` 文案。
 Files/Git 行用原绝对／仓库相对路径的 AX 标签后缀区分同名项，
 文件 Tab 以独立的 AX 路径值区分重名标题，标识符不携带长路径；
@@ -126,6 +131,7 @@ Files/Git 行用原绝对／仓库相对路径的 AX 标签后缀区分同名项
 | --- | --- | --- |
 | 冷启动、命令面板搜索／Escape、非 Files 标签中的外部文件与 Git 索引变更、从编辑器切换 Files 后真实方向键／空格焦点 | `WorkspaceSmokeUITests`、`WorkspaceFileIndexRefreshUITests`、`WorkspaceLocalFileEventsUITests`、`WorkspaceFilesUITests`、`SharedTreeUITests`、`WorkspaceDockUITests` | `FileTreeTests`（事件及共享订阅）、`ProjectFileIndexTests`、`DockWorkspaceTests`、`PanelContextTests`（模型状态与归属） |
 | 系统 Add Folder、Files 预览／打开、焦点恢复、文件去重、编辑保存到磁盘 | `WorkspaceFilesUITests`、`SharedTreeUITests` | `FileTreeTests`、`FileTabPersistenceTests`、`NativeFileTabTests` |
+| Finder 真实拖放在本机 Files 中复制、在 SSH Files 中拒绝上传，核对两端文件字节 | `WorkspaceFilesUITests`（SSH 用例需提供获授权的 `BAILEY_P4_TEST_SSH_HOST`） | `FileTreeTests`、`WindowOwnershipIntegrationTests` |
 | 大文件远距导航、文本替换、键盘撤销／重做、真实保存 | `EditorNavigationUITests` | `NativeEditorLayoutTests`、`NativeEditorCompositionTests`、`FileTabPersistenceTests` |
 | Swift 与纯文本的真实 App 像素差异；Markdown／TSX／HTML／CSS 的原生着色与正文保持 | `EditorHighlightingUITests`（Swift 实际 GUI） | `NativeSyntaxHighlightingTests`（四语言真实 TextKit）、`HighlightQueryCacheTests` |
 | Git Changes、Git Graph、Diff、键盘、暂存／忽略、原生确认及真实保存 | `WorkspaceGitUITests`、`GitChangesUITests`、`GitIgnoreEditorUITests`、`GitUncommittedUITests`、`GitDialogUITests`、`GitGraphUITests`、`GitGraphGeometryUITests`（真实 Git／index／磁盘、原生图谱／菜单／Branch／Tag Sheet） | `GitStatusModelTests`、`GitNativeDialogTests`、`GitRemoteBranchActionTests`、`GitUncommittedActionTests`、`GitIgnoreIntegrationTests`、`NativeDiffTabTests` |
