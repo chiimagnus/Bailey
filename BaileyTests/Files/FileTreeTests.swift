@@ -3059,6 +3059,19 @@ final class FileTreeTests: XCTestCase {
                       "Siblings remain unloaded until clicked")
     }
 
+    func testNativeDragRespectsModifierFilteredAppKitOperationMask() {
+        XCTAssertEqual(FileTreeNativeDragView.preferredInternalOperation(from: [.move, .copy]), .move,
+                       "Normal Files drag moves by default")
+        XCTAssertEqual(FileTreeNativeDragView.preferredInternalOperation(from: .copy), .copy,
+                       "The system filters Option drags to Copy")
+        XCTAssertEqual(FileTreeNativeDragView.preferredInternalOperation(from: .move), .move,
+                       "An explicit Move mask must move")
+        XCTAssertEqual(FileTreeNativeDragView.preferredInternalOperation(from: []), [],
+                       "An invalid drag must be rejected")
+        XCTAssertEqual(FileTreeNativeDragView.preferredInternalOperation(from: .link), [],
+                       "An unsupported Option-Command Link must not modify files")
+    }
+
     func testTreeRowActiveInactiveSelectionAndKeyboardFocusRenderIndependently() throws {
         func bitmap(
             isSelected: Bool, listActive: Bool, focusRing: Bool,
