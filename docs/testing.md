@@ -84,7 +84,9 @@ make test:ui ONLY_TESTING=BaileyUITests/WorkspaceSmokeUITests  # 本地只跑指
 不使用 `-ApplePersistenceIgnoreState YES`，该参数会阻止当前系统创建初始 WindowGroup 窗口。
 已有 Bailey Dev 实例时明确失败而不终止进程，也不允许整套 XCUITest 全部跳过却返回假绿色；
 本机 GUI Runner 必须使用 Apple Development 签名而非强制 ad-hoc，否则可能被系统拒绝操作辅助功能树。
-公共启动入口在 **Bailey Dev 激活后**暂选 ABC，系统选择器的路径输入框获得焦点后再次选 ABC；
+公共启动入口把 `HOME`、`CFFIXED_USER_HOME` 和 Zsh 的 `ZDOTDIR` 都指向测试专属目录，
+避免真实终端测试加载用户的交互插件、历史命令或污染个人 Shell 配置。
+在 **Bailey Dev 激活后**暂选 ABC，系统选择器的路径输入框获得焦点后再次选 ABC；
 测试清理时恢复之前的输入法，并撤销 XCTest 临时启用的 Unicode Hex Input（若该输入法原本未启用）；
 此举不替代真实中文 IME 组词／候选测试。AppKit/XCUITest 仍争用同一桌面键盘焦点，
 要获得完全无干扰的真实 GUI 自动化须使用独立图形会话。

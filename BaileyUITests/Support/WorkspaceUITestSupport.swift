@@ -67,6 +67,7 @@ enum WorkspaceUITestSupport {
         }
         app.launchEnvironment["CFFIXED_USER_HOME"] = home.path
         app.launchEnvironment["HOME"] = home.path
+        app.launchEnvironment["ZDOTDIR"] = home.path
         session = Session(app: app, home: home, language: language,
                           usesFixtureHome: configurationHome != nil,
                           owner: owner, project: project)

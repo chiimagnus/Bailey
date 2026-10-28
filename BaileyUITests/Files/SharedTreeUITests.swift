@@ -156,24 +156,9 @@ final class SharedTreeUITests: XCTestCase {
         let newFile = fixture.root.appendingPathComponent("inside/context-created.txt")
         let newFolder = fixture.root.appendingPathComponent("inside/context-folder")
 
-        let previousInput = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
-        defer { XCTAssertEqual(TISSelectInputSource(previousInput), noErr) }
-        if let ascii = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue() {
-            XCTAssertEqual(TISSelectInputSource(ascii), noErr)
-        }
-
-        let app = XCUIApplication(bundleIdentifier: "chiimagnus.bailey.dev")
-        app.launchArguments = ["--isolated-ui-test", "-AppleLanguages", "(en)"]
-        app.launchEnvironment["BAILEY_UI_TEST_RUN_ID"] = UUID().uuidString
-        app.launchEnvironment["BAILEY_UI_TEST_PROJECT"] = fixture.root.path
-        app.launchEnvironment["HOME"] = home.root.path
-        app.launchEnvironment["CFFIXED_USER_HOME"] = home.root.path
-        app.launch()
-        defer { if app.state != .notRunning { app.terminate() } }
-        app.activate()
-        if !app.windows.firstMatch.waitForExistence(timeout: 1) {
-            app.typeKey("n", modifierFlags: [.command, .shift])
-        }
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: home.root, project: fixture.root
+        )
         let window = app.windows.firstMatch
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 15))
