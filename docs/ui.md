@@ -71,6 +71,8 @@ Files 右键只建立临时 Context Target，不改变当前 Focus 或 Selection
 目标在已选集合内则菜单操作整组，在集合外则只操作本次右键目标。
 菜单期间目标仅显示细边框；Escape 取消后旧选区与游标保持不变。
 菜单结束不抢 Terminal／Editor 的原生输入焦点。
+菜单期间 ⌘N／⌥⌘N 以右键文件夹为目标，转交系统 File 菜单前保留该目标，
+命令接收后清除；取消菜单后仍按普通选区／焦点确定新建目录。
 ↑／↓ 只移动 Focus，不改变 Selection 与当前展示文件；
 Space 明确浏览文件时同步选择游标文件，不夺走 Files 键盘焦点；
 Esc 在普通文件树中清除 Selection、保留 Focus。普通键盘 Focus 可以叠加 Selection；

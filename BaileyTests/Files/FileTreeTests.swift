@@ -1751,12 +1751,16 @@ final class FileTreeTests: XCTestCase {
                        "Context-clicking one of the selected rows keeps the selected set")
 
         tree.selectForContextMenu(rows[1])
+        XCTAssertEqual(tree.contextDirectoryPath, root.path,
+                       "Main File commands must use the parent of a right-clicked file")
         XCTAssertEqual(tree.selectedPath, rows[1].path)
         XCTAssertEqual(tree.selectedPaths, [rows[0].path, rows[2].path],
                        "A context click only changes the temporary menu target")
         XCTAssertEqual(tree.contextSelection(for: rows[1]), [rows[1].path],
                        "An unselected context target is still acted on alone")
         tree.dismissContextMenu(target: rows[1].path)
+        XCTAssertNil(tree.contextDirectoryPath,
+                     "Canceling the menu must restore ordinary File commands")
         XCTAssertEqual(tree.selectedOperationPaths, [rows[0].path, rows[2].path],
                        "Esc must leave the original explicit selection and Edit target intact")
     }

@@ -658,8 +658,11 @@ final class WorkspaceWindowModel {
         let revision = context.connectionRevision
         guard selectedProjectID == project.id, project.matchesPanelTarget(context.identity) else { return }
         let directory: String
-        if project.dock.activeGroup?.selected == .files,
-           project.fileTree.matchesIndexTarget(root: root, context: context) {
+        if project.fileTree.matchesIndexTarget(root: root, context: context),
+           let contextDirectory = project.fileTree.contextDirectoryPath {
+            directory = contextDirectory
+        } else if project.dock.activeGroup?.selected == .files,
+                  project.fileTree.matchesIndexTarget(root: root, context: context) {
             directory = project.fileTree.selectedDirectoryPath ?? root
         } else if case .file(let file)? = project.focusedContent,
                   file.workspaceIdentity == context.identity.workspace {
@@ -667,6 +670,9 @@ final class WorkspaceWindowModel {
             directory = LocalPathScope.contains(parent, in: root) ? parent : root
         } else {
             directory = root
+        }
+        if let menuTarget = project.fileTree.contextMenuTargetPath {
+            project.fileTree.dismissContextMenu(target: menuTarget)
         }
         showPanel(.files)
         guard await project.fileTree.sync(

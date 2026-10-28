@@ -432,7 +432,7 @@ private struct FileTreeRow: View {
             }
             .overlay {
                 ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
-                                       onMenuClosed: { model.dismissContextMenu(target: item.path) },
+                                       onMenuClosed: { dismissContextMenu(for: item.path) },
                                        onMenuKeyDown: handleMenuKeyDown,
                                        isExpectedMenu: isMenuForCurrentRow)
                     .contextMenu { rowMenu(for: item) }
@@ -441,7 +441,7 @@ private struct FileTreeRow: View {
             semanticRow
                 .background {
                     ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
-                                           onMenuClosed: { model.dismissContextMenu(target: item.path) },
+                                           onMenuClosed: { dismissContextMenu(for: item.path) },
                                            onMenuKeyDown: handleMenuKeyDown,
                                            isExpectedMenu: isMenuForCurrentRow)
                 }
@@ -452,7 +452,7 @@ private struct FileTreeRow: View {
             semanticRow
                 .overlay {
                     ContextMenuClickTarget(onContextClick: { selectForContextMenu(item) },
-                                           onMenuClosed: { model.dismissContextMenu(target: item.path) },
+                                           onMenuClosed: { dismissContextMenu(for: item.path) },
                                            onMenuKeyDown: handleMenuKeyDown,
                                            isExpectedMenu: isMenuForCurrentRow)
                         .contextMenu { rowMenu(for: item) }
@@ -502,6 +502,17 @@ private struct FileTreeRow: View {
         model.selectForContextMenu(item, componentPath: target.path == item.path ? nil : target.path)
     }
 
+    private func dismissContextMenu(for target: String) {
+        // AppKit closes this menu before the system File menu handles Cmd-N.
+        // Preserve its target for that same command, but not for Escape/cancel.
+        if let event = NSApp.currentEvent, event.type == .keyDown,
+           event.charactersIgnoringModifiers?.lowercased() == "n" {
+            let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            if modifiers == .command || modifiers == [.command, .option] { return }
+        }
+        model.dismissContextMenu(target: target)
+    }
+
     private func isMenuForCurrentRow(_ menu: NSMenu) -> Bool {
         guard isCurrentTarget(), !item.isDraft,
               model.items.contains(where: { $0.path == item.path }),
@@ -535,6 +546,9 @@ private struct FileTreeRow: View {
             $0.isEnabled && $0.accessibilityLabel() == title
         }) else { return false }
         menu.performActionForItem(at: index)
+        if let target = model.contextMenuTargetPath {
+            model.dismissContextMenu(target: target)
+        }
         menu.cancelTracking()
         return true
     }
@@ -676,7 +690,7 @@ private struct FileTreeRow: View {
                     }
                 },
                 onContextClick: { selectForContextMenu(target) },
-                onMenuClosed: { model.dismissContextMenu(target: target.path) },
+                onMenuClosed: { dismissContextMenu(for: target.path) },
                 onMenuKeyDown: handleMenuKeyDown,
                 isExpectedMenu: isMenuForCurrentRow,
                 menuContent: { rowMenu(for: target) })
