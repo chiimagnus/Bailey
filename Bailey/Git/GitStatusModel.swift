@@ -66,6 +66,18 @@ final class GitStatusModel {
         }
     }
 
+    /// Per-project SCM navigation survives a temporarily hidden Git panel.
+    /// Section distinguishes the staged and worktree sides of the same path.
+    nonisolated struct ChangeSelection: Hashable, Sendable {
+        let scope: String
+        let repository: String
+        let section: String
+        let path: String
+    }
+
+    var changeCursor: ChangeSelection?
+    var changeSelection: ChangeSelection?
+
     typealias FileDecoration = TreeDisplayModel.Status
 
     nonisolated enum CommitAction: CaseIterable, Sendable {

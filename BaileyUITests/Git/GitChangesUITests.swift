@@ -31,6 +31,143 @@ final class GitChangesUITests: XCTestCase {
                        Data(" M alpha.txt\n M beta.txt\n".utf8))
     }
 
+    func testSwitchingActiveDiffTabsRevealsOnlyMatchingGitChange() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("reveal-one.txt", text: "one before\n")
+        let second = try fixture.file("reveal-two.txt", text: "two before\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        try "one after\n".write(to: first, atomically: true, encoding: .utf8)
+        try "two after\n".write(to: second, atomically: true, encoding: .utf8)
+
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let window = app.windows.firstMatch
+        let firstRow = WorkspaceUITestSupport.fileRow(first, in: window, relativeTo: fixture.root)
+        let secondRow = WorkspaceUITestSupport.fileRow(second, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 25))
+        XCTAssertTrue(secondRow.waitForExistence(timeout: 25))
+        firstRow.click()
+        secondRow.click()
+
+        let firstTab = window.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@", "reveal-one.txt"
+        )).firstMatch
+        let secondTab = window.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@", "reveal-two.txt"
+        )).firstMatch
+        XCTAssertTrue(firstTab.waitForExistence(timeout: 15))
+        XCTAssertTrue(secondTab.waitForExistence(timeout: 15))
+
+        for (tab, selected, other) in [
+            (firstTab, firstRow, secondRow),
+            (secondTab, secondRow, firstRow),
+            (firstTab, firstRow, secondRow)
+        ] {
+            tab.click()
+            let expected = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "selected == true"), object: selected
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [expected], timeout: 8), .completed,
+                           "The selected Git row must follow the explicitly active Diff tab")
+            XCTAssertFalse(other.isSelected,
+                           "The former Diff must not retain an independent SCM selection")
+        }
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]),
+                       Data(" M reveal-one.txt\n M reveal-two.txt\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: first), Data("one after\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("two after\n".utf8))
+    }
+
+    func testReturningToGitAfterOpeningOrdinaryFileRevealsOnlyMatchingChange() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("ordinary-match.txt", text: "first original\n")
+        let second = try fixture.file("ordinary-other.txt", text: "second original\n")
+        let unchanged = try fixture.file("ordinary-clean.txt", text: "untouched\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        try "first edited\n".write(to: first, atomically: true, encoding: .utf8)
+        try "second edited\n".write(to: second, atomically: true, encoding: .utf8)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let window = app.windows.firstMatch
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let secondChange = WorkspaceUITestSupport.fileRow(second, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(secondChange.waitForExistence(timeout: 20))
+        secondChange.click()
+
+        app.typeKey("e", modifierFlags: [.command, .shift])
+        let firstFile = WorkspaceUITestSupport.fileRow(first, in: window)
+        XCTAssertTrue(firstFile.waitForExistence(timeout: 15))
+        firstFile.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(first, in: window).waitForExistence(timeout: 15))
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let firstChange = WorkspaceUITestSupport.fileRow(first, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(firstChange.waitForExistence(timeout: 15))
+        let revealed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "selected == true"), object: firstChange
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [revealed], timeout: 8), .completed,
+                       "Returning to Git must reveal the last explicitly opened ordinary file")
+        XCTAssertFalse(secondChange.isSelected)
+
+        app.typeKey("e", modifierFlags: [.command, .shift])
+        let cleanFile = WorkspaceUITestSupport.fileRow(unchanged, in: window)
+        XCTAssertTrue(cleanFile.waitForExistence(timeout: 15))
+        cleanFile.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(unchanged, in: window).waitForExistence(timeout: 15))
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        XCTAssertTrue(firstChange.isSelected,
+                      "An unchanged file must not clear the last valid Git selection")
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]),
+                       Data(" M ordinary-match.txt\n M ordinary-other.txt\n".utf8))
+    }
+
+    func testActiveStagedAndWorktreeDiffTabsChooseDifferentRowsForOnePath() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("same-path.txt", text: "HEAD\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        try "INDEX\n".write(to: file, atomically: true, encoding: .utf8)
+        try fixture.git(["add", "--", "same-path.txt"])
+        try "WORKTREE\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let window = app.windows.firstMatch
+        let rows = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.file")
+            .matching(NSPredicate(format: "label ENDSWITH %@", ", same-path.txt"))
+        XCTAssertTrue(rows.element(boundBy: 1).waitForExistence(timeout: 25))
+        rows.element(boundBy: 0).click()
+        rows.element(boundBy: 1).click()
+
+        let stagedTab = window.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@ AND label CONTAINS %@", "same-path.txt", "Staged"
+        )).firstMatch
+        let workingTab = window.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@ AND NOT label CONTAINS %@", "same-path.txt", "Staged"
+        )).firstMatch
+        XCTAssertTrue(stagedTab.waitForExistence(timeout: 15))
+        XCTAssertTrue(workingTab.waitForExistence(timeout: 15))
+
+        for (tab, selected, other) in [
+            (stagedTab, rows.element(boundBy: 0), rows.element(boundBy: 1)),
+            (workingTab, rows.element(boundBy: 1), rows.element(boundBy: 0))
+        ] {
+            tab.click()
+            let expected = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "selected == true"), object: selected
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [expected], timeout: 8), .completed)
+            XCTAssertFalse(other.isSelected, "The other side of the same path must not be selected")
+        }
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["show", ":same-path.txt"]), Data("INDEX\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: file), Data("WORKTREE\n".utf8))
+    }
+
     func testStagedAndUnstagedRowsPreviewTheirDistinctGitBaselines() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("index-side.txt", text: "HEAD contents\n")

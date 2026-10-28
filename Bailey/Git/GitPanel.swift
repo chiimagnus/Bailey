@@ -77,8 +77,14 @@ struct GitPanel: View {
     @State private var graphKeyboardOwner = TreeKeyboardOwner()
     @State private var lastKeyboardRegion: KeyboardRegion = .changes
     @State private var keyboardFocused = false
-    @State private var selectedChange: ChangeSelection?
-    @State private var explicitlySelectedChange: ChangeSelection?
+    private var selectedChange: ChangeSelection? {
+        get { model.changeCursor }
+        nonmutating set { model.changeCursor = newValue }
+    }
+    private var explicitlySelectedChange: ChangeSelection? {
+        get { model.changeSelection }
+        nonmutating set { model.changeSelection = newValue }
+    }
     @State private var contextChange: ChangeSelection?
     @State private var waitingForChanges = false
     @Environment(\.controlActiveState) private var controlActiveState
@@ -88,12 +94,7 @@ struct GitPanel: View {
 
     private enum KeyboardRegion { case changes, graph }
 
-    private struct ChangeSelection: Hashable {
-        let scope: String
-        let repository: String
-        let section: GitEntryRow.Kind
-        let path: String
-    }
+    private typealias ChangeSelection = GitStatusModel.ChangeSelection
 
     private struct VisibleChange {
         let kind: GitEntryRow.Kind
@@ -109,7 +110,7 @@ struct GitPanel: View {
 
     private func selection(for row: VisibleChange) -> ChangeSelection {
         ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
-                        section: row.kind, path: row.row.path)
+                        section: row.kind.rawValue, path: row.row.path)
     }
 
     private var hasCurrentPanelTarget: Bool {
@@ -122,12 +123,6 @@ struct GitPanel: View {
         guard let project, case .diff(let diff)? = project.selectedTab?.content,
               diff.workspaceIdentity == project.workspaceIdentity else { return nil }
         return diff
-    }
-
-    private func isDisplayedChange(_ entry: GitStatusModel.Entry, kind: GitEntryRow.Kind) -> Bool {
-        guard let diff = displayedDiff else { return false }
-        return diff.repoRoot == model.repoRoot && diff.path == entry.path
-            && diff.source == (kind == .staged ? .staged : .worktree)
     }
 
     var body: some View {
@@ -1927,13 +1922,26 @@ struct GitPanel: View {
                                  },
                                  onAttachedToWindow: focusGitChanges)
             }
-            .onAppear { focusGitChanges() }
+            .onAppear {
+                focusGitChanges()
+                revealActiveChange()
+            }
+            .onChange(of: project?.dock.activeGroup?.selected) { _, _ in
+                revealActiveChange()
+            }
             .onChange(of: isGitActive) { _, active in
-                if active { focusGitChanges() }
-                else { waitingForChanges = false }
+                if active {
+                    focusGitChanges()
+                    revealActiveChange()
+                } else {
+                    waitingForChanges = false
+                }
             }
             .onChange(of: hasCurrentPanelTarget) { _, current in
-                if current { focusGitChanges() }
+                if current {
+                    focusGitChanges()
+                    revealActiveChange()
+                }
             }
             .onChange(of: model.repositoryIdentity) { _, _ in
                 selectedChange = nil
@@ -1968,6 +1976,7 @@ struct GitPanel: View {
                 if let contextChange, !choices.contains(contextChange) {
                     self.contextChange = nil
                 }
+                if !isGitActive { revealActiveChange() }
             }
             .onChange(of: selectedChange) { _, key in
                 if let key, keyboardFocused { proxy.scrollTo(key) }
@@ -2039,6 +2048,47 @@ struct GitPanel: View {
         } else if !rows.isEmpty {
             keyboardOwner.focus()
         }
+    }
+
+    /// Dock activation changes the selected SCM resource, not its native keyboard owner.
+    /// A Git preview updates its own selection in browseGitChange; background previews
+    /// must not masquerade as an active editor change.
+    private func revealActiveChange() {
+        guard hasCurrentPanelTarget, model.canUseCurrentStatus, let project,
+              project.dock.group(containing: .git)?.selected == .git
+        else { return }
+        let content = isGitActive ? project.selectedTab?.content : project.focusedContent
+        let change: VisibleChange?
+        switch content {
+        case .diff(let diff):
+            guard diff.workspaceIdentity == project.workspaceIdentity,
+                  diff.repoRoot == model.repoRoot else { return }
+            let kind: GitEntryRow.Kind
+            switch diff.source {
+            case .staged: kind = .staged
+            case .worktree: kind = .unstaged
+            case .commit, .revision, .revisionWorktree: return
+            }
+            change = navigableChanges.first {
+                ($0.kind == kind || (kind == .unstaged && $0.kind == .merge))
+                    && $0.entry?.path == diff.path
+            }
+        case .file(let file):
+            guard file.workspaceIdentity == project.workspaceIdentity else { return }
+            let matching = navigableChanges.filter {
+                guard let entry = $0.entry else { return false }
+                return model.absolutePath(for: entry) == file.path
+            }
+            change = matching.first(where: { $0.kind == .unstaged })
+                ?? matching.first(where: { $0.kind == .merge })
+                ?? matching.first(where: { $0.kind == .staged })
+        case .session, .browser, .none:
+            return
+        }
+        guard let change, let entry = change.entry, model.isCurrent(entry) else { return }
+        let key = selection(for: change)
+        if selectedChange != key { selectedChange = key }
+        if explicitlySelectedChange != key { explicitlySelectedChange = key }
     }
 
     private func focusContextChange(_ key: ChangeSelection) {
@@ -2139,14 +2189,14 @@ struct GitPanel: View {
         let unstageTrigger = OperationTrigger.entry(path: item.path, operation: .unstage)
         let discardTrigger = OperationTrigger.entry(path: item.path, operation: .discard)
         let key = ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
-                                  section: kind, path: item.path)
+                                  section: kind.rawValue, path: item.path)
         let focused = selectedChange == key && keyboardFocused && isGitActive
             && controlActiveState == .key
         return TreeFolderRow(
             row: item, scale: panelFontScale,
             focusRing: focused, contextRing: item.compactComponents.contains {
                 contextChange == ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
-                                               section: kind, path: $0.path)
+                                               section: kind.rawValue, path: $0.path)
             },
             isSelected: explicitlySelectedChange == key,
             listActive: keyboardFocused && isGitActive && controlActiveState == .key,
@@ -2189,9 +2239,9 @@ struct GitPanel: View {
         row: TreeDisplayModel.Row, entries: [GitStatusModel.Entry], kind: GitEntryRow.Kind
     ) -> AnyView {
         let cursor = ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
-                                     section: kind, path: row.path)
+                                     section: kind.rawValue, path: row.path)
         let context = ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
-                                      section: kind, path: component.path)
+                                      section: kind.rawValue, path: component.path)
         return AnyView(TreeCompactSegment(component: component, index: index,
             isContextTarget: contextChange == context,
             onClick: {
@@ -2264,13 +2314,12 @@ struct GitPanel: View {
             status: .init(entryStatus(entry, kind: kind))
         )
         let key = ChangeSelection(scope: model.currentScope, repository: model.repoRoot,
-                                  section: kind, path: entry.path)
+                                  section: kind.rawValue, path: entry.path)
         return GitEntryRow(
             entry: entry,
             displayRow: presentation,
             kind: kind,
             showDirectory: showDirectory,
-            displayed: isDisplayedChange(entry, kind: kind),
             isSelected: explicitlySelectedChange == key,
             listActive: keyboardFocused && isGitActive && controlActiveState == .key,
             focusRing: selectedChange == key && keyboardFocused && isGitActive
@@ -2773,7 +2822,6 @@ private struct GitEntryRow: View {
     let displayRow: TreeDisplayModel.Row
     let kind: Kind
     let showDirectory: Bool
-    let displayed: Bool
     let isSelected: Bool
     let listActive: Bool
     let focusRing: Bool
@@ -2805,7 +2853,7 @@ private struct GitEntryRow: View {
             row: displayRow,
             scale: fontScale, iconPath: absolutePath,
             directory: showDirectory ? entry.directory : nil,
-            displayed: displayed, isSelected: isSelected,
+            isSelected: isSelected,
             listActive: listActive,
             focusRing: focusRing, contextRing: contextRing,
             accessibilityHint: kind == .merge
