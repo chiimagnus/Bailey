@@ -52,7 +52,6 @@ final class FileTreeNativeDragView: NSView, NSDraggingSource {
     var importFinder: (([NSItemProvider], String) -> Bool)?
     var onDragOperationChanged: ((NSDragOperation) -> Void)?
     private(set) var dragRecord: FileTreeDrag.Record?
-    private var startedAsCopy = false
     private var acceptedDropOperation: NSDragOperation = []
     private var mouseDownEvent: NSEvent?
 
@@ -94,13 +93,10 @@ final class FileTreeNativeDragView: NSView, NSDraggingSource {
               let record = beginDrag?() else { return }
         mouseDownEvent = nil
         dragRecord = record
-        startedAsCopy = down.modifierFlags.contains(.option)
-            || event.modifierFlags.contains(.option)
         let items = Self.dragItems(record: record, local: allowsFinder)
         guard !items.isEmpty else {
             endDrag?(record.nonce)
             dragRecord = nil
-            startedAsCopy = false
             return
         }
         let session = beginDraggingSession(with: items, event: event, source: self)
@@ -131,16 +127,13 @@ final class FileTreeNativeDragView: NSView, NSDraggingSource {
 
     func draggingSession(_ session: NSDraggingSession,
                          sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        context == .withinApplication
-            ? (startedAsCopy ? .copy : [.copy, .move])
-            : (allowsFinder ? .copy : [])
+        context == .withinApplication ? [.copy, .move] : (allowsFinder ? .copy : [])
     }
 
     func draggingSession(_ session: NSDraggingSession,
                          endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         if let record = dragRecord { endDrag?(record.nonce) }
         dragRecord = nil
-        startedAsCopy = false
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -202,10 +195,7 @@ final class FileTreeNativeDragView: NSView, NSDraggingSource {
         guard isCurrent(), !directory.isEmpty else { return [] }
         if let source = sender.draggingSource as? FileTreeNativeDragView {
             guard source.window === window, source.dragRecord != nil else { return [] }
-            let allowed = sender.draggingSourceOperationMask
-            if allowed == .copy { source.startedAsCopy = true }
-            if source.startedAsCopy { return allowed.contains(.copy) ? .copy : [] }
-            return Self.preferredInternalOperation(from: allowed)
+            return Self.preferredInternalOperation(from: sender.draggingSourceOperationMask)
         }
         guard allowsFinder,
               sender.draggingPasteboard.canReadObject(
