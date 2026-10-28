@@ -1048,6 +1048,12 @@ final class WorkspaceFilesUITests: XCTestCase {
               !host.contains(where: { $0.isWhitespace || $0.isNewline }),
               ProcessInfo.processInfo.environment["BAILEY_P2_EXTERNAL_DISCONNECT"] == "1"
         else { throw XCTSkip("Requires a test-only Windows SSH host and Dev-master controller") }
+        let originalClipboard = try WorkspaceUITestSupport.clipboardItems()
+        defer {
+            let clipboard = NSPasteboard.general
+            clipboard.clearContents()
+            if !originalClipboard.isEmpty { XCTAssertTrue(clipboard.writeObjects(originalClipboard)) }
+        }
         let remoteRoot = try runSSH(
             host: host, command: "mktemp -d /tmp/bailey-p2-ui-XXXXXX"
         ).trimmingCharacters(in: .newlines)

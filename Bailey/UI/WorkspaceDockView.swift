@@ -513,8 +513,8 @@ struct DockTabGroupView: View {
                 .padding(.trailing, 2)
             }
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-            .frame(maxWidth: maxWidth, alignment: .leading)
-            .fixedSize(horizontal: maxWidth != nil, vertical: false)
+            .frame(width: maxWidth, alignment: .leading)
+            .clipped()
             .onChange(of: group.selected) { _, selected in
                 if let selected { scrollProxy.scrollTo(selected) }
             }

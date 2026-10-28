@@ -78,14 +78,16 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertTrue(files.waitForExistence(timeout: 15))
         XCTAssertTrue(git.waitForExistence(timeout: 15))
         git.click()
-        if !files.isHittable {
-            let strip = window.scrollViews.containing(
-                .button, identifier: "bailey.dock.git"
-            ).firstMatch
-            XCTAssertTrue(strip.waitForExistence(timeout: 5))
-            strip.swipeRight()
-        }
+        let strip = window.scrollViews.containing(
+            .button, identifier: "bailey.dock.git"
+        ).firstMatch
+        XCTAssertTrue(strip.waitForExistence(timeout: 5))
+        XCTAssertLessThan(strip.frame.width, 130,
+                          "The narrow Dock tab strip must not overflow its group's viewport")
+        strip.swipeRight()
         XCTAssertTrue(files.isHittable, "The Files tab must be reachable by horizontal scrolling")
+        XCTAssertTrue(strip.frame.contains(CGPoint(x: files.frame.midX, y: files.frame.midY)),
+                      "The right-clicked Files tab must be inside the actual tab-strip viewport")
         files.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
         XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
             $0.menuItems["Close Panel"].exists
