@@ -55,8 +55,9 @@ Makefile 校验版本、凭据和输出路径，构建 Release，通过 `ditto` 
    将 App 的 Debug／Release `MARKETING_VERSION` 同步为待发布的 `X.Y.Z`。
 2. 在获准发布后创建并推送 `vX.Y.Z` 标签。
    标签必须指向 `main` 中的提交，不能借文档或本地提交任务擅自推送。
-3. [Release workflow](../.github/workflows/release.yml) 核对标签提交、版本一致性及现有 Releases，
-   拒绝重复或倒退版本，重新执行测试，再导入临时签名身份。
+3. [Release workflow](../.github/workflows/release.yml) 使用与 CI 一致的 Xcode 27 环境，
+   核对标签提交、版本一致性及现有 Releases，拒绝重复或倒退版本，
+   重新执行测试，再导入临时签名身份。
 4. 使用 `make package` 构建和复验唯一发布包，创建对应 GitHub Release；
    构建号来自 workflow 运行编号，最后清理临时凭据。
 
