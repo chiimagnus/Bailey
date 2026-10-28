@@ -146,6 +146,258 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), Data("after\n".utf8))
     }
 
+    func testTwoCommitComparisonReadsLiteralRenameDeletionAndAdditionBytes() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Compare-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func git(_ args: [String]) throws -> String {
+            let result = GitCommandExecution.run(args, in: root.path, timeout: 15)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = try git(["init", "-q", "-b", "main"])
+        _ = try git(["config", "user.name", "Git Compare"])
+        _ = try git(["config", "user.email", "compare@invalid"])
+        _ = try git(["config", "commit.gpgsign", "false"])
+        try Data("renamed unchanged bytes\n".utf8).write(to: root.appendingPathComponent("old name.txt"))
+        try Data("deleted content\n".utf8).write(to: root.appendingPathComponent("deleted.txt"))
+        _ = try git(["add", "--", "."])
+        _ = try git(["commit", "-qm", "first comparison endpoint"])
+        let older = try git(["rev-parse", "HEAD"])
+        _ = try git(["mv", "--", "old name.txt", "new name.txt"])
+        _ = try git(["rm", "--", "deleted.txt"])
+        try Data("added content\n".utf8).write(to: root.appendingPathComponent("added.txt"))
+        _ = try git(["add", "--", "added.txt"])
+        _ = try git(["commit", "-qm", "second comparison endpoint"])
+        let newer = try git(["rev-parse", "HEAD"])
+        let model = GitStatusModel()
+        model.sync(root: root.path)
+        try await wait { model.canUseCurrentHistory
+            && model.recentCommits.contains(where: { $0.hash == older })
+            && model.recentCommits.contains(where: { $0.hash == newer }) }
+        let compared = await model.compareCommits(from: older, to: newer)
+        guard case .loaded(let files) = compared else {
+            return XCTFail("The real two-endpoint Git diff must load: \(compared)")
+        }
+        XCTAssertEqual(files.count, 3)
+        XCTAssertTrue(files.contains(where: {
+            $0.status == "R" && $0.originalPath == "old name.txt" && $0.path == "new name.txt"
+        }))
+        XCTAssertTrue(files.contains(where: { $0.status == "A" && $0.path == "added.txt" }))
+        XCTAssertTrue(files.contains(where: { $0.status == "D" && $0.path == "deleted.txt" }))
+        for file in files {
+            let preview = DiffTab(repoRoot: root.path, path: file.path,
+                source: .commit(hash: newer, parent: older, status: String(file.status)),
+                untracked: false, origPath: file.originalPath,
+                backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+            try await wait { !preview.isLoading }
+            XCTAssertNil(preview.error, "Diff of \(file.path) must not silently treat invalid blobs as empty")
+            switch file.status {
+            case "R":
+                XCTAssertEqual(preview.oldContent, "renamed unchanged bytes\n")
+                XCTAssertEqual(preview.newContent, "renamed unchanged bytes\n")
+            case "A":
+                XCTAssertEqual(preview.oldContent, "")
+                XCTAssertEqual(preview.newContent, "added content\n")
+            case "D":
+                XCTAssertEqual(preview.oldContent, "deleted content\n")
+                XCTAssertEqual(preview.newContent, "")
+            default: XCTFail("Unexpected comparison status")
+            }
+        }
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), newer)
+        XCTAssertTrue(try git(["status", "--porcelain=v1"]).isEmpty)
+        guard case .failed = await model.compareCommits(from: "not-an-oid", to: newer) else {
+            return XCTFail("Invalid hash must never be passed to Git")
+        }
+        guard case .failed = await model.compareCommits(from: older, to: older) else {
+            return XCTFail("Equal endpoints have no two-commit comparison")
+        }
+    }
+
+    func testSHA256CommitComparisonPreservesBothFullObjectIDsAndFileBytes() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Compare-SHA256-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func git(_ args: [String]) throws -> String {
+            let result = GitCommandExecution.run(args, in: root.path, timeout: 15)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = try git(["init", "-q", "--object-format=sha256", "-b", "main"])
+        _ = try git(["config", "user.name", "SHA256 Compare"])
+        _ = try git(["config", "user.email", "sha256-compare@invalid"])
+        _ = try git(["config", "commit.gpgsign", "false"])
+        let file = root.appendingPathComponent("sha256-file.txt")
+        try Data("first sha256 bytes\n".utf8).write(to: file)
+        _ = try git(["add", "."])
+        _ = try git(["commit", "-qm", "sha256 first"])
+        let older = try git(["rev-parse", "HEAD"])
+        try Data("second sha256 bytes\n".utf8).write(to: file)
+        _ = try git(["commit", "-qam", "sha256 second"])
+        let newer = try git(["rev-parse", "HEAD"])
+        XCTAssertEqual(older.count, 64)
+        XCTAssertEqual(newer.count, 64)
+        let model = GitStatusModel()
+        model.sync(root: root.path)
+        try await wait { model.canUseCurrentHistory
+            && model.recentCommits.contains(where: { $0.hash == older }) }
+        let result = await model.compareCommits(from: older, to: newer)
+        guard case .loaded(let files) = result else {
+            return XCTFail("SHA256 commit endpoints must resolve: \(result)")
+        }
+        XCTAssertEqual(files.map(\.path), ["sha256-file.txt"])
+        let fileChange = try XCTUnwrap(files.first)
+        let diff = DiffTab(repoRoot: root.path, path: fileChange.path,
+            source: .commit(hash: newer, parent: older, status: String(fileChange.status)),
+            untracked: false, origPath: fileChange.originalPath,
+            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await wait { !diff.isLoading }
+        XCTAssertNil(diff.error)
+        XCTAssertEqual(diff.oldContent, "first sha256 bytes\n")
+        XCTAssertEqual(diff.newContent, "second sha256 bytes\n")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), newer)
+        XCTAssertTrue(try git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
+    func testRemoteComparisonRejectsStaleConnectionBeforePublishingImmutableDiff() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Compare-SSH-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func git(_ args: [String]) -> String {
+            let result = GitCommandExecution.run(args, in: root.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = git(["init", "-q", "-b", "main"])
+        _ = git(["config", "user.name", "Remote Compare"])
+        _ = git(["config", "user.email", "remote-compare@invalid"])
+        _ = git(["config", "commit.gpgsign", "false"])
+        let file = root.appendingPathComponent("remote-compare.txt")
+        try Data("earlier\n".utf8).write(to: file)
+        _ = git(["add", "."])
+        _ = git(["commit", "-qm", "remote older"])
+        let older = git(["rev-parse", "HEAD"])
+        try Data("later\n".utf8).write(to: file)
+        _ = git(["commit", "-qam", "remote newer"])
+        let newer = git(["rev-parse", "HEAD"])
+        let originalChannel = DiscardRemoteWorkspaceFixture()
+        let nextChannel = DiscardRemoteWorkspaceFixture()
+        defer { Task { await originalChannel.releaseGitRequest() } }
+        let model = GitStatusModel()
+        model.sync(root: root.path, backend: originalChannel, scope: "ssh:fixture")
+        try await wait { model.canUseCurrentHistory && !model.isRefreshing
+            && model.recentCommits.contains(where: { $0.hash == older }) }
+        await originalChannel.suspendNextGitRequest()
+        let pending = Task { await model.compareCommits(from: older, to: newer) }
+        let deadline = Date().addingTimeInterval(8)
+        while await !originalChannel.awaitingGit, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let wasRemoteRequestSuspended = await originalChannel.awaitingGit
+        XCTAssertTrue(wasRemoteRequestSuspended,
+                      "Comparison should use the remote backend, not a local fallback")
+        model.sync(root: root.path, backend: nextChannel, scope: "ssh:fixture")
+        await originalChannel.releaseGitRequest()
+        guard case .failed = await pending.value else {
+            return XCTFail("An obsolete remote comparison must never publish its bytes")
+        }
+        try await wait { model.canUseCurrentHistory }
+        guard case .loaded(let changes) = await model.compareCommits(from: older, to: newer) else {
+            return XCTFail("The verified new backend should still read the comparison")
+        }
+        XCTAssertEqual(changes.map(\.path), ["remote-compare.txt"])
+        XCTAssertEqual(git(["rev-parse", "HEAD"]), newer)
+        XCTAssertTrue(git(["status", "--porcelain=v1"]).isEmpty)
+        XCTAssertEqual(try Data(contentsOf: file), Data("later\n".utf8))
+    }
+
+    func testCommitNameStatusParserRejectsIncompleteAndInvalidUTF8() {
+        let rename = Data("R100\0from name.txt\0to name.txt\0M\0中文.txt\0".utf8)
+        let files = GitStatusModel.parseGitFileChanges(rename)
+        XCTAssertEqual(files?.map(\.path), ["to name.txt", "中文.txt"])
+        XCTAssertEqual(files?.first?.originalPath, "from name.txt")
+        XCTAssertNil(GitStatusModel.parseGitFileChanges(Data("R100\0old\0".utf8)))
+        XCTAssertNil(GitStatusModel.parseGitFileChanges(Data([0x4d, 0x00, 0xff, 0x00])))
+        XCTAssertEqual(GitStatusModel.parseGitFileChanges(Data()), [])
+    }
+
+    func testCommitNavigationUsesRealParentsAndChildrenForMergeBranches() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Graph-Navigation-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func git(_ args: [String]) -> String {
+            let result = GitCommandExecution.run(args, in: directory.path, timeout: 20)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = git(["init", "-q", "-b", "main"])
+        _ = git(["config", "user.name", "Navigation"])
+        _ = git(["config", "user.email", "graph@invalid"])
+        _ = git(["config", "commit.gpgsign", "false"])
+        try Data("base".utf8).write(to: directory.appendingPathComponent("base.txt"))
+        _ = git(["add", "."])
+        _ = git(["commit", "-qm", "base"])
+        let base = git(["rev-parse", "HEAD"])
+        _ = git(["switch", "-qc", "feature"])
+        try Data("feature".utf8).write(to: directory.appendingPathComponent("feature.txt"))
+        _ = git(["add", "."])
+        _ = git(["commit", "-qm", "feature"])
+        let feature = git(["rev-parse", "HEAD"])
+        _ = git(["switch", "-q", "main"])
+        try Data("main".utf8).write(to: directory.appendingPathComponent("main.txt"))
+        _ = git(["add", "."])
+        _ = git(["commit", "-qm", "main"])
+        let main = git(["rev-parse", "HEAD"])
+        _ = git(["merge", "--no-ff", "-qm", "merge", "feature"])
+        let merge = git(["rev-parse", "HEAD"])
+        let model = GitStatusModel()
+        model.sync(root: directory.path)
+        try await wait { model.canUseCurrentHistory
+            && model.recentCommits.contains(where: { $0.hash == base }) }
+        let graph = model.graphCommits
+        let mergeCommit = try XCTUnwrap(graph.first { $0.hash == merge && $0.stash == nil })
+        let baseCommit = try XCTUnwrap(graph.first { $0.hash == base && $0.stash == nil })
+        XCTAssertEqual(mergeCommit.parentHashes, [main, feature])
+        XCTAssertEqual(RecentCommitsView.navigationTarget(
+            commits: graph, current: mergeCommit, parent: true, alternate: false
+        )?.hash, main)
+        XCTAssertEqual(RecentCommitsView.navigationTarget(
+            commits: graph, current: mergeCommit, parent: true, alternate: true
+        )?.hash, feature)
+        let missingFirstParent = graph.filter { $0.hash != main }
+        XCTAssertNil(RecentCommitsView.navigationTarget(
+            commits: missingFirstParent, current: mergeCommit, parent: true, alternate: false
+        ), "Missing first parent must not silently navigate to the second parent")
+        XCTAssertEqual(RecentCommitsView.navigationTarget(
+            commits: missingFirstParent, current: mergeCommit, parent: true, alternate: true
+        )?.hash, feature)
+        XCTAssertNil(RecentCommitsView.navigationTarget(
+            commits: graph, current: baseCommit, parent: true, alternate: false
+        ))
+        let child = RecentCommitsView.navigationTarget(
+            commits: graph, current: baseCommit, parent: false, alternate: false
+        )
+        let alternative = RecentCommitsView.navigationTarget(
+            commits: graph, current: baseCommit, parent: false, alternate: true
+        )
+        XCTAssertEqual(Set([child?.hash, alternative?.hash].compactMap { $0 }), [main, feature],
+                       "Normal and alternative child navigation must reach both real branches")
+        let branches = await model.compareCommits(from: feature, to: main)
+        guard case .loaded(let differences) = branches else {
+            return XCTFail("Unrelated branch tips must be comparable without a merge-base: \(branches)")
+        }
+        XCTAssertEqual(Set(differences.map { "\($0.status):\($0.path)" }),
+                       ["D:feature.txt", "A:main.txt"],
+                       "Direct endpoints must not silently diff against the common ancestor")
+        XCTAssertEqual(git(["rev-parse", "HEAD"]), merge)
+        XCTAssertTrue(git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
     func testBackgroundRefreshPreservesUnchangedToolbarAndGraphData() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

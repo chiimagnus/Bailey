@@ -1827,6 +1827,26 @@ struct GitPanel: View {
                                 guard hasCurrentPanelTarget else { return }
                                 openCommitDiff(commit, file)
                             },
+                            compareCommits: { older, newer in
+                                await model.compareCommits(from: older, to: newer)
+                            },
+                            openComparedFile: { older, newer, file in
+                                guard hasCurrentPanelTarget,
+                                      model.canUseCurrentHistory,
+                                      model.recentCommits.contains(where: { $0.hash == older }),
+                                      model.recentCommits.contains(where: { $0.hash == newer }),
+                                      let project, manager.selectedProject === project,
+                                      let context = project.panelContext,
+                                      project.matchesPanelTarget(context.identity),
+                                      model.matchesPanelTarget(context.identity)
+                                else { return }
+                                project.openHistoricalDiff(
+                                    repoRoot: model.repoRoot, path: file.path,
+                                    source: .commit(hash: newer, parent: older,
+                                                    status: String(file.status)),
+                                    origPath: file.originalPath, activating: false
+                                )
+                            },
                             canSwitchBranch: !model.isBusy && model.canUseCurrentReferences,
                             switchBranch: { name in
                                 switchBranchSafely(to: name)
