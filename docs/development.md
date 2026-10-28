@@ -33,10 +33,13 @@ make build:release                 # 正式版 Release
 
 也可以打开 `Bailey.xcodeproj`，使用现有 `Bailey`／`Bailey-UI` scheme。
 Makefile 通过构建参数选择正式版或开发版，不复制 App Target、scheme 或测试脚本。
+直接在 Xcode 中运行 scheme 不会自动带入 Makefile 的开发版参数；
+需要隔离的 Bailey Dev 时，应使用 `make build:dev` 生成的开发版 App。
 
 正式版产物位于 `build/DerivedData/Build/Products/{Debug,Release}/Bailey.app`；
-测试版位于 `build/DerivedData-Dev/Build/Products/Debug/Bailey.app`，
-显示名称为 **Bailey Dev**（`chiimagnus.bailey.dev`）。两者使用独立 DerivedData 和 Bundle ID，
+测试版位于 `build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app`，
+App 包名、菜单栏和 Dock 名称均为 **Bailey Dev**（`chiimagnus.bailey.dev`）。
+两者使用独立 DerivedData 和 Bundle ID，
 测试不替换 `/Applications/Bailey.app`。正式 Debug／Release 继续共用 `chiimagnus.bailey`；
 包依赖仍在 `build/SourcePackages/`。开发版配置为 `~/.config/bailey-dev/`，历史与钥匙串服务也分开。
 

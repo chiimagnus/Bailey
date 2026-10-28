@@ -220,7 +220,7 @@ Makefile 的测试构建使用独立 Bundle ID `chiimagnus.bailey.dev`；
 需要单独检查原生界面时使用相同签名的 Debug 包：
 
 ```sh
-open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey.app" --args --isolated-ui-test
+open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app" --args --isolated-ui-test
 ```
 
 该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。
@@ -266,9 +266,8 @@ Finder 拖进运行中 Bailey 时，
 双窗口、文件树精确行和网页上传必须检查最终编辑标签／Shell／网页内容，而不是只看鼠标事件已派发。
 
 Finder「打开方式」、Dock 文件投递和 `open -a Bailey` 仍指向正式 `chiimagnus.bailey`。
-对测试版发送文件时，
-必须显式使
-用 `open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey.app" --env "BAILEY_UI_TEST_RUN_ID=$UUID" "$TEMP_FILE"`；
+对测试版发送文件时，必须显式使用
+`open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app" --env "BAILEY_UI_TEST_RUN_ID=$UUID" "$TEMP_FILE"`；
 不能只传 `--isolated-ui-test` 或混用 `--args`（可能丢失系统文件事件）。
 随后核对接收 PID 的 Bundle ID 为 `chiimagnus.bailey.dev`，并检查窗口数、目标文件内容和原始 SHA-256。
 Dev 的 `LSHandlerRank=None` 不竞逐 Finder 默认文件处理程序；
