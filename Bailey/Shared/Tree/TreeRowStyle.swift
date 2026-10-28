@@ -245,6 +245,7 @@ struct RowHighlightStyle: ViewModifier {
     var focusRing = false
     var contextRing = false
     var hovering = false
+    var isDropTarget = false
     var cornerRadius: CGFloat = 4
 
     func body(content: Content) -> some View {
@@ -252,7 +253,9 @@ struct RowHighlightStyle: ViewModifier {
         let theme = Theme.terminal(dark: colorScheme == .dark)
         let accent = Color(nsColor: theme.accentNSColor)
         let foreground = Color(nsColor: theme.foregroundNSColor)
-        let fill: Color = if contextRing {
+        let fill: Color = if isDropTarget {
+            accent.opacity(colorScheme == .dark ? 0.28 : 0.23)
+        } else if contextRing {
             .clear
         } else if isSelected {
             listActive
@@ -269,8 +272,9 @@ struct RowHighlightStyle: ViewModifier {
             .background(RoundedRectangle(cornerRadius: cornerRadius).fill(fill))
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .strokeBorder(focusRing || contextRing ? accent.opacity(0.65) : .clear,
-                                  lineWidth: 1)
+                    .strokeBorder(isDropTarget ? accent :
+                                  (focusRing || contextRing ? accent.opacity(0.65) : .clear),
+                                  lineWidth: isDropTarget ? 1.5 : 1)
                     .allowsHitTesting(false)
             }
     }
@@ -321,6 +325,7 @@ struct TreeRowSurface<Content: View>: View {
     var listActive = false
     var focusRing = false
     var contextRing = false
+    var isDropTarget = false
     var hoverEnabled = true
     var leadingInset = TreeRowStyle.contentInset
     var trailingInset = TreeRowStyle.contentInset
@@ -339,6 +344,7 @@ struct TreeRowSurface<Content: View>: View {
         listActive: Bool = false,
         focusRing: Bool = false,
         contextRing: Bool = false,
+        isDropTarget: Bool = false,
         hoverEnabled: Bool = true,
         leadingInset: CGFloat = TreeRowStyle.contentInset,
         trailingInset: CGFloat = TreeRowStyle.contentInset,
@@ -354,6 +360,7 @@ struct TreeRowSurface<Content: View>: View {
         self.listActive = listActive
         self.focusRing = focusRing
         self.contextRing = contextRing
+        self.isDropTarget = isDropTarget
         self.hoverEnabled = hoverEnabled
         self.leadingInset = leadingInset
         self.trailingInset = trailingInset
@@ -374,7 +381,7 @@ struct TreeRowSurface<Content: View>: View {
             .modifier(RowHighlightStyle(
                 isSelected: isSelected, listActive: listActive, displayed: displayed,
                 focusRing: focusRing, contextRing: contextRing,
-                hovering: hoverEnabled && isHovering
+                hovering: hoverEnabled && isHovering, isDropTarget: isDropTarget
             ))
             .onHover { if hoverEnabled { isHovering = $0 } }
             .padding(.horizontal, outerInset)
@@ -448,6 +455,8 @@ struct TreeCompactSegment<MenuContent: View>: View {
     let index: Int
     var highlighted = false
     var isContextTarget = false
+    var isDropTarget = false
+    var nativeClickOwner = false
     let onClick: () -> Void
     let onContextClick: () -> Void
     let onMenuClosed: () -> Void
@@ -455,16 +464,25 @@ struct TreeCompactSegment<MenuContent: View>: View {
     var isExpectedMenu: ((NSMenu) -> Bool)? = nil
     @ViewBuilder var menuContent: () -> MenuContent
     @State private var hovering = false
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        let accent = Color(nsColor: Theme.terminal(dark: colorScheme == .dark).accentNSColor)
         Text(component.name)
             .underline(highlighted)
             .padding(.horizontal, 2)
             .contentShape(Rectangle())
             .background(RoundedRectangle(cornerRadius: 3)
-                .fill(hovering && !isContextTarget ? Color.primary.opacity(0.05) : .clear))
+                .fill(isDropTarget ? accent.opacity(0.3)
+                      : hovering && !isContextTarget ? Color.primary.opacity(0.05) : .clear))
+            .overlay {
+                RoundedRectangle(cornerRadius: 3)
+                    .strokeBorder(isDropTarget ? accent : .clear, lineWidth: 1.5)
+                    .allowsHitTesting(false)
+            }
             .onHover { hovering = $0 }
-            .highPriorityGesture(TapGesture().onEnded { onClick() })
+            .highPriorityGesture(TapGesture().onEnded { onClick() },
+                                 including: nativeClickOwner ? .none : .all)
             .overlay {
                 ContextMenuClickTarget(onContextClick: onContextClick,
                                       onMenuClosed: onMenuClosed, onMenuKeyDown: onMenuKeyDown,
@@ -537,9 +555,11 @@ private struct TreeRowLabel: View {
 struct TreeFolderRow<Accessory: View>: View {
     let row: TreeDisplayModel.Row
     let scale: CGFloat
+    var nativeClickOwner = false
     var leadingInset = TreeRowStyle.contentInset
     var focusRing = false
     var contextRing = false
+    var isDropTarget = false
     var isSelected = false
     var listActive = false
     var compactSegment: ((TreeDisplayModel.Row.CompactComponent, Int) -> AnyView)? = nil
@@ -549,12 +569,13 @@ struct TreeFolderRow<Accessory: View>: View {
     var body: some View {
         TreeRowSurface(depth: row.depth, scale: scale,
                        isSelected: isSelected, listActive: listActive, focusRing: focusRing,
-                       contextRing: contextRing, leadingInset: leadingInset) { hovering, layout in
+                       contextRing: contextRing, isDropTarget: isDropTarget,
+                       leadingInset: leadingInset) { hovering, layout in
             HStack(spacing: 0) {
                 TreeRowLabel(row: row, iconPath: row.path, scale: scale,
                              compactSegment: compactSegment)
                     .modifier(layout)
-                    .onTapGesture(perform: toggle)
+                    .onTapGesture { if !nativeClickOwner { toggle() } }
                     .accessibilityAction(.default) { toggle() }
                     .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel)
@@ -571,15 +592,16 @@ struct TreeFolderRow<Accessory: View>: View {
 
 extension TreeFolderRow where Accessory == EmptyView {
     init(row: TreeDisplayModel.Row, scale: CGFloat,
+         nativeClickOwner: Bool = false,
          leadingInset: CGFloat = TreeRowStyle.contentInset,
          focusRing: Bool = false, contextRing: Bool = false,
-         isSelected: Bool = false,
+         isDropTarget: Bool = false, isSelected: Bool = false,
          listActive: Bool = false,
          compactSegment: ((TreeDisplayModel.Row.CompactComponent, Int) -> AnyView)? = nil,
          toggle: @escaping () -> Void) {
-        self.init(row: row, scale: scale, leadingInset: leadingInset,
-                  focusRing: focusRing, contextRing: contextRing,
-                  isSelected: isSelected,
+        self.init(row: row, scale: scale, nativeClickOwner: nativeClickOwner,
+                  leadingInset: leadingInset, focusRing: focusRing, contextRing: contextRing,
+                  isDropTarget: isDropTarget, isSelected: isSelected,
                   listActive: listActive, compactSegment: compactSegment,
                   toggle: toggle) { _ in EmptyView() }
     }
@@ -588,6 +610,7 @@ extension TreeFolderRow where Accessory == EmptyView {
 struct TreeFileRow<Accessory: View>: View {
     let row: TreeDisplayModel.Row
     let scale: CGFloat
+    var nativeClickOwner = false
     var iconPath: String? = nil
     var directory: String? = nil
     var displayed = false
@@ -595,6 +618,7 @@ struct TreeFileRow<Accessory: View>: View {
     var listActive = false
     var focusRing = false
     var contextRing = false
+    var isDropTarget = false
     var leadingInset = TreeRowStyle.contentInset
     var accessibilityHint = ""
     var accessibilityID = "bailey.tree.file"
@@ -605,13 +629,16 @@ struct TreeFileRow<Accessory: View>: View {
     var body: some View {
         TreeRowSurface(depth: row.depth, scale: scale, displayed: displayed,
                        isSelected: isSelected, listActive: listActive, focusRing: focusRing,
-                       contextRing: contextRing, leadingInset: leadingInset) { hovering, layout in
+                       contextRing: contextRing, isDropTarget: isDropTarget,
+                       leadingInset: leadingInset) { hovering, layout in
             HStack(spacing: 0) {
                 TreeRowLabel(row: row, iconPath: iconPath ?? row.path, scale: scale,
                              directory: directory)
                     .modifier(layout)
-                    .onTapGesture(perform: open)
-                    .simultaneousGesture(TapGesture(count: 2).onEnded { activate?() })
+                    .onTapGesture { if !nativeClickOwner { open() } }
+                    .simultaneousGesture(TapGesture(count: 2).onEnded {
+                        if !nativeClickOwner { activate?() }
+                    })
                     .accessibilityAction(.default) { open() }
                     .help(row.accessibilityLabel + "\n" + row.path)
                 .accessibilityLabel(row.accessibilityLabel + ", " + row.path)

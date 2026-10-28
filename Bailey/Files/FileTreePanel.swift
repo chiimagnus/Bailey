@@ -67,6 +67,7 @@ struct FileTreePanel: View {
     var beginDrag: (FileTreeModel.Item) -> FileTreeDrag.Record? = { _ in nil }
     var endDrag: (UUID) -> Void = { _ in }
     var receiveInternalDrop: (FileTreeDrag.Record, String, Bool) -> Bool = { _, _, _ in false }
+    @State private var dropTargetDirectory: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -107,9 +108,15 @@ struct FileTreePanel: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
             .padding(.bottom, 8)
+            .background {
+                if dropTargetDirectory == model.rootPath {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.accentColor.opacity(0.24))
+                }
+            }
 
             FileTreeScrollView(
-                model: model, git: git,
+                model: model, git: git, dropTargetDirectory: $dropTargetDirectory,
                 sshHost: sshHost, currentFilePath: currentFilePath,
                 openFile: openFile, isActive: isActive,
                 canFocusKeyboard: canFocusKeyboard,
@@ -126,11 +133,19 @@ struct FileTreePanel: View {
         .onChange(of: model.settings.filesExclude) { _, _ in
             Task { await model.refreshVisibility() }
         }
+        .onChange(of: model.rootPath) { _, _ in dropTargetDirectory = nil }
+        .onChange(of: isCurrentTarget()) { _, current in
+            if !current { dropTargetDirectory = nil }
+        }
         .background {
             FileTreeNativeDragSurface(
                 directory: model.rootPath, isCurrent: isCurrentTarget,
                 allowsFinder: canImportFromFinder,
-                receiveInternal: receiveInternalDrop, importFinder: importFromFinder
+                receiveInternal: receiveInternalDrop, importFinder: importFromFinder,
+                onDragOperationChanged: { operation in
+                    if operation != [] { dropTargetDirectory = model.rootPath }
+                    else if dropTargetDirectory == model.rootPath { dropTargetDirectory = nil }
+                }
             )
         }
     }
@@ -141,6 +156,7 @@ struct FileTreePanel: View {
 private struct FileTreeScrollView: View {
     let model: FileTreeModel
     let git: GitStatusModel
+    @Binding var dropTargetDirectory: String?
     let sshHost: String?
     let currentFilePath: String?
     let openFile: (String, Bool) -> Void
@@ -171,6 +187,7 @@ private struct FileTreeScrollView: View {
                     ForEach(model.items) { item in
                         FileTreeRow(
                             model: model, git: git, item: item,
+                            dropTargetDirectory: $dropTargetDirectory,
                             sshHost: sshHost,
                             openFile: openFile,
                             listFocused: keyboardFocused && isActive && controlActiveState == .key,
@@ -335,6 +352,7 @@ private struct FileTreeRow: View {
     let model: FileTreeModel
     let git: GitStatusModel
     let item: FileTreeModel.Item
+    @Binding var dropTargetDirectory: String?
     let sshHost: String?
     let openFile: (String, Bool) -> Void
     let listFocused: Bool
@@ -365,6 +383,10 @@ private struct FileTreeRow: View {
     }
 
     private var isSelected: Bool { model.selectedPaths.contains(item.path) }
+
+    private func isDropTarget(_ path: String) -> Bool {
+        dropTargetDirectory == path
+    }
 
     private func selectForClick(componentPath: String? = nil) -> Bool {
         let modifiers = NSApp.currentEvent?.modifierFlags ?? []
@@ -464,7 +486,14 @@ private struct FileTreeRow: View {
             beginDrag: { isCurrentTarget() ? beginDrag(target) : nil },
             endDrag: endDrag, directory: directory,
             isCurrent: isCurrentTarget, allowsFinder: canImportFromFinder,
-            receiveInternal: receiveInternalDrop, importFinder: importFromFinder
+            receiveInternal: receiveInternalDrop, importFinder: importFromFinder,
+            onDragOperationChanged: { operation in
+                if operation != [] {
+                    dropTargetDirectory = directory
+                } else if dropTargetDirectory == directory {
+                    dropTargetDirectory = nil
+                }
+            }
         )
     }
 
@@ -637,6 +666,7 @@ private struct FileTreeRow: View {
             TreeCompactSegment(component: component, index: index,
                 highlighted: hasKeyboardCursor && (model.selectedCompactPath ?? item.path) == component.path,
                 isContextTarget: contextMenuPath == component.path,
+                isDropTarget: isDropTarget(component.path), nativeClickOwner: true,
                 onClick: {
                     guard isCurrentTarget() else { return }
                     if selectForClick(componentPath: component.path) { return }
@@ -664,8 +694,9 @@ private struct FileTreeRow: View {
     @ViewBuilder
     private var semanticRow: some View {
         if item.isDirectory {
-            TreeFolderRow(row: displayRow, scale: fontScale,
+            TreeFolderRow(row: displayRow, scale: fontScale, nativeClickOwner: true,
                           focusRing: hasKeyboardCursor, contextRing: hasContextRing,
+                          isDropTarget: item.compactPrefix.isEmpty && isDropTarget(item.path),
                           isSelected: isSelected,
                           listActive: listFocused,
                           compactSegment: { component, index in compactSegmentView(component, index: index) }) {
@@ -678,10 +709,11 @@ private struct FileTreeRow: View {
             }
         } else {
             TreeFileRow(
-                row: displayRow, scale: fontScale,
+                row: displayRow, scale: fontScale, nativeClickOwner: true,
                 isSelected: isSelected,
                 listActive: listFocused,
                 focusRing: hasKeyboardCursor, contextRing: hasContextRing,
+                isDropTarget: isDropTarget(item.path),
                 open: {
                     guard isCurrentTarget() else { return }
                     if !selectForClick() { openFile(item.path, false) }

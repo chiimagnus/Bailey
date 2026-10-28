@@ -3075,11 +3075,13 @@ final class FileTreeTests: XCTestCase {
     func testTreeRowActiveInactiveSelectionAndKeyboardFocusRenderIndependently() throws {
         func bitmap(
             isSelected: Bool, listActive: Bool, focusRing: Bool,
-            displayed: Bool = false, contextRing: Bool = false
+            displayed: Bool = false, contextRing: Bool = false,
+            isDropTarget: Bool = false
         ) throws -> NSBitmapImageRep {
             let row = TreeRowSurface(depth: 0, scale: 1, displayed: displayed,
                                      isSelected: isSelected, listActive: listActive,
                                      focusRing: focusRing, contextRing: contextRing,
+                                     isDropTarget: isDropTarget,
                                      outerInset: 0, showsGuides: false) { _, layout in
                 Color.clear.frame(height: layout.height)
             }
@@ -3121,6 +3123,12 @@ final class FileTreeTests: XCTestCase {
         let menuAndSelected = try bitmap(
             isSelected: true, listActive: true, focusRing: false, contextRing: true
         )
+        let moveTarget = try bitmap(
+            isSelected: false, listActive: true, focusRing: false, isDropTarget: true
+        )
+        let copyTarget = try bitmap(
+            isSelected: true, listActive: true, focusRing: false, isDropTarget: true
+        )
         let centerX = normalImage.pixelsWide / 2
         let centerY = normalImage.pixelsHigh / 2
         let neutral = try color(normalImage, x: centerX, y: centerY)
@@ -3143,6 +3151,10 @@ final class FileTreeTests: XCTestCase {
         }
         XCTAssertLessThan(delta(neutral, try color(menuAndSelected, x: centerX, y: centerY)),
                           0.03, "A menu target displays only its outline, even when selected")
+        for highlighted in [moveTarget, copyTarget] {
+            XCTAssertGreaterThan(delta(neutral, try color(highlighted, x: centerX, y: centerY)),
+                                 0.07, "A valid drag destination must be visibly filled")
+        }
         func changedPixels(_ base: NSBitmapImageRep, _ outlined: NSBitmapImageRep) throws -> Int {
             var count = 0
             for y in 0..<base.pixelsHigh {
@@ -3161,6 +3173,10 @@ final class FileTreeTests: XCTestCase {
                              "Focus outline must remain visible together with Selection")
         XCTAssertGreaterThan(try changedPixels(normalImage, menuAndSelected), 8,
                              "The menu target must have an outline without a Selection fill")
+        XCTAssertGreaterThan(try changedPixels(normalImage, moveTarget), 25,
+                             "Move destination must have a distinct row highlight and border")
+        XCTAssertGreaterThan(try changedPixels(activeImage, copyTarget), 25,
+                             "Copy destination must be visible even above an existing selection")
     }
 
     func testSharedRowVisualPriorityCoversEveryFlagCombinationAcrossAppearancesAndThemes() throws {
