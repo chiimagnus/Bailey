@@ -63,6 +63,71 @@
 
 ## 发现项
 
+## 发现 F-09
+
+- 任务：`P2-T2`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/Files/FileTreePanel.swift:500-548`
+- 摘要：`原生右键菜单期间 Cmd-N 和 Option-Cmd-N 错用正式选区目录`
+- 风险：`右键文件夹 B 的菜单中按新建快捷键时，macOS 主菜单在结束右键菜单后执行命令，原菜单目标已被撤销，实际文件可能写入先前选中的 A，造成错误位置写入。`
+- 预期修复：`在右键菜单的 New File/New Folder 系统快捷键转交到主菜单时保留当次上下文目录，主命令消费并清除，普通菜单取消立即清除且不改写 Focus/Selection。`
+- 验证：`真实 GUI 右键 B Cmd-N、Option-Cmd-N 创建目录和文件；Escape 取消后正常 Cmd-N；宿主 FileTreeTests 与相关全套 GUI。`
+- 解决证据：`Git e837c6f6; Red /tmp/bailey-p2-menu-main-route.log 证明右键 inside 后 Cmd-N 实际误建于 a-unrelated；AppKit 先 endTracking 清理 context target 再执行全局 File Command；Green /tmp/bailey-p2-menu-routed-green.log 真机 GUI 3/3 PASS（右键目录 Cmd-N 与 Option-Cmd-N 在右键目录新建、Escape 取消保持旧焦点、主菜单普通新建仍用正式焦点）；Host FileTreeTests 88/88 PASS /tmp/bailey-p2-menu-handoff-host.log。`
+
+
+## 发现 F-08
+
+- 任务：`P2-T4`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/Files/FileTreeNativeDrag.swift:132-172`
+- 摘要：`Files 文件夹拖放落点无明显目标提示`
+- 风险：`只有光标操作徽标，接收层不把有效目标反馈到共享行样式，用户无法确定实际移动目的地，易误放目录。`
+- 预期修复：`复用原生接收者协商状态，投射到实际目录行/紧凑目录段的共享样式，高亮接受的目标和 Copy/Move 状态，退出、取消、完成即时清除。`
+- 验证：`宿主共享行渲染/状态测试 + 原生 GUI 拖到文件夹的过程中高亮/取消/拒绝场景`
+- 解决证据：`Git 9a83e713; 用户否定的 Copy/Move trailing badge 已删除，按真实有效目标目录/压缩段采用主题色填充+描边，离开和取消清理；双层文件树鼠标点击改归单一原生事件所有者，横向滚轮不拦截；Red /tmp/bailey-p2-user-full-files-gui.log，Green /tmp/bailey-p2-shared-input-owner-green.log 真实 GUI 3/3 PASS（紧凑目录、点击命中、长名称滚动）；Host 像素与文件树 88/88 PASS /tmp/bailey-p2-final-native-host.log，真实拖放 3/3 /tmp/bailey-p2-copy-intent-native-combo.log。`
+
+
+## 发现 F-07
+
+- 任务：`P2-T4`
+- 严重级别：`High`
+- 状态：`Resolved`
+- 位置：`Bailey/Files/FileTreeNativeDrag.swift:132-170`
+- 摘要：`Option 拖动光标为复制，松开时文件仍被移动`
+- 风险：`draggingUpdated 协商返回 copy，但 performDragOperation 重新读取全局修饰键，使最终副作用与光标不一致；可能意外删除原路径。`
+- 预期修复：`原生接收者以已向 AppKit 报告的具体拖放 operation 为唯一最终复制/移动真值；完成/退出清理，业务路径保持现有校验。`
+- 验证：`真实 XCUITest Option/普通拖放 + 宿主 NSDraggingInfo 决议边界 + 源/目标字节`
+- 解决证据：`Git 3db5e3db; Red /tmp/bailey-p2-option-operation-trace.log 与 /tmp/bailey-p2-async-operation-trace.log，AppKit copy 掩码一度转成 copy+move 造成源文件误移动；Green /tmp/bailey-p2-copy-intent-native-combo.log GUI 3/3 PASS：Option 多选复制且原文件保留、默认多选移动、压缩祖先目录移动、真实文件字节；Host FileTreeTests 88/88 PASS /tmp/bailey-p2-final-native-host.log。`
+
+
+## 发现 F-06
+
+- 任务：`P2-T1`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/Files/FileTreePanel.swift:312-325`
+- 摘要：`Space 显式预览文件未同步树 Selection`
+- 风险：`原有蓝底留在旧文件 A 而右侧预览为 B，视觉状态不一致，影响下一个复制/拖动操作对象的判断。`
+- 预期修复：`只有对文件显式 Space Browse 时将游标对应项正式 select 后再 open，不使普通方向键隐式改变 Selection。`
+- 验证：`FileTreeTests、WorkspaceFilesUITests：方向键只改 Focus，Space 后 AX Selection 与展示文件一致、Edit 作用正确。`
+- 解决证据：`Git 36573dc2; Space 浏览同步 Selection，方向键仍只移动 Focus；真实 GUI WorkspaceFilesUITests.testSpacePreviewSelectsFocusedFileWithoutSelectionDuringNavigation PASS /tmp/bailey-p2-user-six-regressions-retry.log；Host FileTreeTests 88/88 PASS /tmp/bailey-p2-final-native-host.log。`
+
+
+## 发现 F-05
+
+- 任务：`P2-T2`
+- 严重级别：`Medium`
+- 状态：`Resolved`
+- 位置：`Bailey/Files/FileTreeModel.swift:309-326`
+- 摘要：`右键非选中 B 后 Esc 永久改写 A 的 Focus/Selection`
+- 风险：`右键本应只选择本次命令目标，关闭菜单后应恢复既有 A 选区；当前菜单外 Edit、拖放错误地跟随 B。用户真机已复现，且旧测试将错误行为写成断言。`
+- 预期修复：`在独立 contextMenuTargetPath 保存临时右键目标，右键仅解析单/多项命令，不改写正式 selectedPaths/selectedPath；同步修订 GUI 和模型契约。`
+- 验证：`FileTreeTests + SharedTreeUITests + WorkspaceFilesUITests，Esc/菜单动作后 AX Selection、磁盘/剪贴板和终端焦点`
+- 解决证据：`Git 3243e159; 右键临时 Context Target 不再改写 Selection/Focus；Host FileTreeTests 88/88 PASS /tmp/bailey-p2-final-native-host.log；真实 GUI SharedTreeUITests.testRightClickUnselectedFileRestoresOriginalKeyboardTargetAfterEscape、Cmd-C、ContextClick PASS /tmp/bailey-p2-menu-routed-green.log 与 /tmp/bailey-p2-user-full-files-gui.log。`
+
+
 ## 发现 F-04
 
 - 任务：`P2-T5`
