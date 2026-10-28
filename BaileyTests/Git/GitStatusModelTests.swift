@@ -18,6 +18,49 @@ final class GitStatusModelTests: XCTestCase {
         }
     }
 
+    func testGitNavigationSurvivesPanelRemountButNotDifferentProjectOrRoot() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Git-Nav-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = Project(fallbackName: "first", workspaceConfiguration: .standard)
+        let second = Project(fallbackName: "second", workspaceConfiguration: .standard)
+        first.customDirectory = directory.path
+        second.customDirectory = directory.path
+        XCTAssertNotEqual(first.id, second.id)
+        let git = GitStatusModel()
+        git.syncSelectedProject(project: first, isCurrent: { _ in true })
+        let selection = GitStatusModel.ChangeSelection(
+            scope: "local", repository: directory.path,
+            section: "unstaged", path: "same-name.txt"
+        )
+        let commit = String(repeating: "a", count: 40)
+        git.changeCursor = selection
+        git.changeSelection = selection
+        git.expandedCommitIDs = [commit]
+
+        git.syncSelectedProject(project: first, isCurrent: { _ in true })
+        XCTAssertEqual(git.changeCursor, selection)
+        XCTAssertEqual(git.changeSelection, selection)
+        XCTAssertEqual(git.expandedCommitIDs, [commit],
+                       "Rebinding the same panel target must preserve valid disclosure")
+
+        git.syncSelectedProject(project: second, isCurrent: { _ in true })
+        XCTAssertNil(git.changeCursor,
+                     "Two different projects sharing the same Git root must not share the cursor")
+        XCTAssertNil(git.changeSelection)
+        XCTAssertTrue(git.expandedCommitIDs.isEmpty,
+                      "The previous project's Graph must not appear in the new project")
+
+        git.changeCursor = selection
+        git.changeSelection = selection
+        git.expandedCommitIDs = [commit]
+        git.sync(root: directory.appendingPathComponent("other").path)
+        XCTAssertNil(git.changeCursor)
+        XCTAssertNil(git.changeSelection)
+        XCTAssertTrue(git.expandedCommitIDs.isEmpty)
+    }
+
     func testBackgroundRefreshPreservesUnchangedToolbarAndGraphData() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

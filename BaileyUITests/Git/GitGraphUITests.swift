@@ -4,6 +4,32 @@ import XCTest
 
 @MainActor
 final class GitGraphUITests: XCTestCase {
+    func testExpandedCommitSurvivesTemporaryGitPanelHiding() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("retained/history.txt", text: "immutable history bytes\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let app = try launchGraph(fixture, language: "en")
+        let commit = app.buttons["E2E fixture history"]
+        let history = historicalFile("retained/history.txt", in: app)
+        XCTAssertTrue(commit.waitForExistence(timeout: 20))
+        XCTAssertFalse(history.exists)
+        commit.click()
+        XCTAssertTrue(history.waitForExistence(timeout: 12))
+
+        app.typeKey("e", modifierFlags: [.command, .shift])
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 15))
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        XCTAssertTrue(history.waitForExistence(timeout: 12),
+                      "Hiding Git must not discard a still-valid expanded commit")
+        commit.click()
+        XCTAssertTrue(history.waitForNonExistence(timeout: 12),
+                      "The restored disclosure must collapse on its next click, not re-expand")
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
     func testRightClickDifferentCommitMovesGraphKeyboardCursorWithoutOpeningHistory() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("first-commit.txt", text: "first\n")

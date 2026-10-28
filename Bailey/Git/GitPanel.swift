@@ -70,7 +70,12 @@ struct GitPanel: View {
         )
     }
     @State private var historyCollapsed = false
-    @State private var expandedCommitIDs: Set<String> = []
+    private var expandedCommitIDsBinding: Binding<Set<String>> {
+        Binding(
+            get: { model.expandedCommitIDs },
+            set: { model.expandedCommitIDs = $0 }
+        )
+    }
     @State private var filterText = ""
     @State private var showFilter = false
     @State private var keyboardOwner = TreeKeyboardOwner()
@@ -1815,7 +1820,7 @@ struct GitPanel: View {
                             isBinaryFile: { commit, file in
                                 model.isHistoricalBinaryFile(commit: commit, path: file.path)
                             },
-                            expandedCommitIDs: $expandedCommitIDs,
+                            expandedCommitIDs: expandedCommitIDsBinding,
                             collapsedFolders: collapsedFoldersBinding,
                             viewMode: settings.gitViewMode,
                             fontScale: panelFontScale,
@@ -2805,7 +2810,6 @@ struct GitPanel: View {
         stagedCollapsed = false
         changesCollapsed = false
         historyCollapsed = false
-        expandedCommitIDs.removeAll()
     }
 
     private func shellQuoted(_ path: String) -> String {

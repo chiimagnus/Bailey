@@ -66,7 +66,7 @@ final class GitStatusModel {
         }
     }
 
-    /// Per-project SCM navigation survives a temporarily hidden Git panel.
+    /// Window-owned SCM navigation survives a temporarily hidden Git panel.
     /// Section distinguishes the staged and worktree sides of the same path.
     nonisolated struct ChangeSelection: Hashable, Sendable {
         let scope: String
@@ -77,6 +77,13 @@ final class GitStatusModel {
 
     var changeCursor: ChangeSelection?
     var changeSelection: ChangeSelection?
+    var expandedCommitIDs: Set<String> = []
+
+    private func clearPanelNavigation() {
+        changeCursor = nil
+        changeSelection = nil
+        expandedCommitIDs.removeAll()
+    }
 
     typealias FileDecoration = TreeDisplayModel.Status
 
@@ -724,10 +731,12 @@ final class GitStatusModel {
         project: Project?, isCurrent: @MainActor (Project) -> Bool
     ) {
         guard let project, isCurrent(project), let context = project.panelContext else {
+            if panelTargetIdentity != nil { clearPanelNavigation() }
             sync(root: "")
             return
         }
         if panelTargetIdentity != context.identity {
+            clearPanelNavigation()
             contextGeneration &+= 1
             stashFilesByOID = [:]
             invalidateStatusRefresh()
@@ -750,6 +759,7 @@ final class GitStatusModel {
             localWatcherPaths = []
         }
         if root != rootPath || workspaceScope != scope {
+            clearPanelNavigation()
             workspaceScope = scope
             contextGeneration &+= 1
             rootPath = root
@@ -2995,7 +3005,10 @@ final class GitStatusModel {
         coreCompletedRequestID = nil
         statusRequestID &+= 1
         pendingRefresh = nil
-        if !preserveIdentity { repositoryIdentity = "" }
+        if !preserveIdentity {
+            repositoryIdentity = ""
+            clearPanelNavigation()
+        }
     }
 
     private func clearDetails() {
@@ -3071,6 +3084,7 @@ final class GitStatusModel {
             hasCurrentLineTotals = false
         }
         if repositoryIdentity != result.topLevel {
+            clearPanelNavigation()
             clearDetails()
             ignoredPaths = []
         }
