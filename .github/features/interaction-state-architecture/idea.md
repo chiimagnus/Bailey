@@ -9,7 +9,8 @@ Bailey 的文件树、Git Changes、Git Graph、Projects、Dock 标签以及命�
 
 当前已能从源码确认：Files 以 `selectedPath` 代表 Focus、`selectedPaths` 代表 Selection，
 而 `selectRange` 会覆盖不相邻选择；Git Changes 的 `explicitlySelectedChange` 只存一个对象；
-Git Graph 的 `expandedCommitIDs`、`selectedRowID`、`contextRowID` 各自独立；
+Git Graph 的展开集合由 `GitPanel` 持有，
+其游标、临时菜单目标由 `RecentCommitsView` 持有，彼此语义独立；
 Dock 一组只保留一个展示项、一个菜单上下文，不支持 VS Code 式多标签选择。
 这些不是单纯颜色差异，必须按原生输入事件、模型状态、命令目标和可见效果一起治理。
 此外，Dock 从文件 A 切换至 B 后，Files 旧 Selection=A 与 Displayed=B 各绘制一层不同灰底；
@@ -112,7 +113,9 @@ Focus、Selection、Anchor、Expanded、Active、Hover、Displayed、Context Tar
 
 - **唯一所有者**：
   `Project.fileTree` 持 Files 路径选择/展开；
-  Git Changes、RecentCommitsView 持局部选择/游标/展开；
+  `GitPanel` 持 Changes 选择/游标及 Graph 的 `expandedCommitIDs`，
+  `RecentCommitsView` 只持 Graph 游标和临时菜单目标，
+  `GitStatusModel` 持 Git 数据和目录折叠；
   `DockWorkspaceModel` 持组布局/活动/每组标签选择；
   `WorkspaceWindowModel` 只管本窗口跨模块交接；
   真正输入以 key window 的 NSWindow.firstResponder 为准。
@@ -124,7 +127,8 @@ Focus、Selection、Anchor、Expanded、Active、Hover、Displayed、Context Tar
 - **输入与命令目标**：编辑器 NSTextView、Ghostty、浏览器、TextField、Sheet/Palette
   在拥有 firstResponder 时不被后台 Files/Git/Dock 改写键盘输入。
   菜单有效时显式目标优先，菜单关闭即撤销，主菜单快捷键仍只有一个动作实现。
-  Files 集合外右键改 Selection；SCM/Dock 集合外右键仅建立 Context，
+  当前 Bailey Files、SCM Changes 与 Dock 对集合外右键均先建立临时 Context，
+  不强制替换原 Selection；各自的集合内/外菜单动作按本领域合法目标解析，
   不统一成同一种“右键选中”。树鼠标 Shift、树键盘 Shift、Tab Shift 分别有自己的规则。
 - **数据保护**：未保存文件保存失败禁止关闭/覆盖，Git index/HEAD/refs 修改按原有确认和
   重新验证执行；SSH 断线或切机器拒绝对过期目标执行且绝不回退本机。

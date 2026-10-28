@@ -1,7 +1,9 @@
 # 执行前独立源码复核
 
 本页供实施者核对行为、取舍、删旧边界和验证条件，不是已经实现的功能报告。
-基线审查日期：2026-10-27。实时任务状态以 `todo.toml` 为准。
+基线审查日期：2026-10-27；P3 现行路径重核：2026-10-29（`ad020a2f`）。
+旧基线的历史问题与测试记载不自动代表当前实现；P3 实施以这次修正的
+源码映射及任务中的重新验证为准。实时任务状态以 `todo.toml` 为准。
 
 ## 依据与阅读边界
 
@@ -71,11 +73,11 @@
 | 链路 | 追踪到的所有者和最终结果 | 同任务维护的文档 |
 | --- | --- | --- |
 | Files 输入/树 | `FileTreePanel` 的 FileTreeScrollView.handleKey、FileTreeRow.selectForClick/compactSegmentView/rowMenu → `FileTreeModel.select/focus/moveSelection/selectRange/contextSelection/rebuild/sync` → `TreeDisplayModel` / `TreeRowStyle` / AX | `docs/features/files.md`、共享视觉确有变化时 `docs/ui.md` |
-| Files 打开/自动定位 | `ToolPanelView.openFilePath` 读取 `Project.selectedTab` → `FileTreeRow` 的 `isCurrent` 单独绘制 Displayed 灰底；`WorkspaceWindowModel.openFile` → `Project.openFile/findFileTab/selectTab` → Dock 组与 `FileTab`，当前没有把后续 Dock 切换同步至 `FileTreeModel` 选区；已有 `FileTreeModel.revealFile` 可复用，不能抢原生键盘 | files、dock、必要 editor |
-| 文件修改/剪贴板/拖动 | FileTreeClipboard/FileTreeDrag → WindowModel.makeFileTreeDragProvider/receiveFileTreeDrop/performFileTreeCommand/performFileOperation → `WorkspaceApplication.withProtectedFiles` → `FileTreeModel.performFileOperation/rename/commitDraft` → LocalWorkspaceBackend.copyExclusive/rename/delete 或 SSHWorkspaceBackend.copy/rename/delete → 跨窗路径更新/实际字节 | files、必要 projects/ssh |
+| Files 打开/自动定位 | P2 已接通 `WorkspaceWindowModel` 的 Dock 活动项回调 → `FileTreeModel.revealFile(automatically:)`，按当前项目、窗口、机器及连接代次复验；`Project.selectedTabID` 仍只是最近工作标签。Files 不能因 Git 预览或隐藏组夺取编辑器原生输入 | files、dock、必要 editor |
+| 文件修改/剪贴板/拖动 | `FileTreeNativeDragSurface/FileTreeDrag` → `WorkspaceWindowModel.receiveFileTreeDrop/performFileTreeCommand/performFileOperation` → `WorkspaceApplication.withProtectedFiles` → `FileTreeModel.performFileOperation/rename/commitDraft` → 当前本机或 SSH backend。P2 已移除旧 `makeFileTreeDragProvider`；不得将这条历史入口误作为 P3 兼容代码清理目标 | files、必要 projects/ssh |
 | Finder 投递 | `ContentView` 中 FinderWindowDrop.receive → WorkspaceApplication 的外部请求队列 → WindowModel.openExternalLocalItems → Project.openLocalFile；Files 接收改为 importFromFinder，Ghostty/WebKit 正文不挂通用 Drop | projects、files、dock |
-| Git Changes | `GitPanel` 的 `explicitlySelectedChange` 与 `isDisplayedChange` 分别渲染选中底色/Displayed 灰底；`Project.selectTab` 不同步 `GitPanel` 局部选区；GitStatusModel.stageEntries/unstageEntries/PendingDiscard/perform → GitCommandExecution → 本机/SSH 的 Git index/工作树 | `docs/features/git.md`、必要 ui/ssh |
-| Graph/历史 Diff | GitPanel → RecentCommitsView 的 keyboardRows/toggle/selectContextRow/referenceStrip/commitFiles/worktreeFiles → GitStatusModel 的真实 refs/stash/worktree/history → Project.openHistoricalDiff → `DiffViewerView.swift` 内 DiffTab.Source/reload → immutable blob/原生 DiffNativeSurface | git、diff、dock、来源说明变化时 session-restore |
+| Git Changes | `GitPanel.selectedChange` 是游标，`explicitlySelectedChange` 是单资源 Selection，`contextChange` 是右键临时目标，`isDisplayedChange` 另绘灰底；`displayedDiff` 当前取 `Project.selectedTab` 而非真实活动 Dock 组。Stage/Unstage 的 `Entry` 执行前须按当前 Section 重新解析；`PendingDiscard/perform` 与编辑保护继续保障本机/SSH 字节安全 | `docs/features/git.md`、必要 dock/ui/ssh |
+| Graph/历史 Diff | `GitPanel.expandedCommitIDs` 通过 Binding 给 `RecentCommitsView`；Graph 游标与临时菜单留在该 View，目录折叠在 GitStatusModel。Graph/历史文件/refs/stash/worktree → 当前 Git 目标校验 → `Project.openHistoricalDiff` → `DiffTab.Source.commit`/`reload` 的 immutable blobs；T4 新比较必须另行查询两提交净差异，不能直接拼各自提交历史文件 | git、diff、dock；持久化实际变化时 session-restore |
 | Dock/关闭 | WorkspaceDockView/DockTabGroupView/WorkspaceChrome → DockWorkspaceModel.select/activate/move/updateLayout/syncTabs → Project.selectTab/closeContent/closeBatch/saveBeforeClosing → 文件保存、Sheet 和受控资源释放 | dock、ui、必要 architecture/settings |
 | Projects | ProjectsPanelView.cursorProjectID/contextProjectID/handleProjectKey → WindowModel.selectedProjectID/close/moveProject → 当前项目与其会话 | projects、dock |
 | 暂态输入 | CommandPaletteView.run/dismiss、TabSwitcherController.cycle/dismiss/handle → WindowModel.toggleCommandPalette/restoreFocusAfterCommandPalette → 当前有效原生输入；Switcher 只提交现存当前项目 | command-palette、dock |
