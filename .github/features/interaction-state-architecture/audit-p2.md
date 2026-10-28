@@ -342,19 +342,64 @@ AX / 文件存在性 / SHA-256 验证最终结果，而不把 `dispatched_unveri
   本轮只提交测试与长期测试说明，未修改用户的正式 Bailey。测试临时 Windows SSH 目录全部清理；
   正式 Bailey PID `1807` 保持运行。phase 的 `audit-p2.md`、`todo.toml` 继续仅在本地保存。
 
+## 扩展复审与逐行为验收（2026-10-29）
+
+此轮按实际代码与 GUI 结果新增 F-05～F-09，并已全部核销。
+修复按问题独立提交：`3243e159`（F-05）、`36573dc2`（F-06）、
+`3db5e3db`（F-07）、`9a83e713`（F-08）、`e837c6f6`（F-09）；
+中文选择器的测试归属修正另提交 `473a2700`，不含产品代码。
+所有提交均在 `rhc`，未推送；审计文件只在本地保存。
+
+| 范围 | 已核验的用户行为 | 真实依据 |
+| --- | --- | --- |
+| Files 鼠标 | 单击预览、双击打开、任意行宽命中、目录展开与压缩目录中间段折叠；不重复打开标签 | `SharedTreeUITests` 独立 3/3 PASS，`/tmp/bailey-p2-shared-input-owner-green.log` |
+| 键盘浏览 | 方向、Home/End/Page 只移动 Focus，Space 明确浏览同步 Selection；Return 进入编辑器 | `WorkspaceFilesUITests` 对应真实 GUI PASS；Space `/tmp/bailey-p2-user-six-regressions-retry.log` |
+| 右键与取消 | A 仍选中时右键 B 仅操作 B；Escape 还原目标；右键 ⌘C 不抢 Terminal／Editor | `SharedTreeUITests`、`WorkspaceFilesUITests` 原生菜单／终端焦点 GUI PASS |
+| 菜单中新建 | 右键文件夹 B 的 ⌘N／⌥⌘N 只创建在 B；Escape 后系统快捷键仍以正式焦点为准 | Red `/tmp/bailey-p2-menu-main-route.log`；Green `/tmp/bailey-p2-menu-routed-green.log` 3/3 PASS，验证真实路径 |
+| Selection 和 Edit | Command/Shift 多选及范围、上下文内外独立目标、复制／剪切／粘贴／废纸篓及最终字节 | 完整 Files GUI 已通过项；`/tmp/bailey-p2-unfinished-real-ui.log` Edit 专项 PASS |
+| 原生拖放 | 选中集合拖动、非选中单行、默认 Move、Option Copy 保留原件、紧凑目录祖先真实路径 | Red `/tmp/bailey-p2-option-operation-trace.log`；Green `/tmp/bailey-p2-copy-intent-native-combo.log` 3/3 PASS |
+| 拖放落点 | 只高亮真正接收的目录／压缩目录段，不增加 Copy/Move 文字徽标，退出／完成清除；横向滚轮不被拖动层吞掉 | 共享行像素宿主测试、滚动真实 GUI Red→Green；目录接收由原生拖放操作测试核实 |
+| Git 共享树 | 压缩路径各段不同的相对／绝对路径、Add to .gitignore、历史与工作区切换、Stage 命中 | `SharedTreeUITests.testGitCompactSegmentsUseTheirRealChangesHistoryAndWorktreePaths` 独立 1/1 PASS，`/tmp/bailey-p2-git-compact-alone.log` |
+| 文件／窗口 | 同名文件各自保存、文件排除与 Reveal、Close 全部标签、编辑器回到 Files 焦点 | 原生 GUI、未完成项补跑 `/tmp/bailey-p2-unfinished-real-ui.log` 4/4 PASS |
+| 中文与输入法 | 中文系统菜单／Command Palette、超长 Unicode 目录、原生文件夹选择器与文件打开 | 中文 Picker 独立 1/1 PASS，`/tmp/bailey-p2-chinese-picker-alone.log`；中文 Palette GUI PASS |
+| Windows SSH | 远端和本机项目隔离、双窗口断连恢复、Finder→SSH 拒绝而本机接受、远端真实字节保护 | 此前真实 Windows SSH 宿主 4/4 PASS，双窗口 E2E PASS，Finder 正反对照 `/tmp/bailey-p2-final-finder-regression.log` 3/3 PASS |
+
+广覆盖首轮 `SharedTreeUITests`（16 项）和 `WorkspaceFilesUITests`（32 项）共 48 个方法；
+运行至 42 个结案（30 PASS、7 FAIL、5 因未传 SSH 主机参数 SKIP）后，
+XCTest 记录外部 VSCodium 前台窗口干扰，及时终止被遮挡的后续鼠标自动化。
+首次失败的 7 项均分别复现或隔离验收为 PASS；未完成的 6 项中 4 项在
+`/tmp/bailey-p2-unfinished-real-ui.log` 全部 PASS，Space 与系统新建快捷键
+已在独立真实 GUI 中 PASS。故**43 项无需 SSH 的不同 GUI 方法均有真实通过证据**，
+这不是一次连续 43/43 的运行结果，不混淆多轮结果和单次通过率。
+
+最后一次主机回归 `make test:FileTreeTests,DockWorkspaceTests,DockFocusIntegrationTests`
+→ **119/119 PASS**（`/tmp/bailey-p2-final-all-host-regression.log`）。
+`make build:dev` → **BUILD SUCCEEDED**，`make build:ui` → **TEST BUILD SUCCEEDED**；
+两个签名产物 `codesign --verify --deep --strict` 均通过，`git diff --check` 通过
+（`/tmp/bailey-p2-final-user-build-*.log`）。
+本轮未修改或重启正式 `/Applications/Bailey.app`，未安装软件或启用系统级 Automation Mode。
+
+新版本 Windows Finder 拒绝用例已提供授权测试主机重新尝试，但
+`/tmp/bailey-p2-ssh-finder-final-qa.log` 在**启动 App 前**因系统剪贴板包含无法完整备份的
+数据类型而安全退出，未执行 GUI 拖放，也未清空用户剪贴板；此轮不记为 PASS。
+同一场景在此前真实 App E2E 已核销，最新 F-07 修改只影响内部拖放操作协商，
+外部 Finder 对 SSH 的拒绝仍由 `allowsFinder` 边界独立约束。
+Windows `/tmp/bailey-p2-ui-*` 测试目录已只读查验，没有遗留目录。
+
 ## Gate（是否允许进入下一阶段）
 
 - 结论：`Go`（仅 P2）
-- 理由：`P2-T1`～`P2-T5` 均为 `completed`；F-01～F-04 全部 `Resolved`，无遗留 `Open` finding。
-  原有 260 项宿主、新增相关 113 项宿主、10 项 Dock GUI、Option Copy、系统 Edit、
-  真实 Windows 双窗口主动断线恢复、F-04 连续终端回归和 SSH Finder 拒绝／本机正向对照均已验证；
-  最新构建、UI 编译和签名通过。其它阶段（P3～P5）仍按自己的计划与 Gate 独立实施。
+- 理由：`P2-T1`～`P2-T5` 均为 `completed`；F-01～F-09 全部 `Resolved`，无遗留 `Open` finding。
+  旧阶段宿主／Dock GUI／Windows 联合验收及本轮 119 项宿主、43 个非 SSH GUI 方法的分组
+  真实回归均有证据；最新 Dev／UI 构建与签名通过。
+  其它阶段（P3～P5）仍按各自计划和 Gate 独立实施。
 
 ## 最终状态与剩余风险
 
-- 当前状态：`Closed`（P2 审计已完成，无未解决 finding）。
-- 已知环境限制：Tailscale 的 SSH 新建连接曾间歇性超时，但在服务正常且连接恢复后
-  完整 Windows 联合 E2E 已通过；这不是 Bailey 生产逻辑缺陷，亦未被作为跳过验收的理由。
+- 当前状态：`Closed`（P2 已结案，审计中无未解决 finding）。
+- 当前重验限制：剪贴板存在无法完整备份的数据类型时，特定 SSH GUI 用例的启动前检查会拒绝运行，
+  不应通过清空用户剪贴板消除报错；此前已有同场景真实 E2E 成功证据。
+  Tailscale 新建 SSH 连接历史上也曾间歇超时，但该环境现象不是已经定位的 Bailey 生产缺陷。
   本轮没有启用 Automation Mode 免认证的系统级设置。
 
 ## 审计约束
