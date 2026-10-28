@@ -221,7 +221,8 @@ final class WorkspaceFilesUITests: XCTestCase {
         let sourceBytes = try Data(contentsOf: source)
 
         let app = try WorkspaceUITestSupport.launch(
-            in: self, language: "en", configurationHome: fixture.root
+            in: self, language: "en", configurationHome: fixture.root,
+            project: localWorkspace, clipboardIsReadOnly: true
         )
         app.menuBarItems["Project"].click()
         let addSSH = app.menuItems["Add SSH Files or Projects…"]
@@ -247,6 +248,10 @@ final class WorkspaceFilesUITests: XCTestCase {
             .matching(NSPredicate(format: "label CONTAINS %@", "drop-zone"))
             .firstMatch
         XCTAssertTrue(remoteFolder.waitForExistence(timeout: 25))
+        remoteFolder.click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileRow(
+            URL(fileURLWithPath: remoteRoot + "/drop-zone/protected.txt"), in: remoteWindow
+        ).waitForExistence(timeout: 25), "The drag target must belong to Windows SSH")
         let finder = WorkspaceUITestSupport.finderDragSource(for: source)
         defer { WorkspaceUITestSupport.closeFinderDragWindow(finder.window) }
         let remotePoint = remoteFolder.coordinate(
@@ -264,22 +269,22 @@ final class WorkspaceFilesUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: source), sourceBytes)
         // The same genuine Finder fileURL must be accepted by local Files;
         // otherwise a missed drag could falsely make the SSH rejection pass.
+        // The local fixture is preloaded; switching projects avoids changing
+        // an unsnapshotable Universal Clipboard through the native picker.
         app.activate()
-        app.typeKey("n", modifierFlags: [.command, .shift])
-        let emptyWindow = try XCTUnwrap(app.windows.allElementsBoundByIndex.first {
-            $0.buttons["bailey.emptyState.addFolder"].exists
-        })
-        let localWindow = app.windows.matching(identifier: emptyWindow.identifier).firstMatch
-        try WorkspaceUITestSupport.addFolder(localWorkspace, to: app, in: localWindow)
-        let localFiles = localWindow.descendants(matching: .any)
+        app.typeKey("1", modifierFlags: .command)
+        let localFiles = remoteWindow.descendants(matching: .any)
             .matching(identifier: "bailey.dock.files").firstMatch
         XCTAssertTrue(localFiles.waitForExistence(timeout: 15))
         localFiles.click()
-        let localFolder = localWindow.descendants(matching: .any)
+        let localFolder = remoteWindow.descendants(matching: .any)
             .matching(identifier: "bailey.tree.folder")
             .matching(NSPredicate(format: "label CONTAINS %@", "drop-zone"))
             .firstMatch
         XCTAssertTrue(localFolder.waitForExistence(timeout: 20))
+        localFolder.click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileRow(localAnchor, in: remoteWindow)
+            .waitForExistence(timeout: 20), "The positive control must use the Mac project")
         let localPoint = localFolder.coordinate(
             withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
         )
