@@ -1743,24 +1743,26 @@ final class WorkspaceFilesUITests: XCTestCase {
         let folderName = "中文目录-" + String(repeating: "深", count: 50)
         let file = try fixture.file(folderName + "/文件-测试.swift", text: "let 中文 = true\n")
         let app = try WorkspaceUITestSupport.launch(in: self, language: "zh-Hans")
-        let add = app.buttons["bailey.emptyState.addFolder"]
+        let window = app.windows.firstMatch
+        let add = window.buttons["bailey.emptyState.addFolder"]
         XCTAssertTrue(add.waitForExistence(timeout: 15))
-        XCTAssertEqual(add.label, "添加文件夹…", "The test must actually launch the Chinese UI")
+        XCTAssertEqual(add.label, "添加项目…", "The test must actually launch the Chinese UI")
 
-        try WorkspaceUITestSupport.addFolder(fixture.root, to: app)
-        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        try WorkspaceUITestSupport.addFolder(fixture.root, to: app, in: window)
+        let files = window.descendants(matching: .any)
+            .matching(identifier: "bailey.dock.files").firstMatch
         XCTAssertTrue(files.waitForExistence(timeout: 20))
         files.click()
-        let folder = app.descendants(matching: .any)
+        let folder = window.descendants(matching: .any)
             .matching(identifier: "bailey.tree.folder")
             .matching(NSPredicate(format: "label == %@", folderName)).firstMatch
         XCTAssertTrue(folder.waitForExistence(timeout: 20))
         folder.click()
-        let row = WorkspaceUITestSupport.fileRow(file, in: app.windows.firstMatch)
+        let row = WorkspaceUITestSupport.fileRow(file, in: window)
         XCTAssertTrue(row.waitForExistence(timeout: 20),
                       "Long Unicode paths must remain uniquely addressable in the AX tree")
         row.doubleClick()
-        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: app.windows.firstMatch)
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: window)
             .waitForExistence(timeout: 15))
     }
 
