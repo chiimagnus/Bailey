@@ -244,12 +244,13 @@ final class WindowOwnershipIntegrationTests: XCTestCase {
         XCTAssertEqual(items.compactMap { ($0.item as? NSURL)?.path },
                        [first.path, second.path])
         let remoteItems = FileTreeNativeDragView.dragItems(record: record, local: false)
-        XCTAssertEqual(remoteItems.count, 2)
-        XCTAssertTrue(remoteItems.allSatisfy {
-            guard let item = $0.item as? NSPasteboardItem else { return false }
-            return item.string(forType: .fileURL) == nil
-                && item.string(forType: NSPasteboard.PasteboardType(FileTreeDrag.type)) != nil
-        }, "SSH Files must not publish local file URLs")
+        XCTAssertEqual(remoteItems.count, 1,
+                       "SSH drags need one private marker, not a pasteboard item per selected file")
+        let marker = try XCTUnwrap(remoteItems.first?.item as? NSPasteboardItem)
+        XCTAssertNil(marker.string(forType: .fileURL))
+        XCTAssertNotNil(marker.string(forType: NSPasteboard.PasteboardType(FileTreeDrag.type)))
+        XCTAssertEqual(record.source.paths, [first.path, second.path],
+                       "The in-process record retains all remote selection paths")
         XCTAssertFalse(other.receiveFileTreeDrop(
             record, into: destination.path, copy: false,
             in: otherProject, target: otherIdentity

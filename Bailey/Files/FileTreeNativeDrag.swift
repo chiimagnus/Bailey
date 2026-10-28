@@ -104,22 +104,22 @@ final class FileTreeNativeDragView: NSView, NSDraggingSource {
     }
 
     static func dragItems(record: FileTreeDrag.Record, local: Bool) -> [NSDraggingItem] {
-        record.source.paths.enumerated().map { index, path in
-            let writer: NSPasteboardWriting
-            if local {
-                writer = URL(fileURLWithPath: path) as NSURL
-            } else {
-                let item = NSPasteboardItem()
-                item.setString("drag", forType: NSPasteboard.PasteboardType(FileTreeDrag.type))
-                writer = item
-            }
-            let item = NSDraggingItem(pasteboardWriter: writer)
-            let image = local ? NSWorkspace.shared.icon(forFile: path)
-                : (NSImage(systemSymbolName: "doc", accessibilityDescription: nil)
-                   ?? NSImage(size: NSSize(width: 20, height: 20)))
+        if !local {
+            let marker = NSPasteboardItem()
+            marker.setString("drag", forType: NSPasteboard.PasteboardType(FileTreeDrag.type))
+            let item = NSDraggingItem(pasteboardWriter: marker)
+            item.setDraggingFrame(
+                NSRect(x: 0, y: 0, width: 20, height: 20),
+                contents: NSImage(systemSymbolName: "doc", accessibilityDescription: nil)
+                    ?? NSImage(size: NSSize(width: 20, height: 20))
+            )
+            return [item]
+        }
+        return record.source.paths.enumerated().map { index, path in
+            let item = NSDraggingItem(pasteboardWriter: URL(fileURLWithPath: path) as NSURL)
             item.setDraggingFrame(
                 NSRect(x: CGFloat(index) * 3, y: 0, width: 20, height: 20),
-                contents: image
+                contents: NSWorkspace.shared.icon(forFile: path)
             )
             return item
         }
