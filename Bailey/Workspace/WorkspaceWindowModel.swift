@@ -587,12 +587,12 @@ final class WorkspaceWindowModel {
             attachedWindow?.performClose(nil)
             return
         }
-        project.dock.clearContextTarget()
         closePanel(item, in: project)
     }
 
     func closePanel(_ item: DockItem, in project: Project) {
         guard selectedProject === project, project.dock.group(containing: item) != nil else { return }
+        project.dock.clearContextTarget()
         switch item {
         case .tab(let id):
             if let tab = project.tabs.first(where: { $0.id == id }) { project.close(tab) }

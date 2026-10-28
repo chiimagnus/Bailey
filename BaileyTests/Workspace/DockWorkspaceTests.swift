@@ -471,6 +471,45 @@ final class DockWorkspaceTests: XCTestCase {
         }
     }
 
+    func testDirectTabCloseClearsMenuTargetWhenAnEarlierCloseIsStillPending() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bailey-pending-close-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("first.txt")
+        let second = directory.appendingPathComponent("second.txt")
+        try "first bytes\n".write(to: first, atomically: true, encoding: .utf8)
+        try "second bytes\n".write(to: second, atomically: true, encoding: .utf8)
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([directory])
+        let project = try XCTUnwrap(manager.selectedProject)
+        project.openFile(first.path)
+        project.openFile(second.path)
+        let tabs = project.tabs
+        XCTAssertEqual(tabs.count, 2)
+        XCTAssertEqual(project.dock.activeGroup?.selected, .tab(tabs[1].id))
+
+        // A right-clicked inactive tab can already be awaiting a save or a
+        // native Cancel decision. A repeated Close must not leave its menu
+        // target armed for a later system Cmd-W.
+        tabs[0].content.suspendAutoSaveForClose(true)
+        defer { tabs[0].content.suspendAutoSaveForClose(false) }
+        project.dock.selectForContextMenu(.tab(tabs[0].id))
+        manager.closePanel(.tab(tabs[0].id), in: project)
+
+        XCTAssertNil(project.dock.contextTarget)
+        XCTAssertEqual(project.tabs.map(\.id), tabs.map(\.id))
+        XCTAssertEqual(project.dock.activeGroup?.selected, .tab(tabs[1].id))
+
+        manager.closeActivePanelOrWindow()
+        XCTAssertEqual(project.tabs.map(\.id), [tabs[0].id],
+                       "A later Cmd-W must close active B, never retry the blocked A")
+        XCTAssertEqual(try Data(contentsOf: first), Data("first bytes\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("second bytes\n".utf8))
+    }
+
     func testRightClickToolTargetIsIndependentOfActiveGroupAndProject() throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }
