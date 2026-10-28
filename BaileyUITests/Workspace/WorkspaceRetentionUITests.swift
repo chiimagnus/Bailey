@@ -269,8 +269,8 @@ final class WorkspaceRetentionUITests: XCTestCase {
         XCTAssertTrue(upload.waitForExistence(timeout: 15),
                       "WebKit file input must expose its native drag target: \(browser.debugDescription.prefix(2500))")
 
-        let finder = finderDragSource(for: file)
-        defer { closeFinderDragWindow(finder.window) }
+        let finder = WorkspaceUITestSupport.finderDragSource(for: file)
+        defer { WorkspaceUITestSupport.closeFinderDragWindow(finder.window) }
         let target = upload.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5))
         XCTAssertLessThan(finder.window.frame.maxX, target.screenPoint.x - 20,
                           "Finder must not obscure the real WKWebView file input")
@@ -300,8 +300,8 @@ final class WorkspaceRetentionUITests: XCTestCase {
         // Finder supplies the genuine system file URL drag. Its window is
         // moved into the left side so Bailey's receiving terminal remains
         // visible: a hidden target cannot be validated by AX coordinates.
-        let finder = finderDragSource(for: file)
-        defer { closeFinderDragWindow(finder.window) }
+        let finder = WorkspaceUITestSupport.finderDragSource(for: file)
+        defer { WorkspaceUITestSupport.closeFinderDragWindow(finder.window) }
         XCTAssertLessThan(finder.window.frame.maxX, window.frame.midX + 70,
                           "Finder must not cover the native terminal drop target")
         finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
@@ -321,30 +321,5 @@ final class WorkspaceRetentionUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), originalBytes)
         XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 0,
                        "The terminal drop must not create a FileTab")
-    }
-
-    private func finderDragSource(for file: URL) -> (window: XCUIElement, source: XCUIElement) {
-        NSWorkspace.shared.activateFileViewerSelecting([file])
-        let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
-        let window = finder.windows.firstMatch
-        XCTAssertTrue(window.waitForExistence(timeout: 20))
-        if !window.outlines["ListView"].waitForExistence(timeout: 2) {
-            finder.activate()
-            finder.typeKey("2", modifierFlags: .command)
-        }
-        XCTAssertTrue(window.outlines["ListView"].waitForExistence(timeout: 12),
-                      "The selected Finder file must expose an actual draggable row")
-        let title = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
-        title.click(forDuration: 0.2,
-                    thenDragTo: title.withOffset(CGVector(dx: 40 - window.frame.minX, dy: 0)))
-        let source = window.outlines["ListView"].outlineRows.firstMatch
-            .textFields[file.lastPathComponent]
-        XCTAssertTrue(source.waitForExistence(timeout: 12),
-                      "The system drag must originate from the actual selected file")
-        return (window, source)
-    }
-
-    private func closeFinderDragWindow(_ window: XCUIElement) {
-        if window.exists { window.buttons["_XCUI:CloseWindow"].firstMatch.click() }
     }
 }

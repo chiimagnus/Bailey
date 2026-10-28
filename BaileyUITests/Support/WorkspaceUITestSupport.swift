@@ -286,6 +286,31 @@ enum WorkspaceUITestSupport {
             .matching(NSPredicate(format: "value == %@", url.standardizedFileURL.path))
             .firstMatch
     }
+
+    static func finderDragSource(for file: URL) -> (window: XCUIElement, source: XCUIElement) {
+        NSWorkspace.shared.activateFileViewerSelecting([file])
+        let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
+        let window = finder.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 20))
+        if !window.outlines["ListView"].waitForExistence(timeout: 2) {
+            finder.activate()
+            finder.typeKey("2", modifierFlags: .command)
+        }
+        XCTAssertTrue(window.outlines["ListView"].waitForExistence(timeout: 12),
+                      "The selected Finder file must expose an actual draggable row")
+        let title = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
+        title.click(forDuration: 0.2,
+                    thenDragTo: title.withOffset(CGVector(dx: 40 - window.frame.minX, dy: 0)))
+        let source = window.outlines["ListView"].outlineRows.firstMatch
+            .textFields[file.lastPathComponent]
+        XCTAssertTrue(source.waitForExistence(timeout: 12),
+                      "The system drag must originate from the actual selected file")
+        return (window, source)
+    }
+
+    static func closeFinderDragWindow(_ window: XCUIElement) {
+        if window.exists { window.buttons["_XCUI:CloseWindow"].firstMatch.click() }
+    }
 }
 
 private final class UITestSessionObserver: NSObject, XCTestObservation {

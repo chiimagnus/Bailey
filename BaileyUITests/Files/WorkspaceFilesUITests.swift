@@ -187,6 +187,120 @@ final class WorkspaceFilesUITests: XCTestCase {
                        "HIDDEN_REMOTE_BYTES\n")
     }
 
+    func testAuthorizedWindowsSSHRejectsRealFinderDropWithoutAffectingLocalCopy() throws {
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"],
+              !host.isEmpty, !host.hasPrefix("-"),
+              !host.contains(where: { $0.isWhitespace || $0.isNewline })
+        else { throw XCTSkip("Requires an explicitly authorized Windows SSH host") }
+
+        let remoteRoot = try runSSH(
+            host: host, command: "mktemp -d /tmp/bailey-p2-ui-XXXXXX"
+        ).trimmingCharacters(in: .newlines)
+        guard (remoteRoot as NSString).deletingLastPathComponent == "/tmp",
+              (remoteRoot as NSString).lastPathComponent.hasPrefix("bailey-p2-ui-")
+        else { throw NSError(domain: "BaileyP2UI", code: 3) }
+        addTeardownBlock { @MainActor in
+            XCTAssertEqual(try self.runSSH(host: host,
+                command: "rm -r -- '\(remoteRoot)' && test ! -e '\(remoteRoot)' && printf cleaned"),
+                "cleaned", "Only the isolated remote test directory may be deleted")
+        }
+        XCTAssertEqual(try runSSH(host: host, command:
+            "mkdir -p -- '\(remoteRoot)/drop-zone' && "
+            + "printf 'REMOTE_UNCHANGED\n' > '\(remoteRoot)/drop-zone/protected.txt' && printf ready"),
+            "ready")
+
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let source = try fixture.file(
+            "finder-source/local-only.txt", text: "MAC_FINDER_SOURCE_UNIQUE_BYTES\n"
+        )
+        let localAnchor = try fixture.file(
+            "local-workspace/drop-zone/existing.txt", text: "LOCAL_DESTINATION_ANCHOR\n"
+        )
+        let localWorkspace = fixture.root.appendingPathComponent("local-workspace")
+        let copied = localWorkspace.appendingPathComponent("drop-zone/local-only.txt")
+        let sourceBytes = try Data(contentsOf: source)
+
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root
+        )
+        app.menuBarItems["Project"].click()
+        let addSSH = app.menuItems["Add SSH Files or Projects…"]
+        XCTAssertTrue(addSSH.waitForExistence(timeout: 12))
+        addSSH.click()
+        let remoteWindow = app.windows.firstMatch
+        let sheet = remoteWindow.sheets.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 12))
+        let hostField = sheet.comboBoxes.firstMatch
+        hostField.click()
+        hostField.typeKey("a", modifierFlags: .command)
+        hostField.typeText(host)
+        let paths = sheet.textViews.firstMatch
+        paths.click()
+        paths.typeText(remoteRoot)
+        sheet.buttons["Add"].click()
+
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 25))
+        files.click()
+        let remoteFolder = remoteWindow.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label CONTAINS %@", "drop-zone"))
+            .firstMatch
+        XCTAssertTrue(remoteFolder.waitForExistence(timeout: 25))
+        let finder = WorkspaceUITestSupport.finderDragSource(for: source)
+        defer { WorkspaceUITestSupport.closeFinderDragWindow(finder.window) }
+        let remotePoint = remoteFolder.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        )
+        XCTAssertLessThan(finder.window.frame.maxX, remotePoint.screenPoint.x - 20,
+                          "Finder must not obscure the real SSH Files destination")
+        finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.4, thenDragTo: remotePoint)
+
+        XCTAssertEqual(try runSSH(host: host, command:
+            "test ! -e '\(remoteRoot)/drop-zone/local-only.txt' && "
+            + "cat '\(remoteRoot)/drop-zone/protected.txt'"),
+            "REMOTE_UNCHANGED\n", "Finder must not upload a Mac file into Windows Files")
+        XCTAssertEqual(try Data(contentsOf: source), sourceBytes)
+        // The same genuine Finder fileURL must be accepted by local Files;
+        // otherwise a missed drag could falsely make the SSH rejection pass.
+        app.activate()
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        let emptyWindow = try XCTUnwrap(app.windows.allElementsBoundByIndex.first {
+            $0.buttons["bailey.emptyState.addFolder"].exists
+        })
+        let localWindow = app.windows.matching(identifier: emptyWindow.identifier).firstMatch
+        try WorkspaceUITestSupport.addFolder(localWorkspace, to: app, in: localWindow)
+        let localFiles = localWindow.descendants(matching: .any)
+            .matching(identifier: "bailey.dock.files").firstMatch
+        XCTAssertTrue(localFiles.waitForExistence(timeout: 15))
+        localFiles.click()
+        let localFolder = localWindow.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label CONTAINS %@", "drop-zone"))
+            .firstMatch
+        XCTAssertTrue(localFolder.waitForExistence(timeout: 20))
+        let localPoint = localFolder.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        )
+        XCTAssertLessThan(finder.window.frame.maxX, localPoint.screenPoint.x - 20)
+        finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.4, thenDragTo: localPoint)
+
+        let arrived = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: copied.path)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [arrived], timeout: 20), .completed,
+                       "The same Finder drag must actually copy into local Files")
+        XCTAssertEqual(try Data(contentsOf: copied), sourceBytes)
+        XCTAssertEqual(try Data(contentsOf: source), sourceBytes)
+        XCTAssertEqual(try String(contentsOf: localAnchor, encoding: .utf8),
+                       "LOCAL_DESTINATION_ANCHOR\n")
+        XCTAssertEqual(try runSSH(host: host, command:
+            "test ! -e '\(remoteRoot)/drop-zone/local-only.txt' && "
+            + "cat '\(remoteRoot)/drop-zone/protected.txt'"), "REMOTE_UNCHANGED\n")
+    }
+
     func testAuthorizedWindowsSSHCommandPaletteOpensRealRemoteFiles() throws {
         guard let host = ProcessInfo.processInfo.environment["BAILEY_P3_TEST_SSH_HOST"],
               !host.isEmpty else {
