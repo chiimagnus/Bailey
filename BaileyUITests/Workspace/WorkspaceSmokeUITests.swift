@@ -1,7 +1,18 @@
+import AppKit
 import XCTest
 
 @MainActor
 final class WorkspaceSmokeUITests: XCTestCase {
+    func testDevelopmentAppNameMatchesFinderDockAndMenuBar() throws {
+        let app = try WorkspaceUITestSupport.launch(in: self)
+        let running = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev"
+        ).first)
+        XCTAssertEqual(running.bundleURL?.lastPathComponent, "Bailey Dev.app")
+        XCTAssertEqual(running.localizedName, "Bailey Dev")
+        XCTAssertTrue(app.menuBars.menuBarItems["Bailey Dev"].waitForExistence(timeout: 12))
+    }
+
     func testRepeatedLaunchDoesNotResetTheCurrentTestProject() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let marker = try fixture.file("marker.txt", text: "test-owned bytes\n")

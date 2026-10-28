@@ -11,7 +11,8 @@ DEV_DERIVED_DATA := build/DerivedData-Dev
 DEV_FLAGS := BAILEY_BUNDLE_SUFFIX=.dev 'BAILEY_APP_NAME=Bailey Dev' \
 	BAILEY_DOCUMENT_HANDLER_RANK=None 'BAILEY_FINDER_SERVICE_NAME=Add Folder to Bailey Dev'
 SOURCE_PACKAGES := build/SourcePackages
-APP = $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/Bailey.app
+APP_BUNDLE = Bailey.app
+APP = $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/$(APP_BUNDLE)
 RELEASE_APP := $(DERIVED_DATA)/Build/Products/Release/Bailey.app
 ARCHIVE := build/releases/bailey-$(VERSION)-macos-arm64.zip
 
@@ -76,6 +77,7 @@ build:
 	codesign --verify --deep --strict '$(APP)'
 
 build\:dev: DERIVED_DATA = $(DEV_DERIVED_DATA)
+build\:dev: APP_BUNDLE = Bailey Dev.app
 build\:dev:
 	@$(DEV_OPERATION_LOCK); \
 	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) build; \
@@ -99,6 +101,7 @@ test\:ui:
 	$(XCODEBUILD) $(SIGNING_FLAGS) $(VERSION_FLAGS) $(DEV_FLAGS) $(TEST_SELECTION) test
 
 test: DERIVED_DATA = $(DEV_DERIVED_DATA)
+test: APP_BUNDLE = Bailey Dev.app
 test:
 	@$(DEV_OPERATION_LOCK); \
 	$(SELECTED_TESTS_PREFLIGHT); \

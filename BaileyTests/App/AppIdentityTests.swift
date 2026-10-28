@@ -78,6 +78,8 @@ final class AppIdentityTests: XCTestCase {
                        AppIdentity.displayName)
         XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String,
                        AppIdentity.displayName)
+        XCTAssertEqual(Bundle.main.bundleURL.lastPathComponent, AppIdentity.displayName + ".app",
+                       "App bundle filename must match its macOS-visible identity")
         XCTAssertTrue(BaileyInstanceMode.isIsolated)
     }
 
