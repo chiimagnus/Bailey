@@ -46,24 +46,24 @@ id = "P2-T1"
 title = "收敛 Files 浏览与打开事件链"
 status = "completed"
 plan = "plan-p2.md#p2-t1"
-commit = "4dd9ad833eb7975a22df56f0a7df3d54d3c5de59"
+commit = "f4feb729883ac71d9790438779a9ead8e46a2ce6"
 note = "182 项宿主与 1 项真实 App GUI 通过，Dev/UI 构建验签通过；隐藏 Files 返回 Red→Green；同组及跨组自动定位。"
 
 [[tasks]]
 id = "P2-T2"
 title = "收敛 Files 系统 Edit 与右键操作目标"
-status = "blocked"
+status = "completed"
 plan = "plan-p2.md#p2-t2"
-commit = ""
-note = "实现已提交 8fe95df5057b70e26fe52b2788e6ec5814e87106；140 宿主+Dev/UI 构建通过，真实 GUI 尚未核销：既有两个隔离 Bailey Dev 进程 PID 22129/23805 处于 T 状态，按测试规范不擅自终止，测试用例命中也需复核。"
+commit = "88ccd4d159c2ba76f6b19ce643f6b2fb93cabbba"
+note = "实现：8fe95df、dd79095f；补充测试提交 88ccd4d。213 项受影响宿主 0 失败；Files 右键 B/C、Control-click、Cmd-C 在 Files/Terminal 焦点下、菜单不误打开文件等 GUI 单项通过，Dev 构建和数据字节断言通过。"
 
 [[tasks]]
 id = "P2-T3"
 title = "核验原生菜单生命周期并清理旧路径"
-status = "blocked"
+status = "completed"
 plan = "plan-p2.md#p2-t3"
-commit = ""
-note = "共享菜单相关实现已提交 3b9c60ddb3a454b91d55741d2fe2b90575038015；34 宿主及 Dev build 通过；真实菜单 Cmd-W/蜂鸣/关闭反馈 GUI 因旧隔离 Dev 测试进程占用未核销。"
+commit = "0823fdf23c13a3a0d31645ef2af11cb94fd3636c"
+note = "实现 3b9c60d、d832f485；根因修复 0823fdf。原生菜单后系统 Cmd-W 错关活动文件 Red→Green；菜单 Escape 取消后关闭活动项、工具菜单 Cmd-W 共 3 条 GUI 通过；213 宿主与 Dev 构建签名通过。"
 
 [[tasks]]
 id = "P2-T4"
@@ -71,7 +71,7 @@ title = "统一文件选择与 Finder 内外拖放目标"
 status = "completed"
 plan = "plan-p2.md#p2-t4"
 commit = "f73f3f0e9df936d1b2d35286068b3e7f5bbd35bf"
-note = "141 项宿主、真实多选 Move 与 Option Copy+未选中 B Move 各 1 项 GUI、Dev 构建签名通过；同场批测曾遇到独立 App 窗口未显示，单项验证正常。"
+note = "主实现 f73f3f0；补充右键回归 8cef05ff、压缩祖先段真实拖放 0a1bcc1。141 宿主、真实 A/C 多选 Move、Option Copy+单行 Move、Control-click 和压缩 a1 目录树 Move GUI 均通过；实际源目标字节核验、Dev 构建签名通过。"
 
 [[tasks]]
 id = "P2-T5"
