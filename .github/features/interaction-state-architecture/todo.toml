@@ -148,18 +148,18 @@ note = "Projects 游标/右键/拖动按项目 UUID 校验；112 项定点宿主
 [[tasks]]
 id = "P4-T2"
 title = "整理 Dock 标签展示激活和关闭"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t2"
-commit = ""
-note = ""
+commit = "d6783953"
+note = "105项宿主通过，3项Dock GUI通过；make build:dev及签名通过。Browser内容恢复GUI用例在基线5dec23ed也以同一坐标失败，独立确认非T2引入，原生标签命中与焦点故障继续纳入同阶段T7共同根因验收。"
 
 [[tasks]]
 id = "P4-T3"
 title = "整理命令面板与 Ctrl+Tab 临时选择"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t3"
-commit = ""
-note = ""
+commit = "b2f7989839cefa0f6b8205e6222f84a5c3db25cb"
+note = "93项相关宿主0失败、1项环境条件跳过；3项Dev GUI E2E全通过；make build:dev及签名通过。跨项目旧Switcher与Palette数组下标漏洞均有红绿回归。"
 
 [[tasks]]
 id = "P4-T4"
