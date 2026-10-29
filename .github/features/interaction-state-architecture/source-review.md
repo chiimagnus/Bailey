@@ -5,6 +5,77 @@
 旧基线的历史问题与测试记载不自动代表当前实现；P3 实施以这次修正的
 源码映射及任务中的重新验证为准。实时任务状态以 `todo.toml` 为准。
 
+<a id="p4-current-source-review"></a>
+
+## P4 当前源码复核（2026-10-30）
+
+本节只针对当前 `rhc@e355b362` 的 P4 执行前审查；
+直接从 `AGENTS.md`、`docs/` 当前契约、CodeGraph 的逐字源码、调用方和现有 XCTest 取证，
+**未阅读或继承任何 `audit*.md`**。P1～P3 的历史执行前描述不代表现行源码。
+核对期间另一个工作流程将 HEAD 切至 `crhhhh@94264742`（PR #67 合并提交）；
+已比对该提交与起始 `e355b362` 的 Git 树，**源码内容无差异**，
+故以下调用链仍对应当前工作区。未擅自切换、提交或推送分支。
+
+上游重新下载并逐字对照固定版 VS Code 的
+`multiEditorTabsControl.ts`、`editorTabsControl.ts`、`editorGroupView.ts`、
+`editorGroupModel.ts`、`editorCommandsContext.ts`、`editorDropTarget.ts`、
+`editorParts.ts` 与 `editorQuickAccess.ts`。
+`selectEditorsBetween` 只去掉 Anchor 另一侧已选的连续岛；
+`getMultiSelectContext` 只有命中已选 Editor 才使用该组集合；
+`onDragStart` 发布组选区；`isMoveOperation` 对 singleton 或同组 Option 按 Move。
+这是上游源码语义核验，**并非**上游 GUI 交互已在本机运行。
+
+前一轮已开始但未提交的 P4-T1 修改涉及 Projects 视图、WorkspaceIdentityTests、
+`docs/features/projects.md` 和 `todo.toml`；预审保留现场，不把它当完成验收。
+此前定点宿主 51/51、已有两项 Projects 相关 GUI 2/2 通过，
+并未独立证明新项目游标清理行为。当前 P4 实现仍须按任务继续 Red→Green。
+
+### 当前可达调用链与计划纠正
+
+| 任务 | 当前逐字源码和实际路径 | 已纳入 P4 计划的修正 |
+| --- | --- | --- |
+| T1 Projects | `ProjectsPanelView.swift:12-18,29-82,139-184` 分别持 cursor/context/drag；`WorkspaceWindowModel.swift:32-58,465-521` 的后台关闭不触发 selectedProjectID 变化，`close(project)` 先保存、成功才终止；`TreeKeyboardHost` 接管真实方向键 | 项目集合按 UUID 清除失效局部状态，保留有效游标；增加挂载项目树/键盘/右键实际 GUI，不把单纯模型重排测试算作游标验收 |
+| T2 Dock 展示/配置 | `DockWorkspaceModel.swift:375-558` 持 root/activeGroup/context、编辑器变化回调；`Project.swift:32-47,89-93` 持 MRU；`WorkspaceDockView.swift:623-625` 连续调用 Dock.select 与 Project.selectTab；`DockWorkspaceModel.swift:69-110` 三处旧 `info` 接受分支；`AppSettings.swift:289-318,428-450` 无效配置默认化并在其它设置保存时重写 TOML | 一次选择只有一条动作链；校验所有 restore/remove 后移除 View fallback；删除运行配置中的 info 分支，但先覆盖下一次普通偏好保存的字节/布局；不删真实快照解码 |
+| T3 暂态输入 | `TabSwitcherView.swift:18-24,76-99,120-158` 持旧 Project 与预览并仅检查其旧 selectedTabID；`ContentView.swift:53-55` 却用新的 selectedProject 绘 Overlay；`WorkspaceWindowModel.swift:45-58,1186-1203` 只在窗口关闭时取消；`CommandPaletteView.swift:319-330` 的项目切换命令捕获数组 index，`run` 在面板结束后执行 | 先阻止跨项目旧 Ctrl+Tab 提交和错误卡片；Palette 项目命令按 UUID 执行前核对，保持原 Search/FileIndexKey、键盘/IME 和焦点恢复边界 |
+| T4 多选与关闭接入 | `DockGroup.selected` 仅表示显示；`WorkspaceChrome.swift:256-334` 仅有一个 isSelected 且复用 RowHighlightStyle；`WorkspaceDockView.swift:486-625` 的 Button/DragGesture/mouseUp 各自影响意图；`WorkspaceWindowModel.swift:613-631` 只有单项 closePanel；`Project.swift:643-665` closeBatch 只收 PaneContent、没有完成通知 | 默认单项由 Displayed 派生，只存扩展多选和 Anchor；同 task 接通真正集合 Move/Close/键盘与 AX，混合工具关闭沿现有顺序保存结果进行，不留单双轨 |
+| T5 批量 Move | `WorkspaceDockView.swift` 的 DockTabDragCoordinator.Position 只有 item，`finish` 单次移动后再可能调用 Project.selectTab；`DockWorkspaceModel.swift:487-519` 每次单项 move 都发布 root；`DockNode.removing/removingEmptyGroups` 位于 `DockWorkspaceModel.swift:228-281` | 验证来源整组、真实目标与原顺序后只计算并发布一次 root；无效/取消/no-op 不发快照，不能循环原单项 Move 或制造空分割 |
+| T6 右键/关闭 | `WorkspaceDockView.swift:585-621,696-755` 校验本次 NSMenu 并把 ⌘W 交给当前菜单；`Project.swift:closeOthers` 先 selectTab(keep.id)（见当前类定义），可能激活后台右键目标；`WindowCloseIntegrationTests.swift:181-298` 验证串行保存与 Cancel 保留未处理项 | 删除 closeOthers 的隐式激活；Close Others/Right 必须按当前组合法成员计算；不可并行 Sheet，不可先关 PTY 再得知脏稿保存失败；保留 P2 菜单目标单次消费 |
+| T7 原生焦点/生命周期 | `DockGroupFocusView.swift:846-921` 的本地监听用可见中点、field editor、TerminalParking 判断组；`WorkspaceWindowModel.swift:1020-1113` 已登记 TreeKeyboardView 且检查实际原生内容；`BrowserView.swift:1068-1135,1192-1244` 两处在请求真正成功前标记 handled 并进行 6×50ms 重试；`TerminalHostView.swift` 停车/重挂载长期同一 Ghostty surface | 只替代经挂载验证确已多余的几何业务推断；保留窗口/停车/Sheet 检查；Browser 焦点请求在真实成功后消费，失效取消，不能以新的轮询掩盖挂载顺序 |
+
+### 同任务删除，而不是阶段末集中清理
+
+- **T1：** 去掉重复选择/游标改写入口（如果有）；不能删合法项目身份与保存失败保护。
+- **T2：** 删除 Work Tab 的双重 `dock.select`、View 的合法性掩盖 fallback
+  及 `DockWorkspaceConfiguration` 的三处运行态 `info`；
+  对其它配置和快照读取无影响才收尾。
+- **T3：** 撤去旧 Project 仍可提交的路径及下标命令；不添加 generation、FocusManager。
+- **T4：** 新多选首次可用时即替换单项 Drag/Move/Close 的并行分支，
+  只保留一个业务动作；T5/T6 是覆盖组合，不是下一阶段才修必要的丢项/保存问题。
+- **T5：** 删除循环单项 Move 与额外 Select 的旧路径；不修改 Finder/Files/Ghostty/WebKit 的外部 Drop。
+- **T6：** 删除 `closeOthers` 的后台激活和已被组选区取代的单项目标假设；
+  真正关闭继续复用 Project 保存/确认所有者。
+- **T7：** 删除经真实 owner/挂载事件替换的焦点几何推断与两套定时重试；
+  不删除拖动命中几何、native firstResponder、必要生命周期检查。
+
+**不能当冗余代码删除：** `DockSavedItem.info` 的历史快照解码
+（`SessionStoreTests.testObsoleteInfoItemIsFilteredWithoutDiscardingLayout`）、
+`TabSnapshot.localFile` 的机器归属、`WorkspaceApplication.withProtectedFiles`、
+文件和 SSH 的项目/路径/连接身份、`Project.closeBatch` 的数据保存否决、
+TerminalParking 的原生对象留存及 AppKit NSMenu 单次目标验证。
+它们有可达的用户数据或系统事件边界；删除需要先证明新实现承担同等保护。
+
+### 证据与验收的真实边界
+
+本轮 CodeGraph 覆盖上述入口、相关原生宿主、业务 owner、持久化和宿主/UI 测试调用。
+没有声称逐字阅读项目中与 P4 无关的 Git/SSH/语法解析全部实现，
+也没有把此前固定版本上游行为清单当作**本轮重新运行的 VS Code GUI**。
+从 P4 源码变更开始，宿主验证负责状态组合、快照、文件字节及原生对象身份；
+完整 Bailey Dev GUI 负责真实组合键、菜单跟踪、鼠标拖动、原生键盘焦点、
+浏览器网页/PTY 与双窗口最终结果。
+只有具备独立来源的新增失败才称为 Red；代码可疑分支不能直接冒称已复现。
+
+---
+
 ## 依据与阅读边界
 
 - 不读取、不继承 `audit*.md` 或 `vscode-source-audit.md` 的结论、失败数字与验收状态。
@@ -351,7 +422,7 @@ make build:dev
 补验办法、是否阻塞本 task/phase。不能预先把最低系统、SSH 或物理设备写成“不可得”后跳过尝试。
 必要条件缺失时不给无保留 Go。
 
-## 本轮交付与后续门禁
+## 2026-10-27 审查交付与后续门禁（历史记录）
 
 本轮交付是现行 idea、P1～P5 的修订和本页独立源码依据；未把任何 task 标成 completed。
 机械校验核对 todo 引用/标题锚点、Markdown 路径、测试类名、差异范围与 diff 空白。

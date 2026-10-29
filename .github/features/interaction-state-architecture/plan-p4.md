@@ -25,6 +25,20 @@
 - `multieditortabscontrol.css`：活动/失焦/selected-but-inactive/hover
   四类标签背景文字，不能全部简单套树行样式。
 
+**P4 执行前独立复核（2026-10-30）：**
+本轮从 `rhc@e355b362` 的当前源码、`AGENTS.md`、功能文档、
+现有宿主/原生 GUI 测试重新沿入口、状态所有者和最终副作用取证；
+不引用已有 `audit*.md` 的发现或完成判断。逐任务源码与删除边界在
+[source-review.md](source-review.md#p4-current-source-review) 中对应。
+上游行为以本计划列出的固定版本源码为比较目标；
+未经重新运行的上游原生交互与设备行为不能算作本机验收。
+
+**已有改动边界：** P4-T1 曾开始实施，当前工作区尚有 Projects 视图、
+WorkspaceIdentityTests、projects 文档与 `todo.toml` 的未提交修改。
+此前 51 项相关宿主和 2 项已有 GUI 测试通过，
+但未单独证明「删除后台项目后游标清理」的真实界面路径；
+预审不把该任务标成完成，也不把这些改动混入其它 task。
+
 **Bailey 域主：**
 `WorkspaceWindowModel` 拥有当前窗口项目；
 `Project.selectedTabID` 是最近的工作标签/MRU，不等于每组当前展示；
@@ -35,9 +49,10 @@
 Settings 保持原生 List，完全不参与。
 
 **重要产品边界：** VS Code 编辑器 tab 与 Bailey Dock **包含工具 tab** 不完全等价。
-新增多选时必须分别约束 singleton 工具、文件、Diff、终端、浏览器等可复制/
-可移动/可关闭性；不能复制运行中的 PTY/WebKit 或允许 Projects/Files/Git 工具重复实例。
-如果没有安全可定义的“复制这个 DockItem”，就显示不可复制而不是误执行。
+新增多选只实现合法的 Move/Close；不能复制运行中的 PTY/WebKit，
+也不能允许 Projects/Files/Git 工具重复实例。
+当前没有 Dock Copy 操作，不为一个不存在的菜单新增禁用项、
+可复制性矩阵、复制协议或兼容转发；Option 按已确定范围保持 Move。
 普通点击保持一个展示项，不重新引入 VS Code 自动替换预览文件标签。
 
 **确定的范围：** 当前 `DockNode` 中每个 DockItem 唯一，Project 对同机同路径文件复用标签，
@@ -74,16 +89,28 @@ Projects 是 Bailey 固有列表，按相同列表行为验证，但不变成文
 3. 在 ProjectsPanelView 局部 owner 清理镜像焦点/重复激活动作，
    项目切换仅调用已有 WorkspaceWindowModel 入口，
    不增加本机路径相同但机器不同的错误身份匹配。
-4. `manager.projects` 删除/关闭/重排后，按 ID 过滤 cursor/context/drag，
-   只修 `selectedProjectID.onChange` 不足以清理“删除的是后台项目”的路径。
-   AX 真实当前项目标记、Focus 轮廓和临时 Context 边框分开；
-   与 Files/Git 共用仅确实相同的绘制语义，项目本身不支持无意义的文件多选。
+4. `manager.projects` 发生添加、关闭或重排时，以稳定 UUID 核对
+   cursor/context/drag 的成员资格；有效游标不因重排或失焦被强制改为当前项目，
+   失效游标才回到当前合法项目，全部删除时清空。
+   `handleProjectKey` 的 Return/Space 在真正切换前也必须按现存项目 ID 解析，
+   不能依赖尚未触发的 SwiftUI `onChange` 清理旧 ID；
+   拖动源消失时同时结束真实拖动光标，而不是只置空状态。
+   保存失败未实际移除项目时不得预清游标；
+   右键 Context 结束只能清本次目标，不能变相切换项目。
+   不新建额外 Focus/Selection Store、可写项目身份镜像或跨项目匹配器。
+5. 仅在 `ProjectsPanelView` 的原生已挂载 `TreeKeyboardHost`
+   核验键盘游标/当前项目/Context 三种 AX 和实际点击结果。
+   `WorkspaceWindowModel.close(project)` 是保存与终端销毁的唯一入口；
+   终端/SSH 真实身份及后台窗口不被该 View 反向控制。
 
 **验证：** `DockWorkspaceTests`、`WorkspaceIdentityTests`、
 `WorkspaceDockUITests`、`WorkspaceWindowsUITests`；
 空/1/N 项目、SSH/本机同名、重排、关闭未保存、弹出选择器、
-键盘/拖动/双窗、明暗/窄宽/中英/AX，
-实际项目根目录与终端会话未被错误删除；
+键盘/拖动/双窗、明暗/窄宽/中英/AX；
+**必须新增真实挂载 Projects 输入的 GUI/原生测试**：当前 A、游标 B、右键 C，
+删除 B 后 ↑/↓/Return 不可切到旧 ID，删除后台 C 不改变 A，
+保存失败不删除目标；单靠 WindowModel 项目顺序宿主断言不能证明游标行为。
+检查实际项目根目录、编辑字节与终端会话未被错误删除；
 `make build:dev`。Docs `docs/features/projects.md`、必要 `docs/ui.md`；
 一个提交。
 
@@ -119,12 +146,19 @@ Projects 是 Bailey 固有列表，按相同列表行为验证，但不变成文
    右键 B 不应把 B 改成 active/current display；
    上游多选 `selectedEditors` 后续归 P4-T4。
    Dock A→B、Palette、Switcher、关闭当前项后激活后继标签应使 P2/P3 已接入的
-   Explorer/SCM Auto Reveal 有且只有一次有效的编辑器变化；
-   仅菜单目标/悬停/重排或普通 View 重绘不应触发。
+   Explorer/SCM Auto Reveal 按**真实活动展示项变化**执行一次，
+   非活动组单纯更换显示项仍保持现有 Browse/预览语义；
+   菜单、Hover、组内多选但未更换 Displayed、布局无效操作与 View 重绘不应产生此事件。
+   追踪 `DockWorkspaceModel.updateLayout/activate` →
+   `WorkspaceWindowModel.bind/autoRevealActiveFile` 和 Git 当前项目同步，
+   不用 `Project.selectedTabID` 或多选集合伪造活动事件。
 2. Red：两组各有不同 File/Terminal/Tool，
    点击后台标签、空标签区/按钮、右键另组文件/工具、
    ⌘W、点击其它组后关闭原标签；
-   关闭保存失败不挪动 current group，不丢 undo/terminal input。
+   关闭保存失败不挪动当前组，不丢 Undo/Terminal 输入。
+   核对 `Project.tabs.didSet` → `dock.syncTabs` 和
+   `Project.onSnapshotChange` 是否因一次实际状态变化发出重复快照通知；
+   只有确有重复才在对应 owner 收敛，不为减少回调丢真实恢复数据。
 3. 在 DockWorkspaceModel 唯一布局 owner 维护活动/展示/菜单目标；
    Project 的 MRU/selectedTabID 不能替代某组 `selected`，
    但已有明确标签选择事件必须正确交给 P2/P3 的资源同步逻辑；
@@ -142,8 +176,17 @@ Projects 是 Bailey 固有列表，按相同列表行为验证，但不变成文
 不能用 View 备用展示掩盖无效模型。
 `DockWorkspaceConfiguration.init` 中三处静默接受已移除 `info` 的分支在本任务移除，
 配置按现有无效 workspace 配置规则处理（日志并使用默认布局），不加旧名 alias 或新迁移器。
-更新 AppSettingsTests 的当前格式夹具，另测旧名字不再被静默吞掉、其它偏好不丢，
-仅初始化读取不改写原 TOML；不虚构当前已有用户可见的配置错误 Sheet。
+`AppSettings.workspace(from:)` 的类型校验及 `persist` 会在其它偏好保存时重新读取 workspace 配置，
+因此要分别检查：**启动仅读**不改写原 TOML、旧 `info` 被明确判为无效、
+其它字体/主题偏好继续可用，以及**下一次修改普通偏好并保存时**配置文件的完整结果；
+不能只测首次载入成功就遗漏手工工作区布局被静默覆盖的情况。
+现行合法 workspace 字段在保存其它偏好时必须保留；
+含已删除 `info` 的配置属于**无效布局**，启动时以默认布局运行且不写盘，
+后续实际保存其它偏好时允许按现有 `persist` 规则写成当前标准布局，
+测试应明确此结果并保留独立字体/语言等偏好，不能把旧无效布局称作已迁移。
+不增加旧格式迁移器或独立原样保留无效布局的双轨状态。
+把 `AppSettingsTests.testDefaultsAndRoundTrip` 改为现行合法格式，
+旧名回归以独立非法配置用例断言，不生成向后兼容写回器或用户可见错误 Sheet。
 `DockSavedItem.info` 和快照 `localFile` 缺省读取有现存数据保护用途，
 删除会使整份旧快照解码失败或把 Mac 文件错绑 SSH；不把它们混同运行态死代码，
 本 Feature 不改存储格式、不删原始快照、不新增迁移器。具体边界见 source-review 的删除表。
@@ -176,7 +219,9 @@ Projects 是 Bailey 固有列表，按相同列表行为验证，但不变成文
 实际 NSTextField 输入；
 `Bailey/UI/Panes/TabSwitcherView.swift:TabSwitcherController` 的
 `highlightedTabID/originalTabID/orderedTabIDs/cycle/finish/cancel`；
-`WorkspaceWindowModel.toggleCommandPalette`、
+`WorkspaceWindowModel.toggleCommandPalette/restoreFocusAfterCommandPalette`、
+`WorkspaceWindowModel.selectedProjectID/close(project)`、
+`ContentView` 的 Switcher Overlay 挂载、
 `TreeKeyboardHost` 焦点交接。
 
 **步骤：**
@@ -193,10 +238,23 @@ Projects 是 Bailey 固有列表，按相同列表行为验证，但不变成文
    删除过时 fallback，尊重 IME 与 keyWindow。
    当前 `dismiss(commitSelection:)` 只核对旧 Project 自己的 selectedTabID，
    `selectedProjectID.didSet` 尚未取消 Switcher；同窗口切项目后释放 Control
-   仍可能改旧项目的标签/MRU。由窗口的显式切项目/关闭动作取消当前 Switcher，
-   不再加另一份 Project generation；覆盖鼠标提交、Control 释放和失去 key 的取消路径。
-4. Ctrl+Tab 真正提交后必须激活正确现存 tab，
+   仍可能改旧项目的标签/MRU。`ContentView` 又以**新** `selectedProject`
+   绘制仍属于**旧** `activeProject` 的 Switcher Overlay。
+   在窗口已有的项目切换/关闭生命周期立即取消旧 Switcher，
+   让提交入口只接受**当前窗口仍选中的原项目及合法标签**；
+   不再加另一份 Project generation 或重复监听。
+   覆盖鼠标卡片提交、Control 释放、Tab 被关闭和失去 key 的取消路径。
+   现有键盘/鼠标监听、终端预览任务与输入焦点守护仍按真实用途保留。
+4. Command Palette 的“切换项目”命令目前从 `manager.projects.enumerated()`
+   捕获**下标**后执行 `selectProject(index:)`。如果面板显示期间另一个入口插入、
+   关闭或重排项目，下标可能指向不同项目。
+   改用当次捕获的 Project UUID，在真正执行时按现存项目身份解析，
+   已不存在即拒绝；不靠冻结整个项目列表或新增请求代次。
+   搜索晚到继续沿已有 `FileIndexKey`、项目身份和连接代次校验。
+5. Ctrl+Tab 真正提交后必须激活正确现存 tab；
    取消后所有原先活动、显示和未保存数据不变。
+   Palette 的 Search/IME/TextField 保持真实 firstResponder，
+   新目标已取得焦点时不执行迟到旧响应者恢复。
 
 **验证：** `DockWorkspaceTests`、`ProjectFileIndexTests`、
 `FileTabPersistenceTests`、`WorkspaceSmokeUITests`、
@@ -204,6 +262,10 @@ Projects 是 Bailey 固有列表，按相同列表行为验证，但不变成文
 `WorkspaceRetentionUITests`；
 空/1/多个/删掉的 Tab，连续按键、焦点切窗、中文/英文/IME、
 搜索晚到/SSH 失效、窄/宽布局/大量结果；
+必须包含项目 A 的 Switcher 在预览期间切到 B，再松 Control/点击旧卡片，
+确认 B 的实际显示与 A 的 MRU 都未被旧请求改写；
+Palette 显示 A/B/C 时重排/关闭 B 后执行原 B 结果，
+确保不打开新占据该数组位置的项目。
 `make build:dev`。Docs `docs/features/command-palette.md`、
 `docs/features/dock.md`；一个提交。
 
@@ -233,6 +295,7 @@ Projects 是 Bailey 固有列表，按相同列表行为验证，但不变成文
   Shift B → A/B/C。必须覆盖这条与 List 算法不同的序列。
 - 普通按下已选项时保留集合供拖动；未触发拖动的普通松开才收成展示项。
   从未选项开始拖动先改成该项；右键、关闭按钮、重命名输入不执行普通选择。
+  空白区与右键未选项只建立 Context，不自行建立第二份 Selection。
   真正切到另一个 Dock 活动组时，原组 Selection 收成其 Displayed；
   仅 NSWindow 失焦/Palette 接管不伪装成切组。
 
@@ -250,6 +313,8 @@ Projects 是 Bailey 固有列表，按相同列表行为验证，但不变成文
    同时在 Bailey 列出所有 `DockItem`（File、Terminal、Browser、
    Diff、Projects/Files/Git singleton 工具）的合法性与行为边界。
 2. 在 **DockWorkspaceModel** 持有按 groupID 索引的非持久 Selection + Anchor，
+   单项默认可从 `DockGroup.selected` 派生，**仅多选/锚点有必要时保存扩展集合**，
+   不为每个组持续复制一个等价的单项 Selection；
    `DockGroup.selected` 继续是唯一 Displayed；
    不为对齐八类术语再增加 displayed/activeEditor 的可写镜像。
    用 UUID/DockItem identity 对齐列表与变更；绝不把 global selectedTabID
@@ -268,17 +333,29 @@ Projects 是 Bailey 固有列表，按相同列表行为验证，但不变成文
    必要时使用 Tab 专属 ViewModifier；
    **不修改 Files/Git `TreeRowSurface`，不触及 Settings List**。
 5. 同任务接通选中集合拖动的最小完整闭环：
-   `Position.item` 改成有序来源集合与拖动项，模型一次计算/发布批量布局；
-   普通单项也走同一动作，不保留旧的单项拖放实现等待 P4-T5 清理。
+   `Position.item` 改成真实源组、按组内原顺序排列的来源集合与拖动项，
+   模型由**同一个**单项/多项 Move 动作一次计算/发布布局；
+   现有 `DockWorkspaceModel.move(item,...)` 的单项分支随接入删除或
+   直接变为新动作的唯一简单入口，不能留下同时可写布局的单双轨。
+   `Project.tabs` 保留原始 PaneTab/PTY/WebView 对象，不引入复制能力。
    现有 `DockGroupFocusView` 的 mouseUp/focusGroup 不能再把修饰键多选或已完成 Drop
    误当普通选择重放；把事件因果关系与 TabItemChrome 的 Button、DragGesture 一起迁移。
    P4-T5 补全布局组合与边界，不是多选上线后才修复丢项拖动。
-   同时让现有 Close/⌘W/关闭按钮消费本组 Selection，沿已有 closeBatch 顺序保护接通，
-   不保留“界面能多选，关闭仍按旧单项”的过渡分支；P4-T6 负责完整菜单/中键/视觉组合核销。
-6. 恢复 Tab 的本机键盘可达性：Tab Strip 的 ←→/Home/End、
-   Enter/Space、Shift+F10（实际系统支持时）、AX selected、
-   中键关闭（可用实体鼠标）按上游对照逐项实现；
-   不覆盖编辑器、终端原生快捷键或已分配的系统主菜单快捷键。
+   同时让现有 Close/⌘W/关闭按钮消费本组 Selection，
+   从当前 `DockWorkspaceModel.closeTarget` 统一解析组选区内/外的动作目标。
+   `WorkspaceWindowModel.closePanel` 现仅逐项关闭，`Project.closeBatch` 只处理
+   `[PaneContent]` 且返回 `Void`，**并不能直接处理混合工具和脏文件批量关闭**。
+   本 task 在既有 `Project.closeBatch` 的顺序保存/确认边界接入一条
+   可等待或回调完成的必要路径；工具移除必须晚于脏文件的可接受结果，
+   若取消则保留未处理项目且不先销毁 PTY；不新建全局 CloseManager，
+   不保留“界面能多选，关闭仍按旧单项”的过渡分支。
+   P4-T6 负责其它菜单、中键与视觉组合复核。
+6. 恢复 Tab Strip 的**自身**原生键盘可达性：只有标签条真实拥有
+   键盘焦点时，←→/Home/End 移动标签游标，Enter/Space 激活，
+   实际支持时 Shift+F10 打开菜单；AX 应分别反映显示和多选。
+   中键关闭需先通过实体鼠标/原生测试证明事件命中，再接入同一关闭动作。
+   禁止为此在 DockGroupFocusView 中增加全局拦截键盘、
+   不覆盖编辑器/终端/浏览器原生快捷键或系统主菜单命令。
 7. 删除单选假设的旧重复 View 状态，不引入旧版快照双轨；
    已保存文档、浏览器与终端视图必须存活。
 
@@ -326,11 +403,21 @@ Projects 是 Bailey 固有列表，按相同列表行为验证，但不变成文
    只有 Drop 真正成功才更新活动组/Focus/Selection 和快照。
    删除重复的 tab 手势状态、无效预置占位或兼容分支。
    批量 Move 不能循环调用旧 `move(item)`，否则会产生中间布局、焦点/自动保存和多个快照。
-   从旧 root 先核对全部来源/目标，移除后按源组顺序插入；
-   同组插入索引减去原索引之前的被移除项数，目标在选中区间内按明确 no-op 处理。
-   只在最终 root 调一次 updateLayout，目标组展示拖动项、Selection 包含完整移动集合。
-   分割目标是源组且整组已选时不制造空分割；其它边缘移动一次建一个新组。
-   失败不产生部分布局。本 task 发现的根因继续在该唯一实现修，不恢复单双轨。
+   从**同一次有效拖动开始时**的 sourceGroup、窗口、项目及当前 DockNode
+   核对全部成员和目标；只有源组里当前合法的完整集合才能一同移动，
+   不在失效状态退化为「只移动被拖的一个」。
+   在旧 root 上先移除，再按源组原顺序插入；
+   同组插入索引减去原索引之前的被移除项数，目标在选中区间内按 no-op 处理，
+   不因 SwiftUI 布局重算复用失效的目标 CGRect/组 ID。
+   只在最终 root 调一次 `updateLayout`，目标组展示拖动项、
+   Selection 包含完整移动集合；**失败或 no-op 不发布新布局/快照/焦点事件**。
+   分割目标是源组且整组已选时不制造空分割；
+   其它有效边缘移动一次建一个新组。
+   保留未被搬走的 Tool/Tab 与有效组内 Displayed；
+   `DockNode.removingEmptyGroups` 只能在全部成员处理之后决定实际空组的命运。
+   当前 `DockTabDragCoordinator.finish` 移动成功后还调用 `Project.selectTab`，
+   需检查其是否再次改动 MRU/重复激活并收敛为一个真实提交动作。
+   本 task 发现的根因继续在唯一实现修，不恢复单双轨。
 5. 对外部 Finder 目录/文件投放、Files→Editor、
    Ghostty 路径插入与 WebKit Upload 保持原来的目标分派，不把
    “多选 Dock Item”传成多文件 Finder 数据；
@@ -373,6 +460,11 @@ unfocused active/inactive 的视觉，菜单期还有临时 Focus。
    Close/⌘W/标签关闭按钮/中键命中组选中项时关闭该组 Selection，
    命中未选项时仅关闭它，右键本身不修改显示或 Selection。
    Close Others 保留该合法目标集合，Close to Right 的范围由明确右键项的组内位置确定；
+   两者沿现有契约只将工作 `PaneTab` 视为被关闭候选，
+   不能暗中移除同组 singleton 工具；显式组选区批量 Close 才可包含工具。
+   当前 `Project.closeOthers(_:)` **先 `selectTab(keep.id)`**，
+   会把后台右键目标意外激活；必须在本 task 删除这条选择副作用，
+   与 `closeToRight` 一起只按源组/真实成员计算关闭目标。
    Rename/Reveal/Copy Path 只用 clicked item，不把非文件工具传给文件动作。
    本 task 从 P4-T4 已接通的集合/顺序关闭入口继续核销；
    菜单明确显示执行范围/启用状态，不新增 Copy Group 动作。
@@ -381,16 +473,25 @@ unfocused active/inactive 的视觉，菜单期还有临时 Focus。
    Cmd-W 或鼠标 Close 必须只按合法目标执行；
    多选 A/C 的批量关闭须遵守每个未保存/只读/运行中的 PTY 保护，
    中途保存失败不得移除未确认的标签。
-   **顺序关闭不是事务：** 复用 `Project.closeBatch` 的保存/确认顺序与取消即停，
+   **顺序关闭不是回滚事务：** 复用 `Project.closeBatch` 的保存/确认顺序与取消即停，
    已确认关闭的内容不复活，失败项与尚未处理项保留；
-   不逐项 fire-and-forget 调 `closePanel` 产生并发 Sheet。
-   工具移除和终端 terminate 延后到批量保存保护允许的阶段，不能先结束 PTY 再发现保存失败。
-3. 在 DockWorkspaceModel owner 保持上下文/多选/关闭目标解析唯一，
+   若集合包含 Tools 与未保存文件，在真正取得保存/确认结果前不先移除 Tool，
+   也不先终止选中的 Terminal；现有 `closeBatch` 无完成回调的事实已由
+   P4-T4 负责修改，T6 验证它的完整用户路径。
+   不逐项 fire-and-forget 调 `closePanel` 产生并发 Sheet，
+   也不为此创建全 App 关闭事务/回滚服务。
+3. 在 `DockWorkspaceModel` owner 保持上下文/多选/关闭目标解析唯一，
+   将 `closeTarget` 的**单项值**扩展为一次合法命令所需的组内集合解析，
+   复用 `WorkspaceWindowModel.closePanel` 的唯一执行入口。
+   右键集合外只关闭命中项，集合内才消费该组成员；
+   点击另一组后旧组合法多选按 P4-T4 的失活规则归约。
    `ContextMenuClickTarget` 只标记实际菜单作用域；
-   禁止菜单按键与系统主菜单各执行一次、取消后留下另一个临时 closeTarget。
+   保持 P2 已有的 NSMenu 与窗口、启用状态核验，以及
+   AppKit 先结束菜单跟踪再派发主菜单 ⌘W 的单次消费语义。
+   禁止菜单按键与系统主菜单各执行一次、取消后留下临时 closeTarget。
    菜单动作重新核对 Group 与 Tab ID，换窗口/项目后不能关闭旧目标。
 4. 移除 Dock Tab 误套共享树行视觉时真正冲突的样式；
-   由 Tab 自己按 upsteam 定义 focus/hover/selected/active/dirty/context 层级，
+   由 Tab 自己按上游可观察语义定义 focus/hover/selected/active/dirty/context 层级，
    但保留 Bailey 既有“整个分屏不画蓝外框”的决定。
    设置窗口继续原生 List，不加入高亮共享体系。
 
@@ -430,17 +531,23 @@ Docs `docs/features/dock.md` 和 `docs/ui.md`；一个提交。
    连续右键 Dock/Projects、拖动多个标签、切/关分屏、
    展开 Git Graph、取消 TabSwitcher；
    恢复应指向事件完成后仍可见的控件，不是此前缓存的 NSView。
-3. 仅在现有 `DockGroupFocusReader` 与窗口级交接入口修复
-   错误的旧宿主验证/重复 focus 请求；
+3. 仅在现有 `DockGroupFocusReader`、`WorkspaceWindowModel.ownsActiveResponder`
+   与窗口级交接入口修复证实错误的旧宿主归属/重复 Focus 请求；
    App 不复制新的全局 FirstResponder 状态，
    当前 View 不向业务 Model 回调自己猜测的“活动组”。
    P2-T5 已接通窗口许可与 Files/Git/Palette 归属，本任务直接复用；
    在 `PanelContentView` 装配 SourceTextEditor、DiffNativeSurface、TerminalHostView、
    BrowserAddressField/WebView 的挂载与聚焦结果，不重新增加另一层协调器。
-   `DockGroupFocusView.containsResponder` 的几何中心/控件类业务识别在适配接通后同任务删除；
-   拖放所需 Geometry/点击区域仍保留，不能误删真正命中数据。
-   Browser 两处 6 次/50ms 递归重试由其挂载/布局就绪回调承担一次当前请求，
-   只有真实 `makeFirstResponder` 成功才清 pending；失效即取消。
+   `DockGroupFocusView.containsResponder` 目前通过 native view 可见区域中点
+   判断组归属，另有 field editor/TerminalParking 类型分支；
+   仅当所属原生控件真实提供可用的挂载/组身份时移除该业务几何猜测，
+   不能改成只看 `NSWindow` 而把邻组或停车容器误当当前输入。
+   拖放所需 Geometry/点击命中与原生可见性仍保留。
+   BrowserAddressField/BrowserWebView 两处当前都是 **6 次/50ms** 重试，
+   且在实际聚焦成功前就标记 `handledFocusRequest`。
+   按挂载、有效窗口和真实聚焦成功处理一个**尚未消费的请求**，
+   失败不提前清 pending，切组/失去 key/请求换代时取消旧请求；
+   不另外引入 6 次重试的替代轮询或全 App FocusManager。
    SourceEditorContainer/TerminalContainerView/Diff 的原生就绪检查保留，
    删除的是重复策略与无依据轮询，不是所有异步调用或所有本地 `@FocusState`。
 4. 严格检查 Scene/窗口关闭/分屏移组与重挂载后
@@ -465,16 +572,28 @@ Docs `docs/features/dock.md`、
 
 ## P4 阶段验收与审计
 
-- 验收完整 VS Code editor tabs parity：⌘多选、Shift anchor/回缩、
-  活动标签 vs 已选标签、失焦样式、右键非活动标签、
-  快捷键/中键、拖动已选集合、按组关闭与结果；不是只看 Dock 背景。
+- 验收 **P4 已选定的 VS Code Tab 行为子集**，不宣称 Electron EditorTabs
+  与 Bailey 含 singleton 工具、终端、浏览器的 Dock 完全同构：
+  ⌘多选、Tab 独立 Shift Anchor、活动展示 vs 已选标签、失焦样式、
+  右键非活动标签、标签条自身键盘/中键、拖动已选集合、按组关闭与结果；
+  不只是看 Dock 背景或多选视觉。
 - Projects 游标与选中项目、Palette/TabSwitcher 临时状态、
   NSWindow firstResponder、双窗/Finder/多分屏输入均有独立真机证据。
   Tools singleton/终端/浏览器批量操作的不可支持行为需明确禁用且不丢对象。
-- 宿主 `DockWorkspaceTests` 与受影响 Files/Editor/Window
-  全集，隔离 `WorkspaceDockUITests/WorkspaceWindowsUITests/`
-  `WorkspaceRetentionUITests`；`make build:dev`、签名与 diff check。
-- 检查各 task 同提交删除替代旧路径且及时更新 docs；
-  `phase-complete --phase p4` 后必须由 `plan-task-auditor`
-  完成 `audit-p4.md` 并判断 Go/No-Go；
-  无法实际实测的触控板、OS 15.6、中键、跨窗拖动和 SSH 各留具体证据缺口。
+- 宿主覆盖 `DockWorkspaceTests` 与受影响 Files/Editor/Window/Settings
+  的合法目标、保存、原生视图身份、无效配置、快照及焦点组合；
+  完整 App GUI 保留宿主无法证明的真实鼠标按下/松开、菜单跟踪、
+  Shift/⌘ 键、原生首响应者、Finder 目标、双窗口与 PTY/WebKit 可见结果。
+  不在每个 task 为同一组合复制整套 UI 夹具。
+  `WorkspaceDockUITests`、`WorkspaceWindowsUITests`、
+  `WorkspaceRetentionUITests` 的最终适用路径逐条执行；
+  `make build:dev`、签名、`git diff --check` 与 todo validate 均需通过。
+- **每个 task 在新入口实际接通、定向 Red→Green 及回归通过的同一提交**
+  移除对应旧策略，不能把旧拖动、重复选择、单项关闭、过期焦点轮询
+  统一推给 P4-T7/P5。不可删的连接身份、脏稿保存否决、
+  历史快照最低限度解码、Finder 外部投放目标保护单列为保留边界。
+- 阶段任务完成、提交及 `phase-complete --phase p4` 通过后，
+  再由 `plan-task-auditor` 独立审计 P4 并给出 Go/No-Go；
+  预审不能预填审计结论。触控板、OS 15.6、中键、
+  跨窗口真实拖动与 SSH 仅在确实没有执行条件时逐项记录
+  影响、替代证据和补验步骤，不直接写成已通过或自动豁免。
