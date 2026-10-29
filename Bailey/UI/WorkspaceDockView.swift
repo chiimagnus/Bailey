@@ -9,11 +9,17 @@ import UniformTypeIdentifiers
 @MainActor
 @Observable
 final class DockTabDragCoordinator {
-    struct Position {
+    struct Source {
         let item: DockItem
         let items: [DockItem]
         let sourceGroupID: UUID
         let sourceLayout: DockNode
+    }
+
+    struct Position {
+        let source: Source
+        var item: DockItem { source.item }
+        var items: [DockItem] { source.items }
         let location: CGPoint
         let destination: UUID?
         let edge: DockEdge?
@@ -21,20 +27,37 @@ final class DockTabDragCoordinator {
     }
 
     private(set) var position: Position?
+    @ObservationIgnored private var source: Source?
     @ObservationIgnored private weak var sourceDock: DockWorkspaceModel?
     @ObservationIgnored private var groups: [UUID: CGRect] = [:]
     @ObservationIgnored private var tabs: [DockItem: CGRect] = [:]
 
-    func cancel() {
+    func cancel(_ item: DockItem? = nil) {
+        if let item, source?.item != item { return }
         // Layout preferences may update before project-switch cancellation;
         // preserve their latest frames so the next drag can still hit a target.
         position = nil
+        source = nil
         sourceDock = nil
         NSCursor.arrow.set()
     }
 
-    func setFrames(groups: [UUID: CGRect]) { self.groups = groups }
-    func setFrames(tabs: [DockItem: CGRect]) { self.tabs = tabs }
+    func setFrames(groups: [UUID: CGRect]) {
+        if source != nil, self.groups != groups { cancel() }
+        self.groups = groups
+    }
+    func setFrames(tabs: [DockItem: CGRect]) {
+        if source != nil, self.tabs != tabs { cancel() }
+        self.tabs = tabs
+    }
+
+    func begin(_ item: DockItem, dock: DockWorkspaceModel) {
+        cancel()
+        guard let group = dock.group(containing: item) else { return }
+        sourceDock = dock
+        source = Source(item: item, items: dock.commandTargets(for: item),
+                        sourceGroupID: group.id, sourceLayout: dock.root)
+    }
 
     func tab(at location: CGPoint, in group: DockGroup) -> DockItem? {
         guard let frame = groups[group.id] else { return nil }
@@ -53,12 +76,8 @@ final class DockTabDragCoordinator {
     }
 
     func update(_ item: DockItem, at location: CGPoint, dock: DockWorkspaceModel) {
-        if position == nil {
-            dock.select(item, activating: false, extending: .preserve)
-            sourceDock = dock
-        }
-        guard sourceDock === dock, let source = dock.group(containing: item) else { return }
-        let items = position?.items ?? dock.selection(in: source.id)
+        guard let source, sourceDock === dock, source.item == item,
+              source.sourceLayout == dock.root else { cancel(); return }
         let hit = groups.first { $0.value.contains(location) }
         var edge: DockEdge?
         var insertIndex: Int?
@@ -74,27 +93,21 @@ final class DockTabDragCoordinator {
                     return location.x < bounds.midX && location.y <= frame.minY + 38
                 } ?? target.items.count
             }
-            if edge != nil && target.items == [item] { edge = nil }
         }
         position = Position(
-            item: item, items: items, sourceGroupID: position?.sourceGroupID ?? source.id,
-            sourceLayout: position?.sourceLayout ?? dock.root, location: location,
+            source: source, location: location,
             destination: hit?.key, edge: edge, index: insertIndex
         )
     }
 
     func finish(project: Project) {
-        defer {
-            position = nil
-            sourceDock = nil
-            NSCursor.arrow.set()
-        }
-        guard let position, sourceDock === project.dock, project.dock.root == position.sourceLayout,
+        defer { cancel() }
+        guard let position, sourceDock === project.dock, project.dock.root == position.source.sourceLayout,
               let destination = position.destination else { return }
         project.movePanels(
             position.item, into: destination,
             edge: position.edge, index: position.index, items: position.items,
-            sourceGroupID: position.sourceGroupID
+            sourceGroupID: position.source.sourceGroupID
         )
     }
 }
@@ -144,6 +157,7 @@ struct WorkspaceDockView: View {
                             Image(systemName: position.item.symbol)
                             Text(position.item.label(project: project))
                                 .lineLimit(1)
+                            if position.items.count > 1 { Text(verbatim: "+\(position.items.count - 1)") }
                         }
                         .font(.system(size: 11.5, weight: .medium))
                         .padding(.horizontal, 11)
@@ -508,7 +522,7 @@ struct DockTabGroupView: View {
                     ForEach(group.items, id: \.self) { item in
                         tab(item)
                             .id(item)
-                            .opacity(dragging.position?.item == item ? 0.6 : 1)
+                            .opacity(dragging.position?.items.contains(item) == true ? 0.6 : 1)
                             .background {
                                 GeometryReader { geometry in
                                     Color.clear.preference(
@@ -520,8 +534,12 @@ struct DockTabGroupView: View {
                             .overlay {
                                 if item.tabID == nil || renamingTabID != item.tabID {
                                     DockTabPointerInput(
-                                        press: { modifiers in select(item, extending: selectionChange(modifiers)) },
+                                        press: { modifiers in
+                                            select(item, extending: selectionChange(modifiers))
+                                            dragging.begin(item, dock: project.dock)
+                                        },
                                         release: { modifiers in
+                                            dragging.cancel()
                                             if modifiers.intersection([.command, .shift]).isEmpty { select(item) }
                                         },
                                         drag: { point, finished in
@@ -529,7 +547,8 @@ struct DockTabGroupView: View {
                                             if finished { dragging.finish(project: project) }
                                             else { NSCursor.closedHand.set() }
                                         },
-                                        close: { manager.closePanel(item, in: project) }
+                                        close: { manager.closePanel(item, in: project) },
+                                        cancel: { dragging.cancel(item) }
                                     )
                                     .padding(.leading, 22)
                                 }
@@ -852,6 +871,7 @@ private struct DockTabPointerInput: NSViewRepresentable {
     let release: (NSEvent.ModifierFlags) -> Void
     let drag: (CGPoint, Bool) -> Void
     let close: () -> Void
+    let cancel: () -> Void
 
     func makeNSView(context: Context) -> DockTabPointerView { DockTabPointerView() }
     func updateNSView(_ view: DockTabPointerView, context: Context) {
@@ -859,12 +879,15 @@ private struct DockTabPointerInput: NSViewRepresentable {
         view.release = release
         view.drag = drag
         view.close = close
+        view.cancel = cancel
     }
     static func dismantleNSView(_ view: DockTabPointerView, coordinator: ()) {
+        view.cancelOperation(nil)
         view.press = nil
         view.release = nil
         view.drag = nil
         view.close = nil
+        view.cancel = nil
     }
 }
 
@@ -873,6 +896,8 @@ final class DockTabPointerView: NSView {
     var release: ((NSEvent.ModifierFlags) -> Void)?
     var drag: ((CGPoint, Bool) -> Void)?
     var close: (() -> Void)?
+    var cancel: (() -> Void)?
+    private var dragKeyMonitor: Any?
     private var origin: CGPoint?
     private var dragged = false
     private var modifiers: NSEvent.ModifierFlags = []
@@ -899,17 +924,42 @@ final class DockTabPointerView: NSView {
     }
     override func mouseDragged(with event: NSEvent) {
         guard let origin else { return }
-        if hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) >= 4 { dragged = true }
+        if !dragged, hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) >= 4 {
+            dragged = true
+            dragKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] key in
+                guard let self, key.window === self.window, self.window?.isKeyWindow == true,
+                      key.keyCode == 53, key.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+                else { return key }
+                self.cancelOperation(nil)
+                return nil
+            }
+        }
         if dragged { drag?(location(event), false) }
     }
     override func mouseUp(with event: NSEvent) {
         guard origin != nil else { return }
+        if let window, !window.isKeyWindow { cancelOperation(nil); return }
         origin = nil
+        stopMonitoring()
         if dragged { drag?(location(event), true) }
         else { release?(modifiers) }
     }
     override func otherMouseDown(with event: NSEvent) {
         if event.buttonNumber == 2 { close?() }
+    }
+    override func cancelOperation(_ sender: Any?) {
+        origin = nil
+        dragged = false
+        stopMonitoring()
+        cancel?()
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { cancelOperation(nil) }
+    }
+    private func stopMonitoring() {
+        if let dragKeyMonitor { NSEvent.removeMonitor(dragKeyMonitor) }
+        dragKeyMonitor = nil
     }
     private func location(_ event: NSEvent) -> CGPoint {
         guard let content = window?.contentView else { return event.locationInWindow }

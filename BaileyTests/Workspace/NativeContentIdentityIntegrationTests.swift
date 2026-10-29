@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import SwiftUI
 import WebKit
 import XCTest
@@ -34,6 +35,15 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         view.mouseUp(with: try mouse(.leftMouseUp, 20))
         XCTAssertEqual(drops, 1)
         XCTAssertEqual(releases, [.command], "A completed drag must never replay ordinary selection")
+        var cancellations = 0
+        view.cancel = { cancellations += 1 }
+        view.mouseDown(with: try mouse(.leftMouseDown, 10))
+        view.mouseDragged(with: try mouse(.leftMouseDragged, 20))
+        view.cancelOperation(nil)
+        view.mouseUp(with: try mouse(.leftMouseUp, 30))
+        XCTAssertEqual(drops, 1)
+        XCTAssertEqual(cancellations, 1)
+        XCTAssertEqual(releases, [.command])
     }
 
     func testTabStripNativeKeyboardNavigatesWithoutDisplayingUntilReturn() async throws {
@@ -90,6 +100,13 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         window.contentView = host
         window.orderFront(nil)
         defer { window.close() }
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let access = await Task.detached {
+            var windows: CFTypeRef?
+            return AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid),
+                kAXWindowsAttribute as CFString, &windows).rawValue
+        }.value
+        XCTAssertEqual(access, AXError.success.rawValue)
         func attribute(_ element: NSObject, _ key: String) -> Any? {
             let selector = NSSelectorFromString(key == "accessibilitySelected" ? "isAccessibilitySelected" : key)
             guard element.responds(to: selector) else { return nil }
@@ -100,13 +117,17 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
                 ?? attribute(element, "accessibilityChildren") as? [NSObject] ?? []
             return [element] + children.flatMap(elements)
         }
+        func tabs() -> [NSObject] {
+            (host.accessibilityChildren() as? [NSObject] ?? []).flatMap(elements)
+        }
         try await wait {
             host.layoutSubtreeIfNeeded()
-            return elements(host).contains {
+            host.displayIfNeeded()
+            return tabs().contains {
                 (attribute($0, "accessibilityLabel") as? String ?? attribute($0, "accessibilityTitle") as? String) == "Selected document"
             }
         }
-        XCTAssertTrue(elements(host).contains {
+        XCTAssertTrue(tabs().contains {
             (attribute($0, "accessibilityLabel") as? String ?? attribute($0, "accessibilityTitle") as? String) == "Selected document"
                 && attribute($0, "accessibilitySelected") as? Bool == true
         }, "The displayed tab must be AX selected, not just painted as selected")
@@ -120,7 +141,7 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
                     )
                     try await wait {
                         host.layoutSubtreeIfNeeded()
-                        return elements(host).contains {
+                        return tabs().contains {
                             attribute($0, "accessibilityLabel") as? String == "Selected document"
                                 && attribute($0, "accessibilitySelected") as? Bool == (displayed || selected)
                         }

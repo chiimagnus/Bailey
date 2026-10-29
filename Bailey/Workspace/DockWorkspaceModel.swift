@@ -263,11 +263,12 @@ indirect enum DockNode: Equatable {
         }
     }
 
-    func removingEmptyGroups() -> DockNode? {
+    func removingEmptyGroups(only groupID: UUID? = nil) -> DockNode? {
         switch self {
-        case .group(let group): return group.items.isEmpty ? nil : self
+        case .group(let group):
+            return group.items.isEmpty && (groupID == nil || groupID == group.id) ? nil : self
         case .split(var split):
-            switch (split.first.removingEmptyGroups(), split.second.removingEmptyGroups()) {
+            switch (split.first.removingEmptyGroups(only: groupID), split.second.removingEmptyGroups(only: groupID)) {
             case (let first?, let second?):
                 split.first = first
                 split.second = second
@@ -563,10 +564,14 @@ final class DockWorkspaceModel {
         guard let source = root.group(containing: item), root.group(id: destinationID) != nil,
               sourceGroupID == nil || sourceGroupID == source.id else { return false }
         let requested = items ?? commandTargets(for: item)
-        let moving = source.items.filter { requested.contains($0) }
+        let movingSet = Set(requested)
+        let moving = source.items.filter { movingSet.contains($0) }
         guard moving.contains(item), Set(moving).count == requested.count else { return false }
         if source.id == destinationID, edge != nil, moving.count == source.items.count { return false }
-        let movingSet = Set(moving)
+        if source.id == destinationID, edge == nil,
+           let first = source.items.firstIndex(where: movingSet.contains),
+           let last = source.items.lastIndex(where: movingSet.contains),
+           (first...last + 1).contains(min(max(index ?? source.items.count, 0), source.items.count)) { return false }
         var updated = root.editingGroup(source.id) { group in
             group.items.removeAll { movingSet.contains($0) }
             if let selected = group.selected, movingSet.contains(selected) { group.selected = group.items.first }
@@ -589,10 +594,8 @@ final class DockWorkspaceModel {
                 group.selected = item
             }
         }
-        if source.id == destinationID, edge == nil,
-           updated.group(id: source.id)?.items == source.items { return false }
         if source.id != targetID, updated.group(id: source.id)?.items.isEmpty == true {
-            updated = updated.removingEmptyGroups() ?? updated
+            updated = updated.removingEmptyGroups(only: source.id) ?? updated
         }
         updateLayout(updated, activating: targetID)
         extendedSelections[source.id] = nil
