@@ -179,7 +179,9 @@ final class WorkspaceApplication {
     }
 
     /// Only editable resources in the actual Git repository can be saved or reloaded.
-    private func gitContents(repository: String, scope: String) -> [PaneContent] {
+    private func gitContents(
+        repository: String, scope: String, affectedPaths: [String]? = nil
+    ) -> [PaneContent] {
         let workspace = scope == "local" ? nil : scope
         return windows.flatMap(\.projects).flatMap(\.tabs).compactMap { tab in
             switch tab.content {
@@ -193,6 +195,17 @@ final class WorkspaceApplication {
                       diff.source == .worktree || diff.source == .staged else { return nil }
             case .session, .browser:
                 return nil
+            }
+            if let affectedPaths {
+                let path: String?
+                if case .diff(let diff) = tab.content, diff.source == .staged {
+                    path = (diff.repoRoot as NSString).appendingPathComponent(diff.path)
+                } else {
+                    path = fileLocation(tab.content)?.path
+                }
+                guard let path, affectedPaths.contains(where: {
+                    matchesFile(path, inside: $0, workspace: workspace)
+                }) else { return nil }
             }
             return tab.content
         }
@@ -233,8 +246,10 @@ final class WorkspaceApplication {
         return isCurrent() && canRunGitAction(repository: repository, scope: scope)
     }
 
-    func canRunGitAction(repository: String, scope: String) -> Bool {
-        gitContents(repository: repository, scope: scope).allSatisfy {
+    func canRunGitAction(
+        repository: String, scope: String, affectedPaths: [String]? = nil
+    ) -> Bool {
+        gitContents(repository: repository, scope: scope, affectedPaths: affectedPaths).allSatisfy {
             guard !$0.isDirty else { return false }
             switch $0 {
             case .file(let file): return !file.isSaving
@@ -244,8 +259,10 @@ final class WorkspaceApplication {
         }
     }
 
-    func reloadAfterGitAction(repository: String, scope: String) {
-        for content in gitContents(repository: repository, scope: scope) {
+    func reloadAfterGitAction(
+        repository: String, scope: String, affectedPaths: [String]? = nil
+    ) {
+        for content in gitContents(repository: repository, scope: scope, affectedPaths: affectedPaths) {
             switch content {
             case .file(let file): file.reloadFromDiskIfClean()
             case .diff(let diff): diff.reload(afterGitAction: true)

@@ -111,7 +111,7 @@ final class SSHGitRecoveryLiveTests: XCTestCase {
             XCTAssertEqual(model.changedEntries.map(\.path), ["tracked.txt"])
             XCTAssertFalse(model.canUseCurrentStatus)
             XCTAssertFalse(model.isCurrent(pending))
-            model.stage(pending)
+            model.stageEntries([pending])
             XCTAssertFalse(model.isBusy, "Stale SSH status must reject stage before remote IO")
 
             await runner.setUnavailable(false)
@@ -122,7 +122,7 @@ final class SSHGitRecoveryLiveTests: XCTestCase {
             XCTAssertTrue(model.isCurrent(model.actionTarget()))
             XCTAssertEqual(model.recentCommits.map(\.subject), ["baseline"])
             let current = try XCTUnwrap(model.changedEntries.first { $0.path == "tracked.txt" })
-            model.stage(current)
+            model.stageEntries([current])
             try await wait { !model.isBusy && model.operation?.finishedAt != nil }
             let staged = try await git(["diff", "--cached", "--name-only"])
             XCTAssertEqual(staged, "tracked.txt")

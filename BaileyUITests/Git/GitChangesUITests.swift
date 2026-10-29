@@ -822,7 +822,7 @@ final class GitChangesUITests: XCTestCase {
             WorkspaceUITestSupport.fileRow($0, in: app.windows.firstMatch, relativeTo: fixture.root)
         }
         XCTAssertTrue(rows[2].waitForExistence(timeout: 25))
-        rows[0].click()
+        XCUIElement.perform(withKeyModifiers: .command) { rows[0].click() }
         XCUIElement.perform(withKeyModifiers: .command) { rows[2].click() }
         XCTAssertTrue(rows[0].isSelected && rows[2].isSelected)
 

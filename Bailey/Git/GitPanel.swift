@@ -180,18 +180,7 @@ struct GitPanel: View {
                     let trigger = OperationTrigger.entry(
                         path: pendingDiscard.entry.path, operation: .discard
                     )
-                    if remoteName != nil {
-                        Task {
-                            if await model.confirmRemoteDiscard([pendingDiscard]), model.isBusy {
-                                operationExpanded = false
-                                operationTrigger = trigger
-                            }
-                        }
-                    } else {
-                        performOperation(trigger) {
-                            _ = model.confirmLocalDiscard([pendingDiscard])
-                        }
-                    }
+                    confirmReviewedDiscard([pendingDiscard], trigger: trigger)
                 }
                 pendingDiscard = nil
             }
@@ -221,18 +210,7 @@ struct GitPanel: View {
                 }
                 let snapshot = pendingDiscardAll
                 let trigger = pendingDiscardAllTrigger
-                if remoteName != nil {
-                    Task {
-                        if await model.confirmRemoteDiscard(snapshot), model.isBusy {
-                            operationExpanded = false
-                            operationTrigger = trigger
-                        }
-                    }
-                } else {
-                    performOperation(trigger) {
-                        _ = model.confirmLocalDiscard(snapshot)
-                    }
-                }
+                confirmReviewedDiscard(snapshot, trigger: trigger)
                 pendingDiscardAll = []
                 confirmDiscardAll = false
             }
@@ -667,7 +645,7 @@ struct GitPanel: View {
         target: GitStatusModel.ActionTarget, window: NSWindow,
         isCurrent: @escaping @MainActor () -> Bool
     ) {
-        guard isCurrent(), let project else { return }
+        guard isCurrent() else { return }
         Task { @MainActor in
             guard let oid = await model.referenceOID(named: "refs/heads/" + name, target: target),
                   isCurrent() else { return }
@@ -2551,6 +2529,73 @@ struct GitPanel: View {
                     Button(String(localized: "Add to .gitignore", table: "Git")) {
                         ignorePaths([path], isDirectory: true)
                     }.disabled(model.isBusy)
+                }
+            }
+        }
+    }
+
+    private func confirmReviewedDiscard(
+        _ reviews: [GitStatusModel.PendingDiscard], trigger: OperationTrigger
+    ) {
+        guard let window = manager.attachedWindow, let project,
+              manager.selectedProject === project, let context = project.panelContext,
+              model.matchesPanelTarget(context.identity), !reviews.isEmpty else { return }
+        let target = model.actionTarget()
+        let relative = reviews.flatMap { review -> [String] in
+            let entry = review.entry
+            return [entry.path] + (entry.isWorktreeRename ? entry.origPath.map { [$0] } ?? [] : [])
+        }
+        let paths = Set(relative).map {
+            (target.repository as NSString).appendingPathComponent($0)
+        }
+        let isCurrent: @MainActor () -> Bool = {
+            manager.attachedWindow === window && manager.selectedProject === project
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity)
+                && model.isCurrent(target)
+        }
+        let mayDiscard: @MainActor () -> Bool = {
+            isCurrent() && manager.application.canRunGitAction(
+                repository: target.repository, scope: target.scope, affectedPaths: paths
+            )
+        }
+        Task {
+            guard isCurrent() else { return }
+            do {
+                try await manager.application.withProtectedFiles(
+                    paths: paths, workspace: target.scope == "local" ? nil : target.scope
+                ) {
+                    guard isCurrent() else { throw CancellationError() }
+                    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                        let completed: @MainActor (Bool) -> Void = { _ in
+                            if isCurrent() {
+                                manager.application.reloadAfterGitAction(
+                                    repository: target.repository, scope: target.scope, affectedPaths: paths
+                                )
+                            }
+                            continuation.resume()
+                        }
+                        if remoteName != nil {
+                            Task {
+                                if await model.confirmRemoteDiscard(
+                                    reviews, isCurrentTarget: mayDiscard, completion: completed
+                                ), model.isBusy {
+                                    operationExpanded = false
+                                    operationTrigger = trigger
+                                }
+                            }
+                        } else {
+                            performOperation(trigger) {
+                                _ = model.confirmLocalDiscard(
+                                    reviews, isCurrentTarget: mayDiscard, completion: completed
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch {
+                if !(error is CancellationError) {
+                    WorkspaceNativeDialogs.showError(error, in: window)
                 }
             }
         }
