@@ -86,6 +86,60 @@ final class WorkspaceDockUITests: XCTestCase {
         }
     }
 
+    func testDockMultiSelectionDragMovesBothTabsToAnotherGroupWithoutCloning() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let files = try (0..<3).map {
+            try fixture.file("d-\($0).swift", text: "let item = \($0)\n")
+        }
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root
+        )
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        let opened = expectation(description: "Create three original native editors")
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.open(files, withApplicationAt: bundle, configuration: config) {
+            _, error in
+            XCTAssertNil(error)
+            opened.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 20), .completed)
+        let window = app.windows.firstMatch
+        let tabs = files.map { WorkspaceUITestSupport.fileTab($0, in: window) }
+        let filesTool = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        for tab in tabs { XCTAssertTrue(tab.waitForExistence(timeout: 15)) }
+        XCTAssertTrue(filesTool.waitForExistence(timeout: 15))
+
+        tabs[0].click()
+        XCUIElement.perform(withKeyModifiers: .command) { tabs[2].click() }
+        XCTAssertTrue(tabs[0].isSelected && tabs[2].isSelected)
+        XCTAssertFalse(tabs[1].isSelected)
+        let originalSourceX = tabs[0].frame.midX
+        let originalTargetX = filesTool.frame.midX
+        XCTAssertGreaterThan(abs(originalTargetX - originalSourceX), 80,
+                             "This fixture must actually span two independent Dock groups")
+        tabs[0].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.3, thenDragTo:
+                filesTool.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            )
+        let moved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            tabs[0].exists && tabs[2].exists
+                && abs(tabs[0].frame.midX - originalTargetX)
+                    < abs(originalSourceX - originalTargetX)
+                && abs(tabs[2].frame.midX - originalTargetX)
+                    < abs(originalSourceX - originalTargetX)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [moved], timeout: 12), .completed,
+                       "One actual drag must move the whole selection into the destination group")
+        XCTAssertTrue(tabs[1].exists, "Unselected native editor must remain in the origin group")
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 3,
+                       "Moving must not clone or drop any file tab")
+        for (index, file) in files.enumerated() {
+            XCTAssertEqual(try Data(contentsOf: file), Data("let item = \(index)\n".utf8))
+        }
+    }
+
     func testDockFileTabSwitchRevealsOneSelectedExplorerRow() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("one.swift", text: "let one = 1\n")
