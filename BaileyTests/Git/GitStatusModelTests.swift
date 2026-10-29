@@ -1859,7 +1859,8 @@ final class GitStatusModelTests: XCTestCase {
         model.sync(root: directory.path, backend: backend, scope: "ssh:first")
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         await backend.suspendNextGitRequest()
-        model.switchBranch(to: "other")
+        model.switchBranch(to: "other",
+                           expectedOID: try XCTUnwrap(model.refsByName["refs/heads/other"]?.oid))
         let deadline = Date().addingTimeInterval(5)
         while await !backend.awaitingGit, Date() < deadline {
             try await Task.sleep(for: .milliseconds(10))
@@ -1971,8 +1972,8 @@ final class GitStatusModelTests: XCTestCase {
                 .init(kind: .localBranch, name: "feature,hotfix"),
                 .init(kind: .remoteBranch, name: "origin/main"),
                 .init(kind: .remoteAlias, name: "origin/HEAD"),
-                .init(kind: .tag, name: "v1.0"),
-                .init(kind: .tag, name: "v1,hotfix"),
+                .init(kind: .tag, name: "v1.0", objectOID: merge),
+                .init(kind: .tag, name: "v1,hotfix", objectOID: merge),
             ])
         )
         XCTAssertEqual(rows.first { $0.hash == side }?.references,
@@ -2758,7 +2759,7 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(commit.parentHashes, [main, side])
         XCTAssertEqual(Set(commit.references), Set([
             .init(kind: .currentBranch, name: "main"),
-            .init(kind: .tag, name: "版本,β"),
+            .init(kind: .tag, name: "版本,β", objectOID: head),
             .init(kind: .remoteBranch, name: "origin/main"),
             .init(kind: .remoteBranch, name: "upstream/HEAD"),
             .init(kind: .remoteAlias, name: "origin/HEAD"),

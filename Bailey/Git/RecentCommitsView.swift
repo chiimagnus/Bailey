@@ -126,7 +126,7 @@ struct RecentCommitsView: View {
     let compareCommits: (String, String) async -> GitStatusModel.CommitComparisonResult
     let openComparedFile: (String, String, Commit.FileChange) -> Void
     let canSwitchBranch: Bool
-    let switchBranch: (String) -> Void
+    let switchBranch: (String, String) -> Void
     let branchAction: (Reference, Commit, BranchAction) -> Void
     let remoteAction: (Reference, Commit, RemoteAction) -> Void
     let tagAction: (Reference, Commit, TagAction) -> Void
@@ -167,7 +167,7 @@ struct RecentCommitsView: View {
         compareCommits: @escaping (String, String) async -> GitStatusModel.CommitComparisonResult,
         openComparedFile: @escaping (String, String, Commit.FileChange) -> Void,
         canSwitchBranch: Bool,
-        switchBranch: @escaping (String) -> Void,
+        switchBranch: @escaping (String, String) -> Void,
         branchAction: @escaping (Reference, Commit, BranchAction) -> Void,
         remoteAction: @escaping (Reference, Commit, RemoteAction) -> Void,
         tagAction: @escaping (Reference, Commit, TagAction) -> Void,
@@ -1212,7 +1212,7 @@ struct RecentCommitsView: View {
             }
             if reference.kind == .localBranch {
                 Button(String(localized: "Switch to This Branch", table: "Git")) {
-                    switchBranch(reference.name)
+                    switchBranch(reference.name, commit.hash)
                 }
                 .disabled(!canSwitchBranch)
             }

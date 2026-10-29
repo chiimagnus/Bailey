@@ -181,7 +181,7 @@ struct BottomToolbarView: View {
                 if filteredBranches.count == 1,
                    let branch = filteredBranches.first,
                    branch != model.branch {
-                    selectBranch(branch)
+                    selectBranch(branch, expectedOID: model.refsByName["refs/heads/" + branch]?.oid)
                 }
             }
             .frame(height: 22)
@@ -200,8 +200,9 @@ struct BottomToolbarView: View {
                         } else {
                             ForEach(filteredBranches, id: \.self) { branch in
                                 let isHovered = hoveredBranch == branch
+                                let expectedOID = model.refsByName["refs/heads/" + branch]?.oid
                                 Button {
-                                    selectBranch(branch)
+                                    selectBranch(branch, expectedOID: expectedOID)
                                 } label: {
                                     HStack(spacing: 7) {
                                         Image(systemName: "checkmark")
@@ -283,9 +284,10 @@ struct BottomToolbarView: View {
         isShowingBranches.toggle()
     }
 
-    private func selectBranch(_ branch: String) {
+    private func selectBranch(_ branch: String, expectedOID: String?) {
+        guard let expectedOID else { return }
         isShowingBranches = false
-        model.switchBranch(to: branch)
+        model.switchBranch(to: branch, expectedOID: expectedOID)
     }
 }
 

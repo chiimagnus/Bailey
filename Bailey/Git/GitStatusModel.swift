@@ -358,6 +358,7 @@ final class GitStatusModel {
 
             let kind: Kind
             let name: String
+            var objectOID: String? = nil
             var id: String { kind.rawValue + ":" + name }
         }
 
@@ -1679,7 +1680,7 @@ final class GitStatusModel {
     // MARK: - Branches, stash, and repository setup
 
     func switchBranch(
-        to name: String,
+        to name: String, expectedOID: String,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
         completion: (@MainActor (Bool) -> Void)? = nil
@@ -1688,10 +1689,18 @@ final class GitStatusModel {
             completion?(name == branch)
             return
         }
+        guard refsByName["refs/heads/" + name]?.oid == expectedOID else {
+            failImmediately(
+                String(localized: "The selected Git reference changed. Reopen the menu and try again.", table: "Git"),
+                completion: completion
+            )
+            return
+        }
         perform(
             label: String(localized: "Switch to \(name)", table: "Git"),
             commands: [["switch", "--", name]],
             preflight: [["check-ref-format", "--branch", name]],
+            expectedRef: (name: "refs/heads/" + name, oid: expectedOID),
             prepare: prepare, isCurrentTarget: isCurrentTarget,
             completion: completion
         )
@@ -2442,7 +2451,7 @@ final class GitStatusModel {
             preflight = [["check-ref-format", "--branch", name]]
         }
         let originalStashes = expectedStashes ?? stashes
-        guard action == .apply || originalStashes.contains(stash) else {
+        guard originalStashes.contains(stash) else {
             failImmediately(String(localized: "The selected stash changed. Reopen the menu and select it again.", table: "Git"),
                             completion: completion)
             return
@@ -2450,7 +2459,7 @@ final class GitStatusModel {
         perform(label: action.title, commands: commands,
                 requiredStatus: .stashes,
                 requiresStableHead: action != .drop, preflight: preflight,
-                expectedStashes: action == .apply ? nil : originalStashes,
+                expectedStashes: originalStashes,
                 prepare: action == .drop ? nil : prepare,
                 isCurrentTarget: isCurrentTarget, completion: completion)
     }
@@ -4209,6 +4218,12 @@ final class GitStatusModel {
                 date: Date(timeIntervalSince1970: timestamp),
                 parentHashes: fields[5].split(separator: " ").map(String.init),
                 references: parseCommitReferences(String(fields[6])).map { reference in
+                    if reference.kind == .tag {
+                        return .init(
+                            kind: .tag, name: reference.name,
+                            objectOID: refsByName["refs/tags/" + reference.name]?.oid
+                        )
+                    }
                     guard reference.kind == .remoteBranch,
                           refsByName["refs/remotes/" + reference.name]?.symbolic != nil else {
                         return reference

@@ -103,6 +103,35 @@ final class GitBranchActionTests: XCTestCase {
         try await settle()
     }
 
+    func testGraphBranchSwitchRejectsExternallyMovedRefBeforeCheckingOut() async throws {
+        let original = try git(["rev-parse", "HEAD"])
+        _ = try git(["branch", "from-graph"])
+        _ = try git(["commit", "--allow-empty", "-qm", "later main"])
+        let moved = try git(["rev-parse", "HEAD"])
+        XCTAssertNotEqual(original, moved)
+        try await refresh()
+        XCTAssertEqual(model.refsByName["refs/heads/from-graph"]?.oid, original)
+        _ = try git(["update-ref", "refs/heads/from-graph", moved])
+
+        model.switchBranch(to: "from-graph", expectedOID: original)
+        try await settle()
+        XCTAssertNotNil(model.lastError,
+                        "An old Graph menu must not switch to an externally moved branch")
+        XCTAssertEqual(try git(["symbolic-ref", "HEAD"]), "refs/heads/main")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), moved)
+        XCTAssertEqual(try git(["rev-parse", "refs/heads/from-graph"]), moved)
+        XCTAssertTrue(try git(["status", "--porcelain=v1"]).isEmpty)
+
+        model.refresh()
+        try await settle()
+        model.switchBranch(to: "from-graph", expectedOID: moved)
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["symbolic-ref", "HEAD"]), "refs/heads/from-graph")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), moved)
+        XCTAssertTrue(try git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
     func testSwitchRejectsOptionNamesAndPreviousCheckoutAliasInsteadOfChangingHead() async throws {
         _ = try git(["branch", "other"])
         let original = try git(["rev-parse", "HEAD"])
@@ -112,13 +141,13 @@ final class GitBranchActionTests: XCTestCase {
             _ = try git(["switch", "main"])
             try await refresh()
             XCTAssertTrue(model.branches.contains(name), "The external Ref must actually exist")
-            model.switchBranch(to: name)
+            model.switchBranch(to: name, expectedOID: original)
             try await settle()
             XCTAssertNotNil(model.lastError, "An option or shorthand must not select a different target")
             XCTAssertEqual(try git(["symbolic-ref", "HEAD"]), "refs/heads/main")
             XCTAssertEqual(try git(["rev-parse", "HEAD"]), original)
         }
-        model.switchBranch(to: "other")
+        model.switchBranch(to: "other", expectedOID: original)
         try await settle()
         XCTAssertNil(model.lastError)
         XCTAssertEqual(try git(["symbolic-ref", "HEAD"]), "refs/heads/other")

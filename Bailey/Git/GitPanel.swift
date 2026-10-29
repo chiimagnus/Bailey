@@ -314,8 +314,9 @@ struct GitPanel: View {
         Menu {
             if !model.branches.isEmpty {
                 ForEach(model.branches, id: \.self) { branch in
+                    let expectedOID = model.refsByName["refs/heads/" + branch]?.oid
                     Button {
-                        switchBranchSafely(to: branch)
+                        switchBranchSafely(to: branch, expectedOID: expectedOID)
                     } label: {
                         if branch == model.branch {
                             Label(branch, systemImage: "checkmark")
@@ -590,10 +591,11 @@ struct GitPanel: View {
         }
     }
 
-    private func switchBranchSafely(to name: String) {
+    private func switchBranchSafely(to name: String, expectedOID: String?) {
         guard let window = manager.attachedWindow, let project,
               manager.selectedProject === project, let context = project.panelContext,
-              model.matchesPanelTarget(context.identity), !model.isBusy else { return }
+              model.matchesPanelTarget(context.identity), !model.isBusy,
+              let expectedOID else { return }
         let target = model.actionTarget()
         let isCurrent: @MainActor () -> Bool = {
             manager.attachedWindow === window && manager.selectedProject === project
@@ -601,7 +603,7 @@ struct GitPanel: View {
                 && model.matchesPanelTarget(context.identity) && model.isCurrent(target)
         }
         performOperation(.branchMenu) {
-            model.switchBranch(to: name,
+            model.switchBranch(to: name, expectedOID: expectedOID,
                 prepare: {
                     await project.saveBeforeGitAction(repository: target.repository,
                         scope: target.scope, isCurrent: isCurrent)
@@ -1162,7 +1164,11 @@ struct GitPanel: View {
         guard reference.kind == .tag, let window = manager.attachedWindow,
               let project, manager.selectedProject === project,
               let context = project.panelContext, model.matchesPanelTarget(context.identity),
-              !model.isBusy, let selected = model.refsByName["refs/tags/" + reference.name]
+              !model.isBusy, let selected = model.refsByName["refs/tags/" + reference.name],
+              reference.objectOID == selected.oid,
+              model.recentCommits.contains(where: {
+                  $0.hash == commit.hash && $0.references.contains(reference)
+              })
         else { return }
         let name = reference.name
         let oid = selected.oid
@@ -1848,8 +1854,8 @@ struct GitPanel: View {
                                 )
                             },
                             canSwitchBranch: !model.isBusy && model.canUseCurrentReferences,
-                            switchBranch: { name in
-                                switchBranchSafely(to: name)
+                            switchBranch: { name, oid in
+                                switchBranchSafely(to: name, expectedOID: oid)
                             },
                             branchAction: { ref, commit, action in
                                 presentBranchAction(ref, commit: commit, action: action)
@@ -2461,7 +2467,8 @@ struct GitPanel: View {
     }
 
     func presentStashDialog(_ stash: GitStatusModel.Stash, action: GitStatusModel.StashAction) {
-        guard !model.isBusy, let window = manager.attachedWindow, let project,
+        guard !model.isBusy, model.stashes.contains(stash),
+              let window = manager.attachedWindow, let project,
               manager.selectedProject === project, let context = project.panelContext,
               model.matchesPanelTarget(context.identity) else { return }
         let target = model.actionTarget()
@@ -2471,6 +2478,7 @@ struct GitPanel: View {
                 && project.matchesPanelTarget(context.identity)
                 && model.matchesPanelTarget(context.identity)
                 && model.isCurrent(target, requiresStableHead: action != .drop)
+                && model.stashes.contains(stash)
         }
         let dialog = GitStashDialog(action: action, stash: stash, target: target)
         dialog.alert.beginSheetModal(for: window) { response in
