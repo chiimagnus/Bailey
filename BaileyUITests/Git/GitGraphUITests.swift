@@ -97,6 +97,9 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(compared.waitForExistence(timeout: 15))
         compared.click()
         let window = app.windows.firstMatch
+        let layout = window.radioGroups["bailey.diff.layout"]
+        XCTAssertTrue(layout.waitForExistence(timeout: 15))
+        layout.radioButtons.element(boundBy: 1).click()
         let actualContent = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             let values = Set(window.textViews.allElementsBoundByIndex.compactMap { $0.value as? String })
             return values.contains("comparison before\n") && values.contains("comparison after\n")
@@ -966,7 +969,22 @@ final class GitGraphUITests: XCTestCase {
             }
             return best
         }
-        var nodeSwatches: [[NSColor]] = []
+        // Compare the predominant painted node color, not the closest pair of
+        // anti-aliased edge pixels (which can look almost identical across lanes).
+        func dominantColor(_ pixels: [NSColor]) throws -> NSColor {
+            var frequencies: [UInt32: Int] = [:]
+            for pixel in pixels {
+                let red = UInt32((pixel.redComponent * 255).rounded())
+                let green = UInt32((pixel.greenComponent * 255).rounded())
+                let blue = UInt32((pixel.blueComponent * 255).rounded())
+                frequencies[(red << 16) | (green << 8) | blue, default: 0] += 1
+            }
+            let key = try XCTUnwrap(frequencies.max(by: { $0.value < $1.value })?.key)
+            return NSColor(srgbRed: CGFloat((key >> 16) & 255) / 255,
+                           green: CGFloat((key >> 8) & 255) / 255,
+                           blue: CGFloat(key & 255) / 255, alpha: 1)
+        }
+        var nodeColors: [NSColor] = []
         for (branch, oid) in [("main", mainOID), ("topic/colors", featureOID)] {
             let badge = app.buttons.matching(NSPredicate(
                 format: "label == %@ OR label BEGINSWITH %@",
@@ -981,11 +999,16 @@ final class GitGraphUITests: XCTestCase {
             print("Git Graph color \(branch): badge=\(badgePixels.count), node=\(nodePixels.count), RGB delta=\(delta)")
             XCTAssertLessThan(delta, 0.32,
                               "\(branch) badge and DAG node must paint the same lane hue")
-            nodeSwatches.append(nodePixels)
+            nodeColors.append(try dominantColor(nodePixels))
         }
-        XCTAssertEqual(nodeSwatches.count, 2)
-        XCTAssertGreaterThan(nearestDifference(nodeSwatches[0], nodeSwatches[1]), 0.30,
-                             "Divergent main and feature lanes must not collapse to one color")
+        XCTAssertEqual(nodeColors.count, 2)
+        let first = nodeColors[0].usingColorSpace(.sRGB)!
+        let second = nodeColors[1].usingColorSpace(.sRGB)!
+        let separation = max(abs(first.redComponent - second.redComponent),
+                             abs(first.greenComponent - second.greenComponent),
+                             abs(first.blueComponent - second.blueComponent))
+        XCTAssertGreaterThan(separation, 0.10,
+                             "Divergent main and feature lanes must retain distinct painted colors")
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), Data((mainOID + "\n").utf8))
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
     }

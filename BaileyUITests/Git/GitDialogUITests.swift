@@ -14,8 +14,17 @@ final class GitDialogUITests: XCTestCase {
         let target = try fixture.git(["rev-parse", "HEAD"])
         try fixture.git(["switch", "main"])
 
+        let home = try WorkspaceUITestFixture(in: self)
+        _ = try home.file(".config/bailey-dev/config.toml",
+                          text: "toolbar.visibility = \"auto\"\n")
         let app = try WorkspaceUITestSupport.launch(
-            in: self, language: "en", project: fixture.root)
+            in: self, language: "en", configurationHome: home.root, project: fixture.root)
+        let window = app.windows.firstMatch
+        let fileRow = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(fileRow.waitForExistence(timeout: 15))
+        fileRow.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: window).waitForExistence(timeout: 15),
+                      "The bottom toolbar belongs to a displayed work tab")
         let toolbar = app.buttons.matching(NSPredicate(
             format: "label == %@", "Current branch, main")).firstMatch
         XCTAssertTrue(toolbar.waitForExistence(timeout: 20),
