@@ -27,6 +27,11 @@ enum DockItem: Hashable {
         case .tab: nil
         }
     }
+
+    var tabID: UUID? {
+        if case .tab(let id) = self { return id }
+        return nil
+    }
 }
 
 /// Defines workspace actions without binding the model to SwiftUI menus.
@@ -373,6 +378,7 @@ indirect enum DockSavedNode: Codable {
 @Observable
 final class DockWorkspaceModel {
     enum SelectionChange { case replace, preserve, toggle, range }
+    enum CommandScope { case selection, otherTabs, tabsToRight }
     private struct ExtendedSelection {
         var items: Set<DockItem>
         var anchor: DockItem?
@@ -405,10 +411,17 @@ final class DockWorkspaceModel {
 
     func anchor(in groupID: UUID) -> DockItem? { extendedSelections[groupID]?.anchor }
 
-    func commandTargets(for item: DockItem) -> [DockItem] {
+    func commandTargets(for item: DockItem, scope: CommandScope = .selection) -> [DockItem] {
         guard let group = group(containing: item) else { return [] }
         let selected = selection(in: group.id)
-        return selected.contains(item) ? selected : [item]
+        let targets = selected.contains(item) ? selected : [item]
+        switch scope {
+        case .selection: return targets
+        case .otherTabs: return group.items.filter { $0.tabID != nil && !targets.contains($0) }
+        case .tabsToRight:
+            guard let index = group.items.firstIndex(of: item) else { return [] }
+            return group.items.dropFirst(index + 1).filter { $0.tabID != nil }
+        }
     }
 
     private func reconcileSelection(with updated: DockNode, activating groupID: UUID?) {

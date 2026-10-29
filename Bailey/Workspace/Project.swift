@@ -574,23 +574,11 @@ final class Project: nonisolated Identifiable {
     /// "Close Others" is scoped to the tab group containing this tab, not
     /// an unrelated dock region elsewhere in the same workspace.
     func closeOthers(_ keep: PaneTab) {
-        guard let group = dock.group(containing: .tab(keep.id)) else { return }
-        selectTab(keep.id)
-        let ids = Set(group.items.compactMap { item -> UUID? in
-            if case .tab(let id) = item, id != keep.id { return id }
-            return nil
-        })
-        closeBatch(tabs.filter { ids.contains($0.id) }.map(\.content))
+        closePanels(dock.commandTargets(for: .tab(keep.id), scope: .otherTabs))
     }
 
     func closeToRight(of tab: PaneTab) {
-        guard let group = dock.group(containing: .tab(tab.id)),
-              let index = group.items.firstIndex(of: .tab(tab.id)) else { return }
-        let ids = Set(group.items.dropFirst(index + 1).compactMap { item -> UUID? in
-            if case .tab(let id) = item { return id }
-            return nil
-        })
-        closeBatch(tabs.filter { ids.contains($0.id) }.map(\.content))
+        closePanels(dock.commandTargets(for: .tab(tab.id), scope: .tabsToRight))
     }
 
     /// Closes file tabs while leaving other content open.
@@ -653,6 +641,7 @@ final class Project: nonisolated Identifiable {
     /// Clean tabs close after the prompts; Cancel stops the remaining prompts
     /// without rolling back tabs already closed by Save or Don't Save.
     private func closeBatch(_ targets: [PaneContent], completion: @escaping (Bool) -> Void = { _ in }) {
+        dock.clearContextTarget()
         guard !isClosingPanels, !targets.contains(where: \.isClosing) else { return }
         let dirtyContents = targets.filter(\.isDirty)
         let cleanContents = targets.filter { !$0.isDirty }
@@ -676,17 +665,18 @@ final class Project: nonisolated Identifiable {
                     return
                 }
             }
-            for content in cleanContents {
-                if content.isDirty {
-                    content.suspendAutoSaveForClose(true)
-                    if await saveBeforeClosing(content, in: window) {
-                        completion(false)
-                        return
-                    }
-                } else {
-                    if case .session(let session) = content { session.terminate() }
-                    removeTabWithContent(content.id)
+            while let content = cleanContents.first(where: { content in
+                content.isDirty && tabs.contains { $0.content.id == content.id }
+            }) {
+                content.suspendAutoSaveForClose(true)
+                if await saveBeforeClosing(content, in: window) {
+                    completion(false)
+                    return
                 }
+            }
+            for content in cleanContents {
+                if case .session(let session) = content { session.terminate() }
+                removeTabWithContent(content.id)
             }
             completion(true)
         }

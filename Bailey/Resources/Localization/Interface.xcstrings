@@ -178,6 +178,16 @@
         }
       }
     },
+    "Close Selected Panels" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭所选面板"
+          }
+        }
+      }
+    },
     "Close Tab" : {
       "localizations" : {
         "zh-Hans" : {

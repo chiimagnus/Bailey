@@ -59,6 +59,48 @@ private final class WindowCloseDelegateWitness: NSObject, NSWindowDelegate {
 final class WindowCloseIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
+    func testNewDraftDuringBatchSaveProtectsEarlierCleanBrowserAndTool() async throws {
+        let project = Project(fallbackName: "new draft", workspaceConfiguration: .standard)
+        let firstBackend = WindowSaveFixture("first original")
+        await firstBackend.permitWrites()
+        let first = FileTab(path: "/fixture/first.txt", backend: firstBackend, workspaceIdentity: nil)
+        try await first.waitForText()
+        let firstTab = PaneTab(content: .file(first))
+        let browser = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
+        let lateBackend = WindowSaveFixture("late original")
+        let late = FileTab(path: "/fixture/late.txt", backend: lateBackend, workspaceIdentity: nil)
+        try await late.waitForText()
+        let lateTab = PaneTab(content: .file(late))
+        for tab in [firstTab, browser, lateTab] { project.append(tab) }
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 720, height: 520),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.orderFront(nil)
+        project.onPresentationWindow = { window }
+        defer { window.close() }
+        first.text = "saved first draft"
+        first.refreshDirtyState()
+        await firstBackend.pauseOneWrite()
+        project.closePanels([.tab(firstTab.id), .tab(browser.id), .tab(lateTab.id), .files])
+        try await wait { await firstBackend.awaitingWrite }
+        late.text = "late unsaved 中文"
+        late.refreshDirtyState()
+        await firstBackend.releaseWrite()
+        try await wait { window.attachedSheet != nil }
+        XCTAssertFalse(project.tabs.contains { $0 === firstTab }, "An already accepted save is not rolled back")
+        XCTAssertTrue(project.tabs.contains { $0 === browser }, "Clean resources must wait for all newly dirty drafts")
+        XCTAssertNotNil(project.dock.group(containing: .files))
+        window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertThirdButtonReturn)
+        try await wait { !project.isClosingPanels }
+        XCTAssertEqual(project.tabs.map(\.id), [browser.id, lateTab.id])
+        XCTAssertTrue(late.isDirty)
+        XCTAssertEqual(late.text, "late unsaved 中文")
+        let saved = await firstBackend.currentText()
+        let retained = await lateBackend.currentText()
+        XCTAssertEqual(saved, "saved first draft")
+        XCTAssertEqual(retained, "late original")
+    }
+
     func testMixedSelectionWaitsForDirtySaveBeforeClosingToolAndBrowser() async throws {
         let manager = workspaceApplication.makeWindow()
         defer { manager.windowClosed() }

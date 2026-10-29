@@ -590,7 +590,7 @@ struct DockTabGroupView: View {
                 isKeyboardFocused: tabKeyboardFocused && tabCursor == item, isPaneFocused: isFocused,
                 isContextTarget: project.dock.contextTarget == item,
                 select: { select(item) },
-                close: { manager.closePanel(item, in: project) },
+                close: { close(item) },
                 renamingTabID: $renamingTabID
             )
             .overlay {
@@ -616,7 +616,7 @@ struct DockTabGroupView: View {
                 isKeyboardFocused: tabKeyboardFocused && tabCursor == item, isPaneFocused: isFocused,
                 isContextTarget: project.dock.contextTarget == item,
                 select: { select(item) },
-                close: { closeTool(item) }
+                close: { close(item) }
             )
             .accessibilityIdentifier("bailey.dock.\(item.configurationName ?? "unknown")")
             .overlay {
@@ -629,13 +629,15 @@ struct DockTabGroupView: View {
                     isExpectedMenu: { isMenuForTab($0, item: item) }
                 )
                 .contextMenu {
-                    let closeTitle = String(localized: "Close Panel", table: "Interface")
+                    let closeTitle = closeTitle(for: item)
                     Button {
-                        closeTool(item)
+                        guard isValidMenuTarget(item) else { return }
+                        close(item)
                     } label: {
                         Text(verbatim: closeTitle + "\t⌘W")
                     }
                     .accessibilityLabel(closeTitle)
+                    .disabled(project.isClosingPanels)
                 }
             }
         }
@@ -655,12 +657,8 @@ struct DockTabGroupView: View {
     }
 
     private func isMenuForTab(_ menu: NSMenu, item: DockItem) -> Bool {
-        guard manager.selectedProject === project,
-              project.dock.contextTarget == item,
-              project.dock.group(containing: item) != nil else { return false }
-        let title = item.tabID == nil
-            ? String(localized: "Close Panel", table: "Interface")
-            : String(localized: "Close", table: "Interface")
+        guard isValidMenuTarget(item), project.dock.contextTarget == item else { return false }
+        let title = closeTitle(for: item)
         return menu.items.contains { $0.accessibilityLabel() == title }
     }
 
@@ -668,9 +666,7 @@ struct DockTabGroupView: View {
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         guard modifiers == [.command], event.charactersIgnoringModifiers?.lowercased() == "w",
               isMenuForTab(menu, item: item) else { return false }
-        let title = item.tabID == nil
-            ? String(localized: "Close Panel", table: "Interface")
-            : String(localized: "Close", table: "Interface")
+        let title = closeTitle(for: item)
         guard let index = menu.items.firstIndex(where: {
             $0.isEnabled && $0.accessibilityLabel() == title
         }) else { return false }
@@ -710,7 +706,28 @@ struct DockTabGroupView: View {
         return true
     }
 
-    private func closeTool(_ item: DockItem) { manager.closePanel(item, in: project) }
+    private func closeTitle(for item: DockItem) -> String {
+        if project.dock.commandTargets(for: item).count > 1 {
+            return String(localized: "Close Selected Panels", table: "Interface")
+        }
+        return item.tabID == nil ? String(localized: "Close Panel", table: "Interface")
+            : String(localized: "Close", table: "Interface")
+    }
+
+    private func isValidMenuTarget(_ item: DockItem) -> Bool {
+        manager.selectedProject === project && project.dock.group(containing: item)?.id == group.id
+            && manager.attachedWindow?.isKeyWindow == true && NSApp.keyWindow === manager.attachedWindow
+    }
+
+    private func currentMenuTab(_ id: UUID) -> PaneTab? {
+        guard isValidMenuTarget(.tab(id)) else { return nil }
+        return project.tabs.first { $0.id == id }
+    }
+
+    private func close(_ item: DockItem) {
+        guard project.dock.group(containing: item)?.id == group.id else { return }
+        manager.closePanel(item, in: project)
+    }
 
     @ViewBuilder
     private var content: some View {
@@ -781,63 +798,79 @@ struct DockTabGroupView: View {
     @ViewBuilder
     private func projectTabMenu(_ tab: PaneTab) -> some View {
         let tabID = tab.id
-        Button(String(localized: "Rename…", table: "Interface")) { renamingTabID = tabID }
+        Button(String(localized: "Rename…", table: "Interface")) {
+            if currentMenuTab(tabID) != nil { renamingTabID = tabID }
+        }
         if tab.customName != nil {
             Button(String(localized: "Use Automatic Title", table: "Interface")) {
-                project.tabs.first(where: { $0.id == tabID })?.customName = nil
+                currentMenuTab(tabID)?.customName = nil
             }
         }
         Divider()
         if case .file(let file) = tab.content {
-            let path = file.path
             Button(String(localized: "Reveal in File Manager", table: "Interface")) {
+                guard currentMenuTab(tabID) != nil else { return }
                 manager.revealFileInFileManager(tabID: tabID, in: project)
             }
             if file.workspaceIdentity == nil {
                 Button(String(localized: "Reveal in Finder", table: "Interface")) {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                    guard case .file(let current)? = currentMenuTab(tabID)?.content,
+                          current.workspaceIdentity == nil else { return }
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: current.path)])
                 }
             }
             Button(String(localized: "Copy Absolute Path", table: "Interface")) {
+                guard case .file(let current)? = currentMenuTab(tabID)?.content else { return }
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(path, forType: .string)
+                NSPasteboard.general.setString(current.path, forType: .string)
             }
             Divider()
         }
         if case .browser(let browser) = tab.content, !browser.urlString.isEmpty {
-            let address = browser.urlString
             Button(String(localized: "Open in Default Browser", table: "Interface")) {
-                if let current = project.tabs.first(where: { $0.id == tabID }),
+                if let current = currentMenuTab(tabID),
                    case .browser(let currentBrowser) = current.content {
                     currentBrowser.openInDefaultBrowser()
                 }
             }
             .disabled(browser.shareURL == nil)
             Button(String(localized: "Copy Address", table: "Interface")) {
+                guard case .browser(let current)? = currentMenuTab(tabID)?.content else { return }
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(address, forType: .string)
+                NSPasteboard.general.setString(current.urlString, forType: .string)
             }
             Divider()
         }
-        let closeTitle = String(localized: "Close", table: "Interface")
+        let closeTitle = closeTitle(for: .tab(tabID))
         Button {
-            manager.closePanel(.tab(tabID), in: project)
+            guard currentMenuTab(tabID) != nil else { return }
+            close(.tab(tabID))
         } label: {
             Text(verbatim: closeTitle + "\t⌘W")
         }
         .accessibilityLabel(closeTitle)
+        .disabled(project.isClosingPanels || tab.content.isClosing)
         Button(String(localized: "Close Others", table: "Interface")) {
-            if let current = project.tabs.first(where: { $0.id == tabID }) { project.closeOthers(current) }
+            if let current = currentMenuTab(tabID) { project.closeOthers(current) }
         }
-            .disabled(group.items.compactMap(\.tabID).count < 2)
+        .disabled(project.isClosingPanels || project.dock.commandTargets(for: .tab(tabID), scope: .otherTabs).isEmpty)
         Button(String(localized: "Close Tabs to the Right", table: "Interface")) {
-            if let current = project.tabs.first(where: { $0.id == tabID }) { project.closeToRight(of: current) }
+            if let current = currentMenuTab(tabID) { project.closeToRight(of: current) }
         }
-            .disabled(group.items.compactMap(\.tabID).last == tabID)
+        .disabled(project.isClosingPanels || project.dock.commandTargets(for: .tab(tabID), scope: .tabsToRight).isEmpty)
         Divider()
-        Button(String(localized: "Close Files", table: "Interface")) { project.closeFiles() }
-        Button(String(localized: "Close Diffs", table: "Interface")) { project.closeDiffs() }
-        Button(String(localized: "Close All", table: "Interface")) { project.closeAll() }
+        Button(String(localized: "Close Files", table: "Interface")) {
+            if currentMenuTab(tabID) != nil { project.closeFiles() }
+        }
+        .disabled(project.isClosingPanels || !project.tabs.contains { $0.content.isFile })
+        Button(String(localized: "Close Diffs", table: "Interface")) {
+            if currentMenuTab(tabID) != nil { project.closeDiffs() }
+        }
+        .disabled(project.isClosingPanels || !project.tabs.contains { $0.content.isDiff })
+        Button(String(localized: "Close All", table: "Interface")) {
+            if currentMenuTab(tabID) != nil { project.closeAll() }
+        }
+        .disabled(project.isClosingPanels)
     }
 
     @ViewBuilder
@@ -1107,12 +1140,5 @@ final class DockGroupFocusView: NSView {
         let visible = view.visibleRect.intersection(view.bounds)
         guard !view.isHiddenOrHasHiddenAncestor, !visible.isEmpty else { return false }
         return bounds.contains(convert(NSPoint(x: visible.midX, y: visible.midY), from: view))
-    }
-}
-
-private extension DockItem {
-    var tabID: UUID? {
-        if case .tab(let id) = self { return id }
-        return nil
     }
 }

@@ -7,6 +7,42 @@ import XCTest
 final class DockWorkspaceTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
+    func testCloseOthersKeepsBackgroundGroupSelectionWithoutActivatingIt() throws {
+        let project = Project(fallbackName: "background menu", workspaceConfiguration: .standard)
+        for _ in 0..<5 { project.newBrowserTab(initialFocus: .none) }
+        let tabs = project.tabs
+        let destination = try XCTUnwrap(project.dock.group(containing: .files))
+        XCTAssertTrue(project.movePanels(.tab(tabs[1].id), into: destination.id,
+            items: Array(tabs[1...3]).map { .tab($0.id) }))
+        project.selectTab(tabs[0].id)
+        project.dock.select(.tab(tabs[2].id), activating: false, extending: .toggle)
+        let active = project.dock.activeGroupID
+        let displayed = project.dock.root.group(id: destination.id)?.selected
+        project.dock.selectForContextMenu(.tab(tabs[1].id))
+        project.closeOthers(tabs[1])
+        XCTAssertEqual(project.dock.activeGroupID, active)
+        XCTAssertEqual(project.selectedTabID, tabs[0].id)
+        XCTAssertEqual(project.dock.root.group(id: destination.id)?.selected, displayed)
+        XCTAssertEqual(project.tabs.map(\.id), [tabs[0].id, tabs[1].id, tabs[2].id, tabs[4].id])
+        XCTAssertNotNil(project.dock.group(containing: .files))
+        XCTAssertNotNil(project.dock.group(containing: .git))
+    }
+
+    func testCloseToRightUsesClickedTabNotSelectionAndKeepsSingletonTools() throws {
+        let project = Project(fallbackName: "right menu", workspaceConfiguration: .standard)
+        for _ in 0..<3 { project.newBrowserTab(initialFocus: .none) }
+        let tabs = project.tabs
+        let group = try XCTUnwrap(project.dock.group(containing: .tab(tabs[0].id)))
+        XCTAssertTrue(project.dock.move(.git, into: group.id))
+        project.selectTab(tabs[0].id)
+        project.selectTab(tabs[2].id, extending: .toggle)
+        project.closeToRight(of: tabs[0])
+        XCTAssertEqual(project.tabs.map(\.id), [tabs[0].id])
+        XCTAssertEqual(project.dock.group(containing: .git)?.id, group.id)
+        XCTAssertNotNil(project.dock.group(containing: .files))
+        XCTAssertNotNil(project.dock.group(containing: .projects))
+    }
+
     func testEverySmallGroupSelectionAndInsertionBoundaryIsAtomic() throws {
         for count in 1...6 {
             for mask in 1..<(1 << count) {

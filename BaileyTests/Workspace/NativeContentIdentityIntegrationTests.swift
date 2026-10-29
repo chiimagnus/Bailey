@@ -10,6 +10,55 @@ import XCTest
 final class NativeContentIdentityIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
+    func testMiddleMouseHitsRealDockTabAndClosesOnlyResolvedGroupTargets() async throws {
+        for multiple in [false, true] {
+            let manager = workspaceApplication.makeWindow()
+            defer { manager.windowClosed() }
+            let project = Project(fallbackName: "middle click", workspaceConfiguration: .standard)
+            manager.projects = [project]
+            manager.selectedProjectID = project.id
+            project.dock.select(.projects)
+            project.dock.select(.files, activating: false)
+            if multiple { project.dock.select(.git, activating: false, extending: .toggle) }
+            let group = try XCTUnwrap(project.dock.group(containing: .git))
+            let active = project.dock.activeGroupID
+            let host = NSHostingView(rootView: DockTabGroupView(
+                group: group, project: project, manager: manager,
+                git: GitStatusModel(), dragging: DockTabDragCoordinator()
+            ))
+            let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 380, height: 180),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            manager.attach(to: window)
+            window.orderFront(nil)
+            defer { window.close() }
+            func pointers(_ view: NSView) -> [DockTabPointerView] {
+                (view as? DockTabPointerView).map { [$0] } ?? view.subviews.flatMap(pointers)
+            }
+            try await wait { host.layoutSubtreeIfNeeded(); return pointers(host).count == 2 }
+            let target = try XCTUnwrap(pointers(host).sorted {
+                $0.convert($0.bounds, to: host).minX < $1.convert($1.bounds, to: host).minX
+            }.last)
+            let point = target.convert(NSPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil)
+            let template = try XCTUnwrap(NSEvent.mouseEvent(
+                with: .otherMouseDown, location: point, modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 917,
+                clickCount: 1, pressure: 1
+            ))
+            let nativeEvent = try XCTUnwrap(template.cgEvent)
+            nativeEvent.setIntegerValueField(.mouseEventButtonNumber, value: 2)
+            let event = try XCTUnwrap(NSEvent(cgEvent: nativeEvent))
+            XCTAssertEqual(event.buttonNumber, 2)
+            XCTAssertEqual(event.windowNumber, window.windowNumber)
+            target.otherMouseDown(with: event)
+            try await wait { project.dock.group(containing: .git) == nil }
+            XCTAssertNil(project.dock.group(containing: .git))
+            XCTAssertEqual(project.dock.group(containing: .files) == nil, multiple)
+            XCTAssertEqual(project.dock.activeGroupID, active, "Middle close never activates the clicked background group")
+        }
+    }
+
     func testNativeTabPointerPreservesDownModifiersAndFinishesDragOnlyOnce() throws {
         let view = DockTabPointerView(frame: .init(x: 0, y: 0, width: 100, height: 24))
         var presses: [NSEvent.ModifierFlags] = []

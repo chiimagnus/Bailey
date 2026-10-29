@@ -629,7 +629,6 @@ final class WorkspaceWindowModel {
     func closePanel(_ item: DockItem, in project: Project) {
         guard selectedProject === project, project.dock.group(containing: item) != nil else { return }
         let targets = project.dock.commandTargets(for: item)
-        project.dock.clearContextTarget()
         project.closePanels(targets)
     }
 
