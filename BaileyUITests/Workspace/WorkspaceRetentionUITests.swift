@@ -210,7 +210,10 @@ final class WorkspaceRetentionUITests: XCTestCase {
         XCTAssertEqual(window.textViews.firstMatch.value as? String, "let untouched = true\n")
         let browserTab = window.buttons["P4T5 Browser Page"]
         XCTAssertTrue(browserTab.waitForExistence(timeout: 15))
-        browserTab.click()
+        XCTAssertTrue(window.frame.contains(CGPoint(x: browserTab.frame.midX,
+                                                  y: browserTab.frame.midY)),
+                      "The browser tab must be visible within its owning window")
+        browserTab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         let reattached = window.webViews.firstMatch
         XCTAssertTrue(reattached.waitForExistence(timeout: 15))
         XCTAssertEqual(reattached.textFields["P4T5 draft"].value as? String,
