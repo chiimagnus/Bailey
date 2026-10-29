@@ -328,6 +328,57 @@ final class WorkspaceWindowsUITests: XCTestCase {
         XCTAssertEqual(workspaceWindowCount(in: app), 2)
     }
 
+    func testBrowserAddressCommandsFollowTheNativeKeyWindow() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let fileA = try fixture.file("browser-a/unchanged.txt", text: "window A bytes\n")
+        let fileB = try fixture.file("browser-b/unchanged.txt", text: "window B bytes\n")
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fileA.deletingLastPathComponent()
+        )
+        let firstWindow = app.windows.firstMatch
+        let windowA = app.windows.matching(identifier: firstWindow.identifier).firstMatch
+        let browserMenu = app.menuItems["New Browser Tab"]
+        XCTAssertTrue(browserMenu.waitForExistence(timeout: 10))
+        browserMenu.click()
+        let addressA = windowA.textFields["Search or enter website name"]
+        XCTAssertTrue(addressA.waitForExistence(timeout: 15))
+
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        XCTAssertEqual(app.windows.count, 2)
+        let empty = try XCTUnwrap(app.windows.allElementsBoundByIndex.first {
+            $0.buttons["bailey.emptyState.addFolder"].exists
+        })
+        let emptyWindow = app.windows.matching(identifier: empty.identifier).firstMatch
+        try WorkspaceUITestSupport.addFolder(
+            fileB.deletingLastPathComponent(), to: app, in: emptyWindow
+        )
+        let windowB = try XCTUnwrap(window(containing: fileB, in: app))
+        XCTAssertNotEqual(windowA.identifier, windowB.identifier)
+
+        browserMenu.click()
+        let addressB = windowB.textFields["Search or enter website name"]
+        XCTAssertTrue(addressB.waitForExistence(timeout: 15))
+        app.typeKey("l", modifierFlags: .command)
+        app.typeText("window B browser marker")
+        XCTAssertEqual(addressB.value as? String, "window B browser marker")
+        let preservedB = addressB.value as? String
+
+        activate(windowA, in: app)
+        app.typeKey("l", modifierFlags: .command)
+        app.typeText("window A browser marker")
+        XCTAssertEqual(addressA.value as? String, "window A browser marker")
+        XCTAssertEqual(addressB.value as? String, preservedB,
+                       "Focus requests in A must never type into B's background address")
+
+        activate(windowB, in: app)
+        app.typeKey("l", modifierFlags: .command)
+        app.typeText("window B second marker")
+        XCTAssertEqual(addressB.value as? String, "window B second marker")
+        XCTAssertEqual(addressA.value as? String, "window A browser marker")
+        XCTAssertEqual(try Data(contentsOf: fileA), Data("window A bytes\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: fileB), Data("window B bytes\n".utf8))
+    }
+
     private func activate(_ window: XCUIElement, in app: XCUIApplication) {
         for _ in 0..<app.windows.count {
             if app.windows.firstMatch.identifier == window.identifier { return }
