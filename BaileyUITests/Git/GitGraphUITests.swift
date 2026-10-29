@@ -4,6 +4,41 @@ import XCTest
 
 @MainActor
 final class GitGraphUITests: XCTestCase {
+    func testSwitchingProjectsInsideSameRepositoryClearsOldGraphComparison() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let nestedFile = try fixture.file("nested/shared.txt", text: "first\n")
+        try fixture.initializeGit()
+        let original = try fixture.git(["rev-parse", "HEAD"])
+        try "second\n".write(to: nestedFile, atomically: true, encoding: .utf8)
+        try fixture.git(["add", "--", "nested/shared.txt"])
+        try fixture.git(["commit", "-qm", "second shared revision"])
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        XCTAssertNotEqual(original, head)
+        let app = try launchGraph(fixture, language: "en")
+        let first = app.buttons["E2E fixture history"]
+        let second = app.buttons["second shared revision"]
+        XCTAssertTrue(first.waitForExistence(timeout: 25))
+        XCTAssertTrue(second.waitForExistence(timeout: 25))
+        first.click()
+        XCUIElement.perform(withKeyModifiers: .command) { second.click() }
+        let comparison = app.staticTexts["bailey.git.compare.endpoints"]
+        XCTAssertTrue(comparison.waitForExistence(timeout: 20))
+
+        app.typeKey("a", modifierFlags: [.command, .shift])
+        try WorkspaceUITestSupport.choose(nestedFile.deletingLastPathComponent(), in: app)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        XCTAssertTrue(first.waitForExistence(timeout: 25))
+        XCTAssertTrue(second.waitForExistence(timeout: 25))
+        XCTAssertFalse(comparison.exists,
+                       "The old project's comparison must not remain visible after switching")
+        first.click()
+        XCTAssertFalse(comparison.exists,
+                       "Re-expanding the identical commit in a new Project must not revive the old comparison")
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try Data(contentsOf: nestedFile), Data("second\n".utf8))
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
     func testExpandedCommitSurvivesTemporaryGitPanelHiding() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("retained/history.txt", text: "immutable history bytes\n")
