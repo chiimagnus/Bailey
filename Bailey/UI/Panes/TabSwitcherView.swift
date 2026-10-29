@@ -16,11 +16,16 @@ final class TabSwitcherController {
     private(set) var orderedTabIDs: [UUID] = []
 
     @ObservationIgnored private weak var activeProject: Project?
+    @ObservationIgnored private weak var activeManager: WorkspaceWindowModel?
     @ObservationIgnored private var originalTabID: UUID?
     @ObservationIgnored private var previewTask: Task<Void, Never>?
     @ObservationIgnored private var isConsumingTabKey = false
     @ObservationIgnored private var isConsumingEscapeKey = false
     @ObservationIgnored private var acceptsPointerHighlight = false
+
+    func isPreviewing(_ project: Project) -> Bool {
+        isPresented && activeProject === project && activeManager?.selectedProject === project
+    }
 
     /// Returns nil for an event consumed by the switcher.
     func handle(_ event: NSEvent) -> NSEvent? {
@@ -75,7 +80,8 @@ final class TabSwitcherController {
 
     private func dismiss(commitSelection: Bool) {
         if commitSelection,
-           let project = activeProject,
+           let project = activeProject, let manager = activeManager,
+           !manager.isClosed, manager.selectedProject === project,
            project.selectedTabID == originalTabID,
            let highlightedTabID,
            project.tabs.contains(where: { $0.id == highlightedTabID }) {
@@ -89,11 +95,15 @@ final class TabSwitcherController {
         highlightedTabID = nil
         originalTabID = nil
         activeProject = nil
+        activeManager = nil
         acceptsPointerHighlight = false
     }
 
     func select(_ tabID: UUID, in project: Project) {
-        guard project.tabs.contains(where: { $0.id == tabID }) else { return }
+        guard isPresented, activeProject === project,
+              let manager = activeManager, !manager.isClosed,
+              manager.selectedProject === project,
+              project.tabs.contains(where: { $0.id == tabID }) else { return }
         project.selectTab(tabID)
         dismiss(commitSelection: false)
     }
@@ -101,6 +111,7 @@ final class TabSwitcherController {
     func highlight(_ tabID: UUID, in project: Project) {
         guard acceptsPointerHighlight,
               isPresented,
+              activeManager?.selectedProject === project,
               activeProject === project,
               highlightedTabID != tabID,
               project.tabs.contains(where: { $0.id == tabID })
@@ -127,6 +138,7 @@ final class TabSwitcherController {
 
         if !isPresented || activeProject !== project {
             previewTask?.cancel()
+            activeManager = manager
             activeProject = project
             originalTabID = selectedID
             orderedTabIDs = project.tabsByRecency.map(\.id)

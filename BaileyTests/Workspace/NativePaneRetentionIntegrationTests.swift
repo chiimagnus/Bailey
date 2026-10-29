@@ -336,6 +336,41 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertTrue(project.tabs.contains { $0.id == project.selectedTabID })
     }
 
+    func testTabSwitcherCannotCommitOrSelectAfterChangingProjects() throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let first = Project(fallbackName: "A", workspaceConfiguration: .standard)
+        let second = Project(fallbackName: "B", workspaceConfiguration: .standard)
+        manager.projects = [first, second]
+        let firstTabs = (0..<3).map { _ in
+            PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
+        }
+        firstTabs.forEach(first.append)
+        let secondTab = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
+        second.append(secondTab)
+        manager.selectedProjectID = first.id
+        let original = first.selectedTabID
+
+        let switcher = manager.tabSwitcher
+        XCTAssertTrue(switcher.cycle(in: manager, reverse: false))
+        let staleCandidate = try XCTUnwrap(switcher.highlightedTabID)
+        XCTAssertTrue(switcher.isPresented)
+        manager.selectedProjectID = second.id
+        XCTAssertFalse(switcher.isPresented,
+                       "A project change must synchronously cancel old Control-Tab previews")
+        switcher.finish()
+        XCTAssertEqual(first.selectedTabID, original,
+                       "A stale Control release cannot write the old project's MRU")
+        XCTAssertEqual(second.selectedTabID, secondTab.id)
+
+        XCTAssertTrue(switcher.cycle(in: manager, reverse: false) == false,
+                      "One-tab projects cannot open a Control-Tab overlay")
+        switcher.select(staleCandidate, in: first)
+        XCTAssertEqual(first.selectedTabID, original,
+                       "A stale overlay card cannot select another project's tab")
+        XCTAssertEqual(manager.selectedProjectID, second.id)
+    }
+
     func testBrowserKVOUpdatesObservationHistoryFaviconAndRepeatedFocus() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

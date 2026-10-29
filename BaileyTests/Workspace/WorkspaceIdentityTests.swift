@@ -120,6 +120,34 @@ final class WorkspaceIdentityTests: XCTestCase {
         XCTAssertNil(manager.selectedProjectID)
     }
 
+    func testProjectCommandIdentitySurvivesReorderAndRefusesRemovedTarget() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Command-Projects-" + UUID().uuidString)
+        let folders = (0..<3).map { root.appendingPathComponent("workspace-\($0)") }
+        for folder in folders {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders(folders)
+        let first = try XCTUnwrap(manager.projects.first { $0.customDirectory == folders[0].path })
+        let second = try XCTUnwrap(manager.projects.first { $0.customDirectory == folders[1].path })
+        let third = try XCTUnwrap(manager.projects.first { $0.customDirectory == folders[2].path })
+        manager.selectedProjectID = first.id
+        manager.moveProject(third.id, to: first.id)
+        manager.selectProject(id: third.id)
+        XCTAssertEqual(manager.selectedProjectID, third.id,
+                       "A command must target the original project, not the previous row index")
+        manager.selectProject(id: first.id)
+        manager.close(second)
+        XCTAssertFalse(manager.projects.contains { $0 === second })
+        manager.selectProject(id: second.id)
+        XCTAssertEqual(manager.selectedProjectID, first.id,
+                       "An expired command cannot target a new occupant of its former index")
+    }
+
     func testFinderTerminalDropDoesNotInjectControlCharactersOrExecute() {
         let simple = URL(fileURLWithPath: "/tmp/simple.txt")
         let quoted = URL(fileURLWithPath: "/tmp/it's a $cost; 🚀.md")

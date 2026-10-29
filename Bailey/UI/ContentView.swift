@@ -50,7 +50,8 @@ struct ContentView: View {
             }
         }
         .overlay {
-            if tabSwitcher.isPresented, let project = manager.selectedProject {
+            if tabSwitcher.isPresented, let project = manager.selectedProject,
+               tabSwitcher.isPreviewing(project) {
                 TabSwitcherOverlay(project: project, controller: tabSwitcher)
                     .zIndex(10)
             }

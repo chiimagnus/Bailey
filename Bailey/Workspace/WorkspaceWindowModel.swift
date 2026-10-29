@@ -45,6 +45,7 @@ final class WorkspaceWindowModel {
     var selectedProjectID: UUID? {
         didSet {
             guard selectedProjectID != oldValue else { return }
+            tabSwitcher.cancel()
             if let oldValue {
                 let previous = projects.first { $0.id == oldValue }
                 previous?.dock.clearContextTarget()
@@ -522,7 +523,12 @@ final class WorkspaceWindowModel {
 
     func selectProject(index: Int) {
         guard projects.indices.contains(index) else { return }
-        selectedProjectID = projects[index].id
+        selectProject(id: projects[index].id)
+    }
+
+    func selectProject(id: UUID) {
+        guard projects.contains(where: { $0.id == id }) else { return }
+        selectedProjectID = id
     }
 
     func selectNextProject() {
