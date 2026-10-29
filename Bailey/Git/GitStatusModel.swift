@@ -228,10 +228,13 @@ final class GitStatusModel {
     }
 
     func isCurrent(_ target: ActionTarget, requiresStableHead: Bool = true) -> Bool {
-        canUseCurrentStatus && isRepo
-            && target.generation == contextGeneration && target.repository == repoRoot
-            && target.scope == currentScope
+        canUseCurrentStatus && canBrowse(target)
             && (!requiresStableHead || (target.head == headOID && target.branch == branch))
+    }
+
+    func canBrowse(_ target: ActionTarget) -> Bool {
+        isRepo && target.generation == contextGeneration && target.repository == repoRoot
+            && target.scope == currentScope
     }
 
     nonisolated static func dropCommitPossible(
@@ -747,7 +750,11 @@ final class GitStatusModel {
     }
 
     func isCurrent(_ entry: Entry) -> Bool {
-        canUseCurrentStatus && entry.repositoryRoot == repoRoot
+        canUseCurrentStatus && canBrowse(entry)
+    }
+
+    func canBrowse(_ entry: Entry) -> Bool {
+        isRepo && entry.repositoryRoot == repoRoot
             && entry.snapshotGeneration == contextGeneration
             && entry.snapshotBranch == branch && entry.snapshotHeadOID == headOID
     }
@@ -975,6 +982,9 @@ final class GitStatusModel {
                   self.contextGeneration == generation,
                   self.statusRequestID == requestID,
                   self.rootPath == root else { return }
+            let phase = self.coreCompletedRequestID == requestID ? "details" : "core"
+            let remote = !(self.backend is LocalWorkspaceBackend)
+            Self.statusLogger.error("refresh watchdog timed out id=\(requestID, privacy: .public) remote=\(remote, privacy: .public) phase=\(phase, privacy: .public)")
             self.statusRequestID &+= 1
             self.isRefreshing = false
             self.isLoadingMoreCommits = false
@@ -1117,7 +1127,7 @@ final class GitStatusModel {
     /// A local item must still exist before opening the file editor. Remote
     /// tabs can be opened while disconnected and will remain read-only.
     func canOpen(_ entry: Entry, isRemote: Bool) -> Bool {
-        guard isCurrent(entry) else { return false }
+        guard canBrowse(entry) else { return false }
         return isRemote || FileManager.default.fileExists(atPath: absolutePath(for: entry))
     }
 
@@ -3433,7 +3443,8 @@ final class GitStatusModel {
         var outcome = "failed"
         defer {
             let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)
-            Self.statusLogger.debug("refresh id=\(requestID, privacy: .public) remote=\(remote, privacy: .public) phase=\(phase, privacy: .public) result=\(outcome, privacy: .public) elapsed_ms=\(elapsed, privacy: .public)")
+            Self.statusLogger.log(level: outcome == "failed" ? .error : .debug,
+                                  "refresh id=\(requestID, privacy: .public) remote=\(remote, privacy: .public) phase=\(phase, privacy: .public) result=\(outcome, privacy: .public) elapsed_ms=\(elapsed, privacy: .public)")
         }
         // A filesystem, Git helper, or corrupt repository must not leave the
         // initial sidebar spinner running forever. Share one deadline across
@@ -3456,12 +3467,21 @@ final class GitStatusModel {
             _ args: [String], in directory: String, batched: Bool = true
         ) async -> (status: Int32, stdout: String, stderr: String) {
             let remaining = deadline.timeIntervalSinceNow
-            guard remaining > 0 else { return (-2, "", timeoutMessage) }
-            if !(backend is LocalWorkspaceBackend), batched {
-                return prefetched[args.joined(separator: " ")]
+            let result: (status: Int32, stdout: String, stderr: String)
+            if remaining <= 0 {
+                result = (-2, "", timeoutMessage)
+            } else if remote, batched {
+                result = prefetched[args.joined(separator: " ")]
                     ?? (-1, "", String(localized: "Unable to read Git status.", table: "Git"))
+            } else {
+                result = await GitCommandExecution.run(args, in: directory, timeout: remaining, backend: backend)
             }
-            return await GitCommandExecution.run(args, in: directory, timeout: remaining, backend: backend)
+            if result.status == -2 {
+                let command = args.first ?? "unknown"
+                let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)
+                Self.statusLogger.error("query timed out id=\(requestID, privacy: .public) remote=\(remote, privacy: .public) command=\(command, privacy: .public) status=\(result.status, privacy: .public) elapsed_ms=\(elapsed, privacy: .public)")
+            }
+            return result
         }
 
         let top = await statusGit(["rev-parse", "--show-toplevel"], in: root)
@@ -3473,6 +3493,7 @@ final class GitStatusModel {
             if top.status == 128,
                failure.localizedCaseInsensitiveContains("not a git repository"),
                (await containsGitMetadata(atOrAbove: root, backend: backend, deadline: deadline)) == false {
+                outcome = "not-repository"
                 return .notRepository
             }
             return .failed(failure)

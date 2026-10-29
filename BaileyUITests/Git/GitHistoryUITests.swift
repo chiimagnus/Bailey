@@ -288,6 +288,10 @@ final class GitHistoryUITests: XCTestCase {
         XCTAssertTrue(fixture.root.lastPathComponent.hasPrefix("Bailey-UITest-"))
         XCTAssertTrue(fixture.root.standardizedFileURL.path.hasPrefix(
             FileManager.default.temporaryDirectory.standardizedFileURL.path))
+        let project = app.buttons.matching(identifier: "bailey.project.row")
+            .matching(NSPredicate(format: "label CONTAINS %@", fixture.root.path)).firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 15))
+        project.click()
         app.typeKey("g", modifierFlags: [.command, .shift])
         let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
         XCTAssertTrue(git.waitForExistence(timeout: 20))

@@ -3,6 +3,133 @@ import XCTest
 
 @MainActor
 final class GitChangesUITests: XCTestCase {
+    func testCoreTimeoutKeepsFileDiffAndKeyboardBrowsingWhileGitWritesStayDisabled() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let home = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("nested/first.txt", text: "first HEAD\n")
+        let second = try fixture.file("nested/second.txt", text: "second HEAD\n")
+        try fixture.initializeGit()
+        try "first INDEX\n".write(to: first, atomically: true, encoding: .utf8)
+        try fixture.git(["add", "--", "nested/first.txt"])
+        try "first WORKTREE\n".write(to: first, atomically: true, encoding: .utf8)
+        try "second WORKTREE\n".write(to: second, atomically: true, encoding: .utf8)
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let status = try fixture.git(["--no-optional-locks", "status", "--porcelain=v1"])
+        let failure = home.root.appendingPathComponent("fail-status")
+        let quotedFailure = "'" + failure.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        try fixture.git(["config", "core.fsmonitor",
+                         "if test -f \(quotedFailure); then /bin/rm -f \(quotedFailure); /bin/sleep 20; fi; false"])
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: home.root, project: fixture.root
+        )
+        let projectRow = app.buttons.matching(identifier: "bailey.project.row")
+            .matching(NSPredicate(format: "label CONTAINS %@", fixture.root.path)).firstMatch
+        XCTAssertTrue(projectRow.waitForExistence(timeout: 15))
+        projectRow.click()
+        let projectWindow = app.windows.containing(NSPredicate(
+            format: "identifier == %@ AND label CONTAINS %@", "bailey.project.row", fixture.root.path
+        )).firstMatch
+        let window = app.windows.matching(identifier: projectWindow.identifier).firstMatch
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        XCTAssertTrue(window.buttons["Refresh Git Status"].waitForExistence(timeout: 15))
+        let firstRows = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.file")
+            .matching(NSPredicate(format: "label ENDSWITH %@", ", nested/first.txt"))
+        let secondRow = WorkspaceUITestSupport.fileRow(second, in: window, relativeTo: fixture.root)
+        guard firstRows.element(boundBy: 1).waitForExistence(timeout: 25),
+              secondRow.waitForExistence(timeout: 25) else {
+            return XCTFail("The real Git snapshot must load before injecting failure:\n\(window.debugDescription)")
+        }
+        try Data("one-shot core timeout\n".utf8).write(to: failure)
+        window.buttons["Refresh Git Status"].click()
+        let warning = window.staticTexts["Git Status Unavailable"]
+        XCTAssertTrue(warning.waitForExistence(timeout: 25), "A real core command timeout is the prerequisite")
+        XCTAssertTrue(window.staticTexts["Git did not respond in time."].exists)
+        let changedFolder = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "nested,")).element(boundBy: 1)
+        XCTAssertTrue(changedFolder.exists)
+        changedFolder.click()
+        let collapsed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !secondRow.exists }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [collapsed], timeout: 5), .completed)
+        changedFolder.click()
+        XCTAssertTrue(secondRow.waitForExistence(timeout: 5))
+        app.typeKey("a", modifierFlags: [.command])
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            firstRows.element(boundBy: 0).isSelected && firstRows.element(boundBy: 1).isSelected
+                && secondRow.isSelected
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertFalse(secondRow.isSelected)
+
+        func expectSplit(old: String, new: String) {
+            let mode = window.radioGroups["bailey.diff.mode"]
+            if mode.exists { mode.radioButtons.element(boundBy: 0).click() }
+            let layout = window.radioGroups["bailey.diff.layout"]
+            XCTAssertTrue(layout.waitForExistence(timeout: 15))
+            guard layout.exists else { return }
+            layout.radioButtons.element(boundBy: 1).click()
+            let visible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                let values = Set(window.textViews.allElementsBoundByIndex.compactMap { $0.value as? String })
+                return values.contains(old) && values.contains(new)
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 15), .completed,
+                           "Expected \(old) → \(new); actual native text: \(window.textViews.allElementsBoundByIndex.compactMap { $0.value as? String })")
+        }
+
+        firstRows.element(boundBy: 0).click()
+        expectSplit(old: "first HEAD\n", new: "first INDEX\n")
+        firstRows.element(boundBy: 1).click()
+        expectSplit(old: "first INDEX\n", new: "first WORKTREE\n")
+        firstRows.element(boundBy: 1).click()
+        secondRow.rightClick()
+        let stage = app.menuItems["Stage Changes"]
+        XCTAssertTrue(stage.waitForExistence(timeout: 8))
+        XCTAssertFalse(stage.isEnabled, "A readable snapshot must not authorize writes")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        expectSplit(old: "second HEAD\n", new: "second WORKTREE\n")
+        secondRow.rightClick()
+        let openHead = app.menuItems["Open HEAD File"]
+        XCTAssertTrue(openHead.waitForExistence(timeout: 8))
+        openHead.click()
+        let historical = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.textViews.allElementsBoundByIndex.contains { ($0.value as? String) == "second HEAD\n" }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [historical], timeout: 15), .completed)
+        secondRow.rightClick()
+        let openFile = app.menuItems["Open File"]
+        XCTAssertTrue(openFile.waitForExistence(timeout: 8))
+        XCTAssertTrue(openFile.isEnabled)
+        openFile.click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(second, in: window).waitForExistence(timeout: 15))
+        let opened = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.textViews.allElementsBoundByIndex.contains { ($0.value as? String) == "second WORKTREE\n" }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 15), .completed)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["--no-optional-locks", "status", "--porcelain=v1"]), status)
+        XCTAssertEqual(try fixture.git(["show", ":nested/first.txt"]), Data("first INDEX\n".utf8))
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: failure.path),
+                       "The one-shot hook must have entered its controlled timeout")
+        window.buttons["Retry"].click()
+        let recovered = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !warning.exists }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [recovered], timeout: 20), .completed)
+        secondRow.rightClick()
+        XCTAssertTrue(stage.waitForExistence(timeout: 8))
+        XCTAssertTrue(stage.isEnabled)
+        stage.click()
+        let staged = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["show", ":nested/second.txt"])) == Data("second WORKTREE\n".utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [staged], timeout: 15), .completed)
+        XCTAssertEqual(try Data(contentsOf: first), Data("first WORKTREE\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("second WORKTREE\n".utf8))
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+    }
+
     func testRightClickAnotherGitChangeMovesKeyboardCursorWithoutOpeningDiff() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("alpha.txt", text: "first old\n")
