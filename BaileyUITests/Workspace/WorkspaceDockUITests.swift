@@ -86,6 +86,88 @@ final class WorkspaceDockUITests: XCTestCase {
         }
     }
 
+    func testSelectedTabContextMenuCommandWClosesSelectionOnlyOnce() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let files = try (0..<3).map {
+            try fixture.file("s-\($0).swift", text: "let selected = \($0)\n")
+        }
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root
+        )
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        let opened = expectation(description: "Open selected Dock close fixtures")
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.open(files, withApplicationAt: bundle, configuration: config) { _, error in
+            XCTAssertNil(error)
+            opened.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 20), .completed)
+        let window = app.windows.firstMatch
+        let tabs = files.map { WorkspaceUITestSupport.fileTab($0, in: window) }
+        for tab in tabs { XCTAssertTrue(tab.waitForExistence(timeout: 15)) }
+
+        tabs[0].click()
+        XCUIElement.perform(withKeyModifiers: .command) { tabs[2].click() }
+        XCTAssertTrue(tabs[0].isSelected && tabs[2].isSelected)
+        XCTAssertFalse(tabs[1].isSelected)
+        tabs[2].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
+        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
+            $0.menuItems["Close Selected Panels"].exists
+        }, "A selected multi-tab right-click must reveal the actual batch action")
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(tabs[0].waitForNonExistence(timeout: 15))
+        XCTAssertTrue(tabs[2].waitForNonExistence(timeout: 15))
+        XCTAssertTrue(tabs[1].exists, "Context-menu Command-W must not close an unselected tab")
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 1,
+                       "The native menu and system shortcut must not both execute a close")
+        for (index, file) in files.enumerated() {
+            XCTAssertEqual(try Data(contentsOf: file), Data("let selected = \(index)\n".utf8))
+        }
+    }
+
+    func testRightClickOutsideTabSelectionClosesOnlyItsOwnTarget() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let files = try (0..<3).map {
+            try fixture.file("u-\($0).swift", text: "let untouched = \($0)\n")
+        }
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root
+        )
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        let opened = expectation(description: "Open context selection fixtures")
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.open(files, withApplicationAt: bundle, configuration: config) { _, error in
+            XCTAssertNil(error)
+            opened.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 20), .completed)
+        let window = app.windows.firstMatch
+        let tabs = files.map { WorkspaceUITestSupport.fileTab($0, in: window) }
+        for tab in tabs { XCTAssertTrue(tab.waitForExistence(timeout: 15)) }
+
+        tabs[0].click()
+        XCUIElement.perform(withKeyModifiers: .command) { tabs[2].click() }
+        XCTAssertTrue(tabs[0].isSelected && tabs[2].isSelected)
+        tabs[1].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
+        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["Close"].exists && $0.menuItems["Close Others"].exists
+        }, "An unselected tab must have a single-item Close action")
+        XCTAssertFalse(menu.menuItems["Close Selected Panels"].exists)
+        XCTAssertTrue(tabs[0].isSelected && tabs[2].isSelected,
+                      "Right-clicking outside the selection cannot select or activate its target")
+        menu.menuItems["Close"].click()
+        XCTAssertTrue(tabs[1].waitForNonExistence(timeout: 15))
+        XCTAssertTrue(tabs[0].exists && tabs[2].exists)
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 2)
+        for (index, file) in files.enumerated() {
+            XCTAssertEqual(try Data(contentsOf: file), Data("let untouched = \(index)\n".utf8))
+        }
+    }
+
     func testDockMultiSelectionDragMovesBothTabsToAnotherGroupWithoutCloning() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let files = try (0..<3).map {
