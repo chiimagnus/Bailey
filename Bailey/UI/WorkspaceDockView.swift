@@ -11,6 +11,9 @@ import UniformTypeIdentifiers
 final class DockTabDragCoordinator {
     struct Position {
         let item: DockItem
+        let items: [DockItem]
+        let sourceGroupID: UUID
+        let sourceLayout: DockNode
         let location: CGPoint
         let destination: UUID?
         let edge: DockEdge?
@@ -18,6 +21,7 @@ final class DockTabDragCoordinator {
     }
 
     private(set) var position: Position?
+    @ObservationIgnored private weak var sourceDock: DockWorkspaceModel?
     @ObservationIgnored private var groups: [UUID: CGRect] = [:]
     @ObservationIgnored private var tabs: [DockItem: CGRect] = [:]
 
@@ -25,6 +29,8 @@ final class DockTabDragCoordinator {
         // Layout preferences may update before project-switch cancellation;
         // preserve their latest frames so the next drag can still hit a target.
         position = nil
+        sourceDock = nil
+        NSCursor.arrow.set()
     }
 
     func setFrames(groups: [UUID: CGRect]) { self.groups = groups }
@@ -47,6 +53,12 @@ final class DockTabDragCoordinator {
     }
 
     func update(_ item: DockItem, at location: CGPoint, dock: DockWorkspaceModel) {
+        if position == nil {
+            dock.select(item, activating: false, extending: .preserve)
+            sourceDock = dock
+        }
+        guard sourceDock === dock, let source = dock.group(containing: item) else { return }
+        let items = position?.items ?? dock.selection(in: source.id)
         let hit = groups.first { $0.value.contains(location) }
         var edge: DockEdge?
         var insertIndex: Int?
@@ -65,7 +77,8 @@ final class DockTabDragCoordinator {
             if edge != nil && target.items == [item] { edge = nil }
         }
         position = Position(
-            item: item, location: location,
+            item: item, items: items, sourceGroupID: position?.sourceGroupID ?? source.id,
+            sourceLayout: position?.sourceLayout ?? dock.root, location: location,
             destination: hit?.key, edge: edge, index: insertIndex
         )
     }
@@ -73,14 +86,16 @@ final class DockTabDragCoordinator {
     func finish(project: Project) {
         defer {
             position = nil
+            sourceDock = nil
             NSCursor.arrow.set()
         }
-        guard let position, let destination = position.destination else { return }
-        guard project.dock.move(
+        guard let position, sourceDock === project.dock, project.dock.root == position.sourceLayout,
+              let destination = position.destination else { return }
+        project.movePanels(
             position.item, into: destination,
-            edge: position.edge, index: position.index
-        ) else { return }
-        if case .tab(let id) = position.item { project.selectTab(id) }
+            edge: position.edge, index: position.index, items: position.items,
+            sourceGroupID: position.sourceGroupID
+        )
     }
 }
 
@@ -278,6 +293,9 @@ struct DockTabGroupView: View {
     private let settings = AppSettings.shared
     @State private var renamingTabID: UUID?
     @State private var showingPanelPicker = false
+    @State private var tabKeyboard = TreeKeyboardOwner()
+    @State private var tabCursor: DockItem?
+    @State private var tabKeyboardFocused = false
     @Environment(\.appearsActive) private var windowAppearsActive
 
     private var active: DockItem? { group.selected }
@@ -297,7 +315,7 @@ struct DockTabGroupView: View {
         project.dock.activate(group.id)
         if case .tab(let id)? = project.dock.root.group(id: group.id)?.selected,
            project.selectedTabID != id {
-            project.selectTab(id)
+            project.selectTab(id, extending: .preserve)
         }
     }
 
@@ -352,8 +370,8 @@ struct DockTabGroupView: View {
             groupID: group.id,
             isActive: isFocused,
             focusesEmptySpace: active?.tabID == nil,
-            canFocus: { canFocusGroup() && dragging.position == nil },
-            onFocused: { if dragging.position == nil { focusGroup() } },
+            canFocus: { canFocusGroup() && dragging.position == nil && !tabKeyboardFocused },
+            onFocused: { if dragging.position == nil && !tabKeyboardFocused { focusGroup() } },
             onPrimaryClick: { project.dock.clearContextTarget() },
             onContextClick: { point in
                 if let target = dragging.tab(at: point, in: group) {
@@ -499,18 +517,23 @@ struct DockTabGroupView: View {
                                     )
                                 }
                             }
-                            .highPriorityGesture(
-                                DragGesture(minimumDistance: 4, coordinateSpace: .global)
-                                    .onChanged { value in
-                                        dragging.update(item, at: value.location, dock: project.dock)
-                                        NSCursor.closedHand.set()
-                                    }
-                                    .onEnded { value in
-                                        dragging.update(item, at: value.location, dock: project.dock)
-                                        dragging.finish(project: project)
-                                    },
-                                including: item.tabID != nil && renamingTabID == item.tabID ? .subviews : .all
-                            )
+                            .overlay {
+                                if item.tabID == nil || renamingTabID != item.tabID {
+                                    DockTabPointerInput(
+                                        press: { modifiers in select(item, extending: selectionChange(modifiers)) },
+                                        release: { modifiers in
+                                            if modifiers.intersection([.command, .shift]).isEmpty { select(item) }
+                                        },
+                                        drag: { point, finished in
+                                            dragging.update(item, at: point, dock: project.dock)
+                                            if finished { dragging.finish(project: project) }
+                                            else { NSCursor.closedHand.set() }
+                                        },
+                                        close: { manager.closePanel(item, in: project) }
+                                    )
+                                    .padding(.leading, 22)
+                                }
+                            }
                     }
                 }
                 .padding(.leading, 4)
@@ -519,8 +542,21 @@ struct DockTabGroupView: View {
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             .frame(width: maxWidth, alignment: .leading)
             .clipped()
+            .background(TreeKeyboardHost(
+                owner: tabKeyboard, onKeyDown: handleTabKey,
+                onFocusChanged: { focused in
+                    tabKeyboardFocused = focused
+                    if focused, tabCursor.map({ !group.items.contains($0) }) ?? true { tabCursor = active }
+                }, onAttachedToWindow: { tabKeyboard.view?.setAccessibilityIdentifier("bailey.dock.tabstrip") }
+            ))
             .onChange(of: group.selected) { _, selected in
                 if let selected { scrollProxy.scrollTo(selected) }
+            }
+            .onChange(of: tabCursor) { _, cursor in
+                if let cursor { scrollProxy.scrollTo(cursor) }
+            }
+            .onChange(of: group.items) { _, items in
+                if tabCursor.map({ !items.contains($0) }) ?? false { tabCursor = active }
             }
         }
     }
@@ -530,7 +566,9 @@ struct DockTabGroupView: View {
         if case .tab(let id) = item,
            let paneTab = project.tabs.first(where: { $0.id == id }) {
             PaneTabItem(
-                tab: paneTab, isSelected: active == item, isPaneFocused: isFocused,
+                tab: paneTab, isDisplayed: active == item,
+                isSelected: project.dock.selection(in: group.id).contains(item),
+                isKeyboardFocused: tabKeyboardFocused && tabCursor == item, isPaneFocused: isFocused,
                 isContextTarget: project.dock.contextTarget == item,
                 select: { select(item) },
                 close: { manager.closePanel(item, in: project) },
@@ -554,7 +592,9 @@ struct DockTabGroupView: View {
         } else {
             TabItemChrome(
                 systemImage: item.symbol, title: item.label(project: project),
-                isSelected: active == item, isPaneFocused: isFocused,
+                isDisplayed: active == item,
+                isSelected: project.dock.selection(in: group.id).contains(item),
+                isKeyboardFocused: tabKeyboardFocused && tabCursor == item, isPaneFocused: isFocused,
                 isContextTarget: project.dock.contextTarget == item,
                 select: { select(item) },
                 close: { closeTool(item) }
@@ -620,9 +660,35 @@ struct DockTabGroupView: View {
         return true
     }
 
-    private func select(_ item: DockItem) {
-        if case .tab(let id) = item { project.selectTab(id) }
-        else { project.dock.select(item) }
+    private func selectionChange(_ modifiers: NSEvent.ModifierFlags) -> DockWorkspaceModel.SelectionChange {
+        if modifiers.contains(.shift) { return .range }
+        if modifiers.contains(.command) { return .toggle }
+        return .preserve
+    }
+
+    private func select(_ item: DockItem, extending change: DockWorkspaceModel.SelectionChange = .replace) {
+        guard manager.selectedProject === project else { return }
+        tabCursor = item
+        if case .tab(let id) = item { project.selectTab(id, extending: change) }
+        else { project.dock.select(item, extending: change, preferred: project.tabsByRecency.map { .tab($0.id) }) }
+    }
+
+    private func handleTabKey(_ event: NSEvent) -> Bool {
+        guard manager.selectedProject === project,
+              event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+              let current = project.dock.root.group(id: group.id), !current.items.isEmpty else { return false }
+        let cursor = tabCursor.flatMap { current.items.contains($0) ? $0 : nil } ?? current.selected
+        let index = cursor.flatMap { current.items.firstIndex(of: $0) } ?? 0
+        switch event.keyCode {
+        case 123: tabCursor = current.items[max(0, index - 1)]
+        case 124: tabCursor = current.items[min(current.items.count - 1, index + 1)]
+        case 115: tabCursor = current.items.first
+        case 119: tabCursor = current.items.last
+        case 36, 49:
+            if let cursor { select(cursor) }
+        default: return false
+        }
+        return true
     }
 
     private func closeTool(_ item: DockItem) { manager.closePanel(item, in: project) }
@@ -781,6 +847,77 @@ struct DockTabGroupView: View {
     }
 }
 
+private struct DockTabPointerInput: NSViewRepresentable {
+    let press: (NSEvent.ModifierFlags) -> Void
+    let release: (NSEvent.ModifierFlags) -> Void
+    let drag: (CGPoint, Bool) -> Void
+    let close: () -> Void
+
+    func makeNSView(context: Context) -> DockTabPointerView { DockTabPointerView() }
+    func updateNSView(_ view: DockTabPointerView, context: Context) {
+        view.press = press
+        view.release = release
+        view.drag = drag
+        view.close = close
+    }
+    static func dismantleNSView(_ view: DockTabPointerView, coordinator: ()) {
+        view.press = nil
+        view.release = nil
+        view.drag = nil
+        view.close = nil
+    }
+}
+
+final class DockTabPointerView: NSView {
+    var press: ((NSEvent.ModifierFlags) -> Void)?
+    var release: ((NSEvent.ModifierFlags) -> Void)?
+    var drag: ((CGPoint, Bool) -> Void)?
+    var close: (() -> Void)?
+    private var origin: CGPoint?
+    private var dragged = false
+    private var modifiers: NSEvent.ModifierFlags = []
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setAccessibilityElement(false)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let event = NSApp.currentEvent,
+              event.type == .otherMouseDown || (event.type == .leftMouseDown && !event.modifierFlags.contains(.control))
+        else { return nil }
+        return super.hitTest(point)
+    }
+    override func mouseDown(with event: NSEvent) {
+        origin = event.locationInWindow
+        dragged = false
+        modifiers = event.modifierFlags
+        press?(modifiers)
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard let origin else { return }
+        if hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) >= 4 { dragged = true }
+        if dragged { drag?(location(event), false) }
+    }
+    override func mouseUp(with event: NSEvent) {
+        guard origin != nil else { return }
+        origin = nil
+        if dragged { drag?(location(event), true) }
+        else { release?(modifiers) }
+    }
+    override func otherMouseDown(with event: NSEvent) {
+        if event.buttonNumber == 2 { close?() }
+    }
+    private func location(_ event: NSEvent) -> CGPoint {
+        guard let content = window?.contentView else { return event.locationInWindow }
+        let point = content.convert(event.locationInWindow, from: nil)
+        return CGPoint(x: point.x, y: content.isFlipped ? point.y : content.bounds.height - point.y)
+    }
+}
+
 private struct DockGroupFocusReader: NSViewRepresentable {
     let groupID: UUID
     let isActive: Bool
@@ -873,6 +1010,8 @@ final class DockGroupFocusView: NSView {
                 }
                 if self.bounds.contains(self.convert(event.locationInWindow, from: nil)) {
                     self.onPrimaryClick?()
+                    let location = self.convert(event.locationInWindow, from: nil)
+                    guard location.y < self.bounds.maxY - 38 else { return event }
                     self.onFocused?()
                     if self.focusesEmptySpace { self.requestFocusAfterClick() }
                 }

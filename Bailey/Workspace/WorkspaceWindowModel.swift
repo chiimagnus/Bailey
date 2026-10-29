@@ -465,6 +465,7 @@ final class WorkspaceWindowModel {
 
     func close(_ project: Project) {
         guard projects.contains(where: { $0 === project }),
+              !project.isClosingPanels,
               !project.tabs.contains(where: { $0.content.isClosing }) else { return }
         let dirty = project.tabs.map(\.content).filter(\.isDirty)
         guard !dirty.isEmpty else {
@@ -627,13 +628,9 @@ final class WorkspaceWindowModel {
 
     func closePanel(_ item: DockItem, in project: Project) {
         guard selectedProject === project, project.dock.group(containing: item) != nil else { return }
+        let targets = project.dock.commandTargets(for: item)
         project.dock.clearContextTarget()
-        switch item {
-        case .tab(let id):
-            if let tab = project.tabs.first(where: { $0.id == id }) { project.close(tab) }
-        case .files, .git, .projects:
-            project.dock.removeTool(item)
-        }
+        project.closePanels(targets)
     }
 
     func selectNextPanel() {

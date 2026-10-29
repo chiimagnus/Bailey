@@ -7,6 +7,70 @@ import XCTest
 final class DockWorkspaceTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
+    func testTabSelectionKeepsIslandsAndRemovesOnlyOppositeAnchorSide() throws {
+        let dock = DockWorkspaceModel()
+        let items = (0..<5).map { _ in DockItem.tab(UUID()) }
+        dock.syncTabs(items.compactMap { if case .tab(let id) = $0 { id } else { nil } }, near: nil)
+        let group = try XCTUnwrap(dock.group(containing: items[0]))
+        dock.select(items[0])
+        dock.select(items[2], extending: .toggle)
+        dock.select(items[4], extending: .range)
+        XCTAssertEqual(dock.selection(in: group.id), [items[0], items[2], items[3], items[4]])
+        dock.select(items[3], extending: .range)
+        XCTAssertEqual(dock.selection(in: group.id), [items[0], items[2], items[3], items[4]])
+        dock.select(items[2], extending: .range)
+        XCTAssertEqual(dock.selection(in: group.id), [items[0], items[2]])
+        dock.select(items[4], extending: .range)
+        dock.select(items[1], extending: .range)
+        XCTAssertEqual(dock.selection(in: group.id), Array(items[0...2]))
+        XCTAssertEqual(dock.activeGroup?.selected, items[1])
+        dock.select(items[1], extending: .toggle, preferred: [items[2], items[0]])
+        XCTAssertEqual(dock.activeGroup?.selected, items[2])
+        XCTAssertEqual(dock.selection(in: group.id), [items[0], items[2]])
+        dock.select(items[0], extending: .toggle)
+        dock.select(items[2], extending: .toggle)
+        XCTAssertEqual(dock.selection(in: group.id), [items[2]])
+    }
+
+    func testTabPointerDownPreservesDragSelectionAndOrdinaryReleaseCollapsesIt() throws {
+        let dock = DockWorkspaceModel()
+        let group = try XCTUnwrap(dock.group(containing: .files))
+        dock.select(.files)
+        dock.select(.git, extending: .toggle)
+        var snapshots = 0
+        dock.onSnapshotChange = { snapshots += 1 }
+        dock.select(.git, extending: .preserve)
+        XCTAssertEqual(dock.selection(in: group.id), [.files, .git])
+        XCTAssertEqual(snapshots, 0)
+        dock.selectForContextMenu(.files)
+        XCTAssertEqual(dock.commandTargets(for: .files), [.files, .git])
+        dock.select(.git)
+        XCTAssertEqual(dock.selection(in: group.id), [.git])
+        XCTAssertEqual(snapshots, 0, "Transient selection must not be persisted")
+        dock.select(.files, extending: .toggle)
+        dock.activate(try XCTUnwrap(dock.group(containing: .projects)).id)
+        XCTAssertEqual(dock.selection(in: group.id), [.files])
+        XCTAssertNil(dock.anchor(in: group.id))
+    }
+
+    func testSelectionPrunesRemovedMembersAndAnchorAndDoesNotCrossWindows() throws {
+        let dock = DockWorkspaceModel()
+        let ids = (0..<32).map { _ in UUID() }
+        dock.syncTabs(ids, near: nil)
+        dock.select(.tab(ids[0]))
+        dock.select(.tab(ids[31]), extending: .range)
+        let group = try XCTUnwrap(dock.activeGroup)
+        XCTAssertEqual(dock.selection(in: group.id).count, 32)
+        dock.syncTabs(Array(ids.dropFirst()), near: nil)
+        XCTAssertNil(dock.anchor(in: group.id))
+        XCTAssertEqual(dock.selection(in: group.id).count, 31)
+        XCTAssertTrue(DockWorkspaceModel().selection(in: group.id).isEmpty)
+        dock.select(.tab(ids[1]), extending: .range)
+        XCTAssertTrue(dock.selection(in: group.id).contains(try XCTUnwrap(dock.activeGroup?.selected)))
+        dock.syncTabs([], near: nil)
+        XCTAssertTrue(dock.selection(in: group.id).isEmpty)
+    }
+
     func testGitChangesPreviewDisplaysDiffWithoutActivatingEditorGroup() throws {
         let project = Project(fallbackName: "Git preview", workspaceConfiguration: .standard)
         let gitGroup = try XCTUnwrap(project.dock.group(containing: .git))

@@ -59,6 +59,55 @@ private final class WindowCloseDelegateWitness: NSObject, NSWindowDelegate {
 final class WindowCloseIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
+    func testMixedSelectionWaitsForDirtySaveBeforeClosingToolAndBrowser() async throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "mixed close", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        let backend = WindowSaveFixture("original")
+        let file = FileTab(path: "/fixture/draft.txt", backend: backend, workspaceIdentity: nil)
+        try await file.waitForText()
+        let draft = PaneTab(content: .file(file))
+        project.append(draft)
+        let browser = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
+        project.append(browser)
+        let group = try XCTUnwrap(project.dock.group(containing: .tab(draft.id)))
+        XCTAssertTrue(project.dock.move(.files, into: group.id))
+        project.selectTab(draft.id)
+        project.dock.select(.files, extending: .toggle)
+        project.selectTab(browser.id, extending: .toggle)
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 720, height: 520),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        manager.attach(to: window)
+        window.orderFront(nil)
+        defer { window.close() }
+        file.text = "unsaved 中文 😀"
+        file.refreshDirtyState()
+        manager.closePanel(.files, in: project)
+        manager.closePanel(.tab(browser.id), in: project)
+        try await wait { window.attachedSheet != nil }
+        XCTAssertNotNil(project.dock.group(containing: .files))
+        XCTAssertEqual(project.tabs.map(\.id), [draft.id, browser.id])
+        window.endSheet(try XCTUnwrap(window.attachedSheet), returnCode: .alertThirdButtonReturn)
+        try await wait { !project.isClosingPanels }
+        XCTAssertTrue(file.isDirty)
+        let original = await backend.currentText()
+        XCTAssertEqual(original, "original")
+        await backend.permitWrites()
+        await backend.pauseOneWrite()
+        manager.closePanel(.files, in: project)
+        try await wait { await backend.awaitingWrite }
+        XCTAssertNotNil(project.dock.group(containing: .files))
+        XCTAssertEqual(project.tabs.count, 2)
+        await backend.releaseWrite()
+        try await wait { project.tabs.isEmpty && !project.isClosingPanels }
+        XCTAssertNil(project.dock.group(containing: .files))
+        let saved = await backend.currentText()
+        XCTAssertEqual(saved, "unsaved 中文 😀")
+    }
+
     // Mount only native window attachment/close coordination.
     private func chromeSurface(for manager: WorkspaceWindowModel) -> some View {
         Color.clear.background(WindowChromeAccessor(

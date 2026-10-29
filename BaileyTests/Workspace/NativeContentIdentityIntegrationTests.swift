@@ -9,6 +9,127 @@ import XCTest
 final class NativeContentIdentityIntegrationTests: XCTestCase {
     @MainActor private lazy var workspaceApplication = WorkspaceApplication()
 
+    func testNativeTabPointerPreservesDownModifiersAndFinishesDragOnlyOnce() throws {
+        let view = DockTabPointerView(frame: .init(x: 0, y: 0, width: 100, height: 24))
+        var presses: [NSEvent.ModifierFlags] = []
+        var releases: [NSEvent.ModifierFlags] = []
+        var drops = 0
+        view.press = { presses.append($0) }
+        view.release = { releases.append($0) }
+        view.drag = { _, finished in if finished { drops += 1 } }
+        func mouse(_ type: NSEvent.EventType, _ x: CGFloat, _ modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: .init(x: x, y: 10),
+                modifierFlags: modifiers, timestamp: 0, windowNumber: 0,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        view.mouseDown(with: try mouse(.leftMouseDown, 10, .command))
+        view.mouseUp(with: try mouse(.leftMouseUp, 10))
+        XCTAssertEqual(presses, [.command])
+        XCTAssertEqual(releases, [.command])
+        view.mouseDown(with: try mouse(.leftMouseDown, 10))
+        view.mouseDragged(with: try mouse(.leftMouseDragged, 13))
+        XCTAssertEqual(drops, 0)
+        view.mouseDragged(with: try mouse(.leftMouseDragged, 14))
+        view.mouseUp(with: try mouse(.leftMouseUp, 20))
+        view.mouseUp(with: try mouse(.leftMouseUp, 20))
+        XCTAssertEqual(drops, 1)
+        XCTAssertEqual(releases, [.command], "A completed drag must never replay ordinary selection")
+    }
+
+    func testTabStripNativeKeyboardNavigatesWithoutDisplayingUntilReturn() async throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let project = Project(fallbackName: "keyboard", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
+        let group = try XCTUnwrap(project.dock.group(containing: .files))
+        let host = NSHostingView(rootView: DockTabGroupView(
+            group: group, project: project, manager: manager, git: GitStatusModel(),
+            dragging: DockTabDragCoordinator()
+        ))
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 360, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        func strip(_ view: NSView) -> TreeKeyboardView? {
+            if let keyboard = view as? TreeKeyboardView,
+               keyboard.accessibilityIdentifier() == "bailey.dock.tabstrip" { return keyboard }
+            return view.subviews.lazy.compactMap(strip).first
+        }
+        try await wait { host.layoutSubtreeIfNeeded(); return strip(host) != nil }
+        let keyboard = try XCTUnwrap(strip(host))
+        XCTAssertTrue(window.makeFirstResponder(keyboard))
+        func key(_ code: UInt16, modifiers: NSEvent.ModifierFlags = []) throws {
+            keyboard.keyDown(with: try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "",
+                charactersIgnoringModifiers: "", isARepeat: false, keyCode: code
+            )))
+            host.layoutSubtreeIfNeeded()
+        }
+        try key(119)
+        XCTAssertEqual(project.dock.group(containing: .files)?.selected, .files)
+        try key(36)
+        XCTAssertEqual(project.dock.group(containing: .git)?.selected, .git)
+        try key(115)
+        try key(49)
+        XCTAssertEqual(project.dock.group(containing: .files)?.selected, .files)
+        XCTAssertTrue(window.firstResponder === keyboard)
+    }
+
+    func testDisplayedTabExposesRealAccessibilitySelection() async throws {
+        let host = NSHostingView(rootView: TabItemChrome(
+            systemImage: "doc", title: "Selected document", isDisplayed: true,
+            isPaneFocused: false, isContextTarget: false, select: {}, close: {}
+        ))
+        let window = NSWindow(contentRect: .init(x: -2000, y: -2000, width: 300, height: 80),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        func attribute(_ element: NSObject, _ key: String) -> Any? {
+            let selector = NSSelectorFromString(key == "accessibilitySelected" ? "isAccessibilitySelected" : key)
+            guard element.responds(to: selector) else { return nil }
+            return element.value(forKey: key)
+        }
+        func elements(_ element: NSObject) -> [NSObject] {
+            let children = attribute(element, "accessibilityChildrenInNavigationOrder") as? [NSObject]
+                ?? attribute(element, "accessibilityChildren") as? [NSObject] ?? []
+            return [element] + children.flatMap(elements)
+        }
+        try await wait {
+            host.layoutSubtreeIfNeeded()
+            return elements(host).contains {
+                (attribute($0, "accessibilityLabel") as? String ?? attribute($0, "accessibilityTitle") as? String) == "Selected document"
+            }
+        }
+        XCTAssertTrue(elements(host).contains {
+            (attribute($0, "accessibilityLabel") as? String ?? attribute($0, "accessibilityTitle") as? String) == "Selected document"
+                && attribute($0, "accessibilitySelected") as? Bool == true
+        }, "The displayed tab must be AX selected, not just painted as selected")
+        for displayed in [false, true] {
+            for selected in [false, true] {
+                for focused in [false, true] {
+                    host.rootView = TabItemChrome(
+                        systemImage: "doc", title: "Selected document", isDisplayed: displayed,
+                        isSelected: selected, isPaneFocused: focused, isContextTarget: true,
+                        select: {}, close: {}
+                    )
+                    try await wait {
+                        host.layoutSubtreeIfNeeded()
+                        return elements(host).contains {
+                            attribute($0, "accessibilityLabel") as? String == "Selected document"
+                                && attribute($0, "accessibilitySelected") as? Bool == (displayed || selected)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Host only the actual pane component, never a complete ContentView or Dock.
     private func panel(for tab: PaneTab) -> some View {
         PanelContentView(tab: tab, isFocused: false,

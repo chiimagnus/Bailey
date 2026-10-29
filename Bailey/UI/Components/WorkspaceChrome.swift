@@ -6,7 +6,9 @@ import SwiftUI
 /// per-kind label below so its live title/dirty state shows.
 struct PaneTabItem: View {
     let tab: PaneTab
-    let isSelected: Bool
+    let isDisplayed: Bool
+    var isSelected = false
+    var isKeyboardFocused = false
     let isPaneFocused: Bool
     let isContextTarget: Bool
     let select: () -> Void
@@ -31,21 +33,24 @@ struct PaneTabItem: View {
             case .session(let session):
                 SessionTabLabel(
                     session: session, customTitle: tab.customName,
-                    isSelected: isSelected, isPaneFocused: isPaneFocused,
+                    isDisplayed: isDisplayed, isSelected: isSelected,
+                    isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
                     isContextTarget: isContextTarget,
                     select: select, close: close
                 )
             case .file(let file):
                 FileTabLabel(
                     file: file, customTitle: tab.customName,
-                    isSelected: isSelected, isPaneFocused: isPaneFocused,
+                    isDisplayed: isDisplayed, isSelected: isSelected,
+                    isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
                     isContextTarget: isContextTarget,
                     select: select, close: close
                 )
             case .browser(let browser):
                 BrowserTabLabel(
                     browser: browser, customTitle: tab.customName,
-                    isSelected: isSelected, isPaneFocused: isPaneFocused,
+                    isDisplayed: isDisplayed, isSelected: isSelected,
+                    isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
                     isContextTarget: isContextTarget,
                     select: select, close: close
                 )
@@ -53,7 +58,7 @@ struct PaneTabItem: View {
                 DiffTabLabel(
                     diff: diff,
                     customTitle: tab.customName,
-                    isSelected: isSelected,
+                    isDisplayed: isDisplayed, isSelected: isSelected, isKeyboardFocused: isKeyboardFocused,
                     isPaneFocused: isPaneFocused,
                     isContextTarget: isContextTarget,
                     select: select,
@@ -156,7 +161,9 @@ private struct SessionTabLabel: View {
     let session: TerminalSession
     /// User-assigned tab name overriding the live terminal title.
     var customTitle: String?
-    let isSelected: Bool
+    let isDisplayed: Bool
+    var isSelected = false
+    var isKeyboardFocused = false
     let isPaneFocused: Bool
     let isContextTarget: Bool
     let select: () -> Void
@@ -166,7 +173,7 @@ private struct SessionTabLabel: View {
         TabItemChrome(
             systemImage: "terminal",
             title: customTitle ?? session.title,
-            isSelected: isSelected,
+            isDisplayed: isDisplayed, isSelected: isSelected, isKeyboardFocused: isKeyboardFocused,
             isPaneFocused: isPaneFocused,
             isContextTarget: isContextTarget,
             select: select,
@@ -179,7 +186,9 @@ private struct FileTabLabel: View {
     let file: FileTab
     /// User-assigned tab name overriding the file name.
     var customTitle: String?
-    let isSelected: Bool
+    let isDisplayed: Bool
+    var isSelected = false
+    var isKeyboardFocused = false
     let isPaneFocused: Bool
     let isContextTarget: Bool
     let select: () -> Void
@@ -190,7 +199,7 @@ private struct FileTabLabel: View {
             systemImage: "doc.text",
             fileIconPath: file.path,
             title: customTitle ?? file.name,
-            isSelected: isSelected,
+            isDisplayed: isDisplayed, isSelected: isSelected, isKeyboardFocused: isKeyboardFocused,
             isPaneFocused: isPaneFocused,
             isContextTarget: isContextTarget,
             isDirty: file.isDirty,
@@ -207,7 +216,9 @@ private struct BrowserTabLabel: View {
     let browser: BrowserTab
     /// User-assigned tab name overriding the webpage title.
     var customTitle: String?
-    let isSelected: Bool
+    let isDisplayed: Bool
+    var isSelected = false
+    var isKeyboardFocused = false
     let isPaneFocused: Bool
     let isContextTarget: Bool
     let select: () -> Void
@@ -218,7 +229,7 @@ private struct BrowserTabLabel: View {
             systemImage: "globe",
             browserIcon: browser,
             title: customTitle ?? browser.title,
-            isSelected: isSelected,
+            isDisplayed: isDisplayed, isSelected: isSelected, isKeyboardFocused: isKeyboardFocused,
             isPaneFocused: isPaneFocused,
             isContextTarget: isContextTarget,
             select: select,
@@ -231,7 +242,9 @@ private struct BrowserTabLabel: View {
 private struct DiffTabLabel: View {
     let diff: DiffTab
     var customTitle: String?
-    let isSelected: Bool
+    let isDisplayed: Bool
+    var isSelected = false
+    var isKeyboardFocused = false
     let isPaneFocused: Bool
     let isContextTarget: Bool
     let select: () -> Void
@@ -242,7 +255,7 @@ private struct DiffTabLabel: View {
             systemImage: "plus.forwardslash.minus",
             fileIconPath: diff.path,
             title: customTitle ?? diff.title,
-            isSelected: isSelected,
+            isDisplayed: isDisplayed, isSelected: isSelected, isKeyboardFocused: isKeyboardFocused,
             isPaneFocused: isPaneFocused,
             isContextTarget: isContextTarget,
             isDirty: diff.isDirty,
@@ -255,11 +268,14 @@ private struct DiffTabLabel: View {
 
 struct TabItemChrome: View {
     private let themeChanges = Theme.changes
+    @Environment(\.colorScheme) private var colorScheme
     let systemImage: String
     var browserIcon: BrowserTab? = nil
     var fileIconPath: String? = nil
     let title: String
-    let isSelected: Bool
+    let isDisplayed: Bool
+    var isSelected = false
+    var isKeyboardFocused = false
     let isPaneFocused: Bool
     let isContextTarget: Bool
     var isDirty = false
@@ -287,31 +303,31 @@ struct TabItemChrome: View {
                         BrowserFaviconView(browser: browserIcon, size: 11)
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(
-                                isSelected && isPaneFocused
+                                isDisplayed && isPaneFocused
                                     ? AnyShapeStyle(Color(nsColor: Theme.accent))
-                                    : (isSelected ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+                                    : (isDisplayed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
                             )
-                            .opacity(isSelected ? 1 : 0.78)
+                            .opacity(isDisplayed ? 1 : 0.78)
                     } else if let fileIconPath {
                         MaterialFileIconView(
                             path: fileIconPath,
                             size: 12,
-                            opacity: isSelected && isPaneFocused ? 1 : 0.82
+                            opacity: isDisplayed && isPaneFocused ? 1 : 0.82
                         )
                     } else {
                         Image(systemName: systemImage)
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(
-                                isSelected && isPaneFocused
+                                isDisplayed && isPaneFocused
                                     ? AnyShapeStyle(Color(nsColor: Theme.accent))
-                                    : (isSelected ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+                                    : (isDisplayed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
                             )
                     }
                 }
                 .frame(width: 14, height: 14)
                 Text(verbatim: title)
                     .font(.system(size: 11.5))
-                    .foregroundStyle(isSelected && isPaneFocused ? .primary : .secondary)
+                    .foregroundStyle((isDisplayed || isSelected) && isPaneFocused ? .primary : .secondary)
                     .lineLimit(1)
                 if isDirty {
                     Circle()
@@ -326,11 +342,34 @@ struct TabItemChrome: View {
         // Cap tab width so a long title truncates instead of stretching the
         // tab; short titles still shrink to fit (maxWidth is an upper bound).
         .frame(maxWidth: 220)
-        .modifier(RowHighlightStyle(
-            isSelected: isSelected, listActive: isPaneFocused,
-            contextRing: isContextTarget, hovering: isHovering, cornerRadius: 6
-        ))
+        .background {
+            RoundedRectangle(cornerRadius: 6).fill(background)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(isContextTarget || isKeyboardFocused
+                    ? Color(nsColor: Theme.terminal(dark: colorScheme == .dark).accentNSColor).opacity(0.65)
+                    : .clear, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isDisplayed || isSelected ? .isSelected : [])
         .onHover { isHovering = $0 }
+    }
+
+    private var background: Color {
+        let theme = Theme.terminal(dark: colorScheme == .dark)
+        let accent = Color(nsColor: theme.accentNSColor)
+        let foreground = Color(nsColor: theme.foregroundNSColor)
+        if isContextTarget { return .clear }
+        if isDisplayed {
+            return isPaneFocused ? accent.opacity(colorScheme == .dark ? 0.36 : 0.42)
+                : foreground.opacity(0.14)
+        }
+        if isSelected {
+            return isPaneFocused ? accent.opacity(0.18) : foreground.opacity(0.08)
+        }
+        return isHovering ? foreground.opacity(0.05) : .clear
     }
 }
 
