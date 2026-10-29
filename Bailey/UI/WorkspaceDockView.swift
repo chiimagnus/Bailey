@@ -339,6 +339,10 @@ struct DockTabGroupView: View {
                     model: git,
                     height: BottomToolbarLayout.height,
                     toggleGitPanel: { manager.showPanel(.git) },
+                    switchBranch: { name, oid in
+                        manager.switchGitBranch(to: name, expectedOID: oid,
+                                                in: project, model: git)
+                    },
                     hideToolbar: { settings.toolbarVisibility = .hide }
                 )
             }

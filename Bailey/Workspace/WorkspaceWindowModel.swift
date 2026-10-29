@@ -128,6 +128,35 @@ final class WorkspaceWindowModel {
         }
     }
 
+    /// Git menus and the bottom toolbar must use the same save-and-reload transaction.
+    func switchGitBranch(
+        to name: String, expectedOID: String, in project: Project, model: GitStatusModel
+    ) {
+        guard let window = attachedWindow, selectedProject === project,
+              let context = project.panelContext,
+              model.matchesPanelTarget(context.identity), !model.isBusy else { return }
+        let target = model.actionTarget()
+        let isCurrent: @MainActor () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return self.attachedWindow === window && self.selectedProject === project
+                && project.matchesPanelTarget(context.identity)
+                && model.matchesPanelTarget(context.identity) && model.isCurrent(target)
+        }
+        model.switchBranch(to: name, expectedOID: expectedOID,
+            prepare: {
+                await self.application.saveBeforeGitAction(
+                    repository: target.repository, scope: target.scope, isCurrent: isCurrent)
+            }, isCurrentTarget: {
+                isCurrent() && self.application.canRunGitAction(
+                    repository: target.repository, scope: target.scope)
+            }, completion: { success in
+                if success {
+                    self.application.reloadAfterGitAction(
+                        repository: target.repository, scope: target.scope)
+                }
+            })
+    }
+
     // MARK: - Projects
 
     /// Only an explicitly selected folder creates or selects a local project.

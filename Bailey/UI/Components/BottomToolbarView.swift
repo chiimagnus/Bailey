@@ -12,6 +12,7 @@ struct BottomToolbarView: View {
     private let themeChanges = Theme.changes
     let height: CGFloat
     let toggleGitPanel: () -> Void
+    let switchBranch: (String, String) -> Void
     let hideToolbar: () -> Void
 
     @State private var isShowingBranches = false
@@ -287,7 +288,7 @@ struct BottomToolbarView: View {
     private func selectBranch(_ branch: String, expectedOID: String?) {
         guard let expectedOID else { return }
         isShowingBranches = false
-        model.switchBranch(to: branch, expectedOID: expectedOID)
+        switchBranch(branch, expectedOID)
     }
 }
 

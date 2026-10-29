@@ -3,6 +3,37 @@ import XCTest
 
 @MainActor
 final class GitDialogUITests: XCTestCase {
+    func testBottomToolbarBranchPickerChecksOutSelectedRealBranch() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("toolbar-branch.txt", text: "main content\n")
+        try fixture.initializeGit()
+        let original = try fixture.git(["rev-parse", "HEAD"])
+        try fixture.git(["switch", "-qc", "toolbar-feature"])
+        try "feature content\n".write(to: file, atomically: true, encoding: .utf8)
+        try fixture.git(["commit", "-qam", "feature content"])
+        let target = try fixture.git(["rev-parse", "HEAD"])
+        try fixture.git(["switch", "main"])
+
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root)
+        let toolbar = app.buttons.matching(NSPredicate(
+            format: "label == %@", "Current branch, main")).firstMatch
+        XCTAssertTrue(toolbar.waitForExistence(timeout: 20),
+                      "The real bottom toolbar must expose the active branch")
+        toolbar.click()
+        let choice = app.buttons["toolbar-feature"]
+        XCTAssertTrue(choice.waitForExistence(timeout: 12))
+        choice.click()
+        let switched = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["branch", "--show-current"])) == Data("toolbar-feature\n".utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [switched], timeout: 20), .completed)
+        XCTAssertNotEqual(original, target)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), target)
+        XCTAssertEqual(try Data(contentsOf: file), Data("feature content\n".utf8))
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
     func testStashApplySheetRejectsSelectorShiftWithoutTouchingWorktree() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("stale-stash.txt", text: "base\n")

@@ -592,27 +592,10 @@ struct GitPanel: View {
     }
 
     private func switchBranchSafely(to name: String, expectedOID: String?) {
-        guard let window = manager.attachedWindow, let project,
-              manager.selectedProject === project, let context = project.panelContext,
-              model.matchesPanelTarget(context.identity), !model.isBusy,
-              let expectedOID else { return }
-        let target = model.actionTarget()
-        let isCurrent: @MainActor () -> Bool = {
-            manager.attachedWindow === window && manager.selectedProject === project
-                && project.matchesPanelTarget(context.identity)
-                && model.matchesPanelTarget(context.identity) && model.isCurrent(target)
-        }
+        guard let project, let expectedOID else { return }
         performOperation(.branchMenu) {
-            model.switchBranch(to: name, expectedOID: expectedOID,
-                prepare: {
-                    await project.saveBeforeGitAction(repository: target.repository,
-                        scope: target.scope, isCurrent: isCurrent)
-                }, isCurrentTarget: {
-                    isCurrent() && project.canRunGitAction(repository: target.repository,
-                        scope: target.scope)
-                }, completion: { success in
-                    if success { project.reloadAfterGitAction(repository: target.repository, scope: target.scope) }
-                })
+            manager.switchGitBranch(to: name, expectedOID: expectedOID,
+                                    in: project, model: model)
         }
     }
 
@@ -651,14 +634,14 @@ struct GitPanel: View {
                         checkout: checkout, replacing: nil, target: target,
                         prepare: {
                             if !checkout { return true }
-                            return await project.saveBeforeGitAction(repository: target.repository,
+                            return await manager.application.saveBeforeGitAction(repository: target.repository,
                                 scope: target.scope, isCurrent: isCurrent)
                         }, isCurrentTarget: {
-                            isCurrent() && (!checkout || project.canRunGitAction(
+                            isCurrent() && (!checkout || manager.application.canRunGitAction(
                                 repository: target.repository, scope: target.scope))
                         }) { success in
                         if success, checkout {
-                            project.reloadAfterGitAction(repository: target.repository, scope: target.scope)
+                            manager.application.reloadAfterGitAction(repository: target.repository, scope: target.scope)
                         }
                         if !success,
                            model.operation?.gitError?.localizedCaseInsensitiveContains("already exists") == true,
@@ -703,14 +686,14 @@ struct GitPanel: View {
                             checkout: checkout, replacing: oid, target: target,
                             prepare: {
                                 if !checkout { return true }
-                                return await project.saveBeforeGitAction(repository: target.repository,
+                                return await manager.application.saveBeforeGitAction(repository: target.repository,
                                     scope: target.scope, isCurrent: isCurrent)
                             }, isCurrentTarget: {
-                                isCurrent() && (!checkout || project.canRunGitAction(
+                                isCurrent() && (!checkout || manager.application.canRunGitAction(
                                     repository: target.repository, scope: target.scope))
                             }, completion: { success in
                                 if success, checkout {
-                                    project.reloadAfterGitAction(repository: target.repository, scope: target.scope)
+                                    manager.application.reloadAfterGitAction(repository: target.repository, scope: target.scope)
                                 }
                             })
                     }
@@ -1032,17 +1015,17 @@ struct GitPanel: View {
                 && model.remoteBranch(named: reference.name)?.remote == selected.remote
         }
         let saveBeforeChangingWorktree: @MainActor () async -> Bool = {
-            await project.saveBeforeGitAction(
+            await manager.application.saveBeforeGitAction(
                 repository: target.repository, scope: target.scope, isCurrent: stillSelected
             )
         }
         let canMutateWorktree: @MainActor () -> Bool = {
-            stillSelected() && project.canRunGitAction(
+            stillSelected() && manager.application.canRunGitAction(
                 repository: target.repository, scope: target.scope
             )
         }
         let onFinish: @MainActor (Bool) -> Void = { _ in
-            project.reloadAfterGitAction(repository: target.repository, scope: target.scope)
+            manager.application.reloadAfterGitAction(repository: target.repository, scope: target.scope)
         }
 
         switch action {
@@ -1344,14 +1327,14 @@ struct GitPanel: View {
                         model.resetHistoricalFile(file.path, at: commit, target: target,
                             expectedFileState: state,
                             prepare: {
-                                await project.saveBeforeGitAction(repository: target.repository,
+                                await manager.application.saveBeforeGitAction(repository: target.repository,
                                     scope: target.scope, isCurrent: current)
                             }, isCurrentTarget: {
-                                current() && project.canRunGitAction(repository: target.repository,
+                                current() && manager.application.canRunGitAction(repository: target.repository,
                                     scope: target.scope)
                             }, completion: { success in
                                 if success {
-                                    project.reloadAfterGitAction(repository: target.repository,
+                                    manager.application.reloadAfterGitAction(repository: target.repository,
                                         scope: target.scope)
                                 }
                             })
@@ -1438,14 +1421,14 @@ struct GitPanel: View {
                     selectedRef: selectedRefName.map { ($0, commit.hash) },
                     prepare: {
                         if !changesWorktree { return true }
-                        return await project.saveBeforeGitAction(
+                        return await manager.application.saveBeforeGitAction(
                             repository: target.repository, scope: target.scope, isCurrent: isCurrent
                         )
                     }, isCurrentTarget: {
-                        isCurrent() && (!changesWorktree || project.canRunGitAction(repository: target.repository, scope: target.scope))
+                        isCurrent() && (!changesWorktree || manager.application.canRunGitAction(repository: target.repository, scope: target.scope))
                     },
                     completion: { _ in
-                        project.reloadAfterGitAction(repository: target.repository, scope: target.scope)
+                        manager.application.reloadAfterGitAction(repository: target.repository, scope: target.scope)
                     }
                 )
             }
@@ -2487,11 +2470,11 @@ struct GitPanel: View {
                 model.actOnStash(stash, action: action, reinstateIndex: dialog.reinstateIndex.state == .on,
                     branchName: dialog.name.stringValue, target: target,
                     expectedStashes: selectedStashes, prepare: {
-                        await project.saveBeforeGitAction(repository: target.repository, scope: target.scope, isCurrent: isCurrent)
+                        await manager.application.saveBeforeGitAction(repository: target.repository, scope: target.scope, isCurrent: isCurrent)
                     }, isCurrentTarget: {
-                        isCurrent() && (action == .drop || project.canRunGitAction(repository: target.repository, scope: target.scope))
+                        isCurrent() && (action == .drop || manager.application.canRunGitAction(repository: target.repository, scope: target.scope))
                     }, completion: { _ in
-                        if action != .drop { project.reloadAfterGitAction(repository: target.repository, scope: target.scope) }
+                        if action != .drop { manager.application.reloadAfterGitAction(repository: target.repository, scope: target.scope) }
                     })
             }
         }
@@ -2514,14 +2497,14 @@ struct GitPanel: View {
             let writesWorktree = action != .reset || mode == .hard
             let prepare: @MainActor () async -> Bool = {
                 if !writesWorktree { return true }
-                return await project.saveBeforeGitAction(
+                return await manager.application.saveBeforeGitAction(
                     repository: target.repository, scope: target.scope, isCurrent: isCurrent)
             }
             let validate: @MainActor () -> Bool = {
-                isCurrent() && (!writesWorktree || project.canRunGitAction(repository: target.repository, scope: target.scope))
+                isCurrent() && (!writesWorktree || manager.application.canRunGitAction(repository: target.repository, scope: target.scope))
             }
             let completion: @MainActor (Bool) -> Void = { _ in
-                project.reloadAfterGitAction(repository: target.repository, scope: target.scope)
+                manager.application.reloadAfterGitAction(repository: target.repository, scope: target.scope)
             }
             performOperation(.moreMenu) {
                 switch action {
