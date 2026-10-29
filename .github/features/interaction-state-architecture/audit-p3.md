@@ -12,7 +12,7 @@
 - [x] P3-T1 统一 Git Changes 状态与 Diff 打开路径
 - [x] P3-T2 统一 Git Graph 展开浏览和菜单目标
 - [x] P3-T3 实现 Git Changes 资源多选与批量动作
-- [x] P3-T4 对齐 Git Graph 提交详情比较与键盘导航
+- [x] P3-T4 对齐 Git Graph 提交详情与键盘导航
 - [x] P3-T5 对齐 Git Graph 轨道颜色与视觉状态
 - [x] P3-T6 复核 Git Graph 引用菜单与危险操作
 - [x] P3-T7 统一 Git Graph/Changes 分页刷新与身份恢复
@@ -34,7 +34,7 @@
     `docs/features/git.md`、`docs/ui.md`。
 - P3-T4 · `d6f66e9a`
   - `RecentCommitsView.swift`、`GitStatusModel.swift`、`GitPanel.swift`：
-    双提交比较、请求失效、父子导航、历史只读 Diff；
+    父子导航、历史只读 Diff 与焦点隔离；
     `GitStatusModelTests.swift`、`GitGraphUITests.swift`、`GitHistoryUITests.swift`；
     `Resources/Localization/Git.xcstrings`、`docs/features/git.md`、`docs/features/diff.md`。
 - P3-T5 · `ccd790ae`
@@ -49,7 +49,7 @@
     `GitDialogUITests.swift`；`docs/features/git.md`。
 - P3-T7 · `5ca1a2c6`
   - `Bailey/UI/Panels/ToolPanelView.swift`：GitPanel 仅随项目 ID／SSH 连接身份换代；
-    `GitGraphUITests.swift`：同 Git 仓库跨两个 Project 的比较失效；
+    `GitGraphUITests.swift`：同 Git 仓库跨两个 Project 的展开隔离；
     `docs/features/git.md`。
 
 ## 逐提交核对
@@ -59,7 +59,7 @@
 | P3-T1 `7385e1cc` | Dock 活动内容 → `GitPanel.revealActiveChange` → `GitStatusModel.changeCursor/selectedChanges` → Changes 行选择；移除旧 Displayed 灰底 | 已接入；未发现残余单项选择写入 |
 | P3-T2 `a6f3c6ec` | `GitPanel` 的展开 Binding → `GitStatusModel.expandedCommitIDs` → `RecentCommitsView`；项目/仓库失效时清理 | 已接入；展开与键盘游标所有者不同 |
 | P3-T3 `fbf59fea` | Shift/Command/右键 → 仓库、Section、路径约束的选择集合 → `selectedEntries` → 单次 `stageEntries/unstageEntries` 或确认 Discard | 已接入；无需恢复 `explicitlySelectedChange` |
-| P3-T4 `d6f66e9a` | Graph 点击与 ⌘方向键 → DAG 目标；⌘点击 → 完整两端 OID → `compareCommits` 的 Git 只读二进制结果 → 历史 Diff | 已接入；异步比较由 requestID 拒绝旧回写 |
+| P3-T4 `d6f66e9a` | Graph 点击与 ⌘方向键 → 有效 DAG 目标 → 提交详情与历史文件 Diff | 已接入；真实 Git SHA 与原生焦点分离 |
 | P3-T5 `ccd790ae` | Stash 徽章 AX 标签 → 原生 Graph 行；像素/轨道断言在 `GitGraphGeometryUITests` | 已接入；没有引入重复视觉模型 |
 | P3-T6 `081167df` | 原生菜单、Tag、Stash、Branch OID → `GitStatusModel.perform` 执行前复核 → 真实 Git | 原始 OID 防护已接入；但工具栏保存旁路和跨窗编辑保护有证实缺口（F-02/F-03） |
 | P3-T7 `5ca1a2c6` | `WorkspaceDockView` → `ToolPanelView` 的 Project Identity/SSH 代次 → GitPanel/Graph 局部游标生命周期 | 已接入；普通刷新与真实切换不混同 |

@@ -107,11 +107,11 @@ note = "108 项受影响 Git 宿主 XCTest 全通过；GitChangesUITests 22 项�
 
 [[tasks]]
 id = "P3-T4"
-title = "对齐 Git Graph 提交详情比较与键盘导航"
+title = "对齐 Git Graph 提交详情与键盘导航"
 status = "completed"
 plan = "plan-p3.md#p3-t4"
 commit = "d6f66e9a5fa5ca93873551e688fed1eea5c9c4fe"
-note = "116项 Graph/GitStatus/Stash/History 宿主 XCTest 全通过；SHA256/远端断连/非祖先比较新增宿主3项通过；32项完整 Graph/History GUI 中3个失败均定位并定向转绿，比较生命周期2项 E2E 通过；make build:dev签名构建成功。"
+note = "Graph 单提交详情、父子快捷键与历史只读 Diff 保留；2026-10-29 重新构建并通过 GitStatus/History/Palette 宿主 81/81 项。"
 
 [[tasks]]
 id = "P3-T5"
@@ -135,7 +135,7 @@ title = "统一 Git Graph/Changes 分页刷新与身份恢复"
 status = "completed"
 plan = "plan-p3.md#p3-t7"
 commit = "5ca1a2c6ddf88dd4947f73193404668e041c92e3"
-note = "58项Graph/历史宿主全通过；6项同仓库跨Project、跨仓库Changes、分页、展开恢复、比较Diff、只读历史Dev E2E改前改后均全通过；make build:dev及签名通过。Project ID/SSH revision采用SwiftUI视图身份，无额外缓存。"
+note = "58 项 Graph/历史宿主全通过；同仓库跨 Project、跨仓库 Changes、分页、展开恢复与只读历史由隔离 Dev E2E 覆盖；make build:dev 及签名通过。Project ID/SSH revision 使用 SwiftUI 视图身份，无额外缓存。"
 
 [[tasks]]
 id = "P4-T1"

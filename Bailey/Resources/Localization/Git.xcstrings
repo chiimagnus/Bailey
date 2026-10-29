@@ -3066,46 +3066,6 @@
           }
         }
       }
-    },
-    "Compare Commits" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "比较提交"
-          }
-        }
-      }
-    },
-    "Close Comparison" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "关闭比较"
-          }
-        }
-      }
-    },
-    "Loading commit changes…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在加载提交差异…"
-          }
-        }
-      }
-    },
-    "Unable to read commit changes" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法读取提交差异"
-          }
-        }
-      }
     }
   },
   "version" : "1.0"

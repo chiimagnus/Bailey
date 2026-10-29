@@ -5,7 +5,7 @@
 
 **目标：** 保留 Git Changes 已分开的“当前显示 Diff”、单项明确选择和键盘游标，
 核对它们的事件规则与视觉组合，补齐资源多选，让 Stage/Unstage/Discard 的实际集合与菜单完全准确；
-同时独立复现 Git Graph 的提交、引用标签、详情、比较、工作树与原生菜单的交互，
+同时独立复现 Git Graph 的提交、引用标签、详情、工作树与原生菜单的交互，
 确保色轨/节点、异步身份和危险动作正确。
 
 **上游必须同时阅读：**
@@ -19,7 +19,6 @@
   `web/graph.ts:Graph.loadCommits/render`、`web/contextMenu.ts:show/close/refresh`、
   `web/styles/main.css` 的行状态；
   `src/gitGraphView.ts` 的事件→Git 操作/差异消息路由，
-  `src/dataSource.ts:getCommitComparison/execDiff` 的两端数据；
   VS Code `extensions/git/src/commands.ts:stage/unstage/clean` 的合法资源过滤。
   **扩展许可证禁止分发衍生源代码：只吸收需求/行为，独立实现 native Swift。**
 
@@ -30,7 +29,6 @@ Graph 展开集合由同一窗口的 `GitStatusModel` 保留，
 `CommitGraphLayout` 与 `GitGraphPalette` 负责图谱拓扑和颜色，
 `Project`/`DockWorkspaceModel` 与 `DiffTab` 负责标签展示、活动组及真实 Diff。
 本阶段不创建统一 Files+Git SelectionStore，也不重新实现 Git backend。
-“不重写 backend”不等于禁止为新增比较补充真实 Git 查询。
 独立复核与任务删除清单见 [source-review.md](source-review.md)。
 
 **状态不变量：** 同一仓库相对路径在 `staged/unstaged/merge` 属不同 Git 对象；
@@ -281,104 +279,43 @@ Docs `docs/features/git.md`，共享选择视觉确有改变时再改 `docs/ui.m
 
 <a id="p3-t4"></a>
 
-## P3-T4 Git Graph 提交详情、比较、标签与键盘导航
+## P3-T4 Git Graph 提交详情、标签与键盘导航
 
-**三套不同语义必须先区分：**
-- 内置 SCM History Tree：多选关闭，提交作为历史节点；
-- Git Graph 扩展 `web/main.ts`：单击提交切换详情，按 ⌘ 比较两个提交，
-  ↑↓ 表格移动、⌘↑↓ 顺父/子、⌘⇧↑↓ 替代父/子；
-  ref 标签单击与双击、右键是不同事件；
-- Bailey 当前 `expandedCommitIDs` 是**多展开集合**，
-  既有用户明确要求单击任意 ref/commit 标签统一展开详情，
-  并否决“单击复制/直接打开 Worktree”等危险或不统一交互。
+**不同列表语义：** 内置 SCM History Tree 不支持多选；
+Git Graph 扩展支持方向键浏览、父子提交跳转以及独立的 ref 菜单；
+Bailey 保留多提交分别展开、普通 ↑↓ 只移动键盘游标、ref 单击展开详情，
+不移植扩展单详情覆盖或 ref 双击 Checkout。
 
-**本轮确定的取舍：** 保留 Bailey 多展开、普通↑↓只移动游标、ref 单击展开，
-不引入扩展的单详情覆盖/普通方向键自动重开详情或 ref 双击 Checkout。
-新增 ⌘点击普通提交作双端比较、⌘↑↓父子导航和 ⌘⇧↑↓替代路径；
-比较不是多选集合，Worktree/Stash 也不假装普通 immutable commit。
-同一 SHA 不同 Stash selector、多个 Worktree 的身份继续沿现有模型。
-
-**锚点：** `RecentCommitsView.toggle`、
-`handleGraphKey`、`keyboardRows`、`referenceStrip`、
-`stashBadge`、`commitRow`、`BranchAction/RemoteAction/TagAction`、
-`expandedCommitIDs`、`CommitGraphLayout`；
-`GitStatusModel.RecentCommit`、`GitPanel` 的既有 Diff/菜单入口、
-`Project.openHistoricalDiff`、`DiffTab.Source.commit`/`reload`、
-`GitCommandExecution.runData`、`GitHistoricalFileLocator` 和原生确认 Sheet。
-当前 `RecentCommitsView` 无比较入口，`GitStatusModel.expandedCommitIDs` 才是展开真源。
+**源码锚点：** `RecentCommitsView.toggle`、`handleGraphKey`、`keyboardRows`、
+`referenceStrip`、`stashBadge`、`commitRow`、`expandedCommitIDs`、
+`CommitGraphLayout`、`GitStatusModel.RecentCommit`、
+`GitPanel` 的历史 Diff/菜单入口、`Project.openHistoricalDiff`、
+`DiffTab.Source.commit`、`GitHistoricalFileLocator`。
 
 **步骤：**
-1. 在**同一张对照表**实际验证扩展/内置/当前 Bailey：
-   首次单击/第二次单击提交、点击 ref badge/node/title/metadata、
-   ⌘ 点第二个提交、方向键/⌘+方向键、连续展开多个详情、
-   右键引用、Stash 和 Worktree；
-   标出 VS Code 本身存在的两种 Graph 行为，不假设它们完全相同。
-2. 按上述已确定取舍实施，不把这些决定留给执行者任选；
-   **危险 Checkout/Reset/Rebase 不得未经明确菜单+确认绑定成双击副作用**。
-   提交比较属于用户明确要求的 VS Code 交互吸收，应有清晰可见的两端身份，
-   不能用 Files/Git Changes multi-select 模型硬凑。
-3. Red：两个提交比较与普通详情展开互不覆盖；
-   跨仓库同 SHA、merge 多父、已不存在 ref、分页时第二目标变动，
-   快速按键时不打开错误历史；
-   菜单/详情中输入框应保留自身焦点。
-4. 仅 `RecentCommitsView` 持临时 Compare pair、请求结果与取消生命周期，
-   展开仍经 Binding 回写既有 `GitStatusModel.expandedCommitIDs`，
-   `GitStatusModel` 只提供可测试的按目标读取双端变更的只读 async 函数，
-   不另存一份可写 compare pair 或平行结果缓存；
-   对过期请求按本次 pair/目标身份拒绝回写。
-   点击提交直接执行明确动作，不由 `selectedRowID` 的 `onChange` 间接打开比较；
-   删除实际被替代的旧点击分支，不为迁移制造 alias。
-5. 若上游部分功能（如比较 UI、分支导航）需要新增布局，
-   先依赖现有 Detail/Diff 容器及真实 Git 数据，
-   不复制扩展 Webview，保证任意 NSWindow/SSH 安全。
-
-**比较必须闭合到字节（本 task，不留给 P3-T7）：**
-- 从最近一次**左键明确激活**的普通 commit 作为第一目标，
-  ⌘点另一普通 commit 开/关比较；
-  不把普通键盘游标、右键菜单游标或已展开集合当作比较锚点；
-  pseudo `RecentCommit`（stash/worktree）不能参与比较；
-  UI 明示两端完整提交身份、缩写 SHA 与比较方向；
-  初始没有第一目标时按普通展开处理，同一提交不创建无意义比较。
-  与扩展 `getCommitOrder` 一样以当前图谱顺序确定旧端→新端，捕获完整 SHA 后不随刷新反转。
-  普通展开集合保留，比较显示在第一目标现有详情容器内，取消只撤销比较。
-- `GitStatusModel` 增加按当前目标执行的只读双端查询，复用 `GitCommandExecution.runData`：
-  `diff --name-status -z --find-renames --no-ext-diff <from> <to> --`，
-  `<from>/<to>` 须为当前仓库真实可访问的完整 40/64 位 commit OID，
-  只读命令的字节输出限制用 `limit+1` 检出截断（现有远端
-  `GitCommandExecution.runData` 仅会截取 `stdoutLimit`，不会自行报告截断）；
-  不拼两个 commit 各自的 files，也不误用 `<from>...<to>` 的 merge-base 比较。
-  复用 `parseStashFileChanges` 已有 NUL/rename 解析能力，通用化命名时同任务迁移 Stash 调用，
-  不保留旧名 alias。空结果与失败/截断/解码失败分别表达；输出沿现有容量与超时契约。
-- 当前 `DiffTab.Source.commit(hash:parent:status:)` 已能读取任意两端 immutable blob，
-  优先通过 `Project.openHistoricalDiff` 复用，不再造 Diff 引擎或可写历史编辑器。
-  两端 SHA、rename old/new path、status 参与既有来源/标签复用语义；
-  核对 `.commit(hash:parent:status:)` 对 `A` 跳过旧 blob、
-  对 `D` 读取新 blob 的现有特判，确保“比较两端”并不错误沿用首父缺省或
-  以无效对象冒充空文件。`Project.findDiffTab` 依 `repoRoot/path/source/workspace`
-  复用，`origPath` 是可变元数据；同源重用必须证明 rename 目标仍一致。
-  更新“首父”说明，使普通提交仍默认首父，比较显式传另一端。
-  非文本/大文件、A/D/R/C/T、根提交、SHA-256、非祖先两端与仓库失效均验证最终两侧内容。
-- 新比较请求只需本 owner 一个取消/取代标识，复用现有仓库/连接 identity，
-  不在 View、Project、DiffTab 各追加一套 comparison generation。
-  DiffTab 独立存在的加载代次仍是其原生内容保护，不是比较可替代的状态。
-- 父导航使用 `parentHashes`；子导航用当前已加载 DAG 的反向关系，优先同 lane，
-  但 `CommitGraphLayout` 的轨道包含 stash/worktree 伪节点，
-  导航图只能由真实普通 commit 建立；
-  替代路径选择第二父/不同 lane 子项，边界无节点不动、不凭空创建父提交。
-  ⌘导航明确激活/展开目标；普通方向键仍仅移动游标，菜单/输入框不被截获。
-  `RecentCommitsView.handleGraphKey` 当前拒绝所有 ⌘/Shift 按键，
-  新导航必须在现有 `TreeKeyboardHost` 第一响应者中验证真实系统快捷键竞争，
-  不能靠额外全局 NSEvent monitor 或让后台图谱截取编辑器快捷键。
+1. 使用固定上游源码与真实 Bailey 交互确认提交、标签、节点、文件、右键菜单
+   及方向键的事件意图。普通提交、Stash、Worktree 保持各自独立身份和动作。
+2. 保留多个提交同时展开；鼠标点击仅改变当前目标与明确展开状态。
+   普通 ↑↓ 移动可见行游标，←→ 展开/折叠或进入父级，Space/Return 执行当前行操作。
+   右键只记录临时 Context Target，不展开提交或浏览 Diff。
+3. ⌘↓ 从当前普通提交沿首父跳转，⌘⇧↓ 沿第二父；
+   ⌘↑ 在已加载 DAG 内跳到子提交，⌘⇧↑ 沿替代子分支。
+   父导航使用 `parentHashes`，子导航从真实普通 commit 建立反向关系，
+   优先同 lane；Stash/Worktree 伪节点不参与。
+   边界与目标未加载时不越级跳转、不更改 HEAD/index。
+4. 由既有 `TreeKeyboardHost` 接收真实键盘焦点，保留原生输入、菜单和窗口的优先权；
+   导航目标自动展开并保持游标与可视区滚动一致，不增设全局 NSEvent monitor。
+   历史文件仍读取单个提交对应首父的只读 Diff，按当前仓库/连接身份保护。
+5. 连续浏览、多个展开、分页、刷新、切项目和 SSH 重连期间，
+   保留有效身份的焦点/展开；旧目标和菜单及时失效，
+   不能将其他窗口的编辑焦点或历史文件误认作 Graph 行选中。
 
 **验证：** `GitStatusModelTests`、`NativeGitHistoryFileTests`、
 `CommitGraphLayoutTests`、`GitGraphUITests`、`GitHistoryUITests`；
-两提交与多父/单父/初始提交/快速连续点击/分页/新删除 ref、
-本机和 SSH 项目、两窗口；
-真 Diff 内容和比较范围/HEAD/index 不变，带未保存编辑时操作受保护；
-`make build:dev`。Docs `docs/features/git.md`、`docs/features/diff.md`、
-只有持久化来源格式或恢复行为实际改变才更新 `docs/features/session-restore.md`，
-确有变化才更新 `docs/ui.md`；
-一个提交。
+根提交/线性/merge/多父/分叉/缺失父/分页、键盘滚动越界、
+本机/SSH 项目与多窗口、原生输入焦点及历史 Diff 文件真实字节，
+HEAD/index/工作区不变；`make build:dev`。文档归 `docs/features/git.md`，
+历史 Diff 读取确有变化时更新 `docs/features/diff.md`；一个提交。
 
 ---
 
@@ -537,12 +474,12 @@ History Graph 分页/LoadMore 不能改变已展示的 Diff 身份。
    当前 `GitPanel` 也主要监听 rootPath/repositoryIdentity/currentScope。
    同 SSH host+目录但**不同 Project ID** 的切换会更新 `PanelContext.Identity`，
    不一定改变前述字符串；先验证是否会把前一个项目的临时菜单、
-   选区或未完成比较带入新项目。连接代次变化仍须确认写操作是否被拦截。
+   选区带入新项目。连接代次变化仍须确认写操作是否被拦截。
    Graph 数据晚到不能把旧 commit/ref 绑定到新 index；
    同名 Changes/History 行菜单不得串线，编辑器已显示旧历史 Diff 可以继续只读。
 3. 在当前所有者按 ID 重绑有效选中和可见展开，
    同一项目/仓库的普通状态刷新保留有效展开/游标，
-   真正切项目、切后端或 SSH 连接代次变化时撤销临时菜单及旧比较请求，
+   真正切项目、切后端或 SSH 连接代次变化时撤销临时菜单目标，
    不把与仓库内容无关的 view 重建当成新身份；
    失效的临时菜单/拖放必须立刻清理；禁止把 array index 当稳定 commit identity；
    不借刷新事件修改实际 NSWindow.firstResponder。
@@ -565,7 +502,7 @@ Docs `docs/features/git.md`，只改本任务直接影响路径；一个提交�
 ## P3 阶段验收与审计
 
 1. Git Changes 资源 **多选与批量 Stage/Unstage/Discard**、
-   Git Graph 提交展开／比较／引用菜单／历史 Diff、DAG 轨道颜色、
+   Git Graph 提交展开／引用菜单／历史 Diff、DAG 轨道颜色、
    Stash/Worktree/Uncommitted、仓库身份各自拥有独立宿主与真实 UI 证据。
 2. 运行受影响的 Git 宿主全集和
    `GitChangesUITests`、`GitGraphUITests`、`GitGraphGeometryUITests`、

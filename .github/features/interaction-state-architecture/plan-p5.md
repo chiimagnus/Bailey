@@ -28,7 +28,7 @@ Window/Dock/Tab identity；`XCTAssertTrue(button.exists)` 不能代表执行成�
    检查真实文件字节与错误路径未写入。
 2. Files 单击浏览 → 另一组显示文件 → Dock 文件 A→B→A →
    Git Changes 打开对应 Diff A/B、再从 Dock 切换 Diff →
-   Graph 打开历史文件/展开 commit/比较两次提交 →
+   Graph 打开历史文件/展开 commit/父子键盘导航 →
    返回 Files 导航，只移动游标而不重新打开编辑器；
    检查活动编辑器变化时 Explorer/SCM 匹配项同步为唯一 Selection/Focus，
    旧项目不留第二条 Displayed 灰底，原生 firstResponder 不被夺走；

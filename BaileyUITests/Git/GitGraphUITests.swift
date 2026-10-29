@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class GitGraphUITests: XCTestCase {
-    func testSwitchingProjectsInsideSameRepositoryClearsOldGraphComparison() throws {
+    func testSwitchingProjectsInsideSameRepositoryKeepsGraphDisclosureScoped() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let nestedFile = try fixture.file("nested/shared.txt", text: "first\n")
         try fixture.initializeGit()
@@ -20,20 +20,19 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(first.waitForExistence(timeout: 25))
         XCTAssertTrue(second.waitForExistence(timeout: 25))
         first.click()
-        XCUIElement.perform(withKeyModifiers: .command) { second.click() }
-        let comparison = app.staticTexts["bailey.git.compare.endpoints"]
-        XCTAssertTrue(comparison.waitForExistence(timeout: 20))
+        let historical = historicalFile("nested/shared.txt", in: app)
+        XCTAssertTrue(historical.waitForExistence(timeout: 12))
 
         app.typeKey("a", modifierFlags: [.command, .shift])
         try WorkspaceUITestSupport.choose(nestedFile.deletingLastPathComponent(), in: app)
         app.typeKey("g", modifierFlags: [.command, .shift])
         XCTAssertTrue(first.waitForExistence(timeout: 25))
         XCTAssertTrue(second.waitForExistence(timeout: 25))
-        XCTAssertFalse(comparison.exists,
-                       "The old project's comparison must not remain visible after switching")
+        XCTAssertFalse(historical.exists,
+                       "A new Project must not reuse the other Project's expanded commit")
         first.click()
-        XCTAssertFalse(comparison.exists,
-                       "Re-expanding the identical commit in a new Project must not revive the old comparison")
+        XCTAssertTrue(historical.waitForExistence(timeout: 12),
+                      "The new Project must open its own commit details on first click")
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertEqual(try Data(contentsOf: nestedFile), Data("second\n".utf8))
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
@@ -65,49 +64,28 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }
 
-    func testCommandClickComparesTwoCommitsWithRealReadOnlyDiffBytes() throws {
+    func testCommandClickSecondCommitKeepsBothHistoricalDetailsIndependent() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
-        let file = try fixture.file("compare.txt", text: "comparison before\n")
+        _ = try fixture.file("first-history.txt", text: "first\n")
         try fixture.initializeGit()
-        let older = String(decoding: try fixture.git(["rev-parse", "HEAD"]), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        try "comparison after\n".write(to: file, atomically: true, encoding: .utf8)
-        try fixture.git(["add", "--", "compare.txt"])
-        try fixture.git(["commit", "-qm", "newer comparison commit"])
-        let newer = String(decoding: try fixture.git(["rev-parse", "HEAD"]), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
+        _ = try fixture.file("second-history.txt", text: "second\n")
+        try fixture.git(["add", "--", "second-history.txt"])
+        try fixture.git(["commit", "-qm", "second history record"])
+        let head = try fixture.git(["rev-parse", "HEAD"])
         let app = try launchGraph(fixture, language: "en")
         let first = app.buttons["E2E fixture history"]
-        let second = app.buttons["newer comparison commit"]
+        let second = app.buttons["second history record"]
         XCTAssertTrue(first.waitForExistence(timeout: 25))
         XCTAssertTrue(second.waitForExistence(timeout: 25))
         first.click()
+        XCTAssertTrue(historicalFile("first-history.txt", in: app).waitForExistence(timeout: 12))
         XCUIElement.perform(withKeyModifiers: .command) { second.click() }
-        let endpoints = app.staticTexts["bailey.git.compare.endpoints"]
-        XCTAssertTrue(endpoints.waitForExistence(timeout: 20),
-                      "Command-click must display real two-endpoint comparison in first commit")
-        XCTAssertTrue(endpoints.label.contains(String(older.prefix(12))))
-        XCTAssertTrue(endpoints.label.contains(String(newer.prefix(12))))
-        let fullEndpoints = endpoints.value as? String ?? ""
-        XCTAssertTrue(fullEndpoints.contains(older) && fullEndpoints.contains(newer),
-                      "Both complete OIDs must be accessible despite narrow Graph columns")
-        let compared = app.descendants(matching: .any)
-            .matching(identifier: "bailey.git.compare.file").firstMatch
-        XCTAssertTrue(compared.waitForExistence(timeout: 15))
-        compared.click()
-        let window = app.windows.firstMatch
-        let layout = window.radioGroups["bailey.diff.layout"]
-        XCTAssertTrue(layout.waitForExistence(timeout: 15))
-        layout.radioButtons.element(boundBy: 1).click()
-        let actualContent = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            let values = Set(window.textViews.allElementsBoundByIndex.compactMap { $0.value as? String })
-            return values.contains("comparison before\n") && values.contains("comparison after\n")
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [actualContent], timeout: 25), .completed,
-                       "The native Diff must read immutable old and new blobs, not HEAD vs Worktree")
-        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), Data((newer + "\n").utf8))
-        XCTAssertEqual(try Data(contentsOf: file), Data("comparison after\n".utf8))
+        XCTAssertTrue(historicalFile("second-history.txt", in: app).waitForExistence(timeout: 12))
+        XCTAssertTrue(historicalFile("first-history.txt", in: app).exists)
+        XCTAssertEqual(app.windows.firstMatch.descendants(matching: .any)
+            .matching(identifier: "bailey.git.history.file").count, 2,
+            "A modified click must only expand its own commit's normal historical files")
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }
 
@@ -131,62 +109,6 @@ final class GitGraphUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.upArrow, modifierFlags: .command)
         XCTAssertTrue(historicalFile("child-node.txt", in: app).waitForExistence(timeout: 15),
                       "Cmd-Up must activate the current commit's loaded child")
-        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
-        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
-    }
-
-    func testCommandClickSameComparisonClosesOnlyComparisonAndPreservesExpandedHistory() throws {
-        let fixture = try WorkspaceUITestFixture(in: self)
-        _ = try fixture.file("older-record.txt", text: "first\n")
-        try fixture.initializeGit()
-        _ = try fixture.file("newer-record.txt", text: "second\n")
-        try fixture.git(["add", "--", "newer-record.txt"])
-        try fixture.git(["commit", "-qm", "second comparison record"])
-        let head = try fixture.git(["rev-parse", "HEAD"])
-        let app = try launchGraph(fixture, language: "en")
-        let first = app.buttons["E2E fixture history"]
-        let second = app.buttons["second comparison record"]
-        XCTAssertTrue(first.waitForExistence(timeout: 25))
-        XCTAssertTrue(second.waitForExistence(timeout: 25))
-        first.click()
-        let retained = historicalFile("older-record.txt", in: app)
-        XCTAssertTrue(retained.waitForExistence(timeout: 12))
-        XCUIElement.perform(withKeyModifiers: .command) { second.click() }
-        let endpoints = app.staticTexts["bailey.git.compare.endpoints"]
-        XCTAssertTrue(endpoints.waitForExistence(timeout: 20))
-        XCUIElement.perform(withKeyModifiers: .command) { second.click() }
-        XCTAssertTrue(endpoints.waitForNonExistence(timeout: 12),
-                      "A second Cmd-click on the same pair must cancel comparison only")
-        XCTAssertTrue(retained.exists,
-                      "Closing two-commit comparison must preserve the original commit disclosure")
-        second.click()
-        XCTAssertTrue(historicalFile("newer-record.txt", in: app).waitForExistence(timeout: 12))
-        XCTAssertTrue(retained.exists, "Multiple ordinary commits may stay expanded")
-        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
-        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
-    }
-
-    func testCommandClickComparisonExpandsCollapsedFirstCommitWithoutTouchingOtherDetails() throws {
-        let fixture = try WorkspaceUITestFixture(in: self)
-        _ = try fixture.file("anchor.txt", text: "anchor\n")
-        try fixture.initializeGit()
-        _ = try fixture.file("second.txt", text: "second\n")
-        try fixture.git(["add", "--", "second.txt"])
-        try fixture.git(["commit", "-qm", "compare collapsed anchor"])
-        let head = try fixture.git(["rev-parse", "HEAD"])
-        let app = try launchGraph(fixture, language: "en")
-        let first = app.buttons["E2E fixture history"]
-        let second = app.buttons["compare collapsed anchor"]
-        XCTAssertTrue(first.waitForExistence(timeout: 25))
-        XCTAssertTrue(second.waitForExistence(timeout: 25))
-        first.click()
-        XCTAssertTrue(historicalFile("anchor.txt", in: app).waitForExistence(timeout: 12))
-        first.click()
-        XCTAssertTrue(historicalFile("anchor.txt", in: app).waitForNonExistence(timeout: 12))
-        XCUIElement.perform(withKeyModifiers: .command) { second.click() }
-        XCTAssertTrue(app.staticTexts["bailey.git.compare.endpoints"].waitForExistence(timeout: 20))
-        XCTAssertTrue(historicalFile("anchor.txt", in: app).waitForExistence(timeout: 12),
-                      "Comparing a collapsed anchor must reveal the first commit's details")
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }

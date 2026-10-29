@@ -42,7 +42,7 @@ Focus、Selection、Anchor、Expanded、Active、Hover、Displayed、Context Tar
   但 **活动编辑器变化是明确事件**：VS Code Explorer/SCM 的 Auto Reveal 会据此更新树的
   Focus 游标与 Selection（不抢真实键盘输入），不能把独立语义误写成禁止事件联动。
 - **只增加确有需求的状态：** Git Changes 和 Dock 补资源／标签多选与 Anchor；
-  Graph 的展开、比较两端不变成通用多提交 Selection，Projects 不增加文件式多选。
+  Graph 的展开不变成通用多提交 Selection，Projects 不增加文件式多选。
   Palette／Ctrl+Tab 保留暂态机制，Settings 保持原生 List，Hover 留在局部视图。
 - **差异不是自动成立的缺陷：** 先核对已授权行为和真实组合，再决定是否修改。
   右键清除背景并绘制临时描边是 Bailey 的现行视觉约定，不因不同于 VS Code 就取消。
@@ -54,7 +54,7 @@ Focus、Selection、Anchor、Expanded、Active、Hover、Displayed、Context Tar
    SCM Changes 的资源多选、分组、Diff、Stage/Unstage；内置 SCM History Graph 的提交/文件节点；
    编辑器标签的 active/selected、多选、组/窗口、拖放、菜单及快捷键。
 2. **Git Graph 双源对齐**：分析 VS Code 内置 History Graph 和 mhutchie Git Graph 扩展的
-   提交展开、比较、ref 标签、Stash、图谱几何、行状态和菜单；Worktree 是 Bailey 自有能力，
+   提交展开、ref 标签、Stash、图谱几何、行状态和菜单；Worktree 是 Bailey 自有能力，
    在 Bailey 原生 SwiftUI/AppKit/现有 Git 后端上独立实现可观察等价行为。
 3. **状态语义稳定**：Focus 游标、明确 Selection、多选 Anchor、Displayed 文件/Diff、
    Expanded 目录/提交、Hover、菜单 Context Target、活动 Dock Group 和真实 NSWindow
@@ -86,12 +86,12 @@ Focus、Selection、Anchor、Expanded、Active、Hover、Displayed、Context Tar
   真实操作能力不足时应依据业务合法目标分组拒绝/禁用，不能假装一组 Git 操作都能批量执行。
   Files 本机多选外拖必须逐项向 Finder 提供 URL，不能只导出被拖行一个文件。
   Dock 内部拖动限同项目同窗口 Move；Option 仍 Move，不新增内容克隆或跨窗口转移后端。
-- **Included（Graph 目标）：** 扩展式 Commit Details、与另一提交的比较意图、
+- **Included（Graph 目标）：** 扩展式 Commit Details、
   分支/远端/标签/Stash/Worktree 独立菜单、父子链键盘导航、
   视觉/图谱身份和刷新恢复的全面行为对照。
   Git Graph 扩展的危险 ref 双击动作与 Bailey 此前“标签单击统一展开”冲突；
   **不得把 checkout/rebase/reset 直接绑到标签双击**。
-  保留多展开与普通方向键仅移动游标；新增普通提交双端比较及修饰键父子导航，
+  保留多展开与普通方向键仅移动游标；新增修饰键父子导航，
   不引入扩展单详情覆盖或其 ref 双击 Checkout。
 - **Preserved：** Bailey 现有固定标签（无自动替换的 preview-tab 生命周期）、
   本机/SSH 工作空间模型、SwiftUI + AppKit + TextKit 2、任意 Dock 工具可停靠、
@@ -156,7 +156,7 @@ Focus、Selection、Anchor、Expanded、Active、Hover、Displayed、Context Tar
 - **P1**：Files 的 Focus/Selection/Anchor、树 identity 与 AX/视觉；修正不连续 Shift 选择。
 - **P2**：Files 打开/预览意图、Dock 编辑器变化的 Explorer Auto Reveal、
   文件菜单/Edit、压缩目录、DnD 和原生 firstResponder。
-- **P3**：SCM Changes 的活动编辑器 Auto Reveal、资源集合/批量操作；History/Git Graph 的提交/比较/上下文、
+- **P3**：SCM Changes 的活动编辑器 Auto Reveal、资源集合/批量操作；History/Git Graph 的提交/上下文、
   拓扑与异步身份，均在现有数据后端上实现。
 - **P4**：Projects、Dock 每组标签多选/Anchor、标签/组拖动、关闭/活动组和 Palette/Tab Switcher；
   核对所有标签切换入口均触发 P2/P3 的一次明确编辑器变化，而非重绘推断。

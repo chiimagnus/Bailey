@@ -55,11 +55,10 @@
 | `src/vs/workbench/browser/parts/editor/editorGroupView.ts`、`editorPart.ts` | setActive 清非活动组多选、setSelection、shouldRestoreFocus；恢复依据原输入是否被布局打断 | P2-T5、P4-T4/T7 |
 | `src/vs/workbench/browser/parts/editor/editorParts.ts` | registerEditorPartListeners、doUpdateMostRecentActive、getPartByDocument；实际焦点、窗口关闭激活与 MRU 分开 | P4-T7 |
 | `src/vs/workbench/browser/parts/editor/editorQuickAccess.ts`、`src/vs/platform/quickinput/browser/quickInputController.ts` | accept 才打开、hide 检查是否已有新输入再恢复；不移植 DOM 焦点链与定时动画 | P4-T3 |
-| 扩展 `web/main.ts` | observeTableEvents/observeKeyboardEvents、requestCommitComparison/getCommitOrder；ref 单击只结束菜单，双击分支会 checkout；提交比较不是普通多选 | P3-T2/T4/T6 |
+| 扩展 `web/main.ts` | observeTableEvents/observeKeyboardEvents、getCommitOrder；ref 单击只结束菜单，双击分支会 checkout；提交游标与展开分别处理 | P3-T2/T4/T6 |
 | 扩展 `web/contextMenu.ts` | show/close/refresh；刷新只在原 index 的 hash/ref 仍匹配时重绑，否则关闭，并不是全表按 hash 搜索恢复 | P2-T3、P3-T6/T7 |
 | 扩展 `web/graph.ts` | loadCommits、第一/替代父子查询；子节点按同分支优先，不是简单取数组邻项 | P3-T4/T5 |
 | 扩展 `web/styles/main.css` | commit:hover/contextMenuActive 与 commitDetailsOpen 的灰底不同；Bailey 明确保留“展开无持续底色” | P1-T4、P3-T5 |
-| 扩展 `src/gitGraphView.ts`、`src/dataSource.ts` | compareCommits 消息到 getCommitComparison，真实双端 name-status/numstat 数据；后端不是仅有详情回调 | P3-T4 |
 
 上游测试核对重点：`src/vs/base/test/browser/ui/list/listWidget.test.ts` 的分页与样式，
 `src/vs/base/test/browser/ui/tree/objectTree.test.ts` 的 identity，
@@ -77,7 +76,7 @@
 | 文件修改/剪贴板/拖动 | `FileTreeNativeDragSurface/FileTreeDrag` → `WorkspaceWindowModel.receiveFileTreeDrop/performFileTreeCommand/performFileOperation` → `WorkspaceApplication.withProtectedFiles` → `FileTreeModel.performFileOperation/rename/commitDraft` → 当前本机或 SSH backend。P2 已移除旧 `makeFileTreeDragProvider`；不得将这条历史入口误作为 P3 兼容代码清理目标 | files、必要 projects/ssh |
 | Finder 投递 | `ContentView` 中 FinderWindowDrop.receive → WorkspaceApplication 的外部请求队列 → WindowModel.openExternalLocalItems → Project.openLocalFile；Files 接收改为 importFromFinder，Ghostty/WebKit 正文不挂通用 Drop | projects、files、dock |
 | Git Changes | `GitPanel.selectedChange` 是游标，`explicitlySelectedChange` 是单资源 Selection，`contextChange` 是右键临时目标，`isDisplayedChange` 另绘灰底；`displayedDiff` 当前取 `Project.selectedTab` 而非真实活动 Dock 组。Stage/Unstage 的 `Entry` 执行前须按当前 Section 重新解析；`PendingDiscard/perform` 与编辑保护继续保障本机/SSH 字节安全 | `docs/features/git.md`、必要 dock/ui/ssh |
-| Graph/历史 Diff | `GitStatusModel.expandedCommitIDs` 通过 `GitPanel` Binding 给 `RecentCommitsView`；Graph 游标与临时菜单留在该 View，目录折叠在 GitStatusModel。Graph/历史文件/refs/stash/worktree → 当前 Git 目标校验 → `Project.openHistoricalDiff` → `DiffTab.Source.commit`/`reload` 的 immutable blobs；T4 新比较必须另行查询两提交净差异，不能直接拼各自提交历史文件 | git、diff、dock；持久化实际变化时 session-restore |
+| Graph/历史 Diff | `GitStatusModel.expandedCommitIDs` 通过 `GitPanel` Binding 给 `RecentCommitsView`；Graph 游标与临时菜单留在该 View，目录折叠在 GitStatusModel。Graph/历史文件/refs/stash/worktree → 当前 Git 目标校验 → `Project.openHistoricalDiff` → `DiffTab.Source.commit`/`reload` 的 immutable blobs | git、diff、dock；持久化实际变化时 session-restore |
 | Dock/关闭 | WorkspaceDockView/DockTabGroupView/WorkspaceChrome → DockWorkspaceModel.select/activate/move/updateLayout/syncTabs → Project.selectTab/closeContent/closeBatch/saveBeforeClosing → 文件保存、Sheet 和受控资源释放 | dock、ui、必要 architecture/settings |
 | Projects | ProjectsPanelView.cursorProjectID/contextProjectID/handleProjectKey → WindowModel.selectedProjectID/close/moveProject → 当前项目与其会话 | projects、dock |
 | 暂态输入 | CommandPaletteView.run/dismiss、TabSwitcherController.cycle/dismiss/handle → WindowModel.toggleCommandPalette/restoreFocusAfterCommandPalette → 当前有效原生输入；Switcher 只提交现存当前项目 | command-palette、dock |
@@ -122,76 +121,69 @@
    不需要重写 Git 服务；循环调用单项会遇到 isBusy，方法返回 void 也不证明完成。
    P3-T3 统一目录/叶子去重、跨 Section 合法目标、单次批量 runner 与实际 index 断言。
 
-6. **High：Graph 比较只有“Compare pair”而没有数据闭环。**
-   某个 commit 的 `files` 是该提交变化，不是任意两个提交的净差异。
-   扩展确有独立 getCommitComparison。P3-T4 加入真实双端查询、NUL/Rename 解析复用、
-   容量/错误、只读 blob、展示位置与方向；不以“不重写 backend”拒绝必要查询。
-   当前 DiffTab.Source.commit 已能承载两端 SHA，先复用，不预建第二个 Diff 引擎。
-   两端 diff 与三点 merge-base diff 的区别见 [Git 官方说明](https://git-scm.com/docs/git-diff)。
-
-7. **Medium：混淆内置 Graph、扩展 Graph 和 Bailey 自有 Worktree。**
-   内置 History 禁多选；扩展是一份详情并支持比较，ref 单击不展开、双击分支会 Checkout；
+6. **Medium：混淆内置 Graph、扩展 Graph 和 Bailey 自有 Worktree。**
+   内置 History 禁多选；扩展主要展示单一详情，ref 单击不展开、双击分支会 Checkout；
    Bailey 是多展开、ref 单击展开、普通箭头仅移动游标。扩展固定版本的 web/src 无 Worktree
    交互实现，不能用它给 Bailey Worktree 菜单背书。P3-T4/T6 已写清采用与不采用的规则。
 
 ### 必须闭合的执行链
 
-8. **High：新增标签多选却仍按普通单项拖放和鼠标松开处理。**
+7. **High：新增标签多选却仍按普通单项拖放和鼠标松开处理。**
    上游 mousedown 保留组选区供拖动，mouseup 才收单选；Bailey Button + DragGesture
    和 DockGroupFocusView.mouseUp 会重复影响激活。
    P4-T4 同时接通事件与批量 Move，删除单项业务旧路；P4-T5 不再是“以后补齐必要安全”。
 
-9. **High：批量 Move 逐项调用 move 会发布中间状态。**
+8. **High：批量 Move 逐项调用 move 会发布中间状态。**
    当前 move 每次 updateLayout 会触发 active/deactivate/snapshot。
    P4-T4/T5 要求一次从旧 root 计算集合移除与插入，正确折算同组 index，最终只发布一次。
    删除 Position.item 的单项假设与重复 gesture，单项也经同一集合实现。
 
-10. **High：批量关闭不能仅复制 Close 菜单。**
+9. **High：批量关闭不能仅复制 Close 菜单。**
     VS Code 的命令上下文、CloseEditorTabAction、关闭按钮与中键都消费组选区。
     Bailey Project.closeBatch 已有保存/顺序 Sheet，取消不回滚已完成项。
     P4-T6 复用该路径并接上工具项，不逐项 fire-and-forget，不先终止 PTY 再发现脏稿保存失败。
 
-11. **Medium：把未来 Copy/跨窗口传输当现成能力。**
+10. **Medium：把未来 Copy/跨窗口传输当现成能力。**
     DockItem 全项目唯一，FileTab 去重，PTY/WebView 没有 Clone；拖动 coordinator 是窗口内手势。
     P4 明确 Move-only，不为理论 Clone 制作接口/权限表/兼容 fallback。
     不能把 Finder 跨窗打开文件的测试当作内部标签跨窗 Move 的通过证据。
 
-12. **High：焦点治理只有口号，没有删掉反向依赖。**
+11. **High：焦点治理只有口号，没有删掉反向依赖。**
     WindowModel.activeTreeResponder 搜全窗口子视图；ownsActiveResponder 识别具体控件、
     几何组和停车容器；各组件又重复判断自动聚焦许可。
     P2-T5 接通现有窗口 owner 与所属适配报告，删被替代的遍历/推断，P4-T7 补完各原生内容。
     布局/挂载时序、field editor、Find/IME 是真实责任，不可把所有 async/@FocusState 当垃圾删掉。
 
-13. **Medium：本机多选内部拖动不等于完整对外导出。**
+12. **Medium：本机多选内部拖动不等于完整对外导出。**
     makeFileTreeDragProvider 的私有记录含 paths，但公开仅注册 item.path 一个 NSURL。
     P2-T4 明确本机逐项 NSDraggingItem，SSH 只私有数据，私有 Drop 不降级 Finder。
     本机 SDK 的 NSView.h 已核对：event overload 自 macOS 10.7 可用，gesture overload 仅 27.0。
     使用 [原生多项拖动 API](https://developer.apple.com/documentation/appkit/nsview/begindraggingsession(with:event:source:))，
     不抬最低版本、不再建另一条 Copy/Move 后端。
 
-14. **Medium：菜单生命周期安全不能晚于新目标解析。**
+13. **Medium：菜单生命周期安全不能晚于新目标解析。**
     ContextMenuClickView 接收下一次 begin-tracking 通知，Files/Dock 回调再核对菜单项。
     P2-T2 在同任务绑定本次合法菜单、动作一次与清理；P2-T3 只做真实事件/蜂鸣/反馈补验。
     当前生产缺陷是否实际发生仍须 Dev 复现，不沿用已删除计划的结论。
 
-15. **Medium：Switcher 的旧 Project 检查不足。**
+14. **Medium：Switcher 的旧 Project 检查不足。**
     dismiss 检查原 Project.selectedTabID，却不检查它是否仍为窗口当前项目；
     selectedProjectID.didSet 当前没有 cancel Switcher。同窗口切项目后 Control 释放可改旧项目 MRU。
     P4-T3 把取消接到现有显式切换/关闭动作，不加新的 request generation。
 
-16. **Medium：验证/命令/交付说法漂移。**
+15. **Medium：验证/命令/交付说法漂移。**
     当前 UI 夹具入口是 WorkspaceUITestSupport.launch(in:project:)，不是假设的统一
     WorkspaceUITestFixture；Graph 自身不横滚，仅长文本横滚；历史分页每页 30；
     DockFocusIntegrationTests 是实际存在的原生焦点宿主类。
     P5 不机械为所有数据组合复制 GUI，Dev 测试不代替之后正式构建/整包安装。
     原计划中的历史 Red 数字移除，所有 runtime 结果重新取得。
 
-17. **Medium：26 个任务链接只有短 fragment，却没有对应真实锚点。**
+16. **Medium：26 个任务链接只有短 fragment，却没有对应真实锚点。**
     `todo.toml` 指向 `#p1-t1` 等短 ID，而原 Markdown 标题还带完整任务名。
     只跑 todo validate 不会发现这种浏览导航缺陷。现为全部任务增加显式 ID，
     并单独校验 task、文件、短锚点和唯一标题的一一对应。
 
-18. **Medium：将语义分开误写成禁止派生，或暗示 Bailey 尚未区分状态。**
+17. **Medium：将语义分开误写成禁止派生，或暗示 Bailey 尚未区分状态。**
     八类概念是分析词汇，不是 VS Code 官方统一状态模型；List 的三个 Trait、Tree 的展开、
     编辑器组状态和菜单上下文分别有自己的实现。固定版本 `editorGroupModel.ts` 的
     `active` getter 直接返回 `selection[0]`，`doSetSelection` 同时维护 active 与 selected；
@@ -203,7 +195,7 @@
     P4 保留 Displayed 与 Selection 的约束，P5 不以“八字段齐全”验收。
     新增多选只落在 Changes/Dock，不扩成 Projects/Graph 的通用集合；菜单期清底色保持现行约定。
 
-19. **High：漏掉活动编辑器变化触发 Explorer/SCM Auto Reveal。**
+18. **High：漏掉活动编辑器变化触发 Explorer/SCM Auto Reveal。**
     上游固定提交 `explorerView.ts:381-384,486-499` 订阅 `onDidActiveEditorChange`，
     `selectResource:909-969` 在父目录展开后同时更新 Focus/Selection；
     `files.contribution.ts:444-453` 的 `explorer.autoReveal` 默认 true。
@@ -230,7 +222,7 @@
 | P2-T4 | `.onDrag` 单 provider 的旧导出实现；第二条拖动触发路线 | 私有 token/project/window/connection/nonce、源目标边界和不可覆盖发布 |
 | P2-T5 | 全窗口查找 TreeKeyboardView、窗口识别下层具体控件和几何归属的旧恢复路径 | 组件真实挂载/执行结果、当前 key window、Palette/Sheet/field editor 优先 |
 | P3-T1/T3 | explicitlySelectedChange 单对象字段及其全部读写；单/多选两套动作解析 | Section/Repo/机器身份、冲突与 Discard 指纹、runner 互斥 |
-| P3-T4 | 仅为 Stash 命名但被通用化的旧解析名与 alias；猜测比较的 onChange | 历史只读、两端完整 SHA、UTF-8/容量与过期请求拒绝 |
+| P3-T4 | 过期的点击状态分支与重复目标恢复 | 历史只读、父子提交 SHA、原生焦点与过期历史拒绝 |
 | P3-T5/T6/T7 | 重复条件色、已替代菜单转发、按数组位置恢复业务身份的路径 | 有效 ref/HEAD/stash selector/Worktree 校验及失败旧数据显示 |
 | P4-T1/T2 | View 中双重 dock.select/project.selectTab；模型不变量成立后删 selected 的 View fallback；运行配置中静默吞 info 名字的旧分支 | 现有配置无效处理与其它偏好；已写入快照的最小解码保护 |
 | P4-T3 | 旧项目仍可提交的 Switcher 路径、重复恢复逻辑 | 暂态预览、现有 MRU、Control 松开才提交、IME 输入 |
@@ -268,7 +260,7 @@
 | 单击 preserveFocus / 双击显式进入 | 保留 Bailey Browse/Open，无自动替换 preview-tab 生命周期 |
 | Explorer 文件剪贴板与其它配置 | 保留现有私有剪贴板+字符串及项目/连接范围；富类型测试指无损保护系统剪贴板，不冒称已支持 Finder 文件 Paste；不新增多选修饰键设置、Tree type-ahead 或工作区文件操作 Undo 服务 |
 | SCM 多选目录/资源和合法批量动作 | 采用；连接现有真实 Git runner，不造后端 |
-| Graph 详情/比较/父子 | 新增双端比较与修饰导航；保留多展开/普通方向键仅移动游标 |
+| Graph 详情/父子 | 保留多展开/普通方向键仅移动游标，新增修饰键沿 DAG 父子导航 |
 | Graph ref 双击 checkout | 不采用；保留显式菜单/原生确认 |
 | Worktree 与十二主题色槽 | Bailey 自有契约，不伪称来自扩展或内置五色注册 |
 | 标签 multi-selection 与批量 Close/Move | 采用；活动组/展示/实际输入独立，同组/同窗 Move-only |
@@ -298,12 +290,12 @@ Git Graph 扩展的 LICENSE 含不授予衍生作品发布/分发许可的限制
 | 压缩/共享使用方 | Files、Changes/staged/merge、历史文件；a/b/c 每段、留白、twistie、独立按钮、文字横滚与拖动 | 实际路径、正确展开、按钮不触发行事件、历史/Changes AX 不串线 |
 | 文件副作用 | Copy/Cut/Paste/Move/Delete/New/Rename；父子重叠集合；同目录复制名序号；源/目标缺失、同名、软链/硬链、根外、权限失败、部分成功 | 磁盘字节/路径、防覆盖、未成功源保留、跨窗 File/Diff 路径与脏稿 |
 | Git Changes | unborn/正常/detached；A/M/D/R/C/conflict/untracked/intent-to-add；同路径分两 Section；目录+叶子/过滤隐藏/跨 Section | 真实 index stages/bytes、HEAD、不相关文件不变；合法子集结果可说明 |
-| Graph/比较 | 根/线性/分叉/双父/octopus/缺失父/不相关两端；完整 SHA-1/SHA-256；同树空差异、A/D/R/C/T、binary/UTF-8 错误、单侧缺失 | 两端净差异与 blob，不误用首父或 merge-base，不写 HEAD/index |
+| Graph/导航 | 根/线性/分叉/双父/octopus/缺失父、真实提交与 Stash/Worktree；完整 SHA-1/SHA-256、跨屏滚动与已展开详情 | 游标指向有效可见节点，展开目标并滚动可见，不写 HEAD/index |
 | Refs/特殊节点 | 本地/远端/别名/tag/annotated tag、同 SHA 多 refs；Stash 同 OID 不同 selector；Worktree 多路径/同 HEAD/移除/锁定/未提交 | 原生菜单目标、真实 refs/reflog/worktree 结果；无 ref 双击危险副作用 |
 | Dock 多选/Move | 0/1/2/30+ 项、混合六类内容、1/2/3+ 组；同组前后/中间/选区内部/四边；整组/最后项/空组/无目标；取消/重复 drop/源组失效 | 一次最终布局、顺序/唯一身份/Selection、正确活动组；Move-only 不复制/跨窗转移 |
 | 批量关闭 | 单项/集合内外；clean/dirty/正在保存；Save/Don't Save/Cancel/保存失败；file/diff/PTY/browser/tool 混合 | 顺序确认、取消即停、失败缓冲保留、未确认资源未释放、已完成项不伪回滚 |
 | 暂态输入 | Palette 空/非空/无结果/50 结果边界、慢索引/目标改变；Switcher 空/1/N/目标删除/切项目/按住 Control/取消/失去 key | 不提前改真实显示或组选区；提交属于当前窗口项目；恢复不抢已有新输入 |
-| 并发/刷新 | provider 晚到、乱序 Git/Files/比较结果、菜单中刷新、分页、快速三目标切换、关闭与重新挂载 | 只接受当前 owner 的有效结果，失效不跨机器回退，状态与已开 Diff 不串线 |
+| 并发/刷新 | provider 晚到、乱序 Git/Files/历史结果、菜单中刷新、分页、快速三目标切换、关闭与重新挂载 | 只接受当前 owner 的有效结果，失效不跨机器回退，状态与已开 Diff 不串线 |
 
 ### 环境、呈现与原生结果
 
@@ -329,7 +321,7 @@ Git Graph 扩展的 LICENSE 含不授予衍生作品发布/分发许可的限制
 组合要求：有限可承受的组合尽可能跑尽；规模大时先确保每个取值、极值和已知故障都覆盖，
 再系统扩展两两/多因素组合。不以“风险驱动抽样”删除本可执行的单项。
 重点交互包括多岛+菜单+刷新、目录多选+filter+Stage、脏稿+批量关闭+切窗、
-多选 Move+整组边缘+原生停车、比较晚到+SSH 重连、Palette 关闭+目标重挂载。
+多选 Move+整组边缘+原生停车、历史分页晚到+SSH 重连、Palette 关闭+目标重挂载。
 
 ### 既有测试与执行入口
 

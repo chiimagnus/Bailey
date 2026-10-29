@@ -76,17 +76,6 @@ struct RecentCommitsView: View {
     @State private var keyboardFocused = false
     @State private var selectedRowID: String?
     @State private var contextRowID: String?
-    @State private var lastActivatedCommit: String?
-    @State private var comparison: Comparison?
-
-    private struct Comparison {
-        let anchor: String
-        let older: String
-        let newer: String
-        let requestID: UUID
-        var result: GitStatusModel.CommitComparisonResult?
-    }
-
     @Environment(\.controlActiveState) private var controlActiveState
 
     private let providedKeyboardOwner: TreeKeyboardOwner?
@@ -123,8 +112,6 @@ struct RecentCommitsView: View {
     let isLoadingMore: Bool
     let loadMore: () -> Bool
     let openDiff: (Commit, Commit.FileChange) -> Void
-    let compareCommits: (String, String) async -> GitStatusModel.CommitComparisonResult
-    let openComparedFile: (String, String, Commit.FileChange) -> Void
     let canSwitchBranch: Bool
     let switchBranch: (String, String) -> Void
     let branchAction: (Reference, Commit, BranchAction) -> Void
@@ -164,8 +151,6 @@ struct RecentCommitsView: View {
         isLoadingMore: Bool,
         loadMore: @escaping () -> Bool,
         openDiff: @escaping (Commit, Commit.FileChange) -> Void,
-        compareCommits: @escaping (String, String) async -> GitStatusModel.CommitComparisonResult,
-        openComparedFile: @escaping (String, String, Commit.FileChange) -> Void,
         canSwitchBranch: Bool,
         switchBranch: @escaping (String, String) -> Void,
         branchAction: @escaping (Reference, Commit, BranchAction) -> Void,
@@ -209,8 +194,6 @@ struct RecentCommitsView: View {
         self.isLoadingMore = isLoadingMore
         self.loadMore = loadMore
         self.openDiff = openDiff
-        self.compareCommits = compareCommits
-        self.openComparedFile = openComparedFile
         self.canSwitchBranch = canSwitchBranch
         self.switchBranch = switchBranch
         self.branchAction = branchAction
@@ -257,12 +240,6 @@ struct RecentCommitsView: View {
                               inHeadHistory: graph.knownHeadHistory.contains(commit.hash))
                         .id(commitRowID(commit))
                     if expanded {
-                        if let comparison, comparison.anchor == commit.hash,
-                           commit.stash == nil, commit.worktree == nil {
-                            comparisonDetails(comparison,
-                                rails: graph.rows[index].bottomRails,
-                                gutter: gutter, spacing: spacing)
-                        }
                         if let worktree = commit.worktree {
                             worktreeFiles(worktree, commit: commit,
                                           rails: graph.rows[index].bottomRails,
@@ -314,23 +291,10 @@ struct RecentCommitsView: View {
         .onChange(of: repoRoot) { _, _ in
             selectedRowID = nil
             contextRowID = nil
-            clearComparison()
         }
         .onChange(of: selectionScope) { _, _ in
             selectedRowID = nil
             contextRowID = nil
-            clearComparison()
-        }
-        .onDisappear { clearComparison() }
-        .onChange(of: commits.map(\.id)) { _, ids in
-            if let comparison,
-               (!ids.contains(comparison.anchor) || !ids.contains(comparison.older)
-                || !ids.contains(comparison.newer)) {
-                clearComparison()
-            }
-            if let lastActivatedCommit, !ids.contains(lastActivatedCommit) {
-                self.lastActivatedCommit = nil
-            }
         }
         .onChange(of: keyboardRows.map(\.id)) { _, ids in
             if let contextRowID, !ids.contains(contextRowID) {
@@ -358,7 +322,6 @@ struct RecentCommitsView: View {
         case commit(Commit)
         case folder(String)
         case historicalFile(Commit, Commit.FileChange)
-        case comparedFile(String, String, Commit.FileChange)
         case worktreeFile(GitStatusModel.WorktreeChanges, GitStatusModel.Entry, Bool)
     }
 
@@ -388,10 +351,6 @@ struct RecentCommitsView: View {
         commitRowID(commit) + "\u{0}worktree\u{0}" + section + "\u{0}" + path
     }
 
-    private func comparedFileRowID(_ comparison: Comparison, file: Commit.FileChange) -> String {
-        "compare:\(selectionScope)\u{0}\(repoRoot)\u{0}\(comparison.older)\u{0}\(comparison.newer)\u{0}\(file.id)"
-    }
-
     private var keyboardRows: [NavigationRow] {
         var rows: [NavigationRow] = []
         for commit in commits {
@@ -401,15 +360,6 @@ struct RecentCommitsView: View {
                 isExpandable: true, isExpanded: expandedCommitIDs.contains(commit.id)
             ))
             guard expandedCommitIDs.contains(commit.id) else { continue }
-            if let comparison, comparison.anchor == commit.hash,
-               case .loaded(let files) = comparison.result {
-                for file in files {
-                    rows.append(NavigationRow(
-                        id: comparedFileRowID(comparison, file: file), parent: id,
-                        action: .comparedFile(comparison.older, comparison.newer, file)
-                    ))
-                }
-            }
             if let worktree = commit.worktree {
                 appendWorktreeNavigation(worktree, commit: commit, to: &rows)
             } else if let stash = commit.stash {
@@ -568,13 +518,11 @@ struct RecentCommitsView: View {
     private func activate(_ action: NavigationAction) {
         switch action {
         case .commit(let commit):
-            toggle(commit, pointer: false)
+            toggle(commit)
         case .folder(let key):
             toggleFolder(key)
         case .historicalFile(let commit, let file):
             openDiff(commit, file)
-        case .comparedFile(let older, let newer, let file):
-            openComparedFile(older, newer, file)
         case .worktreeFile(let worktree, let entry, let staged):
             openWorktreeDiff(worktree, entry, staged)
         }
@@ -662,43 +610,7 @@ struct RecentCommitsView: View {
         return ordered.dropFirst(alternate ? 1 : 0).first
     }
 
-    private func clearComparison() {
-        comparison = nil
-        lastActivatedCommit = nil
-    }
-
-    private func toggle(_ commit: Commit, pointer: Bool = true) {
-        let ordinary = commit.stash == nil && commit.worktree == nil
-        if pointer && ordinary {
-            if NSApp.currentEvent?.modifierFlags.contains(.command) == true,
-               let anchor = lastActivatedCommit, anchor != commit.hash,
-               let first = commits.firstIndex(where: { $0.hash == anchor && $0.stash == nil && $0.worktree == nil }),
-               let second = commits.firstIndex(where: { $0.hash == commit.hash && $0.stash == nil && $0.worktree == nil }) {
-                let older = first > second ? anchor : commit.hash
-                let newer = first > second ? commit.hash : anchor
-                if comparison?.older == older && comparison?.newer == newer {
-                    comparison = nil
-                } else {
-                    let requestID = UUID()
-                    comparison = Comparison(
-                        anchor: anchor, older: older, newer: newer, requestID: requestID
-                    )
-                    if expandedCommitIDs.insert(anchor).inserted,
-                       let original = commits.first(where: { $0.hash == anchor }) {
-                        loadBinaryStatus(original)
-                    }
-                    Task {
-                        let result = await compareCommits(older, newer)
-                        guard comparison?.requestID == requestID,
-                              commits.contains(where: { $0.hash == older }),
-                              commits.contains(where: { $0.hash == newer }) else { return }
-                        comparison?.result = result
-                    }
-                }
-                return
-            }
-            lastActivatedCommit = commit.hash
-        }
+    private func toggle(_ commit: Commit) {
         selectRow(commitRowID(commit))
         if !expandedCommitIDs.insert(commit.id).inserted {
             expandedCommitIDs.remove(commit.id)
@@ -1469,84 +1381,6 @@ struct RecentCommitsView: View {
             }
             Button(String(localized: "Copy Relative Path", table: "Git")) {
                 copy(entry.path)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func comparisonDetails(
-        _ value: Comparison, rails: [CommitGraphLayout.Rail], gutter: CGFloat,
-        spacing: CGFloat
-    ) -> some View {
-        let inset = gutter + 8 * fontScale
-        TreeRowSurface(depth: 0, scale: fontScale, hoverEnabled: false,
-                       leadingInset: inset) { _, layout in
-            VStack(alignment: .leading, spacing: 4 * fontScale) {
-                HStack {
-                    Text(String(localized: "Compare Commits", table: "Git"))
-                        .font(.system(size: 10 * fontScale, weight: .semibold))
-                    Spacer()
-                    Button(String(localized: "Close Comparison", table: "Git")) {
-                        comparison = nil
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 10 * fontScale))
-                    .accessibilityIdentifier("bailey.git.compare.close")
-                }
-                Text(verbatim: String(value.older.prefix(12)) + " → "
-                     + String(value.newer.prefix(12)))
-                    .font(.system(size: 9 * fontScale, design: .monospaced))
-                    .foregroundStyle(graphSecondaryText)
-                    .lineLimit(1)
-                    .help(value.older + " → " + value.newer)
-                    .accessibilityValue(value.older + " → " + value.newer)
-                    .accessibilityIdentifier("bailey.git.compare.endpoints")
-            }
-            .modifier(layout)
-        }
-        .background { fileRails(rails, spacing: spacing) }
-        switch value.result {
-        case .none:
-            stashDetailPlaceholder(String(localized: "Loading commit changes…", table: "Git"),
-                                   rails: rails, gutter: gutter, spacing: spacing)
-        case .failed(let message):
-            stashDetailPlaceholder(message, rails: rails, gutter: gutter, spacing: spacing)
-        case .loaded(let files):
-            if files.isEmpty {
-                stashDetailPlaceholder(String(localized: "No changed files", table: "Git"),
-                                       rails: rails, gutter: gutter, spacing: spacing)
-            }
-            ForEach(files) { file in
-                let id = comparedFileRowID(value, file: file)
-                let opened = displayedDiff?.repoRoot == repoRoot
-                    && displayedDiff?.path == file.path
-                    && displayedDiff?.source == .commit(
-                        hash: value.newer, parent: value.older, status: String(file.status)
-                    )
-                TreeFileRow(
-                    row: displayRow(file), scale: fontScale,
-                    directory: file.directory, displayed: opened,
-                    focusRing: isFocusedRow(id), contextRing: contextRowID == id,
-                    leadingInset: inset,
-                    accessibilityHint: String(localized: "Opens changes", table: "Sidebar"),
-                    accessibilityID: "bailey.git.compare.file",
-                    open: {
-                        selectRow(id)
-                        openComparedFile(value.older, value.newer, file)
-                    }
-                ) { _ in EmptyView() }
-                .id(id)
-                .background { fileRails(rails, spacing: spacing) }
-                .background { contextTarget(for: id) }
-                .contextMenu {
-                    Button(String(localized: "Open Historical Diff", table: "Git")) {
-                        openComparedFile(value.older, value.newer, file)
-                    }
-                    Divider()
-                    Button(String(localized: "Copy Relative Path", table: "Git")) {
-                        copy(file.path)
-                    }
-                }
             }
         }
     }

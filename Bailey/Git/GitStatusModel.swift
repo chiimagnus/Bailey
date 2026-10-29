@@ -579,62 +579,6 @@ final class GitStatusModel {
         case failed(String)
     }
 
-    nonisolated enum CommitComparisonResult: Equatable, Sendable {
-        case loaded([RecentCommit.FileChange])
-        case failed(String)
-    }
-
-    /// Reads a literal two-endpoint commit diff, never a merge-base or working-tree diff.
-    /// The current window, repository, HEAD and loaded commit identities must stay stable.
-    func compareCommits(from older: String, to newer: String) async -> CommitComparisonResult {
-        let stale = String(localized: "The Git action target changed. Reopen the menu and try again.", table: "Git")
-        let failure = String(localized: "Unable to read commit changes", table: "Git")
-        let validOID: (String) -> Bool = { hash in
-            (hash.count == 40 || hash.count == 64) && hash.allSatisfy(\.isHexDigit)
-        }
-        let known: (String) -> Bool = { hash in
-            self.recentCommits.contains {
-                $0.hash == hash && $0.stash == nil && $0.worktree == nil
-            }
-        }
-        guard isRepo, canUseCurrentHistory, older != newer,
-              validOID(older), validOID(newer), older.count == newer.count,
-              known(older), known(newer) else { return .failed(stale) }
-        let target = actionTarget()
-        let root = repoRoot
-        let selectedBackend = backend
-        let limit = 2 << 20
-        let result = await Task.detached(priority: .utility) {
-            for oid in [older, newer] {
-                let object = await GitCommandExecution.runData(
-                    ["cat-file", "-t", oid], in: root, timeout: 15,
-                    stdoutLimit: 32, backend: selectedBackend
-                )
-                guard object.status == 0,
-                      object.stdout == Data("commit\n".utf8) else {
-                    return CommitComparisonResult.failed(object.stderr.isEmpty ? failure : object.stderr)
-                }
-            }
-            let output = await GitCommandExecution.runData(
-                ["diff", "--name-status", "-z", "--find-renames", "--no-ext-diff",
-                 older, newer, "--"], in: root, timeout: 20,
-                stdoutLimit: limit + 1, backend: selectedBackend
-            )
-            guard output.status == 0 else {
-                return CommitComparisonResult.failed(output.stderr.isEmpty ? failure : output.stderr)
-            }
-            guard output.stdout.count <= limit,
-                  let files = Self.parseGitFileChanges(output.stdout) else {
-                return CommitComparisonResult.failed(failure)
-            }
-            return CommitComparisonResult.loaded(files)
-        }.value
-        guard isCurrent(target), canUseCurrentHistory, known(older), known(newer) else {
-            return .failed(stale)
-        }
-        return result
-    }
-
     private(set) var stashFilesByOID: [String: StashFilesState] = [:]
     var graphCommits: [RecentCommit] {
         Self.graphCommits(
