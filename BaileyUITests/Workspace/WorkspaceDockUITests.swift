@@ -3,6 +3,89 @@ import XCTest
 
 @MainActor
 final class WorkspaceDockUITests: XCTestCase {
+    func testDockCommandAndShiftTabSelectionHasNativeAccessibilityState() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let files = try (0..<3).map {
+            try fixture.file("tab-\($0).txt", text: "original \($0)\n")
+        }
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root
+        )
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        let opened = expectation(description: "Open three tabs in a single real Dock")
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.open(files, withApplicationAt: bundle, configuration: configuration) {
+            _, error in
+            XCTAssertNil(error)
+            opened.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 20), .completed)
+        let window = app.windows.firstMatch
+        let tabs = files.map { WorkspaceUITestSupport.fileTab($0, in: window) }
+        for tab in tabs { XCTAssertTrue(tab.waitForExistence(timeout: 15)) }
+
+        tabs[0].click()
+        XCTAssertTrue(tabs[0].isSelected)
+        XCUIElement.perform(withKeyModifiers: .command) { tabs[2].click() }
+        XCTAssertTrue(tabs[0].isSelected,
+                      "Command-click must keep the previously selected tab in the same group")
+        XCTAssertFalse(tabs[1].isSelected)
+        XCTAssertTrue(tabs[2].isSelected)
+
+        XCUIElement.perform(withKeyModifiers: .shift) { tabs[1].click() }
+        XCTAssertTrue(tabs[0].isSelected)
+        XCTAssertTrue(tabs[1].isSelected)
+        XCTAssertTrue(tabs[2].isSelected)
+        tabs[1].click()
+        XCTAssertFalse(tabs[0].isSelected, "Ordinary release must collapse the selected set")
+        XCTAssertTrue(tabs[1].isSelected)
+        XCTAssertFalse(tabs[2].isSelected)
+        for (index, file) in files.enumerated() {
+            XCTAssertEqual(try Data(contentsOf: file), Data("original \(index)\n".utf8))
+        }
+    }
+
+    func testDockCommandSelectedTabsCloseTogetherWithoutClosingUnselectedFiles() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let files = try (0..<3).map {
+            try fixture.file("close-\($0).swift", text: "let value = \($0)\n")
+        }
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root
+        )
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        let opened = expectation(description: "Open three isolated file tabs")
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.open(files, withApplicationAt: bundle, configuration: config) {
+            _, error in
+            XCTAssertNil(error)
+            opened.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 20), .completed)
+        let window = app.windows.firstMatch
+        let tabs = files.map { WorkspaceUITestSupport.fileTab($0, in: window) }
+        for tab in tabs { XCTAssertTrue(tab.waitForExistence(timeout: 15)) }
+
+        tabs[0].click()
+        XCUIElement.perform(withKeyModifiers: .command) { tabs[2].click() }
+        XCTAssertTrue(tabs[0].isSelected && tabs[2].isSelected)
+        XCTAssertFalse(tabs[1].isSelected)
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(tabs[0].waitForNonExistence(timeout: 15))
+        XCTAssertTrue(tabs[2].waitForNonExistence(timeout: 15))
+        XCTAssertTrue(tabs[1].exists,
+                      "Closing a multi-selection must leave unselected tabs open")
+        XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.files", in: app).exists,
+                      "Closing work tabs must not remove the Files tool")
+        for (index, file) in files.enumerated() {
+            XCTAssertEqual(try Data(contentsOf: file), Data("let value = \(index)\n".utf8))
+        }
+    }
+
     func testDockFileTabSwitchRevealsOneSelectedExplorerRow() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("one.swift", text: "let one = 1\n")
