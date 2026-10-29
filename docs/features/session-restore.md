@@ -64,7 +64,9 @@ Finder／Dock 的外部打开请求不是工作区快照。
 
 `BaileyInstanceMode` 识别 `--isolated-ui-test` **或**有效 UUID 的 `BAILEY_UI_TEST_RUN_ID` 环境变量。
 隔离进程以专用 UserDefaults suite 保存窗口快照，并使用临时终端历史；
-不读取正式 Bailey 的窗口，也不启动已保存隧道。
+仅测试模式禁用 SwiftUI 自带的系统场景恢复，避免不同测试启动时重复开窗。
+Bailey 自有的窗口快照恢复仍可测试；正常应用的系统场景行为保持不变。
+隔离实例不读取正式 Bailey 的窗口，也不启动已保存隧道。
 
 刻意测试跨进程恢复时，两次启动传入同一有效 UUID。
 Makefile 的 XCTest 和 `Bailey-UI` 测试已固定使用 `chiimagnus.bailey.dev`，并与正式 Bailey 分开配置、

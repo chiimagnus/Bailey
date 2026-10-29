@@ -224,8 +224,9 @@ open -n -a "$PWD/build/DerivedData-Dev/Build/Products/Debug/Bailey Dev.app" --ar
 ```
 
 该模式为每个进程使用独立 UUID 快照和临时终端历史，不加载其他测试实例的项目，不启动已保存隧道。
-Xcode 27.2 的 XCUITest 有时只启动 Dev 进程而不显示初始 `WindowGroup`，
-共用启动辅助函数在窗口缺失时使用已有的 `⌘⇧N` 命令创建窗口；
+仅隔离测试模式禁用 SwiftUI 系统场景恢复，防止继承上一轮测试的窗口；
+正常应用的窗口恢复不变。Xcode 27.2 的 XCUITest 有时只启动 Dev 进程而不显示初始 `WindowGroup`，
+共用启动辅助函数在窗口缺失时用现有 `⌘⇧N` 创建首窗，并断言启动后恰好一个窗口；
 不得改为 `open -n` 后按 Bundle ID 附着（可能另起非隔离 Dev，污染普通会话快照）。
 **开发版与正式版拥有不同 Bundle ID、配置路径和 DerivedData**，XCUITest 仅定位 Bailey Dev；
 正式版运行时也可执行宿主测试，无须强制退出用户 App。`make build:ui` 只编译。
