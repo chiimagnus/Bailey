@@ -104,7 +104,7 @@ final class GitWorkspaceActionTests: XCTestCase {
         XCTAssertEqual(model.branch, "other")
         XCTAssertTrue(model.changedEntries.contains { $0.path == old.path })
 
-        model.stage(old)
+        model.stageEntries([old])
         try await settle()
         XCTAssertTrue(try git(["diff", "--cached", "--name-only"]).isEmpty,
             "A stale row must not stage another branch's file content")

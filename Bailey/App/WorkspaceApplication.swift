@@ -178,6 +178,99 @@ final class WorkspaceApplication {
         return LocalPathScope.contains(candidate, in: source)
     }
 
+    /// Only editable resources in the actual Git repository can be saved or reloaded.
+    private func gitContents(
+        repository: String, scope: String, affectedPaths: [String]? = nil
+    ) -> [PaneContent] {
+        let workspace = scope == "local" ? nil : scope
+        return windows.flatMap(\.projects).flatMap(\.tabs).compactMap { tab in
+            switch tab.content {
+            case .file(let file):
+                guard file.workspaceIdentity == workspace,
+                      matchesFile(file.path, inside: repository, workspace: workspace)
+                else { return nil }
+            case .diff(let diff):
+                guard diff.workspaceIdentity == workspace,
+                      diff.repoRoot == repository,
+                      diff.source == .worktree || diff.source == .staged else { return nil }
+            case .session, .browser:
+                return nil
+            }
+            if let affectedPaths {
+                let path: String?
+                if case .diff(let diff) = tab.content, diff.source == .staged {
+                    path = (diff.repoRoot as NSString).appendingPathComponent(diff.path)
+                } else {
+                    path = fileLocation(tab.content)?.path
+                }
+                guard let path, affectedPaths.contains(where: {
+                    matchesFile(path, inside: $0, workspace: workspace)
+                }) else { return nil }
+            }
+            return tab.content
+        }
+    }
+
+    private func ensureDistinctDirtyFiles(_ affected: [PaneContent], workspace: String?) throws {
+        var dirtyPaths = Set<String>()
+        for content in affected where content.isDirty {
+            guard let location = fileLocation(content) else { continue }
+            let path = workspace == nil
+                ? LocalPathScope.resolvedPath(location.path)
+                : location.path
+            guard dirtyPaths.insert(path).inserted else {
+                throw NSError(domain: "Bailey.Files", code: 2, userInfo: [
+                    NSLocalizedDescriptionKey: String(
+                        localized: "Two open editors have unsaved changes to the same file.",
+                        table: "Workspace")
+                ])
+            }
+        }
+    }
+
+    /// Save every registered editor affected by a Git worktree mutation.
+    func saveBeforeGitAction(
+        repository: String, scope: String, isCurrent: () -> Bool
+    ) async -> Bool {
+        let contents = gitContents(repository: repository, scope: scope)
+        do {
+            try ensureDistinctDirtyFiles(contents, workspace: scope == "local" ? nil : scope)
+        } catch {
+            return false
+        }
+        for content in contents {
+            guard isCurrent() else { return false }
+            await content.save()
+            guard isCurrent(), !content.isDirty else { return false }
+        }
+        return isCurrent() && canRunGitAction(repository: repository, scope: scope)
+    }
+
+    func canRunGitAction(
+        repository: String, scope: String, affectedPaths: [String]? = nil
+    ) -> Bool {
+        gitContents(repository: repository, scope: scope, affectedPaths: affectedPaths).allSatisfy {
+            guard !$0.isDirty else { return false }
+            switch $0 {
+            case .file(let file): return !file.isSaving
+            case .diff(let diff): return !diff.isSaving
+            case .session, .browser: return true
+            }
+        }
+    }
+
+    func reloadAfterGitAction(
+        repository: String, scope: String, affectedPaths: [String]? = nil
+    ) {
+        for content in gitContents(repository: repository, scope: scope, affectedPaths: affectedPaths) {
+            switch content {
+            case .file(let file): file.reloadFromDiskIfClean()
+            case .diff(let diff): diff.reload(afterGitAction: true)
+            case .session, .browser: break
+            }
+        }
+    }
+
     /// Coordinate file and editable worktree diff tabs across registered windows.
     func withProtectedFiles<Result>(
         paths: [String], workspace: String?,
@@ -192,22 +285,7 @@ final class WorkspaceApplication {
             return content
         }.sorted { $0.id.uuidString < $1.id.uuidString }
 
-        // Two independent dirty editors for the same file cannot both be flushed
-        // without silently replacing one draft with another.
-        var dirtyPaths = Set<String>()
-        for content in affected where content.isDirty {
-            guard let location = fileLocation(content) else { continue }
-            let path = workspace == nil
-                ? LocalPathScope.resolvedPath(location.path)
-                : location.path
-            guard dirtyPaths.insert(path).inserted else {
-                throw NSError(
-                    domain: "Bailey.Files", code: 2,
-                    userInfo: [NSLocalizedDescriptionKey:
-                        String(localized: "Two open editors have unsaved changes to the same file.", table: "Workspace")]
-                )
-            }
-        }
+        try ensureDistinctDirtyFiles(affected, workspace: workspace)
 
         var held: [PaneContent] = []
         for content in affected {

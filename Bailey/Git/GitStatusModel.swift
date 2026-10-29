@@ -66,6 +66,100 @@ final class GitStatusModel {
         }
     }
 
+    /// Window-owned SCM navigation survives a temporarily hidden Git panel.
+    /// Section distinguishes the staged and worktree sides of the same path.
+    nonisolated struct ChangeSelection: Hashable, Sendable {
+        let scope: String
+        let repository: String
+        let section: String
+        let path: String
+    }
+
+    var changeCursor: ChangeSelection?
+    private(set) var selectedChanges: Set<ChangeSelection> = []
+    private(set) var changeAnchor: ChangeSelection?
+    var expandedCommitIDs: Set<String> = []
+
+    /// Git resource selection is independent of the keyboard cursor and Graph disclosure.
+    /// Mouse Shift replaces only the anchor's current contiguous range; other islands survive.
+    func selectChange(
+        _ key: ChangeSelection, visible: [ChangeSelection],
+        extending: Bool = false, toggling: Bool = false
+    ) {
+        guard let end = visible.firstIndex(of: key) else { return }
+        if extending {
+            let anchor = changeAnchor ?? changeCursor ?? key
+            let start = visible.firstIndex(of: anchor) ?? end
+            var lower = start
+            var upper = start
+            while lower > 0 && selectedChanges.contains(visible[lower - 1]) { lower -= 1 }
+            while upper + 1 < visible.count && selectedChanges.contains(visible[upper + 1]) { upper += 1 }
+            selectedChanges.subtract(visible[lower...upper])
+            selectedChanges.formUnion(visible[min(start, end)...max(start, end)])
+            changeAnchor = visible[start]
+        } else if toggling {
+            if !selectedChanges.insert(key).inserted { selectedChanges.remove(key) }
+            changeAnchor = key
+        } else {
+            selectedChanges = [key]
+            changeAnchor = key
+        }
+        changeCursor = key
+    }
+
+    /// Workbench keyboard Shift incrementally expands and contracts; it is not mouse range select.
+    func moveChangeCursor(visible: [ChangeSelection], by delta: Int, extending: Bool = false) {
+        guard !visible.isEmpty else {
+            changeCursor = nil
+            selectedChanges.removeAll()
+            changeAnchor = nil
+            return
+        }
+        let current = changeCursor.flatMap { visible.firstIndex(of: $0) }
+        let start = current ?? (delta >= 0 ? -1 : visible.count)
+        let next = max(0, min(visible.count - 1, start + delta))
+        if extending {
+            if current != next {
+                if selectedChanges.contains(visible[next]) {
+                    if let current { selectedChanges.remove(visible[current]) }
+                } else {
+                    selectedChanges.insert(visible[next])
+                }
+            }
+        } else {
+            changeAnchor = visible[next]
+        }
+        changeCursor = visible[next]
+    }
+
+    func selectAllChanges(visible: [ChangeSelection]) {
+        selectedChanges = Set(visible)
+        changeCursor = visible.first(where: { $0 == changeCursor }) ?? visible.first
+        changeAnchor = nil
+    }
+
+    func clearChangeSelection() {
+        selectedChanges.removeAll()
+        changeAnchor = nil
+    }
+
+    func reconcileChangeSelection(visible: [ChangeSelection]) {
+        let choices = Set(visible)
+        selectedChanges.formIntersection(choices)
+        if let changeAnchor, !choices.contains(changeAnchor) {
+            self.changeAnchor = changeCursor.flatMap { choices.contains($0) ? $0 : nil }
+        }
+        if let changeCursor, !choices.contains(changeCursor) {
+            self.changeCursor = visible.first
+        }
+    }
+
+    private func clearPanelNavigation() {
+        changeCursor = nil
+        clearChangeSelection()
+        expandedCommitIDs.removeAll()
+    }
+
     typealias FileDecoration = TreeDisplayModel.Status
 
     nonisolated enum CommitAction: CaseIterable, Sendable {
@@ -134,10 +228,13 @@ final class GitStatusModel {
     }
 
     func isCurrent(_ target: ActionTarget, requiresStableHead: Bool = true) -> Bool {
-        canUseCurrentStatus && isRepo
-            && target.generation == contextGeneration && target.repository == repoRoot
-            && target.scope == currentScope
+        canUseCurrentStatus && canBrowse(target)
             && (!requiresStableHead || (target.head == headOID && target.branch == branch))
+    }
+
+    func canBrowse(_ target: ActionTarget) -> Bool {
+        isRepo && target.generation == contextGeneration && target.repository == repoRoot
+            && target.scope == currentScope
     }
 
     nonisolated static func dropCommitPossible(
@@ -264,6 +361,7 @@ final class GitStatusModel {
 
             let kind: Kind
             let name: String
+            var objectOID: String? = nil
             var id: String { kind.rawValue + ":" + name }
         }
 
@@ -652,7 +750,11 @@ final class GitStatusModel {
     }
 
     func isCurrent(_ entry: Entry) -> Bool {
-        canUseCurrentStatus && entry.repositoryRoot == repoRoot
+        canUseCurrentStatus && canBrowse(entry)
+    }
+
+    func canBrowse(_ entry: Entry) -> Bool {
+        isRepo && entry.repositoryRoot == repoRoot
             && entry.snapshotGeneration == contextGeneration
             && entry.snapshotBranch == branch && entry.snapshotHeadOID == headOID
     }
@@ -712,10 +814,12 @@ final class GitStatusModel {
         project: Project?, isCurrent: @MainActor (Project) -> Bool
     ) {
         guard let project, isCurrent(project), let context = project.panelContext else {
+            if panelTargetIdentity != nil { clearPanelNavigation() }
             sync(root: "")
             return
         }
         if panelTargetIdentity != context.identity {
+            clearPanelNavigation()
             contextGeneration &+= 1
             stashFilesByOID = [:]
             invalidateStatusRefresh()
@@ -738,6 +842,7 @@ final class GitStatusModel {
             localWatcherPaths = []
         }
         if root != rootPath || workspaceScope != scope {
+            clearPanelNavigation()
             workspaceScope = scope
             contextGeneration &+= 1
             rootPath = root
@@ -877,6 +982,9 @@ final class GitStatusModel {
                   self.contextGeneration == generation,
                   self.statusRequestID == requestID,
                   self.rootPath == root else { return }
+            let phase = self.coreCompletedRequestID == requestID ? "details" : "core"
+            let remote = !(self.backend is LocalWorkspaceBackend)
+            Self.statusLogger.error("refresh watchdog timed out id=\(requestID, privacy: .public) remote=\(remote, privacy: .public) phase=\(phase, privacy: .public)")
             self.statusRequestID &+= 1
             self.isRefreshing = false
             self.isLoadingMoreCommits = false
@@ -1019,7 +1127,7 @@ final class GitStatusModel {
     /// A local item must still exist before opening the file editor. Remote
     /// tabs can be opened while disconnected and will remain read-only.
     func canOpen(_ entry: Entry, isRemote: Bool) -> Bool {
-        guard isCurrent(entry) else { return false }
+        guard canBrowse(entry) else { return false }
         return isRemote || FileManager.default.fileExists(atPath: absolutePath(for: entry))
     }
 
@@ -1157,18 +1265,26 @@ final class GitStatusModel {
             && isCurrent(review.entry) && changedEntries.contains(review.entry)
     }
 
-    private func executeReviewedDiscard(_ reviews: [PendingDiscard]) {
+    private func executeReviewedDiscard(
+        _ reviews: [PendingDiscard],
+        isCurrentTarget: (@MainActor () -> Bool)?,
+        completion: (@MainActor (Bool) -> Void)?
+    ) {
         if reviews.count == 1 {
-            discard(reviews[0].entry)
+            discard(reviews[0].entry, isCurrentTarget: isCurrentTarget, completion: completion)
         } else {
-            discardChanges(reviews.map(\.entry))
+            discardChanges(reviews.map(\.entry), isCurrentTarget: isCurrentTarget, completion: completion)
         }
     }
 
     /// Called on the destructive confirmation button, not on dialog opening.
     @discardableResult
-    func confirmLocalDiscard(_ reviews: [PendingDiscard]) -> Bool {
-        guard backend is LocalWorkspaceBackend, !reviews.isEmpty,
+    func confirmLocalDiscard(
+        _ reviews: [PendingDiscard],
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) -> Bool {
+        guard (isCurrentTarget?() ?? true), backend is LocalWorkspaceBackend, !reviews.isEmpty,
               reviews.allSatisfy(isReviewedDiscardCurrent),
               reviews.allSatisfy({ review in
                   review.fingerprints.allSatisfy { path, fingerprint in
@@ -1176,37 +1292,46 @@ final class GitStatusModel {
                   }
               }) else {
             cancelStaleDiscard()
+            completion?(false)
             return false
         }
-        executeReviewedDiscard(reviews)
+        executeReviewedDiscard(reviews, isCurrentTarget: isCurrentTarget, completion: completion)
         return true
     }
 
-    /// Rechecks both the remote files and their original repository identity
-    /// after each await, then starts the existing Git/Trash operation in place.
+    /// Rechecks remote files and target identity after each await, before any deletion.
     @discardableResult
-    func confirmRemoteDiscard(_ reviews: [PendingDiscard]) async -> Bool {
+    func confirmRemoteDiscard(
+        _ reviews: [PendingDiscard],
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) async -> Bool {
         let selectedBackend = backend
-        guard !(selectedBackend is LocalWorkspaceBackend), !reviews.isEmpty,
+        guard (isCurrentTarget?() ?? true),
+              !(selectedBackend is LocalWorkspaceBackend), !reviews.isEmpty,
               reviews.allSatisfy(isReviewedDiscardCurrent) else {
             cancelStaleDiscard()
+            completion?(false)
             return false
         }
         for review in reviews {
             for (path, fingerprint) in review.fingerprints {
                 guard let current = try? await remoteFingerprint(
                     at: absoluteDiscardPath(path, for: review.entry), backend: selectedBackend
-                ), current == fingerprint, isReviewedDiscardCurrent(review) else {
+                ), current == fingerprint, isReviewedDiscardCurrent(review),
+                      (isCurrentTarget?() ?? true) else {
                     cancelStaleDiscard()
+                    completion?(false)
                     return false
                 }
             }
         }
-        guard reviews.allSatisfy(isReviewedDiscardCurrent) else {
+        guard reviews.allSatisfy(isReviewedDiscardCurrent), (isCurrentTarget?() ?? true) else {
             cancelStaleDiscard()
+            completion?(false)
             return false
         }
-        executeReviewedDiscard(reviews)
+        executeReviewedDiscard(reviews, isCurrentTarget: isCurrentTarget, completion: completion)
         return true
     }
 
@@ -1227,12 +1352,13 @@ final class GitStatusModel {
         }
     }
 
-    func stage(_ entry: Entry) {
-        stageEntries([entry])
-    }
-
     func stageEntries(_ entries: [Entry]) {
-        guard !entries.isEmpty, entries.allSatisfy(validate) else { return }
+        let valid: @MainActor () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return entries.allSatisfy { self.isCurrent($0)
+                && (self.changedEntries.contains($0) || self.mergeEntries.contains($0)) }
+        }
+        guard !entries.isEmpty, entries.allSatisfy(validate), valid() else { return }
         let paths = entries.flatMap { entry in
             [entry.path] + (entry.unstaged == "R" ? entry.origPath.map { [$0] } ?? [] : [])
         }
@@ -1240,27 +1366,28 @@ final class GitStatusModel {
             label: entries.count == 1
                 ? String(localized: "Stage \(entries[0].fileName)", table: "Git")
                 : String(localized: "Stage Changes", table: "Sidebar"),
-            commands: [["--literal-pathspecs", "add", "--"] + paths],
-            requiredStatus: .core, refreshKind: .indexOnly
+            commands: [["--literal-pathspecs", "add", "--"] + Set(paths).sorted()],
+            requiredStatus: .core, refreshKind: .indexOnly, isCurrentTarget: valid
         )
     }
 
-    func unstage(_ entry: Entry) {
-        unstageEntries([entry])
-    }
-
     func unstageEntries(_ entries: [Entry]) {
-        guard !entries.isEmpty, entries.allSatisfy(validate) else { return }
+        let valid: @MainActor () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return entries.allSatisfy { self.isCurrent($0) && self.stagedEntries.contains($0) }
+        }
+        guard !entries.isEmpty, entries.allSatisfy(validate), valid() else { return }
         let paths = entries.flatMap { entry in
             [entry.path] + (entry.staged == "R" ? entry.origPath.map { [$0] } ?? [] : [])
         }
+        let uniquePaths = Set(paths).sorted()
         let args = hasHead
-            ? ["--literal-pathspecs", "restore", "--staged", "--"] + paths
-            : ["--literal-pathspecs", "rm", "--cached", "-f", "--"] + paths
+            ? ["--literal-pathspecs", "restore", "--staged", "--"] + uniquePaths
+            : ["--literal-pathspecs", "rm", "--cached", "-f", "--"] + uniquePaths
         perform(label: entries.count == 1
                 ? String(localized: "Unstage \(entries[0].fileName)", table: "Git")
                 : String(localized: "Unstage Changes", table: "Sidebar"), commands: [args],
-                requiredStatus: .core, refreshKind: .indexOnly)
+                requiredStatus: .core, refreshKind: .indexOnly, isCurrentTarget: valid)
     }
 
     func stageAll() {
@@ -1278,52 +1405,70 @@ final class GitStatusModel {
 
     /// Restores a tracked file from the index, or moves an untracked file to
     /// the Trash. The UI confirms before calling this.
-    func discard(_ entry: Entry) {
-        guard validate(entry) else { return }
+    func discard(
+        _ entry: Entry,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        guard validate(entry), (isCurrentTarget?() ?? true) else {
+            completion?(false)
+            return
+        }
         if entry.isIntentToAdd {
             perform(
                 label: String(localized: "Remove intent-to-add for \(entry.fileName)", table: "Git"),
                 commands: [[
                     "--literal-pathspecs", "rm", "--cached", "-f", "--", entry.path,
-                ]], requiredStatus: .core, completion: { [weak self] success in
-                guard success else { return }
+                ]], requiredStatus: .core, isCurrentTarget: isCurrentTarget, completion: { [weak self] success in
+                guard success else { completion?(false); return }
                 self?.trash(
                     paths: [entry.path],
                     label: String(localized: "Move \(entry.fileName) to Trash", table: "Git"),
-                    completedBefore: String(localized: "Removed the intent-to-add index entry.", table: "Git")
+                    completedBefore: String(localized: "Removed the intent-to-add index entry.", table: "Git"),
+                    isCurrentTarget: isCurrentTarget, completion: completion
                 )
             })
         } else if entry.isUntracked || entry.isWorktreeCopy {
             trash(
                 paths: [entry.path],
-                label: String(localized: "Move \(entry.fileName) to Trash", table: "Git")
+                label: String(localized: "Move \(entry.fileName) to Trash", table: "Git"),
+                isCurrentTarget: isCurrentTarget, completion: completion
             )
         } else if entry.isWorktreeRename, let original = entry.origPath {
             perform(
                 label: String(localized: "Restore \((original as NSString).lastPathComponent)", table: "Git"),
-                commands: [["--literal-pathspecs", "restore", "--worktree", "--", original]], requiredStatus: .core,
+                commands: [["--literal-pathspecs", "restore", "--worktree", "--", original]],
+                requiredStatus: .core, isCurrentTarget: isCurrentTarget,
                 completion: { [weak self] success in
-                guard success else { return }
-                self?.trash(
-                    paths: [entry.path],
-                    label: String(localized: "Move \(entry.fileName) to Trash", table: "Git"),
-                    completedBefore: String(localized: "Restored \((original as NSString).lastPathComponent).", table: "Git")
-                )
-            })
+                    guard success else { completion?(false); return }
+                    self?.trash(
+                        paths: [entry.path],
+                        label: String(localized: "Move \(entry.fileName) to Trash", table: "Git"),
+                        completedBefore: String(localized: "Restored \((original as NSString).lastPathComponent).", table: "Git"),
+                        isCurrentTarget: isCurrentTarget, completion: completion
+                    )
+                }
+            )
         } else {
             perform(
                 label: String(localized: "Discard changes in \(entry.fileName)", table: "Git"),
-                commands: [["--literal-pathspecs", "restore", "--worktree", "--", entry.path]], requiredStatus: .core
+                commands: [["--literal-pathspecs", "restore", "--worktree", "--", entry.path]],
+                requiredStatus: .core, isCurrentTarget: isCurrentTarget, completion: completion
             )
         }
     }
 
     /// Discards only the confirmed snapshot. This prevents new files written
     /// by an agent while the dialog is open from joining a bulk destructive action.
-    func discardChanges(_ entries: [Entry]) {
-        guard !entries.isEmpty else { return }
-        guard entries.allSatisfy(isCurrent) else {
+    func discardChanges(
+        _ entries: [Entry],
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        guard !entries.isEmpty else { completion?(false); return }
+        guard entries.allSatisfy(isCurrent), (isCurrentTarget?() ?? true) else {
             cancelStaleDiscard()
+            completion?(false)
             return
         }
         let intentToAdd = entries.filter(\.isIntentToAdd)
@@ -1343,10 +1488,11 @@ final class GitStatusModel {
                     + intentToAdd.map(\.path)
             )
         }
-        guard !commands.isEmpty || !untracked.isEmpty else { return }
+        guard !commands.isEmpty || !untracked.isEmpty else { completion?(false); return }
 
         if commands.isEmpty {
-            trash(paths: untracked, label: String(localized: "Move untracked files to Trash", table: "Git"))
+            trash(paths: untracked, label: String(localized: "Move untracked files to Trash", table: "Git"),
+                  isCurrentTarget: isCurrentTarget, completion: completion)
         } else {
             var completedSteps: [String] = []
             if !tracked.isEmpty {
@@ -1359,12 +1505,15 @@ final class GitStatusModel {
                     String(localized: "Removed \(intentToAdd.count) intent-to-add index entries.", table: "Git")
                 )
             }
-            perform(label: String(localized: "Discard all changes", table: "Git"), commands: commands, requiredStatus: .core, completion: { [weak self] success in
-                guard success, !untracked.isEmpty else { return }
+            perform(label: String(localized: "Discard all changes", table: "Git"), commands: commands,
+                    requiredStatus: .core, isCurrentTarget: isCurrentTarget,
+                    completion: { [weak self] success in
+                guard success, !untracked.isEmpty else { completion?(success); return }
                 self?.trash(
                     paths: untracked,
                     label: String(localized: "Finish discarding all changes", table: "Git"),
-                    completedBefore: completedSteps.joined(separator: "\n")
+                    completedBefore: completedSteps.joined(separator: "\n"),
+                    isCurrentTarget: isCurrentTarget, completion: completion
                 )
             })
         }
@@ -1516,7 +1665,7 @@ final class GitStatusModel {
     // MARK: - Branches, stash, and repository setup
 
     func switchBranch(
-        to name: String,
+        to name: String, expectedOID: String,
         prepare: (@MainActor () async -> Bool)? = nil,
         isCurrentTarget: (@MainActor () -> Bool)? = nil,
         completion: (@MainActor (Bool) -> Void)? = nil
@@ -1525,10 +1674,18 @@ final class GitStatusModel {
             completion?(name == branch)
             return
         }
+        guard refsByName["refs/heads/" + name]?.oid == expectedOID else {
+            failImmediately(
+                String(localized: "The selected Git reference changed. Reopen the menu and try again.", table: "Git"),
+                completion: completion
+            )
+            return
+        }
         perform(
             label: String(localized: "Switch to \(name)", table: "Git"),
             commands: [["switch", "--", name]],
             preflight: [["check-ref-format", "--branch", name]],
+            expectedRef: (name: "refs/heads/" + name, oid: expectedOID),
             prepare: prepare, isCurrentTarget: isCurrentTarget,
             completion: completion
         )
@@ -2279,7 +2436,7 @@ final class GitStatusModel {
             preflight = [["check-ref-format", "--branch", name]]
         }
         let originalStashes = expectedStashes ?? stashes
-        guard action == .apply || originalStashes.contains(stash) else {
+        guard originalStashes.contains(stash) else {
             failImmediately(String(localized: "The selected stash changed. Reopen the menu and select it again.", table: "Git"),
                             completion: completion)
             return
@@ -2287,7 +2444,7 @@ final class GitStatusModel {
         perform(label: action.title, commands: commands,
                 requiredStatus: .stashes,
                 requiresStableHead: action != .drop, preflight: preflight,
-                expectedStashes: action == .apply ? nil : originalStashes,
+                expectedStashes: originalStashes,
                 prepare: action == .drop ? nil : prepare,
                 isCurrentTarget: isCurrentTarget, completion: completion)
     }
@@ -2709,8 +2866,13 @@ final class GitStatusModel {
         completion?(false)
     }
 
-    private func trash(paths: [String], label: String, completedBefore: String? = nil) {
-        guard !paths.isEmpty, !isBusy, canUseCurrentStatus else { return }
+    private func trash(
+        paths: [String], label: String, completedBefore: String? = nil,
+        isCurrentTarget: (@MainActor () -> Bool)? = nil,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
+        guard !paths.isEmpty, !isBusy, canUseCurrentStatus,
+              (isCurrentTarget?() ?? true) else { completion?(false); return }
         let base = URL(fileURLWithPath: repoRoot, isDirectory: true)
         let expectedRepositoryRoot = repoRoot
         let expectedHeadOID = headOID
@@ -2730,6 +2892,12 @@ final class GitStatusModel {
         let backend = backend
         Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
+                guard await (isCurrentTarget?() ?? true) else {
+                    return TrashResult(
+                        moved: [],
+                        failure: String(localized: "Files changed while the confirmation was open. Review them and try again.", table: "Git")
+                    )
+                }
                 guard await Self.resolveRepositoryRoot(
                     in: validationRoot, backend: backend
                 ) == expectedRepositoryRoot else {
@@ -2755,6 +2923,10 @@ final class GitStatusModel {
                 var moved: [String] = []
                 var failure: String?
                 for path in paths {
+                    guard await (isCurrentTarget?() ?? true) else {
+                        failure = String(localized: "The selected Git target changed. Nothing further was deleted.", table: "Git")
+                        break
+                    }
                     do {
                         // One path per call: the local backend moves it to the
                         // Trash exactly as before, and stopping at the first
@@ -2771,11 +2943,15 @@ final class GitStatusModel {
                 return TrashResult(moved: moved, failure: failure)
             }.value
 
-            guard let self, self.runningOperationID == operationID else { return }
+            guard let self, self.runningOperationID == operationID else {
+                completion?(false)
+                return
+            }
             self.runningOperationID = nil
             self.isBusy = false
             guard self.contextGeneration == generation,
                   self.operation?.id == operationID else {
+                completion?(false)
                 self.refresh()
                 return
             }
@@ -2810,6 +2986,7 @@ final class GitStatusModel {
                     finishedAt: finishedAt
                 )
             }
+            completion?(result.failure == nil)
             self.refresh()
         }
     }
@@ -2875,11 +3052,12 @@ final class GitStatusModel {
         return stashes
     }
 
-    nonisolated static func parseStashFileChanges(
-        _ output: String, fromUntracked: Bool = false
+    nonisolated static func parseGitFileChanges(
+        _ output: Data, fromUntracked: Bool = false
     ) -> [RecentCommit.FileChange]? {
         if output.isEmpty { return [] }
-        var tokens = output.components(separatedBy: "\0")
+        guard let text = String(data: output, encoding: .utf8) else { return nil }
+        var tokens = text.components(separatedBy: "\0")
         guard tokens.removeLast() == "" else { return nil }
         var changes: [RecentCommit.FileChange] = []
         var index = 0
@@ -2920,23 +3098,23 @@ final class GitStatusModel {
         let backend = backend
         Task { [weak self] in
             let state = await Task.detached(priority: .utility) { () async -> StashFilesState in
-                let tracked = await GitCommandExecution.run([
+                let tracked = await GitCommandExecution.runData([
                     "diff", "--name-status", "-z", "--no-ext-diff",
                     stash.baseHash, stash.oid, "--"
                 ], in: root, backend: backend)
                 guard tracked.status == 0,
-                      let trackedFiles = Self.parseStashFileChanges(tracked.stdout) else {
+                      let trackedFiles = Self.parseGitFileChanges(tracked.stdout) else {
                     return .failed(tracked.stderr.isEmpty
                         ? String(localized: "Unable to read stash changes", table: "Git")
                         : tracked.stderr)
                 }
                 guard let untracked = stash.untrackedFilesHash else { return .loaded(trackedFiles) }
-                let extra = await GitCommandExecution.run([
+                let extra = await GitCommandExecution.runData([
                     "diff-tree", "--root", "-r", "--name-status", "-z",
                     "--no-commit-id", untracked, "--"
                 ], in: root, backend: backend)
                 guard extra.status == 0,
-                      let extraFiles = Self.parseStashFileChanges(extra.stdout, fromUntracked: true) else {
+                      let extraFiles = Self.parseGitFileChanges(extra.stdout, fromUntracked: true) else {
                     return .failed(extra.stderr.isEmpty
                         ? String(localized: "Unable to read stash changes", table: "Git")
                         : extra.stderr)
@@ -2983,7 +3161,10 @@ final class GitStatusModel {
         coreCompletedRequestID = nil
         statusRequestID &+= 1
         pendingRefresh = nil
-        if !preserveIdentity { repositoryIdentity = "" }
+        if !preserveIdentity {
+            repositoryIdentity = ""
+            clearPanelNavigation()
+        }
     }
 
     private func clearDetails() {
@@ -3059,6 +3240,7 @@ final class GitStatusModel {
             hasCurrentLineTotals = false
         }
         if repositoryIdentity != result.topLevel {
+            clearPanelNavigation()
             clearDetails()
             ignoredPaths = []
         }
@@ -3261,7 +3443,8 @@ final class GitStatusModel {
         var outcome = "failed"
         defer {
             let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)
-            Self.statusLogger.debug("refresh id=\(requestID, privacy: .public) remote=\(remote, privacy: .public) phase=\(phase, privacy: .public) result=\(outcome, privacy: .public) elapsed_ms=\(elapsed, privacy: .public)")
+            Self.statusLogger.log(level: outcome == "failed" ? .error : .debug,
+                                  "refresh id=\(requestID, privacy: .public) remote=\(remote, privacy: .public) phase=\(phase, privacy: .public) result=\(outcome, privacy: .public) elapsed_ms=\(elapsed, privacy: .public)")
         }
         // A filesystem, Git helper, or corrupt repository must not leave the
         // initial sidebar spinner running forever. Share one deadline across
@@ -3284,12 +3467,21 @@ final class GitStatusModel {
             _ args: [String], in directory: String, batched: Bool = true
         ) async -> (status: Int32, stdout: String, stderr: String) {
             let remaining = deadline.timeIntervalSinceNow
-            guard remaining > 0 else { return (-2, "", timeoutMessage) }
-            if !(backend is LocalWorkspaceBackend), batched {
-                return prefetched[args.joined(separator: " ")]
+            let result: (status: Int32, stdout: String, stderr: String)
+            if remaining <= 0 {
+                result = (-2, "", timeoutMessage)
+            } else if remote, batched {
+                result = prefetched[args.joined(separator: " ")]
                     ?? (-1, "", String(localized: "Unable to read Git status.", table: "Git"))
+            } else {
+                result = await GitCommandExecution.run(args, in: directory, timeout: remaining, backend: backend)
             }
-            return await GitCommandExecution.run(args, in: directory, timeout: remaining, backend: backend)
+            if result.status == -2 {
+                let command = args.first ?? "unknown"
+                let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)
+                Self.statusLogger.error("query timed out id=\(requestID, privacy: .public) remote=\(remote, privacy: .public) command=\(command, privacy: .public) status=\(result.status, privacy: .public) elapsed_ms=\(elapsed, privacy: .public)")
+            }
+            return result
         }
 
         let top = await statusGit(["rev-parse", "--show-toplevel"], in: root)
@@ -3301,6 +3493,7 @@ final class GitStatusModel {
             if top.status == 128,
                failure.localizedCaseInsensitiveContains("not a git repository"),
                (await containsGitMetadata(atOrAbove: root, backend: backend, deadline: deadline)) == false {
+                outcome = "not-repository"
                 return .notRepository
             }
             return .failed(failure)
@@ -4041,6 +4234,12 @@ final class GitStatusModel {
                 date: Date(timeIntervalSince1970: timestamp),
                 parentHashes: fields[5].split(separator: " ").map(String.init),
                 references: parseCommitReferences(String(fields[6])).map { reference in
+                    if reference.kind == .tag {
+                        return .init(
+                            kind: .tag, name: reference.name,
+                            objectOID: refsByName["refs/tags/" + reference.name]?.oid
+                        )
+                    }
                     guard reference.kind == .remoteBranch,
                           refsByName["refs/remotes/" + reference.name]?.symbolic != nil else {
                         return reference

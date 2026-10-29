@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 @testable import Bailey
@@ -103,6 +104,202 @@ final class GitBranchActionTests: XCTestCase {
         try await settle()
     }
 
+    func testWindowBranchSwitchSavesOpenEditorBeforeCheckoutAndReloadsAfterSuccess() async throws {
+        let fileURL = directory.appendingPathComponent("branch-content.txt")
+        try "main revision\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        _ = try git(["add", "--", "branch-content.txt"])
+        _ = try git(["commit", "-qm", "main file"])
+        _ = try git(["switch", "-qc", "feature"])
+        try "feature revision\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        _ = try git(["commit", "-qam", "feature file"])
+        let featureOID = try git(["rev-parse", "HEAD"])
+        _ = try git(["switch", "main"])
+
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        manager.addLocalFolders([directory])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 320, height: 180),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        manager.attach(to: window)
+        defer {
+            window.close()
+            manager.windowClosed()
+        }
+
+        let file = FileTab(path: fileURL.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        try await file.waitForText()
+        project.append(PaneTab(content: .file(file)))
+        manager.syncGitStatus(model)
+        try await settle()
+        XCTAssertEqual(model.branch, "main")
+        XCTAssertEqual(model.refsByName["refs/heads/feature"]?.oid, featureOID)
+
+        file.text = "unsaved buffer\n"
+        file.refreshDirtyState()
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), "main revision\n")
+        manager.switchGitBranch(to: "feature", expectedOID: featureOID,
+                                in: project, model: model)
+        try await settle()
+        XCTAssertEqual(try git(["branch", "--show-current"]), "main",
+                       "Checkout must not bypass the editor's unsaved changes")
+        XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), "unsaved buffer\n",
+                       "The editor must save before Git attempts the switch")
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNotNil(model.lastError)
+
+        file.text = "main revision\n"
+        file.refreshDirtyState()
+        XCTAssertTrue(file.isDirty)
+        manager.switchGitBranch(to: "feature", expectedOID: featureOID,
+                                in: project, model: model)
+        try await settle()
+        XCTAssertEqual(try git(["branch", "--show-current"]), "feature")
+        XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), "feature revision\n")
+        let deadline = Date().addingTimeInterval(6)
+        while file.text != "feature revision\n" && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertEqual(file.text, "feature revision\n",
+                       "An existing editor must reload the newly checked-out branch")
+        XCTAssertFalse(file.isDirty)
+        XCTAssertNil(model.lastError)
+    }
+
+    func testWindowBranchSwitchProtectsDirtyFileInAnotherWindow() async throws {
+        let path = directory.appendingPathComponent("shared.txt")
+        try "main bytes\n".write(to: path, atomically: true, encoding: .utf8)
+        _ = try git(["add", "--", "shared.txt"])
+        _ = try git(["commit", "-qm", "main shared file"])
+        _ = try git(["switch", "-qc", "feature"])
+        try "feature bytes\n".write(to: path, atomically: true, encoding: .utf8)
+        _ = try git(["commit", "-qam", "feature shared file"])
+        let featureOID = try git(["rev-parse", "HEAD"])
+        _ = try git(["switch", "main"])
+
+        let application = WorkspaceApplication()
+        let first = application.makeWindow()
+        let second = application.makeWindow()
+        defer {
+            first.windowClosed()
+            second.windowClosed()
+        }
+        first.addLocalFolders([directory])
+        second.addLocalFolders([directory])
+        let project = try XCTUnwrap(first.selectedProject)
+        let other = try XCTUnwrap(second.selectedProject)
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 320, height: 180),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        first.attach(to: window)
+        defer { window.close() }
+
+        let otherFile = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                                workspaceIdentity: nil)
+        try await otherFile.waitForText()
+        other.append(PaneTab(content: .file(otherFile)))
+        first.syncGitStatus(model)
+        try await settle()
+        otherFile.text = "second window draft\n"
+        otherFile.refreshDirtyState()
+        XCTAssertTrue(otherFile.isDirty)
+
+        first.switchGitBranch(to: "feature", expectedOID: featureOID,
+                              in: project, model: model)
+        try await settle()
+        XCTAssertEqual(try git(["branch", "--show-current"]), "main")
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "second window draft\n",
+                       "The other window's editor must be saved before attempting checkout")
+        XCTAssertEqual(otherFile.text, "second window draft\n")
+        XCTAssertFalse(otherFile.isDirty)
+    }
+
+    func testBranchSwitchRejectsTwoDirtyCopiesOfSameFileAcrossWindows() async throws {
+        let path = directory.appendingPathComponent("shared.txt")
+        try "main bytes\n".write(to: path, atomically: true, encoding: .utf8)
+        _ = try git(["add", "--", "shared.txt"])
+        _ = try git(["commit", "-qm", "main shared file"])
+        _ = try git(["branch", "feature"])
+        let featureOID = try git(["rev-parse", "feature"])
+
+        let application = WorkspaceApplication()
+        let first = application.makeWindow()
+        let second = application.makeWindow()
+        defer {
+            first.windowClosed()
+            second.windowClosed()
+        }
+        first.addLocalFolders([directory])
+        second.addLocalFolders([directory])
+        let project = try XCTUnwrap(first.selectedProject)
+        let other = try XCTUnwrap(second.selectedProject)
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 320, height: 180),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        first.attach(to: window)
+        defer { window.close() }
+
+        let firstFile = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                                workspaceIdentity: nil)
+        let otherFile = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared,
+                                workspaceIdentity: nil)
+        try await firstFile.waitForText()
+        try await otherFile.waitForText()
+        project.append(PaneTab(content: .file(firstFile)))
+        other.append(PaneTab(content: .file(otherFile)))
+        first.syncGitStatus(model)
+        try await settle()
+        firstFile.text = "first draft\n"
+        firstFile.refreshDirtyState()
+        otherFile.text = "second draft\n"
+        otherFile.refreshDirtyState()
+        XCTAssertTrue(firstFile.isDirty && otherFile.isDirty)
+
+        first.switchGitBranch(to: "feature", expectedOID: featureOID,
+                              in: project, model: model)
+        try await settle()
+        XCTAssertEqual(try git(["branch", "--show-current"]), "main")
+        XCTAssertNotNil(model.lastError)
+        XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "main bytes\n",
+                       "Conflicting dirty editors must not overwrite either draft")
+        XCTAssertEqual(firstFile.text, "first draft\n")
+        XCTAssertEqual(otherFile.text, "second draft\n")
+        XCTAssertTrue(firstFile.isDirty && otherFile.isDirty)
+    }
+
+    func testGraphBranchSwitchRejectsExternallyMovedRefBeforeCheckingOut() async throws {
+        let original = try git(["rev-parse", "HEAD"])
+        _ = try git(["branch", "from-graph"])
+        _ = try git(["commit", "--allow-empty", "-qm", "later main"])
+        let moved = try git(["rev-parse", "HEAD"])
+        XCTAssertNotEqual(original, moved)
+        try await refresh()
+        XCTAssertEqual(model.refsByName["refs/heads/from-graph"]?.oid, original)
+        _ = try git(["update-ref", "refs/heads/from-graph", moved])
+
+        model.switchBranch(to: "from-graph", expectedOID: original)
+        try await settle()
+        XCTAssertNotNil(model.lastError,
+                        "An old Graph menu must not switch to an externally moved branch")
+        XCTAssertEqual(try git(["symbolic-ref", "HEAD"]), "refs/heads/main")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), moved)
+        XCTAssertEqual(try git(["rev-parse", "refs/heads/from-graph"]), moved)
+        XCTAssertTrue(try git(["status", "--porcelain=v1"]).isEmpty)
+
+        model.refresh()
+        try await settle()
+        model.switchBranch(to: "from-graph", expectedOID: moved)
+        try await settle()
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(try git(["symbolic-ref", "HEAD"]), "refs/heads/from-graph")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), moved)
+        XCTAssertTrue(try git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
     func testSwitchRejectsOptionNamesAndPreviousCheckoutAliasInsteadOfChangingHead() async throws {
         _ = try git(["branch", "other"])
         let original = try git(["rev-parse", "HEAD"])
@@ -112,13 +309,13 @@ final class GitBranchActionTests: XCTestCase {
             _ = try git(["switch", "main"])
             try await refresh()
             XCTAssertTrue(model.branches.contains(name), "The external Ref must actually exist")
-            model.switchBranch(to: name)
+            model.switchBranch(to: name, expectedOID: original)
             try await settle()
             XCTAssertNotNil(model.lastError, "An option or shorthand must not select a different target")
             XCTAssertEqual(try git(["symbolic-ref", "HEAD"]), "refs/heads/main")
             XCTAssertEqual(try git(["rev-parse", "HEAD"]), original)
         }
-        model.switchBranch(to: "other")
+        model.switchBranch(to: "other", expectedOID: original)
         try await settle()
         XCTAssertNil(model.lastError)
         XCTAssertEqual(try git(["symbolic-ref", "HEAD"]), "refs/heads/other")

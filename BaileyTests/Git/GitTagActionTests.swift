@@ -62,6 +62,32 @@ final class GitTagActionTests: XCTestCase {
         try await settle()
     }
 
+    func testGraphTagReferenceRetainsOriginalAnnotatedObjectOIDAcrossReplacement() async throws {
+        let commit = try git(["rev-parse", "HEAD"])
+        _ = try git(["tag", "-a", "-m", "original annotation", "menu-target"])
+        let firstOID = try git(["rev-parse", "refs/tags/menu-target"])
+        try await refresh()
+        let original = try XCTUnwrap(model.recentCommits
+            .first(where: { $0.hash == commit })?.references
+            .first(where: { $0.kind == .tag && $0.name == "menu-target" }))
+        XCTAssertEqual(original.objectOID, firstOID)
+
+        _ = try git(["tag", "-f", "-a", "-m", "replaced annotation",
+                     "menu-target", commit])
+        let replacedOID = try git(["rev-parse", "refs/tags/menu-target"])
+        XCTAssertNotEqual(firstOID, replacedOID)
+        model.refresh()
+        try await settle()
+        let updated = try XCTUnwrap(model.recentCommits
+            .first(where: { $0.hash == commit })?.references
+            .first(where: { $0.kind == .tag && $0.name == "menu-target" }))
+        XCTAssertEqual(updated.objectOID, replacedOID)
+        XCTAssertNotEqual(original, updated,
+                          "An old Graph menu must not reuse the replacement annotated tag object")
+        XCTAssertEqual(try git(["rev-parse", "HEAD"]), commit)
+        XCTAssertTrue(try git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
     func testAnnotatedAndLightweightTagsExposeActualObjectKindsAndDetails() async throws {
         let first = try git(["rev-parse", "HEAD"])
         _ = try git(["commit", "--allow-empty", "-qm", "second"])

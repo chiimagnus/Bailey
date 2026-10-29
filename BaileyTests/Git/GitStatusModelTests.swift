@@ -18,6 +18,210 @@ final class GitStatusModelTests: XCTestCase {
         }
     }
 
+    func testGitNavigationSurvivesPanelRemountButNotDifferentProjectOrRoot() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Git-Nav-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = Project(fallbackName: "first", workspaceConfiguration: .standard)
+        let second = Project(fallbackName: "second", workspaceConfiguration: .standard)
+        first.customDirectory = directory.path
+        second.customDirectory = directory.path
+        XCTAssertNotEqual(first.id, second.id)
+        let git = GitStatusModel()
+        git.syncSelectedProject(project: first, isCurrent: { _ in true })
+        let selection = GitStatusModel.ChangeSelection(
+            scope: "local", repository: directory.path,
+            section: "unstaged", path: "same-name.txt"
+        )
+        let commit = String(repeating: "a", count: 40)
+        git.changeCursor = selection
+        git.selectChange(selection, visible: [selection])
+        git.expandedCommitIDs = [commit]
+
+        git.syncSelectedProject(project: first, isCurrent: { _ in true })
+        XCTAssertEqual(git.changeCursor, selection)
+        XCTAssertEqual(git.selectedChanges, [selection])
+        XCTAssertEqual(git.expandedCommitIDs, [commit],
+                       "Rebinding the same panel target must preserve valid disclosure")
+
+        git.syncSelectedProject(project: second, isCurrent: { _ in true })
+        XCTAssertNil(git.changeCursor,
+                     "Two different projects sharing the same Git root must not share the cursor")
+        XCTAssertTrue(git.selectedChanges.isEmpty)
+        XCTAssertTrue(git.expandedCommitIDs.isEmpty,
+                      "The previous project's Graph must not appear in the new project")
+
+        git.changeCursor = selection
+        git.selectChange(selection, visible: [selection])
+        git.expandedCommitIDs = [commit]
+        git.sync(root: directory.appendingPathComponent("other").path)
+        XCTAssertNil(git.changeCursor)
+        XCTAssertTrue(git.selectedChanges.isEmpty)
+        XCTAssertTrue(git.expandedCommitIDs.isEmpty)
+    }
+
+    func testGitResourceSelectionPreservesIslandsAndSeparatesIndexSections() {
+        let model = GitStatusModel()
+        func row(_ path: String, section: String = "unstaged") -> GitStatusModel.ChangeSelection {
+            .init(scope: "local", repository: "/fixture", section: section, path: path)
+        }
+        let visible = ["a", "b", "c", "d", "e"].map { row($0) }
+        model.selectChange(visible[0], visible: visible)
+        model.selectChange(visible[2], visible: visible, toggling: true)
+        XCTAssertEqual(model.selectedChanges, [visible[0], visible[2]])
+        model.selectChange(visible[4], visible: visible, extending: true)
+        XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3], visible[4]])
+        model.selectChange(visible[3], visible: visible, extending: true)
+        XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3]],
+                       "Mouse Shift retracts the anchor's contiguous range but preserves islands")
+
+        model.moveChangeCursor(visible: visible, by: 1, extending: true)
+        XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3], visible[4]])
+        model.moveChangeCursor(visible: visible, by: -1, extending: true)
+        XCTAssertEqual(model.selectedChanges, [visible[0], visible[2], visible[3]],
+                       "Keyboard Shift incrementally retracts without replaying mouse range")
+
+        let staged = row("c", section: "staged")
+        model.selectChange(staged, visible: visible + [staged], toggling: true)
+        XCTAssertTrue(model.selectedChanges.contains(staged))
+        XCTAssertTrue(model.selectedChanges.contains(visible[2]),
+                      "Staged and unstaged paths are different resources")
+        model.reconcileChangeSelection(visible: [visible[0], visible[1], staged])
+        XCTAssertEqual(model.selectedChanges, [visible[0], staged])
+        XCTAssertEqual(model.changeCursor, staged)
+
+        model.selectAllChanges(visible: visible + [staged])
+        XCTAssertEqual(model.selectedChanges.count, visible.count + 1)
+        model.clearChangeSelection()
+        XCTAssertTrue(model.selectedChanges.isEmpty)
+        XCTAssertNil(model.changeAnchor)
+        XCTAssertEqual(model.changeCursor, staged,
+                       "Escape clears Selection without clearing the keyboard cursor")
+    }
+
+    func testStaleGitEntriesCannotStageOrUnstageWrongSectionAfterRefresh() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Git-Stale-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let root = directory.path
+        func git(_ args: [String]) -> String {
+            let result = GitCommandExecution.run(args, in: root)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout
+        }
+        _ = git(["init", "-q", "-b", "main"])
+        _ = git(["config", "user.name", "SCM Selection"])
+        _ = git(["config", "user.email", "scm@invalid"])
+        _ = git(["config", "commit.gpgsign", "false"])
+        let file = directory.appendingPathComponent("tracked.txt")
+        try Data("before\n".utf8).write(to: file)
+        _ = git(["add", "tracked.txt"])
+        _ = git(["commit", "-qm", "original"])
+        try Data("after\n".utf8).write(to: file)
+        let model = GitStatusModel()
+        model.sync(root: root)
+        try await wait { model.changedEntries.contains(where: { $0.path == "tracked.txt" }) }
+        let unstaged = try XCTUnwrap(model.changedEntries.first { $0.path == "tracked.txt" })
+        _ = git(["add", "tracked.txt"])
+        model.refresh()
+        try await wait {
+            model.changedEntries.isEmpty
+                && model.stagedEntries.contains(where: { $0.path == "tracked.txt" })
+        }
+        let staged = try XCTUnwrap(model.stagedEntries.first { $0.path == "tracked.txt" })
+        model.stageEntries([unstaged])
+        XCTAssertFalse(model.isBusy, "Old Changes entry must not mutate the new STAGED Section")
+        XCTAssertEqual(git(["show", ":tracked.txt"]), "after\n")
+        _ = git(["restore", "--staged", "--", "tracked.txt"])
+        model.refresh()
+        try await wait {
+            model.stagedEntries.isEmpty
+                && model.changedEntries.contains(where: { $0.path == "tracked.txt" })
+        }
+        model.unstageEntries([staged])
+        XCTAssertFalse(model.isBusy, "Old STAGED entry must not operate on the changed index")
+        XCTAssertEqual(git(["show", ":tracked.txt"]), "before\n")
+        XCTAssertEqual(try Data(contentsOf: file), Data("after\n".utf8))
+    }
+
+    func testCommitNameStatusParserRejectsIncompleteAndInvalidUTF8() {
+        let rename = Data("R100\0from name.txt\0to name.txt\0M\0中文.txt\0".utf8)
+        let files = GitStatusModel.parseGitFileChanges(rename)
+        XCTAssertEqual(files?.map(\.path), ["to name.txt", "中文.txt"])
+        XCTAssertEqual(files?.first?.originalPath, "from name.txt")
+        XCTAssertNil(GitStatusModel.parseGitFileChanges(Data("R100\0old\0".utf8)))
+        XCTAssertNil(GitStatusModel.parseGitFileChanges(Data([0x4d, 0x00, 0xff, 0x00])))
+        XCTAssertEqual(GitStatusModel.parseGitFileChanges(Data()), [])
+    }
+
+    func testCommitNavigationUsesRealParentsAndChildrenForMergeBranches() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Graph-Navigation-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func git(_ args: [String]) -> String {
+            let result = GitCommandExecution.run(args, in: directory.path, timeout: 20)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = git(["init", "-q", "-b", "main"])
+        _ = git(["config", "user.name", "Navigation"])
+        _ = git(["config", "user.email", "graph@invalid"])
+        _ = git(["config", "commit.gpgsign", "false"])
+        try Data("base".utf8).write(to: directory.appendingPathComponent("base.txt"))
+        _ = git(["add", "."])
+        _ = git(["commit", "-qm", "base"])
+        let base = git(["rev-parse", "HEAD"])
+        _ = git(["switch", "-qc", "feature"])
+        try Data("feature".utf8).write(to: directory.appendingPathComponent("feature.txt"))
+        _ = git(["add", "."])
+        _ = git(["commit", "-qm", "feature"])
+        let feature = git(["rev-parse", "HEAD"])
+        _ = git(["switch", "-q", "main"])
+        try Data("main".utf8).write(to: directory.appendingPathComponent("main.txt"))
+        _ = git(["add", "."])
+        _ = git(["commit", "-qm", "main"])
+        let main = git(["rev-parse", "HEAD"])
+        _ = git(["merge", "--no-ff", "-qm", "merge", "feature"])
+        let merge = git(["rev-parse", "HEAD"])
+        let model = GitStatusModel()
+        model.sync(root: directory.path)
+        try await wait { model.canUseCurrentHistory
+            && model.recentCommits.contains(where: { $0.hash == base }) }
+        let graph = model.graphCommits
+        let mergeCommit = try XCTUnwrap(graph.first { $0.hash == merge && $0.stash == nil })
+        let baseCommit = try XCTUnwrap(graph.first { $0.hash == base && $0.stash == nil })
+        XCTAssertEqual(mergeCommit.parentHashes, [main, feature])
+        XCTAssertEqual(RecentCommitsView.navigationTarget(
+            commits: graph, current: mergeCommit, parent: true, alternate: false
+        )?.hash, main)
+        XCTAssertEqual(RecentCommitsView.navigationTarget(
+            commits: graph, current: mergeCommit, parent: true, alternate: true
+        )?.hash, feature)
+        let missingFirstParent = graph.filter { $0.hash != main }
+        XCTAssertNil(RecentCommitsView.navigationTarget(
+            commits: missingFirstParent, current: mergeCommit, parent: true, alternate: false
+        ), "Missing first parent must not silently navigate to the second parent")
+        XCTAssertEqual(RecentCommitsView.navigationTarget(
+            commits: missingFirstParent, current: mergeCommit, parent: true, alternate: true
+        )?.hash, feature)
+        XCTAssertNil(RecentCommitsView.navigationTarget(
+            commits: graph, current: baseCommit, parent: true, alternate: false
+        ))
+        let child = RecentCommitsView.navigationTarget(
+            commits: graph, current: baseCommit, parent: false, alternate: false
+        )
+        let alternative = RecentCommitsView.navigationTarget(
+            commits: graph, current: baseCommit, parent: false, alternate: true
+        )
+        XCTAssertEqual(Set([child?.hash, alternative?.hash].compactMap { $0 }), [main, feature],
+                       "Normal and alternative child navigation must reach both real branches")
+        XCTAssertEqual(git(["rev-parse", "HEAD"]), merge)
+        XCTAssertTrue(git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
     func testBackgroundRefreshPreservesUnchangedToolbarAndGraphData() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -341,12 +545,12 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { !model.isRefreshing }
         await fulfillment(of: [statusChanged], timeout: 1)
         let changed = try XCTUnwrap(model.changedEntries.first)
-        model.stage(changed)
+        model.stageEntries([changed])
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertEqual(try git(["diff", "--cached", "--name-only"]), "tracked.txt")
 
         let staged = try XCTUnwrap(model.stagedEntries.first)
-        model.unstage(staged)
+        model.unstageEntries([staged])
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertTrue(try git(["diff", "--cached", "--name-only"]).isEmpty)
 
@@ -362,6 +566,156 @@ final class GitStatusModelTests: XCTestCase {
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertEqual(try git(["log", "-1", "--format=%s"]), "submitted")
         XCTAssertTrue(model.commitMessage.isEmpty)
+    }
+
+    func testReviewedDiscardRejectsDirtyEditorInOtherWindowAndKeepsUnrelatedDraft() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Git-Discard-Editors-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func git(_ args: [String]) throws -> String {
+            let result = GitCommandExecution.run(args, in: directory.path, timeout: 10)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .newlines)
+        }
+        _ = try git(["init", "-q", "-b", "main"])
+        _ = try git(["config", "user.name", "Discard Safety"])
+        _ = try git(["config", "user.email", "tests@example.invalid"])
+        _ = try git(["config", "commit.gpgsign", "false"])
+        let affected = directory.appendingPathComponent("affected.txt")
+        let unrelated = directory.appendingPathComponent("unrelated.txt")
+        try "baseline\n".write(to: affected, atomically: true, encoding: .utf8)
+        try "other\n".write(to: unrelated, atomically: true, encoding: .utf8)
+        _ = try git(["add", "."])
+        _ = try git(["commit", "-qm", "baseline"])
+        try "disk edit\n".write(to: affected, atomically: true, encoding: .utf8)
+
+        let application = WorkspaceApplication()
+        let first = application.makeWindow()
+        let second = application.makeWindow()
+        defer {
+            first.windowClosed()
+            second.windowClosed()
+        }
+        first.addLocalFolders([directory])
+        second.addLocalFolders([directory])
+        let otherProject = try XCTUnwrap(second.selectedProject)
+        let file = FileTab(path: affected.path, backend: LocalWorkspaceBackend.shared,
+                           workspaceIdentity: nil)
+        let otherFile = FileTab(path: unrelated.path, backend: LocalWorkspaceBackend.shared,
+                                workspaceIdentity: nil)
+        try await file.waitForText()
+        try await otherFile.waitForText()
+        otherProject.append(PaneTab(content: .file(file)))
+        otherProject.append(PaneTab(content: .file(otherFile)))
+        file.text = "unsaved elsewhere\n"
+        file.refreshDirtyState()
+        otherFile.text = "unrelated draft\n"
+        otherFile.refreshDirtyState()
+        XCTAssertTrue(file.isDirty && otherFile.isDirty)
+
+        let model = GitStatusModel()
+        model.sync(root: directory.path)
+        try await wait { model.hasResolvedStatus && !model.isRefreshing }
+        let entry = try XCTUnwrap(model.changedEntries.first { $0.path == "affected.txt" })
+        let original = model.prepareLocalDiscard([entry])
+        XCTAssertEqual(original.count, 1)
+        let mayDiscard: @MainActor @Sendable () -> Bool = {
+            application.canRunGitAction(
+                repository: directory.path, scope: "local", affectedPaths: [affected.path])
+        }
+        XCTAssertFalse(mayDiscard())
+        XCTAssertFalse(model.confirmLocalDiscard(original, isCurrentTarget: mayDiscard))
+        XCTAssertTrue(file.isDirty)
+        XCTAssertEqual(try String(contentsOf: affected, encoding: .utf8), "disk edit\n")
+        XCTAssertEqual(try git(["status", "--porcelain=v1", "--", "affected.txt"]), " M affected.txt")
+
+        let staleReview = try await application.withProtectedFiles(
+            paths: [affected.path], workspace: nil
+        ) {
+            model.confirmLocalDiscard(original, isCurrentTarget: mayDiscard)
+        }
+        XCTAssertFalse(staleReview, "Saving the draft must invalidate the original discard review")
+        XCTAssertFalse(file.isDirty)
+        XCTAssertEqual(try String(contentsOf: affected, encoding: .utf8), "unsaved elsewhere\n")
+        XCTAssertTrue(otherFile.isDirty)
+
+        model.refresh()
+        try await wait { !model.isRefreshing }
+        let updated = try XCTUnwrap(model.changedEntries.first { $0.path == "affected.txt" })
+        let reviews = model.prepareLocalDiscard([updated])
+        XCTAssertTrue(mayDiscard(), "An unrelated dirty file must not block a scoped discard")
+        let completed = try await application.withProtectedFiles(
+            paths: [affected.path], workspace: nil
+        ) {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                _ = model.confirmLocalDiscard(reviews, isCurrentTarget: mayDiscard) { success in
+                    application.reloadAfterGitAction(
+                        repository: directory.path, scope: "local", affectedPaths: [affected.path]
+                    )
+                    continuation.resume(returning: success)
+                }
+            }
+        }
+        XCTAssertTrue(completed)
+        try await wait { !model.isBusy && model.operation?.finishedAt != nil }
+        try await wait { file.text == "baseline\n" }
+        XCTAssertEqual(try String(contentsOf: affected, encoding: .utf8), "baseline\n")
+        XCTAssertEqual(try String(contentsOf: unrelated, encoding: .utf8), "other\n")
+        XCTAssertEqual(otherFile.text, "unrelated draft\n")
+        XCTAssertTrue(otherFile.isDirty)
+        XCTAssertTrue(try git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
+    func testScopedGitReloadRefreshesOnlyMatchingStagedDiff() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Git-Index-Reload-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func git(_ args: [String]) throws {
+            let result = GitCommandExecution.run(args, in: directory.path, timeout: 10)
+            XCTAssertEqual(result.status, 0, result.stderr)
+        }
+        try git(["init", "-q", "-b", "main"])
+        try git(["config", "user.name", "Scoped Diff Test"])
+        try git(["config", "user.email", "tests@example.invalid"])
+        try git(["config", "commit.gpgsign", "false"])
+        let a = directory.appendingPathComponent("a.txt")
+        let b = directory.appendingPathComponent("b.txt")
+        try "a-base\n".write(to: a, atomically: true, encoding: .utf8)
+        try "b-base\n".write(to: b, atomically: true, encoding: .utf8)
+        try git(["add", "."])
+        try git(["commit", "-qm", "baseline"])
+        try "a-staged\n".write(to: a, atomically: true, encoding: .utf8)
+        try "b-staged\n".write(to: b, atomically: true, encoding: .utf8)
+        try git(["add", "a.txt", "b.txt"])
+
+        let application = WorkspaceApplication()
+        let manager = application.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders([directory])
+        let project = try XCTUnwrap(manager.selectedProject)
+        let first = DiffTab(repoRoot: directory.path, path: "a.txt", source: .staged,
+                            untracked: false, origPath: nil,
+                            backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        let second = DiffTab(repoRoot: directory.path, path: "b.txt", source: .staged,
+                             untracked: false, origPath: nil,
+                             backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        project.append(PaneTab(content: .diff(first)))
+        project.append(PaneTab(content: .diff(second)))
+        try await wait { !first.isLoading && !second.isLoading }
+        XCTAssertNil(first.error)
+        XCTAssertNil(second.error)
+        XCTAssertEqual(first.newContent, "a-staged\n")
+        XCTAssertEqual(second.newContent, "b-staged\n")
+
+        try git(["reset", "-q", "--", "a.txt", "b.txt"])
+        application.reloadAfterGitAction(
+            repository: directory.path, scope: "local", affectedPaths: [a.path]
+        )
+        try await wait { first.newContent == "a-base\n" }
+        XCTAssertEqual(second.newContent, "b-staged\n",
+                       "A scoped Git refresh must leave unrelated staged Diff tabs untouched")
     }
 
     func testDiscardReviewGuardsContentSymlinkAndRepositoryScope() async throws {
@@ -480,6 +834,16 @@ final class GitStatusModelTests: XCTestCase {
 
         let reviewed = try await model.prepareRemoteDiscard([entry])
         XCTAssertEqual(reviewed.count, 1)
+        let rejectedByEditor = await model.confirmRemoteDiscard(
+            reviewed, isCurrentTarget: { false }
+        )
+        XCTAssertFalse(rejectedByEditor,
+                       "An editor changed after confirmation must veto remote permanent deletion")
+        let deletedBeforeConfirmation = await backend.deleteAttempts
+        XCTAssertEqual(deletedBeforeConfirmation, 0)
+        XCTAssertEqual(try String(contentsOf: candidate, encoding: .utf8),
+                       "preserved remote fixture")
+
         await backend.setOnline(false)
         let disconnected = await model.confirmRemoteDiscard(reviewed)
         XCTAssertFalse(disconnected)
@@ -1122,8 +1486,8 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(model.recentCommits.map(\.subject), ["second", "first"])
         XCTAssertEqual(model.changedEntries, priorChanges)
         XCTAssertFalse(model.isCurrent(model.actionTarget()), "Stale SSH status must not authorize writes")
-        model.stage(try XCTUnwrap(priorChanges.first,
-                                  "A verified file change is required before testing stale writes"))
+        model.stageEntries([try XCTUnwrap(priorChanges.first,
+                                          "A verified file change is required before testing stale writes")])
         let index = GitCommandExecution.run(["diff", "--cached", "--name-only"], in: directory.path)
         XCTAssertEqual(index.stdout, "", "A stale snapshot must never stage user files")
 
@@ -1395,7 +1759,7 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(model.changedEntries.map(\.path), ["tracked.txt"])
         XCTAssertFalse(model.isCurrent(model.actionTarget()),
                        "A new SSH channel is not yet verified and cannot write from old Git status")
-        model.stage(pending)
+        model.stageEntries([pending])
         XCTAssertFalse(model.isBusy)
         XCTAssertEqual(GitCommandExecution.run(["diff", "--cached", "--name-only"], in: directory.path).stdout, "")
         await newChannel.releaseGitRequest()
@@ -1479,7 +1843,8 @@ final class GitStatusModelTests: XCTestCase {
         model.sync(root: directory.path, backend: backend, scope: "ssh:first")
         try await wait { model.hasResolvedStatus && !model.isRefreshing }
         await backend.suspendNextGitRequest()
-        model.switchBranch(to: "other")
+        model.switchBranch(to: "other",
+                           expectedOID: try XCTUnwrap(model.refsByName["refs/heads/other"]?.oid))
         let deadline = Date().addingTimeInterval(5)
         while await !backend.awaitingGit, Date() < deadline {
             try await Task.sleep(for: .milliseconds(10))
@@ -1591,8 +1956,8 @@ final class GitStatusModelTests: XCTestCase {
                 .init(kind: .localBranch, name: "feature,hotfix"),
                 .init(kind: .remoteBranch, name: "origin/main"),
                 .init(kind: .remoteAlias, name: "origin/HEAD"),
-                .init(kind: .tag, name: "v1.0"),
-                .init(kind: .tag, name: "v1,hotfix"),
+                .init(kind: .tag, name: "v1.0", objectOID: merge),
+                .init(kind: .tag, name: "v1,hotfix", objectOID: merge),
             ])
         )
         XCTAssertEqual(rows.first { $0.hash == side }?.references,
@@ -2378,7 +2743,7 @@ final class GitStatusModelTests: XCTestCase {
         XCTAssertEqual(commit.parentHashes, [main, side])
         XCTAssertEqual(Set(commit.references), Set([
             .init(kind: .currentBranch, name: "main"),
-            .init(kind: .tag, name: "版本,β"),
+            .init(kind: .tag, name: "版本,β", objectOID: head),
             .init(kind: .remoteBranch, name: "origin/main"),
             .init(kind: .remoteBranch, name: "upstream/HEAD"),
             .init(kind: .remoteAlias, name: "origin/HEAD"),
@@ -2557,17 +2922,17 @@ final class GitStatusModelTests: XCTestCase {
         model.refresh()
         try await wait { !model.isRefreshing }
         let untracked = try XCTUnwrap(model.changedEntries.first { $0.path == "initial.txt" })
-        model.stage(untracked)
+        model.stageEntries([untracked])
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertEqual(try git(["diff", "--cached", "--name-only"], in: first), "initial.txt")
 
         let staged = try XCTUnwrap(model.stagedEntries.first { $0.path == "initial.txt" })
-        model.unstage(staged)
+        model.unstageEntries([staged])
         try await wait { !model.isBusy && !model.isRefreshing }
         XCTAssertTrue(try git(["diff", "--cached", "--name-only"], in: first).isEmpty)
         XCTAssertTrue(FileManager.default.fileExists(atPath: first.appendingPathComponent("initial.txt").path))
 
-        model.stage(try XCTUnwrap(model.changedEntries.first { $0.path == "initial.txt" }))
+        model.stageEntries([try XCTUnwrap(model.changedEntries.first { $0.path == "initial.txt" })])
         try await wait { !model.isBusy && !model.isRefreshing }
         model.commit(message: "first", includeAll: false)
         try await wait { !model.isBusy && !model.isRefreshing }

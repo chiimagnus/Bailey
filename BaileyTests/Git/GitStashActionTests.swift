@@ -220,15 +220,20 @@ final class GitStashActionTests: XCTestCase {
         }
     }
 
-    func testApplyFixedOIDStillRestoresSelectedContentAfterSelectorMoves() async throws {
+    func testApplyRejectsStaleSelectorEvenWhenTheOriginalOIDStillExists() async throws {
         try makeTwoStashes(); try await refresh()
         let selected = model.stashes[1]
         try write("a.txt", "new stash\n"); try git(["stash", "push", "-qm", "shift"])
+        let before = try git(["stash", "list", "--format=%gd:%H"])
         model.actOnStash(selected, action: .apply, target: model.actionTarget())
         try await settle()
-        XCTAssertNil(model.lastError)
-        XCTAssertEqual(try text("a.txt"), "work a\n")
-        XCTAssertEqual(model.stashes.count, 3)
+        XCTAssertNotNil(model.lastError,
+                        "An old Graph menu must not apply a moved reflog entry")
+        XCTAssertEqual(try text("a.txt"), "base a\n")
+        XCTAssertEqual(try text("b.txt"), "base b\n")
+        XCTAssertEqual(try git(["show", ":a.txt"]), "base a")
+        XCTAssertEqual(try git(["stash", "list", "--format=%gd:%H"]), before)
+        XCTAssertEqual(try git(["branch", "--show-current"]), "main")
     }
 
     func testSameOIDStashSelectorShiftCannotDeleteAnotherReflogEntry() async throws {

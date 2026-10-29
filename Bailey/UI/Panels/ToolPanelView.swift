@@ -272,6 +272,8 @@ struct ToolPanelView: View {
                         )
                     }
                 )
+                .id(manager.selectedProject?.panelContext?.identity)
+                .id(manager.selectedProject?.panelContext?.connectionRevision)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

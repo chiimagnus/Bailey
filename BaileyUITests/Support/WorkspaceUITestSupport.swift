@@ -103,10 +103,14 @@ enum WorkspaceUITestSupport {
         app.activate()
         XCTAssertEqual(app.state, .runningForeground,
                        "Only Bailey Dev may receive keyboard actions from UI tests")
-        // Some Xcode sessions do not create the initial WindowGroup scene.
+        // Xcode's UI launcher may omit the initial WindowGroup scene.
+        // Isolated launches disable scene restoration, so this cannot race with restored windows.
         if !app.windows.firstMatch.waitForExistence(timeout: 1) {
             app.typeKey("n", modifierFlags: [.command, .shift])
         }
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
+        XCTAssertEqual(app.windows.count, 1,
+                       "An isolated launch must not inherit windows from other UI tests")
         if project != nil {
             let files = element("bailey.dock.files", in: app)
             guard files.waitForExistence(timeout: 30) else {

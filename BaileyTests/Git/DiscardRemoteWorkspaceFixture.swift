@@ -12,6 +12,7 @@ actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     private var failRefSnapshot = false
     private var failRemoteList = false
     private var failGitDirectory = false
+    private var failRead = false
     private var failOperationMarker = false
     private var failWorktreeList = false
     private var pauseNextGit = false
@@ -38,6 +39,7 @@ actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     func setRefSnapshotUnavailable(_ value: Bool) { failRefSnapshot = value }
     func setRemoteListUnavailable(_ value: Bool) { failRemoteList = value }
     func setGitDirectoryUnavailable(_ value: Bool) { failGitDirectory = value }
+    func setReadUnavailable(_ value: Bool) { failRead = value }
     func setOperationMarkerUnavailable(_ value: Bool) { failOperationMarker = value }
     func setWorktreeListUnavailable(_ value: Bool) { failWorktreeList = value }
     func suspendNextGitRequest() { pauseNextGit = true }
@@ -148,7 +150,10 @@ actor DiscardRemoteWorkspaceFixture: WorkspaceBackend {
     }
 
     func list(directory: String) async throws -> [WorkspaceEntry] { [] }
-    func read(path: String, maxBytes: Int) async throws -> Data { throw WorkspaceError.notFound }
+    func read(path: String, maxBytes: Int) async throws -> Data {
+        if failRead { throw WorkspaceError.timedOut }
+        throw WorkspaceError.notFound
+    }
     func write(path: String, data: Data) async throws { throw WorkspaceError.notFound }
     func createFile(path: String) async throws { throw WorkspaceError.notFound }
     func createDirectory(path: String) async throws { throw WorkspaceError.notFound }

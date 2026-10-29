@@ -3,6 +3,126 @@ import XCTest
 
 @MainActor
 final class GitDialogUITests: XCTestCase {
+    func testBottomToolbarBranchPickerChecksOutSelectedRealBranch() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("toolbar-branch.txt", text: "main content\n")
+        try fixture.initializeGit()
+        let original = try fixture.git(["rev-parse", "HEAD"])
+        try fixture.git(["switch", "-qc", "toolbar-feature"])
+        try "feature content\n".write(to: file, atomically: true, encoding: .utf8)
+        try fixture.git(["commit", "-qam", "feature content"])
+        let target = try fixture.git(["rev-parse", "HEAD"])
+        try fixture.git(["switch", "main"])
+
+        let home = try WorkspaceUITestFixture(in: self)
+        _ = try home.file(".config/bailey-dev/config.toml",
+                          text: "toolbar.visibility = \"auto\"\n")
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: home.root, project: fixture.root)
+        let window = app.windows.firstMatch
+        let fileRow = WorkspaceUITestSupport.fileRow(file, in: window)
+        XCTAssertTrue(fileRow.waitForExistence(timeout: 15))
+        fileRow.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(file, in: window).waitForExistence(timeout: 15),
+                      "The bottom toolbar belongs to a displayed work tab")
+        let toolbar = app.buttons.matching(NSPredicate(
+            format: "label == %@", "Current branch, main")).firstMatch
+        XCTAssertTrue(toolbar.waitForExistence(timeout: 20),
+                      "The real bottom toolbar must expose the active branch")
+        toolbar.click()
+        let choice = app.buttons["toolbar-feature"]
+        XCTAssertTrue(choice.waitForExistence(timeout: 12))
+        choice.click()
+        let switched = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["branch", "--show-current"])) == Data("toolbar-feature\n".utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [switched], timeout: 20), .completed)
+        XCTAssertNotEqual(original, target)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), target)
+        XCTAssertEqual(try Data(contentsOf: file), Data("feature content\n".utf8))
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
+    func testStashApplySheetRejectsSelectorShiftWithoutTouchingWorktree() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("stale-stash.txt", text: "base\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        for name in ["older", "newer"] {
+            try (name + "\n").write(to: file, atomically: true, encoding: .utf8)
+            try fixture.git(["stash", "push", "-m", name])
+        }
+        let chosen = try fixture.git(["rev-parse", "stash@{1}"])
+        let app = try launchGit(fixture, language: "en")
+        let badge = app.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@", "stash@{1}")).firstMatch
+        XCTAssertTrue(badge.waitForExistence(timeout: 25))
+        badge.rightClick()
+        let action = app.menuItems["Apply Stash…"]
+        XCTAssertTrue(action.waitForExistence(timeout: 8))
+        action.click()
+        let sheet = app.windows.firstMatch.sheets.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 15))
+        let apply = sheet.buttons["Yes, Apply Stash"]
+        XCTAssertTrue(apply.waitForExistence(timeout: 8))
+
+        try "new external stash\n".write(to: file, atomically: true, encoding: .utf8)
+        try fixture.git(["stash", "push", "-m", "external update"])
+        let liveList = try fixture.git(["stash", "list", "--format=%gd:%H"])
+        XCTAssertNotEqual(try fixture.git(["rev-parse", "stash@{1}"]), chosen)
+        apply.click()
+        XCTAssertTrue(sheet.waitForNonExistence(timeout: 10))
+        let unexpectedWrite = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: file)) != Data("base\n".utf8)
+        }, object: nil)
+        unexpectedWrite.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [unexpectedWrite], timeout: 3), .completed)
+        XCTAssertEqual(try Data(contentsOf: file), Data("base\n".utf8))
+        XCTAssertEqual(try fixture.git(["show", ":stale-stash.txt"]), Data("base\n".utf8))
+        XCTAssertEqual(try fixture.git(["stash", "list", "--format=%gd:%H"]), liveList)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
+    func testAnnotatedTagDeleteSheetRejectsChangedObjectBeforeAnyDeletion() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("tagged-object.txt", text: "original\n")
+        try fixture.initializeGit()
+        let taggedCommit = String(decoding: try fixture.git(["rev-parse", "HEAD"]), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try fixture.git(["tag", "-a", "-m", "old annotation", "tag-menu"])
+        let originalObject = try fixture.git(["rev-parse", "refs/tags/tag-menu"])
+        try "head\n".write(to: file, atomically: true, encoding: .utf8)
+        try fixture.git(["commit", "-qam", "newer HEAD"])
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let app = try launchGit(fixture, language: "en")
+        let badge = app.buttons["tag-menu"]
+        XCTAssertTrue(badge.waitForExistence(timeout: 25))
+        badge.rightClick()
+        let item = app.menuItems["Delete Tag…"]
+        XCTAssertTrue(item.waitForExistence(timeout: 8))
+        item.click()
+        let sheet = app.windows.firstMatch.sheets.firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 15))
+        let confirm = sheet.buttons["Yes, Delete"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 8))
+
+        try fixture.git(["tag", "-f", "-a", "-m", "external replacement", "tag-menu", taggedCommit])
+        let replacement = try fixture.git(["rev-parse", "refs/tags/tag-menu"])
+        XCTAssertNotEqual(originalObject, replacement)
+        confirm.click()
+        XCTAssertTrue(sheet.waitForNonExistence(timeout: 10))
+        let unexpectedDelete = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["rev-parse", "refs/tags/tag-menu"])) != replacement
+        }, object: nil)
+        unexpectedDelete.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [unexpectedDelete], timeout: 3), .completed)
+        XCTAssertEqual(try fixture.git(["rev-parse", "refs/tags/tag-menu"]), replacement)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try Data(contentsOf: file), Data("head\n".utf8))
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
     func testHistoricalBranchSheetCancelsThenCreatesAtChosenCommitWithoutCheckout() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("branch.txt", text: "root\n")

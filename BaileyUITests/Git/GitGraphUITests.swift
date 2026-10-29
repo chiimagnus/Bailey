@@ -4,6 +4,115 @@ import XCTest
 
 @MainActor
 final class GitGraphUITests: XCTestCase {
+    func testSwitchingProjectsInsideSameRepositoryKeepsGraphDisclosureScoped() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let nestedFile = try fixture.file("nested/shared.txt", text: "first\n")
+        try fixture.initializeGit()
+        let original = try fixture.git(["rev-parse", "HEAD"])
+        try "second\n".write(to: nestedFile, atomically: true, encoding: .utf8)
+        try fixture.git(["add", "--", "nested/shared.txt"])
+        try fixture.git(["commit", "-qm", "second shared revision"])
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        XCTAssertNotEqual(original, head)
+        let app = try launchGraph(fixture, language: "en")
+        let first = app.buttons["E2E fixture history"]
+        let second = app.buttons["second shared revision"]
+        XCTAssertTrue(first.waitForExistence(timeout: 25))
+        XCTAssertTrue(second.waitForExistence(timeout: 25))
+        first.click()
+        let historical = historicalFile("nested/shared.txt", in: app)
+        XCTAssertTrue(historical.waitForExistence(timeout: 12))
+
+        app.typeKey("a", modifierFlags: [.command, .shift])
+        try WorkspaceUITestSupport.choose(nestedFile.deletingLastPathComponent(), in: app)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        XCTAssertTrue(first.waitForExistence(timeout: 25))
+        XCTAssertTrue(second.waitForExistence(timeout: 25))
+        XCTAssertFalse(historical.exists,
+                       "A new Project must not reuse the other Project's expanded commit")
+        first.click()
+        XCTAssertTrue(historical.waitForExistence(timeout: 12),
+                      "The new Project must open its own commit details on first click")
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try Data(contentsOf: nestedFile), Data("second\n".utf8))
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
+    func testExpandedCommitSurvivesTemporaryGitPanelHiding() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("retained/history.txt", text: "immutable history bytes\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let app = try launchGraph(fixture, language: "en")
+        let commit = app.buttons["E2E fixture history"]
+        let history = historicalFile("retained/history.txt", in: app)
+        XCTAssertTrue(commit.waitForExistence(timeout: 20))
+        XCTAssertFalse(history.exists)
+        commit.click()
+        XCTAssertTrue(history.waitForExistence(timeout: 12))
+
+        app.typeKey("e", modifierFlags: [.command, .shift])
+        let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        XCTAssertTrue(files.waitForExistence(timeout: 15))
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        XCTAssertTrue(history.waitForExistence(timeout: 12),
+                      "Hiding Git must not discard a still-valid expanded commit")
+        commit.click()
+        XCTAssertTrue(history.waitForNonExistence(timeout: 12),
+                      "The restored disclosure must collapse on its next click, not re-expand")
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
+    func testCommandClickSecondCommitKeepsBothHistoricalDetailsIndependent() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("first-history.txt", text: "first\n")
+        try fixture.initializeGit()
+        _ = try fixture.file("second-history.txt", text: "second\n")
+        try fixture.git(["add", "--", "second-history.txt"])
+        try fixture.git(["commit", "-qm", "second history record"])
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let app = try launchGraph(fixture, language: "en")
+        let first = app.buttons["E2E fixture history"]
+        let second = app.buttons["second history record"]
+        XCTAssertTrue(first.waitForExistence(timeout: 25))
+        XCTAssertTrue(second.waitForExistence(timeout: 25))
+        first.click()
+        XCTAssertTrue(historicalFile("first-history.txt", in: app).waitForExistence(timeout: 12))
+        XCUIElement.perform(withKeyModifiers: .command) { second.click() }
+        XCTAssertTrue(historicalFile("second-history.txt", in: app).waitForExistence(timeout: 12))
+        XCTAssertTrue(historicalFile("first-history.txt", in: app).exists)
+        XCTAssertEqual(app.windows.firstMatch.descendants(matching: .any)
+            .matching(identifier: "bailey.git.history.file").count, 2,
+            "A modified click must only expand its own commit's normal historical files")
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
+    func testGraphCommandArrowsNavigateRealParentAndChildWithoutMutatingGit() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("parent-node.txt", text: "parent data\n")
+        try fixture.initializeGit()
+        _ = try fixture.file("child-node.txt", text: "child data\n")
+        try fixture.git(["add", "--", "child-node.txt"])
+        try fixture.git(["commit", "-qm", "child graph node"])
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let app = try launchGraph(fixture, language: "en")
+        let parent = app.buttons["E2E fixture history"]
+        let child = app.buttons["child graph node"]
+        XCTAssertTrue(parent.waitForExistence(timeout: 25))
+        XCTAssertTrue(child.waitForExistence(timeout: 25))
+        child.click()
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: .command)
+        XCTAssertTrue(historicalFile("parent-node.txt", in: app).waitForExistence(timeout: 15),
+                      "Cmd-Down must activate and expand the actual parent commit")
+        app.typeKey(XCUIKeyboardKey.upArrow, modifierFlags: .command)
+        XCTAssertTrue(historicalFile("child-node.txt", in: app).waitForExistence(timeout: 15),
+                      "Cmd-Up must activate the current commit's loaded child")
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+    }
+
     func testRightClickDifferentCommitMovesGraphKeyboardCursorWithoutOpeningHistory() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("first-commit.txt", text: "first\n")
@@ -782,7 +891,22 @@ final class GitGraphUITests: XCTestCase {
             }
             return best
         }
-        var nodeSwatches: [[NSColor]] = []
+        // Compare the predominant painted node color, not the closest pair of
+        // anti-aliased edge pixels (which can look almost identical across lanes).
+        func dominantColor(_ pixels: [NSColor]) throws -> NSColor {
+            var frequencies: [UInt32: Int] = [:]
+            for pixel in pixels {
+                let red = UInt32((pixel.redComponent * 255).rounded())
+                let green = UInt32((pixel.greenComponent * 255).rounded())
+                let blue = UInt32((pixel.blueComponent * 255).rounded())
+                frequencies[(red << 16) | (green << 8) | blue, default: 0] += 1
+            }
+            let key = try XCTUnwrap(frequencies.max(by: { $0.value < $1.value })?.key)
+            return NSColor(srgbRed: CGFloat((key >> 16) & 255) / 255,
+                           green: CGFloat((key >> 8) & 255) / 255,
+                           blue: CGFloat(key & 255) / 255, alpha: 1)
+        }
+        var nodeColors: [NSColor] = []
         for (branch, oid) in [("main", mainOID), ("topic/colors", featureOID)] {
             let badge = app.buttons.matching(NSPredicate(
                 format: "label == %@ OR label BEGINSWITH %@",
@@ -797,11 +921,16 @@ final class GitGraphUITests: XCTestCase {
             print("Git Graph color \(branch): badge=\(badgePixels.count), node=\(nodePixels.count), RGB delta=\(delta)")
             XCTAssertLessThan(delta, 0.32,
                               "\(branch) badge and DAG node must paint the same lane hue")
-            nodeSwatches.append(nodePixels)
+            nodeColors.append(try dominantColor(nodePixels))
         }
-        XCTAssertEqual(nodeSwatches.count, 2)
-        XCTAssertGreaterThan(nearestDifference(nodeSwatches[0], nodeSwatches[1]), 0.30,
-                             "Divergent main and feature lanes must not collapse to one color")
+        XCTAssertEqual(nodeColors.count, 2)
+        let first = nodeColors[0].usingColorSpace(.sRGB)!
+        let second = nodeColors[1].usingColorSpace(.sRGB)!
+        let separation = max(abs(first.redComponent - second.redComponent),
+                             abs(first.greenComponent - second.greenComponent),
+                             abs(first.blueComponent - second.blueComponent))
+        XCTAssertGreaterThan(separation, 0.10,
+                             "Divergent main and feature lanes must retain distinct painted colors")
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), Data((mainOID + "\n").utf8))
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), Data())
     }

@@ -3,6 +3,133 @@ import XCTest
 
 @MainActor
 final class GitChangesUITests: XCTestCase {
+    func testCoreTimeoutKeepsFileDiffAndKeyboardBrowsingWhileGitWritesStayDisabled() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let home = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("nested/first.txt", text: "first HEAD\n")
+        let second = try fixture.file("nested/second.txt", text: "second HEAD\n")
+        try fixture.initializeGit()
+        try "first INDEX\n".write(to: first, atomically: true, encoding: .utf8)
+        try fixture.git(["add", "--", "nested/first.txt"])
+        try "first WORKTREE\n".write(to: first, atomically: true, encoding: .utf8)
+        try "second WORKTREE\n".write(to: second, atomically: true, encoding: .utf8)
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let status = try fixture.git(["--no-optional-locks", "status", "--porcelain=v1"])
+        let failure = home.root.appendingPathComponent("fail-status")
+        let quotedFailure = "'" + failure.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        try fixture.git(["config", "core.fsmonitor",
+                         "if test -f \(quotedFailure); then /bin/rm -f \(quotedFailure); /bin/sleep 20; fi; false"])
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: home.root, project: fixture.root
+        )
+        let projectRow = app.buttons.matching(identifier: "bailey.project.row")
+            .matching(NSPredicate(format: "label CONTAINS %@", fixture.root.path)).firstMatch
+        XCTAssertTrue(projectRow.waitForExistence(timeout: 15))
+        projectRow.click()
+        let projectWindow = app.windows.containing(NSPredicate(
+            format: "identifier == %@ AND label CONTAINS %@", "bailey.project.row", fixture.root.path
+        )).firstMatch
+        let window = app.windows.matching(identifier: projectWindow.identifier).firstMatch
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        XCTAssertTrue(window.buttons["Refresh Git Status"].waitForExistence(timeout: 15))
+        let firstRows = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.file")
+            .matching(NSPredicate(format: "label ENDSWITH %@", ", nested/first.txt"))
+        let secondRow = WorkspaceUITestSupport.fileRow(second, in: window, relativeTo: fixture.root)
+        guard firstRows.element(boundBy: 1).waitForExistence(timeout: 25),
+              secondRow.waitForExistence(timeout: 25) else {
+            return XCTFail("The real Git snapshot must load before injecting failure:\n\(window.debugDescription)")
+        }
+        try Data("one-shot core timeout\n".utf8).write(to: failure)
+        window.buttons["Refresh Git Status"].click()
+        let warning = window.staticTexts["Git Status Unavailable"]
+        XCTAssertTrue(warning.waitForExistence(timeout: 25), "A real core command timeout is the prerequisite")
+        XCTAssertTrue(window.staticTexts["Git did not respond in time."].exists)
+        let changedFolder = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "nested,")).element(boundBy: 1)
+        XCTAssertTrue(changedFolder.exists)
+        changedFolder.click()
+        let collapsed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !secondRow.exists }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [collapsed], timeout: 5), .completed)
+        changedFolder.click()
+        XCTAssertTrue(secondRow.waitForExistence(timeout: 5))
+        app.typeKey("a", modifierFlags: [.command])
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            firstRows.element(boundBy: 0).isSelected && firstRows.element(boundBy: 1).isSelected
+                && secondRow.isSelected
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertFalse(secondRow.isSelected)
+
+        func expectSplit(old: String, new: String) {
+            let mode = window.radioGroups["bailey.diff.mode"]
+            if mode.exists { mode.radioButtons.element(boundBy: 0).click() }
+            let layout = window.radioGroups["bailey.diff.layout"]
+            XCTAssertTrue(layout.waitForExistence(timeout: 15))
+            guard layout.exists else { return }
+            layout.radioButtons.element(boundBy: 1).click()
+            let visible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                let values = Set(window.textViews.allElementsBoundByIndex.compactMap { $0.value as? String })
+                return values.contains(old) && values.contains(new)
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 15), .completed,
+                           "Expected \(old) → \(new); actual native text: \(window.textViews.allElementsBoundByIndex.compactMap { $0.value as? String })")
+        }
+
+        firstRows.element(boundBy: 0).click()
+        expectSplit(old: "first HEAD\n", new: "first INDEX\n")
+        firstRows.element(boundBy: 1).click()
+        expectSplit(old: "first INDEX\n", new: "first WORKTREE\n")
+        firstRows.element(boundBy: 1).click()
+        secondRow.rightClick()
+        let stage = app.menuItems["Stage Changes"]
+        XCTAssertTrue(stage.waitForExistence(timeout: 8))
+        XCTAssertFalse(stage.isEnabled, "A readable snapshot must not authorize writes")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        expectSplit(old: "second HEAD\n", new: "second WORKTREE\n")
+        secondRow.rightClick()
+        let openHead = app.menuItems["Open HEAD File"]
+        XCTAssertTrue(openHead.waitForExistence(timeout: 8))
+        openHead.click()
+        let historical = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.textViews.allElementsBoundByIndex.contains { ($0.value as? String) == "second HEAD\n" }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [historical], timeout: 15), .completed)
+        secondRow.rightClick()
+        let openFile = app.menuItems["Open File"]
+        XCTAssertTrue(openFile.waitForExistence(timeout: 8))
+        XCTAssertTrue(openFile.isEnabled)
+        openFile.click()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(second, in: window).waitForExistence(timeout: 15))
+        let opened = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.textViews.allElementsBoundByIndex.contains { ($0.value as? String) == "second WORKTREE\n" }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 15), .completed)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["--no-optional-locks", "status", "--porcelain=v1"]), status)
+        XCTAssertEqual(try fixture.git(["show", ":nested/first.txt"]), Data("first INDEX\n".utf8))
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: failure.path),
+                       "The one-shot hook must have entered its controlled timeout")
+        window.buttons["Retry"].click()
+        let recovered = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !warning.exists }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [recovered], timeout: 20), .completed)
+        secondRow.rightClick()
+        XCTAssertTrue(stage.waitForExistence(timeout: 8))
+        XCTAssertTrue(stage.isEnabled)
+        stage.click()
+        let staged = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["show", ":nested/second.txt"])) == Data("second WORKTREE\n".utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [staged], timeout: 15), .completed)
+        XCTAssertEqual(try Data(contentsOf: first), Data("first WORKTREE\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("second WORKTREE\n".utf8))
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+    }
+
     func testRightClickAnotherGitChangeMovesKeyboardCursorWithoutOpeningDiff() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("alpha.txt", text: "first old\n")
@@ -29,6 +156,143 @@ final class GitChangesUITests: XCTestCase {
                       "Return after context-click must browse the clicked Git change")
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]),
                        Data(" M alpha.txt\n M beta.txt\n".utf8))
+    }
+
+    func testSwitchingActiveDiffTabsRevealsOnlyMatchingGitChange() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("reveal-one.txt", text: "one before\n")
+        let second = try fixture.file("reveal-two.txt", text: "two before\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        try "one after\n".write(to: first, atomically: true, encoding: .utf8)
+        try "two after\n".write(to: second, atomically: true, encoding: .utf8)
+
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let window = app.windows.firstMatch
+        let firstRow = WorkspaceUITestSupport.fileRow(first, in: window, relativeTo: fixture.root)
+        let secondRow = WorkspaceUITestSupport.fileRow(second, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 25))
+        XCTAssertTrue(secondRow.waitForExistence(timeout: 25))
+        firstRow.click()
+        secondRow.click()
+
+        let firstTab = window.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@", "reveal-one.txt"
+        )).firstMatch
+        let secondTab = window.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@", "reveal-two.txt"
+        )).firstMatch
+        XCTAssertTrue(firstTab.waitForExistence(timeout: 15))
+        XCTAssertTrue(secondTab.waitForExistence(timeout: 15))
+
+        for (tab, selected, other) in [
+            (firstTab, firstRow, secondRow),
+            (secondTab, secondRow, firstRow),
+            (firstTab, firstRow, secondRow)
+        ] {
+            tab.click()
+            let expected = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "selected == true"), object: selected
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [expected], timeout: 8), .completed,
+                           "The selected Git row must follow the explicitly active Diff tab")
+            XCTAssertFalse(other.isSelected,
+                           "The former Diff must not retain an independent SCM selection")
+        }
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]),
+                       Data(" M reveal-one.txt\n M reveal-two.txt\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: first), Data("one after\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("two after\n".utf8))
+    }
+
+    func testReturningToGitAfterOpeningOrdinaryFileRevealsOnlyMatchingChange() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("ordinary-match.txt", text: "first original\n")
+        let second = try fixture.file("ordinary-other.txt", text: "second original\n")
+        let unchanged = try fixture.file("ordinary-clean.txt", text: "untouched\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        try "first edited\n".write(to: first, atomically: true, encoding: .utf8)
+        try "second edited\n".write(to: second, atomically: true, encoding: .utf8)
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let window = app.windows.firstMatch
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let secondChange = WorkspaceUITestSupport.fileRow(second, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(secondChange.waitForExistence(timeout: 20))
+        secondChange.click()
+
+        app.typeKey("e", modifierFlags: [.command, .shift])
+        let firstFile = WorkspaceUITestSupport.fileRow(first, in: window)
+        XCTAssertTrue(firstFile.waitForExistence(timeout: 15))
+        firstFile.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(first, in: window).waitForExistence(timeout: 15))
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let firstChange = WorkspaceUITestSupport.fileRow(first, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(firstChange.waitForExistence(timeout: 15))
+        let revealed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "selected == true"), object: firstChange
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [revealed], timeout: 8), .completed,
+                       "Returning to Git must reveal the last explicitly opened ordinary file")
+        XCTAssertFalse(secondChange.isSelected)
+
+        app.typeKey("e", modifierFlags: [.command, .shift])
+        let cleanFile = WorkspaceUITestSupport.fileRow(unchanged, in: window)
+        XCTAssertTrue(cleanFile.waitForExistence(timeout: 15))
+        cleanFile.doubleClick()
+        XCTAssertTrue(WorkspaceUITestSupport.fileTab(unchanged, in: window).waitForExistence(timeout: 15))
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        XCTAssertTrue(firstChange.isSelected,
+                      "An unchanged file must not clear the last valid Git selection")
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]),
+                       Data(" M ordinary-match.txt\n M ordinary-other.txt\n".utf8))
+    }
+
+    func testActiveStagedAndWorktreeDiffTabsChooseDifferentRowsForOnePath() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("same-path.txt", text: "HEAD\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        try "INDEX\n".write(to: file, atomically: true, encoding: .utf8)
+        try fixture.git(["add", "--", "same-path.txt"])
+        try "WORKTREE\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let window = app.windows.firstMatch
+        let rows = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.file")
+            .matching(NSPredicate(format: "label ENDSWITH %@", ", same-path.txt"))
+        XCTAssertTrue(rows.element(boundBy: 1).waitForExistence(timeout: 25))
+        rows.element(boundBy: 0).click()
+        rows.element(boundBy: 1).click()
+
+        let stagedTab = window.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@ AND label CONTAINS %@", "same-path.txt", "Staged"
+        )).firstMatch
+        let workingTab = window.buttons.matching(NSPredicate(
+            format: "label CONTAINS %@ AND NOT label CONTAINS %@", "same-path.txt", "Staged"
+        )).firstMatch
+        XCTAssertTrue(stagedTab.waitForExistence(timeout: 15))
+        XCTAssertTrue(workingTab.waitForExistence(timeout: 15))
+
+        for (tab, selected, other) in [
+            (stagedTab, rows.element(boundBy: 0), rows.element(boundBy: 1)),
+            (workingTab, rows.element(boundBy: 1), rows.element(boundBy: 0))
+        ] {
+            tab.click()
+            let expected = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "selected == true"), object: selected
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [expected], timeout: 8), .completed)
+            XCTAssertFalse(other.isSelected, "The other side of the same path must not be selected")
+        }
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try fixture.git(["show", ":same-path.txt"]), Data("INDEX\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: file), Data("WORKTREE\n".utf8))
     }
 
     func testStagedAndUnstagedRowsPreviewTheirDistinctGitBaselines() throws {
@@ -536,6 +800,282 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]),
                        Data(" M selected/a.txt\n M selected/b.txt\n M untouched/c.txt\n".utf8))
+    }
+
+    func testGitMultiSelectCommandShiftAndContextBatchStageRealIndex() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let names = ["a", "b", "c", "d", "e"]
+        let files = try names.map { name in
+            try fixture.file("select-\(name).txt", text: "\(name) before\n")
+        }
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        for (name, file) in zip(names, files) {
+            try "\(name) after\n".write(to: file, atomically: true, encoding: .utf8)
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let window = app.windows.firstMatch
+        let rows = files.map {
+            WorkspaceUITestSupport.fileRow($0, in: window, relativeTo: fixture.root)
+        }
+        XCTAssertTrue(rows[4].waitForExistence(timeout: 25))
+        rows[0].click()
+        XCUIElement.perform(withKeyModifiers: .command) { rows[2].click() }
+        XCTAssertTrue(rows[0].isSelected && rows[2].isSelected)
+        XCTAssertFalse(rows[1].isSelected, "Cmd-click must toggle only the clicked Git resource")
+        XCUIElement.perform(withKeyModifiers: .shift) { rows[4].click() }
+        XCTAssertTrue(rows[0].isSelected && rows[2].isSelected
+            && rows[3].isSelected && rows[4].isSelected)
+        XCUIElement.perform(withKeyModifiers: .shift) { rows[3].click() }
+        XCTAssertTrue(rows[0].isSelected && rows[2].isSelected && rows[3].isSelected)
+        XCTAssertFalse(rows[1].isSelected || rows[4].isSelected)
+
+        rows[2].rightClick()
+        let stage = app.menuItems["Stage Changes"]
+        XCTAssertTrue(stage.waitForExistence(timeout: 8))
+        stage.click()
+        let staged = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            ["a", "c", "d"].allSatisfy { name in
+                (try? fixture.git(["show", ":select-\(name).txt"]))
+                    == Data("\(name) after\n".utf8)
+            }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [staged], timeout: 25), .completed,
+                       "Selected SCM resources must be staged in one actual index operation")
+        for name in ["b", "e"] {
+            XCTAssertEqual(try fixture.git(["show", ":select-\(name).txt"]),
+                           Data("\(name) before\n".utf8))
+        }
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        for (name, file) in zip(names, files) {
+            XCTAssertEqual(try Data(contentsOf: file), Data("\(name) after\n".utf8))
+        }
+    }
+
+    func testGitMultiSelectContextOutsideSetChangesOnlyClickedIndexPath() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let names = ["alpha", "beta", "gamma"]
+        let files = try names.map { try fixture.file("group-\($0).txt", text: "\($0) old\n") }
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        for (name, file) in zip(names, files) {
+            try "\(name) new\n".write(to: file, atomically: true, encoding: .utf8)
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let rows = files.map {
+            WorkspaceUITestSupport.fileRow($0, in: app.windows.firstMatch, relativeTo: fixture.root)
+        }
+        XCTAssertTrue(rows[2].waitForExistence(timeout: 25))
+        rows[0].click()
+        XCUIElement.perform(withKeyModifiers: .command) { rows[2].click() }
+        XCTAssertTrue(rows[0].isSelected && rows[2].isSelected)
+
+        rows[1].rightClick()
+        let stage = app.menuItems["Stage Changes"]
+        XCTAssertTrue(stage.waitForExistence(timeout: 8))
+        stage.click()
+        let onlyContext = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["show", ":group-beta.txt"])) == Data("beta new\n".utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [onlyContext], timeout: 20), .completed)
+        XCTAssertEqual(try fixture.git(["show", ":group-alpha.txt"]), Data("alpha old\n".utf8))
+        XCTAssertEqual(try fixture.git(["show", ":group-gamma.txt"]), Data("gamma old\n".utf8))
+        XCTAssertTrue(rows[0].isSelected && rows[2].isSelected,
+                      "SCM context-click outside Selection must not replace the prior set")
+
+        rows[2].rightClick()
+        XCTAssertTrue(stage.waitForExistence(timeout: 8))
+        stage.click()
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["show", ":group-alpha.txt"])) == Data("alpha new\n".utf8)
+                && (try? fixture.git(["show", ":group-gamma.txt"])) == Data("gamma new\n".utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 20), .completed)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        for (name, file) in zip(names, files) {
+            XCTAssertEqual(try Data(contentsOf: file), Data("\(name) new\n".utf8))
+        }
+    }
+
+    func testGitSelectAllEscapeAndKeyboardShiftRangeDoNotChangeGitIndex() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let names = ["a", "b", "c"]
+        let files = try names.map { try fixture.file("keys-\($0).txt", text: "\($0) old\n") }
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        for (name, file) in zip(names, files) {
+            try "\(name) new\n".write(to: file, atomically: true, encoding: .utf8)
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let rows = files.map {
+            WorkspaceUITestSupport.fileRow($0, in: app.windows.firstMatch, relativeTo: fixture.root)
+        }
+        XCTAssertTrue(rows[2].waitForExistence(timeout: 25))
+        rows[0].click()
+        app.typeKey("a", modifierFlags: .command)
+        XCTAssertTrue(rows.allSatisfy(\.isSelected), "Cmd-A must select only Git resource rows")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertFalse(rows.contains(where: \.isSelected), "Escape must only clear Git Selection")
+
+        rows[0].click()
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: .shift)
+        XCTAssertTrue(rows[0].isSelected && rows[1].isSelected && !rows[2].isSelected)
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: .shift)
+        XCTAssertTrue(rows.allSatisfy(\.isSelected))
+        app.typeKey(XCUIKeyboardKey.upArrow, modifierFlags: .shift)
+        XCTAssertTrue(rows[0].isSelected && rows[1].isSelected && !rows[2].isSelected)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        for (name, file) in zip(names, files) {
+            XCTAssertEqual(try fixture.git(["show", ":keys-\(name).txt"]), Data("\(name) old\n".utf8))
+            XCTAssertEqual(try Data(contentsOf: file), Data("\(name) new\n".utf8))
+        }
+    }
+
+    func testGitMultiSelectedDiscardCancelAndConfirmPreservesUnselectedWorkingFile() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let names = ["discard-a", "discard-b", "discard-c"]
+        let files = try names.map { try fixture.file("\($0).txt", text: "\($0) before\n") }
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        for (name, file) in zip(names, files) {
+            try "\(name) after\n".write(to: file, atomically: true, encoding: .utf8)
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let rows = files.map {
+            WorkspaceUITestSupport.fileRow($0, in: app.windows.firstMatch, relativeTo: fixture.root)
+        }
+        XCTAssertTrue(rows[2].waitForExistence(timeout: 25))
+        XCUIElement.perform(withKeyModifiers: .command) { rows[0].click() }
+        XCUIElement.perform(withKeyModifiers: .command) { rows[2].click() }
+        XCTAssertTrue(rows[0].isSelected && rows[2].isSelected)
+
+        func requestDiscard() {
+            rows[0].rightClick()
+            let action = app.menuItems["Discard Changes…"]
+            XCTAssertTrue(action.waitForExistence(timeout: 8))
+            action.click()
+        }
+        requestDiscard()
+        let cancel = app.windows.firstMatch.sheets.firstMatch.buttons["Cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10),
+                      "The multi-resource destructive action must open native confirmation")
+        cancel.click()
+        for (name, file) in zip(names, files) {
+            XCTAssertEqual(try Data(contentsOf: file), Data("\(name) after\n".utf8))
+            XCTAssertEqual(try fixture.git(["show", ":\(name).txt"]), Data("\(name) before\n".utf8))
+        }
+        XCTAssertTrue(rows[0].isSelected && rows[2].isSelected,
+                      "Cancel must preserve the selected resources without changing bytes")
+
+        requestDiscard()
+        let confirm = app.windows.firstMatch.sheets.firstMatch.buttons["Discard Changes"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
+        confirm.click()
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? Data(contentsOf: files[0])) == Data("discard-a before\n".utf8)
+                && (try? Data(contentsOf: files[2])) == Data("discard-c before\n".utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 25), .completed)
+        XCTAssertEqual(try Data(contentsOf: files[1]), Data("discard-b after\n".utf8))
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        for name in names {
+            XCTAssertEqual(try fixture.git(["show", ":\(name).txt"]),
+                           Data("\(name) before\n".utf8))
+        }
+    }
+
+    func testGitMultiSelectSamePathAcrossStagedAndChangesKeepsActionSectionsDistinct() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("both-sides.txt", text: "HEAD\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        try "INDEX\n".write(to: file, atomically: true, encoding: .utf8)
+        try fixture.git(["add", "--", "both-sides.txt"])
+        try "WORKTREE\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let rows = app.windows.firstMatch.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.file")
+            .matching(NSPredicate(format: "label ENDSWITH %@", ", both-sides.txt"))
+        XCTAssertTrue(rows.element(boundBy: 1).waitForExistence(timeout: 25))
+        let staged = rows.element(boundBy: 0)
+        let changes = rows.element(boundBy: 1)
+        staged.click()
+        XCUIElement.perform(withKeyModifiers: .command) { changes.click() }
+        XCTAssertTrue(staged.isSelected && changes.isSelected,
+                      "Same path in STAGED and CHANGES must remain two selectable resources")
+
+        changes.rightClick()
+        let stage = app.menuItems["Stage Changes"]
+        XCTAssertTrue(stage.waitForExistence(timeout: 8))
+        stage.click()
+        let stagedNew = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["show", ":both-sides.txt"])) == Data("WORKTREE\n".utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [stagedNew], timeout: 20), .completed)
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]),
+                       Data("M  both-sides.txt\n".utf8))
+
+        let refreshed = rows.element(boundBy: 0)
+        XCTAssertTrue(refreshed.waitForExistence(timeout: 15))
+        refreshed.rightClick()
+        let unstage = app.menuItems["Unstage Changes"]
+        XCTAssertTrue(unstage.waitForExistence(timeout: 8))
+        unstage.click()
+        let restoredIndex = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["show", ":both-sides.txt"])) == Data("HEAD\n".utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [restoredIndex], timeout: 20), .completed)
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertEqual(try Data(contentsOf: file), Data("WORKTREE\n".utf8))
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]),
+                       Data(" M both-sides.txt\n".utf8))
+    }
+
+    func testGitMultiSelectDirectoryAndSeparateFileStagesOnlyExpandedPathspecs() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("bundle/a.txt", text: "A old\n")
+        let second = try fixture.file("bundle/b.txt", text: "B old\n")
+        let outside = try fixture.file("outside.txt", text: "outside old\n")
+        let untouched = try fixture.file("untouched.txt", text: "untouched old\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        for (url, text) in [(first, "A"), (second, "B"), (outside, "outside"),
+                            (untouched, "untouched")] {
+            try "\(text) new\n".write(to: url, atomically: true, encoding: .utf8)
+        }
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let window = app.windows.firstMatch
+        let folder = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "bundle,"))
+            .firstMatch
+        let outsideRow = WorkspaceUITestSupport.fileRow(outside, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(folder.waitForExistence(timeout: 25))
+        XCTAssertTrue(outsideRow.waitForExistence(timeout: 25))
+        folder.click()
+        XCUIElement.perform(withKeyModifiers: .command) { outsideRow.click() }
+        XCTAssertTrue(folder.isSelected && outsideRow.isSelected,
+                      "A directory and a leaf from another path must coexist in SCM Selection")
+        folder.rightClick()
+        let stage = app.menuItems["Stage Changes"]
+        XCTAssertTrue(stage.waitForExistence(timeout: 8))
+        stage.click()
+        let staged = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["show", ":bundle/a.txt"])) == Data("A new\n".utf8)
+                && (try? fixture.git(["show", ":bundle/b.txt"])) == Data("B new\n".utf8)
+                && (try? fixture.git(["show", ":outside.txt"])) == Data("outside new\n".utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [staged], timeout: 25), .completed)
+        XCTAssertEqual(try fixture.git(["show", ":untouched.txt"]), Data("untouched old\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: untouched), Data("untouched new\n".utf8))
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
     }
 
     func testStageAndUnstageContextMenuChangeOnlyTheSelectedFixtureIndex() throws {

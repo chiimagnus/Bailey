@@ -288,7 +288,7 @@ final class GitGraphGeometryUITests: XCTestCase {
             for y in 0..<bitmap.pixelsHigh {
                 guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
                 let channels = [color.redComponent, color.greenComponent, color.blueComponent]
-                if channels.max()! - channels.min()! > 0.28 { colors.append(color) }
+                if channels.max()! - channels.min()! > 0.12 { colors.append(color) }
             }
         }
         return colors
@@ -388,19 +388,19 @@ final class GitGraphGeometryUITests: XCTestCase {
                 .matching(identifier: "bailey.git.history.file")
                 .matching(NSPredicate(format: "label ENDSWITH %@", ", " + path)).firstMatch
             parent.hover()
-            let collapsedHistory = try headerColors(parent)
             parent.click()
             XCTAssertTrue(historical.waitForExistence(timeout: 12))
             let expandedHistory = try headerColors(parent)
-            for (before, after) in zip(collapsedHistory, expandedHistory) {
-                let delta = abs(before.redComponent - after.redComponent)
-                    + abs(before.greenComponent - after.greenComponent)
-                    + abs(before.blueComponent - after.blueComponent)
-                XCTAssertLessThan(delta, 0.035,
-                                  "Expanding history must not paint a persistent selection fill")
-            }
             parent.click()
             XCTAssertTrue(historical.waitForNonExistence(timeout: 12))
+            let collapsedHistory = try headerColors(parent)
+            let changedPixels = zip(collapsedHistory, expandedHistory).filter { before, after in
+                abs(before.redComponent - after.redComponent)
+                    + abs(before.greenComponent - after.greenComponent)
+                    + abs(before.blueComponent - after.blueComponent) >= 0.035
+            }
+            XCTAssertLessThan(changedPixels.count, 3,
+                              "History disclosure must not add a persistent row fill; one anti-aliased edge pixel may vary")
         }
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertEqual(try fixture.git(["-C", linked.path, "rev-parse", "HEAD"]), feature)

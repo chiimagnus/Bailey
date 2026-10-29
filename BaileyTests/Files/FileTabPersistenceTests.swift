@@ -574,7 +574,11 @@ final class FileTabPersistenceTests: XCTestCase {
         file.autoSaveSuspendedForClose = true
     }
     func testGitPreparationWaitsForWritesAndNeverClosesOrLosesEditedTab() async throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
         let project = Project(fallbackName: "Git Save", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
         let path = "/fixture/git/file.txt"
         let backend = EditorWorkspaceFixture(path: path, contents: Data("baseline".utf8))
         let file = FileTab(path: path, backend: backend, workspaceIdentity: "ssh:fixture")
@@ -585,7 +589,7 @@ final class FileTabPersistenceTests: XCTestCase {
         file.text = "first edit"
         file.refreshDirtyState()
         let saving = Task {
-            await project.saveBeforeGitAction(repository: "/fixture/git", scope: "ssh:fixture", isCurrent: { true })
+            await self.workspaceApplication.saveBeforeGitAction(repository: "/fixture/git", scope: "ssh:fixture", isCurrent: { true })
         }
         try await waitForFileTabState { await backend.writingPath == path }
         file.text = "new edit while saving"
@@ -600,7 +604,7 @@ final class FileTabPersistenceTests: XCTestCase {
         XCTAssertEqual(persisted, Data("first edit".utf8))
 
         let failed = Task {
-            await project.saveBeforeGitAction(repository: "/fixture/git", scope: "ssh:fixture", isCurrent: { true })
+            await self.workspaceApplication.saveBeforeGitAction(repository: "/fixture/git", scope: "ssh:fixture", isCurrent: { true })
         }
         try await waitForFileTabState { await backend.writingPath == path }
         await backend.finishWrite(failing: true)
@@ -612,6 +616,8 @@ final class FileTabPersistenceTests: XCTestCase {
     }
 
     func testGitPreparationMatchesNativePrivatePathAliasWithoutSavingOtherRepository() async throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -621,6 +627,8 @@ final class FileTabPersistenceTests: XCTestCase {
         try Data("other repository".utf8).write(to: outside)
         defer { try? FileManager.default.removeItem(at: outside) }
         let project = Project(fallbackName: "Aliases", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
         let selected = FileTab(path: inside.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
         try await selected.waitForText()
         let other = FileTab(path: outside.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
@@ -632,7 +640,7 @@ final class FileTabPersistenceTests: XCTestCase {
         other.text = "keep unsaved elsewhere"
         other.refreshDirtyState()
         let repository = root.path.hasPrefix("/var/") ? "/private" + root.path : root.path
-        let prepared = await project.saveBeforeGitAction(repository: repository, scope: "local", isCurrent: { true })
+        let prepared = await workspaceApplication.saveBeforeGitAction(repository: repository, scope: "local", isCurrent: { true })
         XCTAssertTrue(prepared)
         XCTAssertEqual(try String(contentsOf: inside, encoding: .utf8), "save selected")
         XCTAssertFalse(selected.isDirty)

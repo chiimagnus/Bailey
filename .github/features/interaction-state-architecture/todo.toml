@@ -84,58 +84,58 @@ note = "Red 到 Green；104 项宿主；三种真实焦点 GUI 均已验证，�
 [[tasks]]
 id = "P3-T1"
 title = "统一 Git Changes 状态与 Diff 打开路径"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t1"
-commit = ""
-note = ""
+commit = "7385e1ccd6c57eb9537d07af7ae50a921942af63"
+note = "112 项 Git/NativeDiff/Dock 宿主 XCTest 全通过；3 项实际 Dev UI 通过；Build Dev 验签通过；无匹配文件和同名暂存/未暂存切换、面板重挂载保留选择。"
 
 [[tasks]]
 id = "P3-T2"
 title = "统一 Git Graph 展开浏览和菜单目标"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t2"
-commit = ""
-note = ""
+commit = "a6f3c6ec7fe577b88b382e901eb216b090f7dbca"
+note = "29 CommitGraph+50 GitStatusModel+20 HistoryFile 宿主共99项通过；7 GUI Graph/History 与1项新Red-Green Graph挂载测试通过；make build:dev验签通过。"
 
 [[tasks]]
 id = "P3-T3"
 title = "实现 Git Changes 资源多选与批量动作"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t3"
-commit = ""
-note = ""
+commit = "fbf59fea6edaf29634a71a847388a3119db90e99"
+note = "108 项受影响 Git 宿主 XCTest 全通过；GitChangesUITests 22 项真实 Dev E2E 通过（多选、右键、同名跨组、目录、Discard）；make build:dev 签名构建成功。原生 Windows GUI 未单独运行，现有 SSH 状态/断连宿主用例通过。"
 
 [[tasks]]
 id = "P3-T4"
-title = "对齐 Git Graph 提交详情比较与键盘导航"
-status = "pending"
+title = "对齐 Git Graph 提交详情与键盘导航"
+status = "completed"
 plan = "plan-p3.md#p3-t4"
-commit = ""
-note = ""
+commit = "d6f66e9a5fa5ca93873551e688fed1eea5c9c4fe"
+note = "Graph 单提交详情、父子快捷键与历史只读 Diff 保留；2026-10-29 重新构建并通过 GitStatus/History/Palette 宿主 81/81 项。"
 
 [[tasks]]
 id = "P3-T5"
 title = "对齐 Git Graph 轨道颜色与视觉状态"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t5"
-commit = ""
-note = ""
+commit = "ccd790ae3e20db4536a54319396ba5472678a23b"
+note = "91项Git Graph/Palette/Status宿主通过；GitGraphGeometry 14项首轮11通过3失败，3项经定向真Dev复测全部转绿，浅/深主题、33 refs、12 worktrees、最大/最小字号、150-420pt均覆盖；make build:dev成功。"
 
 [[tasks]]
 id = "P3-T6"
 title = "复核 Git Graph 引用菜单与危险操作"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t6"
-commit = ""
-note = ""
+commit = "081167df5fd22a59fe72432e1a01a2f4be3b0158"
+note = "126项宿主124通过、2项因BAILEY_P4_TEST_SSH_HOST未配置跳过；收紧OID参数后71项宿主通过；11项Dev原生菜单E2E通过；make build:dev及签名成功。"
 
 [[tasks]]
 id = "P3-T7"
 title = "统一 Git Graph/Changes 分页刷新与身份恢复"
-status = "pending"
+status = "completed"
 plan = "plan-p3.md#p3-t7"
-commit = ""
-note = ""
+commit = "5ca1a2c6ddf88dd4947f73193404668e041c92e3"
+note = "58 项 Graph/历史宿主全通过；同仓库跨 Project、跨仓库 Changes、分页、展开恢复与只读历史由隔离 Dev E2E 覆盖；make build:dev 及签名通过。Project ID/SSH revision 使用 SwiftUI 视图身份，无额外缓存。"
 
 [[tasks]]
 id = "P4-T1"

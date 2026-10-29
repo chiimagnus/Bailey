@@ -61,11 +61,11 @@ Bailey 架构硬约束，先记录差异和验收决定，不偷偷改回。
 | 同上 `onDidActiveEditorChange` | 显示变动的自动定位为明确受配置控制的动作，可同时更新 Focus/Selection，不是“展示即焦点” | `isDisplayedChange/browseGitChange`，按用户批准的自动定位语义验收；不能另造失焦抢占 |
 | [`scmHistoryViewPane.ts`](https://github.com/microsoft/vscode/blob/4bda7217fc83e8e838b1edd9ebaf21bb9b498c7e/src/vs/workbench/contrib/scm/browser/scmHistoryViewPane.ts) `SCMHistoryTreeIdentityProvider/_createTree/_onDidOpen/_onContextMenu` | 历史树独立 identity；`multipleSelectionSupport:false`；提交、文件、加载更多各有不同打开/右键动作 | `RecentCommitsView` 的提交/历史文件/分页/Stash/Worktree 局部状态，**不允许强行套 SCM Changes 多选** |
 | [`scmHistory.ts`](https://github.com/microsoft/vscode/blob/4bda7217fc83e8e838b1edd9ebaf21bb9b498c7e/src/vs/workbench/contrib/scm/browser/scmHistory.ts) `renderSCMHistoryItemGraph` | 入/出 swimlanes、commit/ref badges、图谱占位在几何层；与交互选中分离 | `CommitGraphLayout`、`RecentCommitsView` rails/节点/徽章，拓扑不应被渲染状态改变 |
-| [扩展 `web/main.ts`](https://github.com/mhutchie/vscode-git-graph/blob/d7f43f429a9e024e896bac9fc65fdc530935c812/web/main.ts) `observeTableEvents/observeKeyboardEvents/loadCommitDetails` | 单击提交打开/折叠详情，⌘点其它提交比较；方向键浏览，⌘方向键沿父/子分支；ref 双击与普通单击有不同语义 | `RecentCommitsView.toggle/activate/handleGraphKey`；明确 Bailey 现有“点标签统一展开”与上游 ref 双击 checkout 的产品冲突，未经决定不引入危险动作 |
+| [扩展 `web/main.ts`](https://github.com/mhutchie/vscode-git-graph/blob/d7f43f429a9e024e896bac9fc65fdc530935c812/web/main.ts) `observeTableEvents/observeKeyboardEvents/loadCommitDetails` | 单击提交打开/折叠详情；方向键浏览，⌘方向键沿父/子分支；ref 双击与普通单击有不同语义 | `RecentCommitsView.toggle/activate/handleGraphKey`；明确 Bailey 现有“点标签统一展开”与上游 ref 双击 checkout 的产品冲突，未经决定不引入危险动作 |
 | 扩展 [`web/contextMenu.ts`](https://github.com/mhutchie/vscode-git-graph/blob/d7f43f429a9e024e896bac9fc65fdc530935c812/web/contextMenu.ts) | commit/ref/stash/repo/详情菜单目标分别标识；菜单关闭撤临时状态；列表重渲染按 hash/ref 重绑，否则关闭 | `contextRowID/contextTarget(for:)`、`ContextMenuClickView`，重点检验分页/刷新/换仓库和延迟菜单关闭 |
 | 扩展 [`web/styles/main.css`](https://github.com/mhutchie/vscode-git-graph/blob/d7f43f429a9e024e896bac9fc65fdc530935c812/web/styles/main.css) | Hover/菜单临时目标弱灰，展开详情深灰、叠加较深灰；ref 活动边框与其父提交背景独立 | Bailey 当前 Graph “展开无持续灰底”，构成视觉差异；需单项视觉对比决定目标，不复制原 CSS |
 | 扩展 [`web/graph.ts`](https://github.com/mhutchie/vscode-git-graph/blob/d7f43f429a9e024e896bac9fc65fdc530935c812/web/graph.ts) | DAG 中的 branch/vertex/parents、展开详情影响路径几何、节点 hover 独立 | `CommitGraphLayout`、`GitGraphPalette`；按独立样本比较 merge/octopus/reflog/stash/worktree，不直接移植算法代码 |
-| 扩展 [`src/gitGraphView.ts`](https://github.com/mhutchie/vscode-git-graph/blob/d7f43f429a9e024e896bac9fc65fdc530935c812/src/gitGraphView.ts)、[`src/dataSource.ts`](https://github.com/mhutchie/vscode-git-graph/blob/d7f43f429a9e024e896bac9fc65fdc530935c812/src/dataSource.ts) | UI 事件与 Git backend 操作分开，异步 commit details/comparison 与仓库结果有目标约束 | `GitStatusModel`、`GitPanel` 现有模型/后端，保留本机和 SSH 可靠身份校验、危险操作确认 |
+| 扩展 [`src/gitGraphView.ts`](https://github.com/mhutchie/vscode-git-graph/blob/d7f43f429a9e024e896bac9fc65fdc530935c812/src/gitGraphView.ts)、[`src/dataSource.ts`](https://github.com/mhutchie/vscode-git-graph/blob/d7f43f429a9e024e896bac9fc65fdc530935c812/src/dataSource.ts) | UI 事件与 Git backend 操作分开，异步 commit details 与仓库结果有目标约束 | `GitStatusModel`、`GitPanel` 现有模型/后端，保留本机和 SSH 可靠身份校验、危险操作确认 |
 | 扩展 [`src/repoFileWatcher.ts`](https://github.com/mhutchie/vscode-git-graph/blob/d7f43f429a9e024e896bac9fc65fdc530935c812/src/repoFileWatcher.ts) | Git metadata 事件过滤与 UI 重绘独立 | 当前 Bailey 的本机事件驱动和 SSH 轮询/通知路径沿用既有所有者，本次仅检验刷新是否错改选择/图谱，不另建刷新架构 |
 
 ### 编辑器标签、活动组与 Dock
@@ -119,7 +119,6 @@ Bailey 架构硬约束，先记录差异和验收决定，不偷偷改回。
 | 场景 | 上游规则 | Bailey 现状与后续 |
 | --- | --- | --- |
 | 提交单击 | 扩展单击提交切换详情，内置历史提交由树节点独立表现 | **已有** `expandedCommitIDs` 可多项展开；是否改扩展单展开须先定产品目标 |
-| 提交多选/比较 | 扩展 ⌘ 点两个提交打开比较，内置 History Tree 明确关闭多选 | **缺口/决定** 必须单列“比较两个提交”，不能误当普通选中、右键菜单或 Git Changes 多选 |
 | ref 标签 | 扩展 ref 单击/双击/右键语义不同；可能双击执行 checkout | **与既有用户决定冲突**：Bailey ref 单击统一展开详情，不应无提示复活双击 checkout；需独立选择取舍 |
 | 提交上下左右键 | 扩展正常 ↑↓ 行导航，⌘↑↓ 同分支，⌘⇧↑↓ 备选分支 | **需观察** Bailey `handleGraphKey` 的实际覆盖，补对应语义但不能改变系统菜单快捷键 |
 | 历史文件单击 | 真实 Git revision Diff/对比读取，展示与提交详情独立 | **已有** 文件行和 DiffTab；检验仍在 Git 的焦点，SSH/历史只读与失败 |
@@ -148,7 +147,7 @@ Bailey 架构硬约束，先记录差异和验收决定，不偷偷改回。
 ## 行为取舍必须显式记录
 
 实施前把下列冲突逐个使用**VS Code 源码 + 真实 VSCodium/VS Code UI + Bailey Dev**核对，
-由计划中的前置比较 task 保存证据；无法确认的不能直接默认为已有行为。
+由计划中的前置源码对照任务保存证据；无法确认的不能直接默认为已有行为。
 
 1. **右键背景是否保留：** VS Code 对选中与焦点可叠加；Bailey 当前右键目标强制隐藏底色。
    用户此前反对误叠加的蓝色底＋蓝框。应先判定“用户反对错误双重焦点”还是“任何右键都必须无底”；

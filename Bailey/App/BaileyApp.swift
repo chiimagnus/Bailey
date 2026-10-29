@@ -19,6 +19,8 @@ struct BaileyApp: App {
             WindowRootView(application: applicationDelegate.workspace)
         }
         .windowStyle(.hiddenTitleBar)
+        .defaultLaunchBehavior(BaileyInstanceMode.isIsolated ? .presented : .automatic)
+        .restorationBehavior(BaileyInstanceMode.isIsolated ? .disabled : .automatic)
         // Keep title-bar dragging away from interactive tabs. The empty
         // header surfaces opt in explicitly through WindowDragArea.
         .windowBackgroundDragBehavior(.disabled)

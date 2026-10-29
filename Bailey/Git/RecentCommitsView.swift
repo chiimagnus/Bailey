@@ -113,7 +113,7 @@ struct RecentCommitsView: View {
     let loadMore: () -> Bool
     let openDiff: (Commit, Commit.FileChange) -> Void
     let canSwitchBranch: Bool
-    let switchBranch: (String) -> Void
+    let switchBranch: (String, String) -> Void
     let branchAction: (Reference, Commit, BranchAction) -> Void
     let remoteAction: (Reference, Commit, RemoteAction) -> Void
     let tagAction: (Reference, Commit, TagAction) -> Void
@@ -152,7 +152,7 @@ struct RecentCommitsView: View {
         loadMore: @escaping () -> Bool,
         openDiff: @escaping (Commit, Commit.FileChange) -> Void,
         canSwitchBranch: Bool,
-        switchBranch: @escaping (String) -> Void,
+        switchBranch: @escaping (String, String) -> Void,
         branchAction: @escaping (Reference, Commit, BranchAction) -> Void,
         remoteAction: @escaping (Reference, Commit, RemoteAction) -> Void,
         tagAction: @escaping (Reference, Commit, TagAction) -> Void,
@@ -273,6 +273,8 @@ struct RecentCommitsView: View {
                     }
             }
         }
+        // A long ref label must not dictate the Graph's viewport width.
+        .containerRelativeFrame(.horizontal, alignment: .leading)
         .background {
             TreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleGraphKey,
                 onFocusChanged: { focused in
@@ -528,11 +530,23 @@ struct RecentCommitsView: View {
 
     private func handleGraphKey(_ event: NSEvent) -> Bool {
         guard isKeyboardActive, keyboardOwner.view?.window?.firstResponder === keyboardOwner.view,
-            event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+              event.modifierFlags.intersection([.control, .option]).isEmpty
         else { return false }
         let rows = keyboardRows
         guard !rows.isEmpty else { return false }
         let current = selectedRowID.flatMap { id in rows.firstIndex { $0.id == id } }
+        if event.modifierFlags.contains(.command) {
+            guard let current, event.keyCode == 125 || event.keyCode == 126,
+                  case .commit(let selected) = rows[current].action,
+                  let next = Self.navigationTarget(
+                    commits: commits, current: selected, parent: event.keyCode == 125,
+                    alternate: event.modifierFlags.contains(.shift)
+                  ) else { return false }
+            selectRow(commitRowID(next))
+            if expandedCommitIDs.insert(next.id).inserted { loadBinaryStatus(next) }
+            return true
+        }
+        guard !event.modifierFlags.contains(.shift) else { return false }
         switch event.keyCode {
         case 125, 126: // Down / Up
             let start = current ?? (event.keyCode == 125 ? -1 : rows.count)
@@ -566,6 +580,34 @@ struct RecentCommitsView: View {
     private func requestMoreIfNeeded(after id: String) {
         guard hasMoreCommits, !isLoadingMore, requestedLastCommit != id else { return }
         if loadMore() { requestedLastCommit = id }
+    }
+
+    /// Navigate only real Git commits. Worktree and Stash pseudo nodes never form edges.
+    static func navigationTarget(
+        commits: [Commit], current: Commit, parent: Bool, alternate: Bool
+    ) -> Commit? {
+        guard current.stash == nil, current.worktree == nil else { return nil }
+        let real = commits.filter { $0.stash == nil && $0.worktree == nil }
+        if parent {
+            let index = alternate ? 1 : 0
+            guard current.parentHashes.indices.contains(index) else { return nil }
+            return real.first { $0.hash == current.parentHashes[index] }
+        }
+        let layout = CommitGraphLayout(commits: commits)
+        let lanes = Dictionary(uniqueKeysWithValues: zip(commits, layout.rows).compactMap {
+            commit, row -> (String, Int)? in
+            commit.stash == nil && commit.worktree == nil ? (commit.hash, row.node.lane) : nil
+        })
+        let positions = Dictionary(uniqueKeysWithValues: real.enumerated().map { ($0.element.hash, $0.offset) })
+        let lane = lanes[current.hash]
+        let descendants = real.filter { $0.parentHashes.contains(current.hash) }
+        let ordered = descendants.sorted {
+            let left = lanes[$0.hash] == lane ? 0 : 1
+            let right = lanes[$1.hash] == lane ? 0 : 1
+            if left != right { return left < right }
+            return (positions[$0.hash] ?? 0) < (positions[$1.hash] ?? 0)
+        }
+        return ordered.dropFirst(alternate ? 1 : 0).first
     }
 
     private func toggle(_ commit: Commit) {
@@ -841,13 +883,15 @@ struct RecentCommitsView: View {
                     .frame(width: Self.badgeIconSize * fontScale,
                            height: Self.badgeHeight * fontScale)
                     .background(palette.color(colorIndex))
-                Text(verbatim: label)
-                    .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
-                    .foregroundStyle(graphTextColor)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: min(128, max(52, viewportWidth * 0.32)) * fontScale)
-                    .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
+                if viewportWidth >= 180 * fontScale {
+                    Text(verbatim: label)
+                        .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
+                        .foregroundStyle(graphTextColor)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: min(128, max(52, viewportWidth * 0.32)) * fontScale)
+                        .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
+                }
                 if locations.count > 1 {
                     Text("\(locations.count)")
                         .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
@@ -918,11 +962,13 @@ struct RecentCommitsView: View {
                     .frame(width: Self.badgeIconSize * fontScale,
                            height: Self.badgeHeight * fontScale)
                     .background(palette.color(colorIndex))
-                Text(verbatim: stash.selector)
-                    .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
-                    .foregroundStyle(graphTextColor)
-                    .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
-                    .fixedSize(horizontal: true, vertical: false)
+                if viewportWidth >= 180 * fontScale {
+                    Text(verbatim: stash.selector)
+                        .font(.system(size: Self.badgeFontSize * fontScale, weight: .medium))
+                        .foregroundStyle(graphTextColor)
+                        .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
             }
             .frame(height: Self.badgeHeight * fontScale)
             .background(graphTextColor.opacity(0.06))
@@ -932,6 +978,7 @@ struct RecentCommitsView: View {
         }
         .buttonStyle(.plain)
         .help(stash.selector + ": " + stash.message)
+        .accessibilityLabel(stash.selector)
         .background {
             contextTarget(for: commitRowID(commit))
         }
@@ -1006,14 +1053,16 @@ struct RecentCommitsView: View {
                     .frame(width: Self.badgeIconSize * fontScale,
                            height: Self.badgeHeight * fontScale)
                     .background(palette.color(colorIndex))
-                Text(verbatim: reference.name)
-                    .font(.system(size: Self.badgeFontSize * fontScale,
-                                  weight: current ? .semibold : .medium))
-                    .foregroundStyle(graphTextColor)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: min(88, max(42, viewportWidth * 0.22)) * fontScale)
-                    .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
+                if viewportWidth >= 180 * fontScale {
+                    Text(verbatim: reference.name)
+                        .font(.system(size: Self.badgeFontSize * fontScale,
+                                      weight: current ? .semibold : .medium))
+                        .foregroundStyle(graphTextColor)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: min(88, max(42, viewportWidth * 0.22)) * fontScale)
+                        .padding(.horizontal, Self.badgeHorizontalPadding * fontScale)
+                }
                 if !matched.isEmpty {
                     Image(systemName: "square.stack")
                         .font(.system(size: 8 * fontScale))
@@ -1075,7 +1124,7 @@ struct RecentCommitsView: View {
             }
             if reference.kind == .localBranch {
                 Button(String(localized: "Switch to This Branch", table: "Git")) {
-                    switchBranch(reference.name)
+                    switchBranch(reference.name, commit.hash)
                 }
                 .disabled(!canSwitchBranch)
             }

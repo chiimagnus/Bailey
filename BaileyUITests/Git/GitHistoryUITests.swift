@@ -82,11 +82,13 @@ final class GitHistoryUITests: XCTestCase {
         let comparison = window.textViews.firstMatch
         XCTAssertTrue(comparison.waitForExistence(timeout: 15))
         let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            guard let content = comparison.value as? String else { return false }
-            return content.contains("original named file") && content.contains("renamed working file")
+            let contents = window.textViews.allElementsBoundByIndex
+                .compactMap { $0.value as? String }.joined(separator: "\n")
+            return contents.contains("original named file")
+                && contents.contains("renamed working file")
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 15), .completed,
-                       "Historical comparison must resolve the real renamed worktree contents")
+                       "Unified and split historical Diff must read both renamed file versions")
 
         openHistoricalMenu(old, fixture: fixture, window: window)
         let open = app.menuItems.matching(NSPredicate(format: "title IN %@",
@@ -286,6 +288,10 @@ final class GitHistoryUITests: XCTestCase {
         XCTAssertTrue(fixture.root.lastPathComponent.hasPrefix("Bailey-UITest-"))
         XCTAssertTrue(fixture.root.standardizedFileURL.path.hasPrefix(
             FileManager.default.temporaryDirectory.standardizedFileURL.path))
+        let project = app.buttons.matching(identifier: "bailey.project.row")
+            .matching(NSPredicate(format: "label CONTAINS %@", fixture.root.path)).firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 15))
+        project.click()
         app.typeKey("g", modifierFlags: [.command, .shift])
         let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
         XCTAssertTrue(git.waitForExistence(timeout: 20))

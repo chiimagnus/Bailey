@@ -531,7 +531,11 @@ final class NativeGitHistoryFileTests: XCTestCase {
         try Data("current\n".utf8).write(to: path)
         _ = try git(["commit", "-qam", "updated"], in: root)
         let head = try git(["rev-parse", "HEAD"], in: root)
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
         let project = Project(fallbackName: "Reset dirty tab", workspaceConfiguration: .standard)
+        manager.projects = [project]
+        manager.selectedProjectID = project.id
         project.customDirectory = root.path
         project.openFile(path.path)
         guard case .file(let file) = project.selectedTab?.content else { return XCTFail("FileTab missing") }
@@ -554,10 +558,10 @@ final class NativeGitHistoryFileTests: XCTestCase {
         XCTAssertEqual(file.text, "current\nunsaved\n")
         XCTAssertEqual(try String(contentsOf: path, encoding: .utf8), "current\n")
         model.resetHistoricalFile("note.txt", at: commit, target: target, expectedFileState: state,
-            prepare: { await project.saveBeforeGitAction(repository: root.path, scope: "local", isCurrent: { true }) },
-            isCurrentTarget: { project.canRunGitAction(repository: root.path, scope: "local") },
+            prepare: { await self.workspaceApplication.saveBeforeGitAction(repository: root.path, scope: "local", isCurrent: { true }) },
+            isCurrentTarget: { self.workspaceApplication.canRunGitAction(repository: root.path, scope: "local") },
             completion: { success in
-                if success { project.reloadAfterGitAction(repository: root.path, scope: "local") }
+                if success { self.workspaceApplication.reloadAfterGitAction(repository: root.path, scope: "local") }
             })
         try await wait { !model.isBusy && model.operation?.finishedAt != nil }
         XCTAssertNil(model.lastError, model.lastError ?? "")
