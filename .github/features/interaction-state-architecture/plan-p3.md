@@ -1,5 +1,8 @@
 # P3：Git Changes、内置 History Graph 与 Git Graph 扩展对齐
 
+**阅读时点：** 下文“当前”与旧字段指 P3 实施前的源码基线，不代表完成后的实现。
+实际提交见 `todo.toml`，现行交互契约见 `docs/features/git.md`。
+
 **目标：** 保留 Git Changes 已分开的“当前显示 Diff”、单项明确选择和键盘游标，
 核对它们的事件规则与视觉组合，补齐资源多选，让 Stage/Unstage/Discard 的实际集合与菜单完全准确；
 同时独立复现 Git Graph 的提交、引用标签、详情、比较、工作树与原生菜单的交互，
@@ -20,8 +23,9 @@
   VS Code `extensions/git/src/commands.ts:stage/unstage/clean` 的合法资源过滤。
   **扩展许可证禁止分发衍生源代码：只吸收需求/行为，独立实现 native Swift。**
 
-**Bailey 真源：** `GitStatusModel` 负责仓库/Worktree/SSH Git 数据与 Git 目录折叠；
-`GitPanel` 持有 Changes 游标/选择/菜单和 `expandedCommitIDs`，
+**Bailey 真源：** `GitStatusModel` 负责仓库/Worktree/SSH Git 数据、Git 目录折叠
+及可跨 Git 面板重挂载保留的 Changes 游标/选择；`GitPanel` 仅解释 Changes 的输入与临时菜单，
+Graph 展开集合由同一窗口的 `GitStatusModel` 保留，
 `RecentCommitsView` 通过 Binding 改变提交展开，只持有 Graph 游标/临时右键等局部状态；
 `CommitGraphLayout` 与 `GitGraphPalette` 负责图谱拓扑和颜色，
 `Project`/`DockWorkspaceModel` 与 `DiffTab` 负责标签展示、活动组及真实 Diff。
@@ -134,8 +138,8 @@
 
 **Bailey 锚点：**
 `RecentCommitsView.swift` 的 `selectedRowID`、
-`contextRowID`、`expandedCommitIDs`/`collapsedFolders` Binding（所有者分别为
-`GitPanel`、`GitStatusModel`）、
+`contextRowID`、`expandedCommitIDs`/`collapsedFolders` Binding（两者所有者均为
+窗口级 `GitStatusModel`，不是短生命周期的 `RecentCommitsView`）、
 `toggle`、`toggleFolder`、`selectRow`、
 `selectContextRow`、`dismissContextRow`、
 `contextTarget(for:)`、`keyboardRows`、
@@ -153,7 +157,9 @@
    Esc 关闭菜单不展开详情，不更换当前 Diff；
    选中的历史文件从另外组显示但 Git 仍为输入目标。
 3. 保留 `RecentCommitsView` 对 Graph 游标与临时菜单的所有权，
-   不移动 `GitPanel.expandedCommitIDs` 或 `GitStatusModel.collapsedFolders` 的真实所有权。
+   `GitStatusModel` 唯一持有展开集合及目录折叠，确保 Git Panel 隐藏/重挂载时
+   保留同一项目的有效展开；项目、仓库或机器切换时在模型同步入口清理。
+   不在 `GitPanel` 重新保留一份 `@State` 镜像。
    逐一核对 `commitRow` 的整体 `onTapGesture`、title/ref/node 的嵌套 `Button`
    是否只触发一次对应动作；有实际重复触发才收敛事件入口，
    不为“统一”增加通用 ContextRouter。
@@ -215,7 +221,10 @@ UI 的 stage/unstage/discard 按钮与独立冲突处理。
    选区锚点只按当前可见的 Changes 行顺序计算，折叠/过滤/刷新后剔除失效成员与锚点；
    ⌘A 选择可见行，Escape 清空选择但保留游标；Shift 鼠标按连续区间、键盘按逐步增减。
    任何修饰键都不得意外触发原行的浏览或目录展开。
-3. 让唯一 GitPanel owner 管理本地集合/Anchor 与有效仓库 identity，
+3. 让 `GitStatusModel` 唯一持有可跨 Git 面板隐藏/重挂载的 Changes 集合、Anchor 与游标；
+   `GitPanel` 仅管理菜单临时目标及键盘输入，不另存镜像。
+   这是 T1 在真实 Dev 中复现的状态丢失根因，
+   不能将多选新集合重新放回会被卸载的 `@State`。
    将菜单/快捷键/行 hover 按该集合计算；
    **批量 Stage/Unstage** 先按动作解析合法资源：Stage 接受 CHANGES，
    Unstage 只接受 STAGED，Discard 只接受现有允许的非冲突 CHANGES；
@@ -296,7 +305,7 @@ Docs `docs/features/git.md`，共享选择视觉确有改变时再改 `docs/ui.m
 `GitStatusModel.RecentCommit`、`GitPanel` 的既有 Diff/菜单入口、
 `Project.openHistoricalDiff`、`DiffTab.Source.commit`/`reload`、
 `GitCommandExecution.runData`、`GitHistoricalFileLocator` 和原生确认 Sheet。
-当前 `RecentCommitsView` 无比较入口，`GitPanel.expandedCommitIDs` 才是展开真源。
+当前 `RecentCommitsView` 无比较入口，`GitStatusModel.expandedCommitIDs` 才是展开真源。
 
 **步骤：**
 1. 在**同一张对照表**实际验证扩展/内置/当前 Bailey：
@@ -313,7 +322,7 @@ Docs `docs/features/git.md`，共享选择视觉确有改变时再改 `docs/ui.m
    快速按键时不打开错误历史；
    菜单/详情中输入框应保留自身焦点。
 4. 仅 `RecentCommitsView` 持临时 Compare pair、请求结果与取消生命周期，
-   展开仍经 Binding 回写既有 `GitPanel.expandedCommitIDs`，
+   展开仍经 Binding 回写既有 `GitStatusModel.expandedCommitIDs`，
    `GitStatusModel` 只提供可测试的按目标读取双端变更的只读 async 函数，
    不另存一份可写 compare pair 或平行结果缓存；
    对过期请求按本次 pair/目标身份拒绝回写。

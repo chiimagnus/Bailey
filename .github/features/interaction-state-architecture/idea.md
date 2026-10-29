@@ -9,7 +9,7 @@ Bailey 的文件树、Git Changes、Git Graph、Projects、Dock 标签以及命�
 
 当前已能从源码确认：Files 以 `selectedPath` 代表 Focus、`selectedPaths` 代表 Selection，
 而 `selectRange` 会覆盖不相邻选择；Git Changes 的 `explicitlySelectedChange` 只存一个对象；
-Git Graph 的展开集合由 `GitPanel` 持有，
+Git Graph 的展开集合由窗口级 `GitStatusModel` 持有，
 其游标、临时菜单目标由 `RecentCommitsView` 持有，彼此语义独立；
 Dock 一组只保留一个展示项、一个菜单上下文，不支持 VS Code 式多标签选择。
 这些不是单纯颜色差异，必须按原生输入事件、模型状态、命令目标和可见效果一起治理。
@@ -113,9 +113,8 @@ Focus、Selection、Anchor、Expanded、Active、Hover、Displayed、Context Tar
 
 - **唯一所有者**：
   `Project.fileTree` 持 Files 路径选择/展开；
-  `GitPanel` 持 Changes 选择/游标及 Graph 的 `expandedCommitIDs`，
-  `RecentCommitsView` 只持 Graph 游标和临时菜单目标，
-  `GitStatusModel` 持 Git 数据和目录折叠；
+  `GitStatusModel` 持 Git 数据、Git Changes 选择/游标、Graph 展开及目录折叠，
+  `GitPanel` 处理 Changes 输入和临时菜单，`RecentCommitsView` 持 Graph 游标/菜单目标；
   `DockWorkspaceModel` 持组布局/活动/每组标签选择；
   `WorkspaceWindowModel` 只管本窗口跨模块交接；
   真正输入以 key window 的 NSWindow.firstResponder 为准。
