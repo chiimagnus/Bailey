@@ -280,7 +280,7 @@ struct DockTabGroupView: View {
     @State private var showingPanelPicker = false
     @Environment(\.appearsActive) private var windowAppearsActive
 
-    private var active: DockItem? { group.selected ?? group.items.first }
+    private var active: DockItem? { group.selected }
     private var isFocused: Bool {
         windowAppearsActive && canFocusGroup()
     }
@@ -621,8 +621,8 @@ struct DockTabGroupView: View {
     }
 
     private func select(_ item: DockItem) {
-        project.dock.select(item)
         if case .tab(let id) = item { project.selectTab(id) }
+        else { project.dock.select(item) }
     }
 
     private func closeTool(_ item: DockItem) { manager.closePanel(item, in: project) }

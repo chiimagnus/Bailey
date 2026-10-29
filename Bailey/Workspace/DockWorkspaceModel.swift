@@ -80,7 +80,6 @@ struct DockWorkspaceConfiguration {
                 .map { $0.trimmingCharacters(in: .whitespaces) }
             var items: [DockItem] = []
             for name in names {
-                if name == "info" { continue }
                 guard let item = DockItem(configurationName: name), seen.insert(item).inserted else {
                     return nil
                 }
@@ -91,8 +90,8 @@ struct DockWorkspaceConfiguration {
         guard seen.contains(.projects), weights.allSatisfy({ $0.isFinite && $0 > 0 }) else { return nil }
         var selected: [DockItem?] = []
         for (index, name) in selectedNames.enumerated() {
-            let item = name.isEmpty || name == "info" ? groups[index].first : DockItem(configurationName: name)
-            if !name.isEmpty && name != "info" && item == nil { return nil }
+            let item = name.isEmpty ? groups[index].first : DockItem(configurationName: name)
+            if !name.isEmpty && item == nil { return nil }
             if let item, !groups[index].contains(item) { return nil }
             selected.append(item)
         }
@@ -102,9 +101,8 @@ struct DockWorkspaceConfiguration {
             let fraction = weights[index] / weights[index...].reduce(0, +)
             guard (0.1...0.9).contains(fraction) else { return nil }
         }
-        let activeActionNames = actionNames.filter { $0 != "info" }
-        let actions = activeActionNames.compactMap(DockAddAction.init(rawValue:))
-        guard actions.count == activeActionNames.count, Set(actions).count == actions.count,
+        let actions = actionNames.compactMap(DockAddAction.init(rawValue:))
+        guard actions.count == actionNames.count, Set(actions).count == actions.count,
               actions.contains(.session), actions.contains(.projects) else { return nil }
         self.init(groups: groups, selected: selected, weights: weights,
                   addActions: actions, edgeThreshold: edgeThreshold)
@@ -157,7 +155,7 @@ enum DockDropHitTest {
     }
 }
 
-struct DockGroup {
+struct DockGroup: Equatable {
     let id: UUID
     var items: [DockItem]
     var selected: DockItem?
@@ -165,11 +163,11 @@ struct DockGroup {
     init(id: UUID = UUID(), items: [DockItem], selected: DockItem? = nil) {
         self.id = id
         self.items = items
-        self.selected = selected ?? items.first
+        self.selected = selected.flatMap { items.contains($0) ? $0 : nil } ?? items.first
     }
 }
 
-struct DockSplit {
+struct DockSplit: Equatable {
     let id: UUID
     var axis: DockAxis
     var fraction: Double
@@ -185,7 +183,7 @@ struct DockSplit {
     }
 }
 
-indirect enum DockNode {
+indirect enum DockNode: Equatable {
     case group(DockGroup)
     case split(DockSplit)
 
@@ -407,7 +405,7 @@ final class DockWorkspaceModel {
         if groupID != nil { contextTarget = nil }
         activeGroupID = (groupID ?? activeGroupID).flatMap { updated.group(id: $0)?.id }
             ?? updated.groups.first?.id
-        root = updated
+        if root != updated { root = updated }
         let current = activeGroup?.selected
         if previous != current {
             if let previous { onDeactivate?(previous) }

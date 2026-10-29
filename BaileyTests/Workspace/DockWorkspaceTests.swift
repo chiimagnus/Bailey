@@ -144,6 +144,20 @@ final class DockWorkspaceTests: XCTestCase {
                        "When Files is hidden, a visible document must receive focus")
     }
 
+    func testSyncTabsWithIdenticalLayoutDoesNotRequestSnapshot() throws {
+        let project = Project(fallbackName: "stable layout", workspaceConfiguration: .standard)
+        let dock = project.dock
+        var snapshots = 0
+        project.onSnapshotChange = { snapshots += 1 }
+        dock.syncTabs([], near: nil)
+        dock.syncTabs([], near: nil)
+        XCTAssertEqual(snapshots, 0, "An unchanged tab list must not publish a duplicate layout")
+        let group = try XCTUnwrap(dock.group(containing: .files))
+        dock.activate(group.id)
+        dock.syncTabs([], near: nil)
+        XCTAssertEqual(snapshots, 0, "Transient activity must not publish a layout")
+    }
+
     func testFocusingAlreadyVisibleWorkTabsDoesNotRequestASnapshot() throws {
         let project = Project(fallbackName: "transient focus", workspaceConfiguration: .standard)
         project.newBrowserTab(initialFocus: .none)
@@ -666,8 +680,8 @@ final class DockWorkspaceTests: XCTestCase {
 
     func testConfigurationRejectsInvalidLayouts() throws {
         let configuration = try XCTUnwrap(DockWorkspaceConfiguration(
-            groupNames: ["files", "projects,info", "git"],
-            selectedNames: ["files", "info", "git"],
+            groupNames: ["files", "projects", "git"],
+            selectedNames: ["files", "projects", "git"],
             weights: [2, 3, 1],
             actionNames: ["session", "git", "projects", "files"],
             edgeThreshold: 0.1
@@ -678,6 +692,9 @@ final class DockWorkspaceTests: XCTestCase {
         let invalid: [([String], [String], [Double], [String], Double)] = [
             (["projects,projects"], ["projects"], [1], ["session"], 0.22),
             (["projects,unknown"], ["projects"], [1], ["session"], 0.22),
+            (["projects,info"], ["projects"], [1], ["session"], 0.22),
+            (["projects"], ["info"], [1], ["session"], 0.22),
+            (["projects"], ["projects"], [1], ["session", "info"], 0.22),
             (["projects"], ["git"], [1], ["session"], 0.22),
             (["projects"], ["projects"], [0], ["session"], 0.22),
             (["projects"], ["projects"], [1], ["session", "session"], 0.22),

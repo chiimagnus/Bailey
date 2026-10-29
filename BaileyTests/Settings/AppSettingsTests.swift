@@ -33,10 +33,10 @@ final class AppSettingsTests: XCTestCase {
         font-size = 18
         panel.font-size = 16
         terminal.font-thicken = true
-        workspace.groups = ["projects,files", "git,info"]
+        workspace.groups = ["projects,files", "git"]
         workspace.selected = ["files", "git"]
         workspace.weights = [2, 3]
-        workspace.add-actions = ["projects", "session", "files", "git", "info"]
+        workspace.add-actions = ["projects", "session", "files", "git"]
         workspace.edge-threshold = 0.3
         """.write(to: configURL, atomically: true, encoding: .utf8)
 
@@ -46,10 +46,51 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(customized.panelFontSize, 16)
         XCTAssertTrue(customized.fontThicken)
         XCTAssertEqual(customized.workspaceConfiguration.groupNames, ["projects,files", "git"])
-        XCTAssertFalse(customized.workspaceConfiguration.addActions.map(\.rawValue).contains("info"))
+        XCTAssertEqual(customized.workspaceConfiguration.actionNames,
+                       ["projects", "session", "files", "git"])
 
         customized.fontSize = 19
         XCTAssertEqual(AppSettings(configURL: configURL).fontSize, 19)
+    }
+
+    func testObsoleteInfoWorkspaceNamesAreRejectedAndOnlyNormalizedOnSave() throws {
+        let validConfig = """
+        font-family = "Fixture Font"
+        font-size = 18
+        panel.font-size = 16
+        workspace.groups = ["projects,files", "git"]
+        workspace.selected = ["files", "git"]
+        workspace.weights = [2, 3]
+        workspace.add-actions = ["projects", "session", "files", "git"]
+        workspace.edge-threshold = 0.3
+        """
+        for (existing, obsolete) in [
+            ("workspace.groups = [\"projects,files\", \"git\"]",
+             "workspace.groups = [\"projects,files\", \"git,info\"]"),
+            ("workspace.selected = [\"files\", \"git\"]",
+             "workspace.selected = [\"files\", \"info\"]"),
+            ("workspace.add-actions = [\"projects\", \"session\", \"files\", \"git\"]",
+             "workspace.add-actions = [\"projects\", \"session\", \"files\", \"git\", \"info\"]"),
+        ] {
+            let source = validConfig.replacingOccurrences(of: existing, with: obsolete) + "\n"
+            try source.write(to: configURL, atomically: true, encoding: .utf8)
+            let bytes = try Data(contentsOf: configURL)
+            let settings = AppSettings(configURL: configURL)
+            XCTAssertEqual(settings.workspaceConfiguration.groupNames,
+                           DockWorkspaceConfiguration.standard.groupNames)
+            XCTAssertEqual(settings.fontFamily, "Fixture Font")
+            XCTAssertEqual(settings.fontSize, 18)
+            XCTAssertEqual(settings.panelFontSize, 16)
+            XCTAssertEqual(try Data(contentsOf: configURL), bytes,
+                           "Loading must not rewrite the user's original config")
+            settings.fontSize = 20
+            let saved = try XCTUnwrap(TOML.parse(at: configURL))
+            XCTAssertEqual(saved["font-family"]?.string, "Fixture Font")
+            XCTAssertEqual(saved["font-size"]?.double, 20)
+            XCTAssertNil(saved["workspace.groups"],
+                         "An actual save normalizes the rejected layout to standard")
+            XCTAssertNil(saved["workspace.add-actions"])
+        }
     }
 
     func testFilesExcludeDefaultsExplicitEmptyAndPersistence() throws {
