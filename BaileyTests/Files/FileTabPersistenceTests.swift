@@ -673,6 +673,10 @@ final class FileTabPersistenceTests: XCTestCase {
 
         manager.addLocalFolders([root])
         let failingProject = try XCTUnwrap(manager.selectedProject)
+        let activeRoot = root.appendingPathComponent("still-open", isDirectory: true)
+        try FileManager.default.createDirectory(at: activeRoot, withIntermediateDirectories: true)
+        manager.addLocalFolders([activeRoot])
+        let activeProject = try XCTUnwrap(manager.selectedProject)
         let remotePath = root.appendingPathComponent("remote.txt")
         try "local sentinel".write(to: remotePath, atomically: true, encoding: .utf8)
         let backend = EditorWorkspaceFixture(path: remotePath.path, contents: Data("old".utf8))
@@ -687,6 +691,9 @@ final class FileTabPersistenceTests: XCTestCase {
         await backend.finishWrite(failing: true)
         try await waitForFileTabState { remote.saveError != nil }
         XCTAssertTrue(manager.projects.contains(where: { $0 === failingProject }))
+        XCTAssertTrue(manager.projects.contains(where: { $0 === activeProject }))
+        XCTAssertEqual(manager.selectedProjectID, activeProject.id,
+                       "A failed background project close cannot switch the active project")
         XCTAssertTrue(remote.isDirty)
         XCTAssertEqual(try String(contentsOf: remotePath, encoding: .utf8), "local sentinel")
 

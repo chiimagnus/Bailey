@@ -237,6 +237,96 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: second), Data("second\n".utf8))
     }
 
+    func testProjectKeyboardCursorAndContextSurviveBackgroundDeletion() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let firstFile = try fixture.file("alpha-workspace/unchanged.txt", text: "alpha bytes\n")
+        let secondFile = try fixture.file("bravo-workspace/unchanged.txt", text: "bravo bytes\n")
+        let thirdFile = try fixture.file("charlie-workspace/unchanged.txt", text: "charlie bytes\n")
+        let folders = [firstFile, secondFile, thirdFile].map { $0.deletingLastPathComponent() }
+
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: folders[0]
+        )
+        let window = app.windows.firstMatch
+        func row(_ index: Int) -> XCUIElement {
+            window.descendants(matching: .any)
+                .matching(identifier: "bailey.project.row")
+                .matching(NSPredicate(format: "label CONTAINS %@", folders[index].lastPathComponent))
+                .firstMatch
+        }
+        for index in 1..<folders.count {
+            app.typeKey("a", modifierFlags: [.command, .shift])
+            try WorkspaceUITestSupport.choose(folders[index], in: app, window: window)
+            XCTAssertTrue(row(index).waitForExistence(timeout: 15))
+        }
+        XCTAssertEqual(window.descendants(matching: .any)
+            .matching(identifier: "bailey.project.row").count, 3)
+
+        let projects = WorkspaceUITestSupport.element("bailey.dock.projects", in: app)
+        let projectContextMenu = app.menus.matching(identifier: "bailey.project.row").firstMatch
+        XCTAssertTrue(projects.waitForExistence(timeout: 15))
+        projects.click()
+        row(0).click()
+        XCTAssertTrue(row(0).isSelected)
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        XCTAssertTrue(row(0).isSelected, "Arrow keys must not activate the cursor project")
+        XCTAssertFalse(row(1).isSelected)
+        row(2).rightClick()
+        XCTAssertTrue(projectContextMenu.menuItems["Close Project"].waitForExistence(timeout: 10))
+        XCTAssertTrue(row(0).isSelected, "Right-clicking a third project cannot activate it")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        XCTAssertTrue(row(1).isSelected, "Return must commit the keyboard cursor, not the menu target")
+
+        row(0).click()
+        XCTAssertTrue(row(0).isSelected)
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        row(1).rightClick()
+        XCTAssertTrue(projectContextMenu.menuItems["Close Project"].waitForExistence(timeout: 10))
+        projectContextMenu.menuItems["Close Project"].click()
+        XCTAssertTrue(row(1).waitForNonExistence(timeout: 12))
+        XCTAssertTrue(row(0).isSelected, "Closing a background cursor project cannot activate another")
+        XCTAssertTrue(row(2).exists)
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        XCTAssertTrue(row(0).isSelected, "Return cannot select the deleted project UUID")
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        XCTAssertTrue(row(2).isSelected,
+                      "After removal, the arrow cursor must follow the remaining project order")
+
+        app.typeKey(XCUIKeyboardKey.upArrow, modifierFlags: [])
+        XCTAssertTrue(row(2).isSelected, "Arrow alone cannot activate another project")
+        app.typeKey(" ", modifierFlags: [])
+        XCTAssertTrue(row(0).isSelected, "Space must activate the keyboard cursor project")
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        XCTAssertTrue(row(2).isSelected)
+
+        row(0).click(forDuration: 0.12, thenDragTo: row(2))
+        let ordered = window.descendants(matching: .any)
+            .matching(identifier: "bailey.project.row").allElementsBoundByIndex
+        XCTAssertEqual(ordered.count, 2)
+        XCTAssertTrue(ordered[0].label.contains(folders[2].lastPathComponent),
+                      "Dragging A onto C must reorder the projects, not change their identities")
+        XCTAssertTrue(ordered[1].label.contains(folders[0].lastPathComponent))
+        XCTAssertTrue(row(2).isSelected, "Reordering a background row cannot switch projects")
+
+        row(0).rightClick()
+        XCTAssertTrue(projectContextMenu.menuItems["Close Project"].waitForExistence(timeout: 10))
+        projectContextMenu.menuItems["Close Project"].click()
+        XCTAssertTrue(row(0).waitForNonExistence(timeout: 12))
+        XCTAssertTrue(row(2).isSelected, "Closing the last background project cannot switch context")
+        row(2).rightClick()
+        XCTAssertTrue(projectContextMenu.menuItems["Close Project"].waitForExistence(timeout: 10))
+        projectContextMenu.menuItems["Close Project"].click()
+        XCTAssertTrue(window.buttons["bailey.emptyState.addFolder"].waitForExistence(timeout: 12))
+        XCTAssertEqual(window.descendants(matching: .any)
+            .matching(identifier: "bailey.project.row").count, 0)
+        XCTAssertEqual(try Data(contentsOf: firstFile), Data("alpha bytes\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: secondFile), Data("bravo bytes\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: thirdFile), Data("charlie bytes\n".utf8))
+    }
+
     func testProjectContextMenuExposesOnlyCloseAndUsesFolderName() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("folder-first.txt", text: "project contents\n")

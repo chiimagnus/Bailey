@@ -87,6 +87,39 @@ final class WorkspaceIdentityTests: XCTestCase {
                      "A terminal cannot implicitly create or redirect a project root")
     }
 
+    func testReorderAndCloseBackgroundProjectsPreserveSelectedProjectIdentity() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Projects-" + UUID().uuidString)
+        let folders = (0..<3).map { root.appendingPathComponent("project-\($0)") }
+        for folder in folders {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        manager.addLocalFolders(folders)
+        let first = try XCTUnwrap(manager.projects.first { $0.customDirectory == folders[0].path })
+        let background = try XCTUnwrap(manager.projects.first { $0.customDirectory == folders[1].path })
+        let last = try XCTUnwrap(manager.projects.first { $0.customDirectory == folders[2].path })
+        manager.selectedProjectID = first.id
+
+        manager.moveProject(last.id, to: first.id)
+        XCTAssertEqual(manager.projects.map(\.id), [last.id, first.id, background.id])
+        XCTAssertEqual(manager.selectedProjectID, first.id)
+        manager.close(background)
+        XCTAssertEqual(manager.projects.map(\.id), [last.id, first.id])
+        XCTAssertEqual(manager.selectedProjectID, first.id,
+                       "Closing an inactive project must not switch the active project")
+        XCTAssertEqual(manager.selectedProject?.customDirectory, folders[0].path)
+        manager.close(first)
+        XCTAssertEqual(manager.selectedProjectID, last.id)
+        XCTAssertEqual(manager.selectedProject?.customDirectory, folders[2].path)
+        manager.close(last)
+        XCTAssertTrue(manager.projects.isEmpty)
+        XCTAssertNil(manager.selectedProjectID)
+    }
+
     func testFinderTerminalDropDoesNotInjectControlCharactersOrExecute() {
         let simple = URL(fileURLWithPath: "/tmp/simple.txt")
         let quoted = URL(fileURLWithPath: "/tmp/it's a $cost; 🚀.md")

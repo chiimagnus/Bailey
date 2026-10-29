@@ -141,6 +141,24 @@ struct ProjectsPanelView: View {
             contextProjectID = nil
             if keyboardFocused { cursorProjectID = id }
         }
+        .onChange(of: manager.projects.map(\.id)) { _, ids in
+            let valid = Set(ids)
+            if let cursorProjectID, !valid.contains(cursorProjectID) {
+                self.cursorProjectID = manager.selectedProjectID.flatMap {
+                    valid.contains($0) ? $0 : nil
+                } ?? ids.first
+            }
+            if let contextProjectID, !valid.contains(contextProjectID) {
+                self.contextProjectID = nil
+            }
+            if let draggedProjectID, !valid.contains(draggedProjectID) {
+                endProjectDrag()
+            }
+            projectFrames = projectFrames.filter { valid.contains($0.key) }
+        }
+        .onDisappear {
+            if draggedProjectID != nil { endProjectDrag() }
+        }
     }
 
     private func focusProjectList() {
@@ -162,7 +180,9 @@ struct ProjectsPanelView: View {
             let offset = event.keyCode == 125 ? 1 : -1
             cursorProjectID = projects[max(0, min(projects.count - 1, index + offset))].id
         case 36, 49, 76: // Return / Space
-            manager.selectedProjectID = cursorProjectID ?? projects[index].id
+            let targetID = projects[index].id
+            cursorProjectID = targetID
+            manager.selectedProjectID = targetID
         case 53: break // Escape leaves the keyboard cursor in place
         default: return false
         }
@@ -170,6 +190,10 @@ struct ProjectsPanelView: View {
     }
 
     private func updateProjectDrag(source: UUID, location: CGPoint) {
+        guard manager.projects.contains(where: { $0.id == source }) else {
+            endProjectDrag()
+            return
+        }
         draggedProjectID = source
         NSCursor.closedHand.set()
         guard let target = projectFrames.first(where: {
