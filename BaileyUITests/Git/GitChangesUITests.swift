@@ -270,7 +270,8 @@ final class GitChangesUITests: XCTestCase {
         let palette = window.textFields["bailey.commandPalette.search"]
         XCTAssertTrue(palette.waitForExistence(timeout: 10))
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-        XCTAssertTrue(palette.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(palette.waitForNonExistence(timeout: 5),
+                      "Escape must close the empty palette rather than reach the underlying editor")
 
         app.typeKey("e", modifierFlags: [.command, .shift])
         firstTab.click()

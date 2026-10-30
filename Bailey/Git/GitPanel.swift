@@ -2055,8 +2055,9 @@ struct GitPanel: View {
         if let tree, let project {
             manager.registerTreeResponder(tree, for: .git, in: project)
         }
-        guard let window = keyboardOwner.view?.window ?? graphKeyboardOwner.view?.window,
-              window.isKeyWindow, NSApp.isActive else {
+        guard !manager.isCommandPaletteVisible,
+              let window = keyboardOwner.view?.window ?? graphKeyboardOwner.view?.window,
+              window.isKeyWindow, NSApp.isActive, window.attachedSheet == nil else {
             GitGraphScrollLog.record("focus-deferred", owner: graphKeyboardOwner)
             return
         }
