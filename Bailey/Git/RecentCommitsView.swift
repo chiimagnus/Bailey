@@ -137,6 +137,10 @@ struct RecentCommitsView: View {
 
     let commits: [Commit]
     let remotes: [String]
+    let remoteURLs: [String: String]
+    let knownRemotesByCommit: [String: Set<String>]
+    let hostProviders: [String: GitHostedRemoteURL.Provider]
+    let openHosted: (String, String) -> Void
     let stashFilesByOID: [String: GitStatusModel.StashFilesState]
     let repoRoot: String
     let selectionScope: String
@@ -174,6 +178,10 @@ struct RecentCommitsView: View {
     init(
         commits: [Commit],
         remotes: [String] = [],
+        remoteURLs: [String: String] = [:],
+        knownRemotesByCommit: [String: Set<String>] = [:],
+        hostProviders: [String: GitHostedRemoteURL.Provider] = [:],
+        openHosted: @escaping (String, String) -> Void = { _, _ in },
         stashFilesByOID: [String: GitStatusModel.StashFilesState] = [:],
         repoRoot: String,
         selectionScope: String = "local",
@@ -217,6 +225,10 @@ struct RecentCommitsView: View {
     ) {
         self.commits = commits
         self.remotes = remotes
+        self.remoteURLs = remoteURLs
+        self.knownRemotesByCommit = knownRemotesByCommit
+        self.hostProviders = hostProviders
+        self.openHosted = openHosted
         self.stashFilesByOID = stashFilesByOID
         self.repoRoot = repoRoot
         self.selectionScope = selectionScope
@@ -889,6 +901,7 @@ struct RecentCommitsView: View {
         } else if let stash = commit.stash {
             stashActions(stash)
         } else {
+            hostedCommitMenu(commit)
             Button(String(localized: "Create Branch at Commit…", table: "Git")) {
                 createBranch(commit)
             }
@@ -907,6 +920,34 @@ struct RecentCommitsView: View {
             Button(String(localized: "Copy Commit Subject", table: "Git")) {
                 copy(commit.subject)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func hostedCommitMenu(_ commit: Commit) -> some View {
+        let containing = knownRemotesByCommit[commit.hash] ?? []
+        let available = remotes.compactMap { remote -> (String, String)? in
+            guard containing.contains(remote), let url = remoteURLs[remote],
+                  let link = GitHostedRemoteURL(
+                      remoteURL: url, hostProviders: hostProviders
+                  ), link.commitURL(commit.hash) != nil else { return nil }
+            return (remote, link.provider.title)
+        }
+        if available.count == 1, let (remote, provider) = available.first {
+            Button(String(localized: "Open on \(provider)", table: "Git")) {
+                openHosted(remote, commit.hash)
+            }
+            Divider()
+        } else if available.count > 1 {
+            Menu(String(localized: "Open in Browser", table: "Git")) {
+                ForEach(available.indices, id: \.self) { index in
+                    let (remote, provider) = available[index]
+                    Button("\(provider) · \(remote)") {
+                        openHosted(remote, commit.hash)
+                    }
+                }
+            }
+            Divider()
         }
     }
 
@@ -1186,6 +1227,7 @@ struct RecentCommitsView: View {
 
     @ViewBuilder
     private func referenceActions(_ reference: Reference, commit: Commit) -> some View {
+        hostedCommitMenu(commit)
         let matches = worktrees(for: reference, in: commit)
         if !matches.isEmpty {
             let locations = commit.checkedOutWorktrees.count > 1

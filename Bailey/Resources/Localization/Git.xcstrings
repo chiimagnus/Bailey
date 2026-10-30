@@ -3066,6 +3066,56 @@
           }
         }
       }
+    },
+    "Open in Browser": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在浏览器中打开"
+          }
+        }
+      }
+    },
+    "Open Remote in Browser": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在浏览器中打开远端"
+          }
+        }
+      }
+    },
+    "This Git remote has no supported web address.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此 Git 远端没有可用的网页地址。"
+          }
+        }
+      }
+    },
+    "Could not open the Git repository in the browser.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法在浏览器中打开 Git 仓库。"
+          }
+        }
+      }
+    },
+    "Open on %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在%@打开"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

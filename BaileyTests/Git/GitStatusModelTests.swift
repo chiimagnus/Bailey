@@ -18,6 +18,71 @@ final class GitStatusModelTests: XCTestCase {
         }
     }
 
+    func testHostedCommitAvailabilityUpdatesAfterRealPushToEachRemote() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-Hosted-\(UUID().uuidString)")
+        let repo = folder.appendingPathComponent("checkout")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        func git(_ args: [String]) -> String {
+            let result = GitCommandExecution.run(args, in: repo.path)
+            XCTAssertEqual(result.status, 0, result.stderr)
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        _ = git(["init", "-q", "-b", "main"])
+        _ = git(["config", "user.name", "Bailey Test"])
+        _ = git(["config", "user.email", "bailey@example.invalid"])
+        _ = git(["config", "commit.gpgsign", "false"])
+        try Data("base\n".utf8).write(to: repo.appendingPathComponent("test.txt"))
+        _ = git(["add", "test.txt"])
+        _ = git(["commit", "-qm", "base"])
+        let base = git(["rev-parse", "HEAD"])
+        for remote in ["origin", "upstream"] {
+            _ = git(["init", "--bare", "-q", folder.appendingPathComponent(remote + ".git").path])
+            _ = git(["remote", "add", remote, folder.appendingPathComponent(remote + ".git").path])
+            _ = git(["push", "-q", remote, "main"])
+        }
+
+        try Data("origin only\n".utf8).write(to: repo.appendingPathComponent("test.txt"))
+        _ = git(["add", "test.txt"])
+        _ = git(["commit", "-qm", "origin only"])
+        let originOnly = git(["rev-parse", "HEAD"])
+        _ = git(["push", "-q", "origin", "main"])
+
+        try Data("local only\n".utf8).write(to: repo.appendingPathComponent("test.txt"))
+        _ = git(["add", "test.txt"])
+        _ = git(["commit", "-qm", "local only"])
+        let localOnly = git(["rev-parse", "HEAD"])
+
+        let model = GitStatusModel()
+        model.sync(root: repo.path)
+        try await wait {
+            model.hasCurrentHistory && model.canUseCurrentReferences
+                && model.recentCommits.contains(where: { $0.hash == localOnly })
+        }
+        XCTAssertEqual(model.knownRemotesByCommit[base], Set(["origin", "upstream"]))
+        XCTAssertEqual(model.knownRemotesByCommit[originOnly], Set(["origin"]))
+        XCTAssertNil(model.knownRemotesByCommit[localOnly])
+
+        _ = git(["push", "-q", "upstream", "main"])
+        model.refresh()
+        try await wait {
+            model.hasCurrentHistory && model.canUseCurrentReferences
+                && model.refsByName["refs/remotes/upstream/main"]?.oid == localOnly
+        }
+        XCTAssertEqual(model.knownRemotesByCommit[localOnly], Set(["upstream"]))
+        XCTAssertEqual(model.knownRemotesByCommit[originOnly], Set(["origin", "upstream"]))
+
+        _ = git(["remote", "remove", "upstream"])
+        model.refresh()
+        try await wait {
+            model.hasCurrentHistory && model.canUseCurrentReferences
+                && !model.remotes.contains("upstream")
+        }
+        XCTAssertNil(model.knownRemotesByCommit[localOnly])
+        XCTAssertEqual(model.knownRemotesByCommit[originOnly], Set(["origin"]))
+    }
+
     func testGitNavigationSurvivesPanelRemountButNotDifferentProjectOrRoot() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("Bailey-Git-Nav-" + UUID().uuidString)

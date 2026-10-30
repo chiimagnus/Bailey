@@ -60,6 +60,23 @@ final class GitRemoteBranchActionTests: XCTestCase {
         try await settle()
     }
 
+    func testRemoteURLParserUsesFetchAddressesAndSupportsCRLF() {
+        let output = """
+        origin\thttps://github.com/team/repo.git (fetch)
+        origin\tgit@github.com:team/repo.git (push)
+        mirror\tgit@gitee.com:team/repo.git (fetch)
+        mirror\tgit@gitee.com:team/repo.git (push)
+        """
+        let expected = [
+            "origin": "https://github.com/team/repo.git",
+            "mirror": "git@gitee.com:team/repo.git"
+        ]
+        XCTAssertEqual(GitStatusModel.parseRemoteURLs(output), expected)
+        XCTAssertEqual(GitStatusModel.parseRemoteURLs(
+            output.replacingOccurrences(of: "\n", with: "\r\n")
+        ), expected)
+    }
+
     func testCheckoutRemoteCreatesTrackingBranchAtSelectedRemoteOID() async throws {
         _ = try makeBareRemote("origin")
         _ = try git(["push", "origin", "main:refs/heads/topic/nested"])

@@ -53,6 +53,31 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings(configURL: configURL).fontSize, 19)
     }
 
+    func testCustomHostRulesPersistWithoutUnrequestedGitGraphPreferences() throws {
+        let settings = AppSettings(configURL: configURL)
+        XCTAssertTrue(settings.gitHostingRules.isEmpty)
+
+        try settings.applyGitHostingRules([
+            "git.company.internal=gitlab", "github.enterprise.test=github"
+        ])
+        let saved = try XCTUnwrap(TOML.parse(at: configURL))
+        XCTAssertEqual(saved["git.host-providers"]?.strings, settings.gitHostingRules)
+
+        let restored = AppSettings(configURL: configURL)
+        XCTAssertEqual(restored.gitHostProviders["git.company.internal"], .gitlab)
+        let before = try Data(contentsOf: configURL)
+        XCTAssertThrowsError(try restored.applyGitHostingRules(["invalid/host=github"]))
+        XCTAssertEqual(try Data(contentsOf: configURL), before)
+
+        restored.resetToDefaults()
+        XCTAssertTrue(AppSettings(configURL: configURL).gitHostingRules.isEmpty)
+        let keys = try XCTUnwrap(TOML.parse(at: configURL))
+        for obsolete in ["git.graph.show-stashes", "git.graph.show-tags",
+                         "git.graph.show-remote-labels", "git.fetch-prune"] {
+            XCTAssertNil(keys[obsolete], "\(obsolete) was not requested and must not be persisted")
+        }
+    }
+
     func testObsoleteInfoWorkspaceNamesAreRejectedAndOnlyNormalizedOnSave() throws {
         let validConfig = """
         font-family = "Fixture Font"

@@ -4,6 +4,79 @@ import XCTest
 
 @MainActor
 final class GitGraphUITests: XCTestCase {
+    func testHostedCommitMenuKeepsRemoteSetupOutOfMainPanel() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("hosted.txt", text: "remote context\n")
+        try fixture.initializeGit()
+        try fixture.git(["remote", "add", "origin", "https://github.com/owner/repo.git"])
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let app = try launchGraph(fixture, language: "en")
+        let commit = app.buttons["E2E fixture history"]
+        XCTAssertTrue(commit.waitForExistence(timeout: 25))
+
+        commit.rightClick()
+        XCTAssertFalse(app.menuItems["Open on GitHub"].exists,
+                       "A configured Remote does not mean this local commit was pushed")
+        XCTAssertFalse(app.menuItems["Open Repository in Browser"].exists,
+                       "An unpushed commit must not fall back to an unrelated repository page")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+        let more = app.descendants(matching: .any)
+            .matching(identifier: "bailey.git.more-actions").firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 12))
+        more.click()
+        XCTAssertFalse(app.menuItems["Manage Remotes…"].exists,
+                       "Repository configuration must not create a separate sheet in Git Graph")
+        XCTAssertTrue(app.menuItems["Open Remote in Browser"].exists,
+                      "The existing repository browser action remains available")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+        XCTAssertEqual(try fixture.git(["remote", "get-url", "origin"]),
+                       Data("https://github.com/owner/repo.git\n".utf8))
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+    }
+
+    func testHostedCommitMenuOnlyOffersRemoteContainingTheSelectedCommit() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("remote-base.txt", text: "base\n")
+        try fixture.initializeGit()
+        let original = try fixture.git(["rev-parse", "HEAD"])
+        let bare = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Bailey-UITest-Bare-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: bare) }
+        try fixture.git(["init", "--bare", "-q", bare.path])
+        try fixture.git(["remote", "add", "origin", bare.path])
+        try fixture.git(["push", "-q", "-u", "origin", "main"])
+        try fixture.git(["remote", "set-url", "origin", "https://github.com/owner/repo.git"])
+        try fixture.git(["remote", "add", "upstream", "https://gitlab.com/team/repo.git"])
+        XCTAssertEqual(try fixture.git(["rev-parse", "refs/remotes/origin/main"]), original)
+
+        _ = try fixture.file("unpublished.txt", text: "unpublished\n")
+        try fixture.git(["add", "--", "unpublished.txt"])
+        try fixture.git(["commit", "-qm", "local only"])
+        let local = try fixture.git(["rev-parse", "HEAD"])
+        let app = try launchGraph(fixture, language: "en")
+        let localRow = app.buttons["local only"]
+        let pushedRow = app.buttons["E2E fixture history"]
+        XCTAssertTrue(localRow.waitForExistence(timeout: 25))
+        XCTAssertTrue(pushedRow.waitForExistence(timeout: 25))
+
+        localRow.rightClick()
+        XCTAssertFalse(app.menuItems["Open on GitHub"].exists)
+        XCTAssertFalse(app.menuItems["Open in Browser"].exists)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+        pushedRow.rightClick()
+        XCTAssertTrue(app.menuItems["Open on GitHub"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.menuItems["Open in Browser"].exists,
+                       "Only the remote containing this commit should be offered")
+        XCTAssertFalse(app.menuItems["Open on GitLab"].exists)
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), local)
+        XCTAssertEqual(try fixture.git(["rev-parse", "refs/remotes/origin/main"]), original)
+    }
+
     func testGraphExplicitSelectionIsIndependentOfKeyboardCursorAndContext() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let oldFile = try fixture.file("nested/old.txt", text: "history stays unchanged\n")

@@ -3,6 +3,43 @@ import XCTest
 
 @MainActor
 final class WorkspaceRetentionUITests: XCTestCase {
+    func testGitHostingSettingsStayInNativeSettingsWithoutExtraGraphToggles() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", configurationHome: fixture.root
+        )
+        app.typeKey(",", modifierFlags: .command)
+        let window = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 15))
+        let gitPage = window.staticTexts["Git Manager"].firstMatch
+        XCTAssertTrue(gitPage.waitForExistence(timeout: 10))
+        gitPage.click()
+
+        XCTAssertTrue(window.staticTexts["Self-hosted Git Providers"].waitForExistence(timeout: 10))
+        let hostRules = window.textViews["Custom Git hosting domains"]
+        XCTAssertTrue(hostRules.waitForExistence(timeout: 10))
+        XCTAssertFalse(window.staticTexts["Show stashes"].exists)
+        XCTAssertFalse(window.staticTexts["Show tag labels"].exists)
+        XCTAssertFalse(window.staticTexts["Show remote branch labels"].exists)
+        XCTAssertFalse(window.staticTexts["Remote Fetch"].exists)
+
+        hostRules.click()
+        hostRules.typeText("git.example.com=gitlab")
+        let apply = window.buttons["Apply"]
+        XCTAssertTrue(apply.waitForExistence(timeout: 10))
+        apply.click()
+        let config = fixture.root.appendingPathComponent(".config/bailey-dev/config.toml")
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let data = try? Data(contentsOf: config) else { return false }
+            let text = String(decoding: data, as: UTF8.self)
+            return text.contains("git.host-providers = [\"git.example.com=gitlab\"]")
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed)
+        let screenshot = XCTAttachment(screenshot: window.screenshot())
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
     func testIsolatedSettingsThemePersistsAcrossRealAppRestart() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let app = try WorkspaceUITestSupport.launch(

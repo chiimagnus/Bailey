@@ -3,6 +3,51 @@ import XCTest
 
 @MainActor
 final class GitGraphReferenceGroupTests: XCTestCase {
+    func testKnownHostingRemotesFollowBothMergeParentsAndNeverInferFromLocalRefs() {
+        typealias Commit = GitStatusModel.RecentCommit
+        typealias Ref = GitStatusModel.GitRef
+        func oid(_ character: Character) -> String { String(repeating: String(character), count: 40) }
+        func commit(_ id: Character, parents: [Character]) -> Commit {
+            Commit(
+                hash: oid(id), shortHash: String(repeating: String(id), count: 7),
+                subject: "commit", author: "Tester", date: .now,
+                parentHashes: parents.map(oid), references: [], files: []
+            )
+        }
+        let commits = [
+            commit("a", parents: []),
+            commit("b", parents: ["a"]),
+            commit("c", parents: ["a"]),
+            commit("d", parents: ["b", "c"]),
+            commit("e", parents: ["d"])
+        ]
+        let refs: [String: Ref] = [
+            "refs/remotes/origin/main": .init(oid: oid("d"), symbolic: nil, objectType: "commit"),
+            "refs/remotes/upstream/main": .init(oid: oid("c"), symbolic: nil, objectType: "commit"),
+            "refs/remotes/origin/team/topic": .init(oid: oid("b"), symbolic: nil, objectType: "commit"),
+            "refs/remotes/origin/HEAD": .init(
+                oid: oid("e"), symbolic: "refs/remotes/origin/main", objectType: "commit"
+            ),
+            "refs/remotes/deleted/main": .init(oid: oid("e"), symbolic: nil, objectType: "commit"),
+            "refs/heads/main": .init(oid: oid("e"), symbolic: nil, objectType: "commit"),
+            "refs/tags/local": .init(oid: oid("e"), symbolic: nil, objectType: "commit")
+        ]
+        let result = GitStatusModel.knownRemotesByCommit(
+            commits, refsByName: refs, remotes: ["origin", "origin/team", "upstream"]
+        )
+        XCTAssertEqual(result[oid("a")], Set(["origin", "origin/team", "upstream"]))
+        XCTAssertEqual(result[oid("b")], Set(["origin", "origin/team"]))
+        XCTAssertEqual(result[oid("c")], Set(["origin", "upstream"]))
+        XCTAssertEqual(result[oid("d")], Set(["origin"]))
+        XCTAssertNil(result[oid("e")], "Local HEAD and an alias are not proof of a published commit")
+        XCTAssertTrue(GitStatusModel.knownRemotesByCommit(
+            commits, refsByName: refs, remotes: []
+        ).isEmpty)
+        XCTAssertNil(GitStatusModel.knownRemotesByCommit(
+            Array(commits.dropFirst()), refsByName: refs, remotes: ["origin"]
+        )[oid("a")], "Missing graph ancestry must not invent remote availability")
+    }
+
     func testCompositeReferencesUseLongestConfiguredRemoteAndPreserveEveryTarget() throws {
         typealias Ref = GitStatusModel.RecentCommit.Reference
         let references: [Ref] = [

@@ -70,6 +70,11 @@ struct GitPanel: View {
         )
     }
     @State private var historyCollapsed = false
+    @State private var remoteURLs: [String: String] = [:]
+    private var remoteLookupID: String {
+        [model.currentScope, model.repoRoot, model.remotes.joined(separator: ","),
+         String(model.canUseCurrentReferences)].joined(separator: "\u{0}")
+    }
     private var expandedCommitIDsBinding: Binding<Set<String>> {
         Binding(
             get: { model.expandedCommitIDs },
@@ -235,6 +240,10 @@ struct GitPanel: View {
         .onChange(of: model.isBusy) {
             if !model.isBusy { operationTrigger = nil }
         }
+        .task(id: remoteLookupID) {
+            remoteURLs = [:]
+            remoteURLs = await model.remoteURLs()
+        }
         .tint(themeAccent)
     }
 
@@ -342,7 +351,9 @@ struct GitPanel: View {
 
     private var moreMenu: some View {
         Menu {
-            Button(String(localized: "Fetch", table: "Sidebar")) { performOperation(.moreMenu, model.fetch) }
+            Button(String(localized: "Fetch", table: "Sidebar")) {
+                performOperation(.moreMenu, model.fetch)
+            }
                 .disabled(model.isBusy || !model.canUseCurrentReferences || model.remotes.isEmpty)
             Button(String(localized: "Pull (Fast-forward Only)", table: "Sidebar")) { performOperation(.moreMenu, model.pull) }
                 .disabled(model.isBusy || !model.canUseCurrentReferences || !model.hasUpstream)
@@ -382,6 +393,20 @@ struct GitPanel: View {
             Button(String(localized: "Copy Changed Paths", table: "Sidebar")) { copyChangedPaths() }
                 .disabled(model.totalChangeCount == 0)
             Button(String(localized: "Copy Repository Path", table: "Sidebar")) { copyToPasteboard(model.repoRoot) }
+            Divider()
+            if !model.remotes.isEmpty {
+                Menu(String(localized: "Open Remote in Browser", table: "Git")) {
+                    ForEach(model.remotes, id: \.self) { remote in
+                        let link = remoteURLs[remote].flatMap {
+                            GitHostedRemoteURL(remoteURL: $0,
+                                               hostProviders: settings.gitHostProviders)
+                        }
+                        Button(link.map { "\($0.provider.title) · \(remote)" } ?? remote) {
+                            model.openInBrowser(remote: remote, hostProviders: settings.gitHostProviders)
+                        }
+                    }
+                }
+            }
             // Finder can only show a path on this Mac.
             if remoteName == nil {
                 Button(String(localized: "Reveal Repository in Finder", table: "Sidebar")) {
@@ -408,6 +433,7 @@ struct GitPanel: View {
         .help(String(localized: "More Actions…", table: "Sidebar"))
         .disabled(!model.canUseCurrentStatus)
         .accessibilityLabel(String(localized: "More Git Actions", table: "Sidebar"))
+        .accessibilityIdentifier("bailey.git.more-actions")
     }
 
     private func headerButton(
@@ -1770,6 +1796,14 @@ struct GitPanel: View {
                         RecentCommitsView(
                             commits: graphCommits,
                             remotes: model.remotes,
+                            remoteURLs: remoteURLs,
+                            knownRemotesByCommit: model.knownRemotesByCommit,
+                            hostProviders: settings.gitHostProviders,
+                            openHosted: { remote, commit in
+                                guard hasCurrentPanelTarget, model.canBrowse(graphTarget) else { return }
+                                model.openInBrowser(remote: remote, commit: commit,
+                                                    hostProviders: settings.gitHostProviders)
+                            },
                             stashFilesByOID: model.stashFilesByOID,
                             repoRoot: model.repoRoot,
                             selectionScope: model.currentScope,

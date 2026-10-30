@@ -20,11 +20,31 @@
 File Manager、Git Manager、Projects，以及连接设置（端口转发、手机通知）；右侧使用系统 `Form`。
 
 Common 设置 System／Light／Dark 外观、明暗 Ghostty 主题和面板字号。
-Text Editor 设置折行，Terminal 设置字体、光标、Option 和历史，Git Manager 设置布局与工具栏。
+Text Editor 设置折行，Terminal 设置字体、光标、Option 和历史。
+Git Manager 保留既有文件布局和工具栏选项，仅新增自部署 Git 托管域名映射。
 File Manager 只配置 Files 树排除规则；Browser 和 Projects 暂无选项。
 
-配置键及生效范围不变；「恢复默认」也重置两项 Git 确认偏好。
+普通设置写入同一配置文件；「恢复默认」清除自定义 Git 域名映射，
+并重置原有两项 Git 确认偏好。
 隔离测试不展示手机通知，也不访问真实 Bark 凭据或启动保存的隧道。
+
+## Git 设置与托管平台
+
+Git Graph 右键提交可以在对应的远端托管网站打开，
+已知远端的仓库主页可以通过 Git Manager 的「⋯ → Open Remote in Browser」打开。
+多个 Git Remote 仍由仓库原生配置管理（如终端执行 `git remote`），
+Bailey 不增加另一套远端管理 Sheet 或额外开关。
+
+GitHub、GitLab、Bitbucket、Gitee、GitCode、Codeup、Azure DevOps、Gitea、Forgejo、
+Codeberg 和 SourceHut 等已知服务可自动识别。
+自部署实例只需在「Self-hosted Git Providers」每行填写 `host=provider`，
+例如 `git.company.cn=gitlab`、`code.example.org=gitea`。
+未知平台可以尝试打开其仓库主页，但不猜测提交详情链接；
+不能从 Git 克隆地址唯一推导网页路由的 CODING 等平台也遵守此限制。
+支持本机和获授权 SSH Git 后端；不会通过平台 API 获取凭据或自动修改 Remote。
+
+唯一新增的配置键是 `git.host-providers = ["git.company.cn=gitlab"]`，
+默认空数组，仅在校验通过后保存；自动支持的平台不需要任何设置。
 
 ## 文件管理器排除规则
 

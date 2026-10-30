@@ -530,6 +530,34 @@ final class GitStatusModel {
     }
 
     private(set) var refsByName: [String: GitRef] = [:]
+
+    /// A local tracking ref proves known fetched/pushed history, not live server state.
+    var knownRemotesByCommit: [String: Set<String>] {
+        guard canUseCurrentReferences, hasCurrentHistory else { return [:] }
+        return Self.knownRemotesByCommit(
+            recentCommits, refsByName: refsByName, remotes: remotes
+        )
+    }
+
+    nonisolated static func knownRemotesByCommit(
+        _ commits: [RecentCommit], refsByName: [String: GitRef], remotes: [String]
+    ) -> [String: Set<String>] {
+        let parents = Dictionary(uniqueKeysWithValues: commits.map { ($0.hash, $0.parentHashes) })
+        let names = remotes.sorted { $0.count > $1.count }
+        var containing: [String: Set<String>] = [:]
+        for (name, ref) in refsByName where name.hasPrefix("refs/remotes/")
+            && ref.symbolic == nil && ref.objectType == "commit" {
+            let suffix = name.dropFirst("refs/remotes/".count)
+            guard let remote = names.first(where: { suffix.hasPrefix($0 + "/") }) else { continue }
+            var stack = [ref.oid]
+            while let oid = stack.popLast() {
+                guard let ancestors = parents[oid],
+                      containing[oid, default: []].insert(remote).inserted else { continue }
+                stack.append(contentsOf: ancestors)
+            }
+        }
+        return containing
+    }
     /// Loaded only when a historical commit's files are expanded. No per-row
     /// SSH queries or eager binary inspection during regular status refresh.
     private(set) var historicalBinaryPaths: [String: Set<String>] = [:]
@@ -560,6 +588,63 @@ final class GitStatusModel {
     private(set) var branches: [String] = []
     private(set) var defaultBranch: String?
     private(set) var remotes: [String] = []
+
+    /// Only fetch URLs are needed to open hosted repositories.
+    nonisolated static func parseRemoteURLs(_ output: String) -> [String: String] {
+        var urls: [String: String] = [:]
+        for line in output.split(whereSeparator: \.isNewline) {
+            let fields = line.split(separator: "\t", maxSplits: 1)
+            guard fields.count == 2, !fields[0].isEmpty,
+                  fields[1].hasSuffix(" (fetch)") else { continue }
+            urls[String(fields[0])] = String(fields[1].dropLast(" (fetch)".count))
+        }
+        return urls
+    }
+
+    func remoteURLs() async -> [String: String] {
+        let target = actionTarget()
+        guard canBrowse(target), canUseCurrentReferences else { return [:] }
+        let result = await GitCommandExecution.run(
+            ["remote", "-v"], in: repoRoot, backend: backend
+        )
+        guard canBrowse(target), result.status == 0 else { return [:] }
+        return Self.parseRemoteURLs(result.stdout)
+    }
+
+    func openInBrowser(
+        remote: String, commit: String? = nil,
+        hostProviders: [String: GitHostedRemoteURL.Provider] = [:]
+    ) {
+        let target = actionTarget()
+        guard canBrowse(target), remotes.contains(remote),
+              commit.map({ knownRemotesByCommit[$0]?.contains(remote) == true }) ?? true else { return }
+        Task {
+            let result = await GitCommandExecution.run(
+                ["remote", "get-url", remote], in: target.repository, backend: backend
+            )
+            guard canBrowse(target), remotes.contains(remote),
+                  commit.map({ knownRemotesByCommit[$0]?.contains(remote) == true }) ?? true
+            else { return }
+            let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard result.status == 0,
+                  let link = GitHostedRemoteURL(remoteURL: raw, hostProviders: hostProviders)
+            else {
+                failImmediately(String(localized: "This Git remote has no supported web address.", table: "Git"))
+                return
+            }
+            let url: URL
+            if let commit {
+                guard let commitURL = link.commitURL(commit) else { return }
+                url = commitURL
+            } else {
+                url = link.repositoryURL
+            }
+            if !NSWorkspace.shared.open(url) {
+                failImmediately(String(localized: "Could not open the Git repository in the browser.", table: "Git"))
+            }
+        }
+    }
+
     private(set) var recentCommits: [RecentCommit] = []
     private(set) var hasMoreRecentCommits = false
     private(set) var isLoadingMoreCommits = false
