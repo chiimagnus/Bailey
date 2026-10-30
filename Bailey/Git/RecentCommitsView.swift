@@ -138,8 +138,9 @@ struct RecentCommitsView: View {
     let commits: [Commit]
     let remotes: [String]
     let remoteLocations: [GitStatusModel.RemoteLocation]
+    let knownRemotesByCommit: [String: Set<String>]
     let hostProviders: [String: GitHostedRemoteURL.Provider]
-    let openHosted: (String, String?) -> Void
+    let openHosted: (String, String) -> Void
     let showTagLabels: Bool
     let showRemoteLabels: Bool
     let stashFilesByOID: [String: GitStatusModel.StashFilesState]
@@ -180,8 +181,9 @@ struct RecentCommitsView: View {
         commits: [Commit],
         remotes: [String] = [],
         remoteLocations: [GitStatusModel.RemoteLocation] = [],
+        knownRemotesByCommit: [String: Set<String>] = [:],
         hostProviders: [String: GitHostedRemoteURL.Provider] = [:],
-        openHosted: @escaping (String, String?) -> Void = { _, _ in },
+        openHosted: @escaping (String, String) -> Void = { _, _ in },
         showTagLabels: Bool = true,
         showRemoteLabels: Bool = true,
         stashFilesByOID: [String: GitStatusModel.StashFilesState] = [:],
@@ -228,6 +230,7 @@ struct RecentCommitsView: View {
         self.commits = commits
         self.remotes = remotes
         self.remoteLocations = remoteLocations
+        self.knownRemotesByCommit = knownRemotesByCommit
         self.hostProviders = hostProviders
         self.openHosted = openHosted
         self.showTagLabels = showTagLabels
@@ -928,31 +931,25 @@ struct RecentCommitsView: View {
 
     @ViewBuilder
     private func hostedCommitMenu(_ commit: Commit) -> some View {
-        if !remotes.isEmpty {
-            if remotes.count == 1, let remote = remotes.first {
-                let location = remoteLocations.first { $0.name == remote }
-                let link = location.flatMap {
-                    GitHostedRemoteURL(remoteURL: $0.fetchURL, hostProviders: hostProviders)
-                }
-                if let link, link.commitURL(commit.hash) != nil {
-                    Button(String(localized: "Open on \(link.provider.title)", table: "Git")) {
+        let containing = knownRemotesByCommit[commit.hash] ?? []
+        let available = remoteLocations.compactMap { location -> (String, String)? in
+            guard containing.contains(location.name), remotes.contains(location.name),
+                  let link = GitHostedRemoteURL(
+                      remoteURL: location.fetchURL, hostProviders: hostProviders
+                  ), link.commitURL(commit.hash) != nil else { return nil }
+            return (location.name, link.provider.title)
+        }
+        if available.count == 1, let (remote, provider) = available.first {
+            Button(String(localized: "Open on \(provider)", table: "Git")) {
+                openHosted(remote, commit.hash)
+            }
+            Divider()
+        } else if available.count > 1 {
+            Menu(String(localized: "Open in Browser", table: "Git")) {
+                ForEach(available.indices, id: \.self) { index in
+                    let (remote, provider) = available[index]
+                    Button("\(provider) · \(remote)") {
                         openHosted(remote, commit.hash)
-                    }
-                } else {
-                    Button(String(localized: "Open Repository in Browser", table: "Git")) {
-                        openHosted(remote, nil)
-                    }
-                }
-            } else {
-                Menu(String(localized: "Open in Browser", table: "Git")) {
-                    ForEach(remotes, id: \.self) { remote in
-                        let location = remoteLocations.first { $0.name == remote }
-                        let link = location.flatMap {
-                            GitHostedRemoteURL(remoteURL: $0.fetchURL, hostProviders: hostProviders)
-                        }
-                        Button(link.map { "\($0.provider.title) · \(remote)" } ?? remote) {
-                            openHosted(remote, link?.commitURL(commit.hash) == nil ? nil : commit.hash)
-                        }
                     }
                 }
             }

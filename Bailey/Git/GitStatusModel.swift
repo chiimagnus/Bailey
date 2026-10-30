@@ -530,6 +530,36 @@ final class GitStatusModel {
     }
 
     private(set) var refsByName: [String: GitRef] = [:]
+
+    /// A local tracking ref proves known fetched/pushed history, not live server state.
+    var knownRemotesByCommit: [String: Set<String>] {
+        guard canUseCurrentReferences, hasCurrentHistory else { return [:] }
+        return Self.knownRemotesByCommit(
+            recentCommits, refsByName: refsByName, remotes: remotes
+        )
+    }
+
+    nonisolated static func knownRemotesByCommit(
+        _ commits: [RecentCommit], refsByName: [String: GitRef], remotes: [String]
+    ) -> [String: Set<String>] {
+        let parents = Dictionary(uniqueKeysWithValues: commits.map { ($0.hash, $0.parentHashes) })
+        let names = remotes.sorted { $0.count > $1.count }
+        var seen: [String: Set<String>] = [:]
+        var containing: [String: Set<String>] = [:]
+        for (name, ref) in refsByName where name.hasPrefix("refs/remotes/")
+            && ref.symbolic == nil && ref.objectType == "commit" {
+            let suffix = name.dropFirst("refs/remotes/".count)
+            guard let remote = names.first(where: { suffix.hasPrefix($0 + "/") }) else { continue }
+            var stack = [ref.oid]
+            while let oid = stack.popLast() {
+                guard let ancestors = parents[oid],
+                      seen[remote, default: []].insert(oid).inserted else { continue }
+                containing[oid, default: []].insert(remote)
+                stack.append(contentsOf: ancestors)
+            }
+        }
+        return containing
+    }
     /// Loaded only when a historical commit's files are expanded. No per-row
     /// SSH queries or eager binary inspection during regular status refresh.
     private(set) var historicalBinaryPaths: [String: Set<String>] = [:]
@@ -605,12 +635,15 @@ final class GitStatusModel {
         hostProviders: [String: GitHostedRemoteURL.Provider] = [:]
     ) {
         let target = actionTarget()
-        guard canBrowse(target), remotes.contains(remote) else { return }
+        guard canBrowse(target), remotes.contains(remote),
+              commit.map({ knownRemotesByCommit[$0]?.contains(remote) == true }) ?? true else { return }
         Task {
             let result = await GitCommandExecution.run(
                 ["remote", "get-url", remote], in: target.repository, backend: backend
             )
-            guard canBrowse(target) else { return }
+            guard canBrowse(target), remotes.contains(remote),
+                  commit.map({ knownRemotesByCommit[$0]?.contains(remote) == true }) ?? true
+            else { return }
             let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             guard result.status == 0,
                   let link = GitHostedRemoteURL(remoteURL: raw, hostProviders: hostProviders)
@@ -618,7 +651,13 @@ final class GitStatusModel {
                 failImmediately(String(localized: "This Git remote has no supported web address.", table: "Git"))
                 return
             }
-            let url = commit.flatMap(link.commitURL) ?? link.repositoryURL
+            let url: URL
+            if let commit {
+                guard let commitURL = link.commitURL(commit) else { return }
+                url = commitURL
+            } else {
+                url = link.repositoryURL
+            }
             if !NSWorkspace.shared.open(url) {
                 failImmediately(String(localized: "Could not open the Git repository in the browser.", table: "Git"))
             }

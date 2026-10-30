@@ -112,10 +112,18 @@ Git Changes／Graph 右键只更新行游标与临时上下文目标，不抢走
 
 ### 托管平台与 Git Remotes
 
-提交行及 Branch／Tag 引用右键提供「在托管平台打开」：
+提交行及 Branch／Tag 引用右键仅对**本地已知远端跟踪分支包含的提交**
+提供「在托管平台打开」。只有本地提交、尚未 Push 的新提交，
+或缺少远端跟踪证据时，不显示提交链接；多 Remote 仅列出包含该提交的远端。
+Merge 的两个父分支及历史祖先均按实际提交关系判断，
+不会把本地分支、Tag 或 Remote 配置本身当作已上传证据。
+这一判断基于当前 Git 引用快照，无额外网络请求；
+它是最近 Fetch／Push 后的本地认知，不保证服务器在此后没有发生强制推送或删除。
+需要确认最新状态时先 Fetch。
+
 GitHub、GitLab、Bitbucket、Gitee、GitCode、Codeup、Azure DevOps、Gitea／Forgejo、Codeberg、SourceHut
-等常见远端按各自 URL 规则打开；多 Remote 显示逐项选择。
-对无法识别网页提交路由的 Git 服务只尝试打开仓库主页，不臆造详情链接。
+等常见远端按各自 URL 规则打开。不能生成可信提交详情 URL 的服务，
+不在提交右键提供错误的仓库主页回退；仓库主页始终由独立的 Git Manager 菜单打开。
 从配置的 Git Remote 地址生成链接，移除认证信息和参数，不调用托管平台 API。
 SSH Remote 的网页地址一般使用 HTTPS；自部署实例的特殊域名可在 Git Manager 设置中映射平台类型。
 

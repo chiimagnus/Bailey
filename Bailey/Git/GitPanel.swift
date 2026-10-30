@@ -1815,6 +1815,7 @@ struct GitPanel: View {
                             commits: graphCommits,
                             remotes: model.remotes,
                             remoteLocations: hostedRemotes,
+                            knownRemotesByCommit: model.knownRemotesByCommit,
                             hostProviders: settings.gitHostProviders,
                             openHosted: { remote, commit in
                                 guard hasCurrentPanelTarget, model.canBrowse(graphTarget) else { return }
