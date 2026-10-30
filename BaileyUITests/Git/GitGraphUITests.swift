@@ -89,6 +89,53 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
     }
 
+    func testGraphArrowNavigationKeepsRealCommitVisible() throws {
+        try verifyGraphArrowNavigation(pendingChanges: false)
+    }
+
+    func testGraphArrowNavigationWithGitChangesKeepsRealCommitVisible() throws {
+        try verifyGraphArrowNavigation(pendingChanges: true)
+    }
+
+    private func verifyGraphArrowNavigation(pendingChanges: Bool) throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let tracked = try fixture.file("navigation-00.txt", text: "initial revision\n")
+        try fixture.initializeGit()
+        for revision in 1...30 {
+            let name = String(format: "navigation-%02d", revision)
+            _ = try fixture.file(name + ".txt", text: "revision \(revision)\n")
+            try fixture.git(["add", "--", name + ".txt"])
+            try fixture.git(["commit", "-qm", name])
+        }
+        if pendingChanges {
+            try "modified revision\n".write(to: tracked, atomically: true, encoding: .utf8)
+            _ = try fixture.file("untracked-navigation.txt", text: "not committed\n")
+        }
+        let initialHead = try fixture.git(["rev-parse", "HEAD"])
+        let initialStatus = try fixture.git(["status", "--porcelain=v1"])
+        let app = try launchGraph(fixture, language: "en")
+        let newest = app.buttons["navigation-30"]
+        XCTAssertTrue(newest.waitForExistence(timeout: 25))
+        newest.click()
+        newest.click()
+
+        for _ in 0..<12 {
+            app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        }
+        let destination = app.buttons["navigation-18"]
+        XCTAssertTrue(destination.waitForExistence(timeout: 12),
+                      "Keyboard navigation must realize an offscreen commit")
+        XCTAssertTrue(destination.isHittable,
+                      "A focused Git Graph commit must stay inside the scroll viewport")
+        app.typeKey(" ", modifierFlags: [])
+        XCTAssertTrue(historicalFile("navigation-18.txt", in: app).waitForExistence(timeout: 12),
+                      "Space must expand the actual navigated commit")
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), initialHead)
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]), initialStatus)
+        XCTAssertEqual(try Data(contentsOf: tracked),
+                       Data(pendingChanges ? "modified revision\n".utf8 : "initial revision\n".utf8))
+    }
+
     func testGraphCommandArrowsNavigateRealParentAndChildWithoutMutatingGit() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("parent-node.txt", text: "parent data\n")
