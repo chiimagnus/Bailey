@@ -32,7 +32,7 @@ Bailey 是自由组装的 AI IDE，以原生终端工作区支持开发者使用
 | --- | --- |
 | [Theme.swift](../Bailey/App/Theme.swift) | 应用外观、终端主题解析、窗口背景、强调色和分隔线 |
 | [PanelTypography.swift](../Bailey/UI/Panels/PanelTypography.swift) | 面板文字的共享缩放 |
-| [TreeRowStyle.swift](../Bailey/Shared/Tree/TreeRowStyle.swift) | 文件／Git 树的尺寸与共享行、Projects／Dock／命令面板的状态视觉 |
+| [TreeRowStyle.swift](../Bailey/Shared/Tree/TreeRowStyle.swift) | 文件／Git 树的尺寸与共享行、Projects／命令面板的状态视觉 |
 | [WorkspaceChrome.swift](../Bailey/UI/Components/WorkspaceChrome.swift) | 标签、工具按钮及其共享外壳 |
 | [WindowChrome.swift](../Bailey/UI/Components/WindowChrome.swift) | 原生窗口接入与窗口外壳 |
 
@@ -96,6 +96,11 @@ Git 树保留原有焦点呈现，共享树行不复制 Files 的多选模型，
 ## 标签、焦点与输入
 
 标签的名称、图标、未保存状态及关闭按钮使用共享外壳，工具面板的「＋」行为一致。
+Dock 标签使用专属样式：展示项与额外多选项采用不同底色，失活组使用中性色；
+键盘游标与菜单目标使用细描边，菜单目标不叠加选中和悬停背景。
+无障碍选中反映组选区，不从鼠标悬停或键盘游标推断。
+多标签拖动统一淡化来源集合并显示附加项数量；预览只表示移动，不因 Option 显示复制。
+拖动期间 Escape 只取消当前窗口这一次手势，结束后不保留按键监听。
 窄 Dock 组优先保留实际可点击的标签区域，左上角拖动留白随组宽收缩。
 外层停靠布局与内部内容布局分开，不能用额外分屏修复某个标签的样式。
 

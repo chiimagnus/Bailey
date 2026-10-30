@@ -317,6 +317,7 @@ struct CommandPaletteView: View {
         }
 
         for (index, project) in manager.projects.enumerated() where project.id != manager.selectedProjectID {
+            let projectID = project.id
             items.append(
                 PaletteCommand(
                     id: "switch-project-\(project.id)",
@@ -324,7 +325,7 @@ struct CommandPaletteView: View {
                     systemImage: "folder",
                     shortcut: index < 9 ? "⌘\(index + 1)" : nil
                 ) {
-                    manager.selectProject(index: index)
+                    manager.selectProject(id: projectID)
                 }
             )
         }

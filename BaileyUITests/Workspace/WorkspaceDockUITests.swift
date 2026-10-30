@@ -3,6 +3,225 @@ import XCTest
 
 @MainActor
 final class WorkspaceDockUITests: XCTestCase {
+    func testDockCommandAndShiftTabSelectionHasNativeAccessibilityState() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let files = try (0..<3).map {
+            try fixture.file("tab-\($0).txt", text: "original \($0)\n")
+        }
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root
+        )
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        let opened = expectation(description: "Open three tabs in a single real Dock")
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.open(files, withApplicationAt: bundle, configuration: configuration) {
+            _, error in
+            XCTAssertNil(error)
+            opened.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 20), .completed)
+        let window = app.windows.firstMatch
+        let tabs = files.map { WorkspaceUITestSupport.fileTab($0, in: window) }
+        for tab in tabs { XCTAssertTrue(tab.waitForExistence(timeout: 15)) }
+
+        tabs[0].click()
+        XCTAssertTrue(tabs[0].isSelected)
+        XCUIElement.perform(withKeyModifiers: .command) { tabs[2].click() }
+        XCTAssertTrue(tabs[0].isSelected,
+                      "Command-click must keep the previously selected tab in the same group")
+        XCTAssertFalse(tabs[1].isSelected)
+        XCTAssertTrue(tabs[2].isSelected)
+
+        XCUIElement.perform(withKeyModifiers: .shift) { tabs[1].click() }
+        XCTAssertTrue(tabs[0].isSelected)
+        XCTAssertTrue(tabs[1].isSelected)
+        XCTAssertTrue(tabs[2].isSelected)
+        tabs[1].click()
+        XCTAssertFalse(tabs[0].isSelected, "Ordinary release must collapse the selected set")
+        XCTAssertTrue(tabs[1].isSelected)
+        XCTAssertFalse(tabs[2].isSelected)
+        for (index, file) in files.enumerated() {
+            XCTAssertEqual(try Data(contentsOf: file), Data("original \(index)\n".utf8))
+        }
+    }
+
+    func testDockCommandSelectedTabsCloseTogetherWithoutClosingUnselectedFiles() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let files = try (0..<3).map {
+            try fixture.file("close-\($0).swift", text: "let value = \($0)\n")
+        }
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root
+        )
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        let opened = expectation(description: "Open three isolated file tabs")
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.open(files, withApplicationAt: bundle, configuration: config) {
+            _, error in
+            XCTAssertNil(error)
+            opened.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 20), .completed)
+        let window = app.windows.firstMatch
+        let tabs = files.map { WorkspaceUITestSupport.fileTab($0, in: window) }
+        for tab in tabs { XCTAssertTrue(tab.waitForExistence(timeout: 15)) }
+
+        tabs[0].click()
+        XCUIElement.perform(withKeyModifiers: .command) { tabs[2].click() }
+        XCTAssertTrue(tabs[0].isSelected && tabs[2].isSelected)
+        XCTAssertFalse(tabs[1].isSelected)
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(tabs[0].waitForNonExistence(timeout: 15))
+        XCTAssertTrue(tabs[2].waitForNonExistence(timeout: 15))
+        XCTAssertTrue(tabs[1].exists,
+                      "Closing a multi-selection must leave unselected tabs open")
+        XCTAssertTrue(WorkspaceUITestSupport.element("bailey.dock.files", in: app).exists,
+                      "Closing work tabs must not remove the Files tool")
+        for (index, file) in files.enumerated() {
+            XCTAssertEqual(try Data(contentsOf: file), Data("let value = \(index)\n".utf8))
+        }
+    }
+
+    func testSelectedTabContextMenuCommandWClosesSelectionOnlyOnce() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let files = try (0..<3).map {
+            try fixture.file("s-\($0).swift", text: "let selected = \($0)\n")
+        }
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root
+        )
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        let opened = expectation(description: "Open selected Dock close fixtures")
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.open(files, withApplicationAt: bundle, configuration: config) { _, error in
+            XCTAssertNil(error)
+            opened.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 20), .completed)
+        let window = app.windows.firstMatch
+        let tabs = files.map { WorkspaceUITestSupport.fileTab($0, in: window) }
+        for tab in tabs { XCTAssertTrue(tab.waitForExistence(timeout: 15)) }
+
+        tabs[0].click()
+        XCUIElement.perform(withKeyModifiers: .command) { tabs[2].click() }
+        XCTAssertTrue(tabs[0].isSelected && tabs[2].isSelected)
+        XCTAssertFalse(tabs[1].isSelected)
+        tabs[2].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
+        XCTAssertTrue(app.menus.allElementsBoundByIndex.contains {
+            $0.menuItems["Close Selected Panels"].exists
+        }, "A selected multi-tab right-click must reveal the actual batch action")
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(tabs[0].waitForNonExistence(timeout: 15))
+        XCTAssertTrue(tabs[2].waitForNonExistence(timeout: 15))
+        XCTAssertTrue(tabs[1].exists, "Context-menu Command-W must not close an unselected tab")
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 1,
+                       "The native menu and system shortcut must not both execute a close")
+        for (index, file) in files.enumerated() {
+            XCTAssertEqual(try Data(contentsOf: file), Data("let selected = \(index)\n".utf8))
+        }
+    }
+
+    func testRightClickOutsideTabSelectionClosesOnlyItsOwnTarget() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let files = try (0..<3).map {
+            try fixture.file("u-\($0).swift", text: "let untouched = \($0)\n")
+        }
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root
+        )
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        let opened = expectation(description: "Open context selection fixtures")
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.open(files, withApplicationAt: bundle, configuration: config) { _, error in
+            XCTAssertNil(error)
+            opened.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 20), .completed)
+        let window = app.windows.firstMatch
+        let tabs = files.map { WorkspaceUITestSupport.fileTab($0, in: window) }
+        for tab in tabs { XCTAssertTrue(tab.waitForExistence(timeout: 15)) }
+
+        tabs[0].click()
+        XCUIElement.perform(withKeyModifiers: .command) { tabs[2].click() }
+        XCTAssertTrue(tabs[0].isSelected && tabs[2].isSelected)
+        tabs[1].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).rightClick()
+        let menu = try XCTUnwrap(app.menus.allElementsBoundByIndex.first {
+            $0.menuItems["Close"].exists && $0.menuItems["Close Others"].exists
+        }, "An unselected tab must have a single-item Close action")
+        XCTAssertFalse(menu.menuItems["Close Selected Panels"].exists)
+        XCTAssertTrue(tabs[0].isSelected && tabs[2].isSelected,
+                      "Right-clicking outside the selection cannot select or activate its target")
+        menu.menuItems["Close"].click()
+        XCTAssertTrue(tabs[1].waitForNonExistence(timeout: 15))
+        XCTAssertTrue(tabs[0].exists && tabs[2].exists)
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 2)
+        for (index, file) in files.enumerated() {
+            XCTAssertEqual(try Data(contentsOf: file), Data("let untouched = \(index)\n".utf8))
+        }
+    }
+
+    func testDockMultiSelectionDragMovesBothTabsToAnotherGroupWithoutCloning() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let files = try (0..<3).map {
+            try fixture.file("d-\($0).swift", text: "let item = \($0)\n")
+        }
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: fixture.root
+        )
+        let bundle = try XCTUnwrap(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "chiimagnus.bailey.dev").compactMap(\.bundleURL).first)
+        let opened = expectation(description: "Create three original native editors")
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.open(files, withApplicationAt: bundle, configuration: config) {
+            _, error in
+            XCTAssertNil(error)
+            opened.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 20), .completed)
+        let window = app.windows.firstMatch
+        let tabs = files.map { WorkspaceUITestSupport.fileTab($0, in: window) }
+        let filesTool = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
+        for tab in tabs { XCTAssertTrue(tab.waitForExistence(timeout: 15)) }
+        XCTAssertTrue(filesTool.waitForExistence(timeout: 15))
+
+        tabs[0].click()
+        XCUIElement.perform(withKeyModifiers: .command) { tabs[2].click() }
+        XCTAssertTrue(tabs[0].isSelected && tabs[2].isSelected)
+        XCTAssertFalse(tabs[1].isSelected)
+        let originalSourceX = tabs[0].frame.midX
+        let originalTargetX = filesTool.frame.midX
+        XCTAssertGreaterThan(abs(originalTargetX - originalSourceX), 80,
+                             "This fixture must actually span two independent Dock groups")
+        tabs[0].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.3, thenDragTo:
+                filesTool.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            )
+        let moved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            tabs[0].exists && tabs[2].exists
+                && abs(tabs[0].frame.midX - originalTargetX)
+                    < abs(originalSourceX - originalTargetX)
+                && abs(tabs[2].frame.midX - originalTargetX)
+                    < abs(originalSourceX - originalTargetX)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [moved], timeout: 12), .completed,
+                       "One actual drag must move the whole selection into the destination group")
+        XCTAssertTrue(tabs[1].exists, "Unselected native editor must remain in the origin group")
+        XCTAssertEqual(window.buttons.matching(identifier: "bailey.tab.file").count, 3,
+                       "Moving must not clone or drop any file tab")
+        for (index, file) in files.enumerated() {
+            XCTAssertEqual(try Data(contentsOf: file), Data("let item = \(index)\n".utf8))
+        }
+    }
+
     func testDockFileTabSwitchRevealsOneSelectedExplorerRow() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("one.swift", text: "let one = 1\n")
@@ -77,13 +296,17 @@ final class WorkspaceDockUITests: XCTestCase {
         let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 15))
         XCTAssertTrue(git.waitForExistence(timeout: 15))
-        git.click()
         let strip = window.scrollViews.containing(
             .button, identifier: "bailey.dock.git"
         ).firstMatch
         XCTAssertTrue(strip.waitForExistence(timeout: 5))
         XCTAssertLessThan(strip.frame.width, 130,
                           "The narrow Dock tab strip must not overflow its group's viewport")
+        strip.swipeLeft()
+        XCTAssertTrue(strip.frame.contains(CGPoint(x: git.frame.midX, y: git.frame.midY)),
+                      "The active Git target must be inside the visible tab-strip viewport")
+        git.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        XCTAssertTrue(git.isSelected, "Real Git tab click must select and activate Git")
         strip.swipeRight()
         XCTAssertTrue(files.isHittable, "The Files tab must be reachable by horizontal scrolling")
         XCTAssertTrue(strip.frame.contains(CGPoint(x: files.frame.midX, y: files.frame.midY)),
@@ -235,6 +458,96 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertTrue(secondTab.exists, "Right-clicking an inactive tab must not replace the active one")
         XCTAssertEqual(try Data(contentsOf: first), Data("first\n".utf8))
         XCTAssertEqual(try Data(contentsOf: second), Data("second\n".utf8))
+    }
+
+    func testProjectKeyboardCursorAndContextSurviveBackgroundDeletion() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let firstFile = try fixture.file("alpha-workspace/unchanged.txt", text: "alpha bytes\n")
+        let secondFile = try fixture.file("bravo-workspace/unchanged.txt", text: "bravo bytes\n")
+        let thirdFile = try fixture.file("charlie-workspace/unchanged.txt", text: "charlie bytes\n")
+        let folders = [firstFile, secondFile, thirdFile].map { $0.deletingLastPathComponent() }
+
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: folders[0]
+        )
+        let window = app.windows.firstMatch
+        func row(_ index: Int) -> XCUIElement {
+            window.descendants(matching: .any)
+                .matching(identifier: "bailey.project.row")
+                .matching(NSPredicate(format: "label CONTAINS %@", folders[index].lastPathComponent))
+                .firstMatch
+        }
+        for index in 1..<folders.count {
+            app.typeKey("a", modifierFlags: [.command, .shift])
+            try WorkspaceUITestSupport.choose(folders[index], in: app, window: window)
+            XCTAssertTrue(row(index).waitForExistence(timeout: 15))
+        }
+        XCTAssertEqual(window.descendants(matching: .any)
+            .matching(identifier: "bailey.project.row").count, 3)
+
+        let projects = WorkspaceUITestSupport.element("bailey.dock.projects", in: app)
+        let projectContextMenu = app.menus.matching(identifier: "bailey.project.row").firstMatch
+        XCTAssertTrue(projects.waitForExistence(timeout: 15))
+        projects.click()
+        row(0).click()
+        XCTAssertTrue(row(0).isSelected)
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        XCTAssertTrue(row(0).isSelected, "Arrow keys must not activate the cursor project")
+        XCTAssertFalse(row(1).isSelected)
+        row(2).rightClick()
+        XCTAssertTrue(projectContextMenu.menuItems["Close Project"].waitForExistence(timeout: 10))
+        XCTAssertTrue(row(0).isSelected, "Right-clicking a third project cannot activate it")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        XCTAssertTrue(row(1).isSelected, "Return must commit the keyboard cursor, not the menu target")
+
+        row(0).click()
+        XCTAssertTrue(row(0).isSelected)
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        row(1).rightClick()
+        XCTAssertTrue(projectContextMenu.menuItems["Close Project"].waitForExistence(timeout: 10))
+        projectContextMenu.menuItems["Close Project"].click()
+        XCTAssertTrue(row(1).waitForNonExistence(timeout: 12))
+        XCTAssertTrue(row(0).isSelected, "Closing a background cursor project cannot activate another")
+        XCTAssertTrue(row(2).exists)
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        XCTAssertTrue(row(0).isSelected, "Return cannot select the deleted project UUID")
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        XCTAssertTrue(row(2).isSelected,
+                      "After removal, the arrow cursor must follow the remaining project order")
+
+        app.typeKey(XCUIKeyboardKey.upArrow, modifierFlags: [])
+        XCTAssertTrue(row(2).isSelected, "Arrow alone cannot activate another project")
+        app.typeKey(" ", modifierFlags: [])
+        XCTAssertTrue(row(0).isSelected, "Space must activate the keyboard cursor project")
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        XCTAssertTrue(row(2).isSelected)
+
+        row(0).click(forDuration: 0.12, thenDragTo: row(2))
+        let ordered = window.descendants(matching: .any)
+            .matching(identifier: "bailey.project.row").allElementsBoundByIndex
+        XCTAssertEqual(ordered.count, 2)
+        XCTAssertTrue(ordered[0].label.contains(folders[2].lastPathComponent),
+                      "Dragging A onto C must reorder the projects, not change their identities")
+        XCTAssertTrue(ordered[1].label.contains(folders[0].lastPathComponent))
+        XCTAssertTrue(row(2).isSelected, "Reordering a background row cannot switch projects")
+
+        row(0).rightClick()
+        XCTAssertTrue(projectContextMenu.menuItems["Close Project"].waitForExistence(timeout: 10))
+        projectContextMenu.menuItems["Close Project"].click()
+        XCTAssertTrue(row(0).waitForNonExistence(timeout: 12))
+        XCTAssertTrue(row(2).isSelected, "Closing the last background project cannot switch context")
+        row(2).rightClick()
+        XCTAssertTrue(projectContextMenu.menuItems["Close Project"].waitForExistence(timeout: 10))
+        projectContextMenu.menuItems["Close Project"].click()
+        XCTAssertTrue(window.buttons["bailey.emptyState.addFolder"].waitForExistence(timeout: 12))
+        XCTAssertEqual(window.descendants(matching: .any)
+            .matching(identifier: "bailey.project.row").count, 0)
+        XCTAssertEqual(try Data(contentsOf: firstFile), Data("alpha bytes\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: secondFile), Data("bravo bytes\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: thirdFile), Data("charlie bytes\n".utf8))
     }
 
     func testProjectContextMenuExposesOnlyCloseAndUsesFolderName() throws {

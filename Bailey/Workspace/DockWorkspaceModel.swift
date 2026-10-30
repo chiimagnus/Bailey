@@ -27,6 +27,11 @@ enum DockItem: Hashable {
         case .tab: nil
         }
     }
+
+    var tabID: UUID? {
+        if case .tab(let id) = self { return id }
+        return nil
+    }
 }
 
 /// Defines workspace actions without binding the model to SwiftUI menus.
@@ -80,7 +85,6 @@ struct DockWorkspaceConfiguration {
                 .map { $0.trimmingCharacters(in: .whitespaces) }
             var items: [DockItem] = []
             for name in names {
-                if name == "info" { continue }
                 guard let item = DockItem(configurationName: name), seen.insert(item).inserted else {
                     return nil
                 }
@@ -91,8 +95,8 @@ struct DockWorkspaceConfiguration {
         guard seen.contains(.projects), weights.allSatisfy({ $0.isFinite && $0 > 0 }) else { return nil }
         var selected: [DockItem?] = []
         for (index, name) in selectedNames.enumerated() {
-            let item = name.isEmpty || name == "info" ? groups[index].first : DockItem(configurationName: name)
-            if !name.isEmpty && name != "info" && item == nil { return nil }
+            let item = name.isEmpty ? groups[index].first : DockItem(configurationName: name)
+            if !name.isEmpty && item == nil { return nil }
             if let item, !groups[index].contains(item) { return nil }
             selected.append(item)
         }
@@ -102,9 +106,8 @@ struct DockWorkspaceConfiguration {
             let fraction = weights[index] / weights[index...].reduce(0, +)
             guard (0.1...0.9).contains(fraction) else { return nil }
         }
-        let activeActionNames = actionNames.filter { $0 != "info" }
-        let actions = activeActionNames.compactMap(DockAddAction.init(rawValue:))
-        guard actions.count == activeActionNames.count, Set(actions).count == actions.count,
+        let actions = actionNames.compactMap(DockAddAction.init(rawValue:))
+        guard actions.count == actionNames.count, Set(actions).count == actions.count,
               actions.contains(.session), actions.contains(.projects) else { return nil }
         self.init(groups: groups, selected: selected, weights: weights,
                   addActions: actions, edgeThreshold: edgeThreshold)
@@ -157,7 +160,7 @@ enum DockDropHitTest {
     }
 }
 
-struct DockGroup {
+struct DockGroup: Equatable {
     let id: UUID
     var items: [DockItem]
     var selected: DockItem?
@@ -165,11 +168,11 @@ struct DockGroup {
     init(id: UUID = UUID(), items: [DockItem], selected: DockItem? = nil) {
         self.id = id
         self.items = items
-        self.selected = selected ?? items.first
+        self.selected = selected.flatMap { items.contains($0) ? $0 : nil } ?? items.first
     }
 }
 
-struct DockSplit {
+struct DockSplit: Equatable {
     let id: UUID
     var axis: DockAxis
     var fraction: Double
@@ -185,7 +188,7 @@ struct DockSplit {
     }
 }
 
-indirect enum DockNode {
+indirect enum DockNode: Equatable {
     case group(DockGroup)
     case split(DockSplit)
 
@@ -265,11 +268,12 @@ indirect enum DockNode {
         }
     }
 
-    func removingEmptyGroups() -> DockNode? {
+    func removingEmptyGroups(only groupID: UUID? = nil) -> DockNode? {
         switch self {
-        case .group(let group): return group.items.isEmpty ? nil : self
+        case .group(let group):
+            return group.items.isEmpty && (groupID == nil || groupID == group.id) ? nil : self
         case .split(var split):
-            switch (split.first.removingEmptyGroups(), split.second.removingEmptyGroups()) {
+            switch (split.first.removingEmptyGroups(only: groupID), split.second.removingEmptyGroups(only: groupID)) {
             case (let first?, let second?):
                 split.first = first
                 split.second = second
@@ -373,6 +377,13 @@ indirect enum DockSavedNode: Codable {
 @MainActor
 @Observable
 final class DockWorkspaceModel {
+    enum SelectionChange { case replace, preserve, toggle, range }
+    enum CommandScope { case selection, otherTabs, tabsToRight }
+    private struct ExtendedSelection {
+        var items: Set<DockItem>
+        var anchor: DockItem?
+    }
+    private var extendedSelections: [UUID: ExtendedSelection] = [:]
     let configuration: DockWorkspaceConfiguration
     private(set) var root: DockNode {
         didSet { onSnapshotChange?() }
@@ -392,6 +403,43 @@ final class DockWorkspaceModel {
     var activeGroup: DockGroup? { activeGroupID.flatMap { root.group(id: $0) } }
     var closeTarget: DockItem? { contextTarget ?? activeGroup?.selected }
 
+    func selection(in groupID: UUID) -> [DockItem] {
+        guard let group = root.group(id: groupID) else { return [] }
+        let selected = extendedSelections[groupID]?.items ?? Set(group.selected.map { [$0] } ?? [])
+        return group.items.filter { selected.contains($0) }
+    }
+
+    func anchor(in groupID: UUID) -> DockItem? { extendedSelections[groupID]?.anchor }
+
+    func commandTargets(for item: DockItem, scope: CommandScope = .selection) -> [DockItem] {
+        guard let group = group(containing: item) else { return [] }
+        let selected = selection(in: group.id)
+        let targets = selected.contains(item) ? selected : [item]
+        switch scope {
+        case .selection: return targets
+        case .otherTabs: return group.items.filter { $0.tabID != nil && !targets.contains($0) }
+        case .tabsToRight:
+            guard let index = group.items.firstIndex(of: item) else { return [] }
+            return group.items.dropFirst(index + 1).filter { $0.tabID != nil }
+        }
+    }
+
+    private func reconcileSelection(with updated: DockNode, activating groupID: UUID?) {
+        if let groupID, groupID != activeGroupID, let old = activeGroupID {
+            extendedSelections[old] = nil
+        }
+        for (identity, var state) in extendedSelections {
+            guard let group = updated.group(id: identity) else {
+                extendedSelections[identity] = nil
+                continue
+            }
+            state.items.formIntersection(group.items)
+            if let displayed = group.selected { state.items.insert(displayed) }
+            if let anchor = state.anchor, !state.items.contains(anchor) { state.anchor = nil }
+            extendedSelections[identity] = state.items.count > 1 || state.anchor != nil ? state : nil
+        }
+    }
+
     func selectForContextMenu(_ item: DockItem) {
         guard group(containing: item) != nil else { return }
         contextTarget = item
@@ -401,13 +449,14 @@ final class DockWorkspaceModel {
 
     private func updateLayout(_ updated: DockNode, activating groupID: UUID? = nil) {
         let previous = activeGroup?.selected
+        reconcileSelection(with: updated, activating: groupID)
         if contextTarget.map({ updated.group(containing: $0) == nil }) == true {
             contextTarget = nil
         }
         if groupID != nil { contextTarget = nil }
         activeGroupID = (groupID ?? activeGroupID).flatMap { updated.group(id: $0)?.id }
             ?? updated.groups.first?.id
-        root = updated
+        if root != updated { root = updated }
         let current = activeGroup?.selected
         if previous != current {
             if let previous { onDeactivate?(previous) }
@@ -419,6 +468,7 @@ final class DockWorkspaceModel {
         guard root.group(id: groupID) != nil, activeGroupID != groupID else { return }
         contextTarget = nil
         let previous = activeGroup?.selected
+        if let old = activeGroupID { extendedSelections[old] = nil }
         activeGroupID = groupID
         if let previous { onDeactivate?(previous) }
         if previous != activeGroup?.selected {
@@ -435,11 +485,49 @@ final class DockWorkspaceModel {
         }
     }
 
-    func select(_ item: DockItem, activating: Bool = true) {
+    func select(_ item: DockItem, activating: Bool = true,
+                extending change: SelectionChange = .replace, preferred: [DockItem] = []) {
         guard let owner = group(containing: item) else { return }
+        var selected = Set(selection(in: owner.id))
+        var anchor = anchor(in: owner.id)
+        var displayed = item
+        switch change {
+        case .replace:
+            selected = [item]
+            anchor = nil
+        case .preserve:
+            if !selected.contains(item) { selected = [item]; anchor = nil }
+        case .toggle:
+            if selected.contains(item) {
+                if selected.count == 1 { return }
+                selected.remove(item)
+                if owner.selected == item {
+                    displayed = (preferred + owner.items).first { selected.contains($0) } ?? item
+                } else { displayed = owner.selected ?? item }
+                if anchor == item { anchor = nil }
+            } else {
+                selected.insert(item)
+                anchor = item
+            }
+        case .range:
+            let origin = anchor.flatMap { selected.contains($0) ? $0 : nil } ?? owner.selected ?? item
+            anchor = origin
+            guard let start = owner.items.firstIndex(of: origin),
+                  let end = owner.items.firstIndex(of: item) else { return }
+            let opposite = end > start ? -1 : 1
+            var cursor = start + opposite
+            while owner.items.indices.contains(cursor), selected.contains(owner.items[cursor]) {
+                selected.remove(owner.items[cursor])
+                cursor += opposite
+            }
+            selected.formUnion(owner.items[min(start, end)...max(start, end)])
+        }
+        selected.insert(displayed)
+        let state = ExtendedSelection(items: selected, anchor: anchor)
+        extendedSelections[owner.id] = selected.count > 1 || anchor != nil ? state : nil
         if activating { contextTarget = nil }
-        if owner.selected != item {
-            updateLayout(root.editingGroup(owner.id) { $0.selected = item },
+        if owner.selected != displayed {
+            updateLayout(root.editingGroup(owner.id) { $0.selected = displayed },
                          activating: activating ? owner.id : nil)
         } else if activating {
             activate(owner.id)
@@ -484,37 +572,47 @@ final class DockWorkspaceModel {
         updateLayout(normalized)
     }
 
-    func move(_ item: DockItem, into destinationID: UUID, edge: DockEdge? = nil, index: Int? = nil) -> Bool {
-        guard let source = root.group(containing: item),
-              root.group(id: destinationID) != nil
-        else { return false }
-        if source.id == destinationID && source.items.count == 1 {
-            guard edge == nil else { return false }
-            select(item)
-            return true
+    func move(_ item: DockItem, into destinationID: UUID, edge: DockEdge? = nil, index: Int? = nil,
+              items: [DockItem]? = nil, sourceGroupID: UUID? = nil) -> Bool {
+        guard let source = root.group(containing: item), root.group(id: destinationID) != nil,
+              sourceGroupID == nil || sourceGroupID == source.id else { return false }
+        let requested = items ?? commandTargets(for: item)
+        let movingSet = Set(requested)
+        let moving = source.items.filter { movingSet.contains($0) }
+        guard moving.contains(item), Set(moving).count == requested.count else { return false }
+        if source.id == destinationID, edge != nil, moving.count == source.items.count { return false }
+        if source.id == destinationID, edge == nil,
+           let first = source.items.firstIndex(where: movingSet.contains),
+           let last = source.items.lastIndex(where: movingSet.contains),
+           (first...last + 1).contains(min(max(index ?? source.items.count, 0), source.items.count)) { return false }
+        var updated = root.editingGroup(source.id) { group in
+            group.items.removeAll { movingSet.contains($0) }
+            if let selected = group.selected, movingSet.contains(selected) { group.selected = group.items.first }
         }
-        guard let remaining = root.removing(item) else { return false }
-        let updated: DockNode
+        let targetID: UUID
         if let edge {
-            guard remaining.group(id: destinationID) != nil else { return false }
-            updated = remaining.inserting(
-                .group(DockGroup(items: [item])),
-                edge: edge, at: destinationID
-            )
+            let newGroup = DockGroup(items: moving, selected: item)
+            targetID = newGroup.id
+            updated = updated.inserting(.group(newGroup), edge: edge, at: destinationID)
         } else {
-            guard let target = remaining.group(id: destinationID) else { return false }
-            let sourceIndex = source.items.firstIndex(of: item)
-            updated = remaining.editingGroup(target.id) { group in
+            targetID = destinationID
+            updated = updated.editingGroup(destinationID) { group in
                 var insertAt = index ?? group.items.count
-                if source.id == destinationID, let sourceIndex, sourceIndex < insertAt {
-                    insertAt -= 1
+                if source.id == destinationID {
+                    let originalIndex = min(max(index ?? source.items.count, 0), source.items.count)
+                    insertAt = originalIndex - source.items.prefix(originalIndex).filter { movingSet.contains($0) }.count
                 }
                 insertAt = min(max(insertAt, 0), group.items.count)
-                group.items.insert(item, at: insertAt)
+                group.items.insert(contentsOf: moving, at: insertAt)
                 group.selected = item
             }
         }
-        updateLayout(updated, activating: updated.group(containing: item)?.id)
+        if source.id != targetID, updated.group(id: source.id)?.items.isEmpty == true {
+            updated = updated.removingEmptyGroups(only: source.id) ?? updated
+        }
+        updateLayout(updated, activating: targetID)
+        extendedSelections[source.id] = nil
+        extendedSelections[targetID] = moving.count > 1 ? ExtendedSelection(items: movingSet, anchor: item) : nil
         return true
     }
 
@@ -550,6 +648,7 @@ final class DockWorkspaceModel {
     }
 
     func restore(_ saved: DockSavedNode, tabIDs: [UUID]) {
+        extendedSelections.removeAll()
         let restored = saved.restore(tabIDs: tabIDs)
         updateLayout(restored, activating: restored.groups.first?.id)
         // Normalize the saved tree: missing/unsnapshotable references and

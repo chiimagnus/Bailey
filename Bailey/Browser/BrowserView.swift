@@ -41,6 +41,18 @@ private final class BrowserContextMenuBridge: NSObject, WKScriptMessageHandler {
 final class BrowserWebView: WKWebView {
     var onFocused: (() -> Void)?
     var onNewBrowserTab: ((String?) -> Void)?
+    var onFocusReady: (() -> Void)?
+    weak var focusOwner: AnyObject?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onFocusReady?()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        onFocusReady?()
+    }
     fileprivate var contextMenuLink: String? {
         didSet {
             guard let contextMenuLink,
@@ -1011,6 +1023,17 @@ struct BrowserView: View {
 /// and select through the native editor; subsequent clicks can place the caret.
 private final class BrowserAddressTextField: NSTextField {
     var isActivelyEditing = false
+    var onFocusReady: (() -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onFocusReady?()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        onFocusReady?()
+    }
 
     override func mouseDown(with event: NSEvent) {
         guard isActivelyEditing else {
@@ -1062,6 +1085,10 @@ private struct BrowserAddressField: NSViewRepresentable {
         field.lineBreakMode = .byTruncatingMiddle
         field.usesSingleLineMode = true
         field.setAccessibilityLabel(String(localized: "Search or enter website name", table: "Browser"))
+        field.onFocusReady = { [weak coordinator = context.coordinator, weak field] in
+            guard let field else { return }
+            coordinator?.attach(field)
+        }
         return field
     }
 
@@ -1072,15 +1099,24 @@ private struct BrowserAddressField: NSViewRepresentable {
             field.stringValue = text
             field.currentEditor()?.string = text
         }
-        guard focusRequest != context.coordinator.handledFocusRequest else { return }
-        context.coordinator.handledFocusRequest = focusRequest
-        context.coordinator.focus(field)
+        context.coordinator.attach(field)
+        context.coordinator.requestFocus(focusRequest)
+    }
+
+    static func dismantleNSView(
+        _ field: BrowserAddressTextField, coordinator: Coordinator
+    ) {
+        field.onFocusReady = nil
+        coordinator.detach()
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var canFocus: () -> Bool = { true }
         var text: Binding<String>
-        var handledFocusRequest: UInt?
+        private var handledFocusRequest: UInt?
+        private var pendingFocusRequest: UInt?
+        private weak var attachedField: BrowserAddressTextField?
+        private weak var attachedWindow: NSWindow?
         private var onFocus: () -> Void
         private var onBlur: () -> Void
         private var onSubmit: () -> Void
@@ -1112,27 +1148,57 @@ private struct BrowserAddressField: NSViewRepresentable {
             onCancel = field.onCancel
         }
 
-        func focus(_ field: BrowserAddressTextField) {
-            // A newly docked tab can update before AppKit has attached its
-            // field to the window. Keep the one-shot request alive briefly.
-            focus(field, attemptsRemaining: 6)
-        }
-
-        private func focus(
-            _ field: BrowserAddressTextField,
-            attemptsRemaining: Int
-        ) {
-            DispatchQueue.main.async { [weak self, weak field] in
-                guard let self, let field, self.canFocus() else { return }
-                if field.focusAndSelectAll() { return }
-                guard attemptsRemaining > 1 else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    self.focus(
-                        field,
-                        attemptsRemaining: attemptsRemaining - 1
+        func attach(_ field: BrowserAddressTextField) {
+            attachedField = field
+            if attachedWindow !== field.window {
+                if let attachedWindow {
+                    NotificationCenter.default.removeObserver(
+                        self, name: NSWindow.didBecomeKeyNotification, object: attachedWindow
+                    )
+                }
+                attachedWindow = field.window
+                if let window = field.window {
+                    NotificationCenter.default.addObserver(
+                        self, selector: #selector(windowDidBecomeKey(_:)),
+                        name: NSWindow.didBecomeKeyNotification, object: window
                     )
                 }
             }
+            attemptFocus()
+        }
+
+        func requestFocus(_ request: UInt) {
+            pendingFocusRequest = request == handledFocusRequest ? nil : request
+            attemptFocus()
+        }
+
+        @objc private func windowDidBecomeKey(_ notification: Notification) {
+            attemptFocus()
+        }
+
+        private func attemptFocus() {
+            guard let request = pendingFocusRequest,
+                  let field = attachedField,
+                  let window = field.window, window === attachedWindow,
+                  canFocus(),
+                  field.focusAndSelectAll() else { return }
+            handledFocusRequest = request
+            pendingFocusRequest = nil
+        }
+
+        func detach() {
+            if let attachedWindow {
+                NotificationCenter.default.removeObserver(
+                    self, name: NSWindow.didBecomeKeyNotification, object: attachedWindow
+                )
+            }
+            attachedWindow = nil
+            attachedField = nil
+            pendingFocusRequest = nil
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
         }
 
         func controlTextDidBeginEditing(_ notification: Notification) {
@@ -1186,6 +1252,12 @@ private struct BrowserWebViewRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> BrowserWebView {
         browser.webView.onFocused = onFocused
         browser.webView.onNewBrowserTab = onNewBrowserTab
+        browser.webView.focusOwner = context.coordinator
+        browser.webView.onFocusReady = {
+            [weak coordinator = context.coordinator, weak webView = browser.webView] in
+            guard let webView else { return }
+            coordinator?.attach(webView)
+        }
         return browser.webView
     }
 
@@ -1193,56 +1265,87 @@ private struct BrowserWebViewRepresentable: NSViewRepresentable {
         context.coordinator.canFocus = canFocus
         webView.onFocused = onFocused
         webView.onNewBrowserTab = onNewBrowserTab
-        guard focusRequest != context.coordinator.handledFocusRequest else {
-            return
-        }
-        context.coordinator.handledFocusRequest = focusRequest
-        context.coordinator.focus(webView)
+        webView.focusOwner = context.coordinator
+        context.coordinator.attach(webView)
+        context.coordinator.requestFocus(focusRequest)
     }
 
     static func dismantleNSView(
         _ webView: BrowserWebView,
         coordinator: Coordinator
     ) {
+        coordinator.detach()
+        guard webView.focusOwner === coordinator else { return }
+        webView.focusOwner = nil
         webView.onFocused = nil
         webView.onNewBrowserTab = nil
+        webView.onFocusReady = nil
     }
 
-    final class Coordinator {
-        var handledFocusRequest: UInt?
+    final class Coordinator: NSObject {
+        private var handledFocusRequest: UInt?
+        private var pendingFocusRequest: UInt?
+        private weak var attachedView: BrowserWebView?
+        private weak var attachedWindow: NSWindow?
         var canFocus: () -> Bool = { true }
 
         init(handledFocusRequest: UInt) {
-            // Preserve a request issued before the representable was mounted.
-            self.handledFocusRequest = handledFocusRequest == 0
-                ? 0
-                : nil
+            // A request created before this representable mounted stays pending.
+            self.handledFocusRequest = handledFocusRequest == 0 ? 0 : nil
         }
 
-        func focus(_ webView: BrowserWebView) {
-            // Docking can race the AppKit attachment just like the
-            // address field; retry only until WebKit accepts first responder.
-            focus(webView, attemptsRemaining: 6)
-        }
-
-        private func focus(
-            _ webView: BrowserWebView,
-            attemptsRemaining: Int
-        ) {
-            DispatchQueue.main.async { [weak self, weak webView] in
-                guard let self, let webView, self.canFocus() else { return }
-                if let window = webView.window,
-                   window.makeFirstResponder(webView) {
-                    return
+        func attach(_ webView: BrowserWebView) {
+            attachedView = webView
+            if attachedWindow !== webView.window {
+                if let attachedWindow {
+                    NotificationCenter.default.removeObserver(
+                        self, name: NSWindow.didBecomeKeyNotification, object: attachedWindow
+                    )
                 }
-                guard attemptsRemaining > 1 else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    self.focus(
-                        webView,
-                        attemptsRemaining: attemptsRemaining - 1
+                attachedWindow = webView.window
+                if let window = webView.window {
+                    NotificationCenter.default.addObserver(
+                        self, selector: #selector(windowDidBecomeKey(_:)),
+                        name: NSWindow.didBecomeKeyNotification, object: window
                     )
                 }
             }
+            attemptFocus()
+        }
+
+        func requestFocus(_ request: UInt) {
+            pendingFocusRequest = request == handledFocusRequest ? nil : request
+            attemptFocus()
+        }
+
+        @objc private func windowDidBecomeKey(_ notification: Notification) {
+            attemptFocus()
+        }
+
+        private func attemptFocus() {
+            guard let request = pendingFocusRequest,
+                  let webView = attachedView,
+                  let window = webView.window, window === attachedWindow,
+                  canFocus(),
+                  !webView.isHiddenOrHasHiddenAncestor,
+                  window.makeFirstResponder(webView) else { return }
+            handledFocusRequest = request
+            pendingFocusRequest = nil
+        }
+
+        func detach() {
+            if let attachedWindow {
+                NotificationCenter.default.removeObserver(
+                    self, name: NSWindow.didBecomeKeyNotification, object: attachedWindow
+                )
+            }
+            attachedView = nil
+            attachedWindow = nil
+            pendingFocusRequest = nil
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
         }
     }
 }

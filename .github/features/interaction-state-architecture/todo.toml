@@ -140,58 +140,58 @@ note = "58 项 Graph/历史宿主全通过；同仓库跨 Project、跨仓库 Ch
 [[tasks]]
 id = "P4-T1"
 title = "整理 Projects 游标和活动项目"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t1"
-commit = ""
-note = ""
+commit = "e4f0231e4ce180b75ba007d3bb3fa068995f2f93"
+note = "Projects 游标/右键/拖动按项目 UUID 校验；112 项定点宿主测试及最终 4 项完整 App GUI 测试通过，右键描边曾有一次截图差异、独立及连续复测均通过；make build:dev、make build 与签名通过，正式 App 已整包替换但未重启现有进程；未专项实测最低 macOS 或真实 SSH GUI。"
 
 [[tasks]]
 id = "P4-T2"
 title = "整理 Dock 标签展示激活和关闭"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t2"
-commit = ""
-note = ""
+commit = "d6783953"
+note = "105项宿主通过，3项Dock GUI通过；make build:dev及签名通过。Browser内容恢复GUI用例在基线5dec23ed也以同一坐标失败，独立确认非T2引入，原生标签命中与焦点故障继续纳入同阶段T7共同根因验收。"
 
 [[tasks]]
 id = "P4-T3"
 title = "整理命令面板与 Ctrl+Tab 临时选择"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t3"
-commit = ""
-note = ""
+commit = "b2f7989839cefa0f6b8205e6222f84a5c3db25cb"
+note = "93项相关宿主0失败、1项环境条件跳过；3项Dev GUI E2E全通过；make build:dev及签名通过。跨项目旧Switcher与Palette数组下标漏洞均有红绿回归。"
 
 [[tasks]]
 id = "P4-T4"
 title = "实现 Dock 标签多选与范围锚点"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t4"
-commit = ""
-note = ""
+commit = "3ae33e96"
+note = "实现3ae33e96、GUI回归d2902830。标签组选区/Shift Anchor/Native keyboard/AX 已接通；85项原生宿主和完整Dock三项GUI通过，多选关闭 E2E 检查真实磁盘字节不变；Dev build及签名已通过。"
 
 [[tasks]]
 id = "P4-T5"
 title = "核销多标签批量拖动与 Move 边界"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t5"
-commit = ""
-note = ""
+commit = "be19f43b"
+note = "实现be19f43b、拖动E2E b31fbaef。85项覆盖批量Move/空组折叠/目标取消/原生保留的宿主通过；42项Dock/AX复测及Dev build签名通过；真实两文件标签跨组拖动E2E通过，未选项与磁盘字节保留。"
 
 [[tasks]]
 id = "P4-T6"
 title = "统一 Dock 标签右键关闭与专属视觉"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t6"
-commit = ""
-note = ""
+commit = "67f87ec8"
+note = "实现67f87ec8，新增E2E cedbe306，旧窄标签可见性测试修正 eaa551f8。135项宿主、原生中键命中专项、Dev build签名通过；最新5项右键/⌘W/取消/组选区完整App E2E联跑全过。混合Tool/Dirty取消与迟到写入有宿主保护。"
 
 [[tasks]]
 id = "P4-T7"
 title = "统一多窗口多组原生焦点交接"
-status = "pending"
+status = "completed"
 plan = "plan-p4.md#p4-t7"
-commit = ""
-note = ""
+commit = "60635f9f"
+note = "原生焦点实现60635f9f，双窗口GUI补证f2ec9ade、WebKit保留GUI修正84c8ae7b；85项原生/窗口宿主+21项专项宿主通过；最终8项跨任务GUI联跑全过，其中双窗口地址栏和Palette焦点、WebKit表单与真实文件字节不变均有E2E证据。Dev build签名通过；最低macOS 15.6/真实SSH跨窗/高对比未专项设备验收。"
 
 [[tasks]]
 id = "P5-T1"

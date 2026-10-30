@@ -134,6 +134,39 @@ final class WorkspaceRetentionUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), stored)
     }
 
+    func testBrowserAddressFocusSurvivesPaletteAndRepeatedCommandL() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let file = try fixture.file("browser/untouched.txt", text: "saved bytes\n")
+        let app = try WorkspaceUITestSupport.launch(
+            in: self, language: "en", project: file.deletingLastPathComponent()
+        )
+        let window = app.windows.firstMatch
+        let newBrowser = app.menuItems["New Browser Tab"]
+        XCTAssertTrue(newBrowser.waitForExistence(timeout: 10))
+        newBrowser.click()
+        let address = window.textFields["Search or enter website name"]
+        XCTAssertTrue(address.waitForExistence(timeout: 15))
+
+        app.typeKey("l", modifierFlags: .command)
+        app.typeText("first focus marker")
+        XCTAssertEqual(address.value as? String, "first focus marker",
+                       "The real address input must own Command-L keyboard events")
+
+        app.typeKey("p", modifierFlags: .command)
+        let palette = window.textFields["bailey.commandPalette.search"]
+        XCTAssertTrue(palette.waitForExistence(timeout: 10))
+        palette.typeText("unmatched palette query")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(palette.waitForNonExistence(timeout: 10))
+
+        app.typeKey("l", modifierFlags: .command)
+        app.typeText("second focus marker")
+        XCTAssertEqual(address.value as? String, "second focus marker",
+                       "Repeating Command-L after a palette handoff must select the whole address")
+        XCTAssertEqual(try Data(contentsOf: file), Data("saved bytes\n".utf8))
+    }
+
     func testRealBrowserKeepsWebContentAcrossFileTabSwitches() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("project/neighbor.swift", text: "let untouched = true\n")
@@ -177,7 +210,10 @@ final class WorkspaceRetentionUITests: XCTestCase {
         XCTAssertEqual(window.textViews.firstMatch.value as? String, "let untouched = true\n")
         let browserTab = window.buttons["P4T5 Browser Page"]
         XCTAssertTrue(browserTab.waitForExistence(timeout: 15))
-        browserTab.click()
+        XCTAssertTrue(window.frame.contains(CGPoint(x: browserTab.frame.midX,
+                                                  y: browserTab.frame.midY)),
+                      "The browser tab must be visible within its owning window")
+        browserTab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         let reattached = window.webViews.firstMatch
         XCTAssertTrue(reattached.waitForExistence(timeout: 15))
         XCTAssertEqual(reattached.textFields["P4T5 draft"].value as? String,

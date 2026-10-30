@@ -121,6 +121,7 @@ Focus／Selection，不把这次状态同步误作 NSWindow.firstResponder 的�
 | 目录／图谱展开 | Files／Git 对应数据或局部展示状态 | 行选中或键盘焦点 |
 | 行选中与悬停 | 各列表游标；Hover 为视图短暂状态 | 已打开文件、当前命令目标 |
 | 哪个内容正在展示 | `DockGroup.selected`；每组独立 | 活动组或输入目标 |
+| Dock 标签组选区与范围锚点 | `DockWorkspaceModel` 按组维护的非持久扩选；单项由展示项派生 | 最近工作标签或恢复布局 |
 | 活动组／最近工作标签 | `DockWorkspaceModel.activeGroupID`／`Project.selectedTabID` | 当前原生第一响应者 |
 | 浏览／打开／激活意图 | 当前用户动作和显式调用参数 | 仅凭选中或展示变化自动推导的行为 |
 | 当前接收键盘 | 前台 key window 的 `firstResponder` 与原生控件实际输入反馈 | 后台窗口残留的 responder、`Project.focusedContent` 或视觉描边 |

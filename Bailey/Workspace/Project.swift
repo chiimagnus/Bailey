@@ -53,6 +53,7 @@ final class Project: nonisolated Identifiable {
 
     @ObservationIgnored var onSnapshotChange: (() -> Void)?
     @ObservationIgnored var onPresentationWindow: (() -> NSWindow?)?
+    private(set) var isClosingPanels = false
     private let fallbackName: String
 
     init(fallbackName: String, workspaceConfiguration: DockWorkspaceConfiguration) {
@@ -86,10 +87,21 @@ final class Project: nonisolated Identifiable {
         tabs.first { $0.id == selectedTabID }
     }
 
-    func selectTab(_ id: UUID, activating: Bool = true) {
+    func selectTab(_ id: UUID, activating: Bool = true,
+                   extending change: DockWorkspaceModel.SelectionChange = .replace) {
         guard tabs.contains(where: { $0.id == id }) else { return }
-        dock.select(.tab(id), activating: activating)
-        selectedTabID = id
+        dock.select(.tab(id), activating: activating, extending: change,
+                    preferred: tabsByRecency.map { .tab($0.id) })
+        if case .tab(let displayed)? = dock.group(containing: .tab(id))?.selected { selectedTabID = displayed }
+    }
+
+    @discardableResult
+    func movePanels(_ item: DockItem, into destinationID: UUID, edge: DockEdge? = nil,
+                    index: Int? = nil, items: [DockItem]? = nil, sourceGroupID: UUID? = nil) -> Bool {
+        guard dock.move(item, into: destinationID, edge: edge, index: index,
+                        items: items, sourceGroupID: sourceGroupID) else { return false }
+        if case .tab(let id) = item { selectedTabID = id }
+        return true
     }
 
     /// Tabs by recency of use, selected first. Tabs not yet selected this
@@ -533,7 +545,7 @@ final class Project: nonisolated Identifiable {
     /// Closes one tab's content. Dirty edits require confirmation; an exited
     /// shell is removed without terminating it again.
     func closeContent(_ content: PaneContent, terminate: Bool = true) {
-        guard !content.isClosing else { return }
+        guard !isClosingPanels, !content.isClosing else { return }
         switch content {
         case .session(let session):
             if terminate { session.terminate() }
@@ -562,23 +574,11 @@ final class Project: nonisolated Identifiable {
     /// "Close Others" is scoped to the tab group containing this tab, not
     /// an unrelated dock region elsewhere in the same workspace.
     func closeOthers(_ keep: PaneTab) {
-        guard let group = dock.group(containing: .tab(keep.id)) else { return }
-        selectTab(keep.id)
-        let ids = Set(group.items.compactMap { item -> UUID? in
-            if case .tab(let id) = item, id != keep.id { return id }
-            return nil
-        })
-        closeBatch(tabs.filter { ids.contains($0.id) }.map(\.content))
+        closePanels(dock.commandTargets(for: .tab(keep.id), scope: .otherTabs))
     }
 
     func closeToRight(of tab: PaneTab) {
-        guard let group = dock.group(containing: .tab(tab.id)),
-              let index = group.items.firstIndex(of: .tab(tab.id)) else { return }
-        let ids = Set(group.items.dropFirst(index + 1).compactMap { item -> UUID? in
-            if case .tab(let id) = item { return id }
-            return nil
-        })
-        closeBatch(tabs.filter { ids.contains($0.id) }.map(\.content))
+        closePanels(dock.commandTargets(for: .tab(tab.id), scope: .tabsToRight))
     }
 
     /// Closes file tabs while leaving other content open.
@@ -640,27 +640,56 @@ final class Project: nonisolated Identifiable {
     /// Handles dirty tabs in order, closing each accepted tab immediately.
     /// Clean tabs close after the prompts; Cancel stops the remaining prompts
     /// without rolling back tabs already closed by Save or Don't Save.
-    private func closeBatch(_ targets: [PaneContent]) {
-        guard !targets.contains(where: \.isClosing) else { return }
+    private func closeBatch(_ targets: [PaneContent], completion: @escaping (Bool) -> Void = { _ in }) {
+        dock.clearContextTarget()
+        guard !isClosingPanels, !targets.contains(where: \.isClosing) else { return }
         let dirtyContents = targets.filter(\.isDirty)
         let cleanContents = targets.filter { !$0.isDirty }
 
         guard !dirtyContents.isEmpty else {
             cleanContents.forEach { closeContent($0) }
+            completion(true)
             return
         }
 
         let window = closeSheetWindow
+        isClosingPanels = true
         dirtyContents.forEach { $0.suspendAutoSaveForClose(true) }
         Task { @MainActor in
+            defer { isClosingPanels = false }
             for content in dirtyContents {
                 // Save on close first; only failures need the native prompt.
                 if await saveBeforeClosing(content, in: window) {
                     dirtyContents.forEach { $0.suspendAutoSaveForClose(false) }
+                    completion(false)
                     return
                 }
             }
-            cleanContents.forEach { closeContent($0) }
+            while let content = cleanContents.first(where: { content in
+                content.isDirty && tabs.contains { $0.content.id == content.id }
+            }) {
+                content.suspendAutoSaveForClose(true)
+                if await saveBeforeClosing(content, in: window) {
+                    completion(false)
+                    return
+                }
+            }
+            for content in cleanContents {
+                if case .session(let session) = content { session.terminate() }
+                removeTabWithContent(content.id)
+            }
+            completion(true)
+        }
+    }
+
+    func closePanels(_ items: [DockItem]) {
+        let contents = items.compactMap { item -> PaneContent? in
+            guard case .tab(let id) = item else { return nil }
+            return tabs.first { $0.id == id }?.content
+        }
+        closeBatch(contents) { [weak self] accepted in
+            guard accepted, let self else { return }
+            for item in items { self.dock.removeTool(item) }
         }
     }
 

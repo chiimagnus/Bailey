@@ -336,6 +336,41 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         XCTAssertTrue(project.tabs.contains { $0.id == project.selectedTabID })
     }
 
+    func testTabSwitcherCannotCommitOrSelectAfterChangingProjects() throws {
+        let manager = workspaceApplication.makeWindow()
+        defer { manager.windowClosed() }
+        let first = Project(fallbackName: "A", workspaceConfiguration: .standard)
+        let second = Project(fallbackName: "B", workspaceConfiguration: .standard)
+        manager.projects = [first, second]
+        let firstTabs = (0..<3).map { _ in
+            PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
+        }
+        firstTabs.forEach(first.append)
+        let secondTab = PaneTab(content: .browser(BrowserTab(initialFocus: .none)))
+        second.append(secondTab)
+        manager.selectedProjectID = first.id
+        let original = first.selectedTabID
+
+        let switcher = manager.tabSwitcher
+        XCTAssertTrue(switcher.cycle(in: manager, reverse: false))
+        let staleCandidate = try XCTUnwrap(switcher.highlightedTabID)
+        XCTAssertTrue(switcher.isPresented)
+        manager.selectedProjectID = second.id
+        XCTAssertFalse(switcher.isPresented,
+                       "A project change must synchronously cancel old Control-Tab previews")
+        switcher.finish()
+        XCTAssertEqual(first.selectedTabID, original,
+                       "A stale Control release cannot write the old project's MRU")
+        XCTAssertEqual(second.selectedTabID, secondTab.id)
+
+        XCTAssertTrue(switcher.cycle(in: manager, reverse: false) == false,
+                      "One-tab projects cannot open a Control-Tab overlay")
+        switcher.select(staleCandidate, in: first)
+        XCTAssertEqual(first.selectedTabID, original,
+                       "A stale overlay card cannot select another project's tab")
+        XCTAssertEqual(manager.selectedProjectID, second.id)
+    }
+
     func testBrowserKVOUpdatesObservationHistoryFaviconAndRepeatedFocus() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1080,6 +1115,15 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         let project = try XCTUnwrap(manager.selectedProject)
         let pane = try XCTUnwrap(project.selectedTab)
         guard case .file(let file) = pane.content else { return XCTFail("Expected a file") }
+        let browser = project.newBrowserTab(initialFocus: .none)
+        let browserPane = try XCTUnwrap(project.selectedTab)
+        let webView = browser.webView
+        let source = try XCTUnwrap(project.dock.group(containing: .tab(pane.id)))
+        XCTAssertTrue(project.dock.move(.files, into: source.id))
+        project.selectTab(pane.id)
+        project.selectTab(browserPane.id, extending: .toggle)
+        project.dock.select(.files, extending: .toggle)
+        project.selectTab(pane.id, extending: .preserve)
         let host = NSHostingView(rootView: NativeSelectedFile(project: project))
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         host.frame = root.bounds
@@ -1114,8 +1158,8 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
         scroll.reflectScrolledClipView(scroll.contentView)
         let scrollBefore = scroll.contentView.bounds.origin
         let heightBefore = scroll.bounds.height
-        let target = try XCTUnwrap(project.dock.group(containing: .files))
-        XCTAssertTrue(project.dock.move(.tab(pane.id), into: target.id, edge: .bottom))
+        let target = try XCTUnwrap(project.dock.group(containing: .git))
+        XCTAssertTrue(project.movePanels(.tab(pane.id), into: target.id, edge: .bottom))
         // The Dock model moves the same tab. Reparent only its native component
         // here; the real Dock drag, target group, and focus route are UI E2E.
         let destination = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 260))
@@ -1128,7 +1172,10 @@ final class NativePaneRetentionIntegrationTests: XCTestCase {
             return file.editorView === scroll && scroll.window === window
                 && scroll.bounds.height > 0 && scroll.bounds.height < heightBefore
         }
-        XCTAssertEqual(project.dock.tabOrder, [pane.id])
+        XCTAssertEqual(project.dock.tabOrder, [pane.id, browserPane.id])
+        XCTAssertEqual(project.dock.selection(in: try XCTUnwrap(project.dock.activeGroupID)), [.tab(pane.id), .tab(browserPane.id), .files])
+        XCTAssertTrue(project.tabs.contains { $0 === browserPane })
+        XCTAssertTrue(browser.webView === webView)
         XCTAssertEqual(project.selectedTabID, pane.id)
         XCTAssertTrue(scroll.documentView === editor)
         // Native surface identity is proved here; real key-window transfer

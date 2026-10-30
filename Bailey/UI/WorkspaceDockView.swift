@@ -9,8 +9,17 @@ import UniformTypeIdentifiers
 @MainActor
 @Observable
 final class DockTabDragCoordinator {
-    struct Position {
+    struct Source {
         let item: DockItem
+        let items: [DockItem]
+        let sourceGroupID: UUID
+        let sourceLayout: DockNode
+    }
+
+    struct Position {
+        let source: Source
+        var item: DockItem { source.item }
+        var items: [DockItem] { source.items }
         let location: CGPoint
         let destination: UUID?
         let edge: DockEdge?
@@ -18,22 +27,36 @@ final class DockTabDragCoordinator {
     }
 
     private(set) var position: Position?
+    @ObservationIgnored private var source: Source?
+    @ObservationIgnored private weak var sourceDock: DockWorkspaceModel?
     @ObservationIgnored private var groups: [UUID: CGRect] = [:]
     @ObservationIgnored private var tabs: [DockItem: CGRect] = [:]
 
-    func cancel() {
+    func cancel(_ item: DockItem? = nil) {
+        if let item, source?.item != item { return }
         // Layout preferences may update before project-switch cancellation;
         // preserve their latest frames so the next drag can still hit a target.
         position = nil
+        source = nil
+        sourceDock = nil
+        NSCursor.arrow.set()
     }
 
-    func setFrames(groups: [UUID: CGRect]) { self.groups = groups }
-    func setFrames(tabs: [DockItem: CGRect]) { self.tabs = tabs }
+    func setFrames(groups: [UUID: CGRect]) {
+        if source != nil, self.groups != groups { cancel() }
+        self.groups = groups
+    }
+    func setFrames(tabs: [DockItem: CGRect]) {
+        if source != nil, self.tabs != tabs { cancel() }
+        self.tabs = tabs
+    }
 
-    func tab(at location: CGPoint, in group: DockGroup) -> DockItem? {
-        guard let frame = groups[group.id] else { return nil }
-        let point = CGPoint(x: frame.minX + location.x, y: frame.minY + location.y)
-        return group.items.first { tabs[$0]?.contains(point) == true }
+    func begin(_ item: DockItem, dock: DockWorkspaceModel) {
+        cancel()
+        guard let group = dock.group(containing: item) else { return }
+        sourceDock = dock
+        source = Source(item: item, items: dock.commandTargets(for: item),
+                        sourceGroupID: group.id, sourceLayout: dock.root)
     }
 
     func insertionX(in group: DockGroup) -> CGFloat? {
@@ -47,6 +70,8 @@ final class DockTabDragCoordinator {
     }
 
     func update(_ item: DockItem, at location: CGPoint, dock: DockWorkspaceModel) {
+        guard let source, sourceDock === dock, source.item == item,
+              source.sourceLayout == dock.root else { cancel(); return }
         let hit = groups.first { $0.value.contains(location) }
         var edge: DockEdge?
         var insertIndex: Int?
@@ -62,25 +87,22 @@ final class DockTabDragCoordinator {
                     return location.x < bounds.midX && location.y <= frame.minY + 38
                 } ?? target.items.count
             }
-            if edge != nil && target.items == [item] { edge = nil }
         }
         position = Position(
-            item: item, location: location,
+            source: source, location: location,
             destination: hit?.key, edge: edge, index: insertIndex
         )
     }
 
     func finish(project: Project) {
-        defer {
-            position = nil
-            NSCursor.arrow.set()
-        }
-        guard let position, let destination = position.destination else { return }
-        guard project.dock.move(
+        defer { cancel() }
+        guard let position, sourceDock === project.dock, project.dock.root == position.source.sourceLayout,
+              let destination = position.destination else { return }
+        project.movePanels(
             position.item, into: destination,
-            edge: position.edge, index: position.index
-        ) else { return }
-        if case .tab(let id) = position.item { project.selectTab(id) }
+            edge: position.edge, index: position.index, items: position.items,
+            sourceGroupID: position.source.sourceGroupID
+        )
     }
 }
 
@@ -129,6 +151,7 @@ struct WorkspaceDockView: View {
                             Image(systemName: position.item.symbol)
                             Text(position.item.label(project: project))
                                 .lineLimit(1)
+                            if position.items.count > 1 { Text(verbatim: "+\(position.items.count - 1)") }
                         }
                         .font(.system(size: 11.5, weight: .medium))
                         .padding(.horizontal, 11)
@@ -278,9 +301,12 @@ struct DockTabGroupView: View {
     private let settings = AppSettings.shared
     @State private var renamingTabID: UUID?
     @State private var showingPanelPicker = false
+    @State private var tabKeyboard = TreeKeyboardOwner()
+    @State private var tabCursor: DockItem?
+    @State private var tabKeyboardFocused = false
     @Environment(\.appearsActive) private var windowAppearsActive
 
-    private var active: DockItem? { group.selected ?? group.items.first }
+    private var active: DockItem? { group.selected }
     private var isFocused: Bool {
         windowAppearsActive && canFocusGroup()
     }
@@ -297,7 +323,7 @@ struct DockTabGroupView: View {
         project.dock.activate(group.id)
         if case .tab(let id)? = project.dock.root.group(id: group.id)?.selected,
            project.selectedTabID != id {
-            project.selectTab(id)
+            project.selectTab(id, extending: .preserve)
         }
     }
 
@@ -352,14 +378,9 @@ struct DockTabGroupView: View {
             groupID: group.id,
             isActive: isFocused,
             focusesEmptySpace: active?.tabID == nil,
-            canFocus: { canFocusGroup() && dragging.position == nil },
-            onFocused: { if dragging.position == nil { focusGroup() } },
-            onPrimaryClick: { project.dock.clearContextTarget() },
-            onContextClick: { point in
-                if let target = dragging.tab(at: point, in: group) {
-                    project.dock.selectForContextMenu(target)
-                }
-            }
+            canFocus: { canFocusGroup() && dragging.position == nil && !tabKeyboardFocused },
+            onFocused: { if dragging.position == nil && !tabKeyboardFocused { focusGroup() } },
+            onPrimaryClick: { project.dock.clearContextTarget() }
         ).id(group.id))
         .background {
             GeometryReader { geometry in
@@ -490,7 +511,7 @@ struct DockTabGroupView: View {
                     ForEach(group.items, id: \.self) { item in
                         tab(item)
                             .id(item)
-                            .opacity(dragging.position?.item == item ? 0.6 : 1)
+                            .opacity(dragging.position?.items.contains(item) == true ? 0.6 : 1)
                             .background {
                                 GeometryReader { geometry in
                                     Color.clear.preference(
@@ -499,18 +520,28 @@ struct DockTabGroupView: View {
                                     )
                                 }
                             }
-                            .highPriorityGesture(
-                                DragGesture(minimumDistance: 4, coordinateSpace: .global)
-                                    .onChanged { value in
-                                        dragging.update(item, at: value.location, dock: project.dock)
-                                        NSCursor.closedHand.set()
-                                    }
-                                    .onEnded { value in
-                                        dragging.update(item, at: value.location, dock: project.dock)
-                                        dragging.finish(project: project)
-                                    },
-                                including: item.tabID != nil && renamingTabID == item.tabID ? .subviews : .all
-                            )
+                            .overlay {
+                                if item.tabID == nil || renamingTabID != item.tabID {
+                                    DockTabPointerInput(
+                                        press: { modifiers in
+                                            select(item, extending: selectionChange(modifiers))
+                                            dragging.begin(item, dock: project.dock)
+                                        },
+                                        release: { modifiers in
+                                            dragging.cancel()
+                                            if modifiers.intersection([.command, .shift]).isEmpty { select(item) }
+                                        },
+                                        drag: { point, finished in
+                                            dragging.update(item, at: point, dock: project.dock)
+                                            if finished { dragging.finish(project: project) }
+                                            else { NSCursor.closedHand.set() }
+                                        },
+                                        close: { manager.closePanel(item, in: project) },
+                                        cancel: { dragging.cancel(item) }
+                                    )
+                                    .padding(.leading, 22)
+                                }
+                            }
                     }
                 }
                 .padding(.leading, 4)
@@ -519,8 +550,21 @@ struct DockTabGroupView: View {
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             .frame(width: maxWidth, alignment: .leading)
             .clipped()
+            .background(TreeKeyboardHost(
+                owner: tabKeyboard, onKeyDown: handleTabKey,
+                onFocusChanged: { focused in
+                    tabKeyboardFocused = focused
+                    if focused, tabCursor.map({ !group.items.contains($0) }) ?? true { tabCursor = active }
+                }, onAttachedToWindow: { tabKeyboard.view?.setAccessibilityIdentifier("bailey.dock.tabstrip") }
+            ))
             .onChange(of: group.selected) { _, selected in
                 if let selected { scrollProxy.scrollTo(selected) }
+            }
+            .onChange(of: tabCursor) { _, cursor in
+                if let cursor { scrollProxy.scrollTo(cursor) }
+            }
+            .onChange(of: group.items) { _, items in
+                if tabCursor.map({ !items.contains($0) }) ?? false { tabCursor = active }
             }
         }
     }
@@ -530,10 +574,12 @@ struct DockTabGroupView: View {
         if case .tab(let id) = item,
            let paneTab = project.tabs.first(where: { $0.id == id }) {
             PaneTabItem(
-                tab: paneTab, isSelected: active == item, isPaneFocused: isFocused,
+                tab: paneTab, isDisplayed: active == item,
+                isSelected: project.dock.selection(in: group.id).contains(item),
+                isKeyboardFocused: tabKeyboardFocused && tabCursor == item, isPaneFocused: isFocused,
                 isContextTarget: project.dock.contextTarget == item,
                 select: { select(item) },
-                close: { manager.closePanel(item, in: project) },
+                close: { close(item) },
                 renamingTabID: $renamingTabID
             )
             .overlay {
@@ -554,10 +600,12 @@ struct DockTabGroupView: View {
         } else {
             TabItemChrome(
                 systemImage: item.symbol, title: item.label(project: project),
-                isSelected: active == item, isPaneFocused: isFocused,
+                isDisplayed: active == item,
+                isSelected: project.dock.selection(in: group.id).contains(item),
+                isKeyboardFocused: tabKeyboardFocused && tabCursor == item, isPaneFocused: isFocused,
                 isContextTarget: project.dock.contextTarget == item,
                 select: { select(item) },
-                close: { closeTool(item) }
+                close: { close(item) }
             )
             .accessibilityIdentifier("bailey.dock.\(item.configurationName ?? "unknown")")
             .overlay {
@@ -570,13 +618,15 @@ struct DockTabGroupView: View {
                     isExpectedMenu: { isMenuForTab($0, item: item) }
                 )
                 .contextMenu {
-                    let closeTitle = String(localized: "Close Panel", table: "Interface")
+                    let closeTitle = closeTitle(for: item)
                     Button {
-                        closeTool(item)
+                        guard isValidMenuTarget(item) else { return }
+                        close(item)
                     } label: {
                         Text(verbatim: closeTitle + "\t⌘W")
                     }
                     .accessibilityLabel(closeTitle)
+                    .disabled(project.isClosingPanels)
                 }
             }
         }
@@ -596,12 +646,8 @@ struct DockTabGroupView: View {
     }
 
     private func isMenuForTab(_ menu: NSMenu, item: DockItem) -> Bool {
-        guard manager.selectedProject === project,
-              project.dock.contextTarget == item,
-              project.dock.group(containing: item) != nil else { return false }
-        let title = item.tabID == nil
-            ? String(localized: "Close Panel", table: "Interface")
-            : String(localized: "Close", table: "Interface")
+        guard isValidMenuTarget(item), project.dock.contextTarget == item else { return false }
+        let title = closeTitle(for: item)
         return menu.items.contains { $0.accessibilityLabel() == title }
     }
 
@@ -609,9 +655,7 @@ struct DockTabGroupView: View {
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         guard modifiers == [.command], event.charactersIgnoringModifiers?.lowercased() == "w",
               isMenuForTab(menu, item: item) else { return false }
-        let title = item.tabID == nil
-            ? String(localized: "Close Panel", table: "Interface")
-            : String(localized: "Close", table: "Interface")
+        let title = closeTitle(for: item)
         guard let index = menu.items.firstIndex(where: {
             $0.isEnabled && $0.accessibilityLabel() == title
         }) else { return false }
@@ -620,12 +664,59 @@ struct DockTabGroupView: View {
         return true
     }
 
-    private func select(_ item: DockItem) {
-        project.dock.select(item)
-        if case .tab(let id) = item { project.selectTab(id) }
+    private func selectionChange(_ modifiers: NSEvent.ModifierFlags) -> DockWorkspaceModel.SelectionChange {
+        if modifiers.contains(.shift) { return .range }
+        if modifiers.contains(.command) { return .toggle }
+        return .preserve
     }
 
-    private func closeTool(_ item: DockItem) { manager.closePanel(item, in: project) }
+    private func select(_ item: DockItem, extending change: DockWorkspaceModel.SelectionChange = .replace) {
+        guard manager.selectedProject === project else { return }
+        tabCursor = item
+        if case .tab(let id) = item { project.selectTab(id, extending: change) }
+        else { project.dock.select(item, extending: change, preferred: project.tabsByRecency.map { .tab($0.id) }) }
+    }
+
+    private func handleTabKey(_ event: NSEvent) -> Bool {
+        guard manager.selectedProject === project,
+              event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+              let current = project.dock.root.group(id: group.id), !current.items.isEmpty else { return false }
+        let cursor = tabCursor.flatMap { current.items.contains($0) ? $0 : nil } ?? current.selected
+        let index = cursor.flatMap { current.items.firstIndex(of: $0) } ?? 0
+        switch event.keyCode {
+        case 123: tabCursor = current.items[max(0, index - 1)]
+        case 124: tabCursor = current.items[min(current.items.count - 1, index + 1)]
+        case 115: tabCursor = current.items.first
+        case 119: tabCursor = current.items.last
+        case 36, 49:
+            if let cursor { select(cursor) }
+        default: return false
+        }
+        return true
+    }
+
+    private func closeTitle(for item: DockItem) -> String {
+        if project.dock.commandTargets(for: item).count > 1 {
+            return String(localized: "Close Selected Panels", table: "Interface")
+        }
+        return item.tabID == nil ? String(localized: "Close Panel", table: "Interface")
+            : String(localized: "Close", table: "Interface")
+    }
+
+    private func isValidMenuTarget(_ item: DockItem) -> Bool {
+        manager.selectedProject === project && project.dock.group(containing: item)?.id == group.id
+            && manager.attachedWindow?.isKeyWindow == true && NSApp.keyWindow === manager.attachedWindow
+    }
+
+    private func currentMenuTab(_ id: UUID) -> PaneTab? {
+        guard isValidMenuTarget(.tab(id)) else { return nil }
+        return project.tabs.first { $0.id == id }
+    }
+
+    private func close(_ item: DockItem) {
+        guard project.dock.group(containing: item)?.id == group.id else { return }
+        manager.closePanel(item, in: project)
+    }
 
     @ViewBuilder
     private var content: some View {
@@ -696,63 +787,79 @@ struct DockTabGroupView: View {
     @ViewBuilder
     private func projectTabMenu(_ tab: PaneTab) -> some View {
         let tabID = tab.id
-        Button(String(localized: "Rename…", table: "Interface")) { renamingTabID = tabID }
+        Button(String(localized: "Rename…", table: "Interface")) {
+            if currentMenuTab(tabID) != nil { renamingTabID = tabID }
+        }
         if tab.customName != nil {
             Button(String(localized: "Use Automatic Title", table: "Interface")) {
-                project.tabs.first(where: { $0.id == tabID })?.customName = nil
+                currentMenuTab(tabID)?.customName = nil
             }
         }
         Divider()
         if case .file(let file) = tab.content {
-            let path = file.path
             Button(String(localized: "Reveal in File Manager", table: "Interface")) {
+                guard currentMenuTab(tabID) != nil else { return }
                 manager.revealFileInFileManager(tabID: tabID, in: project)
             }
             if file.workspaceIdentity == nil {
                 Button(String(localized: "Reveal in Finder", table: "Interface")) {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                    guard case .file(let current)? = currentMenuTab(tabID)?.content,
+                          current.workspaceIdentity == nil else { return }
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: current.path)])
                 }
             }
             Button(String(localized: "Copy Absolute Path", table: "Interface")) {
+                guard case .file(let current)? = currentMenuTab(tabID)?.content else { return }
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(path, forType: .string)
+                NSPasteboard.general.setString(current.path, forType: .string)
             }
             Divider()
         }
         if case .browser(let browser) = tab.content, !browser.urlString.isEmpty {
-            let address = browser.urlString
             Button(String(localized: "Open in Default Browser", table: "Interface")) {
-                if let current = project.tabs.first(where: { $0.id == tabID }),
+                if let current = currentMenuTab(tabID),
                    case .browser(let currentBrowser) = current.content {
                     currentBrowser.openInDefaultBrowser()
                 }
             }
             .disabled(browser.shareURL == nil)
             Button(String(localized: "Copy Address", table: "Interface")) {
+                guard case .browser(let current)? = currentMenuTab(tabID)?.content else { return }
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(address, forType: .string)
+                NSPasteboard.general.setString(current.urlString, forType: .string)
             }
             Divider()
         }
-        let closeTitle = String(localized: "Close", table: "Interface")
+        let closeTitle = closeTitle(for: .tab(tabID))
         Button {
-            manager.closePanel(.tab(tabID), in: project)
+            guard currentMenuTab(tabID) != nil else { return }
+            close(.tab(tabID))
         } label: {
             Text(verbatim: closeTitle + "\t⌘W")
         }
         .accessibilityLabel(closeTitle)
+        .disabled(project.isClosingPanels || tab.content.isClosing)
         Button(String(localized: "Close Others", table: "Interface")) {
-            if let current = project.tabs.first(where: { $0.id == tabID }) { project.closeOthers(current) }
+            if let current = currentMenuTab(tabID) { project.closeOthers(current) }
         }
-            .disabled(group.items.compactMap(\.tabID).count < 2)
+        .disabled(project.isClosingPanels || project.dock.commandTargets(for: .tab(tabID), scope: .otherTabs).isEmpty)
         Button(String(localized: "Close Tabs to the Right", table: "Interface")) {
-            if let current = project.tabs.first(where: { $0.id == tabID }) { project.closeToRight(of: current) }
+            if let current = currentMenuTab(tabID) { project.closeToRight(of: current) }
         }
-            .disabled(group.items.compactMap(\.tabID).last == tabID)
+        .disabled(project.isClosingPanels || project.dock.commandTargets(for: .tab(tabID), scope: .tabsToRight).isEmpty)
         Divider()
-        Button(String(localized: "Close Files", table: "Interface")) { project.closeFiles() }
-        Button(String(localized: "Close Diffs", table: "Interface")) { project.closeDiffs() }
-        Button(String(localized: "Close All", table: "Interface")) { project.closeAll() }
+        Button(String(localized: "Close Files", table: "Interface")) {
+            if currentMenuTab(tabID) != nil { project.closeFiles() }
+        }
+        .disabled(project.isClosingPanels || !project.tabs.contains { $0.content.isFile })
+        Button(String(localized: "Close Diffs", table: "Interface")) {
+            if currentMenuTab(tabID) != nil { project.closeDiffs() }
+        }
+        .disabled(project.isClosingPanels || !project.tabs.contains { $0.content.isDiff })
+        Button(String(localized: "Close All", table: "Interface")) {
+            if currentMenuTab(tabID) != nil { project.closeAll() }
+        }
+        .disabled(project.isClosingPanels)
     }
 
     @ViewBuilder
@@ -781,6 +888,108 @@ struct DockTabGroupView: View {
     }
 }
 
+private struct DockTabPointerInput: NSViewRepresentable {
+    let press: (NSEvent.ModifierFlags) -> Void
+    let release: (NSEvent.ModifierFlags) -> Void
+    let drag: (CGPoint, Bool) -> Void
+    let close: () -> Void
+    let cancel: () -> Void
+
+    func makeNSView(context: Context) -> DockTabPointerView { DockTabPointerView() }
+    func updateNSView(_ view: DockTabPointerView, context: Context) {
+        view.press = press
+        view.release = release
+        view.drag = drag
+        view.close = close
+        view.cancel = cancel
+    }
+    static func dismantleNSView(_ view: DockTabPointerView, coordinator: ()) {
+        view.cancelOperation(nil)
+        view.press = nil
+        view.release = nil
+        view.drag = nil
+        view.close = nil
+        view.cancel = nil
+    }
+}
+
+final class DockTabPointerView: NSView {
+    var press: ((NSEvent.ModifierFlags) -> Void)?
+    var release: ((NSEvent.ModifierFlags) -> Void)?
+    var drag: ((CGPoint, Bool) -> Void)?
+    var close: (() -> Void)?
+    var cancel: (() -> Void)?
+    private var dragKeyMonitor: Any?
+    private var origin: CGPoint?
+    private var dragged = false
+    private var modifiers: NSEvent.ModifierFlags = []
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setAccessibilityElement(false)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let event = NSApp.currentEvent,
+              event.type == .otherMouseDown || (event.type == .leftMouseDown && !event.modifierFlags.contains(.control))
+        else { return nil }
+        return super.hitTest(point)
+    }
+    override func mouseDown(with event: NSEvent) {
+        origin = event.locationInWindow
+        dragged = false
+        modifiers = event.modifierFlags
+        press?(modifiers)
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard let origin else { return }
+        if !dragged, hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) >= 4 {
+            dragged = true
+            dragKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] key in
+                guard let self, key.window === self.window, self.window?.isKeyWindow == true,
+                      key.keyCode == 53, key.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+                else { return key }
+                self.cancelOperation(nil)
+                return nil
+            }
+        }
+        if dragged { drag?(location(event), false) }
+    }
+    override func mouseUp(with event: NSEvent) {
+        guard origin != nil else { return }
+        if let window, !window.isKeyWindow { cancelOperation(nil); return }
+        origin = nil
+        stopMonitoring()
+        if dragged { drag?(location(event), true) }
+        else { release?(modifiers) }
+    }
+    override func otherMouseDown(with event: NSEvent) {
+        if event.buttonNumber == 2 { close?() }
+    }
+    override func cancelOperation(_ sender: Any?) {
+        origin = nil
+        dragged = false
+        stopMonitoring()
+        cancel?()
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { cancelOperation(nil) }
+    }
+    private func stopMonitoring() {
+        if let dragKeyMonitor { NSEvent.removeMonitor(dragKeyMonitor) }
+        dragKeyMonitor = nil
+    }
+    private func location(_ event: NSEvent) -> CGPoint {
+        guard let content = window?.contentView else { return event.locationInWindow }
+        let point = content.convert(event.locationInWindow, from: nil)
+        return CGPoint(x: point.x, y: content.isFlipped ? point.y : content.bounds.height - point.y)
+    }
+}
+
 private struct DockGroupFocusReader: NSViewRepresentable {
     let groupID: UUID
     let isActive: Bool
@@ -788,7 +997,6 @@ private struct DockGroupFocusReader: NSViewRepresentable {
     let canFocus: () -> Bool
     let onFocused: () -> Void
     let onPrimaryClick: () -> Void
-    let onContextClick: (CGPoint) -> Void
 
     func makeNSView(context: Context) -> DockGroupFocusView {
         DockGroupFocusView(groupID: groupID)
@@ -798,7 +1006,6 @@ private struct DockGroupFocusReader: NSViewRepresentable {
         view.canFocus = canFocus
         view.onFocused = onFocused
         view.onPrimaryClick = onPrimaryClick
-        view.onContextClick = onContextClick
         let becameActive = isActive && !view.isActive
         view.isActive = isActive
         view.focusesEmptySpace = focusesEmptySpace
@@ -809,7 +1016,6 @@ private struct DockGroupFocusReader: NSViewRepresentable {
         view.stopMonitoring()
         view.onFocused = nil
         view.onPrimaryClick = nil
-        view.onContextClick = nil
         view.canFocus = nil
     }
 }
@@ -821,7 +1027,6 @@ final class DockGroupFocusView: NSView {
     var canFocus: (() -> Bool)?
     var onFocused: (() -> Void)?
     var onPrimaryClick: (() -> Void)?
-    var onContextClick: ((CGPoint) -> Void)?
     private var monitor: Any?
     private var leftMousePressedHere = false
 
@@ -855,10 +1060,6 @@ final class DockGroupFocusView: NSView {
             if event.type == .rightMouseDown ||
                (event.type == .leftMouseDown && event.modifierFlags.contains(.control)) {
                 self.leftMousePressedHere = false
-                let location = self.convert(event.locationInWindow, from: nil)
-                if self.bounds.contains(location) {
-                    self.onContextClick?(CGPoint(x: location.x, y: self.bounds.height - location.y))
-                }
             } else if event.type == .leftMouseDown {
                 self.leftMousePressedHere = self.bounds.contains(
                     self.convert(event.locationInWindow, from: nil))
@@ -873,6 +1074,8 @@ final class DockGroupFocusView: NSView {
                 }
                 if self.bounds.contains(self.convert(event.locationInWindow, from: nil)) {
                     self.onPrimaryClick?()
+                    let location = self.convert(event.locationInWindow, from: nil)
+                    guard location.y < self.bounds.maxY - 38 else { return event }
                     self.onFocused?()
                     if self.focusesEmptySpace { self.requestFocusAfterClick() }
                 }
@@ -918,12 +1121,5 @@ final class DockGroupFocusView: NSView {
         let visible = view.visibleRect.intersection(view.bounds)
         guard !view.isHiddenOrHasHiddenAncestor, !visible.isEmpty else { return false }
         return bounds.contains(convert(NSPoint(x: visible.midX, y: visible.midY), from: view))
-    }
-}
-
-private extension DockItem {
-    var tabID: UUID? {
-        if case .tab(let id) = self { return id }
-        return nil
     }
 }
