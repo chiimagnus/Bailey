@@ -14,7 +14,14 @@ final class WorkspaceRetentionUITests: XCTestCase {
 
         app.typeKey(",", modifierFlags: .command)
         XCTAssertTrue(app.windows.element(boundBy: 1).waitForExistence(timeout: 15))
-        let dark = app.radioButtons["Dark"].firstMatch
+        let settingsWindow = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
+        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 12))
+        let dark: XCUIElement
+        if #available(macOS 27.0, *) {
+            dark = settingsWindow.descendants(matching: .tab)["Dark"].firstMatch
+        } else {
+            dark = settingsWindow.radioButtons["Dark"].firstMatch
+        }
         XCTAssertTrue(dark.waitForExistence(timeout: 12),
                       "Real Settings must expose the appearance control")
         dark.click()
@@ -25,20 +32,33 @@ final class WorkspaceRetentionUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 12), .completed,
                        "The selected appearance must be written to this isolated TOML")
         XCTAssertEqual(String(describing: dark.value ?? ""), "1",
-                       "Native radio button value must reflect the selected theme")
+                       "The native appearance control must reflect the selected theme")
 
         app.terminate()
         app.launch()
         app.activate()
-        if !app.windows.firstMatch.waitForExistence(timeout: 4) {
+        let mainWindow = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        if !mainWindow.waitForExistence(timeout: 4) {
             let newWindow = app.menuItems.matching(NSPredicate(
                 format: "title IN %@", ["New Window", "新建窗口"])).firstMatch
             XCTAssertTrue(newWindow.waitForExistence(timeout: 10))
             newWindow.click()
         }
-        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
-        app.typeKey(",", modifierFlags: .command)
-        let restoredDark = app.radioButtons["Dark"].firstMatch
+        XCTAssertTrue(mainWindow.waitForExistence(timeout: 15))
+        // Reopen through the native menu after Xcode's synthetic no-window relaunch.
+        let openSettings = app.menuItems.matching(NSPredicate(
+            format: "title CONTAINS[c] %@", "Settings")).firstMatch
+        XCTAssertTrue(openSettings.waitForExistence(timeout: 12))
+        openSettings.click()
+        let restoredWindow = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
+        XCTAssertTrue(restoredWindow.waitForExistence(timeout: 12),
+                      "The native Settings menu must reopen the saved appearance after relaunch")
+        let restoredDark: XCUIElement
+        if #available(macOS 27.0, *) {
+            restoredDark = restoredWindow.descendants(matching: .tab)["Dark"].firstMatch
+        } else {
+            restoredDark = restoredWindow.radioButtons["Dark"].firstMatch
+        }
         XCTAssertTrue(restoredDark.waitForExistence(timeout: 12))
         XCTAssertEqual(String(describing: restoredDark.value ?? ""), "1",
                        "Restart must restore the selected theme in native Settings")
@@ -307,7 +327,8 @@ final class WorkspaceRetentionUITests: XCTestCase {
 
         let finder = WorkspaceUITestSupport.finderDragSource(for: file)
         defer { WorkspaceUITestSupport.closeFinderDragWindow(finder.window) }
-        let target = upload.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5))
+        // Keep the actual WebKit drop point outside the Finder source window.
+        let target = upload.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5))
         XCTAssertLessThan(finder.window.frame.maxX, target.screenPoint.x - 20,
                           "Finder must not obscure the real WKWebView file input")
         finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))

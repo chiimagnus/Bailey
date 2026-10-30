@@ -256,6 +256,40 @@ final class WorkspaceDockUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: second), Data("let two = 2\n".utf8))
     }
 
+    func testThirtyRealDockSwitchesKeepExplorerSelectionAndMeasureEndToEndResponse() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("switch-a.swift", text: "original A\n")
+        let second = try fixture.file("switch-b.swift", text: "original B\n")
+        let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
+        let window = app.windows.firstMatch
+        let firstRow = WorkspaceUITestSupport.fileRow(first, in: window)
+        let secondRow = WorkspaceUITestSupport.fileRow(second, in: window)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 15))
+        XCTAssertTrue(secondRow.waitForExistence(timeout: 15))
+        firstRow.click()
+        secondRow.click()
+        let tabs = [WorkspaceUITestSupport.fileTab(first, in: window),
+                    WorkspaceUITestSupport.fileTab(second, in: window)]
+        for tab in tabs { XCTAssertTrue(tab.waitForExistence(timeout: 15)) }
+        let rows = [firstRow, secondRow]
+        var seconds: [Double] = []
+        for index in 0..<30 {
+            let target = index % 2
+            let start = ProcessInfo.processInfo.systemUptime
+            tabs[target].click()
+            XCTAssertTrue(rows[target].isSelected,
+                          "The real Explorer selection must follow the latest Dock tab")
+            XCTAssertFalse(rows[1 - target].isSelected,
+                           "The previous file must not retain a second selection")
+            seconds.append(ProcessInfo.processInfo.systemUptime - start)
+        }
+        let sorted = seconds.sorted()
+        print(String(format: "P5_DOCK_UI_SWITCH n=30 median=%.3fs p95=%.3fs max=%.3fs",
+                     (sorted[14] + sorted[15]) / 2, sorted[28], sorted[29]))
+        XCTAssertEqual(try Data(contentsOf: first), Data("original A\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("original B\n".utf8))
+    }
+
     func testCrossGroupDragReleaseCannotSelectDestinationButRealClickCan() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let file = try fixture.file("unchanged.swift", text: "original bytes\n")

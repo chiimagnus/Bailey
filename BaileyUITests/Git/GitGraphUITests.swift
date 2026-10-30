@@ -136,6 +136,35 @@ final class GitGraphUITests: XCTestCase {
                        Data(pendingChanges ? "modified revision\n".utf8 : "initial revision\n".utf8))
     }
 
+    func testGraphKeyboardNavigationKeepsFortyHistoricalFilesVisible() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let files = try (0..<40).map { index in
+            try fixture.file(String(format: "graph-key-%02d.txt", index), text: "history \(index)\n")
+        }
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let app = try launchGraph(fixture)
+        let commit = app.buttons["E2E fixture history"]
+        XCTAssertTrue(commit.waitForExistence(timeout: 25))
+        commit.click()
+        XCTAssertTrue(historicalFile("graph-key-00.txt", in: app).waitForExistence(timeout: 15))
+
+        for (index, file) in files.enumerated() {
+            app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+            let row = historicalFile(file.lastPathComponent, in: app)
+            let visible = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in row.isHittable }, object: nil
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 5), .completed,
+                           "Graph keyboard row \(index) must remain in the actual scroll viewport")
+            XCTAssertFalse(row.isSelected,
+                           "Graph keyboard cursor must not manufacture file Selection")
+        }
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(files.last)), Data("history 39\n".utf8))
+    }
+
     func testGraphCommandArrowsNavigateRealParentAndChildWithoutMutatingGit() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("parent-node.txt", text: "parent data\n")
@@ -989,7 +1018,8 @@ final class GitGraphUITests: XCTestCase {
         try fixture.git(["config", "user.name", "BaileyUITest"])
         try fixture.git(["config", "user.email", "tests@example.invalid"])
         try fixture.git(["commit", "--allow-empty", "-qm", "Fix"])
-        let subject = String(repeating: "历史图谱超长中文提交消息–", count: 48)
+        // Each segment must be unique: scrolling past repeated glyphs can yield identical pixels.
+        let subject = (0..<48).map { "历史图谱第\($0)段超长中文提交消息–" }.joined()
         try fixture.git(["commit", "--allow-empty", "-qm", subject])
         let head = String(decoding: try fixture.git(["rev-parse", "HEAD"]),
                           as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1012,6 +1042,7 @@ final class GitGraphUITests: XCTestCase {
             let bytes = try XCTUnwrap(bitmap.bitmapData)
             return Data(bytes: bytes, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
         }
+        long.scroll(byDeltaX: 0, deltaY: 0)
         let beforeLong = try bitmapPixels(long)
         long.scroll(byDeltaX: -460, deltaY: 0)
         let afterLong = try bitmapPixels(long)

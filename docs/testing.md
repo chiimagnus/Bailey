@@ -370,6 +370,11 @@ Debug 与优化构建分开，冷开和热操作分开；按实际改动选择�
 用 Instruments Time Profiler 查 CPU，卡顿但 CPU 不高时查等待；
 用 Allocations 检查视图与缓冲生命周期。确需阶段对齐时才增加轻量 signpost，不先搭埋点框架。
 
+Files 容量由 `FileTreeTests` 在真实 1k／10k／100k 本机文件目录中挂载原生 `FileTreePanel`，
+核对末项滚动、固定视口、非选中焦点与无意外打开，并分别记录创建、同步、挂载、滚动及宿主峰值 RSS；
+原生高对比浅／深外观的行背景与 Focus 边框也在该宿主类以位图验证。
+这些是单次原生组件基线，不代替完整 App 的长期 Instruments 内存和帧间隔测量。
+
 编辑器回归必须覆盖下列实际结果，不能只检查状态字段：
 
 - **性能与坐标**：`NativeEditorLayoutTests`、`TextCoordinateIndexTests` 验证 382／1,000／10,
