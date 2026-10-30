@@ -321,7 +321,8 @@ final class WorkspaceRetentionUITests: XCTestCase {
 
         let finder = WorkspaceUITestSupport.finderDragSource(for: file)
         defer { WorkspaceUITestSupport.closeFinderDragWindow(finder.window) }
-        let target = upload.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.5))
+        // Keep the actual WebKit drop point outside the Finder source window.
+        let target = upload.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5))
         XCTAssertLessThan(finder.window.frame.maxX, target.screenPoint.x - 20,
                           "Finder must not obscure the real WKWebView file input")
         finder.source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
