@@ -894,31 +894,6 @@ final class DockWorkspaceTests: XCTestCase {
         XCTAssertTrue(browser.webView === webView)
     }
 
-    func testRightClickHitTestingOnlyTargetsTabsUnderThePointer() {
-        let ids = (0..<3).map { _ in UUID() }
-        let items = ids.map(DockItem.tab)
-        let group = DockGroup(items: items, selected: items[2])
-        let dragging = DockTabDragCoordinator()
-        dragging.setFrames(groups: [group.id: CGRect(x: 80, y: 100, width: 360, height: 280)])
-        dragging.setFrames(tabs: [
-            items[0]: CGRect(x: 84, y: 100, width: 68, height: 38),
-            items[1]: CGRect(x: 155, y: 100, width: 78, height: 38),
-            items[2]: CGRect(x: 236, y: 100, width: 68, height: 38),
-        ])
-
-        XCTAssertEqual(dragging.tab(at: CGPoint(x: 10, y: 19), in: group), items[0])
-        XCTAssertEqual(dragging.tab(at: CGPoint(x: 112, y: 19), in: group), items[1])
-        XCTAssertEqual(dragging.tab(at: CGPoint(x: 180, y: 19), in: group), items[2])
-        XCTAssertNil(dragging.tab(at: CGPoint(x: 74, y: 19), in: group),
-                     "The gap between tabs cannot become a Close Panel target")
-        XCTAssertNil(dragging.tab(at: CGPoint(x: 112, y: 60), in: group),
-                     "Right-clicking panel content must not select a tab")
-        XCTAssertNil(dragging.tab(at: CGPoint(x: 350, y: 19), in: group))
-        XCTAssertNil(dragging.tab(at: CGPoint(x: 112, y: 19),
-                                  in: DockGroup(items: items)),
-                     "Another Dock group cannot borrow these tab frames")
-    }
-
     func testDefaultLayoutAndDropHitTesting() throws {
         let frame = CGRect(x: 10, y: 20, width: 300, height: 300)
         XCTAssertEqual(DockDropHitTest.edge(at: CGPoint(x: 12, y: 170), in: frame), .left)

@@ -59,12 +59,6 @@ final class DockTabDragCoordinator {
                         sourceGroupID: group.id, sourceLayout: dock.root)
     }
 
-    func tab(at location: CGPoint, in group: DockGroup) -> DockItem? {
-        guard let frame = groups[group.id] else { return nil }
-        let point = CGPoint(x: frame.minX + location.x, y: frame.minY + location.y)
-        return group.items.first { tabs[$0]?.contains(point) == true }
-    }
-
     func insertionX(in group: DockGroup) -> CGFloat? {
         guard let position, position.destination == group.id, position.edge == nil,
               let frame = groups[group.id],
@@ -386,12 +380,7 @@ struct DockTabGroupView: View {
             focusesEmptySpace: active?.tabID == nil,
             canFocus: { canFocusGroup() && dragging.position == nil && !tabKeyboardFocused },
             onFocused: { if dragging.position == nil && !tabKeyboardFocused { focusGroup() } },
-            onPrimaryClick: { project.dock.clearContextTarget() },
-            onContextClick: { point in
-                if let target = dragging.tab(at: point, in: group) {
-                    project.dock.selectForContextMenu(target)
-                }
-            }
+            onPrimaryClick: { project.dock.clearContextTarget() }
         ).id(group.id))
         .background {
             GeometryReader { geometry in
@@ -1008,7 +997,6 @@ private struct DockGroupFocusReader: NSViewRepresentable {
     let canFocus: () -> Bool
     let onFocused: () -> Void
     let onPrimaryClick: () -> Void
-    let onContextClick: (CGPoint) -> Void
 
     func makeNSView(context: Context) -> DockGroupFocusView {
         DockGroupFocusView(groupID: groupID)
@@ -1018,7 +1006,6 @@ private struct DockGroupFocusReader: NSViewRepresentable {
         view.canFocus = canFocus
         view.onFocused = onFocused
         view.onPrimaryClick = onPrimaryClick
-        view.onContextClick = onContextClick
         let becameActive = isActive && !view.isActive
         view.isActive = isActive
         view.focusesEmptySpace = focusesEmptySpace
@@ -1029,7 +1016,6 @@ private struct DockGroupFocusReader: NSViewRepresentable {
         view.stopMonitoring()
         view.onFocused = nil
         view.onPrimaryClick = nil
-        view.onContextClick = nil
         view.canFocus = nil
     }
 }
@@ -1041,7 +1027,6 @@ final class DockGroupFocusView: NSView {
     var canFocus: (() -> Bool)?
     var onFocused: (() -> Void)?
     var onPrimaryClick: (() -> Void)?
-    var onContextClick: ((CGPoint) -> Void)?
     private var monitor: Any?
     private var leftMousePressedHere = false
 
@@ -1075,10 +1060,6 @@ final class DockGroupFocusView: NSView {
             if event.type == .rightMouseDown ||
                (event.type == .leftMouseDown && event.modifierFlags.contains(.control)) {
                 self.leftMousePressedHere = false
-                let location = self.convert(event.locationInWindow, from: nil)
-                if self.bounds.contains(location) {
-                    self.onContextClick?(CGPoint(x: location.x, y: self.bounds.height - location.y))
-                }
             } else if event.type == .leftMouseDown {
                 self.leftMousePressedHere = self.bounds.contains(
                     self.convert(event.locationInWindow, from: nil))
