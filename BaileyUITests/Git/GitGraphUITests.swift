@@ -4,6 +4,91 @@ import XCTest
 
 @MainActor
 final class GitGraphUITests: XCTestCase {
+    func testGraphExplicitSelectionIsIndependentOfKeyboardCursorAndContext() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let oldFile = try fixture.file("nested/old.txt", text: "history stays unchanged\n")
+        try fixture.initializeGit()
+        _ = try fixture.file("new.txt", text: "new revision\n")
+        try fixture.git(["add", "--", "new.txt"])
+        try fixture.git(["commit", "-qm", "new selected commit"])
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let app = try launchGraph(fixture, language: "en")
+        let window = app.windows.firstMatch
+        let current = app.buttons["new selected commit"]
+        let earlier = app.buttons["E2E fixture history"]
+        XCTAssertTrue(current.waitForExistence(timeout: 25))
+        XCTAssertTrue(earlier.waitForExistence(timeout: 25))
+        XCTAssertFalse(current.isSelected)
+        XCTAssertFalse(earlier.isSelected)
+        func rowColor() throws -> NSColor {
+            let screenshot = window.screenshot().image
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(data:
+                XCTUnwrap(screenshot.tiffRepresentation)))
+            let x = bitmap.pixelsWide - Int(16 * CGFloat(bitmap.pixelsWide) / window.frame.width)
+            let y = Int((current.frame.midY - window.frame.minY)
+                        * CGFloat(bitmap.pixelsHigh) / window.frame.height)
+            return try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+        }
+        let beforeColor = try rowColor()
+        let before = XCTAttachment(screenshot: window.screenshot())
+        before.name = "Git Graph before explicit selection"
+        before.lifetime = .keepAlways
+        add(before)
+        current.click()
+        XCTAssertTrue(current.isSelected, "Clicking a commit must create real Selection")
+        XCTAssertFalse(earlier.isSelected)
+        let activeColor = try rowColor()
+        XCTAssertGreaterThan(
+            activeColor.blueComponent - activeColor.redComponent,
+            beforeColor.blueComponent - beforeColor.redComponent + 0.05,
+            "The actual Git Graph row must gain the blue selection fill, not just AX Selected"
+        )
+        let after = XCTAttachment(screenshot: window.screenshot())
+        after.name = "Git Graph selected commit has active accent fill"
+        after.lifetime = .keepAlways
+        add(after)
+
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        XCTAssertTrue(current.isSelected, "Arrow navigation moves Focus, not Selection")
+        XCTAssertFalse(earlier.isSelected)
+        app.typeKey(XCUIKeyboardKey.rightArrow, modifierFlags: [])
+        XCTAssertTrue(current.isSelected, "Right arrow disclosure must not select the focused commit")
+        XCTAssertFalse(earlier.isSelected)
+        app.typeKey(XCUIKeyboardKey.leftArrow, modifierFlags: [])
+        XCTAssertTrue(current.isSelected, "Left arrow collapse must preserve Selection")
+        XCTAssertFalse(earlier.isSelected)
+        earlier.rightClick()
+        XCTAssertTrue(app.menuItems["Create Branch at Commit…"].waitForExistence(timeout: 10))
+        XCTAssertFalse(earlier.isSelected, "Context Target must not become Selection")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(current.isSelected, "Dismissing a menu must preserve Selection")
+
+        earlier.click()
+        XCTAssertTrue(earlier.isSelected)
+        XCTAssertFalse(current.isSelected)
+        let folder = window.descendants(matching: .any)
+            .matching(identifier: "bailey.tree.folder")
+            .matching(NSPredicate(format: "label CONTAINS %@", "nested")).firstMatch
+        XCTAssertTrue(folder.waitForExistence(timeout: 12))
+        folder.click()
+        XCTAssertTrue(folder.isSelected, "Git Graph folders must also use Selection fill")
+        XCTAssertFalse(earlier.isSelected)
+        folder.click()
+        let historical = historicalFile("nested/old.txt", in: app)
+        XCTAssertTrue(historical.waitForExistence(timeout: 12))
+        historical.click()
+        XCTAssertTrue(historical.isSelected, "Historical files must use the shared Selection")
+        XCTAssertFalse(folder.isSelected)
+        app.typeKey(XCUIKeyboardKey.upArrow, modifierFlags: [])
+        XCTAssertTrue(historical.isSelected, "Keyboard Focus must not move the file Selection")
+        app.typeKey(" ", modifierFlags: [])
+        XCTAssertTrue(folder.isSelected, "Space on a focused folder explicitly selects it")
+        XCTAssertFalse(historical.exists, "Space must still collapse the actual focused folder")
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertTrue(try fixture.git(["status", "--porcelain=v1"]).isEmpty)
+        XCTAssertEqual(try Data(contentsOf: oldFile), Data("history stays unchanged\n".utf8))
+    }
+
     func testSwitchingProjectsInsideSameRepositoryKeepsGraphDisclosureScoped() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let nestedFile = try fixture.file("nested/shared.txt", text: "first\n")
@@ -20,6 +105,7 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(first.waitForExistence(timeout: 25))
         XCTAssertTrue(second.waitForExistence(timeout: 25))
         first.click()
+        XCTAssertTrue(first.isSelected, "The original Project must own its Graph Selection")
         let historical = historicalFile("nested/shared.txt", in: app)
         XCTAssertTrue(historical.waitForExistence(timeout: 12))
 
@@ -30,6 +116,8 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(second.waitForExistence(timeout: 25))
         XCTAssertFalse(historical.exists,
                        "A new Project must not reuse the other Project's expanded commit")
+        XCTAssertFalse(first.isSelected,
+                       "A new Project in the same Git repository must not inherit old Selection")
         first.click()
         XCTAssertTrue(historical.waitForExistence(timeout: 12),
                       "The new Project must open its own commit details on first click")
@@ -179,7 +267,10 @@ final class GitGraphUITests: XCTestCase {
         XCTAssertTrue(parent.waitForExistence(timeout: 25))
         XCTAssertTrue(child.waitForExistence(timeout: 25))
         child.click()
+        XCTAssertTrue(child.isSelected)
         app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: .command)
+        XCTAssertTrue(child.isSelected, "Cmd-arrow navigation must preserve explicit Selection")
+        XCTAssertFalse(parent.isSelected)
         XCTAssertTrue(historicalFile("parent-node.txt", in: app).waitForExistence(timeout: 15),
                       "Cmd-Down must activate and expand the actual parent commit")
         app.typeKey(XCUIKeyboardKey.upArrow, modifierFlags: .command)
@@ -1289,12 +1380,17 @@ final class GitGraphUITests: XCTestCase {
                            "The actual Diff must use the selected worktree stage and baseline")
         }
         rows.element(boundBy: 0).click()
+        XCTAssertTrue(rows.element(boundBy: 0).isSelected,
+                      "The staged Worktree file must use Git Graph Selection styling")
         let layout = window.radioGroups["bailey.diff.layout"]
         XCTAssertTrue(layout.waitForExistence(timeout: 15))
         layout.radioButtons.element(boundBy: 1).click()
         requireDiff("committed\n", "index version\n")
 
         rows.element(boundBy: 1).click()
+        XCTAssertTrue(rows.element(boundBy: 1).isSelected)
+        XCTAssertFalse(rows.element(boundBy: 0).isSelected,
+                       "Changing Worktree file must not leave a second selected row")
         let mode = window.radioGroups["bailey.diff.mode"]
         XCTAssertTrue(mode.waitForExistence(timeout: 15))
         mode.radioButtons.element(boundBy: 0).click()
