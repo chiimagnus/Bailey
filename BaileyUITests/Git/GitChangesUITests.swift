@@ -63,12 +63,17 @@ final class GitChangesUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         XCTAssertFalse(secondRow.isSelected)
 
-        func expectSplit(old: String, new: String) {
-            let mode = window.radioGroups["bailey.diff.mode"]
-            if mode.exists { mode.radioButtons.element(boundBy: 0).click() }
+        func expectSplit(old: String, new: String, worktree: Bool = false) {
             let layout = window.radioGroups["bailey.diff.layout"]
             XCTAssertTrue(layout.waitForExistence(timeout: 15))
             guard layout.exists else { return }
+            if worktree {
+                let mode = window.radioGroups["bailey.diff.mode"]
+                XCTAssertTrue(mode.waitForExistence(timeout: 15),
+                              "A loaded regular worktree Diff must expose Review/Edit")
+                guard mode.exists else { return }
+                mode.radioButtons.element(boundBy: 0).click()
+            }
             layout.radioButtons.element(boundBy: 1).click()
             let visible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
                 let values = Set(window.textViews.allElementsBoundByIndex.compactMap { $0.value as? String })
@@ -81,7 +86,7 @@ final class GitChangesUITests: XCTestCase {
         firstRows.element(boundBy: 0).click()
         expectSplit(old: "first HEAD\n", new: "first INDEX\n")
         firstRows.element(boundBy: 1).click()
-        expectSplit(old: "first INDEX\n", new: "first WORKTREE\n")
+        expectSplit(old: "first INDEX\n", new: "first WORKTREE\n", worktree: true)
         firstRows.element(boundBy: 1).click()
         secondRow.rightClick()
         let stage = app.menuItems["Stage Changes"]
@@ -89,7 +94,7 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertFalse(stage.isEnabled, "A readable snapshot must not authorize writes")
         app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
-        expectSplit(old: "second HEAD\n", new: "second WORKTREE\n")
+        expectSplit(old: "second HEAD\n", new: "second WORKTREE\n", worktree: true)
         secondRow.rightClick()
         let openHead = app.menuItems["Open HEAD File"]
         XCTAssertTrue(openHead.waitForExistence(timeout: 8))
