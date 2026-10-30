@@ -182,9 +182,45 @@ P5 行为对齐判定只对可观察契约负责，不宣称复制上游 CSS 或
   被 Finder 窗口位置遮挡及主题重启用例仍按旧 `.segmented` 的 RadioButton
   查询 macOS 27 原生 `.tabs`。**这四项尚未核销，不可宣称完整 GUI 通过。**
   同组 Windows SSH 双窗口测试（含专用 master 断开恢复）实际通过。
-- 新增容量与高对比宿主 2/2 通过；按当前 53+78+59 个 UI 方法的覆盖，
-  已有 186 项通过或经过针对性 Red→Green，剩余明确为 C 组四个失败方法。
-  “已通过”统计不等于同一套 190 项修复后一次性全绿。
+- 上述 C 组 4 个失败方法在 2026-10-31 逐一 Red→Green：
+  - Windows SSH 命令面板：真实远端 Git 与普通文件的搜索、打开、字节和
+    同名本机文件隔离，单独 1/1（102.036s），5 项联合组也通过（119.610s）。
+  - Finder→Windows SSH 拒绝、本机接收：原测试未激活远端项目，
+    误选两个同名 `drop-zone` 之一。显式核对远端项目选中、目录展开和完整
+    `protected.txt` 路径后，远端未上传、受保护文件字节未变，
+    本机相同 Finder 文件确实复制成功；单独 1/1（79.925s），
+    5 项联合组也通过（83.465s），提交 `4cfb09b8`。
+  - Finder→WebKit 原生上传：原测试启动时主窗口呈现晚于 1s 的 GUI 兜底，
+    新窗口与默认场景重复，同时 Finder 窗口遮挡 HTML 输入框；
+    等待真实 WindowGroup 后仅在必要时开新窗，使用无遮挡落点，
+    实际文件 URL 被 HTML 接收、没有意外编辑器标签，
+    单独 1/1（44.562s），5 项联合组 1/1（44.475s），
+    最终 Settings 同类联合组 1/1（44.667s），提交 `f316af8b`。
+  - 重启后主题保持：macOS 27 真正使用 `Tab` 而非旧 `RadioButton`
+    （修复 `a1e26c70`）；第一次启动的 `⌘,` 与主题写盘实际通过。
+    Xcode UI Launcher 重启后偶发没有默认 WindowGroup，测试通过
+    `Window > New Window` 恢复主窗口时，`⌘,` 有不稳定记录，
+    并非已证明的正常用户启动场景。重启后的主题保持改通过系统原生
+    Settings 菜单核对，保持真实 App 终止／重新启动、Dark Tab、配置文件
+    和关闭设置后工作区不丢失的断言；最终同类联合组 1/1（45.095s），
+    退出码 0，提交 `e22c901e`。**不得称合成无默认窗口后的 `⌘,` 已验过。**
+- 5 项跨 Files／Retention／Smoke 联跑结果 **4/5**，唯一失败是测试修改前的
+  重启后 `⌘,`。随后在相同 `WorkspaceRetentionUITests` 类中，
+  WebKit 上传与更正后的设置恢复连续 **2/2**，0 失败、退出码 0。
+  A 组 59、B 组 78、C 组 53，共 **190 个不同 UI 方法已分组实际执行**；
+  曾失败的方法均有真实专项 Red→Green 证据，但并无最新代码
+  同一命令执行 190/190 的报告，不伪称一次性全集全绿。
+- C 组原日志：`/tmp/bailey-p5-complete-ui-C-20261030.log`；
+  五项联跑：`/tmp/bailey-p5-final-combined-5-20261031.log`；
+  最终主题／WebKit 联跑：`/tmp/bailey-p5-settings-native-menu-combined-20261031.log`；
+  Windows SSH Finder 绿灯：`/tmp/bailey-p5-ssh-finder-explicit-project-20261031.log`。
+- 新增容量与高对比宿主测试 2/2 通过，见上文独立原生基线。
+- 最终代码基线 `make build:dev` **BUILD SUCCEEDED，退出码 0**；
+  `codesign --verify --deep --strict --verbose=2` **退出码 0**，Dev 包 `valid on disk`
+  且 `satisfies its Designated Requirement`。
+  完整日志 `/tmp/bailey-p5-final-build-dev-20261031.log`、
+  `/tmp/bailey-p5-final-codesign-20261031.log`。
+  正式 Bailey 未被本轮安装、停止、替换或启动；没有推送或新建 PR。
 
 ## 未核销的设备与组合
 

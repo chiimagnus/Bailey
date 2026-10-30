@@ -1,5 +1,5 @@
 version = 1
-current_task_id = "P5-T2"
+current_task_id = ""
 
 [[tasks]]
 id = "P1-T1"
@@ -196,15 +196,15 @@ note = "原生焦点实现60635f9f，双窗口GUI补证f2ec9ade、WebKit保留GU
 [[tasks]]
 id = "P5-T1"
 title = "跨领域实际事件链与文件 Git 结果验收"
-status = "in_progress"
+status = "completed"
 plan = "plan-p5.md#p5-t1"
-commit = ""
-note = "完成分组 A 59/59、B 原 77/78 且唯一红灯定点修复通过、C 49/53；Windows SSH Palette/本机目标、Finder WebKit 上传、macOS27 Settings 仍4项红灯，按证据继续验收。"
+commit = "4cfb09b8"
+note = "真实 Windows SSH+本机 Finder 拖放 1/1 与命令面板 1/1 均专项及连续联跑通过；组 A 59/59，其他跨域/双窗口 E2E 有真实日志，生产焦点修复 009af523、身份修复 4cfb09b8。Xcode 合成无初始窗口后 Cmd-, 未主张通过；真实设置重启与菜单验收 e22c901e。"
 
 [[tasks]]
 id = "P5-T2"
 title = "多主题无障碍极端容量与性能验收"
-status = "in_progress"
+status = "completed"
 plan = "plan-p5.md#p5-t2"
-commit = ""
-note = "P5 原生 1k/10k/100k FileTree 与高对比宿主 2/2 通过 feed7e5d，Git/共享树/Dock 78 项 77/78 且测试夹具修复 edc31129 定点绿；macOS15.6/VoiceOver/长期 Instruments 仍不可宣称全覆盖。"
+commit = "feed7e5d"
+note = "原生 1k/10k/100k Files 与高对比 2/2，图谱/Dock B 组原77/78且唯一测试像素样本误判修正后 1/1 绿，主题多窗口真实 Dev 回归；723 宿主、Dev build+验签通过。macOS15.6、实体 VoiceOver/IME/第二屏及长期 Instruments 仍作为可审计外部 Deferred，不代表全平台验收。"
