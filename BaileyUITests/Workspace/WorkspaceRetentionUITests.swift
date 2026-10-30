@@ -14,7 +14,14 @@ final class WorkspaceRetentionUITests: XCTestCase {
 
         app.typeKey(",", modifierFlags: .command)
         XCTAssertTrue(app.windows.element(boundBy: 1).waitForExistence(timeout: 15))
-        let dark = app.radioButtons["Dark"].firstMatch
+        let settingsWindow = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
+        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 12))
+        let dark: XCUIElement
+        if #available(macOS 27.0, *) {
+            dark = settingsWindow.descendants(matching: .tab)["Dark"].firstMatch
+        } else {
+            dark = settingsWindow.radioButtons["Dark"].firstMatch
+        }
         XCTAssertTrue(dark.waitForExistence(timeout: 12),
                       "Real Settings must expose the appearance control")
         dark.click()
@@ -25,7 +32,7 @@ final class WorkspaceRetentionUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 12), .completed,
                        "The selected appearance must be written to this isolated TOML")
         XCTAssertEqual(String(describing: dark.value ?? ""), "1",
-                       "Native radio button value must reflect the selected theme")
+                       "The native appearance control must reflect the selected theme")
 
         app.terminate()
         app.launch()
@@ -38,7 +45,14 @@ final class WorkspaceRetentionUITests: XCTestCase {
         }
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
         app.typeKey(",", modifierFlags: .command)
-        let restoredDark = app.radioButtons["Dark"].firstMatch
+        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 12),
+                      "Command-comma must reopen the native Settings scene after relaunch")
+        let restoredDark: XCUIElement
+        if #available(macOS 27.0, *) {
+            restoredDark = settingsWindow.descendants(matching: .tab)["Dark"].firstMatch
+        } else {
+            restoredDark = settingsWindow.radioButtons["Dark"].firstMatch
+        }
         XCTAssertTrue(restoredDark.waitForExistence(timeout: 12))
         XCTAssertEqual(String(describing: restoredDark.value ?? ""), "1",
                        "Restart must restore the selected theme in native Settings")
