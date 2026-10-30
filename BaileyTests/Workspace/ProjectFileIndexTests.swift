@@ -192,9 +192,9 @@ final class ProjectFileIndexTests: XCTestCase {
     }
 
     func testAuthorizedWindowsSSHProjectIndexGitAndPlainRealFiles() async throws {
-        guard let host = ProcessInfo.processInfo.environment["BAILEY_P3_TEST_SSH_HOST"],
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"],
               !host.isEmpty else {
-            throw XCTSkip("Set BAILEY_P3_TEST_SSH_HOST to the approved isolated Windows SSH target")
+            throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST to the approved isolated Windows SSH target")
         }
         let socket = "/tmp/bailey-p3-index-\(UUID().uuidString.prefix(8)).sock"
         let backend = SSHWorkspaceBackend(

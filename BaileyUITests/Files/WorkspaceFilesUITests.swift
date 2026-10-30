@@ -307,9 +307,9 @@ final class WorkspaceFilesUITests: XCTestCase {
     }
 
     func testAuthorizedWindowsSSHCommandPaletteOpensRealRemoteFiles() throws {
-        guard let host = ProcessInfo.processInfo.environment["BAILEY_P3_TEST_SSH_HOST"],
+        guard let host = ProcessInfo.processInfo.environment["BAILEY_P4_TEST_SSH_HOST"],
               !host.isEmpty else {
-            throw XCTSkip("Set BAILEY_P3_TEST_SSH_HOST for the isolated Windows SSH E2E")
+            throw XCTSkip("Set BAILEY_P4_TEST_SSH_HOST for the isolated Windows SSH E2E")
         }
         let remoteRoot = try runSSH(
             host: host, command: "mktemp -d /tmp/bailey-p3-ui-XXXXXX"
