@@ -1365,6 +1365,102 @@ final class FileTreeTests: XCTestCase {
         XCTAssertNil(tree.selectedPath)
     }
 
+    func testNativeFilesViewportAtOneTenAndHundredThousandRealFiles() async throws {
+        let scaleRoot = fixture.appendingPathComponent("native-capacity")
+        try FileManager.default.createDirectory(at: scaleRoot, withIntermediateDirectories: true)
+        func descendants(_ view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(descendants)
+        }
+
+        for capacity in [1_000, 10_000, 100_000] {
+            let root = scaleRoot.appendingPathComponent(String(capacity))
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let createdAt = Date()
+            for index in 0..<capacity {
+                let name = String(format: "entry-%06d.swift", index)
+                let path = root.appendingPathComponent(name).path
+                guard FileManager.default.createFile(atPath: path, contents: Data()) else {
+                    XCTFail("Could not create the actual test file at \(path)")
+                    return
+                }
+            }
+            let createSeconds = Date().timeIntervalSince(createdAt)
+            let tree = FileTreeModel()
+            let syncedAt = Date()
+            let synced = await tree.sync(root: root.path, backend: LocalWorkspaceBackend.shared)
+            let syncSeconds = Date().timeIntervalSince(syncedAt)
+            XCTAssertTrue(synced)
+            XCTAssertEqual(tree.items.count, capacity)
+            let first = try XCTUnwrap(tree.items.first)
+            let last = try XCTUnwrap(tree.items.last)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: last.path))
+
+            let window = NSWindow(
+                contentRect: NSRect(x: -1000, y: -1000, width: 380, height: 260),
+                styleMask: [.titled], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            do {
+                defer { window.close() }
+                var opened = 0
+                let host = NSHostingView(rootView: FileTreePanel(
+                    model: tree, git: GitStatusModel(), sshHost: nil, currentFilePath: nil,
+                    openFile: { _, _ in opened += 1 },
+                    renameFile: { item, name in await tree.rename(item, to: name) },
+                    onCommand: { _ in }, refreshGitStatus: {}, isCurrentTarget: { true },
+                    canPasteFiles: { false }, canImportFromFinder: false,
+                    importFromFinder: { _, _ in false }
+                ))
+                let mountStarted = Date()
+                window.contentView = host
+                window.orderFront(nil)
+                host.layoutSubtreeIfNeeded()
+                let deadline = Date().addingTimeInterval(25)
+                var scroll: NSScrollView?
+                while Date() < deadline {
+                    host.layoutSubtreeIfNeeded()
+                    scroll = descendants(host).compactMap { $0 as? NSScrollView }
+                        .first { $0.contentSize.height > 80 }
+                    if scroll != nil { break }
+                    try await Task.sleep(for: .milliseconds(30))
+                }
+                let viewport = try XCTUnwrap(scroll, "The real native Files viewport must mount")
+                let mountSeconds = Date().timeIntervalSince(mountStarted)
+                XCTAssertLessThan(viewport.contentSize.height, 300,
+                                  "The fixed-height native Files panel must not expand to all rows")
+                let before = viewport.contentView.bounds.minY
+                let focusStarted = Date()
+                tree.focus(last)
+                while Date() < deadline {
+                    host.layoutSubtreeIfNeeded()
+                    if viewport.contentView.bounds.minY > before + 100 { break }
+                    try await Task.sleep(for: .milliseconds(30))
+                }
+                XCTAssertEqual(tree.selectedPath, last.path)
+                XCTAssertGreaterThan(viewport.contentView.bounds.minY, before + 100,
+                                     "The last real file must scroll into the native viewport")
+                let documentHeight = try XCTUnwrap(viewport.documentView).frame.height
+                XCTAssertGreaterThan(documentHeight, CGFloat(capacity) * 16,
+                                     "The real Files document must retain scroll space for every row")
+                let bottomOffset = max(0, documentHeight - viewport.contentSize.height)
+                XCTAssertGreaterThanOrEqual(viewport.contentView.bounds.minY, bottomOffset - 90,
+                                            "The actual scroll viewport must reach the last of \(capacity) files")
+                XCTAssertTrue(tree.selectedPaths.isEmpty,
+                              "Moving the keyboard cursor must not invent a selection")
+                XCTAssertEqual(opened, 0, "Navigating 100k files must not open editor tabs")
+                var usage = rusage()
+                _ = getrusage(RUSAGE_SELF, &usage)
+                let peakRSS = Double(usage.ru_maxrss) / 1_048_576
+                let scrollSeconds = Date().timeIntervalSince(focusStarted)
+                print("P5_NATIVE_FILES_SCALE count=\(capacity) create_s=\(createSeconds) "
+                      + "sync_s=\(syncSeconds) mount_s=\(mountSeconds) "
+                      + "focus_scroll_s=\(scrollSeconds) peak_rss_mib=\(peakRSS) "
+                      + "views=\(descendants(host).count)")
+            }
+        }
+    }
+
     func testNativeTreeHomeEndAndViewportPagingPreserveSelectionAndRejectOtherInputOwners() async throws {
         let root = fixture.appendingPathComponent("paging")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -3181,6 +3277,78 @@ final class FileTreeTests: XCTestCase {
                              "Move destination must have a distinct row highlight and border")
         XCTAssertGreaterThan(try changedPixels(activeImage, copyTarget), 25,
                              "Copy destination must be visible even above an existing selection")
+    }
+
+    func testNativeHighContrastAquaAndDarkAquaPreserveSelectionAndFocusBorders() throws {
+        func image(
+            appearance: NSAppearance.Name, selected: Bool, focused: Bool
+        ) throws -> NSBitmapImageRep {
+            let window = NSWindow(
+                contentRect: NSRect(x: -1200, y: -1200, width: 180, height: 24),
+                styleMask: [.borderless], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+            let dark = appearance == .accessibilityHighContrastDarkAqua
+            let row = TreeRowSurface(
+                depth: 0, scale: 1, displayed: false,
+                isSelected: selected, listActive: true, focusRing: focused,
+                outerInset: 0, showsGuides: false
+            ) { _, layout in
+                Color.clear.frame(height: layout.height)
+            }
+            let host = NSHostingView(rootView: row
+                .background(Color(nsColor: .windowBackgroundColor))
+                .environment(\.colorScheme, dark ? .dark : .light))
+            host.frame = NSRect(x: 0, y: 0, width: 180, height: 24)
+            window.contentView = host
+            window.orderFront(nil)
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            return bitmap
+        }
+        func distance(_ first: NSColor, _ second: NSColor) -> CGFloat {
+            let a = first.usingColorSpace(.sRGB)!
+            let b = second.usingColorSpace(.sRGB)!
+            return abs(a.redComponent - b.redComponent)
+                + abs(a.greenComponent - b.greenComponent)
+                + abs(a.blueComponent - b.blueComponent)
+        }
+        for appearance: NSAppearance.Name in [
+            .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua
+        ] {
+            let normal = try image(appearance: appearance, selected: false, focused: false)
+            let selection = try image(appearance: appearance, selected: true, focused: false)
+            let focus = try image(appearance: appearance, selected: false, focused: true)
+            let x = normal.pixelsWide / 2
+            let y = normal.pixelsHigh / 2
+            let neutral = try XCTUnwrap(normal.colorAt(x: x, y: y))
+            XCTAssertGreaterThan(
+                try distance(neutral, XCTUnwrap(selection.colorAt(x: x, y: y))), 0.04,
+                "The selected row must keep a visible fill in \(appearance.rawValue)"
+            )
+            XCTAssertLessThan(
+                try distance(neutral, XCTUnwrap(focus.colorAt(x: x, y: y))), 0.04,
+                "A focused but unselected row must not gain a selection fill"
+            )
+            var changedBorderPixels = 0
+            for row in 0..<min(2, normal.pixelsHigh) {
+                for column in 0..<normal.pixelsWide {
+                    if try distance(
+                        XCTUnwrap(normal.colorAt(x: column, y: row)),
+                        XCTUnwrap(focus.colorAt(x: column, y: row))
+                    ) > 0.05 {
+                        changedBorderPixels += 1
+                    }
+                }
+            }
+            XCTAssertGreaterThan(
+                changedBorderPixels, 8, "Native high-contrast keyboard focus must paint an outline"
+            )
+        }
     }
 
     func testSharedRowVisualPriorityCoversEveryFlagCombinationAcrossAppearancesAndThemes() throws {
