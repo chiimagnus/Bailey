@@ -207,6 +207,110 @@ final class GitChangesUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: second), Data("two after\n".utf8))
     }
 
+    func testFilesGitGraphDockAndPaletteKeepOneRealTargetThroughSwitches() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        let first = try fixture.file("chain-first.txt", text: "first committed\n")
+        let middle = try fixture.file("chain-middle.txt", text: "middle committed\n")
+        let last = try fixture.file("chain-last.txt", text: "last committed\n")
+        try fixture.initializeGit()
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        try "first changed\n".write(to: first, atomically: true, encoding: .utf8)
+        try "last changed\n".write(to: last, atomically: true, encoding: .utf8)
+
+        let app = try WorkspaceUITestSupport.launch(in: self, language: "en", project: fixture.root)
+        let window = app.windows.firstMatch
+        let fileFirst = WorkspaceUITestSupport.fileRow(first, in: window)
+        let fileMiddle = WorkspaceUITestSupport.fileRow(middle, in: window)
+        let fileLast = WorkspaceUITestSupport.fileRow(last, in: window)
+        XCTAssertTrue(fileLast.waitForExistence(timeout: 20))
+        fileFirst.click()
+        XCUIElement.perform(withKeyModifiers: .command) { fileLast.click() }
+        XCTAssertTrue(fileFirst.isSelected && fileLast.isSelected && !fileMiddle.isSelected)
+        fileMiddle.rightClick()
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(fileFirst.isSelected && fileLast.isSelected && !fileMiddle.isSelected,
+                      "Context cancellation must preserve the Files selection")
+
+        fileFirst.doubleClick()
+        let firstTab = WorkspaceUITestSupport.fileTab(first, in: window)
+        XCTAssertTrue(firstTab.waitForExistence(timeout: 15))
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let gitFirst = WorkspaceUITestSupport.fileRow(first, in: window, relativeTo: fixture.root)
+        let gitLast = WorkspaceUITestSupport.fileRow(last, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(gitLast.waitForExistence(timeout: 25))
+        gitLast.click()
+        gitFirst.click()
+        XCTAssertTrue(gitFirst.isSelected && !gitLast.isSelected,
+                      "The selected Git resource must follow the active Diff")
+
+        let commit = app.buttons["E2E fixture history"]
+        XCTAssertTrue(commit.waitForExistence(timeout: 20))
+        commit.click()
+        let historyFirst = window.descendants(matching: .any)
+            .matching(identifier: "bailey.git.history.file")
+            .matching(NSPredicate(format: "label ENDSWITH %@", ", chain-first.txt"))
+            .firstMatch
+        XCTAssertTrue(historyFirst.waitForExistence(timeout: 15))
+        historyFirst.click()
+        let historicalContent = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            window.textViews.allElementsBoundByIndex.contains {
+                ($0.value as? String)?.contains("first committed\n") == true
+            }
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [historicalContent], timeout: 15), .completed,
+                       "Graph history must display the committed file, not its changed working copy")
+        XCTAssertFalse(historyFirst.isSelected,
+                       "Browsing Graph history must not invent a Git resource selection")
+        app.typeKey("p", modifierFlags: .command)
+        let palette = window.textFields["bailey.commandPalette.search"]
+        XCTAssertTrue(palette.waitForExistence(timeout: 10))
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(palette.waitForNonExistence(timeout: 5))
+
+        app.typeKey("e", modifierFlags: [.command, .shift])
+        firstTab.click()
+        XCTAssertTrue(fileFirst.isSelected && !fileMiddle.isSelected && !fileLast.isSelected,
+                      "Returning to the active editor must reveal only its real Files row")
+        app.typeKey("g", modifierFlags: [.command, .shift])
+        let revealed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "selected == true"), object: gitFirst
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [revealed], timeout: 8), .completed)
+        XCTAssertFalse(gitLast.isSelected)
+
+        gitFirst.rightClick()
+        let stage = app.menuItems["Stage Changes"]
+        XCTAssertTrue(stage.waitForExistence(timeout: 10))
+        stage.click()
+        let staged = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["show", ":chain-first.txt"])) == Data("first changed\n".utf8)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [staged], timeout: 20), .completed,
+                       "Stage must update the real index of the revealed file")
+        XCTAssertEqual(try fixture.git(["show", ":chain-last.txt"]),
+                       Data("last committed\n".utf8))
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+
+        let stagedFirst = WorkspaceUITestSupport.fileRow(first, in: window, relativeTo: fixture.root)
+        XCTAssertTrue(stagedFirst.waitForExistence(timeout: 15))
+        stagedFirst.rightClick()
+        let unstage = app.menuItems["Unstage Changes"]
+        XCTAssertTrue(unstage.waitForExistence(timeout: 10))
+        unstage.click()
+        let unstaged = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (try? fixture.git(["diff", "--cached", "--name-only"]))?.isEmpty == true
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [unstaged], timeout: 20), .completed,
+                       "Unstage must restore only the original index contents")
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+        XCTAssertTrue(try fixture.git(["diff", "--cached", "--name-only"]).isEmpty)
+        XCTAssertEqual(try fixture.git(["status", "--porcelain=v1"]),
+                       Data(" M chain-first.txt\n M chain-last.txt\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: first), Data("first changed\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: middle), Data("middle committed\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: last), Data("last changed\n".utf8))
+    }
+
     func testReturningToGitAfterOpeningOrdinaryFileRevealsOnlyMatchingChange() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let first = try fixture.file("ordinary-match.txt", text: "first original\n")
