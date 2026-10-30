@@ -110,6 +110,21 @@ Git Changes／Graph 右键只更新行游标与临时上下文目标，不抢走
 图谱的历史文件及其它工作树文件单击／键盘浏览 Diff 时保持 Git 活动组（只要 Git 仍可见），
 显式打开内容标签才切入目标。提交说明与过滤输入框仍使用原生文本焦点，输入按键不触发列表动作。
 
+### 托管平台与 Git Remotes
+
+提交行及 Branch／Tag 引用右键提供「在托管平台打开」：
+GitHub、GitLab、Bitbucket、Gitee、GitCode、Codeup、Azure DevOps、Gitea／Forgejo、Codeberg、SourceHut
+等常见远端按各自 URL 规则打开；多 Remote 显示逐项选择。
+对无法识别网页提交路由的 Git 服务只尝试打开仓库主页，不臆造详情链接。
+从配置的 Git Remote 地址生成链接，移除认证信息和参数，不调用托管平台 API。
+SSH Remote 的网页地址一般使用 HTTPS；自部署实例的特殊域名可在 Git Manager 设置中映射平台类型。
+
+「⋯ → Open Remote in Browser」提供当前仓库主页入口；
+「⋯ → Manage Remotes…」在当前项目下查看、添加、修改 Fetch URL 或移除 Remote。
+真实操作使用当前机器的 Git CLI，保持原有目标代次与状态保护，
+不会改变工作区或通过平台 API 创建托管仓库；移除 Remote 同时移除本地跟踪引用。
+设置、默认值与域名映射见[设置与配置](settings.md#git-设置与托管平台)。
+
 ### Git Graph 滚动诊断
 
 日志默认关闭。排查重启后方向键焦点离开视野的问题时，先开启日志，

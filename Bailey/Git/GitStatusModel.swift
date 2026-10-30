@@ -560,6 +560,117 @@ final class GitStatusModel {
     private(set) var branches: [String] = []
     private(set) var defaultBranch: String?
     private(set) var remotes: [String] = []
+
+    nonisolated struct RemoteLocation: Identifiable, Equatable, Sendable {
+        let name: String
+        let fetchURL: String
+        let pushURL: String?
+        var id: String { name }
+    }
+
+    /// Git's remote -v is a local configuration query (also over SSH).
+    nonisolated static func parseRemoteLocations(_ output: String) -> [RemoteLocation] {
+        var entries: [String: (fetch: String?, push: String?)] = [:]
+        for line in output.split(whereSeparator: \.isNewline) {
+            let fields = line.split(separator: "\t", maxSplits: 1)
+            guard fields.count == 2, !fields[0].isEmpty else { continue }
+            let name = String(fields[0])
+            let detail = String(fields[1]).trimmingCharacters(in: .newlines)
+            if detail.hasSuffix(" (fetch)") {
+                entries[name, default: (nil, nil)].fetch =
+                    String(detail.dropLast(" (fetch)".count))
+            } else if detail.hasSuffix(" (push)") {
+                entries[name, default: (nil, nil)].push =
+                    String(detail.dropLast(" (push)".count))
+            }
+        }
+        return entries.compactMap { name, value -> RemoteLocation? in
+            guard let fetch = value.fetch else { return nil }
+            return RemoteLocation(name: name, fetchURL: fetch, pushURL: value.push)
+        }.sorted { $0.name < $1.name }
+    }
+
+    func remoteLocations() async -> [RemoteLocation] {
+        let target = actionTarget()
+        guard canBrowse(target), canUseCurrentReferences else { return [] }
+        let result = await GitCommandExecution.run(
+            ["remote", "-v"], in: repoRoot, backend: backend
+        )
+        guard canBrowse(target), result.status == 0 else { return [] }
+        return Self.parseRemoteLocations(result.stdout)
+    }
+
+    func openInBrowser(
+        remote: String, commit: String? = nil,
+        hostProviders: [String: GitHostedRemoteURL.Provider] = [:]
+    ) {
+        let target = actionTarget()
+        guard canBrowse(target), remotes.contains(remote) else { return }
+        Task {
+            let result = await GitCommandExecution.run(
+                ["remote", "get-url", remote], in: target.repository, backend: backend
+            )
+            guard canBrowse(target) else { return }
+            let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard result.status == 0,
+                  let link = GitHostedRemoteURL(remoteURL: raw, hostProviders: hostProviders)
+            else {
+                failImmediately(String(localized: "This Git remote has no supported web address.", table: "Git"))
+                return
+            }
+            let url = commit.flatMap(link.commitURL) ?? link.repositoryURL
+            if !NSWorkspace.shared.open(url) {
+                failImmediately(String(localized: "Could not open the Git repository in the browser.", table: "Git"))
+            }
+        }
+    }
+
+    func addRemote(name: String, url: String, completion: (@MainActor (Bool) -> Void)? = nil) {
+        guard Self.validRemoteName(name), Self.validRemoteAddress(url) else {
+            failImmediately(String(localized: "Enter a valid remote name and URL.", table: "Git"))
+            completion?(false)
+            return
+        }
+        perform(label: String(localized: "Add Remote", table: "Git"),
+                commands: [["remote", "add", name, url]], requiresStableHead: false,
+                completion: completion)
+    }
+
+    func changeRemoteURL(name: String, url: String, completion: (@MainActor (Bool) -> Void)? = nil) {
+        guard remotes.contains(name), Self.validRemoteAddress(url) else {
+            failImmediately(String(localized: "The remote or URL is invalid.", table: "Git"))
+            completion?(false)
+            return
+        }
+        perform(label: String(localized: "Update Remote", table: "Git"),
+                commands: [["remote", "set-url", name, url]], requiresStableHead: false,
+                completion: completion)
+    }
+
+    func removeRemote(name: String, completion: (@MainActor (Bool) -> Void)? = nil) {
+        guard remotes.contains(name) else { return }
+        perform(label: String(localized: "Remove Remote", table: "Git"),
+                commands: [["remote", "remove", name]], requiresStableHead: false,
+                completion: completion)
+    }
+
+    private nonisolated static func validRemoteName(_ name: String) -> Bool {
+        !name.isEmpty && name.range(
+            of: "^[A-Za-z0-9][A-Za-z0-9._/-]*\\z", options: .regularExpression
+        ) != nil
+    }
+
+    private nonisolated static func validRemoteAddress(_ raw: String) -> Bool {
+        guard !raw.isEmpty, !raw.hasPrefix("-"), raw == raw.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+        else { return false }
+        if let components = URLComponents(string: raw),
+           ["http", "https"].contains(components.scheme?.lowercased() ?? "") {
+            return components.user == nil && components.password == nil
+                && components.query == nil && components.fragment == nil
+        }
+        return true
+    }
     private(set) var recentCommits: [RecentCommit] = []
     private(set) var hasMoreRecentCommits = false
     private(set) var isLoadingMoreCommits = false
@@ -1583,14 +1694,14 @@ final class GitStatusModel {
         })
     }
 
-    func fetch() {
+    func fetch(prune: Bool = true) {
         guard !remotes.isEmpty else {
             failImmediately(String(localized: "No Git remote is configured", table: "Git"))
             return
         }
         perform(
             label: String(localized: "Fetch", table: "Git"),
-            commands: [["fetch", "--all", "--prune"]],
+            commands: [prune ? ["fetch", "--all", "--prune"] : ["fetch", "--all"]],
             requiresStableHead: false
         )
     }

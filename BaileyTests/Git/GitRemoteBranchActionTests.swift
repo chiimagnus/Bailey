@@ -60,6 +60,57 @@ final class GitRemoteBranchActionTests: XCTestCase {
         try await settle()
     }
 
+    func testManageMultipleRemotesWithoutNetworkTraffic() async throws {
+        try await refresh()
+        XCTAssertTrue(model.remotes.isEmpty)
+
+        model.addRemote(name: "origin", url: "https://github.com/team/repo.git")
+        try await settle()
+        XCTAssertEqual(try git(["remote", "get-url", "origin"]),
+                       "https://github.com/team/repo.git")
+        model.addRemote(name: "gitee", url: "git@gitee.com:team/repo.git")
+        try await settle()
+        XCTAssertEqual(model.remotes.sorted(), ["gitee", "origin"])
+
+        let locations = await model.remoteLocations()
+        XCTAssertEqual(locations.count, 2)
+        XCTAssertEqual(locations.first(where: { $0.name == "gitee" })?.fetchURL,
+                       "git@gitee.com:team/repo.git")
+        XCTAssertEqual(locations.first(where: { $0.name == "origin" })?.pushURL,
+                       "https://github.com/team/repo.git")
+
+        model.changeRemoteURL(name: "origin", url: "https://gitlab.com/team/new.git")
+        try await settle()
+        XCTAssertEqual(try git(["remote", "get-url", "origin"]),
+                       "https://gitlab.com/team/new.git")
+
+        model.addRemote(name: "-bad", url: "https://github.com/team/nope.git")
+        XCTAssertFalse(model.isBusy)
+        XCTAssertEqual(model.remotes.count, 2)
+        XCTAssertNotNil(model.lastError)
+
+        model.removeRemote(name: "gitee")
+        try await settle()
+        XCTAssertEqual(model.remotes, ["origin"])
+        XCTAssertEqual(try git(["remote"]), "origin")
+    }
+
+    func testRemoteLocationParserDistinguishesFetchAndPushURL() {
+        let output = """
+        origin\thttps://github.com/team/repo.git (fetch)
+        origin\tgit@github.com:team/repo.git (push)
+        mirror\tgit@gitee.com:team/repo.git (fetch)
+        mirror\tgit@gitee.com:team/repo.git (push)
+        """
+        let locations = GitStatusModel.parseRemoteLocations(output)
+        XCTAssertEqual(locations.map(\.name), ["mirror", "origin"])
+        XCTAssertEqual(locations.last?.fetchURL, "https://github.com/team/repo.git")
+        XCTAssertEqual(locations.last?.pushURL, "git@github.com:team/repo.git")
+        XCTAssertEqual(GitStatusModel.parseRemoteLocations(output.replacingOccurrences(
+            of: "\n", with: "\r\n"
+        )).map(\.name), ["mirror", "origin"])
+    }
+
     func testCheckoutRemoteCreatesTrackingBranchAtSelectedRemoteOID() async throws {
         _ = try makeBareRemote("origin")
         _ = try git(["push", "origin", "main:refs/heads/topic/nested"])

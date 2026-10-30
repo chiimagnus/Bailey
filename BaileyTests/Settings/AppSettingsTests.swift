@@ -53,6 +53,44 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings(configURL: configURL).fontSize, 19)
     }
 
+    func testGitGraphPreferencesAndCustomHostRulesPersistAndReset() throws {
+        let settings = AppSettings(configURL: configURL)
+        XCTAssertTrue(settings.gitGraphShowStashes)
+        XCTAssertTrue(settings.gitGraphShowTags)
+        XCTAssertTrue(settings.gitGraphShowRemoteLabels)
+        XCTAssertTrue(settings.gitFetchPrune)
+        XCTAssertTrue(settings.gitHostingRules.isEmpty)
+
+        settings.gitGraphShowStashes = false
+        settings.gitGraphShowTags = false
+        settings.gitGraphShowRemoteLabels = false
+        settings.gitFetchPrune = false
+        try settings.applyGitHostingRules([
+            "git.company.internal=gitlab", "github.enterprise.test=github"
+        ])
+        let saved = try XCTUnwrap(TOML.parse(at: configURL))
+        XCTAssertEqual(saved["git.graph.show-stashes"]?.bool, false)
+        XCTAssertEqual(saved["git.graph.show-tags"]?.bool, false)
+        XCTAssertEqual(saved["git.graph.show-remote-labels"]?.bool, false)
+        XCTAssertEqual(saved["git.fetch-prune"]?.bool, false)
+        XCTAssertEqual(saved["git.host-providers"]?.strings, settings.gitHostingRules)
+
+        let restored = AppSettings(configURL: configURL)
+        XCTAssertFalse(restored.gitGraphShowStashes)
+        XCTAssertFalse(restored.gitGraphShowTags)
+        XCTAssertFalse(restored.gitGraphShowRemoteLabels)
+        XCTAssertFalse(restored.gitFetchPrune)
+        XCTAssertEqual(restored.gitHostProviders["git.company.internal"], .gitlab)
+
+        let before = try Data(contentsOf: configURL)
+        XCTAssertThrowsError(try restored.applyGitHostingRules(["invalid/host=github"]))
+        XCTAssertEqual(try Data(contentsOf: configURL), before)
+        restored.resetToDefaults()
+        XCTAssertTrue(AppSettings(configURL: configURL).gitHostingRules.isEmpty)
+        XCTAssertTrue(AppSettings(configURL: configURL).gitGraphShowTags)
+        XCTAssertTrue(AppSettings(configURL: configURL).gitFetchPrune)
+    }
+
     func testObsoleteInfoWorkspaceNamesAreRejectedAndOnlyNormalizedOnSave() throws {
         let validConfig = """
         font-family = "Fixture Font"

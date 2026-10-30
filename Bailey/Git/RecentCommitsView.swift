@@ -137,6 +137,11 @@ struct RecentCommitsView: View {
 
     let commits: [Commit]
     let remotes: [String]
+    let remoteLocations: [GitStatusModel.RemoteLocation]
+    let hostProviders: [String: GitHostedRemoteURL.Provider]
+    let openHosted: (String, String?) -> Void
+    let showTagLabels: Bool
+    let showRemoteLabels: Bool
     let stashFilesByOID: [String: GitStatusModel.StashFilesState]
     let repoRoot: String
     let selectionScope: String
@@ -174,6 +179,11 @@ struct RecentCommitsView: View {
     init(
         commits: [Commit],
         remotes: [String] = [],
+        remoteLocations: [GitStatusModel.RemoteLocation] = [],
+        hostProviders: [String: GitHostedRemoteURL.Provider] = [:],
+        openHosted: @escaping (String, String?) -> Void = { _, _ in },
+        showTagLabels: Bool = true,
+        showRemoteLabels: Bool = true,
         stashFilesByOID: [String: GitStatusModel.StashFilesState] = [:],
         repoRoot: String,
         selectionScope: String = "local",
@@ -217,6 +227,11 @@ struct RecentCommitsView: View {
     ) {
         self.commits = commits
         self.remotes = remotes
+        self.remoteLocations = remoteLocations
+        self.hostProviders = hostProviders
+        self.openHosted = openHosted
+        self.showTagLabels = showTagLabels
+        self.showRemoteLabels = showRemoteLabels
         self.stashFilesByOID = stashFilesByOID
         self.repoRoot = repoRoot
         self.selectionScope = selectionScope
@@ -889,6 +904,7 @@ struct RecentCommitsView: View {
         } else if let stash = commit.stash {
             stashActions(stash)
         } else {
+            hostedCommitMenu(commit)
             Button(String(localized: "Create Branch at Commit…", table: "Git")) {
                 createBranch(commit)
             }
@@ -907,6 +923,40 @@ struct RecentCommitsView: View {
             Button(String(localized: "Copy Commit Subject", table: "Git")) {
                 copy(commit.subject)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func hostedCommitMenu(_ commit: Commit) -> some View {
+        if !remotes.isEmpty {
+            if remotes.count == 1, let remote = remotes.first {
+                let location = remoteLocations.first { $0.name == remote }
+                let link = location.flatMap {
+                    GitHostedRemoteURL(remoteURL: $0.fetchURL, hostProviders: hostProviders)
+                }
+                if let link, link.commitURL(commit.hash) != nil {
+                    Button(String(localized: "Open on \(link.provider.title)", table: "Git")) {
+                        openHosted(remote, commit.hash)
+                    }
+                } else {
+                    Button(String(localized: "Open Repository in Browser", table: "Git")) {
+                        openHosted(remote, nil)
+                    }
+                }
+            } else {
+                Menu(String(localized: "Open in Browser", table: "Git")) {
+                    ForEach(remotes, id: \.self) { remote in
+                        let location = remoteLocations.first { $0.name == remote }
+                        let link = location.flatMap {
+                            GitHostedRemoteURL(remoteURL: $0.fetchURL, hostProviders: hostProviders)
+                        }
+                        Button(link.map { "\($0.provider.title) · \(remote)" } ?? remote) {
+                            openHosted(remote, link?.commitURL(commit.hash) == nil ? nil : commit.hash)
+                        }
+                    }
+                }
+            }
+            Divider()
         }
     }
 
@@ -1088,8 +1138,15 @@ struct RecentCommitsView: View {
     private func referenceStrip(
         _ references: [Reference], commit: Commit, colorIndex: Int
     ) -> some View {
+        let visible = references.filter { reference in
+            if reference.kind == .tag { return showTagLabels }
+            if reference.kind == .remoteBranch || reference.kind == .remoteAlias {
+                return showRemoteLabels
+            }
+            return true
+        }
         let groups = GitGraphReferenceGroup.grouped(
-            references, remotes: remotes, worktrees: commit.checkedOutWorktrees
+            visible, remotes: remotes, worktrees: commit.checkedOutWorktrees
         )
         let primary = groups.first?.primary
         let showsWorktree = !commit.checkedOutWorktrees.isEmpty
@@ -1186,6 +1243,7 @@ struct RecentCommitsView: View {
 
     @ViewBuilder
     private func referenceActions(_ reference: Reference, commit: Commit) -> some View {
+        hostedCommitMenu(commit)
         let matches = worktrees(for: reference, in: commit)
         if !matches.isEmpty {
             let locations = commit.checkedOutWorktrees.count > 1

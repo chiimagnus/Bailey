@@ -70,6 +70,13 @@ struct GitPanel: View {
         )
     }
     @State private var historyCollapsed = false
+    @State private var hostedRemotes: [GitStatusModel.RemoteLocation] = []
+    @State private var showingRemoteSettings = false
+    @State private var remoteSettingsTarget: GitStatusModel.ActionTarget?
+    private var remoteLookupID: String {
+        [model.currentScope, model.repoRoot, model.remotes.joined(separator: ","),
+         String(model.canUseCurrentReferences)].joined(separator: "\u{0}")
+    }
     private var expandedCommitIDsBinding: Binding<Set<String>> {
         Binding(
             get: { model.expandedCommitIDs },
@@ -235,6 +242,18 @@ struct GitPanel: View {
         .onChange(of: model.isBusy) {
             if !model.isBusy { operationTrigger = nil }
         }
+        .sheet(isPresented: $showingRemoteSettings, onDismiss: {
+            remoteSettingsTarget = nil
+            Task { hostedRemotes = await model.remoteLocations() }
+        }) {
+            if let remoteSettingsTarget {
+                GitRemoteSettingsSheet(model: model, target: remoteSettingsTarget)
+            }
+        }
+        .task(id: remoteLookupID) {
+            hostedRemotes = []
+            hostedRemotes = await model.remoteLocations()
+        }
         .tint(themeAccent)
     }
 
@@ -342,7 +361,9 @@ struct GitPanel: View {
 
     private var moreMenu: some View {
         Menu {
-            Button(String(localized: "Fetch", table: "Sidebar")) { performOperation(.moreMenu, model.fetch) }
+            Button(String(localized: "Fetch", table: "Sidebar")) {
+                performOperation(.moreMenu) { model.fetch(prune: settings.gitFetchPrune) }
+            }
                 .disabled(model.isBusy || !model.canUseCurrentReferences || model.remotes.isEmpty)
             Button(String(localized: "Pull (Fast-forward Only)", table: "Sidebar")) { performOperation(.moreMenu, model.pull) }
                 .disabled(model.isBusy || !model.canUseCurrentReferences || !model.hasUpstream)
@@ -382,6 +403,26 @@ struct GitPanel: View {
             Button(String(localized: "Copy Changed Paths", table: "Sidebar")) { copyChangedPaths() }
                 .disabled(model.totalChangeCount == 0)
             Button(String(localized: "Copy Repository Path", table: "Sidebar")) { copyToPasteboard(model.repoRoot) }
+            Divider()
+            if !model.remotes.isEmpty {
+                Menu(String(localized: "Open Remote in Browser", table: "Git")) {
+                    ForEach(model.remotes, id: \.self) { remote in
+                        let location = hostedRemotes.first { $0.name == remote }
+                        let link = location.flatMap {
+                            GitHostedRemoteURL(remoteURL: $0.fetchURL,
+                                               hostProviders: settings.gitHostProviders)
+                        }
+                        Button(link.map { "\($0.provider.title) · \(remote)" } ?? remote) {
+                            model.openInBrowser(remote: remote, hostProviders: settings.gitHostProviders)
+                        }
+                    }
+                }
+            }
+            Button(String(localized: "Manage Remotes…", table: "Git")) {
+                remoteSettingsTarget = model.actionTarget()
+                showingRemoteSettings = true
+            }
+            .disabled(model.isBusy || !model.canUseCurrentReferences)
             // Finder can only show a path on this Mac.
             if remoteName == nil {
                 Button(String(localized: "Reveal Repository in Finder", table: "Sidebar")) {
@@ -408,6 +449,7 @@ struct GitPanel: View {
         .help(String(localized: "More Actions…", table: "Sidebar"))
         .disabled(!model.canUseCurrentStatus)
         .accessibilityLabel(String(localized: "More Git Actions", table: "Sidebar"))
+        .accessibilityIdentifier("bailey.git.more-actions")
     }
 
     private func headerButton(
@@ -1683,7 +1725,9 @@ struct GitPanel: View {
     // Only text scrolls horizontally. Section controls and row actions remain
     // anchored to the visible sidebar, even for exceptionally long paths.
     private var changeList: some View {
-        let graphCommits = model.graphCommits
+        let graphCommits = model.graphCommits.filter {
+            settings.gitGraphShowStashes || $0.stash == nil
+        }
         let graphTarget = model.actionTarget()
         return ScrollViewReader { proxy in
             ScrollView(.vertical) {
@@ -1770,6 +1814,15 @@ struct GitPanel: View {
                         RecentCommitsView(
                             commits: graphCommits,
                             remotes: model.remotes,
+                            remoteLocations: hostedRemotes,
+                            hostProviders: settings.gitHostProviders,
+                            openHosted: { remote, commit in
+                                guard hasCurrentPanelTarget, model.canBrowse(graphTarget) else { return }
+                                model.openInBrowser(remote: remote, commit: commit,
+                                                    hostProviders: settings.gitHostProviders)
+                            },
+                            showTagLabels: settings.gitGraphShowTags,
+                            showRemoteLabels: settings.gitGraphShowRemoteLabels,
                             stashFilesByOID: model.stashFilesByOID,
                             repoRoot: model.repoRoot,
                             selectionScope: model.currentScope,

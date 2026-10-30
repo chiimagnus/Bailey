@@ -4,6 +4,42 @@ import XCTest
 
 @MainActor
 final class GitGraphUITests: XCTestCase {
+    func testHostedCommitMenuAndRemoteManagementUseRealGitConfiguration() throws {
+        let fixture = try WorkspaceUITestFixture(in: self)
+        _ = try fixture.file("hosted.txt", text: "remote context\n")
+        try fixture.initializeGit()
+        try fixture.git(["remote", "add", "origin", "https://github.com/owner/repo.git"])
+        let head = try fixture.git(["rev-parse", "HEAD"])
+        let app = try launchGraph(fixture, language: "en")
+        let commit = app.buttons["E2E fixture history"]
+        XCTAssertTrue(commit.waitForExistence(timeout: 25))
+
+        commit.rightClick()
+        XCTAssertTrue(app.menuItems["Open on GitHub"].waitForExistence(timeout: 12),
+                      "Git Graph must expose the known host instead of assuming GitHub")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+
+        let more = app.descendants(matching: .any)
+            .matching(identifier: "bailey.git.more-actions").firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 12))
+        more.click()
+        let manage = app.menuItems["Manage Remotes…"]
+        XCTAssertTrue(manage.waitForExistence(timeout: 10))
+        manage.click()
+        XCTAssertTrue(app.staticTexts["origin"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.descendants(matching: .any)
+            .matching(identifier: "bailey.git.remote-name").firstMatch
+            .waitForExistence(timeout: 15))
+        let done = app.descendants(matching: .any)
+            .matching(identifier: "bailey.git.remote-done").firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 10))
+        done.click()
+
+        XCTAssertEqual(try fixture.git(["remote", "get-url", "origin"]),
+                       Data("https://github.com/owner/repo.git\n".utf8))
+        XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
+    }
+
     func testGraphExplicitSelectionIsIndependentOfKeyboardCursorAndContext() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let oldFile = try fixture.file("nested/old.txt", text: "history stays unchanged\n")
