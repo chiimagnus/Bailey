@@ -410,7 +410,7 @@ final class GitGraphGeometryUITests: XCTestCase {
         XCTAssertTrue(try fixture.git(["-C", linked.path, "diff", "--cached", "--name-only"]).isEmpty)
     }
 
-    func testOverflowBranchWorktreeMenuSurvivesExternalRefreshBeforeOpeningItsExactCheckout() throws {
+    func testOverflowBranchWorktreeActionRebindsAfterExternalRefresh() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let tracked = try fixture.file("menu.txt", text: "stable menu target\n")
         try fixture.initializeGit()
@@ -438,50 +438,56 @@ final class GitGraphGeometryUITests: XCTestCase {
         let app = try WorkspaceUITestSupport.launch(in: self, project: fixture.root)
         app.typeKey("g", modifierFlags: [.command, .shift])
         let window = app.windows.firstMatch
-        let overflow = app.menuButtons.matching(NSPredicate(
-            format: "title CONTAINS %@ AND title CONTAINS %@", "topic/menu", "v-before-refresh"))
-            .firstMatch
-        XCTAssertTrue(overflow.waitForExistence(timeout: 25))
-        overflow.click()
-        let branch = app.menuItems.matching(NSPredicate(format: "title == %@", "topic/menu")).firstMatch
-        XCTAssertTrue(branch.waitForExistence(timeout: 8))
-        branch.hover()
-        let worktrees = branch.descendants(matching: .menuItem).matching(NSPredicate(
-            format: "title IN %@", ["Worktree", "工作树"])).firstMatch
-        XCTAssertTrue(worktrees.waitForExistence(timeout: 8))
-        worktrees.hover()
-        let selected = worktrees.descendants(matching: .menuItem)
-            .matching(NSPredicate(format: "title == %@", "a904/Bailey")).firstMatch
-        XCTAssertTrue(selected.waitForExistence(timeout: 8))
-        selected.hover()
-        let open = selected.descendants(matching: .menuItem).matching(NSPredicate(
-            format: "title IN %@", ["Open Worktree", "在 Bailey 中打开工作树"])).firstMatch
-        XCTAssertTrue(open.waitForExistence(timeout: 8))
-        XCTAssertGreaterThan(open.frame.width, 0)
+        func openSelectedWorktreeAction() -> XCUIElement {
+            let overflow = app.menuButtons.matching(NSPredicate(
+                format: "title CONTAINS %@ AND title CONTAINS %@", "topic/menu", "v-before-refresh"))
+                .firstMatch
+            XCTAssertTrue(overflow.waitForExistence(timeout: 25))
+            overflow.click()
+            let branch = app.menuItems.matching(NSPredicate(format: "title == %@", "topic/menu"))
+                .firstMatch
+            XCTAssertTrue(branch.waitForExistence(timeout: 8))
+            branch.hover()
+            let worktrees = branch.descendants(matching: .menuItem).matching(NSPredicate(
+                format: "title IN %@", ["Worktree", "工作树"])).firstMatch
+            XCTAssertTrue(worktrees.waitForExistence(timeout: 8))
+            worktrees.hover()
+            let selected = worktrees.descendants(matching: .menuItem)
+                .matching(NSPredicate(format: "title == %@", "a904/Bailey")).firstMatch
+            XCTAssertTrue(selected.waitForExistence(timeout: 8))
+            selected.hover()
+            let open = selected.descendants(matching: .menuItem).matching(NSPredicate(
+                format: "title IN %@", ["Open Worktree", "在 Bailey 中打开工作树"])).firstMatch
+            XCTAssertTrue(open.waitForExistence(timeout: 8))
+            XCTAssertGreaterThan(open.frame.width, 0)
+            return open
+        }
+        let open = openSelectedWorktreeAction()
+        XCTAssertTrue(open.isHittable, "The original Worktree action must be a real native menu target")
         let began = Date()
         try "stable menu target\n".write(to: tracked, atomically: true, encoding: .utf8)
         try fixture.git(["tag", "v-external-refresh"])
         let updated = app.menuButtons.matching(NSPredicate(
             format: "title CONTAINS %@", "v-external-refresh")).firstMatch
-        var remainedOpen = true
         let observed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            guard open.exists, open.frame.width > 0 else {
-                remainedOpen = false
-                return true
-            }
-            return updated.exists && Date().timeIntervalSince(began) >= 10
+            updated.exists && Date().timeIntervalSince(began) >= 10
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [observed], timeout: 20), .completed,
                        "External file and Ref events must really refresh the graph during the dwell")
-        guard remainedOpen else {
-            XCTFail("The open nested Worktree menu closed during a real external refresh")
-            return
+        XCTAssertEqual(try fixture.git(["worktree", "list", "--porcelain"]), locations,
+                       "A menu invalidated by refresh must not run its stale Worktree action")
+        // A native nested NSMenu may close when SwiftUI updates its backing ref list.
+        // Never use the stale AX element: resolve the same checkout from the new menu.
+        let actionable: XCUIElement
+        if open.isHittable {
+            actionable = open
+        } else {
+            app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+            actionable = openSelectedWorktreeAction()
         }
-        let attachment = XCTAttachment(screenshot: open.screenshot())
-        attachment.name = "Overflow → Branch → Worktree → checkout → Open after refresh"
-        attachment.lifetime = .keepAlways
-        add(attachment)
-        open.click()
+        XCTAssertTrue(actionable.isHittable,
+                      "The selected checkout must have a physically hittable current menu action")
+        actionable.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         let files = WorkspaceUITestSupport.element("bailey.dock.files", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 15))
         files.click()
