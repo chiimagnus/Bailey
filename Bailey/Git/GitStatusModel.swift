@@ -664,52 +664,6 @@ final class GitStatusModel {
         }
     }
 
-    func addRemote(name: String, url: String, completion: (@MainActor (Bool) -> Void)? = nil) {
-        guard Self.validRemoteName(name), Self.validRemoteAddress(url) else {
-            failImmediately(String(localized: "Enter a valid remote name and URL.", table: "Git"))
-            completion?(false)
-            return
-        }
-        perform(label: String(localized: "Add Remote", table: "Git"),
-                commands: [["remote", "add", name, url]], requiresStableHead: false,
-                completion: completion)
-    }
-
-    func changeRemoteURL(name: String, url: String, completion: (@MainActor (Bool) -> Void)? = nil) {
-        guard remotes.contains(name), Self.validRemoteAddress(url) else {
-            failImmediately(String(localized: "The remote or URL is invalid.", table: "Git"))
-            completion?(false)
-            return
-        }
-        perform(label: String(localized: "Update Remote", table: "Git"),
-                commands: [["remote", "set-url", name, url]], requiresStableHead: false,
-                completion: completion)
-    }
-
-    func removeRemote(name: String, completion: (@MainActor (Bool) -> Void)? = nil) {
-        guard remotes.contains(name) else { return }
-        perform(label: String(localized: "Remove Remote", table: "Git"),
-                commands: [["remote", "remove", name]], requiresStableHead: false,
-                completion: completion)
-    }
-
-    private nonisolated static func validRemoteName(_ name: String) -> Bool {
-        !name.isEmpty && name.range(
-            of: "^[A-Za-z0-9][A-Za-z0-9._/-]*\\z", options: .regularExpression
-        ) != nil
-    }
-
-    private nonisolated static func validRemoteAddress(_ raw: String) -> Bool {
-        guard !raw.isEmpty, !raw.hasPrefix("-"), raw == raw.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
-        else { return false }
-        if let components = URLComponents(string: raw),
-           ["http", "https"].contains(components.scheme?.lowercased() ?? "") {
-            return components.user == nil && components.password == nil
-                && components.query == nil && components.fragment == nil
-        }
-        return true
-    }
     private(set) var recentCommits: [RecentCommit] = []
     private(set) var hasMoreRecentCommits = false
     private(set) var isLoadingMoreCommits = false
@@ -1733,14 +1687,14 @@ final class GitStatusModel {
         })
     }
 
-    func fetch(prune: Bool = true) {
+    func fetch() {
         guard !remotes.isEmpty else {
             failImmediately(String(localized: "No Git remote is configured", table: "Git"))
             return
         }
         perform(
             label: String(localized: "Fetch", table: "Git"),
-            commands: [prune ? ["fetch", "--all", "--prune"] : ["fetch", "--all"]],
+            commands: [["fetch", "--all", "--prune"]],
             requiresStableHead: false
         )
     }

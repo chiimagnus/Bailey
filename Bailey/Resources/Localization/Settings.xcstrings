@@ -785,82 +785,12 @@
         }
       }
     },
-    "Git Graph": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Git 图谱"
-          }
-        }
-      }
-    },
-    "Show stashes": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "显示储藏记录"
-          }
-        }
-      }
-    },
-    "Show tag labels": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "显示标签"
-          }
-        }
-      }
-    },
-    "Show remote branch labels": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "显示远端分支标签"
-          }
-        }
-      }
-    },
-    "Remote Fetch": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "远端拉取"
-          }
-        }
-      }
-    },
-    "Prune deleted remote branches when fetching": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "拉取时清理已删除的远端跟踪分支"
-          }
-        }
-      }
-    },
     "Self-hosted Git Providers": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
             "value": "自部署 Git 托管服务"
-          }
-        }
-      }
-    },
-    "One host=provider per line, for example git.company.com=gitlab. Supported: github, gitlab, bitbucket, gitea, forgejo, gitee, gitcode, codeup, azure, sourcehut, gogs.": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "每行填写 host=provider，例如 git.company.com=gitlab。支持 github、gitlab、bitbucket、gitea、forgejo、gitee、gitcode、codeup、azure、sourcehut、gogs。"
           }
         }
       }

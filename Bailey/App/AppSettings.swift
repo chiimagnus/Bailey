@@ -173,11 +173,6 @@ final class AppSettings {
         didSet { save() }
     }
 
-    var gitGraphShowStashes: Bool { didSet { save() } }
-    var gitGraphShowTags: Bool { didSet { save() } }
-    var gitGraphShowRemoteLabels: Bool { didSet { save() } }
-    var gitFetchPrune: Bool { didSet { save() } }
-
     private(set) var gitHostingRules: [String]
 
     var gitHostProviders: [String: GitHostedRemoteURL.Provider] {
@@ -280,10 +275,6 @@ final class AppSettings {
             rawValue: toml["toolbar.visibility"]?.string ?? ""
         ) ?? Self.defaultToolbarVisibility
         gitViewMode = GitViewMode(rawValue: toml["git.view-mode"]?.string ?? "") ?? .tree
-        gitGraphShowStashes = toml["git.graph.show-stashes"]?.bool ?? true
-        gitGraphShowTags = toml["git.graph.show-tags"]?.bool ?? true
-        gitGraphShowRemoteLabels = toml["git.graph.show-remote-labels"]?.bool ?? true
-        gitFetchPrune = toml["git.fetch-prune"]?.bool ?? true
         if let rules = toml["git.host-providers"]?.strings,
            (try? GitHostedRemoteURL.validateHostProviders(rules)) != nil {
             gitHostingRules = rules
@@ -383,10 +374,6 @@ final class AppSettings {
         themeLight = Theme.defaultLightThemeName
         toolbarVisibility = Self.defaultToolbarVisibility
         gitViewMode = .tree
-        gitGraphShowStashes = true
-        gitGraphShowTags = true
-        gitGraphShowRemoteLabels = true
-        gitFetchPrune = true
         gitHostingRules = []
         gitAlwaysAcceptCheckout = false
         gitAlwaysProceedPushTag = false
@@ -430,10 +417,6 @@ final class AppSettings {
         if gitViewMode != .tree {
             lines.append("git.view-mode = \(TOML.quote(gitViewMode.rawValue))")
         }
-        if !gitGraphShowStashes { lines.append("git.graph.show-stashes = false") }
-        if !gitGraphShowTags { lines.append("git.graph.show-tags = false") }
-        if !gitGraphShowRemoteLabels { lines.append("git.graph.show-remote-labels = false") }
-        if !gitFetchPrune { lines.append("git.fetch-prune = false") }
         let rules = hostingRules ?? gitHostingRules
         if !rules.isEmpty { lines.append("git.host-providers = \(TOML.list(rules))") }
         if gitAlwaysAcceptCheckout {

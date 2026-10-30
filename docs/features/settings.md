@@ -21,24 +21,19 @@ File Manager、Git Manager、Projects，以及连接设置（端口转发、手�
 
 Common 设置 System／Light／Dark 外观、明暗 Ghostty 主题和面板字号。
 Text Editor 设置折行，Terminal 设置字体、光标、Option 和历史。
-Git Manager 设置文件布局、工具栏、图谱标签与 Stash 可见性、Fetch 清理及自部署 Git 托管域名。
+Git Manager 保留既有文件布局和工具栏选项，仅新增自部署 Git 托管域名映射。
 File Manager 只配置 Files 树排除规则；Browser 和 Projects 暂无选项。
 
-普通设置写入同一配置文件；「恢复默认」同时清除自定义 Git 域名映射，
-恢复图谱显示和 Fetch 选项，以及两项 Git 确认偏好。
+普通设置写入同一配置文件；「恢复默认」清除自定义 Git 域名映射，
+并重置原有两项 Git 确认偏好。
 隔离测试不展示手机通知，也不访问真实 Bark 凭据或启动保存的隧道。
 
 ## Git 设置与托管平台
 
-Settings → Git Manager 的 Graph 开关即时控制 Stash 节点、Tag 标签和远端分支标签的可见性，
-不删除 Git 数据，也不更改提交拓扑；默认全部显示。
-Fetch 默认带 `--prune` 清理失效的远端跟踪分支，可单独关闭，不删除本地 Tag。
-
-Git Graph 右键提交可在对应的远端托管网站打开；
-Git Manager 的「⋯ → Open Remote in Browser」打开仓库，
-「⋯ → Manage Remotes…」添加、编辑或删除**当前仓库**的 Git Remotes。
-多 Remote 分别显示；无 Remote 时仍可以添加，操作沿用 Git 的权限和目标校验。
-删除 Remote 只修改本地配置与跟踪引用，不删除远端服务器仓库。
+Git Graph 右键提交可以在对应的远端托管网站打开，
+已知远端的仓库主页可以通过 Git Manager 的「⋯ → Open Remote in Browser」打开。
+多个 Git Remote 仍由仓库原生配置管理（如终端执行 `git remote`），
+Bailey 不增加另一套远端管理 Sheet 或额外开关。
 
 GitHub、GitLab、Bitbucket、Gitee、GitCode、Codeup、Azure DevOps、Gitea、Forgejo、
 Codeberg 和 SourceHut 等已知服务可自动识别。
@@ -48,11 +43,8 @@ Codeberg 和 SourceHut 等已知服务可自动识别。
 不能从 Git 克隆地址唯一推导网页路由的 CODING 等平台也遵守此限制。
 支持本机和获授权 SSH Git 后端；不会通过平台 API 获取凭据或自动修改 Remote。
 
-配置文件的相关键：
-
-- `git.graph.show-stashes`、`git.graph.show-tags`、`git.graph.show-remote-labels`：默认 `true`。
-- `git.fetch-prune`：默认 `true`。
-- `git.host-providers = ["git.company.cn=gitlab"]`：默认空；校验通过才原子保存。
+唯一新增的配置键是 `git.host-providers = ["git.company.cn=gitlab"]`，
+默认空数组，仅在校验通过后保存；自动支持的平台不需要任何设置。
 
 ## 文件管理器排除规则
 

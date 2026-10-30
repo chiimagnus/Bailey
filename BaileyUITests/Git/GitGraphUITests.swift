@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class GitGraphUITests: XCTestCase {
-    func testHostedCommitMenuAndRemoteManagementUseRealGitConfiguration() throws {
+    func testHostedCommitMenuKeepsRemoteSetupOutOfMainPanel() throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         _ = try fixture.file("hosted.txt", text: "remote context\n")
         try fixture.initializeGit()
@@ -25,17 +25,11 @@ final class GitGraphUITests: XCTestCase {
             .matching(identifier: "bailey.git.more-actions").firstMatch
         XCTAssertTrue(more.waitForExistence(timeout: 12))
         more.click()
-        let manage = app.menuItems["Manage Remotes…"]
-        XCTAssertTrue(manage.waitForExistence(timeout: 10))
-        manage.click()
-        XCTAssertTrue(app.staticTexts["origin"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.descendants(matching: .any)
-            .matching(identifier: "bailey.git.remote-name").firstMatch
-            .waitForExistence(timeout: 15))
-        let done = app.descendants(matching: .any)
-            .matching(identifier: "bailey.git.remote-done").firstMatch
-        XCTAssertTrue(done.waitForExistence(timeout: 10))
-        done.click()
+        XCTAssertFalse(app.menuItems["Manage Remotes…"].exists,
+                       "Repository configuration must not create a separate sheet in Git Graph")
+        XCTAssertTrue(app.menuItems["Open Remote in Browser"].exists,
+                      "The existing repository browser action remains available")
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
 
         XCTAssertEqual(try fixture.git(["remote", "get-url", "origin"]),
                        Data("https://github.com/owner/repo.git\n".utf8))

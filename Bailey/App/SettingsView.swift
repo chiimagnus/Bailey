@@ -246,10 +246,6 @@ struct SettingsView: View {
             || settings.themeLight != Theme.defaultLightThemeName
             || settings.toolbarVisibility != AppSettings.defaultToolbarVisibility
             || settings.gitViewMode != .tree
-            || !settings.gitGraphShowStashes
-            || !settings.gitGraphShowTags
-            || !settings.gitGraphShowRemoteLabels
-            || !settings.gitFetchPrune
             || !settings.gitHostingRules.isEmpty
             || settings.gitAlwaysAcceptCheckout
             || settings.gitAlwaysProceedPushTag
@@ -360,20 +356,8 @@ struct SettingsView: View {
                 .labelsHidden()
             }
         }
-        Section(String(localized: "Git Graph", table: "Settings")) {
-            Toggle(String(localized: "Show stashes", table: "Settings"),
-                   isOn: $settings.gitGraphShowStashes).tint(themeAccent)
-            Toggle(String(localized: "Show tag labels", table: "Settings"),
-                   isOn: $settings.gitGraphShowTags).tint(themeAccent)
-            Toggle(String(localized: "Show remote branch labels", table: "Settings"),
-                   isOn: $settings.gitGraphShowRemoteLabels).tint(themeAccent)
-        }
-        Section(String(localized: "Remote Fetch", table: "Settings")) {
-            Toggle(String(localized: "Prune deleted remote branches when fetching", table: "Settings"),
-                   isOn: $settings.gitFetchPrune).tint(themeAccent)
-        }
         Section(String(localized: "Self-hosted Git Providers", table: "Settings")) {
-            Text(String(localized: "One host=provider per line, for example git.company.com=gitlab. Supported: github, gitlab, bitbucket, gitea, forgejo, gitee, gitcode, codeup, azure, sourcehut, gogs.", table: "Settings"))
+            Text(String(localized: "Use host=provider, for example git.company.com=gitlab.", table: "Settings"))
                 .font(.callout).foregroundStyle(.secondary)
             TextEditor(text: $gitHostingDraft)
                 .font(.system(.body, design: .monospaced))

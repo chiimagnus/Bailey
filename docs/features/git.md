@@ -127,11 +127,9 @@ GitHub、GitLab、Bitbucket、Gitee、GitCode、Codeup、Azure DevOps、Gitea／
 从配置的 Git Remote 地址生成链接，移除认证信息和参数，不调用托管平台 API。
 SSH Remote 的网页地址一般使用 HTTPS；自部署实例的特殊域名可在 Git Manager 设置中映射平台类型。
 
-「⋯ → Open Remote in Browser」提供当前仓库主页入口；
-「⋯ → Manage Remotes…」在当前项目下查看、添加、修改 Fetch URL 或移除 Remote。
-真实操作使用当前机器的 Git CLI，保持原有目标代次与状态保护，
-不会改变工作区或通过平台 API 创建托管仓库；移除 Remote 同时移除本地跟踪引用。
-设置、默认值与域名映射见[设置与配置](settings.md#git-设置与托管平台)。
+「⋯ → Open Remote in Browser」提供仓库主页入口；
+仓库的多个 Git Remotes 由 Git 原生配置管理，不在 Git Panel 增加管理 Sheet。
+设置仅保留自托管域名映射，见[设置与配置](settings.md#git-设置与托管平台)。
 
 ### Git Graph 滚动诊断
 

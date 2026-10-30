@@ -141,8 +141,6 @@ struct RecentCommitsView: View {
     let knownRemotesByCommit: [String: Set<String>]
     let hostProviders: [String: GitHostedRemoteURL.Provider]
     let openHosted: (String, String) -> Void
-    let showTagLabels: Bool
-    let showRemoteLabels: Bool
     let stashFilesByOID: [String: GitStatusModel.StashFilesState]
     let repoRoot: String
     let selectionScope: String
@@ -184,8 +182,6 @@ struct RecentCommitsView: View {
         knownRemotesByCommit: [String: Set<String>] = [:],
         hostProviders: [String: GitHostedRemoteURL.Provider] = [:],
         openHosted: @escaping (String, String) -> Void = { _, _ in },
-        showTagLabels: Bool = true,
-        showRemoteLabels: Bool = true,
         stashFilesByOID: [String: GitStatusModel.StashFilesState] = [:],
         repoRoot: String,
         selectionScope: String = "local",
@@ -233,8 +229,6 @@ struct RecentCommitsView: View {
         self.knownRemotesByCommit = knownRemotesByCommit
         self.hostProviders = hostProviders
         self.openHosted = openHosted
-        self.showTagLabels = showTagLabels
-        self.showRemoteLabels = showRemoteLabels
         self.stashFilesByOID = stashFilesByOID
         self.repoRoot = repoRoot
         self.selectionScope = selectionScope
@@ -1135,15 +1129,8 @@ struct RecentCommitsView: View {
     private func referenceStrip(
         _ references: [Reference], commit: Commit, colorIndex: Int
     ) -> some View {
-        let visible = references.filter { reference in
-            if reference.kind == .tag { return showTagLabels }
-            if reference.kind == .remoteBranch || reference.kind == .remoteAlias {
-                return showRemoteLabels
-            }
-            return true
-        }
         let groups = GitGraphReferenceGroup.grouped(
-            visible, remotes: remotes, worktrees: commit.checkedOutWorktrees
+            references, remotes: remotes, worktrees: commit.checkedOutWorktrees
         )
         let primary = groups.first?.primary
         let showsWorktree = !commit.checkedOutWorktrees.isEmpty
