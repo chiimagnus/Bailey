@@ -294,23 +294,23 @@ final class GitGraphGeometryUITests: XCTestCase {
         return colors
     }
 
-    func testDirtyWorktreeDiamondsAlignWithTheirOwnHeadsWithoutSelectingTheirHeaders() throws {
-        try verifyUnselectedHeaders(theme: "light", mode: "tree")
+    func testDirtyWorktreeDiamondsAlignWithHeadsAndShowExplicitSelection() throws {
+        try verifyHeaderSelection(theme: "light", mode: "tree")
     }
 
-    func testDarkTreeHistoryAndWorktreeHeadersExpandWithoutPersistentSelectionFill() throws {
-        try verifyUnselectedHeaders(theme: "dark", mode: "tree")
+    func testDarkTreeHistoryAndWorktreeHeadersShowExplicitSelection() throws {
+        try verifyHeaderSelection(theme: "dark", mode: "tree")
     }
 
-    func testLightListHistoryAndWorktreeHeadersExpandWithoutPersistentSelectionFill() throws {
-        try verifyUnselectedHeaders(theme: "light", mode: "list")
+    func testLightListHistoryAndWorktreeHeadersShowExplicitSelection() throws {
+        try verifyHeaderSelection(theme: "light", mode: "list")
     }
 
-    func testDarkListHistoryAndWorktreeHeadersExpandWithoutPersistentSelectionFill() throws {
-        try verifyUnselectedHeaders(theme: "dark", mode: "list")
+    func testDarkListHistoryAndWorktreeHeadersShowExplicitSelection() throws {
+        try verifyHeaderSelection(theme: "dark", mode: "list")
     }
 
-    private func verifyUnselectedHeaders(theme: String, mode: String) throws {
+    private func verifyHeaderSelection(theme: String, mode: String) throws {
         let fixture = try WorkspaceUITestFixture(in: self)
         let mainFile = try fixture.file("main.txt", text: "base main\n")
         _ = try fixture.file("feature.txt", text: "base feature\n")
@@ -354,6 +354,16 @@ final class GitGraphGeometryUITests: XCTestCase {
             }
             return colors
         }
+        func changedPixels(_ first: [NSColor], _ second: [NSColor], threshold: CGFloat) -> Int {
+            var count = 0
+            for (before, after) in zip(first, second) {
+                let difference = abs(before.redComponent - after.redComponent)
+                    + abs(before.greenComponent - after.greenComponent)
+                    + abs(before.blueComponent - after.blueComponent)
+                if difference > threshold { count += 1 }
+            }
+            return count
+        }
         for (checkout, oid, path) in [(fixture.root, head, "main.txt"), (linked, feature, "feature.txt")] {
             let node = app.buttons.matching(NSPredicate(format: "value == %@", checkout.path)).firstMatch
             let hash = String(decoding: oid, as: UTF8.self)
@@ -373,34 +383,30 @@ final class GitGraphGeometryUITests: XCTestCase {
             }, object: nil)
             XCTAssertEqual(XCTWaiter.wait(for: [expanded], timeout: 12), .completed)
             let selected = try headerColors(node)
-            for (before, after) in zip(collapsed, selected) {
-                let delta = abs(before.redComponent - after.redComponent)
-                    + abs(before.greenComponent - after.greenComponent)
-                    + abs(before.blueComponent - after.blueComponent)
-                XCTAssertLessThan(delta, 0.035,
-                                  "Expanding a Worktree must not paint a persistent selection fill")
-            }
+            XCTAssertGreaterThan(changedPixels(collapsed, selected, threshold: 0.06), 4,
+                                 "Clicking a Worktree must paint the shared selection fill")
             node.click()
             let closed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in files.count == count },
                                                   object: nil)
             XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 12), .completed)
+            let stillSelected = try headerColors(node)
+            XCTAssertLessThan(changedPixels(selected, stillSelected, threshold: 0.04), 3,
+                              "Collapsing the same Worktree must preserve its Selection fill")
             let historical = window.descendants(matching: .any)
                 .matching(identifier: "bailey.git.history.file")
                 .matching(NSPredicate(format: "label ENDSWITH %@", ", " + path)).firstMatch
             parent.hover()
+            let unselectedHistory = try headerColors(parent)
             parent.click()
             XCTAssertTrue(historical.waitForExistence(timeout: 12))
             let expandedHistory = try headerColors(parent)
+            XCTAssertGreaterThan(changedPixels(unselectedHistory, expandedHistory, threshold: 0.06), 4,
+                                 "Clicking a historical commit must paint Selection independently of disclosure")
             parent.click()
             XCTAssertTrue(historical.waitForNonExistence(timeout: 12))
             let collapsedHistory = try headerColors(parent)
-            let changedPixels = zip(collapsedHistory, expandedHistory).filter { before, after in
-                abs(before.redComponent - after.redComponent)
-                    + abs(before.greenComponent - after.greenComponent)
-                    + abs(before.blueComponent - after.blueComponent) >= 0.035
-            }
-            XCTAssertLessThan(changedPixels.count, 3,
-                              "History disclosure must not add a persistent row fill; one anti-aliased edge pixel may vary")
+            XCTAssertLessThan(changedPixels(collapsedHistory, expandedHistory, threshold: 0.035), 3,
+                              "Collapsing a selected commit must not remove its Selection fill")
         }
         XCTAssertEqual(try fixture.git(["rev-parse", "HEAD"]), head)
         XCTAssertEqual(try fixture.git(["-C", linked.path, "rev-parse", "HEAD"]), feature)

@@ -112,6 +112,7 @@ struct RecentCommitsView: View {
     @State private var localKeyboardOwner = TreeKeyboardOwner()
     @State private var keyboardFocused = false
     @State private var selectedRowID: String?
+    @State private var explicitlySelectedRowID: String?
     @State private var contextRowID: String?
     @Environment(\.controlActiveState) private var controlActiveState
 
@@ -335,14 +336,19 @@ struct RecentCommitsView: View {
         .onChange(of: repoRoot) { _, _ in
             GitGraphScrollLog.record("repository-change", owner: keyboardOwner)
             selectedRowID = nil
+            explicitlySelectedRowID = nil
             contextRowID = nil
         }
         .onChange(of: selectionScope) { _, _ in
             GitGraphScrollLog.record("scope-change", owner: keyboardOwner)
             selectedRowID = nil
+            explicitlySelectedRowID = nil
             contextRowID = nil
         }
         .onChange(of: keyboardRows.map(\.id)) { _, ids in
+            if let explicitlySelectedRowID, !ids.contains(explicitlySelectedRowID) {
+                self.explicitlySelectedRowID = nil
+            }
             if let contextRowID, !ids.contains(contextRowID) {
                 self.contextRowID = nil
             }
@@ -520,9 +526,12 @@ struct RecentCommitsView: View {
         }
     }
 
+    private var listFocused: Bool {
+        keyboardFocused && isKeyboardActive && controlActiveState == .key
+    }
+
     private func isFocusedRow(_ id: String) -> Bool {
-        selectedRowID == id && keyboardFocused && isKeyboardActive
-            && controlActiveState == .key
+        selectedRowID == id && listFocused
     }
 
     private func isDisplayedHistoryFile(_ file: Commit.FileChange, in commit: Commit) -> Bool {
@@ -543,6 +552,11 @@ struct RecentCommitsView: View {
     }
 
     private func selectRow(_ id: String) {
+        explicitlySelectedRowID = id
+        focusRow(id)
+    }
+
+    private func focusRow(_ id: String) {
         selectedRowID = id
         if isKeyboardActive {
             onKeyboardFocused()
@@ -608,7 +622,7 @@ struct RecentCommitsView: View {
                     commits: commits, current: selected, parent: event.keyCode == 125,
                     alternate: event.modifierFlags.contains(.shift)
                   ) else { return false }
-            selectRow(commitRowID(next))
+            focusRow(commitRowID(next))
             if expandedCommitIDs.insert(next.id).inserted { loadBinaryStatus(next) }
             return true
         }
@@ -620,6 +634,7 @@ struct RecentCommitsView: View {
             selectedRowID = rows[next].id
         case 49, 36, 76: // Space / Return / Enter: same action as clicking the current row
             guard let current else { return false }
+            explicitlySelectedRowID = rows[current].id
             activate(rows[current].action)
         case 124: // Right expands or enters the first visible child
             guard let current else { return false }
@@ -676,8 +691,12 @@ struct RecentCommitsView: View {
         return ordered.dropFirst(alternate ? 1 : 0).first
     }
 
-    private func toggle(_ commit: Commit) {
+    private func selectAndToggle(_ commit: Commit) {
         selectRow(commitRowID(commit))
+        toggle(commit)
+    }
+
+    private func toggle(_ commit: Commit) {
         if !expandedCommitIDs.insert(commit.id).inserted {
             expandedCommitIDs.remove(commit.id)
         } else if commit.worktree == nil {
@@ -710,6 +729,8 @@ struct RecentCommitsView: View {
     ) -> some View {
         TreeRowSurface(
             depth: 0, scale: fontScale,
+            isSelected: explicitlySelectedRowID == commitRowID(commit),
+            listActive: listFocused,
             focusRing: isFocusedRow(commitRowID(commit)),
             contextRing: contextRowID == commitRowID(commit),
             leadingInset: gutter, trailingInset: TreeRowStyle.contentInset,
@@ -729,7 +750,7 @@ struct RecentCommitsView: View {
                                     .layoutPriority(1)
                             }
                         }
-                        Button { toggle(commit) } label: {
+                        Button { selectAndToggle(commit) } label: {
                             if commit.worktree != nil {
                                 Text(verbatim: commit.subject)
                                     .font(.system(size: 12 * fontScale))
@@ -766,6 +787,8 @@ struct RecentCommitsView: View {
                         .accessibilityValue(expanded
                             ? String(localized: "Expanded", table: "Git")
                             : String(localized: "Collapsed", table: "Git"))
+                        .accessibilityAddTraits(explicitlySelectedRowID == commitRowID(commit)
+                            ? .isSelected : [])
                         Spacer(minLength: 0)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -834,7 +857,7 @@ struct RecentCommitsView: View {
             )
         }
         .overlay(alignment: .topLeading) {
-            Button { toggle(commit) } label: {
+            Button { selectAndToggle(commit) } label: {
                 Circle()
                     .fill(Color.clear)
                     .frame(width: 14 * fontScale, height: 14 * fontScale)
@@ -850,7 +873,7 @@ struct RecentCommitsView: View {
             .accessibilityValue(commit.worktree?.path ?? commit.hash)
         }
         .contentShape(Rectangle())
-        .onTapGesture { toggle(commit) }
+        .onTapGesture { selectAndToggle(commit) }
         .background {
             contextTarget(for: commitRowID(commit))
         }
@@ -941,7 +964,7 @@ struct RecentCommitsView: View {
         let label = Self.worktreeDisplayLabel(location, among: worktreePaths)
         let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
         let palette = graphPalette
-        return Button { toggle(commit) } label: {
+        return Button { selectAndToggle(commit) } label: {
             HStack(spacing: 0) {
                 Image(systemName: "square.stack")
                     .font(.system(size: Self.badgeFontSize * fontScale))
@@ -1020,7 +1043,7 @@ struct RecentCommitsView: View {
     ) -> some View {
         let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
         let palette = graphPalette
-        return Button { toggle(commit) } label: {
+        return Button { selectAndToggle(commit) } label: {
             HStack(spacing: 0) {
                 Image(systemName: "archivebox")
                     .font(.system(size: Self.badgeFontSize * fontScale))
@@ -1109,7 +1132,7 @@ struct RecentCommitsView: View {
         let matched = worktrees(for: reference, in: commit)
         let outline = RoundedRectangle(cornerRadius: 4 * fontScale)
         let palette = graphPalette
-        return Button { toggle(commit) } label: {
+        return Button { selectAndToggle(commit) } label: {
             HStack(spacing: 0) {
                 Image(systemName: reference.kind == .tag ? "tag.fill"
                       : reference.kind == .detachedHead ? "circle"
@@ -1368,6 +1391,9 @@ struct RecentCommitsView: View {
                         contextRing: node.compactComponents.contains {
                             contextRowID == folderRowID(commit, section: section, path: $0.path)
                         },
+                        isSelected: explicitlySelectedRowID == folderRowID(
+                            commit, section: section, path: node.path),
+                        listActive: listFocused,
                         compactSegment: { component, index in
                             folderSegment(component, index: index, row: node, commit: commit,
                                           section: section, root: worktree.path, collapseKey: key + ":" + node.path)
@@ -1421,6 +1447,7 @@ struct RecentCommitsView: View {
             row: row, scale: fontScale,
             directory: showDirectory ? entry.directory : nil,
             displayed: isDisplayedWorktreeFile(entry, staged: staged, in: worktree),
+            isSelected: explicitlySelectedRowID == id, listActive: listFocused,
             focusRing: isFocusedRow(id), contextRing: contextRowID == id,
             leadingInset: inset,
             accessibilityHint: staged
@@ -1497,6 +1524,9 @@ struct RecentCommitsView: View {
                         contextRing: node.compactComponents.contains {
                             contextRowID == folderRowID(commit, section: section, path: $0.path)
                         },
+                        isSelected: explicitlySelectedRowID == folderRowID(
+                            commit, section: section, path: node.path),
+                        listActive: listFocused,
                         compactSegment: { component, index in
                             folderSegment(component, index: index, row: node, commit: commit,
                                           section: section, root: repoRoot, collapseKey: section + ":" + node.path)
@@ -1566,6 +1596,8 @@ struct RecentCommitsView: View {
             row: row, scale: fontScale,
             directory: showDirectory ? file.directory : nil,
             displayed: isDisplayedHistoryFile(file, in: commit),
+            isSelected: explicitlySelectedRowID == historicalFileRowID(commit, file: file),
+            listActive: listFocused,
             focusRing: isFocusedRow(historicalFileRowID(commit, file: file)),
             contextRing: contextRowID == historicalFileRowID(commit, file: file),
             leadingInset: inset,
