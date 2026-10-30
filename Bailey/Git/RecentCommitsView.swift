@@ -1,6 +1,43 @@
 import AppKit
 import GhosttyTheme
+import OSLog
 import SwiftUI
+
+@MainActor
+enum GitGraphScrollLog {
+    private static let logger = Logger(subsystem: "chiimagnus.bailey", category: "GitGraphScroll")
+
+    static var enabled: Bool {
+        UserDefaults.standard.bool(forKey: "GitGraphScrollLogging")
+            || ProcessInfo.processInfo.environment["BAILEY_GIT_GRAPH_SCROLL_LOG"] == "1"
+    }
+
+    static func rowToken(_ row: String?) -> String {
+        row.map { String(UInt(bitPattern: $0.hashValue), radix: 16) } ?? "none"
+    }
+
+    static func record(
+        _ event: String, owner: TreeKeyboardOwner? = nil, row: String? = nil,
+        detail: String = ""
+    ) {
+        guard enabled else { return }
+        let view = owner?.view
+        let window = view?.window
+        let scroll = view?.enclosingScrollView
+        let responder = window?.firstResponder
+        let responderType = responder.map { String(describing: type(of: $0)) } ?? "none"
+        let offset = Double(scroll?.contentView.bounds.minY ?? -1)
+        let viewport = Double(scroll?.contentView.bounds.height ?? -1)
+        let content = Double(scroll?.documentView?.frame.height ?? -1)
+        let appActive = NSApp?.isActive ?? false
+        let ownsFocus = view != nil && responder === view
+        let message = "event=\(event) window=\(window?.windowNumber ?? -1) "
+            + "active=\(appActive) key=\(window?.isKeyWindow ?? false) first=\(ownsFocus) "
+            + "responder=\(responderType) row=\(rowToken(row)) y=\(offset) "
+            + "viewport=\(viewport) content=\(content) \(detail)"
+        logger.notice("\(message, privacy: .public)")
+    }
+}
 
 struct GitGraphReferenceGroup {
     typealias Reference = GitStatusModel.RecentCommit.Reference
@@ -279,20 +316,29 @@ struct RecentCommitsView: View {
             TreeKeyboardHost(owner: keyboardOwner, onKeyDown: handleGraphKey,
                 onFocusChanged: { focused in
                     keyboardFocused = focused
+                    GitGraphScrollLog.record(
+                        "graph-focus", owner: keyboardOwner, row: selectedRowID,
+                        detail: "focused=\(focused) active=\(isKeyboardActive)"
+                    )
                     if focused {
                         if selectedRowID == nil { selectedRowID = keyboardRows.first?.id }
                         onKeyboardFocused()
                     }
-                }, onAttachedToWindow: onKeyboardAttached)
+                }, onAttachedToWindow: {
+                    GitGraphScrollLog.record("graph-attached", owner: keyboardOwner)
+                    onKeyboardAttached()
+                })
         }
         .onChange(of: commits.last(where: { $0.stash == nil })?.id) {
             requestedLastCommit = nil
         }
         .onChange(of: repoRoot) { _, _ in
+            GitGraphScrollLog.record("repository-change", owner: keyboardOwner)
             selectedRowID = nil
             contextRowID = nil
         }
         .onChange(of: selectionScope) { _, _ in
+            GitGraphScrollLog.record("scope-change", owner: keyboardOwner)
             selectedRowID = nil
             contextRowID = nil
         }
@@ -306,11 +352,22 @@ struct RecentCommitsView: View {
                 selectedRowID = ids.first
             }
         }
-        .onChange(of: selectedRowID) { _, id in
+        .onChange(of: selectedRowID) { previous, id in
+            if GitGraphScrollLog.enabled {
+                let index = id.flatMap { target in keyboardRows.firstIndex { $0.id == target } } ?? -1
+                GitGraphScrollLog.record(
+                    "cursor", owner: keyboardOwner, row: id,
+                    detail: "previous=\(GitGraphScrollLog.rowToken(previous)) "
+                        + "index=\(index) focused=\(keyboardFocused) active=\(isKeyboardActive)"
+                )
+            }
             if keyboardFocused, let id { scrollToKeyboardRow(id) }
         }
         .onChange(of: keyboardFocused) { _, focused in
             if focused, let selectedRowID { scrollToKeyboardRow(selectedRowID) }
+        }
+        .onAppear {
+            GitGraphScrollLog.record("graph-appear", owner: keyboardOwner)
         }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) {
             viewportWidth = $0
@@ -529,6 +586,15 @@ struct RecentCommitsView: View {
     }
 
     private func handleGraphKey(_ event: NSEvent) -> Bool {
+        if GitGraphScrollLog.enabled {
+            let index = selectedRowID.flatMap { id in keyboardRows.firstIndex { $0.id == id } } ?? -1
+            GitGraphScrollLog.record(
+                "key-down", owner: keyboardOwner, row: selectedRowID,
+                detail: "code=\(event.keyCode) cmd=\(event.modifierFlags.contains(.command)) "
+                    + "shift=\(event.modifierFlags.contains(.shift)) index=\(index) "
+                    + "focused=\(keyboardFocused) active=\(isKeyboardActive)"
+            )
+        }
         guard isKeyboardActive, keyboardOwner.view?.window?.firstResponder === keyboardOwner.view,
               event.modifierFlags.intersection([.control, .option]).isEmpty
         else { return false }

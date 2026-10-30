@@ -107,6 +107,27 @@ Git Changes／Graph 右键只更新行游标与临时上下文目标，不抢走
 图谱的历史文件及其它工作树文件单击／键盘浏览 Diff 时保持 Git 活动组（只要 Git 仍可见），
 显式打开内容标签才切入目标。提交说明与过滤输入框仍使用原生文本焦点，输入按键不触发列表动作。
 
+### Git Graph 滚动诊断
+
+日志默认关闭。排查重启后方向键焦点离开视野的问题时，先开启日志，
+正常退出并重新启动 App，再复现故障。以 Bailey Dev 为例：
+
+```sh
+defaults write chiimagnus.bailey.dev GitGraphScrollLogging -bool YES
+```
+
+复现后导出日志，完成诊断再关闭开关：
+
+```sh
+log show --last 30m --style compact --predicate 'subsystem == "chiimagnus.bailey" AND category == "GitGraphScroll"' > /tmp/bailey-gitgraph-scroll.log
+defaults delete chiimagnus.bailey.dev GitGraphScrollLogging
+```
+
+需要实时查看时用相同过滤条件运行 `log stream`。
+正式 App 的偏好域为 `chiimagnus.bailey`，独立测试版使用自己的 Bundle ID。
+日志包含窗口恢复／激活、原生第一响应者、键盘按键、匿名行标识与索引、滚动请求、
+滚动偏移和视口尺寸；不记录仓库路径、文件名或提交内容。诊断不会改变滚动行为。
+
 图谱按 `git --date-order` 读取本地分支、远端跟踪分支、Tag，
 以及当前目录和所有有效工作树检出位置可达的提交。工作树即使没有关联分支，或没有未提交改动，
 其独立提交也正常显示；共享提交只显示一次。

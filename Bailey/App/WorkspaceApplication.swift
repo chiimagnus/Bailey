@@ -31,6 +31,9 @@ final class WorkspaceApplication {
     init(loadSavedState: Bool = false) {
         pendingRestores = loadSavedState ? SessionStore.load() : []
         pendingHistories = loadSavedState ? TerminalHistoryStore.load() : [:]
+        GitGraphScrollLog.record(
+            "session-init", detail: "saved=\(loadSavedState) windows=\(pendingRestores.count)"
+        )
         if BaileyInstanceMode.isIsolated,
            let path = ProcessInfo.processInfo.environment["BAILEY_UI_TEST_PROJECT"],
            URL(fileURLWithPath: path).standardizedFileURL.pathComponents.contains(
@@ -59,6 +62,11 @@ final class WorkspaceApplication {
               !manager.isClosed
         else { return }
         windows.append(manager)
+        GitGraphScrollLog.record(
+            "window-register",
+            detail: "restoring=\(!pendingRestores.isEmpty) pending=\(pendingRestores.count) "
+                + "registered=\(windows.count)"
+        )
         if !pendingRestores.isEmpty {
             _ = manager.restore(from: pendingRestores.removeFirst(), histories: pendingHistories)
         }
@@ -81,6 +89,9 @@ final class WorkspaceApplication {
 
     func didAttach(_ manager: WorkspaceWindowModel) {
         guard containsWindow(manager) else { return }
+        GitGraphScrollLog.record(
+            "window-attached", detail: "window=\(manager.attachedWindow?.windowNumber ?? -1)"
+        )
         isOpeningWindow = false
         let directories = takePendingDirectories()
         manager.addLocalFolders(directories.map { URL(fileURLWithPath: $0, isDirectory: true) })
