@@ -123,7 +123,7 @@ Escape、取消、越界、错误项目和重复投放不产生部分移动；�
 
 `WindowRootView` 持有 `WorkspaceWindowModel` 协调单窗，
 delegate 的 `WorkspaceApplication` 只负责跨窗口登记、路由及恢复。
-焦点策略下一阶段再集中，见 [架构规范](../architecture.md#唯一所有者)。
+窗口核对跨组焦点交接，输入仍归实际挂载的原生控件；见 [架构规范](../architecture.md#焦点协调边界)。
 `WindowChromeAccessor` 在原生视图实际挂载到窗口时绑定 `NSWindow`，
 不能依赖一次异步检查或 SwiftUI 恰好再次更新；
 否则新建的空工作区窗口会显示「添加文件夹」却无法弹出选择器。

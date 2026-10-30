@@ -82,7 +82,7 @@ Bailey 复用 SwiftUI Observation、AppKit、现有 Dock/Tab 与后端，不机�
 GitStatusModel 接收选中的 Project 和项目仍有效的检查；窗口在 `syncGitStatus` 接入点提供事实，
 异步请求仍由 Git 的代次和 `PanelContext.Identity` 校验。
 Files／Git 不再持有完整窗口模型，也不复制项目选择。
-P2 的各组件焦点策略仍未迁移，不把 P1 当成整个 Feature 已完成。
+Files／Git 的原生树输入视图在挂载后向所属窗口登记；窗口只对当前项目与有效 Dock 组恢复焦点。
 
 ## 入口与数据流
 
@@ -149,9 +149,10 @@ Settings、Sheet 和 `NSPopover` 自己维护原生输入生命周期，不建�
 **已请求 ≠ 已获得**；不要用无理由的定时轮询掩盖归属错误，
 也不能为消除轮询而删除真实的 AppKit 挂载顺序。菜单、Sheet 和弹窗的有效原生生命周期检查必须保留。
 
-当前窗口级焦点决策仍分布在 `WorkspaceDockView`、`WorkspaceWindowModel` 与各内容／工具组件；
-P2 的焦点职责收敛仍是重构目标。具体单击、双击、临时输入和恢复行为由 [dock.md](features/dock.md)、
-[command-palette.md](features/command-palette.md) 与各功能页维护，不能借职责迁移改变交互。
+窗口通过 `WorkspaceWindowModel` 核对跨项目／Dock 的焦点交接和暂态输入恢复；
+`WorkspaceDockView` 提供活动组上下文，Files／Git／Browser 及原生内容各自处理控件就绪与实际输入。
+具体单击、双击、临时输入和恢复行为由 [dock.md](features/dock.md)、
+[command-palette.md](features/command-palette.md) 与各功能页维护，不另建全局焦点管理器。
 
 ## 原生表面与生命周期
 
