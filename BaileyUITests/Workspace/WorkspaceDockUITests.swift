@@ -296,13 +296,17 @@ final class WorkspaceDockUITests: XCTestCase {
         let git = WorkspaceUITestSupport.element("bailey.dock.git", in: app)
         XCTAssertTrue(files.waitForExistence(timeout: 15))
         XCTAssertTrue(git.waitForExistence(timeout: 15))
-        git.click()
         let strip = window.scrollViews.containing(
             .button, identifier: "bailey.dock.git"
         ).firstMatch
         XCTAssertTrue(strip.waitForExistence(timeout: 5))
         XCTAssertLessThan(strip.frame.width, 130,
                           "The narrow Dock tab strip must not overflow its group's viewport")
+        strip.swipeLeft()
+        XCTAssertTrue(strip.frame.contains(CGPoint(x: git.frame.midX, y: git.frame.midY)),
+                      "The active Git target must be inside the visible tab-strip viewport")
+        git.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        XCTAssertTrue(git.isSelected, "Real Git tab click must select and activate Git")
         strip.swipeRight()
         XCTAssertTrue(files.isHittable, "The Files tab must be reachable by horizontal scrolling")
         XCTAssertTrue(strip.frame.contains(CGPoint(x: files.frame.midX, y: files.frame.midY)),
