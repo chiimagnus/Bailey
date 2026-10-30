@@ -139,6 +139,8 @@ Git Graph 扩展 `web/styles/main.css` 与 `web/graph.ts`
 `CommitGraphLayoutTests`、`GitGraphPaletteTests`、
 `DockWorkspaceTests`、`NativePaneRetentionIntegrationTests`）；
 `make test:ui` 的完整 Dev GUI；
+`FileTreeTests` 使用真实 1k／10k／100k 本机文件及原生 SwiftUI 视口量化创建、加载、挂载、滚动与内存，
+并在原生高对比浅／深色外观下检查共享树行的选中填充与焦点描边；
 `make build:dev` 和实际签名、资源/多标签长期验收；
 `git diff --check`。
 不可获得 macOS 15.6 实体、实体触控板、辅助功能授权、第二显示器、

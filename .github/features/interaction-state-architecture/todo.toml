@@ -1,5 +1,5 @@
 version = 1
-current_task_id = ""
+current_task_id = "P5-T2"
 
 [[tasks]]
 id = "P1-T1"
@@ -196,15 +196,15 @@ note = "原生焦点实现60635f9f，双窗口GUI补证f2ec9ade、WebKit保留GU
 [[tasks]]
 id = "P5-T1"
 title = "跨领域实际事件链与文件 Git 结果验收"
-status = "pending"
+status = "in_progress"
 plan = "plan-p5.md#p5-t1"
 commit = ""
-note = ""
+note = "完成分组 A 59/59、B 原 77/78 且唯一红灯定点修复通过、C 49/53；Windows SSH Palette/本机目标、Finder WebKit 上传、macOS27 Settings 仍4项红灯，按证据继续验收。"
 
 [[tasks]]
 id = "P5-T2"
 title = "多主题无障碍极端容量与性能验收"
-status = "pending"
+status = "in_progress"
 plan = "plan-p5.md#p5-t2"
 commit = ""
-note = ""
+note = "P5 原生 1k/10k/100k FileTree 与高对比宿主 2/2 通过 feed7e5d，Git/共享树/Dock 78 项 77/78 且测试夹具修复 edc31129 定点绿；macOS15.6/VoiceOver/长期 Instruments 仍不可宣称全覆盖。"
