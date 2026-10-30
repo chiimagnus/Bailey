@@ -1,9 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// A tab in the strip. Shows its content's title/icon and dirty indicator.
-/// Observes the tab so name changes refresh it; the content is observed by the
-/// per-kind label below so its live title/dirty state shows.
+/// A tab in the strip. Observes its content's live title and dirty state.
 struct PaneTabItem: View {
     let tab: PaneTab
     let isDisplayed: Bool
@@ -31,39 +29,43 @@ struct PaneTabItem: View {
         } else {
             switch tab.content {
             case .session(let session):
-                SessionTabLabel(
-                    session: session, customTitle: tab.customName,
+                TabItemChrome(
+                    systemImage: "terminal", title: tab.customName ?? session.title,
                     isDisplayed: isDisplayed, isSelected: isSelected,
                     isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
-                    isContextTarget: isContextTarget,
-                    select: select, close: close
+                    isContextTarget: isContextTarget, select: select, close: close
                 )
             case .file(let file):
-                FileTabLabel(
-                    file: file, customTitle: tab.customName,
+                TabItemChrome(
+                    systemImage: "doc.text", fileIconPath: file.path,
+                    title: tab.customName ?? file.name,
                     isDisplayed: isDisplayed, isSelected: isSelected,
                     isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
-                    isContextTarget: isContextTarget,
+                    isContextTarget: isContextTarget, isDirty: file.isDirty,
                     select: select, close: close
                 )
+                .help(file.path)
+                .accessibilityIdentifier("bailey.tab.file")
+                .accessibilityValue(file.path)
             case .browser(let browser):
-                BrowserTabLabel(
-                    browser: browser, customTitle: tab.customName,
+                TabItemChrome(
+                    systemImage: "globe", browserIcon: browser,
+                    title: tab.customName ?? browser.title,
                     isDisplayed: isDisplayed, isSelected: isSelected,
                     isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
-                    isContextTarget: isContextTarget,
+                    isContextTarget: isContextTarget, select: select, close: close
+                )
+                .help(browser.urlString)
+            case .diff(let diff):
+                TabItemChrome(
+                    systemImage: "plus.forwardslash.minus", fileIconPath: diff.path,
+                    title: tab.customName ?? diff.title,
+                    isDisplayed: isDisplayed, isSelected: isSelected,
+                    isKeyboardFocused: isKeyboardFocused, isPaneFocused: isPaneFocused,
+                    isContextTarget: isContextTarget, isDirty: diff.isDirty,
                     select: select, close: close
                 )
-            case .diff(let diff):
-                DiffTabLabel(
-                    diff: diff,
-                    customTitle: tab.customName,
-                    isDisplayed: isDisplayed, isSelected: isSelected, isKeyboardFocused: isKeyboardFocused,
-                    isPaneFocused: isPaneFocused,
-                    isContextTarget: isContextTarget,
-                    select: select,
-                    close: close
-                )
+                .help(diff.path)
             }
         }
     }
@@ -154,115 +156,6 @@ private struct TabRenameChrome: View {
         finished = true
         if apply { commit(draft) }
         end()
-    }
-}
-
-private struct SessionTabLabel: View {
-    let session: TerminalSession
-    /// User-assigned tab name overriding the live terminal title.
-    var customTitle: String?
-    let isDisplayed: Bool
-    var isSelected = false
-    var isKeyboardFocused = false
-    let isPaneFocused: Bool
-    let isContextTarget: Bool
-    let select: () -> Void
-    let close: () -> Void
-
-    var body: some View {
-        TabItemChrome(
-            systemImage: "terminal",
-            title: customTitle ?? session.title,
-            isDisplayed: isDisplayed, isSelected: isSelected, isKeyboardFocused: isKeyboardFocused,
-            isPaneFocused: isPaneFocused,
-            isContextTarget: isContextTarget,
-            select: select,
-            close: close
-        )
-    }
-}
-
-private struct FileTabLabel: View {
-    let file: FileTab
-    /// User-assigned tab name overriding the file name.
-    var customTitle: String?
-    let isDisplayed: Bool
-    var isSelected = false
-    var isKeyboardFocused = false
-    let isPaneFocused: Bool
-    let isContextTarget: Bool
-    let select: () -> Void
-    let close: () -> Void
-
-    var body: some View {
-        TabItemChrome(
-            systemImage: "doc.text",
-            fileIconPath: file.path,
-            title: customTitle ?? file.name,
-            isDisplayed: isDisplayed, isSelected: isSelected, isKeyboardFocused: isKeyboardFocused,
-            isPaneFocused: isPaneFocused,
-            isContextTarget: isContextTarget,
-            isDirty: file.isDirty,
-            select: select,
-            close: close
-        )
-        .help(file.path)
-        .accessibilityIdentifier("bailey.tab.file")
-        .accessibilityValue(file.path)
-    }
-}
-
-private struct BrowserTabLabel: View {
-    let browser: BrowserTab
-    /// User-assigned tab name overriding the webpage title.
-    var customTitle: String?
-    let isDisplayed: Bool
-    var isSelected = false
-    var isKeyboardFocused = false
-    let isPaneFocused: Bool
-    let isContextTarget: Bool
-    let select: () -> Void
-    let close: () -> Void
-
-    var body: some View {
-        TabItemChrome(
-            systemImage: "globe",
-            browserIcon: browser,
-            title: customTitle ?? browser.title,
-            isDisplayed: isDisplayed, isSelected: isSelected, isKeyboardFocused: isKeyboardFocused,
-            isPaneFocused: isPaneFocused,
-            isContextTarget: isContextTarget,
-            select: select,
-            close: close
-        )
-        .help(browser.urlString)
-    }
-}
-
-private struct DiffTabLabel: View {
-    let diff: DiffTab
-    var customTitle: String?
-    let isDisplayed: Bool
-    var isSelected = false
-    var isKeyboardFocused = false
-    let isPaneFocused: Bool
-    let isContextTarget: Bool
-    let select: () -> Void
-    let close: () -> Void
-
-    var body: some View {
-        TabItemChrome(
-            systemImage: "plus.forwardslash.minus",
-            fileIconPath: diff.path,
-            title: customTitle ?? diff.title,
-            isDisplayed: isDisplayed, isSelected: isSelected, isKeyboardFocused: isKeyboardFocused,
-            isPaneFocused: isPaneFocused,
-            isContextTarget: isContextTarget,
-            isDirty: diff.isDirty,
-            select: select,
-            close: close
-        )
-        .help(diff.path)
     }
 }
 

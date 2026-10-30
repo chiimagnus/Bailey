@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Observation
 import SwiftUI
 import WebKit
 import XCTest
@@ -136,6 +137,33 @@ final class NativeContentIdentityIntegrationTests: XCTestCase {
         try key(49)
         XCTAssertEqual(project.dock.group(containing: .files)?.selected, .files)
         XCTAssertTrue(window.firstResponder === keyboard)
+    }
+
+    func testPaneTabChromeTracksContentDirtyAndRenamedTitlesDirectly() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("label.swift")
+        try "original\n".write(to: path, atomically: true, encoding: .utf8)
+        let file = FileTab(path: path.path, backend: LocalWorkspaceBackend.shared, workspaceIdentity: nil)
+        try await file.waitForText()
+        let tab = PaneTab(content: .file(file))
+        let chrome = PaneTabItem(
+            tab: tab, isDisplayed: true, isPaneFocused: true, isContextTarget: false,
+            select: {}, close: {}, renamingTabID: .constant(nil)
+        )
+        let dirty = expectation(description: "The real tab chrome observes the file's dirty state")
+        withObservationTracking({ _ = chrome.body }) { dirty.fulfill() }
+        file.text = "unsaved\n"
+        file.refreshDirtyState()
+        await fulfillment(of: [dirty], timeout: 1)
+        XCTAssertTrue(file.isDirty)
+
+        let renamed = expectation(description: "The same chrome observes the tab's custom title")
+        withObservationTracking({ _ = chrome.body }) { renamed.fulfill() }
+        tab.customName = "新的标签标题"
+        await fulfillment(of: [renamed], timeout: 1)
+        XCTAssertEqual(tab.displayTitle, "新的标签标题")
     }
 
     func testDisplayedTabExposesRealAccessibilitySelection() async throws {
