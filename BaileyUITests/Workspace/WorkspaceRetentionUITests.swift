@@ -37,21 +37,27 @@ final class WorkspaceRetentionUITests: XCTestCase {
         app.terminate()
         app.launch()
         app.activate()
-        if !app.windows.firstMatch.waitForExistence(timeout: 4) {
+        let mainWindow = app.windows.matching(identifier: "main-AppWindow-1").firstMatch
+        if !mainWindow.waitForExistence(timeout: 4) {
             let newWindow = app.menuItems.matching(NSPredicate(
                 format: "title IN %@", ["New Window", "新建窗口"])).firstMatch
             XCTAssertTrue(newWindow.waitForExistence(timeout: 10))
             newWindow.click()
         }
-        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
-        app.typeKey(",", modifierFlags: .command)
-        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 12),
-                      "Command-comma must reopen the native Settings scene after relaunch")
+        XCTAssertTrue(mainWindow.waitForExistence(timeout: 15))
+        // Reopen through the native menu after Xcode's synthetic no-window relaunch.
+        let openSettings = app.menuItems.matching(NSPredicate(
+            format: "title CONTAINS[c] %@", "Settings")).firstMatch
+        XCTAssertTrue(openSettings.waitForExistence(timeout: 12))
+        openSettings.click()
+        let restoredWindow = app.windows.matching(identifier: "com_apple_SwiftUI_Settings_window").firstMatch
+        XCTAssertTrue(restoredWindow.waitForExistence(timeout: 12),
+                      "The native Settings menu must reopen the saved appearance after relaunch")
         let restoredDark: XCUIElement
         if #available(macOS 27.0, *) {
-            restoredDark = settingsWindow.descendants(matching: .tab)["Dark"].firstMatch
+            restoredDark = restoredWindow.descendants(matching: .tab)["Dark"].firstMatch
         } else {
-            restoredDark = settingsWindow.radioButtons["Dark"].firstMatch
+            restoredDark = restoredWindow.radioButtons["Dark"].firstMatch
         }
         XCTAssertTrue(restoredDark.waitForExistence(timeout: 12))
         XCTAssertEqual(String(describing: restoredDark.value ?? ""), "1",
