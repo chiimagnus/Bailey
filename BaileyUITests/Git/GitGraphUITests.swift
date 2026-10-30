@@ -1018,7 +1018,8 @@ final class GitGraphUITests: XCTestCase {
         try fixture.git(["config", "user.name", "BaileyUITest"])
         try fixture.git(["config", "user.email", "tests@example.invalid"])
         try fixture.git(["commit", "--allow-empty", "-qm", "Fix"])
-        let subject = String(repeating: "历史图谱超长中文提交消息–", count: 48)
+        // Each segment must be unique: scrolling past repeated glyphs can yield identical pixels.
+        let subject = (0..<48).map { "历史图谱第\($0)段超长中文提交消息–" }.joined()
         try fixture.git(["commit", "--allow-empty", "-qm", subject])
         let head = String(decoding: try fixture.git(["rev-parse", "HEAD"]),
                           as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1041,6 +1042,7 @@ final class GitGraphUITests: XCTestCase {
             let bytes = try XCTUnwrap(bitmap.bitmapData)
             return Data(bytes: bytes, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
         }
+        long.scroll(byDeltaX: 0, deltaY: 0)
         let beforeLong = try bitmapPixels(long)
         long.scroll(byDeltaX: -460, deltaY: 0)
         let afterLong = try bitmapPixels(long)
